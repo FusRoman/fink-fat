@@ -43,7 +43,7 @@ def intra_night_separation_association(night_alerts, separation_criterion):
     return left_assoc, right_assoc, sep2d[nonzero_idx]
 
 
-def compute_diff_mag(left, right, fid, magnitude_criterion):
+def compute_diff_mag(left, right, fid, magnitude_criterion, normalized=False):
     """
     remove the associations based separation that not match the magnitude criterion. This magnitude criterion was computed on the MPC object.
 
@@ -68,14 +68,17 @@ def compute_diff_mag(left, right, fid, magnitude_criterion):
     left_assoc = left[fid]
     right_assoc = right[fid]
 
-    diff_mag = np.abs(left_assoc['dcmag'].values - right_assoc['dcmag'].values)
+    if normalized:
+        diff_mag = np.abs(left_assoc['dcmag'].values - right_assoc['dcmag'].values) / np.abs(left_assoc['jd'] - right_assoc['jd'])
+    else:
+        diff_mag = np.abs(left_assoc['dcmag'].values - right_assoc['dcmag'].values)
 
     left_assoc = left_assoc[diff_mag <= magnitude_criterion]
     right_assoc = right_assoc[diff_mag <= magnitude_criterion]
 
     return left_assoc, right_assoc
 
-def intra_night_magnitude_association(left_assoc, right_assoc, mag_criterion_same_fid, mag_criterion_diff_fid):
+def magnitude_association(left_assoc, right_assoc, mag_criterion_same_fid, mag_criterion_diff_fid):
     """
     Perform magnitude based association twice, one for the alerts with the same fid and another for the alerts with a different fid. 
 
@@ -167,11 +170,11 @@ def intra_night_association(night_observation, sep_criterion=108.07*u.arcsecond,
     left_assoc : dataframe
         left members of the associations
     right_assoc : dataframe
-        rigth_members of the associations
+        right_members of the associations
     """
     left_assoc, right_assoc, _ = intra_night_separation_association(night_observation, sep_criterion)
 
-    left_assoc, right_assoc = intra_night_magnitude_association(left_assoc, right_assoc, mag_criterion_same_fid, mag_criterion_diff_fid)
+    left_assoc, right_assoc = magnitude_association(left_assoc, right_assoc, mag_criterion_same_fid, mag_criterion_diff_fid)
 
     if compute_metrics:
         metrics = compute_associations_metrics(left_assoc, right_assoc, night_observation)
@@ -180,6 +183,15 @@ def intra_night_association(night_observation, sep_criterion=108.07*u.arcsecond,
         return left_assoc, right_assoc, {}
 
 
+def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
+    nb_new_assoc = len(left_assoc)
+
+    new_traj_id = np.arange(last_traj_id, last_traj_id + nb_new_assoc)
+    left_assoc['trajectory_id'] = new_traj_id
+    right_assoc['trajectory_id'] = new_traj_id
+
+    return pd.concat([left_assoc, right_assoc])
+
 
 if __name__ == "__main__":
 
@@ -187,15 +199,22 @@ if __name__ == "__main__":
 
     all_night = np.unique(df_sso['nid'])
 
-    for night in all_night:
 
-        t_before = t.time()
+    #t_before = t.time()
 
-        df_one_night = df_sso[(df_sso['nid'] == night) & (df_sso['fink_class'] == 'Solar System MPC')]
+    df_one_night = df_sso[(df_sso['nid'] == 1526) & (df_sso['fink_class'] == 'Solar System MPC')]
 
-        t_before = t.time()
-        left_assoc, right_assoc, perf_metrics = intra_night_association(df_one_night, compute_metrics=True)
+    t_before = t.time()
+    left_assoc, right_assoc, perf_metrics = intra_night_association(df_one_night, compute_metrics=True)
 
-        print("performance metrics :\n\t{}".format(perf_metrics))
-        print("elapsed time : {}".format(t.time() - t_before))
-        print()
+    print(left_assoc)
+    print()
+    print(right_assoc)
+    print()
+
+    new_traj_df = new_trajectory_id_assignation(left_assoc, right_assoc, 0)
+    print(new_traj_df)
+
+    #print("performance metrics :\n\t{}".format(perf_metrics))
+    #print("elapsed time : {}".format(t.time() - t_before))
+    print()
