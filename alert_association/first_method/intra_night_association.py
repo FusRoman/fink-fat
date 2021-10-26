@@ -126,7 +126,8 @@ def compute_associations_metrics(left_assoc, right_assoc, observations_with_real
         dictionnary where entries are performance metrics    
     """
     gb_real_assoc = observations_with_real_labels.groupby(['ssnamenr']).count()
-    nb_real_assoc = np.sum(gb_real_assoc[gb_real_assoc['ra'] > 1]['ra'])
+
+    nb_real_assoc = len(gb_real_assoc[gb_real_assoc['ra'] > 1]['ra'])
 
     nb_predict_assoc = len(right_assoc)
 
@@ -137,7 +138,7 @@ def compute_associations_metrics(left_assoc, right_assoc, observations_with_real
     precision = (precision_counter[True] / (precision_counter[True] + precision_counter[False])) * 100
 
     # max(0, (nb_real_assoc - nb_predict_assoc)) == number of false negatif if nb_predict_assoc < nb_real_assoc else 0 because no false negatif occurs. 
-    FN = max(0, (nb_real_assoc - nb_predict_assoc))
+    FN = max(0, (nb_real_assoc - precision_counter[True]))
     recall = (precision_counter[True] / (precision_counter[True] + FN)) * 100
 
     accuracy = (1-(precision_counter[False] / (nb_predict_assoc + nb_real_assoc))) * 100
@@ -253,18 +254,18 @@ if __name__ == "__main__":
 
 
     #t_before = t.time()
+    for night_id in all_night:
+        df_one_night = df_sso[(df_sso['nid'] == night_id) & (df_sso['fink_class'] == 'Solar System MPC')]
 
-    df_one_night = df_sso[(df_sso['nid'] == 1527) & (df_sso['fink_class'] == 'Solar System MPC')]
-
-    t_before = t.time()
-    left_assoc, right_assoc, perf_metrics = intra_night_association(df_one_night, compute_metrics=True)        
+        t_before = t.time()
+        left_assoc, right_assoc, perf_metrics = intra_night_association(df_one_night, compute_metrics=True)        
 
 
-    new_traj_df = new_trajectory_id_assignation(left_assoc, right_assoc, 0)
+        new_traj_df = new_trajectory_id_assignation(left_assoc, right_assoc, 0)
 
-    print("performance metrics :\n\t{}".format(perf_metrics))
-    print("elapsed time : {}".format(t.time() - t_before))
-    print()
+        print("performance metrics :\n\t{}".format(perf_metrics))
+        print("elapsed time : {}".format(t.time() - t_before))
+        print()
 
     # test removed mirrored
     test_1 = pd.DataFrame({
