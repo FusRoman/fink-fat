@@ -243,6 +243,11 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
     left_assoc['trajectory_id'] = new_traj_id
     right_assoc['trajectory_id'] = new_traj_id
 
+    for _, rows in right_assoc.iterrows():
+        new_obs = left_assoc[left_assoc['candid'] == rows['candid']]
+        
+        left_assoc.loc[new_obs.index.values, 'trajectory_id'] = rows['trajectory_id']
+
     return pd.concat([left_assoc, right_assoc])
 
 
@@ -253,19 +258,27 @@ if __name__ == "__main__":
     all_night = np.unique(df_sso['nid'])
 
 
-    #t_before = t.time()
-    for night_id in all_night:
-        df_one_night = df_sso[(df_sso['nid'] == night_id) & (df_sso['fink_class'] == 'Solar System MPC')]
+    
+    df_one_night = df_sso[(df_sso['nid'] == 1527) & (df_sso['fink_class'] == 'Solar System MPC')]
 
-        t_before = t.time()
-        left_assoc, right_assoc, perf_metrics = intra_night_association(df_one_night, compute_metrics=True)        
+    t_before = t.time()
+    left_assoc, right_assoc, perf_metrics = intra_night_association(df_one_night, compute_metrics=True)        
 
 
-        new_traj_df = new_trajectory_id_assignation(left_assoc, right_assoc, 0)
+    new_traj_df = new_trajectory_id_assignation(left_assoc, right_assoc, 0)
 
-        print("performance metrics :\n\t{}".format(perf_metrics))
-        print("elapsed time : {}".format(t.time() - t_before))
-        print()
+    gb_res = new_traj_df.groupby(['trajectory_id']).agg(
+        ssnamenr=('ssnamenr',list),
+        traj_len=('candid',lambda x : len(x))
+    )
+
+    print(gb_res[gb_res['traj_len']>2])
+
+    #print("performance metrics :\n\t{}".format(perf_metrics))
+    #print("elapsed time : {}".format(t.time() - t_before))
+    #print()
+
+    exit()
 
     # test removed mirrored
     test_1 = pd.DataFrame({
