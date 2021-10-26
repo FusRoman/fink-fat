@@ -169,25 +169,29 @@ def removed_mirrored_association(left_assoc, right_assoc):
     left_assoc = left_assoc.reset_index(drop=True)
     right_assoc = right_assoc.reset_index(drop=True)
 
-    old_columns = left_assoc.columns.values
-    new_left_columns = ["left_" + el for el in old_columns]
-    new_right_columns = ["right_" + el for el in old_columns]
+    # rename column with the addition of left and right
+    old_left_columns = left_assoc.columns.values
+    old_right_columns = right_assoc.columns.values
 
-    left_columns = {old_col : new_col for old_col, new_col in zip(old_columns, new_left_columns)}
-    right_columns = {old_col : new_col for old_col, new_col in zip(old_columns, new_right_columns)}
+    new_left_columns = ["left_" + el for el in old_left_columns]
+    new_right_columns = ["right_" + el for el in old_right_columns]
+
+    left_columns = {old_col : new_col for old_col, new_col in zip(old_left_columns, new_left_columns)}
+    right_columns = {old_col : new_col for old_col, new_col in zip(old_right_columns, new_right_columns)}
     left_assoc = left_assoc.rename(left_columns, axis=1)
     right_assoc = right_assoc.rename(right_columns, axis=1)
 
-
+    # concatanates the associations
     all_assoc = pd.concat([left_assoc, right_assoc], axis=1)
 
-    
-
+    # create a set then a list of the left and right candid and detect the mirrored duplicates
     mask = all_assoc[['left_candid','right_candid']].apply(lambda x: list(set(x)), axis=1).duplicated()
+    # remove the mirrored duplicates by applying the mask to the dataframe
     drop_mirrored = all_assoc[~mask]
 
-    restore_left_columns = {new_col : old_col for old_col, new_col in zip(old_columns, new_left_columns)}
-    restore_right_columns = {new_col : old_col for old_col, new_col in zip(old_columns, new_right_columns)}
+    # restore the left and right dataframe and the old columns name
+    restore_left_columns = {new_col : old_col for old_col, new_col in zip(old_left_columns, new_left_columns)}
+    restore_right_columns = {new_col : old_col for old_col, new_col in zip(old_right_columns, new_right_columns)}
     
     drop_left = drop_mirrored[new_left_columns]
     drop_right = drop_mirrored[new_right_columns]
@@ -237,6 +241,24 @@ def intra_night_association(night_observation, sep_criterion=108.07*u.arcsecond,
 
 
 def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
+    """
+    Assign a trajectory id to all associations, perform a transitive assignation to all tracklets.
+
+    Parameters
+    ----------
+    left_assoc : dataframe
+        left members of the associations
+    right_assoc : dataframe
+        right members of the associations
+    last_traj_id : integer
+        the latest trajectory id assigned to all trajectory
+
+    Returns
+    -------
+    trajectory_df : dataframe
+        a single dataframe which are the concatanation of left and right and contains a new columns called 'trajectory_id'. 
+        This column allows to reconstruct the trajectory by groupby on this column. 
+    """
     nb_new_assoc = len(left_assoc)
 
     new_traj_id = np.arange(last_traj_id, last_traj_id + nb_new_assoc)
@@ -258,25 +280,26 @@ if __name__ == "__main__":
     all_night = np.unique(df_sso['nid'])
 
 
-    
-    df_one_night = df_sso[(df_sso['nid'] == 1527) & (df_sso['fink_class'] == 'Solar System MPC')]
+    for night in all_night:
+        print(night)
+        df_one_night = df_sso[(df_sso['nid'] == night) & (df_sso['fink_class'] == 'Solar System MPC')]
 
-    t_before = t.time()
-    left_assoc, right_assoc, perf_metrics = intra_night_association(df_one_night, compute_metrics=True)        
+        t_before = t.time()
+        left_assoc, right_assoc, perf_metrics = intra_night_association(df_one_night, compute_metrics=True)        
 
 
-    new_traj_df = new_trajectory_id_assignation(left_assoc, right_assoc, 0)
+        new_traj_df = new_trajectory_id_assignation(left_assoc, right_assoc, 0)
 
-    gb_res = new_traj_df.groupby(['trajectory_id']).agg(
-        ssnamenr=('ssnamenr',list),
-        traj_len=('candid',lambda x : len(x))
-    )
+        print("performance metrics :\n\t{}".format(perf_metrics))
+        print("elapsed time : {}".format(t.time() - t_before))
+        print()
+        gb_res = new_traj_df.groupby(['trajectory_id']).agg(
+            ssnamenr=('ssnamenr',list),
+            traj_len=('candid',lambda x : len(x))
+        )
 
-    print(gb_res[gb_res['traj_len']>2])
-
-    #print("performance metrics :\n\t{}".format(perf_metrics))
-    #print("elapsed time : {}".format(t.time() - t_before))
-    #print()
+        print(gb_res[gb_res['traj_len']>2])
+        print()
 
     exit()
 

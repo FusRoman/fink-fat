@@ -5,29 +5,34 @@ import numpy as np
 from collections import Counter
 import time as t
 
+from pandas.core.indexes import multi
+
 from intra_night_association import intra_night_association
 from intra_night_association import new_trajectory_id_assignation
 from intra_night_association import magnitude_association
+from intra_night_association import removed_mirrored_association
 
 
 
 def night_to_night_separation_association(old_observation, new_observation, separation_criterion):
     """
-    Perform intra-night association based on the spearation between the alerts. The separation criterion was computed by a data analysis on the MPC object.
+    Perform night-night association based on the separation between the alerts. The separation criterion was computed by a data analysis on the MPC object.
 
     Parameters
     ----------
-    night_alerts : dataframe
-        observation of on night
+    old_observation : dataframe
+        observation of night t-1
+    new_observation : dataframe
+        observation of night t
     separation_criterion : float
         the separation limit between the alerts to be associated, must be in arcsecond
 
     Returns
     -------
     left_assoc : dataframe
-        Associations are a binary relation with left members and right members, return the left members of the associations
+        Associations are a binary relation with left members and right members, return the left members (from old_observation) of the associations
     right_assoc : dataframe
-        return right members of the associations
+        return right members (from new_observation) of the associations
     sep2d : list
         return the separation between the associated alerts
     """
@@ -63,58 +68,36 @@ def night_to_night_association(trajectory_df, old_observation, new_observation, 
     # intra-night association of the new observations
     new_left, new_right, _ = intra_night_association(new_observation)
 
-
-    new_left = new_left.reset_index(drop=True)
-    new_right = new_right.reset_index(drop=True)
-    new_left['tmp_traj_id'] = new_right['tmp_traj_id'] = np.arange(0, len(new_left))
-
-    print(new_left.groupby(['candid']).count())
-    print()
-    print(new_right.groupby(['candid']).count())
-    print(new_left[new_left['candid'] == 1527201710015015012])
-    print()
-    print(new_right[new_right['candid'] == 1527201710015015012])
-    print()
-    print()
-    print(new_left[new_left['tmp_traj_id'] == 595]['candid'])
-    print()
-    print(new_right[new_right['tmp_traj_id'] == 595]['candid'])
-    print()
-    print(new_left[new_left['tmp_traj_id'] == 3114]['candid'])
-    print()
-    print(new_right[new_right['tmp_traj_id'] == 3114]['candid'])
-    print()
-    print()
-    print(new_left[new_left['tmp_traj_id'] == 548]['candid'])
-    print()
-    print(new_right[new_right['tmp_traj_id'] == 548]['candid'])
-    print()
-    print(new_left[new_left['tmp_traj_id'] == 2462]['candid'])
-    print()
-    print(new_right[new_right['tmp_traj_id'] == 2462]['candid'])
-    print("----------")
-    print()
-
     traj_assoc, new_obs_assoc, _ = night_to_night_separation_association(last_observation_trajectory, new_left, sep_criterion)
     traj_assoc, new_obs_assoc = magnitude_association(traj_assoc, new_obs_assoc, mag_criterion_same_fid, mag_criterion_diff_fid)
+    traj_assoc, new_obs_assoc = removed_mirrored_association(traj_assoc, new_obs_assoc)
 
     traj_assoc = traj_assoc.reset_index(drop=True)
     new_obs_assoc = new_obs_assoc.reset_index(drop=True)
-    new_obs_assoc['trajectory_id'] = traj_assoc['trajectory_id']
 
-    print(trajectory_df)
-    print()
-    print()
+    gb_traj = traj_assoc.groupby(['candid']).agg(
+        {
+            "candid" : list,
+            "ra" : lambda x : len(x)
+        }
+    )
+
+
+    multiple_assoc = gb_traj[gb_traj['ra'] > 1]
+    all_multiple_candid = multiple_assoc.explode(['candid'])
+    new_traj_id = np.arange(last_trajectory_id, last_trajectory_id + len(all_multiple_candid))
+    traj_assoc.set_index(['candid'], inplace=True)
+    traj_assoc.loc[np.unique(all_multiple_candid['candid'].values), 'tmp_traj_id'] = new_traj_id
+    traj_assoc = traj_assoc.reset_index()
     print(traj_assoc)
-    print()
-    print()
 
+    gb_traj = traj_assoc.groupby(['trajectory_id']).agg(
+        traj_size=("candid", lambda x : len(x)),
+        tmp_traj=('tmp_traj_id', list)
+    )
 
-    print(traj_assoc.groupby(['trajectory_id']).count())
-    print()
-    print(traj_assoc[traj_assoc['trajectory_id'] == 25])
-    print()
-    print(new_obs_assoc[new_obs_assoc['trajectory_id'] == 25])
+    print(gb_traj)
+
 
     #print(np.unique(pd.concat([last_observation_trajectory, new_obs_assoc]).groupby(['trajectory_id']).count()['ra']))
 
@@ -174,7 +157,6 @@ if __name__ == "__main__":
 
     old_observation = df_night1[~df_night1['candid'].isin(traj_df['candid'])]
 
-    
     old_assoc, new_assoc = night_to_night_association(traj_df, old_observation, df_night2)
 
 
