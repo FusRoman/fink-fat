@@ -57,6 +57,8 @@ def compute_diff_mag(left, right, fid, magnitude_criterion, normalized=False):
         filter the left and right associations with the boolean series based on the fid, take the alerts with the same fid or not.
     magnitude_criterion : float
         filter the association based on this magnitude criterion
+    normalized : boolean
+        if is True, normalized the magnitude difference by the jd difference.
 
     Returns
     -------
@@ -145,6 +147,53 @@ def compute_associations_metrics(left_assoc, right_assoc, observations_with_real
             "total real association" : nb_real_assoc}
 
 
+def removed_mirrored_association(left_assoc, right_assoc):
+    """
+    Remove the mirrored association (associations like (a, b) and (b, a)) that occurs in the intra-night associations. 
+
+    Parameters
+    ----------
+    left_assoc : dataframe
+        left members of the intra-night associations
+    right_assoc : dataframe
+        right members of the intra-night associations
+    
+    Returns
+    -------
+    drop_left : dataframe 
+        left members of the intra-night associations without mirrored associations
+    drop_right : dataframe 
+        right members of the intra-night associations without mirrored associations
+    """
+    left_assoc = left_assoc.reset_index(drop=True)
+    right_assoc = right_assoc.reset_index(drop=True)
+
+    old_columns = left_assoc.columns.values
+    new_left_columns = ["left_" + el for el in old_columns]
+    new_right_columns = ["right_" + el for el in old_columns]
+
+    left_columns = {old_col : new_col for old_col, new_col in zip(old_columns, new_left_columns)}
+    right_columns = {old_col : new_col for old_col, new_col in zip(old_columns, new_right_columns)}
+    left_assoc = left_assoc.rename(left_columns, axis=1)
+    right_assoc = right_assoc.rename(right_columns, axis=1)
+
+
+    all_assoc = pd.concat([left_assoc, right_assoc], axis=1)
+
+    
+
+    mask = all_assoc[['left_candid','right_candid']].apply(lambda x: list(set(x)), axis=1).duplicated()
+    drop_mirrored = all_assoc[~mask]
+
+    restore_left_columns = {new_col : old_col for old_col, new_col in zip(old_columns, new_left_columns)}
+    restore_right_columns = {new_col : old_col for old_col, new_col in zip(old_columns, new_right_columns)}
+    
+    drop_left = drop_mirrored[new_left_columns]
+    drop_right = drop_mirrored[new_right_columns]
+    drop_left = drop_left.rename(restore_left_columns, axis=1)
+    drop_right = drop_right.rename(restore_right_columns, axis=1)
+    return drop_left, drop_right
+
 def intra_night_association(night_observation, sep_criterion=108.07*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=False):
     """
     Perform intra_night association with separation and magnitude criterion
@@ -176,6 +225,9 @@ def intra_night_association(night_observation, sep_criterion=108.07*u.arcsecond,
 
     left_assoc, right_assoc = magnitude_association(left_assoc, right_assoc, mag_criterion_same_fid, mag_criterion_diff_fid)
 
+    # remove mirrored associations
+    left_assoc, right_assoc = removed_mirrored_association(left_assoc, right_assoc)
+    
     if compute_metrics:
         metrics = compute_associations_metrics(left_assoc, right_assoc, night_observation)
         return left_assoc, right_assoc, metrics
@@ -202,19 +254,36 @@ if __name__ == "__main__":
 
     #t_before = t.time()
 
-    df_one_night = df_sso[(df_sso['nid'] == 1526) & (df_sso['fink_class'] == 'Solar System MPC')]
+    df_one_night = df_sso[(df_sso['nid'] == 1527) & (df_sso['fink_class'] == 'Solar System MPC')]
 
     t_before = t.time()
-    left_assoc, right_assoc, perf_metrics = intra_night_association(df_one_night, compute_metrics=True)
+    left_assoc, right_assoc, perf_metrics = intra_night_association(df_one_night, compute_metrics=True)        
 
-    print(left_assoc)
-    print()
-    print(right_assoc)
-    print()
 
     new_traj_df = new_trajectory_id_assignation(left_assoc, right_assoc, 0)
-    print(new_traj_df)
 
-    #print("performance metrics :\n\t{}".format(perf_metrics))
-    #print("elapsed time : {}".format(t.time() - t_before))
+    print("performance metrics :\n\t{}".format(perf_metrics))
+    print("elapsed time : {}".format(t.time() - t_before))
     print()
+
+    # test removed mirrored
+    test_1 = pd.DataFrame({
+        "a" : [1, 2, 3, 4],
+        "candid" : [10, 11, 12, 13]
+    })
+
+    test_2 = pd.DataFrame({
+        "a" : [30, 31, 32, 33],
+        "candid" : [11, 10, 15, 16]
+    })
+
+    print(test_1)
+    print(test_2)
+
+    print()
+    print()
+
+    tt_1, tt_2 = removed_mirrored_association(test_1, test_2)
+
+    print(tt_1)
+    print(tt_2)

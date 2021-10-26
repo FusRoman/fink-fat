@@ -52,15 +52,48 @@ def get_last_observations_from_trajectories(trajectories):
     return last_occurence
 
 
-def night_to_night_association(last_observation_trajectory, old_observation, new_observation, sep_criterion=0.43*u.degree, mag_criterion_same_fid=1.36, mag_criterion_diff_fid=1.31):
+def night_to_night_association(trajectory_df, old_observation, new_observation, sep_criterion=0.43*u.degree, mag_criterion_same_fid=1.36, mag_criterion_diff_fid=1.31):
+
+    last_observation_trajectory = get_last_observations_from_trajectories(trajectory_df)
 
     last_trajectory_id = np.max(last_observation_trajectory['trajectory_id'].values) + 1
 
     # trajectory association with the new tracklets
+
+    # intra-night association of the new observations
     new_left, new_right, _ = intra_night_association(new_observation)
+
+
     new_left = new_left.reset_index(drop=True)
     new_right = new_right.reset_index(drop=True)
     new_left['tmp_traj_id'] = new_right['tmp_traj_id'] = np.arange(0, len(new_left))
+
+    print(new_left.groupby(['candid']).count())
+    print()
+    print(new_right.groupby(['candid']).count())
+    print(new_left[new_left['candid'] == 1527201710015015012])
+    print()
+    print(new_right[new_right['candid'] == 1527201710015015012])
+    print()
+    print()
+    print(new_left[new_left['tmp_traj_id'] == 595]['candid'])
+    print()
+    print(new_right[new_right['tmp_traj_id'] == 595]['candid'])
+    print()
+    print(new_left[new_left['tmp_traj_id'] == 3114]['candid'])
+    print()
+    print(new_right[new_right['tmp_traj_id'] == 3114]['candid'])
+    print()
+    print()
+    print(new_left[new_left['tmp_traj_id'] == 548]['candid'])
+    print()
+    print(new_right[new_right['tmp_traj_id'] == 548]['candid'])
+    print()
+    print(new_left[new_left['tmp_traj_id'] == 2462]['candid'])
+    print()
+    print(new_right[new_right['tmp_traj_id'] == 2462]['candid'])
+    print("----------")
+    print()
 
     traj_assoc, new_obs_assoc, _ = night_to_night_separation_association(last_observation_trajectory, new_left, sep_criterion)
     traj_assoc, new_obs_assoc = magnitude_association(traj_assoc, new_obs_assoc, mag_criterion_same_fid, mag_criterion_diff_fid)
@@ -69,9 +102,19 @@ def night_to_night_association(last_observation_trajectory, old_observation, new
     new_obs_assoc = new_obs_assoc.reset_index(drop=True)
     new_obs_assoc['trajectory_id'] = traj_assoc['trajectory_id']
 
-    print(np.unique(traj_assoc.groupby(['trajectory_id']).count()['ra']))
+    print(trajectory_df)
     print()
-    print(new_obs_assoc)
+    print()
+    print(traj_assoc)
+    print()
+    print()
+
+
+    print(traj_assoc.groupby(['trajectory_id']).count())
+    print()
+    print(traj_assoc[traj_assoc['trajectory_id'] == 25])
+    print()
+    print(new_obs_assoc[new_obs_assoc['trajectory_id'] == 25])
 
     #print(np.unique(pd.concat([last_observation_trajectory, new_obs_assoc]).groupby(['trajectory_id']).count()['ra']))
 
@@ -133,11 +176,5 @@ if __name__ == "__main__":
 
     
     old_assoc, new_assoc = night_to_night_association(traj_df, old_observation, df_night2)
-
-    print("total alerts : {}, {}".format(len(df_night1), len(df_night2)))
-
-    print(old_assoc)
-    print()
-    print(new_assoc)
 
 
