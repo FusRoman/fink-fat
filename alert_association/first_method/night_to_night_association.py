@@ -1,3 +1,4 @@
+from astropy.coordinates.solar_system import get_body_barycentric
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 import pandas as pd
@@ -68,35 +69,77 @@ def night_to_night_association(trajectory_df, old_observation, new_observation, 
     # intra-night association of the new observations
     new_left, new_right, _ = intra_night_association(new_observation)
 
+    # night_to_night association between the last observations from the trajectories and the new observations of the next night
     traj_assoc, new_obs_assoc, _ = night_to_night_separation_association(last_observation_trajectory, new_left, sep_criterion)
     traj_assoc, new_obs_assoc = magnitude_association(traj_assoc, new_obs_assoc, mag_criterion_same_fid, mag_criterion_diff_fid)
     traj_assoc, new_obs_assoc = removed_mirrored_association(traj_assoc, new_obs_assoc)
 
-    traj_assoc = traj_assoc.reset_index(drop=True)
+    
+
+    traj_assoc = traj_assoc.reset_index(drop=True).reset_index()
     new_obs_assoc = new_obs_assoc.reset_index(drop=True)
 
+    #print(traj_assoc)
+
+    new_obs_assoc['trajectory_id'] = traj_assoc['trajectory_id']
+
+    # get alerts with multiple associations
     gb_traj = traj_assoc.groupby(['candid']).agg(
         {
+            "index" : list,
             "candid" : list,
             "ra" : lambda x : len(x)
         }
     )
 
+    #print(gb_traj)
 
     multiple_assoc = gb_traj[gb_traj['ra'] > 1]
-    all_multiple_candid = multiple_assoc.explode(['candid'])
-    new_traj_id = np.arange(last_trajectory_id, last_trajectory_id + len(all_multiple_candid))
-    traj_assoc.set_index(['candid'], inplace=True)
-    traj_assoc.loc[np.unique(all_multiple_candid['candid'].values), 'tmp_traj_id'] = new_traj_id
-    traj_assoc = traj_assoc.reset_index()
-    print(traj_assoc)
 
+    if len(gb_traj) > 0:
+        print("multiple assoc prop : {}".format(np.sum(multiple_assoc['ra']) / np.sum(gb_traj['ra']) * 100))
+    else:
+        print("nb assoc : {}".format(len(gb_traj)))
+
+    return None, None
+
+    all_multiple_candid = multiple_assoc.explode(['index', 'candid'])
+
+    # create new trajectory index for the duplicates
+    new_traj_id = np.arange(last_trajectory_id, last_trajectory_id + len(all_multiple_candid))
+
+    # set candid column as new index to recover the right rows.
+    traj_assoc.set_index(['candid'], inplace=True)
+
+    # set a new trajectory id to all multiple associations
+    # use candid index for traj_assoc 
+    # becarefull, np.unique in the all_multiple_candid is required because loc get rows for each instance of candid so that creates duplicates on the results
+    traj_assoc.loc[np.unique(all_multiple_candid['candid'].values), 'tmp_traj_id'] = new_traj_id
+    new_obs_assoc.loc[np.unique(all_multiple_candid['index'].values), 'tmp_traj_id'] = new_traj_id
+    traj_assoc = traj_assoc.reset_index()
+    new_obs_assoc = new_obs_assoc.reset_index()
+
+    # aggregate the new trajectory_id with the first trajectory_id
     gb_traj = traj_assoc.groupby(['trajectory_id']).agg(
         traj_size=("candid", lambda x : len(x)),
         tmp_traj=('tmp_traj_id', list)
     )
 
-    print(gb_traj)
+    gb_traj = gb_traj[gb_traj['traj_size'] > 1]
+
+    # the first multiple associations take the original trajecotry_id 
+    agg_traj_id = gb_traj['tmp_traj'].values
+    for traj_id, new_traj_idx in zip(gb_traj.index.values, range(len(agg_traj_id))):
+        agg_traj_id[new_traj_idx][0] = traj_id
+
+
+    gb_traj['tmp_traj'] = agg_traj_id
+
+    trajectory_df = trajectory_df.set_index(['trajectory_id'])
+    trajectory_df.loc[trajectory_df.index.values, 'trajectory_id'] = gb_traj['tmp_traj']
+
+    print(trajectory_df.loc[171])
+
 
 
     #print(np.unique(pd.concat([last_observation_trajectory, new_obs_assoc]).groupby(['trajectory_id']).count()['ra']))
@@ -147,16 +190,24 @@ if __name__ == "__main__":
     df_sso = df_sso.drop_duplicates(['candid'])
 
     all_night = np.unique(df_sso['nid'])
+    print(all_night)
 
-    df_night1 = df_sso[(df_sso['nid'] == 1526) & (df_sso['fink_class'] == 'Solar System MPC')]
-    df_night2 = df_sso[(df_sso['nid'] == 1527) & (df_sso['fink_class'] == 'Solar System MPC')]
+    for i in range(len(all_night)-1):
+        t_before = t.time()
+        n1 = all_night[i]
+        n2 = all_night[i+1]
+        if n2 - n1 == 1:
+            print(n1)
+            print(n2)
+            print()
+            df_night1 = df_sso[(df_sso['nid'] == n1) & (df_sso['fink_class'] == 'Solar System MPC')]
+            df_night2 = df_sso[(df_sso['nid'] == n2) & (df_sso['fink_class'] == 'Solar System MPC')]
 
-    left, right, _ = intra_night_association(df_night1)
-    traj_df = new_trajectory_id_assignation(left, right, 0)
-    traj_df = traj_df.reset_index(drop=True)
+            left, right, _ = intra_night_association(df_night1)
+            traj_df = new_trajectory_id_assignation(left, right, 0)
+            traj_df = traj_df.reset_index(drop=True)
 
-    old_observation = df_night1[~df_night1['candid'].isin(traj_df['candid'])]
+            old_observation = df_night1[~df_night1['candid'].isin(traj_df['candid'])]
 
-    old_assoc, new_assoc = night_to_night_association(traj_df, old_observation, df_night2)
-
-
+            old_assoc, new_assoc = night_to_night_association(traj_df, old_observation, df_night2)
+        print("elapsed time: {}".format(t.time() - t_before))
