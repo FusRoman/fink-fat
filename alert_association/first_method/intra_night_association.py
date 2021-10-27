@@ -267,8 +267,8 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
 
     for _, rows in right_assoc.iterrows():
         new_obs = left_assoc[left_assoc['candid'] == rows['candid']]
-        
         left_assoc.loc[new_obs.index.values, 'trajectory_id'] = rows['trajectory_id']
+        right_assoc.loc[new_obs.index.values, 'trajectory_id'] = rows['trajectory_id']
 
     return pd.concat([left_assoc, right_assoc])
 
@@ -298,9 +298,11 @@ if __name__ == "__main__":
             traj_len=('candid',lambda x : len(x))
         )
 
+        print(gb_res[gb_res['traj_len'] == 1])
+
         print(gb_res[gb_res['traj_len']>2])
         print()
-
+        break
     exit()
 
     # test removed mirrored

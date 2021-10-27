@@ -60,6 +60,11 @@ def get_last_observations_from_trajectories(trajectories):
 
 def night_to_night_association(trajectory_df, old_observation, new_observation, sep_criterion=0.43*u.degree, mag_criterion_same_fid=1.36, mag_criterion_diff_fid=1.31):
 
+    print(trajectory_df.sort_values(['trajectory_id']))
+    print(trajectory_df.groupby(['trajectory_id']).tail(2).sort_values(['trajectory_id']))
+
+    return None, None
+
     last_observation_trajectory = get_last_observations_from_trajectories(trajectory_df)
 
     last_trajectory_id = np.max(last_observation_trajectory['trajectory_id'].values) + 1
@@ -74,7 +79,7 @@ def night_to_night_association(trajectory_df, old_observation, new_observation, 
     traj_assoc, new_obs_assoc = magnitude_association(traj_assoc, new_obs_assoc, mag_criterion_same_fid, mag_criterion_diff_fid)
     traj_assoc, new_obs_assoc = removed_mirrored_association(traj_assoc, new_obs_assoc)
 
-    
+
 
     traj_assoc = traj_assoc.reset_index(drop=True).reset_index()
     new_obs_assoc = new_obs_assoc.reset_index(drop=True)
@@ -211,3 +216,4 @@ if __name__ == "__main__":
 
             old_assoc, new_assoc = night_to_night_association(traj_df, old_observation, df_night2)
         print("elapsed time: {}".format(t.time() - t_before))
+        break
