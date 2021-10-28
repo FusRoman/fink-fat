@@ -5,8 +5,10 @@ import numpy as np
 from collections import Counter
 import time as t
 
-import matplotlib.pyplot as plt
 
+
+def get_n_last_observations_from_trajectories(trajectories, n, ascending=True):
+    return trajectories.sort_values(['jd'], ascending=ascending).explode(['trajectory_id']).groupby(['trajectory_id']).tail(n).sort_values(['trajectory_id'])
 
 
 def intra_night_separation_association(night_alerts, separation_criterion):
@@ -243,6 +245,7 @@ def removed_multiple_association(left_assoc, right_assoc):
     l_r_concat = pd.concat([left_assoc, right_assoc], axis=1, keys=['left', 'right'])
 
     agg_dict = {col : list for col in l_r_concat.columns.values}
+
     # group by left candid to detect multiple assoc
     gb_concat = l_r_concat.groupby(by=[('left', 'candid')]).agg(agg_dict)
     gb_concat['nb_multiple_assoc'] = gb_concat.apply(lambda x : len(x[0]), axis=1)
@@ -310,6 +313,7 @@ def intra_night_association(night_observation, sep_criterion=108.07*u.arcsecond,
     # removed wrong multiple association
     left_assoc, right_assoc = removed_multiple_association(left_assoc, right_assoc)
     
+    
     if compute_metrics:
         metrics = compute_associations_metrics(left_assoc, right_assoc, night_observation)
         return left_assoc, right_assoc, metrics
@@ -342,7 +346,7 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
 
     nb_new_assoc = len(left_assoc)
 
-    new_traj_id = [[i] for i in range(last_traj_id, last_traj_id + nb_new_assoc)]
+    new_traj_id = np.arange(last_traj_id, last_traj_id + nb_new_assoc)
 
     left_assoc['trajectory_id'] = new_traj_id
     right_assoc['trajectory_id'] = new_traj_id
@@ -351,10 +355,10 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
 
     for _, rows in right_assoc.iterrows():
         new_obs = left_assoc[left_assoc['candid'] == rows['candid']]
-        left_assoc.loc[new_obs.index.values, 'trajectory_id'] = [rows['trajectory_id']]
-        right_assoc.loc[new_obs.index.values, 'trajectory_id'] = [rows['trajectory_id']]
+        left_assoc.loc[new_obs.index.values, 'trajectory_id'] = rows['trajectory_id']
+        right_assoc.loc[new_obs.index.values, 'trajectory_id'] = rows['trajectory_id']
 
-    return pd.concat([left_assoc, right_assoc]).drop_duplicates(['candid'])
+    return pd.concat([left_assoc, right_assoc]).drop_duplicates(['candid', 'trajectory_id'])
 
 
 if __name__ == "__main__":
@@ -369,23 +373,15 @@ if __name__ == "__main__":
         df_one_night = df_sso[(df_sso['nid'] == night) & (df_sso['fink_class'] == 'Solar System MPC')]
 
         t_before = t.time()
-        left_assoc, right_assoc, perf_metrics = intra_night_association(df_one_night, compute_metrics=True)
-
-        print(right_assoc[right_assoc['candid'].isin(left_assoc['candid'])])
-
-        new_traj_df = new_trajectory_id_assignation(left_assoc, right_assoc, 0)    
-        
-        tt = new_traj_df.explode(['trajectory_id']).groupby(['trajectory_id']).agg({
-            "ssnamenr" : list,
-            "candid" : lambda x : len(x)
-        })
-
-        print(tt[tt['candid'] > 2])
+        left_assoc, right_assoc, perf_metrics = intra_night_association(df_one_night, compute_metrics=True)        
+        new_traj_df = new_trajectory_id_assignation(left_assoc, right_assoc, 0).explode(['trajectory_id'])
+               
 
         print("performance metrics :\n\t{}".format(perf_metrics))
         print("elapsed time : {}".format(t.time() - t_before))
         print()
-        break
+        
+        
 
     
     exit()
