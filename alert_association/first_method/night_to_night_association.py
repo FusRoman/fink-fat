@@ -95,9 +95,13 @@ def remove_nan(x):
 
 def night_to_night_association(trajectory_df, old_observation, new_observation, sep_criterion=0.43*u.degree, mag_criterion_same_fid=1.36, mag_criterion_diff_fid=1.31):
 
+    # get the last two observations for each trajectories
     two_last_observation_trajectory = get_n_last_observations_from_trajectories(trajectory_df, 2)
+
+    # get the maximum trajectory_id and increment it to return the new trajectory_id baseline
     last_trajectory_id = np.max(trajectory_df['trajectory_id'].values) + 1
 
+    # get the last obeservations of the trajectories to perform the associations 
     last_traj_obs = two_last_observation_trajectory.groupby(['trajectory_id']).last().reset_index()
 
     # trajectory association with the new tracklets
@@ -106,9 +110,10 @@ def night_to_night_association(trajectory_df, old_observation, new_observation, 
     new_left, new_right, _ = intra_night_association(new_observation)
     traj_next_night = new_trajectory_id_assignation(new_left, new_right, last_trajectory_id)
 
+    # get the oldest extremity of the new tracklets to perform associations with the youngest observations in the trajectories 
     traj_extremity = get_n_last_observations_from_trajectories(traj_next_night, 1, False)    
 
-    # night_to_night association between the last observations from the trajectories and the new observations of the next night
+    # night_to_night association between the last observations from the trajectories and the first tracklets observations of the next night
     traj_assoc, new_obs_assoc, _ = night_to_night_separation_association(last_traj_obs, traj_extremity, sep_criterion)
     traj_assoc, new_obs_assoc = magnitude_association(traj_assoc, new_obs_assoc, mag_criterion_same_fid, mag_criterion_diff_fid)
     traj_assoc, new_obs_assoc = removed_mirrored_association(traj_assoc, new_obs_assoc)
@@ -265,5 +270,6 @@ if __name__ == "__main__":
         print("elapsed time: {}".format(t.time() - t_before))
         print()
         print()
+        break
         
         

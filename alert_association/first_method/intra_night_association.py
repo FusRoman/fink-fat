@@ -169,35 +169,24 @@ def removed_mirrored_association(left_assoc, right_assoc):
     left_assoc = left_assoc.reset_index(drop=True)
     right_assoc = right_assoc.reset_index(drop=True)
 
-    # rename column with the addition of left and right
-    old_left_columns = left_assoc.columns.values
-    old_right_columns = right_assoc.columns.values
-
-    new_left_columns = ["left_" + el for el in old_left_columns]
-    new_right_columns = ["right_" + el for el in old_right_columns]
-
-    left_columns = {old_col : new_col for old_col, new_col in zip(old_left_columns, new_left_columns)}
-    right_columns = {old_col : new_col for old_col, new_col in zip(old_right_columns, new_right_columns)}
-    left_assoc = left_assoc.rename(left_columns, axis=1)
-    right_assoc = right_assoc.rename(right_columns, axis=1)
-
     # concatanates the associations
-    all_assoc = pd.concat([left_assoc, right_assoc], axis=1)
+    all_assoc = pd.concat([left_assoc, right_assoc], axis=1, keys=['left', 'right']).sort_values([('left', 'jd')])
 
     # create a set then a list of the left and right candid and detect the mirrored duplicates
-    mask = all_assoc[['left_candid','right_candid']].apply(lambda x: list(set(x)), axis=1).duplicated()
+    mask = all_assoc[[('left', 'candid'), ('right','candid')]].apply(lambda x: list(set(x)), axis=1).duplicated()
     # remove the mirrored duplicates by applying the mask to the dataframe
     drop_mirrored = all_assoc[~mask]
 
-    # restore the left and right dataframe and the old columns name
-    restore_left_columns = {new_col : old_col for old_col, new_col in zip(old_left_columns, new_left_columns)}
-    restore_right_columns = {new_col : old_col for old_col, new_col in zip(old_right_columns, new_right_columns)}
+    left_col = drop_mirrored.columns.values[0: len(left_assoc.columns.values)]
+    right_col = drop_mirrored.columns.values[len(left_assoc.columns.values):]
+
+    left_a = drop_mirrored[left_col]
+    left_a.columns = left_a.columns.droplevel()
     
-    drop_left = drop_mirrored[new_left_columns]
-    drop_right = drop_mirrored[new_right_columns]
-    drop_left = drop_left.rename(restore_left_columns, axis=1)
-    drop_right = drop_right.rename(restore_right_columns, axis=1)
-    return drop_left, drop_right
+    right_a = drop_mirrored[right_col]
+    right_a.columns = right_a.columns.droplevel()
+
+    return left_a, right_a
 
 def intra_night_association(night_observation, sep_criterion=108.07*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=False):
     """
@@ -261,12 +250,20 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
     """
     nb_new_assoc = len(left_assoc)
 
-    new_traj_id = np.arange(last_traj_id, last_traj_id + nb_new_assoc)
+    new_traj_id = [[i] for i in range(last_traj_id, last_traj_id + nb_new_assoc)]
+
     left_assoc['trajectory_id'] = new_traj_id
     right_assoc['trajectory_id'] = new_traj_id
 
     for _, rows in right_assoc.iterrows():
         new_obs = left_assoc[left_assoc['candid'] == rows['candid']]
+
+        print(left_assoc.loc[new_obs.index.values])
+        print()
+        print(right_assoc.loc[new_obs.index.values])
+        print()
+        print(rows['trajectory_id'])
+
         left_assoc.loc[new_obs.index.values, 'trajectory_id'] = rows['trajectory_id']
         right_assoc.loc[new_obs.index.values, 'trajectory_id'] = rows['trajectory_id']
 
@@ -287,8 +284,33 @@ if __name__ == "__main__":
         t_before = t.time()
         left_assoc, right_assoc, perf_metrics = intra_night_association(df_one_night, compute_metrics=True)        
 
+        left_col = ["left_" + col for col in left_assoc.columns.values]
+        right_col = ["right_" + col for col in right_assoc.columns.values]
+        
+        l_r_concat = pd.concat([left_assoc, right_assoc], axis=1, keys=['left', 'right'])
+        gb_concat = l_r_concat.groupby(by=[('left', 'candid')]).agg(
+            {
+                ('left', 'jd') : list,
+                ('right', 'candid') : list,
+                ('right', 'jd') : list,
+                ('right', 'ra') : lambda x : len(x)
+            }
+        )
+
+        print(gb_concat[gb_concat[('right', 'ra')] > 1])
+        print()
+        print()
+        print()
+        print()
+        print(right_assoc[right_assoc['candid'] == 1520400554915015001])
+        print(right_assoc[right_assoc['candid'] == 1520401990715015006])
+        
+
+        exit()
 
         new_traj_df = new_trajectory_id_assignation(left_assoc, right_assoc, 0)
+
+        print(new_traj_df)
 
         print("performance metrics :\n\t{}".format(perf_metrics))
         print("elapsed time : {}".format(t.time() - t_before))
@@ -308,12 +330,14 @@ if __name__ == "__main__":
     # test removed mirrored
     test_1 = pd.DataFrame({
         "a" : [1, 2, 3, 4],
-        "candid" : [10, 11, 12, 13]
+        "candid" : [10, 11, 12, 13],
+        "jd" : [1, 2, 3, 4]
     })
 
     test_2 = pd.DataFrame({
         "a" : [30, 31, 32, 33],
-        "candid" : [11, 10, 15, 16]
+        "candid" : [11, 10, 15, 16],
+        "jd" : [2, 1, 5, 6]
     })
 
     print(test_1)
