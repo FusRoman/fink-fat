@@ -5,6 +5,8 @@ import numpy as np
 from collections import Counter
 import time as t
 
+import matplotlib.pyplot as plt
+
 
 
 def intra_night_separation_association(night_alerts, separation_criterion):
@@ -148,6 +150,19 @@ def compute_associations_metrics(left_assoc, right_assoc, observations_with_real
             "total real association" : nb_real_assoc}
 
 
+def restore_left_right(concat_l_r, nb_assoc_column):
+    left_col = concat_l_r.columns.values[0: nb_assoc_column]
+    right_col = concat_l_r.columns.values[nb_assoc_column:]
+
+    left_a = concat_l_r[left_col]
+    left_a.columns = left_a.columns.droplevel()
+    
+    right_a = concat_l_r[right_col]
+    right_a.columns = right_a.columns.droplevel()
+
+    return left_a, right_a
+
+
 def removed_mirrored_association(left_assoc, right_assoc):
     """
     Remove the mirrored association (associations like (a, b) and (b, a)) that occurs in the intra-night associations. 
@@ -177,16 +192,49 @@ def removed_mirrored_association(left_assoc, right_assoc):
     # remove the mirrored duplicates by applying the mask to the dataframe
     drop_mirrored = all_assoc[~mask]
 
-    left_col = drop_mirrored.columns.values[0: len(left_assoc.columns.values)]
-    right_col = drop_mirrored.columns.values[len(left_assoc.columns.values):]
-
-    left_a = drop_mirrored[left_col]
-    left_a.columns = left_a.columns.droplevel()
-    
-    right_a = drop_mirrored[right_col]
-    right_a.columns = right_a.columns.droplevel()
+    left_a, right_a = restore_left_right(drop_mirrored, len(left_assoc.columns.values))
 
     return left_a, right_a
+
+def removed_multiple_association(left_assoc, right_assoc):
+
+    # rest the index in order to recover the non multiple association
+    left_assoc = left_assoc.reset_index(drop=True).reset_index()
+    right_assoc = right_assoc.reset_index(drop=True).reset_index()
+
+    # concat left and right members in order to keep the associations
+    l_r_concat = pd.concat([left_assoc, right_assoc], axis=1, keys=['left', 'right'])
+
+    agg_dict = {col : list for col in l_r_concat.columns.values}
+    # group by left candid to detect multiple assoc
+    gb_concat = l_r_concat.groupby(by=[('left', 'candid')]).agg(agg_dict)
+    gb_concat['nb_multiple_assoc'] = gb_concat.apply(lambda x : len(x[0]), axis=1)
+
+    # keep only the multiple association
+    multiple_assoc = gb_concat[gb_concat[('nb_multiple_assoc', '')] > 1]
+    multiple_assoc = multiple_assoc.drop(labels=[('nb_multiple_assoc', '')], axis=1)
+
+    # sort right member by jd to keep the first association when we will used drop_duplicates
+    explode_multiple_assoc = multiple_assoc.explode(list(multiple_assoc.columns.values)).sort_values([('right', 'jd')])
+
+    # remove the rows from left and right assoc where the rows occurs in a multiple association
+    drop_multiple_assoc = explode_multiple_assoc[('left', 'index')].values
+    left_assoc = left_assoc.drop(index=drop_multiple_assoc)
+    right_assoc = right_assoc.drop(index=drop_multiple_assoc)
+
+    # remove useless columns 
+    multiple_assoc = explode_multiple_assoc.drop(labels=[('left', 'index'), ('right', 'index')], axis=1)
+
+    # drop the multiples associations and keep the first ones, as we have sort by jd on the right members, drop_duplicates remove the wrong associations
+    single_assoc = explode_multiple_assoc.drop_duplicates([('left', 'candid')]).reset_index(drop=True)
+
+    # restore the initial left and right before the column based concatenation and concat the remain association with the old ones.
+    single_left, single_right = restore_left_right(single_assoc, len(left_assoc.columns.values))
+
+    left_assoc = pd.concat([left_assoc, single_left])
+    right_assoc = pd.concat([right_assoc, single_right])
+
+    return left_assoc, right_assoc
 
 def intra_night_association(night_observation, sep_criterion=108.07*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=False):
     """
@@ -221,6 +269,9 @@ def intra_night_association(night_observation, sep_criterion=108.07*u.arcsecond,
 
     # remove mirrored associations
     left_assoc, right_assoc = removed_mirrored_association(left_assoc, right_assoc)
+
+    # removed wrong multiple association
+    left_assoc, right_assoc = removed_multiple_association(left_assoc, right_assoc)
     
     if compute_metrics:
         metrics = compute_associations_metrics(left_assoc, right_assoc, night_observation)
@@ -248,6 +299,10 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
         a single dataframe which are the concatanation of left and right and contains a new columns called 'trajectory_id'. 
         This column allows to reconstruct the trajectory by groupby on this column. 
     """
+
+    left_assoc = left_assoc.reset_index(drop=True)
+    right_assoc = right_assoc.reset_index(drop=True)
+
     nb_new_assoc = len(left_assoc)
 
     new_traj_id = [[i] for i in range(last_traj_id, last_traj_id + nb_new_assoc)]
@@ -255,17 +310,12 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
     left_assoc['trajectory_id'] = new_traj_id
     right_assoc['trajectory_id'] = new_traj_id
 
+
+
     for _, rows in right_assoc.iterrows():
         new_obs = left_assoc[left_assoc['candid'] == rows['candid']]
-
-        print(left_assoc.loc[new_obs.index.values])
-        print()
-        print(right_assoc.loc[new_obs.index.values])
-        print()
-        print(rows['trajectory_id'])
-
-        left_assoc.loc[new_obs.index.values, 'trajectory_id'] = rows['trajectory_id']
-        right_assoc.loc[new_obs.index.values, 'trajectory_id'] = rows['trajectory_id']
+        left_assoc.loc[new_obs.index.values, 'trajectory_id'] = [rows['trajectory_id']]
+        right_assoc.loc[new_obs.index.values, 'trajectory_id'] = [rows['trajectory_id']]
 
     return pd.concat([left_assoc, right_assoc])
 
@@ -282,49 +332,14 @@ if __name__ == "__main__":
         df_one_night = df_sso[(df_sso['nid'] == night) & (df_sso['fink_class'] == 'Solar System MPC')]
 
         t_before = t.time()
-        left_assoc, right_assoc, perf_metrics = intra_night_association(df_one_night, compute_metrics=True)        
+        left_assoc, right_assoc, perf_metrics = intra_night_association(df_one_night, compute_metrics=True)
 
-        left_col = ["left_" + col for col in left_assoc.columns.values]
-        right_col = ["right_" + col for col in right_assoc.columns.values]
-        
-        l_r_concat = pd.concat([left_assoc, right_assoc], axis=1, keys=['left', 'right'])
-        gb_concat = l_r_concat.groupby(by=[('left', 'candid')]).agg(
-            {
-                ('left', 'jd') : list,
-                ('right', 'candid') : list,
-                ('right', 'jd') : list,
-                ('right', 'ra') : lambda x : len(x)
-            }
-        )
-
-        print(gb_concat[gb_concat[('right', 'ra')] > 1])
-        print()
-        print()
-        print()
-        print()
-        print(right_assoc[right_assoc['candid'] == 1520400554915015001])
-        print(right_assoc[right_assoc['candid'] == 1520401990715015006])
-        
-
-        exit()
-
-        new_traj_df = new_trajectory_id_assignation(left_assoc, right_assoc, 0)
-
-        print(new_traj_df)
+        new_traj_df = new_trajectory_id_assignation(left_assoc, right_assoc, 0)    
 
         print("performance metrics :\n\t{}".format(perf_metrics))
         print("elapsed time : {}".format(t.time() - t_before))
         print()
-        gb_res = new_traj_df.groupby(['trajectory_id']).agg(
-            ssnamenr=('ssnamenr',list),
-            traj_len=('candid',lambda x : len(x))
-        )
 
-        print(gb_res[gb_res['traj_len'] == 1])
-
-        print(gb_res[gb_res['traj_len']>2])
-        print()
-        break
     exit()
 
     # test removed mirrored
