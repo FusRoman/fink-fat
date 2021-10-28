@@ -151,6 +151,24 @@ def compute_associations_metrics(left_assoc, right_assoc, observations_with_real
 
 
 def restore_left_right(concat_l_r, nb_assoc_column):
+    """
+    By given a dataframe which is the results of a columns based concatenation of two dataframe, restore the two originals dataframes.
+    Work only if the two dataframe have the same numbers of columns.
+
+    Parameters
+    ----------
+    concat_l_r : dataframe
+        dataframe which is the results of the two concatenate dataframes
+    nb_assoc_column : integer
+        the number of columns in the two dataframe
+
+    Returns
+    -------
+    left_a : dataframe
+        the left dataframe before the concatenation
+    right_a : dataframe
+        the right dataframe before the concatenation
+    """
     left_col = concat_l_r.columns.values[0: nb_assoc_column]
     right_col = concat_l_r.columns.values[nb_assoc_column:]
 
@@ -197,7 +215,25 @@ def removed_mirrored_association(left_assoc, right_assoc):
     return left_a, right_a
 
 def removed_multiple_association(left_assoc, right_assoc):
+    """
+    Remove the multiple associations which can occurs during the intra_night associations.
+    If we have three alerts (A, B and C) in the dataframe and the following associations : (A, B), (B, C) and (A, C) then this function remove
+    the associations (A, C) to keep only (A, B) and (B, C). 
 
+    Parameters
+    ----------
+    left_assoc : dataframe
+        the left members of the associations
+    right_assoc : dataframe
+        the right members of the associations
+
+    Returns
+    -------
+    left_assoc : dataframe
+        left members without the multiple associations
+    right_members : dataframe
+        right members without the multiple associations
+    """
     # rest the index in order to recover the non multiple association
     left_assoc = left_assoc.reset_index(drop=True).reset_index()
     right_assoc = right_assoc.reset_index(drop=True).reset_index()
