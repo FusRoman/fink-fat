@@ -207,6 +207,7 @@ def removed_mirrored_association(left_assoc, right_assoc):
 
     # create a set then a list of the left and right candid and detect the mirrored duplicates
     mask = all_assoc[[('left', 'candid'), ('right','candid')]].apply(lambda x: list(set(x)), axis=1).duplicated()
+    
     # remove the mirrored duplicates by applying the mask to the dataframe
     drop_mirrored = all_assoc[~mask]
 
@@ -267,8 +268,8 @@ def removed_multiple_association(left_assoc, right_assoc):
     # restore the initial left and right before the column based concatenation and concat the remain association with the old ones.
     single_left, single_right = restore_left_right(single_assoc, len(left_assoc.columns.values))
 
-    left_assoc = pd.concat([left_assoc, single_left])
-    right_assoc = pd.concat([right_assoc, single_right])
+    left_assoc = pd.concat([left_assoc, single_left]).drop(labels=['index'], axis=1)
+    right_assoc = pd.concat([right_assoc, single_right]).drop(labels=['index'], axis=1)
 
     return left_assoc, right_assoc
 
@@ -305,7 +306,7 @@ def intra_night_association(night_observation, sep_criterion=108.07*u.arcsecond,
 
     # remove mirrored associations
     left_assoc, right_assoc = removed_mirrored_association(left_assoc, right_assoc)
-
+    
     # removed wrong multiple association
     left_assoc, right_assoc = removed_multiple_association(left_assoc, right_assoc)
     
@@ -353,7 +354,7 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
         left_assoc.loc[new_obs.index.values, 'trajectory_id'] = [rows['trajectory_id']]
         right_assoc.loc[new_obs.index.values, 'trajectory_id'] = [rows['trajectory_id']]
 
-    return pd.concat([left_assoc, right_assoc])
+    return pd.concat([left_assoc, right_assoc]).drop_duplicates(['candid'])
 
 
 if __name__ == "__main__":
@@ -370,14 +371,24 @@ if __name__ == "__main__":
         t_before = t.time()
         left_assoc, right_assoc, perf_metrics = intra_night_association(df_one_night, compute_metrics=True)
 
+        print(right_assoc[right_assoc['candid'].isin(left_assoc['candid'])])
+
         new_traj_df = new_trajectory_id_assignation(left_assoc, right_assoc, 0)    
+        
+        tt = new_traj_df.explode(['trajectory_id']).groupby(['trajectory_id']).agg({
+            "ssnamenr" : list,
+            "candid" : lambda x : len(x)
+        })
+
+        print(tt[tt['candid'] > 2])
 
         print("performance metrics :\n\t{}".format(perf_metrics))
         print("elapsed time : {}".format(t.time() - t_before))
         print()
+        break
 
+    
     exit()
-
     # test removed mirrored
     test_1 = pd.DataFrame({
         "a" : [1, 2, 3, 4],

@@ -52,7 +52,7 @@ def night_to_night_separation_association(old_observation, new_observation, sepa
 
 def get_n_last_observations_from_trajectories(trajectories, n, ascending=True):
 
-    return trajectories.sort_values(['jd'], ascending=ascending).groupby(['trajectory_id']).tail(n).sort_values(['trajectory_id'])
+    return trajectories.sort_values(['jd'], ascending=ascending).explode(['trajectory_id']).groupby(['trajectory_id']).tail(n).sort_values(['trajectory_id'])
 
 
 def angle_three_point(a, b, c):
@@ -66,28 +66,24 @@ def angle_three_point(a, b, c):
 
 
 def angle_df(x):
-    ra, dec, jd = x[1], x[2], x[3]
+    ra_x, dec_x, jd_x = x[1], x[2], x[3]
 
-    all_angle = []
+    ra_y, dec_y, jd_y = x[5], x[6], x[7]
 
-    a = np.array([ra[0], dec[0]])
-    b = np.array([ra[1], dec[1]])
+    a = np.array([ra_x[0], dec_x[0]])
+    b = np.array([ra_x[1], dec_x[1]])
+    c = np.array([ra_y, dec_y])
 
-    jd1 = jd[1]
+    jd_x = jd_x[1]
 
-    for i in range(2, len(ra)):
-        
-        c = np.array([ra[i], dec[i]])
-        jd2 = jd[i]
+    diff_jd = jd_y - jd_x
 
-        diff_jd = jd2 - jd1
-
-        if diff_jd > 1:
-            all_angle.append(angle_three_point(a, b, c) / diff_jd)
-        else:
-            all_angle.append(angle_three_point(a, b, c))
+    if diff_jd > 1:
+        res_angle = angle_three_point(a, b, c) / diff_jd
+    else:
+        res_angle = angle_three_point(a, b, c)
     
-    return all_angle
+    return res_angle
 
 def remove_nan(x):
     return [el for el in x if ~np.isnan(el)]
@@ -99,7 +95,7 @@ def night_to_night_association(trajectory_df, old_observation, new_observation, 
     two_last_observation_trajectory = get_n_last_observations_from_trajectories(trajectory_df, 2)
 
     # get the maximum trajectory_id and increment it to return the new trajectory_id baseline
-    last_trajectory_id = np.max(trajectory_df['trajectory_id'].values) + 1
+    last_trajectory_id = np.max(trajectory_df.explode(['trajectory_id'])['trajectory_id'].values) + 1
 
     # get the last obeservations of the trajectories to perform the associations 
     last_traj_obs = two_last_observation_trajectory.groupby(['trajectory_id']).last().reset_index()
@@ -117,11 +113,30 @@ def night_to_night_association(trajectory_df, old_observation, new_observation, 
     traj_assoc, new_obs_assoc, _ = night_to_night_separation_association(last_traj_obs, traj_extremity, sep_criterion)
     traj_assoc, new_obs_assoc = magnitude_association(traj_assoc, new_obs_assoc, mag_criterion_same_fid, mag_criterion_diff_fid)
     traj_assoc, new_obs_assoc = removed_mirrored_association(traj_assoc, new_obs_assoc)
+    
 
     traj_assoc = traj_assoc.reset_index(drop=True).reset_index()
     new_obs_assoc = new_obs_assoc.reset_index(drop=True).reset_index()
     new_obs_assoc = new_obs_assoc.rename({'trajectory_id' : 'tmp_traj'}, axis=1)
     new_obs_assoc['trajectory_id'] = traj_assoc['trajectory_id']
+    print(traj_assoc)
+    print()
+    print()
+    print(new_obs_assoc)
+    print()
+    print()
+    two_last = two_last_observation_trajectory[two_last_observation_trajectory['trajectory_id'].isin(traj_assoc['trajectory_id'])]
+    print(two_last)
+    two_last = two_last.groupby(['trajectory_id']).agg({
+        "ra" : list,
+        "dec" : list,
+        "jd" : list
+    })
+    
+    prep_angle = two_last.merge(new_obs_assoc[['index', 'ra', 'dec', 'jd', 'trajectory_id']], on='trajectory_id')
+    prep_angle['angle'] = prep_angle.apply(angle_df, axis=1)
+    print(prep_angle)
+    exit()
     print(new_obs_assoc.columns.values)
 
 
@@ -138,6 +153,8 @@ def night_to_night_association(trajectory_df, old_observation, new_observation, 
 
     new_traj_df['angle'] = new_traj_df.apply(angle_df, axis=1)
     
+    print(new_traj_df[new_traj_df['candid'] >= 3])
+
     explode_angle_df = new_traj_df[new_traj_df['candid'] >= 3].explode(['index', 'angle', 'tmp_traj'])
     cone_search = explode_angle_df[explode_angle_df['angle'] <= 29.52].reset_index()
     print(cone_search)
@@ -263,6 +280,9 @@ if __name__ == "__main__":
             left, right, _ = intra_night_association(df_night1)
             traj_df = new_trajectory_id_assignation(left, right, 0)
             traj_df = traj_df.reset_index(drop=True)
+
+            tt = traj_df.explode(['trajectory_id'])
+            print(tt[tt['trajectory_id'] == 90])
 
             old_observation = df_night1[~df_night1['candid'].isin(traj_df['candid'])]
 
