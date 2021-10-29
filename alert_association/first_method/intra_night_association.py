@@ -1,3 +1,4 @@
+from hashlib import new
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 import pandas as pd
@@ -307,6 +308,9 @@ def intra_night_association(night_observation, sep_criterion=108.07*u.arcsecond,
 
     left_assoc, right_assoc = magnitude_association(left_assoc, right_assoc, mag_criterion_same_fid, mag_criterion_diff_fid)
 
+    if len(left_assoc) == 0:
+        return pd.DataFrame(), pd.DataFrame(), {} 
+
     # remove mirrored associations
     left_assoc, right_assoc = removed_mirrored_association(left_assoc, right_assoc)
     
@@ -358,7 +362,9 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
         left_assoc.loc[new_obs.index.values, 'trajectory_id'] = rows['trajectory_id']
         right_assoc.loc[new_obs.index.values, 'trajectory_id'] = rows['trajectory_id']
 
-    return pd.concat([left_assoc, right_assoc]).drop_duplicates(['candid', 'trajectory_id'])
+    traj_df = pd.concat([left_assoc, right_assoc]).drop_duplicates(['candid', 'trajectory_id'])
+    traj_df['trajectory_id'] = [[el] for el in traj_df['trajectory_id'].values]
+    return traj_df
 
 
 if __name__ == "__main__":
@@ -372,14 +378,26 @@ if __name__ == "__main__":
         print(night)
         df_one_night = df_sso[(df_sso['nid'] == night) & (df_sso['fink_class'] == 'Solar System MPC')]
 
+
+        df_cand = df_sso[(df_sso['nid'] == night) & (df_sso['fink_class'] == 'Solar System candidate')]
+
         t_before = t.time()
         left_assoc, right_assoc, perf_metrics = intra_night_association(df_one_night, compute_metrics=True)        
-        new_traj_df = new_trajectory_id_assignation(left_assoc, right_assoc, 0).explode(['trajectory_id'])
-               
+        new_traj_df = new_trajectory_id_assignation(left_assoc, right_assoc, 0)
+        print(new_traj_df)
 
         print("performance metrics :\n\t{}".format(perf_metrics))
         print("elapsed time : {}".format(t.time() - t_before))
         print()
+
+        t_before = t.time()
+        left_assoc, right_assoc, perf_metrics = intra_night_association(df_cand, compute_metrics=True)        
+        new_traj_df = new_trajectory_id_assignation(left_assoc, right_assoc, 0).explode(['trajectory_id'])
+
+        print("nb assoc cand : {}".format(len(left_assoc)))
+        print("elapsed time : {}".format(t.time() - t_before))
+        print()
+        print("-------------")
         
         
 
