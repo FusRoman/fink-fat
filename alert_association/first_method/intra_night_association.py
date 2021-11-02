@@ -9,6 +9,17 @@ import time as t
 
 
 def get_n_last_observations_from_trajectories(trajectories, n, ascending=True):
+    """
+    Get n extremity observations from trajectories
+
+    trajectories : dataframe
+        a dataframe with a trajectory_id column that identify trajectory observations.
+    n : integer
+        the number of extremity observations to return.
+    ascending : boolean
+        if set to True, return the most recent extremity observations, return the oldest ones otherwise, default to True.
+    """
+
     return trajectories.sort_values(['jd'], ascending=ascending).explode(['trajectory_id']).groupby(['trajectory_id']).tail(n).sort_values(['trajectory_id'])
 
 
@@ -208,9 +219,14 @@ def removed_mirrored_association(left_assoc, right_assoc):
     # concatanates the associations
     all_assoc = pd.concat([left_assoc, right_assoc], axis=1, keys=['left', 'right']).sort_values([('left', 'jd')])
 
+    # function used to detect the mirrored rows
+    # taken from : https://stackoverflow.com/questions/58512147/how-to-removing-mirror-copy-rows-in-a-pandas-dataframe
+    def key(x):
+        return frozenset(Counter(x).items())
+
     # create a set then a list of the left and right candid and detect the mirrored duplicates
-    mask = all_assoc[[('left', 'candid'), ('right','candid')]].apply(lambda x: list(set(x)), axis=1).duplicated()
-    
+    mask = all_assoc[[('left', 'candid'), ('right','candid')]].apply(key, axis=1).duplicated()
+
     # remove the mirrored duplicates by applying the mask to the dataframe
     drop_mirrored = all_assoc[~mask]
 
@@ -238,7 +254,7 @@ def removed_multiple_association(left_assoc, right_assoc):
     right_members : dataframe
         right members without the multiple associations
     """
-    # rest the index in order to recover the non multiple association
+    # reset the index in order to recover the non multiple association
     left_assoc = left_assoc.reset_index(drop=True).reset_index()
     right_assoc = right_assoc.reset_index(drop=True).reset_index()
 
@@ -373,16 +389,31 @@ if __name__ == "__main__":
 
     all_night = np.unique(df_sso['nid'])
 
-
+    
     for night in all_night:
         print(night)
-        df_one_night = df_sso[(df_sso['nid'] == night) & (df_sso['fink_class'] == 'Solar System MPC')]
+        df_one_night = df_sso[(df_sso['nid'] == 1522) & (df_sso['fink_class'] == 'Solar System MPC')]
 
 
         df_cand = df_sso[(df_sso['nid'] == night) & (df_sso['fink_class'] == 'Solar System candidate')]
 
         t_before = t.time()
-        left_assoc, right_assoc, perf_metrics = intra_night_association(df_one_night, compute_metrics=True)        
+        left_assoc, right_assoc, perf_metrics = intra_night_association(df_one_night, compute_metrics=True)
+        #left_assoc, right_assoc = removed_mirrored_association(left_assoc, right_assoc)
+        new_left, new_right = left_assoc.reset_index(drop=True), right_assoc.reset_index(drop=True), 
+        print(new_left.loc[692])
+        print(new_right.loc[692])
+        print()
+        print()
+        print(new_left.loc[954])
+        print(new_right.loc[954])
+        print()
+        print()
+
+        print(left_assoc)
+        print(right_assoc)
+
+        exit()    
         new_traj_df = new_trajectory_id_assignation(left_assoc, right_assoc, 0)
         print(new_traj_df)
 
@@ -426,3 +457,27 @@ if __name__ == "__main__":
 
     print(tt_1)
     print(tt_2)
+
+    
+
+    df1 = pd.DataFrame({
+        "candid" : [1522165813015015004, 1522207623015015004],
+        "objectId": ['ZTF21aanxwfq', 'ZTF21aanyhht'],
+        "jd" : [2459276.66581, 2459276.707627]
+    })
+
+    df2 = pd.DataFrame({
+        "candid" : [1522207623015015004, 1522165813015015004],
+        "objectId": ['ZTF21aanyhht', 'ZTF21aanxwfq'],
+        "jd" : [2459276.707627, 2459276.66581]
+    })
+
+    print(df1)
+
+    print(df2)
+
+    dd1, dd2 = removed_mirrored_association(df1, df2)
+
+    print()
+    print(dd1)
+    print(dd2)
