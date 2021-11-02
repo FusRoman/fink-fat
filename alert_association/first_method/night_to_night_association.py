@@ -67,9 +67,9 @@ def angle_three_point(a, b, c):
         the angle formed by the three points
     """
     ba = b - a
-    bc = c - b
+    ca = c - a
 
-    cosine_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
+    cosine_angle = np.dot(ba, ca) / (np.linalg.norm(ba) * np.linalg.norm(ca))
     angle = np.arccos(cosine_angle)
 
     return np.degrees(angle)
@@ -230,7 +230,7 @@ def trajectory_tracklets_id_management(traj_left, traj_right, traj_next_night, t
     """
     This functions perform the trajectory_id propagation between the already known trajectory and the new tracklets that will be associates.
 
-    This function remove also the tracklets involved in an association from traj_next_night and update trajectory_df with all tracklets involved in an associations.
+    This function remove also the tracklets involved in an association in traj_next_night and update trajectory_df with all tracklets involved in an associations.
 
     Parameters 
     ----------
@@ -264,59 +264,53 @@ def trajectory_tracklets_id_management(traj_left, traj_right, traj_next_night, t
 
     # get the tracklets extremity involved in the multiple associations
     multiple_obs = traj_right.loc[multiple_assoc[multiple_assoc['candid'] > 1].explode(['index'])['index'].values]
-    
-    # get the first occurence in the multiple associations
-    first_occur = multiple_obs[multiple_obs.duplicated(['trajectory_id'])]
 
-    # get the others occurences
-    other_occur = multiple_obs[~multiple_obs.duplicated(['trajectory_id'])]
+    first_occur = first_occur_tracklets = other_occur = other_occurs_tracklets = pd.DataFrame()
 
+    if len(multiple_obs) > 0:
+        # get the first occurence in the multiple associations
+        first_occur = multiple_obs[multiple_obs.duplicated(['trajectory_id'])]
 
-    print(first_occur)
-    print()
-    print(single_assoc)
-    print()
-    print(other_occur)
-    
-
-    all_other_occur_tracklets = []
-    # add the trajectory_id of the all other occurences to the list of trajectory_id of the associated trajectories
-    for _, rows in other_occur.iterrows():
-        traj_id = rows['trajectory_id']
-
-        # get all rows of the associated trajectory 
-        mask = trajectory_df.trajectory_id.apply(lambda x: any(i == traj_id for i in x))
-        multi_traj = trajectory_df[mask]
-
-        # get the trajectory id list of the associated trajectory
-        multi_traj_id = multi_traj['trajectory_id'].values
-        # duplicates the new trajectory_id which will be added to the trajectory id list
-        new_traj_id = [[rows['tmp_traj']] for _ in range(len(multi_traj))]
-
-        # concatenate the trajectory id list with the new trajectory id and add this new list to the trajectory_id columns of the associated trajectory
-        trajectory_df.loc[multi_traj.index.values, 'trajectory_id'] = [el1 + el2 for el1, el2 in zip(multi_traj_id, new_traj_id)]
-
+        # get the others occurences
+        other_occur = multiple_obs[~multiple_obs.duplicated(['trajectory_id'])]
         
-        # get all rows of the associated tracklets of the next night 
-        mask = traj_next_night.trajectory_id.apply(lambda x: np.any(x == rows['tmp_traj']))
-        next_night_tracklets = traj_next_night[mask]
-        all_other_occur_tracklets.append(next_night_tracklets)
 
-        # remove the associated tracklets
-        mask_traj_idx = traj_next_night.index.isin(next_night_tracklets.index)
-        traj_next_night = traj_next_night[~mask_traj_idx]
+        all_other_occur_tracklets = []
+        # add the trajectory_id of the all other occurences to the list of trajectory_id of the associated trajectories
+        for _, rows in other_occur.iterrows():
+            traj_id = rows['trajectory_id']
 
-    other_occurs_tracklets = pd.concat(all_other_occur_tracklets)
-    
-    traj_next_night, first_occur_tracklets = assign_new_trajectory_id_to_new_tracklets(first_occur, traj_next_night)
+            # get all rows of the associated trajectory 
+            mask = trajectory_df.trajectory_id.apply(lambda x: any(i == traj_id for i in x))
+            multi_traj = trajectory_df[mask]
+
+            # get the trajectory id list of the associated trajectory
+            multi_traj_id = multi_traj['trajectory_id'].values
+            # duplicates the new trajectory_id which will be added to the trajectory id list
+            new_traj_id = [[rows['tmp_traj']] for _ in range(len(multi_traj))]
+
+            # concatenate the trajectory id list with the new trajectory id and add this new list to the trajectory_id columns of the associated trajectory
+            trajectory_df.loc[multi_traj.index.values, 'trajectory_id'] = [el1 + el2 for el1, el2 in zip(multi_traj_id, new_traj_id)]
+
+            
+            # get all rows of the associated tracklets of the next night 
+            mask = traj_next_night.trajectory_id.apply(lambda x: np.any(x == rows['tmp_traj']))
+            next_night_tracklets = traj_next_night[mask]
+            all_other_occur_tracklets.append(next_night_tracklets)
+
+            # remove the associated tracklets
+            mask_traj_idx = traj_next_night.index.isin(next_night_tracklets.index)
+            traj_next_night = traj_next_night[~mask_traj_idx]
+
+        other_occurs_tracklets = pd.concat(all_other_occur_tracklets)
+        traj_next_night, first_occur_tracklets = assign_new_trajectory_id_to_new_tracklets(first_occur, traj_next_night)
+        other_occur = other_occur.drop(['trajectory_id'], axis=1).rename({'tmp_traj' : 'trajectory_id'}, axis=1)
+        first_occur = first_occur.drop(['tmp_traj'], axis=1)
+        first_occur['trajectory_id'] = [[el] for el in first_occur['trajectory_id'].values]
+        other_occur['trajectory_id'] = [[el] for el in other_occur['trajectory_id'].values]
+
+
     traj_next_night, single_assoc_tracklets = assign_new_trajectory_id_to_new_tracklets(single_assoc, traj_next_night)
-
-    other_occur = other_occur.drop(['trajectory_id'], axis=1).rename({'tmp_traj' : 'trajectory_id'}, axis=1)
-
-    first_occur = first_occur.drop(['tmp_traj'], axis=1)
-
-    first_occur['trajectory_id'] = [[el] for el in first_occur['trajectory_id'].values]
-    other_occur['trajectory_id'] = [[el] for el in other_occur['trajectory_id'].values]
     single_assoc['trajectory_id'] = [[el] for el in single_assoc['trajectory_id'].values]
 
     # add all the new tracklets in the trajectory dataframe with the right trajectory_id
@@ -325,7 +319,7 @@ def trajectory_tracklets_id_management(traj_left, traj_right, traj_next_night, t
 
 
 
-def night_to_night_association(trajectory_df, old_observation, new_observation, sep_criterion=0.43*u.degree, mag_criterion_same_fid=1.36, mag_criterion_diff_fid=1.31, angle_criterion=29.52):
+def night_to_night_association(trajectory_df, old_observation, new_observation, sep_criterion=0.24*u.degree, mag_criterion_same_fid=0.18, mag_criterion_diff_fid=0.7, angle_criterion=8.8):
     # get the last two observations for each trajectories
     two_last_observation_trajectory = get_n_last_observations_from_trajectories(trajectory_df, 2)
 
@@ -335,14 +329,7 @@ def night_to_night_association(trajectory_df, old_observation, new_observation, 
     # intra-night association of the new observations
     new_left, new_right, _ = intra_night_association(new_observation)
     new_left, new_right = new_left.reset_index(drop=True), new_right.reset_index(drop=True), 
-    print(new_left.loc[692])
-    print(new_right.loc[692])
-    print()
-    print()
-    print(new_left.loc[954])
-    print(new_right.loc[954])
-    print()
-    print()
+    
     traj_next_night = new_trajectory_id_assignation(new_left, new_right, last_trajectory_id)
 
     new_observation_not_associated = new_observation[~new_observation['candid'].isin(traj_next_night['candid'])]
@@ -360,51 +347,40 @@ def night_to_night_association(trajectory_df, old_observation, new_observation, 
         angle_criterion
         )
 
+    """precision_counter = Counter(traj_left['ssnamenr'].values == traj_extremity_associated['ssnamenr'].values)
+    print("trajectory_to_tracklets associations precision : {}".format(precision_counter))"""
+
     # remove the tracklets extremity involved in an associations
-    rttt = traj_next_night.explode(['trajectory_id']).reset_index(drop=True)
-
-    print(rttt[rttt['trajectory_id'] == 4329])
-    print()
-    print()
-    print(rttt[rttt['trajectory_id'] == 4067])
-    print()
-    print()
-
     # reset index is important for the trajectory_id_management
     traj_next_night = traj_next_night[~traj_next_night['candid'].isin(traj_extremity_associated['candid'])].reset_index(drop=True)
     tracklets_extremity = tracklets_extremity[~tracklets_extremity['candid'].isin(traj_extremity_associated['candid'])].reset_index(drop=True)
-
-    rttt = traj_next_night.explode(['trajectory_id'])
-    print(rttt[rttt['trajectory_id'] == 4329])
-
-    print()
-    print()
-
-
-    trajectory_df, tracklets_not_associated = trajectory_tracklets_id_management(traj_left, traj_extremity_associated, traj_next_night, trajectory_df)
+    if len(traj_left) > 0:
+        trajectory_df, tracklets_not_associated = trajectory_tracklets_id_management(traj_left, traj_extremity_associated, traj_next_night, trajectory_df)
+    else:
+        tracklets_not_associated = traj_next_night
 
     two_last_not_associated = two_last_observation_trajectory[two_last_observation_trajectory['trajectory_id'].isin(remain_traj['trajectory_id'])]
 
     two_first_obs_tracklets = get_n_last_observations_from_trajectories(tracklets_not_associated, 2, ascending=False)
 
-    track_left, obs_right, remain_track = trajectory_to_extremity_associations(
+    # tracklets associations with the old observations
+    _, old_obs_right, _ = trajectory_to_extremity_associations(
         two_first_obs_tracklets, 
-        new_observation_not_associated,
+        old_observation,
         sep_criterion,
         mag_criterion_same_fid,
         mag_criterion_diff_fid,
         angle_criterion)
 
-    print(track_left)
-    print()
-    print(obs_right)
-
-
     """
-    old_obs_assoc, track_assoc, _ = night_to_night_separation_association(old_observation, tracklets_extremity, sep_criterion)
-    old_obs_assoc, track_assoc = magnitude_association(old_obs_assoc, track_assoc, mag_criterion_same_fid, mag_criterion_diff_fid)
-    old_obs_assoc, track_assoc = removed_mirrored_association(old_obs_assoc, track_assoc)
-    """
+    precision_counter = Counter(track_left['ssnamenr'].values == old_obs_right['ssnamenr'].values)
+    print("old observation to tracklets association precision : {}".format(precision_counter))"""
+
+    old_obs_right['trajectory_id'] = [[el] for el in old_obs_right['trajectory_id'].values]
+    all_new_tracklets = pd.concat([tracklets_not_associated, old_obs_right])
+    
+    trajectory_df = pd.concat([trajectory_df, all_new_tracklets])
+    print(trajectory_df)
 
     return trajectory_df
 
@@ -426,8 +402,8 @@ if __name__ == "__main__":
             print(n1)
             print(n2)
             print()
-            df_night1 = df_sso[(df_sso['nid'] == 1521) & (df_sso['fink_class'] == 'Solar System MPC')]
-            df_night2 = df_sso[(df_sso['nid'] == 1522) & (df_sso['fink_class'] == 'Solar System MPC')]
+            df_night1 = df_sso[(df_sso['nid'] == 1538) & (df_sso['fink_class'] == 'Solar System MPC')]
+            df_night2 = df_sso[(df_sso['nid'] == 1539) & (df_sso['fink_class'] == 'Solar System MPC')]
 
             left, right, _ = intra_night_association(df_night1)
             traj_df = new_trajectory_id_assignation(left, right, 0)
@@ -439,7 +415,19 @@ if __name__ == "__main__":
         print("elapsed time: {}".format(t.time() - t_before))
         print()
         print()
+
+        traj_gb = traj_df.explode(['trajectory_id']).groupby(['trajectory_id']).agg({
+            'ra' : list,
+            'dec' : list,
+            'ssnamenr' : list,
+            'candid' : lambda x : len(x)
+        })
+
+        print(traj_gb[traj_gb['candid'] > 3])
+
         break
+        
+        
         
         
         
