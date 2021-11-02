@@ -12,12 +12,19 @@ def get_n_last_observations_from_trajectories(trajectories, n, ascending=True):
     """
     Get n extremity observations from trajectories
 
+    Parameters
+    ----------
     trajectories : dataframe
         a dataframe with a trajectory_id column that identify trajectory observations.
     n : integer
         the number of extremity observations to return.
     ascending : boolean
         if set to True, return the most recent extremity observations, return the oldest ones otherwise, default to True.
+    
+    Returns
+    -------
+    last_trajectories_observations : dataframe
+        the n last observations from the recorded trajectories
     """
 
     return trajectories.sort_values(['jd'], ascending=ascending).explode(['trajectory_id']).groupby(['trajectory_id']).tail(n).sort_values(['trajectory_id'])
