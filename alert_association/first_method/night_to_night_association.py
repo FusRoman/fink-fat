@@ -380,7 +380,17 @@ def night_to_night_association(trajectory_df, old_observation, new_observation, 
     all_new_tracklets = pd.concat([tracklets_not_associated, old_obs_right])
     
     trajectory_df = pd.concat([trajectory_df, all_new_tracklets])
-    print(trajectory_df)
+    
+    _, new_obs_right, _ = trajectory_to_extremity_associations(
+        two_last_not_associated,
+        new_observation_not_associated,
+        sep_criterion,
+        mag_criterion_same_fid,
+        mag_criterion_diff_fid,
+        angle_criterion
+    )
+
+    trajectory_df = pd.concat([trajectory_df, new_obs_right])
 
     return trajectory_df
 
@@ -416,14 +426,14 @@ if __name__ == "__main__":
         print()
         print()
 
-        traj_gb = traj_df.explode(['trajectory_id']).groupby(['trajectory_id']).agg({
+        """traj_gb = traj_df.explode(['trajectory_id']).groupby(['trajectory_id']).agg({
             'ra' : list,
             'dec' : list,
             'ssnamenr' : list,
             'candid' : lambda x : len(x)
         })
 
-        print(traj_gb[traj_gb['candid'] > 3])
+        print(traj_gb[traj_gb['candid'] > 3])"""
 
         break
         
