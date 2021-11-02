@@ -160,7 +160,13 @@ def cone_search_association(two_last_observations, traj_assoc, new_obs_assoc, an
 
     return traj_assoc.drop(['index'], axis=1), new_obs_assoc.drop(['index'], axis=1)
 
+def night_to_night_observation_association(obs_set1, obs_set2, sep_criterion, mag_criterion_same_fid, mag_criterion_diff_fid):
 
+    # night_to_night association between the last observations from the trajectories and the first tracklets observations of the next night
+    traj_assoc, new_obs_assoc, _ = night_to_night_separation_association(obs_set1, obs_set2, sep_criterion)
+    traj_assoc, new_obs_assoc = magnitude_association(traj_assoc, new_obs_assoc, mag_criterion_same_fid, mag_criterion_diff_fid)
+    traj_assoc, new_obs_assoc = removed_mirrored_association(traj_assoc, new_obs_assoc)
+    return traj_assoc, new_obs_assoc
 
 def trajectory_to_extremity_associations(two_last_observations, tracklets_extremity, sep_criterion, mag_criterion_same_fid, mag_criterion_diff_fid, angle_criterion): 
     """
@@ -184,10 +190,7 @@ def trajectory_to_extremity_associations(two_last_observations, tracklets_extrem
     # get the last obeservations of the trajectories to perform the associations 
     last_traj_obs = two_last_observations.groupby(['trajectory_id']).last().reset_index()
     
-    # night_to_night association between the last observations from the trajectories and the first tracklets observations of the next night
-    traj_assoc, new_obs_assoc, _ = night_to_night_separation_association(last_traj_obs, tracklets_extremity, sep_criterion)
-    traj_assoc, new_obs_assoc = magnitude_association(traj_assoc, new_obs_assoc, mag_criterion_same_fid, mag_criterion_diff_fid)
-    traj_assoc, new_obs_assoc = removed_mirrored_association(traj_assoc, new_obs_assoc)
+    traj_assoc, new_obs_assoc = night_to_night_observation_association(last_traj_obs, tracklets_extremity, sep_criterion, mag_criterion_same_fid, mag_criterion_diff_fid)
 
     if len(traj_assoc) != 0:
         traj_assoc, new_obs_assoc = cone_search_association(two_last_observations, traj_assoc, new_obs_assoc, angle_criterion)
@@ -377,10 +380,16 @@ def night_to_night_association(trajectory_df, old_observation, new_observation, 
     print("old observation to tracklets association precision : {}".format(precision_counter))"""
 
     old_obs_right['trajectory_id'] = [[el] for el in old_obs_right['trajectory_id'].values]
+    # remove the associated observations in original old_observation dataframe
+    old_observation = old_observation[~old_observation['candid'].isin(old_obs_right['candid'])]
+
+    # add the tracklets of the next night to the set of all trajectories
     all_new_tracklets = pd.concat([tracklets_not_associated, old_obs_right])
     
     trajectory_df = pd.concat([trajectory_df, all_new_tracklets])
     
+
+    # trajectories associations with the new observations of the next night
     _, new_obs_right, _ = trajectory_to_extremity_associations(
         two_last_not_associated,
         new_observation_not_associated,
@@ -389,8 +398,28 @@ def night_to_night_association(trajectory_df, old_observation, new_observation, 
         mag_criterion_diff_fid,
         angle_criterion
     )
-
     trajectory_df = pd.concat([trajectory_df, new_obs_right])
+
+    new_observation_not_associated = new_observation_not_associated[~new_observation_not_associated['candid'].isin(new_obs_right['candid'])]
+
+    old_obs_assoc, new_obs_assoc = night_to_night_observation_association(
+        old_observation, 
+        new_observation_not_associated, 
+        sep_criterion,
+        mag_criterion_same_fid,
+        mag_criterion_diff_fid
+        )
+
+    # get the maximum trajectory_id and increment it to return the new trajectory_id baseline
+    last_trajectory_id = np.max(trajectory_df.explode(['trajectory_id'])['trajectory_id'].values) + 1
+    new_traj_id = np.arange(last_trajectory_id, last_trajectory_id + len(old_obs_assoc))
+    
+    # assign a new trajectory_id to new associations
+    old_obs_assoc['trajectory_id'] = new_obs_assoc['trajectory_id'] = new_traj_id
+    trajectory_df = pd.concat([trajectory_df, old_obs_assoc, new_obs_assoc])
+
+    precision_counter = Counter(old_obs_assoc['ssnamenr'].values == new_obs_assoc['ssnamenr'].values)
+    print("old observation to tracklets association precision : {}".format(precision_counter))
 
     return trajectory_df
 
