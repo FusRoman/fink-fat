@@ -9,23 +9,24 @@ on:
   pull_request:
 
 jobs:
-    name: run test
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: [3.6]
-    steps:
-      - uses: actions/checkout@v2
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v2
-        with:
-          python-version: ${{ matrix.python-version }}
-      - name: Install add-ons
-        run: |
-          sudo apt-get install axel
-          sudo apt-get install python3-testresources
-      - name: Run test suites
-        run: |
-          ./run_tests.sh
-          bash <(curl -s https://codecov.io/bash)
+    run-test:
+      name: run-test
+      runs-on: ubuntu-latest
+      strategy:
+        matrix:
+          python-version: [3.6]
+      steps:
+        - uses: actions/checkout@v2
+        - name: Set up Python ${{ matrix.python-version }}
+          uses: actions/setup-python@v2
+          with:
+            python-version: ${{ matrix.python-version }}
+        - name: Install add-ons
+          run: |
+            sudo apt-get install axel
+            sudo apt-get install python3-testresources
+        - name: Run test suites
+          run: |
+            ./run_tests.sh
+            bash <(curl -s https://codecov.io/bash)
     
