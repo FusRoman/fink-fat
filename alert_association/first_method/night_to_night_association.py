@@ -1,13 +1,9 @@
 from re import L
-from astropy.coordinates.solar_system import get_body_barycentric
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 import pandas as pd
 import numpy as np
-from collections import Counter
 import time as t
-
-from pandas.core.indexes import multi
 
 from intra_night_association import intra_night_association
 from intra_night_association import new_trajectory_id_assignation
@@ -75,7 +71,6 @@ def angle_three_point(a, b, c):
 
     return np.degrees(angle)
 
-
 def angle_df(x):
     """
     Taken three alerts from a dataframe rows, computes the angle between the three alerts
@@ -107,7 +102,6 @@ def angle_df(x):
         res_angle = angle_three_point(a, b, c)
     
     return res_angle
-
 
 def cone_search_association(two_last_observations, traj_assoc, new_obs_assoc, angle_criterion):
     """
@@ -231,8 +225,6 @@ def night_to_night_trajectory_associations(two_last_observations, observations_t
         return traj_assoc, new_obs_assoc, remain_traj
     else:
         return traj_assoc, new_obs_assoc, last_traj_obs
-
-
 
 # The two functions below are used if we decide to manage the multiple associations that can appears during the process.
 # They are not yet used.
@@ -371,7 +363,6 @@ def tracklets_id_management(traj_left, traj_right, traj_next_night, trajectory_d
 
     return pd.concat(all_df_to_concat), traj_next_night
 
-
 def trajectory_associations(
     trajectory_df,
     traj_next_night,
@@ -468,7 +459,6 @@ def trajectory_associations(
 
     return trajectory_df, traj_next_night, new_observations
     
-
 def tracklets_and_observations_associations(
     trajectory_df,
     traj_next_night, 
@@ -545,9 +535,6 @@ def tracklets_and_observations_associations(
     print(len(old_observations), len(new_observations))
 
     return trajectory_df, pd.concat([old_observations, new_observations])
-
-
-
 
 def night_to_night_association(trajectory_df, old_observation, new_observation, last_trajectory_id, sep_criterion=0.24*u.degree, mag_criterion_same_fid=0.18, mag_criterion_diff_fid=0.7, angle_criterion=8.8):
     """
