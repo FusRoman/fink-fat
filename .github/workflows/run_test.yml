@@ -26,7 +26,6 @@ jobs:
             sudo apt-get install python3-testresources
         - name: Run test suites
           run: |
-            ls -lth   
             ./run_test.sh
             bash <(curl -s https://codecov.io/bash)
     
