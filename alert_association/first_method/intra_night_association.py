@@ -7,6 +7,7 @@ import time as t
 
 
 
+
 def get_n_last_observations_from_trajectories(trajectories, n, ascending=True):
     """
     Get n extremity observations from trajectories
