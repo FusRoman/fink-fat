@@ -12,15 +12,22 @@ def get_n_last_observations_from_trajectories(trajectories, n, ascending=True):
     """
     Get n extremity observations from trajectories
 
+    Parameters
+    ----------
     trajectories : dataframe
         a dataframe with a trajectory_id column that identify trajectory observations.
     n : integer
         the number of extremity observations to return.
     ascending : boolean
         if set to True, return the most recent extremity observations, return the oldest ones otherwise, default to True.
+    
+    Returns
+    -------
+    last_trajectories_observations : dataframe
+        the n last observations from the recorded trajectories
     """
 
-    return trajectories.sort_values(['jd'], ascending=ascending).explode(['trajectory_id']).groupby(['trajectory_id']).tail(n).sort_values(['trajectory_id'])
+    return trajectories.sort_values(['jd'], ascending=ascending).groupby(['trajectory_id']).tail(n).sort_values(['trajectory_id'])
 
 
 def intra_night_separation_association(night_alerts, separation_criterion):
@@ -379,7 +386,6 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
         right_assoc.loc[new_obs.index.values, 'trajectory_id'] = rows['trajectory_id']
 
     traj_df = pd.concat([left_assoc, right_assoc]).drop_duplicates(['candid', 'trajectory_id'])
-    traj_df['trajectory_id'] = [[el] for el in traj_df['trajectory_id'].values]
     return traj_df
 
 
