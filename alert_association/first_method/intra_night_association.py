@@ -425,6 +425,68 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
     trajectory_df : dataframe
         a single dataframe which are the concatanation of left and right and contains a new columns called 'trajectory_id'. 
         This column allows to reconstruct the trajectory by groupby on this column.
+
+    Examples
+    --------
+    >>> left_assoc1 = pd.DataFrame({
+    ... "candid" : [1, 2, 3, 4]
+    ... })
+
+    >>> right_assoc1 = pd.DataFrame({
+    ... "candid" : [5, 6, 7, 8]
+    ... })
+
+    >>> left_assoc2 = pd.DataFrame({
+    ... "candid" : [1, 2, 3, 4, 5]
+    ... })
+
+    >>> right_assoc2 = pd.DataFrame({
+    ... "candid" : [2, 3, 6, 5, 7]
+    ... })
+
+    >>> left_assoc3 = pd.DataFrame({
+    ... "candid" : [1, 2, 3, 4, 5, 6, 7, 8]
+    ... })
+
+    >>> right_assoc3 = pd.DataFrame({
+    ... "candid" : [9, 10, 11, 6, 4, 3, 2, 12]
+    ... })
+
+    >>> new_trajectory_id_assignation(left_assoc1, right_assoc1, 0)
+       candid  trajectory_id
+    0       1              0
+    1       2              1
+    2       3              2
+    3       4              3
+    0       5              0
+    1       6              1
+    2       7              2
+    3       8              3
+
+    >>> new_trajectory_id_assignation(left_assoc2, right_assoc2, 0)
+       candid  trajectory_id
+    0       1              0
+    1       2              0
+    2       3              0
+    3       4              3
+    4       5              3
+    2       6              0
+    4       7              3
+
+    >>> new_trajectory_id_assignation(left_assoc3, right_assoc3, 0)
+       candid  trajectory_id
+    0       1              0
+    1       2              1
+    2       3              3
+    3       4              3
+    4       5              3
+    5       6              3
+    6       7              1
+    7       8              7
+    0       9              0
+    1      10              1
+    2      11              3
+    7      12              7
     """
 
     left_assoc = left_assoc.reset_index(drop=True)
@@ -437,14 +499,19 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
     left_assoc['trajectory_id'] = new_traj_id
     right_assoc['trajectory_id'] = new_traj_id
 
+    for i, _ in right_assoc.iterrows():
+        right_rows = right_assoc.iloc[i]
+        left_rows = left_assoc.iloc[i]
 
+        left_new_obs = left_assoc[left_assoc['candid'] == right_rows['candid']]
+        left_assoc.loc[left_new_obs.index.values, 'trajectory_id'] = right_rows['trajectory_id']
+        right_assoc.loc[left_new_obs.index.values, 'trajectory_id'] = right_rows['trajectory_id']
 
-    for _, rows in right_assoc.iterrows():
-        new_obs = left_assoc[left_assoc['candid'] == rows['candid']]
-        left_assoc.loc[new_obs.index.values, 'trajectory_id'] = rows['trajectory_id']
-        right_assoc.loc[new_obs.index.values, 'trajectory_id'] = rows['trajectory_id']
-
-    traj_df = pd.concat([left_assoc, right_assoc]).drop_duplicates(['candid', 'trajectory_id'])
+        right_new_obs = right_assoc[right_assoc['candid'] == left_rows['candid']]
+        left_assoc.loc[right_new_obs.index.values, 'trajectory_id'] = left_rows['trajectory_id']
+        right_assoc.loc[right_new_obs.index.values, 'trajectory_id'] = left_rows['trajectory_id']
+        
+    traj_df = pd.concat([left_assoc, right_assoc]).drop_duplicates(['candid'])
     return traj_df
 
 
