@@ -204,7 +204,8 @@ def restore_left_right(concat_l_r, nb_assoc_column):
 
 def removed_mirrored_association(left_assoc, right_assoc):
     """
-    Remove the mirrored association (associations like (a, b) and (b, a)) that occurs in the intra-night associations. 
+    Remove the mirrored association (associations like (a, b) and (b, a)) that occurs in the intra-night associations.
+    The column id used to detect mirrored association are candid.
 
     Parameters
     ----------
@@ -219,6 +220,64 @@ def removed_mirrored_association(left_assoc, right_assoc):
         left members of the intra-night associations without mirrored associations
     drop_right : dataframe 
         right members of the intra-night associations without mirrored associations
+
+    Examples
+    --------
+    >>> test_1 = pd.DataFrame({
+    ... "a" : [1, 2, 3, 4],
+    ... "candid" : [10, 11, 12, 13],
+    ... "jd" : [1, 2, 3, 4]
+    ... })
+
+    >>> test_2 = pd.DataFrame({
+    ... "a" : [30, 31, 32, 33],
+    ... "candid" : [11, 10, 15, 16],
+    ... "jd" : [2, 1, 5, 6]
+    ... })
+
+    >>> tt_1, tt_2 = removed_mirrored_association(test_1, test_2)
+
+    >>> tt_1
+       a  candid  jd
+    0  1      10   1
+    2  3      12   3
+    3  4      13   4
+    >>> tt_2
+        a  candid  jd
+    0  30      11   2
+    2  32      15   5
+    3  33      16   6
+
+    >>> df1 = pd.DataFrame({
+    ... "candid" : [1522165813015015004, 1522207623015015004],
+    ... "objectId": ['ZTF21aanxwfq', 'ZTF21aanyhht'],
+    ... "jd" : [2459276.66581, 2459276.707627]
+    ... })
+
+    >>> df2 = pd.DataFrame({
+    ... "candid" : [1522207623015015004, 1522165813015015004],
+    ... "objectId": ['ZTF21aanyhht', 'ZTF21aanxwfq'],
+    ... "jd" : [2459276.707627, 2459276.66581]
+    ... })
+
+    >>> df1
+                    candid      objectId            jd
+    0  1522165813015015004  ZTF21aanxwfq  2.459277e+06
+    1  1522207623015015004  ZTF21aanyhht  2.459277e+06
+
+    >>> df2
+                    candid      objectId            jd
+    0  1522207623015015004  ZTF21aanyhht  2.459277e+06
+    1  1522165813015015004  ZTF21aanxwfq  2.459277e+06
+
+    >>> dd1, dd2 = removed_mirrored_association(df1, df2)
+
+    >>> dd1
+                    candid      objectId            jd
+    0  1522165813015015004  ZTF21aanxwfq  2.459277e+06
+    >>> dd2
+                    candid      objectId            jd
+    0  1522207623015015004  ZTF21aanyhht  2.459277e+06
     """
     left_assoc = left_assoc.reset_index(drop=True)
     right_assoc = right_assoc.reset_index(drop=True)
@@ -365,7 +424,7 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
     -------
     trajectory_df : dataframe
         a single dataframe which are the concatanation of left and right and contains a new columns called 'trajectory_id'. 
-        This column allows to reconstruct the trajectory by groupby on this column. 
+        This column allows to reconstruct the trajectory by groupby on this column.
     """
 
     left_assoc = left_assoc.reset_index(drop=True)
@@ -390,100 +449,5 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
 
 
 if __name__ == "__main__":
-
-    df_sso = pd.read_pickle("../../data/month=03")
-
-    all_night = np.unique(df_sso['nid'])
-
-    
-    for night in all_night:
-        print(night)
-        df_one_night = df_sso[(df_sso['nid'] == 1522) & (df_sso['fink_class'] == 'Solar System MPC')]
-
-
-        df_cand = df_sso[(df_sso['nid'] == night) & (df_sso['fink_class'] == 'Solar System candidate')]
-
-        t_before = t.time()
-        left_assoc, right_assoc, perf_metrics = intra_night_association(df_one_night, compute_metrics=True)
-        #left_assoc, right_assoc = removed_mirrored_association(left_assoc, right_assoc)
-        new_left, new_right = left_assoc.reset_index(drop=True), right_assoc.reset_index(drop=True), 
-        print(new_left.loc[692])
-        print(new_right.loc[692])
-        print()
-        print()
-        print(new_left.loc[954])
-        print(new_right.loc[954])
-        print()
-        print()
-
-        print(left_assoc)
-        print(right_assoc)
-
-        exit()    
-        new_traj_df = new_trajectory_id_assignation(left_assoc, right_assoc, 0)
-        print(new_traj_df)
-
-        print("performance metrics :\n\t{}".format(perf_metrics))
-        print("elapsed time : {}".format(t.time() - t_before))
-        print()
-
-        t_before = t.time()
-        left_assoc, right_assoc, perf_metrics = intra_night_association(df_cand, compute_metrics=True)        
-        new_traj_df = new_trajectory_id_assignation(left_assoc, right_assoc, 0).explode(['trajectory_id'])
-
-        print("nb assoc cand : {}".format(len(left_assoc)))
-        print("elapsed time : {}".format(t.time() - t_before))
-        print()
-        print("-------------")
-        
-        
-
-    
-    exit()
-    # test removed mirrored
-    test_1 = pd.DataFrame({
-        "a" : [1, 2, 3, 4],
-        "candid" : [10, 11, 12, 13],
-        "jd" : [1, 2, 3, 4]
-    })
-
-    test_2 = pd.DataFrame({
-        "a" : [30, 31, 32, 33],
-        "candid" : [11, 10, 15, 16],
-        "jd" : [2, 1, 5, 6]
-    })
-
-    print(test_1)
-    print(test_2)
-
-    print()
-    print()
-
-    tt_1, tt_2 = removed_mirrored_association(test_1, test_2)
-
-    print(tt_1)
-    print(tt_2)
-
-    
-
-    df1 = pd.DataFrame({
-        "candid" : [1522165813015015004, 1522207623015015004],
-        "objectId": ['ZTF21aanxwfq', 'ZTF21aanyhht'],
-        "jd" : [2459276.66581, 2459276.707627]
-    })
-
-    df2 = pd.DataFrame({
-        "candid" : [1522207623015015004, 1522165813015015004],
-        "objectId": ['ZTF21aanyhht', 'ZTF21aanxwfq'],
-        "jd" : [2459276.707627, 2459276.66581]
-    })
-
-    print(df1)
-
-    print(df2)
-
-    dd1, dd2 = removed_mirrored_association(df1, df2)
-
-    print()
-    print(dd1)
-    print(dd2)
+    import doctest
+    doctest.testmod()
