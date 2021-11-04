@@ -1,0 +1,12 @@
+# General
+numpy>=1.17
+pandas
+scipy
+
+# Coverage
+coveralls
+coverage>=4.2
+codecov
+
+# Astro
+astropy
