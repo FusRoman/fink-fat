@@ -10,8 +10,6 @@ from intra_night_association import magnitude_association
 from intra_night_association import removed_mirrored_association
 from intra_night_association import get_n_last_observations_from_trajectories
 
-
-
 def night_to_night_separation_association(old_observation, new_observation, separation_criterion):
     """
     Perform night-night association based on the separation between the alerts. The separation criterion was computed by a data analysis on the MPC object.
@@ -622,8 +620,6 @@ def night_to_night_association(trajectory_df, old_observation, new_observation, 
 
     return trajectory_df, old_observation
 
-
-    
 if __name__ == "__main__":
     df_sso = pd.read_pickle("../../data/month=03")
 
