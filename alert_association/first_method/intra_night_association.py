@@ -3,9 +3,8 @@ from astropy.coordinates import SkyCoord
 import pandas as pd
 import numpy as np
 from collections import Counter
-import time as t
 
-
+from astropy.coordinates import search_around_sky
 
 
 def get_n_last_observations_from_trajectories(trajectories, n, ascending=True):
@@ -15,7 +14,7 @@ def get_n_last_observations_from_trajectories(trajectories, n, ascending=True):
     Parameters
     ----------
     trajectories : dataframe
-        a dataframe with a trajectory_id column that identify trajectory observations.
+        a dataframe with a trajectory_id column that identify trajectory observations. (column trajectory_id and jd have to be present)
     n : integer
         the number of extremity observations to return.
     ascending : boolean
@@ -25,10 +24,61 @@ def get_n_last_observations_from_trajectories(trajectories, n, ascending=True):
     -------
     last_trajectories_observations : dataframe
         the n last observations from the recorded trajectories
+
+    Examples
+    --------
+    >>> from pandera import Check, Column, DataFrameSchema
+    >>> test = pd.DataFrame({
+    ... "candid" : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    ... "jd" : [0.0, 1.0, 2, 3, 4, 5, 6, 7, 8, 9],
+    ... "trajectory_id" : [1, 1, 1, 1, 2, 2, 3, 3, 3, 3]
+    ... })
+
+    >>> df_schema = DataFrameSchema({
+    ... "jd": Column(float),
+    ... "trajectory_id": Column(int)
+    ... })
+
+    >>> res = get_n_last_observations_from_trajectories(test, 1, False)
+
+    >>> df_schema.validate(res)
+       candid   jd  trajectory_id
+    0       0  0.0              1
+    4       4  4.0              2
+    6       6  6.0              3
+
+    >>> res = get_n_last_observations_from_trajectories(test, 1, True)
+
+    >>> df_schema.validate(res)
+       candid   jd  trajectory_id
+    3       3  3.0              1
+    5       5  5.0              2
+    9       9  9.0              3
+
+    >>> res = get_n_last_observations_from_trajectories(test, 2, True)
+
+    >>> df_schema.validate(res)
+       candid   jd  trajectory_id
+    2       2  2.0              1
+    3       3  3.0              1
+    4       4  4.0              2
+    5       5  5.0              2
+    8       8  8.0              3
+    9       9  9.0              3
+
+    >>> res = get_n_last_observations_from_trajectories(test, 2, False)
+
+    >>> df_schema.validate(res)
+       candid   jd  trajectory_id
+    1       1  1.0              1
+    0       0  0.0              1
+    5       5  5.0              2
+    4       4  4.0              2
+    7       7  7.0              3
+    6       6  6.0              3
     """
 
     return trajectories.sort_values(['jd'], ascending=ascending).groupby(['trajectory_id']).tail(n).sort_values(['trajectory_id'])
-
 
 def intra_night_separation_association(night_alerts, separation_criterion):
     """
@@ -37,7 +87,7 @@ def intra_night_separation_association(night_alerts, separation_criterion):
     Parameters
     ----------
     night_alerts : dataframe
-        observation of on night
+        observation of one night (column ra and dec have to be present)
     separation_criterion : float
         the separation limit between the alerts to be associated, must be in arcsecond
 
@@ -49,12 +99,60 @@ def intra_night_separation_association(night_alerts, separation_criterion):
         return right members of the associations
     sep2d : list
         return the separation between the associated alerts
+
+    Examples
+    --------
+    >>> test = pd.DataFrame({
+    ... 'ra' : [100, 100.003, 100.007, 14, 14.003, 14.007],
+    ... 'dec' : [8, 8.002, 8.005, 16, 15.998, 15.992],
+    ... 'candid' : [1, 2, 3, 4, 5, 6],
+    ... 'traj' : [1, 1, 1, 2, 2, 2]
+    ... })
+
+    >>> left, right, sep = intra_night_separation_association(test, 100*u.arcsecond)
+
+    >>> left
+            ra     dec  candid  traj
+    0  100.000   8.000       1     1
+    0  100.000   8.000       1     1
+    1  100.003   8.002       2     1
+    1  100.003   8.002       2     1
+    2  100.007   8.005       3     1
+    2  100.007   8.005       3     1
+    3   14.000  16.000       4     2
+    3   14.000  16.000       4     2
+    4   14.003  15.998       5     2
+    4   14.003  15.998       5     2
+    5   14.007  15.992       6     2
+    5   14.007  15.992       6     2
+
+    >>> right
+            ra     dec  candid  traj
+    1  100.003   8.002       2     1
+    2  100.007   8.005       3     1
+    0  100.000   8.000       1     1
+    2  100.007   8.005       3     1
+    0  100.000   8.000       1     1
+    1  100.003   8.002       2     1
+    4   14.003  15.998       5     2
+    5   14.007  15.992       6     2
+    3   14.000  16.000       4     2
+    5   14.007  15.992       6     2
+    3   14.000  16.000       4     2
+    4   14.003  15.998       5     2
+    >>> sep
+    <Angle [0.00358129, 0.00854695, 0.00358129, 0.00496889, 0.00854695,
+            0.00496889, 0.00350946, 0.01045366, 0.00350946, 0.00712637,
+            0.01045366, 0.00712637] deg>
+    
+    >>> len(np.where(sep == 0)[0])
+    0
     """
 
     c1 = SkyCoord(night_alerts['ra'], night_alerts['dec'], unit=u.degree)
 
-    # 108.07 arcsecond come from our study of the intra-night separation between the alerts from the same nights. 52 take 99 percents of the objects.
-    c2_idx, c1_idx, sep2d, _ = c1.search_around_sky(c1, separation_criterion)
+    c1_idx, c2_idx, sep2d, _ = search_around_sky(c1, c1, separation_criterion)
+    
 
     # remove the associations with the same alerts. (sep == 0)
     nonzero_idx = np.where(sep2d > 0)[0]
@@ -64,7 +162,6 @@ def intra_night_separation_association(night_alerts, separation_criterion):
     left_assoc = night_alerts.iloc[c1_idx]
     right_assoc = night_alerts.iloc[c2_idx]
     return left_assoc, right_assoc, sep2d[nonzero_idx]
-
 
 def compute_diff_mag(left, right, fid, magnitude_criterion, normalized=False):
     """
@@ -89,12 +186,116 @@ def compute_diff_mag(left, right, fid, magnitude_criterion, normalized=False):
         return the left members of the associations filtered on the magnitude
     right_assoc : dataframe
         return the right members of the associations filtered on the magnitude
+
+    Examples
+    --------
+    >>> test = pd.DataFrame({
+    ... 'ra' : [100, 100.003, 100.007, 100.001, 100.003, 100.008],
+    ... 'dec' : [12, 11.998, 11.994, 11.994, 11.998, 12.002],
+    ... 'jd' : [1, 1, 1, 1, 1, 1],
+    ... 'dcmag' : [17, 17.05, 17.09, 15, 15.07, 15.1],
+    ... 'fid' : [1, 1, 1, 2, 2, 2],
+    ... 'candid' : [1, 2, 3, 4, 5, 6],
+    ... 'traj' : [1, 1, 1, 2, 2, 2]
+    ... })
+
+    >>> l, r, _ = intra_night_separation_association(test, 100*u.arcsecond)
+    >>> same_fid = l['fid'].values == r['fid'].values
+    >>> diff_fid = l['fid'].values != r['fid'].values
+
+    >>> same_fid_left, same_fid_right = compute_diff_mag(l, r, same_fid, 0.1)
+    >>> diff_fid_left, diff_fid_right = compute_diff_mag(l, r, diff_fid, 0.5)
+
+    >>> same_fid_left
+            ra     dec  jd  dcmag  fid  candid  traj
+    0  100.000  12.000   1  17.00    1       1     1
+    0  100.000  12.000   1  17.00    1       1     1
+    1  100.003  11.998   1  17.05    1       2     1
+    1  100.003  11.998   1  17.05    1       2     1
+    2  100.007  11.994   1  17.09    1       3     1
+    2  100.007  11.994   1  17.09    1       3     1
+    3  100.001  11.994   1  15.00    2       4     2
+    3  100.001  11.994   1  15.00    2       4     2
+    4  100.003  11.998   1  15.07    2       5     2
+    4  100.003  11.998   1  15.07    2       5     2
+    5  100.008  12.002   1  15.10    2       6     2
+    5  100.008  12.002   1  15.10    2       6     2
+
+    >>> same_fid_right
+            ra     dec  jd  dcmag  fid  candid  traj
+    1  100.003  11.998   1  17.05    1       2     1
+    2  100.007  11.994   1  17.09    1       3     1
+    0  100.000  12.000   1  17.00    1       1     1
+    2  100.007  11.994   1  17.09    1       3     1
+    0  100.000  12.000   1  17.00    1       1     1
+    1  100.003  11.998   1  17.05    1       2     1
+    4  100.003  11.998   1  15.07    2       5     2
+    5  100.008  12.002   1  15.10    2       6     2
+    3  100.001  11.994   1  15.00    2       4     2
+    5  100.008  12.002   1  15.10    2       6     2
+    3  100.001  11.994   1  15.00    2       4     2
+    4  100.003  11.998   1  15.07    2       5     2
+
+    >>> diff_fid_left
+    Empty DataFrame
+    Columns: [ra, dec, jd, dcmag, fid, candid, traj]
+    Index: []
+
+    >>> diff_fid_right
+    Empty DataFrame
+    Columns: [ra, dec, jd, dcmag, fid, candid, traj]
+    Index: []
+
+    >>> test = pd.DataFrame({
+    ... 'ra' : [100, 99, 99.8, 100.2, 100.7, 100.5],
+    ... 'dec' : [12, 11.8, 11.2, 12.3, 11.7, 11.5],
+    ... 'jd' : [1.05, 1.08, 1.09, 2.5, 2.6, 2.7],
+    ... 'dcmag' : [15, 17, 16, 16.04, 17.03, 15.06],
+    ... 'fid' : [1, 1, 1, 1, 1, 1],
+    ... 'candid' : [1, 2, 3, 4, 5, 6],
+    ... 'traj' : [1, 2, 3, 3, 2, 1]
+    ... })
+
+    >>> l, r, sep = intra_night_separation_association(test, 2*u.degree)
+    >>> same_fid = l['fid'].values == r['fid'].values
+    >>> diff_fid = l['fid'].values != r['fid'].values
+
+    >>> same_fid_left, same_fid_right = compute_diff_mag(l, r, same_fid, 0.1, normalized=True)
+    >>> diff_fid_left, diff_fid_right = compute_diff_mag(l, r, diff_fid, 0.5, normalized=True)
+
+    >>> same_fid_left
+          ra   dec    jd  dcmag  fid  candid  traj
+    0  100.0  12.0  1.05  15.00    1       1     1
+    1   99.0  11.8  1.08  17.00    1       2     2
+    2   99.8  11.2  1.09  16.00    1       3     3
+    3  100.2  12.3  2.50  16.04    1       4     3
+    4  100.7  11.7  2.60  17.03    1       5     2
+    5  100.5  11.5  2.70  15.06    1       6     1
+
+    >>> same_fid_right
+          ra   dec    jd  dcmag  fid  candid  traj
+    5  100.5  11.5  2.70  15.06    1       6     1
+    4  100.7  11.7  2.60  17.03    1       5     2
+    3  100.2  12.3  2.50  16.04    1       4     3
+    2   99.8  11.2  1.09  16.00    1       3     3
+    1   99.0  11.8  1.08  17.00    1       2     2
+    0  100.0  12.0  1.05  15.00    1       1     1
+
+    >>> diff_fid_left
+    Empty DataFrame
+    Columns: [ra, dec, jd, dcmag, fid, candid, traj]
+    Index: []
+
+    >>> diff_fid_right
+    Empty DataFrame
+    Columns: [ra, dec, jd, dcmag, fid, candid, traj]
+    Index: []
     """
     left_assoc = left[fid]
     right_assoc = right[fid]
 
     if normalized:
-        diff_mag = np.abs(left_assoc['dcmag'].values - right_assoc['dcmag'].values) / np.abs(left_assoc['jd'] - right_assoc['jd'])
+        diff_mag = np.abs(left_assoc['dcmag'].values - right_assoc['dcmag'].values) / np.abs(left_assoc['jd'].values - right_assoc['jd'].values)
     else:
         diff_mag = np.abs(left_assoc['dcmag'].values - right_assoc['dcmag'].values)
 
@@ -110,9 +311,9 @@ def magnitude_association(left_assoc, right_assoc, mag_criterion_same_fid, mag_c
     Parameters
     ----------
     left_assoc : dataframe
-        left members of the associations
+        left members of the associations (column dcmag and fid have to be present, jd must be present if normalize is set to True)
     right_assoc : dataframe
-        right members of the associations
+        right members of the associations (column dcmag and fid have to be present, jd must be present if normalize is set to True)
     
     Returns
     -------
@@ -120,6 +321,34 @@ def magnitude_association(left_assoc, right_assoc, mag_criterion_same_fid, mag_c
         return the left members of the associations filtered by magnitude
     right_assoc : dataframe
         return the right members of the associations filtered by magnitude
+
+    Examples
+    --------
+    >>> left_test = pd.DataFrame({
+    ... 'dcmag' : [17.03, 15, 17, 18, 18, 17, 17, 15],
+    ... 'fid' : [1, 2, 1, 2, 1, 2, 1, 2]
+    ... })
+
+    >>> right_test = pd.DataFrame({
+    ... 'dcmag' : [17, 15.09, 16, 19, 15, 12, 16, 14],
+    ... 'fid' : [1, 2, 2, 1, 2, 1, 1, 2]
+    ... })
+
+    >>> l, r = magnitude_association(left_test, right_test, 0.1, 1)
+
+    >>> l
+       dcmag  fid
+    0  17.03    1
+    1  15.00    2
+    2  17.00    1
+    3  18.00    2
+
+    >>> r
+       dcmag  fid
+    0  17.00    1
+    1  15.09    2
+    2  16.00    2
+    3  19.00    1
     """
     same_fid = left_assoc['fid'].values == right_assoc['fid'].values
     diff_fid = left_assoc['fid'].values != right_assoc['fid'].values
@@ -129,10 +358,10 @@ def magnitude_association(left_assoc, right_assoc, mag_criterion_same_fid, mag_c
 
     return pd.concat([same_fid_left, diff_fid_left]), pd.concat([same_fid_right, diff_fid_right])
 
-
 def compute_associations_metrics(left_assoc, right_assoc, observations_with_real_labels):
     """
-    computes performance metrics of the associations methods
+    computes performance metrics of the associations methods.
+    Used only on test dataset where the column 'ssnamenr' are present and the real association are provided.
 
     Parameters
     ----------
@@ -146,13 +375,30 @@ def compute_associations_metrics(left_assoc, right_assoc, observations_with_real
     Returns
     -------
     metrics_dict : dictionnary
-        dictionnary where entries are performance metrics    
+        dictionnary where entries are performance metrics
+
+    Examples
+    --------
+    >>> real_assoc = pd.DataFrame({
+    ... 'ra' : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    ... 'ssnamenr' : [1, 1, 2, 2, 2, 3, 3, 3, 3, 4, 4]
+    ... })
+
+    >>> left_assoc = pd.DataFrame({
+    ... 'ssnamenr' : [1, 2, 2, 3, 3, 3, 4]
+    ... })
+
+    >>> right_assoc = pd.DataFrame({
+    ... 'ssnamenr' : [1, 2, 2, 3, 3, 3, 4]
+    ... })
+
+    >>> compute_associations_metrics(left_assoc, right_assoc, real_assoc)
+    {'precision': 100.0, 'recall': 100.0, 'True Positif': 7, 'False Positif': 0, 'False Negatif': 0, 'total real association': 7}
     """
     gb_real_assoc = observations_with_real_labels.groupby(['ssnamenr']).count()
+    gb_real_assoc = gb_real_assoc[gb_real_assoc['ra'] > 1]['ra'].values
 
-    nb_real_assoc = len(gb_real_assoc[gb_real_assoc['ra'] > 1]['ra'])
-
-    nb_predict_assoc = len(right_assoc)
+    nb_real_assoc = np.sum(gb_real_assoc) - len(gb_real_assoc)
 
     precision_counter = Counter(left_assoc['ssnamenr'].values == right_assoc['ssnamenr'].values)
 
@@ -164,12 +410,9 @@ def compute_associations_metrics(left_assoc, right_assoc, observations_with_real
     FN = max(0, (nb_real_assoc - precision_counter[True]))
     recall = (precision_counter[True] / (precision_counter[True] + FN)) * 100
 
-    accuracy = (1-(precision_counter[False] / (nb_predict_assoc + nb_real_assoc))) * 100
-
-    return {"precision" : precision, "recall" : recall, "accuracy" : accuracy, 
-            "True Positif" : precision_counter[True], "False Positif" : precision_counter[False], "False Negatif" : FN,
+    return {"precision" : precision, "recall" : recall, "True Positif" : precision_counter[True], 
+            "False Positif" : precision_counter[False], "False Negatif" : FN,
             "total real association" : nb_real_assoc}
-
 
 def restore_left_right(concat_l_r, nb_assoc_column):
     """
@@ -189,6 +432,33 @@ def restore_left_right(concat_l_r, nb_assoc_column):
         the left dataframe before the concatenation
     right_a : dataframe
         the right dataframe before the concatenation
+
+    Examples
+    --------
+    >>> df1 = pd.DataFrame({
+    ... "column1": [1, 2, 3],
+    ... "column2": [4, 5, 6]
+    ... })
+
+    >>> df2 = pd.DataFrame({
+    ... "column1": [7, 8, 9],
+    ... "column2": [10, 11, 12]
+    ... })
+
+    >>> concat = pd.concat([df1, df2], axis=1, keys=['left', 'right'])
+
+    >>> l, r = restore_left_right(concat, 2)
+
+    >>> l
+       column1  column2
+    0        1        4
+    1        2        5
+    2        3        6
+    >>> r
+       column1  column2
+    0        7       10
+    1        8       11
+    2        9       12
     """
     left_col = concat_l_r.columns.values[0: nb_assoc_column]
     right_col = concat_l_r.columns.values[nb_assoc_column:]
@@ -200,7 +470,6 @@ def restore_left_right(concat_l_r, nb_assoc_column):
     right_a.columns = right_a.columns.droplevel()
 
     return left_a, right_a
-
 
 def removed_mirrored_association(left_assoc, right_assoc):
     """
@@ -288,9 +557,16 @@ def removed_mirrored_association(left_assoc, right_assoc):
     # function used to detect the mirrored rows
     # taken from : https://stackoverflow.com/questions/58512147/how-to-removing-mirror-copy-rows-in-a-pandas-dataframe
     def key(x):
+        """
+        Examples
+        --------
+        >>> t_list = [10, 11]
+
+        >>> key(t_list)
+        frozenset({(11, 1), (10, 1)})
+        """
         return frozenset(Counter(x).items())
 
-    # create a set then a list of the left and right candid and detect the mirrored duplicates
     mask = all_assoc[[('left', 'candid'), ('right','candid')]].apply(key, axis=1).duplicated()
 
     # remove the mirrored duplicates by applying the mask to the dataframe
@@ -306,6 +582,7 @@ def removed_multiple_association(left_assoc, right_assoc):
     If we have three alerts (A, B and C) in the dataframe and the following associations : (A, B), (B, C) and (A, C) then this function remove
     the associations (A, C) to keep only (A, B) and (B, C). 
 
+    Warning : The jd between the triplets alerts must be differents, don't work if it is the case. 
     Parameters
     ----------
     left_assoc : dataframe
@@ -319,6 +596,52 @@ def removed_multiple_association(left_assoc, right_assoc):
         left members without the multiple associations
     right_members : dataframe
         right members without the multiple associations
+
+    Examples
+    --------
+    >>> left = pd.DataFrame({
+    ... 'candid' : [0, 1, 0],
+    ... 'jd' : [1, 2, 1]
+    ... })
+
+    >>> right = pd.DataFrame({
+    ... 'candid' : [1, 2, 2],
+    ... 'jd' : [2, 3, 3]
+    ... })
+
+    >>> l, r = removed_multiple_association(left, right)
+
+    >>> l
+      candid jd
+    1      1  2
+    0      0  1
+    >>> r
+      candid jd
+    1      2  3
+    0      1  2
+
+    >>> left = pd.DataFrame({
+    ... 'candid' : [0, 2, 0, 1],
+    ... 'jd' : [1, 3, 1, 2]
+    ... })
+
+    >>> right = pd.DataFrame({
+    ... 'candid' : [2, 3, 1, 2],
+    ... 'jd' : [3, 4, 2, 3]
+    ... })
+
+    >>> l, r = removed_multiple_association(left, right)
+
+    >>> l
+      candid jd
+    1      2  3
+    3      1  2
+    0      0  1
+    >>> r
+      candid jd
+    1      3  4
+    3      2  3
+    0      1  2
     """
     # reset the index in order to recover the non multiple association
     left_assoc = left_assoc.reset_index(drop=True).reset_index()
@@ -359,7 +682,7 @@ def removed_multiple_association(left_assoc, right_assoc):
 
     return left_assoc, right_assoc
 
-def intra_night_association(night_observation, sep_criterion=108.07*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=False):
+def intra_night_association(night_observation, sep_criterion=145*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=False):
     """
     Perform intra_night association with separation and magnitude criterion
     Separation and magnitude are not normalised with the jd difference due to a too small difference of jd between the alerts.
@@ -385,6 +708,108 @@ def intra_night_association(night_observation, sep_criterion=108.07*u.arcsecond,
         left members of the associations
     right_assoc : dataframe
         right_members of the associations
+    
+    Examples
+    --------
+    >>> test_traj = pd.DataFrame({
+    ... 'ra' : [
+    ...     106.305259, 106.141905, 169.860467, 106.303285,  106.141138, 169.856885, 106.140906, 
+    ...     106.302386, 106.140840, 106.302364, 169.833666, 169.829712, 169.829656
+    ... ],
+    ... 'dec': [
+    ...     18.176682, 15.241181, 15.206360, 18.177874, 15.239999, 15.210309, 15.239506,
+    ...     18.178404, 15.239482, 18.178424, 15.236048, 15.240389, 15.240490
+    ...     ],
+    ... 'dcmag': [
+    ...     0.066603, 0.018517, 0.038709, 0.089385, 0.020256, 0.044030, 0.021575,
+    ...     0.042095, 0.023033, 0.046602, 0.032183, 0.026171, 0.025890
+    ... ],
+    ... 'ssnamenr': [
+    ...     3866, 3051, 19743, 3866, 3051, 19743,
+    ...     3051, 3866, 3051, 3866, 19743, 19743, 19743
+    ... ],
+    ... 'fid': [1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2],
+    ... 'candid': [
+    ...     1520166712915015010, 1520166711415015012, 1520220641415015001, 1520227401615015011, 1520227400315015018, 
+    ...     1520239140315015026, 1520254695615015016, 1520255162915015021, 1520255630315015010,
+    ...     1520255631615015014, 1520359440315015016, 1520379906015015006, 1520380381415015018
+    ... ],
+    ... 'jd': [
+    ...     2459274.666713, 2459274.666713, 2459274.7206481, 2459274.7274074, 2459274.7274074,
+    ...     2459274.7391435, 2459274.7546991, 2459274.755162, 2459274.7556366,
+    ...     2459274.7556366, 2459274.8594444, 2459274.8799074, 2459274.8803819
+    ... ]
+    ... })
+
+    >>> left, right, metrics = intra_night_association(test_traj, sep_criterion=145*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=True)
+
+    >>> metrics
+    {'precision': 100.0, 'recall': 100.0, 'True Positif': 10, 'False Positif': 0, 'False Negatif': 0, 'total real association': 10}
+
+    >>> left
+                ra        dec     dcmag ssnamenr fid               candid              jd
+    15  106.140906  15.239506  0.021575     3051   2  1520254695615015016  2459274.754699
+    16  106.302386  18.178404  0.042095     3866   2  1520255162915015021  2459274.755162
+    19  169.829712  15.240389  0.026171    19743   2  1520379906015015006  2459274.879907
+    0   106.141905  15.241181  0.018517     3051   1  1520166711415015012  2459274.666713
+    1   106.305259  18.176682  0.066603     3866   1  1520166712915015010  2459274.666713
+    2   169.860467   15.20636  0.038709    19743   1  1520220641415015001  2459274.720648
+    3   106.141138  15.239999  0.020256     3051   1  1520227400315015018  2459274.727407
+    4   106.303285  18.177874  0.089385     3866   1  1520227401615015011  2459274.727407
+    5   169.856885  15.210309   0.04403    19743   1  1520239140315015026  2459274.739144
+    6   169.833666  15.236048  0.032183    19743   2  1520359440315015016  2459274.859444
+    >>> right
+                ra        dec     dcmag ssnamenr fid               candid              jd
+    15   106.14084  15.239482  0.023033     3051   2  1520255630315015010  2459274.755637
+    16  106.302364  18.178424  0.046602     3866   2  1520255631615015014  2459274.755637
+    19  169.829656   15.24049   0.02589    19743   2  1520380381415015018  2459274.880382
+    0   106.141138  15.239999  0.020256     3051   1  1520227400315015018  2459274.727407
+    1   106.303285  18.177874  0.089385     3866   1  1520227401615015011  2459274.727407
+    2   169.856885  15.210309   0.04403    19743   1  1520239140315015026  2459274.739144
+    3   106.140906  15.239506  0.021575     3051   2  1520254695615015016  2459274.754699
+    4   106.302386  18.178404  0.042095     3866   2  1520255162915015021  2459274.755162
+    5   169.833666  15.236048  0.032183    19743   2  1520359440315015016  2459274.859444
+    6   169.829712  15.240389  0.026171    19743   2  1520379906015015006  2459274.879907
+
+    >>> left, right, metrics = intra_night_association(test_traj, sep_criterion=145*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=False)
+
+    >>> metrics
+    {}
+
+    >>> test_traj = pd.DataFrame({
+    ... 'ra' : [
+    ...     106.305259, 106.141905, 169.860467
+    ... ],
+    ... 'dec': [
+    ...     18.176682, 15.241181, 15.206360
+    ...     ],
+    ... 'dcmag': [
+    ...     0.066603, 0.018517, 0.038709
+    ... ],
+    ... 'ssnamenr': [
+    ...     3866, 3051, 19743
+    ... ],
+    ... 'fid': [1, 2, 1],
+    ... 'candid': [
+    ...     1520166712915015010, 1520166711415015012, 1520220641415015001
+    ... ],
+    ... 'jd': [
+    ...     2459274.666713, 2459274.666713, 2459274.7206481
+    ... ]
+    ... })
+
+    >>> left, right, metrics = intra_night_association(test_traj, sep_criterion=145*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=True)
+
+    >>> metrics
+    {}
+    >>> left
+    Empty DataFrame
+    Columns: []
+    Index: []
+    >>> right 
+    Empty DataFrame
+    Columns: []
+    Index: []
     """
     left_assoc, right_assoc, _ = intra_night_separation_association(night_observation, sep_criterion)
 
@@ -405,7 +830,6 @@ def intra_night_association(night_observation, sep_criterion=108.07*u.arcsecond,
         return left_assoc, right_assoc, metrics
     else:
         return left_assoc, right_assoc, {}
-
 
 def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
     """
