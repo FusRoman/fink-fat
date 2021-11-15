@@ -6,7 +6,6 @@ from collections import Counter
 
 from astropy.coordinates import search_around_sky
 
-
 def get_n_last_observations_from_trajectories(trajectories, n, ascending=True):
     """
     Get n extremity observations from trajectories
@@ -28,6 +27,7 @@ def get_n_last_observations_from_trajectories(trajectories, n, ascending=True):
     Examples
     --------
     >>> from pandera import Check, Column, DataFrameSchema
+    >>> 
     >>> test = pd.DataFrame({
     ... "candid" : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
     ... "jd" : [0.0, 1.0, 2, 3, 4, 5, 6, 7, 8, 9],
@@ -41,41 +41,51 @@ def get_n_last_observations_from_trajectories(trajectories, n, ascending=True):
 
     >>> res = get_n_last_observations_from_trajectories(test, 1, False)
 
-    >>> df_schema.validate(res)
-       candid   jd  trajectory_id
-    0       0  0.0              1
-    4       4  4.0              2
-    6       6  6.0              3
+    >>> res = df_schema.validate(res).reset_index(drop=True)
+
+    >>> df_expected = pd.DataFrame({
+    ... "candid" : [0, 4, 6],
+    ... "jd" : [0.0, 4.0, 6.0],
+    ... "trajectory_id" : [1, 2, 3]
+    ... })
+
+    >>> assert_frame_equal(res, df_expected)
 
     >>> res = get_n_last_observations_from_trajectories(test, 1, True)
 
-    >>> df_schema.validate(res)
-       candid   jd  trajectory_id
-    3       3  3.0              1
-    5       5  5.0              2
-    9       9  9.0              3
+    >>> res = df_schema.validate(res).reset_index(drop=True)
+
+    >>> df_expected = pd.DataFrame({
+    ... "candid" : [3, 5, 9],
+    ... "jd" : [3.0, 5.0, 9.0],
+    ... "trajectory_id" : [1, 2, 3]
+    ... })
+
+    >>> assert_frame_equal(res, df_expected)
 
     >>> res = get_n_last_observations_from_trajectories(test, 2, True)
 
-    >>> df_schema.validate(res)
-       candid   jd  trajectory_id
-    2       2  2.0              1
-    3       3  3.0              1
-    4       4  4.0              2
-    5       5  5.0              2
-    8       8  8.0              3
-    9       9  9.0              3
+    >>> res = df_schema.validate(res).reset_index(drop=True)
+
+    >>> df_expected = pd.DataFrame({
+    ... "candid" : [2, 3, 4, 5, 8, 9],
+    ... "jd" : [2.0, 3.0, 4.0, 5.0, 8.0, 9.0],
+    ... "trajectory_id" : [1, 1, 2, 2, 3, 3]
+    ... })
+
+    >>> assert_frame_equal(res, df_expected)
 
     >>> res = get_n_last_observations_from_trajectories(test, 2, False)
 
-    >>> df_schema.validate(res)
-       candid   jd  trajectory_id
-    1       1  1.0              1
-    0       0  0.0              1
-    5       5  5.0              2
-    4       4  4.0              2
-    7       7  7.0              3
-    6       6  6.0              3
+    >>> res = df_schema.validate(res).reset_index(drop=True)
+
+    >>> df_expected = pd.DataFrame({
+    ... "candid" : [1, 0, 5, 4, 7, 6],
+    ... "jd" : [1.0, 0.0, 5.0, 4.0, 7.0, 6.0],
+    ... "trajectory_id" : [1, 1, 2, 2, 3, 3]
+    ... })
+
+    >>> assert_frame_equal(res, df_expected)
     """
 
     return trajectories.sort_values(['jd'], ascending=ascending).groupby(['trajectory_id']).tail(n).sort_values(['trajectory_id'])
@@ -111,39 +121,18 @@ def intra_night_separation_association(night_alerts, separation_criterion):
 
     >>> left, right, sep = intra_night_separation_association(test, 100*u.arcsecond)
 
-    >>> left
-            ra     dec  candid  traj
-    0  100.000   8.000       1     1
-    0  100.000   8.000       1     1
-    1  100.003   8.002       2     1
-    1  100.003   8.002       2     1
-    2  100.007   8.005       3     1
-    2  100.007   8.005       3     1
-    3   14.000  16.000       4     2
-    3   14.000  16.000       4     2
-    4   14.003  15.998       5     2
-    4   14.003  15.998       5     2
-    5   14.007  15.992       6     2
-    5   14.007  15.992       6     2
+    >>> left_expected = ts.intra_sep_left_expected
+    >>> right_expected = ts.intra_sep_right_expected
 
-    >>> right
-            ra     dec  candid  traj
-    1  100.003   8.002       2     1
-    2  100.007   8.005       3     1
-    0  100.000   8.000       1     1
-    2  100.007   8.005       3     1
-    0  100.000   8.000       1     1
-    1  100.003   8.002       2     1
-    4   14.003  15.998       5     2
-    5   14.007  15.992       6     2
-    3   14.000  16.000       4     2
-    5   14.007  15.992       6     2
-    3   14.000  16.000       4     2
-    4   14.003  15.998       5     2
-    >>> sep
-    <Angle [0.00358129, 0.00854695, 0.00358129, 0.00496889, 0.00854695,
-            0.00496889, 0.00350946, 0.01045366, 0.00350946, 0.00712637,
-            0.01045366, 0.00712637] deg>
+    >>> assert_frame_equal(left.reset_index(drop=True), left_expected)
+    >>> assert_frame_equal(right.reset_index(drop=True), right_expected)
+
+    >>> sep_expected = [0.00358129, 0.00854695, 0.00358129, 0.00496889, 0.00854695,
+    ...        0.00496889, 0.00350946, 0.01045366, 0.00350946, 0.00712637,
+    ...        0.01045366, 0.00712637]
+
+    >>> np.any(np.equal(np.around(sep.value, 8), sep_expected))
+    True
     
     >>> len(np.where(sep == 0)[0])
     0
@@ -206,45 +195,19 @@ def compute_diff_mag(left, right, fid, magnitude_criterion, normalized=False):
     >>> same_fid_left, same_fid_right = compute_diff_mag(l, r, same_fid, 0.1)
     >>> diff_fid_left, diff_fid_right = compute_diff_mag(l, r, diff_fid, 0.5)
 
-    >>> same_fid_left
-            ra     dec  jd  dcmag  fid  candid  traj
-    0  100.000  12.000   1  17.00    1       1     1
-    0  100.000  12.000   1  17.00    1       1     1
-    1  100.003  11.998   1  17.05    1       2     1
-    1  100.003  11.998   1  17.05    1       2     1
-    2  100.007  11.994   1  17.09    1       3     1
-    2  100.007  11.994   1  17.09    1       3     1
-    3  100.001  11.994   1  15.00    2       4     2
-    3  100.001  11.994   1  15.00    2       4     2
-    4  100.003  11.998   1  15.07    2       5     2
-    4  100.003  11.998   1  15.07    2       5     2
-    5  100.008  12.002   1  15.10    2       6     2
-    5  100.008  12.002   1  15.10    2       6     2
+    >>> same_fid_left_expected = ts.same_fid_left_expected1
+    >>> same_fid_right_expected = ts.same_fid_right_expected1
 
-    >>> same_fid_right
-            ra     dec  jd  dcmag  fid  candid  traj
-    1  100.003  11.998   1  17.05    1       2     1
-    2  100.007  11.994   1  17.09    1       3     1
-    0  100.000  12.000   1  17.00    1       1     1
-    2  100.007  11.994   1  17.09    1       3     1
-    0  100.000  12.000   1  17.00    1       1     1
-    1  100.003  11.998   1  17.05    1       2     1
-    4  100.003  11.998   1  15.07    2       5     2
-    5  100.008  12.002   1  15.10    2       6     2
-    3  100.001  11.994   1  15.00    2       4     2
-    5  100.008  12.002   1  15.10    2       6     2
-    3  100.001  11.994   1  15.00    2       4     2
-    4  100.003  11.998   1  15.07    2       5     2
+    >>> assert_frame_equal(same_fid_left.reset_index(drop=True), same_fid_left_expected)
+    >>> assert_frame_equal(same_fid_right.reset_index(drop=True), same_fid_right_expected)
 
-    >>> diff_fid_left
-    Empty DataFrame
-    Columns: [ra, dec, jd, dcmag, fid, candid, traj]
-    Index: []
+    >>> diff_fid_left_expected = pd.DataFrame(columns = ['ra', 'dec', 'jd', 'dcmag', 'fid', 'candid', 'traj'])
+    >>> diff_fid_right_expected = pd.DataFrame(columns = ['ra', 'dec', 'jd', 'dcmag', 'fid', 'candid', 'traj'])
 
-    >>> diff_fid_right
-    Empty DataFrame
-    Columns: [ra, dec, jd, dcmag, fid, candid, traj]
-    Index: []
+    >>> assert_frame_equal(diff_fid_left, diff_fid_left_expected, check_index_type=False, check_dtype=False)
+    >>> assert_frame_equal(diff_fid_right, diff_fid_right_expected, check_index_type=False, check_dtype=False)
+
+
 
     >>> test = pd.DataFrame({
     ... 'ra' : [100, 99, 99.8, 100.2, 100.7, 100.5],
@@ -263,34 +226,19 @@ def compute_diff_mag(left, right, fid, magnitude_criterion, normalized=False):
     >>> same_fid_left, same_fid_right = compute_diff_mag(l, r, same_fid, 0.1, normalized=True)
     >>> diff_fid_left, diff_fid_right = compute_diff_mag(l, r, diff_fid, 0.5, normalized=True)
 
-    >>> same_fid_left
-          ra   dec    jd  dcmag  fid  candid  traj
-    0  100.0  12.0  1.05  15.00    1       1     1
-    1   99.0  11.8  1.08  17.00    1       2     2
-    2   99.8  11.2  1.09  16.00    1       3     3
-    3  100.2  12.3  2.50  16.04    1       4     3
-    4  100.7  11.7  2.60  17.03    1       5     2
-    5  100.5  11.5  2.70  15.06    1       6     1
+    >>> same_fid_left_expected = ts.same_fid_left_expected2
+    >>> same_fid_right_expected = ts.same_fid_right_expected2
+    
+    >>> assert_frame_equal(same_fid_left.reset_index(drop=True), same_fid_left_expected)
+    >>> assert_frame_equal(same_fid_right.reset_index(drop=True), same_fid_right_expected)
 
-    >>> same_fid_right
-          ra   dec    jd  dcmag  fid  candid  traj
-    5  100.5  11.5  2.70  15.06    1       6     1
-    4  100.7  11.7  2.60  17.03    1       5     2
-    3  100.2  12.3  2.50  16.04    1       4     3
-    2   99.8  11.2  1.09  16.00    1       3     3
-    1   99.0  11.8  1.08  17.00    1       2     2
-    0  100.0  12.0  1.05  15.00    1       1     1
+    >>> diff_fid_left_expected = pd.DataFrame(columns = ['ra', 'dec', 'jd', 'dcmag', 'fid', 'candid', 'traj'])
+    >>> diff_fid_right_expected = pd.DataFrame(columns = ['ra', 'dec', 'jd', 'dcmag', 'fid', 'candid', 'traj'])
 
-    >>> diff_fid_left
-    Empty DataFrame
-    Columns: [ra, dec, jd, dcmag, fid, candid, traj]
-    Index: []
-
-    >>> diff_fid_right
-    Empty DataFrame
-    Columns: [ra, dec, jd, dcmag, fid, candid, traj]
-    Index: []
+    >>> assert_frame_equal(diff_fid_left, diff_fid_left_expected, check_index_type=False, check_dtype=False)
+    >>> assert_frame_equal(diff_fid_right, diff_fid_right_expected, check_index_type=False, check_dtype=False)
     """
+
     left_assoc = left[fid]
     right_assoc = right[fid]
 
@@ -336,19 +284,18 @@ def magnitude_association(left_assoc, right_assoc, mag_criterion_same_fid, mag_c
 
     >>> l, r = magnitude_association(left_test, right_test, 0.1, 1)
 
-    >>> l
-       dcmag  fid
-    0  17.03    1
-    1  15.00    2
-    2  17.00    1
-    3  18.00    2
+    >>> l_expected = pd.DataFrame({
+    ... "dcmag" : [17.03,15.00,17.00,18.00],
+    ... "fid" : [1,2, 1, 2]
+    ... })
 
-    >>> r
-       dcmag  fid
-    0  17.00    1
-    1  15.09    2
-    2  16.00    2
-    3  19.00    1
+    >>> r_expected = pd.DataFrame({
+    ... "dcmag" : [17.00,15.09,16.00,19.00],
+    ... "fid" : [1,2,2,1]
+    ... })
+
+    >>> assert_frame_equal(l, l_expected)
+    >>> assert_frame_equal(r, r_expected)
     """
     same_fid = left_assoc['fid'].values == right_assoc['fid'].values
     diff_fid = left_assoc['fid'].values != right_assoc['fid'].values
@@ -392,8 +339,10 @@ def compute_associations_metrics(left_assoc, right_assoc, observations_with_real
     ... 'ssnamenr' : [1, 2, 2, 3, 3, 3, 4]
     ... })
 
-    >>> compute_associations_metrics(left_assoc, right_assoc, real_assoc)
-    {'precision': 100.0, 'recall': 100.0, 'True Positif': 7, 'False Positif': 0, 'False Negatif': 0, 'total real association': 7}
+    >>> actual_dict = compute_associations_metrics(left_assoc, right_assoc, real_assoc)
+    >>> expected_dict = {'precision': 100.0, 'recall': 100.0, 'True Positif': 7, 'False Positif': 0, 'False Negatif': 0, 'total real association': 7}
+
+    >>> TestCase().assertDictEqual(expected_dict, actual_dict)
     """
     gb_real_assoc = observations_with_real_labels.groupby(['ssnamenr']).count()
     gb_real_assoc = gb_real_assoc[gb_real_assoc['ra'] > 1]['ra'].values
@@ -449,16 +398,18 @@ def restore_left_right(concat_l_r, nb_assoc_column):
 
     >>> l, r = restore_left_right(concat, 2)
 
-    >>> l
-       column1  column2
-    0        1        4
-    1        2        5
-    2        3        6
-    >>> r
-       column1  column2
-    0        7       10
-    1        8       11
-    2        9       12
+    >>> left_expected = pd.DataFrame({
+    ... "column1" : [1, 2, 3],
+    ... "column2" : [4, 5, 6]
+    ... })
+    
+    >>> right_expected = pd.DataFrame({
+    ... "column1" : [7, 8, 9],
+    ... "column2" : [10, 11, 12]
+    ... })
+
+    >>> assert_frame_equal(l, left_expected)
+    >>> assert_frame_equal(r, right_expected)
     """
     left_col = concat_l_r.columns.values[0: nb_assoc_column]
     right_col = concat_l_r.columns.values[nb_assoc_column:]
@@ -475,6 +426,7 @@ def removed_mirrored_association(left_assoc, right_assoc):
     """
     Remove the mirrored association (associations like (a, b) and (b, a)) that occurs in the intra-night associations.
     The column id used to detect mirrored association are candid.
+    We keep the associations with the smallest jd in the left_assoc dataframe. 
 
     Parameters
     ----------
@@ -504,18 +456,26 @@ def removed_mirrored_association(left_assoc, right_assoc):
     ... "jd" : [2, 1, 5, 6]
     ... })
 
+    The mirror association is the candid 10 with the 11 
+    (10 is associated with 11 and 11 is associated with 10 if we look between test_1 and test_2)
+
     >>> tt_1, tt_2 = removed_mirrored_association(test_1, test_2)
 
-    >>> tt_1
-       a  candid  jd
-    0  1      10   1
-    2  3      12   3
-    3  4      13   4
-    >>> tt_2
-        a  candid  jd
-    0  30      11   2
-    2  32      15   5
-    3  33      16   6
+    >>> tt_1_expected = pd.DataFrame({
+    ... "a" : [1,3,4],
+    ... "candid" : [10,12,13],
+    ... "jd" : [1,3,4]
+    ... })
+
+    >>> tt_2_expected = pd.DataFrame({
+    ... "a" : [30,32,33],
+    ... "candid" : [11,15,16],
+    ... "jd" : [2,5,6]
+    ... })
+
+    >>> assert_frame_equal(tt_1.reset_index(drop=True), tt_1_expected)
+    >>> assert_frame_equal(tt_2.reset_index(drop=True), tt_2_expected)
+
 
     >>> df1 = pd.DataFrame({
     ... "candid" : [1522165813015015004, 1522207623015015004],
@@ -529,24 +489,21 @@ def removed_mirrored_association(left_assoc, right_assoc):
     ... "jd" : [2459276.707627, 2459276.66581]
     ... })
 
-    >>> df1
-                    candid      objectId            jd
-    0  1522165813015015004  ZTF21aanxwfq  2.459277e+06
-    1  1522207623015015004  ZTF21aanyhht  2.459277e+06
-
-    >>> df2
-                    candid      objectId            jd
-    0  1522207623015015004  ZTF21aanyhht  2.459277e+06
-    1  1522165813015015004  ZTF21aanxwfq  2.459277e+06
-
     >>> dd1, dd2 = removed_mirrored_association(df1, df2)
 
-    >>> dd1
-                    candid      objectId            jd
-    0  1522165813015015004  ZTF21aanxwfq  2.459277e+06
-    >>> dd2
-                    candid      objectId            jd
-    0  1522207623015015004  ZTF21aanyhht  2.459277e+06
+    >>> dd1_expected = pd.DataFrame({
+    ... "candid" : [1522165813015015004],
+    ... "objectId" : ['ZTF21aanxwfq'],
+    ... "jd" : [2459276.66581]
+    ... })
+    >>> dd2_expected = pd.DataFrame({
+    ... "candid" : [1522207623015015004],
+    ... "objectId" : ['ZTF21aanyhht'],
+    ... "jd" : [2459276.707627]
+    ... })
+
+    >>> assert_frame_equal(dd1, dd1_expected)
+    >>> assert_frame_equal(dd2, dd2_expected)
     """
     left_assoc = left_assoc.reset_index(drop=True)
     right_assoc = right_assoc.reset_index(drop=True)
@@ -611,14 +568,18 @@ def removed_multiple_association(left_assoc, right_assoc):
 
     >>> l, r = removed_multiple_association(left, right)
 
-    >>> l
-      candid jd
-    1      1  2
-    0      0  1
-    >>> r
-      candid jd
-    1      2  3
-    0      1  2
+    >>> l_expected = pd.DataFrame({
+    ... "candid" : [1, 0],
+    ... "jd" : [2, 1]
+    ... })
+
+    >>> r_expected = pd.DataFrame({
+    ... "candid" : [2, 1],
+    ... "jd" : [3, 2]
+    ... })
+
+    >>> assert_frame_equal(l.reset_index(drop=True), l_expected, check_dtype = False)
+    >>> assert_frame_equal(r.reset_index(drop=True), r_expected, check_dtype = False)
 
     >>> left = pd.DataFrame({
     ... 'candid' : [0, 2, 0, 1],
@@ -632,16 +593,17 @@ def removed_multiple_association(left_assoc, right_assoc):
 
     >>> l, r = removed_multiple_association(left, right)
 
-    >>> l
-      candid jd
-    1      2  3
-    3      1  2
-    0      0  1
-    >>> r
-      candid jd
-    1      3  4
-    3      2  3
-    0      1  2
+    >>> l_expected = pd.DataFrame({
+    ... "candid" : [2, 1, 0],
+    ... "jd" : [3, 2, 1]
+    ... })
+    >>> r_expected = pd.DataFrame({
+    ... "candid" : [3, 2, 1],
+    ... "jd" : [4, 3, 2]
+    ... })
+
+    >>> assert_frame_equal(l.reset_index(drop=True), l_expected, check_dtype = False)
+    >>> assert_frame_equal(r.reset_index(drop=True), r_expected, check_dtype = False)
     """
     # reset the index in order to recover the non multiple association
     left_assoc = left_assoc.reset_index(drop=True).reset_index()
@@ -741,75 +703,37 @@ def intra_night_association(night_observation, sep_criterion=145*u.arcsecond, ma
     ... ]
     ... })
 
-    >>> left, right, metrics = intra_night_association(test_traj, sep_criterion=145*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=True)
+    >>> left, right, actual_metrics = intra_night_association(test_traj, sep_criterion=145*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=True)
 
-    >>> metrics
-    {'precision': 100.0, 'recall': 100.0, 'True Positif': 10, 'False Positif': 0, 'False Negatif': 0, 'total real association': 10}
+    >>> assert_frame_equal(left.reset_index(drop=True), ts.intra_night_left, check_dtype = False)
+    >>> assert_frame_equal(right.reset_index(drop=True), ts.intra_night_right, check_dtype = False)
 
-    >>> left
-                ra        dec     dcmag ssnamenr fid               candid              jd
-    15  106.140906  15.239506  0.021575     3051   2  1520254695615015016  2459274.754699
-    16  106.302386  18.178404  0.042095     3866   2  1520255162915015021  2459274.755162
-    19  169.829712  15.240389  0.026171    19743   2  1520379906015015006  2459274.879907
-    0   106.141905  15.241181  0.018517     3051   1  1520166711415015012  2459274.666713
-    1   106.305259  18.176682  0.066603     3866   1  1520166712915015010  2459274.666713
-    2   169.860467   15.20636  0.038709    19743   1  1520220641415015001  2459274.720648
-    3   106.141138  15.239999  0.020256     3051   1  1520227400315015018  2459274.727407
-    4   106.303285  18.177874  0.089385     3866   1  1520227401615015011  2459274.727407
-    5   169.856885  15.210309   0.04403    19743   1  1520239140315015026  2459274.739144
-    6   169.833666  15.236048  0.032183    19743   2  1520359440315015016  2459274.859444
-    >>> right
-                ra        dec     dcmag ssnamenr fid               candid              jd
-    15   106.14084  15.239482  0.023033     3051   2  1520255630315015010  2459274.755637
-    16  106.302364  18.178424  0.046602     3866   2  1520255631615015014  2459274.755637
-    19  169.829656   15.24049   0.02589    19743   2  1520380381415015018  2459274.880382
-    0   106.141138  15.239999  0.020256     3051   1  1520227400315015018  2459274.727407
-    1   106.303285  18.177874  0.089385     3866   1  1520227401615015011  2459274.727407
-    2   169.856885  15.210309   0.04403    19743   1  1520239140315015026  2459274.739144
-    3   106.140906  15.239506  0.021575     3051   2  1520254695615015016  2459274.754699
-    4   106.302386  18.178404  0.042095     3866   2  1520255162915015021  2459274.755162
-    5   169.833666  15.236048  0.032183    19743   2  1520359440315015016  2459274.859444
-    6   169.829712  15.240389  0.026171    19743   2  1520379906015015006  2459274.879907
+    >>> expected_metrics = {'precision': 100.0, 'recall': 100.0, 'True Positif': 10, 'False Positif': 0, 'False Negatif': 0, 'total real association': 10}
+    >>> TestCase().assertDictEqual(expected_metrics, actual_metrics)
+
 
     >>> left, right, metrics = intra_night_association(test_traj, sep_criterion=145*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=False)
 
-    >>> metrics
-    {}
+    >>> TestCase().assertDictEqual({}, metrics)
 
     >>> test_traj = pd.DataFrame({
-    ... 'ra' : [
-    ...     106.305259, 106.141905, 169.860467
-    ... ],
-    ... 'dec': [
-    ...     18.176682, 15.241181, 15.206360
-    ...     ],
-    ... 'dcmag': [
-    ...     0.066603, 0.018517, 0.038709
-    ... ],
-    ... 'ssnamenr': [
-    ...     3866, 3051, 19743
-    ... ],
+    ... 'ra' : [106.305259, 106.141905, 169.860467],
+    ... 'dec': [18.176682, 15.241181, 15.206360],
+    ... 'dcmag': [0.066603, 0.018517, 0.038709],
+    ... 'ssnamenr': [3866, 3051, 19743],
     ... 'fid': [1, 2, 1],
-    ... 'candid': [
-    ...     1520166712915015010, 1520166711415015012, 1520220641415015001
-    ... ],
-    ... 'jd': [
-    ...     2459274.666713, 2459274.666713, 2459274.7206481
-    ... ]
+    ... 'candid': [1520166712915015010, 1520166711415015012, 1520220641415015001],
+    ... 'jd': [2459274.666713, 2459274.666713, 2459274.7206481]
     ... })
 
     >>> left, right, metrics = intra_night_association(test_traj, sep_criterion=145*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=True)
 
     >>> metrics
     {}
-    >>> left
-    Empty DataFrame
-    Columns: []
-    Index: []
-    >>> right 
-    Empty DataFrame
-    Columns: []
-    Index: []
+    >>> len(left)
+    0
+    >>> len(right) 
+    0
     """
     left_assoc, right_assoc, _ = intra_night_separation_association(night_observation, sep_criterion)
 
@@ -876,41 +800,29 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
     ... "candid" : [9, 10, 11, 6, 4, 3, 2, 12]
     ... })
 
-    >>> new_trajectory_id_assignation(left_assoc1, right_assoc1, 0)
-       candid  trajectory_id
-    0       1              0
-    1       2              1
-    2       3              2
-    3       4              3
-    0       5              0
-    1       6              1
-    2       7              2
-    3       8              3
+    >>> actual_traj_id = new_trajectory_id_assignation(left_assoc1, right_assoc1, 0)
+    >>> expected_traj_id = pd.DataFrame({
+    ... "candid" : [1, 2, 3, 4, 5, 6, 7, 8],
+    ... "trajectory_id" : [0, 1, 2, 3, 0, 1, 2, 3]
+    ... })
 
-    >>> new_trajectory_id_assignation(left_assoc2, right_assoc2, 0)
-       candid  trajectory_id
-    0       1              0
-    1       2              0
-    2       3              0
-    3       4              3
-    4       5              3
-    2       6              0
-    4       7              3
+    >>> assert_frame_equal(actual_traj_id.reset_index(drop=True), expected_traj_id)
 
-    >>> new_trajectory_id_assignation(left_assoc3, right_assoc3, 0)
-       candid  trajectory_id
-    0       1              0
-    1       2              1
-    2       3              3
-    3       4              3
-    4       5              3
-    5       6              3
-    6       7              1
-    7       8              7
-    0       9              0
-    1      10              1
-    2      11              3
-    7      12              7
+    >>> actual_traj_id = new_trajectory_id_assignation(left_assoc2, right_assoc2, 0)
+    >>> expected_traj_id = pd.DataFrame({
+    ... "candid" : [1, 2, 3, 4, 5, 6, 7],
+    ... "trajectory_id" : [0, 0, 0, 3, 3, 0, 3]
+    ... })
+
+    >>> assert_frame_equal(actual_traj_id.reset_index(drop=True), expected_traj_id)
+
+    >>> actual_traj_id = new_trajectory_id_assignation(left_assoc3, right_assoc3, 0)
+    >>> expected_traj_id = pd.DataFrame({
+    ... "candid" : [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+    ... "trajectory_id" : [0, 1, 3, 3, 3, 3, 1, 7, 0, 1, 3, 7]
+    ... })
+
+    >>> assert_frame_equal(actual_traj_id.reset_index(drop=True), expected_traj_id)
     """
 
     left_assoc = left_assoc.reset_index(drop=True)
@@ -941,4 +853,11 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
 
 if __name__ == "__main__":
     import doctest
+    from pandas.testing import assert_frame_equal
+    import numpy as np
+    import test_sample as ts
+    from unittest import TestCase
+
+    globs = globals()
+
     doctest.testmod()
