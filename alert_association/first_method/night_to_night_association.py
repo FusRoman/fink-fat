@@ -621,6 +621,8 @@ def night_to_night_association(trajectory_df, old_observation, new_observation, 
     return trajectory_df, old_observation
 
 if __name__ == "__main__":
+
+    exit()
     df_sso = pd.read_pickle("../../data/month=03")
 
     df_sso = df_sso.drop_duplicates(['candid'])
