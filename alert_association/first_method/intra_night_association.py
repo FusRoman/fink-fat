@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 from collections import Counter
 
+
 from astropy.coordinates import search_around_sky
 
 def get_n_last_observations_from_trajectories(trajectories, n, ascending=True):
@@ -18,7 +19,7 @@ def get_n_last_observations_from_trajectories(trajectories, n, ascending=True):
         the number of extremity observations to return.
     ascending : boolean
         if set to True, return the most recent extremity observations, return the oldest ones otherwise, default to True.
-    
+
     Returns
     -------
     last_trajectories_observations : dataframe
@@ -27,7 +28,7 @@ def get_n_last_observations_from_trajectories(trajectories, n, ascending=True):
     Examples
     --------
     >>> from pandera import Check, Column, DataFrameSchema
-    >>> 
+
     >>> test = pd.DataFrame({
     ... "candid" : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
     ... "jd" : [0.0, 1.0, 2, 3, 4, 5, 6, 7, 8, 9],
@@ -133,7 +134,7 @@ def intra_night_separation_association(night_alerts, separation_criterion):
 
     >>> np.any(np.equal(np.around(sep.value, 8), sep_expected))
     True
-    
+
     >>> len(np.where(sep == 0)[0])
     0
     """
@@ -141,7 +142,6 @@ def intra_night_separation_association(night_alerts, separation_criterion):
     c1 = SkyCoord(night_alerts['ra'], night_alerts['dec'], unit=u.degree)
 
     c1_idx, c2_idx, sep2d, _ = search_around_sky(c1, c1, separation_criterion)
-    
 
     # remove the associations with the same alerts. (sep == 0)
     nonzero_idx = np.where(sep2d > 0)[0]
@@ -228,7 +228,7 @@ def compute_diff_mag(left, right, fid, magnitude_criterion, normalized=False):
 
     >>> same_fid_left_expected = ts.same_fid_left_expected2
     >>> same_fid_right_expected = ts.same_fid_right_expected2
-    
+
     >>> assert_frame_equal(same_fid_left.reset_index(drop=True), same_fid_left_expected)
     >>> assert_frame_equal(same_fid_right.reset_index(drop=True), same_fid_right_expected)
 
@@ -254,7 +254,7 @@ def compute_diff_mag(left, right, fid, magnitude_criterion, normalized=False):
 
 def magnitude_association(left_assoc, right_assoc, mag_criterion_same_fid, mag_criterion_diff_fid):
     """
-    Perform magnitude based association twice, one for the alerts with the same fid and another for the alerts with a different fid. 
+    Perform magnitude based association twice, one for the alerts with the same fid and another for the alerts with a different fid.
 
     Parameters
     ----------
@@ -262,7 +262,7 @@ def magnitude_association(left_assoc, right_assoc, mag_criterion_same_fid, mag_c
         left members of the associations (column dcmag and fid have to be present, jd must be present if normalize is set to True)
     right_assoc : dataframe
         right members of the associations (column dcmag and fid have to be present, jd must be present if normalize is set to True)
-    
+
     Returns
     -------
     left_assoc : dataframe
@@ -318,7 +318,7 @@ def compute_associations_metrics(left_assoc, right_assoc, observations_with_real
         right members of the predicts associations
     observations_with_real_labels : dataframe
         observations from known objects from MPC, real labels are ssnamenr
-    
+
     Returns
     -------
     metrics_dict : dictionnary
@@ -355,13 +355,13 @@ def compute_associations_metrics(left_assoc, right_assoc, observations_with_real
     # precision_counter[True] == number of true positif
     precision = (precision_counter[True] / (precision_counter[True] + precision_counter[False])) * 100
 
-    # max(0, (nb_real_assoc - nb_predict_assoc)) == number of false negatif if nb_predict_assoc < nb_real_assoc else 0 because no false negatif occurs. 
+    # max(0, (nb_real_assoc - nb_predict_assoc)) == number of false negatif if nb_predict_assoc < nb_real_assoc else 0 because no false negatif occurs.
     FN = max(0, (nb_real_assoc - precision_counter[True]))
     recall = (precision_counter[True] / (precision_counter[True] + FN)) * 100
 
-    return {"precision" : precision, "recall" : recall, "True Positif" : precision_counter[True], 
-            "False Positif" : precision_counter[False], "False Negatif" : FN,
-            "total real association" : nb_real_assoc}
+    return {"precision": precision, "recall": recall, "True Positif": precision_counter[True],
+            "False Positif": precision_counter[False], "False Negatif": FN,
+            "total real association": nb_real_assoc}
 
 def restore_left_right(concat_l_r, nb_assoc_column):
     """
@@ -402,7 +402,7 @@ def restore_left_right(concat_l_r, nb_assoc_column):
     ... "column1" : [1, 2, 3],
     ... "column2" : [4, 5, 6]
     ... })
-    
+
     >>> right_expected = pd.DataFrame({
     ... "column1" : [7, 8, 9],
     ... "column2" : [10, 11, 12]
@@ -416,7 +416,7 @@ def restore_left_right(concat_l_r, nb_assoc_column):
 
     left_a = concat_l_r[left_col]
     left_a.columns = left_a.columns.droplevel()
-    
+
     right_a = concat_l_r[right_col]
     right_a.columns = right_a.columns.droplevel()
 
@@ -426,7 +426,7 @@ def removed_mirrored_association(left_assoc, right_assoc):
     """
     Remove the mirrored association (associations like (a, b) and (b, a)) that occurs in the intra-night associations.
     The column id used to detect mirrored association are candid.
-    We keep the associations with the smallest jd in the left_assoc dataframe. 
+    We keep the associations with the smallest jd in the left_assoc dataframe.
 
     Parameters
     ----------
@@ -434,12 +434,12 @@ def removed_mirrored_association(left_assoc, right_assoc):
         left members of the intra-night associations
     right_assoc : dataframe
         right members of the intra-night associations
-    
+
     Returns
     -------
-    drop_left : dataframe 
+    drop_left : dataframe
         left members of the intra-night associations without mirrored associations
-    drop_right : dataframe 
+    drop_right : dataframe
         right members of the intra-night associations without mirrored associations
 
     Examples
@@ -456,7 +456,7 @@ def removed_mirrored_association(left_assoc, right_assoc):
     ... "jd" : [2, 1, 5, 6]
     ... })
 
-    The mirror association is the candid 10 with the 11 
+    The mirror association is the candid 10 with the 11
     (10 is associated with 11 and 11 is associated with 10 if we look between test_1 and test_2)
 
     >>> tt_1, tt_2 = removed_mirrored_association(test_1, test_2)
@@ -524,7 +524,7 @@ def removed_mirrored_association(left_assoc, right_assoc):
         """
         return frozenset(Counter(x).items())
 
-    mask = all_assoc[[('left', 'candid'), ('right','candid')]].apply(key, axis=1).duplicated()
+    mask = all_assoc[[('left', 'candid'), ('right', 'candid')]].apply(key, axis=1).duplicated()
 
     # remove the mirrored duplicates by applying the mask to the dataframe
     drop_mirrored = all_assoc[~mask]
@@ -537,9 +537,9 @@ def removed_multiple_association(left_assoc, right_assoc):
     """
     Remove the multiple associations which can occurs during the intra_night associations.
     If we have three alerts (A, B and C) in the dataframe and the following associations : (A, B), (B, C) and (A, C) then this function remove
-    the associations (A, C) to keep only (A, B) and (B, C). 
+    the associations (A, C) to keep only (A, B) and (B, C).
 
-    Warning : The jd between the triplets alerts must be differents, don't work if it is the case. 
+    Warning : The jd between the triplets alerts must be differents, don't work if it is the case.
     Parameters
     ----------
     left_assoc : dataframe
@@ -612,11 +612,11 @@ def removed_multiple_association(left_assoc, right_assoc):
     # concat left and right members in order to keep the associations
     l_r_concat = pd.concat([left_assoc, right_assoc], axis=1, keys=['left', 'right'])
 
-    agg_dict = {col : list for col in l_r_concat.columns.values}
+    agg_dict = {col: list for col in l_r_concat.columns.values}
 
     # group by left candid to detect multiple assoc
     gb_concat = l_r_concat.groupby(by=[('left', 'candid')]).agg(agg_dict)
-    gb_concat['nb_multiple_assoc'] = gb_concat.apply(lambda x : len(x[0]), axis=1)
+    gb_concat['nb_multiple_assoc'] = gb_concat.apply(lambda x: len(x[0]), axis=1)
 
     # keep only the multiple association
     multiple_assoc = gb_concat[gb_concat[('nb_multiple_assoc', '')] > 1]
@@ -630,7 +630,7 @@ def removed_multiple_association(left_assoc, right_assoc):
     left_assoc = left_assoc.drop(index=drop_multiple_assoc)
     right_assoc = right_assoc.drop(index=drop_multiple_assoc)
 
-    # remove useless columns 
+    # remove useless columns
     multiple_assoc = explode_multiple_assoc.drop(labels=[('left', 'index'), ('right', 'index')], axis=1)
 
     # drop the multiples associations and keep the first ones, as we have sort by jd on the right members, drop_duplicates remove the wrong associations
@@ -644,7 +644,7 @@ def removed_multiple_association(left_assoc, right_assoc):
 
     return left_assoc, right_assoc
 
-def intra_night_association(night_observation, sep_criterion=145*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=False):
+def intra_night_association(night_observation, sep_criterion=145 * u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=False):
     """
     Perform intra_night association with separation and magnitude criterion
     Separation and magnitude are not normalised with the jd difference due to a too small difference of jd between the alerts.
@@ -663,19 +663,19 @@ def intra_night_association(night_observation, sep_criterion=145*u.arcsecond, ma
     real_assoc : boolean
         if True, computes performance metrics of the associations based on real labels from ssnamenr columns in the night_observation parameters.
         night_observations must contains observations with ssnamenr from MPC objects.
-    
+
     Returns
     -------
     left_assoc : dataframe
         left members of the associations
     right_assoc : dataframe
         right_members of the associations
-    
+
     Examples
     --------
     >>> test_traj = pd.DataFrame({
     ... 'ra' : [
-    ...     106.305259, 106.141905, 169.860467, 106.303285,  106.141138, 169.856885, 106.140906, 
+    ...     106.305259, 106.141905, 169.860467, 106.303285,  106.141138, 169.856885, 106.140906,
     ...     106.302386, 106.140840, 106.302364, 169.833666, 169.829712, 169.829656
     ... ],
     ... 'dec': [
@@ -692,7 +692,7 @@ def intra_night_association(night_observation, sep_criterion=145*u.arcsecond, ma
     ... ],
     ... 'fid': [1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2],
     ... 'candid': [
-    ...     1520166712915015010, 1520166711415015012, 1520220641415015001, 1520227401615015011, 1520227400315015018, 
+    ...     1520166712915015010, 1520166711415015012, 1520220641415015001, 1520227401615015011, 1520227400315015018,
     ...     1520239140315015026, 1520254695615015016, 1520255162915015021, 1520255630315015010,
     ...     1520255631615015014, 1520359440315015016, 1520379906015015006, 1520380381415015018
     ... ],
@@ -732,7 +732,7 @@ def intra_night_association(night_observation, sep_criterion=145*u.arcsecond, ma
     {}
     >>> len(left)
     0
-    >>> len(right) 
+    >>> len(right)
     0
     """
     left_assoc, right_assoc, _ = intra_night_separation_association(night_observation, sep_criterion)
@@ -740,15 +740,14 @@ def intra_night_association(night_observation, sep_criterion=145*u.arcsecond, ma
     left_assoc, right_assoc = magnitude_association(left_assoc, right_assoc, mag_criterion_same_fid, mag_criterion_diff_fid)
 
     if len(left_assoc) == 0:
-        return pd.DataFrame(), pd.DataFrame(), {} 
+        return pd.DataFrame(), pd.DataFrame(), {}
 
     # remove mirrored associations
     left_assoc, right_assoc = removed_mirrored_association(left_assoc, right_assoc)
-    
+
     # removed wrong multiple association
     left_assoc, right_assoc = removed_multiple_association(left_assoc, right_assoc)
-    
-    
+
     if compute_metrics:
         metrics = compute_associations_metrics(left_assoc, right_assoc, night_observation)
         return left_assoc, right_assoc, metrics
@@ -771,7 +770,7 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
     Returns
     -------
     trajectory_df : dataframe
-        a single dataframe which are the concatanation of left and right and contains a new columns called 'trajectory_id'. 
+        a single dataframe which are the concatanation of left and right and contains a new columns called 'trajectory_id'.
         This column allows to reconstruct the trajectory by groupby on this column.
 
     Examples
@@ -823,9 +822,6 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
     ... })
 
     >>> assert_frame_equal(actual_traj_id.reset_index(drop=True), expected_traj_id)
-
-    >>> 1
-    0
     """
 
     left_assoc = left_assoc.reset_index(drop=True)
@@ -849,7 +845,7 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
         right_new_obs = right_assoc[right_assoc['candid'] == left_rows['candid']]
         left_assoc.loc[right_new_obs.index.values, 'trajectory_id'] = left_rows['trajectory_id']
         right_assoc.loc[right_new_obs.index.values, 'trajectory_id'] = left_rows['trajectory_id']
-        
+
     traj_df = pd.concat([left_assoc, right_assoc]).drop_duplicates(['candid'])
     return traj_df
 
@@ -857,10 +853,9 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
 if __name__ == "__main__":
     import sys
     import doctest
-    from pandas.testing import assert_frame_equal
-    import numpy as np
-    import test_sample as ts
-    from unittest import TestCase
+    from pandas.testing import assert_frame_equal  # noqa: F401
+    import test_sample as ts  # noqa: F401
+    from unittest import TestCase  # noqa: F401
 
     globs = globals()
 
