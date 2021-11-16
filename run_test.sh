@@ -15,6 +15,8 @@
 # limitations under the License.
 ## Script to launch the python test suite and measure the coverage.
 
+set -e
+
 export ROOTPATH=`pwd`
 
 
