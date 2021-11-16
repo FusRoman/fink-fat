@@ -35,6 +35,29 @@ def night_to_night_separation_association(
         return right members (from new_observation) of the associations
     sep2d : list
         return the separation between the associated alerts
+
+    Examples
+    --------
+    >>> test_night1 = pd.DataFrame({
+    ... 'ra': [10, 11, 20],
+    ... 'dec' : [70, 30, 50],
+    ... 'candid' : [1, 2, 3],
+    ... 'trajectory_id' : [10, 11, 12]
+    ... })
+
+    >>> test_night2 = pd.DataFrame({
+    ... 'ra' : [11, 12, 21],
+    ... 'dec' : [69, 29, 49],
+    ... 'candid' : [4, 5, 6],
+    ... 'trajectory_id' : [10, 11, 12]
+    ... })
+
+    >>> left, right, sep = night_to_night_separation_association(test_night1, test_night2, 2*u.degree)
+
+    >>> assert_frame_equal(test_night1, left)
+    >>> assert_frame_equal(test_night2, right)
+    >>> np.any([1.05951524, 1.32569856, 1.19235978] == np.around(sep.value, 8))
+    True
     """
 
     old_observations_coord = SkyCoord(
@@ -70,6 +93,19 @@ def angle_three_point(a, b, c):
     -------
     angle : float
         the angle formed by the three points
+    
+    Examples
+    --------
+    >>> a = np.array([1, 1])
+    >>> b = np.array([3, 2])
+    >>> c = np.array([5, 4])
+
+    >>> np.around(angle_three_point(a, b, c), 3)
+    10.305
+
+    >>> c = np.array([-2, -2])
+    >>> np.around(angle_three_point(a, b, c), 3)
+    161.565
     """
     ba = b - a
     ca = c - a
@@ -92,6 +128,24 @@ def angle_df(x):
     -------
     res_angle : float
         the angle between the three consecutives alerts normalized by the jd difference between the second point and the third point.
+
+    Examples
+    --------
+    >>> test_dataframe = pd.DataFrame({
+    ... 'col1': [0],
+    ... 'ra_x': [[1, 3]],
+    ... 'dec_x': [[1, 2]],
+    ... 'jd_x': [[0, 1]],
+    ... 'col2': [0],
+    ... 'ra_y': [5],
+    ... 'dec_y':[4],
+    ... 'jd_y': [2]
+    ... })
+
+    >>> res = test_dataframe.apply(angle_df, axis=1)
+
+    >>> np.around(np.array(res)[0], 3)
+    10.305
     """
     ra_x, dec_x, jd_x = x[1], x[2], x[3]
 
@@ -125,13 +179,21 @@ def cone_search_association(
         a dataframe that contains the two last observations for each trajectories
     traj_assoc : dataframe
         a dataframe which contains the trajectories extremity that are associated with the new observations.
+    new_obs_assoc : dataframe
+        new observations that will be associated with the trajectories extremity represented by the two last observations.
+    angle_criterion : float
+        the angle limit between the three points formed by the two last observation and the new observations to associates.
 
     Returns
     -------
     traj_assoc : dataframe
-        trajectories extremity associted with the new observation filtered by the angle cone search
+        trajectories extremity associated with the new observations filtered by the angle cone search
     new_obs_assoc : dataframe
         new observations associated with the trajectories filtered by the angle cone search
+
+    Examples
+    --------
+
     """
     # reset the index of the associated members in order to recovered the right rows after the angle filters.
     traj_assoc = traj_assoc.reset_index(drop=True).reset_index()
@@ -709,16 +771,6 @@ def night_to_night_association(
         ~new_observation["candid"].isin(traj_next_night["candid"])
     ]
 
-    print()
-    print("before the association process :")
-    print(
-        "nb observation in the trajectory dataframe: {}\nnb observation in the tracklets dataframe : {}\nnb non-associated new observation: {}".format(
-            len(trajectory_df),
-            len(traj_next_night),
-            len(new_observation_not_associated),
-        )
-    )
-
     # perform associations with the recorded trajectories :
     #   - trajectories with tracklets
     #   - trajectories with new observations
@@ -751,22 +803,13 @@ def night_to_night_association(
         angle_criterion,
     )
 
-    print()
-    print("after the association process")
-    print(
-        "nb observation in the trajectory dataframe: {}\nnb observation in the tracklets dataframe : {}\nnb non-associated new observation: {}".format(
-            len(trajectory_df),
-            len(traj_next_night),
-            len(new_observation_not_associated),
-        )
-    )
-
     return trajectory_df, old_observation
 
 
 if __name__ == "__main__":
     import sys
     import doctest
+    from pandas.testing import assert_frame_equal  # noqa: F401
 
     sys.exit(doctest.testmod()[0])
 
