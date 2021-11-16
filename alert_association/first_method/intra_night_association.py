@@ -823,6 +823,9 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
     ... })
 
     >>> assert_frame_equal(actual_traj_id.reset_index(drop=True), expected_traj_id)
+
+    >>> 1
+    0
     """
 
     left_assoc = left_assoc.reset_index(drop=True)
@@ -852,6 +855,7 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
 
 
 if __name__ == "__main__":
+    import sys
     import doctest
     from pandas.testing import assert_frame_equal
     import numpy as np
@@ -860,4 +864,4 @@ if __name__ == "__main__":
 
     globs = globals()
 
-    doctest.testmod()
+    sys.exit(doctest.testmod()[0])
