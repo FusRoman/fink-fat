@@ -31,9 +31,6 @@ do
     --rcfile ${ROOTPATH}/.coveragerc $filename
 done
 
-# Combine individual reports in one
-coverage combine
-
 unset COVERAGE_PROCESS_START
 
 coverage report
