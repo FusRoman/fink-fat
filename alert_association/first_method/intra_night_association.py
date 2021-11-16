@@ -738,7 +738,7 @@ def intra_night_association(
     >>> TestCase().assertDictEqual(expected_metrics, actual_metrics)
 
 
-    >>> left, right, metrics = intra_night_association(test_traj, sep_criterion=145*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=False)
+    >>> left, right, metrics = intra_night_association(ts.intra_night_test_traj, sep_criterion=145*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=False)
 
     >>> TestCase().assertDictEqual({}, metrics)
 
