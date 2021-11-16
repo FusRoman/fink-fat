@@ -25,6 +25,7 @@ export COVERAGE_PROCESS_START="${ROOTPATH}/.coveragerc"
 # Run the test suite on the utilities
 for filename in alert_association/first_method/*.py
 do
+  echo $filename
   # Run test suite + coverage
   coverage run \
     --source=${ROOTPATH} \
