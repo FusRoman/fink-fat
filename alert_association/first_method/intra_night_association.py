@@ -7,6 +7,7 @@ from collections import Counter
 
 from astropy.coordinates import search_around_sky
 
+
 def get_n_last_observations_from_trajectories(trajectories, n, ascending=True):
     """
     Get n extremity observations from trajectories
@@ -89,7 +90,13 @@ def get_n_last_observations_from_trajectories(trajectories, n, ascending=True):
     >>> assert_frame_equal(res, df_expected)
     """
 
-    return trajectories.sort_values(['jd'], ascending=ascending).groupby(['trajectory_id']).tail(n).sort_values(['trajectory_id'])
+    return (
+        trajectories.sort_values(["jd"], ascending=ascending)
+        .groupby(["trajectory_id"])
+        .tail(n)
+        .sort_values(["trajectory_id"])
+    )
+
 
 def intra_night_separation_association(night_alerts, separation_criterion):
     """
@@ -139,7 +146,7 @@ def intra_night_separation_association(night_alerts, separation_criterion):
     0
     """
 
-    c1 = SkyCoord(night_alerts['ra'], night_alerts['dec'], unit=u.degree)
+    c1 = SkyCoord(night_alerts["ra"], night_alerts["dec"], unit=u.degree)
 
     c1_idx, c2_idx, sep2d, _ = search_around_sky(c1, c1, separation_criterion)
 
@@ -151,6 +158,7 @@ def intra_night_separation_association(night_alerts, separation_criterion):
     left_assoc = night_alerts.iloc[c1_idx]
     right_assoc = night_alerts.iloc[c2_idx]
     return left_assoc, right_assoc, sep2d[nonzero_idx]
+
 
 def compute_diff_mag(left, right, fid, magnitude_criterion, normalized=False):
     """
@@ -243,16 +251,21 @@ def compute_diff_mag(left, right, fid, magnitude_criterion, normalized=False):
     right_assoc = right[fid]
 
     if normalized:
-        diff_mag = np.abs(left_assoc['dcmag'].values - right_assoc['dcmag'].values) / np.abs(left_assoc['jd'].values - right_assoc['jd'].values)
+        diff_mag = np.abs(
+            left_assoc["dcmag"].values - right_assoc["dcmag"].values
+        ) / np.abs(left_assoc["jd"].values - right_assoc["jd"].values)
     else:
-        diff_mag = np.abs(left_assoc['dcmag'].values - right_assoc['dcmag'].values)
+        diff_mag = np.abs(left_assoc["dcmag"].values - right_assoc["dcmag"].values)
 
     left_assoc = left_assoc[diff_mag <= magnitude_criterion]
     right_assoc = right_assoc[diff_mag <= magnitude_criterion]
 
     return left_assoc, right_assoc
 
-def magnitude_association(left_assoc, right_assoc, mag_criterion_same_fid, mag_criterion_diff_fid):
+
+def magnitude_association(
+    left_assoc, right_assoc, mag_criterion_same_fid, mag_criterion_diff_fid
+):
     """
     Perform magnitude based association twice, one for the alerts with the same fid and another for the alerts with a different fid.
 
@@ -297,15 +310,25 @@ def magnitude_association(left_assoc, right_assoc, mag_criterion_same_fid, mag_c
     >>> assert_frame_equal(l, l_expected)
     >>> assert_frame_equal(r, r_expected)
     """
-    same_fid = left_assoc['fid'].values == right_assoc['fid'].values
-    diff_fid = left_assoc['fid'].values != right_assoc['fid'].values
+    same_fid = left_assoc["fid"].values == right_assoc["fid"].values
+    diff_fid = left_assoc["fid"].values != right_assoc["fid"].values
 
-    same_fid_left, same_fid_right = compute_diff_mag(left_assoc, right_assoc, same_fid, mag_criterion_same_fid)
-    diff_fid_left, diff_fid_right = compute_diff_mag(left_assoc, right_assoc, diff_fid, mag_criterion_diff_fid)
+    same_fid_left, same_fid_right = compute_diff_mag(
+        left_assoc, right_assoc, same_fid, mag_criterion_same_fid
+    )
+    diff_fid_left, diff_fid_right = compute_diff_mag(
+        left_assoc, right_assoc, diff_fid, mag_criterion_diff_fid
+    )
 
-    return pd.concat([same_fid_left, diff_fid_left]), pd.concat([same_fid_right, diff_fid_right])
+    return (
+        pd.concat([same_fid_left, diff_fid_left]),
+        pd.concat([same_fid_right, diff_fid_right]),
+    )
 
-def compute_associations_metrics(left_assoc, right_assoc, observations_with_real_labels):
+
+def compute_associations_metrics(
+    left_assoc, right_assoc, observations_with_real_labels
+):
     """
     computes performance metrics of the associations methods.
     Used only on test dataset where the column 'ssnamenr' are present and the real association are provided.
@@ -344,24 +367,34 @@ def compute_associations_metrics(left_assoc, right_assoc, observations_with_real
 
     >>> TestCase().assertDictEqual(expected_dict, actual_dict)
     """
-    gb_real_assoc = observations_with_real_labels.groupby(['ssnamenr']).count()
-    gb_real_assoc = gb_real_assoc[gb_real_assoc['ra'] > 1]['ra'].values
+    gb_real_assoc = observations_with_real_labels.groupby(["ssnamenr"]).count()
+    gb_real_assoc = gb_real_assoc[gb_real_assoc["ra"] > 1]["ra"].values
 
     nb_real_assoc = np.sum(gb_real_assoc) - len(gb_real_assoc)
 
-    precision_counter = Counter(left_assoc['ssnamenr'].values == right_assoc['ssnamenr'].values)
+    precision_counter = Counter(
+        left_assoc["ssnamenr"].values == right_assoc["ssnamenr"].values
+    )
 
     # precision_counter[False] == number of false positif
     # precision_counter[True] == number of true positif
-    precision = (precision_counter[True] / (precision_counter[True] + precision_counter[False])) * 100
+    precision = (
+        precision_counter[True] / (precision_counter[True] + precision_counter[False])
+    ) * 100
 
     # max(0, (nb_real_assoc - nb_predict_assoc)) == number of false negatif if nb_predict_assoc < nb_real_assoc else 0 because no false negatif occurs.
     FN = max(0, (nb_real_assoc - precision_counter[True]))
     recall = (precision_counter[True] / (precision_counter[True] + FN)) * 100
 
-    return {"precision": precision, "recall": recall, "True Positif": precision_counter[True],
-            "False Positif": precision_counter[False], "False Negatif": FN,
-            "total real association": nb_real_assoc}
+    return {
+        "precision": precision,
+        "recall": recall,
+        "True Positif": precision_counter[True],
+        "False Positif": precision_counter[False],
+        "False Negatif": FN,
+        "total real association": nb_real_assoc,
+    }
+
 
 def restore_left_right(concat_l_r, nb_assoc_column):
     """
@@ -411,7 +444,7 @@ def restore_left_right(concat_l_r, nb_assoc_column):
     >>> assert_frame_equal(l, left_expected)
     >>> assert_frame_equal(r, right_expected)
     """
-    left_col = concat_l_r.columns.values[0: nb_assoc_column]
+    left_col = concat_l_r.columns.values[0:nb_assoc_column]
     right_col = concat_l_r.columns.values[nb_assoc_column:]
 
     left_a = concat_l_r[left_col]
@@ -421,6 +454,7 @@ def restore_left_right(concat_l_r, nb_assoc_column):
     right_a.columns = right_a.columns.droplevel()
 
     return left_a, right_a
+
 
 def removed_mirrored_association(left_assoc, right_assoc):
     """
@@ -509,7 +543,9 @@ def removed_mirrored_association(left_assoc, right_assoc):
     right_assoc = right_assoc.reset_index(drop=True)
 
     # concatanates the associations
-    all_assoc = pd.concat([left_assoc, right_assoc], axis=1, keys=['left', 'right']).sort_values([('left', 'jd')])
+    all_assoc = pd.concat(
+        [left_assoc, right_assoc], axis=1, keys=["left", "right"]
+    ).sort_values([("left", "jd")])
 
     # function used to detect the mirrored rows
     # taken from : https://stackoverflow.com/questions/58512147/how-to-removing-mirror-copy-rows-in-a-pandas-dataframe
@@ -524,7 +560,11 @@ def removed_mirrored_association(left_assoc, right_assoc):
         """
         return frozenset(Counter(x).items())
 
-    mask = all_assoc[[('left', 'candid'), ('right', 'candid')]].apply(key, axis=1).duplicated()
+    mask = (
+        all_assoc[[("left", "candid"), ("right", "candid")]]
+        .apply(key, axis=1)
+        .duplicated()
+    )
 
     # remove the mirrored duplicates by applying the mask to the dataframe
     drop_mirrored = all_assoc[~mask]
@@ -532,6 +572,7 @@ def removed_mirrored_association(left_assoc, right_assoc):
     left_a, right_a = restore_left_right(drop_mirrored, len(left_assoc.columns.values))
 
     return left_a, right_a
+
 
 def removed_multiple_association(left_assoc, right_assoc):
     """
@@ -610,41 +651,56 @@ def removed_multiple_association(left_assoc, right_assoc):
     right_assoc = right_assoc.reset_index(drop=True).reset_index()
 
     # concat left and right members in order to keep the associations
-    l_r_concat = pd.concat([left_assoc, right_assoc], axis=1, keys=['left', 'right'])
+    l_r_concat = pd.concat([left_assoc, right_assoc], axis=1, keys=["left", "right"])
 
     agg_dict = {col: list for col in l_r_concat.columns.values}
 
     # group by left candid to detect multiple assoc
-    gb_concat = l_r_concat.groupby(by=[('left', 'candid')]).agg(agg_dict)
-    gb_concat['nb_multiple_assoc'] = gb_concat.apply(lambda x: len(x[0]), axis=1)
+    gb_concat = l_r_concat.groupby(by=[("left", "candid")]).agg(agg_dict)
+    gb_concat["nb_multiple_assoc"] = gb_concat.apply(lambda x: len(x[0]), axis=1)
 
     # keep only the multiple association
-    multiple_assoc = gb_concat[gb_concat[('nb_multiple_assoc', '')] > 1]
-    multiple_assoc = multiple_assoc.drop(labels=[('nb_multiple_assoc', '')], axis=1)
+    multiple_assoc = gb_concat[gb_concat[("nb_multiple_assoc", "")] > 1]
+    multiple_assoc = multiple_assoc.drop(labels=[("nb_multiple_assoc", "")], axis=1)
 
     # sort right member by jd to keep the first association when we will used drop_duplicates
-    explode_multiple_assoc = multiple_assoc.explode(list(multiple_assoc.columns.values)).sort_values([('right', 'jd')])
+    explode_multiple_assoc = multiple_assoc.explode(
+        list(multiple_assoc.columns.values)
+    ).sort_values([("right", "jd")])
 
     # remove the rows from left and right assoc where the rows occurs in a multiple association
-    drop_multiple_assoc = explode_multiple_assoc[('left', 'index')].values
+    drop_multiple_assoc = explode_multiple_assoc[("left", "index")].values
     left_assoc = left_assoc.drop(index=drop_multiple_assoc)
     right_assoc = right_assoc.drop(index=drop_multiple_assoc)
 
     # remove useless columns
-    multiple_assoc = explode_multiple_assoc.drop(labels=[('left', 'index'), ('right', 'index')], axis=1)
+    multiple_assoc = explode_multiple_assoc.drop(
+        labels=[("left", "index"), ("right", "index")], axis=1
+    )
 
     # drop the multiples associations and keep the first ones, as we have sort by jd on the right members, drop_duplicates remove the wrong associations
-    single_assoc = explode_multiple_assoc.drop_duplicates([('left', 'candid')]).reset_index(drop=True)
+    single_assoc = explode_multiple_assoc.drop_duplicates(
+        [("left", "candid")]
+    ).reset_index(drop=True)
 
     # restore the initial left and right before the column based concatenation and concat the remain association with the old ones.
-    single_left, single_right = restore_left_right(single_assoc, len(left_assoc.columns.values))
+    single_left, single_right = restore_left_right(
+        single_assoc, len(left_assoc.columns.values)
+    )
 
-    left_assoc = pd.concat([left_assoc, single_left]).drop(labels=['index'], axis=1)
-    right_assoc = pd.concat([right_assoc, single_right]).drop(labels=['index'], axis=1)
+    left_assoc = pd.concat([left_assoc, single_left]).drop(labels=["index"], axis=1)
+    right_assoc = pd.concat([right_assoc, single_right]).drop(labels=["index"], axis=1)
 
     return left_assoc, right_assoc
 
-def intra_night_association(night_observation, sep_criterion=145 * u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=False):
+
+def intra_night_association(
+    night_observation,
+    sep_criterion=145 * u.arcsecond,
+    mag_criterion_same_fid=2.21,
+    mag_criterion_diff_fid=1.75,
+    compute_metrics=False,
+):
     """
     Perform intra_night association with separation and magnitude criterion
     Separation and magnitude are not normalised with the jd difference due to a too small difference of jd between the alerts.
@@ -673,37 +729,7 @@ def intra_night_association(night_observation, sep_criterion=145 * u.arcsecond, 
 
     Examples
     --------
-    >>> test_traj = pd.DataFrame({
-    ... 'ra' : [
-    ...     106.305259, 106.141905, 169.860467, 106.303285,  106.141138, 169.856885, 106.140906,
-    ...     106.302386, 106.140840, 106.302364, 169.833666, 169.829712, 169.829656
-    ... ],
-    ... 'dec': [
-    ...     18.176682, 15.241181, 15.206360, 18.177874, 15.239999, 15.210309, 15.239506,
-    ...     18.178404, 15.239482, 18.178424, 15.236048, 15.240389, 15.240490
-    ...     ],
-    ... 'dcmag': [
-    ...     0.066603, 0.018517, 0.038709, 0.089385, 0.020256, 0.044030, 0.021575,
-    ...     0.042095, 0.023033, 0.046602, 0.032183, 0.026171, 0.025890
-    ... ],
-    ... 'ssnamenr': [
-    ...     3866, 3051, 19743, 3866, 3051, 19743,
-    ...     3051, 3866, 3051, 3866, 19743, 19743, 19743
-    ... ],
-    ... 'fid': [1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2],
-    ... 'candid': [
-    ...     1520166712915015010, 1520166711415015012, 1520220641415015001, 1520227401615015011, 1520227400315015018,
-    ...     1520239140315015026, 1520254695615015016, 1520255162915015021, 1520255630315015010,
-    ...     1520255631615015014, 1520359440315015016, 1520379906015015006, 1520380381415015018
-    ... ],
-    ... 'jd': [
-    ...     2459274.666713, 2459274.666713, 2459274.7206481, 2459274.7274074, 2459274.7274074,
-    ...     2459274.7391435, 2459274.7546991, 2459274.755162, 2459274.7556366,
-    ...     2459274.7556366, 2459274.8594444, 2459274.8799074, 2459274.8803819
-    ... ]
-    ... })
-
-    >>> left, right, actual_metrics = intra_night_association(test_traj, sep_criterion=145*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=True)
+    >>> left, right, actual_metrics = intra_night_association(ts.intra_night_test_traj, sep_criterion=145*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=True)
 
     >>> assert_frame_equal(left.reset_index(drop=True), ts.intra_night_left, check_dtype = False)
     >>> assert_frame_equal(right.reset_index(drop=True), ts.intra_night_right, check_dtype = False)
@@ -735,9 +761,13 @@ def intra_night_association(night_observation, sep_criterion=145 * u.arcsecond, 
     >>> len(right)
     0
     """
-    left_assoc, right_assoc, _ = intra_night_separation_association(night_observation, sep_criterion)
+    left_assoc, right_assoc, _ = intra_night_separation_association(
+        night_observation, sep_criterion
+    )
 
-    left_assoc, right_assoc = magnitude_association(left_assoc, right_assoc, mag_criterion_same_fid, mag_criterion_diff_fid)
+    left_assoc, right_assoc = magnitude_association(
+        left_assoc, right_assoc, mag_criterion_same_fid, mag_criterion_diff_fid
+    )
 
     if len(left_assoc) == 0:
         return pd.DataFrame(), pd.DataFrame(), {}
@@ -749,10 +779,13 @@ def intra_night_association(night_observation, sep_criterion=145 * u.arcsecond, 
     left_assoc, right_assoc = removed_multiple_association(left_assoc, right_assoc)
 
     if compute_metrics:
-        metrics = compute_associations_metrics(left_assoc, right_assoc, night_observation)
+        metrics = compute_associations_metrics(
+            left_assoc, right_assoc, night_observation
+        )
         return left_assoc, right_assoc, metrics
     else:
         return left_assoc, right_assoc, {}
+
 
 def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
     """
@@ -831,22 +864,30 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
 
     new_traj_id = np.arange(last_traj_id, last_traj_id + nb_new_assoc)
 
-    left_assoc['trajectory_id'] = new_traj_id
-    right_assoc['trajectory_id'] = new_traj_id
+    left_assoc["trajectory_id"] = new_traj_id
+    right_assoc["trajectory_id"] = new_traj_id
 
     for i, _ in right_assoc.iterrows():
         right_rows = right_assoc.iloc[i]
         left_rows = left_assoc.iloc[i]
 
-        left_new_obs = left_assoc[left_assoc['candid'] == right_rows['candid']]
-        left_assoc.loc[left_new_obs.index.values, 'trajectory_id'] = right_rows['trajectory_id']
-        right_assoc.loc[left_new_obs.index.values, 'trajectory_id'] = right_rows['trajectory_id']
+        left_new_obs = left_assoc[left_assoc["candid"] == right_rows["candid"]]
+        left_assoc.loc[left_new_obs.index.values, "trajectory_id"] = right_rows[
+            "trajectory_id"
+        ]
+        right_assoc.loc[left_new_obs.index.values, "trajectory_id"] = right_rows[
+            "trajectory_id"
+        ]
 
-        right_new_obs = right_assoc[right_assoc['candid'] == left_rows['candid']]
-        left_assoc.loc[right_new_obs.index.values, 'trajectory_id'] = left_rows['trajectory_id']
-        right_assoc.loc[right_new_obs.index.values, 'trajectory_id'] = left_rows['trajectory_id']
+        right_new_obs = right_assoc[right_assoc["candid"] == left_rows["candid"]]
+        left_assoc.loc[right_new_obs.index.values, "trajectory_id"] = left_rows[
+            "trajectory_id"
+        ]
+        right_assoc.loc[right_new_obs.index.values, "trajectory_id"] = left_rows[
+            "trajectory_id"
+        ]
 
-    traj_df = pd.concat([left_assoc, right_assoc]).drop_duplicates(['candid'])
+    traj_df = pd.concat([left_assoc, right_assoc]).drop_duplicates(["candid"])
     return traj_df
 
 
@@ -856,7 +897,5 @@ if __name__ == "__main__":
     from pandas.testing import assert_frame_equal  # noqa: F401
     import test_sample as ts  # noqa: F401
     from unittest import TestCase  # noqa: F401
-
-    globs = globals()
 
     sys.exit(doctest.testmod()[0])
