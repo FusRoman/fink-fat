@@ -644,7 +644,7 @@ new_observations_expected = pd.DataFrame({
 
 # tracklets and observations associations testing
 
-trajectory_df_sample = pd.DataFrame({
+track_and_obs_trajectory_df_sample = pd.DataFrame({
     "ra": [1, 2, 2, 6, 7, 8, 6, 7, 8, 9, 10, 10],
     "dec": [12, 11, 10, 12, 12, 12, 6, 5, 6, 1, 2, 3],
     "dcmag": [15, 15.1, 15.23, 13, 12.6, 12.75, 17.02, 17.15, 17.27, 16, 16.4, 16.7],
@@ -655,7 +655,7 @@ trajectory_df_sample = pd.DataFrame({
     "trajectory_id": [2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 5]
 })
 
-traj_next_night_expected = pd.DataFrame({
+track_and_obs_traj_next_night_sample = pd.DataFrame({
     "ra": [2, 3, 7, 8],
     "dec": [2, 3, 1, 2],
     "dcmag": [15.74, 15.47, 16.21, 16.28],
@@ -666,7 +666,7 @@ traj_next_night_expected = pd.DataFrame({
     "trajectory_id": [11, 11, 13, 13]
 })
 
-old_observations_sample = pd.DataFrame({
+track_and_obs_old_observations_sample = pd.DataFrame({
     "ra": [1, 1, 4, 3, 6, 7, 9],
     "dec": [1, 5, 1, 5, 1, 7, 5],
     "dcmag": [15.52, 16.32, 14.96, 16.28, 16.03, 18.52, 17.68],
@@ -676,7 +676,7 @@ old_observations_sample = pd.DataFrame({
     "candid": [33, 34, 35, 36, 37, 38, 39]
 })
 
-new_observations_sample = pd.DataFrame({
+track_and_obs_new_observations_sample = pd.DataFrame({
     "ra": [2, 4, 6, 5, 10],
     "dec": [9, 6, 3, 10, 4],
     "dcmag": [15.52, 16.32, 14.96, 18.52, 17.99],
@@ -685,3 +685,25 @@ new_observations_sample = pd.DataFrame({
     "jd": [4.1, 4.2, 4.1, 4.2, 4.1],
     "candid": [40, 41, 42, 43, 44]
 })
+
+track_and_obs_trajectory_df_expected = pd.DataFrame({
+    "ra": [ 1, 2, 2, 6, 7, 8, 6, 7, 8, 9,10,10, 3, 9, 4,10, 1, 2, 2, 3, 7, 8, 6, 1],
+    "dec": [12,11,10,12,12,12, 6, 5, 6, 1, 2, 3, 5, 5, 6, 4, 5, 9, 2, 3, 1, 2, 1, 1],
+    "dcmag": [15.00,15.10,15.23,13.00,12.60,12.75,17.02,17.15,17.27,16.00,16.40,16.70,16.28,17.68,16.32,17.99,16.32,15.52,15.74,15.47,16.21,16.28,16.03,15.52],
+    "fid": [1,1,1,1,2,2,2,2,2,1,2,1,2,1,1,2,1,2,2,1,2,2,2,2],
+    "nid": [1,2,3,1,2,3,1,2,3,1,2,3,3,3,4,4,1,4,4,4,4,4,3,2],
+    "jd": [1.0,2.0,3.0,1.0,2.0,3.0,1.0,2.0,3.0,1.0,2.0,3.0,3.2,3.1,4.2,4.1,1.2,4.1,4.1,4.2,4.1,4.2,3.1,2.1],
+    "candid": [13,14,15,16,17,18,19,20,21,22,23,24,36,39,41,44,34,40,27,28,31,32,37,33],
+    "trajectory_id": [ 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 7, 6, 7, 8, 8,11,11,13,13,13,11]
+})
+
+track_and_obs_old_observations_expected = pd.DataFrame({
+    "ra": [4 ,7 ,6 ,5], 
+    "dec": [ 1, 7, 3,10],
+    "dcmag": [14.96,18.52,14.96,18.52],
+    "fid": [2, 1, 2, 1],
+    "nid": [3, 3, 4, 4],
+    "jd": [3.1, 3.2, 4.1, 4.2],
+    "candid": [35, 38, 42, 43]
+})
+

@@ -786,10 +786,10 @@ def tracklets_and_observations_associations(
     Examples
     --------
     >>> trajectory_df, old_observations = tracklets_and_observations_associations(
-    ... ts.trajectory_df_sample,
-    ... ts.traj_next_night_expected,
-    ... ts.old_observations_sample,
-    ... ts.new_observations_sample,
+    ... ts.track_and_obs_trajectory_df_sample,
+    ... ts.track_and_obs_traj_next_night_sample,
+    ... ts.track_and_obs_old_observations_sample,
+    ... ts.track_and_obs_new_observations_sample,
     ... 6,
     ... 1.5 * u.degree,
     ... 0.2,
@@ -797,9 +797,9 @@ def tracklets_and_observations_associations(
     ... 30
     ... )
 
-    >>> print(trajectory_df)
+    >>> assert_frame_equal(trajectory_df.reset_index(drop=True), ts.track_and_obs_trajectory_df_expected)
 
-    >>> print(old_observations)
+    >>> assert_frame_equal(old_observations.reset_index(drop=True), ts.track_and_obs_old_observations_expected)
     """
     next_nid = new_observations["nid"].values[0]
 
@@ -835,8 +835,6 @@ def tracklets_and_observations_associations(
         )
 
         if len(traj_left) > 0:
-
-            print(traj_left)
 
             # remove the duplicates()
             old_obs_right = old_obs_right.drop_duplicates(["trajectory_id"])
