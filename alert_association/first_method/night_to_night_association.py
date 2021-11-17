@@ -658,7 +658,9 @@ def trajectory_associations(
         # get the two last observations with the tracklets extremity that have the current nid
         two_last_current_nid = two_last_observation_trajectory[
             two_last_observation_trajectory["trajectory_id"].isin(
-                last_observation_trajectory[last_observation_trajectory['nid'] == tr_nid]["trajectory_id"]
+                last_observation_trajectory[
+                    last_observation_trajectory["nid"] == tr_nid
+                ]["trajectory_id"]
             )
         ]
 
@@ -692,11 +694,13 @@ def trajectory_associations(
             for _, rows in traj_extremity_associated.iterrows():
 
                 # get all rows of the associated tracklets of the next night
-                next_night_tracklets = traj_next_night[traj_next_night['trajectory_id'] == rows['tmp_traj']]
+                next_night_tracklets = traj_next_night[
+                    traj_next_night["trajectory_id"] == rows["tmp_traj"]
+                ]
 
                 # assign the trajectory id to the tracklets that will be added to this trajectory with this id
                 # the tracklets contains already the alerts within traj_extremity_associated.
-                with pd.option_context('mode.chained_assignment',None):
+                with pd.option_context("mode.chained_assignment", None):
                     next_night_tracklets["trajectory_id"] = rows["trajectory_id"]
                 associated_tracklets.append(next_night_tracklets)
 
@@ -755,7 +759,7 @@ def tracklets_and_observations_associations(
     angle_criterion,
 ):
     """
-    Perform the association process between the tracklets from the next night with the old observations. 
+    Perform the association process between the tracklets from the next night with the old observations.
     After that, associates the remaining old observations with the remaining new observations
 
     Parameters
@@ -810,7 +814,6 @@ def tracklets_and_observations_associations(
 
     old_obs_nid = np.sort(np.unique(old_observations["nid"]))[::-1]
 
-
     two_first_obs_tracklets = get_n_last_observations_from_trajectories(
         traj_next_night, 2, False
     )
@@ -862,14 +865,12 @@ def tracklets_and_observations_associations(
             norm_diff_fid,
         )
 
-
         if len(left_assoc) > 0:
             new_trajectory_id = np.arange(
                 last_trajectory_id, last_trajectory_id + len(left_assoc)
             )
 
             last_trajectory_id = last_trajectory_id + len(left_assoc)
-
 
             old_observations = old_observations[
                 ~old_observations["candid"].isin(left_assoc["candid"])
