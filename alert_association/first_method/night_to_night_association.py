@@ -251,7 +251,6 @@ def cone_search_association(
 
     # compute the cone search angle
     prep_angle["angle"] = prep_angle.apply(angle_df, axis=1)
-    
 
     # filter by the physical properties angle
     remain_assoc = prep_angle[prep_angle["angle"] <= angle_criterion]
@@ -384,8 +383,15 @@ def night_to_night_trajectory_associations(
         new observations to add to the associated trajectories
     remain_traj : dataframe
         all non-associated trajectories
+
+    Examples
+    --------
+    >>> left, right = night_to_night_trajectory_associations(ts.night_to_night_two_last_sample, ts.night_to_night_new_observation, 2 * u.degree, 0.2, 0.5, 30)
+
+    >>> assert_frame_equal(left.reset_index(drop=True), ts.night_to_night_traj_assoc_left_expected)
+    >>> assert_frame_equal(right.reset_index(drop=True), ts.night_to_night_traj_assoc_right_expected)
     """
-    # get the last obeservations of the trajectories to perform the associations
+    # get the last observations of the trajectories to perform the associations
     last_traj_obs = (
         two_last_observations.groupby(["trajectory_id"]).last().reset_index()
     )
@@ -402,10 +408,12 @@ def night_to_night_trajectory_associations(
         traj_assoc, new_obs_assoc = cone_search_association(
             two_last_observations, traj_assoc, new_obs_assoc, angle_criterion
         )
-        remain_traj = last_traj_obs[~last_traj_obs["candid"].isin(traj_assoc["candid"])]
-        return traj_assoc, new_obs_assoc, remain_traj
+
+        #remain_traj = last_traj_obs[~last_traj_obs["candid"].isin(traj_assoc["candid"])]
+
+        return traj_assoc, new_obs_assoc
     else:
-        return traj_assoc, new_obs_assoc, last_traj_obs
+        return traj_assoc, new_obs_assoc
 
 
 # The two functions below are used if we decide to manage the multiple associations that can appears during the process.
@@ -619,7 +627,6 @@ def trajectory_associations(
         (
             traj_left,
             traj_extremity_associated,
-            remain_traj,
         ) = night_to_night_trajectory_associations(
             two_last_current_nid,
             tracklets_extremity_current_nid,
@@ -667,7 +674,7 @@ def trajectory_associations(
             ]
 
         # trajectory associations with the new observations
-        traj_assoc, obs_assoc, remain_traj = night_to_night_trajectory_associations(
+        _, obs_assoc = night_to_night_trajectory_associations(
             two_last_current_nid,
             new_observations,
             norm_sep_crit,
@@ -727,7 +734,7 @@ def tracklets_and_observations_associations(
         norm_angle = angle_criterion * diff_night
 
         # trajectory association with the new tracklets
-        traj_left, old_obs_right, remain_traj = night_to_night_trajectory_associations(
+        traj_left, old_obs_right = night_to_night_trajectory_associations(
             two_first_obs_tracklets,
             current_old_obs,
             norm_sep_crit,
