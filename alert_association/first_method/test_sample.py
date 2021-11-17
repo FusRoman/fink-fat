@@ -441,7 +441,7 @@ intra_night_right = pd.DataFrame(
 
 # Night to night association testing
 
-# Cone search association
+# Cone search association testing
 
 # Association that match the angle criterion
 cone_search_two_last_observation_sample = pd.DataFrame({
@@ -508,4 +508,45 @@ false_new_obs_assoc_sample = pd.DataFrame({
     "jd": [3, 3, 3],
     "candid": [16, 17, 18],
     "trajectory_id": [30, 31, 32]
+})
+
+# Night to night trajectory association testing
+
+night_to_night_two_last_sample = pd.DataFrame({
+    "ra": [1, 2, 5, 6, 10, 11, 1, 2, 7, 7, 1, 8],
+    "dec": [1, 2, 1, 1, 1, 1, 6, 7, 7, 8, 11, 6],
+    "dcmag": [13, 13.05, 15, 15.08, 17, 17.03, 16, 16.04, 17, 17.1, 14, 18],
+    "fid": [1, 2, 1, 1, 2, 2, 1, 2, 2, 2, 1, 1],
+    "jd": [1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2],
+    "candid": [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21],
+    "trajectory_id": [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5]
+})
+
+night_to_night_new_observation = pd.DataFrame({
+    "ra": [3, 7, 10.5, 2, 3, 4, 11, 8],
+    "dec": [3, 2, 2, 8, 7, 9, 9, 9],
+    "dcmag": [13.1, 15.13, 17.06, 16.07, 16.05, 15, 18, 18.5],
+    "fid": [2, 1, 1, 1, 2, 1, 2, 2],
+    "jd": [3, 3, 3, 3, 3, 3, 3, 3],
+    "candid": [22, 23, 24, 25, 26, 27, 28, 29]
+})
+
+night_to_night_traj_assoc_left_expected = pd.DataFrame({
+    "trajectory_id": [0, 1, 3, 3],
+    "ra": [2, 6, 2, 2],
+    "dec": [2, 1, 7, 7],
+    "dcmag": [13.05, 15.08, 16.04, 16.04],
+    "fid": [2, 1, 2, 2],
+    "jd": [2, 2, 2, 2],
+    "candid": [11, 13, 17, 17]
+})
+
+night_to_night_traj_assoc_right_expected = pd.DataFrame({
+    "ra": [3.0, 7, 3, 2],
+    "dec": [3, 2, 7, 8],
+    "dcmag": [13.10, 15.13, 16.05, 16.07],
+    "fid": [2, 1, 2, 1],
+    "jd": [3, 3, 3, 3],
+    "candid": [22, 23, 26, 25],
+    "trajectory_id": [0, 1, 3, 3]
 })
