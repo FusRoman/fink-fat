@@ -292,19 +292,60 @@ def night_to_night_observation_association(
     Examples
     --------
 
-    
+    >>> night_1 = pd.DataFrame({
+    ... "ra": [1, 1, 4, 6, 10],
+    ... "dec": [1, 8, 4, 7, 2],
+    ... "dcmag": [13, 15, 14, 16, 12],
+    ... "fid": [1, 2, 1, 2, 2],
+    ... "jd": [1, 1, 1, 1, 1],
+    ... "candid": [10, 11, 12, 13, 14]
+    ... })
+
+    >>> night_2 = pd.DataFrame({
+    ... "ra": [2, 6, 5, 7, 7, 8],
+    ... "dec": [2, 4, 3, 10, 7, 3],
+    ... "dcmag": [13.05, 17, 14.09, 18, 13, 16.4],
+    ... "fid": [1, 2, 2, 2, 1, 1],
+    ... "jd": [2, 2, 2, 2, 2, 2],
+    ... "candid": [15, 16, 17, 18, 19, 20]
+    ... })
+
+    >>> left, right = night_to_night_observation_association(night_1, night_2, 1.5 * u.degree, 0.2, 0.5)
+
+    >>> left_expected = pd.DataFrame({
+    ... "ra": [1, 4],
+    ... "dec": [1, 4],
+    ... "dcmag": [13, 14],
+    ... "fid": [1, 1],
+    ... "jd": [1, 1],
+    ... "candid": [10, 12]
+    ... })
+
+    >>> right_expected = pd.DataFrame({
+    ... "ra": [2, 5],
+    ... "dec": [2, 3],
+    ... "dcmag": [13.05, 14.09],
+    ... "fid": [1, 2],
+    ... "jd": [2, 2],
+    ... "candid": [15, 17]
+    ... })
+
+    >>> assert_frame_equal(left.reset_index(drop=True), left_expected)
+    >>> assert_frame_equal(right.reset_index(drop=True), right_expected)
     """
 
     # association based separation
-    traj_assoc, new_obs_assoc, _ = night_to_night_separation_association(
+    traj_assoc, new_obs_assoc, sep = night_to_night_separation_association(
         obs_set1, obs_set2, sep_criterion
     )
+
     # filter the association based on magnitude criterion
     traj_assoc, new_obs_assoc = magnitude_association(
         traj_assoc, new_obs_assoc, mag_criterion_same_fid, mag_criterion_diff_fid
     )
+
     # removed mirrored association if occurs
-    traj_assoc, new_obs_assoc = removed_mirrored_association(traj_assoc, new_obs_assoc)
+    # traj_assoc, new_obs_assoc = removed_mirrored_association(traj_assoc, new_obs_assoc)
     return traj_assoc, new_obs_assoc
 
 
