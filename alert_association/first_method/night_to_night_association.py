@@ -93,7 +93,7 @@ def angle_three_point(a, b, c):
     -------
     angle : float
         the angle formed by the three points
-    
+
     Examples
     --------
     >>> a = np.array([1, 1])
@@ -122,7 +122,8 @@ def angle_df(x):
 
     Parameters
     x : dataframe rows
-        a rows from a dataframe with the three consecutives alerts to compute the angle
+        a rows from a dataframe with the three consecutives alerts to compute the angle.
+
 
     Returns
     -------
@@ -131,16 +132,33 @@ def angle_df(x):
 
     Examples
     --------
+    >>> from pandera import Check, Column, DataFrameSchema
+
+    >>> df_schema = DataFrameSchema({
+    ... "trajectory_id": Column(int),
+    ... "ra_x": Column(object),
+    ... "dec_x": Column(object),
+    ... "jd_x": Column(object),
+    ... "candid": Column(int),
+    ... "index": Column(int),
+    ... "ra_y": Column(float),
+    ... "dec_y": Column(float),
+    ... "jd_y": Column(float)
+    ... })
+
     >>> test_dataframe = pd.DataFrame({
-    ... 'col1': [0],
+    ... 'trajectory_id': [0],
     ... 'ra_x': [[1, 3]],
     ... 'dec_x': [[1, 2]],
     ... 'jd_x': [[0, 1]],
-    ... 'col2': [0],
-    ... 'ra_y': [5],
-    ... 'dec_y':[4],
-    ... 'jd_y': [2]
+    ... 'candid': [0],
+    ... 'index' : [0],
+    ... 'ra_y': [5.0],
+    ... 'dec_y':[4.0],
+    ... 'jd_y': [2.0]
     ... })
+
+    >>> test_dataframe = df_schema.validate(test_dataframe)
 
     >>> res = test_dataframe.apply(angle_df, axis=1)
 
@@ -149,7 +167,7 @@ def angle_df(x):
     """
     ra_x, dec_x, jd_x = x[1], x[2], x[3]
 
-    ra_y, dec_y, jd_y = x[5], x[6], x[7]
+    ra_y, dec_y, jd_y = x[6], x[7], x[8]
 
     a = np.array([ra_x[0], dec_x[0]])
     b = np.array([ra_x[1], dec_x[1]])
@@ -179,6 +197,7 @@ def cone_search_association(
         a dataframe that contains the two last observations for each trajectories
     traj_assoc : dataframe
         a dataframe which contains the trajectories extremity that are associated with the new observations.
+        The trajectory extremity in traj_assoc have to be in two_last_observations.
     new_obs_assoc : dataframe
         new observations that will be associated with the trajectories extremity represented by the two last observations.
     angle_criterion : float
@@ -193,7 +212,18 @@ def cone_search_association(
 
     Examples
     --------
+    >>> left, right = cone_search_association(ts.cone_search_two_last_observation_sample, ts.traj_assoc_sample, ts.new_obs_assoc_sample, 8.8)
 
+    >>> assert_frame_equal(left, ts.left_cone_search_expected)
+    >>> assert_frame_equal(right, ts.right_cone_search_expected)
+
+    >>> left, right = cone_search_association(ts.false_cone_search_two_last_observation_sample, ts.false_traj_assoc_sample, ts.false_new_obs_assoc_sample, 8.8)
+
+    >>> left_expected = pd.DataFrame(columns = ['ra', 'dec', 'jd', 'candid', 'trajectory_id'])
+    >>> right_expected = pd.DataFrame(columns = ['ra', 'dec', 'jd', 'candid', 'tmp_traj', 'trajectory_id'])
+
+    >>> assert_frame_equal(left, left_expected, check_index_type=False, check_dtype=False)
+    >>> assert_frame_equal(right, right_expected, check_index_type=False, check_dtype=False)
     """
     # reset the index of the associated members in order to recovered the right rows after the angle filters.
     traj_assoc = traj_assoc.reset_index(drop=True).reset_index()
@@ -221,6 +251,8 @@ def cone_search_association(
 
     # compute the cone search angle
     prep_angle["angle"] = prep_angle.apply(angle_df, axis=1)
+    
+
     # filter by the physical properties angle
     remain_assoc = prep_angle[prep_angle["angle"] <= angle_criterion]
 
@@ -253,17 +285,25 @@ def night_to_night_observation_association(
     Returns
     -------
     traj_assoc : dataframe
-        the left members of the associations, extremity of the trajectories
+        the left members of the associations, can be an extremity of a trajectory
     new_obs_assoc : dataframe
         new observations to add to the associated trajectories
+
+    Examples
+    --------
+
+    
     """
-    # night_to_night association between the last observations from the trajectories and the first tracklets observations of the next night
+
+    # association based separation
     traj_assoc, new_obs_assoc, _ = night_to_night_separation_association(
         obs_set1, obs_set2, sep_criterion
     )
+    # filter the association based on magnitude criterion
     traj_assoc, new_obs_assoc = magnitude_association(
         traj_assoc, new_obs_assoc, mag_criterion_same_fid, mag_criterion_diff_fid
     )
+    # removed mirrored association if occurs
     traj_assoc, new_obs_assoc = removed_mirrored_association(traj_assoc, new_obs_assoc)
     return traj_assoc, new_obs_assoc
 
@@ -329,7 +369,7 @@ def night_to_night_trajectory_associations(
 
 # The two functions below are used if we decide to manage the multiple associations that can appears during the process.
 # They are not yet used.
-def assign_new_trajectory_id_to_new_tracklets(new_obs, traj_next_night):
+def assign_new_trajectory_id_to_new_tracklets(new_obs, traj_next_night): # pragma: no cover
     """
     Propagate the trajectory id of the new obs to all observations of the corresponding trajectory
 
@@ -369,7 +409,7 @@ def assign_new_trajectory_id_to_new_tracklets(new_obs, traj_next_night):
     return traj_next_night, pd.concat(all_tracklets)
 
 
-def tracklets_id_management(traj_left, traj_right, traj_next_night, trajectory_df):
+def tracklets_id_management(traj_left, traj_right, traj_next_night, trajectory_df): # pragma: no cover
     """
     This functions perform the trajectory_id propagation between the already known trajectory and the new tracklets that will be associates.
 
@@ -810,6 +850,7 @@ if __name__ == "__main__":
     import sys
     import doctest
     from pandas.testing import assert_frame_equal  # noqa: F401
+    import test_sample as ts  # noqa: F401
 
     sys.exit(doctest.testmod()[0])
 

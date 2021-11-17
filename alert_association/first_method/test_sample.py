@@ -437,3 +437,75 @@ intra_night_right = pd.DataFrame(
         ],
     }
 )
+
+
+# Night to night association testing
+
+# Cone search association
+
+# Association that match the angle criterion
+cone_search_two_last_observation_sample = pd.DataFrame({
+    "ra": [1, 2, 4, 5, 5, 6, 1, 2],
+    "dec": [8, 7, 1, 2, 4, 8, 1, 1],
+    "jd": [1, 2, 1, 2, 1, 2, 1, 2],
+    "candid": [10, 11, 12, 13, 14, 15, 16, 17],
+    "trajectory_id": [20, 20, 21, 21, 22, 22, 23, 23],
+})
+
+traj_assoc_sample = pd.DataFrame({
+    "ra": [2, 5, 6, 2],
+    "dec": [7, 2, 8, 1],
+    "jd": [2, 2, 2, 2],
+    "candid": [11, 13, 15, 17],
+    "trajectory_id": [20, 21, 22, 23]
+})
+
+new_obs_assoc_sample = pd.DataFrame({
+    "ra": [3, 6, 7, 3],
+    "dec": [6, 3, 9, 1],
+    "jd": [3, 3, 3, 3],
+    "candid": [18, 19, 20, 21],
+    "trajectory_id": [30, 31, 32, 33]
+})
+
+left_cone_search_expected = pd.DataFrame({
+    "ra": [2, 5, 6, 2],
+    "dec": [7, 2, 8, 1],
+    "jd": [2, 2, 2, 2],
+    "candid": [11, 13, 15, 17],
+    "trajectory_id": [20, 21, 22, 23]
+})
+
+right_cone_search_expected = pd.DataFrame({
+    "ra": [3, 6, 7, 3],
+    "dec": [6, 3, 9, 1],
+    "jd": [3, 3, 3, 3],
+    "candid": [18, 19, 20, 21],
+    "tmp_traj": [30, 31, 32, 33],
+    "trajectory_id": [20, 21, 22, 23]
+})
+
+# Association that not match the angle criterion
+false_cone_search_two_last_observation_sample = pd.DataFrame({
+    "ra": [2, 3, 8, 9, 7, 8],
+    "dec": [1, 2, 2, 3, 5, 6],
+    "jd": [1, 2, 1, 2, 1, 2],
+    "candid": [10, 11, 12, 13, 14, 15],
+    "trajectory_id": [20, 20, 21, 21, 22, 22],
+})
+
+false_traj_assoc_sample = pd.DataFrame({
+    "ra": [3, 9, 8],
+    "dec": [2, 3, 6],
+    "jd": [2, 2, 2],
+    "candid": [11, 13, 15],
+    "trajectory_id": [20, 21, 22]
+})
+
+false_new_obs_assoc_sample = pd.DataFrame({
+    "ra": [4, 8, 7],
+    "dec": [1, 5, 7],
+    "jd": [3, 3, 3],
+    "candid": [16, 17, 18],
+    "trajectory_id": [30, 31, 32]
+})
