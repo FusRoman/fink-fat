@@ -7,7 +7,7 @@ import time as t
 from intra_night_association import intra_night_association
 from intra_night_association import new_trajectory_id_assignation
 from intra_night_association import magnitude_association
-from intra_night_association import removed_mirrored_association
+from intra_night_association import removed_mirrored_association  # noqa: F401
 from intra_night_association import get_n_last_observations_from_trajectories
 
 
@@ -409,7 +409,7 @@ def night_to_night_trajectory_associations(
             two_last_observations, traj_assoc, new_obs_assoc, angle_criterion
         )
 
-        #remain_traj = last_traj_obs[~last_traj_obs["candid"].isin(traj_assoc["candid"])]
+        # remain_traj = last_traj_obs[~last_traj_obs["candid"].isin(traj_assoc["candid"])]
 
         return traj_assoc, new_obs_assoc
     else:
@@ -418,7 +418,9 @@ def night_to_night_trajectory_associations(
 
 # The two functions below are used if we decide to manage the multiple associations that can appears during the process.
 # They are not yet used.
-def assign_new_trajectory_id_to_new_tracklets(new_obs, traj_next_night): # pragma: no cover
+def assign_new_trajectory_id_to_new_tracklets(
+    new_obs, traj_next_night
+):  # pragma: no cover
     """
     Propagate the trajectory id of the new obs to all observations of the corresponding trajectory
 
@@ -458,7 +460,9 @@ def assign_new_trajectory_id_to_new_tracklets(new_obs, traj_next_night): # pragm
     return traj_next_night, pd.concat(all_tracklets)
 
 
-def tracklets_id_management(traj_left, traj_right, traj_next_night, trajectory_df): # pragma: no cover
+def tracklets_id_management(
+    traj_left, traj_right, traj_next_night, trajectory_df
+):  # pragma: no cover
     """
     This functions perform the trajectory_id propagation between the already known trajectory and the new tracklets that will be associates.
 
