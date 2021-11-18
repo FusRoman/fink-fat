@@ -1145,7 +1145,7 @@ night_to_night_new_obs = pd.DataFrame(
         "nid": [4, 4, 4, 4, 4, 4, 4, 4, 4],
         "jd": [4.1, 4.2, 4.1, 4.2, 4.1, 4.2, 4.2, 4.1, 4.2],
         "candid": [20, 21, 22, 23, 24, 25, 26, 27, 28],
-        "ssnamenr": [1, 1, 2, 2, 3, 3, 4, 5, 6]
+        "ssnamenr": [1, 1, 2, 2, 3, 3, 4, 5, 6],
     }
 )
 
@@ -1217,24 +1217,26 @@ night_to_night_trajectory_df_expected = pd.DataFrame(
             25,
         ],
         "trajectory_id": [1, 1, 1, 2, 2, 2, 3, 3, 3, 1, 1, 2, 7, 7, 5, 6, 5, 6],
-        "ssnamenr": [np.nan
-,np.nan
-,np.nan
-,np.nan
-,np.nan
-,np.nan
-,np.nan
-,np.nan
-,np.nan
-,  1
-,  1
-,  5
-,np.nan
-,  4
-,  2
-,  3
-,  2
-,  3]
+        "ssnamenr": [
+            np.nan,
+            np.nan,
+            np.nan,
+            np.nan,
+            np.nan,
+            np.nan,
+            np.nan,
+            np.nan,
+            np.nan,
+            1,
+            1,
+            5,
+            np.nan,
+            4,
+            2,
+            3,
+            2,
+            3,
+        ],
     }
 )
 
@@ -1247,7 +1249,7 @@ night_to_night_old_observation_expected = pd.DataFrame(
         "nid": [2, 4],
         "jd": [2.0, 4.2],
         "candid": [29, 28],
-        "ssnamenr": [np.nan, 6.0]
+        "ssnamenr": [np.nan, 6.0],
     }
 )
 
@@ -1262,14 +1264,7 @@ night_to_night_trajectory_df_expected2 = pd.DataFrame(
         "jd": [3.0, 4.2, 4.1, 4.1, 4.1, 4.2, 4.2, 4.2],
         "candid": [19, 26, 20, 22, 24, 21, 23, 25],
         "trajectory_id": [7, 7, 4, 5, 6, 4, 5, 6],
-        "ssnamenr": [np.nan
-,4.0
-,  1
-,  2
-,  3
-,  1
-,  2
-,  3]
+        "ssnamenr": [np.nan, 4.0, 1, 2, 3, 1, 2, 3],
     }
 )
 
@@ -1282,7 +1277,7 @@ night_to_night_old_observation_expected2 = pd.DataFrame(
         "nid": [2, 4, 4],
         "jd": [2.0, 4.1, 4.2],
         "candid": [29, 27, 28],
-        "ssnamenr": [np.nan, 5.0, 6.0]
+        "ssnamenr": [np.nan, 5.0, 6.0],
     }
 )
 

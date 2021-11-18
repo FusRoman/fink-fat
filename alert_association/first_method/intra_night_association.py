@@ -264,7 +264,11 @@ def compute_diff_mag(left, right, fid, magnitude_criterion, normalized=False):
 
 
 def magnitude_association(
-    left_assoc, right_assoc, mag_criterion_same_fid, mag_criterion_diff_fid, jd_normalization=False
+    left_assoc,
+    right_assoc,
+    mag_criterion_same_fid,
+    mag_criterion_diff_fid,
+    jd_normalization=False,
 ):
     """
     Perform magnitude based association twice, one for the alerts with the same fid and another for the alerts with a different fid.
@@ -337,14 +341,14 @@ def compute_associations_metrics(
     Used only on test dataset where the column 'ssnamenr' are present and the real association are provided.
 
     Return 6 performance metrics :
-        - precision : True positive divided by the sum of true positive and false positive. monitor the performance of the algorithm to do the good association. 
+        - precision : True positive divided by the sum of true positive and false positive. monitor the performance of the algorithm to do the good association.
         - recall : True positive divided by the sum of true positive and false negative. monitor the performance of the algorithm to find the association.
         - True positive
         - False positive
         - False Negative
         - total real association : the number of true association in the solar system MPC dataset.
 
-    It has no true negative in the solar system dataset due to the only presence of true association. 
+    It has no true negative in the solar system dataset due to the only presence of true association.
 
     Parameters
     ----------
@@ -908,7 +912,7 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
     return traj_df
 
 
-if __name__ == "__main__": # pragma: no cover
+if __name__ == "__main__":  # pragma: no cover
     import sys
     import doctest
     from pandas.testing import assert_frame_equal  # noqa: F401

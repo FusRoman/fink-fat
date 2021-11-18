@@ -2,7 +2,6 @@ import astropy.units as u
 from astropy.coordinates import SkyCoord
 import pandas as pd
 import numpy as np
-import time as t
 
 from intra_night_association import intra_night_association
 from intra_night_association import new_trajectory_id_assignation
@@ -950,7 +949,7 @@ def night_to_night_association(
     mag_criterion_same_fid=0.18,
     mag_criterion_diff_fid=0.7,
     angle_criterion=8.8,
-    run_intra_night_metrics=False
+    run_intra_night_metrics=False,
 ):
     """
     Perform night to night associations in four steps.
@@ -1031,7 +1030,7 @@ def night_to_night_association(
     ... mag_criterion_diff_fid = 0.5,
     ... angle_criterion = 30
     ... )
-    
+
     >>> assert_frame_equal(trajectory_df.reset_index(drop=True), ts.night_to_night_trajectory_df_expected2, check_dtype=False)
 
     >>> assert_frame_equal(old_observation.reset_index(drop=True), ts.night_to_night_old_observation_expected2)
@@ -1061,7 +1060,7 @@ def night_to_night_association(
         sep_criterion=intra_night_sep_criterion,
         mag_criterion_same_fid=intra_night_mag_criterion_same_fid,
         mag_criterion_diff_fid=intra_night_mag_criterion_diff_fid,
-        compute_metrics=run_intra_night_metrics
+        compute_metrics=run_intra_night_metrics,
     )
 
     new_left, new_right = (
