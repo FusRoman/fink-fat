@@ -631,14 +631,35 @@ def trajectory_associations(
     >>> assert_frame_equal(traj_next_night.reset_index(drop=True), ts.traj_next_night_expected)
 
     >>> assert_frame_equal(new_observations.reset_index(drop=True), ts.new_observations_expected)
+
+    >>> trajectory_df, traj_next_night, new_observations = trajectory_associations(pd.DataFrame(), pd.DataFrame(), ts.new_observations_sample, 2 * u.degree, 0.2, 0.5, 30)
+
+    >>> assert_frame_equal(trajectory_df, pd.DataFrame())
+
+    >>> assert_frame_equal(traj_next_night, pd.DataFrame())
+
+    >>> assert_frame_equal(new_observations, ts.new_observations_sample)
+
+    >>> trajectory_df, traj_next_night, new_observations = trajectory_associations(ts.trajectory_df_sample, pd.DataFrame(), ts.new_observations_sample, 2 * u.degree, 0.2, 0.5, 30)
+
+    >>> assert_frame_equal(trajectory_df.reset_index(drop=True), ts.trajectory_df_expected_empty)
+
+    >>> assert_frame_equal(new_observations.reset_index(drop=True), ts.new_observations_expected)
     """
+
+    if len(trajectory_df) == 0:
+        return trajectory_df, traj_next_night, new_observations
 
     next_nid = new_observations["nid"].values[0]
 
-    # get the oldest extremity of the new tracklets to perform associations with the latest observations in the trajectories
-    tracklets_extremity = get_n_last_observations_from_trajectories(
-        traj_next_night, 1, False
-    )
+    if len(traj_next_night) > 0:
+        # get the oldest extremity of the new tracklets to perform associations with the latest observations in the trajectories
+        tracklets_extremity = get_n_last_observations_from_trajectories(
+            traj_next_night, 1, False
+        )
+    else:
+        tracklets_extremity = pd.DataFrame(columns=['ra', 'dec', 'trajectory_id', 'jd', 'candid', 'fid', 'dcmag'])
+    
 
     # get the last two observations for each trajectories
     two_last_observation_trajectory = get_n_last_observations_from_trajectories(
@@ -804,6 +825,22 @@ def tracklets_and_observations_associations(
     >>> assert_frame_equal(trajectory_df.reset_index(drop=True), ts.track_and_obs_trajectory_df_expected)
 
     >>> assert_frame_equal(old_observations.reset_index(drop=True), ts.track_and_obs_old_observations_expected)
+
+    >>> trajectory_df, old_observations = tracklets_and_observations_associations(
+    ... ts.track_and_obs_trajectory_df_sample,
+    ... pd.DataFrame(),
+    ... ts.track_and_obs_old_observations_sample,
+    ... ts.track_and_obs_new_observations_sample,
+    ... 6,
+    ... 1.5 * u.degree,
+    ... 0.2,
+    ... 0.5,
+    ... 30
+    ... )
+
+    >>> assert_frame_equal(trajectory_df.reset_index(drop=True), ts.track_and_obs_trajectory_df_expected2)
+
+    >>> assert_frame_equal(old_observations.reset_index(drop=True), ts.track_and_obs_old_observations_expected2)
     """
     next_nid = new_observations["nid"].values[0]
 
@@ -814,9 +851,12 @@ def tracklets_and_observations_associations(
 
     old_obs_nid = np.sort(np.unique(old_observations["nid"]))[::-1]
 
-    two_first_obs_tracklets = get_n_last_observations_from_trajectories(
-        traj_next_night, 2, False
-    )
+    if len(traj_next_night) > 0:
+        two_first_obs_tracklets = get_n_last_observations_from_trajectories(
+            traj_next_night, 2, False
+        )
+    else:
+        two_first_obs_tracklets = pd.DataFrame(columns=['ra', 'dec', 'trajectory_id', 'jd', 'candid', 'fid', 'dcmag'])
 
     for obs_nid in old_obs_nid:
         current_old_obs = old_observations[old_observations["nid"] == obs_nid]
@@ -836,6 +876,7 @@ def tracklets_and_observations_associations(
             norm_diff_fid,
             norm_angle,
         )
+
 
         if len(traj_left) > 0:
 
@@ -857,6 +898,7 @@ def tracklets_and_observations_associations(
                 ~current_old_obs["candid"].isin(old_obs_right["candid"])
             ]
 
+
         left_assoc, right_assoc = night_to_night_observation_association(
             current_old_obs,
             new_observations,
@@ -866,6 +908,7 @@ def tracklets_and_observations_associations(
         )
 
         if len(left_assoc) > 0:
+
             new_trajectory_id = np.arange(
                 last_trajectory_id, last_trajectory_id + len(left_assoc)
             )
@@ -895,6 +938,9 @@ def night_to_night_association(
     old_observation,
     new_observation,
     last_trajectory_id,
+    intra_night_sep_criterion=145 * u.arcsecond,
+    intra_night_mag_criterion_same_fid=2.21,
+    intra_night_mag_criterion_diff_fid=1.75,
     sep_criterion=0.24 * u.degree,
     mag_criterion_same_fid=0.18,
     mag_criterion_diff_fid=0.7,
@@ -920,6 +966,8 @@ def night_to_night_association(
         all the observations from the previous night
     new_observation : dataframe
         all observations from the next night
+    last_trajectory_id : integer
+        the last identifier that have been assign to a trajectory + 1
     sep_criterion : float
         the separation criterion to associates alerts
     mag_criterion_same_fid : float
@@ -938,10 +986,33 @@ def night_to_night_association(
 
     Examples
     --------
+    >>> trajectory_df, old_observation = night_to_night_association(
+    ... ts.night_night_trajectory_sample,
+    ... ts.night_to_night_old_obs,
+    ... ts.night_to_night_new_obs,
+    ... 4,
+    ... intra_night_sep_criterion=1.5 * u.degree,
+    ... intra_night_mag_criterion_same_fid=0.2,
+    ... intra_night_mag_criterion_diff_fid=0.5,
+    ... sep_criterion = 1.5 * u.degree,
+    ... mag_criterion_same_fid = 0.2,
+    ... mag_criterion_diff_fid = 0.5,
+    ... angle_criterion = 30
+    ... )
+
+    >>> assert_frame_equal(trajectory_df.reset_index(drop=True), ts.night_to_night_trajectory_df_expected, check_dtype=False)
+
+    >>> assert_frame_equal(old_observation.reset_index(drop=True), ts.night_to_night_old_observation_expected)
     """
 
     # intra-night association of the new observations
-    new_left, new_right, _ = intra_night_association(new_observation)
+    new_left, new_right, _ = intra_night_association(
+        new_observation,
+        sep_criterion=intra_night_sep_criterion,
+        mag_criterion_same_fid=intra_night_mag_criterion_same_fid,
+        mag_criterion_diff_fid=intra_night_mag_criterion_diff_fid,
+    )
+
     new_left, new_right = (
         new_left.reset_index(drop=True),
         new_right.reset_index(drop=True),
@@ -951,7 +1022,10 @@ def night_to_night_association(
         new_left, new_right, last_trajectory_id
     )
 
-    last_trajectory_id = np.max(traj_next_night["trajectory_id"]) + 1
+    if len(traj_next_night) > 0:
+        last_trajectory_id = np.max(traj_next_night["trajectory_id"]) + 1
+    else:
+        traj_next_night = pd.DataFrame(columns=['trajectory_id', 'candid'])
 
     # remove all the alerts that appears in the tracklets
     new_observation_not_associated = new_observation[
