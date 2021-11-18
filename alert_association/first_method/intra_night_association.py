@@ -264,7 +264,7 @@ def compute_diff_mag(left, right, fid, magnitude_criterion, normalized=False):
 
 
 def magnitude_association(
-    left_assoc, right_assoc, mag_criterion_same_fid, mag_criterion_diff_fid
+    left_assoc, right_assoc, mag_criterion_same_fid, mag_criterion_diff_fid, jd_normalization=False
 ):
     """
     Perform magnitude based association twice, one for the alerts with the same fid and another for the alerts with a different fid.
@@ -275,7 +275,10 @@ def magnitude_association(
         left members of the associations (column dcmag and fid have to be present, jd must be present if normalize is set to True)
     right_assoc : dataframe
         right members of the associations (column dcmag and fid have to be present, jd must be present if normalize is set to True)
-
+    mag_criterion_same_fid : float
+        magnitude criterion between the alerts with the same filter id
+    mag_criterion_diff_fid : float
+        magnitude criterion between the alerts with a different filter id
     Returns
     -------
     left_assoc : dataframe
@@ -314,10 +317,10 @@ def magnitude_association(
     diff_fid = left_assoc["fid"].values != right_assoc["fid"].values
 
     same_fid_left, same_fid_right = compute_diff_mag(
-        left_assoc, right_assoc, same_fid, mag_criterion_same_fid
+        left_assoc, right_assoc, same_fid, mag_criterion_same_fid, jd_normalization
     )
     diff_fid_left, diff_fid_right = compute_diff_mag(
-        left_assoc, right_assoc, diff_fid, mag_criterion_diff_fid
+        left_assoc, right_assoc, diff_fid, mag_criterion_diff_fid, jd_normalization
     )
 
     return (
@@ -333,6 +336,16 @@ def compute_associations_metrics(
     computes performance metrics of the associations methods.
     Used only on test dataset where the column 'ssnamenr' are present and the real association are provided.
 
+    Return 6 performance metrics :
+        - precision : True positive divided by the sum of true positive and false positive. monitor the performance of the algorithm to do the good association. 
+        - recall : True positive divided by the sum of true positive and false negative. monitor the performance of the algorithm to find the association.
+        - True positive
+        - False positive
+        - False Negative
+        - total real association : the number of true association in the solar system MPC dataset.
+
+    It has no true negative in the solar system dataset due to the only presence of true association. 
+
     Parameters
     ----------
     left_assoc : dataframe
@@ -344,8 +357,8 @@ def compute_associations_metrics(
 
     Returns
     -------
-    metrics_dict : dictionnary
-        dictionnary where entries are performance metrics
+    metrics_dict : dictionary
+        dictionary where entries are performance metrics
 
     Examples
     --------
@@ -719,6 +732,8 @@ def intra_night_association(
     real_assoc : boolean
         if True, computes performance metrics of the associations based on real labels from ssnamenr columns in the night_observation parameters.
         night_observations must contains observations with ssnamenr from MPC objects.
+    compute_metrics : boolean
+        execute and return the performance metrics of the intra night association
 
     Returns
     -------
@@ -726,6 +741,8 @@ def intra_night_association(
         left members of the associations
     right_assoc : dataframe
         right_members of the associations
+    metrics : dictionary
+        performance metrics of the intra night association
 
     Examples
     --------
@@ -891,7 +908,7 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
     return traj_df
 
 
-if __name__ == "__main__":
+if __name__ == "__main__": # pragma: no cover
     import sys
     import doctest
     from pandas.testing import assert_frame_equal  # noqa: F401
