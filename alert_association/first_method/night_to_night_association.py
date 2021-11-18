@@ -658,8 +658,9 @@ def trajectory_associations(
             traj_next_night, 1, False
         )
     else:
-        tracklets_extremity = pd.DataFrame(columns=['ra', 'dec', 'trajectory_id', 'jd', 'candid', 'fid', 'dcmag'])
-    
+        tracklets_extremity = pd.DataFrame(
+            columns=["ra", "dec", "trajectory_id", "jd", "candid", "fid", "dcmag"]
+        )
 
     # get the last two observations for each trajectories
     two_last_observation_trajectory = get_n_last_observations_from_trajectories(
@@ -856,7 +857,9 @@ def tracklets_and_observations_associations(
             traj_next_night, 2, False
         )
     else:
-        two_first_obs_tracklets = pd.DataFrame(columns=['ra', 'dec', 'trajectory_id', 'jd', 'candid', 'fid', 'dcmag'])
+        two_first_obs_tracklets = pd.DataFrame(
+            columns=["ra", "dec", "trajectory_id", "jd", "candid", "fid", "dcmag"]
+        )
 
     for obs_nid in old_obs_nid:
         current_old_obs = old_observations[old_observations["nid"] == obs_nid]
@@ -877,7 +880,6 @@ def tracklets_and_observations_associations(
             norm_angle,
         )
 
-
         if len(traj_left) > 0:
 
             # remove the duplicates()
@@ -897,7 +899,6 @@ def tracklets_and_observations_associations(
             current_old_obs = current_old_obs[
                 ~current_old_obs["candid"].isin(old_obs_right["candid"])
             ]
-
 
         left_assoc, right_assoc = night_to_night_observation_association(
             current_old_obs,
@@ -1025,7 +1026,7 @@ def night_to_night_association(
     if len(traj_next_night) > 0:
         last_trajectory_id = np.max(traj_next_night["trajectory_id"]) + 1
     else:
-        traj_next_night = pd.DataFrame(columns=['trajectory_id', 'candid'])
+        traj_next_night = pd.DataFrame(columns=["trajectory_id", "candid"])
 
     # remove all the alerts that appears in the tracklets
     new_observation_not_associated = new_observation[
