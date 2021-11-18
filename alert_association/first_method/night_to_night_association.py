@@ -340,7 +340,11 @@ def night_to_night_observation_association(
 
     # filter the association based on magnitude criterion
     traj_assoc, new_obs_assoc = magnitude_association(
-        traj_assoc, new_obs_assoc, mag_criterion_same_fid, mag_criterion_diff_fid
+        traj_assoc,
+        new_obs_assoc,
+        mag_criterion_same_fid,
+        mag_criterion_diff_fid,
+        jd_normalization=True,
     )
 
     # removed mirrored association if occurs
@@ -946,6 +950,7 @@ def night_to_night_association(
     mag_criterion_same_fid=0.18,
     mag_criterion_diff_fid=0.7,
     angle_criterion=8.8,
+    run_intra_night_metrics=False
 ):
     """
     Perform night to night associations in four steps.
@@ -977,6 +982,8 @@ def night_to_night_association(
         the magnitude criterion to associates alerts if the observations have been observed with the same filter
     angle_criterion : float
         the angle criterion to associates alerts during the cone search
+    run_intra_night_metrics : boolean
+        launch and return the performance metrics of the intra night association
 
     Returns
     -------
@@ -984,11 +991,35 @@ def night_to_night_association(
         the updated trajectories with the new observations
     old_observation : dataframe
         the new set of old observations updated with the remaining non-associated new observations.
+    intra_night_metrics : dictionary
+        the performance metrics of the intra_night_association
 
     Examples
     --------
-    >>> trajectory_df, old_observation = night_to_night_association(
+    >>> trajectory_df, old_observation, metrics = night_to_night_association(
     ... ts.night_night_trajectory_sample,
+    ... ts.night_to_night_old_obs,
+    ... ts.night_to_night_new_obs,
+    ... 4,
+    ... intra_night_sep_criterion=1.5 * u.degree,
+    ... intra_night_mag_criterion_same_fid=0.2,
+    ... intra_night_mag_criterion_diff_fid=0.5,
+    ... sep_criterion = 1.5 * u.degree,
+    ... mag_criterion_same_fid = 0.2,
+    ... mag_criterion_diff_fid = 0.5,
+    ... angle_criterion = 30,
+    ... run_intra_night_metrics = True
+    ... )
+
+    >>> expected_metrics = {'precision': 100.0, 'recall': 100.0, 'True Positif': 3, 'False Positif': 0, 'False Negatif': 0, 'total real association': 3}
+    >>> TestCase().assertDictEqual(expected_metrics, metrics)
+
+    >>> assert_frame_equal(trajectory_df.reset_index(drop=True), ts.night_to_night_trajectory_df_expected, check_dtype=False)
+
+    >>> assert_frame_equal(old_observation.reset_index(drop=True), ts.night_to_night_old_observation_expected)
+
+    >>> trajectory_df, old_observation, _ = night_to_night_association(
+    ... pd.DataFrame(),
     ... ts.night_to_night_old_obs,
     ... ts.night_to_night_new_obs,
     ... 4,
@@ -1000,18 +1031,37 @@ def night_to_night_association(
     ... mag_criterion_diff_fid = 0.5,
     ... angle_criterion = 30
     ... )
+    
+    >>> assert_frame_equal(trajectory_df.reset_index(drop=True), ts.night_to_night_trajectory_df_expected2, check_dtype=False)
 
-    >>> assert_frame_equal(trajectory_df.reset_index(drop=True), ts.night_to_night_trajectory_df_expected, check_dtype=False)
+    >>> assert_frame_equal(old_observation.reset_index(drop=True), ts.night_to_night_old_observation_expected2)
 
-    >>> assert_frame_equal(old_observation.reset_index(drop=True), ts.night_to_night_old_observation_expected)
+    >>> trajectory_df, old_observation, _ = night_to_night_association(
+    ... ts.night_night_trajectory_sample,
+    ... ts.night_to_night_old_obs,
+    ... ts.night_to_night_new_obs2,
+    ... 4,
+    ... intra_night_sep_criterion=1.5 * u.degree,
+    ... intra_night_mag_criterion_same_fid=0.2,
+    ... intra_night_mag_criterion_diff_fid=0.5,
+    ... sep_criterion = 1.5 * u.degree,
+    ... mag_criterion_same_fid = 0.2,
+    ... mag_criterion_diff_fid = 0.5,
+    ... angle_criterion = 30
+    ... )
+
+    >>> assert_frame_equal(trajectory_df.reset_index(drop=True), ts.night_to_night_trajectory_df_expected3, check_dtype=False)
+
+    >>> assert_frame_equal(old_observation.reset_index(drop=True), ts.night_to_night_old_observation_expected3)
     """
 
     # intra-night association of the new observations
-    new_left, new_right, _ = intra_night_association(
+    new_left, new_right, intra_night_metrics = intra_night_association(
         new_observation,
         sep_criterion=intra_night_sep_criterion,
         mag_criterion_same_fid=intra_night_mag_criterion_same_fid,
         mag_criterion_diff_fid=intra_night_mag_criterion_diff_fid,
+        compute_metrics=run_intra_night_metrics
     )
 
     new_left, new_right = (
@@ -1065,7 +1115,7 @@ def night_to_night_association(
         angle_criterion,
     )
 
-    return trajectory_df, old_observation
+    return trajectory_df, old_observation, intra_night_metrics
 
 
 if __name__ == "__main__":
@@ -1073,97 +1123,6 @@ if __name__ == "__main__":
     import doctest
     from pandas.testing import assert_frame_equal  # noqa: F401
     import test_sample as ts  # noqa: F401
+    from unittest import TestCase  # noqa: F401
 
     sys.exit(doctest.testmod()[0])
-
-    exit()
-    df_sso = pd.read_pickle("../../data/month=03")
-
-    df_sso = df_sso.drop_duplicates(["candid"])
-    df_sso = df_sso[df_sso["fink_class"] == "Solar System MPC"]
-
-    all_night = np.unique(df_sso["nid"])
-    print(all_night)
-
-    n1 = all_night[0]
-    n2 = all_night[1]
-    df_night1 = df_sso[df_sso["nid"] == n1]
-    df_night2 = df_sso[df_sso["nid"] == n2]
-
-    left, right, _ = intra_night_association(df_night1)
-    traj_df = new_trajectory_id_assignation(left, right, 0)
-    traj_df = traj_df.reset_index(drop=True)
-
-    old_observation = pd.concat(
-        [
-            df_night1[~df_night1["candid"].isin(traj_df["candid"])],
-            df_night2[~df_night2["candid"].isin(traj_df["candid"])],
-        ]
-    )
-
-    for i in range(2, len(all_night)):
-        t_before = t.time()
-        new_night = all_night[i]
-
-        df_next_night = df_sso[df_sso["nid"] == new_night]
-
-        print()
-        print()
-        print("incomming night : {}".format(new_night))
-        print("nb new observation : {}".format(len(df_next_night)))
-        print()
-
-        current_night_id = df_next_night["nid"].values[0]
-
-        last_obs_of_all_traj = get_n_last_observations_from_trajectories(traj_df, 1)
-
-        last_obs_of_all_traj["diff_nid"] = (
-            current_night_id - last_obs_of_all_traj["nid"]
-        )
-
-        most_recent_last_obs = last_obs_of_all_traj[
-            last_obs_of_all_traj["diff_nid"] <= 5
-        ]
-
-        print("nb most recent traj to associate : {}".format(len(most_recent_last_obs)))
-
-        mask_traj = traj_df["trajectory_id"].isin(most_recent_last_obs["trajectory_id"])
-
-        most_recent_traj = traj_df[mask_traj]
-        oldest_traj = traj_df[~mask_traj]
-
-        last_trajectory_id = np.max(traj_df["trajectory_id"].values) + 1
-
-        # print(last_obs_of_all_traj[['objectId', 'ssnamenr', 'trajectory_id', 'nid', 'diff_nid']])
-        traj_df, old_observation = night_to_night_association(
-            most_recent_traj, old_observation, df_next_night, last_trajectory_id
-        )
-
-        traj_df = pd.concat([traj_df, oldest_traj])
-
-        print()
-        print("elapsed time: {}".format(t.time() - t_before))
-        print()
-        print(
-            "nb observation in the trajectory dataframe : {}\nnb old observations : {}".format(
-                len(traj_df), len(old_observation)
-            )
-        )
-        print("-----------------------------------------------")
-
-        """traj_gb = traj_df.explode(['trajectory_id']).groupby(['trajectory_id']).agg({
-            'ssnamenr' : list,
-            'candid' : lambda x :len(x)
-        })
-
-        print()
-        print(traj_gb[traj_gb['candid'] > 3])"""
-
-        """traj_gb = traj_df.explode(['trajectory_id']).groupby(['trajectory_id']).agg({
-            'ra' : list,
-            'dec' : list,
-            'ssnamenr' : list,
-            'candid' : lambda x : len(x)
-        })
-
-        print(traj_gb[traj_gb['candid'] > 3])"""
