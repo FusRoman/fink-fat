@@ -2,6 +2,7 @@
 numpy>=1.17
 pandas
 scipy
+matplotlib
 
 # Coverage
 coveralls

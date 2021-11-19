@@ -254,6 +254,7 @@ def compute_diff_mag(left, right, fid, magnitude_criterion, normalized=False):
         diff_mag = np.abs(
             left_assoc["dcmag"].values - right_assoc["dcmag"].values
         ) / np.abs(left_assoc["jd"].values - right_assoc["jd"].values)
+
     else:
         diff_mag = np.abs(left_assoc["dcmag"].values - right_assoc["dcmag"].values)
 
