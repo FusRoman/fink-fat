@@ -1,0 +1,35 @@
+name: Sentinel
+
+on:
+  # Trigger the workflow on push or pull request,
+  # but only for the main branch
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+    run-test:
+      name: run-test
+      runs-on: ubuntu-latest
+      strategy:
+        matrix:
+          python-version: [3.7]
+      steps:
+        - uses: actions/checkout@v2
+        - name: Set up Python ${{ matrix.python-version }}
+          uses: actions/setup-python@v2
+          with:
+            python-version: ${{ matrix.python-version }}
+        - name: Install Python dependencies
+          run: |
+            pip install --upgrade pip setuptools wheel
+            source ./install_python_deps.sh
+        - name: Install add-ons
+          run: |
+            sudo apt-get install python3-testresources
+        - name: Run test suites
+          run: |
+            ./run_test.sh
+            bash <(curl -s https://codecov.io/bash)
+    
