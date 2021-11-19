@@ -1,0 +1,5 @@
+[run]
+branch = false
+data_file = ${PWD}/.coverage
+omit=
+    setup.py
