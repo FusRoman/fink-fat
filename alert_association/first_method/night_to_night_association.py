@@ -1011,7 +1011,7 @@ def tracklets_and_observations_associations(
             ]
 
         if len(new_observations) > 0:
-            
+
             left_assoc, right_assoc = night_to_night_observation_association(
                 current_old_obs,
                 new_observations,
@@ -1226,7 +1226,7 @@ def night_to_night_association(
     return trajectory_df, old_observation, intra_night_metrics
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     import sys
     import doctest
     from pandas.testing import assert_frame_equal  # noqa: F401
