@@ -4,6 +4,6 @@
 
 # A&A : Asteroids and Associations
 
-This project is a system to detect asteroids with alerts from the ZTF. It use the fink borker to get the alert tag as Solar System Candidates and perform a linkage
+This project is a system to detect asteroids with alerts from the ZTF. It use the fink borker to get the alert with the tag Solar System Candidates and perform a linkage
 algorithm to detect new asteroid trajectories in order to make new discovery. 
 
