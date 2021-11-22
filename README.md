@@ -2,6 +2,8 @@
 [![PEP8](https://github.com/FusRoman/Alert-Association-of-Asteroids-Candidates/workflows/PEP8/badge.svg)](https://github.com/FusRoman/Alert-Association-of-Asteroids-Candidates/actions?query=workflow%3APEP8)
 [![codecov](https://codecov.io/gh/FusRoman/Alert-Association-of-Asteroids-Candidates/branch/master/graph/badge.svg)](https://codecov.io/gh/FusRoman/Alert-Association-of-Asteroids-Candidates)
 
-# Alert-Association-of-Asteroids-Candidates
+# A&A : Asteroids and Associations
 
-Perform alert association night by night in order to build asteroids trajectories.
+This project is a system to detect asteroids with alerts from the ZTF. It use the fink borker to get the alert tag as Solar System Candidates and perform a linkage
+algorithm to detect new asteroid trajectories in order to make new discovery. 
+
