@@ -219,5 +219,5 @@ if __name__ == "__main__":
         )
 
         sys.exit(0)
-    except AssertionError: # pragma: no cover
+    except AssertionError:  # pragma: no cover
         sys.exit(-1)
