@@ -9,10 +9,11 @@ import matplotlib.pyplot as plt
 import astropy.units as u
 from pandas.testing import assert_frame_equal
 import test_sample as ts
+import sys
 
 
 if __name__ == "__main__":
-    data_path = "../data/month=0"
+    data_path = "data/month=0"
     all_df = []
 
     for i in range(3, 7):
@@ -185,33 +186,38 @@ if __name__ == "__main__":
         ax2.legend(title="trajectory identifier")
         plt.show()
 
-    assert_frame_equal(
-        traj_df.reset_index(drop=True), ts.traj_df_expected, check_dtype=False
-    )
+    try:
+        assert_frame_equal(
+            traj_df.reset_index(drop=True), ts.traj_df_expected, check_dtype=False
+        )
 
-    assert_frame_equal(
-        all_alert_not_associated,
-        pd.DataFrame(
-            columns=[
-                "ra",
-                "dec",
-                "ssnamenr",
-                "jd",
-                "fid",
-                "nid",
-                "fink_class",
-                "objectId",
-                "candid",
-                "magpsf",
-                "sigmapsf",
-                "magnr",
-                "sigmagnr",
-                "magzpsci",
-                "isdiffpos",
-                "dcmag",
-                "dcmagerr",
-            ]
-        ),
-        check_index_type=False,
-        check_dtype=False,
-    )
+        assert_frame_equal(
+            all_alert_not_associated,
+            pd.DataFrame(
+                columns=[
+                    "ra",
+                    "dec",
+                    "ssnamenr",
+                    "jd",
+                    "fid",
+                    "nid",
+                    "fink_class",
+                    "objectId",
+                    "candid",
+                    "magpsf",
+                    "sigmapsf",
+                    "magnr",
+                    "sigmagnr",
+                    "magzpsci",
+                    "isdiffpos",
+                    "dcmag",
+                    "dcmagerr",
+                ]
+            ),
+            check_index_type=False,
+            check_dtype=False,
+        )
+
+        sys.exit(0)
+    except AssertionError:
+        sys.exit(-1)
