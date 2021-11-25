@@ -23,7 +23,7 @@ export ROOTPATH=`pwd`
 export COVERAGE_PROCESS_START="${ROOTPATH}/.coveragerc"
 
 # Run the test suite on the utilities
-for filename in alert_association/first_method/*.py
+for filename in alert_association/*.py
 do
   # Run test suite + coverage
   coverage run \
