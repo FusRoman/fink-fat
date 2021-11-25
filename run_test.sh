@@ -34,5 +34,5 @@ done
 
 unset COVERAGE_PROCESS_START
 
-coverage report
+coverage report -m
 coverage html
