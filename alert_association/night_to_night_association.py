@@ -706,7 +706,6 @@ def trajectory_associations(
         norm_sep_crit = sep_criterion * diff_night
         norm_same_fid = mag_criterion_same_fid * diff_night
         norm_diff_fid = mag_criterion_diff_fid * diff_night
-        norm_angle = angle_criterion * diff_night
 
         # trajectory association with the new tracklets
         (
@@ -718,7 +717,7 @@ def trajectory_associations(
             norm_sep_crit,
             norm_same_fid,
             norm_diff_fid,
-            norm_angle,
+            angle_criterion,
         )
 
         if len(traj_extremity_associated) > 0:
@@ -768,7 +767,7 @@ def trajectory_associations(
                 norm_sep_crit,
                 norm_same_fid,
                 norm_diff_fid,
-                norm_angle,
+                angle_criterion,
             )
 
             if len(obs_assoc) > 0:
@@ -978,7 +977,6 @@ def tracklets_and_observations_associations(
         norm_sep_crit = sep_criterion * diff_night
         norm_same_fid = mag_criterion_same_fid * diff_night
         norm_diff_fid = mag_criterion_diff_fid * diff_night
-        norm_angle = angle_criterion * diff_night
 
         # trajectory association with the new tracklets
         traj_left, old_obs_right = night_to_night_trajectory_associations(
@@ -987,7 +985,7 @@ def tracklets_and_observations_associations(
             norm_sep_crit,
             norm_same_fid,
             norm_diff_fid,
-            norm_angle,
+            angle_criterion,
         )
 
         if len(traj_left) > 0:

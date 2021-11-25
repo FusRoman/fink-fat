@@ -12,7 +12,7 @@ import test_sample as ts
 
 
 if __name__ == "__main__":
-    data_path = "data/month=0"
+    data_path = "../data/month=0"
     all_df = []
 
     for i in range(3, 7):
@@ -117,7 +117,7 @@ if __name__ == "__main__":
             sep_criterion=1 * u.degree,
             mag_criterion_same_fid=0.6,
             mag_criterion_diff_fid=0.85,
-            angle_criterion=15,
+            angle_criterion=30,
             run_intra_night_metrics=True,
         )
 
@@ -134,47 +134,16 @@ if __name__ == "__main__":
             )
             print("-----------------------------------------------")
 
-    with open("Output.txt", "w") as text_file:
-        import json
+    # with open("Output.txt", "w") as text_file:
+    # import json
 
-        text_file.write(json.dumps(traj_df.to_dict(orient="list")))
+    # text_file.write(json.dumps(traj_df.to_dict(orient="list")))
 
     all_alert_not_associated = specific_mpc[
         ~specific_mpc["candid"].isin(traj_df["candid"])
     ]
 
-    assert_frame_equal(
-        traj_df.reset_index(drop=True), ts.traj_df_expected, check_dtype=False
-    )
-
-    assert_frame_equal(
-        all_alert_not_associated,
-        pd.DataFrame(
-            columns=[
-                "ra",
-                "dec",
-                "ssnamenr",
-                "jd",
-                "fid",
-                "nid",
-                "fink_class",
-                "objectId",
-                "candid",
-                "magpsf",
-                "sigmapsf",
-                "magnr",
-                "sigmagnr",
-                "magzpsci",
-                "isdiffpos",
-                "dcmag",
-                "dcmagerr",
-            ]
-        ),
-        check_index_type=False,
-        check_dtype=False,
-    )
-
-    show_results = False
+    show_results = True
 
     if show_results:  # pragma: no cover
 
@@ -215,3 +184,34 @@ if __name__ == "__main__":
 
         ax2.legend(title="trajectory identifier")
         plt.show()
+
+    assert_frame_equal(
+        traj_df.reset_index(drop=True), ts.traj_df_expected, check_dtype=False
+    )
+
+    assert_frame_equal(
+        all_alert_not_associated,
+        pd.DataFrame(
+            columns=[
+                "ra",
+                "dec",
+                "ssnamenr",
+                "jd",
+                "fid",
+                "nid",
+                "fink_class",
+                "objectId",
+                "candid",
+                "magpsf",
+                "sigmapsf",
+                "magnr",
+                "sigmagnr",
+                "magzpsci",
+                "isdiffpos",
+                "dcmag",
+                "dcmagerr",
+            ]
+        ),
+        check_index_type=False,
+        check_dtype=False,
+    )
