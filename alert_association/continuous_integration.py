@@ -144,7 +144,7 @@ if __name__ == "__main__":
         ~specific_mpc["candid"].isin(traj_df["candid"])
     ]
 
-    show_results = True
+    show_results = False
 
     if show_results:  # pragma: no cover
 
