@@ -1644,7 +1644,7 @@ night_to_night_old_observation_expected3 = pd.DataFrame(
 traj_df_expected = pd.DataFrame(
     {
         "ra": [
-            196.8659234,
+            195.8659234,
             196.7152213,
             241.7567245,
             241.7633196,
