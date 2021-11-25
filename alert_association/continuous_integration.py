@@ -13,7 +13,7 @@ import sys
 
 
 if __name__ == "__main__":
-    data_path = "data/month=0"
+    data_path = "../data/month=0"
     all_df = []
 
     for i in range(3, 7):
@@ -219,5 +219,5 @@ if __name__ == "__main__":
         )
 
         sys.exit(0)
-    except AssertionError:
+    except AssertionError: # pragma: no cover
         sys.exit(-1)
