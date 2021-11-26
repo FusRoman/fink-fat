@@ -746,23 +746,29 @@ def intra_night_association(
         left members of the associations
     right_assoc : dataframe
         right_members of the associations
-    metrics : dictionary
-        performance metrics of the intra night association
+    intra_night_report : dictionary
+        Statistics about the intra night association, contains the following entries :
+
+                    number of separation association
+
+                    number of association filtered by magnitude
+
+                    association metrics if compute_metrics is set to True
 
     Examples
     --------
-    >>> left, right, actual_metrics = intra_night_association(ts.intra_night_test_traj, sep_criterion=145*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=True)
+    >>> left, right, intra_night_report = intra_night_association(ts.intra_night_test_traj, sep_criterion=145*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=True)
+
+    >>> expected_report = {'number of separation association': 40, 'number of association filtered by magnitude': 0, 'association metrics': {'precision': 100.0, 'recall': 100.0, 'True Positif': 10, 'False Positif': 0, 'False Negatif': 0, 'total real association': 10}}
+    >>> TestCase().assertDictEqual(expected_report, intra_night_report)
 
     >>> assert_frame_equal(left.reset_index(drop=True), ts.intra_night_left, check_dtype = False)
     >>> assert_frame_equal(right.reset_index(drop=True), ts.intra_night_right, check_dtype = False)
 
-    >>> expected_metrics = {'precision': 100.0, 'recall': 100.0, 'True Positif': 10, 'False Positif': 0, 'False Negatif': 0, 'total real association': 10}
-    >>> TestCase().assertDictEqual(expected_metrics, actual_metrics)
+    >>> left, right, intra_night_report = intra_night_association(ts.intra_night_test_traj, sep_criterion=145*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=False)
 
-
-    >>> left, right, metrics = intra_night_association(ts.intra_night_test_traj, sep_criterion=145*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=False)
-
-    >>> TestCase().assertDictEqual({}, metrics)
+    >>> expected_report = {'number of separation association': 40, 'number of association filtered by magnitude': 0, 'association metrics': {}}
+    >>> TestCase().assertDictEqual(expected_report, intra_night_report)
 
     >>> test_traj = pd.DataFrame({
     ... 'ra' : [106.305259, 106.141905, 169.860467],
@@ -774,25 +780,34 @@ def intra_night_association(
     ... 'jd': [2459274.666713, 2459274.666713, 2459274.7206481]
     ... })
 
-    >>> left, right, metrics = intra_night_association(test_traj, sep_criterion=145*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=True)
+    >>> left, right, intra_night_report = intra_night_association(test_traj, sep_criterion=145*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=True)
 
-    >>> metrics
-    {}
+    >>> expected_report = {'number of separation association': 0, 'number of association filtered by magnitude': 0, 'association metrics': {}}
+    >>> TestCase().assertDictEqual(expected_report, intra_night_report)
+
     >>> len(left)
     0
     >>> len(right)
     0
     """
+
+    intra_night_report = dict()
+
     left_assoc, right_assoc, _ = intra_night_separation_association(
         night_observation, sep_criterion
     )
+
+    intra_night_report['number of separation association'] = len(left_assoc)
 
     left_assoc, right_assoc = magnitude_association(
         left_assoc, right_assoc, mag_criterion_same_fid, mag_criterion_diff_fid
     )
 
+    intra_night_report['number of association filtered by magnitude'] = intra_night_report['number of separation association'] - len(left_assoc)
+
     if len(left_assoc) == 0:
-        return pd.DataFrame(), pd.DataFrame(), {}
+        intra_night_report['association metrics'] = {}
+        return pd.DataFrame(), pd.DataFrame(), intra_night_report
 
     # remove mirrored associations
     left_assoc, right_assoc = removed_mirrored_association(left_assoc, right_assoc)
@@ -804,9 +819,14 @@ def intra_night_association(
         metrics = compute_associations_metrics(
             left_assoc, right_assoc, night_observation
         )
-        return left_assoc, right_assoc, metrics
+
+        intra_night_report['association metrics'] = metrics
+
+        return left_assoc, right_assoc, intra_night_report
     else:
-        return left_assoc, right_assoc, {}
+        intra_night_report['association metrics'] = {}
+
+        return left_assoc, right_assoc, intra_night_report
 
 
 def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
