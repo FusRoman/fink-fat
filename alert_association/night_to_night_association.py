@@ -674,6 +674,8 @@ def trajectory_associations(
 
                     all nid association report with the following entries for each reports :
 
+                                current nid
+
                                 trajectories to tracklets report
 
                                 number of trajectories to tracklets duplicated associations
@@ -960,6 +962,8 @@ def tracklets_and_observations_associations(
                     list of the new trajectories
 
                     all nid report with the following entries for each of them :
+
+                            current nid
 
                             old observation to tracklets report
 
