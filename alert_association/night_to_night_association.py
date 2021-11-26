@@ -686,7 +686,7 @@ def trajectory_associations(
     --------
     >>> trajectory_df, traj_next_night, new_observations, report = trajectory_associations(ts.trajectory_df_sample, ts.traj_next_night_sample, ts.new_observations_sample, 2 * u.degree, 0.2, 0.5, 30)
 
-    >>> TestCase().assertDictEqual(ts.expected_trajectory_first_report, report)    
+    >>> TestCase().assertDictEqual(ts.expected_trajectory_first_report, report)
 
     >>> assert_frame_equal(trajectory_df.reset_index(drop=True), ts.trajectory_df_expected)
 
