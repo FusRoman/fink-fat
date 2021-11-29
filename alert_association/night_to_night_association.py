@@ -1410,8 +1410,8 @@ def night_to_night_association(
 
     inter_night_report = dict()
 
-    next_nid = np.unique(new_observation["nid"])
-    inter_night_report["nid of the next night"] = list(next_nid)
+    next_nid = new_observation["nid"].values[0]
+    inter_night_report["nid of the next night"] = int(next_nid)
 
     # intra-night association of the new observations
     new_left, new_right, intra_night_report = intra_night_association(

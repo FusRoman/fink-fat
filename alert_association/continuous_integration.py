@@ -10,6 +10,7 @@ import astropy.units as u
 from pandas.testing import assert_frame_equal
 import test_sample as ts
 import sys
+import night_report
 
 
 def time_window_management(
@@ -135,7 +136,7 @@ def time_window_management(
 if __name__ == "__main__":
     import doctest
 
-    data_path = "data/month=0"
+    data_path = "../data/month=0"
     all_df = []
 
     # load all data
@@ -165,7 +166,7 @@ if __name__ == "__main__":
 
     last_nid = all_night[0]
     df_night1 = specific_mpc[specific_mpc["nid"] == last_nid]
-
+    
     left, right, _ = intra_night_association(df_night1)
 
     last_trajectory_id = 0
@@ -206,7 +207,7 @@ if __name__ == "__main__":
             traj_df, old_observation, last_nid, current_night_id, time_window_limit
         )
 
-        traj_df, old_observation, _ = night_to_night_association(
+        traj_df, old_observation, report = night_to_night_association(
             most_recent_traj,
             old_observation,
             df_next_night,
@@ -219,8 +220,12 @@ if __name__ == "__main__":
             run_intra_night_metrics=True,
         )
 
+        night_report.save_report(report, df_next_night["jd"].values[0])
+
         traj_df = pd.concat([traj_df, oldest_traj])
         last_nid = current_night_id
+
+        break
 
         if verbose:  # pragma: no cover
             print()
@@ -232,11 +237,6 @@ if __name__ == "__main__":
                 )
             )
             print("-----------------------------------------------")
-
-    # with open("Output.txt", "w") as text_file:
-    # import json
-
-    # text_file.write(json.dumps(traj_df.to_dict(orient="list")))
 
     all_alert_not_associated = specific_mpc[
         ~specific_mpc["candid"].isin(traj_df["candid"])
