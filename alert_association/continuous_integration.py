@@ -12,10 +12,132 @@ import test_sample as ts
 import sys
 
 
+def time_window_management(trajectory_df, old_observation, last_nid, nid_next_night, time_window):
+    """
+    Management of the old observation and trajectories. Remove the old observation with a nid difference with
+    the nid of the next night greater than the time window. Perform the same process for trajectories but take
+    the most recent trajectory extremity.
+
+    If a number of night without observation exceeds the time window parameters, keep the observations and trajectories
+    from the night before the non observation gap. 
+
+    Parameters
+    ----------
+    trajectory_df : dataframe
+        all recorded trajectories
+    old_observation : dataframe
+        old observation from previous night
+    last_nid : integer
+        nid of the previous observation night
+    nid_next_night : integer
+        nid of the incoming night
+    time_window : integer
+        limit to keep old observation and trajectories
+
+    Return
+    ------
+    oldest_traj : dataframe
+        the trajectories older than the time window
+    most_recent_traj : dataframe
+        the trajectories with an nid from an extremity observation smaller than the time window
+    old_observation : dataframe
+        all the old observation with a difference of nid with the next incoming nid smaller than
+        the time window
+    
+    Examples
+    --------
+    >>> test_traj = pd.DataFrame({
+    ... "candid" : [10, 11, 12, 13, 14, 15],
+    ... "nid" : [1, 2, 3, 10, 11, 12],
+    ... "jd" : [1, 2, 3, 10, 11, 12],
+    ... "trajectory_id" : [1, 1, 1, 2, 2, 2]
+    ... })
+
+    >>> test_obs = pd.DataFrame({
+    ... "nid" : [1, 4, 11, 12],
+    ... "candid" : [16, 17, 18, 19]
+    ... })
+
+    >>> (test_old_traj, test_most_recent_traj), test_old_obs = time_window_management(test_traj, test_obs, 12, 17, 3)
+
+    >>> expected_old_traj = pd.DataFrame({
+    ... "candid" : [10, 11, 12],
+    ... "nid" : [1, 2, 3],
+    ... "jd" : [1, 2, 3],
+    ... "trajectory_id" : [1, 1, 1]
+    ... })
+
+    >>> expected_most_recent_traj = pd.DataFrame({
+    ... "candid" : [13, 14, 15],
+    ... "nid" : [10, 11, 12],
+    ... "jd" : [10, 11, 12],
+    ... "trajectory_id" : [2, 2, 2]
+    ... })
+
+    >>> expected_old_obs = pd.DataFrame({
+    ... "nid" : [12],
+    ... "candid" : [19]
+    ... })
+
+    >>> assert_frame_equal(expected_old_traj.reset_index(drop=True), test_old_traj.reset_index(drop=True))
+    >>> assert_frame_equal(expected_most_recent_traj.reset_index(drop=True), test_most_recent_traj.reset_index(drop=True))
+    >>> assert_frame_equal(expected_old_obs.reset_index(drop=True), test_old_obs.reset_index(drop=True))
+    """
+    most_recent_traj = pd.DataFrame()
+    oldest_traj = pd.DataFrame()
+
+    if len(trajectory_df) > 0:
+        last_obs_of_all_traj = get_n_last_observations_from_trajectories(trajectory_df, 1)
+
+        
+        if nid_next_night - last_nid > time_window:
+            last_obs_of_all_traj = last_obs_of_all_traj[last_obs_of_all_traj['nid'] == last_nid]
+            mask_traj = trajectory_df["trajectory_id"].isin(
+                last_obs_of_all_traj["trajectory_id"]
+            )
+            most_recent_traj = trajectory_df[mask_traj]
+            oldest_traj = trajectory_df[~mask_traj]
+            old_observation = old_observation[old_observation['nid'] == last_nid]
+
+            return (oldest_traj, most_recent_traj), old_observation
+        
+
+        last_obs_of_all_traj["diff_nid"] = (
+            nid_next_night - last_obs_of_all_traj["nid"]
+        )
+
+        most_recent_last_obs = last_obs_of_all_traj[
+            last_obs_of_all_traj["diff_nid"] <= time_window
+        ]
+
+        if verbose:  # pragma: no cover
+            print(
+                "nb most recent traj to associate : {}".format(
+                    len(most_recent_last_obs)
+                )
+            )
+
+        mask_traj = trajectory_df["trajectory_id"].isin(
+            most_recent_last_obs["trajectory_id"]
+        )
+
+        most_recent_traj = trajectory_df[mask_traj]
+        oldest_traj = trajectory_df[~mask_traj]
+
+    diff_nid_old_observation = current_night_id - old_observation["nid"]
+    old_observation = old_observation[diff_nid_old_observation < time_window]
+
+    return (oldest_traj, most_recent_traj), old_observation
+
+
+
+
 if __name__ == "__main__":
+    import doctest
     data_path = "data/month=0"
     all_df = []
 
+    # load all data
     for i in range(3, 7):
         df_sso = pd.read_pickle(data_path + str(i))
         all_df.append(df_sso)
@@ -40,8 +162,8 @@ if __name__ == "__main__":
 
     all_night = np.unique(specific_mpc["nid"])
 
-    n1 = all_night[0]
-    df_night1 = specific_mpc[specific_mpc["nid"] == n1]
+    last_nid = all_night[0]
+    df_night1 = specific_mpc[specific_mpc["nid"] == last_nid]
 
     left, right, _ = intra_night_association(df_night1)
 
@@ -76,38 +198,10 @@ if __name__ == "__main__":
 
         current_night_id = df_next_night["nid"].values[0]
 
-        most_recent_traj = pd.DataFrame()
-        oldest_traj = pd.DataFrame()
-
         if len(traj_df) > 0:
-            last_obs_of_all_traj = get_n_last_observations_from_trajectories(traj_df, 1)
-
-            last_obs_of_all_traj["diff_nid"] = (
-                current_night_id - last_obs_of_all_traj["nid"]
-            )
-
-            most_recent_last_obs = last_obs_of_all_traj[
-                last_obs_of_all_traj["diff_nid"] <= time_window_limit
-            ]
-
-            if verbose:  # pragma: no cover
-                print(
-                    "nb most recent traj to associate : {}".format(
-                        len(most_recent_last_obs)
-                    )
-                )
-
-            mask_traj = traj_df["trajectory_id"].isin(
-                most_recent_last_obs["trajectory_id"]
-            )
-
-            most_recent_traj = traj_df[mask_traj]
-            oldest_traj = traj_df[~mask_traj]
-
             last_trajectory_id = np.max(traj_df["trajectory_id"].values) + 1
-
-        diff_nid_old_observation = current_night_id - old_observation["nid"]
-        old_observation = old_observation[diff_nid_old_observation < time_window_limit]
+        
+        (oldest_traj, most_recent_traj), old_observation = time_window_management(traj_df, old_observation, last_nid, current_night_id, time_window_limit)
 
         traj_df, old_observation, _ = night_to_night_association(
             most_recent_traj,
@@ -123,6 +217,7 @@ if __name__ == "__main__":
         )
 
         traj_df = pd.concat([traj_df, oldest_traj])
+        last_nid = current_night_id
 
         if verbose:  # pragma: no cover
             print()
@@ -163,7 +258,7 @@ if __name__ == "__main__":
             .reset_index()
         )
 
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(20, 20))
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(40, 40))
 
         for _, rows in mpc_plot.iterrows():
             ra = rows["ra"]
@@ -218,6 +313,6 @@ if __name__ == "__main__":
             check_dtype=False,
         )
 
-        sys.exit(0)
+        sys.exit(doctest.testmod()[0])
     except AssertionError:  # pragma: no cover
         sys.exit(-1)
