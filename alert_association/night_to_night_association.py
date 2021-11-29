@@ -447,7 +447,9 @@ def night_to_night_trajectory_associations(
     )
 
     nb_assoc_before_angle_filtering = len(new_obs_assoc)
-
+    inter_night_obs_report[
+            "number of inter night angle filtered association"
+        ] = 0
     if len(traj_assoc) != 0:
         traj_assoc, new_obs_assoc = cone_search_association(
             two_last_observations, traj_assoc, new_obs_assoc, angle_criterion
@@ -672,7 +674,7 @@ def trajectory_associations(
 
                     list of updated trajectories
 
-                    all nid association report with the following entries for each reports :
+                    all nid report with the following entries for each reports :
 
                                 current nid
 
@@ -730,6 +732,7 @@ def trajectory_associations(
 
     trajectory_associations_report = dict()
     trajectory_associations_report["list of updated trajectories"] = []
+    trajectory_associations_report["all nid report"] = []
 
     if len(trajectory_df) == 0:
         return (
@@ -813,7 +816,7 @@ def trajectory_associations(
             )
 
             night_to_night_traj_to_tracklets_report[
-                "number of trajectory to tracklets duplicated association"
+                "number of duplicated association"
             ] = nb_assoc_with_duplicates - len(traj_extremity_associated)
 
             associated_tracklets = []
@@ -887,7 +890,7 @@ def trajectory_associations(
                 obs_assoc = obs_assoc.drop_duplicates(["trajectory_id"])
 
                 night_to_night_traj_to_obs_report[
-                    "number of trajectory to new observation duplicated association"
+                    "number of duplicated association"
                 ] = nb_traj_to_obs_assoc_with_duplicates - len(obs_assoc)
 
                 # remove the associateds observations from the set of new observations
@@ -904,7 +907,7 @@ def trajectory_associations(
 
         all_nid_assoc_report.append(current_nid_assoc_report)
 
-    trajectory_associations_report["all nid association report"] = all_nid_assoc_report
+    trajectory_associations_report["all nid report"] = all_nid_assoc_report
 
     return (
         trajectory_df,
@@ -959,7 +962,7 @@ def tracklets_and_observations_associations(
     inter_night_report : dictionary
         statistics about the tracklet and observation association process, contains the following entries :
 
-                    list of the new trajectories
+                    list of updated trajectories
 
                     all nid report with the following entries for each of them :
 
@@ -971,7 +974,7 @@ def tracklets_and_observations_associations(
 
                             old observation to new observation report
 
-                    list of the new trajectories
+                    list of updated trajectories
 
     Examples
     --------
@@ -1041,7 +1044,7 @@ def tracklets_and_observations_associations(
     ... 30
     ... )
 
-    >>> expected_report = {'list of the new trajectories': []}
+    >>> expected_report = {'list of updated trajectories': []}
     >>> TestCase().assertDictEqual(expected_report, report)
 
     >>> assert_frame_equal(trajectory_df.reset_index(drop=True), ts.track_and_obs_trajectory_df_expected4)
@@ -1078,7 +1081,7 @@ def tracklets_and_observations_associations(
     ... 30
     ... )
 
-    >>> expected_report = {'list of the new trajectories': []}
+    >>> expected_report = {'list of updated trajectories': []}
     >>> TestCase().assertDictEqual(expected_report, report)
 
     >>> assert_frame_equal(trajectory_df.reset_index(drop=True), ts.track_and_obs_trajectory_df_sample)
@@ -1097,7 +1100,7 @@ def tracklets_and_observations_associations(
     ... 30
     ... )
 
-    >>> expected_report = {'list of the new trajectories': []}
+    >>> expected_report = {'list of updated trajectories': []}
     >>> TestCase().assertDictEqual(expected_report, report)
 
     >>> assert_frame_equal(trajectory_df.reset_index(drop=True), ts.track_and_obs_trajectory_df_sample)
@@ -1106,7 +1109,8 @@ def tracklets_and_observations_associations(
     """
 
     track_and_obs_report = dict()
-    track_and_obs_report["list of the new trajectories"] = []
+    track_and_obs_report["list of updated trajectories"] = []
+    track_and_obs_report["all nid report"] = []
 
     if len(old_observations) == 0:
         if len(traj_next_night) > 0:
@@ -1174,14 +1178,16 @@ def tracklets_and_observations_associations(
         )
 
         nb_track_to_obs_assoc_with_duplicates = len(old_obs_right)
-
+        track_to_old_obs_report[
+                "number of duplicated association"
+            ] = 0
         if len(traj_left) > 0:
 
             # remove the duplicates()
             old_obs_right = old_obs_right.drop_duplicates(["trajectory_id"])
 
             track_to_old_obs_report[
-                "number of tracklets to old observation duplicated association"
+                "number of duplicated association"
             ] = nb_track_to_obs_assoc_with_duplicates - len(old_obs_right)
 
             traj_next_night = pd.concat([traj_next_night, old_obs_right])
@@ -1217,6 +1223,10 @@ def tracklets_and_observations_associations(
                 norm_diff_fid,
             )
 
+            old_to_new_assoc_report[
+                "number of duplicated association"
+            ] = 0
+
             if len(left_assoc) > 0:
 
                 new_trajectory_id = np.arange(
@@ -1242,9 +1252,9 @@ def tracklets_and_observations_associations(
 
                 trajectory_df = pd.concat([trajectory_df, left_assoc, right_assoc])
 
-                track_and_obs_report["list of the new trajectories"] = list(
+                track_and_obs_report["list of updated trajectories"] = list(
                     np.union1d(
-                        track_and_obs_report["list of the new trajectories"],
+                        track_and_obs_report["list of updated trajectories"],
                         np.unique(left_assoc["trajectory_id"]),
                     )
                 )
@@ -1256,9 +1266,9 @@ def tracklets_and_observations_associations(
         all_nid_report.append(current_nid_report)
 
     track_and_obs_report["all nid report"] = all_nid_report
-    track_and_obs_report["list of the new trajectories"] = list(
+    track_and_obs_report["list of updated trajectories"] = list(
         np.union1d(
-            track_and_obs_report["list of the new trajectories"],
+            track_and_obs_report["list of updated trajectories"],
             np.unique(traj_next_night["trajectory_id"]),
         )
     )
@@ -1475,7 +1485,7 @@ def night_to_night_association(
     inter_night_report["intra night report"] = intra_night_report
     inter_night_report["trajectory association report"] = trajectory_association_report
     inter_night_report[
-        "tracklets and observation association report "
+        "tracklets and observation association report"
     ] = tracklets_and_observation_report
 
     return trajectory_df, old_observation, inter_night_report
