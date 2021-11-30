@@ -897,39 +897,42 @@ trajectory_df_expected_empty = pd.DataFrame(
 
 expected_trajectory_first_report = {
     "list of updated trajectories": [1.0, 4.0, 5.0],
-    "all nid association report": [
+    "all nid report": [
         {
             "old nid": 3,
             "trajectories_to_tracklets_report": {
                 "number of inter night separation based association": 3,
                 "number of inter night magnitude filtered association": 1,
                 "number of inter night angle filtered association": 0,
-                "number of trajectory to tracklets duplicated association": 0,
+                "number of duplicated association": 0,
             },
             "trajectories_to_new_observation_report": {
                 "number of inter night separation based association": 1,
                 "number of inter night magnitude filtered association": 0,
                 "number of inter night angle filtered association": 0,
-                "number of trajectory to new observation duplicated association": 0,
+                "number of duplicated association": 0,
             },
         }
     ],
 }
 
+
 expected_trajectory_second_report = {
     "list of updated trajectories": [5.0],
-    "all nid association report": [
+    "all nid report": [
         {
             "old nid": 3,
             "trajectories_to_tracklets_report": {
                 "number of inter night separation based association": 0,
                 "number of inter night magnitude filtered association": 0,
+                "number of inter night angle filtered association": 0,
+                "number of duplicated association": 0,
             },
             "trajectories_to_new_observation_report": {
                 "number of inter night separation based association": 1,
                 "number of inter night magnitude filtered association": 0,
                 "number of inter night angle filtered association": 0,
-                "number of trajectory to new observation duplicated association": 0,
+                "number of duplicated association": 0,
             },
         }
     ],
@@ -937,14 +940,14 @@ expected_trajectory_second_report = {
 
 expected_trajectory_third_report = {
     "list of updated trajectories": [],
-    "all nid association report": [
+    "all nid report": [
         {
             "old nid": 3,
             "trajectories_to_tracklets_report": {
                 "number of inter night separation based association": 3,
                 "number of inter night magnitude filtered association": 1,
                 "number of inter night angle filtered association": 0,
-                "number of trajectory to tracklets duplicated association": 0,
+                "number of duplicated association": 0,
             },
             "trajectories_to_new_observation_report": {},
         }
@@ -1387,7 +1390,7 @@ track_and_obs_old_observations_expected4 = pd.DataFrame(
 )
 
 expected_traj_obs_report = {
-    "list of the new trajectories": [6.0, 7.0, 8.0, 11.0, 13.0],
+    "list of updated trajectories": [6.0, 7.0, 8.0, 11.0, 13.0],
     "all nid report": [
         {
             "old nid": 3,
@@ -1395,11 +1398,12 @@ expected_traj_obs_report = {
                 "number of inter night separation based association": 1,
                 "number of inter night magnitude filtered association": 0,
                 "number of inter night angle filtered association": 0,
-                "number of tracklets to old observation duplicated association": 0,
+                "number of duplicated association": 0,
             },
             "old observation to new observation report": {
                 "number of inter night separation based association": 2,
                 "number of inter night magnitude filtered association": 0,
+                "number of duplicated association": 0,
             },
         },
         {
@@ -1408,11 +1412,12 @@ expected_traj_obs_report = {
                 "number of inter night separation based association": 1,
                 "number of inter night magnitude filtered association": 0,
                 "number of inter night angle filtered association": 0,
-                "number of tracklets to old observation duplicated association": 0,
+                "number of duplicated association": 0,
             },
             "old observation to new observation report": {
                 "number of inter night separation based association": 0,
                 "number of inter night magnitude filtered association": 0,
+                "number of duplicated association": 0,
             },
         },
         {
@@ -1420,27 +1425,33 @@ expected_traj_obs_report = {
             "old observation to tracklets report": {
                 "number of inter night separation based association": 0,
                 "number of inter night magnitude filtered association": 0,
+                "number of inter night angle filtered association": 0,
+                "number of duplicated association": 0,
             },
             "old observation to new observation report": {
                 "number of inter night separation based association": 1,
                 "number of inter night magnitude filtered association": 0,
+                "number of duplicated association": 0,
             },
         },
     ],
 }
 
 expected_traj_obs_report2 = {
-    "list of the new trajectories": [6.0, 7.0, 8.0],
+    "list of updated trajectories": [6.0, 7.0, 8.0],
     "all nid report": [
         {
             "old nid": 3,
             "old observation to tracklets report": {
                 "number of inter night separation based association": 0,
                 "number of inter night magnitude filtered association": 0,
+                "number of inter night angle filtered association": 0,
+                "number of duplicated association": 0,
             },
             "old observation to new observation report": {
                 "number of inter night separation based association": 2,
                 "number of inter night magnitude filtered association": 0,
+                "number of duplicated association": 0,
             },
         },
         {
@@ -1448,10 +1459,13 @@ expected_traj_obs_report2 = {
             "old observation to tracklets report": {
                 "number of inter night separation based association": 0,
                 "number of inter night magnitude filtered association": 0,
+                "number of inter night angle filtered association": 0,
+                "number of duplicated association": 0,
             },
             "old observation to new observation report": {
                 "number of inter night separation based association": 0,
                 "number of inter night magnitude filtered association": 0,
+                "number of duplicated association": 0,
             },
         },
         {
@@ -1459,17 +1473,21 @@ expected_traj_obs_report2 = {
             "old observation to tracklets report": {
                 "number of inter night separation based association": 0,
                 "number of inter night magnitude filtered association": 0,
+                "number of inter night angle filtered association": 0,
+                "number of duplicated association": 0,
             },
             "old observation to new observation report": {
                 "number of inter night separation based association": 1,
                 "number of inter night magnitude filtered association": 0,
+                "number of duplicated association": 0,
             },
         },
     ],
 }
 
+
 expected_traj_obs_report3 = {
-    "list of the new trajectories": [6.0, 7.0, 8.0, 11.0, 13.0],
+    "list of updated trajectories": [6.0, 7.0, 8.0, 11.0, 13.0],
     "all nid report": [
         {
             "old nid": 3,
@@ -1477,11 +1495,12 @@ expected_traj_obs_report3 = {
                 "number of inter night separation based association": 1,
                 "number of inter night magnitude filtered association": 0,
                 "number of inter night angle filtered association": 0,
-                "number of tracklets to old observation duplicated association": 0,
+                "number of duplicated association": 0,
             },
             "old observation to new observation report": {
                 "number of inter night separation based association": 2,
                 "number of inter night magnitude filtered association": 0,
+                "number of duplicated association": 0,
             },
         },
         {
@@ -1490,11 +1509,12 @@ expected_traj_obs_report3 = {
                 "number of inter night separation based association": 1,
                 "number of inter night magnitude filtered association": 0,
                 "number of inter night angle filtered association": 0,
-                "number of tracklets to old observation duplicated association": 0,
+                "number of duplicated association": 0,
             },
             "old observation to new observation report": {
                 "number of inter night separation based association": 0,
                 "number of inter night magnitude filtered association": 0,
+                "number of duplicated association": 0,
             },
         },
         {
@@ -1502,17 +1522,20 @@ expected_traj_obs_report3 = {
             "old observation to tracklets report": {
                 "number of inter night separation based association": 0,
                 "number of inter night magnitude filtered association": 0,
+                "number of inter night angle filtered association": 0,
+                "number of duplicated association": 0,
             },
             "old observation to new observation report": {
                 "number of inter night separation based association": 1,
                 "number of inter night magnitude filtered association": 0,
+                "number of duplicated association": 0,
             },
         },
     ],
 }
 
 expected_traj_obs_report4 = {
-    "list of the new trajectories": [11.0, 13.0],
+    "list of updated trajectories": [11.0, 13.0],
     "all nid report": [
         {
             "old nid": 3,
@@ -1520,7 +1543,7 @@ expected_traj_obs_report4 = {
                 "number of inter night separation based association": 1,
                 "number of inter night magnitude filtered association": 0,
                 "number of inter night angle filtered association": 0,
-                "number of tracklets to old observation duplicated association": 0,
+                "number of duplicated association": 0,
             },
         },
         {
@@ -1529,7 +1552,7 @@ expected_traj_obs_report4 = {
                 "number of inter night separation based association": 1,
                 "number of inter night magnitude filtered association": 0,
                 "number of inter night angle filtered association": 0,
-                "number of tracklets to old observation duplicated association": 0,
+                "number of duplicated association": 0,
             },
         },
         {
@@ -1537,6 +1560,8 @@ expected_traj_obs_report4 = {
             "old observation to tracklets report": {
                 "number of inter night separation based association": 0,
                 "number of inter night magnitude filtered association": 0,
+                "number of inter night angle filtered association": 0,
+                "number of duplicated association": 0,
             },
         },
     ],
@@ -1850,7 +1875,7 @@ night_to_night_old_observation_expected3 = pd.DataFrame(
 )
 
 inter_night_report1 = {
-    "nid of the next night": [4],
+    "nid of the next night": 4,
     "intra night report": {
         "number of separation association": 6,
         "number of association filtered by magnitude": 0,
@@ -1866,36 +1891,39 @@ inter_night_report1 = {
     },
     "trajectory association report": {
         "list of updated trajectories": [1.0, 2.0],
-        "all nid association report": [
+        "all nid report": [
             {
                 "old nid": 3,
                 "trajectories_to_tracklets_report": {
                     "number of inter night separation based association": 2,
                     "number of inter night magnitude filtered association": 0,
                     "number of inter night angle filtered association": 1,
-                    "number of trajectory to tracklets duplicated association": 0,
+                    "number of duplicated association": 0,
                 },
                 "trajectories_to_new_observation_report": {
                     "number of inter night separation based association": 1,
                     "number of inter night magnitude filtered association": 0,
                     "number of inter night angle filtered association": 0,
-                    "number of trajectory to new observation duplicated association": 0,
+                    "number of duplicated association": 0,
                 },
             }
         ],
     },
-    "tracklets and observation association report ": {
-        "list of the new trajectories": [5.0, 6.0, 7.0],
+    "tracklets and observation association report": {
+        "list of updated trajectories": [5.0, 6.0, 7.0],
         "all nid report": [
             {
                 "old nid": 3,
                 "old observation to tracklets report": {
                     "number of inter night separation based association": 0,
                     "number of inter night magnitude filtered association": 0,
+                    "number of inter night angle filtered association": 0,
+                    "number of duplicated association": 0,
                 },
                 "old observation to new observation report": {
                     "number of inter night separation based association": 1,
                     "number of inter night magnitude filtered association": 0,
+                    "number of duplicated association": 0,
                 },
             },
             {
@@ -1903,10 +1931,13 @@ inter_night_report1 = {
                 "old observation to tracklets report": {
                     "number of inter night separation based association": 0,
                     "number of inter night magnitude filtered association": 0,
+                    "number of inter night angle filtered association": 0,
+                    "number of duplicated association": 0,
                 },
                 "old observation to new observation report": {
                     "number of inter night separation based association": 0,
                     "number of inter night magnitude filtered association": 0,
+                    "number of duplicated association": 0,
                 },
             },
         ],
@@ -1914,26 +1945,32 @@ inter_night_report1 = {
 }
 
 inter_night_report2 = {
-    "nid of the next night": [4],
+    "nid of the next night": 4,
     "intra night report": {
         "number of separation association": 6,
         "number of association filtered by magnitude": 0,
         "association metrics": {},
         "number of intra night tracklets": 3,
     },
-    "trajectory association report": {"list of updated trajectories": []},
-    "tracklets and observation association report ": {
-        "list of the new trajectories": [4.0, 5.0, 6.0, 7.0],
+    "trajectory association report": {
+        "list of updated trajectories": [],
+        "all nid report": [],
+    },
+    "tracklets and observation association report": {
+        "list of updated trajectories": [4.0, 5.0, 6.0, 7.0],
         "all nid report": [
             {
                 "old nid": 3,
                 "old observation to tracklets report": {
                     "number of inter night separation based association": 0,
                     "number of inter night magnitude filtered association": 0,
+                    "number of inter night angle filtered association": 0,
+                    "number of duplicated association": 0,
                 },
                 "old observation to new observation report": {
                     "number of inter night separation based association": 1,
                     "number of inter night magnitude filtered association": 0,
+                    "number of duplicated association": 0,
                 },
             },
             {
@@ -1941,10 +1978,13 @@ inter_night_report2 = {
                 "old observation to tracklets report": {
                     "number of inter night separation based association": 0,
                     "number of inter night magnitude filtered association": 0,
+                    "number of inter night angle filtered association": 0,
+                    "number of duplicated association": 0,
                 },
                 "old observation to new observation report": {
                     "number of inter night separation based association": 0,
                     "number of inter night magnitude filtered association": 0,
+                    "number of duplicated association": 0,
                 },
             },
         ],
@@ -1952,7 +1992,7 @@ inter_night_report2 = {
 }
 
 inter_night_report3 = {
-    "nid of the next night": [4],
+    "nid of the next night": 4,
     "intra night report": {
         "number of separation association": 6,
         "number of association filtered by magnitude": 6,
@@ -1961,34 +2001,39 @@ inter_night_report3 = {
     },
     "trajectory association report": {
         "list of updated trajectories": [1.0, 2.0],
-        "all nid association report": [
+        "all nid report": [
             {
                 "old nid": 3,
                 "trajectories_to_tracklets_report": {
                     "number of inter night separation based association": 0,
                     "number of inter night magnitude filtered association": 0,
+                    "number of inter night angle filtered association": 0,
+                    "number of duplicated association": 0,
                 },
                 "trajectories_to_new_observation_report": {
                     "number of inter night separation based association": 3,
                     "number of inter night magnitude filtered association": 0,
                     "number of inter night angle filtered association": 1,
-                    "number of trajectory to new observation duplicated association": 0,
+                    "number of duplicated association": 0,
                 },
             }
         ],
     },
-    "tracklets and observation association report ": {
-        "list of the new trajectories": [4.0, 5.0],
+    "tracklets and observation association report": {
+        "list of updated trajectories": [4.0, 5.0],
         "all nid report": [
             {
                 "old nid": 3,
                 "old observation to tracklets report": {
                     "number of inter night separation based association": 0,
                     "number of inter night magnitude filtered association": 0,
+                    "number of inter night angle filtered association": 0,
+                    "number of duplicated association": 0,
                 },
                 "old observation to new observation report": {
                     "number of inter night separation based association": 1,
                     "number of inter night magnitude filtered association": 0,
+                    "number of duplicated association": 0,
                 },
             },
             {
@@ -1996,10 +2041,13 @@ inter_night_report3 = {
                 "old observation to tracklets report": {
                     "number of inter night separation based association": 0,
                     "number of inter night magnitude filtered association": 0,
+                    "number of inter night angle filtered association": 0,
+                    "number of duplicated association": 0,
                 },
                 "old observation to new observation report": {
                     "number of inter night separation based association": 1,
                     "number of inter night magnitude filtered association": 0,
+                    "number of duplicated association": 0,
                 },
             },
         ],

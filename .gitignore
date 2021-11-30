@@ -132,5 +132,3 @@ dmypy.json
 .vscode/
 
 alert_association/report_db
-
-alert_association/night_report.py

@@ -410,7 +410,7 @@ def compute_associations_metrics(
         "True Positif": precision_counter[True],
         "False Positif": precision_counter[False],
         "False Negatif": FN,
-        "total real association": nb_real_assoc,
+        "total real association": int(nb_real_assoc),
     }
 
 
@@ -797,16 +797,18 @@ def intra_night_association(
         night_observation, sep_criterion
     )
 
-    intra_night_report['number of separation association'] = len(left_assoc)
+    intra_night_report["number of separation association"] = len(left_assoc)
 
     left_assoc, right_assoc = magnitude_association(
         left_assoc, right_assoc, mag_criterion_same_fid, mag_criterion_diff_fid
     )
 
-    intra_night_report['number of association filtered by magnitude'] = intra_night_report['number of separation association'] - len(left_assoc)
+    intra_night_report[
+        "number of association filtered by magnitude"
+    ] = intra_night_report["number of separation association"] - len(left_assoc)
 
     if len(left_assoc) == 0:
-        intra_night_report['association metrics'] = {}
+        intra_night_report["association metrics"] = {}
         return pd.DataFrame(), pd.DataFrame(), intra_night_report
 
     # remove mirrored associations
@@ -820,11 +822,11 @@ def intra_night_association(
             left_assoc, right_assoc, night_observation
         )
 
-        intra_night_report['association metrics'] = metrics
+        intra_night_report["association metrics"] = metrics
 
         return left_assoc, right_assoc, intra_night_report
     else:
-        intra_night_report['association metrics'] = {}
+        intra_night_report["association metrics"] = {}
 
         return left_assoc, right_assoc, intra_night_report
 
