@@ -10,6 +10,7 @@ import astropy.units as u
 from pandas.testing import assert_frame_equal
 import test_sample as ts
 import sys
+import night_report
 
 
 def time_window_management(
@@ -183,6 +184,7 @@ if __name__ == "__main__":
 
     time_window_limit = 14
     verbose = False
+    save_report = False
 
     for i in range(1, len(all_night)):
         t_before = t.time()
@@ -206,7 +208,7 @@ if __name__ == "__main__":
             traj_df, old_observation, last_nid, current_night_id, time_window_limit
         )
 
-        traj_df, old_observation, _ = night_to_night_association(
+        traj_df, old_observation, report = night_to_night_association(
             most_recent_traj,
             old_observation,
             df_next_night,
@@ -218,6 +220,9 @@ if __name__ == "__main__":
             angle_criterion=30,
             run_intra_night_metrics=True,
         )
+
+        if save_report:
+            night_report.save_report(report, df_next_night["jd"].values[0])
 
         traj_df = pd.concat([traj_df, oldest_traj])
         last_nid = current_night_id
@@ -232,11 +237,6 @@ if __name__ == "__main__":
                 )
             )
             print("-----------------------------------------------")
-
-    # with open("Output.txt", "w") as text_file:
-    # import json
-
-    # text_file.write(json.dumps(traj_df.to_dict(orient="list")))
 
     all_alert_not_associated = specific_mpc[
         ~specific_mpc["candid"].isin(traj_df["candid"])

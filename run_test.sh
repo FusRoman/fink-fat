@@ -34,5 +34,5 @@ done
 
 unset COVERAGE_PROCESS_START
 
-coverage report -m
+coverage report -m --omit=alert_association/night_report.py
 coverage html
