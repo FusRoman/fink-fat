@@ -136,7 +136,7 @@ def time_window_management(
 if __name__ == "__main__":
     import doctest
 
-    data_path = "../data/month=0"
+    data_path = "data/month=0"
     all_df = []
 
     # load all data
@@ -184,6 +184,7 @@ if __name__ == "__main__":
 
     time_window_limit = 14
     verbose = False
+    save_report = False
 
     for i in range(1, len(all_night)):
         t_before = t.time()
@@ -220,12 +221,11 @@ if __name__ == "__main__":
             run_intra_night_metrics=True,
         )
 
-        night_report.save_report(report, df_next_night["jd"].values[0])
+        if save_report:
+            night_report.save_report(report, df_next_night["jd"].values[0])
 
         traj_df = pd.concat([traj_df, oldest_traj])
         last_nid = current_night_id
-
-        break
 
         if verbose:  # pragma: no cover
             print()
