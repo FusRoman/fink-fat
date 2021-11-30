@@ -805,9 +805,7 @@ def trajectory_associations(
 
         updated_trajectories = np.unique(traj_left["trajectory_id"])
         nb_assoc_with_duplicates = len(traj_extremity_associated)
-        night_to_night_traj_to_tracklets_report[
-                "number of duplicated association"
-            ] = 0
+        night_to_night_traj_to_tracklets_report["number of duplicated association"] = 0
 
         if len(traj_extremity_associated) > 0:
             # remove duplicates associations
@@ -873,9 +871,7 @@ def trajectory_associations(
             )
 
             nb_traj_to_obs_assoc_with_duplicates = len(obs_assoc)
-            night_to_night_traj_to_obs_report[
-                    "number of duplicated association"
-                ] = 0
+            night_to_night_traj_to_obs_report["number of duplicated association"] = 0
 
             if len(obs_assoc) > 0:
 

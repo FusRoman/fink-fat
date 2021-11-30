@@ -1,7 +1,6 @@
 import json
 from os import path
 from os import mkdir
-import datetime
 import matplotlib.pyplot as plt
 import numpy as np
 from astropy.time import Time
@@ -44,7 +43,9 @@ def save_report(report, date):
 def parse_intra_night_report(intra_night_report):
     if len(intra_night_report) > 0:
         nb_sep_assoc = intra_night_report["number of separation association"]
-        nb_mag_filter = intra_night_report["number of association filtered by magnitude"]
+        nb_mag_filter = intra_night_report[
+            "number of association filtered by magnitude"
+        ]
         nb_tracklets = intra_night_report["number of intra night tracklets"]
         return nb_sep_assoc, nb_mag_filter, nb_tracklets
     else:
@@ -161,7 +162,7 @@ def plot_report(parse_report):
 
     def transform_data(data):
         return np.array(
-            [data[1], data[2], data[3], (data[0] - data[1] - data[2] - data[3]),]
+            [data[1], data[2], data[3], (data[0] - data[1] - data[2] - data[3])]
         )
 
     if len(traj_assoc_value[1]) > 0:
@@ -176,11 +177,9 @@ def plot_report(parse_report):
     else:
         track_assoc_value = np.array([0, 0, 0, 0])
 
-    size = 0.5
     vals = np.concatenate([[traj_assoc_value], [track_assoc_value]], axis=0)
     slop = 0.0001
 
-    group_names = ["Trajectory association", "Tracklets and observation association"]
     group_size = vals.sum(axis=1) + slop
     subgroup_size = vals.flatten()
     subgroup_names = subgroup_size
@@ -190,7 +189,7 @@ def plot_report(parse_report):
 
     ax2.axis("equal")
     mypie, _ = ax2.pie(
-        group_size, radius=1.3, labels=group_size-slop, colors=[a(0.6), b(0.6)]
+        group_size, radius=1.3, labels=group_size - slop, colors=[a(0.6), b(0.6)]
     )
     plt.setp(mypie, width=0.3, edgecolor="white")
 
