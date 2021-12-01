@@ -1,4 +1,3 @@
-from json import load
 import pandas as pd
 import time as t
 import numpy as np
@@ -13,8 +12,10 @@ import test_sample as ts
 import sys
 import night_report
 
+if __name__ == "__main__":
+    import doctest
 
-def load_data(path, object_class):
+    data_path = "data/month=0"
     all_df = []
 
     # load all data
@@ -25,137 +26,7 @@ def load_data(path, object_class):
     df_sso = pd.concat(all_df).sort_values(["jd"]).drop_duplicates()
 
     df_sso = df_sso.drop_duplicates(["candid"])
-    df_sso = df_sso[df_sso["fink_class"] == object_class]
-
-    return df_sso
-
-
-def time_window_management(
-    trajectory_df, old_observation, last_nid, nid_next_night, time_window
-):
-    """
-    Management of the old observation and trajectories. Remove the old observation with a nid difference with
-    the nid of the next night greater than the time window. Perform the same process for trajectories but take
-    the most recent trajectory extremity.
-
-    If a number of night without observation exceeds the time window parameters, keep the observations and trajectories
-    from the night before the non observation gap.
-
-    Parameters
-    ----------
-    trajectory_df : dataframe
-        all recorded trajectories
-    old_observation : dataframe
-        old observation from previous night
-    last_nid : integer
-        nid of the previous observation night
-    nid_next_night : integer
-        nid of the incoming night
-    time_window : integer
-        limit to keep old observation and trajectories
-
-    Return
-    ------
-    oldest_traj : dataframe
-        the trajectories older than the time window
-    most_recent_traj : dataframe
-        the trajectories with an nid from an extremity observation smaller than the time window
-    old_observation : dataframe
-        all the old observation with a difference of nid with the next incoming nid smaller than
-        the time window
-
-    Examples
-    --------
-    >>> test_traj = pd.DataFrame({
-    ... "candid" : [10, 11, 12, 13, 14, 15],
-    ... "nid" : [1, 2, 3, 10, 11, 12],
-    ... "jd" : [1, 2, 3, 10, 11, 12],
-    ... "trajectory_id" : [1, 1, 1, 2, 2, 2]
-    ... })
-
-    >>> test_obs = pd.DataFrame({
-    ... "nid" : [1, 4, 11, 12],
-    ... "candid" : [16, 17, 18, 19]
-    ... })
-
-    >>> (test_old_traj, test_most_recent_traj), test_old_obs = time_window_management(test_traj, test_obs, 12, 17, 3)
-
-    >>> expected_old_traj = pd.DataFrame({
-    ... "candid" : [10, 11, 12],
-    ... "nid" : [1, 2, 3],
-    ... "jd" : [1, 2, 3],
-    ... "trajectory_id" : [1, 1, 1]
-    ... })
-
-    >>> expected_most_recent_traj = pd.DataFrame({
-    ... "candid" : [13, 14, 15],
-    ... "nid" : [10, 11, 12],
-    ... "jd" : [10, 11, 12],
-    ... "trajectory_id" : [2, 2, 2]
-    ... })
-
-    >>> expected_old_obs = pd.DataFrame({
-    ... "nid" : [12],
-    ... "candid" : [19]
-    ... })
-
-    >>> assert_frame_equal(expected_old_traj.reset_index(drop=True), test_old_traj.reset_index(drop=True))
-    >>> assert_frame_equal(expected_most_recent_traj.reset_index(drop=True), test_most_recent_traj.reset_index(drop=True))
-    >>> assert_frame_equal(expected_old_obs.reset_index(drop=True), test_old_obs.reset_index(drop=True))
-    """
-    most_recent_traj = pd.DataFrame()
-    oldest_traj = pd.DataFrame()
-
-    if len(trajectory_df) > 0:
-        last_obs_of_all_traj = get_n_last_observations_from_trajectories(
-            trajectory_df, 1
-        )
-
-        if nid_next_night - last_nid > time_window:
-            last_obs_of_all_traj = last_obs_of_all_traj[
-                last_obs_of_all_traj["nid"] == last_nid
-            ]
-            mask_traj = trajectory_df["trajectory_id"].isin(
-                last_obs_of_all_traj["trajectory_id"]
-            )
-            most_recent_traj = trajectory_df[mask_traj]
-            oldest_traj = trajectory_df[~mask_traj]
-            old_observation = old_observation[old_observation["nid"] == last_nid]
-
-            return (oldest_traj, most_recent_traj), old_observation
-
-        last_obs_of_all_traj["diff_nid"] = nid_next_night - last_obs_of_all_traj["nid"]
-
-        most_recent_last_obs = last_obs_of_all_traj[
-            last_obs_of_all_traj["diff_nid"] <= time_window
-        ]
-
-        if verbose:  # pragma: no cover
-            print(
-                "nb most recent traj to associate : {}".format(
-                    len(most_recent_last_obs)
-                )
-            )
-
-        mask_traj = trajectory_df["trajectory_id"].isin(
-            most_recent_last_obs["trajectory_id"]
-        )
-
-        most_recent_traj = trajectory_df[mask_traj]
-        oldest_traj = trajectory_df[~mask_traj]
-
-    diff_nid_old_observation = current_night_id - old_observation["nid"]
-    old_observation = old_observation[diff_nid_old_observation < time_window]
-
-    return (oldest_traj, most_recent_traj), old_observation
-
-
-if __name__ == "__main__":
-    import doctest
-
-    data_path = "data/month=0"
-    
-    df_sso = load_data(data_path, "Solar System MPC")
+    df_sso = df_sso[df_sso["fink_class"] == "Solar System MPC"]
 
     # "1951", "53317",
 
