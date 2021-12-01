@@ -19,9 +19,7 @@ if __name__ == "__main__":
     data_path = "../data/month=0"
     df_sso = ci.load_data(data_path, "Solar System MPC")
 
-    print(df_sso)
-
-
+    
     mpc_plot = (
         df_sso.groupby(["ssnamenr"]).agg({"ra": list, "dec": list}).reset_index()
     )
