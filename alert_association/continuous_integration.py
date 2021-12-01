@@ -19,7 +19,7 @@ def load_data(path, object_class):
 
     # load all data
     for i in range(3, 7):
-        df_sso = pd.read_pickle(data_path + str(i))
+        df_sso = pd.read_pickle(path + str(i))
         all_df.append(df_sso)
 
     df_sso = pd.concat(all_df).sort_values(["jd"]).drop_duplicates()
@@ -130,13 +130,6 @@ def time_window_management(
             last_obs_of_all_traj["diff_nid"] <= time_window
         ]
 
-        if verbose:  # pragma: no cover
-            print(
-                "nb most recent traj to associate : {}".format(
-                    len(most_recent_last_obs)
-                )
-            )
-
         mask_traj = trajectory_df["trajectory_id"].isin(
             most_recent_last_obs["trajectory_id"]
         )
@@ -144,7 +137,7 @@ def time_window_management(
         most_recent_traj = trajectory_df[mask_traj]
         oldest_traj = trajectory_df[~mask_traj]
 
-    diff_nid_old_observation = current_night_id - old_observation["nid"]
+    diff_nid_old_observation = nid_next_night - old_observation["nid"]
     old_observation = old_observation[diff_nid_old_observation < time_window]
 
     return (oldest_traj, most_recent_traj), old_observation
@@ -153,21 +146,22 @@ def time_window_management(
 if __name__ == "__main__":
     import doctest
 
-    data_path = "data/month=0"
+    data_path = "../data/month=0"
     
     df_sso = load_data(data_path, "Solar System MPC")
 
-    # "1951", "53317",
+    # test case : "53317", "1951", "80343", "1196", "23101", "1758"
+    # additionnal case : "75653", "33568", "226653", "73972", "232351", "75653",
 
-    # "1584" : exemple problématique avec une time window de 14 "53317", "1951", "80343", "1196", "23101",
-
-    #  & (df_sso['nid'] >= 1610) & (df_sso['nid'] <= 1624)
+    # broken case : 73972
     specific_mpc = df_sso[
-        (df_sso["ssnamenr"].isin(["53317", "1951", "80343", "1196", "23101", "1758"]))
+        (df_sso["ssnamenr"].isin(["232351", "73972", "75653", "53317", "1951", "80343", "1196", "23101", "1758"]))
     ]
 
+    #specific_mpc = df_sso
+
     mpc_plot = (
-        specific_mpc.groupby(["ssnamenr"]).agg({"ra": list, "dec": list}).reset_index()
+        specific_mpc.groupby(["ssnamenr"]).agg({"ra": list, "dec": list, "candid": len}).reset_index()
     )
 
     all_night = np.unique(specific_mpc["nid"])
@@ -190,8 +184,8 @@ if __name__ == "__main__":
     else:
         old_observation = df_night1
 
-    time_window_limit = 14
-    verbose = False
+    time_window_limit = 16
+    verbose = True
     save_report = False
 
     for i in range(1, len(all_night)):
@@ -245,7 +239,9 @@ if __name__ == "__main__":
         ~specific_mpc["candid"].isin(traj_df["candid"])
     ]
 
-    show_results = False
+
+
+    show_results = True
 
     if show_results:  # pragma: no cover
 

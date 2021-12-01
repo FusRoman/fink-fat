@@ -11,40 +11,25 @@ from pandas.testing import assert_frame_equal
 import test_sample as ts
 import sys
 import night_report
+import continuous_integration as ci
 
 if __name__ == "__main__":
     import doctest
 
-    data_path = "data/month=0"
-    all_df = []
+    data_path = "../data/month=0"
+    df_sso = ci.load_data(data_path, "Solar System MPC")
 
-    # load all data
-    for i in range(3, 7):
-        df_sso = pd.read_pickle(data_path + str(i))
-        all_df.append(df_sso)
+    print(df_sso)
 
-    df_sso = pd.concat(all_df).sort_values(["jd"]).drop_duplicates()
-
-    df_sso = df_sso.drop_duplicates(["candid"])
-    df_sso = df_sso[df_sso["fink_class"] == "Solar System MPC"]
-
-    # "1951", "53317",
-
-    # "1584" : exemple problématique avec une time window de 14 "53317", "1951", "80343", "1196", "23101",
-
-    #  & (df_sso['nid'] >= 1610) & (df_sso['nid'] <= 1624)
-    specific_mpc = df_sso[
-        (df_sso["ssnamenr"].isin(["53317", "1951", "80343", "1196", "23101", "1758"]))
-    ]
 
     mpc_plot = (
-        specific_mpc.groupby(["ssnamenr"]).agg({"ra": list, "dec": list}).reset_index()
+        df_sso.groupby(["ssnamenr"]).agg({"ra": list, "dec": list}).reset_index()
     )
 
-    all_night = np.unique(specific_mpc["nid"])
+    all_night = np.unique(df_sso["nid"])
 
     last_nid = all_night[0]
-    df_night1 = specific_mpc[specific_mpc["nid"] == last_nid]
+    df_night1 = df_sso[df_sso["nid"] == last_nid]
 
     left, right, _ = intra_night_association(df_night1)
 
@@ -62,14 +47,17 @@ if __name__ == "__main__":
         old_observation = df_night1
 
     time_window_limit = 14
-    verbose = False
+    verbose = True
     save_report = False
+
+    if verbose:
+        print("Begin association process")
 
     for i in range(1, len(all_night)):
         t_before = t.time()
         new_night = all_night[i]
 
-        df_next_night = specific_mpc[specific_mpc["nid"] == new_night]
+        df_next_night = df_sso[df_sso["nid"] == new_night]
 
         if verbose:  # pragma: no cover
             print()
@@ -83,7 +71,7 @@ if __name__ == "__main__":
         if len(traj_df) > 0:
             last_trajectory_id = np.max(traj_df["trajectory_id"].values) + 1
 
-        (oldest_traj, most_recent_traj), old_observation = time_window_management(
+        (oldest_traj, most_recent_traj), old_observation = ci.time_window_management(
             traj_df, old_observation, last_nid, current_night_id, time_window_limit
         )
 
@@ -100,20 +88,23 @@ if __name__ == "__main__":
             run_intra_night_metrics=True,
         )
 
-        if save_report:
-            night_report.save_report(report, df_next_night["jd"].values[0])
-
         traj_df = pd.concat([traj_df, oldest_traj])
         last_nid = current_night_id
+
+        if save_report:
+            report['computation time of the night'] = t.time() - t_before
+            night_report.save_report(report, df_next_night["jd"].values[0])
 
         if verbose:  # pragma: no cover
             print()
             print("elapsed time: {}".format(t.time() - t_before))
             print()
             print("-----------------------------------------------")
+        
+        break
 
-    all_alert_not_associated = specific_mpc[
-        ~specific_mpc["candid"].isin(traj_df["candid"])
+    all_alert_not_associated = df_sso[
+        ~df_sso["candid"].isin(traj_df["candid"])
     ]
 
     show_results = False

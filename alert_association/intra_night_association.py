@@ -94,7 +94,7 @@ def get_n_last_observations_from_trajectories(trajectories, n, ascending=True):
         trajectories.sort_values(["jd"], ascending=ascending)
         .groupby(["trajectory_id"])
         .tail(n)
-        .sort_values(["trajectory_id"])
+        .sort_values(["jd", "trajectory_id"], ascending=ascending)
     )
 
 
