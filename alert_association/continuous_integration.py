@@ -199,8 +199,8 @@ if __name__ == "__main__":
         old_observation = df_night1
 
     time_window_limit = 16
-    verbose = False
-    save_report = False
+    verbose = True
+    save_report = True
     show_results = False
 
     for i in range(1, len(all_night)):
@@ -238,16 +238,20 @@ if __name__ == "__main__":
             run_intra_night_metrics=True,
         )
 
-        if save_report:
-            night_report.save_report(report, df_next_night["jd"].values[0])
-
         traj_df = pd.concat([traj_df, oldest_traj])
         last_nid = current_night_id
+
+        if save_report:
+            report["computation time of the night"] = t.time() - t_before
+            night_report.save_report(report, df_next_night["jd"].values[0])
 
         if verbose:  # pragma: no cover
             print()
             print("elapsed time: {}".format(t.time() - t_before))
             print()
+            print(
+                "nb_trajectories: {}".format(len(np.unique(traj_df["trajectory_id"])))
+            )
             print("-----------------------------------------------")
 
     all_alert_not_associated = specific_mpc[
