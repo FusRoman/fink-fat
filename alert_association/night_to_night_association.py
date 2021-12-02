@@ -1139,12 +1139,9 @@ def tracklets_and_observations_associations(
     old_obs_nid = np.sort(np.unique(old_observations["nid"]))[::-1]
 
     if len(traj_next_night) > 0:
-        print(traj_next_night.groupby(['trajectory_id']).agg({"ssnamenr":list, "candid":len}))
-        print()
         two_first_obs_tracklets = get_n_last_observations_from_trajectories(
             traj_next_night, 2, False
         )
-        print(two_first_obs_tracklets.groupby(['trajectory_id']).agg({"ssnamenr":list, "candid":len}))
     else:
         traj_next_night = pd.DataFrame(
             columns=["ra", "dec", "trajectory_id", "jd", "candid", "fid", "dcmag"]
@@ -1427,19 +1424,6 @@ def night_to_night_association(
     traj_next_night = new_trajectory_id_assignation(
         new_left, new_right, last_trajectory_id
     )
-
-    print('left')
-    print(new_left[new_left['ssnamenr'] == '75653'])
-    print()
-    print('right')
-    print(new_right[new_right['ssnamenr'] == '75653'])
-
-    print("print tracklets new night")
-    test = traj_next_night.groupby(['trajectory_id']).agg({"ssnamenr":list, "candid":len})
-    print(test[test['candid'] == 1])
-    print("--------------------")
-    print(traj_next_night[traj_next_night['ssnamenr'] == '75653'])
-    print("--------------------")
 
     intra_night_report["number of intra night tracklets"] = len(
         np.unique(traj_next_night["trajectory_id"])

@@ -917,20 +917,29 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
     >>> assert_frame_equal(actual_traj_id.reset_index(drop=True), expected_traj_id)
 
     >>> actual_traj_id = new_trajectory_id_assignation(left_assoc4, right_assoc4, 0)
-    >>> print(actual_traj_id)
     >>> expected_traj_id = pd.DataFrame({
-    ... "candid" : [1, 2, 3, 4, 5, 6, 5, 7],
-    ... "trajectory_id" : [0, 1, 2, 3, 0, 1, 2, 3]
+    ... "candid" : [1, 2, 4, 5, 6, 7],
+    ... "trajectory_id" : [0, 1, 2, 0, 1, 2]
     ... })
-
     >>> assert_frame_equal(actual_traj_id.reset_index(drop=True), expected_traj_id)
 
     >>> actual_traj_id = new_trajectory_id_assignation(left_assoc5, right_assoc5, 0)
-    >>> print(actual_traj_id)
+    >>> expected_traj_id = pd.DataFrame({
+    ... "candid" : [10, 1, 2, 3, 8, 6, 5, 7, 9, 11],
+    ... "trajectory_id" : [0, 1, 0, 3, 4, 0, 1, 3, 4, 0]
+    ... })
+    >>> assert_frame_equal(actual_traj_id.reset_index(drop=True), expected_traj_id)
     """
 
-    left_assoc = left_assoc.reset_index(drop=True)
-    right_assoc = right_assoc.reset_index(drop=True)
+    left_assoc = left_assoc
+    right_assoc = right_assoc
+
+    left_duplicates = left_assoc.duplicated()
+    right_duplicates = right_assoc.duplicated()
+
+    keep_non_duplicates = ~(left_duplicates | right_duplicates)
+    left_assoc = left_assoc[keep_non_duplicates].reset_index(drop=True)
+    right_assoc = right_assoc[keep_non_duplicates].reset_index(drop=True)
 
     nb_new_assoc = len(left_assoc)
 
