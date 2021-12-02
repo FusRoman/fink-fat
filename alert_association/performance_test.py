@@ -13,10 +13,12 @@ import night_report
 import continuous_integration as ci
 
 if __name__ == "__main__":
-    import doctest
+    print("Lancement du test de performance")
 
     data_path = "../data/month=0"
     df_sso = ci.load_data(data_path, "Solar System MPC")
+
+    print("total alert: {}".format(len(df_sso)))
 
     mpc_plot = df_sso.groupby(["ssnamenr"]).agg({"ra": list, "dec": list}).reset_index()
 
@@ -25,6 +27,7 @@ if __name__ == "__main__":
     last_nid = all_night[0]
     df_night1 = df_sso[df_sso["nid"] == last_nid]
 
+    print("first intra night association to begin with some trajectories")
     left, right, _ = intra_night_association(df_night1)
 
     last_trajectory_id = 0
@@ -43,6 +46,7 @@ if __name__ == "__main__":
     time_window_limit = 14
     verbose = True
     save_report = False
+    show_results = False
 
     if verbose:
         print("Begin association process")
@@ -93,13 +97,21 @@ if __name__ == "__main__":
             print()
             print("elapsed time: {}".format(t.time() - t_before))
             print()
+            print(
+                "nb_trajectories: {}".format(len(np.unique(traj_df["trajectory_id"])))
+            )
             print("-----------------------------------------------")
 
-        break
-
     all_alert_not_associated = df_sso[~df_sso["candid"].isin(traj_df["candid"])]
+    print()
+    print()
 
-    show_results = False
+    print("not associated alerts: {}".format(len(all_alert_not_associated)))
+    print(
+        "diff size between known trajectory MPC df and detected trajectory: {}".format(
+            len(df_sso) - len(traj_df)
+        )
+    )
 
     if show_results:  # pragma: no cover
 
@@ -140,39 +152,3 @@ if __name__ == "__main__":
 
         ax2.legend(title="trajectory identifier")
         plt.show()
-
-    try:
-        assert_frame_equal(
-            traj_df.reset_index(drop=True), ts.traj_df_expected, check_dtype=False
-        )
-
-        assert_frame_equal(
-            all_alert_not_associated,
-            pd.DataFrame(
-                columns=[
-                    "ra",
-                    "dec",
-                    "ssnamenr",
-                    "jd",
-                    "fid",
-                    "nid",
-                    "fink_class",
-                    "objectId",
-                    "candid",
-                    "magpsf",
-                    "sigmapsf",
-                    "magnr",
-                    "sigmagnr",
-                    "magzpsci",
-                    "isdiffpos",
-                    "dcmag",
-                    "dcmagerr",
-                ]
-            ),
-            check_index_type=False,
-            check_dtype=False,
-        )
-
-        sys.exit(doctest.testmod()[0])
-    except AssertionError:  # pragma: no cover
-        sys.exit(-1)

@@ -809,6 +809,7 @@ def trajectory_associations(
         night_to_night_traj_to_tracklets_report["number of duplicated association"] = 0
 
         if len(traj_extremity_associated) > 0:
+
             # remove duplicates associations
             # do somethings with the duplicates later in the project
             traj_extremity_associated = traj_extremity_associated.drop_duplicates(
@@ -820,6 +821,7 @@ def trajectory_associations(
             ] = nb_assoc_with_duplicates - len(traj_extremity_associated)
 
             associated_tracklets = []
+
             for _, rows in traj_extremity_associated.iterrows():
 
                 # get all rows of the associated tracklets of the next night
@@ -838,7 +840,9 @@ def trajectory_associations(
 
             # remove the tracklets that will be added to a trajectory from the dataframe of all tracklets
             traj_next_night = traj_next_night[
-                ~traj_next_night["candid"].isin(associated_tracklets["candid"])
+                ~traj_next_night["trajectory_id"].isin(
+                    traj_extremity_associated["tmp_traj"]
+                )
             ]
 
             # concatenation of trajectory_df with new tracklets doesn't work if we decide to manage the multiples associations.
