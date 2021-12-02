@@ -8,9 +8,24 @@ from night_to_night_association import night_to_night_association
 import matplotlib.pyplot as plt
 import astropy.units as u
 from pandas.testing import assert_frame_equal
-import test_sample as ts
 import sys
 import night_report
+
+
+def load_data(path, object_class):
+    all_df = []
+
+    # load all data
+    for i in range(3, 7):
+        df_sso = pd.read_pickle(path + str(i))
+        all_df.append(df_sso)
+
+    df_sso = pd.concat(all_df).sort_values(["jd"]).drop_duplicates()
+
+    df_sso = df_sso.drop_duplicates(["candid"])
+    df_sso = df_sso[df_sso["fink_class"] == object_class]
+
+    return df_sso
 
 
 def time_window_management(
@@ -113,13 +128,6 @@ def time_window_management(
             last_obs_of_all_traj["diff_nid"] <= time_window
         ]
 
-        if verbose:  # pragma: no cover
-            print(
-                "nb most recent traj to associate : {}".format(
-                    len(most_recent_last_obs)
-                )
-            )
-
         mask_traj = trajectory_df["trajectory_id"].isin(
             most_recent_last_obs["trajectory_id"]
         )
@@ -127,7 +135,7 @@ def time_window_management(
         most_recent_traj = trajectory_df[mask_traj]
         oldest_traj = trajectory_df[~mask_traj]
 
-    diff_nid_old_observation = current_night_id - old_observation["nid"]
+    diff_nid_old_observation = nid_next_night - old_observation["nid"]
     old_observation = old_observation[diff_nid_old_observation < time_window]
 
     return (oldest_traj, most_recent_traj), old_observation
@@ -137,29 +145,37 @@ if __name__ == "__main__":
     import doctest
 
     data_path = "data/month=0"
-    all_df = []
 
-    # load all data
-    for i in range(3, 7):
-        df_sso = pd.read_pickle(data_path + str(i))
-        all_df.append(df_sso)
+    df_sso = load_data(data_path, "Solar System MPC")
 
-    df_sso = pd.concat(all_df).sort_values(["jd"]).drop_duplicates()
+    # test case : "53317", "1951", "80343", "1196", "23101", "1758"
+    # additionnal case : "75653", "33568", "226653", "73972", "232351", "75653",
 
-    df_sso = df_sso.drop_duplicates(["candid"])
-    df_sso = df_sso[df_sso["fink_class"] == "Solar System MPC"]
-
-    # "1951", "53317",
-
-    # "1584" : exemple problématique avec une time window de 14 "53317", "1951", "80343", "1196", "23101",
-
-    #  & (df_sso['nid'] >= 1610) & (df_sso['nid'] <= 1624)
+    # broken case : 73972
     specific_mpc = df_sso[
-        (df_sso["ssnamenr"].isin(["53317", "1951", "80343", "1196", "23101", "1758"]))
+        (
+            df_sso["ssnamenr"].isin(
+                [
+                    "232351",
+                    "73972",
+                    "75653",
+                    "53317",
+                    "1951",
+                    "80343",
+                    "1196",
+                    "23101",
+                    "1758",
+                ]
+            )
+        )
     ]
 
+    # specific_mpc = df_sso
+
     mpc_plot = (
-        specific_mpc.groupby(["ssnamenr"]).agg({"ra": list, "dec": list}).reset_index()
+        specific_mpc.groupby(["ssnamenr"])
+        .agg({"ra": list, "dec": list, "candid": len})
+        .reset_index()
     )
 
     all_night = np.unique(specific_mpc["nid"])
@@ -182,9 +198,10 @@ if __name__ == "__main__":
     else:
         old_observation = df_night1
 
-    time_window_limit = 14
+    time_window_limit = 16
     verbose = False
     save_report = False
+    show_results = False
 
     for i in range(1, len(all_night)):
         t_before = t.time()
@@ -231,18 +248,11 @@ if __name__ == "__main__":
             print()
             print("elapsed time: {}".format(t.time() - t_before))
             print()
-            print(
-                "nb observation in the trajectory dataframe : {}\nnb old observations : {}".format(
-                    len(traj_df), len(old_observation)
-                )
-            )
             print("-----------------------------------------------")
 
     all_alert_not_associated = specific_mpc[
         ~specific_mpc["candid"].isin(traj_df["candid"])
     ]
-
-    show_results = False
 
     if show_results:  # pragma: no cover
 
@@ -285,10 +295,15 @@ if __name__ == "__main__":
         plt.show()
 
     try:
-        assert_frame_equal(
-            traj_df.reset_index(drop=True), ts.traj_df_expected, check_dtype=False
+        from unittest import TestCase
+
+        expected_output = pd.io.json.read_json(
+            "alert_association/CI_expected_output.json", dtype={"ssnamenr": str}
         )
 
+        assert_frame_equal(
+            traj_df.reset_index(drop=True), expected_output, check_dtype=False
+        )
         assert_frame_equal(
             all_alert_not_associated,
             pd.DataFrame(
@@ -315,7 +330,11 @@ if __name__ == "__main__":
             check_index_type=False,
             check_dtype=False,
         )
+        TestCase().assertEqual(
+            len(specific_mpc), len(traj_df), "dataframes size are not equal"
+        )
 
         sys.exit(doctest.testmod()[0])
-    except AssertionError:  # pragma: no cover
+    except AssertionError as e:  # pragma: no cover
+        print(e)
         sys.exit(-1)

@@ -164,6 +164,7 @@ def angle_df(x):
     >>> np.around(np.array(res)[0], 3)
     10.305
     """
+
     ra_x, dec_x, jd_x = x[1], x[2], x[3]
 
     ra_y, dec_y, jd_y = x[6], x[7], x[8]
@@ -449,6 +450,7 @@ def night_to_night_trajectory_associations(
     nb_assoc_before_angle_filtering = len(new_obs_assoc)
     inter_night_obs_report["number of inter night angle filtered association"] = 0
     if len(traj_assoc) != 0:
+
         traj_assoc, new_obs_assoc = cone_search_association(
             two_last_observations, traj_assoc, new_obs_assoc, angle_criterion
         )
@@ -771,7 +773,6 @@ def trajectory_associations(
 
     # for each trajectory nid from the last observations
     for tr_nid in trajectories_nid:
-
         current_nid_assoc_report = dict()
         current_nid_assoc_report["old nid"] = int(tr_nid)
 

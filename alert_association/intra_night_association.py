@@ -46,9 +46,9 @@ def get_n_last_observations_from_trajectories(trajectories, n, ascending=True):
     >>> res = df_schema.validate(res).reset_index(drop=True)
 
     >>> df_expected = pd.DataFrame({
-    ... "candid" : [0, 4, 6],
-    ... "jd" : [0.0, 4.0, 6.0],
-    ... "trajectory_id" : [1, 2, 3]
+    ... "candid" : [6, 4, 0],
+    ... "jd" : [6.0, 4.0, 0.0],
+    ... "trajectory_id" : [3, 2, 1]
     ... })
 
     >>> assert_frame_equal(res, df_expected)
@@ -82,9 +82,9 @@ def get_n_last_observations_from_trajectories(trajectories, n, ascending=True):
     >>> res = df_schema.validate(res).reset_index(drop=True)
 
     >>> df_expected = pd.DataFrame({
-    ... "candid" : [1, 0, 5, 4, 7, 6],
-    ... "jd" : [1.0, 0.0, 5.0, 4.0, 7.0, 6.0],
-    ... "trajectory_id" : [1, 1, 2, 2, 3, 3]
+    ... "candid" : [7, 6, 5, 4, 1, 0],
+    ... "jd" : [7.0, 6.0, 5.0, 4.0, 1.0, 0.0],
+    ... "trajectory_id" : [3, 3, 2, 2, 1, 1]
     ... })
 
     >>> assert_frame_equal(res, df_expected)
@@ -94,7 +94,7 @@ def get_n_last_observations_from_trajectories(trajectories, n, ascending=True):
         trajectories.sort_values(["jd"], ascending=ascending)
         .groupby(["trajectory_id"])
         .tail(n)
-        .sort_values(["trajectory_id"])
+        .sort_values(["jd", "trajectory_id"], ascending=ascending)
     )
 
 
@@ -876,6 +876,22 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
     ... "candid" : [9, 10, 11, 6, 4, 3, 2, 12]
     ... })
 
+    >>> left_assoc4 = pd.DataFrame({
+    ... "candid" : [1, 2, 3, 4]
+    ... })
+
+    >>> right_assoc4 = pd.DataFrame({
+    ... "candid" : [5, 6, 5, 7]
+    ... })
+
+    >>> left_assoc5 = pd.DataFrame({
+    ... "candid" : [10, 1, 2, 3, 2, 8, 6]
+    ... })
+
+    >>> right_assoc5 = pd.DataFrame({
+    ... "candid" : [2, 5, 6, 7, 8, 9, 11]
+    ... })
+
     >>> actual_traj_id = new_trajectory_id_assignation(left_assoc1, right_assoc1, 0)
     >>> expected_traj_id = pd.DataFrame({
     ... "candid" : [1, 2, 3, 4, 5, 6, 7, 8],
@@ -899,10 +915,31 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
     ... })
 
     >>> assert_frame_equal(actual_traj_id.reset_index(drop=True), expected_traj_id)
+
+    >>> actual_traj_id = new_trajectory_id_assignation(left_assoc4, right_assoc4, 0)
+    >>> expected_traj_id = pd.DataFrame({
+    ... "candid" : [1, 2, 4, 5, 6, 7],
+    ... "trajectory_id" : [0, 1, 2, 0, 1, 2]
+    ... })
+    >>> assert_frame_equal(actual_traj_id.reset_index(drop=True), expected_traj_id)
+
+    >>> actual_traj_id = new_trajectory_id_assignation(left_assoc5, right_assoc5, 0)
+    >>> expected_traj_id = pd.DataFrame({
+    ... "candid" : [10, 1, 2, 3, 8, 6, 5, 7, 9, 11],
+    ... "trajectory_id" : [0, 1, 0, 3, 4, 0, 1, 3, 4, 0]
+    ... })
+    >>> assert_frame_equal(actual_traj_id.reset_index(drop=True), expected_traj_id)
     """
 
-    left_assoc = left_assoc.reset_index(drop=True)
-    right_assoc = right_assoc.reset_index(drop=True)
+    left_assoc = left_assoc
+    right_assoc = right_assoc
+
+    left_duplicates = left_assoc.duplicated()
+    right_duplicates = right_assoc.duplicated()
+
+    keep_non_duplicates = ~(left_duplicates | right_duplicates)
+    left_assoc = left_assoc[keep_non_duplicates].reset_index(drop=True)
+    right_assoc = right_assoc[keep_non_duplicates].reset_index(drop=True)
 
     nb_new_assoc = len(left_assoc)
 
@@ -931,7 +968,9 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
             "trajectory_id"
         ]
 
-    traj_df = pd.concat([left_assoc, right_assoc]).drop_duplicates(["candid"])
+    traj_df = pd.concat([left_assoc, right_assoc]).drop_duplicates(
+        ["candid", "trajectory_id"]
+    )
     return traj_df
 
 
