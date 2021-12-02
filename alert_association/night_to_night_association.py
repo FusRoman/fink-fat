@@ -239,7 +239,6 @@ def cone_search_association(
     two_last = two_last_observations[
         two_last_observations["trajectory_id"].isin(traj_assoc["trajectory_id"])
     ]
-    
 
     # groupby the two last observations in order to prepare the merge with the new observations
     two_last = two_last.groupby(["trajectory_id"]).agg(
@@ -451,7 +450,7 @@ def night_to_night_trajectory_associations(
     nb_assoc_before_angle_filtering = len(new_obs_assoc)
     inter_night_obs_report["number of inter night angle filtered association"] = 0
     if len(traj_assoc) != 0:
-        
+
         traj_assoc, new_obs_assoc = cone_search_association(
             two_last_observations, traj_assoc, new_obs_assoc, angle_criterion
         )

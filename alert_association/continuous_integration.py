@@ -1,4 +1,3 @@
-from json import dump
 import pandas as pd
 import time as t
 import numpy as np
@@ -9,7 +8,6 @@ from night_to_night_association import night_to_night_association
 import matplotlib.pyplot as plt
 import astropy.units as u
 from pandas.testing import assert_frame_equal
-import test_sample as ts
 import sys
 import night_report
 
@@ -147,7 +145,7 @@ if __name__ == "__main__":
     import doctest
 
     data_path = "data/month=0"
-    
+
     df_sso = load_data(data_path, "Solar System MPC")
 
     # test case : "53317", "1951", "80343", "1196", "23101", "1758"
@@ -155,13 +153,29 @@ if __name__ == "__main__":
 
     # broken case : 73972
     specific_mpc = df_sso[
-        (df_sso["ssnamenr"].isin(["232351", "73972", "75653", "53317", "1951", "80343", "1196", "23101", "1758"]))
+        (
+            df_sso["ssnamenr"].isin(
+                [
+                    "232351",
+                    "73972",
+                    "75653",
+                    "53317",
+                    "1951",
+                    "80343",
+                    "1196",
+                    "23101",
+                    "1758",
+                ]
+            )
+        )
     ]
 
-    #specific_mpc = df_sso
+    # specific_mpc = df_sso
 
     mpc_plot = (
-        specific_mpc.groupby(["ssnamenr"]).agg({"ra": list, "dec": list, "candid": len}).reset_index()
+        specific_mpc.groupby(["ssnamenr"])
+        .agg({"ra": list, "dec": list, "candid": len})
+        .reset_index()
     )
 
     all_night = np.unique(specific_mpc["nid"])
@@ -283,8 +297,10 @@ if __name__ == "__main__":
     try:
         from unittest import TestCase
 
-        expected_output = pd.io.json.read_json("alert_association/CI_expected_output.json", dtype={"ssnamenr":str})
-        
+        expected_output = pd.io.json.read_json(
+            "alert_association/CI_expected_output.json", dtype={"ssnamenr": str}
+        )
+
         assert_frame_equal(
             traj_df.reset_index(drop=True), expected_output, check_dtype=False
         )
@@ -314,8 +330,10 @@ if __name__ == "__main__":
             check_index_type=False,
             check_dtype=False,
         )
-        TestCase().assertEqual(len(specific_mpc), len(traj_df), "dataframes size are not equal")
-        
+        TestCase().assertEqual(
+            len(specific_mpc), len(traj_df), "dataframes size are not equal"
+        )
+
         sys.exit(doctest.testmod()[0])
     except AssertionError as e:  # pragma: no cover
         print(e)
