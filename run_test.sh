@@ -22,14 +22,21 @@ export ROOTPATH=`pwd`
 
 export COVERAGE_PROCESS_START="${ROOTPATH}/.coveragerc"
 
+FILE=alert_association/performance_test.py
+
 # Run the test suite on the utilities
 for filename in alert_association/*.py
 do
-  # Run test suite + coverage
-  coverage run \
-    --append \
-    --source=${ROOTPATH} \
-    --rcfile ${ROOTPATH}/.coveragerc $filename
+  case $filename in
+  $FILE ) continue ;;
+  * )
+    # Run test suite + coverage
+    coverage run \
+      --append \
+      --source=${ROOTPATH} \
+      --rcfile ${ROOTPATH}/.coveragerc $filename
+    ;;
+  esac
 done
 
 unset COVERAGE_PROCESS_START
