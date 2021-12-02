@@ -21,7 +21,7 @@ def convert_dict_to_nested_type(report):
 
 def save_report(report, date):
 
-    dir_path = "alert_association/report_db/"
+    dir_path = "report_db/"
     today = Time(date, format="jd")
 
     current_day = today.iso.split(" ")[0].split("-")
