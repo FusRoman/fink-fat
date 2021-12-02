@@ -199,8 +199,8 @@ if __name__ == "__main__":
         old_observation = df_night1
 
     time_window_limit = 16
-    verbose = True
-    save_report = True
+    verbose = False
+    save_report = False
     show_results = False
 
     for i in range(1, len(all_night)):
