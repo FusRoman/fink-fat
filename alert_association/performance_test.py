@@ -6,9 +6,6 @@ from intra_night_association import new_trajectory_id_assignation
 from night_to_night_association import night_to_night_association
 import matplotlib.pyplot as plt
 import astropy.units as u
-from pandas.testing import assert_frame_equal
-import test_sample as ts
-import sys
 import night_report
 import continuous_integration as ci
 
