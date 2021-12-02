@@ -3,7 +3,6 @@ import time as t
 import numpy as np
 from intra_night_association import intra_night_association
 from intra_night_association import new_trajectory_id_assignation
-from intra_night_association import get_n_last_observations_from_trajectories
 from night_to_night_association import night_to_night_association
 import matplotlib.pyplot as plt
 import astropy.units as u
@@ -19,10 +18,7 @@ if __name__ == "__main__":
     data_path = "../data/month=0"
     df_sso = ci.load_data(data_path, "Solar System MPC")
 
-    
-    mpc_plot = (
-        df_sso.groupby(["ssnamenr"]).agg({"ra": list, "dec": list}).reset_index()
-    )
+    mpc_plot = df_sso.groupby(["ssnamenr"]).agg({"ra": list, "dec": list}).reset_index()
 
     all_night = np.unique(df_sso["nid"])
 
@@ -90,7 +86,7 @@ if __name__ == "__main__":
         last_nid = current_night_id
 
         if save_report:
-            report['computation time of the night'] = t.time() - t_before
+            report["computation time of the night"] = t.time() - t_before
             night_report.save_report(report, df_next_night["jd"].values[0])
 
         if verbose:  # pragma: no cover
@@ -98,12 +94,10 @@ if __name__ == "__main__":
             print("elapsed time: {}".format(t.time() - t_before))
             print()
             print("-----------------------------------------------")
-        
+
         break
 
-    all_alert_not_associated = df_sso[
-        ~df_sso["candid"].isin(traj_df["candid"])
-    ]
+    all_alert_not_associated = df_sso[~df_sso["candid"].isin(traj_df["candid"])]
 
     show_results = False
 

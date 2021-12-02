@@ -968,7 +968,9 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
             "trajectory_id"
         ]
 
-    traj_df = pd.concat([left_assoc, right_assoc]).drop_duplicates(["candid", "trajectory_id"])
+    traj_df = pd.concat([left_assoc, right_assoc]).drop_duplicates(
+        ["candid", "trajectory_id"]
+    )
     return traj_df
 
 
