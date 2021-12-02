@@ -1,4 +1,4 @@
-from json import load
+from json import dump
 import pandas as pd
 import time as t
 import numpy as np
@@ -146,7 +146,7 @@ def time_window_management(
 if __name__ == "__main__":
     import doctest
 
-    data_path = "../data/month=0"
+    data_path = "data/month=0"
     
     df_sso = load_data(data_path, "Solar System MPC")
 
@@ -185,8 +185,9 @@ if __name__ == "__main__":
         old_observation = df_night1
 
     time_window_limit = 16
-    verbose = True
+    verbose = False
     save_report = False
+    show_results = False
 
     for i in range(1, len(all_night)):
         t_before = t.time()
@@ -239,10 +240,6 @@ if __name__ == "__main__":
         ~specific_mpc["candid"].isin(traj_df["candid"])
     ]
 
-
-
-    show_results = True
-
     if show_results:  # pragma: no cover
 
         gb_traj = (
@@ -284,10 +281,13 @@ if __name__ == "__main__":
         plt.show()
 
     try:
-        assert_frame_equal(
-            traj_df.reset_index(drop=True), ts.traj_df_expected, check_dtype=False
-        )
+        from unittest import TestCase
 
+        expected_output = pd.io.json.read_json("alert_association/CI_expected_output.json", dtype={"ssnamenr":str})
+        
+        assert_frame_equal(
+            traj_df.reset_index(drop=True), expected_output, check_dtype=False
+        )
         assert_frame_equal(
             all_alert_not_associated,
             pd.DataFrame(
@@ -314,7 +314,9 @@ if __name__ == "__main__":
             check_index_type=False,
             check_dtype=False,
         )
-
+        TestCase().assertEqual(len(specific_mpc), len(traj_df), "dataframes size are not equal")
+        
         sys.exit(doctest.testmod()[0])
-    except AssertionError:  # pragma: no cover
+    except AssertionError as e:  # pragma: no cover
+        print(e)
         sys.exit(-1)
