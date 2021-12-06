@@ -132,3 +132,7 @@ dmypy.json
 .vscode/
 
 alert_association/report_db
+
+alert_association/trajectory_output.parquet
+
+test_report/
