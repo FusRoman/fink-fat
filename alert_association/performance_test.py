@@ -16,9 +16,10 @@ from scipy import stats
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
+        print("you need to add a main argument : 1 to launch performance test and 2 to show performance results")
         exit(0)
     elif int(sys.argv[1]) == 1:
-        print("Lancement du test de performance")
+        print("Launch Performance test")
 
         data_path = "../data/month=0"
         df_sso = ci.load_data(data_path, "Solar System MPC")
@@ -53,13 +54,19 @@ if __name__ == "__main__":
 
         time_window_limit = 3
         verbose = True
-        save_report = False
+        save_report = True
         show_results = False
 
         if verbose:
             print("Begin association process")
-
+        
+        it_limit = 5
+        current_it = -10000
         for i in range(1, len(all_night)):
+            if current_it > it_limit:
+                break
+
+            current_it += 1
             t_before = t.time()
             new_night = all_night[i]
 
@@ -106,7 +113,7 @@ if __name__ == "__main__":
             last_nid = current_night_id
 
             if save_report:
-                report["computation time of the night"] = t.time() - t_before
+                report["computation time of the night"] = float(t.time() - t_before)
                 night_report.save_report(report, df_next_night["jd"].values[0])
 
             if verbose:  # pragma: no cover
@@ -132,10 +139,12 @@ if __name__ == "__main__":
         )
 
         print()
-        print("write trajectory dataframe on disk")
 
-        traj_table = pa.Table.from_pandas(traj_df)
-        pq.write_table(traj_table, "trajectory_output.parquet")
+        if save_report:
+            print("write trajectory dataframe on disk")
+
+            traj_table = pa.Table.from_pandas(traj_df)
+            pq.write_table(traj_table, "trajectory_output.parquet")
 
         print("end of the performance test")
     elif int(sys.argv[1]) == 2:
@@ -145,6 +154,8 @@ if __name__ == "__main__":
 
         print("total alert: {}".format(len(df_sso)))
 
+        trajectory_point_limit = 3
+
         mpc_plot = (
             df_sso.groupby(["ssnamenr"])
             .agg({"ra": list, "dec": list, "candid": len})
@@ -152,8 +163,9 @@ if __name__ == "__main__":
         )
         print("number of known trajectory in this dataset: {}".format(len(mpc_plot)))
         print(
-            "number of MPC trajectories that have a number of point greather strictly than 10: {}".format(
-                len(mpc_plot[mpc_plot["candid"] > 10])
+            "number of MPC trajectories that have a number of point greather strictly than {}: {}".format(
+                trajectory_point_limit,
+                len(mpc_plot[mpc_plot["candid"] > trajectory_point_limit])
             )
         )
 
@@ -182,9 +194,10 @@ if __name__ == "__main__":
             .reset_index()
         )
 
-        gb_traj = gb_traj[gb_traj["candid"] > 10].sort_values(["candid"])
+        gb_traj = gb_traj[gb_traj["candid"] > trajectory_point_limit].sort_values(["candid"])
         print(
-            "number of trajectories that have a number of point greather strictly than 10: {}".format(
+            "number of trajectories that have a number of point greather strictly than {}: {}".format(
+                trajectory_point_limit,
                 len(gb_traj)
             )
         )
@@ -212,7 +225,7 @@ if __name__ == "__main__":
 
         traj_precision = all_counter[:, 1]
         prec_occur = Counter(traj_precision)
-        print(prec_occur[0])
+        print("Ratio of perfectly detected trajectory: {} %".format((prec_occur[0] / len(gb_traj)*100)))
 
         print("min: {}".format(np.min(traj_precision)))
         print("max: {}".format(np.max(traj_precision)))

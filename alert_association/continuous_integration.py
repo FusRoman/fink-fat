@@ -134,6 +134,9 @@ def time_window_management(
 
         most_recent_traj = trajectory_df[mask_traj]
         oldest_traj = trajectory_df[~mask_traj]
+        old_test = oldest_traj.groupby(['trajectory_id']).agg({"ra": list, "candid": len}).explode(['ra']).reset_index(drop=True)
+        oldest_traj = oldest_traj.reset_index(drop=True)
+        oldest_traj = oldest_traj[old_test["candid"] > 2]
 
     diff_nid_old_observation = nid_next_night - old_observation["nid"]
     old_observation = old_observation[diff_nid_old_observation < time_window]
