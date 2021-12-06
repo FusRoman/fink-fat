@@ -628,6 +628,7 @@ def tracklets_id_management(
 
     return pd.concat(all_df_to_concat), traj_next_night
 
+
 def trajectory_associations(
     trajectory_df,
     traj_next_night,
@@ -765,9 +766,9 @@ def trajectory_associations(
     )
 
     # perform association with all previous nid within the time window
-    # Warning : sort by descending order to do the association with the recently previous night in first. 
+    # Warning : sort by descending order to do the association with the recently previous night in first.
     trajectories_nid = np.sort(np.unique(last_observation_trajectory["nid"]))[::-1]
-    
+
     all_nid_assoc_report = []
 
     # for each trajectory nid from the last observations

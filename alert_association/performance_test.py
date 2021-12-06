@@ -16,7 +16,9 @@ from scipy import stats
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("you need to add a main argument : 1 to launch performance test and 2 to show performance results")
+        print(
+            "you need to add a main argument : 1 to launch performance test and 2 to show performance results"
+        )
         exit(0)
     elif int(sys.argv[1]) == 1:
         print("Launch Performance test")
@@ -59,7 +61,7 @@ if __name__ == "__main__":
 
         if verbose:
             print("Begin association process")
-        
+
         it_limit = 5
         current_it = -10000
         for i in range(1, len(all_night)):
@@ -165,7 +167,7 @@ if __name__ == "__main__":
         print(
             "number of MPC trajectories that have a number of point greather strictly than {}: {}".format(
                 trajectory_point_limit,
-                len(mpc_plot[mpc_plot["candid"] > trajectory_point_limit])
+                len(mpc_plot[mpc_plot["candid"] > trajectory_point_limit]),
             )
         )
 
@@ -194,11 +196,12 @@ if __name__ == "__main__":
             .reset_index()
         )
 
-        gb_traj = gb_traj[gb_traj["candid"] > trajectory_point_limit].sort_values(["candid"])
+        gb_traj = gb_traj[gb_traj["candid"] > trajectory_point_limit].sort_values(
+            ["candid"]
+        )
         print(
             "number of trajectories that have a number of point greather strictly than {}: {}".format(
-                trajectory_point_limit,
-                len(gb_traj)
+                trajectory_point_limit, len(gb_traj)
             )
         )
 
@@ -225,7 +228,11 @@ if __name__ == "__main__":
 
         traj_precision = all_counter[:, 1]
         prec_occur = Counter(traj_precision)
-        print("Ratio of perfectly detected trajectory: {} %".format((prec_occur[0] / len(gb_traj)*100)))
+        print(
+            "Ratio of perfectly detected trajectory: {} %".format(
+                (prec_occur[0] / len(gb_traj) * 100)
+            )
+        )
 
         print("min: {}".format(np.min(traj_precision)))
         print("max: {}".format(np.max(traj_precision)))

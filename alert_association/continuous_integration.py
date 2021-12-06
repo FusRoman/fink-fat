@@ -134,7 +134,12 @@ def time_window_management(
 
         most_recent_traj = trajectory_df[mask_traj]
         oldest_traj = trajectory_df[~mask_traj]
-        old_test = oldest_traj.groupby(['trajectory_id']).agg({"ra": list, "candid": len}).explode(['ra']).reset_index(drop=True)
+        old_test = (
+            oldest_traj.groupby(["trajectory_id"])
+            .agg({"ra": list, "candid": len})
+            .explode(["ra"])
+            .reset_index(drop=True)
+        )
         oldest_traj = oldest_traj.reset_index(drop=True)
         oldest_traj = oldest_traj[old_test["candid"] > 2]
 
