@@ -1,4 +1,3 @@
-import json
 import pandas as pd
 import time as t
 import numpy as np
@@ -11,6 +10,8 @@ import astropy.units as u
 from pandas.testing import assert_frame_equal
 import sys
 import night_report
+from collections import Counter
+import pyarrow.parquet as pq
 
 
 def load_data(path, object_class):
@@ -135,6 +136,14 @@ def time_window_management(
 
         most_recent_traj = trajectory_df[mask_traj]
         oldest_traj = trajectory_df[~mask_traj]
+        old_test = (
+            oldest_traj.groupby(["trajectory_id"])
+            .agg({"ra": list, "candid": len})
+            .explode(["ra"])
+            .reset_index(drop=True)
+        )
+        oldest_traj = oldest_traj.reset_index(drop=True)
+        oldest_traj = oldest_traj[old_test["candid"] > 2]
 
     diff_nid_old_observation = nid_next_night - old_observation["nid"]
     old_observation = old_observation[diff_nid_old_observation < time_window]
@@ -145,7 +154,7 @@ def time_window_management(
 if __name__ == "__main__":
     import doctest
 
-    data_path = "../data/month=0"
+    data_path = "data/month=0"
 
     df_sso = load_data(data_path, "Solar System MPC")
 
@@ -259,6 +268,42 @@ if __name__ == "__main__":
         ~specific_mpc["candid"].isin(traj_df["candid"])
     ]
 
+    def trajectory_metrics(rows):
+        ssnamenr = rows["ssnamenr"]
+        count = Counter(ssnamenr)
+
+        nb_traj_change = len(count)
+        most_commons = count.most_common()
+
+        most_common = most_commons[0][1]
+        sum_other = np.sum([el[1] for el in most_commons[1:]])
+
+        traj_precision = sum_other / most_common
+
+        return [nb_traj_change, traj_precision]
+
+    gb_traj = (
+        traj_df.groupby(["trajectory_id"])
+        .agg(
+            {
+                "ra": list,
+                "dec": list,
+                "dcmag": list,
+                "fid": list,
+                "nid": list,
+                "ssnamenr": list,
+                "candid": len,
+            }
+        )
+        .reset_index()
+    )
+    all_counter = np.array(gb_traj.apply(trajectory_metrics, axis=1).tolist())
+    nb_traj_change = all_counter[:, 0]
+    traj_precision = all_counter[:, 1]
+
+    prec_occur = Counter(traj_precision)
+    change_counter = Counter(nb_traj_change)
+
     if show_results:  # pragma: no cover
 
         gb_traj = (
@@ -302,9 +347,9 @@ if __name__ == "__main__":
     try:
         from unittest import TestCase
 
-        expected_output = pd.io.json.read_json(
-            "alert_association/CI_expected_output.json", dtype={"ssnamenr": str}
-        )
+        expected_output = pq.read_table(
+            "alert_association/CI_expected_output.parquet"
+        ).to_pandas()
 
         assert_frame_equal(
             traj_df.reset_index(drop=True), expected_output, check_dtype=False
@@ -337,6 +382,16 @@ if __name__ == "__main__":
         )
         TestCase().assertEqual(
             len(specific_mpc), len(traj_df), "dataframes size are not equal"
+        )
+
+        TestCase().assertEqual(
+            prec_occur[0],
+            9,
+            "some trajectories diverge from real trajectories: {}".format(prec_occur),
+        )
+
+        TestCase().assertEqual(
+            change_counter[1], 9, "some trajectories overlap: {}".format(change_counter)
         )
 
         sys.exit(doctest.testmod()[0])

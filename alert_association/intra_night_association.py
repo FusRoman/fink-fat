@@ -406,10 +406,10 @@ def compute_associations_metrics(
 
     return {
         "precision": precision,
-        "recall": recall,
+        "recall": float(recall),
         "True Positif": precision_counter[True],
         "False Positif": precision_counter[False],
-        "False Negatif": FN,
+        "False Negatif": int(FN),
         "total real association": int(nb_real_assoc),
     }
 
