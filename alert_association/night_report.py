@@ -235,3 +235,7 @@ def plot_report(parse_report):
 
 if __name__ == "__main__":
     import test_sample as ts  # noqa: F401
+
+    # res = open_and_parse_report("report_db/05/27.json")
+
+    # plot_report(res)
