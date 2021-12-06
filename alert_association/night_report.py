@@ -29,6 +29,9 @@ def save_report(report, date):
 
     report_name = str(current_day[2]) + ".json"
     report_path = dir_path + report_name
+
+    # convert_dict_to_nested_type(report)
+
     if path.isdir(dir_path):
         with open(report_path, "w") as outfile:
             # warning : serialize dictionary with numpy type doesn't work,
