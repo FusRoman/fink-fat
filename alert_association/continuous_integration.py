@@ -1,4 +1,3 @@
-import json
 import pandas as pd
 import time as t
 import numpy as np
@@ -145,7 +144,7 @@ def time_window_management(
 if __name__ == "__main__":
     import doctest
 
-    data_path = "../data/month=0"
+    data_path = "data/month=0"
 
     df_sso = load_data(data_path, "Solar System MPC")
 
