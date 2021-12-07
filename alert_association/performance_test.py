@@ -15,6 +15,10 @@ from collections import Counter
 from scipy import stats
 
 if __name__ == "__main__":
+
+    nb_trajectories_limit = True
+    mpc_trajectories = ["10027", "80343", "75539", "53317"]
+
     if len(sys.argv) != 2:
         print(
             "you need to add a main argument : 1 to launch performance test and 2 to show performance results"
@@ -25,6 +29,16 @@ if __name__ == "__main__":
 
         data_path = "../data/month=0"
         df_sso = ci.load_data(data_path, "Solar System MPC")
+        
+        if nb_trajectories_limit:
+            mpc_traj = df_sso.groupby(['ssnamenr']).agg({"candid":len, "ssnamenr":list})
+            specific_sso = np.unique(mpc_traj[mpc_traj['candid'] > 70].explode(['ssnamenr'])['ssnamenr'])
+            
+            df_sso = df_sso[
+                (
+                    df_sso["ssnamenr"].isin(specific_sso[:20])
+                )
+            ]
 
         print("total alert: {}".format(len(df_sso)))
 
@@ -54,16 +68,17 @@ if __name__ == "__main__":
         else:
             old_observation = df_night1
 
-        time_window_limit = 3
+        time_window_limit = 7
         verbose = True
         save_report = True
-        show_results = False
+        show_results = True
 
         if verbose:
             print("Begin association process")
 
         it_limit = 5
         current_it = -10000
+        most_recent_traj = pd.DataFrame(columns=['trajectory_id'])
         for i in range(1, len(all_night)):
             if current_it > it_limit:
                 break
@@ -89,11 +104,18 @@ if __name__ == "__main__":
                 print()
                 print()
                 print("incoming night : {}".format(new_night))
-                print(
-                    "nb most recent traj: {}".format(
-                        len(np.unique(most_recent_traj["trajectory_id"]))
+                if len(most_recent_traj) != 0:
+                    print(
+                        "nb most recent traj: {}".format(
+                            len(np.unique(most_recent_traj["trajectory_id"]))
+                        )
                     )
-                )
+                else:
+                    print(
+                        "nb most recent traj: {}".format(
+                            0
+                        )
+                    )
                 print("nb old observation: {}".format(len(old_observation)))
                 print("nb new observation : {}".format(len(df_next_night)))
                 print()
@@ -122,12 +144,58 @@ if __name__ == "__main__":
                 print()
                 print("elapsed time: {}".format(t.time() - t_before))
                 print()
-                print(
-                    "nb_trajectories: {}".format(
-                        len(np.unique(traj_df["trajectory_id"]))
+                try:
+                    print(
+                        "nb_trajectories: {}".format(
+                            len(np.unique(traj_df["trajectory_id"]))
+                        )
                     )
-                )
+                except KeyError:
+                    print(
+                        "nb_trajectories: {}".format(0)
+                    )
                 print("-----------------------------------------------")
+
+
+        if show_results:  # pragma: no cover
+
+            gb_traj = (
+                traj_df.groupby(["trajectory_id"])
+                .agg(
+                    {
+                        "ra": list,
+                        "dec": list,
+                        "dcmag": list,
+                        "fid": list,
+                        "nid": list,
+                        "candid": lambda x: len(x),
+                    }
+                )
+                .reset_index()
+            )
+
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(40, 40))
+
+            for _, rows in mpc_plot.iterrows():
+                ra = rows["ra"]
+                dec = rows["dec"]
+                label = rows["ssnamenr"]
+
+                ax1.scatter(ra, dec, label=label)
+
+            ax1.legend(title="mpc name")
+
+            for _, rows in gb_traj.iterrows():
+                ra = rows["ra"]
+                dec = rows["dec"]
+                label = rows["trajectory_id"]
+                ax2.scatter(ra, dec, label=label)
+
+            ax1.set_title("real trajectories")
+            ax2.set_title("detected trajectories")
+
+            ax2.legend(title="trajectory identifier")
+            plt.show()
 
         all_alert_not_associated = df_sso[~df_sso["candid"].isin(traj_df["candid"])]
         print()
@@ -153,6 +221,13 @@ if __name__ == "__main__":
         print("show results")
         data_path = "../data/month=0"
         df_sso = ci.load_data(data_path, "Solar System MPC")
+
+        if nb_trajectories_limit:
+            df_sso = df_sso[
+                (
+                    df_sso["ssnamenr"].isin(mpc_trajectories)
+                )
+            ]
 
         print("total alert: {}".format(len(df_sso)))
 
@@ -229,7 +304,8 @@ if __name__ == "__main__":
         traj_precision = all_counter[:, 1]
         prec_occur = Counter(traj_precision)
         print(
-            "Ratio of perfectly detected trajectory: {} %".format(
+            "Ratio of perfectly detected trajectory: ({} / {}) * 100 = {} %".format(
+                prec_occur[0], len(gb_traj),
                 (prec_occur[0] / len(gb_traj) * 100)
             )
         )

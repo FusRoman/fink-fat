@@ -262,6 +262,47 @@ def cone_search_association(
 
     return traj_assoc.drop(["index"], axis=1), new_obs_assoc.drop(["index"], axis=1)
 
+def compute_inter_night_metric(real_obs1, real_obs2, left_assoc, right_assoc):
+    
+    if "ssnamenr" in real_obs1 and "ssnamenr" in real_obs2:
+        
+        real_assoc = real_obs1.merge(
+            real_obs2, on="ssnamenr", suffixes=("_left", "_right")
+        )
+        
+        assoc_mask = ((real_assoc["candid_left"].isin(left_assoc["candid"])) & (real_assoc["candid_right"].isin(right_assoc["candid"])))
+        
+        traj_true_assoc = real_assoc[assoc_mask]
+        traj_not_assoc = real_assoc[~assoc_mask]
+
+        left_assoc = left_assoc.reset_index(drop=True)
+        right_assoc = right_assoc.reset_index(drop=True)
+
+        FP = len(left_assoc[left_assoc['ssnamenr'] != right_assoc['ssnamenr']])
+        TP = len(traj_true_assoc)
+        FN = len(traj_not_assoc)
+
+        try:
+            precision = (TP / (FP + TP)) * 100
+        except ZeroDivisionError:
+            precision = -1
+        
+        try:
+            recall = (TP / (FN + TP)) * 100
+        except ZeroDivisionError:
+            recall = -1
+
+        return {
+            "precision": precision,
+            "recall": float(recall),
+            "True Positif": TP,
+            "False Positif": FP,
+            "False Negatif": int(FN),
+            "total real association": len(real_assoc)
+        }
+    else:
+        return {}
+
 
 def night_to_night_observation_association(
     obs_set1, obs_set2, sep_criterion, mag_criterion_same_fid, mag_criterion_diff_fid
@@ -353,7 +394,7 @@ def night_to_night_observation_association(
     inter_night_obs_assoc_report[
         "number of inter night separation based association"
     ] = len(new_obs_assoc)
-
+                     
     # filter the association based on magnitude criterion
     traj_assoc, new_obs_assoc = magnitude_association(
         traj_assoc,
@@ -452,6 +493,8 @@ def night_to_night_trajectory_associations(
         traj_assoc, new_obs_assoc = cone_search_association(
             two_last_observations, traj_assoc, new_obs_assoc, angle_criterion
         )
+
+
 
         inter_night_obs_report[
             "number of inter night angle filtered association"
@@ -807,6 +850,7 @@ def trajectory_associations(
         updated_trajectories = np.unique(traj_left["trajectory_id"])
         nb_assoc_with_duplicates = len(traj_extremity_associated)
         night_to_night_traj_to_tracklets_report["number of duplicated association"] = 0
+        night_to_night_traj_to_tracklets_report['metrics'] = {}
 
         if len(traj_extremity_associated) > 0:
 
@@ -815,6 +859,11 @@ def trajectory_associations(
             traj_extremity_associated = traj_extremity_associated.drop_duplicates(
                 ["trajectory_id"]
             )
+            traj_left = traj_left.drop_duplicates(["trajectory_id"])
+
+            last_traj_obs = (two_last_current_nid.groupby(["trajectory_id"]).last().reset_index())
+            inter_night_metric = compute_inter_night_metric(last_traj_obs, tracklets_extremity, traj_left, traj_extremity_associated)
+            night_to_night_traj_to_tracklets_report['metrics'] = inter_night_metric
 
             night_to_night_traj_to_tracklets_report[
                 "number of duplicated association"
@@ -863,7 +912,7 @@ def trajectory_associations(
 
             # trajectory associations with the new observations
             (
-                _,
+                traj_left,
                 obs_assoc,
                 night_to_night_traj_to_obs_report,
             ) = night_to_night_trajectory_associations(
@@ -875,8 +924,11 @@ def trajectory_associations(
                 angle_criterion,
             )
 
+
+
             nb_traj_to_obs_assoc_with_duplicates = len(obs_assoc)
             night_to_night_traj_to_obs_report["number of duplicated association"] = 0
+            night_to_night_traj_to_obs_report['metrics'] = {}
 
             if len(obs_assoc) > 0:
 
@@ -893,6 +945,11 @@ def trajectory_associations(
                 # remove duplicates associations
                 # do somethings with the duplicates later in the project
                 obs_assoc = obs_assoc.drop_duplicates(["trajectory_id"])
+                traj_left = traj_left.drop_duplicates(["trajectory_id"])
+
+                last_traj_obs = (two_last_current_nid.groupby(["trajectory_id"]).last().reset_index())
+                inter_night_metric = compute_inter_night_metric(last_traj_obs, new_observations, traj_left, obs_assoc)
+                night_to_night_traj_to_obs_report['metrics'] = inter_night_metric
 
                 night_to_night_traj_to_obs_report[
                     "number of duplicated association"
@@ -1134,11 +1191,6 @@ def tracklets_and_observations_associations(
     else:
         return trajectory_df, old_observations, track_and_obs_report
 
-    # ne pas faire ça dans cette fonction, créer une fonction qui s'occupe de ça
-    # old_observations["diff_nid"] = next_nid - old_observations["nid"]
-    # old_obs_mask = old_observations["diff_nid"] <= 5
-    # old_observations = old_observations[old_obs_mask]
-
     old_obs_nid = np.sort(np.unique(old_observations["nid"]))[::-1]
 
     if len(traj_next_night) > 0:
@@ -1184,10 +1236,17 @@ def tracklets_and_observations_associations(
 
         nb_track_to_obs_assoc_with_duplicates = len(old_obs_right)
         track_to_old_obs_report["number of duplicated association"] = 0
+        track_to_old_obs_report['metrics'] = {}
+
         if len(traj_left) > 0:
 
             # remove the duplicates()
             old_obs_right = old_obs_right.drop_duplicates(["trajectory_id"])
+            traj_left = traj_left.drop_duplicates(["trajectory_id"])
+
+            last_traj_obs = (two_first_obs_tracklets.groupby(["trajectory_id"]).first().reset_index())
+            inter_night_metric = compute_inter_night_metric(last_traj_obs, current_old_obs, traj_left, old_obs_right)
+            track_to_old_obs_report['metrics'] = inter_night_metric
 
             track_to_old_obs_report[
                 "number of duplicated association"
@@ -1212,6 +1271,16 @@ def tracklets_and_observations_associations(
             "old observation to tracklets report"
         ] = track_to_old_obs_report
 
+        current_nid_report[
+                "old observation to new observation report"
+            ] = {
+                "number of inter night separation based association": 0,
+                "number of inter night magnitude filtered association": 0,
+                "number of inter night angle filtered association": 0,
+                "number of duplicated association": 0,
+                "metrics": {}
+            }
+
         if len(new_observations) > 0:
 
             (
@@ -1225,6 +1294,9 @@ def tracklets_and_observations_associations(
                 norm_same_fid,
                 norm_diff_fid,
             )
+            
+            inter_night_metric = compute_inter_night_metric(current_old_obs, new_observations, left_assoc, right_assoc)
+            old_to_new_assoc_report['metrics'] = inter_night_metric
 
             old_to_new_assoc_report["number of duplicated association"] = 0
 

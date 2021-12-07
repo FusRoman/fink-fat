@@ -402,7 +402,11 @@ def compute_associations_metrics(
 
     # max(0, (nb_real_assoc - nb_predict_assoc)) == number of false negatif if nb_predict_assoc < nb_real_assoc else 0 because no false negatif occurs.
     FN = max(0, (nb_real_assoc - precision_counter[True]))
-    recall = (precision_counter[True] / (precision_counter[True] + FN)) * 100
+
+    try:
+        recall = (precision_counter[True] / (precision_counter[True] + FN)) * 100
+    except ZeroDivisionError:
+        recall = -1
 
     return {
         "precision": precision,
@@ -410,7 +414,7 @@ def compute_associations_metrics(
         "True Positif": precision_counter[True],
         "False Positif": precision_counter[False],
         "False Negatif": int(FN),
-        "total real association": int(nb_real_assoc),
+        "total real association": int(nb_real_assoc)
     }
 
 

@@ -50,9 +50,25 @@ def parse_intra_night_report(intra_night_report):
             "number of association filtered by magnitude"
         ]
         nb_tracklets = intra_night_report["number of intra night tracklets"]
-        return nb_sep_assoc, nb_mag_filter, nb_tracklets
+
+        metrics = intra_night_report["association metrics"]
+        if len(metrics) > 0:
+            pr = metrics["precision"]
+            re = metrics["recall"]
+            tp = metrics["True Positif"]
+            fp = metrics["False Positif"]
+            fn = metrics["False Negatif"]
+            tot = metrics["total real association"]
+        else:
+            pr = 0
+            re = 0
+            tp = 0
+            fp = 0
+            fn = 0
+            tot = 0
+        return nb_sep_assoc, nb_mag_filter, nb_tracklets, pr, re, tp, fp, fn, tot
     else:
-        return 0, 0, 0
+        return 0, 0, 0, 0, 0, 0, 0, 0, 0
 
 
 def parse_association_report(association_report):
@@ -68,9 +84,25 @@ def parse_association_report(association_report):
         ]
         nb_duplicates = association_report["number of duplicated association"]
 
-        return np.array([nb_sep_assoc, nb_mag_filter, nb_angle_filter, nb_duplicates])
+        metrics = association_report["metrics"]
+        if len(metrics) > 0:
+            pr = metrics["precision"]
+            re = metrics["recall"]
+            tp = metrics["True Positif"]
+            fp = metrics["False Positif"]
+            fn = metrics["False Negatif"]
+            tot = metrics["total real association"]
+        else:
+            pr = 0
+            re = 0
+            tp = 0
+            fp = 0
+            fn = 0
+            tot = 0
+
+        return np.array([nb_sep_assoc, nb_mag_filter, nb_angle_filter, nb_duplicates, pr, re, tp, fp, fn, tot])
     else:
-        return np.array([0, 0, 0, 0])
+        return np.array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
 
 
 def parse_trajectories_report(inter_night_report):
@@ -236,9 +268,34 @@ def plot_report(parse_report):
     plt.show()
 
 
+def get_intra_night_metrics(parse_report):
+    intra_night = parse_report[0]
+    return np.array(intra_night)[3:]
+
+def get_inter_night_metrics(parse_report):
+    traj_assoc_report = parse_report[1][1]
+
+    track_assoc_report = parse_report[2][1]
+
+    traj_to_tracklets = traj_assoc_report[:, 0, 4:]
+    
+    traj_to_obs = traj_assoc_report[:, 1, 4:]
+    
+    old_obs_to_track = track_assoc_report[:, 0, 4:]
+
+    old_obs_to_new_obs = track_assoc_report[:, 1, 4:]
+
+    return traj_to_tracklets, traj_to_obs, old_obs_to_track, old_obs_to_new_obs
+
 if __name__ == "__main__":
     import test_sample as ts  # noqa: F401
 
-    # res = open_and_parse_report("report_db/05/27.json")
+    res = open_and_parse_report("report_db/05/27.json")
+    
+    tt, to, ot, on = get_inter_night_metrics(res)
+
+    print(ot)
+    print()
+    print(on)
 
     # plot_report(res)
