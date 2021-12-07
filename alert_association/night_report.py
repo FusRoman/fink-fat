@@ -281,21 +281,61 @@ def get_inter_night_metrics(parse_report):
     
     traj_to_obs = traj_assoc_report[:, 1, 4:]
     
-    old_obs_to_track = track_assoc_report[:, 0, 4:]
+    if len(track_assoc_report) > 0:
+        old_obs_to_track = track_assoc_report[:, 0, 4:]
 
-    old_obs_to_new_obs = track_assoc_report[:, 1, 4:]
+        old_obs_to_new_obs = track_assoc_report[:, 1, 4:]
+    else:
+        old_obs_to_track = np.array([0, 0, 0, 0, 0, 0])
+        old_obs_to_new_obs = np.array([0, 0, 0, 0, 0, 0])
 
     return traj_to_tracklets, traj_to_obs, old_obs_to_track, old_obs_to_new_obs
+
+
+def mean_metrics_over_nights(metrics):
+    test = np.ones(np.shape(metrics), dtype=bool)
+    idx = np.where(metrics[:, -1] == 0)
+    test[idx] = np.zeros(6, dtype=bool)
+    return np.mean(metrics, axis=0, where=test)
 
 if __name__ == "__main__":
     import test_sample as ts  # noqa: F401
 
-    res = open_and_parse_report("report_db/05/27.json")
-    
-    tt, to, ot, on = get_inter_night_metrics(res)
+    import glob
 
-    print(ot)
+    all_path_report = glob.glob("report_db/*/*")
+
+    all_metrics = [[], [], [], []]
+
+    for path in all_path_report:
+        
+        parse_report = open_and_parse_report(path)
+
+        inter_night_metrics = get_inter_night_metrics(parse_report)
+        
+        for i in range(4):
+            metrics_shape = np.shape(inter_night_metrics[i])
+            
+            if metrics_shape[0] > 1 and len(metrics_shape) == 2:
+                mean_metrics = np.nan_to_num(mean_metrics_over_nights(inter_night_metrics[i]))
+                all_metrics[i].append(mean_metrics.reshape((1, 6)))
+            else:
+                all_metrics[i].append(inter_night_metrics[i].reshape((1, 6)))
+
+    all_metrics = [np.concatenate(i, axis=0) for i in all_metrics]
+
+    for metrics in all_metrics:
+        print(mean_metrics_over_nights(metrics))
     print()
-    print(on)
 
-    # plot_report(res)
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(20, 20))
+
+    #,"True Positif", "False Positif", "False Negatif", "total real association"
+
+    ax1.plot(np.arange(np.shape(all_metrics[0][:, :2])[0]), all_metrics[0][:, :2], label=["precision", "recall"])
+    ax1.legend()
+
+    ax2.plot(np.arange(np.shape(all_metrics[0][:, 2:])[0]), all_metrics[0][:, 2:], label=["True Positif", "False Positif", "False Negatif", "total real association"])
+    ax2.legend()
+    plt.show()
+

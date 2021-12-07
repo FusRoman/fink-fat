@@ -285,12 +285,12 @@ def compute_inter_night_metric(real_obs1, real_obs2, left_assoc, right_assoc):
         try:
             precision = (TP / (FP + TP)) * 100
         except ZeroDivisionError:
-            precision = -1
+            precision = 0
         
         try:
             recall = (TP / (FN + TP)) * 100
         except ZeroDivisionError:
-            recall = -1
+            recall = 0
 
         return {
             "precision": precision,
@@ -1299,6 +1299,7 @@ def tracklets_and_observations_associations(
             old_to_new_assoc_report['metrics'] = inter_night_metric
 
             old_to_new_assoc_report["number of duplicated association"] = 0
+            old_to_new_assoc_report["number of inter night angle filtered association"] = 0
 
             if len(left_assoc) > 0:
 
