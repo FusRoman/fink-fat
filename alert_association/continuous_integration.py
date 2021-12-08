@@ -5,11 +5,9 @@ from intra_night_association import intra_night_association
 from intra_night_association import new_trajectory_id_assignation
 from intra_night_association import get_n_last_observations_from_trajectories
 from night_to_night_association import night_to_night_association
-import matplotlib.pyplot as plt
 import astropy.units as u
 from pandas.testing import assert_frame_equal
 import sys
-import night_report
 from collections import Counter
 import pyarrow.parquet as pq
 
@@ -142,10 +140,12 @@ def time_window_management(
             .explode(["trajectory_id", "ra"])
             .reset_index(drop=True)
         )
-        old_test = old_test[old_test['candid'] > 2]
-        
+        old_test = old_test[old_test["candid"] > 2]
+
         oldest_traj = oldest_traj.reset_index(drop=True)
-        oldest_traj = oldest_traj[oldest_traj['trajectory_id'].isin(old_test['trajectory_id'])]
+        oldest_traj = oldest_traj[
+            oldest_traj["trajectory_id"].isin(old_test["trajectory_id"])
+        ]
 
     diff_nid_old_observation = nid_next_night - old_observation["nid"]
     old_observation = old_observation[diff_nid_old_observation < time_window]

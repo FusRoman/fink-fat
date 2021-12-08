@@ -69,7 +69,9 @@ def parse_intra_night_report(intra_night_report):
             fp = 0
             fn = 0
             tot = 0
-        return np.array([nb_sep_assoc, nb_mag_filter, nb_tracklets, pr, re, tp, fp, fn, tot])
+        return np.array(
+            [nb_sep_assoc, nb_mag_filter, nb_tracklets, pr, re, tp, fp, fn, tot]
+        )
     else:
         return np.array([0, 0, 0, 0, 100, 100, 0, 0, 0])
 
@@ -106,7 +108,20 @@ def parse_association_report(association_report):
             fn = 0
             tot = 0
 
-        return np.array([nb_sep_assoc, nb_mag_filter, nb_angle_filter, nb_duplicates, pr, re, tp, fp, fn, tot])
+        return np.array(
+            [
+                nb_sep_assoc,
+                nb_mag_filter,
+                nb_angle_filter,
+                nb_duplicates,
+                pr,
+                re,
+                tp,
+                fp,
+                fn,
+                tot,
+            ]
+        )
     else:
         return np.array([0, 0, 0, 0, 100, 100, 0, 0, 0, 0])
 
@@ -278,15 +293,16 @@ def get_intra_night_metrics(parse_report):
     intra_night = parse_report[0]
     return np.array(intra_night)[3:]
 
+
 def get_inter_night_metrics(parse_report):
     traj_assoc_report = parse_report[1][1]
 
     track_assoc_report = parse_report[2][1]
 
     traj_to_tracklets = traj_assoc_report[:, 0, 4:]
-    
+
     traj_to_obs = traj_assoc_report[:, 1, 4:]
-    
+
     if len(track_assoc_report) > 0:
         old_obs_to_track = track_assoc_report[:, 0, 4:]
 
@@ -304,17 +320,30 @@ def mean_metrics_over_nights(metrics):
     test[idx] = np.zeros(6, dtype=bool)
     return np.mean(metrics, axis=0, where=test)
 
+
 def plot_metrics(metrics, axes, title):
     values_idx = np.arange(1, np.shape(metrics[:, :2])[0] + 1)
-    
+
     axes[0].plot(values_idx, np.cumsum(metrics[:, 0]) / values_idx, label="precision")
     axes[0].plot(values_idx, np.cumsum(metrics[:, 1]) / values_idx, label="recall")
     axes[0].set_title(title)
     axes[0].legend()
 
-    axes[1].plot(values_idx, np.cumsum(metrics[:, 2:-1], axis=0), alpha=0.8, label=["True Positif", "False Positif", "False Negatif"])
-    axes[1].plot(values_idx, np.cumsum(metrics[:, -1]), label="total real association", alpha=0.7, color="red")
+    axes[1].plot(
+        values_idx,
+        np.cumsum(metrics[:, 2:-1], axis=0),
+        alpha=0.8,
+        label=["True Positif", "False Positif", "False Negatif"],
+    )
+    axes[1].plot(
+        values_idx,
+        np.cumsum(metrics[:, -1]),
+        label="total real association",
+        alpha=0.7,
+        color="red",
+    )
     axes[1].legend()
+
 
 if __name__ == "__main__":
     import test_sample as ts  # noqa: F401
@@ -325,17 +354,19 @@ if __name__ == "__main__":
 
     all_metrics = [[], [], [], []]
 
-    for path in all_path_report:
-        
-        parse_report = open_and_parse_report(path)
+    for current_path in all_path_report:
+
+        parse_report = open_and_parse_report(current_path)
 
         inter_night_metrics = get_inter_night_metrics(parse_report)
-        
+
         for i in range(4):
             metrics_shape = np.shape(inter_night_metrics[i])
-            
+
             if metrics_shape[0] > 1 and len(metrics_shape) == 2:
-                mean_metrics = np.nan_to_num(mean_metrics_over_nights(inter_night_metrics[i]))
+                mean_metrics = np.nan_to_num(
+                    mean_metrics_over_nights(inter_night_metrics[i])
+                )
                 all_metrics[i].append(mean_metrics.reshape((1, 6)))
             else:
                 all_metrics[i].append(inter_night_metrics[i].reshape((1, 6)))
@@ -351,13 +382,12 @@ if __name__ == "__main__":
         "trajectory to tracklets association",
         "trajectory to new observations association",
         "old observations to tracklets association",
-        "old observations to new observations association"
+        "old observations to new observations association",
     ]
 
     fig.suptitle("Association metrics")
     for i, ax, title in zip(range(4), axes, metrics_title):
         plot_metrics(all_metrics[i], ax, title)
-    
+
     plt.tight_layout(h_pad=2)
     plt.show()
-

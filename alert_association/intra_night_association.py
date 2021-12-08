@@ -334,9 +334,11 @@ def magnitude_association(
     )
 
 
-def compute_inter_night_metric(real_obs1, real_obs2, left_assoc, right_assoc, from_inter_night=False):
+def compute_inter_night_metric(
+    real_obs1, real_obs2, left_assoc, right_assoc, from_inter_night=False
+):
     """
-    Compute the inter night association metrics. 
+    Compute the inter night association metrics.
     Used only on test dataset where the column 'ssnamenr' are present and the real association are provided.
 
     Parameters
@@ -349,7 +351,7 @@ def compute_inter_night_metric(real_obs1, real_obs2, left_assoc, right_assoc, fr
         left members of the detected associations
     right_members : dataframe
         right members of the detected associations
-    
+
     Returns
     -------
     metrics : dictionary
@@ -447,31 +449,39 @@ def compute_inter_night_metric(real_obs1, real_obs2, left_assoc, right_assoc, fr
     >>> expected_metrics = {'precision': 100.0, 'recall': 40.0, 'True Positif': 2, 'False Positif': 0, 'False Negatif': 3, 'total real association': 5}
     >>> TestCase().assertDictEqual(expected_metrics, metrics)
     """
-    
-    if "ssnamenr" in real_obs1 and "ssnamenr" in real_obs2 and "ssnamenr" in left_assoc and "ssnamenr" in right_assoc:
-        
+
+    if (
+        "ssnamenr" in real_obs1 and "ssnamenr" in real_obs2 and "ssnamenr" in left_assoc and "ssnamenr" in right_assoc
+    ):
+
         real_assoc = real_obs1.merge(
-            real_obs2, on="ssnamenr", suffixes=("_left", "_right"), how='left'
+            real_obs2, on="ssnamenr", suffixes=("_left", "_right"), how="left"
         )
 
         if from_inter_night:
-            real_obs1 = real_obs1.rename({g : g + "_left" for g in real_obs1.columns}, axis=1)
-            real_obs2 = real_obs2.rename({g : g + "_right" for g in real_obs2.columns}, axis=1)
-
-            real_assoc = pd.concat(
-                [real_obs1, real_obs2], axis=1
+            real_obs1 = real_obs1.rename(
+                {g: g + "_left" for g in real_obs1.columns}, axis=1
+            )
+            real_obs2 = real_obs2.rename(
+                {g: g + "_right" for g in real_obs2.columns}, axis=1
             )
 
-        left_assoc = left_assoc.rename({g : "left_" + g for g in left_assoc.columns}, axis=1)
-        right_assoc = right_assoc.rename({g : "right_" + g for g in right_assoc.columns}, axis=1)
-        
-        detected_assoc = pd.concat(
-            [left_assoc, right_assoc], axis=1
+            real_assoc = pd.concat([real_obs1, real_obs2], axis=1)
+
+        left_assoc = left_assoc.rename(
+            {g: "left_" + g for g in left_assoc.columns}, axis=1
+        )
+        right_assoc = right_assoc.rename(
+            {g: "right_" + g for g in right_assoc.columns}, axis=1
         )
 
+        detected_assoc = pd.concat([left_assoc, right_assoc], axis=1)
+
         df = real_assoc.merge(
-            detected_assoc, left_on=["candid_left", "candid_right"],
-            right_on=["left_candid", "right_candid"], how='left'
+            detected_assoc,
+            left_on=["candid_left", "candid_right"],
+            right_on=["left_candid", "right_candid"],
+            how="left",
         )
         is_NaN = df.isnull()
         row_has_NaN = is_NaN.any(axis=1)
@@ -480,7 +490,7 @@ def compute_inter_night_metric(real_obs1, real_obs2, left_assoc, right_assoc, fr
         left_assoc = left_assoc.reset_index(drop=True)
         right_assoc = right_assoc.reset_index(drop=True)
 
-        positive_mask = left_assoc['left_ssnamenr'] != right_assoc['right_ssnamenr']
+        positive_mask = left_assoc["left_ssnamenr"] != right_assoc["right_ssnamenr"]
         FP = len(left_assoc[positive_mask])
         TP = len(left_assoc[~positive_mask])
         FN = len(rows_with_NaN) - FP
@@ -489,7 +499,7 @@ def compute_inter_night_metric(real_obs1, real_obs2, left_assoc, right_assoc, fr
             precision = (TP / (FP + TP)) * 100
         except ZeroDivisionError:
             precision = 0
-        
+
         try:
             recall = (TP / (FN + TP)) * 100
         except ZeroDivisionError:
@@ -501,15 +511,13 @@ def compute_inter_night_metric(real_obs1, real_obs2, left_assoc, right_assoc, fr
             "True Positif": TP,
             "False Positif": FP,
             "False Negatif": int(FN),
-            "total real association": len(real_assoc)
+            "total real association": len(real_assoc),
         }
     else:
         return {}
 
 
-def compute_intra_night_metrics(
-    left_assoc, right_assoc, observations_with_real_labels
-):
+def compute_intra_night_metrics(left_assoc, right_assoc, observations_with_real_labels):
     """
     computes performance metrics of the associations methods.
     Used only on test dataset where the column 'ssnamenr' are present and the real association are provided.
@@ -611,39 +619,39 @@ def compute_intra_night_metrics(
     >>> TestCase().assertDictEqual(expected_dict, actual_dict)
     """
 
-    gb_real_assoc = observations_with_real_labels.sort_values(['jd']).groupby(["ssnamenr"]).agg({
-        "ssnamenr": list,
-        "candid": list,
-    })
+    gb_real_assoc = (
+        observations_with_real_labels.sort_values(["jd"])
+        .groupby(["ssnamenr"])
+        .agg({"ssnamenr": list, "candid": list})
+    )
 
     def split_assoc(x, left_ssnamenr, left_candid, right_ssnamenr, right_candid):
-        ssnamenr = x['ssnamenr']
-        candid = x['candid']
+        ssnamenr = x["ssnamenr"]
+        candid = x["candid"]
 
         for i in range(len(ssnamenr) - 1):
             left_ssnamenr.append(ssnamenr[i])
             left_candid.append(candid[i])
 
-            right_ssnamenr.append(ssnamenr[i+1])
-            right_candid.append(candid[i+1])
-
+            right_ssnamenr.append(ssnamenr[i + 1])
+            right_candid.append(candid[i + 1])
 
     left_candid = []
     left_ssnamenr = []
     right_candid = []
     right_ssnamenr = []
 
-    gb_real_assoc.apply(split_assoc, axis=1, args=(left_ssnamenr, left_candid, right_ssnamenr, right_candid))
-    real_left = pd.DataFrame({
-        "ssnamenr": left_ssnamenr,
-        "candid": left_candid
-    })
+    gb_real_assoc.apply(
+        split_assoc,
+        axis=1,
+        args=(left_ssnamenr, left_candid, right_ssnamenr, right_candid),
+    )
+    real_left = pd.DataFrame({"ssnamenr": left_ssnamenr, "candid": left_candid})
 
-    real_right = pd.DataFrame({
-        "ssnamenr": right_ssnamenr,
-        "candid": right_candid
-    })
-    return compute_inter_night_metric(real_left, real_right, left_assoc, right_assoc, from_inter_night=True)
+    real_right = pd.DataFrame({"ssnamenr": right_ssnamenr, "candid": right_candid})
+    return compute_inter_night_metric(
+        real_left, real_right, left_assoc, right_assoc, from_inter_night=True
+    )
 
 
 def restore_left_right(concat_l_r, nb_assoc_column):

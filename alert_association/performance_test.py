@@ -29,16 +29,16 @@ if __name__ == "__main__":
 
         data_path = "../data/month=0"
         df_sso = ci.load_data(data_path, "Solar System MPC")
-        
+
         if nb_trajectories_limit:
-            mpc_traj = df_sso.groupby(['ssnamenr']).agg({"candid":len, "ssnamenr":list})
-            specific_sso = np.unique(mpc_traj[mpc_traj['candid'] > 70].explode(['ssnamenr'])['ssnamenr'])
-            
-            df_sso = df_sso[
-                (
-                    df_sso["ssnamenr"].isin(specific_sso[:20])
-                )
-            ]
+            mpc_traj = df_sso.groupby(["ssnamenr"]).agg(
+                {"candid": len, "ssnamenr": list}
+            )
+            specific_sso = np.unique(
+                mpc_traj[mpc_traj["candid"] > 70].explode(["ssnamenr"])["ssnamenr"]
+            )
+
+            df_sso = df_sso[(df_sso["ssnamenr"].isin(specific_sso[:20]))]
 
         print("total alert: {}".format(len(df_sso)))
 
@@ -78,7 +78,7 @@ if __name__ == "__main__":
 
         it_limit = 5
         current_it = -10000
-        most_recent_traj = pd.DataFrame(columns=['trajectory_id'])
+        most_recent_traj = pd.DataFrame(columns=["trajectory_id"])
         for i in range(1, len(all_night)):
             if current_it > it_limit:
                 break
@@ -111,11 +111,7 @@ if __name__ == "__main__":
                         )
                     )
                 else:
-                    print(
-                        "nb most recent traj: {}".format(
-                            0
-                        )
-                    )
+                    print("nb most recent traj: {}".format(0))
                 print("nb old observation: {}".format(len(old_observation)))
                 print("nb new observation : {}".format(len(df_next_night)))
                 print()
@@ -151,11 +147,8 @@ if __name__ == "__main__":
                         )
                     )
                 except KeyError:
-                    print(
-                        "nb_trajectories: {}".format(0)
-                    )
+                    print("nb_trajectories: {}".format(0))
                 print("-----------------------------------------------")
-
 
         if show_results:  # pragma: no cover
 
@@ -223,11 +216,7 @@ if __name__ == "__main__":
         df_sso = ci.load_data(data_path, "Solar System MPC")
 
         if nb_trajectories_limit:
-            df_sso = df_sso[
-                (
-                    df_sso["ssnamenr"].isin(mpc_trajectories)
-                )
-            ]
+            df_sso = df_sso[(df_sso["ssnamenr"].isin(mpc_trajectories))]
 
         print("total alert: {}".format(len(df_sso)))
 
@@ -305,8 +294,7 @@ if __name__ == "__main__":
         prec_occur = Counter(traj_precision)
         print(
             "Ratio of perfectly detected trajectory: ({} / {}) * 100 = {} %".format(
-                prec_occur[0], len(gb_traj),
-                (prec_occur[0] / len(gb_traj) * 100)
+                prec_occur[0], len(gb_traj), (prec_occur[0] / len(gb_traj) * 100)
             )
         )
 
