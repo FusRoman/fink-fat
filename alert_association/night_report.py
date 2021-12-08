@@ -358,6 +358,6 @@ if __name__ == "__main__":
     for i, ax, title in zip(range(4), axes, metrics_title):
         plot_metrics(all_metrics[i], ax, title)
     
-    plt.tight_layout()
+    plt.tight_layout(h_pad=2)
     plt.show()
 
