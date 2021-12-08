@@ -160,10 +160,6 @@ if __name__ == "__main__":
 
     df_sso = load_data(data_path, "Solar System MPC")
 
-    # test case : "53317", "1951", "80343", "1196", "23101", "1758"
-    # additionnal case : "75653", "33568", "226653", "73972", "232351", "75653",
-
-    # broken case : 73972
     specific_mpc = df_sso[
         (
             df_sso["ssnamenr"].isin(
@@ -181,8 +177,6 @@ if __name__ == "__main__":
             )
         )
     ]
-
-    # specific_mpc = df_sso
 
     mpc_plot = (
         specific_mpc.groupby(["ssnamenr"])
@@ -211,23 +205,12 @@ if __name__ == "__main__":
         old_observation = df_night1
 
     time_window_limit = 16
-    verbose = False
-    save_report = False
-    show_results = False
 
     for i in range(1, len(all_night)):
         t_before = t.time()
         new_night = all_night[i]
 
         df_next_night = specific_mpc[specific_mpc["nid"] == new_night]
-
-        if verbose:  # pragma: no cover
-            print()
-            print()
-            print("incoming night : {}".format(new_night))
-            print("nb new observation : {}".format(len(df_next_night)))
-            print()
-
         current_night_id = df_next_night["nid"].values[0]
 
         if len(traj_df) > 0:
@@ -247,24 +230,11 @@ if __name__ == "__main__":
             mag_criterion_same_fid=0.6,
             mag_criterion_diff_fid=0.85,
             angle_criterion=30,
-            run_intra_night_metrics=True,
+            run_metrics=True,
         )
 
         traj_df = pd.concat([traj_df, oldest_traj])
         last_nid = current_night_id
-
-        if save_report:
-            report["computation time of the night"] = t.time() - t_before
-            night_report.save_report(report, df_next_night["jd"].values[0])
-
-        if verbose:  # pragma: no cover
-            print()
-            print("elapsed time: {}".format(t.time() - t_before))
-            print()
-            print(
-                "nb_trajectories: {}".format(len(np.unique(traj_df["trajectory_id"])))
-            )
-            print("-----------------------------------------------")
 
     all_alert_not_associated = specific_mpc[
         ~specific_mpc["candid"].isin(traj_df["candid"])
@@ -305,46 +275,6 @@ if __name__ == "__main__":
 
     prec_occur = Counter(traj_precision)
     change_counter = Counter(nb_traj_change)
-
-    if show_results:  # pragma: no cover
-
-        gb_traj = (
-            traj_df.groupby(["trajectory_id"])
-            .agg(
-                {
-                    "ra": list,
-                    "dec": list,
-                    "dcmag": list,
-                    "fid": list,
-                    "nid": list,
-                    "candid": lambda x: len(x),
-                }
-            )
-            .reset_index()
-        )
-
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(40, 40))
-
-        for _, rows in mpc_plot.iterrows():
-            ra = rows["ra"]
-            dec = rows["dec"]
-            label = rows["ssnamenr"]
-
-            ax1.scatter(ra, dec, label=label)
-
-        ax1.legend(title="mpc name")
-
-        for _, rows in gb_traj.iterrows():
-            ra = rows["ra"]
-            dec = rows["dec"]
-            label = rows["trajectory_id"]
-            ax2.scatter(ra, dec, label=label)
-
-        ax1.set_title("real trajectories")
-        ax2.set_title("detected trajectories")
-
-        ax2.legend(title="trajectory identifier")
-        plt.show()
 
     try:
         from unittest import TestCase

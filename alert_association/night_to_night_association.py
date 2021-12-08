@@ -6,8 +6,8 @@ import numpy as np
 from intra_night_association import intra_night_association
 from intra_night_association import new_trajectory_id_assignation
 from intra_night_association import magnitude_association
-from intra_night_association import removed_mirrored_association  # noqa: F401
 from intra_night_association import get_n_last_observations_from_trajectories
+from intra_night_association import compute_inter_night_metric
 
 
 def night_to_night_separation_association(
@@ -261,47 +261,6 @@ def cone_search_association(
     new_obs_assoc = new_obs_assoc.loc[remain_assoc["index"].values]
 
     return traj_assoc.drop(["index"], axis=1), new_obs_assoc.drop(["index"], axis=1)
-
-def compute_inter_night_metric(real_obs1, real_obs2, left_assoc, right_assoc):
-    
-    if "ssnamenr" in real_obs1 and "ssnamenr" in real_obs2:
-        
-        real_assoc = real_obs1.merge(
-            real_obs2, on="ssnamenr", suffixes=("_left", "_right")
-        )
-        
-        assoc_mask = ((real_assoc["candid_left"].isin(left_assoc["candid"])) & (real_assoc["candid_right"].isin(right_assoc["candid"])))
-        
-        traj_true_assoc = real_assoc[assoc_mask]
-        traj_not_assoc = real_assoc[~assoc_mask]
-
-        left_assoc = left_assoc.reset_index(drop=True)
-        right_assoc = right_assoc.reset_index(drop=True)
-
-        FP = len(left_assoc[left_assoc['ssnamenr'] != right_assoc['ssnamenr']])
-        TP = len(traj_true_assoc)
-        FN = len(traj_not_assoc)
-
-        try:
-            precision = (TP / (FP + TP)) * 100
-        except ZeroDivisionError:
-            precision = 0
-        
-        try:
-            recall = (TP / (FN + TP)) * 100
-        except ZeroDivisionError:
-            recall = 0
-
-        return {
-            "precision": precision,
-            "recall": float(recall),
-            "True Positif": TP,
-            "False Positif": FP,
-            "False Negatif": int(FN),
-            "total real association": len(real_assoc)
-        }
-    else:
-        return {}
 
 
 def night_to_night_observation_association(
@@ -680,6 +639,7 @@ def trajectory_associations(
     mag_criterion_same_fid,
     mag_criterion_diff_fid,
     angle_criterion,
+    run_metrics=False
 ):
     """
     Perform the trajectory association process. Firstly, associate the recorded trajectories with the tracklets from the new nights.
@@ -701,6 +661,9 @@ def trajectory_associations(
         the magnitude criterion to associates alerts if the observations have been observed with the same filter
     angle_criterion : float
         the angle criterion to associates alerts during the cone search
+    run_metrics : boolean
+        run the inter night association metrics : trajectory_df, traj_next_night and new_observations parameters should have the 
+        ssnamenr column. 
 
     Returns
     -------
@@ -726,6 +689,8 @@ def trajectory_associations(
                                 trajectories to new observations report
 
                                 number of trajectories to new observations duplicated associations
+
+                                metrics, no sense if run_metrics is set to False
 
     Examples
     --------
@@ -860,10 +825,11 @@ def trajectory_associations(
                 ["trajectory_id"]
             )
             traj_left = traj_left.drop_duplicates(["trajectory_id"])
-
-            last_traj_obs = (two_last_current_nid.groupby(["trajectory_id"]).last().reset_index())
-            inter_night_metric = compute_inter_night_metric(last_traj_obs, tracklets_extremity, traj_left, traj_extremity_associated)
-            night_to_night_traj_to_tracklets_report['metrics'] = inter_night_metric
+            
+            if run_metrics:
+                last_traj_obs = (two_last_current_nid.groupby(["trajectory_id"]).last().reset_index())
+                inter_night_metric = compute_inter_night_metric(last_traj_obs, tracklets_extremity, traj_left, traj_extremity_associated)
+                night_to_night_traj_to_tracklets_report['metrics'] = inter_night_metric
 
             night_to_night_traj_to_tracklets_report[
                 "number of duplicated association"
@@ -947,9 +913,10 @@ def trajectory_associations(
                 obs_assoc = obs_assoc.drop_duplicates(["trajectory_id"])
                 traj_left = traj_left.drop_duplicates(["trajectory_id"])
 
-                last_traj_obs = (two_last_current_nid.groupby(["trajectory_id"]).last().reset_index())
-                inter_night_metric = compute_inter_night_metric(last_traj_obs, new_observations, traj_left, obs_assoc)
-                night_to_night_traj_to_obs_report['metrics'] = inter_night_metric
+                if run_metrics:
+                    last_traj_obs = (two_last_current_nid.groupby(["trajectory_id"]).last().reset_index())
+                    inter_night_metric = compute_inter_night_metric(last_traj_obs, new_observations, traj_left, obs_assoc)
+                    night_to_night_traj_to_obs_report['metrics'] = inter_night_metric
 
                 night_to_night_traj_to_obs_report[
                     "number of duplicated association"
@@ -989,6 +956,7 @@ def tracklets_and_observations_associations(
     mag_criterion_same_fid,
     mag_criterion_diff_fid,
     angle_criterion,
+    run_metrics=False
 ):
     """
     Perform the association process between the tracklets from the next night with the old observations.
@@ -1014,6 +982,9 @@ def tracklets_and_observations_associations(
         the magnitude criterion to associates alerts if the observations have been observed with the same filter
     angle_criterion : float
         the angle criterion to associates alerts during the cone search
+    run_metrics : boolean
+        run the inter night association metrics : trajectory_df, traj_next_night, old_observations and new_observations 
+        parameters should have the ssnamenr column. 
 
     Returns
     -------
@@ -1035,6 +1006,8 @@ def tracklets_and_observations_associations(
                             number of tracklets to old observation duplicated association
 
                             old observation to new observation report
+
+                            metrics, no sense if run_metrics is set to False
 
                     list of updated trajectories
 
@@ -1244,9 +1217,10 @@ def tracklets_and_observations_associations(
             old_obs_right = old_obs_right.drop_duplicates(["trajectory_id"])
             traj_left = traj_left.drop_duplicates(["trajectory_id"])
 
-            last_traj_obs = (two_first_obs_tracklets.groupby(["trajectory_id"]).first().reset_index())
-            inter_night_metric = compute_inter_night_metric(last_traj_obs, current_old_obs, traj_left, old_obs_right)
-            track_to_old_obs_report['metrics'] = inter_night_metric
+            if run_metrics:
+                last_traj_obs = (two_first_obs_tracklets.groupby(["trajectory_id"]).first().reset_index())
+                inter_night_metric = compute_inter_night_metric(last_traj_obs, current_old_obs, traj_left, old_obs_right)
+                track_to_old_obs_report['metrics'] = inter_night_metric
 
             track_to_old_obs_report[
                 "number of duplicated association"
@@ -1295,8 +1269,9 @@ def tracklets_and_observations_associations(
                 norm_diff_fid,
             )
             
-            inter_night_metric = compute_inter_night_metric(current_old_obs, new_observations, left_assoc, right_assoc)
-            old_to_new_assoc_report['metrics'] = inter_night_metric
+            if run_metrics:
+                inter_night_metric = compute_inter_night_metric(current_old_obs, new_observations, left_assoc, right_assoc)
+                old_to_new_assoc_report['metrics'] = inter_night_metric
 
             old_to_new_assoc_report["number of duplicated association"] = 0
             old_to_new_assoc_report["number of inter night angle filtered association"] = 0
@@ -1364,7 +1339,7 @@ def night_to_night_association(
     mag_criterion_same_fid=0.18,
     mag_criterion_diff_fid=0.7,
     angle_criterion=8.8,
-    run_intra_night_metrics=False,
+    run_metrics=False,
 ):
     """
     Perform night to night associations in four steps.
@@ -1396,8 +1371,8 @@ def night_to_night_association(
         the magnitude criterion to associates alerts if the observations have been observed with the same filter
     angle_criterion : float
         the angle criterion to associates alerts during the cone search
-    run_intra_night_metrics : boolean
-        launch and return the performance metrics of the intra night association
+    run_metrics : boolean
+        launch and return the performance metrics of the intra night association and inter night association
 
     Returns
     -------
@@ -1428,7 +1403,7 @@ def night_to_night_association(
     ... mag_criterion_same_fid = 0.2,
     ... mag_criterion_diff_fid = 0.5,
     ... angle_criterion = 30,
-    ... run_intra_night_metrics = True
+    ... run_metrics = True
     ... )
 
     >>> TestCase().assertDictEqual(ts.inter_night_report1, inter_night_report)
@@ -1489,7 +1464,7 @@ def night_to_night_association(
         sep_criterion=intra_night_sep_criterion,
         mag_criterion_same_fid=intra_night_mag_criterion_same_fid,
         mag_criterion_diff_fid=intra_night_mag_criterion_diff_fid,
-        compute_metrics=run_intra_night_metrics,
+        compute_metrics=run_metrics,
     )
 
     new_left, new_right = (
@@ -1531,6 +1506,7 @@ def night_to_night_association(
         mag_criterion_same_fid,
         mag_criterion_diff_fid,
         angle_criterion,
+        run_metrics
     )
 
     # perform associations with observations and tracklets :
@@ -1550,6 +1526,7 @@ def night_to_night_association(
         mag_criterion_same_fid,
         mag_criterion_diff_fid,
         angle_criterion,
+        run_metrics
     )
 
     inter_night_report["intra night report"] = intra_night_report
