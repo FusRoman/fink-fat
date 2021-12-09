@@ -828,6 +828,22 @@ def trajectory_associations(
                 last_traj_obs = (
                     two_last_current_nid.groupby(["trajectory_id"]).last().reset_index()
                 )
+
+                col_filter = [
+                    "ra",
+                    "dec",
+                    "ssnamenr",
+                    "jd",
+                    "nid",
+                    "candid",
+                    "dcmag",
+                    "trajectory_id",
+                ]
+
+                specific_traj = trajectory_df[
+                    trajectory_df["trajectory_id"].isin([50, 76])
+                ][col_filter]
+
                 inter_night_metric = compute_inter_night_metric(
                     last_traj_obs,
                     tracklets_extremity,
@@ -1229,7 +1245,7 @@ def tracklets_and_observations_associations(
             if run_metrics:
                 last_traj_obs = (
                     two_first_obs_tracklets.groupby(["trajectory_id"])
-                    .first()
+                    .last()
                     .reset_index()
                 )
                 inter_night_metric = compute_inter_night_metric(

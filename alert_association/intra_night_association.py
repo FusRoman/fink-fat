@@ -337,6 +337,8 @@ def magnitude_association(
 def compute_inter_night_metric(
     real_obs1, real_obs2, left_assoc, right_assoc, from_inter_night=False
 ):
+    # TODO 
+    # faire un test sur des associations dupliquées
     """
     Compute the inter night association metrics.
     Used only on test dataset where the column 'ssnamenr' are present and the real association are provided.
@@ -389,7 +391,7 @@ def compute_inter_night_metric(
     ... })
 
     >>> metrics = compute_inter_night_metric(real_left, real_right, detected_left, detected_right)
-    >>> expected_metrics = {'precision': 0.0, 'recall': 0.0, 'True Positif': 0, 'False Positif': 2, 'False Negatif': 0, 'total real association': 2}
+    >>> expected_metrics = {'precision': 0.0, 'recall': 0.0, 'True Positif': 0, 'False Positif': 2, 'False Negatif': 2, 'total real association': 2}
     >>> TestCase().assertDictEqual(expected_metrics, metrics)
 
     >>> empty_assoc = pd.DataFrame(columns=['candid', 'ssnamenr'])
@@ -418,7 +420,7 @@ def compute_inter_night_metric(
     ... })
 
     >>> metrics = compute_inter_night_metric(real_left, real_right, detected_left, detected_right)
-    >>> expected_metrics = {'precision': 50.0, 'recall': 66.66666666666666, 'True Positif': 2, 'False Positif': 2, 'False Negatif': 1, 'total real association': 5}
+    >>> expected_metrics = {'precision': 50.0, 'recall': 40.0, 'True Positif': 2, 'False Positif': 2, 'False Negatif': 3, 'total real association': 5}
     >>> TestCase().assertDictEqual(expected_metrics, metrics)
 
     >>> detected_left = pd.DataFrame({
@@ -432,7 +434,7 @@ def compute_inter_night_metric(
     ... })
 
     >>> metrics = compute_inter_night_metric(real_left, real_right, detected_left, detected_right)
-    >>> expected_metrics = {'precision': 0.0, 'recall': 0.0, 'True Positif': 0, 'False Positif': 2, 'False Negatif': 3, 'total real association': 5}
+    >>> expected_metrics = {'precision': 0.0, 'recall': 0.0, 'True Positif': 0, 'False Positif': 2, 'False Negatif': 5, 'total real association': 5}
     >>> TestCase().assertDictEqual(expected_metrics, metrics)
 
     >>> detected_left = pd.DataFrame({
@@ -451,11 +453,19 @@ def compute_inter_night_metric(
     """
 
     if (
-        "ssnamenr" in real_obs1 and "ssnamenr" in real_obs2 and "ssnamenr" in left_assoc and "ssnamenr" in right_assoc
+        "ssnamenr" in real_obs1
+        and "ssnamenr" in real_obs2
+        and "ssnamenr" in left_assoc
+        and "ssnamenr" in right_assoc
     ):
+        real_obs1 = real_obs1[["candid", "ssnamenr"]]
+        real_obs2 = real_obs2[["candid", "ssnamenr"]]
+
+        left_assoc = left_assoc[["candid", "ssnamenr"]].reset_index(drop=True)
+        right_assoc = right_assoc[["candid", "ssnamenr"]].reset_index(drop=True)
 
         real_assoc = real_obs1.merge(
-            real_obs2, on="ssnamenr", suffixes=("_left", "_right"), how="left"
+            real_obs2, on="ssnamenr", suffixes=("_left", "_right")
         )
 
         if from_inter_night:
@@ -477,23 +487,20 @@ def compute_inter_night_metric(
 
         detected_assoc = pd.concat([left_assoc, right_assoc], axis=1)
 
-        df = real_assoc.merge(
+        assoc_metrics = real_assoc.merge(
             detected_assoc,
             left_on=["candid_left", "candid_right"],
             right_on=["left_candid", "right_candid"],
-            how="left",
+            how="outer",
+            indicator=True,
         )
-        is_NaN = df.isnull()
-        row_has_NaN = is_NaN.any(axis=1)
-        rows_with_NaN = df[row_has_NaN]
 
-        left_assoc = left_assoc.reset_index(drop=True)
-        right_assoc = right_assoc.reset_index(drop=True)
-
-        positive_mask = left_assoc["left_ssnamenr"] != right_assoc["right_ssnamenr"]
-        FP = len(left_assoc[positive_mask])
-        TP = len(left_assoc[~positive_mask])
-        FN = len(rows_with_NaN) - FP
+        test = (~assoc_metrics[["candid_left", "candid_right"]].duplicated()) | (assoc_metrics[["candid_left", "candid_right"]].isnull().all(axis=1))
+        assoc_metrics = assoc_metrics[test]
+        
+        FP = len(assoc_metrics[assoc_metrics["_merge"] == "right_only"])
+        TP = len(assoc_metrics[assoc_metrics["_merge"] == "both"])
+        FN = len(assoc_metrics[assoc_metrics["_merge"] == "left_only"])
 
         try:
             precision = (TP / (FP + TP)) * 100
@@ -615,7 +622,7 @@ def compute_intra_night_metrics(left_assoc, right_assoc, observations_with_real_
     ... })
 
     >>> actual_dict = compute_intra_night_metrics(left_assoc, right_assoc, real_assoc)
-    >>> expected_dict = {'precision': 83.33333333333334, 'recall': 83.33333333333334, 'True Positif': 5, 'False Positif': 1, 'False Negatif': 1, 'total real association': 7}
+    >>> expected_dict = {'precision': 83.33333333333334, 'recall': 71.42857142857143, 'True Positif': 5, 'False Positif': 1, 'False Negatif': 2, 'total real association': 7}
     >>> TestCase().assertDictEqual(expected_dict, actual_dict)
     """
 

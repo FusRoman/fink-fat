@@ -2,6 +2,7 @@ import json
 from os import path
 from os import mkdir
 import matplotlib.pyplot as plt
+from pandas.core import frame
 import numpy as np
 from astropy.time import Time
 
@@ -171,11 +172,22 @@ def parse_inter_night_report(report):
     traj_report = report["trajectory association report"]
     track_report = report["tracklets and observation association report"]
 
+    nb_traj = report["nb trajectories"]
+    nb_most_recent_traj = report["nb most recent traj"]
+    nb_old_obs = report["nb old observations"]
+    nb_new_obs = report["nb new observations"]
+    time = report["computation time of the night"]
+
     parse_intra_report = parse_intra_night_report(intra_report)
     parse_traj_report = parse_trajectories_report(traj_report)
     parse_track_report = parse_tracklets_obs_report(track_report)
 
-    return parse_intra_report, parse_traj_report, parse_track_report
+    return (
+        parse_intra_report,
+        parse_traj_report,
+        parse_track_report,
+        np.array([nb_traj, time, nb_most_recent_traj, nb_old_obs, nb_new_obs]),
+    )
 
 
 def open_and_parse_report(path):
@@ -294,6 +306,11 @@ def get_intra_night_metrics(parse_report):
     return np.array(intra_night)[3:]
 
 
+def get_intra_night_associations(parse_report):
+    intra_night = parse_report[0]
+    return np.array(intra_night)[:3]
+
+
 def get_inter_night_metrics(parse_report):
     traj_assoc_report = parse_report[1][1]
 
@@ -314,20 +331,56 @@ def get_inter_night_metrics(parse_report):
     return traj_to_tracklets, traj_to_obs, old_obs_to_track, old_obs_to_new_obs
 
 
+def get_inter_night_stat(parse_report):
+    return parse_report[3]
+
+
+def get_inter_night_associations(parse_report):
+    traj_assoc_report = parse_report[1][1]
+
+    track_assoc_report = parse_report[2][1]
+
+    traj_to_tracklets = traj_assoc_report[:, 0, :4]
+
+    traj_to_obs = traj_assoc_report[:, 1, :4]
+
+    if len(track_assoc_report) > 0:
+        old_obs_to_track = track_assoc_report[:, 0, :4]
+
+        old_obs_to_new_obs = track_assoc_report[:, 1, :4]
+    else:
+        old_obs_to_track = np.array([0, 0, 0, 0])
+        old_obs_to_new_obs = np.array([0, 0, 0, 0])
+
+    return traj_to_tracklets, traj_to_obs, old_obs_to_track, old_obs_to_new_obs
+
+
 def mean_metrics_over_nights(metrics):
-    test = np.ones(np.shape(metrics), dtype=bool)
-    idx = np.where(metrics[:, -1] == 0)
-    test[idx] = np.zeros(6, dtype=bool)
-    return np.mean(metrics, axis=0, where=test)
+    # test = np.ones(np.shape(metrics), dtype=bool)
+    # idx = np.where(metrics[:, -1] == 0)
+    # test[idx] = np.zeros(6, dtype=bool)
+    return np.mean(metrics, axis=0)
 
 
-def plot_metrics(metrics, axes, title):
+def plot_metrics(fig, metrics, axes, title):
+
     values_idx = np.arange(1, np.shape(metrics[:, :2])[0] + 1)
+    import matplotlib.colors as mcolors
 
-    axes[0].plot(values_idx, np.cumsum(metrics[:, 0]) / values_idx, label="precision")
-    axes[0].plot(values_idx, np.cumsum(metrics[:, 1]) / values_idx, label="recall")
+    css_color = mcolors.CSS4_COLORS
+    axes[0].plot(
+        values_idx,
+        np.cumsum(metrics[:, 0]) / values_idx,
+        label="precision",
+        color=css_color["crimson"],
+    )
+    axes[0].plot(
+        values_idx,
+        np.cumsum(metrics[:, 1]) / values_idx,
+        label="recall",
+        color=css_color["chocolate"],
+    )
     axes[0].set_title(title)
-    axes[0].legend()
 
     axes[1].plot(
         values_idx,
@@ -335,59 +388,253 @@ def plot_metrics(metrics, axes, title):
         alpha=0.8,
         label=["True Positif", "False Positif", "False Negatif"],
     )
+
     axes[1].plot(
-        values_idx,
-        np.cumsum(metrics[:, -1]),
-        label="total real association",
-        alpha=0.7,
-        color="red",
+        values_idx, np.cumsum(metrics[:, -1]), label="total real association", alpha=0.7
     )
-    axes[1].legend()
+
+    colors = [
+        css_color["green"],
+        css_color["red"],
+        css_color["royalblue"],
+        css_color["black"],
+    ]
+    for i, j in enumerate(axes[1].lines):
+        j.set_color(colors[i])
+
+    lines_labels = [ax.get_legend_handles_labels() for ax in axes]
+    lines, labels = [sum(lol, []) for lol in zip(*lines_labels)]
+    fig.legend(lines, labels, loc=(0.5, 0.45), framealpha=0.2)
+
+
+def plot_intra_assoc(assoc, axes, title):
+
+    values_idx = np.arange(1, np.shape(assoc[:, :2])[0] + 1)
+
+    axes.plot(
+        values_idx,
+        assoc,
+        label=["separation assoc", "magnitude filter", "detected tracklets"],
+    )
+    axes.set_title(title)
+    axes.legend()
+
+
+def plot_inter_assoc(assoc, ax, title):
+    values_idx = np.arange(1, np.shape(assoc[:, :2])[0] + 1)
+
+    ax.plot(
+        values_idx,
+        assoc,
+        label=[
+            "separation assoc",
+            "magnitude filter",
+            "angle filter",
+            "duplicates assoc",
+        ],
+    )
+    ax.set_title(title)
+
+
+def plot_inter_stat(stat, axes, title):
+    values_idx = np.arange(1, np.shape(stat[:, :2])[0] + 1)
+
+    axes[0].plot(values_idx, np.cumsum(stat[:, 1]))
+    axes[0].set_title("cumulative elapsed time")
+
+    axes[1].plot(values_idx, stat[:, 0])
+    axes[1].set_title("cumulative number of trajectories")
+
+    axes[2].plot(
+        values_idx,
+        stat[:, 2:],
+        label=[
+            "number of most recent trajectories",
+            "number of old observations",
+            "number of new observations",
+        ],
+    )
+    axes[2].set_title("inputs statistics")
+    axes[2].legend()
+
+
+def plot_trajectories(traj_df, mpc_plot):
+    gb_traj = (
+        traj_df.groupby(["trajectory_id"])
+        .agg(
+            {
+                "ra": list,
+                "dec": list,
+                "dcmag": list,
+                "fid": list,
+                "nid": list,
+                "candid": lambda x: len(x),
+            }
+        )
+        .reset_index()
+    )
+
+    _, (ax1, ax2) = plt.subplots(2, 1, figsize=(40, 40))
+
+    import matplotlib.cm as cm
+
+    colors = cm.jet(np.linspace(0, 1, len(mpc_plot)))
+
+    for i, rows in mpc_plot.iterrows():
+        ra = rows["ra"]
+        dec = rows["dec"]
+        label = rows["ssnamenr"]
+
+        ax1.scatter(ra, dec, color=colors[i])
+
+    colors = cm.Set1(np.linspace(0, 1, len(gb_traj)))
+    for i, rows in gb_traj.iterrows():
+        ra = rows["ra"]
+        dec = rows["dec"]
+        label = rows["trajectory_id"]
+        ax2.scatter(ra, dec, color=colors[i])
+
+    ax1.set_title("real trajectories")
+    ax2.set_title("detected trajectories")
 
 
 if __name__ == "__main__":
     import test_sample as ts  # noqa: F401
+    import continuous_integration as ci
+    import pyarrow.parquet as pq
+
+    show_traj = True
+    if show_traj:
+        data_path = "../data/month=0"
+        df_sso = ci.load_data(data_path, "Solar System MPC")
+
+        nb_trajectories_limit = True
+        if nb_trajectories_limit:
+            mpc_traj = df_sso.groupby(["ssnamenr"]).agg(
+                {"candid": len, "ssnamenr": list}
+            )
+            specific_sso = np.unique(
+                mpc_traj[mpc_traj["candid"] > 70].explode(["ssnamenr"])["ssnamenr"]
+            )
+
+            df_sso = df_sso[(df_sso["ssnamenr"].isin(specific_sso[:20]))]
+
+        print("total alert: {}".format(len(df_sso)))
+
+        mpc_plot = (
+            df_sso.groupby(["ssnamenr"]).agg({"ra": list, "dec": list}).reset_index()
+        )
+
+        traj_df = pq.read_table("trajectory_output.parquet").to_pandas()
+        plot_trajectories(traj_df, mpc_plot)
 
     import glob
 
     all_path_report = glob.glob("report_db/*/*")
 
-    all_metrics = [[], [], [], []]
+    all_inter_metrics = [[], [], [], []]
+    all_intra_metrics = []
+
+    all_inter_assoc = [[], [], [], []]
+    all_intra_assoc = []
+
+    all_inter_stat = []
 
     for current_path in all_path_report:
 
+        if current_path == "report_db/03/01.json":
+            with open(current_path, "r") as file:
+                intra_night_report = json.load(file)
+                intra_night_report = parse_intra_night_report(intra_night_report)
+                all_intra_metrics.append(intra_night_report[3:])
+                all_intra_assoc.append(intra_night_report[:3])
+                continue
+
         parse_report = open_and_parse_report(current_path)
 
+        inter_night_assoc = get_inter_night_associations(parse_report)
+        intra_night_assoc = get_intra_night_associations(parse_report)
+        all_intra_assoc.append(intra_night_assoc)
+
         inter_night_metrics = get_inter_night_metrics(parse_report)
+        intra_night_metrics = get_intra_night_metrics(parse_report)
+        all_intra_metrics.append(intra_night_metrics)
+
+        inter_stat = get_inter_night_stat(parse_report)
+        all_inter_stat.append(inter_stat)
 
         for i in range(4):
             metrics_shape = np.shape(inter_night_metrics[i])
+            assoc_shape = np.shape(inter_night_assoc[i])
+
+            if assoc_shape[0] > 1 and len(assoc_shape) == 2:
+                mean_assoc = np.nan_to_num(
+                    mean_metrics_over_nights(inter_night_assoc[i])
+                )
+                all_inter_assoc[i].append(mean_assoc.reshape((1, 4)))
+            else:
+                all_inter_assoc[i].append(inter_night_assoc[i].reshape((1, 4)))
 
             if metrics_shape[0] > 1 and len(metrics_shape) == 2:
                 mean_metrics = np.nan_to_num(
                     mean_metrics_over_nights(inter_night_metrics[i])
                 )
-                all_metrics[i].append(mean_metrics.reshape((1, 6)))
+                all_inter_metrics[i].append(mean_metrics.reshape((1, 6)))
             else:
-                all_metrics[i].append(inter_night_metrics[i].reshape((1, 6)))
+                all_inter_metrics[i].append(inter_night_metrics[i].reshape((1, 6)))
 
-    all_metrics = [np.concatenate(i, axis=0) for i in all_metrics]
+    all_intra_assoc = np.stack(all_intra_assoc)
+    all_inter_assoc = [np.concatenate(i, axis=0) for i in all_inter_assoc]
 
-    for metrics in all_metrics:
-        print(mean_metrics_over_nights(metrics))
-    print()
+    all_intra_metrics = np.stack(all_intra_metrics)
+    all_inter_metrics = [np.concatenate(i, axis=0) for i in all_inter_metrics]
 
-    fig, axes = plt.subplots(4, 2, figsize=(20, 20), sharex=True)
+    all_inter_stat = np.stack(all_inter_stat)
+
+    fig1 = plt.figure()
+    ax1 = plt.subplot2grid((3, 3), (0, 0), colspan=2)
+    ax2 = plt.subplot2grid((3, 3), (1, 0))
+    ax3 = plt.subplot2grid((3, 3), (2, 0))
+    ax4 = plt.subplot2grid((3, 3), (1, 1))
+    ax5 = plt.subplot2grid((3, 3), (2, 1))
+    ax6 = plt.subplot2grid((3, 3), (0, 2))
+    ax7 = plt.subplot2grid((3, 3), (1, 2))
+    ax8 = plt.subplot2grid((3, 3), (2, 2))
+
+    stat_axes = [ax1, ax6, ax8]
+    assoc_axes = [ax2, ax3, ax4, ax5]
+
+    plot_inter_stat(all_inter_stat, stat_axes, "inter night statistics")
+    plot_intra_assoc(all_intra_assoc, ax7, "intra night association")
+
+    fig2, axes = plt.subplots(5, 2)
+    metrics_axes = np.array(axes)
+    plot_metrics(fig2, all_intra_metrics, metrics_axes[0], "intra night metrics")
+
     metrics_title = [
-        "trajectory to tracklets association",
-        "trajectory to new observations association",
-        "old observations to tracklets association",
-        "old observations to new observations association",
+        "trajectory to tracklets metrics",
+        "trajectory to new observations metrics",
+        "old observations to tracklets metrics",
+        "old observations to new observations metrics",
     ]
 
-    fig.suptitle("Association metrics")
-    for i, ax, title in zip(range(4), axes, metrics_title):
-        plot_metrics(all_metrics[i], ax, title)
+    assoc_title = [
+        "trajectory to tracklets associations",
+        "trajectory to new observations associations",
+        "old observations to tracklets associations",
+        "old observations to new observations associations",
+    ]
 
-    plt.tight_layout(h_pad=2)
+    fig2.suptitle("Metrics")
+    for i, met_ax, met_title, assoc_ax, title in zip(
+        range(4), metrics_axes[1:], metrics_title, assoc_axes, assoc_title
+    ):
+        plot_metrics(fig2, all_inter_metrics[i], met_ax, met_title)
+        plot_inter_assoc(all_inter_assoc[i], assoc_ax, title)
+
+    lines_labels = [ax.get_legend_handles_labels() for ax in assoc_axes]
+    lines, labels = [sum(lol, []) for lol in zip(*lines_labels)]
+    fig1.legend(lines[:4], labels[:4], loc=(0.55, 0.53), framealpha=0.2)
+
+    plt.tight_layout()
     plt.show()

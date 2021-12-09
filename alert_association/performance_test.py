@@ -53,11 +53,20 @@ if __name__ == "__main__":
         df_night1 = df_sso[df_sso["nid"] == last_nid]
 
         print("first intra night association to begin with some trajectories")
-        left, right, _ = intra_night_association(df_night1)
+        left, right, first_intra_report = intra_night_association(
+            df_night1, compute_metrics=True
+        )
 
         last_trajectory_id = 0
         traj_df = new_trajectory_id_assignation(left, right, last_trajectory_id)
         traj_df = traj_df.reset_index(drop=True)
+
+        save_report = True
+        if save_report:
+            first_intra_report["number of intra night tracklets"] = len(
+                np.unique(traj_df["trajectory_id"])
+            )
+            night_report.save_report(first_intra_report, df_night1["jd"].values[0])
 
         if len(traj_df) > 0:  # pragma: no cover
             old_observation = pd.concat(
@@ -70,8 +79,6 @@ if __name__ == "__main__":
 
         time_window_limit = 7
         verbose = True
-        save_report = True
-        show_results = True
 
         if verbose:
             print("Begin association process")
@@ -105,15 +112,17 @@ if __name__ == "__main__":
                 print()
                 print("incoming night : {}".format(new_night))
                 if len(most_recent_traj) != 0:
-                    print(
-                        "nb most recent traj: {}".format(
-                            len(np.unique(most_recent_traj["trajectory_id"]))
-                        )
+                    nb_most_recent_traj = len(
+                        np.unique(most_recent_traj["trajectory_id"])
                     )
+                    print("nb most recent traj: {}".format(nb_most_recent_traj))
                 else:
-                    print("nb most recent traj: {}".format(0))
-                print("nb old observation: {}".format(len(old_observation)))
-                print("nb new observation : {}".format(len(df_next_night)))
+                    nb_most_recent_traj = 0
+                    print("nb most recent traj: {}".format(nb_most_recent_traj))
+                nb_old_obs = len(old_observation)
+                nb_new_obs = len(df_next_night)
+                print("nb old observation: {}".format(nb_old_obs))
+                print("nb new observation : {}".format(nb_new_obs))
                 print()
 
             traj_df, old_observation, report = night_to_night_association(
@@ -126,13 +135,17 @@ if __name__ == "__main__":
                 mag_criterion_same_fid=0.6,
                 mag_criterion_diff_fid=0.85,
                 angle_criterion=8.8,
-                run_intra_night_metrics=True,
+                run_metrics=True,
             )
 
             traj_df = pd.concat([traj_df, oldest_traj])
             last_nid = current_night_id
-
+            nb_traj = len(np.unique(traj_df["trajectory_id"]))
             if save_report:
+                report["nb most recent traj"] = nb_most_recent_traj
+                report["nb old observations"] = nb_old_obs
+                report["nb new observations"] = nb_new_obs
+                report["nb trajectories"] = nb_traj
                 report["computation time of the night"] = float(t.time() - t_before)
                 night_report.save_report(report, df_next_night["jd"].values[0])
 
@@ -141,54 +154,10 @@ if __name__ == "__main__":
                 print("elapsed time: {}".format(t.time() - t_before))
                 print()
                 try:
-                    print(
-                        "nb_trajectories: {}".format(
-                            len(np.unique(traj_df["trajectory_id"]))
-                        )
-                    )
+                    print("nb_trajectories: {}".format(nb_traj))
                 except KeyError:
                     print("nb_trajectories: {}".format(0))
                 print("-----------------------------------------------")
-
-        if show_results:  # pragma: no cover
-
-            gb_traj = (
-                traj_df.groupby(["trajectory_id"])
-                .agg(
-                    {
-                        "ra": list,
-                        "dec": list,
-                        "dcmag": list,
-                        "fid": list,
-                        "nid": list,
-                        "candid": lambda x: len(x),
-                    }
-                )
-                .reset_index()
-            )
-
-            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(40, 40))
-
-            for _, rows in mpc_plot.iterrows():
-                ra = rows["ra"]
-                dec = rows["dec"]
-                label = rows["ssnamenr"]
-
-                ax1.scatter(ra, dec, label=label)
-
-            ax1.legend(title="mpc name")
-
-            for _, rows in gb_traj.iterrows():
-                ra = rows["ra"]
-                dec = rows["dec"]
-                label = rows["trajectory_id"]
-                ax2.scatter(ra, dec, label=label)
-
-            ax1.set_title("real trajectories")
-            ax2.set_title("detected trajectories")
-
-            ax2.legend(title="trajectory identifier")
-            plt.show()
 
         all_alert_not_associated = df_sso[~df_sso["candid"].isin(traj_df["candid"])]
         print()
@@ -216,7 +185,14 @@ if __name__ == "__main__":
         df_sso = ci.load_data(data_path, "Solar System MPC")
 
         if nb_trajectories_limit:
-            df_sso = df_sso[(df_sso["ssnamenr"].isin(mpc_trajectories))]
+            mpc_traj = df_sso.groupby(["ssnamenr"]).agg(
+                {"candid": len, "ssnamenr": list}
+            )
+            specific_sso = np.unique(
+                mpc_traj[mpc_traj["candid"] > 70].explode(["ssnamenr"])["ssnamenr"]
+            )
+
+            df_sso = df_sso[(df_sso["ssnamenr"].isin(specific_sso[:20]))]
 
         print("total alert: {}".format(len(df_sso)))
 
