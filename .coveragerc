@@ -2,4 +2,5 @@
 branch = false
 data_file = ${PWD}/.coverage
 omit=
-    setup.py
+    alert_association/night_report.py
+    alert_association/performance_test.py

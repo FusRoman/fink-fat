@@ -334,9 +334,245 @@ def magnitude_association(
     )
 
 
-def compute_associations_metrics(
-    left_assoc, right_assoc, observations_with_real_labels
+def compute_inter_night_metric(
+    real_obs1, real_obs2, left_assoc, right_assoc, from_inter_night=False
 ):
+    """
+    Compute the inter night association metrics.
+    Used only on test dataset where the column 'ssnamenr' are present and the real association are provided.
+
+    Parameters
+    ----------
+    real_obs1 : dataframe
+        left_members of the real associations
+    real_obs2 : dataframe
+        right_members of the real associations
+    left_assoc : dataframe
+        left members of the detected associations
+    right_members : dataframe
+        right members of the detected associations
+
+    Returns
+    -------
+    metrics : dictionary
+        dictionary containing the association metrics :
+            precision : quality of the associations
+            recall : capacity of the system to find all the real associations
+            TP : true positive
+            FP : false positive
+            FN : false negative
+
+    Examples
+    --------
+    >>> real_left = pd.DataFrame({
+    ... 'candid': [0, 1],
+    ... 'ssnamenr': [0, 1]
+    ... })
+
+    >>> real_right = pd.DataFrame({
+    ... 'candid': [2, 3],
+    ... 'ssnamenr': [0, 1]
+    ... })
+
+    >>> metrics = compute_inter_night_metric(real_left, real_right, real_left, real_right)
+    >>> expected_metrics = {'precision': 100.0, 'recall': 100.0, 'True Positif': 2, 'False Positif': 0, 'False Negatif': 0, 'total real association': 2}
+    >>> TestCase().assertDictEqual(expected_metrics, metrics)
+
+    >>> detected_left = pd.DataFrame({
+    ... 'candid': [0, 1],
+    ... 'ssnamenr': [0, 1]
+    ... })
+
+    >>> detected_right = pd.DataFrame({
+    ... 'candid': [3, 2],
+    ... 'ssnamenr': [1, 0]
+    ... })
+
+    >>> metrics = compute_inter_night_metric(real_left, real_right, detected_left, detected_right)
+    >>> expected_metrics = {'precision': 0.0, 'recall': 0.0, 'True Positif': 0, 'False Positif': 2, 'False Negatif': 2, 'total real association': 2}
+    >>> TestCase().assertDictEqual(expected_metrics, metrics)
+
+    >>> empty_assoc = pd.DataFrame(columns=['candid', 'ssnamenr'])
+    >>> metrics = compute_inter_night_metric(real_left, real_right, empty_assoc, empty_assoc)
+    >>> expected_metrics = {'precision': 0, 'recall': 0.0, 'True Positif': 0, 'False Positif': 0, 'False Negatif': 2, 'total real association': 2}
+    >>> TestCase().assertDictEqual(expected_metrics, metrics)
+
+    >>> real_left = pd.DataFrame({
+    ... 'candid': [0, 1, 2, 3, 4],
+    ... 'ssnamenr': [0, 1, 2, 3, 4]
+    ... })
+
+    >>> real_right = pd.DataFrame({
+    ... 'candid': [5, 6, 7, 8, 9],
+    ... 'ssnamenr': [0, 1, 2, 3, 4]
+    ... })
+
+    >>> detected_left = pd.DataFrame({
+    ... 'candid': [0, 1, 2, 4],
+    ... 'ssnamenr': [0, 1, 2, 4]
+    ... })
+
+    >>> detected_right = pd.DataFrame({
+    ... 'candid': [5, 6, 8, 7],
+    ... 'ssnamenr': [0, 1, 3, 2]
+    ... })
+
+    >>> metrics = compute_inter_night_metric(real_left, real_right, detected_left, detected_right)
+    >>> expected_metrics = {'precision': 50.0, 'recall': 40.0, 'True Positif': 2, 'False Positif': 2, 'False Negatif': 3, 'total real association': 5}
+    >>> TestCase().assertDictEqual(expected_metrics, metrics)
+
+    >>> detected_left = pd.DataFrame({
+    ... 'candid': [0, 2],
+    ... 'ssnamenr': [0, 2]
+    ... })
+
+    >>> detected_right = pd.DataFrame({
+    ... 'candid': [6, 8],
+    ... 'ssnamenr': [1, 3]
+    ... })
+
+    >>> metrics = compute_inter_night_metric(real_left, real_right, detected_left, detected_right)
+    >>> expected_metrics = {'precision': 0.0, 'recall': 0.0, 'True Positif': 0, 'False Positif': 2, 'False Negatif': 5, 'total real association': 5}
+    >>> TestCase().assertDictEqual(expected_metrics, metrics)
+
+    >>> detected_left = pd.DataFrame({
+    ... 'candid': [0, 3],
+    ... 'ssnamenr': [0, 3]
+    ... })
+
+    >>> detected_right = pd.DataFrame({
+    ... 'candid': [5, 8],
+    ... 'ssnamenr': [0, 3]
+    ... })
+
+    >>> metrics = compute_inter_night_metric(real_left, real_right, detected_left, detected_right)
+    >>> expected_metrics = {'precision': 100.0, 'recall': 40.0, 'True Positif': 2, 'False Positif': 0, 'False Negatif': 3, 'total real association': 5}
+    >>> TestCase().assertDictEqual(expected_metrics, metrics)
+
+    >>> real_left = pd.DataFrame({
+    ... 'candid': [0, 1, 2, 3, 4],
+    ... 'ssnamenr': ["1", "1", "2", "3", "1"]
+    ... })
+
+    >>> real_right = pd.DataFrame({
+    ... 'candid': [5, 6, 7, 8, 9, 10, 11],
+    ... 'ssnamenr': ["1", "1", "2", "3", "4", "5", "1"]
+    ... })
+
+    >>> detected_left = pd.DataFrame({
+    ... 'candid': [0, 1, 2],
+    ... 'ssnamenr': ["0", "1", "2"]
+    ... })
+
+    >>> detected_right = pd.DataFrame({
+    ... 'candid': [5, 6, 7],
+    ... 'ssnamenr': ["1", "1", "2"]
+    ... })
+
+    >>> metrics = compute_inter_night_metric(real_left, real_right, detected_left, detected_right)
+    >>> expected_metrics = {'precision': 66.66666666666666, 'recall': 40.0, 'True Positif': 2, 'False Positif': 1, 'False Negatif': 3, 'total real association': 5}
+    >>> TestCase().assertDictEqual(expected_metrics, metrics)
+
+    >>> real_left = pd.DataFrame({
+    ... 'candid': [1520405434515015014, 1520216750115015007],
+    ... 'ssnamenr': ["53317", "75539"]
+    ... })
+
+    >>> real_right = pd.DataFrame({
+    ... 'candid': [1521202363215015009],
+    ... 'ssnamenr': ["53317"]
+    ... })
+
+    >>> detected_left = pd.DataFrame({
+    ... 'candid': [1520405434515015014],
+    ... 'ssnamenr': ["53317"]
+    ... })
+
+    >>> detected_right = pd.DataFrame({
+    ... 'candid': [1521202363215015009],
+    ... 'ssnamenr': ["53317"]
+    ... })
+
+    >>> metrics = compute_inter_night_metric(real_left, real_right, detected_left, detected_right)
+    >>> expected_metrics = {'precision': 100.0, 'recall': 100.0, 'True Positif': 1, 'False Positif': 0, 'False Negatif': 0, 'total real association': 1}
+    >>> TestCase().assertDictEqual(expected_metrics, metrics)
+    """
+
+    if "ssnamenr" in real_obs1 and "ssnamenr" in real_obs2 and "ssnamenr" in left_assoc and "ssnamenr" in right_assoc:
+        real_obs1 = (
+            real_obs1[["candid", "ssnamenr"]]
+            .sort_values(["ssnamenr"])
+            .reset_index(drop=True)
+        )
+        real_obs2 = (
+            real_obs2[["candid", "ssnamenr"]]
+            .sort_values(["ssnamenr"])
+            .reset_index(drop=True)
+        )
+
+        left_assoc = left_assoc[["candid", "ssnamenr"]].reset_index(drop=True)
+        right_assoc = right_assoc[["candid", "ssnamenr"]].reset_index(drop=True)
+
+        real_obs1 = real_obs1.rename(
+            {g: g + "_left" for g in real_obs1.columns}, axis=1
+        )
+        real_obs2 = real_obs2.rename(
+            {g: g + "_right" for g in real_obs2.columns}, axis=1
+        )
+
+        real_assoc = pd.concat([real_obs1, real_obs2], axis=1, join="inner")
+
+        real_assoc = real_assoc[
+            real_assoc["ssnamenr_left"] == real_assoc["ssnamenr_right"]
+        ]
+
+        left_assoc = left_assoc.rename(
+            {g: "left_" + g for g in left_assoc.columns}, axis=1
+        )
+        right_assoc = right_assoc.rename(
+            {g: "right_" + g for g in right_assoc.columns}, axis=1
+        )
+
+        detected_assoc = pd.concat([left_assoc, right_assoc], axis=1, join="inner")
+
+        assoc_metrics = real_assoc.merge(
+            detected_assoc,
+            left_on=["candid_left", "ssnamenr_left", "candid_right", "ssnamenr_right"],
+            right_on=["left_candid", "left_ssnamenr", "right_candid", "right_ssnamenr"],
+            how="outer",
+            indicator=True,
+        )
+
+        # test = (~assoc_metrics[["candid_left", "candid_right"]].duplicated()) | (assoc_metrics[["candid_left", "candid_right"]].isnull().all(axis=1))
+        # assoc_metrics = assoc_metrics[test]
+
+        FP = len(assoc_metrics[assoc_metrics["_merge"] == "right_only"])
+        TP = len(assoc_metrics[assoc_metrics["_merge"] == "both"])
+        FN = len(assoc_metrics[assoc_metrics["_merge"] == "left_only"])
+
+        try:
+            precision = (TP / (FP + TP)) * 100
+        except ZeroDivisionError:
+            precision = 0
+
+        try:
+            recall = (TP / (FN + TP)) * 100
+        except ZeroDivisionError:
+            recall = 0
+
+        return {
+            "precision": precision,
+            "recall": float(recall),
+            "True Positif": TP,
+            "False Positif": FP,
+            "False Negatif": int(FN),
+            "total real association": len(real_assoc),
+        }
+    else:
+        return {}
+
+
+def compute_intra_night_metrics(left_assoc, right_assoc, observations_with_real_labels):
     """
     computes performance metrics of the associations methods.
     Used only on test dataset where the column 'ssnamenr' are present and the real association are provided.
@@ -349,7 +585,7 @@ def compute_associations_metrics(
         - False Negative
         - total real association : the number of true association in the solar system MPC dataset.
 
-    It has no true negative in the solar system dataset due to the only presence of true association.
+    There is no true negative in the solar system dataset due to the only presence of true association.
 
     Parameters
     ----------
@@ -368,50 +604,109 @@ def compute_associations_metrics(
     Examples
     --------
     >>> real_assoc = pd.DataFrame({
-    ... 'ra' : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    ... 'jd' : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    ... 'candid' : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
     ... 'ssnamenr' : [1, 1, 2, 2, 2, 3, 3, 3, 3, 4, 4]
     ... })
 
     >>> left_assoc = pd.DataFrame({
+    ... 'jd' : [0, 2, 3, 5, 6, 7, 9],
+    ... 'candid' : [0, 2, 3, 5, 6, 7, 9],
     ... 'ssnamenr' : [1, 2, 2, 3, 3, 3, 4]
     ... })
 
     >>> right_assoc = pd.DataFrame({
+    ... 'jd' : [1, 3, 4, 6, 7, 8, 10],
+    ... 'candid' : [1, 3, 4, 6, 7, 8, 10],
     ... 'ssnamenr' : [1, 2, 2, 3, 3, 3, 4]
     ... })
 
-    >>> actual_dict = compute_associations_metrics(left_assoc, right_assoc, real_assoc)
+    >>> actual_dict = compute_intra_night_metrics(left_assoc, right_assoc, real_assoc)
     >>> expected_dict = {'precision': 100.0, 'recall': 100.0, 'True Positif': 7, 'False Positif': 0, 'False Negatif': 0, 'total real association': 7}
 
     >>> TestCase().assertDictEqual(expected_dict, actual_dict)
+
+    >>> left_assoc = pd.DataFrame(columns=['jd', 'candid', 'ssnamenr'], dtype=np.float64)
+
+    >>> right_assoc = pd.DataFrame(columns=['jd', 'candid', 'ssnamenr'], dtype=np.float64)
+
+    >>> real_assoc = pd.DataFrame(columns=['jd', 'candid', 'ssnamenr'], dtype=np.float64)
+    >>> actual_dict = compute_intra_night_metrics(left_assoc, right_assoc, real_assoc)
+    >>> expected_dict = {'precision': 0, 'recall': 0.0, 'True Positif': 0, 'False Positif': 0, 'False Negatif': 0, 'total real association': 0}
+    >>> TestCase().assertDictEqual(expected_dict, actual_dict)
+
+    >>> real_assoc = pd.DataFrame({
+    ... 'jd' : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    ... 'candid' : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    ... 'ssnamenr' : [1, 1, 2, 2, 2, 3, 3, 3, 3, 4, 4]
+    ... })
+
+    >>> left_assoc = pd.DataFrame({
+    ... 'jd' : [0, 2, 5, 6, 9],
+    ... 'candid' : [0, 2, 5, 6, 9],
+    ... 'ssnamenr' : [1, 2, 3, 3, 4]
+    ... })
+
+    >>> right_assoc = pd.DataFrame({
+    ... 'jd' : [1, 3, 6, 7, 10],
+    ... 'candid' : [1, 3, 6, 7, 10],
+    ... 'ssnamenr' : [1, 2, 3, 3, 4]
+    ... })
+
+    >>> actual_dict = compute_intra_night_metrics(left_assoc, right_assoc, real_assoc)
+    >>> expected_dict = {'precision': 100.0, 'recall': 71.42857142857143, 'True Positif': 5, 'False Positif': 0, 'False Negatif': 2, 'total real association': 7}
+    >>> TestCase().assertDictEqual(expected_dict, actual_dict)
+
+    >>> left_assoc = pd.DataFrame({
+    ... 'jd' : [0, 2, 5, 6, 7, 9],
+    ... 'candid' : [0, 2, 5, 6, 7, 9],
+    ... 'ssnamenr' : [1, 2, 3, 3, 3, 4]
+    ... })
+
+    >>> right_assoc = pd.DataFrame({
+    ... 'jd' : [1, 3, 6, 7, 4, 10],
+    ... 'candid' : [1, 3, 6, 7, 4, 10],
+    ... 'ssnamenr' : [1, 2, 3, 3, 2, 4]
+    ... })
+
+    >>> actual_dict = compute_intra_night_metrics(left_assoc, right_assoc, real_assoc)
+    >>> expected_dict = {'precision': 83.33333333333334, 'recall': 71.42857142857143, 'True Positif': 5, 'False Positif': 1, 'False Negatif': 2, 'total real association': 7}
+    >>> TestCase().assertDictEqual(expected_dict, actual_dict)
     """
-    gb_real_assoc = observations_with_real_labels.groupby(["ssnamenr"]).count()
-    gb_real_assoc = gb_real_assoc[gb_real_assoc["ra"] > 1]["ra"].values
 
-    nb_real_assoc = np.sum(gb_real_assoc) - len(gb_real_assoc)
-
-    precision_counter = Counter(
-        left_assoc["ssnamenr"].values == right_assoc["ssnamenr"].values
+    gb_real_assoc = (
+        observations_with_real_labels.sort_values(["jd"])
+        .groupby(["ssnamenr"])
+        .agg({"ssnamenr": list, "candid": list})
     )
 
-    # precision_counter[False] == number of false positif
-    # precision_counter[True] == number of true positif
-    precision = (
-        precision_counter[True] / (precision_counter[True] + precision_counter[False])
-    ) * 100
+    def split_assoc(x, left_ssnamenr, left_candid, right_ssnamenr, right_candid):
+        ssnamenr = x["ssnamenr"]
+        candid = x["candid"]
 
-    # max(0, (nb_real_assoc - nb_predict_assoc)) == number of false negatif if nb_predict_assoc < nb_real_assoc else 0 because no false negatif occurs.
-    FN = max(0, (nb_real_assoc - precision_counter[True]))
-    recall = (precision_counter[True] / (precision_counter[True] + FN)) * 100
+        for i in range(len(ssnamenr) - 1):
+            left_ssnamenr.append(ssnamenr[i])
+            left_candid.append(candid[i])
 
-    return {
-        "precision": precision,
-        "recall": float(recall),
-        "True Positif": precision_counter[True],
-        "False Positif": precision_counter[False],
-        "False Negatif": int(FN),
-        "total real association": int(nb_real_assoc),
-    }
+            right_ssnamenr.append(ssnamenr[i + 1])
+            right_candid.append(candid[i + 1])
+
+    left_candid = []
+    left_ssnamenr = []
+    right_candid = []
+    right_ssnamenr = []
+
+    gb_real_assoc.apply(
+        split_assoc,
+        axis=1,
+        args=(left_ssnamenr, left_candid, right_ssnamenr, right_candid),
+    )
+    real_left = pd.DataFrame({"ssnamenr": left_ssnamenr, "candid": left_candid})
+
+    real_right = pd.DataFrame({"ssnamenr": right_ssnamenr, "candid": right_candid})
+    return compute_inter_night_metric(
+        real_left, real_right, left_assoc, right_assoc, from_inter_night=True
+    )
 
 
 def restore_left_right(concat_l_r, nb_assoc_column):
@@ -818,7 +1113,7 @@ def intra_night_association(
     left_assoc, right_assoc = removed_multiple_association(left_assoc, right_assoc)
 
     if compute_metrics:
-        metrics = compute_associations_metrics(
+        metrics = compute_intra_night_metrics(
             left_assoc, right_assoc, night_observation
         )
 
@@ -980,5 +1275,9 @@ if __name__ == "__main__":  # pragma: no cover
     from pandas.testing import assert_frame_equal  # noqa: F401
     import test_sample as ts  # noqa: F401
     from unittest import TestCase  # noqa: F401
+
+    if "unittest.util" in __import__("sys").modules:
+        # Show full diff in self.assertEqual.
+        __import__("sys").modules["unittest.util"]._MAX_LENGTH = 999999999
 
     sys.exit(doctest.testmod()[0])
