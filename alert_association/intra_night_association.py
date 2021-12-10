@@ -337,8 +337,6 @@ def magnitude_association(
 def compute_inter_night_metric(
     real_obs1, real_obs2, left_assoc, right_assoc, from_inter_night=False
 ):
-    # TODO 
-    # faire un test sur des associations dupliquées
     """
     Compute the inter night association metrics.
     Used only on test dataset where the column 'ssnamenr' are present and the real association are provided.
@@ -450,33 +448,83 @@ def compute_inter_night_metric(
     >>> metrics = compute_inter_night_metric(real_left, real_right, detected_left, detected_right)
     >>> expected_metrics = {'precision': 100.0, 'recall': 40.0, 'True Positif': 2, 'False Positif': 0, 'False Negatif': 3, 'total real association': 5}
     >>> TestCase().assertDictEqual(expected_metrics, metrics)
+
+    >>> real_left = pd.DataFrame({
+    ... 'candid': [0, 1, 2, 3, 4],
+    ... 'ssnamenr': ["1", "1", "2", "3", "1"]
+    ... })
+
+    >>> real_right = pd.DataFrame({
+    ... 'candid': [5, 6, 7, 8, 9, 10, 11],
+    ... 'ssnamenr': ["1", "1", "2", "3", "4", "5", "1"]
+    ... })
+
+    >>> detected_left = pd.DataFrame({
+    ... 'candid': [0, 1, 2],
+    ... 'ssnamenr': ["0", "1", "2"]
+    ... })
+
+    >>> detected_right = pd.DataFrame({
+    ... 'candid': [5, 6, 7],
+    ... 'ssnamenr': ["1", "1", "2"]
+    ... })
+
+    >>> metrics = compute_inter_night_metric(real_left, real_right, detected_left, detected_right)
+    >>> expected_metrics = {'precision': 66.66666666666666, 'recall': 40.0, 'True Positif': 2, 'False Positif': 1, 'False Negatif': 3, 'total real association': 5}
+    >>> TestCase().assertDictEqual(expected_metrics, metrics)
+
+    >>> real_left = pd.DataFrame({
+    ... 'candid': [1520405434515015014, 1520216750115015007],
+    ... 'ssnamenr': ["53317", "75539"]
+    ... })
+
+    >>> real_right = pd.DataFrame({
+    ... 'candid': [1521202363215015009],
+    ... 'ssnamenr': ["53317"]
+    ... })
+
+    >>> detected_left = pd.DataFrame({
+    ... 'candid': [1520405434515015014],
+    ... 'ssnamenr': ["53317"]
+    ... })
+
+    >>> detected_right = pd.DataFrame({
+    ... 'candid': [1521202363215015009],
+    ... 'ssnamenr': ["53317"]
+    ... })
+
+    >>> metrics = compute_inter_night_metric(real_left, real_right, detected_left, detected_right)
+    >>> expected_metrics = {'precision': 100.0, 'recall': 100.0, 'True Positif': 1, 'False Positif': 0, 'False Negatif': 0, 'total real association': 1}
+    >>> TestCase().assertDictEqual(expected_metrics, metrics)
     """
 
-    if (
-        "ssnamenr" in real_obs1
-        and "ssnamenr" in real_obs2
-        and "ssnamenr" in left_assoc
-        and "ssnamenr" in right_assoc
-    ):
-        real_obs1 = real_obs1[["candid", "ssnamenr"]]
-        real_obs2 = real_obs2[["candid", "ssnamenr"]]
+    if "ssnamenr" in real_obs1 and "ssnamenr" in real_obs2 and "ssnamenr" in left_assoc and "ssnamenr" in right_assoc:
+        real_obs1 = (
+            real_obs1[["candid", "ssnamenr"]]
+            .sort_values(["ssnamenr"])
+            .reset_index(drop=True)
+        )
+        real_obs2 = (
+            real_obs2[["candid", "ssnamenr"]]
+            .sort_values(["ssnamenr"])
+            .reset_index(drop=True)
+        )
 
         left_assoc = left_assoc[["candid", "ssnamenr"]].reset_index(drop=True)
         right_assoc = right_assoc[["candid", "ssnamenr"]].reset_index(drop=True)
 
-        real_assoc = real_obs1.merge(
-            real_obs2, on="ssnamenr", suffixes=("_left", "_right")
+        real_obs1 = real_obs1.rename(
+            {g: g + "_left" for g in real_obs1.columns}, axis=1
+        )
+        real_obs2 = real_obs2.rename(
+            {g: g + "_right" for g in real_obs2.columns}, axis=1
         )
 
-        if from_inter_night:
-            real_obs1 = real_obs1.rename(
-                {g: g + "_left" for g in real_obs1.columns}, axis=1
-            )
-            real_obs2 = real_obs2.rename(
-                {g: g + "_right" for g in real_obs2.columns}, axis=1
-            )
+        real_assoc = pd.concat([real_obs1, real_obs2], axis=1, join="inner")
 
-            real_assoc = pd.concat([real_obs1, real_obs2], axis=1)
+        real_assoc = real_assoc[
+            real_assoc["ssnamenr_left"] == real_assoc["ssnamenr_right"]
+        ]
 
         left_assoc = left_assoc.rename(
             {g: "left_" + g for g in left_assoc.columns}, axis=1
@@ -485,19 +533,19 @@ def compute_inter_night_metric(
             {g: "right_" + g for g in right_assoc.columns}, axis=1
         )
 
-        detected_assoc = pd.concat([left_assoc, right_assoc], axis=1)
+        detected_assoc = pd.concat([left_assoc, right_assoc], axis=1, join="inner")
 
         assoc_metrics = real_assoc.merge(
             detected_assoc,
-            left_on=["candid_left", "candid_right"],
-            right_on=["left_candid", "right_candid"],
+            left_on=["candid_left", "ssnamenr_left", "candid_right", "ssnamenr_right"],
+            right_on=["left_candid", "left_ssnamenr", "right_candid", "right_ssnamenr"],
             how="outer",
             indicator=True,
         )
 
-        test = (~assoc_metrics[["candid_left", "candid_right"]].duplicated()) | (assoc_metrics[["candid_left", "candid_right"]].isnull().all(axis=1))
-        assoc_metrics = assoc_metrics[test]
-        
+        # test = (~assoc_metrics[["candid_left", "candid_right"]].duplicated()) | (assoc_metrics[["candid_left", "candid_right"]].isnull().all(axis=1))
+        # assoc_metrics = assoc_metrics[test]
+
         FP = len(assoc_metrics[assoc_metrics["_merge"] == "right_only"])
         TP = len(assoc_metrics[assoc_metrics["_merge"] == "both"])
         FN = len(assoc_metrics[assoc_metrics["_merge"] == "left_only"])

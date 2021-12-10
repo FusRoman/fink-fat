@@ -2,9 +2,11 @@ import json
 from os import path
 from os import mkdir
 import matplotlib.pyplot as plt
-from pandas.core import frame
+import matplotlib.colors as mcolors
 import numpy as np
 from astropy.time import Time
+import glob
+import matplotlib.cm as cm
 
 
 def convert_dict_to_nested_type(report):
@@ -316,9 +318,13 @@ def get_inter_night_metrics(parse_report):
 
     track_assoc_report = parse_report[2][1]
 
-    traj_to_tracklets = traj_assoc_report[:, 0, 4:]
+    if len(traj_assoc_report) > 0:
+        traj_to_tracklets = traj_assoc_report[:, 0, 4:]
 
-    traj_to_obs = traj_assoc_report[:, 1, 4:]
+        traj_to_obs = traj_assoc_report[:, 1, 4:]
+    else:
+        traj_to_tracklets = np.array([100, 100, 0, 0, 0, 0])
+        traj_to_obs = np.array([100, 100, 0, 0, 0, 0])
 
     if len(track_assoc_report) > 0:
         old_obs_to_track = track_assoc_report[:, 0, 4:]
@@ -340,9 +346,14 @@ def get_inter_night_associations(parse_report):
 
     track_assoc_report = parse_report[2][1]
 
-    traj_to_tracklets = traj_assoc_report[:, 0, :4]
+    if len(traj_assoc_report) > 0:
+        traj_to_tracklets = traj_assoc_report[:, 0, :4]
 
-    traj_to_obs = traj_assoc_report[:, 1, :4]
+        traj_to_obs = traj_assoc_report[:, 1, :4]
+    else:
+        traj_to_tracklets = np.array([0, 0, 0, 0])
+
+        traj_to_obs = np.array([0, 0, 0, 0])
 
     if len(track_assoc_report) > 0:
         old_obs_to_track = track_assoc_report[:, 0, :4]
@@ -363,9 +374,7 @@ def mean_metrics_over_nights(metrics):
 
 
 def plot_metrics(fig, metrics, axes, title):
-
     values_idx = np.arange(1, np.shape(metrics[:, :2])[0] + 1)
-    import matplotlib.colors as mcolors
 
     css_color = mcolors.CSS4_COLORS
     axes[0].plot(
@@ -381,7 +390,6 @@ def plot_metrics(fig, metrics, axes, title):
         color=css_color["chocolate"],
     )
     axes[0].set_title(title)
-
     axes[1].plot(
         values_idx,
         np.cumsum(metrics[:, 2:-1], axis=0),
@@ -392,6 +400,8 @@ def plot_metrics(fig, metrics, axes, title):
     axes[1].plot(
         values_idx, np.cumsum(metrics[:, -1]), label="total real association", alpha=0.7
     )
+
+    axes[1].set_yscale("log")
 
     colors = [
         css_color["green"],
@@ -476,14 +486,11 @@ def plot_trajectories(traj_df, mpc_plot):
 
     _, (ax1, ax2) = plt.subplots(2, 1, figsize=(40, 40))
 
-    import matplotlib.cm as cm
-
     colors = cm.jet(np.linspace(0, 1, len(mpc_plot)))
 
     for i, rows in mpc_plot.iterrows():
         ra = rows["ra"]
         dec = rows["dec"]
-        label = rows["ssnamenr"]
 
         ax1.scatter(ra, dec, color=colors[i])
 
@@ -491,46 +498,14 @@ def plot_trajectories(traj_df, mpc_plot):
     for i, rows in gb_traj.iterrows():
         ra = rows["ra"]
         dec = rows["dec"]
-        label = rows["trajectory_id"]
         ax2.scatter(ra, dec, color=colors[i])
 
     ax1.set_title("real trajectories")
     ax2.set_title("detected trajectories")
 
 
-if __name__ == "__main__":
-    import test_sample as ts  # noqa: F401
-    import continuous_integration as ci
-    import pyarrow.parquet as pq
-
-    show_traj = True
-    if show_traj:
-        data_path = "../data/month=0"
-        df_sso = ci.load_data(data_path, "Solar System MPC")
-
-        nb_trajectories_limit = True
-        if nb_trajectories_limit:
-            mpc_traj = df_sso.groupby(["ssnamenr"]).agg(
-                {"candid": len, "ssnamenr": list}
-            )
-            specific_sso = np.unique(
-                mpc_traj[mpc_traj["candid"] > 70].explode(["ssnamenr"])["ssnamenr"]
-            )
-
-            df_sso = df_sso[(df_sso["ssnamenr"].isin(specific_sso[:20]))]
-
-        print("total alert: {}".format(len(df_sso)))
-
-        mpc_plot = (
-            df_sso.groupby(["ssnamenr"]).agg({"ra": list, "dec": list}).reset_index()
-        )
-
-        traj_df = pq.read_table("trajectory_output.parquet").to_pandas()
-        plot_trajectories(traj_df, mpc_plot)
-
-    import glob
-
-    all_path_report = glob.glob("report_db/*/*")
+def load_performance_stat(first_file_report="report_db/03/01.json"):
+    all_path_report = sorted(glob.glob("report_db/*/*"))
 
     all_inter_metrics = [[], [], [], []]
     all_intra_metrics = []
@@ -542,7 +517,7 @@ if __name__ == "__main__":
 
     for current_path in all_path_report:
 
-        if current_path == "report_db/03/01.json":
+        if current_path == first_file_report:
             with open(current_path, "r") as file:
                 intra_night_report = json.load(file)
                 intra_night_report = parse_intra_night_report(intra_night_report)
@@ -591,6 +566,22 @@ if __name__ == "__main__":
 
     all_inter_stat = np.stack(all_inter_stat)
 
+    return (
+        all_intra_assoc,
+        all_inter_assoc,
+        all_intra_metrics,
+        all_inter_metrics,
+        all_inter_stat,
+    )
+
+
+def plot_performance_test(
+    all_intra_assoc,
+    all_inter_assoc,
+    all_intra_metrics,
+    all_inter_metrics,
+    all_inter_stat,
+):
     fig1 = plt.figure()
     ax1 = plt.subplot2grid((3, 3), (0, 0), colspan=2)
     ax2 = plt.subplot2grid((3, 3), (1, 0))

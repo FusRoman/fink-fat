@@ -824,34 +824,6 @@ def trajectory_associations(
             )
             traj_left = traj_left.drop_duplicates(["trajectory_id"])
 
-            if run_metrics:
-                last_traj_obs = (
-                    two_last_current_nid.groupby(["trajectory_id"]).last().reset_index()
-                )
-
-                col_filter = [
-                    "ra",
-                    "dec",
-                    "ssnamenr",
-                    "jd",
-                    "nid",
-                    "candid",
-                    "dcmag",
-                    "trajectory_id",
-                ]
-
-                specific_traj = trajectory_df[
-                    trajectory_df["trajectory_id"].isin([50, 76])
-                ][col_filter]
-
-                inter_night_metric = compute_inter_night_metric(
-                    last_traj_obs,
-                    tracklets_extremity,
-                    traj_left,
-                    traj_extremity_associated,
-                )
-                night_to_night_traj_to_tracklets_report["metrics"] = inter_night_metric
-
             night_to_night_traj_to_tracklets_report[
                 "number of duplicated association"
             ] = nb_assoc_with_duplicates - len(traj_extremity_associated)
@@ -889,6 +861,19 @@ def trajectory_associations(
             two_last_current_nid = two_last_current_nid[
                 ~two_last_current_nid["trajectory_id"].isin(traj_left["trajectory_id"])
             ]
+
+        if run_metrics:
+            last_traj_obs = (
+                two_last_current_nid.groupby(["trajectory_id"]).last().reset_index()
+            )
+
+            inter_night_metric = compute_inter_night_metric(
+                last_traj_obs,
+                tracklets_extremity,
+                traj_left,
+                traj_extremity_associated,
+            )
+            night_to_night_traj_to_tracklets_report["metrics"] = inter_night_metric
 
         current_nid_assoc_report[
             "trajectories_to_tracklets_report"
@@ -932,28 +917,26 @@ def trajectory_associations(
                 obs_assoc = obs_assoc.drop_duplicates(["trajectory_id"])
                 traj_left = traj_left.drop_duplicates(["trajectory_id"])
 
-                if run_metrics:
-                    last_traj_obs = (
-                        two_last_current_nid.groupby(["trajectory_id"])
-                        .last()
-                        .reset_index()
-                    )
-                    inter_night_metric = compute_inter_night_metric(
-                        last_traj_obs, new_observations, traj_left, obs_assoc
-                    )
-                    night_to_night_traj_to_obs_report["metrics"] = inter_night_metric
-
                 night_to_night_traj_to_obs_report[
                     "number of duplicated association"
                 ] = nb_traj_to_obs_assoc_with_duplicates - len(obs_assoc)
 
-                # remove the associateds observations from the set of new observations
-                new_observations = new_observations[
-                    ~new_observations["candid"].isin(obs_assoc["candid"])
-                ]
-
                 # add the new associated observations in the recorded trajectory dataframe
                 trajectory_df = pd.concat([trajectory_df, obs_assoc])
+
+            if run_metrics:
+                last_traj_obs = (
+                    two_last_current_nid.groupby(["trajectory_id"]).last().reset_index()
+                )
+                inter_night_metric = compute_inter_night_metric(
+                    last_traj_obs, new_observations, traj_left, obs_assoc
+                )
+                night_to_night_traj_to_obs_report["metrics"] = inter_night_metric
+
+            # remove the associateds observations from the set of new observations
+            new_observations = new_observations[
+                ~new_observations["candid"].isin(obs_assoc["candid"])
+            ]
 
             current_nid_assoc_report[
                 "trajectories_to_new_observation_report"
@@ -1242,17 +1225,6 @@ def tracklets_and_observations_associations(
             old_obs_right = old_obs_right.drop_duplicates(["trajectory_id"])
             traj_left = traj_left.drop_duplicates(["trajectory_id"])
 
-            if run_metrics:
-                last_traj_obs = (
-                    two_first_obs_tracklets.groupby(["trajectory_id"])
-                    .last()
-                    .reset_index()
-                )
-                inter_night_metric = compute_inter_night_metric(
-                    last_traj_obs, current_old_obs, traj_left, old_obs_right
-                )
-                track_to_old_obs_report["metrics"] = inter_night_metric
-
             track_to_old_obs_report[
                 "number of duplicated association"
             ] = nb_track_to_obs_assoc_with_duplicates - len(old_obs_right)
@@ -1271,6 +1243,15 @@ def tracklets_and_observations_associations(
             current_old_obs = current_old_obs[
                 ~current_old_obs["candid"].isin(old_obs_right["candid"])
             ]
+
+        if run_metrics:
+            last_traj_obs = (
+                two_first_obs_tracklets.groupby(["trajectory_id"]).last().reset_index()
+            )
+            inter_night_metric = compute_inter_night_metric(
+                last_traj_obs, current_old_obs, traj_left, old_obs_right
+            )
+            track_to_old_obs_report["metrics"] = inter_night_metric
 
         current_nid_report[
             "old observation to tracklets report"
