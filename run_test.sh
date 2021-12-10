@@ -22,13 +22,15 @@ export ROOTPATH=`pwd`
 
 export COVERAGE_PROCESS_START="${ROOTPATH}/.coveragerc"
 
-FILE=alert_association/performance_test.py
+FILE1=alert_association/performance_test.py
+FILE2=alert_association/night_report.py
 
-# Run the test suite on the utilities
+# Run the test suite
 for filename in alert_association/*.py
 do
   case $filename in
-  $FILE ) continue ;;
+  $FILE1 ) continue ;;
+  $FILE2 ) continue ;;
   * )
     # Run test suite + coverage
     coverage run \
@@ -41,5 +43,5 @@ done
 
 unset COVERAGE_PROCESS_START
 
-coverage report -m --omit=alert_association/night_report.py
+coverage report -m
 coverage html
