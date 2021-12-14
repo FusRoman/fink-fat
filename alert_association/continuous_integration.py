@@ -29,7 +29,7 @@ def load_data(path, object_class):
 
 
 def time_window_management(
-    trajectory_df, old_observation, last_nid, nid_next_night, time_window
+    trajectory_df, old_observation, last_nid, nid_next_night, time_window, remove_small_track=True
 ):
     """
     Management of the old observation and trajectories. Remove the old observation with a nid difference with
@@ -51,6 +51,8 @@ def time_window_management(
         nid of the incoming night
     time_window : integer
         limit to keep old observation and trajectories
+    remove_small_track : boolean
+        remove the tracks with less than 2 points if the last associated observation night exceed the time window.
 
     Return
     ------
@@ -134,18 +136,20 @@ def time_window_management(
 
         most_recent_traj = trajectory_df[mask_traj]
         oldest_traj = trajectory_df[~mask_traj]
-        old_test = (
-            oldest_traj.groupby(["trajectory_id"])
-            .agg({"trajectory_id": list, "ra": list, "candid": len})
-            .explode(["trajectory_id", "ra"])
-            .reset_index(drop=True)
-        )
-        old_test = old_test[old_test["candid"] > 2]
 
-        oldest_traj = oldest_traj.reset_index(drop=True)
-        oldest_traj = oldest_traj[
-            oldest_traj["trajectory_id"].isin(old_test["trajectory_id"])
-        ]
+        if remove_small_track:
+            old_test = (
+                oldest_traj.groupby(["trajectory_id"])
+                .agg({"trajectory_id": list, "ra": list, "candid": len})
+                .explode(["trajectory_id", "ra"])
+                .reset_index(drop=True)
+            )
+            old_test = old_test[old_test["candid"] > 2]
+
+            oldest_traj = oldest_traj.reset_index(drop=True)
+            oldest_traj = oldest_traj[
+                oldest_traj["trajectory_id"].isin(old_test["trajectory_id"])
+            ]
 
     diff_nid_old_observation = nid_next_night - old_observation["nid"]
     old_observation = old_observation[diff_nid_old_observation < time_window]

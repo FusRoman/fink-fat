@@ -76,6 +76,7 @@ if __name__ == "__main__":
             df_night1 = df_sso[df_sso["nid"] == last_nid]
 
             print("first intra night association to begin with some trajectories")
+            t_before = t.time()
             left, right, first_intra_report = intra_night_association(
                 df_night1, compute_metrics=True
             )
@@ -86,6 +87,12 @@ if __name__ == "__main__":
 
             save_report = True
             if save_report:
+                first_intra_report["nb most recent traj"] = 0
+                first_intra_report["nb old observations"] = 0
+                first_intra_report["nb new observations"] = len(df_night1)
+                nb_traj = len(np.unique(traj_df["trajectory_id"]))
+                first_intra_report["nb trajectories"] = nb_traj
+                first_intra_report["computation time of the night"] = float(t.time() - t_before)
                 first_intra_report["number of intra night tracklets"] = len(
                     np.unique(traj_df["trajectory_id"])
                 )
@@ -100,7 +107,7 @@ if __name__ == "__main__":
             else:
                 old_observation = df_night1
 
-            time_window_limit = 5
+            time_window_limit = 20
             verbose = True
 
             if verbose:
@@ -133,6 +140,7 @@ if __name__ == "__main__":
                     last_nid,
                     current_night_id,
                     time_window_limit,
+                    remove_small_track=False
                 )
                 if verbose:  # pragma: no cover
                     print()
@@ -157,11 +165,11 @@ if __name__ == "__main__":
                     old_observation,
                     df_next_night,
                     last_trajectory_id,
-                    intra_night_sep_criterion=3 * u.arcminute,
-                    sep_criterion=0.5 * u.degree,
-                    mag_criterion_same_fid=0.6,
-                    mag_criterion_diff_fid=0.85,
-                    angle_criterion=9.5,
+                    intra_night_sep_criterion=108.8 * u.arcsecond,
+                    sep_criterion=16.45 * u.arcminute,
+                    mag_criterion_same_fid=0.1,
+                    mag_criterion_diff_fid=0.34,
+                    angle_criterion=1.19,
                     run_metrics=True,
                 )
 
@@ -274,6 +282,7 @@ if __name__ == "__main__":
             ax.set_title(
                 "Ratio between the most common ssnamenr tag and the other ssnamenr tags"
             )
+
             bins = [0, 0.25, 0.5, 0.75, 1, 1.25, 1.75, 2, 2.5, 3, 4, 5, 6]
             ax.hist(traj_precision, 100)
 
