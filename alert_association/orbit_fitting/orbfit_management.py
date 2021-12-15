@@ -8,6 +8,7 @@ from shutil import copyfile
 import re
 import subprocess
 import os
+import multiprocessing as mp
 
 
 def time_to_decimal(time):
@@ -251,16 +252,11 @@ def write_observation_file(obs_df):
     ]
 
     dir_path = "mpcobs/"
-    if os.path.isdir(dir_path):
-        with open(dir_path + prov_desig + ".obs", "wt") as file:
-            file.write(join_string(res, "\n"))
-    else:
-        os.mkdir(dir_path)
-        with open(dir_path + prov_desig + ".obs", "wt") as file:
-            file.write(join_string(res, "\n"))
+    with open(dir_path + prov_desig + ".obs", "wt") as file:
+        file.write(join_string(res, "\n"))
 
     return prov_desig
-
+    
 
 def write_inp(provisional_designation):
     with open(provisional_designation + ".inp", "wt") as file:
@@ -271,53 +267,94 @@ def write_oop(provisional_designation):
     copyfile(oop_template, provisional_designation + ".oop")
 
 def prep_orbitfit():
+
+    dir_path = "mpcobs/"
+    if not os.path.isdir(dir_path):
+        os.mkdir(dir_path)
+
     subprocess.call(["ln", "-s", "OrbitFit/tests/bineph/testout/AST17.bai_431_fcct", "AST17.bai"])
     subprocess.call(["ln", "-s", "OrbitFit/tests/bineph/testout/AST17.bep_431_fcct", "AST17.bep"])
 
 def call_orbitfit(provisional_designation):
     orbitfit_path = "OrbitFit/bin/"
-    command = "./"+orbitfit_path+"orbfit.x < " + provisional_designation + ".inp > out.log"
+    command = "./"+orbitfit_path+"orbfit.x < " + provisional_designation + ".inp >/dev/null 2>&1"
     subprocess.call([command], shell=True)
 
 def obs_clean(prov_desig):
-    command1 = "rm " + prov_desig + ".*"
-    command2 = "rm mpcobs/" + prov_desig + ".*"
+    command1 = "rm " + prov_desig
     subprocess.call([command1], shell=True)
-    subprocess.call([command2], shell=True)
 
 def final_clean():
     command = "rm -rf *.bai *.bep *.log mpcobs"
     subprocess.call([command], shell=True)
 
 def read_oel(prov_desig):
-    with open(prov_desig + ".oel") as file:
-        lines = file.readlines()
-        
-        orb_params = " ".join(lines[7].strip().split()).split(" ")
-        rms = " ".join(lines[12].strip().split()).split(" ")
-        return np.array([orb_params[1:], rms[2:]])
+    try:
+        with open(prov_desig + ".oel") as file:
+            lines = file.readlines()
+            orb_params = " ".join(lines[7].strip().split()).split(" ")
+            if len(lines) > 12:
+                rms = " ".join(lines[12].strip().split()).split(" ")
+            else:
+                rms = [-1, -1, -1, -1, -1, -1, -1, -1]
+            return np.array([orb_params[1:], rms[2:]]).astype(np.float64)
+    except FileNotFoundError:
+        return np.ones((2, 6), dtype=np.float64) * -1
 
+
+def get_orbit_param(df):
+    traj_id = df['trajectory_id'].values[0]
+    prov_desig = write_observation_file(df)
+    write_inp(prov_desig)
+    write_oop(prov_desig)
+    call_orbitfit(prov_desig)
+    return traj_id, prov_desig, read_oel(prov_desig) 
+
+def compute_df_orbit_param(trajectory_df):
+    all_traj_id = np.unique(trajectory_df['trajectory_id'])
+
+    prep_orbitfit()
+    all_track = [mpc[mpc['trajectory_id'] == traj_id] for traj_id in all_traj_id]
+    pool = mp.Pool(mp.cpu_count())
+    results = pool.map(get_orbit_param, all_track)
+
+    obs_clean(join_string([res[1] + ".*" + " mpcobs/" + res[1] + ".*" for res in results], " "))
+    final_clean()
+
+    return results
 
 if __name__ == "__main__":
     path = "../../data/month=03"
     df_sso = pd.read_pickle(path)
 
+    import doctest
+    doctest.testmod()[0]
+
     # test1 : 2010ET42
 
-    # gb_ssn = df_sso.groupby(['ssnamenr']).agg({"candid":len}).sort_values(['candid'])
+    gb_ssn = df_sso.groupby(['ssnamenr']).agg({"candid":len}).sort_values(['candid'])
+    all_track = gb_ssn[gb_ssn['candid'] > 2].reset_index()['ssnamenr'].values
+    print(len(all_track))
 
     # mpc_name = "2010ET42"
     import time as t
     mpc_name = ["2936", "2010ET42", "19285"]
-    mpc = df_sso[df_sso["ssnamenr"].isin(mpc_name)][["ra", "dec", "dcmag", "fid", "jd", "ssnamenr"]]
+    mpc = df_sso[df_sso["ssnamenr"].isin(all_track[:20])][["ra", "dec", "dcmag", "fid", "jd", "ssnamenr"]]
     all_ssnamenr = np.unique(mpc['ssnamenr'].values)
     ssnamenr_translate = {ssn : i for ssn, i in zip(all_ssnamenr, range(len(all_ssnamenr)))}
     mpc['trajectory_id'] = mpc.apply(lambda x : ssnamenr_translate[x['ssnamenr']], axis=1)
-    all_traj_id = np.unique(mpc['trajectory_id'])
 
-    prep_orbitfit()
+    t_before = t.time()
+    
+    orbit_results = compute_df_orbit_param(mpc)
+    print(orbit_results)
 
+    print("total orbfit time: {}".format(t.time() - t_before))
+
+    exit()
     t_before_tot = t.time()
+    all_traj_id = np.unique(mpc['trajectory_id'])
+    prep_orbitfit()
     for traj_id in all_traj_id:
         current_mpc = mpc[mpc['trajectory_id'] == traj_id]
         t_before = t.time()
@@ -326,14 +363,8 @@ if __name__ == "__main__":
         write_oop(prov_desig)
         call_orbitfit(prov_desig)
         mpc.loc[current_mpc.index, "prov_desig"] = prov_desig
-        print()
         orb_elem = read_oel(prov_desig)
-        print(orb_elem)
-        print()
         obs_clean(prov_desig)
         print("traj_id: {}, nb observation: {}, write time: {}".format(traj_id, len(current_mpc), t.time() - t_before))
     final_clean()
     print("total orbfit time: {}".format(t.time() - t_before_tot))
-
-    import doctest
-    doctest.testmod()[0]
