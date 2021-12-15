@@ -250,8 +250,14 @@ def write_observation_file(obs_df):
         for el, mag, b in zip(res, dcmag, band)
     ]
 
-    with open("mpcobs/" + prov_desig + ".obs", "wt") as file:
-        file.write(join_string(res, "\n"))
+    dir_path = "mpcobs/"
+    if os.path.isdir(dir_path):
+        with open(dir_path + prov_desig + ".obs", "wt") as file:
+            file.write(join_string(res, "\n"))
+    else:
+        os.mkdir(dir_path)
+        with open(dir_path + prov_desig + ".obs", "wt") as file:
+            file.write(join_string(res, "\n"))
 
     return prov_desig
 
@@ -270,9 +276,26 @@ def prep_orbitfit():
 
 def call_orbitfit(provisional_designation):
     orbitfit_path = "OrbitFit/bin/"
-    command = "./"+orbitfit_path+"orbfit.x < " + provisional_designation + ".inp"
+    command = "./"+orbitfit_path+"orbfit.x < " + provisional_designation + ".inp > out.log"
     subprocess.call([command], shell=True)
 
+def obs_clean(prov_desig):
+    command1 = "rm " + prov_desig + ".*"
+    command2 = "rm mpcobs/" + prov_desig + ".*"
+    subprocess.call([command1], shell=True)
+    subprocess.call([command2], shell=True)
+
+def final_clean():
+    command = "rm -rf *.bai *.bep *.log mpcobs"
+    subprocess.call([command], shell=True)
+
+def read_oel(prov_desig):
+    with open(prov_desig + ".oel") as file:
+        lines = file.readlines()
+        
+        orb_params = " ".join(lines[7].strip().split()).split(" ")
+        rms = " ".join(lines[12].strip().split()).split(" ")
+        return np.array([orb_params[1:], rms[2:]])
 
 
 if __name__ == "__main__":
@@ -303,8 +326,14 @@ if __name__ == "__main__":
         write_oop(prov_desig)
         call_orbitfit(prov_desig)
         mpc.loc[current_mpc.index, "prov_desig"] = prov_desig
+        print()
+        orb_elem = read_oel(prov_desig)
+        print(orb_elem)
+        print()
+        obs_clean(prov_desig)
         print("traj_id: {}, nb observation: {}, write time: {}".format(traj_id, len(current_mpc), t.time() - t_before))
-    print("total write time: {}".format(t.time() - t_before_tot))
+    final_clean()
+    print("total orbfit time: {}".format(t.time() - t_before_tot))
 
     import doctest
     doctest.testmod()[0]
