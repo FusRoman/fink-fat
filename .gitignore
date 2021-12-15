@@ -140,3 +140,13 @@ test_report/
 data/mpc_database/
 
 *.obs
+*.inp
+*.oop
+*.olg
+*.odc
+*.oel
+*.pro
+*.bai
+*.bep
+alert_association/orbit_fitting/OrbitFit
+mpcobs/

@@ -4,8 +4,10 @@ import pandas as pd
 from astropy.time import Time
 from astropy.coordinates import SkyCoord
 import astropy.units as u
-import csv
+from shutil import copyfile
 import re
+import subprocess
+import os
 
 
 def time_to_decimal(time):
@@ -248,8 +250,29 @@ def write_observation_file(obs_df):
         for el, mag, b in zip(res, dcmag, band)
     ]
 
-    with open(prov_desig + ".obs", "wt") as file:
+    with open("mpcobs/" + prov_desig + ".obs", "wt") as file:
         file.write(join_string(res, "\n"))
+
+    return prov_desig
+
+
+def write_inp(provisional_designation):
+    with open(provisional_designation + ".inp", "wt") as file:
+        file.write(provisional_designation)
+
+def write_oop(provisional_designation):
+    oop_template = "template.oop"
+    copyfile(oop_template, provisional_designation + ".oop")
+
+def prep_orbitfit():
+    subprocess.call(["ln", "-s", "OrbitFit/tests/bineph/testout/AST17.bai_431_fcct", "AST17.bai"])
+    subprocess.call(["ln", "-s", "OrbitFit/tests/bineph/testout/AST17.bep_431_fcct", "AST17.bep"])
+
+def call_orbitfit(provisional_designation):
+    orbitfit_path = "OrbitFit/bin/"
+    command = "./"+orbitfit_path+"orbfit.x < " + provisional_designation + ".inp"
+    subprocess.call([command], shell=True)
+
 
 
 if __name__ == "__main__":
@@ -259,6 +282,7 @@ if __name__ == "__main__":
     # test1 : 2010ET42
 
     # gb_ssn = df_sso.groupby(['ssnamenr']).agg({"candid":len}).sort_values(['candid'])
+
     # mpc_name = "2010ET42"
     import time as t
     mpc_name = ["2936", "2010ET42", "19285"]
@@ -267,11 +291,20 @@ if __name__ == "__main__":
     ssnamenr_translate = {ssn : i for ssn, i in zip(all_ssnamenr, range(len(all_ssnamenr)))}
     mpc['trajectory_id'] = mpc.apply(lambda x : ssnamenr_translate[x['ssnamenr']], axis=1)
     all_traj_id = np.unique(mpc['trajectory_id'])
+
+    prep_orbitfit()
+
+    t_before_tot = t.time()
     for traj_id in all_traj_id:
         current_mpc = mpc[mpc['trajectory_id'] == traj_id]
         t_before = t.time()
-        write_observation_file(current_mpc)
-        print(t.time() - t_before)
+        prov_desig = write_observation_file(current_mpc)
+        write_inp(prov_desig)
+        write_oop(prov_desig)
+        call_orbitfit(prov_desig)
+        mpc.loc[current_mpc.index, "prov_desig"] = prov_desig
+        print("traj_id: {}, nb observation: {}, write time: {}".format(traj_id, len(current_mpc), t.time() - t_before))
+    print("total write time: {}".format(t.time() - t_before_tot))
 
     import doctest
     doctest.testmod()[0]
