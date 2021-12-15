@@ -12,8 +12,8 @@ def time_to_decimal(time):
     return str(int(time[0]) * 3600 + int(time[1]) * 60 + int(time[0]))
 
 
-def split_string(string):
-    return string.split("-")
+def split_string(string, char_split="-"):
+    return string.split(char_split)
 
 
 def join_string(list_string, join_string):
@@ -174,6 +174,22 @@ def make_designation(time, discovery_number):
     --------
     >>> make_designation("2021-05-22 07:33:02.111", 0)
     'K21K00A'
+    >>> make_designation("2021-05-22 07:33:02.111", 24)
+    'K21K00Z'
+    >>> make_designation("2021-05-22 07:33:02.111", 25)
+    'K21K01A'
+    >>> make_designation("2021-05-22 07:33:02.111", 49)
+    'K21K01Z'
+    >>> make_designation("2021-05-22 07:33:02.111", 50)
+    'K21K02A'
+    >>> make_designation("2021-05-22 07:33:02.111", 8999)
+    'K21KZ9Z'
+    >>> make_designation("2021-05-22 07:33:02.111", 9000)
+    'K21Ka0A'
+    >>> make_designation("2021-01-01 07:33:02.111", 0)
+    'K21A00A'
+    >>> make_designation("2022-07-04 07:33:02.111", 0)
+    'K22N00A'
     """
     time_split = time.split(" ")[0].split("-")
     year = time_split[0][-2:]
@@ -188,14 +204,18 @@ def make_designation(time, discovery_number):
     cycle = int(discovery_number / 25)
     return "K" + year + half_month + make_cycle(cycle) + second_letter(order)
 
+def make_date(date):
+    d = date.split(" ")
+    return concat_date(d[0].split("-") + ["."] + [time_to_decimal(d[1].split(":"))])
 
-def write_observation_file(temp_designation, obs_df):
-    obs_df = obs_df.sort_values(["jd"])
+def write_observation_file(obs_df):
+    obs_df = obs_df.sort_values(["trajectory_id", "jd"])
     ra = obs_df["ra"]
     dec = obs_df["dec"]
     dcmag = obs_df["dcmag"]
     band = obs_df["fid"]
     date = obs_df["jd"]
+    traj_id = obs_df['trajectory_id'].values[0]
 
     coord = SkyCoord(ra, dec, unit=u.degree).to_string("hmsdms")
     translation_rules = {ord(i): " " for i in "hmd"}
@@ -208,16 +228,17 @@ def write_observation_file(temp_designation, obs_df):
 
     t = Time(date, format="jd")
     date = t.iso
-    print([make_designation(date[0], i) for i in range(8745, 9300)])
-    date = [a.split(" ") for a in date]
+    prov_desig = make_designation(date[0], traj_id)
 
     date = [
-        concat_date(el[0].split("-") + ["."] + [time_to_decimal(el[1].split(":"))])
-        for el in date
+        make_date(d)
+        for d in date
     ]
     res = [join_string([el1] + [el2], " ") for el1, el2 in zip(date, coord)]
     res = [
-        "     K21X05F  C" # how the observation was made : C means CCD
+        "     "
+        + prov_desig
+        + "  C" # how the observation was made : C means CCD
         + el
         + "         "
         + str(round(mag, 1))
@@ -227,7 +248,7 @@ def write_observation_file(temp_designation, obs_df):
         for el, mag, b in zip(res, dcmag, band)
     ]
 
-    with open(temp_designation + ".obs", "wt") as file:
+    with open(prov_desig + ".obs", "wt") as file:
         file.write(join_string(res, "\n"))
 
 
@@ -237,12 +258,20 @@ if __name__ == "__main__":
 
     # test1 : 2010ET42
 
-    # print(df_sso.groupby(['ssnamenr']).agg({"candid":len}).sort_values(['candid']))
-
+    # gb_ssn = df_sso.groupby(['ssnamenr']).agg({"candid":len}).sort_values(['candid'])
     # mpc_name = "2010ET42"
-    # mpc_name = "2936"
-    # mpc = df_sso[df_sso["ssnamenr"] == mpc_name]
-    # write_observation_file(mpc_name, mpc)
+    import time as t
+    mpc_name = ["2936", "2010ET42", "19285"]
+    mpc = df_sso[df_sso["ssnamenr"].isin(mpc_name)][["ra", "dec", "dcmag", "fid", "jd", "ssnamenr"]]
+    all_ssnamenr = np.unique(mpc['ssnamenr'].values)
+    ssnamenr_translate = {ssn : i for ssn, i in zip(all_ssnamenr, range(len(all_ssnamenr)))}
+    mpc['trajectory_id'] = mpc.apply(lambda x : ssnamenr_translate[x['ssnamenr']], axis=1)
+    all_traj_id = np.unique(mpc['trajectory_id'])
+    for traj_id in all_traj_id:
+        current_mpc = mpc[mpc['trajectory_id'] == traj_id]
+        t_before = t.time()
+        write_observation_file(current_mpc)
+        print(t.time() - t_before)
 
     import doctest
     doctest.testmod()[0]

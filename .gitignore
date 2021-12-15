@@ -138,3 +138,5 @@ alert_association/trajectory_output.parquet
 test_report/
 
 data/mpc_database/
+
+*.obs
