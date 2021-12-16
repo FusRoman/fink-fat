@@ -1,25 +1,29 @@
 import pandas as pd
 import time as t
 import numpy as np
-from intra_night_association import intra_night_association
-from intra_night_association import new_trajectory_id_assignation
-from intra_night_association import get_n_last_observations_from_trajectories
-from night_to_night_association import night_to_night_association
+from alert_association.intra_night_association import intra_night_association
+from alert_association.intra_night_association import new_trajectory_id_assignation
+from alert_association.intra_night_association import get_n_last_observations_from_trajectories
+from alert_association.night_to_night_association import night_to_night_association
 import astropy.units as u
 from pandas.testing import assert_frame_equal
 import sys
 from collections import Counter
 import pyarrow.parquet as pq
+import glob
+import os
 
 
-def load_data(path, object_class):
+def load_data(object_class):
     all_df = []
 
-    # load all data
-    for i in range(3, 7):
-        df_sso = pd.read_pickle(path + str(i))
-        all_df.append(df_sso)
+    all_path = sorted(glob.glob(os.path.join('data', 'month=*')))[:-1]
 
+    # load all data
+    for path in all_path:
+        df_sso = pd.read_pickle(path)
+        all_df.append(df_sso)
+    
     df_sso = pd.concat(all_df).sort_values(["jd"]).drop_duplicates()
 
     df_sso = df_sso.drop_duplicates(["candid"])
@@ -162,7 +166,7 @@ if __name__ == "__main__":
 
     data_path = "data/month=0"
 
-    df_sso = load_data(data_path, "Solar System MPC")
+    df_sso = load_data("Solar System MPC")
 
     specific_mpc = df_sso[
         (

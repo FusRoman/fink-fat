@@ -3,11 +3,11 @@ from astropy.coordinates import SkyCoord
 import pandas as pd
 import numpy as np
 
-from intra_night_association import intra_night_association
-from intra_night_association import new_trajectory_id_assignation
-from intra_night_association import magnitude_association
-from intra_night_association import get_n_last_observations_from_trajectories
-from intra_night_association import compute_inter_night_metric
+from alert_association.intra_night_association import intra_night_association
+from alert_association.intra_night_association import new_trajectory_id_assignation
+from alert_association.intra_night_association import magnitude_association
+from alert_association.intra_night_association import get_n_last_observations_from_trajectories
+from alert_association.intra_night_association import compute_inter_night_metric
 
 
 def night_to_night_separation_association(
