@@ -14,6 +14,7 @@ import multiprocessing as mp
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from alert_association.continuous_integration import load_data
+import alert_association.orbit_fitting.plot_orbstat as po
 
 
 def time_to_decimal(time):
@@ -426,109 +427,6 @@ def orbit_elem_dataframe(orbit_elem):
     return df_orb_elem
 
 
-def get_mpc_database():
-
-    mpc_database = pd.read_json("../../data/mpc_database/mpcorb_extended.json")
-    mpc_database["Number"] = mpc_database["Number"].astype("string").str[1:-1]
-    return mpc_database
-
-
-def color_dict(mpc_database):
-    orbit_color = [
-        "gold",
-        "red",
-        "dodgerblue",
-        "limegreen",
-        "grey",
-        "magenta",
-        "chocolate",
-        "blue",
-        "orange",
-        "mediumspringgreen",
-        "deeppink",
-    ]
-
-    return {
-        orbit_type: orbit_color
-        for orbit_type, orbit_color in zip(
-            np.unique(mpc_database["Orbit_type"]), orbit_color
-        )
-    }
-
-
-def plot_residue(df, orbit_color, n_trajectories, n_points):
-    df = df.reset_index(drop=True)
-    orbit_type = np.unique(df["Orbit_type"])
-    computed_elem = df[
-        ["a_x", "e_x", "i_x", "long. node", "arg. peric", "mean anomaly"]
-    ]
-    known_elem = df[["a_y", "e_y", "i_y", "Node", "Peri", "M"]]
-
-    df[["da", "de", "di", "dNode", "dPeri", "dM"]] = (
-        computed_elem.values - known_elem.values
-    )
-
-    fig, axes = plt.subplots(3, 2, sharex=True)
-    fig.suptitle(
-        "Orbital elements residuals, {} trajectories, {} points".format(
-            n_trajectories, n_points
-        )
-    )
-
-    subplot_title = [
-        "semi-major axis",
-        "eccentricity",
-        "inclination",
-        "Longitude of the ascending node",
-        "Argument of perihelion",
-        "Mean anomaly",
-    ]
-
-    for ax, orb_elem, title in zip(
-        axes.flatten(), ["da", "de", "di", "dNode", "dPeri", "dM"], subplot_title
-    ):
-        ax.set_title(title)
-        ax.axhline(0, ls="--", color="grey")
-        for otype in orbit_type:
-            v = df[df["Orbit_type"] == otype]
-            omean = np.mean(v[orb_elem].values)
-
-            failed_orb = np.where(v["a_x"].values == -1)
-            success_orb = np.where(v["a_x"].values != -1)
-            ax.scatter(
-                np.array(v.index)[success_orb],
-                v[orb_elem].values[success_orb],
-                label="{}: {}, mean : {}, fail: {}".format(
-                    otype, len(v), np.around(omean, decimals=4), len(failed_orb[0])
-                ),
-                color=orbit_color[otype],
-            )
-            ax.scatter(
-                np.array(v.index)[failed_orb],
-                v[orb_elem].values[failed_orb],
-                marker="x",
-                color=orbit_color[otype],
-            )
-
-            ax.axhline(omean, ls=":", color=orbit_color[otype])
-            ax.set_ylabel("$\delta$ {}".format(orb_elem[1:]))
-        ax.legend(prop={"size": 7})
-
-    plt.show()
-
-
-def plot_cpu_time(all_time, n_trajectories, n_points):
-    plt.plot(np.arange(1, mp.cpu_count() + 1), all_time)
-    plt.xlabel("number of cpu")
-    plt.ylabel("computation time")
-    plt.title(
-        "CPU Time analysis\nwith file write on ram\n {} trajectories with {} points".format(
-            n_trajectories, n_points
-        )
-    )
-    plt.show()
-
-
 if __name__ == "__main__":
     ram_dir = "/media/virtuelram/"
 
@@ -540,7 +438,7 @@ if __name__ == "__main__":
 
     doctest.testmod()[0]
 
-    n_trajectories = 3000
+    n_trajectories = 20
     n_points = 4
     n_cpu = int(mp.cpu_count() / 2)
 
@@ -560,7 +458,7 @@ if __name__ == "__main__":
 
     print("MPC DATABASE loading")
     t_before = t.time()
-    mpc_database = get_mpc_database()
+    mpc_database = po.get_mpc_database()
 
     print("MPC DATABASE end loading, elapsed time: {}".format(t.time() - t_before))
     print()
@@ -584,8 +482,8 @@ if __name__ == "__main__":
         mpc_database, how="inner", left_on="ssnamenr", right_on="Number"
     )
 
-    dict_color_orbit = color_dict(mpc_database)
-    plot_residue(cross_match_mpc.drop_duplicates(["ssnamenr"]), dict_color_orbit, min(n_trajectories, len(all_track)), n_points)
+    dict_color_orbit = po.color_dict(mpc_database)
+    po.plot_residue(cross_match_mpc.drop_duplicates(["ssnamenr"]), dict_color_orbit, min(n_trajectories, len(all_track)), n_points)
 
     exit()
     # Sequential orbitfit
