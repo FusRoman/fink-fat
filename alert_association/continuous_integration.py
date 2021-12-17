@@ -14,11 +14,14 @@ import glob
 import os
 
 
-def load_data(object_class):
+def load_data(object_class, nb_indirection=1):
     all_df = []
 
-    all_path = sorted(glob.glob(os.path.join('data', 'month=*')))[:-1]
+    parent_folder = "".join(np.repeat(np.array(['../']), nb_indirection))
 
+
+    all_path = sorted(glob.glob(os.path.join(parent_folder, 'data', 'month=*')))[:-1]
+    
     # load all data
     for path in all_path:
         df_sso = pd.read_pickle(path)
