@@ -1,9 +1,14 @@
 import numpy as np
 import pandas as pd
-from alert_association.night_to_night_association import night_to_night_trajectory_associations
-from alert_association.intra_night_association import get_n_last_observations_from_trajectories
+from alert_association.night_to_night_association import (
+    night_to_night_trajectory_associations,
+)
+from alert_association.intra_night_association import (
+    get_n_last_observations_from_trajectories,
+)
 from alert_association.intra_night_association import compute_inter_night_metric
 import astropy.units as u
+
 
 def tracklets_associations(
     trajectories,
@@ -13,8 +18,8 @@ def tracklets_associations(
     mag_criterion_same_fid,
     mag_criterion_diff_fid,
     angle_criterion,
-    run_metrics=False
-    ):
+    run_metrics=False,
+):
     """
     Perform trajectories associations with tracklets detected in the next night.
 
@@ -80,11 +85,19 @@ def tracklets_associations(
     >>> trajectories = ts.trajectories_sample_1
     >>> trajectories["not_updated"] = np.ones(len(trajectories), dtype=np.bool_)
     >>> tracklets = ts.tracklets_sample_1
-    >>> tr2, tk2, report = tracklets_associations(trajectories, tracklets, 3, 1.5 * u.degree, 0.2, 0.5, 30, True)
+    >>> tr, tk, report = tracklets_associations(trajectories, tracklets, 3, 1.5 * u.degree, 0.2, 0.5, 30, True)
 
-    >>> assert_frame_equal(tr2, ts.trajectories_expected_2, check_dtype=False)
-    >>> assert_frame_equal(tk2, ts.tracklets_expected_2, check_dtype=False)
+    >>> assert_frame_equal(tr, ts.trajectories_expected_2, check_dtype=False)
+    >>> assert_frame_equal(tk, ts.tracklets_expected_2, check_dtype=False)
     >>> TestCase().assertDictEqual(ts.traj_and_track_assoc_report_expected, report)
+
+    >>> tracklets = ts.tracklets_sample_2
+    >>> trajectories = ts.trajectories_sample_2
+    >>> trajectories["not_updated"] = np.ones(len(trajectories), dtype=np.bool_)
+    >>> tr, tk, report = tracklets_associations(trajectories, tracklets, 3, 1 * u.degree, 0.2, 0.5, 30)
+
+    >>> assert_frame_equal(tr, ts.trajectories_expected_3, check_dtype=False)
+    >>> assert_frame_equal(tk, pd.DataFrame(columns=["ra", "dec", "dcmag", "fid", "nid", "jd", "candid", "trajectory_id"]), check_index_type=False, check_dtype=False)
     """
 
     trajectories_not_updated = trajectories[trajectories["not_updated"]]
@@ -118,7 +131,7 @@ def tracklets_associations(
 
         # for each trajectory nid from the last observations
         for tr_nid in trajectories_nid:
-            
+
             current_nid_assoc_report = dict()
             current_nid_assoc_report["old nid"] = int(tr_nid)
 
@@ -150,18 +163,63 @@ def tracklets_associations(
                 angle_criterion,
             )
 
-            updated_trajectories = np.union1d(updated_trajectories, np.unique(traj_left["trajectory_id"]))
-            nb_assoc_with_duplicates = len(traj_extremity_associated)
-            night_to_night_traj_to_tracklets_report["number of duplicated association"] = 0
-            night_to_night_traj_to_tracklets_report["metrics"] = {}
-
             if len(traj_extremity_associated) > 0:
 
-                # remove duplicates associations
-                # do somethings with the duplicates later in the project
-                traj_extremity_associated = traj_extremity_associated.drop_duplicates(
-                    ["trajectory_id"]
+                # creates a dataframe for each duplicated trajectory associated with the tracklets
+                duplicates = traj_extremity_associated["trajectory_id"].duplicated()
+                all_duplicate_traj = []
+
+                # get the duplicated tracklets
+                tracklets_duplicated = traj_extremity_associated[duplicates]
+                if len(tracklets_duplicated) > 0:
+
+                    # get the max trajectory id
+                    max_traj_id = np.max(np.unique(trajectories["trajectory_id"]))
+
+                    for _, rows in tracklets_duplicated.iterrows():
+                        max_traj_id += 1
+
+                        # silence the copy warning
+                        with pd.option_context("mode.chained_assignment", None):
+
+                            # get the trajectory associated with the tracklets and update the trajectory id
+                            duplicate_traj = trajectories[
+                                trajectories["trajectory_id"] == rows["trajectory_id"]
+                            ]
+                            duplicate_traj["trajectory_id"] = max_traj_id
+                            duplicate_traj["not_updated"] = False
+
+                            # get the tracklets and update the trajectory id
+                            other_track = tracklets[
+                                tracklets["trajectory_id"] == rows["tmp_traj"]
+                            ]
+                            other_track["trajectory_id"] = max_traj_id
+                            other_track["not_updated"] = False
+
+                        # append the trajectory and the tracklets into the list
+                        all_duplicate_traj.append(duplicate_traj)
+                        all_duplicate_traj.append(other_track)
+
+                    # create a dataframe with all duplicates
+                    all_duplicate_traj = pd.concat(all_duplicate_traj)
+                    trajectories = pd.concat([trajectories, all_duplicate_traj])
+
+                    tracklets = tracklets[
+                        ~tracklets["trajectory_id"].isin(tracklets_duplicated["tmp_traj"])
+                    ]
+
+                updated_trajectories = np.union1d(
+                    updated_trajectories, np.unique(traj_left["trajectory_id"])
                 )
+                nb_assoc_with_duplicates = len(traj_extremity_associated)
+                night_to_night_traj_to_tracklets_report[
+                    "number of duplicated association"
+                ] = 0
+                night_to_night_traj_to_tracklets_report["metrics"] = {}
+
+                # remove duplicates associations
+                traj_extremity_associated = traj_extremity_associated[~duplicates]
+
                 traj_left = traj_left.drop_duplicates(["trajectory_id"])
 
                 night_to_night_traj_to_tracklets_report[
@@ -196,17 +254,20 @@ def tracklets_associations(
                 # concatenation of trajectory_df with new tracklets doesn't work if we decide to manage the multiples associations.
                 # need to keep track of multiple association with a list of trajectory_id.
                 trajectories = pd.concat([trajectories, associated_tracklets])
-                
-                associated_tr_id = np.unique(associated_tracklets["trajectory_id"])
-                
-                trajectories = trajectories.reset_index(drop=True)
-                tr_updated_index = trajectories[trajectories["trajectory_id"].isin(associated_tr_id)].index
-                trajectories.loc[tr_updated_index, "not_updated"] = False
 
+                associated_tr_id = np.unique(associated_tracklets["trajectory_id"])
+
+                trajectories = trajectories.reset_index(drop=True)
+                tr_updated_index = trajectories[
+                    trajectories["trajectory_id"].isin(associated_tr_id)
+                ].index
+                trajectories.loc[tr_updated_index, "not_updated"] = False
 
                 # remove the two last trajectory observation that have been associated during this loop.
                 two_last_current_nid = two_last_current_nid[
-                    ~two_last_current_nid["trajectory_id"].isin(traj_left["trajectory_id"])
+                    ~two_last_current_nid["trajectory_id"].isin(
+                        traj_left["trajectory_id"]
+                    )
                 ]
 
             if run_metrics:
@@ -227,23 +288,34 @@ def tracklets_associations(
             ] = night_to_night_traj_to_tracklets_report
             traj_to_track_report.append(current_nid_assoc_report)
 
-        trajectories_and_tracklets_associations_report['updated trajectories'] = updated_trajectories.tolist()
-        trajectories_and_tracklets_associations_report['all nid_report'] = traj_to_track_report
-        return trajectories, tracklets.reset_index(drop=True), trajectories_and_tracklets_associations_report
+        trajectories_and_tracklets_associations_report[
+            "updated trajectories"
+        ] = updated_trajectories.tolist()
+        trajectories_and_tracklets_associations_report[
+            "all nid_report"
+        ] = traj_to_track_report
+
+        return (
+            trajectories.reset_index(drop=True),
+            tracklets.reset_index(drop=True),
+            trajectories_and_tracklets_associations_report,
+        )
+
 
 def print_df(df):
     for c in df.columns:
-        print("\"{}\" : {},".format(c, df[c].to_list()))
+        print('"{}" : {},'.format(c, df[c].to_list()))
 
-if __name__ == "__main__": # pragma: no cover
+
+if __name__ == "__main__":  # pragma: no cover
     import sys
     import doctest
     from pandas.testing import assert_frame_equal  # noqa: F401
     import test_sample as ts  # noqa: F401
     from unittest import TestCase  # noqa: F401
 
-    if "unittest.util" in __import__("sys").modules:
-        # Show full diff in self.assertEqual.
-        __import__("sys").modules["unittest.util"]._MAX_LENGTH = 999999999
+    # if "unittest.util" in __import__("sys").modules:
+    #     # Show full diff in self.assertEqual.
+    #     __import__("sys").modules["unittest.util"]._MAX_LENGTH = 999999999
 
     sys.exit(doctest.testmod()[0])
