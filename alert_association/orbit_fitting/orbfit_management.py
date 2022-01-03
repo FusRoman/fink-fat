@@ -438,9 +438,9 @@ if __name__ == "__main__":
 
     doctest.testmod()[0]
 
-    n_trajectories = 20
-    n_points = 4
-    n_cpu = int(mp.cpu_count() / 2)
+    n_trajectories = 100
+    n_points = 5
+    n_cpu = int(mp.cpu_count())
 
     gb_ssn = df_sso.groupby(["ssnamenr"]).agg({"candid": len}).sort_values(["candid"])
     all_track = gb_ssn[gb_ssn["candid"] == n_points].reset_index()["ssnamenr"].values
