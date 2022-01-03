@@ -637,7 +637,7 @@ def trajectory_associations(
     mag_criterion_same_fid,
     mag_criterion_diff_fid,
     angle_criterion,
-    run_metrics=False,
+    run_metrics=False
 ):
     """
     Perform the trajectory association process. Firstly, associate the recorded trajectories with the tracklets from the new nights.
@@ -761,126 +761,12 @@ def trajectory_associations(
             columns=["ra", "dec", "trajectory_id", "jd", "candid", "fid", "dcmag"]
         )
 
-    # get the last two observations for each trajectories
-    two_last_observation_trajectory = get_n_last_observations_from_trajectories(
-        trajectory_df, 2
-    )
-
-    # get the last observations for each trajectories
-    last_observation_trajectory = get_n_last_observations_from_trajectories(
-        trajectory_df, 1
-    )
-
-    # perform association with all previous nid within the time window
-    # Warning : sort by descending order to do the association with the recently previous night in first.
-    trajectories_nid = np.sort(np.unique(last_observation_trajectory["nid"]))[::-1]
+    
 
     all_nid_assoc_report = []
 
-    # for each trajectory nid from the last observations
-    for tr_nid in trajectories_nid:
-        current_nid_assoc_report = dict()
-        current_nid_assoc_report["old nid"] = int(tr_nid)
-
-        # get the two last observations with the tracklets extremity that have the current nid
-        two_last_current_nid = two_last_observation_trajectory[
-            two_last_observation_trajectory["trajectory_id"].isin(
-                last_observation_trajectory[
-                    last_observation_trajectory["nid"] == tr_nid
-                ]["trajectory_id"]
-            )
-        ]
-
-        diff_night = next_nid - tr_nid
-        norm_sep_crit = sep_criterion * diff_night
-        norm_same_fid = mag_criterion_same_fid * diff_night
-        norm_diff_fid = mag_criterion_diff_fid * diff_night
-
-        # trajectory association with the new tracklets
-        (
-            traj_left,
-            traj_extremity_associated,
-            night_to_night_traj_to_tracklets_report,
-        ) = night_to_night_trajectory_associations(
-            two_last_current_nid,
-            tracklets_extremity,
-            norm_sep_crit,
-            norm_same_fid,
-            norm_diff_fid,
-            angle_criterion,
-        )
-
-        updated_trajectories = np.unique(traj_left["trajectory_id"])
-        nb_assoc_with_duplicates = len(traj_extremity_associated)
-        night_to_night_traj_to_tracklets_report["number of duplicated association"] = 0
-        night_to_night_traj_to_tracklets_report["metrics"] = {}
-
-        if len(traj_extremity_associated) > 0:
-
-            # remove duplicates associations
-            # do somethings with the duplicates later in the project
-            traj_extremity_associated = traj_extremity_associated.drop_duplicates(
-                ["trajectory_id"]
-            )
-            traj_left = traj_left.drop_duplicates(["trajectory_id"])
-
-            night_to_night_traj_to_tracklets_report[
-                "number of duplicated association"
-            ] = nb_assoc_with_duplicates - len(traj_extremity_associated)
-
-            associated_tracklets = []
-
-            for _, rows in traj_extremity_associated.iterrows():
-
-                # get all rows of the associated tracklets of the next night
-                next_night_tracklets = traj_next_night[
-                    traj_next_night["trajectory_id"] == rows["tmp_traj"]
-                ]
-
-                # assign the trajectory id to the tracklets that will be added to this trajectory with this id
-                # the tracklets contains already the alerts within traj_extremity_associated.
-                with pd.option_context("mode.chained_assignment", None):
-                    next_night_tracklets["trajectory_id"] = rows["trajectory_id"]
-                associated_tracklets.append(next_night_tracklets)
-
-            # create a dataframe with all tracklets that will be added to a trajectory
-            associated_tracklets = pd.concat(associated_tracklets)
-
-            # remove the tracklets that will be added to a trajectory from the dataframe of all tracklets
-            traj_next_night = traj_next_night[
-                ~traj_next_night["trajectory_id"].isin(
-                    traj_extremity_associated["tmp_traj"]
-                )
-            ]
-
-            # concatenation of trajectory_df with new tracklets doesn't work if we decide to manage the multiples associations.
-            # need to keep track of multiple association with a list of trajectory_id.
-            trajectory_df = pd.concat([trajectory_df, associated_tracklets])
-
-            # remove the two last trajectory observation that have been associated during this loop.
-            two_last_current_nid = two_last_current_nid[
-                ~two_last_current_nid["trajectory_id"].isin(traj_left["trajectory_id"])
-            ]
-
-        if run_metrics:
-            last_traj_obs = (
-                two_last_current_nid.groupby(["trajectory_id"]).last().reset_index()
-            )
-
-            inter_night_metric = compute_inter_night_metric(
-                last_traj_obs,
-                tracklets_extremity,
-                traj_left,
-                traj_extremity_associated,
-            )
-            night_to_night_traj_to_tracklets_report["metrics"] = inter_night_metric
-
-        current_nid_assoc_report[
-            "trajectories_to_tracklets_report"
-        ] = night_to_night_traj_to_tracklets_report
-        current_nid_assoc_report["trajectories_to_new_observation_report"] = dict()
-
-        trajectory_df = pd.concat([trajectory_df, traj_next_night])
+    
+        
 
         # if len(new_observations) > 0:
 
@@ -938,13 +824,13 @@ def trajectory_associations(
         #         "trajectories_to_new_observation_report"
         #     ] = night_to_night_traj_to_obs_report
 
-        trajectory_associations_report[
-            "list of updated trajectories"
-        ] = np.union1d(
-            trajectory_associations_report["list of updated trajectories"],
-            updated_trajectories,
-        ).tolist()
-        all_nid_assoc_report.append(current_nid_assoc_report)
+    trajectory_associations_report[
+        "list of updated trajectories"
+    ] = np.union1d(
+        trajectory_associations_report["list of updated trajectories"],
+        updated_trajectories,
+    ).tolist()
+    all_nid_assoc_report.append(current_nid_assoc_report)
 
     trajectory_associations_report["all nid report"] = all_nid_assoc_report
 
