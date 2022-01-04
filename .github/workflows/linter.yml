@@ -26,4 +26,5 @@ jobs:
         pip install flake8
     - name: Alert Association
       run: |
+        ls -lh
         flake8 ../../../Asteroids_and_Associations
