@@ -1,14 +1,6 @@
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
 import multiprocessing as mp
-
-def get_mpc_database():
-
-    mpc_database = pd.read_json("../../data/mpc_database/mpcorb_extended.json")
-    mpc_database["Number"] = mpc_database["Number"].astype("string").str[1:-1]
-    return mpc_database
-
 
 def color_dict(mpc_database):
     orbit_color = [
