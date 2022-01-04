@@ -92,7 +92,9 @@ if __name__ == "__main__":
                 first_intra_report["nb new observations"] = len(df_night1)
                 nb_traj = len(np.unique(traj_df["trajectory_id"]))
                 first_intra_report["nb trajectories"] = nb_traj
-                first_intra_report["computation time of the night"] = float(t.time() - t_before)
+                first_intra_report["computation time of the night"] = float(
+                    t.time() - t_before
+                )
                 first_intra_report["number of intra night tracklets"] = len(
                     np.unique(traj_df["trajectory_id"])
                 )
@@ -140,7 +142,7 @@ if __name__ == "__main__":
                     last_nid,
                     current_night_id,
                     time_window_limit,
-                    remove_small_track=False
+                    remove_small_track=False,
                 )
                 if verbose:  # pragma: no cover
                     print()
