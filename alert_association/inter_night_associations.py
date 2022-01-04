@@ -16,6 +16,7 @@ from alert_association.night_to_night_association import time_window_management
 # constant to locate the ram file system
 ram_dir = "/media/virtuelram/"
 
+
 def tracklets_associations(
     trajectories,
     tracklets,
@@ -36,7 +37,7 @@ def tracklets_associations(
         Trajectories dataframe must have the following columns :
             ra, dec, dcmag, nid, fid, jd, candid, trajectory_id
     tracklets : dataframe
-        tracklets detected in the next night 
+        tracklets detected in the next night
         Tracklets dataframe must have the following columns :
             ra, dec, dcmag, nid, fid, jd, candid, trajectory_id
             N.B : the id in the trajectory_id column for the tracklets are temporary.
@@ -116,7 +117,9 @@ def tracklets_associations(
         return trajectories, tracklets, {}
     else:
 
-        trajectories_not_updated = trajectories[trajectories["not_updated"] & (trajectories["a"] == -1.0)]
+        trajectories_not_updated = trajectories[
+            trajectories["not_updated"] & (trajectories["a"] == -1.0)
+        ]
         trajectories_and_tracklets_associations_report = dict()
 
         # get the last two observations for each trajectories
@@ -348,13 +351,13 @@ def compute_orbit_elem(trajectory_df):
         "rms_i",
         "rms_long. node",
         "rms_arg. peric",
-        "rms_mean anomaly"
+        "rms_mean anomaly",
     ]
 
     traj_to_compute = traj_to_compute.drop(orbit_column, axis=1)
     orbit_elem = compute_df_orbit_param(traj_to_compute.head(1000), 10, ram_dir)
-    traj_to_compute = traj_to_compute.merge(orbit_elem, on = "trajectory_id")
-    
+    traj_to_compute = traj_to_compute.merge(orbit_elem, on="trajectory_id")
+
     return pd.concat([traj_with_orbelem, traj_to_compute])
 
 
@@ -491,7 +494,9 @@ def night_to_night_association(
     """
 
     last_trajectory_id = np.nan_to_num(np.max(trajectory_df["trajectory_id"])) + 1
-    (old_traj, most_recent_traj), old_observation = time_window_management(trajectory_df, old_observation, last_nid, next_nid, time_window)
+    (old_traj, most_recent_traj), old_observation = time_window_management(
+        trajectory_df, old_observation, last_nid, next_nid, time_window
+    )
 
     inter_night_report = dict()
     inter_night_report["nid of the next night"] = int(next_nid)
@@ -547,13 +552,13 @@ def night_to_night_association(
         run_metrics,
     )
 
-
     most_recent_traj = pd.concat([most_recent_traj, traj_next_night])
     most_recent_traj["jd"] = pd.to_numeric(most_recent_traj["jd"])
     most_recent_traj["trajectory_id"] = most_recent_traj["trajectory_id"].astype(int)
     old_observation = pd.concat([old_observation, new_observation_not_associated])
 
     import time as t
+
     t_before = t.time()
     most_recent_traj = compute_orbit_elem(most_recent_traj)
     print("orb elem computation time: {}".format(t.time() - t_before))
@@ -597,9 +602,9 @@ if __name__ == "__main__":  # pragma: no cover
     import test_sample as ts  # noqa: F401
     from unittest import TestCase  # noqa: F401
 
-    # if "unittest.util" in __import__("sys").modules:
-    #     # Show full diff in self.assertEqual.
-    #     __import__("sys").modules["unittest.util"]._MAX_LENGTH = 999999999
+    if "unittest.util" in __import__("sys").modules:
+        # Show full diff in self.assertEqual.
+        __import__("sys").modules["unittest.util"]._MAX_LENGTH = 999999999
 
     from alert_association.continuous_integration import load_data
 
@@ -619,8 +624,8 @@ if __name__ == "__main__":  # pragma: no cover
         "rms_long. node",
         "rms_arg. peric",
         "rms_mean anomaly",
-        "not_updated", 
-        "trajectory_id"
+        "not_updated",
+        "trajectory_id",
     ]
 
     trajectory_df = pd.DataFrame(columns=tr_orb_columns)
@@ -628,7 +633,7 @@ if __name__ == "__main__":  # pragma: no cover
 
     last_nid = np.min(df_sso["nid"])
 
-    for tr_nid in np.unique(df_sso['nid']):
+    for tr_nid in np.unique(df_sso["nid"]):
 
         print(tr_nid)
         print()
@@ -644,8 +649,8 @@ if __name__ == "__main__":  # pragma: no cover
         print("nb new obs: {}".format(len(new_observation)))
 
         trajectory_df, old_obs, report = night_to_night_association(
-            trajectory_df, 
-            old_observation, 
+            trajectory_df,
+            old_observation,
             new_observation,
             last_nid,
             next_nid,
@@ -653,8 +658,8 @@ if __name__ == "__main__":  # pragma: no cover
             sep_criterion=16.45 * u.arcminute,
             mag_criterion_same_fid=0.1,
             mag_criterion_diff_fid=0.34,
-            angle_criterion=1.19
-            )
+            angle_criterion=1.19,
+        )
 
         trajectory_df["not_updated"] = np.ones(len(trajectory_df), dtype=np.bool_)
 
@@ -671,5 +676,4 @@ if __name__ == "__main__":  # pragma: no cover
 
         last_nid = next_nid
 
-
-    # sys.exit(doctest.testmod()[0])
+    sys.exit(doctest.testmod()[0])

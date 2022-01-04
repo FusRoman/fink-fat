@@ -498,7 +498,12 @@ def compute_inter_night_metric(
     >>> TestCase().assertDictEqual(expected_metrics, metrics)
     """
 
-    if "ssnamenr" in real_obs1 and "ssnamenr" in real_obs2 and "ssnamenr" in left_assoc and "ssnamenr" in right_assoc:
+    # fmt: off
+    test_statement = ("ssnamenr" in real_obs1 and "ssnamenr" in real_obs2 and "ssnamenr" in left_assoc and "ssnamenr" in right_assoc)
+    # fmt: on
+
+    if test_statement:
+
         real_obs1 = (
             real_obs1[["candid", "ssnamenr"]]
             .sort_values(["ssnamenr"])
@@ -542,9 +547,6 @@ def compute_inter_night_metric(
             how="outer",
             indicator=True,
         )
-
-        # test = (~assoc_metrics[["candid_left", "candid_right"]].duplicated()) | (assoc_metrics[["candid_left", "candid_right"]].isnull().all(axis=1))
-        # assoc_metrics = assoc_metrics[test]
 
         FP = len(assoc_metrics[assoc_metrics["_merge"] == "right_only"])
         TP = len(assoc_metrics[assoc_metrics["_merge"] == "both"])

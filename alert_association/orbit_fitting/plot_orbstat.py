@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import multiprocessing as mp
 
+
 def color_dict(mpc_database):
     orbit_color = [
         "gold",
@@ -80,7 +81,7 @@ def plot_residue(df, orbit_color, n_trajectories, n_points):
             )
 
             ax.axhline(omean, ls=":", color=orbit_color[otype])
-            ax.set_ylabel("$\delta$ {}".format(orb_elem[1:]))
+            ax.set_ylabel("$\delta$ {}".format(orb_elem[1:]))  # noqa: W605
         ax.legend(prop={"size": 7})
 
     plt.show()

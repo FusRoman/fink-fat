@@ -3,8 +3,6 @@ from astropy.coordinates import SkyCoord
 import pandas as pd
 import numpy as np
 
-from alert_association.intra_night_association import intra_night_association
-from alert_association.intra_night_association import new_trajectory_id_assignation
 from alert_association.intra_night_association import magnitude_association
 from alert_association.intra_night_association import (
     get_n_last_observations_from_trajectories,
@@ -748,20 +746,20 @@ def trajectory_associations(
             trajectory_associations_report,
         )
 
-    if len(new_observations) > 0:
-        next_nid = new_observations["nid"].values[0]
-    else:
-        next_nid = traj_next_night["nid"].values[0]
+    # if len(new_observations) > 0:
+    #     next_nid = new_observations["nid"].values[0]
+    # else:
+    #     next_nid = traj_next_night["nid"].values[0]
 
-    if len(traj_next_night) > 0:
-        # get the oldest extremity of the new tracklets to perform associations with the latest observations in the trajectories
-        tracklets_extremity = get_n_last_observations_from_trajectories(
-            traj_next_night, 1, False
-        )
-    else:
-        tracklets_extremity = pd.DataFrame(
-            columns=["ra", "dec", "trajectory_id", "jd", "candid", "fid", "dcmag"]
-        )
+    # if len(traj_next_night) > 0:
+    #     # get the oldest extremity of the new tracklets to perform associations with the latest observations in the trajectories
+    #     tracklets_extremity = get_n_last_observations_from_trajectories(
+    #         traj_next_night, 1, False
+    #     )
+    # else:
+    #     tracklets_extremity = pd.DataFrame(
+    #         columns=["ra", "dec", "trajectory_id", "jd", "candid", "fid", "dcmag"]
+    #     )
 
     all_nid_assoc_report = []
 
@@ -821,11 +819,11 @@ def trajectory_associations(
     #         "trajectories_to_new_observation_report"
     #     ] = night_to_night_traj_to_obs_report
 
-    trajectory_associations_report["list of updated trajectories"] = np.union1d(
-        trajectory_associations_report["list of updated trajectories"],
-        updated_trajectories,
-    ).tolist()
-    all_nid_assoc_report.append(current_nid_assoc_report)
+    # trajectory_associations_report["list of updated trajectories"] = np.union1d(
+    #     trajectory_associations_report["list of updated trajectories"],
+    #     updated_trajectories,
+    # ).tolist()
+    # all_nid_assoc_report.append(current_nid_assoc_report)
 
     trajectory_associations_report["all nid report"] = all_nid_assoc_report
 
@@ -1232,7 +1230,7 @@ def time_window_management(
     the nid of the next night greater than the time window. Perform the same process for trajectories but take
     the most recent trajectory extremity.
 
-    Remove also the trajectories with no computed orbit element. 
+    Remove also the trajectories with no computed orbit element.
 
     If a number of night without observation exceeds the time window parameters, keep the observations and trajectories
     from the night before the non observation gap.

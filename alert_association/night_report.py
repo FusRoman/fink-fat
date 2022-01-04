@@ -447,7 +447,7 @@ def plot_inter_assoc(assoc, ax, title):
             "remain after removing duplicates",
         ],
     )
-    ax.set_yscale('log')
+    ax.set_yscale("log")
     ax.set_title(title)
 
 
@@ -532,14 +532,18 @@ def load_performance_stat(only_intra_night=False):
 
         all_intra_metrics.append(intra_night_values[3:])
         all_intra_assoc.append(intra_night_values[:3])
-        all_inter_stat.append(np.array([nb_traj, time, nb_most_recent_traj, nb_old_obs, nb_new_obs]))
+        all_inter_stat.append(
+            np.array([nb_traj, time, nb_most_recent_traj, nb_old_obs, nb_new_obs])
+        )
 
     for current_path in all_path_report[1:]:
 
         if only_intra_night:
             with open(current_path, "r") as file:
                 intra_night_report = json.load(file)
-                intra_night_values = parse_intra_night_report(intra_night_report['intra night report'])
+                intra_night_values = parse_intra_night_report(
+                    intra_night_report["intra night report"]
+                )
 
                 nb_traj = intra_night_report["nb trajectories"]
                 nb_most_recent_traj = intra_night_report["nb most recent traj"]
@@ -549,7 +553,11 @@ def load_performance_stat(only_intra_night=False):
 
                 all_intra_metrics.append(intra_night_values[3:])
                 all_intra_assoc.append(intra_night_values[:3])
-                all_inter_stat.append(np.array([nb_traj, time, nb_most_recent_traj, nb_old_obs, nb_new_obs]))
+                all_inter_stat.append(
+                    np.array(
+                        [nb_traj, time, nb_most_recent_traj, nb_old_obs, nb_new_obs]
+                    )
+                )
                 continue
 
         parse_report = open_and_parse_report(current_path)
@@ -589,7 +597,9 @@ def load_performance_stat(only_intra_night=False):
     all_inter_assoc = [np.concatenate(i, axis=0) for i in all_inter_assoc if len(i) > 0]
 
     all_intra_metrics = np.stack(all_intra_metrics)
-    all_inter_metrics = [np.concatenate(i, axis=0) for i in all_inter_metrics if len(i) > 0]
+    all_inter_metrics = [
+        np.concatenate(i, axis=0) for i in all_inter_metrics if len(i) > 0
+    ]
 
     all_inter_stat = np.stack(all_inter_stat)
 

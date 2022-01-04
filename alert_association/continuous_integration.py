@@ -3,14 +3,12 @@ import time as t
 import numpy as np
 from alert_association.intra_night_association import intra_night_association
 from alert_association.intra_night_association import new_trajectory_id_assignation
-from alert_association.intra_night_association import get_n_last_observations_from_trajectories
 from alert_association.inter_night_associations import night_to_night_association
 import astropy.units as u
 from pandas.testing import assert_frame_equal
 import sys
 from collections import Counter
 import pyarrow.parquet as pq
-import os
 from alert_association.utils import load_data
 from alert_association.night_to_night_association import time_window_management
 

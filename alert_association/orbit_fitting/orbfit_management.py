@@ -10,7 +10,6 @@ import subprocess
 import os
 import multiprocessing as mp
 from alert_association.utils import load_data
-from alert_association.utils import get_mpc_database
 import alert_association.orbit_fitting.plot_orbstat as po
 
 
@@ -287,7 +286,7 @@ def write_inp(ram_dir, provisional_designation):
 
 def write_oop(ram_dir, provisional_designation):
 
-    oop_template = os.path.join('alert_association', 'orbit_fitting', 'template.oop')
+    oop_template = os.path.join("alert_association", "orbit_fitting", "template.oop")
 
     copyfile(oop_template, ram_dir + provisional_designation + ".oop")
     with open(ram_dir + provisional_designation + ".oop", "a") as file:
@@ -301,33 +300,27 @@ def write_oop(ram_dir, provisional_designation):
 
 def prep_orbitfit(ram_dir):
 
-    orbfit_path = os.path.join('alert_association', 'orbit_fitting')
+    orbfit_path = os.path.join("alert_association", "orbit_fitting")
     dir_path = ram_dir + "mpcobs/"
 
     if not os.path.isdir(dir_path):
         os.mkdir(dir_path)
 
     subprocess.call(
-        [
-            "cp",
-            os.path.join(orbfit_path, "AST17.bai_431_fcct"),
-            ram_dir + "AST17.bai",
-        ]
+        ["cp", os.path.join(orbfit_path, "AST17.bai_431_fcct"), ram_dir + "AST17.bai"]
     )
     subprocess.call(["chmod", "777", ram_dir + "AST17.bai"])
     subprocess.call(
-        [
-            "cp",
-            os.path.join(orbfit_path, "AST17.bep_431_fcct"),
-            ram_dir + "AST17.bep",
-        ]
+        ["cp", os.path.join(orbfit_path, "AST17.bep_431_fcct"), ram_dir + "AST17.bep"]
     )
     subprocess.call(["chmod", "777", ram_dir + "AST17.bep"])
 
 
 def call_orbitfit(ram_dir, provisional_designation):
 
-    orbitfit_path = os.path.join('alert_association', 'orbit_fitting', 'OrbitFit', 'bin/')
+    orbitfit_path = os.path.join(
+        "alert_association", "orbit_fitting", "OrbitFit", "bin/"
+    )
 
     command = (
         "./"
@@ -387,16 +380,12 @@ def get_orbit_param(ram_dir, df):
 
 
 def compute_df_orbit_param(trajectory_df, cpu_count, ram_dir):
-
-    """
-    
-    """
-
     all_traj_id = np.unique(trajectory_df["trajectory_id"])
 
     prep_orbitfit(ram_dir)
     all_track = [
-        (ram_dir, trajectory_df[trajectory_df["trajectory_id"] == traj_id]) for traj_id in all_traj_id
+        (ram_dir, trajectory_df[trajectory_df["trajectory_id"] == traj_id])
+        for traj_id in all_traj_id
     ]
 
     pool = mp.Pool(cpu_count)
@@ -408,11 +397,6 @@ def compute_df_orbit_param(trajectory_df, cpu_count, ram_dir):
 
 
 def orbit_elem_dataframe(orbit_elem):
-
-    """
-    
-    """
-
     column_name = [
         "trajectory_id",
         "provisional designation",
@@ -427,7 +411,7 @@ def orbit_elem_dataframe(orbit_elem):
         "rms_i",
         "rms_long. node",
         "rms_arg. peric",
-        "rms_mean anomaly"
+        "rms_mean anomaly",
     ]
 
     df_orb_elem = pd.DataFrame(orbit_elem, columns=column_name,)
@@ -467,11 +451,11 @@ if __name__ == "__main__":
     )
     mpc["ssnamenr"] = mpc["ssnamenr"].astype("string")
 
-    # print("MPC DATABASE loading")
-    # t_before = t.time()
-    # mpc_database = po.get_mpc_database()
+    print("MPC DATABASE loading")
+    t_before = t.time()
+    mpc_database = po.get_mpc_database()
 
-    # print("MPC DATABASE end loading, elapsed time: {}".format(t.time() - t_before))
+    print("MPC DATABASE end loading, elapsed time: {}".format(t.time() - t_before))
     print()
 
     print(
@@ -482,7 +466,7 @@ if __name__ == "__main__":
     print("n_cpu: {}".format(n_cpu))
     t_before = t.time()
     orbit_results = compute_df_orbit_param(mpc, n_cpu, ram_dir)
-    
+
     multiprocess_time = t.time() - t_before
     print("total multiprocessing orbfit time: {}".format(multiprocess_time))
 
@@ -498,7 +482,12 @@ if __name__ == "__main__":
     )
 
     dict_color_orbit = po.color_dict(mpc_database)
-    po.plot_residue(cross_match_mpc.drop_duplicates(["ssnamenr"]), dict_color_orbit, min(n_trajectories, len(all_track)), n_points)
+    po.plot_residue(
+        cross_match_mpc.drop_duplicates(["ssnamenr"]),
+        dict_color_orbit,
+        min(n_trajectories, len(all_track)),
+        n_points,
+    )
 
     exit()
     # Sequential orbitfit
