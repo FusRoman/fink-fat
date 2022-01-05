@@ -406,7 +406,7 @@ def trajectories_associations(
         Trajectories dataframe must have the following columns :
             ra, dec, dcmag, nid, fid, jd, candid, trajectory_id
     new_observations : dataframe
-        new observations from the next night and not associated during the intra night process and the 
+        new observations from the next night and not associated during the intra night process and the
         new observations dataframe must have the following columns :
             ra, dec, dcmag, nid, fid, jd, candid
     next_nid : The next night id which is the night id of the tracklets.
@@ -752,7 +752,6 @@ def compute_orbit_elem(trajectory_df):
     traj_to_compute = trajectory_df[trajectory_df["a"] == -1.0]
     traj_with_orbelem = trajectory_df[trajectory_df["a"] != -1.0]
 
-    
     print(
         "nb traj to compute orb elem: {}".format(
             len(np.unique(traj_to_compute["trajectory_id"]))
@@ -987,7 +986,7 @@ def night_to_night_association(
         )
 
     t_before = t.time()
-    
+
     track_traj_with_orb = compute_orbit_elem(all_traj_to_orb)
     print("orb elem computation time: {}".format(t.time() - t_before))
 
@@ -998,7 +997,7 @@ def night_to_night_association(
     (
         traj_with_new_obs,
         remaining_new_observations,
-        trajectories_associations_report
+        trajectories_associations_report,
     ) = trajectories_associations(
         traj_not_updated,
         remaining_new_observations,
@@ -1007,7 +1006,8 @@ def night_to_night_association(
         mag_criterion_same_fid,
         mag_criterion_diff_fid,
         angle_criterion,
-        run_metrics,)
+        run_metrics,
+    )
 
     # separate trajectories with more than 3 points for the orbit computation and the other tracklets
     other_traj, traj_to_orb = prep_orbit_computation(traj_with_new_obs)
@@ -1024,10 +1024,11 @@ def night_to_night_association(
     print("orb elem computation time: {}".format(t.time() - t_before))
 
     # concatenate all the trajectories with computed orbital elements with the other trajectories/tracklets.
-    most_recent_traj = pd.concat([track_traj_with_orb, new_traj_with_orb, other_traj, other_track])
+    most_recent_traj = pd.concat(
+        [track_traj_with_orb, new_traj_with_orb, other_traj, other_track]
+    )
 
     old_observation = pd.concat([old_observation, remaining_new_observations])
-
 
     inter_night_report["intra night report"] = intra_night_report
     inter_night_report["trajectory association report"] = traj_and_track_assoc_report
@@ -1053,13 +1054,12 @@ if __name__ == "__main__":  # pragma: no cover
         __import__("sys").modules["unittest.util"]._MAX_LENGTH = 999999999
 
     sys.exit(doctest.testmod()[0])
-    
+
     def print_df_to_dict(df):
         print("{")
         for col in df.columns:
             print('"{}": {},'.format(col, list(df[col])))
         print("}")
-
 
     from alert_association.continuous_integration import load_data
 

@@ -4891,8 +4891,41 @@ new_observations_expected_1 = pd.DataFrame(
     }
 )
 
-expected_traj_obs_report_1 = {'traj to obs report': [{'old nid': 2, 'trajectories_to_new_observation_report': {'number of inter night separation based association': 1, 'number of inter night magnitude filtered association': 0, 'number of inter night angle filtered association': 0, 'number of duplicated association': 0, 'metrics': {}}}, {'old nid': 1, 'trajectories_to_new_observation_report': {'number of inter night separation based association': 5, 'number of inter night magnitude filtered association': 3, 'number of inter night angle filtered association': 0, 'number of duplicated association': 0, 'metrics': {}}}, {'old nid': 0, 'trajectories_to_new_observation_report': {'number of inter night separation based association': 1, 'number of inter night magnitude filtered association': 0, 'number of inter night angle filtered association': 0, 'number of duplicated association': 0, 'metrics': {}}}], 'updated trajectories': [0.0, 2.0, 4.0, 5.0]}
-
+expected_traj_obs_report_1 = {
+    "traj to obs report": [
+        {
+            "old nid": 2,
+            "trajectories_to_new_observation_report": {
+                "number of inter night separation based association": 1,
+                "number of inter night magnitude filtered association": 0,
+                "number of inter night angle filtered association": 0,
+                "number of duplicated association": 0,
+                "metrics": {},
+            },
+        },
+        {
+            "old nid": 1,
+            "trajectories_to_new_observation_report": {
+                "number of inter night separation based association": 5,
+                "number of inter night magnitude filtered association": 3,
+                "number of inter night angle filtered association": 0,
+                "number of duplicated association": 0,
+                "metrics": {},
+            },
+        },
+        {
+            "old nid": 0,
+            "trajectories_to_new_observation_report": {
+                "number of inter night separation based association": 1,
+                "number of inter night magnitude filtered association": 0,
+                "number of inter night angle filtered association": 0,
+                "number of duplicated association": 0,
+                "metrics": {},
+            },
+        },
+    ],
+    "updated trajectories": [0.0, 2.0, 4.0, 5.0],
+}
 
 
 trajectories_expected_5 = pd.DataFrame(
@@ -5651,7 +5684,41 @@ new_observations_expected_2 = pd.DataFrame(
     }
 )
 
-expected_traj_obs_report_2 = {'traj to obs report': [{'old nid': 2, 'trajectories_to_new_observation_report': {'number of inter night separation based association': 3, 'number of inter night magnitude filtered association': 0, 'number of inter night angle filtered association': 1, 'number of duplicated association': 1, 'metrics': {}}}, {'old nid': 1, 'trajectories_to_new_observation_report': {'number of inter night separation based association': 3, 'number of inter night magnitude filtered association': 0, 'number of inter night angle filtered association': 0, 'number of duplicated association': 2, 'metrics': {}}}, {'old nid': 0, 'trajectories_to_new_observation_report': {'number of inter night separation based association': 5, 'number of inter night magnitude filtered association': 3, 'number of inter night angle filtered association': 0, 'number of duplicated association': 1, 'metrics': {}}}], 'updated trajectories': [0, 1, 2, 4, 5, 6, 7]}
+expected_traj_obs_report_2 = {
+    "traj to obs report": [
+        {
+            "old nid": 2,
+            "trajectories_to_new_observation_report": {
+                "number of inter night separation based association": 3,
+                "number of inter night magnitude filtered association": 0,
+                "number of inter night angle filtered association": 1,
+                "number of duplicated association": 1,
+                "metrics": {},
+            },
+        },
+        {
+            "old nid": 1,
+            "trajectories_to_new_observation_report": {
+                "number of inter night separation based association": 3,
+                "number of inter night magnitude filtered association": 0,
+                "number of inter night angle filtered association": 0,
+                "number of duplicated association": 2,
+                "metrics": {},
+            },
+        },
+        {
+            "old nid": 0,
+            "trajectories_to_new_observation_report": {
+                "number of inter night separation based association": 5,
+                "number of inter night magnitude filtered association": 3,
+                "number of inter night angle filtered association": 0,
+                "number of duplicated association": 1,
+                "metrics": {},
+            },
+        },
+    ],
+    "updated trajectories": [0, 1, 2, 4, 5, 6, 7],
+}
 
 
 trajectories_expected_6 = pd.DataFrame(
@@ -6322,4 +6389,28 @@ new_observations_expected_3 = pd.DataFrame(
     }
 )
 
-expected_traj_obs_report_3 = {'traj to obs report': [{'old nid': 2, 'trajectories_to_new_observation_report': {'number of inter night separation based association': 4, 'number of inter night magnitude filtered association': 0, 'number of inter night angle filtered association': 0, 'number of duplicated association': 0, 'metrics': {}}}, {'old nid': 1, 'trajectories_to_new_observation_report': {'number of inter night separation based association': 3, 'number of inter night magnitude filtered association': 1, 'number of inter night angle filtered association': 0, 'number of duplicated association': 0, 'metrics': {}}}], 'updated trajectories': [0.0, 1.0, 2.0, 3.0, 5.0, 6.0]}
+expected_traj_obs_report_3 = {
+    "traj to obs report": [
+        {
+            "old nid": 2,
+            "trajectories_to_new_observation_report": {
+                "number of inter night separation based association": 4,
+                "number of inter night magnitude filtered association": 0,
+                "number of inter night angle filtered association": 0,
+                "number of duplicated association": 0,
+                "metrics": {},
+            },
+        },
+        {
+            "old nid": 1,
+            "trajectories_to_new_observation_report": {
+                "number of inter night separation based association": 3,
+                "number of inter night magnitude filtered association": 1,
+                "number of inter night angle filtered association": 0,
+                "number of duplicated association": 0,
+                "metrics": {},
+            },
+        },
+    ],
+    "updated trajectories": [0.0, 1.0, 2.0, 3.0, 5.0, 6.0],
+}
