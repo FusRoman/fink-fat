@@ -763,68 +763,6 @@ def trajectory_associations(
 
     all_nid_assoc_report = []
 
-    # if len(new_observations) > 0:
-
-    #     # trajectory associations with the new observations
-    #     (
-    #         traj_left,
-    #         obs_assoc,
-    #         night_to_night_traj_to_obs_report,
-    #     ) = night_to_night_trajectory_associations(
-    #         two_last_current_nid,
-    #         new_observations,
-    #         norm_sep_crit,
-    #         norm_same_fid,
-    #         norm_diff_fid,
-    #         angle_criterion,
-    #     )
-
-    #     nb_traj_to_obs_assoc_with_duplicates = len(obs_assoc)
-    #     night_to_night_traj_to_obs_report["number of duplicated association"] = 0
-    #     night_to_night_traj_to_obs_report["metrics"] = {}
-
-    #     if len(obs_assoc) > 0:
-
-    #         updated_trajectories = np.union1d(
-    #             updated_trajectories, np.unique(obs_assoc["trajectory_id"])
-    #         )
-
-    #         # remove duplicates associations
-    #         # do somethings with the duplicates later in the project
-    #         obs_assoc = obs_assoc.drop_duplicates(["trajectory_id"])
-    #         traj_left = traj_left.drop_duplicates(["trajectory_id"])
-
-    #         night_to_night_traj_to_obs_report[
-    #             "number of duplicated association"
-    #         ] = nb_traj_to_obs_assoc_with_duplicates - len(obs_assoc)
-
-    #         # add the new associated observations in the recorded trajectory dataframe
-    #         trajectory_df = pd.concat([trajectory_df, obs_assoc])
-
-    #     if run_metrics:
-    #         last_traj_obs = (
-    #             two_last_current_nid.groupby(["trajectory_id"]).last().reset_index()
-    #         )
-    #         inter_night_metric = compute_inter_night_metric(
-    #             last_traj_obs, new_observations, traj_left, obs_assoc
-    #         )
-    #         night_to_night_traj_to_obs_report["metrics"] = inter_night_metric
-
-    #     # remove the associateds observations from the set of new observations
-    #     new_observations = new_observations[
-    #         ~new_observations["candid"].isin(obs_assoc["candid"])
-    #     ]
-
-    #     current_nid_assoc_report[
-    #         "trajectories_to_new_observation_report"
-    #     ] = night_to_night_traj_to_obs_report
-
-    # trajectory_associations_report["list of updated trajectories"] = np.union1d(
-    #     trajectory_associations_report["list of updated trajectories"],
-    #     updated_trajectories,
-    # ).tolist()
-    # all_nid_assoc_report.append(current_nid_assoc_report)
-
     trajectory_associations_report["all nid report"] = all_nid_assoc_report
 
     return (
