@@ -1,5 +1,7 @@
 import numpy as np
 import pandas as pd
+import multiprocessing as mp
+import os
 from alert_association.night_to_night_association import (
     night_to_night_trajectory_associations,
 )
@@ -744,7 +746,11 @@ def prep_orbit_computation(trajectory_df):
     return other_track, track_to_orb
 
 
-def compute_orbit_elem(trajectory_df):
+def compute_orbit_elem(trajectory_df, q):
+
+    _pid = os.getpid()
+    current_ram_path = os.path.join(ram_dir, str(_pid), "")
+    os.mkdir(current_ram_path)
 
     if len(trajectory_df) == 0:
         return trajectory_df
@@ -776,10 +782,15 @@ def compute_orbit_elem(trajectory_df):
 
     traj_to_compute = traj_to_compute.drop(orbit_column, axis=1)
 
-    orbit_elem = compute_df_orbit_param(traj_to_compute, 10, ram_dir)
+    orbit_elem = compute_df_orbit_param(
+        traj_to_compute, int(mp.cpu_count() / 4), current_ram_path
+    )
     traj_to_compute = traj_to_compute.merge(orbit_elem, on="trajectory_id")
 
-    return pd.concat([traj_with_orbelem, traj_to_compute])
+    os.rmdir(current_ram_path)
+    q.put(pd.concat([traj_with_orbelem, traj_to_compute]))
+
+    return 0
 
 
 def intra_night_step(
@@ -926,18 +937,17 @@ def night_to_night_association(
         run_metrics,
     )
 
-    # temporary import
-    import time as t
-
     if len(trajectory_df) == 0:
 
-        t_before = t.time()
-
         other_track, track_to_orb = prep_orbit_computation(tracklets)
-        track_with_orb_elem = compute_orbit_elem(track_to_orb)
 
-        print("orb elem computation time: {}".format(t.time() - t_before))
+        q = mp.Queue()
+        process = mp.Process(target=compute_orbit_elem, args=(track_to_orb, q,))
+        process.start()
+        track_with_orb_elem = q.get()
+        # track_with_orb_elem = compute_orbit_elem(track_to_orb)
 
+        process.terminate()
         return (
             pd.concat([other_track, track_with_orb_elem]),
             remaining_new_observations,
@@ -985,10 +995,12 @@ def night_to_night_association(
             )
         )
 
-    t_before = t.time()
-
-    track_traj_with_orb = compute_orbit_elem(all_traj_to_orb)
-    print("orb elem computation time: {}".format(t.time() - t_before))
+    q = mp.Queue()
+    tracklets_orbfit_process = mp.Process(
+        target=compute_orbit_elem, args=(all_traj_to_orb, q,)
+    )
+    tracklets_orbfit_process.start()
+    # track_traj_with_orb = compute_orbit_elem(all_traj_to_orb)
 
     print("trajectories associations")
 
@@ -1019,14 +1031,23 @@ def night_to_night_association(
             )
         )
 
-    t_before = t.time()
-    new_traj_with_orb = compute_orbit_elem(traj_to_orb)
-    print("orb elem computation time: {}".format(t.time() - t_before))
+    trajectories_orbfit_process = mp.Process(
+        target=compute_orbit_elem, args=(traj_to_orb, q,)
+    )
+    trajectories_orbfit_process.start()
+    # new_traj_with_orb = compute_orbit_elem(traj_to_orb)
+
+    tmp_traj_orb_elem = []
+    for _ in range(2):
+        tmp_traj_orb_elem.append(q.get())
+
+    traj_with_orb_elem = pd.concat(tmp_traj_orb_elem)
+
+    tracklets_orbfit_process.terminate()
+    trajectories_orbfit_process.terminate()
 
     # concatenate all the trajectories with computed orbital elements with the other trajectories/tracklets.
-    most_recent_traj = pd.concat(
-        [track_traj_with_orb, new_traj_with_orb, other_traj, other_track]
-    )
+    most_recent_traj = pd.concat([traj_with_orb_elem, other_traj, other_track])
 
     old_observation = pd.concat([old_observation, remaining_new_observations])
 
@@ -1052,8 +1073,6 @@ if __name__ == "__main__":  # pragma: no cover
     if "unittest.util" in __import__("sys").modules:
         # Show full diff in self.assertEqual.
         __import__("sys").modules["unittest.util"]._MAX_LENGTH = 999999999
-
-    sys.exit(doctest.testmod()[0])
 
     def print_df_to_dict(df):
         print("{")
