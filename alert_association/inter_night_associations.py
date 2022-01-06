@@ -681,8 +681,6 @@ def trajectories_associations(
                 # remove duplicates associations
                 obs_assoc = obs_assoc[~duplicates]
 
-                # traj_left = traj_left.drop_duplicates(["trajectory_id"])
-
                 night_to_night_traj_to_obs_report[
                     "number of duplicated association"
                 ] = nb_traj_to_obs_assoc_with_duplicates - len(obs_assoc)
@@ -728,6 +726,336 @@ def trajectories_associations(
             new_observations.reset_index(drop=True).infer_objects(),
             trajectories_and_observations_associations_report,
         )
+
+
+def old_observations_associations(
+    tracklets,
+    old_observations,
+    next_nid,
+    sep_criterion,
+    mag_criterion_same_fid,
+    mag_criterion_diff_fid,
+    angle_criterion,
+    run_metrics=False,
+):
+    """
+    Perform associations between the tracklets and the old observations from the previous nights.
+
+    Parameters
+    ----------
+    tracklets : dataframe
+        tracklets detected previously from the intra night associations and not associated with a recorded trajectories.
+        Trackelts dataframe must have the following columns :
+            ra, dec, dcmag, nid, fid, jd, candid, trajectory_id
+    old_observations : dataframe
+        old observations from the previous nights.
+        old observatins dataframe must have the following columns :
+            ra, dec, dcmag, nid, fid, jd, candid
+    next_nid : The next night id which is the night id of the tracklets.
+    sep_criterion : float
+        the separation criterion for the alert based position associations
+    mag_criterion_same_fid : float
+        the magnitude criterion to associates alerts if the observations have been observed with the same filter
+    mag_criterion_diff_fid : float
+        the magnitude criterion to associates alerts if the observations have been observed with the same filter
+    angle_criterion : float
+        the angle criterion to associates alerts during the cone search
+    run_metrics : boolean
+        run the inter night association metrics : trajectory_df, traj_next_night, old_observations and new_observations
+        parameters should have the ssnamenr column.
+
+    Return
+    ------
+    tracklets : dataframe
+        tracklets associated with old observations
+    old observations : dataframe
+        remaining old observations
+    track_and_obs_report : dict list
+        statistics about the trajectory and observations association process, contains the following entries :
+
+            list of updated tracklets
+
+            all nid report with the following entries for each reports :
+
+                        current nid
+
+                        trajectories to observations report
+
+                        metrics, no sense if run_metrics is set to False
+
+
+    Examples
+    --------
+    >>> tracklets = ts.tracklets_sample_3
+    >>> old_observations = ts.old_observations_sample_1
+
+    >>> tr_orb_columns = [
+    ...    "provisional designation",
+    ...    "a",
+    ...    "e",
+    ...    "i",
+    ...    "long. node",
+    ...    "arg. peric",
+    ...    "mean anomaly",
+    ...    "rms_a",
+    ...    "rms_e",
+    ...    "rms_i",
+    ...    "rms_long. node",
+    ...    "rms_arg. peric",
+    ...    "rms_mean anomaly",
+    ... ]
+
+    >>> tracklets[tr_orb_columns] = -1.0
+    >>> old_observations[tr_orb_columns] = -1.0
+    >>> tracklets["not_updated"] = np.ones(len(tracklets), dtype=np.bool_)
+
+    >>> tk, old, report = old_observations_associations(tracklets, old_observations, 3, 1.5 * u.degree, 0.1, 0.3, 30)
+
+
+    >>> assert_frame_equal(tk, ts.tracklets_obs_expected_1, check_dtype=False)
+    >>> assert_frame_equal(old.reset_index(drop=True), ts.old_obs_expected_1, check_dtype=False)
+    >>> TestCase().assertDictEqual(ts.track_and_obs_report_expected_1, report)
+
+
+    >>> tracklets = ts.tracklets_sample_4
+    >>> old_observations = ts.old_observations_sample_2
+
+    >>> tr_orb_columns = [
+    ...    "provisional designation",
+    ...    "a",
+    ...    "e",
+    ...    "i",
+    ...    "long. node",
+    ...    "arg. peric",
+    ...    "mean anomaly",
+    ...    "rms_a",
+    ...    "rms_e",
+    ...    "rms_i",
+    ...    "rms_long. node",
+    ...    "rms_arg. peric",
+    ...    "rms_mean anomaly",
+    ... ]
+
+    >>> tracklets[tr_orb_columns] = -1.0
+    >>> old_observations[tr_orb_columns] = -1.0
+    >>> tracklets["not_updated"] = np.ones(len(tracklets), dtype=np.bool_)
+
+    >>> tk, old, report = old_observations_associations(tracklets, old_observations, 3, 1.5 * u.degree, 0.1, 0.3, 30)
+
+    >>> assert_frame_equal(tk, ts.tracklets_obs_expected_2, check_dtype=False)
+    >>> assert_frame_equal(old.reset_index(drop=True), ts.old_obs_expected_2, check_dtype=False)
+    >>> TestCase().assertDictEqual(ts.track_and_obs_report_expected_2, report)
+
+
+    >>> tracklets = ts.tracklets_sample_5
+    >>> old_observations = ts.old_observations_sample_3
+
+    >>> tr_orb_columns = [
+    ...    "provisional designation",
+    ...    "a",
+    ...    "e",
+    ...    "i",
+    ...    "long. node",
+    ...    "arg. peric",
+    ...    "mean anomaly",
+    ...    "rms_a",
+    ...    "rms_e",
+    ...    "rms_i",
+    ...    "rms_long. node",
+    ...    "rms_arg. peric",
+    ...    "rms_mean anomaly",
+    ... ]
+
+    >>> tracklets[tr_orb_columns] = -1.0
+    >>> old_observations[tr_orb_columns] = -1.0
+    >>> tracklets["not_updated"] = np.ones(len(tracklets), dtype=np.bool_)
+
+    >>> tk, old, report = old_observations_associations(tracklets, old_observations, 3, 1.5 * u.degree, 0.1, 0.3, 30)
+
+    >>> assert_frame_equal(tk, ts.tracklets_obs_expected_3, check_dtype=False)
+    >>> assert_frame_equal(old.reset_index(drop=True), ts.old_obs_expected_3, check_dtype=False)
+    >>> TestCase().assertDictEqual(ts.track_and_obs_report_expected_3, report)
+    """
+
+    if len(tracklets) == 0 or len(old_observations) == 0:
+        return tracklets, old_observations, {}
+    else:
+
+        track_and_obs_report = dict()
+
+        # get all the old night id sort by descending order to begin the associations
+        # with the recently ones
+        old_obs_nid = np.sort(np.unique(old_observations["nid"]))[::-1]
+
+        two_first_obs_tracklets = get_n_last_observations_from_trajectories(
+            tracklets, 2, False
+        )
+
+        updated_tracklets = []
+        all_nid_report = []
+
+        for obs_nid in old_obs_nid:
+
+            current_nid_report = dict()
+
+            current_old_obs = old_observations[old_observations["nid"] == obs_nid]
+
+            current_nid_report["old nid"] = int(obs_nid)
+
+            diff_night = next_nid - obs_nid
+            norm_sep_crit = sep_criterion * diff_night
+            norm_same_fid = mag_criterion_same_fid * diff_night
+            norm_diff_fid = mag_criterion_diff_fid * diff_night
+
+            # association between the new tracklets and the old observations
+            (
+                track_left_assoc,
+                old_obs_right_assoc,
+                track_to_old_obs_report,
+            ) = night_to_night_trajectory_associations(
+                two_first_obs_tracklets,
+                current_old_obs,
+                norm_sep_crit,
+                norm_same_fid,
+                norm_diff_fid,
+                angle_criterion,
+            )
+
+            # remove the associateds observations from the set of new observations
+            old_observations = old_observations[
+                ~old_observations["candid"].isin(old_obs_right_assoc["candid"])
+            ]
+
+            nb_track_to_obs_assoc_with_duplicates = len(old_obs_right_assoc)
+            track_to_old_obs_report["number of duplicated association"] = 0
+            track_to_old_obs_report["metrics"] = {}
+
+            if len(track_left_assoc) > 0:
+
+                # creates a dataframe for each duplicated trajectory associated with the tracklets
+                duplicates = old_obs_right_assoc["trajectory_id"].duplicated()
+                all_duplicate_traj = []
+
+                # get the duplicated tracklets
+                duplicate_obs = old_obs_right_assoc[duplicates]
+
+                orbit_column = [
+                    "a",
+                    "e",
+                    "i",
+                    "long. node",
+                    "arg. peric",
+                    "mean anomaly",
+                    "rms_a",
+                    "rms_e",
+                    "rms_i",
+                    "rms_long. node",
+                    "rms_arg. peric",
+                    "rms_mean anomaly",
+                ]
+
+                if len(duplicate_obs) > 0:
+
+                    # get the max trajectory id
+                    max_traj_id = np.max(np.unique(tracklets["trajectory_id"]))
+
+                    for _, rows in duplicate_obs.iterrows():
+                        max_traj_id += 1
+
+                        # silence the copy warning
+                        with pd.option_context("mode.chained_assignment", None):
+
+                            # get the trajectory associated with the tracklets and update the trajectory id
+                            duplicate_track = tracklets[
+                                tracklets["trajectory_id"] == rows["trajectory_id"]
+                            ]
+                            duplicate_track[orbit_column] = -1.0
+                            duplicate_track["trajectory_id"] = max_traj_id
+                            duplicate_track["not_updated"] = False
+
+                            # get the observations and update the trajectory id
+                            obs_duplicate = pd.DataFrame(rows.copy()).T
+
+                            obs_duplicate[orbit_column] = -1.0
+                            obs_duplicate["trajectory_id"] = max_traj_id
+                            obs_duplicate["not_updated"] = False
+
+                        # append the trajectory and the tracklets into the list
+                        all_duplicate_traj.append(duplicate_track)
+                        all_duplicate_traj.append(obs_duplicate)
+                        updated_tracklets.append(max_traj_id)
+
+                    # creates a dataframe with all duplicates and adds it to the trajectories dataframe
+                    all_duplicate_traj = pd.concat(all_duplicate_traj)
+
+                    tracklets = pd.concat([tracklets, all_duplicate_traj])
+
+                # remove the duplicates()
+                # remove duplicates associations
+                old_obs_right_assoc = old_obs_right_assoc[~duplicates]
+                # old_obs_right_assoc = old_obs_right_assoc.drop_duplicates(["trajectory_id"])
+                # track_left_assoc = track_left_assoc.drop_duplicates(["trajectory_id"])
+
+                track_to_old_obs_report[
+                    "number of duplicated association"
+                ] = nb_track_to_obs_assoc_with_duplicates - len(old_obs_right_assoc)
+
+                # add the associated old observations to the tracklets
+                tracklets = pd.concat([tracklets, old_obs_right_assoc])
+
+                # remove the associated tracklets for the next loop turn
+                two_first_obs_tracklets = two_first_obs_tracklets[
+                    ~two_first_obs_tracklets["trajectory_id"].isin(
+                        track_left_assoc["trajectory_id"]
+                    )
+                ]
+
+                updated_tracklets = np.union1d(
+                    updated_tracklets, np.unique(old_obs_right_assoc["trajectory_id"])
+                ).tolist()
+
+                # keep trace of the updated trajectories
+                # get the trajectory_id of the updated trajectories
+                associated_tr_id = np.unique(old_obs_right_assoc["trajectory_id"])
+                tracklets = tracklets.reset_index(drop=True)
+                # get all observations of the updated trajectories
+                tr_updated_index = tracklets[
+                    tracklets["trajectory_id"].isin(associated_tr_id)
+                ].index
+                # update the updated status
+                tracklets.loc[tr_updated_index, "not_updated"] = False
+
+                # remove the associated old observations
+                old_observations = old_observations[
+                    ~old_observations["candid"].isin(old_obs_right_assoc["candid"])
+                ]
+                current_old_obs = current_old_obs[
+                    ~current_old_obs["candid"].isin(old_obs_right_assoc["candid"])
+                ]
+
+            if run_metrics:
+                last_traj_obs = (
+                    two_first_obs_tracklets.groupby(["trajectory_id"])
+                    .last()
+                    .reset_index()
+                )
+                inter_night_metric = compute_inter_night_metric(
+                    last_traj_obs,
+                    current_old_obs,
+                    track_left_assoc,
+                    old_obs_right_assoc,
+                )
+                track_to_old_obs_report["metrics"] = inter_night_metric
+
+            current_nid_report[
+                "old observation to tracklets report"
+            ] = track_to_old_obs_report
+
+            all_nid_report.append(current_nid_report)
+
+        track_and_obs_report["track and obs report"] = all_nid_report
+        track_and_obs_report["updated tracklets"] = updated_tracklets
+        return tracklets, old_observations, track_and_obs_report
 
 
 def prep_orbit_computation(trajectory_df):
@@ -945,7 +1273,6 @@ def night_to_night_association(
         process = mp.Process(target=compute_orbit_elem, args=(track_to_orb, q,))
         process.start()
         track_with_orb_elem = q.get()
-        # track_with_orb_elem = compute_orbit_elem(track_to_orb)
 
         process.terminate()
         return (
@@ -988,19 +1315,11 @@ def night_to_night_association(
     # concatenate the updated trajectories and the tracklets with more than 3 points
     all_traj_to_orb = pd.concat([traj_to_orb, track_to_orb])
 
-    if len(all_traj_to_orb) > 0:
-        print(
-            "updated trajectories: {}".format(
-                len(np.unique(all_traj_to_orb["trajectory_id"]))
-            )
-        )
-
     q = mp.Queue()
     tracklets_orbfit_process = mp.Process(
         target=compute_orbit_elem, args=(all_traj_to_orb, q,)
     )
     tracklets_orbfit_process.start()
-    # track_traj_with_orb = compute_orbit_elem(all_traj_to_orb)
 
     print("trajectories associations")
 
@@ -1024,18 +1343,12 @@ def night_to_night_association(
     # separate trajectories with more than 3 points for the orbit computation and the other tracklets
     other_traj, traj_to_orb = prep_orbit_computation(traj_with_new_obs)
 
-    if len(traj_to_orb) > 0:
-        print(
-            "updated trajectories: {}".format(
-                len(np.unique(traj_to_orb["trajectory_id"]))
-            )
-        )
-
     trajectories_orbfit_process = mp.Process(
         target=compute_orbit_elem, args=(traj_to_orb, q,)
     )
     trajectories_orbfit_process.start()
-    # new_traj_with_orb = compute_orbit_elem(traj_to_orb)
+
+    print("tracklets and old observations associations")
 
     tmp_traj_orb_elem = []
     for _ in range(2):
@@ -1080,6 +1393,8 @@ if __name__ == "__main__":  # pragma: no cover
             print('"{}": {},'.format(col, list(df[col])))
         print("}")
 
+
+    sys.exit(doctest.testmod()[0])
     from alert_association.continuous_integration import load_data
 
     df_sso = load_data("Solar System MPC", 0)
