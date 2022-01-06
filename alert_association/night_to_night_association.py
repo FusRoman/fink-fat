@@ -407,8 +407,6 @@ def night_to_night_trajectory_associations(
         the left members of the associations, extremity of the trajectories
     new_obs_assoc : dataframe
         new observations to add to the associated trajectories
-    remain_traj : dataframe
-        all non-associated trajectories
     inter_night_obs_report : dictionary
         statistics about the trajectory association process, contains the following entries :
 
@@ -993,17 +991,12 @@ def tracklets_and_observations_associations(
 
     old_obs_nid = np.sort(np.unique(old_observations["nid"]))[::-1]
 
-    if len(traj_next_night) > 0:
-        two_first_obs_tracklets = get_n_last_observations_from_trajectories(
-            traj_next_night, 2, False
-        )
-    else:
-        traj_next_night = pd.DataFrame(
-            columns=["ra", "dec", "trajectory_id", "jd", "candid", "fid", "dcmag"]
-        )
-        two_first_obs_tracklets = pd.DataFrame(
-            columns=["ra", "dec", "trajectory_id", "jd", "candid", "fid", "dcmag"]
-        )
+    traj_next_night = pd.DataFrame(
+        columns=["ra", "dec", "trajectory_id", "jd", "candid", "fid", "dcmag"]
+    )
+    two_first_obs_tracklets = pd.DataFrame(
+        columns=["ra", "dec", "trajectory_id", "jd", "candid", "fid", "dcmag"]
+    )
 
     all_nid_report = []
 
