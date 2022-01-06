@@ -1393,7 +1393,6 @@ if __name__ == "__main__":  # pragma: no cover
             print('"{}": {},'.format(col, list(df[col])))
         print("}")
 
-
     sys.exit(doctest.testmod()[0])
     from alert_association.continuous_integration import load_data
 
