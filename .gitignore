@@ -138,6 +138,7 @@ alert_association/trajectory_output.parquet
 test_report/
 
 data/mpc_database/
+alert_association/orbit_fitting/residuals/
 
 *.obs
 *.inp
@@ -148,5 +149,9 @@ data/mpc_database/
 *.pro
 *.bai
 *.bep
-alert_association/orbit_fitting/OrbitFit
 mpcobs/
+
+!alert_association/orbit_fitting/OrbitFit/lib/
+!alert_association/orbit_fitting/OrbitFit/bin/AST17.bai
+!alert_association/orbit_fitting/OrbitFit/bin/AST17.bep
+alert_association/orbit_fitting/OrbitFit/tests/
