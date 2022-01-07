@@ -721,6 +721,8 @@ def trajectories_associations(
             "updated trajectories"
         ] = updated_trajectories
 
+        trajectories = trajectories.drop("tmp_traj", axis=1)
+
         return (
             trajectories.reset_index(drop=True).infer_objects(),
             new_observations.reset_index(drop=True).infer_objects(),
@@ -745,7 +747,7 @@ def old_observations_associations(
     ----------
     tracklets : dataframe
         tracklets detected previously from the intra night associations and not associated with a recorded trajectories.
-        Trackelts dataframe must have the following columns :
+        Tracklets dataframe must have the following columns :
             ra, dec, dcmag, nid, fid, jd, candid, trajectory_id
     old_observations : dataframe
         old observations from the previous nights.
@@ -921,6 +923,9 @@ def old_observations_associations(
                 angle_criterion,
             )
 
+            # remove tmp_traj column added by night_to_night_trajectory_associations
+            old_obs_right_assoc = old_obs_right_assoc.drop("tmp_traj", axis=1)
+
             # remove the associateds observations from the set of new observations
             old_observations = old_observations[
                 ~old_observations["candid"].isin(old_obs_right_assoc["candid"])
@@ -1055,7 +1060,12 @@ def old_observations_associations(
 
         track_and_obs_report["track and obs report"] = all_nid_report
         track_and_obs_report["updated tracklets"] = updated_tracklets
-        return tracklets, old_observations, track_and_obs_report
+
+        return (
+            tracklets.reset_index(drop=True).infer_objects(),
+            old_observations.reset_index(drop=True).infer_objects(),
+            track_and_obs_report,
+        )
 
 
 def prep_orbit_computation(trajectory_df):
@@ -1144,27 +1154,19 @@ def intra_night_step(
         new_right.reset_index(drop=True),
     )
 
-    traj_next_night = new_trajectory_id_assignation(
-        new_left, new_right, last_trajectory_id
-    )
+    tracklets = new_trajectory_id_assignation(new_left, new_right, last_trajectory_id)
 
     intra_night_report["number of intra night tracklets"] = len(
-        np.unique(traj_next_night["trajectory_id"])
+        np.unique(tracklets["trajectory_id"])
     )
-
-    if len(traj_next_night) > 0:
-        last_trajectory_id = np.max(traj_next_night["trajectory_id"]) + 1
-    else:
-        traj_next_night = pd.DataFrame(columns=["trajectory_id", "candid"])
 
     # remove all the alerts that appears in the tracklets
     new_observation_not_associated = new_observation[
-        ~new_observation["candid"].isin(traj_next_night["candid"])
+        ~new_observation["candid"].isin(tracklets["candid"])
     ]
 
     return (
-        traj_next_night,
-        last_trajectory_id,
+        tracklets,
         new_observation_not_associated,
         intra_night_report,
     )
@@ -1251,12 +1253,7 @@ def night_to_night_association(
     inter_night_report["nid of the next night"] = int(next_nid)
 
     # intra night associations steps with the new observations
-    (
-        tracklets,
-        last_trajectory_id,
-        remaining_new_observations,
-        intra_night_report,
-    ) = intra_night_step(
+    (tracklets, remaining_new_observations, intra_night_report,) = intra_night_step(
         new_observation,
         last_trajectory_id,
         intra_night_sep_criterion,
@@ -1301,10 +1298,6 @@ def night_to_night_association(
         run_metrics,
     )
 
-    # restore the type of each columns with the infer_objects columns
-    # already done in tracklets_associations
-    # most_recent_traj = most_recent_traj.reset_index(drop=True).infer_objects()
-
     # get the trajectories updated with new tracklets and the trajectory not updated for the next step
     traj_to_orb = traj_with_track[~traj_with_track["not_updated"]]
     traj_not_updated = traj_with_track[traj_with_track["not_updated"]]
@@ -1340,7 +1333,7 @@ def night_to_night_association(
         run_metrics,
     )
 
-    # separate trajectories with more than 3 points for the orbit computation and the other tracklets
+    # separate trajectories with more than 3 points for the orbit computation and the other trajectories
     other_traj, traj_to_orb = prep_orbit_computation(traj_with_new_obs)
 
     trajectories_orbfit_process = mp.Process(
@@ -1350,8 +1343,36 @@ def night_to_night_association(
 
     print("tracklets and old observations associations")
 
+    # perform associations with the tracklets and the old observations :
+    #   - tracklets with old observations
+    (
+        track_with_old_obs,
+        remain_old_obs,
+        track_and_obs_report,
+    ) = old_observations_associations(
+        other_track,
+        old_observation,
+        next_nid,
+        sep_criterion,
+        mag_criterion_same_fid,
+        mag_criterion_diff_fid,
+        angle_criterion,
+        run_metrics,
+    )
+
+    print("tracklets with old observations added")
+    updated_tracklets = track_with_old_obs[~track_with_old_obs["not_updated"]]
+    not_updated_tracklets = track_with_old_obs[track_with_old_obs["not_updated"]]
+
+    tracklets_with_new_obs_orbfit_process = mp.Process(
+        target=compute_orbit_elem, args=(updated_tracklets, q,)
+    )
+    tracklets_with_new_obs_orbfit_process.start()
+
+    print("old observations and new observations associations")
+
     tmp_traj_orb_elem = []
-    for _ in range(2):
+    for _ in range(3):
         tmp_traj_orb_elem.append(q.get())
 
     traj_with_orb_elem = pd.concat(tmp_traj_orb_elem)
@@ -1360,12 +1381,18 @@ def night_to_night_association(
     trajectories_orbfit_process.terminate()
 
     # concatenate all the trajectories with computed orbital elements with the other trajectories/tracklets.
-    most_recent_traj = pd.concat([traj_with_orb_elem, other_traj, other_track])
+    most_recent_traj = pd.concat(
+        [traj_with_orb_elem, other_traj, not_updated_tracklets]
+    )
 
-    old_observation = pd.concat([old_observation, remaining_new_observations])
+    old_observation = pd.concat([remain_old_obs, remaining_new_observations])
 
     inter_night_report["intra night report"] = intra_night_report
-    inter_night_report["trajectory association report"] = traj_and_track_assoc_report
+    inter_night_report["tracklets associations report"] = traj_and_track_assoc_report
+    inter_night_report[
+        "trajectories associations report"
+    ] = trajectories_associations_report
+    inter_night_report["track and old obs associations report"] = track_and_obs_report
 
     # inter_night_report[
     #     "tracklets and observation association report"
@@ -1393,7 +1420,7 @@ if __name__ == "__main__":  # pragma: no cover
             print('"{}": {},'.format(col, list(df[col])))
         print("}")
 
-    sys.exit(doctest.testmod()[0])
+    # sys.exit(doctest.testmod()[0])
     from alert_association.continuous_integration import load_data
 
     df_sso = load_data("Solar System MPC", 0)
@@ -1432,12 +1459,19 @@ if __name__ == "__main__":  # pragma: no cover
         new_observation = df_sso[df_sso["nid"] == tr_nid]
         with pd.option_context("mode.chained_assignment", None):
             new_observation[tr_orb_columns] = -1.0
+            new_observation["not_updated"] = np.ones(
+                len(new_observation), dtype=np.bool_
+            )
 
         next_nid = new_observation["nid"].values[0]
 
+        print(
+            "nb trajectories: {}".format(len(np.unique(trajectory_df["trajectory_id"])))
+        )
+        print("nb old obs: {}".format(len(old_observation)))
         print("nb new obs: {}".format(len(new_observation)))
 
-        trajectory_df, old_obs, report = night_to_night_association(
+        trajectory_df, old_observation, report = night_to_night_association(
             trajectory_df,
             old_observation,
             new_observation,
@@ -1454,6 +1488,7 @@ if __name__ == "__main__":  # pragma: no cover
 
         print()
         print()
+        print("trajectories with orbital elements")
         print(trajectory_df[trajectory_df["a"] != -1.0])
         print()
         print("--------------------")
