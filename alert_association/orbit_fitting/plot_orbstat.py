@@ -26,9 +26,8 @@ def color_dict(mpc_database):
     }
 
 
-def plot_residue(df, orbit_color, n_trajectories, n_points):
+def compute_residue(df):
     df = df.reset_index(drop=True)
-    orbit_type = np.unique(df["Orbit_type"])
     computed_elem = df[
         ["a_x", "e_x", "i_x", "long. node", "arg. peric", "mean anomaly"]
     ]
@@ -37,6 +36,12 @@ def plot_residue(df, orbit_color, n_trajectories, n_points):
     df[["da", "de", "di", "dNode", "dPeri", "dM"]] = (
         computed_elem.values - known_elem.values
     )
+
+    return df
+
+def plot_residue(df, orbit_color, n_trajectories, n_points):
+    df = compute_residue(df)
+    orbit_type = np.unique(df["Orbit_type"])
 
     fig, axes = plt.subplots(3, 2, sharex=True)
     fig.suptitle(
