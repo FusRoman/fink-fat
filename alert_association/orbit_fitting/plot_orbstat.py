@@ -39,6 +39,7 @@ def compute_residue(df):
 
     return df
 
+
 def plot_residue(df, orbit_color, n_trajectories, n_points):
     df = compute_residue(df)
     orbit_type = np.unique(df["Orbit_type"])

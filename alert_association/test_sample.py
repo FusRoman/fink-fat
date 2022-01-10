@@ -7761,3 +7761,105 @@ track_and_obs_report_expected_3 = {
     ],
     "updated tracklets": [0.0, 1.0, 2.0, 3.0, 4.0],
 }
+
+
+# old observations with new observations associations test
+
+old_observations_sample_4 = pd.DataFrame(
+    {
+        "ra": [1, 5, 2, 8, 11, 15],
+        "dec": [1, 5, 9, 10, 5, 2],
+        "dcmag": [11.01, 15.23, 12.02, 16.21, 14.04, 15.02],
+        "fid": [1, 1, 1, 1, 1, 1],
+        "nid": [2, 2, 1, 2, 0, 1],
+        "jd": [2.1, 2.2, 1.2, 2.5, 0.4, 1.7],
+        "candid": [0, 1, 2, 3, 4, 5],
+    }
+)
+
+new_observation_sample_4 = pd.DataFrame(
+    {
+        "ra": [2, 3, 6, 7, 13, 17],
+        "dec": [2, 8, 5, 2, 8, 6],
+        "dcmag": [11.01, 12.08, 15.22, 16.21, 14.04, 15.02],
+        "fid": [1, 1, 1, 1, 1, 1],
+        "nid": [3, 3, 3, 3, 3, 3],
+        "jd": [3.1, 3.2, 3.2, 3.5, 3.4, 3.7],
+        "candid": [6, 7, 8, 9, 10, 11],
+    }
+)
+
+# - expected outputs
+
+new_trajectory = pd.DataFrame(
+    {
+        "ra": [1, 5, 2, 6, 2, 3, 11, 13],
+        "dec": [1, 5, 2, 5, 9, 8, 5, 8],
+        "dcmag": [11.01, 15.23, 11.01, 15.22, 12.02, 12.08, 14.04, 14.04],
+        "fid": [1, 1, 1, 1, 1, 1, 1, 1],
+        "nid": [2, 2, 3, 3, 1, 3, 0, 3],
+        "jd": [2.1, 2.2, 3.1, 3.2, 1.2, 3.2, 0.4, 3.4],
+        "candid": [0, 1, 6, 8, 2, 7, 4, 10],
+        "trajectory_id": [0, 1, 0, 1, 2, 2, 3, 3],
+    }
+)
+
+remaining_old_obs = pd.DataFrame(
+    {
+        "ra": [8, 15],
+        "dec": [10, 2],
+        "dcmag": [16.21, 15.02],
+        "fid": [1, 1],
+        "nid": [2, 1],
+        "jd": [2.5, 1.7],
+        "candid": [3, 5],
+    }
+)
+
+remaining_new_obs = pd.DataFrame(
+    {
+        "ra": [7, 17],
+        "dec": [2, 6],
+        "dcmag": [16.21, 15.02],
+        "fid": [1, 1],
+        "nid": [3, 3],
+        "jd": [3.5, 3.7],
+        "candid": [9, 11],
+    }
+)
+
+expected_obs_report = {
+    "new trajectories": [0.0, 1.0, 2.0, 3.0],
+    "all nid report": [
+        {
+            "old nid": 2,
+            "observation associations": {
+                "number of inter night separation based association": 2,
+                "number of inter night magnitude filtered association": 0,
+                "metrics": {},
+                "number of duplicated association": 0,
+                "number of inter night angle filtered association": 0,
+            },
+        },
+        {
+            "old nid": 1,
+            "observation associations": {
+                "number of inter night separation based association": 1,
+                "number of inter night magnitude filtered association": 0,
+                "metrics": {},
+                "number of duplicated association": 0,
+                "number of inter night angle filtered association": 0,
+            },
+        },
+        {
+            "old nid": 0,
+            "observation associations": {
+                "number of inter night separation based association": 1,
+                "number of inter night magnitude filtered association": 0,
+                "metrics": {},
+                "number of duplicated association": 0,
+                "number of inter night angle filtered association": 0,
+            },
+        },
+    ],
+}

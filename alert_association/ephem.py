@@ -48,7 +48,7 @@ def write_target_json(trajectory_df):
         dynamical_parameters["node_longitude"] = rows["Node"]
         dynamical_parameters["perihelion_argument"] = rows["Peri"]
         dynamical_parameters["mean_anomaly"] = rows["M"]
-        
+
         # dynamical_parameters["node_longitude"] = rows["long. node"]
         # dynamical_parameters["perihelion_argument"] = rows["arg. peric"]
         # dynamical_parameters["mean_anomaly"] = rows["mean anomaly"]
@@ -73,56 +73,53 @@ def generate_ephemeris(trajectory_df):
     for path in all_param_path:
 
         trajectory_id = int(path.split(".")[0].split("_")[1])
-        jd = trajectory_df[trajectory_df["trajectory_id"] == trajectory_id]["jd_ephem"].values
+        jd = trajectory_df[trajectory_df["trajectory_id"] == trajectory_id][
+            "jd_ephem"
+        ].values
 
         params = {
-                    "-name": "",
-                    "-type": "",
-                    "-tscale": "UTC",
-                    "-observer": "I41",
-                    "-theory": "INPOP",
-                    "-teph": 1,
-                    "-tcoor": 5,
-                    "-oscelem": "",
-                    "-mime": "json",
-                    "-rplane": '1',
-                    "-output": "--jd",
-                    "-from": "MiriadeDoc",
+            "-name": "",
+            "-type": "",
+            "-tscale": "UTC",
+            "-observer": "I41",
+            "-theory": "INPOP",
+            "-teph": 1,
+            "-tcoor": 5,
+            "-oscelem": "",
+            "-mime": "json",
+            "-rplane": "1",
+            "-output": "--jd",
+            "-from": "MiriadeDoc",
         }
 
-        with open(all_param_path[0],'rb') as fp:
+        with open(all_param_path[0], "rb") as fp:
             print(json.load(fp))
             print()
             print()
 
         files = {
-            "target" : open(all_param_path[0],'rb'),
-            "epochs" : ('epochs', '\n'.join(['%.6f' % epoch
-                                             for epoch in jd]))
-            }
+            "target": open(all_param_path[0], "rb"),
+            "epochs": ("epochs", "\n".join(["%.6f" % epoch for epoch in jd])),
+        }
 
         r = requests.post(url, params=params, files=files, timeout=2000)
 
         j = r.json()
-        ephem = pd.DataFrame.from_dict(j['data'])
+        ephem = pd.DataFrame.from_dict(j["data"])
         print(ephem)
         print()
         print()
         coord = SkyCoord(ephem["RA"], ephem["DEC"], unit=(u.deg, u.deg))
 
+        eph = ephem.drop(columns=["RA", "DEC"])
+        eph["RA"] = coord.ra.value * 15
+        eph["Dec"] = coord.dec.value
 
-
-        eph = ephem.drop(columns=['RA','DEC'])
-        eph['RA'] = coord.ra.value*15
-        eph['Dec'] = coord.dec.value
-
-
-        print(eph)
-        print()
-        print()
+        # print(eph)
+        # print()
+        # print()
 
         os.remove(path)
-    
 
     return 0
     buf_data = BytesIO()
@@ -134,13 +131,15 @@ def generate_ephemeris(trajectory_df):
     for path in all_param_path:
         trajectory_id = int(path.split(".")[0].split("_")[1])
 
-        jd = trajectory_df[trajectory_df["trajectory_id"] == trajectory_id]["jd_ephem"].values
+        jd = trajectory_df[trajectory_df["trajectory_id"] == trajectory_id][
+            "jd_ephem"
+        ].values
 
         for tmp_jd in jd:
 
             crl = pcu.Curl()
-            crl.setopt(crl.URL, )
-            
+            crl.setopt(crl.URL,)
+
             print(tmp_jd)
             data = {
                 "-name": "",
@@ -160,25 +159,21 @@ def generate_ephemeris(trajectory_df):
             }
 
             pf = urlencode(data)
-            
+
             print(pf)
 
             crl.setopt(pcu.POST, 1)
             crl.setopt(pcu.VERBOSE, 1)
-            
+
             crl.setopt(pcu.POSTFIELDS, pf)
 
-            crl.setopt(pcu.HTTPPOST, [
-                ('target', (
-                    pcu.FORM_FILE, path,
-                )),
-            ])
+            crl.setopt(pcu.HTTPPOST, [("target", (pcu.FORM_FILE, path,)),])
 
             crl.setopt(pcu.WRITEDATA, buf_data)
 
             crl.perform()
 
-            response_data = buf_data.getvalue().decode('UTF-8')
+            response_data = buf_data.getvalue().decode("UTF-8")
             buf_data.seek(0)
             buf_data.truncate(0)
 
@@ -205,12 +200,17 @@ def generate_ephemeris(trajectory_df):
             dec_list.append(ephemeris_coord.dec.degree)
 
         os.remove(path)
-        
 
     buf_data.close()
 
-    return pd.DataFrame({"trajectory_id": traj_id_list, "ephemeris_ra": ra_list, "ephemeris_dec": dec_list})
-        
+    return pd.DataFrame(
+        {
+            "trajectory_id": traj_id_list,
+            "ephemeris_ra": ra_list,
+            "ephemeris_dec": dec_list,
+        }
+    )
+
 
 if __name__ == "__main__":
     print("ephem")
@@ -236,7 +236,7 @@ if __name__ == "__main__":
     mpc["ssnamenr"] = mpc["ssnamenr"].astype("string")
 
     mpc = mpc.sort_values(["ssnamenr", "jd"]).reset_index(drop=True)
-    
+
     # print(mpc)
 
     print("MPC DATABASE loading")
@@ -251,21 +251,43 @@ if __name__ == "__main__":
 
     cross_match_mpc["jd_ephem"] = cross_match_mpc["jd"]
 
-    print(cross_match_mpc[["ra", "dec", "jd", "jd_ephem", "ssnamenr", "trajectory_id", "a", "e", "i", "Peri", "Node", "M"]])
+    print(
+        cross_match_mpc[
+            [
+                "ra",
+                "dec",
+                "jd",
+                "jd_ephem",
+                "ssnamenr",
+                "trajectory_id",
+                "a",
+                "e",
+                "i",
+                "Peri",
+                "Node",
+                "M",
+            ]
+        ]
+    )
     print()
     print()
 
     ephemeris = generate_ephemeris(cross_match_mpc)
     ephemeris["trajectory_id"] = ephemeris["trajectory_id"].astype(int)
 
-
     ephem_and_obs = ephemeris.merge(cross_match_mpc, on="trajectory_id")
 
-    deltaRAcosDEC = (ephem_and_obs['ra'] - ephem_and_obs['ephemeris_ra'])*np.cos(np.radians(ephem_and_obs['dec']))
-    deltaDEC = (ephem_and_obs['dec']- ephem_and_obs['ephemeris_dec'])
+    deltaRAcosDEC = (ephem_and_obs["ra"] - ephem_and_obs["ephemeris_ra"]) * np.cos(
+        np.radians(ephem_and_obs["dec"])
+    )
+    deltaDEC = ephem_and_obs["dec"] - ephem_and_obs["ephemeris_dec"]
 
     print("ephemeris")
-    print(ephem_and_obs[["ephemeris_ra", "ephemeris_dec", "ra", "dec", "nid", "jd", "jd_ephem"]])
+    print(
+        ephem_and_obs[
+            ["ephemeris_ra", "ephemeris_dec", "ra", "dec", "nid", "jd", "jd_ephem"]
+        ]
+    )
     print(ephem_and_obs["jd"].values)
     print()
     print("ephemeris residuals")
@@ -274,9 +296,9 @@ if __name__ == "__main__":
     print(deltaDEC)
 
     exit()
-    
-    next_obs = mpc[(n_points - 1)::n_points]
-    
+
+    next_obs = mpc[(n_points - 1) :: n_points]
+
     traj_to_orb = mpc[~mpc["candid"].isin(next_obs["candid"])]
     print(mpc)
     print()
@@ -291,13 +313,25 @@ if __name__ == "__main__":
     orbital_elem = compute_orbital_element(traj_to_orb)
     orbital_elem = orbital_elem[orbital_elem["a"] != -1.0]
     print("orbital elements")
-    print(orbital_elem[["trajectory_id", "ssnamenr", "a", "e", "i", "long. node", "arg. peric", "mean anomaly"]])
+    print(
+        orbital_elem[
+            [
+                "trajectory_id",
+                "ssnamenr",
+                "a",
+                "e",
+                "i",
+                "long. node",
+                "arg. peric",
+                "mean anomaly",
+            ]
+        ]
+    )
 
     print("MPC DATABASE loading")
     t_before = t.time()
     mpc_database = utils.get_mpc_database()
     print("MPC DATABASE end loading, elapsed time: {}".format(t.time() - t_before))
-
 
     print()
     print("cross match with mpc database")
@@ -314,18 +348,21 @@ if __name__ == "__main__":
     print()
 
     next_jd = next_obs[["trajectory_id", "jd"]]
-    orbital_elem = orbital_elem.merge(next_jd, on="trajectory_id", suffixes=('', '_ephem'))
+    orbital_elem = orbital_elem.merge(
+        next_jd, on="trajectory_id", suffixes=("", "_ephem")
+    )
 
     print(orbital_elem)
 
     ephemeris = generate_ephemeris(orbital_elem)
     ephemeris["trajectory_id"] = ephemeris["trajectory_id"].astype(int)
 
-
     ephem_and_obs = ephemeris.merge(next_obs, on="trajectory_id")
 
-    deltaRAcosDEC = (ephem_and_obs['ra'] - ephem_and_obs['ephemeris_ra'])*np.cos(np.radians(ephem_and_obs['dec']))
-    deltaDEC = (ephem_and_obs['dec']- ephem_and_obs['ephemeris_dec'])
+    deltaRAcosDEC = (ephem_and_obs["ra"] - ephem_and_obs["ephemeris_ra"]) * np.cos(
+        np.radians(ephem_and_obs["dec"])
+    )
+    deltaDEC = ephem_and_obs["dec"] - ephem_and_obs["ephemeris_dec"]
 
     print("ephemeris")
     print(ephem_and_obs)

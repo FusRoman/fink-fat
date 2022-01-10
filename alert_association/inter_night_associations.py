@@ -4,6 +4,7 @@ import multiprocessing as mp
 import os
 from alert_association.night_to_night_association import (
     night_to_night_trajectory_associations,
+    night_to_night_observation_association,
 )
 from alert_association.intra_night_association import (
     get_n_last_observations_from_trajectories,
@@ -721,7 +722,9 @@ def trajectories_associations(
             "updated trajectories"
         ] = updated_trajectories
 
-        trajectories = trajectories.drop("tmp_traj", axis=1)
+        # remove tmp_traj column added by the cone_search_associations function in  night_to_night_trajectory_associations 
+        if "tmp_traj" in trajectories:
+            trajectories = trajectories.drop("tmp_traj", axis=1)
 
         return (
             trajectories.reset_index(drop=True).infer_objects(),
@@ -923,8 +926,9 @@ def old_observations_associations(
                 angle_criterion,
             )
 
-            # remove tmp_traj column added by night_to_night_trajectory_associations
-            old_obs_right_assoc = old_obs_right_assoc.drop("tmp_traj", axis=1)
+            # remove tmp_traj column added by the cone_search_associations function in  night_to_night_trajectory_associations 
+            if "tmp_traj" in old_obs_right_assoc:
+                old_obs_right_assoc = old_obs_right_assoc.drop("tmp_traj", axis=1)
 
             # remove the associateds observations from the set of new observations
             old_observations = old_observations[
@@ -1065,6 +1069,164 @@ def old_observations_associations(
             tracklets.reset_index(drop=True).infer_objects(),
             old_observations.reset_index(drop=True).infer_objects(),
             track_and_obs_report,
+        )
+
+
+def observations_associations(
+    old_observations,
+    new_observations,
+    next_nid,
+    last_trajectory_id,
+    sep_criterion,
+    mag_criterion_same_fid,
+    mag_criterion_diff_fid,
+    run_metrics=False,
+):
+    """
+    Perform inter night association between the remaining old observation return by the other associations with the remaining new observations.
+
+    Parameters
+    ----------
+    old_observations : dataframe
+        remaining old observations return by old_observations_associations
+        old_observations dataframe must have the following columns :
+            ra, dec, dcmag, nid, fid, jd, candid
+    new_observations : dataframe
+        remaining new observations return by trajectories_associations
+        new_observations dataframe must have the following columns :
+            ra, dec, dcmag, nid, fid, jd, candid
+    next_nid : The next night id which is the night id of the tracklets.
+    last_trajectory_id : integer
+        the last trajectory identifier assign to a trajectory in the trajectories dataframe (currently, it is just the maximum).
+    sep_criterion : float
+        the separation criterion for the alert based position associations
+    mag_criterion_same_fid : float
+        the magnitude criterion to associates alerts if the observations have been observed with the same filter
+    mag_criterion_diff_fid : float
+        the magnitude criterion to associates alerts if the observations have been observed with the same filter
+    angle_criterion : float
+        the angle criterion to associates alerts during the cone search
+    run_metrics : boolean
+        run the inter night association metrics : trajectory_df, traj_next_night, old_observations and new_observations
+        parameters should have the ssnamenr column.
+
+    Return
+    ------
+    trajectory_df : dataframe
+        the new trajectory detected by observations associations, 
+        They are only two points trajeectory so we don't compute orbital elements with this trajectory_df
+    old_observations : dataframe
+        remaining old observations after associations
+    new_observations : dataframe
+        remaining new observations after associations
+    observations_associations_report : dictionnary
+        statistics about the observations association process, contains the following entries :
+
+            list of new trajectories
+
+            all nid report with the following entries for each reports :
+
+                        current nid
+
+                        observations associations report
+
+                        metrics, no sense if run_metrics is set to False
+
+    Examples
+    --------
+    >>> new_tr, remain_old, remain_new, report = observations_associations(ts.old_observations_sample_4, ts.new_observation_sample_4, 3, 0, 1.5 * u.degree, 0.1, 0.3, 30,)
+
+    >>> assert_frame_equal(new_tr.reset_index(drop=True), ts.new_trajectory, check_dtype=False)
+    >>> assert_frame_equal(remain_old.reset_index(drop=True), ts.remaining_old_obs, check_dtype=False)
+    >>> assert_frame_equal(remain_new.reset_index(drop=True), ts.remaining_new_obs, check_dtype=False)
+    >>> TestCase().assertDictEqual(ts.expected_obs_report, report)
+    """
+    if len(old_observations) == 0 or len(new_observations) == 0:
+        return old_observations, new_observations, {}
+    else:
+
+        observations_associations_report = dict()
+        all_nid_report = []
+        new_trajectories = []
+
+        old_obs_nid = np.sort(np.unique(old_observations["nid"]))[::-1]
+        trajectory_df = pd.DataFrame()
+
+        for obs_nid in old_obs_nid:
+
+            current_nid_report = dict()
+
+            current_old_obs = old_observations[old_observations["nid"] == obs_nid]
+
+            current_nid_report["old nid"] = int(obs_nid)
+
+            diff_night = next_nid - obs_nid
+            norm_sep_crit = sep_criterion * diff_night
+            norm_same_fid = mag_criterion_same_fid * diff_night
+            norm_diff_fid = mag_criterion_diff_fid * diff_night
+
+            (
+                left_assoc,
+                right_assoc,
+                old_to_new_assoc_report,
+            ) = night_to_night_observation_association(
+                current_old_obs,
+                new_observations,
+                norm_sep_crit,
+                norm_same_fid,
+                norm_diff_fid,
+            )
+
+            if run_metrics:
+                inter_night_metric = compute_inter_night_metric(
+                    current_old_obs, new_observations, left_assoc, right_assoc
+                )
+                old_to_new_assoc_report["metrics"] = inter_night_metric
+
+            old_to_new_assoc_report["number of duplicated association"] = 0
+            old_to_new_assoc_report[
+                "number of inter night angle filtered association"
+            ] = 0
+
+            if len(left_assoc) > 0:
+
+                new_trajectory_id = np.arange(
+                    last_trajectory_id, last_trajectory_id + len(left_assoc)
+                )
+                new_trajectories = np.union1d(
+                    new_trajectories, new_trajectory_id
+                ).tolist()
+
+                last_trajectory_id = last_trajectory_id + len(left_assoc)
+
+                # remove the associated old observation
+                old_observations = old_observations[
+                    ~old_observations["candid"].isin(left_assoc["candid"])
+                ]
+
+                # remove the associated new observation
+                new_observations = new_observations[
+                    ~new_observations["candid"].isin(right_assoc["candid"])
+                ]
+
+                # assign a new trajectory id to the new association
+                left_assoc["trajectory_id"] = right_assoc[
+                    "trajectory_id"
+                ] = new_trajectory_id
+
+                trajectory_df = pd.concat([trajectory_df, left_assoc, right_assoc])
+
+            current_nid_report["observation associations"] = old_to_new_assoc_report
+            all_nid_report.append(current_nid_report)
+
+        observations_associations_report["new trajectories"] = new_trajectories
+        observations_associations_report["all nid report"] = all_nid_report
+
+        return (
+            trajectory_df,
+            old_observations,
+            new_observations,
+            observations_associations_report,
         )
 
 
@@ -1360,7 +1522,6 @@ def night_to_night_association(
         run_metrics,
     )
 
-    print("tracklets with old observations added")
     updated_tracklets = track_with_old_obs[~track_with_old_obs["not_updated"]]
     not_updated_tracklets = track_with_old_obs[track_with_old_obs["not_updated"]]
 
@@ -1420,7 +1581,7 @@ if __name__ == "__main__":  # pragma: no cover
             print('"{}": {},'.format(col, list(df[col])))
         print("}")
 
-    # sys.exit(doctest.testmod()[0])
+    sys.exit(doctest.testmod()[0])
     from alert_association.continuous_integration import load_data
 
     df_sso = load_data("Solar System MPC", 0)
