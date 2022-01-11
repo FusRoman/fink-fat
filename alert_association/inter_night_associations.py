@@ -20,7 +20,39 @@ ram_dir = "/media/virtuelram/"
 
 
 def prep_orbit_computation(trajectory_df):
-    trajectory_df["jd"] = pd.to_numeric(trajectory_df["jd"])
+    """
+    Return the trajectories with less than 3 points and the others with 3 points and more.
+    The trajectories with 3 points and more will be used for the computation of orbital elements.
+
+    Parameters
+    ----------
+    trajectory_df : dataframe
+        dataframe containing trajectories observations
+        the following columns are required : trajectory_id, ra
+
+    Return
+    ------
+    other_track : dataframe
+        trajectories with less than 3 points
+    track_to_orb : dataframe
+        trajectories with 3 points and more
+
+    Examples
+    --------
+    >>> trajectories = pd.DataFrame({"trajectory_id": [1, 1, 1, 2, 2], "ra": [0, 0, 0, 0, 0]})
+
+    >>> other_track, track_to_orb = prep_orbit_computation(trajectories)
+
+    >>> other_track
+       trajectory_id  ra
+    3              2   0
+    4              2   0
+    >>> track_to_orb
+       trajectory_id  ra
+    0              1   0
+    1              1   0
+    2              1   0
+    """
     trajectory_df["trajectory_id"] = trajectory_df["trajectory_id"].astype(int)
 
     traj_length = (
