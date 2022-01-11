@@ -129,18 +129,17 @@ if __name__ == "__main__":
 
     one_obs = pd.DataFrame(df_sso.loc[0]).T
     
-    print("MPC DATABASE loading, take 10 sec")
+    print("MPC DATABASE loading, take ~10 sec")
     t_before = t.time()
     mpc_database = utils.get_mpc_database()
     print("MPC DATABASE end loading, elapsed time: {}".format(t.time() - t_before))
 
 
 
-    print("cross match with mpc database")
+    print("Get the orbital elements of the observation", end="\n")
     mpc_data_obs = mpc_database[mpc_database["Number"] == one_obs["ssnamenr"].values[0]]
 
     col_select = ["ra", "dec", "ssnamenr", "jd", "nid", "objectId", "Number", "a", "e", "i", "Node", "Peri", "M"]
-
     observation = one_obs.merge(mpc_data_obs, left_on="ssnamenr", right_on="Number")[col_select]
     print(observation)
 
@@ -188,6 +187,8 @@ if __name__ == "__main__":
     files = {
             "target": open(json_orb_elem_path, "rb").read()
         }
+
+    print("Ephemeris request")
 
     r = requests.post(url, params=params, files=files, timeout=2000)
 
