@@ -761,6 +761,7 @@ def tracklets_and_trajectories_associations(
                         next_night_tracklets["trajectory_id"] = rows["trajectory_id"]
                     associated_tracklets.append(next_night_tracklets)
 
+
                 # create a dataframe with all tracklets that will be added to a trajectory
                 associated_tracklets = pd.concat(associated_tracklets)
 
@@ -770,6 +771,7 @@ def tracklets_and_trajectories_associations(
                         traj_extremity_associated["tmp_traj"]
                     )
                 ]
+
 
                 # concatenation of trajectories with new tracklets
                 trajectories = pd.concat([trajectories, associated_tracklets])
@@ -817,6 +819,10 @@ def tracklets_and_trajectories_associations(
         trajectories_and_tracklets_associations_report[
             "all nid_report"
         ] = traj_to_track_report
+
+        # remove tmp_traj column added by the cone_search_associations function in  night_to_night_trajectory_associations
+        # if "tmp_traj" in trajectories:
+        #     trajectories = trajectories.drop("tmp_traj", axis=1)
 
         return (
             trajectories.reset_index(drop=True).infer_objects(),
@@ -976,6 +982,14 @@ def trajectories_with_new_observations_associations(
     >>> assert_frame_equal(tr, ts.trajectories_expected_6, check_dtype=False)
     >>> assert_frame_equal(obs, ts.new_observations_expected_3, check_dtype=False)
     >>> TestCase().assertDictEqual(ts.expected_traj_obs_report_3, report)
+
+    >>> tr, obs, report = trajectories_with_new_observations_associations(
+    ... pd.DataFrame(), new_observations, 3, 1.5 * u.degree, 0.2, 0.5, 30
+    ... )
+
+    >>> assert_frame_equal(tr, pd.DataFrame(), check_dtype=False)
+    >>> assert_frame_equal(obs, new_observations, check_dtype=False)
+    >>> TestCase().assertDictEqual({}, report)
     """
 
     if len(trajectories) == 0 or len(new_observations) == 0:
@@ -1157,10 +1171,6 @@ def trajectories_with_new_observations_associations(
         trajectories_and_observations_associations_report[
             "updated trajectories"
         ] = updated_trajectories
-
-        # remove tmp_traj column added by the cone_search_associations function in  night_to_night_trajectory_associations
-        if "tmp_traj" in trajectories:
-            trajectories = trajectories.drop("tmp_traj", axis=1)
 
         return (
             trajectories.reset_index(drop=True).infer_objects(),
