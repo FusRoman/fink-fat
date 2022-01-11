@@ -79,7 +79,7 @@ def generate_ephemeris(trajectory_df):
 
         params = {
             "-name": "",
-            "-type": "",
+            "-type": "Asteroid",
             "-tscale": "UTC",
             "-observer": "I41",
             "-theory": "INPOP",
@@ -87,7 +87,6 @@ def generate_ephemeris(trajectory_df):
             "-tcoor": 5,
             "-oscelem": "",
             "-mime": "json",
-            "-rplane": "1",
             "-output": "--jd",
             "-from": "MiriadeDoc",
         }
@@ -98,7 +97,7 @@ def generate_ephemeris(trajectory_df):
             print()
 
         files = {
-            "target": open(all_param_path[0], "rb"),
+            "target": open(all_param_path[0], "rb").read(),
             "epochs": ("epochs", "\n".join(["%.6f" % epoch for epoch in jd])),
         }
 
@@ -107,6 +106,7 @@ def generate_ephemeris(trajectory_df):
         j = r.json()
         ephem = pd.DataFrame.from_dict(j["data"])
         print(ephem)
+        print(ephem.info())
         print()
         print()
         coord = SkyCoord(ephem["RA"], ephem["DEC"], unit=(u.deg, u.deg))
