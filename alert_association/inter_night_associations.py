@@ -16,6 +16,8 @@ from alert_association.intra_night_association import new_trajectory_id_assignat
 from alert_association.orbit_fitting.orbfit_management import compute_df_orbit_param
 from alert_association.night_to_night_association import time_window_management
 
+import time as t
+
 # constant to locate the ram file system
 ram_dir = "/media/virtuelram/"
 
@@ -1283,7 +1285,7 @@ def compute_orbit_elem(trajectory_df, q):
     traj_to_compute = traj_to_compute.drop(orbit_column, axis=1)
 
     orbit_elem = compute_df_orbit_param(
-        traj_to_compute, int(mp.cpu_count() / 4), current_ram_path
+        traj_to_compute, int(mp.cpu_count() / 3), current_ram_path
     )
     traj_to_compute = traj_to_compute.merge(orbit_elem, on="trajectory_id")
 
@@ -1424,7 +1426,10 @@ def night_to_night_association(
         run_metrics,
     )
 
-    if len(trajectory_df) == 0:
+    last_trajectory_id = np.max(tracklets["trajectory_id"]) + 1
+
+
+    if len(trajectory_df) == 0 or len(old_observation) == 0:
 
         other_track, track_to_orb = prep_orbit_computation(tracklets)
 
@@ -1478,8 +1483,7 @@ def night_to_night_association(
 
     print("trajectories associations")
 
-    # perform associations with the recorded trajectories :
-    #   - trajectories with new observations
+    # perform associations with the recorded trajectories
     (
         traj_with_new_obs,
         remaining_new_observations,
@@ -1505,8 +1509,7 @@ def night_to_night_association(
 
     print("tracklets and old observations associations")
 
-    # perform associations with the tracklets and the old observations :
-    #   - tracklets with old observations
+    # perform associations with the tracklets and the old observations
     (
         track_with_old_obs,
         remain_old_obs,
@@ -1532,6 +1535,17 @@ def night_to_night_association(
 
     print("old observations and new observations associations")
 
+    new_trajectory, remain_old_obs, remaining_new_observations, observation_report = observations_associations(
+        remain_old_obs,
+        remaining_new_observations,
+        next_nid,
+        last_trajectory_id,
+        sep_criterion,
+        mag_criterion_same_fid,
+        mag_criterion_diff_fid,
+        run_metrics,
+    )
+
     tmp_traj_orb_elem = []
     for _ in range(3):
         tmp_traj_orb_elem.append(q.get())
@@ -1543,7 +1557,7 @@ def night_to_night_association(
 
     # concatenate all the trajectories with computed orbital elements with the other trajectories/tracklets.
     most_recent_traj = pd.concat(
-        [traj_with_orb_elem, other_traj, not_updated_tracklets]
+        [traj_with_orb_elem, other_traj, not_updated_tracklets, new_trajectory]
     )
 
     old_observation = pd.concat([remain_old_obs, remaining_new_observations])
@@ -1581,7 +1595,7 @@ if __name__ == "__main__":  # pragma: no cover
             print('"{}": {},'.format(col, list(df[col])))
         print("}")
 
-    sys.exit(doctest.testmod()[0])
+    # sys.exit(doctest.testmod()[0])
     from alert_association.continuous_integration import load_data
 
     df_sso = load_data("Solar System MPC", 0)
@@ -1610,7 +1624,7 @@ if __name__ == "__main__":  # pragma: no cover
     last_nid = np.min(df_sso["nid"])
 
     for tr_nid in np.unique(df_sso["nid"]):
-
+        print("---New Night---")
         print(tr_nid)
         print()
 
@@ -1649,10 +1663,10 @@ if __name__ == "__main__":  # pragma: no cover
 
         print()
         print()
-        print("trajectories with orbital elements")
-        print(trajectory_df[trajectory_df["a"] != -1.0])
+        orb_elem = trajectory_df[trajectory_df["a"] != -1.0]
+        print("number of trajectories with orbital elements: {}".format(len(np.unique(orb_elem["trajectory_id"]))))
         print()
-        print("--------------------")
+        print("---End Night---")
         print()
 
         last_nid = next_nid
