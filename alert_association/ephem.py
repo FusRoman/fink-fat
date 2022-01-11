@@ -16,11 +16,6 @@ from alert_association.utils import load_data
 import json
 import glob
 import os
-import pycurl as pcu
-from io import BytesIO
-from urllib.parse import urlencode
-import xml.etree.ElementTree as ET
-import xmltodict
 
 # constant to locate the ram file system
 ram_dir = "/media/virtuelram/"
@@ -68,8 +63,6 @@ def generate_ephemeris(trajectory_df):
 
     all_param_path = glob.glob(os.path.join(ram_dir, "@aster_*.json"))
 
-    import requests
-
     for path in all_param_path:
 
         trajectory_id = int(path.split(".")[0].split("_")[1])
@@ -85,7 +78,7 @@ def generate_ephemeris(trajectory_df):
             "-theory": "INPOP",
             "-teph": 1,
             "-tcoor": 5,
-            "-oscelem": "",
+            "-oscelem": "MPCORB",
             "-mime": "json",
             "-output": "--jd",
             "-from": "MiriadeDoc",
@@ -96,6 +89,10 @@ def generate_ephemeris(trajectory_df):
             print()
             print()
 
+        for epoch in jd:
+            print(epoch, end=", ")
+
+        print()
         files = {
             "target": open(all_param_path[0], "rb").read(),
             "epochs": ("epochs", "\n".join(["%.6f" % epoch for epoch in jd])),
@@ -111,109 +108,27 @@ def generate_ephemeris(trajectory_df):
         print()
         coord = SkyCoord(ephem["RA"], ephem["DEC"], unit=(u.deg, u.deg))
 
-        eph = ephem.drop(columns=["RA", "DEC"])
-        eph["RA"] = coord.ra.value * 15
-        eph["Dec"] = coord.dec.value
+        ephem["cRA"] = coord.ra.value * 15
+        ephem["cDec"] = coord.dec.value
 
-        # print(eph)
-        # print()
-        # print()
-
-        os.remove(path)
-
-    return 0
-    buf_data = BytesIO()
-
-    traj_id_list = []
-    ra_list = []
-    dec_list = []
-
-    for path in all_param_path:
-        trajectory_id = int(path.split(".")[0].split("_")[1])
-
-        jd = trajectory_df[trajectory_df["trajectory_id"] == trajectory_id][
-            "jd_ephem"
-        ].values
-
-        for tmp_jd in jd:
-
-            crl = pcu.Curl()
-            crl.setopt(crl.URL,)
-
-            print(tmp_jd)
-            data = {
-                "-name": "",
-                "-type": "",
-                "-ep": str(tmp_jd),
-                "-nbd": 1,
-                "-step": "1d",
-                "-tscale": "UTC",
-                "-observer": "I41",
-                "-theory": "INPOP",
-                "-teph": 1,
-                "-tcoor": 3,
-                "-oscelem": "",
-                "-mime": "json",
-                "-output": "",
-                "-from": "MiriadeDoc",
-            }
-
-            pf = urlencode(data)
-
-            print(pf)
-
-            crl.setopt(pcu.POST, 1)
-            crl.setopt(pcu.VERBOSE, 1)
-
-            crl.setopt(pcu.POSTFIELDS, pf)
-
-            crl.setopt(pcu.HTTPPOST, [("target", (pcu.FORM_FILE, path,)),])
-
-            crl.setopt(pcu.WRITEDATA, buf_data)
-
-            crl.perform()
-
-            response_data = buf_data.getvalue().decode("UTF-8")
-            buf_data.seek(0)
-            buf_data.truncate(0)
-
-            tree = ET.fromstring(response_data)
-            tr_table = tree[-1][-1][-1][-1][0][0:3]
-            print("ephemeris date: {}".format(tr_table[0].text))
-            coord = ""
-            for child in tr_table[1:]:
-                coord += child.text + " "
-
-            print()
-            print(coord)
-            print()
-            print()
-            traj_id_list.append(trajectory_id)
-            ephemeris_coord = SkyCoord(coord, unit=(u.hourangle, u.deg))
-
-            print(ephemeris_coord)
-            print()
-            crl.close()
-            break
-
-            ra_list.append(ephemeris_coord.ra.degree)
-            dec_list.append(ephemeris_coord.dec.degree)
+        print(ephem)
+        print()
+        print()
 
         os.remove(path)
 
-    buf_data.close()
-
-    return pd.DataFrame(
-        {
-            "trajectory_id": traj_id_list,
-            "ephemeris_ra": ra_list,
-            "ephemeris_dec": dec_list,
-        }
-    )
+    return ephem
 
 
 if __name__ == "__main__":
     print("ephem")
+
+
+    
+
+
+
+    exit()
 
     n_trajectories = 1
     n_points = 50
@@ -273,102 +188,36 @@ if __name__ == "__main__":
     print()
 
     ephemeris = generate_ephemeris(cross_match_mpc)
-    ephemeris["trajectory_id"] = ephemeris["trajectory_id"].astype(int)
+    # ephemeris["trajectory_id"] = ephemeris["trajectory_id"].astype(int)
 
-    ephem_and_obs = ephemeris.merge(cross_match_mpc, on="trajectory_id")
+    ephem_and_obs = ephemeris.merge(cross_match_mpc, left_on="Date", right_on="jd")
 
-    deltaRAcosDEC = (ephem_and_obs["ra"] - ephem_and_obs["ephemeris_ra"]) * np.cos(
+    deltaRAcosDEC = (ephem_and_obs["ra"] - ephem_and_obs["cRA"]) * np.cos(
         np.radians(ephem_and_obs["dec"])
     )
-    deltaDEC = ephem_and_obs["dec"] - ephem_and_obs["ephemeris_dec"]
+    deltaDEC = ephem_and_obs["dec"] - ephem_and_obs["cDec"]
 
-    print("ephemeris")
-    print(
-        ephem_and_obs[
-            ["ephemeris_ra", "ephemeris_dec", "ra", "dec", "nid", "jd", "jd_ephem"]
-        ]
-    )
-    print(ephem_and_obs["jd"].values)
-    print()
-    print("ephemeris residuals")
-    print(deltaRAcosDEC)
-    print()
-    print(deltaDEC)
+    colors = ['#15284F', '#F5622E']
+    
+    fig, ax = plt.subplots(
+    figsize=(10, 10), 
+    sharex=True,
+)
 
-    exit()
+    ax.scatter(cross_match_mpc['ra'], cross_match_mpc['dec'], label='ZTF', alpha=0.2, color=colors[1])
 
-    next_obs = mpc[(n_points - 1) :: n_points]
+    ax.plot(ephem_and_obs['cRA'], ephem_and_obs["cDec"], ls='', color='black', marker='x', alpha=0.2, label='Ephemerides')
+    ax.legend(loc='best')
+    ax.set_xlabel('RA ($^o$)')
+    ax.set_ylabel('DEC ($^o$)')
 
-    traj_to_orb = mpc[~mpc["candid"].isin(next_obs["candid"])]
-    print(mpc)
-    print()
-    print()
-    print(next_obs)
-    print()
-    print()
-    print(traj_to_orb)
-    print()
-    print()
+    axins = ax.inset_axes([0.2, 0.2, 0.45, 0.45])
 
-    orbital_elem = compute_orbital_element(traj_to_orb)
-    orbital_elem = orbital_elem[orbital_elem["a"] != -1.0]
-    print("orbital elements")
-    print(
-        orbital_elem[
-            [
-                "trajectory_id",
-                "ssnamenr",
-                "a",
-                "e",
-                "i",
-                "long. node",
-                "arg. peric",
-                "mean anomaly",
-            ]
-        ]
-    )
+    axins.plot( deltaRAcosDEC, deltaDEC, ls='', color=colors[0], marker='x', alpha=0.5)
+    axins.errorbar( np.mean(deltaRAcosDEC), np.mean(deltaDEC), xerr=np.std(deltaRAcosDEC), yerr=np.std(deltaDEC) )
+    axins.axhline(0, ls='--', color='black')
+    axins.axvline(0, ls='--', color='black')
+    axins.set_xlabel(r'$\Delta$RA ($^{\prime\prime}$)')
+    axins.set_ylabel(r'$\Delta$DEC ($^{\prime\prime}$)')
 
-    print("MPC DATABASE loading")
-    t_before = t.time()
-    mpc_database = utils.get_mpc_database()
-    print("MPC DATABASE end loading, elapsed time: {}".format(t.time() - t_before))
-
-    print()
-    print("cross match with mpc database")
-    cross_match_mpc = orbital_elem.merge(
-        mpc_database, how="inner", left_on="ssnamenr", right_on="Number"
-    )
-
-    df_residue = po.compute_residue(cross_match_mpc)
-
-    print()
-    print("orbital elements residuals")
-    print(df_residue[["da", "de", "di", "dNode", "dPeri", "dM"]])
-    print()
-    print()
-
-    next_jd = next_obs[["trajectory_id", "jd"]]
-    orbital_elem = orbital_elem.merge(
-        next_jd, on="trajectory_id", suffixes=("", "_ephem")
-    )
-
-    print(orbital_elem)
-
-    ephemeris = generate_ephemeris(orbital_elem)
-    ephemeris["trajectory_id"] = ephemeris["trajectory_id"].astype(int)
-
-    ephem_and_obs = ephemeris.merge(next_obs, on="trajectory_id")
-
-    deltaRAcosDEC = (ephem_and_obs["ra"] - ephem_and_obs["ephemeris_ra"]) * np.cos(
-        np.radians(ephem_and_obs["dec"])
-    )
-    deltaDEC = ephem_and_obs["dec"] - ephem_and_obs["ephemeris_dec"]
-
-    print("ephemeris")
-    print(ephem_and_obs)
-    print(ephem_and_obs["jd"].values)
-    print()
-    print("ephemeris residuals")
-    print(deltaRAcosDEC)
-    print()
-    print(deltaDEC)
+    plt.show()

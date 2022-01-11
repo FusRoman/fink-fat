@@ -16,7 +16,6 @@ from alert_association.intra_night_association import new_trajectory_id_assignat
 from alert_association.orbit_fitting.orbfit_management import compute_df_orbit_param
 from alert_association.night_to_night_association import time_window_management
 
-import time as t
 
 # constant to locate the ram file system
 ram_dir = "/media/virtuelram/"
@@ -724,7 +723,7 @@ def trajectories_associations(
             "updated trajectories"
         ] = updated_trajectories
 
-        # remove tmp_traj column added by the cone_search_associations function in  night_to_night_trajectory_associations 
+        # remove tmp_traj column added by the cone_search_associations function in  night_to_night_trajectory_associations
         if "tmp_traj" in trajectories:
             trajectories = trajectories.drop("tmp_traj", axis=1)
 
@@ -928,7 +927,7 @@ def old_observations_associations(
                 angle_criterion,
             )
 
-            # remove tmp_traj column added by the cone_search_associations function in  night_to_night_trajectory_associations 
+            # remove tmp_traj column added by the cone_search_associations function in  night_to_night_trajectory_associations
             if "tmp_traj" in old_obs_right_assoc:
                 old_obs_right_assoc = old_obs_right_assoc.drop("tmp_traj", axis=1)
 
@@ -1115,7 +1114,7 @@ def observations_associations(
     Return
     ------
     trajectory_df : dataframe
-        the new trajectory detected by observations associations, 
+        the new trajectory detected by observations associations,
         They are only two points trajeectory so we don't compute orbital elements with this trajectory_df
     old_observations : dataframe
         remaining old observations after associations
@@ -1255,7 +1254,7 @@ def compute_orbit_elem(trajectory_df, q):
     os.mkdir(current_ram_path)
 
     if len(trajectory_df) == 0:
-        return trajectory_df
+        q.put(trajectory_df)
 
     traj_to_compute = trajectory_df[trajectory_df["a"] == -1.0]
     traj_with_orbelem = trajectory_df[trajectory_df["a"] != -1.0]
@@ -1428,7 +1427,6 @@ def night_to_night_association(
 
     last_trajectory_id = np.max(tracklets["trajectory_id"]) + 1
 
-
     if len(trajectory_df) == 0 or len(old_observation) == 0:
 
         other_track, track_to_orb = prep_orbit_computation(tracklets)
@@ -1535,7 +1533,12 @@ def night_to_night_association(
 
     print("old observations and new observations associations")
 
-    new_trajectory, remain_old_obs, remaining_new_observations, observation_report = observations_associations(
+    (
+        new_trajectory,
+        remain_old_obs,
+        remaining_new_observations,
+        observation_report,
+    ) = observations_associations(
         remain_old_obs,
         remaining_new_observations,
         next_nid,
@@ -1664,7 +1667,11 @@ if __name__ == "__main__":  # pragma: no cover
         print()
         print()
         orb_elem = trajectory_df[trajectory_df["a"] != -1.0]
-        print("number of trajectories with orbital elements: {}".format(len(np.unique(orb_elem["trajectory_id"]))))
+        print(
+            "number of trajectories with orbital elements: {}".format(
+                len(np.unique(orb_elem["trajectory_id"]))
+            )
+        )
         print()
         print("---End Night---")
         print()
