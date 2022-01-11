@@ -761,7 +761,6 @@ def tracklets_and_trajectories_associations(
                         next_night_tracklets["trajectory_id"] = rows["trajectory_id"]
                     associated_tracklets.append(next_night_tracklets)
 
-
                 # create a dataframe with all tracklets that will be added to a trajectory
                 associated_tracklets = pd.concat(associated_tracklets)
 
@@ -771,7 +770,6 @@ def tracklets_and_trajectories_associations(
                         traj_extremity_associated["tmp_traj"]
                     )
                 ]
-
 
                 # concatenation of trajectories with new tracklets
                 trajectories = pd.concat([trajectories, associated_tracklets])
@@ -1791,7 +1789,7 @@ def time_window_management(
     >>> assert_frame_equal(expected_most_recent_traj.reset_index(drop=True), test_most_recent_traj.reset_index(drop=True))
     >>> assert_frame_equal(expected_old_obs.reset_index(drop=True), test_old_obs.reset_index(drop=True))
     """
-    
+
     most_recent_traj = pd.DataFrame()
     oldest_traj = pd.DataFrame()
 
