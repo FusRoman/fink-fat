@@ -8,7 +8,6 @@ import time as t
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 
-import alert_association.orbit_fitting.plot_orbstat as po
 import alert_association.orbit_fitting.orbfit_management as om
 import alert_association.utils as utils
 import multiprocessing as mp
@@ -123,11 +122,6 @@ def generate_ephemeris(trajectory_df):
 if __name__ == "__main__":
     print("ephem")
 
-
-    
-
-
-
     exit()
 
     n_trajectories = 1
@@ -197,27 +191,43 @@ if __name__ == "__main__":
     )
     deltaDEC = ephem_and_obs["dec"] - ephem_and_obs["cDec"]
 
-    colors = ['#15284F', '#F5622E']
-    
-    fig, ax = plt.subplots(
-    figsize=(10, 10), 
-    sharex=True,
-)
+    colors = ["#15284F", "#F5622E"]
 
-    ax.scatter(cross_match_mpc['ra'], cross_match_mpc['dec'], label='ZTF', alpha=0.2, color=colors[1])
+    fig, ax = plt.subplots(figsize=(10, 10), sharex=True,)
 
-    ax.plot(ephem_and_obs['cRA'], ephem_and_obs["cDec"], ls='', color='black', marker='x', alpha=0.2, label='Ephemerides')
-    ax.legend(loc='best')
-    ax.set_xlabel('RA ($^o$)')
-    ax.set_ylabel('DEC ($^o$)')
+    ax.scatter(
+        cross_match_mpc["ra"],
+        cross_match_mpc["dec"],
+        label="ZTF",
+        alpha=0.2,
+        color=colors[1],
+    )
+
+    ax.plot(
+        ephem_and_obs["cRA"],
+        ephem_and_obs["cDec"],
+        ls="",
+        color="black",
+        marker="x",
+        alpha=0.2,
+        label="Ephemerides",
+    )
+    ax.legend(loc="best")
+    ax.set_xlabel("RA ($^o$)")
+    ax.set_ylabel("DEC ($^o$)")
 
     axins = ax.inset_axes([0.2, 0.2, 0.45, 0.45])
 
-    axins.plot( deltaRAcosDEC, deltaDEC, ls='', color=colors[0], marker='x', alpha=0.5)
-    axins.errorbar( np.mean(deltaRAcosDEC), np.mean(deltaDEC), xerr=np.std(deltaRAcosDEC), yerr=np.std(deltaDEC) )
-    axins.axhline(0, ls='--', color='black')
-    axins.axvline(0, ls='--', color='black')
-    axins.set_xlabel(r'$\Delta$RA ($^{\prime\prime}$)')
-    axins.set_ylabel(r'$\Delta$DEC ($^{\prime\prime}$)')
+    axins.plot(deltaRAcosDEC, deltaDEC, ls="", color=colors[0], marker="x", alpha=0.5)
+    axins.errorbar(
+        np.mean(deltaRAcosDEC),
+        np.mean(deltaDEC),
+        xerr=np.std(deltaRAcosDEC),
+        yerr=np.std(deltaDEC),
+    )
+    axins.axhline(0, ls="--", color="black")
+    axins.axvline(0, ls="--", color="black")
+    axins.set_xlabel(r"$\Delta$RA ($^{\prime\prime}$)")
+    axins.set_ylabel(r"$\Delta$DEC ($^{\prime\prime}$)")
 
     plt.show()

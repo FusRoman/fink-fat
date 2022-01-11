@@ -10,7 +10,7 @@ import sys
 from collections import Counter
 import pyarrow.parquet as pq
 from alert_association.utils import load_data
-from alert_association.night_to_night_association import time_window_management
+from alert_association.associations import time_window_management
 
 if __name__ == "__main__":
     import doctest
