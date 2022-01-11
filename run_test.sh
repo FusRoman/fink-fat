@@ -18,12 +18,14 @@
 set -e
 
 export ROOTPATH=`pwd`
-
-
 export COVERAGE_PROCESS_START="${ROOTPATH}/.coveragerc"
 
 FILE1=alert_association/performance_test.py
 FILE2=alert_association/night_report.py
+FILE3=alert_association/continuous_integration.py
+FILE4=alert_association/ephem.py
+
+make simple_build
 
 # Run the test suite
 for filename in alert_association/*.py
@@ -31,6 +33,8 @@ do
   case $filename in
   $FILE1 ) continue ;;
   $FILE2 ) continue ;;
+  $FILE3 ) continue ;;
+  $FILE4 ) continue ;;
   * )
     # Run test suite + coverage
     coverage run \
