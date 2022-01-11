@@ -976,7 +976,7 @@ def trajectories_with_new_observations_associations(
     >>> trajectories["not_updated"] = np.ones(len(trajectories), dtype=np.bool_)
 
     >>> tr, obs, report = trajectories_with_new_observations_associations(
-    ... trajectories, new_observations, 3, 1.5 * u.degree, 0.2, 0.5, 30
+    ... trajectories, new_observations, 3, 1.5 * u.degree, 0.2, 0.5, 30, True
     ... )
 
     >>> assert_frame_equal(tr, ts.trajectories_expected_6, check_dtype=False)
@@ -1321,11 +1321,17 @@ def old_observations_with_tracklets_associations(
     >>> old_observations[tr_orb_columns] = -1.0
     >>> tracklets["not_updated"] = np.ones(len(tracklets), dtype=np.bool_)
 
-    >>> tk, old, report = old_observations_with_tracklets_associations(tracklets, old_observations, 3, 1.5 * u.degree, 0.1, 0.3, 30)
+    >>> tk, old, report = old_observations_with_tracklets_associations(tracklets, old_observations, 3, 1.5 * u.degree, 0.1, 0.3, 30, True)
 
     >>> assert_frame_equal(tk, ts.tracklets_obs_expected_3, check_dtype=False)
     >>> assert_frame_equal(old.reset_index(drop=True), ts.old_obs_expected_3, check_dtype=False)
     >>> TestCase().assertDictEqual(ts.track_and_obs_report_expected_3, report)
+
+    >>> tk, old, report = old_observations_with_tracklets_associations(tracklets, pd.DataFrame(), 3, 1.5 * u.degree, 0.1, 0.3, 30)
+
+    >>> assert_frame_equal(tk, tracklets, check_dtype=False)
+    >>> assert_frame_equal(old, pd.DataFrame(), check_dtype=False)
+    >>> TestCase().assertDictEqual({}, report)
     """
 
     if len(tracklets) == 0 or len(old_observations) == 0:
@@ -1373,8 +1379,8 @@ def old_observations_with_tracklets_associations(
             )
 
             # remove tmp_traj column added by the cone_search_associations function in  night_to_night_trajectory_associations
-            if "tmp_traj" in old_obs_right_assoc:
-                old_obs_right_assoc = old_obs_right_assoc.drop("tmp_traj", axis=1)
+            # if "tmp_traj" in old_obs_right_assoc:
+            #     old_obs_right_assoc = old_obs_right_assoc.drop("tmp_traj", axis=1)
 
             # remove the associateds observations from the set of new observations
             old_observations = old_observations[
@@ -1586,9 +1592,15 @@ def old_with_new_observations_associations(
     >>> assert_frame_equal(remain_old.reset_index(drop=True), ts.remaining_old_obs, check_dtype=False)
     >>> assert_frame_equal(remain_new.reset_index(drop=True), ts.remaining_new_obs, check_dtype=False)
     >>> TestCase().assertDictEqual(ts.expected_obs_report, report)
+
+    >>> new_tr, remain_old, remain_new, report = old_with_new_observations_associations(pd.DataFrame(), ts.new_observation_sample_4, 3, 0, 1.5 * u.degree, 0.1, 0.3, 30,)
+    >>> assert_frame_equal(new_tr, pd.DataFrame(), check_dtype=False)
+    >>> assert_frame_equal(remain_old, pd.DataFrame(), check_dtype=False)
+    >>> assert_frame_equal(remain_new.reset_index(drop=True), ts.new_observation_sample_4, check_dtype=False)
+    >>> TestCase().assertDictEqual({}, report)
     """
     if len(old_observations) == 0 or len(new_observations) == 0:
-        return old_observations, new_observations, {}
+        return pd.DataFrame(), old_observations, new_observations, {}
     else:
 
         observations_associations_report = dict()
@@ -1753,7 +1765,33 @@ def time_window_management(
     >>> assert_frame_equal(expected_old_traj.reset_index(drop=True), test_old_traj.reset_index(drop=True))
     >>> assert_frame_equal(expected_most_recent_traj.reset_index(drop=True), test_most_recent_traj.reset_index(drop=True))
     >>> assert_frame_equal(expected_old_obs.reset_index(drop=True), test_old_obs.reset_index(drop=True))
+
+    >>> test_traj = pd.DataFrame({
+    ... "candid" : [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21],
+    ... "nid" : [1, 2, 3, 10, 11, 12, 13, 14, 15, 16, 17, 18],
+    ... "jd" : [1, 2, 3, 10, 11, 12, 13, 14, 15, 16, 17, 18],
+    ... "trajectory_id" : [1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4],
+    ... "a": [2.5, 2.5, 2.5, -1, -1, -1, 1.5, 1.5, 1.5, 2.3, 2.3, 2.3]
+    ... })
+
+    >>> test_obs = pd.DataFrame({
+    ... "nid" : [1, 4, 11, 12, 14, 15, 17, 18, 13],
+    ... "candid" : [22, 23, 24, 25, 26, 27, 28, 29, 30]
+    ... })
+
+    >>> (test_old_traj, test_most_recent_traj), test_old_obs = time_window_management(test_traj, test_obs, 15, 18, 5)
+
+    >>> expected_old_traj = pd.DataFrame({'candid': [10, 11, 12], 'nid': [1, 2, 3], 'jd': [1, 2, 3], 'trajectory_id': [1, 1, 1], 'a': [2.5, 2.5, 2.5]})
+
+    >>> expected_most_recent_traj = pd.DataFrame({'candid': [16, 17, 18, 19, 20, 21], 'nid': [13, 14, 15, 16, 17, 18], 'jd': [13, 14, 15, 16, 17, 18], 'trajectory_id': [3, 3, 3, 4, 4, 4], 'a': [1.5, 1.5, 1.5, 2.3, 2.3, 2.3]})
+
+    >>> expected_old_obs = pd.DataFrame({'nid': [14, 15, 17, 18], 'candid': [26, 27, 28, 29]})
+
+    >>> assert_frame_equal(expected_old_traj.reset_index(drop=True), test_old_traj.reset_index(drop=True))
+    >>> assert_frame_equal(expected_most_recent_traj.reset_index(drop=True), test_most_recent_traj.reset_index(drop=True))
+    >>> assert_frame_equal(expected_old_obs.reset_index(drop=True), test_old_obs.reset_index(drop=True))
     """
+    
     most_recent_traj = pd.DataFrame()
     oldest_traj = pd.DataFrame()
 

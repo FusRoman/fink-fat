@@ -496,6 +496,28 @@ def compute_inter_night_metric(
     >>> metrics = compute_inter_night_metric(real_left, real_right, detected_left, detected_right)
     >>> expected_metrics = {'precision': 100.0, 'recall': 100.0, 'True Positif': 1, 'False Positif': 0, 'False Negatif': 0, 'total real association': 1}
     >>> TestCase().assertDictEqual(expected_metrics, metrics)
+
+
+    >>> real_left = pd.DataFrame({
+    ... 'candid': [1520405434515015014, 1520216750115015007]
+    ... })
+
+    >>> real_right = pd.DataFrame({
+    ... 'candid': [1521202363215015009]
+    ... })
+
+    >>> detected_left = pd.DataFrame({
+    ... 'candid': [1520405434515015014],
+    ... 'ssnamenr': ["53317"]
+    ... })
+
+    >>> detected_right = pd.DataFrame({
+    ... 'candid': [1521202363215015009],
+    ... 'ssnamenr': ["53317"]
+    ... })
+
+    >>> compute_inter_night_metric(real_left, real_right, detected_left, detected_right)
+    {}
     """
 
     # fmt: off
