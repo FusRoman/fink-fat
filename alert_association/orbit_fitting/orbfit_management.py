@@ -11,6 +11,7 @@ import os
 import multiprocessing as mp
 from alert_association.utils import load_data
 import alert_association.orbit_fitting.plot_orbstat as po
+import alert_association.utils as utils
 
 
 def time_to_decimal(time):
@@ -358,12 +359,17 @@ def read_oel(ram_dir, prov_desig):
     try:
         with open(ram_dir + prov_desig + ".oel") as file:
             lines = file.readlines()
+            
+            ref_mjd = float(lines[8].strip().split()[1])
+            # conversion from modified julian date to julian date
+            ref_jd = ref_mjd + 2400000.5
+
             orb_params = " ".join(lines[7].strip().split()).split(" ")
             if len(lines) > 12:
                 rms = " ".join(lines[12].strip().split()).split(" ")
             else:
                 rms = [-1, -1, -1, -1, -1, -1, -1, -1]
-            return orb_params[1:] + rms[2:]
+            return [ref_jd] + orb_params[1:] + rms[2:]
     except FileNotFoundError:
         return list(np.ones(12, dtype=np.float64) * -1)
 
@@ -400,6 +406,7 @@ def orbit_elem_dataframe(orbit_elem):
     column_name = [
         "trajectory_id",
         "provisional designation",
+        "ref_epoch",
         "a",
         "e",
         "i",
@@ -426,16 +433,16 @@ if __name__ == "__main__":
     ram_dir = "/media/virtuelram/"
 
     print("Load sso data")
-    df_sso = load_data("Solar System MPC", nb_indirection=0)
+    df_sso = utils.load_data("Solar System MPC", nb_indirection=0)
 
     import doctest
     import time as t
 
     doctest.testmod()[0]
 
-    n_trajectories = 652
-    n_points = 5
-    n_cpu = int(mp.cpu_count() / 1.5)
+    n_trajectories = 1
+    n_points = 3
+    n_cpu = 1 #int(mp.cpu_count() / 1.5)
 
     gb_ssn = df_sso.groupby(["ssnamenr"]).agg({"candid": len}).sort_values(["candid"])
     all_track = gb_ssn[gb_ssn["candid"] == n_points].reset_index()["ssnamenr"].values
@@ -453,7 +460,7 @@ if __name__ == "__main__":
 
     print("MPC DATABASE loading")
     t_before = t.time()
-    mpc_database = po.get_mpc_database()
+    mpc_database = utils.get_mpc_database()
 
     print("MPC DATABASE end loading, elapsed time: {}".format(t.time() - t_before))
     print()
