@@ -15,6 +15,7 @@ from alert_association.utils import load_data
 import json
 import glob
 import os
+from alert_association.orbit_fitting.orbfit_management import compute_df_orbit_param
 
 # constant to locate the ram file system
 ram_dir = "/media/virtuelram/"
@@ -34,18 +35,18 @@ def write_target_json(trajectory_df):
         dict_param["type"] = "Asteroid"
         dynamical_parameters = dict()
 
-        dynamical_parameters["ref_epoch"] = rows["jd"]
+        dynamical_parameters["ref_epoch"] = rows["ref_epoch"]
         dynamical_parameters["semi_major_axis"] = rows["a"]
         dynamical_parameters["eccentricity"] = rows["e"]
         dynamical_parameters["inclination"] = rows["i"]
 
-        dynamical_parameters["node_longitude"] = rows["Node"]
-        dynamical_parameters["perihelion_argument"] = rows["Peri"]
-        dynamical_parameters["mean_anomaly"] = rows["M"]
+        # dynamical_parameters["node_longitude"] = rows["Node"]
+        # dynamical_parameters["perihelion_argument"] = rows["Peri"]
+        # dynamical_parameters["mean_anomaly"] = rows["M"]
 
-        # dynamical_parameters["node_longitude"] = rows["long. node"]
-        # dynamical_parameters["perihelion_argument"] = rows["arg. peric"]
-        # dynamical_parameters["mean_anomaly"] = rows["mean anomaly"]
+        dynamical_parameters["node_longitude"] = rows["long. node"]
+        dynamical_parameters["perihelion_argument"] = rows["arg. peric"]
+        dynamical_parameters["mean_anomaly"] = rows["mean anomaly"]
 
         dict_param["dynamical_parameters"] = dynamical_parameters
 
@@ -61,6 +62,8 @@ def generate_ephemeris(trajectory_df):
     write_target_json(trajectory_df)
 
     all_param_path = glob.glob(os.path.join(ram_dir, "@aster_*.json"))
+
+    all_ephem = []
 
     for path in all_param_path:
 
@@ -82,18 +85,9 @@ def generate_ephemeris(trajectory_df):
             "-output": "--jd",
             "-from": "MiriadeDoc",
         }
-
-        with open(all_param_path[0], "rb") as fp:
-            print(json.load(fp))
-            print()
-            print()
-
-        for epoch in jd:
-            print(epoch, end=", ")
-
-        print()
+        
         files = {
-            "target": open(all_param_path[0], "rb").read(),
+            "target": open(path, "rb").read(),
             "epochs": ("epochs", "\n".join(["%.6f" % epoch for epoch in jd])),
         }
 
@@ -101,31 +95,24 @@ def generate_ephemeris(trajectory_df):
 
         j = r.json()
         ephem = pd.DataFrame.from_dict(j["data"])
-        print(ephem)
-        print(ephem.info())
-        print()
-        print()
+        
         coord = SkyCoord(ephem["RA"], ephem["DEC"], unit=(u.deg, u.deg))
 
         ephem["cRA"] = coord.ra.value * 15
         ephem["cDec"] = coord.dec.value
-
-        print(ephem)
-        print()
-        print()
+        ephem["trajectory_id"] = trajectory_id
+        all_ephem.append(ephem)
 
         os.remove(path)
 
-    return ephem
+    return pd.concat(all_ephem)
 
 
 if __name__ == "__main__":
     print("ephem")
 
-    exit()
-
-    n_trajectories = 1
-    n_points = 50
+    n_trajectories = 30
+    n_points = 3
 
     print("Load sso data")
     df_sso = load_data("Solar System MPC", nb_indirection=0)
@@ -146,58 +133,70 @@ if __name__ == "__main__":
 
     mpc = mpc.sort_values(["ssnamenr", "jd"]).reset_index(drop=True)
 
-    # print(mpc)
-
-    print("MPC DATABASE loading")
     t_before = t.time()
-    mpc_database = utils.get_mpc_database()
-    print("MPC DATABASE end loading, elapsed time: {}".format(t.time() - t_before))
+    orbit_results = compute_df_orbit_param(mpc, 10, ram_dir)
 
-    print("cross match with mpc database")
-    cross_match_mpc = mpc.merge(
-        mpc_database, how="inner", left_on="ssnamenr", right_on="Number"
-    )
+    multiprocess_time = t.time() - t_before
+    print("total multiprocessing orbfit time: {}".format(multiprocess_time))
 
-    cross_match_mpc["jd_ephem"] = cross_match_mpc["jd"]
+    mpc_orb = mpc.merge(orbit_results, on="trajectory_id")
+    mpc_orb["jd_ephem"] = mpc["jd"]
 
-    print(
-        cross_match_mpc[
-            [
-                "ra",
-                "dec",
-                "jd",
-                "jd_ephem",
-                "ssnamenr",
-                "trajectory_id",
-                "a",
-                "e",
-                "i",
-                "Peri",
-                "Node",
-                "M",
-            ]
-        ]
-    )
-    print()
-    print()
+    # print("MPC DATABASE loading")
+    # t_before = t.time()
+    # mpc_database = utils.get_mpc_database()
+    # print("MPC DATABASE end loading, elapsed time: {}".format(t.time() - t_before))
 
-    ephemeris = generate_ephemeris(cross_match_mpc)
-    # ephemeris["trajectory_id"] = ephemeris["trajectory_id"].astype(int)
+    # print("cross match with mpc database")
+    # cross_match_mpc = mpc.merge(
+    #     mpc_database, how="inner", left_on="ssnamenr", right_on="Number"
+    # )
 
-    ephem_and_obs = ephemeris.merge(cross_match_mpc, left_on="Date", right_on="jd")
+    # cross_match_mpc["jd_ephem"] = cross_match_mpc["jd"]
 
-    deltaRAcosDEC = (ephem_and_obs["ra"] - ephem_and_obs["cRA"]) * np.cos(
+    # print(
+    #     cross_match_mpc[
+    #         [
+    #             "ra",
+    #             "dec",
+    #             "jd",
+    #             "jd_ephem",
+    #             "ssnamenr",
+    #             "trajectory_id",
+    #             "a",
+    #             "e",
+    #             "i",
+    #             "Peri",
+    #             "Node",
+    #             "M",
+    #         ]
+    #     ]
+    # )
+    # print()
+    # print()
+
+    ephemeris = generate_ephemeris(mpc_orb)
+
+    mpc_orb["jd"] = np.around(mpc_orb["jd"].values, decimals=6)
+
+    ephemeris["trajectory_id"] = ephemeris["trajectory_id"].astype(int)
+
+    ephem_and_obs = ephemeris.merge(mpc_orb, left_on=("trajectory_id", "Date"), right_on=("trajectory_id", "jd"))
+
+    deltaRAcosDEC = ((ephem_and_obs["ra"] - ephem_and_obs["cRA"]) * np.cos(
         np.radians(ephem_and_obs["dec"])
-    )
-    deltaDEC = ephem_and_obs["dec"] - ephem_and_obs["cDec"]
+    )) * 3600
+    deltaDEC = (ephem_and_obs["dec"] - ephem_and_obs["cDec"]) * 3600
 
     colors = ["#15284F", "#F5622E"]
 
     fig, ax = plt.subplots(figsize=(10, 10), sharex=True,)
 
+    fig.suptitle("Trajectories / ephemeris : {} trajectories of {} points".format(n_trajectories, n_points))
+
     ax.scatter(
-        cross_match_mpc["ra"],
-        cross_match_mpc["dec"],
+        ephem_and_obs["ra"],
+        ephem_and_obs["dec"],
         label="ZTF",
         alpha=0.2,
         color=colors[1],
