@@ -9,7 +9,6 @@ import re
 import subprocess
 import os
 import multiprocessing as mp
-from alert_association.utils import load_data
 import alert_association.orbit_fitting.plot_orbstat as po
 import alert_association.utils as utils
 
@@ -359,7 +358,7 @@ def read_oel(ram_dir, prov_desig):
     try:
         with open(ram_dir + prov_desig + ".oel") as file:
             lines = file.readlines()
-            
+
             ref_mjd = float(lines[8].strip().split()[1])
             # conversion from modified julian date to julian date
             ref_jd = ref_mjd + 2400000.5
@@ -442,7 +441,7 @@ if __name__ == "__main__":
 
     n_trajectories = 1
     n_points = 3
-    n_cpu = 1 #int(mp.cpu_count() / 1.5)
+    n_cpu = 1  # int(mp.cpu_count() / 1.5)
 
     gb_ssn = df_sso.groupby(["ssnamenr"]).agg({"candid": len}).sort_values(["candid"])
     all_track = gb_ssn[gb_ssn["candid"] == n_points].reset_index()["ssnamenr"].values
