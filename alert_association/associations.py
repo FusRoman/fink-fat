@@ -470,6 +470,7 @@ def tracklets_and_trajectories_associations(
     mag_criterion_same_fid,
     mag_criterion_diff_fid,
     angle_criterion,
+    max_traj_id,
     run_metrics=False,
 ):
     """
@@ -613,7 +614,7 @@ def tracklets_and_trajectories_associations(
     """
 
     if len(trajectories) == 0 or len(tracklets) == 0:
-        return trajectories, tracklets, {}
+        return trajectories, tracklets, max_traj_id, {}
     else:
 
         trajectories_not_updated = trajectories[
@@ -691,11 +692,8 @@ def tracklets_and_trajectories_associations(
 
                 if len(tracklets_duplicated) > 0:
 
-                    # get the max trajectory id
-                    max_traj_id = np.max(np.unique(trajectories["trajectory_id"]))
-
                     for _, rows in tracklets_duplicated.iterrows():
-                        max_traj_id += 1
+                        
 
                         # silence the copy warning
                         with pd.option_context("mode.chained_assignment", None):
@@ -718,6 +716,7 @@ def tracklets_and_trajectories_associations(
                         all_duplicate_traj.append(duplicate_traj)
                         all_duplicate_traj.append(other_track)
                         updated_trajectories.append(max_traj_id)
+                        max_traj_id += 1
 
                     # creates a dataframe with all duplicates and adds it to the trajectories dataframe
                     all_duplicate_traj = pd.concat(all_duplicate_traj)
@@ -825,6 +824,7 @@ def tracklets_and_trajectories_associations(
         return (
             trajectories.reset_index(drop=True).infer_objects(),
             tracklets.reset_index(drop=True).infer_objects(),
+            max_traj_id,
             trajectories_and_tracklets_associations_report,
         )
 
@@ -837,6 +837,7 @@ def trajectories_with_new_observations_associations(
     mag_criterion_same_fid,
     mag_criterion_diff_fid,
     angle_criterion,
+    max_traj_id,
     run_metrics=False,
 ):
     """
@@ -991,7 +992,7 @@ def trajectories_with_new_observations_associations(
     """
 
     if len(trajectories) == 0 or len(new_observations) == 0:
-        return trajectories, new_observations, {}
+        return trajectories, new_observations, max_traj_id, {}
     else:
 
         trajectories_not_updated = trajectories[
@@ -1089,11 +1090,7 @@ def trajectories_with_new_observations_associations(
 
                 if len(duplicate_obs) > 0:
 
-                    # get the max trajectory id
-                    max_traj_id = np.max(np.unique(trajectories["trajectory_id"]))
-
                     for _, rows in duplicate_obs.iterrows():
-                        max_traj_id += 1
 
                         # silence the copy warning
                         with pd.option_context("mode.chained_assignment", None):
@@ -1117,6 +1114,7 @@ def trajectories_with_new_observations_associations(
                         all_duplicate_traj.append(duplicate_traj)
                         all_duplicate_traj.append(obs_duplicate)
                         updated_trajectories.append(max_traj_id)
+                        max_traj_id += 1
 
                     # creates a dataframe with all duplicates and adds it to the trajectories dataframe
                     all_duplicate_traj = pd.concat(all_duplicate_traj)
@@ -1173,6 +1171,7 @@ def trajectories_with_new_observations_associations(
         return (
             trajectories.reset_index(drop=True).infer_objects(),
             new_observations.reset_index(drop=True).infer_objects(),
+            max_traj_id,
             trajectories_and_observations_associations_report,
         )
 
@@ -1185,6 +1184,7 @@ def old_observations_with_tracklets_associations(
     mag_criterion_same_fid,
     mag_criterion_diff_fid,
     angle_criterion,
+    max_traj_id,
     run_metrics=False,
 ):
     """
@@ -1333,7 +1333,7 @@ def old_observations_with_tracklets_associations(
     """
 
     if len(tracklets) == 0 or len(old_observations) == 0:
-        return tracklets, old_observations, {}
+        return tracklets, old_observations, max_traj_id, {}
     else:
 
         track_and_obs_report = dict()
@@ -1415,11 +1415,7 @@ def old_observations_with_tracklets_associations(
 
                 if len(duplicate_obs) > 0:
 
-                    # get the max trajectory id
-                    max_traj_id = np.max(np.unique(tracklets["trajectory_id"]))
-
                     for _, rows in duplicate_obs.iterrows():
-                        max_traj_id += 1
 
                         # silence the copy warning
                         with pd.option_context("mode.chained_assignment", None):
@@ -1443,6 +1439,7 @@ def old_observations_with_tracklets_associations(
                         all_duplicate_traj.append(duplicate_track)
                         all_duplicate_traj.append(obs_duplicate)
                         updated_tracklets.append(max_traj_id)
+                        max_traj_id += 1
 
                     # creates a dataframe with all duplicates and adds it to the trajectories dataframe
                     all_duplicate_traj = pd.concat(all_duplicate_traj)
@@ -1518,6 +1515,7 @@ def old_observations_with_tracklets_associations(
         return (
             tracklets.reset_index(drop=True).infer_objects(),
             old_observations.reset_index(drop=True).infer_objects(),
+            max_traj_id,
             track_and_obs_report,
         )
 
@@ -1687,7 +1685,7 @@ def old_with_new_observations_associations(
 
 
 def time_window_management(
-    trajectory_df, old_observation, last_nid, nid_next_night, time_window
+    trajectory_df, old_observation, last_nid, nid_next_night, traj_time_window, obs_time_window, orbfit_limit
 ):
     """
     Management of the old observation and trajectories. Remove the old observation with a nid difference with
@@ -1737,7 +1735,7 @@ def time_window_management(
     ... "candid" : [16, 17, 18, 19]
     ... })
 
-    >>> (test_old_traj, test_most_recent_traj), test_old_obs = time_window_management(test_traj, test_obs, 12, 17, 3)
+    >>> (test_old_traj, test_most_recent_traj), test_old_obs = time_window_management(test_traj, test_obs, 12, 17, 3, 3, 5)
 
     >>> expected_old_traj = pd.DataFrame({
     ... "candid" : [10, 11, 12],
@@ -1755,14 +1753,9 @@ def time_window_management(
     ... "a": [-1.0, -1.0, -1.0]
     ... })
 
-    >>> expected_old_obs = pd.DataFrame({
-    ... "nid" : [12],
-    ... "candid" : [19]
-    ... })
-
     >>> assert_frame_equal(expected_old_traj.reset_index(drop=True), test_old_traj.reset_index(drop=True))
     >>> assert_frame_equal(expected_most_recent_traj.reset_index(drop=True), test_most_recent_traj.reset_index(drop=True))
-    >>> assert_frame_equal(expected_old_obs.reset_index(drop=True), test_old_obs.reset_index(drop=True))
+    >>> assert_frame_equal(pd.DataFrame(columns=["nid"]), test_old_obs)
 
     >>> test_traj = pd.DataFrame({
     ... "candid" : [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21],
@@ -1777,7 +1770,7 @@ def time_window_management(
     ... "candid" : [22, 23, 24, 25, 26, 27, 28, 29, 30]
     ... })
 
-    >>> (test_old_traj, test_most_recent_traj), test_old_obs = time_window_management(test_traj, test_obs, 15, 18, 5)
+    >>> (test_old_traj, test_most_recent_traj), test_old_obs = time_window_management(test_traj, test_obs, 15, 18, 5, 4, 5)
 
     >>> expected_old_traj = pd.DataFrame({'candid': [10, 11, 12], 'nid': [1, 2, 3], 'jd': [1, 2, 3], 'trajectory_id': [1, 1, 1], 'a': [2.5, 2.5, 2.5]})
 
@@ -1801,7 +1794,7 @@ def time_window_management(
         )
 
         # if the night difference exceed the time window
-        if nid_next_night - last_nid > time_window:
+        if nid_next_night - last_nid > traj_time_window:
 
             # get last observation of trajectories from the last nid
             last_obs_of_all_traj = last_obs_of_all_traj[
@@ -1812,16 +1805,21 @@ def time_window_management(
                 last_obs_of_all_traj["trajectory_id"]
             )
             most_recent_traj = trajectory_df[mask_traj]
+
+            traj_size = most_recent_traj.groupby(["trajectory_id"]).count().reset_index()
+            test_1 = most_recent_traj["trajectory_id"].isin(traj_size[traj_size["nid"] < orbfit_limit]["trajectory_id"])
+            test_2 = most_recent_traj["a"] != -1.0
+            most_recent_traj = most_recent_traj[(test_1 | test_2)]
+
             oldest_traj = trajectory_df[~mask_traj & (trajectory_df["a"] != -1.0)]
-            old_observation = old_observation[old_observation["nid"] == last_nid]
 
             # return the trajectories from the last night id
-            return (oldest_traj, most_recent_traj), old_observation
+            return (oldest_traj, most_recent_traj), pd.DataFrame(columns=["nid"])
 
         last_obs_of_all_traj["diff_nid"] = nid_next_night - last_obs_of_all_traj["nid"]
 
         most_recent_last_obs = last_obs_of_all_traj[
-            last_obs_of_all_traj["diff_nid"] <= time_window
+            last_obs_of_all_traj["diff_nid"] <= traj_time_window
         ]
 
         mask_traj = trajectory_df["trajectory_id"].isin(
@@ -1829,10 +1827,16 @@ def time_window_management(
         )
 
         most_recent_traj = trajectory_df[mask_traj]
+
+        traj_size = most_recent_traj.groupby(["trajectory_id"]).count().reset_index()
+        test_1 = most_recent_traj["trajectory_id"].isin(traj_size[traj_size["nid"] <= orbfit_limit]["trajectory_id"])
+        test_2 = most_recent_traj["a"] != -1.0
+        most_recent_traj = most_recent_traj[(test_1 | test_2)]
+
         oldest_traj = trajectory_df[~mask_traj & (trajectory_df["a"] != -1.0)]
 
     diff_nid_old_observation = nid_next_night - old_observation["nid"]
-    old_observation = old_observation[diff_nid_old_observation < time_window]
+    old_observation = old_observation[diff_nid_old_observation <= obs_time_window]
 
     return (oldest_traj, most_recent_traj), old_observation
 

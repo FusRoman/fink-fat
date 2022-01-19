@@ -1,8 +1,10 @@
+from decimal import DivisionByZero
 import numpy as np
 import pandas as pd
 import multiprocessing as mp
 import os
 import astropy.units as u
+from astropy.coordinates import SkyCoord
 from alert_association.intra_night_association import intra_night_association
 from alert_association.intra_night_association import new_trajectory_id_assignation
 from alert_association.orbit_fitting.orbfit_management import compute_df_orbit_param
@@ -19,9 +21,9 @@ from alert_association.associations import (
 ram_dir = "/media/virtuelram/"
 
 
-def prep_orbit_computation(trajectory_df):
+def prep_orbit_computation(trajectory_df, orbfit_limit):
     """
-    Return the trajectories with less than 3 points and the others with 3 points and more.
+    Return the trajectories with less than orbfit_limit points and the others with orbfit_limit points and more.
     The trajectories with 3 points and more will be used for the computation of orbital elements.
 
     Parameters
@@ -29,6 +31,8 @@ def prep_orbit_computation(trajectory_df):
     trajectory_df : dataframe
         dataframe containing trajectories observations
         the following columns are required : trajectory_id, ra
+    orbfit_limit : integer
+        trajectories with a number of points greater or equal to orbfit_limit can go to the orbit fitting step. 
 
     Return
     ------
@@ -41,7 +45,7 @@ def prep_orbit_computation(trajectory_df):
     --------
     >>> trajectories = pd.DataFrame({"trajectory_id": [1, 1, 1, 2, 2], "ra": [0, 0, 0, 0, 0]})
 
-    >>> other_track, track_to_orb = prep_orbit_computation(trajectories)
+    >>> other_track, track_to_orb = prep_orbit_computation(trajectories, 3)
 
     >>> other_track
        trajectory_id  ra
@@ -53,32 +57,49 @@ def prep_orbit_computation(trajectory_df):
     1              1   0
     2              1   0
     """
-    trajectory_df["trajectory_id"] = trajectory_df["trajectory_id"].astype(int)
+
+    with pd.option_context("mode.chained_assignment", None):
+        trajectory_df["trajectory_id"] = trajectory_df["trajectory_id"].astype(int)
 
     traj_length = (
         trajectory_df.groupby(["trajectory_id"]).agg({"ra": len}).reset_index()
     )
 
-    traj_id_sup_to_3 = traj_length[traj_length["ra"] >= 3]["trajectory_id"]
-    traj_id_inf_to_3 = traj_length[traj_length["ra"] < 3]["trajectory_id"]
-    track_to_orb = trajectory_df[trajectory_df["trajectory_id"].isin(traj_id_sup_to_3)]
-    other_track = trajectory_df[trajectory_df["trajectory_id"].isin(traj_id_inf_to_3)]
+    mask = traj_length["ra"] >= orbfit_limit
 
-    return other_track, track_to_orb
+    traj_id_sup = traj_length[mask]["trajectory_id"]
+    traj_id_inf = traj_length[~mask]["trajectory_id"]
+
+    track_to_orb = trajectory_df[trajectory_df["trajectory_id"].isin(traj_id_sup)]
+    other_track = trajectory_df[trajectory_df["trajectory_id"].isin(traj_id_inf)]
+
+    return other_track.copy(), track_to_orb.copy()
 
 
 def compute_orbit_elem(trajectory_df, q):
+
+    # print()
+    # print("#####")
+    # acceleration_filter(trajectory_df, 0.4)
+    # print("#####")
+    # print()
 
     _pid = os.getpid()
     current_ram_path = os.path.join(ram_dir, str(_pid), "")
     os.mkdir(current_ram_path)
 
     if len(trajectory_df) == 0:
+        print("no orbit computation")
         q.put(trajectory_df)
         return 0
 
     traj_to_compute = trajectory_df[trajectory_df["a"] == -1.0]
     traj_with_orbelem = trajectory_df[trajectory_df["a"] != -1.0]
+
+    if len(traj_to_compute) == 0:
+        print("no orbit computation")
+        q.put(trajectory_df)
+        return 0
 
     print(
         "nb traj to compute orb elem: {}".format(
@@ -88,6 +109,7 @@ def compute_orbit_elem(trajectory_df, q):
 
     orbit_column = [
         "provisional designation",
+        "ref_epoch",
         "a",
         "e",
         "i",
@@ -107,6 +129,7 @@ def compute_orbit_elem(trajectory_df, q):
     orbit_elem = compute_df_orbit_param(
         traj_to_compute, int(mp.cpu_count() / 3), current_ram_path
     )
+
     traj_to_compute = traj_to_compute.merge(orbit_elem, on="trajectory_id")
 
     os.rmdir(current_ram_path)
@@ -165,6 +188,8 @@ def tracklets_and_trajectories_steps(
     mag_criterion_same_fid,
     mag_criterion_diff_fid,
     angle_criterion,
+    orbfit_limit,
+    max_traj_id,
     run_metrics,
 ):
     # perform associations with the recorded trajectories :
@@ -175,6 +200,7 @@ def tracklets_and_trajectories_steps(
     (
         traj_with_track,
         not_associated_tracklets,
+        max_traj_id,
         traj_and_track_assoc_report,
     ) = tracklets_and_trajectories_associations(
         most_recent_traj,
@@ -184,21 +210,22 @@ def tracklets_and_trajectories_steps(
         mag_criterion_same_fid,
         mag_criterion_diff_fid,
         angle_criterion,
+        max_traj_id,
         run_metrics,
-    )
+    )    
 
     # get the trajectories updated with new tracklets and the trajectory not updated for the next step
     traj_to_orb = traj_with_track[~traj_with_track["not_updated"]]
     traj_not_updated = traj_with_track[traj_with_track["not_updated"]]
 
-    # separate traklets with more than 3 points for the orbit computation and the other tracklets
-    other_track, track_to_orb = prep_orbit_computation(not_associated_tracklets)
+    # concatenate the updated trajectories and the remaining tracklets
+    all_traj_to_orb = pd.concat([traj_to_orb, not_associated_tracklets])
 
-    # concatenate the updated trajectories and the tracklets with more than 3 points
-    all_traj_to_orb = pd.concat([traj_to_orb, track_to_orb])
+    # separate traklets with more than orbfit_limit points for the orbit computation and the other tracklets
+    other_track, track_to_orb = prep_orbit_computation(all_traj_to_orb, orbfit_limit)
 
     tracklets_orbfit_process = mp.Process(
-        target=compute_orbit_elem, args=(all_traj_to_orb, return_trajectories_queue,)
+        target=compute_orbit_elem, args=(track_to_orb, return_trajectories_queue,)
     )
     tracklets_orbfit_process.start()
 
@@ -206,6 +233,7 @@ def tracklets_and_trajectories_steps(
         traj_not_updated,
         other_track,
         traj_and_track_assoc_report,
+        max_traj_id,
         tracklets_orbfit_process,
     )
 
@@ -219,6 +247,8 @@ def trajectories_and_new_observations_steps(
     mag_criterion_same_fid,
     mag_criterion_diff_fid,
     angle_criterion,
+    orbfit_limit,
+    max_traj_id,
     run_metrics,
 ):
     print("trajectories associations")
@@ -227,6 +257,7 @@ def trajectories_and_new_observations_steps(
     (
         traj_with_new_obs,
         remaining_new_observations,
+        max_traj_id,
         trajectories_associations_report,
     ) = trajectories_with_new_observations_associations(
         traj_not_updated,
@@ -236,11 +267,12 @@ def trajectories_and_new_observations_steps(
         mag_criterion_same_fid,
         mag_criterion_diff_fid,
         angle_criterion,
+        max_traj_id,
         run_metrics,
     )
 
     # separate trajectories with more than 3 points for the orbit computation and the other trajectories
-    other_traj, traj_to_orb = prep_orbit_computation(traj_with_new_obs)
+    other_traj, traj_to_orb = prep_orbit_computation(traj_with_new_obs, orbfit_limit)
 
     trajectories_orbfit_process = mp.Process(
         target=compute_orbit_elem, args=(traj_to_orb, return_trajectories_queue,)
@@ -251,6 +283,7 @@ def trajectories_and_new_observations_steps(
         other_traj,
         remaining_new_observations,
         trajectories_associations_report,
+        max_traj_id,
         trajectories_orbfit_process,
     )
 
@@ -264,6 +297,8 @@ def tracklets_and_old_observations_steps(
     mag_criterion_same_fid,
     mag_criterion_diff_fid,
     angle_criterion,
+    orbfit_limit,
+    max_traj_id,
     run_metrics,
 ):
     print("tracklets and old observations associations")
@@ -272,6 +307,7 @@ def tracklets_and_old_observations_steps(
     (
         track_with_old_obs,
         remain_old_obs,
+        max_traj_id,
         track_and_obs_report,
     ) = old_observations_with_tracklets_associations(
         other_track,
@@ -281,21 +317,28 @@ def tracklets_and_old_observations_steps(
         mag_criterion_same_fid,
         mag_criterion_diff_fid,
         angle_criterion,
+        max_traj_id,
         run_metrics,
     )
 
     updated_tracklets = track_with_old_obs[~track_with_old_obs["not_updated"]]
     not_updated_tracklets = track_with_old_obs[track_with_old_obs["not_updated"]]
 
+    # separate trajectories with more than 3 points for the orbit computation and the other trajectories
+    track_not_orb, track_to_orb = prep_orbit_computation(updated_tracklets, orbfit_limit)
+
     tracklets_with_new_obs_orbfit_process = mp.Process(
-        target=compute_orbit_elem, args=(updated_tracklets, return_trajectories_queue,)
+        target=compute_orbit_elem, args=(track_to_orb, return_trajectories_queue,)
     )
     tracklets_with_new_obs_orbfit_process.start()
 
+    remaining_tracklets = pd.concat([not_updated_tracklets, track_not_orb])
+
     return (
-        not_updated_tracklets,
+        remaining_tracklets,
         remain_old_obs,
         track_and_obs_report,
+        max_traj_id,
         tracklets_with_new_obs_orbfit_process,
     )
 
@@ -306,7 +349,8 @@ def night_to_night_association(
     new_observation,
     last_nid,
     next_nid,
-    time_window,
+    traj_time_window,
+    obs_time_window,
     intra_night_sep_criterion=145 * u.arcsecond,
     intra_night_mag_criterion_same_fid=2.21,
     intra_night_mag_criterion_diff_fid=1.75,
@@ -314,6 +358,7 @@ def night_to_night_association(
     mag_criterion_same_fid=0.18,
     mag_criterion_diff_fid=0.7,
     angle_criterion=8.8,
+    orbfit_limit = 3,
     run_metrics=False,
 ):
     """
@@ -372,9 +417,13 @@ def night_to_night_association(
     --------
     """
 
-    last_trajectory_id = np.nan_to_num(np.max(trajectory_df["trajectory_id"])) + 1
+    if len(trajectory_df) > 0:
+        last_trajectory_id = np.max(trajectory_df["trajectory_id"]) + 1
+    else:
+        last_trajectory_id = 0
+
     (old_traj, most_recent_traj), old_observation = time_window_management(
-        trajectory_df, old_observation, last_nid, next_nid, time_window
+        trajectory_df, old_observation, last_nid, next_nid, traj_time_window, obs_time_window, orbfit_limit
     )
 
     inter_night_report = dict()
@@ -394,7 +443,7 @@ def night_to_night_association(
 
     if len(most_recent_traj) == 0 and len(old_observation) == 0:
 
-        other_track, track_to_orb = prep_orbit_computation(tracklets)
+        other_track, track_to_orb = prep_orbit_computation(tracklets, orbfit_limit)
 
         q = mp.Queue()
         process = mp.Process(target=compute_orbit_elem, args=(track_to_orb, q,))
@@ -402,10 +451,17 @@ def night_to_night_association(
         track_with_orb_elem = q.get()
 
         process.terminate()
+
+        inter_night_report["intra night report"] = intra_night_report
+        inter_night_report["tracklets associations report"] = {}
+        inter_night_report["trajectories associations report"] = {}
+        inter_night_report["track and old obs associations report"] = {}
+        inter_night_report["old observation and new observation report"] = {}
+
         return (
             pd.concat([other_track, track_with_orb_elem]),
             remaining_new_observations,
-            intra_night_report,
+            inter_night_report,
         )
 
     return_trajectories_queue = mp.Queue()
@@ -414,6 +470,7 @@ def night_to_night_association(
         traj_not_updated,
         other_track,
         traj_and_track_report,
+        max_traj_id,
         tracklets_orbfit_process,
     ) = tracklets_and_trajectories_steps(
         most_recent_traj,
@@ -424,6 +481,8 @@ def night_to_night_association(
         mag_criterion_same_fid,
         mag_criterion_diff_fid,
         angle_criterion,
+        orbfit_limit,
+        last_trajectory_id,
         run_metrics,
     )
 
@@ -431,6 +490,7 @@ def night_to_night_association(
         not_associates_traj,
         remaining_new_observations,
         traj_and_new_obs_report,
+        max_traj_id,
         traj_with_new_obs_orbfit_process,
     ) = trajectories_and_new_observations_steps(
         traj_not_updated,
@@ -441,6 +501,8 @@ def night_to_night_association(
         mag_criterion_same_fid,
         mag_criterion_diff_fid,
         angle_criterion,
+        orbfit_limit,
+        max_traj_id,
         run_metrics,
     )
 
@@ -448,6 +510,7 @@ def night_to_night_association(
         not_updated_tracklets,
         remain_old_obs,
         track_and_old_obs_report,
+        max_traj_id,
         track_with_old_obs_orbfit_process,
     ) = tracklets_and_old_observations_steps(
         other_track,
@@ -458,6 +521,8 @@ def night_to_night_association(
         mag_criterion_same_fid,
         mag_criterion_diff_fid,
         angle_criterion,
+        orbfit_limit,
+        max_traj_id,
         run_metrics,
     )
 
@@ -472,7 +537,7 @@ def night_to_night_association(
         remain_old_obs,
         remaining_new_observations,
         next_nid,
-        last_trajectory_id,
+        max_traj_id,
         sep_criterion,
         mag_criterion_same_fid,
         mag_criterion_diff_fid,
@@ -488,6 +553,10 @@ def night_to_night_association(
     tracklets_orbfit_process.terminate()
     traj_with_new_obs_orbfit_process.terminate()
     track_with_old_obs_orbfit_process.terminate()
+
+    print("----------------")
+    acceleration_filter(not_associates_traj, 0.3)
+    print("----------------")
 
     # concatenate all the trajectories with computed orbital elements with the other trajectories/tracklets.
     most_recent_traj = pd.concat(
@@ -507,8 +576,78 @@ def night_to_night_association(
     ] = observation_report
 
     trajectory_df = pd.concat([old_traj, most_recent_traj])
+    trajectory_df["not_updated"] = np.ones(len(trajectory_df), dtype=np.bool_)
 
     return trajectory_df, old_observation, inter_night_report
+
+
+def acceleration_filter(trajectory_df, acc_criteria):
+
+    # import warnings
+    # warnings.filterwarnings("error")
+
+    if len(trajectory_df) > 0:
+        def acceleration_df(x):
+                ra, dec, jd = x["ra"], x["dec"], x["jd"]
+
+                c1 = SkyCoord(ra, dec, unit = u.degree)
+
+                diff_jd = np.diff(jd)
+
+                sep = c1[0:-1].separation(c1[1:]).degree
+                
+                try:
+                    velocity = sep / diff_jd
+
+                    velocity = velocity[~np.isnan(velocity)]
+
+                    return np.mean(np.abs(np.diff(velocity)))
+                except RuntimeWarning:
+                    print()
+                    print(x["objectId"])
+                    print()
+                    print(x["candid"])
+                    print()
+                    print(x["ssnamenr"])
+                    print()
+                    print(x["nid"])
+                    print()
+                    print(jd)
+
+
+        print(
+            "*** nb trajectories: {}".format(len(np.unique(trajectory_df["trajectory_id"])))
+        )
+        t_before = t.time()
+        tt = trajectory_df.groupby(['trajectory_id'])\
+            .agg(
+                ra=('ra',list), 
+                dec=('dec',list), 
+                dcmag=('dcmag',list), 
+                candid=('candid', list),
+                objectId=('objectId', list),
+                ssnamenr=('ssnamenr', list),
+                fid=('fid',list),
+                nid=('nid',list),
+                jd=('jd',list),
+                trajectory_size=('candid',lambda x: len(list(x)))
+                )
+
+        tt = tt[tt["trajectory_size"] >= 3]
+
+        if len(tt) > 0:
+            tt["acc"] = tt.apply(acceleration_df, axis=1)
+
+            print(t.time() - t_before)
+            print()
+            print("before acc filter: {}".format(len(tt)))
+            print("after acc filter: {}".format(len(tt[tt["acc"] <= acc_criteria])))
+            print()
+        else:
+            print("0 trajectories")
+    
+    else:
+        print("0 trajectories")
 
 
 if __name__ == "__main__":  # pragma: no cover
@@ -517,6 +656,8 @@ if __name__ == "__main__":  # pragma: no cover
     from pandas.testing import assert_frame_equal  # noqa: F401
     import test_sample as ts  # noqa: F401
     from unittest import TestCase  # noqa: F401
+
+    import time as t
 
     if "unittest.util" in __import__("sys").modules:
         # Show full diff in self.assertEqual.
@@ -528,13 +669,14 @@ if __name__ == "__main__":  # pragma: no cover
             print('"{}": {},'.format(col, list(df[col])))
         print("}")
 
-    sys.exit(doctest.testmod()[0])
+    # sys.exit(doctest.testmod()[0])
     from alert_association.continuous_integration import load_data
 
     df_sso = load_data("Solar System MPC", 0)
 
     tr_orb_columns = [
         "provisional designation",
+        "ref_epoch",
         "a",
         "e",
         "i",
@@ -561,7 +703,7 @@ if __name__ == "__main__":  # pragma: no cover
         print(tr_nid)
         print()
 
-        if tr_nid > 1540:
+        if tr_nid == 1540:
             break
 
         new_observation = df_sso[df_sso["nid"] == tr_nid]
@@ -578,95 +720,77 @@ if __name__ == "__main__":  # pragma: no cover
         )
         print("nb old obs: {}".format(len(old_observation)))
         print("nb new obs: {}".format(len(new_observation)))
+        print()
 
+        t_before = t.time()
         trajectory_df, old_observation, report = night_to_night_association(
             trajectory_df,
             old_observation,
             new_observation,
             last_nid,
             next_nid,
-            time_window=5,
-            sep_criterion=16.45 * u.arcminute,
-            mag_criterion_same_fid=0.1,
-            mag_criterion_diff_fid=0.34,
-            angle_criterion=1.19,
+            traj_time_window=7,
+            obs_time_window=3,
+            sep_criterion=24 * u.arcminute,
+            mag_criterion_same_fid=0.2,
+            mag_criterion_diff_fid=0.5,
+            orbfit_limit=5,
+            angle_criterion=2,
         )
 
-        trajectory_df["not_updated"] = np.ones(len(trajectory_df), dtype=np.bool_)
-
-        print()
-        print()
-        orb_elem = trajectory_df[trajectory_df["a"] != -1.0]
-        print(
-            "number of trajectories with orbital elements: {}".format(
-                len(np.unique(orb_elem["trajectory_id"]))
+        elapsed_time = t.time() - t_before
+        if elapsed_time <= 60:
+            print()
+            print("associations elapsed time: {} sec".format(round(elapsed_time, 3)))
+        else:
+            time_min = int(elapsed_time / 60)
+            time_sec = round(elapsed_time % 60, 3)
+            print()
+            print(
+                "associations elapsed time: {} min: {} sec".format(time_min, time_sec)
             )
-        )
+
+        print()
+        print()
+
+        # print()
+        # orb_elem = trajectory_df[trajectory_df["a"] != -1.0]
+        # print(
+        #     "number of trajectories with orbital elements: {}".format(
+        #         len(np.unique(orb_elem["trajectory_id"]))
+        #     )
+        # )
+        # print()
+
+        print()
+        print()
+        print("/////////TEST JD DUPLICATES///////////")
+        test = trajectory_df.groupby(['trajectory_id']).agg(jd=('jd',list)).reset_index()
+        diff_jd = test.apply(lambda x: np.any(np.diff(x["jd"]) == 0), axis=1)
+        keep_traj = test[diff_jd]["trajectory_id"]
+        tttt = trajectory_df[trajectory_df["trajectory_id"].isin(keep_traj)]
+        print(tttt[["ra", "dec", "objectId", "jd", "nid", "ssnamenr", "trajectory_id"]])
+        print()
+        print("/////////FIN TEST JD DUPLICATES///////////")
+
         print()
         print("---End Night---")
+        print()
+        print()
+        print()
         print()
 
         last_nid = next_nid
 
+    
+    trajectory_df = trajectory_df.infer_objects()
+    trajectory_df["ssnamenr"] = trajectory_df["ssnamenr"].astype(str)
+    trajectory_df["fink_class"] = trajectory_df["fink_class"].astype(str)
+    trajectory_df["objectId"] = trajectory_df["objectId"].astype(str)
+    trajectory_df["provisional designation"] = trajectory_df[
+        "provisional designation"
+    ].astype(str)
+
+    trajectory_df.to_parquet("trajectory_df.parquet")
+
     sys.exit(doctest.testmod()[0])
-
-    # >>> trajectory_df, old_observation, inter_night_report = night_to_night_association(
-    # ... ts.night_night_trajectory_sample,
-    # ... ts.night_to_night_old_obs,
-    # ... ts.night_to_night_new_obs,
-    # ... 4,
-    # ... intra_night_sep_criterion=1.5 * u.degree,
-    # ... intra_night_mag_criterion_same_fid=0.2,
-    # ... intra_night_mag_criterion_diff_fid=0.5,
-    # ... sep_criterion = 1.5 * u.degree,
-    # ... mag_criterion_same_fid = 0.2,
-    # ... mag_criterion_diff_fid = 0.5,
-    # ... angle_criterion = 30,
-    # ... run_metrics = True
-    # ... )
-
-    # >>> TestCase().assertDictEqual(ts.inter_night_report1, inter_night_report)
-
-    # >>> assert_frame_equal(trajectory_df.reset_index(drop=True), ts.night_to_night_trajectory_df_expected, check_dtype=False)
-
-    # >>> assert_frame_equal(old_observation.reset_index(drop=True), ts.night_to_night_old_observation_expected)
-
-    # >>> trajectory_df, old_observation, inter_night_report = night_to_night_association(
-    # ... pd.DataFrame(),
-    # ... ts.night_to_night_old_obs,
-    # ... ts.night_to_night_new_obs,
-    # ... 4,
-    # ... intra_night_sep_criterion=1.5 * u.degree,
-    # ... intra_night_mag_criterion_same_fid=0.2,
-    # ... intra_night_mag_criterion_diff_fid=0.5,
-    # ... sep_criterion = 1.5 * u.degree,
-    # ... mag_criterion_same_fid = 0.2,
-    # ... mag_criterion_diff_fid = 0.5,
-    # ... angle_criterion = 30
-    # ... )
-
-    # >>> TestCase().assertDictEqual(ts.inter_night_report2, inter_night_report)
-
-    # >>> assert_frame_equal(trajectory_df.reset_index(drop=True), ts.night_to_night_trajectory_df_expected2, check_dtype=False)
-
-    # >>> assert_frame_equal(old_observation.reset_index(drop=True), ts.night_to_night_old_observation_expected2)
-
-    # >>> trajectory_df, old_observation, inter_night_report = night_to_night_association(
-    # ... ts.night_night_trajectory_sample,
-    # ... ts.night_to_night_old_obs,
-    # ... ts.night_to_night_new_obs2,
-    # ... 4,
-    # ... intra_night_sep_criterion=1.5 * u.degree,
-    # ... intra_night_mag_criterion_same_fid=0.2,
-    # ... intra_night_mag_criterion_diff_fid=0.5,
-    # ... sep_criterion = 1.5 * u.degree,
-    # ... mag_criterion_same_fid = 0.2,
-    # ... mag_criterion_diff_fid = 0.5,
-    # ... angle_criterion = 30
-    # ... )
-
-    # >>> TestCase().assertDictEqual(ts.inter_night_report3, inter_night_report)
-
-    # >>> assert_frame_equal(trajectory_df.reset_index(drop=True), ts.night_to_night_trajectory_df_expected3, check_dtype=False)
-
-    # >>> assert_frame_equal(old_observation.reset_index(drop=True), ts.night_to_night_old_observation_expected3)
