@@ -85,7 +85,7 @@ def generate_ephemeris(trajectory_df):
             "-output": "--jd",
             "-from": "MiriadeDoc",
         }
-        
+
         files = {
             "target": open(path, "rb").read(),
             "epochs": ("epochs", "\n".join(["%.6f" % epoch for epoch in jd])),
@@ -95,7 +95,7 @@ def generate_ephemeris(trajectory_df):
 
         j = r.json()
         ephem = pd.DataFrame.from_dict(j["data"])
-        
+
         coord = SkyCoord(ephem["RA"], ephem["DEC"], unit=(u.deg, u.deg))
 
         ephem["cRA"] = coord.ra.value * 15
@@ -181,18 +181,25 @@ if __name__ == "__main__":
 
     ephemeris["trajectory_id"] = ephemeris["trajectory_id"].astype(int)
 
-    ephem_and_obs = ephemeris.merge(mpc_orb, left_on=("trajectory_id", "Date"), right_on=("trajectory_id", "jd"))
+    ephem_and_obs = ephemeris.merge(
+        mpc_orb, left_on=("trajectory_id", "Date"), right_on=("trajectory_id", "jd")
+    )
 
-    deltaRAcosDEC = ((ephem_and_obs["ra"] - ephem_and_obs["cRA"]) * np.cos(
-        np.radians(ephem_and_obs["dec"])
-    )) * 3600
+    deltaRAcosDEC = (
+        (ephem_and_obs["ra"] - ephem_and_obs["cRA"])
+        * np.cos(np.radians(ephem_and_obs["dec"]))
+    ) * 3600
     deltaDEC = (ephem_and_obs["dec"] - ephem_and_obs["cDec"]) * 3600
 
     colors = ["#15284F", "#F5622E"]
 
     fig, ax = plt.subplots(figsize=(10, 10), sharex=True,)
 
-    fig.suptitle("Trajectories / ephemeris : {} trajectories of {} points".format(n_trajectories, n_points))
+    fig.suptitle(
+        "Trajectories / ephemeris : {} trajectories of {} points".format(
+            n_trajectories, n_points
+        )
+    )
 
     ax.scatter(
         ephem_and_obs["ra"],

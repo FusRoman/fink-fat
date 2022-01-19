@@ -318,6 +318,7 @@ def magnitude_association(
     >>> assert_frame_equal(l, l_expected)
     >>> assert_frame_equal(r, r_expected)
     """
+
     same_fid = left_assoc["fid"].values == right_assoc["fid"].values
     diff_fid = left_assoc["fid"].values != right_assoc["fid"].values
 
@@ -1290,7 +1291,20 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
     traj_df = pd.concat([left_assoc, right_assoc]).drop_duplicates(
         ["candid", "trajectory_id"]
     )
-    return traj_df
+
+    
+    if len(traj_df) > 0:
+        # remove the tracklets which contains two observations associated in the same observation field
+        # remove trajectories that contains duplicates jd
+        test = traj_df.groupby(['trajectory_id']).agg(jd=('jd',list)).reset_index()
+        diff_jd = test.apply(lambda x: np.any(np.diff(x["jd"]) == 0), axis=1)
+        keep_traj = test[~diff_jd]["trajectory_id"]
+
+        traj_df = traj_df[traj_df["trajectory_id"].isin(keep_traj)]
+
+        return traj_df
+    else:
+        return pd.DataFrame(columns=["trajectory_id", "candid", "jd"])
 
 
 if __name__ == "__main__":  # pragma: no cover

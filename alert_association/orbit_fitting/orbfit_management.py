@@ -253,7 +253,7 @@ def write_observation_file(ram_dir, obs_df):
         re.sub(r"(\d+)\.(\d+)", lambda matchobj: matchobj.group()[:5], s) for s in coord
     ]
 
-    t = Time(date, format="jd")
+    t = Time(date.astype(np.double), format="jd")
     date = t.iso
     prov_desig = make_designation(date[0], traj_id)
 
@@ -370,7 +370,7 @@ def read_oel(ram_dir, prov_desig):
                 rms = [-1, -1, -1, -1, -1, -1, -1, -1]
             return [ref_jd] + orb_params[1:] + rms[2:]
     except FileNotFoundError:
-        return list(np.ones(12, dtype=np.float64) * -1)
+        return list(np.ones(13, dtype=np.float64) * -1)
 
 
 def get_orbit_param(ram_dir, df):
