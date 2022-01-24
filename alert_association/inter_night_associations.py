@@ -86,7 +86,6 @@ def compute_orbit_elem(trajectory_df, q):
 
     _pid = os.getpid()
     current_ram_path = os.path.join(ram_dir, str(_pid), "")
-    os.mkdir(current_ram_path)
 
     if len(trajectory_df) == 0:
         print("no orbit computation")
@@ -101,6 +100,7 @@ def compute_orbit_elem(trajectory_df, q):
         q.put(trajectory_df)
         return 0
 
+    os.mkdir(current_ram_path)
     print(
         "nb traj to compute orb elem: {}".format(
             len(np.unique(traj_to_compute["trajectory_id"]))
@@ -127,9 +127,10 @@ def compute_orbit_elem(trajectory_df, q):
     traj_to_compute = traj_to_compute.drop(orbit_column, axis=1)
 
     orbit_elem = compute_df_orbit_param(
-        traj_to_compute, int(mp.cpu_count() / 3), current_ram_path
+        traj_to_compute, int(mp.cpu_count() / 2), current_ram_path
     )
 
+    print("fin orbfit")
     traj_to_compute = traj_to_compute.merge(orbit_elem, on="trajectory_id")
 
     os.rmdir(current_ram_path)
@@ -212,7 +213,7 @@ def tracklets_and_trajectories_steps(
         angle_criterion,
         max_traj_id,
         run_metrics,
-    )    
+    )
 
     # get the trajectories updated with new tracklets and the trajectory not updated for the next step
     traj_to_orb = traj_with_track[~traj_with_track["not_updated"]]
@@ -325,7 +326,9 @@ def tracklets_and_old_observations_steps(
     not_updated_tracklets = track_with_old_obs[track_with_old_obs["not_updated"]]
 
     # separate trajectories with more than 3 points for the orbit computation and the other trajectories
-    track_not_orb, track_to_orb = prep_orbit_computation(updated_tracklets, orbfit_limit)
+    track_not_orb, track_to_orb = prep_orbit_computation(
+        updated_tracklets, orbfit_limit
+    )
 
     tracklets_with_new_obs_orbfit_process = mp.Process(
         target=compute_orbit_elem, args=(track_to_orb, return_trajectories_queue,)
@@ -358,7 +361,8 @@ def night_to_night_association(
     mag_criterion_same_fid=0.18,
     mag_criterion_diff_fid=0.7,
     angle_criterion=8.8,
-    orbfit_limit = 3,
+    acceleration_criteria=0.01,
+    orbfit_limit=3,
     run_metrics=False,
 ):
     """
@@ -422,9 +426,76 @@ def night_to_night_association(
     else:
         last_trajectory_id = 0
 
+    if len(trajectory_df) > 0:
+        gb_traj = (
+            trajectory_df.groupby(["trajectory_id"])
+            .agg(
+                ra=("ra", list),
+                dec=("dec", list),
+                dcmag=("dcmag", list),
+                candid=("candid", list),
+                objectId=("objectId", list),
+                ssnamenr=("ssnamenr", list),
+                fid=("fid", list),
+                nid=("nid", list),
+                jd=("jd", list),
+                trajectory_size=("candid", lambda x: len(list(x))),
+            )
+            .reset_index()
+        )
+
+        from collections import Counter
+
+        print("size trajectory df: {}".format(Counter(gb_traj["trajectory_size"])))
+
     (old_traj, most_recent_traj), old_observation = time_window_management(
-        trajectory_df, old_observation, last_nid, next_nid, traj_time_window, obs_time_window, orbfit_limit
+        trajectory_df,
+        old_observation,
+        last_nid,
+        next_nid,
+        traj_time_window,
+        obs_time_window,
+        orbfit_limit,
     )
+
+    if len(trajectory_df) > 0:
+        gb_traj = (
+            most_recent_traj.groupby(["trajectory_id"])
+            .agg(
+                ra=("ra", list),
+                dec=("dec", list),
+                dcmag=("dcmag", list),
+                candid=("candid", list),
+                objectId=("objectId", list),
+                ssnamenr=("ssnamenr", list),
+                fid=("fid", list),
+                nid=("nid", list),
+                jd=("jd", list),
+                trajectory_size=("candid", lambda x: len(list(x))),
+            )
+            .reset_index()
+        )
+
+        print("size most recent traj: {}".format(Counter(gb_traj["trajectory_size"])))
+
+        gb_traj = (
+            old_traj.groupby(["trajectory_id"])
+            .agg(
+                ra=("ra", list),
+                dec=("dec", list),
+                dcmag=("dcmag", list),
+                candid=("candid", list),
+                objectId=("objectId", list),
+                ssnamenr=("ssnamenr", list),
+                fid=("fid", list),
+                nid=("nid", list),
+                jd=("jd", list),
+                trajectory_size=("candid", lambda x: len(list(x))),
+            )
+            .reset_index()
+        )
+
+        print("size old traj: {}".format(Counter(gb_traj["trajectory_size"])))
 
     inter_night_report = dict()
     inter_night_report["nid of the next night"] = int(next_nid)
@@ -544,6 +615,8 @@ def night_to_night_association(
         run_metrics,
     )
 
+    print("fin assoc")
+
     tmp_traj_orb_elem = []
     for _ in range(3):
         tmp_traj_orb_elem.append(return_trajectories_queue.get())
@@ -555,7 +628,10 @@ def night_to_night_association(
     track_with_old_obs_orbfit_process.terminate()
 
     print("----------------")
-    acceleration_filter(not_associates_traj, 0.3)
+    not_associates_traj = acceleration_filter(
+        not_associates_traj, acceleration_criteria
+    )
+    print(not_associates_traj)
     print("----------------")
 
     # concatenate all the trajectories with computed orbital elements with the other trajectories/tracklets.
@@ -587,67 +663,80 @@ def acceleration_filter(trajectory_df, acc_criteria):
     # warnings.filterwarnings("error")
 
     if len(trajectory_df) > 0:
+
         def acceleration_df(x):
-                ra, dec, jd = x["ra"], x["dec"], x["jd"]
+            ra, dec, jd = x["ra"], x["dec"], x["jd"]
+            c1 = SkyCoord(ra, dec, unit=u.degree)
+            diff_jd = np.diff(jd)
 
-                c1 = SkyCoord(ra, dec, unit = u.degree)
+            sep = c1[0:-1].separation(c1[1:]).degree
 
-                diff_jd = np.diff(jd)
+            velocity = sep / diff_jd
+            velocity = velocity[~np.isnan(velocity)]
 
-                sep = c1[0:-1].separation(c1[1:]).degree
-                
-                try:
-                    velocity = sep / diff_jd
+            acc = np.diff(velocity) / np.diff(diff_jd)
 
-                    velocity = velocity[~np.isnan(velocity)]
-
-                    return np.mean(np.abs(np.diff(velocity)))
-                except RuntimeWarning:
-                    print()
-                    print(x["objectId"])
-                    print()
-                    print(x["candid"])
-                    print()
-                    print(x["ssnamenr"])
-                    print()
-                    print(x["nid"])
-                    print()
-                    print(jd)
-
+            return np.mean(np.abs(acc))
 
         print(
-            "*** nb trajectories: {}".format(len(np.unique(trajectory_df["trajectory_id"])))
+            "*** nb trajectories: {}".format(
+                len(np.unique(trajectory_df["trajectory_id"]))
+            )
         )
         t_before = t.time()
-        tt = trajectory_df.groupby(['trajectory_id'])\
+        gb_traj = (
+            trajectory_df.groupby(["trajectory_id"])
             .agg(
-                ra=('ra',list), 
-                dec=('dec',list), 
-                dcmag=('dcmag',list), 
-                candid=('candid', list),
-                objectId=('objectId', list),
-                ssnamenr=('ssnamenr', list),
-                fid=('fid',list),
-                nid=('nid',list),
-                jd=('jd',list),
-                trajectory_size=('candid',lambda x: len(list(x)))
-                )
+                ra=("ra", list),
+                dec=("dec", list),
+                dcmag=("dcmag", list),
+                candid=("candid", list),
+                objectId=("objectId", list),
+                ssnamenr=("ssnamenr", list),
+                fid=("fid", list),
+                nid=("nid", list),
+                jd=("jd", list),
+                trajectory_size=("candid", lambda x: len(list(x))),
+            )
+            .reset_index()
+        )
 
-        tt = tt[tt["trajectory_size"] >= 3]
+        from collections import Counter
 
-        if len(tt) > 0:
-            tt["acc"] = tt.apply(acceleration_df, axis=1)
+        print("size trajectory: {}".format(Counter(gb_traj["trajectory_size"])))
+
+        large_traj = gb_traj[gb_traj["trajectory_size"] >= 3]
+
+        remain_traj = gb_traj[gb_traj["trajectory_size"] < 3]
+        remain_traj = trajectory_df[
+            trajectory_df["trajectory_id"].isin(remain_traj["trajectory_id"])
+        ]
+
+        if len(large_traj) > 0:
+            with pd.option_context("mode.chained_assignment", None):
+                large_traj["acc"] = large_traj.apply(acceleration_df, axis=1)
 
             print(t.time() - t_before)
             print()
-            print("before acc filter: {}".format(len(tt)))
-            print("after acc filter: {}".format(len(tt[tt["acc"] <= acc_criteria])))
+            print("before acc filter: {}".format(len(large_traj)))
+            print(
+                "after acc filter: {}".format(
+                    len(large_traj[large_traj["acc"] <= acc_criteria])
+                )
+            )
             print()
+            cst_acc = large_traj[large_traj["acc"] <= acc_criteria]["trajectory_id"]
+            return pd.concat(
+                [
+                    remain_traj,
+                    trajectory_df[trajectory_df["trajectory_id"].isin(cst_acc)],
+                ]
+            )
         else:
-            print("0 trajectories")
-    
+            return trajectory_df
+
     else:
-        print("0 trajectories")
+        return trajectory_df
 
 
 if __name__ == "__main__":  # pragma: no cover
@@ -670,6 +759,7 @@ if __name__ == "__main__":  # pragma: no cover
         print("}")
 
     # sys.exit(doctest.testmod()[0])
+
     from alert_association.continuous_integration import load_data
 
     df_sso = load_data("Solar System MPC", 0)
@@ -730,12 +820,13 @@ if __name__ == "__main__":  # pragma: no cover
             last_nid,
             next_nid,
             traj_time_window=7,
-            obs_time_window=3,
+            obs_time_window=4,
             sep_criterion=24 * u.arcminute,
-            mag_criterion_same_fid=0.2,
-            mag_criterion_diff_fid=0.5,
+            acceleration_criteria=0.5,
+            mag_criterion_same_fid=0.3,
+            mag_criterion_diff_fid=0.7,
             orbfit_limit=5,
-            angle_criterion=2,
+            angle_criterion=1.5,
         )
 
         elapsed_time = t.time() - t_before
@@ -753,19 +844,29 @@ if __name__ == "__main__":  # pragma: no cover
         print()
         print()
 
-        # print()
-        # orb_elem = trajectory_df[trajectory_df["a"] != -1.0]
-        # print(
-        #     "number of trajectories with orbital elements: {}".format(
-        #         len(np.unique(orb_elem["trajectory_id"]))
-        #     )
-        # )
-        # print()
+        print()
+        orb_elem = trajectory_df[trajectory_df["a"] != -1.0]
+        print(
+            "number of trajectories with orbital elements: {}".format(
+                len(np.unique(orb_elem["trajectory_id"]))
+            )
+        )
+        print()
+        print("TIMEOUT observation")
+        print(
+            trajectory_df[
+                trajectory_df["provisional designation"] == "K21Ea1O"
+            ].to_dict(orient="list")
+        )
+        print()
+        print()
 
         print()
         print()
         print("/////////TEST JD DUPLICATES///////////")
-        test = trajectory_df.groupby(['trajectory_id']).agg(jd=('jd',list)).reset_index()
+        test = (
+            trajectory_df.groupby(["trajectory_id"]).agg(jd=("jd", list)).reset_index()
+        )
         diff_jd = test.apply(lambda x: np.any(np.diff(x["jd"]) == 0), axis=1)
         keep_traj = test[diff_jd]["trajectory_id"]
         tttt = trajectory_df[trajectory_df["trajectory_id"].isin(keep_traj)]
@@ -782,7 +883,6 @@ if __name__ == "__main__":  # pragma: no cover
 
         last_nid = next_nid
 
-    
     trajectory_df = trajectory_df.infer_objects()
     trajectory_df["ssnamenr"] = trajectory_df["ssnamenr"].astype(str)
     trajectory_df["fink_class"] = trajectory_df["fink_class"].astype(str)
