@@ -1,4 +1,5 @@
 from glob import glob
+import signal
 import numpy as np
 import pandas as pd
 from astropy.time import Time
@@ -26,24 +27,114 @@ def time_to_decimal(time):
     -------
     decimal_time : string
         the decimal part of a date.
+
+    Examples
+    --------
+    >>> time = [20, 17, 40.088]
+    >>> time_to_decimal(time)
+    '73040'
     """
     return str(int(time[0]) * 3600 + int(time[1]) * 60 + int(time[0]))
 
 
 def split_string(string, char_split="-"):
+    """
+    Split char based on char_split
+
+    Parameters
+    ----------
+    string : string
+        string to be split
+    char_split : string
+        characters used for the spliting
+
+    Returns 
+    -------
+    string splited : list
+        a list with all splited members
+
+    Examples
+    --------
+    >>> test = "a-b-c-d"
+    >>> split_string(test)
+    ['a', 'b', 'c', 'd']
+    """
     return string.split(char_split)
 
 
 def join_string(list_string, join_string):
+    """
+    Join string based on join_string
+
+    Parameters
+    ----------
+    list_string : string list
+        list of string to be join
+    join_string : string
+        characters used for the joining
+
+    Returns 
+    -------
+    string joined : string
+        a string where all elements of the list string have been join with join_string between them
+
+    Examples
+    --------
+    >>> test = ["a", "b", "c", "d"]
+    >>> join_string(test, "/")
+    'a/b/c/d'
+    """
     return join_string.join(list_string)
 
 
 def concat_date(list_date):
+    """
+    Concatenation of a date to be conform to mpc format
+
+    Paramters
+    ---------
+    list_date : string list
+        all elements from a date
+
+    Returns
+    -------
+    string mpc format : string
+        a date string in mpc format
+
+    Examples
+    --------
+    >>> ld = ["20", "07", "1969", ".", "73040"]
+    >>> concat_date(ld)
+    '20 07 1969.73040'
+    """
     first_list = join_string(list_date[:-2], " ")
     return join_string([first_list] + list_date[-2:], "")
 
 
 def band_to_str(band):
+    """
+    Small filter band conversion
+
+    Parameters
+    ----------
+    band : integer
+        the integer designation of the ZTF band filter
+
+    Returns
+    -------
+    band string : string
+        the band designation r or g
+
+    Examples
+    --------
+    >>> band_to_str(1)
+    'g'
+
+    >>> band_to_str(2)
+    'r'
+
+    >>> band_to_str(0)
+    """
     if band == 1:
         return "g"
     elif band == 2:
@@ -66,8 +157,23 @@ half_month_letter = {
 }
 
 
-def second_letter(i, lowercase=True):
+def second_letter(i, uppercase=True):
     """
+    Create the second letter of the mpc provisional designation.
+    Return all alphabet letter based on i but only skip the i.
+
+    Paramters
+    ---------
+    i : integer
+        letter rank in the alphabet
+    uppercase : boolean
+        if set to true, return the letter in uppercase
+
+    Returns
+    -------
+    letter : string
+        the ith alphabet letter
+
     Examples
     --------
     >>> second_letter(1)
@@ -82,8 +188,12 @@ def second_letter(i, lowercase=True):
     'J'
     >>> second_letter(9, False)
     'j'
+    >>> second_letter(8)
+    'H'
+    >>> second_letter(10)
+    'K'
     """
-    if lowercase:
+    if uppercase:
         case = 64
     else:
         case = 96
@@ -96,6 +206,20 @@ def second_letter(i, lowercase=True):
 
 def left_shift(number, n):
     """
+    Left shift on 10 base number. 
+
+    Parameters
+    ----------
+    number : integer
+        the number to be shift
+    n : integer
+        the number of digit to shift
+
+    Returns
+    -------
+    shifted number : integer
+        the number left shifted by n digit
+
     Examples
     --------
     >>> left_shift(152, 1)
@@ -108,6 +232,20 @@ def left_shift(number, n):
 
 def right_shift(number, n):
     """
+    Right shift on 10 base number. 
+
+    Parameters
+    ----------
+    number : integer
+        the number to be shift
+    n : integer
+        the number of digit to shift
+
+    Returns
+    -------
+    shifted number : integer
+        the number right shifted by n digit
+        
     Examples
     --------
     >>> right_shift(123, 1)
@@ -122,6 +260,18 @@ def right_shift(number, n):
 
 def letter_cycle(cycle):
     """
+    Return the cycle letter of the provisional designation from the MPC format
+
+    Parameters
+    ----------
+    cycle : integer
+        the number of time that the second letter have cycle throught the alphabet
+
+    Returns
+    -------
+    second letter : string
+        the second letter corresponding to the cycle
+
     Examples
     --------
     >>> letter_cycle(10)
@@ -143,7 +293,7 @@ def letter_cycle(cycle):
         if cycle == 0:
             cycle = 25
 
-        return second_letter(cycle, lowercase=False)
+        return second_letter(cycle, uppercase=False)
     else:
         if cycle == 0:
             cycle = 1
@@ -154,6 +304,18 @@ def letter_cycle(cycle):
 
 def make_cycle(cycle):
     """
+    Return the last two symbol of the provisional designation corresponding to the cycle.
+
+    Parameters
+    ----------
+    cycle : integer
+        the number of time that the second letter have cycle throught the alphabet
+
+    Returns
+    -------
+    the cycle : string
+        the last two symbol of the provisional designation
+
     Examples
     --------
     >>> make_cycle(0)
@@ -195,6 +357,20 @@ def make_cycle(cycle):
 
 def make_designation(time, discovery_number):
     """
+    Return the provisional designation from mpc standard
+
+    Parameters
+    ----------
+    time : string
+        the reference trajectory time
+    discovery_number : integer
+        the trajectory identifier
+
+    Returns
+    -------
+    provisional designation : string
+        the provisional designation to assign to this trajectory
+
     Examples
     --------
     >>> make_designation("2021-05-22 07:33:02.111", 0)
@@ -231,11 +407,68 @@ def make_designation(time, discovery_number):
 
 
 def make_date(date):
+    """
+    Convert date from hmsdms to mpc format
+
+    Parameters
+    ---------
+    date : string
+        hmsdms date format
+
+    Returns
+    -------
+    mpc date : string
+        mpc date format
+
+    Examples
+    --------
+    >>> date = "20-07-1969 20:17:40.088"
+    >>> make_date(date)
+    '20 07 1969.73040'
+    """
     d = date.split(" ")
     return concat_date(d[0].split("-") + ["."] + [time_to_decimal(d[1].split(":"))])
 
 
 def write_observation_file(ram_dir, obs_df):
+    """
+    Write an observation file to mpc standard from an observation dataframe
+
+    Parameters
+    ----------
+    ram_dir : string
+        the path where to write the file
+
+    obs_df : dataframe
+        the observation dataframe
+        have to contains the following columns :
+            ra, dec, dcmag, fid, jd, trajectory_id
+
+    Returns
+    -------
+    prov_desig : string
+        the provisional designation assign to the trajectory
+
+    Examples
+    --------
+    >>> os.mkdir("mpcobs")
+    >>> test_obs = pd.DataFrame({
+    ... "ra" : [0, 1],
+    ... "dec": [0, 1],
+    ... "dcmag" : [17.4, 17.6],
+    ... "fid": [1, 2],
+    ... "jd" : [2440423.34352, 2440423.34387],
+    ... "trajectory_id" : [0, 0]
+    ... })
+
+    >>> write_observation_file("", test_obs)
+    'K69O00A'
+
+    >>> filecmp.cmp("mpcobs/K69O00A.obs", "test/K69O00A_test.obs")
+    True
+
+    >>> shutil.rmtree("mpcobs/")
+    """
     obs_df = obs_df.sort_values(["trajectory_id", "jd"])
     ra = obs_df["ra"]
     dec = obs_df["dec"]
@@ -280,12 +513,57 @@ def write_observation_file(ram_dir, obs_df):
 
 
 def write_inp(ram_dir, provisional_designation):
+    """
+    Write the input file of orbit
+
+    Parameters 
+    ----------
+    ram_dir : string
+        path where to write the file
+
+    provisional_designation : string
+        the provisional designation of the trajectory
+
+    Returns
+    -------
+    
+    Examples
+    --------
+    >>> write_inp("", 'K69O00A')
+
+    >>> with open("K69O00A.inp", "r") as file:
+    ...     file.read()
+    'K69O00A'
+
+    >>> os.remove("K69O00A.inp")
+    """
     with open(ram_dir + provisional_designation + ".inp", "wt") as file:
         file.write(ram_dir + provisional_designation)
 
 
 def write_oop(ram_dir, provisional_designation):
+    """
+    Write the option configuration file for the OrbFit computation
 
+    Parameters
+    ----------
+    ram_dir : string
+        path where to write the file
+    provisional_designation : string
+        the provisional designation of the trajectory
+
+    Returns 
+    -------
+
+    Examples
+    --------
+    >>> write_oop("", "K69O00A")
+
+    >>> filecmp.cmp("K69O00A.oop", "test/K69O00A_test.oop")
+    True
+
+    >>> os.remove("K69O00A.oop")
+    """
     oop_template = os.path.join("alert_association", "orbit_fitting", "template.oop")
 
     copyfile(oop_template, ram_dir + provisional_designation + ".oop")
@@ -299,6 +577,37 @@ def write_oop(ram_dir, provisional_designation):
 
 
 def prep_orbitfit(ram_dir):
+    """
+    Preparation for OrbFit computation
+
+    Copy the AST17 ephemeris files needed for the orbfit computation to the correct location.
+    Set them permission to be read by OrbFit. 
+
+    Parameters
+    ----------
+    ram_dir : string 
+        path where to write file
+
+    Returns
+    -------
+
+    Examples
+    --------
+
+    >>> prep_orbitfit("")
+
+    >>> st = os.stat("AST17.bai")
+    >>> stat.filemode(st.st_mode)
+    '-rwxrwxrwx'
+
+    >>> st = os.stat("AST17.bep")
+    >>> stat.filemode(st.st_mode)
+    '-rwxrwxrwx'
+
+    >>> shutil.rmtree("mpcobs")
+    >>> os.remove("AST17.bai")
+    >>> os.remove("AST17.bep")
+    """
 
     orbfit_path = os.path.join("alert_association", "orbit_fitting")
     dir_path = ram_dir + "mpcobs/"
@@ -306,18 +615,42 @@ def prep_orbitfit(ram_dir):
     if not os.path.isdir(dir_path):
         os.mkdir(dir_path)
 
-    subprocess.call(
-        ["cp", os.path.join(orbfit_path, "AST17.bai_431_fcct"), ram_dir + "AST17.bai"]
-    )
-    subprocess.call(["chmod", "777", ram_dir + "AST17.bai"])
-    subprocess.call(
-        ["cp", os.path.join(orbfit_path, "AST17.bep_431_fcct"), ram_dir + "AST17.bep"]
-    )
-    subprocess.call(["chmod", "777", ram_dir + "AST17.bep"])
+    copyfile(os.path.join(orbfit_path, "AST17.bai_431_fcct"), ram_dir + "AST17.bai")
+    os.chmod(ram_dir + "AST17.bai", 0o777)
+
+    copyfile(os.path.join(orbfit_path, "AST17.bep_431_fcct"), ram_dir + "AST17.bep")
+    os.chmod(ram_dir + "AST17.bep", 0o777)
 
 
 def call_orbitfit(ram_dir, provisional_designation):
+    """
+    Call the OrbFit software in a subprocess. Kill it after 2 second if OrbFit are blocked.
 
+    Parameters
+    ----------
+    ram_dir : string
+        path where to write the file
+    provisional_designation : string
+        the provisional designation of the trajectory
+
+    Returns
+    -------
+    output : integer
+        return status of the orbfit process
+
+    Examples
+    --------
+
+    >>> call_orbitfit("test/call_orbfit/", "K21E00A")
+
+    >>> os.path.exists("test/call_orbfit/K21E00A.oel")
+    True
+
+    >>> os.remove("test/call_orbfit/K21E00A.odc")
+    >>> os.remove("test/call_orbfit/K21E00A.olg")
+    >>> os.remove("test/call_orbfit/K21E00A.pro")
+    >>> os.remove("test/call_orbfit/mpcobs/K21E00A.rwo")
+    """
     orbitfit_path = os.path.join(
         "alert_association", "orbit_fitting", "OrbitFit", "bin/"
     )
@@ -331,30 +664,127 @@ def call_orbitfit(ram_dir, provisional_designation):
         + ".inp "
         + ">/dev/null 2>&1"
     )
-    subprocess.call([command], shell=True)
+
+    with subprocess.Popen(
+        command, shell=True, stdout=subprocess.DEVNULL, preexec_fn=os.setsid
+    ) as process:
+        try:
+            output = process.communicate(timeout=2)[0]
+            return output
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGINT)  # send signal to the process group
+            output = process.communicate()[0]
+            return output
+
+
+def rm_files(files):
+    for path_f in files:
+        os.remove(path_f)
 
 
 def obs_clean(ram_dir, prov_desig):
-    input = glob(ram_dir + prov_desig + ".*")
-    obs = glob(ram_dir + "mpcobs/" + prov_desig + ".*")
-    subprocess.call(["rm"] + input + obs)
+    """
+    Remove all the temporary file named as prov_desig created during the OrbFit process.
 
+    Parameters
+    ----------
+    ram_dir : string
+        Path where files are located
+    prov_desig : string
+        the provisional designation of the trajectory that triggered the OrbFit process.
 
-def seq_obs_clean(ram_dir, prov_desig):
-    command1 = "rm " + ram_dir + prov_desig + ".*"
-    command2 = "rm " + ram_dir + "mpcobs/" + prov_desig + ".*"
-    subprocess.call([command1], shell=True)
-    subprocess.call([command2], shell=True)
+    Returns
+    -------
+    None
+
+    Examples
+    --------
+
+    >>> prov_desig = "A000001"
+    >>> open(prov_desig + ".oel", 'a').close()
+    >>> open(prov_desig + ".err", 'a').close()
+
+    >>> os.makedirs("mpcobs")
+    >>> open("mpcobs/" + prov_desig + ".obs", 'a').close()
+    >>> open("mpcobs/" + prov_desig + ".rwo", 'a').close()
+
+    >>> obs_clean("", prov_desig)
+
+    >>> os.rmdir("mpcobs")
+    """
+
+    rm_files(glob(ram_dir + prov_desig + ".*"))
+    rm_files(glob(ram_dir + "mpcobs/" + prov_desig + ".*"))
 
 
 def final_clean(ram_dir):
-    bai = glob(ram_dir + "*.bai")
-    bep = glob(ram_dir + "*.bep")
-    log = glob(ram_dir + "*.log")
-    subprocess.call(["rm", "-rf"] + bai + bep + log + [ram_dir + "mpcobs"])
+    """
+    Remove the residuals files used by OrbFit
+
+    Parameters
+    ----------
+    ram_dir : string
+        Path where files are located
+
+    Returns
+    -------
+    None
+
+    Examples
+    --------
+    >>> prep_orbitfit("")
+
+    >>> os.path.exists("AST17.bai")
+    True
+    >>> os.path.exists("AST17.bep")
+    True
+    >>> os.path.exists("mpcobs")
+    True
+
+    >>> final_clean("")
+
+    >>> os.path.exists("AST17.bai")
+    False
+    >>> os.path.exists("AST17.bep")
+    False
+    >>> os.path.exists("mpcobs")
+    False
+    """
+    rm_files(glob(ram_dir + "*.bai"))
+    rm_files(glob(ram_dir + "*.bep"))
+    rm_files(glob(ram_dir + "*.log"))
+
+    os.rmdir(ram_dir + "mpcobs")
 
 
 def read_oel(ram_dir, prov_desig):
+    """
+    Read the .oel file return by orbfit. This file contains the orbital elements, the reference epoch of the orbit computation and
+    the rms of the orbital elements
+
+    Parameters
+    ----------
+    ram_dir : string
+        Path where files are located
+    prov_desig : string
+        the provisional designation of the trajectory that triggered the OrbFit process.
+
+    Returns
+    -------
+    orb_elem : integer list
+        A list with the reference epoch first then the orbital elements and finally the rms.
+
+    Examples
+    --------
+    >>> read_oel("test/call_orbfit/", "K21E00A")
+    [2459274.810893373, '1.5834346988159376E+00', '0.613572037782866', '5.9442185803697', '343.7959802838470', '270.1932521117385', '333.9568546371023', -1, -1, -1, -1, -1, -1]
+
+    >>> read_oel("", "")
+    [-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]
+
+    >>> read_oel("test/call_orbfit/", "K21H00A")
+    [2459345.797868819, '3.1514694062448680E+00', '0.113946062348132', '1.6879159876457', '38.1016474068882', '136.1915246941109', '46.5628893357021', '7.94527E-03', '1.83696E-02', '4.77846E-02', '3.17863E-01', '1.34503E+01', '9.82298E+00']
+    """
     try:
         with open(ram_dir + prov_desig + ".oel") as file:
             lines = file.readlines()
@@ -374,34 +804,73 @@ def read_oel(ram_dir, prov_desig):
 
 
 def get_orbit_param(ram_dir, df):
+    """
+    Compute the orbital elements of one trajectory.
+
+    Parameters
+    ----------
+    ram_dir : string
+        Path where files are located
+    df : dataframe
+        All the observation of the trajectory. An observation file will be write in the MPC format based on the observations contains in this dataframe.
+    
+    Returns
+    -------
+    results : list
+        The list contains in this order : the trajectory identifier, the provisional designation, the reference epoch, the 6 orbital elements and finally
+        the rms of the orbital elements.
+
+    Examples
+    --------
+    >>> df = pd.DataFrame({
+    ... 'ra': [169.8604675, 169.8568848, 169.8336664, 169.8297121, 169.8296555], 
+    ... 'dec': [15.2063604, 15.2103091, 15.2360481, 15.2403893, 15.24049], 
+    ... 'dcmag': [16.438142098160576, 16.47854604642893, 15.767506616421468, 15.781593431530103, 15.764373749886605], 
+    ... 'fid': [1, 1, 2, 2, 2], 
+    ... 'jd': [2459274.7206481, 2459274.7391435, 2459274.8594444, 2459274.8799074, 2459274.8803819], 
+    ... 'trajectory_id': [0, 0, 0, 0, 0]
+    ... })
+
+    >>> prep_orbitfit("")
+    >>> get_orbit_param("", df)
+    [0, 'K21E00A', 2459274.810893373, '1.5834346988159376E+00', '0.613572037782866', '5.9442185803697', '343.7959802838470', '270.1932521117385', '333.9568546371023', -1, -1, -1, -1, -1, -1]
+    >>> final_clean("")
+    """
     traj_id = df["trajectory_id"].values[0]
     prov_desig = write_observation_file(ram_dir, df)
     write_inp(ram_dir, prov_desig)
     write_oop(ram_dir, prov_desig)
+
     call_orbitfit(ram_dir, prov_desig)
+
     results = [traj_id, prov_desig] + read_oel(ram_dir, prov_desig)
     obs_clean(ram_dir, prov_desig)
     return results
 
 
-def compute_df_orbit_param(trajectory_df, cpu_count, ram_dir):
-    all_traj_id = np.unique(trajectory_df["trajectory_id"])
-
-    prep_orbitfit(ram_dir)
-    all_track = [
-        (ram_dir, trajectory_df[trajectory_df["trajectory_id"] == traj_id])
-        for traj_id in all_traj_id
-    ]
-
-    pool = mp.Pool(cpu_count)
-    results = pool.starmap(get_orbit_param, all_track)
-    pool.close()
-    final_clean(ram_dir)
-
-    return orbit_elem_dataframe(np.array(results))
-
-
 def orbit_elem_dataframe(orbit_elem):
+    """
+    Convert the list return by get_orbit_param into a dataframe.
+
+    Parameters
+    ----------
+    orbit_elem : list
+        The return of get_orbit_param
+
+    Returns
+    -------
+    df_orb_elem : dataframe
+        the input list convert into a dataframe
+
+    Examples
+    --------
+    >>> orb_list = [[0, 'K21E00A', 2459274.810893373, '1.5834346988159376E+00', '0.613572037782866', '5.9442185803697', '343.7959802838470', '270.1932521117385', '333.9568546371023', -1, -1, -1, -1, -1, -1]]
+
+    >>> orb_df = orbit_elem_dataframe(orb_list)
+
+    >>> assert_frame_equal(orb_df, ts.orb_elem_output)
+    """
+
     column_name = [
         "trajectory_id",
         "provisional designation",
@@ -428,93 +897,165 @@ def orbit_elem_dataframe(orbit_elem):
     return df_orb_elem
 
 
-if __name__ == "__main__":
-    ram_dir = "/media/virtuelram/"
+def compute_df_orbit_param(trajectory_df, cpu_count, ram_dir):
+    """
+    Compute the orbital elements of a set of trajectories. Computation are done in parallel.
+    
+    Parameters
+    ----------
+    trajectory_df : dataframe
+        the set of trajectories, the following columns are required : "ra", "dec", "dcmag", "fid", "jd", "trajectory_id"
+    cpu_count : integer
+        the number of core for the parallel computation
+    ram_dir : string
+        Path where files are located
+    
+    Returns
+    -------
+    orbit_elem : dataframe
+        the orbital elements computed by OrbFit for each inputs trajectories.
 
-    print("Load sso data")
-    df_sso = utils.load_data("Solar System MPC", nb_indirection=0)
 
-    import doctest
-    import time as t
+    Examples
+    --------
 
-    doctest.testmod()[0]
+    >>> orb_elem = compute_df_orbit_param(ts.orbfit_samples, 8, "")
 
-    n_trajectories = 1
-    n_points = 3
-    n_cpu = 1  # int(mp.cpu_count() / 1.5)
+    >>> assert_frame_equal(orb_elem, ts.orbfit_output)
+    """
+    all_traj_id = np.unique(trajectory_df["trajectory_id"])
 
-    gb_ssn = df_sso.groupby(["ssnamenr"]).agg({"candid": len}).sort_values(["candid"])
-    all_track = gb_ssn[gb_ssn["candid"] == n_points].reset_index()["ssnamenr"].values
-    mpc = df_sso[df_sso["ssnamenr"].isin(all_track[:n_trajectories])][
-        ["ra", "dec", "dcmag", "fid", "jd", "ssnamenr"]
+    prep_orbitfit(ram_dir)
+    all_track = [
+        (ram_dir, trajectory_df[trajectory_df["trajectory_id"] == traj_id])
+        for traj_id in all_traj_id
     ]
-    all_ssnamenr = np.unique(mpc["ssnamenr"].values)
-    ssnamenr_translate = {
-        ssn: i for ssn, i in zip(all_ssnamenr, range(len(all_ssnamenr)))
-    }
-    mpc["trajectory_id"] = mpc.apply(
-        lambda x: ssnamenr_translate[x["ssnamenr"]], axis=1
-    )
-    mpc["ssnamenr"] = mpc["ssnamenr"].astype("string")
 
-    print("MPC DATABASE loading")
-    t_before = t.time()
-    mpc_database = utils.get_mpc_database()
+    pool = mp.Pool(cpu_count)
 
-    print("MPC DATABASE end loading, elapsed time: {}".format(t.time() - t_before))
-    print()
+    results = pool.starmap(get_orbit_param, all_track)
 
-    print(
-        "orbital element computation started, n_trajectories: {}, max available: {}".format(
-            min(n_trajectories, len(all_track)), len(all_track)
-        )
-    )
-    print("n_cpu: {}".format(n_cpu))
-    t_before = t.time()
-    orbit_results = compute_df_orbit_param(mpc, n_cpu, ram_dir)
+    pool.close()
+    final_clean(ram_dir)
 
-    multiprocess_time = t.time() - t_before
-    print("total multiprocessing orbfit time: {}".format(multiprocess_time))
+    return orbit_elem_dataframe(np.array(results))
 
-    print(orbit_results)
 
-    exit()
+if __name__ == "__main__":
+    import sys
+    import doctest
+    from pandas.testing import assert_frame_equal  # noqa: F401
+    import alert_association.test_sample as ts  # noqa: F401
+    from unittest import TestCase  # noqa: F401
+    import shutil  # noqa: F401
+    import filecmp  # noqa: F401
+    import stat  # noqa: F401
 
-    ztf_mpc_with_orbit_param = mpc.merge(orbit_results, on="trajectory_id")
-    print()
-    print("cross match with mpc database")
-    cross_match_mpc = ztf_mpc_with_orbit_param.merge(
-        mpc_database, how="inner", left_on="ssnamenr", right_on="Number"
-    )
+    if "unittest.util" in __import__("sys").modules:
+        # Show full diff in self.assertEqual.
+        __import__("sys").modules["unittest.util"]._MAX_LENGTH = 999999999
 
-    dict_color_orbit = po.color_dict(mpc_database)
-    po.plot_residue(
-        cross_match_mpc.drop_duplicates(["ssnamenr"]),
-        dict_color_orbit,
-        min(n_trajectories, len(all_track)),
-        n_points,
-    )
+    sys.exit(doctest.testmod()[0])
 
-    exit()
-    # Sequential orbitfit
-    t_before_tot = t.time()
-    all_traj_id = np.unique(mpc["trajectory_id"])
-    prep_orbitfit()
-    for traj_id in all_traj_id:
-        current_mpc = mpc[mpc["trajectory_id"] == traj_id]
-        t_before = t.time()
-        prov_desig = write_observation_file(current_mpc)
-        write_inp(prov_desig)
-        write_oop(prov_desig)
-        call_orbitfit(prov_desig)
-        mpc.loc[current_mpc.index, "prov_desig"] = prov_desig
-        orb_elem = read_oel(prov_desig)
-        seq_obs_clean(prov_desig)
-        # print("traj_id: {}, nb observation: {}, write time: {}".format(traj_id, len(current_mpc), t.time() - t_before))
-    final_clean()
-    sequential_time = t.time() - t_before_tot
-    print(
-        "total sequential orbfit time: {}\nratio: {} %".format(
-            sequential_time, (multiprocess_time / sequential_time) * 100
-        )
-    )
+    # ram_dir = "/media/virtuelram/"
+
+    # print("Load sso data")
+    # df_sso = utils.load_data("Solar System MPC", nb_indirection=0)
+
+    # mpc = df_sso[(df_sso["nid"] == 1520) & (df_sso["ssnamenr"] == "19743")]
+    # mpc["trajectory_id"] = 0
+
+    # print(mpc[["ra", "dec", "dcmag", "fid", "jd", "trajectory_id"]].to_dict(orient='list'))
+
+    # prep_orbitfit("test/call_orbfit/")
+
+    # prov_desig = write_observation_file("test/call_orbfit/", mpc)
+
+    # print(prov_desig)
+
+    # write_inp("test/call_orbfit/", prov_desig)
+    # write_oop("test/call_orbfit/", prov_desig)
+
+    # output = call_orbitfit("test/call_orbfit/", prov_desig)
+
+    # results = read_oel("test/call_orbfit/", prov_desig)
+
+    # print(output)
+
+    # print(results)
+
+    # import time as t
+
+    # n_trajectories = 1
+    # n_points = 5
+    # n_cpu = 8  # int(mp.cpu_count() / 1.5)
+
+    # gb_ssn = df_sso.groupby(["ssnamenr"]).agg({"candid": len}).sort_values(["candid"])
+    # all_track = gb_ssn[gb_ssn["candid"] == n_points].reset_index()["ssnamenr"].values
+    # mpc = df_sso[df_sso["ssnamenr"].isin(all_track[:n_trajectories])][
+    #     ["ra", "dec", "dcmag", "fid", "jd", "ssnamenr"]
+    # ]
+    # all_ssnamenr = np.unique(mpc["ssnamenr"].values)
+    # ssnamenr_translate = {
+    #     ssn: i for ssn, i in zip(all_ssnamenr, range(len(all_ssnamenr)))
+    # }
+    # mpc["trajectory_id"] = mpc.apply(
+    #     lambda x: ssnamenr_translate[x["ssnamenr"]], axis=1
+    # )
+    # mpc["ssnamenr"] = mpc["ssnamenr"].astype("string")
+
+    # print(
+    #     mpc[["ra", "dec", "dcmag", "fid", "jd", "trajectory_id"]].to_dict(orient="list")
+    # )
+
+    # prov_desig = write_observation_file("test/call_orbfit/", mpc)
+
+    # write_inp("test/call_orbfit/", prov_desig)
+    # write_oop("test/call_orbfit/", prov_desig)
+
+    # output = call_orbitfit("test/call_orbfit/", prov_desig)
+
+    # results = read_oel("test/call_orbfit/", prov_desig)
+
+    # print(output)
+
+    # print(results)
+
+    # exit()
+    # print("MPC DATABASE loading")
+    # t_before = t.time()
+    # mpc_database = utils.get_mpc_database()
+
+    # print("MPC DATABASE end loading, elapsed time: {}".format(t.time() - t_before))
+    # print()
+
+    # print(
+    #     "orbital element computation started, n_trajectories: {}, max available: {}".format(
+    #         min(n_trajectories, len(all_track)), len(all_track)
+    #     )
+    # )
+    # print("n_cpu: {}".format(n_cpu))
+    # t_before = t.time()
+    # orbit_results = compute_df_orbit_param(mpc, n_cpu, ram_dir)
+
+    # multiprocess_time = t.time() - t_before
+    # print("total multiprocessing orbfit time: {}".format(multiprocess_time))
+
+    # print(orbit_results)
+
+    # ztf_mpc_with_orbit_param = mpc.merge(orbit_results, on="trajectory_id")
+    # print()
+    # print("cross match with mpc database")
+    # cross_match_mpc = ztf_mpc_with_orbit_param.merge(
+    #     mpc_database, how="inner", left_on="ssnamenr", right_on="Number"
+    # )
+
+    # dict_color_orbit = po.color_dict(mpc_database)
+    # po.plot_residue(
+    #     cross_match_mpc.drop_duplicates(["ssnamenr"]),
+    #     dict_color_orbit,
+    #     min(n_trajectories, len(all_track)),
+    #     n_points,
+    # )
+
+    # exit()

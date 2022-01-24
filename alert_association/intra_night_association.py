@@ -1117,6 +1117,13 @@ def intra_night_association(
         night_observation, sep_criterion
     )
 
+    left_assoc = left_assoc.reset_index(drop=True)
+    right_assoc = right_assoc.reset_index(drop=True)
+
+    mask_diff_jd = left_assoc["jd"] != right_assoc["jd"]
+    left_assoc = left_assoc[mask_diff_jd]
+    right_assoc = right_assoc[mask_diff_jd]
+
     intra_night_report["number of separation association"] = len(left_assoc)
 
     left_assoc, right_assoc = magnitude_association(
@@ -1292,19 +1299,7 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
         ["candid", "trajectory_id"]
     )
 
-    
-    if len(traj_df) > 0:
-        # remove the tracklets which contains two observations associated in the same observation field
-        # remove trajectories that contains duplicates jd
-        test = traj_df.groupby(['trajectory_id']).agg(jd=('jd',list)).reset_index()
-        diff_jd = test.apply(lambda x: np.any(np.diff(x["jd"]) == 0), axis=1)
-        keep_traj = test[~diff_jd]["trajectory_id"]
-
-        traj_df = traj_df[traj_df["trajectory_id"].isin(keep_traj)]
-
-        return traj_df
-    else:
-        return pd.DataFrame(columns=["trajectory_id", "candid", "jd"])
+    return traj_df
 
 
 if __name__ == "__main__":  # pragma: no cover

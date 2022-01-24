@@ -544,10 +544,12 @@ def tracklets_and_trajectories_associations(
     >>> tracklets[tr_orb_columns] = -1.0
     >>> trajectories["not_updated"] = np.ones(len(trajectories), dtype=np.bool_)
 
-    >>> tr, tk, report = tracklets_and_trajectories_associations(trajectories, tracklets, 4, 2 * u.degree, 0.2, 0.5, 30)
+    >>> tr, tk, max_tr_id, report = tracklets_and_trajectories_associations(trajectories, tracklets, 4, 2 * u.degree, 0.2, 0.5, 30, 6)
 
     >>> assert_frame_equal(tr, ts.trajectories_expected_1, check_dtype=False)
     >>> assert_frame_equal(tk, ts.tracklets_expected_1, check_dtype=False)
+    >>> max_tr_id
+    6
 
     >>> trajectories = ts.trajectories_sample_1
     >>> tracklets = ts.tracklets_sample_1
@@ -572,11 +574,13 @@ def tracklets_and_trajectories_associations(
     >>> tracklets[tr_orb_columns] = -1.0
     >>> trajectories["not_updated"] = np.ones(len(trajectories), dtype=np.bool_)
 
-    >>> tr, tk, report = tracklets_and_trajectories_associations(trajectories, tracklets, 3, 1.5 * u.degree, 0.2, 0.5, 30, True)
+    >>> tr, tk, max_tr_id, report = tracklets_and_trajectories_associations(trajectories, tracklets, 3, 1.5 * u.degree, 0.2, 0.5, 30, 5, True)
 
     >>> assert_frame_equal(tr, ts.trajectories_expected_2, check_dtype=False)
     >>> assert_frame_equal(tk, ts.tracklets_expected_2, check_dtype=False)
     >>> TestCase().assertDictEqual(ts.traj_and_track_assoc_report_expected, report)
+    >>> max_tr_id
+    5
 
     >>> tracklets = ts.tracklets_sample_2
     >>> trajectories = ts.trajectories_sample_2
@@ -601,16 +605,20 @@ def tracklets_and_trajectories_associations(
     >>> tracklets[tr_orb_columns] = -1.0
     >>> trajectories["not_updated"] = np.ones(len(trajectories), dtype=np.bool_)
 
-    >>> tr, tk, report = tracklets_and_trajectories_associations(trajectories, tracklets, 3, 1 * u.degree, 0.2, 0.5, 30)
+    >>> tr, tk, max_tr_id, report = tracklets_and_trajectories_associations(trajectories, tracklets, 3, 1 * u.degree, 0.2, 0.5, 30, 5)
 
     >>> assert_frame_equal(tr, ts.trajectories_expected_3, check_dtype=False)
     >>> assert_frame_equal(tk, pd.DataFrame(columns=["ra", "dec", "dcmag", "fid", "nid", "jd", "candid", "trajectory_id", "provisional designation", "a", "e", "i", "long. node", "arg. peric", "mean anomaly", "rms_a", "rms_e", "rms_i", "rms_long. node", "rms_arg. peric", "rms_mean anomaly",]), check_index_type=False, check_dtype=False)
+    >>> max_tr_id
+    8
 
-    >>> tr, tk, report = tracklets_and_trajectories_associations(pd.DataFrame(), tracklets, 3, 1 * u.degree, 0.2, 0.5, 30)
+    >>> tr, tk, max_tr_id, report = tracklets_and_trajectories_associations(pd.DataFrame(), tracklets, 3, 1 * u.degree, 0.2, 0.5, 30, 0)
 
     >>> assert_frame_equal(tr, pd.DataFrame(), check_dtype=False)
     >>> assert_frame_equal(tk, tracklets)
     >>> TestCase().assertDictEqual({}, report)
+    >>> max_tr_id
+    0
     """
 
     if len(trajectories) == 0 or len(tracklets) == 0:
@@ -693,7 +701,6 @@ def tracklets_and_trajectories_associations(
                 if len(tracklets_duplicated) > 0:
 
                     for _, rows in tracklets_duplicated.iterrows():
-                        
 
                         # silence the copy warning
                         with pd.option_context("mode.chained_assignment", None):
@@ -910,14 +917,15 @@ def trajectories_with_new_observations_associations(
     >>> new_observations[tr_orb_columns] = -1.0
     >>> trajectories["not_updated"] = np.ones(len(trajectories), dtype=np.bool_)
 
-    >>> tr, obs, report = trajectories_with_new_observations_associations(
-    ... trajectories, new_observations, 3, 1.5 * u.degree, 0.2, 0.5, 30
+    >>> tr, obs, max_tr_id, report = trajectories_with_new_observations_associations(
+    ... trajectories, new_observations, 3, 1.5 * u.degree, 0.2, 0.5, 30, 6
     ... )
 
     >>> assert_frame_equal(tr, ts.trajectories_expected_4, check_dtype=False)
     >>> assert_frame_equal(obs, ts.new_observations_expected_1, check_dtype=False)
     >>> TestCase().assertDictEqual(ts.expected_traj_obs_report_1, report)
-
+    >>> max_tr_id
+    6
 
     >>> trajectories = ts.trajectories_sample_4
     >>> new_observations = ts.new_observations_sample_2
@@ -942,14 +950,15 @@ def trajectories_with_new_observations_associations(
     >>> new_observations[tr_orb_columns] = -1.0
     >>> trajectories["not_updated"] = np.ones(len(trajectories), dtype=np.bool_)
 
-    >>> tr, obs, report = trajectories_with_new_observations_associations(
-    ... trajectories, new_observations, 3, 1.5 * u.degree, 0.2, 0.5, 30
+    >>> tr, obs, max_tr_id, report = trajectories_with_new_observations_associations(
+    ... trajectories, new_observations, 3, 1.5 * u.degree, 0.2, 0.5, 30, 4
     ... )
 
     >>> assert_frame_equal(tr, ts.trajectories_expected_5, check_dtype=False)
     >>> assert_frame_equal(obs, ts.new_observations_expected_2, check_dtype=False)
     >>> TestCase().assertDictEqual(ts.expected_traj_obs_report_2, report)
-
+    >>> max_tr_id
+    8
 
     >>> trajectories = ts.trajectories_sample_5
     >>> new_observations = ts.new_observations_sample_3
@@ -974,21 +983,25 @@ def trajectories_with_new_observations_associations(
     >>> new_observations[tr_orb_columns] = -1.0
     >>> trajectories["not_updated"] = np.ones(len(trajectories), dtype=np.bool_)
 
-    >>> tr, obs, report = trajectories_with_new_observations_associations(
-    ... trajectories, new_observations, 3, 1.5 * u.degree, 0.2, 0.5, 30, True
+    >>> tr, obs, max_tr_id, report = trajectories_with_new_observations_associations(
+    ... trajectories, new_observations, 3, 1.5 * u.degree, 0.2, 0.5, 30, 7, True
     ... )
 
     >>> assert_frame_equal(tr, ts.trajectories_expected_6, check_dtype=False)
     >>> assert_frame_equal(obs, ts.new_observations_expected_3, check_dtype=False)
     >>> TestCase().assertDictEqual(ts.expected_traj_obs_report_3, report)
+    >>> max_tr_id
+    7
 
-    >>> tr, obs, report = trajectories_with_new_observations_associations(
-    ... pd.DataFrame(), new_observations, 3, 1.5 * u.degree, 0.2, 0.5, 30
+    >>> tr, obs, max_tr_id, report = trajectories_with_new_observations_associations(
+    ... pd.DataFrame(), new_observations, 3, 1.5 * u.degree, 0.2, 0.5, 30, 0
     ... )
 
     >>> assert_frame_equal(tr, pd.DataFrame(), check_dtype=False)
     >>> assert_frame_equal(obs, new_observations, check_dtype=False)
     >>> TestCase().assertDictEqual({}, report)
+    >>> max_tr_id
+    0
     """
 
     if len(trajectories) == 0 or len(new_observations) == 0:
@@ -1258,13 +1271,14 @@ def old_observations_with_tracklets_associations(
     >>> old_observations[tr_orb_columns] = -1.0
     >>> tracklets["not_updated"] = np.ones(len(tracklets), dtype=np.bool_)
 
-    >>> tk, old, report = old_observations_with_tracklets_associations(tracklets, old_observations, 3, 1.5 * u.degree, 0.1, 0.3, 30)
+    >>> tk, old, max_tr_id, report = old_observations_with_tracklets_associations(tracklets, old_observations, 3, 1.5 * u.degree, 0.1, 0.3, 30, 6)
 
 
     >>> assert_frame_equal(tk, ts.tracklets_obs_expected_1, check_dtype=False)
     >>> assert_frame_equal(old.reset_index(drop=True), ts.old_obs_expected_1, check_dtype=False)
     >>> TestCase().assertDictEqual(ts.track_and_obs_report_expected_1, report)
-
+    >>> max_tr_id
+    6
 
     >>> tracklets = ts.tracklets_sample_4
     >>> old_observations = ts.old_observations_sample_2
@@ -1289,12 +1303,13 @@ def old_observations_with_tracklets_associations(
     >>> old_observations[tr_orb_columns] = -1.0
     >>> tracklets["not_updated"] = np.ones(len(tracklets), dtype=np.bool_)
 
-    >>> tk, old, report = old_observations_with_tracklets_associations(tracklets, old_observations, 3, 1.5 * u.degree, 0.1, 0.3, 30)
+    >>> tk, old, max_tr_id, report = old_observations_with_tracklets_associations(tracklets, old_observations, 3, 1.5 * u.degree, 0.1, 0.3, 30, 5)
 
     >>> assert_frame_equal(tk, ts.tracklets_obs_expected_2, check_dtype=False)
     >>> assert_frame_equal(old.reset_index(drop=True), ts.old_obs_expected_2, check_dtype=False)
     >>> TestCase().assertDictEqual(ts.track_and_obs_report_expected_2, report)
-
+    >>> max_tr_id
+    6
 
     >>> tracklets = ts.tracklets_sample_5
     >>> old_observations = ts.old_observations_sample_3
@@ -1319,17 +1334,21 @@ def old_observations_with_tracklets_associations(
     >>> old_observations[tr_orb_columns] = -1.0
     >>> tracklets["not_updated"] = np.ones(len(tracklets), dtype=np.bool_)
 
-    >>> tk, old, report = old_observations_with_tracklets_associations(tracklets, old_observations, 3, 1.5 * u.degree, 0.1, 0.3, 30, True)
+    >>> tk, old, max_tr_id, report = old_observations_with_tracklets_associations(tracklets, old_observations, 3, 1.5 * u.degree, 0.1, 0.3, 30, 3, True)
 
     >>> assert_frame_equal(tk, ts.tracklets_obs_expected_3, check_dtype=False)
     >>> assert_frame_equal(old.reset_index(drop=True), ts.old_obs_expected_3, check_dtype=False)
     >>> TestCase().assertDictEqual(ts.track_and_obs_report_expected_3, report)
+    >>> max_tr_id
+    5
 
-    >>> tk, old, report = old_observations_with_tracklets_associations(tracklets, pd.DataFrame(), 3, 1.5 * u.degree, 0.1, 0.3, 30)
+    >>> tk, old, max_tr_id, report = old_observations_with_tracklets_associations(tracklets, pd.DataFrame(), 3, 1.5 * u.degree, 0.1, 0.3, 30, 3)
 
     >>> assert_frame_equal(tk, tracklets, check_dtype=False)
     >>> assert_frame_equal(old, pd.DataFrame(), check_dtype=False)
     >>> TestCase().assertDictEqual({}, report)
+    >>> max_tr_id
+    3
     """
 
     if len(tracklets) == 0 or len(old_observations) == 0:
@@ -1685,7 +1704,14 @@ def old_with_new_observations_associations(
 
 
 def time_window_management(
-    trajectory_df, old_observation, last_nid, nid_next_night, traj_time_window, obs_time_window, orbfit_limit
+    trajectory_df,
+    old_observation,
+    last_nid,
+    nid_next_night,
+    traj_time_window,
+    obs_time_window,
+    orbfit_limit,
+    keep_last=False,
 ):
     """
     Management of the old observation and trajectories. Remove the old observation with a nid difference with
@@ -1735,7 +1761,7 @@ def time_window_management(
     ... "candid" : [16, 17, 18, 19]
     ... })
 
-    >>> (test_old_traj, test_most_recent_traj), test_old_obs = time_window_management(test_traj, test_obs, 12, 17, 3, 3, 5)
+    >>> (test_old_traj, test_most_recent_traj), test_old_obs = time_window_management(test_traj, test_obs, 12, 17, 3, 3, 5, True)
 
     >>> expected_old_traj = pd.DataFrame({
     ... "candid" : [10, 11, 12],
@@ -1794,7 +1820,7 @@ def time_window_management(
         )
 
         # if the night difference exceed the time window
-        if nid_next_night - last_nid > traj_time_window:
+        if (nid_next_night - last_nid > traj_time_window) and keep_last:
 
             # get last observation of trajectories from the last nid
             last_obs_of_all_traj = last_obs_of_all_traj[
@@ -1806,8 +1832,12 @@ def time_window_management(
             )
             most_recent_traj = trajectory_df[mask_traj]
 
-            traj_size = most_recent_traj.groupby(["trajectory_id"]).count().reset_index()
-            test_1 = most_recent_traj["trajectory_id"].isin(traj_size[traj_size["nid"] < orbfit_limit]["trajectory_id"])
+            traj_size = (
+                most_recent_traj.groupby(["trajectory_id"]).count().reset_index()
+            )
+            test_1 = most_recent_traj["trajectory_id"].isin(
+                traj_size[traj_size["nid"] < orbfit_limit]["trajectory_id"]
+            )
             test_2 = most_recent_traj["a"] != -1.0
             most_recent_traj = most_recent_traj[(test_1 | test_2)]
 
@@ -1829,7 +1859,9 @@ def time_window_management(
         most_recent_traj = trajectory_df[mask_traj]
 
         traj_size = most_recent_traj.groupby(["trajectory_id"]).count().reset_index()
-        test_1 = most_recent_traj["trajectory_id"].isin(traj_size[traj_size["nid"] <= orbfit_limit]["trajectory_id"])
+        test_1 = most_recent_traj["trajectory_id"].isin(
+            traj_size[traj_size["nid"] <= orbfit_limit]["trajectory_id"]
+        )
         test_2 = most_recent_traj["a"] != -1.0
         most_recent_traj = most_recent_traj[(test_1 | test_2)]
 

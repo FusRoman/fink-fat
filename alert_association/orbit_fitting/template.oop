@@ -30,5 +30,5 @@ propag.
 	.iast=17	        ! 0=no asteroids with mass, n=no. of massive asteroids (def=0)
 	.npoint=600             ! minimum number of data points for a deep close appr (def=100)
 	.dmea=0.2d0             ! min. distance for control of close-app. to the Earth only (def=0.1)
-    .dter=0.05d0            ! min. distance for control of close-app. to terrestrial planets (MVM)(def=0.1)
+    	.dter=0.05d0            ! min. distance for control of close-app. to terrestrial planets (MVM)(def=0.1)
 	
