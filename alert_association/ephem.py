@@ -9,7 +9,8 @@ from astropy.coordinates import SkyCoord
 import astropy.units as u
 
 import alert_association.orbit_fitting.orbfit_management as om
-import alert_association.utils as utils
+
+# import alert_association.utils as utils
 import multiprocessing as mp
 from alert_association.utils import load_data
 import json
@@ -185,10 +186,10 @@ if __name__ == "__main__":
         mpc_orb, left_on=("trajectory_id", "Date"), right_on=("trajectory_id", "jd")
     )
 
-    deltaRAcosDEC = (
-        (ephem_and_obs["ra"] - ephem_and_obs["cRA"])
-        * np.cos(np.radians(ephem_and_obs["dec"]))
-    ) * 3600
+    # fmt: off
+    deltaRAcosDEC = (ephem_and_obs["ra"] - ephem_and_obs["cRA"]) * np.cos(np.radians(ephem_and_obs["dec"])) * 3600
+    # fmt: on
+
     deltaDEC = (ephem_and_obs["dec"] - ephem_and_obs["cDec"]) * 3600
 
     colors = ["#15284F", "#F5622E"]
