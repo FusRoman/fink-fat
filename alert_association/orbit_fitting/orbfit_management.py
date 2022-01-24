@@ -10,8 +10,9 @@ import re
 import subprocess
 import os
 import multiprocessing as mp
-import alert_association.orbit_fitting.plot_orbstat as po
-import alert_association.utils as utils
+
+# import alert_association.orbit_fitting.plot_orbstat as po
+# import alert_association.utils as utils
 
 
 def time_to_decimal(time):
@@ -48,7 +49,7 @@ def split_string(string, char_split="-"):
     char_split : string
         characters used for the spliting
 
-    Returns 
+    Returns
     -------
     string splited : list
         a list with all splited members
@@ -73,7 +74,7 @@ def join_string(list_string, join_string):
     join_string : string
         characters used for the joining
 
-    Returns 
+    Returns
     -------
     string joined : string
         a string where all elements of the list string have been join with join_string between them
@@ -206,7 +207,7 @@ def second_letter(i, uppercase=True):
 
 def left_shift(number, n):
     """
-    Left shift on 10 base number. 
+    Left shift on 10 base number.
 
     Parameters
     ----------
@@ -232,7 +233,7 @@ def left_shift(number, n):
 
 def right_shift(number, n):
     """
-    Right shift on 10 base number. 
+    Right shift on 10 base number.
 
     Parameters
     ----------
@@ -245,7 +246,7 @@ def right_shift(number, n):
     -------
     shifted number : integer
         the number right shifted by n digit
-        
+
     Examples
     --------
     >>> right_shift(123, 1)
@@ -516,7 +517,7 @@ def write_inp(ram_dir, provisional_designation):
     """
     Write the input file of orbit
 
-    Parameters 
+    Parameters
     ----------
     ram_dir : string
         path where to write the file
@@ -526,7 +527,7 @@ def write_inp(ram_dir, provisional_designation):
 
     Returns
     -------
-    
+
     Examples
     --------
     >>> write_inp("", 'K69O00A')
@@ -552,7 +553,7 @@ def write_oop(ram_dir, provisional_designation):
     provisional_designation : string
         the provisional designation of the trajectory
 
-    Returns 
+    Returns
     -------
 
     Examples
@@ -581,11 +582,11 @@ def prep_orbitfit(ram_dir):
     Preparation for OrbFit computation
 
     Copy the AST17 ephemeris files needed for the orbfit computation to the correct location.
-    Set them permission to be read by OrbFit. 
+    Set them permission to be read by OrbFit.
 
     Parameters
     ----------
-    ram_dir : string 
+    ram_dir : string
         path where to write file
 
     Returns
@@ -813,7 +814,7 @@ def get_orbit_param(ram_dir, df):
         Path where files are located
     df : dataframe
         All the observation of the trajectory. An observation file will be write in the MPC format based on the observations contains in this dataframe.
-    
+
     Returns
     -------
     results : list
@@ -823,11 +824,11 @@ def get_orbit_param(ram_dir, df):
     Examples
     --------
     >>> df = pd.DataFrame({
-    ... 'ra': [169.8604675, 169.8568848, 169.8336664, 169.8297121, 169.8296555], 
-    ... 'dec': [15.2063604, 15.2103091, 15.2360481, 15.2403893, 15.24049], 
-    ... 'dcmag': [16.438142098160576, 16.47854604642893, 15.767506616421468, 15.781593431530103, 15.764373749886605], 
-    ... 'fid': [1, 1, 2, 2, 2], 
-    ... 'jd': [2459274.7206481, 2459274.7391435, 2459274.8594444, 2459274.8799074, 2459274.8803819], 
+    ... 'ra': [169.8604675, 169.8568848, 169.8336664, 169.8297121, 169.8296555],
+    ... 'dec': [15.2063604, 15.2103091, 15.2360481, 15.2403893, 15.24049],
+    ... 'dcmag': [16.438142098160576, 16.47854604642893, 15.767506616421468, 15.781593431530103, 15.764373749886605],
+    ... 'fid': [1, 1, 2, 2, 2],
+    ... 'jd': [2459274.7206481, 2459274.7391435, 2459274.8594444, 2459274.8799074, 2459274.8803819],
     ... 'trajectory_id': [0, 0, 0, 0, 0]
     ... })
 
@@ -900,7 +901,7 @@ def orbit_elem_dataframe(orbit_elem):
 def compute_df_orbit_param(trajectory_df, cpu_count, ram_dir):
     """
     Compute the orbital elements of a set of trajectories. Computation are done in parallel.
-    
+
     Parameters
     ----------
     trajectory_df : dataframe
@@ -909,7 +910,7 @@ def compute_df_orbit_param(trajectory_df, cpu_count, ram_dir):
         the number of core for the parallel computation
     ram_dir : string
         Path where files are located
-    
+
     Returns
     -------
     orbit_elem : dataframe

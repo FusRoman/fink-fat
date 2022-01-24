@@ -1,4 +1,3 @@
-from decimal import DivisionByZero
 import numpy as np
 import pandas as pd
 import multiprocessing as mp
@@ -32,7 +31,7 @@ def prep_orbit_computation(trajectory_df, orbfit_limit):
         dataframe containing trajectories observations
         the following columns are required : trajectory_id, ra
     orbfit_limit : integer
-        trajectories with a number of points greater or equal to orbfit_limit can go to the orbit fitting step. 
+        trajectories with a number of points greater or equal to orbfit_limit can go to the orbit fitting step.
 
     Return
     ------
