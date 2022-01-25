@@ -155,3 +155,5 @@ mpcobs/
 !alert_association/orbit_fitting/OrbitFit/bin/AST17.bai
 !alert_association/orbit_fitting/OrbitFit/bin/AST17.bep
 alert_association/orbit_fitting/OrbitFit/tests/
+asteroid_study/*.png
+trajectory_df.parquet

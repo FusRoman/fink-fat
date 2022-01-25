@@ -4,6 +4,7 @@ import multiprocessing as mp
 import os
 import astropy.units as u
 from astropy.coordinates import SkyCoord
+from sympy import comp
 from alert_association.intra_night_association import intra_night_association
 from alert_association.intra_night_association import new_trajectory_id_assignation
 from alert_association.orbit_fitting.orbfit_management import compute_df_orbit_param
@@ -75,19 +76,74 @@ def prep_orbit_computation(trajectory_df, orbfit_limit):
     return other_track.copy(), track_to_orb.copy()
 
 
-def compute_orbit_elem(trajectory_df, q):
+def compute_orbit_elem(trajectory_df, q, ram_dir=""):
+    """
+    Compute the orbital elements of a set of trajectories.
+    The computation are done in parallel process.
 
-    # print()
-    # print("#####")
-    # acceleration_filter(trajectory_df, 0.4)
-    # print("#####")
-    # print()
+    Parameters
+    ----------
+    trajectory_df : dataframe
+        A dataframe containing the observations of each trajectories
+    q : Queue from Multiprocessing package
+        A queue used to return the results of the process
+    ram_dir : string
+        ram_dir : string
+        Path where files needed for the OrbFit computation are located
 
+    Returns
+    -------
+    code : integer
+        a return code indicating that the process has ended correctly
+
+    Examples
+    --------
+    >>> q = mp.Queue()
+    >>> compute_orbit_elem(pd.DataFrame(), q)
+    0
+    >>> d = q.get()
+    >>> assert_frame_equal(pd.DataFrame(), d)
+
+    >>> df_test = pd.DataFrame({
+    ... "a" : [2.3]
+    ... })
+
+    >>> compute_orbit_elem(df_test, q)
+    0
+    >>> res_q = q.get()
+    >>> assert_frame_equal(df_test, res_q)
+
+    >>> orbit_column = [
+    ... "provisional designation",
+    ... "ref_epoch",
+    ... "a",
+    ... "e",
+    ... "i",
+    ... "long. node",
+    ... "arg. peric",
+    ... "mean anomaly",
+    ... "rms_a",
+    ... "rms_e",
+    ... "rms_i",
+    ... "rms_long. node",
+    ... "rms_arg. peric",
+    ... "rms_mean anomaly",
+    ... ]
+
+    >>> test_orbit = ts.orbfit_samples
+    >>> test_orbit[orbit_column] = -1.0
+
+    >>> compute_orbit_elem(ts.orbfit_samples, q)
+    0
+
+    >>> res_orb = q.get()
+
+    >>> assert_frame_equal(res_orb, ts.compute_orbit_elem_output)
+    """
     _pid = os.getpid()
     current_ram_path = os.path.join(ram_dir, str(_pid), "")
 
     if len(trajectory_df) == 0:
-        print("no orbit computation")
         q.put(trajectory_df)
         return 0
 
@@ -95,16 +151,15 @@ def compute_orbit_elem(trajectory_df, q):
     traj_with_orbelem = trajectory_df[trajectory_df["a"] != -1.0]
 
     if len(traj_to_compute) == 0:
-        print("no orbit computation")
         q.put(trajectory_df)
         return 0
 
     os.mkdir(current_ram_path)
-    print(
-        "nb traj to compute orb elem: {}".format(
-            len(np.unique(traj_to_compute["trajectory_id"]))
-        )
-    )
+    # print(
+    #     "nb traj to compute orb elem: {}".format(
+    #         len(np.unique(traj_to_compute["trajectory_id"]))
+    #     )
+    # )
 
     orbit_column = [
         "provisional designation",
@@ -129,7 +184,6 @@ def compute_orbit_elem(trajectory_df, q):
         traj_to_compute, int(mp.cpu_count() / 2), current_ram_path
     )
 
-    print("fin orbfit")
     traj_to_compute = traj_to_compute.merge(orbit_elem, on="trajectory_id")
 
     os.rmdir(current_ram_path)
@@ -146,6 +200,69 @@ def intra_night_step(
     intra_night_mag_criterion_diff_fid,
     run_metrics,
 ):
+    """
+    Perform the intra nigth associations step at the beginning of the inter night association function.
+
+    Parameters
+    ----------
+    new_observation : dataframe
+        The new observation from the new observations night.
+        The dataframe must have the following columns : ra, dec, jd, fid, nid, dcmag, candid, ssnamenr
+    last_trajectory_id : integer
+        The last trajectory identifier assign to a trajectory
+    intra_night_sep_criterion : float
+        separation criterion between the alerts to be associated, must be in arcsecond
+    intra_night_mag_criterion_same_fid : float
+        magnitude criterion between the alerts with the same filter id
+    intra_night_mag_criterion_diff_fid : float
+        magnitude criterion between the alerts with a different filter id
+    run_metrics : boolean
+        execute and return the performance metrics of the intra night association
+
+    Returns
+    -------
+    tracklets : dataframe
+        The tracklets detected inside the new night. 
+    new_observation_not_associated : dataframe
+        All the observation that not occurs in a tracklets
+    intra_night_report : dictionary
+        Statistics about the intra night association, contains the following entries :
+
+                    number of separation association
+
+                    number of association filtered by magnitude
+
+                    association metrics if compute_metrics is set to True
+
+    Examples
+    --------
+    >>> track, remaining_new_obs, metrics = intra_night_step(
+    ... ts.input_observation,
+    ... 0,
+    ... intra_night_sep_criterion = 145 * u.arcsecond,
+    ... intra_night_mag_criterion_same_fid = 2.21,
+    ... intra_night_mag_criterion_diff_fid = 1.75,
+    ... run_metrics = True,
+    ... )
+
+    >>> assert_frame_equal(track.reset_index(drop=True), ts.tracklets_output, check_dtype = False)
+    >>> assert_frame_equal(remaining_new_obs, ts.remaining_new_obs_output, check_dtype = False)
+    >>> TestCase().assertDictEqual(metrics, ts.tracklets_expected_metrics)
+
+
+    >>> track, remaining_new_obs, metrics = intra_night_step(
+    ... ts.input_observation_2,
+    ... 0,
+    ... intra_night_sep_criterion = 145 * u.arcsecond,
+    ... intra_night_mag_criterion_same_fid = 2.21,
+    ... intra_night_mag_criterion_diff_fid = 1.75,
+    ... run_metrics = True,
+    ... )
+
+    >>> assert_frame_equal(track.reset_index(drop=True), ts.tracklets_output_2, check_dtype = False)
+    >>> assert_frame_equal(remaining_new_obs, ts.remaining_new_obs_output_2, check_dtype = False)
+    >>> TestCase().assertDictEqual(metrics, {'number of separation association': 0, 'number of association filtered by magnitude': 0, 'association metrics': {}, 'number of intra night tracklets': 0})
+    """
 
     # intra-night association of the new observations
     new_left, new_right, intra_night_report = intra_night_association(
@@ -167,10 +284,13 @@ def intra_night_step(
         np.unique(tracklets["trajectory_id"])
     )
 
-    # remove all the alerts that appears in the tracklets
-    new_observation_not_associated = new_observation[
-        ~new_observation["candid"].isin(tracklets["candid"])
-    ]
+    if len(tracklets) > 0:
+        # remove all the alerts that appears in the tracklets
+        new_observation_not_associated = new_observation[
+            ~new_observation["candid"].isin(tracklets["candid"])
+        ]
+    else:
+        new_observation_not_associated = new_observation
 
     return (
         tracklets,
@@ -192,10 +312,84 @@ def tracklets_and_trajectories_steps(
     max_traj_id,
     run_metrics,
 ):
-    # perform associations with the recorded trajectories :
-    #   - trajectories with tracklets
+    """
+    Perform associations with the recorded trajectories and the tracklets detected inside the new night.
+    The trajectories send to OrbFit can be recovered with the get method from Multiprocessing.Queue. 
 
-    print("tracklets associations")
+    Parameters
+    ----------
+    most_recent_traj : dataframe
+        The trajectories to be combined with the tracklets
+    tracklets : dataframe
+        The new detected tracklets
+    next_nid : the nid of the new observation night
+    sep_criterion : float
+        separation criterion between the alerts to be associated, must be in arcsecond
+    mag_criterion_same_fid : float
+        magnitude criterion between the alerts with the same filter id
+    mag_criterion_diff_fid : float
+        magnitude criterion between the alerts with a different filter id
+    angle_criterion : float
+        the angle criterion to associates alerts during the cone search
+    orbfit_limit : integer
+        the minimum number of point for a trajectory to be send to OrbFit
+    max_traj_id : integer
+        The next trajectory identifier to a assign to a trajectory.
+    run_metrics : boolean
+        run the inter night association metrics : trajectory_df, traj_next_night, old_observations and new_observations
+        parameters should have the ssnamenr column.
+
+    Returns
+    -------
+    traj_not_updated : dataframe
+        The set of trajectories that have not been associated with the tracklets
+    other_track : dataframe
+        The set of tracklets that have not been associated with the trajectories
+    traj_and_track_assoc_report : dictionary
+        statistics about the trajectory and tracklets association process, contains the following entries :
+
+            list of updated trajectories
+
+            all nid report with the following entries for each reports :
+
+                        current nid
+
+                        trajectories to tracklets report
+
+                        metrics, no sense if run_metrics is set to False
+
+    max_traj_id : integer
+        The next trajectory identifier to a assign to a trajectory.
+    tracklets_orbfit_process : processus
+        The processus that run OrbFit over all the updated trajectories and tracklets in parallel of the main processus.
+
+    Examples
+    --------
+    >>> q = mp.Queue()
+
+    >>> traj_not_updated, other_track, traj_and_track_assoc_report, max_traj_id, _ = tracklets_and_trajectories_steps(
+    ... ts.traj_sample,
+    ... ts.track_sample,
+    ... 1538,
+    ... q,
+    ... sep_criterion=24 * u.arcminute,
+    ... mag_criterion_same_fid=0.5,
+    ... mag_criterion_diff_fid=0.7,
+    ... angle_criterion=8.8,
+    ... orbfit_limit=5,
+    ... max_traj_id=3,
+    ... run_metrics=True,
+    ... )
+
+    >>> track_orb = q.get()
+
+    >>> assert_frame_equal(traj_not_updated.reset_index(drop=True), ts.traj_not_updated_expected, check_dtype = False)
+    >>> assert_frame_equal(other_track.reset_index(drop=True), ts.other_track_expected, check_dtype = False)
+    >>> assert_frame_equal(track_orb.reset_index(drop=True), ts.track_orb_expected, check_dtype = False)
+    >>> TestCase().assertDictEqual(traj_and_track_assoc_report, ts.traj_track_metrics_expected)
+    >>> max_traj_id
+    3
+    """
 
     (
         traj_with_track,
@@ -227,6 +421,7 @@ def tracklets_and_trajectories_steps(
     tracklets_orbfit_process = mp.Process(
         target=compute_orbit_elem, args=(track_to_orb, return_trajectories_queue,)
     )
+
     tracklets_orbfit_process.start()
 
     return (
@@ -757,12 +952,27 @@ if __name__ == "__main__":  # pragma: no cover
             print('"{}": {},'.format(col, list(df[col])))
         print("}")
 
-    # sys.exit(doctest.testmod()[0])
+    sys.exit(doctest.testmod()[0])
 
     from alert_association.continuous_integration import load_data
 
     df_sso = load_data("Solar System MPC", 0)
 
+    def traj_func(mpc, dec):
+        all_ssnamenr = np.unique(mpc["ssnamenr"].values)
+        ssnamenr_translate = {
+            ssn: (i + dec) for ssn, i in zip(all_ssnamenr, range(len(all_ssnamenr)))
+        }
+        mpc["trajectory_id"] = mpc.apply(
+            lambda x: ssnamenr_translate[x["ssnamenr"]], axis=1
+        )
+        return mpc.copy()
+
+
+    
+    
+
+    exit()
     tr_orb_columns = [
         "provisional designation",
         "ref_epoch",

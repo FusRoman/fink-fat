@@ -36,6 +36,8 @@ do
   $FILE3 ) continue ;;
   $FILE4 ) continue ;;
   * )
+
+    echo $filename
     # Run test suite + coverage
     coverage run \
       --append \
@@ -43,6 +45,16 @@ do
       --rcfile ${ROOTPATH}/.coveragerc $filename
     ;;
   esac
+done
+
+for filename in alert_association/orbit_fitting/*.py
+do
+  echo $filename
+  # Run test suite + coverage
+  coverage run \
+    --append \
+    --source=${ROOTPATH} \
+    --rcfile ${ROOTPATH}/.coveragerc $filename
 done
 
 unset COVERAGE_PROCESS_START

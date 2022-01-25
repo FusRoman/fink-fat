@@ -9,6 +9,12 @@ from alert_association.intra_night_association import (
 )
 from alert_association.intra_night_association import compute_inter_night_metric
 
+import sys
+import doctest
+from pandas.testing import assert_frame_equal  # noqa: F401
+import test_sample as ts  # noqa: F401
+from unittest import TestCase  # noqa: F401
+
 
 def night_to_night_separation_association(
     old_observation, new_observation, separation_criterion
@@ -506,7 +512,7 @@ def tracklets_and_trajectories_associations(
         trajectories associated with new tracklets
     tracklets : dataframe
         remaining tracklets
-    traj_to_track_report : dict list
+    traj_to_track_report : dictionary
         statistics about the trajectory and tracklets association process, contains the following entries :
 
             list of updated trajectories
@@ -1874,11 +1880,6 @@ def time_window_management(
 
 
 if __name__ == "__main__":  # pragma: no cover
-    import sys
-    import doctest
-    from pandas.testing import assert_frame_equal  # noqa: F401
-    import test_sample as ts  # noqa: F401
-    from unittest import TestCase  # noqa: F401
 
     if "unittest.util" in __import__("sys").modules:
         # Show full diff in self.assertEqual.
