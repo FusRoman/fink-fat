@@ -29,7 +29,7 @@ make simple_build
 
 echo ""
 echo ""
-echo `pwd`
+echo `ls -a`
 echo ""
 echo ""
 
