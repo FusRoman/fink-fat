@@ -1,2 +1,0 @@
-! Default library directory
-CHARACTER(LEN=100), PARAMETER :: dlibd = '/home/roman/Documents/Doctorat/Asteroids/OrbitFit/lib'
