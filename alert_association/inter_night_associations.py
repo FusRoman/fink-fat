@@ -4,7 +4,6 @@ import multiprocessing as mp
 import os
 import astropy.units as u
 from astropy.coordinates import SkyCoord
-from sympy import comp
 from alert_association.intra_night_association import intra_night_association
 from alert_association.intra_night_association import new_trajectory_id_assignation
 from alert_association.orbit_fitting.orbfit_management import compute_df_orbit_param
@@ -222,7 +221,7 @@ def intra_night_step(
     Returns
     -------
     tracklets : dataframe
-        The tracklets detected inside the new night. 
+        The tracklets detected inside the new night.
     new_observation_not_associated : dataframe
         All the observation that not occurs in a tracklets
     intra_night_report : dictionary
@@ -314,7 +313,7 @@ def tracklets_and_trajectories_steps(
 ):
     """
     Perform associations with the recorded trajectories and the tracklets detected inside the new night.
-    The trajectories send to OrbFit can be recovered with the get method from Multiprocessing.Queue. 
+    The trajectories send to OrbFit can be recovered with the get method from Multiprocessing.Queue.
 
     Parameters
     ----------
@@ -967,10 +966,6 @@ if __name__ == "__main__":  # pragma: no cover
             lambda x: ssnamenr_translate[x["ssnamenr"]], axis=1
         )
         return mpc.copy()
-
-
-    
-    
 
     exit()
     tr_orb_columns = [

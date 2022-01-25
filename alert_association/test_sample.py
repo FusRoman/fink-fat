@@ -9288,7 +9288,7 @@ track_sample = pd.DataFrame(
             True,
             True,
             True,
-            True
+            True,
         ],
         "provisional designation": [
             -1.0,
@@ -10285,4 +10285,25 @@ track_orb_expected = pd.DataFrame(
     }
 )
 
-traj_track_metrics_expected = {'updated trajectories': [0.0, 1.0, 2.0], 'all nid_report': [{'old nid': 1537, 'trajectories_to_tracklets_report': {'number of inter night separation based association': 3, 'number of inter night magnitude filtered association': 0, 'number of inter night angle filtered association': 0, 'number of duplicated association': 0, 'metrics': {'precision': 0.0, 'recall': 0.0, 'True Positif': 0, 'False Positif': 3, 'False Negatif': 0, 'total real association': 0}}}]}
+traj_track_metrics_expected = {
+    "updated trajectories": [0.0, 1.0, 2.0],
+    "all nid_report": [
+        {
+            "old nid": 1537,
+            "trajectories_to_tracklets_report": {
+                "number of inter night separation based association": 3,
+                "number of inter night magnitude filtered association": 0,
+                "number of inter night angle filtered association": 0,
+                "number of duplicated association": 0,
+                "metrics": {
+                    "precision": 0.0,
+                    "recall": 0.0,
+                    "True Positif": 0,
+                    "False Positif": 3,
+                    "False Negatif": 0,
+                    "total real association": 0,
+                },
+            },
+        }
+    ],
+}

@@ -4,7 +4,8 @@ import numpy as np
 from intra_night_association import intra_night_association
 from intra_night_association import new_trajectory_id_assignation
 import matplotlib.pyplot as plt
-import astropy.units as u
+
+# import astropy.units as u
 import night_report
 import continuous_integration as ci
 import sys
@@ -161,29 +162,29 @@ if __name__ == "__main__":
                     print("nb new observation : {}".format(nb_new_obs))
                     print()
 
-                traj_df, old_observation, report = night_to_night_association(
-                    most_recent_traj,
-                    old_observation,
-                    df_next_night,
-                    last_trajectory_id,
-                    intra_night_sep_criterion=108.8 * u.arcsecond,
-                    sep_criterion=16.45 * u.arcminute,
-                    mag_criterion_same_fid=0.1,
-                    mag_criterion_diff_fid=0.34,
-                    angle_criterion=1.19,
-                    run_metrics=True,
-                )
+                # traj_df, old_observation, report = night_to_night_association(
+                #     most_recent_traj,
+                #     old_observation,
+                #     df_next_night,
+                #     last_trajectory_id,
+                #     intra_night_sep_criterion=108.8 * u.arcsecond,
+                #     sep_criterion=16.45 * u.arcminute,
+                #     mag_criterion_same_fid=0.1,
+                #     mag_criterion_diff_fid=0.34,
+                #     angle_criterion=1.19,
+                #     run_metrics=True,
+                # )
 
                 traj_df = pd.concat([traj_df, oldest_traj])
                 last_nid = current_night_id
                 nb_traj = len(np.unique(traj_df["trajectory_id"]))
-                if save_report:
-                    report["nb most recent traj"] = nb_most_recent_traj
-                    report["nb old observations"] = nb_old_obs
-                    report["nb new observations"] = nb_new_obs
-                    report["nb trajectories"] = nb_traj
-                    report["computation time of the night"] = float(t.time() - t_before)
-                    night_report.save_report(report, df_next_night["jd"].values[0])
+                # if save_report:
+                #     report["nb most recent traj"] = nb_most_recent_traj
+                #     report["nb old observations"] = nb_old_obs
+                #     report["nb new observations"] = nb_new_obs
+                #     report["nb trajectories"] = nb_traj
+                #     report["computation time of the night"] = float(t.time() - t_before)
+                #     night_report.save_report(report, df_next_night["jd"].values[0])
 
                 if verbose:  # pragma: no cover
                     print()
