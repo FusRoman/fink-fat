@@ -1,2 +1,0 @@
-MODDEP= -I../suit -I../prelim
-FFLAGS+=$(MODDEP)

@@ -1,3 +1,0 @@
-! Default documentation directory
-CHARACTER*100 ddocd
-PARAMETER (ddocd=  '/orbfit/orb50/doc')
