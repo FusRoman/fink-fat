@@ -3,9 +3,13 @@ from astropy.coordinates import SkyCoord
 import pandas as pd
 import numpy as np
 from collections import Counter
-
-
 from astropy.coordinates import search_around_sky
+
+import sys
+import doctest
+from pandas.testing import assert_frame_equal  # noqa: F401
+import test_sample as ts  # noqa: F401
+from unittest import TestCase  # noqa: F401
 
 
 def get_n_last_observations_from_trajectories(trajectories, n, ascending=True):

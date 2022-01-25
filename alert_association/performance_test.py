@@ -3,7 +3,6 @@ import time as t
 import numpy as np
 from intra_night_association import intra_night_association
 from intra_night_association import new_trajectory_id_assignation
-from alert_association.associations import night_to_night_association
 import matplotlib.pyplot as plt
 import astropy.units as u
 import night_report

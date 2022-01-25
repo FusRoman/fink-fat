@@ -942,7 +942,7 @@ def compute_df_orbit_param(trajectory_df, cpu_count, ram_dir):
     return orbit_elem_dataframe(np.array(results))
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     import sys
     import doctest
     from pandas.testing import assert_frame_equal  # noqa: F401
