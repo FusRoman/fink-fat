@@ -28,6 +28,9 @@ jobs:
         - name: Install add-ons
           run: |
             sudo apt-get install python3-testresources
+        - name: Install Intel Fortran Compiler
+          run: |
+            ./ifort_installer.sh
         - name: Run test suites
           run: |
             ./run_test.sh
