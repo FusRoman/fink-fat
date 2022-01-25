@@ -27,6 +27,13 @@ FILE4=alert_association/ephem.py
 
 make simple_build
 
+echo ""
+echo ""
+echo `pwd`
+echo ""
+echo ""
+
+
 # Run the test suite
 for filename in alert_association/*.py
 do
