@@ -1,3 +1,5 @@
+source /opt/intel/oneapi/setvars.sh
+
 ifort --version
 
 wget http://adams.dm.unipi.it/orbfit/OrbFit5.0.7.tar.gz
