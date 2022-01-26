@@ -22,6 +22,8 @@ ls
 echo ""
 echo ""
 
+source /opt/intel/oneapi/setvars.sh
+
 set -e
 
 export ROOTPATH=`pwd`
