@@ -8,7 +8,3 @@ sudo add-apt-repository "deb https://apt.repos.intel.com/oneapi all main"
 
 sudo apt update
 sudo apt install intel-oneapi-compiler-fortran
-
-source /opt/intel/oneapi/setvars.sh
-
-ifort --version

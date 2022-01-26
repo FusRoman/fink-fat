@@ -1,6 +1,5 @@
+# source the intel fortran compiler and libraries, needed for OrbFit
 source /opt/intel/oneapi/setvars.sh
-
-ifort --version
 
 wget http://adams.dm.unipi.it/orbfit/OrbFit5.0.7.tar.gz
 
@@ -25,9 +24,3 @@ cd lib/
 wget https://ssd.jpl.nasa.gov/ftp/eph/planets/Linux/de440/linux_p1550p2650.440
 
 mv linux_p1550p2650.440 jpleph
-
-ls
-
-cd ../
-
-make test
