@@ -154,3 +154,5 @@ mpcobs/
 OrbitFit
 asteroid_study/*.png
 trajectory_df.parquet
+
+!test
