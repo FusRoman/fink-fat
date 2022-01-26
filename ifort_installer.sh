@@ -10,4 +10,5 @@ sudo apt update
 sudo apt install intel-oneapi-compiler-fortran
 
 source /opt/intel/oneapi/setvars.sh
+
 ifort --version
