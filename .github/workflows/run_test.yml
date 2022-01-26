@@ -31,6 +31,9 @@ jobs:
         - name: Install Intel Fortran Compiler
           run: |
             ./ifort_installer.sh
+        - name: install OrbFit SoftWare
+          run: |
+            ./orbFit_installer.sh
         - name: Run test suites
           run: |
             ./run_test.sh

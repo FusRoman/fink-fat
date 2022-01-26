@@ -653,7 +653,7 @@ def call_orbitfit(ram_dir, provisional_designation):
     >>> os.remove("test/call_orbfit/mpcobs/K21E00A.rwo")
     """
     orbitfit_path = os.path.join(
-        "alert_association", "orbit_fitting", "OrbitFit", "bin/"
+        "OrbitFit", "bin/"
     )
 
     command = (
@@ -663,11 +663,11 @@ def call_orbitfit(ram_dir, provisional_designation):
         + ram_dir
         + provisional_designation
         + ".inp "
-        # + ">/dev/null 2>&1"
+        + ">/dev/null 2>&1"
     )
 
     with subprocess.Popen(
-        command, shell=True, stdout=subprocess.PIPE, preexec_fn=os.setsid
+        command, shell=True, stdout=subprocess.DEVNULL, preexec_fn=os.setsid
     ) as process:
         try:
             output = process.communicate(timeout=2)[0]
