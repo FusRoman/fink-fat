@@ -366,14 +366,14 @@ def tracklets_and_trajectories_steps(
     --------
     >>> q = mp.Queue()
 
-    >>> traj_not_updated, other_track, traj_and_track_assoc_report, max_traj_id, _ = tracklets_and_trajectories_steps(
+    >>> traj_not_updated, small_traj, small_track, traj_and_track_assoc_report, max_traj_id, _ = tracklets_and_trajectories_steps(
     ... ts.traj_sample,
     ... ts.track_sample,
     ... 1538,
     ... q,
     ... sep_criterion=24 * u.arcminute,
     ... mag_criterion_same_fid=0.5,
-    ... mag_criterion_diff_fid=0.7,
+    ... mag_criterion_diff_fid=1.5,
     ... angle_criterion=8.8,
     ... orbfit_limit=5,
     ... max_traj_id=3,
@@ -383,8 +383,9 @@ def tracklets_and_trajectories_steps(
     >>> track_orb = q.get()
 
     >>> assert_frame_equal(traj_not_updated.reset_index(drop=True), ts.traj_not_updated_expected, check_dtype = False)
-    >>> assert_frame_equal(other_track.reset_index(drop=True), ts.other_track_expected, check_dtype = False)
+    >>> assert_frame_equal(small_track.reset_index(drop=True), ts.other_track_expected, check_dtype = False)
     >>> assert_frame_equal(track_orb.reset_index(drop=True), ts.track_orb_expected, check_dtype = False)
+    >>> assert_frame_equal(small_traj.reset_index(drop=True), ts.small_traj_expected, check_dtype = False)
     >>> TestCase().assertDictEqual(traj_and_track_assoc_report, ts.traj_track_metrics_expected)
     >>> max_traj_id
     3
@@ -408,24 +409,30 @@ def tracklets_and_trajectories_steps(
     )
 
     # get the trajectories updated with new tracklets and the trajectory not updated for the next step
-    traj_to_orb = traj_with_track[~traj_with_track["not_updated"]]
+    traj_updated = traj_with_track[~traj_with_track["not_updated"]]
     traj_not_updated = traj_with_track[traj_with_track["not_updated"]]
 
-    # concatenate the updated trajectories and the remaining tracklets
-    all_traj_to_orb = pd.concat([traj_to_orb, not_associated_tracklets])
+    # separate trajectories with more than orbfit_limit points for the orbit computation and the smallest trajectories
+    small_traj, traj_to_orb = prep_orbit_computation(traj_updated, orbfit_limit)
 
-    # separate traklets with more than orbfit_limit points for the orbit computation and the other tracklets
-    other_track, track_to_orb = prep_orbit_computation(all_traj_to_orb, orbfit_limit)
+    # separate traklets with more than orbfit_limit points for the orbit computation and the smallest tracklets
+    small_track, track_to_orb = prep_orbit_computation(
+        not_associated_tracklets, orbfit_limit
+    )
+
+    # concatenate the updated trajectories and the remaining tracklets
+    all_traj_to_orb = pd.concat([traj_to_orb, track_to_orb])
 
     tracklets_orbfit_process = mp.Process(
-        target=compute_orbit_elem, args=(track_to_orb, return_trajectories_queue,)
+        target=compute_orbit_elem, args=(all_traj_to_orb, return_trajectories_queue,)
     )
 
     tracklets_orbfit_process.start()
 
     return (
         traj_not_updated,
-        other_track,
+        small_traj,
+        small_track,
         traj_and_track_assoc_report,
         max_traj_id,
         tracklets_orbfit_process,
@@ -445,7 +452,35 @@ def trajectories_and_new_observations_steps(
     max_traj_id,
     run_metrics,
 ):
-    print("trajectories associations")
+    """
+
+    Examples
+    --------
+
+    >>> q = mp.Queue()
+    >>> other_traj, remaining_new_observations, trajectories_associations_report, max_traj_id, trajectories_orbfit_process = trajectories_and_new_observations_steps(
+    ... ts.traj_sample_2,
+    ... ts.new_obs_sample,
+    ... 1524,
+    ... q,
+    ... sep_criterion=24 * u.arcminute,
+    ... mag_criterion_same_fid=1.5,
+    ... mag_criterion_diff_fid=0.7,
+    ... angle_criterion=8.8,
+    ... orbfit_limit=4,
+    ... max_traj_id=9,
+    ... run_metrics=True,
+    ... )
+
+    >>> max_traj_id
+    9
+
+    >>> traj_orb = q.get()
+
+    >>> assert_frame_equal(other_traj.reset_index(drop=True), ts.other_traj_expected, check_dtype=False)
+    >>> assert_frame_equal(remaining_new_observations.reset_index(drop=True), ts.remaining_new_observations_expected, check_dtype=False)
+    >>> assert_frame_equal(traj_orb.reset_index(drop=True), ts.traj_orb_expected, check_dtype=False)
+    """
 
     # perform associations with the recorded trajectories
     (
@@ -466,7 +501,7 @@ def trajectories_and_new_observations_steps(
     )
 
     # separate trajectories with more than 3 points for the orbit computation and the other trajectories
-    other_traj, traj_to_orb = prep_orbit_computation(traj_with_new_obs, orbfit_limit)
+    small_traj, traj_to_orb = prep_orbit_computation(traj_with_new_obs, orbfit_limit)
 
     trajectories_orbfit_process = mp.Process(
         target=compute_orbit_elem, args=(traj_to_orb, return_trajectories_queue,)
@@ -474,7 +509,7 @@ def trajectories_and_new_observations_steps(
     trajectories_orbfit_process.start()
 
     return (
-        other_traj,
+        small_traj,
         remaining_new_observations,
         trajectories_associations_report,
         max_traj_id,
@@ -495,7 +530,35 @@ def tracklets_and_old_observations_steps(
     max_traj_id,
     run_metrics,
 ):
-    print("tracklets and old observations associations")
+    """
+
+    Examples
+    --------
+    >>> q = mp.Queue()
+
+    >>> remaining_track, remaining_old_observations, track_associations_report, max_traj_id, track_orbfit_process = tracklets_and_old_observations_steps(
+    ... ts.track_sample_2,
+    ... ts.old_obs_sample,
+    ... 1524,
+    ... q,
+    ... sep_criterion=24 * u.arcminute,
+    ... mag_criterion_same_fid=1.5,
+    ... mag_criterion_diff_fid=0.7,
+    ... angle_criterion=8.8,
+    ... orbfit_limit=3,
+    ... max_traj_id=9,
+    ... run_metrics=True,
+    ... )
+
+    >>> max_traj_id
+    9
+
+    >>> traj_orb = q.get()
+
+    >>> assert_frame_equal(remaining_track.reset_index(drop=True), ts.remaining_track_expected, check_dtype=False)
+    >>> assert_frame_equal(remaining_old_observations.reset_index(drop=True), ts.remaining_old_observations_expected, check_dtype=False)
+    >>> assert_frame_equal(traj_orb.reset_index(drop=True), ts.traj_orb_expected_2, check_dtype=False)
+    """
 
     # perform associations with the tracklets and the old observations
     (
@@ -966,6 +1029,83 @@ if __name__ == "__main__":  # pragma: no cover
             lambda x: ssnamenr_translate[x["ssnamenr"]], axis=1
         )
         return mpc.copy()
+
+    all_night = np.unique(df_sso["nid"])
+
+    night = [1537, 1538]
+
+    # & (df_sso["ssnamenr"].isin(traj))
+
+    traj = ["1131"]
+
+    tt = df_sso[(df_sso["nid"].isin(night)) & (df_sso["ssnamenr"].isin(traj))]
+
+    n_traj = tt[tt["nid"] == night[0]][
+        ["ra", "dec", "jd", "fid", "nid", "candid", "dcmag", "ssnamenr"]
+    ]
+
+    n_track = tt[tt["nid"] == night[1]][
+        ["ra", "dec", "jd", "fid", "nid", "candid", "dcmag", "ssnamenr"]
+    ]
+
+    tr = pd.concat([ts.traj_sample, n_traj])
+
+    tk = pd.concat([ts.track_sample, n_track])
+
+    tr = traj_func(tr, 0)
+    tk = traj_func(tk, 10)
+
+    print(tr[["ssnamenr", "trajectory_id"]])
+
+    print()
+
+    print(tk[["ssnamenr", "trajectory_id"]])
+
+    tr_orb_columns = [
+        "provisional designation",
+        "ref_epoch",
+        "a",
+        "e",
+        "i",
+        "long. node",
+        "arg. peric",
+        "mean anomaly",
+        "rms_a",
+        "rms_e",
+        "rms_i",
+        "rms_long. node",
+        "rms_arg. peric",
+        "rms_mean anomaly",
+    ]
+
+    tr[tr_orb_columns] = -1.0
+    tk[tr_orb_columns] = -1.0
+
+    tr["not_updated"] = True
+    tk["not_updated"] = True
+
+    print(tr.to_dict(orient="list"))
+    print()
+    print()
+    print(tk.to_dict(orient="list"))
+
+    exit()
+
+    for i in range(len(all_night) - 1):
+        print(all_night[i], all_night[i + 1])
+        print()
+        n1 = df_sso[df_sso["nid"] == all_night[i]]
+        n2 = df_sso[df_sso["nid"] == all_night[i + 1]]
+
+        n1_gb = n1.groupby(["ssnamenr"]).count().reset_index()
+        n2_gb = n2.groupby(["ssnamenr"]).count().reset_index()
+
+        old_obs = n1_gb[n1_gb["ra"] == 2]
+        track = n2_gb[n2_gb["ra"] == 2]
+
+        print(old_obs.merge(track, on="ssnamenr"))
+        print()
+        print()
 
     exit()
     tr_orb_columns = [
