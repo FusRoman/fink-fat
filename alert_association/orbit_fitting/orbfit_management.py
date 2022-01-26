@@ -652,9 +652,7 @@ def call_orbitfit(ram_dir, provisional_designation):
     >>> os.remove("test/call_orbfit/K21E00A.pro")
     >>> os.remove("test/call_orbfit/mpcobs/K21E00A.rwo")
     """
-    orbitfit_path = os.path.join(
-        "OrbitFit", "bin/"
-    )
+    orbitfit_path = os.path.join("OrbitFit", "bin/")
 
     command = (
         "./"

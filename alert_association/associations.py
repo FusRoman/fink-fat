@@ -467,7 +467,7 @@ def night_to_night_trajectory_associations(
         return traj_assoc, new_obs_assoc, inter_night_obs_report
 
 
-# TODO : tester le retour des rapports pour tracklets_associations
+# TODO : test report return for each of the four associations types
 def tracklets_and_trajectories_associations(
     trajectories,
     tracklets,
