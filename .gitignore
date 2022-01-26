@@ -151,6 +151,6 @@ alert_association/orbit_fitting/residuals/
 *.bep
 mpcobs/
 
-alert_association/orbit_fitting/OrbitFit
+OrbitFit
 asteroid_study/*.png
 trajectory_df.parquet
