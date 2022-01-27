@@ -4,7 +4,6 @@ import multiprocessing as mp
 import os
 import astropy.units as u
 from astropy.coordinates import SkyCoord
-from pyparsing import col
 from alert_association.intra_night_association import intra_night_association
 from alert_association.intra_night_association import new_trajectory_id_assignation
 from alert_association.orbit_fitting.orbfit_management import compute_df_orbit_param
@@ -589,7 +588,7 @@ def tracklets_and_old_observations_steps(
 ):
     """
     Do the associations between the old observations keep in memory and the tracklets detected with the observations of the new observation night
-    The tracklets that have a number of observations more or equal to orbfit_limit can be recover with the return_trajectories_queue. 
+    The tracklets that have a number of observations more or equal to orbfit_limit can be recover with the return_trajectories_queue.
 
     Parameters
     ----------
@@ -732,7 +731,7 @@ def night_to_night_association(
     """
     Perform night to night associations.
 
-    Firstly, detect the intra night tracklets and then do the inter night associations in four steps :  
+    Firstly, detect the intra night tracklets and then do the inter night associations in four steps :
 
     1. associates the recorded trajectories with the new tracklets detected in the new night.
     Associations based on the extremity alerts of the trajectories and the tracklets.
