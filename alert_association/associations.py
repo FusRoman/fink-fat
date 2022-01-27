@@ -1,5 +1,6 @@
 import astropy.units as u
 from astropy.coordinates import SkyCoord
+from more_itertools import last
 import pandas as pd
 import numpy as np
 
@@ -171,9 +172,9 @@ def angle_df(x):
     10.305
     """
 
-    ra_x, dec_x, jd_x = x[1], x[2], x[3]
+    ra_x, dec_x, jd_x = x["ra_x"], x["dec_x"], x["jd_x"]
 
-    ra_y, dec_y, jd_y = x[6], x[7], x[8]
+    ra_y, dec_y, jd_y = x["ra_y"], x["dec_y"], x["jd_y"]
 
     a = np.array([ra_x[0], dec_x[0]])
     b = np.array([ra_x[1], dec_x[1]])
@@ -1071,6 +1072,9 @@ def trajectories_with_new_observations_associations(
                 angle_criterion,
             )
 
+            if "tmp_traj" in obs_assoc:  # pragma: no cover
+                obs_assoc = obs_assoc.drop(["tmp_traj"], axis=1)
+
             # remove the associateds observations from the set of new observations
             new_observations = new_observations[
                 ~new_observations["candid"].isin(obs_assoc["candid"])
@@ -1402,8 +1406,8 @@ def old_observations_with_tracklets_associations(
             )
 
             # remove tmp_traj column added by the cone_search_associations function in  night_to_night_trajectory_associations
-            # if "tmp_traj" in old_obs_right_assoc:
-            #     old_obs_right_assoc = old_obs_right_assoc.drop("tmp_traj", axis=1)
+            if "tmp_traj" in old_obs_right_assoc:  # pragma: no cover
+                old_obs_right_assoc = old_obs_right_assoc.drop("tmp_traj", axis=1)
 
             # remove the associateds observations from the set of new observations
             old_observations = old_observations[
@@ -1815,8 +1819,8 @@ def time_window_management(
     >>> assert_frame_equal(expected_old_obs.reset_index(drop=True), test_old_obs.reset_index(drop=True))
     """
 
-    most_recent_traj = pd.DataFrame()
-    oldest_traj = pd.DataFrame()
+    most_recent_traj = pd.DataFrame(columns=trajectory_df.columns)
+    oldest_traj = pd.DataFrame(columns=trajectory_df.columns)
 
     if len(trajectory_df) > 0:
 
