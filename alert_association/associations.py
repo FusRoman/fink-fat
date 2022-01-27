@@ -1,6 +1,5 @@
 import astropy.units as u
 from astropy.coordinates import SkyCoord
-from more_itertools import last
 import pandas as pd
 import numpy as np
 
