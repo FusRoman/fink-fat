@@ -8,9 +8,6 @@ from alert_association.utils import load_data
 
 if __name__ == "__main__":
 
-    # constant to locate the ram file system
-    ram_dir = "/media/virtuelram/"
-
     df_sso = load_data("Solar System MPC", 0)
 
     traj_count = df_sso.groupby(["ssnamenr"]).count().reset_index()
@@ -70,8 +67,7 @@ if __name__ == "__main__":
             mag_criterion_same_fid=5,
             mag_criterion_diff_fid=5,
             orbfit_limit=5,
-            angle_criterion=200,
-            ram_dir=ram_dir,
+            angle_criterion=200
         )
 
         last_nid = next_nid
