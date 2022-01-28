@@ -933,7 +933,7 @@ def compute_df_orbit_param(trajectory_df, cpu_count, ram_dir):
     ]
 
     pool = mp.Pool(cpu_count)
-    
+
     results = pool.starmap(get_orbit_param, all_track)
 
     pool.close()
@@ -957,106 +957,3 @@ if __name__ == "__main__":  # pragma: no cover
         __import__("sys").modules["unittest.util"]._MAX_LENGTH = 999999999
 
     sys.exit(doctest.testmod()[0])
-
-    # ram_dir = "/media/virtuelram/"
-
-    # print("Load sso data")
-    # df_sso = utils.load_data("Solar System MPC", nb_indirection=0)
-
-    # mpc = df_sso[(df_sso["nid"] == 1520) & (df_sso["ssnamenr"] == "19743")]
-    # mpc["trajectory_id"] = 0
-
-    # print(mpc[["ra", "dec", "dcmag", "fid", "jd", "trajectory_id"]].to_dict(orient='list'))
-
-    # prep_orbitfit("test/call_orbfit/")
-
-    # prov_desig = write_observation_file("test/call_orbfit/", mpc)
-
-    # print(prov_desig)
-
-    # write_inp("test/call_orbfit/", prov_desig)
-    # write_oop("test/call_orbfit/", prov_desig)
-
-    # output = call_orbitfit("test/call_orbfit/", prov_desig)
-
-    # results = read_oel("test/call_orbfit/", prov_desig)
-
-    # print(output)
-
-    # print(results)
-
-    # import time as t
-
-    # n_trajectories = 1
-    # n_points = 5
-    # n_cpu = 8  # int(mp.cpu_count() / 1.5)
-
-    # gb_ssn = df_sso.groupby(["ssnamenr"]).agg({"candid": len}).sort_values(["candid"])
-    # all_track = gb_ssn[gb_ssn["candid"] == n_points].reset_index()["ssnamenr"].values
-    # mpc = df_sso[df_sso["ssnamenr"].isin(all_track[:n_trajectories])][
-    #     ["ra", "dec", "dcmag", "fid", "jd", "ssnamenr"]
-    # ]
-    # all_ssnamenr = np.unique(mpc["ssnamenr"].values)
-    # ssnamenr_translate = {
-    #     ssn: i for ssn, i in zip(all_ssnamenr, range(len(all_ssnamenr)))
-    # }
-    # mpc["trajectory_id"] = mpc.apply(
-    #     lambda x: ssnamenr_translate[x["ssnamenr"]], axis=1
-    # )
-    # mpc["ssnamenr"] = mpc["ssnamenr"].astype("string")
-
-    # print(
-    #     mpc[["ra", "dec", "dcmag", "fid", "jd", "trajectory_id"]].to_dict(orient="list")
-    # )
-
-    # prov_desig = write_observation_file("test/call_orbfit/", mpc)
-
-    # write_inp("test/call_orbfit/", prov_desig)
-    # write_oop("test/call_orbfit/", prov_desig)
-
-    # output = call_orbitfit("test/call_orbfit/", prov_desig)
-
-    # results = read_oel("test/call_orbfit/", prov_desig)
-
-    # print(output)
-
-    # print(results)
-
-    # exit()
-    # print("MPC DATABASE loading")
-    # t_before = t.time()
-    # mpc_database = utils.get_mpc_database()
-
-    # print("MPC DATABASE end loading, elapsed time: {}".format(t.time() - t_before))
-    # print()
-
-    # print(
-    #     "orbital element computation started, n_trajectories: {}, max available: {}".format(
-    #         min(n_trajectories, len(all_track)), len(all_track)
-    #     )
-    # )
-    # print("n_cpu: {}".format(n_cpu))
-    # t_before = t.time()
-    # orbit_results = compute_df_orbit_param(mpc, n_cpu, ram_dir)
-
-    # multiprocess_time = t.time() - t_before
-    # print("total multiprocessing orbfit time: {}".format(multiprocess_time))
-
-    # print(orbit_results)
-
-    # ztf_mpc_with_orbit_param = mpc.merge(orbit_results, on="trajectory_id")
-    # print()
-    # print("cross match with mpc database")
-    # cross_match_mpc = ztf_mpc_with_orbit_param.merge(
-    #     mpc_database, how="inner", left_on="ssnamenr", right_on="Number"
-    # )
-
-    # dict_color_orbit = po.color_dict(mpc_database)
-    # po.plot_residue(
-    #     cross_match_mpc.drop_duplicates(["ssnamenr"]),
-    #     dict_color_orbit,
-    #     min(n_trajectories, len(all_track)),
-    #     n_points,
-    # )
-
-    # exit()

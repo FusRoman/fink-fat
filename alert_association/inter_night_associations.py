@@ -1,4 +1,3 @@
-from itertools import count
 import numpy as np
 import pandas as pd
 import multiprocessing as mp
@@ -136,7 +135,7 @@ def compute_orbit_elem(trajectory_df, q, ram_dir=""):
 
     >>> assert_frame_equal(res_orb, ts.compute_orbit_elem_output)
     """
-    
+
     _pid = os.getpid()
     current_ram_path = os.path.join(ram_dir, str(_pid), "")
 
@@ -152,11 +151,6 @@ def compute_orbit_elem(trajectory_df, q, ram_dir=""):
         return 0
 
     os.mkdir(current_ram_path)
-    # print(
-    #     "nb traj to compute orb elem: {}".format(
-    #         len(np.unique(traj_to_compute["trajectory_id"]))
-    #     )
-    # )
 
     orbit_column = [
         "provisional designation",
@@ -429,7 +423,8 @@ def tracklets_and_trajectories_steps(
     all_traj_to_orb = pd.concat([traj_to_orb, track_to_orb])
 
     tracklets_orbfit_process = mp.Process(
-        target=compute_orbit_elem, args=(all_traj_to_orb, return_trajectories_queue, ram_dir,)
+        target=compute_orbit_elem,
+        args=(all_traj_to_orb, return_trajectories_queue, ram_dir,),
     )
 
     tracklets_orbfit_process.start()
@@ -562,7 +557,8 @@ def trajectories_and_new_observations_steps(
     small_traj, traj_to_orb = prep_orbit_computation(traj_with_new_obs, orbfit_limit)
 
     trajectories_orbfit_process = mp.Process(
-        target=compute_orbit_elem, args=(traj_to_orb, return_trajectories_queue, ram_dir,)
+        target=compute_orbit_elem,
+        args=(traj_to_orb, return_trajectories_queue, ram_dir,),
     )
     trajectories_orbfit_process.start()
 
@@ -698,7 +694,8 @@ def tracklets_and_old_observations_steps(
     )
 
     tracklets_with_new_obs_orbfit_process = mp.Process(
-        target=compute_orbit_elem, args=(track_to_orb, return_trajectories_queue, ram_dir,)
+        target=compute_orbit_elem,
+        args=(track_to_orb, return_trajectories_queue, ram_dir,),
     )
     tracklets_with_new_obs_orbfit_process.start()
 
@@ -948,28 +945,6 @@ def night_to_night_association(
     else:
         last_trajectory_id = 0
 
-    # if len(trajectory_df) > 0:
-    #     gb_traj = (
-    #         trajectory_df.groupby(["trajectory_id"])
-    #         .agg(
-    #             ra=("ra", list),
-    #             dec=("dec", list),
-    #             dcmag=("dcmag", list),
-    #             candid=("candid", list),
-    #             objectId=("objectId", list),
-    #             ssnamenr=("ssnamenr", list),
-    #             fid=("fid", list),
-    #             nid=("nid", list),
-    #             jd=("jd", list),
-    #             trajectory_size=("candid", lambda x: len(list(x))),
-    #         )
-    #         .reset_index()
-    #     )
-
-    #     from collections import Counter
-
-    #     print("size trajectory df: {}".format(Counter(gb_traj["trajectory_size"])))
-
     (old_traj, most_recent_traj), old_observation = time_window_management(
         trajectory_df,
         old_observation,
@@ -979,45 +954,6 @@ def night_to_night_association(
         obs_time_window,
         orbfit_limit,
     )
-
-    # if len(trajectory_df) > 0:
-    #     gb_traj = (
-    #         most_recent_traj.groupby(["trajectory_id"])
-    #         .agg(
-    #             ra=("ra", list),
-    #             dec=("dec", list),
-    #             dcmag=("dcmag", list),
-    #             candid=("candid", list),
-    #             objectId=("objectId", list),
-    #             ssnamenr=("ssnamenr", list),
-    #             fid=("fid", list),
-    #             nid=("nid", list),
-    #             jd=("jd", list),
-    #             trajectory_size=("candid", lambda x: len(list(x))),
-    #         )
-    #         .reset_index()
-    #     )
-
-    #     print("size most recent traj: {}".format(Counter(gb_traj["trajectory_size"])))
-
-    #     gb_traj = (
-    #         old_traj.groupby(["trajectory_id"])
-    #         .agg(
-    #             ra=("ra", list),
-    #             dec=("dec", list),
-    #             dcmag=("dcmag", list),
-    #             candid=("candid", list),
-    #             objectId=("objectId", list),
-    #             ssnamenr=("ssnamenr", list),
-    #             fid=("fid", list),
-    #             nid=("nid", list),
-    #             jd=("jd", list),
-    #             trajectory_size=("candid", lambda x: len(list(x))),
-    #         )
-    #         .reset_index()
-    #     )
-
-    #     print("size old traj: {}".format(Counter(gb_traj["trajectory_size"])))
 
     inter_night_report = dict()
     inter_night_report["nid of the next night"] = int(next_nid)
@@ -1042,7 +978,9 @@ def night_to_night_association(
             other_track, track_to_orb = prep_orbit_computation(tracklets, orbfit_limit)
 
             q = mp.Queue()
-            process = mp.Process(target=compute_orbit_elem, args=(track_to_orb, q, ram_dir,))
+            process = mp.Process(
+                target=compute_orbit_elem, args=(track_to_orb, q, ram_dir,)
+            )
             process.start()
             track_with_orb_elem = q.get()
 
@@ -1198,7 +1136,6 @@ def night_to_night_association(
     tmp_traj_orb_elem = []
     for process in orbfit_process:
         tmp_traj_orb_elem.append(return_trajectories_queue.get())
-    
 
     if len(tmp_traj_orb_elem) > 0:
         traj_with_orb_elem = pd.concat(tmp_traj_orb_elem)
@@ -1244,9 +1181,6 @@ def night_to_night_association(
 
 def acceleration_filter(trajectory_df, acc_criteria):
 
-    # import warnings
-    # warnings.filterwarnings("error")
-
     if len(trajectory_df) > 0:
 
         def acceleration_df(x):
@@ -1263,12 +1197,6 @@ def acceleration_filter(trajectory_df, acc_criteria):
 
             return np.mean(np.abs(acc))
 
-        # print(
-        #     "*** nb trajectories: {}".format(
-        #         len(np.unique(trajectory_df["trajectory_id"]))
-        #     )
-        # )
-        # t_before = t.time()
         gb_traj = (
             trajectory_df.groupby(["trajectory_id"])
             .agg(
@@ -1286,10 +1214,6 @@ def acceleration_filter(trajectory_df, acc_criteria):
             .reset_index()
         )
 
-        # from collections import Counter
-
-        # print("size trajectory: {}".format(Counter(gb_traj["trajectory_size"])))
-
         large_traj = gb_traj[gb_traj["trajectory_size"] >= 3]
 
         remain_traj = gb_traj[gb_traj["trajectory_size"] < 3]
@@ -1301,15 +1225,6 @@ def acceleration_filter(trajectory_df, acc_criteria):
             with pd.option_context("mode.chained_assignment", None):
                 large_traj["acc"] = large_traj.apply(acceleration_df, axis=1)
 
-            # print(t.time() - t_before)
-            # print()
-            # print("before acc filter: {}".format(len(large_traj)))
-            # print(
-            #     "after acc filter: {}".format(
-            #         len(large_traj[large_traj["acc"] <= acc_criteria])
-            #     )
-            # )
-            # print()
             cst_acc = large_traj[large_traj["acc"] <= acc_criteria]["trajectory_id"]
             return pd.concat(
                 [
@@ -1330,8 +1245,6 @@ if __name__ == "__main__":  # pragma: no cover
     from pandas.testing import assert_frame_equal  # noqa: F401
     import test_sample as ts  # noqa: F401
     from unittest import TestCase  # noqa: F401
-
-    import time as t
 
     if "unittest.util" in __import__("sys").modules:
         # Show full diff in self.assertEqual.
