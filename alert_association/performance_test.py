@@ -41,13 +41,20 @@ if __name__ == "__main__":
 
     last_nid = np.min(df_sso["nid"])
 
+    max_night_iter = 10
+    current_loop = 0
+
     for tr_nid in np.unique(df_sso["nid"]):
+
+        if current_loop > max_night_iter:
+            print("BREAK NIGHT")
+            print(tr_nid)
+            print()
+            break
+
         print("---New Night---")
         print(tr_nid)
         print()
-
-        # if tr_nid == 1540:
-        #     break
 
         new_observation = df_sso[df_sso["nid"] == tr_nid]
         with pd.option_context("mode.chained_assignment", None):
@@ -58,12 +65,12 @@ if __name__ == "__main__":
 
         next_nid = new_observation["nid"].values[0]
 
-        # print(
-        #     "nb trajectories: {}".format(len(np.unique(trajectory_df["trajectory_id"])))
-        # )
-        # print("nb old obs: {}".format(len(old_observation)))
-        # print("nb new obs: {}".format(len(new_observation)))
-        # print()
+        print(
+            "nb trajectories: {}".format(len(np.unique(trajectory_df["trajectory_id"])))
+        )
+        print("nb old obs: {}".format(len(old_observation)))
+        print("nb new obs: {}".format(len(new_observation)))
+        print()
 
         # # .to_dict(orient='list')
         # print(trajectory_df.to_dict(orient="list"))
@@ -84,7 +91,7 @@ if __name__ == "__main__":
             traj_time_window=8,
             obs_time_window=3,
             sep_criterion=0.3 * u.degree,
-            acceleration_criteria=1000,
+            acceleration_criteria=0.24,
             mag_criterion_same_fid=0.3,
             mag_criterion_diff_fid=0.7,
             orbfit_limit=5,
@@ -103,9 +110,9 @@ if __name__ == "__main__":
         # print(old_observation.to_dict(orient="list"))
         # print()
         # print()
-        print(report)
-        print()
-        print()
+        # print(report)
+        # print()
+        # print()
 
         elapsed_time = t.time() - t_before
         if elapsed_time <= 60:
@@ -122,33 +129,13 @@ if __name__ == "__main__":
         print()
         print()
 
-        # print()
-        # orb_elem = trajectory_df[trajectory_df["a"] != -1.0]
-        # print(
-        #     "number of trajectories with orbital elements: {}".format(
-        #         len(np.unique(orb_elem["trajectory_id"]))
-        #     )
-        # )
-
-        # print()
-        # print()
-        # if len(trajectory_df) > 0:
-        #     print("/////////TEST JD DUPLICATES///////////")
-        #     test = (
-        #         trajectory_df.groupby(["trajectory_id"])
-        #         .agg(jd=("jd", list))
-        #         .reset_index()
-        #     )
-        #     diff_jd = test.apply(lambda x: np.any(np.diff(x["jd"]) == 0), axis=1)
-        #     keep_traj = test[diff_jd]["trajectory_id"]
-        #     tttt = trajectory_df[trajectory_df["trajectory_id"].isin(keep_traj)]
-        #     print(
-        #         tttt[
-        #             ["ra", "dec", "objectId", "jd", "nid", "ssnamenr", "trajectory_id"]
-        #         ]
-        #     )
-        #     print()
-        #     print("/////////FIN TEST JD DUPLICATES///////////")
+        print()
+        orb_elem = trajectory_df[trajectory_df["a"] != -1.0]
+        print(
+            "number of trajectories with orbital elements: {}".format(
+                len(np.unique(orb_elem["trajectory_id"]))
+            )
+        )
 
         print()
         print("---End Night---")
@@ -158,6 +145,8 @@ if __name__ == "__main__":
         print()
 
         last_nid = next_nid
+
+        current_loop += 1
 
     print()
     print()
