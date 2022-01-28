@@ -1,3 +1,4 @@
+from itertools import count
 import numpy as np
 import pandas as pd
 import multiprocessing as mp
@@ -14,10 +15,6 @@ from alert_association.associations import (
     old_with_new_observations_associations,
     time_window_management,
 )
-
-
-# constant to locate the ram file system
-ram_dir = "/media/virtuelram/"
 
 
 def prep_orbit_computation(trajectory_df, orbfit_limit):
@@ -139,6 +136,7 @@ def compute_orbit_elem(trajectory_df, q, ram_dir=""):
 
     >>> assert_frame_equal(res_orb, ts.compute_orbit_elem_output)
     """
+    
     _pid = os.getpid()
     current_ram_path = os.path.join(ram_dir, str(_pid), "")
 
@@ -183,10 +181,10 @@ def compute_orbit_elem(trajectory_df, q, ram_dir=""):
         traj_to_compute, int(mp.cpu_count() / 2), current_ram_path
     )
 
-    traj_to_compute = traj_to_compute.merge(orbit_elem, on="trajectory_id")
+    traj_to_return = traj_to_compute.merge(orbit_elem, on="trajectory_id")
 
     os.rmdir(current_ram_path)
-    q.put(pd.concat([traj_with_orbelem, traj_to_compute]))
+    q.put(pd.concat([traj_with_orbelem, traj_to_return]))
 
     return 0
 
@@ -309,6 +307,7 @@ def tracklets_and_trajectories_steps(
     angle_criterion,
     orbfit_limit,
     max_traj_id,
+    ram_dir,
     run_metrics,
 ):
     """
@@ -382,6 +381,7 @@ def tracklets_and_trajectories_steps(
     ... angle_criterion=8.8,
     ... orbfit_limit=5,
     ... max_traj_id=3,
+    ... ram_dir="",
     ... run_metrics=True,
     ... )
 
@@ -429,7 +429,7 @@ def tracklets_and_trajectories_steps(
     all_traj_to_orb = pd.concat([traj_to_orb, track_to_orb])
 
     tracklets_orbfit_process = mp.Process(
-        target=compute_orbit_elem, args=(all_traj_to_orb, return_trajectories_queue,)
+        target=compute_orbit_elem, args=(all_traj_to_orb, return_trajectories_queue, ram_dir,)
     )
 
     tracklets_orbfit_process.start()
@@ -455,6 +455,7 @@ def trajectories_and_new_observations_steps(
     angle_criterion,
     orbfit_limit,
     max_traj_id,
+    ram_dir,
     run_metrics,
 ):
     """
@@ -525,6 +526,7 @@ def trajectories_and_new_observations_steps(
     ... angle_criterion=8.8,
     ... orbfit_limit=4,
     ... max_traj_id=9,
+    ... ram_dir="",
     ... run_metrics=True,
     ... )
 
@@ -560,7 +562,7 @@ def trajectories_and_new_observations_steps(
     small_traj, traj_to_orb = prep_orbit_computation(traj_with_new_obs, orbfit_limit)
 
     trajectories_orbfit_process = mp.Process(
-        target=compute_orbit_elem, args=(traj_to_orb, return_trajectories_queue,)
+        target=compute_orbit_elem, args=(traj_to_orb, return_trajectories_queue, ram_dir,)
     )
     trajectories_orbfit_process.start()
 
@@ -584,6 +586,7 @@ def tracklets_and_old_observations_steps(
     angle_criterion,
     orbfit_limit,
     max_traj_id,
+    ram_dir,
     run_metrics,
 ):
     """
@@ -654,6 +657,7 @@ def tracklets_and_old_observations_steps(
     ... angle_criterion=8.8,
     ... orbfit_limit=3,
     ... max_traj_id=9,
+    ... ram_dir="",
     ... run_metrics=True,
     ... )
 
@@ -694,7 +698,7 @@ def tracklets_and_old_observations_steps(
     )
 
     tracklets_with_new_obs_orbfit_process = mp.Process(
-        target=compute_orbit_elem, args=(track_to_orb, return_trajectories_queue,)
+        target=compute_orbit_elem, args=(track_to_orb, return_trajectories_queue, ram_dir,)
     )
     tracklets_with_new_obs_orbfit_process.start()
 
@@ -726,6 +730,7 @@ def night_to_night_association(
     angle_criterion=8.8,
     acceleration_criteria=0.01,
     orbfit_limit=3,
+    ram_dir="",
     run_metrics=False,
 ):
     """
@@ -1037,7 +1042,7 @@ def night_to_night_association(
             other_track, track_to_orb = prep_orbit_computation(tracklets, orbfit_limit)
 
             q = mp.Queue()
-            process = mp.Process(target=compute_orbit_elem, args=(track_to_orb, q,))
+            process = mp.Process(target=compute_orbit_elem, args=(track_to_orb, q, ram_dir,))
             process.start()
             track_with_orb_elem = q.get()
 
@@ -1092,6 +1097,7 @@ def night_to_night_association(
             angle_criterion,
             orbfit_limit,
             last_trajectory_id,
+            ram_dir,
             run_metrics,
         )
         orbfit_process.append(tracklets_orbfit_process)
@@ -1138,6 +1144,7 @@ def night_to_night_association(
             angle_criterion,
             orbfit_limit,
             max_traj_id,
+            ram_dir,
             run_metrics,
         )
         orbfit_process.append(traj_with_new_obs_orbfit_process)
@@ -1163,6 +1170,7 @@ def night_to_night_association(
             angle_criterion,
             orbfit_limit,
             max_traj_id,
+            ram_dir,
             run_metrics,
         )
         orbfit_process.append(track_with_old_obs_orbfit_process)
@@ -1190,7 +1198,7 @@ def night_to_night_association(
     tmp_traj_orb_elem = []
     for process in orbfit_process:
         tmp_traj_orb_elem.append(return_trajectories_queue.get())
-        process.terminate()
+    
 
     if len(tmp_traj_orb_elem) > 0:
         traj_with_orb_elem = pd.concat(tmp_traj_orb_elem)
@@ -1226,6 +1234,10 @@ def night_to_night_association(
 
     trajectory_df = pd.concat([old_traj, most_recent_traj])
     trajectory_df["not_updated"] = np.ones(len(trajectory_df), dtype=np.bool_)
+
+    # terminate properly all the orbfit process
+    for process in orbfit_process:
+        process.terminate()
 
     return trajectory_df, old_observation, inter_night_report
 
@@ -1326,265 +1338,3 @@ if __name__ == "__main__":  # pragma: no cover
         __import__("sys").modules["unittest.util"]._MAX_LENGTH = 999999999
 
     sys.exit(doctest.testmod()[0])
-
-    from alert_association.continuous_integration import load_data
-
-    df_sso = load_data("Solar System MPC", 0)
-
-    # tr = df_sso.groupby(['ssnamenr']).count().sort_values(["ra"])
-
-    # print(tr[tr["ra"] == 10])
-
-    # df_sso = df_sso[df_sso["ssnamenr"].isin(["2017SE19"])]
-
-    all_night = np.unique(df_sso["nid"])
-
-    # print(df_sso)
-
-    night = [1520, 1521]
-    traj = ["10207", "104", "968"]
-
-    tr_spec = df_sso[(df_sso["nid"].isin(night)) & (df_sso["ssnamenr"].isin(traj))]
-
-    tr_orb_columns = [
-        "provisional designation",
-        "ref_epoch",
-        "a",
-        "e",
-        "i",
-        "long. node",
-        "arg. peric",
-        "mean anomaly",
-        "rms_a",
-        "rms_e",
-        "rms_i",
-        "rms_long. node",
-        "rms_arg. peric",
-        "rms_mean anomaly",
-        "not_updated",
-        "trajectory_id",
-    ]
-
-    trajectory_df = pd.DataFrame(columns=tr_orb_columns)
-    old_observation = tr_spec[tr_spec["nid"] == 1520]
-    new_observation = tr_spec[tr_spec["nid"] == 1521]
-
-    with pd.option_context("mode.chained_assignment", None):
-        old_observation[tr_orb_columns] = -1.0
-        new_observation[tr_orb_columns] = -1.0
-        new_observation["not_updated"] = np.ones(len(new_observation), dtype=np.bool_)
-
-    print(trajectory_df.to_dict(orient="list"))
-    print()
-    print()
-    print(old_observation.to_dict(orient="list"))
-    print()
-    print()
-    print(new_observation.to_dict(orient="list"))
-
-    trajectory_df, old_observation, report = night_to_night_association(
-        trajectory_df,
-        old_observation,
-        new_observation,
-        1520,
-        1521,
-        traj_time_window=30,
-        obs_time_window=30,
-        intra_night_sep_criterion=500 * u.arcsecond,
-        sep_criterion=2 * u.degree,
-        acceleration_criteria=0.5,
-        mag_criterion_same_fid=0.3,
-        mag_criterion_diff_fid=5,
-        orbfit_limit=5,
-        angle_criterion=5,
-    )
-
-    print()
-    print("------------------------")
-    print("ASSOCIATION DONE")
-    print()
-    print("trajectory")
-    print(trajectory_df.to_dict(orient="list"))
-    print()
-    print()
-    print(old_observation.to_dict(orient="list"))
-    print()
-    print()
-    print(report)
-    print()
-    print()
-
-    # for i in range(len(all_night) - 1):
-    #     print(all_night[i], all_night[i + 1])
-    #     print()
-    #     n1 = df_sso[df_sso["nid"] == all_night[i]]
-    #     n2 = df_sso[df_sso["nid"] == all_night[i + 1]]
-
-    #     n1_gb = n1.groupby(["ssnamenr"]).count().reset_index()
-    #     n2_gb = n2.groupby(["ssnamenr"]).count().reset_index()
-
-    #     old_obs = n1_gb[n1_gb["ra"] == 1]
-    #     track = n2_gb[n2_gb["ra"] == 1]
-
-    #     print(old_obs.merge(track, on="ssnamenr"))
-    #     print()
-    #     print()
-
-    exit()
-    tr_orb_columns = [
-        "provisional designation",
-        "ref_epoch",
-        "a",
-        "e",
-        "i",
-        "long. node",
-        "arg. peric",
-        "mean anomaly",
-        "rms_a",
-        "rms_e",
-        "rms_i",
-        "rms_long. node",
-        "rms_arg. peric",
-        "rms_mean anomaly",
-        "not_updated",
-        "trajectory_id",
-    ]
-
-    required_columns = ["ra", "dec", "jd", "nid", "fid", "dcmag", "candid"]
-
-    trajectory_df = pd.DataFrame(columns=tr_orb_columns)
-    old_observation = pd.DataFrame(columns=["nid"])
-
-    last_nid = np.min(df_sso["nid"])
-
-    for tr_nid in np.unique(df_sso["nid"]):
-        print("---New Night---")
-        print(tr_nid)
-        print()
-
-        if tr_nid == 1540:
-            break
-
-        new_observation = df_sso[df_sso["nid"] == tr_nid]
-        with pd.option_context("mode.chained_assignment", None):
-            new_observation[tr_orb_columns] = -1.0
-            new_observation["not_updated"] = np.ones(
-                len(new_observation), dtype=np.bool_
-            )
-
-        next_nid = new_observation["nid"].values[0]
-
-        print(
-            "nb trajectories: {}".format(len(np.unique(trajectory_df["trajectory_id"])))
-        )
-        print("nb old obs: {}".format(len(old_observation)))
-        print("nb new obs: {}".format(len(new_observation)))
-        print()
-
-        # .to_dict(orient='list')
-        print(trajectory_df.to_dict(orient="list"))
-        print()
-        print()
-        print(old_observation.to_dict(orient="list"))
-        print()
-        print()
-        print(new_observation.to_dict(orient="list"))
-
-        t_before = t.time()
-        trajectory_df, old_observation, report = night_to_night_association(
-            trajectory_df,
-            old_observation,
-            new_observation,
-            last_nid,
-            next_nid,
-            traj_time_window=30,
-            obs_time_window=30,
-            intra_night_sep_criterion=500 * u.arcsecond,
-            sep_criterion=2 * u.degree,
-            acceleration_criteria=0.5,
-            mag_criterion_same_fid=0.3,
-            mag_criterion_diff_fid=0.7,
-            orbfit_limit=5,
-            angle_criterion=5,
-        )
-
-        print()
-        print("------------------------")
-        print("ASSOCIATION DONE")
-        print()
-        print("trajectory")
-        print(trajectory_df.to_dict(orient="list"))
-        print()
-        print()
-        print(old_observation.to_dict(orient="list"))
-        print()
-        print()
-        print(report)
-        print()
-        print()
-
-        elapsed_time = t.time() - t_before
-        if elapsed_time <= 60:
-            print()
-            print("associations elapsed time: {} sec".format(round(elapsed_time, 3)))
-        else:
-            time_min = int(elapsed_time / 60)
-            time_sec = round(elapsed_time % 60, 3)
-            print()
-            print(
-                "associations elapsed time: {} min: {} sec".format(time_min, time_sec)
-            )
-
-        print()
-        print()
-
-        print()
-        orb_elem = trajectory_df[trajectory_df["a"] != -1.0]
-        print(
-            "number of trajectories with orbital elements: {}".format(
-                len(np.unique(orb_elem["trajectory_id"]))
-            )
-        )
-
-        print()
-        print()
-        if len(trajectory_df) > 0:
-            print("/////////TEST JD DUPLICATES///////////")
-            test = (
-                trajectory_df.groupby(["trajectory_id"])
-                .agg(jd=("jd", list))
-                .reset_index()
-            )
-            diff_jd = test.apply(lambda x: np.any(np.diff(x["jd"]) == 0), axis=1)
-            keep_traj = test[diff_jd]["trajectory_id"]
-            tttt = trajectory_df[trajectory_df["trajectory_id"].isin(keep_traj)]
-            print(
-                tttt[
-                    ["ra", "dec", "objectId", "jd", "nid", "ssnamenr", "trajectory_id"]
-                ]
-            )
-            print()
-            print("/////////FIN TEST JD DUPLICATES///////////")
-
-        print()
-        print("---End Night---")
-        print()
-        print()
-        print()
-        print()
-
-        last_nid = next_nid
-
-    record = False
-    if len(trajectory_df) > 0 and record:
-        trajectory_df = trajectory_df.infer_objects()
-        trajectory_df["ssnamenr"] = trajectory_df["ssnamenr"].astype(str)
-        trajectory_df["fink_class"] = trajectory_df["fink_class"].astype(str)
-        trajectory_df["objectId"] = trajectory_df["objectId"].astype(str)
-        trajectory_df["provisional designation"] = trajectory_df[
-            "provisional designation"
-        ].astype(str)
-
-        trajectory_df.to_parquet("trajectory_df.parquet")
-
-    # sys.exit(doctest.testmod()[0])
