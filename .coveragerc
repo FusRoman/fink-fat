@@ -5,7 +5,6 @@ omit=
     alert_association/night_report.py
     alert_association/performance_test.py
     alert_association/ephem.py
-    alert_association/continuous_integration.py
     alert_association/utils.py
     setup.py
     alert_association/orbit_fitting/plot_orbstat.py
