@@ -4,13 +4,9 @@ import numpy as np
 from alert_association.inter_night_associations import night_to_night_association
 import astropy.units as u
 from pandas.testing import assert_frame_equal
-import sys
 from alert_association.utils import load_data
 
 if __name__ == "__main__":
-    import doctest
-
-    from alert_association.continuous_integration import load_data
 
     # constant to locate the ram file system
     ram_dir = "/media/virtuelram/"
@@ -21,7 +17,7 @@ if __name__ == "__main__":
 
     traj_name = traj_count[traj_count["ra"].isin([20])]["ssnamenr"][:5]
     df_sso = df_sso[df_sso["ssnamenr"].isin(traj_name)].sort_values(["ssnamenr"])
-    
+
     tr_orb_columns = [
         "provisional designation",
         "ref_epoch",
@@ -75,7 +71,7 @@ if __name__ == "__main__":
             mag_criterion_diff_fid=5,
             orbfit_limit=5,
             angle_criterion=200,
-            ram_dir=ram_dir
+            ram_dir=ram_dir,
         )
 
         last_nid = next_nid

@@ -8,8 +8,6 @@ from alert_association.inter_night_associations import night_to_night_associatio
 
 if __name__ == "__main__":
 
-    import doctest
-
     from alert_association.continuous_integration import load_data
 
     # constant to locate the ram file system
@@ -17,34 +15,6 @@ if __name__ == "__main__":
 
     df_sso = load_data("Solar System MPC", 0)
 
-    traj_count = df_sso.groupby(["ssnamenr"]).count().reset_index()
-
-    traj_name = traj_count[traj_count["ra"].isin([20])]["ssnamenr"][:5]
-    df_sso = df_sso[df_sso["ssnamenr"].isin(traj_name)].sort_values(["ssnamenr"])
-
-    print(df_sso.groupby(["ssnamenr"]).count())
-    print()
-    print()
-    print()
-    
-    # exit()
-    # for i in range(len(all_night) - 1):
-    #     print(all_night[i], all_night[i + 1])
-    #     print()
-    #     n1 = df_sso[df_sso["nid"] == all_night[i]]
-    #     n2 = df_sso[df_sso["nid"] == all_night[i + 1]]
-
-    #     n1_gb = n1.groupby(["ssnamenr"]).count().reset_index()
-    #     n2_gb = n2.groupby(["ssnamenr"]).count().reset_index()
-
-    #     old_obs = n1_gb[n1_gb["ra"] == 1]
-    #     track = n2_gb[n2_gb["ra"] == 1]
-
-    #     print(old_obs.merge(track, on="ssnamenr"))
-    #     print()
-    #     print()
-
-    
     tr_orb_columns = [
         "provisional designation",
         "ref_epoch",
@@ -111,16 +81,15 @@ if __name__ == "__main__":
             new_observation,
             last_nid,
             next_nid,
-            traj_time_window=200,
-            obs_time_window=200,
-            intra_night_sep_criterion=500 * u.arcsecond,
-            sep_criterion=0.5 * u.degree,
+            traj_time_window=8,
+            obs_time_window=3,
+            sep_criterion=0.3 * u.degree,
             acceleration_criteria=1000,
-            mag_criterion_same_fid=5,
-            mag_criterion_diff_fid=5,
+            mag_criterion_same_fid=0.3,
+            mag_criterion_diff_fid=0.7,
             orbfit_limit=5,
-            angle_criterion=200,
-            ram_dir=ram_dir
+            angle_criterion=1,
+            ram_dir=ram_dir,
         )
 
         # print()
@@ -190,19 +159,21 @@ if __name__ == "__main__":
 
         last_nid = next_nid
 
-
     print()
     print()
     print()
     print()
 
-    print(trajectory_df[["ssnamenr", "trajectory_id", "a", "e", "i"]].sort_values(["trajectory_id"]))
+    print(
+        trajectory_df[["ssnamenr", "trajectory_id", "a", "e", "i"]].sort_values(
+            ["trajectory_id"]
+        )
+    )
     gb = trajectory_df.groupby(["trajectory_id", "ssnamenr"])
-    
+
     print(len(np.unique(gb.count().reset_index()["ssnamenr"])))
     print()
     print(gb.agg({"ra": len, "a": list, "e": list, "i": list}))
-
 
     record = False
     if len(trajectory_df) > 0 and record:
@@ -213,4 +184,3 @@ if __name__ == "__main__":
 
         trajectory_df = trajectory_df.drop(["provisional designation"], axis=1)
         trajectory_df.to_parquet("alert_association/CI_expected_output.parquet")
-
