@@ -1,0 +1,16 @@
+[flake8]
+ignore = 
+    E302
+    E501
+exclude =
+    .git,
+    __pycache__,
+    docs/source/conf.py,
+    old,
+    build,
+    dist
+count
+show-source
+statistics
+per-file-ignores =
+    ../Asteroids_and_Associations/alert_association/orbit_fitting/orbfit_management.py:W503

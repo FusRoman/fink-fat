@@ -3,8 +3,6 @@ from astropy.coordinates import SkyCoord
 import pandas as pd
 import numpy as np
 from collections import Counter
-
-
 from astropy.coordinates import search_around_sky
 
 
@@ -318,6 +316,7 @@ def magnitude_association(
     >>> assert_frame_equal(l, l_expected)
     >>> assert_frame_equal(r, r_expected)
     """
+
     same_fid = left_assoc["fid"].values == right_assoc["fid"].values
     diff_fid = left_assoc["fid"].values != right_assoc["fid"].values
 
@@ -496,9 +495,36 @@ def compute_inter_night_metric(
     >>> metrics = compute_inter_night_metric(real_left, real_right, detected_left, detected_right)
     >>> expected_metrics = {'precision': 100.0, 'recall': 100.0, 'True Positif': 1, 'False Positif': 0, 'False Negatif': 0, 'total real association': 1}
     >>> TestCase().assertDictEqual(expected_metrics, metrics)
+
+
+    >>> real_left = pd.DataFrame({
+    ... 'candid': [1520405434515015014, 1520216750115015007]
+    ... })
+
+    >>> real_right = pd.DataFrame({
+    ... 'candid': [1521202363215015009]
+    ... })
+
+    >>> detected_left = pd.DataFrame({
+    ... 'candid': [1520405434515015014],
+    ... 'ssnamenr': ["53317"]
+    ... })
+
+    >>> detected_right = pd.DataFrame({
+    ... 'candid': [1521202363215015009],
+    ... 'ssnamenr': ["53317"]
+    ... })
+
+    >>> compute_inter_night_metric(real_left, real_right, detected_left, detected_right)
+    {}
     """
 
-    if "ssnamenr" in real_obs1 and "ssnamenr" in real_obs2 and "ssnamenr" in left_assoc and "ssnamenr" in right_assoc:
+    # fmt: off
+    test_statement = ("ssnamenr" in real_obs1 and "ssnamenr" in real_obs2 and "ssnamenr" in left_assoc and "ssnamenr" in right_assoc)
+    # fmt: on
+
+    if test_statement:
+
         real_obs1 = (
             real_obs1[["candid", "ssnamenr"]]
             .sort_values(["ssnamenr"])
@@ -542,9 +568,6 @@ def compute_inter_night_metric(
             how="outer",
             indicator=True,
         )
-
-        # test = (~assoc_metrics[["candid_left", "candid_right"]].duplicated()) | (assoc_metrics[["candid_left", "candid_right"]].isnull().all(axis=1))
-        # assoc_metrics = assoc_metrics[test]
 
         FP = len(assoc_metrics[assoc_metrics["_merge"] == "right_only"])
         TP = len(assoc_metrics[assoc_metrics["_merge"] == "both"])
@@ -1092,6 +1115,13 @@ def intra_night_association(
         night_observation, sep_criterion
     )
 
+    left_assoc = left_assoc.reset_index(drop=True)
+    right_assoc = right_assoc.reset_index(drop=True)
+
+    mask_diff_jd = left_assoc["jd"] != right_assoc["jd"]
+    left_assoc = left_assoc[mask_diff_jd]
+    right_assoc = right_assoc[mask_diff_jd]
+
     intra_night_report["number of separation association"] = len(left_assoc)
 
     left_assoc, right_assoc = magnitude_association(
@@ -1266,6 +1296,7 @@ def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
     traj_df = pd.concat([left_assoc, right_assoc]).drop_duplicates(
         ["candid", "trajectory_id"]
     )
+
     return traj_df
 
 

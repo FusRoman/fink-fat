@@ -62,9 +62,6 @@ def parse_intra_night_report(intra_night_report):
             fp = metrics["False Positif"]
             fn = metrics["False Negatif"]
             tot = metrics["total real association"]
-            if fp == 0 and tot == 0:
-                pr = 100
-                re = 100
         else:
             pr = 100
             re = 100
@@ -76,7 +73,7 @@ def parse_intra_night_report(intra_night_report):
             [nb_sep_assoc, nb_mag_filter, nb_tracklets, pr, re, tp, fp, fn, tot]
         )
     else:
-        return np.array([0, 0, 0, 0, 100, 100, 0, 0, 0])
+        return np.array([0, 0, 0, 100, 100, 0, 0, 0, 0])
 
 
 def parse_association_report(association_report):
@@ -172,7 +169,11 @@ def parse_tracklets_obs_report(inter_night_report):
 def parse_inter_night_report(report):
     intra_report = report["intra night report"]
     traj_report = report["trajectory association report"]
-    track_report = report["tracklets and observation association report"]
+    if "tracklets and observation association report" in report:
+        track_report = report["tracklets and observation association report"]
+        parse_track_report = parse_tracklets_obs_report(track_report)
+    else:
+        parse_track_report = [], np.array([])
 
     nb_traj = report["nb trajectories"]
     nb_most_recent_traj = report["nb most recent traj"]
@@ -182,7 +183,6 @@ def parse_inter_night_report(report):
 
     parse_intra_report = parse_intra_night_report(intra_report)
     parse_traj_report = parse_trajectories_report(traj_report)
-    parse_track_report = parse_tracklets_obs_report(track_report)
 
     return (
         parse_intra_report,
@@ -433,6 +433,10 @@ def plot_intra_assoc(assoc, axes, title):
 def plot_inter_assoc(assoc, ax, title):
     values_idx = np.arange(1, np.shape(assoc[:, :2])[0] + 1)
 
+    assoc[:, 1] = assoc[:, 0] - assoc[:, 1]
+    assoc[:, 2] = assoc[:, 1] - assoc[:, 2]
+    assoc[:, 3] = np.cumsum(assoc[:, 2] - assoc[:, 3])
+
     ax.plot(
         values_idx,
         assoc,
@@ -440,9 +444,10 @@ def plot_inter_assoc(assoc, ax, title):
             "separation assoc",
             "magnitude filter",
             "angle filter",
-            "duplicates assoc",
+            "remain after removing duplicates",
         ],
     )
+    ax.set_yscale("log")
     ax.set_title(title)
 
 
@@ -504,7 +509,7 @@ def plot_trajectories(traj_df, mpc_plot):
     ax2.set_title("detected trajectories")
 
 
-def load_performance_stat(first_file_report="report_db/03/01.json"):
+def load_performance_stat(only_intra_night=False):
     all_path_report = sorted(glob.glob("report_db/*/*"))
 
     all_inter_metrics = [[], [], [], []]
@@ -515,14 +520,44 @@ def load_performance_stat(first_file_report="report_db/03/01.json"):
 
     all_inter_stat = []
 
-    for current_path in all_path_report:
+    with open(all_path_report[0], "r") as file:
+        intra_night_report = json.load(file)
+        intra_night_values = parse_intra_night_report(intra_night_report)
 
-        if current_path == first_file_report:
+        nb_traj = intra_night_report["nb trajectories"]
+        nb_most_recent_traj = intra_night_report["nb most recent traj"]
+        nb_old_obs = intra_night_report["nb old observations"]
+        nb_new_obs = intra_night_report["nb new observations"]
+        time = intra_night_report["computation time of the night"]
+
+        all_intra_metrics.append(intra_night_values[3:])
+        all_intra_assoc.append(intra_night_values[:3])
+        all_inter_stat.append(
+            np.array([nb_traj, time, nb_most_recent_traj, nb_old_obs, nb_new_obs])
+        )
+
+    for current_path in all_path_report[1:]:
+
+        if only_intra_night:
             with open(current_path, "r") as file:
                 intra_night_report = json.load(file)
-                intra_night_report = parse_intra_night_report(intra_night_report)
-                all_intra_metrics.append(intra_night_report[3:])
-                all_intra_assoc.append(intra_night_report[:3])
+                intra_night_values = parse_intra_night_report(
+                    intra_night_report["intra night report"]
+                )
+
+                nb_traj = intra_night_report["nb trajectories"]
+                nb_most_recent_traj = intra_night_report["nb most recent traj"]
+                nb_old_obs = intra_night_report["nb old observations"]
+                nb_new_obs = intra_night_report["nb new observations"]
+                time = intra_night_report["computation time of the night"]
+
+                all_intra_metrics.append(intra_night_values[3:])
+                all_intra_assoc.append(intra_night_values[:3])
+                all_inter_stat.append(
+                    np.array(
+                        [nb_traj, time, nb_most_recent_traj, nb_old_obs, nb_new_obs]
+                    )
+                )
                 continue
 
         parse_report = open_and_parse_report(current_path)
@@ -559,10 +594,12 @@ def load_performance_stat(first_file_report="report_db/03/01.json"):
                 all_inter_metrics[i].append(inter_night_metrics[i].reshape((1, 6)))
 
     all_intra_assoc = np.stack(all_intra_assoc)
-    all_inter_assoc = [np.concatenate(i, axis=0) for i in all_inter_assoc]
+    all_inter_assoc = [np.concatenate(i, axis=0) for i in all_inter_assoc if len(i) > 0]
 
     all_intra_metrics = np.stack(all_intra_metrics)
-    all_inter_metrics = [np.concatenate(i, axis=0) for i in all_inter_metrics]
+    all_inter_metrics = [
+        np.concatenate(i, axis=0) for i in all_inter_metrics if len(i) > 0
+    ]
 
     all_inter_stat = np.stack(all_inter_stat)
 
@@ -617,11 +654,13 @@ def plot_performance_test(
     ]
 
     fig2.suptitle("Metrics")
-    for i, met_ax, met_title, assoc_ax, title in zip(
-        range(4), metrics_axes[1:], metrics_title, assoc_axes, assoc_title
-    ):
-        plot_metrics(fig2, all_inter_metrics[i], met_ax, met_title)
-        plot_inter_assoc(all_inter_assoc[i], assoc_ax, title)
+
+    if len(all_inter_assoc) > 0 and len(all_inter_metrics) > 0:
+        for i, met_ax, met_title, assoc_ax, title in zip(
+            range(4), metrics_axes[1:], metrics_title, assoc_axes, assoc_title
+        ):
+            plot_metrics(fig2, all_inter_metrics[i], met_ax, met_title)
+            plot_inter_assoc(all_inter_assoc[i], assoc_ax, title)
 
     lines_labels = [ax.get_legend_handles_labels() for ax in assoc_axes]
     lines, labels = [sum(lol, []) for lol in zip(*lines_labels)]

@@ -138,3 +138,19 @@ alert_association/trajectory_output.parquet
 test_report/
 
 data/mpc_database/
+alert_association/orbit_fitting/residuals/
+
+*.obs
+*.inp
+*.oop
+*.olg
+*.odc
+*.oel
+*.pro
+*.bai
+*.bep
+mpcobs/
+
+OrbitFit
+asteroid_study/*.png
+trajectory_df.parquet
