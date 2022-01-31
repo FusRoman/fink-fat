@@ -15,15 +15,21 @@
 # limitations under the License.
 ## Script to launch the python test suite and measure the coverage.
 
+
+# source the intel fortran compiler and libraries, needed for OrbFit 
+source /opt/intel/oneapi/setvars.sh
+
 set -e
 
 export ROOTPATH=`pwd`
-
-
 export COVERAGE_PROCESS_START="${ROOTPATH}/.coveragerc"
 
 FILE1=alert_association/performance_test.py
 FILE2=alert_association/night_report.py
+FILE3=alert_association/ephem.py
+
+make simple_build
+
 
 # Run the test suite
 for filename in alert_association/*.py
@@ -31,7 +37,10 @@ do
   case $filename in
   $FILE1 ) continue ;;
   $FILE2 ) continue ;;
+  $FILE3 ) continue ;;
   * )
+
+    echo $filename
     # Run test suite + coverage
     coverage run \
       --append \
@@ -39,6 +48,16 @@ do
       --rcfile ${ROOTPATH}/.coveragerc $filename
     ;;
   esac
+done
+
+for filename in alert_association/orbit_fitting/*.py
+do
+  echo $filename
+  # Run test suite + coverage
+  coverage run \
+    --append \
+    --source=${ROOTPATH} \
+    --rcfile ${ROOTPATH}/.coveragerc $filename
 done
 
 unset COVERAGE_PROCESS_START
