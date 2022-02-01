@@ -24,6 +24,7 @@ set -e
 export ROOTPATH=`pwd`
 export COVERAGE_PROCESS_START="${ROOTPATH}/.coveragerc"
 
+set -e
 
 make simple_build
 
