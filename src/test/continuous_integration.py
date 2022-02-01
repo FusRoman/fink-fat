@@ -67,7 +67,7 @@ if __name__ == "__main__":
             mag_criterion_same_fid=5,
             mag_criterion_diff_fid=5,
             orbfit_limit=5,
-            angle_criterion=200
+            angle_criterion=200,
         )
 
         last_nid = next_nid
