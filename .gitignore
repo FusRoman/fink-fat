@@ -138,11 +138,7 @@ src/others/trajectory_output.parquet
 test_report/
 
 data/mpc_database/
-<<<<<<< HEAD
 src/orbit_fitting/residuals/
-=======
-alert_association/orbit_fitting/residuals/
->>>>>>> b06e2f212034944f3ef53702799a686f2393a179
 
 *.obs
 *.inp
@@ -157,8 +153,5 @@ mpcobs/
 
 OrbitFit
 asteroid_study/*.png
-<<<<<<< HEAD
 asteroid_study/residuals/
-=======
->>>>>>> b06e2f212034944f3ef53702799a686f2393a179
 trajectory_df.parquet
