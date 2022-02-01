@@ -35,13 +35,13 @@ if __name__ == "__main__":
     df_sso = df_sso[df_sso["nid"].isin(test_night)]
 
     nb_traj = len(np.unique(df_sso["ssnamenr"]))
-    print("number of trajectory: {}".format(nb_traj))
+    print("number of objects in these nights: {}".format(nb_traj))
 
     traj_size = df_sso.groupby(["ssnamenr"]).count().reset_index()
 
     detected_traj = traj_size[traj_size["ra"] >= 5]
 
-    print("number of trajectories that can be detected: {}".format(len(detected_traj)))
+    print("number of objects that can be detected: {}".format(len(detected_traj)))
     print()
 
     traj_with_orb = trajectory_df[trajectory_df["a"] != -1.0]

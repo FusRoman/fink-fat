@@ -48,6 +48,17 @@ if __name__ == "__main__":
     all_time = []
     all_nb_traj = []
 
+    current_test_parameters = {
+        "traj_time_window":8,
+        "obs_time_window":3,
+        "sep_criterion":0.35 * u.degree,
+        "acceleration_criteria":0.4,
+        "mag_criterion_same_fid":0.4,
+        "mag_criterion_diff_fid":0.8,
+        "orbfit_limit":5,
+        "angle_criterion":1.5
+    }
+
     for tr_nid in np.unique(df_sso["nid"]):
 
         if current_loop > max_night_iter:
@@ -93,14 +104,14 @@ if __name__ == "__main__":
             new_observation,
             last_nid,
             next_nid,
-            traj_time_window=8,
-            obs_time_window=3,
-            sep_criterion=0.35 * u.degree,
-            acceleration_criteria=0.4,
-            mag_criterion_same_fid=0.4,
-            mag_criterion_diff_fid=0.8,
-            orbfit_limit=5,
-            angle_criterion=1.5,
+            traj_time_window=current_test_parameters["traj_time_window"],
+            obs_time_window=current_test_parameters["obs_time_window"],
+            sep_criterion=current_test_parameters["sep_criterion"],
+            acceleration_criteria=current_test_parameters["acceleration_criteria"],
+            mag_criterion_same_fid=current_test_parameters["mag_criterion_same_fid"],
+            mag_criterion_diff_fid=current_test_parameters["mag_criterion_diff_fid"],
+            orbfit_limit=current_test_parameters["orbfit_limit"],
+            angle_criterion=current_test_parameters["angle_criterion"],
             ram_dir=ram_dir,
         )
 
@@ -186,3 +197,6 @@ if __name__ == "__main__":
 
         with open("src/others/perf_test/{}.json".format(test_name), "w") as file:
             file.write(json.dumps(details))
+
+        with open("src/others/perf_test/params_{}.json".format(test_name), "w") as file:
+            file.write(json.dumps(current_test_parameters))
