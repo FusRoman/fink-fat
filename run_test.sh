@@ -29,16 +29,16 @@ set -e
 make simple_build
 
 
-# Run the test suite
-for filename in src/associations/*.py
-do
-  echo $filename
-  # Run test suite + coverage
-  coverage run \
-    --append \
-    --source=${ROOTPATH} \
-    --rcfile ${ROOTPATH}/.coveragerc $filename
-done
+# # Run the test suite
+# for filename in src/associations/*.py
+# do
+#   echo $filename
+#   # Run test suite + coverage
+#   coverage run \
+#     --append \
+#     --source=${ROOTPATH} \
+#     --rcfile ${ROOTPATH}/.coveragerc $filename
+# done
 
 echo src/orbit_fitting/orbfit_management.py
 # Run test suite + coverage
