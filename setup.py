@@ -2,8 +2,6 @@
 
 from setuptools import setup, find_packages
 
-print(find_packages())
-
 setup(
     name="Asteroids and Associations",
     version="0.2",
