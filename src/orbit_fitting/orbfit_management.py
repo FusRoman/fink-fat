@@ -433,7 +433,7 @@ def make_date(date):
 
 def write_observation_file(ram_dir, obs_df):
     """
-    Write an observation file to mpc standard from an observation dataframe
+    Write an observation file to mpc standard from a dataframe containing all the observations of one trajectories
 
     Parameters
     ----------
@@ -832,18 +832,24 @@ def get_orbit_param(ram_dir, df):
 
     >>> prep_orbitfit("")
     >>> get_orbit_param("", df)
-    [0, 'K21E00A', 2459274.810893373, '1.5834346988159376E+00', '0.613572037782866', '5.9442185803697', '343.7959802838470', '270.1932521117385', '333.9568546371023', -1, -1, -1, -1, -1, -1]
+    [[0, 'K21E00A', 2459274.810893373, '1.5834346988159376E+00', '0.613572037782866', '5.9442185803697', '343.7959802838470', '270.1932521117385', '333.9568546371023', -1, -1, -1, -1, -1, -1]]
     >>> final_clean("")
     """
-    traj_id = df["trajectory_id"].values[0]
-    prov_desig = write_observation_file(ram_dir, df)
-    write_inp(ram_dir, prov_desig)
-    write_oop(ram_dir, prov_desig)
 
-    call_orbitfit(ram_dir, prov_desig)
+    all_traj_id = np.unique(df["trajectory_id"].values)
 
-    results = [traj_id, prov_desig] + read_oel(ram_dir, prov_desig)
-    obs_clean(ram_dir, prov_desig)
+    results = []
+    for traj_id in all_traj_id:
+        df_one_traj = df[df["trajectory_id"] == traj_id]
+        prov_desig = write_observation_file(ram_dir, df_one_traj)
+        write_inp(ram_dir, prov_desig)
+        write_oop(ram_dir, prov_desig)
+
+        call_orbitfit(ram_dir, prov_desig)
+
+        results.append([traj_id, prov_desig] + read_oel(ram_dir, prov_desig))
+        obs_clean(ram_dir, prov_desig)
+
     return results
 
 
@@ -923,18 +929,22 @@ def compute_df_orbit_param(trajectory_df, cpu_count, ram_dir):
     >>> assert_frame_equal(orb_elem, ts.orbfit_output)
     """
 
-    all_traj_id = np.unique(trajectory_df["trajectory_id"])
-
     prep_orbitfit(ram_dir)
 
-    all_track = [
-        (ram_dir, trajectory_df[trajectory_df["trajectory_id"] == traj_id])
-        for traj_id in all_traj_id
+    all_traj_id = np.unique(trajectory_df["trajectory_id"].values)
+
+    trajectory_id_chunks = np.array_split(all_traj_id, cpu_count)
+
+    chunks = [
+        (ram_dir, trajectory_df[trajectory_df["trajectory_id"].isin(tr_chunk)])
+        for tr_chunk in trajectory_id_chunks
+        if len(tr_chunk) > 0
     ]
 
     pool = mp.Pool(cpu_count)
 
-    results = pool.starmap(get_orbit_param, all_track)
+    results = pool.starmap(get_orbit_param, chunks)
+    results = [el2 for el1 in results for el2 in el1]
 
     pool.close()
     final_clean(ram_dir)
