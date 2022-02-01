@@ -13680,3 +13680,6 @@ trajectory_df_expected_6 = pd.DataFrame(
         ],
     }
 )
+
+if __name__ == "__main__":  # pragma: no cover
+    exit()

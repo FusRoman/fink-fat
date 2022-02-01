@@ -3,12 +3,12 @@ import time as t
 import numpy as np
 
 import astropy.units as u
-from alert_association.inter_night_associations import night_to_night_association
+from src.associations.inter_night_associations import night_to_night_association
 
 
 if __name__ == "__main__":
 
-    from alert_association.continuous_integration import load_data
+    from src.others.utils import load_data
 
     # constant to locate the ram file system
     ram_dir = "/media/virtuelram/"
@@ -41,7 +41,7 @@ if __name__ == "__main__":
 
     last_nid = np.min(df_sso["nid"])
 
-    max_night_iter = 10
+    max_night_iter = 5
     current_loop = 0
 
     for tr_nid in np.unique(df_sso["nid"]):
@@ -164,7 +164,7 @@ if __name__ == "__main__":
     print()
     print(gb.agg({"ra": len, "a": list, "e": list, "i": list}))
 
-    record = False
+    record = True
     if len(trajectory_df) > 0 and record:
         trajectory_df = trajectory_df.infer_objects()
         trajectory_df["ssnamenr"] = trajectory_df["ssnamenr"].astype(str)
@@ -172,4 +172,4 @@ if __name__ == "__main__":
         trajectory_df["objectId"] = trajectory_df["objectId"].astype(str)
 
         trajectory_df = trajectory_df.drop(["provisional designation"], axis=1)
-        trajectory_df.to_parquet("alert_association/CI_expected_output.parquet")
+        trajectory_df.to_parquet("perf_test_1.parquet")

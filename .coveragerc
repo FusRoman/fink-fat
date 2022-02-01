@@ -2,9 +2,10 @@
 branch = false
 data_file = ${PWD}/.coverage
 omit=
-    alert_association/night_report.py
-    alert_association/performance_test.py
-    alert_association/ephem.py
-    alert_association/utils.py
+    src/others/night_report.py
+    src/others/performance_test.py
+    src/orbit_fitting/ephem.py
+    src/others/utils.py
     setup.py
-    alert_association/orbit_fitting/plot_orbstat.py
+    src/orbit_fitting/plot_orbstat.py
+    src/test/test_sample.py

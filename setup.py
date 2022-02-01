@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 
-from distutils.core import setup
+from setuptools import setup, find_packages
+
+print(find_packages())
 
 setup(
     name="Asteroids and Associations",
@@ -9,5 +11,7 @@ setup(
     author="Roman Le Montagner",
     author_email="roman.le-montagner@ijclab.in2p3.fr",
     url="https://github.com/FusRoman/Asteroids_and_Associations",
-    packages=["alert_association", "alert_association.orbit_fitting"],
+    packages=find_packages(),
+    license="Apache-2.0 License",
+    platforms="Linux"
 )

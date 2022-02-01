@@ -131,14 +131,14 @@ dmypy.json
 # Custom ignore
 .vscode/
 
-alert_association/report_db
+src/report_db
 
-alert_association/trajectory_output.parquet
+src/trajectory_output.parquet
 
 test_report/
 
 data/mpc_database/
-alert_association/orbit_fitting/residuals/
+src/orbit_fitting/residuals/
 
 *.obs
 *.inp
@@ -153,4 +153,5 @@ mpcobs/
 
 OrbitFit
 asteroid_study/*.png
+asteroid_study/residuals/
 trajectory_df.parquet

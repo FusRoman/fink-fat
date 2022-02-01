@@ -8,15 +8,15 @@ import time as t
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 
-import alert_association.orbit_fitting.orbfit_management as om
+import src.orbit_fitting.orbfit_management as om
 
-# import alert_association.utils as utils
+# import src.utils as utils
 import multiprocessing as mp
-from alert_association.utils import load_data
+from src.others.utils import load_data
 import json
 import glob
 import os
-from alert_association.orbit_fitting.orbfit_management import compute_df_orbit_param
+from src.orbit_fitting.orbfit_management import compute_df_orbit_param
 
 # constant to locate the ram file system
 ram_dir = "/media/virtuelram/"

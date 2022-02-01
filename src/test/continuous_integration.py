@@ -1,10 +1,10 @@
 import pandas as pd
 import time as t
 import numpy as np
-from alert_association.inter_night_associations import night_to_night_association
+from src.associations.inter_night_associations import night_to_night_association
 import astropy.units as u
 from pandas.testing import assert_frame_equal
-from alert_association.utils import load_data
+from src.others.utils import load_data
 
 if __name__ == "__main__":
 
@@ -72,7 +72,7 @@ if __name__ == "__main__":
 
         last_nid = next_nid
 
-    path_ci = "alert_association/CI_expected_output.parquet"
+    path_ci = "src/test/CI_expected_output.parquet"
 
     ci_df = pd.read_parquet(path_ci)
     trajectory_df = trajectory_df.drop(["provisional designation"], axis=1)
