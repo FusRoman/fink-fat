@@ -1,5 +1,4 @@
 from collections import Counter
-from itsdangerous import json
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
@@ -10,13 +9,14 @@ import json
 
 
 def plot_orbit_type(orbit_param, title, y, ylabel):
-    g = sns.scatterplot(data=orbit_param, x='a', y=y, hue='Orbit_type')
+    g = sns.scatterplot(data=orbit_param, x="a", y=y, hue="Orbit_type")
 
     g.set(xlim=(0, 7))
-    g.set(xlabel='semi-major axis (UA)', ylabel=ylabel)
+    g.set(xlabel="semi-major axis (UA)", ylabel=ylabel)
     g.set_title(title)
 
     plt.show()
+
 
 if __name__ == "__main__":
     test_name = "perf_test_1"
@@ -49,19 +49,24 @@ if __name__ == "__main__":
     traj_cand_size = traj_with_orb.groupby(["trajectory_id"]).agg(
         trajectory_size=("candid", lambda x: len(list(x))),
         error=("ssnamenr", lambda x: len(np.unique(x))),
-        ssnamenr=("ssnamenr",np.unique)
+        ssnamenr=("ssnamenr", np.unique),
     )
 
     true_candidate = traj_cand_size[traj_cand_size["error"] == 1]
 
     false_candidate = traj_cand_size[traj_cand_size["error"] != 1]
-    
 
-    real_mpc_trajectories = np.unique(traj_cand_size[traj_cand_size["error"] == 1]["ssnamenr"])
+    real_mpc_trajectories = np.unique(
+        traj_cand_size[traj_cand_size["error"] == 1]["ssnamenr"]
+    )
 
-    not_detected_object = detected_traj[~detected_traj["ssnamenr"].isin(real_mpc_trajectories)]
+    not_detected_object = detected_traj[
+        ~detected_traj["ssnamenr"].isin(real_mpc_trajectories)
+    ]
 
-    print("number of trajectories with orbital elements: {}".format(len(traj_cand_size)))
+    print(
+        "number of trajectories with orbital elements: {}".format(len(traj_cand_size))
+    )
 
     print("number of true detected trajectories: {}".format(len(true_candidate)))
 
@@ -74,7 +79,9 @@ if __name__ == "__main__":
     print()
     print("number of mpc object recover: {}".format(len(real_mpc_trajectories)))
 
-    print("efficiency: {}".format((len(real_mpc_trajectories) / len(detected_traj)) * 100))
+    print(
+        "efficiency: {}".format((len(real_mpc_trajectories) / len(detected_traj)) * 100)
+    )
 
     piece_of_traj = true_candidate.groupby(["ssnamenr"]).count().reset_index()
 
@@ -90,8 +97,10 @@ if __name__ == "__main__":
     mpc_database = get_mpc_database(0)
 
     detected_mpc = mpc_database[mpc_database["Number"].isin(real_mpc_trajectories)]
-    not_detected_mpc = mpc_database[mpc_database["Number"].isin(not_detected_object["ssnamenr"])]
-    
+    not_detected_mpc = mpc_database[
+        mpc_database["Number"].isin(not_detected_object["ssnamenr"])
+    ]
+
     print()
     print()
     print("Class of objects detected by FAT")
@@ -101,30 +110,14 @@ if __name__ == "__main__":
     print("Class of objects not detected by FAT")
     print(Counter(not_detected_mpc["Orbit_type"]))
 
-    plot_orbit_type(
-        detected_mpc,
-        "Asteroids detected by FAT",
-        "e",
-        "eccentricity"
-        )
+    plot_orbit_type(detected_mpc, "Asteroids detected by FAT", "e", "eccentricity")
+
+    plot_orbit_type(detected_mpc, "Asteroids detected by FAT", "i", "inclination")
 
     plot_orbit_type(
-        detected_mpc,
-        "Asteroids detected by FAT",
-        "i",
-        "inclination"
-        )
+        not_detected_mpc, "Asteroids not detected by FAT", "e", "eccentricity"
+    )
 
     plot_orbit_type(
-        not_detected_mpc,
-        "Asteroids not detected by FAT",
-        "e",
-        "eccentricity"
-        )
-
-    plot_orbit_type(
-        not_detected_mpc,
-        "Asteroids not detected by FAT",
-        "i",
-        "inclination"
-        )
+        not_detected_mpc, "Asteroids not detected by FAT", "i", "inclination"
+    )

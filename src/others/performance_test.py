@@ -1,5 +1,4 @@
 import json
-from textwrap import indent
 import pandas as pd
 import time as t
 import numpy as np
@@ -50,14 +49,14 @@ if __name__ == "__main__":
     all_nb_traj = []
 
     current_test_parameters = {
-        "traj_time_window":8,
-        "obs_time_window":3,
-        "sep_criterion":0.35,
-        "acceleration_criteria":0.4,
-        "mag_criterion_same_fid":0.4,
-        "mag_criterion_diff_fid":0.8,
-        "orbfit_limit":5,
-        "angle_criterion":1.5
+        "traj_time_window": 8,
+        "obs_time_window": 3,
+        "sep_criterion": 0.35,
+        "acceleration_criteria": 0.4,
+        "mag_criterion_same_fid": 0.4,
+        "mag_criterion_diff_fid": 0.8,
+        "orbfit_limit": 5,
+        "angle_criterion": 1.5,
     }
 
     for tr_nid in np.unique(df_sso["nid"]):
@@ -166,8 +165,6 @@ if __name__ == "__main__":
         last_nid = next_nid
 
         current_loop += 1
-
-    
 
     record = True
     if len(trajectory_df) > 0 and record:
