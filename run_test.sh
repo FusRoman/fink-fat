@@ -24,33 +24,12 @@ set -e
 export ROOTPATH=`pwd`
 export COVERAGE_PROCESS_START="${ROOTPATH}/.coveragerc"
 
-FILE1=alert_association/performance_test.py
-FILE2=alert_association/night_report.py
-FILE3=alert_association/ephem.py
 
 make simple_build
 
 
 # Run the test suite
-for filename in alert_association/*.py
-do
-  case $filename in
-  $FILE1 ) continue ;;
-  $FILE2 ) continue ;;
-  $FILE3 ) continue ;;
-  * )
-
-    echo $filename
-    # Run test suite + coverage
-    coverage run \
-      --append \
-      --source=${ROOTPATH} \
-      --rcfile ${ROOTPATH}/.coveragerc $filename
-    ;;
-  esac
-done
-
-for filename in alert_association/orbit_fitting/*.py
+for filename in src/associations/*.py
 do
   echo $filename
   # Run test suite + coverage
@@ -59,6 +38,20 @@ do
     --source=${ROOTPATH} \
     --rcfile ${ROOTPATH}/.coveragerc $filename
 done
+
+echo src/orbit_fitting/orbfit_management.py
+# Run test suite + coverage
+coverage run \
+  --append \
+  --source=${ROOTPATH} \
+  --rcfile ${ROOTPATH}/.coveragerc src/orbit_fitting/orbfit_management.py
+
+echo src/test/continuous_integration.py
+# Run test suite + coverage
+coverage run \
+  --append \
+  --source=${ROOTPATH} \
+  --rcfile ${ROOTPATH}/.coveragerc src/test/continuous_integration.py
 
 unset COVERAGE_PROCESS_START
 
