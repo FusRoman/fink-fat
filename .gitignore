@@ -133,7 +133,7 @@ dmypy.json
 
 src/report_db
 
-src/trajectory_output.parquet
+src/others/trajectory_output.parquet
 
 test_report/
 
