@@ -1,8 +1,10 @@
+import json
 import pandas as pd
 import time as t
 import numpy as np
 
 import astropy.units as u
+from sympy import det
 from src.associations.inter_night_associations import night_to_night_association
 
 
@@ -41,8 +43,11 @@ if __name__ == "__main__":
 
     last_nid = np.min(df_sso["nid"])
 
-    max_night_iter = 5
+    max_night_iter = 10
     current_loop = 0
+
+    all_time = []
+    all_nb_traj = []
 
     for tr_nid in np.unique(df_sso["nid"]):
 
@@ -65,8 +70,11 @@ if __name__ == "__main__":
 
         next_nid = new_observation["nid"].values[0]
 
+        nb_traj = len(np.unique(trajectory_df["trajectory_id"]))
+        all_nb_traj.append(nb_traj)
+
         print(
-            "nb trajectories: {}".format(len(np.unique(trajectory_df["trajectory_id"])))
+            "nb trajectories: {}".format(nb_traj)
         )
         print("nb old obs: {}".format(len(old_observation)))
         print("nb new obs: {}".format(len(new_observation)))
@@ -115,6 +123,9 @@ if __name__ == "__main__":
         # print()
 
         elapsed_time = t.time() - t_before
+        all_time.append(elapsed_time)
+
+
         if elapsed_time <= 60:
             print()
             print("associations elapsed time: {} sec".format(round(elapsed_time, 3)))
@@ -166,10 +177,20 @@ if __name__ == "__main__":
 
     record = True
     if len(trajectory_df) > 0 and record:
+        test_name = "perf_test_1"
         trajectory_df = trajectory_df.infer_objects()
         trajectory_df["ssnamenr"] = trajectory_df["ssnamenr"].astype(str)
         trajectory_df["fink_class"] = trajectory_df["fink_class"].astype(str)
         trajectory_df["objectId"] = trajectory_df["objectId"].astype(str)
 
         trajectory_df = trajectory_df.drop(["provisional designation"], axis=1)
-        trajectory_df.to_parquet("perf_test_1.parquet")
+        trajectory_df.to_parquet("src/others/perf_test/{}.parquet".format(test_name))
+
+        details = {
+            "time": all_time,
+            "trajectory_size": all_nb_traj
+        }
+
+        with open('src/others/perf_test/{}.json'.format(test_name), 'w') as file:
+            file.write(json.dumps(details))
+
