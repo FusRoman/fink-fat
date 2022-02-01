@@ -4,7 +4,6 @@ import time as t
 import numpy as np
 
 import astropy.units as u
-from sympy import det
 from src.associations.inter_night_associations import night_to_night_association
 
 
@@ -73,9 +72,7 @@ if __name__ == "__main__":
         nb_traj = len(np.unique(trajectory_df["trajectory_id"]))
         all_nb_traj.append(nb_traj)
 
-        print(
-            "nb trajectories: {}".format(nb_traj)
-        )
+        print("nb trajectories: {}".format(nb_traj))
         print("nb old obs: {}".format(len(old_observation)))
         print("nb new obs: {}".format(len(new_observation)))
         print()
@@ -124,7 +121,6 @@ if __name__ == "__main__":
 
         elapsed_time = t.time() - t_before
         all_time.append(elapsed_time)
-
 
         if elapsed_time <= 60:
             print()
@@ -186,11 +182,7 @@ if __name__ == "__main__":
         trajectory_df = trajectory_df.drop(["provisional designation"], axis=1)
         trajectory_df.to_parquet("src/others/perf_test/{}.parquet".format(test_name))
 
-        details = {
-            "time": all_time,
-            "trajectory_size": all_nb_traj
-        }
+        details = {"time": all_time, "trajectory_size": all_nb_traj}
 
-        with open('src/others/perf_test/{}.json'.format(test_name), 'w') as file:
+        with open("src/others/perf_test/{}.json".format(test_name), "w") as file:
             file.write(json.dumps(details))
-
