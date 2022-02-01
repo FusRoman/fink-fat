@@ -2,18 +2,17 @@ import astropy.units as u
 from astropy.coordinates import SkyCoord
 import pandas as pd
 import numpy as np
-
 from src.associations.intra_night_association import magnitude_association
 from src.associations.intra_night_association import (
     get_n_last_observations_from_trajectories,
 )
 from src.associations.intra_night_association import compute_inter_night_metric
-
 import sys
 import doctest
 from pandas.testing import assert_frame_equal  # noqa: F401
 from unittest import TestCase  # noqa: F401
-import src.test.test_sample as ts # noqa: F401
+import src.test.test_sample as ts  # noqa: F401
+
 
 def night_to_night_separation_association(
     old_observation, new_observation, separation_criterion

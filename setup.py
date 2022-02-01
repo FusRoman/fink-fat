@@ -13,5 +13,5 @@ setup(
     url="https://github.com/FusRoman/Asteroids_and_Associations",
     packages=find_packages(),
     license="Apache-2.0 License",
-    platforms="Linux"
+    platforms="Linux",
 )
