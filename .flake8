@@ -13,8 +13,4 @@ count
 show-source
 statistics
 per-file-ignores =
-<<<<<<< HEAD
     ../Asteroids_and_Associations/src/orbit_fitting/orbfit_management.py:W503
-=======
-    ../Asteroids_and_Associations/alert_association/orbit_fitting/orbfit_management.py:W503
->>>>>>> b06e2f212034944f3ef53702799a686f2393a179
