@@ -155,3 +155,5 @@ OrbitFit
 asteroid_study/*.png
 asteroid_study/residuals/
 trajectory_df.parquet
+
+src/others/perf_test
