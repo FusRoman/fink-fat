@@ -1,4 +1,5 @@
 import json
+from textwrap import indent
 import pandas as pd
 import time as t
 import numpy as np
@@ -42,7 +43,7 @@ if __name__ == "__main__":
 
     last_nid = np.min(df_sso["nid"])
 
-    max_night_iter = 5
+    max_night_iter = 10
     current_loop = 0
 
     all_time = []
@@ -51,7 +52,7 @@ if __name__ == "__main__":
     current_test_parameters = {
         "traj_time_window":8,
         "obs_time_window":3,
-        "sep_criterion":0.35 * u.degree,
+        "sep_criterion":0.35,
         "acceleration_criteria":0.4,
         "mag_criterion_same_fid":0.4,
         "mag_criterion_diff_fid":0.8,
@@ -106,7 +107,7 @@ if __name__ == "__main__":
             next_nid,
             traj_time_window=current_test_parameters["traj_time_window"],
             obs_time_window=current_test_parameters["obs_time_window"],
-            sep_criterion=current_test_parameters["sep_criterion"],
+            sep_criterion=current_test_parameters["sep_criterion"] * u.degree,
             acceleration_criteria=current_test_parameters["acceleration_criteria"],
             mag_criterion_same_fid=current_test_parameters["mag_criterion_same_fid"],
             mag_criterion_diff_fid=current_test_parameters["mag_criterion_diff_fid"],
@@ -166,21 +167,7 @@ if __name__ == "__main__":
 
         current_loop += 1
 
-    print()
-    print()
-    print()
-    print()
-
-    print(
-        trajectory_df[["ssnamenr", "trajectory_id", "a", "e", "i"]].sort_values(
-            ["trajectory_id"]
-        )
-    )
-    gb = trajectory_df.groupby(["trajectory_id", "ssnamenr"])
-
-    print(len(np.unique(gb.count().reset_index()["ssnamenr"])))
-    print()
-    print(gb.agg({"ra": len, "a": list, "e": list, "i": list}))
+    
 
     record = True
     if len(trajectory_df) > 0 and record:
@@ -196,7 +183,7 @@ if __name__ == "__main__":
         details = {"time": all_time, "trajectory_size": all_nb_traj}
 
         with open("src/others/perf_test/{}.json".format(test_name), "w") as file:
-            file.write(json.dumps(details))
+            file.write(json.dumps(details, indent=4))
 
         with open("src/others/perf_test/params_{}.json".format(test_name), "w") as file:
-            file.write(json.dumps(current_test_parameters))
+            file.write(json.dumps(current_test_parameters, indent=4))
