@@ -42,7 +42,7 @@ if __name__ == "__main__":
 
     last_nid = np.min(df_sso["nid"])
 
-    max_night_iter = 10
+    max_night_iter = 5
     current_loop = 0
 
     all_time = []
@@ -95,12 +95,12 @@ if __name__ == "__main__":
             next_nid,
             traj_time_window=8,
             obs_time_window=3,
-            sep_criterion=0.3 * u.degree,
-            acceleration_criteria=0.24,
-            mag_criterion_same_fid=0.3,
-            mag_criterion_diff_fid=0.7,
+            sep_criterion=0.35 * u.degree,
+            acceleration_criteria=0.4,
+            mag_criterion_same_fid=0.4,
+            mag_criterion_diff_fid=0.8,
             orbfit_limit=5,
-            angle_criterion=1,
+            angle_criterion=1.5,
             ram_dir=ram_dir,
         )
 
