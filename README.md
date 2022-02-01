@@ -1,4 +1,4 @@
-# A&A : Asteroids and Associations
+# FAT : FINK Asteroids Tracker
 
 [![Sentinel](https://github.com/FusRoman/Alert-Association-of-Asteroids-Candidates/workflows/Sentinel/badge.svg)](https://github.com/FusRoman/Alert-Association-of-Asteroids-Candidates/actions?query=workflow%3ASentinel)
 [![PEP8](https://github.com/FusRoman/Alert-Association-of-Asteroids-Candidates/workflows/PEP8/badge.svg)](https://github.com/FusRoman/Alert-Association-of-Asteroids-Candidates/actions?query=workflow%3APEP8)
