@@ -1814,6 +1814,21 @@ def time_window_management(
     >>> assert_frame_equal(expected_old_traj.reset_index(drop=True), test_old_traj.reset_index(drop=True))
     >>> assert_frame_equal(expected_most_recent_traj.reset_index(drop=True), test_most_recent_traj.reset_index(drop=True))
     >>> assert_frame_equal(expected_old_obs.reset_index(drop=True), test_old_obs.reset_index(drop=True))
+
+
+    >>> (old_traj, keep_traj), old_obs = time_window_management(
+    ... ts.test_time_window,
+    ... pd.DataFrame(columns=["nid"]),
+    ... 8,
+    ... 10, 
+    ... 5, 
+    ... 2, 
+    ... 3
+    ... )
+
+    >>> assert_frame_equal(old_traj.reset_index(drop=True), ts.old_traj_expected.reset_index(drop=True))
+    >>> assert_frame_equal(keep_traj.reset_index(drop=True), ts.keep_traj_expected.reset_index(drop=True))
+    >>> assert_frame_equal(old_obs, pd.DataFrame(columns=["nid"]))
     """
 
     most_recent_traj = pd.DataFrame(columns=trajectory_df.columns)

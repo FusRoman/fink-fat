@@ -171,6 +171,8 @@ def compute_orbit_elem(trajectory_df, q, ram_dir=""):
 
     traj_to_compute = traj_to_compute.drop(orbit_column, axis=1)
 
+    print("nb trajectories to compute orb elem: {}".format(len(np.unique(traj_to_compute["trajectory_id"]))))
+
     orbit_elem = compute_df_orbit_param(
         traj_to_compute, int(mp.cpu_count() / 2), current_ram_path
     )
@@ -1142,9 +1144,9 @@ def night_to_night_association(
     else:
         traj_with_orb_elem = pd.DataFrame(columns=most_recent_traj.columns)
 
-    not_associated_traj = acceleration_filter(
-        not_associated_traj, acceleration_criteria
-    )
+    # not_associated_traj = acceleration_filter(
+    #     not_associated_traj, acceleration_criteria
+    # )
 
     # concatenate all the trajectories with computed orbital elements and the other trajectories/tracklets.
     most_recent_traj = pd.concat(

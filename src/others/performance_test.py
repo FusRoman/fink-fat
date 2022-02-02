@@ -42,14 +42,14 @@ if __name__ == "__main__":
 
     last_nid = np.min(df_sso["nid"])
 
-    max_night_iter = 10
+    max_night_iter = 2000
     current_loop = 0
 
     all_time = []
     all_nb_traj = []
 
     current_test_parameters = {
-        "traj_time_window": 8,
+        "traj_time_window": 5,
         "obs_time_window": 3,
         "sep_criterion": 0.35,
         "acceleration_criteria": 0.4,
@@ -168,7 +168,7 @@ if __name__ == "__main__":
 
     record = True
     if len(trajectory_df) > 0 and record:
-        test_name = "perf_test_1"
+        test_name = "perf_test_2"
         trajectory_df = trajectory_df.infer_objects()
         trajectory_df["ssnamenr"] = trajectory_df["ssnamenr"].astype(str)
         trajectory_df["fink_class"] = trajectory_df["fink_class"].astype(str)
