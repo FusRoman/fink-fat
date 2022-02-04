@@ -58,6 +58,10 @@ if __name__ == "__main__":
         "orbfit_limit": 5,
         "angle_criterion": 1,
         "store_kd_tree": True,
+        "do_track_and_traj_assoc":True,
+        "do_traj_and_new_obs_assoc":True,
+        "do_track_and_old_obs_assoc":True,
+        "do_new_obs_and_old_obs_assoc":True
     }
 
     for tr_nid in np.unique(df_sso["nid"]):
@@ -115,6 +119,10 @@ if __name__ == "__main__":
             angle_criterion=current_test_parameters["angle_criterion"],
             ram_dir=ram_dir,
             store_kd_tree=current_test_parameters["store_kd_tree"],
+            do_track_and_traj_assoc=current_test_parameters["do_track_and_traj_assoc"],
+            do_traj_and_new_obs_assoc=current_test_parameters["do_traj_and_new_obs_assoc"],
+            do_track_and_old_obs_assoc=current_test_parameters["do_track_and_old_obs_assoc"],
+            do_new_obs_and_old_obs_assoc=current_test_parameters["do_new_obs_and_old_obs_assoc"]
         )
 
         # print()
