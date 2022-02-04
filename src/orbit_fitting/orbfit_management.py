@@ -845,10 +845,30 @@ def get_orbit_param(ram_dir, df):
         write_inp(ram_dir, prov_desig)
         write_oop(ram_dir, prov_desig)
 
-        call_orbitfit(ram_dir, prov_desig)
+        try:
+            call_orbitfit(ram_dir, prov_desig)
+        except Exception as e:
+            import traceback
+            import logging
+
+            print(e)
+            print()
+            logging.error(traceback.format_exc())
+            print()
+            print(prov_desig)
+            print()
+            print()
+            print(df_one_traj)
 
         results.append([traj_id, prov_desig] + read_oel(ram_dir, prov_desig))
-        obs_clean(ram_dir, prov_desig)
+
+        try:
+            obs_clean(ram_dir, prov_desig)
+        except FileNotFoundError:
+            print(prov_desig)
+            print()
+            print()
+            print(df_one_traj)
 
     return results
 
