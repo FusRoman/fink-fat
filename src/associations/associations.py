@@ -1,5 +1,6 @@
 import astropy.units as u
 from astropy.coordinates import SkyCoord
+from astropy.coordinates import search_around_sky
 import pandas as pd
 import numpy as np
 from src.associations.intra_night_association import magnitude_association
@@ -15,7 +16,7 @@ import src.test.test_sample as ts  # noqa: F401
 
 
 def night_to_night_separation_association(
-    old_observation, new_observation, separation_criterion
+    old_observation, new_observation, separation_criterion, store_kd_tree=False
 ):
     """
     Perform night-night association based on the separation between the alerts.
@@ -70,8 +71,11 @@ def night_to_night_separation_association(
         new_observation["ra"], new_observation["dec"], unit=u.degree
     )
 
-    new_obs_idx, old_obs_idx, sep2d, _ = old_observations_coord.search_around_sky(
-        new_observations_coord, separation_criterion
+    old_obs_idx, new_obs_idx, sep2d, _ = search_around_sky(
+        old_observations_coord,
+        new_observations_coord,
+        separation_criterion,
+        storekdtree=store_kd_tree,
     )
 
     old_obs_assoc = old_observation.iloc[old_obs_idx]
@@ -268,7 +272,12 @@ def cone_search_association(
 
 
 def night_to_night_observation_association(
-    obs_set1, obs_set2, sep_criterion, mag_criterion_same_fid, mag_criterion_diff_fid
+    obs_set1,
+    obs_set2,
+    sep_criterion,
+    mag_criterion_same_fid,
+    mag_criterion_diff_fid,
+    store_kd_tree=False,
 ):
     """
     Night to night associations between the observations. Take only two set of observations and return couples of observations
@@ -352,7 +361,7 @@ def night_to_night_observation_association(
 
     # association based separation
     traj_assoc, new_obs_assoc, sep = night_to_night_separation_association(
-        obs_set1, obs_set2, sep_criterion
+        obs_set1, obs_set2, sep_criterion, store_kd_tree
     )
 
     inter_night_obs_assoc_report[
@@ -386,6 +395,7 @@ def night_to_night_trajectory_associations(
     mag_criterion_same_fid,
     mag_criterion_diff_fid,
     angle_criterion,
+    store_kd_tree=False,
 ):
     """
     Associates the extremity of the trajectories with the new observations. The new observations can be a single observations or the extremity of a trajectories.
@@ -446,6 +456,7 @@ def night_to_night_trajectory_associations(
         sep_criterion,
         mag_criterion_same_fid,
         mag_criterion_diff_fid,
+        store_kd_tree,
     )
 
     nb_assoc_before_angle_filtering = len(new_obs_assoc)
@@ -475,6 +486,7 @@ def tracklets_and_trajectories_associations(
     mag_criterion_diff_fid,
     angle_criterion,
     max_traj_id,
+    store_kd_tree=False,
     run_metrics=False,
 ):
     """
@@ -688,6 +700,7 @@ def tracklets_and_trajectories_associations(
                 norm_same_fid,
                 norm_diff_fid,
                 angle_criterion,
+                store_kd_tree,
             )
 
             if len(traj_extremity_associated) > 0:
@@ -849,6 +862,7 @@ def trajectories_with_new_observations_associations(
     mag_criterion_diff_fid,
     angle_criterion,
     max_traj_id,
+    store_kd_tree=False,
     run_metrics=False,
 ):
     """
@@ -1067,6 +1081,7 @@ def trajectories_with_new_observations_associations(
                 norm_same_fid,
                 norm_diff_fid,
                 angle_criterion,
+                store_kd_tree,
             )
 
             if "tmp_traj" in obs_assoc:  # pragma: no cover
@@ -1205,6 +1220,7 @@ def old_observations_with_tracklets_associations(
     mag_criterion_diff_fid,
     angle_criterion,
     max_traj_id,
+    store_kd_tree=False,
     run_metrics=False,
 ):
     """
@@ -1400,6 +1416,7 @@ def old_observations_with_tracklets_associations(
                 norm_same_fid,
                 norm_diff_fid,
                 angle_criterion,
+                store_kd_tree,
             )
 
             # remove tmp_traj column added by the cone_search_associations function in  night_to_night_trajectory_associations
@@ -1554,6 +1571,7 @@ def old_with_new_observations_associations(
     sep_criterion,
     mag_criterion_same_fid,
     mag_criterion_diff_fid,
+    store_kd_tree=False,
     run_metrics=False,
 ):
     """
@@ -1608,14 +1626,14 @@ def old_with_new_observations_associations(
 
     Examples
     --------
-    >>> new_tr, remain_old, remain_new, report = old_with_new_observations_associations(ts.old_observations_sample_4, ts.new_observation_sample_4, 3, 0, 1.5 * u.degree, 0.1, 0.3, 30,)
+    >>> new_tr, remain_old, remain_new, report = old_with_new_observations_associations(ts.old_observations_sample_4, ts.new_observation_sample_4, 3, 0, 1.5 * u.degree, 0.1, 0.3, run_metrics=True)
 
     >>> assert_frame_equal(new_tr.reset_index(drop=True), ts.new_trajectory, check_dtype=False)
     >>> assert_frame_equal(remain_old.reset_index(drop=True), ts.remaining_old_obs, check_dtype=False)
     >>> assert_frame_equal(remain_new.reset_index(drop=True), ts.remaining_new_obs, check_dtype=False)
     >>> TestCase().assertDictEqual(ts.expected_obs_report, report)
 
-    >>> new_tr, remain_old, remain_new, report = old_with_new_observations_associations(pd.DataFrame(), ts.new_observation_sample_4, 3, 0, 1.5 * u.degree, 0.1, 0.3, 30,)
+    >>> new_tr, remain_old, remain_new, report = old_with_new_observations_associations(pd.DataFrame(), ts.new_observation_sample_4, 3, 0, 1.5 * u.degree, 0.1, 0.3)
     >>> assert_frame_equal(new_tr, pd.DataFrame(), check_dtype=False)
     >>> assert_frame_equal(remain_old, pd.DataFrame(), check_dtype=False)
     >>> assert_frame_equal(remain_new.reset_index(drop=True), ts.new_observation_sample_4, check_dtype=False)
@@ -1655,6 +1673,7 @@ def old_with_new_observations_associations(
                 norm_sep_crit,
                 norm_same_fid,
                 norm_diff_fid,
+                store_kd_tree,
             )
 
             if run_metrics:
