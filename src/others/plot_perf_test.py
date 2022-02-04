@@ -196,7 +196,9 @@ if __name__ == "__main__":
         labels = [k for k in assoc_type.keys()]
 
         # define Seaborn color palette to use
+        # fmt: off
         colors = sns.color_palette("pastel")[0:len(data)]
+        # fmt: on
         print(colors)
         # create pie chart
         plt.pie(data, labels=labels, colors=colors, autopct="%.0f%%")

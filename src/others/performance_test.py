@@ -42,7 +42,7 @@ if __name__ == "__main__":
 
     last_nid = np.min(df_sso["nid"])
 
-    max_night_iter = 2000
+    max_night_iter = 4
     current_loop = 0
 
     all_time = []
@@ -57,6 +57,7 @@ if __name__ == "__main__":
         "mag_criterion_diff_fid": 0.6,
         "orbfit_limit": 5,
         "angle_criterion": 1,
+        "store_kd_tree": True,
     }
 
     for tr_nid in np.unique(df_sso["nid"]):
@@ -113,6 +114,7 @@ if __name__ == "__main__":
             orbfit_limit=current_test_parameters["orbfit_limit"],
             angle_criterion=current_test_parameters["angle_criterion"],
             ram_dir=ram_dir,
+            store_kd_tree=current_test_parameters["store_kd_tree"],
         )
 
         # print()
@@ -168,7 +170,7 @@ if __name__ == "__main__":
 
     record = True
     if len(trajectory_df) > 0 and record:
-        test_name = "perf_test_2"
+        test_name = "perf_test_4"
         trajectory_df = trajectory_df.infer_objects()
         trajectory_df["ssnamenr"] = trajectory_df["ssnamenr"].astype(str)
         trajectory_df["fink_class"] = trajectory_df["fink_class"].astype(str)
