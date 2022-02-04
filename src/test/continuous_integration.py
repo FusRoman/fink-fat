@@ -6,6 +6,7 @@ from pandas.testing import assert_frame_equal
 import src.test.test_sample as ts
 import sys
 
+
 def ci_function(
     df_sso,
     path_ci,
@@ -82,22 +83,14 @@ def ci_function(
         check_dtype=False,
     )
 
+
 if __name__ == "__main__":
 
     mpc = ts.trajectory_sample_2
 
-    ci_function(
-        mpc,
-        "src/test/CI_expected_output_2.parquet",
-        orbfit_limit=40
-    )
+    ci_function(mpc, "src/test/CI_expected_output_2.parquet", orbfit_limit=40)
 
     df_sso = ts.trajectory_sample
-    ci_function(
-        df_sso,
-        "src/test/CI_expected_output.parquet"
-    )
-
+    ci_function(df_sso, "src/test/CI_expected_output.parquet")
 
     sys.exit(0)
-    
