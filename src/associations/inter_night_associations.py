@@ -741,7 +741,7 @@ def night_to_night_association(
     do_track_and_traj_assoc=True,
     do_traj_and_new_obs_assoc=True,
     do_track_and_old_obs_assoc=True,
-    do_new_obs_and_old_obs_assoc=True
+    do_new_obs_and_old_obs_assoc=True,
 ):
     """
     Perform night to night associations.
@@ -1078,7 +1078,10 @@ def night_to_night_association(
             max_traj_id = last_trajectory_id
             traj_and_track_report = {}
 
-    if len(traj_not_updated) > 0 and len(remaining_new_observations) > 0 and do_traj_and_new_obs_assoc:
+    # fmt: off
+    assoc_test = len(traj_not_updated) > 0 and len(remaining_new_observations) > 0 and do_traj_and_new_obs_assoc
+    # fmt: on
+    if assoc_test:
         (
             not_associated_traj,
             remaining_new_observations,

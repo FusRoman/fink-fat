@@ -99,6 +99,7 @@ def detect_tracklets(x):
 
         return assoc_dict
 
+
 def association_stat(df, test_name, df_name):
     with pd.option_context("mode.chained_assignment", None):
         df["assoc_type"] = df.apply(detect_tracklets, axis=1)
@@ -118,6 +119,7 @@ def association_stat(df, test_name, df_name):
     plt.title("Distribution of the associations done over nights")
     plt.savefig(os.path.join(test_name, df_name), dpi=500)
     plt.show()
+
 
 if __name__ == "__main__":
     sns.set_context("talk")
