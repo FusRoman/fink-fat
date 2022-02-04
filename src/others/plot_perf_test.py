@@ -118,7 +118,9 @@ def detect_tracklets(x, traj_time_window, obs_time_window):
 
 def association_stat(df, traj_time_window, obs_time_window, test_name, df_name):
     with pd.option_context("mode.chained_assignment", None):
-        df["assoc_type"] = df.apply(detect_tracklets, axis=1, args=(traj_time_window, obs_time_window,))
+        df["assoc_type"] = df.apply(
+            detect_tracklets, axis=1, args=(traj_time_window, obs_time_window,)
+        )
 
     assoc_type = Counter(df.explode(["assoc_type"])["assoc_type"])
 
@@ -150,7 +152,9 @@ if __name__ == "__main__":
     with open("src/others/perf_test/{}.json".format(test_name), "r") as json_file:
         stat = json.load(json_file)
 
-    with open("src/others/perf_test/params_{}.json".format(test_name), "r") as json_file:
+    with open(
+        "src/others/perf_test/params_{}.json".format(test_name), "r"
+    ) as json_file:
         params = json.load(json_file)
 
     test_night = np.unique(trajectory_df["nid"])
@@ -175,13 +179,17 @@ if __name__ == "__main__":
 
     traj_with_orb = trajectory_df[trajectory_df["a"] != -1.0]
 
-    traj_cand_size = traj_with_orb.sort_values(["jd"]).groupby(["trajectory_id"]).agg(
-        trajectory_size=("candid", lambda x: len(list(x))),
-        error=("ssnamenr", lambda x: len(np.unique(x))),
-        ssnamenr=("ssnamenr", np.unique),
-        nid=("nid", list),
-        assoc=("nid", lambda x: Counter(x)),
-        track=("nid", lambda x: len(np.unique(x))),
+    traj_cand_size = (
+        traj_with_orb.sort_values(["jd"])
+        .groupby(["trajectory_id"])
+        .agg(
+            trajectory_size=("candid", lambda x: len(list(x))),
+            error=("ssnamenr", lambda x: len(np.unique(x))),
+            ssnamenr=("ssnamenr", np.unique),
+            nid=("nid", list),
+            assoc=("nid", lambda x: Counter(x)),
+            track=("nid", lambda x: len(np.unique(x))),
+        )
     )
 
     true_candidate = traj_cand_size[traj_cand_size["error"] == 1]
@@ -229,13 +237,17 @@ if __name__ == "__main__":
 
     detected_sso = df_sso[df_sso["ssnamenr"].isin(detected_traj["ssnamenr"])]
 
-    assoc_sso = detected_sso.sort_values(["jd"]).groupby(["ssnamenr"]).agg(
-        trajectory_size=("candid", lambda x: len(list(x))),
-        error=("ssnamenr", lambda x: len(np.unique(x))),
-        ssnamenr=("ssnamenr", np.unique),
-        nid=("nid", list),
-        assoc=("nid", lambda x: Counter(x)),
-        track=("nid", lambda x: len(np.unique(x))),
+    assoc_sso = (
+        detected_sso.sort_values(["jd"])
+        .groupby(["ssnamenr"])
+        .agg(
+            trajectory_size=("candid", lambda x: len(list(x))),
+            error=("ssnamenr", lambda x: len(np.unique(x))),
+            ssnamenr=("ssnamenr", np.unique),
+            nid=("nid", list),
+            assoc=("nid", lambda x: Counter(x)),
+            track=("nid", lambda x: len(np.unique(x))),
+        )
     )
 
     # for i in [5, 10, 15, 20]:
@@ -245,7 +257,13 @@ if __name__ == "__main__":
 
     # best windows parameters : 15 for the trajectories and 2 for the observations
 
-    association_stat(real_mpc_object, params["traj_time_window"], params["obs_time_window"], test_name, "assoc_type_candidates")
+    association_stat(
+        real_mpc_object,
+        params["traj_time_window"],
+        params["obs_time_window"],
+        test_name,
+        "assoc_type_candidates",
+    )
 
     # traj_d_size = detected_traj.groupby(["ssnamenr"]).agg(
     #     trajectory_size=("candid", lambda x: len(list(x))),
