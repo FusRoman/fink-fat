@@ -301,6 +301,7 @@ def tracklets_and_trajectories_steps(
     orbfit_limit,
     max_traj_id,
     ram_dir,
+    store_kd_tree,
     run_metrics,
 ):
     """
@@ -375,6 +376,7 @@ def tracklets_and_trajectories_steps(
     ... orbfit_limit=5,
     ... max_traj_id=3,
     ... ram_dir="",
+    ... store_kd_tree=True,
     ... run_metrics=True,
     ... )
 
@@ -403,6 +405,7 @@ def tracklets_and_trajectories_steps(
         mag_criterion_diff_fid,
         angle_criterion,
         max_traj_id,
+        store_kd_tree,
         run_metrics,
     )
 
@@ -450,6 +453,7 @@ def trajectories_and_new_observations_steps(
     orbfit_limit,
     max_traj_id,
     ram_dir,
+    store_kd_tree,
     run_metrics,
 ):
     """
@@ -521,6 +525,7 @@ def trajectories_and_new_observations_steps(
     ... orbfit_limit=4,
     ... max_traj_id=9,
     ... ram_dir="",
+    ... store_kd_tree=True,
     ... run_metrics=True,
     ... )
 
@@ -549,6 +554,7 @@ def trajectories_and_new_observations_steps(
         mag_criterion_diff_fid,
         angle_criterion,
         max_traj_id,
+        store_kd_tree,
         run_metrics,
     )
 
@@ -582,6 +588,7 @@ def tracklets_and_old_observations_steps(
     orbfit_limit,
     max_traj_id,
     ram_dir,
+    store_kd_tree,
     run_metrics,
 ):
     """
@@ -653,6 +660,7 @@ def tracklets_and_old_observations_steps(
     ... orbfit_limit=3,
     ... max_traj_id=9,
     ... ram_dir="",
+    ... store_kd_tree = True,
     ... run_metrics=True,
     ... )
 
@@ -681,6 +689,7 @@ def tracklets_and_old_observations_steps(
         mag_criterion_diff_fid,
         angle_criterion,
         max_traj_id,
+        store_kd_tree,
         run_metrics,
     )
 
@@ -724,6 +733,7 @@ def night_to_night_association(
     mag_criterion_same_fid=0.18,
     mag_criterion_diff_fid=0.7,
     angle_criterion=8.8,
+    store_kd_tree=False,
     acceleration_criteria=0.01,
     orbfit_limit=3,
     ram_dir="",
@@ -1035,6 +1045,7 @@ def night_to_night_association(
             orbfit_limit,
             last_trajectory_id,
             ram_dir,
+            store_kd_tree,
             run_metrics,
         )
         orbfit_process.append(tracklets_orbfit_process)
@@ -1082,6 +1093,7 @@ def night_to_night_association(
             orbfit_limit,
             max_traj_id,
             ram_dir,
+            store_kd_tree,
             run_metrics,
         )
         orbfit_process.append(traj_with_new_obs_orbfit_process)
@@ -1108,6 +1120,7 @@ def night_to_night_association(
             orbfit_limit,
             max_traj_id,
             ram_dir,
+            store_kd_tree,
             run_metrics,
         )
         orbfit_process.append(track_with_old_obs_orbfit_process)
@@ -1129,6 +1142,7 @@ def night_to_night_association(
         sep_criterion,
         mag_criterion_same_fid,
         mag_criterion_diff_fid,
+        store_kd_tree,
         run_metrics,
     )
 
