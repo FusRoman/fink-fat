@@ -56,6 +56,71 @@ def plot_stat(stat_df, test_name):
     plt.close()
 
 
+def detect_tracklets(x):
+
+    counter = x["assoc"]
+
+    most_c = np.array(counter.most_common())
+
+    most_c = most_c[most_c[:, 0].argsort()]
+
+    if most_c[0][1] == x["trajectory_size"]:
+        return ["tracklets"]
+    elif np.any(most_c[:, 1] == 5):
+        return ["only detected with tracklets"]
+    elif np.all(most_c[:, 1] > 1):
+        return ["tracklets_with_trajectories_associations only"]
+    elif np.all(most_c[:, 1] == 1):
+        return ["observations_associations"]
+    else:
+        counter = np.array([i for i in counter.values()])
+
+        assoc_dict = list()
+
+        if counter[0] == 1 and counter[1] == 1:
+            assoc_dict.append("obs_assoc")
+        elif counter[0] > 1 and counter[1] == 1:
+            assoc_dict.append("traj_with_new_obs")
+        elif counter[0] == 1 and counter[1] > 1:
+            assoc_dict.append("old_obs_with_track")
+        elif counter[0] > 1 and counter[1] > 1:
+            assoc_dict.append("traj_with_track")
+
+        for i in range(2, len(counter)):
+
+            if counter[i - 1] > 1 and counter[i] == 1:
+                assoc_dict.append("traj_with_new_obs")
+            elif counter[i - 1] == 1 and counter[i] > 1:
+                assoc_dict.append("traj_with_track")
+            elif counter[i - 1] > 1 and counter[i] > 1:
+                assoc_dict.append("traj_with_track")
+            elif counter[i - 1] == 1 and counter[i] == 1:
+                assoc_dict.append("traj_with_new_obs")
+
+        return assoc_dict
+
+
+def association_stat(df, test_name, df_name):
+    with pd.option_context("mode.chained_assignment", None):
+        df["assoc_type"] = df.apply(detect_tracklets, axis=1)
+
+    assoc_type = Counter(df.explode(["assoc_type"])["assoc_type"])
+
+    data = [v for v in assoc_type.values()]
+    labels = [k for k in assoc_type.keys()]
+
+    # define Seaborn color palette to use
+    # fmt: off
+    colors = sns.color_palette("pastel")[0:len(data)]
+    # fmt: on
+    print(colors)
+    # create pie chart
+    plt.pie(data, labels=labels, colors=colors, autopct="%.0f%%")
+    plt.title("Distribution of the associations done over nights")
+    plt.savefig(os.path.join(test_name, df_name), dpi=500)
+    plt.show()
+
+
 if __name__ == "__main__":
     sns.set_context("talk")
     sns.set(rc={"figure.figsize": (20, 9)})
@@ -143,70 +208,7 @@ if __name__ == "__main__":
 
     real_mpc_object = traj_cand_size[traj_cand_size["error"] == 1]
 
-    def detect_tracklets(x):
-
-        counter = x["assoc"]
-
-        most_c = np.array(counter.most_common())
-
-        most_c = most_c[most_c[:, 0].argsort()]
-
-        if most_c[0][1] == x["trajectory_size"]:
-            return ["tracklets"]
-        elif np.any(most_c[:, 1] == 5):
-            return ["only detected with tracklets"]
-        elif np.all(most_c[:, 1] > 1):
-            return ["tracklets_with_trajectories_associations only"]
-        elif np.all(most_c[:, 1] == 1):
-            return ["observations_associations"]
-        else:
-            counter = np.array([i for i in counter.values()])
-
-            assoc_dict = list()
-
-            if counter[0] == 1 and counter[1] == 1:
-                assoc_dict.append("obs_assoc")
-            elif counter[0] > 1 and counter[1] == 1:
-                assoc_dict.append("traj_with_new_obs")
-            elif counter[0] == 1 and counter[1] > 1:
-                assoc_dict.append("old_obs_with_track")
-            elif counter[0] > 1 and counter[1] > 1:
-                assoc_dict.append("traj_with_track")
-
-            for i in range(2, len(counter)):
-
-                if counter[i - 1] > 1 and counter[i] == 1:
-                    assoc_dict.append("traj_with_new_obs")
-                elif counter[i - 1] == 1 and counter[i] > 1:
-                    assoc_dict.append("traj_with_track")
-                elif counter[i - 1] > 1 and counter[i] > 1:
-                    assoc_dict.append("traj_with_track")
-                elif counter[i - 1] == 1 and counter[i] == 1:
-                    assoc_dict.append("traj_with_new_obs")
-
-            return assoc_dict
-
-    def association_stat(df, test_name):
-        with pd.option_context("mode.chained_assignment", None):
-            df["assoc_type"] = df.apply(detect_tracklets, axis=1)
-
-        assoc_type = Counter(df.explode(["assoc_type"])["assoc_type"])
-
-        data = [v for v in assoc_type.values()]
-        labels = [k for k in assoc_type.keys()]
-
-        # define Seaborn color palette to use
-        # fmt: off
-        colors = sns.color_palette("pastel")[0:len(data)]
-        # fmt: on
-        print(colors)
-        # create pie chart
-        plt.pie(data, labels=labels, colors=colors, autopct="%.0f%%")
-        plt.title("Distribution of the associations done over nights")
-        plt.savefig(os.path.join(test_name, "assoc_type"), dpi=500)
-        plt.show()
-
-    association_stat(real_mpc_object, test_name)
+    association_stat(real_mpc_object, test_name, "assoc_type_candidates")
 
     # traj_d_size = detected_traj.groupby(["ssnamenr"]).agg(
     #     trajectory_size=("candid", lambda x: len(list(x))),
