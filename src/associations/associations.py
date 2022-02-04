@@ -1820,9 +1820,9 @@ def time_window_management(
     ... ts.test_time_window,
     ... pd.DataFrame(columns=["nid"]),
     ... 8,
-    ... 10, 
-    ... 5, 
-    ... 2, 
+    ... 10,
+    ... 5,
+    ... 2,
     ... 3
     ... )
 

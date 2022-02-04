@@ -9,3 +9,4 @@ omit=
     setup.py
     src/orbit_fitting/plot_orbstat.py
     src/test/test_sample.py
+    src/others/plot_perf_test.py

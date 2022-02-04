@@ -50,13 +50,13 @@ if __name__ == "__main__":
 
     current_test_parameters = {
         "traj_time_window": 5,
-        "obs_time_window": 3,
-        "sep_criterion": 0.35,
+        "obs_time_window": 2,
+        "sep_criterion": 0.24,
         "acceleration_criteria": 0.4,
-        "mag_criterion_same_fid": 0.4,
-        "mag_criterion_diff_fid": 0.8,
+        "mag_criterion_same_fid": 0.2,
+        "mag_criterion_diff_fid": 0.6,
         "orbfit_limit": 5,
-        "angle_criterion": 1.5,
+        "angle_criterion": 1,
     }
 
     for tr_nid in np.unique(df_sso["nid"]):

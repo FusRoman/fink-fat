@@ -76,4 +76,9 @@ if __name__ == "__main__":
 
     ci_df = pd.read_parquet(path_ci)
     trajectory_df = trajectory_df.drop(["provisional designation"], axis=1)
-    assert_frame_equal(trajectory_df, ci_df, check_dtype=False)
+
+    assert_frame_equal(
+        trajectory_df.reset_index(drop=True),
+        ci_df.reset_index(drop=True),
+        check_dtype=False,
+    )

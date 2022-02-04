@@ -157,3 +157,5 @@ asteroid_study/residuals/
 trajectory_df.parquet
 
 src/others/perf_test
+
+perf_test_*/
