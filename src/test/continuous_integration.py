@@ -1,20 +1,24 @@
 import pandas as pd
-import time as t
 import numpy as np
 from src.associations.inter_night_associations import night_to_night_association
 import astropy.units as u
 from pandas.testing import assert_frame_equal
-from src.others.utils import load_data
+import src.test.test_sample as ts
+import sys
 
-if __name__ == "__main__":
-
-    df_sso = load_data("Solar System MPC", 0)
-
-    traj_count = df_sso.groupby(["ssnamenr"]).count().reset_index()
-
-    traj_name = traj_count[traj_count["ra"].isin([20])]["ssnamenr"][:5]
-    df_sso = df_sso[df_sso["ssnamenr"].isin(traj_name)].sort_values(["ssnamenr"])
-
+def ci_function(
+    df_sso,
+    path_ci,
+    traj_time_window=200,
+    obs_time_window=200,
+    intra_night_sep_criterion=500 * u.arcsecond,
+    sep_criterion=0.5 * u.degree,
+    acceleration_criteria=1000,
+    mag_criterion_same_fid=5,
+    mag_criterion_diff_fid=5,
+    orbfit_limit=5,
+    angle_criterion=200,
+):
     tr_orb_columns = [
         "provisional designation",
         "ref_epoch",
@@ -34,8 +38,6 @@ if __name__ == "__main__":
         "trajectory_id",
     ]
 
-    required_columns = ["ra", "dec", "jd", "nid", "fid", "dcmag", "candid"]
-
     trajectory_df = pd.DataFrame(columns=tr_orb_columns)
     old_observation = pd.DataFrame(columns=["nid"])
 
@@ -52,27 +54,24 @@ if __name__ == "__main__":
 
         next_nid = new_observation["nid"].values[0]
 
-        t_before = t.time()
-        trajectory_df, old_observation, report = night_to_night_association(
+        trajectory_df, old_observation, _ = night_to_night_association(
             trajectory_df,
             old_observation,
             new_observation,
             last_nid,
             next_nid,
-            traj_time_window=200,
-            obs_time_window=200,
-            intra_night_sep_criterion=500 * u.arcsecond,
-            sep_criterion=0.5 * u.degree,
-            acceleration_criteria=1000,
-            mag_criterion_same_fid=5,
-            mag_criterion_diff_fid=5,
-            orbfit_limit=5,
-            angle_criterion=200,
+            traj_time_window=traj_time_window,
+            obs_time_window=obs_time_window,
+            intra_night_sep_criterion=intra_night_sep_criterion,
+            sep_criterion=sep_criterion,
+            acceleration_criteria=acceleration_criteria,
+            mag_criterion_same_fid=mag_criterion_same_fid,
+            mag_criterion_diff_fid=mag_criterion_diff_fid,
+            orbfit_limit=orbfit_limit,
+            angle_criterion=angle_criterion,
         )
 
         last_nid = next_nid
-
-    path_ci = "src/test/CI_expected_output.parquet"
 
     ci_df = pd.read_parquet(path_ci)
     trajectory_df = trajectory_df.drop(["provisional designation"], axis=1)
@@ -82,3 +81,23 @@ if __name__ == "__main__":
         ci_df.reset_index(drop=True),
         check_dtype=False,
     )
+
+if __name__ == "__main__":
+
+    mpc = ts.trajectory_sample_2
+
+    ci_function(
+        mpc,
+        "src/test/CI_expected_output_2.parquet",
+        orbfit_limit=40
+    )
+
+    df_sso = ts.trajectory_sample
+    ci_function(
+        df_sso,
+        "src/test/CI_expected_output.parquet"
+    )
+
+
+    sys.exit(0)
+    
