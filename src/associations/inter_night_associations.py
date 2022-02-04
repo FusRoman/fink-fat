@@ -738,6 +738,10 @@ def night_to_night_association(
     orbfit_limit=3,
     ram_dir="",
     run_metrics=False,
+    do_track_and_traj_assoc=True,
+    do_traj_and_new_obs_assoc=True,
+    do_track_and_old_obs_assoc=True,
+    do_new_obs_and_old_obs_assoc=True,
 ):
     """
     Perform night to night associations.
@@ -1025,7 +1029,7 @@ def night_to_night_association(
     orbfit_process = []
 
     # call tracklets_and_trajectories_steps if they have most_recent_traj and tracklets
-    if len(most_recent_traj) > 0 and len(tracklets) > 0:
+    if len(most_recent_traj) > 0 and len(tracklets) > 0 and do_track_and_traj_assoc:
         (
             traj_not_updated,
             small_traj,
@@ -1074,7 +1078,10 @@ def night_to_night_association(
             max_traj_id = last_trajectory_id
             traj_and_track_report = {}
 
-    if len(traj_not_updated) > 0 and len(remaining_new_observations) > 0:
+    # fmt: off
+    assoc_test = len(traj_not_updated) > 0 and len(remaining_new_observations) > 0 and do_traj_and_new_obs_assoc
+    # fmt: on
+    if assoc_test:
         (
             not_associated_traj,
             remaining_new_observations,
@@ -1101,7 +1108,7 @@ def night_to_night_association(
         not_associated_traj = traj_not_updated
         traj_and_new_obs_report = {}
 
-    if len(small_track) > 0 and len(old_observation) > 0:
+    if len(small_track) > 0 and len(old_observation) > 0 and do_track_and_old_obs_assoc:
         (
             not_updated_tracklets,
             remain_old_obs,
@@ -1129,22 +1136,26 @@ def night_to_night_association(
         remain_old_obs = old_observation
         track_and_old_obs_report = {}
 
-    (
-        new_trajectory,
-        remain_old_obs,
-        remaining_new_observations,
-        observation_report,
-    ) = old_with_new_observations_associations(
-        remain_old_obs,
-        remaining_new_observations,
-        next_nid,
-        max_traj_id,
-        sep_criterion,
-        mag_criterion_same_fid,
-        mag_criterion_diff_fid,
-        store_kd_tree,
-        run_metrics,
-    )
+    if do_new_obs_and_old_obs_assoc:
+        (
+            new_trajectory,
+            remain_old_obs,
+            remaining_new_observations,
+            observation_report,
+        ) = old_with_new_observations_associations(
+            remain_old_obs,
+            remaining_new_observations,
+            next_nid,
+            max_traj_id,
+            sep_criterion,
+            mag_criterion_same_fid,
+            mag_criterion_diff_fid,
+            store_kd_tree,
+            run_metrics,
+        )
+    else:
+        new_trajectory = pd.DataFrame(columns=remain_old_obs.columns)
+        observation_report = {}
 
     tmp_traj_orb_elem = []
     for process in orbfit_process:
