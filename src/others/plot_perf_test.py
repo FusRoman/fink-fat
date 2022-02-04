@@ -56,7 +56,7 @@ def plot_stat(stat_df, test_name):
     plt.close()
 
 
-def detect_tracklets(x):
+def detect_tracklets(x, traj_time_window, obs_time_window):
 
     counter = x["assoc"]
 
@@ -71,38 +71,54 @@ def detect_tracklets(x):
     elif np.all(most_c[:, 1] > 1):
         return ["tracklets_with_trajectories_associations only"]
     elif np.all(most_c[:, 1] == 1):
-        return ["observations_associations"]
+        return ["observations_associations only"]
     else:
         counter = np.array([i for i in counter.values()])
+        diff_nid = np.diff(np.unique(x["nid"]))
 
         assoc_dict = list()
 
         if counter[0] == 1 and counter[1] == 1:
-            assoc_dict.append("obs_assoc")
+            if diff_nid[0] <= obs_time_window:
+                assoc_dict.append("begin by obs_assoc")
+            else:
+                assoc_dict.append("assoc_not_seen")
         elif counter[0] > 1 and counter[1] == 1:
-            assoc_dict.append("traj_with_new_obs")
+            if diff_nid[0] <= traj_time_window:
+                assoc_dict.append("traj_with_new_obs")
+            else:
+                assoc_dict.append("assoc_not_seen")
         elif counter[0] == 1 and counter[1] > 1:
-            assoc_dict.append("old_obs_with_track")
+            if diff_nid[0] <= obs_time_window:
+                assoc_dict.append("old_obs_with_track")
+            else:
+                assoc_dict.append("assoc_not_seen")
         elif counter[0] > 1 and counter[1] > 1:
-            assoc_dict.append("traj_with_track")
+            if diff_nid[0] <= traj_time_window:
+                assoc_dict.append("traj_with_track")
+            else:
+                assoc_dict.append("assoc_not_seen")
 
         for i in range(2, len(counter)):
 
-            if counter[i - 1] > 1 and counter[i] == 1:
-                assoc_dict.append("traj_with_new_obs")
-            elif counter[i - 1] == 1 and counter[i] > 1:
-                assoc_dict.append("traj_with_track")
-            elif counter[i - 1] > 1 and counter[i] > 1:
-                assoc_dict.append("traj_with_track")
-            elif counter[i - 1] == 1 and counter[i] == 1:
-                assoc_dict.append("traj_with_new_obs")
+            if diff_nid[i - 1] <= traj_time_window:
+                if counter[i - 1] > 1 and counter[i] == 1:
+                    assoc_dict.append("traj_with_new_obs")
+                elif counter[i - 1] == 1 and counter[i] > 1:
+                    assoc_dict.append("traj_with_track")
+                elif counter[i - 1] > 1 and counter[i] > 1:
+                    assoc_dict.append("traj_with_track")
+                elif counter[i - 1] == 1 and counter[i] == 1:
+                    assoc_dict.append("traj_with_new_obs")
+            else:
+                assoc_dict.append("assoc_not_seen")
 
         return assoc_dict
 
 
-def association_stat(df, test_name, df_name):
+def association_stat(df, traj_time_window, obs_time_window, test_name, df_name):
     with pd.option_context("mode.chained_assignment", None):
-        df["assoc_type"] = df.apply(detect_tracklets, axis=1)
+        df["assoc_type"] = df.apply(detect_tracklets, axis=1, args=(traj_time_window, obs_time_window,))
 
     assoc_type = Counter(df.explode(["assoc_type"])["assoc_type"])
 
@@ -113,12 +129,12 @@ def association_stat(df, test_name, df_name):
     # fmt: off
     colors = sns.color_palette("pastel")[0:len(data)]
     # fmt: on
-    print(colors)
+
     # create pie chart
     plt.pie(data, labels=labels, colors=colors, autopct="%.0f%%")
     plt.title("Distribution of the associations done over nights")
     plt.savefig(os.path.join(test_name, df_name), dpi=500)
-    plt.show()
+    plt.close()
 
 
 if __name__ == "__main__":
@@ -133,6 +149,9 @@ if __name__ == "__main__":
 
     with open("src/others/perf_test/{}.json".format(test_name), "r") as json_file:
         stat = json.load(json_file)
+
+    with open("src/others/perf_test/params_{}.json".format(test_name), "r") as json_file:
+        params = json.load(json_file)
 
     test_night = np.unique(trajectory_df["nid"])
 
@@ -156,7 +175,7 @@ if __name__ == "__main__":
 
     traj_with_orb = trajectory_df[trajectory_df["a"] != -1.0]
 
-    traj_cand_size = traj_with_orb.groupby(["trajectory_id"]).agg(
+    traj_cand_size = traj_with_orb.sort_values(["jd"]).groupby(["trajectory_id"]).agg(
         trajectory_size=("candid", lambda x: len(list(x))),
         error=("ssnamenr", lambda x: len(np.unique(x))),
         ssnamenr=("ssnamenr", np.unique),
@@ -208,7 +227,25 @@ if __name__ == "__main__":
 
     real_mpc_object = traj_cand_size[traj_cand_size["error"] == 1]
 
-    association_stat(real_mpc_object, test_name, "assoc_type_candidates")
+    detected_sso = df_sso[df_sso["ssnamenr"].isin(detected_traj["ssnamenr"])]
+
+    assoc_sso = detected_sso.sort_values(["jd"]).groupby(["ssnamenr"]).agg(
+        trajectory_size=("candid", lambda x: len(list(x))),
+        error=("ssnamenr", lambda x: len(np.unique(x))),
+        ssnamenr=("ssnamenr", np.unique),
+        nid=("nid", list),
+        assoc=("nid", lambda x: Counter(x)),
+        track=("nid", lambda x: len(np.unique(x))),
+    )
+
+    # for i in [5, 10, 15, 20]:
+    #     for j in [2, 3, 5, 10]:
+    #         print(i, " ", j)
+    #         association_stat(assoc_sso, i, j, test_name, "assoc_type_real_tw={}_ow={}".format(i, j))
+
+    # best windows parameters : 15 for the trajectories and 2 for the observations
+
+    association_stat(real_mpc_object, params["traj_time_window"], params["obs_time_window"], test_name, "assoc_type_candidates")
 
     # traj_d_size = detected_traj.groupby(["ssnamenr"]).agg(
     #     trajectory_size=("candid", lambda x: len(list(x))),
