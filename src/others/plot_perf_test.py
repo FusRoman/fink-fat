@@ -1,6 +1,4 @@
-from cProfile import label
 from collections import Counter
-from itertools import count
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
@@ -102,7 +100,7 @@ def detect_tracklets(x, traj_time_window, obs_time_window):
                 assoc = "traj_with_track"
             else:
                 assoc = "assoc_not_seen"
-        
+
         assoc_dict.append(assoc)
         pred_assoc = assoc
 
@@ -131,14 +129,16 @@ def detect_tracklets(x, traj_time_window, obs_time_window):
                         assoc = "traj_with_new_obs"
             else:
                 assoc = "assoc_not_seen"
-            
+
             pred_assoc = assoc
             assoc_dict.append(assoc)
 
         return assoc_dict
 
 
-def association_stat(df, traj_time_window, obs_time_window, test_name, df_name, pie_chart=False):
+def association_stat(
+    df, traj_time_window, obs_time_window, test_name, df_name, pie_chart=False
+):
     with pd.option_context("mode.chained_assignment", None):
         df["assoc_type"] = df.apply(
             detect_tracklets, axis=1, args=(traj_time_window, obs_time_window,)
@@ -280,7 +280,6 @@ if __name__ == "__main__":
     #     )
     # )
 
-
     # all_assoc_type = {}
     # all_assoc_type["params"] = []
     # all_assoc_type["results"] = []
@@ -321,12 +320,12 @@ if __name__ == "__main__":
     #             proc_data[key].append(counter[key])
     #         else:
     #             proc_data[key].append(0)
-    
+
     # # print(proc_data)
     # data_df = pd.DataFrame(proc_data).reset_index(drop=True)
 
     # data_df = data_df.divide(data_df.sum(axis=1), axis=0)# .multiply(100)
-    
+
     # g = sns.lineplot(data=data_df)
     # g.set_xlabel("time windows parameters")
     # g.set_ylabel("number of associations types (percentage)")
@@ -335,7 +334,6 @@ if __name__ == "__main__":
     # plt.show()
     # plt.close()
 
-    
     # best windows parameters : 15 for the trajectories and 2 for the observations
 
     association_stat(
@@ -344,7 +342,7 @@ if __name__ == "__main__":
         params["obs_time_window"],
         test_name,
         "assoc_type_candidates",
-        True
+        True,
     )
 
     # traj_d_size = detected_traj.groupby(["ssnamenr"]).agg(
