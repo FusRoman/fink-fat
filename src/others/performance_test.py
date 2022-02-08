@@ -42,26 +42,26 @@ if __name__ == "__main__":
 
     last_nid = np.min(df_sso["nid"])
 
-    max_night_iter = 4
+    max_night_iter = 2000
     current_loop = 0
 
     all_time = []
     all_nb_traj = []
 
     current_test_parameters = {
-        "traj_time_window": 5,
-        "obs_time_window": 2,
-        "sep_criterion": 0.24,
+        "traj_time_window": 10,
+        "obs_time_window": 5,
+        "sep_criterion": 0.35,
         "acceleration_criteria": 0.4,
-        "mag_criterion_same_fid": 0.2,
-        "mag_criterion_diff_fid": 0.6,
-        "orbfit_limit": 5,
-        "angle_criterion": 1,
-        "store_kd_tree": True,
+        "mag_criterion_same_fid": 0.3,
+        "mag_criterion_diff_fid": 0.7,
+        "orbfit_limit": 7,
+        "angle_criterion": 1.5,
+        "store_kd_tree": False,
         "do_track_and_traj_assoc": True,
         "do_traj_and_new_obs_assoc": True,
-        "do_track_and_old_obs_assoc": True,
-        "do_new_obs_and_old_obs_assoc": True,
+        "do_track_and_old_obs_assoc": False,
+        "do_new_obs_and_old_obs_assoc": False,
     }
 
     for tr_nid in np.unique(df_sso["nid"]):
