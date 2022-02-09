@@ -706,9 +706,6 @@ def tracklets_and_trajectories_associations(
 
             if len(traj_extremity_associated) > 0:
 
-                # duplicates management is not really optimized, optimisation would be to remove the for loop
-                # and vectorized the operation
-
                 # creates a dataframe for each duplicated trajectory associated with the tracklets
                 duplicates = traj_extremity_associated["trajectory_id"].duplicated()
 
@@ -754,14 +751,23 @@ def tracklets_and_trajectories_associations(
                         tracklets_duplicated["trajectory_id"], return_counts=True
                     )
 
+                    # compute the occurence of each duplicated tracklets
+                    _, track_counts_duplicates = np.unique(
+                        tracklets_duplicated["tmp_traj"], return_counts=True
+                    )
+
                     tr_index = duplicate_traj.index.values
+                    tk_index = duplicate_track.index.values
 
                     # duplicates each trajectory according to the numbers of duplicates for each of them
                     # solution for the next instruction taken from :
                     # https://stackoverflow.com/questions/63510977/repeat-but-in-variable-sized-chunks-in-numpy
 
-                    dp_index = repeat_chunk(tr_index, traj_size, traj_counts_duplicates)
-                    df = duplicate_traj.loc[dp_index]
+                    tr_index = repeat_chunk(tr_index, traj_size, traj_counts_duplicates)
+                    tr_df = duplicate_traj.loc[tr_index]
+
+                    tk_index = repeat_chunk(tk_index, track_size, track_counts_duplicates)
+                    tk_df = duplicate_track.loc[tk_index]
 
                     # compute the new trajectory id
                     new_obs_id = np.arange(
@@ -775,19 +781,20 @@ def tracklets_and_trajectories_associations(
                     tr_id_repeat = np.repeat(traj_size, traj_counts_duplicates)
                     new_tr_id = np.repeat(new_obs_id, tr_id_repeat)
 
-                    new_obs_id = np.repeat(new_obs_id, track_size)
+                    track_dp_size = np.repeat(track_size, track_counts_duplicates)
+                    new_obs_id = np.repeat(new_obs_id, track_dp_size)
 
                     # assign the new trajectory_id
                     # silence the copy warning
                     with pd.option_context("mode.chained_assignment", None):
-                        df["trajectory_id"] = new_tr_id
-                        df["not_updated"] = False
+                        tr_df["trajectory_id"] = new_tr_id
+                        tr_df["not_updated"] = False
 
-                        duplicate_track["trajectory_id"] = new_obs_id
-                        duplicate_track["not_updated"] = False
+                        tk_df["trajectory_id"] = new_obs_id
+                        tk_df["not_updated"] = False
 
                     # add the duplicated new trajectories to the set of trajectories
-                    all_duplicate_traj = pd.concat([df, duplicate_track])
+                    all_duplicate_traj = pd.concat([tr_df, tk_df])
                     trajectories = pd.concat([trajectories, all_duplicate_traj])
 
                     # remove the duplicates tracklets associated with a trajectory from the
@@ -860,6 +867,9 @@ def tracklets_and_trajectories_associations(
                         traj_left["trajectory_id"]
                     )
                 ]
+
+                # remove also the tracklets extremity that have been associated during this loop
+                tracklets_extremity = tracklets_extremity[~tracklets_extremity["trajectory_id"].isin(traj_extremity_associated["tmp_traj"])]
 
             if run_metrics:  # pragma: no cover
                 last_traj_obs = (
