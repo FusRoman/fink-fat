@@ -1082,11 +1082,6 @@ def night_to_night_association(
     assoc_test = len(traj_not_updated) > 0 and len(remaining_new_observations) > 0 and do_traj_and_new_obs_assoc
     # fmt: on
     if assoc_test:
-
-        traj_not_updated = traj_not_updated.drop(["provisional designation"], axis=1)
-        traj_not_updated.to_parquet("traj_not_updated.parquet")
-        remaining_new_observations.to_parquet("remaining_new_observations.parquet")
-
         (
             not_associated_traj,
             remaining_new_observations,
