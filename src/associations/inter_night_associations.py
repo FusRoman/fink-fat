@@ -734,7 +734,6 @@ def night_to_night_association(
     mag_criterion_diff_fid=0.7,
     angle_criterion=8.8,
     store_kd_tree=False,
-    acceleration_criteria=0.01,
     orbfit_limit=3,
     ram_dir="",
     run_metrics=False,
@@ -1166,10 +1165,6 @@ def night_to_night_association(
     else:
         traj_with_orb_elem = pd.DataFrame(columns=most_recent_traj.columns)
 
-    # not_associated_traj = acceleration_filter(
-    #     not_associated_traj, acceleration_criteria
-    # )
-
     # concatenate all the trajectories with computed orbital elements and the other trajectories/tracklets.
     most_recent_traj = pd.concat(
         [
@@ -1201,67 +1196,6 @@ def night_to_night_association(
         process.terminate()
 
     return trajectory_df, old_observation, inter_night_report
-
-
-# def acceleration_filter(trajectory_df, acc_criteria):
-
-#     if len(trajectory_df) > 0:
-
-#         def acceleration_df(x):
-#             ra, dec, jd = x["ra"], x["dec"], x["jd"]
-#             c1 = SkyCoord(ra, dec, unit=u.degree)
-#             diff_jd = np.diff(jd)
-
-#             sep = c1[0:-1].separation(c1[1:]).degree
-
-#             velocity = sep / diff_jd
-#             velocity = velocity[~np.isnan(velocity)]
-
-#             acc = np.diff(velocity) / np.diff(diff_jd)
-
-#             return np.mean(np.abs(acc))
-
-#         gb_traj = (
-#             trajectory_df.groupby(["trajectory_id"])
-#             .agg(
-#                 ra=("ra", list),
-#                 dec=("dec", list),
-#                 dcmag=("dcmag", list),
-#                 candid=("candid", list),
-#                 objectId=("objectId", list),
-#                 ssnamenr=("ssnamenr", list),
-#                 fid=("fid", list),
-#                 nid=("nid", list),
-#                 jd=("jd", list),
-#                 trajectory_size=("candid", lambda x: len(list(x))),
-#             )
-#             .reset_index()
-#         )
-
-#         large_traj = gb_traj[gb_traj["trajectory_size"] >= 3]
-
-#         remain_traj = gb_traj[gb_traj["trajectory_size"] < 3]
-#         remain_traj = trajectory_df[
-#             trajectory_df["trajectory_id"].isin(remain_traj["trajectory_id"])
-#         ]
-
-#         if len(large_traj) > 0:
-#             with pd.option_context("mode.chained_assignment", None):
-#                 large_traj["acc"] = large_traj.apply(acceleration_df, axis=1)
-
-#             cst_acc = large_traj[large_traj["acc"] <= acc_criteria]["trajectory_id"]
-#             return pd.concat(
-#                 [
-#                     remain_traj,
-#                     trajectory_df[trajectory_df["trajectory_id"].isin(cst_acc)],
-#                 ]
-#             )
-#         else:
-#             return trajectory_df
-
-#     else:
-#         return trajectory_df
-
 
 if __name__ == "__main__":  # pragma: no cover
     import sys
