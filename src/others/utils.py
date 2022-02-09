@@ -33,3 +33,21 @@ def get_mpc_database(nb_indirection=0):
     )
     mpc_database["Number"] = mpc_database["Number"].astype("string").str[1:-1]
     return mpc_database
+
+
+def create_ranges(starts, ends, chunks_list):
+    clens = chunks_list.cumsum()
+    ids = np.ones(clens[-1], dtype=int)
+    ids[0] = starts[0]
+    ids[clens[:-1]] = starts[1:] - ends[:-1] + 1
+    out = ids.cumsum()
+    return out
+
+
+def repeat_chunk(a, chunks, repeats):
+    s = np.r_[0, chunks.cumsum()]
+    starts = a[np.repeat(s[:-1], repeats)]
+    repeated_chunks = np.repeat(chunks, repeats)
+    ends = starts + repeated_chunks
+    out = create_ranges(starts, ends, repeated_chunks)
+    return out

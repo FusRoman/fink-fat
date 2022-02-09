@@ -49,13 +49,13 @@ if __name__ == "__main__":
     all_nb_traj = []
 
     current_test_parameters = {
-        "traj_time_window": 10,
+        "traj_time_window": 15,
         "obs_time_window": 5,
         "sep_criterion": 0.35,
         "acceleration_criteria": 0.4,
         "mag_criterion_same_fid": 0.3,
         "mag_criterion_diff_fid": 0.7,
-        "orbfit_limit": 7,
+        "orbfit_limit": 20,
         "angle_criterion": 1.5,
         "store_kd_tree": False,
         "do_track_and_traj_assoc": True,
