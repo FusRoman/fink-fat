@@ -1142,7 +1142,7 @@ def intra_night_association(
     # removed wrong multiple association
     left_assoc, right_assoc = removed_multiple_association(left_assoc, right_assoc)
 
-    if compute_metrics: # pragma: no cover
+    if compute_metrics:  # pragma: no cover
         metrics = compute_intra_night_metrics(
             left_assoc, right_assoc, night_observation
         )
@@ -1150,7 +1150,7 @@ def intra_night_association(
         intra_night_report["association metrics"] = metrics
 
         return left_assoc, right_assoc, intra_night_report
-    else: # pragma: no cover
+    else:  # pragma: no cover
         intra_night_report["association metrics"] = {}
 
         return left_assoc, right_assoc, intra_night_report
