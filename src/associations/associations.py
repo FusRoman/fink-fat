@@ -8,6 +8,7 @@ from src.associations.intra_night_association import (
     get_n_last_observations_from_trajectories,
 )
 from src.associations.intra_night_association import compute_inter_night_metric
+from src.others.utils import repeat_chunk
 import sys
 import doctest
 from pandas.testing import assert_frame_equal  # noqa: F401
@@ -710,42 +711,87 @@ def tracklets_and_trajectories_associations(
 
                 # creates a dataframe for each duplicated trajectory associated with the tracklets
                 duplicates = traj_extremity_associated["trajectory_id"].duplicated()
-                all_duplicate_traj = []
 
                 # get the duplicated tracklets
                 tracklets_duplicated = traj_extremity_associated[duplicates]
 
                 if len(tracklets_duplicated) > 0:
 
-                    for _, rows in tracklets_duplicated.iterrows():
+                    # get the trajectories involved in the duplicates
+                    duplicate_traj = (
+                        trajectories[
+                            trajectories["trajectory_id"].isin(
+                                tracklets_duplicated["trajectory_id"]
+                            )
+                        ]
+                        .sort_values(["trajectory_id", "jd"])
+                        .reset_index(drop=True)
+                    )
 
-                        # silence the copy warning
-                        with pd.option_context("mode.chained_assignment", None):
+                    # get the tracklets involved in the duplicates
+                    duplicate_track = (
+                        tracklets[
+                            tracklets["trajectory_id"].isin(
+                                tracklets_duplicated["tmp_traj"]
+                            )
+                        ]
+                        .sort_values(["trajectory_id", "jd"])
+                        .reset_index(drop=True)
+                    )
 
-                            # get the trajectory associated with the tracklets and update the trajectory id
-                            duplicate_traj = trajectories[
-                                trajectories["trajectory_id"] == rows["trajectory_id"]
-                            ]
-                            duplicate_traj["trajectory_id"] = max_traj_id
-                            duplicate_traj["not_updated"] = False
+                    # compute the size of each trajectories
+                    traj_size = (
+                        duplicate_traj.groupby(["trajectory_id"]).count()["ra"].values
+                    )
 
-                            # get the tracklets and update the trajectory id
-                            other_track = tracklets[
-                                tracklets["trajectory_id"] == rows["tmp_traj"]
-                            ]
-                            other_track["trajectory_id"] = max_traj_id
-                            other_track["not_updated"] = False
+                    # compute the size of each tracklets
+                    track_size = (
+                        duplicate_track.groupby(["trajectory_id"]).count()["ra"].values
+                    )
 
-                        # append the trajectory and the tracklets into the list
-                        all_duplicate_traj.append(duplicate_traj)
-                        all_duplicate_traj.append(other_track)
-                        updated_trajectories.append(max_traj_id)
-                        max_traj_id += 1
+                    # compute the number of time each trajectories need to be duplicates
+                    _, traj_counts_duplicates = np.unique(
+                        tracklets_duplicated["trajectory_id"], return_counts=True
+                    )
 
-                    # creates a dataframe with all duplicates and adds it to the trajectories dataframe
-                    all_duplicate_traj = pd.concat(all_duplicate_traj)
+                    tr_index = duplicate_traj.index.values
+
+                    # duplicates each trajectory according to the numbers of duplicates for each of them
+                    # solution for the next instruction taken from :
+                    # https://stackoverflow.com/questions/63510977/repeat-but-in-variable-sized-chunks-in-numpy
+
+                    dp_index = repeat_chunk(tr_index, traj_size, traj_counts_duplicates)
+                    df = duplicate_traj.loc[dp_index]
+
+                    # compute the new trajectory id
+                    new_obs_id = np.arange(
+                        max_traj_id, max_traj_id + len(tracklets_duplicated)
+                    )
+
+                    max_traj_id += len(tracklets_duplicated)
+
+                    # repeat all the trajectory_id according to the size of each trajectory and
+                    # the number of time they need to be repeated
+                    tr_id_repeat = np.repeat(traj_size, traj_counts_duplicates)
+                    new_tr_id = np.repeat(new_obs_id, tr_id_repeat)
+
+                    new_obs_id = np.repeat(new_obs_id, track_size)
+
+                    # assign the new trajectory_id
+                    # silence the copy warning
+                    with pd.option_context("mode.chained_assignment", None):
+                        df["trajectory_id"] = new_tr_id
+                        df["not_updated"] = False
+
+                        duplicate_track["trajectory_id"] = new_obs_id
+                        duplicate_track["not_updated"] = False
+
+                    # add the duplicated new trajectories to the set of trajectories
+                    all_duplicate_traj = pd.concat([df, duplicate_track])
                     trajectories = pd.concat([trajectories, all_duplicate_traj])
 
+                    # remove the duplicates tracklets associated with a trajectory from the
+                    # set of tracklets detected this night.
                     tracklets = tracklets[
                         ~tracklets["trajectory_id"].isin(
                             tracklets_duplicated["tmp_traj"]
@@ -815,7 +861,7 @@ def tracklets_and_trajectories_associations(
                     )
                 ]
 
-            if run_metrics:
+            if run_metrics:  # pragma: no cover
                 last_traj_obs = (
                     two_last_current_nid.groupby(["trajectory_id"]).last().reset_index()
                 )
@@ -949,6 +995,7 @@ def trajectories_with_new_observations_associations(
     >>> new_observations = ts.new_observations_sample_2
 
     >>> tr_orb_columns = [
+    ... "ref_epoch",
     ... "provisional designation",
     ... "a",
     ... "e",
@@ -982,6 +1029,7 @@ def trajectories_with_new_observations_associations(
     >>> new_observations = ts.new_observations_sample_3
 
     >>> tr_orb_columns = [
+    ... "ref_epoch",
     ... "provisional designation",
     ... "a",
     ... "e",
@@ -1103,12 +1151,13 @@ def trajectories_with_new_observations_associations(
 
                 # creates a dataframe for each duplicated trajectory associated with the tracklets
                 duplicates = obs_assoc["trajectory_id"].duplicated()
-                all_duplicate_traj = []
 
                 # get the duplicated tracklets
                 duplicate_obs = obs_assoc[duplicates]
 
                 orbit_column = [
+                    "ref_epoch",
+                    "provisional designation",
                     "a",
                     "e",
                     "i",
@@ -1125,35 +1174,66 @@ def trajectories_with_new_observations_associations(
 
                 if len(duplicate_obs) > 0:
 
-                    for _, rows in duplicate_obs.iterrows():
+                    # get the trajectories involved in the duplicates
+                    duplicate_traj = (
+                        trajectories[
+                            trajectories["trajectory_id"].isin(
+                                duplicate_obs["trajectory_id"]
+                            )
+                        ]
+                        .sort_values(["trajectory_id", "jd"])
+                        .reset_index(drop=True)
+                    )
 
-                        # silence the copy warning
-                        with pd.option_context("mode.chained_assignment", None):
+                    # compute the size of each trajectories
+                    traj_size = (
+                        duplicate_traj.groupby(["trajectory_id"]).count()["ra"].values
+                    )
 
-                            # get the trajectory associated with the tracklets and update the trajectory id
-                            duplicate_traj = trajectories[
-                                trajectories["trajectory_id"] == rows["trajectory_id"]
-                            ]
-                            duplicate_traj[orbit_column] = -1.0
-                            duplicate_traj["trajectory_id"] = max_traj_id
-                            duplicate_traj["not_updated"] = False
+                    # compute the number of time each trajectories need to be duplicates
+                    _, traj_counts_duplicates = np.unique(
+                        duplicate_obs["trajectory_id"], return_counts=True
+                    )
 
-                            # get the observations and update the trajectory id
-                            obs_duplicate = pd.DataFrame(rows.copy()).T
+                    tr_index = duplicate_traj.index.values
 
-                            obs_duplicate[orbit_column] = -1.0
-                            obs_duplicate["trajectory_id"] = max_traj_id
-                            obs_duplicate["not_updated"] = False
+                    # # duplicates each trajectory according to the numbers of duplicates for each of them
+                    # # solution for the next instruction taken from :
+                    # # https://stackoverflow.com/questions/63510977/repeat-but-in-variable-sized-chunks-in-numpy
 
-                        # append the trajectory and the tracklets into the list
-                        all_duplicate_traj.append(duplicate_traj)
-                        all_duplicate_traj.append(obs_duplicate)
-                        updated_trajectories.append(max_traj_id)
-                        max_traj_id += 1
+                    dp_index = repeat_chunk(tr_index, traj_size, traj_counts_duplicates)
+                    df = duplicate_traj.loc[dp_index]
 
-                    # creates a dataframe with all duplicates and adds it to the trajectories dataframe
-                    all_duplicate_traj = pd.concat(all_duplicate_traj)
+                    # compute the new trajectory id
+                    new_obs_id = np.arange(
+                        max_traj_id, max_traj_id + len(duplicate_obs)
+                    )
 
+                    # add the new trajectory_id to the list of updated tracklets
+                    updated_trajectories = np.union1d(
+                        updated_trajectories, new_obs_id
+                    ).tolist()
+
+                    max_traj_id += len(duplicate_obs)
+
+                    # repeat all the trajectory_id according to the size of each trajectory and
+                    # the number of time they need to be repeated
+                    tr_id_repeat = np.repeat(traj_size, traj_counts_duplicates)
+                    new_tr_id = np.repeat(new_obs_id, tr_id_repeat)
+
+                    # assign the new trajectory_id
+                    # silence the copy warning
+                    with pd.option_context("mode.chained_assignment", None):
+                        df[orbit_column] = -1.0
+                        df["trajectory_id"] = new_tr_id
+                        df["not_updated"] = False
+
+                        duplicate_obs[orbit_column] = -1.0
+                        duplicate_obs["trajectory_id"] = new_obs_id
+                        duplicate_obs["not_updated"] = False
+
+                    # add the duplicated new trajectories to the set of trajectories
+                    all_duplicate_traj = pd.concat([df, duplicate_obs])
                     trajectories = pd.concat([trajectories, all_duplicate_traj])
 
                 updated_trajectories = np.union1d(
@@ -1181,7 +1261,7 @@ def trajectories_with_new_observations_associations(
                 # update the updated status
                 trajectories.loc[tr_updated_index, "not_updated"] = False
 
-            if run_metrics:
+            if run_metrics:  # pragma: no cover
                 last_traj_obs = (
                     two_last_current_nid.groupby(["trajectory_id"]).last().reset_index()
                 )
@@ -1436,7 +1516,6 @@ def old_observations_with_tracklets_associations(
 
                 # creates a dataframe for each duplicated trajectory associated with the tracklets
                 duplicates = old_obs_right_assoc["trajectory_id"].duplicated()
-                all_duplicate_traj = []
 
                 # get the duplicated tracklets
                 duplicate_obs = old_obs_right_assoc[duplicates]
@@ -1458,38 +1537,98 @@ def old_observations_with_tracklets_associations(
 
                 if len(duplicate_obs) > 0:
 
-                    for _, rows in duplicate_obs.iterrows():
+                    # get the tracklets involved with duplicates
+                    duplicate_traj = (
+                        tracklets[
+                            tracklets["trajectory_id"].isin(
+                                duplicate_obs["trajectory_id"]
+                            )
+                        ]
+                        .sort_values(["trajectory_id", "jd"])
+                        .reset_index(drop=True)
+                    )
 
-                        # silence the copy warning
-                        with pd.option_context("mode.chained_assignment", None):
+                    # compute size of each tracklets
+                    traj_size = (
+                        duplicate_traj.groupby(["trajectory_id"]).count()["ra"].values
+                    )
 
-                            # get the trajectory associated with the tracklets and update the trajectory id
-                            duplicate_track = tracklets[
-                                tracklets["trajectory_id"] == rows["trajectory_id"]
-                            ]
-                            duplicate_track[orbit_column] = -1.0
-                            duplicate_track["trajectory_id"] = max_traj_id
-                            duplicate_track["not_updated"] = False
+                    # compute the number of duplicates for each tracklets
+                    _, traj_counts_duplicates = np.unique(
+                        duplicate_obs["trajectory_id"], return_counts=True
+                    )
 
-                            # get the observations and update the trajectory id
-                            obs_duplicate = pd.DataFrame(rows.copy()).T
+                    tr_index = duplicate_traj.index
 
-                            obs_duplicate[orbit_column] = -1.0
-                            obs_duplicate["trajectory_id"] = max_traj_id
-                            obs_duplicate["not_updated"] = False
+                    # duplicates each trajectory according to the number of duplicates for each of them
+                    # solution for the next instruction taken from :
+                    # https://stackoverflow.com/questions/63510977/repeat-but-in-variable-sized-chunks-in-numpy
+                    dp_index = repeat_chunk(tr_index, traj_size, traj_counts_duplicates)
 
-                        # append the trajectory and the tracklets into the list
-                        all_duplicate_traj.append(duplicate_track)
-                        all_duplicate_traj.append(obs_duplicate)
-                        updated_tracklets.append(max_traj_id)
-                        max_traj_id += 1
+                    # apply the duplicated index to the tracklets dataframe
+                    df = duplicate_traj.loc[dp_index]
 
-                    # creates a dataframe with all duplicates and adds it to the trajectories dataframe
-                    all_duplicate_traj = pd.concat(all_duplicate_traj)
+                    # compute the trajectory_id for each new tracklets
+                    new_obs_id = np.arange(
+                        max_traj_id, max_traj_id + len(duplicate_obs)
+                    )
 
-                    tracklets = pd.concat([tracklets, all_duplicate_traj])
+                    # add the new trajectory_id to the list of updated tracklets
+                    updated_tracklets = np.union1d(
+                        updated_tracklets, new_obs_id
+                    ).tolist()
 
-                # remove the duplicates()
+                    max_traj_id += len(duplicate_obs)
+
+                    # duplicates the trajectory_id for each duplicates tracklets
+                    tr_id_repeat = np.repeat(traj_size, traj_counts_duplicates)
+                    new_tr_id = np.repeat(new_obs_id, tr_id_repeat)
+
+                    # assign the new list of trajectory_id
+                    # silence the copy warning
+                    with pd.option_context("mode.chained_assignment", None):
+                        df[orbit_column] = -1.0
+                        df["trajectory_id"] = new_tr_id
+                        df["not_updated"] = False
+
+                        duplicate_obs[orbit_column] = -1.0
+                        duplicate_obs["trajectory_id"] = new_obs_id
+                        duplicate_obs["not_updated"] = False
+
+                    all_duplicate_track = pd.concat([df, duplicate_obs])
+                    tracklets = pd.concat([tracklets, all_duplicate_track])
+
+                    # for _, rows in duplicate_obs.iterrows():
+
+                    #     # silence the copy warning
+                    #     with pd.option_context("mode.chained_assignment", None):
+
+                    #         # get the trajectory associated with the tracklets and update the trajectory id
+                    #         duplicate_track = tracklets[
+                    #             tracklets["trajectory_id"] == rows["trajectory_id"]
+                    #         ]
+                    #         duplicate_track[orbit_column] = -1.0
+                    #         duplicate_track["trajectory_id"] = max_traj_id
+                    #         duplicate_track["not_updated"] = False
+
+                    #         # get the observations and update the trajectory id
+                    #         obs_duplicate = pd.DataFrame(rows.copy()).T
+
+                    #         obs_duplicate[orbit_column] = -1.0
+                    #         obs_duplicate["trajectory_id"] = max_traj_id
+                    #         obs_duplicate["not_updated"] = False
+
+                    #     # append the trajectory and the tracklets into the list
+                    #     all_duplicate_traj.append(duplicate_track)
+                    #     all_duplicate_traj.append(obs_duplicate)
+                    #     updated_tracklets.append(max_traj_id)
+                    #     max_traj_id += 1
+
+                    # # creates a dataframe with all duplicates and adds it to the trajectories dataframe
+                    # all_duplicate_traj = pd.concat(all_duplicate_traj)
+
+                    # tracklets = pd.concat([tracklets, all_duplicate_traj])
+
                 # remove duplicates associations
                 old_obs_right_assoc = old_obs_right_assoc[~duplicates]
                 # old_obs_right_assoc = old_obs_right_assoc.drop_duplicates(["trajectory_id"])
@@ -1532,7 +1671,7 @@ def old_observations_with_tracklets_associations(
                     ~current_old_obs["candid"].isin(old_obs_right_assoc["candid"])
                 ]
 
-            if run_metrics:
+            if run_metrics:  # pragma: no cover
                 last_traj_obs = (
                     two_first_obs_tracklets.groupby(["trajectory_id"])
                     .last()
@@ -1676,7 +1815,7 @@ def old_with_new_observations_associations(
                 store_kd_tree,
             )
 
-            if run_metrics:
+            if run_metrics:  # pragma: no cover
                 inter_night_metric = compute_inter_night_metric(
                     current_old_obs, new_observations, left_assoc, right_assoc
                 )
@@ -1921,3 +2060,259 @@ if __name__ == "__main__":  # pragma: no cover
         __import__("sys").modules["unittest.util"]._MAX_LENGTH = 999999999
 
     sys.exit(doctest.testmod()[0])
+
+    tracklets = ts.tracklets_sample_4
+    old_observations = ts.old_observations_sample_2
+
+    tr_orb_columns = [
+        "provisional designation",
+        "a",
+        "e",
+        "i",
+        "long. node",
+        "arg. peric",
+        "mean anomaly",
+        "rms_a",
+        "rms_e",
+        "rms_i",
+        "rms_long. node",
+        "rms_arg. peric",
+        "rms_mean anomaly",
+    ]
+
+    tracklets[tr_orb_columns] = -1.0
+    old_observations[tr_orb_columns] = -1.0
+    tracklets["not_updated"] = np.ones(len(tracklets), dtype=np.bool_)
+
+    tk, old, max_tr_id, report = old_observations_with_tracklets_associations(
+        tracklets, old_observations, 3, 1.5 * u.degree, 0.1, 0.3, 30, 5
+    )
+
+    print(tk)
+
+    exit()
+
+    trajectories = ts.trajectories_sample_4
+    new_observations = ts.new_observations_sample_2
+
+    tr_orb_columns = [
+        "ref_epoch",
+        "provisional designation",
+        "a",
+        "e",
+        "i",
+        "long. node",
+        "arg. peric",
+        "mean anomaly",
+        "rms_a",
+        "rms_e",
+        "rms_i",
+        "rms_long. node",
+        "rms_arg. peric",
+        "rms_mean anomaly",
+    ]
+
+    trajectories[tr_orb_columns] = -1.0
+    new_observations[tr_orb_columns] = -1.0
+    trajectories["not_updated"] = np.ones(len(trajectories), dtype=np.bool_)
+
+    tr, obs, max_tr_id, report = trajectories_with_new_observations_associations(
+        trajectories, new_observations, 3, 1.5 * u.degree, 0.2, 0.5, 30, 4
+    )
+
+    print(tr.to_dict(orient="list"))
+
+    assert_frame_equal(tr, ts.trajectories_expected_5, check_dtype=False)
+
+    exit()
+
+    trajectories = ts.trajectories_sample_5
+    new_observations = ts.new_observations_sample_3
+
+    tr_orb_columns = [
+        "ref_epoch",
+        "provisional designation",
+        "a",
+        "e",
+        "i",
+        "long. node",
+        "arg. peric",
+        "mean anomaly",
+        "rms_a",
+        "rms_e",
+        "rms_i",
+        "rms_long. node",
+        "rms_arg. peric",
+        "rms_mean anomaly",
+    ]
+
+    trajectories[tr_orb_columns] = -1.0
+    new_observations[tr_orb_columns] = -1.0
+    trajectories["not_updated"] = np.ones(len(trajectories), dtype=np.bool_)
+
+    tr, obs, max_tr_id, report = trajectories_with_new_observations_associations(
+        trajectories, new_observations, 3, 1.5 * u.degree, 0.2, 0.5, 30, 7, True
+    )
+
+    print("[", end="")
+    for v in obs["ref_epoch"].values:
+        print(str(v) + ", ", end="")
+    print("]")
+
+    exit()
+
+    tracklets = ts.tracklets_sample_2
+    trajectories = ts.trajectories_sample_2
+
+    tr_orb_columns = [
+        "provisional designation",
+        "a",
+        "e",
+        "i",
+        "long. node",
+        "arg. peric",
+        "mean anomaly",
+        "rms_a",
+        "rms_e",
+        "rms_i",
+        "rms_long. node",
+        "rms_arg. peric",
+        "rms_mean anomaly",
+    ]
+
+    trajectories[tr_orb_columns] = -1.0
+    tracklets[tr_orb_columns] = -1.0
+    trajectories["not_updated"] = np.ones(len(trajectories), dtype=np.bool_)
+
+    tr, tk, max_tr_id, report = tracklets_and_trajectories_associations(
+        trajectories, tracklets, 3, 1 * u.degree, 0.2, 0.5, 30, 5
+    )
+
+    print(tr.to_dict(orient="list"))
+
+    exit()
+    tracklets = ts.tracklets_sample_2
+    trajectories = ts.trajectories_sample_2
+
+    tr_orb_columns = [
+        "provisional designation",
+        "a",
+        "e",
+        "i",
+        "long. node",
+        "arg. peric",
+        "mean anomaly",
+        "rms_a",
+        "rms_e",
+        "rms_i",
+        "rms_long. node",
+        "rms_arg. peric",
+        "rms_mean anomaly",
+    ]
+
+    trajectories[tr_orb_columns] = -1.0
+    tracklets[tr_orb_columns] = -1.0
+    trajectories["not_updated"] = np.ones(len(trajectories), dtype=np.bool_)
+
+    tr, tk, max_tr_id, report = tracklets_and_trajectories_associations(
+        trajectories, tracklets, 3, 1 * u.degree, 0.2, 0.5, 30, 5
+    )
+
+    # trajectories = ts.trajectories_sample_4
+    # new_observations = ts.new_observations_sample_2
+
+    # tr_orb_columns = [
+    # "provisional designation",
+    # "a",
+    # "e",
+    # "i",
+    # "long. node",
+    # "arg. peric",
+    # "mean anomaly",
+    # "rms_a",
+    # "rms_e",
+    # "rms_i",
+    # "rms_long. node",
+    # "rms_arg. peric",
+    # "rms_mean anomaly"
+    # ]
+
+    # trajectories[tr_orb_columns] = -1.0
+    # new_observations[tr_orb_columns] = -1.0
+    # trajectories["not_updated"] = np.ones(len(trajectories), dtype=np.bool_)
+
+    # tr, obs, max_tr_id, report = trajectories_with_new_observations_associations(
+    # trajectories, new_observations, 3, 1.5 * u.degree, 0.2, 0.5, 30, 4
+    # )
+
+    # print(tr)
+    # print()
+    # print()
+    # print(obs)
+    # print()
+    # print()
+    # print(max_tr_id)
+
+    # tracklets = ts.tracklets_sample_4
+    # old_observations = ts.old_observations_sample_2
+
+    # tr_orb_columns = [
+    #    "provisional designation",
+    #    "a",
+    #    "e",
+    #    "i",
+    #    "long. node",
+    #    "arg. peric",
+    #    "mean anomaly",
+    #    "rms_a",
+    #    "rms_e",
+    #    "rms_i",
+    #    "rms_long. node",
+    #    "rms_arg. peric",
+    #    "rms_mean anomaly",
+    # ]
+
+    # tracklets[tr_orb_columns] = -1.0
+    # old_observations[tr_orb_columns] = -1.0
+    # tracklets["not_updated"] = np.ones(len(tracklets), dtype=np.bool_)
+
+    # tk, old, max_tr_id, report = old_observations_with_tracklets_associations(tracklets, old_observations, 3, 1.5 * u.degree, 0.1, 0.3, 30, 5)
+
+    # trajectories = pd.read_parquet("traj_not_updated.parquet")
+    # new_observations = pd.read_parquet("remaining_new_observations.parquet")
+
+    # print(len(trajectories))
+    # max_tr_id = np.max(np.unique(trajectories["trajectory_id"]))
+    # print(len(np.unique(trajectories["trajectory_id"])))
+    # print(len(new_observations))
+    # next_nid = new_observations["nid"].values[0]
+
+    # import time as t
+    # t_before = t.time()
+    # tr, obs, max_tr_id, report = trajectories_with_new_observations_associations(
+    # trajectories, new_observations, next_nid, 0.35 * u.degree, 0.3, 0.7, 1.5, max_tr_id
+    # )
+
+    # elapsed_time = t.time() - t_before
+
+    # if elapsed_time <= 60:
+    #     print()
+    #     print("associations elapsed time: {} sec".format(round(elapsed_time, 3)))
+    # else:
+    #     time_min = int(elapsed_time / 60)
+    #     time_sec = round(elapsed_time % 60, 3)
+    #     print()
+    #     print(
+    #         "associations elapsed time: {} min: {} sec".format(time_min, time_sec)
+    #     )
+
+    # print()
+    # print()
+    # print(len(tr))
+    # print(len(np.unique(tr["trajectory_id"])))
+    # print()
+    # print()
+    # print(len(obs))
+    # print()
+    # print()
+    # print(max_tr_id)
