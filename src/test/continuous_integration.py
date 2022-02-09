@@ -12,9 +12,9 @@ def ci_function(
     path_ci,
     traj_time_window=200,
     obs_time_window=200,
+    traj_2_points_time_window=200,
     intra_night_sep_criterion=500 * u.arcsecond,
     sep_criterion=0.5 * u.degree,
-    acceleration_criteria=1000,
     mag_criterion_same_fid=5,
     mag_criterion_diff_fid=5,
     orbfit_limit=5,
@@ -63,9 +63,9 @@ def ci_function(
             next_nid,
             traj_time_window=traj_time_window,
             obs_time_window=obs_time_window,
+            traj_2_points_time_window=traj_2_points_time_window,
             intra_night_sep_criterion=intra_night_sep_criterion,
             sep_criterion=sep_criterion,
-            acceleration_criteria=acceleration_criteria,
             mag_criterion_same_fid=mag_criterion_same_fid,
             mag_criterion_diff_fid=mag_criterion_diff_fid,
             orbfit_limit=orbfit_limit,
@@ -78,8 +78,8 @@ def ci_function(
     trajectory_df = trajectory_df.drop(["provisional designation"], axis=1)
 
     assert_frame_equal(
-        trajectory_df.reset_index(drop=True),
-        ci_df.reset_index(drop=True),
+        trajectory_df.sort_values(["trajectory_id", "jd"]).reset_index(drop=True),
+        ci_df.sort_values(["trajectory_id", "jd"]).reset_index(drop=True),
         check_dtype=False,
     )
 
