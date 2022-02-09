@@ -49,19 +49,19 @@ if __name__ == "__main__":
     all_nb_traj = []
 
     current_test_parameters = {
-        "traj_time_window": 10,
-        "obs_time_window": 5,
+        "traj_time_window": 15,
+        "obs_time_window": 2,
         "sep_criterion": 0.35,
         "acceleration_criteria": 0.4,
         "mag_criterion_same_fid": 0.3,
         "mag_criterion_diff_fid": 0.7,
-        "orbfit_limit": 7,
+        "orbfit_limit": 10,
         "angle_criterion": 1.5,
         "store_kd_tree": False,
         "do_track_and_traj_assoc": True,
         "do_traj_and_new_obs_assoc": True,
-        "do_track_and_old_obs_assoc": False,
-        "do_new_obs_and_old_obs_assoc": False,
+        "do_track_and_old_obs_assoc": True,
+        "do_new_obs_and_old_obs_assoc": True,
     }
 
     for tr_nid in np.unique(df_sso["nid"]):

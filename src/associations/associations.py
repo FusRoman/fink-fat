@@ -1876,10 +1876,14 @@ def time_window_management(
             traj_size = (
                 most_recent_traj.groupby(["trajectory_id"]).count().reset_index()
             )
+
+            # keep only the trajectories with less than orbfit_limit point and more than 2 points
+            # if the difference of night is greater than the time window
             test_1 = most_recent_traj["trajectory_id"].isin(
-                traj_size[traj_size["nid"] < orbfit_limit]["trajectory_id"]
+                traj_size[(traj_size["nid"] < orbfit_limit) & (traj_size["nid"] > 2)]["trajectory_id"]
             )
             test_2 = most_recent_traj["a"] != -1.0
+
             most_recent_traj = most_recent_traj[(test_1 | test_2)]
 
             oldest_traj = trajectory_df[~mask_traj & (trajectory_df["a"] != -1.0)]
@@ -1900,10 +1904,15 @@ def time_window_management(
         most_recent_traj = trajectory_df[mask_traj]
 
         traj_size = most_recent_traj.groupby(["trajectory_id"]).count().reset_index()
+
+        diff_nid = np.repeat(most_recent_last_obs["diff_nid"].values, traj_size["nid"].values)
+        most_recent_traj["diff_nid"] = diff_nid
+
         test_1 = most_recent_traj["trajectory_id"].isin(
             traj_size[traj_size["nid"] <= orbfit_limit]["trajectory_id"]
         )
         test_2 = most_recent_traj["a"] != -1.0
+
         most_recent_traj = most_recent_traj[(test_1 | test_2)]
 
         oldest_traj = trajectory_df[~mask_traj & (trajectory_df["a"] != -1.0)]
