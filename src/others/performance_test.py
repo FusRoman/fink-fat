@@ -52,7 +52,7 @@ if __name__ == "__main__":
         "traj_time_window": 15,
         "obs_time_window": 2,
         "sep_criterion": 0.35,
-        "acceleration_criteria": 0.4,
+        "traj_2_points_time_window": 15,
         "mag_criterion_same_fid": 0.3,
         "mag_criterion_diff_fid": 0.7,
         "orbfit_limit": 10,
@@ -111,8 +111,10 @@ if __name__ == "__main__":
             next_nid,
             traj_time_window=current_test_parameters["traj_time_window"],
             obs_time_window=current_test_parameters["obs_time_window"],
+            traj_2_points_time_window=current_test_parameters[
+                "traj_2_points_time_window"
+            ],
             sep_criterion=current_test_parameters["sep_criterion"] * u.degree,
-            acceleration_criteria=current_test_parameters["acceleration_criteria"],
             mag_criterion_same_fid=current_test_parameters["mag_criterion_same_fid"],
             mag_criterion_diff_fid=current_test_parameters["mag_criterion_diff_fid"],
             orbfit_limit=current_test_parameters["orbfit_limit"],

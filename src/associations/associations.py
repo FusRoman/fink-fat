@@ -1875,6 +1875,7 @@ def time_window_management(
     nid_next_night,
     traj_time_window,
     obs_time_window,
+    traj_2_points_time_windows,
     orbfit_limit,
     keep_last=False,
 ):
@@ -1926,7 +1927,7 @@ def time_window_management(
     ... "candid" : [16, 17, 18, 19]
     ... })
 
-    >>> (test_old_traj, test_most_recent_traj), test_old_obs = time_window_management(test_traj, test_obs, 12, 17, 3, 3, 5, True)
+    >>> (test_old_traj, test_most_recent_traj), test_old_obs = time_window_management(test_traj, test_obs, 12, 17, 3, 3, 3, 5, True)
 
     >>> expected_old_traj = pd.DataFrame({
     ... "candid" : [10, 11, 12],
@@ -1949,11 +1950,11 @@ def time_window_management(
     >>> assert_frame_equal(pd.DataFrame(columns=["nid"]), test_old_obs)
 
     >>> test_traj = pd.DataFrame({
-    ... "candid" : [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21],
-    ... "nid" : [1, 2, 3, 10, 11, 12, 13, 14, 15, 16, 17, 18],
-    ... "jd" : [1, 2, 3, 10, 11, 12, 13, 14, 15, 16, 17, 18],
-    ... "trajectory_id" : [1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4],
-    ... "a": [2.5, 2.5, 2.5, -1, -1, -1, 1.5, 1.5, 1.5, 2.3, 2.3, 2.3]
+    ... "candid" : [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29],
+    ... "nid" : [1, 2, 3, 10, 11, 12, 13, 14, 15, 16, 17, 18, 17, 18, 13, 14, 3, 8, 12, 16],
+    ... "jd" : [1, 2, 3, 10, 11, 12, 13, 14, 15, 16, 17, 18, 17, 18, 13, 14, 3, 8, 12, 16],
+    ... "trajectory_id" : [1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 6, 6, 7, 7, 7, 7],
+    ... "a": [2.5, 2.5, 2.5, -1, -1, -1, 1.5, 1.5, 1.5, 2.3, 2.3, 2.3, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]
     ... })
 
     >>> test_obs = pd.DataFrame({
@@ -1961,11 +1962,11 @@ def time_window_management(
     ... "candid" : [22, 23, 24, 25, 26, 27, 28, 29, 30]
     ... })
 
-    >>> (test_old_traj, test_most_recent_traj), test_old_obs = time_window_management(test_traj, test_obs, 15, 18, 5, 4, 5)
+    >>> (test_old_traj, test_most_recent_traj), test_old_obs = time_window_management(test_traj, test_obs, 15, 18, 5, 4, 3, 5)
 
     >>> expected_old_traj = pd.DataFrame({'candid': [10, 11, 12], 'nid': [1, 2, 3], 'jd': [1, 2, 3], 'trajectory_id': [1, 1, 1], 'a': [2.5, 2.5, 2.5]})
 
-    >>> expected_most_recent_traj = pd.DataFrame({'candid': [16, 17, 18, 19, 20, 21], 'nid': [13, 14, 15, 16, 17, 18], 'jd': [13, 14, 15, 16, 17, 18], 'trajectory_id': [3, 3, 3, 4, 4, 4], 'a': [1.5, 1.5, 1.5, 2.3, 2.3, 2.3]})
+    >>> expected_most_recent_traj = pd.DataFrame({'candid': [16, 17, 18, 19, 20, 21, 22, 23, 26, 27, 28, 29], 'nid': [13, 14, 15, 16, 17, 18, 17, 18, 3, 8, 12, 16], 'jd': [13, 14, 15, 16, 17, 18, 17, 18, 3, 8, 12, 16], 'trajectory_id': [3, 3, 3, 4, 4, 4, 5, 5, 7, 7, 7, 7], 'a': [1.5, 1.5, 1.5, 2.3, 2.3, 2.3, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]})
 
     >>> expected_old_obs = pd.DataFrame({'nid': [14, 15, 17, 18], 'candid': [26, 27, 28, 29]})
 
@@ -1981,6 +1982,7 @@ def time_window_management(
     ... 10,
     ... 5,
     ... 2,
+    ... 5,
     ... 3
     ... )
 
@@ -2019,7 +2021,9 @@ def time_window_management(
             # keep only the trajectories with less than orbfit_limit point and more than 2 points
             # if the difference of night is greater than the time window
             test_1 = most_recent_traj["trajectory_id"].isin(
-                traj_size[(traj_size["nid"] < orbfit_limit) & (traj_size["nid"] > 2)]["trajectory_id"]
+                traj_size[(traj_size["nid"] < orbfit_limit) & (traj_size["nid"] > 2)][
+                    "trajectory_id"
+                ]
             )
             test_2 = most_recent_traj["a"] != -1.0
 
@@ -2044,15 +2048,28 @@ def time_window_management(
 
         traj_size = most_recent_traj.groupby(["trajectory_id"]).count().reset_index()
 
-        diff_nid = np.repeat(most_recent_last_obs["diff_nid"].values, traj_size["nid"].values)
-        most_recent_traj["diff_nid"] = diff_nid
+        most_recent_traj = most_recent_traj.merge(
+            most_recent_last_obs[["trajectory_id", "diff_nid"]], on="trajectory_id"
+        )
 
         test_1 = most_recent_traj["trajectory_id"].isin(
-            traj_size[traj_size["nid"] <= orbfit_limit]["trajectory_id"]
+            traj_size[(traj_size["nid"] <= orbfit_limit) & (traj_size["nid"] > 2)][
+                "trajectory_id"
+            ]
         )
         test_2 = most_recent_traj["a"] != -1.0
 
-        most_recent_traj = most_recent_traj[(test_1 | test_2)]
+        test_3_1 = most_recent_traj["trajectory_id"].isin(
+            traj_size[traj_size["nid"] == 2]["trajectory_id"]
+        )
+
+        test_3_2 = most_recent_traj["diff_nid"] <= traj_2_points_time_windows
+
+        test_3 = test_3_1 & test_3_2
+
+        most_recent_traj = most_recent_traj[(test_1 | test_2 | test_3)]
+
+        most_recent_traj = most_recent_traj.drop(["diff_nid"], axis=1)
 
         oldest_traj = trajectory_df[~mask_traj & (trajectory_df["a"] != -1.0)]
 
@@ -2069,259 +2086,3 @@ if __name__ == "__main__":  # pragma: no cover
         __import__("sys").modules["unittest.util"]._MAX_LENGTH = 999999999
 
     sys.exit(doctest.testmod()[0])
-
-    tracklets = ts.tracklets_sample_4
-    old_observations = ts.old_observations_sample_2
-
-    tr_orb_columns = [
-        "provisional designation",
-        "a",
-        "e",
-        "i",
-        "long. node",
-        "arg. peric",
-        "mean anomaly",
-        "rms_a",
-        "rms_e",
-        "rms_i",
-        "rms_long. node",
-        "rms_arg. peric",
-        "rms_mean anomaly",
-    ]
-
-    tracklets[tr_orb_columns] = -1.0
-    old_observations[tr_orb_columns] = -1.0
-    tracklets["not_updated"] = np.ones(len(tracklets), dtype=np.bool_)
-
-    tk, old, max_tr_id, report = old_observations_with_tracklets_associations(
-        tracklets, old_observations, 3, 1.5 * u.degree, 0.1, 0.3, 30, 5
-    )
-
-    print(tk)
-
-    exit()
-
-    trajectories = ts.trajectories_sample_4
-    new_observations = ts.new_observations_sample_2
-
-    tr_orb_columns = [
-        "ref_epoch",
-        "provisional designation",
-        "a",
-        "e",
-        "i",
-        "long. node",
-        "arg. peric",
-        "mean anomaly",
-        "rms_a",
-        "rms_e",
-        "rms_i",
-        "rms_long. node",
-        "rms_arg. peric",
-        "rms_mean anomaly",
-    ]
-
-    trajectories[tr_orb_columns] = -1.0
-    new_observations[tr_orb_columns] = -1.0
-    trajectories["not_updated"] = np.ones(len(trajectories), dtype=np.bool_)
-
-    tr, obs, max_tr_id, report = trajectories_with_new_observations_associations(
-        trajectories, new_observations, 3, 1.5 * u.degree, 0.2, 0.5, 30, 4
-    )
-
-    print(tr.to_dict(orient="list"))
-
-    assert_frame_equal(tr, ts.trajectories_expected_5, check_dtype=False)
-
-    exit()
-
-    trajectories = ts.trajectories_sample_5
-    new_observations = ts.new_observations_sample_3
-
-    tr_orb_columns = [
-        "ref_epoch",
-        "provisional designation",
-        "a",
-        "e",
-        "i",
-        "long. node",
-        "arg. peric",
-        "mean anomaly",
-        "rms_a",
-        "rms_e",
-        "rms_i",
-        "rms_long. node",
-        "rms_arg. peric",
-        "rms_mean anomaly",
-    ]
-
-    trajectories[tr_orb_columns] = -1.0
-    new_observations[tr_orb_columns] = -1.0
-    trajectories["not_updated"] = np.ones(len(trajectories), dtype=np.bool_)
-
-    tr, obs, max_tr_id, report = trajectories_with_new_observations_associations(
-        trajectories, new_observations, 3, 1.5 * u.degree, 0.2, 0.5, 30, 7, True
-    )
-
-    print("[", end="")
-    for v in obs["ref_epoch"].values:
-        print(str(v) + ", ", end="")
-    print("]")
-
-    exit()
-
-    tracklets = ts.tracklets_sample_2
-    trajectories = ts.trajectories_sample_2
-
-    tr_orb_columns = [
-        "provisional designation",
-        "a",
-        "e",
-        "i",
-        "long. node",
-        "arg. peric",
-        "mean anomaly",
-        "rms_a",
-        "rms_e",
-        "rms_i",
-        "rms_long. node",
-        "rms_arg. peric",
-        "rms_mean anomaly",
-    ]
-
-    trajectories[tr_orb_columns] = -1.0
-    tracklets[tr_orb_columns] = -1.0
-    trajectories["not_updated"] = np.ones(len(trajectories), dtype=np.bool_)
-
-    tr, tk, max_tr_id, report = tracklets_and_trajectories_associations(
-        trajectories, tracklets, 3, 1 * u.degree, 0.2, 0.5, 30, 5
-    )
-
-    print(tr.to_dict(orient="list"))
-
-    exit()
-    tracklets = ts.tracklets_sample_2
-    trajectories = ts.trajectories_sample_2
-
-    tr_orb_columns = [
-        "provisional designation",
-        "a",
-        "e",
-        "i",
-        "long. node",
-        "arg. peric",
-        "mean anomaly",
-        "rms_a",
-        "rms_e",
-        "rms_i",
-        "rms_long. node",
-        "rms_arg. peric",
-        "rms_mean anomaly",
-    ]
-
-    trajectories[tr_orb_columns] = -1.0
-    tracklets[tr_orb_columns] = -1.0
-    trajectories["not_updated"] = np.ones(len(trajectories), dtype=np.bool_)
-
-    tr, tk, max_tr_id, report = tracklets_and_trajectories_associations(
-        trajectories, tracklets, 3, 1 * u.degree, 0.2, 0.5, 30, 5
-    )
-
-    # trajectories = ts.trajectories_sample_4
-    # new_observations = ts.new_observations_sample_2
-
-    # tr_orb_columns = [
-    # "provisional designation",
-    # "a",
-    # "e",
-    # "i",
-    # "long. node",
-    # "arg. peric",
-    # "mean anomaly",
-    # "rms_a",
-    # "rms_e",
-    # "rms_i",
-    # "rms_long. node",
-    # "rms_arg. peric",
-    # "rms_mean anomaly"
-    # ]
-
-    # trajectories[tr_orb_columns] = -1.0
-    # new_observations[tr_orb_columns] = -1.0
-    # trajectories["not_updated"] = np.ones(len(trajectories), dtype=np.bool_)
-
-    # tr, obs, max_tr_id, report = trajectories_with_new_observations_associations(
-    # trajectories, new_observations, 3, 1.5 * u.degree, 0.2, 0.5, 30, 4
-    # )
-
-    # print(tr)
-    # print()
-    # print()
-    # print(obs)
-    # print()
-    # print()
-    # print(max_tr_id)
-
-    # tracklets = ts.tracklets_sample_4
-    # old_observations = ts.old_observations_sample_2
-
-    # tr_orb_columns = [
-    #    "provisional designation",
-    #    "a",
-    #    "e",
-    #    "i",
-    #    "long. node",
-    #    "arg. peric",
-    #    "mean anomaly",
-    #    "rms_a",
-    #    "rms_e",
-    #    "rms_i",
-    #    "rms_long. node",
-    #    "rms_arg. peric",
-    #    "rms_mean anomaly",
-    # ]
-
-    # tracklets[tr_orb_columns] = -1.0
-    # old_observations[tr_orb_columns] = -1.0
-    # tracklets["not_updated"] = np.ones(len(tracklets), dtype=np.bool_)
-
-    # tk, old, max_tr_id, report = old_observations_with_tracklets_associations(tracklets, old_observations, 3, 1.5 * u.degree, 0.1, 0.3, 30, 5)
-
-    # trajectories = pd.read_parquet("traj_not_updated.parquet")
-    # new_observations = pd.read_parquet("remaining_new_observations.parquet")
-
-    # print(len(trajectories))
-    # max_tr_id = np.max(np.unique(trajectories["trajectory_id"]))
-    # print(len(np.unique(trajectories["trajectory_id"])))
-    # print(len(new_observations))
-    # next_nid = new_observations["nid"].values[0]
-
-    # import time as t
-    # t_before = t.time()
-    # tr, obs, max_tr_id, report = trajectories_with_new_observations_associations(
-    # trajectories, new_observations, next_nid, 0.35 * u.degree, 0.3, 0.7, 1.5, max_tr_id
-    # )
-
-    # elapsed_time = t.time() - t_before
-
-    # if elapsed_time <= 60:
-    #     print()
-    #     print("associations elapsed time: {} sec".format(round(elapsed_time, 3)))
-    # else:
-    #     time_min = int(elapsed_time / 60)
-    #     time_sec = round(elapsed_time % 60, 3)
-    #     print()
-    #     print(
-    #         "associations elapsed time: {} min: {} sec".format(time_min, time_sec)
-    #     )
-
-    # print()
-    # print()
-    # print(len(tr))
-    # print(len(np.unique(tr["trajectory_id"])))
-    # print()
-    # print()
-    # print(len(obs))
-    # print()
-    # print()
-    # print(max_tr_id)
