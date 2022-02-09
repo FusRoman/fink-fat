@@ -766,7 +766,9 @@ def tracklets_and_trajectories_associations(
                     tr_index = repeat_chunk(tr_index, traj_size, traj_counts_duplicates)
                     tr_df = duplicate_traj.loc[tr_index]
 
-                    tk_index = repeat_chunk(tk_index, track_size, track_counts_duplicates)
+                    tk_index = repeat_chunk(
+                        tk_index, track_size, track_counts_duplicates
+                    )
                     tk_df = duplicate_track.loc[tk_index]
 
                     # compute the new trajectory id
@@ -869,7 +871,11 @@ def tracklets_and_trajectories_associations(
                 ]
 
                 # remove also the tracklets extremity that have been associated during this loop
-                tracklets_extremity = tracklets_extremity[~tracklets_extremity["trajectory_id"].isin(traj_extremity_associated["tmp_traj"])]
+                tracklets_extremity = tracklets_extremity[
+                    ~tracklets_extremity["trajectory_id"].isin(
+                        traj_extremity_associated["tmp_traj"]
+                    )
+                ]
 
             if run_metrics:  # pragma: no cover
                 last_traj_obs = (
