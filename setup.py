@@ -3,13 +3,13 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="Asteroids and Associations",
+    name="FINK-FAT",
     version="0.2",
-    description="Associations of ZTF alerts to detect moving objects",
+    description="Associations of alerts to detect moving objects",
     author="Roman Le Montagner",
     author_email="roman.le-montagner@ijclab.in2p3.fr",
-    url="https://github.com/FusRoman/Asteroids_and_Associations",
+    url="https://github.com/FusRoman/FINK-Asteroids-Tracker",
     packages=find_packages(),
     license="Apache-2.0 License",
-    platforms="Linux",
+    platforms="Linux Debian distribution",
 )

@@ -13,4 +13,4 @@ count
 show-source
 statistics
 per-file-ignores =
-    ../Asteroids_and_Associations/src/orbit_fitting/orbfit_management.py:W503
+    ../FINK-FAT/src/orbit_fitting/orbfit_management.py:W503
