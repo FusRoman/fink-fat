@@ -3,12 +3,12 @@ simple_build :
 	python setup.py install
 
 flake8:
-	flake8 ../Asteroids_and_Associations
+	flake8 ../FINK-FAT
 
 black:
-	black ../Asteroids_and_Associations
+	black ../FINK-FAT
 
 clean :
-	rm -r Asteroids_and_Associations.egg-info
-	rm dist/Asteroids_and_Associations-0.2-py3.9.egg
+	rm -r FINK_FAT.egg-info
+	rm dist/FINK_FAT-0.2-py3.9.egg
 	python setup.py clean --all
