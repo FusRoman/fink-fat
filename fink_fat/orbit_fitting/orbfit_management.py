@@ -658,11 +658,11 @@ def call_orbitfit(ram_dir, provisional_designation):
         + ram_dir
         + provisional_designation
         + ".inp "
-        + ">/dev/null 2>&1"
+        # + ">/dev/null 2>&1"
     )
 
     with subprocess.Popen(
-        command, shell=True, stdout=subprocess.DEVNULL, preexec_fn=os.setsid
+        command, shell=True, stdout=subprocess.PIPE, preexec_fn=os.setsid
     ) as process:
         try:
             output = process.communicate(timeout=2)[0]
@@ -983,4 +983,11 @@ if __name__ == "__main__":  # pragma: no cover
         # Show full diff in self.assertEqual.
         __import__("sys").modules["unittest.util"]._MAX_LENGTH = 999999999
 
-    sys.exit(doctest.testmod()[0])
+    # sys.exit(doctest.testmod()[0])
+
+    orb_elem = compute_df_orbit_param(ts.orbfit_samples, 8, "")
+
+    print(orb_elem)
+    print()
+    print()
+    print(ts.orbfit_output)
