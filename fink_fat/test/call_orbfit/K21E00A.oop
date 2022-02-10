@@ -32,9 +32,9 @@ propag.
 	.dmea=0.2d0             ! min. distance for control of close-app. to the Earth only (def=0.1)
     	.dter=0.05d0            ! min. distance for control of close-app. to terrestrial planets (MVM)(def=0.1)
 	
-.filbe=src/test/call_orbfit/AST17
+.filbe=fink_fat/test/call_orbfit/AST17
 output_files.
-	.elem = src/test/call_orbfit/K21E00A.oel
+	.elem = fink_fat/test/call_orbfit/K21E00A.oel
 object1.
-	.obs_dir = src/test/call_orbfit/mpcobs
+	.obs_dir = fink_fat/test/call_orbfit/mpcobs
 	.obs_fname = K21E00A

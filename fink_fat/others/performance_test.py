@@ -4,12 +4,12 @@ import time as t
 import numpy as np
 
 import astropy.units as u
-from src.associations.inter_night_associations import night_to_night_association
+from fink_fat.associations.inter_night_associations import night_to_night_association
 
 
 if __name__ == "__main__":
 
-    from src.others.utils import load_data
+    from fink_fat.others.utils import load_data
 
     # constant to locate the ram file system
     ram_dir = "/media/virtuelram/"
@@ -193,12 +193,16 @@ if __name__ == "__main__":
         trajectory_df["objectId"] = trajectory_df["objectId"].astype(str)
 
         trajectory_df = trajectory_df.drop(["provisional designation"], axis=1)
-        trajectory_df.to_parquet("src/others/perf_test/{}.parquet".format(test_name))
+        trajectory_df.to_parquet(
+            "fink_fat/others/perf_test/{}.parquet".format(test_name)
+        )
 
         details = {"time": all_time, "trajectory_size": all_nb_traj}
 
-        with open("src/others/perf_test/{}.json".format(test_name), "w") as file:
+        with open("fink_fat/others/perf_test/{}.json".format(test_name), "w") as file:
             file.write(json.dumps(details, indent=4))
 
-        with open("src/others/perf_test/params_{}.json".format(test_name), "w") as file:
+        with open(
+            "fink_fat/others/perf_test/params_{}.json".format(test_name), "w"
+        ) as file:
             file.write(json.dumps(current_test_parameters, indent=4))

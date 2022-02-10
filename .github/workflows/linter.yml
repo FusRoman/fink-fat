@@ -26,4 +26,4 @@ jobs:
         pip install flake8
     - name: Alert Association
       run: |
-        flake8 ../FINK-FAT
+        flake8 ../fink-fat

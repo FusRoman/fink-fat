@@ -30,7 +30,7 @@ make simple_build
 
 
 # Run the test suite
-for filename in src/associations/*.py
+for filename in fink_fat/associations/*.py
 do
   echo $filename
   # Run test suite + coverage
@@ -40,19 +40,19 @@ do
     --rcfile ${ROOTPATH}/.coveragerc $filename
 done
 
-echo src/orbit_fitting/orbfit_management.py
+echo fink_fat/orbit_fitting/orbfit_management.py
 # Run test suite + coverage
 coverage run \
   --append \
   --source=${ROOTPATH} \
-  --rcfile ${ROOTPATH}/.coveragerc src/orbit_fitting/orbfit_management.py
+  --rcfile ${ROOTPATH}/.coveragerc fink_fat/orbit_fitting/orbfit_management.py
 
-echo src/test/continuous_integration.py
+echo fink_fat/test/continuous_integration.py
 # Run test suite + coverage
 coverage run \
   --append \
   --source=${ROOTPATH} \
-  --rcfile ${ROOTPATH}/.coveragerc src/test/continuous_integration.py
+  --rcfile ${ROOTPATH}/.coveragerc fink_fat/test/continuous_integration.py
 
 unset COVERAGE_PROCESS_START
 
