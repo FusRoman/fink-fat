@@ -987,7 +987,8 @@ if __name__ == "__main__":  # pragma: no cover
 
     orb_elem = compute_df_orbit_param(ts.orbfit_samples, 8, "")
 
-    print(orb_elem)
-    print()
-    print()
-    print(ts.orbfit_output)
+    with pd.option_context('display.max_rows', None, 'display.max_columns', None):
+        print(orb_elem)
+        print()
+        print()
+        print(ts.orbfit_output)
