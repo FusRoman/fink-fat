@@ -15,10 +15,6 @@
 # limitations under the License.
 ## Script to launch the python test suite and measure the coverage.
 
-
-# source the intel fortran compiler and libraries, needed for OrbFit 
-source /opt/intel/oneapi/setvars.sh
-
 set -e
 
 export ROOTPATH=`pwd`
