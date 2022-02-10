@@ -1304,7 +1304,7 @@ if __name__ == "__main__":  # pragma: no cover
     import sys
     import doctest
     from pandas.testing import assert_frame_equal  # noqa: F401
-    import src.test.test_sample as ts  # noqa: F401
+    import fink_fat.test.test_sample as ts  # noqa: F401
     from unittest import TestCase  # noqa: F401
 
     if "unittest.util" in __import__("sys").modules:

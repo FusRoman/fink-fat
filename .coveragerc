@@ -2,11 +2,11 @@
 branch = false
 data_file = ${PWD}/.coverage
 omit=
-    src/others/night_report.py
-    src/others/performance_test.py
-    src/orbit_fitting/ephem.py
-    src/others/utils.py
+    fink_fat/others/night_report.py
+    fink_fat/others/performance_test.py
+    fink_fat/orbit_fitting/ephem.py
+    fink_fat/others/utils.py
     setup.py
-    src/orbit_fitting/plot_orbstat.py
-    src/test/test_sample.py
-    src/others/plot_perf_test.py
+    fink_fat/orbit_fitting/plot_orbstat.py
+    fink_fat/test/test_sample.py
+    fink_fat/others/plot_perf_test.py

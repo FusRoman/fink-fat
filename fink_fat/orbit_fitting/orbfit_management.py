@@ -11,9 +11,6 @@ import subprocess
 import os
 import multiprocessing as mp
 
-# import src.orbit_fitting.plot_orbstat as po
-# import src.utils as utils
-
 
 def time_to_decimal(time):
     """
@@ -465,7 +462,7 @@ def write_observation_file(ram_dir, obs_df):
     >>> write_observation_file("", test_obs)
     'K69O00A'
 
-    >>> filecmp.cmp("mpcobs/K69O00A.obs", "src/test/K69O00A_test.obs")
+    >>> filecmp.cmp("mpcobs/K69O00A.obs", "fink_fat/test/K69O00A_test.obs")
     True
 
     >>> shutil.rmtree("mpcobs/")
@@ -560,12 +557,12 @@ def write_oop(ram_dir, provisional_designation):
     --------
     >>> write_oop("", "K69O00A")
 
-    >>> filecmp.cmp("K69O00A.oop", "src/test/K69O00A_test.oop")
+    >>> filecmp.cmp("K69O00A.oop", "fink_fat/test/K69O00A_test.oop")
     True
 
     >>> os.remove("K69O00A.oop")
     """
-    oop_template = os.path.join("src", "orbit_fitting", "template.oop")
+    oop_template = os.path.join("fink_fat", "orbit_fitting", "template.oop")
 
     copyfile(oop_template, ram_dir + provisional_designation + ".oop")
     with open(ram_dir + provisional_designation + ".oop", "a") as file:
@@ -610,7 +607,7 @@ def prep_orbitfit(ram_dir):
     >>> os.remove("AST17.bep")
     """
 
-    orbfit_path = os.path.join("src", "orbit_fitting")
+    orbfit_path = os.path.join("fink_fat", "orbit_fitting")
     dir_path = ram_dir + "mpcobs/"
 
     if not os.path.isdir(dir_path):
@@ -642,15 +639,15 @@ def call_orbitfit(ram_dir, provisional_designation):
     Examples
     --------
 
-    >>> call_orbitfit("src/test/call_orbfit/", "K21E00A")
+    >>> call_orbitfit("fink_fat/test/call_orbfit/", "K21E00A")
 
-    >>> os.path.exists("src/test/call_orbfit/K21E00A.oel")
+    >>> os.path.exists("fink_fat/test/call_orbfit/K21E00A.oel")
     True
 
-    >>> os.remove("src/test/call_orbfit/K21E00A.odc")
-    >>> os.remove("src/test/call_orbfit/K21E00A.olg")
-    >>> os.remove("src/test/call_orbfit/K21E00A.pro")
-    >>> os.remove("src/test/call_orbfit/mpcobs/K21E00A.rwo")
+    >>> os.remove("fink_fat/test/call_orbfit/K21E00A.odc")
+    >>> os.remove("fink_fat/test/call_orbfit/K21E00A.olg")
+    >>> os.remove("fink_fat/test/call_orbfit/K21E00A.pro")
+    >>> os.remove("fink_fat/test/call_orbfit/mpcobs/K21E00A.rwo")
     """
     orbitfit_path = os.path.join("OrbitFit", "bin/")
 
@@ -775,13 +772,13 @@ def read_oel(ram_dir, prov_desig):
 
     Examples
     --------
-    >>> read_oel("src/test/call_orbfit/", "K21E00A")
+    >>> read_oel("fink_fat/test/call_orbfit/", "K21E00A")
     [2459274.810893373, '1.5834346988159376E+00', '0.613572037782866', '5.9442185803697', '343.7959802838470', '270.1932521117385', '333.9568546371023', -1, -1, -1, -1, -1, -1]
 
     >>> read_oel("", "")
     [-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]
 
-    >>> read_oel("src/test/call_orbfit/", "K21H00A")
+    >>> read_oel("fink_fat/test/call_orbfit/", "K21H00A")
     [2459345.797868819, '3.1514694062448680E+00', '0.113946062348132', '1.6879159876457', '38.1016474068882', '136.1915246941109', '46.5628893357021', '7.94527E-03', '1.83696E-02', '4.77846E-02', '3.17863E-01', '1.34503E+01', '9.82298E+00']
     """
     try:
@@ -976,7 +973,7 @@ if __name__ == "__main__":  # pragma: no cover
     import sys
     import doctest
     from pandas.testing import assert_frame_equal  # noqa: F401
-    import src.test.test_sample as ts  # noqa: F401
+    import fink_fat.test.test_sample as ts  # noqa: F401
     from unittest import TestCase  # noqa: F401
     import shutil  # noqa: F401
     import filecmp  # noqa: F401

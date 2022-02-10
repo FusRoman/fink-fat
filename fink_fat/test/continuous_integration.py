@@ -1,9 +1,9 @@
 import pandas as pd
 import numpy as np
-from src.associations.inter_night_associations import night_to_night_association
+from fink_fat.associations.inter_night_associations import night_to_night_association
 import astropy.units as u
 from pandas.testing import assert_frame_equal
-import src.test.test_sample as ts
+import fink_fat.test.test_sample as ts
 import sys
 
 
@@ -88,9 +88,9 @@ if __name__ == "__main__":
 
     mpc = ts.trajectory_sample_2
 
-    ci_function(mpc, "src/test/CI_expected_output_2.parquet", orbfit_limit=40)
+    ci_function(mpc, "fink_fat/test/CI_expected_output_2.parquet", orbfit_limit=40)
 
     df_sso = ts.trajectory_sample
-    ci_function(df_sso, "src/test/CI_expected_output.parquet")
+    ci_function(df_sso, "fink_fat/test/CI_expected_output.parquet")
 
     sys.exit(0)

@@ -131,14 +131,14 @@ dmypy.json
 # Custom ignore
 .vscode/
 
-src/report_db
+fink_fat/report_db
 
-src/others/trajectory_output.parquet
+fink_fat/others/trajectory_output.parquet
 
 test_report/
 
 data/mpc_database/
-src/orbit_fitting/residuals/
+fink_fat/orbit_fitting/residuals/
 
 *.obs
 *.inp
@@ -156,6 +156,6 @@ asteroid_study/*.png
 asteroid_study/residuals/
 trajectory_df.parquet
 
-src/others/perf_test
+fink_fat/others/perf_test
 
 perf_test_*/

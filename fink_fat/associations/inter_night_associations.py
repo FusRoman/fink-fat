@@ -3,10 +3,10 @@ import pandas as pd
 import multiprocessing as mp
 import os
 import astropy.units as u
-from src.associations.intra_night_association import intra_night_association
-from src.associations.intra_night_association import new_trajectory_id_assignation
-from src.orbit_fitting.orbfit_management import compute_df_orbit_param
-from src.associations.associations import (
+from fink_fat.associations.intra_night_association import intra_night_association
+from fink_fat.associations.intra_night_association import new_trajectory_id_assignation
+from fink_fat.orbit_fitting.orbfit_management import compute_df_orbit_param
+from fink_fat.associations.associations import (
     tracklets_and_trajectories_associations,
     trajectories_with_new_observations_associations,
     old_observations_with_tracklets_associations,
@@ -1204,7 +1204,7 @@ if __name__ == "__main__":  # pragma: no cover
     import sys
     import doctest
     from pandas.testing import assert_frame_equal  # noqa: F401
-    import src.test.test_sample as ts  # noqa: F401
+    import fink_fat.test.test_sample as ts  # noqa: F401
     from unittest import TestCase  # noqa: F401
 
     if "unittest.util" in __import__("sys").modules:

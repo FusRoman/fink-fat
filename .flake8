@@ -13,4 +13,4 @@ count
 show-source
 statistics
 per-file-ignores =
-    ../FINK-FAT/src/orbit_fitting/orbfit_management.py:W503
+    ../fink-fat/fink_fat/orbit_fitting/orbfit_management.py:W503

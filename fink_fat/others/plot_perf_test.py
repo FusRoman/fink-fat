@@ -3,8 +3,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import pandas as pd
-from src.others.utils import load_data
-from src.others.utils import get_mpc_database
+from fink_fat.others.utils import load_data
+from fink_fat.others.utils import get_mpc_database
 import json
 import os
 
@@ -177,13 +177,15 @@ if __name__ == "__main__":
 
     df_sso = load_data("Solar System MPC", 0)
 
-    trajectory_df = pd.read_parquet("src/others/perf_test/{}.parquet".format(test_name))
+    trajectory_df = pd.read_parquet(
+        "fink_fat/others/perf_test/{}.parquet".format(test_name)
+    )
 
-    with open("src/others/perf_test/{}.json".format(test_name), "r") as json_file:
+    with open("fink_fat/others/perf_test/{}.json".format(test_name), "r") as json_file:
         stat = json.load(json_file)
 
     with open(
-        "src/others/perf_test/params_{}.json".format(test_name), "r"
+        "fink_fat/others/perf_test/params_{}.json".format(test_name), "r"
     ) as json_file:
         params = json.load(json_file)
 
