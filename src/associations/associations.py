@@ -826,6 +826,7 @@ def tracklets_and_trajectories_associations(
 
                 associated_tracklets = []
 
+                # If too slow, need to be optimized/vectorized
                 for _, rows in traj_extremity_associated.iterrows():
 
                     # get all rows of the associated tracklets of the next night
@@ -1161,9 +1162,6 @@ def trajectories_with_new_observations_associations(
             night_to_night_traj_to_obs_report["metrics"] = {}
 
             if len(obs_assoc) > 0:
-
-                # duplicates management is not really optimized, optimisation would be to remove the for loop
-                # and vectorized the operation
 
                 # creates a dataframe for each duplicated trajectory associated with the tracklets
                 duplicates = obs_assoc["trajectory_id"].duplicated()
@@ -1614,41 +1612,8 @@ def old_observations_with_tracklets_associations(
                     all_duplicate_track = pd.concat([df, duplicate_obs])
                     tracklets = pd.concat([tracklets, all_duplicate_track])
 
-                    # for _, rows in duplicate_obs.iterrows():
-
-                    #     # silence the copy warning
-                    #     with pd.option_context("mode.chained_assignment", None):
-
-                    #         # get the trajectory associated with the tracklets and update the trajectory id
-                    #         duplicate_track = tracklets[
-                    #             tracklets["trajectory_id"] == rows["trajectory_id"]
-                    #         ]
-                    #         duplicate_track[orbit_column] = -1.0
-                    #         duplicate_track["trajectory_id"] = max_traj_id
-                    #         duplicate_track["not_updated"] = False
-
-                    #         # get the observations and update the trajectory id
-                    #         obs_duplicate = pd.DataFrame(rows.copy()).T
-
-                    #         obs_duplicate[orbit_column] = -1.0
-                    #         obs_duplicate["trajectory_id"] = max_traj_id
-                    #         obs_duplicate["not_updated"] = False
-
-                    #     # append the trajectory and the tracklets into the list
-                    #     all_duplicate_traj.append(duplicate_track)
-                    #     all_duplicate_traj.append(obs_duplicate)
-                    #     updated_tracklets.append(max_traj_id)
-                    #     max_traj_id += 1
-
-                    # # creates a dataframe with all duplicates and adds it to the trajectories dataframe
-                    # all_duplicate_traj = pd.concat(all_duplicate_traj)
-
-                    # tracklets = pd.concat([tracklets, all_duplicate_traj])
-
                 # remove duplicates associations
                 old_obs_right_assoc = old_obs_right_assoc[~duplicates]
-                # old_obs_right_assoc = old_obs_right_assoc.drop_duplicates(["trajectory_id"])
-                # track_left_assoc = track_left_assoc.drop_duplicates(["trajectory_id"])
 
                 track_to_old_obs_report[
                     "number of duplicated association"
@@ -1683,9 +1648,11 @@ def old_observations_with_tracklets_associations(
                 old_observations = old_observations[
                     ~old_observations["candid"].isin(old_obs_right_assoc["candid"])
                 ]
-                current_old_obs = current_old_obs[
-                    ~current_old_obs["candid"].isin(old_obs_right_assoc["candid"])
-                ]
+
+                # not usefull due to modification of current_old_obs each loop turn
+                # current_old_obs = current_old_obs[
+                #     ~current_old_obs["candid"].isin(old_obs_right_assoc["candid"])
+                # ]
 
             if run_metrics:  # pragma: no cover
                 last_traj_obs = (
