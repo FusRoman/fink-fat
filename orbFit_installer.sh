@@ -1,5 +1,4 @@
-# source the intel fortran compiler and libraries, needed for OrbFit
-source /opt/intel/oneapi/setvars.sh
+sudo apt install gfortran
 
 wget http://adams.dm.unipi.it/orbfit/OrbFit5.0.7.tar.gz
 
@@ -15,7 +14,7 @@ rm OrbFit5.0.7.tar.gz
 
 cd OrbitFit/
 
-./config -O intel
+./config -O gfortran
 
 make
 
