@@ -808,7 +808,7 @@ def tracklets_and_trajectories_associations(
                         )
                     ]
 
-                    # Becareful to remove also the duplicated tracklets extremity 
+                    # Becareful to remove also the duplicated tracklets extremity
                     # that have been associated during this loop
                     tracklets_extremity = tracklets_extremity[
                         ~tracklets_extremity["trajectory_id"].isin(
