@@ -384,7 +384,7 @@ def tracklets_and_trajectories_steps(
 
     >>> assert_frame_equal(traj_not_updated.reset_index(drop=True), ts.traj_not_updated_expected, check_dtype = False)
     >>> assert_frame_equal(small_track.reset_index(drop=True), ts.other_track_expected, check_dtype = False)
-    >>> assert_frame_equal(track_orb.reset_index(drop=True), ts.track_orb_expected, check_dtype = False)
+    >>> assert_frame_equal(track_orb.reset_index(drop=True), ts.track_orb_expected, check_dtype = False, atol=1e-1, rtol=1e-1)
     >>> assert_frame_equal(small_traj.reset_index(drop=True), ts.small_traj_expected, check_dtype = False)
     >>> TestCase().assertDictEqual(traj_and_track_assoc_report, ts.traj_track_metrics_expected)
     >>> max_traj_id
