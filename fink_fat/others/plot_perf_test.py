@@ -173,7 +173,7 @@ if __name__ == "__main__":
     sns.set_context("talk")
     sns.set(rc={"figure.figsize": (40, 15)})
 
-    test_name = "perf_test_2"
+    test_name = "perf_test_4"
 
     df_sso = load_data("Solar System MPC", 0)
 
@@ -202,9 +202,9 @@ if __name__ == "__main__":
 
     traj_size = df_sso.groupby(["ssnamenr"]).count().reset_index()
 
-    detected_traj = traj_size[traj_size["ra"] >= 5]
+    detected_traj = traj_size[traj_size["ra"] >= params["orbfit_limit"]]
 
-    traj_not_observed = traj_size[traj_size["ra"] < 5]
+    traj_not_observed = traj_size[traj_size["ra"] < params["orbfit_limit"]]
 
     print("number of objects that can be detected: {}".format(len(detected_traj)))
     print()
