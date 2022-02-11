@@ -769,6 +769,7 @@ def tracklets_and_trajectories_associations(
                     tk_index = repeat_chunk(
                         tk_index, track_size, track_counts_duplicates
                     )
+
                     tk_df = duplicate_track.loc[tk_index]
 
                     # compute the new trajectory id
@@ -803,6 +804,14 @@ def tracklets_and_trajectories_associations(
                     # set of tracklets detected this night.
                     tracklets = tracklets[
                         ~tracklets["trajectory_id"].isin(
+                            tracklets_duplicated["tmp_traj"]
+                        )
+                    ]
+
+                    # Becareful to remove also the duplicated tracklets extremity 
+                    # that have been associated during this loop
+                    tracklets_extremity = tracklets_extremity[
+                        ~tracklets_extremity["trajectory_id"].isin(
                             tracklets_duplicated["tmp_traj"]
                         )
                     ]
