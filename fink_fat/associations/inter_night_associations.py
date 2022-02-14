@@ -1128,7 +1128,7 @@ def night_to_night_association(
             run_metrics,
         )
 
-        print("elapsed time to associates new points to a trajectories : {}".format(len(t.time() - t_before)))
+        print("elapsed time to associates new points to a trajectories : {}".format(t.time() - t_before))
 
         orbfit_process.append(traj_with_new_obs_orbfit_process)
     else:
@@ -1160,7 +1160,7 @@ def night_to_night_association(
             run_metrics,
         )
 
-        print("elapsed time to associates the old points to the tracklets  : {}".format(len(t.time() - t_before)))
+        print("elapsed time to associates the old points to the tracklets  : {}".format(t.time() - t_before))
 
         orbfit_process.append(track_with_old_obs_orbfit_process)
     else:
@@ -1188,7 +1188,7 @@ def night_to_night_association(
             run_metrics,
         )
 
-        print("elapsed time to associates couples of observations : {}".format(len(t.time() - t_before)))
+        print("elapsed time to associates couples of observations : {}".format(t.time() - t_before))
     else:
         new_trajectory = pd.DataFrame(columns=remain_old_obs.columns)
         observation_report = {}
