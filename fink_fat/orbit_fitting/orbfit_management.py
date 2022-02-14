@@ -752,7 +752,8 @@ def final_clean(ram_dir):
 
     os.rmdir(ram_dir + "mpcobs")
 
-
+import traceback
+import logging
 def read_oel(ram_dir, prov_desig):
     """
     Read the .oel file return by orbfit. This file contains the orbital elements, the reference epoch of the orbit computation and
@@ -795,9 +796,12 @@ def read_oel(ram_dir, prov_desig):
             else:
                 rms = [-1, -1, -1, -1, -1, -1, -1, -1]
             return [ref_jd] + orb_params[1:] + rms[2:]
+    except FileNotFoundError:
+        print("----")
+        logging.error(traceback.format_exc())
+        print("----")
+        return list(np.ones(13, dtype=np.float64) * -1)
     except Exception as e:
-        import traceback
-        import logging
         print("----")
         print(lines)
         print()

@@ -1205,8 +1205,8 @@ def night_to_night_association(
     trajectory_df["not_updated"] = np.ones(len(trajectory_df), dtype=np.bool_)
 
     # terminate properly all the orbfit process
-    for process in orbfit_process:
-        process.terminate()
+    # for process in orbfit_process:
+    #     process.terminate()
 
     return trajectory_df, old_observation, inter_night_report
 
