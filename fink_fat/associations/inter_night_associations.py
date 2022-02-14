@@ -1072,7 +1072,7 @@ def night_to_night_association(
             run_metrics,
         )
 
-        print("elapsed time to associates tracklets with trajectories : {}".format(len(t.time() - t_before)))
+        print("elapsed time to associates tracklets with trajectories : {}".format(t.time() - t_before))
 
         orbfit_process.append(tracklets_orbfit_process)
 
