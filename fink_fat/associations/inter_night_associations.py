@@ -170,6 +170,17 @@ def compute_orbit_elem(trajectory_df, q, ram_dir=""):
 
     traj_to_compute = traj_to_compute.drop(orbit_column, axis=1)
 
+    from collections import Counter
+
+    tr_gb = traj_to_compute.groupby(["trajectory_id"]).count()
+
+    print("____")
+    print("Orbfit traj size distribution")
+    print()
+    print(Counter(tr_gb["ra"].values))
+    print()
+    print("____")
+
     orbit_elem = compute_df_orbit_param(
         traj_to_compute, int(mp.cpu_count() / 2), current_ram_path
     )
