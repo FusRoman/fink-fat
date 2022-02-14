@@ -797,9 +797,6 @@ def read_oel(ram_dir, prov_desig):
                 rms = [-1, -1, -1, -1, -1, -1, -1, -1]
             return [ref_jd] + orb_params[1:] + rms[2:]
     except FileNotFoundError:
-        print("----")
-        logging.error(traceback.format_exc())
-        print("----")
         return list(np.ones(13, dtype=np.float64) * -1)
     except Exception as e:
         print("----")
