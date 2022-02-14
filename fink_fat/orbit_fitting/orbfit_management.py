@@ -800,7 +800,9 @@ def read_oel(ram_dir, prov_desig):
         return list(np.ones(13, dtype=np.float64) * -1)
     except Exception as e:
         print("----")
+        print("ERROR LINES")
         print(lines)
+        print()
         print()
         logging.error(traceback.format_exc())
         print("----")
@@ -857,6 +859,7 @@ def get_orbit_param(ram_dir, df):
             import logging
 
             print(e)
+            print("ERROR ORBFIT")
             print()
             logging.error(traceback.format_exc())
             print()
@@ -870,6 +873,7 @@ def get_orbit_param(ram_dir, df):
         try:
             obs_clean(ram_dir, prov_desig)
         except FileNotFoundError:
+            print("ERROR CLEANING ORBFIT")
             print(prov_desig)
             print()
             print()
