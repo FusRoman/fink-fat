@@ -1891,8 +1891,21 @@ def time_window_management(
         nid of the previous observation night
     nid_next_night : integer
         nid of the incoming night
-    time_window : integer
-        limit to keep old observation and trajectories
+    traj_time_window : integer
+        limit to keep the recorded trajectories
+    obs_time_window : integer
+        limit to keep the old observations
+    traj_2_points_time_windows : integer
+        limit to keep the trajectories of two points.
+        These are observations detected during the observations association step and are not accurate.
+        To limit the combinatorial, keep them less time than the other trajectories with more points.
+    orbfit_limit : integer
+        The number of points required to send trajectories to the orbit fitting program.
+        Remove the trajectories with more point than "orbfit limit" points and without orbital elements.
+        Keep the trajectories with less than "orbfit limit" points
+    keep_last : boolean
+        Is set to true, keep the trajectories and the old observation of the last observation night
+        irrespective of the traj_time_window and old_obs_time_window.
 
     Return
     ------
