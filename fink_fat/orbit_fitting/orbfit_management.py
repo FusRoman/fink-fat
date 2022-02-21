@@ -11,6 +11,9 @@ import subprocess
 import os
 import multiprocessing as mp
 
+import traceback
+import logging
+
 
 def time_to_decimal(time):
     """
@@ -665,7 +668,7 @@ def call_orbitfit(ram_dir, provisional_designation):
         command, shell=True, stdout=subprocess.DEVNULL, preexec_fn=os.setsid
     ) as process:
         try:
-            output = process.communicate(timeout=2)[0]
+            output = process.communicate(timeout=5)[0]
             return output
         except subprocess.TimeoutExpired:
             os.killpg(process.pid, signal.SIGINT)  # send signal to the process group
@@ -752,8 +755,7 @@ def final_clean(ram_dir):
 
     os.rmdir(ram_dir + "mpcobs")
 
-import traceback
-import logging
+
 def read_oel(ram_dir, prov_desig):
     """
     Read the .oel file return by orbfit. This file contains the orbital elements, the reference epoch of the orbit computation and
@@ -800,7 +802,10 @@ def read_oel(ram_dir, prov_desig):
         return list(np.ones(13, dtype=np.float64) * -1)
     except Exception as e:
         print("----")
-        print("ERROR LINES")
+        print(e)
+        print()
+        print("ERROR READ OEL FILE: {}".format(prov_desig))
+        print()
         print(lines)
         print()
         print()
@@ -855,11 +860,8 @@ def get_orbit_param(ram_dir, df):
         try:
             call_orbitfit(ram_dir, prov_desig)
         except Exception as e:
-            import traceback
-            import logging
-
             print(e)
-            print("ERROR ORBFIT")
+            print("ERROR CALLING ORBFIT: {}".format(prov_desig))
             print()
             logging.error(traceback.format_exc())
             print()
@@ -873,7 +875,7 @@ def get_orbit_param(ram_dir, df):
         try:
             obs_clean(ram_dir, prov_desig)
         except FileNotFoundError:
-            print("ERROR CLEANING ORBFIT")
+            print("ERROR CLEANING ORBFIT: {}".format(prov_desig))
             print(prov_desig)
             print()
             print()
