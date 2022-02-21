@@ -70,9 +70,6 @@ def prep_orbit_computation(trajectory_df, orbfit_limit):
     return other_track.copy(), track_to_orb.copy()
 
 
-from collections import Counter
-import time as t
-
 def compute_orbit_elem(trajectory_df, q, ram_dir=""):
     """
     Compute the orbital elements of a set of trajectories.
@@ -173,20 +170,20 @@ def compute_orbit_elem(trajectory_df, q, ram_dir=""):
 
     traj_to_compute = traj_to_compute.drop(orbit_column, axis=1)
 
-    tr_gb = traj_to_compute.groupby(["trajectory_id"]).count()
+    # tr_gb = traj_to_compute.groupby(["trajectory_id"]).count()
 
-    print("____")
-    print("Orbfit traj size distribution")
-    print()
-    print(Counter(tr_gb["ra"].values))
-    print()
-    print("____")
+    # print("____")
+    # print("Orbfit traj size distribution")
+    # print()
+    # print(Counter(tr_gb["ra"].values))
+    # print()
+    # print("____")
 
-    t_before = t.time()
+    # t_before = t.time()
     orbit_elem = compute_df_orbit_param(
         traj_to_compute, int(mp.cpu_count() / 2), current_ram_path
     )
-    print("ORBFIT elapsed time: {}".format(t.time() - t_before))
+    # print("ORBFIT elapsed time: {}".format(t.time() - t_before))
 
     traj_to_return = traj_to_compute.merge(orbit_elem, on="trajectory_id")
 
@@ -986,7 +983,8 @@ def night_to_night_association(
     inter_night_report = dict()
     inter_night_report["nid of the next night"] = int(next_nid)
 
-    t_before = t.time()
+    # t_before = t.time()
+
     # intra night associations steps with the new observations
     (tracklets, remaining_new_observations, intra_night_report,) = intra_night_step(
         new_observation,
@@ -996,7 +994,8 @@ def night_to_night_association(
         intra_night_mag_criterion_diff_fid,
         run_metrics,
     )
-    print("elapsed time to find tracklets : {}".format(t.time() - t_before))
+
+    # print("elapsed time to find tracklets : {}".format(t.time() - t_before))
 
     if len(tracklets) > 0:
         last_trajectory_id = np.max(tracklets["trajectory_id"]) + 1
@@ -1048,7 +1047,7 @@ def night_to_night_association(
     # call tracklets_and_trajectories_steps if they have most_recent_traj and tracklets
     if len(most_recent_traj) > 0 and len(tracklets) > 0 and do_track_and_traj_assoc:
 
-        t_before = t.time()
+        # t_before = t.time()
         (
             traj_not_updated,
             small_traj,
@@ -1072,7 +1071,7 @@ def night_to_night_association(
             run_metrics,
         )
 
-        print("elapsed time to associates tracklets with trajectories : {}".format(t.time() - t_before))
+        # print("elapsed time to associates tracklets with trajectories : {}".format(t.time() - t_before))
 
         orbfit_process.append(tracklets_orbfit_process)
 
@@ -1105,7 +1104,7 @@ def night_to_night_association(
     # fmt: on
     if assoc_test:
 
-        t_before = t.time()
+        # t_before = t.time()
         (
             not_associated_traj,
             remaining_new_observations,
@@ -1128,7 +1127,7 @@ def night_to_night_association(
             run_metrics,
         )
 
-        print("elapsed time to associates new points to a trajectories : {}".format(t.time() - t_before))
+        # print("elapsed time to associates new points to a trajectories : {}".format(t.time() - t_before))
 
         orbfit_process.append(traj_with_new_obs_orbfit_process)
     else:
@@ -1137,7 +1136,7 @@ def night_to_night_association(
 
     if len(small_track) > 0 and len(old_observation) > 0 and do_track_and_old_obs_assoc:
 
-        t_before = t.time()
+        # t_before = t.time()
         (
             not_updated_tracklets,
             remain_old_obs,
@@ -1160,7 +1159,7 @@ def night_to_night_association(
             run_metrics,
         )
 
-        print("elapsed time to associates the old points to the tracklets  : {}".format(t.time() - t_before))
+        # print("elapsed time to associates the old points to the tracklets  : {}".format(t.time() - t_before))
 
         orbfit_process.append(track_with_old_obs_orbfit_process)
     else:
@@ -1170,7 +1169,7 @@ def night_to_night_association(
 
     if do_new_obs_and_old_obs_assoc:
 
-        t_before = t.time()
+        # t_before = t.time()
         (
             new_trajectory,
             remain_old_obs,
@@ -1188,7 +1187,7 @@ def night_to_night_association(
             run_metrics,
         )
 
-        print("elapsed time to associates couples of observations : {}".format(t.time() - t_before))
+        # print("elapsed time to associates couples of observations : {}".format(t.time() - t_before))
     else:
         new_trajectory = pd.DataFrame(columns=remain_old_obs.columns)
         observation_report = {}
