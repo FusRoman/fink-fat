@@ -3,6 +3,8 @@ import pandas as pd
 import multiprocessing as mp
 import os
 import astropy.units as u
+import time as t
+from collections import Counter
 from fink_fat.associations.intra_night_association import intra_night_association
 from fink_fat.associations.intra_night_association import new_trajectory_id_assignation
 from fink_fat.orbit_fitting.orbfit_management import compute_df_orbit_param
@@ -70,7 +72,7 @@ def prep_orbit_computation(trajectory_df, orbfit_limit):
     return other_track.copy(), track_to_orb.copy()
 
 
-def compute_orbit_elem(trajectory_df, q, ram_dir=""):
+def compute_orbit_elem(trajectory_df, q, ram_dir="", verbose=False):
     """
     Compute the orbital elements of a set of trajectories.
     The computation are done in parallel process.
@@ -82,8 +84,9 @@ def compute_orbit_elem(trajectory_df, q, ram_dir=""):
     q : Queue from Multiprocessing package
         A queue used to return the results of the process
     ram_dir : string
-        ram_dir : string
         Path where files needed for the OrbFit computation are located
+    verbose : boolean
+        print information about the orbfit process
 
     Returns
     -------
@@ -170,20 +173,23 @@ def compute_orbit_elem(trajectory_df, q, ram_dir=""):
 
     traj_to_compute = traj_to_compute.drop(orbit_column, axis=1)
 
-    # tr_gb = traj_to_compute.groupby(["trajectory_id"]).count()
+    if verbose:
+        tr_gb = traj_to_compute.groupby(["trajectory_id"]).count()
+        print("____")
+        print("Orbfit traj size distribution")
+        print()
+        print(Counter(tr_gb["ra"].values))
+        print()
+        print("____")
 
-    # print("____")
-    # print("Orbfit traj size distribution")
-    # print()
-    # print(Counter(tr_gb["ra"].values))
-    # print()
-    # print("____")
+        t_before = t.time()
 
-    # t_before = t.time()
     orbit_elem = compute_df_orbit_param(
         traj_to_compute, int(mp.cpu_count() / 2), current_ram_path
     )
-    # print("ORBFIT elapsed time: {}".format(t.time() - t_before))
+
+    if verbose:
+        print("ORBFIT elapsed time: {}".format(t.time() - t_before))
 
     traj_to_return = traj_to_compute.merge(orbit_elem, on="trajectory_id")
 
@@ -314,6 +320,7 @@ def tracklets_and_trajectories_steps(
     ram_dir,
     store_kd_tree,
     run_metrics,
+    verbose=False,
 ):
     """
     Perform associations with the recorded trajectories and the tracklets detected inside the new night.
@@ -437,7 +444,7 @@ def tracklets_and_trajectories_steps(
 
     tracklets_orbfit_process = mp.Process(
         target=compute_orbit_elem,
-        args=(all_traj_to_orb, return_trajectories_queue, ram_dir,),
+        args=(all_traj_to_orb, return_trajectories_queue, ram_dir, verbose,),
     )
 
     tracklets_orbfit_process.start()
@@ -466,6 +473,7 @@ def trajectories_and_new_observations_steps(
     ram_dir,
     store_kd_tree,
     run_metrics,
+    verbose=False,
 ):
     """
     Do the associations between recorded trajectories and the remaining associations from the new observations night that have not been associated before.
@@ -574,7 +582,7 @@ def trajectories_and_new_observations_steps(
 
     trajectories_orbfit_process = mp.Process(
         target=compute_orbit_elem,
-        args=(traj_to_orb, return_trajectories_queue, ram_dir,),
+        args=(traj_to_orb, return_trajectories_queue, ram_dir, verbose,),
     )
     trajectories_orbfit_process.start()
 
@@ -601,6 +609,7 @@ def tracklets_and_old_observations_steps(
     ram_dir,
     store_kd_tree,
     run_metrics,
+    verbose=False,
 ):
     """
     Do the associations between the old observations keep in memory and the tracklets detected with the observations of the new observation night
@@ -714,7 +723,7 @@ def tracklets_and_old_observations_steps(
 
     tracklets_with_new_obs_orbfit_process = mp.Process(
         target=compute_orbit_elem,
-        args=(track_to_orb, return_trajectories_queue, ram_dir,),
+        args=(track_to_orb, return_trajectories_queue, ram_dir, verbose,),
     )
     tracklets_with_new_obs_orbfit_process.start()
 
@@ -753,6 +762,7 @@ def night_to_night_association(
     do_traj_and_new_obs_assoc=True,
     do_track_and_old_obs_assoc=True,
     do_new_obs_and_old_obs_assoc=True,
+    verbose=False,
 ):
     """
     Perform night to night associations.
@@ -784,6 +794,10 @@ def night_to_night_association(
         limit to keep old trajectories in memory
     obs_time_window : integer
         limit to keep old observations in memory
+    traj_2_points_time_windows : integer
+        limit to keep the trajectories of two points.
+        These are observations detected during the observations association step and are not accurate.
+        To limit the combinatorial, keep them less time than the other trajectories with more points.
     intra_night_sep_criterion : float
         separation criterion between the intra night alerts to be associated, must be in arcsecond
     intra_night_mag_criterion_same_fid : float
@@ -798,8 +812,26 @@ def night_to_night_association(
         the magnitude criterion to associates inter night alerts if the observations have been observed with the same filter
     angle_criterion : float
         the angle criterion to associates alerts during the cone search
+    store_kd_tree : boolean
+        if set to true, store the kd tree return by the search_around_sky method of astropy.
+    orbfit_limit : integer
+        The number of points required to send trajectories to the orbit fitting program.
+        Remove the trajectories with more point than "orbfit limit" points and without orbital elements.
+        Keep the trajectories with less than "orbfit limit" points
+    ram_dir : string
+        Path where files needed for the OrbFit computation are located
     run_metrics : boolean
         launch and return the performance metrics of the intra night association and inter night association
+    do_track_and_traj_assoc : boolean
+        if set to false, deactivate the association between the trajectories and the tracklets
+    do_traj_and_new_obs_assoc : boolean
+        if set to false, deactivate the association between the trajectories and the new observations
+    do_track_and_old_obs_assoc : boolean
+        if set to false, deactivate the association between the old observations and the tracklets
+    do_new_obs_and_old_obs_assoc : boolean
+        if set to false, deactivate the association between the old observations and the new observations
+    verbose : boolean
+        if set to true, print information of the assocation process
 
     Returns
     -------
@@ -983,7 +1015,8 @@ def night_to_night_association(
     inter_night_report = dict()
     inter_night_report["nid of the next night"] = int(next_nid)
 
-    # t_before = t.time()
+    if verbose:
+        t_before = t.time()
 
     # intra night associations steps with the new observations
     (tracklets, remaining_new_observations, intra_night_report,) = intra_night_step(
@@ -995,7 +1028,8 @@ def night_to_night_association(
         run_metrics,
     )
 
-    # print("elapsed time to find tracklets : {}".format(t.time() - t_before))
+    if verbose:
+        print("elapsed time to find tracklets : {}".format(t.time() - t_before))
 
     if len(tracklets) > 0:
         last_trajectory_id = np.max(tracklets["trajectory_id"]) + 1
@@ -1008,7 +1042,7 @@ def night_to_night_association(
 
             q = mp.Queue()
             process = mp.Process(
-                target=compute_orbit_elem, args=(track_to_orb, q, ram_dir,)
+                target=compute_orbit_elem, args=(track_to_orb, q, ram_dir, verbose,)
             )
             process.start()
             track_with_orb_elem = q.get()
@@ -1047,7 +1081,8 @@ def night_to_night_association(
     # call tracklets_and_trajectories_steps if they have most_recent_traj and tracklets
     if len(most_recent_traj) > 0 and len(tracklets) > 0 and do_track_and_traj_assoc:
 
-        # t_before = t.time()
+        if verbose:
+            t_before = t.time()
         (
             traj_not_updated,
             small_traj,
@@ -1069,9 +1104,15 @@ def night_to_night_association(
             ram_dir,
             store_kd_tree,
             run_metrics,
+            verbose,
         )
 
-        # print("elapsed time to associates tracklets with trajectories : {}".format(t.time() - t_before))
+        if verbose:
+            print(
+                "elapsed time to associates tracklets with trajectories : {}".format(
+                    t.time() - t_before
+                )
+            )
 
         orbfit_process.append(tracklets_orbfit_process)
 
@@ -1082,7 +1123,7 @@ def night_to_night_association(
 
             tracklets_process = mp.Process(
                 target=compute_orbit_elem,
-                args=(track_to_orb, return_trajectories_queue,),
+                args=(track_to_orb, return_trajectories_queue, ram_dir, verbose,),
             )
             tracklets_process.start()
             orbfit_process.append(tracklets_process)
@@ -1104,7 +1145,8 @@ def night_to_night_association(
     # fmt: on
     if assoc_test:
 
-        # t_before = t.time()
+        if verbose:
+            t_before = t.time()
         (
             not_associated_traj,
             remaining_new_observations,
@@ -1125,9 +1167,15 @@ def night_to_night_association(
             ram_dir,
             store_kd_tree,
             run_metrics,
+            verbose,
         )
 
-        # print("elapsed time to associates new points to a trajectories : {}".format(t.time() - t_before))
+        if verbose:
+            print(
+                "elapsed time to associates new points to a trajectories : {}".format(
+                    t.time() - t_before
+                )
+            )
 
         orbfit_process.append(traj_with_new_obs_orbfit_process)
     else:
@@ -1136,7 +1184,8 @@ def night_to_night_association(
 
     if len(small_track) > 0 and len(old_observation) > 0 and do_track_and_old_obs_assoc:
 
-        # t_before = t.time()
+        if verbose:
+            t_before = t.time()
         (
             not_updated_tracklets,
             remain_old_obs,
@@ -1157,9 +1206,15 @@ def night_to_night_association(
             ram_dir,
             store_kd_tree,
             run_metrics,
+            verbose,
         )
 
-        # print("elapsed time to associates the old points to the tracklets  : {}".format(t.time() - t_before))
+        if verbose:
+            print(
+                "elapsed time to associates the old points to the tracklets  : {}".format(
+                    t.time() - t_before
+                )
+            )
 
         orbfit_process.append(track_with_old_obs_orbfit_process)
     else:
@@ -1169,7 +1224,8 @@ def night_to_night_association(
 
     if do_new_obs_and_old_obs_assoc:
 
-        # t_before = t.time()
+        if verbose:
+            t_before = t.time()
         (
             new_trajectory,
             remain_old_obs,
@@ -1187,7 +1243,12 @@ def night_to_night_association(
             run_metrics,
         )
 
-        # print("elapsed time to associates couples of observations : {}".format(t.time() - t_before))
+        if verbose:
+            print(
+                "elapsed time to associates couples of observations : {}".format(
+                    t.time() - t_before
+                )
+            )
     else:
         new_trajectory = pd.DataFrame(columns=remain_old_obs.columns)
         observation_report = {}
