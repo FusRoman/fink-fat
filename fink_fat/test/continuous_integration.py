@@ -81,6 +81,7 @@ def ci_function(
         trajectory_df.sort_values(["trajectory_id", "jd"]).reset_index(drop=True),
         ci_df.sort_values(["trajectory_id", "jd"]).reset_index(drop=True),
         check_dtype=False,
+        rtol=1e-4
     )
 
 
