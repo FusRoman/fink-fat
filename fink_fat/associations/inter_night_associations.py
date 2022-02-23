@@ -995,7 +995,6 @@ def night_to_night_association(
     >>> assert_frame_equal(traj_expected.reset_index(drop=True), ts.trajectory_df_expected_6, check_dtype=False)
     >>> assert_frame_equal(old_expected, ts.old_observation_expected_5, check_dtype=False)
     """
-
     if len(trajectory_df) > 0:
         last_trajectory_id = np.max(trajectory_df["trajectory_id"]) + 1
     else:

@@ -5,6 +5,7 @@ import numpy as np
 
 import astropy.units as u
 from fink_fat.associations.inter_night_associations import night_to_night_association
+from fink_fat.others.utils import cast_obs_data
 
 
 if __name__ == "__main__":
@@ -15,6 +16,19 @@ if __name__ == "__main__":
     ram_dir = "/media/virtuelram/"
 
     df_sso = load_data("Solar System MPC", 0)
+
+    df_sso = df_sso.drop(
+        [
+            "fink_class",
+            "magpsf",
+            "sigmapsf",
+            "magnr",
+            "sigmagnr",
+            "magzpsci",
+            "isdiffpos",
+        ],
+        axis=1,
+    )
 
     tr_orb_columns = [
         "provisional designation",
@@ -59,9 +73,9 @@ if __name__ == "__main__":
         "angle_criterion": 1.5,
         "store_kd_tree": False,
         "do_track_and_traj_assoc": True,
-        "do_traj_and_new_obs_assoc": False,
-        "do_track_and_old_obs_assoc": False,
-        "do_new_obs_and_old_obs_assoc": False,
+        "do_traj_and_new_obs_assoc": True,
+        "do_track_and_old_obs_assoc": True,
+        "do_new_obs_and_old_obs_assoc": True,
     }
 
     for tr_nid in np.unique(df_sso["nid"]):
@@ -87,7 +101,6 @@ if __name__ == "__main__":
 
         nb_traj = len(np.unique(trajectory_df["trajectory_id"]))
         all_nb_traj.append(nb_traj)
-
         print("nb trajectories: {}".format(nb_traj))
         print("nb old obs: {}".format(len(old_observation)))
         print("nb new obs: {}".format(len(new_observation)))
@@ -131,7 +144,7 @@ if __name__ == "__main__":
             do_new_obs_and_old_obs_assoc=current_test_parameters[
                 "do_new_obs_and_old_obs_assoc"
             ],
-            verbose=True
+            verbose=True,
         )
 
         # print()
@@ -188,7 +201,7 @@ if __name__ == "__main__":
     record = False
     if len(trajectory_df) > 0 and record:
         test_name = "perf_test_4"
-        trajectory_df = trajectory_df.infer_objects()
+        trajectory_df = cast_obs_data(trajectory_df)
         trajectory_df["ssnamenr"] = trajectory_df["ssnamenr"].astype(str)
         trajectory_df["fink_class"] = trajectory_df["fink_class"].astype(str)
         trajectory_df["objectId"] = trajectory_df["objectId"].astype(str)
