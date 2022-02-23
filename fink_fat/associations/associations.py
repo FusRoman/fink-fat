@@ -858,14 +858,21 @@ def tracklets_and_trajectories_associations(
                         traj_extremity_associated["tmp_traj"]
                     )
                 ]
-
+                print()
+                print(trajectories.info(memory_usage='deep'))
+                print()
                 # concatenation of trajectories with new tracklets
                 trajectories = pd.concat([trajectories, associated_tracklets])
 
+                print(trajectories.info(memory_usage='deep'))
+                print()
                 # keep trace of the updated trajectories
                 # get the trajectory_id of the updated trajectories
                 associated_tr_id = np.unique(associated_tracklets["trajectory_id"])
                 trajectories = trajectories.reset_index(drop=True)
+
+                print(trajectories.info(memory_usage='deep'))
+                print()
                 # get all observations of the updated trajectories
                 tr_updated_index = trajectories[
                     trajectories["trajectory_id"].isin(associated_tr_id)
@@ -2044,7 +2051,8 @@ def time_window_management(
         most_recent_last_obs = last_obs_of_all_traj[
             last_obs_of_all_traj["diff_nid"] <= traj_time_window
         ]
-
+        
+        # mask used to split the trajectories between those inside the traj time window and the oldest one
         mask_traj = trajectory_df["trajectory_id"].isin(
             most_recent_last_obs["trajectory_id"]
         )
@@ -2057,19 +2065,23 @@ def time_window_management(
             most_recent_last_obs[["trajectory_id", "diff_nid"]], on="trajectory_id"
         )
 
+        # Keep trajectories with less than orbfit_limit point and more than 2 points
         test_1 = most_recent_traj["trajectory_id"].isin(
             traj_size[(traj_size["nid"] <= orbfit_limit) & (traj_size["nid"] > 2)][
                 "trajectory_id"
             ]
         )
+
+        # Keep trajectories with orbital elements
         test_2 = most_recent_traj["a"] != -1.0
 
+        # get the trajectories with only two points
         test_3_1 = most_recent_traj["trajectory_id"].isin(
             traj_size[traj_size["nid"] == 2]["trajectory_id"]
         )
 
+        # keep the trajectories with two points and that not exceed the time windows for the trajectories with 2 points
         test_3_2 = most_recent_traj["diff_nid"] <= traj_2_points_time_windows
-
         test_3 = test_3_1 & test_3_2
 
         most_recent_traj = most_recent_traj[(test_1 | test_2 | test_3)]
