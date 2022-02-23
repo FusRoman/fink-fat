@@ -858,21 +858,15 @@ def tracklets_and_trajectories_associations(
                         traj_extremity_associated["tmp_traj"]
                     )
                 ]
-                print()
-                print(trajectories.info(memory_usage='deep'))
-                print()
+
                 # concatenation of trajectories with new tracklets
                 trajectories = pd.concat([trajectories, associated_tracklets])
 
-                print(trajectories.info(memory_usage='deep'))
-                print()
                 # keep trace of the updated trajectories
                 # get the trajectory_id of the updated trajectories
                 associated_tr_id = np.unique(associated_tracklets["trajectory_id"])
                 trajectories = trajectories.reset_index(drop=True)
 
-                print(trajectories.info(memory_usage='deep'))
-                print()
                 # get all observations of the updated trajectories
                 tr_updated_index = trajectories[
                     trajectories["trajectory_id"].isin(associated_tr_id)
@@ -2051,7 +2045,7 @@ def time_window_management(
         most_recent_last_obs = last_obs_of_all_traj[
             last_obs_of_all_traj["diff_nid"] <= traj_time_window
         ]
-        
+
         # mask used to split the trajectories between those inside the traj time window and the oldest one
         mask_traj = trajectory_df["trajectory_id"].isin(
             most_recent_last_obs["trajectory_id"]
