@@ -49,13 +49,13 @@ if __name__ == "__main__":
     all_nb_traj = []
 
     current_test_parameters = {
-        "traj_time_window": 10,
+        "traj_time_window": 15,
         "obs_time_window": 2,
         "traj_2_points_time_window": 7,
         "sep_criterion": 0.35,
         "mag_criterion_same_fid": 0.3,
         "mag_criterion_diff_fid": 0.7,
-        "orbfit_limit": 10,
+        "orbfit_limit": 1000,
         "angle_criterion": 1.5,
         "store_kd_tree": False,
         "do_track_and_traj_assoc": True,
@@ -131,6 +131,7 @@ if __name__ == "__main__":
             do_new_obs_and_old_obs_assoc=current_test_parameters[
                 "do_new_obs_and_old_obs_assoc"
             ],
+            verbose=True
         )
 
         # print()
