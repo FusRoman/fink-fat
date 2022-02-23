@@ -51,3 +51,20 @@ def repeat_chunk(a, chunks, repeats):
     ends = starts + repeated_chunks
     out = create_ranges(starts, ends, repeated_chunks)
     return out
+
+
+def cast_obs_data(trajectories):
+    dict_new_types = {
+        "ra": np.float64,
+        "dec": np.float64,
+        "fid": np.int8,
+        "nid": np.int32,
+        "candid": np.int64,
+        # "a": np.float64,
+    }
+    if "trajectory_id" in trajectories:
+        dict_new_types["trajectory_id"] = np.int64
+    if "not_updated" in trajectories:
+        dict_new_types["not_updated"] = np.bool_
+
+    return trajectories.astype(dict_new_types)

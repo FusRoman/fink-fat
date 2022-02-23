@@ -9,6 +9,7 @@ from fink_fat.associations.intra_night_association import (
 )
 from fink_fat.associations.intra_night_association import compute_inter_night_metric
 from fink_fat.others.utils import repeat_chunk
+from fink_fat.others.utils import cast_obs_data
 import sys
 import doctest
 from pandas.testing import assert_frame_equal  # noqa: F401
@@ -860,7 +861,9 @@ def tracklets_and_trajectories_associations(
                 ]
 
                 # concatenation of trajectories with new tracklets
-                trajectories = pd.concat([trajectories, associated_tracklets])
+                trajectories = cast_obs_data(
+                    pd.concat([trajectories, associated_tracklets])
+                )
 
                 # keep trace of the updated trajectories
                 # get the trajectory_id of the updated trajectories
@@ -914,13 +917,9 @@ def tracklets_and_trajectories_associations(
             "all nid_report"
         ] = traj_to_track_report
 
-        # remove tmp_traj column added by the cone_search_associations function in  night_to_night_trajectory_associations
-        # if "tmp_traj" in trajectories:
-        #     trajectories = trajectories.drop("tmp_traj", axis=1)
-
         return (
-            trajectories.reset_index(drop=True).infer_objects(),
-            tracklets.reset_index(drop=True).infer_objects(),
+            cast_obs_data(trajectories).reset_index(drop=True),
+            cast_obs_data(tracklets).reset_index(drop=True),
             max_traj_id,
             trajectories_and_tracklets_associations_report,
         )
@@ -1308,8 +1307,8 @@ def trajectories_with_new_observations_associations(
         ] = updated_trajectories
 
         return (
-            trajectories.reset_index(drop=True).infer_objects(),
-            new_observations.reset_index(drop=True).infer_objects(),
+            cast_obs_data(trajectories).reset_index(drop=True),
+            cast_obs_data(new_observations).reset_index(drop=True),
             max_traj_id,
             trajectories_and_observations_associations_report,
         )
@@ -1688,8 +1687,8 @@ def old_observations_with_tracklets_associations(
         track_and_obs_report["updated tracklets"] = updated_tracklets
 
         return (
-            tracklets.reset_index(drop=True).infer_objects(),
-            old_observations.reset_index(drop=True).infer_objects(),
+            cast_obs_data(tracklets).reset_index(drop=True),
+            cast_obs_data(old_observations).reset_index(drop=True),
             max_traj_id,
             track_and_obs_report,
         )
