@@ -738,6 +738,59 @@ def tracklets_and_old_observations_steps(
     )
 
 
+def align_trajectory_id(trajectories):
+    """
+    Reasign the trajectory_id of the trajectories dataframe from 0 to the number of trajectories
+
+    Parameters
+    ----------
+    trajectories : dataframe
+        The set of observations belonging to the trajectories
+
+    Returns
+    -------
+    trajectories : dataframe
+        Same as the input except that the trajectory_id column is in [0, nb trajectories[ .
+
+    Examples
+    --------
+
+    >>> trajectories = pd.DataFrame({
+    ... "candid" : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+    ... "trajectory_id" : [2, 2, 4, 5, 4, 4, 6, 6, 5, 6, 2, 3, 3, 7, 7, 3, 7, 5]
+    ... })
+
+    >>> align_trajectory_id(trajectories)
+        candid  trajectory_id
+    0        0              0
+    1        1              0
+    2        2              2
+    3        3              3
+    4        4              2
+    5        5              2
+    6        6              4
+    7        7              4
+    8        8              3
+    9        9              4
+    10      10              0
+    11      11              1
+    12      12              1
+    13      13              5
+    14      14              5
+    15      15              1
+    16      16              5
+    17      17              3
+    """
+    tr_id = np.unique(trajectories["trajectory_id"])
+    translate_tr = {
+        old_id: new_id for old_id, new_id in zip(tr_id, np.arange(len(tr_id)))
+    }
+    trajectories["trajectory_id"] = trajectories.apply(
+        lambda x: translate_tr[x["trajectory_id"]], axis=1
+    )
+    return trajectories
+
+
 def night_to_night_association(
     trajectory_df,
     old_observation,
@@ -1291,7 +1344,7 @@ def night_to_night_association(
     # for process in orbfit_process:
     #     process.terminate()
 
-    return trajectory_df, old_observation, inter_night_report
+    return align_trajectory_id(trajectory_df), old_observation, inter_night_report
 
 
 if __name__ == "__main__":  # pragma: no cover
