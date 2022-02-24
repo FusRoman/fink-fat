@@ -57,14 +57,35 @@ def cast_obs_data(trajectories):
     dict_new_types = {
         "ra": np.float64,
         "dec": np.float64,
+        "jd": np.float64,
         "fid": np.int8,
         "nid": np.int32,
         "candid": np.int64,
-        # "a": np.float64,
     }
     if "trajectory_id" in trajectories:
         dict_new_types["trajectory_id"] = np.int64
     if "not_updated" in trajectories:
         dict_new_types["not_updated"] = np.bool_
+    tr_orb_columns = [
+        "dcmag",
+        "dcmagerr",
+        "ref_epoch",
+        "a",
+        "e",
+        "i",
+        "long. node",
+        "arg. peric",
+        "mean anomaly",
+        "rms_a",
+        "rms_e",
+        "rms_i",
+        "rms_long. node",
+        "rms_arg. peric",
+        "rms_mean anomaly",
+    ]
+
+    for c in tr_orb_columns:
+        if c in trajectories:
+            dict_new_types[c] = np.float64
 
     return trajectories.astype(dict_new_types)

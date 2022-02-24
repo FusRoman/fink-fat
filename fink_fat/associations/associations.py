@@ -798,8 +798,10 @@ def tracklets_and_trajectories_associations(
                         tk_df["not_updated"] = False
 
                     # add the duplicated new trajectories to the set of trajectories
-                    all_duplicate_traj = pd.concat([tr_df, tk_df])
-                    trajectories = pd.concat([trajectories, all_duplicate_traj])
+                    all_duplicate_traj = cast_obs_data(pd.concat([tr_df, tk_df]))
+                    trajectories = cast_obs_data(
+                        pd.concat([trajectories, all_duplicate_traj])
+                    )
 
                     # remove the duplicates tracklets associated with a trajectory from the
                     # set of tracklets detected this night.
@@ -851,7 +853,7 @@ def tracklets_and_trajectories_associations(
                     associated_tracklets.append(next_night_tracklets)
 
                 # create a dataframe with all tracklets that will be added to a trajectory
-                associated_tracklets = pd.concat(associated_tracklets)
+                associated_tracklets = cast_obs_data(pd.concat(associated_tracklets))
 
                 # remove the tracklets that will be added to a trajectory from the dataframe of all tracklets
                 tracklets = tracklets[
@@ -1256,8 +1258,10 @@ def trajectories_with_new_observations_associations(
                         duplicate_obs["not_updated"] = False
 
                     # add the duplicated new trajectories to the set of trajectories
-                    all_duplicate_traj = pd.concat([df, duplicate_obs])
-                    trajectories = pd.concat([trajectories, all_duplicate_traj])
+                    all_duplicate_traj = cast_obs_data(pd.concat([df, duplicate_obs]))
+                    trajectories = cast_obs_data(
+                        pd.concat([trajectories, all_duplicate_traj])
+                    )
 
                 updated_trajectories = np.union1d(
                     updated_trajectories, np.unique(obs_assoc["trajectory_id"])
@@ -1271,7 +1275,7 @@ def trajectories_with_new_observations_associations(
                 ] = nb_traj_to_obs_assoc_with_duplicates - len(obs_assoc)
 
                 # add the new associated observations in the recorded trajectory dataframe
-                trajectories = pd.concat([trajectories, obs_assoc])
+                trajectories = cast_obs_data(pd.concat([trajectories, obs_assoc]))
 
                 # keep trace of the updated trajectories
                 # get the trajectory_id of the updated trajectories
@@ -1618,8 +1622,10 @@ def old_observations_with_tracklets_associations(
                         duplicate_obs["trajectory_id"] = new_obs_id
                         duplicate_obs["not_updated"] = False
 
-                    all_duplicate_track = pd.concat([df, duplicate_obs])
-                    tracklets = pd.concat([tracklets, all_duplicate_track])
+                    all_duplicate_track = cast_obs_data(pd.concat([df, duplicate_obs]))
+                    tracklets = cast_obs_data(
+                        pd.concat([tracklets, all_duplicate_track])
+                    )
 
                 # remove duplicates associations
                 old_obs_right_assoc = old_obs_right_assoc[~duplicates]
@@ -1629,7 +1635,7 @@ def old_observations_with_tracklets_associations(
                 ] = nb_track_to_obs_assoc_with_duplicates - len(old_obs_right_assoc)
 
                 # add the associated old observations to the tracklets
-                tracklets = pd.concat([tracklets, old_obs_right_assoc])
+                tracklets = cast_obs_data(pd.concat([tracklets, old_obs_right_assoc]))
 
                 # remove the associated tracklets for the next loop turn
                 two_first_obs_tracklets = two_first_obs_tracklets[
@@ -1844,7 +1850,9 @@ def old_with_new_observations_associations(
                     "trajectory_id"
                 ] = new_trajectory_id
 
-                trajectory_df = pd.concat([trajectory_df, left_assoc, right_assoc])
+                trajectory_df = cast_obs_data(
+                    pd.concat([trajectory_df, left_assoc, right_assoc])
+                )
 
             current_nid_report["observation associations"] = old_to_new_assoc_report
             all_nid_report.append(current_nid_report)
