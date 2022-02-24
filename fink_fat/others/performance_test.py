@@ -6,7 +6,7 @@ import numpy as np
 import astropy.units as u
 from fink_fat.associations.inter_night_associations import night_to_night_association
 from fink_fat.others.utils import cast_obs_data
-
+import psutil as pu
 
 if __name__ == "__main__":
 
@@ -79,6 +79,10 @@ if __name__ == "__main__":
     }
 
     for tr_nid in np.unique(df_sso["nid"]):
+
+        memory = pu.virtual_memory()
+        print("active memory : {}".format(memory.active / 1e9))
+        print("available memory : {}".format(memory.available / 1e9))
 
         if current_loop > max_night_iter:
             print("BREAK NIGHT")
@@ -203,7 +207,6 @@ if __name__ == "__main__":
         test_name = "perf_test_4"
         trajectory_df = cast_obs_data(trajectory_df)
         trajectory_df["ssnamenr"] = trajectory_df["ssnamenr"].astype(str)
-        trajectory_df["fink_class"] = trajectory_df["fink_class"].astype(str)
         trajectory_df["objectId"] = trajectory_df["objectId"].astype(str)
 
         trajectory_df = trajectory_df.drop(["provisional designation"], axis=1)
