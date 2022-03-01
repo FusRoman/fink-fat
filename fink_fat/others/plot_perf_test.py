@@ -1,7 +1,5 @@
 import time as t
 from collections import Counter
-from unicodedata import decimal
-from matplotlib import units
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
@@ -28,8 +26,7 @@ def plot_orbit_type(orbit_param, title, y, ylabel, savefig=False, test_name=""):
         g.set(xlim=(0, 7))
         plt.savefig(os.path.join(test_name, title + "_" + ylabel), dpi=500)
         g.set(xlim=(6, 500))
-        plt.savefig(os.path.join(test_name, title +
-                    "_" + ylabel + "_distant"), dpi=500)
+        plt.savefig(os.path.join(test_name, title + "_" + ylabel + "_distant"), dpi=500)
 
     plt.close()
     # g.set(xlim=(0, 7))
@@ -50,8 +47,7 @@ def plot_stat(stat_df, test_name):
     g = sns.lineplot(data=stat_df, x="night", y="cum_time")
     plt.xticks(rotation=90)
     g.set(xlabel="night identifier", ylabel="time (sec)")
-    g.set_title(
-        "Cumulative computation time of the associations algorithm over nights")
+    g.set_title("Cumulative computation time of the associations algorithm over nights")
     plt.savefig(os.path.join(test_name, "cum_time_plot"))
     plt.close()
 
@@ -151,23 +147,48 @@ def association_stat(
             detect_tracklets, axis=1, args=(traj_time_window, obs_time_window,)
         )
 
-    begin_by_obs_assoc_percent = (np.sum(df.apply(
-        lambda x: 1 if x["assoc_type"][0] == "begin by obs_assoc" else 0, axis=1)) / len(df)) * 100
+    # fmt: off
+    begin_by_obs_assoc_percent = (
+        np.sum(
+            df.apply(
+                lambda x: 1 if x["assoc_type"][0] == "begin by obs_assoc" else 0, axis=1
+            )
+        ) / len(df)
+    ) * 100
 
-    print("Number of trajectories beginning by observations associations: {0:10.1f}".format(
-        begin_by_obs_assoc_percent))
+    print(
+        "Number of trajectories beginning by observations associations: {0:10.1f}".format(
+            begin_by_obs_assoc_percent
+        )
+    )
 
-    begin_by_old_obs_assoc_percent = (np.sum(df.apply(
-        lambda x: 1 if x["assoc_type"][0] == "old_obs_with_track" else 0, axis=1)) / len(df)) * 100
+    begin_by_old_obs_assoc_percent = (
+        np.sum(
+            df.apply(
+                lambda x: 1 if x["assoc_type"][0] == "old_obs_with_track" else 0, axis=1
+            )
+        ) / len(df)
+    ) * 100
 
-    print("Number of trajectories beginning by associations of old observations with tracklets: {0:10.1f}".format(
-        begin_by_old_obs_assoc_percent))
+    # fmt: on
+
+    print(
+        "Number of trajectories beginning by associations of old observations with tracklets: {0:10.1f}".format(
+            begin_by_old_obs_assoc_percent
+        )
+    )
 
     def new_obs_track_prop(rows):
         assoc_type = Counter(rows["assoc_type"])
 
-        if "traj_with_new_obs" in assoc_type and "traj_with_track" in assoc_type and assoc_type["traj_with_track"] != 0:
-            return [assoc_type["traj_with_new_obs"] / assoc_type["traj_with_track"], "ratio"]
+        # fmt: off
+        test = "traj_with_new_obs" in assoc_type and "traj_with_track" in assoc_type and assoc_type["traj_with_track"] != 0
+        # fmt: on
+        if test:
+            return [
+                assoc_type["traj_with_new_obs"] / assoc_type["traj_with_track"],
+                "ratio",
+            ]
         elif "traj_with_new_obs" in assoc_type:
             return [float(assoc_type["traj_with_new_obs"]), "nb_traj_with_new_obs"]
         elif "traj_with_track" in assoc_type:
@@ -176,15 +197,15 @@ def association_stat(
             return [float(0), "none of them"]
 
     df[["prop", "type"]] = pd.DataFrame(
-        np.array(df.apply(new_obs_track_prop, axis=1).to_list()), index=df.index)
+        np.array(df.apply(new_obs_track_prop, axis=1).to_list()), index=df.index
+    )
 
-    h = sns.histplot(data=df, x="prop", hue="type", stat="percent")
+    _ = sns.histplot(data=df, x="prop", hue="type", stat="percent")
     plt.savefig(os.path.join(test_name, "ratio_assoc_type"))
     plt.close()
 
     assoc_type = Counter(df.explode(["assoc_type"])["assoc_type"])
-    tt = df.apply(lambda x: np.all(
-        np.array(x["assoc_type"]) == "tracklets"), axis=1)
+    tt = df.apply(lambda x: np.all(np.array(x["assoc_type"]) == "tracklets"), axis=1)
     print(df[tt])
     if pie_chart:
         data = [v for v in assoc_type.values()]
@@ -213,7 +234,9 @@ def angle(a, b, c):
     ba = b - a
     ca = c - a
 
-    cosine_angle = np.round_(np.dot(ba, ca) / (np.linalg.norm(ba) * np.linalg.norm(ca)), decimals=8)
+    cosine_angle = np.round_(
+        np.dot(ba, ca) / (np.linalg.norm(ba) * np.linalg.norm(ca)), decimals=8
+    )
     angle = np.arccos(cosine_angle)
     return np.degrees(angle)
 
@@ -238,11 +261,11 @@ def compute_angle(rows):
 
     for i in range(len(ra) - 2):
         a = np.array([ra[i], dec[i]])
-        b = np.array([ra[i+1], dec[i+1]])
-        c = np.array([ra[i+2], dec[i+2]])
+        b = np.array([ra[i + 1], dec[i + 1]])
+        c = np.array([ra[i + 2], dec[i + 2]])
 
-        jd1 = jd[i+1]
-        jd2 = jd[i+2]
+        jd1 = jd[i + 1]
+        jd2 = jd[i + 2]
         diff_jd = jd2 - jd1
 
         if diff_jd > 0:
@@ -255,19 +278,19 @@ def compute_angle(rows):
 
 def rm_list(a):
     np_array = np.array(a["diff_night"])
-    np_mask = np.ma.masked_array(
-        np_array, np_array > params["traj_time_window"])
-    for i in range(len(np_mask)-2):
+    np_mask = np.ma.masked_array(np_array, np_array > params["traj_time_window"])
+    for i in range(len(np_mask) - 2):
         current = np_mask[0]
-        n_next_ = np_mask[i+2]
+        n_next_ = np_mask[i + 2]
         if current is np.ma.masked and n_next_ is np.ma.masked:
-            np_mask[i+1] = np.ma.masked
+            np_mask[i + 1] = np.ma.masked
 
     not_mask = np.logical_not(np_mask.mask)
-    count_consecutif = np.diff(np.where(np.concatenate(([not_mask[0]],
-                                                        not_mask[:-
-                                                                 1] != not_mask[1:],
-                                                        [True])))[0])[::2]
+    count_consecutif = np.diff(
+        np.where(
+            np.concatenate(([not_mask[0]], not_mask[:-1] != not_mask[1:], [True]))
+        )[0]
+    )[::2]
 
     return np.any(count_consecutif >= params["orbfit_limit"])
 
@@ -319,22 +342,21 @@ if __name__ == "__main__":
     # number of object that can be detected in the sso dataset
     detected_traj = traj_size[traj_size["ra"] >= params["orbfit_limit"]]
 
-    detected_object = df_sso[df_sso["ssnamenr"].isin(
-        detected_traj["ssnamenr"])].sort_values(["ssnamenr", "jd"])
+    detected_object = df_sso[
+        df_sso["ssnamenr"].isin(detected_traj["ssnamenr"])
+    ].sort_values(["ssnamenr", "jd"])
 
     traj_can_be_detected = detected_object.groupby(["ssnamenr"]).agg(
         trajectory_size=("candid", lambda x: len(list(x))),
         nid=("nid", list),
-        diff_night=("nid", lambda x: list(np.diff(list(x))))
+        diff_night=("nid", lambda x: list(np.diff(list(x)))),
     )
 
-    traj_can_be_detected["diff_night"] = traj_can_be_detected.apply(
-        rm_list,
-        axis=1
-    )
+    traj_can_be_detected["diff_night"] = traj_can_be_detected.apply(rm_list, axis=1)
 
-    detected_traj = traj_can_be_detected[traj_can_be_detected["diff_night"]].reset_index(
-    )
+    detected_traj = traj_can_be_detected[
+        traj_can_be_detected["diff_night"]
+    ].reset_index()
 
     # number of object that cannot be detected
     traj_not_observed = traj_size[traj_size["ra"] < params["orbfit_limit"]]
@@ -370,8 +392,7 @@ if __name__ == "__main__":
     ]
 
     print(
-        "number of trajectories with orbital elements: {}".format(
-            len(traj_cand_size))
+        "number of trajectories with orbital elements: {}".format(len(traj_cand_size))
     )
 
     print("number of true detected trajectories: {}".format(len(true_candidate)))
@@ -379,8 +400,7 @@ if __name__ == "__main__":
     print("number of overlaping trajectories: {}".format(len(false_candidate)))
 
     print()
-    print("purity: {0:10.1f}".format(
-        (len(true_candidate) / len(traj_cand_size)) * 100))
+    print("purity: {0:10.1f}".format((len(true_candidate) / len(traj_cand_size)) * 100))
 
     print()
     print()
@@ -388,7 +408,8 @@ if __name__ == "__main__":
 
     print(
         "efficiency: {0:10.1f}".format(
-            (len(real_mpc_trajectories) / len(detected_traj)) * 100)
+            (len(real_mpc_trajectories) / len(detected_traj)) * 100
+        )
     )
 
     piece_of_traj = true_candidate.groupby(["ssnamenr"]).count().reset_index()
@@ -408,16 +429,21 @@ if __name__ == "__main__":
     not_recompute = True
     not_detected_path_data = os.path.join(test_name, "not_detected_traj.parquet")
     detected_path_data = os.path.join(test_name, "detected_traj.parquet")
-    if os.path.exists(detected_path_data) and os.path.exists(not_detected_path_data) and not_recompute:
+    # fmt: off
+    test = os.path.exists(detected_path_data) and os.path.exists(not_detected_path_data) and not_recompute
+    # fmt: on
+    if test:
         not_detected_traj = pd.read_parquet(not_detected_path_data)
         detected_traj = pd.read_parquet(detected_path_data)
     else:
         t_before = t.time()
-        not_detected_sso = detected_sso[~detected_sso["ssnamenr"].isin(
-            real_mpc_trajectories)]
+        not_detected_sso = detected_sso[
+            ~detected_sso["ssnamenr"].isin(real_mpc_trajectories)
+        ]
 
-        detected_mpc = detected_sso[detected_sso["ssnamenr"].isin(
-            real_mpc_trajectories)]
+        detected_mpc = detected_sso[
+            detected_sso["ssnamenr"].isin(real_mpc_trajectories)
+        ]
 
         not_detected_traj = (
             not_detected_sso.sort_values(["jd"])
@@ -429,7 +455,7 @@ if __name__ == "__main__":
                 ra=("ra", list),
                 dec=("dec", list),
                 jd=("jd", list),
-                dcmag=("dcmag", list)
+                dcmag=("dcmag", list),
             )
         )
 
@@ -443,44 +469,51 @@ if __name__ == "__main__":
                 ra=("ra", list),
                 dec=("dec", list),
                 jd=("jd", list),
-                dcmag=("dcmag", list)
+                dcmag=("dcmag", list),
             )
         )
-        not_detected_traj["speed"] = not_detected_traj.apply(
-            compute_speed, axis=1)
-        not_detected_traj["angle"] = not_detected_traj.apply(
-            compute_angle, axis=1)
+        not_detected_traj["speed"] = not_detected_traj.apply(compute_speed, axis=1)
+        not_detected_traj["angle"] = not_detected_traj.apply(compute_angle, axis=1)
 
-        detected_traj["speed"] = detected_traj.apply(
-            compute_speed, axis=1)
-        detected_traj["angle"] = detected_traj.apply(
-            compute_angle, axis=1)
+        detected_traj["speed"] = detected_traj.apply(compute_speed, axis=1)
+        detected_traj["angle"] = detected_traj.apply(compute_angle, axis=1)
         print("stat computation elapsed time: {}".format(t.time() - t_before))
         not_detected_traj.to_parquet(not_detected_path_data)
         detected_traj.to_parquet(detected_path_data)
 
-    
     n_speed_explode = not_detected_traj["speed"].explode(["speed"])
     n_speed_data = n_speed_explode.to_numpy()
-    sns.histplot(n_speed_data, bins=200, binrange=(0, 1), cbar_kws=dict(alpha=0.5), color="red")
-    
+    sns.histplot(
+        n_speed_data, bins=200, binrange=(0, 1), cbar_kws=dict(alpha=0.5), color="red"
+    )
+
     d_speed_explode = detected_traj["speed"].explode(["speed"])
     d_speed_data = d_speed_explode.to_numpy()
-    sns.histplot(d_speed_data[d_speed_data < params["sep_criterion"]], bins=200, binrange=(0, 1), cbar_kws=dict(alpha=0.5))
+    sns.histplot(
+        d_speed_data[d_speed_data < params["sep_criterion"]],
+        bins=200,
+        binrange=(0, 1),
+        cbar_kws=dict(alpha=0.5),
+    )
     plt.savefig(os.path.join(test_name, "speed_result"))
     plt.close()
 
     n_angle_explode = not_detected_traj["angle"].explode(["angle"])
     n_angle_data = n_angle_explode.to_numpy()
-    sns.histplot(n_angle_data, bins=200, binrange=(0, 8), cbar_kws=dict(alpha=0.5), color="red")
+    sns.histplot(
+        n_angle_data, bins=200, binrange=(0, 8), cbar_kws=dict(alpha=0.5), color="red"
+    )
 
     d_angle_explode = detected_traj["angle"].explode(["angle"])
     d_angle_data = d_angle_explode.to_numpy()
-    sns.histplot(d_angle_data[d_angle_data < params["angle_criterion"]], bins=200, binrange=(0, 8), cbar_kws=dict(alpha=0.5))
+    sns.histplot(
+        d_angle_data[d_angle_data < params["angle_criterion"]],
+        bins=200,
+        binrange=(0, 8),
+        cbar_kws=dict(alpha=0.5),
+    )
     plt.savefig(os.path.join(test_name, "angle_result"))
     plt.close()
-
-    
 
     # assoc_sso = (
     #     detected_sso.sort_values(["jd"])
@@ -588,13 +621,22 @@ if __name__ == "__main__":
     print(mpc_database.info())
 
     mpc_reduce = mpc_database[["a", "e", "i", "Number", "Orbit_type"]]
-    
+
     detected_real_mpc = mpc_reduce[mpc_reduce["Number"].isin(detected_traj["ssnamenr"])]
     detected_real_mpc["detected"] = True
-    not_detected_real_mpc = mpc_reduce[mpc_reduce["Number"].isin(not_detected_traj["ssnamenr"])]
+    not_detected_real_mpc = mpc_reduce[
+        mpc_reduce["Number"].isin(not_detected_traj["ssnamenr"])
+    ]
     not_detected_real_mpc["detected"] = False
     synthesis_mpc_result = pd.concat([detected_real_mpc, not_detected_real_mpc])
-    
-    g = sns.scatterplot(data=synthesis_mpc_result, x="a", y="e", hue="Orbit_type", markers=["v", "o"], style="detected")
+
+    g = sns.scatterplot(
+        data=synthesis_mpc_result,
+        x="a",
+        y="e",
+        hue="Orbit_type",
+        markers=["v", "o"],
+        style="detected",
+    )
     g.set(xlim=(0, 7))
     plt.show()
