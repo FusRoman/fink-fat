@@ -137,7 +137,7 @@ fink_fat/others/trajectory_output.parquet
 
 test_report/
 
-data/mpc_database/
+fink_fat/data/mpc_database/
 fink_fat/orbit_fitting/residuals/
 
 *.obs
