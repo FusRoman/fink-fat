@@ -2,14 +2,15 @@ import numpy as np
 import glob
 import os
 import pandas as pd
+import pkg_resources
 
 
-def load_data(object_class, nb_indirection=1):
+def load_data(object_class):
     all_df = []
 
-    parent_folder = "".join(np.repeat(np.array(["../"]), nb_indirection))
+    p = pkg_resources.resource_filename("fink_fat", "data/month=*")
 
-    all_path = sorted(glob.glob(os.path.join(parent_folder, "data", "month=*")))[:-1]
+    all_path = sorted(glob.glob(p))[:-1]
 
     # load all data
     for path in all_path:
@@ -25,14 +26,16 @@ def load_data(object_class, nb_indirection=1):
 
 
 def get_mpc_database(nb_indirection=0):
+    try:
+        parent_folder = "".join(np.repeat(np.array(["../"]), nb_indirection))
 
-    parent_folder = "".join(np.repeat(np.array(["../"]), nb_indirection))
-
-    mpc_database = pd.read_json(
-        os.path.join(parent_folder, "data", "mpc_database", "mpcorb_extended.json")
-    )
-    mpc_database["Number"] = mpc_database["Number"].astype("string").str[1:-1]
-    return mpc_database
+        mpc_database = pd.read_json(
+            os.path.join(parent_folder, "data", "mpc_database", "mpcorb_extended.json")
+        )
+        mpc_database["Number"] = mpc_database["Number"].astype("string").str[1:-1]
+        return mpc_database
+    except Exception:
+        print("don't use this function outside of the fink-fat directories and if the mpc_database has not been downloaded before.")
 
 
 def create_ranges(starts, ends, chunks_list):
