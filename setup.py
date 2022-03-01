@@ -6,7 +6,7 @@ print(find_packages(where="fink_fat"))
 
 setup(
     name="fink-fat",
-    version="0.2.2",
+    version="0.2.3",
     description="Associations of alerts to detect moving objects",
     author="Roman Le Montagner",
     author_email="roman.le-montagner@ijclab.in2p3.fr",
