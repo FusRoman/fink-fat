@@ -2,7 +2,6 @@ import numpy as np
 import glob
 import os
 import pandas as pd
-from fink_fat import __file__
 
 
 def load_data(object_class, nb_indirection=1):
@@ -90,11 +89,3 @@ def cast_obs_data(trajectories):
             dict_new_types[c] = np.float64
 
     return trajectories.astype(dict_new_types)
-
-
-if __name__ == "__main__":
-    path = os.path.dirname(__file__)
-
-    data_path = 'file://{}/data/month=*'.format(path)
-
-    print(data_path)
