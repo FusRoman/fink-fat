@@ -6,15 +6,15 @@ print(find_packages(where="fink_fat"))
 
 setup(
     name="fink-fat",
-    version="0.2.3",
+    version="0.2.5",
     description="Associations of alerts to detect moving objects",
     author="Roman Le Montagner",
     author_email="roman.le-montagner@ijclab.in2p3.fr",
     url="https://github.com/FusRoman/fink-fat",
     packages=find_packages(),
     package_data={
-        'data': [
-            'month=*'
+        'fink_fat': [
+            'data/month=*'
         ]
     },
     license="Apache-2.0 License",
