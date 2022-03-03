@@ -504,7 +504,7 @@ def night_to_night_association(
     inter_night_report = dict()
     inter_night_report["nid of the next night"] = int(next_nid)
 
-    if verbose:
+    if verbose: # pragma: no cover
         t_before = t.time()
 
     # intra night associations steps with the new observations
@@ -517,7 +517,7 @@ def night_to_night_association(
         run_metrics,
     )
 
-    if verbose:
+    if verbose: # pragma: no cover
         print("elapsed time to find tracklets : {}".format(t.time() - t_before))
 
     if len(most_recent_traj) == 0 and len(old_observation) == 0:
@@ -544,7 +544,7 @@ def night_to_night_association(
     # call tracklets_and_trajectories_steps if they have most_recent_traj and tracklets
     if len(most_recent_traj) > 0 and len(tracklets) > 0 and do_track_and_traj_assoc:
 
-        if verbose:
+        if verbose: # pragma: no cover
             t_before = t.time()
 
         (
@@ -565,7 +565,7 @@ def night_to_night_association(
             run_metrics,
         )
 
-        if verbose:
+        if verbose: # pragma: no cover
             print(
                 "elapsed time to associates tracklets with trajectories : {}".format(
                     t.time() - t_before
@@ -583,7 +583,7 @@ def night_to_night_association(
     # fmt: on
     if assoc_test:
 
-        if verbose:
+        if verbose: # pragma: no cover
             t_before = t.time()
 
         # perform associations with the recorded trajectories
@@ -605,7 +605,7 @@ def night_to_night_association(
             run_metrics,
         )
 
-        if verbose:
+        if verbose: # pragma: no cover
             print(
                 "elapsed time to associates new points to a trajectories : {}".format(
                     t.time() - t_before
@@ -621,7 +621,7 @@ def night_to_night_association(
     # fmt: on
     if test:
 
-        if verbose:
+        if verbose: # pragma: no cover
             t_before = t.time()
 
         # perform associations with the tracklets and the old observations
@@ -643,7 +643,7 @@ def night_to_night_association(
             run_metrics,
         )
 
-        if verbose:
+        if verbose: # pragma: no cover
             print(
                 "elapsed time to associates the old points to the tracklets  : {}".format(
                     t.time() - t_before
@@ -660,7 +660,7 @@ def night_to_night_association(
     # fmt: on
     if test:
 
-        if verbose:
+        if verbose: # pragma: no cover
             t_before = t.time()
         (
             new_trajectory,
@@ -679,7 +679,7 @@ def night_to_night_association(
             run_metrics,
         )
 
-        if verbose:
+        if verbose: # pragma: no cover
             print(
                 "elapsed time to associates couples of observations : {}".format(
                     t.time() - t_before
