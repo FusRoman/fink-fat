@@ -1880,9 +1880,12 @@ def time_window_management(
     keep_last=False,
 ):
     """
-    Management of the old observation and trajectories. Remove the old observation with a nid difference with
-    the nid of the next night greater than the time window. Perform the same process for trajectories but take
-    the most recent trajectory extremity.
+    Management of the old observation and trajectories.
+
+    Remove the old observation when the nid difference between the nid of the next night 
+    and the nid of the old observation are greater than the time window. 
+
+    Perform the same process for trajectories but take the most recent trajectory extremity.
 
     Remove also the trajectories with no computed orbit element.
 
