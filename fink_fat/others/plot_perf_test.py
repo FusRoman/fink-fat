@@ -297,13 +297,13 @@ def rm_list(a):
 
 if __name__ == "__main__":
     sns.set_context("talk")
-    sns.set(rc={"figure.figsize": (40, 15)})
+    # sns.set(rc={"figure.figsize": (40, 15)})
 
     test_name = "perf_test_6"
     if not os.path.isdir(test_name):
         os.mkdir(test_name)
 
-    df_sso = load_data("Solar System MPC", 0)
+    df_sso = load_data("Solar System MPC")
 
     trajectory_df = pd.read_parquet(
         "fink_fat/others/perf_test/{}.parquet".format(test_name)
@@ -614,29 +614,29 @@ if __name__ == "__main__":
 
     # exit()
 
-    print("Object analysis")
+    # print("Object analysis")
 
-    mpc_database = get_mpc_database(0)
+    # mpc_database = get_mpc_database(0)
 
-    print(mpc_database.info())
+    # print(mpc_database.info())
 
-    mpc_reduce = mpc_database[["a", "e", "i", "Number", "Orbit_type"]]
+    # mpc_reduce = mpc_database[["a", "e", "i", "Number", "Orbit_type"]]
 
-    detected_real_mpc = mpc_reduce[mpc_reduce["Number"].isin(detected_traj["ssnamenr"])]
-    detected_real_mpc["detected"] = True
-    not_detected_real_mpc = mpc_reduce[
-        mpc_reduce["Number"].isin(not_detected_traj["ssnamenr"])
-    ]
-    not_detected_real_mpc["detected"] = False
-    synthesis_mpc_result = pd.concat([detected_real_mpc, not_detected_real_mpc])
+    # detected_real_mpc = mpc_reduce[mpc_reduce["Number"].isin(detected_traj["ssnamenr"])]
+    # detected_real_mpc["detected"] = True
+    # not_detected_real_mpc = mpc_reduce[
+    #     mpc_reduce["Number"].isin(not_detected_traj["ssnamenr"])
+    # ]
+    # not_detected_real_mpc["detected"] = False
+    # synthesis_mpc_result = pd.concat([detected_real_mpc, not_detected_real_mpc])
 
-    g = sns.scatterplot(
-        data=synthesis_mpc_result,
-        x="a",
-        y="e",
-        hue="Orbit_type",
-        markers=["v", "o"],
-        style="detected",
-    )
-    g.set(xlim=(0, 7))
-    plt.show()
+    # g = sns.scatterplot(
+    #     data=synthesis_mpc_result,
+    #     x="a",
+    #     y="e",
+    #     hue="Orbit_type",
+    #     markers=["v", "o"],
+    #     style="detected",
+    # )
+    # g.set(xlim=(0, 7))
+    # plt.show()
