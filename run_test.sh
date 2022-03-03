@@ -22,7 +22,7 @@ export COVERAGE_PROCESS_START="${ROOTPATH}/.coveragerc"
 
 set -e
 
-make simple_build
+make simple_install
 
 
 # Run the test suite

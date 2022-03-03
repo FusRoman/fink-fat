@@ -643,9 +643,7 @@ def tracklets_and_trajectories_associations(
         return trajectories, tracklets, max_traj_id, {}
     else:
 
-        trajectories_not_updated = trajectories[
-            trajectories["not_updated"] & (trajectories["a"] == -1.0)
-        ]
+        trajectories_not_updated = trajectories[trajectories["not_updated"]]
         trajectories_and_tracklets_associations_report = dict()
 
         # get the last two observations for each trajectories
@@ -1102,9 +1100,8 @@ def trajectories_with_new_observations_associations(
         return trajectories, new_observations, max_traj_id, {}
     else:
 
-        trajectories_not_updated = trajectories[
-            trajectories["not_updated"] & (trajectories["a"] == -1.0)
-        ]
+        # get only the trajectories not updated by a previous step
+        trajectories_not_updated = trajectories[trajectories["not_updated"]]
 
         trajectories_and_observations_associations_report = dict()
 
@@ -1876,14 +1873,13 @@ def time_window_management(
     traj_time_window,
     obs_time_window,
     traj_2_points_time_windows,
-    orbfit_limit,
     keep_last=False,
 ):
     """
     Management of the old observation and trajectories.
 
-    Remove the old observation when the nid difference between the nid of the next night 
-    and the nid of the old observation are greater than the time window. 
+    Remove the old observation when the nid difference between the nid of the next night
+    and the nid of the old observation are greater than the time window.
 
     Perform the same process for trajectories but take the most recent trajectory extremity.
 
@@ -1934,8 +1930,7 @@ def time_window_management(
     ... "candid" : [10, 11, 12, 13, 14, 15],
     ... "nid" : [1, 2, 3, 10, 11, 12],
     ... "jd" : [1, 2, 3, 10, 11, 12],
-    ... "trajectory_id" : [1, 1, 1, 2, 2, 2],
-    ... "a": [2.5, 2.5, 2.5, -1, -1, -1]
+    ... "trajectory_id" : [1, 1, 1, 2, 2, 2]
     ... })
 
     >>> test_obs = pd.DataFrame({
@@ -1943,22 +1938,20 @@ def time_window_management(
     ... "candid" : [16, 17, 18, 19]
     ... })
 
-    >>> (test_old_traj, test_most_recent_traj), test_old_obs = time_window_management(test_traj, test_obs, 12, 17, 3, 3, 3, 5, True)
+    >>> (test_old_traj, test_most_recent_traj), test_old_obs = time_window_management(test_traj, test_obs, 12, 17, 3, 3, 3, True)
 
     >>> expected_old_traj = pd.DataFrame({
     ... "candid" : [10, 11, 12],
     ... "nid" : [1, 2, 3],
     ... "jd" : [1, 2, 3],
-    ... "trajectory_id" : [1, 1, 1],
-    ... "a" : [2.5, 2.5, 2.5]
+    ... "trajectory_id" : [1, 1, 1]
     ... })
 
     >>> expected_most_recent_traj = pd.DataFrame({
     ... "candid" : [13, 14, 15],
     ... "nid" : [10, 11, 12],
     ... "jd" : [10, 11, 12],
-    ... "trajectory_id" : [2, 2, 2],
-    ... "a": [-1.0, -1.0, -1.0]
+    ... "trajectory_id" : [2, 2, 2]
     ... })
 
     >>> assert_frame_equal(expected_old_traj.reset_index(drop=True), test_old_traj.reset_index(drop=True))
@@ -1969,8 +1962,7 @@ def time_window_management(
     ... "candid" : [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29],
     ... "nid" : [1, 2, 3, 10, 11, 12, 13, 14, 15, 16, 17, 18, 17, 18, 13, 14, 3, 8, 12, 16],
     ... "jd" : [1, 2, 3, 10, 11, 12, 13, 14, 15, 16, 17, 18, 17, 18, 13, 14, 3, 8, 12, 16],
-    ... "trajectory_id" : [1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 6, 6, 7, 7, 7, 7],
-    ... "a": [2.5, 2.5, 2.5, -1, -1, -1, 1.5, 1.5, 1.5, 2.3, 2.3, 2.3, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]
+    ... "trajectory_id" : [1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 6, 6, 7, 7, 7, 7]
     ... })
 
     >>> test_obs = pd.DataFrame({
@@ -1978,11 +1970,11 @@ def time_window_management(
     ... "candid" : [22, 23, 24, 25, 26, 27, 28, 29, 30]
     ... })
 
-    >>> (test_old_traj, test_most_recent_traj), test_old_obs = time_window_management(test_traj, test_obs, 15, 18, 5, 4, 3, 5)
+    >>> (test_old_traj, test_most_recent_traj), test_old_obs = time_window_management(test_traj, test_obs, 15, 18, 5, 4, 3)
 
-    >>> expected_old_traj = pd.DataFrame({'candid': [10, 11, 12], 'nid': [1, 2, 3], 'jd': [1, 2, 3], 'trajectory_id': [1, 1, 1], 'a': [2.5, 2.5, 2.5]})
+    >>> expected_old_traj = pd.DataFrame({'candid': [10, 11, 12, 13, 14, 15], 'nid': [1, 2, 3, 10, 11, 12], 'jd': [1, 2, 3, 10, 11, 12], 'trajectory_id': [1, 1, 1, 2, 2, 2]})
 
-    >>> expected_most_recent_traj = pd.DataFrame({'candid': [16, 17, 18, 19, 20, 21, 22, 23, 26, 27, 28, 29], 'nid': [13, 14, 15, 16, 17, 18, 17, 18, 3, 8, 12, 16], 'jd': [13, 14, 15, 16, 17, 18, 17, 18, 3, 8, 12, 16], 'trajectory_id': [3, 3, 3, 4, 4, 4, 5, 5, 7, 7, 7, 7], 'a': [1.5, 1.5, 1.5, 2.3, 2.3, 2.3, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]})
+    >>> expected_most_recent_traj = pd.DataFrame({'candid': [16, 17, 18, 19, 20, 21, 22, 23, 26, 27, 28, 29], 'nid': [13, 14, 15, 16, 17, 18, 17, 18, 3, 8, 12, 16], 'jd': [13, 14, 15, 16, 17, 18, 17, 18, 3, 8, 12, 16], 'trajectory_id': [3, 3, 3, 4, 4, 4, 5, 5, 7, 7, 7, 7]})
 
     >>> expected_old_obs = pd.DataFrame({'nid': [14, 15, 17, 18], 'candid': [26, 27, 28, 29]})
 
@@ -1998,8 +1990,7 @@ def time_window_management(
     ... 10,
     ... 5,
     ... 2,
-    ... 5,
-    ... 3
+    ... 5
     ... )
 
     >>> assert_frame_equal(old_traj.reset_index(drop=True), ts.old_traj_expected.reset_index(drop=True))
@@ -2034,18 +2025,15 @@ def time_window_management(
                 most_recent_traj.groupby(["trajectory_id"]).count().reset_index()
             )
 
-            # keep only the trajectories with less than orbfit_limit point and more than 2 points
+            # keep only the trajectories with more than 2 points
             # if the difference of night is greater than the time window
-            test_1 = most_recent_traj["trajectory_id"].isin(
-                traj_size[(traj_size["nid"] < orbfit_limit) & (traj_size["nid"] > 2)][
-                    "trajectory_id"
-                ]
+            test = most_recent_traj["trajectory_id"].isin(
+                traj_size[traj_size["nid"] > 2]["trajectory_id"]
             )
-            test_2 = most_recent_traj["a"] != -1.0
 
-            most_recent_traj = most_recent_traj[(test_1 | test_2)]
+            most_recent_traj = most_recent_traj[test]
 
-            oldest_traj = trajectory_df[~mask_traj & (trajectory_df["a"] != -1.0)]
+            oldest_traj = trajectory_df[~mask_traj]
 
             # return the trajectories from the last night id
             return (oldest_traj, most_recent_traj), pd.DataFrame(columns=["nid"])
@@ -2069,30 +2057,25 @@ def time_window_management(
             most_recent_last_obs[["trajectory_id", "diff_nid"]], on="trajectory_id"
         )
 
-        # Keep trajectories with less than orbfit_limit point and more than 2 points
+        # Keep trajectories with more than 2 points
         test_1 = most_recent_traj["trajectory_id"].isin(
-            traj_size[(traj_size["nid"] <= orbfit_limit) & (traj_size["nid"] > 2)][
-                "trajectory_id"
-            ]
+            traj_size[traj_size["nid"] > 2]["trajectory_id"]
         )
 
-        # Keep trajectories with orbital elements
-        test_2 = most_recent_traj["a"] != -1.0
-
         # get the trajectories with only two points
-        test_3_1 = most_recent_traj["trajectory_id"].isin(
+        test_2_1 = most_recent_traj["trajectory_id"].isin(
             traj_size[traj_size["nid"] == 2]["trajectory_id"]
         )
 
         # keep the trajectories with two points and that not exceed the time windows for the trajectories with 2 points
-        test_3_2 = most_recent_traj["diff_nid"] <= traj_2_points_time_windows
-        test_3 = test_3_1 & test_3_2
+        test_2_2 = most_recent_traj["diff_nid"] <= traj_2_points_time_windows
+        test_2 = test_2_1 & test_2_2
 
-        most_recent_traj = most_recent_traj[(test_1 | test_2 | test_3)]
+        most_recent_traj = most_recent_traj[(test_1 | test_2)]
 
         most_recent_traj = most_recent_traj.drop(["diff_nid"], axis=1)
 
-        oldest_traj = trajectory_df[~mask_traj & (trajectory_df["a"] != -1.0)]
+        oldest_traj = trajectory_df[~mask_traj]
 
     diff_nid_old_observation = nid_next_night - old_observation["nid"]
     old_observation = old_observation[diff_nid_old_observation <= obs_time_window]
