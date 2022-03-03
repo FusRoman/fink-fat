@@ -159,3 +159,6 @@ trajectory_df.parquet
 fink_fat/others/perf_test
 
 perf_test_*/
+
+fink_fat/others/plot_perf_test.py
+fink_fat/others/night_report.py
