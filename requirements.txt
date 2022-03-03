@@ -12,3 +12,6 @@ pandera
 
 # Astro
 astropy
+
+# packaging
+build
