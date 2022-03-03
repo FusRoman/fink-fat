@@ -1,5 +1,3 @@
-sudo apt install gfortran
-
 wget http://adams.dm.unipi.it/orbfit/OrbFit5.0.7.tar.gz
 
 if [[ ! -d OrbitFit/ ]]
