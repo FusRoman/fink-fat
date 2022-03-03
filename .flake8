@@ -9,6 +9,8 @@ exclude =
     old,
     build,
     dist
+    fink_fat/others/plot_perf_test.py
+    fink_fat/others/night_report.py
 count
 show-source
 statistics
