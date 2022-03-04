@@ -1,7 +1,7 @@
 """
 Usage: 
     fink_fat association (mpc | candidates) [--night <date>] [options]
-    fink_fat solve_orbit [options]
+    fink_fat solve_orbit (mpc | candidates) [options]
     fink_fat -h | --help
     fink_fat --version
 
@@ -21,9 +21,6 @@ Options:
 """
 
 from docopt import docopt
-from fink_fat.associations.inter_night_associations import night_to_night_association
-from fink_fat.others.utils import cast_obs_data
-import fink_fat
 import configparser
 import os
 import pandas as pd
@@ -32,6 +29,11 @@ import datetime
 import requests
 from fink_science.conversion import dc_mag
 from astropy import units as u
+
+import fink_fat
+from fink_fat.associations.inter_night_associations import night_to_night_association
+from fink_fat.others.utils import cast_obs_data
+from fink_fat.orbit_fitting.orbfit_management import compute_df_orbit_param
 
 
 def string_to_bool(str):
@@ -102,11 +104,7 @@ def get_last_sso_alert(object_class, date, verbose=False):
     return pdf[required_columns]
 
 
-if __name__ == "__main__":
-    
-    # parse the command line and return options provided by the user.
-    arguments = docopt(__doc__, version=fink_fat.__version__)
-
+def init_cli(arguments):
     # read the config file
     config = configparser.ConfigParser()
     config.read(arguments["--config"])
@@ -117,20 +115,34 @@ if __name__ == "__main__":
 
     if not os.path.isdir(output_path):
         os.mkdir(output_path)
+    
+    return config, output_path
+
+def get_class(arguments, path):
+    if arguments["mpc"]:
+        path = os.path.join(path, "mpc", "")
+        if not os.path.isdir(path):
+            os.mkdir(path)
+        object_class = "Solar System MPC"
+
+    elif arguments["candidates"]:
+        path = os.path.join(path, "candidates", "")
+        if not os.path.isdir(path):
+            os.mkdir(path)
+        object_class = "Solar System candidate"
+    
+    return path, object_class
+
+if __name__ == "__main__":
+
+    # parse the command line and return options provided by the user.
+    arguments = docopt(__doc__, version=fink_fat.__version__)
+
+    config, output_path = init_cli(arguments)
 
     if arguments["association"]:
 
-        if arguments["mpc"]:
-            output_path = os.path.join(output_path, "mpc", "")
-            if not os.path.isdir(output_path):
-                os.mkdir(output_path)
-            object_class = "Solar System MPC"
-
-        elif arguments["candidates"]:
-            output_path = os.path.join(output_path, "candidates", "")
-            if not os.path.isdir(output_path):
-                os.mkdir(output_path)
-            object_class = "Solar System candidate"
+        output_path, object_class = get_class(arguments, output_path)
 
         tr_df_path = os.path.join(output_path, "trajectory_df.parquet")
         obs_df_path = os.path.join(output_path, "old_obs.parquet")
@@ -235,4 +247,24 @@ if __name__ == "__main__":
             print("Association done")
 
     elif arguments["solve_orbit"]:
-        print("orbit")
+        
+        output_path, object_class = get_class(arguments, output_path)
+        tr_df_path = os.path.join(output_path, "trajectory_df.parquet")
+
+        # test if the trajectory_df and old_obs_df exists in the output directory.
+        if os.path.exists(tr_df_path):
+            trajectory_df = pd.read_parquet(tr_df_path)
+        else:
+            print("Trajectory file doesn't exist, run 'fink_fat association (mpc | candidates)' to create it.")
+            exit()
+
+        orbit_results = compute_df_orbit_param(
+            trajectory_df,
+            int(config["SOLVE_ORBIT_PARAMS"]["cpu_count"]),
+            config["SOLVE_ORBIT_PARAMS"]["ram_dir"]
+            )
+
+        print(orbit_results)
+
+
+
