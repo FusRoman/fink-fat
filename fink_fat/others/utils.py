@@ -35,7 +35,9 @@ def get_mpc_database(nb_indirection=0):
         mpc_database["Number"] = mpc_database["Number"].astype("string").str[1:-1]
         return mpc_database
     except Exception:
-        print("don't use this function outside of the fink-fat directories and if the mpc_database has not been downloaded before.")
+        print(
+            "don't use this function outside of the fink-fat directories and if the mpc_database has not been downloaded before."
+        )
 
 
 def create_ranges(starts, ends, chunks_list):
