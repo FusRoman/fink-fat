@@ -75,13 +75,11 @@ def ci_function(
         last_nid = next_nid
 
     ci_df = pd.read_parquet(path_ci)
-    trajectory_df = trajectory_df.drop(["provisional designation"], axis=1)
 
     assert_frame_equal(
         trajectory_df.sort_values(["trajectory_id", "jd"]).reset_index(drop=True),
         ci_df.sort_values(["trajectory_id", "jd"]).reset_index(drop=True),
         check_dtype=False,
-        rtol=1e-4,
     )
 
 
