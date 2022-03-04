@@ -12,6 +12,7 @@ Options:
                                    Format is yyyy-mm-dd as yyyy = year, mm = month, dd = day.
                                    Example : 2022-03-04 for the 2022 march 04.
                                    [intervall of day between the day starting at night midday until night midday + 1]
+  -r --reset                       Remove the file containing the trajectories and the old observations.
   -h --help                        Show help and quit.
   --version                        Show version.
   --config FILE                    Specify the config file [default: conf/fink_fat.conf]
@@ -21,6 +22,7 @@ Options:
 
 from docopt import docopt
 from fink_fat.associations.inter_night_associations import night_to_night_association
+from fink_fat.others.utils import cast_obs_data
 import fink_fat
 import configparser
 import os
@@ -40,9 +42,7 @@ def string_to_bool(str):
 
 
 def get_last_sso_alert(object_class, date, verbose=False):
-    date_obj = datetime.datetime.strptime(date, "%Y-%m-%d")
-    midday = datetime.time(12, 00)
-    startdate = datetime.datetime.combine(date_obj, midday)
+    startdate = datetime.datetime.strptime(date, "%Y-%m-%d")
     stopdate = startdate + datetime.timedelta(days=1)
 
     if verbose:
@@ -56,15 +56,14 @@ def get_last_sso_alert(object_class, date, verbose=False):
         "https://fink-portal.org/api/v1/latests",
         json={
             "class": object_class,
-            "n": "10000000",
+            "n": "100",
             "startdate": str(startdate),
             "stopdate": str(stopdate),
         },
     )
-
     pdf = pd.read_json(r.content)
 
-    required_columns = ["ra", "dec", "jd", "nid", "fid", "dcmag", "candid"]
+    required_columns = ["ra", "dec", "jd", "nid", "fid", "dcmag", "candid", "not_updated"]
     translate_columns = {
         "i:ra": "ra",
         "i:dec": "dec",
@@ -99,10 +98,12 @@ def get_last_sso_alert(object_class, date, verbose=False):
     else:
         return pd.DataFrame(columns=required_columns)
 
+    pdf.insert(len(pdf.columns), "not_updated", np.ones(len(pdf), dtype=np.bool_))
     return pdf[required_columns]
 
 
 if __name__ == "__main__":
+    
     # parse the command line and return options provided by the user.
     arguments = docopt(__doc__, version=fink_fat.__version__)
 
@@ -119,51 +120,76 @@ if __name__ == "__main__":
 
     if arguments["association"]:
 
-        last_night = datetime.datetime.now() - datetime.timedelta(days=1)
-        last_night = last_night.strftime("%Y-%m-%d")
-        if arguments["--night"]:
-            last_night = arguments["--night"]
-
         if arguments["mpc"]:
             output_path = os.path.join(output_path, "mpc", "")
             if not os.path.isdir(output_path):
                 os.mkdir(output_path)
-
-            new_alerts = get_last_sso_alert(
-                "Solar System MPC", last_night, arguments["--verbose"]
-            )
+            object_class = "Solar System MPC"
 
         elif arguments["candidates"]:
             output_path = os.path.join(output_path, "candidates", "")
             if not os.path.isdir(output_path):
                 os.mkdir(output_path)
+            object_class = "Solar System candidate"
 
-            new_alerts = get_last_sso_alert(
-                "Solar System candidate", last_night, arguments["--verbose"]
-            )
+        tr_df_path = os.path.join(output_path, "trajectory_df.parquet")
+        obs_df_path = os.path.join(output_path, "old_obs.parquet")
+
+        if arguments["--reset"]:
+            print("WARNING !!!")
+            print("you will loose the trajectory done by previous association, Continue ? [Y/n]")
+            answer = ""
+            while(answer.upper() not in  ["Y", "YES", "N", "NO"]):
+                answer = input("Continue?")
+                if answer.upper() in ["Y", "YES"]:
+                    if os.path.exists(tr_df_path) and os.path.exists(obs_df_path):
+                        print("Removing files :\n\t{}\n\t{}".format(tr_df_path, obs_df_path))
+                        try:
+                            os.remove(tr_df_path)
+                            os.remove(obs_df_path)
+                        except OSError as e: # name the Exception `e`
+                            print("Failed with:", e.strerror) # look what it says
+                            print("Error code:", e.code)
+                    else:
+                        print("File trajectory and old observations not exists.")
+                elif answer.upper() in ["N", "NO"]:
+                    print("Abort reset.")
+                else:
+                    print("please, answer with y or n.")
+
+        last_night = datetime.datetime.now() - datetime.timedelta(days=1)
+        last_night = last_night.strftime("%Y-%m-%d")
+        if arguments["--night"]:
+            last_night = arguments["--night"]
+
+        new_alerts = get_last_sso_alert(
+            object_class, last_night, arguments["--verbose"]
+        )
 
         if len(new_alerts) == 0:
             print("no alerts available for this night")
             exit()
 
         last_nid = next_nid = new_alerts["nid"][0]
-        # test if the trajectory_df and old_obs_df exists in the output directory.
-        tr_df_path = os.path.join(output_path, "trajectory_df.parquet")
-        obs_df_path = os.path.join(output_path, "old_obs.parquet")
-
         trajectory_df = pd.DataFrame(columns=new_alerts.columns)
         old_obs_df = pd.DataFrame(columns=new_alerts.columns)
 
+        # test if the trajectory_df and old_obs_df exists in the output directory.
         if os.path.exists(tr_df_path) and os.path.exists(obs_df_path):
+            
             trajectory_df = pd.read_parquet(tr_df_path)
             old_obs_df = pd.read_parquet(obs_df_path)
             last_nid = np.max([np.max(trajectory_df["nid"]), np.max(old_obs_df["nid"])])
             if last_nid == next_nid:
+                print()
+                print("ERROR !!!")
                 print("Association already done for this night.")
                 print("Wait a next observation night to do new association")
                 print("or run 'fink_fat solve_orbit' to get orbital_elements.")
                 exit()
             if last_nid > next_nid:
+                print()
+                print("ERROR !!!")
                 print(
                     "Query alerts from a night before the last night in the recorded trajectory/old_observations."
                 )
@@ -198,11 +224,15 @@ if __name__ == "__main__":
             string_to_bool(
                 config["ASSOC_SYSTEM"]["new_observations_with_old_observations"]
             ),
-            arguments["--verbose"],
+            arguments["--verbose"]
         )
 
-        trajectory_df.to_parquet(tr_df_path)
-        old_obs_df.to_parquet(obs_df_path)
+
+        cast_obs_data(trajectory_df).to_parquet(tr_df_path)
+        cast_obs_data(old_obs_df).to_parquet(obs_df_path)
+
+        if arguments["--verbose"]:
+            print("Association done")
 
     elif arguments["solve_orbit"]:
         print("orbit")
