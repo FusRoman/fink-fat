@@ -247,13 +247,12 @@ def night_to_night_association(
     angle_criterion=8.8,
     store_kd_tree=False,
     orbfit_limit=3,
-    ram_dir="",
-    run_metrics=False,
     do_track_and_traj_assoc=True,
     do_traj_and_new_obs_assoc=True,
     do_track_and_old_obs_assoc=True,
     do_new_obs_and_old_obs_assoc=True,
     verbose=False,
+    run_metrics=False,
 ):
     """
     Perform night to night associations.
@@ -263,9 +262,9 @@ def night_to_night_association(
     1. associates the recorded trajectories with the new tracklets detected in the new night.
     Associations based on the extremity alerts of the trajectories and the tracklets.
 
-    2. associates the old observations with the extremity of the new tracklets.
+    2. associates the new observations with the extremity of the recorded trajectories.
 
-    3. associates the new observations with the extremity of the recorded trajectories.
+    3. associates the old observations with the extremity of the new tracklets.
 
     4. associates the remaining old observations with the remaining new observations.
 
