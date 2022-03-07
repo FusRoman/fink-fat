@@ -7,10 +7,13 @@ Usage:
     fink_fat --version
 
 Options:
-  mpc                              Return the associations on the solar system mpc alerts (only for tests purpose).
-  candidates                       Run the associations on the solar system candidates alerts.
+  associations                     Perform associations of alert to return a set of trajectories candidates.
+  solve_orbit                      Resolve a dynamical inverse problem to return a set of orbital elements from
+                                   the set of trajectories candidates.
   stats                            Print statistics about trajectories detected by assocations, the old observations
                                    and, if exists, the orbital elements for some trajectories.
+  mpc                              Return the associations on the solar system mpc alerts (only for tests purpose).
+  candidates                       Run the associations on the solar system candidates alerts.
   -n <date> --night <date>         Specify the night to request sso alerts from fink broker.
                                    Format is yyyy-mm-dd as yyyy = year, mm = month, dd = day.
                                    Example : 2022-03-04 for the 2022 march 04.
@@ -18,7 +21,7 @@ Options:
   -r --reset                       Remove the file containing the trajectories and the old observations.
   -h --help                        Show help and quit.
   --version                        Show version.
-  --config FILE                    Specify the config file [default: conf/fink_fat.conf]
+  --config FILE                    Specify the config file
   --output PATH                    Specify the out directory. A default path is set in the default fink_fat.conf
   --verbose                        Print information and progress bar during the process
 """
@@ -41,8 +44,8 @@ from fink_fat.others.utils import cast_obs_data
 from fink_fat.orbit_fitting.orbfit_local import compute_df_orbit_param
 
 
-def string_to_bool(str):
-    if str.casefold() == "false".casefold():
+def string_to_bool(bool_str):
+    if bool_str.casefold() == "false".casefold():
         return False
     else:
         return True
@@ -119,9 +122,17 @@ def get_last_sso_alert(object_class, date, verbose=False):
 
 
 def init_cli(arguments):
+
     # read the config file
     config = configparser.ConfigParser()
-    config.read(arguments["--config"])
+
+    if arguments["--config"]:
+        config.read(arguments["--config"])
+    else:
+        config_path = os.path.join(fink_fat.__file__, "data", "fink_fat.conf")
+        print(config_path)
+        config.read(config_path)
+
     output_path = config["OUTPUT"]["association_output_file"]
 
     if arguments["--output"]:
@@ -149,7 +160,7 @@ def get_class(arguments, path):
     return path, object_class
 
 
-if __name__ == "__main__":
+def main():
 
     # parse the command line and return options provided by the user.
     arguments = docopt(__doc__, version=fink_fat.__version__)
@@ -407,3 +418,6 @@ if __name__ == "__main__":
             )
         else:
             print("No trajectories with orbital elements found")
+    
+    else:
+        exit()
