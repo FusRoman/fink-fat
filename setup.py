@@ -11,7 +11,7 @@ setup(
     author_email="roman.le-montagner@ijclab.in2p3.fr",
     url="https://github.com/FusRoman/fink-fat",
     packages=find_packages(),
-    package_data={"fink_fat": ["data/month=*"]},
+    package_data={"fink_fat": ["data/month=*", "orbit_fitting/AST17.*", "orbit_fitting/template.oop"]},
     license="Apache-2.0 License",
     platforms="Linux Debian distribution",
     project_urls={

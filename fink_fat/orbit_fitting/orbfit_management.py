@@ -10,6 +10,7 @@ import re
 import subprocess
 import os
 import multiprocessing as mp
+from fink_fat import __file__
 
 import traceback
 import logging
@@ -565,7 +566,8 @@ def write_oop(ram_dir, provisional_designation):
 
     >>> os.remove("K69O00A.oop")
     """
-    oop_template = os.path.join("fink_fat", "orbit_fitting", "template.oop")
+    fink_fat_path = os.path.dirname(__file__)
+    oop_template = os.path.join(fink_fat_path, "orbit_fitting", "template.oop")
 
     copyfile(oop_template, ram_dir + provisional_designation + ".oop")
     with open(ram_dir + provisional_designation + ".oop", "a") as file:
@@ -610,17 +612,22 @@ def prep_orbitfit(ram_dir):
     >>> os.remove("AST17.bep")
     """
 
-    orbfit_path = os.path.join("fink_fat", "orbit_fitting")
-    dir_path = ram_dir + "mpcobs/"
+    try:
+        fink_fat_path = os.path.dirname(__file__)
+        orbfit_path = os.path.join(fink_fat_path, "orbit_fitting")
+        dir_path = ram_dir + "mpcobs/"
 
-    if not os.path.isdir(dir_path):
-        os.mkdir(dir_path)
+        if not os.path.isdir(dir_path):
+            os.mkdir(dir_path)
 
-    copyfile(os.path.join(orbfit_path, "AST17.bai_431_fcct"), ram_dir + "AST17.bai")
-    os.chmod(ram_dir + "AST17.bai", 0o777)
+        copyfile(os.path.join(orbfit_path, "AST17.bai_431_fcct"), ram_dir + "AST17.bai")
+        os.chmod(ram_dir + "AST17.bai", 0o777)
 
-    copyfile(os.path.join(orbfit_path, "AST17.bep_431_fcct"), ram_dir + "AST17.bep")
-    os.chmod(ram_dir + "AST17.bep", 0o777)
+        copyfile(os.path.join(orbfit_path, "AST17.bep_431_fcct"), ram_dir + "AST17.bep")
+        os.chmod(ram_dir + "AST17.bep", 0o777)
+    except Exception as e:
+        logging.error(traceback.format_exc())
+
 
 
 def call_orbitfit(ram_dir, provisional_designation):
@@ -652,11 +659,9 @@ def call_orbitfit(ram_dir, provisional_designation):
     >>> os.remove("fink_fat/test/call_orbfit/K21E00A.pro")
     >>> os.remove("fink_fat/test/call_orbfit/mpcobs/K21E00A.rwo")
     """
-    orbitfit_path = os.path.join("OrbitFit", "bin/")
-
+    orbitfit_path = os.path.join("~", "OrbitFit", "bin", "")
     command = (
-        "./"
-        + orbitfit_path
+        orbitfit_path
         + "orbfit.x < "
         + ram_dir
         + provisional_designation

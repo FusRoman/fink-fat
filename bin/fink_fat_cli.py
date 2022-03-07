@@ -1,13 +1,16 @@
 """
 Usage: 
-    fink_fat association (mpc | candidates) [--night <date>] [options]
+    fink_fat associations (mpc | candidates) [--night <date>] [options]
     fink_fat solve_orbit (mpc | candidates) [options]
+    fink_fat stats (mpc | candidates) [options]
     fink_fat -h | --help
     fink_fat --version
 
 Options:
-  mpc                              Return the associations on the solar system mpc alerts (only for tests purpose)
-  candidates                       Run the associations on the solar system candidates alerts
+  mpc                              Return the associations on the solar system mpc alerts (only for tests purpose).
+  candidates                       Run the associations on the solar system candidates alerts.
+  stats                            Print statistics about trajectories detected by assocations, the old observations
+                                   and, if exists, the orbital elements for some trajectories.
   -n <date> --night <date>         Specify the night to request sso alerts from fink broker.
                                    Format is yyyy-mm-dd as yyyy = year, mm = month, dd = day.
                                    Example : 2022-03-04 for the 2022 march 04.
@@ -20,6 +23,8 @@ Options:
   --verbose                        Print information and progress bar during the process
 """
 
+from collections import Counter
+from collections import OrderedDict
 from docopt import docopt
 import configparser
 import os
@@ -140,7 +145,7 @@ if __name__ == "__main__":
 
     config, output_path = init_cli(arguments)
 
-    if arguments["association"]:
+    if arguments["associations"]:
 
         output_path, object_class = get_class(arguments, output_path)
 
@@ -159,9 +164,10 @@ if __name__ == "__main__":
                         try:
                             os.remove(tr_df_path)
                             os.remove(obs_df_path)
-                        except OSError as e: # name the Exception `e`
-                            print("Failed with:", e.strerror) # look what it says
-                            print("Error code:", e.code)
+                        except OSError as e:
+                            if arguments["--verbose"]:
+                                print("Failed with:", e.strerror)
+                                print("Error code:", e.code)
                     else:
                         print("File trajectory and old observations not exists.")
                 elif answer.upper() in ["N", "NO"]:
@@ -250,21 +256,116 @@ if __name__ == "__main__":
         
         output_path, object_class = get_class(arguments, output_path)
         tr_df_path = os.path.join(output_path, "trajectory_df.parquet")
+        orb_res_path = os.path.join(output_path, "orbital.parquet")
+        traj_orb_path = os.path.join(output_path, "trajectory_orb.parquet")
 
-        # test if the trajectory_df and old_obs_df exists in the output directory.
+        if arguments["--reset"]:
+            print("WARNING !!!")
+            print("you will loose the previously computed orbital elements and all the associated observations, Continue ? [Y/n]")
+            answer = ""
+            while(answer.upper() not in  ["Y", "YES", "N", "NO"]):
+                answer = input("Continue?")
+                if answer.upper() in ["Y", "YES"]:
+                    if os.path.exists(orb_res_path) and os.path.exists(traj_orb_path):
+                        print("Removing files :\n\t{}\n\t".format(orb_res_path, traj_orb_path))
+                        try:
+                            os.remove(orb_res_path)
+                            os.remove(traj_orb_path)
+                        except OSError as e:
+                            if arguments["--verbose"]:
+                                print("Failed with:", e.strerror)
+                                print("Error code:", e.code)
+                    else:
+                        print("File with orbital elements not exists.")
+                elif answer.upper() in ["N", "NO"]:
+                    print("Abort reset.")
+                else:
+                    print("please, answer with y or n.")
+
+        # test if the trajectory_df exist in the output directory.
         if os.path.exists(tr_df_path):
             trajectory_df = pd.read_parquet(tr_df_path)
         else:
             print("Trajectory file doesn't exist, run 'fink_fat association (mpc | candidates)' to create it.")
             exit()
 
-        orbit_results = compute_df_orbit_param(
-            trajectory_df,
-            int(config["SOLVE_ORBIT_PARAMS"]["cpu_count"]),
-            config["SOLVE_ORBIT_PARAMS"]["ram_dir"]
-            )
+        
+        # get trajectories with a number of points greater than the orbfit limit
+        gb = trajectory_df.groupby(["trajectory_id"]).count().reset_index()
+        traj = gb[gb["ra"] >= int(config["SOLVE_ORBIT_PARAMS"]["orbfit_limit"])]["trajectory_id"]
+        traj_to_orbital = trajectory_df[trajectory_df["trajectory_id"].isin(traj)]
 
-        print(orbit_results)
+        if len(traj_to_orbital) > 0:
+            orbit_results = compute_df_orbit_param(
+                traj_to_orbital,
+                int(config["SOLVE_ORBIT_PARAMS"]["cpu_count"]),
+                config["SOLVE_ORBIT_PARAMS"]["ram_dir"]
+                )
+
+            if len(orbit_results) > 0:
+                traj_with_orb = orbit_results["trajectory_id"]
+                test_orb = trajectory_df["trajectory_id"].isin(traj_with_orb)
+
+                obs_with_orb = trajectory_df[test_orb]
+                obs_without_orb = trajectory_df[~test_orb]
+
+                if os.path.exists(orb_res_path):
+                    orb_df = pd.read_parquet(orb_res_path)
+                    orb_df = pd.concat([orb_df, orbit_results])
+                    orb_df.to_parquet(orb_res_path)
+                else:
+                    orbit_results.to_parquet(orb_res_path)
+                
+                if os.path.exists(traj_orb_path):
+                    traj_orb_df = pd.read_parquet(traj_orb_path)
+                    traj_orb_df = pd.concat([traj_orb_df, obs_with_orb])
+                    traj_orb_df.to_parquet(traj_orb_path)
+                else:
+                    obs_with_orb.to_parquet(traj_orb_path)
+
+                obs_without_orb.to_parquet(tr_df_path)
+
+                if arguments["--verbose"]:
+                    print("Orbital elements saved")
+            
+            else:
+                if arguments["--verbose"]:
+                    print("No orbital elements found.")
+
+        else:
+            print("No trajectory with enough points to send to orbfit.")
+            print("Wait more night to produce trajectories with more points")
+
+    elif arguments["stats"]:
+
+        output_path, object_class = get_class(arguments, output_path)
+        tr_df_path = os.path.join(output_path, "trajectory_df.parquet")
+        orb_res_path = os.path.join(output_path, "orbital.parquet")
+        obs_df_path = os.path.join(output_path, "old_obs.parquet")
+
+        if os.path.exists(tr_df_path):
+            trajectory_df = pd.read_parquet(tr_df_path)
+            print("Number of observations, all trajectories combined: {}".format(len(trajectory_df)))
+            print("Number of trajectories detected: {}".format(len(np.unique(trajectory_df["trajectory_id"]))))
+            gb = trajectory_df.groupby(["trajectory_id"]).count()["ra"]
+            print("Trajectories size distribution:")
+            c = Counter(gb)
+            for size, number_size in OrderedDict(sorted(c.items())).items():
+                print("\tsize: {}, number of trajectories: {}".format(size, number_size))
+            print()
+        else:
+            print("Trajectory file doesn't exist, run 'fink_fat association (mpc | candidates)' to create it.")
 
 
+        if os.path.exists(obs_df_path):
+            old_obs_df = pd.read_parquet(obs_df_path)
+            print("Number of old observations: {}".format(len(old_obs_df)))
+            print()
+        else:
+            print("No old observations exists.")
 
+        if os.path.exists(orb_res_path):
+            orb_df = pd.read_parquet(orb_res_path)
+            print("number of trajectories with orbital elements: {}".format(len(orb_df)))
+        else:
+            print("No trajectories with orbital elements found")
