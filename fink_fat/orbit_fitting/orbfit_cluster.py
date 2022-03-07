@@ -155,5 +155,7 @@ if __name__=="__main__":
         spark_gb.jd,
         spark_gb.trajectory_id
     ))
+    
+    print(spark_column.collect())
 
     print("finish")
