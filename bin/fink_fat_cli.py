@@ -411,13 +411,14 @@ def main():
                     application
                 )
             
+            print("spark-submit")
+            print(spark_submit)
+            print()
+            print()
             with subprocess.Popen(spark_submit, shell=True, stdout=subprocess.PIPE, preexec_fn=os.setsid) as process:
-                try:
-                    output = process.communicate(timeout=5)[0]
-                except subprocess.TimeoutExpired:
-                    os.killpg(process.pid, signal.SIGINT)  # send signal to the process group
-                    output = process.communicate()[0]
+                output = process.communicate()[0]
 
+            print("end spark submit")
             print(output)
 
             traj_pdf = pd.read_parquet("res_orb.parquet")
