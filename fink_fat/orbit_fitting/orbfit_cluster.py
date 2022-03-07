@@ -728,7 +728,8 @@ if __name__=="__main__":
         spark_gb.dcmag,
         spark_gb.fid,
         spark_gb.jd,
-        spark_gb.trajectory_id
+        spark_gb.trajectory_id,
+        ram_dir
     ))
     
     print(spark_column.collect())
