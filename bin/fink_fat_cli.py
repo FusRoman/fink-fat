@@ -38,7 +38,7 @@ from astropy import units as u
 import fink_fat
 from fink_fat.associations.inter_night_associations import night_to_night_association
 from fink_fat.others.utils import cast_obs_data
-from fink_fat.orbit_fitting.orbfit_management import compute_df_orbit_param
+from fink_fat.orbit_fitting.orbfit_local import compute_df_orbit_param
 
 
 def string_to_bool(str):
