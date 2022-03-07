@@ -1,5 +1,5 @@
 """
-Usage: 
+Usage:
     fink_fat associations (mpc | candidates) [--night <date>] [options]
     fink_fat solve_orbit (mpc | candidates) [options]
     fink_fat stats (mpc | candidates) [options]
@@ -286,7 +286,7 @@ if __name__ == "__main__":
                 if answer.upper() in ["Y", "YES"]:
                     if os.path.exists(orb_res_path) and os.path.exists(traj_orb_path):
                         print(
-                            "Removing files :\n\t{}\n\t".format(
+                            "Removing files :\n\t{}\n\t{}".format(
                                 orb_res_path, traj_orb_path
                             )
                         )
