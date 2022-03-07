@@ -652,7 +652,7 @@ def read_oel(ram_dir, prov_desig):
 
 
 
-def find_orb(ra, dec, dcmag, band, date, traj_id, ram_dir):
+def orbit_wrapper(ra, dec, dcmag, band, date, traj_id, ram_dir):
 
     @pandas_udf(ArrayType(DoubleType()))
     def get_orbit_element(ra, dec, dcmag, band, date, traj_id):
@@ -700,18 +700,7 @@ if __name__=="__main__":
                         .appName("orbfit_cluster") \
                         .getOrCreate()
 
-    df = ut.load_data("Solar System MPC")
-    gb = df.groupby(['ssnamenr']).count().reset_index()
-    all_mpc_name = np.unique(df["ssnamenr"])
-    df_traj = df[df["ssnamenr"].isin(gb[gb['ra'] == 7]["ssnamenr"][:10000])]
-    mpc_name = np.unique(df_traj["ssnamenr"])
-    to_traj_id = {name:i for i, name in zip(np.arange(len(mpc_name)), mpc_name)}
-    df_traj["trajectory_id"] = df_traj.apply(lambda x: to_traj_id[x["ssnamenr"]], axis=1)
-
-    print("load local data finish")
-
-    print("send dataframe to spark")
-    sparkDF = spark.createDataFrame(df_traj[["ra", "dec", "dcmag", "fid", "jd", "trajectory_id"]])
+    sparkDF = spark.read.parquet("tmp_traj.parquet")
 
     spark_gb = sparkDF.groupby("trajectory_id") \
         .agg(F.sort_array(F.collect_list(F.struct("jd", "ra", "dec", "fid", "dcmag"))) \
@@ -726,7 +715,7 @@ if __name__=="__main__":
     spark_gb = spark_gb.repartition(sparkDF.rdd.getNumPartitions())
 
     print("begin compute orbital elem on spark")
-    spark_column = spark_gb.withColumn('orbital_elements', find_orb(
+    spark_column = spark_gb.withColumn('orbital_elements', orbit_wrapper(
         spark_gb.ra,
         spark_gb.dec,
         spark_gb.dcmag,
@@ -737,7 +726,4 @@ if __name__=="__main__":
     ))
 
     orb_pdf = spark_column.toPandas()
-
-    print(orb_pdf)
-
-    print(os.getcwd())
+    orb_pdf.to_parquet("res_orb.parquet")
