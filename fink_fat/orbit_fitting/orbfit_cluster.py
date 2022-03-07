@@ -726,7 +726,7 @@ if __name__=="__main__":
     spark_gb = spark_gb.repartition(sparkDF.rdd.getNumPartitions())
 
     print("begin compute orbital elem on spark")
-    spark_column = spark_gb.withColumn('orbital_element', find_orb(
+    spark_column = spark_gb.withColumn('orbital_elements', find_orb(
         spark_gb.ra,
         spark_gb.dec,
         spark_gb.dcmag,
@@ -736,9 +736,8 @@ if __name__=="__main__":
         ram_dir
     ))
 
-    t_before = t.time()
-    
-    print(spark_column.collect())
+    orb_pdf = spark_column.toPandas()
 
-    print(t.time() - t_before)
-    print("finish")
+    print(orb_pdf)
+
+    print(os.getcwd())
