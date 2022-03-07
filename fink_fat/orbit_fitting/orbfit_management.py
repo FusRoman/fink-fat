@@ -625,9 +625,8 @@ def prep_orbitfit(ram_dir):
 
         copyfile(os.path.join(orbfit_path, "AST17.bep_431_fcct"), ram_dir + "AST17.bep")
         os.chmod(ram_dir + "AST17.bep", 0o777)
-    except Exception as e:
+    except Exception:
         logging.error(traceback.format_exc())
-
 
 
 def call_orbitfit(ram_dir, provisional_designation):

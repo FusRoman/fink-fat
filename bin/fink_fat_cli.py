@@ -70,7 +70,16 @@ def get_last_sso_alert(object_class, date, verbose=False):
     )
     pdf = pd.read_json(r.content)
 
-    required_columns = ["ra", "dec", "jd", "nid", "fid", "dcmag", "candid", "not_updated"]
+    required_columns = [
+        "ra",
+        "dec",
+        "jd",
+        "nid",
+        "fid",
+        "dcmag",
+        "candid",
+        "not_updated",
+    ]
     translate_columns = {
         "i:ra": "ra",
         "i:dec": "dec",
@@ -120,8 +129,9 @@ def init_cli(arguments):
 
     if not os.path.isdir(output_path):
         os.mkdir(output_path)
-    
+
     return config, output_path
+
 
 def get_class(arguments, path):
     if arguments["mpc"]:
@@ -135,8 +145,9 @@ def get_class(arguments, path):
         if not os.path.isdir(path):
             os.mkdir(path)
         object_class = "Solar System candidate"
-    
+
     return path, object_class
+
 
 if __name__ == "__main__":
 
@@ -154,13 +165,19 @@ if __name__ == "__main__":
 
         if arguments["--reset"]:
             print("WARNING !!!")
-            print("you will loose the trajectory done by previous association, Continue ? [Y/n]")
+            print(
+                "you will loose the trajectory done by previous association, Continue ? [Y/n]"
+            )
             answer = ""
-            while(answer.upper() not in  ["Y", "YES", "N", "NO"]):
+            while answer.upper() not in ["Y", "YES", "N", "NO"]:
                 answer = input("Continue?")
                 if answer.upper() in ["Y", "YES"]:
                     if os.path.exists(tr_df_path) and os.path.exists(obs_df_path):
-                        print("Removing files :\n\t{}\n\t{}".format(tr_df_path, obs_df_path))
+                        print(
+                            "Removing files :\n\t{}\n\t{}".format(
+                                tr_df_path, obs_df_path
+                            )
+                        )
                         try:
                             os.remove(tr_df_path)
                             os.remove(obs_df_path)
@@ -194,7 +211,7 @@ if __name__ == "__main__":
 
         # test if the trajectory_df and old_obs_df exists in the output directory.
         if os.path.exists(tr_df_path) and os.path.exists(obs_df_path):
-            
+
             trajectory_df = pd.read_parquet(tr_df_path)
             old_obs_df = pd.read_parquet(obs_df_path)
             last_nid = np.max([np.max(trajectory_df["nid"]), np.max(old_obs_df["nid"])])
@@ -242,9 +259,8 @@ if __name__ == "__main__":
             string_to_bool(
                 config["ASSOC_SYSTEM"]["new_observations_with_old_observations"]
             ),
-            arguments["--verbose"]
+            arguments["--verbose"],
         )
-
 
         cast_obs_data(trajectory_df).to_parquet(tr_df_path)
         cast_obs_data(old_obs_df).to_parquet(obs_df_path)
@@ -253,7 +269,7 @@ if __name__ == "__main__":
             print("Association done")
 
     elif arguments["solve_orbit"]:
-        
+
         output_path, object_class = get_class(arguments, output_path)
         tr_df_path = os.path.join(output_path, "trajectory_df.parquet")
         orb_res_path = os.path.join(output_path, "orbital.parquet")
@@ -261,13 +277,19 @@ if __name__ == "__main__":
 
         if arguments["--reset"]:
             print("WARNING !!!")
-            print("you will loose the previously computed orbital elements and all the associated observations, Continue ? [Y/n]")
+            print(
+                "you will loose the previously computed orbital elements and all the associated observations, Continue ? [Y/n]"
+            )
             answer = ""
-            while(answer.upper() not in  ["Y", "YES", "N", "NO"]):
+            while answer.upper() not in ["Y", "YES", "N", "NO"]:
                 answer = input("Continue?")
                 if answer.upper() in ["Y", "YES"]:
                     if os.path.exists(orb_res_path) and os.path.exists(traj_orb_path):
-                        print("Removing files :\n\t{}\n\t".format(orb_res_path, traj_orb_path))
+                        print(
+                            "Removing files :\n\t{}\n\t".format(
+                                orb_res_path, traj_orb_path
+                            )
+                        )
                         try:
                             os.remove(orb_res_path)
                             os.remove(traj_orb_path)
@@ -286,21 +308,24 @@ if __name__ == "__main__":
         if os.path.exists(tr_df_path):
             trajectory_df = pd.read_parquet(tr_df_path)
         else:
-            print("Trajectory file doesn't exist, run 'fink_fat association (mpc | candidates)' to create it.")
+            print(
+                "Trajectory file doesn't exist, run 'fink_fat association (mpc | candidates)' to create it."
+            )
             exit()
 
-        
         # get trajectories with a number of points greater than the orbfit limit
         gb = trajectory_df.groupby(["trajectory_id"]).count().reset_index()
-        traj = gb[gb["ra"] >= int(config["SOLVE_ORBIT_PARAMS"]["orbfit_limit"])]["trajectory_id"]
+        traj = gb[gb["ra"] >= int(config["SOLVE_ORBIT_PARAMS"]["orbfit_limit"])][
+            "trajectory_id"
+        ]
         traj_to_orbital = trajectory_df[trajectory_df["trajectory_id"].isin(traj)]
 
         if len(traj_to_orbital) > 0:
             orbit_results = compute_df_orbit_param(
                 traj_to_orbital,
                 int(config["SOLVE_ORBIT_PARAMS"]["cpu_count"]),
-                config["SOLVE_ORBIT_PARAMS"]["ram_dir"]
-                )
+                config["SOLVE_ORBIT_PARAMS"]["ram_dir"],
+            )
 
             if len(orbit_results) > 0:
                 traj_with_orb = orbit_results["trajectory_id"]
@@ -315,7 +340,7 @@ if __name__ == "__main__":
                     orb_df.to_parquet(orb_res_path)
                 else:
                     orbit_results.to_parquet(orb_res_path)
-                
+
                 if os.path.exists(traj_orb_path):
                     traj_orb_df = pd.read_parquet(traj_orb_path)
                     traj_orb_df = pd.concat([traj_orb_df, obs_with_orb])
@@ -327,7 +352,7 @@ if __name__ == "__main__":
 
                 if arguments["--verbose"]:
                     print("Orbital elements saved")
-            
+
             else:
                 if arguments["--verbose"]:
                     print("No orbital elements found.")
@@ -345,17 +370,28 @@ if __name__ == "__main__":
 
         if os.path.exists(tr_df_path):
             trajectory_df = pd.read_parquet(tr_df_path)
-            print("Number of observations, all trajectories combined: {}".format(len(trajectory_df)))
-            print("Number of trajectories detected: {}".format(len(np.unique(trajectory_df["trajectory_id"]))))
+            print(
+                "Number of observations, all trajectories combined: {}".format(
+                    len(trajectory_df)
+                )
+            )
+            print(
+                "Number of trajectories detected: {}".format(
+                    len(np.unique(trajectory_df["trajectory_id"]))
+                )
+            )
             gb = trajectory_df.groupby(["trajectory_id"]).count()["ra"]
             print("Trajectories size distribution:")
             c = Counter(gb)
             for size, number_size in OrderedDict(sorted(c.items())).items():
-                print("\tsize: {}, number of trajectories: {}".format(size, number_size))
+                print(
+                    "\tsize: {}, number of trajectories: {}".format(size, number_size)
+                )
             print()
         else:
-            print("Trajectory file doesn't exist, run 'fink_fat association (mpc | candidates)' to create it.")
-
+            print(
+                "Trajectory file doesn't exist, run 'fink_fat association (mpc | candidates)' to create it."
+            )
 
         if os.path.exists(obs_df_path):
             old_obs_df = pd.read_parquet(obs_df_path)
@@ -366,6 +402,8 @@ if __name__ == "__main__":
 
         if os.path.exists(orb_res_path):
             orb_df = pd.read_parquet(orb_res_path)
-            print("number of trajectories with orbital elements: {}".format(len(orb_df)))
+            print(
+                "number of trajectories with orbital elements: {}".format(len(orb_df))
+            )
         else:
             print("No trajectories with orbital elements found")
