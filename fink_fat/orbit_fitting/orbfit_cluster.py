@@ -126,6 +126,9 @@ if __name__=="__main__":
     to_traj_id = {name:i for i, name in zip(np.arange(len(mpc_name)), mpc_name)}
     df_traj["trajectory_id"] = df_traj.apply(lambda x: to_traj_id[x["ssnamenr"]], axis=1)
 
+    print("load local data finish")
+
+    print("send dataframe to spark")
     sparkDF = spark.createDataFrame(df_traj[["ra", "dec", "dcmag", "fid", "jd", "trajectory_id"]])
 
     spark_gb = sparkDF.groupby("trajectory_id") \
@@ -140,6 +143,7 @@ if __name__=="__main__":
 
     spark_gb = spark_gb.repartition(sparkDF.rdd.getNumPartitions())
 
+    print("begin compute orbital elem on spark")
     spark_column = spark_gb.withColumn('coord', get_orbit_element(
         spark_gb.ra,
         spark_gb.dec,
@@ -148,3 +152,5 @@ if __name__=="__main__":
         spark_gb.jd,
         spark_gb.trajectory_id
     ))
+
+    print("finish")
