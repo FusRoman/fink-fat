@@ -8,6 +8,7 @@ from pyspark.sql.functions import pandas_udf
 from pyspark.sql.functions import PandasUDFType
 from pyspark.sql.types import *
 from pyspark.sql import functions as F
+from pyspark.context import SparkContext
 
 from fink_fat.orbit_fitting.orbfit_local import final_clean, obs_clean, prep_orbitfit, read_oel, write_inp, write_observation_file
 
@@ -114,6 +115,8 @@ def get_orbit_element(ra, dec, dcmag, band, date, traj_id, ram_dir):
 if __name__=="__main__":
     import fink_fat.others.utils as ut
     ram_dir = "/tmp/ramdisk/"
+
+    spark = SparkContext.getOrCreate()
 
     df = ut.load_data("Solar System MPC")
     gb = df.groupby(['ssnamenr']).count().reset_index()
