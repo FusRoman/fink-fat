@@ -650,41 +650,44 @@ def read_oel(ram_dir, prov_desig):
         return list(np.ones(13, dtype=np.float64) * -1)
 
 
-@pandas_udf(ArrayType(DoubleType()))
-def get_orbit_element(ra, dec, dcmag, band, date, traj_id, ram_dir):
-    _pid = os.getpid()
-    current_ram_path = os.path.join(ram_dir, str(_pid), "")
-    if not os.path.isdir(current_ram_path):
-        os.mkdir(current_ram_path)
-        
-    prep_orbfit(current_ram_path)
-    
-    res = []
-    for c_ra, c_dec, c_dcmag, c_band, c_date, c_traj_id in zip(ra, dec, dcmag, band, date, traj_id):
-        prov_desig = write_observation_file(
-            current_ram_path,
-            c_ra,
-            c_dec,
-            c_dcmag,
-            c_band,
-            c_date,
-            c_traj_id
-        )
-        write_inp(current_ram_path, prov_desig)
-        write_oop(current_ram_path, prov_desig)
-        
-        call_orbitfit(current_ram_path, prov_desig)
-        orb_elem = read_oel(current_ram_path, prov_desig)
-        
-        res.append(orb_elem)
-        
-        obs_clean(current_ram_path, prov_desig)
-        
-    final_clean(current_ram_path)
-    os.rmdir(current_ram_path)
-    return pd.Series(res)
 
+def find_orb(ra, dec, dcmag, band, date, traj_id, ram_dir):
 
+    @pandas_udf(ArrayType(DoubleType()))
+    def get_orbit_element(ra, dec, dcmag, band, date, traj_id):
+        _pid = os.getpid()
+        current_ram_path = os.path.join(ram_dir, str(_pid), "")
+        if not os.path.isdir(current_ram_path):
+            os.mkdir(current_ram_path)
+            
+        prep_orbfit(current_ram_path)
+        
+        res = []
+        for c_ra, c_dec, c_dcmag, c_band, c_date, c_traj_id in zip(ra, dec, dcmag, band, date, traj_id):
+            prov_desig = write_observation_file(
+                current_ram_path,
+                c_ra,
+                c_dec,
+                c_dcmag,
+                c_band,
+                c_date,
+                c_traj_id
+            )
+            write_inp(current_ram_path, prov_desig)
+            write_oop(current_ram_path, prov_desig)
+            
+            call_orbitfit(current_ram_path, prov_desig)
+            orb_elem = read_oel(current_ram_path, prov_desig)
+            
+            res.append(orb_elem)
+            
+            obs_clean(current_ram_path, prov_desig)
+            
+        final_clean(current_ram_path)
+        os.rmdir(current_ram_path)
+        return pd.Series(res)
+
+    return get_orbit_element(ra, dec, dcmag, band, date, traj_id)
 
 
 if __name__=="__main__":
@@ -722,7 +725,7 @@ if __name__=="__main__":
     spark_gb = spark_gb.repartition(sparkDF.rdd.getNumPartitions())
 
     print("begin compute orbital elem on spark")
-    spark_column = spark_gb.withColumn('coord', get_orbit_element(
+    spark_column = spark_gb.withColumn('coord', find_orb(
         spark_gb.ra,
         spark_gb.dec,
         spark_gb.dcmag,
