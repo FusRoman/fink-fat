@@ -129,8 +129,7 @@ def init_cli(arguments):
     if arguments["--config"]:
         config.read(arguments["--config"])
     else:
-        config_path = os.path.join(fink_fat.__file__, "data", "fink_fat.conf")
-        print(config_path)
+        config_path = os.path.join(os.path.dirname(fink_fat.__file__), "data", "fink_fat.conf")
         config.read(config_path)
 
     output_path = config["OUTPUT"]["association_output_file"]
