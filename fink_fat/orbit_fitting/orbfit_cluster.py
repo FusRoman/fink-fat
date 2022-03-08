@@ -12,7 +12,6 @@ from astropy.coordinates import SkyCoord
 import astropy.units as u
 from shutil import copyfile
 import re
-from fink_fat.orbit_fitting.orbfit_local import band_to_str, join_string, make_date, make_designation, rm_files
 
 from pyspark.sql.functions import pandas_udf
 from pyspark.sql.types import *  # noqa: F403
@@ -31,6 +30,11 @@ def prep_orbfit(ram_dir):
 
     copyfile(os.path.join(orbfit_path, "AST17.bep_431_fcct"), ram_dir + "AST17.bep")
     os.chmod(ram_dir + "AST17.bep", 0o777)
+
+
+def rm_files(files):
+    for path_f in files:
+        os.remove(path_f)
 
 
 def final_clean(ram_dir):
