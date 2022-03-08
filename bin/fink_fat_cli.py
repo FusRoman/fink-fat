@@ -416,7 +416,7 @@ def main():
             print(spark_submit)
             print()
             print()
-            exit()
+            
             process=subprocess.Popen(
                 spark_submit,
                 stdout=subprocess.PIPE,
