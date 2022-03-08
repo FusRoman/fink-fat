@@ -2,6 +2,7 @@
 Usage:
     fink_fat associations (mpc | candidates) [--night <date>] [options]
     fink_fat solve_orbit (mpc | candidates) (local | cluster) [options]
+    fink_fat offline (mpc | candidates) (local | cluster) <start> <end> [options]
     fink_fat stats (mpc | candidates) [options]
     fink_fat -h | --help
     fink_fat --version
@@ -165,6 +166,8 @@ def main():
         if len(traj_to_orbital) > 0:
 
             if arguments["local"]:
+                t_before = t.time()
+
                 # return orbit results from local mode
                 orbit_results = compute_df_orbit_param(
                     traj_to_orbital,
@@ -172,9 +175,17 @@ def main():
                     config["SOLVE_ORBIT_PARAMS"]["ram_dir"],
                 ).drop("provisional designation", axis=1)
 
+                if arguments["--verbose"]:
+                    print("time taken to get orbit: {}".format(t.time() - t_before))
+
             elif arguments["cluster"]:
+                t_before = t.time()
+
                 # return orbit results from cluster mode
                 orbit_results = cluster_mode(config, traj_to_orbital)
+
+                if arguments["--verbose"]:
+                    print("time taken to get orbit: {}".format(t.time() - t_before))
 
             if len(orbit_results) > 0:
 
@@ -230,12 +241,12 @@ def main():
         if os.path.exists(tr_df_path):
             trajectory_df = pd.read_parquet(tr_df_path)
             print(
-                "Number of observations, all trajectories combined: {}".format(
+                "Number of observations, all trajectories candidates combined: {}".format(
                     len(trajectory_df)
                 )
             )
             print(
-                "Number of trajectories detected: {}".format(
+                "Number of trajectories candidates: {}".format(
                     len(np.unique(trajectory_df["trajectory_id"]))
                 )
             )
@@ -244,7 +255,7 @@ def main():
             c = Counter(gb)
             for size, number_size in OrderedDict(sorted(c.items())).items():
                 print(
-                    "\tsize: {}, number of trajectories: {}".format(size, number_size)
+                    "\tsize: {}, number of trajectories candidates: {}".format(size, number_size)
                 )
             print()
         else:
@@ -262,10 +273,156 @@ def main():
         if os.path.exists(orb_res_path):
             orb_df = pd.read_parquet(orb_res_path)
             print(
-                "number of trajectories with orbital elements: {}".format(len(orb_df))
+                "Number of detected orbit: {}".format(len(orb_df))
             )
         else:
             print("No trajectories with orbital elements found")
+
+    elif arguments["offline"]:
+        print("offline mode")
+
+        output_path, object_class = get_class(arguments, output_path)
+
+        current_date = datetime.datetime.strptime(arguments["<start>"], "%Y-%m-%d")
+        stop_date = datetime.datetime.strptime(arguments["<end>"], "%Y-%m-%d")
+        delta_day = datetime.timedelta(days=1)
+
+        today = datetime.datetime.now().date() + delta_day
+
+        if current_date > stop_date:
+            print("Error !!! Start date is greater than stop date.")
+            exit()
+        
+        trajectory_columns = ['ra', 'dec', 'jd', 'nid', 'fid', 'dcmag', 'candid', 'not_updated', 'ssnamenr', 'trajectory_id']
+        trajectory_df = pd.DataFrame(columns=trajectory_columns)
+        old_obs_df = pd.DataFrame(columns=trajectory_columns)
+
+        obs_with_orb = pd.DataFrame()
+        traj_with_orb_elem = pd.DataFrame()
+
+        while True:
+            if arguments["--verbose"]:
+                print("current processing date: {}".format(current_date))
+                print()
+
+            t_before = t.time()
+            new_alerts = get_last_sso_alert(
+                object_class, current_date.strftime("%Y-%m-%d"), arguments["--verbose"]
+            )
+            # if no alerts are available
+            if len(new_alerts) == 0:
+                current_date += delta_day
+
+                if current_date == stop_date + delta_day:
+                    break
+                if current_date.date() == today:
+                    print("The current processing day is greater than today. Out of the offline loop.")
+                    break
+
+                continue
+
+            if arguments["--verbose"]:
+                print(
+                    "time taken to retrieve alerts from fink broker: {}".format(
+                        t.time() - t_before
+                    )
+                )
+                print()
+
+            next_nid = new_alerts["nid"][0]
+            last_nid = np.max([np.max(trajectory_df["nid"]), np.max(old_obs_df["nid"])])
+            
+            trajectory_df, old_obs_df, _ = night_to_night_association(
+                trajectory_df,
+                old_obs_df,
+                new_alerts,
+                last_nid,
+                next_nid,
+                int(config["TW_PARAMS"]["trajectory_keep_limit"]),
+                int(config["TW_PARAMS"]["old_observation_keep_limit"]),
+                int(config["TW_PARAMS"]["trajectory_2_points_keep_limit"]),
+                float(config["ASSOC_PARAMS"]["intra_night_separation"]) * u.arcsecond,
+                float(config["ASSOC_PARAMS"]["intra_night_magdiff_limit_same_fid"]),
+                float(config["ASSOC_PARAMS"]["intra_night_magdiff_limit_diff_fid"]),
+                float(config["ASSOC_PARAMS"]["inter_night_separation"]) * u.degree,
+                float(config["ASSOC_PARAMS"]["inter_night_magdiff_limit_same_fid"]),
+                float(config["ASSOC_PARAMS"]["inter_night_magdiff_limit_diff_fid"]),
+                float(config["ASSOC_PARAMS"]["maximum_angle"]),
+                string_to_bool(config["ASSOC_PERF"]["store_kd_tree"]),
+                int(config["SOLVE_ORBIT_PARAMS"]["orbfit_limit"]),
+                string_to_bool(config["ASSOC_SYSTEM"]["tracklets_with_trajectories"]),
+                string_to_bool(
+                    config["ASSOC_SYSTEM"]["trajectories_with_new_observations"]
+                ),
+                string_to_bool(config["ASSOC_SYSTEM"]["tracklets_with_old_observations"]),
+                string_to_bool(
+                    config["ASSOC_SYSTEM"]["new_observations_with_old_observations"]
+                ),
+                arguments["--verbose"],
+            )
+            
+            # get trajectories with a number of points greater than the orbfit limit
+            gb = trajectory_df.groupby(["trajectory_id"]).count().reset_index()
+            traj = gb[gb["ra"] >= int(config["SOLVE_ORBIT_PARAMS"]["orbfit_limit"])][
+                "trajectory_id"
+            ]
+            test_orb = trajectory_df["trajectory_id"].isin(traj)
+            traj_to_orbital = trajectory_df[test_orb]
+            trajectory_df = trajectory_df[~test_orb]
+
+            if len(traj_to_orbital) > 0:
+
+                if arguments["--verbose"]:
+                    print("Solve orbit...")
+
+                if arguments["local"]:
+                    t_before = t.time()
+
+                    # return orbit results from local mode
+                    orbit_results = compute_df_orbit_param(
+                        traj_to_orbital,
+                        int(config["SOLVE_ORBIT_PARAMS"]["cpu_count"]),
+                        config["SOLVE_ORBIT_PARAMS"]["ram_dir"],
+                    ).drop("provisional designation", axis=1)
+
+                    if arguments["--verbose"]:
+                        print("time taken to get orbit: {}".format(t.time() - t_before))
+
+                elif arguments["cluster"]:
+                    t_before = t.time()
+
+                    # return orbit results from cluster mode
+                    orbit_results = cluster_mode(config, traj_to_orbital)
+
+                    if arguments["--verbose"]:
+                        print("time taken to get orbit: {}".format(t.time() - t_before))
+                    
+                if len(orbit_results) > 0:
+
+                    # get only the trajectories with orbital elements
+                    current_traj_with_orb_elem = orbit_results[orbit_results["a"] != -1.0]
+
+                    # get the observations of trajectories with orbital elements
+                    current_obs_with_orb = traj_to_orbital[
+                        traj_to_orbital["trajectory_id"].isin(
+                            current_traj_with_orb_elem["trajectory_id"]
+                        )
+                    ]
+
+                    traj_with_orb_elem = pd.concat([traj_with_orb_elem, current_traj_with_orb_elem])
+                    obs_with_orb = pd.concat([obs_with_orb, current_obs_with_orb])
+
+
+
+            current_date += delta_day
+
+            if current_date == stop_date + delta_day:
+                break
+            if current_date.date() == today:
+                print("The current processing day is greater than today. Out of the offline loop.")
+                break
+        
+        print("Offline mode ended")
 
     else:
         exit()
