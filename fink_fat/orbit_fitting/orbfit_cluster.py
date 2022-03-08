@@ -4,26 +4,19 @@ import signal
 import subprocess
 import traceback
 import numpy as np
-import time as t
 
 from glob import glob
-import signal
-import numpy as np
 import pandas as pd
 from astropy.time import Time
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 from shutil import copyfile
 import re
-import subprocess
-import os
 
-import pandas as pd
 from pyspark.sql.functions import pandas_udf
-from pyspark.sql.functions import PandasUDFType
-from pyspark.sql.types import *
-from pyspark.sql import functions as F
-from pyspark.sql import SparkSession
+from pyspark.sql.types import *  # noqa: F403
+from pyspark.sql import functions as F  # noqa: F401
+from pyspark.sql import SparkSession  # noqa: F401
 
 
 def time_to_decimal(time):
@@ -650,7 +643,7 @@ def read_oel(ram_dir, prov_desig):
 
 
 def orbit_wrapper(ra, dec, dcmag, band, date, traj_id, ram_dir):
-    @pandas_udf(ArrayType(DoubleType()))
+    @pandas_udf(ArrayType(DoubleType()))  # noqa: F405
     def get_orbit_element(ra, dec, dcmag, band, date, traj_id):
         _pid = os.getpid()
         current_ram_path = os.path.join(ram_dir, str(_pid), "")
@@ -681,54 +674,3 @@ def orbit_wrapper(ra, dec, dcmag, band, date, traj_id, ram_dir):
         return pd.Series(res)
 
     return get_orbit_element(ra, dec, dcmag, band, date, traj_id)
-
-
-if __name__ == "__main__":
-    import fink_fat.others.utils as ut
-
-    ram_dir = "/tmp/ramdisk/"
-
-    spark = spark = (
-        SparkSession.builder.master("mesos://vm-75063.lal.in2p3.fr:5050")
-        .appName("orbfit_cluster")
-        .getOrCreate()
-    )
-
-    # read the input from local parquet file
-    traj_df = pd.read_parquet("tmp_traj.parquet")
-    # transform the local pandas dataframe into a spark dataframe
-    sparkDF = spark.createDataFrame(traj_df)
-
-    spark_gb = (
-        sparkDF.groupby("trajectory_id")
-        .agg(
-            F.sort_array(
-                F.collect_list(F.struct("jd", "ra", "dec", "fid", "dcmag"))
-            ).alias("collected_list")
-        )
-        .withColumn("ra", F.col("collected_list.ra"))
-        .withColumn("dec", F.col("collected_list.dec"))
-        .withColumn("fid", F.col("collected_list.fid"))
-        .withColumn("dcmag", F.col("collected_list.dcmag"))
-        .withColumn("jd", F.col("collected_list.jd"))
-        .drop("collected_list")
-    )
-
-    spark_gb = spark_gb.repartition(sparkDF.rdd.getNumPartitions())
-
-    print("begin compute orbital elem on spark")
-    spark_column = spark_gb.withColumn(
-        "orbital_elements",
-        orbit_wrapper(
-            spark_gb.ra,
-            spark_gb.dec,
-            spark_gb.dcmag,
-            spark_gb.fid,
-            spark_gb.jd,
-            spark_gb.trajectory_id,
-            ram_dir,
-        ),
-    )
-
-    orb_pdf = spark_column.toPandas()
-    orb_pdf.to_parquet("res_orb.parquet")

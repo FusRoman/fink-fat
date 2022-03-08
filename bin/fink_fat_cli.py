@@ -346,7 +346,7 @@ def main():
                     int(config["SOLVE_ORBIT_PARAMS"]["cpu_count"]),
                     config["SOLVE_ORBIT_PARAMS"]["ram_dir"],
                 ).drop("provisional designation", axis=1)
-            
+
             elif arguments["cluster"]:
                 traj_to_orbital.to_parquet("tmp_traj.parquet")
 
@@ -361,7 +361,9 @@ def main():
                 exec_core = config["SOLVE_ORBIT_PARAMS"]["executor_core"]
 
                 application = os.path.join(
-                    os.path.dirname(fink_fat.__file__), "orbit_fitting", "orbfit_cluster.py"
+                    os.path.dirname(fink_fat.__file__),
+                    "orbit_fitting",
+                    "orbfit_cluster.py",
                 )
 
                 spark_submit = "spark-submit \
@@ -405,17 +407,23 @@ def main():
 
                 orbital_columns = [
                     "ref_epoch",
-                    "a", "e", "i",
+                    "a",
+                    "e",
+                    "i",
                     "long. node",
                     "arg. peric",
                     "mean anomaly",
-                    "rms_a", "rms_e", "rms_i",
+                    "rms_a",
+                    "rms_e",
+                    "rms_i",
                     "rms_long. node",
                     "rms_arg. peric",
-                    "rms_mean anomaly"
+                    "rms_mean anomaly",
                 ]
 
-                split_df = pd.DataFrame(traj_pdf["orbital_elements"].tolist(), columns=orbital_columns)
+                split_df = pd.DataFrame(
+                    traj_pdf["orbital_elements"].tolist(), columns=orbital_columns
+                )
                 orbit_results = pd.concat([traj_pdf["trajectory_id"], split_df], axis=1)
 
                 os.remove("tmp_traj.parquet")
