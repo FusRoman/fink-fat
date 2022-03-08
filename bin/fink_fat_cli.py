@@ -419,8 +419,9 @@ def main():
                 ]
 
                 split_df = pd.DataFrame(traj_pdf["orbital_elements"].tolist(), columns=orbital_columns)
-
-                print(split_df)
+                orbit_results = pd.concat([traj_pdf["trajectory_id"], split_df], axis=1)
+                
+                print(orbit_results)
                 exit()
 
             if len(orbit_results) > 0:
