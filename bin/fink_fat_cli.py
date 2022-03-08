@@ -33,136 +33,20 @@ from collections import Counter
 from collections import OrderedDict
 import subprocess
 from docopt import docopt
-import configparser
 import os
 import pandas as pd
 import numpy as np
+import time as t
 import datetime
-import requests
-from fink_science.conversion import dc_mag
 from astropy import units as u
+from bin.orbit_cli import cluster_mode, get_orbital_data, intro_reset_orbit, yes_orbit_reset
+from bin.utils_cli import get_class, init_cli, string_to_bool, yes_or_no
 
 import fink_fat
 from fink_fat.associations.inter_night_associations import night_to_night_association
 from fink_fat.others.utils import cast_obs_data
 from fink_fat.orbit_fitting.orbfit_local import compute_df_orbit_param
-
-
-def string_to_bool(bool_str):
-    if bool_str.casefold() == "false".casefold():
-        return False
-    else:
-        return True
-
-
-def get_last_sso_alert(object_class, date, verbose=False):
-    startdate = datetime.datetime.strptime(date, "%Y-%m-%d")
-    stopdate = startdate + datetime.timedelta(days=1)
-
-    if verbose:
-        print(
-            "Query fink broker to get sso alerts for the night between {} and {}".format(
-                startdate.strftime("%Y-%m-%d"), stopdate.strftime("%Y-%m-%d")
-            )
-        )
-
-    r = requests.post(
-        "https://fink-portal.org/api/v1/latests",
-        json={
-            "class": object_class,
-            "n": "1000",
-            "startdate": str(startdate),
-            "stopdate": str(stopdate),
-        },
-    )
-    pdf = pd.read_json(r.content)
-
-    required_columns = [
-        "ra",
-        "dec",
-        "jd",
-        "nid",
-        "fid",
-        "dcmag",
-        "candid",
-        "not_updated",
-    ]
-    translate_columns = {
-        "i:ra": "ra",
-        "i:dec": "dec",
-        "i:jd": "jd",
-        "i:nid": "nid",
-        "i:fid": "fid",
-        "i:candid": "candid",
-    }
-    if object_class == "Solar System MPC":
-        required_columns.append("ssnamenr")
-        translate_columns["i:ssnamenr"] = "ssnamenr"
-
-    _dc_mag = np.array(
-        pdf.apply(
-            lambda x: dc_mag(
-                x["i:fid"],
-                x["i:magpsf"],
-                x["i:sigmapsf"],
-                x["i:magnr"],
-                x["i:sigmagnr"],
-                x["i:magzpsci"],
-                x["i:isdiffpos"],
-            ),
-            axis=1,
-            result_type="expand",
-        ).values
-    )
-
-    pdf = pdf.rename(columns=translate_columns)
-    if len(_dc_mag) > 0:
-        pdf.insert(len(pdf.columns), "dcmag", _dc_mag[:, 0])
-    else:
-        return pd.DataFrame(columns=required_columns)
-
-    pdf.insert(len(pdf.columns), "not_updated", np.ones(len(pdf), dtype=np.bool_))
-    return pdf[required_columns]
-
-
-def init_cli(arguments):
-
-    # read the config file
-    config = configparser.ConfigParser()
-
-    if arguments["--config"]:
-        config.read(arguments["--config"])
-    else:
-        config_path = os.path.join(
-            os.path.dirname(fink_fat.__file__), "data", "fink_fat.conf"
-        )
-        config.read(config_path)
-
-    output_path = config["OUTPUT"]["association_output_file"]
-
-    if arguments["--output"]:
-        output_path = arguments["--output"]
-
-    if not os.path.isdir(output_path):
-        os.mkdir(output_path)
-
-    return config, output_path
-
-
-def get_class(arguments, path):
-    if arguments["mpc"]:
-        path = os.path.join(path, "mpc", "")
-        if not os.path.isdir(path):
-            os.mkdir(path)
-        object_class = "Solar System MPC"
-
-    elif arguments["candidates"]:
-        path = os.path.join(path, "candidates", "")
-        if not os.path.isdir(path):
-            os.mkdir(path)
-        object_class = "Solar System candidate"
-
-    return path, object_class
+from bin.association_cli import get_data, get_last_sso_alert, intro_reset, no_reset, yes_reset
 
 
 def main():
@@ -179,75 +63,36 @@ def main():
         tr_df_path = os.path.join(output_path, "trajectory_df.parquet")
         obs_df_path = os.path.join(output_path, "old_obs.parquet")
 
+        # remove the save data from previous associations if the user say yes
         if arguments["--reset"]:
-            print("WARNING !!!")
-            print(
-                "you will loose the trajectory done by previous association, Continue ? [Y/n]"
+            yes_or_no(
+                intro_reset,
+                yes_reset,
+                no_reset,
+                yes_args=(arguments, tr_df_path, obs_df_path),
             )
-            answer = ""
-            while answer.upper() not in ["Y", "YES", "N", "NO"]:
-                answer = input("Continue?")
-                if answer.upper() in ["Y", "YES"]:
-                    if os.path.exists(tr_df_path) and os.path.exists(obs_df_path):
-                        print(
-                            "Removing files :\n\t{}\n\t{}".format(
-                                tr_df_path, obs_df_path
-                            )
-                        )
-                        try:
-                            os.remove(tr_df_path)
-                            os.remove(obs_df_path)
-                        except OSError as e:
-                            if arguments["--verbose"]:
-                                print("Failed with:", e.strerror)
-                                print("Error code:", e.code)
-                    else:
-                        print("File trajectory and old observations not exists.")
-                elif answer.upper() in ["N", "NO"]:
-                    print("Abort reset.")
-                else:
-                    print("please, answer with y or n.")
 
         last_night = datetime.datetime.now() - datetime.timedelta(days=1)
         last_night = last_night.strftime("%Y-%m-%d")
         if arguments["--night"]:
             last_night = arguments["--night"]
 
+        t_before = t.time()
         new_alerts = get_last_sso_alert(
             object_class, last_night, arguments["--verbose"]
         )
+        if arguments["--verbose"]:
+            print("time taken to retrieve alerts from fink broker: {}".format(t.time() - t_before))
+            print()
 
         if len(new_alerts) == 0:
             print("no alerts available for the night of {}".format(last_night))
             exit()
 
-        last_nid = next_nid = new_alerts["nid"][0]
-        trajectory_df = pd.DataFrame(columns=new_alerts.columns)
-        old_obs_df = pd.DataFrame(columns=new_alerts.columns)
+        trajectory_df, old_obs_df, last_nid, next_nid = get_data(new_alerts, tr_df_path, obs_df_path)
 
-        # test if the trajectory_df and old_obs_df exists in the output directory.
-        if os.path.exists(tr_df_path) and os.path.exists(obs_df_path):
-
-            trajectory_df = pd.read_parquet(tr_df_path)
-            old_obs_df = pd.read_parquet(obs_df_path)
-            last_nid = np.max([np.max(trajectory_df["nid"]), np.max(old_obs_df["nid"])])
-            if last_nid == next_nid:
-                print()
-                print("ERROR !!!")
-                print("Association already done for this night.")
-                print("Wait a next observation night to do new association")
-                print("or run 'fink_fat solve_orbit' to get orbital_elements.")
-                exit()
-            if last_nid > next_nid:
-                print()
-                print("ERROR !!!")
-                print(
-                    "Query alerts from a night before the last night in the recorded trajectory/old_observations."
-                )
-                print(
-                    "Maybe try with a more recent night or reset the associations with 'fink_fat association -r'"
-                )
-                exit()
+        if arguments["--verbose"]:
+            print("started associations...")
 
         trajectory_df, old_obs_df, _ = night_to_night_association(
             trajectory_df,
@@ -292,55 +137,19 @@ def main():
         traj_orb_path = os.path.join(output_path, "trajectory_orb.parquet")
 
         if arguments["--reset"]:
-            print("WARNING !!!")
-            print(
-                "you will loose the previously computed orbital elements and all the associated observations, Continue ? [Y/n]"
+            yes_or_no(
+                intro_reset_orbit,
+                yes_orbit_reset,
+                no_reset,
+                yes_args=(arguments, orb_res_path, traj_orb_path),
             )
-            answer = ""
-            while answer.upper() not in ["Y", "YES", "N", "NO"]:
-                answer = input("Continue?")
-                if answer.upper() in ["Y", "YES"]:
-                    if os.path.exists(orb_res_path) and os.path.exists(traj_orb_path):
-                        print(
-                            "Removing files :\n\t{}\n\t{}".format(
-                                orb_res_path, traj_orb_path
-                            )
-                        )
-                        try:
-                            os.remove(orb_res_path)
-                            os.remove(traj_orb_path)
-                        except OSError as e:
-                            if arguments["--verbose"]:
-                                print("Failed with:", e.strerror)
-                                print("Error code:", e.code)
-                    else:
-                        print("File with orbital elements not exists.")
-                elif answer.upper() in ["N", "NO"]:
-                    print("Abort reset.")
-                else:
-                    print("please, answer with y or n.")
 
-        # test if the trajectory_df exist in the output directory.
-        if os.path.exists(tr_df_path):
-            trajectory_df = pd.read_parquet(tr_df_path)
-        else:
-            print(
-                "Trajectory file doesn't exist, run 'fink_fat association (mpc | candidates)' to create it."
-            )
-            exit()
-
-        # get trajectories with a number of points greater than the orbfit limit
-        gb = trajectory_df.groupby(["trajectory_id"]).count().reset_index()
-        traj = gb[gb["ra"] >= int(config["SOLVE_ORBIT_PARAMS"]["orbfit_limit"])][
-            "trajectory_id"
-        ]
-        test_orb = trajectory_df["trajectory_id"].isin(traj)
-        traj_to_orbital = trajectory_df[test_orb]
+        traj_to_orbital, traj_no_orb = get_orbital_data(config, tr_df_path)
 
         if len(traj_to_orbital) > 0:
 
             if arguments["local"]:
-
+                # return orbit results from local mode
                 orbit_results = compute_df_orbit_param(
                     traj_to_orbital,
                     int(config["SOLVE_ORBIT_PARAMS"]["cpu_count"]),
@@ -348,92 +157,13 @@ def main():
                 ).drop("provisional designation", axis=1)
 
             elif arguments["cluster"]:
-                traj_to_orbital.to_parquet("tmp_traj.parquet")
-
-                master_manager = config["SOLVE_ORBIT_PARAMS"]["manager"]
-                principal_group = config["SOLVE_ORBIT_PARAMS"]["principal"]
-                secret = config["SOLVE_ORBIT_PARAMS"]["secret"]
-                role = config["SOLVE_ORBIT_PARAMS"]["role"]
-                executor_env = config["SOLVE_ORBIT_PARAMS"]["exec_env"]
-                driver_mem = config["SOLVE_ORBIT_PARAMS"]["driver_memory"]
-                exec_mem = config["SOLVE_ORBIT_PARAMS"]["executor_memory"]
-                max_core = config["SOLVE_ORBIT_PARAMS"]["max_core"]
-                exec_core = config["SOLVE_ORBIT_PARAMS"]["executor_core"]
-
-                application = os.path.join(
-                    os.path.dirname(fink_fat.__file__),
-                    "orbit_fitting",
-                    "orbfit_cluster.py",
-                )
-
-                spark_submit = "spark-submit \
-                    --master {} \
-                    --conf spark.mesos.principal={} \
-                    --conf spark.mesos.secret={} \
-                    --conf spark.mesos.role={} \
-                    --conf spark.executorEnv.HOME={} \
-                    --driver-memory {}G \
-                    --executor-memory {}G \
-                    --conf spark.cores.max={} \
-                    --conf spark.executor.cores={} \
-                    {}".format(
-                    master_manager,
-                    principal_group,
-                    secret,
-                    role,
-                    executor_env,
-                    driver_mem,
-                    exec_mem,
-                    max_core,
-                    exec_core,
-                    application,
-                )
-
-                process = subprocess.Popen(
-                    spark_submit,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    universal_newlines=True,
-                    shell=True,
-                )
-
-                stdout, stderr = process.communicate()
-                if process.returncode != 0:
-                    print(stderr)
-                    print(stdout)
-                    exit()
-
-                traj_pdf = pd.read_parquet("res_orb.parquet")
-
-                orbital_columns = [
-                    "ref_epoch",
-                    "a",
-                    "e",
-                    "i",
-                    "long. node",
-                    "arg. peric",
-                    "mean anomaly",
-                    "rms_a",
-                    "rms_e",
-                    "rms_i",
-                    "rms_long. node",
-                    "rms_arg. peric",
-                    "rms_mean anomaly",
-                ]
-
-                split_df = pd.DataFrame(
-                    traj_pdf["orbital_elements"].tolist(), columns=orbital_columns
-                )
-                orbit_results = pd.concat([traj_pdf["trajectory_id"], split_df], axis=1)
-
-                os.remove("tmp_traj.parquet")
-                os.remove("res_orb.parquet")
+                # return orbit results from cluster mode
+                orbit_results = cluster_mode(config, traj_to_orbital)
 
             if len(orbit_results) > 0:
 
                 # write the trajectory_df without the trajectories with more than orbfit_limit point
                 # delay the writing of trajectory_df in case of orbfit fail.
-                traj_no_orb = trajectory_df[~test_orb]
                 traj_no_orb.to_parquet(tr_df_path)
 
                 # get only the trajectories with orbital elements
