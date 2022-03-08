@@ -339,10 +339,6 @@ def main():
 
         if len(traj_to_orbital) > 0:
 
-            # write the trajectory_df without the trajectories with more than orbfit_limit point
-            traj_no_orb = trajectory_df[~test_orb]
-            traj_no_orb.to_parquet(tr_df_path)
-
             if arguments["local"]:
 
                 orbit_results = compute_df_orbit_param(
@@ -415,6 +411,11 @@ def main():
                 exit()
 
             if len(orbit_results) > 0:
+
+                # write the trajectory_df without the trajectories with more than orbfit_limit point
+                # delay the writing of trajectory_df in case of orbfit fail.
+                traj_no_orb = trajectory_df[~test_orb]
+                traj_no_orb.to_parquet(tr_df_path)
 
                 # get only the trajectories with orbital elements
                 traj_with_orb_elem = orbit_results[orbit_results["a"] != -1.0]
