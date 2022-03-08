@@ -14,10 +14,12 @@ setup(
     package_data={
         "fink_fat": [
             "data/month=*",
+            "data/fink_fat.conf",
             "orbit_fitting/AST17.*",
             "orbit_fitting/template.oop",
         ]
     },
+    entry_points={"console_scripts": ["fink_fat=bin.fink_fat_cli:main"]},
     license="Apache-2.0 License",
     platforms="Linux Debian distribution",
     project_urls={

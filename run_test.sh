@@ -22,8 +22,7 @@ export COVERAGE_PROCESS_START="${ROOTPATH}/.coveragerc"
 
 set -e
 
-make simple_install
-
+pip install .
 
 # Run the test suite
 for filename in fink_fat/associations/*.py
@@ -36,12 +35,12 @@ do
     --rcfile ${ROOTPATH}/.coveragerc $filename
 done
 
-echo fink_fat/orbit_fitting/orbfit_management.py
+echo fink_fat/orbit_fitting/orbfit_local.py
 # Run test suite + coverage
 coverage run \
   --append \
   --source=${ROOTPATH} \
-  --rcfile ${ROOTPATH}/.coveragerc fink_fat/orbit_fitting/orbfit_management.py
+  --rcfile ${ROOTPATH}/.coveragerc fink_fat/orbit_fitting/orbfit_local.py
 
 echo fink_fat/test/continuous_integration.py
 # Run test suite + coverage
