@@ -211,3 +211,54 @@ def orbit_wrapper(ra, dec, dcmag, band, date, traj_id, ram_dir):
         return pd.Series(res)
 
     return get_orbit_element(ra, dec, dcmag, band, date, traj_id)
+
+
+if __name__ == "__main__":
+    import fink_fat.others.utils as ut
+
+    ram_dir = "/tmp/ramdisk/"
+
+    spark = spark = (
+        SparkSession.builder.master("mesos://vm-75063.lal.in2p3.fr:5050")
+        .appName("orbfit_cluster")
+        .getOrCreate()
+    )
+
+    # read the input from local parquet file
+    traj_df = pd.read_parquet("tmp_traj.parquet")
+    # transform the local pandas dataframe into a spark dataframe
+    sparkDF = spark.createDataFrame(traj_df)
+
+    spark_gb = (
+        sparkDF.groupby("trajectory_id")
+        .agg(
+            F.sort_array(
+                F.collect_list(F.struct("jd", "ra", "dec", "fid", "dcmag"))
+            ).alias("collected_list")
+        )
+        .withColumn("ra", F.col("collected_list.ra"))
+        .withColumn("dec", F.col("collected_list.dec"))
+        .withColumn("fid", F.col("collected_list.fid"))
+        .withColumn("dcmag", F.col("collected_list.dcmag"))
+        .withColumn("jd", F.col("collected_list.jd"))
+        .drop("collected_list")
+    )
+
+    spark_gb = spark_gb.repartition(sparkDF.rdd.getNumPartitions())
+
+    print("begin compute orbital elem on spark")
+    spark_column = spark_gb.withColumn(
+        "orbital_elements",
+        orbit_wrapper(
+            spark_gb.ra,
+            spark_gb.dec,
+            spark_gb.dcmag,
+            spark_gb.fid,
+            spark_gb.jd,
+            spark_gb.trajectory_id,
+            ram_dir,
+        ),
+    )
+
+    orb_pdf = spark_column.toPandas()
+    orb_pdf.to_parquet("res_orb.parquet")
