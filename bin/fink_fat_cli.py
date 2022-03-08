@@ -346,9 +346,6 @@ def main():
                     int(config["SOLVE_ORBIT_PARAMS"]["cpu_count"]),
                     config["SOLVE_ORBIT_PARAMS"]["ram_dir"],
                 ).drop("provisional designation", axis=1)
-
-                print(orbit_results)
-                exit()
             
             elif arguments["cluster"]:
                 traj_to_orbital.to_parquet("tmp_traj.parquet")
@@ -420,9 +417,6 @@ def main():
 
                 split_df = pd.DataFrame(traj_pdf["orbital_elements"].tolist(), columns=orbital_columns)
                 orbit_results = pd.concat([traj_pdf["trajectory_id"], split_df], axis=1)
-                
-                print(orbit_results)
-                exit()
 
             if len(orbit_results) > 0:
 
