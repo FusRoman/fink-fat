@@ -15,3 +15,6 @@ astropy>=4.2.1
 
 # packaging
 build
+
+# fink
+fink-science>=0.5.1

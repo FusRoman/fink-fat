@@ -700,7 +700,10 @@ if __name__=="__main__":
                         .appName("orbfit_cluster") \
                         .getOrCreate()
 
-    sparkDF = spark.read.parquet("tmp_traj.parquet")
+    # read the input from local parquet file
+    traj_df = pd.read_parquet("tmp_traj.parquet")
+    # transform the local pandas dataframe into a spark dataframe
+    sparkDF = spark.createDataFrame(traj_df)
 
     spark_gb = sparkDF.groupby("trajectory_id") \
         .agg(F.sort_array(F.collect_list(F.struct("jd", "ra", "dec", "fid", "dcmag"))) \

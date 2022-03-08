@@ -31,7 +31,6 @@ Options:
 
 from collections import Counter
 from collections import OrderedDict
-import signal
 import subprocess
 from docopt import docopt
 import configparser
@@ -373,6 +372,8 @@ def main():
                     if arguments["--verbose"]:
                         print("No orbital elements found.")
         elif arguments["cluster"]:
+            print("cluster mode")
+
             traj_to_orbital.to_parquet("tmp_traj.parquet")
 
             master_manager = config["SOLVE_ORBIT_PARAMS"]["manager"]
@@ -415,11 +416,21 @@ def main():
             print(spark_submit)
             print()
             print()
-            with subprocess.Popen(spark_submit, shell=True, stdout=subprocess.PIPE, preexec_fn=os.setsid) as process:
-                output = process.communicate()[0]
+            exit()
+            process=subprocess.Popen(
+                spark_submit,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True, 
+                shell=True
+                )
+
+            stdout,stderr = process.communicate()
+            if process.returncode !=0:
+                print(stderr)
+                print(stdout)
 
             print("end spark submit")
-            print(output)
 
             traj_pdf = pd.read_parquet("res_orb.parquet")
 
