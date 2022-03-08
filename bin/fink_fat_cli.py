@@ -133,7 +133,9 @@ def init_cli(arguments):
     if arguments["--config"]:
         config.read(arguments["--config"])
     else:
-        config_path = os.path.join(os.path.dirname(fink_fat.__file__), "data", "fink_fat.conf")
+        config_path = os.path.join(
+            os.path.dirname(fink_fat.__file__), "data", "fink_fat.conf"
+        )
         config.read(config_path)
 
     output_path = config["OUTPUT"]["association_output_file"]
@@ -332,110 +334,121 @@ def main():
         traj = gb[gb["ra"] >= int(config["SOLVE_ORBIT_PARAMS"]["orbfit_limit"])][
             "trajectory_id"
         ]
-        traj_to_orbital = trajectory_df[trajectory_df["trajectory_id"].isin(traj)]
+        test_orb = trajectory_df["trajectory_id"].isin(traj)
+        traj_to_orbital = trajectory_df[test_orb]
 
-        if arguments["local"]:
-            if len(traj_to_orbital) > 0:
+        if len(traj_to_orbital) > 0:
+
+            # write the trajectory_df without the trajectories with more than orbfit_limit point
+            traj_no_orb = trajectory_df[~test_orb]
+            traj_no_orb.to_parquet(tr_df_path)
+
+            if arguments["local"]:
+
                 orbit_results = compute_df_orbit_param(
                     traj_to_orbital,
                     int(config["SOLVE_ORBIT_PARAMS"]["cpu_count"]),
                     config["SOLVE_ORBIT_PARAMS"]["ram_dir"],
                 )
 
-                if len(orbit_results) > 0:
-                    traj_with_orb = orbit_results["trajectory_id"]
-                    test_orb = trajectory_df["trajectory_id"].isin(traj_with_orb)
-
-                    obs_with_orb = trajectory_df[test_orb]
-                    obs_without_orb = trajectory_df[~test_orb]
-
-                    if os.path.exists(orb_res_path):
-                        orb_df = pd.read_parquet(orb_res_path)
-                        orb_df = pd.concat([orb_df, orbit_results])
-                        orb_df.to_parquet(orb_res_path)
-                    else:
-                        orbit_results.to_parquet(orb_res_path)
-
-                    if os.path.exists(traj_orb_path):
-                        traj_orb_df = pd.read_parquet(traj_orb_path)
-                        traj_orb_df = pd.concat([traj_orb_df, obs_with_orb])
-                        traj_orb_df.to_parquet(traj_orb_path)
-                    else:
-                        obs_with_orb.to_parquet(traj_orb_path)
-
-                    obs_without_orb.to_parquet(tr_df_path)
-
-                    if arguments["--verbose"]:
-                        print("Orbital elements saved")
-
-                else:
-                    if arguments["--verbose"]:
-                        print("No orbital elements found.")
-        elif arguments["cluster"]:
-            print("cluster mode")
-
-            traj_to_orbital.to_parquet("tmp_traj.parquet")
-
-            master_manager = config["SOLVE_ORBIT_PARAMS"]["manager"]
-            principal_group = config["SOLVE_ORBIT_PARAMS"]["principal"]
-            secret = config["SOLVE_ORBIT_PARAMS"]["secret"]
-            role = config["SOLVE_ORBIT_PARAMS"]["role"]
-            executor_env = config["SOLVE_ORBIT_PARAMS"]["exec_env"]
-            driver_mem = config["SOLVE_ORBIT_PARAMS"]["driver_memory"]
-            exec_mem = config["SOLVE_ORBIT_PARAMS"]["executor_memory"]
-            max_core = config["SOLVE_ORBIT_PARAMS"]["max_core"]
-            exec_core = config["SOLVE_ORBIT_PARAMS"]["executor_core"]
+                print(orbit_results)
+                exit()
             
-            application = os.path.join(os.path.dirname(fink_fat.__file__), "orbit_fitting", "orbfit_cluster.py")
+            elif arguments["cluster"]:
+                traj_to_orbital.to_parquet("tmp_traj.parquet")
 
-            spark_submit = "spark-submit \
-                --master {} \
-                --conf spark.mesos.principal={} \
-                --conf spark.mesos.secret={} \
-                --conf spark.mesos.role={} \
-                --conf spark.executorEnv.HOME={} \
-                --driver-memory {}G \
-                --executor-memory {}G \
-                --conf spark.cores.max={} \
-                --conf spark.executor.cores={} \
-                {}"\
-                .format(
-                    master_manager, 
-                    principal_group, 
-                    secret, 
-                    role, 
-                    executor_env, 
+                master_manager = config["SOLVE_ORBIT_PARAMS"]["manager"]
+                principal_group = config["SOLVE_ORBIT_PARAMS"]["principal"]
+                secret = config["SOLVE_ORBIT_PARAMS"]["secret"]
+                role = config["SOLVE_ORBIT_PARAMS"]["role"]
+                executor_env = config["SOLVE_ORBIT_PARAMS"]["exec_env"]
+                driver_mem = config["SOLVE_ORBIT_PARAMS"]["driver_memory"]
+                exec_mem = config["SOLVE_ORBIT_PARAMS"]["executor_memory"]
+                max_core = config["SOLVE_ORBIT_PARAMS"]["max_core"]
+                exec_core = config["SOLVE_ORBIT_PARAMS"]["executor_core"]
+
+                application = os.path.join(
+                    os.path.dirname(fink_fat.__file__), "orbit_fitting", "orbfit_cluster.py"
+                )
+
+                spark_submit = "spark-submit \
+                    --master {} \
+                    --conf spark.mesos.principal={} \
+                    --conf spark.mesos.secret={} \
+                    --conf spark.mesos.role={} \
+                    --conf spark.executorEnv.HOME={} \
+                    --driver-memory {}G \
+                    --executor-memory {}G \
+                    --conf spark.cores.max={} \
+                    --conf spark.executor.cores={} \
+                    {}".format(
+                    master_manager,
+                    principal_group,
+                    secret,
+                    role,
+                    executor_env,
                     driver_mem,
                     exec_mem,
                     max_core,
                     exec_core,
-                    application
-                )
-            
-            print("spark-submit")
-            print(spark_submit)
-            print()
-            print()
-            
-            process=subprocess.Popen(
-                spark_submit,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                universal_newlines=True, 
-                shell=True
+                    application,
                 )
 
-            stdout,stderr = process.communicate()
-            if process.returncode !=0:
-                print(stderr)
-                print(stdout)
+                process = subprocess.Popen(
+                    spark_submit,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    universal_newlines=True,
+                    shell=True,
+                )
 
-            print("end spark submit")
+                stdout, stderr = process.communicate()
+                if process.returncode != 0:
+                    print(stderr)
+                    print(stdout)
+                    exit()
 
-            traj_pdf = pd.read_parquet("res_orb.parquet")
+                traj_pdf = pd.read_parquet("res_orb.parquet")
 
-            print()
-            print(traj_pdf)
+                print(traj_pdf)
+
+                exit()
+
+            if len(orbit_results) > 0:
+
+                # get only the trajectories with orbital elements
+                traj_with_orb_elem = orbit_results[orbit_results["a"] != -1.0]
+
+                # get the observations of trajectories with orbital elements
+                obs_with_orb = traj_to_orbital[
+                    traj_to_orbital["trajectory_id"].isin(
+                        traj_with_orb_elem["trajectory_id"]
+                    )
+                ]
+
+                if os.path.exists(orb_res_path):
+                    # if a save of orbit exists, append the new trajectories to it.
+                    orb_df = pd.read_parquet(orb_res_path)
+                    orb_df = pd.concat([orb_df, traj_with_orb_elem])
+                    orb_df.to_parquet(orb_res_path)
+                else:
+                    # else we create the save of orbital elements
+                    orbit_results.to_parquet(orb_res_path)
+
+                if os.path.exists(traj_orb_path):
+                    # we save the observations of trajectories with orbital elements
+                    traj_orb_df = pd.read_parquet(traj_orb_path)
+                    traj_orb_df = pd.concat([traj_orb_df, obs_with_orb])
+                    traj_orb_df.to_parquet(traj_orb_path)
+                else:
+                    obs_with_orb.to_parquet(traj_orb_path)
+
+                if arguments["--verbose"]:
+                    print("Orbital elements saved")
+
+            else:
+                if arguments["--verbose"]:
+                    print("No orbital elements found.")
 
         else:
             print("No trajectory with enough points to send to orbfit.")
@@ -487,6 +500,6 @@ def main():
             )
         else:
             print("No trajectories with orbital elements found")
-    
+
     else:
         exit()

@@ -26,7 +26,6 @@ from pyspark.sql import functions as F
 from pyspark.sql import SparkSession
 
 
-
 def time_to_decimal(time):
     """
     Get the decimal part of a date.
@@ -454,7 +453,6 @@ def prep_orbfit(ram_dir):
     if not os.path.isdir(dir_path):
         os.mkdir(dir_path)
 
-
     copyfile(os.path.join(orbfit_path, "AST17.bai_431_fcct"), ram_dir + "AST17.bai")
     os.chmod(ram_dir + "AST17.bai", 0o777)
 
@@ -519,7 +517,7 @@ def write_observation_file(ram_dir, ra, dec, dcmag, band, date, traj_id):
 
     >>> shutil.rmtree("mpcobs/")
     """
-    
+
     coord = SkyCoord(ra, dec, unit=u.degree).to_string("hmsdms")
     translation_rules = {ord(i): " " for i in "hmd"}
     translation_rules[ord("s")] = ""
@@ -560,33 +558,33 @@ def write_oop(ram_dir, provisional_designation):
         # write output options
         file.write("output.\n")
         file.write("\t.elements = 'KEP'\n")
-        
+
         # write operations options
         file.write("operations.\n")
         file.write("\t.init_orbdet = 2\n")
         file.write("\t.diffcor = 2\n")
         file.write("\t.ident = 0\n")
         file.write("\t.ephem = 0\n")
-        
+
         # write error model options
         file.write("error_model.\n")
         file.write("\t.name='fcct14'\n")
-        
+
         # write additional options
         file.write("IERS.\n")
         file.write("\t.extrapolation = .T.\n")
-        
+
         # write reject options
         file.write("reject.\n")
         file.write("\t.rejopp = .FALSE.\n")
-        
+
         # write propagation options
         file.write("propag.\n")
         file.write("\t.iast = 17\n")
         file.write("\t.npoint = 600\n")
         file.write("\t.dmea = 0.2d0\n")
         file.write("\t.dter = 0.05d0\n")
-        
+
         # write location files options
         file.write(".filbe=" + ram_dir + "AST17\n")
         file.write("\noutput_files.\n")
@@ -651,39 +649,33 @@ def read_oel(ram_dir, prov_desig):
         return list(np.ones(13, dtype=np.float64) * -1)
 
 
-
 def orbit_wrapper(ra, dec, dcmag, band, date, traj_id, ram_dir):
-
     @pandas_udf(ArrayType(DoubleType()))
     def get_orbit_element(ra, dec, dcmag, band, date, traj_id):
         _pid = os.getpid()
         current_ram_path = os.path.join(ram_dir, str(_pid), "")
         if not os.path.isdir(current_ram_path):
             os.mkdir(current_ram_path)
-            
+
         prep_orbfit(current_ram_path)
-        
+
         res = []
-        for c_ra, c_dec, c_dcmag, c_band, c_date, c_traj_id in zip(ra, dec, dcmag, band, date, traj_id):
+        for c_ra, c_dec, c_dcmag, c_band, c_date, c_traj_id in zip(
+            ra, dec, dcmag, band, date, traj_id
+        ):
             prov_desig = write_observation_file(
-                current_ram_path,
-                c_ra,
-                c_dec,
-                c_dcmag,
-                c_band,
-                c_date,
-                c_traj_id
+                current_ram_path, c_ra, c_dec, c_dcmag, c_band, c_date, c_traj_id
             )
             write_inp(current_ram_path, prov_desig)
             write_oop(current_ram_path, prov_desig)
-            
+
             call_orbitfit(current_ram_path, prov_desig)
             orb_elem = read_oel(current_ram_path, prov_desig)
-            
+
             res.append(orb_elem)
-            
+
             obs_clean(current_ram_path, prov_desig)
-            
+
         final_clean(current_ram_path)
         os.rmdir(current_ram_path)
         return pd.Series(res)
@@ -691,42 +683,52 @@ def orbit_wrapper(ra, dec, dcmag, band, date, traj_id, ram_dir):
     return get_orbit_element(ra, dec, dcmag, band, date, traj_id)
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     import fink_fat.others.utils as ut
+
     ram_dir = "/tmp/ramdisk/"
 
-    spark = spark = SparkSession.builder \
-                        .master("mesos://vm-75063.lal.in2p3.fr:5050") \
-                        .appName("orbfit_cluster") \
-                        .getOrCreate()
+    spark = spark = (
+        SparkSession.builder.master("mesos://vm-75063.lal.in2p3.fr:5050")
+        .appName("orbfit_cluster")
+        .getOrCreate()
+    )
 
     # read the input from local parquet file
     traj_df = pd.read_parquet("tmp_traj.parquet")
     # transform the local pandas dataframe into a spark dataframe
     sparkDF = spark.createDataFrame(traj_df)
 
-    spark_gb = sparkDF.groupby("trajectory_id") \
-        .agg(F.sort_array(F.collect_list(F.struct("jd", "ra", "dec", "fid", "dcmag"))) \
-        .alias("collected_list"))\
-        .withColumn("ra", F.col("collected_list.ra"))\
-        .withColumn("dec", F.col("collected_list.dec"))\
-        .withColumn("fid", F.col("collected_list.fid"))\
-        .withColumn("dcmag", F.col("collected_list.dcmag"))\
-        .withColumn("jd", F.col("collected_list.jd"))\
+    spark_gb = (
+        sparkDF.groupby("trajectory_id")
+        .agg(
+            F.sort_array(
+                F.collect_list(F.struct("jd", "ra", "dec", "fid", "dcmag"))
+            ).alias("collected_list")
+        )
+        .withColumn("ra", F.col("collected_list.ra"))
+        .withColumn("dec", F.col("collected_list.dec"))
+        .withColumn("fid", F.col("collected_list.fid"))
+        .withColumn("dcmag", F.col("collected_list.dcmag"))
+        .withColumn("jd", F.col("collected_list.jd"))
         .drop("collected_list")
+    )
 
     spark_gb = spark_gb.repartition(sparkDF.rdd.getNumPartitions())
 
     print("begin compute orbital elem on spark")
-    spark_column = spark_gb.withColumn('orbital_elements', orbit_wrapper(
-        spark_gb.ra,
-        spark_gb.dec,
-        spark_gb.dcmag,
-        spark_gb.fid,
-        spark_gb.jd,
-        spark_gb.trajectory_id,
-        ram_dir
-    ))
+    spark_column = spark_gb.withColumn(
+        "orbital_elements",
+        orbit_wrapper(
+            spark_gb.ra,
+            spark_gb.dec,
+            spark_gb.dcmag,
+            spark_gb.fid,
+            spark_gb.jd,
+            spark_gb.trajectory_id,
+            ram_dir,
+        ),
+    )
 
     orb_pdf = spark_column.toPandas()
     orb_pdf.to_parquet("res_orb.parquet")
