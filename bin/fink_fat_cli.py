@@ -345,7 +345,7 @@ def main():
                     traj_to_orbital,
                     int(config["SOLVE_ORBIT_PARAMS"]["cpu_count"]),
                     config["SOLVE_ORBIT_PARAMS"]["ram_dir"],
-                )
+                ).drop("provisional designation", axis=1)
 
                 print(orbit_results)
                 exit()
@@ -419,10 +419,8 @@ def main():
                 ]
 
                 split_df = pd.DataFrame(traj_pdf["orbital_elements"].tolist(), columns=orbital_columns)
-                traj_pdf = pd.concat([traj_pdf, split_df], axis=1)
-                orbit_results = traj_pdf.drop("orbital_elements", axis=1)
 
-                print(orbit_results)
+                print(split_df)
                 exit()
 
             if len(orbit_results) > 0:
