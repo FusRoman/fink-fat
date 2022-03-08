@@ -1,24 +1,18 @@
+import logging
 import os
 import signal
 import subprocess
+import traceback
 import numpy as np
 
+from glob import glob
 import pandas as pd
 from astropy.time import Time
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 from shutil import copyfile
 import re
-from fink_fat.orbit_fitting.orbfit_local import (
-    band_to_str,
-    final_clean,
-    join_string,
-    make_date,
-    make_designation,
-    obs_clean,
-    read_oel,
-    write_inp,
-)
+from fink_fat.orbit_fitting.orbfit_local import band_to_str, join_string, make_date, make_designation, rm_files
 
 from pyspark.sql.functions import pandas_udf
 from pyspark.sql.types import *  # noqa: F403
@@ -37,6 +31,24 @@ def prep_orbfit(ram_dir):
 
     copyfile(os.path.join(orbfit_path, "AST17.bep_431_fcct"), ram_dir + "AST17.bep")
     os.chmod(ram_dir + "AST17.bep", 0o777)
+
+
+def final_clean(ram_dir):
+    rm_files(glob(ram_dir + "*.bai"))
+    rm_files(glob(ram_dir + "*.bep"))
+    rm_files(glob(ram_dir + "*.log"))
+
+    os.rmdir(ram_dir + "mpcobs")
+
+
+def obs_clean(ram_dir, prov_desig):
+    rm_files(glob(ram_dir + prov_desig + ".*"))
+    rm_files(glob(ram_dir + "mpcobs/" + prov_desig + ".*"))
+
+
+def write_inp(ram_dir, provisional_designation):
+    with open(ram_dir + provisional_designation + ".inp", "wt") as file:
+        file.write(ram_dir + provisional_designation)
 
 
 def write_observation_file(ram_dir, ra, dec, dcmag, band, date, traj_id):
@@ -179,6 +191,37 @@ def call_orbitfit(ram_dir, provisional_designation):
             return output
 
 
+def read_oel(ram_dir, prov_desig):
+    try:
+        with open(ram_dir + prov_desig + ".oel") as file:
+            lines = file.readlines()
+
+            ref_mjd = float(lines[8].strip().split()[1])
+            # conversion from modified julian date to julian date
+            ref_jd = ref_mjd + 2400000.5
+
+            orb_params = " ".join(lines[7].strip().split()).split(" ")
+            if len(lines) > 12:
+                rms = " ".join(lines[12].strip().split()).split(" ")
+            else:
+                rms = [-1, -1, -1, -1, -1, -1, -1, -1]
+            return [float(i) for i in [ref_jd] + orb_params[1:] + rms[2:]]
+    except FileNotFoundError:
+        return list(np.ones(13, dtype=np.float64) * -1)
+    except Exception as e:
+        print("----")
+        print(e)
+        print()
+        print("ERROR READ OEL FILE: {}".format(prov_desig))
+        print()
+        print(lines)
+        print()
+        print()
+        logging.error(traceback.format_exc())
+        print("----")
+        return list(np.ones(13, dtype=np.float64) * -1)
+
+
 def orbit_wrapper(ra, dec, dcmag, band, date, traj_id, ram_dir):
     @pandas_udf(ArrayType(DoubleType()))  # noqa: F405
     def get_orbit_element(ra, dec, dcmag, band, date, traj_id):
@@ -214,8 +257,6 @@ def orbit_wrapper(ra, dec, dcmag, band, date, traj_id, ram_dir):
 
 
 if __name__ == "__main__":
-    import fink_fat.others.utils as ut
-
     ram_dir = "/tmp/ramdisk/"
 
     spark = spark = (
