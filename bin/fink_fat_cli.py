@@ -16,7 +16,7 @@ Options:
   candidates                       Run the associations on the solar system candidates alerts.
   local                            Run the orbital solver in local mode. Use multiprocessing to speed-up the computation.
   cluster                          Run the orbital solver in cluster mode. Use a Spark cluster to significantly speed-up the computation.
-                                   The cluster mode need to be launch on a system where pyspark are installed and a cluster manager are setup.
+                                   The cluster mode need to be launch on a system where pyspark are installed and a spark cluster manager are setup.
   -n <date> --night <date>         Specify the night to request sso alerts from fink broker.
                                    Format is yyyy-mm-dd as yyyy = year, mm = month, dd = day.
                                    Example : 2022-03-04 for the 2022 march 04.
@@ -70,7 +70,7 @@ def get_last_sso_alert(object_class, date, verbose=False):
         "https://fink-portal.org/api/v1/latests",
         json={
             "class": object_class,
-            "n": "100",
+            "n": "1000",
             "startdate": str(startdate),
             "stopdate": str(stopdate),
         },
