@@ -406,8 +406,23 @@ def main():
 
                 traj_pdf = pd.read_parquet("res_orb.parquet")
 
-                print(traj_pdf)
+                orbital_columns = [
+                    "ref_epoch",
+                    "a", "e", "i",
+                    "long. node",
+                    "arg. peric",
+                    "mean anomaly",
+                    "rms_a", "rms_e", "rms_i",
+                    "rms_long. node",
+                    "rms_arg. peric",
+                    "rms_mean anomaly"
+                ]
 
+                split_df = pd.DataFrame(traj_pdf["orbital_elements"].tolist(), columns=orbital_columns)
+                traj_pdf = pd.concat([traj_pdf, split_df], axis=1)
+                orbit_results = traj_pdf.drop("orbital_elements", axis=1)
+
+                print(orbit_results)
                 exit()
 
             if len(orbit_results) > 0:
