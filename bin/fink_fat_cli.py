@@ -418,6 +418,9 @@ def main():
                 split_df = pd.DataFrame(traj_pdf["orbital_elements"].tolist(), columns=orbital_columns)
                 orbit_results = pd.concat([traj_pdf["trajectory_id"], split_df], axis=1)
 
+                os.remove("tmp_traj.parquet")
+                os.remove("res_orb.parquet")
+
             if len(orbit_results) > 0:
 
                 # write the trajectory_df without the trajectories with more than orbfit_limit point
