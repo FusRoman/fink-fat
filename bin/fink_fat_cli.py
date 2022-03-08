@@ -31,7 +31,6 @@ Options:
 
 from collections import Counter
 from collections import OrderedDict
-import subprocess
 from docopt import docopt
 import os
 import pandas as pd
@@ -39,14 +38,25 @@ import numpy as np
 import time as t
 import datetime
 from astropy import units as u
-from bin.orbit_cli import cluster_mode, get_orbital_data, intro_reset_orbit, yes_orbit_reset
+from bin.orbit_cli import (
+    cluster_mode,
+    get_orbital_data,
+    intro_reset_orbit,
+    yes_orbit_reset,
+)
 from bin.utils_cli import get_class, init_cli, string_to_bool, yes_or_no
 
 import fink_fat
 from fink_fat.associations.inter_night_associations import night_to_night_association
 from fink_fat.others.utils import cast_obs_data
 from fink_fat.orbit_fitting.orbfit_local import compute_df_orbit_param
-from bin.association_cli import get_data, get_last_sso_alert, intro_reset, no_reset, yes_reset
+from bin.association_cli import (
+    get_data,
+    get_last_sso_alert,
+    intro_reset,
+    no_reset,
+    yes_reset,
+)
 
 
 def main():
@@ -82,14 +92,20 @@ def main():
             object_class, last_night, arguments["--verbose"]
         )
         if arguments["--verbose"]:
-            print("time taken to retrieve alerts from fink broker: {}".format(t.time() - t_before))
+            print(
+                "time taken to retrieve alerts from fink broker: {}".format(
+                    t.time() - t_before
+                )
+            )
             print()
 
         if len(new_alerts) == 0:
             print("no alerts available for the night of {}".format(last_night))
             exit()
 
-        trajectory_df, old_obs_df, last_nid, next_nid = get_data(new_alerts, tr_df_path, obs_df_path)
+        trajectory_df, old_obs_df, last_nid, next_nid = get_data(
+            new_alerts, tr_df_path, obs_df_path
+        )
 
         if arguments["--verbose"]:
             print("started associations...")

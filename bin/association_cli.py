@@ -129,5 +129,5 @@ def get_data(new_alerts, tr_df_path, obs_df_path):
                 "Maybe try with a more recent night or reset the associations with 'fink_fat association -r'"
             )
             exit()
-        
+
     return trajectory_df, old_obs_df, last_nid, next_nid

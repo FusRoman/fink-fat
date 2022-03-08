@@ -12,13 +12,10 @@ def intro_reset_orbit():
         "you will loose the previously computed orbital elements and all the associated observations, Continue ? [Y/n]"
     )
 
+
 def yes_orbit_reset(arguments, orb_res_path, traj_orb_path):
     if os.path.exists(orb_res_path) and os.path.exists(traj_orb_path):
-        print(
-            "Removing files :\n\t{}\n\t{}".format(
-                orb_res_path, traj_orb_path
-            )
-        )
+        print("Removing files :\n\t{}\n\t{}".format(orb_res_path, traj_orb_path))
         try:
             os.remove(orb_res_path)
             os.remove(traj_orb_path)
@@ -28,6 +25,7 @@ def yes_orbit_reset(arguments, orb_res_path, traj_orb_path):
                 print("Error code:", e.code)
     else:
         print("File with orbital elements not exists.")
+
 
 def get_orbital_data(config, tr_df_path):
     # test if the trajectory_df exist in the output directory.
@@ -50,6 +48,7 @@ def get_orbital_data(config, tr_df_path):
 
     return traj_to_orbital, traj_no_orb
 
+
 def cluster_mode(config, traj_to_orbital):
     traj_to_orbital.to_parquet("tmp_traj.parquet")
 
@@ -64,9 +63,7 @@ def cluster_mode(config, traj_to_orbital):
     exec_core = config["SOLVE_ORBIT_PARAMS"]["executor_core"]
 
     application = os.path.join(
-        os.path.dirname(fink_fat.__file__),
-        "orbit_fitting",
-        "orbfit_cluster.py",
+        os.path.dirname(fink_fat.__file__), "orbit_fitting", "orbfit_cluster.py",
     )
 
     spark_submit = "spark-submit \
