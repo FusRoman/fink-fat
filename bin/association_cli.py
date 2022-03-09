@@ -22,7 +22,7 @@ def get_last_sso_alert(object_class, date, verbose=False):
         "https://fink-portal.org/api/v1/latests",
         json={
             "class": object_class,
-            "n": "1000",
+            "n": "10000000",
             "startdate": str(startdate),
             "stopdate": str(stopdate),
         },

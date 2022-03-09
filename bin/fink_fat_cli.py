@@ -102,6 +102,9 @@ def main():
             object_class, last_night, arguments["--verbose"]
         )
 
+        if arguments["--verbose"]:
+            print("Number of alerts retrieve from fink: {}".format(len(new_alerts)))
+
         if arguments["--save"]:
             save_path = os.path.join(output_path, "save", "")
             if not os.path.isdir(save_path):
@@ -669,6 +672,9 @@ def main():
             new_alerts = get_last_sso_alert(
                 object_class, current_date.strftime("%Y-%m-%d"), arguments["--verbose"]
             )
+
+            if arguments["--verbose"]:
+                print("Number of alerts retrieve from fink: {}".format(len(new_alerts)))
 
             if arguments["--save"]:
                 if len(new_alerts) > 0:
