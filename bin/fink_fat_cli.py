@@ -2,7 +2,7 @@
 Usage:
     fink_fat associations (mpc | candidates) [--night <date>] [options]
     fink_fat solve_orbit (mpc | candidates) (local | cluster) [options]
-    fink_fat offline (mpc | candidates) (local | cluster) <start> <end> [options]
+    fink_fat offline (mpc | candidates) (local | cluster) <end> [<start>] [options]
     fink_fat stats (mpc | candidates) [options]
     fink_fat -h | --help
     fink_fat --version
@@ -39,6 +39,7 @@ import numpy as np
 import time as t
 import datetime
 from astropy import units as u
+from bin.offline_cli import offline_intro_reset, offline_yes_reset
 from bin.orbit_cli import (
     cluster_mode,
     get_orbital_data,
@@ -69,6 +70,7 @@ def main():
 
     if arguments["associations"]:
 
+        # get the path according to the class mpc or candidates
         output_path, object_class = get_class(arguments, output_path)
 
         tr_df_path = os.path.join(output_path, "trajectory_df.parquet")
@@ -139,6 +141,11 @@ def main():
             ),
             arguments["--verbose"],
         )
+
+        if "last_assoc_date" in trajectory_df:
+            trajectory_df["last_assoc_date"] = last_night
+        else:
+            trajectory_df.insert(len(trajectory_df.columns), "last_assoc_date", last_night)
 
         cast_obs_data(trajectory_df).to_parquet(tr_df_path)
         cast_obs_data(old_obs_df).to_parquet(obs_df_path)
@@ -283,22 +290,71 @@ def main():
 
         output_path, object_class = get_class(arguments, output_path)
 
-        current_date = datetime.datetime.strptime(arguments["<start>"], "%Y-%m-%d")
-        stop_date = datetime.datetime.strptime(arguments["<end>"], "%Y-%m-%d")
-        delta_day = datetime.timedelta(days=1)
+        # path to the associations data
+        tr_df_path = os.path.join(output_path, "trajectory_df.parquet")
+        obs_df_path = os.path.join(output_path, "old_obs.parquet")
 
-        today = datetime.datetime.now().date() + delta_day
+        # path to the orbit data
+        orb_res_path = os.path.join(output_path, "orbital.parquet")
+        traj_orb_path = os.path.join(output_path, "trajectory_orb.parquet")
 
-        if current_date > stop_date:
-            print("Error !!! Start date is greater than stop date.")
-            exit()
-        
+        # remove the save data from previous associations if the user say yes
+        if arguments["--reset"]:
+            yes_or_no(
+                offline_intro_reset,
+                offline_yes_reset,
+                no_reset,
+                yes_args=(arguments, tr_df_path, obs_df_path, orb_res_path, traj_orb_path),
+            )
+
         trajectory_columns = ['ra', 'dec', 'jd', 'nid', 'fid', 'dcmag', 'candid', 'not_updated', 'ssnamenr', 'trajectory_id']
         trajectory_df = pd.DataFrame(columns=trajectory_columns)
         old_obs_df = pd.DataFrame(columns=trajectory_columns)
+        
+        delta_day = datetime.timedelta(days=1)
 
-        obs_with_orb = pd.DataFrame()
-        traj_with_orb_elem = pd.DataFrame()
+        # Default: begin the offline mode from the last night
+        current_date = datetime.datetime.now() - delta_day
+
+        # test if the trajectory_df and old_obs_df exists in the output directory.
+        if os.path.exists(tr_df_path) and os.path.exists(obs_df_path):
+            if arguments["<start>"] is not None :
+                print("A save of trajectories candidates already exists.")
+                print("Remove the <start> argument if you want to continue with the save")
+                print("or use the -r options to restart the associations from your <start> date.")
+                print("Abort offline mode.")
+                exit()
+
+            trajectory_df = pd.read_parquet(tr_df_path)
+            old_obs_df = pd.read_parquet(obs_df_path)
+
+            # first case: trajectories already exists: begin the offline mode with the last associations date + 1
+            current_date = datetime.datetime.strptime(trajectory_df["last_assoc_date"].values[0], "%Y-%m-%d")
+            current_date += delta_day
+        
+        # last case: <start> options given by the user, start the offline mode from this date.
+        if arguments["<start>"] is not None :
+            current_date = datetime.datetime.strptime(arguments["<start>"], "%Y-%m-%d")
+
+        # stop date
+        stop_date = datetime.datetime.strptime(arguments["<end>"], "%Y-%m-%d")
+
+        # tomorrow
+        today = datetime.datetime.now().date()
+
+        if current_date.date() > stop_date.date():
+            print("Error !!! Start date is greater than stop date.")
+            exit()
+
+        orb_df = pd.DataFrame()
+        traj_orb_df = pd.DataFrame()
+
+        # load the orbit data if already exists
+        if os.path.exists(orb_res_path):
+            orb_df = pd.read_parquet(orb_res_path)
+
+        if os.path.exists(traj_orb_path):
+            traj_orb_df = pd.read_parquet(traj_orb_path)
 
         while True:
             if arguments["--verbose"]:
@@ -373,6 +429,8 @@ def main():
             if len(traj_to_orbital) > 0:
 
                 if arguments["--verbose"]:
+                    print()
+                    print("Number of trajectories candidates send to solve orbit: {}".format(len(np.unique(traj_to_orbital["trajectory_id"]))))
                     print("Solve orbit...")
 
                 if arguments["local"]:
@@ -409,8 +467,8 @@ def main():
                         )
                     ]
 
-                    traj_with_orb_elem = pd.concat([traj_with_orb_elem, current_traj_with_orb_elem])
-                    obs_with_orb = pd.concat([obs_with_orb, current_obs_with_orb])
+                    orb_df = pd.concat([orb_df, current_traj_with_orb_elem])
+                    traj_orb_df = pd.concat([traj_orb_df, current_obs_with_orb])
 
 
 
@@ -422,6 +480,13 @@ def main():
                 print("The current processing day is greater than today. Out of the offline loop.")
                 break
         
+        # save the new data computed by the online mode
+        cast_obs_data(trajectory_df).to_parquet(tr_df_path)
+        cast_obs_data(old_obs_df).to_parquet(obs_df_path)
+
+        orb_df.to_parquet(orb_res_path)
+        traj_orb_df.to_parquet(traj_orb_path)
+
         print("Offline mode ended")
 
     else:
