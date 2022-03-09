@@ -23,7 +23,7 @@ Options:
                                    Example : 2022-03-04 for the 2022 march 04.
                                    [intervall of day between the day starting at night midday until night midday + 1]
   -m <path> --mpc-data <path>      Compute statistics according to the minor planet center database.
-                                   <path> of the mpc database file. 
+                                   <path> of the mpc database file.
                                    The mpc database can be downloaded by pasting this url in your browser: https://minorplanetcenter.net/Extended_Files/mpcorb_extended.json.gz
   -r --reset                       Remove the file containing the trajectories candidates, the old observations and the orbits.
   -s --save                        Save the alerts sent by Fink before the associations for statistics purposes.
@@ -66,6 +66,7 @@ from bin.association_cli import (
     no_reset,
     yes_reset,
 )
+
 
 def main():
 
@@ -279,9 +280,14 @@ def main():
             gb = trajectory_df.groupby(["trajectory_id"]).count()["ra"]
             c = Counter(gb)
             table_data = [["Size", "Number of trajectories candidates"]]
-            table_data += [ [size, number_size] for size, number_size in OrderedDict(sorted(c.items())).items()]
-            table_instance = AsciiTable(table_data, "trajectories candidates distribution")
-            table_instance.justify_columns[1] = 'right'
+            table_data += [
+                [size, number_size]
+                for size, number_size in OrderedDict(sorted(c.items())).items()
+            ]
+            table_instance = AsciiTable(
+                table_data, "trajectories candidates distribution"
+            )
+            table_instance.justify_columns[1] = "right"
             print()
             print(table_instance.table)
             print()
@@ -304,11 +310,15 @@ def main():
             print("No trajectories with orbital elements found")
             exit()
 
-        orb_stats = orb_df[["a", "e", "i", "long. node", "arg. peric", "mean anomaly"]].describe().round(decimals=3)
+        orb_stats = (
+            orb_df[["a", "e", "i", "long. node", "arg. peric", "mean anomaly"]]
+            .describe()
+            .round(decimals=3)
+        )
         print("Number of orbit candidates: {}".format(orb_stats["a"]["count"]))
 
         orbit_distrib_data = (
-            ("orbital elements", "Metrics" , "Values"),
+            ("orbital elements", "Metrics", "Values"),
             ("semi-major-axis (AU)", "mean", orb_stats["a"]["mean"]),
             ("", "std", orb_stats["a"]["std"]),
             ("", "min", orb_stats["a"]["min"]),
@@ -343,15 +353,35 @@ def main():
         main_belt_candidates = orb_df[(orb_df["a"] <= 4.5) & (orb_df["a"] >= 1.7)]
         distant_main_belt = orb_df[orb_df["a"] > 4.5]
         close_asteroids = orb_df[orb_df["a"] < 1.7]
-        earth_crosser = close_asteroids[(close_asteroids["a"] < 1.7) & (close_asteroids["e"] > 0.1)]
-        no_earth_crosser = close_asteroids[(close_asteroids["a"] < 1.7) & (close_asteroids["e"] <= 0.1)]
+        earth_crosser = close_asteroids[
+            (close_asteroids["a"] < 1.7) & (close_asteroids["e"] > 0.1)
+        ]
+        no_earth_crosser = close_asteroids[
+            (close_asteroids["a"] < 1.7) & (close_asteroids["e"] <= 0.1)
+        ]
 
         orbit_type_data = (
             ("Orbit type", "Number of candidates", "Notes"),
-            ("Main belt", len(main_belt_candidates), "Main belt asteroids are asteroids with a semi major axis between 1.7 AU and 4.5 AU"),
-            ("Distant", len(distant_main_belt), "Distant asteroids are asteroids with a semi major axis greater than 4.5 AU"),
-            ("Earth crosser", len(earth_crosser), "An asteroids is considered as an earth crosser when his semi major axis is less than 1.7 and his eccentricity is greater than 0.1"),
-            ("No earth crosser", len(no_earth_crosser), "Asteroids with a semi major axis less than 1.7 and an eccentricity less than 0.1")
+            (
+                "Main belt",
+                len(main_belt_candidates),
+                "Main belt asteroids are asteroids with a semi major axis between 1.7 AU and 4.5 AU",
+            ),
+            (
+                "Distant",
+                len(distant_main_belt),
+                "Distant asteroids are asteroids with a semi major axis greater than 4.5 AU",
+            ),
+            (
+                "Earth crosser",
+                len(earth_crosser),
+                "An asteroids is considered as an earth crosser when his semi major axis is less than 1.7 and his eccentricity is greater than 0.1",
+            ),
+            (
+                "No earth crosser",
+                len(no_earth_crosser),
+                "Asteroids with a semi major axis less than 1.7 and an eccentricity less than 0.1",
+            ),
         )
         orb_type_table = SingleTable(orbit_type_data, "orbit candidates type")
         print()
@@ -367,28 +397,41 @@ def main():
                 for path in all_path_alert:
                     pdf = pd.read_parquet(path)
                     alerts_pdf = pd.concat([alerts_pdf, pdf])
-                
-                alerts_pdf["ssnamenr"] = alerts_pdf["ssnamenr"].astype("string")
-                
-                gb = alerts_pdf.sort_values(["jd"]).groupby(["ssnamenr"]).agg(
-                    trajectory_size=("candid", lambda x: len(list(x))),
-                    nid=("nid", list),
-                    diff_night=("nid", lambda x: list(np.diff(list(x))))
-                ).reset_index()
 
-                detectable_test = gb["trajectory_size"] >= int(config["SOLVE_ORBIT_PARAMS"]["orbfit_limit"])
+                alerts_pdf["ssnamenr"] = alerts_pdf["ssnamenr"].astype("string")
+
+                gb = (
+                    alerts_pdf.sort_values(["jd"])
+                    .groupby(["ssnamenr"])
+                    .agg(
+                        trajectory_size=("candid", lambda x: len(list(x))),
+                        nid=("nid", list),
+                        diff_night=("nid", lambda x: list(np.diff(list(x)))),
+                    )
+                    .reset_index()
+                )
+
+                detectable_test = gb["trajectory_size"] >= int(
+                    config["SOLVE_ORBIT_PARAMS"]["orbfit_limit"]
+                )
 
                 trivial_detectable_sso = gb[detectable_test]
                 trivial_detectable_sso.insert(
                     len(trivial_detectable_sso.columns),
                     "detectable",
-                    trivial_detectable_sso.apply(test_detectable, axis=1, args=(
-                        int(config["TW_PARAMS"]["trajectory_keep_limit"]),
-                        int(config["SOLVE_ORBIT_PARAMS"]["orbfit_limit"])
-                    )))
+                    trivial_detectable_sso.apply(
+                        test_detectable,
+                        axis=1,
+                        args=(
+                            int(config["TW_PARAMS"]["trajectory_keep_limit"]),
+                            int(config["SOLVE_ORBIT_PARAMS"]["orbfit_limit"]),
+                        ),
+                    ),
+                )
 
-                detectable_sso = trivial_detectable_sso[trivial_detectable_sso["detectable"]]
-                non_detectable_sso = gb[~detectable_test]
+                detectable_sso = trivial_detectable_sso[
+                    trivial_detectable_sso["detectable"]
+                ]
 
                 obs_with_orb = orb_df.merge(traj_orb_df, on="trajectory_id")
 
@@ -396,8 +439,10 @@ def main():
                     obs_with_orb.groupby(["trajectory_id"])
                     .agg(
                         error=("ssnamenr", lambda x: len(np.unique(x))),
-                        ssnamenr=("ssnamenr", list)
-                    ).reset_index().explode(["ssnamenr"])
+                        ssnamenr=("ssnamenr", list),
+                    )
+                    .reset_index()
+                    .explode(["ssnamenr"])
                 )
 
                 true_orbit = true_cand[true_cand["error"] == 1]
@@ -412,17 +457,48 @@ def main():
 
                 table_data = (
                     ("Metrics", "Values", "Notes"),
-                    ("True SSO", len(np.unique(alerts_pdf["ssnamenr"])), "Number of solar system objects (SSO) observed by ZTF since the first associations date with fink_fat."),
-                    ("Detectable True SSO", detectable, "Number of SSO detectable with fink_fat according to the config file.\n(trajectory_keep_limit={} days / orbfit_limit={} points.".format(config["TW_PARAMS"]["trajectory_keep_limit"], config["SOLVE_ORBIT_PARAMS"]["orbfit_limit"])),
-                    ("Orbit candidates", orb_cand, "Number of orbit detected with fink_fat"),
-                    ("Pure objects orbit", pure_orb, "Number of orbit candidates that contains only observations of the same SSO."),
-                    ("Detected SSO", detected, "Number of unique SSO detected with fink_fat.\n(removes the SSO seen multiple time with fink_fat)"),
-                    ("Purity" , "{} %".format(purity), "ratio between the number of orbit candidates and the number of pure orbits"),
-                    ("Efficiency", "{} %".format(efficiency), "ratio between the number of detectable sso and the number of detected sso with fink_fat.")
+                    (
+                        "True SSO",
+                        len(np.unique(alerts_pdf["ssnamenr"])),
+                        "Number of solar system objects (SSO) observed by ZTF since the first associations date with fink_fat.",
+                    ),
+                    (
+                        "Detectable True SSO",
+                        detectable,
+                        "Number of SSO detectable with fink_fat according to the config file.\n(trajectory_keep_limit={} days / orbfit_limit={} points.".format(
+                            config["TW_PARAMS"]["trajectory_keep_limit"],
+                            config["SOLVE_ORBIT_PARAMS"]["orbfit_limit"],
+                        ),
+                    ),
+                    (
+                        "Orbit candidates",
+                        orb_cand,
+                        "Number of orbit detected with fink_fat",
+                    ),
+                    (
+                        "Pure objects orbit",
+                        pure_orb,
+                        "Number of orbit candidates that contains only observations of the same SSO.",
+                    ),
+                    (
+                        "Detected SSO",
+                        detected,
+                        "Number of unique SSO detected with fink_fat.\n(removes the SSO seen multiple time with fink_fat)",
+                    ),
+                    (
+                        "Purity",
+                        "{} %".format(purity),
+                        "ratio between the number of orbit candidates and the number of pure orbits",
+                    ),
+                    (
+                        "Efficiency",
+                        "{} %".format(efficiency),
+                        "ratio between the number of detectable sso and the number of detected sso with fink_fat.",
+                    ),
                 )
 
                 table_instance = DoubleTable(table_data, "fink_fat performances")
-                table_instance.justify_columns[2] = 'right'
+                table_instance.justify_columns[2] = "right"
                 print(table_instance.table)
 
                 if arguments["--mpc-data"] is not None:
@@ -432,12 +508,20 @@ def main():
                         print()
                         print("Load mpc database...")
                         mpc_data = pd.read_json(arguments["--mpc-data"])
-                        mpc_data['Number'] = mpc_data['Number'].astype("string").str[1:-1]
-                        
-                        sub_set_mpc = alerts_pdf.merge(mpc_data, left_on="ssnamenr", right_on="Number", how='inner')
-                        
-                        detectable_mpc = sub_set_mpc[sub_set_mpc["ssnamenr"].isin(detectable_sso["ssnamenr"])].drop_duplicates(subset=["ssnamenr"])
-                        pure_mpc = sub_set_mpc[sub_set_mpc["ssnamenr"].isin(true_orbit["ssnamenr"])].drop_duplicates(subset=["ssnamenr"])
+                        mpc_data["Number"] = (
+                            mpc_data["Number"].astype("string").str[1:-1]
+                        )
+
+                        sub_set_mpc = alerts_pdf.merge(
+                            mpc_data, left_on="ssnamenr", right_on="Number", how="inner"
+                        )
+
+                        detectable_mpc = sub_set_mpc[
+                            sub_set_mpc["ssnamenr"].isin(detectable_sso["ssnamenr"])
+                        ].drop_duplicates(subset=["ssnamenr"])
+                        pure_mpc = sub_set_mpc[
+                            sub_set_mpc["ssnamenr"].isin(true_orbit["ssnamenr"])
+                        ].drop_duplicates(subset=["ssnamenr"])
 
                         count_detect_orbit = Counter(detectable_mpc["Orbit_type"])
                         count_pure_orbit = Counter(pure_mpc["Orbit_type"])
@@ -447,22 +531,36 @@ def main():
                                 pure_value = count_pure_orbit[detect_key]
                             else:
                                 pure_value = 0
-                            
-                            table_rows.append([detect_key, "{} %".format(np.round_((pure_value / detect_value) * 100, decimals=2))])
-                        
-                        orbit_type_table = DoubleTable(table_rows, "Orbit type recovery performance")
+
+                            table_rows.append(
+                                [
+                                    detect_key,
+                                    "{} %".format(
+                                        np.round_(
+                                            (pure_value / detect_value) * 100,
+                                            decimals=2,
+                                        )
+                                    ),
+                                ]
+                            )
+
+                        orbit_type_table = DoubleTable(
+                            table_rows, "Orbit type recovery performance"
+                        )
                         print()
                         print(orbit_type_table.table)
-                    
+
                     else:
                         print()
                         print("The indicated path for the mpc database doesn't exist.")
                         exit()
 
-                print("\t*Reminder: These performance statistics exists as fink_fat has been run in mpc mode.")
+                print(
+                    "\t*Reminder: These performance statistics exists as fink_fat has been run in mpc mode."
+                )
 
                 exit()
-                
+
     elif arguments["offline"]:
         print("offline mode")
 
@@ -576,7 +674,8 @@ def main():
                 if len(new_alerts) > 0:
                     new_alerts.to_parquet(
                         os.path.join(
-                            save_path, "alert_{}".format(current_date.strftime("%Y-%m-%d"))
+                            save_path,
+                            "alert_{}".format(current_date.strftime("%Y-%m-%d")),
                         )
                     )
 

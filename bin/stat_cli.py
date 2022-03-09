@@ -1,5 +1,6 @@
 import numpy as np
 
+
 def test_detectable(list_diff_night, traj_time_window, orbfit_limit):
     np_array = np.array(list_diff_night["diff_night"])
     np_mask = np.ma.masked_array(np_array, np_array > traj_time_window)
@@ -15,5 +16,5 @@ def test_detectable(list_diff_night, traj_time_window, orbfit_limit):
             np.concatenate(([not_mask[0]], not_mask[:-1] != not_mask[1:], [True]))
         )[0]
     )[::2]
-    
+
     return np.any(count_consecutif * 2 >= orbfit_limit)
