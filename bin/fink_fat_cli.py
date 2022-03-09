@@ -52,7 +52,7 @@ from bin.orbit_cli import (
     intro_reset_orbit,
     yes_orbit_reset,
 )
-from bin.stat_cli import test_detectable
+from bin.stat_cli import compute_residue, test_detectable
 from bin.utils_cli import get_class, init_cli, string_to_bool, yes_or_no
 
 import fink_fat
@@ -552,6 +552,88 @@ def main():
                         )
                         print()
                         print(orbit_type_table.table)
+                        print(
+                            "\t*Ratio computed between the detectable object and the pure detected objects with fink_fat."
+                        )
+
+                        true_obs = obs_with_orb[
+                            obs_with_orb["trajectory_id"].isin(
+                                true_cand["trajectory_id"]
+                            )
+                        ]
+                        detect_orb_with_mpc = true_obs.drop_duplicates(
+                            subset=["trajectory_id"]
+                        ).merge(
+                            sub_set_mpc,
+                            left_on="ssnamenr",
+                            right_on="Number",
+                            how="inner",
+                        )
+
+                        orbital_residue = compute_residue(detect_orb_with_mpc)[
+                            ["da", "de", "di", "dNode", "dPeri", "dM"]
+                        ]
+                        residue_stats = orbital_residue.describe().round(decimals=3)
+
+                        orbit_residue_data = (
+                            ("orbital elements", "Metrics", "Values"),
+                            (
+                                "residue semi-major-axis (AU)",
+                                "mean",
+                                residue_stats["da"]["mean"],
+                            ),
+                            ("", "std", residue_stats["da"]["std"]),
+                            ("", "min", residue_stats["da"]["min"]),
+                            ("", "max", residue_stats["da"]["max"]),
+                            (
+                                "residue eccentricity",
+                                "mean",
+                                residue_stats["de"]["mean"],
+                            ),
+                            ("", "std", residue_stats["de"]["std"]),
+                            ("", "min", residue_stats["de"]["min"]),
+                            ("", "max", residue_stats["de"]["max"]),
+                            (
+                                "residue inclination",
+                                "mean",
+                                residue_stats["di"]["mean"],
+                            ),
+                            ("", "std", residue_stats["di"]["std"]),
+                            ("", "min", residue_stats["di"]["min"]),
+                            ("", "max", residue_stats["di"]["max"]),
+                            (
+                                "residue long. node",
+                                "mean",
+                                residue_stats["dNode"]["mean"],
+                            ),
+                            ("", "std", residue_stats["dNode"]["std"]),
+                            ("", "min", residue_stats["dNode"]["min"]),
+                            ("", "max", residue_stats["dNode"]["max"]),
+                            (
+                                "residue arg. peric",
+                                "mean",
+                                residue_stats["dPeri"]["mean"],
+                            ),
+                            ("", "std", residue_stats["dPeri"]["std"]),
+                            ("", "min", residue_stats["dPeri"]["min"]),
+                            ("", "max", residue_stats["dPeri"]["max"]),
+                            (
+                                "residue mean anomaly",
+                                "mean",
+                                residue_stats["dM"]["mean"],
+                            ),
+                            ("", "std", residue_stats["dM"]["std"]),
+                            ("", "min", residue_stats["dM"]["min"]),
+                            ("", "max", residue_stats["dM"]["max"]),
+                        )
+
+                        residue_table = SingleTable(
+                            orbit_residue_data, "orbit residuals"
+                        )
+                        print(residue_table.table)
+                        print(
+                            "\t*Residues computed between the orbital elements from the pure detected objets and the orbital elemments from the mpc database for the corresponding object."
+                        )
 
                     else:
                         print()
@@ -559,7 +641,7 @@ def main():
                         exit()
 
                 print(
-                    "\t*Reminder: These performance statistics exists as fink_fat has been run in mpc mode."
+                    "\t**Reminder: These performance statistics exists as fink_fat has been run in mpc mode."
                 )
 
                 exit()

@@ -18,3 +18,17 @@ def test_detectable(list_diff_night, traj_time_window, orbfit_limit):
     )[::2]
 
     return np.any(count_consecutif * 2 >= orbfit_limit)
+
+
+def compute_residue(df):
+    df = df.reset_index(drop=True)
+    computed_elem = df[
+        ["a_x", "e_x", "i_x", "long. node", "arg. peric", "mean anomaly"]
+    ]
+    known_elem = df[["a_y", "e_y", "i_y", "Node", "Peri", "M"]]
+
+    df[["da", "de", "di", "dNode", "dPeri", "dM"]] = (
+        computed_elem.values - known_elem.values
+    )
+
+    return df
