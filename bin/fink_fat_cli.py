@@ -100,7 +100,9 @@ def main():
             save_path = os.path.join(output_path, "save", "")
             if not os.path.isdir(save_path):
                 os.mkdir(save_path)
-            new_alerts.to_parquet(os.path.join(save_path, "alert_{}".format(last_night)))
+            new_alerts.to_parquet(
+                os.path.join(save_path, "alert_{}".format(last_night))
+            )
 
         if arguments["--verbose"]:
             print(
@@ -405,7 +407,11 @@ def main():
             )
 
             if arguments["--save"]:
-                new_alerts.to_parquet(os.path.join(save_path, "alert_{}".format(current_date.strftime("%Y-%m-%d"))))
+                new_alerts.to_parquet(
+                    os.path.join(
+                        save_path, "alert_{}".format(current_date.strftime("%Y-%m-%d"))
+                    )
+                )
 
             # if no alerts are available
             if len(new_alerts) == 0:

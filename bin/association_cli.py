@@ -98,7 +98,7 @@ def yes_reset(arguments, tr_df_path, obs_df_path):
         print("File trajectory and old observations not exists.")
 
     dirname = os.path.dirname(tr_df_path)
-    save_path = os.path.join(dirname, "save" , "")
+    save_path = os.path.join(dirname, "save", "")
     if os.path.exists(save_path):
         shutil.rmtree(save_path)
 
