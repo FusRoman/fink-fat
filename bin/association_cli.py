@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import requests
 from fink_science.conversion import dc_mag
+import shutil
 
 
 def get_last_sso_alert(object_class, date, verbose=False):
@@ -95,6 +96,11 @@ def yes_reset(arguments, tr_df_path, obs_df_path):
                 print("Error code:", e.code)
     else:
         print("File trajectory and old observations not exists.")
+
+    dirname = os.path.dirname(tr_df_path)
+    save_path = os.path.join(dirname, "save" , "")
+    if os.path.exists(save_path):
+        shutil.rmtree(save_path)
 
 
 def no_reset():
