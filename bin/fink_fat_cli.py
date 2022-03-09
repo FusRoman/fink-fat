@@ -1,8 +1,9 @@
 """
 Usage:
-    fink_fat associations (mpc | candidates) [--night <date>] [options]
+    fink_fat associations (mpc | candidates) [--night <date> --save] [options]
     fink_fat solve_orbit (mpc | candidates) (local | cluster) [options]
-    fink_fat stats (mpc | candidates) [options]
+    fink_fat offline (mpc | candidates) (local | cluster) <end> [<start> --save] [options]
+    fink_fat stats (mpc | candidates) [--mpc-data <path>] [options]
     fink_fat -h | --help
     fink_fat --version
 
@@ -21,7 +22,11 @@ Options:
                                    Format is yyyy-mm-dd as yyyy = year, mm = month, dd = day.
                                    Example : 2022-03-04 for the 2022 march 04.
                                    [intervall of day between the day starting at night midday until night midday + 1]
-  -r --reset                       Remove the file containing the trajectories and the old observations.
+  -m <path> --mpc-data <path>      Compute statistics according to the minor planet center database.
+                                   <path> of the mpc database file.
+                                   The mpc database can be downloaded by pasting this url in your browser: https://minorplanetcenter.net/Extended_Files/mpcorb_extended.json.gz
+  -r --reset                       Remove the file containing the trajectories candidates, the old observations and the orbits.
+  -s --save                        Save the alerts sent by Fink before the associations for statistics purposes.
   -h --help                        Show help and quit.
   --version                        Show version.
   --config FILE                    Specify the config file
@@ -37,13 +42,17 @@ import pandas as pd
 import numpy as np
 import time as t
 import datetime
+import glob
 from astropy import units as u
+from terminaltables import DoubleTable, AsciiTable, SingleTable
+from bin.offline_cli import offline_intro_reset, offline_yes_reset
 from bin.orbit_cli import (
     cluster_mode,
     get_orbital_data,
     intro_reset_orbit,
     yes_orbit_reset,
 )
+from bin.stat_cli import test_detectable
 from bin.utils_cli import get_class, init_cli, string_to_bool, yes_or_no
 
 import fink_fat
@@ -68,6 +77,7 @@ def main():
 
     if arguments["associations"]:
 
+        # get the path according to the class mpc or candidates
         output_path, object_class = get_class(arguments, output_path)
 
         tr_df_path = os.path.join(output_path, "trajectory_df.parquet")
@@ -91,6 +101,16 @@ def main():
         new_alerts = get_last_sso_alert(
             object_class, last_night, arguments["--verbose"]
         )
+
+        if arguments["--save"]:
+            save_path = os.path.join(output_path, "save", "")
+            if not os.path.isdir(save_path):
+                os.mkdir(save_path)
+            if len(new_alerts) > 0:
+                new_alerts.to_parquet(
+                    os.path.join(save_path, "alert_{}".format(last_night))
+                )
+
         if arguments["--verbose"]:
             print(
                 "time taken to retrieve alerts from fink broker: {}".format(
@@ -139,6 +159,13 @@ def main():
             arguments["--verbose"],
         )
 
+        if "last_assoc_date" in trajectory_df:
+            trajectory_df["last_assoc_date"] = last_night
+        else:
+            trajectory_df.insert(
+                len(trajectory_df.columns), "last_assoc_date", last_night
+            )
+
         cast_obs_data(trajectory_df).to_parquet(tr_df_path)
         cast_obs_data(old_obs_df).to_parquet(obs_df_path)
 
@@ -165,6 +192,8 @@ def main():
         if len(traj_to_orbital) > 0:
 
             if arguments["local"]:
+                t_before = t.time()
+
                 # return orbit results from local mode
                 orbit_results = compute_df_orbit_param(
                     traj_to_orbital,
@@ -172,9 +201,17 @@ def main():
                     config["SOLVE_ORBIT_PARAMS"]["ram_dir"],
                 ).drop("provisional designation", axis=1)
 
+                if arguments["--verbose"]:
+                    print("time taken to get orbit: {}".format(t.time() - t_before))
+
             elif arguments["cluster"]:
+                t_before = t.time()
+
                 # return orbit results from cluster mode
                 orbit_results = cluster_mode(config, traj_to_orbital)
+
+                if arguments["--verbose"]:
+                    print("time taken to get orbit: {}".format(t.time() - t_before))
 
             if len(orbit_results) > 0:
 
@@ -226,26 +263,33 @@ def main():
         tr_df_path = os.path.join(output_path, "trajectory_df.parquet")
         orb_res_path = os.path.join(output_path, "orbital.parquet")
         obs_df_path = os.path.join(output_path, "old_obs.parquet")
+        traj_orb_path = os.path.join(output_path, "trajectory_orb.parquet")
 
         if os.path.exists(tr_df_path):
             trajectory_df = pd.read_parquet(tr_df_path)
             print(
-                "Number of observations, all trajectories combined: {}".format(
+                "Number of observations, all trajectories candidates combined: {}".format(
                     len(trajectory_df)
                 )
             )
             print(
-                "Number of trajectories detected: {}".format(
+                "Number of trajectories candidates: {}".format(
                     len(np.unique(trajectory_df["trajectory_id"]))
                 )
             )
             gb = trajectory_df.groupby(["trajectory_id"]).count()["ra"]
-            print("Trajectories size distribution:")
             c = Counter(gb)
-            for size, number_size in OrderedDict(sorted(c.items())).items():
-                print(
-                    "\tsize: {}, number of trajectories: {}".format(size, number_size)
-                )
+            table_data = [["Size", "Number of trajectories candidates"]]
+            table_data += [
+                [size, number_size]
+                for size, number_size in OrderedDict(sorted(c.items())).items()
+            ]
+            table_instance = AsciiTable(
+                table_data, "trajectories candidates distribution"
+            )
+            table_instance.justify_columns[1] = "right"
+            print()
+            print(table_instance.table)
             print()
         else:
             print(
@@ -259,13 +303,515 @@ def main():
         else:
             print("No old observations exists.")
 
-        if os.path.exists(orb_res_path):
+        if os.path.exists(orb_res_path) and os.path.exists(traj_orb_path):
             orb_df = pd.read_parquet(orb_res_path)
-            print(
-                "number of trajectories with orbital elements: {}".format(len(orb_df))
-            )
+            traj_orb_df = pd.read_parquet(traj_orb_path)
         else:
             print("No trajectories with orbital elements found")
+            exit()
+
+        orb_stats = (
+            orb_df[["a", "e", "i", "long. node", "arg. peric", "mean anomaly"]]
+            .describe()
+            .round(decimals=3)
+        )
+        print("Number of orbit candidates: {}".format(orb_stats["a"]["count"]))
+
+        orbit_distrib_data = (
+            ("orbital elements", "Metrics", "Values"),
+            ("semi-major-axis (AU)", "mean", orb_stats["a"]["mean"]),
+            ("", "std", orb_stats["a"]["std"]),
+            ("", "min", orb_stats["a"]["min"]),
+            ("", "max", orb_stats["a"]["max"]),
+            ("eccentricity", "mean", orb_stats["e"]["mean"]),
+            ("", "std", orb_stats["e"]["std"]),
+            ("", "min", orb_stats["e"]["min"]),
+            ("", "max", orb_stats["e"]["max"]),
+            ("inclination", "mean", orb_stats["i"]["mean"]),
+            ("", "std", orb_stats["i"]["std"]),
+            ("", "min", orb_stats["i"]["min"]),
+            ("", "max", orb_stats["i"]["max"]),
+            ("long. node", "mean", orb_stats["long. node"]["mean"]),
+            ("", "std", orb_stats["long. node"]["std"]),
+            ("", "min", orb_stats["long. node"]["min"]),
+            ("", "max", orb_stats["long. node"]["max"]),
+            ("arg. peric", "mean", orb_stats["arg. peric"]["mean"]),
+            ("", "std", orb_stats["arg. peric"]["std"]),
+            ("", "min", orb_stats["arg. peric"]["min"]),
+            ("", "max", orb_stats["arg. peric"]["max"]),
+            ("mean anomaly", "mean", orb_stats["mean anomaly"]["mean"]),
+            ("", "std", orb_stats["mean anomaly"]["std"]),
+            ("", "min", orb_stats["mean anomaly"]["min"]),
+            ("", "max", orb_stats["mean anomaly"]["max"]),
+        )
+
+        orb_table = SingleTable(orbit_distrib_data, "orbit candidates distribution")
+        print()
+        print(orb_table.table)
+        print()
+
+        main_belt_candidates = orb_df[(orb_df["a"] <= 4.5) & (orb_df["a"] >= 1.7)]
+        distant_main_belt = orb_df[orb_df["a"] > 4.5]
+        close_asteroids = orb_df[orb_df["a"] < 1.7]
+        earth_crosser = close_asteroids[
+            (close_asteroids["a"] < 1.7) & (close_asteroids["e"] > 0.1)
+        ]
+        no_earth_crosser = close_asteroids[
+            (close_asteroids["a"] < 1.7) & (close_asteroids["e"] <= 0.1)
+        ]
+
+        orbit_type_data = (
+            ("Orbit type", "Number of candidates", "Notes"),
+            (
+                "Main belt",
+                len(main_belt_candidates),
+                "Main belt asteroids are asteroids with a semi major axis between 1.7 AU and 4.5 AU",
+            ),
+            (
+                "Distant",
+                len(distant_main_belt),
+                "Distant asteroids are asteroids with a semi major axis greater than 4.5 AU",
+            ),
+            (
+                "Earth crosser",
+                len(earth_crosser),
+                "An asteroids is considered as an earth crosser when his semi major axis is less than 1.7 and his eccentricity is greater than 0.1",
+            ),
+            (
+                "No earth crosser",
+                len(no_earth_crosser),
+                "Asteroids with a semi major axis less than 1.7 and an eccentricity less than 0.1",
+            ),
+        )
+        orb_type_table = SingleTable(orbit_type_data, "orbit candidates type")
+        print()
+        print(orb_type_table.table)
+        print()
+
+        if arguments["mpc"]:
+            print()
+            path_alert = os.path.join(output_path, "save", "")
+            if os.path.exists(path_alert):
+                all_path_alert = glob.glob(os.path.join(path_alert, "alert_*"))
+                alerts_pdf = pd.DataFrame()
+                for path in all_path_alert:
+                    pdf = pd.read_parquet(path)
+                    alerts_pdf = pd.concat([alerts_pdf, pdf])
+
+                alerts_pdf["ssnamenr"] = alerts_pdf["ssnamenr"].astype("string")
+
+                gb = (
+                    alerts_pdf.sort_values(["jd"])
+                    .groupby(["ssnamenr"])
+                    .agg(
+                        trajectory_size=("candid", lambda x: len(list(x))),
+                        nid=("nid", list),
+                        diff_night=("nid", lambda x: list(np.diff(list(x)))),
+                    )
+                    .reset_index()
+                )
+
+                detectable_test = gb["trajectory_size"] >= int(
+                    config["SOLVE_ORBIT_PARAMS"]["orbfit_limit"]
+                )
+
+                trivial_detectable_sso = gb[detectable_test]
+                trivial_detectable_sso.insert(
+                    len(trivial_detectable_sso.columns),
+                    "detectable",
+                    trivial_detectable_sso.apply(
+                        test_detectable,
+                        axis=1,
+                        args=(
+                            int(config["TW_PARAMS"]["trajectory_keep_limit"]),
+                            int(config["SOLVE_ORBIT_PARAMS"]["orbfit_limit"]),
+                        ),
+                    ),
+                )
+
+                detectable_sso = trivial_detectable_sso[
+                    trivial_detectable_sso["detectable"]
+                ]
+
+                obs_with_orb = orb_df.merge(traj_orb_df, on="trajectory_id")
+
+                true_cand = (
+                    obs_with_orb.groupby(["trajectory_id"])
+                    .agg(
+                        error=("ssnamenr", lambda x: len(np.unique(x))),
+                        ssnamenr=("ssnamenr", list),
+                    )
+                    .reset_index()
+                    .explode(["ssnamenr"])
+                )
+
+                true_orbit = true_cand[true_cand["error"] == 1]
+
+                orb_cand = len(orb_df)
+                pure_orb = len(np.unique(true_orbit["trajectory_id"]))
+                purity = np.round_((pure_orb / orb_cand) * 100, decimals=2)
+
+                detectable = len(np.unique(detectable_sso["ssnamenr"]))
+                detected = len(np.unique(true_orbit["ssnamenr"]))
+                efficiency = np.round_((detected / detectable) * 100, decimals=2)
+
+                table_data = (
+                    ("Metrics", "Values", "Notes"),
+                    (
+                        "True SSO",
+                        len(np.unique(alerts_pdf["ssnamenr"])),
+                        "Number of solar system objects (SSO) observed by ZTF since the first associations date with fink_fat.",
+                    ),
+                    (
+                        "Detectable True SSO",
+                        detectable,
+                        "Number of SSO detectable with fink_fat according to the config file.\n(trajectory_keep_limit={} days / orbfit_limit={} points.".format(
+                            config["TW_PARAMS"]["trajectory_keep_limit"],
+                            config["SOLVE_ORBIT_PARAMS"]["orbfit_limit"],
+                        ),
+                    ),
+                    (
+                        "Orbit candidates",
+                        orb_cand,
+                        "Number of orbit detected with fink_fat",
+                    ),
+                    (
+                        "Pure objects orbit",
+                        pure_orb,
+                        "Number of orbit candidates that contains only observations of the same SSO.",
+                    ),
+                    (
+                        "Detected SSO",
+                        detected,
+                        "Number of unique SSO detected with fink_fat.\n(removes the SSO seen multiple time with fink_fat)",
+                    ),
+                    (
+                        "Purity",
+                        "{} %".format(purity),
+                        "ratio between the number of orbit candidates and the number of pure orbits",
+                    ),
+                    (
+                        "Efficiency",
+                        "{} %".format(efficiency),
+                        "ratio between the number of detectable sso and the number of detected sso with fink_fat.",
+                    ),
+                )
+
+                table_instance = DoubleTable(table_data, "fink_fat performances")
+                table_instance.justify_columns[2] = "right"
+                print(table_instance.table)
+
+                if arguments["--mpc-data"] is not None:
+
+                    if os.path.exists(arguments["--mpc-data"]):
+                        print()
+                        print()
+                        print("Load mpc database...")
+                        mpc_data = pd.read_json(arguments["--mpc-data"])
+                        mpc_data["Number"] = (
+                            mpc_data["Number"].astype("string").str[1:-1]
+                        )
+
+                        sub_set_mpc = alerts_pdf.merge(
+                            mpc_data, left_on="ssnamenr", right_on="Number", how="inner"
+                        )
+
+                        detectable_mpc = sub_set_mpc[
+                            sub_set_mpc["ssnamenr"].isin(detectable_sso["ssnamenr"])
+                        ].drop_duplicates(subset=["ssnamenr"])
+                        pure_mpc = sub_set_mpc[
+                            sub_set_mpc["ssnamenr"].isin(true_orbit["ssnamenr"])
+                        ].drop_duplicates(subset=["ssnamenr"])
+
+                        count_detect_orbit = Counter(detectable_mpc["Orbit_type"])
+                        count_pure_orbit = Counter(pure_mpc["Orbit_type"])
+                        table_rows = [["Orbit type", "Recovery"]]
+                        for detect_key, detect_value in count_detect_orbit.items():
+                            if detect_key in count_pure_orbit:
+                                pure_value = count_pure_orbit[detect_key]
+                            else:
+                                pure_value = 0
+
+                            table_rows.append(
+                                [
+                                    detect_key,
+                                    "{} %".format(
+                                        np.round_(
+                                            (pure_value / detect_value) * 100,
+                                            decimals=2,
+                                        )
+                                    ),
+                                ]
+                            )
+
+                        orbit_type_table = DoubleTable(
+                            table_rows, "Orbit type recovery performance"
+                        )
+                        print()
+                        print(orbit_type_table.table)
+
+                    else:
+                        print()
+                        print("The indicated path for the mpc database doesn't exist.")
+                        exit()
+
+                print(
+                    "\t*Reminder: These performance statistics exists as fink_fat has been run in mpc mode."
+                )
+
+                exit()
+
+    elif arguments["offline"]:
+        print("offline mode")
+
+        output_path, object_class = get_class(arguments, output_path)
+
+        # path to the associations data
+        tr_df_path = os.path.join(output_path, "trajectory_df.parquet")
+        obs_df_path = os.path.join(output_path, "old_obs.parquet")
+
+        # path to the orbit data
+        orb_res_path = os.path.join(output_path, "orbital.parquet")
+        traj_orb_path = os.path.join(output_path, "trajectory_orb.parquet")
+
+        # remove the save data from previous associations if the user say yes
+        if arguments["--reset"]:
+            yes_or_no(
+                offline_intro_reset,
+                offline_yes_reset,
+                no_reset,
+                yes_args=(
+                    arguments,
+                    tr_df_path,
+                    obs_df_path,
+                    orb_res_path,
+                    traj_orb_path,
+                ),
+            )
+
+        trajectory_columns = [
+            "ra",
+            "dec",
+            "jd",
+            "nid",
+            "fid",
+            "dcmag",
+            "candid",
+            "not_updated",
+            "ssnamenr",
+            "trajectory_id",
+        ]
+        trajectory_df = pd.DataFrame(columns=trajectory_columns)
+        old_obs_df = pd.DataFrame(columns=trajectory_columns)
+
+        delta_day = datetime.timedelta(days=1)
+
+        # Default: begin the offline mode from the last night
+        current_date = datetime.datetime.now() - delta_day
+
+        # test if the trajectory_df and old_obs_df exists in the output directory.
+        if os.path.exists(tr_df_path) and os.path.exists(obs_df_path):
+            if arguments["<start>"] is not None:
+                print("A save of trajectories candidates already exists.")
+                print(
+                    "Remove the <start> argument if you want to continue with the save"
+                )
+                print(
+                    "or use the -r options to restart the associations from your <start> date."
+                )
+                print("Abort offline mode.")
+                exit()
+
+            trajectory_df = pd.read_parquet(tr_df_path)
+            old_obs_df = pd.read_parquet(obs_df_path)
+
+            # first case: trajectories already exists: begin the offline mode with the last associations date + 1
+            current_date = datetime.datetime.strptime(
+                trajectory_df["last_assoc_date"].values[0], "%Y-%m-%d"
+            )
+            current_date += delta_day
+
+        # last case: <start> options given by the user, start the offline mode from this date.
+        if arguments["<start>"] is not None:
+            current_date = datetime.datetime.strptime(arguments["<start>"], "%Y-%m-%d")
+
+        # stop date
+        stop_date = datetime.datetime.strptime(arguments["<end>"], "%Y-%m-%d")
+
+        # tomorrow
+        today = datetime.datetime.now().date()
+
+        if current_date.date() > stop_date.date():
+            print("Error !!! Start date is greater than stop date.")
+            exit()
+
+        orb_df = pd.DataFrame()
+        traj_orb_df = pd.DataFrame()
+
+        # load the orbit data if already exists
+        if os.path.exists(orb_res_path):
+            orb_df = pd.read_parquet(orb_res_path)
+
+        if os.path.exists(traj_orb_path):
+            traj_orb_df = pd.read_parquet(traj_orb_path)
+
+        if arguments["--save"]:
+            save_path = os.path.join(output_path, "save", "")
+            if not os.path.isdir(save_path):
+                os.mkdir(save_path)
+
+        while True:
+            if arguments["--verbose"]:
+                print("current processing date: {}".format(current_date))
+                print()
+
+            t_before = t.time()
+            new_alerts = get_last_sso_alert(
+                object_class, current_date.strftime("%Y-%m-%d"), arguments["--verbose"]
+            )
+
+            if arguments["--save"]:
+                if len(new_alerts) > 0:
+                    new_alerts.to_parquet(
+                        os.path.join(
+                            save_path,
+                            "alert_{}".format(current_date.strftime("%Y-%m-%d")),
+                        )
+                    )
+
+            # if no alerts are available
+            if len(new_alerts) == 0:
+                current_date += delta_day
+
+                if current_date == stop_date + delta_day:
+                    break
+                if current_date.date() == today:
+                    print(
+                        "The current processing day is greater than today. Out of the offline loop."
+                    )
+                    break
+
+                continue
+
+            if arguments["--verbose"]:
+                print(
+                    "time taken to retrieve alerts from fink broker: {}".format(
+                        t.time() - t_before
+                    )
+                )
+                print()
+
+            next_nid = new_alerts["nid"][0]
+            last_nid = np.max([np.max(trajectory_df["nid"]), np.max(old_obs_df["nid"])])
+
+            trajectory_df, old_obs_df, _ = night_to_night_association(
+                trajectory_df,
+                old_obs_df,
+                new_alerts,
+                last_nid,
+                next_nid,
+                int(config["TW_PARAMS"]["trajectory_keep_limit"]),
+                int(config["TW_PARAMS"]["old_observation_keep_limit"]),
+                int(config["TW_PARAMS"]["trajectory_2_points_keep_limit"]),
+                float(config["ASSOC_PARAMS"]["intra_night_separation"]) * u.arcsecond,
+                float(config["ASSOC_PARAMS"]["intra_night_magdiff_limit_same_fid"]),
+                float(config["ASSOC_PARAMS"]["intra_night_magdiff_limit_diff_fid"]),
+                float(config["ASSOC_PARAMS"]["inter_night_separation"]) * u.degree,
+                float(config["ASSOC_PARAMS"]["inter_night_magdiff_limit_same_fid"]),
+                float(config["ASSOC_PARAMS"]["inter_night_magdiff_limit_diff_fid"]),
+                float(config["ASSOC_PARAMS"]["maximum_angle"]),
+                string_to_bool(config["ASSOC_PERF"]["store_kd_tree"]),
+                int(config["SOLVE_ORBIT_PARAMS"]["orbfit_limit"]),
+                string_to_bool(config["ASSOC_SYSTEM"]["tracklets_with_trajectories"]),
+                string_to_bool(
+                    config["ASSOC_SYSTEM"]["trajectories_with_new_observations"]
+                ),
+                string_to_bool(
+                    config["ASSOC_SYSTEM"]["tracklets_with_old_observations"]
+                ),
+                string_to_bool(
+                    config["ASSOC_SYSTEM"]["new_observations_with_old_observations"]
+                ),
+                arguments["--verbose"],
+            )
+
+            # get trajectories with a number of points greater than the orbfit limit
+            gb = trajectory_df.groupby(["trajectory_id"]).count().reset_index()
+            traj = gb[gb["ra"] >= int(config["SOLVE_ORBIT_PARAMS"]["orbfit_limit"])][
+                "trajectory_id"
+            ]
+            test_orb = trajectory_df["trajectory_id"].isin(traj)
+            traj_to_orbital = trajectory_df[test_orb]
+            trajectory_df = trajectory_df[~test_orb]
+
+            if len(traj_to_orbital) > 0:
+
+                if arguments["--verbose"]:
+                    print()
+                    print(
+                        "Number of trajectories candidates send to solve orbit: {}".format(
+                            len(np.unique(traj_to_orbital["trajectory_id"]))
+                        )
+                    )
+                    print("Solve orbit...")
+
+                if arguments["local"]:
+                    t_before = t.time()
+
+                    # return orbit results from local mode
+                    orbit_results = compute_df_orbit_param(
+                        traj_to_orbital,
+                        int(config["SOLVE_ORBIT_PARAMS"]["cpu_count"]),
+                        config["SOLVE_ORBIT_PARAMS"]["ram_dir"],
+                    ).drop("provisional designation", axis=1)
+
+                    if arguments["--verbose"]:
+                        print("time taken to get orbit: {}".format(t.time() - t_before))
+
+                elif arguments["cluster"]:
+                    t_before = t.time()
+
+                    # return orbit results from cluster mode
+                    orbit_results = cluster_mode(config, traj_to_orbital)
+
+                    if arguments["--verbose"]:
+                        print("time taken to get orbit: {}".format(t.time() - t_before))
+
+                if len(orbit_results) > 0:
+
+                    # get only the trajectories with orbital elements
+                    current_traj_with_orb_elem = orbit_results[
+                        orbit_results["a"] != -1.0
+                    ]
+
+                    # get the observations of trajectories with orbital elements
+                    current_obs_with_orb = traj_to_orbital[
+                        traj_to_orbital["trajectory_id"].isin(
+                            current_traj_with_orb_elem["trajectory_id"]
+                        )
+                    ]
+
+                    orb_df = pd.concat([orb_df, current_traj_with_orb_elem])
+                    traj_orb_df = pd.concat([traj_orb_df, current_obs_with_orb])
+
+            current_date += delta_day
+
+            if current_date == stop_date + delta_day:
+                break
+            if current_date.date() == today:
+                print(
+                    "The current processing day is greater than today. Out of the offline loop."
+                )
+                break
+
+        # save the new data computed by the online mode
+        cast_obs_data(trajectory_df).to_parquet(tr_df_path)
+        cast_obs_data(old_obs_df).to_parquet(obs_df_path)
+
+        orb_df.to_parquet(orb_res_path)
+        traj_orb_df.to_parquet(traj_orb_path)
+
+        print("Offline mode ended")
 
     else:
         exit()

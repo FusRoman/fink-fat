@@ -14,7 +14,11 @@ pandera
 astropy>=4.2.1
 
 # packaging
-build
+build>=0.7.0
 
 # fink
 fink-science>=0.5.1
+
+# other
+docopt>=0.6.2
+terminaltables>=3.1.10
