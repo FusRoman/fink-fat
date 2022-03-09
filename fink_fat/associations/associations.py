@@ -1177,23 +1177,6 @@ def trajectories_with_new_observations_associations(
                 # get the duplicated tracklets
                 duplicate_obs = obs_assoc[duplicates]
 
-                orbit_column = [
-                    "ref_epoch",
-                    "provisional designation",
-                    "a",
-                    "e",
-                    "i",
-                    "long. node",
-                    "arg. peric",
-                    "mean anomaly",
-                    "rms_a",
-                    "rms_e",
-                    "rms_i",
-                    "rms_long. node",
-                    "rms_arg. peric",
-                    "rms_mean anomaly",
-                ]
-
                 if len(duplicate_obs) > 0:
 
                     # get the trajectories involved in the duplicates
@@ -1246,11 +1229,9 @@ def trajectories_with_new_observations_associations(
                     # assign the new trajectory_id
                     # silence the copy warning
                     with pd.option_context("mode.chained_assignment", None):
-                        df[orbit_column] = -1.0
                         df["trajectory_id"] = new_tr_id
                         df["not_updated"] = False
 
-                        duplicate_obs[orbit_column] = -1.0
                         duplicate_obs["trajectory_id"] = new_obs_id
                         duplicate_obs["not_updated"] = False
 
@@ -1544,21 +1525,6 @@ def old_observations_with_tracklets_associations(
                 # get the duplicated tracklets
                 duplicate_obs = old_obs_right_assoc[duplicates]
 
-                orbit_column = [
-                    "a",
-                    "e",
-                    "i",
-                    "long. node",
-                    "arg. peric",
-                    "mean anomaly",
-                    "rms_a",
-                    "rms_e",
-                    "rms_i",
-                    "rms_long. node",
-                    "rms_arg. peric",
-                    "rms_mean anomaly",
-                ]
-
                 if len(duplicate_obs) > 0:
 
                     # get the tracklets involved with duplicates
@@ -1611,11 +1577,9 @@ def old_observations_with_tracklets_associations(
                     # assign the new list of trajectory_id
                     # silence the copy warning
                     with pd.option_context("mode.chained_assignment", None):
-                        df[orbit_column] = -1.0
                         df["trajectory_id"] = new_tr_id
                         df["not_updated"] = False
 
-                        duplicate_obs[orbit_column] = -1.0
                         duplicate_obs["trajectory_id"] = new_obs_id
                         duplicate_obs["not_updated"] = False
 
