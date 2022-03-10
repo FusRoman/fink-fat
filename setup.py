@@ -20,12 +20,12 @@ setup(
         ]
     },
     install_requires=[
-    'docopt>=0.6.2',
-    'terminaltables>=3.1.10',
-    'fink-science>=0.5.1',
-    'numpy>=1.17',
-    'pandas>=1.3.5',
-    'astropy>=4.2.1'
+        "docopt>=0.6.2",
+        "terminaltables>=3.1.10",
+        "fink-science>=0.5.1",
+        "numpy>=1.17",
+        "pandas>=1.3.5",
+        "astropy>=4.2.1",
     ],
     entry_points={"console_scripts": ["fink_fat=bin.fink_fat_cli:main"]},
     license="Apache-2.0 License",
