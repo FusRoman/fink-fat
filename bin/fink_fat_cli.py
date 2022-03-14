@@ -270,6 +270,11 @@ def main():
 
         if os.path.exists(tr_df_path):
             trajectory_df = pd.read_parquet(tr_df_path)
+
+            if len(trajectory_df) == 0:
+                print("No trajectories detected.")
+                exit()
+
             print(
                 "Number of observations, all trajectories candidates combined: {}".format(
                     len(trajectory_df)
@@ -288,7 +293,7 @@ def main():
                 for size, number_size in OrderedDict(sorted(c.items())).items()
             ]
             table_instance = AsciiTable(
-                table_data, "trajectories candidates distribution"
+                table_data, "Trajectories candidates size distribution"
             )
             table_instance.justify_columns[1] = "right"
             print()
@@ -309,15 +314,38 @@ def main():
         if os.path.exists(orb_res_path) and os.path.exists(traj_orb_path):
             orb_df = pd.read_parquet(orb_res_path)
             traj_orb_df = pd.read_parquet(traj_orb_path)
+
+            if len(orb_df) == 0 or len(traj_orb_df) == 0:
+                print("No trajectories with orbital elements found.")
+                exit()
+
         else:
             print("No trajectories with orbital elements found")
             exit()
 
+        # trajectories with orbits size comparation
+        trajectories_size = Counter(traj_orb_df.groupby(["trajectory_id"]).count()["ra"])
+        table_data = [["Size", "Number of orbits candidates"]]
+        table_data += [
+                [size, number_size]
+                for size, number_size in OrderedDict(sorted(trajectories_size.items())).items()
+        ]
+        table_instance = AsciiTable(
+            table_data, "Orbits candidates size distribution"
+        )
+        table_instance.justify_columns[1] = "right"
+        print()
+        print(table_instance.table)
+        print()
+
+
+        # orbital type statistics
         orb_stats = (
             orb_df[["a", "e", "i", "long. node", "arg. peric", "mean anomaly"]]
             .describe()
             .round(decimals=3)
         )
+
         print("Number of orbit candidates: {}".format(orb_stats["a"]["count"]))
 
         orbit_distrib_data = (
