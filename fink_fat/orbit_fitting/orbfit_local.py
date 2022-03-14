@@ -973,6 +973,7 @@ def compute_df_orbit_param(trajectory_df, cpu_count, ram_dir):
     chunk_ramdir = [os.path.join(ram_dir, "chunkid_{}".format(chunk_id), "") for chunk_id in np.arange(len(trajectory_id_chunks))]
 
     for chunk_dir in chunk_ramdir:
+        os.mkdir(chunk_dir)
         prep_orbitfit(chunk_dir)
 
     chunks = [
@@ -987,7 +988,9 @@ def compute_df_orbit_param(trajectory_df, cpu_count, ram_dir):
     results = [el2 for el1 in results for el2 in el1]
 
     pool.close()
-    final_clean(ram_dir)
+    # final_clean(ram_dir)
+    for chunk_dir in chunk_ramdir:
+        shutil.rmtree(chunk_dir)
 
     return orbit_elem_dataframe(np.array(results))
 
