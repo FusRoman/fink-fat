@@ -324,20 +324,21 @@ def main():
             exit()
 
         # trajectories with orbits size comparation
-        trajectories_size = Counter(traj_orb_df.groupby(["trajectory_id"]).count()["ra"])
+        trajectories_size = Counter(
+            traj_orb_df.groupby(["trajectory_id"]).count()["ra"]
+        )
         table_data = [["Size", "Number of orbits candidates"]]
         table_data += [
-                [size, number_size]
-                for size, number_size in OrderedDict(sorted(trajectories_size.items())).items()
+            [size, number_size]
+            for size, number_size in OrderedDict(
+                sorted(trajectories_size.items())
+            ).items()
         ]
-        table_instance = AsciiTable(
-            table_data, "Orbits candidates size distribution"
-        )
+        table_instance = AsciiTable(table_data, "Orbits candidates size distribution")
         table_instance.justify_columns[1] = "right"
         print()
         print(table_instance.table)
         print()
-
 
         # orbital type statistics
         orb_stats = (

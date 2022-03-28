@@ -22,7 +22,6 @@ def get_last_sso_alert(object_class, date, verbose=False):
     if object_class == "Solar System MPC":
         request_columns += ", i:ssnamenr"
 
-
     r = requests.post(
         "https://fink-portal.org/api/v1/latests",
         json={
@@ -30,7 +29,7 @@ def get_last_sso_alert(object_class, date, verbose=False):
             "n": "200000",
             "startdate": str(startdate),
             "stopdate": str(stopdate),
-            "columns": request_columns
+            "columns": request_columns,
         },
     )
     pdf = pd.read_json(r.content)

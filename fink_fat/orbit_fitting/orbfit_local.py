@@ -970,7 +970,10 @@ def compute_df_orbit_param(trajectory_df, cpu_count, ram_dir):
 
     trajectory_id_chunks = np.array_split(all_traj_id, cpu_count)
 
-    chunk_ramdir = [os.path.join(ram_dir, "chunkid_{}".format(chunk_id), "") for chunk_id in np.arange(len(trajectory_id_chunks))]
+    chunk_ramdir = [
+        os.path.join(ram_dir, "chunkid_{}".format(chunk_id), "")
+        for chunk_id in np.arange(len(trajectory_id_chunks))
+    ]
 
     for chunk_dir in chunk_ramdir:
         os.mkdir(chunk_dir)
