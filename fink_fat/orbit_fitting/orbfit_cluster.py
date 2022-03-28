@@ -705,7 +705,8 @@ if __name__ == "__main__":
         .drop("collected_list")
     )
 
-    spark_gb = spark_gb.repartition(sparkDF.rdd.getNumPartitions())
+    max_core = int(dict(spark.sparkContext.getConf().getAll())['spark.cores.max'])
+    spark_gb = spark_gb.repartition(max_core * 2)
 
     print("begin compute orbital elem on spark")
     spark_column = spark_gb.withColumn(
