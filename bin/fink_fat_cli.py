@@ -358,19 +358,19 @@ def main():
             ("", "std", orb_stats["e"]["std"]),
             ("", "min", orb_stats["e"]["min"]),
             ("", "max", orb_stats["e"]["max"]),
-            ("inclination", "mean", orb_stats["i"]["mean"]),
+            ("inclination (degrees)", "mean", orb_stats["i"]["mean"]),
             ("", "std", orb_stats["i"]["std"]),
             ("", "min", orb_stats["i"]["min"]),
             ("", "max", orb_stats["i"]["max"]),
-            ("long. node", "mean", orb_stats["long. node"]["mean"]),
+            ("long. node (degrees)", "mean", orb_stats["long. node"]["mean"]),
             ("", "std", orb_stats["long. node"]["std"]),
             ("", "min", orb_stats["long. node"]["min"]),
             ("", "max", orb_stats["long. node"]["max"]),
-            ("arg. peric", "mean", orb_stats["arg. peric"]["mean"]),
+            ("arg. peric (degrees)", "mean", orb_stats["arg. peric"]["mean"]),
             ("", "std", orb_stats["arg. peric"]["std"]),
             ("", "min", orb_stats["arg. peric"]["min"]),
             ("", "max", orb_stats["arg. peric"]["max"]),
-            ("mean anomaly", "mean", orb_stats["mean anomaly"]["mean"]),
+            ("mean anomaly (degrees)", "mean", orb_stats["mean anomaly"]["mean"]),
             ("", "std", orb_stats["mean anomaly"]["std"]),
             ("", "min", orb_stats["mean anomaly"]["min"]),
             ("", "max", orb_stats["mean anomaly"]["max"]),
@@ -606,7 +606,7 @@ def main():
                         orbit_residue_data = (
                             ("orbital elements", "Metrics", "Values"),
                             (
-                                "residue semi-major-axis (AU)",
+                                "residue semi-major-axis (AU) (%)",
                                 "mean",
                                 residue_stats["da"]["mean"],
                             ),
@@ -614,7 +614,7 @@ def main():
                             ("", "min", residue_stats["da"]["min"]),
                             ("", "max", residue_stats["da"]["max"]),
                             (
-                                "residue eccentricity",
+                                "residue eccentricity (%)",
                                 "mean",
                                 residue_stats["de"]["mean"],
                             ),
@@ -622,7 +622,7 @@ def main():
                             ("", "min", residue_stats["de"]["min"]),
                             ("", "max", residue_stats["de"]["max"]),
                             (
-                                "residue inclination",
+                                "residue inclination (degrees) (%)",
                                 "mean",
                                 residue_stats["di"]["mean"],
                             ),
@@ -630,7 +630,7 @@ def main():
                             ("", "min", residue_stats["di"]["min"]),
                             ("", "max", residue_stats["di"]["max"]),
                             (
-                                "residue long. node",
+                                "residue long. node (degrees) (%)",
                                 "mean",
                                 residue_stats["dNode"]["mean"],
                             ),
@@ -638,7 +638,7 @@ def main():
                             ("", "min", residue_stats["dNode"]["min"]),
                             ("", "max", residue_stats["dNode"]["max"]),
                             (
-                                "residue arg. peric",
+                                "residue arg. peric (degrees) (%)",
                                 "mean",
                                 residue_stats["dPeri"]["mean"],
                             ),
@@ -646,7 +646,7 @@ def main():
                             ("", "min", residue_stats["dPeri"]["min"]),
                             ("", "max", residue_stats["dPeri"]["max"]),
                             (
-                                "residue mean anomaly",
+                                "residue mean anomaly (degrees) (%)",
                                 "mean",
                                 residue_stats["dM"]["mean"],
                             ),
@@ -660,7 +660,7 @@ def main():
                         )
                         print(residue_table.table)
                         print(
-                            "\t*Residues computed between the orbital elements from the pure detected objets and the orbital elemments from the mpc database for the corresponding object."
+                            "\t*Residues computed between the orbital elements from the pure detected objets and the orbital elements from the mpc database for the corresponding object."
                         )
 
                     else:

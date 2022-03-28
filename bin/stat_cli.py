@@ -28,7 +28,7 @@ def compute_residue(df):
     known_elem = df[["a_y", "e_y", "i_y", "Node", "Peri", "M"]]
 
     df[["da", "de", "di", "dNode", "dPeri", "dM"]] = (
-        computed_elem.values - known_elem.values
+        (computed_elem.values - known_elem.values) / computed_elem.values
     )
 
     return df
