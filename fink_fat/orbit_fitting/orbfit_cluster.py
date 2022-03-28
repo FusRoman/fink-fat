@@ -681,7 +681,7 @@ if __name__ == "__main__":
 
     spark = spark = (
         SparkSession.builder.master("mesos://vm-75063.lal.in2p3.fr:5050")
-        .appName("orbfit_cluster")
+        .appName("orbit_fitting_computation")
         .getOrCreate()
     )
 
