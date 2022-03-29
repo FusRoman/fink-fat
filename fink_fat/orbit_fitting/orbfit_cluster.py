@@ -1,6 +1,7 @@
 import logging
 import os
 import signal
+import sys
 import subprocess
 import traceback
 import numpy as np
@@ -678,9 +679,10 @@ def orbit_wrapper(ra, dec, dcmag, band, date, traj_id, ram_dir):
 
 if __name__ == "__main__":
     ram_dir = "/tmp/ramdisk/"
+    master_adress = sys.argv[1]
 
     spark = spark = (
-        SparkSession.builder.master("mesos://vm-75063.lal.in2p3.fr:5050")
+        SparkSession.builder.master(master_adress)
         .appName("orbit_fitting_computation")
         .getOrCreate()
     )

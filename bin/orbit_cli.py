@@ -66,6 +66,8 @@ def cluster_mode(config, traj_to_orbital):
         os.path.dirname(fink_fat.__file__), "orbit_fitting", "orbfit_cluster.py",
     )
 
+    application += " " + master_manager
+
     spark_submit = "spark-submit \
         --master {} \
         --conf spark.mesos.principal={} \
