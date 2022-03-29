@@ -5,7 +5,7 @@ import pandas as pd
 from astropy.time import Time
 from astropy.coordinates import SkyCoord
 import astropy.units as u
-from shutil import copyfile
+from shutil import copyfile, rmtree
 import re
 import subprocess
 import os
@@ -993,7 +993,7 @@ def compute_df_orbit_param(trajectory_df, cpu_count, ram_dir):
     pool.close()
     # final_clean(ram_dir)
     for chunk_dir in chunk_ramdir:
-        shutil.rmtree(chunk_dir)
+        rmtree(chunk_dir)
 
     return orbit_elem_dataframe(np.array(results))
 
