@@ -741,7 +741,7 @@ def main():
 
             # first case: trajectories already exists: begin the offline mode with the last associations date + 1
             current_date = datetime.datetime.strptime(
-                trajectory_df["last_assoc_date"].values[0], "%Y-%m-%d"
+                str(trajectory_df["last_assoc_date"].values[0].astype("datetime64[D]")), "%Y-%m-%d"
             )
             current_date += delta_day
 
