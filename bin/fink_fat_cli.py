@@ -921,6 +921,13 @@ def main():
                 )
                 break
 
+        if "last_assoc_date" in trajectory_df:
+            trajectory_df["last_assoc_date"] = current_date
+        else:
+            trajectory_df.insert(
+                len(trajectory_df.columns), "last_assoc_date", current_date
+            )
+
         # save the new data computed by the online mode
         cast_obs_data(trajectory_df).to_parquet(tr_df_path)
         cast_obs_data(old_obs_df).to_parquet(obs_df_path)
