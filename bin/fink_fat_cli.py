@@ -363,7 +363,7 @@ def main():
             .round(decimals=3)
         )
 
-        print("Number of orbit candidates: {}".format(orb_stats["a"]["count"]))
+        print("Number of orbit candidates: {}".format(int(orb_stats["a"]["count"])))
 
         orbit_distrib_data = (
             ("orbital elements", "Metrics", "Values"),
