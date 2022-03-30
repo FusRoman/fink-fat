@@ -741,7 +741,8 @@ def main():
 
             # first case: trajectories already exists: begin the offline mode with the last associations date + 1
             current_date = datetime.datetime.strptime(
-                str(trajectory_df["last_assoc_date"].values[0].astype("datetime64[D]")), "%Y-%m-%d"
+                str(trajectory_df["last_assoc_date"].values[0].astype("datetime64[D]")),
+                "%Y-%m-%d",
             )
             current_date += delta_day
 
@@ -897,6 +898,7 @@ def main():
                 if len(orbit_results) > 0:
 
                     # get only the trajectories with orbital elements
+                    # the other one are discards
                     current_traj_with_orb_elem = orbit_results[
                         orbit_results["a"] != -1.0
                     ]
