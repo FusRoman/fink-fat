@@ -53,7 +53,13 @@ from bin.orbit_cli import (
     yes_orbit_reset,
 )
 from bin.stat_cli import compute_residue, test_detectable
-from bin.utils_cli import get_class, init_cli, string_to_bool, yes_or_no
+from bin.utils_cli import (
+    get_class,
+    init_cli,
+    string_to_bool,
+    yes_or_no,
+    align_trajectory_id,
+)
 
 import fink_fat
 from fink_fat.associations.inter_night_associations import night_to_night_association
@@ -218,10 +224,6 @@ def main():
 
             if len(orbit_results) > 0:
 
-                # write the trajectory_df without the trajectories with more than orbfit_limit point
-                # delay the writing of trajectory_df in case of orbfit fail.
-                traj_no_orb.to_parquet(tr_df_path)
-
                 # get only the trajectories with orbital elements
                 traj_with_orb_elem = orbit_results[orbit_results["a"] != -1.0]
 
@@ -235,19 +237,33 @@ def main():
                 if os.path.exists(orb_res_path):
                     # if a save of orbit exists, append the new trajectories to it.
                     orb_df = pd.read_parquet(orb_res_path)
-                    orb_df = pd.concat([orb_df, traj_with_orb_elem])
-                    orb_df.to_parquet(orb_res_path)
-                else:
-                    # else we create the save of orbital elements
-                    orbit_results.to_parquet(orb_res_path)
-
-                if os.path.exists(traj_orb_path):
-                    # we save the observations of trajectories with orbital elements
+                    # if a save of orbit exist then a save of obs orbit necessarily exist
                     traj_orb_df = pd.read_parquet(traj_orb_path)
+
+                    orb_df = pd.concat([orb_df, traj_with_orb_elem])
                     traj_orb_df = pd.concat([traj_orb_df, obs_with_orb])
+
+                    traj_no_orb, orb_df, traj_orb_df = align_trajectory_id(
+                        traj_no_orb, orb_df, traj_orb_df
+                    )
+
+                    orb_df.to_parquet(orb_res_path)
                     traj_orb_df.to_parquet(traj_orb_path)
+
+                    # write the trajectory_df without the trajectories with more than orbfit_limit point
+                    traj_no_orb.to_parquet(tr_df_path)
                 else:
+
+                    traj_no_orb, traj_with_orb_elem, obs_with_orb = align_trajectory_id(
+                        traj_no_orb, traj_with_orb_elem, obs_with_orb
+                    )
+
+                    # else we create the save of orbital elements and the associated observations
+                    traj_with_orb_elem.to_parquet(orb_res_path)
                     obs_with_orb.to_parquet(traj_orb_path)
+
+                    # write the trajectory_df without the trajectories with more than orbfit_limit point
+                    traj_no_orb.to_parquet(tr_df_path)
 
                 if arguments["--verbose"]:
                     print("Orbital elements saved")
@@ -912,6 +928,10 @@ def main():
 
                     orb_df = pd.concat([orb_df, current_traj_with_orb_elem])
                     traj_orb_df = pd.concat([traj_orb_df, current_obs_with_orb])
+
+                    (trajectory_df, orb_df, traj_orb_df,) = align_trajectory_id(
+                        trajectory_df, orb_df, traj_orb_df
+                    )
 
             current_date += delta_day
 
