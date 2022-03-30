@@ -869,6 +869,9 @@ def main():
                 arguments["--verbose"],
             )
 
+            trajectory_df = cast_obs_data(trajectory_df)
+            old_obs_df = cast_obs_data(old_obs_df)
+            
             # get trajectories with a number of points greater than the orbfit limit
             gb = trajectory_df.groupby(["trajectory_id"]).count().reset_index()
             traj = gb[gb["ra"] >= int(config["SOLVE_ORBIT_PARAMS"]["orbfit_limit"])][

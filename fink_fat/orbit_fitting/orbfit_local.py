@@ -991,9 +991,11 @@ def compute_df_orbit_param(trajectory_df, cpu_count, ram_dir):
     results = [el2 for el1 in results for el2 in el1]
 
     pool.close()
-    # final_clean(ram_dir)
+
     for chunk_dir in chunk_ramdir:
         rmtree(chunk_dir)
+
+    final_clean(ram_dir)
 
     return orbit_elem_dataframe(np.array(results))
 
