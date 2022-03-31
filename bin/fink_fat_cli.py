@@ -11,6 +11,9 @@ Options:
   associations                     Perform associations of alert to return a set of trajectories candidates.
   solve_orbit                      Resolve a dynamical inverse problem to return a set of orbital elements from
                                    the set of trajectories candidates.
+  offline                          Associate the alerts to form trajectories candidates then solve the orbit
+                                   until the end paramters. Starts from saved data or from the start parameters
+                                   if provided.
   stats                            Print statistics about trajectories detected by assocations, the old observations
                                    and, if exists, the orbital elements for some trajectories.
   mpc                              Return the associations on the solar system mpc alerts (only for tests purpose).
