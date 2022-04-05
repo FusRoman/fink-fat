@@ -846,8 +846,11 @@ def main():
             last_nid = np.max([np.max(trajectory_df["nid"]), np.max(old_obs_df["nid"])])
 
             last_trajectory_id = 0
-            if len(trajectory_df) > 0 or len(orb_df) > 0:
-                last_trajectory_id = np.max(np.union1d(trajectory_df["trajectory_id"], orb_df["trajectory_id"]))
+            if len(trajectory_df) > 0:
+                if len(orb_df) > 0:
+                    last_trajectory_id = np.max(np.union1d(trajectory_df["trajectory_id"], orb_df["trajectory_id"]))
+                else:
+                    last_trajectory_id = np.max(trajectory_df["trajectory_id"])
 
             trajectory_df, old_obs_df, _ = night_to_night_association(
                 trajectory_df,
