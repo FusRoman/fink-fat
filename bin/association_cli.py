@@ -112,10 +112,12 @@ def no_reset():
     print("Abort reset.")
 
 
-def get_data(new_alerts, tr_df_path, obs_df_path):
+def get_data(new_alerts, tr_df_path, obs_df_path, orb_res_path):
     last_nid = next_nid = new_alerts["nid"][0]
     trajectory_df = pd.DataFrame(columns=new_alerts.columns)
     old_obs_df = pd.DataFrame(columns=new_alerts.columns)
+
+    last_trajectory_id = 0
 
     # test if the trajectory_df and old_obs_df exists in the output directory.
     if os.path.exists(tr_df_path) and os.path.exists(obs_df_path):
@@ -141,4 +143,10 @@ def get_data(new_alerts, tr_df_path, obs_df_path):
             )
             exit()
 
-    return trajectory_df, old_obs_df, last_nid, next_nid
+        if os.path.exists(orb_res_path):
+            orb_cand = pd.read_parquet(orb_res_path)
+            last_trajectory_id = np.max(np.union1d(trajectory_df["trajectory_id"], orb_cand["trajectory_id"]))
+        else:
+            last_trajectory_id = np.max(trajectory_df["trajectory_id"])
+
+    return trajectory_df, old_obs_df, last_nid, next_nid, last_trajectory_id

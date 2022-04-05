@@ -179,6 +179,7 @@ def night_to_night_association(
     trajectory_df,
     old_observation,
     new_observation,
+    last_trajectory_id,
     last_nid,
     next_nid,
     traj_time_window,
@@ -222,6 +223,8 @@ def night_to_night_association(
         all the observations from the previous night
     new_observation : dataframe
         all observations from the next night
+    last_trajectory_id : integer
+        the maximum trajectory_id from the trajectories candidates database and the orbital candidates database
     last_nid : integer
         nid of the previous observation night
     next_night : integer
@@ -431,11 +434,7 @@ def night_to_night_association(
     >>> assert_frame_equal(traj_expected.reset_index(drop=True), ts.trajectory_df_expected_6, check_dtype=False)
     >>> assert_frame_equal(old_expected, ts.old_observation_expected_5, check_dtype=False)
     """
-    if len(trajectory_df) > 0:
-        last_trajectory_id = np.max(trajectory_df["trajectory_id"]) + 1
-    else:
-        last_trajectory_id = 0
-
+    
     (old_traj, most_recent_traj), old_observation = time_window_management(
         trajectory_df,
         old_observation,

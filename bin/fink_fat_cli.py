@@ -92,6 +92,9 @@ def main():
         tr_df_path = os.path.join(output_path, "trajectory_df.parquet")
         obs_df_path = os.path.join(output_path, "old_obs.parquet")
 
+        # get the path of the orbit database to compute properly the trajectory_id baseline.
+        orb_res_path = os.path.join(output_path, "orbital.parquet")
+
         # remove the save data from previous associations if the user say yes
         if arguments["--reset"]:
             yes_or_no(
@@ -135,8 +138,8 @@ def main():
             print("no alerts available for the night of {}".format(last_night))
             exit()
 
-        trajectory_df, old_obs_df, last_nid, next_nid = get_data(
-            new_alerts, tr_df_path, obs_df_path
+        trajectory_df, old_obs_df, last_nid, next_nid, last_trajectory_id = get_data(
+            new_alerts, tr_df_path, obs_df_path, orb_res_path
         )
 
         if arguments["--verbose"]:
@@ -146,6 +149,7 @@ def main():
             trajectory_df,
             old_obs_df,
             new_alerts,
+            last_trajectory_id,
             last_nid,
             next_nid,
             int(config["TW_PARAMS"]["trajectory_keep_limit"]),
@@ -841,10 +845,15 @@ def main():
             next_nid = new_alerts["nid"][0]
             last_nid = np.max([np.max(trajectory_df["nid"]), np.max(old_obs_df["nid"])])
 
+            last_trajectory_id = 0
+            if len(trajectory_df) > 0 or len(orb_df) > 0:
+                last_trajectory_id = np.max(np.union1d(trajectory_df["trajectory_id"], orb_df["trajectory_id"]))
+
             trajectory_df, old_obs_df, _ = night_to_night_association(
                 trajectory_df,
                 old_obs_df,
                 new_alerts,
+                last_trajectory_id,
                 last_nid,
                 next_nid,
                 int(config["TW_PARAMS"]["trajectory_keep_limit"]),
