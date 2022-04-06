@@ -460,7 +460,7 @@ if __name__ == "__main__":
     # # traj id : 12, 31571
 
     t_before = t.time()
-    merge_results = merge_orbit(orbit_candidate, obs_cand, 5, 12)
+    merge_results = merge_orbit(ram_dir, orbit_candidate, obs_cand, 5, 12)
     print(t.time() - t_before)
 
     merge_results.to_parquet("merge_traj.parquet")
