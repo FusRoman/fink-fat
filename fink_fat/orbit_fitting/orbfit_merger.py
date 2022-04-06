@@ -356,7 +356,7 @@ def parallel_merger(ram_dir, trajectory_df, orb_cand, indices):
     return res_orb
 
 
-def merge_orbit(orbit_candidate, observations, nb_neighbors, cpu_count):
+def merge_orbit(ram_dir, orbit_candidate, observations, nb_neighbors, cpu_count):
     orb_features = np.array(orbit_candidate[["a", "e", "i"]])
 
     nbrs = NearestNeighbors(n_neighbors=nb_neighbors, algorithm='ball_tree').fit(orb_features)
@@ -451,76 +451,35 @@ def merge_orb_id(pdf_orb, pdf_traj_merge):
 
 if __name__ == "__main__":
 
-    # ram_dir = "/media/virtuelram/"
+    ram_dir = "/media/virtuelram/"
 
-    path_data = "/home/roman/Documents/Doctorat/Asteroids/test_asteroids_candidates/ZTF/asteroids_candidates_resultats/candidates"
+    path_data = "/home/roman/Documents/Doctorat/Asteroids/test_asteroids_candidates/ZTF/hope_without_bug/asteroids_candidates_resultats/candidates"
 
     obs_cand = pd.read_parquet(os.path.join(path_data, "trajectory_orb.parquet")).sort_values(["trajectory_id"])
 
     orbit_candidate = pd.read_parquet(os.path.join(path_data, "orbital.parquet")).reset_index(drop=True)
 
-    print(len(np.unique(obs_cand["trajectory_id"])))
-
-    tt = orbit_candidate.groupby(["trajectory_id"]).agg(
-        {
-            "a": list,
-            "e": list,
-            "i": list,
-            "ref_epoch": len
-        }
-    )
-
-    print(tt[tt["ref_epoch"] > 1])
-
-    # gb_orb = orbit_candidate.groupby(["trajectory_id"]).count()
-
-    # traj_double = gb_orb[gb_orb["a"] > 1].reset_index()
-
-    # print(traj_double)
-
-    # test = obs_cand.merge(traj_double[traj_double["trajectory_id"] == 56], on="trajectory_id").sort_values(["jd"])
-
-    # traj_coord = SkyCoord(test["ra"], test["ra"], unit=u.degree)
-
-    # print(traj_coord[:-1].separation(traj_coord[1:]).degree)
-
-    # print(np.diff(test["nid"]))
-
-    # print(test)
-
-    # jd = Time(test["jd"], format="jd")
-    # date = jd.to_value("iso", "date")
-
-    # print(date)
-
-    # import matplotlib.pyplot as plt
-
-    # plt.scatter(test["ra"], test["dec"])
-    # plt.show()
-
-    exit()
-
     # # traj id : 12, 31571
 
-    # t_before = t.time()
-    # merge_results = merge_orbit(orbit_candidate, obs_cand, 5, 12)
-    # print(t.time() - t_before)
+    t_before = t.time()
+    merge_results = merge_orbit(orbit_candidate, obs_cand, 5, 12)
+    print(t.time() - t_before)
 
     # merge_results.to_parquet("merge_traj.parquet")
 
-    merge_traj = pd.read_parquet("merge_traj.parquet").reset_index(drop=True)
+    # merge_traj = pd.read_parquet("merge_traj.parquet").reset_index(drop=True)
 
-    print(merge_traj)
+    # print(merge_traj)
 
-    merge_traj = remove_mirror(merge_traj)
+    # merge_traj = remove_mirror(merge_traj)
 
-    print(merge_traj)
+    # print(merge_traj)
 
-    merge_traj = remove_transitive(merge_traj)
+    # merge_traj = remove_transitive(merge_traj)
 
-    obs_cand = merge_obs_id(obs_cand, merge_traj)
+    # obs_cand = merge_obs_id(obs_cand, merge_traj)
 
-    merge_orb_id(orbit_candidate, merge_traj)
+    # merge_orb_id(orbit_candidate, merge_traj)
 
     exit()
 
