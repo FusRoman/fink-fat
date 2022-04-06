@@ -359,7 +359,9 @@ def merge_orbit(ram_dir, orbit_candidate, observations, nb_neighbors, cpu_count)
 
     nbrs = NearestNeighbors(n_neighbors=nb_neighbors, algorithm='ball_tree').fit(orb_features)
 
-    _, indices = nbrs.kneighbors(orb_features)
+    _, indices = nbrs.kneighbors(orb_features[:100])
+
+    print("K nearest neighbor ...")
 
     trajectory_id_chunks = np.array_split(indices, cpu_count)
 
@@ -378,9 +380,13 @@ def merge_orbit(ram_dir, orbit_candidate, observations, nb_neighbors, cpu_count)
         if len(tr_chunk) > 0
     ]
 
+    print("orbit trajectories merging ...")
+
     pool = mp.Pool(cpu_count)
 
     results = pool.starmap(parallel_merger, chunks)
+
+    print("orbit parallel merging ended ...")
 
     for chunk_dir in chunk_ramdir:
         rmtree(chunk_dir)
@@ -399,7 +405,11 @@ def merge_orbit(ram_dir, orbit_candidate, observations, nb_neighbors, cpu_count)
         "ref_epoch"
     ]
 
+    print("creation of the dataframe")
+
     df_orb_elem = pd.DataFrame(results, columns=column_name,)
+
+    print("end of the orbit merging")
 
     return df_orb_elem[df_orb_elem["a"] != -1.0]
 
