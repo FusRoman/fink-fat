@@ -451,7 +451,7 @@ if __name__ == "__main__":
 
     ram_dir = "/media/virtuelram/"
 
-    path_data = "/home/roman/Documents/Doctorat/Asteroids/test_asteroids_candidates/ZTF/hope_without_bug/asteroids_candidates_resultats/candidates"
+    path_data = "~/Documents/Doctorat/Asteroids/asteroids_candidates_resultats/candidates"
 
     obs_cand = pd.read_parquet(os.path.join(path_data, "trajectory_orb.parquet")).sort_values(["trajectory_id"])
 
