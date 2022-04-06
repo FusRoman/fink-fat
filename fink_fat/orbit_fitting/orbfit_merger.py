@@ -449,7 +449,7 @@ def merge_orb_id(pdf_orb, pdf_traj_merge):
 
 if __name__ == "__main__":
 
-    ram_dir = "/media/virtuelram/"
+    ram_dir = "/tmp/ramdisk/"
 
     path_data = "~/Documents/Doctorat/Asteroids/asteroids_candidates_resultats/candidates"
 
