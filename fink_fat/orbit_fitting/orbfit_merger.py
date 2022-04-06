@@ -463,7 +463,7 @@ if __name__ == "__main__":
     merge_results = merge_orbit(orbit_candidate, obs_cand, 5, 12)
     print(t.time() - t_before)
 
-    # merge_results.to_parquet("merge_traj.parquet")
+    merge_results.to_parquet("merge_traj.parquet")
 
     # merge_traj = pd.read_parquet("merge_traj.parquet").reset_index(drop=True)
 
