@@ -124,10 +124,7 @@ def concat_date(list_date):
 
     return join_string(list_date[:2] + [date_float], " ")
 
-    # first_list = join_string(list_date[:-2], " ")
-    # return join_string([first_list] + list_date[-2:], "")
-
-
+    
 def band_to_str(band):
     """
     Small filter band conversion
