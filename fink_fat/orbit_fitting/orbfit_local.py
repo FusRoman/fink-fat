@@ -105,12 +105,27 @@ def concat_date(list_date):
 
     Examples
     --------
-    >>> ld = ["20", "07", "1969", ".", "73040"]
+    >>> ld = ["1969", "07", "20", ".", "73040"]
     >>> concat_date(ld)
-    '20 07 1969.73040'
+    '1969 07 20.73040'
+
+    >>> ld = ["2021", "11", "03", ".", "4503"]
+    >>> concat_date(ld)
+    '2021 11 03.45030'
+
+    >>> ld = ["2021", "04", "2", ".", "453"]
+    >>> concat_date(ld)
+    '2021 04 02.45300'
     """
-    first_list = join_string(list_date[:-2], " ")
-    return join_string([first_list] + list_date[-2:], "")
+
+    first_list = join_string(list_date[-3:], "")
+
+    date_float = format(float(first_list), '.5f').rjust(8, "0")
+
+    return join_string(list_date[:2] + [date_float], " ")
+
+    # first_list = join_string(list_date[:-2], " ")
+    # return join_string([first_list] + list_date[-2:], "")
 
 
 def band_to_str(band):

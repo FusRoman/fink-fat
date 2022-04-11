@@ -1,3 +1,4 @@
+from matplotlib import pyplot as plt
 import pandas as pd
 import numpy as np
 import os
@@ -118,6 +119,7 @@ def write_observation_file(ram_dir, obs_df):
 
     >>> shutil.rmtree("mpcobs/")
     """
+    
     obs_df = obs_df.sort_values(["trajectory_id", "jd"])
     ra = obs_df["ra"]
     dec = obs_df["dec"]
@@ -129,6 +131,7 @@ def write_observation_file(ram_dir, obs_df):
     coord = SkyCoord(ra, dec, unit=u.degree).to_string("hmsdms")
     translation_rules = {ord(i): " " for i in "hmd"}
     translation_rules[ord("s")] = ""
+
     coord = [el.translate(translation_rules) for el in coord]
 
     coord = [
@@ -140,7 +143,9 @@ def write_observation_file(ram_dir, obs_df):
     prov_desig = ol.make_designation(date[0], traj_id)
 
     date = [ol.make_date(d) for d in date]
+
     res = [ol.join_string([el1] + [el2], " ") for el1, el2 in zip(date, coord)]
+
     res = [
         "     "
         + prov_desig
@@ -345,11 +350,11 @@ def parallel_merger(ram_dir, trajectory_df, orb_cand, indices):
 
             res_orb.append([neighbor_traj[0], other_traj] + detect_ident(ram_dir, first_obj, second_obj))
 
-        rm_files(glob.glob(os.path.join(ram_dir, "*.err")))
-        rm_files(glob.glob(os.path.join(ram_dir, "*.inp")))
-        rm_files(glob.glob(os.path.join(ram_dir, "*.oop")))
-        rm_files(glob.glob(os.path.join(ram_dir, "*.pro")))
-        rm_files(glob.glob(os.path.join(ram_dir, "*.odc")))
+        # rm_files(glob.glob(os.path.join(ram_dir, "*.err")))
+        # rm_files(glob.glob(os.path.join(ram_dir, "*.inp")))
+        # rm_files(glob.glob(os.path.join(ram_dir, "*.oop")))
+        # rm_files(glob.glob(os.path.join(ram_dir, "*.pro")))
+        # rm_files(glob.glob(os.path.join(ram_dir, "*.odc")))
     
     return res_orb
 
@@ -359,9 +364,7 @@ def merge_orbit(ram_dir, orbit_candidate, observations, nb_neighbors, cpu_count)
 
     nbrs = NearestNeighbors(n_neighbors=nb_neighbors, algorithm='ball_tree').fit(orb_features)
 
-    _, indices = nbrs.kneighbors(orb_features)
-
-    print("K nearest neighbor ...")
+    _, indices = nbrs.kneighbors(orb_features[:1])
 
     trajectory_id_chunks = np.array_split(indices, cpu_count)
 
@@ -380,16 +383,12 @@ def merge_orbit(ram_dir, orbit_candidate, observations, nb_neighbors, cpu_count)
         if len(tr_chunk) > 0
     ]
 
-    print("orbit trajectories merging ...")
-
     pool = mp.Pool(cpu_count)
 
     results = pool.starmap(parallel_merger, chunks)
 
-    print("orbit parallel merging ended ...")
-
-    for chunk_dir in chunk_ramdir:
-        rmtree(chunk_dir)
+    # for chunk_dir in chunk_ramdir:
+    #     rmtree(chunk_dir)
 
     results = [el2 for el1 in results for el2 in el1]
     
@@ -405,11 +404,7 @@ def merge_orbit(ram_dir, orbit_candidate, observations, nb_neighbors, cpu_count)
         "ref_epoch"
     ]
 
-    print("creation of the dataframe")
-
     df_orb_elem = pd.DataFrame(results, columns=column_name,)
-
-    print("end of the orbit merging")
 
     return df_orb_elem[df_orb_elem["a"] != -1.0]
 
@@ -440,12 +435,6 @@ def merge_obs_id(pdf_obs, pdf_traj_merge):
 
 def merge_orb_id(pdf_orb, pdf_traj_merge):
 
-    print(pdf_orb)
-
-    print(len(np.unique(pdf_orb["trajectory_id"])))
-
-    print(pdf_traj_merge)
-
     merge_orb_id = pdf_orb["trajectory_id"].isin(pdf_traj_merge["trajectory_id_2"])
 
     pdf_orb.loc[merge_orb_id, "trajectory_id"] = pdf_traj_merge["trajectory_id_1"].to_numpy()
@@ -453,15 +442,49 @@ def merge_orb_id(pdf_orb, pdf_traj_merge):
 
     pdf_orb.loc[merge_orb_id, ["a", "e", "i", "long. node", "arg. peric", "mean anomaly"]] = pdf_traj_merge[["a", "e", "i", "long. node", "arg. peric", "mean anomaly"]].to_numpy()
 
-    print(len(np.unique(pdf_orb["trajectory_id"])))
+    return pdf_orb.drop_duplicates(["trajectory_id"])
+    
 
-    print(pdf_orb.drop_duplicates(["trajectory_id"]))
+
+def eq2gal(ra, dec):
+
+    """
+    Transforms equatorial coordinates to galactic ones.
+    Then prepares them for matplotlib aitoff projection. 
+    """
+
+    eq = SkyCoord(ra, dec, unit=u.deg)
+    gal = eq.galactic
+
+    # Minus appears because of “mapping from the inside” issue
+    l_gal, b_gal = -gal.l.wrap_at("180d").radian, gal.b.radian
+
+    return l_gal, b_gal
+
+
+def ecl2gal(lon_ecl, lat_ecl):
+
+    """
+    Transforms ecliptic coordinates to galactic ones.
+    Then prepares them for matplotlib aitoff projection.
+    """
+
+    ecl = SkyCoord(lon_ecl, lat_ecl, unit=u.deg, frame="barycentricmeanecliptic")
+    gal = ecl.transform_to("galactic")
+
+    # Minus appears because of “mapping from the inside” issue
+    l_gal, b_gal = -gal.l.wrap_at("180d").radian, gal.b.radian
+
+    return l_gal, b_gal
+
+
+
 
 if __name__ == "__main__":
 
-    ram_dir = "/tmp/ramdisk/"
+    ram_dir = "/media/virtuelram/" # "/tmp/ramdisk/"
 
-    path_data = "~/Documents/Doctorat/Asteroids/asteroids_candidates_resultats/candidates"
+    path_data = "~/Documents/Doctorat/Asteroids/test_asteroids_candidates/ZTF/hope_without_bug/asteroids_candidates_resultats/candidates"
 
     obs_cand = pd.read_parquet(os.path.join(path_data, "trajectory_orb.parquet")).sort_values(["trajectory_id"])
 
@@ -470,24 +493,119 @@ if __name__ == "__main__":
     # # traj id : 12, 31571
 
     t_before = t.time()
-    merge_results = merge_orbit(ram_dir, orbit_candidate, obs_cand, 5, 12)
+    merge_results = merge_orbit(ram_dir, orbit_candidate, obs_cand, 2, 1)
     print(t.time() - t_before)
 
-    merge_results.to_parquet("merge_traj.parquet")
+    # merge_results.to_parquet("merge_traj.parquet")
 
-    # merge_traj = pd.read_parquet("merge_traj.parquet").reset_index(drop=True)
+    exit()
 
-    # print(merge_traj)
+    merge_traj = pd.read_parquet("merge_traj.parquet").reset_index(drop=True)
 
-    # merge_traj = remove_mirror(merge_traj)
+    merge_traj = remove_mirror(merge_traj)
 
-    # print(merge_traj)
+    merge_traj = remove_transitive(merge_traj)
 
-    # merge_traj = remove_transitive(merge_traj)
+    obs_cand = merge_obs_id(obs_cand, merge_traj)
 
-    # obs_cand = merge_obs_id(obs_cand, merge_traj)
+    merged_orbit = merge_orb_id(orbit_candidate, merge_traj)
 
-    # merge_orb_id(orbit_candidate, merge_traj)
+    size_traj = obs_cand.groupby(["trajectory_id"]).count().sort_values(["ra"])
+
+    print(size_traj)
+
+    print()
+
+    # test asteroide : 1989 (semble bien), 6058 (semble pas bien), 2000 (moyen bien)
+
+    largest_traj = obs_cand[obs_cand["trajectory_id"] == 1989]
+
+    largest_traj_orb_param = merged_orbit[merged_orbit["trajectory_id"] == 1989]
+
+    print(largest_traj.sort_values(["jd"]))
+
+    jd = Time(largest_traj["jd"], format="jd")
+    date = jd.to_value("iso", "date")
+
+    print()
+
+    print("observation date of the trajectories : ")
+    print(date)
+
+    print()
+
+    print(largest_traj_orb_param)
+
+    # exit()
+    fig = plt.figure(figsize=(15, 10))
+
+    plt.scatter(largest_traj["ra"], largest_traj["dec"])
+
+    plt.show()
+
+
+    fig = plt.figure(figsize=(15, 10))
+
+    filter_test = (largest_traj["fid"] == 1).to_numpy()
+
+    plt.scatter(np.arange(len(largest_traj[filter_test])), largest_traj["dcmag"][filter_test], label='g band')
+
+    plt.scatter(np.arange(len(largest_traj[~filter_test])), largest_traj["dcmag"][~filter_test], label='r band')
+
+    plt.legend()
+
+    plt.show()
+
+
+    gal = SkyCoord(largest_traj["ra"], largest_traj["dec"], unit="deg").galactic
+
+    fig = plt.figure(figsize=(15, 10))
+
+    ax = plt.subplot(projection="aitoff")
+
+    plt.scatter(
+        -gal.l.wrap_at("180d").radian,
+        gal.b.radian,
+        color="C0",
+        alpha=0.1,
+        marker="o"
+    )
+
+    plt.xticks(
+        ticks=np.radians([-150, -120, -90, -60, -30, 0, 30, 60, 90, 120, 150]),
+        labels=[
+            "150°",
+            "120°",
+            "90°",
+            "60°",
+            "30°",
+            "0°",
+            "330°",
+            "300°",
+            "270°",
+            "240°",
+            "210°",
+        ],
+    )
+
+    # Equatorial plane
+    ra_all = np.linspace(-180, 180, 100)
+    dec_0 = np.zeros(100)
+
+    l_eq_gal, b_eq_gal = eq2gal(ra_all, dec_0)
+
+    # Ecliptic plane
+    lon_ecl = np.linspace(0, 360, 100)
+    lat_ecl = np.zeros(100)
+
+    l_ecl_gal, b_ecl_gal = ecl2gal(lon_ecl, lat_ecl)
+
+    plt.scatter(l_eq_gal, b_eq_gal, s=6, marker="v", label="Celestial Equator", color="black")
+    plt.scatter(l_ecl_gal, b_ecl_gal, s=6, marker="^", label="Ecliptic", color="lime")
+
+    plt.legend()
+
+    plt.show()
 
     exit()
 
