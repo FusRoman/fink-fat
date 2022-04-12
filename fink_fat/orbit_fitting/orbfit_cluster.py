@@ -655,6 +655,51 @@ def read_oel(ram_dir, prov_desig):
         return list(np.ones(13, dtype=np.float64) * -1)
 
 
+def read_rwo(ram_dir, prov_desig, nb_obs):
+    """
+    Read the .rwo file return by orbfit. This file contains the observations of the trajectories and the goodness of the fit computed by OrbFit.
+    Return the chi values for each observations.  
+
+    Parameters
+    ----------
+    ram_dir : string
+        Path where files are located
+    prov_desig : string
+        the provisional designation of the trajectory that triggered the OrbFit process.
+
+    Returns
+    -------
+    chi : integer list
+        The list of all chi values of each observations.
+
+    Examples
+    --------
+    
+    """
+    try:
+        dir_path = ram_dir + "mpcobs/"
+        with open(dir_path + prov_desig + ".rwo", "r") as file:
+            lines = file.readlines()
+
+            chi_obs = [obs_l.strip().split(" ")[-3] for obs_l in lines[7:]]
+            
+            return np.array(chi_obs).astype(np.float32)
+    except FileNotFoundError:
+        return np.ones(nb_obs, dtype=np.float64) * -1
+    except Exception as e:
+        print("----")
+        print(e)
+        print()
+        print("ERROR READ RWO FILE: {}".format(prov_desig))
+        print()
+        print(lines)
+        print()
+        print()
+        logging.error(traceback.format_exc())
+        print("----")
+        return np.ones(nb_obs, dtype=np.float64) * -1
+
+
 def orbit_wrapper(ra, dec, dcmag, band, date, traj_id, ram_dir):
     @pandas_udf(ArrayType(DoubleType()))  # noqa: F405
     def get_orbit_element(ra, dec, dcmag, band, date, traj_id):
@@ -678,7 +723,11 @@ def orbit_wrapper(ra, dec, dcmag, band, date, traj_id, ram_dir):
             call_orbitfit(current_ram_path, prov_desig)
             orb_elem = read_oel(current_ram_path, prov_desig)
 
-            res.append(orb_elem)
+            chi_values = read_rwo(current_ram_path, prov_desig, len(c_ra))
+            # reduced the chi values
+            chi_reduced = np.sum(np.array(chi_values)) / len(c_ra)
+            
+            res.append(orb_elem + [chi_reduced])
 
             obs_clean(current_ram_path, prov_desig)
 
@@ -720,7 +769,7 @@ if __name__ == "__main__":
     )
 
     max_core = int(dict(spark.sparkContext.getConf().getAll())["spark.cores.max"])
-    spark_gb = spark_gb.repartition(max_core * 2)
+    spark_gb = spark_gb.repartition(max_core * 100)
 
     print("begin compute orbital elem on spark")
     spark_column = spark_gb.withColumn(

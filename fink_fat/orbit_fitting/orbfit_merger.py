@@ -364,7 +364,7 @@ def merge_orbit(ram_dir, orbit_candidate, observations, nb_neighbors, cpu_count)
 
     nbrs = NearestNeighbors(n_neighbors=nb_neighbors, algorithm='ball_tree').fit(orb_features)
 
-    _, indices = nbrs.kneighbors(orb_features[:1])
+    _, indices = nbrs.kneighbors(orb_features[:10])
 
     trajectory_id_chunks = np.array_split(indices, cpu_count)
 
