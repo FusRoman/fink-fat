@@ -860,6 +860,8 @@ def read_rwo(ram_dir, prov_desig, nb_obs):
             return np.array(chi_obs).astype(np.float32)
     except FileNotFoundError:
         return list(np.ones(nb_obs, dtype=np.float64) * -1)
+    except ValueError:
+        return list(np.ones(nb_obs, dtype=np.float64) * -1)
     except Exception as e:
         print("----")
         print(e)
