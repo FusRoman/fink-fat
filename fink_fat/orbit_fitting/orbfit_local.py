@@ -1062,7 +1062,27 @@ def compute_df_orbit_param(trajectory_df, cpu_count, ram_dir):
 
     final_clean(ram_dir)
 
-    return orbit_elem_dataframe(np.array(results))
+    if len(results) > 0:
+        return orbit_elem_dataframe(np.array(results))
+    else:
+        return pd.DataFrame(columns=[
+        "trajectory_id",
+        "provisional designation",
+        "ref_epoch",
+        "a",
+        "e",
+        "i",
+        "long. node",
+        "arg. peric",
+        "mean anomaly",
+        "rms_a",
+        "rms_e",
+        "rms_i",
+        "rms_long. node",
+        "rms_arg. peric",
+        "rms_mean anomaly",
+        "chi_reduced"
+    ])
 
 
 if __name__ == "__main__":  # pragma: no cover

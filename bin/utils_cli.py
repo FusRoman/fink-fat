@@ -211,20 +211,21 @@ def align_trajectory_id(trajectory_df, orbit_df, obs_orbit_df):
         old_id: new_id for old_id, new_id in zip(tr_id, np.arange(len(tr_id)))
     }
 
-    if len(orbit_df) > 0:
-        orbit_df["trajectory_id"] = orbit_df.apply(
-            lambda x: translate_tr[x["trajectory_id"]], axis=1
-        )
+    with pd.option_context("mode.chained_assignment", None):
+        if len(orbit_df) > 0:
+            orbit_df["trajectory_id"] = orbit_df.apply(
+                lambda x: translate_tr[x["trajectory_id"]], axis=1
+            )
 
-    if len(obs_orbit_df) > 0:
-        obs_orbit_df["trajectory_id"] = obs_orbit_df.apply(
-            lambda x: translate_tr[x["trajectory_id"]], axis=1
-        )
+        if len(obs_orbit_df) > 0:
+            obs_orbit_df["trajectory_id"] = obs_orbit_df.apply(
+                lambda x: translate_tr[x["trajectory_id"]], axis=1
+            )
 
-    if len(trajectory_df) > 0:
-        trajectory_df["trajectory_id"] = trajectory_df.apply(
-            lambda x: translate_tr[x["trajectory_id"]], axis=1
-        )
+        if len(trajectory_df) > 0:
+            trajectory_df["trajectory_id"] = trajectory_df.apply(
+                lambda x: translate_tr[x["trajectory_id"]], axis=1
+            )
 
     return trajectory_df, orbit_df, obs_orbit_df
 
