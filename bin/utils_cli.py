@@ -2,6 +2,7 @@ import configparser
 import os
 
 import numpy as np
+import pandas as pd
 
 import fink_fat
 
@@ -27,9 +28,6 @@ def init_cli(arguments):
         config.read(config_path)
 
     output_path = config["OUTPUT"]["association_output_file"]
-
-    if arguments["--output"]:
-        output_path = arguments["--output"]
 
     if not os.path.isdir(output_path):
         os.mkdir(output_path)

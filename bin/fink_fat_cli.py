@@ -35,7 +35,6 @@ Options:
   -h --help                        Show help and quit.
   --version                        Show version.
   --config FILE                    Specify the config file
-  --output PATH                    Specify the out directory. A default path is set in the default fink_fat.conf
   --verbose                        Print information and progress bar during the process
 """
 
@@ -302,7 +301,8 @@ def main():
                 print("Beginning of the merging !")
 
             t_before = t.time()
-            merger_orb_df, merge_traj_orb = orbit_identification(
+            # call the orbit identification that will merge trajectories
+            merge_traj_orb, merger_orb_df = orbit_identification(
                 traj_orb_df,
                 orb_df,
                 config["SOLVE_ORBIT_PARAMS"]["ram_dir"],
@@ -884,6 +884,7 @@ def main():
             next_nid = new_alerts["nid"][0]
             last_nid = np.max([np.max(trajectory_df["nid"]), np.max(old_obs_df["nid"])])
 
+            # get the last trajectory_id as baseline for new trajectories
             last_trajectory_id = 0
             if len(trajectory_df) > 0:
                 if len(orb_df) > 0:
@@ -989,7 +990,6 @@ def main():
                     (trajectory_df, orb_df, traj_orb_df,) = align_trajectory_id(
                         trajectory_df, orb_df, traj_orb_df
                     )
-
             current_date += delta_day
 
             if current_date == stop_date + delta_day:

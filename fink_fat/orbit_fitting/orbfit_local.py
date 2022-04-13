@@ -93,7 +93,7 @@ def concat_date(list_date):
     """
     Concatenation of a date to be conform to mpc format
 
-    Paramters
+    Parameters
     ---------
     list_date : string list
         all elements from a date
@@ -540,6 +540,7 @@ def write_inp(ram_dir, provisional_designation):
 
     Returns
     -------
+    None
 
     Examples
     --------
@@ -568,6 +569,7 @@ def write_oop(ram_dir, provisional_designation):
 
     Returns
     -------
+    None
 
     Examples
     --------
@@ -596,7 +598,7 @@ def prep_orbitfit(ram_dir):
     Preparation for OrbFit computation
 
     Copy the AST17 ephemeris files needed for the orbfit computation to the correct location.
-    Set them permission to be read by OrbFit.
+    Set their permissions to be read by OrbFit.
 
     Parameters
     ----------
@@ -693,6 +695,17 @@ def call_orbitfit(ram_dir, provisional_designation):
 
 
 def rm_files(files):
+    """
+    Remove all files contains in the files parameters
+
+    Parameters
+    files : string list
+        A list of files path (typically return by the glob library)
+
+    Return
+    ------
+    None
+    """
     for path_f in files:
         os.remove(path_f)
 

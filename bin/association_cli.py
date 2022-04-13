@@ -7,6 +7,39 @@ from fink_science.conversion import dc_mag
 import shutil
 
 
+def request_fink(object_class, startdate, stopdate, request_columns, verbose, nb_tries, current_tries):
+    r = requests.post(
+        "https://fink-portal.org/api/v1/latests",
+        json={
+            "class": object_class,
+            "n": "200000",
+            "startdate": str(startdate),
+            "stopdate": str(stopdate),
+            "columns": request_columns,
+        },
+    )
+
+    try:
+        return pd.read_json(r.content)
+    except ValueError:
+        if current_tries == nb_tries:
+            return pd.DataFrame(columns=[
+                "ra",
+                "dec",
+                "jd",
+                "nid",
+                "fid",
+                "dcmag",
+                "candid",
+                "not_updated",
+            ])
+        else:
+            if verbose:
+                print("error when trying to get fink alerts, try again !")
+            
+            request_fink(object_class, startdate, stopdate, request_columns, verbose, nb_tries, current_tries + 1)
+
+
 def get_last_sso_alert(object_class, date, verbose=False):
     startdate = datetime.datetime.strptime(date, "%Y-%m-%d")
     stopdate = startdate + datetime.timedelta(days=1)
@@ -22,17 +55,8 @@ def get_last_sso_alert(object_class, date, verbose=False):
     if object_class == "Solar System MPC":
         request_columns += ", i:ssnamenr"
 
-    r = requests.post(
-        "https://fink-portal.org/api/v1/latests",
-        json={
-            "class": object_class,
-            "n": "200000",
-            "startdate": str(startdate),
-            "stopdate": str(stopdate),
-            "columns": request_columns,
-        },
-    )
-    pdf = pd.read_json(r.content)
+    
+    pdf = request_fink(object_class, startdate, stopdate, request_columns, verbose, 5, 0)
 
     required_columns = [
         "ra",
