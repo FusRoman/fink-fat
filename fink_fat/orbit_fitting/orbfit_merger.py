@@ -629,7 +629,6 @@ def merge_orb_id(orb_cand, confirmed_merger, pdf_traj_merge):
     return orb_cand
     
 
-
 def orbit_identification(obs_cand, orbit_elem_cand, ram_dir, nb_neighbor, cpu_count):
     """
     Call orbfit to merge two trajectories candidates. Create two observations files and orbfit try to match a single orbit

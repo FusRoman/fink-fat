@@ -2,6 +2,7 @@
 Usage:
     fink_fat associations (mpc | candidates) [--night <date> --save] [options]
     fink_fat solve_orbit (mpc | candidates) (local | cluster) [options]
+    fink_fat merge_orbit (mpc | candidates) [options]
     fink_fat offline (mpc | candidates) (local | cluster) <end> [<start> --save] [options]
     fink_fat stats (mpc | candidates) [--mpc-data <path>] [options]
     fink_fat -h | --help
@@ -11,8 +12,9 @@ Options:
   associations                     Perform associations of alert to return a set of trajectories candidates.
   solve_orbit                      Resolve a dynamical inverse problem to return a set of orbital elements from
                                    the set of trajectories candidates.
+  merge_orbit                      Merge the orbit candidates if the both trajectories can belong to the same solar system objects.
   offline                          Associate the alerts to form trajectories candidates then solve the orbit
-                                   until the end paramters. Starts from saved data or from the start parameters
+                                   until the end parameters. Starts from saved data or from the start parameters
                                    if provided.
   stats                            Print statistics about trajectories detected by assocations, the old observations
                                    and, if exists, the orbital elements for some trajectories.
@@ -68,6 +70,7 @@ import fink_fat
 from fink_fat.associations.inter_night_associations import night_to_night_association
 from fink_fat.others.utils import cast_obs_data
 from fink_fat.orbit_fitting.orbfit_local import compute_df_orbit_param
+from fink_fat.orbit_fitting.orbfit_merger import orbit_identification
 from bin.association_cli import (
     get_data,
     get_last_sso_alert,
@@ -282,6 +285,42 @@ def main():
         else:
             print("No trajectory with enough points to send to orbfit.")
             print("Wait more night to produce trajectories with more points")
+
+    elif arguments["merge_orbit"]:
+
+        output_path, object_class = get_class(arguments, output_path)
+        orb_res_path = os.path.join(output_path, "orbital.parquet")
+        traj_orb_path = os.path.join(output_path, "trajectory_orb.parquet")
+
+        if os.path.exists(orb_res_path):
+            # if a save of orbit exists, append the new trajectories to it.
+            orb_df = pd.read_parquet(orb_res_path)
+            # if a save of orbit exist then a save of obs orbit necessarily exist
+            traj_orb_df = pd.read_parquet(traj_orb_path)
+
+            if arguments["--verbose"]:
+                print("Beginning of the merging !")
+
+            t_before = t.time()
+            merger_orb_df, merge_traj_orb = orbit_identification(
+                traj_orb_df,
+                orb_df,
+                config["SOLVE_ORBIT_PARAMS"]["ram_dir"],
+                int(config["MERGE_ORBIT_PARAMS"]["neighbor"]),
+                int(config["SOLVE_ORBIT_PARAMS"]["cpu_count"]),
+            )
+
+            merge_traj_orb.to_parquet(traj_orb_path)
+            merger_orb_df.to_parquet(orb_res_path)
+
+            if arguments["--verbose"]:
+                print("Merging of the trajectories done !")
+                print("elapsed time: {}".format(t.time() - t_before, '.3f'))
+        
+        else:
+            print("No orbital elements found !")
+            print("Abort merging !")
+            exit()
 
     elif arguments["stats"]:
 
