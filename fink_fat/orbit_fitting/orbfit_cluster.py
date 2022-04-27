@@ -109,12 +109,24 @@ def concat_date(list_date):
 
     Examples
     --------
-    >>> ld = ["20", "07", "1969", ".", "73040"]
+    >>> ld = ["1969", "07", "20", ".", "73040"]
     >>> concat_date(ld)
-    '20 07 1969.73040'
+    '1969 07 20.73040'
+
+    >>> ld = ["2021", "11", "03", ".", "4503"]
+    >>> concat_date(ld)
+    '2021 11 03.45030'
+
+    >>> ld = ["2021", "04", "2", ".", "453"]
+    >>> concat_date(ld)
+    '2021 04 02.45300'
     """
-    first_list = join_string(list_date[:-2], " ")
-    return join_string([first_list] + list_date[-2:], "")
+
+    first_list = join_string(list_date[-3:], "")
+
+    date_float = format(float(first_list), ".5f").rjust(8, "0")
+
+    return join_string(list_date[:2] + [date_float], " ")
 
 
 def band_to_str(band):
@@ -437,6 +449,38 @@ def make_date(date):
 
 
 def prep_orbfit(ram_dir):
+    """
+    Preparation for OrbFit computation
+
+    Copy the AST17 ephemeris files needed for the orbfit computation to the correct location.
+    Set their permissions to be read by OrbFit.
+
+    Parameters
+    ----------
+    ram_dir : string
+        path where to write file
+
+    Returns
+    -------
+
+    Examples
+    --------
+
+    >>> prep_orbitfit("")
+
+    >>> st = os.stat("AST17.bai")
+    >>> stat.filemode(st.st_mode)
+    '-rwxrwxrwx'
+
+    >>> st = os.stat("AST17.bep")
+    >>> stat.filemode(st.st_mode)
+    '-rwxrwxrwx'
+
+    >>> shutil.rmtree("mpcobs")
+    >>> os.remove("AST17.bai")
+    >>> os.remove("AST17.bep")
+    """
+
     orbfit_path = os.path.join("/opt", "OrbitFit", "tests", "bineph", "testout")
     dir_path = ram_dir + "mpcobs/"
     if not os.path.isdir(dir_path):
@@ -450,11 +494,34 @@ def prep_orbfit(ram_dir):
 
 
 def rm_files(files):
+    """
+    Remove all files contains in the files parameters
+
+    Parameters
+    files : string list
+        A list of files path (typically return by the glob library)
+
+    Return
+    ------
+    None
+    """
     for path_f in files:
         os.remove(path_f)
 
 
 def final_clean(ram_dir):
+    """
+    Remove the residuals files used by OrbFit
+
+    Parameters
+    ----------
+    ram_dir : string
+        Path where files are located
+
+    Returns
+    -------
+    None
+    """
     rm_files(glob(ram_dir + "*.bai"))
     rm_files(glob(ram_dir + "*.bep"))
     rm_files(glob(ram_dir + "*.log"))
@@ -463,11 +530,42 @@ def final_clean(ram_dir):
 
 
 def obs_clean(ram_dir, prov_desig):
+    """
+    Remove all the temporary file named as prov_desig created during the OrbFit process.
+
+    Parameters
+    ----------
+    ram_dir : string
+        Path where files are located
+    prov_desig : string
+        the provisional designation of the trajectory that triggered the OrbFit process.
+
+    Returns
+    -------
+    None
+    """
+
     rm_files(glob(ram_dir + prov_desig + ".*"))
     rm_files(glob(ram_dir + "mpcobs/" + prov_desig + ".*"))
 
 
 def write_inp(ram_dir, provisional_designation):
+    """
+    Write the input file of orbit
+
+    Parameters
+    ----------
+    ram_dir : string
+        path where to write the file
+
+    provisional_designation : string
+        the provisional designation of the trajectory
+
+    Returns
+    -------
+    None
+    """
+
     with open(ram_dir + provisional_designation + ".inp", "wt") as file:
         file.write(ram_dir + provisional_designation)
 
@@ -475,41 +573,30 @@ def write_inp(ram_dir, provisional_designation):
 def write_observation_file(ram_dir, ra, dec, dcmag, band, date, traj_id):
     """
     Write an observation file to mpc standard from a dataframe containing all the observations of one trajectories
+    This version of the function is used by the cluster mode.
 
     Parameters
     ----------
     ram_dir : string
         the path where to write the file
 
-    obs_df : dataframe
-        the observation dataframe
-        have to contains the following columns :
-            ra, dec, dcmag, fid, jd, trajectory_id
+    ra : spark dataframe columns
+        Right ascension columns of the observations
+    dec : spark dataframe columns
+        Declination columns of the observations
+    dcmag : spark dataframe columns
+        The apparent magnitude computed with the dc_mag function in fink_science.conversion
+    band : spark dataframe columns
+        The filter used during the observations
+    date : spark dataframe columns
+        The observations date in jd
+    traj_id : spark dataframe columns
+        The trajectory_id of each trajectories
 
     Returns
     -------
     prov_desig : string
         the provisional designation assign to the trajectory
-
-    Examples
-    --------
-    >>> os.mkdir("mpcobs")
-    >>> test_obs = pd.DataFrame({
-    ... "ra" : [0, 1],
-    ... "dec": [0, 1],
-    ... "dcmag" : [17.4, 17.6],
-    ... "fid": [1, 2],
-    ... "jd" : [2440423.34352, 2440423.34387],
-    ... "trajectory_id" : [0, 0]
-    ... })
-
-    >>> write_observation_file("", test_obs)
-    'K69O00A'
-
-    >>> filecmp.cmp("mpcobs/K69O00A.obs", "fink_fat/test/K69O00A_test.obs")
-    True
-
-    >>> shutil.rmtree("mpcobs/")
     """
 
     coord = SkyCoord(ra, dec, unit=u.degree).to_string("hmsdms")
@@ -548,6 +635,21 @@ def write_observation_file(ram_dir, ra, dec, dcmag, band, date, traj_id):
 
 
 def write_oop(ram_dir, provisional_designation):
+    """
+    Write the option configuration file for the OrbFit computation in cluster mode.
+
+    Parameters
+    ----------
+    ram_dir : string
+        path where to write the file
+    provisional_designation : string
+        the provisional designation of the trajectory
+
+    Returns
+    -------
+    None
+    """
+
     with open(ram_dir + provisional_designation + ".oop", "w") as file:
         # write output options
         file.write("output.\n")
@@ -589,6 +691,22 @@ def write_oop(ram_dir, provisional_designation):
 
 
 def call_orbitfit(ram_dir, provisional_designation):
+    """
+    Call the OrbFit software in a subprocess. Kill it after 2 second if OrbFit are blocked.
+
+    Parameters
+    ----------
+    ram_dir : string
+        path where to write the file
+    provisional_designation : string
+        the provisional designation of the trajectory
+
+    Returns
+    -------
+    output : integer
+        return status of the orbfit process
+    """
+
     orbitfit_path = os.path.join("/opt", "OrbitFit", "bin/")
 
     command = (
@@ -613,6 +731,23 @@ def call_orbitfit(ram_dir, provisional_designation):
 
 
 def read_oel(ram_dir, prov_desig):
+    """
+    Read the .oel file return by orbfit. This file contains the orbital elements, the reference epoch of the orbit computation and
+    the rms of the orbital elements
+
+    Parameters
+    ----------
+    ram_dir : string
+        Path where files are located
+    prov_desig : string
+        the provisional designation of the trajectory that triggered the OrbFit process.
+
+    Returns
+    -------
+    orb_elem : integer list
+        A list with the reference epoch first then the orbital elements and finally the rms.
+    """
+
     try:
         with open(ram_dir + prov_desig + ".oel") as file:
             lines = file.readlines()
@@ -643,7 +778,77 @@ def read_oel(ram_dir, prov_desig):
         return list(np.ones(13, dtype=np.float64) * -1)
 
 
+def read_rwo(ram_dir, prov_desig, nb_obs):
+    """
+    Read the .rwo file return by orbfit. This file contains the observations of the trajectories and the goodness of the fit computed by OrbFit.
+    Return the chi values for each observations.
+
+    Parameters
+    ----------
+    ram_dir : string
+        Path where files are located
+    prov_desig : string
+        the provisional designation of the trajectory that triggered the OrbFit process.
+
+    Returns
+    -------
+    chi : integer list
+        The list of all chi values of each observations.
+
+    Examples
+    --------
+    """
+    try:
+        dir_path = ram_dir + "mpcobs/"
+        with open(dir_path + prov_desig + ".rwo", "r") as file:
+            lines = file.readlines()
+
+            chi_obs = [obs_l.strip().split(" ")[-3] for obs_l in lines[7:]]
+
+            return np.array(chi_obs).astype(np.float32)
+    except FileNotFoundError:
+        return np.ones(nb_obs, dtype=np.float64) * -1
+    except Exception as e:
+        print("----")
+        print(e)
+        print()
+        print("ERROR READ RWO FILE: {}".format(prov_desig))
+        print()
+        print(lines)
+        print()
+        print()
+        logging.error(traceback.format_exc())
+        print("----")
+        return np.ones(nb_obs, dtype=np.float64) * -1
+
+
 def orbit_wrapper(ra, dec, dcmag, band, date, traj_id, ram_dir):
+    """
+    Computation of OrbFit in cluster mode.
+
+    Parameters
+    ----------
+    ra : spark dataframe columns
+        Right ascension columns of the observations
+    dec : spark dataframe columns
+        Declination columns of the observations
+    dcmag : spark dataframe columns
+        The apparent magnitude computed with the dc_mag function in fink_science.conversion
+    band : spark dataframe columns
+        The filter used during the observations
+    date : spark dataframe columns
+        The observations date in jd
+    traj_id : spark dataframe columns
+        The trajectory_id of each trajectories
+    ram_dir : string
+        the path where to write the file
+
+    Return
+    ------
+    res : Series
+        The orbital elements and their RMS computed by orbfit for each trajectories.
+    """
+
     @pandas_udf(ArrayType(DoubleType()))  # noqa: F405
     def get_orbit_element(ra, dec, dcmag, band, date, traj_id):
         _pid = os.getpid()
@@ -666,7 +871,11 @@ def orbit_wrapper(ra, dec, dcmag, band, date, traj_id, ram_dir):
             call_orbitfit(current_ram_path, prov_desig)
             orb_elem = read_oel(current_ram_path, prov_desig)
 
-            res.append(orb_elem)
+            chi_values = read_rwo(current_ram_path, prov_desig, len(c_ra))
+            # reduced the chi values
+            chi_reduced = np.sum(np.array(chi_values)) / len(c_ra)
+
+            res.append(orb_elem + [chi_reduced])
 
             obs_clean(current_ram_path, prov_desig)
 
@@ -708,7 +917,7 @@ if __name__ == "__main__":
     )
 
     max_core = int(dict(spark.sparkContext.getConf().getAll())["spark.cores.max"])
-    spark_gb = spark_gb.repartition(max_core * 2)
+    spark_gb = spark_gb.repartition(max_core * 100)
 
     print("begin compute orbital elem on spark")
     spark_column = spark_gb.withColumn(

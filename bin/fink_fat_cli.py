@@ -2,6 +2,7 @@
 Usage:
     fink_fat associations (mpc | candidates) [--night <date> --save] [options]
     fink_fat solve_orbit (mpc | candidates) (local | cluster) [options]
+    fink_fat merge_orbit (mpc | candidates) [options]
     fink_fat offline (mpc | candidates) (local | cluster) <end> [<start> --save] [options]
     fink_fat stats (mpc | candidates) [--mpc-data <path>] [options]
     fink_fat -h | --help
@@ -11,8 +12,9 @@ Options:
   associations                     Perform associations of alert to return a set of trajectories candidates.
   solve_orbit                      Resolve a dynamical inverse problem to return a set of orbital elements from
                                    the set of trajectories candidates.
+  merge_orbit                      Merge the orbit candidates if the both trajectories can belong to the same solar system objects.
   offline                          Associate the alerts to form trajectories candidates then solve the orbit
-                                   until the end paramters. Starts from saved data or from the start parameters
+                                   until the end parameters. Starts from saved data or from the start parameters
                                    if provided.
   stats                            Print statistics about trajectories detected by assocations, the old observations
                                    and, if exists, the orbital elements for some trajectories.
@@ -33,7 +35,6 @@ Options:
   -h --help                        Show help and quit.
   --version                        Show version.
   --config FILE                    Specify the config file
-  --output PATH                    Specify the out directory. A default path is set in the default fink_fat.conf
   --verbose                        Print information and progress bar during the process
 """
 
@@ -68,6 +69,7 @@ import fink_fat
 from fink_fat.associations.inter_night_associations import night_to_night_association
 from fink_fat.others.utils import cast_obs_data
 from fink_fat.orbit_fitting.orbfit_local import compute_df_orbit_param
+from fink_fat.orbit_fitting.orbfit_merger import orbit_identification
 from bin.association_cli import (
     get_data,
     get_last_sso_alert,
@@ -91,6 +93,9 @@ def main():
 
         tr_df_path = os.path.join(output_path, "trajectory_df.parquet")
         obs_df_path = os.path.join(output_path, "old_obs.parquet")
+
+        # get the path of the orbit database to compute properly the trajectory_id baseline.
+        orb_res_path = os.path.join(output_path, "orbital.parquet")
 
         # remove the save data from previous associations if the user say yes
         if arguments["--reset"]:
@@ -135,8 +140,8 @@ def main():
             print("no alerts available for the night of {}".format(last_night))
             exit()
 
-        trajectory_df, old_obs_df, last_nid, next_nid = get_data(
-            new_alerts, tr_df_path, obs_df_path
+        trajectory_df, old_obs_df, last_nid, next_nid, last_trajectory_id = get_data(
+            new_alerts, tr_df_path, obs_df_path, orb_res_path
         )
 
         if arguments["--verbose"]:
@@ -146,6 +151,7 @@ def main():
             trajectory_df,
             old_obs_df,
             new_alerts,
+            last_trajectory_id + 1,
             last_nid,
             next_nid,
             int(config["TW_PARAMS"]["trajectory_keep_limit"]),
@@ -278,6 +284,43 @@ def main():
         else:
             print("No trajectory with enough points to send to orbfit.")
             print("Wait more night to produce trajectories with more points")
+
+    elif arguments["merge_orbit"]:
+
+        output_path, object_class = get_class(arguments, output_path)
+        orb_res_path = os.path.join(output_path, "orbital.parquet")
+        traj_orb_path = os.path.join(output_path, "trajectory_orb.parquet")
+
+        if os.path.exists(orb_res_path):
+            # if a save of orbit exists, append the new trajectories to it.
+            orb_df = pd.read_parquet(orb_res_path)
+            # if a save of orbit exist then a save of obs orbit necessarily exist
+            traj_orb_df = pd.read_parquet(traj_orb_path)
+
+            if arguments["--verbose"]:
+                print("Beginning of the merging !")
+
+            t_before = t.time()
+            # call the orbit identification that will merge trajectories
+            merge_traj_orb, merger_orb_df = orbit_identification(
+                traj_orb_df,
+                orb_df,
+                config["SOLVE_ORBIT_PARAMS"]["ram_dir"],
+                int(config["MERGE_ORBIT_PARAMS"]["neighbor"]),
+                int(config["SOLVE_ORBIT_PARAMS"]["cpu_count"]),
+            )
+
+            merge_traj_orb.to_parquet(traj_orb_path)
+            merger_orb_df.to_parquet(orb_res_path)
+
+            if arguments["--verbose"]:
+                print("Merging of the trajectories done !")
+                print("elapsed time: {:.3f}".format(t.time() - t_before))
+
+        else:
+            print("No orbital elements found !")
+            print("Abort merging !")
+            exit()
 
     elif arguments["stats"]:
 
@@ -437,6 +480,84 @@ def main():
         orb_type_table = SingleTable(orbit_type_data, "orbit candidates type")
         print()
         print(orb_type_table.table)
+        print()
+
+        # subtraction with the mean of each rms computed with
+        # the trajectories from MPC.
+        orb_df["rms_dist"] = np.linalg.norm(
+            orb_df[
+                [
+                    "rms_a",
+                    "rms_e",
+                    "rms_i",
+                    "rms_long. node",
+                    "rms_arg. peric",
+                    "rms_mean anomaly",
+                ]
+            ].values
+            - [0.018712, 0.009554, 0.170369, 0.383595, 4.314636, 3.791175],
+            axis=1,
+        )
+
+        orb_df["chi_dist"] = np.abs(orb_df["chi_reduced"].values - 1)
+
+        orb_df["score"] = np.linalg.norm(
+            orb_df[["rms_dist", "chi_dist"]].values - [0, 0], axis=1
+        )
+
+        orb_df = orb_df.sort_values(["score"]).reset_index(drop=True)
+        best_orb = orb_df.loc[:9]
+
+        best_orbit_data = (
+            [
+                [
+                    "Trajectory id",
+                    "Orbit ref epoch",
+                    "a (AU)",
+                    "error",
+                    "e",
+                    "error",
+                    "i (deg)",
+                    "error",
+                    "Long. node (deg)",
+                    "error",
+                    "Arg. peri (deg)",
+                    "error",
+                    "Mean Anomaly (deg)",
+                    "error",
+                    "chi",
+                    "score",
+                ],
+            ]
+            + np.around(
+                best_orb[
+                    [
+                        "trajectory_id",
+                        "ref_epoch",
+                        "a",
+                        "rms_a",
+                        "e",
+                        "rms_e",
+                        "i",
+                        "rms_i",
+                        "long. node",
+                        "rms_long. node",
+                        "arg. peric",
+                        "rms_arg. peric",
+                        "mean anomaly",
+                        "rms_mean anomaly",
+                        "chi_reduced",
+                        "score",
+                    ]
+                ].values,
+                3,
+            ).tolist()
+        )
+
+        best_table = DoubleTable(best_orbit_data, "Best orbit")
+
+        print(best_table.table)
+        print("* a: Semi major axis, e: eccentricity, i: inclination")
         print()
 
         if arguments["mpc"]:
@@ -841,10 +962,23 @@ def main():
             next_nid = new_alerts["nid"][0]
             last_nid = np.max([np.max(trajectory_df["nid"]), np.max(old_obs_df["nid"])])
 
+            # get the last trajectory_id as baseline for new trajectories
+            last_trajectory_id = 0
+            if len(trajectory_df) > 0:
+                if len(orb_df) > 0:
+                    last_trajectory_id = np.max(
+                        np.union1d(
+                            trajectory_df["trajectory_id"], orb_df["trajectory_id"]
+                        )
+                    )
+                else:
+                    last_trajectory_id = np.max(trajectory_df["trajectory_id"])
+
             trajectory_df, old_obs_df, _ = night_to_night_association(
                 trajectory_df,
                 old_obs_df,
                 new_alerts,
+                last_trajectory_id + 1,
                 last_nid,
                 next_nid,
                 int(config["TW_PARAMS"]["trajectory_keep_limit"]),
@@ -938,7 +1072,6 @@ def main():
                     (trajectory_df, orb_df, traj_orb_df,) = align_trajectory_id(
                         trajectory_df, orb_df, traj_orb_df
                     )
-
             current_date += delta_day
 
             if current_date == stop_date + delta_day:

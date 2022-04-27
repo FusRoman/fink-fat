@@ -7,6 +7,51 @@ from fink_science.conversion import dc_mag
 import shutil
 
 
+def request_fink(
+    object_class, startdate, stopdate, request_columns, verbose, nb_tries, current_tries
+):
+    r = requests.post(
+        "https://fink-portal.org/api/v1/latests",
+        json={
+            "class": object_class,
+            "n": "200000",
+            "startdate": str(startdate),
+            "stopdate": str(stopdate),
+            "columns": request_columns,
+        },
+    )
+
+    try:
+        return pd.read_json(r.content)
+    except ValueError:
+        if current_tries == nb_tries:
+            return pd.DataFrame(
+                columns=[
+                    "ra",
+                    "dec",
+                    "jd",
+                    "nid",
+                    "fid",
+                    "dcmag",
+                    "candid",
+                    "not_updated",
+                ]
+            )
+        else:
+            if verbose:
+                print("error when trying to get fink alerts, try again !")
+
+            request_fink(
+                object_class,
+                startdate,
+                stopdate,
+                request_columns,
+                verbose,
+                nb_tries,
+                current_tries + 1,
+            )
+
+
 def get_last_sso_alert(object_class, date, verbose=False):
     startdate = datetime.datetime.strptime(date, "%Y-%m-%d")
     stopdate = startdate + datetime.timedelta(days=1)
@@ -22,17 +67,9 @@ def get_last_sso_alert(object_class, date, verbose=False):
     if object_class == "Solar System MPC":
         request_columns += ", i:ssnamenr"
 
-    r = requests.post(
-        "https://fink-portal.org/api/v1/latests",
-        json={
-            "class": object_class,
-            "n": "200000",
-            "startdate": str(startdate),
-            "stopdate": str(stopdate),
-            "columns": request_columns,
-        },
+    pdf = request_fink(
+        object_class, startdate, stopdate, request_columns, verbose, 5, 0
     )
-    pdf = pd.read_json(r.content)
 
     required_columns = [
         "ra",
@@ -112,10 +149,12 @@ def no_reset():
     print("Abort reset.")
 
 
-def get_data(new_alerts, tr_df_path, obs_df_path):
+def get_data(new_alerts, tr_df_path, obs_df_path, orb_res_path):
     last_nid = next_nid = new_alerts["nid"][0]
     trajectory_df = pd.DataFrame(columns=new_alerts.columns)
     old_obs_df = pd.DataFrame(columns=new_alerts.columns)
+
+    last_trajectory_id = 0
 
     # test if the trajectory_df and old_obs_df exists in the output directory.
     if os.path.exists(tr_df_path) and os.path.exists(obs_df_path):
@@ -141,4 +180,12 @@ def get_data(new_alerts, tr_df_path, obs_df_path):
             )
             exit()
 
-    return trajectory_df, old_obs_df, last_nid, next_nid
+        if os.path.exists(orb_res_path):
+            orb_cand = pd.read_parquet(orb_res_path)
+            last_trajectory_id = np.max(
+                np.union1d(trajectory_df["trajectory_id"], orb_cand["trajectory_id"])
+            )
+        else:
+            last_trajectory_id = np.max(trajectory_df["trajectory_id"])
+
+    return trajectory_df, old_obs_df, last_nid, next_nid, last_trajectory_id

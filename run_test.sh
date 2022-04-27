@@ -22,7 +22,7 @@ export COVERAGE_PROCESS_START="${ROOTPATH}/.coveragerc"
 
 set -e
 
-pip install .
+python -m pip install .
 
 # Run the test suite
 for filename in fink_fat/associations/*.py
