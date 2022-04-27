@@ -8024,6 +8024,7 @@ orbfit_output = pd.DataFrame(
         "rms_long. node": [0.00670637, -1.0, 0.555542],
         "rms_arg. peric": [1.13426, -1.0, 10.4839],
         "rms_mean anomaly": [0.787228, -1.0, 9.93615],
+        'chi_reduced': [2.4020000457763677, -1.0, 1.9959999084472655]
     }
 )
 
@@ -8046,6 +8047,7 @@ orb_elem_output = pd.DataFrame(
         "rms_long. node": [-1],
         "rms_arg. peric": [-1],
         "rms_mean anomaly": [-1],
+        "chi_reduced": [2.4]
     }
 )
 
