@@ -2,7 +2,6 @@ import configparser
 import os
 
 import numpy as np
-import pandas as pd
 
 import fink_fat
 

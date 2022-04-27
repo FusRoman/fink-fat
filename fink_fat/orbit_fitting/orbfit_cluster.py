@@ -124,7 +124,7 @@ def concat_date(list_date):
 
     first_list = join_string(list_date[-3:], "")
 
-    date_float = format(float(first_list), '.5f').rjust(8, "0")
+    date_float = format(float(first_list), ".5f").rjust(8, "0")
 
     return join_string(list_date[:2] + [date_float], " ")
 
@@ -544,7 +544,7 @@ def obs_clean(ram_dir, prov_desig):
     -------
     None
     """
-    
+
     rm_files(glob(ram_dir + prov_desig + ".*"))
     rm_files(glob(ram_dir + "mpcobs/" + prov_desig + ".*"))
 
@@ -781,7 +781,7 @@ def read_oel(ram_dir, prov_desig):
 def read_rwo(ram_dir, prov_desig, nb_obs):
     """
     Read the .rwo file return by orbfit. This file contains the observations of the trajectories and the goodness of the fit computed by OrbFit.
-    Return the chi values for each observations.  
+    Return the chi values for each observations.
 
     Parameters
     ----------
@@ -797,7 +797,6 @@ def read_rwo(ram_dir, prov_desig, nb_obs):
 
     Examples
     --------
-    
     """
     try:
         dir_path = ram_dir + "mpcobs/"
@@ -805,7 +804,7 @@ def read_rwo(ram_dir, prov_desig, nb_obs):
             lines = file.readlines()
 
             chi_obs = [obs_l.strip().split(" ")[-3] for obs_l in lines[7:]]
-            
+
             return np.array(chi_obs).astype(np.float32)
     except FileNotFoundError:
         return np.ones(nb_obs, dtype=np.float64) * -1
@@ -843,7 +842,7 @@ def orbit_wrapper(ra, dec, dcmag, band, date, traj_id, ram_dir):
         The trajectory_id of each trajectories
     ram_dir : string
         the path where to write the file
-        
+
     Return
     ------
     res : Series
@@ -875,7 +874,7 @@ def orbit_wrapper(ra, dec, dcmag, band, date, traj_id, ram_dir):
             chi_values = read_rwo(current_ram_path, prov_desig, len(c_ra))
             # reduced the chi values
             chi_reduced = np.sum(np.array(chi_values)) / len(c_ra)
-            
+
             res.append(orb_elem + [chi_reduced])
 
             obs_clean(current_ram_path, prov_desig)

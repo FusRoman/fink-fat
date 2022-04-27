@@ -315,8 +315,8 @@ def main():
 
             if arguments["--verbose"]:
                 print("Merging of the trajectories done !")
-                print("elapsed time: {}".format(t.time() - t_before, '.3f'))
-        
+                print("elapsed time: {:.3f}".format(t.time() - t_before))
+
         else:
             print("No orbital elements found !")
             print("Abort merging !")
@@ -482,64 +482,79 @@ def main():
         print(orb_type_table.table)
         print()
 
-        orb_df["rms_dist"] = np.linalg.norm(orb_df[[
-            "rms_a", "rms_e", "rms_i",
-            "rms_long. node", "rms_arg. peric", "rms_mean anomaly"
-        ]].values - [
-            0.018712, 
-            0.009554, 
-            0.170369, 
-            0.383595, 
-            4.314636, 
-            3.791175
-            ], axis=1)
+        # subtraction with the mean of each rms computed with
+        # the trajectories from MPC.
+        orb_df["rms_dist"] = np.linalg.norm(
+            orb_df[
+                [
+                    "rms_a",
+                    "rms_e",
+                    "rms_i",
+                    "rms_long. node",
+                    "rms_arg. peric",
+                    "rms_mean anomaly",
+                ]
+            ].values
+            - [0.018712, 0.009554, 0.170369, 0.383595, 4.314636, 3.791175],
+            axis=1,
+        )
 
         orb_df["chi_dist"] = np.abs(orb_df["chi_reduced"].values - 1)
 
-        orb_df["score"] = np.linalg.norm(orb_df[[
-            "rms_dist", "chi_dist"
-            ]].values - [0, 0], axis=1)
+        orb_df["score"] = np.linalg.norm(
+            orb_df[["rms_dist", "chi_dist"]].values - [0, 0], axis=1
+        )
 
         orb_df = orb_df.sort_values(["score"]).reset_index(drop=True)
         best_orb = orb_df.loc[:9]
 
-        best_orbit_data = [
+        best_orbit_data = (
             [
-                "Trajectory id", 
-                "Orbit ref epoch", 
-                "a (AU)",
-                "error",
-                "e",
-                "error",
-                "i (deg)",
-                "error",
-                "Long. node (deg)",
-                "error",
-                "Arg. peri (deg)",
-                "error",
-                "Mean Anomaly (deg)",
-                "error",
-                "chi",
-                "score"
-            ],
-        ] + np.around(best_orb[[
-            "trajectory_id",
-            "ref_epoch",
-            "a", "rms_a",
-            "e", "rms_e",
-            "i", "rms_i",
-            "long. node",
-            "rms_long. node",
-            "arg. peric",
-            "rms_arg. peric",
-            "mean anomaly",
-            "rms_mean anomaly",
-            "chi_reduced",
-            "score"
-        ]].values, 3).tolist()
+                [
+                    "Trajectory id",
+                    "Orbit ref epoch",
+                    "a (AU)",
+                    "error",
+                    "e",
+                    "error",
+                    "i (deg)",
+                    "error",
+                    "Long. node (deg)",
+                    "error",
+                    "Arg. peri (deg)",
+                    "error",
+                    "Mean Anomaly (deg)",
+                    "error",
+                    "chi",
+                    "score",
+                ],
+            ]
+            + np.around(
+                best_orb[
+                    [
+                        "trajectory_id",
+                        "ref_epoch",
+                        "a",
+                        "rms_a",
+                        "e",
+                        "rms_e",
+                        "i",
+                        "rms_i",
+                        "long. node",
+                        "rms_long. node",
+                        "arg. peric",
+                        "rms_arg. peric",
+                        "mean anomaly",
+                        "rms_mean anomaly",
+                        "chi_reduced",
+                        "score",
+                    ]
+                ].values,
+                3,
+            ).tolist()
+        )
 
         best_table = DoubleTable(best_orbit_data, "Best orbit")
-
 
         print(best_table.table)
         print("* a: Semi major axis, e: eccentricity, i: inclination")
@@ -951,7 +966,11 @@ def main():
             last_trajectory_id = 0
             if len(trajectory_df) > 0:
                 if len(orb_df) > 0:
-                    last_trajectory_id = np.max(np.union1d(trajectory_df["trajectory_id"], orb_df["trajectory_id"]))
+                    last_trajectory_id = np.max(
+                        np.union1d(
+                            trajectory_df["trajectory_id"], orb_df["trajectory_id"]
+                        )
+                    )
                 else:
                     last_trajectory_id = np.max(trajectory_df["trajectory_id"])
 

@@ -120,11 +120,11 @@ def concat_date(list_date):
 
     first_list = join_string(list_date[-3:], "")
 
-    date_float = format(float(first_list), '.5f').rjust(8, "0")
+    date_float = format(float(first_list), ".5f").rjust(8, "0")
 
     return join_string(list_date[:2] + [date_float], " ")
 
-    
+
 def band_to_str(band):
     """
     Small filter band conversion
@@ -846,7 +846,7 @@ def read_oel(ram_dir, prov_desig):
 def read_rwo(ram_dir, prov_desig, nb_obs):
     """
     Read the .rwo file return by orbfit. This file contains the observations of the trajectories and the goodness of the fit computed by OrbFit.
-    Return the chi values for each observations.  
+    Return the chi values for each observations.
 
     Parameters
     ----------
@@ -862,14 +862,13 @@ def read_rwo(ram_dir, prov_desig, nb_obs):
 
     Examples
     --------
-    
     """
     try:
         with open(ram_dir + "mpcobs/" + prov_desig + ".rwo") as file:
             lines = file.readlines()
 
             chi_obs = [obs_l.strip().split(" ")[-3] for obs_l in lines[7:]]
-            
+
             return np.array(chi_obs).astype(np.float32)
     except FileNotFoundError:
         return list(np.ones(nb_obs, dtype=np.float64) * -1)
@@ -950,8 +949,9 @@ def get_orbit_param(ram_dir, df):
         # reduced the chi values
         chi_reduced = np.sum(np.array(chi_values)) / len(df_one_traj)
 
-        results.append([traj_id, prov_desig] + read_oel(ram_dir, prov_desig) + [chi_reduced])
-        
+        results.append(
+            [traj_id, prov_desig] + read_oel(ram_dir, prov_desig) + [chi_reduced]
+        )
 
         try:
             obs_clean(ram_dir, prov_desig)
@@ -1004,7 +1004,7 @@ def orbit_elem_dataframe(orbit_elem):
         "rms_long. node",
         "rms_arg. peric",
         "rms_mean anomaly",
-        "chi_reduced"
+        "chi_reduced",
     ]
 
     df_orb_elem = pd.DataFrame(orbit_elem, columns=column_name,)
@@ -1078,24 +1078,26 @@ def compute_df_orbit_param(trajectory_df, cpu_count, ram_dir):
     if len(results) > 0:
         return orbit_elem_dataframe(np.array(results))
     else:
-        return pd.DataFrame(columns=[
-        "trajectory_id",
-        "provisional designation",
-        "ref_epoch",
-        "a",
-        "e",
-        "i",
-        "long. node",
-        "arg. peric",
-        "mean anomaly",
-        "rms_a",
-        "rms_e",
-        "rms_i",
-        "rms_long. node",
-        "rms_arg. peric",
-        "rms_mean anomaly",
-        "chi_reduced"
-    ])
+        return pd.DataFrame(
+            columns=[
+                "trajectory_id",
+                "provisional designation",
+                "ref_epoch",
+                "a",
+                "e",
+                "i",
+                "long. node",
+                "arg. peric",
+                "mean anomaly",
+                "rms_a",
+                "rms_e",
+                "rms_i",
+                "rms_long. node",
+                "rms_arg. peric",
+                "rms_mean anomaly",
+                "chi_reduced",
+            ]
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover
