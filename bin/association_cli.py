@@ -3,7 +3,7 @@ import os
 import numpy as np
 import pandas as pd
 import requests
-from fink_science.conversion import dc_mag
+from fink_utils.photometry.conversion import dc_mag
 import shutil
 
 
