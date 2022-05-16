@@ -73,7 +73,7 @@ def intra_night_step(
     last_trajectory_id,
     intra_night_sep_criterion,
     intra_night_mag_criterion_same_fid,
-    intra_night_mag_criterion_diff_fid
+    intra_night_mag_criterion_diff_fid,
 ):
     """
     Perform the intra nigth associations step at the beginning of the inter night association function.
@@ -129,7 +129,7 @@ def intra_night_step(
         new_observation,
         sep_criterion=intra_night_sep_criterion,
         mag_criterion_same_fid=intra_night_mag_criterion_same_fid,
-        mag_criterion_diff_fid=intra_night_mag_criterion_diff_fid
+        mag_criterion_diff_fid=intra_night_mag_criterion_diff_fid,
     )
 
     new_left, new_right = (
@@ -147,10 +147,7 @@ def intra_night_step(
     else:
         new_observation_not_associated = new_observation
 
-    return (
-        tracklets,
-        new_observation_not_associated
-    )
+    return (tracklets, new_observation_not_associated)
 
 
 def night_to_night_association(
@@ -176,7 +173,7 @@ def night_to_night_association(
     do_traj_and_new_obs_assoc=True,
     do_track_and_old_obs_assoc=True,
     do_new_obs_and_old_obs_assoc=True,
-    verbose=False
+    verbose=False,
 ):
     """
     Perform night to night associations.
@@ -430,7 +427,7 @@ def night_to_night_association(
         last_trajectory_id,
         intra_night_sep_criterion,
         intra_night_mag_criterion_same_fid,
-        intra_night_mag_criterion_diff_fid
+        intra_night_mag_criterion_diff_fid,
     )
 
     if verbose:  # pragma: no cover
@@ -438,10 +435,7 @@ def night_to_night_association(
 
     if len(most_recent_traj) == 0 and len(old_observation) == 0:
 
-        return (
-            pd.concat([old_traj, tracklets]),
-            remaining_new_observations
-        )
+        return (pd.concat([old_traj, tracklets]), remaining_new_observations)
 
     if len(tracklets) > 0:
         # separate the tracklets with enough points to be sent to orbfit and the other small one.
@@ -461,7 +455,7 @@ def night_to_night_association(
         (
             traj_with_track,
             not_associated_tracklets,
-            max_traj_id
+            max_traj_id,
         ) = tracklets_and_trajectories_associations(
             most_recent_traj,
             small_track,
@@ -471,7 +465,7 @@ def night_to_night_association(
             mag_criterion_diff_fid,
             angle_criterion,
             last_trajectory_id,
-            store_kd_tree
+            store_kd_tree,
         )
 
         if verbose:  # pragma: no cover
@@ -498,7 +492,7 @@ def night_to_night_association(
         (
             traj_with_new_obs,
             remaining_new_observations,
-            max_traj_id
+            max_traj_id,
         ) = trajectories_with_new_observations_associations(
             traj_with_track,
             remaining_new_observations,
@@ -508,7 +502,7 @@ def night_to_night_association(
             mag_criterion_diff_fid,
             angle_criterion,
             max_traj_id,
-            store_kd_tree
+            store_kd_tree,
         )
 
         if verbose:  # pragma: no cover
@@ -533,7 +527,7 @@ def night_to_night_association(
         (
             track_with_old_obs,
             remain_old_obs,
-            max_traj_id
+            max_traj_id,
         ) = old_observations_with_tracklets_associations(
             not_associated_tracklets,
             old_observation,
@@ -543,7 +537,7 @@ def night_to_night_association(
             mag_criterion_diff_fid,
             angle_criterion,
             max_traj_id,
-            store_kd_tree
+            store_kd_tree,
         )
 
         if verbose:  # pragma: no cover
@@ -567,7 +561,7 @@ def night_to_night_association(
         (
             new_trajectory,
             remain_old_obs,
-            remaining_new_observations
+            remaining_new_observations,
         ) = old_with_new_observations_associations(
             remain_old_obs,
             remaining_new_observations,
@@ -576,7 +570,7 @@ def night_to_night_association(
             sep_criterion,
             mag_criterion_same_fid,
             mag_criterion_diff_fid,
-            store_kd_tree
+            store_kd_tree,
         )
 
         if verbose:  # pragma: no cover

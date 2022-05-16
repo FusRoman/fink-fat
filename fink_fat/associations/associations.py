@@ -1121,7 +1121,7 @@ def old_observations_with_tracklets_associations(
             # association between the new tracklets and the old observations
             (
                 track_left_assoc,
-                old_obs_right_assoc
+                old_obs_right_assoc,
             ) = night_to_night_trajectory_associations(
                 two_first_obs_tracklets,
                 current_old_obs,
