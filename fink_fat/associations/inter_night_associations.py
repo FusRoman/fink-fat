@@ -112,7 +112,7 @@ def intra_night_step(
     >>> assert_frame_equal(track.reset_index(drop=True), ts.tracklets_output, check_dtype = False)
     >>> assert_frame_equal(remaining_new_obs, ts.remaining_new_obs_output, check_dtype = False)
 
-    >>> track, remaining_new_obs, metrics = intra_night_step(
+    >>> track, remaining_new_obs = intra_night_step(
     ... ts.input_observation_2,
     ... 0,
     ... intra_night_sep_criterion = 145 * u.arcsecond,
@@ -233,8 +233,6 @@ def night_to_night_association(
         Keep the trajectories with less than "orbfit limit" points
     ram_dir : string
         Path where files needed for the OrbFit computation are located
-    run_metrics : boolean
-        launch and return the performance metrics of the intra night association and inter night association
     do_track_and_traj_assoc : boolean
         if set to false, deactivate the association between the trajectories and the tracklets
     do_traj_and_new_obs_assoc : boolean
