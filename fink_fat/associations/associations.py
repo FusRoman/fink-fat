@@ -7,7 +7,6 @@ from fink_fat.associations.intra_night_association import magnitude_association
 from fink_fat.associations.intra_night_association import (
     get_n_last_observations_from_trajectories,
 )
-from fink_fat.associations.intra_night_association import compute_inter_night_metric
 from fink_fat.others.utils import repeat_chunk
 from fink_fat.others.utils import cast_obs_data
 import sys
@@ -412,16 +411,13 @@ def night_to_night_trajectory_associations(
     >>> assert_frame_equal(left.reset_index(drop=True), ts.night_to_night_traj_assoc_left_expected)
     >>> assert_frame_equal(right.reset_index(drop=True), ts.night_to_night_traj_assoc_right_expected)
     """
-    
+
     # get the last observations of the trajectories to perform the associations
     last_traj_obs = (
         two_last_observations.groupby(["trajectory_id"]).last().reset_index()
     )
 
-    (
-        traj_assoc,
-        new_obs_assoc
-    ) = night_to_night_observation_association(
+    (traj_assoc, new_obs_assoc) = night_to_night_observation_association(
         last_traj_obs,
         observations_to_associates,
         sep_criterion,
@@ -762,7 +758,7 @@ def tracklets_and_trajectories_associations(
         return (
             cast_obs_data(trajectories).reset_index(drop=True),
             cast_obs_data(tracklets).reset_index(drop=True),
-            max_traj_id
+            max_traj_id,
         )
 
 
@@ -775,7 +771,7 @@ def trajectories_with_new_observations_associations(
     mag_criterion_diff_fid,
     angle_criterion,
     max_traj_id,
-    store_kd_tree=False
+    store_kd_tree=False,
 ):
     """
     Perform trajectories associations with the remaining new observations return by the intra night associations
@@ -1009,7 +1005,7 @@ def trajectories_with_new_observations_associations(
         return (
             cast_obs_data(trajectories).reset_index(drop=True),
             cast_obs_data(new_observations).reset_index(drop=True),
-            max_traj_id
+            max_traj_id,
         )
 
 
@@ -1022,7 +1018,7 @@ def old_observations_with_tracklets_associations(
     mag_criterion_diff_fid,
     angle_criterion,
     max_traj_id,
-    store_kd_tree=False
+    store_kd_tree=False,
 ):
     """
     Perform associations between the tracklets and the old observations from the previous nights.
@@ -1125,8 +1121,7 @@ def old_observations_with_tracklets_associations(
             # association between the new tracklets and the old observations
             (
                 track_left_assoc,
-                old_obs_right_assoc,
-                track_to_old_obs_report,
+                old_obs_right_assoc
             ) = night_to_night_trajectory_associations(
                 two_first_obs_tracklets,
                 current_old_obs,
@@ -1215,10 +1210,6 @@ def old_observations_with_tracklets_associations(
                 # remove duplicates associations
                 old_obs_right_assoc = old_obs_right_assoc[~duplicates]
 
-                track_to_old_obs_report[
-                    "number of duplicated association"
-                ] = nb_track_to_obs_assoc_with_duplicates - len(old_obs_right_assoc)
-
                 # add the associated old observations to the tracklets
                 tracklets = cast_obs_data(pd.concat([tracklets, old_obs_right_assoc]))
 
@@ -1253,7 +1244,7 @@ def old_observations_with_tracklets_associations(
         return (
             cast_obs_data(tracklets).reset_index(drop=True),
             cast_obs_data(old_observations).reset_index(drop=True),
-            max_traj_id
+            max_traj_id,
         )
 
 
@@ -1331,10 +1322,7 @@ def old_with_new_observations_associations(
             norm_same_fid = mag_criterion_same_fid * diff_night
             norm_diff_fid = mag_criterion_diff_fid * diff_night
 
-            (
-                left_assoc,
-                right_assoc
-            ) = night_to_night_observation_association(
+            (left_assoc, right_assoc) = night_to_night_observation_association(
                 current_old_obs,
                 new_observations,
                 norm_sep_crit,
@@ -1370,12 +1358,7 @@ def old_with_new_observations_associations(
                     pd.concat([trajectory_df, left_assoc, right_assoc])
                 )
 
-
-        return (
-            trajectory_df,
-            old_observations,
-            new_observations
-        )
+        return (trajectory_df, old_observations, new_observations)
 
 
 def time_window_management(

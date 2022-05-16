@@ -1034,7 +1034,7 @@ def intra_night_association(
     night_observation,
     sep_criterion=145 * u.arcsecond,
     mag_criterion_same_fid=2.21,
-    mag_criterion_diff_fid=1.75
+    mag_criterion_diff_fid=1.75,
 ):
     """
     Perform intra_night association with separation and magnitude criterion
