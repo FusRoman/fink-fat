@@ -325,9 +325,7 @@ def night_to_night_observation_association(
     ... "candid": [15, 16, 17, 18, 19, 20]
     ... })
 
-    >>> left, right, report = night_to_night_observation_association(night_1, night_2, 1.5 * u.degree, 0.2, 0.5)
-
-    >>> expected_report = {'number of inter night separation based association': 3, 'number of inter night magnitude filtered association': 1}
+    >>> left, right = night_to_night_observation_association(night_1, night_2, 1.5 * u.degree, 0.2, 0.5)
 
     >>> left_expected = pd.DataFrame({
     ... "ra": [1, 4],
@@ -349,7 +347,6 @@ def night_to_night_observation_association(
 
     >>> assert_frame_equal(left.reset_index(drop=True), left_expected)
     >>> assert_frame_equal(right.reset_index(drop=True), right_expected)
-    >>> TestCase().assertDictEqual(expected_report, report)
     """
 
     # association based separation
@@ -510,14 +507,14 @@ def tracklets_and_trajectories_associations(
 
     >>> trajectories["not_updated"] = np.ones(len(trajectories), dtype=np.bool_)
 
-    >>> tr, tk, max_tr_id, report = tracklets_and_trajectories_associations(trajectories, tracklets, 3, 1 * u.degree, 0.2, 0.5, 30, 5)
+    >>> tr, tk, max_tr_id = tracklets_and_trajectories_associations(trajectories, tracklets, 3, 1 * u.degree, 0.2, 0.5, 30, 5)
 
     >>> assert_frame_equal(tr, ts.trajectories_expected_3, check_dtype=False)
     >>> assert_frame_equal(tk, pd.DataFrame(columns=["ra", "dec", "dcmag", "fid", "nid", "jd", "candid", "trajectory_id", "provisional designation", "a", "e", "i", "long. node", "arg. peric", "mean anomaly", "rms_a", "rms_e", "rms_i", "rms_long. node", "rms_arg. peric", "rms_mean anomaly",]), check_index_type=False, check_dtype=False)
     >>> max_tr_id
     8
 
-    >>> tr, tk, max_tr_id, report = tracklets_and_trajectories_associations(pd.DataFrame(), tracklets, 3, 1 * u.degree, 0.2, 0.5, 30, 0)
+    >>> tr, tk, max_tr_id = tracklets_and_trajectories_associations(pd.DataFrame(), tracklets, 3, 1 * u.degree, 0.2, 0.5, 30, 0)
 
     >>> assert_frame_equal(tr, pd.DataFrame(), check_dtype=False)
     >>> assert_frame_equal(tk, tracklets)
@@ -898,8 +895,7 @@ def trajectories_with_new_observations_associations(
             # trajectory associations with the new observations
             (
                 traj_left,
-                obs_assoc,
-                night_to_night_traj_to_obs_report,
+                obs_assoc
             ) = night_to_night_trajectory_associations(
                 two_last_current_nid,
                 new_observations,
@@ -1057,7 +1053,7 @@ def old_observations_with_tracklets_associations(
 
     >>> tracklets["not_updated"] = np.ones(len(tracklets), dtype=np.bool_)
 
-    >>> tk, old, max_tr_id, report = old_observations_with_tracklets_associations(tracklets, old_observations, 3, 1.5 * u.degree, 0.1, 0.3, 30, 6)
+    >>> tk, old, max_tr_id = old_observations_with_tracklets_associations(tracklets, old_observations, 3, 1.5 * u.degree, 0.1, 0.3, 30, 6)
 
 
     >>> assert_frame_equal(tk, ts.tracklets_obs_expected_1, check_dtype=False)
@@ -1070,7 +1066,7 @@ def old_observations_with_tracklets_associations(
 
     >>> tracklets["not_updated"] = np.ones(len(tracklets), dtype=np.bool_)
 
-    >>> tk, old, max_tr_id, report = old_observations_with_tracklets_associations(tracklets, old_observations, 3, 1.5 * u.degree, 0.1, 0.3, 30, 5)
+    >>> tk, old, max_tr_id = old_observations_with_tracklets_associations(tracklets, old_observations, 3, 1.5 * u.degree, 0.1, 0.3, 30, 5)
 
     >>> assert_frame_equal(tk, ts.tracklets_obs_expected_2, check_dtype=False)
     >>> assert_frame_equal(old.reset_index(drop=True), ts.old_obs_expected_2, check_dtype=False)
