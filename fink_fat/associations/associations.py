@@ -510,7 +510,7 @@ def tracklets_and_trajectories_associations(
     >>> tr, tk, max_tr_id = tracklets_and_trajectories_associations(trajectories, tracklets, 3, 1 * u.degree, 0.2, 0.5, 30, 5)
 
     >>> assert_frame_equal(tr, ts.trajectories_expected_3, check_dtype=False)
-    >>> assert_frame_equal(tk, pd.DataFrame(columns=["ra", "dec", "dcmag", "fid", "nid", "jd", "candid", "trajectory_id", "provisional designation", "a", "e", "i", "long. node", "arg. peric", "mean anomaly", "rms_a", "rms_e", "rms_i", "rms_long. node", "rms_arg. peric", "rms_mean anomaly",]), check_index_type=False, check_dtype=False)
+    >>> assert_frame_equal(tk, pd.DataFrame(columns=["ra", "dec", "dcmag", "fid", "nid", "jd", "candid", "trajectory_id"]), check_index_type=False, check_dtype=False)
     >>> max_tr_id
     8
 
