@@ -1034,8 +1034,7 @@ def intra_night_association(
     night_observation,
     sep_criterion=145 * u.arcsecond,
     mag_criterion_same_fid=2.21,
-    mag_criterion_diff_fid=1.75,
-    compute_metrics=False,
+    mag_criterion_diff_fid=1.75
 ):
     """
     Perform intra_night association with separation and magnitude criterion
@@ -1109,8 +1108,6 @@ def intra_night_association(
     0
     """
 
-    intra_night_report = dict()
-
     left_assoc, right_assoc, _ = intra_night_separation_association(
         night_observation, sep_criterion
     )
@@ -1122,19 +1119,12 @@ def intra_night_association(
     left_assoc = left_assoc[mask_diff_jd]
     right_assoc = right_assoc[mask_diff_jd]
 
-    intra_night_report["number of separation association"] = len(left_assoc)
-
     left_assoc, right_assoc = magnitude_association(
         left_assoc, right_assoc, mag_criterion_same_fid, mag_criterion_diff_fid
     )
 
-    intra_night_report[
-        "number of association filtered by magnitude"
-    ] = intra_night_report["number of separation association"] - len(left_assoc)
-
     if len(left_assoc) == 0:
-        intra_night_report["association metrics"] = {}
-        return pd.DataFrame(), pd.DataFrame(), intra_night_report
+        return pd.DataFrame(), pd.DataFrame()
 
     # remove mirrored associations
     left_assoc, right_assoc = removed_mirrored_association(left_assoc, right_assoc)
@@ -1142,18 +1132,7 @@ def intra_night_association(
     # removed wrong multiple association
     left_assoc, right_assoc = removed_multiple_association(left_assoc, right_assoc)
 
-    if compute_metrics:  # pragma: no cover
-        metrics = compute_intra_night_metrics(
-            left_assoc, right_assoc, night_observation
-        )
-
-        intra_night_report["association metrics"] = metrics
-
-        return left_assoc, right_assoc, intra_night_report
-    else:  # pragma: no cover
-        intra_night_report["association metrics"] = {}
-
-        return left_assoc, right_assoc, intra_night_report
+    return left_assoc, right_assoc
 
 
 def new_trajectory_id_assignation(left_assoc, right_assoc, last_traj_id):
