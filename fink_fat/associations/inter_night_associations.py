@@ -74,7 +74,6 @@ def intra_night_step(
     intra_night_sep_criterion,
     intra_night_mag_criterion_same_fid,
     intra_night_mag_criterion_diff_fid,
-    run_metrics,
 ):
     """
     Perform the intra nigth associations step at the beginning of the inter night association function.
@@ -92,8 +91,6 @@ def intra_night_step(
         magnitude criterion between the alerts with the same filter id
     intra_night_mag_criterion_diff_fid : float
         magnitude criterion between the alerts with a different filter id
-    run_metrics : boolean
-        execute and return the performance metrics of the intra night association
 
     Returns
     -------
@@ -101,52 +98,38 @@ def intra_night_step(
         The tracklets detected inside the new night.
     new_observation_not_associated : dataframe
         All the observation that not occurs in a tracklets
-    intra_night_report : dictionary
-        Statistics about the intra night association, contains the following entries :
-
-                    number of separation association
-
-                    number of association filtered by magnitude
-
-                    association metrics if compute_metrics is set to True
 
     Examples
     --------
-    >>> track, remaining_new_obs, metrics = intra_night_step(
+    >>> track, remaining_new_obs = intra_night_step(
     ... ts.input_observation,
     ... 0,
     ... intra_night_sep_criterion = 145 * u.arcsecond,
     ... intra_night_mag_criterion_same_fid = 2.21,
-    ... intra_night_mag_criterion_diff_fid = 1.75,
-    ... run_metrics = True,
+    ... intra_night_mag_criterion_diff_fid = 1.75
     ... )
 
     >>> assert_frame_equal(track.reset_index(drop=True), ts.tracklets_output, check_dtype = False)
     >>> assert_frame_equal(remaining_new_obs, ts.remaining_new_obs_output, check_dtype = False)
-    >>> TestCase().assertDictEqual(metrics, ts.tracklets_expected_metrics)
 
-
-    >>> track, remaining_new_obs, metrics = intra_night_step(
+    >>> track, remaining_new_obs = intra_night_step(
     ... ts.input_observation_2,
     ... 0,
     ... intra_night_sep_criterion = 145 * u.arcsecond,
     ... intra_night_mag_criterion_same_fid = 2.21,
     ... intra_night_mag_criterion_diff_fid = 1.75,
-    ... run_metrics = True,
     ... )
 
     >>> assert_frame_equal(track.reset_index(drop=True), ts.tracklets_output_2, check_dtype = False)
     >>> assert_frame_equal(remaining_new_obs, ts.remaining_new_obs_output_2, check_dtype = False)
-    >>> TestCase().assertDictEqual(metrics, {'number of separation association': 0, 'number of association filtered by magnitude': 0, 'association metrics': {}, 'number of intra night tracklets': 0})
     """
 
     # intra-night association of the new observations
-    new_left, new_right, intra_night_report = intra_night_association(
+    new_left, new_right = intra_night_association(
         new_observation,
         sep_criterion=intra_night_sep_criterion,
         mag_criterion_same_fid=intra_night_mag_criterion_same_fid,
         mag_criterion_diff_fid=intra_night_mag_criterion_diff_fid,
-        compute_metrics=run_metrics,
     )
 
     new_left, new_right = (
@@ -156,10 +139,6 @@ def intra_night_step(
 
     tracklets = new_trajectory_id_assignation(new_left, new_right, last_trajectory_id)
 
-    intra_night_report["number of intra night tracklets"] = len(
-        np.unique(tracklets["trajectory_id"])
-    )
-
     if len(tracklets) > 0:
         # remove all the alerts that appears in the tracklets
         new_observation_not_associated = new_observation[
@@ -168,11 +147,7 @@ def intra_night_step(
     else:
         new_observation_not_associated = new_observation
 
-    return (
-        tracklets,
-        new_observation_not_associated,
-        intra_night_report,
-    )
+    return (tracklets, new_observation_not_associated)
 
 
 def night_to_night_association(
@@ -199,7 +174,6 @@ def night_to_night_association(
     do_track_and_old_obs_assoc=True,
     do_new_obs_and_old_obs_assoc=True,
     verbose=False,
-    run_metrics=False,
 ):
     """
     Perform night to night associations.
@@ -259,8 +233,6 @@ def night_to_night_association(
         Keep the trajectories with less than "orbfit limit" points
     ram_dir : string
         Path where files needed for the OrbFit computation are located
-    run_metrics : boolean
-        launch and return the performance metrics of the intra night association and inter night association
     do_track_and_traj_assoc : boolean
         if set to false, deactivate the association between the trajectories and the tracklets
     do_traj_and_new_obs_assoc : boolean
@@ -278,18 +250,10 @@ def night_to_night_association(
         the updated trajectories with the new observations
     old_observation : dataframe
         the new set of old observations updated with the remaining non-associated new observations.
-    inter_night_report : dictionary
-        Statistics about the night_to_night_association, contains the following entries :
-
-                    intra night report
-
-                    trajectory association report
-
-                    tracklets and observation report
 
     Examples
     --------
-    >>> traj_expected, old_expected, report_expected = night_to_night_association(
+    >>> traj_expected, old_expected = night_to_night_association(
     ... ts.trajectory_df_1,
     ... ts.old_observation_1,
     ... ts.new_observation_1,
@@ -310,7 +274,7 @@ def night_to_night_association(
     >>> assert_frame_equal(old_expected, ts.old_observation_expected_1, check_dtype=False)
 
 
-    >>> traj_expected, old_expected, report_expected = night_to_night_association(
+    >>> traj_expected, old_expected = night_to_night_association(
     ... ts.trajectory_df_2,
     ... ts.old_observation_2,
     ... ts.new_observation_2,
@@ -332,7 +296,7 @@ def night_to_night_association(
     >>> assert_frame_equal(old_expected, ts.old_observation_expected_2, check_dtype=False)
 
 
-    >>> traj_expected, old_expected, report_expected = night_to_night_association(
+    >>> traj_expected, old_expected = night_to_night_association(
     ... ts.trajectory_df_3,
     ... ts.old_observation_3,
     ... ts.new_observation_3,
@@ -354,7 +318,7 @@ def night_to_night_association(
     >>> assert_frame_equal(old_expected, ts.old_observation_expected_3, check_dtype=False)
 
 
-    >>> traj_expected, old_expected, report_expected = night_to_night_association(
+    >>> traj_expected, old_expected = night_to_night_association(
     ... ts.trajectory_df_4,
     ... ts.old_observation_4,
     ... ts.new_observation_4,
@@ -376,7 +340,7 @@ def night_to_night_association(
     >>> assert_frame_equal(old_expected, ts.old_observation_expected_4, check_dtype=False)
 
 
-    >>> traj_expected, old_expected, report_expected = night_to_night_association(
+    >>> traj_expected, old_expected = night_to_night_association(
     ... ts.trajectory_df_5,
     ... ts.old_observation_5,
     ... ts.new_observation_5,
@@ -398,7 +362,7 @@ def night_to_night_association(
     >>> assert_frame_equal(old_expected, ts.old_observation_expected_5, check_dtype=False)
 
 
-    >>> traj_expected, old_expected, report_expected = night_to_night_association(
+    >>> traj_expected, old_expected = night_to_night_association(
     ... ts.trajectory_df_5,
     ... ts.old_observation_5,
     ... ts.new_observation_6,
@@ -420,7 +384,7 @@ def night_to_night_association(
     >>> assert_frame_equal(old_expected, ts.old_observation_expected_6, check_dtype=False)
 
 
-    >>> traj_expected, old_expected, report_expected = night_to_night_association(
+    >>> traj_expected, old_expected = night_to_night_association(
     ... ts.trajectory_df_5,
     ... ts.old_observation_6,
     ... ts.new_observation_7,
@@ -452,20 +416,16 @@ def night_to_night_association(
         traj_2_points_time_window,
     )
 
-    inter_night_report = dict()
-    inter_night_report["nid of the next night"] = int(next_nid)
-
     if verbose:  # pragma: no cover
         t_before = t.time()
 
     # intra night associations steps with the new observations
-    (tracklets, remaining_new_observations, intra_night_report,) = intra_night_step(
+    (tracklets, remaining_new_observations,) = intra_night_step(
         new_observation,
         last_trajectory_id,
         intra_night_sep_criterion,
         intra_night_mag_criterion_same_fid,
         intra_night_mag_criterion_diff_fid,
-        run_metrics,
     )
 
     if verbose:  # pragma: no cover
@@ -473,17 +433,7 @@ def night_to_night_association(
 
     if len(most_recent_traj) == 0 and len(old_observation) == 0:
 
-        inter_night_report["intra night report"] = intra_night_report
-        inter_night_report["tracklets associations report"] = {}
-        inter_night_report["trajectories associations report"] = {}
-        inter_night_report["track and old obs associations report"] = {}
-        inter_night_report["old observation and new observation report"] = {}
-
-        return (
-            pd.concat([old_traj, tracklets]),
-            remaining_new_observations,
-            inter_night_report,
-        )
+        return (pd.concat([old_traj, tracklets]), remaining_new_observations)
 
     if len(tracklets) > 0:
         # separate the tracklets with enough points to be sent to orbfit and the other small one.
@@ -504,7 +454,6 @@ def night_to_night_association(
             traj_with_track,
             not_associated_tracklets,
             max_traj_id,
-            traj_with_track_report,
         ) = tracklets_and_trajectories_associations(
             most_recent_traj,
             small_track,
@@ -515,7 +464,6 @@ def night_to_night_association(
             angle_criterion,
             last_trajectory_id,
             store_kd_tree,
-            run_metrics,
         )
 
         if verbose:  # pragma: no cover
@@ -529,7 +477,6 @@ def night_to_night_association(
         traj_with_track = most_recent_traj
         not_associated_tracklets = small_track
         max_traj_id = last_trajectory_id
-        traj_with_track_report = {}
 
     # fmt: off
     assoc_test = len(traj_with_track) > 0 and len(remaining_new_observations) > 0 and do_traj_and_new_obs_assoc
@@ -544,7 +491,6 @@ def night_to_night_association(
             traj_with_new_obs,
             remaining_new_observations,
             max_traj_id,
-            traj_with_new_obs_report,
         ) = trajectories_with_new_observations_associations(
             traj_with_track,
             remaining_new_observations,
@@ -555,7 +501,6 @@ def night_to_night_association(
             angle_criterion,
             max_traj_id,
             store_kd_tree,
-            run_metrics,
         )
 
         if verbose:  # pragma: no cover
@@ -567,7 +512,6 @@ def night_to_night_association(
 
     else:
         traj_with_new_obs = traj_with_track
-        traj_with_new_obs_report = {}
 
     # fmt: off
     test = len(not_associated_tracklets) > 0 and len(old_observation) > 0 and do_track_and_old_obs_assoc
@@ -582,7 +526,6 @@ def night_to_night_association(
             track_with_old_obs,
             remain_old_obs,
             max_traj_id,
-            track_and_obs_report,
         ) = old_observations_with_tracklets_associations(
             not_associated_tracklets,
             old_observation,
@@ -593,7 +536,6 @@ def night_to_night_association(
             angle_criterion,
             max_traj_id,
             store_kd_tree,
-            run_metrics,
         )
 
         if verbose:  # pragma: no cover
@@ -606,7 +548,6 @@ def night_to_night_association(
     else:
         track_with_old_obs = not_associated_tracklets
         remain_old_obs = old_observation
-        track_and_obs_report = {}
 
     # fmt: off
     test = len(remain_old_obs) > 0 and len(remaining_new_observations) > 0 and do_new_obs_and_old_obs_assoc
@@ -619,7 +560,6 @@ def night_to_night_association(
             new_trajectory,
             remain_old_obs,
             remaining_new_observations,
-            observation_report,
         ) = old_with_new_observations_associations(
             remain_old_obs,
             remaining_new_observations,
@@ -629,7 +569,6 @@ def night_to_night_association(
             mag_criterion_same_fid,
             mag_criterion_diff_fid,
             store_kd_tree,
-            run_metrics,
         )
 
         if verbose:  # pragma: no cover
@@ -640,7 +579,6 @@ def night_to_night_association(
             )
     else:
         new_trajectory = pd.DataFrame(columns=remain_old_obs.columns)
-        observation_report = {}
 
     # concatenate all the trajectories with computed orbital elements and the other trajectories/tracklets.
     most_recent_traj = pd.concat(
@@ -649,18 +587,10 @@ def night_to_night_association(
 
     old_observation = pd.concat([remain_old_obs, remaining_new_observations])
 
-    inter_night_report["intra night report"] = intra_night_report
-    inter_night_report["tracklets associations report"] = traj_with_track_report
-    inter_night_report["trajectories associations report"] = traj_with_new_obs_report
-    inter_night_report["track and old obs associations report"] = track_and_obs_report
-    inter_night_report[
-        "old observation and new observation report"
-    ] = observation_report
-
     trajectory_df = pd.concat([old_traj, most_recent_traj])
     trajectory_df["not_updated"] = np.ones(len(trajectory_df), dtype=np.bool_)
 
-    return trajectory_df, old_observation, inter_night_report
+    return trajectory_df, old_observation
 
 
 if __name__ == "__main__":  # pragma: no cover
