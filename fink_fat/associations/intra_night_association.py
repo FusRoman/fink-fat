@@ -1054,8 +1054,6 @@ def intra_night_association(
     real_assoc : boolean
         if True, computes performance metrics of the associations based on real labels from ssnamenr columns in the night_observation parameters.
         night_observations must contains observations with ssnamenr from MPC objects.
-    compute_metrics : boolean
-        execute and return the performance metrics of the intra night association
 
     Returns
     -------
@@ -1063,29 +1061,15 @@ def intra_night_association(
         left members of the associations
     right_assoc : dataframe
         right_members of the associations
-    intra_night_report : dictionary
-        Statistics about the intra night association, contains the following entries :
-
-                    number of separation association
-
-                    number of association filtered by magnitude
-
-                    association metrics if compute_metrics is set to True
 
     Examples
     --------
-    >>> left, right, intra_night_report = intra_night_association(ts.intra_night_test_traj, sep_criterion=145*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=True)
-
-    >>> expected_report = {'number of separation association': 40, 'number of association filtered by magnitude': 0, 'association metrics': {'precision': 100.0, 'recall': 100.0, 'True Positif': 10, 'False Positif': 0, 'False Negatif': 0, 'total real association': 10}}
-    >>> TestCase().assertDictEqual(expected_report, intra_night_report)
+    >>> left, right = intra_night_association(ts.intra_night_test_traj, sep_criterion=145*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75)
 
     >>> assert_frame_equal(left.reset_index(drop=True), ts.intra_night_left, check_dtype = False)
     >>> assert_frame_equal(right.reset_index(drop=True), ts.intra_night_right, check_dtype = False)
 
-    >>> left, right, intra_night_report = intra_night_association(ts.intra_night_test_traj, sep_criterion=145*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=False)
-
-    >>> expected_report = {'number of separation association': 40, 'number of association filtered by magnitude': 0, 'association metrics': {}}
-    >>> TestCase().assertDictEqual(expected_report, intra_night_report)
+    >>> left, right = intra_night_association(ts.intra_night_test_traj, sep_criterion=145*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75)
 
     >>> test_traj = pd.DataFrame({
     ... 'ra' : [106.305259, 106.141905, 169.860467],
@@ -1097,10 +1081,7 @@ def intra_night_association(
     ... 'jd': [2459274.666713, 2459274.666713, 2459274.7206481]
     ... })
 
-    >>> left, right, intra_night_report = intra_night_association(test_traj, sep_criterion=145*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75, compute_metrics=True)
-
-    >>> expected_report = {'number of separation association': 0, 'number of association filtered by magnitude': 0, 'association metrics': {}}
-    >>> TestCase().assertDictEqual(expected_report, intra_night_report)
+    >>> left, right = intra_night_association(test_traj, sep_criterion=145*u.arcsecond, mag_criterion_same_fid=2.21, mag_criterion_diff_fid=1.75)
 
     >>> len(left)
     0
