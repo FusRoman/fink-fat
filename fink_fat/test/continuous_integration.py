@@ -43,7 +43,7 @@ def ci_function(
 
         next_nid = new_observation["nid"].values[0]
 
-        trajectory_df, old_observation, _ = night_to_night_association(
+        trajectory_df, old_observation = night_to_night_association(
             trajectory_df,
             old_observation,
             new_observation,
