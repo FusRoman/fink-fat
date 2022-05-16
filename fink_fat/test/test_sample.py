@@ -7016,7 +7016,7 @@ tracklets_obs_expected_3 = pd.DataFrame(
             7.0,
             6.0,
         ],
-        "trajectory_id": [0, 0, 1, 1, 2, 2, 2, 3, 3, 3, 1, 4, 4, 4, 0]
+        "trajectory_id": [0, 0, 1, 1, 2, 2, 2, 3, 3, 3, 1, 4, 4, 4, 0],
         "not_updated": [
             False,
             False,
@@ -7045,20 +7045,7 @@ old_obs_expected_3 = pd.DataFrame(
         "fid": [1],
         "nid": [0],
         "jd": [0.3],
-        "candid": [8],
-        "provisional designation": [-1.0],
-        "a": [-1.0],
-        "e": [-1.0],
-        "i": [-1.0],
-        "long. node": [-1.0],
-        "arg. peric": [-1.0],
-        "mean anomaly": [-1.0],
-        "rms_a": [-1.0],
-        "rms_e": [-1.0],
-        "rms_i": [-1.0],
-        "rms_long. node": [-1.0],
-        "rms_arg. peric": [-1.0],
-        "rms_mean anomaly": [-1.0],
+        "candid": [8]
     }
 )
 
