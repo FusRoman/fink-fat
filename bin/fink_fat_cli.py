@@ -147,7 +147,7 @@ def main():
         if arguments["--verbose"]:
             print("started associations...")
 
-        trajectory_df, old_obs_df, _ = night_to_night_association(
+        trajectory_df, old_obs_df = night_to_night_association(
             trajectory_df,
             old_obs_df,
             new_alerts,
@@ -974,7 +974,7 @@ def main():
                 else:
                     last_trajectory_id = np.max(trajectory_df["trajectory_id"])
 
-            trajectory_df, old_obs_df, _ = night_to_night_association(
+            trajectory_df, old_obs_df = night_to_night_association(
                 trajectory_df,
                 old_obs_df,
                 new_alerts,
