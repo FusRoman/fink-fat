@@ -2382,7 +2382,7 @@ tracklets_expected_1 = pd.DataFrame(
         "nid": [4, 4, 4, 4],
         "jd": [4.1, 4.2, 4.1, 4.2],
         "candid": [27, 28, 31, 32],
-        "trajectory_id": [11, 11, 13, 13]
+        "trajectory_id": [11, 11, 13, 13],
     }
 )
 
@@ -2553,7 +2553,7 @@ tracklets_expected_2 = pd.DataFrame(
         "nid": [3, 3],
         "jd": [3.4, 3.5],
         "candid": [23, 24],
-        "trajectory_id": [13, 13]
+        "trajectory_id": [13, 13],
     }
 )
 
@@ -3392,7 +3392,7 @@ new_observations_expected_1 = pd.DataFrame(
         "fid": [1, 1, 1, 1],
         "nid": [3, 3, 3, 3],
         "jd": [3.1, 3.2, 3.3, 3.4],
-        "candid": [16, 20, 21, 22]
+        "candid": [16, 20, 21, 22],
     }
 )
 
@@ -3743,7 +3743,7 @@ new_observations_expected_2 = pd.DataFrame(
         "fid": [1, 1, 1, 1, 1],
         "nid": [3, 3, 3, 3, 3],
         "jd": [3.3, 3.4, 3.5, 3.5, 3.4],
-        "candid": [21, 24, 25, 26, 27]
+        "candid": [21, 24, 25, 26, 27],
     }
 )
 
@@ -4058,7 +4058,7 @@ new_observations_expected_3 = pd.DataFrame(
         "fid": [1],
         "nid": [3],
         "jd": [3.5],
-        "candid": [25]
+        "candid": [25],
     }
 )
 
@@ -4257,7 +4257,7 @@ old_obs_expected_1 = pd.DataFrame(
         "fid": [1, 1],
         "nid": [0, 1],
         "jd": [0.2, 1.5],
-        "candid": [13, 15]
+        "candid": [13, 15],
     }
 )
 
@@ -4463,7 +4463,7 @@ old_obs_expected_2 = pd.DataFrame(
         "fid": [1, 1],
         "nid": [1, 2],
         "jd": [1.1, 2.3],
-        "candid": [12, 13]
+        "candid": [12, 13],
     }
 )
 
@@ -4654,7 +4654,7 @@ old_obs_expected_3 = pd.DataFrame(
         "fid": [1],
         "nid": [0],
         "jd": [0.3],
-        "candid": [8]
+        "candid": [8],
     }
 )
 
@@ -6161,7 +6161,7 @@ traj_not_updated_expected = pd.DataFrame(
         ],
         "ssnamenr": ["99956", "99969", "99969", "99956"],
         "trajectory_id": [4, 5, 5, 4],
-        "not_updated": [True, True, True, True]
+        "not_updated": [True, True, True, True],
     }
 )
 
@@ -6186,7 +6186,7 @@ other_track_expected = pd.DataFrame(
         ],
         "ssnamenr": ["99949", "99949", "99946", "99946"],
         "trajectory_id": [16, 16, 15, 15],
-        "not_updated": [True, True, True, True]
+        "not_updated": [True, True, True, True],
     }
 )
 

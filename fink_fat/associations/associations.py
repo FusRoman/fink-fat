@@ -897,10 +897,7 @@ def trajectories_with_new_observations_associations(
             norm_diff_fid = mag_criterion_diff_fid * diff_night
 
             # trajectory associations with the new observations
-            (
-                traj_left,
-                obs_assoc
-            ) = night_to_night_trajectory_associations(
+            (traj_left, obs_assoc) = night_to_night_trajectory_associations(
                 two_last_current_nid,
                 new_observations,
                 norm_sep_crit,
@@ -1204,7 +1201,7 @@ def old_observations_with_tracklets_associations(
 
                         duplicate_obs["trajectory_id"] = new_obs_id
                         duplicate_obs["not_updated"] = False
-                    
+
                     duplicate_obs["assoc_tag"] = "O"
                     all_duplicate_track = cast_obs_data(pd.concat([df, duplicate_obs]))
                     tracklets = cast_obs_data(
@@ -1359,9 +1356,7 @@ def old_with_new_observations_associations(
                     "trajectory_id"
                 ] = new_trajectory_id
 
-                left_assoc["assoc_tag"] = right_assoc[
-                    "assoc_tag"
-                ] = "N"
+                left_assoc["assoc_tag"] = right_assoc["assoc_tag"] = "N"
 
                 trajectory_df = cast_obs_data(
                     pd.concat([trajectory_df, left_assoc, right_assoc])

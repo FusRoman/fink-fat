@@ -387,8 +387,7 @@ def main():
 
         # trajectories with orbits size comparation
         trajectories_gb = traj_orb_df.groupby(["trajectory_id"]).agg(
-                count=("ra", len),
-                tags=("assoc_tag", list)
+            count=("ra", len), tags=("assoc_tag", list)
         )
 
         trajectories_size = Counter(trajectories_gb["count"])
