@@ -386,9 +386,12 @@ def main():
             exit()
 
         # trajectories with orbits size comparation
-        trajectories_size = Counter(
-            traj_orb_df.groupby(["trajectory_id"]).count()["ra"]
+        trajectories_gb = traj_orb_df.groupby(["trajectory_id"]).agg(
+                count=("ra", len),
+                tags=("assoc_tag", list)
         )
+
+        trajectories_size = Counter(trajectories_gb["count"])
         table_data = [["Size", "Number of orbits candidates"]]
         table_data += [
             [size, number_size]
