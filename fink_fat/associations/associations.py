@@ -672,6 +672,8 @@ def tracklets_and_trajectories_associations(
 
                     # add the duplicated new trajectories to the set of trajectories
                     all_duplicate_traj = cast_obs_data(pd.concat([tr_df, tk_df]))
+                    all_duplicate_traj["assoc_tag"] = "T"
+
                     trajectories = cast_obs_data(
                         pd.concat([trajectories, all_duplicate_traj])
                     )
@@ -709,10 +711,12 @@ def tracklets_and_trajectories_associations(
                     # the tracklets contains already the alerts within traj_extremity_associated.
                     with pd.option_context("mode.chained_assignment", None):
                         next_night_tracklets["trajectory_id"] = rows["trajectory_id"]
+
                     associated_tracklets.append(next_night_tracklets)
 
                 # create a dataframe with all tracklets that will be added to a trajectory
                 associated_tracklets = cast_obs_data(pd.concat(associated_tracklets))
+                associated_tracklets["assoc_tag"] = "T"
 
                 # remove the tracklets that will be added to a trajectory from the dataframe of all tracklets
                 tracklets = tracklets[
@@ -977,12 +981,15 @@ def trajectories_with_new_observations_associations(
 
                     # add the duplicated new trajectories to the set of trajectories
                     all_duplicate_traj = cast_obs_data(pd.concat([df, duplicate_obs]))
+                    all_duplicate_traj["assoc_tag"] = "A"
+
                     trajectories = cast_obs_data(
                         pd.concat([trajectories, all_duplicate_traj])
                     )
 
                 # remove duplicates associations
                 obs_assoc = obs_assoc[~duplicates]
+                obs_assoc["assoc_tag"] = "A"
 
                 # add the new associated observations in the recorded trajectory dataframe
                 trajectories = cast_obs_data(pd.concat([trajectories, obs_assoc]))
@@ -1197,7 +1204,8 @@ def old_observations_with_tracklets_associations(
 
                         duplicate_obs["trajectory_id"] = new_obs_id
                         duplicate_obs["not_updated"] = False
-
+                    
+                    duplicate_obs["assoc_tag"] = "O"
                     all_duplicate_track = cast_obs_data(pd.concat([df, duplicate_obs]))
                     tracklets = cast_obs_data(
                         pd.concat([tracklets, all_duplicate_track])
@@ -1205,6 +1213,7 @@ def old_observations_with_tracklets_associations(
 
                 # remove duplicates associations
                 old_obs_right_assoc = old_obs_right_assoc[~duplicates]
+                old_obs_right_assoc["assoc_tag"] = "O"
 
                 # add the associated old observations to the tracklets
                 tracklets = cast_obs_data(pd.concat([tracklets, old_obs_right_assoc]))
@@ -1349,6 +1358,10 @@ def old_with_new_observations_associations(
                 left_assoc["trajectory_id"] = right_assoc[
                     "trajectory_id"
                 ] = new_trajectory_id
+
+                left_assoc["assoc_tag"] = right_assoc[
+                    "assoc_tag"
+                ] = "N"
 
                 trajectory_df = cast_obs_data(
                     pd.concat([trajectory_df, left_assoc, right_assoc])
