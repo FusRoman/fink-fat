@@ -605,6 +605,23 @@ trajectory_df_sample = pd.DataFrame(
         "jd": [1, 2, 3, 1, 2, 3, 1, 2, 3, 1, 2, 3, 1, 2, 3],
         "candid": [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24],
         "trajectory_id": [1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 5],
+        "assoc_tag": [
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+        ],
     }
 )
 
@@ -618,6 +635,7 @@ traj_next_night_sample = pd.DataFrame(
         "jd": [4.1, 4.2, 4.1, 4.2, 4.1, 4.2, 4.1, 4.2],
         "candid": [25, 26, 27, 28, 29, 30, 31, 32],
         "trajectory_id": [10, 10, 11, 11, 12, 12, 13, 13],
+        "assoc_tag": ["I", "I", "I", "I", "I", "I", "I", "I"],
     }
 )
 
@@ -2166,6 +2184,24 @@ trajectories_sample_1 = pd.DataFrame(
         ],
         "candid": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
         "trajectory_id": [0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 4],
+        "assoc_tag": [
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+            "A",
+        ],
     }
 )
 
@@ -2179,6 +2215,7 @@ tracklets_sample_1 = pd.DataFrame(
         "jd": [3.1, 3.2, 3.1, 3.2, 3.1, 3.2, 3.3, 3.4, 3.5],
         "candid": [16, 17, 18, 19, 20, 21, 22, 23, 24],
         "trajectory_id": [10, 10, 11, 11, 12, 12, 12, 13, 13],
+        "assoc_tag": ["I", "I", "I", "I", "I", "I", "I", "I", "I"],
     }
 )
 
@@ -2226,6 +2263,23 @@ trajectories_sample_2 = pd.DataFrame(
         ],
         "candid": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
         "trajectory_id": [0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4],
+        "assoc_tag": [
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+        ],
     }
 )
 
@@ -2254,6 +2308,22 @@ tracklets_sample_2 = pd.DataFrame(
         "jd": [3.1, 3.2, 3.1, 3.2, 3.1, 3.2, 3.1, 3.2, 3.1, 3.2, 3.1, 3.2, 3.1, 3.2],
         "candid": [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29],
         "trajectory_id": [10, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 15, 16, 16],
+        "assoc_tag": [
+            "I",
+            "I",
+            "I",
+            "I",
+            "I",
+            "I",
+            "I",
+            "I",
+            "I",
+            "I",
+            "I",
+            "I",
+            "I",
+            "I",
+        ],
     }
 )
 
@@ -2349,6 +2419,27 @@ trajectories_expected_1 = pd.DataFrame(
             4.0,
             4.0,
         ],
+        "assoc_tag": [
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+            "T",
+            "T",
+            "T",
+            "T",
+        ],
         "not_updated": [
             False,
             False,
@@ -2382,7 +2473,8 @@ tracklets_expected_1 = pd.DataFrame(
         "nid": [4, 4, 4, 4],
         "jd": [4.1, 4.2, 4.1, 4.2],
         "candid": [27, 28, 31, 32],
-        "trajectory_id": [11, 11, 13, 13]
+        "trajectory_id": [11, 11, 13, 13],
+        "assoc_tag": ["I", "I", "I", "I"],
     }
 )
 
@@ -2516,6 +2608,31 @@ trajectories_expected_2 = pd.DataFrame(
             0.0,
             0.0,
         ],
+        "assoc_tag": [
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+            "A",
+            "T",
+            "T",
+            "T",
+            "T",
+            "T",
+            "T",
+            "T",
+        ],
         "not_updated": [
             False,
             False,
@@ -2553,7 +2670,8 @@ tracklets_expected_2 = pd.DataFrame(
         "nid": [3, 3],
         "jd": [3.4, 3.5],
         "candid": [23, 24],
-        "trajectory_id": [13, 13]
+        "trajectory_id": [13, 13],
+        "assoc_tag": ["I", "I"],
     }
 )
 
@@ -2931,6 +3049,48 @@ trajectories_expected_3 = pd.DataFrame(
             4.0,
             4.0,
         ],
+        "assoc_tag": [
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+            "I",
+            "I",
+            "A",
+            "T",
+            "T",
+            "T",
+            "T",
+            "T",
+            "T",
+            "T",
+            "T",
+            "T",
+            "T",
+            "T",
+            "T",
+            "T",
+            "T",
+            "T",
+            "T",
+        ],
         "not_updated": [
             False,
             False,
@@ -3027,6 +3187,26 @@ trajectories_sample_3 = pd.DataFrame(
         ],
         "candid": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
         "trajectory_id": [0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 5],
+        "assoc_tag": [
+            "I",
+            "I",
+            "N",
+            "I",
+            "I",
+            "N",
+            "I",
+            "I",
+            "N",
+            "I",
+            "I",
+            "N",
+            "I",
+            "I",
+            "N",
+            "I",
+            "I",
+            "N",
+        ],
     }
 )
 
@@ -3067,6 +3247,7 @@ trajectories_sample_4 = pd.DataFrame(
         "jd": [0.1, 1.2, 1.3, 0.1, 0.1, 0.2, 0.1, 1.1, 2.3, 0.0, 2.2, 2.4],
         "candid": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
         "trajectory_id": [0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3],
+        "assoc_tag": ["I", "I", "N", "I", "I", "N", "I", "I", "N", "I", "I", "N"],
     }
 )
 
@@ -3215,6 +3396,29 @@ trajectories_sample_5 = pd.DataFrame(
             6,
             6,
         ],
+        "assoc_tag": [
+            "I",
+            "I",
+            "N",
+            "I",
+            "I",
+            "N",
+            "I",
+            "I",
+            "N",
+            "I",
+            "I",
+            "N",
+            "I",
+            "I",
+            "N",
+            "I",
+            "I",
+            "N",
+            "I",
+            "I",
+            "N",
+        ],
     }
 )
 
@@ -3357,6 +3561,30 @@ trajectories_expected_4 = pd.DataFrame(
             5,
             4,
         ],
+        "assoc_tag": [
+            "I",
+            "I",
+            "N",
+            "I",
+            "I",
+            "N",
+            "I",
+            "I",
+            "N",
+            "I",
+            "I",
+            "N",
+            "I",
+            "I",
+            "N",
+            "I",
+            "I",
+            "N",
+            "A",
+            "A",
+            "A",
+            "A",
+        ],
         "not_updated": [
             False,
             False,
@@ -3392,7 +3620,7 @@ new_observations_expected_1 = pd.DataFrame(
         "fid": [1, 1, 1, 1],
         "nid": [3, 3, 3, 3],
         "jd": [3.1, 3.2, 3.3, 3.4],
-        "candid": [16, 20, 21, 22]
+        "candid": [16, 20, 21, 22],
     }
 )
 
@@ -3699,6 +3927,39 @@ trajectories_expected_5 = pd.DataFrame(
             7,
             1,
         ],
+        "assoc_tag": [
+            "I",
+            "I",
+            "N",
+            "I",
+            "I",
+            "N",
+            "I",
+            "I",
+            "N",
+            "I",
+            "I",
+            "N",
+            "A",
+            "A",
+            "A",
+            "A",
+            "A",
+            "A",
+            "A",
+            "A",
+            "A",
+            "A",
+            "A",
+            "A",
+            "A",
+            "A",
+            "A",
+            "A",
+            "A",
+            "A",
+            "A",
+        ],
         "not_updated": [
             False,
             False,
@@ -3743,7 +4004,7 @@ new_observations_expected_2 = pd.DataFrame(
         "fid": [1, 1, 1, 1, 1],
         "nid": [3, 3, 3, 3, 3],
         "jd": [3.3, 3.4, 3.5, 3.5, 3.4],
-        "candid": [21, 24, 25, 26, 27]
+        "candid": [21, 24, 25, 26, 27],
     }
 )
 
@@ -4018,6 +4279,35 @@ trajectories_expected_6 = pd.DataFrame(
             0,
             1,
         ],
+        "assoc_tag": [
+            "I",
+            "I",
+            "N",
+            "I",
+            "I",
+            "N",
+            "I",
+            "I",
+            "N",
+            "I",
+            "I",
+            "N",
+            "I",
+            "I",
+            "N",
+            "I",
+            "I",
+            "N",
+            "I",
+            "I",
+            "N",
+            "A",
+            "A",
+            "A",
+            "A",
+            "A",
+            "A",
+        ],
         "not_updated": [
             False,
             False,
@@ -4058,7 +4348,7 @@ new_observations_expected_3 = pd.DataFrame(
         "fid": [1],
         "nid": [3],
         "jd": [3.5],
-        "candid": [25]
+        "candid": [25],
     }
 )
 
@@ -4115,6 +4405,7 @@ tracklets_sample_3 = pd.DataFrame(
         "jd": [3.0, 3.1, 3.0, 3.1, 3.0, 3.1, 3.0, 3.1, 3.0, 3.1, 3.0, 3.1],
         "candid": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
         "trajectory_id": [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5],
+        "assoc_tag": ["I", "I", "I", "I", "I", "I", "I", "I", "I", "I", "I", "I"],
     }
 )
 
@@ -4142,6 +4433,7 @@ tracklets_sample_4 = pd.DataFrame(
         "jd": [3.0, 3.1, 3.0, 3.1, 3.0, 3.1, 3.0, 3.1, 3.0, 3.1],
         "candid": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
         "trajectory_id": [0, 0, 1, 1, 2, 2, 3, 3, 4, 4],
+        "assoc_tag": ["I", "I", "I", "I", "I", "I", "I", "I", "I", "I"],
     }
 )
 
@@ -4167,6 +4459,7 @@ tracklets_sample_5 = pd.DataFrame(
         "jd": [3.0, 3.1, 3.0, 3.1, 3.0, 3.1],
         "candid": [0, 1, 2, 3, 4, 5],
         "trajectory_id": [0, 0, 1, 1, 2, 2],
+        "assoc_tag": ["I", "I", "I", "I", "I", "I"],
     }
 )
 
@@ -4228,6 +4521,24 @@ tracklets_obs_expected_1 = pd.DataFrame(
         ],
         "candid": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 16, 17, 14, 12],
         "trajectory_id": [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 3, 4, 1, 0],
+        "assoc_tag": [
+            "I",
+            "I",
+            "I",
+            "I",
+            "I",
+            "I",
+            "I",
+            "I",
+            "I",
+            "I",
+            "I",
+            "I",
+            "O",
+            "O",
+            "O",
+            "O",
+        ],
         "not_updated": [
             False,
             False,
@@ -4257,7 +4568,7 @@ old_obs_expected_1 = pd.DataFrame(
         "fid": [1, 1],
         "nid": [0, 1],
         "jd": [0.2, 1.5],
-        "candid": [13, 15]
+        "candid": [13, 15],
     }
 )
 
@@ -4433,6 +4744,25 @@ tracklets_obs_expected_2 = pd.DataFrame(
             10.0,
         ],
         "trajectory_id": [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 3, 4, 5, 5, 5, 0, 1],
+        "assoc_tag": [
+            "I",
+            "I",
+            "I",
+            "I",
+            "I",
+            "I",
+            "I",
+            "I",
+            "I",
+            "I",
+            "O",
+            "O",
+            "I",
+            "I",
+            "O",
+            "O",
+            "O",
+        ],
         "not_updated": [
             False,
             False,
@@ -4463,7 +4793,7 @@ old_obs_expected_2 = pd.DataFrame(
         "fid": [1, 1],
         "nid": [1, 2],
         "jd": [1.1, 2.3],
-        "candid": [12, 13]
+        "candid": [12, 13],
     }
 )
 
@@ -4626,6 +4956,23 @@ tracklets_obs_expected_3 = pd.DataFrame(
             6.0,
         ],
         "trajectory_id": [0, 0, 1, 1, 2, 2, 2, 3, 3, 3, 1, 4, 4, 4, 0],
+        "assoc_tag": [
+            "I",
+            "I",
+            "I",
+            "I",
+            "I",
+            "I",
+            "O",
+            "I",
+            "I",
+            "O",
+            "O",
+            "I",
+            "I",
+            "O",
+            "O",
+        ],
         "not_updated": [
             False,
             False,
@@ -4654,7 +5001,7 @@ old_obs_expected_3 = pd.DataFrame(
         "fid": [1],
         "nid": [0],
         "jd": [0.3],
-        "candid": [8]
+        "candid": [8],
     }
 )
 
@@ -4733,6 +5080,7 @@ new_trajectory = pd.DataFrame(
         "jd": [2.1, 2.2, 3.1, 3.2, 1.2, 3.2, 0.4, 3.4],
         "candid": [0, 1, 6, 8, 2, 7, 4, 10],
         "trajectory_id": [0, 1, 0, 1, 2, 2, 3, 3],
+        "assoc_tag": ["N", "N", "N", "N", "N", "N", "N", "N"],
     }
 )
 
@@ -6161,7 +6509,7 @@ traj_not_updated_expected = pd.DataFrame(
         ],
         "ssnamenr": ["99956", "99969", "99969", "99956"],
         "trajectory_id": [4, 5, 5, 4],
-        "not_updated": [True, True, True, True]
+        "not_updated": [True, True, True, True],
     }
 )
 
@@ -6186,7 +6534,7 @@ other_track_expected = pd.DataFrame(
         ],
         "ssnamenr": ["99949", "99949", "99946", "99946"],
         "trajectory_id": [16, 16, 15, 15],
-        "not_updated": [True, True, True, True]
+        "not_updated": [True, True, True, True],
     }
 )
 
@@ -8394,6 +8742,7 @@ trajectory_df_1 = pd.DataFrame(
             0.11273170545876375,
             0.16941500452233074,
         ],
+        "assoc_tag": ["I", "I", "I", "I"],
     }
 )
 
@@ -8466,6 +8815,7 @@ trajectory_df_2 = pd.DataFrame(
         "dcmagerr": [0.0937448233135806, 0.06749592086393852],
         "not_updated": [True, True],
         "trajectory_id": [0, 0],
+        "assoc_tag": ["I", "I"],
     }
 )
 
@@ -8604,6 +8954,7 @@ trajectory_df_3 = pd.DataFrame(
         ],
         "not_updated": [True, True, True, True, True],
         "trajectory_id": [0, 0, 0, 0, 0],
+        "assoc_tag": ["I", "I", "T", "T", "A"],
     }
 )
 
@@ -8705,7 +9056,9 @@ new_observation_4 = pd.DataFrame(
     }
 )
 
-trajectory_df_5 = pd.DataFrame({"not_updated": [], "trajectory_id": []})
+trajectory_df_5 = pd.DataFrame(
+    {"not_updated": [], "trajectory_id": [], "assoc_tag": []}
+)
 
 old_observation_5 = pd.DataFrame({"not_updated": [], "trajectory_id": [], "nid": []})
 
@@ -8894,6 +9247,7 @@ trajectory_df_expected_1 = pd.DataFrame(
             0.16941500452233074,
             0.060128034429116364,
         ],
+        "assoc_tag": ["I", "I", "I", "I", "A"],
     }
 )
 
@@ -8987,6 +9341,7 @@ trajectory_df_expected_2 = pd.DataFrame(
         ],
         "not_updated": [True, True, True, True],
         "trajectory_id": [0, 0, 0, 0],
+        "assoc_tag": ["I", "I", "T", "T"],
     }
 )
 
@@ -9147,6 +9502,7 @@ trajectory_df_expected_3 = pd.DataFrame(
         ],
         "not_updated": [True, True, True, True, True, True, True],
         "trajectory_id": [0, 0, 0, 0, 0, 0, 0],
+        "assoc_tag": ["I", "I", "T", "T", "A", "T", "T"],
     }
 )
 
@@ -9195,6 +9551,7 @@ trajectory_df_expected_4 = pd.DataFrame(
         "isdiffpos": ["t", "t", "t"],
         "dcmag": [19.548137703415094, 19.10678402261543, 18.883507138530334],
         "dcmagerr": [0.1677876844765026, 0.13075569292812592, 0.1568226716835336],
+        "assoc_tag": ["I", "I", "O"],
     }
 )
 
@@ -9226,6 +9583,7 @@ trajectory_df_expected_5 = pd.DataFrame(
     {
         "not_updated": [True, True],
         "trajectory_id": [0, 0],
+        "assoc_tag": ["I", "I"],
         "ra": [150.0755966, 150.0461002],
         "dec": [29.657104, 29.658911],
         "ssnamenr": ["107951", "107951"],
@@ -9298,6 +9656,7 @@ trajectory_df_expected_6 = pd.DataFrame(
     {
         "not_updated": [True, True, True, True, True, True],
         "trajectory_id": [0, 1, 2, 0, 1, 2],
+        "assoc_tag": ["N", "N", "N", "N", "N", "N"],
         "ra": [
             109.6370802,
             95.1293755,

@@ -147,7 +147,7 @@ def main():
         if arguments["--verbose"]:
             print("started associations...")
 
-        trajectory_df, old_obs_df, _ = night_to_night_association(
+        trajectory_df, old_obs_df = night_to_night_association(
             trajectory_df,
             old_obs_df,
             new_alerts,
@@ -386,9 +386,11 @@ def main():
             exit()
 
         # trajectories with orbits size comparation
-        trajectories_size = Counter(
-            traj_orb_df.groupby(["trajectory_id"]).count()["ra"]
+        trajectories_gb = traj_orb_df.groupby(["trajectory_id"]).agg(
+            count=("ra", len), tags=("assoc_tag", list)
         )
+
+        trajectories_size = Counter(trajectories_gb["count"])
         table_data = [["Size", "Number of orbits candidates"]]
         table_data += [
             [size, number_size]
@@ -974,7 +976,7 @@ def main():
                 else:
                     last_trajectory_id = np.max(trajectory_df["trajectory_id"])
 
-            trajectory_df, old_obs_df, _ = night_to_night_association(
+            trajectory_df, old_obs_df = night_to_night_association(
                 trajectory_df,
                 old_obs_df,
                 new_alerts,

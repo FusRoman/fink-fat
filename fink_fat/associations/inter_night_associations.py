@@ -428,6 +428,8 @@ def night_to_night_association(
         intra_night_mag_criterion_diff_fid,
     )
 
+    tracklets["assoc_tag"] = "I"
+
     if verbose:  # pragma: no cover
         print("elapsed time to find tracklets : {}".format(t.time() - t_before))
 
