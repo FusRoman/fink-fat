@@ -976,9 +976,9 @@ def trajectories_with_new_observations_associations(
                         duplicate_obs["trajectory_id"] = new_obs_id
                         duplicate_obs["not_updated"] = False
 
+                    duplicate_obs["assoc_tag"] = "A"
                     # add the duplicated new trajectories to the set of trajectories
                     all_duplicate_traj = cast_obs_data(pd.concat([df, duplicate_obs]))
-                    all_duplicate_traj["assoc_tag"] = "A"
 
                     trajectories = cast_obs_data(
                         pd.concat([trajectories, all_duplicate_traj])
