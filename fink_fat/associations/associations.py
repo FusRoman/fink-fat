@@ -510,7 +510,7 @@ def tracklets_and_trajectories_associations(
     >>> tr, tk, max_tr_id = tracklets_and_trajectories_associations(trajectories, tracklets, 3, 1 * u.degree, 0.2, 0.5, 30, 5)
 
     >>> assert_frame_equal(tr, ts.trajectories_expected_3, check_dtype=False)
-    >>> assert_frame_equal(tk, pd.DataFrame(columns=["ra", "dec", "dcmag", "fid", "nid", "jd", "candid", "trajectory_id"]), check_index_type=False, check_dtype=False)
+    >>> assert_frame_equal(tk, pd.DataFrame(columns=["ra", "dec", "dcmag", "fid", "nid", "jd", "candid", "trajectory_id", "assoc_tag"]), check_index_type=False, check_dtype=False)
     >>> max_tr_id
     8
 
@@ -670,9 +670,9 @@ def tracklets_and_trajectories_associations(
                         tk_df["trajectory_id"] = new_obs_id
                         tk_df["not_updated"] = False
 
+                    tk_df["assoc_tag"] = "T"
                     # add the duplicated new trajectories to the set of trajectories
                     all_duplicate_traj = cast_obs_data(pd.concat([tr_df, tk_df]))
-                    all_duplicate_traj["assoc_tag"] = "T"
 
                     trajectories = cast_obs_data(
                         pd.concat([trajectories, all_duplicate_traj])
@@ -1202,7 +1202,8 @@ def old_observations_with_tracklets_associations(
                         duplicate_obs["trajectory_id"] = new_obs_id
                         duplicate_obs["not_updated"] = False
 
-                    duplicate_obs["assoc_tag"] = "O"
+                        duplicate_obs["assoc_tag"] = "O"
+
                     all_duplicate_track = cast_obs_data(pd.concat([df, duplicate_obs]))
                     tracklets = cast_obs_data(
                         pd.concat([tracklets, all_duplicate_track])
