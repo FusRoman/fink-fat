@@ -56,7 +56,7 @@ from bin.orbit_cli import (
     intro_reset_orbit,
     yes_orbit_reset,
 )
-from bin.stat_cli import assoc_stats, compute_residue, test_detectable
+from bin.stat_cli import compute_residue, test_detectable
 from bin.utils_cli import (
     get_class,
     init_cli,

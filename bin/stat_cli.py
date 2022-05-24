@@ -33,7 +33,6 @@ def test_detectable(list_diff_night, traj_time_window, orbfit_limit):
         if current is np.ma.masked and n_next_ is np.ma.masked:
             np_mask[i + 1] = np.ma.masked
 
-
     not_mask = np.logical_not(np_mask.mask)
     count_consecutif = np.diff(
         np.where(
@@ -79,7 +78,7 @@ def assoc_metrics(x):
     Parameters
     ----------
     x : pd.Series
-        a row of a trajectory dataframe, must contains at least the 'assoc_tag' column. 
+        a row of a trajectory dataframe, must contains at least the 'assoc_tag' column.
 
     Returns
     -------
@@ -92,11 +91,11 @@ def assoc_metrics(x):
         the number of single alerts added to the trajectory.
     c_T : integer
         the number of alerts in the tracklets added to the trajectory. (the first tracklets not include)
-    len_tags : the number of tags / alerts of the trajectory.    
+    len_tags : the number of tags / alerts of the trajectory.
     """
     tags = x["assoc_tag"]
 
-    if 'O' in tags:
+    if "O" in tags:
         start = 2
     elif tags[0] == "I":
         start = 0
@@ -114,6 +113,7 @@ def assoc_metrics(x):
         start = 4
 
     return start, c["A"], c["T"], len(tags)
+
 
 def assoc_stats(traj):
     """
@@ -141,10 +141,11 @@ def assoc_stats(traj):
     mean_l_traj_2 : float
         the number of alert contains in the intra night tracklets added to a trajectory in average
     """
-    gb = traj[["trajectory_id", "assoc_tag", "ra"]].groupby("trajectory_id").agg(
-        assoc_tag=("assoc_tag", list),
-        count=("ra", len)
-        )
+    gb = (
+        traj[["trajectory_id", "assoc_tag", "ra"]]
+        .groupby("trajectory_id")
+        .agg(assoc_tag=("assoc_tag", list), count=("ra", len))
+    )
 
     t = gb.apply(assoc_metrics, axis=1, result_type="expand")
 
@@ -157,21 +158,65 @@ def assoc_stats(traj):
 
     l_traj = t[(t[0].isin([0, 1])) | ((t[0] == 2) & (t[3] > 3))]
 
-    return len(track), len(pair_p), len(b_track), len(b_pair), len(b_old), np.mean(l_traj[1]), np.mean(l_traj[2])
+    return (
+        len(track),
+        len(pair_p),
+        len(b_track),
+        len(b_pair),
+        len(b_old),
+        np.mean(l_traj[1]),
+        np.mean(l_traj[2]),
+    )
 
 
 def print_assoc_table(traj_df):
-    nb_intra, nb_pair_p, nb_b_intra, nb_b_pair, nb_b_intra_o, mean_a, mean_t = assoc_stats(traj_df)
+    (
+        nb_intra,
+        nb_pair_p,
+        nb_b_intra,
+        nb_b_pair,
+        nb_b_intra_o,
+        mean_a,
+        mean_t,
+    ) = assoc_stats(traj_df)
     nb_traj = len(np.unique(traj_df["trajectory_id"]))
     assoc_data = (
         ("descriptions", "values (absolute)", "values (percentage)"),
-        ("Number of intra night tracklets", nb_intra, np.around((nb_intra / nb_traj) * 100, 3)),
-        ("Number of pair of points", nb_pair_p, np.around((nb_pair_p / nb_traj) * 100, 3)),
-        ("Number of trajectory beggining by an intra night tracklets", nb_b_intra, np.around((nb_b_intra / nb_traj) * 100, 3)),
-        ("```   ```   ```   ```   ```   ``` a pair of points", nb_b_pair, np.around((nb_b_pair / nb_traj) * 100, 3)),
-        ("```   ```   ```   ```   ```   ``` an intra night tracklets + an old alert", nb_b_intra_o, np.around((nb_b_intra_o / nb_traj) * 100, 3)),
-        ("Number of single alerts added to a trajectory in average", np.around(mean_a, 3), "X"),
-        ("Number of alerts in the intra night added to a trajectory in average", np.around(mean_t, 3), "X")
+        (
+            "Number of intra night tracklets",
+            nb_intra,
+            np.around((nb_intra / nb_traj) * 100, 3),
+        ),
+        (
+            "Number of pair of points",
+            nb_pair_p,
+            np.around((nb_pair_p / nb_traj) * 100, 3),
+        ),
+        (
+            "Number of trajectory beggining by an intra night tracklets",
+            nb_b_intra,
+            np.around((nb_b_intra / nb_traj) * 100, 3),
+        ),
+        (
+            "```   ```   ```   ```   ```   ``` a pair of points",
+            nb_b_pair,
+            np.around((nb_b_pair / nb_traj) * 100, 3),
+        ),
+        (
+            "```   ```   ```   ```   ```   ``` an intra night tracklets + an old alert",
+            nb_b_intra_o,
+            np.around((nb_b_intra_o / nb_traj) * 100, 3),
+        ),
+        (
+            "Number of single alerts added to a trajectory in average",
+            np.around(mean_a, 3),
+            "X",
+        ),
+        (
+            "Number of alerts in the intra night added to a trajectory in average",
+            np.around(mean_t, 3),
+            "X",
+        ),
     )
 
     assoc_table = AsciiTable(
