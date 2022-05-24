@@ -56,7 +56,7 @@ from bin.orbit_cli import (
     intro_reset_orbit,
     yes_orbit_reset,
 )
-from bin.stat_cli import compute_residue, test_detectable
+from bin.stat_cli import assoc_stats, compute_residue, test_detectable
 from bin.utils_cli import (
     get_class,
     init_cli,
@@ -77,6 +77,7 @@ from bin.association_cli import (
     no_reset,
     yes_reset,
 )
+from bin.stat_cli import print_assoc_table
 
 
 def main():
@@ -361,6 +362,9 @@ def main():
             print()
             print(table_instance.table)
             print()
+
+            print_assoc_table(trajectory_df)
+
         else:
             print(
                 "Trajectory file doesn't exist, run 'fink_fat association (mpc | candidates)' to create it."
@@ -403,6 +407,8 @@ def main():
         print()
         print(table_instance.table)
         print()
+
+        print_assoc_table(traj_orb_df)
 
         # orbital type statistics
         orb_stats = (
