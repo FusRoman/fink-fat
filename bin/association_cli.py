@@ -41,7 +41,7 @@ def request_fink(
             if verbose:
                 print("error when trying to get fink alerts, try again !")
 
-            request_fink(
+            return request_fink(
                 object_class,
                 startdate,
                 stopdate,
