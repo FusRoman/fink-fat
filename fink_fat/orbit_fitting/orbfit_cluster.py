@@ -892,7 +892,7 @@ if __name__ == "__main__":
 
     spark = spark = (
         SparkSession.builder.master(master_adress)
-        .appName("orbit_fitting_computation")
+        .appName("Fink-FAT_solve_orbit")
         .getOrCreate()
     )
 
