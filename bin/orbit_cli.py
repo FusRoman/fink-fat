@@ -121,6 +121,7 @@ def cluster_mode(config, traj_to_orbital):
         "rms_long. node",
         "rms_arg. peric",
         "rms_mean anomaly",
+        "chi_reduce"
     ]
 
     split_df = pd.DataFrame(
