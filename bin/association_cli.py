@@ -53,6 +53,22 @@ def request_fink(
 
 
 def get_last_sso_alert(object_class, date, verbose=False):
+    """
+    Get the alerts from Fink corresponding to the object_class for the given date.
+
+    Parameters
+    ----------
+    object_class : string
+        the class of the requested alerts
+    date : string
+        the requested date of the alerts, format is YYYY-MM-DD
+
+    Returns
+    -------
+    pdf : pd.DataFrame
+        the alerts from Fink with the following columns:
+            ra, dec, jd, nid, fid, dcmag, dcmag_err, candid, not_updated
+    """
     startdate = datetime.datetime.strptime(date, "%Y-%m-%d")
     stopdate = startdate + datetime.timedelta(days=1)
 
@@ -78,6 +94,7 @@ def get_last_sso_alert(object_class, date, verbose=False):
         "nid",
         "fid",
         "dcmag",
+        "dcmag_err",
         "candid",
         "not_updated",
     ]
@@ -112,6 +129,7 @@ def get_last_sso_alert(object_class, date, verbose=False):
     pdf = pdf.rename(columns=translate_columns)
     if len(_dc_mag) > 0:
         pdf.insert(len(pdf.columns), "dcmag", _dc_mag[:, 0])
+        pdf.insert(len(pdf.columns), "dcmag_err", _dc_mag[:, 1])
     else:
         return pd.DataFrame(columns=required_columns)
 
