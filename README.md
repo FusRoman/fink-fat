@@ -7,6 +7,12 @@
 This project is aim to detect asteroids with alerts from the ZTF. It use the fink borker to get the alert tag as Solar System Candidates and apply a linkage
 algorithm to detect new asteroid trajectories.
 
+## Installation
+
+```console
+pip install fink-fat
+```
+
 ## Latest News
 
 * 03/22: Release [0.6.0](https://github.com/FusRoman/fink-fat/releases/tag/0.6.0_beta)
