@@ -21,20 +21,6 @@ def ci_function(
     angle_criterion=200,
 ):
     tr_orb_columns = [
-        "provisional designation",
-        "ref_epoch",
-        "a",
-        "e",
-        "i",
-        "long. node",
-        "arg. peric",
-        "mean anomaly",
-        "rms_a",
-        "rms_e",
-        "rms_i",
-        "rms_long. node",
-        "rms_arg. peric",
-        "rms_mean anomaly",
         "not_updated",
         "trajectory_id",
     ]
@@ -43,6 +29,8 @@ def ci_function(
     old_observation = pd.DataFrame(columns=["nid"])
 
     last_nid = np.min(df_sso["nid"])
+
+    tr_id = 0
 
     for tr_nid in np.unique(df_sso["nid"]):
 
@@ -55,10 +43,11 @@ def ci_function(
 
         next_nid = new_observation["nid"].values[0]
 
-        trajectory_df, old_observation, _ = night_to_night_association(
+        trajectory_df, old_observation = night_to_night_association(
             trajectory_df,
             old_observation,
             new_observation,
+            tr_id,
             last_nid,
             next_nid,
             traj_time_window=traj_time_window,
@@ -71,6 +60,9 @@ def ci_function(
             orbfit_limit=orbfit_limit,
             angle_criterion=angle_criterion,
         )
+
+        if len(trajectory_df) > 0:
+            tr_id = np.max(trajectory_df["trajectory_id"]) + 1
 
         last_nid = next_nid
 

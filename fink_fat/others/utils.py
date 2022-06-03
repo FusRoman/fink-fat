@@ -71,6 +71,8 @@ def cast_obs_data(trajectories):
         dict_new_types["trajectory_id"] = np.int64
     if "not_updated" in trajectories:
         dict_new_types["not_updated"] = np.bool_
+    if "ssnamenr" in trajectories:
+        dict_new_types["ssnamenr"] = str
     tr_orb_columns = [
         "dcmag",
         "dcmagerr",

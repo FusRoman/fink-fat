@@ -5,11 +5,12 @@ import pandas as pd
 from astropy.time import Time
 from astropy.coordinates import SkyCoord
 import astropy.units as u
-from shutil import copyfile
+from shutil import copyfile, rmtree
 import re
 import subprocess
 import os
 import multiprocessing as mp
+from fink_fat import __file__
 
 import traceback
 import logging
@@ -92,7 +93,7 @@ def concat_date(list_date):
     """
     Concatenation of a date to be conform to mpc format
 
-    Paramters
+    Parameters
     ---------
     list_date : string list
         all elements from a date
@@ -104,12 +105,24 @@ def concat_date(list_date):
 
     Examples
     --------
-    >>> ld = ["20", "07", "1969", ".", "73040"]
+    >>> ld = ["1969", "07", "20", ".", "73040"]
     >>> concat_date(ld)
-    '20 07 1969.73040'
+    '1969 07 20.73040'
+
+    >>> ld = ["2021", "11", "03", ".", "4503"]
+    >>> concat_date(ld)
+    '2021 11 03.45030'
+
+    >>> ld = ["2021", "04", "2", ".", "453"]
+    >>> concat_date(ld)
+    '2021 04 02.45300'
     """
-    first_list = join_string(list_date[:-2], " ")
-    return join_string([first_list] + list_date[-2:], "")
+
+    first_list = join_string(list_date[-3:], "")
+
+    date_float = format(float(first_list), ".5f").rjust(8, "0")
+
+    return join_string(list_date[:2] + [date_float], " ")
 
 
 def band_to_str(band):
@@ -527,6 +540,7 @@ def write_inp(ram_dir, provisional_designation):
 
     Returns
     -------
+    None
 
     Examples
     --------
@@ -555,6 +569,7 @@ def write_oop(ram_dir, provisional_designation):
 
     Returns
     -------
+    None
 
     Examples
     --------
@@ -565,7 +580,8 @@ def write_oop(ram_dir, provisional_designation):
 
     >>> os.remove("K69O00A.oop")
     """
-    oop_template = os.path.join("fink_fat", "orbit_fitting", "template.oop")
+    fink_fat_path = os.path.dirname(__file__)
+    oop_template = os.path.join(fink_fat_path, "orbit_fitting", "template.oop")
 
     copyfile(oop_template, ram_dir + provisional_designation + ".oop")
     with open(ram_dir + provisional_designation + ".oop", "a") as file:
@@ -582,7 +598,7 @@ def prep_orbitfit(ram_dir):
     Preparation for OrbFit computation
 
     Copy the AST17 ephemeris files needed for the orbfit computation to the correct location.
-    Set them permission to be read by OrbFit.
+    Set their permissions to be read by OrbFit.
 
     Parameters
     ----------
@@ -610,17 +626,21 @@ def prep_orbitfit(ram_dir):
     >>> os.remove("AST17.bep")
     """
 
-    orbfit_path = os.path.join("fink_fat", "orbit_fitting")
-    dir_path = ram_dir + "mpcobs/"
+    try:
+        fink_fat_path = os.path.dirname(__file__)
+        orbfit_path = os.path.join(fink_fat_path, "orbit_fitting")
+        dir_path = ram_dir + "mpcobs/"
 
-    if not os.path.isdir(dir_path):
-        os.mkdir(dir_path)
+        if not os.path.isdir(dir_path):
+            os.mkdir(dir_path)
 
-    copyfile(os.path.join(orbfit_path, "AST17.bai_431_fcct"), ram_dir + "AST17.bai")
-    os.chmod(ram_dir + "AST17.bai", 0o777)
+        copyfile(os.path.join(orbfit_path, "AST17.bai_431_fcct"), ram_dir + "AST17.bai")
+        os.chmod(ram_dir + "AST17.bai", 0o777)
 
-    copyfile(os.path.join(orbfit_path, "AST17.bep_431_fcct"), ram_dir + "AST17.bep")
-    os.chmod(ram_dir + "AST17.bep", 0o777)
+        copyfile(os.path.join(orbfit_path, "AST17.bep_431_fcct"), ram_dir + "AST17.bep")
+        os.chmod(ram_dir + "AST17.bep", 0o777)
+    except Exception:
+        logging.error(traceback.format_exc())
 
 
 def call_orbitfit(ram_dir, provisional_designation):
@@ -652,11 +672,9 @@ def call_orbitfit(ram_dir, provisional_designation):
     >>> os.remove("fink_fat/test/call_orbfit/K21E00A.pro")
     >>> os.remove("fink_fat/test/call_orbfit/mpcobs/K21E00A.rwo")
     """
-    orbitfit_path = os.path.join("OrbitFit", "bin/")
-
+    orbitfit_path = os.path.join("~", "OrbitFit", "bin", "")
     command = (
-        "./"
-        + orbitfit_path
+        orbitfit_path
         + "orbfit.x < "
         + ram_dir
         + provisional_designation
@@ -677,6 +695,17 @@ def call_orbitfit(ram_dir, provisional_designation):
 
 
 def rm_files(files):
+    """
+    Remove all files contains in the files parameters
+
+    Parameters
+    files : string list
+        A list of files path (typically return by the glob library)
+
+    Return
+    ------
+    None
+    """
     for path_f in files:
         os.remove(path_f)
 
@@ -814,6 +843,51 @@ def read_oel(ram_dir, prov_desig):
         return list(np.ones(13, dtype=np.float64) * -1)
 
 
+def read_rwo(ram_dir, prov_desig, nb_obs):
+    """
+    Read the .rwo file return by orbfit. This file contains the observations of the trajectories and the goodness of the fit computed by OrbFit.
+    Return the chi values for each observations.
+
+    Parameters
+    ----------
+    ram_dir : string
+        Path where files are located
+    prov_desig : string
+        the provisional designation of the trajectory that triggered the OrbFit process.
+
+    Returns
+    -------
+    chi : integer list
+        The list of all chi values of each observations.
+
+    Examples
+    --------
+    """
+    try:
+        with open(ram_dir + "mpcobs/" + prov_desig + ".rwo") as file:
+            lines = file.readlines()
+
+            chi_obs = [obs_l.strip().split(" ")[-3] for obs_l in lines[7:]]
+
+            return np.array(chi_obs).astype(np.float32)
+    except FileNotFoundError:
+        return list(np.ones(nb_obs, dtype=np.float64) * -1)
+    except ValueError:
+        return list(np.ones(nb_obs, dtype=np.float64) * -1)
+    except Exception as e:
+        print("----")
+        print(e)
+        print()
+        print("ERROR READ RWO FILE: {}".format(prov_desig))
+        print()
+        print(lines)
+        print()
+        print()
+        logging.error(traceback.format_exc())
+        print("----")
+        return list(np.ones(nb_obs, dtype=np.float64) * -1)
+
+
 def get_orbit_param(ram_dir, df):
     """
     Compute the orbital elements of one trajectory.
@@ -844,7 +918,7 @@ def get_orbit_param(ram_dir, df):
 
     >>> prep_orbitfit("")
     >>> get_orbit_param("", df)
-    [[0, 'K21E00A', 2459274.810893373, '1.5833993623527698E+00', '0.613559993695898', '5.9440877456670', '343.7960539272898', '270.1931234374459', '333.9557366497585', -1, -1, -1, -1, -1, -1]]
+    [[0, 'K21E00A', 2459274.810893373, '1.5833993623527698E+00', '0.613559993695898', '5.9440877456670', '343.7960539272898', '270.1931234374459', '333.9557366497585', -1, -1, -1, -1, -1, -1, -1.0]]
     >>> final_clean("")
     """
 
@@ -870,7 +944,14 @@ def get_orbit_param(ram_dir, df):
             print()
             print(df_one_traj)
 
-        results.append([traj_id, prov_desig] + read_oel(ram_dir, prov_desig))
+        chi_values = read_rwo(ram_dir, prov_desig, len(df_one_traj))
+
+        # reduced the chi values
+        chi_reduced = np.sum(np.array(chi_values)) / len(df_one_traj)
+
+        results.append(
+            [traj_id, prov_desig] + read_oel(ram_dir, prov_desig) + [chi_reduced]
+        )
 
         try:
             obs_clean(ram_dir, prov_desig)
@@ -900,7 +981,7 @@ def orbit_elem_dataframe(orbit_elem):
 
     Examples
     --------
-    >>> orb_list = [[0, 'K21E00A', 2459274.810893373, '1.5834346988159376E+00', '0.613572037782866', '5.9442185803697', '343.7959802838470', '270.1932521117385', '333.9568546371023', -1, -1, -1, -1, -1, -1]]
+    >>> orb_list = [[0, 'K21E00A', 2459274.810893373, '1.5834346988159376E+00', '0.613572037782866', '5.9442185803697', '343.7959802838470', '270.1932521117385', '333.9568546371023', -1, -1, -1, -1, -1, -1, 2.4]]
 
     >>> orb_df = orbit_elem_dataframe(orb_list)
 
@@ -923,6 +1004,7 @@ def orbit_elem_dataframe(orbit_elem):
         "rms_long. node",
         "rms_arg. peric",
         "rms_mean anomaly",
+        "chi_reduced",
     ]
 
     df_orb_elem = pd.DataFrame(orbit_elem, columns=column_name,)
@@ -966,9 +1048,18 @@ def compute_df_orbit_param(trajectory_df, cpu_count, ram_dir):
 
     trajectory_id_chunks = np.array_split(all_traj_id, cpu_count)
 
+    chunk_ramdir = [
+        os.path.join(ram_dir, "chunkid_{}".format(chunk_id), "")
+        for chunk_id in np.arange(len(trajectory_id_chunks))
+    ]
+
+    for chunk_dir in chunk_ramdir:
+        os.mkdir(chunk_dir)
+        prep_orbitfit(chunk_dir)
+
     chunks = [
-        (ram_dir, trajectory_df[trajectory_df["trajectory_id"].isin(tr_chunk)])
-        for tr_chunk in trajectory_id_chunks
+        (chunk_dir, trajectory_df[trajectory_df["trajectory_id"].isin(tr_chunk)])
+        for tr_chunk, chunk_dir in zip(trajectory_id_chunks, chunk_ramdir)
         if len(tr_chunk) > 0
     ]
 
@@ -978,9 +1069,35 @@ def compute_df_orbit_param(trajectory_df, cpu_count, ram_dir):
     results = [el2 for el1 in results for el2 in el1]
 
     pool.close()
+
+    for chunk_dir in chunk_ramdir:
+        rmtree(chunk_dir)
+
     final_clean(ram_dir)
 
-    return orbit_elem_dataframe(np.array(results))
+    if len(results) > 0:
+        return orbit_elem_dataframe(np.array(results))
+    else:
+        return pd.DataFrame(
+            columns=[
+                "trajectory_id",
+                "provisional designation",
+                "ref_epoch",
+                "a",
+                "e",
+                "i",
+                "long. node",
+                "arg. peric",
+                "mean anomaly",
+                "rms_a",
+                "rms_e",
+                "rms_i",
+                "rms_long. node",
+                "rms_arg. peric",
+                "rms_mean anomaly",
+                "chi_reduced",
+            ]
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -15,4 +15,7 @@ count
 show-source
 statistics
 per-file-ignores =
-    ../fink-fat/fink_fat/orbit_fitting/orbfit_management.py:W503
+    ../fink-fat/fink_fat/orbit_fitting/orbfit_local.py:W503
+    ../fink-fat/fink_fat/orbit_fitting/orbfit_cluster.py:W503
+    ../fink-fat/fink_fat/orbit_fitting/orbfit_merger.py:W503
+    ../fink-fat/bin/fink_fat_cli.py:W503
