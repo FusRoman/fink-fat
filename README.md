@@ -9,8 +9,9 @@ algorithm to detect new asteroid trajectories.
 
 ## Latest News
 
-* 11/21: Release [0.1](https://github.com/FusRoman/Asteroids_and_Associations/releases/tag/v0.1.0-alpha)
+* 03/22: Realease[0.6.0](https://github.com/FusRoman/fink-fat/releases/tag/0.6.0_beta)
+* 11/21: Release [0.1](https://github.com/FusRoman/fink-fat/releases/tag/v0.1.0-alpha)
 
 ## Documentation
 
-All documentation for this project is hosted [here](https://github.com/FusRoman/Asteroids_and_Associations/wiki)
+All documentation for this project is hosted [here](https://github.com/FusRoman/fink-fat/wiki)
