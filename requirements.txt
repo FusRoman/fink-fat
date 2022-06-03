@@ -19,6 +19,7 @@ twine>=3.8.0
 
 # fink
 fink-science>=0.5.1
+fink-utils>=0.3.0
 
 # other
 docopt>=0.6.2
