@@ -3,6 +3,10 @@
 from setuptools import setup, find_packages
 import fink_fat
 
+
+with open("README.md", "r") as fh:
+    long_description = fh.read()
+
 setup(
     name="fink-fat",
     version=fink_fat.__version__,
@@ -10,6 +14,8 @@ setup(
     author="Roman Le Montagner",
     author_email="roman.le-montagner@ijclab.in2p3.fr",
     url="https://github.com/FusRoman/fink-fat",
+    long_description=long_description,
+    long_description_content_type="text/markdown",
     packages=find_packages(),
     package_data={
         "fink_fat": [
