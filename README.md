@@ -13,6 +13,8 @@ algorithm to detect new asteroid trajectories.
 pip install fink-fat
 ```
 
+Installation of the external dependencies: follow this [link](https://github.com/FusRoman/fink-fat/wiki/Installation)
+
 ## Latest News
 
 * 03/22: Release [0.6.0](https://github.com/FusRoman/fink-fat/releases/tag/0.6.0_beta)

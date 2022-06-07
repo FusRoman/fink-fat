@@ -169,7 +169,7 @@ def no_reset():
 
 def get_data(new_alerts, tr_df_path, obs_df_path, orb_res_path):
     last_nid = next_nid = new_alerts["nid"][0]
-    trajectory_df = pd.DataFrame(columns=new_alerts.columns)
+    trajectory_df = pd.DataFrame(columns=list(new_alerts.columns) + ["trajectory_id"])
     old_obs_df = pd.DataFrame(columns=new_alerts.columns)
 
     last_trajectory_id = 0
