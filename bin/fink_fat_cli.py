@@ -44,14 +44,12 @@ from collections import OrderedDict
 import json
 from docopt import docopt
 import os
-from more_itertools import last
 import pandas as pd
 import numpy as np
 import time as t
 import datetime
 import glob
 from astropy import units as u
-from regex import E
 from terminaltables import DoubleTable, AsciiTable, SingleTable
 from bin.offline_cli import offline_intro_reset, offline_yes_reset
 from bin.orbit_cli import (
