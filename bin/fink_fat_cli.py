@@ -191,14 +191,13 @@ def main():
             "assoc_time": assoc_time,
             "nb_traj": nb_traj,
             "nb_old_obs": nb_old_obs,
-            "nb_new_alerts": nb_new_alerts
+            "nb_new_alerts": nb_new_alerts,
         }
 
         if arguments["--save"]:
             save_additional_stats(
-                os.path.join(save_path, "stats.json"),
-                last_night,
-                new_stats)
+                os.path.join(save_path, "stats.json"), last_night, new_stats
+            )
 
         if "last_assoc_date" in trajectory_df:
             trajectory_df["last_assoc_date"] = last_night
@@ -234,7 +233,6 @@ def main():
 
             if arguments["local"]:
 
-
                 t_before = t.time()
                 # return orbit results from local mode
                 orbit_results = compute_df_orbit_param(
@@ -244,18 +242,15 @@ def main():
                 ).drop("provisional designation", axis=1)
                 orbfit_time = t.time() - t_before
 
-
                 if arguments["--verbose"]:
                     print("time taken to get orbit: {}".format(orbfit_time))
 
             elif arguments["cluster"]:
 
-
                 t_before = t.time()
                 # return orbit results from cluster mode
                 orbit_results = cluster_mode(config, traj_to_orbital)
                 orbfit_time = t.time() - t_before
-
 
                 if arguments["--verbose"]:
                     print("time taken to get orbit: {}".format(orbfit_time))
@@ -316,7 +311,7 @@ def main():
                 stats_path = os.path.join(save_path, "stats.json")
                 nb_traj_to_orbfit = len(np.unique(traj_to_orbital["trajectory_id"]))
                 if os.path.exists(stats_path):
-                    with open(stats_path, 'r+') as f:
+                    with open(stats_path, "r+") as f:
                         stats_dict = json.load(f)
                         f.seek(0)
                         last_date = list(stats_dict.keys())[-1]
@@ -326,7 +321,9 @@ def main():
                         json.dump(stats_dict, f, indent=4, sort_keys=True)
                         f.truncate()
                 else:
-                    print("No stats file exists. Run fink-fat in associations mode with the options --save to add it. ")
+                    print(
+                        "No stats file exists. Run fink-fat in associations mode with the options --save to add it. "
+                    )
 
         else:
             print("No trajectory with enough points to send to orbfit.")
@@ -1030,7 +1027,6 @@ def main():
                 else:
                     last_trajectory_id = np.max(trajectory_df["trajectory_id"])
 
-
             nb_traj = len(np.unique(trajectory_df["trajectory_id"]))
             nb_old_obs = len(old_obs_df)
             nb_new_alerts = len(new_alerts)
@@ -1086,9 +1082,8 @@ def main():
             orbfit_time = 0.0
             nb_orb = 0
 
-
             if len(traj_to_orbital) > 0:
-                
+
                 if arguments["--verbose"]:
                     print()
                     print(
@@ -1099,7 +1094,6 @@ def main():
                     print("Solve orbit...")
 
                 if arguments["local"]:
-
 
                     t_before = t.time()
                     # return orbit results from local mode
@@ -1115,12 +1109,10 @@ def main():
 
                 elif arguments["cluster"]:
 
-
                     t_before = t.time()
                     # return orbit results from cluster mode
                     orbit_results = cluster_mode(config, traj_to_orbital)
                     orbfit_time = t.time() - t_before
-
 
                     if arguments["--verbose"]:
                         print("time taken to get orbit: {}".format(orbfit_time))
@@ -1148,7 +1140,6 @@ def main():
                         trajectory_df, orb_df, traj_orb_df
                     )
 
-
             stats_dict[current_date.strftime("%Y-%m-%d")] = {
                 "assoc_time": assoc_time,
                 "nb_traj": nb_traj,
@@ -1156,9 +1147,8 @@ def main():
                 "nb_new_alerts": nb_new_alerts,
                 "nb_traj_to_orbfit": nb_traj_to_orbfit,
                 "orbfit_time": orbfit_time,
-                "nb_orb": nb_orb
+                "nb_orb": nb_orb,
             }
-
 
             current_date += delta_day
 

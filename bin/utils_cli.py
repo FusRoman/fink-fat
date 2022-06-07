@@ -83,17 +83,15 @@ def save_additional_stats(save_path, date, stats):
         the additional statistics
     """
     if os.path.exists(save_path):
-        with open(save_path, 'r') as f:
+        with open(save_path, "r") as f:
             stats_dict = json.load(f)
     else:
         stats_dict = {}
-    
+
     stats_dict[date] = stats
 
-    with open(save_path, 'w') as f:
+    with open(save_path, "w") as f:
         json.dump(stats_dict, f, indent=4, sort_keys=True)
-    
-    
 
 
 def align_trajectory_id(trajectory_df, orbit_df, obs_orbit_df):
