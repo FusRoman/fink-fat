@@ -1,4 +1,5 @@
 import configparser
+import json
 import os
 
 import numpy as np
@@ -66,6 +67,33 @@ def yes_or_no(
             no_function(*no_args)
         else:
             print("please, answer with y or n.")
+
+
+def save_additional_stats(save_path, date, stats):
+    """
+    Save the additional statistics
+
+    Parameters
+    ----------
+    save_path : string
+        json statistics file path
+    date : string
+        the computed statistics date
+    stats : dict
+        the additional statistics
+    """
+    if os.path.exists(save_path):
+        with open(save_path, 'r') as f:
+            stats_dict = json.load(f)
+    else:
+        stats_dict = {}
+    
+    stats_dict[date] = stats
+
+    with open(save_path, 'w') as f:
+        json.dump(stats_dict, f, indent=4, sort_keys=True)
+    
+    
 
 
 def align_trajectory_id(trajectory_df, orbit_df, obs_orbit_df):

@@ -1,9 +1,9 @@
 """
 Usage:
-    fink_fat associations (mpc | candidates) [--night <date> --save] [options]
+    fink_fat associations (mpc | candidates) [--night <date>] [options]
     fink_fat solve_orbit (mpc | candidates) (local | cluster) [options]
     fink_fat merge_orbit (mpc | candidates) [options]
-    fink_fat offline (mpc | candidates) (local | cluster) <end> [<start> --save] [options]
+    fink_fat offline (mpc | candidates) (local | cluster) <end> [<start>] [options]
     fink_fat stats (mpc | candidates) [--mpc-data <path>] [options]
     fink_fat -h | --help
     fink_fat --version
@@ -41,14 +41,17 @@ Options:
 
 from collections import Counter
 from collections import OrderedDict
+import json
 from docopt import docopt
 import os
+from more_itertools import last
 import pandas as pd
 import numpy as np
 import time as t
 import datetime
 import glob
 from astropy import units as u
+from regex import E
 from terminaltables import DoubleTable, AsciiTable, SingleTable
 from bin.offline_cli import offline_intro_reset, offline_yes_reset
 from bin.orbit_cli import (
@@ -64,6 +67,7 @@ from bin.utils_cli import (
     string_to_bool,
     yes_or_no,
     align_trajectory_id,
+    save_additional_stats,
 )
 
 import fink_fat
@@ -149,6 +153,12 @@ def main():
         if arguments["--verbose"]:
             print("started associations...")
 
+        # for additional statistics
+        nb_traj = len(np.unique(trajectory_df["trajectory_id"]))
+        nb_old_obs = len(old_obs_df)
+        nb_new_alerts = len(new_alerts)
+        t_before = t.time()
+
         trajectory_df, old_obs_df = night_to_night_association(
             trajectory_df,
             old_obs_df,
@@ -178,6 +188,19 @@ def main():
             ),
             arguments["--verbose"],
         )
+        assoc_time = t.time() - t_before
+        new_stats = {
+            "assoc_time": assoc_time,
+            "nb_traj": nb_traj,
+            "nb_old_obs": nb_old_obs,
+            "nb_new_alerts": nb_new_alerts
+        }
+
+        if arguments["--save"]:
+            save_additional_stats(
+                os.path.join(save_path, "stats.json"),
+                last_night,
+                new_stats)
 
         if "last_assoc_date" in trajectory_df:
             trajectory_df["last_assoc_date"] = last_night
@@ -212,28 +235,52 @@ def main():
         if len(traj_to_orbital) > 0:
 
             if arguments["local"]:
-                t_before = t.time()
 
+
+                t_before = t.time()
                 # return orbit results from local mode
                 orbit_results = compute_df_orbit_param(
                     traj_to_orbital,
                     int(config["SOLVE_ORBIT_PARAMS"]["cpu_count"]),
                     config["SOLVE_ORBIT_PARAMS"]["ram_dir"],
                 ).drop("provisional designation", axis=1)
+                orbfit_time = t.time() - t_before
+
 
                 if arguments["--verbose"]:
-                    print("time taken to get orbit: {}".format(t.time() - t_before))
+                    print("time taken to get orbit: {}".format(orbfit_time))
 
             elif arguments["cluster"]:
-                t_before = t.time()
 
+
+                t_before = t.time()
                 # return orbit results from cluster mode
                 orbit_results = cluster_mode(config, traj_to_orbital)
+                orbfit_time = t.time() - t_before
+
 
                 if arguments["--verbose"]:
-                    print("time taken to get orbit: {}".format(t.time() - t_before))
+                    print("time taken to get orbit: {}".format(orbfit_time))
 
             if len(orbit_results) > 0:
+
+                
+                if arguments["--save"]:
+                    save_path = os.path.join(output_path, "save", "")
+                    stats_path = os.path.join(save_path, "stats.json")
+                    nb_traj_to_orbfit = len(np.unique(traj_to_orbital["trajectory_id"]))
+                    if os.path.exists(stats_path):
+                        with open(stats_path, 'r+') as f:
+                            stats_dict = json.load(f)
+                            f.seek(0)
+                            last_date = list(stats_dict.keys())[-1]
+                            stats_dict[last_date]["nb_traj_to_orbfit"] = nb_traj_to_orbfit
+                            stats_dict[last_date]["orbfit_time"] = orbfit_time
+                            json.dump(stats_dict, f, indent=4, sort_keys=True)
+                            f.truncate()
+                    else:
+                        print("No stats file exists. Run fink-fat in associations mode with the options --save to add it. ")
+
 
                 # get only the trajectories with orbital elements
                 traj_with_orb_elem = orbit_results[orbit_results["a"] != -1.0]
