@@ -32,6 +32,7 @@ Options:
                                    The mpc database can be downloaded by pasting this url in your browser: https://minorplanetcenter.net/Extended_Files/mpcorb_extended.json.gz
   -r --reset                       Remove the file containing the trajectories candidates, the old observations and the orbits.
   -s --save                        Save the alerts sent by Fink before the associations for statistics purposes.
+                                   Save also additional statistics : computation time, number of alerts from the current days, number of candidates trajectories, number of old observations.
   -h --help                        Show help and quit.
   --version                        Show version.
   --config FILE                    Specify the config file
