@@ -80,10 +80,7 @@ from bin.association_cli import (
     no_reset,
     yes_reset,
 )
-from bin.stat_cli import (
-    print_assoc_table,
-    describe
-)
+from bin.stat_cli import print_assoc_table, describe
 
 
 def main():
@@ -457,7 +454,10 @@ def main():
         print_assoc_table(traj_orb_df)
 
         # orbital type statistics
-        orb_stats = describe(orb_df[["a", "e", "i", "long. node", "arg. peric", "mean anomaly"]], ["median"]).round(decimals=3)
+        orb_stats = describe(
+            orb_df[["a", "e", "i", "long. node", "arg. peric", "mean anomaly"]],
+            ["median"],
+        ).round(decimals=3)
 
         print("Number of orbit candidates: {}".format(int(orb_stats["a"]["count"])))
 
@@ -742,7 +742,9 @@ def main():
                         count_detect_orbit = Counter(detectable_mpc["Orbit_type"])
                         total_orbit = len(detectable_mpc)
                         count_pure_orbit = Counter(pure_mpc["Orbit_type"])
-                        table_rows = [["Orbit type", "Known orbit distribution", "Recovery"]]
+                        table_rows = [
+                            ["Orbit type", "Known orbit distribution", "Recovery"]
+                        ]
                         for detect_key, detect_value in count_detect_orbit.items():
                             if detect_key in count_pure_orbit:
                                 pure_value = count_pure_orbit[detect_key]
@@ -755,16 +757,16 @@ def main():
                                     "{} % ({})".format(
                                         np.round_(
                                             (detect_value / total_orbit) * 100,
-                                            decimals=2
-                                            ), 
-                                        detect_value
+                                            decimals=2,
                                         ),
+                                        detect_value,
+                                    ),
                                     "{} % ({})".format(
                                         np.round_(
                                             (pure_value / detect_value) * 100,
                                             decimals=2,
                                         ),
-                                        pure_value
+                                        pure_value,
                                     ),
                                 ]
                             )
@@ -796,7 +798,9 @@ def main():
                             ["da", "de", "di", "dNode", "dPeri", "dM"]
                         ]
 
-                        residue_stats = describe(orbital_residue, ["median"]).round(decimals=3)
+                        residue_stats = describe(orbital_residue, ["median"]).round(
+                            decimals=3
+                        )
 
                         orbit_residue_data = (
                             ("orbital elements", "Metrics", "Values"),
