@@ -72,6 +72,4 @@ mv linux_p1550p2650.440 jpleph
 
 echo "export ORBFIT_HOME=${ORBLOCATE}" >> ~/.bash_profile
 
-source ~/.bash_profile
-
 echo "OrbFit installation done, location is ${ORBLOCATE}"
