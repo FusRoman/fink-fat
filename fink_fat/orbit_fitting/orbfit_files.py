@@ -2,7 +2,6 @@ import os
 import traceback
 import logging
 from glob import glob
-from matplotlib.pyplot import step
 import numpy as np
 
 from fink_fat import __file__
@@ -36,10 +35,18 @@ def write_inp(ram_dir, first_designation, second_designation=None):
 
 
 def oop_options(
-    file, ram_dir, first_desig, second_desig=None, prop_epoch=None,
-    n_triplets=10, noise_ntrials = 10, with_ephem=0,
-    start_ephem = None, end_ephem = None, step_ephem = None,
-    obscode = None, 
+    file,
+    ram_dir,
+    first_desig,
+    second_desig=None,
+    prop_epoch=None,
+    n_triplets=10,
+    noise_ntrials=10,
+    with_ephem=0,
+    start_ephem=None,
+    end_ephem=None,
+    step_ephem=None,
+    obscode=None,
 ):
     """
     Write the lines of the OrbFit options file.
@@ -122,7 +129,6 @@ def oop_options(
     file.write("\t.obscode =  {}\n".format(obscode))
     file.write("\t.timescale = UTC\n")
     file.write("\t.fields = cal,mjd,coord,mag,delta,r,elong,phase,glat,appmot,skyerr\n")
-
 
     # write error model options
     file.write("error_model.\n")
