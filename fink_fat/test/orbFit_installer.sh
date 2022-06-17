@@ -21,6 +21,11 @@ ORBLOCATE=~/OrbitFit
 
 aria2c -x8 http://adams.dm.unipi.it/orbfit/OrbFit5.0.7.tar.gz
 
+if [[ ! -d $ORBLOCATE ]]
+then
+    echo "OrbitFit/ directory does not exists on your filesystem."
+    mkdir $ORBLOCATE
+fi
 
 tar -xf OrbFit5.0.7.tar.gz -C $ORBLOCATE
 
