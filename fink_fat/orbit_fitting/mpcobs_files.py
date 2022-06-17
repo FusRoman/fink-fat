@@ -502,6 +502,7 @@ def write_observation_file(ram_dir, obs_df):
 
     date = [make_date(d) for d in date]
     res = [join_string([el1] + [el2], " ") for el1, el2 in zip(date, coord)]
+
     res = [
         "     "
         + prov_desig

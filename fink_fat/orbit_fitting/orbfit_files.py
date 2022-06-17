@@ -1,10 +1,8 @@
 import os
-from shutil import copyfile
 import traceback
 import logging
 from glob import glob
 import numpy as np
-from sympy import sec
 
 from fink_fat import __file__
 
