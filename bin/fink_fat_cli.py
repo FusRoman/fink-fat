@@ -80,7 +80,7 @@ from bin.association_cli import (
     no_reset,
     yes_reset,
 )
-from bin.stat_cli import print_assoc_table
+from bin.stat_cli import print_assoc_table, describe
 
 
 def main():
@@ -454,38 +454,31 @@ def main():
         print_assoc_table(traj_orb_df)
 
         # orbital type statistics
-        orb_stats = (
-            orb_df[["a", "e", "i", "long. node", "arg. peric", "mean anomaly"]]
-            .describe()
-            .round(decimals=3)
-        )
+        orb_stats = describe(
+            orb_df[["a", "e", "i", "long. node", "arg. peric", "mean anomaly"]],
+            ["median"],
+        ).round(decimals=3)
 
         print("Number of orbit candidates: {}".format(int(orb_stats["a"]["count"])))
 
         orbit_distrib_data = (
             ("orbital elements", "Metrics", "Values"),
-            ("semi-major-axis (AU)", "mean", orb_stats["a"]["mean"]),
-            ("", "std", orb_stats["a"]["std"]),
+            ("semi-major-axis (AU)", "median", orb_stats["a"]["median"]),
             ("", "min", orb_stats["a"]["min"]),
             ("", "max", orb_stats["a"]["max"]),
-            ("eccentricity", "mean", orb_stats["e"]["mean"]),
-            ("", "std", orb_stats["e"]["std"]),
+            ("eccentricity", "median", orb_stats["e"]["median"]),
             ("", "min", orb_stats["e"]["min"]),
             ("", "max", orb_stats["e"]["max"]),
-            ("inclination (degrees)", "mean", orb_stats["i"]["mean"]),
-            ("", "std", orb_stats["i"]["std"]),
+            ("inclination (degrees)", "median", orb_stats["i"]["median"]),
             ("", "min", orb_stats["i"]["min"]),
             ("", "max", orb_stats["i"]["max"]),
-            ("long. node (degrees)", "mean", orb_stats["long. node"]["mean"]),
-            ("", "std", orb_stats["long. node"]["std"]),
+            ("long. node (degrees)", "median", orb_stats["long. node"]["median"]),
             ("", "min", orb_stats["long. node"]["min"]),
             ("", "max", orb_stats["long. node"]["max"]),
-            ("arg. peric (degrees)", "mean", orb_stats["arg. peric"]["mean"]),
-            ("", "std", orb_stats["arg. peric"]["std"]),
+            ("arg. peric (degrees)", "median", orb_stats["arg. peric"]["median"]),
             ("", "min", orb_stats["arg. peric"]["min"]),
             ("", "max", orb_stats["arg. peric"]["max"]),
-            ("mean anomaly (degrees)", "mean", orb_stats["mean anomaly"]["mean"]),
-            ("", "std", orb_stats["mean anomaly"]["std"]),
+            ("mean anomaly (degrees)", "median", orb_stats["mean anomaly"]["median"]),
             ("", "min", orb_stats["mean anomaly"]["min"]),
             ("", "max", orb_stats["mean anomaly"]["max"]),
         )
@@ -747,8 +740,11 @@ def main():
                         ].drop_duplicates(subset=["ssnamenr"])
 
                         count_detect_orbit = Counter(detectable_mpc["Orbit_type"])
+                        total_orbit = len(detectable_mpc)
                         count_pure_orbit = Counter(pure_mpc["Orbit_type"])
-                        table_rows = [["Orbit type", "Recovery"]]
+                        table_rows = [
+                            ["Orbit type", "Known orbit distribution", "Recovery"]
+                        ]
                         for detect_key, detect_value in count_detect_orbit.items():
                             if detect_key in count_pure_orbit:
                                 pure_value = count_pure_orbit[detect_key]
@@ -758,11 +754,19 @@ def main():
                             table_rows.append(
                                 [
                                     detect_key,
-                                    "{} %".format(
+                                    "{} % ({})".format(
+                                        np.round_(
+                                            (detect_value / total_orbit) * 100,
+                                            decimals=2,
+                                        ),
+                                        detect_value,
+                                    ),
+                                    "{} % ({})".format(
                                         np.round_(
                                             (pure_value / detect_value) * 100,
                                             decimals=2,
-                                        )
+                                        ),
+                                        pure_value,
                                     ),
                                 ]
                             )
@@ -793,54 +797,57 @@ def main():
                         orbital_residue = compute_residue(detect_orb_with_mpc)[
                             ["da", "de", "di", "dNode", "dPeri", "dM"]
                         ]
-                        residue_stats = orbital_residue.describe().round(decimals=3)
+
+                        residue_stats = describe(orbital_residue, ["median"]).round(
+                            decimals=3
+                        )
 
                         orbit_residue_data = (
                             ("orbital elements", "Metrics", "Values"),
                             (
                                 "residue semi-major-axis (AU) (%)",
-                                "mean",
-                                residue_stats["da"]["mean"],
+                                "median",
+                                residue_stats["da"]["median"],
                             ),
                             ("", "std", residue_stats["da"]["std"]),
                             ("", "min", residue_stats["da"]["min"]),
                             ("", "max", residue_stats["da"]["max"]),
                             (
                                 "residue eccentricity (%)",
-                                "mean",
-                                residue_stats["de"]["mean"],
+                                "median",
+                                residue_stats["de"]["median"],
                             ),
                             ("", "std", residue_stats["de"]["std"]),
                             ("", "min", residue_stats["de"]["min"]),
                             ("", "max", residue_stats["de"]["max"]),
                             (
                                 "residue inclination (degrees) (%)",
-                                "mean",
-                                residue_stats["di"]["mean"],
+                                "median",
+                                residue_stats["di"]["median"],
                             ),
                             ("", "std", residue_stats["di"]["std"]),
                             ("", "min", residue_stats["di"]["min"]),
                             ("", "max", residue_stats["di"]["max"]),
                             (
                                 "residue long. node (degrees) (%)",
-                                "mean",
-                                residue_stats["dNode"]["mean"],
+                                "median",
+                                residue_stats["dNode"]["median"],
                             ),
                             ("", "std", residue_stats["dNode"]["std"]),
                             ("", "min", residue_stats["dNode"]["min"]),
                             ("", "max", residue_stats["dNode"]["max"]),
                             (
                                 "residue arg. peric (degrees) (%)",
-                                "mean",
-                                residue_stats["dPeri"]["mean"],
+                                "median",
+                                residue_stats["dPeri"]["median"],
                             ),
                             ("", "std", residue_stats["dPeri"]["std"]),
                             ("", "min", residue_stats["dPeri"]["min"]),
                             ("", "max", residue_stats["dPeri"]["max"]),
                             (
                                 "residue mean anomaly (degrees) (%)",
-                                "mean",
-                                residue_stats["dM"]["mean"],
+                                "median",
+                                residue_stats["dM"]["median"],
                             ),
                             ("", "std", residue_stats["dM"]["std"]),
                             ("", "min", residue_stats["dM"]["min"]),
