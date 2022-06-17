@@ -224,3 +224,8 @@ def print_assoc_table(traj_df):
     )
     print(assoc_table.table)
     print()
+
+
+def describe(df, stats):
+    d = df.describe()
+    return d.append(df.reindex(d.columns, axis=1).agg(stats))
