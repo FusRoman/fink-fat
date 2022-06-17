@@ -43,4 +43,8 @@ aria2c -x8 https://ssd.jpl.nasa.gov/ftp/eph/planets/Linux/de440/linux_p1550p2650
 
 mv linux_p1550p2650.440 jpleph
 
+echo "export ORBFIT_HOME=${ORBLOCATE}" >> ~/.bash_profile
+
+source ~/.bash_profile
+
 echo "OrbFit installation done, location is ${ORBLOCATE}"
