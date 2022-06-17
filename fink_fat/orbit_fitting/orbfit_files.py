@@ -221,7 +221,7 @@ def prep_orbitfit(ram_dir):
 
     >>> st = os.stat("AST17.bai")
     >>> stat.filemode(st.st_mode)
-    '-rwxrwxr-fink_fat/orbit_fitting/orbfit_files.py                131     84    36%   27-34, 41-97, 117-124, 177-178, 318-320, 324-335, 358-380x'
+    '-rwxrwxr-x'
 
     >>> st = os.stat("AST17.bep")
     >>> stat.filemode(st.st_mode)
