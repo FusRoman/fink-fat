@@ -4,6 +4,7 @@ import astropy.units as u
 import re
 import numpy as np
 
+
 def time_to_decimal(time):
     """
     Get the decimal part of a date.
@@ -485,7 +486,14 @@ def write_observation_file(ram_dir, obs_df):
     coord = [el.translate(translation_rules) for el in coord]
 
     coord = [
-        re.sub(r"(\d+)\.(\d+)", lambda matchobj: matchobj.group()[:5], s) for s in coord
+        re.sub(
+            r"(\d+)\.(\d+)",
+            lambda matchobj: matchobj.group()[:5]
+            if len(matchobj.group()[:5]) == 5
+            else matchobj.group()[:5] + "0",
+            s,
+        )
+        for s in coord
     ]
 
     t = Time(date.astype(np.double), format="jd")
@@ -514,4 +522,3 @@ def write_observation_file(ram_dir, obs_df):
         file.write(join_string(res, "\n"))
 
     return prov_desig
-

@@ -841,7 +841,6 @@ import logging
 #         return list(np.ones(nb_obs, dtype=np.float64) * -1)
 
 
-
 def call_orbitfit(ram_dir, first_designation, second_designation=None):
     """
     Call the OrbFit software in a subprocess. Kill it after 2 second if OrbFit are blocked.
@@ -884,15 +883,15 @@ def call_orbitfit(ram_dir, first_designation, second_designation=None):
         )
     else:
         command = (
-        orbitfit_path
-        + "orbfit.x < "
-        + ram_dir
-        + first_designation
-        + "_"
-        + second_designation
-        + ".inp "
-        + ">/dev/null 2>&1"
-    )
+            orbitfit_path
+            + "orbfit.x < "
+            + ram_dir
+            + first_designation
+            + "_"
+            + second_designation
+            + ".inp "
+            + ">/dev/null 2>&1"
+        )
 
     with subprocess.Popen(
         command, shell=True, stdout=subprocess.DEVNULL, preexec_fn=os.setsid
@@ -925,6 +924,7 @@ def get_orbit_param(ram_dir, df):
 
     Examples
     --------
+    >>> import fink_fat.orbit_fitting.orbfit_files as of
     >>> df = pd.DataFrame({
     ... 'ra': [169.8604675, 169.8568848, 169.8336664, 169.8297121, 169.8296555],
     ... 'dec': [15.2063604, 15.2103091, 15.2360481, 15.2403893, 15.24049],
@@ -934,10 +934,10 @@ def get_orbit_param(ram_dir, df):
     ... 'trajectory_id': [0, 0, 0, 0, 0]
     ... })
 
-    >>> prep_orbitfit("")
+    >>> of.prep_orbitfit("")
     >>> get_orbit_param("", df)
     [[0, 'K21E00A', 2459274.810893373, '1.5833993623527698E+00', '0.613559993695898', '5.9440877456670', '343.7960539272898', '270.1931234374459', '333.9557366497585', -1, -1, -1, -1, -1, -1, -1.0]]
-    >>> final_clean("")
+    >>> of.final_clean("")
     """
 
     all_traj_id = np.unique(df["trajectory_id"].values)

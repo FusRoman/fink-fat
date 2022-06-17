@@ -25,7 +25,16 @@ setup(
         ]
     },
     data_files=[
-        ("fink_fat/data", ["fink_fat/data/month=03"])
+        (
+            "fink_fat/data",
+            [
+                "fink_fat/data/month=03",
+                "fink_fat/data/month=04",
+                "fink_fat/data/month=05",
+                "fink_fat/data/month=06",
+                "fink_fat/data/month=07",
+            ],
+        )
     ],
     install_requires=[
         "docopt>=0.6.2",

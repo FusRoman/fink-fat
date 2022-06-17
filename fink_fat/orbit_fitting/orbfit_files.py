@@ -1,8 +1,12 @@
 import os
+from shutil import copyfile
 import traceback
 import logging
-import glob
+from glob import glob
 import numpy as np
+from sympy import sec
+
+from fink_fat import __file__
 
 
 def write_inp(ram_dir, first_designation, second_designation=None):
@@ -31,71 +35,68 @@ def write_inp(ram_dir, first_designation, second_designation=None):
         ) as file:
             file.write(ram_dir + first_designation + "_" + second_designation)
 
-def oop_options(
-    file,
-    ram_dir,
-    first_desig,
-    second_desig=None,
-    with_ephem=0,
-    ):
-        # write output options
-        file.write("output.\n")
-        file.write("\t.elements = 'KEP'\n")
 
-        # write operations options
-        file.write("operations.\n")
-        file.write("\t.init_orbdet = 2\n")
-        file.write("\t.diffcor = 2\n")
+def oop_options(
+    file, ram_dir, first_desig, second_desig=None, with_ephem=0,
+):
+    # write output options
+    file.write("output.\n")
+    file.write("\t.elements = 'KEP'\n")
+
+    # write init_orb options
+    file.write("init_orbdet.\n")
+    file.write("\t.verbose = 1\n")
+
+    # write operations options
+    file.write("operations.\n")
+    file.write("\t.init_orbdet = 2\n")
+    file.write("\t.diffcor = 2\n")
+    if second_desig is None:
+        file.write("\t.ident = 0\n")
+    else:
         file.write("\t.ident = 2\n")
 
-        if with_ephem not in [0, 1, 2]:
-            with_ephem = 0
-        file.write("\t.ephem = {}\n".format(with_ephem))
+    if with_ephem not in [0, 1, 2]:
+        with_ephem = 0
+    file.write("\t.ephem = {}\n".format(with_ephem))
 
-        # write error model options
-        file.write("error_model.\n")
-        file.write("\t.name='fcct14'\n")
+    # write error model options
+    file.write("error_model.\n")
+    file.write("\t.name='fcct14'\n")
 
-        # write additional options
-        file.write("IERS.\n")
-        file.write("\t.extrapolation = .T.\n")
+    # write additional options
+    file.write("IERS.\n")
+    file.write("\t.extrapolation = .T.\n")
 
-        # write reject options
-        file.write("reject.\n")
-        file.write("\t.rejopp = .FALSE.\n")
+    # write reject options
+    file.write("reject.\n")
+    file.write("\t.rejopp = .FALSE.\n")
 
-        # write propagation options
-        file.write("propag.\n")
-        file.write("\t.iast = 17\n")
-        file.write("\t.npoint = 600\n")
-        file.write("\t.dmea = 0.2d0\n")
-        file.write("\t.dter = 0.05d0\n")
+    # write propagation options
+    file.write("propag.\n")
+    file.write("\t.iast = 17\n")
+    file.write("\t.npoint = 600\n")
+    file.write("\t.dmea = 0.2d0\n")
+    file.write("\t.dter = 0.05d0\n")
 
-        # write location files options
-        file.write(".filbe=" + ram_dir + "AST17\n")
-        file.write("\noutput_files.\n")
+    # write location files options
+    file.write("\t.filbe=" + ram_dir + "AST17\n")
+    file.write("\noutput_files.\n")
 
-        if second_desig is None:
-            file.write("\t.elem = " + ram_dir + first_desig + ".oel\n")
-        else:
-            file.write(
-                "\t.elem = "
-                + ram_dir
-                + first_desig
-                + "_"
-                + second_desig
-                + ".oel\n"
-            )
-        
-        file.write("object1.\n")
+    if second_desig is None:
+        file.write("\t.elem = " + ram_dir + first_desig + ".oel\n")
+    else:
+        file.write("\t.elem = " + ram_dir + first_desig + "_" + second_desig + ".oel\n")
+
+    file.write("object1.\n")
+    file.write("\t.obs_dir = " + ram_dir + "mpcobs\n")
+    file.write("\t.name = " + first_desig)
+
+    if second_desig is not None:
+        # write second object location
+        file.write("\nobject2.\n")
         file.write("\t.obs_dir = " + ram_dir + "mpcobs\n")
-        file.write("\t.name = " + first_desig)
-
-        if second_desig is not None:
-            # write second object location
-            file.write("\nobject2.\n")
-            file.write("\t.obs_dir = " + ram_dir + "mpcobs\n")
-            file.write("\t.name = " + second_desig)
+        file.write("\t.name = " + second_desig)
 
 
 def write_oop(ram_dir, first_designation, second_designation=None):
@@ -122,7 +123,9 @@ def write_oop(ram_dir, first_designation, second_designation=None):
         with open(
             ram_dir + first_designation + "_" + second_designation + ".oop", "w"
         ) as file:
-            oop_options(file, ram_dir, first_designation, second_desig=second_designation)
+            oop_options(
+                file, ram_dir, first_designation, second_desig=second_designation
+            )
 
 
 def prep_orbitfit(ram_dir):
@@ -166,11 +169,20 @@ def prep_orbitfit(ram_dir):
         if not os.path.isdir(dir_path):
             os.mkdir(dir_path)
 
-        os.symlink(os.path.join(orbfit_path, "AST17.bai_431_fcct"), ram_dir + "AST17.bai")
-        os.chmod(ram_dir + "AST17.bai", 0o777)
+        os.symlink(
+            os.path.join(orbfit_path, "AST17.bai_431_fcct"), ram_dir + "AST17.bai"
+        )
+        # os.chmod(ram_dir + "AST17.bai", 0o777)
 
-        os.symlink(os.path.join(orbfit_path, "AST17.bep_431_fcct"), ram_dir + "AST17.bep")
-        os.chmod(ram_dir + "AST17.bep", 0o777)
+        os.symlink(
+            os.path.join(orbfit_path, "AST17.bep_431_fcct"), ram_dir + "AST17.bep"
+        )
+        # os.chmod(ram_dir + "AST17.bep", 0o777)
+        # copyfile(os.path.join(orbfit_path, "AST17.bai_431_fcct"), ram_dir + "AST17.bai")
+        # os.chmod(ram_dir + "AST17.bai", 0o777)
+
+        # copyfile(os.path.join(orbfit_path, "AST17.bep_431_fcct"), ram_dir + "AST17.bep")
+        # os.chmod(ram_dir + "AST17.bep", 0o777)
     except Exception:
         logging.error(traceback.format_exc())
 
@@ -259,11 +271,16 @@ def final_clean(ram_dir):
     >>> os.path.exists("mpcobs")
     False
     """
-    rm_files(glob(ram_dir + "*.bai"))
-    rm_files(glob(ram_dir + "*.bep"))
+
+    for p in glob(ram_dir + "*.bai"):
+        os.unlink(p)
+
+    for p in glob(ram_dir + "*.bep"):
+        os.unlink(p)
+
     rm_files(glob(ram_dir + "*.log"))
 
-    os.rmdir(ram_dir + "mpcobs")
+    # os.rmdir(ram_dir + "mpcobs")
 
 
 def read_oel_lines(lines):
@@ -277,6 +294,7 @@ def read_oel_lines(lines):
     else:
         rms = [-1, -1, -1, -1, -1, -1, -1, -1]
     return [ref_jd] + orb_params[1:] + rms[2:]
+
 
 def read_oel(ram_dir, first_desig, second_desig=None):
     """
