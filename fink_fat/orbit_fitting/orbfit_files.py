@@ -148,11 +148,11 @@ def prep_orbitfit(ram_dir):
 
     >>> st = os.stat("AST17.bai")
     >>> stat.filemode(st.st_mode)
-    '-rwxrwxrwx'
+    '-rwxrwxr-fink_fat/orbit_fitting/orbfit_files.py                131     84    36%   27-34, 41-97, 117-124, 177-178, 318-320, 324-335, 358-380x'
 
     >>> st = os.stat("AST17.bep")
     >>> stat.filemode(st.st_mode)
-    '-rwxrwxrwx'
+    '-rwxrwxr-x'
 
     >>> shutil.rmtree("mpcobs")
     >>> os.remove("AST17.bai")
@@ -170,17 +170,10 @@ def prep_orbitfit(ram_dir):
         os.symlink(
             os.path.join(orbfit_path, "AST17.bai_431_fcct"), ram_dir + "AST17.bai"
         )
-        # os.chmod(ram_dir + "AST17.bai", 0o777)
 
         os.symlink(
             os.path.join(orbfit_path, "AST17.bep_431_fcct"), ram_dir + "AST17.bep"
         )
-        # os.chmod(ram_dir + "AST17.bep", 0o777)
-        # copyfile(os.path.join(orbfit_path, "AST17.bai_431_fcct"), ram_dir + "AST17.bai")
-        # os.chmod(ram_dir + "AST17.bai", 0o777)
-
-        # copyfile(os.path.join(orbfit_path, "AST17.bep_431_fcct"), ram_dir + "AST17.bep")
-        # os.chmod(ram_dir + "AST17.bep", 0o777)
     except Exception:
         logging.error(traceback.format_exc())
 
@@ -223,7 +216,7 @@ def obs_clean(ram_dir, prov_desig):
     >>> open(prov_desig + ".oel", 'a').close()
     >>> open(prov_desig + ".err", 'a').close()
 
-    >>> os.makedirs("mpcobs")
+    # >>> os.makedirs("mpcobs")
     >>> open("mpcobs/" + prov_desig + ".obs", 'a').close()
     >>> open("mpcobs/" + prov_desig + ".rwo", 'a').close()
 
@@ -253,11 +246,9 @@ def final_clean(ram_dir):
     --------
     >>> prep_orbitfit("")
 
-    >>> os.path.exists("AST17.bai")
+    >>> os.path.islink("AST17.bai")
     True
-    >>> os.path.exists("AST17.bep")
-    True
-    >>> os.path.exists("mpcobs")
+    >>> os.path.islink("AST17.bep")
     True
 
     >>> final_clean("")
@@ -265,8 +256,6 @@ def final_clean(ram_dir):
     >>> os.path.exists("AST17.bai")
     False
     >>> os.path.exists("AST17.bep")
-    False
-    >>> os.path.exists("mpcobs")
     False
     """
 
@@ -277,8 +266,6 @@ def final_clean(ram_dir):
         os.unlink(p)
 
     rm_files(glob(ram_dir + "*.log"))
-
-    # os.rmdir(ram_dir + "mpcobs")
 
 
 def read_oel_lines(lines):
@@ -391,3 +378,20 @@ def read_rwo(ram_dir, prov_desig, nb_obs):
         logging.error(traceback.format_exc())
         print("----")
         return list(np.ones(nb_obs, dtype=np.float64) * -1)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    import sys
+    import doctest
+    from pandas.testing import assert_frame_equal  # noqa: F401
+    import fink_fat.test.test_sample as ts  # noqa: F401
+    from unittest import TestCase  # noqa: F401
+    import shutil  # noqa: F401
+    import filecmp  # noqa: F401
+    import stat  # noqa: F401
+
+    if "unittest.util" in __import__("sys").modules:
+        # Show full diff in self.assertEqual.
+        __import__("sys").modules["unittest.util"]._MAX_LENGTH = 999999999
+
+    sys.exit(doctest.testmod()[0])

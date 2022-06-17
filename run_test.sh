@@ -41,6 +41,18 @@ coverage run \
   --source=${ROOTPATH} \
   --rcfile ${ROOTPATH}/.coveragerc fink_fat/orbit_fitting/orbfit_local.py
 
+echo fink_fat/orbit_fitting/orbfit_files.py
+coverage run \
+  --append \
+  --source=${ROOTPATH} \
+  --rcfile ${ROOTPATH}/.coveragerc fink_fat/orbit_fitting/orbfit_files.py
+
+echo fink_fat/orbit_fitting/mpcobs_files.py
+coverage run \
+  --append \
+  --source=${ROOTPATH} \
+  --rcfile ${ROOTPATH}/.coveragerc fink_fat/orbit_fitting/mpcobs_files.py
+
 echo bin/utils_cli.py
 coverage run \
   --append \
