@@ -17,10 +17,9 @@
 
 set -e
 
+source ~/.bash_profile
 export ROOTPATH=`pwd`
 export COVERAGE_PROCESS_START="${ROOTPATH}/.coveragerc"
-
-set -e
 
 python -m pip install .
 
