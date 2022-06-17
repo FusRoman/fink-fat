@@ -236,7 +236,7 @@ def call_orbitfit(ram_dir, first_designation, second_designation):
     >>> os.remove("fink_fat/test/call_orbfit/K21E00A.pro")
     >>> os.remove("fink_fat/test/call_orbfit/mpcobs/K21E00A.rwo")
     """
-    orbitfit_path = os.path.join("~", "OrbitFit", "bin", "")
+    orbitfit_path = os.path.join(os.environ["ORBFIT_HOME"], "bin", "")
     command = (
         orbitfit_path
         + "orbfit.x < "

@@ -72,17 +72,6 @@ mv linux_p1550p2650.440 jpleph
 
 echo "export ORBFIT_HOME=${ORBLOCATE}" >> ~/.bash_profile
 
-while true; do
-    read -p "Do you want to add OrbFit software to your PATH? \nIf not, you will need to add the following path: ${ORBLOCATE}/bin to the fink_fat configuration file. \n[SOLVE_ORBIT_PARAMS] \n\tOrbFit_path=*PATH*" yn
-    case $yn in
-        [Yy]* )
-            echo "export PATH=${ORBLOCATE}/bin:$PATH" >> ~/.bash_profile;
-            break;;
-        [Nn]* ) exit;;
-        * ) echo "Please answer yes or no.";;
-    esac
-done
-
 source ~/.bash_profile
 
 echo "OrbFit installation done, location is ${ORBLOCATE}"
