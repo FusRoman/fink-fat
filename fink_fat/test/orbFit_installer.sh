@@ -13,9 +13,29 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-## Script to install python dependencies
+## Script to install the OrbFit software
 
 set -e
 
-# Dependencies
-pip install -r requirements.txt
+ORBLOCATE=~/OrbitFit
+
+aria2c -x8 http://adams.dm.unipi.it/orbfit/OrbFit5.0.7.tar.gz
+
+
+tar -xf OrbFit5.0.7.tar.gz -C $ORBLOCATE
+
+rm OrbFit5.0.7.tar.gz
+
+cd $ORBLOCATE
+
+./config -O gfortran
+
+make
+
+cd lib/
+
+aria2c -x8 https://ssd.jpl.nasa.gov/ftp/eph/planets/Linux/de440/linux_p1550p2650.440
+
+mv linux_p1550p2650.440 jpleph
+
+echo "OrbFit installation done, location is ${ORBLOCATE}"
