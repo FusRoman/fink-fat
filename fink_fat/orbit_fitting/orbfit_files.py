@@ -119,16 +119,17 @@ def oop_options(
         with_ephem = 0
     file.write("\t.ephem = {}\n".format(with_ephem))
 
-    # write ephem options
-    file.write("ephem.\n")
-    file.write("\t.epoch.start = {}\n".format(start_ephem))
-    file.write("\t.epoch.end = {}\n".format(end_ephem))
-    if step_ephem <= 0:
-        step_ephem = 1
-    file.write("\t.step = {}\n".format(step_ephem))
-    file.write("\t.obscode =  {}\n".format(obscode))
-    file.write("\t.timescale = UTC\n")
-    file.write("\t.fields = cal,mjd,coord,mag,delta,r,elong,phase,glat,appmot,skyerr\n")
+    if with_ephem in [1, 2]:
+        # write ephem options
+        file.write("ephem.\n")
+        file.write("\t.epoch.start = {}\n".format(start_ephem))
+        file.write("\t.epoch.end = {}\n".format(end_ephem))
+        if step_ephem <= 0:
+            step_ephem = 1
+        file.write("\t.step = {}\n".format(step_ephem))
+        file.write("\t.obscode =  {}\n".format(obscode))
+        file.write("\t.timescale = UTC\n")
+        file.write("\t.fields = cal,mjd,coord,mag,delta,r,elong,phase,glat,appmot,skyerr\n")
 
     # write error model options
     file.write("error_model.\n")
