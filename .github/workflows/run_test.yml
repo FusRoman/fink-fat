@@ -30,7 +30,7 @@ jobs:
             sudo apt-get install python3-testresources
         - name: install OrbFit SoftWare
           run: |
-            ./orbFit_installer.sh
+            ./fink_fat/test/orbFit_installer.sh
         - name: Run test suites
           run: |
             ./run_test.sh

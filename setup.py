@@ -19,12 +19,14 @@ setup(
     packages=find_packages(),
     package_data={
         "fink_fat": [
-            "data/month=*",
             "data/fink_fat.conf",
             "orbit_fitting/AST17.*",
             "orbit_fitting/template.oop",
         ]
     },
+    data_files=[
+        ("fink_fat/data", ["fink_fat/data/month=03"])
+    ],
     install_requires=[
         "docopt>=0.6.2",
         "terminaltables>=3.1.10",
