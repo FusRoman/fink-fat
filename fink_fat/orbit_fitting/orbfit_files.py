@@ -9,7 +9,7 @@ from fink_fat import __file__
 
 def write_inp(ram_dir, first_designation, second_designation=None):
     """
-    Write the input files of Orbfit in orbit identification mode. 
+    Write the input files of Orbfit.
     Two designations can be given to perform an orbit fitting for two trajectory arcs.
 
     Parameters
@@ -474,7 +474,7 @@ def final_clean(ram_dir):
 
 def read_oel_lines(lines):
     """
-    Convert the lines from the .oel file generate by OrbFit into list. 
+    Convert the lines from the .oel file generate by OrbFit into list.
 
     Parameters
     ----------

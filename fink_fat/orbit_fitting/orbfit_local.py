@@ -257,7 +257,7 @@ def compute_df_orbit_param(
     --------
 
     >>> orb_elem = compute_df_orbit_param(ts.orbfit_samples, 2, "")
-    
+
     >>> assert_frame_equal(orb_elem, ts.orbfit_output)
     """
 
