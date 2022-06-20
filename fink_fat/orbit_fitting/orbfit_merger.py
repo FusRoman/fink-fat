@@ -17,64 +17,6 @@ import fink_fat.orbit_fitting.orbfit_files as of
 import fink_fat.orbit_fitting.mpcobs_files as mf
 
 
-def read_oel(ram_dir, first_desig, second_desig):
-    """
-    Read the .oel file return by orbfit. This file contains the orbital elements, the reference epoch of the orbit computation and
-    the rms of the orbital elements
-
-    Parameters
-    ----------
-    ram_dir : string
-        Path where files are located
-    prov_desig : string
-        the provisional designation of the trajectory that triggered the OrbFit process.
-
-    Returns
-    -------
-    orb_elem : integer list
-        A list with the reference epoch first then the orbital elements and finally the rms.
-
-    Examples
-    --------
-    >>> read_oel("fink_fat/test/call_orbfit/", "K21E00A")
-    [2459274.810893373, '1.5833993623527698E+00', '0.613559993695898', '5.9440877456670', '343.7960539272898', '270.1931234374459', '333.9557366497585', -1, -1, -1, -1, -1, -1]
-
-    >>> read_oel("", "")
-    [-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]
-
-    >>> read_oel("fink_fat/test/call_orbfit/", "K21H00A")
-    [2459345.797868819, '3.1514694062448680E+00', '0.113946062348132', '1.6879159876457', '38.1016474068882', '136.1915246941109', '46.5628893357021', '7.94527E-03', '1.83696E-02', '4.77846E-02', '3.17863E-01', '1.34503E+01', '9.82298E+00']
-    """
-    try:
-        with open(ram_dir + first_desig + "_" + second_desig + ".oel") as file:
-            lines = file.readlines()
-
-            ref_mjd = float(lines[8].strip().split()[1])
-            # conversion from modified julian date to julian date
-            ref_jd = ref_mjd + 2400000.5
-
-            orb_params = " ".join(lines[7].strip().split()).split(" ")
-            if len(lines) > 12:
-                rms = " ".join(lines[12].strip().split()).split(" ")
-            else:
-                rms = [-1, -1, -1, -1, -1, -1, -1, -1]
-            return [ref_jd] + orb_params[1:] + rms[2:]
-    except FileNotFoundError:
-        return list(np.ones(13, dtype=np.float64) * -1)
-    except Exception as e:
-        print("----")
-        print(e)
-        print()
-        print("ERROR READ OEL FILE: {}".format(first_desig + "_" + second_desig))
-        print()
-        print(lines)
-        print()
-        print()
-        logging.error(traceback.format_exc())
-        print("----")
-        return list(np.ones(13, dtype=np.float64) * -1)
-
-
 def detect_ident(ram_dir, first_desig, second_desig):
     """
     Read the .olg files return by orbfit. The .olg files is the log files of OrbFit. It contains the information if the orbit identification
