@@ -9,9 +9,6 @@ from shutil import rmtree
 import re
 import multiprocessing as mp
 
-import traceback
-import logging
-
 import fink_fat.orbit_fitting.orbfit_local as ol
 import fink_fat.orbit_fitting.orbfit_files as of
 import fink_fat.orbit_fitting.mpcobs_files as mf
