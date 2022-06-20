@@ -472,7 +472,7 @@ def write_observation_file(ram_dir, obs_df):
 
     >>> shutil.rmtree("mpcobs/")
     """
-    obs_df = obs_df.sort_values(["trajectory_id", "jd"])
+    obs_df = obs_df.sort_values("jd")
     ra = obs_df["ra"]
     dec = obs_df["dec"]
     dcmag = obs_df["dcmag"]

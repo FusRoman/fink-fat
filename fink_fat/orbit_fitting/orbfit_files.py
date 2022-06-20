@@ -183,7 +183,9 @@ def oop_options(
         file.write("\t.step = {}\n".format(step_ephem))
         file.write("\t.obscode =  {}\n".format(obscode))
         file.write("\t.timescale = UTC\n")
-        file.write("\t.fields = cal,mjd,coord,mag,delta,r,elong,phase,glat,appmot,skyerr\n")
+        file.write(
+            "\t.fields = cal,mjd,coord,mag,delta,r,elong,phase,glat,appmot,skyerr\n"
+        )
 
     # write error model options
     file.write("error_model.\n")
@@ -225,8 +227,8 @@ def oop_options(
 
 
 def write_oop(
-    ram_dir, 
-    first_designation, 
+    ram_dir,
+    first_designation,
     second_designation=None,
     prop_epoch=None,
     n_triplets=10,
@@ -235,9 +237,10 @@ def write_oop(
     start_ephem=None,
     end_ephem=None,
     step_ephem=None,
-    obscode=None,):
+    obscode=None,
+):
     """
-    Write the option file of OrbFit. see 'oop_options' for more documentation.
+    Write the option file of OrbFit.
 
     Parameters
     ----------
@@ -247,6 +250,34 @@ def write_oop(
         the provisional designation of the first arc
     second_designation : string
         the provisional designation of the second arc
+    prop_epoch : string
+        Epoch at which output orbital elements
+        Epochs can be specified in Julian Days, Modified Julian Days or
+        calendar date/time, according to the following examples
+        prop_epoch     = CAL 1998/Jun/18 22:35:40.00 UTC
+            or         = CAL 1998/06/18  22:35:40.00 UTC
+            or         = JD  2450983.44143519 UTC
+            or         = MJD 50982.94143519 UTC ! MJD with fractional part
+            or         = MJD 50982 81340.00 UTC ! integer MJD & secs within day)
+    n_triplets : integer
+        max number of triplets of observations to be tried for the initial orbit determination
+    noise_ntrials : integer
+        number of trials for each triplet for the initial orbit determination
+    with_ephem : integer
+        Compute the ephemeris or not:
+            0: no ephemeris
+            1: compute ephemeris is possible
+            2: always compute ephemeris
+    start_ephem : string
+        start date to compute the ephemeris, same format as the prop_epoch keyword.
+    end_epehm : string
+        start date to compute the ephemeris.
+    step_ephem : float
+        Ephemeris stepsize in days
+    obscode : integer
+        Observatory code for which ephemeris has to be computed, required for applying topocentric correction.
+        Observatory codes can be found here : https://en.wikipedia.org/wiki/List_of_observatory_codes
+        Take only the observatory code before 999 (those without letters).
 
     Return
     ------
@@ -269,8 +300,8 @@ def write_oop(
     if second_designation is None:
         with open(ram_dir + first_designation + ".oop", "w") as file:
             oop_options(
-                file, 
-                ram_dir, 
+                file,
+                ram_dir,
                 first_designation,
                 prop_epoch=prop_epoch,
                 n_triplets=n_triplets,
@@ -280,15 +311,15 @@ def write_oop(
                 end_ephem=end_ephem,
                 step_ephem=step_ephem,
                 obscode=obscode,
-                )
+            )
     else:
         with open(
             ram_dir + first_designation + "_" + second_designation + ".oop", "w"
         ) as file:
             oop_options(
-                file, 
-                ram_dir, 
-                first_designation, 
+                file,
+                ram_dir,
+                first_designation,
                 second_desig=second_designation,
                 prop_epoch=prop_epoch,
                 n_triplets=n_triplets,
@@ -347,7 +378,7 @@ def prep_orbitfit(ram_dir):
         os.symlink(
             os.path.join(orbfit_path, "AST17.bep_431_fcct"), ram_dir + "AST17.bep"
         )
-    except Exception: # pragma: no cover
+    except Exception:  # pragma: no cover
         logging.error(traceback.format_exc())
 
 
@@ -442,16 +473,45 @@ def final_clean(ram_dir):
 
 
 def read_oel_lines(lines):
-    ref_mjd = float(lines[8].strip().split()[1])
+    """
+    Convert the lines from the .oel file generate by OrbFit into list. 
+
+    Parameters
+    ----------
+    lines : string list
+        Lines from a .oel file
+
+    Returns
+    -------
+    orb_params_list : float list
+        reference epoch, orbital parameters and their errors
+
+    Examples
+    --------
+    >>> file = open("fink_fat/test/K21E00A_test.oel", "r")
+    >>> lines = file.readlines()
+    >>> read_oel_lines(lines)
+    [2459274.881182641, '1.2989984390232820E+00', '0.237563404272872', '3.0006189587041', '139.1486265719337', '316.7163361462099', '42.4810617056960', '2.63690E-155', '2.15639E-155', '0.00000E+00', '1.50627E-153', '4.02731E-159', '0.00000E+00']
+
+    >>> file.close()
+    """
+    ref_mjd = float(lines[9].strip().split()[1])
     # conversion from modified julian date to julian date
     ref_jd = ref_mjd + 2400000.5
 
-    orb_params = " ".join(lines[7].strip().split()).split(" ")
-    if len(lines) > 12:
-        rms = " ".join(lines[12].strip().split()).split(" ")
+    orb_params = " ".join(lines[8].strip().split()).split(" ")
+    if len(lines) >= 14:
+        rms = " ".join(lines[13].strip().split()).split(" ")
+
+        for i_error in range(2, len(rms)):
+            tmp_error = rms[i_error]
+            if tmp_error[-4] != "E":
+                rms[i_error] = tmp_error[:-4] + "E" + tmp_error[-4:]
     else:
         rms = [-1, -1, -1, -1, -1, -1, -1, -1]
-    return [ref_jd] + orb_params[1:] + rms[2:]
+
+    orb_params_list = [ref_jd] + orb_params[1:] + rms[2:]
+    return orb_params_list
 
 
 def read_oel(ram_dir, first_desig, second_desig=None):
@@ -473,8 +533,8 @@ def read_oel(ram_dir, first_desig, second_desig=None):
 
     Examples
     --------
-    >>> read_oel("fink_fat/test/call_orbfit/", "K21E00A")
-    [2459274.810893373, '1.5833993623527698E+00', '0.613559993695898', '5.9440877456670', '343.7960539272898', '270.1931234374459', '333.9557366497585', -1, -1, -1, -1, -1, -1]
+    >>> read_oel("fink_fat/test/", "K21E00A_test")
+    [2459274.881182641, '1.2989984390232820E+00', '0.237563404272872', '3.0006189587041', '139.1486265719337', '316.7163361462099', '42.4810617056960', '2.63690E-155', '2.15639E-155', '0.00000E+00', '1.50627E-153', '4.02731E-159', '0.00000E+00']
 
     >>> read_oel("", "")
     [-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]
@@ -494,7 +554,7 @@ def read_oel(ram_dir, first_desig, second_desig=None):
 
     except FileNotFoundError:
         return list(np.ones(13, dtype=np.float64) * -1)
-    except Exception as e: # pragma: no cover
+    except Exception as e:  # pragma: no cover
         print("----")
         print(e)
         print()

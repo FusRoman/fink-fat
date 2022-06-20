@@ -77,7 +77,7 @@ def call_orbitfit(ram_dir, first_designation, second_designation=None):
             return output
 
 
-def get_orbit_param(ram_dir, df):
+def get_orbit_param(ram_dir, df, n_triplets, noise_ntrials, prop_epoch=None):
     """
     Compute the orbital elements of one trajectory.
 
@@ -87,6 +87,12 @@ def get_orbit_param(ram_dir, df):
         Path where files are located
     df : dataframe
         All the observation of the trajectory. An observation file will be write in the MPC format based on the observations contains in this dataframe.
+    n_triplets : integer
+        max number of triplets of observations to be tried for the initial orbit determination
+    noise_ntrials : integer
+        number of trials for each triplet for the initial orbit determination
+    prop_epoch : float
+        Epoch at which output orbital elements in JD.
 
     Returns
     -------
@@ -107,8 +113,10 @@ def get_orbit_param(ram_dir, df):
     ... })
 
     >>> of.prep_orbitfit("")
-    >>> get_orbit_param("", df)
-    [[0, 'K21E00A', 2459274.810893373, '1.5833993623527698E+00', '0.613559993695898', '5.9440877456670', '343.7960539272898', '270.1931234374459', '333.9557366497585', -1, -1, -1, -1, -1, -1, -1.0]]
+    >>> res = get_orbit_param("", df, 15, 15)
+    >>> res[0][:9]
+    [0, 'K21E00A', 2459274.881182641, '1.2989984390232820E+00', '0.237563404272872', '3.0006189587041', '139.1486265719337', '316.7163361462099', '42.4810617056960']
+
     >>> of.final_clean("")
     """
 
@@ -119,7 +127,22 @@ def get_orbit_param(ram_dir, df):
         df_one_traj = df[df["trajectory_id"] == traj_id]
         prov_desig = mf.write_observation_file(ram_dir, df_one_traj)
         of.write_inp(ram_dir, prov_desig)
-        of.write_oop(ram_dir, prov_desig)
+        if prop_epoch is None:
+            of.write_oop(
+                ram_dir,
+                prov_desig,
+                prop_epoch="JD  {} UTC".format(df_one_traj["jd"].values[-1]),
+                n_triplets=n_triplets,
+                noise_ntrials=noise_ntrials,
+            )
+        else:
+            of.write_oop(
+                ram_dir,
+                prov_desig,
+                prop_epoch="JD  {} UTC".format(prop_epoch),
+                n_triplets=n_triplets,
+                noise_ntrials=noise_ntrials,
+            )
 
         try:
             call_orbitfit(ram_dir, prov_desig)
@@ -205,7 +228,9 @@ def orbit_elem_dataframe(orbit_elem):
     return df_orb_elem
 
 
-def compute_df_orbit_param(trajectory_df, cpu_count, ram_dir):
+def compute_df_orbit_param(
+    trajectory_df, cpu_count, ram_dir, n_triplets=10, noise_ntrials=10,
+):
     """
     Compute the orbital elements of a set of trajectories. Computation are done in parallel.
 
@@ -217,6 +242,10 @@ def compute_df_orbit_param(trajectory_df, cpu_count, ram_dir):
         the number of core for the parallel computation
     ram_dir : string
         Path where files are located
+    n_triplets : integer
+        max number of triplets of observations to be tried for the initial orbit determination
+    noise_ntrials : integer
+        number of trials for each triplet for the initial orbit determination
 
     Returns
     -------
@@ -228,7 +257,7 @@ def compute_df_orbit_param(trajectory_df, cpu_count, ram_dir):
     --------
 
     >>> orb_elem = compute_df_orbit_param(ts.orbfit_samples, 2, "")
-
+    
     >>> assert_frame_equal(orb_elem, ts.orbfit_output)
     """
 
@@ -248,7 +277,13 @@ def compute_df_orbit_param(trajectory_df, cpu_count, ram_dir):
         of.prep_orbitfit(chunk_dir)
 
     chunks = [
-        (chunk_dir, trajectory_df[trajectory_df["trajectory_id"].isin(tr_chunk)])
+        (
+            chunk_dir,
+            trajectory_df[trajectory_df["trajectory_id"].isin(tr_chunk)],
+            n_triplets,
+            noise_ntrials,
+            None,
+        )
         for tr_chunk, chunk_dir in zip(trajectory_id_chunks, chunk_ramdir)
         if len(tr_chunk) > 0
     ]

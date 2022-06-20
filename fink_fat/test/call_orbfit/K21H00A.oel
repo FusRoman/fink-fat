@@ -1,3 +1,4 @@
+! Propagated orbits
 ! Orbits computed with differential corrections
 format  = 'OEF2.0'       ! file format
 rectype = 'ML'           ! record type (1L/ML)
