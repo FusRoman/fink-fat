@@ -219,13 +219,11 @@ def prep_orbitfit(ram_dir):
 
     >>> prep_orbitfit("")
 
-    >>> st = os.stat("AST17.bai")
-    >>> stat.filemode(st.st_mode)
-    '-rwxrwxr-x'
+    >>> os.path.islink("AST17.bai")
+    True
 
-    >>> st = os.stat("AST17.bep")
-    >>> stat.filemode(st.st_mode)
-    '-rwxrwxr-x'
+    >>> os.path.islink("AST17.bep")
+    True
 
     >>> shutil.rmtree("mpcobs")
     >>> os.remove("AST17.bai")
