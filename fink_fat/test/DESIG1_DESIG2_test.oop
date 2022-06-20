@@ -1,0 +1,40 @@
+output.
+	.elements = 'KEP'
+	.epoch = JD  2450983.44143519 UTC
+init_orbdet.
+	.verbose = 1
+	.n_triplets = 24
+	.noise.ntrials = 12
+operations.
+	.init_orbdet = 2
+	.diffcor = 2
+	.ident = 2
+	.ephem = 1
+ephem.
+	.epoch.start = JD  2450993.44143519 UTC
+	.epoch.end = JD  2451003.44143519 UTC
+	.step = 5.3
+	.obscode =  675
+	.timescale = UTC
+	.fields = cal,mjd,coord,mag,delta,r,elong,phase,glat,appmot,skyerr
+error_model.
+	.name='fcct14'
+IERS.
+	.extrapolation = .T.
+reject.
+	.rejopp = .FALSE.
+propag.
+	.iast = 17
+	.npoint = 600
+	.dmea = 0.2d0
+	.dter = 0.05d0
+	.filbe=fink_fat/test/AST17
+
+output_files.
+	.elem = fink_fat/test/DESIG1_DESIG2.oel
+object1.
+	.obs_dir = fink_fat/test/mpcobs
+	.name = DESIG1
+object2.
+	.obs_dir = fink_fat/test/mpcobs
+	.name = DESIG2

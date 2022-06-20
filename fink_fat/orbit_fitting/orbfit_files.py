@@ -9,7 +9,8 @@ from fink_fat import __file__
 
 def write_inp(ram_dir, first_designation, second_designation=None):
     """
-    Write the input files of Orbfit in orbit identification mode. Two designations need to be given corresponding to the both arcs.
+    Write the input files of Orbfit in orbit identification mode. 
+    Two designations can be given to perform an orbit fitting for two trajectory arcs.
 
     Parameters
     ----------
@@ -23,6 +24,19 @@ def write_inp(ram_dir, first_designation, second_designation=None):
     Return
     ------
     None
+
+    Examples
+    --------
+    >>> write_inp("fink_fat/test/", "DESIG1")
+    >>> filecmp.cmp("fink_fat/test/DESIG1.inp", "fink_fat/test/DESIG1_test.inp")
+    True
+
+    >>> write_inp("fink_fat/test/", "DESIG1", "DESIG2")
+    >>> filecmp.cmp("fink_fat/test/DESIG1_DESIG2.inp", "fink_fat/test/DESIG1_DESIG2_test.inp")
+    True
+
+    >>> os.remove("fink_fat/test/DESIG1.inp")
+    >>> os.remove("fink_fat/test/DESIG1_DESIG2.inp")
     """
     if second_designation is None:
         with open(ram_dir + first_designation + ".inp", "wt") as file:
@@ -89,6 +103,46 @@ def oop_options(
         Observatory code for which ephemeris has to be computed, required for applying topocentric correction.
         Observatory codes can be found here : https://en.wikipedia.org/wiki/List_of_observatory_codes
         Take only the observatory code before 999 (those without letters).
+
+    Returns
+    -------
+    None
+
+    Examples
+    --------
+    >>> file = open("fink_fat/test/test.oop", "w")
+    >>> oop_options(file, "fink_fat/test/", "DESIG1")
+    >>> file.close()
+    >>> filecmp.cmp("fink_fat/test/test.oop", "fink_fat/test/DESIG1_test.oop")
+    True
+
+    >>> os.remove("fink_fat/test/test.oop")
+
+    >>> file = open("fink_fat/test/test.oop", "w")
+    >>> oop_options(file, "fink_fat/test/", "DESIG1", "DESIG2", "JD  2450983.44143519 UTC", 24, 12, 1, "JD  2450993.44143519 UTC", "JD  2451003.44143519 UTC", 5.3, 675)
+    >>> file.close()
+    >>> filecmp.cmp("fink_fat/test/test.oop", "fink_fat/test/DESIG1_DESIG2_test.oop")
+    True
+
+    >>> os.remove("fink_fat/test/test.oop")
+
+    >>> file = open("fink_fat/test/test.oop", "w")
+    >>> oop_options(file, "fink_fat/test/", "DESIG1", "DESIG2", "JD  2450983.44143519 UTC", -3, -10, 1, "JD  2450993.44143519 UTC", "JD  2451003.44143519 UTC", -2, 675)
+    >>> file.close()
+
+    >>> filecmp.cmp("fink_fat/test/test.oop", "fink_fat/test/DESIG1_DESIG2_neg_test.oop")
+    True
+
+    >>> os.remove("fink_fat/test/test.oop")
+
+    >>> file = open("fink_fat/test/test.oop", "w")
+    >>> oop_options(file, "fink_fat/test/", "DESIG1", with_ephem=10)
+    >>> file.close()
+
+    >>> filecmp.cmp("fink_fat/test/test.oop", "fink_fat/test/DESIG1_no_ephem_test.oop")
+    True
+
+    >>> os.remove("fink_fat/test/test.oop")
     """
     # write output options
     file.write("output.\n")
@@ -170,9 +224,20 @@ def oop_options(
         file.write("\t.name = " + second_desig)
 
 
-def write_oop(ram_dir, first_designation, second_designation=None):
+def write_oop(
+    ram_dir, 
+    first_designation, 
+    second_designation=None,
+    prop_epoch=None,
+    n_triplets=10,
+    noise_ntrials=10,
+    with_ephem=0,
+    start_ephem=None,
+    end_ephem=None,
+    step_ephem=None,
+    obscode=None,):
     """
-    Write the option file of OrbFit in orbit identification mode. Two designations need to be given corresponding to the both arcs.
+    Write the option file of OrbFit. see 'oop_options' for more documentation.
 
     Parameters
     ----------
@@ -186,16 +251,53 @@ def write_oop(ram_dir, first_designation, second_designation=None):
     Return
     ------
     None
+
+    Examples
+    --------
+    >>> write_oop("fink_fat/test/", "DESIG1")
+    >>> filecmp.cmp("fink_fat/test/DESIG1.oop", "fink_fat/test/DESIG1_test.oop")
+    True
+
+    >>> os.remove("fink_fat/test/DESIG1.oop")
+
+    >>> write_oop("fink_fat/test/", "DESIG1", "DESIG2")
+    >>> filecmp.cmp("fink_fat/test/DESIG1_DESIG2.oop", "fink_fat/test/DESIG1_DESIG2_test2.oop")
+    True
+
+    >>> os.remove("fink_fat/test/DESIG1_DESIG2.oop")
     """
     if second_designation is None:
         with open(ram_dir + first_designation + ".oop", "w") as file:
-            oop_options(file, ram_dir, first_designation)
+            oop_options(
+                file, 
+                ram_dir, 
+                first_designation,
+                prop_epoch=prop_epoch,
+                n_triplets=n_triplets,
+                noise_ntrials=noise_ntrials,
+                with_ephem=with_ephem,
+                start_ephem=start_ephem,
+                end_ephem=end_ephem,
+                step_ephem=step_ephem,
+                obscode=obscode,
+                )
     else:
         with open(
             ram_dir + first_designation + "_" + second_designation + ".oop", "w"
         ) as file:
             oop_options(
-                file, ram_dir, first_designation, second_desig=second_designation
+                file, 
+                ram_dir, 
+                first_designation, 
+                second_desig=second_designation,
+                prop_epoch=prop_epoch,
+                n_triplets=n_triplets,
+                noise_ntrials=noise_ntrials,
+                with_ephem=with_ephem,
+                start_ephem=start_ephem,
+                end_ephem=end_ephem,
+                step_ephem=step_ephem,
+                obscode=obscode,
             )
 
 
@@ -245,7 +347,7 @@ def prep_orbitfit(ram_dir):
         os.symlink(
             os.path.join(orbfit_path, "AST17.bep_431_fcct"), ram_dir + "AST17.bep"
         )
-    except Exception:
+    except Exception: # pragma: no cover
         logging.error(traceback.format_exc())
 
 
@@ -392,7 +494,7 @@ def read_oel(ram_dir, first_desig, second_desig=None):
 
     except FileNotFoundError:
         return list(np.ones(13, dtype=np.float64) * -1)
-    except Exception as e:
+    except Exception as e: # pragma: no cover
         print("----")
         print(e)
         print()
