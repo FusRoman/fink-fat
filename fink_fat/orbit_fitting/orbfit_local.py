@@ -143,6 +143,7 @@ def get_orbit_param(ram_dir, df, n_triplets, noise_ntrials, prop_epoch=None, ver
                 prop_epoch="JD  {} UTC".format(prop_epoch),
                 n_triplets=n_triplets,
                 noise_ntrials=noise_ntrials,
+                verbose=verbose
             )
 
         try:
