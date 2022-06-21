@@ -93,6 +93,11 @@ def get_orbit_param(ram_dir, df, n_triplets, noise_ntrials, prop_epoch=None, ver
         number of trials for each triplet for the initial orbit determination
     prop_epoch : float
         Epoch at which output orbital elements in JD.
+    verbose : integer
+        Verbosity levels of Orbfit
+        1 = summary information on the solution found
+        2 = summary information on all trials
+        3 = debug
 
     Returns
     -------
@@ -231,7 +236,7 @@ def orbit_elem_dataframe(orbit_elem):
 
 
 def compute_df_orbit_param(
-    trajectory_df, cpu_count, ram_dir, n_triplets=10, noise_ntrials=10, verbose=1
+    trajectory_df, cpu_count, ram_dir, n_triplets=10, noise_ntrials=10, prop_epoch=None, verbose=1
 ):
     """
     Compute the orbital elements of a set of trajectories. Computation are done in parallel.
@@ -248,6 +253,13 @@ def compute_df_orbit_param(
         max number of triplets of observations to be tried for the initial orbit determination
     noise_ntrials : integer
         number of trials for each triplet for the initial orbit determination
+    prop_epoch : float
+        Epoch at which output orbital elements in JD.
+    verbose : integer
+        Verbosity levels of Orbfit
+        1 = summary information on the solution found
+        2 = summary information on all trials
+        3 = debug
 
     Returns
     -------
@@ -284,7 +296,7 @@ def compute_df_orbit_param(
             trajectory_df[trajectory_df["trajectory_id"].isin(tr_chunk)],
             n_triplets,
             noise_ntrials,
-            None,
+            prop_epoch,
             verbose
         )
         for tr_chunk, chunk_dir in zip(trajectory_id_chunks, chunk_ramdir)
