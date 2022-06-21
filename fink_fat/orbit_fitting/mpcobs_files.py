@@ -1,7 +1,6 @@
 from astropy.time import Time
 from astropy.coordinates import SkyCoord
 import astropy.units as u
-import re
 import numpy as np
 
 
@@ -484,17 +483,6 @@ def write_observation_file(ram_dir, obs_df):
     translation_rules = {ord(i): " " for i in "hmd"}
     translation_rules[ord("s")] = ""
     coord = [el.translate(translation_rules) for el in coord]
-
-    # coord = [
-    #     re.sub(
-    #         r"(\d+)\.(\d+)",
-    #         lambda matchobj: matchobj.group()[:5]
-    #         if len(matchobj.group()[:5]) == 5
-    #         else matchobj.group()[:5] + "0",
-    #         s,
-    #     )
-    #     for s in coord
-    # ]
 
     t = Time(date.astype(np.double), format="jd")
     date = t.iso

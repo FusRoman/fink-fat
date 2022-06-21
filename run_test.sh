@@ -59,6 +59,12 @@ coverage run \
   --source=${ROOTPATH} \
   --rcfile ${ROOTPATH}/.coveragerc bin/utils_cli.py
 
+echo fink_fat/test/write_obs_test.py
+coverage run \
+  --append \
+  --source=${ROOTPATH} \
+  --rcfile ${ROOTPATH}/.coveragerc fink_fat/test/write_obs_test.py
+
 echo fink_fat/test/continuous_integration.py
 # Run test suite + coverage
 coverage run \
