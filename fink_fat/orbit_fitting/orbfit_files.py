@@ -387,12 +387,12 @@ def prep_orbitfit(ram_dir):
         if not os.path.isdir(dir_path):
             os.mkdir(dir_path)
 
-        if not os.path.islink("AST17.bai"):
+        if not os.path.islink(ram_dir + "AST17.bai"):
             os.symlink(
                 os.path.join(orbfit_path, "AST17.bai_431_fcct"), ram_dir + "AST17.bai"
             )
 
-        if not os.path.islink("AST17.bep"):
+        if not os.path.islink(ram_dir + "AST17.bep"):
             os.symlink(
                 os.path.join(orbfit_path, "AST17.bep_431_fcct"), ram_dir + "AST17.bep"
             )
