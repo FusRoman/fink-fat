@@ -77,7 +77,7 @@ def call_orbitfit(ram_dir, first_designation, second_designation=None):
             return output
 
 
-def get_orbit_param(ram_dir, df, n_triplets, noise_ntrials, prop_epoch=None):
+def get_orbit_param(ram_dir, df, n_triplets, noise_ntrials, prop_epoch=None, verbose=1):
     """
     Compute the orbital elements of one trajectory.
 
@@ -229,7 +229,7 @@ def orbit_elem_dataframe(orbit_elem):
 
 
 def compute_df_orbit_param(
-    trajectory_df, cpu_count, ram_dir, n_triplets=10, noise_ntrials=10,
+    trajectory_df, cpu_count, ram_dir, n_triplets=10, noise_ntrials=10, verbose=1
 ):
     """
     Compute the orbital elements of a set of trajectories. Computation are done in parallel.
@@ -283,6 +283,7 @@ def compute_df_orbit_param(
             n_triplets,
             noise_ntrials,
             None,
+            verbose
         )
         for tr_chunk, chunk_dir in zip(trajectory_id_chunks, chunk_ramdir)
         if len(tr_chunk) > 0

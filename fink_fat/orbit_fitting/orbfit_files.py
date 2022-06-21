@@ -61,6 +61,7 @@ def oop_options(
     end_ephem=None,
     step_ephem=None,
     obscode=None,
+    verbose=1,
 ):
     """
     Write the lines of the OrbFit options file.
@@ -103,6 +104,11 @@ def oop_options(
         Observatory code for which ephemeris has to be computed, required for applying topocentric correction.
         Observatory codes can be found here : https://en.wikipedia.org/wiki/List_of_observatory_codes
         Take only the observatory code before 999 (those without letters).
+    verbose : integer
+        Verbosity levels of Orbfit
+        1 = summary information on the solution found
+        2 = summary information on all trials
+        3 = debug
 
     Returns
     -------
@@ -152,7 +158,9 @@ def oop_options(
 
     # write init_orb options
     file.write("init_orbdet.\n")
-    file.write("\t.verbose = 1\n")
+    if verbose not in [1, 2, 3]:
+        verbose = 1
+    file.write("\t.verbose = {}\n".format(verbose))
     if n_triplets <= 0:
         n_triplets = 10
     file.write("\t.n_triplets = {}\n".format(n_triplets))
@@ -238,6 +246,7 @@ def write_oop(
     end_ephem=None,
     step_ephem=None,
     obscode=None,
+    verbose=1
 ):
     """
     Write the option file of OrbFit.
@@ -278,6 +287,11 @@ def write_oop(
         Observatory code for which ephemeris has to be computed, required for applying topocentric correction.
         Observatory codes can be found here : https://en.wikipedia.org/wiki/List_of_observatory_codes
         Take only the observatory code before 999 (those without letters).
+    verbose : integer
+        Verbosity levels of Orbfit
+        1 = summary information on the solution found
+        2 = summary information on all trials
+        3 = debug
 
     Return
     ------
@@ -311,6 +325,7 @@ def write_oop(
                 end_ephem=end_ephem,
                 step_ephem=step_ephem,
                 obscode=obscode,
+                verbose=verbose
             )
     else:
         with open(
@@ -329,6 +344,7 @@ def write_oop(
                 end_ephem=end_ephem,
                 step_ephem=step_ephem,
                 obscode=obscode,
+                verbose=verbose
             )
 
 
