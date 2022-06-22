@@ -128,7 +128,7 @@ def merge_orbit(
 
     Examples
     --------
-    
+
     >>> merge_test_path = "fink_fat/test/merge_test/"
     >>> merge_res = merge_orbit(pd.read_parquet(merge_test_path + "obs_merge.parquet"), pd.read_parquet(merge_test_path + "orb_merge.parquet"), "", 2, 1, 2459752.00278)
 
