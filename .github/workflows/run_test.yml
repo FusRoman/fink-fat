@@ -31,6 +31,9 @@ jobs:
         - name: install OrbFit SoftWare
           run: |
             ./fink_fat/test/orbFit_installer.sh
+        - name: update pickle
+          run: |
+            pip install pickle --upgrade
         - name: Run test suites
           run: |
             ./run_test.sh
