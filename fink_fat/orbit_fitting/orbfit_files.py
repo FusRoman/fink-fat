@@ -186,9 +186,10 @@ def oop_options(
         file.write("ephem.\n")
         file.write("\t.epoch.start = {}\n".format(start_ephem))
         file.write("\t.epoch.end = {}\n".format(end_ephem))
-        if step_ephem <= 0:
-            step_ephem = 1
-        file.write("\t.step = {}\n".format(step_ephem))
+        if step_ephem is not None:
+            if step_ephem <= 0:
+                step_ephem = 1
+            file.write("\t.step = {}\n".format(step_ephem))
         file.write("\t.obscode =  {}\n".format(obscode))
         file.write("\t.timescale = UTC\n")
         file.write(
@@ -595,7 +596,7 @@ def read_oel(ram_dir, first_desig, second_desig=None):
     Parameters
     ----------
     ram_dir : string
-        Path where files are located
+        Path where the files are located
     prov_desig : string
         the provisional designation of the trajectory that triggered the OrbFit process.
 
