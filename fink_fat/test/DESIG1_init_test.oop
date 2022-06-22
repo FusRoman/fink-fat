@@ -1,0 +1,30 @@
+output.
+	.elements = 'KEP'
+init_orbdet.
+	.verbose = 1
+	.n_triplets = 10
+	.noise.ntrials = 10
+operations.
+	.init_orbdet = 0
+	.diffcor = 0
+	.ident = 0
+	.ephem = 0
+error_model.
+	.name='fcct14'
+IERS.
+	.extrapolation = .T.
+reject.
+	.rejopp = .FALSE.
+propag.
+	.iast = 17
+	.npoint = 600
+	.dmea = 0.2d0
+	.dter = 0.05d0
+	.filbe=fink_fat/test/AST17
+
+output_files.
+	.elem = fink_fat/test/DESIG1.oel
+object1.
+	.obs_dir = fink_fat/test/mpcobs
+	.name = DESIG1
+	.inc_files = toto/

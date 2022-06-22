@@ -469,7 +469,7 @@ def write_observation_file(ram_dir, obs_df):
     >>> filecmp.cmp("mpcobs/K69O00A.obs", "fink_fat/test/K69O00A_test.obs")
     True
 
-    >>> shutil.rmtree("mpcobs/")
+    >>> shutil.rmtree("mpcobs")
     """
     obs_df = obs_df.sort_values("jd")
     ra = obs_df["ra"]

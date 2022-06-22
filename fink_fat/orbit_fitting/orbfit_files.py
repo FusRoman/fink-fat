@@ -154,6 +154,15 @@ def oop_options(
     True
 
     >>> os.remove("fink_fat/test/test.oop")
+
+    >>> file = open("fink_fat/test/test.oop", "w")
+    >>> oop_options(file, "fink_fat/test/", "DESIG1", init_orb_file="toto/")
+    >>> file.close()
+
+    >>> filecmp.cmp("fink_fat/test/test.oop", "fink_fat/test/DESIG1_init_test.oop")
+    True
+
+    >>> os.remove("fink_fat/test/test.oop")
     """
     # write output options
     file.write("output.\n")
