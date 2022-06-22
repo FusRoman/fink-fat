@@ -34,24 +34,18 @@ do
     --rcfile ${ROOTPATH}/.coveragerc $filename
 done
 
-echo fink_fat/orbit_fitting/orbfit_local.py
-# Run test suite + coverage
-coverage run \
-  --append \
-  --source=${ROOTPATH} \
-  --rcfile ${ROOTPATH}/.coveragerc fink_fat/orbit_fitting/orbfit_local.py
-
-echo fink_fat/orbit_fitting/orbfit_files.py
-coverage run \
-  --append \
-  --source=${ROOTPATH} \
-  --rcfile ${ROOTPATH}/.coveragerc fink_fat/orbit_fitting/orbfit_files.py
-
-echo fink_fat/orbit_fitting/mpcobs_files.py
-coverage run \
-  --append \
-  --source=${ROOTPATH} \
-  --rcfile ${ROOTPATH}/.coveragerc fink_fat/orbit_fitting/mpcobs_files.py
+# Run the test suite
+for filename in fink_fat/orbit_fitting/*.py
+do
+  if [ $filename != "fink_fat/orbit_fitting/orbfit_cluster.py" ]; then
+    echo $filename
+    # Run test suite + coverage
+    coverage run \
+      --append \
+      --source=${ROOTPATH} \
+      --rcfile ${ROOTPATH}/.coveragerc $filename
+  fi
+done
 
 echo bin/utils_cli.py
 coverage run \
