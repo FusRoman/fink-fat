@@ -62,6 +62,7 @@ def oop_options(
     step_ephem=None,
     obscode=None,
     verbose=1,
+    init_orb_file=None
 ):
     """
     Write the lines of the OrbFit options file.
@@ -109,6 +110,10 @@ def oop_options(
         1 = summary information on the solution found
         2 = summary information on all trials
         3 = debug
+    init_orb_file : string
+        path where are located a .oel file corresponding to the current trajectory.
+        Used to skip the orbit fitting.
+
 
     Returns
     -------
@@ -170,8 +175,12 @@ def oop_options(
 
     # write operations options
     file.write("operations.\n")
-    file.write("\t.init_orbdet = 2\n")
-    file.write("\t.diffcor = 2\n")
+    if init_orb_file is not None:
+        orb_det_and_diff_cor = 0
+    else:
+        orb_det_and_diff_cor = 2
+    file.write("\t.init_orbdet = {}\n".format(orb_det_and_diff_cor))
+    file.write("\t.diffcor = {}\n".format(orb_det_and_diff_cor))
     if second_desig is None:
         file.write("\t.ident = 0\n")
     else:
@@ -226,7 +235,9 @@ def oop_options(
 
     file.write("object1.\n")
     file.write("\t.obs_dir = " + ram_dir + "mpcobs\n")
-    file.write("\t.name = " + first_desig)
+    file.write("\t.name = " + first_desig + "\n")
+    if init_orb_file is not None:
+        file.write("\t.inc_files = " + init_orb_file + "\n")
 
     if second_desig is not None:
         # write second object location
