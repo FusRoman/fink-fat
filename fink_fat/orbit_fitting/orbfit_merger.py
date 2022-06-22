@@ -227,7 +227,8 @@ if __name__ == "__main__":  # pragma: no cover
     import shutil  # noqa: F401
     import filecmp  # noqa: F401
     import stat  # noqa: F401
-    import pickle  # noqa: F401
+    # import pickle  # noqa: F401
+    import pickle5 as pickle  # noqa: F401
 
     if "unittest.util" in __import__("sys").modules:
         # Show full diff in self.assertEqual.

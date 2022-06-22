@@ -33,7 +33,7 @@ jobs:
             ./fink_fat/test/orbFit_installer.sh
         - name: update pickle
           run: |
-            pip install pickle --upgrade
+            pip install pickle5
         - name: Run test suites
           run: |
             ./run_test.sh
