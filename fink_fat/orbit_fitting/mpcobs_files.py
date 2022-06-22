@@ -470,6 +470,7 @@ def write_observation_file(ram_dir, obs_df):
     True
 
     >>> shutil.rmtree("mpcobs/")
+    >>> os.rmdir("mpcobs")
     """
     obs_df = obs_df.sort_values("jd")
     ra = obs_df["ra"]
