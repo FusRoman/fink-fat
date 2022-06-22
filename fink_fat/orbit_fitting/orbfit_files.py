@@ -259,6 +259,7 @@ def write_oop(
     step_ephem=None,
     obscode=None,
     verbose=1,
+    init_orb_file=None
 ):
     """
     Write the option file of OrbFit.
@@ -304,6 +305,9 @@ def write_oop(
         1 = summary information on the solution found
         2 = summary information on all trials
         3 = debug
+    init_orb_file : string
+        path where are located a .oel file corresponding to the current trajectory.
+        Used to skip the orbit fitting.
 
     Return
     ------
@@ -338,6 +342,7 @@ def write_oop(
                 step_ephem=step_ephem,
                 obscode=obscode,
                 verbose=verbose,
+                init_orb_file=init_orb_file
             )
     else:
         with open(
@@ -357,6 +362,7 @@ def write_oop(
                 step_ephem=step_ephem,
                 obscode=obscode,
                 verbose=verbose,
+                init_orb_file=init_orb_file
             )
 
 
