@@ -235,9 +235,9 @@ def oop_options(
 
     file.write("object1.\n")
     file.write("\t.obs_dir = " + ram_dir + "mpcobs\n")
-    file.write("\t.name = " + first_desig + "\n")
+    file.write("\t.name = " + first_desig)
     if init_orb_file is not None:
-        file.write("\t.inc_files = " + init_orb_file + "\n")
+        file.write("\n\t.inc_files = " + init_orb_file + "\n")
 
     if second_desig is not None:
         # write second object location
