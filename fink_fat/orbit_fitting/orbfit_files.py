@@ -777,6 +777,13 @@ def parse_ephem_line(ephem_line):
     -------
     ephem_data : float list
         the ephemeris data contained in the line.
+
+    Examples
+    --------
+    >>> ephem_line = '14 Jun 2022 22.500 59744.937500   08 57 55.330  +03 44 56.14   6.5  3.8204  3.3166  -53.4   14.2  29.7    0.7017   -0.1361    0.7148 101.0    4.719"    2.008" 108.4'
+
+    >>> parse_ephem_line(ephem_line)
+    [2459745.4375, 134.48054166666662, 3.748927777777778, 6.5, 3.8204, 3.3166, -53.4, 14.2, 29.7, 0.7017, -0.1361, 0.7148, 101.0, 4.719, 2.008, 108.4]
     """
     replace_char = {'"': "", "'": ""}
     ephem_split = [
@@ -828,6 +835,21 @@ def read_ephem(ram_dir, first_desig):
             Vel_(deg/d):       Velocity (degree/day)
             Err1_(arcsec):     sky plane error (arcsecond)
             Err2_(arcsec):     sky plane error (arcsecond)
+
+    Examples
+    --------
+    >>> ram_dir = "fink_fat/test/ephem_test/"
+    >>> ephem_pdf = read_ephem(ram_dir, "K19V00F_test")
+    >>> ephem_pdf["trajectory_id"] = 5
+    
+    >>> res_ephem_test = pd.read_parquet("fink_fat/test/ephem_test/res_ephem3.parquet")
+    >>> assert_frame_equal(res_ephem_test, ephem_pdf)
+
+    >>> read_ephem(ram_dir, "K19V00A")
+        jd   ra  dec  mag  delta_(AU)  R_(AU)  ...  dec_(deg/d)  Vel_(deg/d)  PA_(degree)  Err1_(arcsec)  Err2_(arcsec)   PA
+    0 -1.0 -1.0 -1.0 -1.0        -1.0    -1.0  ...         -1.0         -1.0         -1.0           -1.0           -1.0 -1.0
+    <BLANKLINE>
+    [1 rows x 16 columns]
     """
     ephem_cols = [
         "jd",
