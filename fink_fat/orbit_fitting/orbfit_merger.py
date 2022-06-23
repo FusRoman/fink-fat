@@ -227,6 +227,7 @@ if __name__ == "__main__":  # pragma: no cover
     import shutil  # noqa: F401
     import filecmp  # noqa: F401
     import stat  # noqa: F401
+
     # import pickle  # noqa: F401
     import pickle5 as pickle  # noqa: F401
 
