@@ -17,6 +17,7 @@ Installation of the external dependencies: follow this [link](https://github.com
 
 ## Latest News
 
+* 06/23: Release [0.8.0](https://github.com/FusRoman/fink-fat/releases/tag/0.8.0_beta)
 * 03/22: Release [0.6.0](https://github.com/FusRoman/fink-fat/releases/tag/0.6.0_beta)
 * 11/21: Release [0.1](https://github.com/FusRoman/fink-fat/releases/tag/v0.1.0-alpha)
 
