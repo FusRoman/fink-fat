@@ -841,7 +841,7 @@ def read_ephem(ram_dir, first_desig):
     >>> ram_dir = "fink_fat/test/ephem_test/"
     >>> ephem_pdf = read_ephem(ram_dir, "K19V00F_test")
     >>> ephem_pdf["trajectory_id"] = 5
-    
+
     >>> res_ephem_test = pd.read_parquet("fink_fat/test/ephem_test/res_ephem3.parquet")
     >>> assert_frame_equal(res_ephem_test, ephem_pdf)
 
