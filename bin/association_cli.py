@@ -8,13 +8,13 @@ import shutil
 
 
 def request_fink(
-    object_class, startdate, stopdate, request_columns, verbose, nb_tries, current_tries
+    object_class, n_sso, startdate, stopdate, request_columns, verbose, nb_tries, current_tries
 ):
     r = requests.post(
         "https://fink-portal.org/api/v1/latests",
         json={
             "class": object_class,
-            "n": "200000",
+            "n": "{}".format(n_sso),
             "startdate": str(startdate),
             "stopdate": str(stopdate),
             "columns": request_columns,
@@ -52,6 +52,20 @@ def request_fink(
             )
 
 
+def get_n_sso(object_class, date):
+    r = requests.post(
+        'https://fink-portal.org/api/v1/statistics',
+        json={
+            'date': str(date),
+            'output-format': 'json'
+        }
+    )
+
+    pdf = pd.read_json(r.content)
+
+    return pdf["class:{}".format(object_class)].values[0]
+
+
 def get_last_sso_alert(object_class, date, verbose=False):
     """
     Get the alerts from Fink corresponding to the object_class for the given date.
@@ -83,8 +97,10 @@ def get_last_sso_alert(object_class, date, verbose=False):
     if object_class == "Solar System MPC":
         request_columns += ", i:ssnamenr"
 
+    n_sso = get_n_sso(object_class, date.replace("-", ""))
+
     pdf = request_fink(
-        object_class, startdate, stopdate, request_columns, verbose, 5, 0
+        object_class, n_sso, startdate, stopdate, request_columns, verbose, 5, 0
     )
 
     required_columns = [
@@ -106,6 +122,7 @@ def get_last_sso_alert(object_class, date, verbose=False):
         "i:fid": "fid",
         "i:candid": "candid",
     }
+
     if object_class == "Solar System MPC":
         required_columns.append("ssnamenr")
         translate_columns["i:ssnamenr"] = "ssnamenr"
