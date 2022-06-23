@@ -1,0 +1,33 @@
+output.
+	.elements = 'KEP'
+	.epoch = JD  2459752.00278 UTC
+init_orbdet.
+	.verbose = 1
+	.n_triplets = 10
+	.noise.ntrials = 10
+operations.
+	.init_orbdet = 2
+	.diffcor = 2
+	.ident = 2
+	.ephem = 0
+error_model.
+	.name='fcct14'
+IERS.
+	.extrapolation = .T.
+reject.
+	.rejopp = .FALSE.
+propag.
+	.iast = 17
+	.npoint = 600
+	.dmea = 0.2d0
+	.dter = 0.05d0
+	.filbe=fink_fat/test/call_orbfit/AST17
+
+output_files.
+	.elem = fink_fat/test/call_orbfit/K19V01E_K20V02K.oel
+object1.
+	.obs_dir = fink_fat/test/call_orbfit/mpcobs
+	.name = K19V01E
+object2.
+	.obs_dir = fink_fat/test/call_orbfit/mpcobs
+	.name = K20V02K
