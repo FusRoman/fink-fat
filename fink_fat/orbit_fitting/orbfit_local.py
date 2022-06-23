@@ -292,7 +292,14 @@ def compute_df_orbit_param(
     -------
     orbit_elem : dataframe
         the orbital elements computed by OrbFit for each inputs trajectories.
-
+        column description:
+            ref_epoch: referent epoch of the orbit (Julian date)
+            a: semi-major axis (Astronomical unit)
+            e: eccentricity
+            i: inclination
+            long. node: longitude of the ascending node (degree)
+            arg. peri: argument of periapsis (degree)
+            mean anomaly: (degree)
 
     Examples
     --------
