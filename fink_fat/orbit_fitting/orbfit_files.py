@@ -845,11 +845,10 @@ def read_ephem(ram_dir, first_desig):
     >>> res_ephem_test = pd.read_parquet("fink_fat/test/ephem_test/res_ephem3.parquet")
     >>> assert_frame_equal(res_ephem_test, ephem_pdf)
 
-    >>> read_ephem(ram_dir, "K19V00A")
-        jd   ra  dec  mag  delta_(AU)  R_(AU)  ...  dec_(deg/d)  Vel_(deg/d)  PA_(degree)  Err1_(arcsec)  Err2_(arcsec)   PA
-    0 -1.0 -1.0 -1.0 -1.0        -1.0    -1.0  ...         -1.0         -1.0         -1.0           -1.0           -1.0 -1.0
-    <BLANKLINE>
-    [1 rows x 16 columns]
+    >>> ephem_test = read_ephem(ram_dir, "K19V00A")
+    >>> ephem_cols = ["jd", "ra", "dec", "mag", "delta_(AU)", "R_(AU)", "SolEl_(degree)", "Phase_(degree)", "Glat_(degree)", "ra*cosDec_(deg/d)", "dec_(deg/d)", "Vel_(deg/d)", "PA_(degree)", "Err1_(arcsec)", "Err2_(arcsec)", "PA"]
+    >>> ephem_true = pd.DataFrame([list(np.ones(len(ephem_cols)) * -1.0)], columns=ephem_cols)
+    >>> assert_frame_equal(ephem_test, ephem_true)
     """
     ephem_cols = [
         "jd",
