@@ -50,6 +50,7 @@ import time as t
 import datetime
 import glob
 from astropy import units as u
+from astropy.time import Time
 from terminaltables import DoubleTable, AsciiTable, SingleTable
 from bin.offline_cli import offline_intro_reset, offline_yes_reset
 from bin.orbit_cli import (
@@ -72,7 +73,7 @@ import fink_fat
 from fink_fat.associations.inter_night_associations import night_to_night_association
 from fink_fat.others.utils import cast_obs_data
 from fink_fat.orbit_fitting.orbfit_local import compute_df_orbit_param
-from fink_fat.orbit_fitting.orbfit_merger import orbit_identification
+from fink_fat.orbit_fitting.orbfit_merger import merge_orbit
 from bin.association_cli import (
     get_data,
     get_last_sso_alert,
@@ -346,16 +347,16 @@ def main():
 
             t_before = t.time()
             # call the orbit identification that will merge trajectories
-            merge_traj_orb, merger_orb_df = orbit_identification(
+            merge_traj = merge_orbit(
                 traj_orb_df,
                 orb_df,
                 config["SOLVE_ORBIT_PARAMS"]["ram_dir"],
                 int(config["MERGE_ORBIT_PARAMS"]["neighbor"]),
                 int(config["SOLVE_ORBIT_PARAMS"]["cpu_count"]),
+                prop_epoch=(Time.now() + 2 * u.hour).jd
             )
 
-            merge_traj_orb.to_parquet(traj_orb_path)
-            merger_orb_df.to_parquet(orb_res_path)
+            merge_traj.to_parquet(os.path.join(output_path, "merge_traj.parquet"))
 
             if arguments["--verbose"]:
                 print("Merging of the trajectories done !")
