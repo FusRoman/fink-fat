@@ -65,7 +65,7 @@ def oop_options(
     step_ephem=None,
     obscode=None,
     verbose=1,
-    init_orb_file=None
+    init_orb_file=None,
 ):
     """
     Write the lines of the OrbFit options file.
@@ -271,7 +271,7 @@ def write_oop(
     step_ephem=None,
     obscode=None,
     verbose=1,
-    init_orb_file=None
+    init_orb_file=None,
 ):
     """
     Write the option file of OrbFit.
@@ -354,7 +354,7 @@ def write_oop(
                 step_ephem=step_ephem,
                 obscode=obscode,
                 verbose=verbose,
-                init_orb_file=init_orb_file
+                init_orb_file=init_orb_file,
             )
     else:
         with open(
@@ -374,7 +374,7 @@ def write_oop(
                 step_ephem=step_ephem,
                 obscode=obscode,
                 verbose=verbose,
-                init_orb_file=init_orb_file
+                init_orb_file=init_orb_file,
             )
 
 
@@ -778,15 +778,16 @@ def parse_ephem_line(ephem_line):
     ephem_data : float list
         the ephemeris data contained in the line.
     """
-    replace_char = {
-        "\"": "",
-        "'": ""
-    }
-    ephem_split = [x.strip().translate(str.maketrans(replace_char)) for x in ephem_line.split(" ") if x != '']
-    
+    replace_char = {'"': "", "'": ""}
+    ephem_split = [
+        x.strip().translate(str.maketrans(replace_char))
+        for x in ephem_line.split(" ")
+        if x != ""
+    ]
+
     # convert MJD to JD
     jd_ephem = float(ephem_split[4]) + 2400000.5
-    
+
     # convert hmsdms coord into degrees
     hms = ephem_split[5] + "h" + ephem_split[6] + "m" + ephem_split[7] + "s"
     dms = ephem_split[8] + "d" + ephem_split[9] + "m" + ephem_split[10] + "s"
@@ -794,11 +795,7 @@ def parse_ephem_line(ephem_line):
 
     # get the other data
     other_ephem_data = [float(x) for x in ephem_split[11:]]
-    return [
-        jd_ephem, 
-        equ_coord.ra.degree, 
-        equ_coord.dec.degree, 
-        ] + other_ephem_data
+    return [jd_ephem, equ_coord.ra.degree, equ_coord.dec.degree] + other_ephem_data
 
 
 def read_ephem(ram_dir, first_desig):
@@ -833,27 +830,29 @@ def read_ephem(ram_dir, first_desig):
             Err2_(arcsec):     sky plane error (arcsecond)
     """
     ephem_cols = [
-            "jd",
-            "ra",
-            "dec",
-            "mag",
-            "delta_(AU)",
-            "R_(AU)",
-            "SolEl_(degree)",
-            "Phase_(degree)",
-            "Glat_(degree)",
-            "ra*cosDec_(deg/d)",
-            "dec_(deg/d)",
-            "Vel_(deg/d)",
-            "PA_(degree)",
-            "Err1_(arcsec)",
-            "Err2_(arcsec)",
-            "PA"
+        "jd",
+        "ra",
+        "dec",
+        "mag",
+        "delta_(AU)",
+        "R_(AU)",
+        "SolEl_(degree)",
+        "Phase_(degree)",
+        "Glat_(degree)",
+        "ra*cosDec_(deg/d)",
+        "dec_(deg/d)",
+        "Vel_(deg/d)",
+        "PA_(degree)",
+        "Err1_(arcsec)",
+        "Err2_(arcsec)",
+        "PA",
     ]
     try:
         with open(ram_dir + first_desig + ".oep") as file:
             lines = file.readlines()
-            return pd.DataFrame([parse_ephem_line(l) for l in lines[9:]], columns=ephem_cols)
+            return pd.DataFrame(
+                [parse_ephem_line(line) for line in lines[9:]], columns=ephem_cols
+            )
     except FileNotFoundError:
         return pd.DataFrame([list(np.ones(len(ephem_cols)) * -1.0)], columns=ephem_cols)
 

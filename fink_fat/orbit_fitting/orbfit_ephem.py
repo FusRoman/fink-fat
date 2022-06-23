@@ -12,6 +12,7 @@ import fink_fat.orbit_fitting.orbfit_files as of
 import fink_fat.orbit_fitting.mpcobs_files as mf
 import fink_fat.orbit_fitting.orbfit_local as ol
 
+
 def cache_orbit(traj_id, cache_path):
     """
     Cache the .oel file into the cache_path folder to avoid the orbit fitting for the ephemeries.
@@ -20,7 +21,7 @@ def cache_orbit(traj_id, cache_path):
     ----------
     traj_id : integer
         the trajectories identifier
-    cache_path : string 
+    cache_path : string
         the cache folder where will be stored the .oel file, must finish with a '/'.
 
     Returns
@@ -34,7 +35,7 @@ def cache_orbit(traj_id, cache_path):
     >>> cache_orbit(0, "cache_folder/")
 
     >>> os.rmdir("cache_folder")
-    
+
     >>> os.mkdir("cache_folder")
     >>> open("cache_folder/orbit_0.oel", 'w').close()
     >>> cache_orbit(0, "cache_folder/")
@@ -51,13 +52,13 @@ def cache_orbit(traj_id, cache_path):
         else:
             # create the cache folder if not exists.
             os.mkdir(cache_path)
-    
+
     return init_orbit
 
 
 def trajectory_ephemeris(
-    observation, 
-    traj_id, 
+    observation,
+    traj_id,
     ram_dir,
     start_ephem,
     end_ephem=None,
@@ -67,8 +68,8 @@ def trajectory_ephemeris(
     n_triplets=10,
     noise_ntrials=10,
     verbose=1,
-    cache_path=None
-    ):
+    cache_path=None,
+):
     """
     Compute the ephemeris of one trajectory. Can recompute the orbit or read an existing orbit file (.oel).
 
@@ -198,7 +199,7 @@ def trajectory_ephemeris(
             end_ephem="JD  {} UTC".format(end_ephem),
             step_ephem=dt_ephem,
             obscode=obs_code,
-            init_orb_file=init_orbit
+            init_orb_file=init_orbit,
         )
     else:
         of.write_oop(
@@ -213,7 +214,7 @@ def trajectory_ephemeris(
             end_ephem="JD  {} UTC".format(end_ephem),
             step_ephem=dt_ephem,
             obscode=obs_code,
-            init_orb_file=init_orbit
+            init_orb_file=init_orbit,
         )
 
     try:
@@ -237,8 +238,13 @@ def trajectory_ephemeris(
 
     if cache_path is not None:
         # move the .oel file into the cache folder
-        if (not os.path.exists(cache_path + "orbit_{}.oel".format(traj_id))) and os.path.exists(ram_dir + prov_desig + ".oel"):
-                shutil.move(ram_dir + prov_desig + ".oel", cache_path + "orbit_{}.oel".format(traj_id))
+        if (
+            not os.path.exists(cache_path + "orbit_{}.oel".format(traj_id))
+        ) and os.path.exists(ram_dir + prov_desig + ".oel"):
+            shutil.move(
+                ram_dir + prov_desig + ".oel",
+                cache_path + "orbit_{}.oel".format(traj_id),
+            )
 
     try:
         of.obs_clean(ram_dir, prov_desig)
@@ -249,21 +255,21 @@ def trajectory_ephemeris(
         print()
         print(df_one_traj)
 
-    orb_columns=[
-                "ref_epoch",
-                "a",
-                "e",
-                "i",
-                "long. node",
-                "arg. peric",
-                "mean anomaly",
-                "rms_a",
-                "rms_e",
-                "rms_i",
-                "rms_long. node",
-                "rms_arg. peric",
-                "rms_mean anomaly"
-            ]
+    orb_columns = [
+        "ref_epoch",
+        "a",
+        "e",
+        "i",
+        "long. node",
+        "arg. peric",
+        "mean anomaly",
+        "rms_a",
+        "rms_e",
+        "rms_i",
+        "rms_long. node",
+        "rms_arg. peric",
+        "rms_mean anomaly",
+    ]
 
     res_orbit = pd.DataFrame([res_orbit], columns=orb_columns)
     res_orbit["trajectory_id"] = traj_id
@@ -272,8 +278,8 @@ def trajectory_ephemeris(
 
 
 def aux_ephem(
-    observation, 
-    chunk, 
+    observation,
+    chunk,
     ram_dir,
     start_ephem,
     end_ephem=None,
@@ -283,8 +289,8 @@ def aux_ephem(
     n_triplets=10,
     noise_ntrials=10,
     verbose=1,
-    cache_path=None
-    ):
+    cache_path=None,
+):
     """
     Auxiliary ephemeris function that compute ephemeris for a set of trajectory.
 
@@ -347,17 +353,17 @@ def aux_ephem(
     >>> res_orb_test = pd.read_parquet("fink_fat/test/ephem_test/res_multiple_orb.parquet")
 
     >>> assert_frame_equal(res_ephem_test, res_ephem)
-    >>> assert_frame_equal(res_orb_test, res_orb)   
+    >>> assert_frame_equal(res_orb_test, res_orb)
 
-    >>> of.final_clean(ram_dir) 
+    >>> of.final_clean(ram_dir)
     >>> os.rmdir(ram_dir + "mpcobs")
     """
     res_ephem = []
     res_orb = []
     for tr_id in chunk:
         ephem, orb = trajectory_ephemeris(
-            observation, 
-            tr_id, 
+            observation,
+            tr_id,
             ram_dir,
             start_ephem,
             end_ephem,
@@ -367,11 +373,12 @@ def aux_ephem(
             n_triplets,
             noise_ntrials,
             verbose,
-            cache_path
+            cache_path,
         )
         res_ephem.append(ephem)
         res_orb.append(orb)
     return pd.concat(res_ephem), pd.concat(res_orb)
+
 
 def parallel_ephem(
     observation,
@@ -385,7 +392,8 @@ def parallel_ephem(
     n_triplets=10,
     noise_ntrials=10,
     verbose=1,
-    cache_path=None):
+    cache_path=None,
+):
     """
      Compute ephemeris for a set of trajectory in parallel.
 
@@ -475,7 +483,7 @@ def parallel_ephem(
             n_triplets,
             noise_ntrials,
             verbose,
-            cache_path
+            cache_path,
         )
         for tr_chunk, chunk_dir in zip(trajectory_id_chunks, chunk_ramdir)
         if len(tr_chunk) > 0
@@ -488,7 +496,7 @@ def parallel_ephem(
     for ephem, orb in res_parallel:
         res_ephem.append(ephem)
         res_orb.append(orb)
-        
+
     res_ephem, res_orb = pd.concat(res_ephem), pd.concat(res_orb)
 
     pool.close()
@@ -507,7 +515,6 @@ if __name__ == "__main__":  # pragma: no cover
     from pandas.testing import assert_frame_equal  # noqa: F401
     import fink_fat.test.test_sample as ts  # noqa: F401
     from unittest import TestCase  # noqa: F401
-    import shutil  # noqa: F401
     import filecmp  # noqa: F401
     import stat  # noqa: F401
 

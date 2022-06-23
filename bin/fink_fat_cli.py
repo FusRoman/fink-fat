@@ -353,7 +353,7 @@ def main():
                 config["SOLVE_ORBIT_PARAMS"]["ram_dir"],
                 int(config["MERGE_ORBIT_PARAMS"]["neighbor"]),
                 int(config["SOLVE_ORBIT_PARAMS"]["cpu_count"]),
-                prop_epoch=(Time.now() + 2 * u.hour).jd
+                prop_epoch=(Time.now() + 2 * u.hour).jd,
             )
 
             merge_traj.to_parquet(os.path.join(output_path, "merge_traj.parquet"))
