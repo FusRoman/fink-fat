@@ -21,7 +21,11 @@ def init_cli(arguments):
     config = configparser.ConfigParser()
 
     if arguments["--config"]:
-        config.read(arguments["--config"])
+        if os.path.exists(arguments["--config"]):
+            config.read(arguments["--config"])
+        else:
+            print("config file does not exist !!")
+            exit(1)
     else:
         config_path = os.path.join(
             os.path.dirname(fink_fat.__file__), "data", "fink_fat.conf"

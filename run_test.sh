@@ -66,6 +66,12 @@ coverage run \
   --source=${ROOTPATH} \
   --rcfile ${ROOTPATH}/.coveragerc fink_fat/test/continuous_integration.py
 
+echo fink_fat/test/cli_test/test_cli.py
+coverage run \
+  --append \
+  --source=${ROOTPATH} \
+  --rcfile ${ROOTPATH}/.coveragerc fink_fat/test/cli_test/test_cli.py
+
 unset COVERAGE_PROCESS_START
 
 coverage report -m

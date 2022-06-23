@@ -84,10 +84,24 @@ from bin.association_cli import (
 from bin.stat_cli import print_assoc_table, describe
 
 
-def main():
 
-    # parse the command line and return options provided by the user.
-    arguments = docopt(__doc__, version=fink_fat.__version__)
+def fink_fat_main(arguments):
+    """
+    Main function of fink_fat. Execute a process according to the arguments given by the user.
+
+    Parameters
+    ----------
+    arguments : dictionnary
+        arguments parse by docopt from the command line
+
+    Returns
+    -------
+    None
+
+    Examples
+    --------
+
+    """
 
     config, output_path = init_cli(arguments)
 
@@ -1192,3 +1206,18 @@ def main():
 
     else:
         exit()
+
+
+def main():
+
+    # parse the command line and return options provided by the user.
+    arguments = docopt(__doc__, version=fink_fat.__version__)
+    fink_fat_main(arguments)
+
+
+def main_test(argv):
+    print(argv)
+    # parse the command line and return options provided by the user.
+    arguments = docopt(__doc__, argv=argv, version=fink_fat.__version__)
+
+    fink_fat_main(arguments)
