@@ -39,7 +39,9 @@ def string_to_bool(bool_str):
     elif bool_str.casefold() == "true".casefold():
         return True
     else:  # pragma: no cover
-        raise ValueError("the parameter is not a boolean string, should be 'true' or 'false'")
+        raise ValueError(
+            "the parameter is not a boolean string, should be 'true' or 'false'"
+        )
 
 
 def init_cli(arguments):
@@ -63,7 +65,7 @@ def init_cli(arguments):
     >>> arguments = {
     ...    "--config" : "fink_fat/test/cli_test/test.conf"
     ... }
-    
+
     >>> config, output_path = init_cli(arguments)
 
     >>> config.sections()
@@ -87,7 +89,11 @@ def init_cli(arguments):
         if os.path.exists(arguments["--config"]):
             config.read(arguments["--config"])
         else:  # pragma: no cover
-            print("config file does not exist from this path: {} !!".format(arguments["--config"]))
+            print(
+                "config file does not exist from this path: {} !!".format(
+                    arguments["--config"]
+                )
+            )
             exit(1)
     else:
         config_path = os.path.join(
@@ -120,7 +126,7 @@ def get_class(arguments, path):
     path : string
         path where to store the fink_fat product corresponding to the object class.
     object_class : string
-        contains 'Solar System MPC' if the argument is 'mpc' 
+        contains 'Solar System MPC' if the argument is 'mpc'
             or 'Solar System candidate' if the argument is 'candidates'.
 
     Examples
@@ -131,7 +137,7 @@ def get_class(arguments, path):
     ... }
     >>> config, output_path = init_cli(arguments)
     >>> path, object_class = get_class(arguments, output_path)
-    
+
     >>> path
     'fink_fat/test/cli_test/fink_fat_out/mpc/'
     >>> object_class
@@ -164,7 +170,11 @@ def get_class(arguments, path):
             os.mkdir(path)
         object_class = "Solar System candidate"
     else:  # pragma: no cover
-        raise ValueError("Class does not correspond to a sso class from fink, got {}".format(arguments["mpc"]))
+        raise ValueError(
+            "Class does not correspond to a sso class from fink, got {}".format(
+                arguments["mpc"]
+            )
+        )
 
     return path, object_class
 
@@ -192,7 +202,7 @@ def yes_or_no(
     Returns
     -------
     None
-    
+
     """
 
     intro_function(*intro_args)
@@ -404,7 +414,6 @@ if __name__ == "__main__":  # pragma: no cover
     import fink_fat.test.test_sample as ts  # noqa: F401
     from unittest import TestCase  # noqa: F401
     import shutil  # noqa: F401
-
 
     if "unittest.util" in __import__("sys").modules:
         # Show full diff in self.assertEqual.

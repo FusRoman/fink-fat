@@ -8,14 +8,21 @@ import shutil
 
 
 def request_fink(
-    object_class, n_sso, startdate, stopdate, request_columns, verbose, nb_tries, current_tries
+    object_class,
+    n_sso,
+    startdate,
+    stopdate,
+    request_columns,
+    verbose,
+    nb_tries,
+    current_tries,
 ):
     """
     Get the alerts corresponding to the object_class from Fink with the API.
 
     Parameters
     ----------
-    object_class : string 
+    object_class : string
         should be either 'Solar System MPC' or 'Solar System candidates'
     n_sso : integer
         number of alerts to retrieve
@@ -110,7 +117,7 @@ def get_n_sso(object_class, date):
 
     Parameters
     ----------
-    object_class : string 
+    object_class : string
         should be either 'Solar System MPC' or 'Solar System candidates'
     startdate : datetime
         start date of the request
@@ -135,11 +142,8 @@ def get_n_sso(object_class, date):
     0
     """
     r = requests.post(
-        'https://fink-portal.org/api/v1/statistics',
-        json={
-            'date': str(date),
-            'output-format': 'json'
-        }
+        "https://fink-portal.org/api/v1/statistics",
+        json={"date": str(date), "output-format": "json"},
     )
 
     pdf = pd.read_json(r.content)
@@ -166,7 +170,7 @@ def get_last_sso_alert(object_class, date, verbose=False):
     pdf : pd.DataFrame
         the alerts from Fink with the following columns:
             ra, dec, jd, nid, fid, dcmag, dcmag_err, candid, not_updated
-    
+
     Examples
     --------
     >>> get_last_sso_alert(
@@ -218,7 +222,7 @@ def get_last_sso_alert(object_class, date, verbose=False):
         "dcmag_err",
         "candid",
         "not_updated",
-        "last_assoc_date"
+        "last_assoc_date",
     ]
     translate_columns = {
         "i:ra": "ra",
@@ -317,8 +321,8 @@ def get_data(tr_df_path, obs_df_path, orb_res_path):
     --------
     >>> data_path = "fink_fat/test/cli_test/fink_fat_out_test/mpc/"
     >>> tr_df, old_obs_df, last_tr_id = get_data(
-    ... data_path + "trajectory_df.parquet", 
-    ... data_path + "old_obs.parquet", 
+    ... data_path + "trajectory_df.parquet",
+    ... data_path + "old_obs.parquet",
     ... data_path + "orbital.parquet"
     ... )
 
@@ -330,8 +334,8 @@ def get_data(tr_df_path, obs_df_path, orb_res_path):
     1893
 
     >>> tr_df, old_obs_df, last_tr_id = get_data(
-    ... data_path + "trajectory_df.parquet", 
-    ... data_path + "old_obs.parquet", 
+    ... data_path + "trajectory_df.parquet",
+    ... data_path + "old_obs.parquet",
     ... data_path + "toto.parquet"
     ... )
 
@@ -352,7 +356,7 @@ def get_data(tr_df_path, obs_df_path, orb_res_path):
         "dcmag_err",
         "candid",
         "not_updated",
-        "last_assoc_date"
+        "last_assoc_date",
     ]
     # last_nid = next_nid = new_alerts["nid"][0]
     trajectory_df = pd.DataFrame(columns=tr_columns + ["trajectory_id"])
@@ -401,10 +405,6 @@ if __name__ == "__main__":  # pragma: no cover
     from pandas.testing import assert_frame_equal  # noqa: F401
     import fink_fat.test.test_sample as ts  # noqa: F401
     from unittest import TestCase  # noqa: F401
-    import shutil  # noqa: F401
-    import pandas as pd  # noqa: F401
-    import fink_fat.test.test_sample as ts  # noqa: F401
-
 
     if "unittest.util" in __import__("sys").modules:
         # Show full diff in self.assertEqual.

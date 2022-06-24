@@ -94,7 +94,7 @@ def compute_residue(df):
     ... "i_y": [2.8, 17.9],
     ... "Node": [36.4, 14.7],
     ... "Peri": [56.8, 78.7],
-    ... "M": [29.7, 312.3],  
+    ... "M": [29.7, 312.3],
     ... })
 
     >>> residue = compute_residue(test_residue)
@@ -242,7 +242,7 @@ def assoc_stats(traj):
 def print_assoc_table(traj_df):  # pragma: no cover
     """
     Print the table that describe the associations of the trajectories.
-    
+
     Parameters
     ----------
     traj_df : dataframe
@@ -352,8 +352,6 @@ if __name__ == "__main__":  # pragma: no cover
     from unittest import TestCase  # noqa: F401
     import shutil  # noqa: F401
     import pandas as pd  # noqa: F401
-    import fink_fat.test.test_sample as ts  # noqa: F401
-
 
     if "unittest.util" in __import__("sys").modules:
         # Show full diff in self.assertEqual.

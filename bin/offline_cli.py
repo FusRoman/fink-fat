@@ -9,7 +9,9 @@ def offline_intro_reset():  # pragma: no cover
     )
 
 
-def offline_yes_reset(arguments, tr_df_path, obs_df_path, orb_res_path, traj_orb_path):  # pragma: no cover
+def offline_yes_reset(
+    arguments, tr_df_path, obs_df_path, orb_res_path, traj_orb_path
+):  # pragma: no cover
     # fmt: off
     test = os.path.exists(tr_df_path) and os.path.exists(obs_df_path) and os.path.exists(orb_res_path) and os.path.exists(traj_orb_path)
     # fmt: on

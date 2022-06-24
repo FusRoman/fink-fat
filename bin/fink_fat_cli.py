@@ -84,7 +84,6 @@ from bin.association_cli import (
 from bin.stat_cli import print_assoc_table, describe
 
 
-
 def fink_fat_main(arguments):
     """
     Main function of fink_fat. Execute a process according to the arguments given by the user.
@@ -136,14 +135,12 @@ def fink_fat_main(arguments):
 
         if len(trajectory_df) > 0:
             last_tr_date = pd.to_datetime(
-                trajectory_df["last_assoc_date"], 
-                format="%Y-%m-%d"
-                )
+                trajectory_df["last_assoc_date"], format="%Y-%m-%d"
+            )
 
             last_obs_date = pd.to_datetime(
-                old_obs_df["last_assoc_date"], 
-                format="%Y-%m-%d"
-                )
+                old_obs_df["last_assoc_date"], format="%Y-%m-%d"
+            )
 
             last_request_date = max(last_tr_date.max(), last_obs_date.max())
             current_date = datetime.datetime.strptime(last_night, "%Y-%m-%d")
@@ -172,7 +169,7 @@ def fink_fat_main(arguments):
         )
 
         last_nid = next_nid = new_alerts["nid"][0]
-        if len(trajectory_df) > 0 and len(old_obs_df)> 0:
+        if len(trajectory_df) > 0 and len(old_obs_df) > 0:
             last_nid = np.max([np.max(trajectory_df["nid"]), np.max(old_obs_df["nid"])])
 
         if arguments["--verbose"]:
@@ -963,7 +960,7 @@ def fink_fat_main(arguments):
             "not_updated",
             "ssnamenr",
             "trajectory_id",
-            "last_assoc_date"
+            "last_assoc_date",
         ]
         trajectory_df = pd.DataFrame(columns=trajectory_columns)
         old_obs_df = pd.DataFrame(columns=trajectory_columns)
@@ -991,14 +988,12 @@ def fink_fat_main(arguments):
 
             # first case: trajectories already exists: begin the offline mode with the last associations date + 1
             last_tr_date = pd.to_datetime(
-                trajectory_df["last_assoc_date"], 
-                format="%Y-%m-%d"
-                )
+                trajectory_df["last_assoc_date"], format="%Y-%m-%d"
+            )
 
             last_obs_date = pd.to_datetime(
-                old_obs_df["last_assoc_date"], 
-                format="%Y-%m-%d"
-                )
+                old_obs_df["last_assoc_date"], format="%Y-%m-%d"
+            )
 
             current_date = max(last_tr_date.max(), last_obs_date.max())
             current_date += delta_day
