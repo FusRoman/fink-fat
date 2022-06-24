@@ -6,14 +6,14 @@ import pandas as pd
 import fink_fat
 
 
-def intro_reset_orbit():
+def intro_reset_orbit():  # pragma: no cover
     print("WARNING !!!")
     print(
         "you will loose the previously computed orbital elements and all the associated observations, Continue ? [Y/n]"
     )
 
 
-def yes_orbit_reset(arguments, orb_res_path, traj_orb_path):
+def yes_orbit_reset(arguments, orb_res_path, traj_orb_path):  # pragma: no cover
     if os.path.exists(orb_res_path) and os.path.exists(traj_orb_path):
         print("Removing files :\n\t{}\n\t{}".format(orb_res_path, traj_orb_path))
         try:
@@ -27,7 +27,7 @@ def yes_orbit_reset(arguments, orb_res_path, traj_orb_path):
         print("File with orbital elements not exists.")
 
 
-def get_orbital_data(config, tr_df_path):
+def get_orbital_data(config, tr_df_path):  # pragma: no cover
     # test if the trajectory_df exist in the output directory.
     if os.path.exists(tr_df_path):
         trajectory_df = pd.read_parquet(tr_df_path)
@@ -49,7 +49,7 @@ def get_orbital_data(config, tr_df_path):
     return traj_to_orbital, traj_no_orb
 
 
-def cluster_mode(config, traj_to_orbital):
+def cluster_mode(config, traj_to_orbital):  # pragma: no cover
     traj_to_orbital.to_parquet("tmp_traj.parquet")
 
     master_manager = config["SOLVE_ORBIT_PARAMS"]["manager"]

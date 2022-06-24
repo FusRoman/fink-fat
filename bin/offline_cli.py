@@ -2,14 +2,14 @@ import os
 import shutil
 
 
-def offline_intro_reset():
+def offline_intro_reset():  # pragma: no cover
     print("WARNING !!!")
     print(
         "you will loose all the data from the previous associations including the orbits, Continue ? [Y/n]"
     )
 
 
-def offline_yes_reset(arguments, tr_df_path, obs_df_path, orb_res_path, traj_orb_path):
+def offline_yes_reset(arguments, tr_df_path, obs_df_path, orb_res_path, traj_orb_path):  # pragma: no cover
     # fmt: off
     test = os.path.exists(tr_df_path) and os.path.exists(obs_df_path) and os.path.exists(orb_res_path) and os.path.exists(traj_orb_path)
     # fmt: on

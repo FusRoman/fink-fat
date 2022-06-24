@@ -10,6 +10,58 @@ import shutil
 def request_fink(
     object_class, n_sso, startdate, stopdate, request_columns, verbose, nb_tries, current_tries
 ):
+    """
+    Get the alerts corresponding to the object_class from Fink with the API.
+
+    Parameters
+    ----------
+    object_class : string 
+        should be either 'Solar System MPC' or 'Solar System candidates'
+    n_sso : integer
+        number of alerts to retrieve
+    startdate : datetime
+        start date of the request
+    stopdate : datetime
+        stop date of the request
+    request_columns : string
+        the request will return only the columns specified in this string.
+        The columns name are comma-separated.
+    verbose : boolean
+        print some informations during the process
+    nb_tries : integer
+        the maximum number of trials if the request failed.
+    current_tries : integer
+        the current number of trials / the number of failed requests.
+
+    Returns
+    -------
+    alert_pdf : dataframe
+        the alerts get from fink for the corresponding interval of time.
+
+    Examples
+    --------
+    >>> request_fink(
+    ... 'Solar System MPC',
+    ... 10,
+    ... datetime.datetime.strptime("2022-06-22", "%Y-%m-%d"),
+    ... datetime.datetime.strptime("2022-06-23", "%Y-%m-%d"),
+    ... "i:ra, i:dec, i:jd",
+    ... False,
+    ... 1,
+    ... 0
+    ... )
+           i:dec          i:jd        i:ra
+    0  12.543168  2.459753e+06  356.113631
+    1  12.907248  2.459753e+06  356.054645
+    2  14.686620  2.459753e+06  353.888462
+    3  15.305179  2.459753e+06  354.357292
+    4  10.165192  2.459753e+06  353.209892
+    5  10.296633  2.459753e+06  353.197138
+    6  10.504157  2.459753e+06  353.403702
+    7  10.305569  2.459753e+06  358.151255
+    8  10.270319  2.459753e+06  357.861407
+    9  10.307019  2.459753e+06  358.332623
+    """
     r = requests.post(
         "https://fink-portal.org/api/v1/latests",
         json={
@@ -23,7 +75,7 @@ def request_fink(
 
     try:
         return pd.read_json(r.content)
-    except ValueError:
+    except ValueError:  # pragma: no cover
         if current_tries == nb_tries:
             return pd.DataFrame(
                 columns=[
@@ -37,7 +89,7 @@ def request_fink(
                     "not_updated",
                 ]
             )
-        else:
+        else:  # pragma: no cover
             if verbose:
                 print("error when trying to get fink alerts, try again !")
 
@@ -53,6 +105,35 @@ def request_fink(
 
 
 def get_n_sso(object_class, date):
+    """
+    Get the exact number of object for the given date by using the fink statistics API.
+
+    Parameters
+    ----------
+    object_class : string 
+        should be either 'Solar System MPC' or 'Solar System candidates'
+    startdate : datetime
+        start date of the request
+
+    Returns
+    -------
+    n_sso : integer
+        the number of alerts for the corresponding class and date.
+
+    Examples
+    --------
+    >>> get_n_sso(
+    ... 'Solar System MPC',
+    ... "2022-06-22".replace("-", ""),
+    ... )
+    10536
+
+    >>> get_n_sso(
+    ... 'Solar System MPC',
+    ... "2020-05-21".replace("-", ""),
+    ... )
+    0
+    """
     r = requests.post(
         'https://fink-portal.org/api/v1/statistics',
         json={
@@ -62,6 +143,9 @@ def get_n_sso(object_class, date):
     )
 
     pdf = pd.read_json(r.content)
+
+    if len(pdf) == 0:
+        return 0
 
     return pdf["class:{}".format(object_class)].values[0]
 
@@ -82,11 +166,32 @@ def get_last_sso_alert(object_class, date, verbose=False):
     pdf : pd.DataFrame
         the alerts from Fink with the following columns:
             ra, dec, jd, nid, fid, dcmag, dcmag_err, candid, not_updated
+    
+    Examples
+    --------
+    >>> get_last_sso_alert(
+    ... 'Solar System candidate',
+    ... '2020-06-29'
+    ... )
+               ra        dec            jd   nid  fid      dcmag  dcmag_err               candid  not_updated last_assoc_date
+    0  168.746104  72.323873  2.459030e+06  1275    2  26.163538   0.164791  1275226845215010004         True      2020-06-29
+    1  243.163542  14.826109  2.459030e+06  1275    2  26.253582   0.167772  1275214395315010002         True      2020-06-29
+    2  233.435624   7.630151  2.459030e+06  1275    2  26.224300   0.175327  1275212975315010004         True      2020-06-29
+    3  230.724063 -20.641448  2.459030e+06  1275    2  17.977817   0.116643  1275211571415015010         True      2020-06-29
+    4  230.728459 -20.640919  2.459030e+06  1275    2  18.477150   0.122778  1275211571415015011         True      2020-06-29
+
+    >>> get_last_sso_alert(
+    ... 'Solar System candidate',
+    ... '2020-05-21'
+    ... )
+    Empty DataFrame
+    Columns: [ra, dec, jd, nid, fid, dcmag, dcmag_err, candid, not_updated, last_assoc_date]
+    Index: []
     """
     startdate = datetime.datetime.strptime(date, "%Y-%m-%d")
     stopdate = startdate + datetime.timedelta(days=1)
 
-    if verbose:
+    if verbose:  # pragma: no cover
         print(
             "Query fink broker to get sso alerts for the night between {} and {}".format(
                 startdate.strftime("%Y-%m-%d"), stopdate.strftime("%Y-%m-%d")
@@ -94,7 +199,7 @@ def get_last_sso_alert(object_class, date, verbose=False):
         )
 
     request_columns = "i:ra, i:dec, i:jd, i:nid, i:fid, i:candid, i:magpsf, i:sigmapsf, i:magnr, i:sigmagnr, i:magzpsci, i:isdiffpos"
-    if object_class == "Solar System MPC":
+    if object_class == "Solar System MPC":  # pragma: no cover
         request_columns += ", i:ssnamenr"
 
     n_sso = get_n_sso(object_class, date.replace("-", ""))
@@ -113,6 +218,7 @@ def get_last_sso_alert(object_class, date, verbose=False):
         "dcmag_err",
         "candid",
         "not_updated",
+        "last_assoc_date"
     ]
     translate_columns = {
         "i:ra": "ra",
@@ -123,7 +229,7 @@ def get_last_sso_alert(object_class, date, verbose=False):
         "i:candid": "candid",
     }
 
-    if object_class == "Solar System MPC":
+    if object_class == "Solar System MPC":  # pragma: no cover
         required_columns.append("ssnamenr")
         translate_columns["i:ssnamenr"] = "ssnamenr"
 
@@ -151,17 +257,18 @@ def get_last_sso_alert(object_class, date, verbose=False):
         return pd.DataFrame(columns=required_columns)
 
     pdf.insert(len(pdf.columns), "not_updated", np.ones(len(pdf), dtype=np.bool_))
+    pdf.insert(len(pdf.columns), "last_assoc_date", date)
     return pdf[required_columns]
 
 
-def intro_reset():
+def intro_reset():  # pragma: no cover
     print("WARNING !!!")
     print(
         "you will loose the trajectory done by previous association, Continue ? [Y/n]"
     )
 
 
-def yes_reset(arguments, tr_df_path, obs_df_path):
+def yes_reset(arguments, tr_df_path, obs_df_path):  # pragma: no cover
     if os.path.exists(tr_df_path) and os.path.exists(obs_df_path):
         print("Removing files :\n\t{}\n\t{}".format(tr_df_path, obs_df_path))
         try:
@@ -180,14 +287,76 @@ def yes_reset(arguments, tr_df_path, obs_df_path):
         shutil.rmtree(save_path)
 
 
-def no_reset():
+def no_reset():  # pragma: no cover
     print("Abort reset.")
 
 
-def get_data(new_alerts, tr_df_path, obs_df_path, orb_res_path):
-    last_nid = next_nid = new_alerts["nid"][0]
-    trajectory_df = pd.DataFrame(columns=list(new_alerts.columns) + ["trajectory_id"])
-    old_obs_df = pd.DataFrame(columns=new_alerts.columns)
+def get_data(tr_df_path, obs_df_path, orb_res_path):
+    """
+    Load the trajectory and old observations save by the previous call of fink_fat
+
+    Parameters
+    ----------
+    tr_df_path : string
+        path where are saved the trajectory observations
+    obs_df_path : string
+        path where are saved the old observations
+    orb_res_path : string
+        path where are saved the orbital parameters
+
+    Returns
+    -------
+    trajectory_df : dataframe
+        the trajectory observations
+    old_obs_df : dataframe
+        the old observations
+    last_trajectory_id : integer
+        the last trajectory identifier given to a trajectory.
+
+    Examples
+    --------
+    >>> data_path = "fink_fat/test/cli_test/fink_fat_out_test/mpc/"
+    >>> tr_df, old_obs_df, last_tr_id = get_data(
+    ... data_path + "trajectory_df.parquet", 
+    ... data_path + "old_obs.parquet", 
+    ... data_path + "orbital.parquet"
+    ... )
+
+    >>> len(tr_df)
+    4002
+    >>> len(old_obs_df)
+    6357
+    >>> last_tr_id
+    1893
+
+    >>> tr_df, old_obs_df, last_tr_id = get_data(
+    ... data_path + "trajectory_df.parquet", 
+    ... data_path + "old_obs.parquet", 
+    ... data_path + "toto.parquet"
+    ... )
+
+    >>> len(tr_df)
+    4002
+    >>> len(old_obs_df)
+    6357
+    >>> last_tr_id
+    1893
+    """
+    tr_columns = [
+        "ra",
+        "dec",
+        "jd",
+        "nid",
+        "fid",
+        "dcmag",
+        "dcmag_err",
+        "candid",
+        "not_updated",
+        "last_assoc_date"
+    ]
+    # last_nid = next_nid = new_alerts["nid"][0]
+    trajectory_df = pd.DataFrame(columns=tr_columns + ["trajectory_id"])
+    old_obs_df = pd.DataFrame(columns=tr_columns)
 
     last_trajectory_id = 0
 
@@ -196,24 +365,24 @@ def get_data(new_alerts, tr_df_path, obs_df_path, orb_res_path):
 
         trajectory_df = pd.read_parquet(tr_df_path)
         old_obs_df = pd.read_parquet(obs_df_path)
-        last_nid = np.max([np.max(trajectory_df["nid"]), np.max(old_obs_df["nid"])])
-        if last_nid == next_nid:
-            print()
-            print("ERROR !!!")
-            print("Association already done for this night.")
-            print("Wait a next observation night to do new association")
-            print("or run 'fink_fat solve_orbit' to get orbital_elements.")
-            exit()
-        if last_nid > next_nid:
-            print()
-            print("ERROR !!!")
-            print(
-                "Query alerts from a night before the last night in the recorded trajectory/old_observations."
-            )
-            print(
-                "Maybe try with a more recent night or reset the associations with 'fink_fat association -r'"
-            )
-            exit()
+        # last_nid = np.max([np.max(trajectory_df["nid"]), np.max(old_obs_df["nid"])])
+        # if last_nid == next_nid:
+        #     print()
+        #     print("ERROR !!!")
+        #     print("Association already done for this night.")
+        #     print("Wait a next observation night to do new association")
+        #     print("or run 'fink_fat solve_orbit' to get orbital_elements.")
+        #     exit()
+        # if last_nid > next_nid:
+        #     print()
+        #     print("ERROR !!!")
+        #     print(
+        #         "Query alerts from a night before the last night in the recorded trajectory/old_observations."
+        #     )
+        #     print(
+        #         "Maybe try with a more recent night or reset the associations with 'fink_fat association -r'"
+        #     )
+        #     exit()
 
         if os.path.exists(orb_res_path):
             orb_cand = pd.read_parquet(orb_res_path)
@@ -223,4 +392,22 @@ def get_data(new_alerts, tr_df_path, obs_df_path, orb_res_path):
         else:
             last_trajectory_id = np.max(trajectory_df["trajectory_id"])
 
-    return trajectory_df, old_obs_df, last_nid, next_nid, last_trajectory_id
+    return trajectory_df, old_obs_df, last_trajectory_id
+
+
+if __name__ == "__main__":  # pragma: no cover
+    import sys
+    import doctest
+    from pandas.testing import assert_frame_equal  # noqa: F401
+    import fink_fat.test.test_sample as ts  # noqa: F401
+    from unittest import TestCase  # noqa: F401
+    import shutil  # noqa: F401
+    import pandas as pd  # noqa: F401
+    import fink_fat.test.test_sample as ts  # noqa: F401
+
+
+    if "unittest.util" in __import__("sys").modules:
+        # Show full diff in self.assertEqual.
+        __import__("sys").modules["unittest.util"]._MAX_LENGTH = 999999999
+
+    sys.exit(doctest.testmod()[0])

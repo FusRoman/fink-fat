@@ -9,22 +9,85 @@ import fink_fat
 
 
 def string_to_bool(bool_str):
+    """
+    Convert a string to a boolean.
+
+    Note: Raise ValueError exception if the parameter is not 'true' or 'false'.
+
+    Parameters
+    ----------
+    bool_str : string
+        a string containing either 'true' or 'false'
+
+    Returns
+    bool_results : boolean
+        True is bool_str is 'true' else 'false'
+
+    Examples
+    --------
+    >>> string_to_bool("true")
+    True
+    >>> string_to_bool("false")
+    False
+    >>> string_to_bool("tRuE")
+    True
+    >>> string_to_bool("FaLse")
+    False
+    """
     if bool_str.casefold() == "false".casefold():
         return False
-    else:
+    elif bool_str.casefold() == "true".casefold():
         return True
+    else:  # pragma: no cover
+        raise ValueError("the parameter is not a boolean string, should be 'true' or 'false'")
 
 
 def init_cli(arguments):
+    """
+    Read the fink_fat configuration file of fink_fat specified by the --config argument
 
+    Parameters
+    ----------
+    arguments : dictionnary
+        The arguments read from the command line and parse by docopt
+
+    Returns
+    -------
+    config : dictionnary
+        the options from the configuration file
+    output_path : string
+        the output path where to store the product of fink_fat
+
+    Examples
+    --------
+    >>> arguments = {
+    ...    "--config" : "fink_fat/test/cli_test/test.conf"
+    ... }
+    
+    >>> config, output_path = init_cli(arguments)
+
+    >>> config.sections()
+    ['TW_PARAMS', 'ASSOC_PARAMS', 'ASSOC_PERF', 'SOLVE_ORBIT_PARAMS', 'ASSOC_SYSTEM', 'OUTPUT']
+    >>> output_path
+    'fink_fat/test/cli_test/fink_fat_out'
+
+    >>> config, output_path = init_cli({"--config":""})
+
+    >>> config.sections()
+    ['TW_PARAMS', 'ASSOC_PARAMS', 'ASSOC_PERF', 'SOLVE_ORBIT_PARAMS', 'ASSOC_SYSTEM', 'OUTPUT']
+    >>> output_path
+    'fink_fat_out'
+
+    >>> os.rmdir("fink_fat_out")
+    """
     # read the config file
     config = configparser.ConfigParser()
 
     if arguments["--config"]:
         if os.path.exists(arguments["--config"]):
             config.read(arguments["--config"])
-        else:
-            print("config file does not exist !!")
+        else:  # pragma: no cover
+            print("config file does not exist from this path: {} !!".format(arguments["--config"]))
             exit(1)
     else:
         config_path = os.path.join(
@@ -41,6 +104,54 @@ def init_cli(arguments):
 
 
 def get_class(arguments, path):
+    """
+    Return the fink object name corresponding to the arguments given by the users
+    'mpc' for the known objects and 'candidates' for the sso candidates.
+
+    Parameters
+    ----------
+    arguments : dictionnary
+        The arguments read from the command line and parse by docopt
+    path : string
+        path where to store the fink_fat product read from the config file.
+
+    Returns
+    -------
+    path : string
+        path where to store the fink_fat product corresponding to the object class.
+    object_class : string
+        contains 'Solar System MPC' if the argument is 'mpc' 
+            or 'Solar System candidate' if the argument is 'candidates'.
+
+    Examples
+    --------
+    >>> arguments = {
+    ...    "--config" : "fink_fat/test/cli_test/test.conf",
+    ...    "mpc" : True
+    ... }
+    >>> config, output_path = init_cli(arguments)
+    >>> path, object_class = get_class(arguments, output_path)
+    
+    >>> path
+    'fink_fat/test/cli_test/fink_fat_out/mpc/'
+    >>> object_class
+    'Solar System MPC'
+
+    >>> arguments = {
+    ...    "--config" : "fink_fat/test/cli_test/test.conf",
+    ...    "mpc" : False,
+    ...    "candidates" : True
+    ... }
+    >>> config, output_path = init_cli(arguments)
+    >>> path, object_class = get_class(arguments, output_path)
+
+    >>> path
+    'fink_fat/test/cli_test/fink_fat_out/candidates/'
+    >>> object_class
+    'Solar System candidate'
+
+    >>> shutil.rmtree("fink_fat/test/cli_test/fink_fat_out")
+    """
     if arguments["mpc"]:
         path = os.path.join(path, "mpc", "")
         if not os.path.isdir(path):
@@ -52,13 +163,37 @@ def get_class(arguments, path):
         if not os.path.isdir(path):
             os.mkdir(path)
         object_class = "Solar System candidate"
+    else:  # pragma: no cover
+        raise ValueError("Class does not correspond to a sso class from fink, got {}".format(arguments["mpc"]))
 
     return path, object_class
 
 
 def yes_or_no(
     intro_function, yes_function, no_function, intro_args=(), yes_args=(), no_args=()
-):
+):  # pragma: no cover
+    """
+    Function for the -r options.
+    Ask to the user a questions from the intro_function and depending of the answer, apply the yes_function or
+    the no_function.
+
+    Parameters
+    ----------
+    intro_function : Callable
+    yes_function : Callable
+    no_function : Callable
+    intro_args : tuples
+        arguments of the intro_function
+    yes_args : tuples
+        arguments of the yes_function
+    no_args : tuples
+        arguments of the no function
+
+    Returns
+    -------
+    None
+    
+    """
 
     intro_function(*intro_args)
 
@@ -73,7 +208,7 @@ def yes_or_no(
             print("please, answer with y or n.")
 
 
-def save_additional_stats(save_path, date, stats):
+def save_additional_stats(save_path, date, stats):  # pragma: no cover
     """
     Save the additional statistics
 
@@ -85,6 +220,10 @@ def save_additional_stats(save_path, date, stats):
         the computed statistics date
     stats : dict
         the additional statistics
+
+    Returns
+    -------
+    None
     """
     if os.path.exists(save_path):
         with open(save_path, "r") as f:
@@ -264,6 +403,8 @@ if __name__ == "__main__":  # pragma: no cover
     from pandas.testing import assert_frame_equal  # noqa: F401
     import fink_fat.test.test_sample as ts  # noqa: F401
     from unittest import TestCase  # noqa: F401
+    import shutil  # noqa: F401
+
 
     if "unittest.util" in __import__("sys").modules:
         # Show full diff in self.assertEqual.

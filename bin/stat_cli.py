@@ -11,8 +11,8 @@ def test_detectable(list_diff_night, traj_time_window, orbfit_limit):
 
     Parameters
     ----------
-    list_diff_night : integer list
-        the list containing the interval of night between the alerts
+    list_diff_night : pd.Series
+        A pandas series containing list with the interval of nights between the alerts
     traj_time_window : integer
         the Fink-FAT parameter that manage the number of night a trajectory can be kept after the last associated alert.
     orbfit_limit : integer
@@ -23,6 +23,28 @@ def test_detectable(list_diff_night, traj_time_window, orbfit_limit):
     is_detectable : boolean
         if true, the trajectory is detectable by Fink-FAT according only to the time window
         (do not take into account of the separation / magnitude / angle filters).
+
+    Examples
+    --------
+    >>> tr_night = pd.Series({"diff_night": [5, 2, 6, 3]})
+    >>> test_detectable(tr_night, 8, 6)
+    True
+
+    >>> tr_night = pd.Series({"diff_night": [5, 2, 9, 3]})
+    >>> test_detectable(tr_night, 8, 6)
+    False
+
+    >>> tr_night = pd.Series({"diff_night": [5, 2]})
+    >>> test_detectable(tr_night, 8, 6)
+    False
+
+    >>> tr_night = pd.Series({"diff_night": [5, 2, 1]})
+    >>> test_detectable(tr_night, 8, 6)
+    True
+
+    >>> tr_night = pd.Series({"diff_night": [5, 2, 12, 2, 3, 12, 15, 10, 24, 1, 2, 4]})
+    >>> test_detectable(tr_night, 8, 6)
+    True
     """
     np_array = np.array(list_diff_night["diff_night"])
     np_mask = np.ma.masked_array(np_array, np_array > traj_time_window)
@@ -57,6 +79,27 @@ def compute_residue(df):
     -------
     df : pd.DataFrame
         the input dataframe with additional columns containing the residual difference (in %).
+
+    Examples
+    --------
+    >>> test_residue = pd.DataFrame({
+    ... "a_x": [2.3, 5.7],
+    ... "e_x": [0.2, 0.7],
+    ... "i_x": [0.54, 15.7],
+    ... "long. node": [25.4, 29.7],
+    ... "arg. peric": [23.8, 48.7],
+    ... "mean anomaly": [144.7, 231.3],
+    ... "a_y": [1.7, 3.9],
+    ... "e_y": [0.5, 0.3],
+    ... "i_y": [2.8, 17.9],
+    ... "Node": [36.4, 14.7],
+    ... "Peri": [56.8, 78.7],
+    ... "M": [29.7, 312.3],  
+    ... })
+
+    >>> residue = compute_residue(test_residue)
+
+    >>> assert_frame_equal(residue, ts.residue_test)
     """
     df = df.reset_index(drop=True)
     computed_elem = df[
@@ -65,8 +108,8 @@ def compute_residue(df):
     known_elem = df[["a_y", "e_y", "i_y", "Node", "Peri", "M"]]
 
     df[["da", "de", "di", "dNode", "dPeri", "dM"]] = (
-        np.abs(computed_elem.values - known_elem.values)
-    ) / computed_elem.values
+        np.abs(known_elem.values - computed_elem.values)
+    ) / known_elem.values
 
     return df
 
@@ -92,6 +135,24 @@ def assoc_metrics(x):
     c_T : integer
         the number of alerts in the tracklets added to the trajectory. (the first tracklets not include)
     len_tags : the number of tags / alerts of the trajectory.
+
+    Examples
+    --------
+    >>> tags = pd.Series({"assoc_tag": ['I', 'A', 'T', 'A']})
+    >>> assoc_metrics(tags)
+    (0, 2, 1, 4)
+
+    >>> tags = pd.Series({"assoc_tag": ['O', 'I', 'A', 'T', 'A']})
+    >>> assoc_metrics(tags)
+    (2, 2, 1, 5)
+
+    >>> tags = pd.Series({"assoc_tag": ['N', 'A', 'A', 'A']})
+    >>> assoc_metrics(tags)
+    (1, 3, 0, 4)
+
+    >>> tags = pd.Series({"assoc_tag": ['I']})
+    >>> assoc_metrics(tags)
+    (3, 0, 0, 1)
     """
     tags = x["assoc_tag"]
 
@@ -101,7 +162,7 @@ def assoc_metrics(x):
         start = 0
     elif tags[0] == "N":
         start = 1
-    else:
+    else:  # pragma: no cover
         print(tags)
         raise Exception("bad trajectory starting")
 
@@ -109,8 +170,6 @@ def assoc_metrics(x):
     k_assoc = list(c.keys())
     if len(k_assoc) == 1 and k_assoc[0] == "I":
         start = 3
-    elif len(k_assoc) == 1 and k_assoc[0] == "N":
-        start = 4
 
     return start, c["A"], c["T"], len(tags)
 
@@ -140,6 +199,17 @@ def assoc_stats(traj):
         the number of single alert added to a trajectory in average
     mean_l_traj_2 : float
         the number of alert contains in the intra night tracklets added to a trajectory in average
+
+    Examples
+    --------
+    >>> traj_df = pd.DataFrame({
+    ... "trajectory_id": [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2],
+    ... "assoc_tag": ['I', 'I', 'A', 'T', 'T', 'A', 'N', 'N', 'T', 'T', 'T', 'A', 'O', 'I', 'I', 'I', 'T', 'T'],
+    ... "ra": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    ... })
+
+    >>> assoc_stats(traj_df)
+    (0, 0, 1, 1, 1, 1.0, 2.3333333333333335)
     """
     gb = (
         traj[["trajectory_id", "assoc_tag", "ra"]]
@@ -169,7 +239,19 @@ def assoc_stats(traj):
     )
 
 
-def print_assoc_table(traj_df):
+def print_assoc_table(traj_df):  # pragma: no cover
+    """
+    Print the table that describe the associations of the trajectories.
+    
+    Parameters
+    ----------
+    traj_df : dataframe
+        the trajectory dataframe containing the observations of the trajectories with orbital elements
+
+    Returns
+    -------
+    None
+    """
     (
         nb_intra,
         nb_pair_p,
@@ -227,5 +309,54 @@ def print_assoc_table(traj_df):
 
 
 def describe(df, stats):
+    """
+    Add additional statistics to the return of pandas.describe
+
+    Parameters
+    ----------
+    df : dataframe
+        dataframe for compute statistics
+    stats : string list
+        list with name of additional stats
+
+    Examples
+    --------
+    >>> test = pd.DataFrame({
+    ...     "a": [0, 10, 2, 5, 6, 9, 7, 78],
+    ...     "b": [5, 47, 23, 24, 98, 14, 1, 23]
+    ... })
+
+    >>> describe(test, ["median", "kurtosis", "skew"])
+                      a          b
+    count      8.000000   8.000000
+    mean      14.625000  29.375000
+    std       25.823232  31.089445
+    min        0.000000   1.000000
+    25%        4.250000  11.750000
+    50%        6.500000  23.000000
+    75%        9.250000  29.750000
+    max       78.000000  98.000000
+    median     6.500000  23.000000
+    kurtosis   7.607253   3.664267
+    skew       2.733760   1.819347
+    """
     d = df.describe()
     return d.append(df.reindex(d.columns, axis=1).agg(stats))
+
+
+if __name__ == "__main__":  # pragma: no cover
+    import sys
+    import doctest
+    from pandas.testing import assert_frame_equal  # noqa: F401
+    import fink_fat.test.test_sample as ts  # noqa: F401
+    from unittest import TestCase  # noqa: F401
+    import shutil  # noqa: F401
+    import pandas as pd  # noqa: F401
+    import fink_fat.test.test_sample as ts  # noqa: F401
+
+
+    if "unittest.util" in __import__("sys").modules:
+        # Show full diff in self.assertEqual.
+        __import__("sys").modules["unittest.util"]._MAX_LENGTH = 999999999
+
+    sys.exit(doctest.testmod()[0])
