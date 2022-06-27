@@ -785,7 +785,7 @@ def parse_ephem_line(ephem_line):
     >>> parse_ephem_line(ephem_line)
     [2459745.4375, 134.48054166666662, 3.748927777777778, 6.5, 3.8204, 3.3166, -53.4, 14.2, 29.7, 0.7017, -0.1361, 0.7148, 101.0, 4.719, 2.008, 108.4]
     """
-    replace_char = {'"': "", "'": ""}
+    replace_char = {'"': "", "'": "", "d": ""}
     ephem_split = [
         x.strip().translate(str.maketrans(replace_char))
         for x in ephem_line.split(" ")
