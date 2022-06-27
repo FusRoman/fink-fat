@@ -174,24 +174,21 @@ def get_last_sso_alert(object_class, date, verbose=False):
 
     Examples
     --------
-    >>> get_last_sso_alert(
+    >>> res_request = get_last_sso_alert(
     ... 'Solar System candidate',
     ... '2020-06-29'
     ... )
-               ra        dec            jd   nid  fid      dcmag  dcmag_err               candid  not_updated last_assoc_date
-    0  168.746104  72.323873  2.459030e+06  1275    2  26.163538   0.164791  1275226845215010004         True      2020-06-29
-    1  243.163542  14.826109  2.459030e+06  1275    2  26.253582   0.167772  1275214395315010002         True      2020-06-29
-    2  233.435624   7.630151  2.459030e+06  1275    2  26.224300   0.175327  1275212975315010004         True      2020-06-29
-    3  230.724063 -20.641448  2.459030e+06  1275    2  17.977817   0.116643  1275211571415015010         True      2020-06-29
-    4  230.728459 -20.640919  2.459030e+06  1275    2  18.477150   0.122778  1275211571415015011         True      2020-06-29
 
-    >>> get_last_sso_alert(
+    >>> pdf_test = pd.read_parquet("fink_fat/test/cli_test/get_sso_alert_test.parquet")
+
+    >>> assert_frame_equal(res_request, pdf_test)
+
+    >>> res_request = get_last_sso_alert(
     ... 'Solar System candidate',
     ... '2020-05-21'
     ... )
-    Empty DataFrame
-    Columns: [ra, dec, jd, nid, fid, dcmag, dcmag_err, candid, not_updated, last_assoc_date]
-    Index: []
+
+    >>> assert_frame_equal(res_request, pd.DataFrame(columns=["ra", "dec", "jd", "nid", "fid", "dcmag", "dcmag_err", "candid", "not_updated", "last_assoc_date"]))
     """
     startdate = datetime.datetime.strptime(date, "%Y-%m-%d")
     stopdate = startdate + datetime.timedelta(days=1)
