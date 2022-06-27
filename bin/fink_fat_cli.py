@@ -84,10 +84,23 @@ from bin.association_cli import (
 from bin.stat_cli import print_assoc_table, describe
 
 
-def main():
+def fink_fat_main(arguments):
+    """
+    Main function of fink_fat. Execute a process according to the arguments given by the user.
 
-    # parse the command line and return options provided by the user.
-    arguments = docopt(__doc__, version=fink_fat.__version__)
+    Parameters
+    ----------
+    arguments : dictionnary
+        arguments parse by docopt from the command line
+
+    Returns
+    -------
+    None
+
+    Examples
+    --------
+
+    """
 
     config, output_path = init_cli(arguments)
 
@@ -116,10 +129,48 @@ def main():
         if arguments["--night"]:
             last_night = arguments["--night"]
 
+        trajectory_df, old_obs_df, last_trajectory_id = get_data(
+            tr_df_path, obs_df_path, orb_res_path
+        )
+
+        if len(trajectory_df) > 0:
+            last_tr_date = pd.to_datetime(
+                trajectory_df["last_assoc_date"], format="%Y-%m-%d"
+            )
+
+            last_obs_date = pd.to_datetime(
+                old_obs_df["last_assoc_date"], format="%Y-%m-%d"
+            )
+
+            last_request_date = max(last_tr_date.max(), last_obs_date.max())
+            current_date = datetime.datetime.strptime(last_night, "%Y-%m-%d")
+
+            if last_request_date == current_date:
+                print()
+                print("ERROR !!!")
+                print("Association already done for this night.")
+                print("Wait a next observation night to do new association")
+                print("or run 'fink_fat solve_orbit' to get orbital_elements.")
+                exit()
+            if last_request_date > current_date:
+                print()
+                print("ERROR !!!")
+                print(
+                    "Query alerts from a night before the last night in the recorded trajectory/old_observations."
+                )
+                print(
+                    "Maybe try with a more recent night or reset the associations with 'fink_fat association -r'"
+                )
+                exit()
+
         t_before = t.time()
         new_alerts = get_last_sso_alert(
             object_class, last_night, arguments["--verbose"]
         )
+
+        last_nid = next_nid = new_alerts["nid"][0]
+        if len(trajectory_df) > 0 and len(old_obs_df) > 0:
+            last_nid = np.max([np.max(trajectory_df["nid"]), np.max(old_obs_df["nid"])])
 
         if arguments["--verbose"]:
             print("Number of alerts retrieve from fink: {}".format(len(new_alerts)))
@@ -144,10 +195,6 @@ def main():
         if len(new_alerts) == 0:
             print("no alerts available for the night of {}".format(last_night))
             exit()
-
-        trajectory_df, old_obs_df, last_nid, next_nid, last_trajectory_id = get_data(
-            new_alerts, tr_df_path, obs_df_path, orb_res_path
-        )
 
         if arguments["--verbose"]:
             print("started associations...")
@@ -200,12 +247,12 @@ def main():
                 os.path.join(save_path, "stats.json"), last_night, new_stats
             )
 
-        if "last_assoc_date" in trajectory_df:
-            trajectory_df["last_assoc_date"] = last_night
-        else:
-            trajectory_df.insert(
-                len(trajectory_df.columns), "last_assoc_date", last_night
-            )
+        # if "last_assoc_date" in trajectory_df:
+        #     trajectory_df["last_assoc_date"] = last_night
+        # else:
+        #     trajectory_df.insert(
+        #         len(trajectory_df.columns), "last_assoc_date", last_night
+        #     )
 
         cast_obs_data(trajectory_df).to_parquet(tr_df_path)
         cast_obs_data(old_obs_df).to_parquet(obs_df_path)
@@ -913,6 +960,7 @@ def main():
             "not_updated",
             "ssnamenr",
             "trajectory_id",
+            "last_assoc_date",
         ]
         trajectory_df = pd.DataFrame(columns=trajectory_columns)
         old_obs_df = pd.DataFrame(columns=trajectory_columns)
@@ -939,10 +987,15 @@ def main():
             old_obs_df = pd.read_parquet(obs_df_path)
 
             # first case: trajectories already exists: begin the offline mode with the last associations date + 1
-            current_date = datetime.datetime.strptime(
-                str(trajectory_df["last_assoc_date"].values[0].astype("datetime64[D]")),
-                "%Y-%m-%d",
+            last_tr_date = pd.to_datetime(
+                trajectory_df["last_assoc_date"], format="%Y-%m-%d"
             )
+
+            last_obs_date = pd.to_datetime(
+                old_obs_df["last_assoc_date"], format="%Y-%m-%d"
+            )
+
+            current_date = max(last_tr_date.max(), last_obs_date.max())
             current_date += delta_day
 
         # last case: <start> options given by the user, start the offline mode from this date.
@@ -1192,3 +1245,17 @@ def main():
 
     else:
         exit()
+
+
+def main():
+
+    # parse the command line and return options provided by the user.
+    arguments = docopt(__doc__, version=fink_fat.__version__)
+    fink_fat_main(arguments)
+
+
+def main_test(argv):
+    # parse the command line and return options provided by the user.
+    arguments = docopt(__doc__, argv=argv, version=fink_fat.__version__)
+
+    fink_fat_main(arguments)

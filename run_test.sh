@@ -47,11 +47,16 @@ do
   fi
 done
 
-echo bin/utils_cli.py
-coverage run \
-  --append \
-  --source=${ROOTPATH} \
-  --rcfile ${ROOTPATH}/.coveragerc bin/utils_cli.py
+
+for filename in bin/*.py
+do
+  echo $filename
+  # Run test suite + coverage
+  coverage run \
+    --append \
+    --source=${ROOTPATH} \
+    --rcfile ${ROOTPATH}/.coveragerc $filename
+done
 
 echo fink_fat/test/write_obs_test.py
 coverage run \
@@ -65,6 +70,12 @@ coverage run \
   --append \
   --source=${ROOTPATH} \
   --rcfile ${ROOTPATH}/.coveragerc fink_fat/test/continuous_integration.py
+
+echo fink_fat/test/cli_test/test_cli.py
+coverage run \
+  --append \
+  --source=${ROOTPATH} \
+  --rcfile ${ROOTPATH}/.coveragerc fink_fat/test/cli_test/test_cli.py
 
 unset COVERAGE_PROCESS_START
 
