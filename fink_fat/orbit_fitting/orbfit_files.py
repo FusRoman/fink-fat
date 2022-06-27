@@ -880,8 +880,9 @@ def read_ephem(ram_dir, first_desig):
             res_parse = [parse_ephem_line(line) for line in lines[9:]]
             if len(res_parse[0]) == 13:
                 return pd.DataFrame(
-                [parse_ephem_line(line) for line in lines[9:]], columns=ephem_cols[0:13]
-            )
+                    [parse_ephem_line(line) for line in lines[9:]],
+                    columns=ephem_cols[0:13],
+                )
             else:
                 return pd.DataFrame(
                     [parse_ephem_line(line) for line in lines[9:]], columns=ephem_cols
