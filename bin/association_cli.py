@@ -5,6 +5,7 @@ import pandas as pd
 import requests
 from fink_utils.photometry.conversion import dc_mag
 import shutil
+from io import BytesIO
 
 
 def request_fink(
@@ -81,7 +82,7 @@ def request_fink(
     )
 
     try:
-        return pd.read_json(r.content)
+        return pd.read_json(BytesIO(r.content))
     except ValueError:  # pragma: no cover
         if current_tries == nb_tries:
             return pd.DataFrame(
@@ -146,7 +147,7 @@ def get_n_sso(object_class, date):
         json={"date": str(date), "output-format": "json"},
     )
 
-    pdf = pd.read_json(r.content)
+    pdf = pd.read_json(BytesIO(r.content))
 
     if len(pdf) == 0:
         return 0
