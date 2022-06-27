@@ -849,6 +849,12 @@ def read_ephem(ram_dir, first_desig):
     >>> ephem_cols = ["jd", "ra", "dec", "mag", "delta_(AU)", "R_(AU)", "SolEl_(degree)", "Phase_(degree)", "Glat_(degree)", "ra*cosDec_(deg/d)", "dec_(deg/d)", "Vel_(deg/d)", "PA_(degree)", "Err1_(arcsec)", "Err2_(arcsec)", "PA"]
     >>> ephem_true = pd.DataFrame([list(np.ones(len(ephem_cols)) * -1.0)], columns=ephem_cols)
     >>> assert_frame_equal(ephem_test, ephem_true)
+
+    >>> ephem_pdf = read_ephem(ram_dir, "K20SG7A_test")
+    >>> ephem_pdf["trajectory_id"] = 5
+
+    >>> res_ephem_test = pd.read_parquet("fink_fat/test/ephem_test/res_ephem4.parquet")
+    >>> assert_frame_equal(res_ephem_test, ephem_pdf)
     """
     ephem_cols = [
         "jd",
@@ -871,9 +877,15 @@ def read_ephem(ram_dir, first_desig):
     try:
         with open(ram_dir + first_desig + ".oep") as file:
             lines = file.readlines()
-            return pd.DataFrame(
-                [parse_ephem_line(line) for line in lines[9:]], columns=ephem_cols
+            res_parse = [parse_ephem_line(line) for line in lines[9:]]
+            if len(res_parse[0]) == 13:
+                return pd.DataFrame(
+                [parse_ephem_line(line) for line in lines[9:]], columns=ephem_cols[0:13]
             )
+            else:
+                return pd.DataFrame(
+                    [parse_ephem_line(line) for line in lines[9:]], columns=ephem_cols
+                )
     except FileNotFoundError:
         return pd.DataFrame([list(np.ones(len(ephem_cols)) * -1.0)], columns=ephem_cols)
 
