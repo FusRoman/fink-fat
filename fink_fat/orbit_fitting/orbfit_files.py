@@ -6,6 +6,7 @@ import numpy as np
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 import pandas as pd
+from pyparsing import line
 
 from fink_fat import __file__
 
@@ -855,6 +856,9 @@ def read_ephem(ram_dir, first_desig):
 
     >>> res_ephem_test = pd.read_parquet("fink_fat/test/ephem_test/res_ephem4.parquet")
     >>> assert_frame_equal(res_ephem_test, ephem_pdf)
+
+    >>> ephem_pdf = read_ephem(ram_dir, "K20ABCD_test")
+    >>> assert_frame_equal(ephem_pdf, ephem_true)
     """
     ephem_cols = [
         "jd",
@@ -877,6 +881,10 @@ def read_ephem(ram_dir, first_desig):
     try:
         with open(ram_dir + first_desig + ".oep") as file:
             lines = file.readlines()
+            
+            if len(lines) == 0:
+                return pd.DataFrame([list(np.ones(len(ephem_cols)) * -1.0)], columns=ephem_cols)
+
             res_parse = [parse_ephem_line(line) for line in lines[9:]]
             if len(res_parse[0]) == 13:
                 return pd.DataFrame(
