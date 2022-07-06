@@ -153,6 +153,7 @@ def get_orbit_param(ram_dir, df, n_triplets, noise_ntrials, prop_epoch=None, ver
         df_one_traj = df[df["trajectory_id"] == traj_id]
         prov_desig = mf.write_observation_file(ram_dir, df_one_traj)
         of.write_inp(ram_dir, prov_desig)
+
         if prop_epoch is None:
             of.write_oop(
                 ram_dir,

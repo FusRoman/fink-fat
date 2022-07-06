@@ -382,7 +382,7 @@ def prep_orbitfit(ram_dir):
     """
     Preparation for OrbFit computation
 
-    Copy the AST17 ephemeris files needed for the orbfit computation to the correct location.
+    Copy the AST17 ephemeries files needed for the orbfit computation to the correct location.
     Set their permissions to be read by OrbFit.
 
     Parameters

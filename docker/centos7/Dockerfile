@@ -69,3 +69,12 @@ RUN yum -y install epel-release \
 && source ./orbFit_installer.sh --install_path ${USRLIBS}/OrbFit \
 && echo "export ORBFIT_HOME=${USRLIBS}/OrbFit" > /etc/profile.d/orbfithome.sh \
 && cd ${USRLIBS}
+
+ENV SPARK_HOME=$USRLIBS/spark-${SPARK_VERSION}-bin-${HADOOP_VERSION}
+ENV SPARKLIB=${SPARK_HOME}/python:${SPARK_HOME}/python/lib/py4j-0.10.9-src.zip
+ENV ORBFIT_HOME=${USRLIBS}/OrbFit
+ENV JAVA_HOME="$(dirname $(dirname $(readlink -f $(type -P java))))"
+ENV PATH=${SPARK_HOME}/bin:${SPARK_HOME}/sbin:/usr/local/bin:${PATH}
+
+ENV BINPATH=$PATH
+ENV PYTHONPATH=${SPARKLIB}:${PYTHONPATH}
