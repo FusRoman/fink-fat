@@ -847,6 +847,12 @@ def orbit_wrapper(ra, dec, dcmag, band, date, traj_id, ram_dir):
     ------
     res : Series
         The orbital elements and their RMS computed by orbfit for each trajectories.
+
+
+    Examples
+    --------
+    >>> df = spark.read.format('parquet').load(traj_sample)
+    >>> df.show()
     """
 
     @pandas_udf(ArrayType(DoubleType()))  # noqa: F405
@@ -887,51 +893,66 @@ def orbit_wrapper(ra, dec, dcmag, band, date, traj_id, ram_dir):
 
 
 if __name__ == "__main__":
-    ram_dir = "/tmp/ramdisk/"
-    master_adress = sys.argv[1]
+    if sys.argv[1] == "test":
+        from fink_fat import __file__
+        from fink_science.tester import spark_unit_tests
 
-    spark = spark = (
-        SparkSession.builder.master(master_adress)
-        .appName("Fink-FAT_solve_orbit")
-        .getOrCreate()
-    )
+        globs = globals()
+        path = os.path.dirname(__file__)
 
-    # read the input from local parquet file
-    traj_df = pd.read_parquet("tmp_traj.parquet")
-    # transform the local pandas dataframe into a spark dataframe
-    sparkDF = spark.createDataFrame(traj_df)
+        traj_sample = 'file://{}/test/cluster_test/traj_sample.parquet'.format(path)
+        globs["traj_sample"] = traj_sample
 
-    spark_gb = (
-        sparkDF.groupby("trajectory_id")
-        .agg(
-            F.sort_array(
-                F.collect_list(F.struct("jd", "ra", "dec", "fid", "dcmag"))
-            ).alias("collected_list")
+        # Run the test suite
+        spark_unit_tests(globs)
+    elif sys.argv[1] == "dev":
+
+        master_adress = sys.argv[2]
+        ram_dir = sys.argv[3]
+
+        spark = spark = (
+            SparkSession.builder.master(master_adress)
+            .appName("Fink-FAT_solve_orbit")
+            .getOrCreate()
         )
-        .withColumn("ra", F.col("collected_list.ra"))
-        .withColumn("dec", F.col("collected_list.dec"))
-        .withColumn("fid", F.col("collected_list.fid"))
-        .withColumn("dcmag", F.col("collected_list.dcmag"))
-        .withColumn("jd", F.col("collected_list.jd"))
-        .drop("collected_list")
-    )
 
-    max_core = int(dict(spark.sparkContext.getConf().getAll())["spark.cores.max"])
-    spark_gb = spark_gb.repartition(max_core * 100)
+        # read the input from local parquet file
+        traj_df = pd.read_parquet("tmp_traj.parquet")
+        # transform the local pandas dataframe into a spark dataframe
+        sparkDF = spark.createDataFrame(traj_df)
 
-    print("begin compute orbital elem on spark")
-    spark_column = spark_gb.withColumn(
-        "orbital_elements",
-        orbit_wrapper(
-            spark_gb.ra,
-            spark_gb.dec,
-            spark_gb.dcmag,
-            spark_gb.fid,
-            spark_gb.jd,
-            spark_gb.trajectory_id,
-            ram_dir,
-        ),
-    )
+        spark_gb = (
+            sparkDF.groupby("trajectory_id")
+            .agg(
+                F.sort_array(
+                    F.collect_list(F.struct("jd", "ra", "dec", "fid", "dcmag"))
+                ).alias("collected_list")
+            )
+            .withColumn("ra", F.col("collected_list.ra"))
+            .withColumn("dec", F.col("collected_list.dec"))
+            .withColumn("fid", F.col("collected_list.fid"))
+            .withColumn("dcmag", F.col("collected_list.dcmag"))
+            .withColumn("jd", F.col("collected_list.jd"))
+            .drop("collected_list")
+        )
 
-    orb_pdf = spark_column.toPandas()
-    orb_pdf.to_parquet("res_orb.parquet")
+        max_core = int(dict(spark.sparkContext.getConf().getAll())["spark.cores.max"])
+        spark_gb = spark_gb.repartition(max_core * 100)
+
+        print("begin compute orbital elem on spark")
+        spark_column = spark_gb.withColumn(
+            "orbital_elements",
+            orbit_wrapper(
+                spark_gb.ra,
+                spark_gb.dec,
+                spark_gb.dcmag,
+                spark_gb.fid,
+                spark_gb.jd,
+                spark_gb.trajectory_id,
+                ram_dir,
+            ),
+        )
+
+        orb_pdf = spark_column.toPandas()
+        orb_pdf.to_parquet("res_orb.parquet")
+        sys.exit(0)

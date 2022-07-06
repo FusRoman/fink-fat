@@ -16,3 +16,6 @@ black:
 
 uninstall :
 	pip uninstall fink_fat
+
+build_docker :
+	docker build -t fink_fat:dev -f docker/centos7/Dockerfile .
