@@ -31,7 +31,6 @@ do
   echo $filename
   # Run test suite + coverage
   coverage run \
-    --append \
     --source=${ROOTPATH} \
     --rcfile ${ROOTPATH}/.coveragerc $filename
 done
@@ -43,14 +42,12 @@ do
     echo $filename
     # Run test suite + coverage
     coverage run \
-      --append \
       --source=${ROOTPATH} \
       --rcfile ${ROOTPATH}/.coveragerc $filename "test"
   else
     echo $filename
     # Run test suite + coverage
     coverage run \
-      --append \
       --source=${ROOTPATH} \
       --rcfile ${ROOTPATH}/.coveragerc $filename
   fi
@@ -62,7 +59,6 @@ do
   echo $filename
   # Run test suite + coverage
   coverage run \
-    --append \
     --source=${ROOTPATH} \
     --rcfile ${ROOTPATH}/.coveragerc $filename
 done
@@ -71,10 +67,11 @@ for filename in fink_fat/test/*.py
 do
   echo $filename
   coverage run \
-    --append \
     --source=${ROOTPATH} \
     --rcfile ${ROOTPATH}/.coveragerc $filename
 done
+
+coverage combine
 
 unset COVERAGE_PROCESS_START
 

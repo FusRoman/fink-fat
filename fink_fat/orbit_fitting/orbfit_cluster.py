@@ -1,19 +1,8 @@
-import logging
 import os
 import shutil
-import signal
 import sys
-import subprocess
-import traceback
 import numpy as np
-
-from glob import glob
 import pandas as pd
-from astropy.time import Time
-from astropy.coordinates import SkyCoord
-import astropy.units as u
-from shutil import copyfile
-import re
 
 from pyspark.sql.functions import pandas_udf
 from pyspark.sql.types import ArrayType, DoubleType
@@ -57,6 +46,17 @@ def orbit_wrapper(
         The trajectory_id of each trajectories
     ram_dir : string
         the path where to write the file
+    n_triplets : integer
+        max number of triplets of observations to be tried for the initial orbit determination
+    noise_ntrials : integer
+        number of trials for each triplet for the initial orbit determination
+    prop_epoch : float
+        Epoch at which output orbital elements in JD.
+    verbose : integer
+        Verbosity levels of Orbfit
+        1 = summary information on the solution found
+        2 = summary information on all trials
+        3 = debug
 
     Return
     ------
@@ -82,7 +82,7 @@ def orbit_wrapper(
     ...     .drop("collected_list")
     ... )
 
-    >>> ram_dir = "/media/virtuelram/"
+
     >>> spark_column = spark_gb.withColumn(
     ...     "orbital_elements",
     ...     orbit_wrapper(
@@ -92,7 +92,7 @@ def orbit_wrapper(
     ...         spark_gb.fid,
     ...         spark_gb.jd,
     ...         spark_gb.trajectory_id,
-    ...         ram_dir,
+    ...         "",
     ...         10, 10
     ...     ),
     ... )
@@ -104,7 +104,7 @@ def orbit_wrapper(
     """
 
     @pandas_udf(ArrayType(DoubleType()))  # noqa: F405
-    def get_orbit_element(ra, dec, dcmag, band, date, traj_id):
+    def get_orbit_element(ra, dec, dcmag, band, date, traj_id):  # pragma: no cover
         _pid = os.getpid()
         current_ram_path = os.path.join(ram_dir, str(_pid), "")
         if not os.path.isdir(current_ram_path):
