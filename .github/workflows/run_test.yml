@@ -13,9 +13,9 @@ jobs:
     name: run-test
     runs-on: ubuntu-latest
 
-
-    matrix:
-      container: ["fusroman/fink_fat_docker:dev"]
+    strategy:
+      matrix:
+        container: ["fusroman/fink_fat_docker:dev"]
 
     container:
       image: ${{ matrix.container }}
