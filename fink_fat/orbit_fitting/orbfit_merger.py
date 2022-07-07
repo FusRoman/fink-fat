@@ -88,8 +88,7 @@ def parallel_merger(ram_dir, trajectory_df, orb_cand, indices, prop_epoch):
 
     >>> res = parallel_merger(*merge_data)
 
-    >>> df_orb_elem = pd.DataFrame(res, columns=merge_column_name,)
-
+    >>> df_orb_elem = ol.orbit_elem_dataframe(res, merge_column_name)
     >>> df_merge_test = pd.read_parquet("fink_fat/test/merge_test/df_merge_test")
 
     >>> assert_frame_equal(
