@@ -45,5 +45,7 @@ jobs:
 
     - name: Run test suites
       run: |
-        ./run_test.sh
+        echo $USRLIBS
+        cd $USRLIBS/fink-fat
+        source script/run_test.sh
         bash <(curl -s https://codecov.io/bash)
