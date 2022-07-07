@@ -12,6 +12,24 @@ import fink_fat.orbit_fitting.mpcobs_files as mf
 import traceback
 import logging
 
+orbfit_column_name = [
+        "trajectory_id",
+        "provisional designation",
+        "ref_epoch",
+        "a",
+        "e",
+        "i",
+        "long. node",
+        "arg. peric",
+        "mean anomaly",
+        "rms_a",
+        "rms_e",
+        "rms_i",
+        "rms_long. node",
+        "rms_arg. peric",
+        "rms_mean anomaly",
+        "chi_reduced",
+    ]
 
 def call_orbitfit(ram_dir, first_designation, second_designation=None):
     """
@@ -207,7 +225,7 @@ def get_orbit_param(ram_dir, df, n_triplets, noise_ntrials, prop_epoch=None, ver
     return results
 
 
-def orbit_elem_dataframe(orbit_elem):
+def orbit_elem_dataframe(orbit_elem, column_name):
     """
     Convert the list return by get_orbit_param into a dataframe.
 
@@ -215,6 +233,8 @@ def orbit_elem_dataframe(orbit_elem):
     ----------
     orbit_elem : list
         The return of get_orbit_param
+    column_name : string list
+        Columns name of the result dataframe
 
     Returns
     -------
@@ -225,34 +245,17 @@ def orbit_elem_dataframe(orbit_elem):
     --------
     >>> orb_list = [[0, 'K21E00A', 2459274.810893373, '1.5834346988159376E+00', '0.613572037782866', '5.9442185803697', '343.7959802838470', '270.1932521117385', '333.9568546371023', -1, -1, -1, -1, -1, -1, 2.4]]
 
-    >>> orb_df = orbit_elem_dataframe(orb_list)
+    >>> orb_df = orbit_elem_dataframe(orb_list, orbfit_column_name)
 
     >>> assert_frame_equal(orb_df, ts.orb_elem_output)
+    
+    >>> os.rmdir("mpcobs")
     """
-
-    column_name = [
-        "trajectory_id",
-        "provisional designation",
-        "ref_epoch",
-        "a",
-        "e",
-        "i",
-        "long. node",
-        "arg. peric",
-        "mean anomaly",
-        "rms_a",
-        "rms_e",
-        "rms_i",
-        "rms_long. node",
-        "rms_arg. peric",
-        "rms_mean anomaly",
-        "chi_reduced",
-    ]
 
     df_orb_elem = pd.DataFrame(orbit_elem, columns=column_name,)
 
-    for col_name in set(column_name).difference(set(["provisional designation"])):
-        df_orb_elem[col_name] = pd.to_numeric(df_orb_elem[col_name])
+    for col_name in column_name:
+        df_orb_elem[col_name] = pd.to_numeric(df_orb_elem[col_name], errors="ignore")
 
     return df_orb_elem
 
@@ -351,27 +354,10 @@ def compute_df_orbit_param(
     of.final_clean(ram_dir)
 
     if len(results) > 0:
-        return orbit_elem_dataframe(np.array(results))
+        return orbit_elem_dataframe(np.array(results), orbfit_column_name)
     else:  # pragma: no cover
         return pd.DataFrame(
-            columns=[
-                "trajectory_id",
-                "provisional designation",
-                "ref_epoch",
-                "a",
-                "e",
-                "i",
-                "long. node",
-                "arg. peric",
-                "mean anomaly",
-                "rms_a",
-                "rms_e",
-                "rms_i",
-                "rms_long. node",
-                "rms_arg. peric",
-                "rms_mean anomaly",
-                "chi_reduced",
-            ]
+            columns=orbfit_column_name
         )
 
 
