@@ -98,9 +98,33 @@ def orbit_wrapper(
     ... )
 
     >>> orb_pdf = spark_column.toPandas()
-    >>> test_orb = pd.read_parquet("fink_fat/test/cluster_test/res_orb_cluster.parquet")
 
-    >>> assert_frame_equal(orb_pdf, test_orb)
+    >>> orbital_columns = [
+    ... "ref_epoch",
+    ... "a",
+    ... "e",
+    ... "i",
+    ... "long. node",
+    ... "arg. peric",
+    ... "mean anomaly",
+    ... "rms_a",
+    ... "rms_e",
+    ... "rms_i",
+    ... "rms_long. node",
+    ... "rms_arg. peric",
+    ... "rms_mean anomaly",
+    ... "chi_reduced",
+    ... ]
+
+    >>> split_df = pd.DataFrame(
+    ... orb_pdf["orbital_elements"].tolist(), columns=orbital_columns
+    ... )
+
+    >>> orbit_results = pd.concat([orb_pdf["trajectory_id"], split_df], axis=1)
+
+    >>> orbit_test = pd.read_parquet("fink_fat/test/cluster_test/res_orb_cluster.parquet")
+
+    >>> assert_frame_equal(orbit_results.round(decimals=5), orbit_test.round(decimals=5))
     """
 
     @pandas_udf(ArrayType(DoubleType()))  # noqa: F405
