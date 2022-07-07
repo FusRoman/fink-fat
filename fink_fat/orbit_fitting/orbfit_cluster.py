@@ -93,7 +93,7 @@ def orbit_wrapper(
     ...         spark_gb.jd,
     ...         spark_gb.trajectory_id,
     ...         "",
-    ...         10, 10
+    ...         30, 20
     ...     ),
     ... )
 
@@ -121,9 +121,8 @@ def orbit_wrapper(
     ... )
 
     >>> orbit_results = pd.concat([orb_pdf["trajectory_id"], split_df], axis=1)
-
     >>> orbit_test = pd.read_parquet("fink_fat/test/cluster_test/res_orb_cluster.parquet")
-
+    
     >>> assert_frame_equal(orbit_results.round(decimals=5), orbit_test.round(decimals=5))
     """
 
