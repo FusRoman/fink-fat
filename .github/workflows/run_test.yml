@@ -9,7 +9,7 @@ on:
   pull_request:
 
 jobs:
-  test-suite:
+  run-test:
     name: run-test
     runs-on: ubuntu-latest
 
