@@ -45,6 +45,5 @@ jobs:
 
     - name: Run test suites
       run: |
-        ls script
-        ./script/run_test.sh
+        ./run_test.sh
         bash <(curl -s https://codecov.io/bash)
