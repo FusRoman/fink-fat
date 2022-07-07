@@ -123,7 +123,10 @@ def orbit_wrapper(
     >>> orbit_results = pd.concat([orb_pdf["trajectory_id"], split_df], axis=1)
     >>> orbit_test = pd.read_parquet("fink_fat/test/cluster_test/res_orb_cluster.parquet")
 
-    >>> assert_frame_equal(orbit_results.round(decimals=5), orbit_test.round(decimals=5))
+    >>> assert_frame_equal(
+    ... orbit_results[["trajectory_id", "a", "e", "i"]].round(decimals=5), 
+    ... orbit_test[["trajectory_id", "a", "e", "i"]].round(decimals=5)
+    ... )
     """
 
     @pandas_udf(ArrayType(DoubleType()))  # noqa: F405
