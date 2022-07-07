@@ -132,7 +132,12 @@ def merge_orbit(
     >>> merge_test_path = "fink_fat/test/merge_test/"
     >>> merge_res = merge_orbit(pd.read_parquet(merge_test_path + "obs_merge.parquet"), pd.read_parquet(merge_test_path + "orb_merge.parquet"), "", 2, 1, 2459752.00278)
 
-    >>> assert_frame_equal(merge_res, pd.read_parquet(merge_test_path + "merge_test_results.parquet"))
+    >>> merge_test = pd.read_parquet(merge_test_path + "merge_test_results.parquet")
+
+    >>> assert_frame_equal(
+    ... merge_res.round(decimals=5), 
+    ... merge_test.round(decimals=5)
+    ... )
     """
     orb_features = np.array(orbit_candidate[["a", "e", "i"]])
 
