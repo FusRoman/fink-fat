@@ -45,7 +45,6 @@ jobs:
 
     - name: Run test suites
       run: |
-        ls
-        cd fink-fat
+        ls script
         ./script/run_test.sh
         bash <(curl -s https://codecov.io/bash)
