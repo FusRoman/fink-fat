@@ -124,7 +124,7 @@ def orbit_wrapper(
     >>> orbit_test = pd.read_parquet("fink_fat/test/cluster_test/res_orb_cluster.parquet")
 
     >>> assert_frame_equal(
-    ... orbit_results[["trajectory_id", "a", "e", "i"]].round(decimals=5), 
+    ... orbit_results[["trajectory_id", "a", "e", "i"]].round(decimals=5),
     ... orbit_test[["trajectory_id", "a", "e", "i"]].round(decimals=5)
     ... )
     """

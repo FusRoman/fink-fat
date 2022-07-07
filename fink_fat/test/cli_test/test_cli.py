@@ -67,7 +67,6 @@ if __name__ == "__main__":
     orb = pd.read_parquet("{}mpc/orbital.parquet".format(data_current_path))
     obs_orb = pd.read_parquet("{}mpc/trajectory_orb.parquet".format(data_current_path))
 
-
     # load test data
     old_obs_test = pd.read_parquet("{}mpc/old_obs.parquet".format(data_test_path))
     trajectory_df_test = pd.read_parquet(
@@ -80,23 +79,21 @@ if __name__ == "__main__":
 
     try:
         assert_frame_equal(
-            old_obs.sort_values("candid"), 
-            old_obs_test.sort_values("candid")
+            old_obs.sort_values("candid"), old_obs_test.sort_values("candid")
         )
 
         assert_frame_equal(
-            trajectory_df.sort_values("trajectory_id"), 
-            trajectory_df_test.sort_values("trajectory_id")
+            trajectory_df.sort_values("trajectory_id"),
+            trajectory_df_test.sort_values("trajectory_id"),
         )
 
         assert_frame_equal(
-            orb_test.sort_values("trajectory_id"), 
-            orb.sort_values("trajectory_id")
+            orb_test.sort_values("trajectory_id"), orb.sort_values("trajectory_id")
         )
 
         assert_frame_equal(
-            obs_orb_test.sort_values("trajectory_id"), 
-            obs_orb.sort_values("trajectory_id")
+            obs_orb_test.sort_values("trajectory_id"),
+            obs_orb.sort_values("trajectory_id"),
         )
 
         shutil.rmtree("fink_fat/test/cli_test/fink_fat_out")

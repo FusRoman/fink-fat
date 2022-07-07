@@ -1,4 +1,3 @@
-import pandas as pd
 import numpy as np
 import os
 from sklearn.neighbors import NearestNeighbors
@@ -187,7 +186,7 @@ def merge_orbit(
     >>> merge_test = pd.read_parquet(merge_test_path + "merge_test_results.parquet")
 
     >>> assert_frame_equal(
-    ... merge_res.round(decimals=5), 
+    ... merge_res.round(decimals=5),
     ... merge_test.round(decimals=5)
     ... )
     """
@@ -235,6 +234,7 @@ def merge_orbit(
 if __name__ == "__main__":  # pragma: no cover
     import sys
     import doctest
+    import pandas as pd  # noqa: F401
     from pandas.testing import assert_frame_equal  # noqa: F401
     import fink_fat.test.test_sample as ts  # noqa: F401
     from unittest import TestCase  # noqa: F401

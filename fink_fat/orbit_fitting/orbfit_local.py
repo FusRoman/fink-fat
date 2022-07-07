@@ -13,23 +13,24 @@ import traceback
 import logging
 
 orbfit_column_name = [
-        "trajectory_id",
-        "provisional designation",
-        "ref_epoch",
-        "a",
-        "e",
-        "i",
-        "long. node",
-        "arg. peric",
-        "mean anomaly",
-        "rms_a",
-        "rms_e",
-        "rms_i",
-        "rms_long. node",
-        "rms_arg. peric",
-        "rms_mean anomaly",
-        "chi_reduced",
-    ]
+    "trajectory_id",
+    "provisional designation",
+    "ref_epoch",
+    "a",
+    "e",
+    "i",
+    "long. node",
+    "arg. peric",
+    "mean anomaly",
+    "rms_a",
+    "rms_e",
+    "rms_i",
+    "rms_long. node",
+    "rms_arg. peric",
+    "rms_mean anomaly",
+    "chi_reduced",
+]
+
 
 def call_orbitfit(ram_dir, first_designation, second_designation=None):
     """
@@ -248,7 +249,7 @@ def orbit_elem_dataframe(orbit_elem, column_name):
     >>> orb_df = orbit_elem_dataframe(orb_list, orbfit_column_name)
 
     >>> assert_frame_equal(orb_df, ts.orb_elem_output)
-    
+
     >>> os.rmdir("mpcobs")
     """
 
@@ -356,9 +357,7 @@ def compute_df_orbit_param(
     if len(results) > 0:
         return orbit_elem_dataframe(np.array(results), orbfit_column_name)
     else:  # pragma: no cover
-        return pd.DataFrame(
-            columns=orbfit_column_name
-        )
+        return pd.DataFrame(columns=orbfit_column_name)
 
 
 if __name__ == "__main__":  # pragma: no cover
