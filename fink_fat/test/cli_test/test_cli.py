@@ -8,7 +8,6 @@ import logging
 
 from bin.fink_fat_cli import main_test
 
-import numpy as np
 if __name__ == "__main__":
     data_test_path = "fink_fat/test/cli_test/fink_fat_out_test/"
     data_current_path = "fink_fat/test/cli_test/fink_fat_out/"

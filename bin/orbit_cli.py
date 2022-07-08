@@ -72,8 +72,8 @@ def cluster_mode(config, traj_to_orbital):  # pragma: no cover
         os.path.dirname(fink_fat.__file__), "orbit_fitting", "orbfit_cluster.py prod",
     )
 
-    application += " " + master_manager 
-    application += " " + ram_dir 
+    application += " " + master_manager
+    application += " " + ram_dir
     application += " " + n_triplets
     application += " " + noise_ntrials
     application += " " + prop_epoch
