@@ -67,6 +67,7 @@ def cluster_mode(config, traj_to_orbital):  # pragma: no cover
     exec_mem = config["SOLVE_ORBIT_PARAMS"]["executor_memory"]
     max_core = config["SOLVE_ORBIT_PARAMS"]["max_core"]
     exec_core = config["SOLVE_ORBIT_PARAMS"]["executor_core"]
+    orbfit_home = config["SOLVE_ORBIT_PARAMS"]["orbfit_path"]
 
     application = os.path.join(
         os.path.dirname(fink_fat.__file__), "orbit_fitting", "orbfit_cluster.py prod",
@@ -89,6 +90,7 @@ def cluster_mode(config, traj_to_orbital):  # pragma: no cover
         --executor-memory {}G \
         --conf spark.cores.max={} \
         --conf spark.executor.cores={} \
+        --conf spark.executorEnv.ORBFIT_HOME={} \
         {}".format(
         master_manager,
         principal_group,
@@ -99,6 +101,7 @@ def cluster_mode(config, traj_to_orbital):  # pragma: no cover
         exec_mem,
         max_core,
         exec_core,
+        orbfit_home,
         application,
     )
 
