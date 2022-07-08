@@ -18,4 +18,4 @@ uninstall :
 	pip uninstall fink_fat
 
 build_docker :
-	docker build -t fink_fat:dev -f docker/centos7/Dockerfile .
+	docker build -t fusroman/fink_fat_docker:dev -f docker/centos7/Dockerfile .
