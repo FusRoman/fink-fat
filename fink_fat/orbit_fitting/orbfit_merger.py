@@ -84,11 +84,13 @@ def parallel_merger(ram_dir, trajectory_df, orb_cand, indices, prop_epoch):
     --------
     >>> merge_file = open('fink_fat/test/merge_test/merge_data.pickle', 'rb')
     >>> merge_data = pickle.load(merge_file)
+    >>> merge_file.close()
     >>> os.makedirs("chunkid_0/mpcobs/")
 
     >>> res = parallel_merger(*merge_data)
 
     >>> df_orb_elem = ol.orbit_elem_dataframe(res, merge_column_name)
+
     >>> df_merge_test = pd.read_parquet("fink_fat/test/merge_test/df_merge_test")
 
     >>> assert_frame_equal(
