@@ -122,12 +122,12 @@ if __name__ == "__main__":
         )
 
         assert_frame_equal(
-            orb_test.sort_values("trajectory_id"), orb.sort_values("trajectory_id")
+            obs_orb_test.sort_values("trajectory_id"),
+            obs_orb.sort_values("trajectory_id"),
         )
 
         assert_frame_equal(
-            obs_orb_test.sort_values("trajectory_id"),
-            obs_orb.sort_values("trajectory_id"),
+            orb_test.sort_values("trajectory_id"), orb.sort_values("trajectory_id")
         )
 
         shutil.rmtree("fink_fat/test/cli_test/fink_fat_out")
