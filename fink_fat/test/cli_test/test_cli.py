@@ -8,7 +8,7 @@ import logging
 
 from bin.fink_fat_cli import main_test
 
-
+import numpy as np
 if __name__ == "__main__":
     data_test_path = "fink_fat/test/cli_test/fink_fat_out_test/"
     data_current_path = "fink_fat/test/cli_test/fink_fat_out/"
@@ -59,13 +59,48 @@ if __name__ == "__main__":
         ]
     )
 
+    main_test(
+        [
+            "offline",
+            "mpc",
+            "local",
+            "2020-05-08",
+            "--config",
+            "fink_fat/test/cli_test/test.conf",
+            "--verbose",
+        ]
+    )
+
+    main_test(
+        [
+            "associations",
+            "mpc",
+            "--night",
+            "2020-05-09",
+            "--config",
+            "fink_fat/test/cli_test/test.conf",
+            "--verbose",
+        ]
+    )
+
+    main_test(
+        [
+            "solve_orbit",
+            "mpc",
+            "cluster",
+            "--config",
+            "fink_fat/test/cli_test/test.conf",
+            "--verbose",
+        ]
+    )
+
     # load current data
-    old_obs = pd.read_parquet("{}mpc/old_obs.parquet".format(data_current_path))
+    old_obs = pd.read_parquet("{}mpc/old_obs.parquet".format(data_current_path)).reset_index(drop=True)
     trajectory_df = pd.read_parquet(
         "{}mpc/trajectory_df.parquet".format(data_current_path)
-    )
-    orb = pd.read_parquet("{}mpc/orbital.parquet".format(data_current_path))
-    obs_orb = pd.read_parquet("{}mpc/trajectory_orb.parquet".format(data_current_path))
+    ).reset_index(drop=True)
+    orb = pd.read_parquet("{}mpc/orbital.parquet".format(data_current_path)).reset_index(drop=True)
+    obs_orb = pd.read_parquet("{}mpc/trajectory_orb.parquet".format(data_current_path)).reset_index(drop=True)
 
     # load test data
     old_obs_test = pd.read_parquet("{}mpc/old_obs.parquet".format(data_test_path))

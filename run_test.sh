@@ -62,6 +62,14 @@ do
     --rcfile ${ROOTPATH}/.coveragerc $filename
 done
 
+for filename in fink_fat/test/*/*.py
+do
+  echo $filename
+  coverage run \
+    --source=${ROOTPATH} \
+    --rcfile ${ROOTPATH}/.coveragerc $filename
+done
+
 for filename in fink_fat/test/*.py
 do
   echo $filename

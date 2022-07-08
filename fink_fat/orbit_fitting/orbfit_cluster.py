@@ -208,11 +208,13 @@ if __name__ == "__main__":
         spark_unit_tests(globs)
     elif sys.argv[1] == "prod":
 
-        master_adress = sys.argv[2]
-        ram_dir = sys.argv[3]
-        n_triplets = sys.argv[4]
-        noise_ntrials = sys.argv[5]
-        prop_epoch = sys.argv[6]
+        master_adress = str(sys.argv[2])
+        ram_dir = str(sys.argv[3])
+        n_triplets = int(sys.argv[4])
+        noise_ntrials = int(sys.argv[5])
+        prop_epoch = float(sys.argv[6])
+
+        print(master_adress, " ", ram_dir, " ", n_triplets, " ", noise_ntrials, " ", prop_epoch)
 
         spark = spark = (
             SparkSession.builder.master(master_adress)
@@ -222,6 +224,9 @@ if __name__ == "__main__":
 
         # read the input from local parquet file
         traj_df = pd.read_parquet("tmp_traj.parquet")
+
+        nb_traj = len(np.unique(traj_df["trajectory_id"]))
+
         # transform the local pandas dataframe into a spark dataframe
         sparkDF = spark.createDataFrame(traj_df)
 
@@ -241,7 +246,7 @@ if __name__ == "__main__":
         )
 
         max_core = int(dict(spark.sparkContext.getConf().getAll())["spark.cores.max"])
-        spark_gb = spark_gb.repartition(max_core * 100)
+        spark_gb = spark_gb.repartition(nb_traj // max_core)
 
         print("begin compute orbital elem on spark")
         spark_column = spark_gb.withColumn(
