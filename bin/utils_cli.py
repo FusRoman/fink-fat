@@ -83,7 +83,7 @@ def init_cli(arguments):
     >>> os.rmdir("fink_fat_out")
     """
     # read the config file
-    config = configparser.SafeConfigParser(os.environ)
+    config = configparser.ConfigParser(os.environ)
 
     if arguments["--config"]:
         if os.path.exists(arguments["--config"]):
