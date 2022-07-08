@@ -9,33 +9,40 @@ on:
   pull_request:
 
 jobs:
-    run-test:
-      name: run-test
-      runs-on: ubuntu-latest
-      strategy:
-        matrix:
-          python-version: [3.7, 3.9]
-      steps:
-        - uses: actions/checkout@v2
-        - name: Set up Python ${{ matrix.python-version }}
-          uses: actions/setup-python@v2
-          with:
-            python-version: ${{ matrix.python-version }}
-        - name: Install Python dependencies
-          run: |
-            pip install --upgrade pip setuptools wheel
-            source ./install_python_deps.sh
-        - name: Install add-ons
-          run: |
-            sudo apt-get install python3-testresources
-        - name: install OrbFit SoftWare
-          run: |
-            ./fink_fat/test/orbFit_installer.sh
-        - name: update pickle
-          run: |
-            pip install pickle5
-        - name: Run test suites
-          run: |
-            ./run_test.sh
-            bash <(curl -s https://codecov.io/bash)
-    
+  run-test:
+    name: run-test
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        container: ["fusroman/fink_fat_docker:dev"]
+
+    container:
+      image: ${{ matrix.container }}
+
+    steps:
+    - uses: actions/checkout@v2
+      
+    - name: Set up env [1/2]
+      run: |
+        echo "FINK_FAT=$GITHUB_WORKSPACE" >> $GITHUB_ENV
+        echo "JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))" >> $GITHUB_ENV
+        echo "${BINPATH}" >> $GITHUB_PATH
+
+    - name: Set up env [2/2]
+      run: |
+        echo "PYTHONPATH="${PYTHONPATH}:${SPARKLIB}:${FINK_FAT}"" >> $GITHUB_ENV
+
+    - name: Check env
+      run: |
+        echo "FINK_FAT: $FINK_FAT"
+        echo "SPARK_HOME: $SPARK_HOME"
+        echo "SPARKLIB: $SPARKLIB"
+        echo "PYTHONPATH: $PYTHONPATH"
+        echo "JAVA_HOME: $JAVA_HOME"
+        echo `python -V`
+
+    - name: Run test suites
+      run: |
+        ./run_test.sh
+        curl -s https://codecov.io/bash | bash

@@ -1042,7 +1042,7 @@ def fink_fat_main(arguments):
             if arguments["--verbose"]:
                 print("Number of alerts retrieve from fink: {}".format(len(new_alerts)))
 
-            if arguments["--save"]:
+            if arguments["--save"] and object_class == "Solar System MPC":
                 if len(new_alerts) > 0:
                     new_alerts.to_parquet(
                         os.path.join(
@@ -1221,12 +1221,12 @@ def fink_fat_main(arguments):
                 )
                 break
 
-        if "last_assoc_date" in trajectory_df:
-            trajectory_df["last_assoc_date"] = current_date
-        else:
-            trajectory_df.insert(
-                len(trajectory_df.columns), "last_assoc_date", current_date
-            )
+        # if "last_assoc_date" in trajectory_df:
+        #     trajectory_df["last_assoc_date"] = current_date
+        # else:
+        #     trajectory_df.insert(
+        #         len(trajectory_df.columns), "last_assoc_date", current_date
+        #     )
 
         # save the new data computed by the online mode
         cast_obs_data(trajectory_df).to_parquet(tr_df_path)

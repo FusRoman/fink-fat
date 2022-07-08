@@ -1,43 +1,4 @@
 import numpy as np
-import glob
-import os
-import pandas as pd
-import pkg_resources
-
-
-def load_data(object_class):
-    all_df = []
-
-    p = pkg_resources.resource_filename("fink_fat", "data/month=*")
-
-    all_path = sorted(glob.glob(p))[:-1]
-
-    # load all data
-    for path in all_path:
-        df_sso = pd.read_pickle(path)
-        all_df.append(df_sso)
-
-    df_sso = pd.concat(all_df).sort_values(["jd"]).drop_duplicates()
-
-    df_sso = df_sso.drop_duplicates(["candid"])
-    df_sso = df_sso[df_sso["fink_class"] == object_class]
-
-    return df_sso
-
-
-def get_mpc_database(nb_indirection=0):
-    try:
-        parent_folder = "".join(np.repeat(np.array(["../"]), nb_indirection))
-
-        mpc_database = pd.read_json(
-            os.path.join(parent_folder, "data", "mpc_database", "mpcorb_extended.json")
-        )
-        mpc_database["Number"] = mpc_database["Number"].astype("string").str[1:-1]
-        return mpc_database
-    except Exception:
-        print(
-            "don't use this function outside of the fink-fat directories and if the mpc_database has not been downloaded before."
-        )
 
 
 def create_ranges(starts, ends, chunks_list):

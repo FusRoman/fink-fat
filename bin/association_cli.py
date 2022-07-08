@@ -325,11 +325,11 @@ def get_data(tr_df_path, obs_df_path, orb_res_path):
     ... )
 
     >>> len(tr_df)
-    4002
+    12660
     >>> len(old_obs_df)
-    6357
+    5440
     >>> last_tr_id
-    1893
+    5439
 
     >>> tr_df, old_obs_df, last_tr_id = get_data(
     ... data_path + "trajectory_df.parquet",
@@ -338,11 +338,11 @@ def get_data(tr_df_path, obs_df_path, orb_res_path):
     ... )
 
     >>> len(tr_df)
-    4002
+    12660
     >>> len(old_obs_df)
-    6357
+    5440
     >>> last_tr_id
-    1893
+    5439
     """
     tr_columns = [
         "ra",
