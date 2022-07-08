@@ -17,7 +17,6 @@
 
 set -e
 
-source ~/.bash_profile
 export ROOTPATH=`pwd`
 
 export PYTHONPATH="${SPARK_HOME}/python/test_coverage:$PYTHONPATH"
