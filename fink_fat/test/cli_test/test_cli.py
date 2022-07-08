@@ -113,21 +113,23 @@ if __name__ == "__main__":
 
     try:
         assert_frame_equal(
-            old_obs.sort_values("candid"), old_obs_test.sort_values("candid")
+            old_obs.sort_values("candid").round(decimals=5),
+            old_obs_test.sort_values("candid").round(decimals=5)
         )
 
         assert_frame_equal(
-            trajectory_df.sort_values("trajectory_id"),
-            trajectory_df_test.sort_values("trajectory_id"),
+            trajectory_df.sort_values("trajectory_id").round(decimals=5),
+            trajectory_df_test.sort_values("trajectory_id").round(decimals=5),
         )
 
         assert_frame_equal(
-            obs_orb_test.sort_values("trajectory_id"),
-            obs_orb.sort_values("trajectory_id"),
+            obs_orb_test.sort_values("trajectory_id").round(decimals=5),
+            obs_orb.sort_values("trajectory_id").round(decimals=5),
         )
 
         assert_frame_equal(
-            orb_test.sort_values("trajectory_id"), orb.sort_values("trajectory_id")
+            orb_test.sort_values("trajectory_id").round(decimals=5),
+            orb.sort_values("trajectory_id").round(decimals=5)
         )
 
         shutil.rmtree("fink_fat/test/cli_test/fink_fat_out")
