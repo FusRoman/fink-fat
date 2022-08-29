@@ -271,6 +271,10 @@ def trajectory_ephemeris(
         "rms_mean anomaly",
     ]
 
+    print()
+    print(res_orbit)
+    print()
+
     res_orbit = pd.DataFrame([res_orbit], columns=orb_columns)
     res_orbit["trajectory_id"] = traj_id
     res_orbit = res_orbit.apply(pd.to_numeric)
