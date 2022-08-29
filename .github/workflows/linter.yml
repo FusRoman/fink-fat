@@ -26,5 +26,4 @@ jobs:
         pip install flake8
     - name: Flake8 Fink FAT
       run: |
-        cat .flake8
         flake8 ../fink-fat
