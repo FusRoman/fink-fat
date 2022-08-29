@@ -271,9 +271,10 @@ def trajectory_ephemeris(
         "rms_mean anomaly",
     ]
 
-    print()
-    print(res_orbit)
-    print()
+    if len(res_orbit) != 13:
+        print()
+        print(res_orbit)
+        print()
 
     res_orbit = pd.DataFrame([res_orbit], columns=orb_columns)
     res_orbit["trajectory_id"] = traj_id
