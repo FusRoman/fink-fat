@@ -214,7 +214,17 @@ if __name__ == "__main__":
         noise_ntrials = int(sys.argv[5])
         prop_epoch = float(sys.argv[6])
 
-        print(master_adress, " ", ram_dir, " ", n_triplets, " ", noise_ntrials, " ", prop_epoch)
+        print(
+            master_adress,
+            " ",
+            ram_dir,
+            " ",
+            n_triplets,
+            " ",
+            noise_ntrials,
+            " ",
+            prop_epoch,
+        )
 
         spark = spark = (
             SparkSession.builder.master(master_adress)
