@@ -34,24 +34,21 @@ do
     --rcfile ${ROOTPATH}/.coveragerc $filename
 done
 
-# Run the test suite
-for filename in fink_fat/orbit_fitting/*.py
-do
-  if [ $filename == "fink_fat/orbit_fitting/orbfit_cluster.py" ]; then
-    echo $filename
-    # Run test suite + coverage
-    coverage run \
-      --source=${ROOTPATH} \
-      --rcfile ${ROOTPATH}/.coveragerc $filename "test"
-  else
-    echo $filename
-    # Run test suite + coverage
-    coverage run \
-      --source=${ROOTPATH} \
-      --rcfile ${ROOTPATH}/.coveragerc $filename
-  fi
-done
+# Run the test suite for the orbit fitting
 
+ORBITFITTING_PATH="fink_fat/orbit_fitting"
+echo "${ORBITFITTING_PATH}/mpcobs_files.py"
+coverage run --source=${ROOTPATH} --rcfile ${ROOTPATH}/.coveragerc ${ORBITFITTING_PATH}/mpcobs_files.py
+echo "${ORBITFITTING_PATH}/orbfit_files.py"
+coverage run --source=${ROOTPATH} --rcfile ${ROOTPATH}/.coveragerc ${ORBITFITTING_PATH}/orbfit_files.py
+echo "${ORBITFITTING_PATH}/orbfit_local.py"
+coverage run --source=${ROOTPATH} --rcfile ${ROOTPATH}/.coveragerc ${ORBITFITTING_PATH}/orbfit_local.py
+echo "${ORBITFITTING_PATH}/orbfit_cluster.py test"
+coverage run --source=${ROOTPATH} --rcfile ${ROOTPATH}/.coveragerc ${ORBITFITTING_PATH}/orbfit_cluster.py "test"
+echo "${ORBITFITTING_PATH}/orbfit_merger.py"
+coverage run --source=${ROOTPATH} --rcfile ${ROOTPATH}/.coveragerc ${ORBITFITTING_PATH}/orbfit_merger.py
+echo "${ORBITFITTING_PATH}/orbfit_ephem.py"
+coverage run --source=${ROOTPATH} --rcfile ${ROOTPATH}/.coveragerc ${ORBITFITTING_PATH}/orbfit_ephem.py
 
 for filename in bin/*.py
 do
