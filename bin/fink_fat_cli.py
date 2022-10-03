@@ -278,7 +278,8 @@ def fink_fat_main(arguments):
         traj_to_orbital, traj_no_orb = get_orbital_data(config, tr_df_path)
 
         if len(traj_to_orbital) > 0:
-
+            
+            # solve orbit in local mode
             if arguments["local"]:
 
                 t_before = t.time()
@@ -293,6 +294,7 @@ def fink_fat_main(arguments):
                 if arguments["--verbose"]:
                     print("time taken to get orbit: {}".format(orbfit_time))
 
+            # solve orbit in cluster mode
             elif arguments["cluster"]:
 
                 t_before = t.time()
@@ -304,6 +306,7 @@ def fink_fat_main(arguments):
                     print("time taken to get orbit: {}".format(orbfit_time))
 
             nb_orb = 0
+            # if new orbit has been computed
             if len(orbit_results) > 0:
                 # get only the trajectories with orbital elements
                 traj_with_orb_elem = orbit_results[orbit_results["a"] != -1.0]
