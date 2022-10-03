@@ -278,7 +278,7 @@ def fink_fat_main(arguments):
         traj_to_orbital, traj_no_orb = get_orbital_data(config, tr_df_path)
 
         if len(traj_to_orbital) > 0:
-            
+
             # solve orbit in local mode
             if arguments["local"]:
 
