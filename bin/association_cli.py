@@ -181,15 +181,13 @@ def get_last_sso_alert(object_class, date, verbose=False):
     ... )
 
     >>> pdf_test = pd.read_parquet("fink_fat/test/cli_test/get_sso_alert_test.parquet")
-
     >>> assert_frame_equal(res_request, pdf_test)
 
     >>> res_request = get_last_sso_alert(
     ... 'Solar System candidate',
     ... '2020-05-21'
     ... )
-
-    >>> assert_frame_equal(res_request, pd.DataFrame(columns=["ra", "dec", "jd", "nid", "fid", "dcmag", "dcmag_err", "candid", "not_updated", "last_assoc_date"]))
+    >>> assert_frame_equal(res_request, pd.DataFrame(columns=["objectId", "candid", "ra", "dec", "jd", "nid", "fid", "magpsf", "sigmapsf", "dcmag", "dcmag_err", "not_updated", "last_assoc_date"]))
     """
     startdate = datetime.datetime.strptime(date, "%Y-%m-%d")
     stopdate = startdate + datetime.timedelta(days=1)
@@ -235,7 +233,7 @@ def get_last_sso_alert(object_class, date, verbose=False):
         "i:nid": "nid",
         "i:fid": "fid",
         "i:magpsf": "magpsf",
-        "i:sigmapsf": "sigmapsf"
+        "i:sigmapsf": "sigmapsf",
     }
 
     if object_class == "Solar System MPC":  # pragma: no cover

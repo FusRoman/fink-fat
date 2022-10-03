@@ -1,4 +1,3 @@
-
 import datetime
 
 
@@ -7,9 +6,9 @@ def int_to_tags(traj_id):
     Convert an integer into a Fink-FAT trajectory identifier.
     The identifier format is :
 
-    "FFYYYYXXXXXXX" where 
-        'FF' is for 'Fink-FAT', 
-        'YYYY' is the full year (2022), 
+    "FFYYYYXXXXXXX" where
+        'FF' is for 'Fink-FAT',
+        'YYYY' is the full year (2022),
         and 'XXXXXXX' is the number of trajectories since the beginning of the year in the base-26.
 
     Parameters
@@ -61,7 +60,7 @@ def generate_tags(begin, end):
         start tags
     end : integer
         end tags
-    
+
     Returns
     -------
     tags_list : str list
@@ -70,9 +69,12 @@ def generate_tags(begin, end):
     Examples
     --------
     >>> l = generate_tags(3, 6)
-    >>> l
+    >>> year = datetime.date.today().year
+    >>> test_value = ['FF{}aaaaaad'.format(year), 'FF{}aaaaaae'.format(year), 'FF{}aaaaaaf'.format(year)]
+    >>> test_value == l
+    True
     """
-    [int_to_tags(i) for i in range(begin, end)]
+    return [int_to_tags(i) for i in range(begin, end)]
 
 
 if __name__ == "__main__":  # pragma: no cover
