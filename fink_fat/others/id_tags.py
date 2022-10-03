@@ -12,6 +12,16 @@ def int_to_tags(traj_id):
         'YYYY' is the full year (2022), 
         and 'XXXXXXX' is the number of trajectories since the beginning of the year in the base-26.
 
+    Parameters
+    ----------
+    traj_id : integer
+        trajectories identifier as an integer
+
+    Returns
+    -------
+    tags : str
+        the fink-fat identifier
+
     Examples
     --------
     >>> r = int_to_tags(15)
@@ -41,6 +51,27 @@ def int_to_tags(traj_id):
 
 
 def generate_tags(begin, end):
+    """
+    Generate a list of tags between begin and end
+
+
+    Parameters
+    ----------
+    begin : integer
+        start tags
+    end : integer
+        end tags
+    
+    Returns
+    -------
+    tags_list : str list
+        all the tags between begin and end
+
+    Examples
+    --------
+    >>> l = generate_tags(3, 6)
+    >>> l
+    """
     [int_to_tags(i) for i in range(begin, end)]
 
 
