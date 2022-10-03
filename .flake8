@@ -12,9 +12,6 @@ exclude =
     fink_fat/others/plot_perf_test.py
     fink_fat/others/night_report.py
     ../fink-fat/fink_fat_out_2/mpc/test_assoc_tag.py
-count
-show-source
-statistics
 per-file-ignores =
     ../fink-fat/fink_fat/orbit_fitting/orbfit_files.py:W503
     ../fink-fat/fink_fat/orbit_fitting/mpcobs_files.py:W503

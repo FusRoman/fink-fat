@@ -162,3 +162,23 @@ perf_test_*/
 
 fink_fat/others/plot_perf_test.py
 fink_fat/others/night_report.py
+
+asteroid_orbit.png
+custom2.conf
+custom3.conf
+custom4.conf
+custom5.conf
+fink_fat/data/month=03
+fink_fat/data/month=04
+fink_fat/data/month=05
+fink_fat/data/month=06
+fink_fat/data/month=07
+fink_fat/others/performance_test.py
+fink_fat_out_2/
+fink_fat_out_3/
+grb_evolution.png
+merge_sample.parquet
+merge_traj.parquet
+test_merger/
+track_bug/
+transient_data.json

@@ -271,6 +271,11 @@ def trajectory_ephemeris(
         "rms_mean anomaly",
     ]
 
+    if len(res_orbit) != 13:
+        print()
+        print(res_orbit)
+        print()
+
     res_orbit = pd.DataFrame([res_orbit], columns=orb_columns)
     res_orbit["trajectory_id"] = traj_id
     res_orbit = res_orbit.apply(pd.to_numeric)
@@ -387,7 +392,7 @@ def parallel_ephem(
     start_ephem,
     end_ephem=None,
     dt_ephem=None,
-    obs_code=675,
+    obs_code=500,
     prop_epoch=None,
     n_triplets=10,
     noise_ntrials=10,
@@ -448,7 +453,16 @@ def parallel_ephem(
     >>> start_ephem = 2459732.43750
     >>> end_ephem = 2459761.43750
 
-    >>> res_ephem, res_orb = parallel_ephem(df_traj, ram_dir, 3, start_ephem = start_ephem, end_ephem=end_ephem, cache_path=None, n_triplets=30, noise_ntrials=20)
+    >>> res_ephem, res_orb = parallel_ephem(
+    ... df_traj,
+    ... ram_dir,
+    ... 3,
+    ... start_ephem = start_ephem,
+    ... end_ephem=end_ephem,
+    ... cache_path=None,
+    ... n_triplets=30,
+    ... noise_ntrials=20
+    ... )
 
     >>> res_ephem_test = pd.read_parquet("fink_fat/test/ephem_test/res_parallel_ephem.parquet")
     >>> res_orb_test = pd.read_parquet("fink_fat/test/ephem_test/res_parallel_orb.parquet")
