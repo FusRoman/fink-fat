@@ -40,10 +40,11 @@ COPY . fink-fat
 # Install system build dependencies
 RUN yum -y update \
 && yum -y install which git wget java-11-openjdk-devel \
+&& echo "export JAVA_HOME=$(dirname $(dirname $(readlink -f $(type -P java))))" > /etc/profile.d/javahome.sh \
 && yum -y groupinstall "Development Tools" \
 && yum -y clean all \
-&& rm -rf /var/cache \
-&& echo "export JAVA_HOME=$(dirname $(dirname $(readlink -f $(type -P java))))" > /etc/profile.d/javahome.sh
+&& rm -rf /var/cache
+# && echo "export JAVA_HOME=$(dirname $(dirname $(readlink -f $(type -P java))))" > /etc/profile.d/javahome.sh
 
 # install python and the dependencies
 RUN wget --quiet https://repo.anaconda.com/miniconda/Miniconda3-${PYTHON_VERSION}-Linux-x86_64.sh -O ~/miniconda.sh \
@@ -73,7 +74,7 @@ RUN yum -y install epel-release \
 ENV SPARK_HOME=$USRLIBS/spark-${SPARK_VERSION}-bin-${HADOOP_VERSION}
 ENV SPARKLIB=${SPARK_HOME}/python:${SPARK_HOME}/python/lib/py4j-0.10.9-src.zip
 ENV ORBFIT_HOME=${USRLIBS}/OrbFit
-ENV JAVA_HOME="$(dirname $(dirname $(readlink -f $(type -P java))))"
+# ENV JAVA_HOME="$(dirname $(dirname $(readlink -f $(type -P java))))"
 ENV PATH=${SPARK_HOME}/bin:${SPARK_HOME}/sbin:/usr/local/bin:${PATH}
 
 ENV BINPATH=$PATH
