@@ -17,8 +17,9 @@
 
 set -e
 
-source ~/.bash_profile
 export ROOTPATH=`pwd`
+
+export PYTHONPATH="${SPARK_HOME}/python/test_coverage:$PYTHONPATH"
 export COVERAGE_PROCESS_START="${ROOTPATH}/.coveragerc"
 
 python -m pip install .
@@ -29,53 +30,52 @@ do
   echo $filename
   # Run test suite + coverage
   coverage run \
-    --append \
     --source=${ROOTPATH} \
     --rcfile ${ROOTPATH}/.coveragerc $filename
 done
 
-# Run the test suite
-for filename in fink_fat/orbit_fitting/*.py
-do
-  if [ $filename != "fink_fat/orbit_fitting/orbfit_cluster.py" ]; then
-    echo $filename
-    # Run test suite + coverage
-    coverage run \
-      --append \
-      --source=${ROOTPATH} \
-      --rcfile ${ROOTPATH}/.coveragerc $filename
-  fi
-done
+# Run the test suite for the orbit fitting
 
+ORBITFITTING_PATH="fink_fat/orbit_fitting"
+echo "${ORBITFITTING_PATH}/mpcobs_files.py"
+coverage run --source=${ROOTPATH} --rcfile ${ROOTPATH}/.coveragerc ${ORBITFITTING_PATH}/mpcobs_files.py
+echo "${ORBITFITTING_PATH}/orbfit_files.py"
+coverage run --source=${ROOTPATH} --rcfile ${ROOTPATH}/.coveragerc ${ORBITFITTING_PATH}/orbfit_files.py
+echo "${ORBITFITTING_PATH}/orbfit_local.py"
+coverage run --source=${ROOTPATH} --rcfile ${ROOTPATH}/.coveragerc ${ORBITFITTING_PATH}/orbfit_local.py
+# echo "${ORBITFITTING_PATH}/orbfit_cluster.py test"
+# coverage run --source=${ROOTPATH} --rcfile ${ROOTPATH}/.coveragerc ${ORBITFITTING_PATH}/orbfit_cluster.py "test"
+echo "${ORBITFITTING_PATH}/orbfit_merger.py"
+coverage run --source=${ROOTPATH} --rcfile ${ROOTPATH}/.coveragerc ${ORBITFITTING_PATH}/orbfit_merger.py
+# echo "${ORBITFITTING_PATH}/orbfit_ephem.py"
+# coverage run --source=${ROOTPATH} --rcfile ${ROOTPATH}/.coveragerc ${ORBITFITTING_PATH}/orbfit_ephem.py
 
 for filename in bin/*.py
 do
   echo $filename
   # Run test suite + coverage
   coverage run \
-    --append \
     --source=${ROOTPATH} \
     --rcfile ${ROOTPATH}/.coveragerc $filename
 done
 
-echo fink_fat/test/write_obs_test.py
-coverage run \
-  --append \
-  --source=${ROOTPATH} \
-  --rcfile ${ROOTPATH}/.coveragerc fink_fat/test/write_obs_test.py
+for filename in fink_fat/test/*/*.py
+do
+  echo $filename
+  coverage run \
+    --source=${ROOTPATH} \
+    --rcfile ${ROOTPATH}/.coveragerc $filename
+done
 
-echo fink_fat/test/continuous_integration.py
-# Run test suite + coverage
-coverage run \
-  --append \
-  --source=${ROOTPATH} \
-  --rcfile ${ROOTPATH}/.coveragerc fink_fat/test/continuous_integration.py
+for filename in fink_fat/test/*.py
+do
+  echo $filename
+  coverage run \
+    --source=${ROOTPATH} \
+    --rcfile ${ROOTPATH}/.coveragerc $filename
+done
 
-echo fink_fat/test/cli_test/test_cli.py
-coverage run \
-  --append \
-  --source=${ROOTPATH} \
-  --rcfile ${ROOTPATH}/.coveragerc fink_fat/test/cli_test/test_cli.py
+coverage combine
 
 unset COVERAGE_PROCESS_START
 

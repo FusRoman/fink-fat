@@ -279,6 +279,7 @@ def fink_fat_main(arguments):
 
         if len(traj_to_orbital) > 0:
 
+            # solve orbit in local mode
             if arguments["local"]:
 
                 t_before = t.time()
@@ -293,6 +294,7 @@ def fink_fat_main(arguments):
                 if arguments["--verbose"]:
                     print("time taken to get orbit: {}".format(orbfit_time))
 
+            # solve orbit in cluster mode
             elif arguments["cluster"]:
 
                 t_before = t.time()
@@ -304,6 +306,7 @@ def fink_fat_main(arguments):
                     print("time taken to get orbit: {}".format(orbfit_time))
 
             nb_orb = 0
+            # if new orbit has been computed
             if len(orbit_results) > 0:
                 # get only the trajectories with orbital elements
                 traj_with_orb_elem = orbit_results[orbit_results["a"] != -1.0]
@@ -1042,7 +1045,7 @@ def fink_fat_main(arguments):
             if arguments["--verbose"]:
                 print("Number of alerts retrieve from fink: {}".format(len(new_alerts)))
 
-            if arguments["--save"]:
+            if arguments["--save"] and object_class == "Solar System MPC":
                 if len(new_alerts) > 0:
                     new_alerts.to_parquet(
                         os.path.join(
@@ -1221,12 +1224,12 @@ def fink_fat_main(arguments):
                 )
                 break
 
-        if "last_assoc_date" in trajectory_df:
-            trajectory_df["last_assoc_date"] = current_date
-        else:
-            trajectory_df.insert(
-                len(trajectory_df.columns), "last_assoc_date", current_date
-            )
+        # if "last_assoc_date" in trajectory_df:
+        #     trajectory_df["last_assoc_date"] = current_date
+        # else:
+        #     trajectory_df.insert(
+        #         len(trajectory_df.columns), "last_assoc_date", current_date
+        #     )
 
         # save the new data computed by the online mode
         cast_obs_data(trajectory_df).to_parquet(tr_df_path)

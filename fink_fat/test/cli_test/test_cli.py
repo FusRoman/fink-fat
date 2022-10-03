@@ -8,7 +8,6 @@ import logging
 
 from bin.fink_fat_cli import main_test
 
-
 if __name__ == "__main__":
     data_test_path = "fink_fat/test/cli_test/fink_fat_out_test/"
     data_current_path = "fink_fat/test/cli_test/fink_fat_out/"
@@ -59,13 +58,56 @@ if __name__ == "__main__":
         ]
     )
 
-    old_obs = pd.read_parquet("{}mpc/old_obs.parquet".format(data_current_path))
+    main_test(
+        [
+            "offline",
+            "mpc",
+            "local",
+            "2020-05-08",
+            "--config",
+            "fink_fat/test/cli_test/test.conf",
+            "--verbose",
+        ]
+    )
+
+    main_test(
+        [
+            "associations",
+            "mpc",
+            "--night",
+            "2020-05-09",
+            "--config",
+            "fink_fat/test/cli_test/test.conf",
+            "--verbose",
+        ]
+    )
+
+    main_test(
+        [
+            "solve_orbit",
+            "mpc",
+            "cluster",
+            "--config",
+            "fink_fat/test/cli_test/test.conf",
+            "--verbose",
+        ]
+    )
+
+    # load current data
+    old_obs = pd.read_parquet(
+        "{}mpc/old_obs.parquet".format(data_current_path)
+    ).reset_index(drop=True)
     trajectory_df = pd.read_parquet(
         "{}mpc/trajectory_df.parquet".format(data_current_path)
-    )
-    orb = pd.read_parquet("{}mpc/orbital.parquet".format(data_current_path))
-    obs_orb = pd.read_parquet("{}mpc/trajectory_orb.parquet".format(data_current_path))
+    ).reset_index(drop=True)
+    orb = pd.read_parquet(
+        "{}mpc/orbital.parquet".format(data_current_path)
+    ).reset_index(drop=True)
+    obs_orb = pd.read_parquet(
+        "{}mpc/trajectory_orb.parquet".format(data_current_path)
+    ).reset_index(drop=True)
 
+    # load test data
     old_obs_test = pd.read_parquet("{}mpc/old_obs.parquet".format(data_test_path))
     trajectory_df_test = pd.read_parquet(
         "{}mpc/trajectory_df.parquet".format(data_test_path)
@@ -76,10 +118,25 @@ if __name__ == "__main__":
     )
 
     try:
-        assert_frame_equal(old_obs, old_obs_test)
-        assert_frame_equal(trajectory_df, trajectory_df_test)
-        assert_frame_equal(orb_test, orb)
-        assert_frame_equal(obs_orb_test, obs_orb)
+        assert_frame_equal(
+            old_obs.sort_values("candid").round(decimals=5),
+            old_obs_test.sort_values("candid").round(decimals=5),
+        )
+
+        assert_frame_equal(
+            trajectory_df.sort_values("trajectory_id").round(decimals=5),
+            trajectory_df_test.sort_values("trajectory_id").round(decimals=5),
+        )
+
+        assert_frame_equal(
+            obs_orb_test.sort_values("trajectory_id").round(decimals=5),
+            obs_orb.sort_values("trajectory_id").round(decimals=5),
+        )
+
+        assert_frame_equal(
+            orb_test[["trajectory_id", "ref_epoch", "a", "e", "i"]].sort_values("trajectory_id").round(decimals=5),
+            orb[["trajectory_id", "ref_epoch", "a", "e", "i"]].sort_values("trajectory_id").round(decimals=5),
+        )
 
         shutil.rmtree("fink_fat/test/cli_test/fink_fat_out")
 

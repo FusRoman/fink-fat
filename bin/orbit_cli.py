@@ -52,6 +52,12 @@ def get_orbital_data(config, tr_df_path):  # pragma: no cover
 def cluster_mode(config, traj_to_orbital):  # pragma: no cover
     traj_to_orbital.to_parquet("tmp_traj.parquet")
 
+    ram_dir = config["SOLVE_ORBIT_PARAMS"]["ram_dir"]
+    n_triplets = config["SOLVE_ORBIT_PARAMS"]["n_triplets"]
+    noise_ntrials = config["SOLVE_ORBIT_PARAMS"]["noise_ntrials"]
+    prop_epoch = config["SOLVE_ORBIT_PARAMS"]["prop_epoch"]
+    orbfit_verbose = config["SOLVE_ORBIT_PARAMS"]["orbfit_verbose"]
+
     master_manager = config["SOLVE_ORBIT_PARAMS"]["manager"]
     principal_group = config["SOLVE_ORBIT_PARAMS"]["principal"]
     secret = config["SOLVE_ORBIT_PARAMS"]["secret"]
@@ -61,12 +67,18 @@ def cluster_mode(config, traj_to_orbital):  # pragma: no cover
     exec_mem = config["SOLVE_ORBIT_PARAMS"]["executor_memory"]
     max_core = config["SOLVE_ORBIT_PARAMS"]["max_core"]
     exec_core = config["SOLVE_ORBIT_PARAMS"]["executor_core"]
+    orbfit_home = config["SOLVE_ORBIT_PARAMS"]["orbfit_path"]
 
     application = os.path.join(
-        os.path.dirname(fink_fat.__file__), "orbit_fitting", "orbfit_cluster.py",
+        os.path.dirname(fink_fat.__file__), "orbit_fitting", "orbfit_cluster.py prod",
     )
 
     application += " " + master_manager
+    application += " " + ram_dir
+    application += " " + n_triplets
+    application += " " + noise_ntrials
+    application += " " + prop_epoch
+    application += " " + orbfit_verbose
 
     spark_submit = "spark-submit \
         --master {} \
@@ -78,6 +90,7 @@ def cluster_mode(config, traj_to_orbital):  # pragma: no cover
         --executor-memory {}G \
         --conf spark.cores.max={} \
         --conf spark.executor.cores={} \
+        --conf spark.executorEnv.ORBFIT_HOME={} \
         {}".format(
         master_manager,
         principal_group,
@@ -88,6 +101,7 @@ def cluster_mode(config, traj_to_orbital):  # pragma: no cover
         exec_mem,
         max_core,
         exec_core,
+        orbfit_home,
         application,
     )
 
