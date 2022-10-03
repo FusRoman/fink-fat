@@ -47,8 +47,8 @@ coverage run --source=${ROOTPATH} --rcfile ${ROOTPATH}/.coveragerc ${ORBITFITTIN
 # coverage run --source=${ROOTPATH} --rcfile ${ROOTPATH}/.coveragerc ${ORBITFITTING_PATH}/orbfit_cluster.py "test"
 echo "${ORBITFITTING_PATH}/orbfit_merger.py"
 coverage run --source=${ROOTPATH} --rcfile ${ROOTPATH}/.coveragerc ${ORBITFITTING_PATH}/orbfit_merger.py
-echo "${ORBITFITTING_PATH}/orbfit_ephem.py"
-coverage run --source=${ROOTPATH} --rcfile ${ROOTPATH}/.coveragerc ${ORBITFITTING_PATH}/orbfit_ephem.py
+# echo "${ORBITFITTING_PATH}/orbfit_ephem.py"
+# coverage run --source=${ROOTPATH} --rcfile ${ROOTPATH}/.coveragerc ${ORBITFITTING_PATH}/orbfit_ephem.py
 
 for filename in bin/*.py
 do
