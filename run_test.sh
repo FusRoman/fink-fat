@@ -43,8 +43,8 @@ echo "${ORBITFITTING_PATH}/orbfit_files.py"
 coverage run --source=${ROOTPATH} --rcfile ${ROOTPATH}/.coveragerc ${ORBITFITTING_PATH}/orbfit_files.py
 echo "${ORBITFITTING_PATH}/orbfit_local.py"
 coverage run --source=${ROOTPATH} --rcfile ${ROOTPATH}/.coveragerc ${ORBITFITTING_PATH}/orbfit_local.py
-echo "${ORBITFITTING_PATH}/orbfit_cluster.py test"
-coverage run --source=${ROOTPATH} --rcfile ${ROOTPATH}/.coveragerc ${ORBITFITTING_PATH}/orbfit_cluster.py "test"
+# echo "${ORBITFITTING_PATH}/orbfit_cluster.py test"
+# coverage run --source=${ROOTPATH} --rcfile ${ROOTPATH}/.coveragerc ${ORBITFITTING_PATH}/orbfit_cluster.py "test"
 echo "${ORBITFITTING_PATH}/orbfit_merger.py"
 coverage run --source=${ROOTPATH} --rcfile ${ROOTPATH}/.coveragerc ${ORBITFITTING_PATH}/orbfit_merger.py
 echo "${ORBITFITTING_PATH}/orbfit_ephem.py"
