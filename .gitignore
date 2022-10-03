@@ -182,3 +182,4 @@ merge_traj.parquet
 test_merger/
 track_bug/
 transient_data.json
+fink_fat_test/

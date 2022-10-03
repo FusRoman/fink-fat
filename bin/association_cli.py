@@ -103,6 +103,7 @@ def request_fink(
 
             return request_fink(
                 object_class,
+                n_sso,
                 startdate,
                 stopdate,
                 request_columns,
@@ -200,7 +201,7 @@ def get_last_sso_alert(object_class, date, verbose=False):
             )
         )
 
-    request_columns = "i:ra, i:dec, i:jd, i:nid, i:fid, i:candid, i:magpsf, i:sigmapsf, i:magnr, i:sigmagnr, i:magzpsci, i:isdiffpos"
+    request_columns = "i:objectId,i:candid,i:ra,i:dec,i:jd,i:nid,i:fid,i:magpsf,i:sigmapsf,i:magnr,i:sigmagnr,i:magzpsci,i:isdiffpos"
     if object_class == "Solar System MPC":  # pragma: no cover
         request_columns += ", i:ssnamenr"
 
@@ -211,24 +212,30 @@ def get_last_sso_alert(object_class, date, verbose=False):
     )
 
     required_columns = [
+        "objectId",
+        "candid",
         "ra",
         "dec",
         "jd",
         "nid",
         "fid",
+        "magpsf",
+        "sigmapsf",
         "dcmag",
         "dcmag_err",
-        "candid",
         "not_updated",
         "last_assoc_date",
     ]
     translate_columns = {
+        "i:objectId": "objectId",
+        "i:candid": "candid",
         "i:ra": "ra",
         "i:dec": "dec",
         "i:jd": "jd",
         "i:nid": "nid",
         "i:fid": "fid",
-        "i:candid": "candid",
+        "i:magpsf": "magpsf",
+        "i:sigmapsf": "sigmapsf"
     }
 
     if object_class == "Solar System MPC":  # pragma: no cover
