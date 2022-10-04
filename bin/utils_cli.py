@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 import fink_fat
+from fink_fat.others.id_tags import generate_tags
 
 
 def string_to_bool(bool_str):
@@ -405,6 +406,97 @@ def align_trajectory_id(trajectory_df, orbit_df, obs_orbit_df):
             )
 
     return trajectory_df, orbit_df, obs_orbit_df
+
+
+def assig_tags(orb_df, traj_orb_df, start_tags):
+    """
+    Assign the ssoCandId to the orbital and traj_orb dataframe
+
+    Parameters
+    ----------
+    orb_df : DataFrame
+        contains the orbital elements
+    traj_orb_df : DataFrame
+        contains the observations
+    start_tags : integer
+        start generation tags number, the tags will be between start_tags and len(orb_df)
+
+    Returns
+    -------
+    orb_df : DataFrame
+        same as inputs with a new column called ssoCandId, the trajectory_id column has been dropped
+    traj_orb_df : DataFrame
+        same as inputs with a new column called ssoCandId, the trajectory_id column has been dropped
+
+    Examples
+    --------
+    >>> orb = pd.DataFrame({
+    ... "trajectory_id": [0, 1, 2, 3, 4, 5],
+    ... "a": [1, 1.5, 1.6, 2.8, 35.41, 265.32],
+    ... "ref_epoch": [0, 2, 3, 5, 4, 1]
+    ... })
+    >>> traj = pd.DataFrame({
+    ... "trajectory_id": [0, 0, 0, 0, 0, 0, 1, 2, 1, 2, 1, 3, 3, 4, 5, 3, 5, 4, 5, 4, 3, 1, 2, 3, 4, 5, 5, 2],
+    ... "candid": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27],
+    ... "ra": [0, 0, 0, 0, 0, 0, 1, 2, 1, 2, 1, 3, 3, 4, 5, 3, 5, 4, 5, 4, 3, 1, 2, 3, 4, 5, 5, 2]
+    ... })
+    >>> new_orb, new_traj = assig_tags(orb, traj, 0)
+    >>> new_orb[["ssoCandId", "ref_epoch", "a"]]
+           ssoCandId  ref_epoch       a
+    0  FF2022aaaaaaa          0    1.00
+    5  FF2022aaaaaab          1  265.32
+    1  FF2022aaaaaac          2    1.50
+    2  FF2022aaaaaad          3    1.60
+    4  FF2022aaaaaae          4   35.41
+    3  FF2022aaaaaaf          5    2.80
+
+    >>> new_traj[["ssoCandId", "candid", "ra"]]
+            ssoCandId  candid  ra
+    0   FF2022aaaaaaa       0   0
+    1   FF2022aaaaaaa       1   0
+    2   FF2022aaaaaaa       2   0
+    3   FF2022aaaaaaa       3   0
+    4   FF2022aaaaaaa       4   0
+    5   FF2022aaaaaaa       5   0
+    6   FF2022aaaaaac       6   1
+    7   FF2022aaaaaad       7   2
+    8   FF2022aaaaaac       8   1
+    9   FF2022aaaaaad       9   2
+    10  FF2022aaaaaac      10   1
+    11  FF2022aaaaaaf      11   3
+    12  FF2022aaaaaaf      12   3
+    13  FF2022aaaaaae      13   4
+    14  FF2022aaaaaab      14   5
+    15  FF2022aaaaaaf      15   3
+    16  FF2022aaaaaab      16   5
+    17  FF2022aaaaaae      17   4
+    18  FF2022aaaaaab      18   5
+    19  FF2022aaaaaae      19   4
+    20  FF2022aaaaaaf      20   3
+    21  FF2022aaaaaac      21   1
+    22  FF2022aaaaaad      22   2
+    23  FF2022aaaaaaf      23   3
+    24  FF2022aaaaaae      24   4
+    25  FF2022aaaaaab      25   5
+    26  FF2022aaaaaab      26   5
+    27  FF2022aaaaaad      27   2
+    """
+    orb_df = orb_df.sort_values("ref_epoch")
+
+    all_tags = generate_tags(start_tags, start_tags + len(orb_df))
+    int_id_to_tags = {
+        tr_id: tag for tr_id, tag in zip(orb_df["trajectory_id"], all_tags)
+    }
+
+    assert len(np.unique(orb_df["trajectory_id"])) == len(int_id_to_tags)
+
+    orb_df["ssoCandId"] = orb_df["trajectory_id"].map(int_id_to_tags)
+
+    traj_orb_df["ssoCandId"] = traj_orb_df["trajectory_id"].map(int_id_to_tags)
+
+    orb_df = orb_df.drop("trajectory_id", axis=1)
+    traj_orb_df = traj_orb_df.drop("trajectory_id", axis=1)
+    return orb_df, traj_orb_df
 
 
 if __name__ == "__main__":  # pragma: no cover

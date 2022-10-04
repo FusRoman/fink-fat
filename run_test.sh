@@ -34,6 +34,17 @@ do
     --rcfile ${ROOTPATH}/.coveragerc $filename
 done
 
+# Run the test suite
+for filename in fink_fat/others/*.py
+do
+  echo $filename
+  # Run test suite + coverage
+  coverage run \
+    --source=${ROOTPATH} \
+    --rcfile ${ROOTPATH}/.coveragerc $filename
+done
+
+
 # Run the test suite for the orbit fitting
 
 ORBITFITTING_PATH="fink_fat/orbit_fitting"
