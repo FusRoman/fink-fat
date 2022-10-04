@@ -103,6 +103,7 @@ def request_fink(
 
             return request_fink(
                 object_class,
+                n_sso,
                 startdate,
                 stopdate,
                 request_columns,
@@ -180,15 +181,13 @@ def get_last_sso_alert(object_class, date, verbose=False):
     ... )
 
     >>> pdf_test = pd.read_parquet("fink_fat/test/cli_test/get_sso_alert_test.parquet")
-
     >>> assert_frame_equal(res_request, pdf_test)
 
     >>> res_request = get_last_sso_alert(
     ... 'Solar System candidate',
     ... '2020-05-21'
     ... )
-
-    >>> assert_frame_equal(res_request, pd.DataFrame(columns=["ra", "dec", "jd", "nid", "fid", "dcmag", "dcmag_err", "candid", "not_updated", "last_assoc_date"]))
+    >>> assert_frame_equal(res_request, pd.DataFrame(columns=["objectId", "candid", "ra", "dec", "jd", "nid", "fid", "magpsf", "sigmapsf", "dcmag", "dcmag_err", "not_updated", "last_assoc_date"]))
     """
     startdate = datetime.datetime.strptime(date, "%Y-%m-%d")
     stopdate = startdate + datetime.timedelta(days=1)
@@ -200,7 +199,7 @@ def get_last_sso_alert(object_class, date, verbose=False):
             )
         )
 
-    request_columns = "i:ra, i:dec, i:jd, i:nid, i:fid, i:candid, i:magpsf, i:sigmapsf, i:magnr, i:sigmagnr, i:magzpsci, i:isdiffpos"
+    request_columns = "i:objectId,i:candid,i:ra,i:dec,i:jd,i:nid,i:fid,i:magpsf,i:sigmapsf,i:magnr,i:sigmagnr,i:magzpsci,i:isdiffpos"
     if object_class == "Solar System MPC":  # pragma: no cover
         request_columns += ", i:ssnamenr"
 
@@ -211,24 +210,30 @@ def get_last_sso_alert(object_class, date, verbose=False):
     )
 
     required_columns = [
+        "objectId",
+        "candid",
         "ra",
         "dec",
         "jd",
         "nid",
         "fid",
+        "magpsf",
+        "sigmapsf",
         "dcmag",
         "dcmag_err",
-        "candid",
         "not_updated",
         "last_assoc_date",
     ]
     translate_columns = {
+        "i:objectId": "objectId",
+        "i:candid": "candid",
         "i:ra": "ra",
         "i:dec": "dec",
         "i:jd": "jd",
         "i:nid": "nid",
         "i:fid": "fid",
-        "i:candid": "candid",
+        "i:magpsf": "magpsf",
+        "i:sigmapsf": "sigmapsf",
     }
 
     if object_class == "Solar System MPC":  # pragma: no cover
@@ -293,7 +298,7 @@ def no_reset():  # pragma: no cover
     print("Abort reset.")
 
 
-def get_data(tr_df_path, obs_df_path, orb_res_path):
+def get_data(tr_df_path, obs_df_path):
     """
     Load the trajectory and old observations save by the previous call of fink_fat
 
@@ -303,8 +308,6 @@ def get_data(tr_df_path, obs_df_path, orb_res_path):
         path where are saved the trajectory observations
     obs_df_path : string
         path where are saved the old observations
-    orb_res_path : string
-        path where are saved the orbital parameters
 
     Returns
     -------
@@ -320,8 +323,7 @@ def get_data(tr_df_path, obs_df_path, orb_res_path):
     >>> data_path = "fink_fat/test/cli_test/fink_fat_out_test/mpc/"
     >>> tr_df, old_obs_df, last_tr_id = get_data(
     ... data_path + "trajectory_df.parquet",
-    ... data_path + "old_obs.parquet",
-    ... data_path + "orbital.parquet"
+    ... data_path + "old_obs.parquet"
     ... )
 
     >>> len(tr_df)
@@ -329,12 +331,11 @@ def get_data(tr_df_path, obs_df_path, orb_res_path):
     >>> len(old_obs_df)
     5440
     >>> last_tr_id
-    5439
+    7704
 
     >>> tr_df, old_obs_df, last_tr_id = get_data(
     ... data_path + "trajectory_df.parquet",
-    ... data_path + "old_obs.parquet",
-    ... data_path + "toto.parquet"
+    ... data_path + "old_obs.parquet"
     ... )
 
     >>> len(tr_df)
@@ -342,7 +343,7 @@ def get_data(tr_df_path, obs_df_path, orb_res_path):
     >>> len(old_obs_df)
     5440
     >>> last_tr_id
-    5439
+    7704
     """
     tr_columns = [
         "ra",
@@ -386,13 +387,7 @@ def get_data(tr_df_path, obs_df_path, orb_res_path):
         #     )
         #     exit()
 
-        if os.path.exists(orb_res_path):
-            orb_cand = pd.read_parquet(orb_res_path)
-            last_trajectory_id = np.max(
-                np.union1d(trajectory_df["trajectory_id"], orb_cand["trajectory_id"])
-            )
-        else:
-            last_trajectory_id = np.max(trajectory_df["trajectory_id"])
+        last_trajectory_id = np.max(trajectory_df["trajectory_id"])
 
     return trajectory_df, old_obs_df, last_trajectory_id
 
