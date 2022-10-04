@@ -65,8 +65,8 @@ from bin.utils_cli import (
     init_cli,
     string_to_bool,
     yes_or_no,
-    align_trajectory_id,
     save_additional_stats,
+    assig_tags,
 )
 
 import fink_fat
@@ -130,7 +130,7 @@ def fink_fat_main(arguments):
             last_night = arguments["--night"]
 
         trajectory_df, old_obs_df, last_trajectory_id = get_data(
-            tr_df_path, obs_df_path, orb_res_path
+            tr_df_path, obs_df_path
         )
 
         if len(trajectory_df) > 0:
@@ -279,6 +279,14 @@ def fink_fat_main(arguments):
 
         if len(traj_to_orbital) > 0:
 
+            nb_traj_to_orbfit = len(np.unique(traj_to_orbital["trajectory_id"]))
+            if arguments["--verbose"]:
+                print(
+                    "number of trajectories send to the orbit solver: {}".format(
+                        nb_traj_to_orbfit
+                    )
+                )
+
             # solve orbit in local mode
             if arguments["local"]:
 
@@ -312,6 +320,11 @@ def fink_fat_main(arguments):
                 traj_with_orb_elem = orbit_results[orbit_results["a"] != -1.0]
                 nb_orb = len(traj_with_orb_elem)
 
+                if arguments["--verbose"]:
+                    print("number of trajectories with orbit: {}".format(nb_orb))
+                    ratio_traj_to_orb = (nb_orb / nb_traj_to_orbfit) * 100
+                    print("ratio: {0:.3f} %".format(ratio_traj_to_orb))
+
                 # get the observations of trajectories with orbital elements
                 obs_with_orb = traj_to_orbital[
                     traj_to_orbital["trajectory_id"].isin(
@@ -325,12 +338,16 @@ def fink_fat_main(arguments):
                     # if a save of orbit exist then a save of obs orbit necessarily exist
                     traj_orb_df = pd.read_parquet(traj_orb_path)
 
+                    traj_with_orb_elem, obs_with_orb = assig_tags(
+                        traj_with_orb_elem, obs_with_orb, len(orb_df)
+                    )
+
                     orb_df = pd.concat([orb_df, traj_with_orb_elem])
                     traj_orb_df = pd.concat([traj_orb_df, obs_with_orb])
 
-                    traj_no_orb, orb_df, traj_orb_df = align_trajectory_id(
-                        traj_no_orb, orb_df, traj_orb_df
-                    )
+                    # traj_no_orb, orb_df, traj_orb_df = align_trajectory_id(
+                    #     traj_no_orb, orb_df, traj_orb_df
+                    # )
 
                     orb_df.to_parquet(orb_res_path)
                     traj_orb_df.to_parquet(traj_orb_path)
@@ -339,11 +356,14 @@ def fink_fat_main(arguments):
                     traj_no_orb.to_parquet(tr_df_path)
                 else:
 
-                    traj_no_orb, traj_with_orb_elem, obs_with_orb = align_trajectory_id(
-                        traj_no_orb, traj_with_orb_elem, obs_with_orb
-                    )
+                    # traj_no_orb, traj_with_orb_elem, obs_with_orb = align_trajectory_id(
+                    #     traj_no_orb, traj_with_orb_elem, obs_with_orb
+                    # )
 
                     # else we create the save of orbital elements and the associated observations
+                    traj_with_orb_elem, obs_with_orb = assig_tags(
+                        traj_with_orb_elem, obs_with_orb, 0
+                    )
                     traj_with_orb_elem.to_parquet(orb_res_path)
                     obs_with_orb.to_parquet(traj_orb_path)
 
@@ -1082,14 +1102,7 @@ def fink_fat_main(arguments):
             # get the last trajectory_id as baseline for new trajectories
             last_trajectory_id = 0
             if len(trajectory_df) > 0:
-                if len(orb_df) > 0:
-                    last_trajectory_id = np.max(
-                        np.union1d(
-                            trajectory_df["trajectory_id"], orb_df["trajectory_id"]
-                        )
-                    )
-                else:
-                    last_trajectory_id = np.max(trajectory_df["trajectory_id"])
+                last_trajectory_id = np.max(trajectory_df["trajectory_id"])
 
             nb_traj = len(np.unique(trajectory_df["trajectory_id"]))
             nb_old_obs = len(old_obs_df)
@@ -1190,6 +1203,11 @@ def fink_fat_main(arguments):
                     ]
                     nb_orb = len(current_traj_with_orb_elem)
 
+                    if arguments["--verbose"]:
+                        print("number of trajectories with orbit: {}".format(nb_orb))
+                        ratio_traj_to_orb = (nb_orb / nb_traj_to_orbfit) * 100
+                        print("ratio: {0:.3f} %".format(ratio_traj_to_orb))
+
                     # get the observations of trajectories with orbital elements
                     current_obs_with_orb = traj_to_orbital[
                         traj_to_orbital["trajectory_id"].isin(
@@ -1197,12 +1215,19 @@ def fink_fat_main(arguments):
                         )
                     ]
 
+                    current_traj_with_orb_elem, current_obs_with_orb = assig_tags(
+                        current_traj_with_orb_elem, current_obs_with_orb, len(orb_df)
+                    )
+
                     orb_df = pd.concat([orb_df, current_traj_with_orb_elem])
                     traj_orb_df = pd.concat([traj_orb_df, current_obs_with_orb])
 
-                    (trajectory_df, orb_df, traj_orb_df,) = align_trajectory_id(
-                        trajectory_df, orb_df, traj_orb_df
-                    )
+                    # (trajectory_df, orb_df, traj_orb_df,) = align_trajectory_id(
+                    #     trajectory_df, orb_df, traj_orb_df
+                    # )
+                else:
+                    if arguments["--verbose"]:
+                        print("No orbit found")
 
             stats_dict[current_date.strftime("%Y-%m-%d")] = {
                 "assoc_time": assoc_time,

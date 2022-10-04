@@ -298,7 +298,7 @@ def no_reset():  # pragma: no cover
     print("Abort reset.")
 
 
-def get_data(tr_df_path, obs_df_path, orb_res_path):
+def get_data(tr_df_path, obs_df_path):
     """
     Load the trajectory and old observations save by the previous call of fink_fat
 
@@ -308,8 +308,6 @@ def get_data(tr_df_path, obs_df_path, orb_res_path):
         path where are saved the trajectory observations
     obs_df_path : string
         path where are saved the old observations
-    orb_res_path : string
-        path where are saved the orbital parameters
 
     Returns
     -------
@@ -325,8 +323,7 @@ def get_data(tr_df_path, obs_df_path, orb_res_path):
     >>> data_path = "fink_fat/test/cli_test/fink_fat_out_test/mpc/"
     >>> tr_df, old_obs_df, last_tr_id = get_data(
     ... data_path + "trajectory_df.parquet",
-    ... data_path + "old_obs.parquet",
-    ... data_path + "orbital.parquet"
+    ... data_path + "old_obs.parquet"
     ... )
 
     >>> len(tr_df)
@@ -334,12 +331,11 @@ def get_data(tr_df_path, obs_df_path, orb_res_path):
     >>> len(old_obs_df)
     5440
     >>> last_tr_id
-    5439
+    7704
 
     >>> tr_df, old_obs_df, last_tr_id = get_data(
     ... data_path + "trajectory_df.parquet",
-    ... data_path + "old_obs.parquet",
-    ... data_path + "toto.parquet"
+    ... data_path + "old_obs.parquet"
     ... )
 
     >>> len(tr_df)
@@ -347,7 +343,7 @@ def get_data(tr_df_path, obs_df_path, orb_res_path):
     >>> len(old_obs_df)
     5440
     >>> last_tr_id
-    5439
+    7704
     """
     tr_columns = [
         "ra",
@@ -391,13 +387,7 @@ def get_data(tr_df_path, obs_df_path, orb_res_path):
         #     )
         #     exit()
 
-        if os.path.exists(orb_res_path):
-            orb_cand = pd.read_parquet(orb_res_path)
-            last_trajectory_id = np.max(
-                np.union1d(trajectory_df["trajectory_id"], orb_cand["trajectory_id"])
-            )
-        else:
-            last_trajectory_id = np.max(trajectory_df["trajectory_id"])
+        last_trajectory_id = np.max(trajectory_df["trajectory_id"])
 
     return trajectory_df, old_obs_df, last_trajectory_id
 

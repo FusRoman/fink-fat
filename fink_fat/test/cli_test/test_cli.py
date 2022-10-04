@@ -129,16 +129,16 @@ if __name__ == "__main__":
         )
 
         assert_frame_equal(
-            obs_orb_test.sort_values("trajectory_id").round(decimals=5),
-            obs_orb.sort_values("trajectory_id").round(decimals=5),
+            obs_orb_test.sort_values("ssoCandId").round(decimals=5),
+            obs_orb.sort_values("ssoCandId").round(decimals=5),
         )
 
         assert_frame_equal(
-            orb_test[["trajectory_id", "ref_epoch", "a", "e", "i"]]
-            .sort_values("trajectory_id")
+            orb_test[["ssoCandId", "ref_epoch", "a", "e", "i"]]
+            .sort_values("ssoCandId")
             .round(decimals=5),
-            orb[["trajectory_id", "ref_epoch", "a", "e", "i"]]
-            .sort_values("trajectory_id")
+            orb[["ssoCandId", "ref_epoch", "a", "e", "i"]]
+            .sort_values("ssoCandId")
             .round(decimals=5),
         )
 
