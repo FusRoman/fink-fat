@@ -1,0 +1,12 @@
+format  = 'OEF2.0'       ! file format
+rectype = 'ML'           ! record type (1L/ML)
+refsys  = ECLM J2000     ! default reference system
+END_OF_HEADER
+! Vaisala(wN)
+K20S78Y
+! Keplerian elements: a, e, i, long. node, arg. peric., mean anomaly
+ KEP   1.0101036808411066E+00 0.017570539774989   0.0462434008335 333.9940951731836 116.2380298003005 273.2124730253331
+ MJD     59116.291244266 TDT
+ MAG   0.000  0.000
+! Non-grav parameters: model used, actual number in use, dimension
+ LSP   0  0    6
