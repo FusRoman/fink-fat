@@ -150,7 +150,7 @@ def get_n_sso(object_class, date):
 
     pdf = pd.read_json(BytesIO(r.content))
 
-    if len(pdf) == 0:
+    if len(pdf) == 0 or 'class:Solar System candidate' not in pdf:
         return 0
 
     return pdf["class:{}".format(object_class)].values[0]

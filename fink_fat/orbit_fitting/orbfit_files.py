@@ -588,11 +588,20 @@ def read_oel_lines(lines, second_desig=False):
     """
     if len(lines) <= 2:  # pragma: no cover
         raise Exception("Not enough lines")
-    ref_mjd = float(lines[9].strip().split()[1])
+
+    idx_ref_mjd = 9
+    idx_orb = 8
+    idx_rms = 13
+    if lines[0] != "! Propagated orbits\n":
+        idx_ref_mjd -= 1
+        idx_orb -= 1
+        idx_rms -= 1
+
+    ref_mjd = float(lines[idx_ref_mjd].strip().split()[1])
     # conversion from modified julian date to julian date
     ref_jd = ref_mjd + 2400000.5
 
-    orb_params_rms = get_orb_and_rms(lines, 8, 13)
+    orb_params_rms = get_orb_and_rms(lines, idx_orb, idx_rms)
 
     if second_desig:
         if len(lines) < 34 or len(lines) < 58:  # pragma: no cover
@@ -648,6 +657,22 @@ def read_oel(ram_dir, first_desig, second_desig=None):
     >>> read_oel("fink_fat/test/", "K20K00H", "K20R01N")
     [2459752.003580741, 'K20K00H', '3.2770176197522716E+00', '0.489813406860185', '35.4071377670066', '226.6207914399979', '31.7464752385818', '155.1565090050280', '1.87409E-03', '3.06154E-04', '2.61077E-03', '6.34970E-03', '1.72381E-02', '1.47562E-01', 'K20R01N', '3.2383542557794258E+00', '0.481691420534986', '35.4276816300695', '226.5233903480844', '31.5657299503385', '158.2732975448453', '8.93757E-05', '1.30080E-05', '3.24117E-04', '3.15449E-04', '2.50948E-03', '7.41469E-03', 'K20K00H=K20R01N', '3.2349020268784363E+00', '0.482351607052538', '35.4236361556923', '226.5195200701270', '31.4737170165724', '158.4560587571972', '1.15171E-04', '1.79974E-05', '4.67414E-04', '3.35064E-04', '3.15876E-03', '1.04831E-02']
 
+    >>> prov_desig = ["K20S78Y", "K20S81E", "K20SA3E", "K20SE8G"]
+    >>> curr_prov = prov_desig[0]
+    >>> read_oel("fink_fat/test/test_orbit_file/oel_files_temoin/", curr_prov)
+    [2459116.791244266, '1.0101036808411066E+00', '0.017570539774989', '0.0462434008335', '333.9940951731836', '116.2380298003005', '273.2124730253331', -1, -1, -1, -1, -1, -1]
+
+    >>> curr_prov = prov_desig[1]
+    >>> read_oel("fink_fat/test/test_orbit_file/oel_files_temoin/", curr_prov)
+    [2459129.735106341, '1.1008303548821825E+01', '0.871520130700892', '19.6871756655679', '340.6126485287991', '323.4681159655320', '3.0688342367274', '2.16284E-155', '2.16284E-155', '8.63350E-155', '3.82064E-160', '4.02731E-159', '0.00000E+00']
+
+    >>> curr_prov = prov_desig[2]
+    >>> read_oel("fink_fat/test/test_orbit_file/oel_files_temoin/", curr_prov)
+    [2459129.735106341, '2.6560887910299198E+00', '0.323298886246569', '10.0351186819502', '282.8100753611521', '78.1952197872338', '6.0212953730713', '2.18007E-02', '3.51950E-03', '6.33842E-02', '6.36417E-01', '2.71518E+00', '9.76338E-01']
+
+    >>> curr_prov = prov_desig[3]
+    >>> read_oel("fink_fat/test/test_orbit_file/oel_files_temoin/", curr_prov)
+    [2459129.733694241, '1.9392773655815077E+00', '0.200534172500931', '5.4539087296055', '359.0154395927225', '22.7340166735647', '352.1978239707137', '2.15999E-155', '2.15999E-155', '8.63350E-155', '3.82064E-160', '4.02731E-159', '0.00000E+00']
     """
     try:
         if second_desig is None:
