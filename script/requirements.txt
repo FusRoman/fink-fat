@@ -5,6 +5,10 @@ scipy==1.4.1
 matplotlib>=3.5.0
 scikit-learn==1.0.2
 
+# parquet management
+fastavro==1.5.1
+pyarrow==4.0.1
+
 # Coverage
 coveralls==3.2.0
 coverage==5.5
