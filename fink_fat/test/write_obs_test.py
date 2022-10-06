@@ -11,6 +11,8 @@ from fink_fat.orbit_fitting.mpcobs_files import write_observation_file
 
 if __name__ == "__main__":
 
+    mpc_file_obs_path = "fink_fat/test/test_orbit_file"
+
     mpc_obs = pd.read_parquet("fink_fat/test/mpc_example.parquet")
 
     mpc_obs["dcmag"], mpc_obs["dc_magerr"] = vect_dc_mag(
@@ -36,22 +38,22 @@ if __name__ == "__main__":
         {"i:ra": "ra", "i:dec": "dec", "i:fid": "fid", "i:jd": "jd"}, axis=1
     )
 
-    os.mkdir("fink_fat/test/test_obs/mpcobs/")
+    os.mkdir("{}/mpcobs/".format(mpc_file_obs_path))
 
     res_test = 0
     for tr_id in np.unique(mpc_obs["trajectory_id"]):
         tmp_tr = mpc_obs[mpc_obs["trajectory_id"] == tr_id]
 
-        prov_desig = write_observation_file("fink_fat/test/test_obs/", tmp_tr)
+        prov_desig = write_observation_file("{}/".format(mpc_file_obs_path), tmp_tr)
 
         if not filecmp.cmp(
-            "fink_fat/test/test_obs/mpcobs/{}.obs".format(prov_desig),
-            "fink_fat/test/test_obs/mpcobs_temoin/{}.obs".format(prov_desig),
+            "{}/mpcobs/{}.obs".format(mpc_file_obs_path, prov_desig),
+            "{}/mpcobs_temoin/{}.obs".format(mpc_file_obs_path, prov_desig),
         ):  # pragma: no cover
             print("failed test: {}".format(prov_desig))
             res_test = 1
 
-        os.remove("fink_fat/test/test_obs/mpcobs/{}.obs".format(prov_desig))
+        os.remove("{}/mpcobs/{}.obs".format(mpc_file_obs_path, prov_desig))
 
-    os.rmdir("fink_fat/test/test_obs/mpcobs/")
+    os.rmdir("{}/mpcobs/".format(mpc_file_obs_path))
     sys.exit(res_test)
