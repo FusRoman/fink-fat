@@ -441,45 +441,15 @@ def assig_tags(orb_df, traj_orb_df, start_tags):
     ... "ra": [0, 0, 0, 0, 0, 0, 1, 2, 1, 2, 1, 3, 3, 4, 5, 3, 5, 4, 5, 4, 3, 1, 2, 3, 4, 5, 5, 2]
     ... })
     >>> new_orb, new_traj = assig_tags(orb, traj, 0)
-    >>> new_orb[["ssoCandId", "ref_epoch", "a"]]
-           ssoCandId  ref_epoch       a
-    0  FF2022aaaaaaa          0    1.00
-    5  FF2022aaaaaab          1  265.32
-    1  FF2022aaaaaac          2    1.50
-    2  FF2022aaaaaad          3    1.60
-    4  FF2022aaaaaae          4   35.41
-    3  FF2022aaaaaaf          5    2.80
 
-    >>> new_traj[["ssoCandId", "candid", "ra"]]
-            ssoCandId  candid  ra
-    0   FF2022aaaaaaa       0   0
-    1   FF2022aaaaaaa       1   0
-    2   FF2022aaaaaaa       2   0
-    3   FF2022aaaaaaa       3   0
-    4   FF2022aaaaaaa       4   0
-    5   FF2022aaaaaaa       5   0
-    6   FF2022aaaaaac       6   1
-    7   FF2022aaaaaad       7   2
-    8   FF2022aaaaaac       8   1
-    9   FF2022aaaaaad       9   2
-    10  FF2022aaaaaac      10   1
-    11  FF2022aaaaaaf      11   3
-    12  FF2022aaaaaaf      12   3
-    13  FF2022aaaaaae      13   4
-    14  FF2022aaaaaab      14   5
-    15  FF2022aaaaaaf      15   3
-    16  FF2022aaaaaab      16   5
-    17  FF2022aaaaaae      17   4
-    18  FF2022aaaaaab      18   5
-    19  FF2022aaaaaae      19   4
-    20  FF2022aaaaaaf      20   3
-    21  FF2022aaaaaac      21   1
-    22  FF2022aaaaaad      22   2
-    23  FF2022aaaaaaf      23   3
-    24  FF2022aaaaaae      24   4
-    25  FF2022aaaaaab      25   5
-    26  FF2022aaaaaab      26   5
-    27  FF2022aaaaaad      27   2
+    >>> orb_test = pd.read_parquet("fink_fat/test/utils_cli_test_orb.parquet")
+    >>> traj_test = pd.read_parquet("fink_fat/test/utils_cli_test_traj.parquet")
+
+    >>> orb_test["ssoCandId"] = orb_test["ssoCandId"].str.replace("2022", str(datetime.date.today().year), regex=False)
+    >>> traj_test["ssoCandId"] = traj_test["ssoCandId"].str.replace("2022", str(datetime.date.today().year), regex=False)
+
+    >>> assert_frame_equal(orb_test, new_orb)
+    >>> assert_frame_equal(traj_test, new_traj)
     """
     orb_df = orb_df.sort_values("ref_epoch")
 
@@ -506,6 +476,7 @@ if __name__ == "__main__":  # pragma: no cover
     import fink_fat.test.test_sample as ts  # noqa: F401
     from unittest import TestCase  # noqa: F401
     import shutil  # noqa: F401
+    import datetime  # noqa: F401
 
     if "unittest.util" in __import__("sys").modules:
         # Show full diff in self.assertEqual.
