@@ -1,0 +1,227 @@
+{
+    "2020-09-01": {
+        "assoc_time": 16.601078271865845,
+        "nb_new_alerts": 12420,
+        "nb_old_obs": 0,
+        "nb_orb": 3,
+        "nb_traj": 0,
+        "nb_traj_to_orbfit": 7,
+        "orbfit_time": 34.33737778663635
+    },
+    "2020-09-02": {
+        "assoc_time": 16.56840944290161,
+        "nb_new_alerts": 11239,
+        "nb_old_obs": 5252,
+        "nb_orb": 29,
+        "nb_traj": 3243,
+        "nb_traj_to_orbfit": 43,
+        "orbfit_time": 36.11257743835449
+    },
+    "2020-09-03": {
+        "assoc_time": 23.503926992416382,
+        "nb_new_alerts": 15988,
+        "nb_old_obs": 6531,
+        "nb_orb": 165,
+        "nb_traj": 7758,
+        "nb_traj_to_orbfit": 182,
+        "orbfit_time": 41.15505862236023
+    },
+    "2020-09-04": {
+        "assoc_time": 21.993129014968872,
+        "nb_new_alerts": 14503,
+        "nb_old_obs": 7368,
+        "nb_orb": 334,
+        "nb_traj": 17065,
+        "nb_traj_to_orbfit": 363,
+        "orbfit_time": 44.677550077438354
+    },
+    "2020-09-05": {
+        "assoc_time": 8.171487092971802,
+        "nb_new_alerts": 3314,
+        "nb_old_obs": 8931,
+        "nb_orb": 207,
+        "nb_traj": 21066,
+        "nb_traj_to_orbfit": 219,
+        "orbfit_time": 40.441771507263184
+    },
+    "2020-09-10": {
+        "assoc_time": 12.066010475158691,
+        "nb_new_alerts": 4938,
+        "nb_old_obs": 8076,
+        "nb_orb": 308,
+        "nb_traj": 20795,
+        "nb_traj_to_orbfit": 871,
+        "orbfit_time": 73.24500131607056
+    },
+    "2020-09-12": {
+        "assoc_time": 19.017509937286377,
+        "nb_new_alerts": 13938,
+        "nb_old_obs": 1164,
+        "nb_orb": 497,
+        "nb_traj": 6063,
+        "nb_traj_to_orbfit": 1482,
+        "orbfit_time": 98.49057602882385
+    },
+    "2020-09-14": {
+        "assoc_time": 47.92625141143799,
+        "nb_new_alerts": 23141,
+        "nb_old_obs": 4920,
+        "nb_orb": 301,
+        "nb_traj": 11941,
+        "nb_traj_to_orbfit": 2045,
+        "orbfit_time": 88.23861503601074
+    },
+    "2020-09-15": {
+        "assoc_time": 101.63709259033203,
+        "nb_new_alerts": 39106,
+        "nb_old_obs": 6515,
+        "nb_orb": 292,
+        "nb_traj": 23409,
+        "nb_traj_to_orbfit": 1463,
+        "orbfit_time": 78.96337914466858
+    },
+    "2020-09-16": {
+        "assoc_time": 21.90036654472351,
+        "nb_new_alerts": 10000,
+        "nb_old_obs": 11527,
+        "nb_orb": 169,
+        "nb_traj": 34215,
+        "nb_traj_to_orbfit": 738,
+        "orbfit_time": 57.578917026519775
+    },
+    "2020-09-17": {
+        "assoc_time": 99.17460227012634,
+        "nb_new_alerts": 30846,
+        "nb_old_obs": 12554,
+        "nb_orb": 1258,
+        "nb_traj": 36085,
+        "nb_traj_to_orbfit": 3114,
+        "orbfit_time": 126.727374792099
+    },
+    "2020-09-18": {
+        "assoc_time": 144.16267204284668,
+        "nb_new_alerts": 46184,
+        "nb_old_obs": 9153,
+        "nb_orb": 2116,
+        "nb_traj": 48148,
+        "nb_traj_to_orbfit": 4701,
+        "orbfit_time": 179.1788375377655
+    },
+    "2020-09-19": {
+        "assoc_time": 86.21178889274597,
+        "nb_new_alerts": 37975,
+        "nb_old_obs": 11715,
+        "nb_orb": 1452,
+        "nb_traj": 48278,
+        "nb_traj_to_orbfit": 3341,
+        "orbfit_time": 136.15200662612915
+    },
+    "2020-09-20": {
+        "assoc_time": 168.0859773159027,
+        "nb_new_alerts": 52234,
+        "nb_old_obs": 16077,
+        "nb_orb": 2676,
+        "nb_traj": 54289,
+        "nb_traj_to_orbfit": 6643,
+        "orbfit_time": 237.83704471588135
+    },
+    "2020-09-21": {
+        "assoc_time": 267.0486640930176,
+        "nb_new_alerts": 68042,
+        "nb_old_obs": 14279,
+        "nb_orb": 3820,
+        "nb_traj": 70483,
+        "nb_traj_to_orbfit": 9338,
+        "orbfit_time": 319.28709959983826
+    },
+    "2020-09-22": {
+        "assoc_time": 173.3679530620575,
+        "nb_new_alerts": 54966,
+        "nb_old_obs": 14916,
+        "nb_orb": 2562,
+        "nb_traj": 78080,
+        "nb_traj_to_orbfit": 5822,
+        "orbfit_time": 211.87121653556824
+    },
+    "2020-09-23": {
+        "assoc_time": 232.10882258415222,
+        "nb_new_alerts": 59919,
+        "nb_old_obs": 13772,
+        "nb_orb": 3877,
+        "nb_traj": 86951,
+        "nb_traj_to_orbfit": 9928,
+        "orbfit_time": 335.6234154701233
+    },
+    "2020-09-24": {
+        "assoc_time": 292.83792662620544,
+        "nb_new_alerts": 69831,
+        "nb_old_obs": 13426,
+        "nb_orb": 4261,
+        "nb_traj": 92685,
+        "nb_traj_to_orbfit": 12139,
+        "orbfit_time": 402.4320025444031
+    },
+    "2020-09-25": {
+        "assoc_time": 184.9865746498108,
+        "nb_new_alerts": 55725,
+        "nb_old_obs": 13272,
+        "nb_orb": 3580,
+        "nb_traj": 91403,
+        "nb_traj_to_orbfit": 10403,
+        "orbfit_time": 348.48070526123047
+    },
+    "2020-09-26": {
+        "assoc_time": 265.33151292800903,
+        "nb_new_alerts": 66354,
+        "nb_old_obs": 10520,
+        "nb_orb": 4227,
+        "nb_traj": 93012,
+        "nb_traj_to_orbfit": 12869,
+        "orbfit_time": 441.4084527492523
+    },
+    "2020-09-27": {
+        "assoc_time": 67.18747997283936,
+        "nb_new_alerts": 21968,
+        "nb_old_obs": 9803,
+        "nb_orb": 1817,
+        "nb_traj": 92508,
+        "nb_traj_to_orbfit": 4631,
+        "orbfit_time": 232.82241344451904
+    },
+    "2020-09-28": {
+        "assoc_time": 138.04513478279114,
+        "nb_new_alerts": 38005,
+        "nb_old_obs": 9072,
+        "nb_orb": 2866,
+        "nb_traj": 88174,
+        "nb_traj_to_orbfit": 9295,
+        "orbfit_time": 435.52267718315125
+    },
+    "2020-09-29": {
+        "assoc_time": 65.6466875076294,
+        "nb_new_alerts": 20783,
+        "nb_old_obs": 6746,
+        "nb_orb": 1417,
+        "nb_traj": 83386,
+        "nb_traj_to_orbfit": 5168,
+        "orbfit_time": 256.53882789611816
+    },
+    "2020-09-30": {
+        "assoc_time": 55.81467652320862,
+        "nb_new_alerts": 19762,
+        "nb_old_obs": 5671,
+        "nb_orb": 1148,
+        "nb_traj": 75936,
+        "nb_traj_to_orbfit": 5061,
+        "orbfit_time": 395.8839650154114
+    },
+    "2020-10-01": {
+        "assoc_time": 49.39383578300476,
+        "nb_new_alerts": 15305,
+        "nb_old_obs": 6565,
+        "nb_orb": 858,
+        "nb_traj": 69543,
+        "nb_traj_to_orbfit": 3868,
+        "orbfit_time": 312.5706329345703
+    }
+}
