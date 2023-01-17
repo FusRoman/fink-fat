@@ -256,7 +256,7 @@ if __name__ == "__main__":
         )
 
         max_core = int(dict(spark.sparkContext.getConf().getAll())["spark.cores.max"])
-        spark_gb = spark_gb.repartition(1 if nb_traj // max_core == 0 else nb_traj // max_core)
+        spark_gb = spark_gb.repartition(2 if nb_traj // max_core <= 1 else nb_traj // max_core)
 
         print("begin compute orbital elem on spark")
         spark_column = spark_gb.withColumn(
