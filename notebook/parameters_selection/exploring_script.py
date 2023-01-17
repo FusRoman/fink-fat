@@ -110,7 +110,7 @@ def plot_hist_and_cdf(data, hist_range, hist_title, hist_xlabel, hist_ylabel, cd
 
     mean_diff_value, mean_diff_bins, _ = ax2.hist(data, range=cdf_range, bins=bins, cumulative=True, density=True, histtype='step')
 
-    x_interp = np.interp(percent_cdf, mean_diff_value, mean_diff_bins[:-1])
+    x_interp = np.interp(percent_cdf, np.array(mean_diff_value, dtype='float64'), np.array(mean_diff_bins[:-1], dtype='float64'))
     ax2.scatter(x_interp, percent_cdf)
 
     for i , value in enumerate(zip(percent_cdf, x_interp)):
@@ -136,3 +136,40 @@ def intra_sep_df(x):
     sep = c1[0:-1].separation(c1[1:]).arcsecond
 
     return sep
+
+
+def mag_df(x):
+    """
+    Compute magnitude rate of the SSO for each filter and the color
+    """
+    mag, fid, jd = np.array(x["dcmag"]), np.array(x["fid"]), np.array(x["jd"])
+
+    fid1 = np.where(fid == 1)[0]
+    fid2 = np.where(fid == 2)[0]
+
+    jd_fid1 = jd[fid1]
+    jd_fid2 = jd[fid2]
+
+    mag1 = mag[fid1]
+    diff_mag1 = np.diff(mag1)
+
+    mag2 = mag[fid2]
+    diff_mag2 = np.diff(mag2)
+
+    diff_jd1 = np.diff(jd_fid1)
+    diff_jd2 = np.diff(jd_fid2)
+
+    diff_mag1 = np.abs(diff_mag1)
+    diff_mag2 = np.abs(diff_mag2)
+    
+    dmag_fid1 = np.divide(diff_mag1, diff_jd1)
+    dmag_fid2 = np.divide(diff_mag2, diff_jd2)
+
+    if len(dmag_fid1) == 0:
+        return [], dmag_fid2, 0
+    elif len(dmag_fid2) == 0:
+        return dmag_fid1, [], 0
+    else:
+        diff_fid_mag = np.subtract(np.mean(mag1), np.mean(mag2))
+
+        return dmag_fid1, dmag_fid2, diff_fid_mag
