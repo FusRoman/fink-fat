@@ -173,3 +173,37 @@ def mag_df(x):
         diff_fid_mag = np.subtract(np.mean(mag1), np.mean(mag2))
 
         return dmag_fid1, dmag_fid2, diff_fid_mag
+
+
+def cross_match_fink_mpc(confirmed_sso, mpc_data):
+    mpc_data["Number_alt"] = mpc_data["Number"].str[1:-1]
+    unique_ssnamenr = confirmed_sso["ssnamenr"].unique()
+
+    Number_crossmatch = mpc_data["Number_alt"].isin(unique_ssnamenr)
+    Name_crossmatch = mpc_data["Name"].str.replace(" ", "").isin(unique_ssnamenr)
+    PDesig_crossmatch = mpc_data["Principal_desig"].str.replace(" ", "").isin(unique_ssnamenr)
+
+    mpc_data_explode = mpc_data.explode("Other_desigs").reset_index(drop=True)
+    mpc_data_explode = mpc_data_explode[~(mpc_data_explode["Principal_desig"] == mpc_data_explode["Other_desigs"])]
+    ODesig_crossmatch = mpc_data_explode["Other_desigs"].str.replace(" ", "").isin(unique_ssnamenr)
+
+    mpc_in_fink1 = mpc_data[Number_crossmatch]
+    mpc_in_fink2 = mpc_data[Name_crossmatch]
+    mpc_in_fink3 = mpc_data[PDesig_crossmatch]
+    mpc_in_fink_ODesig = mpc_data_explode[ODesig_crossmatch]
+
+    Number_crossmatch = mpc_data_explode["Number_alt"].isin(unique_ssnamenr)
+    Name_crossmatch = mpc_data_explode["Name"].str.replace(" ", "").isin(unique_ssnamenr)
+    PDesig_crossmatch = mpc_data_explode["Principal_desig"].str.replace(" ", "").isin(unique_ssnamenr)
+    mpc_not_in_fink = mpc_data_explode[~(Number_crossmatch | Name_crossmatch | PDesig_crossmatch | ODesig_crossmatch)]
+
+    mpc_in_fink = pd.concat([mpc_in_fink1, mpc_in_fink2, mpc_in_fink3, mpc_in_fink_ODesig])
+
+
+    unique_sso_fink = confirmed_sso.drop_duplicates("ssnamenr")
+    t1 = unique_sso_fink["ssnamenr"].isin(mpc_in_fink["Number_alt"])
+    t2 = unique_sso_fink["ssnamenr"].isin(mpc_in_fink["Principal_desig"].str.replace(" ", ""))
+    t3 = unique_sso_fink["ssnamenr"].isin(mpc_data_explode["Other_desigs"].str.replace(" ", ""))
+    fink_not_in_mpc = unique_sso_fink[~(t1 | t2 | t3)]
+
+    return mpc_in_fink, fink_not_in_mpc, mpc_not_in_fink
