@@ -212,7 +212,7 @@ if __name__ == "__main__":
         ram_dir = str(sys.argv[3])
         n_triplets = int(sys.argv[4])
         noise_ntrials = int(sys.argv[5])
-        prop_epoch = float(sys.argv[6])
+        prop_epoch = None if sys.argv[6] == "None" else float(sys.argv[6])
 
         print(
             master_adress,
