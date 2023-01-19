@@ -66,6 +66,7 @@ def sep_df(x):
     c1 = SkyCoord(ra, dec, unit = u.degree)
 
     diff_jd = np.diff(jd)
+    diff_jd = np.where(diff_jd < 1, 1, diff_jd)
 
     sep = c1[0:-1].separation(c1[1:]).degree
 
@@ -142,7 +143,7 @@ def mag_df(x):
     """
     Compute magnitude rate of the SSO for each filter and the color
     """
-    mag, fid, jd = np.array(x["dcmag"]), np.array(x["fid"]), np.array(x["jd"])
+    mag, fid, jd = np.array(x["magpsf"]), np.array(x["fid"]), np.array(x["jd"])
 
     fid1 = np.where(fid == 1)[0]
     fid2 = np.where(fid == 2)[0]
@@ -158,6 +159,9 @@ def mag_df(x):
 
     diff_jd1 = np.diff(jd_fid1)
     diff_jd2 = np.diff(jd_fid2)
+
+    diff_jd1 = np.where(diff_jd1 < 1, 1, diff_jd1)
+    diff_jd2 = np.where(diff_jd2 < 1, 1, diff_jd2)
 
     diff_mag1 = np.abs(diff_mag1)
     diff_mag2 = np.abs(diff_mag2)
@@ -207,3 +211,31 @@ def cross_match_fink_mpc(confirmed_sso, mpc_data):
     fink_not_in_mpc = unique_sso_fink[~(t1 | t2 | t3)]
 
     return mpc_in_fink, fink_not_in_mpc, mpc_not_in_fink
+
+def angle(a, b, c):
+    ba = b - a
+    ca = c - a
+
+    cosine_angle = np.dot(ba, ca) / (np.linalg.norm(ba) * np.linalg.norm(ca))
+    angle = np.arccos(cosine_angle)
+
+    return np.degrees(angle)
+
+def angle_df(x):
+    ra, dec, jd = x["ra"], x["dec"], x["jd"]
+
+    all_angle = []
+
+    for i in range(len(ra) - 2):
+        a = np.array([ra[i], dec[i]])
+        b = np.array([ra[i+1], dec[i+1]])
+        c = np.array([ra[i+2], dec[i+2]])
+
+        jd1 = jd[i+1]
+        jd2 = jd[i+2]
+        diff_jd = jd2 - jd1
+        diff_jd = diff_jd if diff_jd >= 1 else 1
+        
+        all_angle.append(angle(a, b, c) / diff_jd)
+    
+    return all_angle
