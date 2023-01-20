@@ -179,38 +179,25 @@ def mag_df(x):
         return dmag_fid1, dmag_fid2, diff_fid_mag
 
 
-def cross_match_fink_mpc(confirmed_sso, mpc_data):
-    mpc_data["Number_alt"] = mpc_data["Number"].str[1:-1]
-    unique_ssnamenr = confirmed_sso["ssnamenr"].unique()
+def mpc_crossmatch(mpc_orb, ssnamenr):
+    explode_other = mpc_orb.explode("Other_desigs")
+    #explode_other = explode_other[explode_other["Principal_desig"] != explode_other["Other_desigs"]].reset_index(drop=True)
 
-    Number_crossmatch = mpc_data["Number_alt"].isin(unique_ssnamenr)
-    Name_crossmatch = mpc_data["Name"].str.replace(" ", "").isin(unique_ssnamenr)
-    PDesig_crossmatch = mpc_data["Principal_desig"].str.replace(" ", "").isin(unique_ssnamenr)
+    t1 = explode_other["Number"].str[1:-1].isin(ssnamenr)
+    t2 = explode_other["Principal_desig"].str.replace(" ", "").isin(ssnamenr)
+    t3 = explode_other["Name"].str.replace(" ", "").isin(ssnamenr)
+    t4 = explode_other["Other_desigs"].str.replace(" ", "").isin(ssnamenr)
 
-    mpc_data_explode = mpc_data.explode("Other_desigs").reset_index(drop=True)
-    mpc_data_explode = mpc_data_explode[~(mpc_data_explode["Principal_desig"] == mpc_data_explode["Other_desigs"])]
-    ODesig_crossmatch = mpc_data_explode["Other_desigs"].str.replace(" ", "").isin(unique_ssnamenr)
+    reconstructed_mpc = explode_other[t1 | t2 | t3 | t4].drop_duplicates(["Number", "Principal_desig"])
 
-    mpc_in_fink1 = mpc_data[Number_crossmatch]
-    mpc_in_fink2 = mpc_data[Name_crossmatch]
-    mpc_in_fink3 = mpc_data[PDesig_crossmatch]
-    mpc_in_fink_ODesig = mpc_data_explode[ODesig_crossmatch]
+    a = ~ssnamenr.isin(explode_other["Number"].str[1:-1])
+    b = ~ssnamenr.isin(explode_other["Principal_desig"].str.replace(" ", ""))
+    c = ~ssnamenr.isin(explode_other["Name"].str.replace(" ", ""))
+    d = ~ssnamenr.isin(explode_other["Other_desigs"].str.replace(" ", ""))
 
-    Number_crossmatch = mpc_data_explode["Number_alt"].isin(unique_ssnamenr)
-    Name_crossmatch = mpc_data_explode["Name"].str.replace(" ", "").isin(unique_ssnamenr)
-    PDesig_crossmatch = mpc_data_explode["Principal_desig"].str.replace(" ", "").isin(unique_ssnamenr)
-    mpc_not_in_fink = mpc_data_explode[~(Number_crossmatch | Name_crossmatch | PDesig_crossmatch | ODesig_crossmatch)]
+    not_in_mpc = ssnamenr[a & b & c & d]
 
-    mpc_in_fink = pd.concat([mpc_in_fink1, mpc_in_fink2, mpc_in_fink3, mpc_in_fink_ODesig])
-
-
-    unique_sso_fink = confirmed_sso.drop_duplicates("ssnamenr")
-    t1 = unique_sso_fink["ssnamenr"].isin(mpc_in_fink["Number_alt"])
-    t2 = unique_sso_fink["ssnamenr"].isin(mpc_in_fink["Principal_desig"].str.replace(" ", ""))
-    t3 = unique_sso_fink["ssnamenr"].isin(mpc_data_explode["Other_desigs"].str.replace(" ", ""))
-    fink_not_in_mpc = unique_sso_fink[~(t1 | t2 | t3)]
-
-    return mpc_in_fink, fink_not_in_mpc, mpc_not_in_fink
+    return reconstructed_mpc, not_in_mpc
 
 def angle(a, b, c):
     ba = b - a
