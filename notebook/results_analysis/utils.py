@@ -89,7 +89,7 @@ def plot_hist_and_cdf(data, range, percent_cdf = [0.8, 0.9], bins=200):
         plot_ax(ax1, ax2, rms_label[i], "Distribution {}".format(rms_label[i]), rms_label[i], "", "Cumulative {}".format(rms_label[i]), rms_label[i], "")
         plot_ax(ax3, ax4, rms_label[i+1], "Distribution {}".format(rms_label[i+1]), rms_label[i+1], "", "Cumulative {}".format(rms_label[i+1]), rms_label[i+1], "")
         i+=2
-        
+
     plt.tight_layout()
     plt.show()
 
@@ -117,3 +117,169 @@ def compare_confirmed_and_candidates_rms(confirmed_orbit, confirmed_traj, candid
         plt.hist(candidates_orbit_with_error[cand_rms],range=[0, 10], bins=200, log=True, alpha=0.75, label="candidate reconstructed orbit")
         plt.legend()
         plt.show()
+
+
+
+def get_unique_and_pure(reconstructed_orbit, reconstructed_trajectory):
+
+    # With error (rms)
+    orbit_with_error = reconstructed_orbit[reconstructed_orbit["rms_a"] != -1.0]
+    traj_with_error = reconstructed_trajectory[reconstructed_trajectory["ssoCandId"].isin(orbit_with_error["ssoCandId"])]
+
+    count_ssnamenr = reconstructed_trajectory[["ssoCandId", "ssnamenr"]].groupby("ssoCandId").agg(
+        ssnamenr=("ssnamenr", list),
+        count_ssnamenr=("ssnamenr", lambda x: len(Counter(x)))
+    )
+
+    count_ssnamenr_with_error = traj_with_error[["ssoCandId", "ssnamenr"]].groupby("ssoCandId").agg(
+        ssnamenr=("ssnamenr", list),
+        count_ssnamenr=("ssnamenr", lambda x: len(Counter(x)))
+    )
+
+    pure_orbit, pure_with_error = count_ssnamenr[count_ssnamenr["count_ssnamenr"] == 1], count_ssnamenr_with_error[count_ssnamenr_with_error["count_ssnamenr"] == 1]
+
+    unique_orbit, unique_with_error = count_ssnamenr[count_ssnamenr["count_ssnamenr"] == 1].explode("ssnamenr").drop_duplicates("ssnamenr"), count_ssnamenr_with_error[count_ssnamenr_with_error["count_ssnamenr"] == 1].explode("ssnamenr").drop_duplicates("ssnamenr")
+
+    return orbit_with_error, traj_with_error, pure_orbit, pure_with_error, unique_orbit, unique_with_error
+
+
+
+from IPython.display import display, Markdown, Latex
+def results(reconstructed_orbit, reconstructed_trajectory, input_data, orbfit_limit_point=6, tw=15):
+    # Confirmed SSO in Input
+    nb_input = len(input_data["ssnamenr"].unique())
+
+    is_detectable = input_data.sort_values("jd").groupby("ssnamenr").agg(
+        nb_det=("ra", len),
+        is_in_tw=("jd", lambda x: np.all(np.diff(x)<=tw))
+    )
+
+    # Detectable
+    nb_detectable = len(is_detectable[(is_detectable["nb_det"] >= orbfit_limit_point) & (is_detectable["is_in_tw"])])
+
+    # Reconstructed
+    nb_reconstruct = len(reconstructed_orbit)
+
+    orbit_with_error, traj_with_error, pure_orbit, pure_with_error, unique_orbit, unique_with_error = get_unique_and_pure(reconstructed_orbit, reconstructed_trajectory)
+
+    # with error
+    nb_reconstruct_with_error = len(orbit_with_error)
+
+    # Pure
+    nb_pure, nb_pure_with_error = len(pure_orbit), len(pure_with_error)
+
+    # Unique
+    nb_unique, nb_unique_with_error = len(unique_orbit), len(unique_with_error)
+
+    # Purity
+    purity, purity_with_error = ((nb_pure / nb_reconstruct) * 100), ((nb_pure_with_error / nb_reconstruct_with_error) * 100)
+
+    # Efficiency
+    efficiency, efficiency_with_error = ((nb_unique / nb_reconstruct) * 100), ((nb_unique_with_error / nb_reconstruct_with_error) * 100)
+
+    return """
+|                     | Fink_FAT |                 |
+|---------------------|----------|-----------------|
+|                     | All      | Only with error |
+| Confirmed SSO input | {}       | X               |
+| Detectable          | {}       | X               |
+| Reconstructed orbit | {}    | {}           |
+| - Pure              | {}    | {}           |
+| - Unique            | {}    | {}           |
+| Purity              | {:.1f} %   | {:.1f} %          |
+| Efficiency          | {:.1f} %   | {:.1f} %          |
+        """.format(
+            nb_input, nb_detectable, nb_reconstruct, nb_reconstruct_with_error,
+            nb_pure, nb_pure_with_error, nb_unique, nb_unique_with_error,
+            purity, purity_with_error, efficiency, efficiency_with_error
+        )
+
+def plot_rms_distribution(reconstructed_orbit, reconstructed_trajectory, mops_orbit=None, mops_traj=None):
+
+    orbit_with_error, _, _, pure_with_error, _, _ = get_unique_and_pure(reconstructed_orbit, reconstructed_trajectory)
+
+    if mops_orbit is not None and mops_traj is not None:
+        orbit_mops_with_error, _, _, pure_mops_with_error, _, _ = get_unique_and_pure(mops_orbit, mops_traj)
+
+    for rms in ['rms_a', 'rms_e', 'rms_i', 'rms_long. node', 'rms_arg. peric', 'rms_mean anomaly']:
+        fig = plt.figure(figsize=(20, 10))
+        fig.suptitle(rms, y=0.9)
+
+        _, bins = np.histogram(orbit_with_error[rms], bins=200)
+        logbins = np.logspace(np.log10(bins[0]),np.log10(bins[-1]),len(bins))
+       
+        plt.hist(orbit_with_error[rms], bins=logbins, log=True, alpha=0.6, label="confirmed reconstructed_orbit")
+
+        pure_with_error = reconstructed_orbit[reconstructed_orbit["ssoCandId"].isin(pure_with_error.reset_index()["ssoCandId"])]
+        plt.hist(pure_with_error[rms], bins=logbins, log=True, alpha=0.75, label="pure confirmed reconstructed orbit")
+
+        if mops_orbit is not None and mops_traj is not None:
+            plt.hist(orbit_mops_with_error[rms], bins=logbins, log=True, alpha=0.6, label="MOPS: confirmed reconstructed_orbit")
+            pure_mops_with_error = mops_orbit[mops_orbit["ssoCandId"].isin(pure_mops_with_error.reset_index()["ssoCandId"])]
+            plt.hist(pure_mops_with_error[rms], bins=logbins, log=True, alpha=0.75, label="MOPS: pure confirmed reconstructed orbit")
+
+        plt.xscale('log')
+        plt.legend()
+        plt.show()
+
+
+def mpc_crossmatch(mpc_orb, ssnamenr):
+    explode_other = mpc_orb.explode("Other_desigs")
+    explode_other = explode_other[explode_other["Principal_desig"] != explode_other["Other_desigs"]].reset_index(drop=True)
+
+    t1 = explode_other["Number"].str[1:-1].isin(ssnamenr)
+    t2 = explode_other["Principal_desig"].str.replace(" ", "").isin(ssnamenr)
+    t3 = explode_other["Name"].str.replace(" ", "").isin(ssnamenr)
+    t4 = explode_other["Other_desigs"].str.replace(" ", "").isin(ssnamenr)
+
+    reconstructed_mpc = explode_other[t1 | t2 | t3 | t4].drop_duplicates(["Number", "Principal_desig"])
+
+    a = ~ssnamenr.isin(explode_other["Number"].str[1:-1])
+    b = ~ssnamenr.isin(explode_other["Principal_desig"].str.replace(" ", ""))
+    c = ~ssnamenr.isin(explode_other["Name"].str.replace(" ", ""))
+    d = ~ssnamenr.isin(explode_other["Other_desigs"].str.replace(" ", ""))
+
+    not_in_mpc = ssnamenr[a & b & c & d]
+
+    return reconstructed_mpc, not_in_mpc
+
+
+def display_mpc_reconstruction(reconstructed_mpc, reconstructed_mops, input_mpc):
+
+    reconstruc_orbit_type = reconstructed_mpc.groupby("Orbit_type").count()["Principal_desig"]
+    initial_mpc = input_mpc.groupby("Orbit_type").count()["Principal_desig"]
+    percent_mpc_reconstr = (reconstruc_orbit_type / initial_mpc) * 100
+
+    reconstruc_mops_orbit_type = reconstructed_mops.groupby("Orbit_type").count()["Principal_desig"]
+    percent_mpc_reconstr_mops = (reconstruc_mops_orbit_type / initial_mpc) * 100
+
+    table = """
+|  | Initial orbit Distribution | Fink_FAT | MOPS |
+|--|----------------------------|----------|------|
+"""
+
+    for i in initial_mpc.items():
+        cur_orbit = i[0]
+        nb_init = initial_mpc[cur_orbit]
+
+        if cur_orbit not in reconstruc_orbit_type:
+            nb_reconstr = 0
+        else:
+            nb_reconstr = reconstruc_orbit_type[cur_orbit]
+        if cur_orbit not in percent_mpc_reconstr:
+            percent = 0
+        else:
+            percent = percent_mpc_reconstr[cur_orbit]
+
+        if cur_orbit not in reconstruc_mops_orbit_type:
+            nb_reconstr_mops = 0
+        else:
+            nb_reconstr_mops = reconstruc_mops_orbit_type[cur_orbit]
+        if cur_orbit not in percent_mpc_reconstr_mops:
+            percent_mops = 0
+        else:
+            percent_mops = percent_mpc_reconstr_mops[cur_orbit]
+
+        table += "| {} | {} | {} ({:.2f} %) | {} ({:.2f} %) |\n".format(cur_orbit, nb_init, nb_reconstr, percent, nb_reconstr_mops, percent_mops)
+
+    return table
