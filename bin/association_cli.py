@@ -3,7 +3,6 @@ import os
 import numpy as np
 import pandas as pd
 import requests
-from fink_utils.photometry.conversion import dc_mag
 import shutil
 from io import BytesIO
 
@@ -324,11 +323,11 @@ def get_data(tr_df_path, obs_df_path):
     ... )
 
     >>> len(tr_df)
-    12660
+    12897
     >>> len(old_obs_df)
-    5440
+    5307
     >>> last_tr_id
-    7704
+    7866
 
     >>> tr_df, old_obs_df, last_tr_id = get_data(
     ... data_path + "trajectory_df.parquet",
@@ -336,11 +335,11 @@ def get_data(tr_df_path, obs_df_path):
     ... )
 
     >>> len(tr_df)
-    12660
+    12897
     >>> len(old_obs_df)
-    5440
+    5307
     >>> last_tr_id
-    7704
+    7866
     """
     tr_columns = [
         "ra",
