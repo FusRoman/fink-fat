@@ -144,7 +144,7 @@ def get_orbit_param(ram_dir, df, n_triplets, noise_ntrials, prop_epoch=None, ver
     >>> df = pd.DataFrame({
     ... 'ra': [169.8604675, 169.8568848, 169.8336664, 169.8297121, 169.8296555],
     ... 'dec': [15.2063604, 15.2103091, 15.2360481, 15.2403893, 15.24049],
-    ... 'dcmag': [16.438142098160576, 16.47854604642893, 15.767506616421468, 15.781593431530103, 15.764373749886605],
+    ... 'magpsf': [16.438142098160576, 16.47854604642893, 15.767506616421468, 15.781593431530103, 15.764373749886605],
     ... 'fid': [1, 1, 2, 2, 2],
     ... 'jd': [2459274.7206481, 2459274.7391435, 2459274.8594444, 2459274.8799074, 2459274.8803819],
     ... 'trajectory_id': [0, 0, 0, 0, 0]
@@ -276,7 +276,7 @@ def compute_df_orbit_param(
     Parameters
     ----------
     trajectory_df : dataframe
-        the set of trajectories, the following columns are required : "ra", "dec", "dcmag", "fid", "jd", "trajectory_id"
+        the set of trajectories, the following columns are required : "ra", "dec", "magpsf", "fid", "jd", "trajectory_id"
     cpu_count : integer
         the number of core for the parallel computation
     ram_dir : string

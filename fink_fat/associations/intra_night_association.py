@@ -250,11 +250,11 @@ def compute_diff_mag(left, right, fid, magnitude_criterion, normalized=False):
 
     if normalized:
         diff_mag = np.abs(
-            left_assoc["dcmag"].values - right_assoc["dcmag"].values
+            left_assoc["magpsf"].values - right_assoc["magpsf"].values
         ) / np.abs(left_assoc["jd"].values - right_assoc["jd"].values)
 
     else:
-        diff_mag = np.abs(left_assoc["dcmag"].values - right_assoc["dcmag"].values)
+        diff_mag = np.abs(left_assoc["magpsf"].values - right_assoc["magpsf"].values)
 
     left_assoc = left_assoc[diff_mag <= magnitude_criterion]
     right_assoc = right_assoc[diff_mag <= magnitude_criterion]
@@ -275,9 +275,9 @@ def magnitude_association(
     Parameters
     ----------
     left_assoc : dataframe
-        left members of the associations (column dcmag and fid have to be present, jd must be present if normalize is set to True)
+        left members of the associations (column magpsf and fid have to be present, jd must be present if normalize is set to True)
     right_assoc : dataframe
-        right members of the associations (column dcmag and fid have to be present, jd must be present if normalize is set to True)
+        right members of the associations (column magpsf and fid have to be present, jd must be present if normalize is set to True)
     mag_criterion_same_fid : float
         magnitude criterion between the alerts with the same filter id
     mag_criterion_diff_fid : float
