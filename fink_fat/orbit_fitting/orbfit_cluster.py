@@ -17,7 +17,7 @@ import fink_fat.orbit_fitting.mpcobs_files as mf
 def orbit_wrapper(
     ra,
     dec,
-    dcmag,
+    magpsf,
     band,
     date,
     traj_id,
@@ -36,7 +36,7 @@ def orbit_wrapper(
         Right ascension columns of the observations
     dec : spark dataframe columns
         Declination columns of the observations
-    dcmag : spark dataframe columns
+    magpsf : spark dataframe columns
         The apparent magnitude computed with the dc_mag function in fink_science.conversion
     band : spark dataframe columns
         The filter used during the observations
@@ -71,13 +71,13 @@ def orbit_wrapper(
     ... sparkDF.groupby("trajectory_id")
     ... .agg(
     ...     F.sort_array(
-    ...             F.collect_list(F.struct("jd", "ra", "dec", "fid", "dcmag"))
+    ...             F.collect_list(F.struct("jd", "ra", "dec", "fid", "magpsf"))
     ...         ).alias("collected_list")
     ...     )
     ...     .withColumn("ra", F.col("collected_list.ra"))
     ...     .withColumn("dec", F.col("collected_list.dec"))
     ...     .withColumn("fid", F.col("collected_list.fid"))
-    ...     .withColumn("dcmag", F.col("collected_list.dcmag"))
+    ...     .withColumn("magpsf", F.col("collected_list.magpsf"))
     ...     .withColumn("jd", F.col("collected_list.jd"))
     ...     .drop("collected_list")
     ... )
@@ -88,7 +88,7 @@ def orbit_wrapper(
     ...     orbit_wrapper(
     ...         spark_gb.ra,
     ...         spark_gb.dec,
-    ...         spark_gb.dcmag,
+    ...         spark_gb.magpsf,
     ...         spark_gb.fid,
     ...         spark_gb.jd,
     ...         spark_gb.trajectory_id,
@@ -130,7 +130,7 @@ def orbit_wrapper(
     """
 
     @pandas_udf(ArrayType(DoubleType()))  # noqa: F405
-    def get_orbit_element(ra, dec, dcmag, band, date, traj_id):  # pragma: no cover
+    def get_orbit_element(ra, dec, magpsf, band, date, traj_id):  # pragma: no cover
         _pid = os.getpid()
         current_ram_path = os.path.join(ram_dir, str(_pid), "")
         if not os.path.isdir(current_ram_path):
@@ -139,15 +139,15 @@ def orbit_wrapper(
         of.prep_orbitfit(current_ram_path)
 
         res = []
-        for c_ra, c_dec, c_dcmag, c_band, c_date, c_traj_id in zip(
-            ra, dec, dcmag, band, date, traj_id
+        for c_ra, c_dec, c_magpsf, c_band, c_date, c_traj_id in zip(
+            ra, dec, magpsf, band, date, traj_id
         ):
             df_tmp_traj = pd.DataFrame(
                 {
                     "trajectory_id": np.ones(len(c_ra), dtype=int) * c_traj_id,
                     "ra": c_ra,
                     "dec": c_dec,
-                    "dcmag": c_dcmag,
+                    "magpsf": c_magpsf,
                     "fid": c_band,
                     "jd": c_date,
                 }
@@ -191,7 +191,7 @@ def orbit_wrapper(
         res = [[float(el) for el in i] for i in res]
         return pd.Series(res)
 
-    return get_orbit_element(ra, dec, dcmag, band, date, traj_id)
+    return get_orbit_element(ra, dec, magpsf, band, date, traj_id)
 
 
 if __name__ == "__main__":
@@ -244,13 +244,13 @@ if __name__ == "__main__":
             sparkDF.groupby("trajectory_id")
             .agg(
                 F.sort_array(
-                    F.collect_list(F.struct("jd", "ra", "dec", "fid", "dcmag"))
+                    F.collect_list(F.struct("jd", "ra", "dec", "fid", "magpsf"))
                 ).alias("collected_list")
             )
             .withColumn("ra", F.col("collected_list.ra"))
             .withColumn("dec", F.col("collected_list.dec"))
             .withColumn("fid", F.col("collected_list.fid"))
-            .withColumn("dcmag", F.col("collected_list.dcmag"))
+            .withColumn("magpsf", F.col("collected_list.magpsf"))
             .withColumn("jd", F.col("collected_list.jd"))
             .drop("collected_list")
         )
@@ -264,7 +264,7 @@ if __name__ == "__main__":
             orbit_wrapper(
                 spark_gb.ra,
                 spark_gb.dec,
-                spark_gb.dcmag,
+                spark_gb.magpsf,
                 spark_gb.fid,
                 spark_gb.jd,
                 spark_gb.trajectory_id,

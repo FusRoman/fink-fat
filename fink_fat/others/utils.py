@@ -35,8 +35,8 @@ def cast_obs_data(trajectories):
     if "ssnamenr" in trajectories:
         dict_new_types["ssnamenr"] = str
     tr_orb_columns = [
-        "dcmag",
-        "dcmagerr",
+        "magpsf",
+        "sigmapsf",
         "ref_epoch",
         "a",
         "e",

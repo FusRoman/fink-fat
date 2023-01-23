@@ -82,7 +82,7 @@ def intra_night_step(
     ----------
     new_observation : dataframe
         The new observation from the new observations night.
-        The dataframe must have the following columns : ra, dec, jd, fid, nid, dcmag, candid, ssnamenr
+        The dataframe must have the following columns : ra, dec, jd, fid, nid, magpsf, sigmapsf, candid, ssnamenr
     last_trajectory_id : integer
         The last trajectory identifier assign to a trajectory
     intra_night_sep_criterion : float

@@ -188,7 +188,7 @@ def compute_diff_mag(left, right, fid, magnitude_criterion, normalized=False):
     ... 'ra' : [100, 100.003, 100.007, 100.001, 100.003, 100.008],
     ... 'dec' : [12, 11.998, 11.994, 11.994, 11.998, 12.002],
     ... 'jd' : [1, 1, 1, 1, 1, 1],
-    ... 'dcmag' : [17, 17.05, 17.09, 15, 15.07, 15.1],
+    ... 'magpsf' : [17, 17.05, 17.09, 15, 15.07, 15.1],
     ... 'fid' : [1, 1, 1, 2, 2, 2],
     ... 'candid' : [1, 2, 3, 4, 5, 6],
     ... 'traj' : [1, 1, 1, 2, 2, 2]
@@ -207,8 +207,8 @@ def compute_diff_mag(left, right, fid, magnitude_criterion, normalized=False):
     >>> assert_frame_equal(same_fid_left.reset_index(drop=True), same_fid_left_expected)
     >>> assert_frame_equal(same_fid_right.reset_index(drop=True), same_fid_right_expected)
 
-    >>> diff_fid_left_expected = pd.DataFrame(columns = ['ra', 'dec', 'jd', 'dcmag', 'fid', 'candid', 'traj'])
-    >>> diff_fid_right_expected = pd.DataFrame(columns = ['ra', 'dec', 'jd', 'dcmag', 'fid', 'candid', 'traj'])
+    >>> diff_fid_left_expected = pd.DataFrame(columns = ['ra', 'dec', 'jd', 'magpsf', 'fid', 'candid', 'traj'])
+    >>> diff_fid_right_expected = pd.DataFrame(columns = ['ra', 'dec', 'jd', 'magpsf', 'fid', 'candid', 'traj'])
 
     >>> assert_frame_equal(diff_fid_left, diff_fid_left_expected, check_index_type=False, check_dtype=False)
     >>> assert_frame_equal(diff_fid_right, diff_fid_right_expected, check_index_type=False, check_dtype=False)
@@ -219,7 +219,7 @@ def compute_diff_mag(left, right, fid, magnitude_criterion, normalized=False):
     ... 'ra' : [100, 99, 99.8, 100.2, 100.7, 100.5],
     ... 'dec' : [12, 11.8, 11.2, 12.3, 11.7, 11.5],
     ... 'jd' : [1.05, 1.08, 1.09, 2.5, 2.6, 2.7],
-    ... 'dcmag' : [15, 17, 16, 16.04, 17.03, 15.06],
+    ... 'magpsf' : [15, 17, 16, 16.04, 17.03, 15.06],
     ... 'fid' : [1, 1, 1, 1, 1, 1],
     ... 'candid' : [1, 2, 3, 4, 5, 6],
     ... 'traj' : [1, 2, 3, 3, 2, 1]
@@ -238,8 +238,8 @@ def compute_diff_mag(left, right, fid, magnitude_criterion, normalized=False):
     >>> assert_frame_equal(same_fid_left.reset_index(drop=True), same_fid_left_expected)
     >>> assert_frame_equal(same_fid_right.reset_index(drop=True), same_fid_right_expected)
 
-    >>> diff_fid_left_expected = pd.DataFrame(columns = ['ra', 'dec', 'jd', 'dcmag', 'fid', 'candid', 'traj'])
-    >>> diff_fid_right_expected = pd.DataFrame(columns = ['ra', 'dec', 'jd', 'dcmag', 'fid', 'candid', 'traj'])
+    >>> diff_fid_left_expected = pd.DataFrame(columns = ['ra', 'dec', 'jd', 'magpsf', 'fid', 'candid', 'traj'])
+    >>> diff_fid_right_expected = pd.DataFrame(columns = ['ra', 'dec', 'jd', 'magpsf', 'fid', 'candid', 'traj'])
 
     >>> assert_frame_equal(diff_fid_left, diff_fid_left_expected, check_index_type=False, check_dtype=False)
     >>> assert_frame_equal(diff_fid_right, diff_fid_right_expected, check_index_type=False, check_dtype=False)
@@ -250,11 +250,11 @@ def compute_diff_mag(left, right, fid, magnitude_criterion, normalized=False):
 
     if normalized:
         diff_mag = np.abs(
-            left_assoc["dcmag"].values - right_assoc["dcmag"].values
+            left_assoc["magpsf"].values - right_assoc["magpsf"].values
         ) / np.abs(left_assoc["jd"].values - right_assoc["jd"].values)
 
     else:
-        diff_mag = np.abs(left_assoc["dcmag"].values - right_assoc["dcmag"].values)
+        diff_mag = np.abs(left_assoc["magpsf"].values - right_assoc["magpsf"].values)
 
     left_assoc = left_assoc[diff_mag <= magnitude_criterion]
     right_assoc = right_assoc[diff_mag <= magnitude_criterion]
@@ -275,9 +275,9 @@ def magnitude_association(
     Parameters
     ----------
     left_assoc : dataframe
-        left members of the associations (column dcmag and fid have to be present, jd must be present if normalize is set to True)
+        left members of the associations (column magpsf and fid have to be present, jd must be present if normalize is set to True)
     right_assoc : dataframe
-        right members of the associations (column dcmag and fid have to be present, jd must be present if normalize is set to True)
+        right members of the associations (column magpsf and fid have to be present, jd must be present if normalize is set to True)
     mag_criterion_same_fid : float
         magnitude criterion between the alerts with the same filter id
     mag_criterion_diff_fid : float
@@ -292,24 +292,24 @@ def magnitude_association(
     Examples
     --------
     >>> left_test = pd.DataFrame({
-    ... 'dcmag' : [17.03, 15, 17, 18, 18, 17, 17, 15],
+    ... 'magpsf' : [17.03, 15, 17, 18, 18, 17, 17, 15],
     ... 'fid' : [1, 2, 1, 2, 1, 2, 1, 2]
     ... })
 
     >>> right_test = pd.DataFrame({
-    ... 'dcmag' : [17, 15.09, 16, 19, 15, 12, 16, 14],
+    ... 'magpsf' : [17, 15.09, 16, 19, 15, 12, 16, 14],
     ... 'fid' : [1, 2, 2, 1, 2, 1, 1, 2]
     ... })
 
     >>> l, r = magnitude_association(left_test, right_test, 0.1, 1)
 
     >>> l_expected = pd.DataFrame({
-    ... "dcmag" : [17.03,15.00,17.00,18.00],
+    ... "magpsf" : [17.03,15.00,17.00,18.00],
     ... "fid" : [1,2, 1, 2]
     ... })
 
     >>> r_expected = pd.DataFrame({
-    ... "dcmag" : [17.00,15.09,16.00,19.00],
+    ... "magpsf" : [17.00,15.09,16.00,19.00],
     ... "fid" : [1,2,2,1]
     ... })
 
@@ -1074,7 +1074,7 @@ def intra_night_association(
     >>> test_traj = pd.DataFrame({
     ... 'ra' : [106.305259, 106.141905, 169.860467],
     ... 'dec': [18.176682, 15.241181, 15.206360],
-    ... 'dcmag': [0.066603, 0.018517, 0.038709],
+    ... 'magpsf': [0.066603, 0.018517, 0.038709],
     ... 'ssnamenr': [3866, 3051, 19743],
     ... 'fid': [1, 2, 1],
     ... 'candid': [1520166712915015010, 1520166711415015012, 1520220641415015001],
