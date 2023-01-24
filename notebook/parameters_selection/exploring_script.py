@@ -5,6 +5,8 @@ from astropy.coordinates import SkyCoord
 import astropy.units as u
 import numpy as np
 
+from matplotlib.lines import Line2D
+
 
 def load_data(columns=None):
     """
@@ -269,3 +271,44 @@ def angle_df(x):
         all_angle.append(angle(a, b, c) / diff_jd)
 
     return all_angle
+
+
+def plot_ast_distrib(mpc_in_fink):
+    fig = plt.figure(figsize=(20, 10))
+
+    ax = plt.gca()
+    ax.set_title("Distribution of the asteroid in the Fink's database", fontdict={"size": 20})
+
+    for orb in mpc_in_fink["Orbit_type"].unique():
+        cur_orb = mpc_in_fink[mpc_in_fink["Orbit_type"] == orb]
+        ax.scatter(cur_orb["a"], cur_orb["e"], label=orb, alpha=0.5)
+
+    #ax.set_yscale('log')
+    ax.set_xlabel("Semi major axis (AU)", fontdict={"size": 20})
+    ax.set_ylabel("Eccentricity", fontdict={"size": 20})
+    ax.set_xscale('log')
+    ax.tick_params(axis="x", which="major", labelsize=20)
+    ax.tick_params(axis="y", which="major", labelsize=15)
+    ax.legend()
+    plt.show()
+
+
+def plot_ast_distrib_with_incl(mpc_in_fink):
+    fig = plt.figure(figsize=(20, 10))
+
+    ax = plt.gca()
+    ax.set_title("Distribution of the asteroid in the Fink's database", fontdict={"size": 20})
+
+    for orb, mark in zip(mpc_in_fink["Orbit_type"].unique(), Line2D.filled_markers):
+
+        cur_orb = mpc_in_fink[mpc_in_fink["Orbit_type"] == orb]
+        ax.scatter(cur_orb["a"], cur_orb["e"], label=orb, alpha=0.5, c=cur_orb["i"], marker=mark, s=100)
+
+    #ax.set_yscale('log')
+    ax.set_xlabel("Semi major axis (AU)", fontdict={"size": 20})
+    ax.set_ylabel("Eccentricity", fontdict={"size": 20})
+    ax.set_xscale('log')
+    ax.tick_params(axis="x", which="major", labelsize=20)
+    ax.tick_params(axis="y", which="major", labelsize=15)
+    ax.legend()
+    plt.show()
