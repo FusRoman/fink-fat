@@ -7,6 +7,8 @@ import numpy as np
 
 from matplotlib.lines import Line2D
 
+from bin.stat_cli import compute_residue
+
 
 def load_data(columns=None):
     """
@@ -86,7 +88,7 @@ def sep_df(x):
     """
     ra, dec, jd = x["ra"], x["dec"], x["jd"]
 
-    c1 = SkyCoord(ra, dec, unit=u.degree)
+    c1 = SkyCoord(np.array(ra) * u.degree, np.array(dec) * u.degree)
 
     diff_jd = np.diff(jd)
     diff_jd = np.where(diff_jd < 1, 1, diff_jd)
@@ -96,6 +98,19 @@ def sep_df(x):
     velocity = np.divide(sep, diff_jd)
 
     return velocity
+
+
+def intra_sep_df(x):
+    """
+    Compute the speed between two observations of solar system object
+    """
+    ra, dec = x["ra"], x["dec"]
+
+    c1 = SkyCoord(np.array(ra) * u.degree, np.array(dec) * u.degree)
+
+    sep = c1[0:-1].separation(c1[1:]).arcminute
+
+    return sep
 
 
 def plot_hist_and_cdf(
@@ -165,19 +180,6 @@ def plot_hist_and_cdf(
     ax2.tick_params(axis="x", which="major", labelsize=30)
     ax2.tick_params(axis="y", which="major", labelsize=25)
     plt.show()
-
-
-def intra_sep_df(x):
-    """
-    Compute the sky separation from a set of equatorial coordinates
-    """
-    ra, dec = x["ra"], x["dec"]
-
-    c1 = SkyCoord(ra, dec, unit=u.degree)
-
-    sep = c1[0:-1].separation(c1[1:]).arcsecond
-
-    return sep
 
 
 def mag_df(x):
@@ -322,5 +324,143 @@ def plot_ast_distrib_with_incl(mpc_in_fink):
     ax.set_xscale("log")
     ax.tick_params(axis="x", which="major", labelsize=20)
     ax.tick_params(axis="y", which="major", labelsize=15)
-    ax.legend()
+    ax.legend(prop={"size": 15})
+    plt.show()
+
+
+def merge_reconstruct_and_mpc(mpc_in_fink, reconstruct_orbit):
+
+    mpc_in_fink["Number"] = mpc_in_fink["Number"].str[1:-1]
+    mpc_in_fink["Principal_desig"] = mpc_in_fink["Principal_desig"].str.replace(" ", "")
+
+    mpc_in_fink_explode = mpc_in_fink.explode("Other_desigs")
+    mpc_in_fink_explode["Other_desigs"] = mpc_in_fink_explode[
+        "Other_desigs"
+    ].str.replace(" ", "")
+
+    a = reconstruct_orbit.merge(mpc_in_fink, left_on="ssnamenr", right_on="Number")
+    b = reconstruct_orbit.merge(
+        mpc_in_fink, left_on="ssnamenr", right_on="Principal_desig"
+    )
+    c = reconstruct_orbit.merge(
+        mpc_in_fink, left_on="ssnamenr", right_on="Other_desigs"
+    )
+
+    merge_mpc_orbfit = pd.concat([a, b, c])
+
+    return merge_mpc_orbfit
+
+
+def orbfit_perf_results():
+
+    mpc_ast_data = pd.read_parquet(
+        "../data/MPC_Database/mpcorb_extended.parquet",
+        columns=[
+            "Number",
+            "Name",
+            "Principal_desig",
+            "Other_desigs",
+            "a",
+            "e",
+            "i",
+            "Node",
+            "Peri",
+            "M",
+            "Epoch",
+            "Orbit_type",
+        ],
+    )
+    res_dict = {}
+    for i in list(range(3, 11)) + [15]:
+        print("current nb point: {}".format(i))
+
+        cur_orb = pd.read_parquet("res_orbit_nb_point/{}_point_orbit.parquet".format(i))
+        cur_tra = pd.read_parquet("res_orbit_nb_point/{}_point_traj.parquet".format(i))
+        orb_and_traj = cur_tra.merge(cur_orb, on="trajectory_id").drop_duplicates(
+            "trajectory_id"
+        )
+        orb_and_traj = orb_and_traj[orb_and_traj["a"] != -1.0]
+
+        nb_orb = len(orb_and_traj)
+        nb_traj = len(cur_orb)
+        nb_fail = nb_traj - nb_orb
+        nb_with_error = len(orb_and_traj[orb_and_traj["rms_a"] != -1.0])
+
+        mpc_in_fink, _ = mpc_crossmatch(
+            mpc_ast_data, pd.Series(orb_and_traj["ssnamenr"].unique())
+        )
+        merge_mpc_orbfit = merge_reconstruct_and_mpc(mpc_in_fink, orb_and_traj)
+
+        df_with_perf = compute_residue(merge_mpc_orbfit)
+
+        res_dict[i] = {
+            "nb_traj": nb_traj,
+            "nb_orb": nb_orb,
+            "nb_fail": nb_fail,
+            "nb_error": nb_with_error,
+            "df_with_perf": df_with_perf,
+        }
+
+    return res_dict
+
+
+def plot_orbfit_perf(res_dict):
+    efficiency = []
+    purity = []
+    for i in list(range(3, 11)) + [15]:
+        nb_orb = res_dict[i]["nb_orb"]
+        nb_traj = res_dict[i]["nb_traj"]
+        nb_error = res_dict[i]["nb_error"]
+        efficiency.append((nb_orb / nb_traj) * 100)
+        purity.append((nb_error / nb_orb) * 100)
+
+    plt.plot((list(np.arange(3, 11)) + [15]), efficiency, label="efficiency")
+    plt.plot((list(np.arange(3, 11)) + [15]), purity, label="purity")
+    plt.ylabel("(%)")
+    plt.xlabel("Number of point")
+    plt.legend()
+    plt.show()
+
+
+def plot_orbfit_diff_hist(res_dict, orb_param):
+    _ = plt.figure(figsize=(20, 10))
+    logbins = None
+    for i in list(np.arange(3, 11)) + [15]:
+        data = res_dict[i]["df_with_perf"][orb_param]
+
+        if type(logbins) == type(None):
+            _, bins = np.histogram(data, bins=200)
+            tmp_logbins = np.logspace(np.log10(bins[0]), np.log10(bins[-1]), len(bins))
+
+            logbins = tmp_logbins
+
+            plt.hist(
+                data,
+                bins=logbins,
+                log=True,
+                alpha=0.6,
+                label="nb_point={}".format(i),
+            )
+        else:
+            plt.hist(
+                data,
+                bins=logbins,
+                log=True,
+                alpha=0.6,
+                label="nb_point={}".format(i),
+            )
+
+    plt.legend(prop={"size": 15})
+    plt.title(
+        "Distribution of the difference between the estimated orbit parameters with ORBFIT and the MPC orbit parameters",
+        fontdict={"size": 20},
+    )
+    plt.ylabel("Number of orbit (log)", fontdict={"size": 20})
+    plt.xlabel(
+        "Difference between orbit and MPC (log of the difference in %)",
+        fontdict={"size": 20},
+    )
+    ax = plt.gca()
+    ax.tick_params(axis="x", which="major", labelsize=15)
+    ax.tick_params(axis="y", which="major", labelsize=15)
     plt.show()
