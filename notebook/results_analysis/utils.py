@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from collections import Counter
 
 
@@ -310,7 +311,8 @@ def results(
     # Detectable
     nb_detectable = len(
         is_detectable[
-            (is_detectable["nb_det"] >= orbfit_limit_point) & (is_detectable["is_in_tw"])
+            (is_detectable["nb_det"] >= orbfit_limit_point)
+            & (is_detectable["is_in_tw"])
         ]
     )
 
@@ -341,8 +343,8 @@ def results(
     )
 
     # Efficiency
-    efficiency, efficiency_with_error = ((nb_unique / nb_reconstruct) * 100), (
-        (nb_unique_with_error / nb_reconstruct_with_error) * 100
+    efficiency, efficiency_with_error = ((nb_unique / nb_detectable) * 100), (
+        (nb_unique_with_error / nb_detectable) * 100
     )
 
     return """
@@ -369,7 +371,7 @@ def results(
         purity_with_error,
         efficiency,
         efficiency_with_error,
-    )
+    ), purity, purity_with_error, efficiency, efficiency_with_error
 
 
 def plot_rms_distribution(
@@ -448,9 +450,7 @@ def plot_rms_distribution(
 
 def mpc_crossmatch(mpc_orb, ssnamenr):
     explode_other = mpc_orb.explode("Other_desigs")
-    explode_other = explode_other[
-        explode_other["Principal_desig"] != explode_other["Other_desigs"]
-    ].reset_index(drop=True)
+    # explode_other = explode_other[explode_other["Principal_desig"] != explode_other["Other_desigs"]].reset_index(drop=True)
 
     t1 = explode_other["Number"].str[1:-1].isin(ssnamenr)
     t2 = explode_other["Principal_desig"].str.replace(" ", "").isin(ssnamenr)
@@ -516,3 +516,54 @@ def display_mpc_reconstruction(reconstructed_mpc, reconstructed_mops, input_mpc)
         )
 
     return table
+
+
+def merge_reconstruct_and_mpc(mpc_in_fink, reconstruct_orbit):
+
+    mpc_in_fink["Number"] = mpc_in_fink["Number"].str[1:-1]
+    mpc_in_fink["Principal_desig"] = mpc_in_fink["Principal_desig"].str.replace(" ", "")
+
+    mpc_in_fink_explode = mpc_in_fink.explode("Other_desigs")
+    mpc_in_fink_explode["Other_desigs"] = mpc_in_fink_explode[
+        "Other_desigs"
+    ].str.replace(" ", "")
+
+    a = reconstruct_orbit.merge(mpc_in_fink, left_on="ssnamenr", right_on="Number")
+    b = reconstruct_orbit.merge(
+        mpc_in_fink, left_on="ssnamenr", right_on="Principal_desig"
+    )
+    c = reconstruct_orbit.merge(
+        mpc_in_fink, left_on="ssnamenr", right_on="Other_desigs"
+    )
+
+    merge_mpc_orbfit = pd.concat([a, b, c])
+
+    return merge_mpc_orbfit
+
+
+def plot_orbfit_diff_hist(diff_data, orb_param):
+    _ = plt.figure(figsize=(20, 10))
+
+    data = diff_data[orb_param]
+
+    _, bins = np.histogram(data, bins=200)
+    tmp_logbins = np.logspace(np.log10(bins[0]), np.log10(bins[-1]), len(bins))
+
+    logbins = tmp_logbins
+
+    plt.hist(data, bins=logbins, log=True, alpha=0.6)
+
+    # plt.legend(prop={'size': 15})
+    plt.title(
+        "Distribution of the difference between the estimated orbit parameters with ORBFIT and the MPC orbit parameters",
+        fontdict={"size": 20},
+    )
+    plt.ylabel("Number of orbit (log)", fontdict={"size": 20})
+    plt.xlabel(
+        "Difference between orbit and MPC (log of the difference in %)",
+        fontdict={"size": 20},
+    )
+    ax = plt.gca()
+    ax.tick_params(axis="x", which="major", labelsize=15)
+    ax.tick_params(axis="y", which="major", labelsize=15)
+    plt.show()

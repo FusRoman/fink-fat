@@ -69,13 +69,29 @@ def request_fink(
     8  10.270319  2.459753e+06  357.861407
     9  10.307019  2.459753e+06  358.332623
     """
+
+    if current_tries == nb_tries:
+        return pd.DataFrame(
+            columns=[
+                "ra",
+                "dec",
+                "jd",
+                "nid",
+                "fid",
+                "magpsf",
+                "sigmapsf",
+                "candid",
+                "not_updated",
+            ]
+        )
+
     r = requests.post(
         "https://fink-portal.org/api/v1/latests",
         json={
             "class": object_class,
             "n": "{}".format(n_sso),
-            "startdate": str(startdate),
-            "stopdate": str(stopdate),
+            "startdate": str((startdate - datetime.timedelta(hours=1))),
+            "stopdate": str((stopdate + datetime.timedelta(hours=1))),
             "columns": request_columns,
         },
     )
@@ -99,34 +115,19 @@ def request_fink(
             return pdf
 
     except ValueError:  # pragma: no cover
-        if current_tries == nb_tries:
-            return pd.DataFrame(
-                columns=[
-                    "ra",
-                    "dec",
-                    "jd",
-                    "nid",
-                    "fid",
-                    "magpsf",
-                    "sigmapsf",
-                    "candid",
-                    "not_updated",
-                ]
-            )
-        else:  # pragma: no cover
-            if verbose:
-                print("error when trying to get fink alerts, try again !")
+        if verbose:
+            print("error when trying to get fink alerts, try again !")
 
-            return request_fink(
-                object_class,
-                n_sso,
-                startdate,
-                stopdate,
-                request_columns,
-                verbose,
-                nb_tries,
-                current_tries + 1,
-            )
+        return request_fink(
+            object_class,
+            n_sso,
+            startdate,
+            stopdate,
+            request_columns,
+            verbose,
+            nb_tries,
+            current_tries + 1,
+        )
 
 
 def get_n_sso(object_class, date):
