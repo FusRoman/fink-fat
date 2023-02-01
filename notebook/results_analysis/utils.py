@@ -343,8 +343,8 @@ def results(
     )
 
     # Efficiency
-    efficiency, efficiency_with_error = ((nb_unique / nb_reconstruct) * 100), (
-        (nb_unique_with_error / nb_reconstruct_with_error) * 100
+    efficiency, efficiency_with_error = ((nb_unique / nb_detectable) * 100), (
+        (nb_unique_with_error / nb_detectable) * 100
     )
 
     return """
@@ -371,7 +371,7 @@ def results(
         purity_with_error,
         efficiency,
         efficiency_with_error,
-    )
+    ), purity, purity_with_error, efficiency, efficiency_with_error
 
 
 def plot_rms_distribution(
