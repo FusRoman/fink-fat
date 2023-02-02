@@ -29,6 +29,25 @@ def load_data(columns=None):
     """
     return pd.read_parquet("sso_data", columns=columns)
 
+def load_candidate_data(columns=None):
+    """
+    Load all the observations of solar system object in Fink
+    from the period between 1st of November 2019 and 16th of January 2022
+
+    Parameters
+    ----------
+    None
+
+    Return
+    ------
+    sso_data : Pandas Dataframe
+        all sso alerts with the following columns
+            - 'objectId', 'candid', 'ra', 'dec', 'jd', 'nid', 'fid', 'ssnamenr',
+                'ssdistnr', 'magpsf', 'sigmapsf', 'magnr', 'sigmagnr', 'magzpsci',
+                'isdiffpos', 'day', 'nb_detection', 'year', 'month'
+    """
+    return pd.read_parquet("sso_candidate_data", columns=columns)
+
 
 def plot_nb_det_distribution(df):
     """
