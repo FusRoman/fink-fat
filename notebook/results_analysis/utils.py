@@ -1,7 +1,9 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import os
 from collections import Counter
+import datetime
 
 
 def plot_nb_det_distribution(df):
@@ -213,10 +215,14 @@ def compare_confirmed_and_candidates_rms(
     ):
         fig = plt.figure(figsize=(20, 10))
         fig.suptitle(conf_rms, y=0.9)
+
+        _, bins = np.histogram(candidates_orbit_with_error[cand_rms], bins=200)
+        logbins = np.logspace(np.log10(bins[0]), np.log10(bins[-1]), len(bins))
+
         plt.hist(
             orbit_with_error[conf_rms],
             range=[0, 10],
-            bins=200,
+            bins=logbins,
             log=True,
             alpha=0.6,
             label="confirmed reconstructed_orbit",
@@ -224,7 +230,7 @@ def compare_confirmed_and_candidates_rms(
         plt.hist(
             pure_orbit_with_error[conf_rms],
             range=[0, 10],
-            bins=200,
+            bins=logbins,
             log=True,
             alpha=0.75,
             label="pure confirmed reconstructed orbit",
@@ -232,7 +238,7 @@ def compare_confirmed_and_candidates_rms(
         plt.hist(
             candidates_orbit_with_error[cand_rms],
             range=[0, 10],
-            bins=200,
+            bins=logbins,
             log=True,
             alpha=0.75,
             label="candidate reconstructed orbit",
@@ -567,3 +573,174 @@ def plot_orbfit_diff_hist(diff_data, orb_param):
     ax.tick_params(axis="x", which="major", labelsize=15)
     ax.tick_params(axis="y", which="major", labelsize=15)
     plt.show()
+
+
+
+def generate_mpc_results(
+    mpc_orb,
+    input_data,
+    reconstructed_orbit, 
+    reconstructed_trajectory, 
+    reconstructed_orbit_mops, 
+    reconstructed_trajectory_mops,
+    orbfit_limit_point=6,
+    tw=15
+    ):
+
+    _, _, _, _, _, unique_with_error = get_unique_and_pure(reconstructed_orbit, reconstructed_trajectory)
+
+    _, _, _, _, _, unique_with_error_mops = get_unique_and_pure(reconstructed_orbit_mops, reconstructed_trajectory_mops)
+
+    unique_confirmed_with_error = unique_with_error["ssnamenr"]
+    unique_confirmed_with_error_mops = unique_with_error_mops["ssnamenr"]
+
+    reconstructed_mpc, _ = mpc_crossmatch(mpc_orb, unique_confirmed_with_error)
+    reconstructed_mpc_mops, _ = mpc_crossmatch(mpc_orb, unique_confirmed_with_error_mops)
+
+    is_detectable = (
+        input_data.sort_values("jd")
+        .groupby("ssnamenr")
+        .agg(
+            nb_det=("ra", len), 
+            is_in_tw=("jd", lambda x: np.all(np.diff(x) <= tw))
+            )
+        .reset_index()
+    )
+    is_detectable = is_detectable[
+            (is_detectable["nb_det"] >= orbfit_limit_point)
+            & (is_detectable["is_in_tw"])
+        ]
+    input_mpc, _ = mpc_crossmatch(mpc_orb, pd.Series(is_detectable["ssnamenr"].unique()))
+
+    return display_mpc_reconstruction(reconstructed_mpc, reconstructed_mpc_mops, input_mpc)
+
+
+def get_api_time(path_tw, tw_exp, kind_exp):
+    res = []
+    log_path = os.path.join(path_tw, tw_exp, kind_exp, "fink_fat.log")
+    with open(log_path, "r") as f:
+        for lines in f.readlines():
+            split_line = lines.split(":")
+            if split_line[0] == "time taken to retrieve alerts from fink broker":
+                res.append(float(split_line[1].split("/")[0]))
+    return res
+
+
+def print_time_stats(all_stats, path_tw):
+
+    all_stats["api_time"] = get_api_time(path_tw, "15_2_2", "all_assoc")
+    min_orbfit_time = all_stats.iloc[all_stats["orbfit_time"].argmin()]
+    max_orbfit_time = all_stats.iloc[all_stats["orbfit_time"].argmax()]
+    total_execution_time = all_stats["assoc_time"].sum() + all_stats["orbfit_time"].sum() + all_stats["api_time"].sum()
+    
+
+    return """
+|      |API time|Association time|Orbfit time|Trajectory volume|Total|
+|------|-------------|--------------------|---------------|---------------------|---------|
+| min (sec)  |    {:0.2f}     |        {:0.2f}        |     {:0.2f} ({:0.0f} trajectories)      |         {:0.0f}        | X |
+|median (sec)|    {:0.2f}     |        {:0.2f}        |     {:0.2f}      |         {:0.0f}        | X |
+|max (sec)   |    {:0.2f}     |        {:0.2f}        |     {:0.2f} ({:0.0f} trajectories)      |         {:0.0f}        | X |
+|total (hh:mm:ss) |    {}     |        {}        |     {}      |         X        |         {}        |
+    """.format(
+        all_stats["api_time"].min(), 
+        all_stats["assoc_time"].min(), 
+        min_orbfit_time["orbfit_time"],
+        min_orbfit_time["nb_traj_to_orbfit"], 
+        all_stats["nb_traj_to_orbfit"].min(), 
+        all_stats["api_time"].median(), 
+        all_stats["assoc_time"].median(), 
+        all_stats["orbfit_time"].median(),
+        all_stats["nb_traj_to_orbfit"].median(), 
+        all_stats["api_time"].max(), 
+        all_stats["assoc_time"].max(), 
+        max_orbfit_time["orbfit_time"],
+        max_orbfit_time["nb_traj_to_orbfit"], 
+        all_stats["nb_traj_to_orbfit"].max(),
+        str(datetime.timedelta(seconds=all_stats["api_time"].sum())),
+        str(datetime.timedelta(seconds=all_stats["assoc_time"].sum())),
+        str(datetime.timedelta(seconds=all_stats["orbfit_time"].sum())),
+        str(datetime.timedelta(seconds=total_execution_time))
+    )
+
+
+def plot_hist_and_cdf(
+    data,
+    hist_range,
+    hist_title,
+    hist_xlabel,
+    hist_ylabel,
+    cdf_range,
+    cdf_title,
+    cdf_xlabel,
+    cdf_ylabel,
+    percent_cdf=[0.8, 0.9],
+    bins=200,
+):
+    """
+    Plot the distribution and the cumulative from data.
+
+    Parameters
+    ----------
+    data: Series
+    hist_range: list or None
+    hist_title: String
+    hist_xlabel: String
+    hist_ylabel: String
+    cdf_range: list or None
+    cdf_title: String
+    cdf_xlabel: String
+    cdf_ylabel: String
+    percent_cdf: list , default = [0.8, 0.9]
+    bins: integer, default = 200
+
+    Returns
+    -------
+    None
+    """
+    _, (ax1, ax2) = plt.subplots(1, 2, figsize=(30, 10))
+
+    ax1.set_title(hist_title, fontdict={"size": 30})
+    ax1.set_xlabel(hist_xlabel, fontdict={"size": 30})
+    ax1.set_ylabel(hist_ylabel, fontdict={"size": 30})
+    ax1.set_yscale("log")
+    ax1.hist(data, bins=bins, range=hist_range)
+
+    ax2.set_title(cdf_title, fontdict={"size": 30})
+    ax2.set_ylabel(cdf_ylabel, fontdict={"size": 30})
+    ax2.set_xlabel(cdf_xlabel, fontdict={"size": 30})
+
+    mean_diff_value, mean_diff_bins, _ = ax2.hist(
+        data, range=cdf_range, bins=bins, cumulative=True, density=True, histtype="step"
+    )
+
+    x_interp = np.interp(
+        percent_cdf,
+        np.array(mean_diff_value, dtype="float64"),
+        np.array(mean_diff_bins[:-1], dtype="float64"),
+    )
+    ax2.scatter(x_interp, percent_cdf)
+
+    for i, value in enumerate(zip(percent_cdf, x_interp)):
+        txt = str(int(value[0] * 100)) + "% = " + str(value[1].round(decimals=2))
+        ax2.annotate(txt, (x_interp[i], percent_cdf[i]), fontsize=30)
+
+    ax1.tick_params(axis="x", which="major", labelsize=30)
+    ax1.tick_params(axis="y", which="major", labelsize=25)
+
+    ax2.tick_params(axis="x", which="major", labelsize=30)
+    ax2.tick_params(axis="y", which="major", labelsize=25)
+    plt.show()
+
+
+def print_assoc_distrib(reconstructed_orbit, reconstructed_trajectory, with_error=True):
+    if with_error:
+        orbit_error = reconstructed_orbit[reconstructed_orbit["rms_a"] != -1.0]
+    else:
+        orbit_error = reconstructed_orbit[reconstructed_orbit["rms_a"] == -1.0]
+
+    traj_error = reconstructed_trajectory.merge(orbit_error, on="ssoCandId")
+    start_tr = traj_error[(traj_error["assoc_tag"] == "I") | (traj_error["assoc_tag"] == "O") | (traj_error["assoc_tag"] == "N")].drop_duplicates(["assoc_tag", "ssoCandId"])
+    print("Association repartition (orbit with error)")
+    for k, v in Counter(start_tr["assoc_tag"]).items():
+        print("\t{} : {} ({})".format(k, v, (v/len(start_tr))*100))
+

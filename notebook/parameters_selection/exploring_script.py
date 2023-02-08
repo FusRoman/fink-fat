@@ -418,6 +418,8 @@ def orbfit_perf_results():
             "nb_fail": nb_fail,
             "nb_error": nb_with_error,
             "df_with_perf": df_with_perf,
+            "orbit": cur_orb,
+            "trajectory": cur_tra
         }
 
     return res_dict
@@ -441,11 +443,16 @@ def plot_orbfit_perf(res_dict):
     plt.show()
 
 
-def plot_orbfit_diff_hist(res_dict, orb_param):
+def plot_orbfit_diff_hist(res_dict, df, orb_param, title="", xlabel="", ylabel=""):
     _ = plt.figure(figsize=(20, 10))
     logbins = None
     for i in list(np.arange(3, 11)) + [15]:
-        data = res_dict[i]["df_with_perf"][orb_param]
+        if df == "orbit":
+            data = res_dict[i][df]
+            data = data[data[orb_param] != -1.0]
+            data = data[orb_param]
+        else:
+            data = res_dict[i][df][orb_param]
 
         if type(logbins) == type(None):
             _, bins = np.histogram(data, bins=200)
@@ -453,30 +460,22 @@ def plot_orbfit_diff_hist(res_dict, orb_param):
 
             logbins = tmp_logbins
 
-            plt.hist(
-                data,
-                bins=logbins,
-                log=True,
-                alpha=0.6,
-                label="nb_point={}".format(i),
-            )
-        else:
-            plt.hist(
-                data,
-                bins=logbins,
-                log=True,
-                alpha=0.6,
-                label="nb_point={}".format(i),
-            )
+        plt.hist(
+            data,
+            bins=logbins,
+            log=True,
+            alpha=0.6,
+            label="nb_point={}".format(i),
+        )
 
     plt.legend(prop={"size": 15})
     plt.title(
-        "Distribution of the difference between the estimated orbit parameters with ORBFIT and the MPC orbit parameters",
+        title,
         fontdict={"size": 20},
     )
-    plt.ylabel("Number of orbit (log)", fontdict={"size": 20})
+    plt.ylabel(ylabel, fontdict={"size": 20})
     plt.xlabel(
-        "Difference between orbit and MPC (log of the difference in %)",
+        xlabel,
         fontdict={"size": 20},
     )
     ax = plt.gca()
