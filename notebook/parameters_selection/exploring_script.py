@@ -295,24 +295,32 @@ def angle_df(x):
 
 
 def plot_ast_distrib(mpc_in_fink):
-    _ = plt.figure(figsize=(20, 10))
+    _ = plt.figure(figsize=(25, 10))
 
     ax = plt.gca()
     ax.set_title(
-        "Distribution of the asteroid in the Fink's database", fontdict={"size": 20}
+        "Distribution of the asteroid in the Fink's database", fontdict={"size": 30}
     )
 
     for orb in mpc_in_fink["Orbit_type"].unique():
         cur_orb = mpc_in_fink[mpc_in_fink["Orbit_type"] == orb]
-        ax.scatter(cur_orb["a"], cur_orb["e"], label=orb, alpha=0.5)
+        if orb == "Object with perihelion distance < 1.665 AU":
+            orb = "Small Peri Dist"
+        ax.scatter(
+            cur_orb["a"],
+             cur_orb["e"], 
+             label=orb, 
+             alpha=0.5,
+             s=100
+        )
 
     # ax.set_yscale('log')
-    ax.set_xlabel("Semi major axis (AU)", fontdict={"size": 20})
-    ax.set_ylabel("Eccentricity", fontdict={"size": 20})
+    ax.set_xlabel("Semi major axis (AU)", fontdict={"size": 30})
+    ax.set_ylabel("Eccentricity", fontdict={"size": 30})
     ax.set_xscale("log")
-    ax.tick_params(axis="x", which="major", labelsize=20)
-    ax.tick_params(axis="y", which="major", labelsize=15)
-    ax.legend()
+    ax.tick_params(axis="x", which="major", labelsize=25)
+    ax.tick_params(axis="y", which="major", labelsize=20)
+    ax.legend(prop={"size": 25})
     plt.show()
 
 
