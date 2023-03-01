@@ -29,6 +29,7 @@ def load_data(columns=None):
     """
     return pd.read_parquet("sso_data", columns=columns)
 
+
 def load_candidate_data(columns=None):
     """
     Load all the observations of solar system object in Fink
@@ -308,17 +309,13 @@ def plot_ast_distrib(mpc_in_fink, ycol):
             ydata = np.sin(np.deg2rad(cur_orb[ycol]))
         else:
             ydata = cur_orb[ycol]
-        ax.scatter(
-            cur_orb["a"],
-             ydata, 
-             label=orb, 
-             alpha=0.5,
-             s=100
-        )
+        ax.scatter(cur_orb["a"], ydata, label=orb, alpha=0.5, s=100)
 
     # ax.set_yscale('log')
     ax.set_xlabel("Semi major axis (AU)", fontdict={"size": 30})
-    ax.set_ylabel("Eccentricity", fontdict={"size": 30})
+    ax.set_ylabel(
+        "Eccentricity" if ycol == "e" else "sin(inclination)", fontdict={"size": 30}
+    )
     ax.set_xscale("log")
     ax.tick_params(axis="x", which="major", labelsize=25)
     ax.tick_params(axis="y", which="major", labelsize=20)
@@ -429,7 +426,7 @@ def orbfit_perf_results():
             "nb_error": nb_with_error,
             "df_with_perf": df_with_perf,
             "orbit": cur_orb,
-            "trajectory": cur_tra
+            "trajectory": cur_tra,
         }
 
     return res_dict
@@ -471,22 +468,16 @@ def plot_orbfit_diff_hist(res_dict, df, orb_param, title="", xlabel="", ylabel="
             logbins = tmp_logbins
 
         plt.hist(
-            data,
-            bins=logbins,
-            log=True,
-            alpha=0.6,
-            label="nb_point={}".format(i),
+            data, bins=logbins, log=True, alpha=0.6, label="nb_point={}".format(i),
         )
 
     plt.legend(prop={"size": 15})
     plt.title(
-        title,
-        fontdict={"size": 20},
+        title, fontdict={"size": 20},
     )
     plt.ylabel(ylabel, fontdict={"size": 20})
     plt.xlabel(
-        xlabel,
-        fontdict={"size": 20},
+        xlabel, fontdict={"size": 20},
     )
     ax = plt.gca()
     ax.tick_params(axis="x", which="major", labelsize=15)

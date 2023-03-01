@@ -697,70 +697,70 @@ def print_time_stats(all_stats, path_tw):
     )
 
 
-def plot_hist_and_cdf(
-    data,
-    hist_range,
-    hist_title,
-    hist_xlabel,
-    hist_ylabel,
-    cdf_range,
-    cdf_title,
-    cdf_xlabel,
-    cdf_ylabel,
-    percent_cdf=[0.8, 0.9],
-    bins=200,
-):
-    """
-    Plot the distribution and the cumulative from data.
+# def plot_hist_and_cdf(
+#     data,
+#     hist_range,
+#     hist_title,
+#     hist_xlabel,
+#     hist_ylabel,
+#     cdf_range,
+#     cdf_title,
+#     cdf_xlabel,
+#     cdf_ylabel,
+#     percent_cdf=[0.8, 0.9],
+#     bins=200,
+# ):
+#     """
+#     Plot the distribution and the cumulative from data.
 
-    Parameters
-    ----------
-    data: Series
-    hist_range: list or None
-    hist_title: String
-    hist_xlabel: String
-    hist_ylabel: String
-    cdf_range: list or None
-    cdf_title: String
-    cdf_xlabel: String
-    cdf_ylabel: String
-    percent_cdf: list , default = [0.8, 0.9]
-    bins: integer, default = 200
+#     Parameters
+#     ----------
+#     data: Series
+#     hist_range: list or None
+#     hist_title: String
+#     hist_xlabel: String
+#     hist_ylabel: String
+#     cdf_range: list or None
+#     cdf_title: String
+#     cdf_xlabel: String
+#     cdf_ylabel: String
+#     percent_cdf: list , default = [0.8, 0.9]
+#     bins: integer, default = 200
 
-    Returns
-    -------
-    None
-    """
-    _, (ax1, ax2) = plt.subplots(1, 2, figsize=(30, 10))
+#     Returns
+#     -------
+#     None
+#     """
+#     _, (ax1, ax2) = plt.subplots(1, 2, figsize=(30, 10))
 
-    ax1.set_title(hist_title, fontdict={"size": 30})
-    ax1.set_xlabel(hist_xlabel, fontdict={"size": 30})
-    ax1.set_ylabel(hist_ylabel, fontdict={"size": 30})
-    ax1.set_yscale("log")
-    ax1.hist(data, bins=bins, range=hist_range)
+#     ax1.set_title(hist_title, fontdict={"size": 30})
+#     ax1.set_xlabel(hist_xlabel, fontdict={"size": 30})
+#     ax1.set_ylabel(hist_ylabel, fontdict={"size": 30})
+#     ax1.set_yscale("log")
+#     ax1.hist(data, bins=bins, range=hist_range)
 
-    ax2.set_title(cdf_title, fontdict={"size": 30})
-    ax2.set_ylabel(cdf_ylabel, fontdict={"size": 30})
-    ax2.set_xlabel(cdf_xlabel, fontdict={"size": 30})
+#     ax2.set_title(cdf_title, fontdict={"size": 30})
+#     ax2.set_ylabel(cdf_ylabel, fontdict={"size": 30})
+#     ax2.set_xlabel(cdf_xlabel, fontdict={"size": 30})
 
-    mean_diff_value, mean_diff_bins, _ = ax2.hist(
-        data, range=cdf_range, bins=bins, cumulative=True, density=True, histtype="step"
-    )
+#     mean_diff_value, mean_diff_bins, _ = ax2.hist(
+#         data, range=cdf_range, bins=bins, cumulative=True, density=True, histtype="step"
+#     )
 
-    x_interp = np.interp(
-        percent_cdf,
-        np.array(mean_diff_value, dtype="float64"),
-        np.array(mean_diff_bins[:-1], dtype="float64"),
-    )
-    ax2.scatter(x_interp, percent_cdf)
+#     x_interp = np.interp(
+#         percent_cdf,
+#         np.array(mean_diff_value, dtype="float64"),
+#         np.array(mean_diff_bins[:-1], dtype="float64"),
+#     )
+#     ax2.scatter(x_interp, percent_cdf)
 
-    for i, value in enumerate(zip(percent_cdf, x_interp)):
-        txt = str(int(value[0] * 100)) + "% = " + str(value[1].round(decimals=2))
-        ax2.annotate(txt, (x_interp[i], percent_cdf[i]), fontsize=30)
+#     for i, value in enumerate(zip(percent_cdf, x_interp)):
+#         txt = str(int(value[0] * 100)) + "% = " + str(value[1].round(decimals=2))
+#         ax2.annotate(txt, (x_interp[i], percent_cdf[i]), fontsize=30)
 
-    ax1.tick_params(axis="x", which="major", labelsize=30)
-    ax1.tick_params(axis="y", which="major", labelsize=25)
+#     ax1.tick_params(axis="x", which="major", labelsize=30)
+#     ax1.tick_params(axis="y", which="major", labelsize=25)
 
-    ax2.tick_params(axis="x", which="major", labelsize=30)
-    ax2.tick_params(axis="y", which="major", labelsize=25)
-    plt.show()
+#     ax2.tick_params(axis="x", which="major", labelsize=30)
+#     ax2.tick_params(axis="y", which="major", labelsize=25)
+#     plt.show()
