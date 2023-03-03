@@ -5,6 +5,10 @@ import os
 from collections import Counter
 import datetime
 
+import sbpy.data as sso_py
+from astropy.time import Time
+import astropy.units as ut
+
 
 def load_data(columns=None):
     """
@@ -298,14 +302,13 @@ def get_unique_and_pure(reconstructed_orbit, reconstructed_trajectory):
         count_ssnamenr_with_error[count_ssnamenr_with_error["count_ssnamenr"] == 1],
     )
 
-    unique_orbit, unique_with_error = count_ssnamenr[
-        count_ssnamenr["count_ssnamenr"] == 1
-    ].explode("ssnamenr").drop_duplicates("ssnamenr"), count_ssnamenr_with_error[
-        count_ssnamenr_with_error["count_ssnamenr"] == 1
-    ].explode(
-        "ssnamenr"
-    ).drop_duplicates(
-        "ssnamenr"
+    unique_orbit, unique_with_error = (
+        count_ssnamenr[count_ssnamenr["count_ssnamenr"] == 1]
+        .explode("ssnamenr")
+        .drop_duplicates("ssnamenr"),
+        count_ssnamenr_with_error[count_ssnamenr_with_error["count_ssnamenr"] == 1]
+        .explode("ssnamenr")
+        .drop_duplicates("ssnamenr"),
     )
 
     return (
@@ -364,13 +367,15 @@ def results(
     nb_unique, nb_unique_with_error = len(unique_orbit), len(unique_with_error)
 
     # Purity
-    purity, purity_with_error = ((nb_pure / nb_reconstruct) * 100), (
-        (nb_pure_with_error / nb_reconstruct_with_error) * 100
+    purity, purity_with_error = (
+        ((nb_pure / nb_reconstruct) * 100),
+        ((nb_pure_with_error / nb_reconstruct_with_error) * 100),
     )
 
     # Efficiency
-    efficiency, efficiency_with_error = ((nb_unique / nb_detectable) * 100), (
-        (nb_unique_with_error / nb_detectable) * 100
+    efficiency, efficiency_with_error = (
+        ((nb_unique / nb_detectable) * 100),
+        ((nb_unique_with_error / nb_detectable) * 100),
     )
 
     return (
@@ -644,6 +649,106 @@ def generate_mpc_results(
     return display_mpc_reconstruction(
         reconstructed_mpc, reconstructed_mpc_mops, input_mpc
     )
+
+
+def ephem_preparation(reconstructed_orbit, reconstructed_trajectory, mpc_orb):
+    _, _, _, pure_with_error, _, _ = get_unique_and_pure(
+        reconstructed_orbit, reconstructed_trajectory
+    )
+
+    pure_with_error_candid = pure_with_error.reset_index()["ssoCandId"]
+    pure_with_error_traj = reconstructed_trajectory[
+        reconstructed_trajectory["ssoCandId"].isin(pure_with_error_candid)
+    ].reset_index(drop=True)
+
+    pure_with_error_prep_ephem = (
+        pure_with_error_traj.sort_values(["ssoCandId", "jd"])[
+            ["ssoCandId", "jd", "ssnamenr"]
+        ]
+        .groupby("ssoCandId")
+        .agg(lambda x: list(x)[-1])
+        .reset_index()
+    )
+
+    mpc_orb["MPCID"] = mpc_orb["Number"].str[1:-1]
+    prep_ephem = mpc_orb.merge(
+        pure_with_error_prep_ephem, left_on="MPCID", right_on="ssnamenr"
+    ).merge(reconstructed_orbit, on="ssoCandId")
+
+    prep_ephem["jd+7"] = prep_ephem["jd"] + 7
+    prep_ephem["jd+30"] = prep_ephem["jd"] + 30
+    prep_ephem["jd+120"] = prep_ephem["jd"] + 120
+    prep_ephem["jd+360"] = prep_ephem["jd"] + 360
+
+    return prep_ephem
+
+
+def df_to_orb(df_orb, get_column_orbit, map_rename):
+
+    prep_to_orb = df_orb[get_column_orbit].rename(map_rename, axis=1,)
+
+    prep_to_orb["orbtype"] = "KEP"
+
+    prep_to_orb["H"] = 14.45
+    prep_to_orb["G"] = 0.15
+
+    orb_dict = prep_to_orb.to_dict(orient="list")
+
+    orb_dict["a"] = orb_dict["a"] * ut.au
+    orb_dict["i"] = orb_dict["i"] * ut.deg
+    orb_dict["node"] = orb_dict["node"] * ut.deg
+    orb_dict["argper"] = orb_dict["argper"] * ut.deg
+    orb_dict["M"] = orb_dict["M"] * ut.deg
+    orb_dict["epoch"] = Time(orb_dict["epoch"], format="jd")
+    orb_dict["H"] = orb_dict["H"] * ut.mag
+
+    ast_orb_db = sso_py.Orbit.from_dict(orb_dict)
+    return ast_orb_db
+
+
+# Time window study
+path_tw = "../fink_fat_experiments/time_window_experiments"
+
+
+def gen_path(exp):
+    """
+    exp must be 'all' or 'mops'
+    """
+    assert exp == "all" or exp == "mops"
+    if exp == "mops":
+        return "{}/confirmed_{}_fink_fat/mpc/".format(exp, exp)
+    elif exp == "all":
+        return "{}_assoc/confirmed_{}_fink_fat/mpc/".format(exp, exp)
+
+
+def get_tw_exp(tw_exp, kind_exp):
+    assert (
+        tw_exp == "15_2_2"
+        or tw_exp == "15_2_15"
+        or tw_exp == "15_15_2"
+        or tw_exp == "15_15_15"
+    )
+    exp_dir = gen_path(kind_exp)
+    reconstructed_orbit = pd.read_parquet(
+        os.path.join(path_tw, tw_exp, exp_dir, "orbital.parquet")
+    )
+    reconstructed_trajectory = pd.read_parquet(
+        os.path.join(path_tw, tw_exp, exp_dir, "trajectory_orb.parquet")
+    )
+    input_data = pd.read_parquet(os.path.join(path_tw, tw_exp, exp_dir, "save"))
+    return reconstructed_orbit, reconstructed_trajectory, input_data
+
+
+def get_stats(tw_exp, kind_exp):
+    assert (
+        tw_exp == "15_2_2"
+        or tw_exp == "15_2_15"
+        or tw_exp == "15_15_2"
+        or tw_exp == "15_15_15"
+    )
+    exp_dir = gen_path(kind_exp)
+    stats = pd.read_json(os.path.join(path_tw, tw_exp, exp_dir, "stats.json"))
+    return stats
 
 
 def get_api_time(path_tw, tw_exp, kind_exp):
