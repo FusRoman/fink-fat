@@ -85,6 +85,8 @@ def request_fink(
             ]
         )
 
+
+    # +- 1 hour due to hbase issue
     r = requests.post(
         "https://fink-portal.org/api/v1/latests",
         json={
