@@ -85,7 +85,6 @@ def request_fink(
             ]
         )
 
-
     # +- 1 hour due to hbase issue
     r = requests.post(
         "https://fink-portal.org/api/v1/latests",
@@ -102,7 +101,11 @@ def request_fink(
         pdf = pd.read_json(BytesIO(r.content))
         if len(pdf) != n_sso:
             if verbose:
-                print("error when trying to get fink alerts !!!\n\t number of alerts get from the API call ({}) is different from the real number of alerts ({}) \n\ttry again !".format(len(pdf), n_sso))
+                print(
+                    "error when trying to get fink alerts !!!\n\t number of alerts get from the API call ({}) is different from the real number of alerts ({}) \n\ttry again !".format(
+                        len(pdf), n_sso
+                    )
+                )
             return request_fink(
                 object_class,
                 n_sso,
@@ -169,7 +172,7 @@ def get_n_sso(object_class, date):
 
     pdf = pd.read_json(BytesIO(r.content))
 
-    if len(pdf) == 0 or 'class:Solar System candidate' not in pdf:
+    if len(pdf) == 0 or "class:Solar System candidate" not in pdf:
         return 0
 
     return pdf["class:{}".format(object_class)].values[0]
@@ -218,7 +221,9 @@ def get_last_sso_alert(object_class, date, verbose=False):
             )
         )
 
-    request_columns = "i:objectId,i:candid,i:ra,i:dec,i:jd,i:nid,i:fid,i:magpsf,i:sigmapsf"
+    request_columns = (
+        "i:objectId,i:candid,i:ra,i:dec,i:jd,i:nid,i:fid,i:magpsf,i:sigmapsf"
+    )
     if object_class == "Solar System MPC":  # pragma: no cover
         request_columns += ", i:ssnamenr"
 

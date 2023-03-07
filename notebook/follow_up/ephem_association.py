@@ -9,16 +9,12 @@ import datetime
 from sbpy.data import Orbit, Ephem
 import io
 import math
-import datetime
 import requests
 import astropy.units as u
 import matplotlib.pyplot as plt
 
-from bin.association_cli import request_fink
 from fink_fat.orbit_fitting.orbfit_local import compute_df_orbit_param
 
-from fink_utils.photometry.vect_conversion import vect_dc_mag
-from astroquery.imcce import Skybot
 
 def df_to_orb(df_orb):
     prep_to_orb = df_orb[
@@ -88,13 +84,15 @@ def get_stats_sso():
     )
 
     pdf = pd.read_json(io.BytesIO(r.content))
-    
+
     pdf["jd"] = [Time(f"{el[4:8]}-{el[8:10]}-{el[10:12]}").jd for el in pdf["key:key"]]
     return pdf[["class:Solar System candidate", "jd", "key:key"]]
 
 
 def get_alerts(start, stop, nb_alerts):
-    request_columns = "i:ra,i:dec,i:jd,i:nid,i:fid,i:candid,i:magpsf,i:sigmapsf,i:ssnamenr,i:objectId"
+    request_columns = (
+        "i:ra,i:dec,i:jd,i:nid,i:fid,i:candid,i:magpsf,i:sigmapsf,i:ssnamenr,i:objectId"
+    )
     required_columns = [
         "ra",
         "dec",
@@ -105,7 +103,7 @@ def get_alerts(start, stop, nb_alerts):
         "magpsf",
         "sigmapsf",
         "ssnamenr",
-        "objectId"
+        "objectId",
     ]
 
     # with hbase correction
@@ -160,11 +158,6 @@ def ephem_association_new(traj, orbit, step=15, separation=5):
                 start = Time(recursive_start, format="jd")
                 stop = Time(recursive_start + step, format="jd")
 
-        
-        start_jd = start.jd
-        stop_jd = stop.jd
-
-        
         # nb_alerts = int(np.sum(
         #     stats_sso[(stats_sso["jd"] >= start_jd) & (stats_sso["jd"] < stop_jd)]["class:Solar System candidate"]
         # ))
@@ -172,7 +165,6 @@ def ephem_association_new(traj, orbit, step=15, separation=5):
         pdf_alert = get_alerts(start.datetime, stop.datetime, 999999).astype(
             {"candid": int}
         )
-
 
         if len(pdf_alert) == 0:
             if backward:
@@ -184,9 +176,9 @@ def ephem_association_new(traj, orbit, step=15, separation=5):
                     traj, orbit, step=step, recursive_start=None, backward=True
                 )
 
-
-        ztf_assoc = ephem_cross_match(pdf_alert, orbit, separation).reset_index(drop=True)
-
+        ztf_assoc = ephem_cross_match(pdf_alert, orbit, separation).reset_index(
+            drop=True
+        )
 
         if len(ztf_assoc) == 0:
             if backward:
@@ -195,7 +187,6 @@ def ephem_association_new(traj, orbit, step=15, separation=5):
                 return ephem_association_aux(
                     traj, orbit, step=step, recursive_start=None, backward=True
                 )
-
 
         traj_test = traj
         for (
@@ -222,14 +213,17 @@ def ephem_association_new(traj, orbit, step=15, separation=5):
             rows["ssoCandId"] = traj["ssoCandId"].values[0]
 
             traj_extend = pd.concat([traj_test, pd.DataFrame(rows).T])
-            
+
             traj_extend["trajectory_id"] = 1
 
             new_orbit = compute_df_orbit_param(
                 traj_extend, 1, "/media/virtuelram/", 30, 20, float(rows["jd"]), 3
             )
 
-            if new_orbit["a"].values[0] != -1.0 and new_orbit["rms_a"].values[0] != -1.0:
+            if (
+                new_orbit["a"].values[0] != -1.0
+                and new_orbit["rms_a"].values[0] != -1.0
+            ):
                 traj_test = traj_extend
                 new_orbit["ssoCandId"] = orbit["ssoCandId"].values[0]
                 new_orbit = new_orbit.drop("trajectory_id", axis=1)
@@ -241,8 +235,10 @@ def ephem_association_new(traj, orbit, step=15, separation=5):
                 traj_test, orbit, step=step, recursive_start=start.jd, backward=True
             )
         else:
-            return ephem_association_aux(traj_test, orbit, step=step, recursive_start=stop.jd)
-    
+            return ephem_association_aux(
+                traj_test, orbit, step=step, recursive_start=stop.jd
+            )
+
     return ephem_association_aux(traj, orbit, step, separation), hist_orbit
 
 
@@ -272,7 +268,6 @@ def ephem_association_old(
         {"candid": int}
     )
 
-
     if len(pdf_alert) == 0:
         return traj, orbit
 
@@ -288,7 +283,6 @@ def ephem_association_old(
     ) in (
         ztf_assoc.iterrows()
     ):  # big issue with iterrows and the candid columns (cast problem)
-
 
         rows["assoc_tag"] = "E"
         # rows = rows.astype({"candid": int}, axis=1)
@@ -313,7 +307,9 @@ def ephem_association_old(
             traj_test, orbit, step=step, recursive_start=start.jd, backward=True
         )
     else:
-        return ephem_association_old(traj_test, orbit, step=step, recursive_start=stop.jd)
+        return ephem_association_old(
+            traj_test, orbit, step=step, recursive_start=stop.jd
+        )
 
 
 def extend_sso_traj(sso_lc, sso_orb, output_lc_path, output_orb_path):
@@ -351,34 +347,51 @@ def extend_sso_traj(sso_lc, sso_orb, output_lc_path, output_orb_path):
     return new_traj, new_orbit
 
 
-def extended_traj_table(extended_traj, extended_orbit, assoc_follow_up_table, suffix="_x"):
-    stats_pdf = extended_traj.sort_values(["ssoCandId", "jd"]).groupby("ssoCandId").agg(
-        nb_point=("ra", len),
-        last_observation=("last_assoc_date", lambda x: list(x)[-1]),
-        observation_window=("jd", lambda x: list(x)[-1] - list(x)[0])
-    ).reset_index()
+def extended_traj_table(
+    extended_traj, extended_orbit, assoc_follow_up_table, suffix="_x"
+):
+    stats_pdf = (
+        extended_traj.sort_values(["ssoCandId", "jd"])
+        .groupby("ssoCandId")
+        .agg(
+            nb_point=("ra", len),
+            last_observation=("last_assoc_date", lambda x: list(x)[-1]),
+            observation_window=("jd", lambda x: list(x)[-1] - list(x)[0]),
+        )
+        .reset_index()
+    )
 
-    stats_with_id = assoc_follow_up_table.merge(stats_pdf, left_on="ssoCandId{}".format(suffix), right_on="ssoCandId")
+    stats_with_id = assoc_follow_up_table.merge(
+        stats_pdf, left_on="ssoCandId{}".format(suffix), right_on="ssoCandId"
+    )
 
     mag_stats_dict = {
         "ssoCandId": [],
         "min_g": [],
         "max_g": [],
         "min_r": [],
-        "max_r": []
+        "max_r": [],
     }
 
     for ssoId in stats_pdf.ssoCandId:
         mag_stats_dict["ssoCandId"].append(ssoId)
         for filter in [1, 2]:
-            tmp_pdf = extended_traj[(extended_traj["ssoCandId"] == ssoId) & (extended_traj["fid"] == filter)]
+            tmp_pdf = extended_traj[
+                (extended_traj["ssoCandId"] == ssoId) & (extended_traj["fid"] == filter)
+            ]
 
-            mag_stats_dict["min_{}".format("g" if filter == 1 else "r")].append(tmp_pdf["magpsf"].min())
-            mag_stats_dict["max_{}".format("g" if filter == 1 else "r")].append(tmp_pdf["magpsf"].max())
+            mag_stats_dict["min_{}".format("g" if filter == 1 else "r")].append(
+                tmp_pdf["magpsf"].min()
+            )
+            mag_stats_dict["max_{}".format("g" if filter == 1 else "r")].append(
+                tmp_pdf["magpsf"].max()
+            )
 
     mag_pdf = pd.DataFrame(mag_stats_dict)
 
-    data_table = stats_with_id.merge(mag_pdf, on="ssoCandId").merge(extended_orbit, on="ssoCandId")
+    data_table = stats_with_id.merge(mag_pdf, on="ssoCandId").merge(
+        extended_orbit, on="ssoCandId"
+    )
 
     header = """
 |Fink Internal Id|Nb point|last observation|observation window(day)|magnitude<br>g:[min, max]<br>r:[min, max]|a (AU)|e|i (degree)|
@@ -389,18 +402,21 @@ def extended_traj_table(extended_traj, extended_orbit, assoc_follow_up_table, su
         header += "|15_2_2: {}<br>old: {}|{}|{}|{:.0f}|g:[{:.2f}, {:.2f}]<br>r:[{:.2f}, {:.2f}]|{:.3f} ± {:.3f}|{:.3f} ± {:.3f}|{:.3f} ± {:.3f}\n".format(
             rows["ssoCandId"],
             rows["ssoCandId_y"],
-            rows["nb_point"], 
-            rows["last_observation"], 
+            rows["nb_point"],
+            rows["last_observation"],
             rows["observation_window"],
             rows["min_g"],
             rows["max_g"],
             rows["min_r"],
             rows["max_r"],
-            rows["a"], rows["rms_a"],
-            rows["e"], rows["rms_e"], 
-            rows["i"], rows["rms_i"]
-    )
-    
+            rows["a"],
+            rows["rms_a"],
+            rows["e"],
+            rows["rms_e"],
+            rows["i"],
+            rows["rms_i"],
+        )
+
     return header
 
 
@@ -408,30 +424,30 @@ def plot_hist_orb(hist_orbit, candId):
 
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 15), sharex=True)
     fig.suptitle(candId, y=0.9)
-    fig.text(0.5, 0.08, 'new added point', ha='center')
+    fig.text(0.5, 0.08, "new added point", ha="center")
 
     tmp_hist = hist_orbit[hist_orbit["ssoCandId"] == candId]
 
     ax1.errorbar(
-        np.arange(len(tmp_hist)), 
+        np.arange(len(tmp_hist)),
         tmp_hist["a"],
         yerr=tmp_hist["rms_a"],
         marker="o",
-        linestyle=":"
+        linestyle=":",
     )
     ax2.errorbar(
-        np.arange(len(tmp_hist)), 
+        np.arange(len(tmp_hist)),
         tmp_hist["e"],
         yerr=tmp_hist["rms_e"],
         marker="o",
-        linestyle=":"
+        linestyle=":",
     )
     ax3.errorbar(
-        np.arange(len(tmp_hist)), 
+        np.arange(len(tmp_hist)),
         tmp_hist["i"],
         yerr=tmp_hist["rms_i"],
         marker="o",
-        linestyle=":"
+        linestyle=":",
     )
     ax1.set_ylabel("semi major axis (AU)")
 
@@ -442,7 +458,6 @@ def plot_hist_orb(hist_orbit, candId):
 
 
 if __name__ == "__main__":
-    import time as t
     import warnings
 
     warnings.filterwarnings("ignore")
