@@ -688,7 +688,10 @@ def ephem_preparation(reconstructed_orbit, reconstructed_trajectory, mpc_orb):
 
 def df_to_orb(df_orb, get_column_orbit, map_rename):
 
-    prep_to_orb = df_orb[get_column_orbit].rename(map_rename, axis=1,)
+    prep_to_orb = df_orb[get_column_orbit].rename(
+        map_rename,
+        axis=1,
+    )
 
     prep_to_orb["orbtype"] = "KEP"
 
@@ -877,33 +880,50 @@ def print_time_stats(all_stats, path_tw):
 def skybot_analysis(skybot_pdf):
 
     nb_counterparts = len(skybot_pdf[skybot_pdf["Ast_Name"] != "null"])
-    counterparts_percent = (len(skybot_pdf[skybot_pdf["Ast_Name"] != "null"]) / len(skybot_pdf))*100
+    counterparts_percent = (
+        len(skybot_pdf[skybot_pdf["Ast_Name"] != "null"]) / len(skybot_pdf)
+    ) * 100
 
     match_skybot = skybot_pdf[skybot_pdf["Ast_Name"] != "null"]
 
-    purity_unknown = skybot_pdf.groupby("d:ssoCandId").agg(
-        is_pure=("Ast_Name", lambda x: len(Counter(list(x)))),
-        is_unknown=("Ast_Name", lambda x: len(Counter(x)) == 1 and list(Counter(x).keys())[0] == "null")
-    ).reset_index()
+    purity_unknown = (
+        skybot_pdf.groupby("d:ssoCandId")
+        .agg(
+            is_pure=("Ast_Name", lambda x: len(Counter(list(x)))),
+            is_unknown=(
+                "Ast_Name",
+                lambda x: len(Counter(x)) == 1 and list(Counter(x).keys())[0] == "null",
+            ),
+        )
+        .reset_index()
+    )
 
-    pure_obj = purity_unknown[(purity_unknown["is_pure"] == 1) & ~(purity_unknown["is_unknown"])]
-
-    pure_traj = skybot_pdf[skybot_pdf["d:ssoCandId"].isin(pure_obj["d:ssoCandId"])]
+    pure_obj = purity_unknown[
+        (purity_unknown["is_pure"] == 1) & ~(purity_unknown["is_unknown"])
+    ]
 
     nb_pure = len(pure_obj)
-    pure_percent = (len(pure_obj) / len(skybot_pdf.drop_duplicates("d:ssoCandId"))*100)
+    pure_percent = len(pure_obj) / len(skybot_pdf.drop_duplicates("d:ssoCandId")) * 100
 
     not_pure_obj = purity_unknown[purity_unknown["is_pure"] != 1]
     nb_not_pure = len(not_pure_obj)
-    not_pure_percent = (len(not_pure_obj) / len(skybot_pdf.drop_duplicates("d:ssoCandId"))*100)
+    not_pure_percent = (
+        len(not_pure_obj) / len(skybot_pdf.drop_duplicates("d:ssoCandId")) * 100
+    )
 
-    unknown_obj = purity_unknown[(purity_unknown["is_pure"] == 1) & (purity_unknown["is_unknown"])]
+    unknown_obj = purity_unknown[
+        (purity_unknown["is_pure"] == 1) & (purity_unknown["is_unknown"])
+    ]
     nb_unknown = len(unknown_obj)
-    unknown_percent = (len(unknown_obj) / len(skybot_pdf.drop_duplicates("d:ssoCandId"))*100)
+    unknown_percent = (
+        len(unknown_obj) / len(skybot_pdf.drop_duplicates("d:ssoCandId")) * 100
+    )
 
-    fig = plt.figure(figsize=(8, 8))
+    _ = plt.figure(figsize=(8, 8))
     plt.hist(match_skybot["centerdist"], bins=200)
-    plt.title("Distribution of the separation \nbetween the observations and the skybot associations (max: 5 arcsecond)")
+    plt.title(
+        "Distribution of the separation \nbetween the observations and the skybot associations (max: 5 arcsecond)"
+    )
     plt.show()
 
     header = """
@@ -917,19 +937,23 @@ def skybot_analysis(skybot_pdf):
 |Unknown orbit|{} ({} %)|
 """.format(
         len(skybot_pdf),
-        nb_counterparts, counterparts_percent,
+        nb_counterparts,
+        counterparts_percent,
         len(skybot_pdf["d:ssoCandId"].unique()),
-        nb_pure, pure_percent,
-        nb_not_pure, not_pure_percent,
-        nb_unknown, unknown_percent
-)
+        nb_pure,
+        pure_percent,
+        nb_not_pure,
+        not_pure_percent,
+        nb_unknown,
+        unknown_percent,
+    )
 
     return header, pure_obj, not_pure_obj, unknown_obj
 
 
 def compute_sep_from_ztf(traj, fink_id, mpc_id, id_type=None):
-    """ Compute the separation between a Fink trajectory and a SSO object
-        
+    """Compute the separation between a Fink trajectory and a SSO object
+
     Parameters
     ----------
     fink_id: str
@@ -938,58 +962,62 @@ def compute_sep_from_ztf(traj, fink_id, mpc_id, id_type=None):
         MPC number or designation
     id_type: None or str
         If the mpc_id is a major body (e.g. planet satellite), specify id_type="id"
-        
+
     Returns
     -----------
     out: list
         List of separation between the Fink-FAT trajectory alerts and the SSO
     """
-    t_ztf = traj[traj['ssoCandId'] == fink_id]['jd'].values
-    epoch = Time(t_ztf, format='jd', scale='utc') # time in UT
-    
+    t_ztf = traj[traj["ssoCandId"] == fink_id]["jd"].values
+    epoch = Time(t_ztf, format="jd", scale="utc")  # time in UT
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         if id_type is None:
-            eph = Ephem.from_horizons(mpc_id, location='I41', epochs=epoch)
+            eph = Ephem.from_horizons(mpc_id, location="I41", epochs=epoch)
         else:
-            eph = Ephem.from_horizons(mpc_id, id_type=id_type, location='I41', epochs=epoch)
+            eph = Ephem.from_horizons(
+                mpc_id, id_type=id_type, location="I41", epochs=epoch
+            )
 
         t = eph.table
-        prediction = SkyCoord(t['RA'], t['DEC'])
+        prediction = SkyCoord(t["RA"], t["DEC"])
 
         obs = SkyCoord(
-            traj[traj['ssoCandId'] == fink_id]['ra'].values,
-            traj[traj['ssoCandId'] == fink_id]['dec'].values,
-            unit='deg'
+            traj[traj["ssoCandId"] == fink_id]["ra"].values,
+            traj[traj["ssoCandId"] == fink_id]["dec"].values,
+            unit="deg",
         )
 
     return prediction.separation(obs), prediction, obs
 
 
 def plot_ff_error(ssoCandId, obs_ztf, *args):
-    fig = plt.figure(figsize=(9, 9))
+    _ = plt.figure(figsize=(9, 9))
     plt.plot(
-        obs_ztf.ra, 
-        obs_ztf.dec, 
-        label="Obs ZTF: {}".format(ssoCandId), 
+        obs_ztf.ra,
+        obs_ztf.dec,
+        label="Obs ZTF: {}".format(ssoCandId),
         color="C2",
         marker="o",
         linestyle="--",
-        linewidth=3, markersize=8
+        linewidth=3,
+        markersize=8,
     )
 
     for (pred, ast_name) in args:
 
         plt.plot(
-            pred.ra, 
-            pred.dec, 
+            pred.ra,
+            pred.dec,
             label="Prediction: {}".format(ast_name),
             alpha=0.5,
             marker="o",
             linestyle="--",
-            linewidth=1.5, markersize=4
+            linewidth=1.5,
+            markersize=4,
         )
-        
+
         # ax = plt.gca()
         # for i, txt in enumerate(sep):
         #     ax.annotate("{:.4f} arcsec".format(txt.arcsecond), (pred.ra[i].value + 0.0005, pred.dec[i].value + 0.0008))
