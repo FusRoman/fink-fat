@@ -971,7 +971,7 @@ def plot_ff_error(ssoCandId, obs_ztf, *args):
     plt.plot(
         obs_ztf.ra, 
         obs_ztf.dec, 
-        label="Obs ZTF", 
+        label="Obs ZTF: {}".format(ssoCandId), 
         color="C2",
         marker="o",
         linestyle="--",
