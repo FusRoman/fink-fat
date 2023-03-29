@@ -323,6 +323,44 @@ def plot_ast_distrib(mpc_in_fink, ycol):
     plt.show()
 
 
+def plot_ast_distrib_bft(df, ycol):
+    plt.set_cmap('viridis')
+    _ = plt.figure(figsize=(25, 13))
+
+    ax = plt.gca()
+
+    for orb in df["sso_class"].unique():
+        cur_orb = df[df["sso_class"] == orb]
+        if len(cur_orb) > 0:
+            if orb == "Object with perihelion distance < 1.665 AU":
+                orb = "Small Peri Dist"
+
+            if ycol == "orbital_elements.inclination.value":
+                ydata = np.sin(np.deg2rad(cur_orb[ycol]))
+            else:
+                ydata = cur_orb[ycol]
+            ax.scatter(
+                cur_orb["orbital_elements.semi_major_axis.value"], 
+                ydata, 
+                label=orb, 
+                alpha=0.5, 
+                s=100,
+                cmap="veridis"
+            )
+
+    # ax.set_yscale('log')
+    ax.set_xlabel("Semi major axis (AU)", fontdict={"size": 30})
+    ax.set_ylabel(
+        "Eccentricity" if ycol == "orbital_elements.eccentricity.value" else "sin(inclination)", fontdict={"size": 30}
+    )
+    ax.set_xscale("log")
+    ax.tick_params(axis="x", which="major", labelsize=25)
+    ax.tick_params(axis="y", which="major", labelsize=20)
+    plt.legend(ncol=4, prop={"size": 20})
+    plt.tight_layout()
+    plt.show()
+
+
 def plot_ast_distrib_with_incl(mpc_in_fink):
     _ = plt.figure(figsize=(20, 10))
 

@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import os
+import rocks
 from collections import Counter
 import datetime
 import warnings
@@ -609,6 +610,13 @@ def plot_orbfit_diff_hist(diff_data, orb_param):
     plt.show()
 
 
+def rocks_identification(ssnamenr):
+    return pd.DataFrame(rocks.identify(ssnamenr), columns=["ast_name", "ast_number"])
+
+def bft_crossmatch(rocks_results, bft):
+    return bft[bft["sso_name"].isin(rocks_results["ast_name"])]
+
+
 def generate_mpc_results(
     mpc_orb,
     input_data,
@@ -652,6 +660,70 @@ def generate_mpc_results(
     return display_mpc_reconstruction(
         reconstructed_mpc, reconstructed_mpc_mops, input_mpc
     )
+
+
+def display_bft_results(
+        reconstructed_orbit, reconstructed_trajectory,
+        reconstructed_mops_orbit, reconstructed_mops_trajectory,
+        input_data, bft_data
+        ):
+    _, _, _, _, _, unique_with_error = get_unique_and_pure(
+        reconstructed_orbit, reconstructed_trajectory
+    )
+
+    _, _, _, _, _, unique_with_error_mops = get_unique_and_pure(
+        reconstructed_mops_orbit, reconstructed_mops_trajectory
+    )
+
+    unique_confirmed_with_error = unique_with_error["ssnamenr"]
+    unique_confirmed_with_error_mops = unique_with_error_mops["ssnamenr"]
+
+    unique_confirmed_error_identify = rocks_identification(unique_confirmed_with_error)
+    unique_confirmed_error_mops_identify = rocks_identification(unique_confirmed_with_error_mops)
+    unique_err_bft = bft_crossmatch(unique_confirmed_error_identify, bft_data)
+    unique_err_mops_bft = bft_crossmatch(unique_confirmed_error_mops_identify, bft_data)
+
+    is_detectable = (
+        input_data.sort_values("jd")
+        .groupby("ssnamenr")
+        .agg(nb_det=("ra", len), is_in_tw=("jd", lambda x: np.all(np.diff(x) <= 15)))
+        .reset_index()
+    )
+    is_detectable = is_detectable[
+        (is_detectable["nb_det"] >= 6) & (is_detectable["is_in_tw"])
+    ]
+
+    is_detectable_rocks = rocks_identification(is_detectable["ssnamenr"])
+    bft_is_detectable = bft_crossmatch(is_detectable_rocks, bft_data)
+    print("nb sso not identify by rocks: Fink-FAT: {}, à la mops: {}, is_detectable: {}".format(
+        len(unique_confirmed_error_identify) - len(unique_err_bft),
+        len(unique_confirmed_error_mops_identify) - len(unique_err_mops_bft),
+        len(is_detectable_rocks) - len(bft_is_detectable)
+    ))
+
+    table = """
+|  | Initial orbit Distribution | Fink_FAT | MOPS |
+|--|----------------------------|----------|------|
+"""
+
+    for sso_class in bft_data["sso_class"].unique():
+        nb_detectable_init = len(bft_is_detectable[bft_is_detectable["sso_class"] == sso_class])
+
+        nb_reconstr = len(unique_err_bft[unique_err_bft["sso_class"] == sso_class])
+        nb_reconstr_mops = len(unique_err_mops_bft[unique_err_mops_bft["sso_class"] == sso_class])
+
+        if nb_detectable_init != 0:
+            percent = (nb_reconstr / nb_detectable_init) * 100
+            percent_mops = (nb_reconstr_mops / nb_detectable_init) * 100
+        else:
+            percent = 0
+            percent_mops = 0
+
+        table += "| {} | {} | {} ({:.2f} %) | {} ({:.2f} %) |\n".format(
+                sso_class, nb_detectable_init, nb_reconstr, percent, nb_reconstr_mops, percent_mops
+            )
+
+    return table
 
 
 def ephem_preparation(reconstructed_orbit, reconstructed_trajectory, mpc_orb):
