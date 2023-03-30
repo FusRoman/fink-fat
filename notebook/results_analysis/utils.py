@@ -667,6 +667,21 @@ def display_bft_results(
         reconstructed_mops_orbit, reconstructed_mops_trajectory,
         input_data, bft_data
         ):
+    
+    def get_label(x):
+        if x[0] == "MB":
+            if x[1] in ["Middle", "Outer", "Inner"]:
+                return x[0]
+            else:
+                return x[1]
+        elif x[0] == "NEA":
+            return x[1]
+        else:
+            return x[0]
+
+
+    bft_data["class_alt"] = bft_data["sso_class"].str.split(">").map(lambda x: get_label(x))
+
     _, _, _, _, _, unique_with_error = get_unique_and_pure(
         reconstructed_orbit, reconstructed_trajectory
     )
@@ -706,11 +721,11 @@ def display_bft_results(
 |--|----------------------------|----------|------|
 """
 
-    for sso_class in bft_data["sso_class"].unique():
-        nb_detectable_init = len(bft_is_detectable[bft_is_detectable["sso_class"] == sso_class])
+    for sso_class in bft_data["class_alt"].unique():
+        nb_detectable_init = len(bft_is_detectable[bft_is_detectable["class_alt"] == sso_class])
 
-        nb_reconstr = len(unique_err_bft[unique_err_bft["sso_class"] == sso_class])
-        nb_reconstr_mops = len(unique_err_mops_bft[unique_err_mops_bft["sso_class"] == sso_class])
+        nb_reconstr = len(unique_err_bft[unique_err_bft["class_alt"] == sso_class])
+        nb_reconstr_mops = len(unique_err_mops_bft[unique_err_mops_bft["class_alt"] == sso_class])
 
         if nb_detectable_init != 0:
             percent = (nb_reconstr / nb_detectable_init) * 100

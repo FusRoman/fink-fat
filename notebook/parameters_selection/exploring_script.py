@@ -329,11 +329,29 @@ def plot_ast_distrib_bft(df, ycol):
 
     ax = plt.gca()
 
-    for orb in df["sso_class"].unique():
-        cur_orb = df[df["sso_class"] == orb]
+    def get_label(x):
+        if x[0] == "MB":
+            if x[1] in ["Middle", "Outer", "Inner"]:
+                return x[0]
+            else:
+                return x[1]
+        elif x[0] == "NEA":
+            return x[1]
+        else:
+            return x[0]
+
+
+    df["class_alt"] = df["sso_class"].str.split(">").map(lambda x: get_label(x))
+
+    unique_lab = df["class_alt"].unique()
+    import matplotlib.rcsetup as rcsetup
+    jet = plt.cm.nipy_spectral
+    idx = np.linspace(0, 1, len(unique_lab))
+    ax.set_prop_cycle(rcsetup.cycler('color', jet(idx)))
+
+    for orb in unique_lab:
+        cur_orb = df[df["class_alt"] == orb]
         if len(cur_orb) > 0:
-            if orb == "Object with perihelion distance < 1.665 AU":
-                orb = "Small Peri Dist"
 
             if ycol == "orbital_elements.inclination.value":
                 ydata = np.sin(np.deg2rad(cur_orb[ycol]))
@@ -343,7 +361,7 @@ def plot_ast_distrib_bft(df, ycol):
                 cur_orb["orbital_elements.semi_major_axis.value"], 
                 ydata, 
                 label=orb, 
-                alpha=0.5, 
+                alpha=0.5,
                 s=100,
                 cmap="veridis"
             )
