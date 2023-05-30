@@ -310,7 +310,7 @@ def night_to_night_observation_association(
     >>> night_1 = pd.DataFrame({
     ... "ra": [1, 1, 4, 6, 10],
     ... "dec": [1, 8, 4, 7, 2],
-    ... "dcmag": [13, 15, 14, 16, 12],
+    ... "magpsf": [13, 15, 14, 16, 12],
     ... "fid": [1, 2, 1, 2, 2],
     ... "jd": [1, 1, 1, 1, 1],
     ... "candid": [10, 11, 12, 13, 14]
@@ -319,7 +319,7 @@ def night_to_night_observation_association(
     >>> night_2 = pd.DataFrame({
     ... "ra": [2, 6, 5, 7, 7, 8],
     ... "dec": [2, 4, 3, 10, 7, 3],
-    ... "dcmag": [13.05, 17, 14.09, 18, 13, 16.4],
+    ... "magpsf": [13.05, 17, 14.09, 18, 13, 16.4],
     ... "fid": [1, 2, 2, 2, 1, 1],
     ... "jd": [2, 2, 2, 2, 2, 2],
     ... "candid": [15, 16, 17, 18, 19, 20]
@@ -330,7 +330,7 @@ def night_to_night_observation_association(
     >>> left_expected = pd.DataFrame({
     ... "ra": [1, 4],
     ... "dec": [1, 4],
-    ... "dcmag": [13, 14],
+    ... "magpsf": [13, 14],
     ... "fid": [1, 1],
     ... "jd": [1, 1],
     ... "candid": [10, 12]
@@ -339,7 +339,7 @@ def night_to_night_observation_association(
     >>> right_expected = pd.DataFrame({
     ... "ra": [2, 5],
     ... "dec": [2, 3],
-    ... "dcmag": [13.05, 14.09],
+    ... "magpsf": [13.05, 14.09],
     ... "fid": [1, 2],
     ... "jd": [2, 2],
     ... "candid": [15, 17]
@@ -453,11 +453,11 @@ def tracklets_and_trajectories_associations(
     trajectories : dataframe
         trajectories detected previously from the old night by the algorithm.
         Trajectories dataframe must have the following columns :
-            ra, dec, dcmag, nid, fid, jd, candid, trajectory_id
+            ra, dec, magpsf, sigmapsf, nid, fid, jd, candid, trajectory_id
     tracklets : dataframe
         tracklets detected in the next night
         Tracklets dataframe must have the following columns :
-            ra, dec, dcmag, nid, fid, jd, candid, trajectory_id
+            ra, dec, magpsf, sigmapsf, nid, fid, jd, candid, trajectory_id
             N.B : the id in the trajectory_id column for the tracklets are temporary.
     next_nid : The next night id which is the night id of the tracklets.
     sep_criterion : float
@@ -510,7 +510,7 @@ def tracklets_and_trajectories_associations(
     >>> tr, tk, max_tr_id = tracklets_and_trajectories_associations(trajectories, tracklets, 3, 1 * u.degree, 0.2, 0.5, 30, 5)
 
     >>> assert_frame_equal(tr, ts.trajectories_expected_3, check_dtype=False)
-    >>> assert_frame_equal(tk, pd.DataFrame(columns=["ra", "dec", "dcmag", "fid", "nid", "jd", "candid", "trajectory_id", "assoc_tag"]), check_index_type=False, check_dtype=False)
+    >>> assert_frame_equal(tk, pd.DataFrame(columns=["ra", "dec", "magpsf", "fid", "nid", "jd", "candid", "trajectory_id", "assoc_tag"]), check_index_type=False, check_dtype=False)
     >>> max_tr_id
     8
 
@@ -782,11 +782,11 @@ def trajectories_with_new_observations_associations(
     trajectories : dataframe
         trajectories detected previously from the old night by the algorithm.
         Trajectories dataframe must have the following columns :
-            ra, dec, dcmag, nid, fid, jd, candid, trajectory_id
+            ra, dec, magpsf, sigmapsf, nid, fid, jd, candid, trajectory_id
     new_observations : dataframe
         new observations from the next night and not associated during the intra night process and the
         new observations dataframe must have the following columns :
-            ra, dec, dcmag, nid, fid, jd, candid
+            ra, dec, magpsf, sigmapsf, nid, fid, jd, candid
     next_nid : The next night id which is the night id of the tracklets.
     sep_criterion : float
         the separation criterion for the alert based position associations
@@ -1029,11 +1029,11 @@ def old_observations_with_tracklets_associations(
     tracklets : dataframe
         tracklets detected previously from the intra night associations and not associated with a recorded trajectories.
         Tracklets dataframe must have the following columns :
-            ra, dec, dcmag, nid, fid, jd, candid, trajectory_id
+            ra, dec, magpsf, sigmapsf, nid, fid, jd, candid, trajectory_id
     old_observations : dataframe
         old observations from the previous nights.
         old observations dataframe must have the following columns :
-            ra, dec, dcmag, nid, fid, jd, candid
+            ra, dec, magpsf, sigmapsf, nid, fid, jd, candid
     next_nid : The next night id which is the night id of the tracklets.
     sep_criterion : float
         the separation criterion for the alert based position associations
@@ -1270,11 +1270,11 @@ def old_with_new_observations_associations(
     old_observations : dataframe
         remaining old observations return by old_observations_associations
         old_observations dataframe must have the following columns :
-            ra, dec, dcmag, nid, fid, jd, candid
+            ra, dec, magpsf, sigmapsf nid, fid, jd, candid
     new_observations : dataframe
         remaining new observations return by trajectories_associations
         new_observations dataframe must have the following columns :
-            ra, dec, dcmag, nid, fid, jd, candid
+            ra, dec, magpsf, sigmapsf, nid, fid, jd, candid
     next_nid : The next night id which is the night id of the tracklets.
     last_trajectory_id : integer
         the last trajectory identifier assign to a trajectory in the trajectories dataframe (currently, it is just the maximum).

@@ -15,7 +15,7 @@ if __name__ == "__main__":
 
     mpc_obs = pd.read_parquet("fink_fat/test/mpc_example.parquet")
 
-    mpc_obs["dcmag"], mpc_obs["dc_magerr"] = vect_dc_mag(
+    mpc_obs["magpsf"], mpc_obs["sigmapsf"] = vect_dc_mag(
         mpc_obs["i:fid"],
         mpc_obs["i:magpsf"],
         mpc_obs["i:sigmapsf"],

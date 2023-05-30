@@ -118,8 +118,12 @@ if __name__ == "__main__":
         "{}mpc/trajectory_orb.parquet".format(data_test_path)
     )
 
-    orb_test["ssoCandId"] = orb_test["ssoCandId"].str.replace("2022", str(datetime.date.today().year), regex=False)
-    obs_orb_test["ssoCandId"] = obs_orb_test["ssoCandId"].str.replace("2022", str(datetime.date.today().year), regex=False)
+    orb_test["ssoCandId"] = orb_test["ssoCandId"].str.replace(
+        "2022", str(datetime.date.today().year), regex=False
+    )
+    obs_orb_test["ssoCandId"] = obs_orb_test["ssoCandId"].str.replace(
+        "2022", str(datetime.date.today().year), regex=False
+    )
 
     try:
         assert_frame_equal(

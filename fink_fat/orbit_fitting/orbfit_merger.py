@@ -87,6 +87,8 @@ def parallel_merger(ram_dir, trajectory_df, orb_cand, indices, prop_epoch):
     >>> merge_file.close()
     >>> os.makedirs("chunkid_0/mpcobs/")
 
+    >>> merge_data[1]["magpsf"], merge_data[1]["sigmapsf"] = merge_data[1]["dcmag"], merge_data[1]["dcmagerr"]
+
     >>> res = parallel_merger(*merge_data)
 
     >>> df_orb_elem = ol.orbit_elem_dataframe(res, merge_column_name)
@@ -182,7 +184,11 @@ def merge_orbit(
     --------
 
     >>> merge_test_path = "fink_fat/test/merge_test/"
-    >>> merge_res = merge_orbit(pd.read_parquet(merge_test_path + "obs_merge.parquet"), pd.read_parquet(merge_test_path + "orb_merge.parquet"), "", 2, 1, 2459752.00278)
+    >>> obs = pd.read_parquet(merge_test_path + "obs_merge.parquet")
+    >>> orb = pd.read_parquet(merge_test_path + "orb_merge.parquet")
+    >>> obs["magpsf"], obs["sigmapsf"] = obs["dcmag"], obs["dcmagerr"]
+
+    >>> merge_res = merge_orbit(obs, orb, "", 2, 1, 2459752.00278)
 
     >>> merge_test = pd.read_parquet(merge_test_path + "merge_test_results.parquet")
 
