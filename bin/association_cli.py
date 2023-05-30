@@ -3,7 +3,6 @@ import os
 import numpy as np
 import pandas as pd
 import requests
-from fink_utils.photometry.conversion import dc_mag
 import shutil
 from io import BytesIO
 
@@ -70,37 +69,43 @@ def request_fink(
     8  10.270319  2.459753e+06  357.861407
     9  10.307019  2.459753e+06  358.332623
     """
+
+    if current_tries == nb_tries:
+        return pd.DataFrame(
+            columns=[
+                "ra",
+                "dec",
+                "jd",
+                "nid",
+                "fid",
+                "magpsf",
+                "sigmapsf",
+                "candid",
+                "not_updated",
+            ]
+        )
+
+    # +- 1 hour due to hbase issue
     r = requests.post(
         "https://fink-portal.org/api/v1/latests",
         json={
             "class": object_class,
             "n": "{}".format(n_sso),
-            "startdate": str(startdate),
-            "stopdate": str(stopdate),
+            "startdate": str((startdate - datetime.timedelta(hours=1))),
+            "stopdate": str((stopdate + datetime.timedelta(hours=1))),
             "columns": request_columns,
         },
     )
 
     try:
-        return pd.read_json(BytesIO(r.content))
-    except ValueError:  # pragma: no cover
-        if current_tries == nb_tries:
-            return pd.DataFrame(
-                columns=[
-                    "ra",
-                    "dec",
-                    "jd",
-                    "nid",
-                    "fid",
-                    "dcmag",
-                    "candid",
-                    "not_updated",
-                ]
-            )
-        else:  # pragma: no cover
+        pdf = pd.read_json(BytesIO(r.content))
+        if len(pdf) != n_sso:
             if verbose:
-                print("error when trying to get fink alerts, try again !")
-
+                print(
+                    "error when trying to get fink alerts !!!\n\t number of alerts get from the API call ({}) is different from the real number of alerts ({}) \n\ttry again !".format(
+                        len(pdf), n_sso
+                    )
+                )
             return request_fink(
                 object_class,
                 n_sso,
@@ -111,6 +116,23 @@ def request_fink(
                 nb_tries,
                 current_tries + 1,
             )
+        else:
+            return pdf
+
+    except ValueError:  # pragma: no cover
+        if verbose:
+            print("error when trying to get fink alerts, try again !")
+
+        return request_fink(
+            object_class,
+            n_sso,
+            startdate,
+            stopdate,
+            request_columns,
+            verbose,
+            nb_tries,
+            current_tries + 1,
+        )
 
 
 def get_n_sso(object_class, date):
@@ -150,7 +172,7 @@ def get_n_sso(object_class, date):
 
     pdf = pd.read_json(BytesIO(r.content))
 
-    if len(pdf) == 0 or 'class:Solar System candidate' not in pdf:
+    if len(pdf) == 0 or "class:Solar System candidate" not in pdf:
         return 0
 
     return pdf["class:{}".format(object_class)].values[0]
@@ -171,7 +193,7 @@ def get_last_sso_alert(object_class, date, verbose=False):
     -------
     pdf : pd.DataFrame
         the alerts from Fink with the following columns:
-            ra, dec, jd, nid, fid, dcmag, dcmag_err, candid, not_updated
+            ra, dec, jd, nid, fid, magpsf, sigmapsf, candid, not_updated
 
     Examples
     --------
@@ -187,7 +209,7 @@ def get_last_sso_alert(object_class, date, verbose=False):
     ... 'Solar System candidate',
     ... '2020-05-21'
     ... )
-    >>> assert_frame_equal(res_request, pd.DataFrame(columns=["objectId", "candid", "ra", "dec", "jd", "nid", "fid", "magpsf", "sigmapsf", "dcmag", "dcmag_err", "not_updated", "last_assoc_date"]))
+    >>> assert_frame_equal(res_request, pd.DataFrame(columns=["objectId", "candid", "ra", "dec", "jd", "nid", "fid", "magpsf", "sigmapsf", "not_updated", "last_assoc_date"]))
     """
     startdate = datetime.datetime.strptime(date, "%Y-%m-%d")
     stopdate = startdate + datetime.timedelta(days=1)
@@ -199,7 +221,9 @@ def get_last_sso_alert(object_class, date, verbose=False):
             )
         )
 
-    request_columns = "i:objectId,i:candid,i:ra,i:dec,i:jd,i:nid,i:fid,i:magpsf,i:sigmapsf,i:magnr,i:sigmagnr,i:magzpsci,i:isdiffpos"
+    request_columns = (
+        "i:objectId,i:candid,i:ra,i:dec,i:jd,i:nid,i:fid,i:magpsf,i:sigmapsf"
+    )
     if object_class == "Solar System MPC":  # pragma: no cover
         request_columns += ", i:ssnamenr"
 
@@ -219,8 +243,6 @@ def get_last_sso_alert(object_class, date, verbose=False):
         "fid",
         "magpsf",
         "sigmapsf",
-        "dcmag",
-        "dcmag_err",
         "not_updated",
         "last_assoc_date",
     ]
@@ -240,31 +262,13 @@ def get_last_sso_alert(object_class, date, verbose=False):
         required_columns.append("ssnamenr")
         translate_columns["i:ssnamenr"] = "ssnamenr"
 
-    _dc_mag = np.array(
-        pdf.apply(
-            lambda x: dc_mag(
-                x["i:fid"],
-                x["i:magpsf"],
-                x["i:sigmapsf"],
-                x["i:magnr"],
-                x["i:sigmagnr"],
-                x["i:magzpsci"],
-                x["i:isdiffpos"],
-            ),
-            axis=1,
-            result_type="expand",
-        ).values
-    )
-
     pdf = pdf.rename(columns=translate_columns)
-    if len(_dc_mag) > 0:
-        pdf.insert(len(pdf.columns), "dcmag", _dc_mag[:, 0])
-        pdf.insert(len(pdf.columns), "dcmag_err", _dc_mag[:, 1])
+    if len(pdf) > 0:
+        pdf.insert(len(pdf.columns), "not_updated", np.ones(len(pdf), dtype=np.bool_))
+        pdf.insert(len(pdf.columns), "last_assoc_date", date)
     else:
         return pd.DataFrame(columns=required_columns)
 
-    pdf.insert(len(pdf.columns), "not_updated", np.ones(len(pdf), dtype=np.bool_))
-    pdf.insert(len(pdf.columns), "last_assoc_date", date)
     return pdf[required_columns]
 
 
@@ -327,11 +331,11 @@ def get_data(tr_df_path, obs_df_path):
     ... )
 
     >>> len(tr_df)
-    12660
+    12897
     >>> len(old_obs_df)
-    5440
+    5307
     >>> last_tr_id
-    7704
+    7866
 
     >>> tr_df, old_obs_df, last_tr_id = get_data(
     ... data_path + "trajectory_df.parquet",
@@ -339,11 +343,11 @@ def get_data(tr_df_path, obs_df_path):
     ... )
 
     >>> len(tr_df)
-    12660
+    12897
     >>> len(old_obs_df)
-    5440
+    5307
     >>> last_tr_id
-    7704
+    7866
     """
     tr_columns = [
         "ra",
@@ -351,8 +355,8 @@ def get_data(tr_df_path, obs_df_path):
         "jd",
         "nid",
         "fid",
-        "dcmag",
-        "dcmag_err",
+        "magpsf",
+        "sigmapsf",
         "candid",
         "not_updated",
         "last_assoc_date",

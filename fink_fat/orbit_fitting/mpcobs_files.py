@@ -229,7 +229,7 @@ def left_shift(number, n):
     >>> left_shift(14589, 3)
     14
     """
-    return number // 10 ** n
+    return number // 10**n
 
 
 def right_shift(number, n):
@@ -257,7 +257,7 @@ def right_shift(number, n):
     >>> right_shift(1234, 2)
     34
     """
-    return number % 10 ** n
+    return number % 10**n
 
 
 def letter_cycle(cycle):
@@ -444,7 +444,7 @@ def write_observation_file(ram_dir, obs_df):
     obs_df : dataframe
         the observation dataframe
         have to contains the following columns :
-            ra, dec, dcmag, fid, jd, trajectory_id
+            ra, dec, magpsf, fid, jd, trajectory_id
 
     Returns
     -------
@@ -457,7 +457,7 @@ def write_observation_file(ram_dir, obs_df):
     >>> test_obs = pd.DataFrame({
     ... "ra" : [0, 1],
     ... "dec": [0, 1],
-    ... "dcmag" : [17.4, 17.6],
+    ... "magpsf" : [17.4, 17.6],
     ... "fid": [1, 2],
     ... "jd" : [2440423.34352, 2440423.34387],
     ... "trajectory_id" : [0, 0]
@@ -474,7 +474,7 @@ def write_observation_file(ram_dir, obs_df):
     obs_df = obs_df.sort_values("jd")
     ra = obs_df["ra"]
     dec = obs_df["dec"]
-    dcmag = obs_df["dcmag"]
+    magpsf = obs_df["magpsf"]
     band = obs_df["fid"]
     date = obs_df["jd"]
     traj_id = obs_df["trajectory_id"].values[0]
@@ -501,7 +501,7 @@ def write_observation_file(ram_dir, obs_df):
         + " "
         + band_to_str(b)
         + "      I41"  # ZTF observation code
-        for el, mag, b in zip(res, dcmag, band)
+        for el, mag, b in zip(res, magpsf, band)
     ]
 
     res[0] = res[0][:12] + "*" + res[0][13:]
