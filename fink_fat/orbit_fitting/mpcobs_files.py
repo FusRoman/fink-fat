@@ -229,7 +229,7 @@ def left_shift(number, n):
     >>> left_shift(14589, 3)
     14
     """
-    return number // 10 ** n
+    return number // 10**n
 
 
 def right_shift(number, n):
@@ -257,7 +257,7 @@ def right_shift(number, n):
     >>> right_shift(1234, 2)
     34
     """
-    return number % 10 ** n
+    return number % 10**n
 
 
 def letter_cycle(cycle):

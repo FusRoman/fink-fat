@@ -253,7 +253,10 @@ def orbit_elem_dataframe(orbit_elem, column_name):
     >>> os.rmdir("mpcobs")
     """
 
-    df_orb_elem = pd.DataFrame(orbit_elem, columns=column_name,)
+    df_orb_elem = pd.DataFrame(
+        orbit_elem,
+        columns=column_name,
+    )
 
     for col_name in column_name:
         df_orb_elem[col_name] = pd.to_numeric(df_orb_elem[col_name], errors="ignore")

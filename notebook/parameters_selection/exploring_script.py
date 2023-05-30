@@ -6,6 +6,7 @@ import astropy.units as u
 import numpy as np
 
 from matplotlib.lines import Line2D
+import matplotlib.rcsetup as rcsetup
 
 from bin.stat_cli import compute_residue
 
@@ -226,11 +227,14 @@ def mag_df(x):
     diff_jd1 = np.where(diff_jd1 < 1, 1, diff_jd1)
     diff_jd2 = np.where(diff_jd2 < 1, 1, diff_jd2)
 
+    mask_jd1 = np.where(diff_jd1 < 15)[0]
+    mask_jd2 = np.where(diff_jd2 < 15)[0]
+
     diff_mag1 = np.abs(diff_mag1)
     diff_mag2 = np.abs(diff_mag2)
 
-    dmag_fid1 = np.divide(diff_mag1, diff_jd1)
-    dmag_fid2 = np.divide(diff_mag2, diff_jd2)
+    dmag_fid1 = np.divide(diff_mag1[mask_jd1], diff_jd1[mask_jd1])
+    dmag_fid2 = np.divide(diff_mag2[mask_jd2], diff_jd2[mask_jd2])
 
     if len(dmag_fid1) == 0:
         return [], dmag_fid2, 0
@@ -323,60 +327,60 @@ def plot_ast_distrib(mpc_in_fink, ycol):
     plt.show()
 
 
-def plot_ast_distrib_bft(df, ycol):
-    plt.set_cmap('viridis')
-    _ = plt.figure(figsize=(25, 13))
+# def plot_ast_distrib_bft(df, ycol):
+#     plt.set_cmap('viridis')
+#     _ = plt.figure(figsize=(25, 13))
 
-    ax = plt.gca()
+#     ax = plt.gca()
 
-    def get_label(x):
-        if x[0] == "MB":
-            if x[1] in ["Middle", "Outer", "Inner"]:
-                return x[0]
-            else:
-                return x[1]
-        elif x[0] == "NEA":
-            return x[1]
-        else:
-            return x[0]
+#     def get_label(x):
+#         if x[0] == "MB":
+#             if x[1] in ["Middle", "Outer", "Inner"]:
+#                 return x[0]
+#             else:
+#                 return x[1]
+#         elif x[0] == "NEA":
+#             return x[1]
+#         else:
+#             return x[0]
 
 
-    df["class_alt"] = df["sso_class"].str.split(">").map(lambda x: get_label(x))
+#     df["class_alt"] = df["sso_class"].str.split(">").map(lambda x: get_label(x))
 
-    unique_lab = df["class_alt"].unique()
-    import matplotlib.rcsetup as rcsetup
-    jet = plt.cm.nipy_spectral
-    idx = np.linspace(0, 1, len(unique_lab))
-    ax.set_prop_cycle(rcsetup.cycler('color', jet(idx)))
+#     unique_lab = df["class_alt"].unique()
 
-    for orb in unique_lab:
-        cur_orb = df[df["class_alt"] == orb]
-        if len(cur_orb) > 0:
+#     jet = plt.cm.tab20
+#     idx = np.linspace(0, 1, len(unique_lab))
+#     ax.set_prop_cycle(rcsetup.cycler('color', jet(idx)))
 
-            if ycol == "orbital_elements.inclination.value":
-                ydata = np.sin(np.deg2rad(cur_orb[ycol]))
-            else:
-                ydata = cur_orb[ycol]
-            ax.scatter(
-                cur_orb["orbital_elements.semi_major_axis.value"], 
-                ydata, 
-                label=orb, 
-                alpha=0.5,
-                s=100,
-                cmap="veridis"
-            )
+#     for orb in unique_lab:
+#         cur_orb = df[df["class_alt"] == orb]
+#         if len(cur_orb) > 0:
 
-    # ax.set_yscale('log')
-    ax.set_xlabel("Semi major axis (AU)", fontdict={"size": 30})
-    ax.set_ylabel(
-        "Eccentricity" if ycol == "orbital_elements.eccentricity.value" else "sin(inclination)", fontdict={"size": 30}
-    )
-    ax.set_xscale("log")
-    ax.tick_params(axis="x", which="major", labelsize=25)
-    ax.tick_params(axis="y", which="major", labelsize=20)
-    plt.legend(ncol=4, prop={"size": 20})
-    plt.tight_layout()
-    plt.show()
+#             if ycol == "orbital_elements.inclination.value":
+#                 ydata = np.sin(np.deg2rad(cur_orb[ycol]))
+#             else:
+#                 ydata = cur_orb[ycol]
+#             ax.scatter(
+#                 cur_orb["orbital_elements.semi_major_axis.value"],
+#                 ydata,
+#                 label=orb,
+#                 alpha=0.5,
+#                 s=100,
+#                 cmap="veridis"
+#             )
+
+#     # ax.set_yscale('log')
+#     ax.set_xlabel("Semi major axis (AU)", fontdict={"size": 30})
+#     ax.set_ylabel(
+#         "Eccentricity" if ycol == "orbital_elements.eccentricity.value" else "sin(inclination)", fontdict={"size": 30}
+#     )
+#     ax.set_xscale("log")
+#     ax.tick_params(axis="x", which="major", labelsize=25)
+#     ax.tick_params(axis="y", which="major", labelsize=20)
+#     plt.legend(ncol=4, prop={"size": 20})
+#     plt.tight_layout()
+#     plt.show()
 
 
 def plot_ast_distrib_with_incl(mpc_in_fink):
@@ -388,7 +392,6 @@ def plot_ast_distrib_with_incl(mpc_in_fink):
     )
 
     for orb, mark in zip(mpc_in_fink["Orbit_type"].unique(), Line2D.filled_markers):
-
         cur_orb = mpc_in_fink[mpc_in_fink["Orbit_type"] == orb]
         ax.scatter(
             cur_orb["a"],
@@ -411,7 +414,6 @@ def plot_ast_distrib_with_incl(mpc_in_fink):
 
 
 def merge_reconstruct_and_mpc(mpc_in_fink, reconstruct_orbit):
-
     mpc_in_fink["Number"] = mpc_in_fink["Number"].str[1:-1]
     mpc_in_fink["Principal_desig"] = mpc_in_fink["Principal_desig"].str.replace(" ", "")
 
@@ -434,7 +436,6 @@ def merge_reconstruct_and_mpc(mpc_in_fink, reconstruct_orbit):
 
 
 def orbfit_perf_results():
-
     mpc_ast_data = pd.read_parquet(
         "../data/MPC_Database/mpcorb_extended.parquet",
         columns=[
@@ -524,18 +525,197 @@ def plot_orbfit_diff_hist(res_dict, df, orb_param, title="", xlabel="", ylabel="
             logbins = tmp_logbins
 
         plt.hist(
-            data, bins=logbins, log=True, alpha=0.6, label="nb_point={}".format(i),
+            data,
+            bins=logbins,
+            log=True,
+            alpha=0.6,
+            label="nb_point={}".format(i),
         )
 
     plt.legend(prop={"size": 15})
     plt.title(
-        title, fontdict={"size": 20},
+        title,
+        fontdict={"size": 20},
     )
     plt.ylabel(ylabel, fontdict={"size": 20})
     plt.xlabel(
-        xlabel, fontdict={"size": 20},
+        xlabel,
+        fontdict={"size": 20},
     )
     ax = plt.gca()
     ax.tick_params(axis="x", which="major", labelsize=15)
     ax.tick_params(axis="y", which="major", labelsize=15)
+    plt.show()
+
+
+# papier version
+def plot_ast_distrib_bft(df, ycol):
+    # plt.set_cmap('tab10')
+    _ = plt.figure(figsize=(15, 10))
+
+    ax = plt.gca()
+
+    def get_label_merged(x):
+        if x[0] == "MB":
+            if x[1] in ["Middle", "Outer", "Inner"]:
+                return "Inner/Middle/Outer"
+            else:
+                return x[1]
+        elif x[0] == "NEA":
+            return x[1]
+        else:
+            return x[0]
+
+    # Class definition
+    leglist_nea = ["Amor", "Apollo", "Aten", "Atira"]
+
+    leglist_mc = ["Mars-Crosser"]
+
+    leglist_mb = ["Inner/Middle/Outer", "Cybele", "Hilda", "Hungaria", "Phocaea"]
+
+    leglist_other = ["Trojan", "Centaur", "KBO"]
+
+    # get labels
+    df = df.copy()
+    df["class_alt"] = df["sso_class"].str.split(">").map(lambda x: get_label_merged(x))
+    unique_class_sso = df["class_alt"].unique()
+
+    # Define color cycle
+    jet = plt.cm.tab20
+    idx = np.linspace(0, 1, 11)
+
+    #     idx = np.arange(20)
+    ax.set_prop_cycle(rcsetup.cycler("color", jet(idx)))
+
+    # if orb in leglist_nea:
+    #     marker = 'o'
+    #     prelabel = 'NEA>'
+    # if orb in leglist_mc:
+    #     marker = 's'
+    #     prelabel = ''
+    # if orb in leglist_mb:
+    #     marker = '.'
+    #     prelabel = 'MB>'
+    # if orb in leglist_other:
+    #     marker = '^'
+    #     prelabel = ''
+
+    color_tag = {
+        t: jet(n)
+        for t, n in zip(
+            leglist_nea + leglist_mc + leglist_mb + leglist_other,
+            np.arange(len(unique_class_sso)),
+        )
+    }
+
+    # tag_color = {
+    #     n: t for t, n in zip(unique_class_sso, np.arange(len(unique_class_sso)))
+    # }
+
+    def plot_leglist(leglist, marker, loc, legend_title):
+        cur_orb = df[df["class_alt"].isin(leglist)]
+
+        color_series = cur_orb["class_alt"].map(color_tag)
+
+        ax.scatter(
+            cur_orb["orbital_elements.semi_major_axis.value"],
+            cur_orb["orbital_elements.eccentricity.value"],
+            c=color_series.values,
+            label=leglist,
+            alpha=0.5,
+            marker=marker,
+            s=60,
+            cmap=plt.cm.tab20,
+        )
+
+        from matplotlib.lines import Line2D
+
+        legend1 = ax.legend(
+            handles=[
+                Line2D(
+                    [0],
+                    [0],
+                    color="w",
+                    markerfacecolor=v,
+                    marker=marker,
+                    label=k,
+                    markersize=15,
+                )
+                for k, v in color_tag.items()
+                if k in leglist
+            ],
+            loc=loc,
+            title=legend_title,
+            title_fontsize=15,
+            prop={"size": 20},
+        )
+        ax.add_artist(legend1)
+
+    locs = [(0.82, 0.615), (0.737, 0.539), (0.67, 0.2), (0.8, 0.01)]
+    markers = ["o", "s", ".", "^"]
+
+    plot_leglist(leglist_nea, markers[0], locs[0], "NEA")
+    plot_leglist(leglist_mc, markers[1], locs[1], "")
+    plot_leglist(leglist_mb, markers[2], locs[2], "MB")
+    plot_leglist(leglist_other, markers[3], locs[3], "")
+
+    # plt.gca().add_artist(
+    #     plt.legend(
+    #         handles=[sc],
+    #         loc=(0.8, 0.1)
+    #     )
+    # )
+
+    # Loop over classes
+    # for orb in leglist_nea + leglist_mc + leglist_mb + leglist_other:
+    #     cur_orb = df[df["class_alt"] == orb]
+
+    #     if orb in leglist_nea:
+    #         marker = 'o'
+    #         prelabel = 'NEA>'
+    #     if orb in leglist_mc:
+    #         marker = 's'
+    #         prelabel = ''
+    #     if orb in leglist_mb:
+    #         marker = '.'
+    #         prelabel = 'MB>'
+    #     if orb in leglist_other:
+    #         marker = '^'
+    #         prelabel = ''
+
+    #     if len(cur_orb) > 0:
+
+    #         if ycol == "orbital_elements.inclination.value":
+    #             ydata = np.sin(np.deg2rad(cur_orb[ycol]))
+    #         else:
+    #             ydata = cur_orb[ycol]
+    #         sc = ax.scatter(
+    #             cur_orb["orbital_elements.semi_major_axis.value"],
+    #             ydata,
+    #             label=prelabel+orb,
+    #             alpha=0.5,
+    #             marker=marker,
+    #             s=60,
+    #             cmap=plt.cm.tab20
+    #         )
+
+    #         plt.gca().add_artist(
+    #             plt.legend(
+    #                 handles=[sc],
+    #                 loc=(0.8, ( (y_padding*0.01) * len(all_leglist[y_padding % 4]) + 0.05))
+    #             )
+    #         )
+    #         y_padding += 1
+
+    # ax.set_yscale('log')
+    ax.set_xlabel("Semi major axis (AU)")
+    ax.set_ylabel(
+        "Eccentricity"
+        if ycol == "orbital_elements.eccentricity.value"
+        else "sin(inclination)"
+    )
+    ax.set_xscale("log")
+    ax.set_ylim(0, 1)
+
+    # ax.legend(markerscale=3, loc='lower right')
     plt.show()
