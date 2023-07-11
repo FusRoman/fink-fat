@@ -17,7 +17,8 @@ Installation of the external dependencies: follow this [link](https://github.com
 
 ## Latest News
 
-* 2023/07/11: Release [0.14.0](https://github.com/FusRoman/fink-fat/releases/tag/v0.14.0)
+* 2023/07/11: Release [0.15.0](https://github.com/FusRoman/fink-fat/releases/tag/v0.15.0)
+* 2023/07/11: Release [0.14.0](https://github.com/FusRoman/fink-fat/releases/tag/v0.14.0)(Paper version: https://arxiv.org/abs/2305.01123)
 * 2022/06/23: Release [0.8.0](https://github.com/FusRoman/fink-fat/releases/tag/0.8.0_beta)
 * 2022/03/22: Release [0.6.0](https://github.com/FusRoman/fink-fat/releases/tag/0.6.0_beta)
 * 2021/11/25: Release [0.1](https://github.com/FusRoman/fink-fat/releases/tag/v0.1.0-alpha)
