@@ -2,7 +2,6 @@ import pandas as pd
 from pandas.testing import assert_frame_equal
 import shutil
 import sys
-import datetime
 
 import traceback
 import logging
@@ -116,13 +115,6 @@ if __name__ == "__main__":
     orb_test = pd.read_parquet("{}mpc/orbital.parquet".format(data_test_path))
     obs_orb_test = pd.read_parquet(
         "{}mpc/trajectory_orb.parquet".format(data_test_path)
-    )
-
-    orb_test["ssoCandId"] = orb_test["ssoCandId"].str.replace(
-        "2022", str(datetime.date.today().year), regex=False
-    )
-    obs_orb_test["ssoCandId"] = obs_orb_test["ssoCandId"].str.replace(
-        "2022", str(datetime.date.today().year), regex=False
     )
 
     try:

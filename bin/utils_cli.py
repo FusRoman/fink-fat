@@ -433,7 +433,7 @@ def assig_tags(orb_df, traj_orb_df, start_tags):
     >>> orb = pd.DataFrame({
     ... "trajectory_id": [0, 1, 2, 3, 4, 5],
     ... "a": [1, 1.5, 1.6, 2.8, 35.41, 265.32],
-    ... "ref_epoch": [0, 2, 3, 5, 4, 1]
+    ... "ref_epoch": [2460235.42, 2460412.42, 2460842.42, 2460137.42, 2460131.42, 2460095.42]
     ... })
     >>> traj = pd.DataFrame({
     ... "trajectory_id": [0, 0, 0, 0, 0, 0, 1, 2, 1, 2, 1, 3, 3, 4, 5, 3, 5, 4, 5, 4, 3, 1, 2, 3, 4, 5, 5, 2],
@@ -445,15 +445,12 @@ def assig_tags(orb_df, traj_orb_df, start_tags):
     >>> orb_test = pd.read_parquet("fink_fat/test/utils_cli_test_orb.parquet")
     >>> traj_test = pd.read_parquet("fink_fat/test/utils_cli_test_traj.parquet")
 
-    >>> orb_test["ssoCandId"] = orb_test["ssoCandId"].str.replace("2022", str(datetime.date.today().year), regex=False)
-    >>> traj_test["ssoCandId"] = traj_test["ssoCandId"].str.replace("2022", str(datetime.date.today().year), regex=False)
-
     >>> assert_frame_equal(orb_test, new_orb)
     >>> assert_frame_equal(traj_test, new_traj)
     """
     orb_df = orb_df.sort_values("ref_epoch")
 
-    all_tags = generate_tags(start_tags, start_tags + len(orb_df))
+    all_tags = generate_tags(start_tags, start_tags + len(orb_df), orb_df["ref_epoch"])
     int_id_to_tags = {
         tr_id: tag for tr_id, tag in zip(orb_df["trajectory_id"], all_tags)
     }
