@@ -1,20 +1,25 @@
+import numpy as np
 import datetime
 
+from astropy.time import Time
 
-def int_to_tags(traj_id):
+
+def int_to_tags(traj_id, jd):
     """
     Convert an integer into a Fink-FAT trajectory identifier.
     The identifier format is :
 
     "FFYYYYXXXXXXX" where
         'FF' is for 'Fink-FAT',
-        'YYYY' is the full year (2022),
+        'DDMMYYYY' is the full date (01012022),
         and 'XXXXXXX' is the number of trajectories since the beginning of the year in the base-26.
 
     Parameters
     ----------
     traj_id : integer
         trajectories identifier as an integer
+    jd : float
+        the discovery date of the trajectory
 
     Returns
     -------
@@ -23,20 +28,12 @@ def int_to_tags(traj_id):
 
     Examples
     --------
-    >>> r = int_to_tags(15)
-    >>> test_value = 'FF{}aaaaaap'.format(datetime.date.today().year)
-    >>> test_value == r
-    True
-
-    >>> r =int_to_tags(27)
-    >>> test_value = 'FF{}aaaaabb'.format(datetime.date.today().year)
-    >>> test_value == r
-    True
-
-    >>> r = int_to_tags(652)
-    >>> test_value = 'FF{}aaaaazc'.format(datetime.date.today().year)
-    >>> test_value == r
-    True
+    >>> int_to_tags(15, 2460135.98)
+    'FF10072023aaaaaap'
+    >>> int_to_tags(27, 2460135.98)
+    'FF10072023aaaaabb'
+    >>> int_to_tags(652, 2460135.98)
+    'FF10072023aaaaazc'
     """
     res_tag = ""
     for _ in range(7):
@@ -46,10 +43,11 @@ def int_to_tags(traj_id):
         res_tag += chr(r + 97)
         traj_id = q
 
-    return "FF" + str(datetime.date.today().year) + res_tag[::-1]
+    discovery = Time(jd, format="jd").datetime
+    return "FF{:02d}{:02d}{}{}".format(discovery.day, discovery.month, discovery.year, res_tag[::-1])
 
 
-def generate_tags(begin, end):
+def generate_tags(begin, end, jd):
     """
     Generate a list of tags between begin and end
 
@@ -60,6 +58,8 @@ def generate_tags(begin, end):
         start tags
     end : integer
         end tags
+    jd : float list
+        list of discovery date
 
     Returns
     -------
@@ -68,13 +68,10 @@ def generate_tags(begin, end):
 
     Examples
     --------
-    >>> l = generate_tags(3, 6)
-    >>> year = datetime.date.today().year
-    >>> test_value = ['FF{}aaaaaad'.format(year), 'FF{}aaaaaae'.format(year), 'FF{}aaaaaaf'.format(year)]
-    >>> test_value == l
-    True
+    >>> generate_tags(3, 6, [2460135.42, 2460137.57, 2460148.72])
+    ['FF09072023aaaaaad', 'FF12072023aaaaaae', 'FF23072023aaaaaaf']
     """
-    return [int_to_tags(i) for i in range(begin, end)]
+    return [int_to_tags(i, date) for date, i in zip(jd, np.arange(begin, end))]
 
 
 if __name__ == "__main__":  # pragma: no cover
