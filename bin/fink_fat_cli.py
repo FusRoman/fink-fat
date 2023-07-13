@@ -1105,6 +1105,7 @@ def fink_fat_main(arguments):
                 float(config["ASSOC_PARAMS"]["intra_night_separation"]) * u.arcsecond,
                 float(config["ASSOC_PARAMS"]["intra_night_magdiff_limit_same_fid"]),
                 float(config["ASSOC_PARAMS"]["intra_night_magdiff_limit_diff_fid"]),
+                string_to_bool(config["ASSOC_PARAMS"]["use_dbscan"]),
                 float(config["ASSOC_PARAMS"]["inter_night_separation"]) * u.degree,
                 float(config["ASSOC_PARAMS"]["inter_night_magdiff_limit_same_fid"]),
                 float(config["ASSOC_PARAMS"]["inter_night_magdiff_limit_diff_fid"]),
