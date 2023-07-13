@@ -11,6 +11,7 @@ from fink_fat.associations.associations import (
     old_with_new_observations_associations,
     time_window_management,
 )
+from fink_fat.seeding.dbscan_seeding import intra_night_seeding
 
 
 def separate_trajectories(trajectory_df, orbfit_limit):
@@ -74,6 +75,7 @@ def intra_night_step(
     intra_night_sep_criterion,
     intra_night_mag_criterion_same_fid,
     intra_night_mag_criterion_diff_fid,
+    dbscan=False,
 ):
     """
     Perform the intra nigth associations step at the beginning of the inter night association function.
@@ -91,6 +93,8 @@ def intra_night_step(
         magnitude criterion between the alerts with the same filter id
     intra_night_mag_criterion_diff_fid : float
         magnitude criterion between the alerts with a different filter id
+    dbscan: boolean
+        if True, use dbscan to perform the intra night association, much faster but a little bit more inaccurate
 
     Returns
     -------
@@ -124,20 +128,27 @@ def intra_night_step(
     >>> assert_frame_equal(remaining_new_obs, ts.remaining_new_obs_output_2, check_dtype = False)
     """
 
-    # intra-night association of the new observations
-    new_left, new_right = intra_night_association(
-        new_observation,
-        sep_criterion=intra_night_sep_criterion,
-        mag_criterion_same_fid=intra_night_mag_criterion_same_fid,
-        mag_criterion_diff_fid=intra_night_mag_criterion_diff_fid,
-    )
+    if dbscan:
+        tracklets = intra_night_seeding(
+            new_observation, intra_night_sep_criterion.to(u.deg)
+        )
+    else:
+        # intra-night association of the new observations
+        new_left, new_right = intra_night_association(
+            new_observation,
+            sep_criterion=intra_night_sep_criterion,
+            mag_criterion_same_fid=intra_night_mag_criterion_same_fid,
+            mag_criterion_diff_fid=intra_night_mag_criterion_diff_fid,
+        )
 
-    new_left, new_right = (
-        new_left.reset_index(drop=True),
-        new_right.reset_index(drop=True),
-    )
+        new_left, new_right = (
+            new_left.reset_index(drop=True),
+            new_right.reset_index(drop=True),
+        )
 
-    tracklets = new_trajectory_id_assignation(new_left, new_right, last_trajectory_id)
+        tracklets = new_trajectory_id_assignation(
+            new_left, new_right, last_trajectory_id
+        )
 
     if len(tracklets) > 0:
         # remove all the alerts that appears in the tracklets
@@ -163,6 +174,7 @@ def night_to_night_association(
     intra_night_sep_criterion=145 * u.arcsecond,
     intra_night_mag_criterion_same_fid=2.21,
     intra_night_mag_criterion_diff_fid=1.75,
+    intra_night_dbscan=False,
     sep_criterion=0.24 * u.degree,
     mag_criterion_same_fid=0.18,
     mag_criterion_diff_fid=0.7,
@@ -420,12 +432,16 @@ def night_to_night_association(
         t_before = t.time()
 
     # intra night associations steps with the new observations
-    (tracklets, remaining_new_observations,) = intra_night_step(
+    (
+        tracklets,
+        remaining_new_observations,
+    ) = intra_night_step(
         new_observation,
         last_trajectory_id,
         intra_night_sep_criterion,
         intra_night_mag_criterion_same_fid,
         intra_night_mag_criterion_diff_fid,
+        intra_night_dbscan,
     )
 
     tracklets["assoc_tag"] = "I"
@@ -434,7 +450,6 @@ def night_to_night_association(
         print("elapsed time to find tracklets : {}".format(t.time() - t_before))
 
     if len(most_recent_traj) == 0 and len(old_observation) == 0:
-
         return (pd.concat([old_traj, tracklets]), remaining_new_observations)
 
     if len(tracklets) > 0:
@@ -448,7 +463,6 @@ def night_to_night_association(
 
     # call tracklets_and_trajectories_steps if they have most_recent_traj and tracklets
     if len(most_recent_traj) > 0 and len(tracklets) > 0 and do_track_and_traj_assoc:
-
         if verbose:  # pragma: no cover
             t_before = t.time()
 
@@ -484,7 +498,6 @@ def night_to_night_association(
     assoc_test = len(traj_with_track) > 0 and len(remaining_new_observations) > 0 and do_traj_and_new_obs_assoc
     # fmt: on
     if assoc_test:
-
         if verbose:  # pragma: no cover
             t_before = t.time()
 
@@ -519,7 +532,6 @@ def night_to_night_association(
     test = len(not_associated_tracklets) > 0 and len(old_observation) > 0 and do_track_and_old_obs_assoc
     # fmt: on
     if test:
-
         if verbose:  # pragma: no cover
             t_before = t.time()
 
@@ -555,7 +567,6 @@ def night_to_night_association(
     test = len(remain_old_obs) > 0 and len(remaining_new_observations) > 0 and do_new_obs_and_old_obs_assoc
     # fmt: on
     if test:
-
         if verbose:  # pragma: no cover
             t_before = t.time()
         (

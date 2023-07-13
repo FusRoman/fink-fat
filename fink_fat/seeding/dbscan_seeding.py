@@ -58,12 +58,12 @@ def intra_night_seeding(night_observation, sep_criterion=2.585714285714286 * u.a
     ... })
 
     >>> intra_night_seeding(df_test, 2 * u.deg)
-       ra  dec  cluster
-    0   1    1        0
-    1   2    2        0
-    2  30   30       -1
-    3  11   11        1
-    4  12   12        1
+       ra  dec  trajectory_id
+    0   1    1              0
+    1   2    2              0
+    2  30   30             -1
+    3  11   11              1
+    4  12   12              1
     """
     assert sep_criterion.unit == u.Unit("deg")
 
@@ -74,7 +74,7 @@ def intra_night_seeding(night_observation, sep_criterion=2.585714285714286 * u.a
 
     clustering = DBSCAN(eps=dist_3d(sep_criterion), min_samples=2).fit(cart_coord)
     with pd.option_context("mode.chained_assignment", None):
-        night_observation["cluster"] = clustering.labels_
+        night_observation["trajectory_id"] = clustering.labels_
 
     return night_observation
 
@@ -102,7 +102,7 @@ def seeding_purity(df: pd.DataFrame) -> float:
     >>> df_test = pd.DataFrame({
     ... "ra": [0, 0],
     ... "ssnamenr": [1, 1],
-    ... "cluster": [0, 0]
+    ... "trajectory_id": [0, 0]
     ... })
 
     >>> seeding_purity(df_test)
@@ -111,7 +111,7 @@ def seeding_purity(df: pd.DataFrame) -> float:
     >>> df_test = pd.DataFrame({
     ... "ra": [0, 0, 0, 0, 0],
     ... "ssnamenr": [1, 1, 2, 2, 2],
-    ... "cluster": [0, 0, 0, 1, 1]
+    ... "trajectory_id": [0, 0, 0, 1, 1]
     ... })
 
     >>> seeding_purity(df_test)
@@ -120,7 +120,7 @@ def seeding_purity(df: pd.DataFrame) -> float:
     >>> df_test = pd.DataFrame({
     ... "ra": [0, 0, 0, 0, 0, 0, 0],
     ... "ssnamenr": [1, 1, 2, 2, 2, 3, 2],
-    ... "cluster": [0, 0, 0, 1, 1, -1, -1]
+    ... "trajectory_id": [0, 0, 0, 1, 1, -1, -1]
     ... })
 
     >>> seeding_purity(df_test)
@@ -129,7 +129,7 @@ def seeding_purity(df: pd.DataFrame) -> float:
     >>> df_test = pd.DataFrame({
     ... "ra": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     ... "ssnamenr": [1, 1, 2, 2, 2, 3, 2, 4, 4, 5, 5],
-    ... "cluster": [0, 0, 0, 1, 1, -1, -1, 2, 2, 3, 3]
+    ... "trajectory_id": [0, 0, 0, 1, 1, -1, -1, 2, 2, 3, 3]
     ... })
 
     >>> seeding_purity(df_test)
@@ -143,13 +143,19 @@ def seeding_purity(df: pd.DataFrame) -> float:
 
     with pd.option_context("mode.chained_assignment", None):
         df["ssnamenr_bis"] = df["ssnamenr"].astype(str)
-        df["cluster_bis"] = df["cluster"]
+        df["cluster_bis"] = df["trajectory_id"]
 
-    select_cols = ["ssnamenr", "cluster", "ssnamenr_bis", "cluster_bis", "nb_point"]
+    select_cols = [
+        "ssnamenr",
+        "trajectory_id",
+        "ssnamenr_bis",
+        "cluster_bis",
+        "nb_point",
+    ]
 
     r = (
         df[select_cols]
-        .groupby("cluster")
+        .groupby("trajectory_id")
         .agg(
             ssnamenr_list=("ssnamenr_bis", list),
             cluster_list=("cluster_bis", list),
@@ -201,7 +207,7 @@ def seeding_completude(df: pd.DataFrame) -> float:
     >>> df_test = pd.DataFrame({
     ... "ra": [0, 0],
     ... "ssnamenr": [1, 1],
-    ... "cluster": [0, 0]
+    ... "trajectory_id": [0, 0]
     ... })
 
     >>> seeding_completude(df_test)
@@ -210,7 +216,7 @@ def seeding_completude(df: pd.DataFrame) -> float:
     >>> df_test = pd.DataFrame({
     ... "ra": [0, 0, 0, 0, 0],
     ... "ssnamenr": [1, 1, 2, 2, 2],
-    ... "cluster": [0, 0, 0, 1, 1]
+    ... "trajectory_id": [0, 0, 0, 1, 1]
     ... })
 
     >>> seeding_completude(df_test)
@@ -219,7 +225,7 @@ def seeding_completude(df: pd.DataFrame) -> float:
     >>> df_test = pd.DataFrame({
     ... "ra": [0, 0, 0, 0, 0, 0, 0],
     ... "ssnamenr": [1, 1, 2, 2, 2, 3, 2],
-    ... "cluster": [0, 0, 0, 1, 1, -1, -1]
+    ... "trajectory_id": [0, 0, 0, 1, 1, -1, -1]
     ... })
 
     >>> seeding_completude(df_test)
@@ -232,9 +238,15 @@ def seeding_completude(df: pd.DataFrame) -> float:
 
     with pd.option_context("mode.chained_assignment", None):
         recoverable["ssnamenr_bis"] = df["ssnamenr"].astype(str)
-        recoverable["cluster_bis"] = df["cluster"]
+        recoverable["cluster_bis"] = df["trajectory_id"]
 
-    select_cols = ["ssnamenr", "cluster", "ssnamenr_bis", "cluster_bis", "nb_point"]
+    select_cols = [
+        "ssnamenr",
+        "trajectory_id",
+        "ssnamenr_bis",
+        "cluster_bis",
+        "nb_point",
+    ]
 
     r = (
         recoverable[select_cols]
