@@ -51,12 +51,13 @@ def intra_night_seeding(night_observation, sep_criterion=2.585714285714286 * u.a
 
     Examples
     --------
+    >>> import astropy.units as u
     >>> df_test = pd.DataFrame({
     ... "ra": [1, 2, 30, 11, 12],
     ... "dec": [1, 2, 30, 11, 12]
     ... })
 
-    >>> seeding(df_test, 10/60)
+    >>> intra_night_seeding(df_test, 2 * u.deg)
        ra  dec  cluster
     0   1    1        0
     1   2    2        0
@@ -64,6 +65,8 @@ def intra_night_seeding(night_observation, sep_criterion=2.585714285714286 * u.a
     3  11   11        1
     4  12   12        1
     """
+    assert sep_criterion.unit == u.Unit("deg")
+
     coord_ast = SkyCoord(
         night_observation["ra"].values, night_observation["dec"].values, unit="deg"
     )
@@ -78,7 +81,9 @@ def intra_night_seeding(night_observation, sep_criterion=2.585714285714286 * u.a
 
 def seeding_purity(df: pd.DataFrame) -> float:
     """
-    Return the purity of the clustering in percent.
+    Return the purity of the clustering in per cent.
+    purity = how able the clustering is to create pure clusters
+        (pure cluster means clusters belonging to the same asteroids))
 
     Parameters
     ----------
@@ -110,12 +115,21 @@ def seeding_purity(df: pd.DataFrame) -> float:
     ... })
 
     >>> seeding_purity(df_test)
-    50.0
+    0.0
 
     >>> df_test = pd.DataFrame({
     ... "ra": [0, 0, 0, 0, 0, 0, 0],
     ... "ssnamenr": [1, 1, 2, 2, 2, 3, 2],
     ... "cluster": [0, 0, 0, 1, 1, -1, -1]
+    ... })
+
+    >>> seeding_purity(df_test)
+    0.0
+
+    >>> df_test = pd.DataFrame({
+    ... "ra": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    ... "ssnamenr": [1, 1, 2, 2, 2, 3, 2, 4, 4, 5, 5],
+    ... "cluster": [0, 0, 0, 1, 1, -1, -1, 2, 2, 3, 3]
     ... })
 
     >>> seeding_purity(df_test)
@@ -168,6 +182,49 @@ def seeding_purity(df: pd.DataFrame) -> float:
 
 
 def seeding_completude(df: pd.DataFrame) -> float:
+    """
+    Return the completude of the clustering in per cent
+    (how the clustering can find all the asteroids)
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        inputs dataframe, required columns are ssnamenr, ra, cluster
+
+    Returns
+    -------
+    float
+        the completude in percentage
+
+    Examples
+    --------
+    >>> df_test = pd.DataFrame({
+    ... "ra": [0, 0],
+    ... "ssnamenr": [1, 1],
+    ... "cluster": [0, 0]
+    ... })
+
+    >>> seeding_completude(df_test)
+    100.0
+
+    >>> df_test = pd.DataFrame({
+    ... "ra": [0, 0, 0, 0, 0],
+    ... "ssnamenr": [1, 1, 2, 2, 2],
+    ... "cluster": [0, 0, 0, 1, 1]
+    ... })
+
+    >>> seeding_completude(df_test)
+    50.0
+
+    >>> df_test = pd.DataFrame({
+    ... "ra": [0, 0, 0, 0, 0, 0, 0],
+    ... "ssnamenr": [1, 1, 2, 2, 2, 3, 2],
+    ... "cluster": [0, 0, 0, 1, 1, -1, -1]
+    ... })
+
+    >>> seeding_completude(df_test)
+    50.0
+    """
     nb_p = df.groupby("ssnamenr").agg(nb_point=("ra", len)).reset_index()
     df = df.merge(nb_p, on="ssnamenr")
 
@@ -215,3 +272,14 @@ def seeding_completude(df: pd.DataFrame) -> float:
         r["cluster_ok"] = res_cluster
 
     return (r["cluster_ok"].sum() / len(np.unique(recoverable["ssnamenr"]))) * 100
+
+
+if __name__ == "__main__":  # pragma: no cover
+    import sys
+    import doctest
+
+    if "unittest.util" in __import__("sys").modules:
+        # Show full diff in self.assertEqual.
+        __import__("sys").modules["unittest.util"]._MAX_LENGTH = 999999999
+
+    sys.exit(doctest.testmod()[0])
