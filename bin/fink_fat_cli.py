@@ -105,7 +105,6 @@ def fink_fat_main(arguments):
     config, output_path = init_cli(arguments)
 
     if arguments["associations"]:
-
         # get the path according to the class mpc or candidates
         output_path, object_class = get_class(arguments, output_path)
 
@@ -218,6 +217,7 @@ def fink_fat_main(arguments):
             float(config["ASSOC_PARAMS"]["intra_night_separation"]) * u.arcsecond,
             float(config["ASSOC_PARAMS"]["intra_night_magdiff_limit_same_fid"]),
             float(config["ASSOC_PARAMS"]["intra_night_magdiff_limit_diff_fid"]),
+            string_to_bool(config["ASSOC_PARAMS"]["use_dbscan"]),
             float(config["ASSOC_PARAMS"]["inter_night_separation"]) * u.degree,
             float(config["ASSOC_PARAMS"]["inter_night_magdiff_limit_same_fid"]),
             float(config["ASSOC_PARAMS"]["inter_night_magdiff_limit_diff_fid"]),
@@ -247,13 +247,6 @@ def fink_fat_main(arguments):
                 os.path.join(save_path, "stats.json"), last_night, new_stats
             )
 
-        # if "last_assoc_date" in trajectory_df:
-        #     trajectory_df["last_assoc_date"] = last_night
-        # else:
-        #     trajectory_df.insert(
-        #         len(trajectory_df.columns), "last_assoc_date", last_night
-        #     )
-
         cast_obs_data(trajectory_df).to_parquet(tr_df_path)
         cast_obs_data(old_obs_df).to_parquet(obs_df_path)
 
@@ -261,7 +254,6 @@ def fink_fat_main(arguments):
             print("Association done")
 
     elif arguments["solve_orbit"]:
-
         output_path, object_class = get_class(arguments, output_path)
         tr_df_path = os.path.join(output_path, "trajectory_df.parquet")
         orb_res_path = os.path.join(output_path, "orbital.parquet")
@@ -278,7 +270,6 @@ def fink_fat_main(arguments):
         traj_to_orbital, traj_no_orb = get_orbital_data(config, tr_df_path)
 
         if len(traj_to_orbital) > 0:
-
             nb_traj_to_orbfit = len(np.unique(traj_to_orbital["trajectory_id"]))
             if arguments["--verbose"]:
                 print(
@@ -289,7 +280,6 @@ def fink_fat_main(arguments):
 
             # solve orbit in local mode
             if arguments["local"]:
-
                 t_before = t.time()
                 # return orbit results from local mode
                 orbit_results = compute_df_orbit_param(
@@ -304,7 +294,6 @@ def fink_fat_main(arguments):
 
             # solve orbit in cluster mode
             elif arguments["cluster"]:
-
                 t_before = t.time()
                 # return orbit results from cluster mode
                 orbit_results = cluster_mode(config, traj_to_orbital)
@@ -355,7 +344,6 @@ def fink_fat_main(arguments):
                     # write the trajectory_df without the trajectories with more than orbfit_limit point
                     traj_no_orb.to_parquet(tr_df_path)
                 else:
-
                     # traj_no_orb, traj_with_orb_elem, obs_with_orb = align_trajectory_id(
                     #     traj_no_orb, traj_with_orb_elem, obs_with_orb
                     # )
@@ -401,7 +389,6 @@ def fink_fat_main(arguments):
             print("Wait more night to produce trajectories with more points")
 
     elif arguments["merge_orbit"]:
-
         output_path, object_class = get_class(arguments, output_path)
         orb_res_path = os.path.join(output_path, "orbital.parquet")
         traj_orb_path = os.path.join(output_path, "trajectory_orb.parquet")
@@ -438,7 +425,6 @@ def fink_fat_main(arguments):
             exit()
 
     elif arguments["stats"]:
-
         output_path, object_class = get_class(arguments, output_path)
         tr_df_path = os.path.join(output_path, "trajectory_df.parquet")
         orb_res_path = os.path.join(output_path, "orbital.parquet")
@@ -623,51 +609,48 @@ def fink_fat_main(arguments):
         orb_df = orb_df.sort_values(["score"]).reset_index(drop=True)
         best_orb = orb_df.loc[:9]
 
-        best_orbit_data = (
+        best_orbit_data = [
             [
+                "Trajectory id",
+                "Orbit ref epoch",
+                "a (AU)",
+                "error",
+                "e",
+                "error",
+                "i (deg)",
+                "error",
+                "Long. node (deg)",
+                "error",
+                "Arg. peri (deg)",
+                "error",
+                "Mean Anomaly (deg)",
+                "error",
+                "chi",
+                "score",
+            ],
+        ] + np.around(
+            best_orb[
                 [
-                    "Trajectory id",
-                    "Orbit ref epoch",
-                    "a (AU)",
-                    "error",
+                    "trajectory_id",
+                    "ref_epoch",
+                    "a",
+                    "rms_a",
                     "e",
-                    "error",
-                    "i (deg)",
-                    "error",
-                    "Long. node (deg)",
-                    "error",
-                    "Arg. peri (deg)",
-                    "error",
-                    "Mean Anomaly (deg)",
-                    "error",
-                    "chi",
+                    "rms_e",
+                    "i",
+                    "rms_i",
+                    "long. node",
+                    "rms_long. node",
+                    "arg. peric",
+                    "rms_arg. peric",
+                    "mean anomaly",
+                    "rms_mean anomaly",
+                    "chi_reduced",
                     "score",
-                ],
-            ]
-            + np.around(
-                best_orb[
-                    [
-                        "trajectory_id",
-                        "ref_epoch",
-                        "a",
-                        "rms_a",
-                        "e",
-                        "rms_e",
-                        "i",
-                        "rms_i",
-                        "long. node",
-                        "rms_long. node",
-                        "arg. peric",
-                        "rms_arg. peric",
-                        "mean anomaly",
-                        "rms_mean anomaly",
-                        "chi_reduced",
-                        "score",
-                    ]
-                ].values,
-                3,
-            ).tolist()
-        )
+                ]
+            ].values,
+            3,
+        ).tolist()
 
         best_table = DoubleTable(best_orbit_data, "Best orbit")
 
@@ -789,7 +772,6 @@ def fink_fat_main(arguments):
                 print(table_instance.table)
 
                 if arguments["--mpc-data"] is not None:
-
                     if os.path.exists(arguments["--mpc-data"]):
                         print()
                         print()
@@ -1123,6 +1105,7 @@ def fink_fat_main(arguments):
                 float(config["ASSOC_PARAMS"]["intra_night_separation"]) * u.arcsecond,
                 float(config["ASSOC_PARAMS"]["intra_night_magdiff_limit_same_fid"]),
                 float(config["ASSOC_PARAMS"]["intra_night_magdiff_limit_diff_fid"]),
+                string_to_bool(config["ASSOC_PARAMS"]["use_dbscan"]),
                 float(config["ASSOC_PARAMS"]["inter_night_separation"]) * u.degree,
                 float(config["ASSOC_PARAMS"]["inter_night_magdiff_limit_same_fid"]),
                 float(config["ASSOC_PARAMS"]["inter_night_magdiff_limit_diff_fid"]),
@@ -1161,7 +1144,6 @@ def fink_fat_main(arguments):
             nb_orb = 0
 
             if len(traj_to_orbital) > 0:
-
                 if arguments["--verbose"]:
                     print()
                     print(
@@ -1172,7 +1154,6 @@ def fink_fat_main(arguments):
                     print("Solve orbit...")
 
                 if arguments["local"]:
-
                     t_before = t.time()
                     # return orbit results from local mode
                     orbit_results = compute_df_orbit_param(
@@ -1186,7 +1167,6 @@ def fink_fat_main(arguments):
                         print("time taken to get orbit: {}".format(orbfit_time))
 
                 elif arguments["cluster"]:
-
                     t_before = t.time()
                     # return orbit results from cluster mode
                     orbit_results = cluster_mode(config, traj_to_orbital)
@@ -1196,7 +1176,6 @@ def fink_fat_main(arguments):
                         print("time taken to get orbit: {}".format(orbfit_time))
 
                 if len(orbit_results) > 0:
-
                     # get only the trajectories with orbital elements
                     # the other one are discards
                     current_traj_with_orb_elem = orbit_results[
@@ -1277,7 +1256,6 @@ def fink_fat_main(arguments):
 
 
 def main():
-
     # parse the command line and return options provided by the user.
     arguments = docopt(__doc__, version=fink_fat.__version__)
     fink_fat_main(arguments)
