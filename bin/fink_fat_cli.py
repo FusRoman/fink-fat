@@ -166,6 +166,9 @@ def fink_fat_main(arguments):
         new_alerts = get_last_sso_alert(
             object_class, last_night, arguments["--verbose"]
         )
+        if len(new_alerts) == 0:
+            print("no alerts available for the night of {}".format(last_night))
+            exit()
 
         last_nid = next_nid = new_alerts["nid"][0]
         if len(trajectory_df) > 0 and len(old_obs_df) > 0:
@@ -190,10 +193,6 @@ def fink_fat_main(arguments):
                 )
             )
             print()
-
-        if len(new_alerts) == 0:
-            print("no alerts available for the night of {}".format(last_night))
-            exit()
 
         if arguments["--verbose"]:
             print("started associations...")
