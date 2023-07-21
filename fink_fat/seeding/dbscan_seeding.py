@@ -98,7 +98,8 @@ def intra_night_seeding(
 
     # remove bad seeds containing observations in the same exposure time
     test_jd_0 = (
-        night_observation.groupby("trajectory_id")
+        night_observation.sort_values("jd")
+        .groupby("trajectory_id")
         .agg(is_same_exp=("jd", lambda x: np.any(np.diff(x) == 0.0)))
         .reset_index()
     )
