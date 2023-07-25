@@ -432,10 +432,7 @@ def night_to_night_association(
         t_before = t.time()
 
     # intra night associations steps with the new observations
-    (
-        tracklets,
-        remaining_new_observations,
-    ) = intra_night_step(
+    (tracklets, remaining_new_observations,) = intra_night_step(
         new_observation,
         last_trajectory_id,
         intra_night_sep_criterion,
