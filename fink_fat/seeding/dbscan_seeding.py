@@ -32,10 +32,12 @@ def dist_3d(sep_lim):
     return 2.0 * np.sin(np.radians(sep_lim) / 2.0)
 
 
-def intra_night_seeding(night_observation, sep_criterion=2.585714285714286 * u.arcmin):
+def intra_night_seeding(
+    night_observation, sep_criterion=(2.585714285714286 * u.arcmin).to("deg")
+):
     """
     Find the cluster corresponding to the intra-night trajectory.
-    The required columns in the input dataframe are ra and dec.
+    The required columns in the input dataframe are ra, dec and jd.
 
     Parameters
     ----------
@@ -54,16 +56,34 @@ def intra_night_seeding(night_observation, sep_criterion=2.585714285714286 * u.a
     >>> import astropy.units as u
     >>> df_test = pd.DataFrame({
     ... "ra": [1, 2, 30, 11, 12],
-    ... "dec": [1, 2, 30, 11, 12]
+    ... "dec": [1, 2, 30, 11, 12],
+    ... "jd": [0, 1, 2, 3, 4]
     ... })
 
     >>> intra_night_seeding(df_test, 2 * u.deg)
-       ra  dec  trajectory_id
-    0   1    1              0
-    1   2    2              0
-    2  30   30             -1
-    3  11   11              1
-    4  12   12              1
+       ra  dec  jd  trajectory_id
+    0   1    1   0              0
+    1   2    2   1              0
+    2  30   30   2             -1
+    3  11   11   3              1
+    4  12   12   4              1
+
+    >>> df_test = pd.DataFrame({
+    ... "ra": [1, 2, 30, 11, 12, 20, 21, 22],
+    ... "dec": [1, 2, 30, 11, 12, 20, 21, 22],
+    ... "jd": [0, 1, 2, 3, 4, 5, 5, 6]
+    ... })
+
+    >>> intra_night_seeding(df_test, 2 * u.deg)
+       ra  dec  jd  trajectory_id
+    0   1    1   0              0
+    1   2    2   1              0
+    2  30   30   2             -1
+    3  11   11   3              1
+    4  12   12   4              1
+    5  20   20   5             -1
+    6  21   21   5             -1
+    7  22   22   6             -1
     """
     assert sep_criterion.unit == u.Unit("deg")
 
@@ -75,6 +95,21 @@ def intra_night_seeding(night_observation, sep_criterion=2.585714285714286 * u.a
     clustering = DBSCAN(eps=dist_3d(sep_criterion), min_samples=2).fit(cart_coord)
     with pd.option_context("mode.chained_assignment", None):
         night_observation["trajectory_id"] = clustering.labels_
+
+    # remove bad seeds containing observations in the same exposure time
+    test_jd_0 = (
+        night_observation.sort_values("jd")
+        .groupby("trajectory_id")
+        .agg(is_same_exp=("jd", lambda x: np.any(np.diff(x) == 0.0)))
+        .reset_index()
+    )
+    test_jd_0 = test_jd_0[test_jd_0["trajectory_id"] != -1.0]
+    jd_0_traj_id = test_jd_0[test_jd_0["is_same_exp"]]["trajectory_id"]
+
+    with pd.option_context("mode.chained_assignment", None):
+        night_observation.loc[
+            night_observation["trajectory_id"].isin(jd_0_traj_id), "trajectory_id"
+        ] = -1.0
 
     return night_observation
 
