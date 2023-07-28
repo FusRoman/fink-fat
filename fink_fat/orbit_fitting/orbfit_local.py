@@ -10,7 +10,7 @@ import fink_fat.orbit_fitting.orbfit_files as of
 import fink_fat.orbit_fitting.mpcobs_files as mf
 
 import traceback
-import logging
+from fink_fat.others.utils import init_logging
 
 orbfit_column_name = [
     "trajectory_id",
@@ -164,7 +164,7 @@ def get_orbit_param(ram_dir, df, n_triplets, noise_ntrials, prop_epoch=None, ver
 
     >>> of.final_clean("")
     """
-
+    logger = init_logging()
     all_traj_id = np.unique(df["trajectory_id"].values)
 
     results = []
@@ -195,15 +195,15 @@ def get_orbit_param(ram_dir, df, n_triplets, noise_ntrials, prop_epoch=None, ver
         try:
             call_orbitfit(ram_dir, prov_desig)
         except Exception as e:  # pragma: no cover
-            print(e)
-            print("ERROR CALLING ORBFIT: {}".format(prov_desig))
-            print()
-            logging.error(traceback.format_exc())
-            print()
-            print(prov_desig)
-            print()
-            print()
-            print(df_one_traj)
+            logger.info(e)
+            logger.info("ERROR CALLING ORBFIT: {}".format(prov_desig))
+            logger.newline()
+            logger.error(traceback.format_exc())
+            logger.newline()
+            logger.info(prov_desig)
+            logger.newline()
+            logger.newline()
+            logger.info(df_one_traj)
 
         chi_values = of.read_rwo(ram_dir, prov_desig, len(df_one_traj))
 
@@ -217,11 +217,11 @@ def get_orbit_param(ram_dir, df, n_triplets, noise_ntrials, prop_epoch=None, ver
         try:
             of.obs_clean(ram_dir, prov_desig)
         except FileNotFoundError:  # pragma: no cover
-            print("ERROR CLEANING ORBFIT: {}".format(prov_desig))
-            print(prov_desig)
-            print()
-            print()
-            print(df_one_traj)
+            logger.info("ERROR CLEANING ORBFIT: {}".format(prov_desig))
+            logger.info(prov_desig)
+            logger.newline()
+            logger.newline()
+            logger.info(df_one_traj)
 
     return results
 

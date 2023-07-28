@@ -11,6 +11,7 @@ import logging
 import fink_fat.orbit_fitting.orbfit_files as of
 import fink_fat.orbit_fitting.mpcobs_files as mf
 import fink_fat.orbit_fitting.orbfit_local as ol
+from fink_fat.others.utils import init_logging
 
 
 def cache_orbit(traj_id, cache_path):
@@ -177,6 +178,7 @@ def trajectory_ephemeris(
     >>> os.rmdir(ram_dir + "mpcobs")
     >>> shutil.rmtree(ram_dir + "cache_orb/")
     """
+    logger = init_logging()
     df_one_traj = observation[observation["trajectory_id"] == traj_id]
     prov_desig = mf.write_observation_file(ram_dir, df_one_traj)
     of.write_inp(ram_dir, prov_desig)
@@ -220,15 +222,15 @@ def trajectory_ephemeris(
     try:
         ol.call_orbitfit(ram_dir, prov_desig)
     except Exception as e:  # pragma: no cover
-        print(e)
-        print("ERROR CALLING ORBFIT: {}".format(prov_desig))
-        print()
+        logger.info(e)
+        logger.info("ERROR CALLING ORBFIT: {}".format(prov_desig))
+        logger.newline()
         logging.error(traceback.format_exc())
-        print()
-        print(prov_desig)
-        print()
-        print()
-        print(df_one_traj)
+        logger.newline()
+        logger.info(prov_desig)
+        logger.newline()
+        logger.newline()
+        logger.info(df_one_traj)
 
     res_ephem = of.read_ephem(ram_dir, prov_desig)
 
@@ -249,11 +251,11 @@ def trajectory_ephemeris(
     try:
         of.obs_clean(ram_dir, prov_desig)
     except FileNotFoundError:  # pragma: no cover
-        print("ERROR CLEANING ORBFIT: {}".format(prov_desig))
-        print(prov_desig)
-        print()
-        print()
-        print(df_one_traj)
+        logger.info("ERROR CLEANING ORBFIT: {}".format(prov_desig))
+        logger.info(prov_desig)
+        logger.newline()
+        logger.newline()
+        logger.info(df_one_traj)
 
     orb_columns = [
         "ref_epoch",
@@ -272,9 +274,9 @@ def trajectory_ephemeris(
     ]
 
     if len(res_orbit) != 13:
-        print()
-        print(res_orbit)
-        print()
+        logger.newline()
+        logger.info(res_orbit)
+        logger.newline()
 
     res_orbit = pd.DataFrame([res_orbit], columns=orb_columns)
     res_orbit["trajectory_id"] = traj_id

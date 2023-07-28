@@ -21,6 +21,7 @@ from fink_fat.command_line.association_cli import (
     get_last_sso_alert,
     no_reset,
 )
+from fink_fat.others.utils import init_logging
 
 
 def cli_offline(arguments, config, output_path):
@@ -36,7 +37,8 @@ def cli_offline(arguments, config, output_path):
     output_path : string
         path where are located the fink-fat data
     """
-    print("offline mode")
+    logger = init_logging()
+    logger.info("offline mode")
 
     output_path, object_class = get_class(arguments, output_path)
 
@@ -88,12 +90,14 @@ def cli_offline(arguments, config, output_path):
     # test if the trajectory_df and old_obs_df exists in the output directory.
     if os.path.exists(tr_df_path) and os.path.exists(obs_df_path):
         if arguments["<start>"] is not None:
-            print("A save of trajectories candidates already exists.")
-            print("Remove the <start> argument if you want to continue with the save")
-            print(
+            logger.info("A save of trajectories candidates already exists.")
+            logger.info(
+                "Remove the <start> argument if you want to continue with the save"
+            )
+            logger.info(
                 "or use the -r options to restart the associations from your <start> date."
             )
-            print("Abort offline mode.")
+            logger.info("Abort offline mode.")
             exit()
 
         trajectory_df = pd.read_parquet(tr_df_path)
@@ -120,7 +124,7 @@ def cli_offline(arguments, config, output_path):
     today = datetime.datetime.now().date()
 
     if current_date.date() > stop_date.date():
-        print("Error !!! Start date is greater than stop date.")
+        logger.info("Error !!! Start date is greater than stop date.")
         exit()
 
     orb_df = pd.DataFrame()
@@ -142,8 +146,8 @@ def cli_offline(arguments, config, output_path):
 
     while True:
         if arguments["--verbose"]:
-            print("current processing date: {}".format(current_date))
-            print()
+            logger.info("current processing date: {}".format(current_date))
+            logger.newline()
 
         t_before = t.time()
         new_alerts = get_last_sso_alert(
@@ -151,7 +155,9 @@ def cli_offline(arguments, config, output_path):
         )
 
         if arguments["--verbose"]:
-            print("Number of alerts retrieve from fink: {}".format(len(new_alerts)))
+            logger.info(
+                "Number of alerts retrieve from fink: {}".format(len(new_alerts))
+            )
 
         if arguments["--save"] and object_class == "Solar System MPC":
             if len(new_alerts) > 0:
@@ -169,7 +175,7 @@ def cli_offline(arguments, config, output_path):
             if current_date == stop_date + delta_day:
                 break
             if current_date.date() == today:
-                print(
+                logger.info(
                     "The current processing day is greater than today. Out of the offline loop."
                 )
                 break
@@ -177,12 +183,12 @@ def cli_offline(arguments, config, output_path):
             continue
 
         if arguments["--verbose"]:
-            print(
+            logger.info(
                 "time taken to retrieve alerts from fink broker: {}".format(
                     t.time() - t_before
                 )
             )
-            print()
+            logger.newline()
 
         next_nid = new_alerts["nid"][0]
         last_nid = np.max([np.max(trajectory_df["nid"]), np.max(old_obs_df["nid"])])
@@ -248,13 +254,13 @@ def cli_offline(arguments, config, output_path):
 
         if len(traj_to_orbital) > 0:
             if arguments["--verbose"]:
-                print()
-                print(
+                logger.newline()
+                logger.info(
                     "Number of trajectories candidates send to solve orbit: {}".format(
                         nb_traj_to_orbfit
                     )
                 )
-                print("Solve orbit...")
+                logger.info("Solve orbit...")
 
             if arguments["local"]:
                 t_before = t.time()
@@ -267,7 +273,7 @@ def cli_offline(arguments, config, output_path):
                 orbfit_time = t.time() - t_before
 
                 if arguments["--verbose"]:
-                    print("time taken to get orbit: {}".format(orbfit_time))
+                    logger.info("time taken to get orbit: {}".format(orbfit_time))
 
             elif arguments["cluster"]:
                 t_before = t.time()
@@ -276,7 +282,7 @@ def cli_offline(arguments, config, output_path):
                 orbfit_time = t.time() - t_before
 
                 if arguments["--verbose"]:
-                    print("time taken to get orbit: {}".format(orbfit_time))
+                    logger.info("time taken to get orbit: {}".format(orbfit_time))
 
             if len(orbit_results) > 0:
                 # get only the trajectories with orbital elements
@@ -285,9 +291,9 @@ def cli_offline(arguments, config, output_path):
                 nb_orb = len(current_traj_with_orb_elem)
 
                 if arguments["--verbose"]:
-                    print("number of trajectories with orbit: {}".format(nb_orb))
+                    logger.info("number of trajectories with orbit: {}".format(nb_orb))
                     ratio_traj_to_orb = (nb_orb / nb_traj_to_orbfit) * 100
-                    print("ratio: {0:.3f} %".format(ratio_traj_to_orb))
+                    logger.info("ratio: {0:.3f} %".format(ratio_traj_to_orb))
 
                 # get the observations of trajectories with orbital elements
                 current_obs_with_orb = traj_to_orbital[
@@ -308,7 +314,7 @@ def cli_offline(arguments, config, output_path):
                 # )
             else:
                 if arguments["--verbose"]:
-                    print("No orbit found")
+                    logger.info("No orbit found")
 
         stats_dict[current_date.strftime("%Y-%m-%d")] = {
             "assoc_time": assoc_time,
@@ -325,7 +331,7 @@ def cli_offline(arguments, config, output_path):
         if current_date == stop_date + delta_day:
             break
         if current_date.date() == today:
-            print(
+            logger.info(
                 "The current processing day is greater than today. Out of the offline loop."
             )
             break
@@ -350,4 +356,4 @@ def cli_offline(arguments, config, output_path):
         with open(stats_path, "w") as f:
             json.dump(stats_dict, f, indent=4, sort_keys=True)
 
-    print("Offline mode ended")
+    logger.info("Offline mode ended")

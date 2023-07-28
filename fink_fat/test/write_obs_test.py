@@ -7,6 +7,7 @@ import os
 
 from fink_utils.photometry.vect_conversion import vect_dc_mag
 from fink_fat.orbit_fitting.mpcobs_files import write_observation_file
+from fink_fat.others.utils import init_logging
 
 
 if __name__ == "__main__":
@@ -49,7 +50,8 @@ if __name__ == "__main__":
             "{}/mpcobs/{}.obs".format(mpc_file_obs_path, prov_desig),
             "{}/mpcobs_temoin/{}.obs".format(mpc_file_obs_path, prov_desig),
         ):  # pragma: no cover
-            print("failed test: {}".format(prov_desig))
+            logger = init_logging()
+            logger.info("failed test: {}".format(prov_desig))
             res_test = 1
 
         os.remove("{}/mpcobs/{}.obs".format(mpc_file_obs_path, prov_desig))

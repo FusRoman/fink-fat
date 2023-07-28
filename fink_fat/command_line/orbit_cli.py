@@ -4,35 +4,39 @@ import subprocess
 import pandas as pd
 
 import fink_fat
+from fink_fat.others.utils import init_logging
 
 
 def intro_reset_orbit():  # pragma: no cover
-    print("WARNING !!!")
-    print(
+    logger = init_logging()
+    logger.info("WARNING !!!")
+    logger.info(
         "you will loose the previously computed orbital elements and all the associated observations, Continue ? [Y/n]"
     )
 
 
 def yes_orbit_reset(arguments, orb_res_path, traj_orb_path):  # pragma: no cover
+    logger = init_logging()
     if os.path.exists(orb_res_path) and os.path.exists(traj_orb_path):
-        print("Removing files :\n\t{}\n\t{}".format(orb_res_path, traj_orb_path))
+        logger.info("Removing files :\n\t{}\n\t{}".format(orb_res_path, traj_orb_path))
         try:
             os.remove(orb_res_path)
             os.remove(traj_orb_path)
         except OSError as e:
             if arguments["--verbose"]:
-                print("Failed with:", e.strerror)
-                print("Error code:", e.code)
+                logger.info("Failed with:", e.strerror)
+                logger.info("Error code:", e.code)
     else:
-        print("File with orbital elements not exists.")
+        logger.info("File with orbital elements not exists.")
 
 
 def get_orbital_data(config, tr_df_path):  # pragma: no cover
+    logger = init_logging()
     # test if the trajectory_df exist in the output directory.
     if os.path.exists(tr_df_path):
         trajectory_df = pd.read_parquet(tr_df_path)
     else:
-        print(
+        logger.info(
             "Trajectory file doesn't exist, run 'fink_fat association (mpc | candidates)' to create it."
         )
         exit()
@@ -117,8 +121,9 @@ def cluster_mode(config, traj_to_orbital):  # pragma: no cover
 
     stdout, stderr = process.communicate()
     if process.returncode != 0:
-        print(stderr)
-        print(stdout)
+        logger = init_logging()
+        logger.info(stderr)
+        logger.info(stdout)
         exit()
 
     traj_pdf = pd.read_parquet("res_orb.parquet")

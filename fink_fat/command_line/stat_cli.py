@@ -1,6 +1,7 @@
 import numpy as np
 from collections import Counter
 from terminaltables import AsciiTable
+from fink_fat.others.utils import init_logging
 
 
 def test_detectable(list_diff_night, traj_time_window, orbfit_limit):
@@ -163,7 +164,8 @@ def assoc_metrics(x):
     elif tags[0] == "N":
         start = 1
     else:  # pragma: no cover
-        print(tags)
+        logger = init_logging()
+        logger.info(tags)
         raise Exception("bad trajectory starting")
 
     c = Counter(tags)
@@ -304,8 +306,9 @@ def print_assoc_table(traj_df):  # pragma: no cover
     assoc_table = AsciiTable(
         assoc_data, "Trajectories candidates association statistics"
     )
-    print(assoc_table.table)
-    print()
+    logger = init_logging()
+    logger.info(assoc_table.table)
+    logger.newline()
 
 
 def describe(df, stats):
