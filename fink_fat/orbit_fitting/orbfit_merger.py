@@ -117,7 +117,6 @@ def parallel_merger(ram_dir, trajectory_df, orb_cand, indices, prop_epoch):
 
         # for each trajectories in the neighborhood of the ith trajectories
         for other_traj in neighbor_traj[1:]:
-
             second_traj = trajectory_df[trajectory_df["trajectory_id"] == other_traj]
 
             second_obj = mf.write_observation_file(ram_dir, second_traj)

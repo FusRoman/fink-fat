@@ -369,7 +369,6 @@ def get_data(tr_df_path, obs_df_path):
 
     # test if the trajectory_df and old_obs_df exists in the output directory.
     if os.path.exists(tr_df_path) and os.path.exists(obs_df_path):
-
         trajectory_df = pd.read_parquet(tr_df_path)
         old_obs_df = pd.read_parquet(obs_df_path)
         # last_nid = np.max([np.max(trajectory_df["nid"]), np.max(old_obs_df["nid"])])

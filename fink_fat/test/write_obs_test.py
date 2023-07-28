@@ -10,7 +10,6 @@ from fink_fat.orbit_fitting.mpcobs_files import write_observation_file
 
 
 if __name__ == "__main__":
-
     mpc_file_obs_path = "fink_fat/test/test_orbit_file"
 
     mpc_obs = pd.read_parquet("fink_fat/test/mpc_example.parquet")
