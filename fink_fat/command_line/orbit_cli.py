@@ -70,7 +70,9 @@ def cluster_mode(config, traj_to_orbital):  # pragma: no cover
     orbfit_home = config["SOLVE_ORBIT_PARAMS"]["orbfit_path"]
 
     application = os.path.join(
-        os.path.dirname(fink_fat.__file__), "orbit_fitting", "orbfit_cluster.py prod",
+        os.path.dirname(fink_fat.__file__),
+        "orbit_fitting",
+        "orbfit_cluster.py prod",
     )
 
     application += " " + master_manager

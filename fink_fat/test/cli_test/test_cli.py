@@ -6,7 +6,7 @@ import sys
 import traceback
 import logging
 
-from bin.fink_fat_cli import main_test
+from fink_fat.command_line.fink_fat_cli import main_test
 
 if __name__ == "__main__":
     data_test_path = "fink_fat/test/cli_test/fink_fat_out_test/"

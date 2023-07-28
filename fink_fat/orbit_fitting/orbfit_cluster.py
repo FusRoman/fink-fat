@@ -207,7 +207,6 @@ if __name__ == "__main__":
         # Run the test suite
         spark_unit_tests(globs)
     elif sys.argv[1] == "prod":
-
         master_adress = str(sys.argv[2])
         ram_dir = str(sys.argv[3])
         n_triplets = int(sys.argv[4])

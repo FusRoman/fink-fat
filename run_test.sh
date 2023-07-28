@@ -71,7 +71,7 @@ coverage run --source=${ROOTPATH} --rcfile ${ROOTPATH}/.coveragerc ${ORBITFITTIN
 # echo "${ORBITFITTING_PATH}/orbfit_ephem.py"
 # coverage run --source=${ROOTPATH} --rcfile ${ROOTPATH}/.coveragerc ${ORBITFITTING_PATH}/orbfit_ephem.py
 
-for filename in bin/*.py
+for filename in fink_fat/command_line/*.py
 do
   echo $filename
   # Run test suite + coverage
