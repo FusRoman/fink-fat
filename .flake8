@@ -25,3 +25,4 @@ per-file-ignores =
     ../fink-fat/notebook/parameters_selection/exploring_script.py:E721
     ../fink-fat/notebook/follow_up/ephem_association.py:W503
     ../fink-fat/fink_fat/seeding/dbscan_seeding.py:W503
+    ../fink-fat/fink_fat/command_line/cli_main/stats.py:W503
