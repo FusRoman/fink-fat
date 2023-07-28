@@ -52,15 +52,15 @@ import glob
 from astropy import units as u
 from astropy.time import Time
 from terminaltables import DoubleTable, AsciiTable, SingleTable
-from bin.offline_cli import offline_intro_reset, offline_yes_reset
-from bin.orbit_cli import (
+from fink_fat.command_line.offline_cli import offline_intro_reset, offline_yes_reset
+from fink_fat.command_line.orbit_cli import (
     cluster_mode,
     get_orbital_data,
     intro_reset_orbit,
     yes_orbit_reset,
 )
-from bin.stat_cli import compute_residue, test_detectable
-from bin.utils_cli import (
+from fink_fat.command_line.stat_cli import compute_residue, test_detectable
+from fink_fat.command_line.utils_cli import (
     get_class,
     init_cli,
     string_to_bool,
@@ -74,14 +74,14 @@ from fink_fat.associations.inter_night_associations import night_to_night_associ
 from fink_fat.others.utils import cast_obs_data
 from fink_fat.orbit_fitting.orbfit_local import compute_df_orbit_param
 from fink_fat.orbit_fitting.orbfit_merger import merge_orbit
-from bin.association_cli import (
+from fink_fat.command_line.association_cli import (
     get_data,
     get_last_sso_alert,
     intro_reset,
     no_reset,
     yes_reset,
 )
-from bin.stat_cli import print_assoc_table, describe
+from fink_fat.command_line.stat_cli import print_assoc_table, describe
 
 
 def fink_fat_main(arguments):

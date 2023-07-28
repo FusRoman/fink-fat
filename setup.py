@@ -34,9 +34,11 @@ setup(
         "scikit-learn==1.0.2",
         "astropy==4.0",
         "fastavro==1.5.1",
-        "pyarrow==4.0.1"
+        "pyarrow==4.0.1",
     ],
-    entry_points={"console_scripts": ["fink_fat=bin.fink_fat_cli:main"]},
+    entry_points={
+        "console_scripts": ["fink_fat=fink_fat.command_line.fink_fat_cli:main"]
+    },
     license="Apache-2.0 License",
     platforms="Linux Debian distribution",
     project_urls={
