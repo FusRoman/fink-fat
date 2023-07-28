@@ -23,7 +23,7 @@ from fink_fat.command_line.association_cli import (
     yes_reset,
 )
 
-from fink_fat.others.utils import cast_obs_data
+from fink_fat.others.utils import cast_obs_data, init_logging
 
 
 def cli_associations(arguments, config, output_path):
@@ -39,6 +39,7 @@ def cli_associations(arguments, config, output_path):
     output_path : string
         path where are located the fink-fat data
     """
+    logger = init_logging()
 
     # get the path according to the class mpc or candidates
     output_path, object_class = get_class(arguments, output_path)
@@ -73,19 +74,19 @@ def cli_associations(arguments, config, output_path):
         current_date = datetime.datetime.strptime(last_night, "%Y-%m-%d")
 
         if last_request_date == current_date:
-            print()
-            print("ERROR !!!")
-            print("Association already done for this night.")
-            print("Wait a next observation night to do new association")
-            print("or run 'fink_fat solve_orbit' to get orbital_elements.")
+            logger.newline()
+            logger.info("ERROR !!!")
+            logger.info("Association already done for this night.")
+            logger.info("Wait a next observation night to do new association")
+            logger.info("or run 'fink_fat solve_orbit' to get orbital_elements.")
             exit()
         if last_request_date > current_date:
-            print()
-            print("ERROR !!!")
-            print(
+            logger.newline()
+            logger.info("ERROR !!!")
+            logger.info(
                 "Query alerts from a night before the last night in the recorded trajectory/old_observations."
             )
-            print(
+            logger.info(
                 "Maybe try with a more recent night or reset the associations with 'fink_fat association -r'"
             )
             exit()
@@ -93,7 +94,7 @@ def cli_associations(arguments, config, output_path):
     t_before = t.time()
     new_alerts = get_last_sso_alert(object_class, last_night, arguments["--verbose"])
     if len(new_alerts) == 0:
-        print("no alerts available for the night of {}".format(last_night))
+        logger.info("no alerts available for the night of {}".format(last_night))
         exit()
 
     last_nid = next_nid = new_alerts["nid"][0]
@@ -101,7 +102,7 @@ def cli_associations(arguments, config, output_path):
         last_nid = np.max([np.max(trajectory_df["nid"]), np.max(old_obs_df["nid"])])
 
     if arguments["--verbose"]:
-        print("Number of alerts retrieve from fink: {}".format(len(new_alerts)))
+        logger.info("Number of alerts retrieve from fink: {}".format(len(new_alerts)))
 
     if arguments["--save"]:
         save_path = os.path.join(output_path, "save", "")
@@ -113,15 +114,15 @@ def cli_associations(arguments, config, output_path):
             )
 
     if arguments["--verbose"]:
-        print(
+        logger.info(
             "time taken to retrieve alerts from fink broker: {}".format(
                 t.time() - t_before
             )
         )
-        print()
+        logger.newline()
 
     if arguments["--verbose"]:
-        print("started associations...")
+        logger.info("started associations...")
 
     # for additional statistics
     nb_traj = len(np.unique(trajectory_df["trajectory_id"]))
@@ -174,4 +175,4 @@ def cli_associations(arguments, config, output_path):
     cast_obs_data(old_obs_df).to_parquet(obs_df_path)
 
     if arguments["--verbose"]:
-        print("Association done")
+        logger.info("Association done")

@@ -13,6 +13,8 @@ import fink_fat.orbit_fitting.orbfit_files as of
 import fink_fat.orbit_fitting.orbfit_local as ol
 import fink_fat.orbit_fitting.mpcobs_files as mf
 
+from fink_fat.others.utils import init_logging
+
 
 def orbit_wrapper(
     ra,
@@ -207,13 +209,14 @@ if __name__ == "__main__":
         # Run the test suite
         spark_unit_tests(globs)
     elif sys.argv[1] == "prod":
+        logger = init_logging()
         master_adress = str(sys.argv[2])
         ram_dir = str(sys.argv[3])
         n_triplets = int(sys.argv[4])
         noise_ntrials = int(sys.argv[5])
         prop_epoch = None if sys.argv[6] == "None" else float(sys.argv[6])
 
-        print(
+        logger.info(
             master_adress,
             " ",
             ram_dir,
@@ -259,7 +262,7 @@ if __name__ == "__main__":
             1 if nb_traj // max_core == 0 else nb_traj // max_core
         )
 
-        print("begin compute orbital elem on spark")
+        logger.info("begin compute orbital elem on spark")
         spark_column = spark_gb.withColumn(
             "orbital_elements",
             orbit_wrapper(

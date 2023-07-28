@@ -8,6 +8,7 @@ import astropy.units as u
 import pandas as pd
 
 from fink_fat import __file__
+from fink_fat.others.utils import init_logging
 
 
 def write_inp(ram_dir, first_designation, second_designation=None):
@@ -692,16 +693,17 @@ def read_oel(ram_dir, first_desig, second_desig=None):
     except Exception as e:  # pragma: no cover
         if second_desig is not None:
             return list(np.ones(40, dtype=np.float64) * -1)
-        print("----")
-        print(e)
-        print()
-        print("ERROR READ OEL FILE: {}".format(first_desig))
-        print()
-        print(lines)
-        print()
-        print()
+        logger = init_logging()
+        logger.info("----")
+        logger.info(e)
+        logger.newline()
+        logger.info("ERROR READ OEL FILE: {}".format(first_desig))
+        logger.newline()
+        logger.info(lines)
+        logger.newline()
+        logger.newline()
         logging.error(traceback.format_exc())
-        print("----")
+        logger.info("----")
         return list(np.ones(13, dtype=np.float64) * -1)
 
 
@@ -776,16 +778,17 @@ def read_rwo(ram_dir, prov_desig, nb_obs):
     except ValueError:  # pragma: no cover
         return list(np.ones(nb_obs, dtype=np.float64) * -1)
     except Exception as e:  # pragma: no cover
-        print("----")
-        print(e)
-        print()
-        print("ERROR READ RWO FILE: {}".format(prov_desig))
-        print()
-        print(lines)
-        print()
-        print()
+        logger = init_logging()
+        logger.info("----")
+        logger.info(e)
+        logger.newline()
+        logger.info("ERROR READ RWO FILE: {}".format(prov_desig))
+        logger.newline()
+        logger.info(lines)
+        logger.newline()
+        logger.newline()
         logging.error(traceback.format_exc())
-        print("----")
+        logger.info("----")
         return list(np.ones(nb_obs, dtype=np.float64) * -1)
 
 

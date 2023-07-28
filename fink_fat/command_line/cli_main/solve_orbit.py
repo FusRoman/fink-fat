@@ -16,6 +16,7 @@ from fink_fat.command_line.orbit_cli import (
 )
 
 from fink_fat.orbit_fitting.orbfit_local import compute_df_orbit_param
+from fink_fat.others.utils import init_logging
 
 
 def cli_solve_orbit(arguments, config, output_path):
@@ -31,6 +32,7 @@ def cli_solve_orbit(arguments, config, output_path):
     output_path : string
         path where are located the fink-fat data
     """
+    logger = init_logging()
     output_path, object_class = get_class(arguments, output_path)
     tr_df_path = os.path.join(output_path, "trajectory_df.parquet")
     orb_res_path = os.path.join(output_path, "orbital.parquet")
@@ -49,7 +51,7 @@ def cli_solve_orbit(arguments, config, output_path):
     if len(traj_to_orbital) > 0:
         nb_traj_to_orbfit = len(np.unique(traj_to_orbital["trajectory_id"]))
         if arguments["--verbose"]:
-            print(
+            logger.info(
                 "number of trajectories send to the orbit solver: {}".format(
                     nb_traj_to_orbfit
                 )
@@ -67,7 +69,7 @@ def cli_solve_orbit(arguments, config, output_path):
             orbfit_time = t.time() - t_before
 
             if arguments["--verbose"]:
-                print("time taken to get orbit: {}".format(orbfit_time))
+                logger.info("time taken to get orbit: {}".format(orbfit_time))
 
         # solve orbit in cluster mode
         elif arguments["cluster"]:
@@ -77,7 +79,7 @@ def cli_solve_orbit(arguments, config, output_path):
             orbfit_time = t.time() - t_before
 
             if arguments["--verbose"]:
-                print("time taken to get orbit: {}".format(orbfit_time))
+                logger.info("time taken to get orbit: {}".format(orbfit_time))
 
         nb_orb = 0
         # if new orbit has been computed
@@ -87,9 +89,9 @@ def cli_solve_orbit(arguments, config, output_path):
             nb_orb = len(traj_with_orb_elem)
 
             if arguments["--verbose"]:
-                print("number of trajectories with orbit: {}".format(nb_orb))
+                logger.info("number of trajectories with orbit: {}".format(nb_orb))
                 ratio_traj_to_orb = (nb_orb / nb_traj_to_orbfit) * 100
-                print("ratio: {0:.3f} %".format(ratio_traj_to_orb))
+                logger.info("ratio: {0:.3f} %".format(ratio_traj_to_orb))
 
             # get the observations of trajectories with orbital elements
             obs_with_orb = traj_to_orbital[
@@ -136,11 +138,11 @@ def cli_solve_orbit(arguments, config, output_path):
                 traj_no_orb.to_parquet(tr_df_path)
 
             if arguments["--verbose"]:
-                print("Orbital elements saved")
+                logger.info("Orbital elements saved")
 
         else:
             if arguments["--verbose"]:
-                print("No orbital elements found.")
+                logger.info("No orbital elements found.")
 
         if arguments["--save"]:
             save_path = os.path.join(output_path, "save", "")
@@ -157,10 +159,10 @@ def cli_solve_orbit(arguments, config, output_path):
                     json.dump(stats_dict, f, indent=4, sort_keys=True)
                     f.truncate()
             else:
-                print(
+                logger.info(
                     "No stats file exists. Run fink-fat in associations mode with the options --save to add it. "
                 )
 
     else:
-        print("No trajectory with enough points to send to orbfit.")
-        print("Wait more night to produce trajectories with more points")
+        logger.info("No trajectory with enough points to send to orbfit.")
+        logger.info("Wait more night to produce trajectories with more points")

@@ -5,6 +5,7 @@ import pandas as pd
 import requests
 import shutil
 from io import BytesIO
+from fink_fat.others.utils import init_logging
 
 
 def request_fink(
@@ -70,6 +71,8 @@ def request_fink(
     9  10.307019  2.459753e+06  358.332623
     """
 
+    logger = init_logging()
+
     if current_tries == nb_tries:
         return pd.DataFrame(
             columns=[
@@ -101,7 +104,7 @@ def request_fink(
         pdf = pd.read_json(BytesIO(r.content))
         if len(pdf) != n_sso:
             if verbose:
-                print(
+                logger.info(
                     "error when trying to get fink alerts !!!\n\t number of alerts get from the API call ({}) is different from the real number of alerts ({}) \n\ttry again !".format(
                         len(pdf), n_sso
                     )
@@ -121,7 +124,7 @@ def request_fink(
 
     except ValueError:  # pragma: no cover
         if verbose:
-            print("error when trying to get fink alerts, try again !")
+            logger.info("error when trying to get fink alerts, try again !")
 
         return request_fink(
             object_class,
@@ -211,11 +214,12 @@ def get_last_sso_alert(object_class, date, verbose=False):
     ... )
     >>> assert_frame_equal(res_request, pd.DataFrame(columns=["objectId", "candid", "ra", "dec", "jd", "nid", "fid", "magpsf", "sigmapsf", "not_updated", "last_assoc_date"]))
     """
+    logger = init_logging()
     startdate = datetime.datetime.strptime(date, "%Y-%m-%d")
     stopdate = startdate + datetime.timedelta(days=1)
 
     if verbose:  # pragma: no cover
-        print(
+        logger.info(
             "Query fink broker to get sso alerts for the night between {} and {}".format(
                 startdate.strftime("%Y-%m-%d"), stopdate.strftime("%Y-%m-%d")
             )
@@ -273,24 +277,26 @@ def get_last_sso_alert(object_class, date, verbose=False):
 
 
 def intro_reset():  # pragma: no cover
-    print("WARNING !!!")
-    print(
+    logger = init_logging()
+    logger.info("WARNING !!!")
+    logger.info(
         "you will loose the trajectory done by previous association, Continue ? [Y/n]"
     )
 
 
 def yes_reset(arguments, tr_df_path, obs_df_path):  # pragma: no cover
+    logger = init_logging()
     if os.path.exists(tr_df_path) and os.path.exists(obs_df_path):
-        print("Removing files :\n\t{}\n\t{}".format(tr_df_path, obs_df_path))
+        logger.info("Removing files :\n\t{}\n\t{}".format(tr_df_path, obs_df_path))
         try:
             os.remove(tr_df_path)
             os.remove(obs_df_path)
         except OSError as e:
             if arguments["--verbose"]:
-                print("Failed with:", e.strerror)
-                print("Error code:", e.code)
+                logger.info("Failed with:", e.strerror)
+                logger.info("Error code:", e.code)
     else:
-        print("File trajectory and old observations not exists.")
+        logger.info("File trajectory and old observations not exists.")
 
     dirname = os.path.dirname(tr_df_path)
     save_path = os.path.join(dirname, "save", "")
@@ -299,7 +305,8 @@ def yes_reset(arguments, tr_df_path, obs_df_path):  # pragma: no cover
 
 
 def no_reset():  # pragma: no cover
-    print("Abort reset.")
+    logger = init_logging()
+    logger.info("Abort reset.")
 
 
 def get_data(tr_df_path, obs_df_path):
@@ -371,25 +378,6 @@ def get_data(tr_df_path, obs_df_path):
     if os.path.exists(tr_df_path) and os.path.exists(obs_df_path):
         trajectory_df = pd.read_parquet(tr_df_path)
         old_obs_df = pd.read_parquet(obs_df_path)
-        # last_nid = np.max([np.max(trajectory_df["nid"]), np.max(old_obs_df["nid"])])
-        # if last_nid == next_nid:
-        #     print()
-        #     print("ERROR !!!")
-        #     print("Association already done for this night.")
-        #     print("Wait a next observation night to do new association")
-        #     print("or run 'fink_fat solve_orbit' to get orbital_elements.")
-        #     exit()
-        # if last_nid > next_nid:
-        #     print()
-        #     print("ERROR !!!")
-        #     print(
-        #         "Query alerts from a night before the last night in the recorded trajectory/old_observations."
-        #     )
-        #     print(
-        #         "Maybe try with a more recent night or reset the associations with 'fink_fat association -r'"
-        #     )
-        #     exit()
-
         last_trajectory_id = np.max(trajectory_df["trajectory_id"])
 
     return trajectory_df, old_obs_df, last_trajectory_id

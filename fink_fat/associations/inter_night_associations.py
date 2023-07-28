@@ -12,6 +12,7 @@ from fink_fat.associations.associations import (
     time_window_management,
 )
 from fink_fat.seeding.dbscan_seeding import intra_night_seeding
+from fink_fat.others.utils import init_logging
 
 
 def separate_trajectories(trajectory_df, orbfit_limit):
@@ -418,6 +419,9 @@ def night_to_night_association(
     >>> assert_frame_equal(old_expected, ts.old_observation_expected_5, check_dtype=False)
     """
 
+    if verbose:
+        logger = init_logging()
+
     (old_traj, most_recent_traj), old_observation = time_window_management(
         trajectory_df,
         old_observation,
@@ -447,7 +451,7 @@ def night_to_night_association(
     tracklets["assoc_tag"] = "I"
 
     if verbose:  # pragma: no cover
-        print("elapsed time to find tracklets : {}".format(t.time() - t_before))
+        logger.info("elapsed time to find tracklets : {}".format(t.time() - t_before))
 
     if len(most_recent_traj) == 0 and len(old_observation) == 0:
         return (pd.concat([old_traj, tracklets]), remaining_new_observations)
@@ -483,7 +487,7 @@ def night_to_night_association(
         )
 
         if verbose:  # pragma: no cover
-            print(
+            logger.info(
                 "elapsed time to associates tracklets with trajectories : {}".format(
                     t.time() - t_before
                 )
@@ -519,7 +523,7 @@ def night_to_night_association(
         )
 
         if verbose:  # pragma: no cover
-            print(
+            logger.info(
                 "elapsed time to associates new points to a trajectories : {}".format(
                     t.time() - t_before
                 )
@@ -553,7 +557,7 @@ def night_to_night_association(
         )
 
         if verbose:  # pragma: no cover
-            print(
+            logger.info(
                 "elapsed time to associates the old points to the tracklets  : {}".format(
                     t.time() - t_before
                 )
@@ -585,7 +589,7 @@ def night_to_night_association(
         )
 
         if verbose:  # pragma: no cover
-            print(
+            logger.info(
                 "elapsed time to associates couples of observations : {}".format(
                     t.time() - t_before
                 )

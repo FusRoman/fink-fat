@@ -6,6 +6,7 @@ import astropy.units as u
 
 from fink_fat.command_line.utils_cli import get_class
 from fink_fat.orbit_fitting.orbfit_merger import merge_orbit
+from fink_fat.others.utils import init_logging
 
 
 def cli_merge_orbit(arguments, config, output_path):
@@ -21,6 +22,7 @@ def cli_merge_orbit(arguments, config, output_path):
     output_path : string
         path where are located the fink-fat data
     """
+    logger = init_logging()
     output_path, object_class = get_class(arguments, output_path)
     orb_res_path = os.path.join(output_path, "orbital.parquet")
     traj_orb_path = os.path.join(output_path, "trajectory_orb.parquet")
@@ -32,7 +34,7 @@ def cli_merge_orbit(arguments, config, output_path):
         traj_orb_df = pd.read_parquet(traj_orb_path)
 
         if arguments["--verbose"]:
-            print("Beginning of the merging !")
+            logger.info("Beginning of the merging !")
 
         t_before = t.time()
         # call the orbit identification that will merge trajectories
@@ -48,10 +50,10 @@ def cli_merge_orbit(arguments, config, output_path):
         merge_traj.to_parquet(os.path.join(output_path, "merge_traj.parquet"))
 
         if arguments["--verbose"]:
-            print("Merging of the trajectories done !")
-            print("elapsed time: {:.3f}".format(t.time() - t_before))
+            logger.info("Merging of the trajectories done !")
+            logger.info("elapsed time: {:.3f}".format(t.time() - t_before))
 
     else:
-        print("No orbital elements found !")
-        print("Abort merging !")
+        logger.info("No orbital elements found !")
+        logger.info("Abort merging !")
         exit()

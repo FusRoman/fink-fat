@@ -1,10 +1,12 @@
 import os
 import shutil
+from fink_fat.others.utils import init_logging
 
 
 def offline_intro_reset():  # pragma: no cover
-    print("WARNING !!!")
-    print(
+    logger = init_logging()
+    logger.info("WARNING !!!")
+    logger.info(
         "you will loose all the data from the previous associations including the orbits, Continue ? [Y/n]"
     )
 
@@ -12,11 +14,12 @@ def offline_intro_reset():  # pragma: no cover
 def offline_yes_reset(
     arguments, tr_df_path, obs_df_path, orb_res_path, traj_orb_path
 ):  # pragma: no cover
+    logger = init_logging()
     # fmt: off
     test = os.path.exists(tr_df_path) and os.path.exists(obs_df_path) and os.path.exists(orb_res_path) and os.path.exists(traj_orb_path)
     # fmt: on
     if test:
-        print(
+        logger.info(
             "Removing files :\n\t{}\n\t{}\n\t{}\n\t{}".format(
                 tr_df_path, obs_df_path, orb_res_path, traj_orb_path
             )
@@ -28,10 +31,10 @@ def offline_yes_reset(
             os.remove(traj_orb_path)
         except OSError as e:
             if arguments["--verbose"]:
-                print("Failed with:", e.strerror)
-                print("Error code:", e.code)
+                logger.info("Failed with:", e.strerror)
+                logger.info("Error code:", e.code)
     else:
-        print("Data from previous associations and solve orbits not exists.")
+        logger.info("Data from previous associations and solve orbits not exists.")
 
     dirname = os.path.dirname(tr_df_path)
     save_path = os.path.join(dirname, "save", "")

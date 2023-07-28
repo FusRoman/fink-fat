@@ -7,6 +7,7 @@ import pandas as pd
 
 import fink_fat
 from fink_fat.others.id_tags import generate_tags
+from fink_fat.others.utils import init_logging
 
 
 def string_to_bool(bool_str):
@@ -90,7 +91,8 @@ def init_cli(arguments):
         if os.path.exists(arguments["--config"]):
             config.read(arguments["--config"])
         else:  # pragma: no cover
-            print(
+            logger = init_logging()
+            logger.info(
                 "config file does not exist from this path: {} !!".format(
                     arguments["--config"]
                 )
@@ -216,7 +218,8 @@ def yes_or_no(
         elif answer.upper() in ["N", "NO"]:
             no_function(*no_args)
         else:
-            print("please, answer with y or n.")
+            logger = init_logging()
+            logger.info("please, answer with y or n.")
 
 
 def save_additional_stats(save_path, date, stats):  # pragma: no cover
