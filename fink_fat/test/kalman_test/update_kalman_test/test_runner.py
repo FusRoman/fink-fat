@@ -2,7 +2,7 @@ import pandas as pd
 from pandas.testing import assert_frame_equal
 from fink_fat.associations.association_kalman import update_trajectories
 
-from fink_fat.test.kalman_test.update_kalman_test.data import *
+from fink_fat.test.kalman_test.update_kalman_test import data as d
 
 
 def assert_test(
@@ -62,31 +62,31 @@ def aux_test_runner(f):
 
 
 def test_1():
-    aux_test_runner(data_test_1)
+    aux_test_runner(d.data_test_1)
 
 
 def test_2():
-    aux_test_runner(data_test_2)
+    aux_test_runner(d.data_test_2)
 
 
 def test_3():
-    aux_test_runner(data_test_3)
+    aux_test_runner(d.data_test_3)
 
 
 def test_4():
-    aux_test_runner(data_test_4)
+    aux_test_runner(d.data_test_4)
 
 
 def test_5():
-    aux_test_runner(data_test_5)
+    aux_test_runner(d.data_test_5)
 
 
 def test_6():
-    aux_test_runner(data_test_6)
+    aux_test_runner(d.data_test_6)
 
 
 def test_7():
-    aux_test_runner(data_test_7)
+    aux_test_runner(d.data_test_7)
 
 
 test_1()
