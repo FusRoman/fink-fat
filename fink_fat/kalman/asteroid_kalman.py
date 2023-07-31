@@ -1,5 +1,4 @@
 import numpy as np
-import matplotlib.pyplot as plt
 import warnings
 
 
@@ -280,7 +279,7 @@ class KalfAst:
     def __repr__(self) -> str:
         return f"""
 @kalman: {hex(id(self))}
-X state: 
+X state:
 {self.X}
 
 
