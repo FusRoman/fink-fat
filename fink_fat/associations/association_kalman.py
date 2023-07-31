@@ -1,0 +1,203 @@
+import numpy as np
+import pandas as pd
+
+from copy import deepcopy
+
+from fink_fat.kalman.init_kalman import init_kalman
+
+
+def update_kalman(kalman_copy, new_alert):
+    Y = np.array(
+        [
+            [
+                new_alert[2],
+                new_alert[3],
+            ]
+        ]
+    )
+
+    dt = new_alert[4] - kalman_copy["jd_1"].values[0]
+    A = np.array(
+        [
+            [1, 0, dt, 0],
+            [0, 1, 0, dt],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1],
+        ]
+    )
+
+    kalman_copy["kalman"].values[0].update(
+        Y,
+        A,
+    )
+    with pd.option_context(
+        "mode.chained_assignment",
+        None,
+    ):
+        kalman_copy["ra_0"] = kalman_copy["ra_1"]
+        kalman_copy["dec_0"] = kalman_copy["dec_1"]
+        kalman_copy["jd_0"] = kalman_copy["jd_1"]
+
+        kalman_copy["ra_1"] = new_alert[2]
+        kalman_copy["dec_1"] = new_alert[3]
+        kalman_copy["jd_1"] = new_alert[4]
+
+        kalman_copy["mag_1"] = new_alert[9]
+        kalman_copy["fid_1"] = new_alert[6]
+
+        kalman_copy["dt"] = kalman_copy["jd_1"] - kalman_copy["jd_0"]
+        kalman_copy["vel_ra"] = (
+            kalman_copy["ra_1"] - kalman_copy["ra_0"]
+        ) / kalman_copy["dt"]
+        kalman_copy["vel_dec"] = (
+            kalman_copy["dec_1"] - kalman_copy["dec_0"]
+        ) / kalman_copy["dt"]
+
+    return kalman_copy
+
+
+def kalman_rowcopy(
+    kalman_row,
+):
+    r = deepcopy(kalman_row)
+    r["kalman"] = deepcopy(r["kalman"].values)
+    return r
+
+
+def update_trajectories(
+    trajectory_df,
+    kalman_df,
+    new_alerts,
+):
+    new_alerts["seeds_next_night"] = new_alerts["trajectory_id"]
+    new_alerts_explode = new_alerts.explode(
+        [
+            "ffdistnr",
+            "estimator_id",
+        ]
+    )
+    new_alerts_explode = new_alerts_explode[~new_alerts_explode["ffdistnr"].isna()]
+
+    # initialize new kalman filters based on the seeds no associated with a known kalman filter
+    tracklets_no_assoc = new_alerts[
+        ~new_alerts["trajectory_id"].isin(new_alerts_explode["estimator_id"])
+    ]
+    new_seeds = tracklets_no_assoc[tracklets_no_assoc["trajectory_id"] != -1]
+    kalman_new_seeds = init_kalman(new_seeds)
+
+    new_alerts = new_alerts.drop("trajectory_id", axis=1)
+    new_alerts_explode = new_alerts_explode.drop("trajectory_id", axis=1)
+
+    new_traj = []
+    new_kalman = []
+    new_traj_id = kalman_df["trajectory_id"].max() + 1
+
+    unique_traj_id_to_update = new_alerts_explode["estimator_id"].unique()
+    for trajectory_id in unique_traj_id_to_update:
+        current_assoc = new_alerts_explode[
+            new_alerts_explode["estimator_id"] == trajectory_id
+        ]
+        for seeds in current_assoc["seeds_next_night"].unique():
+            if seeds != -1.0:
+                current_trajectory = deepcopy(
+                    trajectory_df[trajectory_df["trajectory_id"] == trajectory_id]
+                )
+                current_seeds = deepcopy(
+                    new_alerts[new_alerts["seeds_next_night"] == seeds]
+                )
+                current_kalman_pdf = kalman_rowcopy(
+                    kalman_df[kalman_df["trajectory_id"] == trajectory_id]
+                )
+
+                assert len(current_kalman_pdf) == 1
+
+                for el in current_seeds.sort_values("jd").values:
+                    current_kalman_pdf = update_kalman(
+                        current_kalman_pdf,
+                        el,
+                    )
+
+                with pd.option_context(
+                    "mode.chained_assignment",
+                    None,
+                ):
+                    current_trajectory["trajectory_id"] = new_traj_id
+                    current_kalman_pdf["trajectory_id"] = new_traj_id
+                    current_seeds["trajectory_id"] = new_traj_id
+                new_traj.append(current_trajectory)
+                new_traj.append(current_seeds[current_trajectory.columns])
+                new_kalman.append(current_kalman_pdf)
+
+                new_traj_id += 1
+
+            else:
+                current_seeds = deepcopy(
+                    current_assoc[(current_assoc["seeds_next_night"] == seeds)]
+                )
+                current_seeds["trajectory_id"] = current_seeds["estimator_id"]
+                cols_to_keep = list(current_seeds.columns[:-5]) + ["trajectory_id"]
+                for el in current_seeds[cols_to_keep].values:
+                    current_trajectory = deepcopy(
+                        trajectory_df[trajectory_df["trajectory_id"] == trajectory_id]
+                    )
+                    current_kalman_pdf = kalman_rowcopy(
+                        kalman_df[kalman_df["trajectory_id"] == trajectory_id]
+                    )
+                    assert len(current_kalman_pdf) == 1
+                    current_kalman_pdf = update_kalman(
+                        current_kalman_pdf,
+                        el,
+                    )
+
+                    with pd.option_context(
+                        "mode.chained_assignment",
+                        None,
+                    ):
+                        el[-1] = new_traj_id
+                        current_trajectory["trajectory_id"] = new_traj_id
+                        current_kalman_pdf["trajectory_id"] = new_traj_id
+                        current_seeds["trajectory_id"] = new_traj_id
+
+                    new_traj.append(current_trajectory)
+                    new_traj.append(
+                        pd.DataFrame(
+                            [el],
+                            columns=cols_to_keep,
+                        )
+                    )
+                    new_kalman.append(current_kalman_pdf)
+
+                    new_traj_id += 1
+
+    previous_traj = trajectory_df[
+        ~trajectory_df["trajectory_id"].isin(unique_traj_id_to_update)
+    ]
+    previous_kalman = kalman_df[
+        ~kalman_df["trajectory_id"].isin(unique_traj_id_to_update)
+    ]
+
+    new_traj = pd.concat([previous_traj, pd.concat(new_traj)]).sort_values(
+        [
+            "trajectory_id",
+            "jd",
+        ]
+    )
+    new_kalman = pd.concat([previous_kalman, pd.concat(new_kalman)])
+
+    max_traj_id = new_kalman["trajectory_id"].max() + 1
+    map_new_traj_id = {
+        curr_traj_id: new_traj_id
+        for curr_traj_id, new_traj_id in zip(
+            kalman_new_seeds["trajectory_id"],
+            np.arange(max_traj_id, max_traj_id + len(kalman_new_seeds), dtype=int),
+        )
+    }
+    new_seeds["trajectory_id"] = new_seeds["trajectory_id"].map(map_new_traj_id)
+    kalman_new_seeds["trajectory_id"] = kalman_new_seeds["trajectory_id"].map(
+        map_new_traj_id
+    )
+
+    new_traj = new_traj.append(new_seeds[new_traj.columns]).reset_index(drop=True)
+    new_kalman = new_kalman.append(kalman_new_seeds).reset_index(drop=True)
+
+    return new_traj, new_kalman
