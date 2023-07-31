@@ -98,7 +98,9 @@ done
 
 
 # run the test suite for the kalman filter
-
+echo "run kalman test"
+coverage run --source=${ROOTPATH} --rcfile=${ROOTPATH}/.coveragerc -m \
+  pytest fink_fat/test/kalman_test/update_kalman_test/test_runner.py
 
 
 coverage combine
