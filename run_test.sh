@@ -96,6 +96,11 @@ do
     --rcfile ${ROOTPATH}/.coveragerc $filename
 done
 
+
+# run the test suite for the kalman filter
+
+
+
 coverage combine
 
 unset COVERAGE_PROCESS_START

@@ -7,6 +7,21 @@ from fink_fat.kalman.init_kalman import init_kalman
 
 
 def update_kalman(kalman_copy, new_alert):
+    """
+
+
+    Parameters
+    ----------
+    kalman_copy : _type_
+        _description_
+    new_alert : _type_
+        _description_
+
+    Returns
+    -------
+    _type_
+        _description_
+    """
     Y = np.array(
         [
             [
@@ -59,6 +74,19 @@ def update_kalman(kalman_copy, new_alert):
 def kalman_rowcopy(
     kalman_row,
 ):
+    """
+
+
+    Parameters
+    ----------
+    kalman_row : _type_
+        _description_
+
+    Returns
+    -------
+    _type_
+        _description_
+    """
     r = deepcopy(kalman_row)
     r["kalman"] = deepcopy(r["kalman"].values)
     return r
@@ -69,6 +97,27 @@ def update_trajectories(
     kalman_df,
     new_alerts,
 ):
+    """
+    Update the kalman filters and the trajectories with the new associations found during the night.
+    This function initialize also the new kalman filters based on the seeds found in the night.
+
+    Parameters
+    ----------
+    trajectory_df : pd.DataFrame
+        dataframe containing the observations of each trajectories
+    kalman_df : pd.DataFrame
+        dataframe containing the kalman filters
+    new_alerts : pd.DataFrame
+        dataframe containing the alerts from the current nigth to associates with the kalman filters
+
+    Returns
+    -------
+    new_traj: pd.DataFrame
+        the trajectories with the new associated points
+    new_kalman: pd.DataFrame
+        the updated kalman filters
+    """
+    # get the alerts associated with at least one kalman filter
     new_alerts["seeds_next_night"] = new_alerts["trajectory_id"]
     new_alerts_explode = new_alerts.explode(
         [
@@ -99,6 +148,7 @@ def update_trajectories(
         ]
         for seeds in current_assoc["seeds_next_night"].unique():
             if seeds != -1.0:
+                # add an intra night tracklets to a trajectory
                 current_trajectory = deepcopy(
                     trajectory_df[trajectory_df["trajectory_id"] == trajectory_id]
                 )
