@@ -35,6 +35,7 @@ setup(
         "astropy==4.0",
         "fastavro==1.5.1",
         "pyarrow==4.0.1",
+        "pytest==7.2.2",
     ],
     entry_points={
         "console_scripts": ["fink_fat=fink_fat.command_line.fink_fat_cli:main"]
