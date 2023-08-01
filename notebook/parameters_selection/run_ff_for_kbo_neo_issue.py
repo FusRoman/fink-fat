@@ -14,8 +14,8 @@ if __name__ == "__main__":
         curr_date = start_date + timedelta(days=i)
 
         print(curr_date)
-        ff_assoc_command = f"fink_fat associations mpc --night {curr_date} --config notebook/fink_fat_experiments/kbo_neo_issue.conf --verbose"
-        ff_orbit_command = "fink_fat solve_orbit mpc local --config notebook/fink_fat_experiments/kbo_neo_issue.conf --verbose"
+        ff_assoc_command = f"fink_fat associations mpc --night {curr_date} --config ../fink_fat_experiments/kbo_neo_issue.conf --verbose"
+        ff_orbit_command = "fink_fat solve_orbit mpc local --config ../fink_fat_experiments/kbo_neo_issue.conf --verbose"
 
         results_assoc = subprocess.run(
             ff_assoc_command, shell=True, universal_newlines=True, check=True
