@@ -1,5 +1,7 @@
 import numpy as np
 import pandas as pd
+import sys
+import doctest
 
 from copy import deepcopy
 
@@ -8,19 +10,19 @@ from fink_fat.kalman.init_kalman import init_kalman
 
 def update_kalman(kalman_copy, new_alert):
     """
-
+    Update the kalman filter contains in the
 
     Parameters
     ----------
-    kalman_copy : _type_
-        _description_
-    new_alert : _type_
-        _description_
+    kalman_copy : pd.Series
+        a row of the kalman dataframe
+    new_alert : numpy array
+        a numpy array containing data of one alert
 
     Returns
     -------
-    _type_
-        _description_
+    pd.Series
+        same row as input but updated with the new alert
     """
     Y = np.array(
         [
@@ -75,17 +77,56 @@ def kalman_rowcopy(
     kalman_row,
 ):
     """
-
+    Make a copy of one rows of the kalman dataframe
 
     Parameters
     ----------
-    kalman_row : _type_
-        _description_
+    kalman_row : pd.Series
+        one row of a kalman dataframe
 
     Returns
     -------
-    _type_
-        _description_
+    pd.Series
+        a copy of the input row.
+
+    Examples
+    --------
+    >>> from fink_fat.kalman.asteroid_kalman import KalfAst
+    >>> r1 = pd.Series({
+    ... "ra_0": 0,
+    ... "dec_0": 0,
+    ... "ra_1": 1,
+    ... "dec_1": 1,
+    ... "jd_0": 0,
+    ... "jd_1": 1,
+    ... "mag_1": 0,
+    ... "fid_1": 1,
+    ... "dt": 1,
+    ... "vel_ra": 0,
+    ... "vel_dec": 0
+    ... })
+
+    >>> kalman = KalfAst(
+    ... r1["ra_1"],
+    ... r1["dec_1"],
+    ... r1["vel_ra"],
+    ... r1["vel_dec"],
+    ... [
+    ...     [1, 0, 0.5, 0],
+    ...     [0, 1, 0, 0.5],
+    ...     [0, 0, 1, 0],
+    ...     [0, 0, 0, 1],
+    ... ],
+    ... )
+    >>> r1["kalman"] = kalman
+    >>> r2 = kalman_rowcopy(pd.DataFrame(r1).T)
+
+    >>> id(r1) != id(r2)
+    True
+    >>> id(r1["ra_0"]) != id(r2["ra_0"])
+    True
+    >>> id(r1["kalman"]) != id(r2["kalman"])
+    True
     """
     r = deepcopy(kalman_row)
     r["kalman"] = deepcopy(r["kalman"].values)
@@ -251,3 +292,11 @@ def update_trajectories(
     new_kalman = new_kalman.append(kalman_new_seeds).reset_index(drop=True)
 
     return new_traj, new_kalman
+
+
+if __name__ == "__main__":  # pragma: no cover
+    if "unittest.util" in __import__("sys").modules:
+        # Show full diff in self.assertEqual.
+        __import__("sys").modules["unittest.util"]._MAX_LENGTH = 999999999
+
+    sys.exit(doctest.testmod()[0])
