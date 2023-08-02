@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 from pandas.testing import assert_frame_equal
 from fink_fat.associations.association_kalman import update_trajectories
 
@@ -13,6 +14,14 @@ def assert_test(
 ):
     assert len(new_traj["trajectory_id"].unique()) == len(new_kalman)
     assert len(new_kalman) == len(new_kalman["trajectory_id"].unique())
+
+    test_id = np.array(
+        [
+            kf.kf_id == tr_id
+            for kf, tr_id in zip(new_kalman["kalman"], new_kalman["trajectory_id"])
+        ]
+    )
+    assert test_id.all()
 
     assert_frame_equal(
         new_traj.fillna(-1.0).reset_index(drop=True),

@@ -30,6 +30,7 @@ def data_test_1():
         vel_ra.append((ra_1[i] - ra_0[i]) / dt[i])
         vel_dec.append((dec_1[i] - dec_0[i]) / dt[i])
         kalman = KalfAst(
+            i,
             ra_1[i],
             dec_1[i],
             vel_ra[i],
@@ -104,6 +105,7 @@ def data_test_2():
         vel_ra.append((ra_1[i] - ra_0[i]) / dt[i])
         vel_dec.append((dec_1[i] - dec_0[i]) / dt[i])
         kalman = KalfAst(
+            i,
             ra_1[i],
             dec_1[i],
             vel_ra[i],
@@ -180,6 +182,7 @@ def data_test_3():
         vel_ra.append((ra_1[i] - ra_0[i]) / dt[i])
         vel_dec.append((dec_1[i] - dec_0[i]) / dt[i])
         kalman = KalfAst(
+            i,
             ra_1[i],
             dec_1[i],
             vel_ra[i],
@@ -256,6 +259,7 @@ def data_test_4():
         vel_ra.append((ra_1[i] - ra_0[i]) / dt[i])
         vel_dec.append((dec_1[i] - dec_0[i]) / dt[i])
         kalman = KalfAst(
+            i,
             ra_1[i],
             dec_1[i],
             vel_ra[i],
@@ -332,6 +336,7 @@ def data_test_5():
         vel_ra.append((ra_1[i] - ra_0[i]) / dt[i])
         vel_dec.append((dec_1[i] - dec_0[i]) / dt[i])
         kalman = KalfAst(
+            i,
             ra_1[i],
             dec_1[i],
             vel_ra[i],
@@ -408,6 +413,7 @@ def data_test_6():
         vel_ra.append((ra_1[i] - ra_0[i]) / dt[i])
         vel_dec.append((dec_1[i] - dec_0[i]) / dt[i])
         kalman = KalfAst(
+            i,
             ra_1[i],
             dec_1[i],
             vel_ra[i],
@@ -484,6 +490,7 @@ def data_test_7():
         vel_ra.append((ra_1[i] - ra_0[i]) / dt[i])
         vel_dec.append((dec_1[i] - dec_0[i]) / dt[i])
         kalman = KalfAst(
+            i,
             ra_1[i],
             dec_1[i],
             vel_ra[i],

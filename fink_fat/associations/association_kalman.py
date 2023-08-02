@@ -134,7 +134,7 @@ def kalman_rowcopy(kalman_row: pd.Series, new_traj_id: int) -> pd.Series:
     """
     r = deepcopy(kalman_row)
     r["kalman"] = deepcopy(r["kalman"].values)
-    r["kalman"].id = new_traj_id
+    r["kalman"].values[0].kf_id = new_traj_id
     return r
 
 

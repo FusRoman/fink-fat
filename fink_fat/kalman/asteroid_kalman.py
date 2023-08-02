@@ -30,7 +30,7 @@ class KalfAst:
         """
         # Strong hypotesis: sso speed remains constant over a small tracking time window
 
-        self.id = id
+        self.kf_id = id
 
         # Initialization of state matrices
         self.X = np.array(
@@ -284,7 +284,7 @@ class KalfAst:
 
     def __repr__(self) -> str:
         return f"""
-identifier: {self.id}
+identifier: {self.kf_id}
 @kalman: {hex(id(self))}
 
 X state:
@@ -300,4 +300,4 @@ current A state:
 """
 
     def __str__(self) -> str:
-        return f"kf {self.id}"
+        return f"kf {self.kf_id}"
