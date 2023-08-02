@@ -73,9 +73,7 @@ def update_kalman(kalman_copy, new_alert):
     return kalman_copy
 
 
-def kalman_rowcopy(
-    kalman_row,
-):
+def kalman_rowcopy(kalman_row: pd.Series, new_traj_id: int) -> pd.Series:
     """
     Make a copy of one rows of the kalman dataframe
 
@@ -92,7 +90,10 @@ def kalman_rowcopy(
     Examples
     --------
     >>> from fink_fat.kalman.asteroid_kalman import KalfAst
+
+    >>> traj_id = 0
     >>> r1 = pd.Series({
+    ... "trajectory_id": traj_id,
     ... "ra_0": 0,
     ... "dec_0": 0,
     ... "ra_1": 1,
@@ -107,6 +108,7 @@ def kalman_rowcopy(
     ... })
 
     >>> kalman = KalfAst(
+    ... traj_id,
     ... r1["ra_1"],
     ... r1["dec_1"],
     ... r1["vel_ra"],
@@ -119,7 +121,7 @@ def kalman_rowcopy(
     ... ],
     ... )
     >>> r1["kalman"] = kalman
-    >>> r2 = kalman_rowcopy(pd.DataFrame(r1).T)
+    >>> r2 = kalman_rowcopy(pd.DataFrame(r1).T, 5)
 
     >>> id(r1) != id(r2)
     True
@@ -127,9 +129,12 @@ def kalman_rowcopy(
     True
     >>> id(r1["kalman"]) != id(r2["kalman"])
     True
+    >>> r2["kalman"].id
+    5
     """
     r = deepcopy(kalman_row)
     r["kalman"] = deepcopy(r["kalman"].values)
+    r["kalman"].id = new_traj_id
     return r
 
 
@@ -157,6 +162,10 @@ def update_trajectories(
         the trajectories with the new associated points
     new_kalman: pd.DataFrame
         the updated kalman filters
+
+    Examples
+    --------
+    # see fink_fat/test/kalman_test/update_kalman_test
     """
     # get the alerts associated with at least one kalman filter
     new_alerts["seeds_next_night"] = new_alerts["trajectory_id"]
@@ -197,7 +206,7 @@ def update_trajectories(
                     new_alerts[new_alerts["seeds_next_night"] == seeds]
                 )
                 current_kalman_pdf = kalman_rowcopy(
-                    kalman_df[kalman_df["trajectory_id"] == trajectory_id]
+                    kalman_df[kalman_df["trajectory_id"] == trajectory_id], new_traj_id
                 )
 
                 assert len(current_kalman_pdf) == 1
@@ -232,7 +241,8 @@ def update_trajectories(
                         trajectory_df[trajectory_df["trajectory_id"] == trajectory_id]
                     )
                     current_kalman_pdf = kalman_rowcopy(
-                        kalman_df[kalman_df["trajectory_id"] == trajectory_id]
+                        kalman_df[kalman_df["trajectory_id"] == trajectory_id],
+                        new_traj_id,
                     )
                     assert len(current_kalman_pdf) == 1
                     current_kalman_pdf = update_kalman(
