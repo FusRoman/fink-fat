@@ -5,6 +5,7 @@ import warnings
 class KalfAst:
     def __init__(
         self,
+        id: int,
         initX: float,
         initY: float,
         initVx: float,
@@ -28,6 +29,8 @@ class KalfAst:
             state transition matrix of the kalman filter
         """
         # Strong hypotesis: sso speed remains constant over a small tracking time window
+
+        self.id = id
 
         # Initialization of state matrices
         self.X = np.array(
@@ -58,6 +61,9 @@ class KalfAst:
         self.R = np.eye(2)
 
     def dec_warn(ra, dec, opp_ra, opp_dec):
+        """
+        raise a warning if the kalman prediction goes beyond the circle coordinates
+        """
         warnings.warn(
             f"""\n!!! Warnings! Kalman filter for asteroids generate a bad prediction.
                             Declination should be -90 < dec < 90, found: ra={ra}, dec={dec}
@@ -278,7 +284,9 @@ class KalfAst:
 
     def __repr__(self) -> str:
         return f"""
+identifier: {self.id}
 @kalman: {hex(id(self))}
+
 X state:
 {self.X}
 
@@ -290,3 +298,6 @@ P state:
 current A state:
 {self.A}
 """
+
+    def __str__(self) -> str:
+        return f"kf {self.id}"
