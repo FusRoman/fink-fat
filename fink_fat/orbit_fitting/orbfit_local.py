@@ -265,6 +265,20 @@ def orbit_elem_dataframe(orbit_elem, column_name):
 
 
 def get_last_detection(trajectory_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Get the last detection for each trajectories in the input dataframe
+
+    Parameters
+    ----------
+    trajectory_df : pd.DataFrame
+        contains trajectory
+        mandatory columns: trajectory_id, ra, dec, jd, magpsf, fid
+
+    Returns
+    -------
+    pd.DataFrame
+        dataframe containing the last detection for each trajectories
+    """
     get_last = lambda x: list(x)[-1]  # noqa: E731
     last_det = (
         trajectory_df.sort_values("jd")
