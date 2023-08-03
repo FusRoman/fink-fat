@@ -47,10 +47,7 @@ def update_kalman(kalman_copy, new_alert):
         Y,
         A,
     )
-    with pd.option_context(
-        "mode.chained_assignment",
-        None,
-    ):
+    with pd.option_context("mode.chained_assignment", None):
         kalman_copy["ra_0"] = kalman_copy["ra_1"]
         kalman_copy["dec_0"] = kalman_copy["dec_1"]
         kalman_copy["jd_0"] = kalman_copy["jd_1"]
@@ -217,10 +214,7 @@ def update_trajectories(
                         el,
                     )
 
-                with pd.option_context(
-                    "mode.chained_assignment",
-                    None,
-                ):
+                with pd.option_context("mode.chained_assignment", None):
                     current_trajectory["trajectory_id"] = new_traj_id
                     current_kalman_pdf["trajectory_id"] = new_traj_id
                     current_seeds["trajectory_id"] = new_traj_id
@@ -250,10 +244,7 @@ def update_trajectories(
                         el,
                     )
 
-                    with pd.option_context(
-                        "mode.chained_assignment",
-                        None,
-                    ):
+                    with pd.option_context("mode.chained_assignment", None):
                         el[-1] = new_traj_id
                         current_trajectory["trajectory_id"] = new_traj_id
                         current_kalman_pdf["trajectory_id"] = new_traj_id
