@@ -124,6 +124,58 @@ def angle_three_point(a, b, c):
     return np.degrees(angle)
 
 
+def angle_three_point_vect(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> np.ndarray:
+    """
+    vectorized version of angle three point
+
+    Parameters
+    ----------
+    a : np.ndarray
+        first points
+    b : np.ndarray
+        second points
+    c : np.ndarray
+        third points
+
+    Returns
+    -------
+    np.ndarray
+        the angles formed by the three points
+
+    Examples
+    --------
+    >>> a = np.array(
+    ...  [
+    ...     [1, 1],
+    ...     [1, 1]
+    ...  ]
+    ... )
+    >>> b = np.array(
+    ...  [
+    ...     [3, 2],
+    ...     [3, 2]
+    ...  ]
+    ... )
+    >>> c = np.array(
+    ...  [
+    ...     [5, 4],
+    ...     [-2, -2]
+    ...  ]
+    ... )
+
+    >>> np.around(angle_three_point_vect(a, b, c), 3)
+    array([ 10.305, 161.565])
+    """
+    ba = b - a
+    ca = c - a
+
+    dot = np.sum(ba * ca, axis=1)
+    cosine_angle = dot / (np.linalg.norm(ba, axis=1) * np.linalg.norm(ca, axis=1))
+    angle = np.arccos(cosine_angle)
+
+    return np.degrees(angle)
+
+
 def angle_df(x):
     """
     Taken three alerts from a dataframe rows, computes the angle between the three alerts
