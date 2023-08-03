@@ -264,6 +264,23 @@ def orbit_elem_dataframe(orbit_elem, column_name):
     return df_orb_elem
 
 
+def get_last_detection(trajectory_df: pd.DataFrame) -> pd.DataFrame:
+    get_last = lambda x: list(x)[-1]  # noqa: E731
+    last_det = (
+        trajectory_df.sort_values("jd")
+        .groupby("trajectory_id")
+        .agg(
+            last_ra=("ra", get_last),
+            last_dec=("dec", get_last),
+            last_jd=("jd", get_last),
+            last_mag=("magpsf", get_last),
+            last_fid=("fid", get_last),
+        )
+        .reset_index()
+    )
+    return last_det
+
+
 def compute_df_orbit_param(
     trajectory_df,
     cpu_count,
@@ -312,9 +329,15 @@ def compute_df_orbit_param(
     Examples
     --------
 
-    >>> orb_elem = compute_df_orbit_param(ts.orbfit_samples, 2, "")
-
-    >>> assert_frame_equal(orb_elem, ts.orbfit_output)
+    >>> tr = pd.read_parquet("fink_fat/test/cluster_test/trajectories_sample.parquet")
+    >>> compute_df_orbit_param(tr, 2, "")
+       trajectory_id provisional designation     ref_epoch         a         e  ...   last_ra   last_dec       last_jd   last_mag  last_fid
+    0              0                 K22J00A  2.459715e+06  1.070227  0.137731  ...  4.621290  17.565801  2.459715e+06  18.274776         2
+    1              1                 K22J00B  2.459715e+06  0.771897  0.322908  ...  2.758656  17.599980  2.459715e+06  15.062812         2
+    2              2                 K22J00C  2.459715e+06  1.169447  0.155540  ...  0.908090  18.341969  2.459715e+06  18.537624         2
+    3              3                 K22J00D  2.459715e+06  0.743214  0.240508  ...  0.199920  18.665883  2.459715e+06  19.020517         2
+    <BLANKLINE>
+    [4 rows x 21 columns]
     """
 
     # of.prep_orbitfit(ram_dir)
@@ -358,7 +381,10 @@ def compute_df_orbit_param(
     of.final_clean(ram_dir)
 
     if len(results) > 0:
-        return orbit_elem_dataframe(np.array(results), orbfit_column_name)
+        orbits = orbit_elem_dataframe(np.array(results), orbfit_column_name)
+        last_det = get_last_detection(trajectory_df)
+        orbits = orbits.merge(last_det, on="trajectory_id")
+        return orbits
     else:  # pragma: no cover
         return pd.DataFrame(columns=orbfit_column_name)
 

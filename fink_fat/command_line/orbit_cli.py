@@ -5,6 +5,7 @@ import pandas as pd
 
 import fink_fat
 from fink_fat.others.utils import init_logging
+from fink_fat.orbit_fitting.orbfit_local import get_last_detection
 
 
 def intro_reset_orbit():  # pragma: no cover
@@ -53,7 +54,41 @@ def get_orbital_data(config, tr_df_path):  # pragma: no cover
     return traj_to_orbital, traj_no_orb
 
 
-def cluster_mode(config, traj_to_orbital):  # pragma: no cover
+def cluster_mode(
+    config: dict, traj_to_orbital: pd.DataFrame
+) -> pd.DataFrame:  # pragma: no cover
+    """
+    Compute orbits using the cluster mode
+
+    Parameters
+    ----------
+    config : dict
+        data of the configuration file
+    traj_to_orbital : pd.DataFrame
+        trajectory dataframe
+        mandatory columns: ra, dec, jd, magpsf, fid, trajectory_id
+
+    Returns
+    -------
+    pd.DataFrame
+        dataframe containing the orbital parameters of the input trajectories
+        columns: ref_epoch, a, e, i, long. node, arg. peric, mean anomaly, rms_a, rms_e,
+        rms_i, rms_long. node, rms_arg. peric, rms_mean anomaly, chi_reduced,
+        last_ra, last_dec, last_jd, last_mag, last_fid
+
+    Examples
+    --------
+    >>> tr = pd.read_parquet(traj_sample)
+    >>> config, output_path = init_cli({"--config": ""})
+    >>> cluster_mode(config, tr)
+       trajectory_id     ref_epoch         a         e         i  ...   last_ra   last_dec       last_jd   last_mag  last_fid
+    0              0  2.459715e+06  1.070227  0.137731  2.992601  ...  4.621290  17.565801  2.459715e+06  18.274776         2
+    1              1  2.459715e+06  0.771897  0.322908  3.337650  ...  2.758656  17.599980  2.459715e+06  15.062812         2
+    2              3  2.459715e+06  3.291413  0.721156  6.712754  ...  0.199920  18.665883  2.459715e+06  19.020517         2
+    3              2  2.459715e+06  1.169445  0.155539  1.847652  ...  0.908090  18.341969  2.459715e+06  18.537624         2
+    <BLANKLINE>
+    [4 rows x 20 columns]
+    """
     traj_to_orbital.to_parquet("tmp_traj.parquet")
 
     ram_dir = config["SOLVE_ORBIT_PARAMS"]["ram_dir"]
@@ -111,19 +146,12 @@ def cluster_mode(config, traj_to_orbital):  # pragma: no cover
         application,
     )
 
-    process = subprocess.Popen(
-        spark_submit,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        universal_newlines=True,
-        shell=True,
-    )
+    process = subprocess.run(spark_submit, shell=True)
 
-    stdout, stderr = process.communicate()
     if process.returncode != 0:
         logger = init_logging()
-        logger.info(stderr)
-        logger.info(stdout)
+        logger.info(process.stderr)
+        logger.info(process.stdout)
         exit()
 
     traj_pdf = pd.read_parquet("res_orb.parquet")
@@ -150,7 +178,24 @@ def cluster_mode(config, traj_to_orbital):  # pragma: no cover
     )
     orbit_results = pd.concat([traj_pdf["trajectory_id"], split_df], axis=1)
 
+    last_det = get_last_detection(traj_to_orbital)
+    orbit_results = orbit_results.merge(last_det, on="trajectory_id")
+
     os.remove("tmp_traj.parquet")
     os.remove("res_orb.parquet")
 
     return orbit_results
+
+
+if __name__ == "__main__":
+    from fink_science.tester import spark_unit_tests
+    from pandas.testing import assert_frame_equal  # noqa: F401
+    from fink_fat.command_line.utils_cli import init_cli  # noqa: F401
+
+    globs = globals()
+
+    traj_sample = "fink_fat/test/cluster_test/trajectories_sample.parquet"
+    globs["traj_sample"] = traj_sample
+
+    # Run the test suite
+    spark_unit_tests(globs)
