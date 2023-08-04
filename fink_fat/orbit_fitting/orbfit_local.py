@@ -345,7 +345,7 @@ def compute_df_orbit_param(
 
     >>> tr = pd.read_parquet("fink_fat/test/cluster_test/trajectories_sample.parquet")
     >>> orbits = compute_df_orbit_param(tr, 2, "")
-    >>> print(orbits)
+    >>> print(orbits.to_dict())
     >>> assert_frame_equal(
     ...     orbits.round(decimals=4),
     ...     ts2.local_orbit_test.round(decimals=4)
