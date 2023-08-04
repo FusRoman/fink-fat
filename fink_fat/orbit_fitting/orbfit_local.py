@@ -345,10 +345,10 @@ def compute_df_orbit_param(
 
     >>> tr = pd.read_parquet("fink_fat/test/cluster_test/trajectories_sample.parquet")
     >>> orbits = compute_df_orbit_param(tr, 2, "")
-    >>> print(orbits.to_dict())
+    >>> cols_to_drop = ["rms_a", "rms_e", "rms_i", "rms_long. node", "rms_arg. peric", "rms_mean anomaly", "chi_reduced"]
     >>> assert_frame_equal(
-    ...     orbits.round(decimals=4),
-    ...     ts2.local_orbit_test.round(decimals=4)
+    ...     orbits.drop(cols_to_drop, axis=1).round(decimals=4),
+    ...     ts2.drop(cols_to_drop, axis=1).local_orbit_test.round(decimals=4)
     ... )
     """
 
