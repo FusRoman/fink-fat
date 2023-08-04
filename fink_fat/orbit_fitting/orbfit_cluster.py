@@ -216,17 +216,20 @@ if __name__ == "__main__":
         noise_ntrials = int(sys.argv[5])
         prop_epoch = None if sys.argv[6] == "None" else float(sys.argv[6])
 
-        logger.info(
+        msg_info = """
+master: {}
+ram_dir: {}
+n_triplets: {}
+noise_ntrials: {}
+prop_epoch: {}
+""".format(
             master_adress,
-            " ",
             ram_dir,
-            " ",
             n_triplets,
-            " ",
             noise_ntrials,
-            " ",
             prop_epoch,
         )
+        logger.info(msg_info)
 
         spark = spark = (
             SparkSession.builder.master(master_adress)

@@ -264,6 +264,37 @@ def orbit_elem_dataframe(orbit_elem, column_name):
     return df_orb_elem
 
 
+def get_last_detection(trajectory_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Get the last detection for each trajectories in the input dataframe
+
+    Parameters
+    ----------
+    trajectory_df : pd.DataFrame
+        contains trajectory
+        mandatory columns: trajectory_id, ra, dec, jd, magpsf, fid
+
+    Returns
+    -------
+    pd.DataFrame
+        dataframe containing the last detection for each trajectories
+    """
+    get_last = lambda x: list(x)[-1]  # noqa: E731
+    last_det = (
+        trajectory_df.sort_values("jd")
+        .groupby("trajectory_id")
+        .agg(
+            last_ra=("ra", get_last),
+            last_dec=("dec", get_last),
+            last_jd=("jd", get_last),
+            last_mag=("magpsf", get_last),
+            last_fid=("fid", get_last),
+        )
+        .reset_index()
+    )
+    return last_det
+
+
 def compute_df_orbit_param(
     trajectory_df,
     cpu_count,
@@ -312,9 +343,13 @@ def compute_df_orbit_param(
     Examples
     --------
 
-    >>> orb_elem = compute_df_orbit_param(ts.orbfit_samples, 2, "")
-
-    >>> assert_frame_equal(orb_elem, ts.orbfit_output)
+    >>> tr = pd.read_parquet("fink_fat/test/cluster_test/trajectories_sample.parquet")
+    >>> orbits = compute_df_orbit_param(tr, 2, "")
+    >>> cols_to_drop = ["rms_a", "rms_e", "rms_i", "rms_long. node", "rms_arg. peric", "rms_mean anomaly", "chi_reduced"]
+    >>> assert_frame_equal(
+    ...     orbits.drop(cols_to_drop, axis=1).round(decimals=4),
+    ...     ts2.local_orbit_test.drop(cols_to_drop, axis=1).round(decimals=4)
+    ... )
     """
 
     # of.prep_orbitfit(ram_dir)
@@ -358,7 +393,10 @@ def compute_df_orbit_param(
     of.final_clean(ram_dir)
 
     if len(results) > 0:
-        return orbit_elem_dataframe(np.array(results), orbfit_column_name)
+        orbits = orbit_elem_dataframe(np.array(results), orbfit_column_name)
+        last_det = get_last_detection(trajectory_df)
+        orbits = orbits.merge(last_det, on="trajectory_id")
+        return orbits
     else:  # pragma: no cover
         return pd.DataFrame(columns=orbfit_column_name)
 
@@ -368,6 +406,7 @@ if __name__ == "__main__":  # pragma: no cover
     import doctest
     from pandas.testing import assert_frame_equal  # noqa: F401
     import fink_fat.test.test_sample as ts  # noqa: F401
+    import fink_fat.test.test_sample_2 as ts2  # noqa: F401
     from unittest import TestCase  # noqa: F401
     import shutil  # noqa: F401
     import filecmp  # noqa: F401
