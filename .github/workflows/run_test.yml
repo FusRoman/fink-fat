@@ -36,6 +36,7 @@ jobs:
     - name: Check env
       run: |
         echo "FINK_FAT: $FINK_FAT"
+        echo "ORBFIT: $ORBFIT_HOME"
         echo "SPARK_HOME: $SPARK_HOME"
         echo "SPARKLIB: $SPARKLIB"
         echo "PYTHONPATH: $PYTHONPATH"

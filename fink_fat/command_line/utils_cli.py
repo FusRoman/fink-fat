@@ -46,6 +46,14 @@ def string_to_bool(bool_str):
         )
 
 
+class EnvInterpolation(configparser.BasicInterpolation):
+    """Interpolation which expands environment variables in values."""
+
+    def before_get(self, parser, section, option, value, defaults):
+        value = super().before_get(parser, section, option, value, defaults)
+        return os.path.expandvars(value)
+
+
 def init_cli(arguments):
     """
     Read the fink_fat configuration file of fink_fat specified by the --config argument
@@ -85,7 +93,7 @@ def init_cli(arguments):
     >>> os.rmdir("fink_fat_out")
     """
     # read the config file
-    config = configparser.ConfigParser(os.environ)
+    config = configparser.ConfigParser(os.environ, interpolation=EnvInterpolation())
 
     if arguments["--config"]:
         if os.path.exists(arguments["--config"]):
