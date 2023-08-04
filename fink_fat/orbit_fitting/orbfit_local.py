@@ -344,14 +344,11 @@ def compute_df_orbit_param(
     --------
 
     >>> tr = pd.read_parquet("fink_fat/test/cluster_test/trajectories_sample.parquet")
-    >>> compute_df_orbit_param(tr, 2, "")
-       trajectory_id provisional designation     ref_epoch         a         e  ...   last_ra   last_dec       last_jd   last_mag  last_fid
-    0              0                 K22J00A  2.459715e+06  1.070227  0.137731  ...  4.621290  17.565801  2.459715e+06  18.274776         2
-    1              1                 K22J00B  2.459715e+06  0.771897  0.322908  ...  2.758656  17.599980  2.459715e+06  15.062812         2
-    2              2                 K22J00C  2.459715e+06  1.169447  0.155540  ...  0.908090  18.341969  2.459715e+06  18.537624         2
-    3              3                 K22J00D  2.459715e+06  0.743214  0.240508  ...  0.199920  18.665883  2.459715e+06  19.020517         2
-    <BLANKLINE>
-    [4 rows x 21 columns]
+    >>> orbits = compute_df_orbit_param(tr, 2, "")
+    >>> assert_frame_equal(
+    ...     orbits.round(decimals=4),
+    ...     ts2.local_orbit_test.round(decimals=4)
+    ... )
     """
 
     # of.prep_orbitfit(ram_dir)
@@ -408,6 +405,7 @@ if __name__ == "__main__":  # pragma: no cover
     import doctest
     from pandas.testing import assert_frame_equal  # noqa: F401
     import fink_fat.test.test_sample as ts  # noqa: F401
+    import fink_fat.test.test_sample_2 as ts2  # noqa: F401
     from unittest import TestCase  # noqa: F401
     import shutil  # noqa: F401
     import filecmp  # noqa: F401

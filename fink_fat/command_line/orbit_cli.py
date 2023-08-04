@@ -80,14 +80,11 @@ def cluster_mode(
     --------
     >>> tr = pd.read_parquet(traj_sample)
     >>> config, output_path = init_cli({"--config": ""})
-    >>> cluster_mode(config, tr)
-       trajectory_id     ref_epoch         a         e         i  ...   last_ra   last_dec       last_jd   last_mag  last_fid
-    0              0  2.459715e+06  1.070227  0.137731  2.992601  ...  4.621290  17.565801  2.459715e+06  18.274776         2
-    1              1  2.459715e+06  0.771897  0.322908  3.337650  ...  2.758656  17.599980  2.459715e+06  15.062812         2
-    2              3  2.459715e+06  3.291413  0.721156  6.712754  ...  0.199920  18.665883  2.459715e+06  19.020517         2
-    3              2  2.459715e+06  1.169445  0.155539  1.847652  ...  0.908090  18.341969  2.459715e+06  18.537624         2
-    <BLANKLINE>
-    [4 rows x 20 columns]
+    >>> orbits = cluster_mode(config, tr)
+    >>> assert_frame_equal(
+    ...     orbits.round(decimals=4),
+    ...     ts2.cluster_mode_cli_test.round(decimals=4)
+    ... )
     """
     traj_to_orbital.to_parquet("tmp_traj.parquet")
 
@@ -191,6 +188,7 @@ if __name__ == "__main__":
     from fink_science.tester import spark_unit_tests
     from pandas.testing import assert_frame_equal  # noqa: F401
     from fink_fat.command_line.utils_cli import init_cli  # noqa: F401
+    import fink_fat.test.test_sample_2 as ts2  # noqa: F401
 
     globs = globals()
 
