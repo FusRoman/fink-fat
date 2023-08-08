@@ -160,7 +160,31 @@ def init_kalman(
     5              5    22     16     8     12     4    16     27     10  12  -1.166667 -0.333333   kf 5
     6              6    21     17    15     23    24    28     24     23   4  -1.500000  1.500000   kf 6
     7              7    18      1    19     16     3    24      2      7  21   0.047619  0.714286   kf 7
+
+    >>> df = pd.DataFrame(columns=["ra", "dec", "jd", "magpsf", "fid", "trajectory_id"])
+    >>> init_kalman(df)
+    Empty DataFrame
+    Columns: [ra, dec, jd, magpsf, fid, trajectory_id]
+    Index: []
     """
+    if len(night_pdf) == 0:
+        return pd.DataFrame(
+            columns=[
+                "trajectory_id",
+                "ra_0",
+                "dec_0",
+                "ra_1",
+                "dec_1",
+                "jd_0",
+                "jd_1",
+                "mag_1",
+                "fid_1",
+                "dt",
+                "vel_ra",
+                "vel_dec",
+                "kalman",
+            ]
+        )
     # remove dbscan noise
     night_pdf = night_pdf[night_pdf["trajectory_id"] != -1.0]
     return (
