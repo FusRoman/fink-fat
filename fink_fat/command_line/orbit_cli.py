@@ -74,7 +74,7 @@ def cluster_mode(
         dataframe containing the orbital parameters of the input trajectories
         columns: ref_epoch, a, e, i, long. node, arg. peric, mean anomaly, rms_a, rms_e,
         rms_i, rms_long. node, rms_arg. peric, rms_mean anomaly, chi_reduced,
-        last_ra, last_dec, last_jd, last_mag, last_fid
+        last_ra, last_dec, last_jd, last_mag, last_fid, ssoCandId
 
     Examples
     --------
