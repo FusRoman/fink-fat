@@ -2,8 +2,7 @@ import numpy as np
 import pandas as pd
 from typing import Tuple
 
-from fink_fat.orbit_fitting.orbfit_local import compute_df_orbit_param
-from fink_fat.command_line.orbit_cli import cluster_mode
+from fink_fat.command_line.orbit_cli import switch_local_cluster
 
 
 def generate_fake_traj_id(orb_pdf: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
@@ -67,6 +66,9 @@ def orbit_associations(
         .rename({"estimator_id": "ssoCandId"}, axis=1)
         .drop("flag", axis=1)
     )
+    if len(orbit_alert_assoc) == 0:
+        return orbits, trajectory_df
+
     updated_sso_id = orbit_alert_assoc["ssoCandId"].unique()
     # get the trajectories to update
     traj_to_update = trajectory_df[trajectory_df["ssoCandId"].isin(updated_sso_id)]
@@ -79,19 +81,7 @@ def orbit_associations(
     ]["ssoCandId"]
     assert len(duplicated_id) == 0
 
-    nb_orb = len(traj_to_new_orbit["trajectory_id"].unique())
-    if nb_orb > int(config["SOLVE_ORBIT_PARAMS"]["local_mode_limit"]):
-        new_orbit_pdf = cluster_mode(config, traj_to_new_orbit)
-    else:
-        new_orbit_pdf = compute_df_orbit_param(
-            traj_to_new_orbit,
-            int(config["SOLVE_ORBIT_PARAMS"]["cpu_count"]),
-            config["SOLVE_ORBIT_PARAMS"]["ram_dir"],
-            int(config["SOLVE_ORBIT_PARAMS"]["n_triplets"]),
-            int(config["SOLVE_ORBIT_PARAMS"]["noise_ntrials"]),
-            config["SOLVE_ORBIT_PARAMS"]["prop_epoch"],
-            int(config["SOLVE_ORBIT_PARAMS"]["orbfit_verbose"]),
-        ).drop("provisional designation", axis=1)
+    new_orbit_pdf = switch_local_cluster(config, traj_to_new_orbit)
 
     # remove the failed orbits
     new_orbit_pdf = new_orbit_pdf[new_orbit_pdf["a"] != -1.0]

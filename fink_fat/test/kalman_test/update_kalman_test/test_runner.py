@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from pandas.testing import assert_frame_equal
-from fink_fat.associations.association_kalman import update_trajectories
+from fink_fat.associations.association_kalman import kalman_association
 
 from fink_fat.test.kalman_test.update_kalman_test import data as d
 
@@ -29,6 +29,7 @@ def assert_test(
         check_index_type=False,
         check_dtype=False,
     )
+
     assert_frame_equal(
         new_kalman.fillna(-1.0)[new_kalman.columns[:-1]].reset_index(drop=True),
         result_kalman.fillna(-1.0).reset_index(drop=True),
@@ -39,7 +40,7 @@ def assert_test(
 
 def aux_test_runner(f):
     trajectory_df, kalman_pdf, new_alerts = f()
-    new_traj, new_kalman = update_trajectories(trajectory_df, kalman_pdf, new_alerts)
+    new_traj, new_kalman = kalman_association(trajectory_df, kalman_pdf, new_alerts)
 
     # print("   FUNCTION RESULTS   ")
     # print(new_traj.fillna(-1.0))
