@@ -391,6 +391,11 @@ def kalman_association(
     new_traj = pd.concat([res_tr, new_traj])
     new_kalman = pd.concat([res_kalman, new_kalman])
 
+    # add a column to know which trajectories has been updated this night (Y: yes, N: no)
+    with pd.option_context("mode.chained_assignment", None):
+        new_traj["updated"] = "Y"
+        non_tr_update_df["updated"] = "N"
+
     traj_results = pd.concat([non_tr_update_df, new_traj])
     kalman_results = pd.concat([non_kalman_update, new_kalman])
 

@@ -5,7 +5,7 @@ from typing import Tuple
 import pandas as pd
 
 import fink_fat
-from fink_fat.others.utils import init_logging
+from fink_fat.others.utils import init_logging, LoggerNewLine
 from fink_fat.orbit_fitting.orbfit_local import (
     get_last_detection,
     compute_df_orbit_param,
@@ -232,6 +232,8 @@ def kalman_to_orbit(
     trajectory_orb: pd.DataFrame,
     kalman_df: pd.DataFrame,
     orbits: pd.DataFrame,
+    logger: LoggerNewLine,
+    verbose: bool,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Compute and return the orbits for the trajectories with enough points found by the kalman filters
@@ -249,6 +251,10 @@ def kalman_to_orbit(
         the kalman filters parameters
     orbits : pd.DataFrame
         the orbits parameters
+    logger : LoggerNewLine
+        the logging object used to print the logs
+    verbose : bool
+        if true, print the logs
 
     Returns
     -------
@@ -266,11 +272,24 @@ def kalman_to_orbit(
     if len(large_traj) == 0:
         return trajectory_df, kalman_df, trajectory_orb, orbits
 
+    # to be send to the orbit fitting,
+    # a trajectory must have a number of point above the orbit point limit set in the config file
+    # and must have been updated during the current night
     traj_to_orb = trajectory_df[
-        trajectory_df["trajectory_id"].isin(large_traj.index.values)
+        (trajectory_df["trajectory_id"].isin(large_traj.index.values))
+        & (trajectory_df["updated"] == "Y")
     ].sort_values(["trajectory_id", "jd"])
+    nb_traj_to_orb = len(trajectory_df["trajectory_id"].unique())
+    if verbose:
+        logger.info(
+            f"number of trajectories send to the orbit fitting: {nb_traj_to_orb}"
+        )
     new_orbits = switch_local_cluster(config, traj_to_orb)
     new_orbits = new_orbits[new_orbits["a"] != -1.0]
+    if verbose:
+        logger.info(
+            f"number of orbit fitted: {len(new_orbits)} ({(len(new_orbits) / nb_traj_to_orb) * 100} %)"
+        )
 
     # get the trajectories with orbit and assign the ssoCandId
     new_traj_id = new_orbits["trajectory_id"]

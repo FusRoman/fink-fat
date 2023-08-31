@@ -470,9 +470,9 @@ def assig_tags(
     }
 
     assert len(np.unique(orb_df["trajectory_id"])) == len(int_id_to_tags)
-
-    orb_df["ssoCandId"] = orb_df["trajectory_id"].map(int_id_to_tags)
-    traj_orb_df["ssoCandId"] = traj_orb_df["trajectory_id"].map(int_id_to_tags)
+    with pd.option_context("mode.chained_assignment", None):
+        orb_df["ssoCandId"] = orb_df["trajectory_id"].map(int_id_to_tags)
+        traj_orb_df["ssoCandId"] = traj_orb_df["trajectory_id"].map(int_id_to_tags)
 
     orb_df = orb_df.drop("trajectory_id", axis=1)
     traj_orb_df = traj_orb_df.drop("trajectory_id", axis=1)

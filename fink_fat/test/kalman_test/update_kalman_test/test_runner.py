@@ -40,7 +40,9 @@ def assert_test(
 
 def aux_test_runner(f):
     trajectory_df, kalman_pdf, new_alerts = f()
-    new_traj, new_kalman = kalman_association(trajectory_df, kalman_pdf, new_alerts)
+    new_traj, new_kalman = kalman_association(
+        trajectory_df, kalman_pdf, new_alerts, True
+    )
 
     # print("   FUNCTION RESULTS   ")
     # print(new_traj.fillna(-1.0))
