@@ -62,9 +62,9 @@ def orbit_associations(
         traj_cols_to_keep.append("ffdistnr")
 
     orbit_alert_assoc = (
-        new_alerts[new_alerts["flag"] == 5]
+        new_alerts[new_alerts["roid"] == 5]
         .rename({"estimator_id": "ssoCandId"}, axis=1)
-        .drop("flag", axis=1)
+        .drop("roid", axis=1)
     )
     if len(orbit_alert_assoc) == 0:
         return orbits, trajectory_df

@@ -204,6 +204,7 @@ def tracklets_associations(
 
     """
     traj_id_to_update = np.sort(new_alerts["estimator_id"].unique())
+    traj_id_to_update = traj_id_to_update[traj_id_to_update != -1]
 
     # get the trajectory to update
     mask_tr_update = trajectory_df["trajectory_id"].isin(traj_id_to_update)
@@ -226,7 +227,6 @@ def tracklets_associations(
         current_kalman = kalman_to_update[kalman_to_update["trajectory_id"] == tr_id]
         current_cluster = cluster_df[cluster_df["estimator_id"] == tr_id]
         current_cluster_id = np.sort(current_cluster["trajectory_id"].unique())
-
         for cl_id in current_cluster_id:
             next_extended_traj, next_updated_kalman = trajectory_extension(
                 current_tr,
@@ -280,10 +280,13 @@ def single_alerts_associations(
         * new trajectories with the new added alerts
         * new kalman filters
     """
-    cluster_df = new_alerts[new_alerts["trajectory_id"] == -1]
+    cluster_df = new_alerts[
+        (new_alerts["trajectory_id"] == -1) & (new_alerts["estimator_id"] != -1)
+    ]
     traj_counts_duplicates = cluster_df["estimator_id"].value_counts().sort_index()
     new_traj_id = np.arange(max_tr_id, max_tr_id + np.sum(traj_counts_duplicates))
-    cluster_df["trajectory_id"] = new_traj_id
+    with pd.option_context("mode.chained_assignment", None):
+        cluster_df["trajectory_id"] = new_traj_id
     cluster_df = cluster_df.sort_values("estimator_id")
 
     if len(cluster_df) == 0:
@@ -331,7 +334,10 @@ def single_alerts_associations(
 
 
 def kalman_association(
-    trajectory_df: pd.DataFrame, kalman_df: pd.DataFrame, new_alerts: pd.DataFrame
+    trajectory_df: pd.DataFrame,
+    kalman_df: pd.DataFrame,
+    new_alerts: pd.DataFrame,
+    confirmed_sso: bool = False,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Update the kalman filters and the trajectories with the new associations found during the night.
@@ -346,6 +352,8 @@ def kalman_association(
     new_alerts : pd.DataFrame
         dataframe containing the alerts from the current nigth to associates with the kalman filters,
         the dataframe must contains the trajectory_id corresponding to the seeds find by the seeding.
+    confirmed_sso : boolean
+        if true, used the confirmed sso (for test purpose)
 
     Returns
     -------
@@ -358,7 +366,13 @@ def kalman_association(
     --------
     #### see fink_fat/test/kalman_test/update_kalman_test
     """
+    if confirmed_sso:
+        roid_flag = [3, 4]
+    else:
+        roid_flag = [1, 2, 4]
+    new_alerts = new_alerts[new_alerts["roid"].isin(roid_flag)]
     new_alerts = new_alerts.explode(["ffdistnr", "estimator_id"])
+    new_alerts["estimator_id"] = new_alerts["estimator_id"].fillna(-1).astype(int)
     traj_id_to_update = np.sort(new_alerts["estimator_id"].unique())
 
     # get the trajectory to update

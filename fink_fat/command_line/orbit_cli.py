@@ -211,13 +211,16 @@ def switch_local_cluster(config: dict, traj_orb: pd.DataFrame) -> pd.DataFrame:
     if nb_orb > int(config["SOLVE_ORBIT_PARAMS"]["local_mode_limit"]):
         new_orbit_pdf = cluster_mode(config, traj_orb)
     else:
+        config_epoch = config["SOLVE_ORBIT_PARAMS"]["prop_epoch"]
+        prop_epoch = None if config_epoch == "None" else float(config_epoch)
+
         new_orbit_pdf = compute_df_orbit_param(
             traj_orb,
             int(config["SOLVE_ORBIT_PARAMS"]["cpu_count"]),
             config["SOLVE_ORBIT_PARAMS"]["ram_dir"],
             int(config["SOLVE_ORBIT_PARAMS"]["n_triplets"]),
             int(config["SOLVE_ORBIT_PARAMS"]["noise_ntrials"]),
-            config["SOLVE_ORBIT_PARAMS"]["prop_epoch"],
+            prop_epoch,
             int(config["SOLVE_ORBIT_PARAMS"]["orbfit_verbose"]),
         ).drop("provisional designation", axis=1)
     return new_orbit_pdf
@@ -257,22 +260,16 @@ def kalman_to_orbit(
     """
     # get the trajectories large enough to go to the orbit fitting
     orbit_limit = int(config["SOLVE_ORBIT_PARAMS"]["orbfit_limit"])
-    traj_size = (
-        trajectory_df.groupby("trajectory_id").agg(traj_size=("ra", len)).reset_index()
-    )
-    large_traj = traj_size[traj_size["traj_size"] >= orbit_limit]
+    traj_size = trajectory_df["trajectory_id"].value_counts()
+    large_traj = traj_size[traj_size >= orbit_limit]
+
     if len(large_traj) == 0:
         return trajectory_df, kalman_df, trajectory_orb, orbits
+
     traj_to_orb = trajectory_df[
-        trajectory_df["trajectory_id"].isin(large_traj["trajectory_id"])
+        trajectory_df["trajectory_id"].isin(large_traj.index.values)
     ].sort_values(["trajectory_id", "jd"])
-    print(
-        traj_to_orb[
-            ["jd", "ra", "dec", "ssnamenr", "magpsf", "objectId", "trajectory_id"]
-        ]
-    )
     new_orbits = switch_local_cluster(config, traj_to_orb)
-    print(new_orbits)
     new_orbits = new_orbits[new_orbits["a"] != -1.0]
 
     # get the trajectories with orbit and assign the ssoCandId
