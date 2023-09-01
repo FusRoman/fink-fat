@@ -3,6 +3,7 @@ import subprocess
 from typing import Tuple
 
 import pandas as pd
+import numpy as np
 
 import fink_fat
 from fink_fat.others.utils import init_logging, LoggerNewLine
@@ -279,7 +280,7 @@ def kalman_to_orbit(
         (trajectory_df["trajectory_id"].isin(large_traj.index.values))
         & (trajectory_df["updated"] == "Y")
     ].sort_values(["trajectory_id", "jd"])
-    nb_traj_to_orb = len(trajectory_df["trajectory_id"].unique())
+    nb_traj_to_orb = len(traj_to_orb["trajectory_id"].unique())
     if verbose:
         logger.info(
             f"number of trajectories send to the orbit fitting: {nb_traj_to_orb}"
@@ -292,7 +293,7 @@ def kalman_to_orbit(
         )
 
     # get the trajectories with orbit and assign the ssoCandId
-    new_traj_id = new_orbits["trajectory_id"]
+    new_traj_id = new_orbits["trajectory_id"].values
     new_traj_orb = traj_to_orb[traj_to_orb["trajectory_id"].isin(new_traj_id)]
     new_orbits, new_traj_orb = assig_tags(new_orbits, new_traj_orb, len(orbits) + 1)
 
@@ -301,8 +302,27 @@ def kalman_to_orbit(
     trajectory_orb = pd.concat([trajectory_orb, new_traj_orb])
 
     # remove the new trajectories with orbit from trajectory_df and the associated kalman filters
-    trajectory_df = trajectory_df[~trajectory_df["trajectory_id"].isin(new_traj_id)]
-    kalman_df = kalman_df[~kalman_df["trajectory_id"].isin(new_traj_id)]
+    trajectory_df = trajectory_df[
+        ~trajectory_df["trajectory_id"].isin(new_traj_id)
+    ].reset_index(drop=True)
+    kalman_df = kalman_df[~kalman_df["trajectory_id"].isin(new_traj_id)].reset_index(
+        drop=True
+    )
+    failed_orbit = np.setdiff1d(large_traj.index.values, new_traj_id)
+    mask_failed = kalman_df["trajectory_id"].isin(failed_orbit)
+    with pd.option_context("mode.chained_assignment", None):
+        kalman_df.loc[mask_failed, "orbfit_test"] = (
+            kalman_df.loc[mask_failed, "orbfit_test"] + 1
+        )
+
+    print()
+    print(large_traj.index.values)
+    print(new_traj_id)
+    print(failed_orbit)
+    print(mask_failed)
+    print(kalman_df[mask_failed])
+    print(kalman_df["orbfit_test"].value_counts())
+    print()
 
     return trajectory_df, kalman_df, trajectory_orb, orbits
 
