@@ -3,6 +3,7 @@ import pandas as pd
 from typing import Tuple
 
 from fink_fat.command_line.orbit_cli import switch_local_cluster
+from fink_fat.others.utils import LoggerNewLine
 
 
 def generate_fake_traj_id(orb_pdf: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
@@ -36,7 +37,9 @@ def orbit_associations(
     new_alerts: pd.DataFrame,
     trajectory_df: pd.DataFrame,
     orbits: pd.DataFrame,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    logger: LoggerNewLine,
+    verbose: bool,
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Add the alerts 5-flagged to the trajectory_df and recompute the orbit with the new points.
 
@@ -50,11 +53,15 @@ def orbit_associations(
         contains the alerts of the trajectories
     orbits : pd.DataFrame
         contains the orbital parameters of the orbits
+    logger : LoggerNewLine
+        logger class used to print the logs
+    verbose : bool
+        if true, print the logs
 
     Returns
     -------
-    Tuple[pd.DataFrame, pd.DataFrame]
-        the new orbits and the updated trajectories
+    Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]
+        the new orbits, the updated trajectories and the old orbits
     """
     orbit_cols_to_keep = list(orbits.columns)
     traj_cols_to_keep = list(trajectory_df.columns)
@@ -67,7 +74,7 @@ def orbit_associations(
         .drop("roid", axis=1)
     )
     if len(orbit_alert_assoc) == 0:
-        return orbits, trajectory_df
+        return orbits, trajectory_df, pd.DataFrame(columns=orbits.columns)
 
     updated_sso_id = orbit_alert_assoc["ssoCandId"].unique()
     # get the trajectories to update
@@ -75,6 +82,9 @@ def orbit_associations(
     # add the new alerts
     traj_to_new_orbit = pd.concat([traj_to_update, orbit_alert_assoc])
     traj_to_new_orbit, trid_to_ssoid = generate_fake_traj_id(traj_to_new_orbit)
+
+    if verbose:
+        logger.info(f"number of orbits to update: {len(updated_sso_id)}")
 
     duplicated_id = orbit_alert_assoc[
         orbit_alert_assoc[["ssoCandId", "jd"]].duplicated()
@@ -85,13 +95,19 @@ def orbit_associations(
 
     # remove the failed orbits
     new_orbit_pdf = new_orbit_pdf[new_orbit_pdf["a"] != -1.0]
+    if verbose:
+        logger.info(
+            f"number of successfull updated orbits: {len(new_orbit_pdf)} ({(len(new_orbit_pdf) / len(updated_sso_id)) * 100} %)"
+        )
     new_orbit_pdf["ssoCandId"] = new_orbit_pdf["trajectory_id"].map(trid_to_ssoid)
     updated_id = new_orbit_pdf["ssoCandId"]
 
     # update orbit
-    old_orbit = orbits[~orbits["ssoCandId"].isin(updated_id)]
+    mask_orbit_update = orbits["ssoCandId"].isin(updated_id)
+    current_orbit = orbits[~mask_orbit_update]
+    old_orbit = orbits[mask_orbit_update]
     old_orbit_len = len(orbits)
-    orbits = pd.concat([old_orbit, new_orbit_pdf])[orbit_cols_to_keep]
+    orbits = pd.concat([current_orbit, new_orbit_pdf])[orbit_cols_to_keep]
     assert len(orbits) == old_orbit_len
 
     # update traj
@@ -99,5 +115,4 @@ def orbit_associations(
     old_traj = trajectory_df[~trajectory_df["ssoCandId"].isin(updated_id)]
 
     trajectory_df = pd.concat([old_traj, new_traj])[traj_cols_to_keep]
-
-    return orbits, trajectory_df
+    return orbits, trajectory_df, old_orbit

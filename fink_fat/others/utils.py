@@ -84,6 +84,14 @@ class CustomTZFormatter(logging.Formatter):  # pragma: no cover
 
 
 class LoggerNewLine(logging.Logger):
+    """
+    A custom logger class adding only a method to print a newline.
+
+    Examples
+    --------
+    logger.newline()
+    """
+
     def __init__(self, name: str, level: int = 0) -> None:
         super().__init__(name, level)
         ch = logging.StreamHandler()
@@ -123,7 +131,7 @@ class LoggerNewLine(logging.Logger):
         # Switch handler, output a blank line
         self.removeHandler(self.console_handler)
         self.addHandler(self.blank_handler)
-        for i in range(how_many_lines):
+        for _ in range(how_many_lines):
             self.info("\n")
 
         # Switch back

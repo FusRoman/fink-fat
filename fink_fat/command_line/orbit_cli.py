@@ -314,16 +314,6 @@ def kalman_to_orbit(
         kalman_df.loc[mask_failed, "orbfit_test"] = (
             kalman_df.loc[mask_failed, "orbfit_test"] + 1
         )
-
-    print()
-    print(large_traj.index.values)
-    print(new_traj_id)
-    print(failed_orbit)
-    print(mask_failed)
-    print(kalman_df[mask_failed])
-    print(kalman_df["orbfit_test"].value_counts())
-    print()
-
     return trajectory_df, kalman_df, trajectory_orb, orbits
 
 
