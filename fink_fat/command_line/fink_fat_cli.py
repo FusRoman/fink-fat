@@ -1,6 +1,7 @@
 """
 Usage:
     fink_fat associations (mpc | candidates) [--night <date>] [options]
+    fink_fat kalman (mpc | candidates) [--night <date>] [options]
     fink_fat solve_orbit (mpc | candidates) (local | cluster) [options]
     fink_fat merge_orbit (mpc | candidates) [options]
     fink_fat offline (mpc | candidates) (local | cluster) <end> [<start>] [options]
@@ -10,6 +11,8 @@ Usage:
 
 Options:
   associations                     Perform associations of alert to return a set of trajectories candidates.
+  kalman                           Perform associations of alerts with the kalman filters and the orbits
+                                   (Must be used with the new fink-science asteroid module)
   solve_orbit                      Resolve a dynamical inverse problem to return a set of orbital elements from
                                    the set of trajectories candidates.
   merge_orbit                      Merge the orbit candidates if the both trajectories can belong to the same solar system objects.
@@ -68,6 +71,11 @@ def fink_fat_main(arguments):
         from fink_fat.command_line.cli_main.associations import cli_associations
 
         cli_associations(arguments, config, output_path)
+
+    elif arguments["kalman"]:
+        from fink_fat.command_line.cli_main.kalman import cli_kalman_associations
+
+        cli_kalman_associations(arguments, config, output_path)
 
     elif arguments["solve_orbit"]:
         from fink_fat.command_line.cli_main.solve_orbit import cli_solve_orbit
