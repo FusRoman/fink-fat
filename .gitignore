@@ -154,7 +154,7 @@ mpcobs/
 OrbitFit
 asteroid_study/*.png
 asteroid_study/residuals/
-trajectory_df.parquet
+# trajectory_df.parquet
 
 fink_fat/others/perf_test
 

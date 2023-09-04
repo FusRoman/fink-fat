@@ -63,6 +63,8 @@ def orbit_associations(
     Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]
         the new orbits, the updated trajectories and the old orbits
     """
+    if verbose:
+        logger.info("start the associations with the orbits")
     orbit_cols_to_keep = list(orbits.columns)
     traj_cols_to_keep = list(trajectory_df.columns)
     if "ffdistnr" not in traj_cols_to_keep:
@@ -99,6 +101,7 @@ def orbit_associations(
         logger.info(
             f"number of successfull updated orbits: {len(new_orbit_pdf)} ({(len(new_orbit_pdf) / len(updated_sso_id)) * 100} %)"
         )
+        logger.newline(2)
     new_orbit_pdf["ssoCandId"] = new_orbit_pdf["trajectory_id"].map(trid_to_ssoid)
     updated_id = new_orbit_pdf["ssoCandId"]
 

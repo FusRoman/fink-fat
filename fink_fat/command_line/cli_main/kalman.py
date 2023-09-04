@@ -21,7 +21,9 @@ from fink_fat.kalman.init_kalman import init_kalman
 from fink_fat.command_line.orbit_cli import kalman_to_orbit
 
 
-def get_default_input() -> Tuple[pd.DataFrame, pd.DataFrame]:
+def get_default_input() -> (
+    Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]
+):
     trajectory_orb = pd.DataFrame(
         columns=[
             "objectId",
@@ -35,6 +37,43 @@ def get_default_input() -> Tuple[pd.DataFrame, pd.DataFrame]:
             "nid",
             "ssoCandId",
             "ffdistnr",
+        ]
+    )
+
+    trajectory_df = pd.DataFrame(
+        columns=[
+            "objectId",
+            "candid",
+            "ra",
+            "dec",
+            "jd",
+            "magpsf",
+            "sigmapsf",
+            "fid",
+            "ssnamenr",
+            "roid",
+            "estimator_id",
+            "ffdistnr",
+            "trajectory_id",
+        ]
+    )
+
+    kalman_df = pd.DataFrame(
+        columns=[
+            "trajectory_id",
+            "ra_0",
+            "dec_0",
+            "ra_1",
+            "dec_1",
+            "jd_0",
+            "jd_1",
+            "mag_1",
+            "fid_1",
+            "dt",
+            "vel_ra",
+            "vel_dec",
+            "kalman",
+            "orbfit_test",
         ]
     )
 
@@ -62,7 +101,7 @@ def get_default_input() -> Tuple[pd.DataFrame, pd.DataFrame]:
             "ssoCandId",
         ]
     )
-    return trajectory_orb, orbits
+    return trajectory_df, kalman_df, trajectory_orb, orbits
 
 
 def load_sso_data(sso_path: pd.DataFrame) -> pd.DataFrame:
@@ -117,6 +156,17 @@ def kalman_window_management(
     return trajectory_df, kalman_df, nb_removed_kalman
 
 
+def seeds_new_id(seeds: pd.DataFrame, kalman_df: pd.DataFrame) -> pd.DataFrame:
+    max_traj_id = kalman_df["trajectory_id"].max() + 1
+    clusters_id = seeds["trajectory_id"].unique()
+    new_traj_id = np.arange(max_traj_id, max_traj_id + len(clusters_id)).astype(int)
+    assert len(new_traj_id) == len(clusters_id)
+    map_new_tr = {cl_id: tr_id for tr_id, cl_id in zip(new_traj_id, clusters_id)}
+    with pd.option_context("mode.chained_assignment", None):
+        seeds["trajectory_id"] = seeds["trajectory_id"].map(map_new_tr)
+    return seeds
+
+
 def cli_kalman_associations(arguments: dict, config: dict, output_path: str):
     logger = init_logging()
 
@@ -136,11 +186,11 @@ def cli_kalman_associations(arguments: dict, config: dict, output_path: str):
     # --------------------------------------------------------------------------------#
     ## fink fat command line association
 
-    # roid_output_path = "pipeline_output/roid_data/year=2021/month=6/day=2"
     roid_output_path = config["OUTPUT"]["fink_roid_output"]
 
     roid_output_path = os.path.join(
-        f"year={current_datetime.year}/month={current_datetime.month}/day={current_datetime.day}"
+        roid_output_path,
+        f"year={current_datetime.year}/month={current_datetime.month}/day={current_datetime.day}",
     )
     if not os.path.exists(roid_output_path):
         logger.info(f"roid output path does not exists, {roid_output_path}")
@@ -160,7 +210,7 @@ roid count:
             )
         )
 
-    trajectory_orb, orbits = get_default_input()
+    trajectory_df, kalman_df, trajectory_orb, orbits = get_default_input()
 
     # get path of the fink fat outputs
     path_orbit = os.path.join(output_path, "orbital.parquet")
@@ -171,16 +221,46 @@ roid count:
     path_old_orbits = os.path.join(output_path, "old_orbits.parquet")
 
     if os.path.exists(path_orbit) and os.path.exists(path_trajectory_orb):
-        logger.info("orbits file detected, start the associations with the orbits")
         orbits = pd.read_parquet(path_orbit)
         trajectory_orb = pd.read_parquet(path_trajectory_orb)
-        orbits, trajectory_orb, old_orbits = orbit_associations(
-            config, alerts_night, trajectory_orb, orbits, logger, True
-        )
-        if os.path.exists(path_old_orbits):
-            save_old_orbits = pd.read_parquet(path_old_orbits)
-            old_orbits = pd.concat([save_old_orbits, old_orbits])
-        old_orbits.to_parquet(path_old_orbits, index=False)
+
+    if os.path.exists(path_trajectory_df) and os.path.exists(path_kalman):
+        trajectory_df = pd.read_parquet(path_trajectory_df)
+        kalman_df = pd.read_pickle(path_kalman)
+
+        if len(trajectory_df) > 0:
+            last_tr_date = Time(kalman_df["jd_1"], format="jd").to_datetime()
+            if len(orbits) > 0:
+                last_orbits_date = Time(orbits["last_jd"], format="jd").to_datetime()
+            else:
+                last_orbits_date = last_tr_date
+            last_request_date = max(last_tr_date.max(), last_orbits_date.max())
+
+            if last_request_date == current_datetime:
+                logger.newline()
+                logger.info("ERROR !!!")
+                logger.info("Association already done for this night.")
+                logger.info("Wait a next observation night to do new association")
+                logger.info("or run 'fink_fat solve_orbit' to get orbital_elements.")
+                exit()
+            if last_request_date > current_datetime:
+                logger.newline()
+                logger.info("ERROR !!!")
+                logger.info(
+                    "Query alerts from a night before the last night in the recorded trajectory/old_observations."
+                )
+                logger.info(
+                    "Maybe try with a more recent night or reset the associations with 'fink_fat association -r'"
+                )
+                exit()
+
+    orbits, trajectory_orb, old_orbits = orbit_associations(
+        config, alerts_night, trajectory_orb, orbits, logger, is_verbose
+    )
+    if os.path.exists(path_old_orbits):
+        save_old_orbits = pd.read_parquet(path_old_orbits)
+        old_orbits = pd.concat([save_old_orbits, old_orbits])
+    old_orbits.to_parquet(path_old_orbits, index=False)
 
     confirmed_sso = object_class == "Solar System MPC"
     if confirmed_sso:
@@ -189,7 +269,9 @@ roid count:
         keep_flags = [1, 2, 4]
     sso_night = alerts_night[alerts_night["roid"].isin(keep_flags)]
 
-    logger.info("start seeding")
+    if is_verbose:
+        logger.info("start seeding")
+
     intra_sep = (
         float(config["ASSOC_PARAMS"]["intra_night_separation"]) * units.arcsecond
     ).to("deg")
@@ -204,14 +286,7 @@ roid count:
     nb_deviating_kalman = 0
     nb_new_kalman = 0
 
-    if (
-        len(sso_night[sso_night["roid"] == 4]) != 0
-        and os.path.exists(path_trajectory_df)
-        and os.path.exists(path_kalman)
-    ):
-        trajectory_df = pd.read_parquet(path_trajectory_df)
-        kalman_df = pd.read_pickle(path_kalman)
-
+    if len(sso_night[sso_night["roid"] == 4]) != 0:
         nb_kalman_before = len(kalman_df)
         trajectory_df, kalman_df = kalman_association(
             trajectory_df, kalman_df, seeds, logger, True, confirmed_sso=True
@@ -231,15 +306,7 @@ roid count:
         )
         test_seeds = test_seeds[test_seeds["tr_no_assoc"]]
         seeds_no_assoc = seeds[seeds["trajectory_id"].isin(test_seeds["trajectory_id"])]
-        max_traj_id = kalman_df["trajectory_id"].max() + 1
-        clusters_id = seeds_no_assoc["trajectory_id"].unique()
-        new_traj_id = np.arange(max_traj_id, max_traj_id + len(clusters_id)).astype(int)
-        assert len(new_traj_id) == len(clusters_id)
-        map_new_tr = {cl_id: tr_id for tr_id, cl_id in zip(new_traj_id, clusters_id)}
-        with pd.option_context("mode.chained_assignment", None):
-            seeds_no_assoc["trajectory_id"] = seeds_no_assoc["trajectory_id"].map(
-                map_new_tr
-            )
+        seeds_no_assoc = seeds_new_id(seeds_no_assoc, kalman_df)
         new_kalman_df = init_kalman(seeds_no_assoc)
         with pd.option_context("mode.chained_assignment", None):
             seeds_no_assoc["updated"] = "Y"
@@ -253,12 +320,19 @@ roid count:
             logger.info(
                 "No kalman file detected, start to init kalman filters from the intra night seeds"
             )
-        trajectory_df = seeds[seeds["trajectory_id"] != -1.0]
-        kalman_df = init_kalman(trajectory_df)
+
+        seeds = seeds[seeds["trajectory_id"] != -1.0]
+        if len(kalman_df) > 0:
+            seeds = seeds_new_id(seeds, kalman_df)
+        new_kalman_df = init_kalman(seeds)
+
         with pd.option_context("mode.chained_assignment", None):
-            trajectory_df["updated"] = "Y"
-            kalman_df["orbfit_test"] = 0
+            seeds["updated"] = "Y"
+            new_kalman_df["orbfit_test"] = 0
         nb_new_kalman = len(kalman_df)
+
+        trajectory_df = pd.concat([trajectory_df, seeds])
+        kalman_df = pd.concat([kalman_df, new_kalman_df])
 
     trajectory_df, kalman_df, trajectory_orb, orbits = kalman_to_orbit(
         config, trajectory_df, trajectory_orb, kalman_df, orbits, logger, True
@@ -277,23 +351,23 @@ roid count:
         traj_orbits_size = Counter(
             trajectory_orb["ssoCandId"].value_counts().sort_index()
         )
-
+        logger.newline(2)
         logger.info(
             f"""
-    STATISTICS - ASSOCIATIONS
-    ----------
+STATISTICS - ASSOCIATIONS
+----------
 
-    number of orbits: {nb_orbits}
-    number of kalman: {nb_kalman}
-    * number of deviating kalman: {nb_deviating_kalman}
-    * number of new kalman: {nb_new_kalman}
-    * number of kalman removed by the time window: {nb_removed_kalman}
+number of orbits: {nb_orbits}
+number of kalman: {nb_kalman}
+* number of deviating kalman: {nb_deviating_kalman}
+* number of new kalman: {nb_new_kalman}
+* number of kalman removed by the time window: {nb_removed_kalman}
 
-    kalman trajectories size:
-    {Counter(traj_kalman_size)}
+kalman trajectories size:
+{Counter(traj_kalman_size)}
 
-    orbits trajectories size:
-    {Counter(traj_orbits_size)}
+orbits trajectories size:
+{Counter(traj_orbits_size)}
     """
         )
         logger.newline(2)
