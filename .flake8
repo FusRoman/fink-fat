@@ -27,3 +27,4 @@ per-file-ignores =
     ../fink-fat/fink_fat/seeding/dbscan_seeding.py:W503
     ../fink-fat/fink_fat/command_line/cli_main/stats.py:W503
     ../fink-fat/fink_fat/kalman/asteroid_kalman.py:W503
+    ../fink-fat/fink_fat/command_line/orbit_cli.py:W503

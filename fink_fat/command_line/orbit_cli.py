@@ -1,11 +1,17 @@
 import os
 import subprocess
+from typing import Tuple
 
 import pandas as pd
+import numpy as np
 
 import fink_fat
-from fink_fat.others.utils import init_logging
-from fink_fat.orbit_fitting.orbfit_local import get_last_detection
+from fink_fat.others.utils import init_logging, LoggerNewLine
+from fink_fat.orbit_fitting.orbfit_local import (
+    get_last_detection,
+    compute_df_orbit_param,
+)
+from fink_fat.command_line.utils_cli import assig_tags
 
 
 def intro_reset_orbit():  # pragma: no cover
@@ -74,7 +80,7 @@ def cluster_mode(
         dataframe containing the orbital parameters of the input trajectories
         columns: ref_epoch, a, e, i, long. node, arg. peric, mean anomaly, rms_a, rms_e,
         rms_i, rms_long. node, rms_arg. peric, rms_mean anomaly, chi_reduced,
-        last_ra, last_dec, last_jd, last_mag, last_fid
+        last_ra, last_dec, last_jd, last_mag, last_fid, ssoCandId
 
     Examples
     --------
@@ -183,6 +189,132 @@ def cluster_mode(
     os.remove("res_orb.parquet")
 
     return orbit_results
+
+
+def switch_local_cluster(config: dict, traj_orb: pd.DataFrame) -> pd.DataFrame:
+    """
+    Run the orbit fitting and choose cluster mode if the number of trajectories are above
+    the local limit set in the config file
+
+    Parameters
+    ----------
+    config : dict
+        contains data from the config file
+    traj_orb : pd.DataFrame
+        contains the alerts of the trajectories
+
+    Returns
+    -------
+    new_orbit_pdf : pd.DataFrame
+        contains the orbital parameters estimated from the traj_orb parameters by the orbit fitting.
+    """
+    nb_orb = len(traj_orb["trajectory_id"].unique())
+    if nb_orb > int(config["SOLVE_ORBIT_PARAMS"]["local_mode_limit"]):
+        new_orbit_pdf = cluster_mode(config, traj_orb)
+    else:
+        config_epoch = config["SOLVE_ORBIT_PARAMS"]["prop_epoch"]
+        prop_epoch = None if config_epoch == "None" else float(config_epoch)
+
+        new_orbit_pdf = compute_df_orbit_param(
+            traj_orb,
+            int(config["SOLVE_ORBIT_PARAMS"]["cpu_count"]),
+            config["SOLVE_ORBIT_PARAMS"]["ram_dir"],
+            int(config["SOLVE_ORBIT_PARAMS"]["n_triplets"]),
+            int(config["SOLVE_ORBIT_PARAMS"]["noise_ntrials"]),
+            prop_epoch,
+            int(config["SOLVE_ORBIT_PARAMS"]["orbfit_verbose"]),
+        ).drop("provisional designation", axis=1)
+    return new_orbit_pdf
+
+
+def kalman_to_orbit(
+    config: dict,
+    trajectory_df: pd.DataFrame,
+    trajectory_orb: pd.DataFrame,
+    kalman_df: pd.DataFrame,
+    orbits: pd.DataFrame,
+    logger: LoggerNewLine,
+    verbose: bool,
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Compute and return the orbits for the trajectories with enough points found by the kalman filters
+
+
+    Parameters
+    ----------
+    config : dict
+        the data from the config file
+    trajectory_df : pd.DataFrame
+        trajectories found by the kalman filters
+    trajectory_orb : pd.DataFrame
+        trajectories with orbits
+    kalman_df : pd.DataFrame
+        the kalman filters parameters
+    orbits : pd.DataFrame
+        the orbits parameters
+    logger : LoggerNewLine
+        the logging object used to print the logs
+    verbose : bool
+        if true, print the logs
+
+    Returns
+    -------
+    Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame,]
+        * trajectories found by the kalman filters without those sent to the orbit fitting
+        * kalman filters without those with the associated trajectories sent to the orbit fitting
+        * trajectories with the ones with orbits
+        * the orbits parameters with the new ones
+    """
+    # get the trajectories large enough to go to the orbit fitting
+    orbit_limit = int(config["SOLVE_ORBIT_PARAMS"]["orbfit_limit"])
+    traj_size = trajectory_df["trajectory_id"].value_counts()
+    large_traj = traj_size[traj_size >= orbit_limit]
+
+    if len(large_traj) == 0:
+        return trajectory_df, kalman_df, trajectory_orb, orbits
+
+    # to be send to the orbit fitting,
+    # a trajectory must have a number of point above the orbit point limit set in the config file
+    # and must have been updated during the current night
+    traj_to_orb = trajectory_df[
+        (trajectory_df["trajectory_id"].isin(large_traj.index.values))
+        & (trajectory_df["updated"] == "Y")
+    ].sort_values(["trajectory_id", "jd"])
+    nb_traj_to_orb = len(traj_to_orb["trajectory_id"].unique())
+    if verbose:
+        logger.info(
+            f"number of trajectories send to the orbit fitting: {nb_traj_to_orb}"
+        )
+    new_orbits = switch_local_cluster(config, traj_to_orb)
+    new_orbits = new_orbits[new_orbits["a"] != -1.0]
+    if verbose:
+        logger.info(
+            f"number of orbit fitted: {len(new_orbits)} ({(len(new_orbits) / nb_traj_to_orb) * 100} %)"
+        )
+
+    # get the trajectories with orbit and assign the ssoCandId
+    new_traj_id = new_orbits["trajectory_id"].values
+    new_traj_orb = traj_to_orb[traj_to_orb["trajectory_id"].isin(new_traj_id)]
+    new_orbits, new_traj_orb = assig_tags(new_orbits, new_traj_orb, len(orbits) + 1)
+
+    # add the new orbits and new trajectories with orbit
+    orbits = pd.concat([orbits, new_orbits])
+    trajectory_orb = pd.concat([trajectory_orb, new_traj_orb])
+
+    # remove the new trajectories with orbit from trajectory_df and the associated kalman filters
+    trajectory_df = trajectory_df[
+        ~trajectory_df["trajectory_id"].isin(new_traj_id)
+    ].reset_index(drop=True)
+    kalman_df = kalman_df[~kalman_df["trajectory_id"].isin(new_traj_id)].reset_index(
+        drop=True
+    )
+    failed_orbit = np.setdiff1d(large_traj.index.values, new_traj_id)
+    mask_failed = kalman_df["trajectory_id"].isin(failed_orbit)
+    with pd.option_context("mode.chained_assignment", None):
+        kalman_df.loc[mask_failed, "orbfit_test"] = (
+            kalman_df.loc[mask_failed, "orbfit_test"] + 1
+        )
+    return trajectory_df, kalman_df, trajectory_orb, orbits
 
 
 if __name__ == "__main__":

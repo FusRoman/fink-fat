@@ -8,6 +8,7 @@ import pandas as pd
 import fink_fat
 from fink_fat.others.id_tags import generate_tags
 from fink_fat.others.utils import init_logging
+from typing import Tuple
 
 
 def string_to_bool(bool_str):
@@ -419,7 +420,9 @@ def align_trajectory_id(trajectory_df, orbit_df, obs_orbit_df):
     return trajectory_df, orbit_df, obs_orbit_df
 
 
-def assig_tags(orb_df, traj_orb_df, start_tags):
+def assig_tags(
+    orb_df: pd.DataFrame, traj_orb_df: pd.DataFrame, start_tags: int
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Assign the ssoCandId to the orbital and traj_orb dataframe
 
@@ -467,10 +470,9 @@ def assig_tags(orb_df, traj_orb_df, start_tags):
     }
 
     assert len(np.unique(orb_df["trajectory_id"])) == len(int_id_to_tags)
-
-    orb_df["ssoCandId"] = orb_df["trajectory_id"].map(int_id_to_tags)
-
-    traj_orb_df["ssoCandId"] = traj_orb_df["trajectory_id"].map(int_id_to_tags)
+    with pd.option_context("mode.chained_assignment", None):
+        orb_df["ssoCandId"] = orb_df["trajectory_id"].map(int_id_to_tags)
+        traj_orb_df["ssoCandId"] = traj_orb_df["trajectory_id"].map(int_id_to_tags)
 
     orb_df = orb_df.drop("trajectory_id", axis=1)
     traj_orb_df = traj_orb_df.drop("trajectory_id", axis=1)

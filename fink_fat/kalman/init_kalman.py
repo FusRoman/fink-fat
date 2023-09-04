@@ -61,7 +61,7 @@ def make_kalman(gb_input):
         ]
 
     tr_id, ra, dec, jd, mag, fid = (
-        gb_input["trajectory_id"].values[0],
+        int(gb_input["trajectory_id"].values[0]),
         gb_input["ra"].values,
         gb_input["dec"].values,
         gb_input["jd"].values,

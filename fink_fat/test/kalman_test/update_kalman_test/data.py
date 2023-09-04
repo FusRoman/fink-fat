@@ -70,6 +70,7 @@ def data_test_1():
             "ssdistnr": [1, 1, 1, 1],
             "magpsf": [17.5, 21.2, 19.6, 14.3],
             "trajectory_id": [0, 0, 1, 1],
+            "roid": [4, 4, 4, 4],
             "ffdistnr": [[0.1], [0.3], [0.1], [0.5]],
             "estimator_id": [[0], [0], [1], [1]],
         }
@@ -145,8 +146,7 @@ def data_test_2():
             "ssdistnr": [1, 1, 1, 1],
             "magpsf": [17.5, 21.2, 19.6, 14.3],
             "trajectory_id": [-1, -1, -1, -1],
-            "roid": [3, 3, 3, 3],
-            "t_estimator": ["kalman", "kalman", "kalman", "kalman"],
+            "roid": [4, 4, 4, 4],
             "ffdistnr": [[0.1], [0.3], [0.1], [0.5]],
             "estimator_id": [[1], [0], [1], [0]],
         }
@@ -222,8 +222,7 @@ def data_test_3():
             "ssdistnr": [1, 1, 1, 1],
             "magpsf": [17.5, 21.2, 19.6, 14.3],
             "trajectory_id": [-1, -1, -1, -1],
-            "roid": [3, 3, 3, 3],
-            "t_estimator": ["kalman", "kalman", "kalman", "kalman"],
+            "roid": [4, 4, 4, 4],
             "ffdistnr": [[0.1, 0.3], [0.3], [0.1], [0.5, 0.4]],
             "estimator_id": [[1, 2], [0], [1], [0, 2]],
         }
@@ -299,8 +298,7 @@ def data_test_4():
             "ssdistnr": [1, 1, 1, 1, 1, 1],
             "magpsf": [17.5, 21.2, 19.6, 14.3, 17.5, 19.8],
             "trajectory_id": [-1, -1, -1, -1, 0, 0],
-            "roid": [3, 3, 3, 3, 3, 3],
-            "t_estimator": ["kalman", "kalman", "kalman", "kalman", "kalman", "kalman"],
+            "roid": [4, 3, 4, 3, 4, 3],
             "ffdistnr": [[0.1, 0.3], [0.3], [0.1], [0.5, 0.4], [0.2], [0.4]],
             "estimator_id": [[1, 2], [0], [1], [0, 2], [0], [0]],
         }
@@ -376,8 +374,7 @@ def data_test_5():
             "ssdistnr": [1, 1, 1, 1, 1, 1],
             "magpsf": [17.5, 21.2, 19.6, 14.3, 17.5, 19.8],
             "trajectory_id": [1, 1, 2, 2, 0, 0],
-            "roid": [3, 3, 3, 3, 3, 3],
-            "t_estimator": ["kalman", "kalman", "kalman", "kalman", "kalman", "kalman"],
+            "roid": [4, 4, 3, 3, 4, 3],
             "ffdistnr": [[0.1, 0.3], [0.3], [0.1], [0.5, 0.4], [0.2], [0.4]],
             "estimator_id": [[1, 2], [0], [1], [0, 2], [0], [0]],
         }
@@ -454,7 +451,6 @@ def data_test_6():
             "magpsf": [17.5, 21.2, 19.6, 14.3, 17.5, 19.8],
             "trajectory_id": [-1, -1, 2, 2, 0, 0],
             "roid": [3, 3, 3, 3, 3, 3],
-            "t_estimator": ["kalman", "kalman", "kalman", "kalman", "kalman", "kalman"],
             "ffdistnr": [[0.1, 0.3], [0.3, 0.2], [0.1], [0.5, 0.4], [0.2], [0.4]],
             "estimator_id": [[1, 2], [0, 1], [1], [0, 2], [0], [0]],
         }
@@ -531,7 +527,6 @@ def data_test_7():
             "magpsf": [17.5, 21.2, 19.6, 14.3, 17.5, 19.8],
             "trajectory_id": [0, 0, 2, 2, 1, 1],
             "roid": [3, 3, 3, 3, 3, 3],
-            "t_estimator": ["kalman", "kalman", "kalman", "kalman", "kalman", "kalman"],
             "ffdistnr": [[0.1, 0.3], [0.3, 0.2], [0.1], [0.5], [0.2], [0.4]],
             "estimator_id": [[1, 2], [1, 2], [0], [0], [0], [0]],
         }

@@ -1,7 +1,6 @@
 import numpy as np
 import fink_fat
 import logging
-import types
 import datetime
 import pytz
 
@@ -84,7 +83,63 @@ class CustomTZFormatter(logging.Formatter):  # pragma: no cover
         return s
 
 
-def init_logging(logger_name=fink_fat.__name__) -> logging.Logger:
+class LoggerNewLine(logging.Logger):
+    """
+    A custom logger class adding only a method to print a newline.
+
+    Examples
+    --------
+    logger.newline()
+    """
+
+    def __init__(self, name: str, level: int = 0) -> None:
+        super().__init__(name, level)
+        ch = logging.StreamHandler()
+
+        self.setLevel(logging.DEBUG)
+
+        # create console handler and set level to debug
+        ch = logging.StreamHandler()
+        ch.setLevel(logging.DEBUG)
+
+        # create formatter
+        formatter = CustomTZFormatter(
+            "%(asctime)s - %(name)s - %(levelname)s \n\t message: %(message)s"
+        )
+
+        # add formatter to ch
+        ch.setFormatter(formatter)
+
+        # add ch to logger
+        self.addHandler(ch)
+
+        blank_handler = logging.StreamHandler()
+        blank_handler.setLevel(logging.DEBUG)
+        blank_handler.setFormatter(logging.Formatter(fmt=""))
+        self.console_handler = ch
+        self.blank_handler = blank_handler
+
+    def newline(self, how_many_lines=1):
+        """
+        Print blank line using the logger class
+
+        Parameters
+        ----------
+        how_many_lines : int, optional
+            how many blank line to print, by default 1
+        """
+        # Switch handler, output a blank line
+        self.removeHandler(self.console_handler)
+        self.addHandler(self.blank_handler)
+        for _ in range(how_many_lines):
+            self.info("\n")
+
+        # Switch back
+        self.removeHandler(self.blank_handler)
+        self.addHandler(self.console_handler)
+
+
+def init_logging(logger_name=fink_fat.__name__) -> LoggerNewLine:
     """
     Initialise a logger for the gcn stream
 
@@ -105,41 +160,6 @@ def init_logging(logger_name=fink_fat.__name__) -> logging.Logger:
     """
     # create logger
 
-    def log_newline(self, how_many_lines=1):
-        # Switch handler, output a blank line
-        self.removeHandler(self.console_handler)
-        self.addHandler(self.blank_handler)
-        for i in range(how_many_lines):
-            self.info("\n")
-
-        # Switch back
-        self.removeHandler(self.blank_handler)
-        self.addHandler(self.console_handler)
-
+    logging.setLoggerClass(LoggerNewLine)
     logger = logging.getLogger(logger_name)
-    logger.setLevel(logging.DEBUG)
-
-    # create console handler and set level to debug
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.DEBUG)
-
-    # create formatter
-    formatter = CustomTZFormatter(
-        "%(asctime)s - %(name)s - %(levelname)s \n\t message: %(message)s"
-    )
-
-    # add formatter to ch
-    ch.setFormatter(formatter)
-
-    # add ch to logger
-    logger.addHandler(ch)
-
-    blank_handler = logging.StreamHandler()
-    blank_handler.setLevel(logging.DEBUG)
-    blank_handler.setFormatter(logging.Formatter(fmt=""))
-
-    logger.console_handler = ch
-    logger.blank_handler = blank_handler
-    logger.newline = types.MethodType(log_newline, logger)
-
     return logger
