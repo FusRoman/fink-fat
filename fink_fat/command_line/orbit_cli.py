@@ -210,6 +210,11 @@ def switch_local_cluster(config: dict, traj_orb: pd.DataFrame) -> pd.DataFrame:
     """
     nb_orb = len(traj_orb["trajectory_id"].unique())
     if nb_orb > int(config["SOLVE_ORBIT_PARAMS"]["local_mode_limit"]):
+        traj_cols = traj_orb.columns
+        if "estimator_id" in traj_cols:
+            traj_orb = traj_orb.drop("estimator_id", axis=1)
+        if "ffdistnr" in traj_cols:
+            traj_orb = traj_orb.drop("ffdistnr", axis=1)
         new_orbit_pdf = cluster_mode(config, traj_orb)
     else:
         config_epoch = config["SOLVE_ORBIT_PARAMS"]["prop_epoch"]
