@@ -183,9 +183,6 @@ def cli_kalman_associations(arguments: dict, config: dict, output_path: str):
         logger.info(f"start to process date {last_night}")
         logger.newline()
 
-    # --------------------------------------------------------------------------------#
-    ## fink fat command line association
-
     roid_output_path = config["OUTPUT"]["fink_roid_output"]
 
     roid_output_path = os.path.join(
@@ -202,7 +199,7 @@ def cli_kalman_associations(arguments: dict, config: dict, output_path: str):
             """
 STATISTICS - STREAMING NIGHT
 -----------------------
-                
+
 roid count:
 {}
                 """.format(
