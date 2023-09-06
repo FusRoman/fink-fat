@@ -50,15 +50,19 @@ def make_kalman(gb_input):
     """
 
     def compute_vel(x1, x2, dt):
+        if dt == 0:
+            dt = 30 / 3600 / 24
         return (x2 - x1) / dt
 
     def make_A(dt):
-        return [
-            [1, 0, dt, 0],
-            [0, 1, 0, dt],
-            [0, 0, 1, 0],
-            [0, 0, 0, 1],
-        ]
+        return np.array(
+            [
+                [1, 0, dt, 0],
+                [0, 1, 0, dt],
+                [0, 0, 1, 0],
+                [0, 0, 0, 1],
+            ]
+        )
 
     tr_id, ra, dec, jd, mag, fid = (
         int(gb_input["trajectory_id"].values[0]),
@@ -99,10 +103,12 @@ def make_kalman(gb_input):
             fid_1 = fid_i
 
             dt = jd_1 - jd_0
+            if dt == 0:
+                continue
             ra_vel = compute_vel(ra_0, ra_1, dt)
             dec_vel = compute_vel(dec_0, dec_1, dt)
 
-            Y = np.array([[ra_1, dec_1]])
+            Y = np.array([[ra_1], [dec_1], [ra_vel], [dec_vel]])
             kaf.update(Y, make_A(dt))
     return pd.Series(
         [ra_0, dec_0, ra_1, dec_1, jd_0, jd_1, mag_1, fid_1, dt, ra_vel, dec_vel, kaf],
@@ -185,6 +191,10 @@ def init_kalman(
                 "kalman",
             ]
         )
+
+    # TODO
+    # detecter les jd dupliqués et appliquer une fonction spécial dans le cas ou dt = 0
+
     # remove dbscan noise
     night_pdf = night_pdf[night_pdf["trajectory_id"] != -1.0]
     return (

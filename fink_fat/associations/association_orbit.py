@@ -72,6 +72,7 @@ def orbit_associations(
 
     orbit_alert_assoc = (
         new_alerts[new_alerts["roid"] == 5]
+        .explode(["estimator_id", "ffdistnr"])
         .rename({"estimator_id": "ssoCandId"}, axis=1)
         .drop("roid", axis=1)
     )

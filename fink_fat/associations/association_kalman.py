@@ -20,7 +20,7 @@ def update_kalman(
     tr_id: int,
 ) -> pd.Series:
     """
-    Update the kalman filter contains in the
+    Update the kalman filter in input inplace.
 
     Parameters
     ----------
@@ -44,29 +44,13 @@ def update_kalman(
     pd.Series
         same row as input but updated with the new alert
     """
-    Y = np.array(
-        [
-            [
-                ra_alert,
-                dec_alert,
-            ]
-        ]
-    )
-
     dt = jd_alert - kalman_copy["jd_1"].values[0]
-    A = np.array(
-        [
-            [1, 0, dt, 0],
-            [0, 1, 0, dt],
-            [0, 0, 1, 0],
-            [0, 0, 0, 1],
-        ]
-    )
 
-    kalman_copy["kalman"].values[0].update(
-        Y,
-        A,
-    )
+    if dt == 0:
+        # if the dt is 0, the previous data point of the kalman are in the same exposure.
+        # it happens only for the assocations between the tracklets and the kalman
+        # and skip this point is not too bad for the rest of the kalman estimation.
+        return kalman_copy
     with pd.option_context("mode.chained_assignment", None):
         kalman_copy["ra_0"] = kalman_copy["ra_1"]
         kalman_copy["dec_0"] = kalman_copy["dec_1"]
@@ -87,6 +71,29 @@ def update_kalman(
             kalman_copy["dec_1"] - kalman_copy["dec_0"]
         ) / kalman_copy["dt"]
         kalman_copy["trajectory_id"] = tr_id
+
+    A = np.array(
+        [
+            [1, 0, dt, 0],
+            [0, 1, 0, dt],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1],
+        ]
+    )
+
+    Y = np.array(
+        [
+            [ra_alert],
+            [dec_alert],
+            [kalman_copy["vel_ra"].values[0]],
+            [kalman_copy["vel_dec"].values[0]],
+        ]
+    )
+
+    kalman_copy["kalman"].values[0].update(
+        Y,
+        A,
+    )
 
     return kalman_copy
 
@@ -411,7 +418,9 @@ def kalman_association(
 
     if verbose:
         logger.info("- start the association with the kalman filters")
-    new_alerts = new_alerts[new_alerts["roid"].isin(roid_flag)]
+    new_alerts = new_alerts[new_alerts["roid"].isin(roid_flag)].explode(
+        ["estimator_id", "ffdistnr"]
+    )
     new_alerts = new_alerts.explode(["ffdistnr", "estimator_id"])
     new_alerts["estimator_id"] = new_alerts["estimator_id"].fillna(-1).astype(int)
     traj_id_to_update = np.sort(new_alerts["estimator_id"].unique())

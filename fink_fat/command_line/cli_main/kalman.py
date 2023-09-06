@@ -112,7 +112,7 @@ def load_sso_data(sso_path: pd.DataFrame) -> pd.DataFrame:
         [sso_night, candidate_pdf, roid_pdf],
         axis=1,
     )
-    sso_night = sso_night.explode(["estimator_id", "ffdistnr"])
+    sso_night = sso_night  # .explode(["estimator_id", "ffdistnr"])
 
     cols_to_keep = [
         "objectId",
@@ -296,6 +296,7 @@ roid count:
         # get the seeds with no associations to run the init_kalman on them.
         test_seeds = (
             seeds[seeds["trajectory_id"] != -1]
+            .explode(["estimator_id", "ffdistnr"])
             .fillna(-1)
             .groupby("trajectory_id")
             .agg(
@@ -378,7 +379,9 @@ orbits trajectories size:
         trajectory_df["trajectory_id"] = trajectory_df["trajectory_id"].astype(int)
         kalman_df["trajectory_id"] = kalman_df["trajectory_id"].astype(int)
 
-    trajectory_df = trajectory_df.drop("updated", axis=1)
+    trajectory_df = trajectory_df.drop("updated", axis=1).explode(
+        ["estimator_id", "ffdistnr"]
+    )
     trajectory_df.to_parquet(path_trajectory_df, index=False)
 
     assert (kalman_df["trajectory_id"].value_counts() == 1).all()
@@ -387,6 +390,8 @@ orbits trajectories size:
     tr_orb_cols = trajectory_orb.columns
     if "updated" in tr_orb_cols:
         trajectory_orb = trajectory_orb.drop("updated", axis=1)
+    if len(trajectory_orb) > 0:
+        trajectory_orb = trajectory_orb.explode(["estimator_id", "ffdistnr"])
     trajectory_orb.to_parquet(path_trajectory_orb, index=False)
     orbits.to_parquet(path_orbit, index=False)
 
