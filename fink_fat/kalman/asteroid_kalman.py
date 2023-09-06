@@ -165,15 +165,25 @@ New position set to the opposite: new_ra={opp_ra}, new_dec={opp_dec}\n"""
 
         if len(np.shape(A)) == 2:
             prediction = self.opposite_dec_2d(prediction)
+            # print("--")
+            # print(A.T)
+            # print(np.dot(self.P, A.T))
+            # print(np.dot(A, np.dot(self.P, A.T)))
+            # print("--")
             P = np.dot(A, np.dot(self.P, A.T))  # + self.Q
 
         elif len(np.shape(A)) == 3:
             prediction = self.opposite_dec_3d(prediction)
 
             P = np.array([self.P for _ in range(A.shape[0])])
-            Q_exp = np.array([np.eye(A.shape[-1]) for _ in range(A.shape[0])])
+            # Q_exp = np.array([np.eye(A.shape[-1]) for _ in range(A.shape[0])])
             f1 = np.flip(P @ A, (1, 2))
-            P = (A @ f1) + Q_exp
+            P = A @ f1  # + Q_exp
+            # print("==")
+            # print(f1)
+            # print((A @ f1))
+            # print(P)
+            # print("==")
 
         return prediction, P
 
