@@ -39,37 +39,37 @@ COPY . fink-fat
 
 # Install system build dependencies
 RUN yum -y update \
-&& yum -y install which git wget java-11-openjdk-devel \
-&& echo "export JAVA_HOME=$(dirname $(dirname $(readlink -f $(type -P java))))" > /etc/profile.d/javahome.sh \
-&& yum -y groupinstall "Development Tools" \
-&& yum -y clean all \
-&& rm -rf /var/cache
+    && yum -y install which git wget java-11-openjdk-devel \
+    && echo "export JAVA_HOME=$(dirname $(dirname $(readlink -f $(type -P java))))" > /etc/profile.d/javahome.sh \
+    && yum -y groupinstall "Development Tools" \
+    && yum -y clean all \
+    && rm -rf /var/cache
 # && echo "export JAVA_HOME=$(dirname $(dirname $(readlink -f $(type -P java))))" > /etc/profile.d/javahome.sh
 
 # install python and the dependencies
 RUN wget --quiet https://repo.anaconda.com/miniconda/Miniconda3-${PYTHON_VERSION}-Linux-x86_64.sh -O ~/miniconda.sh \
-&& bash ~/miniconda.sh -b -p ${USRLIBS}/miniconda
+    && bash ~/miniconda.sh -b -p ${USRLIBS}/miniconda
 
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
-&& cd ${USRLIBS}/fink-fat/script \
-&& source ./install_python_deps.sh \
-&& cd ${USRLIBS}
+    && cd ${USRLIBS}/fink-fat/script \
+    && source ./install_python_deps.sh \
+    && cd ${USRLIBS}
 
 
 # install spark
 RUN wget --quiet https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-${HADOOP_VERSION}.tgz \
-&& tar -xf spark-${SPARK_VERSION}-bin-${HADOOP_VERSION}.tgz \
-&& rm spark-${SPARK_VERSION}-bin-${HADOOP_VERSION}.tgz \
-&& echo "export SPARK_HOME=$PWD/spark-${SPARK_VERSION}-bin-${HADOOP_VERSION}" > /etc/profile.d/sparkhome.sh
+    && tar -xf spark-${SPARK_VERSION}-bin-${HADOOP_VERSION}.tgz \
+    && rm spark-${SPARK_VERSION}-bin-${HADOOP_VERSION}.tgz \
+    && echo "export SPARK_HOME=$PWD/spark-${SPARK_VERSION}-bin-${HADOOP_VERSION}" > /etc/profile.d/sparkhome.sh
 
 # install OrbFit
 RUN yum -y install epel-release \
-&& yum -y install aria2 \
-&& mkdir OrbFit \
-&& cd ${USRLIBS}/fink-fat/script \
-&& source ./orbFit_installer.sh --install_path ${USRLIBS}/OrbFit \
-&& echo "export ORBFIT_HOME=${USRLIBS}/OrbFit" > /etc/profile.d/orbfithome.sh \
-&& cd ${USRLIBS}
+    && yum -y install aria2 \
+    && mkdir OrbFit \
+    && cd ${USRLIBS}/fink-fat/script \
+    && source ./orbFit_installer.sh --install_path ${USRLIBS}/OrbFit \
+    && echo "export ORBFIT_HOME=${USRLIBS}/OrbFit" > /etc/profile.d/orbfithome.sh \
+    && cd ${USRLIBS}
 
 ENV SPARK_HOME=$USRLIBS/spark-${SPARK_VERSION}-bin-${HADOOP_VERSION}
 ENV SPARKLIB=${SPARK_HOME}/python:${SPARK_HOME}/python/lib/py4j-0.10.9-src.zip
