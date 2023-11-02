@@ -232,29 +232,28 @@ def switch_local_cluster(config: dict, traj_orb: pd.DataFrame) -> pd.DataFrame:
     return new_orbit_pdf
 
 
-def kalman_to_orbit(
+def trcand_to_orbit(
     config: dict,
     trajectory_df: pd.DataFrame,
     trajectory_orb: pd.DataFrame,
-    kalman_df: pd.DataFrame,
+    trparams_df: pd.DataFrame,
     orbits: pd.DataFrame,
     logger: LoggerNewLine,
     verbose: bool,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
-    Compute and return the orbits for the trajectories with enough points found by the kalman filters
-
+    Compute and return the orbits for the trajectories with enough points found by the prediction functions
 
     Parameters
     ----------
     config : dict
         the data from the config file
     trajectory_df : pd.DataFrame
-        trajectories found by the kalman filters
+        trajectories found by the function predictors
     trajectory_orb : pd.DataFrame
         trajectories with orbits
-    kalman_df : pd.DataFrame
-        the kalman filters parameters
+    trparams_df : pd.DataFrame
+        the fit functions parameters
     orbits : pd.DataFrame
         the orbits parameters
     logger : LoggerNewLine
@@ -265,7 +264,7 @@ def kalman_to_orbit(
     Returns
     -------
     Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame,]
-        * trajectories found by the kalman filters without those sent to the orbit fitting
+        * trajectories found by the prediction functions without those sent to the orbit fitting
         * kalman filters without those with the associated trajectories sent to the orbit fitting
         * trajectories with the ones with orbits
         * the orbits parameters with the new ones
@@ -276,7 +275,7 @@ def kalman_to_orbit(
     large_traj = traj_size[traj_size >= orbit_limit]
 
     if len(large_traj) == 0:
-        return trajectory_df, kalman_df, trajectory_orb, orbits
+        return trajectory_df, trparams_df, trajectory_orb, orbits
 
     # to be send to the orbit fitting,
     # a trajectory must have a number of point above the orbit point limit set in the config file
@@ -310,16 +309,16 @@ def kalman_to_orbit(
     trajectory_df = trajectory_df[
         ~trajectory_df["trajectory_id"].isin(new_traj_id)
     ].reset_index(drop=True)
-    kalman_df = kalman_df[~kalman_df["trajectory_id"].isin(new_traj_id)].reset_index(
+    trparams_df = trparams_df[~trparams_df["trajectory_id"].isin(new_traj_id)].reset_index(
         drop=True
     )
     failed_orbit = np.setdiff1d(large_traj.index.values, new_traj_id)
-    mask_failed = kalman_df["trajectory_id"].isin(failed_orbit)
+    mask_failed = trparams_df["trajectory_id"].isin(failed_orbit)
     with pd.option_context("mode.chained_assignment", None):
-        kalman_df.loc[mask_failed, "orbfit_test"] = (
-            kalman_df.loc[mask_failed, "orbfit_test"] + 1
+        trparams_df.loc[mask_failed, "orbfit_test"] = (
+            trparams_df.loc[mask_failed, "orbfit_test"] + 1
         )
-    return trajectory_df, kalman_df, trajectory_orb, orbits
+    return trajectory_df, trparams_df, trajectory_orb, orbits
 
 
 if __name__ == "__main__":

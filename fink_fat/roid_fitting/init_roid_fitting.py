@@ -88,7 +88,7 @@ def init_polyast(
     night_pdf: pd.DataFrame,
 ) -> pd.DataFrame:
     """
-    Initialize kalman filters based on the seeds or tracklets.
+    Initialize fit functions based on the seeds or tracklets.
     required columns: ra, dec, jd, magpsf, fid, trajectory_id
 
     Parameters

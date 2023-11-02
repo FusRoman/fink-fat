@@ -18,7 +18,7 @@ from fink_fat.seeding.dbscan_seeding import (
 from fink_fat.associations.association_orbit import orbit_associations
 from fink_fat.associations.association_kalman import kalman_association
 from fink_fat.kalman.init_kalman import init_kalman
-from fink_fat.command_line.orbit_cli import kalman_to_orbit
+from fink_fat.command_line.orbit_cli import trcand_to_orbit
 
 
 def get_default_input() -> (
@@ -332,7 +332,7 @@ roid count:
         trajectory_df = pd.concat([trajectory_df, seeds])
         kalman_df = pd.concat([kalman_df, new_kalman_df])
 
-    trajectory_df, kalman_df, trajectory_orb, orbits = kalman_to_orbit(
+    trajectory_df, kalman_df, trajectory_orb, orbits = trcand_to_orbit(
         config, trajectory_df, trajectory_orb, kalman_df, orbits, logger, True
     )
 

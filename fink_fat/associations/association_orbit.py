@@ -94,6 +94,7 @@ def orbit_associations(
     ]["ssoCandId"]
     assert len(duplicated_id) == 0
 
+    # recompute the orbit using local or cluster mode
     new_orbit_pdf = switch_local_cluster(config, traj_to_new_orbit)
 
     # remove the failed orbits
