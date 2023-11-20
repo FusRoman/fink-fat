@@ -364,10 +364,6 @@ def single_alerts_associations(
     tr_id_repeat = np.repeat(cluster_df["trajectory_id"].values, nb_repeat)
 
     traj_duplicate["trajectory_id"] = tr_id_repeat
-    nb_repeat = np.repeat(traj_size.values, traj_counts_duplicates.values)
-    tr_id_repeat = np.repeat(cluster_df["trajectory_id"].values, nb_repeat)
-
-    traj_duplicate["trajectory_id"] = tr_id_repeat
     new_traj = pd.concat([traj_duplicate, cluster_df.drop("estimator_id", axis=1)])
     return new_traj, new_kalman
 

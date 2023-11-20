@@ -289,6 +289,11 @@ def trcand_to_orbit(
         logger.info(
             f"number of trajectories send to the orbit fitting: {nb_traj_to_orb}"
         )
+
+    if nb_traj_to_orb == 0:
+        # no trajectory updated during this night to send to orbit fitting
+        return trajectory_df, trparams_df, trajectory_orb, orbits
+
     new_orbits = switch_local_cluster(config, traj_to_orb)
     new_orbits = new_orbits[new_orbits["a"] != -1.0]
     if verbose:
