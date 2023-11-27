@@ -44,7 +44,7 @@ def int_to_tags(traj_id, jd):
 
     discovery = Time(jd, format="jd").datetime
     return "FF{:02d}{:02d}{}{}".format(
-        discovery.day, discovery.month, discovery.year, res_tag[::-1]
+        discovery.year, discovery.month, discovery.day, res_tag[::-1]
     )
 
 
