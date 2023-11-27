@@ -183,3 +183,8 @@ test_merger/
 track_bug/
 transient_data.json
 fink_fat_test/
+
+fink_fat_notebook/fink_fat_experiments/confirmed_all_fink_fat/
+fink_fat_notebook/fink_fat_experiments/confirmed_mops_fink_fat/
+fink_fat_notebook/fink_fat_experiments/data/
+fink_fat_notebook/parameters_selection/res_orbit_nb_point/
