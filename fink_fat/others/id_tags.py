@@ -28,11 +28,11 @@ def int_to_tags(traj_id, jd):
     Examples
     --------
     >>> int_to_tags(15, 2460135.98)
-    'FF10072023aaaaaap'
+    'FF20230710aaaaaap'
     >>> int_to_tags(27, 2460135.98)
-    'FF10072023aaaaabb'
+    'FF20230710aaaaabb'
     >>> int_to_tags(652, 2460135.98)
-    'FF10072023aaaaazc'
+    'FF20230710aaaaazc'
     """
     res_tag = ""
     for _ in range(7):
@@ -43,7 +43,7 @@ def int_to_tags(traj_id, jd):
         traj_id = q
 
     discovery = Time(jd, format="jd").datetime
-    return "FF{:02d}{:02d}{}{}".format(
+    return "FF{:04d}{:02d}{:02d}{}".format(
         discovery.year, discovery.month, discovery.day, res_tag[::-1]
     )
 
@@ -70,7 +70,7 @@ def generate_tags(begin, end, jd):
     Examples
     --------
     >>> generate_tags(3, 6, [2460135.42, 2460137.57, 2460148.72])
-    ['FF09072023aaaaaad', 'FF12072023aaaaaae', 'FF23072023aaaaaaf']
+    ['FF20230709aaaaaad', 'FF20230712aaaaaae', 'FF20230723aaaaaaf']
     """
     return [int_to_tags(i, date) for date, i in zip(jd, np.arange(begin, end))]
 
