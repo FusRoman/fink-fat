@@ -167,10 +167,14 @@ def fink_fat_main(arguments):
         t_before = t.time()
         if arguments['--filepath']:
             new_alerts = get_last_sso_alert_from_file(arguments["--filepath"], arguments["--verbose"])
+            if arguments["--verbose"]:
+                print("Number of alerts measurements from {}: {}".format(arguments["--filepath"], len(new_alerts)))
         else:
             new_alerts = get_last_sso_alert(
                 object_class, last_night, arguments["--verbose"]
             )
+            if arguments["--verbose"]:
+                print("Number of alerts retrieve from fink: {}".format(len(new_alerts)))
         if len(new_alerts) == 0:
             print("no alerts available for the night of {}".format(last_night))
             exit()
@@ -178,9 +182,6 @@ def fink_fat_main(arguments):
         last_nid = next_nid = new_alerts["nid"][0]
         if len(trajectory_df) > 0 and len(old_obs_df) > 0:
             last_nid = np.max([np.max(trajectory_df["nid"]), np.max(old_obs_df["nid"])])
-
-        if arguments["--verbose"]:
-            print("Number of alerts retrieve from fink: {}".format(len(new_alerts)))
 
         if arguments["--save"]:
             save_path = os.path.join(output_path, "save", "")
