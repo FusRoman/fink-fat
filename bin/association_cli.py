@@ -201,6 +201,10 @@ def get_last_sso_alert_from_file(filepath, verbose=False):
 
     Examples
     --------
+    >>> data_path = "fink_fat/data/sample_euclid.txt"
+    >>> pdf = get_last_sso_alert_from_file(data_path)
+    >>> assert len(pdf) == 2798
+    >>> assert 'objectId' in pdf.columns
     """
     pdf = pd.read_csv(filepath, header=0, sep=r'\s+', index_col=False)
 
