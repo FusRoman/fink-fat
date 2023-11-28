@@ -286,7 +286,8 @@ def fink_fat_main(arguments):
                     int(config["SOLVE_ORBIT_PARAMS"]["cpu_count"]),
                     config["SOLVE_ORBIT_PARAMS"]["ram_dir"],
                     int(config["SOLVE_ORBIT_PARAMS"]["n_triplets"]),
-                    int(config["SOLVE_ORBIT_PARAMS"]["noise_ntrials"])
+                    int(config["SOLVE_ORBIT_PARAMS"]["noise_ntrials"]),
+                    verbose=int(config["SOLVE_ORBIT_PARAMS"]["orbfit_verbose"])
                 ).drop("provisional designation", axis=1)
                 orbfit_time = t.time() - t_before
 
@@ -1162,7 +1163,8 @@ def fink_fat_main(arguments):
                         int(config["SOLVE_ORBIT_PARAMS"]["cpu_count"]),
                         config["SOLVE_ORBIT_PARAMS"]["ram_dir"],
                         int(config["SOLVE_ORBIT_PARAMS"]["n_triplets"]),
-                        int(config["SOLVE_ORBIT_PARAMS"]["noise_ntrials"])
+                        int(config["SOLVE_ORBIT_PARAMS"]["noise_ntrials"]),
+                        verbose=int(config["SOLVE_ORBIT_PARAMS"]["orbfit_verbose"])
                     ).drop("provisional designation", axis=1)
                     orbfit_time = t.time() - t_before
 
