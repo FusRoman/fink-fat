@@ -175,6 +175,7 @@ def fink_fat_main(arguments):
             )
             if arguments["--verbose"]:
                 print("Number of alerts retrieve from fink: {}".format(len(new_alerts)))
+
         if len(new_alerts) == 0:
             print("no alerts available for the night of {}".format(last_night))
             exit()
