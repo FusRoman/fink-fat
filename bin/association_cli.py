@@ -202,7 +202,7 @@ def get_last_sso_alert_from_file(filepath, verbose=False):
     Examples
     --------
     """
-    pdf = pd.read_csv(filepath, header=0, sep='\s+', index_col=False)
+    pdf = pd.read_csv(filepath, header=0, sep=r'\s+', index_col=False)
 
     if 'objectId' not in pdf.columns:
         pdf['objectId'] = range(len(pdf))
