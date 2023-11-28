@@ -301,6 +301,20 @@ def get_last_sso_alert(object_class, date, verbose=False):
         "i:sigmapsf": "sigmapsf",
     }
 
+    required_columns = [
+        "objectId",
+        "candid",
+        "ra",
+        "dec",
+        "jd",
+        "nid",
+        "fid",
+        "magpsf",
+        "sigmapsf",
+        "not_updated",
+        "last_assoc_date",
+    ]
+
     if object_class == "Solar System MPC":  # pragma: no cover
         required_columns.append("ssnamenr")
         translate_columns["i:ssnamenr"] = "ssnamenr"
