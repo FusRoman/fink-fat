@@ -208,6 +208,13 @@ def get_last_sso_alert_from_file(filepath, verbose=False):
     """
     pdf = pd.read_csv(filepath, header=0, sep=r'\s+', index_col=False)
 
+    required_header = ['ra', 'dec', 'jd', 'magpsf', 'sigmapsf']
+    msg = """
+    The header of {} must contain at least the following fields:
+    ra dec jd magpsf sigmapsf
+    """.format(filepath)
+    assert set(required_header) - set(pdf.columns) == set(), AssertionError(msg)
+
     if 'objectId' not in pdf.columns:
         pdf['objectId'] = range(len(pdf))
 
