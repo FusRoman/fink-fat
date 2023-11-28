@@ -181,14 +181,17 @@ def get_n_sso(object_class, date):
 
 def get_last_sso_alert_from_file(filepath, verbose=False):
     """
-    Get the alerts from Fink corresponding to the object_class for the given date.
+    Read single night alert data from a file. The file header **must contain** at least:
+    ra, dec, jd, magpsf, sigmapsf
+
+    other fields can exist, and will remain attached.
 
     Parameters
     ----------
-    object_class : string
-        the class of the requested alerts
-    date : string
-        the requested date of the alerts, format is YYYY-MM-DD
+    filepath: str
+        Path to a file containing measurements
+    verbose: bool
+        If True, print extra information. Default is False.
 
     Returns
     -------
@@ -198,46 +201,13 @@ def get_last_sso_alert_from_file(filepath, verbose=False):
 
     Examples
     --------
-    >>> res_request = get_last_sso_alert(
-    ... 'Solar System candidate',
-    ... '2020-06-29'
-    ... )
-
-    >>> pdf_test = pd.read_parquet("fink_fat/test/cli_test/get_sso_alert_test.parquet")
-    >>> assert_frame_equal(res_request, pdf_test)
-
-    >>> res_request = get_last_sso_alert(
-    ... 'Solar System candidate',
-    ... '2020-05-21'
-    ... )
-    >>> assert_frame_equal(res_request, pd.DataFrame(columns=["objectId", "candid", "ra", "dec", "jd", "nid", "fid", "magpsf", "sigmapsf", "not_updated", "last_assoc_date"]))
     """
-    # Hardcoded...
-    HEADER = [
-        'Index',
-        'RA',
-        'DEC',
-        'MU',
-        'NDet',
-        'Catalogue',
-        'X_WORLD',
-        'Y_WORLD',
-        'ERRA_WORLD',
-        'ERRB_WORLD',
-        'FLUX_AUTO',
-        'FLUXERR_AUTO',
-        'MAG_AUTO',
-        'MAGERR_AUTO',
-        'ELONGATION',
-        'ELLIPTICITY',
-        'MJD'
-    ]
+    pdf = pd.read_csv(filepath, header=0, sep='\s+', index_col=False)
 
-    pdf = pd.read_csv(filepath, header=None, sep=' ', skiprows=1)
+    if 'objectId' not in pdf.columns:
+        pdf['objectId'] = range(len(pdf))
 
-    pdf.columns = HEADER
-    pdf['candid'] = range(len(pdf))
-    pdf['jd'] = pdf['MJD'].apply(lambda x: Time(x, format='mjd').jd)
+    pdf['candid'] = range(10, len(pdf) + 10)
     pdf['nid'] = 0
     pdf['fid'] = 0
 
@@ -255,21 +225,8 @@ def get_last_sso_alert_from_file(filepath, verbose=False):
         "last_assoc_date",
     ]
 
-    translate_columns = {
-        "MU": "objectId",
-        "candid": "candid",
-        "RA": "ra",
-        "DEC": "dec",
-        "jd": "jd",
-        "nid": "nid",
-        "fid": "fid",
-        "MAG_AUTO": "magpsf",
-        "MAGERR_AUTO": "sigmapsf",
-    }
-
-    pdf = pdf.rename(columns=translate_columns)
     if len(pdf) > 0:
-        date = Time(pdf['MJD'].values[0], format='mjd').iso.split(' ')[0]
+        date = Time(pdf['jd'].values[0], format='jd').iso.split(' ')[0]
         pdf.insert(len(pdf.columns), "not_updated", np.ones(len(pdf), dtype=np.bool_))
         pdf.insert(len(pdf.columns), "last_assoc_date", date)
     else:
