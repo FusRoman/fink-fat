@@ -152,7 +152,6 @@ subprocess output:
         with open(os.path.join(ram_path_parent, f"{log_file_name}.log"), "w") as f:
             f.write(str_log)
 
-
     try:
         completed_process = subprocess.run(
             command, shell=True, capture_output=True, timeout=5
