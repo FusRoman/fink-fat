@@ -1,0 +1,37 @@
+output.
+	.elements = 'KEP'
+	.epoch = JD  2460150.946169 UTC
+init_orbdet.
+	.verbose = 2
+	.n_triplets = 30
+	.noise.ntrials = 20
+operations.
+	.init_orbdet = 2
+	.diffcor = 1
+	.ident = 1
+	.ephem = 0
+error_model.
+	.name='fcct14'
+IERS.
+	.extrapolation = .T.
+reject.
+	.rejopp = .FALSE.
+propag.
+	.iast = 17
+	.npoint = 600
+	.dmea = 0.2d0
+	.dter = 0.05d0
+	.filbe=fink_fat/test/call_orbfit/AST17
+	.irel=2
+
+lsfit.
+	.nit_max = 1
+	.nitg_max = 1
+	.conv_cntr = 1.0
+	.div_cntr = 1.0
+
+output_files.
+	.elem = fink_fat/test/call_orbfit/K23Nb8K.oel
+object1.
+	.obs_dir = fink_fat/test/call_orbfit/mpcobs
+	.name = K23Nb8K

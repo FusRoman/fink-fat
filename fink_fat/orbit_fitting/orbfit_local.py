@@ -1,4 +1,3 @@
-import signal
 import numpy as np
 import pandas as pd
 from shutil import rmtree
@@ -11,6 +10,8 @@ import fink_fat.orbit_fitting.mpcobs_files as mf
 
 import traceback
 import logging
+from typing import Union
+import pathlib
 
 orbfit_column_name = [
     "trajectory_id",
@@ -32,7 +33,7 @@ orbfit_column_name = [
 ]
 
 
-def call_orbitfit(ram_dir, first_designation, second_designation=None):
+def call_orbitfit(ram_dir, first_designation, second_designation=None, verbose=False):
     """
     Call the OrbFit software in a subprocess. Kill it after 2 second if OrbFit are blocked.
 
@@ -56,15 +57,21 @@ def call_orbitfit(ram_dir, first_designation, second_designation=None):
     >>> os.path.exists("fink_fat/test/call_orbfit/K21E00A.oel")
     True
 
-    >>> os.remove("fink_fat/test/call_orbfit/K21E00A.odc")
-    >>> os.remove("fink_fat/test/call_orbfit/K21E00A.olg")
-    >>> os.remove("fink_fat/test/call_orbfit/K21E00A.pro")
-    >>> os.remove("fink_fat/test/call_orbfit/mpcobs/K21E00A.rwo")
-    >>> os.remove("fink_fat/test/call_orbfit/K21E00A.oel")
-
     >>> call_orbitfit("fink_fat/test/call_orbfit/", "K19V01E", "K20V02K")
 
     >>> os.path.exists("fink_fat/test/call_orbfit/K19V01E_K20V02K.oel")
+    True
+
+    >>> call_orbitfit("fink_fat/test/call_orbfit/", "K23Nb8K")
+
+    >>> call_orbitfit("fink_fat/test/call_orbfit/", "K21E00A", verbose=True)
+    >>> call_orbitfit("fink_fat/test/call_orbfit/", "K19V01E", "K20V02K", verbose=True)
+
+    >>> os.path.exists("fink_fat/test/K23Nb8K.log")
+    True
+    >>> os.path.exists("fink_fat/test/K21E00A.log")
+    True
+    >>> os.path.exists("fink_fat/test/K19V01E_K20V02K.log")
     True
 
     >>> os.remove("fink_fat/test/call_orbfit/K19V01E_K20V02K.odc")
@@ -74,18 +81,31 @@ def call_orbitfit(ram_dir, first_designation, second_designation=None):
     >>> os.remove("fink_fat/test/call_orbfit/mpcobs/K20V02K.rwo")
     >>> os.remove("fink_fat/test/call_orbfit/K19V01E_K20V02K.oel")
     >>> os.remove("fink_fat/test/call_orbfit/K19V01E_K20V02K.err")
+
+    >>> os.remove("fink_fat/test/call_orbfit/K21E00A.odc")
+    >>> os.remove("fink_fat/test/call_orbfit/K21E00A.olg")
+    >>> os.remove("fink_fat/test/call_orbfit/K21E00A.pro")
+    >>> os.remove("fink_fat/test/call_orbfit/K21E00A.clo")
+    >>> os.remove("fink_fat/test/call_orbfit/K21E00A.err")
+    >>> os.remove("fink_fat/test/call_orbfit/mpcobs/K21E00A.rwo")
+    >>> os.remove("fink_fat/test/call_orbfit/K21E00A.oel")
+
+    >>> os.remove("fink_fat/test/call_orbfit/K23Nb8K.odc")
+    >>> os.remove("fink_fat/test/call_orbfit/K23Nb8K.olg")
+    >>> os.remove("fink_fat/test/call_orbfit/K23Nb8K.pro")
+    >>> os.remove("fink_fat/test/call_orbfit/K23Nb8K.clo")
+    >>> os.remove("fink_fat/test/call_orbfit/K23Nb8K.err")
+    >>> os.remove("fink_fat/test/call_orbfit/mpcobs/K23Nb8K.rwo")
+    >>> os.remove("fink_fat/test/call_orbfit/K23Nb8K.oel")
+
+    >>> os.remove("fink_fat/test/K23Nb8K.log")
+    >>> os.remove("fink_fat/test/K21E00A.log")
+    >>> os.remove("fink_fat/test/K19V01E_K20V02K.log")
     """
     orbitfit_path = os.path.join(os.environ["ORBFIT_HOME"], "bin", "")
 
     if second_designation is None:
-        command = (
-            orbitfit_path
-            + "orbfit.x < "
-            + ram_dir
-            + first_designation
-            + ".inp "
-            + ">/dev/null 2>&1"
-        )
+        command = orbitfit_path + "orbfit.x < " + ram_dir + first_designation + ".inp "
     else:
         command = (
             orbitfit_path
@@ -95,22 +115,73 @@ def call_orbitfit(ram_dir, first_designation, second_designation=None):
             + "_"
             + second_designation
             + ".inp "
-            + ">/dev/null 2>&1"
         )
 
-    with subprocess.Popen(
-        command, shell=True, stdout=subprocess.DEVNULL, preexec_fn=os.setsid
-    ) as process:
+    def generate_logs(
+        run_exception: Union[subprocess.CalledProcessError, subprocess.TimeoutExpired]
+    ):
+        err_type = (
+            f"timeout exceeded: {run_exception.timeout} seconds"
+            if isinstance(run_exception, subprocess.TimeoutExpired)
+            else f"return code: {run_exception.returncode}"
+        )
+        str_err = f"""
+--- ORBFIT ERROR ---
+command: {run_exception.cmd}
+{err_type}
+
+stdout:
+{run_exception.stdout.decode("utf-8")}
+
+
+
+stderr:
+{run_exception.stderr.decode("utf-8")}
+
+
+
+subprocess output:
+{run_exception.output.decode("utf-8")}
+-------------------------------------
+"""
+        return str_err
+
+    def write_logs(str_log, first_designation, second_designation):
+        ram_path_parent = pathlib.Path(ram_dir).parent.absolute()
+        log_file_name = first_designation if second_designation is None else first_designation + "_" + second_designation
+        with open(os.path.join(ram_path_parent, f"{log_file_name}.log"), "w") as f:
+            f.write(str_log)
+
+    try:
+        completed_process = subprocess.run(
+            command, shell=True, capture_output=True, timeout=5
+        )
         try:
-            output = process.communicate(timeout=5)[0]
-            return output
-        except subprocess.TimeoutExpired:  # pragma: no cover
-            os.killpg(process.pid, signal.SIGINT)  # send signal to the process group
-            output = process.communicate()[0]
-            return output
+            completed_process.check_returncode()
+            if verbose:
+                str_out = f"""
+--- ORBFIT OUTPUT ---
+args: {completed_process.args}
+returncode: {completed_process.returncode}
+
+stdout:
+{completed_process.stdout.decode("utf-8")}
 
 
-def get_orbit_param(ram_dir, df, n_triplets, noise_ntrials, prop_epoch=None, verbose=1):
+
+stderr:
+{completed_process.stderr.decode("utf-8")}
+-------------------------------------
+"""
+                write_logs(str_out, first_designation, second_designation)
+
+        except subprocess.CalledProcessError as e:
+            write_logs(generate_logs(e), first_designation, second_designation)
+    except subprocess.TimeoutExpired as te:
+        write_logs(generate_logs(te), first_designation, second_designation)
+
+
+def get_orbit_param(ram_dir, df, n_triplets, noise_ntrials, prop_epoch=None, verbose_orbfit=1, verbose=None):
     """
     Compute the orbital elements of one trajectory.
 
@@ -180,7 +251,7 @@ def get_orbit_param(ram_dir, df, n_triplets, noise_ntrials, prop_epoch=None, ver
                 prop_epoch="JD  {} UTC".format(df_one_traj["jd"].values[-1]),
                 n_triplets=n_triplets,
                 noise_ntrials=noise_ntrials,
-                verbose=verbose,
+                verbose=verbose_orbfit,
             )
         else:
             of.write_oop(
@@ -189,11 +260,11 @@ def get_orbit_param(ram_dir, df, n_triplets, noise_ntrials, prop_epoch=None, ver
                 prop_epoch="JD  {} UTC".format(prop_epoch),
                 n_triplets=n_triplets,
                 noise_ntrials=noise_ntrials,
-                verbose=verbose,
+                verbose=verbose_orbfit,
             )
 
         try:
-            call_orbitfit(ram_dir, prov_desig)
+            call_orbitfit(ram_dir, prov_desig, verbose=verbose)
         except Exception as e:  # pragma: no cover
             print(e)
             print("ERROR CALLING ORBFIT: {}".format(prov_desig))
@@ -271,7 +342,8 @@ def compute_df_orbit_param(
     n_triplets=10,
     noise_ntrials=10,
     prop_epoch=None,
-    verbose=1,
+    verbose_orbfit=1,
+    verbose=None
 ):
     """
     Compute the orbital elements of a set of trajectories. Computation are done in parallel.
@@ -339,7 +411,8 @@ def compute_df_orbit_param(
             n_triplets,
             noise_ntrials,
             prop_epoch,
-            verbose,
+            verbose_orbfit,
+            verbose
         )
         for tr_chunk, chunk_dir in zip(trajectory_id_chunks, chunk_ramdir)
         if len(tr_chunk) > 0
