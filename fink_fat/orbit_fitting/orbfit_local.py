@@ -182,7 +182,7 @@ stderr:
         write_logs(generate_logs(te), first_designation, second_designation)
 
 
-def get_orbit_param(ram_dir, df, n_triplets, noise_ntrials, prop_epoch=None, verbose=1):
+def get_orbit_param(ram_dir, df, n_triplets, noise_ntrials, prop_epoch=None, verbose_orbfit=1, verbose=None):
     """
     Compute the orbital elements of one trajectory.
 
@@ -252,7 +252,7 @@ def get_orbit_param(ram_dir, df, n_triplets, noise_ntrials, prop_epoch=None, ver
                 prop_epoch="JD  {} UTC".format(df_one_traj["jd"].values[-1]),
                 n_triplets=n_triplets,
                 noise_ntrials=noise_ntrials,
-                verbose=verbose,
+                verbose=verbose_orbfit,
             )
         else:
             of.write_oop(
@@ -261,11 +261,11 @@ def get_orbit_param(ram_dir, df, n_triplets, noise_ntrials, prop_epoch=None, ver
                 prop_epoch="JD  {} UTC".format(prop_epoch),
                 n_triplets=n_triplets,
                 noise_ntrials=noise_ntrials,
-                verbose=verbose,
+                verbose=verbose_orbfit,
             )
 
         try:
-            call_orbitfit(ram_dir, prov_desig)
+            call_orbitfit(ram_dir, prov_desig, verbose=verbose)
         except Exception as e:  # pragma: no cover
             print(e)
             print("ERROR CALLING ORBFIT: {}".format(prov_desig))
@@ -343,7 +343,8 @@ def compute_df_orbit_param(
     n_triplets=10,
     noise_ntrials=10,
     prop_epoch=None,
-    verbose=1,
+    verbose_orbfit=1,
+    verbose=None
 ):
     """
     Compute the orbital elements of a set of trajectories. Computation are done in parallel.
@@ -411,7 +412,8 @@ def compute_df_orbit_param(
             n_triplets,
             noise_ntrials,
             prop_epoch,
-            verbose,
+            verbose_orbfit,
+            verbose
         )
         for tr_chunk, chunk_dir in zip(trajectory_id_chunks, chunk_ramdir)
         if len(tr_chunk) > 0

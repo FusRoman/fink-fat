@@ -289,7 +289,8 @@ def fink_fat_main(arguments):
                     int(config["SOLVE_ORBIT_PARAMS"]["n_triplets"]),
                     int(config["SOLVE_ORBIT_PARAMS"]["noise_ntrials"]),
                     prop_epoch=float(prop_epoch) if prop_epoch != "None" else None,
-                    verbose=int(config["SOLVE_ORBIT_PARAMS"]["orbfit_verbose"])
+                    verbose_orbfit=int(config["SOLVE_ORBIT_PARAMS"]["orbfit_verbose"]),
+                    verbose=arguments["--verbose"]
                 ).drop("provisional designation", axis=1)
                 orbfit_time = t.time() - t_before
 
@@ -1168,7 +1169,8 @@ def fink_fat_main(arguments):
                         int(config["SOLVE_ORBIT_PARAMS"]["n_triplets"]),
                         int(config["SOLVE_ORBIT_PARAMS"]["noise_ntrials"]),
                         prop_epoch=float(prop_epoch) if prop_epoch != "None" else None,
-                        verbose=int(config["SOLVE_ORBIT_PARAMS"]["orbfit_verbose"])
+                        verbose_orbfit=int(config["SOLVE_ORBIT_PARAMS"]["orbfit_verbose"]),
+                        verbose=arguments["--verbose"]
                     ).drop("provisional designation", axis=1)
                     orbfit_time = t.time() - t_before
 
