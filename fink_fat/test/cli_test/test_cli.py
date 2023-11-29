@@ -119,27 +119,31 @@ if __name__ == "__main__":
 
     try:
         assert_frame_equal(
-            old_obs.sort_values("candid").round(decimals=5),
-            old_obs_test.sort_values("candid").round(decimals=5),
+            old_obs.sort_values("candid").round(decimals=5).reset_index(drop=True),
+            old_obs_test.sort_values("candid").round(decimals=5).reset_index(drop=True),
+            check_like=True
         )
 
         assert_frame_equal(
-            trajectory_df.sort_values("trajectory_id").round(decimals=5),
-            trajectory_df_test.sort_values("trajectory_id").round(decimals=5),
+            trajectory_df.sort_values("trajectory_id").round(decimals=5).reset_index(drop=True),
+            trajectory_df_test.sort_values("trajectory_id").round(decimals=5).reset_index(drop=True),
+            check_like=True
         )
 
         assert_frame_equal(
-            obs_orb_test.sort_values("ssoCandId").round(decimals=5),
-            obs_orb.sort_values("ssoCandId").round(decimals=5),
+            obs_orb_test.sort_values("ssoCandId").round(decimals=5).reset_index(drop=True),
+            obs_orb.sort_values("ssoCandId").round(decimals=5).reset_index(drop=True),
+            check_like=True
         )
 
         assert_frame_equal(
             orb_test[["ssoCandId", "ref_epoch", "a", "e", "i"]]
             .sort_values("ssoCandId")
-            .round(decimals=5),
+            .round(decimals=5).reset_index(drop=True),
             orb[["ssoCandId", "ref_epoch", "a", "e", "i"]]
             .sort_values("ssoCandId")
-            .round(decimals=5),
+            .round(decimals=5).reset_index(drop=True),
+            check_like=True
         )
 
         shutil.rmtree("fink_fat/test/cli_test/fink_fat_out")
