@@ -280,11 +280,16 @@ def fink_fat_main(arguments):
             # solve orbit in local mode
             if arguments["local"]:
                 t_before = t.time()
+                prop_epoch = config["SOLVE_ORBIT_PARAMS"]["prop_epoch"]
                 # return orbit results from local mode
                 orbit_results = compute_df_orbit_param(
                     traj_to_orbital,
                     int(config["SOLVE_ORBIT_PARAMS"]["cpu_count"]),
                     config["SOLVE_ORBIT_PARAMS"]["ram_dir"],
+                    int(config["SOLVE_ORBIT_PARAMS"]["n_triplets"]),
+                    int(config["SOLVE_ORBIT_PARAMS"]["noise_ntrials"]),
+                    prop_epoch=float(prop_epoch) if prop_epoch != "None" else None,
+                    verbose=int(config["SOLVE_ORBIT_PARAMS"]["orbfit_verbose"])
                 ).drop("provisional designation", axis=1)
                 orbfit_time = t.time() - t_before
 
@@ -1154,11 +1159,16 @@ def fink_fat_main(arguments):
 
                 if arguments["local"]:
                     t_before = t.time()
+                    prop_epoch = config["SOLVE_ORBIT_PARAMS"]["prop_epoch"]
                     # return orbit results from local mode
                     orbit_results = compute_df_orbit_param(
                         traj_to_orbital,
                         int(config["SOLVE_ORBIT_PARAMS"]["cpu_count"]),
                         config["SOLVE_ORBIT_PARAMS"]["ram_dir"],
+                        int(config["SOLVE_ORBIT_PARAMS"]["n_triplets"]),
+                        int(config["SOLVE_ORBIT_PARAMS"]["noise_ntrials"]),
+                        prop_epoch=float(prop_epoch) if prop_epoch != "None" else None,
+                        verbose=int(config["SOLVE_ORBIT_PARAMS"]["orbfit_verbose"])
                     ).drop("provisional designation", axis=1)
                     orbfit_time = t.time() - t_before
 
