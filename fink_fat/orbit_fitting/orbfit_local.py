@@ -122,7 +122,7 @@ def call_orbitfit(ram_dir, first_designation, second_designation=None, verbose=F
     ):
         err_type = (
             f"timeout exceeded: {run_exception.timeout} seconds"
-            if isinstance(type(run_exception), subprocess.TimeoutExpired)
+            if isinstance(run_exception, subprocess.TimeoutExpired)
             else f"return code: {run_exception.returncode}"
         )
         str_err = f"""
