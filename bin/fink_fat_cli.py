@@ -1,6 +1,6 @@
 """
 Usage:
-    fink_fat associations (mpc | candidates) [--night <date>] [options]
+    fink_fat associations (mpc | candidates) [--night <date>] [--filepath <filepath>] [options]
     fink_fat solve_orbit (mpc | candidates) (local | cluster) [options]
     fink_fat merge_orbit (mpc | candidates) [options]
     fink_fat offline (mpc | candidates) (local | cluster) <end> [<start>] [options]
@@ -27,6 +27,7 @@ Options:
                                    Format is yyyy-mm-dd as yyyy = year, mm = month, dd = day.
                                    Example : 2022-03-04 for the 2022 march 04.
                                    [intervall of day between the day starting at night midday until night midday + 1]
+  -f <filepath> --filepath <filepath> Path to the Euclid SSOPipe output file.
   -m <path> --mpc-data <path>      Compute statistics according to the minor planet center database.
                                    <path> of the mpc database file.
                                    The mpc database can be downloaded by pasting this url in your browser: https://minorplanetcenter.net/Extended_Files/mpcorb_extended.json.gz
@@ -77,6 +78,7 @@ from fink_fat.orbit_fitting.orbfit_merger import merge_orbit
 from bin.association_cli import (
     get_data,
     get_last_sso_alert,
+    get_last_sso_alert_from_file,
     intro_reset,
     no_reset,
     yes_reset,
@@ -163,9 +165,17 @@ def fink_fat_main(arguments):
                 exit()
 
         t_before = t.time()
-        new_alerts = get_last_sso_alert(
-            object_class, last_night, arguments["--verbose"]
-        )
+        if arguments['--filepath']:
+            new_alerts = get_last_sso_alert_from_file(arguments["--filepath"], arguments["--verbose"])
+            if arguments["--verbose"]:
+                print("Number of alerts measurements from {}: {}".format(arguments["--filepath"], len(new_alerts)))
+        else:
+            new_alerts = get_last_sso_alert(
+                object_class, last_night, arguments["--verbose"]
+            )
+            if arguments["--verbose"]:
+                print("Number of alerts retrieve from fink: {}".format(len(new_alerts)))
+
         if len(new_alerts) == 0:
             print("no alerts available for the night of {}".format(last_night))
             exit()
@@ -173,9 +183,6 @@ def fink_fat_main(arguments):
         last_nid = next_nid = new_alerts["nid"][0]
         if len(trajectory_df) > 0 and len(old_obs_df) > 0:
             last_nid = np.max([np.max(trajectory_df["nid"]), np.max(old_obs_df["nid"])])
-
-        if arguments["--verbose"]:
-            print("Number of alerts retrieve from fink: {}".format(len(new_alerts)))
 
         if arguments["--save"]:
             save_path = os.path.join(output_path, "save", "")
