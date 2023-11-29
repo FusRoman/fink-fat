@@ -191,7 +191,7 @@ def cluster_mode(
     return orbit_results
 
 
-def switch_local_cluster(config: dict, traj_orb: pd.DataFrame) -> pd.DataFrame:
+def switch_local_cluster(arguments: dict, config: dict, traj_orb: pd.DataFrame) -> pd.DataFrame:
     """
     Run the orbit fitting and choose cluster mode if the number of trajectories are above
     the local limit set in the config file
@@ -220,14 +220,17 @@ def switch_local_cluster(config: dict, traj_orb: pd.DataFrame) -> pd.DataFrame:
         config_epoch = config["SOLVE_ORBIT_PARAMS"]["prop_epoch"]
         prop_epoch = None if config_epoch == "None" else float(config_epoch)
 
+        prop_epoch = config["SOLVE_ORBIT_PARAMS"]["prop_epoch"]
+        # return orbit results from local mode
         new_orbit_pdf = compute_df_orbit_param(
             traj_orb,
             int(config["SOLVE_ORBIT_PARAMS"]["cpu_count"]),
             config["SOLVE_ORBIT_PARAMS"]["ram_dir"],
             int(config["SOLVE_ORBIT_PARAMS"]["n_triplets"]),
             int(config["SOLVE_ORBIT_PARAMS"]["noise_ntrials"]),
-            prop_epoch,
-            int(config["SOLVE_ORBIT_PARAMS"]["orbfit_verbose"]),
+            prop_epoch=float(prop_epoch) if prop_epoch != "None" else None,
+            verbose_orbfit=int(config["SOLVE_ORBIT_PARAMS"]["orbfit_verbose"]),
+            verbose=arguments["--verbose"]
         ).drop("provisional designation", axis=1)
     return new_orbit_pdf
 

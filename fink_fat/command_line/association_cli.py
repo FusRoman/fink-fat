@@ -7,6 +7,7 @@ import shutil
 from io import BytesIO
 from fink_fat.others.utils import init_logging
 
+from astropy.time import Time
 
 def request_fink(
     object_class,
@@ -181,6 +182,72 @@ def get_n_sso(object_class, date):
     return pdf["class:{}".format(object_class)].values[0]
 
 
+def get_last_sso_alert_from_file(filepath, verbose=False):
+    """
+    Read single night alert data from a file. The file header **must contain** at least:
+    ra, dec, jd, magpsf, sigmapsf
+
+    other fields can exist, and will remain attached.
+
+    Parameters
+    ----------
+    filepath: str
+        Path to a file containing measurements
+    verbose: bool
+        If True, print extra information. Default is False.
+
+    Returns
+    -------
+    pdf : pd.DataFrame
+        the alerts from Fink with the following columns:
+            ra, dec, jd, nid, fid, magpsf, sigmapsf, candid, not_updated
+
+    Examples
+    --------
+    >>> data_path = "fink_fat/data/sample_euclid.txt"
+    >>> pdf = get_last_sso_alert_from_file(data_path)
+    >>> assert len(pdf) == 2798
+    >>> assert 'objectId' in pdf.columns
+    """
+    pdf = pd.read_csv(filepath, header=0, sep=r'\s+', index_col=False)
+
+    required_header = ['ra', 'dec', 'jd', 'magpsf', 'sigmapsf']
+    msg = """
+    The header of {} must contain at least the following fields:
+    ra dec jd magpsf sigmapsf
+    """.format(filepath)
+    assert set(required_header) - set(pdf.columns) == set(), AssertionError(msg)
+
+    if 'objectId' not in pdf.columns:
+        pdf['objectId'] = range(len(pdf))
+
+    pdf['candid'] = range(10, len(pdf) + 10)
+    pdf['nid'] = 0
+    pdf['fid'] = 0
+
+    required_columns = [
+        "objectId",
+        "candid",
+        "ra",
+        "dec",
+        "jd",
+        "nid",
+        "fid",
+        "magpsf",
+        "sigmapsf",
+        "not_updated",
+        "last_assoc_date",
+    ]
+
+    if len(pdf) > 0:
+        date = Time(pdf['jd'].values[0], format='jd').iso.split(' ')[0]
+        pdf.insert(len(pdf.columns), "not_updated", np.ones(len(pdf), dtype=np.bool_))
+        pdf.insert(len(pdf.columns), "last_assoc_date", date)
+    else:
+        return pd.DataFrame(columns=required_columns)
+
+    return pdf[required_columns]
+
 def get_last_sso_alert(object_class, date, verbose=False):
     """
     Get the alerts from Fink corresponding to the object_class for the given date.
@@ -237,6 +304,18 @@ def get_last_sso_alert(object_class, date, verbose=False):
         object_class, n_sso, startdate, stopdate, request_columns, verbose, 5, 0
     )
 
+    translate_columns = {
+        "i:objectId": "objectId",
+        "i:candid": "candid",
+        "i:ra": "ra",
+        "i:dec": "dec",
+        "i:jd": "jd",
+        "i:nid": "nid",
+        "i:fid": "fid",
+        "i:magpsf": "magpsf",
+        "i:sigmapsf": "sigmapsf",
+    }
+
     required_columns = [
         "objectId",
         "candid",
@@ -250,17 +329,6 @@ def get_last_sso_alert(object_class, date, verbose=False):
         "not_updated",
         "last_assoc_date",
     ]
-    translate_columns = {
-        "i:objectId": "objectId",
-        "i:candid": "candid",
-        "i:ra": "ra",
-        "i:dec": "dec",
-        "i:jd": "jd",
-        "i:nid": "nid",
-        "i:fid": "fid",
-        "i:magpsf": "magpsf",
-        "i:sigmapsf": "sigmapsf",
-    }
 
     if object_class == "Solar System MPC":  # pragma: no cover
         required_columns.append("ssnamenr")
