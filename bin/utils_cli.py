@@ -442,11 +442,11 @@ def assig_tags(orb_df, traj_orb_df, start_tags):
     ... })
     >>> new_orb, new_traj = assig_tags(orb, traj, 0)
 
-    >>> orb_test = pd.read_parquet("fink_fat/test/utils_cli_test_orb.parquet")
-    >>> traj_test = pd.read_parquet("fink_fat/test/utils_cli_test_traj.parquet")
+    >>> orb_test = pd.read_parquet("fink_fat/test/utils_cli_test_orb.parquet").reset_index(drop=True)
+    >>> traj_test = pd.read_parquet("fink_fat/test/utils_cli_test_traj.parquet").reset_index(drop=True)
 
-    >>> assert_frame_equal(orb_test, new_orb)
-    >>> assert_frame_equal(traj_test, new_traj)
+    >>> assert_frame_equal(orb_test, new_orb.reset_index(drop=True))
+    >>> assert_frame_equal(traj_test, new_traj.reset_index(drop=True))
     """
     orb_df = orb_df.sort_values("ref_epoch")
 
