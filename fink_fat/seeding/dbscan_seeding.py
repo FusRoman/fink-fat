@@ -81,9 +81,9 @@ def intra_night_seeding(
     2  30   30   2             -1
     3  11   11   3              1
     4  12   12   4              1
-    5  20   20   5             -1
-    6  21   21   5             -1
-    7  22   22   6             -1
+    5  20   20   5              2
+    6  21   21   5              2
+    7  22   22   6              2
     """
     assert sep_criterion.unit == u.Unit("deg")
 

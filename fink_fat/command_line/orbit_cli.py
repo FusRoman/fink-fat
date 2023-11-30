@@ -191,7 +191,7 @@ def cluster_mode(
     return orbit_results
 
 
-def switch_local_cluster(arguments: dict, config: dict, traj_orb: pd.DataFrame) -> pd.DataFrame:
+def switch_local_cluster(config: dict, traj_orb: pd.DataFrame, verbose=False) -> pd.DataFrame:
     """
     Run the orbit fitting and choose cluster mode if the number of trajectories are above
     the local limit set in the config file
@@ -230,7 +230,7 @@ def switch_local_cluster(arguments: dict, config: dict, traj_orb: pd.DataFrame) 
             int(config["SOLVE_ORBIT_PARAMS"]["noise_ntrials"]),
             prop_epoch=float(prop_epoch) if prop_epoch != "None" else None,
             verbose_orbfit=int(config["SOLVE_ORBIT_PARAMS"]["orbfit_verbose"]),
-            verbose=arguments["--verbose"]
+            verbose=verbose
         ).drop("provisional designation", axis=1)
     return new_orbit_pdf
 
@@ -249,6 +249,8 @@ def trcand_to_orbit(
 
     Parameters
     ----------
+    arguments : dict
+        the commend line arguments
     config : dict
         the data from the config file
     trajectory_df : pd.DataFrame
@@ -297,7 +299,7 @@ def trcand_to_orbit(
         # no trajectory updated during this night to send to orbit fitting
         return trajectory_df, trparams_df, trajectory_orb, orbits
 
-    new_orbits = switch_local_cluster(config, traj_to_orb)
+    new_orbits = switch_local_cluster(config, traj_to_orb, verbose)
     new_orbits = new_orbits[new_orbits["a"] != -1.0]
     if verbose:
         logger.info(
