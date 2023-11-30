@@ -1,28 +1,21 @@
 import numpy as np
 import pandas as pd
-import sys
-import doctest
 from typing import Tuple
-
-from copy import deepcopy
 
 from fink_fat.others.utils import repeat_chunk
 from fink_fat.others.utils import LoggerNewLine
-from fink_fat.roid_fitting.utils_roid_fit import fit_traj
 from fink_fat.roid_fitting.init_roid_fitting import init_polyast
 import time
-from typing import Tuple
-
 
 
 def merge_trajectory_cluster(
-        tr_to_update: pd.DataFrame, 
-        fit_roid_df: pd.DataFrame,
-        base_tr_id: int,
-        new_alerts: pd.DataFrame, 
-        logger: LoggerNewLine, 
-        verbose: bool
-    )-> Tuple[pd.DataFrame, pd.DataFrame]:
+    tr_to_update: pd.DataFrame,
+    fit_roid_df: pd.DataFrame,
+    base_tr_id: int,
+    new_alerts: pd.DataFrame,
+    logger: LoggerNewLine,
+    verbose: bool,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Merge the trajectory with the intra night tracklets (cluster from dbscan)
 
@@ -40,8 +33,8 @@ def merge_trajectory_cluster(
             - trajectory_id: id return by the intra night associations (observations of the same tracklets)
             - roid: flag from the asteroids science module of fink, 4 means alerts associated with a fink-fat trajectory
             - estimator_id: id of the fink-fat trajectory associated with this alerts.
-            The goal of this function is to merge the cluster (all alerts with the same trjaectory_id) 
-            to the trajectory with the same estimator_id.  
+            The goal of this function is to merge the cluster (all alerts with the same trjaectory_id)
+            to the trajectory with the same estimator_id.
     logger : LoggerNewLine
         the logger object for logs
     verbose : bool
@@ -52,12 +45,12 @@ def merge_trajectory_cluster(
     Tuple[pd.DataFrame, pd.DataFrame]
         new_traj_tracklets -> the trajectories extends with the clusters
         new_fit_roid_tracklets -> the prediction functions updated with the new added points from the clusters
-    
+
     Examples
     --------
     see stream_association_test
     """
-    
+
     cluster_df = new_alerts[
         (new_alerts["trajectory_id"] != -1) & (new_alerts["roid"] == 4)
     ]
@@ -78,8 +71,9 @@ def merge_trajectory_cluster(
                     tr_to_update[tr_to_update["trajectory_id"] == tr_id],
                     # get the cluster
                     (
-                        cluster_df[cluster_df["trajectory_id"] == cl_id]
-                        .sort_values("jd")
+                        cluster_df[cluster_df["trajectory_id"] == cl_id].sort_values(
+                            "jd"
+                        )
                         # .drop_duplicates("objectId")
                     ),
                 ]
@@ -108,19 +102,20 @@ def merge_trajectory_cluster(
         new_fit_roid_tracklets = init_polyast(new_traj_tracklets)
 
     if verbose:
-        logger.info(f"time to merge trajectories with clusters : {time.time() - t_before}")
+        logger.info(
+            f"time to merge trajectories with clusters : {time.time() - t_before}"
+        )
     return new_traj_tracklets, new_fit_roid_tracklets
 
 
-
 def merge_trajectory_alerts(
-        trajectory_df: pd.DataFrame,
-        fit_roid_df: pd.DataFrame,
-        next_traj_id: int,
-        new_alerts: pd.DataFrame, 
-        logger: LoggerNewLine, 
-        verbose: bool
-    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    trajectory_df: pd.DataFrame,
+    fit_roid_df: pd.DataFrame,
+    next_traj_id: int,
+    new_alerts: pd.DataFrame,
+    logger: LoggerNewLine,
+    verbose: bool,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Merge the trajectory with the intra night tracklets (cluster from dbscan)
 
@@ -144,7 +139,7 @@ def merge_trajectory_alerts(
     Tuple[pd.DataFrame, pd.DataFrame]
         new_traj -> the trajectories with the new added points
         new_fit_roid_single -> the new estimations of the prediction functions
-    
+
     Examples
     --------
     see stream_association_test
@@ -180,12 +175,11 @@ def merge_trajectory_alerts(
             traj_to_update.index.values, traj_size.values, traj_counts_duplicates.values
         )
         traj_duplicate = traj_to_update.loc[duplicate_id]
-        
+
         nb_repeat = np.repeat(traj_size.values, traj_counts_duplicates.values)
         tr_id_repeat = np.repeat(single_alerts["trajectory_id"].values, nb_repeat)
 
         traj_duplicate["trajectory_id"] = tr_id_repeat
-        
 
         new_traj = pd.concat([traj_duplicate, single_alerts])
         new_fit_roid_single = init_polyast(new_traj)
@@ -230,7 +224,7 @@ def stream_association(
     Tuple[pd.DataFrame, pd.DataFrame]
         traj_results -> the trajectories extends with the new points
         fit_roid_results -> the new estimation of the prediction functions with the new points
-    
+
     Examples
     --------
     see stream_association_test
@@ -261,12 +255,7 @@ def stream_association(
     # ------ MERGE TRAJECTORY WITH CLUSTER ------
     new_tr_id = np.max(trajectory_df["trajectory_id"].unique()) + 1
     new_traj_tracklets, new_fit_roid_tracklets = merge_trajectory_cluster(
-        tr_to_update,
-        fit_roid_df,
-        new_tr_id,
-        new_alerts,
-        logger,
-        verbose
+        tr_to_update, fit_roid_df, new_tr_id, new_alerts, logger, verbose
     )
     next_traj_id = np.max(new_fit_roid_tracklets["trajectory_id"].unique()) + 1
 
