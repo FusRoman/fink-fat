@@ -63,6 +63,8 @@ def orbit_associations(
     Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]
         the new orbits, the updated trajectories and the old orbits
     """
+    if verbose:
+        logger.info("start the associations with the orbits")
     orbit_cols_to_keep = list(orbits.columns)
     traj_cols_to_keep = list(trajectory_df.columns)
     if "ffdistnr" not in traj_cols_to_keep:
@@ -70,6 +72,7 @@ def orbit_associations(
 
     orbit_alert_assoc = (
         new_alerts[new_alerts["roid"] == 5]
+        .explode(["estimator_id", "ffdistnr"])
         .rename({"estimator_id": "ssoCandId"}, axis=1)
         .drop("roid", axis=1)
     )
@@ -87,10 +90,11 @@ def orbit_associations(
         logger.info(f"number of orbits to update: {len(updated_sso_id)}")
 
     duplicated_id = orbit_alert_assoc[
-        orbit_alert_assoc[["ssoCandId", "jd"]].duplicated()
+        orbit_alert_assoc[["ssoCandId", "candid"]].duplicated()
     ]["ssoCandId"]
     assert len(duplicated_id) == 0
 
+    # recompute the orbit using local or cluster mode
     new_orbit_pdf = switch_local_cluster(config, traj_to_new_orbit)
 
     # remove the failed orbits
@@ -99,6 +103,7 @@ def orbit_associations(
         logger.info(
             f"number of successfull updated orbits: {len(new_orbit_pdf)} ({(len(new_orbit_pdf) / len(updated_sso_id)) * 100} %)"
         )
+        logger.newline(2)
     new_orbit_pdf["ssoCandId"] = new_orbit_pdf["trajectory_id"].map(trid_to_ssoid)
     updated_id = new_orbit_pdf["ssoCandId"]
 

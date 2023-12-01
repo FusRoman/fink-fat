@@ -7,6 +7,7 @@ from typing import Tuple
 from copy import deepcopy
 
 from fink_fat.others.utils import repeat_chunk
+from fink_fat.others.utils import LoggerNewLine
 
 
 def update_kalman(
@@ -19,7 +20,7 @@ def update_kalman(
     tr_id: int,
 ) -> pd.Series:
     """
-    Update the kalman filter contains in the
+    Update the kalman filter in input inplace.
 
     Parameters
     ----------
@@ -43,29 +44,13 @@ def update_kalman(
     pd.Series
         same row as input but updated with the new alert
     """
-    Y = np.array(
-        [
-            [
-                ra_alert,
-                dec_alert,
-            ]
-        ]
-    )
-
     dt = jd_alert - kalman_copy["jd_1"].values[0]
-    A = np.array(
-        [
-            [1, 0, dt, 0],
-            [0, 1, 0, dt],
-            [0, 0, 1, 0],
-            [0, 0, 0, 1],
-        ]
-    )
 
-    kalman_copy["kalman"].values[0].update(
-        Y,
-        A,
-    )
+    if dt == 0:
+        # if the dt is 0, the previous data point of the kalman are in the same exposure.
+        # it happens only for the assocations between the tracklets and the kalman
+        # and skip this point is not too bad for the rest of the kalman estimation.
+        return kalman_copy
     with pd.option_context("mode.chained_assignment", None):
         kalman_copy["ra_0"] = kalman_copy["ra_1"]
         kalman_copy["dec_0"] = kalman_copy["dec_1"]
@@ -86,6 +71,29 @@ def update_kalman(
             kalman_copy["dec_1"] - kalman_copy["dec_0"]
         ) / kalman_copy["dt"]
         kalman_copy["trajectory_id"] = tr_id
+
+    A = np.array(
+        [
+            [1, 0, dt, 0],
+            [0, 1, 0, dt],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1],
+        ]
+    )
+
+    Y = np.array(
+        [
+            [ra_alert],
+            [dec_alert],
+            [kalman_copy["vel_ra"].values[0]],
+            [kalman_copy["vel_dec"].values[0]],
+        ]
+    )
+
+    kalman_copy["kalman"].values[0].update(
+        Y,
+        A,
+    )
 
     return kalman_copy
 
@@ -182,7 +190,11 @@ def trajectory_extension(
 
 
 def tracklets_associations(
-    trajectory_df: pd.DataFrame, kalman_df: pd.DataFrame, new_alerts: pd.DataFrame
+    trajectory_df: pd.DataFrame,
+    kalman_df: pd.DataFrame,
+    new_alerts: pd.DataFrame,
+    logger: LoggerNewLine,
+    verbose: bool,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Associates the intra night trajectories with the kalman trajectories.
@@ -195,6 +207,10 @@ def tracklets_associations(
         dataframe containing the kalman filters informations
     new_alerts : pd.DataFrame
         new associateds alerts from the new observing night.
+    logger : LoggerNewLine
+        logger class used to print the logs
+    verbose : bool
+        if true, print the logs
 
     Returns
     -------
@@ -241,10 +257,19 @@ def tracklets_associations(
             new_tr_id += 1
 
     if len(res_updated_traj) == 0:
+        if verbose:
+            logger.info(
+                "no associations between the intra night tracklets and the trajectories"
+            )
         return (
             pd.DataFrame(columns=trajectory_df.columns),
             pd.DataFrame(columns=kalman_df.columns),
             new_tr_id,
+        )
+
+    if verbose:
+        logger.info(
+            f"number of associations between the intra night tracklets and the trajectories: {len(res_updated_kalman)}"
         )
 
     # merge the extended trajectories
@@ -259,6 +284,8 @@ def single_alerts_associations(
     kalman_df: pd.DataFrame,
     new_alerts: pd.DataFrame,
     max_tr_id: int,
+    logger: LoggerNewLine,
+    verbose: bool,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Associates the single alerts with the kalman trajectories
@@ -273,6 +300,10 @@ def single_alerts_associations(
         new associateds alerts from the new observing night.
     max_tr_id : int
         maximum trajectory id to assign to the new kalman trajectories
+    logger : LoggerNewLine
+        logger class used to print the logs
+    verbose : bool
+        if true, print the logs
 
     Returns
     -------
@@ -290,6 +321,10 @@ def single_alerts_associations(
     cluster_df = cluster_df.sort_values("estimator_id")
 
     if len(cluster_df) == 0:
+        if verbose:
+            logger.info(
+                "no associations between the single alerts and the trajectories"
+            )
         return pd.DataFrame(columns=trajectory_df.columns), pd.DataFrame(
             columns=kalman_df.columns
         )
@@ -310,6 +345,10 @@ def single_alerts_associations(
             ].values
         ]
     )
+    if verbose:
+        logger.info(
+            f"number of kalman trajectories to updated with single alert: {len(new_kalman)}"
+        )
     traj_to_update = (
         trajectory_df[trajectory_df["trajectory_id"].isin(cluster_df["estimator_id"])]
         .sort_values(["trajectory_id", "jd"])
@@ -325,10 +364,6 @@ def single_alerts_associations(
     tr_id_repeat = np.repeat(cluster_df["trajectory_id"].values, nb_repeat)
 
     traj_duplicate["trajectory_id"] = tr_id_repeat
-    nb_repeat = np.repeat(traj_size.values, traj_counts_duplicates.values)
-    tr_id_repeat = np.repeat(cluster_df["trajectory_id"].values, nb_repeat)
-
-    traj_duplicate["trajectory_id"] = tr_id_repeat
     new_traj = pd.concat([traj_duplicate, cluster_df.drop("estimator_id", axis=1)])
     return new_traj, new_kalman
 
@@ -337,6 +372,8 @@ def kalman_association(
     trajectory_df: pd.DataFrame,
     kalman_df: pd.DataFrame,
     new_alerts: pd.DataFrame,
+    logger: LoggerNewLine,
+    verbose: bool,
     confirmed_sso: bool = False,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
@@ -352,6 +389,10 @@ def kalman_association(
     new_alerts : pd.DataFrame
         dataframe containing the alerts from the current nigth to associates with the kalman filters,
         the dataframe must contains the trajectory_id corresponding to the seeds find by the seeding.
+    logger : LoggerNewLine
+        logger class used to print the logs
+    verbose : bool
+        if true, print the logs
     confirmed_sso : boolean
         if true, used the confirmed sso (for test purpose)
 
@@ -370,7 +411,12 @@ def kalman_association(
         roid_flag = [3, 4]
     else:
         roid_flag = [1, 2, 4]
-    new_alerts = new_alerts[new_alerts["roid"].isin(roid_flag)]
+
+    if verbose:
+        logger.info("- start the association with the kalman filters")
+    new_alerts = new_alerts[new_alerts["roid"].isin(roid_flag)].explode(
+        ["estimator_id", "ffdistnr"]
+    )
     new_alerts = new_alerts.explode(["ffdistnr", "estimator_id"])
     new_alerts["estimator_id"] = new_alerts["estimator_id"].fillna(-1).astype(int)
     traj_id_to_update = np.sort(new_alerts["estimator_id"].unique())
@@ -382,10 +428,10 @@ def kalman_association(
     non_kalman_update = kalman_df[~mask_kalman_update]
 
     res_tr, res_kalman, max_tr_id = tracklets_associations(
-        trajectory_df, kalman_df, new_alerts
+        trajectory_df, kalman_df, new_alerts, logger, verbose
     )
     new_traj, new_kalman = single_alerts_associations(
-        trajectory_df, kalman_df, new_alerts, max_tr_id
+        trajectory_df, kalman_df, new_alerts, max_tr_id, logger, verbose
     )
 
     new_traj = pd.concat([res_tr, new_traj])
@@ -398,7 +444,8 @@ def kalman_association(
 
     traj_results = pd.concat([non_tr_update_df, new_traj])
     kalman_results = pd.concat([non_kalman_update, new_kalman])
-
+    if verbose:
+        logger.newline()
     return traj_results, kalman_results
 
 

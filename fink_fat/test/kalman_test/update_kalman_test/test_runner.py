@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from pandas.testing import assert_frame_equal
 from fink_fat.associations.association_kalman import kalman_association
+from fink_fat.others.utils import init_logging
 
 from fink_fat.test.kalman_test.update_kalman_test import data as d
 
@@ -41,7 +42,7 @@ def assert_test(
 def aux_test_runner(f):
     trajectory_df, kalman_pdf, new_alerts = f()
     new_traj, new_kalman = kalman_association(
-        trajectory_df, kalman_pdf, new_alerts, True
+        trajectory_df, kalman_pdf, new_alerts, init_logging(), False, True
     )
 
     # print("   FUNCTION RESULTS   ")

@@ -26,6 +26,7 @@ def predictions(
     numpy array
         contains the trajectory_id, the predict coordinates and the errors
     """
+    print(f"kalmanDfPrediction dt: {dt}")
     A = np.array(
         [
             [

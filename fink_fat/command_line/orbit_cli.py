@@ -191,7 +191,7 @@ def cluster_mode(
     return orbit_results
 
 
-def switch_local_cluster(config: dict, traj_orb: pd.DataFrame) -> pd.DataFrame:
+def switch_local_cluster(config: dict, traj_orb: pd.DataFrame, verbose=False) -> pd.DataFrame:
     """
     Run the orbit fitting and choose cluster mode if the number of trajectories are above
     the local limit set in the config file
@@ -210,46 +210,55 @@ def switch_local_cluster(config: dict, traj_orb: pd.DataFrame) -> pd.DataFrame:
     """
     nb_orb = len(traj_orb["trajectory_id"].unique())
     if nb_orb > int(config["SOLVE_ORBIT_PARAMS"]["local_mode_limit"]):
+        traj_cols = traj_orb.columns
+        if "estimator_id" in traj_cols:
+            traj_orb = traj_orb.drop("estimator_id", axis=1)
+        if "ffdistnr" in traj_cols:
+            traj_orb = traj_orb.drop("ffdistnr", axis=1)
         new_orbit_pdf = cluster_mode(config, traj_orb)
     else:
         config_epoch = config["SOLVE_ORBIT_PARAMS"]["prop_epoch"]
         prop_epoch = None if config_epoch == "None" else float(config_epoch)
 
+        prop_epoch = config["SOLVE_ORBIT_PARAMS"]["prop_epoch"]
+        # return orbit results from local mode
         new_orbit_pdf = compute_df_orbit_param(
             traj_orb,
             int(config["SOLVE_ORBIT_PARAMS"]["cpu_count"]),
             config["SOLVE_ORBIT_PARAMS"]["ram_dir"],
             int(config["SOLVE_ORBIT_PARAMS"]["n_triplets"]),
             int(config["SOLVE_ORBIT_PARAMS"]["noise_ntrials"]),
-            prop_epoch,
-            int(config["SOLVE_ORBIT_PARAMS"]["orbfit_verbose"]),
+            prop_epoch=float(prop_epoch) if prop_epoch != "None" else None,
+            verbose_orbfit=int(config["SOLVE_ORBIT_PARAMS"]["orbfit_verbose"]),
+            verbose=verbose
         ).drop("provisional designation", axis=1)
     return new_orbit_pdf
 
 
-def kalman_to_orbit(
+def trcand_to_orbit(
     config: dict,
     trajectory_df: pd.DataFrame,
     trajectory_orb: pd.DataFrame,
-    kalman_df: pd.DataFrame,
+    trparams_df: pd.DataFrame,
     orbits: pd.DataFrame,
     logger: LoggerNewLine,
     verbose: bool,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
-    Compute and return the orbits for the trajectories with enough points found by the kalman filters
-
+    Compute and return the orbits for the trajectories with enough points found by the prediction functions
 
     Parameters
     ----------
+    arguments : dict
+        the commend line arguments
     config : dict
         the data from the config file
     trajectory_df : pd.DataFrame
-        trajectories found by the kalman filters
+        trajectories found by the function predictors
     trajectory_orb : pd.DataFrame
         trajectories with orbits
-    kalman_df : pd.DataFrame
-        the kalman filters parameters
+    trparams_df : pd.DataFrame
+        the fit functions parameters
     orbits : pd.DataFrame
         the orbits parameters
     logger : LoggerNewLine
@@ -260,7 +269,7 @@ def kalman_to_orbit(
     Returns
     -------
     Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame,]
-        * trajectories found by the kalman filters without those sent to the orbit fitting
+        * trajectories found by the prediction functions without those sent to the orbit fitting
         * kalman filters without those with the associated trajectories sent to the orbit fitting
         * trajectories with the ones with orbits
         * the orbits parameters with the new ones
@@ -271,7 +280,7 @@ def kalman_to_orbit(
     large_traj = traj_size[traj_size >= orbit_limit]
 
     if len(large_traj) == 0:
-        return trajectory_df, kalman_df, trajectory_orb, orbits
+        return trajectory_df, trparams_df, trajectory_orb, orbits
 
     # to be send to the orbit fitting,
     # a trajectory must have a number of point above the orbit point limit set in the config file
@@ -285,7 +294,12 @@ def kalman_to_orbit(
         logger.info(
             f"number of trajectories send to the orbit fitting: {nb_traj_to_orb}"
         )
-    new_orbits = switch_local_cluster(config, traj_to_orb)
+
+    if nb_traj_to_orb == 0:
+        # no trajectory updated during this night to send to orbit fitting
+        return trajectory_df, trparams_df, trajectory_orb, orbits
+
+    new_orbits = switch_local_cluster(config, traj_to_orb, verbose)
     new_orbits = new_orbits[new_orbits["a"] != -1.0]
     if verbose:
         logger.info(
@@ -305,16 +319,16 @@ def kalman_to_orbit(
     trajectory_df = trajectory_df[
         ~trajectory_df["trajectory_id"].isin(new_traj_id)
     ].reset_index(drop=True)
-    kalman_df = kalman_df[~kalman_df["trajectory_id"].isin(new_traj_id)].reset_index(
+    trparams_df = trparams_df[~trparams_df["trajectory_id"].isin(new_traj_id)].reset_index(
         drop=True
     )
     failed_orbit = np.setdiff1d(large_traj.index.values, new_traj_id)
-    mask_failed = kalman_df["trajectory_id"].isin(failed_orbit)
+    mask_failed = trparams_df["trajectory_id"].isin(failed_orbit)
     with pd.option_context("mode.chained_assignment", None):
-        kalman_df.loc[mask_failed, "orbfit_test"] = (
-            kalman_df.loc[mask_failed, "orbfit_test"] + 1
+        trparams_df.loc[mask_failed, "orbfit_test"] = (
+            trparams_df.loc[mask_failed, "orbfit_test"] + 1
         )
-    return trajectory_df, kalman_df, trajectory_orb, orbits
+    return trajectory_df, trparams_df, trajectory_orb, orbits
 
 
 if __name__ == "__main__":

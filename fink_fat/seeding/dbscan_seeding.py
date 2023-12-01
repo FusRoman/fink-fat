@@ -81,9 +81,9 @@ def intra_night_seeding(
     2  30   30   2             -1
     3  11   11   3              1
     4  12   12   4              1
-    5  20   20   5             -1
-    6  21   21   5             -1
-    7  22   22   6             -1
+    5  20   20   5              2
+    6  21   21   5              2
+    7  22   22   6              2
     """
     assert sep_criterion.unit == u.Unit("deg")
 
@@ -97,19 +97,19 @@ def intra_night_seeding(
         night_observation["trajectory_id"] = clustering.labels_
 
     # remove bad seeds containing observations in the same exposure time
-    test_jd_0 = (
-        night_observation.sort_values("jd")
-        .groupby("trajectory_id")
-        .agg(is_same_exp=("jd", lambda x: np.any(np.diff(x) == 0.0)))
-        .reset_index()
-    )
-    test_jd_0 = test_jd_0[test_jd_0["trajectory_id"] != -1.0]
-    jd_0_traj_id = test_jd_0[test_jd_0["is_same_exp"]]["trajectory_id"]
+    # test_jd_0 = (
+    #     night_observation.sort_values("jd")
+    #     .groupby("trajectory_id")
+    #     .agg(is_same_exp=("jd", lambda x: np.any(np.diff(x) == 0.0)))
+    #     .reset_index()
+    # )
+    # test_jd_0 = test_jd_0[test_jd_0["trajectory_id"] != -1.0]
+    # jd_0_traj_id = test_jd_0[test_jd_0["is_same_exp"]]["trajectory_id"]
 
-    with pd.option_context("mode.chained_assignment", None):
-        night_observation.loc[
-            night_observation["trajectory_id"].isin(jd_0_traj_id), "trajectory_id"
-        ] = -1.0
+    # with pd.option_context("mode.chained_assignment", None):
+    #     night_observation.loc[
+    #         night_observation["trajectory_id"].isin(jd_0_traj_id), "trajectory_id"
+    #     ] = -1.0
 
     return night_observation
 

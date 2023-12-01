@@ -41,33 +41,33 @@ class KalfAst:
                 [initVy],
             ]
         )  # the mean state estimation of the previous step (k-1)
-
-        self.P = np.diag(
-            (0.01, 0.01, 0.01, 0.01)
-        )  # the state covariance of previous step (k-1)
+        self.H = np.array(
+            [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
+        )  # measurement matrix
+        # self.R = np.eye(4)  # measurement noise covariance matrix
+        error_pos = 1
+        error_vel = 1
+        self.R = np.diag((error_pos, error_pos, error_vel, error_vel))
+        self.P = np.diag((1, 1, 1, 1))  # the state covariance of previous step (k-1)
 
         self.A = np.array(state_transition)  # the state transition matrix
 
-        self.Q = np.eye(self.X.shape[0])  # the process noise covariance matrix
+        # self.Q = np.zeros(self.X.shape[0])  # the process noise covariance matrix
         self.B = np.eye(self.X.shape[0])  # the input effect matrix
         self.U = np.zeros((self.X.shape[0], 1))  # the control input
 
-        self.H = np.array(
-            [
-                [1, 0, 0, 0],
-                [0, 1, 0, 0],
-            ]
-        )
-        self.R = np.eye(2)
-
-    def dec_warn(ra, dec, opp_ra, opp_dec):
+    def dec_warn(self, ra, dec, opp_ra, opp_dec):
         """
         raise a warning if the kalman prediction goes beyond the circle coordinates
         """
         warnings.warn(
             f"""\n!!! Warnings! Kalman filter for asteroids generate a bad prediction.
-                            Declination should be -90 < dec < 90, found: ra={ra}, dec={dec}
-                            New position set to the opposite: new_ra={opp_ra}, new_dec={opp_dec}\n"""
+current kalman state:
+{self.X}
+current covariance:
+{self.P}
+Declination should be -90 < dec < 90, found: ra={ra}, dec={dec}
+New position set to the opposite: new_ra={opp_ra}, new_dec={opp_dec}\n"""
         )
 
     def opposite_dec_2d(self, prediction):
@@ -92,7 +92,7 @@ class KalfAst:
         if np.any(dec > 90):
             opposite_ra = 360 - ra
             opposite_dec = 180 - dec
-            KalfAst.dec_warn(ra, dec, opposite_ra, opposite_dec)
+            self.dec_warn(ra, dec, opposite_ra, opposite_dec)
             prediction[0, 0] = opposite_ra
             prediction[1, 0] = opposite_dec
 
@@ -100,7 +100,7 @@ class KalfAst:
             opposite_ra = 360 - ra
             opposite_dec = -(dec + 180)
 
-            KalfAst.dec_warn(ra, dec, opposite_ra, opposite_dec)
+            self.dec_warn(ra, dec, opposite_ra, opposite_dec)
 
             prediction[0, 0] = opposite_ra
             prediction[1, 0] = opposite_dec
@@ -133,7 +133,7 @@ class KalfAst:
             idx_dec = np.where(dec > 90)
             opposite_ra = 360 - ra[idx_dec]
             opposite_dec = 180 - dec[idx_dec]
-            KalfAst.dec_warn(ra, dec, opposite_ra, opposite_dec)
+            self.dec_warn(ra, dec, opposite_ra, opposite_dec)
             ra[idx_dec] = opposite_ra
             dec[idx_dec] = opposite_dec
 
@@ -141,7 +141,7 @@ class KalfAst:
             idx_dec = np.where(dec < -90)
             opposite_ra = 360 - ra[idx_dec]
             opposite_dec = -(dec[idx_dec] + 180)
-            KalfAst.dec_warn(ra, dec, opposite_ra, opposite_dec)
+            self.dec_warn(ra, dec, opposite_ra, opposite_dec)
             ra[idx_dec] = opposite_ra
             dec[idx_dec] = opposite_dec
 
@@ -165,15 +165,37 @@ class KalfAst:
 
         if len(np.shape(A)) == 2:
             prediction = self.opposite_dec_2d(prediction)
-            P = np.dot(A, np.dot(self.P, A.T)) + self.Q
+            print("---------------------------------------------------------")
+            print(A.T)
+            print()
+            print(np.dot(self.P, A.T))
+            print()
+            print(np.dot(A, np.dot(self.P, A.T)))
+            print("---------------------------------------------------------")
+            P = np.dot(A, np.dot(self.P, A.T))  # + self.Q
 
         elif len(np.shape(A)) == 3:
             prediction = self.opposite_dec_3d(prediction)
 
             P = np.array([self.P for _ in range(A.shape[0])])
-            Q_exp = np.array([np.eye(A.shape[-1]) for _ in range(A.shape[0])])
+            # Q_exp = np.array([np.eye(A.shape[-1]) for _ in range(A.shape[0])])
             f1 = np.flip(P @ A, (1, 2))
-            P = (A @ f1) + Q_exp
+            P = A @ f1  # + Q_exp
+            # TODO
+            # the computation of P bug here when shape of A == 3
+            # fix that
+
+            print("===============================================================")
+            # print(A)
+            # print()
+            # print(A.T)
+            # print()
+            print(f1)
+            print()
+            print((A @ f1))
+            print()
+            print(P)
+            print("===============================================================")
 
         return prediction, P
 
@@ -199,14 +221,14 @@ class KalfAst:
             error of the state transition matrix has not the same shape
             as the one stored in this kalman filter.
         """
-        IM = np.dot(self.H, self.X)  # mean of predictive distribution of Y
-        IS = self.R + np.dot(self.H, np.dot(self.P, self.H.T))  # predictive mean of Y
-        K = np.dot(
-            self.P, np.dot(self.H.T, np.linalg.inv(IS))
-        )  # the kalman gain matrix
+        pred_x, P = self.predict(transition_update)
 
-        self.X = self.X + np.dot(K, (Y - IM))
-        self.P = self.P - np.dot(K, np.dot(IS, K.T))
+        IM = np.dot(self.H, pred_x)  # mean of predictive distribution of Y
+        IS = self.R + np.dot(self.H, np.dot(P, self.H.T))  # predictive mean of Y
+        K = np.dot(P, np.dot(self.H.T, np.linalg.inv(IS)))  # the kalman gain matrix
+
+        self.X = pred_x + np.dot(K, (Y - IM))
+        self.P = np.dot((np.eye(4) - np.dot(K, self.H)), self.P)
 
         LH = KalfAst.gauss(
             Y, IM, IS

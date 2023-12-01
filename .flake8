@@ -21,9 +21,9 @@ per-file-ignores =
     ../fink-fat/fink_fat/orbit_fitting/orbfit_merger.py:W503
     ../fink-fat/fink_fat/command_line/fink_fat_cli.py:W503
     ../fink-fat/fink_fat/test/test_sample.py:F601
-    ../fink-fat/notebook/results_analysis/utils.py:W503
-    ../fink-fat/notebook/parameters_selection/exploring_script.py:E721
-    ../fink-fat/notebook/follow_up/ephem_association.py:W503
+    ../fink-fat/fink_fat_notebook/results_analysis/utils.py:W503
+    ../fink-fat/fink_fat_notebook/parameters_selection/exploring_script.py:E721
+    ../fink-fat/fink_fat_notebook/follow_up/ephem_association.py:W503
     ../fink-fat/fink_fat/seeding/dbscan_seeding.py:W503
     ../fink-fat/fink_fat/command_line/cli_main/stats.py:W503
     ../fink-fat/fink_fat/kalman/asteroid_kalman.py:W503
