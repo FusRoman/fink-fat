@@ -5,11 +5,6 @@ from astropy.coordinates import SkyCoord, search_around_sky
 import astropy.units as u
 
 from pyspark import SparkFiles
-
-from sklearn.neighbors import BallTree
-
-from fink_fat.seeding.dbscan_seeding import dist_3d
-from fink_fat.associations.associations import angle_three_point_vect
 from fink_fat.others.utils import init_logging
 from fink_fat.roid_fitting.roid_fit_prediction import fitroid_prediction
 from fink_fat.associations.associations import night_to_night_separation_association
@@ -267,9 +262,9 @@ def fitroid_association(
     ...     np.array([-5.1239501, -5.1298901, 3.2216515, -3.9021139, -0.5572286]),
     ...     np.array(
     ...         [
-    ...             2459459.7334491, 
-    ...             2459459.7747685, 
-    ...             2459459.8152199, 
+    ...             2459459.7334491,
+    ...             2459459.7747685,
+    ...             2459459.8152199,
     ...             2459459.8147454,
     ...             2459459.8147454
     ...         ]
@@ -311,9 +306,9 @@ def fitroid_association(
     ...     np.array([-5.1239501, -5.1298901, 3.2216515, -3.9021139, -0.5572286]),
     ...     np.array(
     ...         [
-    ...             2459459.7334491, 
-    ...             2459459.7747685, 
-    ...             2459459.8152199, 
+    ...             2459459.7334491,
+    ...             2459459.7747685,
+    ...             2459459.8152199,
     ...             2459459.8147454,
     ...             2459459.8147454
     ...         ]
@@ -372,7 +367,6 @@ def fitroid_association(
 
     # filter the kalman estimators to keep only those inside the current exposures.
     fit_to_keep = fitroid_window(fit_pdf, coord_masked_alerts)
-    print(fit_to_keep)
 
     fit_pred = fitroid_prediction(fit_to_keep, jd_unique)
 
@@ -407,20 +401,7 @@ def fitroid_association(
             fit_to_keep[["trajectory_id", "mag_1", "fid_1", "jd_1"]], on="trajectory_id"
         )
     )
-    print(fit_to_keep[["trajectory_id", "mag_1", "fid_1", "jd_1"]])
-    print(pd.concat(
-            [
-                next_assoc.reset_index(),
-                pred_assoc[["trajectory_id"]]
-                .reset_index()
-                .rename({"index": "pred_index"}, axis=1),
-            ],
-            axis=1,
-        ).merge(
-            fit_to_keep[["trajectory_id", "mag_1", "fid_1", "jd_1"]], on="trajectory_id"
-        ))
     merge_assoc["trajectory_id"] = merge_assoc["trajectory_id"].astype(str)
-    print(merge_assoc)
 
     diff_mag = np.abs(merge_assoc["magpsf"] - merge_assoc["mag_1"])
     diff_jd = merge_assoc["jd"] - merge_assoc["jd_1"]

@@ -45,9 +45,9 @@ def df_to_orb(df_orb: pd.DataFrame) -> sso_py.Orbit:
 
     >>> df_to_orb(df_orbit)
     <QTable length=1>
-       a       e       i    long. node ...   node   argper    M        epoch    
-       AU             deg              ...   deg     deg     deg                
-    float64 float64 float64  float64   ... float64 float64 float64     object   
+       a       e       i    long. node ...   node   argper    M        epoch
+       AU             deg              ...   deg     deg     deg
+    float64 float64 float64  float64   ... float64 float64 float64     object
     ------- ------- ------- ---------- ... ------- ------- ------- -------------
       2.587   0.123   4.526      5.956 ...   5.956   9.547  12.587 2460158.87174
     """

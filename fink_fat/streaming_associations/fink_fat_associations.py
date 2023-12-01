@@ -68,12 +68,12 @@ def fink_fat_association(
 
     Examples
     --------
-    >>> from fink_science.tester import add_roid_datatest
+    >>> from fink_fat.test.tester_utils import add_roid_datatest
     >>> add_roid_datatest(spark)
     >>> flags, estimator_id, ffdistnr = fink_fat_association(
     ...     pd.Series([
     ...         46.328490, 108.603010, 97.600172, 98.928007, 2.05, 46.55802234,
-    ...         0.254, 48.147, 34.741, 0.198, 0.192, 
+    ...         0.254, 48.147, 34.741, 0.198, 0.192,
     ...         316.035113, 316.0302983, 347.8101124, 351.2340633, 350.9250203
     ...     ]),
     ...     pd.Series([
@@ -107,6 +107,7 @@ def fink_fat_association(
     ...         3, 3, 1, 2, 2
     ...     ]),
     ...     pd.Series([True]),
+    ...     pd.Series([15.0]),
     ...     pd.Series([2]),
     ...     pd.Series([2]),
     ...     pd.Series([30]),
@@ -174,7 +175,7 @@ def fink_fat_association(
     >>> flags, estimator_id, ffdistnr = fink_fat_association(
     ...     pd.Series([
     ...         46.328490, 108.603010, 97.600172, 98.928007, 2.05, 46.55802234,
-    ...         0.254, 48.147, 34.741, 0.198, 0.192, 
+    ...         0.254, 48.147, 34.741, 0.198, 0.192,
     ...         316.035113, 316.0302983, 347.8101124, 351.2340633, 350.9250203
     ...     ]),
     ...     pd.Series([
@@ -208,6 +209,7 @@ def fink_fat_association(
     ...         3, 3, 1, 2, 2
     ...     ]),
     ...     pd.Series([False]),
+    ...     pd.Series([15.0]),
     ...     pd.Series([2]),
     ...     pd.Series([2]),
     ...     pd.Series([30]),
@@ -217,7 +219,7 @@ def fink_fat_association(
     >>> flags
     0     5
     1     3
-    2     5
+    2     1
     3     5
     4     3
     5     3
@@ -236,7 +238,7 @@ def fink_fat_association(
     >>> estimator_id
     0     [FF20230802aaaaaaa]
     1                      []
-    2     [FF20230802aaaaaab]
+    2                      []
     3     [FF20230802aaaaaad]
     4                      []
     5                      []
@@ -255,7 +257,7 @@ def fink_fat_association(
     >>> ffdistnr
     0                     [8.956302666882892e-06]
     1                                          []
-    2                     [4.788559911943089e-06]
+    2                                          []
     3                    [1.9314410219648141e-07]
     4                                          []
     5                                          []
