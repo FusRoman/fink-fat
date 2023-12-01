@@ -33,11 +33,11 @@ def xyz_to_equ(x, y, z):
     return cart_to_equ(cart_coord)
 
 
-def fit_traj(ra, dec, jd):
+def fit_traj(ra, dec, jd, poly_exp=2):
     cart = radec_to_cart(ra, dec)
-    popt_x = np.polyfit(jd, cart.x.value, 2)
-    popt_y = np.polyfit(jd, cart.y.value, 2)
-    popt_z = np.polyfit(jd, cart.z.value, 2)
+    popt_x = np.polyfit(jd, cart.x.value, poly_exp)
+    popt_y = np.polyfit(jd, cart.y.value, poly_exp)
+    popt_z = np.polyfit(jd, cart.z.value, poly_exp)
 
     return np.array([popt_x, popt_y, popt_z])
 

@@ -56,7 +56,7 @@ def merge_trajectory_cluster(
     ]
 
     # new_tr_id = np.max(trajectory_df["trajectory_id"].unique()) + 1
-    new_traj_tracklets = pd.DataFrame(tr_to_update.columns)
+    new_traj_tracklets = pd.DataFrame(columns=tr_to_update.columns)
     new_fit_roid_tracklets = pd.DataFrame(columns=fit_roid_df.columns)
     t_before = time.time()
     if len(cluster_df) != 0:
@@ -257,7 +257,12 @@ def stream_association(
     new_traj_tracklets, new_fit_roid_tracklets = merge_trajectory_cluster(
         tr_to_update, fit_roid_df, new_tr_id, new_alerts, logger, verbose
     )
-    next_traj_id = np.max(new_fit_roid_tracklets["trajectory_id"].unique()) + 1
+
+    uniq_new_traj = new_fit_roid_tracklets["trajectory_id"].unique()
+    if len(uniq_new_traj) > 0:
+        next_traj_id = np.max(uniq_new_traj) + 1
+    else:
+        next_traj_id = new_tr_id
 
     # ------ MERGE TRAJECTORY WITH SINGLE ALERTS ------
     new_traj, new_fit_roid_single = merge_trajectory_alerts(

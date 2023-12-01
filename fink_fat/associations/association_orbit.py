@@ -90,7 +90,7 @@ def orbit_associations(
         logger.info(f"number of orbits to update: {len(updated_sso_id)}")
 
     duplicated_id = orbit_alert_assoc[
-        orbit_alert_assoc[["ssoCandId", "jd"]].duplicated()
+        orbit_alert_assoc[["ssoCandId", "candid"]].duplicated()
     ]["ssoCandId"]
     assert len(duplicated_id) == 0
 
