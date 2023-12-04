@@ -28,3 +28,4 @@ per-file-ignores =
     ../fink-fat/fink_fat/command_line/cli_main/stats.py:W503
     ../fink-fat/fink_fat/kalman/asteroid_kalman.py:W503
     ../fink-fat/fink_fat/command_line/orbit_cli.py:W503
+    ../fink-fat/fink_fat/streaming_associations/orbit_assoc.py:W503

@@ -165,13 +165,13 @@ New position set to the opposite: new_ra={opp_ra}, new_dec={opp_dec}\n"""
 
         if len(np.shape(A)) == 2:
             prediction = self.opposite_dec_2d(prediction)
-            print("---------------------------------------------------------")
-            print(A.T)
-            print()
-            print(np.dot(self.P, A.T))
-            print()
-            print(np.dot(A, np.dot(self.P, A.T)))
-            print("---------------------------------------------------------")
+            # print("---------------------------------------------------------")
+            # print(A.T)
+            # print()
+            # print(np.dot(self.P, A.T))
+            # print()
+            # print(np.dot(A, np.dot(self.P, A.T)))
+            # print("---------------------------------------------------------")
             P = np.dot(A, np.dot(self.P, A.T))  # + self.Q
 
         elif len(np.shape(A)) == 3:
@@ -185,17 +185,17 @@ New position set to the opposite: new_ra={opp_ra}, new_dec={opp_dec}\n"""
             # the computation of P bug here when shape of A == 3
             # fix that
 
-            print("===============================================================")
-            # print(A)
+            # print("===============================================================")
+            # # print(A)
+            # # print()
+            # # print(A.T)
+            # # print()
+            # print(f1)
             # print()
-            # print(A.T)
+            # print((A @ f1))
             # print()
-            print(f1)
-            print()
-            print((A @ f1))
-            print()
-            print(P)
-            print("===============================================================")
+            # print(P)
+            # print("===============================================================")
 
         return prediction, P
 
