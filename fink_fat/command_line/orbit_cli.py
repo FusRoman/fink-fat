@@ -191,7 +191,9 @@ def cluster_mode(
     return orbit_results
 
 
-def switch_local_cluster(config: dict, traj_orb: pd.DataFrame, verbose=False) -> pd.DataFrame:
+def switch_local_cluster(
+    config: dict, traj_orb: pd.DataFrame, verbose=False
+) -> pd.DataFrame:
     """
     Run the orbit fitting and choose cluster mode if the number of trajectories are above
     the local limit set in the config file
@@ -230,7 +232,7 @@ def switch_local_cluster(config: dict, traj_orb: pd.DataFrame, verbose=False) ->
             int(config["SOLVE_ORBIT_PARAMS"]["noise_ntrials"]),
             prop_epoch=float(prop_epoch) if prop_epoch != "None" else None,
             verbose_orbfit=int(config["SOLVE_ORBIT_PARAMS"]["orbfit_verbose"]),
-            verbose=verbose
+            verbose=verbose,
         ).drop("provisional designation", axis=1)
     return new_orbit_pdf
 
@@ -319,9 +321,9 @@ def trcand_to_orbit(
     trajectory_df = trajectory_df[
         ~trajectory_df["trajectory_id"].isin(new_traj_id)
     ].reset_index(drop=True)
-    trparams_df = trparams_df[~trparams_df["trajectory_id"].isin(new_traj_id)].reset_index(
-        drop=True
-    )
+    trparams_df = trparams_df[
+        ~trparams_df["trajectory_id"].isin(new_traj_id)
+    ].reset_index(drop=True)
     failed_orbit = np.setdiff1d(large_traj.index.values, new_traj_id)
     mask_failed = trparams_df["trajectory_id"].isin(failed_orbit)
     with pd.option_context("mode.chained_assignment", None):

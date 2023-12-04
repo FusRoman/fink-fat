@@ -18,12 +18,14 @@ from fink_fat.command_line.utils_cli import (
 from fink_fat.command_line.association_cli import (
     get_data,
     get_last_sso_alert,
+    get_last_sso_alert_from_file,
     intro_reset,
     no_reset,
     yes_reset,
 )
 
 from fink_fat.others.utils import cast_obs_data, init_logging
+from fink_fat.command_line.cli_main.fitroid import fitroid_associations
 
 
 def cli_associations(arguments, config, output_path):
@@ -43,6 +45,10 @@ def cli_associations(arguments, config, output_path):
 
     # get the path according to the class mpc or candidates
     output_path, object_class = get_class(arguments, output_path)
+
+    if object_class == "SSO fitroid":
+        fitroid_associations(arguments, config, logger, output_path)
+        exit()
 
     tr_df_path = os.path.join(output_path, "trajectory_df.parquet")
     obs_df_path = os.path.join(output_path, "old_obs.parquet")
@@ -92,7 +98,24 @@ def cli_associations(arguments, config, output_path):
             exit()
 
     t_before = t.time()
-    new_alerts = get_last_sso_alert(object_class, last_night, arguments["--verbose"])
+
+    if arguments["--filepath"]:
+        new_alerts = get_last_sso_alert_from_file(
+            arguments["--filepath"], arguments["--verbose"]
+        )
+        if arguments["--verbose"]:
+            print(
+                "Number of alerts measurements from {}: {}".format(
+                    arguments["--filepath"], len(new_alerts)
+                )
+            )
+    else:
+        new_alerts = get_last_sso_alert(
+            object_class, last_night, arguments["--verbose"]
+        )
+        if arguments["--verbose"]:
+            print("Number of alerts retrieve from fink: {}".format(len(new_alerts)))
+
     if len(new_alerts) == 0:
         logger.info("no alerts available for the night of {}".format(last_night))
         exit()

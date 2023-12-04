@@ -8,6 +8,12 @@ from io import BytesIO
 from fink_fat.others.utils import init_logging
 
 from astropy.time import Time
+import fink_fat
+import subprocess
+from pyspark.sql.functions import col
+from fink_fat.command_line.utils_cli import string_to_bool
+import configparser
+
 
 def request_fink(
     object_class,
@@ -209,21 +215,23 @@ def get_last_sso_alert_from_file(filepath, verbose=False):
     >>> assert len(pdf) == 2798
     >>> assert 'objectId' in pdf.columns
     """
-    pdf = pd.read_csv(filepath, header=0, sep=r'\s+', index_col=False)
+    pdf = pd.read_csv(filepath, header=0, sep=r"\s+", index_col=False)
 
-    required_header = ['ra', 'dec', 'jd', 'magpsf', 'sigmapsf']
+    required_header = ["ra", "dec", "jd", "magpsf", "sigmapsf"]
     msg = """
     The header of {} must contain at least the following fields:
     ra dec jd magpsf sigmapsf
-    """.format(filepath)
+    """.format(
+        filepath
+    )
     assert set(required_header) - set(pdf.columns) == set(), AssertionError(msg)
 
-    if 'objectId' not in pdf.columns:
-        pdf['objectId'] = range(len(pdf))
+    if "objectId" not in pdf.columns:
+        pdf["objectId"] = range(len(pdf))
 
-    pdf['candid'] = range(10, len(pdf) + 10)
-    pdf['nid'] = 0
-    pdf['fid'] = 0
+    pdf["candid"] = range(10, len(pdf) + 10)
+    pdf["nid"] = 0
+    pdf["fid"] = 0
 
     required_columns = [
         "objectId",
@@ -240,13 +248,14 @@ def get_last_sso_alert_from_file(filepath, verbose=False):
     ]
 
     if len(pdf) > 0:
-        date = Time(pdf['jd'].values[0], format='jd').iso.split(' ')[0]
+        date = Time(pdf["jd"].values[0], format="jd").iso.split(" ")[0]
         pdf.insert(len(pdf.columns), "not_updated", np.ones(len(pdf), dtype=np.bool_))
         pdf.insert(len(pdf.columns), "last_assoc_date", date)
     else:
         return pd.DataFrame(columns=required_columns)
 
     return pdf[required_columns]
+
 
 def get_last_sso_alert(object_class, date, verbose=False):
     """
@@ -343,6 +352,100 @@ def get_last_sso_alert(object_class, date, verbose=False):
 
     return pdf[required_columns]
 
+
+def get_last_roid_streaming_alert(
+    config: configparser.ConfigParser,
+    is_mpc: bool,
+    mode: str,
+    read_path: str,
+    output_path: str = None,
+):
+    if mode == "local":
+        # load alerts from local
+        sso_night = pd.read_parquet(read_path)
+
+    elif mode == "spark":
+        assert (
+            output_path is not None
+        ), "The argument 'output_path' is None.\nYou must set an output_path when loading data with spark"
+
+        # load alerts from spark
+        master_manager = config["SOLVE_ORBIT_PARAMS"]["manager"]
+        principal_group = config["SOLVE_ORBIT_PARAMS"]["principal"]
+        secret = config["SOLVE_ORBIT_PARAMS"]["secret"]
+        role = config["SOLVE_ORBIT_PARAMS"]["role"]
+        executor_env = config["SOLVE_ORBIT_PARAMS"]["exec_env"]
+        driver_mem = config["SOLVE_ORBIT_PARAMS"]["driver_memory"]
+        exec_mem = config["SOLVE_ORBIT_PARAMS"]["executor_memory"]
+        max_core = config["SOLVE_ORBIT_PARAMS"]["max_core"]
+        exec_core = config["SOLVE_ORBIT_PARAMS"]["executor_core"]
+
+        application = os.path.join(
+            os.path.dirname(fink_fat.__file__),
+            "command_line",
+            "association_cli.py prod",
+        )
+
+        application += " " + master_manager
+        application += " " + read_path
+        application += " " + is_mpc
+
+        spark_submit = "spark-submit \
+            --master {} \
+            --conf spark.mesos.principal={} \
+            --conf spark.mesos.secret={} \
+            --conf spark.mesos.role={} \
+            --conf spark.executorEnv.HOME={} \
+            --driver-memory {}G \
+            --executor-memory {}G \
+            --conf spark.cores.max={} \
+            --conf spark.executor.cores={} \
+            {}".format(
+            master_manager,
+            principal_group,
+            secret,
+            role,
+            executor_env,
+            driver_mem,
+            exec_mem,
+            max_core,
+            exec_core,
+            application,
+        )
+
+        process = subprocess.run(spark_submit, shell=True)
+        if process.returncode != 0:
+            logger = init_logging()
+            logger.info(process.stderr)
+            logger.info(process.stdout)
+            exit()
+
+        sso_night = pd.read_parquet(output_path)
+        os.remove(output_path)
+
+    else:
+        raise ValueError(f"mode {mode} not exist")
+
+    roid_pdf = pd.json_normalize(sso_night["ff_roid"])
+    sso_night = pd.concat(
+        [sso_night, roid_pdf],
+        axis=1,
+    )
+    cols_to_keep = [
+        "objectId",
+        "candid",
+        "ra",
+        "dec",
+        "jd",
+        "magpsf",
+        "sigmapsf",
+        "fid",
+        "ssnamenr",
+        "roid",
+        "estimator_id",
+        "ffdistnr",
+    ]
+    return sso_night[cols_to_keep]
 
 def intro_reset():  # pragma: no cover
     logger = init_logging()
@@ -453,13 +556,45 @@ def get_data(tr_df_path, obs_df_path):
 
 if __name__ == "__main__":  # pragma: no cover
     import sys
-    import doctest
-    from pandas.testing import assert_frame_equal  # noqa: F401
-    import fink_fat.test.test_sample as ts  # noqa: F401
-    from unittest import TestCase  # noqa: F401
+    if sys.argv[1] == "test":
+        import doctest
+        from pandas.testing import assert_frame_equal  # noqa: F401
+        import fink_fat.test.test_sample as ts  # noqa: F401
+        from unittest import TestCase  # noqa: F401
 
-    if "unittest.util" in __import__("sys").modules:
-        # Show full diff in self.assertEqual.
-        __import__("sys").modules["unittest.util"]._MAX_LENGTH = 999999999
+        if "unittest.util" in __import__("sys").modules:
+            # Show full diff in self.assertEqual.
+            __import__("sys").modules["unittest.util"]._MAX_LENGTH = 999999999
 
-    sys.exit(doctest.testmod()[0])
+        sys.exit(doctest.testmod()[0])
+    elif sys.argv[1] == "prod":
+        from pyspark.sql import SparkSession
+
+        logger = init_logging()
+        master_adress = str(sys.argv[2])
+        read_path = str(sys.argv[3])
+        output_path = str(sys.argv[4])
+        is_mpc = string_to_bool(str(sys.argv[5]))
+
+        spark = (
+            SparkSession.builder.master(master_adress)
+            .appName("Fink-FAT_solve_orbit")
+            .getOrCreate()
+        )
+        df = spark.read.load(read_path)
+        df = df.select(
+            "objectId",
+            "candid",
+            "candidate.ra",
+            "candidate.dec",
+            "candidate.jd",
+            "candidate.magpsf",
+            "candidate.sigmapsf",
+            "candidate.fid",
+            "candidate.ssnamenr",
+            "ff_roid",
+        )
+        roid_flag = [3, 4, 5] if is_mpc else [1, 2, 4, 5]
+        df = df.filter(col("ff_roid.roid").isin(roid_flag))
+        df_local = df.toPandas()
+        df_local.to_parquet(output_path, index=False)

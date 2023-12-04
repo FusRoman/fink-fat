@@ -55,7 +55,7 @@ class EnvInterpolation(configparser.BasicInterpolation):
         return os.path.expandvars(value)
 
 
-def init_cli(arguments):
+def init_cli(arguments: dict) -> Tuple[configparser.ConfigParser, str]:
     """
     Read the fink_fat configuration file of fink_fat specified by the --config argument
 
@@ -181,10 +181,15 @@ def get_class(arguments, path):
         if not os.path.isdir(path):
             os.mkdir(path)
         object_class = "Solar System candidate"
+    elif arguments["fitroid"]:
+        path = os.path.join(path, "fitroid", "")
+        if not os.path.isdir(path):
+            os.mkdir(path)
+        object_class = "SSO fitroid"
     else:  # pragma: no cover
         raise ValueError(
-            "Class does not correspond to a sso class from fink, got {}".format(
-                arguments["mpc"]
+            "Class does not correspond to a sso class from fink\nargument keys: {}".format(
+                arguments
             )
         )
 
