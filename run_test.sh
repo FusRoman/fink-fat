@@ -77,7 +77,7 @@ do
   # Run test suite + coverage
   coverage run \
     --source=${ROOTPATH} \
-    --rcfile ${ROOTPATH}/.coveragerc $filename
+    --rcfile ${ROOTPATH}/.coveragerc $filename "test"
 done
 
 for filename in fink_fat/test/*/*.py
