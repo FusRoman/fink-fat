@@ -406,7 +406,7 @@ def get_last_roid_streaming_alert(
         application += " " + master_manager
         application += " " + input_path
         application += " " + output_path_spark
-        application += " " + is_mpc
+        application += " " + str(is_mpc)
 
         spark_submit = "spark-submit \
             --master {} \
