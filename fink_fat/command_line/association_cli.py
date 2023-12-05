@@ -13,6 +13,7 @@ import subprocess
 from pyspark.sql.functions import col
 from fink_fat.command_line.utils_cli import string_to_bool
 import configparser
+import pathlib
 
 
 def request_fink(
@@ -385,6 +386,8 @@ def get_last_roid_streaming_alert(
             f"month={split_night[1]}",
             f"day={split_night[2]}",
         )
+        if not os.path.isdir(output_path_spark):
+            pathlib.Path(output_path_spark).mkdir(parents=True)
 
         # load alerts from spark
         master_manager = config["SOLVE_ORBIT_PARAMS"]["manager"]
