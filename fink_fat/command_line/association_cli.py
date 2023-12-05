@@ -445,8 +445,9 @@ def get_last_roid_streaming_alert(
             logger.info(process.stdout)
             exit()
 
-        sso_night = pd.read_parquet(output_path_spark)
-        os.remove(output_path_spark)
+        read_path = os.path.join(output_path_spark, "tmp_ast.parquet")
+        sso_night = pd.read_parquet(read_path)
+        os.remove(read_path)
 
     else:
         raise ValueError(f"mode {mode} not exist")
@@ -625,4 +626,4 @@ if __name__ == "__main__":  # pragma: no cover
         roid_flag = [3, 4, 5] if is_mpc else [1, 2, 4, 5]
         df = df.filter(col("ff_roid.roid").isin(roid_flag))
         df_local = df.toPandas()
-        df_local.to_parquet(output_path, index=False)
+        df_local.to_parquet(os.path.join(output_path, "tmp_ast.parquet"), index=False)
