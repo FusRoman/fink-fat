@@ -354,12 +354,8 @@ def get_last_sso_alert(object_class, date, verbose=False):
 
 
 def get_last_roid_streaming_alert(
-    config: configparser.ConfigParser,
-    last_night: str,
-    output_path: str,
-    is_mpc: bool
+    config: configparser.ConfigParser, last_night: str, output_path: str, is_mpc: bool
 ):
-    
     input_path = config["OUTPUT"]["roid_module_output"]
     split_night = last_night.split("-")
     input_path = os.path.join(
@@ -375,18 +371,19 @@ def get_last_roid_streaming_alert(
         # load alerts from local
         sso_night = pd.read_parquet(input_path)
         if "candidate" in sso_night:
-            candidate_pdf = pd.json_normalize(sso_night["candidate"]).drop("candid", axis=1)
+            candidate_pdf = pd.json_normalize(sso_night["candidate"]).drop(
+                "candid", axis=1
+            )
             sso_night = pd.concat(
                 [sso_night, candidate_pdf],
                 axis=1,
             )
     elif mode == "spark":
-
         output_path_spark = os.path.join(
-            output_path, 
+            output_path,
             f"year={split_night[0]}",
             f"month={split_night[1]}",
-            f"day={split_night[2]}"
+            f"day={split_night[2]}",
         )
 
         # load alerts from spark
@@ -468,6 +465,7 @@ def get_last_roid_streaming_alert(
         "ffdistnr",
     ]
     return sso_night[cols_to_keep]
+
 
 def intro_reset():  # pragma: no cover
     logger = init_logging()
@@ -578,6 +576,7 @@ def get_data(tr_df_path, obs_df_path):
 
 if __name__ == "__main__":  # pragma: no cover
     import sys
+
     if sys.argv[1] == "test":
         import doctest
         from pandas.testing import assert_frame_equal  # noqa: F401

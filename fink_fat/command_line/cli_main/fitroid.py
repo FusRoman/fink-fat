@@ -111,7 +111,7 @@ def fitroid_associations(
             """
 STATISTICS - STREAMING NIGHT
 -----------------------
-                    
+
 roid count:
 {}
                     """.format(
