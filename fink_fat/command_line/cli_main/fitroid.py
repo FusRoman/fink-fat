@@ -220,6 +220,8 @@ roid count:
         nb_new_trcand = len(fit_roid_df)
 
     trajectory_df["trajectory_id"] = trajectory_df["trajectory_id"].astype(int)
+    if "updated" not in trajectory_df:
+        trajectory_df["updated"] = "N"
     trajectory_df, fit_roid_df, trajectory_orb, orbits = trcand_to_orbit(
         config, trajectory_df, trajectory_orb, fit_roid_df, orbits, logger, True
     )

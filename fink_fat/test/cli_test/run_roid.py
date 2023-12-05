@@ -22,12 +22,16 @@ if __name__ == "__main__":
     datapath = "fink_fat/test/cli_test/small_sso_dataset"
 
     year, month, day = sys.argv[1:]
-    config, output_path = init_cli({"--config": "fink_fat/test/cli_test/fitroid_test.conf"})
+    config, output_path = init_cli(
+        {"--config": "fink_fat/test/cli_test/fitroid_test.conf"}
+    )
 
-    path_orbit = os.path.join(output_path, "orbital.parquet")
-    path_fit_roid = os.path.join(output_path, "fit_roid.parquet")
+    path_orbit = os.path.join(output_path, "fitroid", "orbital.parquet")
+    path_fit_roid = os.path.join(output_path, "fitroid", "fit_roid.parquet")
 
-    path_sso = os.path.join(datapath, f"year={int(year):04d}/month={int(month):02d}/day={int(day):02d}")
+    path_sso = os.path.join(
+        datapath, f"year={int(year):04d}/month={int(month):02d}/day={int(day):02d}"
+    )
 
     spark = init_sparksession("fink_fat_roid")
     addFileToSpark(spark, path_fit_roid, path_orbit)
@@ -62,8 +66,11 @@ if __name__ == "__main__":
     df = df.withColumn("ff_roid", roid_catcher(*args))
     df = df.drop(*what_prefix)
 
-    df = df.withColumn("year", F.lit(f"{int(year):04d}"))
-    df = df.withColumn("month", F.lit(f"{int(month):02d}"))
-    df = df.withColumn("day", F.lit(f"{int(day):02d}"))
-
-    df.write.partitionBy("year", "month", "day").parquet(config["OUTPUT"]["roid_module_output"])
+    df.write.parquet(
+        os.path.join(
+            config["OUTPUT"]["roid_module_output"],
+            f"year={int(year):04d}",
+            f"month={int(month):02d}",
+            f"day={int(day):02d}",
+        )
+    )

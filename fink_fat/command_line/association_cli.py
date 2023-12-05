@@ -452,6 +452,7 @@ def get_last_roid_streaming_alert(
         [sso_night, roid_pdf],
         axis=1,
     )
+    sso_night = sso_night.explode(["estimator_id", "ffdistnr"])
     cols_to_keep = [
         "objectId",
         "candid",
