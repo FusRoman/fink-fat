@@ -11,7 +11,6 @@ import fink_fat.orbit_fitting.mpcobs_files as mf
 import traceback
 import logging
 from typing import Union
-import pathlib
 
 orbfit_column_name = [
     "trajectory_id",
