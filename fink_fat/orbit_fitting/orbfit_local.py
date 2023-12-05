@@ -11,7 +11,6 @@ import fink_fat.orbit_fitting.mpcobs_files as mf
 import traceback
 import logging
 from typing import Union
-import pathlib
 
 orbfit_column_name = [
     "trajectory_id",
@@ -67,11 +66,11 @@ def call_orbitfit(ram_dir, first_designation, second_designation=None, verbose=F
     >>> call_orbitfit("fink_fat/test/call_orbfit/", "K21E00A", verbose=True)
     >>> call_orbitfit("fink_fat/test/call_orbfit/", "K19V01E", "K20V02K", verbose=True)
 
-    >>> os.path.exists("fink_fat/test/K23Nb8K.log")
+    >>> os.path.exists("fink_fat/test/call_orbfit/K23Nb8K.log")
     True
-    >>> os.path.exists("fink_fat/test/K21E00A.log")
+    >>> os.path.exists("fink_fat/test/call_orbfit/K21E00A.log")
     True
-    >>> os.path.exists("fink_fat/test/K19V01E_K20V02K.log")
+    >>> os.path.exists("fink_fat/test/call_orbfit/K19V01E_K20V02K.log")
     True
 
     >>> os.remove("fink_fat/test/call_orbfit/K19V01E_K20V02K.odc")
@@ -98,9 +97,9 @@ def call_orbitfit(ram_dir, first_designation, second_designation=None, verbose=F
     >>> os.remove("fink_fat/test/call_orbfit/mpcobs/K23Nb8K.rwo")
     >>> os.remove("fink_fat/test/call_orbfit/K23Nb8K.oel")
 
-    >>> os.remove("fink_fat/test/K23Nb8K.log")
-    >>> os.remove("fink_fat/test/K21E00A.log")
-    >>> os.remove("fink_fat/test/K19V01E_K20V02K.log")
+    >>> os.remove("fink_fat/test/call_orbfit/K23Nb8K.log")
+    >>> os.remove("fink_fat/test/call_orbfit/K21E00A.log")
+    >>> os.remove("fink_fat/test/call_orbfit/K19V01E_K20V02K.log")
     """
     orbitfit_path = os.path.join(os.environ["ORBFIT_HOME"], "bin", "")
 
@@ -147,9 +146,8 @@ subprocess output:
         return str_err
 
     def write_logs(str_log, first_designation, second_designation):
-        ram_path_parent = pathlib.Path(ram_dir).parent.absolute()
         log_file_name = first_designation if second_designation is None else first_designation + "_" + second_designation
-        with open(os.path.join(ram_path_parent, f"{log_file_name}.log"), "w") as f:
+        with open(os.path.join(ram_dir, f"{log_file_name}.log"), "w") as f:
             f.write(str_log)
 
     try:
