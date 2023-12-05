@@ -48,7 +48,7 @@ def cli_associations(arguments, config, output_path):
 
     if object_class == "SSO fitroid":
         fitroid_associations(arguments, config, logger, output_path)
-        exit()
+        return
 
     tr_df_path = os.path.join(output_path, "trajectory_df.parquet")
     obs_df_path = os.path.join(output_path, "old_obs.parquet")

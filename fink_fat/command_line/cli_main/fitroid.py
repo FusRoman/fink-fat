@@ -102,23 +102,22 @@ def fitroid_associations(
     path_fit_roid = os.path.join(output_path, "fit_roid.parquet")
     path_trajectory_df = os.path.join(output_path, "trajectory_df.parquet")
 
-    input_path = config["OUTPUT"]["roid_module_output"]
-    split_night = last_night.split("-")
-    input_path = os.path.join(
-        input_path,
-        f"year={split_night[0]}",
-        f"month={split_night[1]}",
-        f"day={split_night[2]}",
-    )
-
-    output_path_spark = None
-    if config["OUTPUT"]["roid_path_mode"] == "spark":
-        output_path_spark = os.path.join(output_path, "spark_alerts_night.parquet")
-
     # load the alerts from the last streaming night (roid science module with fink-fat must have been run)
     alerts_night = get_last_roid_streaming_alert(
-        config["OUTPUT"]["roid_path_mode"], is_mpc, input_path, output_path_spark
+        config, last_night, output_path, is_mpc
     )
+    if arguments["--verbose"]:
+        logger.info(
+            """
+STATISTICS - STREAMING NIGHT
+-----------------------
+                    
+roid count:
+{}
+                    """.format(
+                alerts_night["roid"].value_counts().sort_index()
+            )
+        )
 
     trajectory_orb, orbits = get_default_input()
 

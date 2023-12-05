@@ -355,19 +355,39 @@ def get_last_sso_alert(object_class, date, verbose=False):
 
 def get_last_roid_streaming_alert(
     config: configparser.ConfigParser,
-    is_mpc: bool,
-    mode: str,
-    read_path: str,
-    output_path: str = None,
+    last_night: str,
+    output_path: str,
+    is_mpc: bool
 ):
+    
+    input_path = config["OUTPUT"]["roid_module_output"]
+    split_night = last_night.split("-")
+    input_path = os.path.join(
+        input_path,
+        f"year={split_night[0]}",
+        f"month={split_night[1]}",
+        f"day={split_night[2]}",
+    )
+
+    mode = str(config["OUTPUT"]["roid_path_mode"])
+
     if mode == "local":
         # load alerts from local
-        sso_night = pd.read_parquet(read_path)
-
+        sso_night = pd.read_parquet(input_path)
+        if "candidate" in sso_night:
+            candidate_pdf = pd.json_normalize(sso_night["candidate"]).drop("candid", axis=1)
+            sso_night = pd.concat(
+                [sso_night, candidate_pdf],
+                axis=1,
+            )
     elif mode == "spark":
-        assert (
-            output_path is not None
-        ), "The argument 'output_path' is None.\nYou must set an output_path when loading data with spark"
+
+        output_path_spark = os.path.join(
+            output_path, 
+            f"year={split_night[0]}",
+            f"month={split_night[1]}",
+            f"day={split_night[2]}"
+        )
 
         # load alerts from spark
         master_manager = config["SOLVE_ORBIT_PARAMS"]["manager"]
@@ -387,7 +407,8 @@ def get_last_roid_streaming_alert(
         )
 
         application += " " + master_manager
-        application += " " + read_path
+        application += " " + input_path
+        application += " " + output_path_spark
         application += " " + is_mpc
 
         spark_submit = "spark-submit \
@@ -420,8 +441,8 @@ def get_last_roid_streaming_alert(
             logger.info(process.stdout)
             exit()
 
-        sso_night = pd.read_parquet(output_path)
-        os.remove(output_path)
+        sso_night = pd.read_parquet(output_path_spark)
+        os.remove(output_path_spark)
 
     else:
         raise ValueError(f"mode {mode} not exist")
