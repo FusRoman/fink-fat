@@ -418,6 +418,10 @@ def get_last_roid_streaming_alert(
             --executor-memory {}G \
             --conf spark.cores.max={} \
             --conf spark.executor.cores={} \
+            --conf spark.driver.maxResultSize=6G\
+            --conf spark.sql.execution.arrow.pyspark.enabled=true\
+            --conf spark.sql.execution.arrow.maxRecordsPerBatch=1000000\
+            --conf spark.kryoserializer.buffer.max=512m\
             {}".format(
             master_manager,
             principal_group,
