@@ -125,30 +125,28 @@ def cluster_mode(
     application += " " + prop_epoch
     application += " " + orbfit_verbose
 
-    spark_submit = "spark-submit \
-        --master {} \
-        --conf spark.mesos.principal={} \
-        --conf spark.mesos.secret={} \
-        --conf spark.mesos.role={} \
-        --conf spark.executorEnv.HOME={} \
-        --driver-memory {}G \
-        --executor-memory {}G \
-        --conf spark.cores.max={} \
-        --conf spark.executor.cores={} \
-        --conf spark.executorEnv.ORBFIT_HOME={} \
-        {}".format(
-        master_manager,
-        principal_group,
-        secret,
-        role,
-        executor_env,
-        driver_mem,
-        exec_mem,
-        max_core,
-        exec_core,
-        orbfit_home,
-        application,
-    )
+    # FIXME
+    # temporary dependencies (only during the performance test phase)
+    FINK_FAT="/home/roman.le-montagner/home_big_storage/Doctorat/Asteroids/fink-fat/dist/fink_fat-1.0.0-py3.9.egg"
+    FINK_SCIENCE="/home/roman.le-montagner/home_big_storage/Doctorat/fink-science/dist/fink_science-4.4-py3.7.egg"
+
+    spark_submit = f"spark-submit \
+        --master {master_manager} \
+        --conf spark.mesos.principal={principal_group} \
+        --conf spark.mesos.secret={secret} \
+        --conf spark.mesos.role={role} \
+        --conf spark.executorEnv.HOME={executor_env} \
+        --driver-memory {driver_mem}G \
+        --executor-memory {exec_mem}G \
+        --conf spark.cores.max={max_core} \
+        --conf spark.executor.cores={exec_core} \
+        --conf spark.driver.maxResultSize=6G\
+        --conf spark.sql.execution.arrow.pyspark.enabled=true\
+        --conf spark.sql.execution.arrow.maxRecordsPerBatch=1000000\
+        --conf spark.kryoserializer.buffer.max=512m\
+        --conf spark.executorEnv.ORBFIT_HOME={orbfit_home} \
+        --py-files {FINK_FAT},{FINK_SCIENCE}\
+        {application}"
 
     process = subprocess.run(spark_submit, shell=True)
 

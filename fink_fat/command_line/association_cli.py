@@ -613,7 +613,7 @@ if __name__ == "__main__":  # pragma: no cover
 
         spark = (
             SparkSession.builder.master(master_adress)
-            .appName("fink_fat_recover_stream_data")
+            .appName("FINK-FAT_recover_stream_data")
             .getOrCreate()
         )
         df = spark.read.load(read_path)
