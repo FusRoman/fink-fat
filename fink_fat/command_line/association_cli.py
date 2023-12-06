@@ -5,7 +5,7 @@ import pandas as pd
 import requests
 import shutil
 from io import BytesIO
-from fink_fat.others.utils import init_logging
+from fink_fat.others.utils import init_logging, LoggerNewLine
 
 from astropy.time import Time
 import fink_fat
@@ -355,8 +355,10 @@ def get_last_sso_alert(object_class, date, verbose=False):
 
 
 def get_last_roid_streaming_alert(
-    config: configparser.ConfigParser, last_night: str, output_path: str, is_mpc: bool
+    config: configparser.ConfigParser, last_night: str, output_path: str, is_mpc: bool, verbose:bool = False, logger:LoggerNewLine=None
 ):
+    
+    assert verbose and logger is not None, "logger is None while verbose is True"
     input_path = config["OUTPUT"]["roid_module_output"]
     split_night = last_night.split("-")
     input_path = os.path.join(
@@ -369,6 +371,8 @@ def get_last_roid_streaming_alert(
     mode = str(config["OUTPUT"]["roid_path_mode"])
 
     if mode == "local":
+        if verbose:
+            logger.info("start to get data in local mode")
         # load alerts from local
         sso_night = pd.read_parquet(input_path)
         if "candidate" in sso_night:
@@ -380,6 +384,9 @@ def get_last_roid_streaming_alert(
                 axis=1,
             )
     elif mode == "spark":
+
+        if verbose:
+            logger.info("start to get data in spark mode")
         output_path_spark = os.path.join(
             output_path,
             f"year={split_night[0]}",
@@ -437,7 +444,9 @@ def get_last_roid_streaming_alert(
             exec_core,
             application,
         )
-
+        
+        if verbose:
+            logger.info("run recovering of data with spark")
         process = subprocess.run(spark_submit, shell=True)
         if process.returncode != 0:
             logger = init_logging()
@@ -445,6 +454,8 @@ def get_last_roid_streaming_alert(
             logger.info(process.stdout)
             exit()
 
+        if verbose:
+            logger.info("data recovered from spark")
         read_path = os.path.join(output_path_spark, "tmp_ast.parquet")
         sso_night = pd.read_parquet(read_path)
         os.remove(read_path)

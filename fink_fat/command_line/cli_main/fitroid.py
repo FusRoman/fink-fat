@@ -104,7 +104,7 @@ def fitroid_associations(
 
     # load the alerts from the last streaming night (roid science module with fink-fat must have been run)
     alerts_night = get_last_roid_streaming_alert(
-        config, last_night, output_path, is_mpc
+        config, last_night, output_path, is_mpc, arguments["--verbose"]
     )
     if arguments["--verbose"]:
         logger.info(
