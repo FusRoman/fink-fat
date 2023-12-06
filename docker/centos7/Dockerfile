@@ -12,9 +12,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-ARG PYTHON_VERSION=py37_4.11.0
+ARG PYTHON_VERSION=py39_22.11.1-1
 ARG SPARK_VERSION=3.1.3
-ARG HADOOP_VERSION=hadoop2.7
+ARG HADOOP_VERSION=hadoop3.2
 
 FROM centos:centos7
 LABEL maintainer="roman.le-montagner@ijclab.in2p3.fr"
