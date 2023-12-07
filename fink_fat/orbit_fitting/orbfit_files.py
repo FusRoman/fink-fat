@@ -6,6 +6,7 @@ import numpy as np
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 import pandas as pd
+import zipfile
 
 from fink_fat import __file__
 from fink_fat.others.utils import init_logging
@@ -418,15 +419,28 @@ def prep_orbitfit(ram_dir):
         if not os.path.isdir(dir_path):
             os.mkdir(dir_path)
 
-        if not os.path.islink(ram_dir + "AST17.bai"):
-            os.symlink(
-                os.path.join(orbfit_path, "AST17.bai_431_fcct"), ram_dir + "AST17.bai"
-            )
+        if ".egg" in fink_fat_path:
+            egg_path = os.path.dirname(fink_fat_path)
+            input_zip = zipfile.ZipFile(egg_path)
+            
+            if not os.path.exists(ram_dir + "AST17.bai"):
+                filepath = "fink_fat/orbit_fitting/AST17.bai_431_fcct"
+                input_zip.extract(filepath, ram_dir)
+                os.rename(ram_dir + filepath, ram_dir + "AST17.bai")
+            if not os.path.exists(ram_dir + "AST17.bep"):
+                filepath = "fink_fat/orbit_fitting/AST17.bep_431_fcct"
+                input_zip.extract(filepath, ram_dir)
+                os.rename(ram_dir + filepath, ram_dir + "AST17.bep")
+        else:
+            if not os.path.islink(ram_dir + "AST17.bai"):
+                os.symlink(
+                    os.path.join(orbfit_path, "AST17.bai_431_fcct"), ram_dir + "AST17.bai"
+                )
 
-        if not os.path.islink(ram_dir + "AST17.bep"):
-            os.symlink(
-                os.path.join(orbfit_path, "AST17.bep_431_fcct"), ram_dir + "AST17.bep"
-            )
+            if not os.path.islink(ram_dir + "AST17.bep"):
+                os.symlink(
+                    os.path.join(orbfit_path, "AST17.bep_431_fcct"), ram_dir + "AST17.bep"
+                )
     except Exception:  # pragma: no cover
         logging.error(traceback.format_exc())
 
