@@ -61,7 +61,7 @@ def get_orbital_data(config, tr_df_path):  # pragma: no cover
 
 
 def cluster_mode(
-    config: dict, traj_to_orbital: pd.DataFrame
+    config: dict, traj_to_orbital: pd.DataFrame, year: str, month: str, day: str
 ) -> pd.DataFrame:  # pragma: no cover
     """
     Compute orbits using the cluster mode
@@ -124,6 +124,9 @@ def cluster_mode(
     application += " " + noise_ntrials
     application += " " + prop_epoch
     application += " " + orbfit_verbose
+    application += " " + year
+    application += " " + month
+    application += " " + day
 
     # FIXME
     # temporary dependencies (only during the performance test phase)
@@ -190,7 +193,7 @@ def cluster_mode(
 
 
 def switch_local_cluster(
-    config: dict, traj_orb: pd.DataFrame, verbose=False
+    config: dict, traj_orb: pd.DataFrame, year: str, month: str, day: str, verbose=False
 ) -> pd.DataFrame:
     """
     Run the orbit fitting and choose cluster mode if the number of trajectories are above
@@ -215,7 +218,7 @@ def switch_local_cluster(
             traj_orb = traj_orb.drop("estimator_id", axis=1)
         if "ffdistnr" in traj_cols:
             traj_orb = traj_orb.drop("ffdistnr", axis=1)
-        new_orbit_pdf = cluster_mode(config, traj_orb)
+        new_orbit_pdf = cluster_mode(config, traj_orb, year, month, day)
     else:
         config_epoch = config["SOLVE_ORBIT_PARAMS"]["prop_epoch"]
         prop_epoch = None if config_epoch == "None" else float(config_epoch)
@@ -241,6 +244,7 @@ def trcand_to_orbit(
     trajectory_orb: pd.DataFrame,
     trparams_df: pd.DataFrame,
     orbits: pd.DataFrame,
+    last_night: str,
     logger: LoggerNewLine,
     verbose: bool,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -299,7 +303,8 @@ def trcand_to_orbit(
         # no trajectory updated during this night to send to orbit fitting
         return trajectory_df, trparams_df, trajectory_orb, orbits
 
-    new_orbits = switch_local_cluster(config, traj_to_orb, verbose)
+    year, month, day = last_night.split("-")
+    new_orbits = switch_local_cluster(config, traj_to_orb, verbose, year, month, day)
     new_orbits = new_orbits[new_orbits["a"] != -1.0]
     if verbose:
         logger.info(

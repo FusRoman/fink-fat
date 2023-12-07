@@ -364,12 +364,12 @@ def get_last_roid_streaming_alert(
 ):
     assert verbose and logger is not None, "logger is None while verbose is True"
     input_path = config["OUTPUT"]["roid_module_output"]
-    split_night = last_night.split("-")
+    year, month, day = last_night.split("-")
     input_path = os.path.join(
         input_path,
-        f"year={split_night[0]}",
-        f"month={split_night[1]}",
-        f"day={split_night[2]}",
+        f"year={year}",
+        f"month={month}",
+        f"day={day}",
     )
 
     mode = str(config["OUTPUT"]["roid_path_mode"])
@@ -392,9 +392,9 @@ def get_last_roid_streaming_alert(
             logger.info("start to get data in spark mode")
         output_path_spark = os.path.join(
             output_path,
-            f"year={split_night[0]}",
-            f"month={split_night[1]}",
-            f"day={split_night[2]}",
+            f"year={year}",
+            f"month={month}",
+            f"day={day}",
         )
         if not os.path.isdir(output_path_spark):
             pathlib.Path(output_path_spark).mkdir(parents=True)
@@ -420,6 +420,9 @@ def get_last_roid_streaming_alert(
         application += " " + input_path
         application += " " + output_path_spark
         application += " " + str(is_mpc)
+        application += " " + year
+        application += " " + month
+        application += " " + day
 
         # FIXME
         # temporary dependencies (only during the performance test phase)
@@ -613,10 +616,13 @@ if __name__ == "__main__":  # pragma: no cover
         read_path = str(sys.argv[3])
         output_path = str(sys.argv[4])
         is_mpc = string_to_bool(str(sys.argv[5]))
+        year = sys.argv[6]
+        month = sys.argv[7]
+        day = sys.argv[8]
 
         spark = (
             SparkSession.builder.master(master_adress)
-            .appName("FINK-FAT_recover_stream_data")
+            .appName(f"FINK-FAT_recover_stream_data_{year}{month}{day}")
             .getOrCreate()
         )
         df = spark.read.load(read_path)
