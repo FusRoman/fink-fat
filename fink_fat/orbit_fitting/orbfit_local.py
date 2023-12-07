@@ -130,17 +130,17 @@ command: {run_exception.cmd}
 {err_type}
 
 stdout:
-{run_exception.stdout.decode("utf-8")}
+{run_exception.stdout.decode("utf-8")if run_exception.stdout is not None else "no std output"}
 
 
 
 stderr:
-{run_exception.stderr.decode("utf-8")}
+{run_exception.stderr.decode("utf-8") if run_exception.stderr is not None else "no err output"}
 
 
 
 subprocess output:
-{run_exception.output.decode("utf-8")}
+{run_exception.output.decode("utf-8") if run_exception.output is not None else "no output"}
 -------------------------------------
 """
         return str_err
@@ -163,12 +163,12 @@ args: {completed_process.args}
 returncode: {completed_process.returncode}
 
 stdout:
-{completed_process.stdout.decode("utf-8")}
+{completed_process.stdout.decode("utf-8")if completed_process.stdout is not None else "no std output"}
 
 
 
 stderr:
-{completed_process.stderr.decode("utf-8")}
+{completed_process.stderr.decode("utf-8")if completed_process.stderr is not None else "no err output"}
 -------------------------------------
 """
                 write_logs(str_out, first_designation, second_designation)
