@@ -355,9 +355,13 @@ def get_last_sso_alert(object_class, date, verbose=False):
 
 
 def get_last_roid_streaming_alert(
-    config: configparser.ConfigParser, last_night: str, output_path: str, is_mpc: bool, verbose:bool = False, logger:LoggerNewLine=None
+    config: configparser.ConfigParser,
+    last_night: str,
+    output_path: str,
+    is_mpc: bool,
+    verbose: bool = False,
+    logger: LoggerNewLine = None,
 ):
-    
     assert verbose and logger is not None, "logger is None while verbose is True"
     input_path = config["OUTPUT"]["roid_module_output"]
     split_night = last_night.split("-")
@@ -384,7 +388,6 @@ def get_last_roid_streaming_alert(
                 axis=1,
             )
     elif mode == "spark":
-
         if verbose:
             logger.info("start to get data in spark mode")
         output_path_spark = os.path.join(
@@ -420,8 +423,8 @@ def get_last_roid_streaming_alert(
 
         # FIXME
         # temporary dependencies (only during the performance test phase)
-        FINK_FAT="/home/roman.le-montagner/home_big_storage/Doctorat/Asteroids/fink-fat/dist/fink_fat-1.0.0-py3.9.egg"
-        FINK_SCIENCE="/home/roman.le-montagner/home_big_storage/Doctorat/fink-science/dist/fink_science-4.4-py3.7.egg"
+        FINK_FAT = "/home/roman.le-montagner/home_big_storage/Doctorat/Asteroids/fink-fat/dist/fink_fat-1.0.0-py3.9.egg"
+        FINK_SCIENCE = "/home/roman.le-montagner/home_big_storage/Doctorat/fink-science/dist/fink_science-4.4-py3.7.egg"
 
         spark_submit = f"spark-submit \
             --master {master_manager} \
@@ -439,7 +442,7 @@ def get_last_roid_streaming_alert(
             --conf spark.kryoserializer.buffer.max=512m\
             --py-files {FINK_FAT},{FINK_SCIENCE}\
             {application}"
-        
+
         if verbose:
             logger.info("run recovering of data with spark")
         process = subprocess.run(spark_submit, shell=True)

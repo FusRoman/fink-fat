@@ -146,7 +146,11 @@ subprocess output:
         return str_err
 
     def write_logs(str_log, first_designation, second_designation):
-        log_file_name = first_designation if second_designation is None else first_designation + "_" + second_designation
+        log_file_name = (
+            first_designation
+            if second_designation is None
+            else first_designation + "_" + second_designation
+        )
         with open(os.path.join(ram_dir, f"{log_file_name}.log"), "w") as f:
             f.write(str_log)
 
@@ -179,7 +183,15 @@ stderr:
         write_logs(generate_logs(te), first_designation, second_designation)
 
 
-def get_orbit_param(ram_dir, df, n_triplets, noise_ntrials, prop_epoch=None, verbose_orbfit=1, verbose=None):
+def get_orbit_param(
+    ram_dir,
+    df,
+    n_triplets,
+    noise_ntrials,
+    prop_epoch=None,
+    verbose_orbfit=1,
+    verbose=None,
+):
     """
     Compute the orbital elements of one trajectory.
 
@@ -372,7 +384,7 @@ def compute_df_orbit_param(
     noise_ntrials=10,
     prop_epoch=None,
     verbose_orbfit=1,
-    verbose=None
+    verbose=None,
 ):
     """
     Compute the orbital elements of a set of trajectories. Computation are done in parallel.
@@ -445,7 +457,7 @@ def compute_df_orbit_param(
             noise_ntrials,
             prop_epoch,
             verbose_orbfit,
-            verbose
+            verbose,
         )
         for tr_chunk, chunk_dir in zip(trajectory_id_chunks, chunk_ramdir)
         if len(tr_chunk) > 0

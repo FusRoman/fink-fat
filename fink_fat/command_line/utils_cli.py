@@ -488,7 +488,7 @@ def assig_tags(
     return orb_df, traj_orb_df
 
 
-def chi_square(ra: np.ndarray, dec: np.ndarray, jd: np.ndarray)->float:
+def chi_square(ra: np.ndarray, dec: np.ndarray, jd: np.ndarray) -> float:
     """
     Compute chi-square of a trajectory fitted using a polynomial function
 
@@ -516,10 +516,8 @@ def chi_square(ra: np.ndarray, dec: np.ndarray, jd: np.ndarray)->float:
 
 
 def chi_filter(
-        trajectory_df: pd.DataFrame,
-        fit_df: pd.DataFrame,
-        chi_limit: float
-    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    trajectory_df: pd.DataFrame, fit_df: pd.DataFrame, chi_limit: float
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Filter the trajectories based on the chi square.
     Trajectories with a chi square below the chi_limit are discarded.
@@ -540,17 +538,20 @@ def chi_filter(
         lambda x: chi_square(x["ra"], x["dec"], x["jd"])
     )
 
-    traj_filt = trajectory_df[trajectory_df["trajectory_id"].isin(chi[chi <= chi_limit].index)]
+    traj_filt = trajectory_df[
+        trajectory_df["trajectory_id"].isin(chi[chi <= chi_limit].index)
+    ]
     fit_filt = fit_df[fit_df["trajectory_id"].isin(chi[chi <= chi_limit].index)]
 
     return traj_filt, fit_filt
 
+
 def time_window(
-        trajectory_df: pd.DataFrame,
-        fit_df: pd.DataFrame,
-        current_time: float, 
-        time_window: int
-    )->Tuple[pd.DataFrame, pd.DataFrame]:
+    trajectory_df: pd.DataFrame,
+    fit_df: pd.DataFrame,
+    current_time: float,
+    time_window: int,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Remove trajectories based on a time window.
     The time delay is computed between the last observations of each trajectories and the current time.
@@ -570,21 +571,24 @@ def time_window(
     pd.DataFrame
         trajectories dataframe filtered using the time window threshold
     """
-    last_pdf = trajectory_df.sort_values(["trajectory_id", "jd"]).groupby("trajectory_id").agg(
-        last_jd=("jd", lambda x: list(x)[-1])
+    last_pdf = (
+        trajectory_df.sort_values(["trajectory_id", "jd"])
+        .groupby("trajectory_id")
+        .agg(last_jd=("jd", lambda x: list(x)[-1]))
     )
-
 
     last_time = Time(last_pdf["last_jd"].round(decimals=0), format="jd").jd
 
     traj_window = trajectory_df[
         trajectory_df["trajectory_id"].isin(
             last_pdf[(current_time - last_time) <= time_window].index
-    )]
+        )
+    ]
     fit_df = fit_df[
         fit_df["trajectory_id"].isin(
             last_pdf[(current_time - last_time) <= time_window].index
-    )]
+        )
+    ]
 
     return traj_window, fit_df
 

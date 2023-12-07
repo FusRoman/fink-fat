@@ -19,11 +19,11 @@ import fink_fat.test.test_sample as ts  # noqa: F401
 
 
 def night_to_night_separation_association(
-    old_observation: pd.DataFrame, 
-    new_observation: pd.DataFrame, 
-    separation_criterion: u.Unit, 
-    store_kd_tree: bool=False
-)-> Tuple[pd.DataFrame, pd.DataFrame, Angle]:
+    old_observation: pd.DataFrame,
+    new_observation: pd.DataFrame,
+    separation_criterion: u.Unit,
+    store_kd_tree: bool = False,
+) -> Tuple[pd.DataFrame, pd.DataFrame, Angle]:
     """
     Perform night-night association based on the separation between the alerts.
     The separation criterion was computed by a data analysis on the MPC object.

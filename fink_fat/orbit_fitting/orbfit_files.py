@@ -422,7 +422,7 @@ def prep_orbitfit(ram_dir):
         if ".egg" in fink_fat_path:
             egg_path = os.path.dirname(fink_fat_path)
             input_zip = zipfile.ZipFile(egg_path)
-            
+
             if not os.path.exists(ram_dir + "AST17.bai"):
                 filepath = "fink_fat/orbit_fitting/AST17.bai_431_fcct"
                 input_zip.extract(filepath, ram_dir)
@@ -434,12 +434,14 @@ def prep_orbitfit(ram_dir):
         else:
             if not os.path.islink(ram_dir + "AST17.bai"):
                 os.symlink(
-                    os.path.join(orbfit_path, "AST17.bai_431_fcct"), ram_dir + "AST17.bai"
+                    os.path.join(orbfit_path, "AST17.bai_431_fcct"),
+                    ram_dir + "AST17.bai",
                 )
 
             if not os.path.islink(ram_dir + "AST17.bep"):
                 os.symlink(
-                    os.path.join(orbfit_path, "AST17.bep_431_fcct"), ram_dir + "AST17.bep"
+                    os.path.join(orbfit_path, "AST17.bep_431_fcct"),
+                    ram_dir + "AST17.bep",
                 )
     except Exception:  # pragma: no cover
         logging.error(traceback.format_exc())

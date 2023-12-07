@@ -2,6 +2,7 @@ from pyspark.sql import SparkSession
 import os
 from fink_fat import __file__
 
+
 def add_roid_datatest(spark: SparkSession):
     """
     Load the files used for the roid test
@@ -15,9 +16,7 @@ def add_roid_datatest(spark: SparkSession):
     """
     path = os.path.dirname(__file__)
 
-    orbit_sample = "file://{}/test/streaming_data_test/orbital.parquet".format(
-        path
-    )
+    orbit_sample = "file://{}/test/streaming_data_test/orbital.parquet".format(path)
     kalman_sample = "file://{}/test/streaming_data_test/kalman.pkl".format(path)
     fitroid_sample = "file://{}/test/streaming_data_test/fit_roid.parquet".format(path)
 

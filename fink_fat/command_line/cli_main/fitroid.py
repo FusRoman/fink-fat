@@ -234,16 +234,12 @@ roid count:
         trajectory_df,
         fit_roid_df,
         Time(last_night).jd,
-        config["TW_PARAMS"]["predict_function_keep_limit"]
+        config["TW_PARAMS"]["predict_function_keep_limit"],
     )
     nb_after_tw = len(fit_roid_df)
     nb_remove_tw = nb_tr_before_tw - nb_after_tw
 
-    trajectory_df, fit_roid_df = chi_filter(
-        trajectory_df,
-        fit_roid_df,
-        10e-5
-    )
+    trajectory_df, fit_roid_df = chi_filter(trajectory_df, fit_roid_df, 10e-5)
     nb_remove_chi = nb_after_tw - len(fit_roid_df)
 
     if arguments["--verbose"]:

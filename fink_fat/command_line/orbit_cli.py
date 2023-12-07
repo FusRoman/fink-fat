@@ -127,8 +127,8 @@ def cluster_mode(
 
     # FIXME
     # temporary dependencies (only during the performance test phase)
-    FINK_FAT="/home/roman.le-montagner/home_big_storage/Doctorat/Asteroids/fink-fat/dist/fink_fat-1.0.0-py3.9.egg"
-    FINK_SCIENCE="/home/roman.le-montagner/home_big_storage/Doctorat/fink-science/dist/fink_science-4.4-py3.7.egg"
+    FINK_FAT = "/home/roman.le-montagner/home_big_storage/Doctorat/Asteroids/fink-fat/dist/fink_fat-1.0.0-py3.9.egg"
+    FINK_SCIENCE = "/home/roman.le-montagner/home_big_storage/Doctorat/fink-science/dist/fink_science-4.4-py3.7.egg"
 
     spark_submit = f"spark-submit \
         --master {master_manager} \
