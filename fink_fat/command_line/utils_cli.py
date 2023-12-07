@@ -8,7 +8,11 @@ import pandas as pd
 import fink_fat
 from fink_fat.others.id_tags import generate_tags
 from fink_fat.others.utils import init_logging
+from fink_fat.roid_fitting.utils_roid_fit import fit_traj, predict_equ
 from typing import Tuple
+import warnings
+from astropy.coordinates import SkyCoord
+from astropy.time import Time
 
 
 def string_to_bool(bool_str):
@@ -482,6 +486,107 @@ def assig_tags(
     orb_df = orb_df.drop("trajectory_id", axis=1)
     traj_orb_df = traj_orb_df.drop("trajectory_id", axis=1)
     return orb_df, traj_orb_df
+
+
+def chi_square(ra: np.ndarray, dec: np.ndarray, jd: np.ndarray)->float:
+    """
+    Compute chi-square of a trajectory fitted using a polynomial function
+
+    Parameters
+    ----------
+    ra : np.ndarray
+        right ascension
+    dec : np.ndarray
+        declination
+    jd : np.ndarray
+        julian date of observations
+
+    Returns
+    -------
+    float
+        chi-square computed on the trajectory
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        popt = fit_traj(ra, dec, jd)
+    prediction = predict_equ(popt[0], popt[1], popt[2], jd)
+
+    true = SkyCoord(ra, dec, unit="deg")
+    return np.sum(true.separation(prediction).value ** 2) / 3
+
+
+def chi_filter(
+        trajectory_df: pd.DataFrame,
+        fit_df: pd.DataFrame,
+        chi_limit: float
+    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Filter the trajectories based on the chi square.
+    Trajectories with a chi square below the chi_limit are discarded.
+
+    Parameters
+    ----------
+    trajectory_df : pd.DataFrame
+        trajectories dataframe containing ra, dec and jd columns
+    chi_limit : float
+        chi filtering limit
+
+    Returns
+    -------
+    pd.DataFrame
+        trajectory dataframe filtered using chi square values
+    """
+    chi = trajectory_df.groupby("trajectory_id").apply(
+        lambda x: chi_square(x["ra"], x["dec"], x["jd"])
+    )
+
+    traj_filt = trajectory_df[trajectory_df["trajectory_id"].isin(chi[chi <= chi_limit].index)]
+    fit_filt = fit_df[fit_df["trajectory_id"].isin(chi[chi <= chi_limit].index)]
+
+    return traj_filt, fit_filt
+
+def time_window(
+        trajectory_df: pd.DataFrame,
+        fit_df: pd.DataFrame,
+        current_time: float, 
+        time_window: int
+    )->Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Remove trajectories based on a time window.
+    The time delay is computed between the last observations of each trajectories and the current time.
+    Each trajectories with a delay greater than the time window are discarded.
+
+    Parameters
+    ----------
+    trajectory_df : pd.DataFrame
+        trajectories dataframe containing ra, dec and jd columns
+    current_time : float
+        the current processing time of fink-fat
+    time_window : int
+        time window limit
+
+    Returns
+    -------
+    pd.DataFrame
+        trajectories dataframe filtered using the time window threshold
+    """
+    last_pdf = trajectory_df.sort_values(["trajectory_id", "jd"]).groupby("trajectory_id").agg(
+        last_jd=("jd", lambda x: list(x)[-1])
+    )
+
+
+    last_time = Time(last_pdf["last_jd"].round(decimals=0), format="jd").jd
+
+    traj_window = trajectory_df[
+        trajectory_df["trajectory_id"].isin(
+            last_pdf[(current_time - last_time) <= time_window].index
+    )]
+    fit_df = fit_df[
+        fit_df["trajectory_id"].isin(
+            last_pdf[(current_time - last_time) <= time_window].index
+    )]
+
+    return traj_window, fit_df
 
 
 if __name__ == "__main__":  # pragma: no cover

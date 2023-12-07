@@ -11,14 +11,19 @@ from fink_fat.others.utils import repeat_chunk
 from fink_fat.others.utils import cast_obs_data
 import sys
 import doctest
+from typing import Tuple
+from astropy.coordinates import Angle
 from pandas.testing import assert_frame_equal  # noqa: F401
 from unittest import TestCase  # noqa: F401
 import fink_fat.test.test_sample as ts  # noqa: F401
 
 
 def night_to_night_separation_association(
-    old_observation, new_observation, separation_criterion, store_kd_tree=False
-):
+    old_observation: pd.DataFrame, 
+    new_observation: pd.DataFrame, 
+    separation_criterion: u.Unit, 
+    store_kd_tree: bool=False
+)-> Tuple[pd.DataFrame, pd.DataFrame, Angle]:
     """
     Perform night-night association based on the separation between the alerts.
     The separation criterion was computed by a data analysis on the MPC object.
@@ -66,10 +71,10 @@ def night_to_night_separation_association(
     """
 
     old_observations_coord = SkyCoord(
-        old_observation["ra"], old_observation["dec"], unit=u.degree
+        old_observation["ra"].values, old_observation["dec"].values, unit=u.degree
     )
     new_observations_coord = SkyCoord(
-        new_observation["ra"], new_observation["dec"], unit=u.degree
+        new_observation["ra"].values, new_observation["dec"].values, unit=u.degree
     )
 
     old_obs_idx, new_obs_idx, sep2d, _ = search_around_sky(

@@ -13,7 +13,7 @@ def predictions(
     jd: list,
 ):
     """
-    Make predictions of the kalman filters for all dt.
+    Make predictions of the fitting functions for all dt.
 
     Parameters
     ----------

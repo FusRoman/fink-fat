@@ -322,12 +322,21 @@ def trcand_to_orbit(
     trparams_df = trparams_df[
         ~trparams_df["trajectory_id"].isin(new_traj_id)
     ].reset_index(drop=True)
+
     failed_orbit = np.setdiff1d(large_traj.index.values, new_traj_id)
-    mask_failed = trparams_df["trajectory_id"].isin(failed_orbit)
-    with pd.option_context("mode.chained_assignment", None):
-        trparams_df.loc[mask_failed, "orbfit_test"] = (
-            trparams_df.loc[mask_failed, "orbfit_test"] + 1
-        )
+    # FIXME
+    # as the trajectory_id change between the night if the trajectories are updated, this solution to keep track
+    # of the failed orbit as well as the number of time they have been sent to the orbit fitting doesn't works.
+    # Remove the failed orbit in the meantime
+    # mask_failed = trparams_df["trajectory_id"].isin(failed_orbit)
+    # with pd.option_context("mode.chained_assignment", None):
+    #     trparams_df.loc[mask_failed, "orbfit_test"] = (
+    #         trparams_df.loc[mask_failed, "orbfit_test"] + 1
+    #     )
+
+    # Remove the failed orbit
+    trajectory_df = trajectory_df[~trajectory_df["trajectory_id"].isin(failed_orbit)]
+    trparams_df = trparams_df[~trparams_df["trajectory_id"].isin(failed_orbit)]
     return trajectory_df, trparams_df, trajectory_orb, orbits
 
 

@@ -7,6 +7,7 @@ from collections import Counter
 from typing import Tuple
 
 import astropy.units as u
+from astropy.time import Time
 
 from fink_fat.associations.association_orbit import orbit_associations
 from fink_fat.roid_fitting.init_roid_fitting import init_polyast
@@ -14,7 +15,7 @@ from fink_fat.associations.stream_association import stream_association
 
 from fink_fat.seeding.dbscan_seeding import intra_night_seeding
 
-from fink_fat.command_line.utils_cli import string_to_bool
+from fink_fat.command_line.utils_cli import string_to_bool, time_window, chi_filter
 from fink_fat.command_line.orbit_cli import trcand_to_orbit
 
 from fink_fat.command_line.association_cli import get_last_roid_streaming_alert
@@ -154,12 +155,14 @@ roid count:
     ).to("deg")
     seeds = intra_night_seeding(sso_night, intra_sep)
 
+    nb_tr_last_night = 0
     nb_deviating_trcand = 0
     nb_new_trcand = 0
 
     if os.path.exists(path_trajectory_df) and os.path.exists(path_fit_roid):
         trajectory_df = pd.read_parquet(path_trajectory_df)
         fit_roid_df = pd.read_parquet(path_fit_roid)
+        nb_tr_last_night = len(fit_roid_df)
 
         if len(sso_night[sso_night["roid"] == 4]) != 0:
             nb_trcand_before = len(fit_roid_df)
@@ -226,8 +229,26 @@ roid count:
         config, trajectory_df, trajectory_orb, fit_roid_df, orbits, logger, True
     )
 
+    nb_tr_before_tw = len(fit_roid_df)
+    trajectory_df, fit_roid_df = time_window(
+        trajectory_df,
+        fit_roid_df,
+        Time(last_night).jd,
+        config["TW_PARAMS"]["predict_function_keep_limit"]
+    )
+    nb_after_tw = len(fit_roid_df)
+    nb_remove_tw = nb_tr_before_tw - nb_after_tw
+
+    trajectory_df, fit_roid_df = chi_filter(
+        trajectory_df,
+        fit_roid_df,
+        10e-5
+    )
+    nb_remove_chi = nb_after_tw - len(fit_roid_df)
+
     if arguments["--verbose"]:
         nb_trcand = len(fit_roid_df)
+        diff_last_night = nb_tr_last_night - nb_trcand
 
         nb_orbits = len(orbits)
         traj_cand_size = Counter(
@@ -236,16 +257,19 @@ roid count:
         traj_orbits_size = Counter(
             trajectory_orb["ssoCandId"].value_counts().sort_index()
         )
-        # * number of trajectory removed by the time window: {nb_removed_trcand}
+
         logger.info(
             f"""
 STATISTICS - ASSOCIATIONS
 ----------
 
 number of orbits: {nb_orbits}
-number of trcand: {nb_trcand}
+number of total trcand (end of the processing): {nb_trcand}
+ * difference from last night: {f"+{diff_last_night}" if diff_last_night > 0 else f"{diff_last_night}"}
  * number of deviating trajectory: {nb_deviating_trcand}
  * number of new trajectory: {nb_new_trcand}
+ * number of trajectories removed by time_window: {nb_remove_tw}
+ * number of trajectories removed by chi_square filter: {nb_remove_chi}
 
 trajectories candidate size:
 {Counter(traj_cand_size)}
