@@ -2,6 +2,7 @@ import pandas as pd
 
 from fink_fat.streaming_associations.fitroid_assoc import fitroid_association
 from fink_fat.streaming_associations.orbit_assoc import orbit_association
+import time
 
 from fink_science.tester import spark_unit_tests
 
@@ -291,6 +292,8 @@ def fink_fat_association(
     orbit_tw = orbit_tw.values[0]
     orbit_error = orbit_error.values[0]
 
+    # FIXME remove time print
+    t_before = time.time()
     # associates the alerts with the orbit
     flags, estimator_id, ffdistnr = orbit_association(
         ra,
@@ -307,7 +310,9 @@ def fink_fat_association(
         orbit_tw,
         orbit_error,
     )
+    print(f"stream orbit associations: {time.time() - t_before:.5f}")
 
+    t_before = time.time()
     # associates the alerts with the kalman filters
     flags, estimator_id, ffdistnr = fitroid_association(
         ra,
@@ -324,6 +329,7 @@ def fink_fat_association(
         mag_criterion_same_fid,
         mag_criterion_diff_fid,
     )
+    print(f"stream polyfit associations: {time.time() - t_before:.5f}")
 
     return flags, estimator_id, ffdistnr
 
