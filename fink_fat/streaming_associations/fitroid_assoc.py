@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import healpy as hp
 
 from astropy.coordinates import SkyCoord, search_around_sky
 import astropy.units as u
@@ -9,6 +10,7 @@ from fink_fat.others.utils import init_logging
 from fink_fat.roid_fitting.roid_fit_prediction import fitroid_prediction
 from fink_fat.associations.associations import night_to_night_separation_association
 
+from fink_utils.science.utils import dec2theta, ra2phi
 from fink_science.tester import spark_unit_tests
 from typing import Tuple
 
@@ -185,12 +187,22 @@ def fitroid_window(pred_pdf: pd.DataFrame, coord_alerts: SkyCoord) -> pd.DataFra
         coord_alerts,
         5 * u.deg,
     )
-    kalman_to_keep = pred_pdf[
+    fitroid_to_keep = pred_pdf[
         pred_pdf["trajectory_id"].isin(
             pred_pdf.iloc[idx_kalman]["trajectory_id"].unique()
         )
     ]
-    return kalman_to_keep
+    return fitroid_to_keep
+
+
+def ang2pix(NSIDE: int, ra: pd.Series, dec: pd.Series):
+    return hp.ang2pix(NSIDE, dec2theta(dec), ra2phi(ra))
+
+def fit_filter(fit_pdf, alert_ra, alert_dec):
+    NSIDE=4
+    fit_pdf_pix = ang2pix(NSIDE, fit_pdf["ra_1"].values, fit_pdf["dec_1"].values)
+    alert_pix = ang2pix(NSIDE, alert_ra, alert_dec)
+    return fit_pdf[np.isin(fit_pdf_pix, alert_pix)]
 
 
 def fitroid_association(
@@ -365,8 +377,8 @@ def fitroid_association(
         logger.warning("files containing the kalman filters not found", exc_info=1)
         return flags, estimator_id, ffdistnr
 
-    # filter the kalman estimators to keep only those inside the current exposures.
-    fit_to_keep = fitroid_window(fit_pdf, coord_masked_alerts)
+    # filter the polyfit estimators to keep only those inside the current exposures.
+    fit_to_keep = fit_filter(fit_pdf, ra_mask, dec_mask)
 
     fit_pred = fitroid_prediction(fit_to_keep, jd_unique)
 

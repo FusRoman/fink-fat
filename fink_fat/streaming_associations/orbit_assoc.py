@@ -12,6 +12,7 @@ import sbpy.data as sso_py
 
 from fink_science.tester import spark_unit_tests
 from fink_fat.streaming_associations.kalman_assoc import roid_mask
+from fink_fat.streaming_associations.fitroid_assoc import ang2pix
 
 from fink_fat.others.utils import init_logging
 
@@ -186,26 +187,10 @@ def orbit_window(
         & (orbit_pdf["ref_epoch"] >= (min_night_jd - orbit_tw))
     ]
 
-    coord_orbit = SkyCoord(
-        last_orbits["last_ra"].values,
-        last_orbits["last_dec"].values,
-        unit="deg",
-    )
-    (
-        idx_orbit,
-        _,
-        _,
-        _,
-    ) = search_around_sky(
-        coord_orbit,
-        coord_alerts,
-        5 * u.deg,
-    )
-
-    orbit_to_keep = orbit_pdf[
-        orbit_pdf["ssoCandId"].isin(orbit_pdf.iloc[idx_orbit]["ssoCandId"].unique())
-    ]
-    return orbit_to_keep
+    NSIDE=4
+    orbit_pix = ang2pix(NSIDE, last_orbits["last_ra"].values, last_orbits["last_dec"].values)
+    alert_pix = ang2pix(NSIDE, coord_alerts.ra, coord_alerts.dec)
+    return last_orbits[np.isin(orbit_pix, alert_pix)]
 
 
 def orbit_association(

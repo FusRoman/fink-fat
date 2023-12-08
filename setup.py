@@ -36,6 +36,9 @@ setup(
         "fastavro==1.6.0",
         "pyarrow==9.0.0",
         "pytest==7.2.2",
+        "sbpy==0.4.0",
+        "scipy>=1.4.1",
+        "healpy==1.16.6"
     ],
     entry_points={
         "console_scripts": ["fink_fat=fink_fat.command_line.fink_fat_cli:main"]

@@ -42,8 +42,11 @@ def predictions(
     [0, array([252.01023015, 251.87293013, 251.46736539, 250.5250238 ]), array([-47.69832558, -47.72534314, -47.80403179, -47.98046663])]
     """
 
-    coord_pred = uf.predict_equ(xp, yp, zp, jd)
-    return [trajectory_id, coord_pred.ra.deg, coord_pred.dec.deg]
+    x = np.poly1d(xp)(jd)
+    y = np.poly1d(yp)(jd)
+    z = np.poly1d(zp)(jd)
+    trajectory_id = np.ones(len(x), dtype=int) * trajectory_id
+    return np.array([trajectory_id, x, y, z])
 
 
 def fitroid_prediction(fit_pdf: pd.DataFrame, jd: list) -> pd.DataFrame:
@@ -98,19 +101,23 @@ def fitroid_prediction(fit_pdf: pd.DataFrame, jd: list) -> pd.DataFrame:
     1              2  246.074463 -22.402872
     1              2  245.343992 -22.438328
     """
-    pred_list = [
+    pred_list = np.hstack([
         predictions(*args, jd)
         for args in zip(
             fit_pdf["trajectory_id"], fit_pdf["xp"], fit_pdf["yp"], fit_pdf["zp"]
         )
-    ]
+    ])
+    eq_coord = uf.xyz_to_equ(pred_list[1, :], pred_list[2,:], pred_list[3, :])
 
     pdf_prediction = pd.DataFrame(
-        pred_list,
-        columns=["trajectory_id", "ra", "dec"],
+        {
+            "trajectory_id": pred_list[0, :],
+            "ra": eq_coord.ra.deg,
+            "dec": eq_coord.dec.deg
+        }
     )
 
-    return pdf_prediction.explode(["ra", "dec"])
+    return pdf_prediction
 
 
 if __name__ == "__main__":  # pragma: no cover
