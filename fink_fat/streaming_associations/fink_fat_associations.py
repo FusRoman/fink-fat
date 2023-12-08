@@ -312,7 +312,9 @@ def fink_fat_association(
         orbit_error,
     )
     time_calc = time.time() - t_before
-    print(f"nb alert: {nb_alert}\nstream orbit associations: {time_calc:.5f}s\n{nb_alert/time_calc} alert/sec")
+    print(
+        f"nb alert: {nb_alert}\nstream orbit associations: {time_calc:.5f}s\n{nb_alert/time_calc} alert/sec"
+    )
 
     t_before = time.time()
     # associates the alerts with the kalman filters
@@ -333,7 +335,9 @@ def fink_fat_association(
     )
     print(f"stream polyfit associations: {time.time() - t_before:.5f}")
     time_calc = time.time() - t_before
-    print(f"nb alert: {nb_alert}\nstream orbit associations: {time_calc:.5f}s\n{nb_alert/time_calc} alert/sec")
+    print(
+        f"nb alert: {nb_alert}\nstream orbit associations: {time_calc:.5f}s\n{nb_alert/time_calc} alert/sec"
+    )
 
     return flags, estimator_id, ffdistnr
 

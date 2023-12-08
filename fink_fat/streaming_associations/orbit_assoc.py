@@ -5,7 +5,7 @@ import math
 from pyspark import SparkFiles
 
 from astropy.time import Time
-from astropy.coordinates import SkyCoord, search_around_sky
+from astropy.coordinates import SkyCoord
 import astropy.units as u
 
 import sbpy.data as sso_py
@@ -187,8 +187,10 @@ def orbit_window(
         & (orbit_pdf["ref_epoch"] >= (min_night_jd - orbit_tw))
     ]
 
-    NSIDE=4
-    orbit_pix = ang2pix(NSIDE, last_orbits["last_ra"].values, last_orbits["last_dec"].values)
+    NSIDE = 4
+    orbit_pix = ang2pix(
+        NSIDE, last_orbits["last_ra"].values, last_orbits["last_dec"].values
+    )
     alert_pix = ang2pix(NSIDE, coord_alerts.ra, coord_alerts.dec)
     return last_orbits[np.isin(orbit_pix, alert_pix)]
 

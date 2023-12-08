@@ -101,19 +101,21 @@ def fitroid_prediction(fit_pdf: pd.DataFrame, jd: list) -> pd.DataFrame:
     1              2  246.074463 -22.402872
     1              2  245.343992 -22.438328
     """
-    pred_list = np.hstack([
-        predictions(*args, jd)
-        for args in zip(
-            fit_pdf["trajectory_id"], fit_pdf["xp"], fit_pdf["yp"], fit_pdf["zp"]
-        )
-    ])
-    eq_coord = uf.xyz_to_equ(pred_list[1, :], pred_list[2,:], pred_list[3, :])
+    pred_list = np.hstack(
+        [
+            predictions(*args, jd)
+            for args in zip(
+                fit_pdf["trajectory_id"], fit_pdf["xp"], fit_pdf["yp"], fit_pdf["zp"]
+            )
+        ]
+    )
+    eq_coord = uf.xyz_to_equ(pred_list[1, :], pred_list[2, :], pred_list[3, :])
 
     pdf_prediction = pd.DataFrame(
         {
             "trajectory_id": pred_list[0, :],
             "ra": eq_coord.ra.deg,
-            "dec": eq_coord.dec.deg
+            "dec": eq_coord.dec.deg,
         }
     )
 

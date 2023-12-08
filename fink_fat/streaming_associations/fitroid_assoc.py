@@ -198,8 +198,9 @@ def fitroid_window(pred_pdf: pd.DataFrame, coord_alerts: SkyCoord) -> pd.DataFra
 def ang2pix(NSIDE: int, ra: pd.Series, dec: pd.Series):
     return hp.ang2pix(NSIDE, dec2theta(dec), ra2phi(ra))
 
+
 def fit_filter(fit_pdf, alert_ra, alert_dec):
-    NSIDE=4
+    NSIDE = 4
     fit_pdf_pix = ang2pix(NSIDE, fit_pdf["ra_1"].values, fit_pdf["dec_1"].values)
     alert_pix = ang2pix(NSIDE, alert_ra, alert_dec)
     return fit_pdf[np.isin(fit_pdf_pix, alert_pix)]
