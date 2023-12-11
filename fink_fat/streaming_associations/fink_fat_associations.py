@@ -2,7 +2,6 @@ import pandas as pd
 
 from fink_fat.streaming_associations.fitroid_assoc import fitroid_association
 from fink_fat.streaming_associations.orbit_assoc import orbit_association
-import time
 
 from fink_science.tester import spark_unit_tests
 
