@@ -311,10 +311,12 @@ def orbit_association(
         logger.warning("files containing the orbits not found", exc_info=1)
         return flags, estimator_id, ffdistnr
 
-    if len(orbit_to_keep) == 0:
+    if len(orbit_pdf) != 0:
+        orbit_to_keep = orbit_window(orbit_pdf, coord_alerts, jd_unique, orbit_tw)
+        if len(orbit_to_keep) == 0:
+            return flags, estimator_id, ffdistnr
+    else:
         return flags, estimator_id, ffdistnr
-
-    orbit_to_keep = orbit_window(orbit_pdf, coord_alerts, jd_unique, orbit_tw)
 
     # compute ephem from the latest orbits and find the matching alerts coordinates
     ephem = compute_ephem(orbit_to_keep, jd_unique)
