@@ -292,9 +292,6 @@ def fink_fat_association(
     orbit_tw = orbit_tw.values[0]
     orbit_error = orbit_error.values[0]
 
-    # FIXME remove time print
-    t_before = time.time()
-    nb_alert = len(ra)
     # associates the alerts with the orbit
     flags, estimator_id, ffdistnr = orbit_association(
         ra,
@@ -311,12 +308,7 @@ def fink_fat_association(
         orbit_tw,
         orbit_error,
     )
-    time_calc = time.time() - t_before
-    print(
-        f"nb alert: {nb_alert}\nstream orbit associations: {time_calc:.5f}s\n{nb_alert/time_calc} alert/sec"
-    )
 
-    t_before = time.time()
     # associates the alerts with the kalman filters
     flags, estimator_id, ffdistnr = fitroid_association(
         ra,
@@ -332,11 +324,6 @@ def fink_fat_association(
         error_radius,
         mag_criterion_same_fid,
         mag_criterion_diff_fid,
-    )
-    print(f"stream polyfit associations: {time.time() - t_before:.5f}")
-    time_calc = time.time() - t_before
-    print(
-        f"nb alert: {nb_alert}\nstream orbit associations: {time_calc:.5f}s\n{nb_alert/time_calc} alert/sec"
     )
 
     return flags, estimator_id, ffdistnr

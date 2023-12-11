@@ -56,7 +56,7 @@ coverage.xml
 *.pot
 
 # Django stuff:
-*.log
+# *.log
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
@@ -207,3 +207,4 @@ save_ff_output_kbo_neo_issue/
 sso_data_norm.parquet
 test_assoc_kalman.py
 test_assoc_orbit.py
+fink_fat/test/cli_test/*.log

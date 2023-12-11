@@ -129,7 +129,7 @@ roid count:
         orbits = pd.read_parquet(path_orbit)
         trajectory_orb = pd.read_parquet(path_trajectory_orb)
         orbits, trajectory_orb, old_orbits = orbit_associations(
-            config, alerts_night, trajectory_orb, orbits, logger, True
+            config, alerts_night, trajectory_orb, orbits, last_night, logger, True
         )
         if os.path.exists(path_old_orbits):
             save_old_orbits = pd.read_parquet(path_old_orbits)

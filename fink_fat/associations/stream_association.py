@@ -240,7 +240,10 @@ def stream_association(
 
     new_alerts = new_alerts[new_alerts["roid"].isin(roid_flag)]
     new_alerts = new_alerts.explode(["ffdistnr", "estimator_id"])
-    new_alerts["estimator_id"] = new_alerts["estimator_id"].fillna(-1).astype(int)
+
+    new_alerts["estimator_id"] = new_alerts["estimator_id"].fillna(-1)
+    new_alerts["estimator_id"] = new_alerts["estimator_id"].astype(float).astype(int)
+
     traj_id_to_update = np.sort(new_alerts["estimator_id"].unique())
 
     # get the trajectory to update

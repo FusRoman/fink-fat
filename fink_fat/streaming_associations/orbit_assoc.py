@@ -191,7 +191,7 @@ def orbit_window(
     orbit_pix = ang2pix(
         NSIDE, last_orbits["last_ra"].values, last_orbits["last_dec"].values
     )
-    alert_pix = ang2pix(NSIDE, coord_alerts.ra, coord_alerts.dec)
+    alert_pix = ang2pix(NSIDE, coord_alerts.ra.value, coord_alerts.dec.value)
     return last_orbits[np.isin(orbit_pix, alert_pix)]
 
 
