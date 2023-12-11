@@ -534,16 +534,28 @@ def chi_filter(
     pd.DataFrame
         trajectory dataframe filtered using chi square values
     """
-    chi = trajectory_df.groupby("trajectory_id").apply(
+    tr_updated_mask = trajectory_df["updated"] == "Y"
+    tr_updated = trajectory_df[tr_updated_mask]
+
+    fit_updated_mask = fit_df["trajectory_id"].isin(tr_updated["trajectory_id"])
+    fit_updated = fit_df[fit_updated_mask]
+
+    tr_non_updated = trajectory_df[~tr_updated_mask]
+    fit_non_updated = fit_df[~fit_updated_mask]
+
+    chi = tr_updated.groupby("trajectory_id").apply(
         lambda x: chi_square(x["ra"], x["dec"], x["jd"])
     )
+    chi_mask = chi[chi <= chi_limit].index
 
-    traj_filt = trajectory_df[
-        trajectory_df["trajectory_id"].isin(chi[chi <= chi_limit].index)
+    traj_filt = tr_updated[
+        tr_updated["trajectory_id"].isin(chi_mask)
     ]
-    fit_filt = fit_df[fit_df["trajectory_id"].isin(chi[chi <= chi_limit].index)]
+    fit_filt = fit_updated[fit_updated["trajectory_id"].isin(chi_mask)]
 
-    return traj_filt, fit_filt
+    trajectory_df = pd.concat([tr_non_updated, traj_filt])
+    fit_df = pd.concat([fit_non_updated, fit_filt])
+    return trajectory_df, fit_df
 
 
 def time_window(
