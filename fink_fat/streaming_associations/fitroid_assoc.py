@@ -378,6 +378,9 @@ def fitroid_association(
         logger.warning("files containing the kalman filters not found", exc_info=1)
         return flags, estimator_id, ffdistnr
 
+    if len(fit_to_keep) == 0:
+        return flags, estimator_id, ffdistnr
+
     # filter the polyfit estimators to keep only those inside the current exposures.
     fit_to_keep = fit_filter(fit_pdf, ra_mask, dec_mask)
 
