@@ -304,7 +304,7 @@ def trcand_to_orbit(
         return trajectory_df, trparams_df, trajectory_orb, orbits
 
     year, month, day = last_night.split("-")
-    new_orbits = switch_local_cluster(config, traj_to_orb, verbose, year, month, day)
+    new_orbits = switch_local_cluster(config, traj_to_orb, year, month, day, verbose)
     new_orbits = new_orbits[new_orbits["a"] != -1.0]
     if verbose:
         logger.info(
