@@ -22,7 +22,7 @@ export ROOTPATH=`pwd`
 export PYTHONPATH="${SPARK_HOME}/python/test_coverage:$PYTHONPATH"
 export COVERAGE_PROCESS_START="${ROOTPATH}/.coveragerc"
 
-python -m pip install .
+python -m pip install -U .
 
 # Run the test suite
 for filename in fink_fat/associations/*.py

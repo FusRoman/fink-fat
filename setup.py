@@ -38,7 +38,8 @@ setup(
         "pytest==7.2.2",
         "sbpy==0.4.0",
         "scipy>=1.4.1",
-        "healpy==1.16.6"
+        "healpy==1.16.6",
+        "pandera==0.18.0"
     ],
     entry_points={
         "console_scripts": ["fink_fat=fink_fat.command_line.fink_fat_cli:main"]
