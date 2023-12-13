@@ -251,7 +251,7 @@ roid count:
 
     if arguments["--verbose"]:
         nb_trcand = len(fit_roid_df)
-        diff_last_night = nb_tr_last_night - nb_trcand
+        diff_last_night = nb_trcand - nb_tr_last_night
 
         nb_orbits = len(orbits)
         traj_cand_size = Counter(
