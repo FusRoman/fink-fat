@@ -98,12 +98,7 @@ def orbit_associations(
     year, month, day = last_night.split("-")
     # recompute the orbit using local or cluster mode
     new_orbit_pdf = switch_local_cluster(
-        config,
-        traj_to_new_orbit,
-        year,
-        month,
-        day,
-        verbose
+        config, traj_to_new_orbit, year, month, day, verbose
     )
 
     # remove the failed orbits

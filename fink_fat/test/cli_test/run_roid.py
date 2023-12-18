@@ -12,11 +12,8 @@ from pyspark.sql import SparkSession
 
 
 def addFileToSpark(
-        spark: SparkSession, 
-        fitroid_path: str, 
-        orbit_path: str,
-        ephem_path: str
-    ):
+    spark: SparkSession, fitroid_path: str, orbit_path: str, ephem_path: str
+):
     if os.path.exists(orbit_path):
         spark.sparkContext.addFile(orbit_path)
     if os.path.exists(fitroid_path):
@@ -42,12 +39,7 @@ if __name__ == "__main__":
     )
 
     spark = init_sparksession("fink_fat_roid")
-    addFileToSpark(
-        spark, 
-        path_fit_roid, 
-        path_orbit,
-        path_ephem
-    )
+    addFileToSpark(spark, path_fit_roid, path_orbit, path_ephem)
 
     df = spark.read.load(path_sso)
     what = ["jd", "magpsf"]

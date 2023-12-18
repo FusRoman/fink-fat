@@ -548,9 +548,7 @@ def chi_filter(
     )
     chi_mask = chi[chi <= chi_limit].index
 
-    traj_filt = tr_updated[
-        tr_updated["trajectory_id"].isin(chi_mask)
-    ]
+    traj_filt = tr_updated[tr_updated["trajectory_id"].isin(chi_mask)]
     fit_filt = fit_updated[fit_updated["trajectory_id"].isin(chi_mask)]
 
     trajectory_df = pd.concat([tr_non_updated, traj_filt])

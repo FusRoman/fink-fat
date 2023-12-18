@@ -195,13 +195,12 @@ def orbit_window(
     alert_pix = ang2pix(NSIDE, coord_alerts.ra.value, coord_alerts.dec.value)
     return last_orbits[np.isin(orbit_pix, alert_pix)]
 
-def ephem_window(
-    ephem_pdf: pd.DataFrame, coord_alerts: SkyCoord
-) -> pd.DataFrame:
+
+def ephem_window(ephem_pdf: pd.DataFrame, coord_alerts: SkyCoord) -> pd.DataFrame:
     """
     Return a subset of ephemerides close to the alerts of the current batch.
     The filter use healpix, each ephemerides contains within the same pixels than the alerts
-    are output. 
+    are output.
 
     Parameters
     ----------
@@ -235,11 +234,10 @@ def ephem_window(
     4  7.574226  47.131672
     """
     NSIDE = 32
-    orbit_pix = ang2pix(
-        NSIDE, ephem_pdf["RA"].values, ephem_pdf["DEC"].values
-    )
+    orbit_pix = ang2pix(NSIDE, ephem_pdf["RA"].values, ephem_pdf["DEC"].values)
     alert_pix = ang2pix(NSIDE, coord_alerts.ra.value, coord_alerts.dec.value)
     return ephem_pdf[np.isin(orbit_pix, alert_pix)].reset_index(drop=True)
+
 
 def orbit_association(
     ra: np.ndarray,
@@ -254,7 +252,7 @@ def orbit_association(
     mag_criterion_same_fid: float,
     mag_criterion_diff_fid: float,
     orbit_error: float,
-)-> Tuple[pd.Series, pd.Series, pd.Series]:
+) -> Tuple[pd.Series, pd.Series, pd.Series]:
     """
     Associates the alerts from the current spark batch
     with the orbit estimated by fink_fat from the previous nights.
@@ -364,7 +362,9 @@ def orbit_association(
         return flags, estimator_id, ffdistnr
 
     # get equatorial coordinates of the ephemerides
-    ephem_coord = SkyCoord(ephem_to_keep["RA"].values, ephem_to_keep["DEC"].values, unit=u.degree)
+    ephem_coord = SkyCoord(
+        ephem_to_keep["RA"].values, ephem_to_keep["DEC"].values, unit=u.degree
+    )
 
     # return the closest alerts of each ephemerides
     res_search = coord_alerts.match_to_catalog_sky(ephem_coord)
@@ -375,9 +375,9 @@ def orbit_association(
     f_distance = np.where(sep.arcsecond < orbit_error)[0]
 
     idx_ephem_assoc = idx_ephem[f_distance]
-    close_orbit = ephem_to_keep.loc[idx_ephem_assoc].merge(
-        orbit_pdf, on="ssoCandId"
-    )[["ssoCandId", "last_mag", "last_fid", "last_jd", "ssoCandId"]]
+    close_orbit = ephem_to_keep.loc[idx_ephem_assoc].merge(orbit_pdf, on="ssoCandId")[
+        ["ssoCandId", "last_mag", "last_fid", "last_jd", "ssoCandId"]
+    ]
 
     mag_assoc = mag_mask[f_distance]
     fid_assoc = fid_mask[f_distance]

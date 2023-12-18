@@ -343,6 +343,7 @@ def trcand_to_orbit(
     trparams_df = trparams_df[~trparams_df["trajectory_id"].isin(failed_orbit)]
     return trajectory_df, trparams_df, trajectory_orb, orbits
 
+
 if __name__ == "__main__":
     from fink_science.tester import spark_unit_tests
     from pandas.testing import assert_frame_equal  # noqa: F401

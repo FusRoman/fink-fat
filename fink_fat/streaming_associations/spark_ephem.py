@@ -174,14 +174,21 @@ def launch_spark_ephem(
     process = subprocess.run(spark_submit, shell=True)
     if process.returncode != 0:
         logger = init_logging()
-        logger.info(process.stderr.decode("utf-8")if process.stderr is not None else "no err output")
-        logger.info(process.stdout.decode("utf-8")if process.stdout is not None else "no std output")
+        logger.info(
+            process.stderr.decode("utf-8")
+            if process.stderr is not None
+            else "no err output"
+        )
+        logger.info(
+            process.stdout.decode("utf-8")
+            if process.stdout is not None
+            else "no std output"
+        )
         exit()
 
 
 if __name__ == "__main__":
     import sys
-    from fink_fat.command_line.orbit_cli import spark_ephem
 
     year, month, day = (
         sys.argv[4],
