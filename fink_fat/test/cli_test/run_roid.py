@@ -11,11 +11,18 @@ from fink_fat.command_line.utils_cli import init_cli
 from pyspark.sql import SparkSession
 
 
-def addFileToSpark(spark: SparkSession, fitroid_path, orbit_path):
+def addFileToSpark(
+        spark: SparkSession, 
+        fitroid_path: str, 
+        orbit_path: str,
+        ephem_path: str
+    ):
     if os.path.exists(orbit_path):
         spark.sparkContext.addFile(orbit_path)
     if os.path.exists(fitroid_path):
         spark.sparkContext.addFile(fitroid_path)
+    if os.path.exists(ephem_path):
+        spark.sparkContext.addFile(ephem_path)
 
 
 if __name__ == "__main__":
@@ -28,13 +35,19 @@ if __name__ == "__main__":
 
     path_orbit = os.path.join(output_path, "fitroid", "orbital.parquet")
     path_fit_roid = os.path.join(output_path, "fitroid", "fit_roid.parquet")
+    path_ephem = os.path.join(output_path, "fitroid", "ephem.parquet")
 
     path_sso = os.path.join(
         datapath, f"year={int(year):04d}/month={int(month):02d}/day={int(day):02d}"
     )
 
     spark = init_sparksession("fink_fat_roid")
-    addFileToSpark(spark, path_fit_roid, path_orbit)
+    addFileToSpark(
+        spark, 
+        path_fit_roid, 
+        path_orbit,
+        path_ephem
+    )
 
     df = spark.read.load(path_sso)
     what = ["jd", "magpsf"]

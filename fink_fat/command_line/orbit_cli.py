@@ -1,7 +1,6 @@
 import os
 import subprocess
 from typing import Tuple
-
 import pandas as pd
 import numpy as np
 
@@ -343,7 +342,6 @@ def trcand_to_orbit(
     trajectory_df = trajectory_df[~trajectory_df["trajectory_id"].isin(failed_orbit)]
     trparams_df = trparams_df[~trparams_df["trajectory_id"].isin(failed_orbit)]
     return trajectory_df, trparams_df, trajectory_orb, orbits
-
 
 if __name__ == "__main__":
     from fink_science.tester import spark_unit_tests

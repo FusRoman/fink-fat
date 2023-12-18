@@ -15,6 +15,7 @@ from fink_fat.streaming_associations.kalman_assoc import roid_mask
 from fink_fat.streaming_associations.fitroid_assoc import ang2pix
 
 from fink_fat.others.utils import init_logging
+from typing import Tuple
 
 
 def df_to_orb(df_orb: pd.DataFrame) -> sso_py.Orbit:
@@ -194,6 +195,51 @@ def orbit_window(
     alert_pix = ang2pix(NSIDE, coord_alerts.ra.value, coord_alerts.dec.value)
     return last_orbits[np.isin(orbit_pix, alert_pix)]
 
+def ephem_window(
+    ephem_pdf: pd.DataFrame, coord_alerts: SkyCoord
+) -> pd.DataFrame:
+    """
+    Return a subset of ephemerides close to the alerts of the current batch.
+    The filter use healpix, each ephemerides contains within the same pixels than the alerts
+    are output. 
+
+    Parameters
+    ----------
+    ephem_pdf : pd.DataFrame
+        dataframe containing the ephemerides, columns are ssoCandId, RA and DEC.
+    coord_alerts : SkyCoord
+        equatorial coordinates of the alerts contains in the current batch
+
+    Returns
+    -------
+    pd.DataFrame
+        filtered ephemerides
+
+    Examples
+    --------
+    >>> rng = np.random.default_rng(42)
+    >>> dec = rng.uniform(-10, 10, 100)
+    >>> ra = rng.uniform(40, 60, 100)
+    >>> coords_alerts = SkyCoord(ra, dec, unit="deg")
+
+    >>> ephem = pd.DataFrame({
+    ... "DEC": rng.uniform(-90, 90, 1000),
+    ... "RA": rng.uniform(0, 360, 1000)
+    ... })
+    >>> ephem_window(ephem, coords_alerts)
+            DEC         RA
+    0 -8.298561  41.517518
+    1 -8.222767  56.072762
+    2 -3.331559  55.942963
+    3 -4.898885  50.323533
+    4  7.574226  47.131672
+    """
+    NSIDE = 32
+    orbit_pix = ang2pix(
+        NSIDE, ephem_pdf["RA"].values, ephem_pdf["DEC"].values
+    )
+    alert_pix = ang2pix(NSIDE, coord_alerts.ra.value, coord_alerts.dec.value)
+    return ephem_pdf[np.isin(orbit_pix, alert_pix)].reset_index(drop=True)
 
 def orbit_association(
     ra: np.ndarray,
@@ -207,9 +253,8 @@ def orbit_association(
     ffdistnr: pd.Series,
     mag_criterion_same_fid: float,
     mag_criterion_diff_fid: float,
-    orbit_tw: int,
     orbit_error: float,
-):
+)-> Tuple[pd.Series, pd.Series, pd.Series]:
     """
     Associates the alerts from the current spark batch
     with the orbit estimated by fink_fat from the previous nights.
@@ -241,8 +286,6 @@ def orbit_association(
     mag_criterion_diff_fid : float
         the criterion to filter the alerts with the filter identifier for the magnitude
         different from the last point used to compute the orbit
-    orbit_tw : int
-        time window used to filter the orbit
     orbit_error: float
         error radius to associates the alerts with the orbits
 
@@ -270,7 +313,7 @@ def orbit_association(
     ...     False,
     ...     pd.Series([[], [], [], [], []]),
     ...     pd.Series([[], [], [], [], []]),
-    ...     2, 2, 30, 15.0
+    ...     2, 2, 15.0
     ... )
 
     >>> flags
@@ -294,33 +337,34 @@ def orbit_association(
     """
     logger = init_logging()
     (
-        ra_mask,
-        dec_mask,
+        _,
+        _,
         coord_alerts,
         mag_mask,
         fid_mask,
         jd_mask,
-        jd_unique,
+        _,
         idx_keep_mask,
     ) = roid_mask(ra, dec, jd, magpsf, fid, flags, confirmed_sso)
 
     try:
+        # get the latest computed ephemeride for the current observing night
+        ephem_pdf = pd.read_parquet(SparkFiles.get("ephem.parquet"))
         # get latest detected orbit
         orbit_pdf = pd.read_parquet(SparkFiles.get("orbital.parquet"))
     except FileNotFoundError:
         logger.warning("files containing the orbits not found", exc_info=1)
         return flags, estimator_id, ffdistnr
 
-    if len(orbit_pdf) != 0:
-        orbit_to_keep = orbit_window(orbit_pdf, coord_alerts, jd_unique, orbit_tw)
-        if len(orbit_to_keep) == 0:
+    if len(ephem_pdf) != 0:
+        ephem_to_keep = ephem_window(ephem_pdf, coord_alerts)
+        if len(ephem_to_keep) == 0:
             return flags, estimator_id, ffdistnr
     else:
         return flags, estimator_id, ffdistnr
 
-    # compute ephem from the latest orbits and find the matching alerts coordinates
-    ephem = compute_ephem(orbit_to_keep, jd_unique)
-    ephem_coord = SkyCoord(ephem["RA"], ephem["DEC"], unit=u.degree)
+    # get equatorial coordinates of the ephemerides
+    ephem_coord = SkyCoord(ephem_to_keep["RA"].values, ephem_to_keep["DEC"].values, unit=u.degree)
 
     # return the closest alerts of each ephemerides
     res_search = coord_alerts.match_to_catalog_sky(ephem_coord)
@@ -331,9 +375,9 @@ def orbit_association(
     f_distance = np.where(sep.arcsecond < orbit_error)[0]
 
     idx_ephem_assoc = idx_ephem[f_distance]
-    close_orbit = ephem.loc[idx_ephem_assoc].merge(
-        orbit_to_keep, left_on="targetname", right_on="ssoCandId"
-    )[["ssoCandId", "last_mag", "last_fid", "last_jd", "targetname_x"]]
+    close_orbit = ephem_to_keep.loc[idx_ephem_assoc].merge(
+        orbit_pdf, on="ssoCandId"
+    )[["ssoCandId", "last_mag", "last_fid", "last_jd", "ssoCandId"]]
 
     mag_assoc = mag_mask[f_distance]
     fid_assoc = fid_mask[f_distance]
@@ -354,7 +398,7 @@ def orbit_association(
 
     flags[idx_mag] = 5
     estimator_id[idx_mag] = np.expand_dims(
-        close_orbit.loc[idx_rate, "targetname_x"], axis=1
+        close_orbit.loc[idx_rate, "ssoCandId"], axis=1
     ).tolist()
     ffdistnr[idx_mag] = np.expand_dims(sep[f_distance][idx_rate].value, axis=1).tolist()
 

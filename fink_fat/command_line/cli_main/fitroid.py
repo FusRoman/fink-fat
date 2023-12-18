@@ -10,6 +10,7 @@ import astropy.units as u
 from astropy.time import Time
 
 from fink_fat.associations.association_orbit import orbit_associations
+from fink_fat.streaming_associations.spark_ephem import launch_spark_ephem
 from fink_fat.roid_fitting.init_roid_fitting import init_polyast
 from fink_fat.associations.stream_association import stream_association
 
@@ -298,6 +299,12 @@ orbits trajectories size:
     fit_roid_df.to_parquet(path_fit_roid, index=False)
     trajectory_orb.to_parquet(path_trajectory_orb, index=False)
     orbits.to_parquet(path_orbit, index=False)
+
+    # compute the ephemerides for the next observation night
+    year, month, day = last_night.split("-")
+    launch_spark_ephem(
+        config, path_orbit, os.path.join(output_path, "ephem.parquet"), year, month, day
+    )
 
     if arguments["--verbose"]:
         logger.info("END OF THE FITROID ASSOCIATION")
