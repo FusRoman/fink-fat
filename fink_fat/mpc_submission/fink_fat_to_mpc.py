@@ -376,7 +376,9 @@ def submit_to_mpc(
     print(response.text)
 
 
-def mpc_submission_batch(trajectory_orb: pd.DataFrame, ack_msg:str, ack_mail:str, test: bool = False):
+def mpc_submission_batch(
+    trajectory_orb: pd.DataFrame, ack_msg: str, ack_mail: str, test: bool = False
+):
     """
     Submit all the trajectories in trajectory_orb to the MPC.
 
