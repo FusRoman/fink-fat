@@ -226,7 +226,7 @@ def make_obs_data(
         the xml block to which the obs data block will be attached
     """
     obstime = Time(jd, format="jd")
-    xsd_good_format = obstime.datetime.isoformat() + 'Z'
+    xsd_good_format = obstime.datetime.isoformat() + "Z"
 
     optical = addElement(obs_data, "optical")
     addDataElement(optical, "trkSub", submission_id)
@@ -254,7 +254,7 @@ def validate(schema: XMLTree.XMLSchema, ades: XMLTree._ElementTree):
     """
     try:
         schema.assertValid(ades)
-    except:
+    except XMLTree.DocumentInvalid:
         print(traceback.format_exc())
 
 
@@ -272,7 +272,7 @@ def readXML(xmlFile):
     return XMLTree.parse(xmlFile)
 
 
-def XMLtoSchema(xml_tree: XMLTree._Element)->XMLTree.XMLSchema:
+def XMLtoSchema(xml_tree: XMLTree._Element) -> XMLTree.XMLSchema:
     """Re-interprets and xml_tree as a schema
     Inputs:
        xml_tree:  an xml tree
@@ -291,7 +291,7 @@ def XMLtoSchema(xml_tree: XMLTree._Element)->XMLTree.XMLSchema:
     return XMLTree.XMLSchema(xml_tree)  # now parsed as schema
 
 
-def pdf_to_ades(trajectory: pd.DataFrame, schema: XMLTree.XMLSchema)->str:
+def pdf_to_ades(trajectory: pd.DataFrame, schema: XMLTree.XMLSchema) -> str:
     """
     Convert a trajectory dataframe to a valid aded xml.
     Raise an exception if the ades is not valid regarding the ades validation schema get from github
@@ -330,7 +330,7 @@ def pdf_to_ades(trajectory: pd.DataFrame, schema: XMLTree.XMLSchema)->str:
     return str_xml
 
 
-def get_schema_from_github()->XMLTree.XMLSchema:
+def get_schema_from_github() -> XMLTree.XMLSchema:
     """
     Get the ades validation schema from the Ades github repository.
 
@@ -339,13 +339,16 @@ def get_schema_from_github()->XMLTree.XMLSchema:
     XMLTree.XMLSchema
         the ades validation schema
     """
-    r = requests.get("https://raw.githubusercontent.com/IAU-ADES/ADES-Master/master/xsd/submit.xsd")
+    r = requests.get(
+        "https://raw.githubusercontent.com/IAU-ADES/ADES-Master/master/xsd/submit.xsd"
+    )
     xml_string = r.content.decode("utf-8")
     xml = XMLTree.fromstring(xml_string)
     schema = XMLtoSchema(xml)
     return schema
 
-def submit_to_mpc(xml_ades: XMLTree._ElementTree, test:bool):
+
+def submit_to_mpc(xml_ades: XMLTree._ElementTree, test: bool):
     """
     Submit an ades xml containing the observation of one trajectories to the MPC.
     Print the response in the standard output.
@@ -358,19 +361,20 @@ def submit_to_mpc(xml_ades: XMLTree._ElementTree, test:bool):
         if true, send the ades xml to the test end-point of MPC.
     """
     files = {
-        'ack': (None, 'ok test'),
-        'ac2': (None, 'roman.le-montagner@ijclab.in2p3.fr'),
-        'obj_type': (None, 'Unclassified'),
-        'source': (None, xml_ades),
+        "ack": (None, "ok test"),
+        "ac2": (None, "roman.le-montagner@ijclab.in2p3.fr"),
+        "obj_type": (None, "Unclassified"),
+        "source": (None, xml_ades),
     }
 
     submit_url = "https://minorplanetcenter.net/submit_xml"
     if test:
-        submit_url = 'https://minorplanetcenter.net/submit_xml_test'
+        submit_url = "https://minorplanetcenter.net/submit_xml_test"
     response = requests.post(submit_url, files=files)
     print(response.text)
 
-def mpc_submission_batch(trajectory_orb: pd.DataFrame, test:bool=False):
+
+def mpc_submission_batch(trajectory_orb: pd.DataFrame, test: bool = False):
     """
     Submit all the trajectories in trajectory_orb to the MPC.
 
@@ -403,11 +407,10 @@ def mpc_submission_batch(trajectory_orb: pd.DataFrame, test:bool=False):
 
     multiple_track, two_point, more_point = prep_traj_for_mpc(trajectory_orb)
 
-    def submit_trajectories(tr:pd.DataFrame):
+    def submit_trajectories(tr: pd.DataFrame):
         if len(tr) != 0:
             t = tr.groupby("submission_id").apply(pdf_to_ades, schema=validation_schema)
             t.apply(submit_to_mpc, test=test)
-
 
     submit_trajectories(multiple_track)
     submit_trajectories(two_point)

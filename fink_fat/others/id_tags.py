@@ -3,7 +3,7 @@ import numpy as np
 from astropy.time import Time
 
 
-def alphabetic_tag(int_id: int, nb_alphabetic: int)->str:
+def alphabetic_tag(int_id: int, nb_alphabetic: int) -> str:
     """
     Make an alphabetic tag in base 26.
 
@@ -41,7 +41,7 @@ def alphabetic_tag(int_id: int, nb_alphabetic: int)->str:
 
         res_tag += chr(r + 97)
         int_id = q
-    
+
     return res_tag[::-1]
 
 
