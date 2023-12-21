@@ -348,7 +348,9 @@ def get_schema_from_github() -> XMLTree.XMLSchema:
     return schema
 
 
-def submit_to_mpc(xml_ades: XMLTree._ElementTree, test: bool):
+def submit_to_mpc(
+    xml_ades: XMLTree._ElementTree, ack_msg: str, ack_mail: str, test: bool
+):
     """
     Submit an ades xml containing the observation of one trajectories to the MPC.
     Print the response in the standard output.
@@ -361,8 +363,8 @@ def submit_to_mpc(xml_ades: XMLTree._ElementTree, test: bool):
         if true, send the ades xml to the test end-point of MPC.
     """
     files = {
-        "ack": (None, "ok test"),
-        "ac2": (None, "roman.le-montagner@ijclab.in2p3.fr"),
+        "ack": (None, ack_msg),
+        "ac2": (None, ack_mail),
         "obj_type": (None, "Unclassified"),
         "source": (None, xml_ades),
     }
@@ -374,7 +376,7 @@ def submit_to_mpc(xml_ades: XMLTree._ElementTree, test: bool):
     print(response.text)
 
 
-def mpc_submission_batch(trajectory_orb: pd.DataFrame, test: bool = False):
+def mpc_submission_batch(trajectory_orb: pd.DataFrame, ack_msg:str, ack_mail:str, test: bool = False):
     """
     Submit all the trajectories in trajectory_orb to the MPC.
 
@@ -388,7 +390,7 @@ def mpc_submission_batch(trajectory_orb: pd.DataFrame, test: bool = False):
     Examples
     --------
     >>> test_pdf = pd.read_parquet("fink_fat/test/test_mpc_submission/pdf_test.parquet")
-    >>> mpc_submission_batch(test_pdf, True)
+    >>> mpc_submission_batch(test_pdf, "ok test", "toto@gmail.com", True)
     Submission valid
     <BLANKLINE>
     Submission valid
@@ -410,7 +412,7 @@ def mpc_submission_batch(trajectory_orb: pd.DataFrame, test: bool = False):
     def submit_trajectories(tr: pd.DataFrame):
         if len(tr) != 0:
             t = tr.groupby("submission_id").apply(pdf_to_ades, schema=validation_schema)
-            t.apply(submit_to_mpc, test=test)
+            t.apply(submit_to_mpc, ack_msg=ack_msg, ack_mail=ack_mail, test=test)
 
     submit_trajectories(multiple_track)
     submit_trajectories(two_point)
