@@ -89,8 +89,8 @@ def launch_spark_ephem(
 
     # FIXME
     # temporary dependencies (only during the performance test phase)
-    # FINK_FAT = "/home/roman.le-montagner/home_big_storage/Doctorat/Asteroids/fink-fat/dist/fink_fat-1.0.0-py3.9.egg"
-    # FINK_SCIENCE = "/home/roman.le-montagner/home_big_storage/Doctorat/fink-science/dist/fink_science-4.4-py3.7.egg"
+    FINK_FAT = "/home/roman.le-montagner/home_big_storage/Doctorat/Asteroids/fink-fat/dist/fink_fat-1.0.0-py3.9.egg"
+    FINK_SCIENCE = "/home/roman.le-montagner/home_big_storage/Doctorat/fink-science/dist/fink_science-4.4-py3.7.egg"
 
     spark_submit = f"spark-submit \
         --master {master_manager} \
@@ -106,8 +106,8 @@ def launch_spark_ephem(
         --conf spark.sql.execution.arrow.pyspark.enabled=true\
         --conf spark.sql.execution.arrow.maxRecordsPerBatch=1000000\
         --conf spark.kryoserializer.buffer.max=512m\
+        --py-files {FINK_FAT},{FINK_SCIENCE}\
         {application}"
-    # --py-files {FINK_FAT},{FINK_SCIENCE}\
 
     process = subprocess.run(spark_submit, shell=True, capture_output=True)
     logger = init_logging()

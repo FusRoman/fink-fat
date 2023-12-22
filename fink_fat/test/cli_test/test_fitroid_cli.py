@@ -3,6 +3,8 @@ from fink_fat.others.utils import init_logging
 from fink_fat.command_line.fink_fat_cli import main_test
 from datetime import date, timedelta
 import os
+import pandas as pd
+import numpy as np
 
 
 def daterange(start_date, end_date):
@@ -63,3 +65,19 @@ if __name__ == "__main__":
                     "--verbose",
                 ]
             )
+
+    true_traj = pd.read_parquet("fink_fat/test/cli_test/small_sso_dataset/")
+    tr_orb = pd.read_parquet(
+        "fink_fat/test/cli_test/fink_fat_out/fitroid/trajectory_orb.parquet"
+    )
+
+    gb = tr_orb.groupby("ssoCandId").agg(
+        sso_id=("ssnamenr", "unique"),
+        nb_uniq_id=("ssnamenr", lambda x: len(np.unique(x))),
+    )
+    assert (gb["nb_uniq_id"] == 1).all()
+
+    print(
+        f"number of trajectories in the input dataset: {len(true_traj['candidate'].str['ssnamenr'].unique())}"
+    )
+    print(f"number of reconstructed trajectories: {len(tr_orb['ssnamenr'].unique())}")

@@ -361,7 +361,7 @@ def fitroid_association(
     (
         ra_mask,
         dec_mask,
-        coord_masked_alerts,
+        _,
         mag_mask,
         fid_mask,
         candid_mask,
