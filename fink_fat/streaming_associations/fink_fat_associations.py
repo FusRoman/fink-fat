@@ -304,7 +304,6 @@ def fink_fat_association(
         ffdistnr,
         mag_criterion_same_fid,
         mag_criterion_diff_fid,
-        orbit_tw,
         orbit_error,
     )
 

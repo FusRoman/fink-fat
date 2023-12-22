@@ -1,5 +1,4 @@
 import configparser
-from astropy.time import Time
 import os
 import subprocess
 
@@ -13,7 +12,7 @@ def launch_spark_ephem(
     year: str,
     month: str,
     day: str,
-    verbose:bool=False
+    verbose: bool = False,
 ):
     """
     Launch the spark job computing the ephemeries
@@ -43,24 +42,24 @@ def launch_spark_ephem(
     ... config,
     ... "fink_fat/test/ephem_test/distribute_ephem_test.parquet",
     ... "ephem.parquet",
-    ... "2023", "12", "25", False
+    ... "2023", "08", "12", False
     ... )
 
     >>> pd.read_parquet("ephem.parquet").sort_values(["epoch_jd"])
                   ssoCandId          RA        DEC      epoch_jd
-    0     FF20191105aaaaaaa   69.192078  31.641987  2.460305e+06
-    2880  FF20230801aaaadar  277.590698 -23.188044  2.460305e+06
-    4320  FF20230809aaaadbj  292.941956 -21.498949  2.460305e+06
-    1440  FF20191108aaaaaad  120.581985  36.149860  2.460305e+06
-    1     FF20191105aaaaaaa   69.192009  31.641975  2.460305e+06
+    0     FF20230801aaaadar   92.166557  24.420229  2.460170e+06
+    1440  FF20230809aaaadbj  230.341629  -1.378862  2.460170e+06
+    1441  FF20230809aaaadbj  230.341705  -1.378949  2.460170e+06
+    1     FF20230801aaaadar   92.168213  24.420206  2.460170e+06
+    2     FF20230801aaaadar   92.169868  24.420185  2.460170e+06
     ...                 ...         ...        ...           ...
-    1438  FF20191105aaaaaaa   69.084938  31.622543  2.460305e+06
-    2879  FF20191108aaaaaad  120.447014  36.199837  2.460305e+06
-    1439  FF20191105aaaaaaa   69.084869  31.622528  2.460305e+06
-    4319  FF20230801aaaadar  278.224487 -23.156519  2.460305e+06
-    5759  FF20230809aaaadbj  293.234589 -21.500076  2.460305e+06
+    1437  FF20230801aaaadar   94.647072  24.447813  2.460170e+06
+    2878  FF20230809aaaadbj  230.463974  -1.503022  2.460170e+06
+    1438  FF20230801aaaadar   94.648766  24.447826  2.460170e+06
+    1439  FF20230801aaaadar   94.650459  24.447840  2.460170e+06
+    2879  FF20230809aaaadbj  230.464050  -1.503109  2.460170e+06
     <BLANKLINE>
-    [5760 rows x 4 columns]
+    [2880 rows x 4 columns]
 
     >>> os.remove("ephem.parquet")
     """
@@ -82,6 +81,7 @@ def launch_spark_ephem(
 
     application += " " + orbital_path
     application += " " + ephem_output_path
+    application += " " + config["TW_PARAMS"]["orbit_keep_limit"]
     application += " " + config["ASSOC_PARAMS"]["ephem_obs_site"]
     application += " " + year
     application += " " + month
@@ -118,12 +118,22 @@ def launch_spark_ephem(
             else "no std output"
         )
     if process.returncode != 0:
-        logger.error("ephem spark generation exited with a non-zero status code")
+        logger.error(
+            f"ephem spark generation exited with a non-zero status code, status_code={process.returncode}"
+        )
+        logger.newline(2)
+        logger.info(
+            process.stdout.decode("utf-8")
+            if process.stdout is not None
+            else "no std output"
+        )
+        logger.newline(2)
         logger.info(
             process.stderr.decode("utf-8")
             if process.stderr is not None
             else "no err output"
         )
+        logger.newline(2)
         exit()
 
 

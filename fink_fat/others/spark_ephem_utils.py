@@ -12,9 +12,11 @@ ephem_schema = StructType(
     [
         StructField("RA", ArrayType(FloatType()), True),
         StructField("DEC", ArrayType(FloatType()), True),
-        StructField("epoch_jd", ArrayType(DoubleType()), True)
+        StructField("epoch_jd", ArrayType(DoubleType()), True),
     ]
 )
+
+
 @pandas_udf(ephem_schema)
 def distribute_ephem(
     a,
@@ -94,6 +96,7 @@ def distribute_ephem(
 def spark_ephem(
     orbital_path: str,
     ephem_output_path: str,
+    orbit_tw: int,
     start_ephem: str,
     stop_ephem: str,
     step: float,
@@ -111,6 +114,8 @@ def spark_ephem(
         path where are stored the orbits
     ephem_output_path : str
         path where the ephemerides will be stored
+    orbit_tw: int
+        time window to keep the orbit, old orbit are removed
     start_ephem : str
         start ephemeries date
     stop_ephem : str
@@ -140,7 +145,13 @@ def spark_ephem(
         axis=1,
     )
 
-    orbit_spark = spark.createDataFrame(orbit_pdf)
+    current_jd = Time(f"{int(year):04d}-{int(month):02d}-{int(day):02d}").jd
+    last_orbits = orbit_pdf[(orbit_pdf["ref_epoch"] >= (current_jd - orbit_tw))]
+
+    if len(last_orbits) == 0:
+        return
+
+    orbit_spark = spark.createDataFrame(last_orbits)
 
     ephem_spark = orbit_spark.withColumn(
         "ephem",
@@ -174,13 +185,14 @@ def spark_ephem(
 
     local_ephem.to_parquet(ephem_output_path, index=False)
 
+
 if __name__ == "__main__":
     import sys
 
     year, month, day = (
-        sys.argv[4],
         sys.argv[5],
         sys.argv[6],
+        sys.argv[7],
     )
     start_time = Time(f"{year}-{month}-{day} 02:00:00").jd
     stop_time = Time(f"{year}-{month}-{day} 14:00:00").jd
@@ -191,10 +203,11 @@ if __name__ == "__main__":
     spark_ephem(
         sys.argv[1],
         sys.argv[2],
+        int(sys.argv[3]),
         start_time,
         stop_time,
         30 / 24 / 3600,
-        sys.argv[3],
+        sys.argv[4],
         year,
         month,
         day,
