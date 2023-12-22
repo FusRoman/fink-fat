@@ -196,7 +196,9 @@ def orbit_window(
     return last_orbits[np.isin(orbit_pix, alert_pix)]
 
 
-def ephem_window(ephem_pdf: pd.DataFrame, coord_alerts: SkyCoord, jd_mask: np.ndarray) -> pd.DataFrame:
+def ephem_window(
+    ephem_pdf: pd.DataFrame, coord_alerts: SkyCoord, jd_mask: np.ndarray
+) -> pd.DataFrame:
     """
     Return a subset of ephemerides close to the alerts of the current batch.
     The filter use healpix, each ephemerides contains within the same pixels than the alerts
@@ -235,7 +237,9 @@ def ephem_window(ephem_pdf: pd.DataFrame, coord_alerts: SkyCoord, jd_mask: np.nd
     """
     min_jd = np.min(jd_mask)
     max_jd = np.max(jd_mask)
-    ephem_pdf = ephem_pdf[(ephem_pdf["epoch_jd"] >= min_jd) & (ephem_pdf["epoch_jd"] <= max_jd)]
+    ephem_pdf = ephem_pdf[
+        (ephem_pdf["epoch_jd"] >= min_jd) & (ephem_pdf["epoch_jd"] <= max_jd)
+    ]
 
     NSIDE = 32
     orbit_pix = ang2pix(NSIDE, ephem_pdf["RA"].values, ephem_pdf["DEC"].values)
@@ -380,7 +384,7 @@ def orbit_association(
                 "fid": fid_mask,
                 "jd": jd_mask,
                 "candid": candid_mask,
-                "idx_mask": idx_keep_mask
+                "idx_mask": idx_keep_mask,
             }
         ),
         ephem_to_keep.rename({"RA": "ra", "DEC": "dec"}, axis=1),
@@ -389,7 +393,9 @@ def orbit_association(
     alert_assoc = alert_assoc.reset_index(drop=True)
     ephem_assoc = ephem_assoc.reset_index(drop=True)
 
-    ephem_orbit = orbit_pdf[["last_mag", "ssoCandId", "last_jd", "last_fid"]].merge(ephem_assoc, on="ssoCandId")
+    ephem_orbit = orbit_pdf[["last_mag", "ssoCandId", "last_jd", "last_fid"]].merge(
+        ephem_assoc, on="ssoCandId"
+    )
     ephem_orbit["sep"] = sep.value
 
     # filter the alerts based on the magnitude
@@ -398,7 +404,8 @@ def orbit_association(
     rate = diff_mag / np.where(diff_jd >= 1, diff_jd, 1)
 
     mag_criterion = np.where(
-        alert_assoc["fid"].reset_index(drop=True) == ephem_orbit["last_fid"].reset_index(drop=True),
+        alert_assoc["fid"].reset_index(drop=True)
+        == ephem_orbit["last_fid"].reset_index(drop=True),
         mag_criterion_same_fid,
         mag_criterion_diff_fid,
     )
@@ -409,15 +416,23 @@ def orbit_association(
     alert_assoc = alert_assoc.iloc[idx_rate]
 
     # keep only the closest association from the ephemerides
-    alert_assoc["ssoCandId"], alert_assoc["sep"] = ephem_orbit["ssoCandId"], ephem_orbit["sep"]
+    alert_assoc["ssoCandId"], alert_assoc["sep"] = (
+        ephem_orbit["ssoCandId"],
+        ephem_orbit["sep"],
+    )
     kept_alerts = alert_assoc.loc[alert_assoc.groupby("candid").sep.idxmin()]
 
     # set the flags and the associations informations
     flags[kept_alerts["idx_mask"]] = 5
-    ffdistnr[kept_alerts["idx_mask"]] = np.expand_dims(kept_alerts["sep"], axis=1).tolist()
-    estimator_id[kept_alerts["idx_mask"]] = np.expand_dims(kept_alerts["ssoCandId"], axis=1).tolist()
+    ffdistnr[kept_alerts["idx_mask"]] = np.expand_dims(
+        kept_alerts["sep"], axis=1
+    ).tolist()
+    estimator_id[kept_alerts["idx_mask"]] = np.expand_dims(
+        kept_alerts["ssoCandId"], axis=1
+    ).tolist()
 
     return flags, estimator_id, ffdistnr
+
 
 if __name__ == "__main__":
     """Execute the test suite"""
