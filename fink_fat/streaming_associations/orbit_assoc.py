@@ -10,8 +10,9 @@ import astropy.units as u
 
 import sbpy.data as sso_py
 
-from fink_fat.streaming_associations.kalman_assoc import roid_mask
+from fink_fat.streaming_associations.fitroid_assoc import roid_mask
 from fink_fat.streaming_associations.fitroid_assoc import ang2pix
+from fink_fat.associations.associations import night_to_night_separation_association
 
 from fink_fat.others.utils import init_logging
 from typing import Tuple
@@ -195,7 +196,7 @@ def orbit_window(
     return last_orbits[np.isin(orbit_pix, alert_pix)]
 
 
-def ephem_window(ephem_pdf: pd.DataFrame, coord_alerts: SkyCoord) -> pd.DataFrame:
+def ephem_window(ephem_pdf: pd.DataFrame, coord_alerts: SkyCoord, jd_mask: np.ndarray) -> pd.DataFrame:
     """
     Return a subset of ephemerides close to the alerts of the current batch.
     The filter use healpix, each ephemerides contains within the same pixels than the alerts
@@ -207,6 +208,7 @@ def ephem_window(ephem_pdf: pd.DataFrame, coord_alerts: SkyCoord) -> pd.DataFram
         dataframe containing the ephemerides, columns are ssoCandId, RA and DEC.
     coord_alerts : SkyCoord
         equatorial coordinates of the alerts contains in the current batch
+    jd_mask : julian date of the current alert batch
 
     Returns
     -------
@@ -222,16 +224,19 @@ def ephem_window(ephem_pdf: pd.DataFrame, coord_alerts: SkyCoord) -> pd.DataFram
 
     >>> ephem = pd.DataFrame({
     ... "DEC": rng.uniform(-90, 90, 1000),
-    ... "RA": rng.uniform(0, 360, 1000)
+    ... "RA": rng.uniform(0, 360, 1000),
+    ... "epoch_jd": np.arange(2460200.9068904775, 2460300.9068904775, 0.1)
     ... })
-    >>> ephem_window(ephem, coords_alerts)
-            DEC         RA
-    0 -8.298561  41.517518
-    1 -8.222767  56.072762
-    2 -3.331559  55.942963
-    3 -4.898885  50.323533
-    4  7.574226  47.131672
+    >>> ephem_window(ephem, coords_alerts, [2460210.9068904775, 2460285.9068904775])
+            DEC         RA      epoch_jd
+    0 -8.222767  56.072762  2.460220e+06
+    1 -3.331559  55.942963  2.460271e+06
+    2 -4.898885  50.323533  2.460282e+06
     """
+    min_jd = np.min(jd_mask)
+    max_jd = np.max(jd_mask)
+    ephem_pdf = ephem_pdf[(ephem_pdf["epoch_jd"] >= min_jd) & (ephem_pdf["epoch_jd"] <= max_jd)]
+
     NSIDE = 32
     orbit_pix = ang2pix(NSIDE, ephem_pdf["RA"].values, ephem_pdf["DEC"].values)
     alert_pix = ang2pix(NSIDE, coord_alerts.ra.value, coord_alerts.dec.value)
@@ -244,6 +249,7 @@ def orbit_association(
     jd: np.ndarray,
     magpsf: np.ndarray,
     fid: np.ndarray,
+    candid: np.ndarray,
     flags: np.ndarray,
     confirmed_sso: bool,
     estimator_id: pd.Series,
@@ -268,6 +274,8 @@ def orbit_association(
         psf magnitude of the alerts
     fid : np.ndarray
         filter identifier of the alerts
+    candid: np.ndarray
+        candidate identifier of the alert
     flags : np.ndarray
         roid flags
     confirmed_sso : bool
@@ -301,11 +309,12 @@ def orbit_association(
     >>> from fink_fat.test.tester_utils import add_roid_datatest
     >>> add_roid_datatest(spark)
     >>> flags, estimator_id, ffdistnr = orbit_association(
-    ...     np.array([46.328490, 108.603010, 97.600172, 98.928007, 2.05]),
-    ...     np.array([18.833964, -67.879693, 32.281571, 23.230676, 3.01]),
-    ...     np.array([2460139.8717433237, 2460140.8717433237, 2460139.9917433237, 2460139.8717433237, 2460140.8717432237]),
+    ...     np.array([54.700455, 54.739471, 97.600172, 110.400536, 2.05]),
+    ...     np.array([21.481771, 21.493351, 32.281571, -68.058235, 3.01]),
+    ...     np.array([2460160.58482852, 2460160.58482852, 2460161.07413407, 2460160.94413407, 2460161.18413407]),
     ...     np.array([16.2, 18.3, 17.2, 19.5, 17.4]),
     ...     np.array([1, 1, 2, 2, 2]),
+    ...     np.array([100, 101, 102, 103, 104]),
     ...     np.array([2, 3, 1, 2, 3]),
     ...     False,
     ...     pd.Series([[], [], [], [], []]),
@@ -314,35 +323,36 @@ def orbit_association(
     ... )
 
     >>> flags
-    array([2, 3, 5, 2, 3])
+    array([5, 3, 1, 5, 3])
 
     >>> estimator_id
-    0                     []
+    0    [FF20230802aaaaaaa]
     1                     []
-    2    [FF20230802aaaaaab]
-    3                     []
+    2                     []
+    3    [FF20230802aaaaaac]
     4                     []
     dtype: object
 
     >>> ffdistnr
-    0                         []
+    0    [3.457984498753697e-07]
     1                         []
-    2    [4.788559911943089e-06]
-    3                         []
+    2                         []
+    3    [0.0003231138559712371]
     4                         []
     dtype: object
     """
     logger = init_logging()
     (
-        _,
-        _,
+        ra_mask,
+        dec_mask,
         coord_alerts,
         mag_mask,
         fid_mask,
+        candid_mask,
         jd_mask,
-        _,
+        jd_unique,
         idx_keep_mask,
-    ) = roid_mask(ra, dec, jd, magpsf, fid, flags, confirmed_sso)
+    ) = roid_mask(ra, dec, jd, magpsf, fid, candid, flags, confirmed_sso)
 
     try:
         # get the latest computed ephemeride for the current observing night
@@ -354,56 +364,60 @@ def orbit_association(
         return flags, estimator_id, ffdistnr
 
     if len(ephem_pdf) != 0:
-        ephem_to_keep = ephem_window(ephem_pdf, coord_alerts)
+        ephem_to_keep = ephem_window(ephem_pdf, coord_alerts, jd_unique)
         if len(ephem_to_keep) == 0:
             return flags, estimator_id, ffdistnr
     else:
         return flags, estimator_id, ffdistnr
 
-    # get equatorial coordinates of the ephemerides
-    ephem_coord = SkyCoord(
-        ephem_to_keep["RA"].values, ephem_to_keep["DEC"].values, unit=u.degree
+    # find the alerts within the error location of the ephemerides
+    alert_assoc, ephem_assoc, sep = night_to_night_separation_association(
+        pd.DataFrame(
+            {
+                "ra": ra_mask,
+                "dec": dec_mask,
+                "magpsf": mag_mask,
+                "fid": fid_mask,
+                "jd": jd_mask,
+                "candid": candid_mask,
+                "idx_mask": idx_keep_mask
+            }
+        ),
+        ephem_to_keep.rename({"RA": "ra", "DEC": "dec"}, axis=1),
+        orbit_error * u.arcsecond,
     )
+    alert_assoc = alert_assoc.reset_index(drop=True)
+    ephem_assoc = ephem_assoc.reset_index(drop=True)
 
-    # return the closest alerts of each ephemerides
-    res_search = coord_alerts.match_to_catalog_sky(ephem_coord)
-    sep = res_search[1]
-    idx_ephem = res_search[0]
+    ephem_orbit = orbit_pdf[["last_mag", "ssoCandId", "last_jd", "last_fid"]].merge(ephem_assoc, on="ssoCandId")
+    ephem_orbit["sep"] = sep.value
 
-    # filter the associations to keep only those satisfying the orbit_error criteria
-    f_distance = np.where(sep.arcsecond < orbit_error)[0]
-
-    idx_ephem_assoc = idx_ephem[f_distance]
-    close_orbit = ephem_to_keep.loc[idx_ephem_assoc].merge(orbit_pdf, on="ssoCandId")[
-        ["ssoCandId", "last_mag", "last_fid", "last_jd", "ssoCandId"]
-    ]
-
-    mag_assoc = mag_mask[f_distance]
-    fid_assoc = fid_mask[f_distance]
-    jd_assoc = jd_mask[f_distance]
-    idx_assoc = idx_keep_mask[f_distance]
-
-    # filter the associations to keep only those with a credible magnitude rate
-    diff_mag = np.abs(mag_assoc - close_orbit["last_mag"])
-    diff_jd = jd_assoc - close_orbit["last_jd"]
+    # filter the alerts based on the magnitude
+    diff_mag = np.abs(alert_assoc["magpsf"] - ephem_orbit["last_mag"])
+    diff_jd = alert_assoc["jd"] - ephem_orbit["last_jd"]
     rate = diff_mag / np.where(diff_jd >= 1, diff_jd, 1)
+
     mag_criterion = np.where(
-        fid_assoc == close_orbit["last_fid"],
+        alert_assoc["fid"].reset_index(drop=True) == ephem_orbit["last_fid"].reset_index(drop=True),
         mag_criterion_same_fid,
         mag_criterion_diff_fid,
     )
+
+    # remove the alerts with a difference magnitude greater than the criterion in the config file
     idx_rate = np.where(rate < mag_criterion)[0]
-    idx_mag = idx_assoc[idx_rate]
+    ephem_orbit = ephem_orbit.iloc[idx_rate]
+    alert_assoc = alert_assoc.iloc[idx_rate]
 
-    flags[idx_mag] = 5
-    estimator_id[idx_mag] = np.expand_dims(
-        close_orbit.loc[idx_rate, "ssoCandId"], axis=1
-    ).tolist()
-    ffdistnr[idx_mag] = np.expand_dims(sep[f_distance][idx_rate].value, axis=1).tolist()
+    # keep only the closest association from the ephemerides
+    alert_assoc["ssoCandId"], alert_assoc["sep"] = ephem_orbit["ssoCandId"], ephem_orbit["sep"]
+    kept_alerts = alert_assoc.loc[alert_assoc.groupby("candid").sep.idxmin()]
 
-    # return the distance to the ephem and the associated orbit id
+    # set the flags and the associations informations
+    flags[kept_alerts["idx_mask"]] = 5
+    ffdistnr[kept_alerts["idx_mask"]] = np.expand_dims(kept_alerts["sep"], axis=1).tolist()
+    estimator_id[kept_alerts["idx_mask"]] = np.expand_dims(kept_alerts["ssoCandId"], axis=1).tolist()
+
     return flags, estimator_id, ffdistnr
-
 
 if __name__ == "__main__":
     """Execute the test suite"""

@@ -19,7 +19,9 @@ def add_roid_datatest(spark: SparkSession):
     orbit_sample = "file://{}/test/streaming_data_test/orbital.parquet".format(path)
     kalman_sample = "file://{}/test/streaming_data_test/kalman.pkl".format(path)
     fitroid_sample = "file://{}/test/streaming_data_test/fit_roid.parquet".format(path)
+    ephem_sample = "file://{}/test/streaming_data_test/ephem.parquet".format(path)
 
     spark.sparkContext.addFile(orbit_sample)
     spark.sparkContext.addFile(kalman_sample)
     spark.sparkContext.addFile(fitroid_sample)
+    spark.sparkContext.addFile(ephem_sample)

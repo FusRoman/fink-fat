@@ -301,6 +301,9 @@ orbits trajectories size:
     orbits.to_parquet(path_orbit, index=False)
 
     # compute the ephemerides for the next observation night
+    if arguments["--verbose"]:
+        logger.info("start to compute ephemerides using spark")
+
     year, month, day = last_night.split("-")
     launch_spark_ephem(
         config, path_orbit, os.path.join(output_path, "ephem.parquet"), year, month, day

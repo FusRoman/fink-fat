@@ -310,7 +310,7 @@ def fitroid_association(
     1                                         []
     2                       [0.6219832018982673]
     3    [0.5461049333814415, 6.365279160721899]
-    4                       [0.6548163695675884]
+    4                       [0.6548163695675883]
     dtype: object
 
 
@@ -350,8 +350,8 @@ def fitroid_association(
     dtype: object
 
     >>> ffdistnr
-    0    [0.8667306486778968]
-    1       [0.6532971697207]
+    0     [0.866730648677894]
+    1    [0.6532971697206779]
     2                      []
     3                      []
     4                      []
@@ -419,7 +419,7 @@ def fitroid_association(
             fit_to_keep[["trajectory_id", "mag_1", "fid_1", "jd_1"]], on="trajectory_id"
         )
     )
-    merge_assoc["trajectory_id"] = merge_assoc["trajectory_id"].astype(str)
+    merge_assoc["trajectory_id"] = merge_assoc["trajectory_id"].astype(int).astype(str)
 
     diff_mag = np.abs(merge_assoc["magpsf"] - merge_assoc["mag_1"])
     diff_jd = merge_assoc["jd"] - merge_assoc["jd_1"]
