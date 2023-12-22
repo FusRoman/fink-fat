@@ -3,6 +3,48 @@ import numpy as np
 from astropy.time import Time
 
 
+def alphabetic_tag(int_id: int, nb_alphabetic: int) -> str:
+    """
+    Make an alphabetic tag in base 26.
+
+    Parameters
+    ----------
+    int_id : int
+        tag identifier
+    nb_alphabetic : int
+        number of symbol in the tag
+
+    Returns
+    -------
+    str
+        the tag
+
+    Examples
+    --------
+    >>> alphabetic_tag(0, 0)
+    ''
+    >>> alphabetic_tag(0, 3)
+    'aaa'
+    >>> alphabetic_tag(3, 5)
+    'aaaad'
+    >>> alphabetic_tag(100, 5)
+    'aaadw'
+    >>> alphabetic_tag(675, 2)
+    'zz'
+    >>> alphabetic_tag(676, 2)
+    'aa'
+    """
+    res_tag = ""
+    for _ in range(nb_alphabetic):
+        q = int(int_id / 26)
+        r = int(int_id % 26)
+
+        res_tag += chr(r + 97)
+        int_id = q
+
+    return res_tag[::-1]
+
+
 def int_to_tags(traj_id, jd):
     """
     Convert an integer into a Fink-FAT trajectory identifier.
@@ -34,21 +76,14 @@ def int_to_tags(traj_id, jd):
     >>> int_to_tags(652, 2460135.98)
     'FF20230710aaaaazc'
     """
-    res_tag = ""
-    for _ in range(7):
-        q = int(traj_id / 26)
-        r = int(traj_id % 26)
-
-        res_tag += chr(r + 97)
-        traj_id = q
-
+    res_tag = alphabetic_tag(traj_id, 7)
     discovery = Time(jd, format="jd").datetime
     return "FF{:04d}{:02d}{:02d}{}".format(
-        discovery.year, discovery.month, discovery.day, res_tag[::-1]
+        discovery.year, discovery.month, discovery.day, res_tag
     )
 
 
-def generate_tags(begin, end, jd):
+def generate_tags(begin: int, end: int, jd: float) -> list:
     """
     Generate a list of tags between begin and end
 
