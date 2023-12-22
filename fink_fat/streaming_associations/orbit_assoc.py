@@ -10,7 +10,6 @@ import astropy.units as u
 
 import sbpy.data as sso_py
 
-from fink_science.tester import spark_unit_tests
 from fink_fat.streaming_associations.kalman_assoc import roid_mask
 from fink_fat.streaming_associations.fitroid_assoc import ang2pix
 
@@ -408,6 +407,7 @@ def orbit_association(
 
 if __name__ == "__main__":
     """Execute the test suite"""
+    from fink_science.tester import spark_unit_tests
 
     globs = globals()
 

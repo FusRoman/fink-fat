@@ -1,122 +1,10 @@
-import numpy as np
-import pandas as pd
 import configparser
 from astropy.time import Time
 import os
 import subprocess
 
 import fink_fat
-from pyspark.sql.functions import pandas_udf, lit
-from pyspark.sql.types import ArrayType, FloatType, StructField, StructType
-from fink_fat.streaming_associations.orbit_assoc import compute_ephem
-from fink_utils.broker.sparkUtils import init_sparksession
 from fink_fat.others.utils import init_logging
-
-ephem_schema = StructType(
-    [
-        StructField("RA", ArrayType(FloatType()), True),
-        StructField("DEC", ArrayType(FloatType()), True),
-    ]
-)
-
-
-@pandas_udf(ephem_schema)
-def distribute_ephem(
-    a,
-    e,
-    i,
-    long_node,
-    arg_peric,
-    mean_anomaly,
-    ref_epoch,
-    ssoCandId,
-    start_time,
-    end_time,
-    step,
-    location,
-):
-    orbit_pdf = pd.DataFrame(
-        {
-            "a": a,
-            "e": e,
-            "i": i,
-            "long. node": long_node,
-            "arg. peric": arg_peric,
-            "mean anomaly": mean_anomaly,
-            "ref_epoch": ref_epoch,
-            "ssoCandId": ssoCandId,
-        }
-    )
-
-    time_ephem = np.arange(
-        Time(start_time.values[0]).jd, Time(end_time.values[0]).jd, step.values[0]
-    )
-
-    cols_to_keep = ["targetname", "RA", "DEC"]
-    ephem_pdf = compute_ephem(orbit_pdf, time_ephem, location)[cols_to_keep]
-    ephem_gb = ephem_pdf.groupby("targetname").agg(list)
-
-    return ephem_gb
-
-
-def spark_ephem(
-    orbital_path: str,
-    ephem_output_path: str,
-    start_ephem: str,
-    stop_ephem: str,
-    step: float,
-    location: str,
-    year: str,
-    month: str,
-    day: str,
-):
-    orbit_pdf = pd.read_parquet(orbital_path)
-
-    spark = init_sparksession(
-        f"FINK-FAT_ephemerides_{int(year):04d}{int(month):02d}{int(day):02d}"
-    )
-
-    orbit_pdf = orbit_pdf.rename(
-        {
-            "long. node": "long_node",
-            "arg. peric": "arg_peric",
-        },
-        axis=1,
-    )
-
-    orbit_spark = spark.createDataFrame(orbit_pdf)
-
-    ephem_spark = orbit_spark.withColumn(
-        "ephem",
-        distribute_ephem(
-            "a",
-            "e",
-            "i",
-            "long_node",
-            "arg_peric",
-            "mean anomaly",
-            "ref_epoch",
-            "ssoCandId",
-            lit(start_ephem),
-            lit(stop_ephem),
-            lit(step),
-            lit(location),
-        ),
-    )
-
-    ephem_spark = ephem_spark.select(
-        [
-            "ssoCandId",
-            ephem_spark["ephem"]["RA"].alias("RA"),
-            ephem_spark["ephem"]["DEC"].alias("DEC"),
-        ]
-    )
-
-    local_ephem = ephem_spark.toPandas()
-    local_ephem = local_ephem.explode(["RA", "DEC"])
-
-    local_ephem.to_parquet(ephem_output_path, index=False)
-
 
 def launch_spark_ephem(
     config: configparser.ConfigParser,
@@ -125,7 +13,57 @@ def launch_spark_ephem(
     year: str,
     month: str,
     day: str,
+    verbose:bool=False
 ):
+    """
+    Launch the spark job computing the ephemeries
+
+    Parameters
+    ----------
+    config : configparser.ConfigParser
+        fink-fat configuration
+    orbital_path : str
+        path where are stored the orbits
+    ephem_output_path : str
+        path where the ephemerides will be stored
+    year : str
+        current processing year, ephemerides will be generate the day after
+    month : str
+        current processing month, ephemerides will be generate the day after
+    day : str
+        current processing day, ephemerides will be generate the day after
+
+    Examples
+    --------
+    >>> from fink_fat.command_line.utils_cli import init_cli
+    >>> import pandas as pd
+    >>> config, _ = init_cli({"--config": ""})
+
+    >>> launch_spark_ephem(
+    ... config,
+    ... "fink_fat/test/ephem_test/distribute_ephem_test.parquet",
+    ... "ephem.parquet",
+    ... "2023", "12", "25", False
+    ... )
+
+    >>> pd.read_parquet("ephem.parquet").sort_values(["epoch_jd"])
+                  ssoCandId          RA        DEC      epoch_jd
+    0     FF20191105aaaaaaa   69.192078  31.641987  2.460305e+06
+    2880  FF20230801aaaadar  277.590698 -23.188044  2.460305e+06
+    4320  FF20230809aaaadbj  292.941956 -21.498949  2.460305e+06
+    1440  FF20191108aaaaaad  120.581985  36.149860  2.460305e+06
+    1     FF20191105aaaaaaa   69.192009  31.641975  2.460305e+06
+    ...                 ...         ...        ...           ...
+    1438  FF20191105aaaaaaa   69.084938  31.622543  2.460305e+06
+    2879  FF20191108aaaaaad  120.447014  36.199837  2.460305e+06
+    1439  FF20191105aaaaaaa   69.084869  31.622528  2.460305e+06
+    4319  FF20230801aaaadar  278.224487 -23.156519  2.460305e+06
+    5759  FF20230809aaaadbj  293.234589 -21.500076  2.460305e+06
+    <BLANKLINE>
+    [5760 rows x 4 columns]
+
+    >>> os.remove("ephem.parquet")
+    """
     master_manager = config["SOLVE_ORBIT_PARAMS"]["manager"]
     principal_group = config["SOLVE_ORBIT_PARAMS"]["principal"]
     secret = config["SOLVE_ORBIT_PARAMS"]["secret"]
@@ -138,8 +76,8 @@ def launch_spark_ephem(
 
     application = os.path.join(
         os.path.dirname(fink_fat.__file__),
-        "streaming_associations",
-        "spark_ephem.py",
+        "others",
+        "spark_ephem_utils.py",
     )
 
     application += " " + orbital_path
@@ -151,8 +89,8 @@ def launch_spark_ephem(
 
     # FIXME
     # temporary dependencies (only during the performance test phase)
-    FINK_FAT = "/home/roman.le-montagner/home_big_storage/Doctorat/Asteroids/fink-fat/dist/fink_fat-1.0.0-py3.9.egg"
-    FINK_SCIENCE = "/home/roman.le-montagner/home_big_storage/Doctorat/fink-science/dist/fink_science-4.4-py3.7.egg"
+    # FINK_FAT = "/home/roman.le-montagner/home_big_storage/Doctorat/Asteroids/fink-fat/dist/fink_fat-1.0.0-py3.9.egg"
+    # FINK_SCIENCE = "/home/roman.le-montagner/home_big_storage/Doctorat/fink-science/dist/fink_science-4.4-py3.7.egg"
 
     spark_submit = f"spark-submit \
         --master {master_manager} \
@@ -168,47 +106,32 @@ def launch_spark_ephem(
         --conf spark.sql.execution.arrow.pyspark.enabled=true\
         --conf spark.sql.execution.arrow.maxRecordsPerBatch=1000000\
         --conf spark.kryoserializer.buffer.max=512m\
-        --py-files {FINK_FAT},{FINK_SCIENCE}\
         {application}"
+    # --py-files {FINK_FAT},{FINK_SCIENCE}\
 
-    process = subprocess.run(spark_submit, shell=True)
-    if process.returncode != 0:
-        logger = init_logging()
-        logger.info(
-            process.stderr.decode("utf-8")
-            if process.stderr is not None
-            else "no err output"
-        )
+    process = subprocess.run(spark_submit, shell=True, capture_output=True)
+    logger = init_logging()
+    if verbose:
         logger.info(
             process.stdout.decode("utf-8")
             if process.stdout is not None
             else "no std output"
         )
+    if process.returncode != 0:
+        logger.error("ephem spark generation exited with a non-zero status code")
+        logger.info(
+            process.stderr.decode("utf-8")
+            if process.stderr is not None
+            else "no err output"
+        )
         exit()
 
 
 if __name__ == "__main__":
-    import sys
+    """Execute the test suite"""
+    from fink_science.tester import spark_unit_tests
 
-    year, month, day = (
-        sys.argv[4],
-        sys.argv[5],
-        sys.argv[6],
-    )
-    start_time = Time(f"{year}-{month}-{day} 03:00:00").jd
-    stop_time = Time(f"{year}-{month}-{day} 12:50:00").jd
+    globs = globals()
 
-    start_time = Time(start_time + 1, format="jd").iso
-    stop_time = Time(stop_time + 1, format="jd").iso
-
-    spark_ephem(
-        sys.argv[1],
-        sys.argv[2],
-        start_time,
-        stop_time,
-        30 / 24 / 3600,
-        sys.argv[3],
-        year,
-        month,
-        day,
-    )
+    # Run the test suite
+    spark_unit_tests(globs)
