@@ -359,8 +359,12 @@ def orbit_association(
     ) = roid_mask(ra, dec, jd, magpsf, fid, candid, flags, confirmed_sso)
 
     try:
-        # get the latest computed ephemeride for the current observing night
-        ephem_pdf = pd.read_parquet(SparkFiles.get("ephem.parquet"))
+        try:
+            # get the latest computed ephemeride for the current observing night
+            ephem_pdf = pd.read_parquet(SparkFiles.get("ephem.parquet"))
+        except FileNotFoundError:
+            logger.warning("files containing the ephemeris not found", exc_info=1)
+            return flags, estimator_id, ffdistnr
         # get latest detected orbit
         orbit_pdf = pd.read_parquet(SparkFiles.get("orbital.parquet"))
     except FileNotFoundError:
