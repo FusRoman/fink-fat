@@ -338,11 +338,11 @@ def orbit_association(
     dtype: object
 
     >>> ffdistnr
-    0    [3.457984498753697e-07]
-    1                         []
-    2                         []
-    3    [0.0003231138559712371]
-    4                         []
+    0    [2.0747906992522184e-05]
+    1                          []
+    2                          []
+    3      [0.019386831358274226]
+    4                          []
     dtype: object
     """
     logger = init_logging()
