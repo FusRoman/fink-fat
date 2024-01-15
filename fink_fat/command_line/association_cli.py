@@ -446,6 +446,21 @@ def get_last_roid_streaming_alert(
             --py-files {FINK_FAT},{FINK_SCIENCE}\
             {application}"
 
+        cols_to_keep = [
+            "objectId",
+            "candid",
+            "ra",
+            "dec",
+            "jd",
+            "magpsf",
+            "sigmapsf",
+            "fid",
+            "ssnamenr",
+            "roid",
+            "estimator_id",
+            "ffdistnr",
+        ]
+
         if verbose:
             logger.info("run recovering of data with spark")
         process = subprocess.run(spark_submit, shell=True)
@@ -453,7 +468,7 @@ def get_last_roid_streaming_alert(
             logger = init_logging()
             logger.info(process.stderr)
             logger.info(process.stdout)
-            exit()
+            return pd.DataFrame(columns=cols_to_keep)
 
         if verbose:
             logger.info("data recovered from spark")
@@ -470,20 +485,6 @@ def get_last_roid_streaming_alert(
         axis=1,
     )
     sso_night = sso_night.explode(["estimator_id", "ffdistnr"])
-    cols_to_keep = [
-        "objectId",
-        "candid",
-        "ra",
-        "dec",
-        "jd",
-        "magpsf",
-        "sigmapsf",
-        "fid",
-        "ssnamenr",
-        "roid",
-        "estimator_id",
-        "ffdistnr",
-    ]
     return sso_night[cols_to_keep]
 
 

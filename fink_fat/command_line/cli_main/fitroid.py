@@ -108,6 +108,17 @@ def fitroid_associations(
     alerts_night = get_last_roid_streaming_alert(
         config, last_night, output_path, is_mpc, arguments["--verbose"], logger
     )
+
+    if len(alerts_night) == 0:
+        if arguments["--verbose"]:
+            logger.info("No alerts in the current night, compute the ephemeries for the next night")
+        # even if no alerts for the current night, compute the ephemeries for the next night in any case
+        year, month, day = last_night.split("-")
+        launch_spark_ephem(
+            config, path_orbit, os.path.join(output_path, "ephem.parquet"), year, month, day
+        )
+        return
+
     if arguments["--verbose"]:
         logger.info(
             """
