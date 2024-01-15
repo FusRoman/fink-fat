@@ -400,7 +400,7 @@ def orbit_association(
     ephem_orbit = orbit_pdf[["last_mag", "ssoCandId", "last_jd", "last_fid"]].merge(
         ephem_assoc, on="ssoCandId"
     )
-    ephem_orbit["sep"] = sep.value
+    ephem_orbit["sep"] = sep.arcmin
 
     # filter the alerts based on the magnitude
     diff_mag = np.abs(alert_assoc["magpsf"] - ephem_orbit["last_mag"])
