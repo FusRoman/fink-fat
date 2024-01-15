@@ -308,7 +308,7 @@ def fink_fat_association(
         orbit_error,
     )
 
-    # associates the alerts with the kalman filters
+    # associates the alerts with the polynomial trajectory estimators
     flags, estimator_id, ffdistnr = fitroid_association(
         ra,
         dec,
