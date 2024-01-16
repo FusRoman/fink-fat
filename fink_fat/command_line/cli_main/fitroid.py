@@ -81,7 +81,8 @@ def roid_flags(config: configparser.ConfigParser) -> Tuple[bool, list]:
     flags = [3] if is_mpc_flag else [1, 2]
     return is_mpc_flag, flags
 
-def seconds_to_hms(seconds: int)->Tuple[int, int, int]:
+
+def seconds_to_hms(seconds: int) -> Tuple[int, int, int]:
     """
     Convert seconds into hours, minutes and seconds
 
@@ -138,18 +139,29 @@ def fitroid_associations(
     if len(alerts_night) == 0:
         if arguments["--verbose"]:
             t_before = time.time()
-            logger.info("No alerts in the current night, compute the ephemeries for the next night")
+            logger.info(
+                "No alerts in the current night, compute the ephemeries for the next night"
+            )
         # even if no alerts for the current night, compute the ephemeries for the next night in any case
         year, month, day = last_night.split("-")
         launch_spark_ephem(
-            config, path_orbit, os.path.join(output_path, "ephem.parquet"), year, month, day
+            config,
+            path_orbit,
+            os.path.join(output_path, "ephem.parquet"),
+            year,
+            month,
+            day,
         )
 
         if arguments["--verbose"]:
-            logger.info(f"ephemeries computing time: {time.time() - t_before:.4f} seconds")
+            logger.info(
+                f"ephemeries computing time: {time.time() - t_before:.4f} seconds"
+            )
             logger.newline()
             hours, minutes, secondes = seconds_to_hms(time.time() - start_assoc_time)
-            logger.info(f"total execution time: {hours} hours, {minutes} minutes, {secondes} seconds")
+            logger.info(
+                f"total execution time: {hours} hours, {minutes} minutes, {secondes} seconds"
+            )
             logger.info("END OF THE FITROID ASSOCIATION")
             logger.info("------------------")
             logger.newline(3)
@@ -371,7 +383,9 @@ orbits trajectories size:
         logger.info(f"ephemeries computing time: {time.time() - t_before:.4f} seconds")
         logger.newline()
         hours, minutes, secondes = seconds_to_hms(time.time() - start_assoc_time)
-        logger.info(f"total execution time: {hours} hours, {minutes} minutes, {secondes} seconds")
+        logger.info(
+            f"total execution time: {hours} hours, {minutes} minutes, {secondes} seconds"
+        )
         logger.info("END OF THE FITROID ASSOCIATION")
         logger.info("------------------")
         logger.newline(3)
