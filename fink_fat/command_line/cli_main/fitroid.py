@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import os
+import time
 import datetime
 import configparser
 from collections import Counter
@@ -112,12 +113,20 @@ def fitroid_associations(
 
     if len(alerts_night) == 0:
         if arguments["--verbose"]:
+            t_before = time.time()
             logger.info("No alerts in the current night, compute the ephemeries for the next night")
         # even if no alerts for the current night, compute the ephemeries for the next night in any case
         year, month, day = last_night.split("-")
         launch_spark_ephem(
             config, path_orbit, os.path.join(output_path, "ephem.parquet"), year, month, day
         )
+
+        if arguments["--verbose"]:
+            logger.info(f"ephemeries computing time: {time.time() - t_before:.4f} seconds")
+            logger.info("END OF THE FITROID ASSOCIATION")
+            logger.info("------------------")
+            logger.newline(3)
+
         return
 
     if arguments["--verbose"]:
@@ -259,7 +268,16 @@ roid count:
     nb_after_tw = len(fit_roid_df)
     nb_remove_tw = nb_tr_before_tw - nb_after_tw
 
+    if arguments["--verbose"]:
+        logger.info("start to compute chi-filter")
+        t_before = time.time()
+
     trajectory_df, fit_roid_df = chi_filter(trajectory_df, fit_roid_df, 10e-5)
+
+    if arguments["--verbose"]:
+        chi_filter_time = time.time() - t_before
+        logger.info(f"chi-filter elapsed time: {chi_filter_time:.4f} seconds")
+
     nb_remove_chi = nb_after_tw - len(fit_roid_df)
 
     if arguments["--verbose"]:
@@ -315,6 +333,7 @@ orbits trajectories size:
     # compute the ephemerides for the next observation night
     if arguments["--verbose"]:
         logger.info("start to compute ephemerides using spark")
+        t_before = time.time()
 
     year, month, day = last_night.split("-")
     launch_spark_ephem(
@@ -322,6 +341,7 @@ orbits trajectories size:
     )
 
     if arguments["--verbose"]:
+        logger.info(f"ephemeries computing time: {time.time() - t_before:.4f} seconds")
         logger.info("END OF THE FITROID ASSOCIATION")
         logger.info("------------------")
         logger.newline(3)

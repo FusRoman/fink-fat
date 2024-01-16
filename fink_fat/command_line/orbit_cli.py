@@ -1,5 +1,6 @@
 import os
 import subprocess
+import time
 from typing import Tuple
 import pandas as pd
 import numpy as np
@@ -303,11 +304,19 @@ def trcand_to_orbit(
         return trajectory_df, trparams_df, trajectory_orb, orbits
 
     year, month, day = last_night.split("-")
+
+    if verbose:
+        t_before = time.time()
+
     new_orbits = switch_local_cluster(config, traj_to_orb, year, month, day, verbose)
     new_orbits = new_orbits[new_orbits["a"] != -1.0]
+
     if verbose:
         logger.info(
-            f"number of orbit fitted: {len(new_orbits)} ({(len(new_orbits) / nb_traj_to_orb) * 100} %)"
+            f"""
+number of orbit fitted: {len(new_orbits)} ({(len(new_orbits) / nb_traj_to_orb) * 100} %)
+orbit fitting elapsed time: {time.time() - t_before:.4f} seconds
+"""
         )
 
     # get the trajectories with orbit and assign the ssoCandId
