@@ -10,7 +10,10 @@ import fink_fat.orbit_fitting.mpcobs_files as mf
 
 import traceback
 from typing import Union
+<<<<<<< HEAD
 from fink_fat.others.utils import init_logging
+=======
+>>>>>>> main
 
 orbfit_column_name = [
     "trajectory_id",
