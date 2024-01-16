@@ -81,6 +81,28 @@ def roid_flags(config: configparser.ConfigParser) -> Tuple[bool, list]:
     flags = [3] if is_mpc_flag else [1, 2]
     return is_mpc_flag, flags
 
+def seconds_to_hms(seconds: int)->Tuple[int, int, int]:
+    """
+    Convert seconds into hours, minutes and seconds
+
+    Parameters
+    ----------
+    seconds : int
+        number of seconds
+
+    Returns
+    -------
+    Tuple[int, int, int]
+        hours, minutes, seconds
+    """
+    dt = datetime.timedelta(seconds=seconds)
+    days, seconds = dt.days, dt.seconds
+
+    hours = (days * 24 + seconds) // 3600
+    minutes = (seconds % 3600) // 60
+    sec = seconds % 60
+    return hours, minutes, sec
+
 
 def fitroid_associations(
     arguments: dict,
@@ -89,6 +111,8 @@ def fitroid_associations(
     output_path: str,
 ):
     """ """
+
+    start_assoc_time = time.time()
 
     is_mpc, flags = roid_flags(config)
 
@@ -123,6 +147,9 @@ def fitroid_associations(
 
         if arguments["--verbose"]:
             logger.info(f"ephemeries computing time: {time.time() - t_before:.4f} seconds")
+            logger.newline()
+            hours, minutes, secondes = seconds_to_hms(time.time() - start_assoc_time)
+            logger.info(f"total execution time: {hours} hours, {minutes} minutes, {secondes} seconds")
             logger.info("END OF THE FITROID ASSOCIATION")
             logger.info("------------------")
             logger.newline(3)
@@ -342,6 +369,9 @@ orbits trajectories size:
 
     if arguments["--verbose"]:
         logger.info(f"ephemeries computing time: {time.time() - t_before:.4f} seconds")
+        logger.newline()
+        hours, minutes, secondes = seconds_to_hms(time.time() - start_assoc_time)
+        logger.info(f"total execution time: {hours} hours, {minutes} minutes, {secondes} seconds")
         logger.info("END OF THE FITROID ASSOCIATION")
         logger.info("------------------")
         logger.newline(3)
