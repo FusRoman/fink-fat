@@ -74,7 +74,7 @@ def merge_trajectory_cluster(
                         cluster_df[cluster_df["trajectory_id"] == cl_id].sort_values(
                             "jd"
                         )
-                        # .drop_duplicates("objectId")
+                        .drop_duplicates("candid")
                     ),
                 ]
             )

@@ -13,7 +13,7 @@ from pandas.testing import assert_frame_equal
 traj = pd.DataFrame(
     {
         "trajectory_id": [0, 0, 1, 1],
-        "objectId": [0, 1, 2, 3],
+        "candid": [0, 1, 2, 3],
         "ra": [0, 1, 5, 6],
         "dec": [0, 1, 5, 6],
         "jd": [0, 1, 0, 1],
@@ -27,7 +27,7 @@ new_alerts = pd.DataFrame(
         "trajectory_id": [0, 0],
         "estimator_id": [0, 0],
         "roid": [4, 4],
-        "objectId": [4, 5],
+        "candid": [4, 5],
         "jd": [2, 3],
         "ra": [8, 9],
         "dec": [8, 9],
@@ -43,7 +43,7 @@ res_traj, res_fit = merge_trajectory_cluster(
 test_traj = pd.DataFrame(
     {
         "trajectory_id": [2, 2, 2, 2],
-        "objectId": [0, 1, 4, 5],
+        "candid": [0, 1, 4, 5],
         "ra": [0, 1, 8, 9],
         "dec": [0, 1, 8, 9],
         "jd": [0, 1, 2, 3],
@@ -86,7 +86,7 @@ assert_frame_equal(
 traj = pd.DataFrame(
     {
         "trajectory_id": [0, 0, 1, 1],
-        "objectId": [0, 1, 2, 3],
+        "candid": [0, 1, 2, 3],
         "ra": [0, 1, 5, 6],
         "dec": [0, 1, 5, 6],
         "jd": [0, 1, 0, 1],
@@ -100,7 +100,7 @@ new_alerts = pd.DataFrame(
         "trajectory_id": [0, 0, 5, 5],
         "estimator_id": [0, 0, 1, 1],
         "roid": [4, 4, 4, 4],
-        "objectId": [4, 5, 6, 7],
+        "candid": [4, 5, 6, 7],
         "jd": [2, 3, 4, 5],
         "ra": [8, 9, 11, 12],
         "dec": [8, 9, 11, 12],
@@ -116,7 +116,7 @@ res_traj, res_fit = merge_trajectory_cluster(
 test_traj = pd.DataFrame(
     {
         "trajectory_id": [2, 2, 2, 2, 3, 3, 3, 3],
-        "objectId": [0, 1, 4, 5, 2, 3, 6, 7],
+        "candid": [0, 1, 4, 5, 2, 3, 6, 7],
         "ra": [0, 1, 8, 9, 5, 6, 11, 12],
         "dec": [0, 1, 8, 9, 5, 6, 11, 12],
         "jd": [0, 1, 2, 3, 0, 1, 4, 5],
@@ -167,7 +167,7 @@ assert_frame_equal(
 traj = pd.DataFrame(
     {
         "trajectory_id": [0, 0, 1, 1, 2, 2, 2],
-        "objectId": [0, 1, 2, 3, 4, 5, 6],
+        "candid": [0, 1, 2, 3, 4, 5, 6],
         "ra": [0, 1, 5, 6, 0, 1, 2],
         "dec": [0, 1, 5, 6, 0, 1, 2],
         "jd": [0, 1, 0, 1, 0, 1, 2],
@@ -181,7 +181,7 @@ new_alerts = pd.DataFrame(
         "trajectory_id": [0, 0, 5, 5, 8, 8, 8],
         "estimator_id": [0, 0, 1, 1, 2, 2, 1],
         "roid": [4, 4, 4, 4, 4, 4, 4],
-        "objectId": [40, 50, 60, 70, 66, 77, 88],
+        "candid": [40, 50, 60, 70, 66, 77, 88],
         "jd": [2, 3, 4, 5, 3, 4, 5],
         "ra": [8, 9, 11, 12, 5, 6, 7],
         "dec": [8, 9, 11, 12, 5, 6, 7],
@@ -197,7 +197,7 @@ res_traj, res_fit = merge_trajectory_cluster(
 test_traj = pd.DataFrame(
     {
         "trajectory_id": [3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6],
-        "objectId": [0, 1, 40, 50, 2, 3, 60, 70, 2, 3, 66, 77, 88, 4, 5, 6, 66, 77, 88],
+        "candid": [0, 1, 40, 50, 2, 3, 60, 70, 2, 3, 66, 77, 88, 4, 5, 6, 66, 77, 88],
         "ra": [0, 1, 8, 9, 5, 6, 11, 12, 5, 6, 5, 6, 7, 0, 1, 2, 5, 6, 7],
         "dec": [0, 1, 8, 9, 5, 6, 11, 12, 5, 6, 5, 6, 7, 0, 1, 2, 5, 6, 7],
         "jd": [0, 1, 2, 3, 0, 1, 4, 5, 0, 1, 3, 4, 5, 0, 1, 2, 3, 4, 5],
@@ -294,7 +294,7 @@ assert_frame_equal(
 traj = pd.DataFrame(
     {
         "trajectory_id": [0, 0, 1, 1],
-        "objectId": [0, 1, 2, 3],
+        "candid": [0, 1, 2, 3],
         "ra": [0, 1, 5, 6],
         "dec": [0, 1, 5, 6],
         "jd": [0, 1, 0, 1],
@@ -308,7 +308,7 @@ new_alerts = pd.DataFrame(
         "trajectory_id": [0, 0, 1, 1],
         "estimator_id": [0, 0, 0, 0],
         "roid": [4, 4, 4, 4],
-        "objectId": [40, 50, 60, 70],
+        "candid": [40, 50, 60, 70],
         "jd": [2, 3, 4, 5],
         "ra": [8, 9, 10, 11],
         "dec": [8, 9, 10, 11],
@@ -324,7 +324,7 @@ res_traj, res_fit = merge_trajectory_cluster(
 test_traj = pd.DataFrame(
     {
         "trajectory_id": [3, 3, 3, 3, 4, 4, 4, 4],
-        "objectId": [0, 1, 40, 50, 0, 1, 60, 70],
+        "candid": [0, 1, 40, 50, 0, 1, 60, 70],
         "ra": [0, 1, 8, 9, 0, 1, 10, 11],
         "dec": [0, 1, 8, 9, 0, 1, 10, 11],
         "jd": [0, 1, 2, 3, 0, 1, 4, 5],
@@ -375,7 +375,7 @@ assert_frame_equal(
 traj = pd.DataFrame(
     {
         "trajectory_id": [0, 0, 1, 1],
-        "objectId": [0, 1, 2, 3],
+        "candid": [0, 1, 2, 3],
         "ra": [0, 1, 5, 6],
         "dec": [0, 1, 5, 6],
         "jd": [0, 1, 0, 1],
@@ -389,7 +389,7 @@ new_alerts = pd.DataFrame(
         "trajectory_id": [0, 0, 1, 1],
         "estimator_id": [0, 0, 1, 1],
         "roid": [4, 4, 4, 4],
-        "objectId": [40, 50, 40, 50],
+        "candid": [40, 50, 40, 50],
         "jd": [2, 3, 2, 3],
         "ra": [8, 9, 8, 9],
         "dec": [8, 9, 8, 9],
@@ -406,7 +406,7 @@ res_traj, res_fit = merge_trajectory_cluster(
 test_traj = pd.DataFrame(
     {
         "trajectory_id": [3, 3, 3, 3, 4, 4, 4, 4],
-        "objectId": [0, 1, 40, 50, 2, 3, 40, 50],
+        "candid": [0, 1, 40, 50, 2, 3, 40, 50],
         "ra": [0, 1, 8, 9, 5, 6, 8, 9],
         "dec": [0, 1, 8, 9, 5, 6, 8, 9],
         "jd": [0, 1, 2, 3, 0, 1, 2, 3],
@@ -453,6 +453,88 @@ assert_frame_equal(
     check_like=True,
 )
 
+
+traj = pd.DataFrame(
+    {
+        "trajectory_id": [0, 0, 1, 1],
+        "candid": [0, 1, 2, 3],
+        "ra": [0, 1, 5, 6],
+        "dec": [0, 1, 5, 6],
+        "jd": [0, 1, 0, 1],
+        "magpsf": [0, 1, 2, 3],
+        "fid": [1, 2, 2, 1],
+    }
+)
+
+new_alerts = pd.DataFrame(
+    {
+        "trajectory_id": [0, 0, 0, 0],
+        "estimator_id": [0, 1, 0, 1],
+        "roid": [4, 4, 4, 4],
+        "candid": [4, 5, 4, 5],
+        "jd": [2, 3, 2, 3],
+        "ra": [8, 9, 8, 9],
+        "dec": [8, 9, 8, 9],
+        "magpsf": [8, 9, 8, 9],
+        "fid": [2, 2, 2, 2],
+    }
+)
+
+res_traj, res_fit = merge_trajectory_cluster(
+    traj, pd.DataFrame(), 2, new_alerts, init_logging(), False
+)
+
+test_traj = pd.DataFrame(
+    {
+        "trajectory_id": [2, 2, 2, 2, 3, 3, 3, 3],
+        "candid": [0, 1, 4, 5, 2, 3, 4, 5],
+        "ra": [0, 1, 8, 9, 5, 6, 8, 9],
+        "dec": [0, 1, 8, 9, 5, 6, 8, 9],
+        "jd": [0, 1, 2, 3, 0, 1, 2, 3],
+        "magpsf": [0, 1, 8, 9, 2, 3, 8, 9],
+        "fid": [1, 2, 2, 2, 2, 1, 2, 2],
+        "estimator_id": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+        "roid": [0.0, 0.0, 4.0, 4.0, 0.0, 0.0, 4.0, 4.0],
+    }
+)
+test_fit = pd.DataFrame(
+    {
+        "trajectory_id": [2, 3],
+        "ra_0": [8, 8],
+        "dec_0": [8, 8],
+        "ra_1": [9, 9],
+        "dec_1": [9, 9],
+        "jd_0": [2, 2],
+        "jd_1": [3, 3],
+        "mag_1": [9, 9],
+        "fid_1": [2, 2],
+        "xp": [
+            np.array([-0.0011995, -0.00564948, 1.0016361]),
+            np.array([-4.43128421e-04, -4.57759549e-03, 9.92826538e-01]),
+        ],
+        "yp": [
+            np.array([-0.00018998, 0.05895939, -0.01032991]),
+            np.array([-0.00011048, 0.02402306, 0.08512888]),
+        ],
+        "zp": [
+            np.array([-4.77605893e-05, 5.92456907e-02, -1.04363809e-02]),
+            np.array([-2.78391100e-05, 2.43315978e-02, 8.54229832e-02]),
+        ],
+    }
+)
+
+assert_frame_equal(
+    res_traj.fillna(0).reset_index(drop=True),
+    test_traj.reset_index(drop=True),
+    check_like=True,
+)
+assert_frame_equal(
+    res_fit.fillna(0).reset_index(drop=True),
+    test_fit.reset_index(drop=True),
+    check_like=True,
+)
+
+
 # ======================================================================== #
 # test merge traj and single alert
 
@@ -460,7 +542,7 @@ assert_frame_equal(
 traj = pd.DataFrame(
     {
         "trajectory_id": [0, 0, 1, 1],
-        "objectId": [0, 1, 2, 3],
+        "candid": [0, 1, 2, 3],
         "ra": [0, 1, 5, 6],
         "dec": [0, 1, 5, 6],
         "jd": [0, 1, 0, 1],
@@ -474,7 +556,7 @@ new_alerts = pd.DataFrame(
         "trajectory_id": [-1, -1],
         "estimator_id": [0, 1],
         "roid": [4, 4],
-        "objectId": [4, 5],
+        "candid": [4, 5],
         "jd": [2, 3],
         "ra": [8, 9],
         "dec": [8, 9],
@@ -490,7 +572,7 @@ res_traj, res_fit = merge_trajectory_alerts(
 test_traj = pd.DataFrame(
     {
         "trajectory_id": [2, 2, 3, 3, 2, 3],
-        "objectId": [0, 1, 2, 3, 4, 5],
+        "candid": [0, 1, 2, 3, 4, 5],
         "ra": [0, 1, 5, 6, 8, 9],
         "dec": [0, 1, 5, 6, 8, 9],
         "jd": [0, 1, 0, 1, 2, 3],
@@ -541,7 +623,7 @@ assert_frame_equal(
 traj = pd.DataFrame(
     {
         "trajectory_id": [0, 0, 1, 1, 2, 2],
-        "objectId": [0, 1, 2, 3, 4, 5],
+        "candid": [0, 1, 2, 3, 4, 5],
         "ra": [0, 1, 5, 6, 0, 1],
         "dec": [0, 1, 5, 6, 0, 1],
         "jd": [0, 1, 0, 1, 0, 1],
@@ -555,7 +637,7 @@ new_alerts = pd.DataFrame(
         "trajectory_id": [-1, -1, -1, -1, -1, -1],
         "estimator_id": [0, 1, 0, 1, 1, 0],
         "roid": [4, 4, 4, 4, 4, 4],
-        "objectId": [40, 50, 60, 70, 80, 90],
+        "candid": [40, 50, 60, 70, 80, 90],
         "jd": [2, 3, 4, 2, 4, 5],
         "ra": [8, 9, 10, 11, 14, 15],
         "dec": [8, 9, 10, 11, 14, 15],
@@ -571,7 +653,7 @@ res_traj, res_fit = merge_trajectory_alerts(
 test_traj = pd.DataFrame(
     {
         "trajectory_id": [2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 2, 3, 4, 5, 6, 7],
-        "objectId": [0, 1, 0, 1, 0, 1, 2, 3, 2, 3, 2, 3, 40, 60, 90, 50, 70, 80],
+        "candid": [0, 1, 0, 1, 0, 1, 2, 3, 2, 3, 2, 3, 40, 60, 90, 50, 70, 80],
         "ra": [0, 1, 0, 1, 0, 1, 5, 6, 5, 6, 5, 6, 8, 10, 15, 9, 11, 14],
         "dec": [0, 1, 0, 1, 0, 1, 5, 6, 5, 6, 5, 6, 8, 10, 15, 9, 11, 14],
         "jd": [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 2, 4, 5, 3, 2, 4],
@@ -672,7 +754,7 @@ assert_frame_equal(
 traj = pd.DataFrame(
     {
         "trajectory_id": [0, 0, 1, 1],
-        "objectId": [0, 1, 2, 3],
+        "candid": [0, 1, 2, 3],
         "ra": [0, 1, 5, 6],
         "dec": [0, 1, 5, 6],
         "jd": [0, 1, 0, 1],
@@ -686,7 +768,7 @@ new_alerts = pd.DataFrame(
         "trajectory_id": [-1, -1, -1, -1, -1, -1],
         "estimator_id": [0, 0, 1, 1, 1, 1],
         "roid": [4, 4, 4, 4, 4, 4],
-        "objectId": [40, 50, 60, 70, 40, 50],
+        "candid": [40, 50, 60, 70, 40, 50],
         "jd": [2, 3, 4, 5, 2, 3],
         "ra": [8, 9, 10, 11, 8, 9],
         "dec": [8, 9, 10, 11, 8, 9],
@@ -704,7 +786,7 @@ res_traj, res_fit = merge_trajectory_alerts(
 test_traj = pd.DataFrame(
     {
         "trajectory_id": [2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 2, 3, 4, 5, 6, 7],
-        "objectId": [0, 1, 0, 1, 2, 3, 2, 3, 2, 3, 2, 3, 40, 50, 60, 70, 40, 50],
+        "candid": [0, 1, 0, 1, 2, 3, 2, 3, 2, 3, 2, 3, 40, 50, 60, 70, 40, 50],
         "ra": [0, 1, 0, 1, 5, 6, 5, 6, 5, 6, 5, 6, 8, 9, 10, 11, 8, 9],
         "dec": [0, 1, 0, 1, 5, 6, 5, 6, 5, 6, 5, 6, 8, 9, 10, 11, 8, 9],
         "jd": [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 2, 3, 4, 5, 2, 3],
@@ -807,7 +889,7 @@ assert_frame_equal(
 traj = pd.DataFrame(
     {
         "trajectory_id": [2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 2, 3, 4, 5, 6, 7],
-        "objectId": [0, 1, 0, 1, 2, 3, 2, 3, 2, 3, 2, 3, 40, 50, 60, 70, 40, 50],
+        "candid": [0, 1, 0, 1, 2, 3, 2, 3, 2, 3, 2, 3, 40, 50, 60, 70, 40, 50],
         "ra": [0, 1, 0, 1, 5, 6, 5, 6, 5, 6, 5, 6, 8, 9, 10, 11, 8, 9],
         "dec": [0, 1, 0, 1, 5, 6, 5, 6, 5, 6, 5, 6, 8, 9, 10, 11, 8, 9],
         "jd": [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 2, 3, 4, 5, 2, 3],
@@ -859,7 +941,7 @@ new_alerts = pd.DataFrame(
         "estimator_id": [[2], [2], [5], [6]],
         "ffdistnr": [[0.2], [0.25], [0.5], [0.6]],
         "roid": [4, 4, 4, 4],
-        "objectId": [110, 120, 130, 150],
+        "candid": [110, 120, 130, 150],
         "jd": [2, 3, 4, 5],
         "ra": [8, 9, 10, 11],
         "dec": [8, 9, 10, 11],
@@ -897,7 +979,7 @@ test_traj = pd.DataFrame(
             9,
             10,
         ],
-        "objectId": [
+        "candid": [
             0,
             1,
             2,

@@ -373,6 +373,20 @@ def get_last_roid_streaming_alert(
     )
 
     mode = str(config["OUTPUT"]["roid_path_mode"])
+    cols_to_keep = [
+        "objectId",
+        "candid",
+        "ra",
+        "dec",
+        "jd",
+        "magpsf",
+        "sigmapsf",
+        "fid",
+        "ssnamenr",
+        "roid",
+        "estimator_id",
+        "ffdistnr",
+    ]
 
     if mode == "local":
         if verbose:
@@ -445,21 +459,6 @@ def get_last_roid_streaming_alert(
             --conf spark.kryoserializer.buffer.max=512m\
             --py-files {FINK_FAT},{FINK_SCIENCE}\
             {application}"
-
-        cols_to_keep = [
-            "objectId",
-            "candid",
-            "ra",
-            "dec",
-            "jd",
-            "magpsf",
-            "sigmapsf",
-            "fid",
-            "ssnamenr",
-            "roid",
-            "estimator_id",
-            "ffdistnr",
-        ]
 
         if verbose:
             logger.info("run recovering of data with spark")
