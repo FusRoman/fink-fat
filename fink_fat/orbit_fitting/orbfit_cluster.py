@@ -215,6 +215,10 @@ if __name__ == "__main__":
         n_triplets = int(sys.argv[4])
         noise_ntrials = int(sys.argv[5])
         prop_epoch = None if sys.argv[6] == "None" else float(sys.argv[6])
+        orbfit_verbose = int(sys.argv[7])
+        year = sys.argv[8]
+        month = sys.argv[9]
+        day = sys.argv[10]
 
         msg_info = """
 master: {}
@@ -233,7 +237,7 @@ prop_epoch: {}
 
         spark = spark = (
             SparkSession.builder.master(master_adress)
-            .appName("Fink-FAT_solve_orbit")
+            .appName(f"Fink-FAT_solve_orbit_{year}{month}{day}")
             .getOrCreate()
         )
 
@@ -279,7 +283,7 @@ prop_epoch: {}
                 n_triplets,
                 noise_ntrials,
                 prop_epoch,
-                verbose=3,
+                verbose=orbfit_verbose,
             ),
         )
 

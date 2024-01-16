@@ -10,7 +10,6 @@ import fink_fat.orbit_fitting.mpcobs_files as mf
 
 import traceback
 from typing import Union
-import pathlib
 from fink_fat.others.utils import init_logging
 
 orbfit_column_name = [
@@ -67,11 +66,11 @@ def call_orbitfit(ram_dir, first_designation, second_designation=None, verbose=F
     >>> call_orbitfit("fink_fat/test/call_orbfit/", "K21E00A", verbose=True)
     >>> call_orbitfit("fink_fat/test/call_orbfit/", "K19V01E", "K20V02K", verbose=True)
 
-    >>> os.path.exists("fink_fat/test/K23Nb8K.log")
+    >>> os.path.exists("fink_fat/test/call_orbfit/K23Nb8K.log")
     True
-    >>> os.path.exists("fink_fat/test/K21E00A.log")
+    >>> os.path.exists("fink_fat/test/call_orbfit/K21E00A.log")
     True
-    >>> os.path.exists("fink_fat/test/K19V01E_K20V02K.log")
+    >>> os.path.exists("fink_fat/test/call_orbfit/K19V01E_K20V02K.log")
     True
 
     >>> os.remove("fink_fat/test/call_orbfit/K19V01E_K20V02K.odc")
@@ -98,9 +97,9 @@ def call_orbitfit(ram_dir, first_designation, second_designation=None, verbose=F
     >>> os.remove("fink_fat/test/call_orbfit/mpcobs/K23Nb8K.rwo")
     >>> os.remove("fink_fat/test/call_orbfit/K23Nb8K.oel")
 
-    >>> os.remove("fink_fat/test/K23Nb8K.log")
-    >>> os.remove("fink_fat/test/K21E00A.log")
-    >>> os.remove("fink_fat/test/K19V01E_K20V02K.log")
+    >>> os.remove("fink_fat/test/call_orbfit/K23Nb8K.log")
+    >>> os.remove("fink_fat/test/call_orbfit/K21E00A.log")
+    >>> os.remove("fink_fat/test/call_orbfit/K19V01E_K20V02K.log")
     """
     orbitfit_path = os.path.join(os.environ["ORBFIT_HOME"], "bin", "")
 
@@ -131,25 +130,28 @@ command: {run_exception.cmd}
 {err_type}
 
 stdout:
-{run_exception.stdout.decode("utf-8")}
+{run_exception.stdout.decode("utf-8")if run_exception.stdout is not None else "no std output"}
 
 
 
 stderr:
-{run_exception.stderr.decode("utf-8")}
+{run_exception.stderr.decode("utf-8") if run_exception.stderr is not None else "no err output"}
 
 
 
 subprocess output:
-{run_exception.output.decode("utf-8")}
+{run_exception.output.decode("utf-8") if run_exception.output is not None else "no output"}
 -------------------------------------
 """
         return str_err
 
     def write_logs(str_log, first_designation, second_designation):
-        ram_path_parent = pathlib.Path(ram_dir).parent.absolute()
-        log_file_name = first_designation if second_designation is None else first_designation + "_" + second_designation
-        with open(os.path.join(ram_path_parent, f"{log_file_name}.log"), "w") as f:
+        log_file_name = (
+            first_designation
+            if second_designation is None
+            else first_designation + "_" + second_designation
+        )
+        with open(os.path.join(ram_dir, f"{log_file_name}.log"), "w") as f:
             f.write(str_log)
 
     try:
@@ -165,12 +167,12 @@ args: {completed_process.args}
 returncode: {completed_process.returncode}
 
 stdout:
-{completed_process.stdout.decode("utf-8")}
+{completed_process.stdout.decode("utf-8")if completed_process.stdout is not None else "no std output"}
 
 
 
 stderr:
-{completed_process.stderr.decode("utf-8")}
+{completed_process.stderr.decode("utf-8")if completed_process.stderr is not None else "no err output"}
 -------------------------------------
 """
                 write_logs(str_out, first_designation, second_designation)
@@ -181,7 +183,15 @@ stderr:
         write_logs(generate_logs(te), first_designation, second_designation)
 
 
-def get_orbit_param(ram_dir, df, n_triplets, noise_ntrials, prop_epoch=None, verbose_orbfit=1, verbose=None):
+def get_orbit_param(
+    ram_dir,
+    df,
+    n_triplets,
+    noise_ntrials,
+    prop_epoch=None,
+    verbose_orbfit=1,
+    verbose=None,
+):
     """
     Compute the orbital elements of one trajectory.
 
@@ -374,7 +384,7 @@ def compute_df_orbit_param(
     noise_ntrials=10,
     prop_epoch=None,
     verbose_orbfit=1,
-    verbose=None
+    verbose=None,
 ):
     """
     Compute the orbital elements of a set of trajectories. Computation are done in parallel.
@@ -447,7 +457,7 @@ def compute_df_orbit_param(
             noise_ntrials,
             prop_epoch,
             verbose_orbfit,
-            verbose
+            verbose,
         )
         for tr_chunk, chunk_dir in zip(trajectory_id_chunks, chunk_ramdir)
         if len(tr_chunk) > 0

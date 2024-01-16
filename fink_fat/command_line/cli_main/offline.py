@@ -274,7 +274,7 @@ def cli_offline(arguments, config, output_path):
                     int(config["SOLVE_ORBIT_PARAMS"]["noise_ntrials"]),
                     prop_epoch=float(prop_epoch) if prop_epoch != "None" else None,
                     verbose_orbfit=int(config["SOLVE_ORBIT_PARAMS"]["orbfit_verbose"]),
-                    verbose=arguments["--verbose"]
+                    verbose=arguments["--verbose"],
                 ).drop("provisional designation", axis=1)
                 orbfit_time = t.time() - t_before
 

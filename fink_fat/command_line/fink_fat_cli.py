@@ -1,6 +1,6 @@
 """
 Usage:
-    fink_fat associations (mpc | candidates) [--night <date>] [options]
+    fink_fat associations (mpc | candidates | fitroid) [--night <date>] [--filepath <filepath>] [options]
     fink_fat kalman (mpc | candidates) [--night <date>] [options]
     fink_fat solve_orbit (mpc | candidates) (local | cluster) [options]
     fink_fat merge_orbit (mpc | candidates) [options]
@@ -10,36 +10,37 @@ Usage:
     fink_fat --version
 
 Options:
-  associations                     Perform associations of alert to return a set of trajectories candidates.
-  kalman                           Perform associations of alerts with the kalman filters and the orbits
-                                   (Must be used with the new fink-science asteroid module)
-  solve_orbit                      Resolve a dynamical inverse problem to return a set of orbital elements from
-                                   the set of trajectories candidates.
-  merge_orbit                      Merge the orbit candidates if the both trajectories can belong to the same solar system objects.
-  offline                          Associate the alerts to form trajectories candidates then solve the orbit
-                                   until the end parameters. Starts from saved data or from the start parameters
-                                   if provided.
-  stats                            Print statistics about trajectories detected by assocations, the old observations
-                                   and, if exists, the orbital elements for some trajectories.
-  mpc                              Return the associations on the solar system mpc alerts (only for tests purpose).
-  candidates                       Run the associations on the solar system candidates alerts.
-  local                            Run the orbital solver in local mode. Use multiprocessing to speed-up the computation.
-  cluster                          Run the orbital solver in cluster mode. Use a Spark cluster to significantly speed-up the computation.
-                                   The cluster mode need to be launch on a system where pyspark are installed and a spark cluster manager are setup.
-  -n <date> --night <date>         Specify the night to request sso alerts from fink broker.
-                                   Format is yyyy-mm-dd as yyyy = year, mm = month, dd = day.
-                                   Example : 2022-03-04 for the 2022 march 04.
-                                   [intervall of day between the day starting at night midday until night midday + 1]
-  -m <path> --mpc-data <path>      Compute statistics according to the minor planet center database.
-                                   <path> of the mpc database file.
-                                   The mpc database can be downloaded by pasting this url in your browser: https://minorplanetcenter.net/Extended_Files/mpcorb_extended.json.gz
-  -r --reset                       Remove the file containing the trajectories candidates, the old observations and the orbits.
-  -s --save                        Save the alerts sent by Fink before the associations for statistics purposes.
-                                   Save also additional statistics : computation time, number of alerts from the current days, number of candidates trajectories, number of old observations.
-  -h --help                        Show help and quit.
-  --version                        Show version.
-  --config FILE                    Specify the config file
-  --verbose                        Print information and progress bar during the process
+  associations                        Perform associations of alert to return a set of trajectories candidates.
+  solve_orbit                         Resolve a dynamical inverse problem to return a set of orbital elements from
+                                      the set of trajectories candidates.
+  merge_orbit                         Merge the orbit candidates if the both trajectories can belong to the same solar system objects.
+  offline                             Associate the alerts to form trajectories candidates then solve the orbit
+                                      until the end parameters. Starts from saved data or from the start parameters
+                                      if provided.
+  stats                               Print statistics about trajectories detected by assocations, the old observations
+                                      and, if exists, the orbital elements for some trajectories.
+  mpc                                 Return the associations on the solar system mpc alerts (only for tests purpose).
+  candidates                          Run the associations on the solar system candidates alerts.
+  fitroid                             Merge the trajectories on the alerts associated with the trajectories by the roid science module of fink
+                                      (the roid science module from fink-science must have been run before)
+  local                               Run the orbital solver in local mode. Use multiprocessing to speed-up the computation.
+  cluster                             Run the orbital solver in cluster mode. Use a Spark cluster to significantly speed-up the computation.
+                                      The cluster mode need to be launch on a system where pyspark are installed and a spark cluster manager are setup.
+  -n <date> --night <date>            Specify the night to request sso alerts from fink broker.
+                                      Format is yyyy-mm-dd as yyyy = year, mm = month, dd = day.
+                                      Example : 2022-03-04 for the 2022 march 04.
+                                      [intervall of day between the day starting at night midday until night midday + 1]
+  -f <filepath> --filepath <filepath> Path to the Euclid SSOPipe output file.
+  -m <path> --mpc-data <path>         Compute statistics according to the minor planet center database.
+                                      <path> of the mpc database file.
+                                      The mpc database can be downloaded by pasting this url in your browser: https://minorplanetcenter.net/Extended_Files/mpcorb_extended.json.gz
+  -r --reset                          Remove the file containing the trajectories candidates, the old observations and the orbits.
+  -s --save                           Save the alerts sent by Fink before the associations for statistics purposes.
+                                      Save also additional statistics : computation time, number of alerts from the current days, number of candidates trajectories, number of old observations.
+  -h --help                           Show help and quit.
+  --version                           Show version.
+  --config FILE                       Specify the config file
+  --verbose                           Print information and progress bar during the process
 """
 
 from fink_fat import __version__

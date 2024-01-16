@@ -1,7 +1,7 @@
 import os
 import subprocess
+import time
 from typing import Tuple
-
 import pandas as pd
 import numpy as np
 
@@ -61,7 +61,7 @@ def get_orbital_data(config, tr_df_path):  # pragma: no cover
 
 
 def cluster_mode(
-    config: dict, traj_to_orbital: pd.DataFrame
+    config: dict, traj_to_orbital: pd.DataFrame, year: str, month: str, day: str
 ) -> pd.DataFrame:  # pragma: no cover
     """
     Compute orbits using the cluster mode
@@ -124,31 +124,32 @@ def cluster_mode(
     application += " " + noise_ntrials
     application += " " + prop_epoch
     application += " " + orbfit_verbose
+    application += " " + year
+    application += " " + month
+    application += " " + day
 
-    spark_submit = "spark-submit \
-        --master {} \
-        --conf spark.mesos.principal={} \
-        --conf spark.mesos.secret={} \
-        --conf spark.mesos.role={} \
-        --conf spark.executorEnv.HOME={} \
-        --driver-memory {}G \
-        --executor-memory {}G \
-        --conf spark.cores.max={} \
-        --conf spark.executor.cores={} \
-        --conf spark.executorEnv.ORBFIT_HOME={} \
-        {}".format(
-        master_manager,
-        principal_group,
-        secret,
-        role,
-        executor_env,
-        driver_mem,
-        exec_mem,
-        max_core,
-        exec_core,
-        orbfit_home,
-        application,
-    )
+    # FIXME
+    # temporary dependencies (only during the performance test phase)
+    FINK_FAT = "/home/roman.le-montagner/home_big_storage/Doctorat/Asteroids/fink-fat/dist/fink_fat-1.0.0-py3.9.egg"
+    FINK_SCIENCE = "/home/roman.le-montagner/home_big_storage/Doctorat/fink-science/dist/fink_science-4.4-py3.7.egg"
+
+    spark_submit = f"spark-submit \
+        --master {master_manager} \
+        --conf spark.mesos.principal={principal_group} \
+        --conf spark.mesos.secret={secret} \
+        --conf spark.mesos.role={role} \
+        --conf spark.executorEnv.HOME={executor_env} \
+        --driver-memory {driver_mem}G \
+        --executor-memory {exec_mem}G \
+        --conf spark.cores.max={max_core} \
+        --conf spark.executor.cores={exec_core} \
+        --conf spark.driver.maxResultSize=6G\
+        --conf spark.sql.execution.arrow.pyspark.enabled=true\
+        --conf spark.sql.execution.arrow.maxRecordsPerBatch=1000000\
+        --conf spark.kryoserializer.buffer.max=512m\
+        --conf spark.executorEnv.ORBFIT_HOME={orbfit_home} \
+        --py-files {FINK_FAT},{FINK_SCIENCE}\
+        {application}"
 
     process = subprocess.run(spark_submit, shell=True)
 
@@ -191,7 +192,9 @@ def cluster_mode(
     return orbit_results
 
 
-def switch_local_cluster(config: dict, traj_orb: pd.DataFrame, verbose=False) -> pd.DataFrame:
+def switch_local_cluster(
+    config: dict, traj_orb: pd.DataFrame, year: str, month: str, day: str, verbose=False
+) -> pd.DataFrame:
     """
     Run the orbit fitting and choose cluster mode if the number of trajectories are above
     the local limit set in the config file
@@ -215,7 +218,7 @@ def switch_local_cluster(config: dict, traj_orb: pd.DataFrame, verbose=False) ->
             traj_orb = traj_orb.drop("estimator_id", axis=1)
         if "ffdistnr" in traj_cols:
             traj_orb = traj_orb.drop("ffdistnr", axis=1)
-        new_orbit_pdf = cluster_mode(config, traj_orb)
+        new_orbit_pdf = cluster_mode(config, traj_orb, year, month, day)
     else:
         config_epoch = config["SOLVE_ORBIT_PARAMS"]["prop_epoch"]
         prop_epoch = None if config_epoch == "None" else float(config_epoch)
@@ -230,7 +233,7 @@ def switch_local_cluster(config: dict, traj_orb: pd.DataFrame, verbose=False) ->
             int(config["SOLVE_ORBIT_PARAMS"]["noise_ntrials"]),
             prop_epoch=float(prop_epoch) if prop_epoch != "None" else None,
             verbose_orbfit=int(config["SOLVE_ORBIT_PARAMS"]["orbfit_verbose"]),
-            verbose=verbose
+            verbose=verbose,
         ).drop("provisional designation", axis=1)
     return new_orbit_pdf
 
@@ -241,6 +244,7 @@ def trcand_to_orbit(
     trajectory_orb: pd.DataFrame,
     trparams_df: pd.DataFrame,
     orbits: pd.DataFrame,
+    last_night: str,
     logger: LoggerNewLine,
     verbose: bool,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -299,11 +303,20 @@ def trcand_to_orbit(
         # no trajectory updated during this night to send to orbit fitting
         return trajectory_df, trparams_df, trajectory_orb, orbits
 
-    new_orbits = switch_local_cluster(config, traj_to_orb, verbose)
+    year, month, day = last_night.split("-")
+
+    if verbose:
+        t_before = time.time()
+
+    new_orbits = switch_local_cluster(config, traj_to_orb, year, month, day, verbose)
     new_orbits = new_orbits[new_orbits["a"] != -1.0]
+
     if verbose:
         logger.info(
-            f"number of orbit fitted: {len(new_orbits)} ({(len(new_orbits) / nb_traj_to_orb) * 100} %)"
+            f"""
+number of orbit fitted: {len(new_orbits)} ({(len(new_orbits) / nb_traj_to_orb) * 100} %)
+orbit fitting elapsed time: {time.time() - t_before:.4f} seconds
+"""
         )
 
     # get the trajectories with orbit and assign the ssoCandId
@@ -319,15 +332,24 @@ def trcand_to_orbit(
     trajectory_df = trajectory_df[
         ~trajectory_df["trajectory_id"].isin(new_traj_id)
     ].reset_index(drop=True)
-    trparams_df = trparams_df[~trparams_df["trajectory_id"].isin(new_traj_id)].reset_index(
-        drop=True
-    )
+    trparams_df = trparams_df[
+        ~trparams_df["trajectory_id"].isin(new_traj_id)
+    ].reset_index(drop=True)
+
     failed_orbit = np.setdiff1d(large_traj.index.values, new_traj_id)
-    mask_failed = trparams_df["trajectory_id"].isin(failed_orbit)
-    with pd.option_context("mode.chained_assignment", None):
-        trparams_df.loc[mask_failed, "orbfit_test"] = (
-            trparams_df.loc[mask_failed, "orbfit_test"] + 1
-        )
+    # FIXME
+    # as the trajectory_id change between the night if the trajectories are updated, this solution to keep track
+    # of the failed orbit as well as the number of time they have been sent to the orbit fitting doesn't works.
+    # Remove the failed orbit in the meantime
+    # mask_failed = trparams_df["trajectory_id"].isin(failed_orbit)
+    # with pd.option_context("mode.chained_assignment", None):
+    #     trparams_df.loc[mask_failed, "orbfit_test"] = (
+    #         trparams_df.loc[mask_failed, "orbfit_test"] + 1
+    #     )
+
+    # Remove the failed orbit
+    trajectory_df = trajectory_df[~trajectory_df["trajectory_id"].isin(failed_orbit)]
+    trparams_df = trparams_df[~trparams_df["trajectory_id"].isin(failed_orbit)]
     return trajectory_df, trparams_df, trajectory_orb, orbits
 
 

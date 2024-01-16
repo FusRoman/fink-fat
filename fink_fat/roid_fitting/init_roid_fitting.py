@@ -84,9 +84,7 @@ def fit_polyast(gb_input, poly_exp=2):
     )
 
 
-def init_polyast(
-    night_pdf: pd.DataFrame, poly_exp=2
-) -> pd.DataFrame:
+def init_polyast(night_pdf: pd.DataFrame, poly_exp=2) -> pd.DataFrame:
     """
     Initialize fit functions based on the seeds or tracklets.
     required columns: ra, dec, jd, magpsf, fid, trajectory_id

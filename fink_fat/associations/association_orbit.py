@@ -37,6 +37,7 @@ def orbit_associations(
     new_alerts: pd.DataFrame,
     trajectory_df: pd.DataFrame,
     orbits: pd.DataFrame,
+    last_night: str,
     logger: LoggerNewLine,
     verbose: bool,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -94,8 +95,11 @@ def orbit_associations(
     ]["ssoCandId"]
     assert len(duplicated_id) == 0
 
+    year, month, day = last_night.split("-")
     # recompute the orbit using local or cluster mode
-    new_orbit_pdf = switch_local_cluster(config, traj_to_new_orbit)
+    new_orbit_pdf = switch_local_cluster(
+        config, traj_to_new_orbit, year, month, day, verbose
+    )
 
     # remove the failed orbits
     new_orbit_pdf = new_orbit_pdf[new_orbit_pdf["a"] != -1.0]

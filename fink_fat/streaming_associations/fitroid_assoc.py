@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import healpy as hp
 
 from astropy.coordinates import SkyCoord, search_around_sky
 import astropy.units as u
@@ -9,6 +10,7 @@ from fink_fat.others.utils import init_logging
 from fink_fat.roid_fitting.roid_fit_prediction import fitroid_prediction
 from fink_fat.associations.associations import night_to_night_separation_association
 
+from fink_utils.science.utils import dec2theta, ra2phi
 from fink_science.tester import spark_unit_tests
 from typing import Tuple
 
@@ -185,12 +187,23 @@ def fitroid_window(pred_pdf: pd.DataFrame, coord_alerts: SkyCoord) -> pd.DataFra
         coord_alerts,
         5 * u.deg,
     )
-    kalman_to_keep = pred_pdf[
+    fitroid_to_keep = pred_pdf[
         pred_pdf["trajectory_id"].isin(
             pred_pdf.iloc[idx_kalman]["trajectory_id"].unique()
         )
     ]
-    return kalman_to_keep
+    return fitroid_to_keep
+
+
+def ang2pix(NSIDE: int, ra: pd.Series, dec: pd.Series):
+    return hp.ang2pix(NSIDE, dec2theta(dec), ra2phi(ra))
+
+
+def fit_filter(fit_pdf, alert_ra, alert_dec):
+    NSIDE = 4
+    fit_pdf_pix = ang2pix(NSIDE, fit_pdf["ra_1"].values, fit_pdf["dec_1"].values)
+    alert_pix = ang2pix(NSIDE, alert_ra, alert_dec)
+    return fit_pdf[np.isin(fit_pdf_pix, alert_pix)]
 
 
 def fitroid_association(
@@ -297,7 +310,7 @@ def fitroid_association(
     1                                         []
     2                       [0.6219832018982673]
     3    [0.5461049333814415, 6.365279160721899]
-    4                       [0.6548163695675884]
+    4                       [0.6548163695675883]
     dtype: object
 
 
@@ -337,8 +350,8 @@ def fitroid_association(
     dtype: object
 
     >>> ffdistnr
-    0    [0.8667306486778968]
-    1       [0.6532971697207]
+    0     [0.866730648677894]
+    1    [0.6532971697206779]
     2                      []
     3                      []
     4                      []
@@ -348,7 +361,7 @@ def fitroid_association(
     (
         ra_mask,
         dec_mask,
-        coord_masked_alerts,
+        _,
         mag_mask,
         fid_mask,
         candid_mask,
@@ -365,8 +378,13 @@ def fitroid_association(
         logger.warning("files containing the kalman filters not found", exc_info=1)
         return flags, estimator_id, ffdistnr
 
-    # filter the kalman estimators to keep only those inside the current exposures.
-    fit_to_keep = fitroid_window(fit_pdf, coord_masked_alerts)
+    if len(fit_pdf) != 0:
+        # filter the polyfit estimators to keep only those inside the current exposures.
+        fit_to_keep = fit_filter(fit_pdf, ra_mask, dec_mask)
+        if len(fit_to_keep) == 0:
+            return flags, estimator_id, ffdistnr
+    else:
+        return flags, estimator_id, ffdistnr
 
     fit_pred = fitroid_prediction(fit_to_keep, jd_unique)
 
@@ -401,7 +419,7 @@ def fitroid_association(
             fit_to_keep[["trajectory_id", "mag_1", "fid_1", "jd_1"]], on="trajectory_id"
         )
     )
-    merge_assoc["trajectory_id"] = merge_assoc["trajectory_id"].astype(str)
+    merge_assoc["trajectory_id"] = merge_assoc["trajectory_id"].astype(int).astype(str)
 
     diff_mag = np.abs(merge_assoc["magpsf"] - merge_assoc["mag_1"])
     diff_jd = merge_assoc["jd"] - merge_assoc["jd_1"]

@@ -22,7 +22,7 @@ export ROOTPATH=`pwd`
 export PYTHONPATH="${SPARK_HOME}/python/test_coverage:$PYTHONPATH"
 export COVERAGE_PROCESS_START="${ROOTPATH}/.coveragerc"
 
-python -m pip install .
+python -m pip install -U .
 
 # Run the test suite
 for filename in fink_fat/associations/*.py
@@ -55,6 +55,16 @@ do
     --rcfile ${ROOTPATH}/.coveragerc $filename
 done
 
+# Run the test suite
+for filename in fink_fat/mpc_submission/*.py
+do
+  echo $filename
+  # Run test suite + coverage
+  coverage run \
+    --source=${ROOTPATH} \
+    --rcfile ${ROOTPATH}/.coveragerc $filename
+done
+
 # Run the test suite for the orbit fitting
 
 ORBITFITTING_PATH="fink_fat/orbit_fitting"
@@ -77,7 +87,7 @@ do
   # Run test suite + coverage
   coverage run \
     --source=${ROOTPATH} \
-    --rcfile ${ROOTPATH}/.coveragerc $filename
+    --rcfile ${ROOTPATH}/.coveragerc $filename "test"
 done
 
 for filename in fink_fat/test/*/*.py
