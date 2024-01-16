@@ -77,7 +77,8 @@ def get_default_input():
 
 def roid_flags(config: configparser.ConfigParser) -> Tuple[bool, list]:
     is_mpc_flag = string_to_bool(config["ASSOC_PARAMS"]["roid_mpc"])
-    return is_mpc_flag, [3] if is_mpc_flag else is_mpc_flag, [1, 2]
+    flags = [3] if is_mpc_flag else [1, 2]
+    return is_mpc_flag, flags
 
 
 def fitroid_associations(
