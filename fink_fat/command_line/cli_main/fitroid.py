@@ -122,6 +122,7 @@ def fitroid_associations(
     if arguments["--night"]:
         last_night = arguments["--night"]
 
+    year, month, day = last_night.split("-")
     # path to the orbits data
     path_orbit = os.path.join(output_path, "orbital.parquet")
     path_trajectory_orb = os.path.join(output_path, "trajectory_orb.parquet")
@@ -143,7 +144,6 @@ def fitroid_associations(
                 "No alerts in the current night, compute the ephemeries for the next night"
             )
         # even if no alerts for the current night, compute the ephemeries for the next night in any case
-        year, month, day = last_night.split("-")
         launch_spark_ephem(
             config,
             path_orbit,
@@ -359,6 +359,7 @@ orbits trajectories size:
     with pd.option_context("mode.chained_assignment", None):
         trajectory_df["trajectory_id"] = trajectory_df["trajectory_id"].astype(int)
         fit_roid_df["trajectory_id"] = fit_roid_df["trajectory_id"].astype(int)
+        fit_roid_df["last_assoc_date"] = f"{year}-{month}-{day}"
 
     trajectory_df = trajectory_df.drop("updated", axis=1)
     trajectory_df.to_parquet(path_trajectory_df, index=False)
@@ -369,19 +370,21 @@ orbits trajectories size:
     trajectory_orb.to_parquet(path_trajectory_orb, index=False)
     orbits.to_parquet(path_orbit, index=False)
 
-    # compute the ephemerides for the next observation night
-    if arguments["--verbose"]:
-        logger.info("start to compute ephemerides using spark")
-        t_before = time.time()
+    if len(orbits) > 0:
+        # compute the ephemerides for the next observation night
+        if arguments["--verbose"]:
+            logger.info("start to compute ephemerides using spark")
+            t_before = time.time()
 
-    year, month, day = last_night.split("-")
-    launch_spark_ephem(
-        config, path_orbit, os.path.join(output_path, "ephem.parquet"), year, month, day
-    )
+        launch_spark_ephem(
+            config, path_orbit, os.path.join(output_path, "ephem.parquet"), year, month, day
+        )
+
+        if arguments["--verbose"]:
+            logger.info(f"ephemeries computing time: {time.time() - t_before:.4f} seconds")
+            logger.newline()
 
     if arguments["--verbose"]:
-        logger.info(f"ephemeries computing time: {time.time() - t_before:.4f} seconds")
-        logger.newline()
         hours, minutes, secondes = seconds_to_hms(time.time() - start_assoc_time)
         logger.info(
             f"total execution time: {hours} hours, {minutes} minutes, {secondes} seconds"

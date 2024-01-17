@@ -1,9 +1,9 @@
 import configparser
 import os
-import subprocess
 
 import fink_fat
 from fink_fat.others.utils import init_logging
+import fink_fat.others.launch_spark as spark
 
 def launch_spark_ephem(
     config: configparser.ConfigParser,
@@ -63,16 +63,6 @@ def launch_spark_ephem(
 
     >>> os.remove("ephem.parquet")
     """
-    master_manager = config["SOLVE_ORBIT_PARAMS"]["manager"]
-    principal_group = config["SOLVE_ORBIT_PARAMS"]["principal"]
-    secret = config["SOLVE_ORBIT_PARAMS"]["secret"]
-    role = config["SOLVE_ORBIT_PARAMS"]["role"]
-    executor_env = config["SOLVE_ORBIT_PARAMS"]["exec_env"]
-    driver_mem = config["SOLVE_ORBIT_PARAMS"]["driver_memory"]
-    exec_mem = config["SOLVE_ORBIT_PARAMS"]["executor_memory"]
-    max_core = config["SOLVE_ORBIT_PARAMS"]["max_core"]
-    exec_core = config["SOLVE_ORBIT_PARAMS"]["executor_core"]
-
     application = os.path.join(
         os.path.dirname(fink_fat.__file__),
         "others",
@@ -87,29 +77,10 @@ def launch_spark_ephem(
     application += " " + month
     application += " " + day
 
-    # FIXME
-    # temporary dependencies (only during the performance test phase)
-    FINK_FAT = "/home/roman.le-montagner/home_big_storage/Doctorat/Asteroids/fink-fat/dist/fink_fat-1.0.0-py3.9.egg"
-    FINK_SCIENCE = "/home/roman.le-montagner/home_big_storage/Doctorat/fink-science/dist/fink_science-4.4-py3.7.egg"
+    spark_submit = spark.build_spark_submit(config)
+    spark_app = spark.spark_submit_application(spark_submit, application)
+    process = spark.run_spark_submit(spark_app, verbose)
 
-    spark_submit = f"spark-submit \
-        --master {master_manager} \
-        --conf spark.mesos.principal={principal_group} \
-        --conf spark.mesos.secret={secret} \
-        --conf spark.mesos.role={role} \
-        --conf spark.executorEnv.HOME={executor_env} \
-        --driver-memory {driver_mem}G \
-        --executor-memory {exec_mem}G \
-        --conf spark.cores.max={max_core} \
-        --conf spark.executor.cores={exec_core} \
-        --conf spark.driver.maxResultSize=6G\
-        --conf spark.sql.execution.arrow.pyspark.enabled=true\
-        --conf spark.sql.execution.arrow.maxRecordsPerBatch=1000000\
-        --conf spark.kryoserializer.buffer.max=512m\
-        --py-files {FINK_FAT},{FINK_SCIENCE}\
-        {application}"
-
-    process = subprocess.run(spark_submit, shell=True, capture_output=True)
     logger = init_logging()
     if verbose:
         logger.info(

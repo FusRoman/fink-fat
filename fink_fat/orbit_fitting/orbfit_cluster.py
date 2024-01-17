@@ -209,16 +209,17 @@ if __name__ == "__main__":
         # Run the test suite
         spark_unit_tests(globs)
     elif sys.argv[1] == "prod":
+        from fink_utils.broker.sparkUtils import init_sparksession
+
         logger = init_logging()
-        master_adress = str(sys.argv[2])
-        ram_dir = str(sys.argv[3])
-        n_triplets = int(sys.argv[4])
-        noise_ntrials = int(sys.argv[5])
-        prop_epoch = None if sys.argv[6] == "None" else float(sys.argv[6])
-        orbfit_verbose = int(sys.argv[7])
-        year = sys.argv[8]
-        month = sys.argv[9]
-        day = sys.argv[10]
+        ram_dir = str(sys.argv[2])
+        n_triplets = int(sys.argv[3])
+        noise_ntrials = int(sys.argv[4])
+        prop_epoch = None if sys.argv[5] == "None" else float(sys.argv[5])
+        orbfit_verbose = int(sys.argv[6])
+        year = sys.argv[7]
+        month = sys.argv[8]
+        day = sys.argv[9]
 
         msg_info = """
 master: {}
@@ -227,7 +228,6 @@ n_triplets: {}
 noise_ntrials: {}
 prop_epoch: {}
 """.format(
-            master_adress,
             ram_dir,
             n_triplets,
             noise_ntrials,
@@ -235,10 +235,8 @@ prop_epoch: {}
         )
         logger.info(msg_info)
 
-        spark = spark = (
-            SparkSession.builder.master(master_adress)
-            .appName(f"Fink-FAT_solve_orbit_{year}{month}{day}")
-            .getOrCreate()
+        spark = init_sparksession(
+            f"Fink-FAT_solve_orbit_{year}{month}{day}"
         )
 
         # read the input from local parquet file
