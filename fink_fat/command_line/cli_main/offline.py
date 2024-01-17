@@ -22,6 +22,9 @@ from fink_fat.command_line.association_cli import (
     no_reset,
 )
 from fink_fat.others.utils import init_logging
+from fink_fat.command_line.cli_main.offline_fitroid.offline_fitroid import (
+    offline_fitroid,
+)
 
 
 def cli_offline(arguments, config, output_path):
@@ -38,7 +41,6 @@ def cli_offline(arguments, config, output_path):
         path where are located the fink-fat data
     """
     logger = init_logging()
-    logger.info("offline mode")
 
     output_path, object_class = get_class(arguments, output_path)
 
@@ -124,7 +126,9 @@ def cli_offline(arguments, config, output_path):
     today = datetime.datetime.now().date()
 
     if current_date.date() > stop_date.date():
-        logger.info("Error !!! Start date is greater than stop date.")
+        logger.info(
+            f"Error !!! Start date {current_date.date()} is greater than stop date {stop_date.date()}."
+        )
         exit()
 
     orb_df = pd.DataFrame()
@@ -144,6 +148,19 @@ def cli_offline(arguments, config, output_path):
 
     stats_dict = {}
 
+    if object_class == "SSO fitroid":
+        offline_fitroid(
+            config,
+            arguments["--config"],
+            current_date,
+            stop_date,
+            logger,
+            arguments["--verbose"],
+        )
+        return
+
+    if arguments["--verbose"]:
+        logger.info("start the offline mode")
     while True:
         if arguments["--verbose"]:
             logger.info("current processing date: {}".format(current_date))
