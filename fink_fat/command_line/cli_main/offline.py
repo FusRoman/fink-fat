@@ -111,9 +111,9 @@ def cli_offline(arguments, config, output_path):
         # 1.0 case: load the fit_roid parquet
         if object_class == "SSO fitroid":
             fitroid_df = pd.read_parquet(fitroid_path)
-            current_date = max(pd.to_datetime(
-                fitroid_df["last_assoc_date"], format="%Y-%m-%d"
-            ))
+            current_date = max(
+                pd.to_datetime(fitroid_df["last_assoc_date"], format="%Y-%m-%d")
+            )
             current_date += delta_day
 
         # version < 1.0: load trajectory_df and old_obs parquet
@@ -126,12 +126,16 @@ def cli_offline(arguments, config, output_path):
                 trajectory_df["last_assoc_date"], format="%Y-%m-%d"
             )
 
-            last_obs_date = pd.to_datetime(old_obs_df["last_assoc_date"], format="%Y-%m-%d")
+            last_obs_date = pd.to_datetime(
+                old_obs_df["last_assoc_date"], format="%Y-%m-%d"
+            )
 
             current_date = max(last_tr_date.max(), last_obs_date.max())
             current_date += delta_day
-        
-        logger.info(f"Start offline mode with the previous reconstructed trajectory, start date = {current_date.date()}")
+
+        logger.info(
+            f"Start offline mode with the previous reconstructed trajectory, start date = {current_date.date()}"
+        )
 
     # last case: <start> options given by the user, start the offline mode from this date.
     if arguments["<start>"] is not None:

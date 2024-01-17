@@ -1,5 +1,4 @@
 import os
-import subprocess
 import time
 from typing import Tuple
 import pandas as pd
@@ -128,9 +127,11 @@ def cluster_mode(
 
     if process.returncode != 0:
         logger = init_logging()
-        logger.error(f"""
+        logger.error(
+            f"""
     Spark orbit fitting exited with a non-zero return code: {process.returncode}
-""")
+"""
+        )
         logger.info(process.stderr)
         logger.info(process.stdout)
         exit()

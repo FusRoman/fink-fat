@@ -9,13 +9,12 @@ from fink_fat.others.utils import init_logging, LoggerNewLine
 
 from astropy.time import Time
 import fink_fat
-import subprocess
 from pyspark.sql.functions import col
 from fink_fat.command_line.utils_cli import string_to_bool
 import configparser
 import pathlib
 
-import fink_fat.others.launch_spark as spark
+import fink_fat.others.launch_spark as sp
 
 
 def request_fink(
@@ -428,15 +427,17 @@ def get_last_roid_streaming_alert(
         application += " " + month
         application += " " + day
 
-        spark_submit = spark.build_spark_submit(config)
-        spark_app = spark.spark_submit_application(spark_submit, application)
-        process = spark.run_spark_submit(spark_app, verbose)
+        spark_submit = sp.build_spark_submit(config)
+        spark_app = sp.spark_submit_application(spark_submit, application)
+        process = sp.run_spark_submit(spark_app, verbose)
 
         if process.returncode != 0:
             logger = init_logging()
-            logger.error(f"""
+            logger.error(
+                f"""
     Recovering of stream data with spark exited with a non-zero return code: {process.returncode}
-""")
+"""
+            )
             logger.info(process.stderr)
             logger.info(process.stdout)
             return pd.DataFrame(columns=cols_to_keep)
@@ -591,9 +592,7 @@ if __name__ == "__main__":  # pragma: no cover
         month = sys.argv[6]
         day = sys.argv[7]
 
-        spark = init_sparksession(
-            f"FINK-FAT_recover_stream_data_{year}{month}{day}"
-        )
+        spark = init_sparksession(f"FINK-FAT_recover_stream_data_{year}{month}{day}")
         df = spark.read.load(read_path)
         df = df.select(
             "objectId",

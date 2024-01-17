@@ -7,7 +7,6 @@ import pandas as pd
 from pyspark.sql.functions import pandas_udf
 from pyspark.sql.types import ArrayType, DoubleType
 from pyspark.sql import functions as F
-from pyspark.sql import SparkSession
 
 import fink_fat.orbit_fitting.orbfit_files as of
 import fink_fat.orbit_fitting.orbfit_local as ol
@@ -222,7 +221,6 @@ if __name__ == "__main__":
         day = sys.argv[9]
 
         msg_info = """
-master: {}
 ram_dir: {}
 n_triplets: {}
 noise_ntrials: {}
@@ -235,9 +233,7 @@ prop_epoch: {}
         )
         logger.info(msg_info)
 
-        spark = init_sparksession(
-            f"Fink-FAT_solve_orbit_{year}{month}{day}"
-        )
+        spark = init_sparksession(f"Fink-FAT_solve_orbit_{year}{month}{day}")
 
         # read the input from local parquet file
         traj_df = pd.read_parquet("tmp_traj.parquet")
