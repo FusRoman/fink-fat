@@ -133,17 +133,21 @@ def fitroid_associations(
     path_trajectory_df = os.path.join(output_path, "trajectory_df.parquet")
 
     if os.path.exists(path_fit_roid):
-        fit_roid_last_assoc = pd.read_parquet(path_fit_roid, columns=["last_assoc_date"])
-        last_assoc_date = max(pd.to_datetime(
-            fit_roid_last_assoc["last_assoc_date"], format="%Y-%m-%d"
-        ))
+        fit_roid_last_assoc = pd.read_parquet(
+            path_fit_roid, columns=["last_assoc_date"]
+        )
+        last_assoc_date = max(
+            pd.to_datetime(fit_roid_last_assoc["last_assoc_date"], format="%Y-%m-%d")
+        )
 
         current_date = datetime.datetime.strptime(last_night, "%Y-%m-%d")
 
         if last_assoc_date == current_date:
             logger.newline()
             logger.error("Association already done for this night.")
-            logger.info("Wait a next observation night and the end of the alert stream to start a new run of association.")
+            logger.info(
+                "Wait a next observation night and the end of the alert stream to start a new run of association."
+            )
             exit()
         if last_assoc_date > current_date:
             logger.newline()
@@ -154,7 +158,6 @@ def fitroid_associations(
                 "Maybe try with a more recent night or reset the associations with 'fink_fat association -r'"
             )
             exit()
-
 
     # load the alerts from the last streaming night (roid science module with fink-fat must have been run)
     alerts_night = get_last_roid_streaming_alert(

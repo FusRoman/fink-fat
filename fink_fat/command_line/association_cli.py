@@ -489,7 +489,6 @@ def yes_reset(arguments, tr_df_path, obs_df_path):  # pragma: no cover
 
 
 def yes_reset_fitroid(arguments, output_path):  # pragma: no cover
-
     # path to the orbits data
     path_orbit = os.path.join(output_path, "orbital.parquet")
     path_trajectory_orb = os.path.join(output_path, "trajectory_orb.parquet")
@@ -502,7 +501,9 @@ def yes_reset_fitroid(arguments, output_path):  # pragma: no cover
 
     logger = init_logging()
     if os.path.exists(path_trajectory_df) and os.path.exists(path_fit_roid):
-        logger.info("Removing files :\n\t{}\n\t{}".format(path_trajectory_df, path_fit_roid))
+        logger.info(
+            "Removing files :\n\t{}\n\t{}".format(path_trajectory_df, path_fit_roid)
+        )
         try:
             os.remove(path_trajectory_df)
             os.remove(path_fit_roid)
@@ -513,8 +514,17 @@ def yes_reset_fitroid(arguments, output_path):  # pragma: no cover
     else:
         logger.info("File trajectory and fit roid not exists.")
 
-    if os.path.exists(path_orbit) and os.path.exists(path_trajectory_orb) and os.path.exists(path_old_orbits) and os.path.exists(path_ephem):
-        logger.info("Removing files :\n\t{}\n\t{}\n\t{}\n\t".format(path_orbit, path_trajectory_orb, path_old_orbits, path_ephem))
+    if (
+        os.path.exists(path_orbit)
+        and os.path.exists(path_trajectory_orb)
+        and os.path.exists(path_old_orbits)
+        and os.path.exists(path_ephem)
+    ):
+        logger.info(
+            "Removing files :\n\t{}\n\t{}\n\t{}\n\t{}".format(
+                path_orbit, path_trajectory_orb, path_old_orbits, path_ephem
+            )
+        )
         try:
             os.remove(path_orbit)
             os.remove(path_trajectory_orb)
@@ -539,16 +549,20 @@ def yes_reset_fitroid_offline(arguments, output_path, config):
     if os.path.exists(log_path):
         logger.info(f"Removing logs at this location: {log_path}")
         shutil.rmtree(log_path)
-    
+
     if roid_mode == "local":
         if os.path.exists(roid_path):
-            logger.info(f"Removing the roid science module output at this location: {roid_path}")
+            logger.info(
+                f"Removing the roid science module output at this location: {roid_path}"
+            )
             shutil.rmtree(roid_path)
     else:
-        logger.warning("The loading mode of the data output by the roid science module has been set to 'spark' in the config file !")
-        logger.info(f"To remove them: run in the terminal 'hdfs dfs -rm -r {roid_path}'")
-
-
+        logger.warning(
+            "The loading mode of the data output by the roid science module has been set to 'spark' in the config file !"
+        )
+        logger.info(
+            f"To remove them: run in the terminal 'hdfs dfs -rm -r {roid_path}'"
+        )
 
 
 def no_reset():  # pragma: no cover
