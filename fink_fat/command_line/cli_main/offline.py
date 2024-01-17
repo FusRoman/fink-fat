@@ -22,6 +22,9 @@ from fink_fat.command_line.association_cli import (
     no_reset,
 )
 from fink_fat.others.utils import init_logging
+from fink_fat.command_line.cli_main.offline_fitroid.offline_fitroid import (
+    offline_fitroid,
+)
 
 
 def cli_offline(arguments, config, output_path):
@@ -38,13 +41,13 @@ def cli_offline(arguments, config, output_path):
         path where are located the fink-fat data
     """
     logger = init_logging()
-    logger.info("offline mode")
 
     output_path, object_class = get_class(arguments, output_path)
 
     # path to the associations data
     tr_df_path = os.path.join(output_path, "trajectory_df.parquet")
     obs_df_path = os.path.join(output_path, "old_obs.parquet")
+    fitroid_path = os.path.join(output_path, "fit_roid.parquet")
 
     # path to the orbit data
     orb_res_path = os.path.join(output_path, "orbital.parquet")
@@ -88,7 +91,12 @@ def cli_offline(arguments, config, output_path):
     current_date = datetime.datetime.now() - delta_day
 
     # test if the trajectory_df and old_obs_df exists in the output directory.
-    if os.path.exists(tr_df_path) and os.path.exists(obs_df_path):
+    if object_class == "SSO fitroid":
+        test_path = os.path.exists(tr_df_path) and os.path.exists(fitroid_path)
+    else:
+        test_path = os.path.exists(tr_df_path) and os.path.exists(obs_df_path)
+
+    if test_path:
         if arguments["<start>"] is not None:
             logger.info("A save of trajectories candidates already exists.")
             logger.info(
@@ -100,18 +108,34 @@ def cli_offline(arguments, config, output_path):
             logger.info("Abort offline mode.")
             exit()
 
-        trajectory_df = pd.read_parquet(tr_df_path)
-        old_obs_df = pd.read_parquet(obs_df_path)
+        # 1.0 case: load the fit_roid parquet
+        if object_class == "SSO fitroid":
+            fitroid_df = pd.read_parquet(fitroid_path)
+            current_date = max(
+                pd.to_datetime(fitroid_df["last_assoc_date"], format="%Y-%m-%d")
+            )
+            current_date += delta_day
 
-        # first case: trajectories already exists: begin the offline mode with the last associations date + 1
-        last_tr_date = pd.to_datetime(
-            trajectory_df["last_assoc_date"], format="%Y-%m-%d"
+        # version < 1.0: load trajectory_df and old_obs parquet
+        else:
+            trajectory_df = pd.read_parquet(tr_df_path)
+            old_obs_df = pd.read_parquet(obs_df_path)
+
+            # first case: trajectories already exists: begin the offline mode with the last associations date + 1
+            last_tr_date = pd.to_datetime(
+                trajectory_df["last_assoc_date"], format="%Y-%m-%d"
+            )
+
+            last_obs_date = pd.to_datetime(
+                old_obs_df["last_assoc_date"], format="%Y-%m-%d"
+            )
+
+            current_date = max(last_tr_date.max(), last_obs_date.max())
+            current_date += delta_day
+
+        logger.info(
+            f"Start offline mode with the previous reconstructed trajectory, start date = {current_date.date()}"
         )
-
-        last_obs_date = pd.to_datetime(old_obs_df["last_assoc_date"], format="%Y-%m-%d")
-
-        current_date = max(last_tr_date.max(), last_obs_date.max())
-        current_date += delta_day
 
     # last case: <start> options given by the user, start the offline mode from this date.
     if arguments["<start>"] is not None:
@@ -124,7 +148,15 @@ def cli_offline(arguments, config, output_path):
     today = datetime.datetime.now().date()
 
     if current_date.date() > stop_date.date():
-        logger.info("Error !!! Start date is greater than stop date.")
+        logger.error(
+            f"Start date {current_date.date()} is greater than stop date {stop_date.date()}."
+        )
+        exit()
+
+    if current_date.date() == stop_date.date():
+        logger.warn(
+            f"Start date {current_date.date()} = stop date {stop_date.date()}.\n\tStart the offline mode with the argument <start> strictly greater than stop date."
+        )
         exit()
 
     orb_df = pd.DataFrame()
@@ -144,6 +176,19 @@ def cli_offline(arguments, config, output_path):
 
     stats_dict = {}
 
+    if object_class == "SSO fitroid":
+        offline_fitroid(
+            config,
+            arguments["--config"],
+            current_date,
+            stop_date,
+            logger,
+            arguments["--verbose"],
+        )
+        return
+
+    if arguments["--verbose"]:
+        logger.info("start the offline mode")
     while True:
         if arguments["--verbose"]:
             logger.info("current processing date: {}".format(current_date))

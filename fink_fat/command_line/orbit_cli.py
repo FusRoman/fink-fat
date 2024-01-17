@@ -1,5 +1,4 @@
 import os
-import subprocess
 import time
 from typing import Tuple
 import pandas as pd
@@ -12,6 +11,7 @@ from fink_fat.orbit_fitting.orbfit_local import (
     compute_df_orbit_param,
 )
 from fink_fat.command_line.utils_cli import assig_tags
+import fink_fat.others.launch_spark as spark
 
 
 def intro_reset_orbit():  # pragma: no cover
@@ -61,7 +61,12 @@ def get_orbital_data(config, tr_df_path):  # pragma: no cover
 
 
 def cluster_mode(
-    config: dict, traj_to_orbital: pd.DataFrame, year: str, month: str, day: str
+    config: dict,
+    traj_to_orbital: pd.DataFrame,
+    year: str,
+    month: str,
+    day: str,
+    verbose: bool = False,
 ) -> pd.DataFrame:  # pragma: no cover
     """
     Compute orbits using the cluster mode
@@ -101,24 +106,12 @@ def cluster_mode(
     prop_epoch = config["SOLVE_ORBIT_PARAMS"]["prop_epoch"]
     orbfit_verbose = config["SOLVE_ORBIT_PARAMS"]["orbfit_verbose"]
 
-    master_manager = config["SOLVE_ORBIT_PARAMS"]["manager"]
-    principal_group = config["SOLVE_ORBIT_PARAMS"]["principal"]
-    secret = config["SOLVE_ORBIT_PARAMS"]["secret"]
-    role = config["SOLVE_ORBIT_PARAMS"]["role"]
-    executor_env = config["SOLVE_ORBIT_PARAMS"]["exec_env"]
-    driver_mem = config["SOLVE_ORBIT_PARAMS"]["driver_memory"]
-    exec_mem = config["SOLVE_ORBIT_PARAMS"]["executor_memory"]
-    max_core = config["SOLVE_ORBIT_PARAMS"]["max_core"]
-    exec_core = config["SOLVE_ORBIT_PARAMS"]["executor_core"]
-    orbfit_home = config["SOLVE_ORBIT_PARAMS"]["orbfit_path"]
-
     application = os.path.join(
         os.path.dirname(fink_fat.__file__),
         "orbit_fitting",
         "orbfit_cluster.py prod",
     )
 
-    application += " " + master_manager
     application += " " + ram_dir
     application += " " + n_triplets
     application += " " + noise_ntrials
@@ -128,33 +121,17 @@ def cluster_mode(
     application += " " + month
     application += " " + day
 
-    # FIXME
-    # temporary dependencies (only during the performance test phase)
-    FINK_FAT = "/home/roman.le-montagner/home_big_storage/Doctorat/Asteroids/fink-fat/dist/fink_fat-1.0.0-py3.9.egg"
-    FINK_SCIENCE = "/home/roman.le-montagner/home_big_storage/Doctorat/fink-science/dist/fink_science-4.4-py3.7.egg"
-
-    spark_submit = f"spark-submit \
-        --master {master_manager} \
-        --conf spark.mesos.principal={principal_group} \
-        --conf spark.mesos.secret={secret} \
-        --conf spark.mesos.role={role} \
-        --conf spark.executorEnv.HOME={executor_env} \
-        --driver-memory {driver_mem}G \
-        --executor-memory {exec_mem}G \
-        --conf spark.cores.max={max_core} \
-        --conf spark.executor.cores={exec_core} \
-        --conf spark.driver.maxResultSize=6G\
-        --conf spark.sql.execution.arrow.pyspark.enabled=true\
-        --conf spark.sql.execution.arrow.maxRecordsPerBatch=1000000\
-        --conf spark.kryoserializer.buffer.max=512m\
-        --conf spark.executorEnv.ORBFIT_HOME={orbfit_home} \
-        --py-files {FINK_FAT},{FINK_SCIENCE}\
-        {application}"
-
-    process = subprocess.run(spark_submit, shell=True)
+    spark_submit = spark.build_spark_submit(config)
+    spark_app = spark.spark_submit_application(spark_submit, application)
+    process = spark.run_spark_submit(spark_app, verbose)
 
     if process.returncode != 0:
         logger = init_logging()
+        logger.error(
+            f"""
+    Spark orbit fitting exited with a non-zero return code: {process.returncode}
+"""
+        )
         logger.info(process.stderr)
         logger.info(process.stdout)
         exit()
@@ -218,7 +195,7 @@ def switch_local_cluster(
             traj_orb = traj_orb.drop("estimator_id", axis=1)
         if "ffdistnr" in traj_cols:
             traj_orb = traj_orb.drop("ffdistnr", axis=1)
-        new_orbit_pdf = cluster_mode(config, traj_orb, year, month, day)
+        new_orbit_pdf = cluster_mode(config, traj_orb, year, month, day, verbose)
     else:
         config_epoch = config["SOLVE_ORBIT_PARAMS"]["prop_epoch"]
         prop_epoch = None if config_epoch == "None" else float(config_epoch)

@@ -9,11 +9,12 @@ from fink_fat.others.utils import init_logging, LoggerNewLine
 
 from astropy.time import Time
 import fink_fat
-import subprocess
 from pyspark.sql.functions import col
 from fink_fat.command_line.utils_cli import string_to_bool
 import configparser
 import pathlib
+
+import fink_fat.others.launch_spark as sp
 
 
 def request_fink(
@@ -413,24 +414,12 @@ def get_last_roid_streaming_alert(
         if not os.path.isdir(output_path_spark):
             pathlib.Path(output_path_spark).mkdir(parents=True)
 
-        # load alerts from spark
-        master_manager = config["SOLVE_ORBIT_PARAMS"]["manager"]
-        principal_group = config["SOLVE_ORBIT_PARAMS"]["principal"]
-        secret = config["SOLVE_ORBIT_PARAMS"]["secret"]
-        role = config["SOLVE_ORBIT_PARAMS"]["role"]
-        executor_env = config["SOLVE_ORBIT_PARAMS"]["exec_env"]
-        driver_mem = config["SOLVE_ORBIT_PARAMS"]["driver_memory"]
-        exec_mem = config["SOLVE_ORBIT_PARAMS"]["executor_memory"]
-        max_core = config["SOLVE_ORBIT_PARAMS"]["max_core"]
-        exec_core = config["SOLVE_ORBIT_PARAMS"]["executor_core"]
-
         application = os.path.join(
             os.path.dirname(fink_fat.__file__),
             "command_line",
             "association_cli.py prod",
         )
 
-        application += " " + master_manager
         application += " " + input_path
         application += " " + output_path_spark
         application += " " + str(is_mpc)
@@ -438,33 +427,17 @@ def get_last_roid_streaming_alert(
         application += " " + month
         application += " " + day
 
-        # FIXME
-        # temporary dependencies (only during the performance test phase)
-        FINK_FAT = "/home/roman.le-montagner/home_big_storage/Doctorat/Asteroids/fink-fat/dist/fink_fat-1.0.0-py3.9.egg"
-        FINK_SCIENCE = "/home/roman.le-montagner/home_big_storage/Doctorat/fink-science/dist/fink_science-4.4-py3.7.egg"
+        spark_submit = sp.build_spark_submit(config)
+        spark_app = sp.spark_submit_application(spark_submit, application)
+        process = sp.run_spark_submit(spark_app, verbose)
 
-        spark_submit = f"spark-submit \
-            --master {master_manager} \
-            --conf spark.mesos.principal={principal_group} \
-            --conf spark.mesos.secret={secret} \
-            --conf spark.mesos.role={role} \
-            --conf spark.executorEnv.HOME={executor_env} \
-            --driver-memory {driver_mem}G \
-            --executor-memory {exec_mem}G \
-            --conf spark.cores.max={max_core} \
-            --conf spark.executor.cores={exec_core} \
-            --conf spark.driver.maxResultSize=6G\
-            --conf spark.sql.execution.arrow.pyspark.enabled=true\
-            --conf spark.sql.execution.arrow.maxRecordsPerBatch=1000000\
-            --conf spark.kryoserializer.buffer.max=512m\
-            --py-files {FINK_FAT},{FINK_SCIENCE}\
-            {application}"
-
-        if verbose:
-            logger.info("run recovering of data with spark")
-        process = subprocess.run(spark_submit, shell=True)
         if process.returncode != 0:
             logger = init_logging()
+            logger.error(
+                f"""
+    Recovering of stream data with spark exited with a non-zero return code: {process.returncode}
+"""
+            )
             logger.info(process.stderr)
             logger.info(process.stdout)
             return pd.DataFrame(columns=cols_to_keep)
@@ -609,22 +582,17 @@ if __name__ == "__main__":  # pragma: no cover
 
         sys.exit(doctest.testmod()[0])
     elif sys.argv[1] == "prod":
-        from pyspark.sql import SparkSession
+        from fink_utils.broker.sparkUtils import init_sparksession
 
         logger = init_logging()
-        master_adress = str(sys.argv[2])
-        read_path = str(sys.argv[3])
-        output_path = str(sys.argv[4])
-        is_mpc = string_to_bool(str(sys.argv[5]))
-        year = sys.argv[6]
-        month = sys.argv[7]
-        day = sys.argv[8]
+        read_path = str(sys.argv[2])
+        output_path = str(sys.argv[3])
+        is_mpc = string_to_bool(str(sys.argv[4]))
+        year = sys.argv[5]
+        month = sys.argv[6]
+        day = sys.argv[7]
 
-        spark = (
-            SparkSession.builder.master(master_adress)
-            .appName(f"FINK-FAT_recover_stream_data_{year}{month}{day}")
-            .getOrCreate()
-        )
+        spark = init_sparksession(f"FINK-FAT_recover_stream_data_{year}{month}{day}")
         df = spark.read.load(read_path)
         df = df.select(
             "objectId",

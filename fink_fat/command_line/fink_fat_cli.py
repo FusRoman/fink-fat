@@ -1,10 +1,9 @@
 """
 Usage:
     fink_fat associations (mpc | candidates | fitroid) [--night <date>] [--filepath <filepath>] [options]
-    fink_fat kalman (mpc | candidates) [--night <date>] [options]
     fink_fat solve_orbit (mpc | candidates) (local | cluster) [options]
     fink_fat merge_orbit (mpc | candidates) [options]
-    fink_fat offline (mpc | candidates) (local | cluster) <end> [<start>] [options]
+    fink_fat offline (mpc (local | cluster) | candidates (local | cluster) | fitroid) <end> [<start>] [options]
     fink_fat stats (mpc | candidates) [--mpc-data <path>] [options]
     fink_fat -h | --help
     fink_fat --version
@@ -73,10 +72,11 @@ def fink_fat_main(arguments):
 
         cli_associations(arguments, config, output_path)
 
-    elif arguments["kalman"]:
-        from fink_fat.command_line.cli_main.kalman import cli_kalman_associations
+    # DEPRECATED
+    # elif arguments["kalman"]:
+    #     from fink_fat.command_line.cli_main.kalman import cli_kalman_associations
 
-        cli_kalman_associations(arguments, config, output_path)
+    #     cli_kalman_associations(arguments, config, output_path)
 
     elif arguments["solve_orbit"]:
         from fink_fat.command_line.cli_main.solve_orbit import cli_solve_orbit
