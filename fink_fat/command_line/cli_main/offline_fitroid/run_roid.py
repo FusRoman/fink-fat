@@ -12,7 +12,9 @@ from fink_fat.command_line.utils_cli import init_cli
 from pyspark.sql import SparkSession
 
 
-def addFileToSpark(spark: SparkSession, fitroid_path: str, orbit_path: str, ephem_path: str):
+def addFileToSpark(
+    spark: SparkSession, fitroid_path: str, orbit_path: str, ephem_path: str
+):
     if os.path.exists(orbit_path):
         spark.sparkContext.addFile(orbit_path)
     if os.path.exists(fitroid_path):
@@ -22,11 +24,8 @@ def addFileToSpark(spark: SparkSession, fitroid_path: str, orbit_path: str, ephe
 
 
 if __name__ == "__main__":
-
     year, month, day, path_config = sys.argv[1:]
-    config, output_path = init_cli(
-        {"--config": path_config}
-    )
+    config, output_path = init_cli({"--config": path_config})
 
     path_orbit = os.path.join(output_path, "fitroid", "orbital.parquet")
     path_fit_roid = os.path.join(output_path, "fitroid", "fit_roid.parquet")
@@ -37,28 +36,27 @@ if __name__ == "__main__":
         datapath, f"year={int(year):04d}/month={int(month):02d}/day={int(day):02d}"
     )
 
-    spark = init_sparksession(f"FINK-FAT_roid_module_{int(year):04d}{int(month):02d}{int(day):02d}")
+    spark = init_sparksession(
+        f"FINK-FAT_roid_module_{int(year):04d}{int(month):02d}{int(day):02d}"
+    )
     addFileToSpark(spark, path_fit_roid, path_orbit, path_ephem)
 
-    userschema = spark\
-        .read\
-        .parquet(path_sso)\
-        .schema
+    userschema = spark.read.parquet(path_sso).schema
 
-    df = spark\
-        .read\
-        .format('parquet')\
-        .schema(userschema)\
-        .option("basePath", path_sso) \
-        .option("path", path_sso)\
+    df = (
+        spark.read.format("parquet")
+        .schema(userschema)
+        .option("basePath", path_sso)
+        .option("path", path_sso)
         .load()
+    )
 
     what = ["jd", "magpsf"]
     prefix = "c"
     what_prefix = [prefix + i for i in what]
     for colname in what:
         df = concat_col(df, colname, prefix=prefix)
-    
+
     args = [
         "candidate.ra",
         "candidate.dec",
@@ -82,17 +80,16 @@ if __name__ == "__main__":
     df = df.withColumn("ff_roid", roid_catcher(*args))
     df = df.drop(*what_prefix)
 
-    df = df.select([
-        col 
-        for col in df.columns 
-        if col not in ["cutoutScience", "cutoutDifference", "cutoutTemplate"]
-    ])
+    df = df.select(
+        [
+            col
+            for col in df.columns
+            if col not in ["cutoutScience", "cutoutDifference", "cutoutTemplate"]
+        ]
+    )
 
     t_before = t.time()
-    df\
-    .write\
-    .mode("ignore")\
-    .parquet(
+    df.write.mode("ignore").parquet(
         os.path.join(
             config["OUTPUT"]["roid_module_output"],
             f"year={int(year):04d}",

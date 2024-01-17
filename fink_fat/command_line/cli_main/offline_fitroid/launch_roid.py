@@ -28,12 +28,10 @@ if __name__ == "__main__":
 
     year, month, day = sys.argv[1], sys.argv[2], sys.argv[3]
     path_offline = sys.argv[4]
-    path_config=sys.argv[5]
+    path_config = sys.argv[5]
     verbose = sys.argv[6]
 
-    config, output_path = init_cli(
-        {"--config": path_config}
-    )
+    config, output_path = init_cli({"--config": path_config})
 
     # load alerts from spark
     master_manager = config["SOLVE_ORBIT_PARAMS"]["manager"]

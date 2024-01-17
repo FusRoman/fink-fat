@@ -6,6 +6,8 @@ import fink_fat
 import configparser
 import pathlib
 
+from fink_fat.others.utils import init_logging
+
 
 def offline_fitroid(
     config: configparser.ConfigParser,
@@ -39,4 +41,9 @@ def offline_fitroid(
         ),
         shell=True,
     )
+
+    if proc.returncode != 0:
+        logger = init_logging()
+        logger.info(proc.stderr)
+        logger.info(proc.stdout)
     return
