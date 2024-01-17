@@ -132,6 +132,30 @@ def fitroid_associations(
     path_fit_roid = os.path.join(output_path, "fit_roid.parquet")
     path_trajectory_df = os.path.join(output_path, "trajectory_df.parquet")
 
+    if os.path.exists(path_fit_roid):
+        fit_roid_last_assoc = pd.read_parquet(path_fit_roid, columns=["last_assoc_date"])
+        last_assoc_date = max(pd.to_datetime(
+            fit_roid_last_assoc["last_assoc_date"], format="%Y-%m-%d"
+        ))
+
+        current_date = datetime.datetime.strptime(last_night, "%Y-%m-%d")
+
+        if last_assoc_date == current_date:
+            logger.newline()
+            logger.error("Association already done for this night.")
+            logger.info("Wait a next observation night and the end of the alert stream to start a new run of association.")
+            exit()
+        if last_assoc_date > current_date:
+            logger.newline()
+            logger.error(
+                "Try to associates alerts from a night before the last night recorded in the trajectories"
+            )
+            logger.info(
+                "Maybe try with a more recent night or reset the associations with 'fink_fat association -r'"
+            )
+            exit()
+
+
     # load the alerts from the last streaming night (roid science module with fink-fat must have been run)
     alerts_night = get_last_roid_streaming_alert(
         config, last_night, output_path, is_mpc, arguments["--verbose"], logger
@@ -283,7 +307,9 @@ roid count:
             fit_roid_df["orbfit_test"] = 0
         nb_new_trcand = len(fit_roid_df)
 
-    trajectory_df["trajectory_id"] = trajectory_df["trajectory_id"].astype(int)
+    with pd.option_context("mode.chained_assignment", None):
+        trajectory_df["trajectory_id"] = trajectory_df["trajectory_id"].astype(int)
+
     if "updated" not in trajectory_df:
         trajectory_df["updated"] = "N"
     trajectory_df, fit_roid_df, trajectory_orb, orbits = trcand_to_orbit(
@@ -377,11 +403,18 @@ orbits trajectories size:
             t_before = time.time()
 
         launch_spark_ephem(
-            config, path_orbit, os.path.join(output_path, "ephem.parquet"), year, month, day
+            config,
+            path_orbit,
+            os.path.join(output_path, "ephem.parquet"),
+            year,
+            month,
+            day,
         )
 
         if arguments["--verbose"]:
-            logger.info(f"ephemeries computing time: {time.time() - t_before:.4f} seconds")
+            logger.info(
+                f"ephemeries computing time: {time.time() - t_before:.4f} seconds"
+            )
             logger.newline()
 
     if arguments["--verbose"]:

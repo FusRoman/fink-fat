@@ -488,6 +488,69 @@ def yes_reset(arguments, tr_df_path, obs_df_path):  # pragma: no cover
         shutil.rmtree(save_path)
 
 
+def yes_reset_fitroid(arguments, output_path):  # pragma: no cover
+
+    # path to the orbits data
+    path_orbit = os.path.join(output_path, "orbital.parquet")
+    path_trajectory_orb = os.path.join(output_path, "trajectory_orb.parquet")
+    path_old_orbits = os.path.join(output_path, "old_orbits.parquet")
+    path_ephem = os.path.join(output_path, "ephem.parquet")
+
+    # path to the candidate trajectories
+    path_fit_roid = os.path.join(output_path, "fit_roid.parquet")
+    path_trajectory_df = os.path.join(output_path, "trajectory_df.parquet")
+
+    logger = init_logging()
+    if os.path.exists(path_trajectory_df) and os.path.exists(path_fit_roid):
+        logger.info("Removing files :\n\t{}\n\t{}".format(path_trajectory_df, path_fit_roid))
+        try:
+            os.remove(path_trajectory_df)
+            os.remove(path_fit_roid)
+        except OSError as e:
+            if arguments["--verbose"]:
+                logger.info("Failed with:", e.strerror)
+                logger.info("Error code:", e.code)
+    else:
+        logger.info("File trajectory and fit roid not exists.")
+
+    if os.path.exists(path_orbit) and os.path.exists(path_trajectory_orb) and os.path.exists(path_old_orbits) and os.path.exists(path_ephem):
+        logger.info("Removing files :\n\t{}\n\t{}\n\t{}\n\t".format(path_orbit, path_trajectory_orb, path_old_orbits, path_ephem))
+        try:
+            os.remove(path_orbit)
+            os.remove(path_trajectory_orb)
+            os.remove(path_old_orbits)
+            os.remove(path_ephem)
+        except OSError as e:
+            if arguments["--verbose"]:
+                logger.info("Failed with:", e.strerror)
+                logger.info("Error code:", e.code)
+    else:
+        logger.info("Orbits files not exists not exists.")
+
+
+def yes_reset_fitroid_offline(arguments, output_path, config):
+    logger = init_logging()
+    yes_reset_fitroid(arguments, output_path)
+
+    log_path = config["OFFLINE"]["log_path"]
+    roid_mode = config["OUTPUT"]["roid_path_mode"]
+    roid_path = config["OUTPUT"]["roid_module_output"]
+
+    if os.path.exists(log_path):
+        logger.info(f"Removing logs at this location: {log_path}")
+        shutil.rmtree(log_path)
+    
+    if roid_mode == "local":
+        if os.path.exists(roid_path):
+            logger.info(f"Removing the roid science module output at this location: {roid_path}")
+            shutil.rmtree(roid_path)
+    else:
+        logger.warning("The loading mode of the data output by the roid science module has been set to 'spark' in the config file !")
+        logger.info(f"To remove them: run in the terminal 'hdfs dfs -rm -r {roid_path}'")
+
+
+
+
 def no_reset():  # pragma: no cover
     logger = init_logging()
     logger.info("Abort reset.")

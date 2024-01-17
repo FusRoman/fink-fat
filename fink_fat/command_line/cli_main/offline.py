@@ -11,7 +11,7 @@ from fink_fat.command_line.utils_cli import (
     get_class,
     string_to_bool,
     yes_or_no,
-    assig_tags,
+    assig_tags
 )
 
 from fink_fat.associations.inter_night_associations import night_to_night_association
@@ -20,6 +20,7 @@ from fink_fat.orbit_fitting.orbfit_local import compute_df_orbit_param
 from fink_fat.command_line.association_cli import (
     get_last_sso_alert,
     no_reset,
+    yes_reset_fitroid_offline
 )
 from fink_fat.others.utils import init_logging
 from fink_fat.command_line.cli_main.offline_fitroid.offline_fitroid import (
@@ -55,18 +56,26 @@ def cli_offline(arguments, config, output_path):
 
     # remove the save data from previous associations if the user say yes
     if arguments["--reset"]:
-        yes_or_no(
-            offline_intro_reset,
-            offline_yes_reset,
-            no_reset,
-            yes_args=(
-                arguments,
-                tr_df_path,
-                obs_df_path,
-                orb_res_path,
-                traj_orb_path,
-            ),
-        )
+        if object_class == "SSO fitroid":
+            yes_or_no(
+                offline_intro_reset,
+                yes_reset_fitroid_offline,
+                no_reset,
+                yes_args=(arguments, output_path, config),
+            )
+        else:
+            yes_or_no(
+                offline_intro_reset,
+                offline_yes_reset,
+                no_reset,
+                yes_args=(
+                    arguments,
+                    tr_df_path,
+                    obs_df_path,
+                    orb_res_path,
+                    traj_orb_path,
+                ),
+            )
 
     trajectory_columns = [
         "ra",

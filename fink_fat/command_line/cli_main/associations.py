@@ -22,6 +22,7 @@ from fink_fat.command_line.association_cli import (
     intro_reset,
     no_reset,
     yes_reset,
+    yes_reset_fitroid
 )
 
 from fink_fat.others.utils import cast_obs_data, init_logging
@@ -46,21 +47,29 @@ def cli_associations(arguments, config, output_path):
     # get the path according to the class mpc or candidates
     output_path, object_class = get_class(arguments, output_path)
 
-    if object_class == "SSO fitroid":
-        fitroid_associations(arguments, config, logger, output_path)
-        return
-
     tr_df_path = os.path.join(output_path, "trajectory_df.parquet")
     obs_df_path = os.path.join(output_path, "old_obs.parquet")
 
     # remove the save data from previous associations if the user say yes
     if arguments["--reset"]:
-        yes_or_no(
-            intro_reset,
-            yes_reset,
-            no_reset,
-            yes_args=(arguments, tr_df_path, obs_df_path),
-        )
+        if object_class == "SSO fitroid":
+            yes_or_no(
+                intro_reset,
+                yes_reset_fitroid,
+                no_reset,
+                yes_args=(arguments, output_path),
+            )
+        else:
+            yes_or_no(
+                intro_reset,
+                yes_reset,
+                no_reset,
+                yes_args=(arguments, tr_df_path, obs_df_path),
+            )
+
+    if object_class == "SSO fitroid":
+        fitroid_associations(arguments, config, logger, output_path)
+        return
 
     last_night = datetime.datetime.now() - datetime.timedelta(days=1)
     last_night = last_night.strftime("%Y-%m-%d")
@@ -93,7 +102,7 @@ def cli_associations(arguments, config, output_path):
                 "Query alerts from a night before the last night in the recorded trajectory/old_observations."
             )
             logger.info(
-                "Maybe try with a more recent night or reset the associations with 'fink_fat association -r'"
+                "Maybe try with a more recent night or reset the associations with 'fink_fat association fitroid -r'"
             )
             exit()
 
