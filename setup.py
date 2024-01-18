@@ -41,7 +41,8 @@ setup(
         "healpy==1.16.6",
         "pandera==0.18.0",
         "lxml>=4.9.3",
-        "slack_sdk>=3.26.2"
+        "slack_sdk>=3.26.2",
+        "pickle5>=0.0.11"
     ],
     entry_points={
         "console_scripts": ["fink_fat=fink_fat.command_line.fink_fat_cli:main"]

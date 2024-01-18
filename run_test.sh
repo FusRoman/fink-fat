@@ -37,13 +37,13 @@ done
 # Run the test suite
 for filename in fink_fat/others/*.py
 do
-  if [[ "$filename" != "fink_fat/others/spark_ephem_utils.py"]]; then
-    echo $filename
-    # Run test suite + coverage
-    coverage run \
-      --source=${ROOTPATH} \
-      --rcfile ${ROOTPATH}/.coveragerc $filename
-  fi
+    if [[ "$filename" != "fink_fat/others/spark_ephem_utils.py" ]]; then
+        echo $filename
+        # Run test suite + coverage
+        coverage run \
+        --source=${ROOTPATH} \
+        --rcfile ${ROOTPATH}/.coveragerc $filename
+    fi
 done
 
 

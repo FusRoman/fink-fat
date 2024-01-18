@@ -32,7 +32,8 @@ jobs:
 
     - name: Install Orbfit
       run: |
-        ./script/orbFit_installer.sh --install_path /home/libs
+        mkdir /home/libs/Orbfit
+        ./script/orbFit_installer.sh --install_path /home/libs/Orbfit
         source ~/.bash_profile
   
     - name: Set up env [1/2]
