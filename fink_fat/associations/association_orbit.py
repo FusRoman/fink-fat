@@ -4,6 +4,7 @@ from typing import Tuple
 
 from fink_fat.command_line.orbit_cli import switch_local_cluster
 from fink_fat.others.utils import LoggerNewLine
+from fink_fat.orbit_fitting.utils import orb_class
 
 
 def generate_fake_traj_id(orb_pdf: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
@@ -40,7 +41,7 @@ def orbit_associations(
     last_night: str,
     logger: LoggerNewLine,
     verbose: bool,
-) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.Series]:
     """
     Add the alerts 5-flagged to the trajectory_df and recompute the orbit with the new points.
 
@@ -61,8 +62,8 @@ def orbit_associations(
 
     Returns
     -------
-    Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]
-        the new orbits, the updated trajectories and the old orbits
+    Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.Series]
+        the new orbits, the updated trajectories and the old orbits, the id of the updated orbits
     """
     if verbose:
         logger.info("start the associations with the orbits")
@@ -78,7 +79,7 @@ def orbit_associations(
         .drop("roid", axis=1)
     )
     if len(orbit_alert_assoc) == 0:
-        return orbits, trajectory_df, pd.DataFrame(columns=orbits.columns)
+        return orbits, trajectory_df, pd.DataFrame(columns=orbits.columns), pd.Series()
 
     updated_sso_id = orbit_alert_assoc["ssoCandId"].unique()
     # get the trajectories to update
@@ -109,6 +110,7 @@ def orbit_associations(
         )
         logger.newline(2)
     new_orbit_pdf["ssoCandId"] = new_orbit_pdf["trajectory_id"].map(trid_to_ssoid)
+    new_orbit_pdf = orb_class(new_orbit_pdf)
     updated_id = new_orbit_pdf["ssoCandId"]
 
     # update orbit
@@ -124,4 +126,4 @@ def orbit_associations(
     old_traj = trajectory_df[~trajectory_df["ssoCandId"].isin(updated_id)]
 
     trajectory_df = pd.concat([old_traj, new_traj])[traj_cols_to_keep]
-    return orbits, trajectory_df, old_orbit
+    return orbits, trajectory_df, old_orbit, updated_id

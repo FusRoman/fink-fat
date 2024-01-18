@@ -26,7 +26,7 @@ from fink_fat.others.utils import LoggerNewLine
 import fink_fat.slack_bot.slack_bot as slack
 
 
-def get_default_input():
+def get_default_input() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """_summary_
 
     Returns
@@ -50,31 +50,33 @@ def get_default_input():
         ]
     )
 
-    orbits = pd.DataFrame(
-        columns=[
-            "ref_epoch",
-            "a",
-            "e",
-            "i",
-            "long. node",
-            "arg. peric",
-            "mean anomaly",
-            "rms_a",
-            "rms_e",
-            "rms_i",
-            "rms_long. node",
-            "rms_arg. peric",
-            "rms_mean anomaly",
-            "chi_reduced",
-            "last_ra",
-            "last_dec",
-            "last_jd",
-            "last_mag",
-            "last_fid",
-            "ssoCandId",
-        ]
-    )
-    return trajectory_orb, orbits
+    orb_cols = [
+        "ref_epoch",
+        "a",
+        "e",
+        "i",
+        "long. node",
+        "arg. peric",
+        "mean anomaly",
+        "rms_a",
+        "rms_e",
+        "rms_i",
+        "rms_long. node",
+        "rms_arg. peric",
+        "rms_mean anomaly",
+        "chi_reduced",
+        "last_ra",
+        "last_dec",
+        "last_jd",
+        "last_mag",
+        "last_fid",
+        "ssoCandId",
+        "class",
+    ]
+
+    orbits = pd.DataFrame(columns=orb_cols)
+    old_orbits = pd.DataFrame(columns=orb_cols)
+    return trajectory_orb, orbits, old_orbits
 
 
 def roid_flags(config: configparser.ConfigParser) -> Tuple[bool, list]:
@@ -209,7 +211,8 @@ roid count:
             )
         )
 
-    trajectory_orb, orbits = get_default_input()
+    trajectory_orb, orbits, old_orbits = get_default_input()
+    new_or_updated_orbits = []
 
     # associations between trajectories with orbit and the new alerts associated with ephemeride
     if os.path.exists(path_orbit) and os.path.exists(path_trajectory_orb):
@@ -217,9 +220,12 @@ roid count:
             logger.info("orbits file detected, start the associations with the orbits")
         orbits = pd.read_parquet(path_orbit)
         trajectory_orb = pd.read_parquet(path_trajectory_orb)
-        orbits, trajectory_orb, old_orbits = orbit_associations(
+
+        orbits, trajectory_orb, old_orbits, updated_ssocandid = orbit_associations(
             config, alerts_night, trajectory_orb, orbits, last_night, logger, True
         )
+        new_or_updated_orbits += updated_ssocandid.tolist()
+
         if os.path.exists(path_old_orbits):
             save_old_orbits = pd.read_parquet(path_old_orbits)
             old_orbits = pd.concat([save_old_orbits, old_orbits])
@@ -316,7 +322,7 @@ roid count:
 
     if "updated" not in trajectory_df:
         trajectory_df["updated"] = "N"
-    trajectory_df, fit_roid_df, trajectory_orb, orbits = trcand_to_orbit(
+    trajectory_df, fit_roid_df, trajectory_orb, orbits, new_ssoCandId = trcand_to_orbit(
         config,
         trajectory_df,
         trajectory_orb,
@@ -326,6 +332,7 @@ roid count:
         logger,
         True,
     )
+    new_or_updated_orbits += new_ssoCandId.tolist()
 
     nb_tr_before_tw = len(fit_roid_df)
     trajectory_df, fit_roid_df = time_window(
@@ -368,7 +375,13 @@ number of polyfit trajectories: {nb_trcand}
 
         if post_on_slack:
             slack.post_assoc_on_slack(
-                last_night, statistic_string, trajectory_df, trajectory_orb
+                last_night,
+                statistic_string,
+                trajectory_df,
+                trajectory_orb,
+                orbits,
+                old_orbits,
+                new_or_updated_orbits,
             )
 
         if arguments["--verbose"]:

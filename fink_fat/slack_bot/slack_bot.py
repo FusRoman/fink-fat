@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import io
 
 from fink_fat.others.utils import init_logging
+from fink_fat.orbit_fitting.utils import best_orbits
 
 
 def init_slackbot() -> WebClient:
@@ -21,15 +22,19 @@ def init_slackbot() -> WebClient:
     return client
 
 
-def post_msg_on_slack(webclient: WebClient, msg: str):
+def post_msg_on_slack(webclient: WebClient, msg: list):
     logging = init_logging()
     try:
-        webclient.chat_postMessage(
-            channel="#bot_asteroid_test",
-            text=msg,
-            blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": msg}}],
-        )
-        logging.info("Post msg on slack successfull")
+        for tmp_msg in msg:
+            webclient.chat_postMessage(
+                channel="#bot_asteroid_test",
+                text=tmp_msg,
+                blocks=[
+                    {"type": "section", "text": {"type": "mrkdwn", "text": tmp_msg}}
+                ],
+            )
+            logging.info("Post msg on slack successfull")
+            time.sleep(1)
     except SlackApiError as e:
         if e.response["ok"] is False:
             logging.error("Post slack msg error", exc_info=1)
@@ -40,8 +45,10 @@ def post_assoc_on_slack(
     statistic_string: str,
     trajectory_df: pd.DataFrame,
     trajectory_orb: pd.DataFrame,
+    orbits: pd.DataFrame,
+    old_orbits: pd.DataFrame,
+    ssoCandId: list,
 ):
-
     def size_hist(data, title):
         plt.figure()
         plt.title(title)
@@ -77,7 +84,44 @@ def post_assoc_on_slack(
     traj_size_perml = f"<{result['files'][0]['permalink']}|{' '}>"
     orb_size_perml = f"<{result['files'][1]['permalink']}|{' '}>"
 
+    best_orb_msg = []
+    if len(ssoCandId) == 0:
+        best_orb_msg.append("No updated or new orbits during this night")
+    else:
+        best_orb = best_orbits(orbits)
+        tmp_msg = "### 10 best new or updated orbits of the night ###\n"
+        best_orb_msg.append(tmp_msg)
+        for i, (_, rows) in enumerate(best_orb.iterrows()):
+            tmp_best = "------------------------------------------------------\n"
+
+            prev_orb = old_orbits[
+                old_orbits["ssoCandId"] == rows["ssoCandId"]
+            ].sort_values(["ref_epoch"])
+            if len(prev_orb) > 0:
+                tmp_best += f"{i+1}. Orbit updated: {rows['ssoCandId']}\n"
+                tmp_best += f"\tclass: {rows['class']} (previous class: {prev_orb.iloc[-1]['class']})\n"
+            else:
+                tmp_best += f"{i+1}. New orbit: {rows['ssoCandId']}\n"
+                tmp_best += f"\tclass: {rows['class']}\n"
+
+            traj = trajectory_orb[
+                trajectory_orb["ssoCandId"] == rows["ssoCandId"]
+            ].sort_values("jd")
+            obs_window = traj["jd"].values[-1] - traj["jd"].values[0]
+            last_magpsf = traj["magpsf"].values[-1]
+            last_sigmapsf = traj["sigmapsf"].values[-1]
+
+            tmp_best += f"\tnumber of observations in the trajectory: {len(traj)}\n"
+            tmp_best += f"\ttrajectory time window: {obs_window:.4f} days\n"
+            tmp_best += f"\tlast magpsf: {last_magpsf} ± {last_sigmapsf}\n"
+            tmp_best += f"\t\ta = {rows['a']} ± {rows['rms_a']}\n"
+            tmp_best += f"\t\te = {rows['e']} ± {rows['rms_e']}\n"
+            tmp_best += f"\t\ti = {rows['i']} ± {rows['rms_i']}\n\n"
+            best_orb_msg.append(tmp_best)
+
+    msg_list = []
     slack_msg = f"""
+============================================
 FINK-FAT STATISTICS OF THE NIGHT: {last_night}
 
 {statistic_string}
@@ -86,5 +130,5 @@ FINK-FAT STATISTICS OF THE NIGHT: {last_night}
 
 {orb_size_perml}
 """
-
-    post_msg_on_slack(slack_client, slack_msg)
+    msg_list += [slack_msg] + best_orb_msg
+    post_msg_on_slack(slack_client, msg_list)

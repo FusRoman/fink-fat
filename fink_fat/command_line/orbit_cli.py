@@ -12,6 +12,7 @@ from fink_fat.orbit_fitting.orbfit_local import (
 )
 from fink_fat.command_line.utils_cli import assig_tags
 import fink_fat.others.launch_spark as spark
+from fink_fat.orbit_fitting.utils import orb_class
 
 
 def intro_reset_orbit():  # pragma: no cover
@@ -224,7 +225,7 @@ def trcand_to_orbit(
     last_night: str,
     logger: LoggerNewLine,
     verbose: bool,
-) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.Series]:
     """
     Compute and return the orbits for the trajectories with enough points found by the prediction functions
 
@@ -249,11 +250,12 @@ def trcand_to_orbit(
 
     Returns
     -------
-    Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame,]
+    Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.Series]
         * trajectories found by the prediction functions without those sent to the orbit fitting
-        * kalman filters without those with the associated trajectories sent to the orbit fitting
+        * polyfit functions without those with the associated trajectories sent to the orbit fitting
         * trajectories with the ones with orbits
         * the orbits parameters with the new ones
+        * the ssoCandId of the new orbits
     """
     # get the trajectories large enough to go to the orbit fitting
     orbit_limit = int(config["SOLVE_ORBIT_PARAMS"]["orbfit_limit"])
@@ -261,7 +263,7 @@ def trcand_to_orbit(
     large_traj = traj_size[traj_size >= orbit_limit]
 
     if len(large_traj) == 0:
-        return trajectory_df, trparams_df, trajectory_orb, orbits
+        return trajectory_df, trparams_df, trajectory_orb, orbits, pd.Series()
 
     # to be send to the orbit fitting,
     # a trajectory must have a number of point above the orbit point limit set in the config file
@@ -278,7 +280,7 @@ def trcand_to_orbit(
 
     if nb_traj_to_orb == 0:
         # no trajectory updated during this night to send to orbit fitting
-        return trajectory_df, trparams_df, trajectory_orb, orbits
+        return trajectory_df, trparams_df, trajectory_orb, orbits, pd.Series()
 
     year, month, day = last_night.split("-")
 
@@ -300,6 +302,8 @@ orbit fitting elapsed time: {time.time() - t_before:.4f} seconds
     new_traj_id = new_orbits["trajectory_id"].values
     new_traj_orb = traj_to_orb[traj_to_orb["trajectory_id"].isin(new_traj_id)]
     new_orbits, new_traj_orb = assig_tags(new_orbits, new_traj_orb, len(orbits) + 1)
+    new_orbits = orb_class(new_orbits)
+    new_ssocandid = new_orbits["ssoCandId"]
 
     # add the new orbits and new trajectories with orbit
     orbits = pd.concat([orbits, new_orbits])
@@ -327,7 +331,7 @@ orbit fitting elapsed time: {time.time() - t_before:.4f} seconds
     # Remove the failed orbit
     trajectory_df = trajectory_df[~trajectory_df["trajectory_id"].isin(failed_orbit)]
     trparams_df = trparams_df[~trparams_df["trajectory_id"].isin(failed_orbit)]
-    return trajectory_df, trparams_df, trajectory_orb, orbits
+    return trajectory_df, trparams_df, trajectory_orb, orbits, new_ssocandid
 
 
 if __name__ == "__main__":
