@@ -23,6 +23,7 @@ from fink_fat.command_line.orbit_cli import trcand_to_orbit
 from fink_fat.command_line.association_cli import get_last_roid_streaming_alert
 
 from fink_fat.others.utils import LoggerNewLine
+import fink_fat.slack_bot.slack_bot as slack
 
 
 def get_default_input():
@@ -348,39 +349,96 @@ roid count:
 
     nb_remove_chi = nb_after_tw - len(fit_roid_df)
 
-    if arguments["--verbose"]:
+    post_on_slack = string_to_bool(config["SLACK"]["post_on_slack"])
+    if arguments["--verbose"] or post_on_slack:
         nb_trcand = len(fit_roid_df)
         diff_last_night = nb_trcand - nb_tr_last_night
 
         nb_orbits = len(orbits)
-        traj_cand_size = Counter(
-            trajectory_df["trajectory_id"].value_counts().sort_index()
-        )
-        traj_orbits_size = Counter(
-            trajectory_orb["ssoCandId"].value_counts().sort_index()
-        )
 
-        logger.info(
-            f"""
+        statistic_string = f"""
+number of orbits: {nb_orbits}
+number of polyfit trajectories: {nb_trcand}
+ * difference from last night: {f"+{diff_last_night}" if diff_last_night > 0 else f"{diff_last_night}"}
+ * number of deviating trajectory: {nb_deviating_trcand}
+ * number of new trajectory (before the orbit fitting): {nb_new_trcand}
+ * number of trajectories removed by time_window: {nb_remove_tw}
+ * number of trajectories removed by chi_square filter: {nb_remove_chi}
+"""
+
+        if post_on_slack:
+            import matplotlib.pyplot as plt
+            import io
+
+            def size_hist(data, title):
+                plt.figure()
+                plt.title(title)
+                plt.xlabel("number of observations")
+                plt.hist(data)
+                bytes_fig = io.BytesIO()
+                plt.savefig(bytes_fig, format="png")
+                bytes_fig.seek(0)
+                return bytes_fig
+
+            slack_client = slack.init_slackbot()
+
+            result = slack_client.files_upload_v2(
+                file_uploads=[
+                    {
+                        "file": size_hist(
+                            trajectory_df["trajectory_id"].value_counts(),
+                            "Distribution of the polyfit trajectories number of observations",
+                        ),
+                        "title": "traj_size_distrib",
+                    },
+                    {
+                        "file": size_hist(
+                            trajectory_orb["ssoCandId"].value_counts(),
+                            "Distribution of the orbit trajectories number of observations",
+                        ),
+                        "title": "traj_size_distrib",
+                    },
+                ]
+            )
+            time.sleep(3)
+
+            traj_size_perml = f"<{result['files'][0]['permalink']}|{' '}>"
+            orb_size_perml = f"<{result['files'][1]['permalink']}|{' '}>"
+
+            slack_msg = f"""
+FINK-FAT STATISTICS OF THE NIGHT: {last_night}
+
+{statistic_string}
+
+{traj_size_perml}
+
+{orb_size_perml}
+"""
+
+            slack.post_msg_on_slack(slack_client, slack_msg)
+
+        if arguments["--verbose"]:
+            traj_cand_size = Counter(
+                trajectory_df["trajectory_id"].value_counts().sort_index()
+            )
+            traj_orbits_size = Counter(
+                trajectory_orb["ssoCandId"].value_counts().sort_index()
+            )
+            logger.info(
+                f"""
 STATISTICS - ASSOCIATIONS
 ----------
 
-number of orbits: {nb_orbits}
-number of total trcand (end of the processing): {nb_trcand}
- * difference from last night: {f"+{diff_last_night}" if diff_last_night > 0 else f"{diff_last_night}"}
- * number of deviating trajectory: {nb_deviating_trcand}
- * number of new trajectory: {nb_new_trcand}
- * number of trajectories removed by time_window: {nb_remove_tw}
- * number of trajectories removed by chi_square filter: {nb_remove_chi}
+{statistic_string}
 
 trajectories candidate size:
 {Counter(traj_cand_size)}
 
 orbits trajectories size:
 {Counter(traj_orbits_size)}
-"""
-        )
-        logger.newline(2)
+    """
+            )
+            logger.newline(2)
 
     if arguments["--verbose"]:
         logger.info("write the results")
