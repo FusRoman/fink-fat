@@ -60,7 +60,7 @@ if [[ ! -d $ORBLOCATE ]]; then
     exit
 fi
 
-wget http://adams.dm.unipi.it/orbfit/OrbFit5.0.7.tar.gz
+aria2c -x8 http://adams.dm.unipi.it/orbfit/OrbFit5.0.7.tar.gz
 
 
 tar -xf OrbFit5.0.7.tar.gz -C $ORBLOCATE
@@ -75,7 +75,7 @@ make
 
 cd lib/
 
-wget https://ssd.jpl.nasa.gov/ftp/eph/planets/Linux/de440/linux_p1550p2650.440
+aria2c -x8 https://ssd.jpl.nasa.gov/ftp/eph/planets/Linux/de440/linux_p1550p2650.440
 
 mv linux_p1550p2650.440 jpleph
 
