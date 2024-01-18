@@ -23,7 +23,7 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     
-    -name: Install requirements
+    - name: Install requirements
       run: |
         yum install epel-release -y
         yum install aria2 -y
