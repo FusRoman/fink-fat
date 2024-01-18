@@ -34,10 +34,10 @@ jobs:
       run: |
         mkdir /home/libs/Orbfit
         ./script/orbFit_installer.sh --install_path /home/libs/Orbfit
-        export ORBFIT_HOME=/home/libs/Orbfit
-  
+
     - name: Set up env [1/2]
       run: |
+        echo "ORBFIT_HOME=/home/libs/Orbfit" >> $GITHUB_ENV
         echo "FINK_FAT=$GITHUB_WORKSPACE" >> $GITHUB_ENV
         echo "JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))" >> $GITHUB_ENV
         echo "${BINPATH}" >> $GITHUB_PATH
