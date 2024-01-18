@@ -84,7 +84,7 @@ if __name__ == "__main__":
         [
             col
             for col in df.columns
-            if col not in ["cutoutScience", "cutoutDifference", "cutoutTemplate"]
+            if col not in ["cutoutScience", "cutoutDifference", "cutoutTemplate", "prv_candidates"]
         ]
     )
 
