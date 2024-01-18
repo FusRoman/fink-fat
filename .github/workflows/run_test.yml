@@ -28,6 +28,7 @@ jobs:
         yum install epel-release -y
         yum install aria2 -y
         yum install make -y
+        yum install gfortran -y
 
     - name: Install Orbfit
       run: |
