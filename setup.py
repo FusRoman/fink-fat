@@ -22,6 +22,7 @@ setup(
             "data/fink_fat.conf",
             "orbit_fitting/AST17.*",
             "orbit_fitting/template.oop",
+            "command_line/cli_main/offline_fitroid/run_offline_fitroid.sh"
         ]
     },
     install_requires=[
