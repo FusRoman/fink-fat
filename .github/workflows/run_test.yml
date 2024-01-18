@@ -22,7 +22,11 @@ jobs:
 
     steps:
     - uses: actions/checkout@v2
-      
+    
+    - name: Install Orbfit
+      run: |
+        ./script/orbFit_installer.sh --install_path /home/libs
+        source ~/.bash_profile
     - name: Set up env [1/2]
       run: |
         echo "FINK_FAT=$GITHUB_WORKSPACE" >> $GITHUB_ENV
