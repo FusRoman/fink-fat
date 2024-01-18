@@ -367,55 +367,9 @@ number of polyfit trajectories: {nb_trcand}
 """
 
         if post_on_slack:
-            import matplotlib.pyplot as plt
-            import io
-
-            def size_hist(data, title):
-                plt.figure()
-                plt.title(title)
-                plt.xlabel("number of observations")
-                plt.hist(data)
-                bytes_fig = io.BytesIO()
-                plt.savefig(bytes_fig, format="png")
-                bytes_fig.seek(0)
-                return bytes_fig
-
-            slack_client = slack.init_slackbot()
-
-            result = slack_client.files_upload_v2(
-                file_uploads=[
-                    {
-                        "file": size_hist(
-                            trajectory_df["trajectory_id"].value_counts(),
-                            "Distribution of the polyfit trajectories number of observations",
-                        ),
-                        "title": "traj_size_distrib",
-                    },
-                    {
-                        "file": size_hist(
-                            trajectory_orb["ssoCandId"].value_counts(),
-                            "Distribution of the orbit trajectories number of observations",
-                        ),
-                        "title": "traj_size_distrib",
-                    },
-                ]
+            slack.post_assoc_on_slack(
+                last_night, statistic_string, trajectory_df, trajectory_orb
             )
-            time.sleep(3)
-
-            traj_size_perml = f"<{result['files'][0]['permalink']}|{' '}>"
-            orb_size_perml = f"<{result['files'][1]['permalink']}|{' '}>"
-
-            slack_msg = f"""
-FINK-FAT STATISTICS OF THE NIGHT: {last_night}
-
-{statistic_string}
-
-{traj_size_perml}
-
-{orb_size_perml}
-"""
-
-            slack.post_msg_on_slack(slack_client, slack_msg)
 
         if arguments["--verbose"]:
             traj_cand_size = Counter(
