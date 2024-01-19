@@ -8,7 +8,7 @@ from fink_utils.spark.utils import concat_col
 
 from fink_science.asteroids.processor import roid_catcher
 
-from fink_fat.command_line.utils_cli import init_cli
+from fink_fat.command_line.utils_cli import init_cli, string_to_bool
 from pyspark.sql import SparkSession
 
 
@@ -75,7 +75,7 @@ if __name__ == "__main__":
         F.lit(float(config["ASSOC_PARAMS"]["inter_night_magdiff_limit_diff_fid"])),
         F.lit(int(config["TW_PARAMS"]["orbit_keep_limit"])),
         F.lit(float(config["ASSOC_PARAMS"]["orbit_assoc_radius"])),
-        F.lit(True),
+        F.lit(string_to_bool(config["ASSOC_PARAMS"]["roid_mpc"])),
     ]
     df = df.withColumn("ff_roid", roid_catcher(*args))
     df = df.drop(*what_prefix)
@@ -84,7 +84,13 @@ if __name__ == "__main__":
         [
             col
             for col in df.columns
-            if col not in ["cutoutScience", "cutoutDifference", "cutoutTemplate", "prv_candidates"]
+            if col
+            not in [
+                "cutoutScience",
+                "cutoutDifference",
+                "cutoutTemplate",
+                "prv_candidates",
+            ]
         ]
     )
 
