@@ -84,7 +84,7 @@ def init_cli(arguments: dict) -> Tuple[configparser.ConfigParser, str]:
     >>> config, output_path = init_cli(arguments)
 
     >>> config.sections()
-    ['TW_PARAMS', 'ASSOC_PARAMS', 'ASSOC_PERF', 'SOLVE_ORBIT_PARAMS', 'SPARK', 'ASSOC_SYSTEM', 'OUTPUT', 'OFFLINE', 'SLACK']
+    ['TW_PARAMS', 'ASSOC_PARAMS', 'ASSOC_PERF', 'SOLVE_ORBIT_PARAMS', 'ASSOC_SYSTEM', 'OUTPUT']
     >>> output_path
     'fink_fat/test/cli_test/fink_fat_out'
 
