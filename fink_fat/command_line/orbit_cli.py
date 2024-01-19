@@ -11,7 +11,7 @@ from fink_fat.orbit_fitting.orbfit_local import (
     compute_df_orbit_param,
 )
 from fink_fat.command_line.utils_cli import assig_tags
-import fink_fat.others.launch_spark as spark
+import fink_fat.others.launch_spark as l_spark
 from fink_fat.orbit_fitting.utils import orb_class
 
 
@@ -92,7 +92,7 @@ def cluster_mode(
     --------
     >>> tr = pd.read_parquet(traj_sample)
     >>> config, output_path = init_cli({"--config": ""})
-    >>> orbits = cluster_mode(config, tr)
+    >>> orbits = cluster_mode(config, tr, "2020", "10", "10", True)
     >>> cols_to_drop = ["rms_a", "rms_e", "rms_i", "rms_long. node", "rms_arg. peric", "rms_mean anomaly", "chi_reduced"]
     >>> assert_frame_equal(
     ...     orbits.drop(cols_to_drop, axis=1).round(decimals=4),
@@ -122,9 +122,9 @@ def cluster_mode(
     application += " " + month
     application += " " + day
 
-    spark_submit = spark.build_spark_submit(config)
-    spark_app = spark.spark_submit_application(spark_submit, application)
-    process = spark.run_spark_submit(spark_app, verbose)
+    spark_submit = l_spark.build_spark_submit(config)
+    spark_app = l_spark.spark_submit_application(spark_submit, application)
+    process = l_spark.run_spark_submit(spark_app, verbose)
 
     if process.returncode != 0:
         logger = init_logging()
