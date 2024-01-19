@@ -142,5 +142,8 @@ def orb_class(orbits: pd.DataFrame) -> pd.DataFrame:
     pd.DataFrame
         dynamical class of all the orbits
     """
-    orbits["class"] = orbits.apply(lambda x: asteroid_class(x["a"], x["e"]), axis=1)
-    return orbits
+    if len(orbits) > 0:
+        orbits["class"] = orbits.apply(lambda x: asteroid_class(x["a"], x["e"]), axis=1)
+        return orbits
+    else:
+        return orbits
