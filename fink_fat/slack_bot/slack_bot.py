@@ -88,7 +88,8 @@ def post_assoc_on_slack(
     if len(ssoCandId) == 0:
         best_orb_msg.append("No updated or new orbits during this night")
     else:
-        best_orb = best_orbits(orbits)
+        new_or_updated_orb = orbits[orbits["ssoCandId"].isin(ssoCandId)]
+        best_orb = best_orbits(new_or_updated_orb)
         tmp_msg = "### 10 best new or updated orbits of the night ###\n"
         best_orb_msg.append(tmp_msg)
         for i, (_, rows) in enumerate(best_orb.iterrows()):
