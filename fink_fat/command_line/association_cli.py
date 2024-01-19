@@ -57,7 +57,7 @@ def request_fink(
 
     Examples
     --------
-    >>> request_fink(
+    >>> pdf = request_fink(
     ... 'Solar System MPC',
     ... 10,
     ... datetime.datetime.strptime("2022-06-22", "%Y-%m-%d"),
@@ -67,17 +67,19 @@ def request_fink(
     ... 1,
     ... 0
     ... )
+
+    >>> pdf.reindex(sorted(pdf.columns), axis=1).sort_values("i:jd").reset_index(drop=True)
            i:dec          i:jd        i:ra
-    0  12.543168  2.459753e+06  356.113631
-    1  12.907248  2.459753e+06  356.054645
-    2  14.686620  2.459753e+06  353.888462
-    3  15.305179  2.459753e+06  354.357292
-    4  10.165192  2.459753e+06  353.209892
-    5  10.296633  2.459753e+06  353.197138
-    6  10.504157  2.459753e+06  353.403702
-    7  10.305569  2.459753e+06  358.151255
-    8  10.270319  2.459753e+06  357.861407
-    9  10.307019  2.459753e+06  358.332623
+    0  12.907248  2.459753e+06  356.054645
+    1  15.305179  2.459753e+06  354.357292
+    2  10.307019  2.459753e+06  358.332623
+    3  10.305569  2.459753e+06  358.151255
+    4  14.686620  2.459753e+06  353.888462
+    5  10.270319  2.459753e+06  357.861407
+    6  10.165192  2.459753e+06  353.209892
+    7  10.504157  2.459753e+06  353.403702
+    8  12.543168  2.459753e+06  356.113631
+    9  10.296633  2.459753e+06  353.197138
     """
 
     logger = init_logging()
@@ -284,7 +286,10 @@ def get_last_sso_alert(object_class, date, verbose=False):
     ... )
 
     >>> pdf_test = pd.read_parquet("fink_fat/test/cli_test/get_sso_alert_test.parquet")
-    >>> assert_frame_equal(res_request, pdf_test)
+    >>> assert_frame_equal(
+    ... res_request.sort_values("objectId").reset_index(drop=True), 
+    ... pdf_test.sort_values("objectId").reset_index(drop=True)
+    ... )
 
     >>> res_request = get_last_sso_alert(
     ... 'Solar System candidate',
