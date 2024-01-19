@@ -370,6 +370,11 @@ def fitroid_association(
         idx_keep_mask,
     ) = roid_mask(ra, dec, jd, magpsf, fid, candid, flags, confirmed_sso)
 
+    # if no alerts satisfying the flags mask (flags are 3 for mpc or 1 or 2 for candidates) then return
+    # because we are in a distributed environment, the current batch can contains no alerts satisfying the mask
+    if len(ra_mask) == 0:
+        return flags, estimator_id, ffdistnr
+
     try:
         # path where are stored the kalman filters
         # fit_pdf = pd.read_parquet(SparkFiles.get("fit_roid.parquet"))
