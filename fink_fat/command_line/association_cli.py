@@ -287,7 +287,7 @@ def get_last_sso_alert(object_class, date, verbose=False):
 
     >>> pdf_test = pd.read_parquet("fink_fat/test/cli_test/get_sso_alert_test.parquet")
     >>> assert_frame_equal(
-    ... res_request.sort_values("objectId").reset_index(drop=True), 
+    ... res_request.sort_values("objectId").reset_index(drop=True),
     ... pdf_test.sort_values("objectId").reset_index(drop=True)
     ... )
 
