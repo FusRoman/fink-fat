@@ -33,7 +33,6 @@ def ci_function(
     tr_id = 0
 
     for tr_nid in np.unique(df_sso["nid"]):
-
         new_observation = df_sso[df_sso["nid"] == tr_nid]
         with pd.option_context("mode.chained_assignment", None):
             new_observation[tr_orb_columns] = -1.0
@@ -76,7 +75,6 @@ def ci_function(
 
 
 if __name__ == "__main__":
-
     mpc = ts.trajectory_sample_2
 
     ci_function(mpc, "fink_fat/test/CI_expected_output_2.parquet", orbfit_limit=40)

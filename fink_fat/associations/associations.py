@@ -11,14 +11,19 @@ from fink_fat.others.utils import repeat_chunk
 from fink_fat.others.utils import cast_obs_data
 import sys
 import doctest
+from typing import Tuple
+from astropy.coordinates import Angle
 from pandas.testing import assert_frame_equal  # noqa: F401
 from unittest import TestCase  # noqa: F401
 import fink_fat.test.test_sample as ts  # noqa: F401
 
 
 def night_to_night_separation_association(
-    old_observation, new_observation, separation_criterion, store_kd_tree=False
-):
+    old_observation: pd.DataFrame,
+    new_observation: pd.DataFrame,
+    separation_criterion: u.Unit,
+    store_kd_tree: bool = False,
+) -> Tuple[pd.DataFrame, pd.DataFrame, Angle]:
     """
     Perform night-night association based on the separation between the alerts.
     The separation criterion was computed by a data analysis on the MPC object.
@@ -66,10 +71,10 @@ def night_to_night_separation_association(
     """
 
     old_observations_coord = SkyCoord(
-        old_observation["ra"], old_observation["dec"], unit=u.degree
+        old_observation["ra"].values, old_observation["dec"].values, unit=u.degree
     )
     new_observations_coord = SkyCoord(
-        new_observation["ra"], new_observation["dec"], unit=u.degree
+        new_observation["ra"].values, new_observation["dec"].values, unit=u.degree
     )
 
     old_obs_idx, new_obs_idx, sep2d, _ = search_around_sky(
@@ -119,6 +124,58 @@ def angle_three_point(a, b, c):
     ca = c - a
 
     cosine_angle = np.dot(ba, ca) / (np.linalg.norm(ba) * np.linalg.norm(ca))
+    angle = np.arccos(cosine_angle)
+
+    return np.degrees(angle)
+
+
+def angle_three_point_vect(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> np.ndarray:
+    """
+    vectorized version of angle three point
+
+    Parameters
+    ----------
+    a : np.ndarray
+        first points
+    b : np.ndarray
+        second points
+    c : np.ndarray
+        third points
+
+    Returns
+    -------
+    np.ndarray
+        the angles formed by the three points
+
+    Examples
+    --------
+    >>> a = np.array(
+    ...  [
+    ...     [1, 1],
+    ...     [1, 1]
+    ...  ]
+    ... )
+    >>> b = np.array(
+    ...  [
+    ...     [3, 2],
+    ...     [3, 2]
+    ...  ]
+    ... )
+    >>> c = np.array(
+    ...  [
+    ...     [5, 4],
+    ...     [-2, -2]
+    ...  ]
+    ... )
+
+    >>> np.around(angle_three_point_vect(a, b, c), 3)
+    array([ 10.305, 161.565])
+    """
+    ba = b - a
+    ca = c - a
+
+    dot = np.sum(ba * ca, axis=1)
+    cosine_angle = dot / (np.linalg.norm(ba, axis=1) * np.linalg.norm(ca, axis=1))
     angle = np.arccos(cosine_angle)
 
     return np.degrees(angle)
@@ -424,7 +481,6 @@ def night_to_night_trajectory_associations(
     )
 
     if len(traj_assoc) != 0:
-
         traj_assoc, new_obs_assoc = cone_search_association(
             two_last_observations, traj_assoc, new_obs_assoc, angle_criterion
         )
@@ -525,7 +581,6 @@ def tracklets_and_trajectories_associations(
     if len(trajectories) == 0 or len(tracklets) == 0:
         return trajectories, tracklets, max_traj_id
     else:
-
         trajectories_not_updated = trajectories[trajectories["not_updated"]]
 
         # get the last two observations for each trajectories
@@ -549,7 +604,6 @@ def tracklets_and_trajectories_associations(
 
         # for each trajectory nid from the last observations
         for tr_nid in trajectories_nid:
-
             # get the two last observations with the tracklets extremity that have the current nid
             two_last_current_nid = two_last_observation_trajectory[
                 two_last_observation_trajectory["trajectory_id"].isin(
@@ -579,7 +633,6 @@ def tracklets_and_trajectories_associations(
             )
 
             if len(traj_extremity_associated) > 0:
-
                 # creates a dataframe for each duplicated trajectory associated with the tracklets
                 duplicates = traj_extremity_associated["trajectory_id"].duplicated()
 
@@ -587,7 +640,6 @@ def tracklets_and_trajectories_associations(
                 tracklets_duplicated = traj_extremity_associated[duplicates]
 
                 if len(tracklets_duplicated) > 0:
-
                     # get the trajectories involved in the duplicates
                     duplicate_traj = (
                         trajectories[
@@ -701,7 +753,6 @@ def tracklets_and_trajectories_associations(
 
                 # If too slow, need to be optimized/vectorized
                 for _, rows in traj_extremity_associated.iterrows():
-
                     # get all rows of the associated tracklets of the next night
                     next_night_tracklets = tracklets[
                         tracklets["trajectory_id"] == rows["tmp_traj"]
@@ -861,7 +912,6 @@ def trajectories_with_new_observations_associations(
     if len(trajectories) == 0 or len(new_observations) == 0:
         return trajectories, new_observations, max_traj_id
     else:
-
         # get only the trajectories not updated by a previous step
         trajectories_not_updated = trajectories[trajectories["not_updated"]]
 
@@ -881,7 +931,6 @@ def trajectories_with_new_observations_associations(
 
         # for each trajectory nid from the last observations
         for tr_nid in trajectories_nid:
-
             # get the two last observations with the tracklets extremity that have the current nid
             two_last_current_nid = two_last_observation_trajectory[
                 two_last_observation_trajectory["trajectory_id"].isin(
@@ -916,7 +965,6 @@ def trajectories_with_new_observations_associations(
             ]
 
             if len(obs_assoc) > 0:
-
                 # creates a dataframe for each duplicated trajectory associated with the tracklets
                 duplicates = obs_assoc["trajectory_id"].duplicated()
 
@@ -924,7 +972,6 @@ def trajectories_with_new_observations_associations(
                 duplicate_obs = obs_assoc[duplicates]
 
                 if len(duplicate_obs) > 0:
-
                     # get the trajectories involved in the duplicates
                     duplicate_traj = (
                         trajectories[
@@ -1101,7 +1148,6 @@ def old_observations_with_tracklets_associations(
     if len(tracklets) == 0 or len(old_observations) == 0:
         return tracklets, old_observations, max_traj_id
     else:
-
         # get all the old night id sort by descending order to begin the associations
         # with the recently ones
         old_obs_nid = np.sort(np.unique(old_observations["nid"]))[::-1]
@@ -1111,7 +1157,6 @@ def old_observations_with_tracklets_associations(
         )
 
         for obs_nid in old_obs_nid:
-
             current_old_obs = old_observations[old_observations["nid"] == obs_nid]
 
             diff_night = next_nid - obs_nid
@@ -1143,7 +1188,6 @@ def old_observations_with_tracklets_associations(
             ]
 
             if len(track_left_assoc) > 0:
-
                 # creates a dataframe for each duplicated trajectory associated with the tracklets
                 duplicates = old_obs_right_assoc["trajectory_id"].duplicated()
 
@@ -1151,7 +1195,6 @@ def old_observations_with_tracklets_associations(
                 duplicate_obs = old_obs_right_assoc[duplicates]
 
                 if len(duplicate_obs) > 0:
-
                     # get the tracklets involved with duplicates
                     duplicate_traj = (
                         tracklets[
@@ -1313,12 +1356,10 @@ def old_with_new_observations_associations(
     if len(old_observations) == 0 or len(new_observations) == 0:
         return pd.DataFrame(), old_observations, new_observations
     else:
-
         old_obs_nid = np.sort(np.unique(old_observations["nid"]))[::-1]
         trajectory_df = pd.DataFrame()
 
         for obs_nid in old_obs_nid:
-
             current_old_obs = old_observations[old_observations["nid"] == obs_nid]
 
             diff_night = next_nid - obs_nid
@@ -1336,7 +1377,6 @@ def old_with_new_observations_associations(
             )
 
             if len(left_assoc) > 0:
-
                 new_trajectory_id = np.arange(
                     last_trajectory_id, last_trajectory_id + len(left_assoc)
                 )
@@ -1504,7 +1544,6 @@ def time_window_management(
     oldest_traj = pd.DataFrame(columns=trajectory_df.columns)
 
     if len(trajectory_df) > 0:
-
         # get the lost observation of all trajectories
         last_obs_of_all_traj = get_n_last_observations_from_trajectories(
             trajectory_df, 1
@@ -1512,7 +1551,6 @@ def time_window_management(
 
         # if the night difference exceed the time window
         if (nid_next_night - last_nid > traj_time_window) and keep_last:
-
             # get last observation of trajectories from the last nid
             last_obs_of_all_traj = last_obs_of_all_traj[
                 last_obs_of_all_traj["nid"] == last_nid
@@ -1586,7 +1624,6 @@ def time_window_management(
 
 
 if __name__ == "__main__":  # pragma: no cover
-
     if "unittest.util" in __import__("sys").modules:
         # Show full diff in self.assertEqual.
         __import__("sys").modules["unittest.util"]._MAX_LENGTH = 999999999
