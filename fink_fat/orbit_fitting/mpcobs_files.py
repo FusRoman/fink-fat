@@ -491,18 +491,36 @@ def write_observation_file(ram_dir, obs_df):
     date = [make_date(d) for d in date]
     res = [join_string([el1] + [el2], " ") for el1, el2 in zip(date, coord)]
 
-    res = [
-        "     "
-        + prov_desig
-        + "  C"  # how the observation was made : C means CCD
-        + el
-        + "         "
-        + str(round(mag, 1))
-        + " "
-        + band_to_str(b)
-        + "      I41"  # ZTF observation code
-        for el, mag, b in zip(res, magpsf, band)
-    ]
+    try:
+        res = [
+            "     "
+            + prov_desig
+            + "  C"  # how the observation was made : C means CCD
+            + el
+            + "         "
+            + str(round(mag, 1))
+            + " "
+            + band_to_str(b)
+            + "      I41"  # ZTF observation code
+            for el, mag, b in zip(res, magpsf, band)
+        ]
+    except Exception as e:
+        from fink_fat.others.utils import init_logging
+        logger = init_logging()
+        logger.error(f"""
+Exception raised when creating the observational file for orbfit:
+
+date: {date}
+prov_desig input: {date[0]}, {traj_id}
+prov_desig: {prov_desig}
+
+res: {res}
+
+mag: {magpsf}
+
+band: {band}
+""", exc_info=1)
+        raise e
 
     res[0] = res[0][:12] + "*" + res[0][13:]
 

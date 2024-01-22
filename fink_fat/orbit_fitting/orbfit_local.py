@@ -251,7 +251,12 @@ def get_orbit_param(
     results = []
     for traj_id in all_traj_id:
         df_one_traj = df[df["trajectory_id"] == traj_id]
-        prov_desig = mf.write_observation_file(ram_dir, df_one_traj)
+
+        try:
+            prov_desig = mf.write_observation_file(ram_dir, df_one_traj)
+        except Exception:
+            continue
+
         of.write_inp(ram_dir, prov_desig)
 
         if prop_epoch is None:
