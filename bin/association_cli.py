@@ -206,7 +206,7 @@ def get_last_sso_alert_from_file(filepath, verbose=False):
     >>> assert len(pdf) == 2798
     >>> assert 'objectId' in pdf.columns
     """
-    pdf = pd.read_csv(filepath, header=0, sep=r'\s+', index_col=False)
+    pdf = pd.read_parquet(filepath)
 
     required_header = ['ra', 'dec', 'jd', 'magpsf', 'sigmapsf']
     msg = """
@@ -221,6 +221,7 @@ def get_last_sso_alert_from_file(filepath, verbose=False):
     pdf['candid'] = range(10, len(pdf) + 10)
     pdf['nid'] = 0
     pdf['fid'] = 0
+    print(pdf)
 
     required_columns = [
         "objectId",
