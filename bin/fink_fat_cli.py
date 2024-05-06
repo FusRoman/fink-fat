@@ -180,6 +180,7 @@ def fink_fat_main(arguments):
             print("no alerts available for the night of {}".format(last_night))
             exit()
 
+        print(new_alerts["nid"])
         last_nid = next_nid = new_alerts["nid"][0]
         if len(trajectory_df) > 0 and len(old_obs_df) > 0:
             last_nid = np.max([np.max(trajectory_df["nid"]), np.max(old_obs_df["nid"])])

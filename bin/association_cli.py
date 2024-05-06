@@ -206,12 +206,23 @@ def get_last_sso_alert_from_file(filepath, verbose=False):
     >>> assert len(pdf) == 2798
     >>> assert 'objectId' in pdf.columns
     """
-    pdf = pd.read_csv(filepath, header=0, sep=r'\s+', index_col=False)
+    #pdf = pd.read_csv(filepath, header=0, sep=r'\s+', index_col=False)
+    #pdf = pd.read_csv(filepath, header=0, index_col=False)
+    pdf = pd.read_parquet(filepath)
 
-    required_header = ['ra', 'dec', 'jd', 'magpsf', 'sigmapsf']
+    conv = {'g': 0, 'r': 1, 'i': 2, 'z': 3}
+    pdf['fid'] = pdf['fid'].apply(lambda x: conv[x]).astype(int)
+    #maskFilter = pdf['fid'].apply(lambda x: x in ['r', 'g'])
+    #pdf = pdf[maskFilter]
+    #jdunique = np.unique(pdf['jd'])
+    #pdf = pdf[pdf['jd'] == np.max(jdunique)]
+    #print("toto", np.unique(pdf['nid']))
+    pdf = pdf.reset_index()
+
+    required_header = ['ra', 'dec', 'jd', 'magpsf', 'sigmapsf', 'fid', 'nid']
     msg = """
     The header of {} must contain at least the following fields:
-    ra dec jd magpsf sigmapsf
+    ra dec jd magpsf sigmapsf fid nid
     """.format(filepath)
     assert set(required_header) - set(pdf.columns) == set(), AssertionError(msg)
 
@@ -219,8 +230,8 @@ def get_last_sso_alert_from_file(filepath, verbose=False):
         pdf['objectId'] = range(len(pdf))
 
     pdf['candid'] = range(10, len(pdf) + 10)
-    pdf['nid'] = 0
-    pdf['fid'] = 0
+    # pdf['nid'] = 0
+    # pdf['fid'] = 0
 
     required_columns = [
         "objectId",

@@ -95,22 +95,6 @@ def intra_night_seeding(
     clustering = DBSCAN(eps=dist_3d(sep_criterion), min_samples=2).fit(cart_coord)
     with pd.option_context("mode.chained_assignment", None):
         night_observation["trajectory_id"] = clustering.labels_
-
-    # remove bad seeds containing observations in the same exposure time
-    test_jd_0 = (
-        night_observation.sort_values("jd")
-        .groupby("trajectory_id")
-        .agg(is_same_exp=("jd", lambda x: np.any(np.diff(x) == 0.0)))
-        .reset_index()
-    )
-    test_jd_0 = test_jd_0[test_jd_0["trajectory_id"] != -1.0]
-    jd_0_traj_id = test_jd_0[test_jd_0["is_same_exp"]]["trajectory_id"]
-
-    with pd.option_context("mode.chained_assignment", None):
-        night_observation.loc[
-            night_observation["trajectory_id"].isin(jd_0_traj_id), "trajectory_id"
-        ] = -1.0
-
     return night_observation
 
 
