@@ -1,4 +1,6 @@
 if __name__ == "__main__":
+    # Fink-FAT version > 1.0: Script launching the run_roid file with spark in a subprocess for the offline mode
+
     import os
     import sys
     from fink_fat.others.utils import init_logging

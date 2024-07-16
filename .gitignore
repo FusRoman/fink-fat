@@ -208,3 +208,5 @@ sso_data_norm.parquet
 test_assoc_kalman.py
 test_assoc_orbit.py
 fink_fat/test/cli_test/*.log
+orbital.parquet
+trajectory_orb.parquet

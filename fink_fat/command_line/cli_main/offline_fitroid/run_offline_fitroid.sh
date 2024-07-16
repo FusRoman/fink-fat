@@ -1,5 +1,6 @@
 #!/bin/bash
 
+# script running Fink-FAT 1.0 in offline mode between input_start and input_end
 
 input_start=$1
 input_end=$3

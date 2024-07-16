@@ -17,6 +17,24 @@ def offline_fitroid(
     logger: LoggerNewLine,
     verbose: bool,
 ):
+    """
+    Launch the run_offline_fitroid script in a separate processus.
+
+    Parameters
+    ----------
+    config: configparser.ConfigParser
+        configuration file object
+    path_config: str
+        path to the fink-fat configuration file
+    start_date: datetime
+        start date of the offline mode
+    end_date:
+        end date of the offline mode (not include)
+    logger: LoggerNewLine
+        logging object
+    verbose: bool
+        if true, activate verbosity
+    """
     if verbose:
         logger.info(
             f"""

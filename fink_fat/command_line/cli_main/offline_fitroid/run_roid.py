@@ -24,6 +24,8 @@ def addFileToSpark(
 
 
 if __name__ == "__main__":
+    # Fink-FAT version >= 1.0: Processus running the Fink asteroid science module in offline mode
+
     year, month, day, path_config = sys.argv[1:]
     config, output_path = init_cli({"--config": path_config})
 

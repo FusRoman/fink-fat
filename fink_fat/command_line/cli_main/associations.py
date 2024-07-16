@@ -68,6 +68,7 @@ def cli_associations(arguments, config, output_path):
             )
 
     if object_class == "SSO fitroid":
+        # run the associations of Fink-FAT version > 1.0 
         fitroid_associations(arguments, config, logger, output_path)
         return
 

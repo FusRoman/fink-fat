@@ -149,13 +149,19 @@ def fitroid_associations(
             logger.newline()
             logger.error("Association already done for this night.")
             logger.info(
-                "Wait a next observation night and the end of the alert stream to start a new run of association."
+                """
+                last recorded association date: {} == current date: {}
+                Wait a next observation night and the end of the alert stream to start a new run of association.
+                """.format(current_date, last_assoc_date)
             )
             exit()
         if last_assoc_date > current_date:
             logger.newline()
             logger.error(
-                "Try to associates alerts from a night before the last night recorded in the trajectories"
+                """
+                last recorded association date: {} > current date: {}
+                Try to associates alerts from a night before the last night recorded in the trajectories
+                """.format(current_date, last_assoc_date)
             )
             logger.info(
                 "Maybe try with a more recent night or reset the associations with 'fink_fat association -r'"

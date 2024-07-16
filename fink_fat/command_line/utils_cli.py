@@ -127,8 +127,10 @@ def init_cli(arguments: dict) -> Tuple[configparser.ConfigParser, str]:
 
 def get_class(arguments, path):
     """
-    Return the fink object name corresponding to the arguments given by the users
+    - Return the fink object name corresponding to the arguments given by the users
     'mpc' for the known objects and 'candidates' for the sso candidates.
+
+    - If the arguments is 'fitroid', return 'SSO fitroid' and run Fink-FAT version > 1.0
 
     Parameters
     ----------
