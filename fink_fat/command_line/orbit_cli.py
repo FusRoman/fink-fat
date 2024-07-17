@@ -94,9 +94,10 @@ def cluster_mode(
     >>> config, output_path = init_cli({"--config": ""})
     >>> orbits = cluster_mode(config, tr, "2020", "10", "10", True)
     >>> cols_to_drop = ["rms_a", "rms_e", "rms_i", "rms_long. node", "rms_arg. peric", "rms_mean anomaly", "chi_reduced"]
+    
     >>> assert_frame_equal(
     ...     orbits.drop(cols_to_drop, axis=1).round(decimals=4),
-    ...     ts2.cluster_mode_cli_test.drop(cols_to_drop, axis=1).round(decimals=4)
+    ...     ts2.cluster_mode_cli_test.round(decimals=4)
     ... )
     """
     traj_to_orbital.to_parquet("tmp_traj.parquet")
