@@ -3,6 +3,7 @@ import pandas as pd
 import os
 import time as t
 import json
+from datetime import datetime
 
 from fink_fat.command_line.utils_cli import get_class, yes_or_no, assig_tags
 
@@ -81,7 +82,15 @@ def cli_solve_orbit(arguments, config, output_path):
         elif arguments["cluster"]:
             t_before = t.time()
             # return orbit results from cluster mode
-            orbit_results = cluster_mode(config, traj_to_orbital)
+            current_time = datetime.now()
+            orbit_results = cluster_mode(
+                config,
+                traj_to_orbital,
+                "{:04d}".format(current_time.year),
+                "{:02d}".format(current_time.month),
+                "{:02d}".format(current_time.day),
+                arguments["--verbose"]
+            )
             orbfit_time = t.time() - t_before
 
             if arguments["--verbose"]:

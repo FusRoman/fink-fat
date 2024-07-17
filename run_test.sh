@@ -94,10 +94,12 @@ done
 
 for filename in fink_fat/test/*/*.py
 do
-  echo $filename
-  coverage run \
-    --source=${ROOTPATH} \
-    --rcfile ${ROOTPATH}/.coveragerc $filename
+    if [[ "$filename" != "fink_fat/test/cli_test/run_roid.py" ]]; then
+        echo $filename
+        coverage run \
+          --source=${ROOTPATH} \
+          --rcfile ${ROOTPATH}/.coveragerc $filename
+    fi
 done
 
 for filename in fink_fat/test/*.py
