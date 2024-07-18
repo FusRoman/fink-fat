@@ -69,7 +69,7 @@ if __name__ == "__main__":
                     "--verbose",
                 ]
             )
-    
+
     logger.info("TEST FINK-FAT OFFLINE FITROID")
     logger.newline()
     # --------------------------------------------------------------------------------#
@@ -85,7 +85,6 @@ if __name__ == "__main__":
             "--verbose",
         ]
     )
-
 
     true_traj = pd.read_parquet("fink_fat/test/cli_test/small_sso_dataset/")
     tr_orb = pd.read_parquet(
