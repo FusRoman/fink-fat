@@ -1,10 +1,8 @@
-import numpy as np
 import pandas as pd
 import os
 import time
 import datetime
 import configparser
-from collections import Counter
 from typing import Tuple
 
 import astropy.units as u
@@ -13,11 +11,19 @@ from astropy.time import Time
 from fink_fat.associations.association_orbit import orbit_associations
 from fink_fat.streaming_associations.spark_ephem import launch_spark_ephem
 from fink_fat.roid_fitting.init_roid_fitting import init_polyast
-from fink_fat.associations.stream_association import stream_association
+from fink_fat.associations.stream_association import (
+    stream_association,
+    trajectories_from_remaining_seeds,
+)
 
 from fink_fat.seeding.dbscan_seeding import intra_night_seeding
 
-from fink_fat.command_line.utils_cli import string_to_bool, time_window, chi_filter
+from fink_fat.command_line.utils_cli import (
+    string_to_bool,
+    time_window,
+    chi_filter,
+    verbose_and_slack,
+)
 from fink_fat.command_line.orbit_cli import trcand_to_orbit
 
 from fink_fat.command_line.association_cli import get_last_roid_streaming_alert
@@ -80,6 +86,26 @@ def get_default_input() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 
 
 def roid_flags(config: configparser.ConfigParser) -> Tuple[bool, list]:
+    """
+    According to the 'roid_mpc' value in the configuration file,
+    start fink-fat with confirmed SSO (flag 3) or
+    with one detection objects (flag 1) and candidate alerts (flag 2)
+
+    Parameters
+    ----------
+    config : configparser.ConfigParser
+        object containing the values of the configuration file
+
+    Returns
+    -------
+    Tuple[bool, list]
+        is_mpc: bool
+            tell to the spark job returning the alerts from hdfs if it should return alerts flagged as 3
+            or alerts flagged as 1 and 2.
+        flags: integer list
+            [3] if fink-fat should associate confirmed objects (for test and performance)
+            or [1, 2] if fink-fat associate candidate alerts
+    """
     is_mpc_flag = string_to_bool(config["ASSOC_PARAMS"]["roid_mpc"])
     flags = [3] if is_mpc_flag else [1, 2]
     return is_mpc_flag, flags
@@ -114,7 +140,32 @@ def fitroid_associations(
     logger: LoggerNewLine,
     output_path: str,
 ):
-    """ """
+    """
+    (1) Initialise new trajectories
+    (2) Associate the alerts flagged by the asteroid science of fink with trajectories
+    (3) (re)compute the orbits
+    (4) filter trajectories
+    (5) post message on slack
+
+    Parameters
+    ----------
+    arguments: dict
+        argument from the command line
+    config: configparser.ConfigParser
+        object containing the values of the configuration file
+    logger: LoggerNewLine
+        custom logger object of fink-fat
+    output_path: str
+        location of the fink-fat outputs
+            - trajectory_df
+                alerts and their contents linked by fink-fat
+            - fit_roid_df
+                parameters of the polyfit predictors
+            - trajectory_orb
+                alerts and their contents for trajectories with orbit
+            - orbits
+                orbital parameters
+    """
 
     start_assoc_time = time.time()
 
@@ -152,7 +203,9 @@ def fitroid_associations(
                 """
                 last recorded association date: {} == current date: {}
                 Wait a next observation night and the end of the alert stream to start a new run of association.
-                """.format(current_date, last_assoc_date)
+                """.format(
+                    current_date, last_assoc_date
+                )
             )
             exit()
         if last_assoc_date > current_date:
@@ -161,7 +214,9 @@ def fitroid_associations(
                 """
                 last recorded association date: {} > current date: {}
                 Try to associates alerts from a night before the last night recorded in the trajectories
-                """.format(current_date, last_assoc_date)
+                """.format(
+                    current_date, last_assoc_date
+                )
             )
             logger.info(
                 "Maybe try with a more recent night or reset the associations with 'fink_fat association -r'"
@@ -272,44 +327,12 @@ roid count:
             )
             nb_deviating_trcand = len(fit_roid_df) - nb_trcand_before
 
-        # get the seeds with no associations to run the initialization of the fit functions them.
-        test_seeds = seeds[seeds["trajectory_id"] != -1]
-        if len(test_seeds) != 0:
-            test_seeds = (
-                test_seeds.fillna(-1)
-                .groupby("trajectory_id")
-                .agg(
-                    tr_no_assoc=("estimator_id", lambda x: (np.array(x) == -1).all()),
-                    list_est=("estimator_id", list),
-                )
-                .reset_index()
-            )
-
-            test_seeds = test_seeds[test_seeds["tr_no_assoc"]]
-            seeds_no_assoc = seeds[
-                seeds["trajectory_id"].isin(test_seeds["trajectory_id"])
-            ]
-            max_traj_id = fit_roid_df["trajectory_id"].max() + 1
-            clusters_id = seeds_no_assoc["trajectory_id"].unique()
-            new_traj_id = np.arange(max_traj_id, max_traj_id + len(clusters_id)).astype(
-                int
-            )
-            assert len(new_traj_id) == len(clusters_id)
-            map_new_tr = {
-                cl_id: tr_id for tr_id, cl_id in zip(new_traj_id, clusters_id)
-            }
-            with pd.option_context("mode.chained_assignment", None):
-                seeds_no_assoc["trajectory_id"] = seeds_no_assoc["trajectory_id"].map(
-                    map_new_tr
-                )
-            new_fit_df = init_polyast(seeds_no_assoc)
-            with pd.option_context("mode.chained_assignment", None):
-                seeds_no_assoc["updated"] = "Y"
-                new_fit_df["orbfit_test"] = 0
-            nb_new_trcand = len(new_fit_df)
-
-            trajectory_df = pd.concat([trajectory_df, seeds_no_assoc])
-            fit_roid_df = pd.concat([fit_roid_df, new_fit_df])
+        # create new trajectories from the remaining seeds with no associations
+        seeds_no_assoc, new_fit_df, nb_new_trcand = trajectories_from_remaining_seeds(
+            seeds, fit_roid_df
+        )
+        trajectory_df = pd.concat([trajectory_df, seeds_no_assoc])
+        fit_roid_df = pd.concat([fit_roid_df, new_fit_df])
 
     else:
         if arguments["--verbose"]:
@@ -328,6 +351,7 @@ roid count:
 
     if "updated" not in trajectory_df:
         trajectory_df["updated"] = "N"
+
     trajectory_df, fit_roid_df, trajectory_orb, orbits, new_ssoCandId = trcand_to_orbit(
         config,
         trajectory_df,
@@ -354,7 +378,7 @@ roid count:
         logger.info("start to compute chi-filter")
         t_before = time.time()
 
-    trajectory_df, fit_roid_df = chi_filter(trajectory_df, fit_roid_df, 10e-5)
+    # trajectory_df, fit_roid_df = chi_filter(trajectory_df, fit_roid_df, 10e-5)
 
     if arguments["--verbose"]:
         chi_filter_time = time.time() - t_before
@@ -362,56 +386,27 @@ roid count:
 
     nb_remove_chi = nb_after_tw - len(fit_roid_df)
 
-    post_on_slack = string_to_bool(config["SLACK"]["post_on_slack"])
-    if arguments["--verbose"] or post_on_slack:
-        nb_trcand = len(fit_roid_df)
-        diff_last_night = nb_trcand - nb_tr_last_night
-
-        nb_orbits = len(orbits)
-
-        statistic_string = f"""
-number of orbits: {nb_orbits}
-number of polyfit trajectories: {nb_trcand}
- * difference from last night: {f"+{diff_last_night}" if diff_last_night > 0 else f"{diff_last_night}"}
- * number of deviating trajectory: {nb_deviating_trcand}
- * number of new trajectory (before the orbit fitting): {nb_new_trcand}
- * number of trajectories removed by time_window: {nb_remove_tw}
- * number of trajectories removed by chi_square filter: {nb_remove_chi}
-"""
-
-        if post_on_slack:
-            slack.post_assoc_on_slack(
-                last_night,
-                statistic_string,
-                trajectory_df,
-                trajectory_orb,
-                orbits,
-                old_orbits,
-                new_or_updated_orbits,
-            )
-
-        if arguments["--verbose"]:
-            traj_cand_size = Counter(
-                trajectory_df["trajectory_id"].value_counts().sort_index()
-            )
-            traj_orbits_size = Counter(
-                trajectory_orb["ssoCandId"].value_counts().sort_index()
-            )
-            logger.info(
-                f"""
-STATISTICS - ASSOCIATIONS
-----------
-
-{statistic_string}
-
-trajectories candidate size:
-{Counter(traj_cand_size)}
-
-orbits trajectories size:
-{Counter(traj_orbits_size)}
-    """
-            )
-            logger.newline(2)
+    verbose_and_slack(
+        (
+            nb_tr_last_night,
+            nb_deviating_trcand,
+            nb_new_trcand,
+            nb_remove_tw,
+            nb_remove_chi,
+        ),
+        (
+            trajectory_df,
+            fit_roid_df,
+            trajectory_orb,
+            orbits,
+            old_orbits,
+            new_or_updated_orbits,
+        ),
+        last_night,
+        arguments["--verbose"],
+        logger,
+        config["SLACK"]["post_on_slack"],
+    )
 
     if arguments["--verbose"]:
         logger.info("write the results")

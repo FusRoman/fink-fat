@@ -310,7 +310,7 @@ orbit fitting elapsed time: {time.time() - t_before:.4f} seconds
     orbits = pd.concat([orbits, new_orbits])
     trajectory_orb = pd.concat([trajectory_orb, new_traj_orb])
 
-    # remove the new trajectories with orbit from trajectory_df and the associated kalman filters
+    # remove the new trajectories with orbit from trajectory_df and the associated fitroid parameters
     trajectory_df = trajectory_df[
         ~trajectory_df["trajectory_id"].isin(new_traj_id)
     ].reset_index(drop=True)

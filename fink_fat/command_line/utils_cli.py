@@ -1,6 +1,7 @@
 import configparser
 import json
 import os
+from collections import Counter
 
 import numpy as np
 import pandas as pd
@@ -9,6 +10,8 @@ import fink_fat
 from fink_fat.others.id_tags import generate_tags
 from fink_fat.others.utils import init_logging
 from fink_fat.roid_fitting.utils_roid_fit import fit_traj, predict_equ
+import fink_fat.slack_bot.slack_bot as slack
+from fink_fat.others.utils import LoggerNewLine
 from typing import Tuple
 import warnings
 from astropy.coordinates import SkyCoord
@@ -591,18 +594,108 @@ def time_window(
 
     last_time = Time(last_pdf["last_jd"].round(decimals=0), format="jd").jd
 
-    traj_window = trajectory_df[
-        trajectory_df["trajectory_id"].isin(
-            last_pdf[(current_time - last_time) <= time_window].index
-        )
-    ]
-    fit_df = fit_df[
-        fit_df["trajectory_id"].isin(
-            last_pdf[(current_time - last_time) <= time_window].index
-        )
-    ]
+    mask_window = last_pdf[(current_time - last_time) <= time_window].index
+    traj_window = trajectory_df[trajectory_df["trajectory_id"].isin(mask_window)]
+    fit_df = fit_df[fit_df["trajectory_id"].isin(mask_window)]
 
     return traj_window, fit_df
+
+
+def verbose_and_slack(
+    stats_info: Tuple[int, int, int, int, int],
+    fink_fat_data: Tuple[
+        pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, list
+    ],
+    last_night: str,
+    verbose: bool,
+    logger: LoggerNewLine,
+    post_on_slack: str,
+):
+    """
+    log the verbose info of fink-fat
+    If post_on_slack is true, send association report on slack
+
+    Parameters
+    ----------
+    stats_info : Tuple[int, int, int, int, int]
+        contain integer about the number of associations, trrajectories ... made during the current night.
+    fink_fat_data : Tuple[ pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, list ]
+        all the necessary data about the current fink-fat association night
+    last_night : str
+        the current association night
+    verbose : bool
+        if true, log verbose information
+    logger : LoggerNewLine
+        the logger object
+    post_on_slack : str
+        if true, post association report on slack
+    """    
+    post_on_slack = string_to_bool(post_on_slack)
+    if verbose or post_on_slack:
+        (
+            trajectory_df,
+            fit_roid_df,
+            trajectory_orb,
+            orbits,
+            old_orbits,
+            new_or_updated_orbits,
+        ) = fink_fat_data
+
+        nb_trcand = len(fit_roid_df)
+        (
+            nb_tr_last_night,
+            nb_deviating_trcand,
+            nb_new_trcand,
+            nb_remove_tw,
+            nb_remove_chi,
+        ) = stats_info
+        diff_last_night = nb_trcand - nb_tr_last_night
+
+        nb_orbits = len(orbits)
+
+        statistic_string = f"""
+number of orbits: {nb_orbits}
+number of polyfit trajectories: {nb_trcand}
+ * difference from last night: {f"+{diff_last_night}" if diff_last_night > 0 else f"{diff_last_night}"}
+ * number of deviating trajectory: {nb_deviating_trcand}
+ * number of new trajectory (before the orbit fitting): {nb_new_trcand}
+ * number of trajectories removed by time_window: {nb_remove_tw}
+ * number of trajectories removed by chi_square filter: {nb_remove_chi}
+"""
+
+        if post_on_slack:
+            slack.post_assoc_on_slack(
+                last_night,
+                statistic_string,
+                trajectory_df,
+                trajectory_orb,
+                orbits,
+                old_orbits,
+                new_or_updated_orbits,
+            )
+
+        if verbose:
+            traj_cand_size = Counter(
+                trajectory_df["trajectory_id"].value_counts().sort_index()
+            )
+            traj_orbits_size = Counter(
+                trajectory_orb["ssoCandId"].value_counts().sort_index()
+            )
+            logger.info(
+                f"""
+STATISTICS - ASSOCIATIONS
+----------
+
+{statistic_string}
+
+trajectories candidate size:
+{Counter(traj_cand_size)}
+
+orbits trajectories size:
+{Counter(traj_orbits_size)}
+    """
+            )
+            logger.newline(2)
 
 
 if __name__ == "__main__":  # pragma: no cover

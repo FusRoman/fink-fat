@@ -285,3 +285,40 @@ def stream_association(
     if verbose:
         logger.newline()
     return traj_results, fit_roid_results
+
+
+def trajectories_from_remaining_seeds(seeds, fit_roid_df):
+    # get the seeds with no associations to run the initialization of the fit functions them.
+    test_seeds = seeds[seeds["trajectory_id"] != -1]
+    if len(test_seeds) != 0:
+        test_seeds = (
+            test_seeds.fillna(-1)
+            .groupby("trajectory_id")
+            .agg(tr_no_assoc=("estimator_id", lambda x: (np.array(x) == -1).all()))
+            .reset_index()
+        )
+
+        test_seeds = test_seeds[test_seeds["tr_no_assoc"]]
+        seeds_no_assoc = seeds[
+            seeds["trajectory_id"].isin(test_seeds["trajectory_id"])
+        ]
+        max_traj_id = fit_roid_df["trajectory_id"].max() + 1
+        clusters_id = seeds_no_assoc["trajectory_id"].unique()
+        new_traj_id = np.arange(max_traj_id, max_traj_id + len(clusters_id)).astype(
+            int
+        )
+        assert len(new_traj_id) == len(clusters_id)
+        map_new_tr = {
+            cl_id: tr_id for tr_id, cl_id in zip(new_traj_id, clusters_id)
+        }
+        with pd.option_context("mode.chained_assignment", None):
+            seeds_no_assoc["trajectory_id"] = seeds_no_assoc["trajectory_id"].map(
+                map_new_tr
+            )
+        new_fit_df = init_polyast(seeds_no_assoc)
+        with pd.option_context("mode.chained_assignment", None):
+            seeds_no_assoc["updated"] = "Y"
+            new_fit_df["orbfit_test"] = 0
+        nb_new_trcand = len(new_fit_df)
+
+    return seeds_no_assoc, new_fit_df, nb_new_trcand
