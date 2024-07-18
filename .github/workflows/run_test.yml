@@ -64,6 +64,5 @@ jobs:
 
     - name: Run test suites
       run: |
-        pip install git+https://github.com/astrolabsoftware/fink-science.git@issue/326/roid_extension
         ./run_test.sh
         curl -s https://codecov.io/bash | bash

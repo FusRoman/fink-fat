@@ -23,6 +23,7 @@ export PYTHONPATH="${SPARK_HOME}/python/test_coverage:$PYTHONPATH"
 export COVERAGE_PROCESS_START="${ROOTPATH}/.coveragerc"
 
 python -m pip install -U .
+pip install git+https://github.com/astrolabsoftware/fink-science.git@issue/326/roid_extension
 
 # Run the test suite
 for filename in fink_fat/associations/*.py
