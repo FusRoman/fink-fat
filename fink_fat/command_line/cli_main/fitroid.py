@@ -21,7 +21,6 @@ from fink_fat.seeding.dbscan_seeding import intra_night_seeding
 from fink_fat.command_line.utils_cli import (
     string_to_bool,
     time_window,
-    chi_filter,
     verbose_and_slack,
 )
 from fink_fat.command_line.orbit_cli import trcand_to_orbit
@@ -29,7 +28,6 @@ from fink_fat.command_line.orbit_cli import trcand_to_orbit
 from fink_fat.command_line.association_cli import get_last_roid_streaming_alert
 
 from fink_fat.others.utils import LoggerNewLine
-import fink_fat.slack_bot.slack_bot as slack
 
 
 def get_default_input() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:

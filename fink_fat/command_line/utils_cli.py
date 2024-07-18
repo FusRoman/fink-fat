@@ -629,7 +629,7 @@ def verbose_and_slack(
         the logger object
     post_on_slack : str
         if true, post association report on slack
-    """    
+    """
     post_on_slack = string_to_bool(post_on_slack)
     if verbose or post_on_slack:
         (
