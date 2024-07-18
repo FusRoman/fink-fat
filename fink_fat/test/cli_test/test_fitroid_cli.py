@@ -31,9 +31,13 @@ if __name__ == "__main__":
     datapath = "fink_fat/test/cli_test/small_sso_dataset"
 
     start_date = date(2021, 6, 1)
-    end_date = date(2021, 6, 30)
+    end_date = date(2021, 6, 15)
     logger = init_logging()
 
+    # test successive call of fink-fat 1.0 as Fink normal operation
+    # between first of june and 15 of june
+    logger.info("TEST SUCCESSIVE FINK-FAT FITROID CALL")
+    logger.newline()
     for sso_date in daterange(start_date, end_date):
         logger.info(f"start to process date {sso_date}")
         logger.newline()
@@ -65,6 +69,23 @@ if __name__ == "__main__":
                     "--verbose",
                 ]
             )
+    
+    logger.info("TEST FINK-FAT OFFLINE FITROID")
+    logger.newline()
+    # --------------------------------------------------------------------------------#
+    # fink fat offline command line association
+    # test fink-fat 1.0 offline mode
+    main_test(
+        [
+            "offline",
+            "fitroid",
+            "2021-06-30",
+            "--config",
+            "fink_fat/test/cli_test/fitroid_test.conf",
+            "--verbose",
+        ]
+    )
+
 
     true_traj = pd.read_parquet("fink_fat/test/cli_test/small_sso_dataset/")
     tr_orb = pd.read_parquet(

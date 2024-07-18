@@ -35,6 +35,12 @@ jobs:
         mkdir /home/libs/Orbfit
         ./script/orbFit_installer.sh --install_path /home/libs/Orbfit
 
+    - name: Install pyoorb
+    # for ephemerides computation
+      run: |
+        pip install pyoorb
+        conda install -c defaults -c conda-forge openorb-data-de405
+
     - name: Set up env [1/2]
       run: |
         echo "ORBFIT_HOME=/home/libs/Orbfit" >> $GITHUB_ENV
@@ -58,5 +64,6 @@ jobs:
 
     - name: Run test suites
       run: |
+        pip install git+https://github.com/astrolabsoftware/fink-science.git@issue/326/roid_extension
         ./run_test.sh
         curl -s https://codecov.io/bash | bash
