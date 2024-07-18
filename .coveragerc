@@ -13,3 +13,4 @@ omit=
     fink_fat/__init__.py
     bin/orbit_cli.py
     bin/offline_cli.py
+    *fink_fat_notebook*
