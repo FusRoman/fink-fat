@@ -16,12 +16,10 @@ if __name__ == "__main__":
     mpc_obs = pd.read_parquet("fink_fat/test/mpc_example.parquet")
 
     mpc_obs["magpsf"], mpc_obs["sigmapsf"] = vect_dc_mag(
-        mpc_obs["i:fid"],
         mpc_obs["i:magpsf"],
         mpc_obs["i:sigmapsf"],
         mpc_obs["i:magnr"],
         mpc_obs["i:sigmagnr"],
-        mpc_obs["i:magzpsci"],
         mpc_obs["i:isdiffpos"],
     )
     ssnamenr = np.unique(mpc_obs["i:ssnamenr"])
