@@ -4,7 +4,9 @@ import subprocess
 from fink_fat.others.utils import init_logging
 
 
-def build_spark_submit(config: configparser.ConfigParser) -> str:
+def build_spark_submit(
+    config: configparser.ConfigParser
+) -> str:
     """
     Build the spark-submit application command
 
@@ -46,6 +48,11 @@ def build_spark_submit(config: configparser.ConfigParser) -> str:
 
     if py_files != "":
         spark_submit += f" --py-files {py_files}"
+
+    # add the orbfit path as an environment variable in the spark env
+    orbfit_path = config["SOLVE_ORBIT_PARAMS"]["orbfit_path"]
+    if orbfit_path != "":
+        spark_submit += f" --conf spark.executorEnv.ORBFIT_HOME={orbfit_path}"
 
     return spark_submit
 
