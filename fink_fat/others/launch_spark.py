@@ -46,13 +46,18 @@ def build_spark_submit(
     --conf spark.sql.execution.arrow.maxRecordsPerBatch=1000000\
     --conf spark.kryoserializer.buffer.max=512m"
 
-    if py_files != "":
-        spark_submit += f" --py-files {py_files}"
-
     # add the orbfit path as an environment variable in the spark env
     orbfit_path = config["SOLVE_ORBIT_PARAMS"]["orbfit_path"]
     if orbfit_path != "":
         spark_submit += f" --conf spark.executorEnv.ORBFIT_HOME={orbfit_path}"
+    else:
+        raise LookupError("""
+config file entry 'orbfit_path' is invalid
+config["SOLVE_ORBIT_PARAMS"]["orbfit_path"] == {}
+""".format(orbfit_path))
+
+    if py_files != "":
+        spark_submit += f" --py-files {py_files}"
 
     return spark_submit
 
