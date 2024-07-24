@@ -524,7 +524,6 @@ def compute_inter_night_metric(
     # fmt: on
 
     if test_statement:
-
         real_obs1 = (
             real_obs1[["candid", "ssnamenr"]]
             .sort_values(["ssnamenr"])

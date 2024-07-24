@@ -22,21 +22,32 @@ setup(
             "data/fink_fat.conf",
             "orbit_fitting/AST17.*",
             "orbit_fitting/template.oop",
+            "command_line/cli_main/offline_fitroid/run_offline_fitroid.sh"
         ]
     },
     install_requires=[
         "docopt>=0.6.2",
         "terminaltables>=3.1.10",
         "fink-science>=0.5.1",
-        "fink-utils>=0.3.0",
-        "numpy==1.21.6",
+        "fink-utils>=0.13.8",
+        "numpy==1.23.5",
         "pandas==1.3.5",
         "scikit-learn==1.0.2",
-        "astropy==4.0",
-        "fastavro==1.5.1",
-        "pyarrow==4.0.1"
+        "astropy==5.1",
+        "fastavro==1.6.0",
+        "pyarrow==9.0.0",
+        "pytest==7.2.2",
+        "sbpy==0.4.0",
+        "scipy>=1.4.1",
+        "healpy==1.16.6",
+        "pandera==0.18.0",
+        "lxml>=4.9.3",
+        "slack_sdk>=3.26.2",
+        "pickle5>=0.0.11"
     ],
-    entry_points={"console_scripts": ["fink_fat=bin.fink_fat_cli:main"]},
+    entry_points={
+        "console_scripts": ["fink_fat=fink_fat.command_line.fink_fat_cli:main"]
+    },
     license="Apache-2.0 License",
     platforms="Linux Debian distribution",
     project_urls={

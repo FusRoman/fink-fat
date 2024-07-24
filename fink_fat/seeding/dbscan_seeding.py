@@ -81,9 +81,9 @@ def intra_night_seeding(
     2  30   30   2             -1
     3  11   11   3              1
     4  12   12   4              1
-    5  20   20   5             -1
-    6  21   21   5             -1
-    7  22   22   6             -1
+    5  20   20   5              2
+    6  21   21   5              2
+    7  22   22   6              2
     """
     assert sep_criterion.unit == u.Unit("deg")
 
@@ -97,19 +97,19 @@ def intra_night_seeding(
         night_observation["trajectory_id"] = clustering.labels_
 
     # remove bad seeds containing observations in the same exposure time
-    test_jd_0 = (
-        night_observation.sort_values("jd")
-        .groupby("trajectory_id")
-        .agg(is_same_exp=("jd", lambda x: np.any(np.diff(x) == 0.0)))
-        .reset_index()
-    )
-    test_jd_0 = test_jd_0[test_jd_0["trajectory_id"] != -1.0]
-    jd_0_traj_id = test_jd_0[test_jd_0["is_same_exp"]]["trajectory_id"]
+    # test_jd_0 = (
+    #     night_observation.sort_values("jd")
+    #     .groupby("trajectory_id")
+    #     .agg(is_same_exp=("jd", lambda x: np.any(np.diff(x) == 0.0)))
+    #     .reset_index()
+    # )
+    # test_jd_0 = test_jd_0[test_jd_0["trajectory_id"] != -1.0]
+    # jd_0_traj_id = test_jd_0[test_jd_0["is_same_exp"]]["trajectory_id"]
 
-    with pd.option_context("mode.chained_assignment", None):
-        night_observation.loc[
-            night_observation["trajectory_id"].isin(jd_0_traj_id), "trajectory_id"
-        ] = -1.0
+    # with pd.option_context("mode.chained_assignment", None):
+    #     night_observation.loc[
+    #         night_observation["trajectory_id"].isin(jd_0_traj_id), "trajectory_id"
+    #     ] = -1.0
 
     return night_observation
 
@@ -129,7 +129,7 @@ def seeding_purity(df: pd.DataFrame) -> float:
 
     Returns
     -------
-    float
+    purity : float
         the efficiency of the clustering
 
     Examples
@@ -177,14 +177,12 @@ def seeding_purity(df: pd.DataFrame) -> float:
     recoverable = nb_p[nb_p["nb_point"] > 1]
 
     with pd.option_context("mode.chained_assignment", None):
-        df["ssnamenr_bis"] = df["ssnamenr"].astype(str)
-        df["cluster_bis"] = df["trajectory_id"]
+        df["cluster"] = df["trajectory_id"]
 
     select_cols = [
         "ssnamenr",
         "trajectory_id",
-        "ssnamenr_bis",
-        "cluster_bis",
+        "cluster",
         "nb_point",
     ]
 
@@ -192,40 +190,37 @@ def seeding_purity(df: pd.DataFrame) -> float:
         df[select_cols]
         .groupby("trajectory_id")
         .agg(
-            ssnamenr_list=("ssnamenr_bis", list),
-            cluster_list=("cluster_bis", list),
-            cluster_size=("cluster_bis", len),
+            ast_name=("ssnamenr", list),
+            len_uniq_ast=("ssnamenr", lambda x: len(np.unique(x))),
+            cluster_list=("cluster", list),
+            cluster_size=("cluster", len),
             nb_point=("nb_point", lambda x: list(x)[0]),
         )
         .reset_index()
     )
 
-    def test_cluster(x):
-        uniq_ast = np.unique(x["ssnamenr_list"])
-        return (
-            # is the cluster is complete (all the asteroids observation are in the cluster)
-            len(x["cluster_list"]) == x["nb_point"]
-            # only one asteroids names in the cluster
-            and len(uniq_ast) == 1
-        )
+    t = r[r["trajectory_id"] != -1.0]
 
-    res_cluster = r.apply(test_cluster, axis=1)
-    if len(res_cluster) == 0:
-        if len(recoverable) == 0:
-            return 100
-        else:
-            return 0
+    # cluster size have the same size than the number of asteroids for each trajectory
+    # and only one asteroid for each cluster
+    detected = t[(t["len_uniq_ast"] == 1) & (t["cluster_size"] == t["nb_point"])]
+    if len(recoverable) == 0 and len(detected) == 0:
+        return 100
+    else:
+        purity = (len(detected) / len(recoverable)) * 100
 
-    with pd.option_context("mode.chained_assignment", None):
-        r["cluster_ok"] = res_cluster
-
-    return (r["cluster_ok"].sum() / len(recoverable)) * 100
+        return purity
 
 
 def seeding_completude(df: pd.DataFrame) -> float:
     """
-    Return the completude of the clustering in per cent
-    (how the clustering can find all the asteroids)
+    Return the completude of the clustering.
+    (Is the clustering found all the asteroids)
+
+    Completude is between 0 and +inf.
+    If completude is between [0, 1[ then there is less cluster than the number of asteroids
+    If completude is between ]1, +inf[ then there is more cluster than the number of asteroids
+    Completude == 1 means there is the same number of clusters as the number of asteroids.
 
     Parameters
     ----------
@@ -234,7 +229,7 @@ def seeding_completude(df: pd.DataFrame) -> float:
 
     Returns
     -------
-    float
+    completude : float
         the completude in percentage
 
     Examples
@@ -246,7 +241,7 @@ def seeding_completude(df: pd.DataFrame) -> float:
     ... })
 
     >>> seeding_completude(df_test)
-    100.0
+    1.0
 
     >>> df_test = pd.DataFrame({
     ... "ra": [0, 0, 0, 0, 0],
@@ -255,7 +250,7 @@ def seeding_completude(df: pd.DataFrame) -> float:
     ... })
 
     >>> seeding_completude(df_test)
-    50.0
+    1.0
 
     >>> df_test = pd.DataFrame({
     ... "ra": [0, 0, 0, 0, 0, 0, 0],
@@ -264,61 +259,39 @@ def seeding_completude(df: pd.DataFrame) -> float:
     ... })
 
     >>> seeding_completude(df_test)
-    50.0
+    1.0
+
+    >>> df_test = pd.DataFrame({
+    ... "ra": [0, 0, 0, 0, 0, 0, 0],
+    ... "ssnamenr": [1, 1, 2, 2, 2, 3, 3],
+    ... "trajectory_id": [0, 0, 1, 1, 1, -1, -1]
+    ... })
+
+    >>> seeding_completude(df_test)
+    0.6666666666666667
+
+    >>> df_test = pd.DataFrame({
+    ... "ra": [0, 0, 0, 0, 0, 0, 0, 0],
+    ... "ssnamenr": [1, 1, 2, 2, 2, 2, 3, 3],
+    ... "trajectory_id": [0, 0, 1, 1, 2, 2, 3, 3]
+    ... })
+
+    >>> seeding_completude(df_test)
+    1.3333333333333333
     """
     nb_p = df.groupby("ssnamenr").agg(nb_point=("ra", len)).reset_index()
-    df = df.merge(nb_p, on="ssnamenr")
+    df = df[df["trajectory_id"] != -1]
 
-    recoverable = df[df["nb_point"] > 1]
+    recoverable = nb_p[nb_p["nb_point"] > 1]
 
-    with pd.option_context("mode.chained_assignment", None):
-        recoverable["ssnamenr_bis"] = df["ssnamenr"].astype(str)
-        recoverable["cluster_bis"] = df["trajectory_id"]
-
-    select_cols = [
-        "ssnamenr",
-        "trajectory_id",
-        "ssnamenr_bis",
-        "cluster_bis",
-        "nb_point",
-    ]
-
-    r = (
-        recoverable[select_cols]
-        .groupby("ssnamenr")
-        .agg(
-            ssnamenr_list=("ssnamenr_bis", list),
-            cluster_list=("cluster_bis", list),
-            unique_cluster=("cluster_bis", lambda x: len(np.unique(list(x)))),
-            first_cluster=("cluster_bis", lambda x: list(x)[0]),
-            cluster_size=("cluster_bis", len),
-            nb_point=("nb_point", lambda x: list(x)[0]),
-        )
-        .reset_index()
-    )
-
-    def test_cluster(x):
-        uniq_cluster = np.unique(x["cluster_list"])
-        return (
-            # is the cluster is complete (all the asteroids observation are in the cluster)
-            x["cluster_size"] == x["nb_point"]
-            # only one asteroids names in the cluster
-            and len(uniq_cluster) == 1
-            # and the asteroid observations are not noise (in DBSCAN, -1 means noise so not in a cluster)
-            and uniq_cluster[0] != -1
+    if len(recoverable) == 0 and len(df) == 0:
+        return 1.0
+    else:
+        completude = 1 - (
+            (len(recoverable) - (len(df["trajectory_id"].unique()))) / len(recoverable)
         )
 
-    res_cluster = r.apply(test_cluster, axis=1)
-    if len(res_cluster) == 0:
-        if len(recoverable) == 0:
-            return 100
-        else:
-            return 0
-
-    with pd.option_context("mode.chained_assignment", None):
-        r["cluster_ok"] = res_cluster
-
-    return (r["cluster_ok"].sum() / len(np.unique(recoverable["ssnamenr"]))) * 100
+        return completude
 
 
 if __name__ == "__main__":  # pragma: no cover

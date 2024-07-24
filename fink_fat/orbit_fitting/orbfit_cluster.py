@@ -7,11 +7,12 @@ import pandas as pd
 from pyspark.sql.functions import pandas_udf
 from pyspark.sql.types import ArrayType, DoubleType
 from pyspark.sql import functions as F
-from pyspark.sql import SparkSession
 
 import fink_fat.orbit_fitting.orbfit_files as of
 import fink_fat.orbit_fitting.orbfit_local as ol
 import fink_fat.orbit_fitting.mpcobs_files as mf
+
+from fink_fat.others.utils import init_logging
 
 
 def orbit_wrapper(
@@ -207,30 +208,32 @@ if __name__ == "__main__":
         # Run the test suite
         spark_unit_tests(globs)
     elif sys.argv[1] == "prod":
+        from fink_utils.broker.sparkUtils import init_sparksession
 
-        master_adress = str(sys.argv[2])
-        ram_dir = str(sys.argv[3])
-        n_triplets = int(sys.argv[4])
-        noise_ntrials = int(sys.argv[5])
-        prop_epoch = None if sys.argv[6] == "None" else float(sys.argv[6])
+        logger = init_logging()
+        ram_dir = str(sys.argv[2])
+        n_triplets = int(sys.argv[3])
+        noise_ntrials = int(sys.argv[4])
+        prop_epoch = None if sys.argv[5] == "None" else float(sys.argv[5])
+        orbfit_verbose = int(sys.argv[6])
+        year = sys.argv[7]
+        month = sys.argv[8]
+        day = sys.argv[9]
 
-        print(
-            master_adress,
-            " ",
+        msg_info = """
+ram_dir: {}
+n_triplets: {}
+noise_ntrials: {}
+prop_epoch: {}
+""".format(
             ram_dir,
-            " ",
             n_triplets,
-            " ",
             noise_ntrials,
-            " ",
             prop_epoch,
         )
+        logger.info(msg_info)
 
-        spark = spark = (
-            SparkSession.builder.master(master_adress)
-            .appName("Fink-FAT_solve_orbit")
-            .getOrCreate()
-        )
+        spark = init_sparksession(f"Fink-FAT_solve_orbit_{year}{month}{day}")
 
         # read the input from local parquet file
         traj_df = pd.read_parquet("tmp_traj.parquet")
@@ -260,7 +263,7 @@ if __name__ == "__main__":
             1 if nb_traj // max_core == 0 else nb_traj // max_core
         )
 
-        print("begin compute orbital elem on spark")
+        logger.info("begin compute orbital elem on spark")
         spark_column = spark_gb.withColumn(
             "orbital_elements",
             orbit_wrapper(
@@ -274,7 +277,7 @@ if __name__ == "__main__":
                 n_triplets,
                 noise_ntrials,
                 prop_epoch,
-                verbose=3,
+                verbose=orbfit_verbose,
             ),
         )
 

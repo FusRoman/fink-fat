@@ -15,16 +15,35 @@ jobs:
 
     strategy:
       matrix:
-        container: ["fusroman/fink_fat_docker:dev"]
+        container: ["julienpeloton/fink-ci:latest"]
 
     container:
       image: ${{ matrix.container }}
 
     steps:
     - uses: actions/checkout@v2
-      
+    
+    - name: Install requirements
+      run: |
+        yum install epel-release -y
+        yum install aria2 -y
+        yum install make -y
+        yum install gfortran -y
+
+    - name: Install Orbfit
+      run: |
+        mkdir /home/libs/Orbfit
+        ./script/orbFit_installer.sh --install_path /home/libs/Orbfit
+
+    - name: Install pyoorb
+    # for ephemerides computation
+      run: |
+        pip install pyoorb
+        conda install -c defaults -c conda-forge openorb-data-de405
+
     - name: Set up env [1/2]
       run: |
+        echo "ORBFIT_HOME=/home/libs/Orbfit" >> $GITHUB_ENV
         echo "FINK_FAT=$GITHUB_WORKSPACE" >> $GITHUB_ENV
         echo "JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))" >> $GITHUB_ENV
         echo "${BINPATH}" >> $GITHUB_PATH
@@ -36,6 +55,7 @@ jobs:
     - name: Check env
       run: |
         echo "FINK_FAT: $FINK_FAT"
+        echo "ORBFIT: $ORBFIT_HOME"
         echo "SPARK_HOME: $SPARK_HOME"
         echo "SPARKLIB: $SPARKLIB"
         echo "PYTHONPATH: $PYTHONPATH"
@@ -44,5 +64,6 @@ jobs:
 
     - name: Run test suites
       run: |
+        python -m pip install -U git+https://github.com/astrolabsoftware/fink-science.git@issue/326/roid_extension
         ./run_test.sh
         curl -s https://codecov.io/bash | bash

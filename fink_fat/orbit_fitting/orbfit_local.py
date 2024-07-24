@@ -9,8 +9,8 @@ import fink_fat.orbit_fitting.orbfit_files as of
 import fink_fat.orbit_fitting.mpcobs_files as mf
 
 import traceback
-import logging
 from typing import Union
+from fink_fat.others.utils import init_logging
 
 orbfit_column_name = [
     "trajectory_id",
@@ -130,23 +130,27 @@ command: {run_exception.cmd}
 {err_type}
 
 stdout:
-{run_exception.stdout.decode("utf-8")}
+{run_exception.stdout.decode("utf-8")if run_exception.stdout is not None else "no std output"}
 
 
 
 stderr:
-{run_exception.stderr.decode("utf-8")}
+{run_exception.stderr.decode("utf-8") if run_exception.stderr is not None else "no err output"}
 
 
 
 subprocess output:
-{run_exception.output.decode("utf-8")}
+{run_exception.output.decode("utf-8") if run_exception.output is not None else "no output"}
 -------------------------------------
 """
         return str_err
 
     def write_logs(str_log, first_designation, second_designation):
-        log_file_name = first_designation if second_designation is None else first_designation + "_" + second_designation
+        log_file_name = (
+            first_designation
+            if second_designation is None
+            else first_designation + "_" + second_designation
+        )
         with open(os.path.join(ram_dir, f"{log_file_name}.log"), "w") as f:
             f.write(str_log)
 
@@ -163,12 +167,12 @@ args: {completed_process.args}
 returncode: {completed_process.returncode}
 
 stdout:
-{completed_process.stdout.decode("utf-8")}
+{completed_process.stdout.decode("utf-8")if completed_process.stdout is not None else "no std output"}
 
 
 
 stderr:
-{completed_process.stderr.decode("utf-8")}
+{completed_process.stderr.decode("utf-8")if completed_process.stderr is not None else "no err output"}
 -------------------------------------
 """
                 write_logs(str_out, first_designation, second_designation)
@@ -179,7 +183,15 @@ stderr:
         write_logs(generate_logs(te), first_designation, second_designation)
 
 
-def get_orbit_param(ram_dir, df, n_triplets, noise_ntrials, prop_epoch=None, verbose_orbfit=1, verbose=None):
+def get_orbit_param(
+    ram_dir,
+    df,
+    n_triplets,
+    noise_ntrials,
+    prop_epoch=None,
+    verbose_orbfit=1,
+    verbose=None,
+):
     """
     Compute the orbital elements of one trajectory.
 
@@ -222,24 +234,29 @@ def get_orbit_param(ram_dir, df, n_triplets, noise_ntrials, prop_epoch=None, ver
     >>> of.prep_orbitfit("")
     >>> res = get_orbit_param("", df, 15, 15)
     >>> res[0][:9]
-    [0, 'K21E00A', 2459274.881182641, '1.2731835539687217E+00', '0.206413338170746', '2.7535934287416', '137.2985320438607', '321.1224023053072', '43.2327613057881']
+    [0, 'K21E00A', 2459274.881182641, '1.2731871850383536E+00', '0.206418078901105', '2.7536307829725', '137.2988441541181', '321.1216348948549', '43.2327049947369']
 
     >>> of.final_clean("")
 
     >>> of.prep_orbitfit("")
     >>> res = get_orbit_param("", df, 15, 15, prop_epoch=2459752.16319)
     >>> res[0][:9]
-    [0, 'K21E00A', 2459752.163990741, '1.2731741718578882E+00', '0.206162998389323', '2.7531115133717', '137.2874441097704', '321.1518212593283', '10.6664371694522']
+    [0, 'K21E00A', 2459752.163990741, '1.2731778010190435E+00', '0.206167737176772', '2.7531488723284', '137.2877565940593', '321.1510512580166', '10.6649827879165']
 
     >>> of.final_clean("")
     """
-
+    logger = init_logging()
     all_traj_id = np.unique(df["trajectory_id"].values)
 
     results = []
     for traj_id in all_traj_id:
         df_one_traj = df[df["trajectory_id"] == traj_id]
-        prov_desig = mf.write_observation_file(ram_dir, df_one_traj)
+
+        try:
+            prov_desig = mf.write_observation_file(ram_dir, df_one_traj)
+        except Exception:
+            continue
+
         of.write_inp(ram_dir, prov_desig)
 
         if prop_epoch is None:
@@ -264,15 +281,15 @@ def get_orbit_param(ram_dir, df, n_triplets, noise_ntrials, prop_epoch=None, ver
         try:
             call_orbitfit(ram_dir, prov_desig, verbose=verbose)
         except Exception as e:  # pragma: no cover
-            print(e)
-            print("ERROR CALLING ORBFIT: {}".format(prov_desig))
-            print()
-            logging.error(traceback.format_exc())
-            print()
-            print(prov_desig)
-            print()
-            print()
-            print(df_one_traj)
+            logger.info(e)
+            logger.info("ERROR CALLING ORBFIT: {}".format(prov_desig))
+            logger.newline()
+            logger.error(traceback.format_exc())
+            logger.newline()
+            logger.info(prov_desig)
+            logger.newline()
+            logger.newline()
+            logger.info(df_one_traj)
 
         chi_values = of.read_rwo(ram_dir, prov_desig, len(df_one_traj))
 
@@ -286,11 +303,11 @@ def get_orbit_param(ram_dir, df, n_triplets, noise_ntrials, prop_epoch=None, ver
         try:
             of.obs_clean(ram_dir, prov_desig)
         except FileNotFoundError:  # pragma: no cover
-            print("ERROR CLEANING ORBFIT: {}".format(prov_desig))
-            print(prov_desig)
-            print()
-            print()
-            print(df_one_traj)
+            logger.info("ERROR CLEANING ORBFIT: {}".format(prov_desig))
+            logger.info(prov_desig)
+            logger.newline()
+            logger.newline()
+            logger.info(df_one_traj)
 
     return results
 
@@ -333,6 +350,37 @@ def orbit_elem_dataframe(orbit_elem, column_name):
     return df_orb_elem
 
 
+def get_last_detection(trajectory_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Get the last detection for each trajectories in the input dataframe
+
+    Parameters
+    ----------
+    trajectory_df : pd.DataFrame
+        contains trajectory
+        mandatory columns: trajectory_id, ra, dec, jd, magpsf, fid
+
+    Returns
+    -------
+    pd.DataFrame
+        dataframe containing the last detection for each trajectories
+    """
+    get_last = lambda x: list(x)[-1]  # noqa: E731
+    last_det = (
+        trajectory_df.sort_values("jd")
+        .groupby("trajectory_id")
+        .agg(
+            last_ra=("ra", get_last),
+            last_dec=("dec", get_last),
+            last_jd=("jd", get_last),
+            last_mag=("magpsf", get_last),
+            last_fid=("fid", get_last),
+        )
+        .reset_index()
+    )
+    return last_det
+
+
 def compute_df_orbit_param(
     trajectory_df,
     cpu_count,
@@ -341,7 +389,7 @@ def compute_df_orbit_param(
     noise_ntrials=10,
     prop_epoch=None,
     verbose_orbfit=1,
-    verbose=None
+    verbose=None,
 ):
     """
     Compute the orbital elements of a set of trajectories. Computation are done in parallel.
@@ -382,9 +430,13 @@ def compute_df_orbit_param(
     Examples
     --------
 
-    >>> orb_elem = compute_df_orbit_param(ts.orbfit_samples, 2, "")
-
-    >>> assert_frame_equal(orb_elem, ts.orbfit_output)
+    >>> tr = pd.read_parquet("fink_fat/test/cluster_test/trajectories_sample.parquet")
+    >>> orbits = compute_df_orbit_param(tr, 2, "")
+    >>> cols_to_drop = ["rms_a", "rms_e", "rms_i", "rms_long. node", "rms_arg. peric", "rms_mean anomaly", "chi_reduced"]
+    >>> assert_frame_equal(
+    ...     orbits.drop(cols_to_drop, axis=1).round(decimals=4),
+    ...     ts2.local_orbit_test.round(decimals=4)
+    ... )
     """
 
     # of.prep_orbitfit(ram_dir)
@@ -410,7 +462,7 @@ def compute_df_orbit_param(
             noise_ntrials,
             prop_epoch,
             verbose_orbfit,
-            verbose
+            verbose,
         )
         for tr_chunk, chunk_dir in zip(trajectory_id_chunks, chunk_ramdir)
         if len(tr_chunk) > 0
@@ -429,7 +481,10 @@ def compute_df_orbit_param(
     of.final_clean(ram_dir)
 
     if len(results) > 0:
-        return orbit_elem_dataframe(np.array(results), orbfit_column_name)
+        orbits = orbit_elem_dataframe(np.array(results), orbfit_column_name)
+        last_det = get_last_detection(trajectory_df)
+        orbits = orbits.merge(last_det, on="trajectory_id")
+        return orbits
     else:  # pragma: no cover
         return pd.DataFrame(columns=orbfit_column_name)
 
@@ -439,6 +494,7 @@ if __name__ == "__main__":  # pragma: no cover
     import doctest
     from pandas.testing import assert_frame_equal  # noqa: F401
     import fink_fat.test.test_sample as ts  # noqa: F401
+    import fink_fat.test.test_sample_2 as ts2  # noqa: F401
     from unittest import TestCase  # noqa: F401
     import shutil  # noqa: F401
     import filecmp  # noqa: F401

@@ -7,21 +7,19 @@ import os
 
 from fink_utils.photometry.vect_conversion import vect_dc_mag
 from fink_fat.orbit_fitting.mpcobs_files import write_observation_file
+from fink_fat.others.utils import init_logging
 
 
 if __name__ == "__main__":
-
     mpc_file_obs_path = "fink_fat/test/test_orbit_file"
 
     mpc_obs = pd.read_parquet("fink_fat/test/mpc_example.parquet")
 
     mpc_obs["magpsf"], mpc_obs["sigmapsf"] = vect_dc_mag(
-        mpc_obs["i:fid"],
         mpc_obs["i:magpsf"],
         mpc_obs["i:sigmapsf"],
         mpc_obs["i:magnr"],
         mpc_obs["i:sigmagnr"],
-        mpc_obs["i:magzpsci"],
         mpc_obs["i:isdiffpos"],
     )
     ssnamenr = np.unique(mpc_obs["i:ssnamenr"])
@@ -50,7 +48,8 @@ if __name__ == "__main__":
             "{}/mpcobs/{}.obs".format(mpc_file_obs_path, prov_desig),
             "{}/mpcobs_temoin/{}.obs".format(mpc_file_obs_path, prov_desig),
         ):  # pragma: no cover
-            print("failed test: {}".format(prov_desig))
+            logger = init_logging()
+            logger.info("failed test: {}".format(prov_desig))
             res_test = 1
 
         os.remove("{}/mpcobs/{}.obs".format(mpc_file_obs_path, prov_desig))

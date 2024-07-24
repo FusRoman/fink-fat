@@ -60,12 +60,15 @@ if [[ ! -d $ORBLOCATE ]]; then
     exit
 fi
 
-aria2c -x8 http://adams.dm.unipi.it/orbfit/OrbFit5.0.7.tar.gz
+# aria2c -x8 http://adams.dm.unipi.it/orbfit/OrbFit5.0.7.tar.gz
+# tar -xf OrbFit5.0.7.tar.gz -C $ORBLOCATE
+# rm OrbFit5.0.7.tar.gz
 
+git clone -b SourceCode https://github.com/FusRoman/OrbFit.git
 
-tar -xf OrbFit5.0.7.tar.gz -C $ORBLOCATE
+mv OrbFit/* $ORBLOCATE
 
-rm OrbFit5.0.7.tar.gz
+rm -rf OrbFit
 
 cd $ORBLOCATE
 

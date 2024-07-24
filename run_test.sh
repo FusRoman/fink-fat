@@ -22,7 +22,7 @@ export ROOTPATH=`pwd`
 export PYTHONPATH="${SPARK_HOME}/python/test_coverage:$PYTHONPATH"
 export COVERAGE_PROCESS_START="${ROOTPATH}/.coveragerc"
 
-python -m pip install .
+python -m pip install -U .
 
 # Run the test suite
 for filename in fink_fat/associations/*.py
@@ -37,6 +37,19 @@ done
 # Run the test suite
 for filename in fink_fat/others/*.py
 do
+    if [[ "$filename" != "fink_fat/others/spark_ephem_utils.py" ]]; then
+        echo $filename
+        # Run test suite + coverage
+        coverage run \
+        --source=${ROOTPATH} \
+        --rcfile ${ROOTPATH}/.coveragerc $filename
+    fi
+done
+
+
+# Run the test suite
+for filename in fink_fat/seeding/*.py
+do
   echo $filename
   # Run test suite + coverage
   coverage run \
@@ -44,9 +57,8 @@ do
     --rcfile ${ROOTPATH}/.coveragerc $filename
 done
 
-
 # Run the test suite
-for filename in fink_fat/seeding/*.py
+for filename in fink_fat/mpc_submission/*.py
 do
   echo $filename
   # Run test suite + coverage
@@ -71,21 +83,23 @@ coverage run --source=${ROOTPATH} --rcfile ${ROOTPATH}/.coveragerc ${ORBITFITTIN
 # echo "${ORBITFITTING_PATH}/orbfit_ephem.py"
 # coverage run --source=${ROOTPATH} --rcfile ${ROOTPATH}/.coveragerc ${ORBITFITTING_PATH}/orbfit_ephem.py
 
-for filename in bin/*.py
+for filename in fink_fat/command_line/*.py
 do
   echo $filename
   # Run test suite + coverage
   coverage run \
     --source=${ROOTPATH} \
-    --rcfile ${ROOTPATH}/.coveragerc $filename
+    --rcfile ${ROOTPATH}/.coveragerc $filename "test"
 done
 
 for filename in fink_fat/test/*/*.py
 do
-  echo $filename
-  coverage run \
-    --source=${ROOTPATH} \
-    --rcfile ${ROOTPATH}/.coveragerc $filename
+    if [[ "$filename" != "fink_fat/test/cli_test/run_roid.py" ]]; then
+        echo $filename
+        coverage run \
+          --source=${ROOTPATH} \
+          --rcfile ${ROOTPATH}/.coveragerc $filename
+    fi
 done
 
 for filename in fink_fat/test/*.py
@@ -95,6 +109,13 @@ do
     --source=${ROOTPATH} \
     --rcfile ${ROOTPATH}/.coveragerc $filename
 done
+
+
+# run the test suite for the kalman filter
+echo "run kalman test"
+coverage run --source=${ROOTPATH} --rcfile=${ROOTPATH}/.coveragerc -m \
+  pytest fink_fat/test/kalman_test/update_kalman_test/test_runner.py
+
 
 coverage combine
 

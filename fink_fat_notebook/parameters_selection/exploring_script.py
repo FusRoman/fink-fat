@@ -8,7 +8,7 @@ import numpy as np
 from matplotlib.lines import Line2D
 import matplotlib.rcsetup as rcsetup
 
-from bin.stat_cli import compute_residue
+from fink_fat.command_line.stat_cli import compute_residue
 
 
 def load_data(columns=None):
