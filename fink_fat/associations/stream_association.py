@@ -71,9 +71,8 @@ def merge_trajectory_cluster(
                     tr_to_update[tr_to_update["trajectory_id"] == tr_id],
                     # get the cluster
                     (
-                        cluster_df[cluster_df["trajectory_id"] == cl_id].sort_values(
-                            "jd"
-                        )
+                        cluster_df[cluster_df["trajectory_id"] == cl_id]
+                        .sort_values("jd")
                         .drop_duplicates("candid")
                     ),
                 ]
@@ -197,7 +196,6 @@ def stream_association(
     new_alerts: pd.DataFrame,
     logger: LoggerNewLine,
     verbose: bool,
-    confirmed_sso: bool = False,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Merge the trajectories with the new observations from the new night.
@@ -216,8 +214,6 @@ def stream_association(
         the logger used to print logs
     verbose : bool
         if true, print logs
-    confirmed_sso : bool, optional
-        if true, perform the associations with known sso, perform associations with candidates otherwise, by default False
 
     Returns
     -------
@@ -230,15 +226,6 @@ def stream_association(
     see stream_association_test
     """
 
-    if confirmed_sso:
-        roid_flag = [3, 4]
-    else:
-        roid_flag = [1, 2, 4]
-
-    if verbose:
-        logger.info("- start the association with the results from the roid stream")
-
-    new_alerts = new_alerts[new_alerts["roid"].isin(roid_flag)]
     new_alerts = new_alerts.explode(["ffdistnr", "estimator_id"])
 
     new_alerts["estimator_id"] = new_alerts["estimator_id"].fillna(-1)
@@ -287,7 +274,26 @@ def stream_association(
     return traj_results, fit_roid_results
 
 
-def trajectories_from_remaining_seeds(seeds, fit_roid_df):
+def trajectories_from_remaining_seeds(
+    seeds: pd.DataFrame, fit_roid_df: pd.DataFrame
+) -> Tuple[pd.DataFrame, pd.DataFrame, int]:
+    """
+    Create trajectories and fit predictors for the seeds not associated with existing trajectories
+
+    Parameters
+    ----------
+    seeds : pd.DataFrame
+        seeds from the intra_night_seeding and not associated
+    fit_roid_df : pd.DataFrame
+        the trajectory predictors
+
+    Returns
+    -------
+    Tuple[pd.DataFrame, pd.DataFrame, int]
+        - seeds_no_assoc: trajectories from the seeds not associated
+        - new_fit_df: the new trajectory predictors
+        - nb_new_trcand: the number of new trajectories made from the remaining seeds
+    """
     # get the seeds with no associations to run the initialization of the fit functions them.
     test_seeds = seeds[seeds["trajectory_id"] != -1]
     if len(test_seeds) != 0:
@@ -299,18 +305,12 @@ def trajectories_from_remaining_seeds(seeds, fit_roid_df):
         )
 
         test_seeds = test_seeds[test_seeds["tr_no_assoc"]]
-        seeds_no_assoc = seeds[
-            seeds["trajectory_id"].isin(test_seeds["trajectory_id"])
-        ]
+        seeds_no_assoc = seeds[seeds["trajectory_id"].isin(test_seeds["trajectory_id"])]
         max_traj_id = fit_roid_df["trajectory_id"].max() + 1
         clusters_id = seeds_no_assoc["trajectory_id"].unique()
-        new_traj_id = np.arange(max_traj_id, max_traj_id + len(clusters_id)).astype(
-            int
-        )
+        new_traj_id = np.arange(max_traj_id, max_traj_id + len(clusters_id)).astype(int)
         assert len(new_traj_id) == len(clusters_id)
-        map_new_tr = {
-            cl_id: tr_id for tr_id, cl_id in zip(new_traj_id, clusters_id)
-        }
+        map_new_tr = {cl_id: tr_id for tr_id, cl_id in zip(new_traj_id, clusters_id)}
         with pd.option_context("mode.chained_assignment", None):
             seeds_no_assoc["trajectory_id"] = seeds_no_assoc["trajectory_id"].map(
                 map_new_tr

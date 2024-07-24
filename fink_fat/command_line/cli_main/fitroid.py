@@ -290,6 +290,7 @@ roid count:
             old_orbits = pd.concat([save_old_orbits, old_orbits])
         old_orbits.to_parquet(path_old_orbits, index=False)
 
+    # take alerts associated with trajectory predictors from the stream
     keep_flags = flags + [4]
     sso_night = alerts_night[alerts_night["roid"].isin(keep_flags)]
 
@@ -321,7 +322,7 @@ roid count:
         if len(sso_night[sso_night["roid"] == 4]) != 0:
             nb_trcand_before = len(fit_roid_df)
             trajectory_df, fit_roid_df = stream_association(
-                trajectory_df, fit_roid_df, seeds, logger, True, confirmed_sso=True
+                trajectory_df, fit_roid_df, seeds, logger, True
             )
             nb_deviating_trcand = len(fit_roid_df) - nb_trcand_before
 
