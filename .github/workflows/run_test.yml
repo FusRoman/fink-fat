@@ -15,7 +15,7 @@ jobs:
 
     strategy:
       matrix:
-        container: ["fusroman/fink_fat_docker:dev"]
+        container: ["julienpeloton/fink-ci:latest"]
 
     container:
       image: ${{ matrix.container }}
