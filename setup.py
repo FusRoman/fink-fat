@@ -32,7 +32,7 @@ setup(
         "numpy==1.21.6",
         "pandas==1.3.5",
         "scikit-learn==1.0.2",
-        "astropy==4.0",
+        "astropy>=6.0",
         "fastavro==1.5.1",
         "pyarrow==4.0.1"
     ],
