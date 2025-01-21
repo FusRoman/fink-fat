@@ -34,7 +34,8 @@ setup(
         "scikit-learn==1.0.2",
         "astropy>=6.0",
         "fastavro>=1.5.1",
-        "pyarrow>=4.0.1"
+        "pyarrow>=4.0.1",
+        "pickle5"
     ],
     entry_points={"console_scripts": ["fink_fat=bin.fink_fat_cli:main"]},
     license="Apache-2.0 License",
