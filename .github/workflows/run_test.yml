@@ -41,7 +41,7 @@ jobs:
         dnf -y install gcc-gfortran
         mkdir /home/libs/OrbFit
         source ./script/orbFit_installer.sh --install_path /home/libs/OrbFit
-        echo "/home/libs/OrbFit" >> $GITHUB_PATH
+        echo "ORBFIT_HOME=/home/libs/OrbFit" >> $GITHUB_PATH
 
     - name: Check env
       run: |
