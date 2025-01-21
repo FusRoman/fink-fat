@@ -22,7 +22,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v2
-      
+
     - name: Set up env [1/2]
       run: |
         echo "FINK_FAT=$GITHUB_WORKSPACE" >> $GITHUB_ENV
@@ -37,11 +37,9 @@ jobs:
       run: |
         dnf -y install epel-release
         dnf -y install aria2
-        mkdir OrbFit
-        cd ${USRLIBS}/fink-fat/script
-        source ./orbFit_installer.sh --install_path ${USRLIBS}/OrbFit
-        echo "export ORBFIT_HOME=${USRLIBS}/OrbFit" > /etc/profile.d/orbfithome.sh
-        cd ${USRLIBS}
+        mkdir /home/libs/OrbFit
+        source ./orbFit_installer.sh --install_path /home/libs/OrbFit
+        echo "/home/libs/OrbFit" >> $GITHUB_PATH
 
     - name: Check env
       run: |
