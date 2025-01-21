@@ -33,6 +33,16 @@ jobs:
       run: |
         echo "PYTHONPATH="${PYTHONPATH}:${SPARKLIB}:${FINK_FAT}"" >> $GITHUB_ENV
 
+    - name: Install Orbfit
+      run: |
+        dnf -y install epel-release
+        dnf -y install aria2
+        mkdir OrbFit
+        cd ${USRLIBS}/fink-fat/script
+        source ./orbFit_installer.sh --install_path ${USRLIBS}/OrbFit
+        echo "export ORBFIT_HOME=${USRLIBS}/OrbFit" > /etc/profile.d/orbfithome.sh
+        cd ${USRLIBS}
+
     - name: Check env
       run: |
         echo "FINK_FAT: $FINK_FAT"
