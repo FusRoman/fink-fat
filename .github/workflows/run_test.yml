@@ -38,6 +38,7 @@ jobs:
         dnf -y install epel-release
         dnf -y install aria2
         dnf -y install make-1:4.3-8.el9.x86_64
+        dnf -y install gcc-gfortran
         mkdir /home/libs/OrbFit
         source ./script/orbFit_installer.sh --install_path /home/libs/OrbFit
         echo "/home/libs/OrbFit" >> $GITHUB_PATH

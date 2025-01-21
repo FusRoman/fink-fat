@@ -65,7 +65,7 @@ aria2c -x8 http://adams.dm.unipi.it/orbfit/OrbFit5.0.7.tar.gz
 
 tar -xf OrbFit5.0.7.tar.gz -C $ORBLOCATE
 
-rm OrbFit5.0.7.tar.gz
+rm -f OrbFit5.0.7.tar.gz
 
 cd $ORBLOCATE
 
