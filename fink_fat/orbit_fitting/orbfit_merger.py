@@ -56,7 +56,7 @@ merge_column_name = [
 ]
 
 
-def parallel_merger(ram_dir, trajectory_df, orb_cand, indices, prop_epoch):
+def parallel_merger(ram_dir, trajectory_df, orb_cand, indices, prop_epoch, verbose=False):
     """
     Function used for the parallel computation of Orbfit in orbit identification mode.
     Try all the combination of trajectories return by the nearest neighbor algorithm.
@@ -130,7 +130,7 @@ def parallel_merger(ram_dir, trajectory_df, orb_cand, indices, prop_epoch):
                 prop_epoch="JD  {} UTC".format(prop_epoch),
             )
 
-            ol.call_orbitfit(ram_dir, first_obj, second_obj)
+            ol.call_orbitfit(ram_dir, first_obj, second_obj, verbose=verbose)
 
             readed_orb = of.read_oel(ram_dir, first_obj, second_obj)
             readed_orb[1] = neighbor_traj[0]

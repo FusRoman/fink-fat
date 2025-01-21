@@ -610,7 +610,7 @@ def read_oel_lines(lines, second_desig=False):
         second_desig = lines[31].rstrip()
         merge_desig = lines[56].rstrip()
         orb_rms_second = get_orb_and_rms(lines, 33, 38)
-        orb_rms_merge = get_orb_and_rms(lines, 58, 62)
+        orb_rms_merge = get_orb_and_rms(lines, 58, 63)
         orb_params_list = (
             [ref_jd]
             + [first_desig]
