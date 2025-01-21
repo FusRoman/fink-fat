@@ -38,7 +38,7 @@ jobs:
         dnf -y install epel-release
         dnf -y install aria2
         mkdir /home/libs/OrbFit
-        source ./orbFit_installer.sh --install_path /home/libs/OrbFit
+        source ./script/orbFit_installer.sh --install_path /home/libs/OrbFit
         echo "/home/libs/OrbFit" >> $GITHUB_PATH
 
     - name: Check env
