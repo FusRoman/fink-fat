@@ -544,6 +544,7 @@ def get_orb_and_rms(lines, index_orb, index_rms):
     """
     orb_params = " ".join(lines[index_orb].strip().split()).split(" ")
     if len(lines) > index_rms:
+        # It's not very effective (maybe ...)
         rms = " ".join(lines[index_rms].strip().split()).split(" ")
 
         for i_error in range(2, len(rms)):
