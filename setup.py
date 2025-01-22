@@ -29,12 +29,13 @@ setup(
         "terminaltables>=3.1.10",
         "fink-science>=0.5.1",
         "fink-utils>=0.3.0",
-        "numpy==1.21.6",
-        "pandas==1.3.5",
+        "numpy",
+        "pandas",
         "scikit-learn==1.0.2",
-        "astropy==4.0",
-        "fastavro==1.5.1",
-        "pyarrow==4.0.1"
+        "astropy>=6.0",
+        "fastavro>=1.5.1",
+        "pyarrow>=4.0.1",
+        "pickle5"
     ],
     entry_points={"console_scripts": ["fink_fat=bin.fink_fat_cli:main"]},
     license="Apache-2.0 License",
