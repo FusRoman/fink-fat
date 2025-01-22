@@ -140,19 +140,6 @@ def angle_df(x):
 
     Examples
     --------
-    >>> from pandera import Check, Column, DataFrameSchema
-
-    >>> df_schema = DataFrameSchema({
-    ... "trajectory_id": Column(int),
-    ... "ra_x": Column(object),
-    ... "dec_x": Column(object),
-    ... "jd_x": Column(object),
-    ... "candid": Column(int),
-    ... "index": Column(int),
-    ... "ra_y": Column(float),
-    ... "dec_y": Column(float),
-    ... "jd_y": Column(float)
-    ... })
 
     >>> test_dataframe = pd.DataFrame({
     ... 'trajectory_id': [0],
@@ -165,8 +152,6 @@ def angle_df(x):
     ... 'dec_y':[4.0],
     ... 'jd_y': [2.0]
     ... })
-
-    >>> test_dataframe = df_schema.validate(test_dataframe)
 
     >>> res = test_dataframe.apply(angle_df, axis=1)
 

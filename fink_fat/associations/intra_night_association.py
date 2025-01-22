@@ -26,22 +26,13 @@ def get_n_last_observations_from_trajectories(trajectories, n, ascending=True):
 
     Examples
     --------
-    >>> from pandera import Check, Column, DataFrameSchema
-
     >>> test = pd.DataFrame({
     ... "candid" : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
     ... "jd" : [0.0, 1.0, 2, 3, 4, 5, 6, 7, 8, 9],
     ... "trajectory_id" : [1, 1, 1, 1, 2, 2, 3, 3, 3, 3]
     ... })
 
-    >>> df_schema = DataFrameSchema({
-    ... "jd": Column(float),
-    ... "trajectory_id": Column(int)
-    ... })
-
-    >>> res = get_n_last_observations_from_trajectories(test, 1, False)
-
-    >>> res = df_schema.validate(res).reset_index(drop=True)
+    >>> res = get_n_last_observations_from_trajectories(test, 1, False).reset_index(drop=True)
 
     >>> df_expected = pd.DataFrame({
     ... "candid" : [6, 4, 0],
@@ -51,9 +42,7 @@ def get_n_last_observations_from_trajectories(trajectories, n, ascending=True):
 
     >>> assert_frame_equal(res, df_expected)
 
-    >>> res = get_n_last_observations_from_trajectories(test, 1, True)
-
-    >>> res = df_schema.validate(res).reset_index(drop=True)
+    >>> res = get_n_last_observations_from_trajectories(test, 1, True).reset_index(drop=True)
 
     >>> df_expected = pd.DataFrame({
     ... "candid" : [3, 5, 9],
@@ -63,9 +52,7 @@ def get_n_last_observations_from_trajectories(trajectories, n, ascending=True):
 
     >>> assert_frame_equal(res, df_expected)
 
-    >>> res = get_n_last_observations_from_trajectories(test, 2, True)
-
-    >>> res = df_schema.validate(res).reset_index(drop=True)
+    >>> res = get_n_last_observations_from_trajectories(test, 2, True).reset_index(drop=True)
 
     >>> df_expected = pd.DataFrame({
     ... "candid" : [2, 3, 4, 5, 8, 9],
@@ -75,9 +62,7 @@ def get_n_last_observations_from_trajectories(trajectories, n, ascending=True):
 
     >>> assert_frame_equal(res, df_expected)
 
-    >>> res = get_n_last_observations_from_trajectories(test, 2, False)
-
-    >>> res = df_schema.validate(res).reset_index(drop=True)
+    >>> res = get_n_last_observations_from_trajectories(test, 2, False).reset_index(drop=True)
 
     >>> df_expected = pd.DataFrame({
     ... "candid" : [7, 6, 5, 4, 1, 0],

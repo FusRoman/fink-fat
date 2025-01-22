@@ -15,14 +15,14 @@ jobs:
 
     strategy:
       matrix:
-        container: ["fusroman/fink_fat_docker:dev"]
+        container: ["julienpeloton/fink-ci:latest"]
 
     container:
       image: ${{ matrix.container }}
 
     steps:
     - uses: actions/checkout@v2
-      
+
     - name: Set up env [1/2]
       run: |
         echo "FINK_FAT=$GITHUB_WORKSPACE" >> $GITHUB_ENV
@@ -33,6 +33,16 @@ jobs:
       run: |
         echo "PYTHONPATH="${PYTHONPATH}:${SPARKLIB}:${FINK_FAT}"" >> $GITHUB_ENV
 
+    - name: Install Orbfit
+      run: |
+        dnf -y install epel-release
+        dnf -y install aria2
+        dnf -y install make-1:4.3-8.el9.x86_64
+        dnf -y install gcc-gfortran
+        mkdir /home/libs/OrbFit
+        source ./script/orbFit_installer.sh --install_path /home/libs/OrbFit
+        echo "ORBFIT_HOME=/home/libs/OrbFit" >> $GITHUB_ENV
+
     - name: Check env
       run: |
         echo "FINK_FAT: $FINK_FAT"
@@ -40,6 +50,7 @@ jobs:
         echo "SPARKLIB: $SPARKLIB"
         echo "PYTHONPATH: $PYTHONPATH"
         echo "JAVA_HOME: $JAVA_HOME"
+        echo "ORBFIT_HOME: $ORBFIT_HOME"
         echo `python -V`
 
     - name: Run test suites

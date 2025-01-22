@@ -88,7 +88,7 @@ def request_fink(
 
     # +- 1 hour due to hbase issue
     r = requests.post(
-        "https://fink-portal.org/api/v1/latests",
+        "https://api.fink-portal.org/api/v1/latests",
         json={
             "class": object_class,
             "n": "{}".format(n_sso),
@@ -167,7 +167,7 @@ def get_n_sso(object_class, date):
     0
     """
     r = requests.post(
-        "https://fink-portal.org/api/v1/statistics",
+        "https://api.fink-portal.org/api/v1/statistics",
         json={"date": str(date), "output-format": "json"},
     )
 

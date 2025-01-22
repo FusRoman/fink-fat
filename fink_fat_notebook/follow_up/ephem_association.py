@@ -79,7 +79,7 @@ def ephem_cross_match(pdf_alerts, orbit, sep_assoc):
 
 def get_stats_sso():
     r = requests.post(
-        "https://fink-portal.org/api/v1/statistics",
+        "https://api.fink-portal.org/api/v1/statistics",
         json={"date": "", "output-format": "json"},
     )
 
@@ -108,7 +108,7 @@ def get_alerts(start, stop, nb_alerts):
 
     # with hbase correction
     r = requests.post(
-        "https://fink-portal.org/api/v1/latests",
+        "https://api.fink-portal.org/api/v1/latests",
         json={
             "class": "Solar System candidate",
             "n": "{}".format(nb_alerts),
