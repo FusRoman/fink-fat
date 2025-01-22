@@ -44,7 +44,6 @@ if __name__ == "__main__":
 
         prov_desig = write_observation_file("{}/".format(mpc_file_obs_path), tmp_tr)
 
-
         if not filecmp.cmp(
             "{}/mpcobs/{}.obs".format(mpc_file_obs_path, prov_desig),
             "{}/mpcobs_temoin/{}.obs".format(mpc_file_obs_path, prov_desig),
