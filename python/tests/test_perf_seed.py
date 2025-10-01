@@ -72,7 +72,7 @@ def synthesize_alerts(
     dec = np.empty(n_total, dtype=np.float64)
     t   = np.empty(n_total, dtype=np.float64)
     band = np.ones(n_total, dtype=np.uint8)
-    dia = np.arange(1, n_total + 1, dtype=np.int64)
+    dia = np.arange(1, n_total + 1, dtype=np.uint64)
 
     # --- Triplets A,B,C (vectorisé) ---
     idx0 = 0
@@ -189,6 +189,7 @@ def test_perf_generate_seeds_10m():
         trip_max_pair_sep=trip_max_pair_sep,
         trip_max_pred_resid=trip_max_pred_resid,
         enforce_time_order=enforce_time_order,
+        show_progress=True,
     )
     t2 = time.perf_counter()
 
@@ -209,4 +210,3 @@ def test_perf_generate_seeds_10m():
 
     print(store[pairs[0][0]], store[pairs[0][1]])
     print(store[triplets[0][0]], store[triplets[0][1]], store[triplets[0][2]])
-    

@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 [dependencies]
 ahash = "0.8.12"
 cdshealpix = "0.7.3"
+indicatif = "0.18.0"
 itertools = "0.14.0"
 numpy = "0.26.0"
 pyo3 = { version = "0.26", features = ["extension-module"] }
