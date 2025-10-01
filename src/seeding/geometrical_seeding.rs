@@ -2,9 +2,11 @@
 //! Génération de seeds (paires & triplets) à partir de buckets spatio-temporels.
 use ahash::AHashMap;
 
+use indicatif::ProgressBar;
 use pyo3::pyclass;
 
 use crate::alerts::{Alert, AlertId};
+use crate::progress::{maybe_progress_finish, maybe_progress_start, maybe_progress_throttled_set};
 use crate::seeding::space_time_bucket::{
     BucketIndex, BucketKey, MjdTt, Radians, SpatialBinner, SpatialKey, TimeBin, TimeBinner,
 };
@@ -69,73 +71,104 @@ fn time_targets<Bt: TimeBinner>(
 
 /* --------------------------- Génération des PAIRS --------------------- */
 
-pub fn generate_pairs<Bs: SpatialBinner, Bt: TimeBinner>(
+#[inline]
+fn unit_vec(ra: f64, dec: f64) -> [f64; 3] {
+    let c = dec.cos();
+    [c * ra.cos(), c * ra.sin(), dec.sin()]
+}
+#[inline]
+fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+/// première position `i` telle que `times_by_id[ids[i]] > key_time`
+#[inline]
+fn lower_bound_gt_ids(ids: &[AlertId], key_time: f64, times_by_id: &[f64]) -> usize {
+    let (mut lo, mut hi) = (0usize, ids.len());
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        let t = times_by_id[ids[mid] as usize];
+        if t > key_time {
+            hi = mid
+        } else {
+            lo = mid + 1
+        }
+    }
+    lo
+}
+
+/// Core pair generation with optional progress reporting.
+///
+/// This function contains the shared hot-path logic used by both
+/// `generate_pairs` and `generate_pairs_with_progress`.
+///
+/// Notes
+/// -----
+/// - We keep direct tables indexed by `AlertId` for cache locality and
+///   zero `HashMap` lookups in the inner loops.
+/// - Spatial and temporal neighbor lists are cached per `(space_key, time_bin)`.
+/// - The output list is de-duplicated at the end in case multiple paths
+///   generate the same `(a, b)`.
+///
+/// Arguments
+/// ---------
+/// * `index` – bucket index produced by spatial & temporal binning.
+/// * `alerts` – contiguous alert array where `alert.id == index`.
+/// * `sb`, `tb` – spatial/time binners.
+/// * `params` – pairing constraints (max dt, max sep, etc.).
+/// * `pb_opt` – optional progress bar (throttled updates).
+///
+/// Return
+/// ------
+/// * Vector of `(AlertId, AlertId)` with `t_b > t_a` and angular separation
+///   ≤ `params.max_sep`.
+fn generate_pairs_core<Bs: SpatialBinner, Bt: TimeBinner>(
     index: &BucketIndex,
     alerts: &[Alert],
     sb: &Bs,
     tb: &Bt,
     params: PairParams,
+    pb_opt: Option<&ProgressBar>,
 ) -> Vec<(AlertId, AlertId)> {
-    #[inline]
-    fn unit_vec(ra: f64, dec: f64) -> [f64; 3] {
-        let c = dec.cos();
-        [c * ra.cos(), c * ra.sin(), dec.sin()]
-    }
-    #[inline]
-    fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
-        a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-    }
-    /// première position `i` telle que `times_by_id[ids[i]] > key_time`
-    #[inline]
-    fn lower_bound_gt_ids(ids: &[AlertId], key_time: f64, times_by_id: &[f64]) -> usize {
-        let (mut lo, mut hi) = (0usize, ids.len());
-        while lo < hi {
-            let mid = (lo + hi) / 2;
-            let t = times_by_id[ids[mid] as usize];
-            if t > key_time {
-                hi = mid
-            } else {
-                lo = mid + 1
-            }
-        }
-        lo
-    }
-
-    // --- tables directes indexées par AlertId (zéro HashMap dans la boucle chaude)
+    // --- direct tables (id == index)
     debug_assert!(
         alerts.iter().enumerate().all(|(i, a)| a.id as usize == i),
         "generate_pairs expects contiguous AlertId (id == index)"
     );
-    let n = alerts.len();
-    let mut times_by_id = Vec::with_capacity(n);
-    let mut vecs_by_id = Vec::with_capacity(n);
-    for a in alerts {
-        times_by_id.push(a.mjd_tt);
-        vecs_by_id.push(unit_vec(a.ra, a.dec));
-    }
 
-    // caches légers
+    let n = alerts.len();
+    let times_by_id: Vec<f64> = alerts.iter().map(|a| a.mjd_tt).collect();
+    let vecs_by_id: Vec<[f64; 3]> = alerts.iter().map(|a| unit_vec(a.ra, a.dec)).collect();
+
+    // --- light caches
     let r_search = params.max_sep + sb.cell_radius();
     let cos_thresh = params.max_sep.cos();
     let mut neigh_cache: AHashMap<SpatialKey, Vec<SpatialKey>> = AHashMap::new();
     let mut ttargets_cache: AHashMap<TimeBin, Vec<TimeBin>> = AHashMap::new();
 
+    // --- progress
+    maybe_progress_start(pb_opt, n as u64, "pairs");
+    let mut processed = 0u64;
+    let mut last_tick = 0u64;
+    // empirical safe-by-default throttle; adjust if you prefer
+    const THROTTLE_STEP: u64 = 10_000;
+
+    // --- output
     let mut out: Vec<(AlertId, AlertId)> = Vec::with_capacity(n / 8);
 
     for (key0, bucket0) in &index.buckets {
-        // voisins spatiaux (cache + dédup au cas où)
+        // spatial neighbors (cached + dedup)
         let s_neighs = neigh_cache.entry(key0.space_key).or_insert_with(|| {
             let mut v = sb.neighbors(key0.space_key, r_search);
             v.sort_unstable();
             v.dedup();
             v
         });
-        // time-bins cibles (cache)
+        // time-bin targets (cached)
         let ttargets = ttargets_cache.entry(key0.time_bin).or_insert_with(|| {
             time_targets(tb, key0.time_bin, params.max_dt, params.allow_same_timebin).collect()
         });
 
-        // source déjà trié: on itère directement
+        // source list already time-sorted inside bucket
         for &a_id in &bucket0.members {
             let t_a = times_by_id[a_id as usize];
             let t_max = t_a + params.max_dt;
@@ -152,9 +185,9 @@ pub fn generate_pairs<Bs: SpatialBinner, Bt: TimeBinner>(
                     };
                     let ids = btgt.members.as_slice();
 
-                    // bsearch vers le premier t_b > t_a
+                    // binary search: first t_b > t_a
                     let mut i = lower_bound_gt_ids(ids, t_a, &times_by_id);
-                    // scan jusqu'à t_b > t_max
+                    // scan until t_b > t_max
                     while i < ids.len() {
                         let b_id = ids[i];
                         let t_b = times_by_id[b_id as usize];
@@ -164,7 +197,7 @@ pub fn generate_pairs<Bs: SpatialBinner, Bt: TimeBinner>(
                         if b_id != a_id {
                             let vb = vecs_by_id[b_id as usize];
                             if dot3(va, vb) >= cos_thresh {
-                                // ordre temporel garanti (t_b > t_a)
+                                // time-order guaranteed (t_b > t_a)
                                 out.push((a_id, b_id));
                             }
                         }
@@ -172,146 +205,156 @@ pub fn generate_pairs<Bs: SpatialBinner, Bt: TimeBinner>(
                     }
                 }
             }
+
+            processed += 1;
+            maybe_progress_throttled_set(pb_opt, processed, &mut last_tick, THROTTLE_STEP);
         }
     }
 
-    // dédup éventuelle (si le même (a,b) apparaît via plusieurs chemins)
+    maybe_progress_finish(pb_opt, n as u64, "pairs ✓");
+
+    // remove duplicates if the same (a,b) came from multiple paths
     out.sort_unstable();
     out.dedup();
     out
 }
 
+/* ---------------- Public APIs: thin wrappers ---------------- */
+
+/// Pair generation without progress reporting.
+pub fn generate_pairs<Bs: SpatialBinner, Bt: TimeBinner>(
+    index: &BucketIndex,
+    alerts: &[Alert],
+    sb: &Bs,
+    tb: &Bt,
+    params: PairParams,
+) -> Vec<(AlertId, AlertId)> {
+    generate_pairs_core(index, alerts, sb, tb, params, None)
+}
+
+/// Pair generation with an `indicatif::ProgressBar`.
+pub fn generate_pairs_with_progress<Bs: SpatialBinner, Bt: TimeBinner>(
+    index: &BucketIndex,
+    alerts: &[Alert],
+    sb: &Bs,
+    tb: &Bt,
+    params: PairParams,
+    pb: &ProgressBar,
+) -> Vec<(AlertId, AlertId)> {
+    generate_pairs_core(index, alerts, sb, tb, params, Some(pb))
+}
+
 /* --------------------------- Génération des TRIPLETS ------------------ */
 
-pub fn generate_triplets_from_pairs<Bs: SpatialBinner, Bt: TimeBinner>(
+#[inline]
+fn wrap_pm_pi(x: f64) -> f64 {
+    let two_pi = std::f64::consts::PI * 2.0;
+    let mut y = (x + std::f64::consts::PI) % two_pi;
+    if y < 0.0 {
+        y += two_pi;
+    }
+    y - std::f64::consts::PI
+}
+
+/// Tangent-plane offsets around (ra0, dec0) using precomputed `cos(dec0)`.
+#[inline]
+fn planar_offset_fast(ra0: f64, dec0: f64, cos_dec0: f64, ra: f64, dec: f64) -> (f64, f64) {
+    let dx = wrap_pm_pi(ra - ra0) * cos_dec0;
+    let dy = dec - dec0;
+    (dx, dy)
+}
+
+// ===================== CORE (shared by both public APIs) =====================
+
+/// Core triplet generation from pairs with optional progress reporting.
+///
+/// This function implements the full hot-path used by both
+/// `generate_triplets_from_pairs` and `generate_triplets_from_pairs_with_progress`.
+fn generate_triplets_from_pairs_core<Bs: SpatialBinner, Bt: TimeBinner>(
     index: &BucketIndex,
     alerts: &[Alert],
     sb: &Bs,
     tb: &Bt,
     params: TripletParams,
     pairs: &[(AlertId, AlertId)],
+    pb_opt: Option<&ProgressBar>,
 ) -> Vec<(AlertId, AlertId, AlertId)> {
-    #[inline]
-    fn wrap_pm_pi(x: f64) -> f64 {
-        let two_pi = std::f64::consts::PI * 2.0;
-        let mut y = (x + std::f64::consts::PI) % two_pi;
-        if y < 0.0 {
-            y += two_pi;
-        }
-        y - std::f64::consts::PI
-    }
-    #[inline]
-    fn unit_vec(ra: f64, dec: f64) -> [f64; 3] {
-        let c = dec.cos();
-        [c * ra.cos(), c * ra.sin(), dec.sin()]
-    }
-    #[inline]
-    fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
-        a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-    }
-    /// première position i telle que `times_by_id[ids[i]] > key_time`
-    #[inline]
-    fn lower_bound_gt_ids(ids: &[AlertId], key_time: f64, times_by_id: &[f64]) -> usize {
-        let (mut lo, mut hi) = (0usize, ids.len());
-        while lo < hi {
-            let mid = (lo + hi) / 2;
-            let t = times_by_id[ids[mid] as usize];
-            if t > key_time {
-                hi = mid
-            } else {
-                lo = mid + 1
-            }
-        }
-        lo
-    }
-    /// offsets plan tangent autour de (ra0, dec0) avec cos(dec0) pré-calculé
-    #[inline]
-    fn planar_offset_fast(ra0: f64, dec0: f64, cos_dec0: f64, ra: f64, dec: f64) -> (f64, f64) {
-        let dx = wrap_pm_pi(ra - ra0) * cos_dec0;
-        let dy = dec - dec0;
-        (dx, dy)
-    }
-
-    // --- tableaux indexés par AlertId (aucun HashMap chaud) ---
-    // Hypothèse: id == index (contigu). Si ce n’est pas garanti, on peut ajouter une table de traduction id->index.
+    // contiguity assumption: id == index
     debug_assert!(
         alerts.iter().enumerate().all(|(i, a)| a.id as usize == i),
         "generate_triplets_from_pairs expects contiguous AlertId (id == index)"
     );
-    let n = alerts.len();
-    let mut times_by_id = Vec::with_capacity(n);
-    let mut ra_by_id = Vec::with_capacity(n);
-    let mut dec_by_id = Vec::with_capacity(n);
-    let mut cosdec_by_id = Vec::with_capacity(n);
-    let mut vecs_by_id = Vec::with_capacity(n);
-    for a in alerts {
-        times_by_id.push(a.mjd_tt);
-        ra_by_id.push(a.ra);
-        dec_by_id.push(a.dec);
-        cosdec_by_id.push(a.dec.cos());
-        vecs_by_id.push(unit_vec(a.ra, a.dec));
-    }
 
-    // (optionnel) pré-calcul des BucketKey natifs des ids pour ce (sb,tb).
-    // Utile si tu as énormément de paires, ça évite des recomputations key_for/bin_for.
-    let mut spacekey_by_id = Vec::with_capacity(n);
-    let mut timebin_by_id = Vec::with_capacity(n);
-    for a in alerts {
-        spacekey_by_id.push(sb.key_for(a.ra, a.dec));
-        timebin_by_id.push(tb.bin_for(a.mjd_tt));
-    }
+    // direct tables (id-indexed)
+    let times_by_id: Vec<f64> = alerts.iter().map(|a| a.mjd_tt).collect();
+    let ra_by_id: Vec<f64> = alerts.iter().map(|a| a.ra).collect();
+    let dec_by_id: Vec<f64> = alerts.iter().map(|a| a.dec).collect();
+    let cosdec_by_id: Vec<f64> = alerts.iter().map(|a| a.dec.cos()).collect();
+    let vecs_by_id: Vec<[f64; 3]> = alerts.iter().map(|a| unit_vec(a.ra, a.dec)).collect();
 
-    // caches légers
+    // precompute keys (pays off when pairs is large)
+    let spacekey_by_id: Vec<SpatialKey> = alerts.iter().map(|a| sb.key_for(a.ra, a.dec)).collect();
+    let timebin_by_id: Vec<TimeBin> = alerts.iter().map(|a| tb.bin_for(a.mjd_tt)).collect();
+
+    // light caches
     let r_search = params.max_pair_sep + sb.cell_radius();
     let cos_pair = params.max_pair_sep.cos();
     let mut neigh_cache: AHashMap<SpatialKey, Vec<SpatialKey>> = AHashMap::new();
     let mut ttargets_cache: AHashMap<TimeBin, Vec<TimeBin>> = AHashMap::new();
 
+    // progress
+    maybe_progress_start(pb_opt, pairs.len() as u64, "triplets");
+    let mut processed = 0u64;
+    let mut last_tick = 0u64;
+    const THROTTLE_STEP: u64 = 20_000;
+
+    // output
     let mut out: Vec<(AlertId, AlertId, AlertId)> = Vec::with_capacity(pairs.len() / 2);
 
     for &(a_id, b_id) in pairs {
         let t_a = times_by_id[a_id as usize];
         let t_b = times_by_id[b_id as usize];
 
-        // On impose dt_ab>0 pour stabilité (même si enforce_time_order=false)
-        if t_b <= t_a {
-            continue;
-        }
-        if params.enforce_time_order && !(t_a < t_b) {
+        // enforce time order if requested; otherwise require t_b > t_a for stability
+        if t_b <= t_a || (params.enforce_time_order && !(t_a < t_b)) {
+            processed += 1;
+            maybe_progress_throttled_set(pb_opt, processed, &mut last_tick, THROTTLE_STEP);
             continue;
         }
 
-        // centre “b” : clé spatiale et time bin (pré-calculées)
+        // center on b (spatial/time keys)
         let key_b = BucketKey {
             space_key: spacekey_by_id[b_id as usize],
             time_bin: timebin_by_id[b_id as usize],
         };
 
-        // voisins spatiaux (cache + dédup)
+        // spatial neighbors (cached + dedup)
         let s_neighs = neigh_cache.entry(key_b.space_key).or_insert_with(|| {
             let mut v = sb.neighbors(key_b.space_key, r_search);
             v.sort_unstable();
             v.dedup();
             v
         });
-        // bins temporels cibles (cache): t in (t_b, t_b + dt_max]
+
+        // temporal target bins after b (cached)
         let ttargets = ttargets_cache.entry(key_b.time_bin).or_insert_with(|| {
+            // we never want same-bin as b for c (strictly after b), hence `allow_same=false`
             time_targets(tb, key_b.time_bin, params.max_dt_between, false).collect()
         });
 
-        // Mouvement a→b (plan tangent autour de a)
+        // linear motion a->b estimated in tangent plane around a
         let ra_a = ra_by_id[a_id as usize];
         let dec_a = dec_by_id[a_id as usize];
         let cos_a = cosdec_by_id[a_id as usize];
         let ra_b = ra_by_id[b_id as usize];
         let dec_b = dec_by_id[b_id as usize];
-
         let (dx_ab, dy_ab) = planar_offset_fast(ra_a, dec_a, cos_a, ra_b, dec_b);
         let dt_ab = (t_b - t_a).max(1e-12);
         let vx = dx_ab / dt_ab;
         let vy = dy_ab / dt_ab;
 
-        let vb = vecs_by_id[b_id as usize]; // pour test angulaire b↔c
+        // b->c pairwise angular test
+        let vb = vecs_by_id[b_id as usize];
         let t_bmax = t_b + params.max_dt_between;
 
         for &tbin in ttargets.iter() {
@@ -323,62 +366,93 @@ pub fn generate_triplets_from_pairs<Bs: SpatialBinner, Bt: TimeBinner>(
                 let Some(bucket_c) = index.buckets.get(&k) else {
                     continue;
                 };
-                let ids = bucket_c.members.as_slice(); // trié par temps
+                let ids = bucket_c.members.as_slice(); // time-sorted
 
-                // bsearch: première c avec t_c > t_b
+                // first c with t_c > t_b
                 let mut i = lower_bound_gt_ids(ids, t_b, &times_by_id);
 
-                // scan jusqu'à t_c > t_b + Δt_between
+                // scan while t_c ≤ t_b + Δt_between
                 while i < ids.len() {
                     let c_id = ids[i];
+                    i += 1;
+
                     if c_id == a_id || c_id == b_id {
-                        i += 1;
                         continue;
                     }
-
                     let t_c = times_by_id[c_id as usize];
                     if t_c > t_bmax {
                         break;
                     }
 
-                    // Filtre pairwise b↔c via dot-product
+                    // fast pairwise b<->c angular consistency
                     let vc = vecs_by_id[c_id as usize];
-                    if dot3(vb, vc) >= cos_pair {
-                        // Résidu linéaire: projeter a→b à t(c), comparer à c (plan tangent autour de a)
-                        let dt_ac = t_c - t_a;
-                        if dt_ac > 0.0 {
-                            // prédiction
-                            let ra_pred = ra_a + vx * dt_ac / cos_a.max(1e-12);
-                            let dec_pred = dec_a + vy * dt_ac;
-
-                            // résidu
-                            let (dx_pc, dy_pc) = planar_offset_fast(
-                                ra_a,
-                                dec_a,
-                                cos_a,
-                                ra_by_id[c_id as usize],
-                                dec_by_id[c_id as usize],
-                            );
-                            let (dx_pp, dy_pp) =
-                                planar_offset_fast(ra_a, dec_a, cos_a, ra_pred, dec_pred);
-                            let resid = ((dx_pc - dx_pp).powi(2) + (dy_pc - dy_pp).powi(2)).sqrt();
-
-                            if resid <= params.max_predicted_residual {
-                                // ordre temporel déjà garanti: (a < b < c) ⇒ pas besoin de trier
-                                out.push((a_id, b_id, c_id));
-                            }
-                        }
+                    if dot3(vb, vc) < cos_pair {
+                        continue;
                     }
-                    i += 1;
+
+                    // linear prediction at t_c from motion a->b, compare to c in tangent plane at a
+                    let dt_ac = t_c - t_a;
+                    if dt_ac <= 0.0 {
+                        continue;
+                    }
+
+                    let ra_pred = ra_a + vx * dt_ac / cos_a.max(1e-12);
+                    let dec_pred = dec_a + vy * dt_ac;
+
+                    let (dx_pc, dy_pc) = planar_offset_fast(
+                        ra_a,
+                        dec_a,
+                        cos_a,
+                        ra_by_id[c_id as usize],
+                        dec_by_id[c_id as usize],
+                    );
+                    let (dx_pp, dy_pp) = planar_offset_fast(ra_a, dec_a, cos_a, ra_pred, dec_pred);
+
+                    let resid = ((dx_pc - dx_pp).powi(2) + (dy_pc - dy_pp).powi(2)).sqrt();
+                    if resid <= params.max_predicted_residual {
+                        // temporal order guaranteed: (a < b < c)
+                        out.push((a_id, b_id, c_id));
+                    }
                 }
             }
         }
+
+        processed += 1;
+        maybe_progress_throttled_set(pb_opt, processed, &mut last_tick, THROTTLE_STEP);
     }
 
-    // dédup (au cas où un même triplet apparaisse via 2 chemins de voisinage)
+    maybe_progress_finish(pb_opt, pairs.len() as u64, "triplets ✓");
+
     out.sort_unstable();
     out.dedup();
     out
+}
+
+// ============================ Public thin wrappers ============================
+
+/// Triplet generation from pairs without progress reporting.
+pub fn generate_triplets_from_pairs<Bs: SpatialBinner, Bt: TimeBinner>(
+    index: &BucketIndex,
+    alerts: &[Alert],
+    sb: &Bs,
+    tb: &Bt,
+    params: TripletParams,
+    pairs: &[(AlertId, AlertId)],
+) -> Vec<(AlertId, AlertId, AlertId)> {
+    generate_triplets_from_pairs_core(index, alerts, sb, tb, params, pairs, None)
+}
+
+/// Triplet generation from pairs with an `indicatif::ProgressBar`.
+pub fn generate_triplets_from_pairs_with_progress<Bs: SpatialBinner, Bt: TimeBinner>(
+    index: &BucketIndex,
+    alerts: &[Alert],
+    sb: &Bs,
+    tb: &Bt,
+    params: TripletParams,
+    pairs: &[(AlertId, AlertId)],
+    pb: &ProgressBar,
+) -> Vec<(AlertId, AlertId, AlertId)> {
+    generate_triplets_from_pairs_core(index, alerts, sb, tb, params, pairs, Some(pb))
 }
 
 /// Résultat combiné : *toutes* les paires + les triplets générés à partir de ces paires.
@@ -388,26 +462,6 @@ pub fn generate_triplets_from_pairs<Bs: SpatialBinner, Bt: TimeBinner>(
 pub struct SeedSets {
     pub pairs: Vec<(AlertId, AlertId)>,
     pub triplets: Vec<(AlertId, AlertId, AlertId)>,
-}
-
-/// Génère d’abord **toutes** les paires (selon `pair_params`), puis les **triplets**
-/// dérivés de ces paires. Les paires sont retournées en entier (on ne retire pas celles
-/// utilisées dans un triplet).
-pub fn generate_pairs_and_triplets<Bs: SpatialBinner, Bt: TimeBinner>(
-    index: &BucketIndex,
-    alerts: &[Alert],
-    sb: &Bs,
-    tb: &Bt,
-    pair_params: PairParams,
-    triplet_params: TripletParams,
-) -> SeedSets {
-    println!("Generating pairs...");
-    let pairs = generate_pairs(index, alerts, sb, tb, pair_params);
-
-    println!("Generating triplets from {} pairs...", pairs.len());
-
-    let triplets = generate_triplets_from_pairs(index, alerts, sb, tb, triplet_params, &pairs);
-    SeedSets { pairs, triplets }
 }
 
 pub fn generate_triplets<Bs: SpatialBinner, Bt: TimeBinner>(
@@ -677,28 +731,36 @@ mod geom_seeds_tests {
         let alerts = vec![a.clone(), b.clone()];
         let index = build_index_from_alerts_precise(&alerts, &sb, &tb);
 
-        let seeds = generate_pairs_and_triplets(
+        let pairs = generate_pairs(
             &index,
             &alerts,
             &sb,
             &tb,
             PairParams {
-                max_dt: 15.0 / 1440.0,
-                max_sep: arcsec_to_rad(10.0),
+                max_dt: 30.0 / 1440.0,
+                max_sep: arcsec_to_rad(20.0),
                 allow_same_timebin: false,
-            },
-            TripletParams {
-                max_dt_between: 10.0 / 1440.0, // c devrait être <=10 min après b (absent ici)
-                max_pair_sep: arcsec_to_rad(12.0),
-                max_predicted_residual: arcsec_to_rad(3.0),
-                enforce_time_order: true,
             },
         );
 
+        let triplets = generate_triplets_from_pairs(
+            &index,
+            &alerts,
+            &sb,
+            &tb,
+            TripletParams {
+                max_dt_between: 25.0 / 1440.0,
+                max_pair_sep: arcsec_to_rad(20.0),
+                max_predicted_residual: arcsec_to_rad(5.0),
+                enforce_time_order: true,
+            },
+            &pairs,
+        );
+
         // On conserve la paire même sans triplet
-        assert_eq!(seeds.triplets.len(), 0);
-        assert_eq!(seeds.pairs.len(), 1);
-        let (i, j) = seeds.pairs[0];
+        assert_eq!(triplets.len(), 0);
+        assert_eq!(pairs.len(), 1);
+        let (i, j) = pairs[0];
         assert!((i == 0 && j == 1) || (i == 1 && j == 0));
     }
 
@@ -718,29 +780,37 @@ mod geom_seeds_tests {
         let alerts = vec![a.clone(), b.clone(), c.clone()];
         let index = build_index_from_alerts_precise(&alerts, &sb, &tb);
 
-        let seeds = generate_pairs_and_triplets(
+        let pairs = generate_pairs(
             &index,
             &alerts,
             &sb,
             &tb,
             PairParams {
-                max_dt: 25.0 / 1440.0, // autorise (a,b) et (b,c); (a,c) = 20 min aussi
-                max_sep: arcsec_to_rad(15.0),
+                max_dt: 30.0 / 1440.0,
+                max_sep: arcsec_to_rad(20.0),
                 allow_same_timebin: false,
-            },
-            TripletParams {
-                max_dt_between: 15.0 / 1440.0, // a→b et b→c valides
-                max_pair_sep: arcsec_to_rad(15.0),
-                max_predicted_residual: arcsec_to_rad(3.0),
-                enforce_time_order: true,
             },
         );
 
+        let triplets = generate_triplets_from_pairs(
+            &index,
+            &alerts,
+            &sb,
+            &tb,
+            TripletParams {
+                max_dt_between: 25.0 / 1440.0,
+                max_pair_sep: arcsec_to_rad(20.0),
+                max_predicted_residual: arcsec_to_rad(5.0),
+                enforce_time_order: true,
+            },
+            &pairs,
+        );
+
         // Triplet détecté
-        assert!(seeds.triplets.contains(&(0, 1, 2)));
+        assert!(triplets.contains(&(0, 1, 2)));
         // Les paires incluent au moins (a,b) et (b,c) (et possiblement (a,c) selon max_dt)
         let mut pair_set = std::collections::HashSet::new();
-        for &(i, j) in &seeds.pairs {
+        for &(i, j) in &pairs {
             pair_set.insert(if i < j { (i, j) } else { (j, i) });
         }
         assert!(pair_set.contains(&(0, 1)));
@@ -765,7 +835,7 @@ mod geom_seeds_tests {
         let alerts = vec![a, b, c, d];
         let index = build_index_from_alerts_precise(&alerts, &sb, &tb);
 
-        let seeds = generate_pairs_and_triplets(
+        let pairs = generate_pairs(
             &index,
             &alerts,
             &sb,
@@ -775,21 +845,29 @@ mod geom_seeds_tests {
                 max_sep: arcsec_to_rad(20.0),
                 allow_same_timebin: false,
             },
+        );
+
+        let triplets = generate_triplets_from_pairs(
+            &index,
+            &alerts,
+            &sb,
+            &tb,
             TripletParams {
-                max_dt_between: 20.0 / 1440.0,
+                max_dt_between: 25.0 / 1440.0,
                 max_pair_sep: arcsec_to_rad(20.0),
-                max_predicted_residual: arcsec_to_rad(4.0),
+                max_predicted_residual: arcsec_to_rad(5.0),
                 enforce_time_order: true,
             },
+            &pairs,
         );
 
         // Construire un set des paires (ordre canonique i<j)
         let mut pair_set = std::collections::HashSet::new();
-        for &(i, j) in &seeds.pairs {
+        for &(i, j) in &pairs {
             pair_set.insert(if i < j { (i, j) } else { (j, i) });
         }
 
-        for &(i, j, _) in &seeds.triplets {
+        for &(i, j, _) in &triplets {
             // (i,j) appartient au set pairs (par construction)
             let (a, b) = if i < j { (i, j) } else { (j, i) };
             assert!(
