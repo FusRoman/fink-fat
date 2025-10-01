@@ -17,6 +17,7 @@ numpy = "0.26.0"
 pyo3 = { version = "0.26", features = ["extension-module"] }
 
 [dev-dependencies]
+husky-rs = "0.1.5"
 proptest = "1.8.0"
 
 [profile.release]
