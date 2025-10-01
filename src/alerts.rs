@@ -5,11 +5,19 @@ use pyo3::{pyclass, pymethods, Py, PyErr, PyResult, Python};
 
 use numpy::PyReadonlyArray1;
 
-use crate::seeding::{
-    geometrical_seeding::{generate_pairs_and_triplets, PairParams, TripletParams},
-    healpix_binners::HealpixBinner,
-    space_time_bucket::build_index_from_alerts_precise,
-    uniform_time_binner::UniformTimeBinner,
+use crate::{
+    progress::{make_bar, make_multi_progress},
+    seeding::{
+        geometrical_seeding::{
+            generate_pairs, generate_pairs_with_progress, generate_triplets_from_pairs,
+            generate_triplets_from_pairs_with_progress, PairParams, TripletParams,
+        },
+        healpix_binners::HealpixBinner,
+        space_time_bucket::{
+            build_index_from_alerts_precise, build_index_from_alerts_precise_with_progress,
+        },
+        uniform_time_binner::UniformTimeBinner,
+    },
 };
 
 pub type AlertId = u32;
@@ -203,6 +211,7 @@ impl AlertStore {
         trip_max_pair_sep: f64,
         trip_max_pred_resid: f64,
         enforce_time_order: bool,
+        show_progress: bool,
     ) -> PyResult<(Vec<(AlertId, AlertId)>, Vec<(AlertId, AlertId, AlertId)>)> {
         let pair_params = PairParams {
             max_dt: pair_max_dt,
@@ -219,38 +228,55 @@ impl AlertStore {
         let sb = HealpixBinner::new(healpix_depth);
         let tb = UniformTimeBinner::new(self.start_mjd, time_bin_width_days);
 
-        println!(
-            "Generating seeds with Healpix depth {}, time bin width {:.3} days",
-            healpix_depth, time_bin_width_days
-        );
-        let index = build_index_from_alerts_precise(&self.alerts, &sb, &tb);
+        if !show_progress {
+            let index = build_index_from_alerts_precise(&self.alerts, &sb, &tb);
+            let pairs = generate_pairs(&index, &self.alerts, &sb, &tb, pair_params);
 
-        println!(
-            "Built space-time index with {} buckets (max bucket size {})",
-            index.buckets.len(),
-            index
-                .buckets
-                .values()
-                .map(|b| b.members.len())
-                .max()
-                .unwrap_or(0)
-        );
+            let triplets = generate_triplets_from_pairs(
+                &index,
+                &self.alerts,
+                &sb,
+                &tb,
+                triplet_params,
+                &pairs,
+            );
+            return Ok((pairs, triplets));
+        }
 
-        let seeds = generate_pairs_and_triplets(
+        // ====== PROGRESS ======
+        let mp = make_multi_progress();
+        let global = make_bar(&mp, 3, "pipeline");
+        let pb_buckets = make_bar(&mp, 2 * self.alerts.len() as u64, "buckets");
+        let pb_pairs = make_bar(&mp, self.alerts.len() as u64, "pairs");
+        // pb_triplets: longueur ajustée après avoir les paires.
+        let pb_triplets = make_bar(&mp, 1, "triplets (waiting)");
+
+        // Step 1: buckets
+        let index =
+            build_index_from_alerts_precise_with_progress(&self.alerts, &sb, &tb, &pb_buckets);
+        global.inc(1);
+
+        // Step 2: pairs
+        let pairs =
+            generate_pairs_with_progress(&index, &self.alerts, &sb, &tb, pair_params, &pb_pairs);
+        global.inc(1);
+
+        // Step 3: triplets
+        pb_triplets.set_length(pairs.len() as u64);
+        pb_triplets.set_message("triplets");
+        let triplets = generate_triplets_from_pairs_with_progress(
             &index,
             &self.alerts,
             &sb,
             &tb,
-            pair_params,
             triplet_params,
+            &pairs,
+            &pb_triplets,
         );
+        global.inc(1);
+        global.finish_with_message("done ✓");
+        // ====== /PROGRESS ======
 
-        println!(
-            "Generated {} pairs and {} triplets",
-            seeds.pairs.len(),
-            seeds.triplets.len()
-        );
-
-        Ok((seeds.pairs, seeds.triplets))
+        Ok((pairs, triplets))
     }
 }

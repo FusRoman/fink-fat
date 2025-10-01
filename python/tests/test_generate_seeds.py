@@ -19,7 +19,7 @@ def build_store_from_triplets(start_mjd: float, triplets):
     Construit un AlertStore via AlertStore.from_numpy(...).
     """
     n = len(triplets)
-    dia_source_id = np.arange(1, n + 1, dtype=np.int64)
+    dia_source_id = np.arange(1, n + 1, dtype=np.uint64)
     ra = np.array([t[0] for t in triplets], dtype=np.float64)
     dec = np.array([t[1] for t in triplets], dtype=np.float64)
     mjd_tt = np.array([start_mjd + t[2] for t in triplets], dtype=np.float64)
@@ -75,6 +75,7 @@ def test_pairs_kept_without_triplet():
         trip_max_pair_sep=arcsec_to_rad(12.0),
         trip_max_pred_resid=arcsec_to_rad(3.0),
         enforce_time_order=True,
+        show_progress=False,
     )
     assert len(triplets_out) == 0
     assert len(pairs) == 1
@@ -114,6 +115,7 @@ def test_same_timebin_toggle():
         trip_max_pair_sep=arcsec_to_rad(10.0),
         trip_max_pred_resid=arcsec_to_rad(3.0),
         enforce_time_order=True,
+        show_progress=False,
     )
     assert pairs == []
     assert trips == []
@@ -129,6 +131,7 @@ def test_same_timebin_toggle():
         trip_max_pair_sep=arcsec_to_rad(10.0),
         trip_max_pred_resid=arcsec_to_rad(3.0),
         enforce_time_order=True,
+        show_progress=False,
     )
     assert len(pairs2) == 1
     assert len(trips2) == 0
@@ -160,6 +163,7 @@ def test_triplet_linear_motion_and_pairs_present():
         trip_max_pair_sep=arcsec_to_rad(15.0),
         trip_max_pred_resid=arcsec_to_rad(3.0),
         enforce_time_order=True,
+        show_progress=False,
     )
 
     # 1) Un triplet (ids 0,1,2 selon impl la plus commune)
@@ -201,6 +205,7 @@ def test_output_types_and_shapes():
         trip_max_pair_sep=arcsec_to_rad(10.0),
         trip_max_pred_resid=arcsec_to_rad(3.0),
         enforce_time_order=True,
+        show_progress=False,
     )
 
     # types

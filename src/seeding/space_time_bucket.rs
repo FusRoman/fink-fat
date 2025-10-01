@@ -1,9 +1,12 @@
 /* --------------------------- Keys & Buckets ------------------------- */
 
 use ahash::AHashMap;
-use std::collections::hash_map::Entry;
+use indicatif::ProgressBar;
 
-use crate::alerts::{Alert, AlertId};
+use crate::{
+    alerts::{Alert, AlertId},
+    progress::throttled_inc,
+};
 
 pub type MjdTt = f64; // days
 pub type Radians = f64; // rad
@@ -78,17 +81,6 @@ fn bucket_key_for<Bs: SpatialBinner, Bt: TimeBinner>(
     }
 }
 
-#[inline]
-fn buckets_entry_mut<'a>(index: &'a mut BucketIndex, key: BucketKey) -> &'a mut Bucket {
-    match index.buckets.entry(key) {
-        Entry::Occupied(e) => e.into_mut(),
-        Entry::Vacant(v) => v.insert(Bucket {
-            key,
-            members: Vec::new(),
-        }),
-    }
-}
-
 fn precount_bucket_sizes<'a, I, Bs, Bt>(alerts: I, sb: &Bs, tb: &Bt) -> AHashMap<BucketKey, usize>
 where
     I: IntoIterator<Item = &'a Alert>,
@@ -159,6 +151,84 @@ where
         });
     }
 
+    index
+}
+
+pub fn build_index_from_alerts_precise_with_progress<'a, Bs, Bt>(
+    alerts: &'a [Alert],
+    space_binner: &Bs,
+    time_binner: &Bt,
+    pb: &ProgressBar,
+) -> BucketIndex
+where
+    Bs: SpatialBinner,
+    Bt: TimeBinner,
+{
+    let mut processed = 0u64;
+    let mut last_drawn = 0u64;
+    let tick = 10_000u64;
+    pb.set_message("buckets");
+
+    // Pass 1: precount
+    let mut sizes: AHashMap<BucketKey, usize> = AHashMap::new();
+    for a in alerts {
+        let key = BucketKey {
+            space_key: space_binner.key_for(a.ra, a.dec),
+            time_bin: time_binner.bin_for(a.mjd_tt),
+        };
+        *sizes.entry(key).or_insert(0) += 1;
+        processed += 1;
+        throttled_inc(pb, processed, &mut last_drawn, tick);
+    }
+
+    let mut index = BucketIndex {
+        buckets: AHashMap::with_capacity(sizes.len()),
+        bucket_sizes: sizes.clone(),
+    };
+
+    for (key, &cap) in &sizes {
+        index.buckets.insert(
+            *key,
+            Bucket {
+                key: *key,
+                members: Vec::with_capacity(cap),
+            },
+        );
+    }
+
+    // Pass 2: remplissage
+    for a in alerts {
+        let key = BucketKey {
+            space_key: space_binner.key_for(a.ra, a.dec),
+            time_bin: time_binner.bin_for(a.mjd_tt),
+        };
+        let bucket = index.buckets.get_mut(&key).unwrap();
+        bucket.members.push(a.id);
+        processed += 1;
+        throttled_inc(pb, processed, &mut last_drawn, tick);
+    }
+
+    // Tri final des membres par temps (et id en tie-break)
+    let mut time_of: AHashMap<AlertId, MjdTt> = AHashMap::with_capacity(alerts.len());
+    for a in alerts {
+        time_of.insert(a.id, a.mjd_tt);
+    }
+    // on étend la longueur totale pour couvrir aussi le tri bucket-par-bucket
+    pb.set_length(2 * alerts.len() as u64 + index.buckets.len() as u64);
+
+    for b in index.buckets.values_mut() {
+        b.members.sort_unstable_by(
+            |&i, &j| match time_of[&i].partial_cmp(&time_of[&j]).unwrap() {
+                std::cmp::Ordering::Equal => i.cmp(&j),
+                ord => ord,
+            },
+        );
+        processed += 1;
+        throttled_inc(pb, processed, &mut last_drawn, 1_000);
+    }
+
+    pb.set_position(2 * alerts.len() as u64 + index.buckets.len() as u64);
+    pb.finish_with_message("buckets ✓");
     index
 }
 
