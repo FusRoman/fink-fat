@@ -76,3 +76,4 @@ proptest-regressions/
 
 test_seed_real_data.py
 ztf_alert.parquet
+python/tests/test_perf_seed.py

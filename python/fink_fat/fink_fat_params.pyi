@@ -1,4 +1,4 @@
-# fink_fat/params.pyi
+# fink_fat/fink_fat_params.pyi
 # Type stubs for Fink-FAT Python parameter bindings (auto-completion & mypy).
 # Docstrings follow the NumPy docstring convention.
 
@@ -7,7 +7,6 @@ from __future__ import annotations
 from typing import TypedDict, Union
 
 Number = Union[int, float]
-
 
 class PyFinkFatParamsDict(TypedDict):
     """Dictionary view of scalar configuration fields.
