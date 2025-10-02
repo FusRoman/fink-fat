@@ -2,8 +2,7 @@
 import math
 import pytest
 
-from fink_fat import PyFinkFatParams  # type: ignore
-
+from fink_fat import PyFinkFatParams
 
 def B():
     """Helper: return a fresh builder from the classmethod."""
