@@ -1,8 +1,8 @@
 use pyo3::prelude::*;
 
 pub mod alerts;
-pub mod seeding;
 pub(crate) mod progress;
+pub mod seeding;
 
 /// A Python module implemented in Rust.
 #[pymodule]
