@@ -607,16 +607,29 @@ mod geom_seeds_tests {
                 p.max_dt(30.0 / 1440.0) // 30 min
                     .max_sep(arcsec_to_rad(8.0)) // 8"
                     .max_flux_difference(5.0) // large
+                    .allow_same_timebin(false)
             })
             .build()
             .unwrap();
 
         // Interdit same timebin -> aucune paire
         let pairs_no_same = generate_pairs(&index, &alerts, &sb, &tb, &params);
+
         assert!(pairs_no_same.is_empty());
+
+        let params = FinkFatParams::builder()
+            .pairs(|p| {
+                p.max_dt(30.0 / 1440.0) // 30 min
+                    .max_sep(arcsec_to_rad(8.0)) // 8"
+                    .max_flux_difference(5.0) // large
+                    .allow_same_timebin(true)
+            })
+            .build()
+            .unwrap();
 
         // Autorisé -> la paire doit apparaître
         let pairs_same = generate_pairs(&index, &alerts, &sb, &tb, &params);
+
         assert_eq!(pairs_same.len(), 1);
         let (i, j) = pairs_same[0];
         assert!((i == 0 && j == 1) || (i == 1 && j == 0));
