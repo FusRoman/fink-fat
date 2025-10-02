@@ -6,7 +6,7 @@
 //! with integer k ∈ ℤ stored in `TimeBin(i64)`.
 //!
 //! `bins_in_range([a,b])` returns all bins that overlap the *closed*
-//! interval [a,b]. This is achieved by slightly nudging `b` downward
+//! interval \[a,b\]. This is achieved by slightly nudging `b` downward
 //! to handle exact-boundary cases in presence of floating-point roundoff.
 
 use crate::seeding::space_time_bucket::{MjdTt, TimeBin, TimeBinner};

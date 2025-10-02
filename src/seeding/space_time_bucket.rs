@@ -107,8 +107,8 @@ fn build_time_lookup(alerts: &[Alert]) -> AHashMap<AlertId, MjdTt> {
     map
 }
 
-pub fn build_index_from_alerts_precise<'a, Bs, Bt>(
-    alerts: &'a [Alert],
+pub fn build_index_from_alerts_precise<Bs, Bt>(
+    alerts: &[Alert],
     space_binner: &Bs,
     time_binner: &Bt,
 ) -> BucketIndex
@@ -154,8 +154,8 @@ where
     index
 }
 
-pub fn build_index_from_alerts_precise_with_progress<'a, Bs, Bt>(
-    alerts: &'a [Alert],
+pub fn build_index_from_alerts_precise_with_progress<Bs, Bt>(
+    alerts: &[Alert],
     space_binner: &Bs,
     time_binner: &Bt,
     pb: &ProgressBar,
@@ -286,7 +286,7 @@ mod bucket_tests {
         let tb = UniformTimeBinner::new(59000.0, 1.0);
 
         let a = mk_alert(1, 1.0, 0.1, 59000.25, 1);
-        let idx = build_index_from_alerts_precise(&[a.clone()], &sb, &tb);
+        let idx = build_index_from_alerts_precise(std::slice::from_ref(&a), &sb, &tb);
 
         assert_eq!(idx.buckets.len(), 1);
         assert_eq!(idx.bucket_sizes.len(), 1);

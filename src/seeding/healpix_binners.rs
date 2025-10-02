@@ -13,7 +13,7 @@
 //! Réf. API:
 //!   - `nested::get(depth)` retourne `&'static Layer`.
 //!   - `Layer::hash(lon, lat)` -> u64.
-//!   - `Layer::neighbours(hash, include_center)` -> MainWindMap<u64>.
+//!   - `Layer::neighbours(hash, include_center)` -> MainWindMap\<u64\>.
 //!   - `nested::cone_coverage_approx_flat(depth, lon, lat, radius)` -> Box<[u64]>.
 //!   - `cdshealpix::largest_center_to_vertex_distance(depth, lon, lat)` -> f64.
 
@@ -155,7 +155,7 @@ mod healpix_binner_tests {
         assert_eq!(ulen, neighs.len(), "neighbors must be unique");
 
         assert!(
-            neighs.iter().any(|&k| k == key),
+            neighs.contains(&key),
             "neighbors(<=cell_radius) must include the center key"
         );
 
@@ -165,7 +165,7 @@ mod healpix_binner_tests {
             "neighbors(<cell_radius) should stay in local mode with ≤ 9 entries"
         );
         assert!(
-            neighs_small.iter().any(|&k| k == key),
+            neighs_small.contains(&key),
             "neighbors(<cell_radius) must include the center key"
         );
         assert_eq!(
@@ -188,7 +188,7 @@ mod healpix_binner_tests {
         let cone = b.neighbors(key, big_r);
 
         assert!(
-            cone.iter().any(|&k| k == key),
+            cone.contains(&key),
             "cone coverage must include the center key"
         );
 
@@ -235,8 +235,8 @@ mod healpix_binner_tests {
             "just above cell_radius, cone mode should yield ≥ local neighbors"
         );
 
-        assert!(v_local.iter().any(|&k| k == key));
-        assert!(v_cone.iter().any(|&k| k == key));
+        assert!(v_local.contains(&key));
+        assert!(v_cone.contains(&key));
         assert_eq!(uniq_len(&v_local), v_local.len());
         assert_eq!(uniq_len(&v_cone), v_cone.len());
     }
@@ -293,7 +293,7 @@ mod healpix_binner_tests {
                 prop_assert!(!neighs.is_empty(), "local neighbors must include at least the center");
                 prop_assert!(neighs.len() <= 9, "local neighbors should be ≤ 9 (center + up to 8)");
                 prop_assert_eq!(uniq_len(&neighs), neighs.len(), "neighbors must be unique");
-                prop_assert!(neighs.iter().any(|&k| k == key), "center key must be included");
+                prop_assert!(neighs.contains(&key), "center key must be included");
             }
 
             #[test]
@@ -307,7 +307,7 @@ mod healpix_binner_tests {
                 let big_r = 3.0 * r_cell;
                 let cone = b.neighbors(key, big_r);
 
-                prop_assert!(cone.iter().any(|&k| k == key), "cone coverage must include the center");
+                prop_assert!(cone.contains(&key), "cone coverage must include the center");
                 prop_assert!(cone.len() >= local.len(), "cone coverage should have ≥ local neighbors");
                 prop_assert_eq!(uniq_len(&cone), cone.len(), "cone neighbors must be unique");
             }
@@ -326,8 +326,8 @@ mod healpix_binner_tests {
                 let v_wider = b.neighbors(key, local_rc * 1.5);
 
                 // invariants
-                prop_assert!(v_local.iter().any(|&k| k == key));
-                prop_assert!(v_wider.iter().any(|&k| k == key));
+                prop_assert!(v_local.contains(&key));
+                prop_assert!(v_wider.contains(&key));
                 prop_assert_eq!(uniq_len(&v_local), v_local.len());
                 prop_assert_eq!(uniq_len(&v_wider), v_wider.len());
 
