@@ -6,38 +6,13 @@ use indicatif::ProgressBar;
 use pyo3::pyclass;
 
 use crate::alerts::{Alert, AlertId};
+use crate::params::FinkFatParams;
 use crate::progress::{maybe_progress_finish, maybe_progress_start, maybe_progress_throttled_set};
 use crate::seeding::space_time_bucket::{
-    BucketIndex, BucketKey, MjdTt, Radians, SpatialBinner, SpatialKey, TimeBin, TimeBinner,
+    BucketIndex, BucketKey, SpatialBinner, SpatialKey, TimeBin, TimeBinner,
 };
 
-/* --------------------------- Params & Types --------------------------- */
-
-#[derive(Clone, Copy, Debug)]
-pub struct PairParams {
-    /// Δt max entre a et b (jours)
-    pub max_dt: MjdTt,
-    /// séparation angulaire max entre a et b (radians)
-    pub max_sep: Radians,
-    /// Magnitude max pour les alertes considérées
-    pub max_flux_difference: f32,
-    /// Inclure les paires dans le même bin temporel ?
-    pub allow_same_timebin: bool,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct TripletParams {
-    /// Δt max entre observations consécutives (a→b, b→c) (jours)
-    pub max_dt_between: MjdTt,
-    /// séparation max entre voisins consécutifs (a↔b et b↔c) (rad)
-    pub max_pair_sep: Radians,
-    /// Résidu max de la prédiction linéaire a→b extrapolée à l’instant de c (rad)
-    pub max_predicted_residual: Radians,
-    /// Imposer t(a) < t(b) < t(c)
-    pub enforce_time_order: bool,
-    /// Magnitude max pour les alertes considérées
-    pub max_flux_difference: f32,
-}
+/* --------------------------- Types --------------------------- */
 
 pub type Pairs = Vec<(AlertId, AlertId)>;
 pub type Triplets = Vec<(AlertId, AlertId, AlertId)>;
@@ -133,7 +108,7 @@ fn generate_pairs_core<Bs: SpatialBinner, Bt: TimeBinner>(
     alerts: &[Alert],
     sb: &Bs,
     tb: &Bt,
-    params: PairParams,
+    params: &FinkFatParams,
     pb_opt: Option<&ProgressBar>,
 ) -> Pairs {
     // --- direct tables (id == index)
@@ -148,8 +123,8 @@ fn generate_pairs_core<Bs: SpatialBinner, Bt: TimeBinner>(
     let vecs_by_id: Vec<[f64; 3]> = alerts.iter().map(|a| unit_vec(a.ra, a.dec)).collect();
 
     // --- light caches
-    let r_search = params.max_sep + sb.cell_radius();
-    let cos_thresh = params.max_sep.cos();
+    let r_search = params.pairs.max_sep + sb.cell_radius();
+    let cos_thresh = params.pairs.max_sep.cos();
     let mut neigh_cache: AHashMap<SpatialKey, Vec<SpatialKey>> = AHashMap::new();
     let mut ttargets_cache: AHashMap<TimeBin, Vec<TimeBin>> = AHashMap::new();
 
@@ -173,14 +148,20 @@ fn generate_pairs_core<Bs: SpatialBinner, Bt: TimeBinner>(
         });
         // time-bin targets (cached)
         let ttargets = ttargets_cache.entry(key0.time_bin).or_insert_with(|| {
-            time_targets(tb, key0.time_bin, params.max_dt, params.allow_same_timebin).collect()
+            time_targets(
+                tb,
+                key0.time_bin,
+                params.pairs.max_dt,
+                params.pairs.allow_same_timebin,
+            )
+            .collect()
         });
 
         // source list already time-sorted inside bucket
         for &a_id in &bucket0.members {
             let t_a = times_by_id[a_id as usize];
             let m_a = mags_by_id[a_id as usize];
-            let t_max = t_a + params.max_dt;
+            let t_max = t_a + params.pairs.max_dt;
             let va = vecs_by_id[a_id as usize];
 
             for &tbin in ttargets.iter() {
@@ -208,7 +189,7 @@ fn generate_pairs_core<Bs: SpatialBinner, Bt: TimeBinner>(
                             let vb = vecs_by_id[b_id as usize];
                             // angular + magnitude cuts
                             if dot3(va, vb) >= cos_thresh
-                                && (m_a - m_b).abs() < params.max_flux_difference
+                                && (m_a - m_b).abs() < params.pairs.max_flux_difference
                             {
                                 // time-order guaranteed (t_b > t_a)
                                 out.push((a_id, b_id));
@@ -240,7 +221,7 @@ pub fn generate_pairs<Bs: SpatialBinner, Bt: TimeBinner>(
     alerts: &[Alert],
     sb: &Bs,
     tb: &Bt,
-    params: PairParams,
+    params: &FinkFatParams,
 ) -> Pairs {
     generate_pairs_core(index, alerts, sb, tb, params, None)
 }
@@ -251,7 +232,7 @@ pub fn generate_pairs_with_progress<Bs: SpatialBinner, Bt: TimeBinner>(
     alerts: &[Alert],
     sb: &Bs,
     tb: &Bt,
-    params: PairParams,
+    params: &FinkFatParams,
     pb: &ProgressBar,
 ) -> Pairs {
     generate_pairs_core(index, alerts, sb, tb, params, Some(pb))
@@ -288,7 +269,7 @@ fn generate_triplets_from_pairs_core<Bs: SpatialBinner, Bt: TimeBinner>(
     alerts: &[Alert],
     sb: &Bs,
     tb: &Bt,
-    params: TripletParams,
+    params: &FinkFatParams,
     pairs: &[(AlertId, AlertId)],
     pb_opt: Option<&ProgressBar>,
 ) -> Triplets {
@@ -311,8 +292,8 @@ fn generate_triplets_from_pairs_core<Bs: SpatialBinner, Bt: TimeBinner>(
     let timebin_by_id: Vec<TimeBin> = alerts.iter().map(|a| tb.bin_for(a.mjd_tt)).collect();
 
     // light caches
-    let r_search = params.max_pair_sep + sb.cell_radius();
-    let cos_pair = params.max_pair_sep.cos();
+    let r_search = params.triplets.max_pair_sep + sb.cell_radius();
+    let cos_pair = params.triplets.max_pair_sep.cos();
     let mut neigh_cache: AHashMap<SpatialKey, Vec<SpatialKey>> = AHashMap::new();
     let mut ttargets_cache: AHashMap<TimeBin, Vec<TimeBin>> = AHashMap::new();
 
@@ -333,7 +314,7 @@ fn generate_triplets_from_pairs_core<Bs: SpatialBinner, Bt: TimeBinner>(
 
         // enforce time order if requested; otherwise require t_b > t_a for stability
         if t_b.partial_cmp(&t_a) == Some(std::cmp::Ordering::Less)
-            || (params.enforce_time_order
+            || (params.triplets.enforce_time_order
                 && t_a.partial_cmp(&t_b) != Some(std::cmp::Ordering::Less))
         {
             processed += 1;
@@ -358,7 +339,7 @@ fn generate_triplets_from_pairs_core<Bs: SpatialBinner, Bt: TimeBinner>(
         // temporal target bins after b (cached)
         let ttargets = ttargets_cache.entry(key_b.time_bin).or_insert_with(|| {
             // we never want same-bin as b for c (strictly after b), hence `allow_same=false`
-            time_targets(tb, key_b.time_bin, params.max_dt_between, false).collect()
+            time_targets(tb, key_b.time_bin, params.triplets.max_dt_between, false).collect()
         });
 
         // linear motion a->b estimated in tangent plane around a
@@ -374,7 +355,7 @@ fn generate_triplets_from_pairs_core<Bs: SpatialBinner, Bt: TimeBinner>(
 
         // b->c pairwise angular test
         let vb = vecs_by_id[b_id as usize];
-        let t_bmax = t_b + params.max_dt_between;
+        let t_bmax = t_b + params.triplets.max_dt_between;
 
         for &tbin in ttargets.iter() {
             for &s_key in s_neighs.iter() {
@@ -416,7 +397,7 @@ fn generate_triplets_from_pairs_core<Bs: SpatialBinner, Bt: TimeBinner>(
                     }
 
                     let m_c = mags_by_id[c_id as usize];
-                    if (m_b - m_c).abs() > params.max_flux_difference {
+                    if (m_b - m_c).abs() > params.triplets.max_flux_difference {
                         continue;
                     }
 
@@ -433,7 +414,7 @@ fn generate_triplets_from_pairs_core<Bs: SpatialBinner, Bt: TimeBinner>(
                     let (dx_pp, dy_pp) = planar_offset_fast(ra_a, dec_a, cos_a, ra_pred, dec_pred);
 
                     let resid = ((dx_pc - dx_pp).powi(2) + (dy_pc - dy_pp).powi(2)).sqrt();
-                    if resid <= params.max_predicted_residual {
+                    if resid <= params.triplets.max_predicted_residual {
                         // temporal order guaranteed: (a < b < c)
                         out.push((a_id, b_id, c_id));
                     }
@@ -460,7 +441,7 @@ pub fn generate_triplets_from_pairs<Bs: SpatialBinner, Bt: TimeBinner>(
     alerts: &[Alert],
     sb: &Bs,
     tb: &Bt,
-    params: TripletParams,
+    params: &FinkFatParams,
     pairs: &[(AlertId, AlertId)],
 ) -> Triplets {
     generate_triplets_from_pairs_core(index, alerts, sb, tb, params, pairs, None)
@@ -472,7 +453,7 @@ pub fn generate_triplets_from_pairs_with_progress<Bs: SpatialBinner, Bt: TimeBin
     alerts: &[Alert],
     sb: &Bs,
     tb: &Bt,
-    params: TripletParams,
+    params: &FinkFatParams,
     pairs: &[(AlertId, AlertId)],
     pb: &ProgressBar,
 ) -> Triplets {
@@ -493,16 +474,9 @@ pub fn generate_triplets<Bs: SpatialBinner, Bt: TimeBinner>(
     alerts: &[Alert],
     sb: &Bs,
     tb: &Bt,
-    params: TripletParams,
+    params: &FinkFatParams,
 ) -> Triplets {
-    // Paires « locales » en amont : même logique que précédemment
-    let pair_params = PairParams {
-        max_dt: params.max_dt_between,
-        max_sep: params.max_pair_sep,
-        allow_same_timebin: false,
-        max_flux_difference: params.max_flux_difference,
-    };
-    let pairs = generate_pairs(index, alerts, sb, tb, pair_params);
+    let pairs = generate_pairs(index, alerts, sb, tb, params);
     generate_triplets_from_pairs(index, alerts, sb, tb, params, &pairs)
 }
 
@@ -513,6 +487,7 @@ mod geom_seeds_tests {
     use std::f64::consts::PI;
 
     use crate::alerts::{Alert, AlertId};
+    use crate::params;
     use crate::seeding::healpix_binners::HealpixBinner;
     use crate::seeding::space_time_bucket::{build_index_from_alerts_precise, BucketKey};
     use crate::seeding::uniform_time_binner::UniformTimeBinner;
@@ -589,18 +564,17 @@ mod geom_seeds_tests {
         let alerts = vec![a1.clone(), a2.clone(), a3.clone()];
         let index = build_index_from_alerts_precise(&alerts, &sb, &tb);
 
-        let pairs = generate_pairs(
-            &index,
-            &alerts,
-            &sb,
-            &tb,
-            PairParams {
-                max_dt: 10.0 / 1440.0,        // 10 min
-                max_sep: arcsec_to_rad(10.0), // 10"
-                allow_same_timebin: false,
-                max_flux_difference: 5.0, // large
-            },
-        );
+        let params = FinkFatParams::builder()
+            .pairs(|p| {
+                p.max_dt(10.0 / 1440.0) // 10 min
+                    .max_sep(arcsec_to_rad(10.0)) // 10"
+                    .allow_same_timebin(false)
+                    .max_flux_difference(5.0) // large
+            })
+            .build()
+            .unwrap();
+
+        let pairs = generate_pairs(&index, &alerts, &sb, &tb, &params);
 
         assert!(pairs.contains(&(0, 1)) || pairs.contains(&(1, 2)));
         assert!(!pairs.iter().any(|&(i, j)| (i == 2 || i == 1) && j == 3));
@@ -628,34 +602,21 @@ mod geom_seeds_tests {
         let alerts = vec![a1.clone(), a2.clone()];
         let index = build_index_from_alerts_precise(&alerts, &sb, &tb);
 
+        let params = FinkFatParams::builder()
+            .pairs(|p| {
+                p.max_dt(30.0 / 1440.0) // 30 min
+                    .max_sep(arcsec_to_rad(8.0)) // 8"
+                    .max_flux_difference(5.0) // large
+            })
+            .build()
+            .unwrap();
+
         // Interdit same timebin -> aucune paire
-        let pairs_no_same = generate_pairs(
-            &index,
-            &alerts,
-            &sb,
-            &tb,
-            PairParams {
-                max_dt: 30.0 / 1440.0,
-                max_sep: arcsec_to_rad(8.0),
-                allow_same_timebin: false,
-                max_flux_difference: 5.0,
-            },
-        );
+        let pairs_no_same = generate_pairs(&index, &alerts, &sb, &tb, &params);
         assert!(pairs_no_same.is_empty());
 
         // Autorisé -> la paire doit apparaître
-        let pairs_same = generate_pairs(
-            &index,
-            &alerts,
-            &sb,
-            &tb,
-            PairParams {
-                max_dt: 30.0 / 1440.0,
-                max_sep: arcsec_to_rad(8.0),
-                allow_same_timebin: true,
-                max_flux_difference: 5.0,
-            },
-        );
+        let pairs_same = generate_pairs(&index, &alerts, &sb, &tb, &params);
         assert_eq!(pairs_same.len(), 1);
         let (i, j) = pairs_same[0];
         assert!((i == 0 && j == 1) || (i == 1 && j == 0));
@@ -678,19 +639,18 @@ mod geom_seeds_tests {
         let alerts = vec![a.clone(), b.clone(), c.clone()];
         let index = build_index_from_alerts_precise(&alerts, &sb, &tb);
 
-        let triplets = generate_triplets(
-            &index,
-            &alerts,
-            &sb,
-            &tb,
-            TripletParams {
-                max_dt_between: 30.0 / 1440.0,              // 30 min
-                max_pair_sep: arcsec_to_rad(15.0),          // 15"
-                max_predicted_residual: arcsec_to_rad(3.0), // 3"
-                enforce_time_order: true,
-                max_flux_difference: 5.0, // large
-            },
-        );
+        let params = FinkFatParams::builder()
+            .triplets(|p| {
+                p.max_dt_between(30.0 / 1440.0) // 30 min
+                    .max_pair_sep(arcsec_to_rad(15.0)) // 15"
+                    .max_predicted_residual(arcsec_to_rad(3.0)) // 3"
+                    .enforce_time_order(true)
+                    .max_flux_difference(5.0) // large
+            })
+            .build()
+            .unwrap();
+
+        let triplets = generate_triplets(&index, &alerts, &sb, &tb, &params);
 
         // On s'attend à (21,22,23)
         assert!(triplets.contains(&(0, 1, 2)));
@@ -722,19 +682,18 @@ mod geom_seeds_tests {
         let alerts = vec![a.clone(), b.clone(), c.clone()];
         let index = build_index_from_alerts_precise(&alerts, &sb, &tb);
 
-        let triplets = generate_triplets(
-            &index,
-            &alerts,
-            &sb,
-            &tb,
-            TripletParams {
-                max_dt_between: 30.0 / 1440.0,
-                max_pair_sep: arcsec_to_rad(60.0), // pairwise OK
-                max_predicted_residual: arcsec_to_rad(5.0), // mais trop strict pour la déviation
-                enforce_time_order: true,
-                max_flux_difference: 5.0,
-            },
-        );
+        let params = params::FinkFatParams::builder()
+            .triplets(|p| {
+                p.max_dt_between(30.0 / 1440.0) // 30 min
+                    .max_pair_sep(arcsec_to_rad(60.0)) // 60"
+                    .max_predicted_residual(arcsec_to_rad(5.0)) // 5"
+                    .enforce_time_order(true)
+                    .max_flux_difference(5.0) // large
+            })
+            .build()
+            .unwrap();
+
+        let triplets = generate_triplets(&index, &alerts, &sb, &tb, &params);
 
         assert!(!triplets.contains(&(0, 1, 2)));
     }
@@ -759,33 +718,26 @@ mod geom_seeds_tests {
         let alerts = vec![a.clone(), b.clone()];
         let index = build_index_from_alerts_precise(&alerts, &sb, &tb);
 
-        let pairs = generate_pairs(
-            &index,
-            &alerts,
-            &sb,
-            &tb,
-            PairParams {
-                max_dt: 30.0 / 1440.0,
-                max_sep: arcsec_to_rad(20.0),
-                allow_same_timebin: false,
-                max_flux_difference: 5.0,
-            },
-        );
+        let params = FinkFatParams::builder()
+            .pairs(|p| {
+                p.max_dt(30.0 / 1440.0) // 30 min
+                    .max_sep(arcsec_to_rad(20.0)) // 20"
+                    .allow_same_timebin(false)
+                    .max_flux_difference(5.0) // large
+            })
+            .triplets(|p| {
+                p.max_dt_between(25.0 / 1440.0) // 25 min
+                    .max_pair_sep(arcsec_to_rad(20.0)) // 20"
+                    .max_predicted_residual(arcsec_to_rad(5.0)) // 5"
+                    .enforce_time_order(true)
+                    .max_flux_difference(5.0) // large
+            })
+            .build()
+            .unwrap();
 
-        let triplets = generate_triplets_from_pairs(
-            &index,
-            &alerts,
-            &sb,
-            &tb,
-            TripletParams {
-                max_dt_between: 25.0 / 1440.0,
-                max_pair_sep: arcsec_to_rad(20.0),
-                max_predicted_residual: arcsec_to_rad(5.0),
-                enforce_time_order: true,
-                max_flux_difference: 5.0,
-            },
-            &pairs,
-        );
+        let pairs = generate_pairs(&index, &alerts, &sb, &tb, &params);
+
+        let triplets = generate_triplets_from_pairs(&index, &alerts, &sb, &tb, &params, &pairs);
 
         // On conserve la paire même sans triplet
         assert_eq!(triplets.len(), 0);
@@ -810,33 +762,26 @@ mod geom_seeds_tests {
         let alerts = vec![a.clone(), b.clone(), c.clone()];
         let index = build_index_from_alerts_precise(&alerts, &sb, &tb);
 
-        let pairs = generate_pairs(
-            &index,
-            &alerts,
-            &sb,
-            &tb,
-            PairParams {
-                max_dt: 30.0 / 1440.0,
-                max_sep: arcsec_to_rad(20.0),
-                allow_same_timebin: false,
-                max_flux_difference: 5.0,
-            },
-        );
+        let params = FinkFatParams::builder()
+            .pairs(|p| {
+                p.max_dt(30.0 / 1440.0) // 30 min
+                    .max_sep(arcsec_to_rad(20.0)) // 20"
+                    .allow_same_timebin(false)
+                    .max_flux_difference(5.0) // large
+            })
+            .triplets(|p| {
+                p.max_dt_between(25.0 / 1440.0) // 25 min
+                    .max_pair_sep(arcsec_to_rad(20.0)) // 20"
+                    .max_predicted_residual(arcsec_to_rad(5.0)) // 5"
+                    .enforce_time_order(true)
+                    .max_flux_difference(5.0) // large
+            })
+            .build()
+            .unwrap();
 
-        let triplets = generate_triplets_from_pairs(
-            &index,
-            &alerts,
-            &sb,
-            &tb,
-            TripletParams {
-                max_dt_between: 25.0 / 1440.0,
-                max_pair_sep: arcsec_to_rad(20.0),
-                max_predicted_residual: arcsec_to_rad(5.0),
-                enforce_time_order: true,
-                max_flux_difference: 5.0,
-            },
-            &pairs,
-        );
+        let pairs = generate_pairs(&index, &alerts, &sb, &tb, &params);
+
+        let triplets = generate_triplets_from_pairs(&index, &alerts, &sb, &tb, &params, &pairs);
 
         // Triplet détecté
         assert!(triplets.contains(&(0, 1, 2)));
@@ -867,33 +812,26 @@ mod geom_seeds_tests {
         let alerts = vec![a, b, c, d];
         let index = build_index_from_alerts_precise(&alerts, &sb, &tb);
 
-        let pairs = generate_pairs(
-            &index,
-            &alerts,
-            &sb,
-            &tb,
-            PairParams {
-                max_dt: 30.0 / 1440.0,
-                max_sep: arcsec_to_rad(20.0),
-                allow_same_timebin: false,
-                max_flux_difference: 5.0,
-            },
-        );
+        let params = FinkFatParams::builder()
+            .pairs(|p| {
+                p.max_dt(30.0 / 1440.0) // 30 min
+                    .max_sep(arcsec_to_rad(20.0)) // 20"
+                    .allow_same_timebin(false)
+                    .max_flux_difference(5.0) // large
+            })
+            .triplets(|p| {
+                p.max_dt_between(25.0 / 1440.0) // 25 min
+                    .max_pair_sep(arcsec_to_rad(20.0)) // 20"
+                    .max_predicted_residual(arcsec_to_rad(5.0)) // 5"
+                    .enforce_time_order(true)
+                    .max_flux_difference(5.0) // large
+            })
+            .build()
+            .unwrap();
 
-        let triplets = generate_triplets_from_pairs(
-            &index,
-            &alerts,
-            &sb,
-            &tb,
-            TripletParams {
-                max_dt_between: 25.0 / 1440.0,
-                max_pair_sep: arcsec_to_rad(20.0),
-                max_predicted_residual: arcsec_to_rad(5.0),
-                enforce_time_order: true,
-                max_flux_difference: 5.0,
-            },
-            &pairs,
-        );
+        let pairs = generate_pairs(&index, &alerts, &sb, &tb, &params);
+
+        let triplets = generate_triplets_from_pairs(&index, &alerts, &sb, &tb, &params, &pairs);
 
         // Construire un set des paires (ordre canonique i<j)
         let mut pair_set = std::collections::HashSet::new();
@@ -941,13 +879,18 @@ mod geom_seeds_tests {
             ) {
                 let sb = HealpixBinner::new(8);
                 let tb = UniformTimeBinner::new(60000.0, 10.0 / 1440.0); // 10 min
-                let params = PairParams {
-                    max_dt: 30.0 / 1440.0,        // 30 min
-                    max_sep: arcsec_to_rad(20.0), // 20"
-                    allow_same_timebin: false,
-                    max_flux_difference: 5.0,     // large
-                };
-                let search_radius = params.max_sep + sb.cell_radius();
+
+                let params = FinkFatParams::builder()
+                    .pairs(|p| {
+                        p.max_dt(30.0 / 1440.0) // 30 min
+                            .max_sep(arcsec_to_rad(20.0)) // 20"
+                            .allow_same_timebin(false)
+                            .max_flux_difference(5.0) // large
+                    })
+                    .build()
+                    .unwrap();
+
+                let search_radius = params.pairs.max_sep + sb.cell_radius();
 
                 // build alerts
                 let alerts: Vec<Alert> = triples.iter().enumerate().map(|(i, (ra, dec, t))| {
@@ -955,7 +898,7 @@ mod geom_seeds_tests {
                 }).collect();
                 let index = build_index_from_alerts_precise(&alerts, &sb, &tb);
 
-                let pairs = generate_pairs(&index, &alerts, &sb, &tb, params);
+                let pairs = generate_pairs(&index, &alerts, &sb, &tb, &params);
 
                 // unicité
                 let set: HashSet<_> = pairs.iter().collect();
@@ -967,16 +910,16 @@ mod geom_seeds_tests {
                     let b = find_alert(&alerts, j);
                     // ordre temporel dans l'impl
                     prop_assert!(b.mjd_tt > a.mjd_tt);
-                    prop_assert!((b.mjd_tt - a.mjd_tt) <= params.max_dt);
+                    prop_assert!((b.mjd_tt - a.mjd_tt) <= params.pairs.max_dt);
                     let d = ang_sep(a.ra, a.dec, b.ra, b.dec);
-                    prop_assert!(d <= params.max_sep);
+                    prop_assert!(d <= params.pairs.max_sep);
 
                     // buckets compatibles :
                     let key_a = BucketKey { space_key: sb.key_for(a.ra, a.dec), time_bin: tb.bin_for(a.mjd_tt) };
                     let neighs = sb.neighbors(key_a.space_key, search_radius);
                     let allowed_bins: HashSet<i64> = {
                         let w = tb.bin_width().max(1e-12);
-                        let max_steps = (params.max_dt / w).ceil().max(0.0) as i64;
+                        let max_steps = (params.pairs.max_dt / w).ceil().max(0.0) as i64;
                         // allow_same_timebin=false -> commence à +1
                         (1..=max_steps).map(|dk| key_a.time_bin.0 + dk).collect()
                     };
@@ -994,21 +937,26 @@ mod geom_seeds_tests {
             ) {
                 let sb = HealpixBinner::new(8);
                 let tb = UniformTimeBinner::new(60000.0, 10.0 / 1440.0); // 10 min
-                let params = TripletParams {
-                    max_dt_between: 40.0 / 1440.0,        // 40 min
-                    max_pair_sep: arcsec_to_rad(30.0),    // 30"
-                    max_predicted_residual: arcsec_to_rad(10.0), // 10"
-                    enforce_time_order: true,
-                    max_flux_difference: 5.0,             // large
-                };
-                let pair_search_radius = params.max_pair_sep + sb.cell_radius();
+
+                let params = FinkFatParams::builder()
+                    .triplets(|p| {
+                        p.max_dt_between(40.0 / 1440.0) // 40 min
+                            .max_pair_sep(arcsec_to_rad(30.0)) // 30"
+                            .max_predicted_residual(arcsec_to_rad(10.0)) // 10"
+                            .enforce_time_order(true)
+                            .max_flux_difference(5.0) // large
+                    })
+                    .build()
+                    .unwrap();
+
+                let pair_search_radius = params.triplets.max_pair_sep + sb.cell_radius();
 
                 let alerts: Vec<Alert> = triples.iter().enumerate().map(|(i, (ra, dec, t))| {
                     mk_alert(i as u32, *ra, *dec, *t, 1)
                 }).collect();
                 let index = build_index_from_alerts_precise(&alerts, &sb, &tb);
 
-                let triplets = generate_triplets(&index, &alerts, &sb, &tb, params);
+                let triplets = generate_triplets(&index, &alerts, &sb, &tb, &params);
                 // unicité
                 let set: HashSet<_> = triplets.iter().collect();
                 prop_assert_eq!(set.len(), triplets.len());
@@ -1024,11 +972,11 @@ mod geom_seeds_tests {
                     // contraintes pairwise Δt/Δθ
                     let dt_ab = b.mjd_tt - a.mjd_tt;
                     let dt_bc = c.mjd_tt - b.mjd_tt;
-                    prop_assert!(dt_ab <= params.max_dt_between && dt_bc <= params.max_dt_between);
+                    prop_assert!(dt_ab <= params.triplets.max_dt_between && dt_bc <= params.triplets.max_dt_between);
 
                     let dab = ang_sep(a.ra, a.dec, b.ra, b.dec);
                     let dbc = ang_sep(b.ra, b.dec, c.ra, c.dec);
-                    prop_assert!(dab <= params.max_pair_sep && dbc <= params.max_pair_sep);
+                    prop_assert!(dab <= params.triplets.max_pair_sep && dbc <= params.triplets.max_pair_sep);
 
                     // résidu de prédiction linéaire (recalcule comme dans l'impl)
                     let (dx_ab, dy_ab) = {
@@ -1052,7 +1000,7 @@ mod geom_seeds_tests {
                         (dx, dy)
                     };
                     let resid = ((dx_pc - dx_pp).powi(2) + (dy_pc - dy_pp).powi(2)).sqrt();
-                    prop_assert!(resid <= params.max_predicted_residual);
+                    prop_assert!(resid <= params.triplets.max_predicted_residual);
 
                     // buckets compatibles:
                     // (a,b) : b dans les voisins et bins autorisés de a
@@ -1062,7 +1010,7 @@ mod geom_seeds_tests {
                     prop_assert!(neighs_ab.into_iter().any(|k| k == key_b.space_key));
                     {
                         let w = tb.bin_width().max(1e-12);
-                        let max_steps = (params.max_dt_between / w).ceil().max(0.0) as i64;
+                        let max_steps = (params.triplets.max_dt_between / w).ceil().max(0.0) as i64;
                         // allow_same_timebin=false dans generate_pairs en amont
                         let allowed_ab: HashSet<i64> = (1..=max_steps).map(|dk| key_a.time_bin.0 + dk).collect();
                         prop_assert!(allowed_ab.contains(&key_b.time_bin.0));
@@ -1075,7 +1023,7 @@ mod geom_seeds_tests {
                     prop_assert!(neighs_bc.into_iter().any(|k| k == key_c.space_key));
                     {
                         let w = tb.bin_width().max(1e-12);
-                        let max_steps = (params.max_dt_between / w).ceil().max(0.0) as i64;
+                        let max_steps = (params.triplets.max_dt_between / w).ceil().max(0.0) as i64;
                         let allowed_bc: HashSet<i64> = (1..=max_steps).map(|dk| key_b2.time_bin.0 + dk).collect();
                         prop_assert!(allowed_bc.contains(&key_c.time_bin.0));
                     }

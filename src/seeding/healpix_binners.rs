@@ -21,7 +21,10 @@ use cdshealpix as chpx;
 use chpx::nested;
 use chpx::nested::Layer;
 
-use crate::seeding::space_time_bucket::{Radians, SpatialBinner, SpatialKey};
+use crate::{
+    seeding::space_time_bucket::{SpatialBinner, SpatialKey},
+    Radians,
+};
 
 /// HEALPix-backed spatial binner (NESTED scheme).
 #[derive(Clone, Copy)]

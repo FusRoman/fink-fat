@@ -9,7 +9,10 @@
 //! interval \[a,b\]. This is achieved by slightly nudging `b` downward
 //! to handle exact-boundary cases in presence of floating-point roundoff.
 
-use crate::seeding::space_time_bucket::{MjdTt, TimeBin, TimeBinner};
+use crate::{
+    seeding::space_time_bucket::{TimeBin, TimeBinner},
+    MjdTt,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub struct UniformTimeBinner {
