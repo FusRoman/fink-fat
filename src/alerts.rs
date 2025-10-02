@@ -1,7 +1,11 @@
 use std::{collections::BTreeSet, fmt};
 
 use itertools::izip;
-use pyo3::{pyclass, pymethods, Py, PyErr, PyResult, Python};
+use pyo3::{
+    pyclass, pymethods,
+    types::{PyAnyMethods, PyDict, PyList},
+    Py, PyAny, PyErr, PyResult, Python,
+};
 
 use numpy::PyReadonlyArray1;
 
@@ -10,7 +14,7 @@ use crate::{
     seeding::{
         geometrical_seeding::{
             generate_pairs, generate_pairs_with_progress, generate_triplets_from_pairs,
-            generate_triplets_from_pairs_with_progress, PairParams, TripletParams,
+            generate_triplets_from_pairs_with_progress, PairParams, Pairs, TripletParams, Triplets,
         },
         healpix_binners::HealpixBinner,
         space_time_bucket::{
@@ -140,10 +144,7 @@ impl AlertStore {
 
         let start_mjd = mjd_tt.iter().copied().fold(f64::INFINITY, f64::min).floor();
 
-        Ok(AlertStore {
-            start_mjd: start_mjd,
-            alerts,
-        })
+        Ok(AlertStore { start_mjd, alerts })
     }
 
     /// Retourne un **objet Python possédé** (copie/clône) plutôt qu’une référence Rust.
@@ -200,10 +201,12 @@ impl AlertStore {
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn generate_seeds(
         &self,
         healpix_depth: u8,
         time_bin_width_days: f64,
+        max_flux_difference: f32,
         pair_max_dt: f64,
         pair_max_sep: f64,
         allow_same_timebin: bool,
@@ -212,17 +215,19 @@ impl AlertStore {
         trip_max_pred_resid: f64,
         enforce_time_order: bool,
         show_progress: bool,
-    ) -> PyResult<(Vec<(AlertId, AlertId)>, Vec<(AlertId, AlertId, AlertId)>)> {
+    ) -> PyResult<(Pairs, Triplets)> {
         let pair_params = PairParams {
             max_dt: pair_max_dt,
             max_sep: pair_max_sep,
             allow_same_timebin,
+            max_flux_difference,
         };
         let triplet_params = TripletParams {
             max_dt_between: trip_max_dt_between,
             max_pair_sep: trip_max_pair_sep,
             max_predicted_residual: trip_max_pred_resid,
             enforce_time_order,
+            max_flux_difference,
         };
 
         let sb = HealpixBinner::new(healpix_depth);
@@ -278,5 +283,87 @@ impl AlertStore {
         // ====== /PROGRESS ======
 
         Ok((pairs, triplets))
+    }
+
+    pub fn build_link_uids_dict(
+        &self,
+        py: Python<'_>,
+        pairs: Pairs,
+        triplets: Triplets,
+    ) -> PyResult<Py<PyAny>> {
+        // ===== Helpers for column builders =====
+        #[inline]
+        fn get_dia(alerts: &[Alert], id: AlertId) -> u64 {
+            alerts[id as usize].dia_source_id
+        }
+
+        // ===== Build PAIRS columns =====
+        let mut pair_uid: Vec<String> = Vec::with_capacity(pairs.len());
+        let mut a_alert_id: Vec<u32> = Vec::with_capacity(pairs.len());
+        let mut b_alert_id: Vec<u32> = Vec::with_capacity(pairs.len());
+        let mut a_dia: Vec<u64> = Vec::with_capacity(pairs.len());
+        let mut b_dia: Vec<u64> = Vec::with_capacity(pairs.len());
+
+        for (a, b) in pairs.iter().copied() {
+            let da = get_dia(&self.alerts, a);
+            let db = get_dia(&self.alerts, b);
+            let (dmin, dmax) = if da <= db { (da, db) } else { (db, da) };
+            // Stable, deterministic, human-readable UID
+            let uid = format!("P|{}|{}", dmin, dmax);
+
+            pair_uid.push(uid);
+            a_alert_id.push(a);
+            b_alert_id.push(b);
+            a_dia.push(da);
+            b_dia.push(db);
+        }
+
+        // ===== Build TRIPLETS columns =====
+        let mut trip_uid: Vec<String> = Vec::with_capacity(triplets.len());
+        let mut ta_alert_id: Vec<u32> = Vec::with_capacity(triplets.len());
+        let mut tb_alert_id: Vec<u32> = Vec::with_capacity(triplets.len());
+        let mut tc_alert_id: Vec<u32> = Vec::with_capacity(triplets.len());
+        let mut ta_dia: Vec<u64> = Vec::with_capacity(triplets.len());
+        let mut tb_dia: Vec<u64> = Vec::with_capacity(triplets.len());
+        let mut tc_dia: Vec<u64> = Vec::with_capacity(triplets.len());
+
+        for (a, b, c) in triplets.iter().copied() {
+            let da = get_dia(&self.alerts, a);
+            let db = get_dia(&self.alerts, b);
+            let dc = get_dia(&self.alerts, c);
+            let mut s = [da, db, dc];
+            s.sort_unstable();
+            let uid = format!("T|{}|{}|{}", s[0], s[1], s[2]);
+
+            trip_uid.push(uid);
+            ta_alert_id.push(a);
+            tb_alert_id.push(b);
+            tc_alert_id.push(c);
+            ta_dia.push(da);
+            tb_dia.push(db);
+            tc_dia.push(dc);
+        }
+
+        // ===== Convert to Python dicts of columns =====
+        let pairs_dict = PyDict::new(py);
+        pairs_dict.set_item("pair_uid", PyList::new(py, &pair_uid)?)?;
+        pairs_dict.set_item("a_alert_id", PyList::new(py, &a_alert_id)?)?;
+        pairs_dict.set_item("b_alert_id", PyList::new(py, &b_alert_id)?)?;
+        pairs_dict.set_item("a_dia_source_id", PyList::new(py, &a_dia)?)?;
+        pairs_dict.set_item("b_dia_source_id", PyList::new(py, &b_dia)?)?;
+
+        let trips_dict = PyDict::new(py);
+        trips_dict.set_item("trip_uid", PyList::new(py, &trip_uid)?)?;
+        trips_dict.set_item("a_alert_id", PyList::new(py, &ta_alert_id)?)?;
+        trips_dict.set_item("b_alert_id", PyList::new(py, &tb_alert_id)?)?;
+        trips_dict.set_item("c_alert_id", PyList::new(py, &tc_alert_id)?)?;
+        trips_dict.set_item("a_dia_source_id", PyList::new(py, &ta_dia)?)?;
+        trips_dict.set_item("b_dia_source_id", PyList::new(py, &tb_dia)?)?;
+        trips_dict.set_item("c_dia_source_id", PyList::new(py, &tc_dia)?)?;
+
+        let out = PyDict::new(py);
+        out.set_item("pairs", pairs_dict)?;
+        out.set_item("triplets", trips_dict)?;
+        Ok(out.into())
     }
 }
