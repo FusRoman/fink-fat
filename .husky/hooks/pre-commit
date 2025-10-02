@@ -9,5 +9,5 @@ cargo clippy --all-targets --all-features -- -D warnings || exit 1
 echo "Running cargo check..."
 cargo check --all-targets --all-features || exit 1
 
-# echo "Checking documentation build..."
-# RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features || exit 1
+echo "Checking documentation build..."
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features || exit 1

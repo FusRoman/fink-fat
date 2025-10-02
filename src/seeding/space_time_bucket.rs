@@ -6,10 +6,8 @@ use indicatif::ProgressBar;
 use crate::{
     alerts::{Alert, AlertId},
     progress::throttled_inc,
+    MjdTt, Radians,
 };
-
-pub type MjdTt = f64; // days
-pub type Radians = f64; // rad
 
 /// Spatial key (e.g. HEALPix/HTM cell id, or simple lon/lat grid index)
 #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
