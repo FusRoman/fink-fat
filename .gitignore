@@ -73,3 +73,6 @@ docs/_build/
 
 .pdm-python
 proptest-regressions/
+
+test_seed_real_data.py
+ztf_alert.parquet
