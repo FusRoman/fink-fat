@@ -1,3 +1,4 @@
+import fink_fat
 from .fink_fat import *
 
 

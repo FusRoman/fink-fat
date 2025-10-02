@@ -1,10 +1,9 @@
 # tests/test_generate_seeds.py
 import math
 import numpy as np
-import pytest
 
 # Le module PyO3 exposé par ta crate (d'après #[pyclass(module = "fink_fat")])
-from fink_fat import AlertStore
+from fink_fat import AlertStore, PyFinkFatParams  # type: ignore
 
 
 def arcsec_to_rad(x: float) -> float:
@@ -65,18 +64,22 @@ def test_pairs_kept_without_triplet():
     store = build_store_from_triplets(start, triplets)
 
     # Bins de 10 min ; Δt_max = 15 min ; Δθ_max = 10"
-    pairs, triplets_out = store.generate_seeds(
-        healpix_depth=9,
-        time_bin_width_days=10.0 / 1440.0,
-        pair_max_dt=15.0 / 1440.0,
-        pair_max_sep=arcsec_to_rad(10.0),
-        allow_same_timebin=False,
-        trip_max_dt_between=10.0 / 1440.0,  # stricte → pas de 3e point
-        trip_max_pair_sep=arcsec_to_rad(12.0),
-        trip_max_pred_resid=arcsec_to_rad(3.0),
-        enforce_time_order=True,
-        show_progress=False,
+    params = (
+        PyFinkFatParams.builder()
+        .healpix_depth(9)
+        .time_bin_width_days(10.0 / 1440.0)
+        .pair_max_dt(15.0 / 1440.0)
+        .pair_max_sep(arcsec_to_rad(10.0))
+        .pair_allow_same_timebin(False)
+        .triplet_max_dt_between(10.0 / 1440.0)
+        .triplet_max_pair_sep(arcsec_to_rad(12.0))
+        .triplet_max_predicted_residual(arcsec_to_rad(3.0))
+        .triplet_enforce_time_order(True)
+        .show_progress(False)
+        .build()
     )
+
+    pairs, triplets_out = store.generate_seeds(params)
     assert len(triplets_out) == 0
     assert len(pairs) == 1
     # Les ids sont séquentiels (0-based) si ton Rust les assigne ainsi ; le plus fréquent est [0,1].
@@ -104,35 +107,43 @@ def test_same_timebin_toggle():
     ]
     store = build_store_from_triplets(start, triplets)
 
-    # Interdit same-timebin
-    pairs, trips = store.generate_seeds(
-        healpix_depth=9,
-        time_bin_width_days=20.0 / 1440.0,  # 20 min
-        pair_max_dt=30.0 / 1440.0,
-        pair_max_sep=arcsec_to_rad(8.0),
-        allow_same_timebin=False,
-        trip_max_dt_between=15.0 / 1440.0,
-        trip_max_pair_sep=arcsec_to_rad(10.0),
-        trip_max_pred_resid=arcsec_to_rad(3.0),
-        enforce_time_order=True,
-        show_progress=False,
+    params = (
+        PyFinkFatParams.builder()
+        .healpix_depth(9)
+        .time_bin_width_days(20.0 / 1440.0)
+        .pair_max_dt(30.0 / 1440.0)
+        .pair_max_sep(arcsec_to_rad(8.0))
+        .pair_allow_same_timebin(False)
+        .triplet_max_dt_between(15.0 / 1440.0)
+        .triplet_max_pair_sep(arcsec_to_rad(10.0))
+        .triplet_max_predicted_residual(arcsec_to_rad(3.0))
+        .triplet_enforce_time_order(True)
+        .show_progress(False)
+        .build()
     )
+
+    # Interdit same-timebin
+    pairs, trips = store.generate_seeds(params)
     assert pairs == []
     assert trips == []
 
-    # Autorise same-timebin
-    pairs2, trips2 = store.generate_seeds(
-        healpix_depth=9,
-        time_bin_width_days=20.0 / 1440.0,
-        pair_max_dt=30.0 / 1440.0,
-        pair_max_sep=arcsec_to_rad(8.0),
-        allow_same_timebin=True,
-        trip_max_dt_between=15.0 / 1440.0,
-        trip_max_pair_sep=arcsec_to_rad(10.0),
-        trip_max_pred_resid=arcsec_to_rad(3.0),
-        enforce_time_order=True,
-        show_progress=False,
+    params = (
+        PyFinkFatParams.builder()
+        .healpix_depth(9)
+        .time_bin_width_days(20.0 / 1440.0)
+        .pair_max_dt(30.0 / 1440.0)
+        .pair_max_sep(arcsec_to_rad(8.0))
+        .pair_allow_same_timebin(True)
+        .triplet_max_dt_between(15.0 / 1440.0)
+        .triplet_max_pair_sep(arcsec_to_rad(10.0))
+        .triplet_max_predicted_residual(arcsec_to_rad(3.0))
+        .triplet_enforce_time_order(True)
+        .show_progress(False)
+        .build()
     )
+
+    # Autorise same-timebin
+    pairs2, trips2 = store.generate_seeds(params)
     assert len(pairs2) == 1
     assert len(trips2) == 0
 
@@ -153,18 +164,22 @@ def test_triplet_linear_motion_and_pairs_present():
     ]
     store = build_store_from_triplets(start, triplets)
 
-    pairs, tri = store.generate_seeds(
-        healpix_depth=10,
-        time_bin_width_days=10.0 / 1440.0,
-        pair_max_dt=25.0 / 1440.0,
-        pair_max_sep=arcsec_to_rad(15.0),
-        allow_same_timebin=False,
-        trip_max_dt_between=15.0 / 1440.0,
-        trip_max_pair_sep=arcsec_to_rad(15.0),
-        trip_max_pred_resid=arcsec_to_rad(3.0),
-        enforce_time_order=True,
-        show_progress=False,
+    params = (
+        PyFinkFatParams.builder()
+        .healpix_depth(10)
+        .time_bin_width_days(10.0 / 1440.0)
+        .pair_max_dt(25.0 / 1440.0)
+        .pair_max_sep(arcsec_to_rad(15.0))
+        .pair_allow_same_timebin(False)
+        .triplet_max_dt_between(15.0 / 1440.0)
+        .triplet_max_pair_sep(arcsec_to_rad(15.0))
+        .triplet_max_predicted_residual(arcsec_to_rad(3.0))
+        .triplet_enforce_time_order(True)
+        .show_progress(False)
+        .build()
     )
+
+    pairs, tri = store.generate_seeds(params)
 
     # 1) Un triplet (ids 0,1,2 selon impl la plus commune)
     # On ne dépend pas de l'offset d'id exact: on accepte toute permutation triée de {0,1,2}
@@ -195,18 +210,22 @@ def test_output_types_and_shapes():
     ]
     store = build_store_from_triplets(start, triplets)
 
-    pairs, tri = store.generate_seeds(
-        healpix_depth=8,
-        time_bin_width_days=10.0 / 1440.0,
-        pair_max_dt=10.0 / 1440.0,
-        pair_max_sep=arcsec_to_rad(10.0),
-        allow_same_timebin=True,
-        trip_max_dt_between=10.0 / 1440.0,
-        trip_max_pair_sep=arcsec_to_rad(10.0),
-        trip_max_pred_resid=arcsec_to_rad(3.0),
-        enforce_time_order=True,
-        show_progress=False,
+    params = (
+        PyFinkFatParams.builder()
+        .healpix_depth(8)
+        .time_bin_width_days(10.0 / 1440.0)
+        .pair_max_dt(10.0 / 1440.0)
+        .pair_max_sep(arcsec_to_rad(10.0))
+        .pair_allow_same_timebin(True)
+        .triplet_max_dt_between(10.0 / 1440.0)
+        .triplet_max_pair_sep(arcsec_to_rad(10.0))
+        .triplet_max_predicted_residual(arcsec_to_rad(3.0))
+        .triplet_enforce_time_order(True)
+        .show_progress(False)
+        .build()
     )
+
+    pairs, tri = store.generate_seeds(params)
 
     # types
     assert isinstance(pairs, list)

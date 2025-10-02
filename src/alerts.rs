@@ -1,3 +1,35 @@
+//! # Alert data model and seeding bridge (Python bindings)
+//!
+//! This module exposes a minimal **alert data model** to Python and the
+//! **intra-night seeding pipeline** entry points.
+//!
+//! ## Overview
+//!
+//! - [`Alert`] is a lightweight immutable record (exposed to Python) holding
+//!   the per-detection astrometry, photometry and metadata.
+//! - [`AlertStore`] is a contiguous vector of [`Alert`] indexed by
+//!   [`AlertId`], plus a `start_mjd` anchor used for time binning.
+//! - From Python, you can construct an [`AlertStore`] directly from NumPy
+//!   arrays via [`AlertStore::from_numpy`], run the **pair/triplet seeding**
+//!   pipeline with [`AlertStore::generate_seeds`], and build stable,
+//!   human-readable link identifiers with [`AlertStore::build_link_uids_dict`].
+//!
+//! ## Units & Conventions
+//!
+//! - `ra`, `dec` are in **radians** (ICRS, J2000).
+//! - `mjd_tt` is **Modified Julian Date in TT (Terrestrial Time)**.
+//! - `flux` is PSF **difference** flux (e.g., nJy), and `flux_err` its error.
+//! - `band` is an **integer** photometric band code.
+//! - [`AlertId`] is a **0-based** dense integer index into the `alerts` vector.
+//!
+//! ## Performance notes
+//!
+//! - [`AlertStore::from_numpy`] performs a single pass over zero-copied slices
+//!   (no Python allocation in the loop). Data is **copied once** into a Rust
+//!   `Vec<Alert>` to enable contiguous access and safe parallel iteration later.
+//! - The seeding routines can stream progress bars via `indicatif` if requested
+//!   in [`PyFinkFatParams`]; otherwise there is no UI overhead.
+
 use std::{collections::BTreeSet, fmt};
 
 use itertools::izip;
@@ -25,8 +57,22 @@ use crate::{
     },
 };
 
+/// Dense identifier used to index into [`AlertStore::alerts`].
 pub type AlertId = u32;
 
+/// Single detection in the alert stream.
+///
+/// This record is intentionally compact and cloneable so it can be moved across
+/// threads and sent back to Python when needed.
+///
+/// Fields
+/// ------
+/// - `id` – [`AlertId`] assigned on ingestion; indexes `alerts[id as usize]`.
+/// - `dia_source_id` – LSST `diaSourceId` (stable, 64-bit).
+/// - `ra`, `dec` – ICRS coordinates in **radians**.
+/// - `mjd_tt` – **MJD (TT)** timestamp of the detection.
+/// - `flux`, `flux_err` – PSF **difference** flux and its uncertainty (units depend on upstream).
+/// - `band` – integer photometric band code.
 #[pyclass(module = "fink_fat")]
 #[derive(Clone)]
 pub struct Alert {
@@ -48,11 +94,11 @@ pub struct Alert {
     pub band: u8, // photometric band
 }
 
-// -------- Display / Debug --------
+/* ------------------------ Display / Debug ------------------------- */
 
 impl fmt::Display for Alert {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Affichage compact, une ligne
+        // Compact single-line rendering for logs and __str__.
         write!(
             f,
             "Alert(id={}, dia_source_id={}, ra={:.6} rad, dec={:.6} rad, mjd_tt={:.5}, flux={:.3}±{:.3} nJy, band={})",
@@ -61,18 +107,26 @@ impl fmt::Display for Alert {
     }
 }
 
-// -------- API Python --------
+/* --------------------------- Python API --------------------------- */
 
 #[pymethods]
 impl Alert {
-    /// Python: str(alert)
+    /// Return a compact string representation (Python `str(alert)`).
+    ///
+    /// Examples
+    /// --------
+    /// >>> str(alert)  # doctest: +SKIP
+    /// "Alert(id=42, dia_source_id=..., ra=..., dec=..., ...)"
     fn __str__(&self) -> String {
         format!("{}", self)
     }
 
-    /// Python: repr(alert)
+    /// Return a detailed representation (Python `repr(alert)`).
+    ///
+    /// Notes
+    /// -----
+    /// This is more verbose than `__str__` and includes all scalar fields.
     fn __repr__(&self) -> String {
-        // Plus verbeux que __str__ si tu veux
         format!(
             "Alert(id={}, dia_source_id={}, ra={:.6}, dec={:.6}, mjd_tt={:.5}, flux={:.3}, flux_err={:.3}, band={})",
             self.id, self.dia_source_id, self.ra, self.dec, self.mjd_tt, self.flux, self.flux_err, self.band
@@ -80,16 +134,31 @@ impl Alert {
     }
 }
 
-/// AlertStore holds all alerts of a night, indexed by AlertId as usize
+/// Contiguous store of alerts for (typically) a single night.
+///
+/// The vector `alerts` is indexed by [`AlertId`] (0-based) and provides
+/// cache-friendly iteration for the seeding pipeline.
+///
+/// Design
+/// ------
+/// - `start_mjd` is the **floor** of the minimum `mjd_tt` in the store and
+///   serves as origin for uniform time binning.
+/// - Alerts are immutable after construction to simplify sharing across threads.
+///
+/// Python
+/// ------
+/// Instances are exposed in `fink_fat.AlertStore`.
 #[pyclass(module = "fink_fat")]
 pub struct AlertStore {
-    pub start_mjd: f64,     // t0 of the night (TT)
-    pub alerts: Vec<Alert>, // indexed by AlertId as usize
+    /// Night anchor (TT): floor of the minimum `mjd_tt` in `alerts`.
+    pub start_mjd: f64,
+    /// All alerts, densely indexed by [`AlertId`].
+    pub alerts: Vec<Alert>,
 }
 
 impl fmt::Display for AlertStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Version "légère", ne lit pas les alertes (pas de GIL)
+        // Lightweight summary without iterating the alerts (no GIL needed).
         write!(
             f,
             "AlertStore(n_alerts={}, start_mjd={:.5})",
@@ -101,6 +170,32 @@ impl fmt::Display for AlertStore {
 
 #[pymethods]
 impl AlertStore {
+    /// Build an [`AlertStore`] from 1-D NumPy arrays (copying once into Rust).
+    ///
+    /// Parameters
+    /// ----------
+    /// dia_source_id : numpy.ndarray\[uint64\]
+    ///     LSST diaSource identifiers (shape: `(N,)`).
+    /// ra, dec : numpy.ndarray\[float64\]
+    ///     ICRS coordinates in **radians** (shape: `(N,)`).
+    /// mjd_tt : numpy.ndarray\[float64\]
+    ///     Detection time as **MJD (TT)** (shape: `(N,)`).
+    /// flux, flux_err : numpy.ndarray\[float32\]
+    ///     PSF **difference** flux and its uncertainty (shape: `(N,)`).
+    /// band : numpy.ndarray\[uint8\]
+    ///     Integer photometric band code (shape: `(N,)`).
+    ///
+    /// Returns
+    /// -------
+    /// AlertStore
+    ///     A new store with `N` alerts and `start_mjd = floor(min(mjd_tt))`.
+    ///
+    /// Notes
+    /// -----
+    /// - All arrays must be 1-D and have the same length.
+    /// - Values are copied into a contiguous `Vec<Alert>` for performance.
+    /// - Field units are not converted here; callers must provide radians and TT.
+    #[pyo3(text_signature = "(dia_source_id, ra, dec, mjd_tt, flux, flux_err, band, /)")]
     #[staticmethod]
     pub fn from_numpy(
         dia_source_id: PyReadonlyArray1<u64>,
@@ -148,7 +243,22 @@ impl AlertStore {
         Ok(AlertStore { start_mjd, alerts })
     }
 
-    /// Retourne un **objet Python possédé** (copie/clône) plutôt qu’une référence Rust.
+    /// Return an owned Python `Alert` (clone), not a Rust reference.
+    ///
+    /// Parameters
+    /// ----------
+    /// id : int
+    ///     Dense alert identifier (`0 <= id < len(store)`).
+    ///
+    /// Returns
+    /// -------
+    /// Alert
+    ///
+    /// Raises
+    /// ------
+    /// IndexError
+    ///     If `id` is out of bounds.
+    #[pyo3(text_signature = "($self, id, /)")]
     pub fn get<'py>(&self, py: Python<'py>, id: AlertId) -> PyResult<Py<Alert>> {
         let a = self
             .alerts
@@ -157,10 +267,17 @@ impl AlertStore {
         Py::new(py, a.clone())
     }
 
+    /// Python `len(store)`.
     pub fn __len__(&self) -> usize {
         self.alerts.len()
     }
 
+    /// Python `store[idx]` → owned `Alert` (clone).
+    ///
+    /// Raises
+    /// ------
+    /// IndexError
+    ///     If `idx` is out of range.
     pub fn __getitem__<'py>(&self, py: Python<'py>, idx: usize) -> PyResult<Py<Alert>> {
         let a = self
             .alerts
@@ -169,12 +286,17 @@ impl AlertStore {
         Py::new(py, a.clone())
     }
 
-    /// Python: str(store)
+    /// Compact string summary (Python `str(store)`).
     fn __str__(&self) -> String {
         format!("{}", self)
     }
 
-    /// Python: repr(store) — résumé plus riche (span temporel + bandes)
+    /// Rich summary including time span and band set (Python `repr(store)`).
+    ///
+    /// Returns
+    /// -------
+    /// str
+    ///     Example: `"AlertStore(n_alerts=..., start_mjd=..., time_span=[tmin, tmax], bands={...})"`.
     fn __repr__(&self) -> PyResult<String> {
         let n = self.alerts.len();
         if n == 0 {
@@ -202,6 +324,28 @@ impl AlertStore {
         ))
     }
 
+    /// Generate intra-night **pairs** and **triplets** seeds.
+    ///
+    /// Parameters
+    /// ----------
+    /// params : FinkFatParams
+    ///     Configuration object. The following fields are consumed here:
+    ///     - `healpix_depth`, `time_bin_width_days` (bucketing),
+    ///     - pair thresholds (max Δt, max angular sep, etc.),
+    ///     - triplet thresholds (Δt between, pair separation, predicted residual),
+    ///     - `show_progress` (enable/disable progress bars).
+    ///
+    /// Returns
+    /// -------
+    /// (Pairs, Triplets)
+    ///     Pair and triplet collections as defined by the seeding module.
+    ///
+    /// Notes
+    /// -----
+    /// - If `show_progress == False`, runs the pure compute path without UI.
+    /// - Otherwise, attaches `indicatif` progress bars with three phases:
+    ///   buckets → pairs → triplets.
+    #[pyo3(text_signature = "($self, params, /)")]
     #[allow(clippy::too_many_arguments)]
     pub fn generate_seeds(&self, params: &PyFinkFatParams) -> PyResult<(Pairs, Triplets)> {
         let sb = HealpixBinner::new(params.healpix_depth());
@@ -216,15 +360,15 @@ impl AlertStore {
             return Ok((pairs, triplets));
         }
 
-        // ====== PROGRESS ======
+        // ====== Progress UI ======
         let mp = make_multi_progress();
         let global = make_bar(&mp, 3, "pipeline");
         let pb_buckets = make_bar(&mp, 2 * self.alerts.len() as u64, "buckets");
         let pb_pairs = make_bar(&mp, self.alerts.len() as u64, "pairs");
-        // pb_triplets: longueur ajustée après avoir les paires.
+        // pb_triplets: length set after pairs are known.
         let pb_triplets = make_bar(&mp, 1, "triplets (waiting)");
 
-        // Step 1: buckets
+        // Step 1: bucket index
         let index =
             build_index_from_alerts_precise_with_progress(&self.alerts, &sb, &tb, &pb_buckets);
         global.inc(1);
@@ -248,24 +392,48 @@ impl AlertStore {
         );
         global.inc(1);
         global.finish_with_message("done ✓");
-        // ====== /PROGRESS ======
+        // ====== /Progress UI ======
 
         Ok((pairs, triplets))
     }
 
+    /// Build deterministic, human-readable link UIDs for pairs and triplets.
+    ///
+    /// The function returns a nested Python `dict` of column lists ready to be
+    /// turned into a pandas DataFrame. The UID construction is order-invariant
+    /// with respect to member DIA source ids.
+    ///
+    /// Returns
+    /// -------
+    /// dict
+    ///     Structure:
+    ///     - `out["pairs"]`:
+    ///       - `"pair_uid"`: list\[str\] — format `"P|{min_dia}|{max_dia}"`.
+    ///       - `"a_alert_id"`, `"b_alert_id"`: list\[int\] — store indices.
+    ///       - `"a_dia_source_id"`, `"b_dia_source_id"`: list\[int\].
+    ///     - `out["triplets"]`:
+    ///       - `"trip_uid"`: list\[str\] — format `"T|{dia1}|{dia2}|{dia3}"` with sorted DIAs.
+    ///       - `"a_alert_id"`, `"b_alert_id"`, `"c_alert_id"`: list\[int\].
+    ///       - `"a_dia_source_id"`, `"b_dia_source_id"`, `"c_dia_source_id"`: list\[int\].
+    ///
+    /// Notes
+    /// -----
+    /// - The UID scheme is stable across runs and independent of alert ordering.
+    /// - Use this to join seeds across nights or to deduplicate collections.
+    #[pyo3(text_signature = "($self, pairs, triplets, /)")]
     pub fn build_link_uids_dict(
         &self,
         py: Python<'_>,
         pairs: Pairs,
         triplets: Triplets,
     ) -> PyResult<Py<PyAny>> {
-        // ===== Helpers for column builders =====
+        // --- Helpers for column builders ---
         #[inline]
         fn get_dia(alerts: &[Alert], id: AlertId) -> u64 {
             alerts[id as usize].dia_source_id
         }
 
-        // ===== Build PAIRS columns =====
+        // --- Build PAIRS columns ---
         let mut pair_uid: Vec<String> = Vec::with_capacity(pairs.len());
         let mut a_alert_id: Vec<u32> = Vec::with_capacity(pairs.len());
         let mut b_alert_id: Vec<u32> = Vec::with_capacity(pairs.len());
@@ -286,7 +454,7 @@ impl AlertStore {
             b_dia.push(db);
         }
 
-        // ===== Build TRIPLETS columns =====
+        // --- Build TRIPLETS columns ---
         let mut trip_uid: Vec<String> = Vec::with_capacity(triplets.len());
         let mut ta_alert_id: Vec<u32> = Vec::with_capacity(triplets.len());
         let mut tb_alert_id: Vec<u32> = Vec::with_capacity(triplets.len());
@@ -312,7 +480,7 @@ impl AlertStore {
             tc_dia.push(dc);
         }
 
-        // ===== Convert to Python dicts of columns =====
+        // --- Convert to Python dicts of columns ---
         let pairs_dict = PyDict::new(py);
         pairs_dict.set_item("pair_uid", PyList::new(py, &pair_uid)?)?;
         pairs_dict.set_item("a_alert_id", PyList::new(py, &a_alert_id)?)?;
