@@ -10,11 +10,12 @@ use pyo3::{
 use numpy::PyReadonlyArray1;
 
 use crate::{
+    params::params_binding::PyFinkFatParams,
     progress::{make_bar, make_multi_progress},
     seeding::{
         geometrical_seeding::{
             generate_pairs, generate_pairs_with_progress, generate_triplets_from_pairs,
-            generate_triplets_from_pairs_with_progress, PairParams, Pairs, TripletParams, Triplets,
+            generate_triplets_from_pairs_with_progress, Pairs, Triplets,
         },
         healpix_binners::HealpixBinner,
         space_time_bucket::{
@@ -202,49 +203,16 @@ impl AlertStore {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn generate_seeds(
-        &self,
-        healpix_depth: u8,
-        time_bin_width_days: f64,
-        max_flux_difference: f32,
-        pair_max_dt: f64,
-        pair_max_sep: f64,
-        allow_same_timebin: bool,
-        trip_max_dt_between: f64,
-        trip_max_pair_sep: f64,
-        trip_max_pred_resid: f64,
-        enforce_time_order: bool,
-        show_progress: bool,
-    ) -> PyResult<(Pairs, Triplets)> {
-        let pair_params = PairParams {
-            max_dt: pair_max_dt,
-            max_sep: pair_max_sep,
-            allow_same_timebin,
-            max_flux_difference,
-        };
-        let triplet_params = TripletParams {
-            max_dt_between: trip_max_dt_between,
-            max_pair_sep: trip_max_pair_sep,
-            max_predicted_residual: trip_max_pred_resid,
-            enforce_time_order,
-            max_flux_difference,
-        };
+    pub fn generate_seeds(&self, params: &PyFinkFatParams) -> PyResult<(Pairs, Triplets)> {
+        let sb = HealpixBinner::new(params.healpix_depth());
+        let tb = UniformTimeBinner::new(self.start_mjd, params.time_bin_width_days());
 
-        let sb = HealpixBinner::new(healpix_depth);
-        let tb = UniformTimeBinner::new(self.start_mjd, time_bin_width_days);
-
-        if !show_progress {
+        if !params.show_progress() {
             let index = build_index_from_alerts_precise(&self.alerts, &sb, &tb);
-            let pairs = generate_pairs(&index, &self.alerts, &sb, &tb, pair_params);
+            let pairs = generate_pairs(&index, &self.alerts, &sb, &tb, &params.inner);
 
-            let triplets = generate_triplets_from_pairs(
-                &index,
-                &self.alerts,
-                &sb,
-                &tb,
-                triplet_params,
-                &pairs,
-            );
+            let triplets =
+                generate_triplets_from_pairs(&index, &self.alerts, &sb, &tb, &params.inner, &pairs);
             return Ok((pairs, triplets));
         }
 
@@ -263,7 +231,7 @@ impl AlertStore {
 
         // Step 2: pairs
         let pairs =
-            generate_pairs_with_progress(&index, &self.alerts, &sb, &tb, pair_params, &pb_pairs);
+            generate_pairs_with_progress(&index, &self.alerts, &sb, &tb, &params.inner, &pb_pairs);
         global.inc(1);
 
         // Step 3: triplets
@@ -274,7 +242,7 @@ impl AlertStore {
             &self.alerts,
             &sb,
             &tb,
-            triplet_params,
+            &params.inner,
             &pairs,
             &pb_triplets,
         );
