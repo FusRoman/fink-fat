@@ -539,7 +539,7 @@ mod geom_seeds_tests {
             .expect("alert id not found")
     }
 
-    /* --------------------- unit tests (deterministes) --------------------- */
+    /* --------------------- unit tests (deterministic) --------------------- */
 
     #[test]
     fn pairs_basic_one_pair() {
@@ -547,7 +547,7 @@ mod geom_seeds_tests {
         let sb = HealpixBinner::new(10); // NSIDE=1024
         let tb = UniformTimeBinner::new(60000.0, 10.0 / 1440.0); // 10 min
 
-        // Deux alertes séparées de ~5 arcsec et 8 min -> devraient matcher (Δt<=10 min, sep<=10")
+        // Two alerts ~5 arcsec apart and 8 min apart -> should match (Δt<=10 min, sep<=10")
         let t0 = 60000.10;
         let a1 = mk_alert(0, 1.0, 0.2, t0, 1);
         let a2 = mk_alert(
@@ -558,7 +558,7 @@ mod geom_seeds_tests {
             1,
         );
 
-        // Un outlier loin (ne doit pas matcher)
+        // A distant outlier (must not match)
         let a3 = mk_alert(2, 2.0, -0.3, t0 + 5.0 / 1440.0, 1);
 
         let alerts = vec![a1.clone(), a2.clone(), a3.clone()];
@@ -578,7 +578,7 @@ mod geom_seeds_tests {
 
         assert!(pairs.contains(&(0, 1)) || pairs.contains(&(1, 2)));
         assert!(!pairs.iter().any(|&(i, j)| (i == 2 || i == 1) && j == 3));
-        // unicité
+        // Uniqueness
         let set: HashSet<_> = pairs.iter().collect();
         assert_eq!(set.len(), pairs.len());
     }
@@ -589,7 +589,7 @@ mod geom_seeds_tests {
         let tb = UniformTimeBinner::new(60000.0, 20.0 / 1440.0); // 20 min bins
 
         let t0 = 60000.25;
-        // Deux alertes dans le même bin temporel (Δt = 5 min < 20 min)
+        // Two alerts in the same time bin (Δt = 5 min < 20 min)
         let a1 = mk_alert(0, 1.5, 0.1, t0, 1);
         let a2 = mk_alert(
             1,
@@ -612,7 +612,7 @@ mod geom_seeds_tests {
             .build()
             .unwrap();
 
-        // Interdit same timebin -> aucune paire
+        // Not allowed to match within the same time bin -> expect no pairs
         let pairs_no_same = generate_pairs(&index, &alerts, &sb, &tb, &params);
 
         assert!(pairs_no_same.is_empty());
@@ -627,7 +627,7 @@ mod geom_seeds_tests {
             .build()
             .unwrap();
 
-        // Autorisé -> la paire doit apparaître
+        // Allowed -> the pair should appear
         let pairs_same = generate_pairs(&index, &alerts, &sb, &tb, &params);
 
         assert_eq!(pairs_same.len(), 1);
@@ -641,7 +641,7 @@ mod geom_seeds_tests {
         let tb = UniformTimeBinner::new(60000.0, 10.0 / 1440.0); // 10 min
 
         let t0 = 60000.0;
-        // Mouvement linéaire: ~6" toutes les 10 min le long de RA (plan tangent)
+        // Linear motion: ~6" every 10 min along RA (tangent plane)
         let dec0: f64 = 0.25;
         let dr = arcsec_to_rad(6.0) / dec0.cos();
 
@@ -665,9 +665,9 @@ mod geom_seeds_tests {
 
         let triplets = generate_triplets(&index, &alerts, &sb, &tb, &params);
 
-        // On s'attend à (21,22,23)
+        // Expect (0,1,2)
         assert!(triplets.contains(&(0, 1, 2)));
-        // unicité
+        // Uniqueness
         let set: HashSet<_> = triplets.iter().collect();
         assert_eq!(set.len(), triplets.len());
     }
@@ -683,7 +683,7 @@ mod geom_seeds_tests {
 
         let a = mk_alert(0, 2.0, dec0, t0, 1);
         let b = mk_alert(1, 2.0 + dr, dec0, t0 + 10.0 / 1440.0, 1);
-        // 3ème point dévié de ~40" -> résidu devrait dépasser 5"
+        // Third point deviates by ~40" -> residual should exceed 5"
         let c = mk_alert(
             2,
             2.0 + 2.0 * dr + arcsec_to_rad(40.0) / dec0.cos(),
@@ -716,7 +716,7 @@ mod geom_seeds_tests {
         let sb = HealpixBinner::new(9);
         let tb = UniformTimeBinner::new(61000.0, 10.0 / 1440.0); // 10 min
 
-        // Deux points compatibles en Δt/Δθ, mais aucun 3e point dans la fenêtre -> pas de triplet.
+        // Two points compatible in Δt/Δθ, but no third point in the window -> no triplet.
         let t0 = 61000.20;
         let dec = 0.2;
         let a = mk_alert(0, 1.0, dec, t0, 1);
@@ -752,7 +752,7 @@ mod geom_seeds_tests {
 
         let triplets = generate_triplets_from_pairs(&index, &alerts, &sb, &tb, &params, &pairs);
 
-        // On conserve la paire même sans triplet
+        // Keep the pair even when no triplet is found
         assert_eq!(triplets.len(), 0);
         assert_eq!(pairs.len(), 1);
         let (i, j) = pairs[0];
@@ -796,9 +796,9 @@ mod geom_seeds_tests {
 
         let triplets = generate_triplets_from_pairs(&index, &alerts, &sb, &tb, &params, &pairs);
 
-        // Triplet détecté
+        // Triplet found
         assert!(triplets.contains(&(0, 1, 2)));
-        // Les paires incluent au moins (a,b) et (b,c) (et possiblement (a,c) selon max_dt)
+        // Pairs include at least (a,b) and (b,c) (possibly also (a,c) depending on max_dt)
         let mut pair_set = std::collections::HashSet::new();
         for &(i, j) in &pairs {
             pair_set.insert(if i < j { (i, j) } else { (j, i) });
@@ -809,7 +809,7 @@ mod geom_seeds_tests {
 
     #[test]
     fn triplets_from_pairs_is_subset_of_pairs_prefix() {
-        // Vérifie que chaque (a,b,c) renvoyé provient d'une paire (a,b) appartenant au set pairs.
+        // Verify that every returned (a,b,c) originates from a pair (a,b) present in `pairs`.
         let sb = HealpixBinner::new(9);
         let tb = UniformTimeBinner::new(62000.0, 10.0 / 1440.0);
 
@@ -820,7 +820,7 @@ mod geom_seeds_tests {
         let a = mk_alert(0, 0.6, dec, t0, 1);
         let b = mk_alert(1, 0.6 + dr, dec, t0 + 10.0 / 1440.0, 1);
         let c = mk_alert(2, 0.6 + 2.0 * dr, dec, t0 + 20.0 / 1440.0, 1);
-        let d = mk_alert(3, 2.5, 0.0, t0 + 5.0 / 1440.0, 1); // bruit
+        let d = mk_alert(3, 2.5, 0.0, t0 + 5.0 / 1440.0, 1); // noise
 
         let alerts = vec![a, b, c, d];
         let index = build_index_from_alerts_precise(&alerts, &sb, &tb);
@@ -846,14 +846,14 @@ mod geom_seeds_tests {
 
         let triplets = generate_triplets_from_pairs(&index, &alerts, &sb, &tb, &params, &pairs);
 
-        // Construire un set des paires (ordre canonique i<j)
+        // Build a set of pairs (canonical order i<j)
         let mut pair_set = std::collections::HashSet::new();
         for &(i, j) in &pairs {
             pair_set.insert(if i < j { (i, j) } else { (j, i) });
         }
 
         for &(i, j, _) in &triplets {
-            // (i,j) appartient au set pairs (par construction)
+            // (i,j) must belong to the `pairs` set (by construction)
             let (a, b) = if i < j { (i, j) } else { (j, i) };
             assert!(
                 pair_set.contains(&(a, b)),
@@ -862,7 +862,7 @@ mod geom_seeds_tests {
         }
     }
 
-    /* --------------------- property tests (robustes) --------------------- */
+    /* --------------------- property tests --------------------- */
 
     mod geom_seeds_prop {
         use super::*;
@@ -877,15 +877,15 @@ mod geom_seeds_tests {
             (-(PI / 2.0 - LAT_EPS))..(PI / 2.0 - LAT_EPS)
         }
         fn t_strategy() -> impl Strategy<Value = f64> {
-            // ~ 4 h de fenêtre
-            60000.0f64..60000.1667f64 // 0.1667 ~ 4 h
+            // ~4h window
+            60000.0f64..60000.1667f64 // 0.1667 ~ 4h
         }
 
         proptest! {
             #![proptest_config(ProptestConfig { cases: 32, .. ProptestConfig::default() })]
 
-            /// Tous les pairs retournés vérifient les contraintes Δt et Δθ,
-            /// et appartiennent à des buckets compatibles (voisinage spatio-temporel).
+            /// All returned pairs respect the Δt and Δθ constraints,
+            /// and belong to compatible buckets (spatio-temporal neighborhood).
             #[test]
             fn prop_pairs_respect_constraints_and_buckets(
                 triples in proptest::collection::vec((ra_strategy(), dec_strategy(), t_strategy()), 0..120)
@@ -905,7 +905,7 @@ mod geom_seeds_tests {
 
                 let search_radius = params.pairs.max_sep + sb.cell_radius();
 
-                // build alerts
+                // Build alerts
                 let alerts: Vec<Alert> = triples.iter().enumerate().map(|(i, (ra, dec, t))| {
                     mk_alert(i as u32, *ra, *dec, *t, 1)
                 }).collect();
@@ -913,27 +913,27 @@ mod geom_seeds_tests {
 
                 let pairs = generate_pairs(&index, &alerts, &sb, &tb, &params);
 
-                // unicité
+                // Uniqueness
                 let set: HashSet<_> = pairs.iter().collect();
                 prop_assert_eq!(set.len(), pairs.len());
 
-                // contraintes
+                // Constraints
                 for (i, j) in pairs {
                     let a = find_alert(&alerts, i);
                     let b = find_alert(&alerts, j);
-                    // ordre temporel dans l'impl
+                    // Time order in the implementation
                     prop_assert!(b.mjd_tt > a.mjd_tt);
                     prop_assert!((b.mjd_tt - a.mjd_tt) <= params.pairs.max_dt);
                     let d = ang_sep(a.ra, a.dec, b.ra, b.dec);
                     prop_assert!(d <= params.pairs.max_sep);
 
-                    // buckets compatibles :
+                    // Compatible buckets:
                     let key_a = BucketKey { space_key: sb.key_for(a.ra, a.dec), time_bin: tb.bin_for(a.mjd_tt) };
                     let neighs = sb.neighbors(key_a.space_key, search_radius);
                     let allowed_bins: HashSet<i64> = {
                         let w = tb.bin_width().max(1e-12);
                         let max_steps = (params.pairs.max_dt / w).ceil().max(0.0) as i64;
-                        // allow_same_timebin=false -> commence à +1
+                        // allow_same_timebin=false → start at +1
                         (1..=max_steps).map(|dk| key_a.time_bin.0 + dk).collect()
                     };
                     let key_b = BucketKey { space_key: sb.key_for(b.ra, b.dec), time_bin: tb.bin_for(b.mjd_tt) };
@@ -942,8 +942,9 @@ mod geom_seeds_tests {
                 }
             }
 
-            /// Tous les triplets respectent (a,b) et (b,c) en Δt/Δθ et le résidu de prédiction,
-            /// et appartiennent à des buckets compatibles (voisinages).
+            /// All triplets respect (a,b) and (b,c) Δt/Δθ constraints,
+            /// the linear prediction residual,
+            /// and belong to compatible buckets (spatio-temporal neighborhoods).
             #[test]
             fn prop_triplets_respect_constraints_and_buckets(
                 triples in proptest::collection::vec((ra_strategy(), dec_strategy(), t_strategy()), 0..100)
@@ -964,13 +965,14 @@ mod geom_seeds_tests {
 
                 let pair_search_radius = params.triplets.max_pair_sep + sb.cell_radius();
 
+                // Build alerts
                 let alerts: Vec<Alert> = triples.iter().enumerate().map(|(i, (ra, dec, t))| {
                     mk_alert(i as u32, *ra, *dec, *t, 1)
                 }).collect();
                 let index = build_index_from_alerts_precise(&alerts, &sb, &tb);
 
                 let triplets = generate_triplets(&index, &alerts, &sb, &tb, &params);
-                // unicité
+                // Uniqueness
                 let set: HashSet<_> = triplets.iter().collect();
                 prop_assert_eq!(set.len(), triplets.len());
 
@@ -979,10 +981,10 @@ mod geom_seeds_tests {
                     let b = find_alert(&alerts, j);
                     let c = find_alert(&alerts, k);
 
-                    // ordre temporel
+                    // Time ordering
                     prop_assert!(a.mjd_tt < b.mjd_tt && b.mjd_tt < c.mjd_tt);
 
-                    // contraintes pairwise Δt/Δθ
+                    // Pairwise Δt/Δθ constraints
                     let dt_ab = b.mjd_tt - a.mjd_tt;
                     let dt_bc = c.mjd_tt - b.mjd_tt;
                     prop_assert!(dt_ab <= params.triplets.max_dt_between && dt_bc <= params.triplets.max_dt_between);
@@ -991,7 +993,7 @@ mod geom_seeds_tests {
                     let dbc = ang_sep(b.ra, b.dec, c.ra, c.dec);
                     prop_assert!(dab <= params.triplets.max_pair_sep && dbc <= params.triplets.max_pair_sep);
 
-                    // résidu de prédiction linéaire (recalcule comme dans l'impl)
+                    // Linear prediction residual (recomputed as in implementation)
                     let (dx_ab, dy_ab) = {
                         let dx = wrap_pm_pi(b.ra - a.ra) * a.dec.cos();
                         let dy = b.dec - a.dec;
@@ -1015,8 +1017,8 @@ mod geom_seeds_tests {
                     let resid = ((dx_pc - dx_pp).powi(2) + (dy_pc - dy_pp).powi(2)).sqrt();
                     prop_assert!(resid <= params.triplets.max_predicted_residual);
 
-                    // buckets compatibles:
-                    // (a,b) : b dans les voisins et bins autorisés de a
+                    // Compatible buckets:
+                    // (a,b): b must be in the neighbors and allowed bins of a
                     let key_a = BucketKey { space_key: sb.key_for(a.ra, a.dec), time_bin: tb.bin_for(a.mjd_tt) };
                     let key_b = BucketKey { space_key: sb.key_for(b.ra, b.dec), time_bin: tb.bin_for(b.mjd_tt) };
                     let neighs_ab = sb.neighbors(key_a.space_key, pair_search_radius);
@@ -1024,12 +1026,12 @@ mod geom_seeds_tests {
                     {
                         let w = tb.bin_width().max(1e-12);
                         let max_steps = (params.triplets.max_dt_between / w).ceil().max(0.0) as i64;
-                        // allow_same_timebin=false dans generate_pairs en amont
+                        // allow_same_timebin=false in generate_pairs upstream
                         let allowed_ab: HashSet<i64> = (1..=max_steps).map(|dk| key_a.time_bin.0 + dk).collect();
                         prop_assert!(allowed_ab.contains(&key_b.time_bin.0));
                     }
 
-                    // (b,c) : c dans les voisins et bins autorisés de b
+                    // (b,c): c must be in the neighbors and allowed bins of b
                     let key_b2 = key_b;
                     let key_c = BucketKey { space_key: sb.key_for(c.ra, c.dec), time_bin: tb.bin_for(c.mjd_tt) };
                     let neighs_bc = sb.neighbors(key_b2.space_key, pair_search_radius);
