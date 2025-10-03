@@ -12,22 +12,22 @@ def arcsec_to_rad(x: float) -> float:
 
 def build_store_from_triplets(start_mjd: float, triplets):
     """
-    triplets: iterable of (ra, dec, mjd_tt_offset_days)
-      - ra/dec en radians
-      - mjd_tt = start_mjd + offset
-    Construit un AlertStore via AlertStore.from_numpy(...).
+    triplets: list of (ra, dec, dt) tuples, with dt in days relative to start_mjd
+
+    Returns an AlertStore containing these alerts.
     """
     n = len(triplets)
     dia_source_id = np.arange(1, n + 1, dtype=np.uint64)
     ra = np.array([t[0] for t in triplets], dtype=np.float64)
+    ra_err = np.full(n, np.deg2rad(0.5/3600), dtype=np.float64) # 0.5" error
     dec = np.array([t[1] for t in triplets], dtype=np.float64)
+    dec_err = np.full(n, np.deg2rad(0.5/3600), dtype=np.float64) # 0.5" error
     mjd_tt = np.array([start_mjd + t[2] for t in triplets], dtype=np.float64)
     flux = np.zeros(n, dtype=np.float32)
     flux_err = np.zeros(n, dtype=np.float32)
-    band = np.ones(n, dtype=np.uint8)  # n'importe quelle bande
+    band = np.ones(n, dtype=np.uint8)
 
-    # On suppose que tu as bien un @staticmethod from_numpy(...)
-    return AlertStore.from_numpy(dia_source_id, ra, dec, mjd_tt, flux, flux_err, band)
+    return AlertStore.from_numpy(dia_source_id, ra, ra_err, dec, dec_err, mjd_tt, flux, flux_err, band)
 
 
 def normalize_pair(a, b):

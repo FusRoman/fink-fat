@@ -8,6 +8,8 @@ pub mod params;
 pub(crate) mod progress;
 pub mod seeding;
 
+pub mod propagation;
+
 /// Strong-typed aliases (adapt to your real types).
 pub type MjdTt = f64; // days (TT)
 pub type Radians = f64; // radians

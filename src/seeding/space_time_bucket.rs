@@ -595,7 +595,9 @@ mod bucket_tests {
             id,
             dia_source_id: id as u64,
             ra,
+            ra_err: 2.42406840554768e-06, // ~0.5 arcsec in radians
             dec,
+            dec_err: 2.42406840554768e-06, // ~0.5 arcsec in radians
             mjd_tt,
             flux: 0.0,
             flux_err: 0.0,
