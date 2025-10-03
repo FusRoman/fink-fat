@@ -50,7 +50,11 @@ use crate::{
     alerts::{AlertId, AlertStore},
     seeding::geometrical_seeding::{Pairs, Triplets},
 };
-use std::f64::consts::PI;
+
+// --- Small numeric constants reused ---
+const INV_COSC_MIN: f64 = 1e-12;
+const NORM_MIN: f64 = 1e-16;
+const TWO_PI: f64 = std::f64::consts::PI * 2.0;
 
 /* --------------------------- Public types --------------------------- */
 
@@ -183,44 +187,40 @@ pub fn extract_pair_features(
         let a = &store.alerts[ia as usize];
         let b = &store.alerts[ib as usize];
 
-        // ---- Time base (MJD TT) ----
         let ta = a.mjd_tt;
         let tb = b.mjd_tt;
         let tm = 0.5 * (ta + tb);
         let dt = tb - ta;
+        let inv_dt = 1.0 / dt;
+        let inv_dt2 = inv_dt * inv_dt;
 
-        // ---- Local tangent plane centered at spherical midpoint ----
         let (ra0, dec0) = spherical_midpoint(a.ra, a.dec, b.ra, b.dec);
         let pa = radec_to_tangent(a.ra, a.dec, ra0, dec0);
         let pb = radec_to_tangent(b.ra, b.dec, ra0, dec0);
 
-        // ---- Mid-position & constant velocity ----
         let pm = [(pa[0] + pb[0]) * 0.5, (pa[1] + pb[1]) * 0.5];
-        let vx = (pb[0] - pa[0]) / dt;
-        let vy = (pb[1] - pa[1]) / dt;
-        let v = [vx, vy];
 
-        // Optional guardrail on speed for robustness (e.g., tiny Δt).
+        // v = (pb - pa) / dt  -> use inv_dt (one division)
+        let vx = (pb[0] - pa[0]) * inv_dt;
+        let vy = (pb[1] - pa[1]) * inv_dt;
+
+        // Speed guardrail without sqrt: compare squared norms
         if let Some(vmax) = params.max_speed_rad_per_day {
-            let speed = (vx * vx + vy * vy).sqrt();
-            if speed > vmax {
-                continue; // Skip this seed
+            let speed2 = vx.mul_add(vx, vy * vy);
+            let vmax2 = vmax * vmax;
+            if speed2 > vmax2 {
+                continue;
             }
         }
 
-        // ---- Covariance construction (simple, per-axis & diagonal) ----
-        // Use the larger of (ra_err, dec_err) per detection to guard against
-        // underestimating axis-aligned errors after projection.
+        // Covariances: reuse inv_dt²
         let sa = a.ra_err.max(a.dec_err);
         let sb = b.ra_err.max(b.dec_err);
-        // Mean squared error across endpoints:
         let s2 = 0.5 * (sa * sa + sb * sb);
-        // Position covariance at mid-point (diagonal):
         let cov_pos = [[s2, 0.0], [0.0, s2]];
-        // Velocity covariance from finite differencing noisy positions:
-        let cov_vel = [[2.0 * s2 / (dt * dt), 0.0], [0.0, 2.0 * s2 / (dt * dt)]];
+        let vel_var = 2.0 * s2 * inv_dt2;
+        let cov_vel = [[vel_var, 0.0], [0.0, vel_var]];
 
-        // ---- Photometry summary (difference PSF flux, nJy) ----
         let flux_mean = (a.flux + b.flux) * 0.5;
         let flux_std = ((a.flux - flux_mean).abs() + (b.flux - flux_mean).abs()) * 0.5;
 
@@ -229,13 +229,13 @@ pub fn extract_pair_features(
             night_id,
             epoch_mid: tm,
             pos_xy: pm,
-            vel_xy: v,
+            vel_xy: [vx, vy],
             cov_pos,
             cov_vel,
-            acc_xy: None, // pairs: no explicit curvature
+            acc_xy: None,
             flux_mean,
             flux_std,
-            band: a.band, // representative band
+            band: a.band,
             n_obs: 2,
             members: vec![ia, ib],
         });
@@ -296,34 +296,29 @@ pub fn extract_triplet_features(
         let b = &store.alerts[ib as usize];
         let c = &store.alerts[ic as usize];
 
-        // ---- Time base (MJD TT) ----
         let (ta, tb, tc) = (a.mjd_tt, b.mjd_tt, c.mjd_tt);
         let tm = (ta + tb + tc) / 3.0;
 
-        // ---- Tangent plane centered between first & last (robust) ----
         let (ra0, dec0) = spherical_midpoint(a.ra, a.dec, c.ra, c.dec);
         let pa = radec_to_tangent(a.ra, a.dec, ra0, dec0);
         let pb = radec_to_tangent(b.ra, b.dec, ra0, dec0);
         let pc = radec_to_tangent(c.ra, c.dec, ra0, dec0);
 
-        // ---- Quadratic fit in time (relative to tm) ----
         let (p0x, vx, ax) = fit_quad_1d([ta - tm, tb - tm, tc - tm], [pa[0], pb[0], pc[0]]);
         let (p0y, vy, ay) = fit_quad_1d([ta - tm, tb - tm, tc - tm], [pa[1], pb[1], pc[1]]);
 
-        // ---- Covariances (simple diagonal heuristics) ----
         let sa = a.ra_err.max(a.dec_err);
         let sb = b.ra_err.max(b.dec_err);
         let sc = c.ra_err.max(c.dec_err);
         let s2 = (sa * sa + sb * sb + sc * sc) / 3.0;
 
         let dt_char = (tc - ta).max(1e-6);
-        let cov_pos = [[s2 / 3.0, 0.0], [0.0, s2 / 3.0]];
-        let cov_vel = [
-            [s2 / (dt_char * dt_char), 0.0],
-            [0.0, s2 / (dt_char * dt_char)],
-        ];
+        let inv_dt2 = 1.0 / (dt_char * dt_char);
 
-        // ---- Photometry (difference PSF flux, nJy) ----
+        let cov_pos = [[s2 / 3.0, 0.0], [0.0, s2 / 3.0]];
+        let vel_var = s2 * inv_dt2;
+        let cov_vel = [[vel_var, 0.0], [0.0, vel_var]];
+
         let flux_mean = (a.flux + b.flux + c.flux) / 3.0;
         let flux_std =
             ((a.flux - flux_mean).abs() + (b.flux - flux_mean).abs() + (c.flux - flux_mean).abs())
@@ -384,11 +379,12 @@ pub fn extract_triplet_features(
 /// See also
 /// --------
 /// - [`radec_to_tangent`] to project around the returned center.
+#[inline]
 fn spherical_midpoint(ra1: f64, dec1: f64, ra2: f64, dec2: f64) -> (f64, f64) {
     let (x1, y1, z1) = sph_to_cart(ra1, dec1);
     let (x2, y2, z2) = sph_to_cart(ra2, dec2);
     let (x, y, z) = (x1 + x2, y1 + y2, z1 + z2);
-    let r = (x * x + y * y + z * z).sqrt().max(1e-16);
+    let r = (x * x + y * y + z * z).sqrt().max(NORM_MIN);
     cart_to_sph(x / r, y / r, z / r)
 }
 
@@ -438,11 +434,22 @@ fn spherical_midpoint(ra1: f64, dec1: f64, ra2: f64, dec2: f64) -> (f64, f64) {
 /// let pa = radec_to_tangent(ra_a, dec_a, ra0, dec0);
 /// let pb = radec_to_tangent(ra_b, dec_b, ra0, dec0);
 /// ```
+#[inline]
 fn radec_to_tangent(ra: f64, dec: f64, ra0: f64, dec0: f64) -> [f64; 2] {
-    let cosc = dec0.cos() * dec.cos() * (ra - ra0).cos() + dec0.sin() * dec.sin();
-    let inv = 1.0 / cosc.max(1e-12);
-    let x = (dec.cos() * (ra - ra0).sin()) * inv;
-    let y = (dec0.cos() * dec.sin() - dec0.sin() * dec.cos() * (ra - ra0).cos()) * inv;
+    // Precompute sin/cos with a single call per angle
+    let (sdec, cdec) = dec.sin_cos();
+    let (sdec0, cdec0) = dec0.sin_cos();
+    let dra = ra - ra0;
+    let (sdra, cdra) = dra.sin_cos();
+
+    // cosc = sin(dec0) sin(dec) + cos(dec0) cos(dec) cos(dra)
+    let cosc = cdec0 * cdec * cdra + sdec0 * sdec;
+    let inv = 1.0 / cosc.max(INV_COSC_MIN);
+
+    // x =  cos(dec) sin(dra) / cosc
+    // y = (cos(dec0) sin(dec) - sin(dec0) cos(dec) cos(dra)) / cosc
+    let x = cdec * sdra * inv;
+    let y = (cdec0 * sdec - sdec0 * cdec * cdra) * inv;
     [x, y]
 }
 
@@ -466,9 +473,11 @@ fn radec_to_tangent(ra: f64, dec: f64, ra0: f64, dec0: f64) -> [f64; 2] {
 /// -----
 /// - Angles in radians.
 /// - Output is dimensionless.
+#[inline]
 fn sph_to_cart(ra: f64, dec: f64) -> (f64, f64, f64) {
-    let c = dec.cos();
-    (c * ra.cos(), c * ra.sin(), dec.sin())
+    let (sdec, cdec) = dec.sin_cos();
+    let (sra, cra) = ra.sin_cos();
+    (cdec * cra, cdec * sra, sdec)
 }
 
 /// Convert a Cartesian vector (x, y, z) back to spherical angles (ra, dec).
@@ -496,10 +505,13 @@ fn sph_to_cart(ra: f64, dec: f64) -> (f64, f64, f64) {
 /// Units
 /// -----
 /// - Angles in radians.
+#[inline]
 fn cart_to_sph(x: f64, y: f64, z: f64) -> (f64, f64) {
-    let r = (x * x + y * y + z * z).sqrt();
-    let dec = (z / r).asin();
-    let ra = y.atan2(x).rem_euclid(2.0 * PI);
+    let r2 = x * x + y * y + z * z;
+    let r = r2.sqrt();
+    let inv_r = 1.0 / r;
+    let dec = (z * inv_r).asin();
+    let ra = y.atan2(x).rem_euclid(TWO_PI);
     (ra, dec)
 }
 
@@ -545,11 +557,15 @@ fn cart_to_sph(x: f64, y: f64, z: f64) -> (f64, f64) {
 /// let tm = (ta + tb + tc) / 3.0;
 /// let (p0, v, a) = fit_quad_1d([ta - tm, tb - tm, tc - tm], [xa, xb, xc]);
 /// ```
+#[inline]
 fn fit_quad_1d(dt: [f64; 3], x: [f64; 3]) -> (f64, f64, f64) {
     let (t0, t1, t2) = (dt[0], dt[1], dt[2]);
-    let d01 = (x[1] - x[0]) / (t1 - t0);
-    let d12 = (x[2] - x[1]) / (t2 - t1);
-    let a = 2.0 * (d12 - d01) / (t2 - t0);
+    let inv_01 = 1.0 / (t1 - t0);
+    let inv_12 = 1.0 / (t2 - t1);
+    let d01 = (x[1] - x[0]) * inv_01;
+    let d12 = (x[2] - x[1]) * inv_12;
+    let inv_20 = 1.0 / (t2 - t0);
+    let a = 2.0 * (d12 - d01) * inv_20;
     let v = d01 - 0.5 * a * (t0 + t1);
     let p0 = x[1] - v * t1 - 0.5 * a * t1 * t1;
     (p0, v, a)
