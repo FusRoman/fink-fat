@@ -28,6 +28,119 @@
 
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 
+/* --------------------------- Progress context --------------------------- */
+
+/// Progress reporting context (no-op when `pb` is `None`).
+///
+/// This wrapper centralizes everything related to a progress bar:
+/// - the underlying `ProgressBar` (or `None` for silent mode),
+/// - the **processed** counter,
+/// - the **throttling** state (`last_drawn`) and **tick** policy.
+///
+/// It also exposes convenience methods (`inc_long`, `inc_short`, `set_length`,
+/// `set_message`, `finish_with_message`, etc.) that degrade gracefully to no-ops
+/// when there is no progress bar.
+///
+/// Design notes
+/// ------------
+/// - We keep two tick values:
+///   - `tick_long` for long linear passes (precount / populate),
+///   - `tick_short` for the quick per-bucket sort loop.
+/// - `processed` is maintained here to keep signatures tight and clippy happy.
+/// - Using this struct removes 4 parameters from each internal function.
+///
+/// Lifetimes
+/// ---------
+/// The context holds a **borrow** to an external `ProgressBar` (`'a` lifetime).
+pub struct ProgressCtx<'a> {
+    pb: Option<&'a ProgressBar>,
+    processed: u64,
+    last_drawn: u64,
+    tick_long: u64,
+    tick_short: u64,
+}
+
+impl<'a> ProgressCtx<'a> {
+    /// Build a **silent** context (no progress bar, still counts processed items).
+    pub fn silent(tick_long: u64, tick_short: u64) -> Self {
+        Self {
+            pb: None,
+            processed: 0,
+            last_drawn: 0,
+            tick_long,
+            tick_short,
+        }
+    }
+
+    /// Build a **reporting** context around a `ProgressBar`.
+    pub fn with_bar(pb: &'a ProgressBar, tick_long: u64, tick_short: u64) -> Self {
+        Self {
+            pb: Some(pb),
+            processed: 0,
+            last_drawn: 0,
+            tick_long,
+            tick_short,
+        }
+    }
+
+    /// Set the bar length (no-op if silent).
+    #[inline]
+    pub fn set_length(&self, len: u64) {
+        if let Some(pb) = self.pb {
+            pb.set_length(len);
+        }
+    }
+
+    /// Set the bar message (no-op if silent).
+    #[inline]
+    pub fn set_message(&self, msg: &str) {
+        if let Some(pb) = self.pb {
+            pb.set_message(msg.to_string());
+        }
+    }
+
+    /// Set the bar position (no-op if silent).
+    #[inline]
+    pub fn set_position(&self, pos: u64) {
+        if let Some(pb) = self.pb {
+            pb.set_position(pos);
+        }
+    }
+
+    /// Finish with a message (no-op if silent).
+    #[inline]
+    pub fn finish_with_message(&self, msg: &str) {
+        if let Some(pb) = self.pb {
+            pb.finish_with_message(msg.to_string());
+        }
+    }
+
+    /// Increment processed with **long-pass** throttling (precount/populate).
+    #[inline]
+    pub fn inc_long(&mut self, by: u64) {
+        self.processed = self.processed.saturating_add(by);
+        if let Some(pb) = self.pb {
+            throttled_inc(pb, self.processed, &mut self.last_drawn, self.tick_long);
+        }
+    }
+
+    /// Increment processed with **short-pass** throttling (per-bucket sort).
+    #[inline]
+    pub fn inc_short(&mut self, by: u64) {
+        self.processed = self.processed.saturating_add(by);
+        if let Some(pb) = self.pb {
+            throttled_inc(pb, self.processed, &mut self.last_drawn, self.tick_short);
+        }
+    }
+
+    /// Return total processed so far (useful for diagnostics).
+    #[allow(dead_code)]
+    #[inline]
+    pub fn processed(&self) -> u64 {
+        self.processed
+    }
+}
+
 /// Create a [`MultiProgress`] suitable for unit tests or batch jobs.
 ///
 /// This uses [`ProgressDrawTarget::stderr_with_hz`] with a low refresh rate
