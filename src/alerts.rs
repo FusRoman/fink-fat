@@ -70,6 +70,7 @@ pub type AlertId = u32;
 /// - `id` – [`AlertId`] assigned on ingestion; indexes `alerts[id as usize]`.
 /// - `dia_source_id` – LSST `diaSourceId` (stable, 64-bit).
 /// - `ra`, `dec` – ICRS coordinates in **radians**.
+/// - `ra_err`, `dec_err` – 1-sigma uncertainties on `ra` and `dec` in **radians**.
 /// - `mjd_tt` – **MJD (TT)** timestamp of the detection.
 /// - `flux`, `flux_err` – PSF **difference** flux and its uncertainty (units depend on upstream).
 /// - `band` – integer photometric band code.
@@ -83,7 +84,11 @@ pub struct Alert {
     #[pyo3(get)]
     pub ra: f64, // rad
     #[pyo3(get)]
+    pub ra_err: f64, // rad
+    #[pyo3(get)]
     pub dec: f64, // rad
+    #[pyo3(get)]
+    pub dec_err: f64, // rad
     #[pyo3(get)]
     pub mjd_tt: f64, // days (TT)
     #[pyo3(get)]
@@ -178,6 +183,8 @@ impl AlertStore {
     ///     LSST diaSource identifiers (shape: `(N,)`).
     /// ra, dec : numpy.ndarray\[float64\]
     ///     ICRS coordinates in **radians** (shape: `(N,)`).
+    /// ra_err, dec_err : numpy.ndarray\[float64\]
+    ///     ICRS coordinate uncertainties in **radians** (shape: `(N,)`).
     /// mjd_tt : numpy.ndarray\[float64\]
     ///     Detection time as **MJD (TT)** (shape: `(N,)`).
     /// flux, flux_err : numpy.ndarray\[float32\]
@@ -195,12 +202,17 @@ impl AlertStore {
     /// - All arrays must be 1-D and have the same length.
     /// - Values are copied into a contiguous `Vec<Alert>` for performance.
     /// - Field units are not converted here; callers must provide radians and TT.
-    #[pyo3(text_signature = "(dia_source_id, ra, dec, mjd_tt, flux, flux_err, band, /)")]
+    #[pyo3(
+        text_signature = "(dia_source_id, ra, ra_err, dec, dec_err, mjd_tt, flux, flux_err, band, /)"
+    )]
     #[staticmethod]
+    #[allow(clippy::too_many_arguments)]
     pub fn from_numpy(
         dia_source_id: PyReadonlyArray1<u64>,
         ra: PyReadonlyArray1<f64>,
+        ra_err: PyReadonlyArray1<f64>,
         dec: PyReadonlyArray1<f64>,
+        dec_err: PyReadonlyArray1<f64>,
         mjd_tt: PyReadonlyArray1<f64>,
         flux: PyReadonlyArray1<f32>,
         flux_err: PyReadonlyArray1<f32>,
@@ -208,7 +220,9 @@ impl AlertStore {
     ) -> PyResult<Self> {
         let dia_source_id = dia_source_id.as_slice()?;
         let ra = ra.as_slice()?;
+        let ra_err = ra_err.as_slice()?;
         let dec = dec.as_slice()?;
+        let dec_err = dec_err.as_slice()?;
         let mjd_tt = mjd_tt.as_slice()?;
         let flux = flux.as_slice()?;
         let flux_err = flux_err.as_slice()?;
@@ -216,21 +230,35 @@ impl AlertStore {
 
         let n = dia_source_id.len();
         assert_eq!(ra.len(), n);
+        assert_eq!(ra_err.len(), n);
         assert_eq!(dec.len(), n);
+        assert_eq!(dec_err.len(), n);
         assert_eq!(mjd_tt.len(), n);
         assert_eq!(flux.len(), n);
         assert_eq!(flux_err.len(), n);
         assert_eq!(band.len(), n);
 
         let mut alerts = Vec::with_capacity(n);
-        for (i, (&dia, &ra, &dec, &t, &fl, &flerr, &b)) in
-            izip!(dia_source_id, ra, dec, mjd_tt, flux, flux_err, band).enumerate()
+        for (i, (&dia, &ra, &ra_err, &dec, &dec_err, &t, &fl, &flerr, &b)) in izip!(
+            dia_source_id,
+            ra,
+            ra_err,
+            dec,
+            dec_err,
+            mjd_tt,
+            flux,
+            flux_err,
+            band
+        )
+        .enumerate()
         {
             alerts.push(Alert {
                 id: i as AlertId,
                 dia_source_id: dia,
                 ra,
+                ra_err,
                 dec,
+                dec_err,
                 mjd_tt: t,
                 flux: fl,
                 flux_err: flerr,
