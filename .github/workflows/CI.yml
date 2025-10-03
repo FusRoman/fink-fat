@@ -71,7 +71,7 @@ jobs:
       - name: Show installed package info
         run: |
           ./.venv/bin/python -c "import sys; print('Python:', sys.version)"
-          ./.venv/bin/python -c "import py_outfit as m; print('py_outfit:', getattr(m,'__version__','unknown')); print('from:', m.__file__)"
+          ./.venv/bin/python -c "import fink_fat as m; print('fink_fat:', getattr(m,'__version__','unknown')); print('from:', m.__file__)"
 
       - name: Run pytest
         run: |
