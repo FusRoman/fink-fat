@@ -1,4 +1,60 @@
-/* --------------------------- Keys & Buckets ------------------------- */
+//! # Keys & Buckets
+//!
+//! Spatio–temporal bucketing utilities for LSST/Fink alerts.
+//!
+//! This module provides:
+//! - **Compact keys** for spatial cells and time bins (`SpatialKey`, `TimeBin`),
+//! - A **joint key** (`BucketKey`) and a `Bucket` container of alert memberships,
+//! - A memory-efficient `BucketIndex` mapping keys → members (with precomputed sizes),
+//! - Two **binners** traits (`SpatialBinner`, `TimeBinner`) to plug different schemes
+//!   (e.g., HEALPix for space, uniform bins for time),
+//! - Fast builders that take a slice of `Alert` and produce a ready-to-query index,
+//!   with an optional progress bar for long runs.
+//!
+//! ## Units
+//! - Right ascension / declination: **radians** (`Radians`),
+//! - Time stamps: **MJD (TT)** days (`MjdTt`).
+//!
+//! ## Invariants
+//! - For each `Bucket`, `members` are **sorted by increasing MJD(TT)**,
+//!   with `AlertId` as **tie-break** on exact time equality. This makes later
+//!   time-ordered scans and neighbor searches deterministic.
+//!
+//! ## Performance notes
+//! - The builder performs **two passes** over input alerts:
+//!   1) size precount (to reserve exact capacity per bucket),
+//!   2) contiguous push + final in-bucket sort.
+//! - Hash maps use `AHashMap` for throughput on large nightly volumes (10M+ alerts).
+//! - Sorting uses `sort_unstable_by`, which is non-stable but deterministic with the
+//!   explicit `(time, id)` comparator.
+//!
+//! ## Example
+//! ```rust
+//! # use fink_fat::keys_buckets::*;
+//! # use fink_fat::alerts::Alert;
+//! // Given concrete binners (e.g., HealpixBinner, UniformTimeBinner) implementing the traits:
+//! let space = HealpixBinner::new(10);
+//! let time  = UniformTimeBinner::new(0.01); // 0.01 day ≈ 14.4 minutes
+//!
+//! // `alerts` is a contiguous slice of nightly detections (radians / MJD(TT)):
+//! let index = build_index_from_alerts_precise(&alerts, &space, &time);
+//!
+//! // Access a specific bucket and iterate members in chronological order:
+//! let key = BucketKey {
+//!     space_key: space.key_for(alerts[0].ra, alerts[0].dec),
+//!     time_bin:  time.bin_for(alerts[0].mjd_tt),
+//! };
+//! if let Some(bucket) = index.buckets.get(&key) {
+//!     for alert_id in &bucket.members {
+//!         // Use alert_id to access your external store
+//!     }
+//! }
+//! ```
+//!
+//! ## See also
+//! - `generate_pairs` / `generate_triplets` consumers that rely on the sorting invariant,
+//! - Spatial binners such as **HEALPix**/**HTM** adapters,
+//! - Time binners such as fixed-width or cadence-aware schemes.
 
 use ahash::AHashMap;
 use indicatif::ProgressBar;
@@ -9,62 +65,126 @@ use crate::{
     MjdTt, Radians,
 };
 
-/// Spatial key (e.g. HEALPix/HTM cell id, or simple lon/lat grid index)
+/// Compact spatial cell identifier.
+///
+/// Typically the output of a sky partitioner (e.g., HEALPix, HTM, or a lon/lat grid).
+/// Stores the cell id as an unsigned 64-bit integer to accommodate deep tessellations.
+///
+/// ### Notes
+/// - The specific **encoding** depends on the `SpatialBinner` implementation.
+/// - Comparable and hashable to serve as a map key.
 #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct SpatialKey(pub u64);
 
-/// Time bin key (e.g. uniform bins of Δt)
+/// Compact time bin identifier.
+///
+/// Usually an integer index of uniform-width bins on the MJD(TT) axis.
+/// Signed 64-bit to support long spans and negative offsets if needed.
+///
+/// ### Notes
+/// - The exact mapping `MJD → TimeBin` depends on the `TimeBinner`.
+/// - Comparable and hashable to serve as a map key.
 #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct TimeBin(pub i64);
 
-/// Joint spatio-temporal bucket key = (spatial cell, time bin)
+/// Joint spatio-temporal key = (spatial cell, time bin).
+///
+/// This is the hash-map key into bucketed memberships. Compared/orderable and hashable
+/// to support fast indexing and deterministic iteration.
 #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct BucketKey {
+    /// Spatial cell id.
     pub space_key: SpatialKey,
+    /// Time bin id.
     pub time_bin: TimeBin,
 }
 
-/// A bucket stores the list of Detection ids that fall into (SpatialKey, TimeBin)
+/// Container of alert memberships for a given `(SpatialKey, TimeBin)`.
+///
+/// ### Invariant
+/// `members` are sorted by **increasing MJD(TT)** with `AlertId` as **tie-break**.
+/// This is enforced by the builders provided in this module.
 #[derive(Clone, Debug)]
 pub struct Bucket {
+    /// The joint spatio-temporal key for this bucket.
     pub key: BucketKey,
+    /// List of alert identifiers belonging to that bucket (sorted; see invariant).
     pub members: Vec<AlertId>,
 }
 
-/// Index of all buckets for a given night / time span
+/// Global index of all buckets for a given night or time span.
+///
+/// Provides two maps:
+/// - `buckets`: the actual memberships,
+/// - `bucket_sizes`: the pre-counted sizes (useful for diagnostics and pre-allocation).
 #[derive(Default, Debug)]
 pub struct BucketIndex {
+    /// Memberships keyed by `(SpatialKey, TimeBin)`.
     pub buckets: AHashMap<BucketKey, Bucket>,
+    /// Precounted bucket sizes (same keys as `buckets`).
     pub bucket_sizes: AHashMap<BucketKey, usize>,
 }
 
 /* ---------------------------- Binners ------------------------------- */
 
-/// Converts (ra, dec) into a spatial key; can also enumerate neighbor keys.
+/// Spatial binning interface.
+///
+/// Implement this for your sky partitioner (HEALPix, HTM, lon/lat grid…).
 pub trait SpatialBinner {
-    /// Return the spatial cell for given sky position.
+    /// Return the spatial cell for a given sky position.
+    ///
+    /// Parameters
+    /// ----------
+    /// - `ra`: Right ascension (radians).
+    /// - `dec`: Declination (radians).
+    ///
+    /// Return
+    /// ------
+    /// `SpatialKey` – the spatial cell id covering `(ra, dec)`.
     fn key_for(&self, ra: Radians, dec: Radians) -> SpatialKey;
 
-    /// Return neighbor cells needed to cover an angular radius (radians).
-    /// (Inclut typiquement `key` lui-même.)
+    /// Enumerate neighbor cells needed to cover an **angular radius** around `key`.
+    ///
+    /// The radius is in **radians** and typically chosen as a small multiple of the
+    /// cell's characteristic scale (see [`cell_radius`](crate::seeding::space_time_bucket::SpatialBinner::cell_radius)).
+    ///
+    /// Notes
+    /// -----
+    /// Implementations usually **include `key` itself** in the returned list,
+    /// but callers should not rely on this unless documented by the concrete type.
     fn neighbors(&self, key: SpatialKey, ang_radius: Radians) -> Vec<SpatialKey>;
 
-    /// Characteristic cell angular size (radians), utile pour régler le rayon de voisinage.
+    /// Characteristic angular **radius** for a single cell (radians).
+    ///
+    /// This can drive the choice of neighbor coverage (e.g., `k × cell_radius()`).
     fn cell_radius(&self) -> Radians;
 }
 
-/// Converts mjd into a time bin; can also enumerate bins in a time window.
+/// Time binning interface.
+///
+/// Implement this for your time partitioner (uniform bins, cadence-aware bins…).
 pub trait TimeBinner {
-    /// Return the time bin for a given MJD(TT).
+    /// Return the **time bin** covering `mjd_tt`.
+    ///
+    /// Parameters
+    /// ----------
+    /// - `mjd_tt`: Time stamp in MJD(TT) days.
     fn bin_for(&self, mjd_tt: MjdTt) -> TimeBin;
 
-    /// Return all bins overlapping [t0, t1].
+    /// Enumerate all bins **overlapping** the closed interval `[t0, t1]`.
+    ///
+    /// Parameters
+    /// ----------
+    /// - `t0`, `t1`: Start/end in MJD(TT) days (no ordering required; implementations may swap).
     fn bins_in_range(&self, t0: MjdTt, t1: MjdTt) -> Vec<TimeBin>;
 
-    /// Bin width (days).
+    /// The **bin width** in days.
     fn bin_width(&self) -> MjdTt;
 }
 
+/// Compute the joint `BucketKey` for a single alert sample.
+///
+/// Thin helper around `SpatialBinner::key_for` and `TimeBinner::bin_for`.
 #[inline]
 fn bucket_key_for<Bs: SpatialBinner, Bt: TimeBinner>(
     ra: Radians,
@@ -79,6 +199,21 @@ fn bucket_key_for<Bs: SpatialBinner, Bt: TimeBinner>(
     }
 }
 
+/// Precount the number of members per bucket for capacity reservation.
+///
+/// Parameters
+/// ----------
+/// - `alerts`: Iterable of `&Alert`.
+/// - `sb`: Spatial binner.
+/// - `tb`: Time binner.
+///
+/// Return
+/// ------
+/// `AHashMap<BucketKey, usize>` – Exact per-bucket counts to reserve capacities.
+///
+/// Complexity
+/// ----------
+/// `O(N)` over the number of input alerts.
 fn precount_bucket_sizes<'a, I, Bs, Bt>(alerts: I, sb: &Bs, tb: &Bt) -> AHashMap<BucketKey, usize>
 where
     I: IntoIterator<Item = &'a Alert>,
@@ -93,9 +228,9 @@ where
     sizes
 }
 
-// invariants: Bucket.members est trié par MJD(TT) croissant.
-// tie-break: AlertId croissant si MJD égaux.
-
+/// Build a `AlertId → MJD(TT)` lookup used for in-bucket sorting.
+///
+/// Complexity: `O(N)` time and `O(N)` extra memory.
 #[inline]
 fn build_time_lookup(alerts: &[Alert]) -> AHashMap<AlertId, MjdTt> {
     let mut map = AHashMap::with_capacity(alerts.len());
@@ -105,6 +240,36 @@ fn build_time_lookup(alerts: &[Alert]) -> AHashMap<AlertId, MjdTt> {
     map
 }
 
+/// Build a `BucketIndex` from a slice of alerts (two-pass, precise capacities).
+///
+/// The function performs:
+/// 1. **Precount** per-bucket sizes to allocate exact `Vec` capacities,
+/// 2. **Populate** members by a single push per alert,
+/// 3. **Sort** each bucket by `(MJD(TT), AlertId)` to enforce the invariant.
+///
+/// Parameters
+/// ----------
+/// - `alerts`: Slice of input detections (fields must be filled in radians / MJD(TT)).
+/// - `space_binner`: Spatial binner implementation (e.g., HEALPix).
+/// - `time_binner`: Time binner implementation (e.g., uniform width).
+///
+/// Return
+/// ------
+/// `BucketIndex` – Ready-to-use index with sorted memberships.
+///
+/// Complexity
+/// ----------
+/// - Time: `O(N + B log B)` where `B` is the sum of per-bucket member counts,
+///   i.e. the cost of sorting each bucket.
+/// - Memory: `O(N)` for memberships + maps.
+///
+/// Panics
+/// ------
+/// - If internal logic encounters a missing bucket when inserting (should not happen).
+///
+/// See also
+/// --------
+/// - [`build_index_from_alerts_precise_with_progress`] – same, but with progress feedback.
 pub fn build_index_from_alerts_precise<Bs, Bt>(
     alerts: &[Alert],
     space_binner: &Bs,
@@ -131,18 +296,21 @@ where
         );
     }
 
-    // Pass 2: remplissage (push « brut »)
+    // Pass 2: populate (raw push, no sorting yet).
     for a in alerts {
         let key = bucket_key_for(a.ra, a.dec, a.mjd_tt, space_binner, time_binner);
-        let bucket = index.buckets.get_mut(&key).unwrap();
+        let bucket = index.buckets.get_mut(&key).expect("bucket must exist");
         bucket.members.push(a.id);
     }
 
-    // Tri final par temps (et AlertId en tie-break) — garantit l’invariant.
+    // Final sort by time (and AlertId as tie-breaker) — enforces the invariant.
     let time_of = build_time_lookup(alerts);
     for bucket in index.buckets.values_mut() {
         bucket.members.sort_unstable_by(|&id1, &id2| {
-            match time_of[&id1].partial_cmp(&time_of[&id2]).unwrap() {
+            match time_of[&id1]
+                .partial_cmp(&time_of[&id2])
+                .expect("valid times")
+            {
                 std::cmp::Ordering::Equal => id1.cmp(&id2),
                 ord => ord,
             }
@@ -152,6 +320,43 @@ where
     index
 }
 
+/// Build a `BucketIndex` with progress reporting (useful for 10M+ alerts).
+///
+/// Same algorithm as [`build_index_from_alerts_precise`], but regularly updates
+/// an `indicatif::ProgressBar` during:
+/// - the **precount** pass,
+/// - the **populate** pass,
+/// - the **per-bucket sort** phase.
+///
+/// The progress bar message is set to `"buckets"`, and the final status ends
+/// with `"buckets ✓"`.
+///
+/// Parameters
+/// ----------
+/// - `alerts`: Slice of input detections (radians / MJD(TT)).
+/// - `space_binner`: Spatial binner implementation.
+/// - `time_binner`: Time binner implementation.
+/// - `pb`: External progress bar instance to update.
+///
+/// Return
+/// ------
+/// `BucketIndex` – Ready-to-use index with sorted memberships.
+///
+/// Notes
+/// -----
+/// - Updates are throttled via `throttled_inc` to avoid excessive redraws.
+/// - The bar length is set to `2 * alerts.len() + index.buckets.len()` to account
+///   for both passes and the bucket-sorting loop.
+///
+/// Example
+/// -------
+/// ```rust
+/// # use indicatif::ProgressBar;
+/// # use fink_fat::keys_buckets::*;
+/// let pb = ProgressBar::new(0);
+/// let index = build_index_from_alerts_precise_with_progress(&alerts, &space, &time, &pb);
+/// pb.finish_and_clear();
+/// ```
 pub fn build_index_from_alerts_precise_with_progress<Bs, Bt>(
     alerts: &[Alert],
     space_binner: &Bs,
@@ -167,7 +372,7 @@ where
     let tick = 10_000u64;
     pb.set_message("buckets");
 
-    // Pass 1: precount
+    // Pass 1: precount sizes.
     let mut sizes: AHashMap<BucketKey, usize> = AHashMap::new();
     for a in alerts {
         let key = BucketKey {
@@ -194,33 +399,34 @@ where
         );
     }
 
-    // Pass 2: remplissage
+    // Pass 2: populate.
     for a in alerts {
         let key = BucketKey {
             space_key: space_binner.key_for(a.ra, a.dec),
             time_bin: time_binner.bin_for(a.mjd_tt),
         };
-        let bucket = index.buckets.get_mut(&key).unwrap();
+        let bucket = index.buckets.get_mut(&key).expect("bucket must exist");
         bucket.members.push(a.id);
         processed += 1;
         throttled_inc(pb, processed, &mut last_drawn, tick);
     }
 
-    // Tri final des membres par temps (et id en tie-break)
+    // Final per-bucket sort (by time then id).
     let mut time_of: AHashMap<AlertId, MjdTt> = AHashMap::with_capacity(alerts.len());
     for a in alerts {
         time_of.insert(a.id, a.mjd_tt);
     }
-    // on étend la longueur totale pour couvrir aussi le tri bucket-par-bucket
+
+    // Extend the total length to cover the sorting phase.
     pb.set_length(2 * alerts.len() as u64 + index.buckets.len() as u64);
 
     for b in index.buckets.values_mut() {
-        b.members.sort_unstable_by(
-            |&i, &j| match time_of[&i].partial_cmp(&time_of[&j]).unwrap() {
+        b.members.sort_unstable_by(|&i, &j| {
+            match time_of[&i].partial_cmp(&time_of[&j]).expect("valid times") {
                 std::cmp::Ordering::Equal => i.cmp(&j),
                 ord => ord,
-            },
-        );
+            }
+        });
         processed += 1;
         throttled_inc(pb, processed, &mut last_drawn, 1_000);
     }
