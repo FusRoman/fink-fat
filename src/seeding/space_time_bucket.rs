@@ -61,7 +61,7 @@ use indicatif::ProgressBar;
 
 use crate::{
     alerts::{Alert, AlertId},
-    progress::throttled_inc,
+    progress::ProgressCtx,
     MjdTt, Radians,
 };
 
@@ -199,35 +199,6 @@ fn bucket_key_for<Bs: SpatialBinner, Bt: TimeBinner>(
     }
 }
 
-/// Precount the number of members per bucket for capacity reservation.
-///
-/// Parameters
-/// ----------
-/// - `alerts`: Iterable of `&Alert`.
-/// - `sb`: Spatial binner.
-/// - `tb`: Time binner.
-///
-/// Return
-/// ------
-/// `AHashMap<BucketKey, usize>` – Exact per-bucket counts to reserve capacities.
-///
-/// Complexity
-/// ----------
-/// `O(N)` over the number of input alerts.
-fn precount_bucket_sizes<'a, I, Bs, Bt>(alerts: I, sb: &Bs, tb: &Bt) -> AHashMap<BucketKey, usize>
-where
-    I: IntoIterator<Item = &'a Alert>,
-    Bs: SpatialBinner,
-    Bt: TimeBinner,
-{
-    let mut sizes: AHashMap<BucketKey, usize> = AHashMap::new();
-    for a in alerts {
-        let key = bucket_key_for(a.ra, a.dec, a.mjd_tt, sb, tb);
-        *sizes.entry(key).or_insert(0) += 1;
-    }
-    sizes
-}
-
 /// Build a `AlertId → MJD(TT)` lookup used for in-bucket sorting.
 ///
 /// Complexity: `O(N)` time and `O(N)` extra memory.
@@ -242,34 +213,56 @@ fn build_time_lookup(alerts: &[Alert]) -> AHashMap<AlertId, MjdTt> {
 
 /// Build a `BucketIndex` from a slice of alerts (two-pass, precise capacities).
 ///
-/// The function performs:
-/// 1. **Precount** per-bucket sizes to allocate exact `Vec` capacities,
-/// 2. **Populate** members by a single push per alert,
-/// 3. **Sort** each bucket by `(MJD(TT), AlertId)` to enforce the invariant.
+/// This is the “quiet” variant (no progress bar). It builds a spatio-temporal
+/// index of alert memberships with **exact per-bucket capacities** and enforces
+/// the invariant that, inside each bucket, members are sorted by
+/// **increasing MJD(TT)** with `AlertId` as a **tie-break** on equal times.
+///
+/// Pipeline
+/// --------
+/// 1. **Precount** per-bucket sizes (one pass) to reserve exact capacities,
+/// 2. **Populate** by pushing each alert id into its bucket (one pass),
+/// 3. **Sort** members within each bucket by `(MJD(TT), AlertId)`.
+///
+/// Units
+/// -----
+/// - `ra`, `dec` in **radians**; `mjd_tt` in **MJD(TT) days** (as carried by `Alert`).
 ///
 /// Parameters
 /// ----------
-/// - `alerts`: Slice of input detections (fields must be filled in radians / MJD(TT)).
-/// - `space_binner`: Spatial binner implementation (e.g., HEALPix).
-/// - `time_binner`: Time binner implementation (e.g., uniform width).
+/// - `alerts`: slice of input detections,
+/// - `sb`: spatial binner,
+/// - `tb`: time binner,
+/// - `ctx`: progress context (for throttled increments).
 ///
 /// Return
 /// ------
-/// `BucketIndex` – Ready-to-use index with sorted memberships.
+/// `BucketIndex` with all buckets populated and sorted.
 ///
 /// Complexity
 /// ----------
-/// - Time: `O(N + B log B)` where `B` is the sum of per-bucket member counts,
-///   i.e. the cost of sorting each bucket.
-/// - Memory: `O(N)` for memberships + maps.
+/// - Time: `O(N + Σ_b n_b log n_b)` where `n_b` is the size of bucket `b`,
+/// - Memory: `O(N)` additional storage for the maps and membership vectors.
+///
+/// Invariants
+/// ----------
+/// - Each bucket’s `members` is sorted by `(time ASC, id ASC)` on return.
 ///
 /// Panics
 /// ------
-/// - If internal logic encounters a missing bucket when inserting (should not happen).
+/// - If a bucket is missing at populate time (should not happen with the
+///   two-pass “precount then allocate” scheme).
 ///
-/// See also
-/// --------
-/// - [`build_index_from_alerts_precise_with_progress`] – same, but with progress feedback.
+/// Example
+/// -------
+/// ```rust
+/// # use fink_fat::keys_buckets::*;
+/// # let alerts: Vec<Alert> = vec![];
+/// # let space_binner = HealpixBinner::new(10);
+/// # let time_binner  = UniformTimeBinner::new(0.01);
+/// let index = build_index_from_alerts_precise(&alerts, &space_binner, &time_binner);
+/// assert!(index.buckets.values().all(|b| b.members.windows(2).all(|w| w[0] <= w[1])));
+/// ```
 pub fn build_index_from_alerts_precise<Bs, Bt>(
     alerts: &[Alert],
     space_binner: &Bs,
@@ -279,82 +272,53 @@ where
     Bs: SpatialBinner,
     Bt: TimeBinner,
 {
-    let sizes = precount_bucket_sizes(alerts.iter(), space_binner, time_binner);
-
-    let mut index = BucketIndex {
-        buckets: AHashMap::with_capacity(sizes.len()),
-        bucket_sizes: sizes.clone(),
-    };
-
-    for (key, &cap) in &sizes {
-        index.buckets.insert(
-            *key,
-            Bucket {
-                key: *key,
-                members: Vec::with_capacity(cap),
-            },
-        );
-    }
-
-    // Pass 2: populate (raw push, no sorting yet).
-    for a in alerts {
-        let key = bucket_key_for(a.ra, a.dec, a.mjd_tt, space_binner, time_binner);
-        let bucket = index.buckets.get_mut(&key).expect("bucket must exist");
-        bucket.members.push(a.id);
-    }
-
-    // Final sort by time (and AlertId as tie-breaker) — enforces the invariant.
-    let time_of = build_time_lookup(alerts);
-    for bucket in index.buckets.values_mut() {
-        bucket.members.sort_unstable_by(|&id1, &id2| {
-            match time_of[&id1]
-                .partial_cmp(&time_of[&id2])
-                .expect("valid times")
-            {
-                std::cmp::Ordering::Equal => id1.cmp(&id2),
-                ord => ord,
-            }
-        });
-    }
-
-    index
+    // Silent context: still tracks counters, but makes no UI calls.
+    let mut ctx = ProgressCtx::silent(/*tick_long*/ 10_000, /*tick_short*/ 1_000);
+    build_index_core(alerts, space_binner, time_binner, &mut ctx)
 }
 
-/// Build a `BucketIndex` with progress reporting (useful for 10M+ alerts).
+/// Build a `BucketIndex` with **progress reporting** (suitable for 10M+ alerts).
 ///
-/// Same algorithm as [`build_index_from_alerts_precise`], but regularly updates
-/// an `indicatif::ProgressBar` during:
-/// - the **precount** pass,
-/// - the **populate** pass,
-/// - the **per-bucket sort** phase.
+/// Same algorithm as [`build_index_from_alerts_precise`], but reports progress
+/// at three points:
+/// - during the **precount** pass,
+/// - during the **populate** pass,
+/// - during the **per-bucket sort** pass.
 ///
-/// The progress bar message is set to `"buckets"`, and the final status ends
-/// with `"buckets ✓"`.
+/// The progress bar message is set to `"buckets"` and finishes with `"buckets ✓"`.
 ///
 /// Parameters
 /// ----------
-/// - `alerts`: Slice of input detections (radians / MJD(TT)).
-/// - `space_binner`: Spatial binner implementation.
-/// - `time_binner`: Time binner implementation.
-/// - `pb`: External progress bar instance to update.
+/// - `alerts`: slice of input detections,
+/// - `sb`: spatial binner,
+/// - `tb`: time binner,
+/// - `ctx`: progress context (for throttled increments).
 ///
 /// Return
 /// ------
-/// `BucketIndex` – Ready-to-use index with sorted memberships.
+/// `BucketIndex` with all buckets populated and sorted.
 ///
-/// Notes
-/// -----
-/// - Updates are throttled via `throttled_inc` to avoid excessive redraws.
-/// - The bar length is set to `2 * alerts.len() + index.buckets.len()` to account
-///   for both passes and the bucket-sorting loop.
+/// Throttling
+/// ----------
+/// Progress updates are throttled via `throttled_inc` to avoid excessive redraws
+/// on very large slices (default tick: `10_000` items for the long passes, `1_000`
+/// for the short per-bucket loop).
+///
+/// Bar length
+/// ----------
+/// The bar total is set to `2 * alerts.len() + index.buckets.len()` to represent
+/// the two linear passes plus the per-bucket sort loop.
 ///
 /// Example
 /// -------
 /// ```rust
 /// # use indicatif::ProgressBar;
 /// # use fink_fat::keys_buckets::*;
+/// # let alerts: Vec<Alert> = vec![];
+/// # let space_binner = HealpixBinner::new(10);
+/// # let time_binner  = UniformTimeBinner::new(0.01);
 /// let pb = ProgressBar::new(0);
-/// let index = build_index_from_alerts_precise_with_progress(&alerts, &space, &time, &pb);
+/// let index = build_index_from_alerts_precise_with_progress(&alerts, &space_binner, &time_binner, &pb);
 /// pb.finish_and_clear();
 /// ```
 pub fn build_index_from_alerts_precise_with_progress<Bs, Bt>(
@@ -367,73 +331,250 @@ where
     Bs: SpatialBinner,
     Bt: TimeBinner,
 {
-    let mut processed = 0u64;
-    let mut last_drawn = 0u64;
-    let tick = 10_000u64;
-    pb.set_message("buckets");
+    let mut ctx = ProgressCtx::with_bar(pb, /*tick_long*/ 10_000, /*tick_short*/ 1_000);
+    ctx.set_message("buckets");
+    build_index_core(alerts, space_binner, time_binner, &mut ctx)
+}
 
-    // Pass 1: precount sizes.
+/// Core pipeline shared by both public builders.
+///
+/// It orchestrates the four steps, optionally reporting progress if a
+/// `ProgressBar` is provided:
+///
+/// 1) **Precount** sizes (+ optional progress),
+/// 2) **Allocate** buckets with exact capacities,
+/// 3) **Populate** memberships (+ optional progress),
+/// 4) **Sort** in-bucket members by (time, id) (+ optional progress).
+///
+/// Parameters
+/// ----------
+/// - `alerts`: slice of input detections,
+/// - `sb`: spatial binner,
+/// - `tb`: time binner,
+/// - `ctx`: progress context (for throttled increments).
+///
+/// Return
+/// ------
+/// `BucketIndex` with all buckets populated and sorted.
+///
+/// Notes
+/// -----
+/// - The sort uses a precomputed `AlertId → MJD(TT)` lookup to avoid chasing
+///   full `Alert` records during comparisons.
+/// - Using a two-pass approach (precount then reserve) prevents reallocation
+///   during insertion and keeps memory tight.
+///
+/// Safety & panics
+/// ---------------
+/// - The only `expect` is for missing buckets during population — which cannot
+///   occur if precount/allocation stayed consistent.
+///
+/// See also
+/// --------
+/// - [`precount_bucket_sizes_with_progress`],
+/// - [`allocate_index`],
+/// - [`populate_buckets_with_progress`],
+/// - [`sort_buckets_chrono_with_progress`].
+fn build_index_core<Bs, Bt>(
+    alerts: &[Alert],
+    space_binner: &Bs,
+    time_binner: &Bt,
+    ctx: &mut ProgressCtx<'_>,
+) -> BucketIndex
+where
+    Bs: SpatialBinner,
+    Bt: TimeBinner,
+{
+    // ---- 1) Precount sizes ---------------------------------------------------
+    let sizes = precount_bucket_sizes_with_progress(alerts, space_binner, time_binner, ctx);
+
+    // ---- 2) Allocate exact capacities ---------------------------------------
+    let mut index = allocate_index(&sizes);
+
+    // ---- 3) Populate memberships --------------------------------------------
+    populate_buckets_with_progress(alerts, space_binner, time_binner, &mut index, ctx);
+
+    // ---- 4) Sort members by (time, id) --------------------------------------
+    sort_buckets_chrono_with_progress(alerts, &mut index, ctx);
+
+    ctx.finish_with_message("buckets ✓");
+    index
+}
+
+/// Step 1: **Precount sizes** (optionally reporting progress).
+///
+/// Builds a temporary `AHashMap<BucketKey, usize>` that holds the exact number of
+/// members per bucket. This enables allocating `Vec` with the final capacity and
+/// prevents reallocation during population.
+///
+/// Parameters
+/// ----------
+/// - `alerts`: slice of input detections,
+/// - `sb`: spatial binner,
+/// - `tb`: time binner,
+/// - `ctx`: progress context (for throttled increments).
+///
+/// Return
+/// ------
+/// `AHashMap<BucketKey, usize>`: exact size per bucket.
+///
+/// Complexity
+/// ----------
+/// Time `O(N)`, memory `O(B)` where `B` is the number of non-empty buckets.
+fn precount_bucket_sizes_with_progress<Bs, Bt>(
+    alerts: &[Alert],
+    sb: &Bs,
+    tb: &Bt,
+    ctx: &mut ProgressCtx<'_>,
+) -> AHashMap<BucketKey, usize>
+where
+    Bs: SpatialBinner,
+    Bt: TimeBinner,
+{
     let mut sizes: AHashMap<BucketKey, usize> = AHashMap::new();
     for a in alerts {
-        let key = BucketKey {
-            space_key: space_binner.key_for(a.ra, a.dec),
-            time_bin: time_binner.bin_for(a.mjd_tt),
-        };
+        // Compute once per alert the joint spatio-temporal key.
+        let key = bucket_key_for(a.ra, a.dec, a.mjd_tt, sb, tb);
+
+        // Bump the expected size for that key.
         *sizes.entry(key).or_insert(0) += 1;
-        processed += 1;
-        throttled_inc(pb, processed, &mut last_drawn, tick);
+
+        // Progress (throttled for long pass).
+        ctx.inc_long(1);
     }
+    sizes
+}
 
-    let mut index = BucketIndex {
-        buckets: AHashMap::with_capacity(sizes.len()),
-        bucket_sizes: sizes.clone(),
-    };
-
-    for (key, &cap) in &sizes {
-        index.buckets.insert(
+/// Step 2: **Allocate** the `BucketIndex` with **exact capacities**.
+///
+/// For each non-empty `BucketKey`, creates a `Bucket` and reserves a `Vec` with
+/// the exact final size recorded by `sizes`.
+///
+/// Parameters
+/// ----------
+/// - `sizes`: result of the precount pass.
+///
+/// Return
+/// ------
+/// `BucketIndex` with allocated (but still empty) membership vectors.
+///
+/// Notes
+/// -----
+/// The separate `bucket_sizes` copy is useful for later diagnostics (e.g. to
+/// inspect the distribution of bucket occupancies).
+fn allocate_index(sizes: &AHashMap<BucketKey, usize>) -> BucketIndex {
+    let mut buckets = AHashMap::with_capacity(sizes.len());
+    for (key, &cap) in sizes {
+        buckets.insert(
             *key,
             Bucket {
                 key: *key,
-                members: Vec::with_capacity(cap),
+                members: Vec::with_capacity(cap), // exact capacity to avoid reallocation
             },
         );
     }
+    BucketIndex {
+        buckets,
+        bucket_sizes: sizes.clone(),
+    }
+}
 
-    // Pass 2: populate.
+/// Step 3: **Populate** memberships (optionally reporting progress).
+///
+/// Pushes each `AlertId` into the appropriate `Bucket.members`. Since we reserved
+/// exact capacities, these pushes do not reallocate.
+///
+/// Parameters
+/// ----------
+/// - `alerts`: slice of input detections,
+/// - `sb`: spatial binner,
+/// - `tb`: time binner,
+/// - `index`: the (allocated) `BucketIndex` to be filled,
+/// - `ctx`: progress context (for throttled increments).
+///
+/// Panics
+/// ------
+/// - If a bucket key is not found in `index.buckets` (should not happen as long
+///   as `allocate_index` was created from the same `sizes` map).
+fn populate_buckets_with_progress<Bs, Bt>(
+    alerts: &[Alert],
+    sb: &Bs,
+    tb: &Bt,
+    index: &mut BucketIndex,
+    ctx: &mut ProgressCtx<'_>,
+) where
+    Bs: SpatialBinner,
+    Bt: TimeBinner,
+{
     for a in alerts {
-        let key = BucketKey {
-            space_key: space_binner.key_for(a.ra, a.dec),
-            time_bin: time_binner.bin_for(a.mjd_tt),
-        };
-        let bucket = index.buckets.get_mut(&key).expect("bucket must exist");
+        let key = bucket_key_for(a.ra, a.dec, a.mjd_tt, sb, tb);
+
+        // This must succeed since we allocated from the very same sizes map.
+        let bucket = index
+            .buckets
+            .get_mut(&key)
+            .expect("bucket must exist; inconsistent sizes/allocation");
+
         bucket.members.push(a.id);
-        processed += 1;
-        throttled_inc(pb, processed, &mut last_drawn, tick);
+
+        // Progress (throttled for long pass).
+        ctx.inc_long(1);
     }
+}
 
-    // Final per-bucket sort (by time then id).
-    let mut time_of: AHashMap<AlertId, MjdTt> = AHashMap::with_capacity(alerts.len());
-    for a in alerts {
-        time_of.insert(a.id, a.mjd_tt);
-    }
+/// Step 4: **Sort** in-bucket members by `(MJD(TT), AlertId)` (optionally with progress).
+///
+/// The sort uses a temporary `AlertId → MJD(TT)` lookup (`AHashMap`) to keep
+/// comparisons fast and avoid touching the full `Alert` slice during the sort.
+///
+/// Progress
+/// --------
+/// When a `ProgressBar` is present, the total length is set to cover both linear
+/// passes and the number of buckets, then we advance once per sorted bucket.
+/// A tighter throttle (`1_000`) is used here because buckets are usually smaller.
+///
+/// Parameters
+/// ----------
+/// - `alerts`: original slice (used only to build the time lookup),
+/// - `index`: the bucketed memberships to be sorted,
+/// - `ctx`: progress context (for throttled increments).
+///
+/// Stability & determinism
+/// -----------------------
+/// Sorting is done via `sort_unstable_by` (not stable) but is **deterministic**
+/// due to the explicit `(time, id)` comparator.
+///
+/// Complexity
+/// ----------
+/// Time: `Σ_b n_b log n_b`, Memory: `O(N)` for the `time_of` lookup.
+fn sort_buckets_chrono_with_progress(
+    alerts: &[Alert],
+    index: &mut BucketIndex,
+    ctx: &mut ProgressCtx<'_>,
+) {
+    // Precompute times to avoid touching the full `alerts` slice in the comparator.
+    let time_of = build_time_lookup(alerts);
 
-    // Extend the total length to cover the sorting phase.
-    pb.set_length(2 * alerts.len() as u64 + index.buckets.len() as u64);
+    // Extend total length to include the sorting phase.
+    ctx.set_length(2 * alerts.len() as u64 + index.buckets.len() as u64);
 
-    for b in index.buckets.values_mut() {
-        b.members.sort_unstable_by(|&i, &j| {
-            match time_of[&i].partial_cmp(&time_of[&j]).expect("valid times") {
-                std::cmp::Ordering::Equal => i.cmp(&j),
+    for bucket in index.buckets.values_mut() {
+        bucket.members.sort_unstable_by(|&id1, &id2| {
+            // Use total order on f64 to avoid panics if a NaN slips in.
+            let t1 = time_of[&id1];
+            let t2 = time_of[&id2];
+            match t1.total_cmp(&t2) {
+                std::cmp::Ordering::Equal => id1.cmp(&id2), // tie-break ensures determinism
                 ord => ord,
             }
         });
-        processed += 1;
-        throttled_inc(pb, processed, &mut last_drawn, 1_000);
+
+        // Progress (throttled for short pass).
+        ctx.inc_short(1);
     }
 
-    pb.set_position(2 * alerts.len() as u64 + index.buckets.len() as u64);
-    pb.finish_with_message("buckets ✓");
-    index
+    // Snap to the final position (nice for UIs that poll infrequently).
+    ctx.set_position(2 * alerts.len() as u64 + index.buckets.len() as u64);
 }
 
 #[cfg(test)]
