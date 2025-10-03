@@ -1,21 +1,52 @@
 // src/seeding/healpix_binner.rs
 
-//! SpatialBinner implementation backed by HEALPix (NESTED) using `cdshealpix`.
+//! HEALPix-backed implementation of [`SpatialBinner`] (NESTED scheme).
 //!
-//! - `depth` = HEALPix order (a.k.a. K); NSIDE = 2^depth
-//! - `key_for` uses `Layer::hash(lon, lat)` with (lon,lat)=(ra,dec)
-//! - `neighbors`
-//!     * si `ang_radius <= cell_radius()`: 8-voisins + centre (quand dispo)
-//!     * sinon: couverture par cône (`cone_coverage_approx_flat`) centrée
-//!       sur le centre du pixel `key` avec rayon `ang_radius`
-//! - `cell_radius` = majorant (centre→sommet) au plan équatorial
+//! This module provides [`HealpixBinner`], a spatial binning strategy based
+//! on the [HEALPix](https://healpix.sourceforge.io) tessellation of the sphere,
+//! using the [`cdshealpix`](https://docs.rs/cdshealpix) crate.
 //!
-//! Réf. API:
-//!   - `nested::get(depth)` retourne `&'static Layer`.
-//!   - `Layer::hash(lon, lat)` -> u64.
-//!   - `Layer::neighbours(hash, include_center)` -> MainWindMap\<u64\>.
-//!   - `nested::cone_coverage_approx_flat(depth, lon, lat, radius)` -> Box<[u64]>.
-//!   - `cdshealpix::largest_center_to_vertex_distance(depth, lon, lat)` -> f64.
+//! ## Conventions
+//!
+//! - The HEALPix order (or **depth**) is denoted `K`.  
+//!   The number of divisions per side is `NSIDE = 2^K`.  
+//!   The total number of pixels is `12 × 4^K`.  
+//! - The binning scheme is **NESTED**, not RING.  
+//! - Pixel centers and boundaries are handled by the underlying
+//!   [`cdshealpix::nested`] API.
+//!
+//! ## Neighbor Search
+//!
+//! The method [`neighbors`](HealpixBinner::neighbors) chooses the strategy
+//! depending on the query radius `ang_radius`:
+//!
+//! - If `ang_radius ≤ cell_radius`: returns the **central pixel** and its
+//!   8 immediate neighbors (when available).  
+//! - Otherwise: falls back to a **cone search** with approximate coverage
+//!   (`cone_coverage_approx_flat`) centered on the pixel center.
+//!
+//! ## Cell Radius
+//!
+//! [`cell_radius`](HealpixBinner::cell_radius) is defined as the maximum
+//! angular distance between the pixel center and one of its vertices,
+//! evaluated at the equator `(lon=0, lat=0)` for the given `depth`.
+//!
+//! This serves as a characteristic angular size used to decide between
+//! local-neighbor vs. cone-coverage strategies.
+//!
+//! ## Example
+//!
+//! ```rust
+//! use fink_fat::seeding::space_time_bucket::SpatialBinner;
+//! use fink_fat::seeding::healpix_binner::HealpixBinner;
+//!
+//! let binner = HealpixBinner::new(5); // depth=5 → NSIDE=32
+//! let key = binner.key_for(1.0, 0.5); // RA=1 rad, DEC=0.5 rad
+//!
+//! // Retrieve neighbors within ~cell size
+//! let neigh = binner.neighbors(key, binner.cell_radius());
+//! assert!(neigh.len() > 1);
+//! ```
 
 use cdshealpix as chpx;
 use chpx::nested;
@@ -26,22 +57,38 @@ use crate::{
     Radians,
 };
 
-/// HEALPix-backed spatial binner (NESTED scheme).
+/// Spatial binner backed by **HEALPix** (NESTED scheme).
+///
+/// Provides mapping between (RA, DEC) positions in radians and HEALPix
+/// pixel identifiers, along with neighbor queries.
+///
+/// Internally uses [`cdshealpix`] for hashing, neighbor lookup,
+/// and cone coverage.
 #[derive(Clone, Copy)]
 pub struct HealpixBinner {
+    /// HEALPix order (0 ≤ depth ≤ 29).  
+    /// NSIDE = 2^depth ; total pixels = 12 × 4^depth.
     depth: u8,
+    /// Underlying HEALPix layer from `cdshealpix`.
     layer: &'static Layer,
-    /// Taille caractéristique (rad) — majorant distance centre→sommet autour (lon=0,lat=0).
+    /// Characteristic cell radius (radians).  
+    /// Defined as the maximum center→vertex distance at the equator.
     cell_radius: Radians,
 }
 
 impl HealpixBinner {
-    /// Crée un binner HEALPix au **depth** donné (0..=29).
+    /// Construct a new HEALPix binner for the given order (depth).
     ///
-    /// NSIDE = 2^depth ; Nb de pixels = 12 * 4^depth.
+    /// Parameters
+    /// ----------
+    /// * `depth` — HEALPix order (0..=29).  
+    ///   NSIDE = 2^depth ; number of pixels = 12 × 4^depth.
+    ///
+    /// Returns
+    /// -------
+    /// A [`HealpixBinner`] ready for spatial binning at the requested depth.
     pub fn new(depth: u8) -> Self {
         let layer = nested::get(depth);
-        // Taille caractéristique: majorant centre→sommet, évaluée à l'équateur (lon=0, lat=0).
         let cell_radius = chpx::largest_center_to_vertex_distance(depth, 0.0_f64, 0.0_f64);
         Self {
             depth,
@@ -50,29 +97,58 @@ impl HealpixBinner {
         }
     }
 
-    /// Retourne l’order HEALPix (depth).
+    /// Return the HEALPix order (depth).
+    #[inline]
     pub fn depth(&self) -> u8 {
         self.depth
     }
 
-    /// NSIDE (2^depth).
+    /// Return NSIDE, defined as 2^depth.
+    #[inline]
     pub fn nside(&self) -> u64 {
         chpx::nside(self.depth) as u64
     }
 }
 
 impl SpatialBinner for HealpixBinner {
+    /// Compute the HEALPix key for a sky position.
+    ///
+    /// Parameters
+    /// ----------
+    /// * `ra` — Right ascension (radians).
+    /// * `dec` — Declination (radians).
+    ///
+    /// Returns
+    /// -------
+    /// [`SpatialKey`] wrapping the NESTED HEALPix hash.
     #[inline]
     fn key_for(&self, ra: Radians, dec: Radians) -> SpatialKey {
-        // cdshealpix attend (lon, lat) en radians
+        // cdshealpix expects (lon, lat) in radians
         let h = self.layer.hash(ra, dec);
         SpatialKey(h)
     }
 
+    /// Return neighboring pixels of a given key within `ang_radius`.
+    ///
+    /// Parameters
+    /// ----------
+    /// * `key` — Central pixel as [`SpatialKey`].
+    /// * `ang_radius` — Angular search radius (radians).
+    ///
+    /// Behavior
+    /// --------
+    /// - If `ang_radius ≤ cell_radius(center)`: returns the central pixel
+    ///   and its 8 adjacent neighbors (when available).  
+    /// - Otherwise: uses cone coverage (`cone_coverage_approx_flat`) centered
+    ///   on the pixel center with radius `ang_radius`.
+    ///
+    /// Returns
+    /// -------
+    /// Vector of [`SpatialKey`] covering the neighborhood.
     fn neighbors(&self, key: SpatialKey, ang_radius: Radians) -> Vec<SpatialKey> {
         let SpatialKey(h) = key;
 
-        // Rayon LOCAL: distance centre→sommet au centre du pixel courant
+        // Local characteristic radius at this pixel center
         let (lon_c, lat_c) = self.layer.center(h);
         let local_rc = chpx::largest_center_to_vertex_distance(self.depth, lon_c, lat_c);
 
@@ -89,11 +165,18 @@ impl SpatialBinner for HealpixBinner {
         }
     }
 
-    /// Taille angulaire caractéristique d’une cellule (rad).
+    /// Characteristic angular radius of a HEALPix cell (radians).
     ///
-    /// Définition: majorant *centre→sommet* évalué à (lon=0,lat=0).
-    /// NB: la vraie taille varie légèrement avec la latitude; ce choix fournit un seuil simple
-    /// pour basculer entre 8-voisins et recherche par cône.
+    /// Definition
+    /// ----------
+    /// Maximum angular distance between a pixel center and any vertex,
+    /// evaluated at the equator `(lon=0, lat=0)` for the given `depth`.
+    ///
+    /// Notes
+    /// -----
+    /// - The true center→vertex distance varies slightly with latitude,
+    ///   but this value is used as a **simple threshold** for switching
+    ///   between local-neighbor vs cone-based search.
     #[inline]
     fn cell_radius(&self) -> Radians {
         self.cell_radius
