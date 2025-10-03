@@ -54,21 +54,25 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Create venv and install deps
+      - name: Create virtualenv (.venv)
         run: |
           python -m venv .venv
-          ./.venv/bin/python -m pip install --upgrade pip
-          if [ -f python/requirements-dev.txt ]; then
-            ./.venv/bin/pip install -r python/requirements-dev.txt
-          else
-            ./.venv/bin/pip install maturin pytest numpy
-          fi
+          ./.venv/bin/python -V
 
-      - name: Build & install extension into venv (maturin develop)
-        # maturin détecte .venv à la racine sans besoin d’activation
+      - name: Upgrade pip & install test deps (in .venv)
         run: |
-          maturin develop -m python/pyproject.toml --release
+          ./.venv/bin/python -m pip install --upgrade pip wheel setuptools
+          ./.venv/bin/pip install pytest pytest-cov maturin
+
+      - name: Build and develop-install the extension (maturin)
+        run: |
+          ./.venv/bin/maturin develop --release
+
+      - name: Show installed package info
+        run: |
+          ./.venv/bin/python -c "import sys; print('Python:', sys.version)"
+          ./.venv/bin/python -c "import py_outfit as m; print('py_outfit:', getattr(m,'__version__','unknown')); print('from:', m.__file__)"
 
       - name: Run pytest
         run: |
-          ./.venv/bin/pytest -q python/fink_fat/tests
+          ./.venv/bin/pytest -q --maxfail=1 --disable-warnings -ra
