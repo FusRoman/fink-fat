@@ -261,7 +261,9 @@ class AlertStore:
     def from_numpy(
         dia_source_id: npt.NDArray[np.uint64],
         ra: npt.NDArray[np.float64],
+        ra_err: npt.NDArray[np.float64],
         dec: npt.NDArray[np.float64],
+        dec_err: npt.NDArray[np.float64],
         mjd_tt: npt.NDArray[np.float64],
         flux: npt.NDArray[np.float32],
         flux_err: npt.NDArray[np.float32],
@@ -276,6 +278,8 @@ class AlertStore:
             LSST `diaSourceId` per alert (64-bit).
         ra, dec : ndarray[float64], shape (N,)
             ICRS right ascension/declination **in radians**.
+        ra_err, dec_err : ndarray[float64], shape (N,)
+            1-sigma uncertainties on `ra` and `dec` in **radians**
         mjd_tt : ndarray[float64], shape (N,)
             Detection times as **MJD (TT)** in days.
         flux, flux_err : ndarray[float32], shape (N,)
