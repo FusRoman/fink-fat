@@ -40,6 +40,8 @@
 
 use thiserror::Error;
 
+use crate::NightId;
+
 /// Error type for invalid or inconsistent parameters in Fink-FAT.
 ///
 /// This enum captures validation failures when constructing or using
@@ -109,4 +111,11 @@ pub enum ParamError {
     /// - conflicting filter rules.
     #[error("inconsistent parameter set: {0}")]
     Inconsistent(&'static str),
+}
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum FinkFatError {
+    /// Error importing track for night `NightId`.
+    #[error("error exporting track for night {0}")]
+    TrackExportError(NightId),
 }

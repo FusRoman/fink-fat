@@ -30,11 +30,18 @@
 //!
 //! ## Example
 //! ```rust
-//! # use fink_fat::keys_buckets::*;
-//! # use fink_fat::alerts::Alert;
+//! use fink_fat::alerts::Alert;
+//! use fink_fat::seeding::space_time_bucket::BucketKey;
+//! use fink_fat::seeding::space_time_bucket::build_index_from_alerts_precise;
+//! use fink_fat::seeding::healpix_binners::HealpixBinner;
+//! use fink_fat::seeding::uniform_time_binner::UniformTimeBinner;
+//! use fink_fat::seeding::space_time_bucket::{SpatialBinner, TimeBinner};
+//!
 //! // Given concrete binners (e.g., HealpixBinner, UniformTimeBinner) implementing the traits:
 //! let space = HealpixBinner::new(10);
-//! let time  = UniformTimeBinner::new(0.01); // 0.01 day ≈ 14.4 minutes
+//! let time  = UniformTimeBinner::new(59000.0, 0.01); // 0.01 day ≈ 14.4 minutes
+//!
+//! let alerts: Vec<Alert> = vec![Alert::default()]; // your nightly alert stream
 //!
 //! // `alerts` is a contiguous slice of nightly detections (radians / MJD(TT)):
 //! let index = build_index_from_alerts_precise(&alerts, &space, &time);
@@ -59,11 +66,7 @@
 use ahash::AHashMap;
 use indicatif::ProgressBar;
 
-use crate::{
-    alerts::{Alert, AlertId},
-    progress::ProgressCtx,
-    MjdTt, Radians,
-};
+use crate::{alerts::Alert, progress::ProgressCtx, AlertId, MjdTt, Radians};
 
 /// Compact spatial cell identifier.
 ///
@@ -256,10 +259,13 @@ fn build_time_lookup(alerts: &[Alert]) -> AHashMap<AlertId, MjdTt> {
 /// Example
 /// -------
 /// ```rust
-/// # use fink_fat::keys_buckets::*;
+/// # use fink_fat::alerts::Alert;
+/// # use fink_fat::seeding::space_time_bucket::*;
+/// # use fink_fat::seeding::healpix_binners::HealpixBinner;
+/// # use fink_fat::seeding::uniform_time_binner::UniformTimeBinner;
 /// # let alerts: Vec<Alert> = vec![];
 /// # let space_binner = HealpixBinner::new(10);
-/// # let time_binner  = UniformTimeBinner::new(0.01);
+/// # let time_binner  = UniformTimeBinner::new(59000.0, 0.01);
 /// let index = build_index_from_alerts_precise(&alerts, &space_binner, &time_binner);
 /// assert!(index.buckets.values().all(|b| b.members.windows(2).all(|w| w[0] <= w[1])));
 /// ```
@@ -308,19 +314,6 @@ where
 /// ----------
 /// The bar total is set to `2 * alerts.len() + index.buckets.len()` to represent
 /// the two linear passes plus the per-bucket sort loop.
-///
-/// Example
-/// -------
-/// ```rust
-/// # use indicatif::ProgressBar;
-/// # use fink_fat::keys_buckets::*;
-/// # let alerts: Vec<Alert> = vec![];
-/// # let space_binner = HealpixBinner::new(10);
-/// # let time_binner  = UniformTimeBinner::new(0.01);
-/// let pb = ProgressBar::new(0);
-/// let index = build_index_from_alerts_precise_with_progress(&alerts, &space_binner, &time_binner, &pb);
-/// pb.finish_and_clear();
-/// ```
 pub fn build_index_from_alerts_precise_with_progress<Bs, Bt>(
     alerts: &[Alert],
     space_binner: &Bs,
@@ -584,7 +577,7 @@ mod bucket_tests {
 
     // Ton type Alert/AlertId
     use crate::{
-        alerts::{Alert, AlertId},
+        alerts::Alert,
         seeding::{healpix_binners::HealpixBinner, uniform_time_binner::UniformTimeBinner},
     };
 
@@ -593,7 +586,7 @@ mod bucket_tests {
     fn mk_alert(id: AlertId, ra: f64, dec: f64, mjd_tt: f64, band: u8) -> Alert {
         Alert {
             id,
-            dia_source_id: id as u64,
+            dia_source_id: id.idx() as u64,
             ra,
             ra_err: 2.42406840554768e-06, // ~0.5 arcsec in radians
             dec,
@@ -632,7 +625,7 @@ mod bucket_tests {
         let sb = HealpixBinner::new(7);
         let tb = UniformTimeBinner::new(59000.0, 1.0);
 
-        let a = mk_alert(1, 1.0, 0.1, 59000.25, 1);
+        let a = mk_alert(1_u32.into(), 1.0, 0.1, 59000.25, 1);
         let idx = build_index_from_alerts_precise(std::slice::from_ref(&a), &sb, &tb);
 
         assert_eq!(idx.buckets.len(), 1);
@@ -659,7 +652,7 @@ mod bucket_tests {
         let mut alerts = Vec::new();
         for i in 0..20u32 {
             alerts.push(mk_alert(
-                i + 1,
+                (i + 1).into(),
                 base_ra + 1e-6 * (i as f64),
                 base_dec - 1e-6 * (i as f64),
                 base_t + 1e-7 * (i as f64),
@@ -690,9 +683,9 @@ mod bucket_tests {
         let dec = 0.0;
         let t0 = 59000.2;
         let alerts = vec![
-            mk_alert(1, ra, dec, t0 + 0.1 * dt, 1), // bin k
-            mk_alert(2, ra, dec, t0 + 1.1 * dt, 1), // bin k+1
-            mk_alert(3, ra, dec, t0 + 2.1 * dt, 1), // bin k+2
+            mk_alert(1_u32.into(), ra, dec, t0 + 0.1 * dt, 1), // bin k
+            mk_alert(2_u32.into(), ra, dec, t0 + 1.1 * dt, 1), // bin k+1
+            mk_alert(3_u32.into(), ra, dec, t0 + 2.1 * dt, 1), // bin k+2
         ];
 
         let idx = build_index_from_alerts_precise(&alerts, &sb, &tb);
@@ -721,8 +714,8 @@ mod bucket_tests {
         let ra1 = two_pi_wrap(ra0 + 3.0 * r_cell);
 
         let t = 59000.25;
-        let a0 = mk_alert(1, ra0, dec, t, 1);
-        let a1 = mk_alert(2, ra1, dec, t, 1);
+        let a0 = mk_alert(1_u32.into(), ra0, dec, t, 1);
+        let a1 = mk_alert(2_u32.into(), ra1, dec, t, 1);
 
         // s'assure qu'on est bien sur deux pixels différents
         let s0 = sb.key_for(ra0, dec);
@@ -758,7 +751,7 @@ mod bucket_tests {
             let ra = two_pi_wrap(0.1 + (i as f64) * 0.05);
             let dec = 0.3 - 0.002 * (i as f64 % 10.0);
             let t = 59000.0 + (i as f64 % 20.0) * (1.0 / 48.0);
-            alerts.push(mk_alert(i + 1, ra, dec, t, 1));
+            alerts.push(mk_alert((i + 1).into(), ra, dec, t, 1));
         }
 
         let idx = build_index_from_alerts_precise(&alerts, &sb, &tb);
@@ -819,7 +812,7 @@ mod bucket_tests {
 
                 // Construire la liste d'alertes à partir des triplets
                 let alerts: Vec<Alert> = triples.iter().enumerate().map(|(i, (ra, dec, t))| {
-                    mk_alert((i + 1) as u32, *ra, *dec, *t, 1)
+                    mk_alert((i + 1).into(), *ra, *dec, *t, 1)
                 }).collect();
 
                 let idx = build_index_from_alerts_precise(&alerts, &sb, &tb);

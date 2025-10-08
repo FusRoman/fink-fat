@@ -38,7 +38,7 @@
 //!
 //! ```rust
 //! use fink_fat::seeding::space_time_bucket::SpatialBinner;
-//! use fink_fat::seeding::healpix_binner::HealpixBinner;
+//! use fink_fat::seeding::healpix_binners::HealpixBinner;
 //!
 //! let binner = HealpixBinner::new(5); // depth=5 → NSIDE=32
 //! let key = binner.key_for(1.0, 0.5); // RA=1 rad, DEC=0.5 rad
