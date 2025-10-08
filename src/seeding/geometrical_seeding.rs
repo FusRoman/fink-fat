@@ -36,20 +36,15 @@
 use ahash::AHashMap;
 use indicatif::ProgressBar;
 
-use crate::alerts::{Alert, AlertId};
+use crate::alerts::Alert;
 use crate::params::FinkFatParams;
 use crate::progress::{maybe_progress_finish, maybe_progress_start, maybe_progress_throttled_set};
 use crate::seeding::space_time_bucket::{
     BucketIndex, BucketKey, SpatialBinner, SpatialKey, TimeBin, TimeBinner,
 };
+use crate::seeding::{AlertId, Pair, Pairs, Triplets};
 
 /* --------------------------- Types --------------------------- */
-
-/// Compact list of **pair** seeds `(a, b)` where `t_b > t_a`.
-pub type Pairs = Vec<(AlertId, AlertId)>;
-
-/// Compact list of **triplet** seeds `(a, b, c)` with `t_a < t_b < t_c`.
-pub type Triplets = Vec<(AlertId, AlertId, AlertId)>;
 
 /* --------------------------- ID → Alert lookup ------------------------ */
 
@@ -132,7 +127,7 @@ fn lower_bound_gt_ids(ids: &[AlertId], key_time: f64, times_by_id: &[f64]) -> us
     let (mut lo, mut hi) = (0usize, ids.len());
     while lo < hi {
         let mid = (lo + hi) / 2;
-        let t = times_by_id[ids[mid] as usize];
+        let t = times_by_id[ids[mid].idx()];
         if t > key_time {
             hi = mid
         } else {
@@ -175,7 +170,7 @@ fn generate_pairs_core<Bs: SpatialBinner, Bt: TimeBinner>(
 ) -> Pairs {
     // Require contiguous ids for O(1) tables.
     debug_assert!(
-        alerts.iter().enumerate().all(|(i, a)| a.id as usize == i),
+        alerts.iter().enumerate().all(|(i, a)| a.id.idx() == i),
         "generate_pairs expects contiguous AlertId (id == index)"
     );
 
@@ -220,10 +215,10 @@ fn generate_pairs_core<Bs: SpatialBinner, Bt: TimeBinner>(
 
         // Members are time-sorted inside each bucket
         for &a_id in &bucket0.members {
-            let t_a = times_by_id[a_id as usize];
-            let m_a = mags_by_id[a_id as usize];
+            let t_a = times_by_id[a_id.idx()];
+            let m_a = mags_by_id[a_id.idx()];
             let t_max = t_a + params.pairs.max_dt;
-            let va = vecs_by_id[a_id as usize];
+            let va = vecs_by_id[a_id.idx()];
 
             for &tbin in ttargets.iter() {
                 for &s_key in s_neighs.iter() {
@@ -241,19 +236,19 @@ fn generate_pairs_core<Bs: SpatialBinner, Bt: TimeBinner>(
                     // Scan until t_b > t_max
                     while i < ids.len() {
                         let b_id = ids[i];
-                        let t_b = times_by_id[b_id as usize];
-                        let m_b = mags_by_id[b_id as usize];
+                        let t_b = times_by_id[b_id.idx()];
+                        let m_b = mags_by_id[b_id.idx()];
                         if t_b > t_max {
                             break;
                         }
                         if b_id != a_id {
-                            let vb = vecs_by_id[b_id as usize];
+                            let vb = vecs_by_id[b_id.idx()];
                             // Angular + magnitude cuts
                             if dot3(va, vb) >= cos_thresh
                                 && (m_a - m_b).abs() < params.pairs.max_flux_difference
                             {
                                 // Time order guaranteed (t_b > t_a)
-                                out.push((a_id, b_id));
+                                out.push((a_id, b_id).into());
                             }
                         }
                         i += 1;
@@ -374,12 +369,12 @@ fn generate_triplets_from_pairs_core<Bs: SpatialBinner, Bt: TimeBinner>(
     sb: &Bs,
     tb: &Bt,
     params: &FinkFatParams,
-    pairs: &[(AlertId, AlertId)],
+    pairs: &[Pair],
     pb_opt: Option<&ProgressBar>,
 ) -> Triplets {
     // contiguity assumption: id == index
     debug_assert!(
-        alerts.iter().enumerate().all(|(i, a)| a.id as usize == i),
+        alerts.iter().enumerate().all(|(i, a)| a.id.idx() == i),
         "generate_triplets_from_pairs expects contiguous AlertId (id == index)"
     );
 
@@ -410,11 +405,11 @@ fn generate_triplets_from_pairs_core<Bs: SpatialBinner, Bt: TimeBinner>(
     // output
     let mut out: Triplets = Vec::with_capacity(pairs.len() / 2);
 
-    for &(a_id, b_id) in pairs {
-        let t_a = times_by_id[a_id as usize];
-        let t_b = times_by_id[b_id as usize];
+    for &Pair { a: a_id, b: b_id } in pairs {
+        let t_a = times_by_id[a_id.idx()];
+        let t_b = times_by_id[b_id.idx()];
 
-        let m_b = mags_by_id[b_id as usize];
+        let m_b = mags_by_id[b_id.idx()];
 
         // Enforce time order if requested; otherwise require t_b > t_a for stability
         if t_b.partial_cmp(&t_a) == Some(std::cmp::Ordering::Less)
@@ -428,8 +423,8 @@ fn generate_triplets_from_pairs_core<Bs: SpatialBinner, Bt: TimeBinner>(
 
         // Center on b (spatial/time keys)
         let key_b = BucketKey {
-            space_key: spacekey_by_id[b_id as usize],
-            time_bin: timebin_by_id[b_id as usize],
+            space_key: spacekey_by_id[b_id.idx()],
+            time_bin: timebin_by_id[b_id.idx()],
         };
 
         // Spatial neighbors (cached + dedup)
@@ -446,18 +441,18 @@ fn generate_triplets_from_pairs_core<Bs: SpatialBinner, Bt: TimeBinner>(
         });
 
         // Linear motion a->b estimated on tangent plane around a
-        let ra_a = ra_by_id[a_id as usize];
-        let dec_a = dec_by_id[a_id as usize];
-        let cos_a = cosdec_by_id[a_id as usize];
-        let ra_b = ra_by_id[b_id as usize];
-        let dec_b = dec_by_id[b_id as usize];
+        let ra_a = ra_by_id[a_id.idx()];
+        let dec_a = dec_by_id[a_id.idx()];
+        let cos_a = cosdec_by_id[a_id.idx()];
+        let ra_b = ra_by_id[b_id.idx()];
+        let dec_b = dec_by_id[b_id.idx()];
         let (dx_ab, dy_ab) = planar_offset_fast(ra_a, dec_a, cos_a, ra_b, dec_b);
         let dt_ab = (t_b - t_a).max(1e-12);
         let vx = dx_ab / dt_ab;
         let vy = dy_ab / dt_ab;
 
         // Pairwise b->c angular test
-        let vb = vecs_by_id[b_id as usize];
+        let vb = vecs_by_id[b_id.idx()];
         let t_bmax = t_b + params.triplets.max_dt_between;
 
         for &tbin in ttargets.iter() {
@@ -482,13 +477,13 @@ fn generate_triplets_from_pairs_core<Bs: SpatialBinner, Bt: TimeBinner>(
                     if c_id == a_id || c_id == b_id {
                         continue;
                     }
-                    let t_c = times_by_id[c_id as usize];
+                    let t_c = times_by_id[c_id.idx()];
                     if t_c > t_bmax {
                         break;
                     }
 
                     // Fast pairwise b<->c angular consistency
-                    let vc = vecs_by_id[c_id as usize];
+                    let vc = vecs_by_id[c_id.idx()];
                     if dot3(vb, vc) < cos_pair {
                         continue;
                     }
@@ -499,7 +494,7 @@ fn generate_triplets_from_pairs_core<Bs: SpatialBinner, Bt: TimeBinner>(
                         continue;
                     }
 
-                    let m_c = mags_by_id[c_id as usize];
+                    let m_c = mags_by_id[c_id.idx()];
                     if (m_b - m_c).abs() > params.triplets.max_flux_difference {
                         continue;
                     }
@@ -511,15 +506,15 @@ fn generate_triplets_from_pairs_core<Bs: SpatialBinner, Bt: TimeBinner>(
                         ra_a,
                         dec_a,
                         cos_a,
-                        ra_by_id[c_id as usize],
-                        dec_by_id[c_id as usize],
+                        ra_by_id[c_id.idx()],
+                        dec_by_id[c_id.idx()],
                     );
                     let (dx_pp, dy_pp) = planar_offset_fast(ra_a, dec_a, cos_a, ra_pred, dec_pred);
 
                     let resid = ((dx_pc - dx_pp).powi(2) + (dy_pc - dy_pp).powi(2)).sqrt();
                     if resid <= params.triplets.max_predicted_residual {
                         // Temporal order guaranteed: a < b < c
-                        out.push((a_id, b_id, c_id));
+                        out.push((a_id, b_id, c_id).into());
                     }
                 }
             }
@@ -556,7 +551,7 @@ pub fn generate_triplets_from_pairs<Bs: SpatialBinner, Bt: TimeBinner>(
     sb: &Bs,
     tb: &Bt,
     params: &FinkFatParams,
-    pairs: &[(AlertId, AlertId)],
+    pairs: &[Pair],
 ) -> Triplets {
     generate_triplets_from_pairs_core(index, alerts, sb, tb, params, pairs, None)
 }
@@ -571,7 +566,7 @@ pub fn generate_triplets_from_pairs_with_progress<Bs: SpatialBinner, Bt: TimeBin
     sb: &Bs,
     tb: &Bt,
     params: &FinkFatParams,
-    pairs: &[(AlertId, AlertId)],
+    pairs: &[Pair],
     pb: &ProgressBar,
 ) -> Triplets {
     generate_triplets_from_pairs_core(index, alerts, sb, tb, params, pairs, Some(pb))
@@ -609,18 +604,19 @@ mod geom_seeds_tests {
     use std::collections::HashSet;
     use std::f64::consts::PI;
 
-    use crate::alerts::{Alert, AlertId};
+    use crate::alerts::Alert;
     use crate::params;
     use crate::seeding::healpix_binners::HealpixBinner;
     use crate::seeding::space_time_bucket::{build_index_from_alerts_precise, BucketKey};
     use crate::seeding::uniform_time_binner::UniformTimeBinner;
+    use crate::seeding::Triplet;
 
     /* ------------------------- helpers ------------------------- */
 
     fn mk_alert(id: AlertId, ra: f64, dec: f64, mjd_tt: f64, band: u8) -> Alert {
         Alert {
             id,
-            dia_source_id: id as u64,
+            dia_source_id: id.idx() as u64,
             ra,
             ra_err: 2.42406840554768e-06, // ~0.5 arcsec in radians
             dec,
@@ -674,9 +670,9 @@ mod geom_seeds_tests {
 
         // Two alerts ~5 arcsec apart and 8 min apart -> should match (Δt<=10 min, sep<=10")
         let t0 = 60000.10;
-        let a1 = mk_alert(0, 1.0, 0.2, t0, 1);
+        let a1 = mk_alert(0_u32.into(), 1.0, 0.2, t0, 1);
         let a2 = mk_alert(
-            1,
+            1_u32.into(),
             1.0 + arcsec_to_rad(5.0) / 0.2_f64.cos(),
             0.2,
             t0 + 8.0 / 1440.0,
@@ -684,7 +680,7 @@ mod geom_seeds_tests {
         );
 
         // A distant outlier (must not match)
-        let a3 = mk_alert(2, 2.0, -0.3, t0 + 5.0 / 1440.0, 1);
+        let a3 = mk_alert(2_u32.into(), 2.0, -0.3, t0 + 5.0 / 1440.0, 1);
 
         let alerts = vec![a1.clone(), a2.clone(), a3.clone()];
         let index = build_index_from_alerts_precise(&alerts, &sb, &tb);
@@ -701,8 +697,13 @@ mod geom_seeds_tests {
 
         let pairs = generate_pairs(&index, &alerts, &sb, &tb, &params);
 
-        assert!(pairs.contains(&(0, 1)) || pairs.contains(&(1, 2)));
-        assert!(!pairs.iter().any(|&(i, j)| (i == 2 || i == 1) && j == 3));
+        assert!(
+            pairs.contains(&(0_u32.into(), 1_u32.into()).into())
+                || pairs.contains(&(1_u32.into(), 2_u32.into()).into())
+        );
+        assert!(!pairs
+            .iter()
+            .any(|&Pair { a, b }| (a == 2_u32.into() || a == 1_u32.into()) && b == 3_u32.into()));
         // Uniqueness
         let set: HashSet<_> = pairs.iter().collect();
         assert_eq!(set.len(), pairs.len());
@@ -715,9 +716,9 @@ mod geom_seeds_tests {
 
         let t0 = 60000.25;
         // Two alerts in the same time bin (Δt = 5 min < 20 min)
-        let a1 = mk_alert(0, 1.5, 0.1, t0, 1);
+        let a1 = mk_alert(0_u32.into(), 1.5, 0.1, t0, 1);
         let a2 = mk_alert(
-            1,
+            1_u32.into(),
             1.5 + arcsec_to_rad(4.0) / 0.1_f64.cos(),
             0.1,
             t0 + 5.0 / 1440.0,
@@ -756,8 +757,10 @@ mod geom_seeds_tests {
         let pairs_same = generate_pairs(&index, &alerts, &sb, &tb, &params);
 
         assert_eq!(pairs_same.len(), 1);
-        let (i, j) = pairs_same[0];
-        assert!((i == 0 && j == 1) || (i == 1 && j == 0));
+        let (i, j) = pairs_same[0].into();
+        assert!(
+            (i == 0_u32.into() && j == 1_u32.into()) || (i == 1_u32.into() && j == 0_u32.into())
+        );
     }
 
     #[test]
@@ -770,9 +773,9 @@ mod geom_seeds_tests {
         let dec0: f64 = 0.25;
         let dr = arcsec_to_rad(6.0) / dec0.cos();
 
-        let a = mk_alert(0, 1.0, dec0, t0, 1);
-        let b = mk_alert(1, 1.0 + dr, dec0, t0 + 10.0 / 1440.0, 1);
-        let c = mk_alert(2, 1.0 + 2.0 * dr, dec0, t0 + 20.0 / 1440.0, 1);
+        let a = mk_alert(0_u32.into(), 1.0, dec0, t0, 1);
+        let b = mk_alert(1_u32.into(), 1.0 + dr, dec0, t0 + 10.0 / 1440.0, 1);
+        let c = mk_alert(2_u32.into(), 1.0 + 2.0 * dr, dec0, t0 + 20.0 / 1440.0, 1);
 
         let alerts = vec![a.clone(), b.clone(), c.clone()];
         let index = build_index_from_alerts_precise(&alerts, &sb, &tb);
@@ -791,7 +794,7 @@ mod geom_seeds_tests {
         let triplets = generate_triplets(&index, &alerts, &sb, &tb, &params);
 
         // Expect (0,1,2)
-        assert!(triplets.contains(&(0, 1, 2)));
+        assert!(triplets.contains(&(0_u32.into(), 1_u32.into(), 2_u32.into()).into()));
         // Uniqueness
         let set: HashSet<_> = triplets.iter().collect();
         assert_eq!(set.len(), triplets.len());
@@ -806,11 +809,11 @@ mod geom_seeds_tests {
         let dec0: f64 = 0.1;
         let dr = arcsec_to_rad(6.0) / dec0.cos();
 
-        let a = mk_alert(0, 2.0, dec0, t0, 1);
-        let b = mk_alert(1, 2.0 + dr, dec0, t0 + 10.0 / 1440.0, 1);
+        let a = mk_alert(0_u32.into(), 2.0, dec0, t0, 1);
+        let b = mk_alert(1_u32.into(), 2.0 + dr, dec0, t0 + 10.0 / 1440.0, 1);
         // Third point deviates by ~40" -> residual should exceed 5"
         let c = mk_alert(
-            2,
+            2_u32.into(),
             2.0 + 2.0 * dr + arcsec_to_rad(40.0) / dec0.cos(),
             dec0,
             t0 + 20.0 / 1440.0,
@@ -833,7 +836,7 @@ mod geom_seeds_tests {
 
         let triplets = generate_triplets(&index, &alerts, &sb, &tb, &params);
 
-        assert!(!triplets.contains(&(0, 1, 2)));
+        assert!(!triplets.contains(&(0_u32.into(), 1_u32.into(), 2_u32.into()).into()));
     }
 
     #[test]
@@ -844,9 +847,9 @@ mod geom_seeds_tests {
         // Two points compatible in Δt/Δθ, but no third point in the window -> no triplet.
         let t0 = 61000.20;
         let dec = 0.2;
-        let a = mk_alert(0, 1.0, dec, t0, 1);
+        let a = mk_alert(0_u32.into(), 1.0, dec, t0, 1);
         let b = mk_alert(
-            1,
+            1_u32.into(),
             1.0 + arcsec_to_rad(6.0) / dec.cos(),
             dec,
             t0 + 8.0 / 1440.0,
@@ -880,8 +883,10 @@ mod geom_seeds_tests {
         // Keep the pair even when no triplet is found
         assert_eq!(triplets.len(), 0);
         assert_eq!(pairs.len(), 1);
-        let (i, j) = pairs[0];
-        assert!((i == 0 && j == 1) || (i == 1 && j == 0));
+        let (i, j) = pairs[0].into();
+        assert!(
+            (i == 0_u32.into() && j == 1_u32.into()) || (i == 1_u32.into() && j == 0_u32.into())
+        );
     }
 
     #[test]
@@ -893,9 +898,9 @@ mod geom_seeds_tests {
         let dec: f64 = 0.15;
         let dr = arcsec_to_rad(6.0) / dec.cos();
 
-        let a = mk_alert(0, 2.0, dec, t0, 1);
-        let b = mk_alert(1, 2.0 + dr, dec, t0 + 10.0 / 1440.0, 1);
-        let c = mk_alert(2, 2.0 + 2.0 * dr, dec, t0 + 20.0 / 1440.0, 1);
+        let a = mk_alert(0_u32.into(), 2.0, dec, t0, 1);
+        let b = mk_alert(1_u32.into(), 2.0 + dr, dec, t0 + 10.0 / 1440.0, 1);
+        let c = mk_alert(2_u32.into(), 2.0 + 2.0 * dr, dec, t0 + 20.0 / 1440.0, 1);
 
         let alerts = vec![a.clone(), b.clone(), c.clone()];
         let index = build_index_from_alerts_precise(&alerts, &sb, &tb);
@@ -922,14 +927,14 @@ mod geom_seeds_tests {
         let triplets = generate_triplets_from_pairs(&index, &alerts, &sb, &tb, &params, &pairs);
 
         // Triplet found
-        assert!(triplets.contains(&(0, 1, 2)));
+        assert!(triplets.contains(&(0_u32.into(), 1_u32.into(), 2_u32.into()).into()));
         // Pairs include at least (a,b) and (b,c) (possibly also (a,c) depending on max_dt)
         let mut pair_set = std::collections::HashSet::new();
-        for &(i, j) in &pairs {
+        for &Pair { a: i, b: j } in &pairs {
             pair_set.insert(if i < j { (i, j) } else { (j, i) });
         }
-        assert!(pair_set.contains(&(0, 1)));
-        assert!(pair_set.contains(&(1, 2)));
+        assert!(pair_set.contains(&(0_u32.into(), 1_u32.into())));
+        assert!(pair_set.contains(&(1_u32.into(), 2_u32.into())));
     }
 
     #[test]
@@ -942,10 +947,10 @@ mod geom_seeds_tests {
         let dec: f64 = 0.25;
         let dr = arcsec_to_rad(8.0) / dec.cos();
 
-        let a = mk_alert(0, 0.6, dec, t0, 1);
-        let b = mk_alert(1, 0.6 + dr, dec, t0 + 10.0 / 1440.0, 1);
-        let c = mk_alert(2, 0.6 + 2.0 * dr, dec, t0 + 20.0 / 1440.0, 1);
-        let d = mk_alert(3, 2.5, 0.0, t0 + 5.0 / 1440.0, 1); // noise
+        let a = mk_alert(0_u32.into(), 0.6, dec, t0, 1);
+        let b = mk_alert(1_u32.into(), 0.6 + dr, dec, t0 + 10.0 / 1440.0, 1);
+        let c = mk_alert(2_u32.into(), 0.6 + 2.0 * dr, dec, t0 + 20.0 / 1440.0, 1);
+        let d = mk_alert(3_u32.into(), 2.5, 0.0, t0 + 5.0 / 1440.0, 1); // noise
 
         let alerts = vec![a, b, c, d];
         let index = build_index_from_alerts_precise(&alerts, &sb, &tb);
@@ -973,11 +978,11 @@ mod geom_seeds_tests {
 
         // Build a set of pairs (canonical order i<j)
         let mut pair_set = std::collections::HashSet::new();
-        for &(i, j) in &pairs {
+        for &Pair { a: i, b: j } in &pairs {
             pair_set.insert(if i < j { (i, j) } else { (j, i) });
         }
 
-        for &(i, j, _) in &triplets {
+        for &Triplet { a: i, b: j, c: _ } in &triplets {
             // (i,j) must belong to the `pairs` set (by construction)
             let (a, b) = if i < j { (i, j) } else { (j, i) };
             assert!(
@@ -1032,7 +1037,7 @@ mod geom_seeds_tests {
 
                 // Build alerts
                 let alerts: Vec<Alert> = triples.iter().enumerate().map(|(i, (ra, dec, t))| {
-                    mk_alert(i as u32, *ra, *dec, *t, 1)
+                    mk_alert(i.into(), *ra, *dec, *t, 1)
                 }).collect();
                 let index = build_index_from_alerts_precise(&alerts, &sb, &tb);
 
@@ -1043,7 +1048,7 @@ mod geom_seeds_tests {
                 prop_assert_eq!(set.len(), pairs.len());
 
                 // Constraints
-                for (i, j) in pairs {
+                for Pair {a: i, b: j} in pairs {
                     let a = find_alert(&alerts, i);
                     let b = find_alert(&alerts, j);
                     // Time order in the implementation
@@ -1092,7 +1097,7 @@ mod geom_seeds_tests {
 
                 // Build alerts
                 let alerts: Vec<Alert> = triples.iter().enumerate().map(|(i, (ra, dec, t))| {
-                    mk_alert(i as u32, *ra, *dec, *t, 1)
+                    mk_alert(i.into(), *ra, *dec, *t, 1)
                 }).collect();
                 let index = build_index_from_alerts_precise(&alerts, &sb, &tb);
 
@@ -1101,7 +1106,7 @@ mod geom_seeds_tests {
                 let set: HashSet<_> = triplets.iter().collect();
                 prop_assert_eq!(set.len(), triplets.len());
 
-                for (i, j, k) in triplets {
+                for Triplet { a: i, b: j, c: k } in triplets {
                     let a = find_alert(&alerts, i);
                     let b = find_alert(&alerts, j);
                     let c = find_alert(&alerts, k);

@@ -82,6 +82,8 @@ use crate::{errors::ParamError, MjdTt, Radians};
 /// Example
 /// -------
 /// ```rust
+/// use fink_fat::params::pair_params::PairParams;
+///
 /// let params = PairParams::builder()
 ///     .max_dt(0.05)                // 72 min
 ///     .max_sep(0.0025)             // ~8.6 arcmin
@@ -163,6 +165,7 @@ impl PairParams {
 /// Example
 /// -------
 /// ```rust
+/// use fink_fat::params::pair_params::PairParamsBuilder;
 /// let params = PairParamsBuilder::default()
 ///     .max_dt(0.04)
 ///     .max_sep(0.002)

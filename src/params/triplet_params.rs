@@ -52,6 +52,7 @@ use crate::{errors::ParamError, MjdTt, Radians};
 /// Example
 /// -------
 /// ```rust
+/// use fink_fat::params::triplet_params::TripletParams;
 /// let params = TripletParams::builder()
 ///     .max_dt_between(0.03)          // ~43 min
 ///     .max_pair_sep(0.002)           // ~6.9 arcmin
@@ -149,6 +150,7 @@ impl TripletParams {
 /// Example
 /// -------
 /// ```rust
+/// use fink_fat::params::triplet_params::TripletParamsBuilder;
 /// let params = TripletParamsBuilder::default()
 ///     .max_dt_between(0.02)
 ///     .max_pair_sep(0.0018)

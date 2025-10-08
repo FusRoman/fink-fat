@@ -9,22 +9,6 @@
 //!   overhead when tracking millions of iterations.
 //! - **optional progress**: `maybe_*` helpers allow enabling/disabling
 //!   progress reporting without cluttering the call sites.
-//!
-//! Typical usage:
-//!
-//! ```rust
-//! use fink_fat::util::progress::*;
-//!
-//! let mp = make_multi_progress();
-//! let pb = make_bar(&mp, 1_000, "Processing");
-//!
-//! let mut last = 0;
-//! for i in 0..1_000 {
-//!     // ... heavy work ...
-//!     throttled_inc(&pb, i, &mut last, 100);
-//! }
-//! maybe_progress_finish(Some(&pb), 1_000, "Done");
-//! ```
 
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 

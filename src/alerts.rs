@@ -44,21 +44,26 @@ use numpy::PyReadonlyArray1;
 use crate::{
     params::params_binding::PyFinkFatParams,
     progress::{make_bar, make_multi_progress},
+    propagation::{
+        features::{
+            extract_pair_features, extract_triplet_features, FeatureExtractParams, SeedNode,
+        },
+        linking::NightSnapshot,
+    },
     seeding::{
         geometrical_seeding::{
             generate_pairs, generate_pairs_with_progress, generate_triplets_from_pairs,
-            generate_triplets_from_pairs_with_progress, Pairs, Triplets,
+            generate_triplets_from_pairs_with_progress,
         },
         healpix_binners::HealpixBinner,
         space_time_bucket::{
             build_index_from_alerts_precise, build_index_from_alerts_precise_with_progress,
         },
         uniform_time_binner::UniformTimeBinner,
+        Pair, Pairs, Triplet, Triplets,
     },
+    AlertId, NightId,
 };
-
-/// Dense identifier used to index into [`AlertStore::alerts`].
-pub type AlertId = u32;
 
 /// Single detection in the alert stream.
 ///
@@ -75,7 +80,7 @@ pub type AlertId = u32;
 /// - `flux`, `flux_err` – PSF **difference** flux and its uncertainty (units depend on upstream).
 /// - `band` – integer photometric band code.
 #[pyclass(module = "fink_fat")]
-#[derive(Clone)]
+#[derive(Clone, Debug, Default)]
 pub struct Alert {
     #[pyo3(get)]
     pub id: AlertId,
@@ -107,7 +112,7 @@ impl fmt::Display for Alert {
         write!(
             f,
             "Alert(id={}, dia_source_id={}, ra={:.6} rad, dec={:.6} rad, mjd_tt={:.5}, flux={:.3}±{:.3} nJy, band={})",
-            self.id, self.dia_source_id, self.ra, self.dec, self.mjd_tt, self.flux, self.flux_err, self.band
+            self.id.idx(), self.dia_source_id, self.ra, self.dec, self.mjd_tt, self.flux, self.flux_err, self.band
         )
     }
 }
@@ -134,7 +139,7 @@ impl Alert {
     fn __repr__(&self) -> String {
         format!(
             "Alert(id={}, dia_source_id={}, ra={:.6}, dec={:.6}, mjd_tt={:.5}, flux={:.3}, flux_err={:.3}, band={})",
-            self.id, self.dia_source_id, self.ra, self.dec, self.mjd_tt, self.flux, self.flux_err, self.band
+            self.id.idx(), self.dia_source_id, self.ra, self.dec, self.mjd_tt, self.flux, self.flux_err, self.band
         )
     }
 }
@@ -154,6 +159,7 @@ impl Alert {
 /// ------
 /// Instances are exposed in `fink_fat.AlertStore`.
 #[pyclass(module = "fink_fat")]
+#[derive(Debug)]
 pub struct AlertStore {
     /// Night anchor (TT): floor of the minimum `mjd_tt` in `alerts`.
     pub start_mjd: f64,
@@ -170,6 +176,104 @@ impl fmt::Display for AlertStore {
             self.alerts.len(),
             self.start_mjd
         )
+    }
+}
+
+impl AlertStore {
+    /// Build a **snapshot** for one night from alerts by running the pure-Rust seeding
+    /// (no UI) then extracting features.
+    ///
+    /// Use this for the **current** night N+1 right before linking, and persist the
+    /// returned snapshot to disk to serve as “previous” on the next run.
+    pub fn build_snapshot_from_store(
+        &self,
+        night_id: NightId,
+        seeding_params: &PyFinkFatParams,
+        extract_params: &FeatureExtractParams,
+    ) -> NightSnapshot {
+        // 1) Seeding (no progress UI)
+        let sb = HealpixBinner::new(seeding_params.healpix_depth());
+        let tb = UniformTimeBinner::new(self.start_mjd, seeding_params.time_bin_width_days());
+        let index = build_index_from_alerts_precise(&self.alerts, &sb, &tb);
+        let pairs = generate_pairs(&index, &self.alerts, &sb, &tb, &seeding_params.inner);
+        let triplets = generate_triplets_from_pairs(
+            &index,
+            &self.alerts,
+            &sb,
+            &tb,
+            &seeding_params.inner,
+            &pairs,
+        );
+
+        // 2) Feature extraction
+        let mut seeds = Vec::with_capacity(pairs.len() + triplets.len());
+        seeds.extend(extract_pair_features(
+            self,
+            &pairs,
+            extract_params,
+            night_id,
+        ));
+        seeds.extend(extract_triplet_features(self, &triplets, night_id));
+        renumber_seed_ids(&mut seeds);
+
+        NightSnapshot {
+            night_id,
+            pairs,
+            triplets,
+            seeds,
+        }
+    }
+
+    /// Borrow one alert by id (checked).
+    ///
+    /// Return
+    /// ------
+    /// `Some(&Alert)` if `id` is in bounds, otherwise `None`.
+    #[inline]
+    pub fn get(&self, id: AlertId) -> Option<&Alert> {
+        self.alerts.get(id.idx())
+    }
+
+    /// Borrow one alert by id (debug assert + unchecked; fastest in hot loops).
+    #[inline]
+    pub fn get_fast(&self, id: AlertId) -> &Alert {
+        debug_assert!(id.idx() < self.alerts.len());
+        unsafe { self.alerts.get_unchecked(id.idx()) }
+    }
+
+    /// Borrow both members of a pair (checked).
+    #[inline]
+    pub fn get_pair(&self, p: Pair) -> Option<(&Alert, &Alert)> {
+        p.resolve(self)
+    }
+
+    /// Borrow the three members of a triplet (checked).
+    #[inline]
+    pub fn get_triplet(&self, t: Triplet) -> Option<(&Alert, &Alert, &Alert)> {
+        t.resolve(self)
+    }
+
+    /// Resolve an arbitrary list of `AlertId`s into borrowed `&Alert`s (checked).
+    ///
+    /// The iterator short-circuits to `None` if any id is out-of-bounds.
+    #[inline]
+    pub fn get_many(
+        &self,
+        ids: impl IntoIterator<Item = AlertId>,
+    ) -> Option<impl Iterator<Item = &Alert>> {
+        let mut v = Vec::new();
+        for id in ids {
+            v.push(self.alerts.get(id.idx())?);
+        }
+        Some(v.into_iter())
+    }
+}
+
+/* ----------------------------- Internals ----------------------------- */
+
+fn renumber_seed_ids(seeds: &mut [SeedNode]) {
+    for (k, s) in seeds.iter_mut().enumerate() {
+        s.seed_id = k as u64;
     }
 }
 
@@ -253,7 +357,7 @@ impl AlertStore {
         .enumerate()
         {
             alerts.push(Alert {
-                id: i as AlertId,
+                id: AlertId::from(i),
                 dia_source_id: dia,
                 ra,
                 ra_err,
@@ -287,10 +391,10 @@ impl AlertStore {
     /// IndexError
     ///     If `id` is out of bounds.
     #[pyo3(text_signature = "($self, id, /)")]
-    pub fn get<'py>(&self, py: Python<'py>, id: AlertId) -> PyResult<Py<Alert>> {
+    pub fn get_py<'py>(&self, py: Python<'py>, id: AlertId) -> PyResult<Py<Alert>> {
         let a = self
             .alerts
-            .get(id as usize)
+            .get(id.idx())
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyIndexError, _>("invalid AlertId"))?;
         Py::new(py, a.clone())
     }
@@ -374,7 +478,6 @@ impl AlertStore {
     /// - Otherwise, attaches `indicatif` progress bars with three phases:
     ///   buckets → pairs → triplets.
     #[pyo3(text_signature = "($self, params, /)")]
-    #[allow(clippy::too_many_arguments)]
     pub fn generate_seeds(&self, params: &PyFinkFatParams) -> PyResult<(Pairs, Triplets)> {
         let sb = HealpixBinner::new(params.healpix_depth());
         let tb = UniformTimeBinner::new(self.start_mjd, params.time_bin_width_days());
@@ -458,7 +561,7 @@ impl AlertStore {
         // --- Helpers for column builders ---
         #[inline]
         fn get_dia(alerts: &[Alert], id: AlertId) -> u64 {
-            alerts[id as usize].dia_source_id
+            alerts[id.idx()].dia_source_id
         }
 
         // --- Build PAIRS columns ---
@@ -468,7 +571,7 @@ impl AlertStore {
         let mut a_dia: Vec<u64> = Vec::with_capacity(pairs.len());
         let mut b_dia: Vec<u64> = Vec::with_capacity(pairs.len());
 
-        for (a, b) in pairs.iter().copied() {
+        for Pair { a, b } in pairs.iter().copied() {
             let da = get_dia(&self.alerts, a);
             let db = get_dia(&self.alerts, b);
             let (dmin, dmax) = if da <= db { (da, db) } else { (db, da) };
@@ -476,8 +579,8 @@ impl AlertStore {
             let uid = format!("P|{}|{}", dmin, dmax);
 
             pair_uid.push(uid);
-            a_alert_id.push(a);
-            b_alert_id.push(b);
+            a_alert_id.push(a.idx() as u32);
+            b_alert_id.push(b.idx() as u32);
             a_dia.push(da);
             b_dia.push(db);
         }
@@ -491,7 +594,7 @@ impl AlertStore {
         let mut tb_dia: Vec<u64> = Vec::with_capacity(triplets.len());
         let mut tc_dia: Vec<u64> = Vec::with_capacity(triplets.len());
 
-        for (a, b, c) in triplets.iter().copied() {
+        for Triplet { a, b, c } in triplets.iter().copied() {
             let da = get_dia(&self.alerts, a);
             let db = get_dia(&self.alerts, b);
             let dc = get_dia(&self.alerts, c);
@@ -500,9 +603,9 @@ impl AlertStore {
             let uid = format!("T|{}|{}|{}", s[0], s[1], s[2]);
 
             trip_uid.push(uid);
-            ta_alert_id.push(a);
-            tb_alert_id.push(b);
-            tc_alert_id.push(c);
+            ta_alert_id.push(a.idx() as u32);
+            tb_alert_id.push(b.idx() as u32);
+            tc_alert_id.push(c.idx() as u32);
             ta_dia.push(da);
             tb_dia.push(db);
             tc_dia.push(dc);

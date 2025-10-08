@@ -47,13 +47,15 @@
 //! returning a list of records or a dict-of-arrays ready for `pandas.DataFrame`.
 
 use ahash::AHashMap;
+use pyo3::{pyclass, pymethods};
 
 use crate::{
-    alerts::{AlertId, AlertStore},
+    alerts::{Alert, AlertStore},
     seeding::{
-        geometrical_seeding::{Pairs, Triplets},
         space_time_bucket::{SpatialBinner, SpatialKey},
+        Pair, Pairs, Triplet, Triplets,
     },
+    AlertId, NightId,
 };
 
 // --- Small numeric constants reused ---
@@ -128,7 +130,7 @@ pub struct SeedNode {
     /// Unique seed id **within the current extraction batch** (0..N-1).
     pub seed_id: u64,
     /// Optional night identifier. Use `-1` if unknown.
-    pub night_id: i32,
+    pub night_id: NightId,
     /// Reference epoch for the kinematics (MJD, TT).
     pub epoch_mid: f64,
     /// Tangent-plane position at `epoch_mid` (radians).
@@ -177,10 +179,21 @@ pub struct SeedNode {
 /// # See also
 /// - [`extract_pair_features`]
 /// - [`extract_triplet_features`]
+#[pyclass(module = "fink_fat")]
 #[derive(Clone, Copy, Debug)]
 pub struct FeatureExtractParams {
     /// Optional maximum sky-plane speed (rad/day). Use `None` to disable.
     pub max_speed_rad_per_day: Option<f64>,
+}
+
+#[pymethods]
+impl FeatureExtractParams {
+    #[new]
+    fn new(max_speed_rad_per_day: Option<f64>) -> Self {
+        Self {
+            max_speed_rad_per_day,
+        }
+    }
 }
 
 /// Additive model-noise schedule to cover unmodeled curvature and model mismatch.
@@ -300,6 +313,20 @@ pub struct PredictorParams {
 /* --------------------------- Public API --------------------------- */
 
 impl SeedNode {
+    /// Resolve all member alerts of a seed (checked).
+    ///
+    /// Return
+    /// ------
+    /// `Some(Vec<&Alert>)` preserving the order of `SeedNode.members`,
+    /// or `None` if any member id is out-of-bounds.
+    #[inline]
+    pub fn resolve_seed_members<'a>(&self, store: &'a AlertStore) -> Option<Vec<&'a Alert>> {
+        self.members
+            .iter()
+            .map(|&id| store.alerts.get(id.idx()))
+            .collect()
+    }
+
     /// Predict the **sky position** (RA, Dec) at a target epoch from this seed's local model.
     ///
     /// Overview
@@ -515,7 +542,7 @@ impl SeedNode {
     /// ------------------------------------
     /// We return a **diagonal** covariance on the plane using a simple,
     /// interpretable heuristic:
-    /// ```
+    /// ```text
     /// Σ_p(t) ≈ Σ_pos  +  Δt² Σ_vel  +  Q(Δt)
     /// ```
     /// where:
@@ -556,7 +583,11 @@ impl SeedNode {
     ///   propagation that keeps cross-covariances and (optionally) acceleration
     ///   uncertainty.
     #[inline]
-    fn predict_on_plane(&self, t_target: f64, noise: ModelNoise) -> ([f64; 2], [[f64; 2]; 2]) {
+    pub(crate) fn predict_on_plane(
+        &self,
+        t_target: f64,
+        noise: ModelNoise,
+    ) -> ([f64; 2], [[f64; 2]; 2]) {
         let dt = t_target - self.epoch_mid;
 
         // ---- Mean position on the plane -------------------------------------
@@ -629,13 +660,13 @@ impl SeedNode {
 pub fn extract_pair_features(
     store: &AlertStore,
     pairs: &Pairs,
-    params: FeatureExtractParams,
-    night_id: i32,
+    params: &FeatureExtractParams,
+    night_id: NightId,
 ) -> Vec<SeedNode> {
     let mut out = Vec::with_capacity(pairs.len());
-    for (seed_id, &(ia, ib)) in pairs.iter().enumerate() {
-        let a = &store.alerts[ia as usize];
-        let b = &store.alerts[ib as usize];
+    for (seed_id, &Pair { a: ia, b: ib }) in pairs.iter().enumerate() {
+        let a = &store.alerts[ia.idx()];
+        let b = &store.alerts[ib.idx()];
 
         let ta = a.mjd_tt;
         let tb = b.mjd_tt;
@@ -748,13 +779,21 @@ pub fn extract_pair_features(
 pub fn extract_triplet_features(
     store: &AlertStore,
     trips: &Triplets,
-    night_id: i32,
+    night_id: NightId,
 ) -> Vec<SeedNode> {
     let mut out = Vec::with_capacity(trips.len());
-    for (seed_id, &(ia, ib, ic)) in trips.iter().enumerate() {
-        let a = &store.alerts[ia as usize];
-        let b = &store.alerts[ib as usize];
-        let c = &store.alerts[ic as usize];
+    for (
+        seed_id,
+        &Triplet {
+            a: ia,
+            b: ib,
+            c: ic,
+        },
+    ) in trips.iter().enumerate()
+    {
+        let a = &store.alerts[ia.idx()];
+        let b = &store.alerts[ib.idx()];
+        let c = &store.alerts[ic.idx()];
 
         let (ta, tb, tc) = (a.mjd_tt, b.mjd_tt, c.mjd_tt);
         let tm = (ta + tb + tc) / 3.0;
@@ -1067,7 +1106,7 @@ fn spherical_midpoint(ra1: f64, dec1: f64, ra2: f64, dec2: f64) -> (f64, f64) {
 /// let pb = radec_to_tangent(ra_b, dec_b, ra0, dec0);
 /// ```
 #[inline]
-fn radec_to_tangent(ra: f64, dec: f64, ra0: f64, dec0: f64) -> [f64; 2] {
+pub(crate) fn radec_to_tangent(ra: f64, dec: f64, ra0: f64, dec0: f64) -> [f64; 2] {
     // Precompute sin/cos with a single call per angle
     let (sdec, cdec) = dec.sin_cos();
     let (sdec0, cdec0) = dec0.sin_cos();
@@ -1379,7 +1418,7 @@ mod feature_extract_tests {
     ) -> Alert {
         Alert {
             id,
-            dia_source_id: id as u64,
+            dia_source_id: id.idx() as u64,
             ra,
             ra_err,
             dec,
@@ -1394,7 +1433,7 @@ mod feature_extract_tests {
     fn make_store(mut alerts: Vec<Alert>) -> AlertStore {
         // Ensure IDs are consistent with index.
         for (i, a) in alerts.iter_mut().enumerate() {
-            a.id = i as AlertId;
+            a.id = AlertId::from(i);
         }
         let start_mjd = alerts
             .iter()
@@ -1436,7 +1475,7 @@ mod feature_extract_tests {
         ra_err: f64,
         dec_err: f64,
         fluxes: (f32, f32),
-    ) -> (AlertStore, Vec<(AlertId, AlertId)>) {
+    ) -> (AlertStore, Pairs) {
         let t_a = tm - 0.5 * dt;
         let t_b = tm + 0.5 * dt;
 
@@ -1447,7 +1486,7 @@ mod feature_extract_tests {
         let (ra_b, dec_b) = tangent_to_radec(pb[0], pb[1], ra0, dec0);
 
         let a = make_alert(
-            0 as AlertId,
+            AlertId::from(0_u32),
             ra_a,
             dec_a,
             t_a,
@@ -1458,7 +1497,7 @@ mod feature_extract_tests {
             dec_err,
         );
         let b = make_alert(
-            1 as AlertId,
+            AlertId::from(1_u32),
             ra_b,
             dec_b,
             t_b,
@@ -1470,7 +1509,7 @@ mod feature_extract_tests {
         );
 
         let store = make_store(vec![a, b]);
-        let pairs = vec![(0 as AlertId, 1 as AlertId)];
+        let pairs = vec![Pair::from((AlertId::from(0_u32), AlertId::from(1_u32)))];
         (store, pairs)
     }
 
@@ -1489,7 +1528,7 @@ mod feature_extract_tests {
         ra_err: f64,
         dec_err: f64,
         fluxes: (f32, f32, f32),
-    ) -> (AlertStore, Vec<(AlertId, AlertId, AlertId)>) {
+    ) -> (AlertStore, Triplets) {
         let t_a = tm - dt_char;
         let t_b = tm;
         let t_c = tm + dt_char;
@@ -1516,7 +1555,7 @@ mod feature_extract_tests {
         let (ra_c, dec_c) = tangent_to_radec(pc[0], pc[1], ra0, dec0);
 
         let a = make_alert(
-            0 as AlertId,
+            AlertId::from(0_u32),
             ra_a,
             dec_a,
             t_a,
@@ -1527,7 +1566,7 @@ mod feature_extract_tests {
             dec_err,
         );
         let b = make_alert(
-            1 as AlertId,
+            AlertId::from(1_u32),
             ra_b,
             dec_b,
             t_b,
@@ -1538,7 +1577,7 @@ mod feature_extract_tests {
             dec_err,
         );
         let c = make_alert(
-            2 as AlertId,
+            AlertId::from(2_u32),
             ra_c,
             dec_c,
             t_c,
@@ -1550,7 +1589,11 @@ mod feature_extract_tests {
         );
 
         let store = make_store(vec![a, b, c]);
-        let trips = vec![(0 as AlertId, 1 as AlertId, 2 as AlertId)];
+        let trips = vec![Triplet::from((
+            AlertId::from(0_u32),
+            AlertId::from(1_u32),
+            AlertId::from(2_u32),
+        ))];
         (store, trips)
     }
 
@@ -1586,7 +1629,7 @@ mod feature_extract_tests {
         let feats = extract_pair_features(
             &store,
             &pairs,
-            FeatureExtractParams {
+            &FeatureExtractParams {
                 max_speed_rad_per_day: Some(0.01), // keep it
             },
             3156,
@@ -1632,10 +1675,10 @@ mod feature_extract_tests {
         let feats = extract_pair_features(
             &store,
             &pairs,
-            FeatureExtractParams {
+            &FeatureExtractParams {
                 max_speed_rad_per_day: Some(0.05),
             },
-            -1,
+            1,
         );
         assert_eq!(feats.len(), 0, "Fast pair should have been filtered out");
     }
@@ -1710,7 +1753,7 @@ mod feature_extract_tests {
             let feats = extract_pair_features(
                 &store,
                 &pairs,
-                FeatureExtractParams { max_speed_rad_per_day: Some(0.05) },
+                &FeatureExtractParams { max_speed_rad_per_day: Some(0.05) },
                 42,
             );
 
@@ -1810,7 +1853,7 @@ mod feature_extract_tests {
         #[allow(clippy::too_many_arguments)]
         fn make_seed(
             seed_id: u64,
-            night_id: i32,
+            night_id: NightId,
             center_ra: f64,
             center_dec: f64,
             epoch_mid: f64,

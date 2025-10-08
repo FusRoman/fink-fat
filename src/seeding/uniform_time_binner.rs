@@ -30,7 +30,8 @@
 //! ## Example
 //!
 //! ```rust
-//! use fink_fat::seeding::time_binner::{UniformTimeBinner, TimeBinner};
+//! use fink_fat::seeding::uniform_time_binner::UniformTimeBinner;
+//! use fink_fat::seeding::space_time_bucket::TimeBinner;
 //!
 //! let binner = UniformTimeBinner::new(59000.0, 1.0); // 1-day bins
 //! let bin = binner.bin_for(59000.3); // should fall into bin index 0
