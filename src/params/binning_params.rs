@@ -148,6 +148,7 @@ impl BinningParams {
     /// Example
     /// -------
     /// ```rust
+    /// use fink_fat::params::binning_params::{BinningParams, BinningParamsBuilder};
     /// let params = BinningParams::builder()
     ///     .healpix_depth(12)
     ///     .time_bin_width_days(0.01)
@@ -167,6 +168,7 @@ impl BinningParams {
 /// Example
 /// -------
 /// ```rust
+/// use fink_fat::params::binning_params::BinningParamsBuilder;
 /// let params = BinningParamsBuilder::default()
 ///     .healpix_depth(8)
 ///     .time_bin_width_days(0.05)

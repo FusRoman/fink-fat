@@ -58,7 +58,7 @@
 //!
 //! After construction, always validate in contexts where parameters may come
 //! from user input or external files:
-//! ```rust
+//! ```rust, ignore
 //! params.validate().unwrap();
 //! ```
 //!
@@ -170,6 +170,7 @@ impl FinkFatParams {
     /// Example
     /// -------
     /// ```rust
+    /// use fink_fat::params::FinkFatParams;
     /// let cfg = FinkFatParams::builder()
     ///     .healpix_depth(11)
     ///     .time_bin_width_days(0.02)
