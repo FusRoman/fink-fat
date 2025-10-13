@@ -1,5 +1,6 @@
 use pyo3::prelude::*;
 
+#[cfg(feature = "python-extension")]
 use crate::propagation::linking::RollingLinkState;
 
 pub mod alerts;
@@ -61,7 +62,7 @@ impl From<AlertId> for usize {
 }
 
 /// A Python module implemented in Rust.
-//#[cfg(feature = "python-extension")]
+#[cfg(feature = "python-extension")]
 #[pymodule]
 fn fink_fat(m: &Bound<'_, PyModule>) -> PyResult<()> {
     use crate::{
