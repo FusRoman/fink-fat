@@ -19,7 +19,7 @@ tests = [
 ]
 [tool.maturin]
 python-source = "python"
-features = ["pyo3/extension-module"]
+features = ["python-extension"]
 
 [dependency-groups]
 dev = [
@@ -27,4 +27,5 @@ dev = [
     "pip>=25.2",
     "pytest>=8.4.2",
     "black>=25.9.0",
+    "ipython>=9.6.0",
 ]
