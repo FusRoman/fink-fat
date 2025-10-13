@@ -52,113 +52,16 @@
 //! - [`crate::seeding::space_time_bucket`] — binner traits (HEALPix-backed).
 
 use ahash::AHashMap;
-use pyo3::{pyclass, pymethods};
 
 use crate::{
+    params::engine_params::InterNightLinkConfig,
     propagation::{
-        features::{ModelNoise, PredictorParams, SeedId, SeedNode, SeedSpatialIndex},
-        scoring::{ScoreConfig, ScoredEdge},
+        features::{SeedId, SeedNode, SeedSpatialIndex},
+        scoring::ScoredEdge,
         solver::{Assignment, AssignmentSolver, BipartiteProblem, Edge},
     },
     NightId,
 };
-
-/* ----------------------- Graph & candidate controls ----------------------- */
-
-/// Limits controlling candidate generation and graph size.
-///
-/// Apply these to keep the bipartite problem **sparse** and the solver fast.
-/// These limits are enforced **after** scoring/gating, **per left seed** (Top-K),
-/// and optionally on the **global** edge list (max_total_edges).
-#[derive(Clone, Copy, Debug)]
-pub struct CandidateLimits {
-    /// Keep at most this many **lowest-cost** edges per **left** seed after scoring.
-    ///
-    /// Tip: 4–16 is often a good range when gating is effective.
-    pub top_k_per_left: usize,
-    /// Optional cap on the **total** number of edges (after concatenating all Top-K).
-    /// Use `None` to disable.
-    ///
-    /// If exceeded, the global edge list is sorted by cost and truncated.
-    pub max_total_edges: Option<usize>,
-    /// Optional **hard cost cutoff**: discard edges with `cost > max_cost`.
-    ///
-    /// Use this to reject outliers even before Top-K selection.
-    pub max_cost: Option<f64>,
-}
-
-impl Default for CandidateLimits {
-    fn default() -> Self {
-        Self {
-            top_k_per_left: 8,
-            max_total_edges: None,
-            max_cost: None,
-        }
-    }
-}
-
-/* --------------------------------- Config -------------------------------- */
-
-/// End-to-end config for linking **one pair of nights**.
-///
-/// This aggregates **prediction**, **scoring**, and **graph-size** controls for
-/// the `N_left → N_right` pairwise problem.
-#[pyclass]
-#[derive(Clone, Debug)]
-pub struct PairLinkConfig {
-    /// Predictor parameters (cone inflation, model noise, and cell-padding).
-    ///
-    /// See [`PredictorParams`] for details. The `k_sigma` inflation and `pad_cell_radius`
-    /// control the **cone robustness** against propagation error and pixelization.
-    pub predict: PredictorParams,
-    /// Scoring configuration (gates + weights + scales).
-    ///
-    /// See [`ScoreConfig`] and the `scoring` module for detailed semantics.
-    pub scoring: ScoreConfig,
-    /// Limits to keep the graph sparse and the solver fast.
-    ///
-    /// See [`CandidateLimits`].
-    pub limits: CandidateLimits,
-}
-
-impl Default for PairLinkConfig {
-    fn default() -> Self {
-        Self {
-            predict: PredictorParams {
-                k_sigma: 3.0,
-                noise: ModelNoise {
-                    q0: 1e-12,
-                    q1: 0.0,
-                    q2: 5e-14,
-                },
-                pad_cell_radius: true,
-            },
-            scoring: ScoreConfig {
-                noise: ModelNoise {
-                    q0: 1e-12,
-                    q1: 0.0,
-                    q2: 5e-14,
-                },
-                weights: Default::default(),
-                gates: Default::default(),
-                scales: Default::default(),
-            },
-            limits: Default::default(),
-        }
-    }
-}
-
-#[pymethods]
-impl PairLinkConfig {
-    /// Python constructor: `PairLinkConfig()`.
-    ///
-    /// Returns a configuration with **project defaults**. Adjust
-    /// `predict/scoring/limits` as needed for your dataset.
-    #[new]
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
 
 /* ------------------------------- Results --------------------------------- */
 
@@ -212,7 +115,7 @@ pub struct LinkResult {
 pub fn link_pair_with_binner<S, B>(
     left: &[SeedNode],
     right: &[SeedNode],
-    cfg: &PairLinkConfig,
+    cfg: &InterNightLinkConfig,
     solver: &S,
     binner: &B,
     right_id_to_index: &AHashMap<SeedId, usize>,
@@ -247,7 +150,7 @@ where
 
     for i in left {
         // (a) coarse coverage at median epoch to fetch candidate ids
-        let (ra_c, dec_c, r_c) = i.predict_cone(t_right_med, binner, cfg.predict);
+        let (ra_c, dec_c, r_c) = i.predict_cone(t_right_med, binner, &cfg.predict);
         let cand_iter = SeedSpatialIndex::cone_query(&index_right, binner, ra_c, dec_c, r_c);
 
         // Collect and **score** each candidate at its own epoch t_j
@@ -255,7 +158,7 @@ where
         for j_id in cand_iter {
             if let Some(&j_idx) = right_id_to_index.get(&j_id) {
                 let j = &right[j_idx];
-                if let Some(se) = ScoredEdge::score(i, j, cfg.scoring, delta_revisit) {
+                if let Some(se) = ScoredEdge::score(i, j, cfg, delta_revisit) {
                     // Optional cost cutoff
                     if let Some(cmax) = cfg.limits.max_cost {
                         if se.cost > cmax {

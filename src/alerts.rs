@@ -45,9 +45,7 @@ use crate::{
     params::params_binding::PyFinkFatParams,
     progress::{make_bar, make_multi_progress},
     propagation::{
-        features::{
-            extract_pair_features, extract_triplet_features, FeatureExtractParams, SeedNode,
-        },
+        features::{extract_pair_features, extract_triplet_features, SeedNode},
         linking::NightSnapshot,
     },
     seeding::{
@@ -188,30 +186,23 @@ impl AlertStore {
     pub fn build_snapshot_from_store(
         &self,
         night_id: NightId,
-        seeding_params: &PyFinkFatParams,
-        extract_params: &FeatureExtractParams,
+        params: &PyFinkFatParams,
     ) -> NightSnapshot {
         // 1) Seeding (no progress UI)
-        let sb = HealpixBinner::new(seeding_params.healpix_depth());
-        let tb = UniformTimeBinner::new(self.start_mjd, seeding_params.time_bin_width_days());
+        let sb = HealpixBinner::new(params.healpix_depth());
+        let tb = UniformTimeBinner::new(self.start_mjd, params.time_bin_width_days());
         let index = build_index_from_alerts_precise(&self.alerts, &sb, &tb);
-        let pairs = generate_pairs(&index, &self.alerts, &sb, &tb, &seeding_params.inner);
-        let triplets = generate_triplets_from_pairs(
-            &index,
-            &self.alerts,
-            &sb,
-            &tb,
-            &seeding_params.inner,
-            &pairs,
-        );
+        let pairs = generate_pairs(&index, &self.alerts, &sb, &tb, &params.inner);
+        let triplets =
+            generate_triplets_from_pairs(&index, &self.alerts, &sb, &tb, &params.inner, &pairs);
 
         // 2) Feature extraction
         let mut seeds = Vec::with_capacity(pairs.len() + triplets.len());
         seeds.extend(extract_pair_features(
             self,
             &pairs,
-            extract_params,
             night_id,
+            params.inner.link.max_speed_rad_per_day,
         ));
         seeds.extend(extract_triplet_features(self, &triplets, night_id));
         renumber_seed_ids(&mut seeds);

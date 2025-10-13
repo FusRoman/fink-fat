@@ -89,14 +89,21 @@
 //! * [`triplet_params::TripletParams`]
 
 pub mod binning_params;
+pub mod engine_params;
 pub mod pair_params;
 pub mod params_binding;
+pub mod propagator_params;
+pub mod scoring_params;
 pub mod triplet_params;
+
+use camino::Utf8Path;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     errors::ParamError,
     params::{
         binning_params::{BinningParams, BinningParamsBuilder},
+        engine_params::{InterNightLinkConfig, InterNightLinkConfigBuilder},
         pair_params::{PairParams, PairParamsBuilder},
         triplet_params::{TripletParams, TripletParamsBuilder},
     },
@@ -104,6 +111,23 @@ use crate::{
 };
 
 /* --------------------------- FinkFatParams --------------------------- */
+
+fn default_schema_version() -> String {
+    "1".to_string()
+}
+
+/// On-disk representation of Fink-FAT config files.
+///
+/// Keeps a `schema_version` to allow future migrations.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FinkFatConfigFile {
+    /// Schema version (string to allow semver if needed later).
+    #[serde(default = "default_schema_version")]
+    pub schema_version: String,
+    /// Actual parameters.
+    #[serde(flatten)]
+    pub params: FinkFatParams,
+}
 
 /// Top-level parameter bag for the **entire Fink-FAT project**.
 ///
@@ -133,15 +157,24 @@ use crate::{
 /// * [`PairParams`] – controls pair generation.
 /// * [`TripletParams`] – controls triplet generation.
 /// * [`BinningParams`] – controls HEALPix depth & time bin width.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FinkFatParams {
     /// Global spatial/temporal bucketing parameters.
+    #[serde(default)]
     pub binning: BinningParams,
     /// Pair-generation parameters.
+    #[serde(default)]
     pub pairs: PairParams,
     /// Triplet-generation parameters.
+    #[serde(default)]
     pub triplets: TripletParams,
+    /// Inter-night linking configuration (prediction, scoring, graph limits).
+    ///
+    /// See [`engine_params::InterNightLinkConfig`].
+    #[serde(default)]
+    pub link: InterNightLinkConfig,
     /// Whether to show progress bars during seeding/linking.
+    #[serde(default)]
     pub show_progress: bool,
 }
 
@@ -159,12 +192,40 @@ impl Default for FinkFatParams {
             binning: BinningParams::default(),
             pairs: PairParams::default(),
             triplets: TripletParams::default(),
+            link: InterNightLinkConfig::default(),
             show_progress: false,
         }
     }
 }
 
 impl FinkFatParams {
+    pub fn from_toml_str(s: &str) -> Result<Self, ParamError> {
+        let file: FinkFatConfigFile = toml::from_str(s)?;
+        let params = file.params;
+        params.validate()?;
+        Ok(params)
+    }
+
+    pub fn to_toml_string_pretty(&self) -> Result<String, ParamError> {
+        let file = FinkFatConfigFile {
+            schema_version: default_schema_version(),
+            params: self.clone(),
+        };
+        let s = toml::to_string_pretty(&file)?;
+        Ok(s)
+    }
+
+    pub fn load_toml_file(path: &Utf8Path) -> Result<Self, ParamError> {
+        let txt = std::fs::read_to_string(path)?;
+        Self::from_toml_str(&txt)
+    }
+
+    pub fn save_toml_file(&self, path: &Utf8Path) -> Result<(), ParamError> {
+        let s = self.to_toml_string_pretty()?;
+        std::fs::write(path, s)?;
+        Ok(())
+    }
+
     /// Create a builder for [`FinkFatParams`].
     ///
     /// Example
@@ -227,6 +288,16 @@ impl FinkFatParams {
         self.triplets = triplets;
         self
     }
+
+    /// Replace the inter-night linking configuration.
+    ///
+    /// Notes
+    /// -----
+    /// This method does **not** call `validate()`. Call it explicitly if needed.
+    pub fn with_link(mut self, link: InterNightLinkConfig) -> Self {
+        self.link = link;
+        self
+    }
 }
 
 /// Builder for [`FinkFatParams`].
@@ -256,6 +327,7 @@ pub struct FinkFatParamsBuilder {
     binning: BinningParamsBuilder,
     pairs: PairParamsBuilder,
     triplets: TripletParamsBuilder,
+    link: InterNightLinkConfigBuilder,
     show_progress: bool,
 }
 
@@ -266,6 +338,7 @@ impl Default for FinkFatParamsBuilder {
             binning: BinningParamsBuilder::default(),
             pairs: PairParamsBuilder::default(),
             triplets: TripletParamsBuilder::default(),
+            link: InterNightLinkConfigBuilder::new(),
             show_progress: false,
         }
     }
@@ -350,6 +423,116 @@ impl FinkFatParamsBuilder {
         self
     }
 
+    /* ---------------------- Flat setters (linking) ---------------------- */
+    // Predictor passthrough
+    pub fn link_k_sigma(mut self, v: f64) -> Self {
+        self.link = self.link.set_k_sigma(v);
+        self
+    }
+    pub fn link_noise_q0(mut self, v: f64) -> Self {
+        self.link = self.link.set_noise_q0(v);
+        self
+    }
+    pub fn link_noise_q1(mut self, v: f64) -> Self {
+        self.link = self.link.set_noise_q1(v);
+        self
+    }
+    pub fn link_noise_q2(mut self, v: f64) -> Self {
+        self.link = self.link.set_noise_q2(v);
+        self
+    }
+    pub fn link_pad_cell_radius(mut self, yes: bool) -> Self {
+        self.link = self.link.set_pad_cell_radius(yes);
+        self
+    }
+
+    // Scoring (common knobs)
+    pub fn link_w_pos(mut self, v: f64) -> Self {
+        self.link = self.link.set_w_pos(v);
+        self
+    }
+    pub fn link_w_vel_dir(mut self, v: f64) -> Self {
+        self.link = self.link.set_w_vel_dir(v);
+        self
+    }
+    pub fn link_w_vel_norm(mut self, v: f64) -> Self {
+        self.link = self.link.set_w_vel_norm(v);
+        self
+    }
+    pub fn link_w_flux(mut self, v: f64) -> Self {
+        self.link = self.link.set_w_flux(v);
+        self
+    }
+    pub fn link_w_gap(mut self, v: f64) -> Self {
+        self.link = self.link.set_w_gap(v);
+        self
+    }
+    pub fn link_w_band_mismatch(mut self, v: f64) -> Self {
+        self.link = self.link.set_w_band_mismatch(v);
+        self
+    }
+
+    pub fn link_max_d2_pos(mut self, v: f64) -> Self {
+        self.link = self.link.set_max_d2_pos(v);
+        self
+    }
+    pub fn link_max_theta_vel(mut self, v: f64) -> Self {
+        self.link = self.link.set_max_theta_vel(v);
+        self
+    }
+    pub fn link_max_speed_diff(mut self, v: f64) -> Self {
+        self.link = self.link.set_max_speed_diff(v);
+        self
+    }
+
+    pub fn link_theta0(mut self, v: f64) -> Self {
+        self.link = self.link.set_theta0(v);
+        self
+    }
+    pub fn link_v0(mut self, v: f64) -> Self {
+        self.link = self.link.set_v0(v);
+        self
+    }
+    pub fn link_flux_sigma_floor(mut self, v: f64) -> Self {
+        self.link = self.link.set_flux_sigma_floor(v);
+        self
+    }
+    pub fn link_gap_rho(mut self, v: f64) -> Self {
+        self.link = self.link.set_gap_rho(v);
+        self
+    }
+    pub fn link_vel_eps_days(mut self, v: f64) -> Self {
+        self.link = self.link.set_vel_eps_days(v);
+        self
+    }
+
+    // Limits
+    pub fn link_top_k_per_left(mut self, v: usize) -> Self {
+        self.link = self.link.set_top_k_per_left(v);
+        self
+    }
+    pub fn link_max_total_edges(mut self, v: Option<usize>) -> Self {
+        self.link = self.link.set_max_total_edges(v);
+        self
+    }
+    pub fn link_clear_max_total_edges(mut self) -> Self {
+        self.link = self.link.clear_max_total_edges();
+        self
+    }
+    pub fn link_max_cost(mut self, v: Option<f64>) -> Self {
+        self.link = self.link.set_max_cost(v);
+        self
+    }
+    pub fn link_clear_max_cost(mut self) -> Self {
+        self.link = self.link.clear_max_cost();
+        self
+    }
+
+    pub fn link_max_speed_rad_per_day(mut self, v: Option<f64>) -> Self {
+        self.link = self.link.set_max_speed_rad_per_day(v);
+        self
+    }
+
     /* -------------------- Nested setters via closure ------------------- */
 
     /// Configure `binning` via its builder.
@@ -391,6 +574,19 @@ impl FinkFatParamsBuilder {
         self
     }
 
+    /// Configure inter-night linking via its builder.
+    ///
+    /// Notes
+    /// -----
+    /// This closure-based API is **not** exposed in Python bindings.
+    pub fn linking<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(InterNightLinkConfigBuilder) -> InterNightLinkConfigBuilder,
+    {
+        self.link = f(self.link);
+        self
+    }
+
     /// Build the full [`FinkFatParams`] (apply defaults for unspecified fields) and validate.
     ///
     /// Return
@@ -401,10 +597,13 @@ impl FinkFatParamsBuilder {
         let binning = self.binning.build()?;
         let pairs = self.pairs.build()?;
         let triplets = self.triplets.build()?;
+        let link = self.link.build()?;
+
         let cfg = FinkFatParams {
             binning,
             pairs,
             triplets,
+            link,
             show_progress: self.show_progress,
         };
         cfg.validate()?;
@@ -441,12 +640,17 @@ mod params_tests {
             .time_bin_width_days(0.03)
             .pair_max_dt(0.02)
             .triplet_max_pair_sep(1.2e-3)
+            .link_k_sigma(3.7)
+            .link_top_k_per_left(12)
             .build()
             .unwrap();
+
         assert_eq!(p.binning.healpix_depth, 12);
         assert_eq!(p.binning.time_bin_width_days, 0.03);
         assert_eq!(p.pairs.max_dt, 0.02);
         assert_eq!(p.triplets.max_pair_sep, 1.2e-3);
+        assert!((p.link.predict.k_sigma - 3.7).abs() < 1e-12);
+        assert_eq!(p.link.limits.top_k_per_left, 12);
     }
 
     #[test]
@@ -455,13 +659,22 @@ mod params_tests {
             .binning(|b| b.healpix_depth(11).time_bin_width_days(0.015))
             .pairs(|b| b.max_sep(2.1e-3).allow_same_timebin(false))
             .triplets(|b| b.max_predicted_residual(5.0e-4))
+            .linking(|l| {
+                l.set_k_sigma(3.5)
+                    .set_max_d2_pos(12.0)
+                    .set_top_k_per_left(10)
+            })
             .build()
             .unwrap();
+
         assert_eq!(p.binning.healpix_depth, 11);
         assert_eq!(p.binning.time_bin_width_days, 0.015);
         assert_eq!(p.pairs.max_sep, 2.1e-3);
         assert!(!p.pairs.allow_same_timebin);
         assert_eq!(p.triplets.max_predicted_residual, 5.0e-4);
+        assert!((p.link.predict.k_sigma - 3.5).abs() < 1e-12);
+        assert!((p.link.scoring.gates.max_d2_pos - 12.0).abs() < 1e-12);
+        assert_eq!(p.link.limits.top_k_per_left, 10);
     }
 
     #[test]
@@ -480,5 +693,16 @@ mod params_tests {
             .build()
             .unwrap_err();
         assert!(matches!(err, ParamError::Inconsistent(_)));
+    }
+
+    #[test]
+    fn catches_invalid_linking_limits() {
+        // top_k_per_left = 0 must fail via EngineParamError mapped to ParamError.
+        let err = FinkFatParams::builder()
+            .link_top_k_per_left(0)
+            .build()
+            .unwrap_err();
+
+        assert!(matches!(err, ParamError::Engine(_)));
     }
 }
