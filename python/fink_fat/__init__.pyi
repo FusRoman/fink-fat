@@ -17,6 +17,16 @@ from .alerts import (
     LinkUIDs,
 )
 
+from .rolling_link_state import (
+    RollingLinkState,
+    DetectConflictPolicy,
+    PairCostSummary,
+    PairStats,
+    LinkedDetectionsCols,
+    EdgesKeptSummary,
+    RollingStats,
+)
+
 __all__ = [
     "Alert",
     "AlertStore",
@@ -31,4 +41,11 @@ __all__ = [
     "FinkFatParams",
     "FinkFatParamsBuilder",
     "FinkFatParamsDict",
+    "RollingLinkState",
+    "DetectConflictPolicy",
+    "PairCostSummary",
+    "PairStats",
+    "LinkedDetectionsCols",
+    "EdgesKeptSummary",
+    "RollingStats",
 ]
