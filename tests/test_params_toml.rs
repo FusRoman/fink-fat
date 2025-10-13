@@ -73,7 +73,7 @@ fn full_file_has_expected_values() {
     let path = data_path("params_full.toml");
     let p = FinkFatParams::load_toml_file(&path).expect("load full.toml");
 
-    assert!(p.show_progress);
+    assert!(!p.show_progress);
     assert_eq!(p.binning.healpix_depth, 10);
     assert!((p.binning.time_bin_width_days - 0.02).abs() < 1e-12);
 

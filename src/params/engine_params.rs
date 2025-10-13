@@ -21,7 +21,7 @@ use std::fmt;
 /// Apply these to keep the bipartite problem **sparse** and the solver fast.
 /// These limits are enforced **after** scoring/gating, **per left seed** (Top-K),
 /// and optionally on the **global** edge list (max_total_edges).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CandidateLimits {
     /// Keep at most this many **lowest-cost** edges per **left** seed after scoring.
     ///
@@ -36,6 +36,16 @@ pub struct CandidateLimits {
     ///
     /// Use this to reject outliers even before Top-K selection.
     pub max_cost: Option<f64>,
+}
+
+impl Default for CandidateLimits {
+    fn default() -> Self {
+        Self {
+            top_k_per_left: 8,
+            max_total_edges: None,
+            max_cost: None,
+        }
+    }
 }
 
 /* -------------------------------------------------------------------------- */
