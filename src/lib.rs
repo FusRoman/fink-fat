@@ -69,6 +69,8 @@ fn fink_fat(m: &Bound<'_, PyModule>) -> PyResult<()> {
         params::params_binding::register_params_module, track_registry::DetectConflictPolicy,
     };
 
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+
     m.add_class::<alerts::Alert>()?;
     m.add_class::<alerts::AlertStore>()?;
     m.add_class::<RollingLinkState>()?;
