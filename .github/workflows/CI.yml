@@ -66,7 +66,7 @@ jobs:
 
       - name: Build and develop-install the extension (maturin)
         run: |
-          ./.venv/bin/maturin develop --release
+          ./.venv/bin/maturin develop --release --features python-extension
 
       - name: Show installed package info
         run: |
