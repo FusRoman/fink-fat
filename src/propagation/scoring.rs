@@ -62,126 +62,10 @@
 //! - `crate::propagation::features` — seed representation and propagation,
 //! - Future work: trajectory-level smoothing / flow constraints.
 
-use crate::propagation::features::{radec_to_tangent, ModelNoise, SeedId, SeedNode};
-
-/* ------------------------------ Weights ------------------------------ */
-
-/// Additive weights for the edge **cost**.
-///
-/// The final cost (schematic) is:
-///
-/// `cost = w_pos * d2_pos
-///       + w_vel_dir  * (theta / theta0)
-///       + w_vel_norm * (| |v_i| - |v_j| | / v0)
-///       + w_flux     * z_flux
-///       + w_gap      * gap(Δ)
-///       + band_mismatch * w_band_mismatch`
-///
-/// where missing (uninformative) components contribute `0`.
-#[derive(Clone, Copy, Debug)]
-pub struct ScoreWeights {
-    /// Position term (Mahalanobis d² on the plane). Strongly discriminative.
-    pub w_pos: f64,
-    /// Direction consistency (angle between `v_i` and `v_j`, normalized by `theta0`).
-    pub w_vel_dir: f64,
-    /// Speed consistency (absolute speed difference, normalized by `v0`).
-    pub w_vel_norm: f64,
-    /// Photometry penalty (flux z-score).
-    pub w_flux: f64,
-    /// Gap penalty weight for Δ>1 revisits.
-    pub w_gap: f64,
-    /// Small additive penalty when `band(i) != band(j)`. Set to `0.0` to disable.
-    pub w_band_mismatch: f64,
-}
-
-impl Default for ScoreWeights {
-    fn default() -> Self {
-        Self {
-            w_pos: 0.5,           // strong — geometry dominates
-            w_vel_dir: 0.3,       // moderate — useful when geometry is ambiguous
-            w_vel_norm: 0.3,      // moderate — speed mismatch as consistency check
-            w_flux: 0.5,          // moderate — helps against confusions
-            w_gap: 0.3,           // mild to moderate — encourages short gaps
-            w_band_mismatch: 0.2, // small — cross-band matches are possible but less likely
-        }
-    }
-}
-
-/* ------------------------------- Gates ------------------------------- */
-
-/// **Hard** gates: if any is violated, the edge is rejected (`None`).
-#[derive(Clone, Copy, Debug)]
-pub struct ScoreGates {
-    /// Max Mahalanobis `d²_pos` (e.g., `~9.0` ≈ 3σ in 2D).
-    pub max_d2_pos: f64,
-    /// Max angle between velocity directions (**radians**).
-    pub max_theta_vel: f64,
-    /// Max **absolute** speed difference (**radians/day**).
-    pub max_speed_diff: f64,
-}
-
-impl Default for ScoreGates {
-    fn default() -> Self {
-        Self {
-            max_d2_pos: 9.0,                      // ≈ 3σ in 2D
-            max_theta_vel: 10.0_f64.to_radians(), // ~10°
-            max_speed_diff: f64::INFINITY,        // disabled by default
-        }
-    }
-}
-
-/* ------------------------------- Scales ------------------------------ */
-
-/// Scaling constants and numerical knobs for the score components.
-///
-/// These parameters set the **natural scales** for the normalized penalties and
-/// control the finite-difference step for kinematics.
-#[derive(Clone, Copy, Debug)]
-pub struct ScoreScales {
-    /// Direction reference angle (**radians**) used to scale `theta`.
-    pub theta0: f64,
-    /// Speed reference (**radians/day**) used to scale `| |v_i| - |v_j| |`.
-    pub v0: f64,
-    /// Photometry σ floor (**nJy**) for robust pooling:
-    /// `σ_pool = sqrt(σ_i² + σ_j² + σ_floor²)`.
-    pub flux_sigma_floor: f64,
-    /// Gap exponent: `gap(Δ) = (Δ - 1)^rho` if `Δ > 1`, else `0`.
-    pub gap_rho: f64,
-    /// Symmetric finite-difference step (**days**) for `j`’s plane velocity.
-    pub vel_eps_days: f64,
-}
-
-impl Default for ScoreScales {
-    fn default() -> Self {
-        Self {
-            theta0: 5.0_f64.to_radians(), // a few degrees
-            v0: 0.005,                    // ~0.29 deg/day in rad/day
-            flux_sigma_floor: 50.0,       // tune to the survey noise model
-            gap_rho: 1.0,                 // linear penalty in (Δ - 1)
-            vel_eps_days: 1e-3,           // ~86.4 s; small but safely > integration jitter
-        }
-    }
-}
-
-/* ------------------------------- Config ------------------------------ */
-
-/// Complete configuration to score edges.
-///
-/// - `noise` feeds the prediction covariance for `i` at `t_j`,
-/// - `weights` shape the additive objective,
-/// - `gates` prune implausible candidates early,
-/// - `scales` normalize penalties and set numerical steps.
-#[derive(Clone, Copy, Debug)]
-pub struct ScoreConfig {
-    /// Model noise for `i`’s prediction covariance at `t_j`.
-    pub noise: ModelNoise,
-    /// Additive weights for the cost.
-    pub weights: ScoreWeights,
-    /// Hard gates for pruning.
-    pub gates: ScoreGates,
-    /// Scaling constants and numerical knobs.
-    pub scales: ScoreScales,
-}
+use crate::{
+    params::engine_params::InterNightLinkConfig,
+    propagation::features::{radec_to_tangent, SeedId, SeedNode},
+};
 
 /* ---------------------------- Score outputs --------------------------- */
 
@@ -248,10 +132,15 @@ impl ScoredEdge {
     /// - Speeds in **radians/day**,
     /// - Fluxes in **nJy**,
     /// - Time in **days** (MJD TT).
-    pub fn score(i: &SeedNode, j: &SeedNode, cfg: ScoreConfig, delta_revisit: u32) -> Option<Self> {
+    pub fn score(
+        i: &SeedNode,
+        j: &SeedNode,
+        cfg: &InterNightLinkConfig,
+        delta_revisit: u32,
+    ) -> Option<Self> {
         // --- 1) Predict i at t_j (mean & plane covariance) --------------------
         let t_j = j.epoch_mid;
-        let (p_hat, s_i) = i.predict_on_plane(t_j, cfg.noise);
+        let (p_hat, s_i) = i.predict_on_plane(t_j, &cfg.predict.noise);
         let (px, py) = (p_hat[0], p_hat[1]);
 
         // --- 2) Project j to i's plane ---------------------------------------
@@ -270,7 +159,7 @@ impl ScoredEdge {
         let d2_pos = dp[0] * dp[0] * inv_sxx + dp[1] * dp[1] * inv_syy;
 
         // Hard gate #1: position
-        if !(d2_pos.is_finite()) || d2_pos > cfg.gates.max_d2_pos {
+        if !(d2_pos.is_finite()) || d2_pos > cfg.scoring.gates.max_d2_pos {
             return None;
         }
 
@@ -284,7 +173,7 @@ impl ScoredEdge {
         };
 
         // Estimate v_j in i's plane via symmetric finite difference of (RA,Dec)->plane.
-        let eps = cfg.scales.vel_eps_days;
+        let eps = cfg.scoring.scales.vel_eps_days;
         let (ra_p, dec_p) = j.predict_radec(t_j + eps);
         let (ra_m, dec_m) = j.predict_radec(t_j - eps);
         let p_plus = radec_to_tangent(ra_p, dec_p, i.center_ra, i.center_dec);
@@ -305,7 +194,7 @@ impl ScoredEdge {
             let dv = (norm_vi - norm_vj).abs();
 
             // Hard gates #2-3
-            if theta > cfg.gates.max_theta_vel || dv > cfg.gates.max_speed_diff {
+            if theta > cfg.scoring.gates.max_theta_vel || dv > cfg.scoring.gates.max_speed_diff {
                 return None;
             }
 
@@ -315,13 +204,14 @@ impl ScoredEdge {
 
         // --- 5) Photometry ----------------------------------------------------
         let mut z_flux = None;
-        if cfg.weights.w_flux > 0.0 {
+        if cfg.scoring.weights.w_flux > 0.0 {
             let df = (j.flux_mean as f64) - (i.flux_mean as f64);
             let s_i = i.flux_std as f64;
             let s_j = j.flux_std as f64;
-            let sigma =
-                (s_i * s_i + s_j * s_j + cfg.scales.flux_sigma_floor * cfg.scales.flux_sigma_floor)
-                    .sqrt();
+            let sigma = (s_i * s_i
+                + s_j * s_j
+                + cfg.scoring.scales.flux_sigma_floor * cfg.scoring.scales.flux_sigma_floor)
+                .sqrt();
             if sigma.is_finite() && sigma > 0.0 {
                 z_flux = Some(df.abs() / sigma);
             }
@@ -329,7 +219,7 @@ impl ScoredEdge {
 
         // --- 6) Gap penalty ---------------------------------------------------
         let gap_penalty = if delta_revisit > 1 {
-            ((delta_revisit as f64) - 1.0).powf(cfg.scales.gap_rho)
+            ((delta_revisit as f64) - 1.0).powf(cfg.scoring.scales.gap_rho)
         } else {
             0.0
         };
@@ -344,17 +234,17 @@ impl ScoredEdge {
             band_mismatch: i.band != j.band,
         };
 
-        let cost = cfg.weights.w_pos * comps.d2_pos
-            + comps
-                .vel_angle_rad
-                .map_or(0.0, |th| cfg.weights.w_vel_dir * (th / cfg.scales.theta0))
-            + comps
-                .vel_speed_diff
-                .map_or(0.0, |dv| cfg.weights.w_vel_norm * (dv / cfg.scales.v0))
-            + comps.z_flux.map_or(0.0, |z| cfg.weights.w_flux * z)
-            + cfg.weights.w_gap * comps.gap_penalty
+        let cost = cfg.scoring.weights.w_pos * comps.d2_pos
+            + comps.vel_angle_rad.map_or(0.0, |th| {
+                cfg.scoring.weights.w_vel_dir * (th / cfg.scoring.scales.theta0)
+            })
+            + comps.vel_speed_diff.map_or(0.0, |dv| {
+                cfg.scoring.weights.w_vel_norm * (dv / cfg.scoring.scales.v0)
+            })
+            + comps.z_flux.map_or(0.0, |z| cfg.scoring.weights.w_flux * z)
+            + cfg.scoring.weights.w_gap * comps.gap_penalty
             + if comps.band_mismatch {
-                cfg.weights.w_band_mismatch
+                cfg.scoring.weights.w_band_mismatch
             } else {
                 0.0
             };
@@ -384,6 +274,12 @@ fn l2_norm(x: f64, y: f64) -> f64 {
 #[cfg(test)]
 mod scoring_tests {
     use std::f64::consts::PI;
+
+    use crate::params::{
+        engine_params::CandidateLimits,
+        propagator_params::PredictorParams,
+        scoring_params::{ScoreConfig, ScoreGates, ScoreScales, ScoreWeights},
+    };
 
     use super::*;
     use proptest::prelude::*;
@@ -443,16 +339,18 @@ mod scoring_tests {
         }
     }
 
-    fn default_cfg() -> ScoreConfig {
-        ScoreConfig {
-            noise: ModelNoise {
-                q0: 1e-12,
-                q1: 0.0,
-                q2: 5e-14,
-            },
+    fn default_cfg() -> InterNightLinkConfig {
+        let score = ScoreConfig {
             weights: ScoreWeights::default(),
             gates: ScoreGates::default(),
             scales: ScoreScales::default(),
+        };
+
+        InterNightLinkConfig {
+            predict: PredictorParams::default(),
+            scoring: score,
+            limits: CandidateLimits::default(),
+            max_speed_rad_per_day: None,
         }
     }
 
@@ -464,7 +362,7 @@ mod scoring_tests {
         let j = mk_seed(2, ra0, dec0, [0.0, 0.0], [1e-3, 0.0], 1000.0, 1);
         let cfg = default_cfg();
 
-        let e = ScoredEdge::score(&i, &j, cfg, 1).expect("should pass gates");
+        let e = ScoredEdge::score(&i, &j, &cfg, 1).expect("should pass gates");
         assert!(
             e.components.d2_pos < 1e-6,
             "position residual should be tiny"
@@ -485,8 +383,8 @@ mod scoring_tests {
         let j = mk_seed(2, ra0, dec0, [0.0, 0.0], [0.0, 1e-3], 1000.0, 1);
 
         let mut cfg = default_cfg();
-        cfg.gates.max_theta_vel = 5.0_f64.to_radians(); // 5° tolerance
-        let e = ScoredEdge::score(&i, &j, cfg, 1);
+        cfg.scoring.gates.max_theta_vel = 5.0_f64.to_radians(); // 5° tolerance
+        let e = ScoredEdge::score(&i, &j, &cfg, 1);
         assert!(e.is_none(), "90° should be gated out");
     }
 
@@ -498,8 +396,8 @@ mod scoring_tests {
         let j = mk_seed(2, ra0, dec0, [0.0, 0.0], [5e-3, 0.0], 1000.0, 1);
 
         let mut cfg = default_cfg();
-        cfg.gates.max_speed_diff = 1e-3; // 0 tolerance beyond ~equal speed
-        let e = ScoredEdge::score(&i, &j, cfg, 1);
+        cfg.scoring.gates.max_speed_diff = 1e-3; // 0 tolerance beyond ~equal speed
+        let e = ScoredEdge::score(&i, &j, &cfg, 1);
         assert!(e.is_none(), "too different speeds should be gated out");
     }
 
@@ -512,11 +410,11 @@ mod scoring_tests {
         let j_diff = mk_seed(3, ra0, dec0, [0.0, 0.0], [1e-3, 0.0], 1500.0, 1);
 
         let mut cfg = default_cfg();
-        cfg.weights.w_flux = 1.0;
-        cfg.scales.flux_sigma_floor = 10.0;
+        cfg.scoring.weights.w_flux = 1.0;
+        cfg.scoring.scales.flux_sigma_floor = 10.0;
 
-        let e_same = ScoredEdge::score(&i, &j_same, cfg, 1).unwrap();
-        let e_diff = ScoredEdge::score(&i, &j_diff, cfg, 1).unwrap();
+        let e_same = ScoredEdge::score(&i, &j_same, &cfg, 1).unwrap();
+        let e_diff = ScoredEdge::score(&i, &j_diff, &cfg, 1).unwrap();
         assert!(
             e_diff.cost > e_same.cost,
             "flux mismatch should raise the cost"
@@ -531,8 +429,8 @@ mod scoring_tests {
         let j = mk_seed(2, ra0, dec0, [0.0, 0.0], [5e-4, 2e-4], 1000.0, 1);
 
         let cfg = default_cfg();
-        let e1 = ScoredEdge::score(&i, &j, cfg, 1).unwrap();
-        let e3 = ScoredEdge::score(&i, &j, cfg, 3).unwrap();
+        let e1 = ScoredEdge::score(&i, &j, &cfg, 1).unwrap();
+        let e3 = ScoredEdge::score(&i, &j, &cfg, 3).unwrap();
         assert!(e3.cost > e1.cost, "larger revisit gap should increase cost");
     }
 
@@ -556,11 +454,11 @@ mod scoring_tests {
             let i  = mk_seed(1, ra0, dec0, [0.0, 0.0], [1e-3, 0.0], 1000.0, 1);
             let j0 = mk_seed(2, ra0, dec0, [0.0, 0.0], [1e-3, 0.0], 1000.0, 1);
             let mut cfg = default_cfg();
-            cfg.gates.max_theta_vel = 20.0_f64.to_radians();
-            cfg.gates.max_speed_diff = 2e-3;
+            cfg.scoring.gates.max_theta_vel = 20.0_f64.to_radians();
+            cfg.scoring.gates.max_speed_diff = 2e-3;
 
             // Combined plane variance S at dt=0 (same recipe as scorer)
-            let (_p_hat, s_i) = i.predict_on_plane(j0.epoch_mid, cfg.noise);
+            let (_p_hat, s_i) = i.predict_on_plane(j0.epoch_mid, &cfg.predict.noise);
             let sxx = (s_i[0][0] + j0.cov_pos[0][0]).max(0.0);
             let syy = (s_i[1][1] + j0.cov_pos[1][1]).max(0.0);
 
@@ -575,7 +473,7 @@ mod scoring_tests {
 
             let j = mk_seed(2, ra0, dec0, [dx, dy], [1e-3 + dvx, dvy], 1000.0 + dflux, 1);
 
-            let e = ScoredEdge::score(&i, &j, cfg, 1);
+            let e = ScoredEdge::score(&i, &j, &cfg, 1);
             prop_assert!(e.is_some(), "inside the 3σ (slightly shrunk) circle should pass");
             let e = e.unwrap();
             prop_assert!(e.components.d2_pos <= 9.0 + 1e-6);
@@ -595,8 +493,8 @@ mod scoring_tests {
             let j = mk_seed(2, ra0, dec0, [0.0, 0.0], vj, 1000.0, 1);
 
             let mut cfg = default_cfg();
-            cfg.gates.max_theta_vel = 30.0_f64.to_radians();
-            let e = ScoredEdge::score(&i, &j, cfg, 1);
+            cfg.scoring.gates.max_theta_vel = 30.0_f64.to_radians();
+            let e = ScoredEdge::score(&i, &j, &cfg, 1);
             prop_assert!(e.is_none());
         }
     }

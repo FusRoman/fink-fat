@@ -42,6 +42,82 @@ use thiserror::Error;
 
 use crate::NightId;
 
+/* -------------------------------------------------------------------------- */
+/*  Score Errors                                                              */
+/* -------------------------------------------------------------------------- */
+
+/// Parameter validation errors for `ScoreConfigBuilder`.
+#[derive(Debug, Error, PartialEq)]
+pub enum ScoreParamError {
+    /// A weight must be finite and non-negative.
+    #[error("invalid weight `{name}` = {value:?} (expect finite and >= 0)")]
+    InvalidWeight { name: &'static str, value: f64 },
+
+    /// A gate must be finite and non-negative (except `max_speed_diff` can be +∞).
+    #[error("invalid gate `{name}` = {value:?} (expect finite and >= 0)")]
+    InvalidGate { name: &'static str, value: f64 },
+
+    /// A scale must be finite and strictly positive.
+    #[error("invalid scale `{name}` = {value:?} (expect finite and > 0)")]
+    InvalidScale { name: &'static str, value: f64 },
+
+    /// A general message when the external `ModelNoise` fails its own checks.
+    #[error("invalid model noise: {0}")]
+    InvalidNoise(String),
+}
+
+impl ScoreParamError {
+    pub fn invalid_weight(name: &'static str, value: f64) -> Self {
+        Self::InvalidWeight { name, value }
+    }
+    pub fn invalid_gate(name: &'static str, value: f64) -> Self {
+        Self::InvalidGate { name, value }
+    }
+    pub fn invalid_scale(name: &'static str, value: f64) -> Self {
+        Self::InvalidScale { name, value }
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Predictor Errors                                                          */
+/* -------------------------------------------------------------------------- */
+
+/// Parameter validation errors for the predictor builder.
+#[derive(Debug, Error, Clone, PartialEq)]
+pub enum PredictorParamError {
+    /// k_sigma must be finite and strictly positive.
+    #[error("invalid k_sigma = {0:?} (expect finite and > 0)")]
+    InvalidKSigma(f64),
+    /// Noise coefficients must be finite and non-negative.
+    #[error("invalid noise coefficient `{name}` = {value:?} (expect finite and >= 0)")]
+    InvalidNoiseCoeff { name: &'static str, value: f64 },
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Engine Errors                                                             */
+/* -------------------------------------------------------------------------- */
+
+/// Validation errors for engine/graph parameters.
+#[derive(Debug, Error, Clone, PartialEq)]
+pub enum EngineParamError {
+    /// `top_k_per_left` must be positive.
+    #[error("invalid top_k_per_left = {0} (expect >= 1)")]
+    InvalidTopK(usize),
+    /// `max_total_edges` must be positive if provided.
+    #[error("invalid max_total_edges = {0} (expect >= 1)")]
+    InvalidMaxTotal(usize),
+    /// `max_cost` must be finite and non-negative if provided.
+    #[error("invalid max_cost = {0:?} (expect finite and >= 0)")]
+    InvalidMaxCost(f64),
+
+    /// Bubbled-up predictor parameter error.
+    #[error("invalid predictor parameters: {0}")]
+    InvalidPredictor(String),
+    /// Bubbled-up scoring parameter error.
+    #[error("invalid scoring parameters: {0}")]
+    InvalidScoring(String),
+}
+
 /// Error type for invalid or inconsistent parameters in Fink-FAT.
 ///
 /// This enum captures validation failures when constructing or using
@@ -73,7 +149,7 @@ use crate::NightId;
 ///   name such as `"pair.max_dt"` or `"triplet.max_sep"`).
 /// - Errors are `Clone`, `PartialEq`, and `Eq` to simplify testing.
 /// - The [`thiserror::Error`] derive provides user-friendly display strings.
-#[derive(Debug, Error, Clone, PartialEq, Eq)]
+#[derive(Debug, Error)]
 pub enum ParamError {
     /// A time interval must be finite and non-negative.
     ///
@@ -111,6 +187,42 @@ pub enum ParamError {
     /// - conflicting filter rules.
     #[error("inconsistent parameter set: {0}")]
     Inconsistent(&'static str),
+
+    /// Error in a nested scoring configuration.
+    ///
+    /// Wraps a [`ScoreParamError`] from the `scoring` module.
+    #[error("scoring parameter error: {0}")]
+    Scoring(ScoreParamError),
+
+    /// Error in a nested predictor configuration.
+    ///
+    /// Wraps a [`PredictorParamError`] from the `propagation::features` module.
+    #[error("predictor parameter error: {0}")]
+    Predictor(PredictorParamError),
+
+    /// Error in a nested engine configuration.
+    ///
+    /// Wraps an [`EngineParamError`].
+    #[error("engine parameter error: {0}")]
+    Engine(EngineParamError),
+
+    /// Error parsing or encoding TOML configuration files.
+    ///
+    /// Wraps the underlying TOML parsing/encoding errors.
+    #[error("TOML parse error: {0}")]
+    TomlParse(#[from] toml::de::Error),
+
+    /// Error encoding TOML configuration files.
+    ///
+    /// Wraps the underlying TOML encoding errors.
+    #[error("TOML encode error: {0}")]
+    TomlEncode(#[from] toml::ser::Error),
+
+    /// I/O error when reading/writing configuration files.
+    ///
+    /// Wraps the underlying I/O error.
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]

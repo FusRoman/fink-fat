@@ -37,6 +37,8 @@
 //! * [`BinningParams`](crate::params::binning_params::BinningParams) – controls spatial/temporal bucket sizes.
 //! * [`TripletParams`](crate::params::triplet_params::TripletParams) – extends pairs into triplets for initial orbit seeds.
 
+use serde::{Deserialize, Serialize};
+
 use crate::{errors::ParamError, MjdTt, Radians};
 
 /// Parameters controlling **pair generation** between alerts `(a, b)`.
@@ -92,7 +94,7 @@ use crate::{errors::ParamError, MjdTt, Radians};
 ///     .build()
 ///     .unwrap();
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PairParams {
     /// Maximum allowed Δt between alerts a and b (days, TT).
     pub max_dt: MjdTt,
