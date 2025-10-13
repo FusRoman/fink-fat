@@ -24,7 +24,7 @@ use std::fmt;
 ///       + band_mismatch * w_band_mismatch`
 ///
 /// where missing (uninformative) components contribute `0`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ScoreWeights {
     /// Position term (Mahalanobis d² on the plane). Strongly discriminative.
     pub w_pos: f64,
@@ -40,8 +40,21 @@ pub struct ScoreWeights {
     pub w_band_mismatch: f64,
 }
 
+impl Default for ScoreWeights {
+    fn default() -> Self {
+        Self {
+            w_pos: 0.5,           // strong — geometry dominates
+            w_vel_dir: 0.3,       // moderate — useful when geometry is ambiguous
+            w_vel_norm: 0.3,      // moderate — speed mismatch as consistency check
+            w_flux: 0.5,          // moderate — helps against confusions
+            w_gap: 0.3,           // mild to moderate — encourages short gaps
+            w_band_mismatch: 0.2, // small — cross-band matches are possible but less likely
+        }
+    }
+}
+
 /// **Hard** gates: if any is violated, the edge is rejected (`None`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ScoreGates {
     /// Max Mahalanobis `d²_pos` (e.g., `~9.0` ≈ 3σ in 2D).
     pub max_d2_pos: f64,
@@ -51,11 +64,21 @@ pub struct ScoreGates {
     pub max_speed_diff: f64,
 }
 
+impl Default for ScoreGates {
+    fn default() -> Self {
+        Self {
+            max_d2_pos: 9.0,                      // ≈ 3σ in 2D
+            max_theta_vel: 10.0_f64.to_radians(), // ~10°
+            max_speed_diff: f64::INFINITY,        // disabled by default
+        }
+    }
+}
+
 /// Scaling constants and numerical knobs for the score components.
 ///
 /// These parameters set the **natural scales** for the normalized penalties and
 /// control the finite-difference step for kinematics.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ScoreScales {
     /// Direction reference angle (**radians**) used to scale `theta`.
     pub theta0: f64,
@@ -68,6 +91,18 @@ pub struct ScoreScales {
     pub gap_rho: f64,
     /// Symmetric finite-difference step (**days**) for `j`’s plane velocity.
     pub vel_eps_days: f64,
+}
+
+impl Default for ScoreScales {
+    fn default() -> Self {
+        Self {
+            theta0: 5.0_f64.to_radians(), // a few degrees
+            v0: 0.005,                    // ~0.29 deg/day in rad/day
+            flux_sigma_floor: 50.0,       // tune to the survey noise model
+            gap_rho: 1.0,                 // linear penalty in (Δ - 1)
+            vel_eps_days: 1e-3,           // ~86.4 s; small but safely > integration jitter
+        }
+    }
 }
 
 /// Complete configuration to score edges.

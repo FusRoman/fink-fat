@@ -253,13 +253,8 @@ impl RollingLinkState {
     ///     LSST DIA columns (1D, matching length).
     /// night_id : int
     ///     Night identifier for this batch.
-    /// seeding_params : PyFinkFatParams
-    ///     Seeding configuration (HEALPix depth, time bin width, gates…).
-    /// feature_params : FeatureExtractParams
-    ///     Feature extraction configuration (plane, covariances, etc.).
-    /// pair_config : PairLinkConfig
-    ///     Inter-night pair-link configuration (gates, K, penalties…).
-    ///
+    /// params : PyFinkFatParams
+    ///    Global configuration (seeding, features, linking).
     /// Notes
     /// -----
     /// - On the **first night**, we “seed” all seeds to fresh tracks so their
