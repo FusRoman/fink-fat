@@ -1,7 +1,9 @@
-import fink_fat
 from .fink_fat import *
 
-
-__doc__ = fink_fat.__doc__
-if hasattr(fink_fat, "__all__"):
-    __all__ = fink_fat.__all__
+try:
+    from . import fink_fat as _mod
+    __doc__ = getattr(_mod, "__doc__", __doc__)
+    if hasattr(_mod, "__all__"):
+        __all__ = _mod.__all__
+except Exception:
+    pass
