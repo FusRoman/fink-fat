@@ -74,9 +74,9 @@ docs/_build/
 .pdm-python
 proptest-regressions/
 
-test_seed_real_data.py
+seed_real_data.py
 ztf_alert.parquet
 python/tests/test_perf_seed.py
 linked_trajectories.parquet
 linking_metric.py
-test_linking_inter.py
+linking_inter.py
