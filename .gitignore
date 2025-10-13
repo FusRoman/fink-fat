@@ -80,3 +80,4 @@ python/tests/test_perf_seed.py
 linked_trajectories.parquet
 linking_metric.py
 linking_inter.py
+Fink-FAT/
