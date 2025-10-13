@@ -2,55 +2,36 @@
 //!
 //! This module exposes a **Python-friendly** configuration API for Fink-FAT,
 //! wrapping the Rust [`FinkFatParams`] and its builder. The Python surface is
-//! intentionally **flat** (no closure-based nested setters) to keep the API
-//! stable and ergonomic in notebooks and scripts.
+//! intentionally **flat** (no nested closures) to keep the API ergonomic in
+//! notebooks and scripts.
 //!
 //! ## Overview
 //! -----------
 //! * [`PyFinkFatParams`] – an owning wrapper around the validated Rust
 //!   [`FinkFatParams`]. Provides read-only getters, `validate()`, `to_dict()`,
-//!   and `__repr__`.
+//!   TOML helpers, and `__repr__`.
 //! * [`PyFinkFatParamsBuilder`] – a fluent builder exposing **flat setters** only
-//!   (binning/pairs/triplets/global). It reuses all validation logic from Rust.
+//!   (binning/pairs/triplets/linking/global). Validation is delegated to Rust.
 //!
 //! ## Defaults
 //! -----------
-//! Tuned for LSST-like cadence:
-//! * Binning: `healpix_depth = 10`, `time_bin_width_days = 0.02` (~28.8 min)
-//! * Pairs: `max_dt = 0.06 d`, `max_sep = 0.003 rad`, `max_flux_difference = 5.0`
-//! * Triplets: `max_dt_between = 0.04 d`, `max_pair_sep = 0.0025 rad`,
-//!   `max_predicted_residual = 8e-4 rad`
-//! * Global: `show_progress = false`
-//!
-//! ## Errors
-//! ---------
-//! Any invalid parameter (non-finite/negative times or angles, inconsistent
-//! tolerances, out-of-range HEALPix depth) results in a Rust [`ParamError`],
-//! converted here into a Python `ValueError` with a clear message.
-//!
-//! ## See also
-//! -----------
-//! * Rust configuration types: [`FinkFatParams`], [`FinkFatParamsBuilder`],
-//!   and the sub-groups (`BinningParams`, `PairParams`, `TripletParams`).
+//! The defaults follow the Rust side. Call `PyFinkFatParams::default()` or use
+//! `PyFinkFatParamsBuilder()` then `.build()`.
 
-#![allow(clippy::needless_pass_by_value)]
+use std::mem;
 
-use pyo3::exceptions::PyValueError;
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::{
+    exceptions::PyValueError,
+    prelude::*,
+    types::{PyDict, PyModule},
+    Bound,
+};
 
 use crate::errors::ParamError;
-use crate::params::{FinkFatParams, FinkFatParamsBuilder};
+use crate::params::FinkFatParams;
+use crate::params::FinkFatParamsBuilder;
 
 /// Convert an internal [`ParamError`] into a Python `ValueError`.
-///
-/// Arguments
-/// ---------
-/// * `e` – Rust parameter validation error.
-///
-/// Return
-/// ------
-/// * `PyErr` – a `ValueError` carrying the error string.
 fn to_py_err(e: ParamError) -> PyErr {
     PyValueError::new_err(e.to_string())
 }
@@ -60,16 +41,8 @@ fn to_py_err(e: ParamError) -> PyErr {
 /// Python wrapper around the validated Rust [`FinkFatParams`].
 ///
 /// This object owns the inner Rust configuration and exposes **read-only**
-/// Python accessors for all scalar fields, a `validate()` method, a compact
-/// `__repr__`, and a convenience `to_dict()` for logging/serialization.
-///
-/// Overview
-/// --------
-/// * Construct via [`PyFinkFatParams::default`] or the builder
-///   [`PyFinkFatParams::builder`].
-/// * All getters are **read-only**; use the builder to create new configs.
-/// * `validate()` raises `ValueError` on invalid combinations.
-#[pyclass(module = "fink_fat")]
+/// Python accessors for all scalar fields, TOML helpers, and a compact `repr`.
+#[pyclass(name = "FinkFatParams")]
 #[derive(Clone)]
 pub struct PyFinkFatParams {
     pub(crate) inner: FinkFatParams,
@@ -77,32 +50,14 @@ pub struct PyFinkFatParams {
 
 #[pymethods]
 impl PyFinkFatParams {
-    /// Return LSST-like defaults.
-    ///
-    /// Return
-    /// ------
-    /// * `PyFinkFatParams` – configuration object with project defaults.
-    ///
-    /// Example (Python)
-    /// ----------------
-    /// ```python
-    /// from fink_fat import FinkFatParams
-    /// p = FinkFatParams.default()
-    /// ```
-    #[staticmethod]
-    #[allow(clippy::should_implement_trait)]
-    pub fn default() -> Self {
-        Self {
-            inner: FinkFatParams::default(),
-        }
+    /// Construct with Rust defaults (validate on creation).
+    #[new]
+    pub fn new() -> PyResult<Self> {
+        let cfg = FinkFatParams::builder().build().map_err(to_py_err)?;
+        Ok(Self { inner: cfg })
     }
 
-    /// Create a fluent builder (flat setters only).
-    ///
-    /// Notes
-    /// -----
-    /// The Python API intentionally **does not** expose nested closure setters.
-    /// Use the provided flat setters to configure all fields.
+    /// Return a builder to mutate settings before validation.
     #[staticmethod]
     pub fn builder() -> PyFinkFatParamsBuilder {
         PyFinkFatParamsBuilder {
@@ -110,98 +65,262 @@ impl PyFinkFatParams {
         }
     }
 
-    /* ----------------------------- Read-only getters ---------------------------- */
+    /* ------------------------------- TOML I/O ------------------------------- */
 
-    /// Whether to display progress bars in seeding/linking stages.
+    /// Build from a TOML string (validates).
+    #[staticmethod]
+    pub fn from_toml_str(s: &str) -> PyResult<Self> {
+        let cfg = FinkFatParams::from_toml_str(s).map_err(to_py_err)?;
+        Ok(Self { inner: cfg })
+    }
+
+    /// Dump to a TOML string (pretty).
+    pub fn to_toml_str(&self) -> PyResult<String> {
+        self.inner.to_toml_string_pretty().map_err(to_py_err)
+    }
+
+    /* ----------------------------- Global options --------------------------- */
+
+    /// Whether to show progress bars.
     #[getter]
     pub fn show_progress(&self) -> bool {
         self.inner.show_progress
     }
 
-    /// HEALPix depth (NSIDE = 2^depth), valid range: 0..=29.
+    /* -------------------------------- Binning ------------------------------- */
+
+    /// HEALPix depth (NSIDE = 2^depth).
     #[getter]
     pub fn healpix_depth(&self) -> u8 {
         self.inner.binning.healpix_depth
     }
 
-    /// Temporal bucket width (days, TT). Must be strictly positive.
+    /// Time-bin width in **days (TT)**.
     #[getter]
     pub fn time_bin_width_days(&self) -> f64 {
         self.inner.binning.time_bin_width_days
     }
 
-    /// Pair: maximum Δt between alerts (days, TT).
+    /* --------------------------------- Pairs -------------------------------- */
+
+    /// Max time difference for pairs (days, TT).
     #[getter]
     pub fn pair_max_dt(&self) -> f64 {
         self.inner.pairs.max_dt
     }
 
-    /// Pair: maximum angular separation (radians).
+    /// Max great-circle separation for pairs (radians).
     #[getter]
     pub fn pair_max_sep(&self) -> f64 {
         self.inner.pairs.max_sep
     }
 
-    /// Pair: maximum photometric difference (dimensionless; flux or Δmag proxy).
+    /// Max photometric difference for pairs (dimensionless).
     #[getter]
     pub fn pair_max_flux_difference(&self) -> f32 {
         self.inner.pairs.max_flux_difference
     }
 
-    /// Pair: whether alerts inside the same time bin can form a pair.
+    /// Allow matching within the same time bin.
     #[getter]
     pub fn pair_allow_same_timebin(&self) -> bool {
         self.inner.pairs.allow_same_timebin
     }
 
-    /// Triplet: maximum Δt between consecutive neighbors (days, TT).
+    /* -------------------------------- Triplets ------------------------------ */
+
+    /// Max neighbor Δt for triplets (days, TT).
     #[getter]
     pub fn triplet_max_dt_between(&self) -> f64 {
         self.inner.triplets.max_dt_between
     }
 
-    /// Triplet: maximum neighbor angular separation (radians).
+    /// Max per-pair separation in triplets (radians).
     #[getter]
     pub fn triplet_max_pair_sep(&self) -> f64 {
         self.inner.triplets.max_pair_sep
     }
 
-    /// Triplet: maximum predicted residual at `c` when extrapolating `a→b` (radians).
+    /// Max predicted residual at `c` when extrapolating `a→b` (radians).
     #[getter]
     pub fn triplet_max_predicted_residual(&self) -> f64 {
         self.inner.triplets.max_predicted_residual
     }
 
-    /// Triplet: enforce strict time ordering `t(a) < t(b) < t(c)`.
+    /// Enforce strict time ordering `t(a) < t(b) < t(c)`.
     #[getter]
     pub fn triplet_enforce_time_order(&self) -> bool {
         self.inner.triplets.enforce_time_order
     }
 
-    /// Triplet: maximum photometric difference (dimensionless; flux or Δmag proxy).
+    /// Max photometric difference for triplets (dimensionless).
     #[getter]
     pub fn triplet_max_flux_difference(&self) -> f32 {
         self.inner.triplets.max_flux_difference
     }
 
-    /// Convert scalar fields to a Python dict.
-    ///
-    /// Return
-    /// ------
-    /// * `dict[str, float|bool|int]` – simple mapping of scalar settings.
-    ///
-    /// Notes
-    /// -----
-    /// Complex/nested fields (if any are added in the future) are not included.
+    /* ----------------------------- Linking: Predict ------------------------- */
+
+    /// Predictor cone inflation `k_sigma` (dimensionless).
+    #[getter]
+    pub fn link_k_sigma(&self) -> f64 {
+        self.inner.link.predict.k_sigma
+    }
+
+    /// Whether to pad by the spatial cell radius when forming cones.
+    #[getter]
+    pub fn link_pad_cell_radius(&self) -> bool {
+        self.inner.link.predict.pad_cell_radius
+    }
+
+    /// Additive model noise (variance floor, rad²).
+    #[getter]
+    pub fn link_noise_q0(&self) -> f64 {
+        self.inner.link.predict.noise.variance_floor
+    }
+
+    /// Additive model noise (linear drift per day, rad²/day).
+    #[getter]
+    pub fn link_noise_q1(&self) -> f64 {
+        self.inner.link.predict.noise.drift_per_day
+    }
+
+    /// Additive model noise (quadratic curvature per day², rad²/day²).
+    #[getter]
+    pub fn link_noise_q2(&self) -> f64 {
+        self.inner.link.predict.noise.curvature_per_day2
+    }
+
+    /* ------------------------------ Linking: Weights ------------------------ */
+
+    #[getter]
+    pub fn link_w_pos(&self) -> f64 {
+        self.inner.link.scoring.weights.w_pos
+    }
+    #[getter]
+    pub fn link_w_vel_dir(&self) -> f64 {
+        self.inner.link.scoring.weights.w_vel_dir
+    }
+    #[getter]
+    pub fn link_w_vel_norm(&self) -> f64 {
+        self.inner.link.scoring.weights.w_vel_norm
+    }
+    #[getter]
+    pub fn link_w_flux(&self) -> f64 {
+        self.inner.link.scoring.weights.w_flux
+    }
+    #[getter]
+    pub fn link_w_gap(&self) -> f64 {
+        self.inner.link.scoring.weights.w_gap
+    }
+    #[getter]
+    pub fn link_w_band_mismatch(&self) -> f64 {
+        self.inner.link.scoring.weights.w_band_mismatch
+    }
+
+    /* ------------------------------- Linking: Gates ------------------------ */
+
+    /// Gate on Mahalanobis distance (d² on positions).
+    #[getter]
+    pub fn link_max_d2_pos(&self) -> f64 {
+        self.inner.link.scoring.gates.max_d2_pos
+    }
+
+    /// Gate on velocity direction mismatch (radians).
+    #[getter]
+    pub fn link_max_theta_vel(&self) -> f64 {
+        self.inner.link.scoring.gates.max_theta_vel
+    }
+
+    /// Gate on absolute speed difference (rad/day).
+    #[getter]
+    pub fn link_max_speed_diff(&self) -> f64 {
+        self.inner.link.scoring.gates.max_speed_diff
+    }
+
+    /* ------------------------------ Linking: Scales ------------------------ */
+
+    /// Angular scale used in costs (radians).
+    #[getter]
+    pub fn link_theta0(&self) -> f64 {
+        self.inner.link.scoring.scales.theta0
+    }
+
+    /// Speed scale used in costs (rad/day).
+    #[getter]
+    pub fn link_v0(&self) -> f64 {
+        self.inner.link.scoring.scales.v0
+    }
+
+    /// Flux sigma floor (dimensionless, cost term).
+    #[getter]
+    pub fn link_flux_sigma_floor(&self) -> f64 {
+        self.inner.link.scoring.scales.flux_sigma_floor
+    }
+
+    /// Gap exponent ρ for Δ>1 penalty.
+    #[getter]
+    pub fn link_gap_rho(&self) -> f64 {
+        self.inner.link.scoring.scales.gap_rho
+    }
+
+    /// Finite-difference step for j’s plane velocity (days).
+    #[getter]
+    pub fn link_vel_eps_days(&self) -> f64 {
+        self.inner.link.scoring.scales.vel_eps_days
+    }
+
+    /* ------------------------------- Linking: Limits ----------------------- */
+
+    /// Keep at most K edges per left node (Top-K).
+    #[getter]
+    pub fn link_top_k_per_left(&self) -> usize {
+        self.inner.link.limits.top_k_per_left
+    }
+
+    /// Global cap on total edges (after Top-K); `None` disables it.
+    #[getter]
+    pub fn link_max_total_edges(&self) -> Option<usize> {
+        self.inner.link.limits.max_total_edges
+    }
+
+    /// Hard cost cutoff; `None` disables it.
+    #[getter]
+    pub fn link_max_cost(&self) -> Option<f64> {
+        self.inner.link.limits.max_cost
+    }
+
+    /// Optional hard cap on per-seed speed (rad/day).
+    #[getter]
+    pub fn link_max_speed_rad_per_day(&self) -> Option<f64> {
+        self.inner.link.max_speed_rad_per_day
+    }
+
+    /* -------------------------------- Utilities ---------------------------- */
+
+    /// Validate the entire parameter set.
+    pub fn validate(&self) -> PyResult<()> {
+        self.inner.validate().map_err(to_py_err)
+    }
+
+    /// Convert scalar fields to a Python dict for logging/serialization.
     pub fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
         let d = PyDict::new(py);
+
+        // Global
         d.set_item("show_progress", self.show_progress())?;
+
+        // Binning
         d.set_item("healpix_depth", self.healpix_depth())?;
         d.set_item("time_bin_width_days", self.time_bin_width_days())?;
+
+        // Pairs
         d.set_item("pair_max_dt", self.pair_max_dt())?;
         d.set_item("pair_max_sep", self.pair_max_sep())?;
         d.set_item("pair_max_flux_difference", self.pair_max_flux_difference())?;
         d.set_item("pair_allow_same_timebin", self.pair_allow_same_timebin())?;
+
+        // Triplets
         d.set_item("triplet_max_dt_between", self.triplet_max_dt_between())?;
         d.set_item("triplet_max_pair_sep", self.triplet_max_pair_sep())?;
         d.set_item(
@@ -216,229 +335,333 @@ impl PyFinkFatParams {
             "triplet_max_flux_difference",
             self.triplet_max_flux_difference(),
         )?;
-        Ok(d.into())
+
+        // Linking – predictor
+        d.set_item("link_k_sigma", self.link_k_sigma())?;
+        d.set_item("link_pad_cell_radius", self.link_pad_cell_radius())?;
+        d.set_item("link_noise_q0", self.link_noise_q0())?;
+        d.set_item("link_noise_q1", self.link_noise_q1())?;
+        d.set_item("link_noise_q2", self.link_noise_q2())?;
+
+        // Linking – weights
+        d.set_item("link_w_pos", self.link_w_pos())?;
+        d.set_item("link_w_vel_dir", self.link_w_vel_dir())?;
+        d.set_item("link_w_vel_norm", self.link_w_vel_norm())?;
+        d.set_item("link_w_flux", self.link_w_flux())?;
+        d.set_item("link_w_gap", self.link_w_gap())?;
+        d.set_item("link_w_band_mismatch", self.link_w_band_mismatch())?;
+
+        // Linking – gates
+        d.set_item("link_max_d2_pos", self.link_max_d2_pos())?;
+        d.set_item("link_max_theta_vel", self.link_max_theta_vel())?;
+        d.set_item("link_max_speed_diff", self.link_max_speed_diff())?;
+
+        // Linking – scales
+        d.set_item("link_theta0", self.link_theta0())?;
+        d.set_item("link_v0", self.link_v0())?;
+        d.set_item("link_flux_sigma_floor", self.link_flux_sigma_floor())?;
+        d.set_item("link_gap_rho", self.link_gap_rho())?;
+        d.set_item("link_vel_eps_days", self.link_vel_eps_days())?;
+
+        // Linking – limits & optional cap
+        d.set_item("link_top_k_per_left", self.link_top_k_per_left())?;
+        d.set_item("link_max_total_edges", self.link_max_total_edges())?;
+        d.set_item("link_max_cost", self.link_max_cost())?;
+        d.set_item(
+            "link_max_speed_rad_per_day",
+            self.link_max_speed_rad_per_day(),
+        )?;
+
+        Ok(d.unbind())
     }
 
-    /// Compact string representation (for logging / debugging).
+    /// Compact `repr` string for debugging.
     fn __repr__(&self) -> PyResult<String> {
         Ok(format!(
-            "FinkFatParams(show_progress={}, depth={}, dt_days={:.6}, \
-pair_max_dt={:.6}, pair_max_sep={:.6}, pair_max_flux_diff={:.3}, same_bin={}, \
-trip_max_dt_between={:.6}, trip_max_pair_sep={:.6}, trip_max_pred_resid={:.6}, \
-time_order={}, trip_max_flux_diff={:.3})",
-            self.show_progress(),
+            "FinkFatParams(healpix_depth={}, time_bin_width_days={}, pair_max_dt={}, pair_max_sep={}, triplet_max_dt_between={}, link.k_sigma={:.3}, ...)",
             self.healpix_depth(),
             self.time_bin_width_days(),
             self.pair_max_dt(),
             self.pair_max_sep(),
-            self.pair_max_flux_difference(),
-            self.pair_allow_same_timebin(),
             self.triplet_max_dt_between(),
-            self.triplet_max_pair_sep(),
-            self.triplet_max_predicted_residual(),
-            self.triplet_enforce_time_order(),
-            self.triplet_max_flux_difference(),
+            self.link_k_sigma(),
         ))
     }
 }
 
-/* --------------------------- PyFinkFatParamsBuilder --------------------------- */
+/* --------------------------- PyFinkFatParamsBuilder ------------------------- */
 
-/// Python wrapper over the Rust [`FinkFatParamsBuilder`].
+/// Fluent Python builder mirroring [`FinkFatParamsBuilder`] with flat setters.
 ///
-/// This builder exposes **flat setters** only, mapping 1:1 to the Rust builder’s
-/// flat API. It applies Rust-side validation upon `build()`, raising a Python
-/// `ValueError` when constraints are not satisfied.
-#[pyclass(module = "fink_fat")]
+/// Each setter returns `self` so you can chain calls and finish with `.build()`.
+#[pyclass(name = "FinkFatParamsBuilder")]
 pub struct PyFinkFatParamsBuilder {
     pub(crate) inner: FinkFatParamsBuilder,
 }
 
+impl Default for PyFinkFatParamsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[pymethods]
 impl PyFinkFatParamsBuilder {
-    /// Set whether to show progress bars during seeding/linking.
+    #[new]
+    pub fn new() -> Self {
+        Self {
+            inner: FinkFatParamsBuilder::default(),
+        }
+    }
+
+    /// Enable/disable progress bars.
     ///
-    /// Arguments
-    /// ---------
-    /// * `v` – `bool`
+    /// Returns
+    /// -------
+    /// self : PyFinkFatParamsBuilder
+    ///     The same builder (for chaining).
     pub fn show_progress<'py>(mut slf: PyRefMut<'py, Self>, v: bool) -> PyRefMut<'py, Self> {
-        let inner = std::mem::take(&mut slf.inner).show_progress(v);
-        slf.inner = inner;
-        slf
+        let inner = mem::take(&mut slf.inner); // move out safely (requires Default)
+        slf.inner = inner.show_progress(v); // consume + return new builder
+        slf // return PyRefMut<Self> for chaining
     }
 
-    /* ------------------------- Binning setters ------------------------- */
-
-    /// Set HEALPix depth (NSIDE = 2^depth).
-    ///
-    /// Arguments
-    /// ---------
-    /// * `v` – `int` in **0..=29**
+    /* Binning */
     pub fn healpix_depth<'py>(mut slf: PyRefMut<'py, Self>, v: u8) -> PyRefMut<'py, Self> {
-        let inner = std::mem::take(&mut slf.inner).healpix_depth(v);
-        slf.inner = inner;
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.healpix_depth(v);
         slf
     }
-
-    /// Set the time bin width (days, TT).
-    ///
-    /// Arguments
-    /// ---------
-    /// * `v` – `float` strictly **> 0**
     pub fn time_bin_width_days<'py>(mut slf: PyRefMut<'py, Self>, v: f64) -> PyRefMut<'py, Self> {
-        let inner = std::mem::take(&mut slf.inner).time_bin_width_days(v);
-        slf.inner = inner;
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.time_bin_width_days(v);
         slf
     }
 
-    /* --------------------------- Pair setters -------------------------- */
-
-    /// Set pair maximum Δt (days, TT).
-    ///
-    /// Arguments
-    /// ---------
-    /// * `v` – `float` ≥ 0 and finite
+    /* Pairs */
     pub fn pair_max_dt<'py>(mut slf: PyRefMut<'py, Self>, v: f64) -> PyRefMut<'py, Self> {
-        slf.inner = std::mem::take(&mut slf.inner).pair_max_dt(v);
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.pair_max_dt(v);
         slf
     }
-
-    /// Set pair maximum angular separation (radians).
-    ///
-    /// Arguments
-    /// ---------
-    /// * `v` – `float` ≥ 0 and finite
     pub fn pair_max_sep<'py>(mut slf: PyRefMut<'py, Self>, v: f64) -> PyRefMut<'py, Self> {
-        slf.inner = std::mem::take(&mut slf.inner).pair_max_sep(v);
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.pair_max_sep(v);
         slf
     }
-
-    /// Set pair maximum photometric difference (dimensionless).
-    ///
-    /// Arguments
-    /// ---------
-    /// * `v` – `float` ≥ 0 and finite
     pub fn pair_max_flux_difference<'py>(
         mut slf: PyRefMut<'py, Self>,
         v: f32,
     ) -> PyRefMut<'py, Self> {
-        slf.inner = std::mem::take(&mut slf.inner).pair_max_flux_difference(v);
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.pair_max_flux_difference(v);
         slf
     }
-
-    /// Allow/disallow pairing within the same time bin.
-    ///
-    /// Arguments
-    /// ---------
-    /// * `v` – `bool`
     pub fn pair_allow_same_timebin<'py>(
         mut slf: PyRefMut<'py, Self>,
-        v: bool,
+        yes: bool,
     ) -> PyRefMut<'py, Self> {
-        slf.inner = std::mem::take(&mut slf.inner).pair_allow_same_timebin(v);
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.pair_allow_same_timebin(yes);
         slf
     }
 
-    /* ------------------------- Triplet setters ------------------------- */
-
-    /// Set maximum Δt between consecutive neighbors (days, TT).
-    ///
-    /// Arguments
-    /// ---------
-    /// * `v` – `float` ≥ 0 and finite
+    /* Triplets */
     pub fn triplet_max_dt_between<'py>(
         mut slf: PyRefMut<'py, Self>,
         v: f64,
     ) -> PyRefMut<'py, Self> {
-        slf.inner = std::mem::take(&mut slf.inner).triplet_max_dt_between(v);
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.triplet_max_dt_between(v);
         slf
     }
-
-    /// Set maximum neighbor angular separation (radians).
-    ///
-    /// Arguments
-    /// ---------
-    /// * `v` – `float` ≥ 0 and finite
     pub fn triplet_max_pair_sep<'py>(mut slf: PyRefMut<'py, Self>, v: f64) -> PyRefMut<'py, Self> {
-        slf.inner = std::mem::take(&mut slf.inner).triplet_max_pair_sep(v);
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.triplet_max_pair_sep(v);
         slf
     }
-
-    /// Set maximum predicted residual at `c` (radians) when extrapolating `a→b`.
-    ///
-    /// Arguments
-    /// ---------
-    /// * `v` – `float` ≥ 0 and finite
     pub fn triplet_max_predicted_residual<'py>(
         mut slf: PyRefMut<'py, Self>,
         v: f64,
     ) -> PyRefMut<'py, Self> {
-        slf.inner = std::mem::take(&mut slf.inner).triplet_max_predicted_residual(v);
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.triplet_max_predicted_residual(v);
         slf
     }
-
-    /// Enforce strict time ordering: `t(a) < t(b) < t(c)`.
-    ///
-    /// Arguments
-    /// ---------
-    /// * `v` – `bool`
     pub fn triplet_enforce_time_order<'py>(
         mut slf: PyRefMut<'py, Self>,
-        v: bool,
+        yes: bool,
     ) -> PyRefMut<'py, Self> {
-        slf.inner = std::mem::take(&mut slf.inner).triplet_enforce_time_order(v);
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.triplet_enforce_time_order(yes);
         slf
     }
-
-    /// Set triplet maximum photometric difference (dimensionless).
-    ///
-    /// Arguments
-    /// ---------
-    /// * `v` – `float` ≥ 0 and finite
     pub fn triplet_max_flux_difference<'py>(
         mut slf: PyRefMut<'py, Self>,
         v: f32,
     ) -> PyRefMut<'py, Self> {
-        slf.inner = std::mem::take(&mut slf.inner).triplet_max_flux_difference(v);
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.triplet_max_flux_difference(v);
         slf
     }
 
-    /* ------------------------------ Build ------------------------------ */
-
-    /// Build a validated `FinkFatParams`. Raises `ValueError` on invalid combo.
-    ///
-    /// Return
-    /// ------
-    /// * `PyFinkFatParams` – owning wrapper over the validated Rust config.
-    ///
-    /// Errors
-    /// ------
-    /// * `ValueError` if validation fails.
-    pub fn build(&mut self) -> PyResult<PyFinkFatParams> {
-        let built = std::mem::take(&mut self.inner).build().map_err(to_py_err)?;
-        Ok(PyFinkFatParams { inner: built })
+    /* Linking – predictor */
+    pub fn link_k_sigma<'py>(mut slf: PyRefMut<'py, Self>, v: f64) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_k_sigma(v);
+        slf
+    }
+    pub fn link_pad_cell_radius<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        yes: bool,
+    ) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_pad_cell_radius(yes);
+        slf
+    }
+    pub fn link_noise_q0<'py>(mut slf: PyRefMut<'py, Self>, v: f64) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_noise_q0(v);
+        slf
+    }
+    pub fn link_noise_q1<'py>(mut slf: PyRefMut<'py, Self>, v: f64) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_noise_q1(v);
+        slf
+    }
+    pub fn link_noise_q2<'py>(mut slf: PyRefMut<'py, Self>, v: f64) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_noise_q2(v);
+        slf
     }
 
-    /// Minimal builder summary.
-    fn __repr__(&self) -> PyResult<String> {
-        Ok("FinkFatParamsBuilder(...)".to_string())
+    /* Linking – weights */
+    pub fn link_w_pos<'py>(mut slf: PyRefMut<'py, Self>, v: f64) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_w_pos(v);
+        slf
+    }
+    pub fn link_w_vel_dir<'py>(mut slf: PyRefMut<'py, Self>, v: f64) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_w_vel_dir(v);
+        slf
+    }
+    pub fn link_w_vel_norm<'py>(mut slf: PyRefMut<'py, Self>, v: f64) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_w_vel_norm(v);
+        slf
+    }
+    pub fn link_w_flux<'py>(mut slf: PyRefMut<'py, Self>, v: f64) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_w_flux(v);
+        slf
+    }
+    pub fn link_w_gap<'py>(mut slf: PyRefMut<'py, Self>, v: f64) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_w_gap(v);
+        slf
+    }
+    pub fn link_w_band_mismatch<'py>(mut slf: PyRefMut<'py, Self>, v: f64) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_w_band_mismatch(v);
+        slf
+    }
+
+    /* Linking – gates */
+    pub fn link_max_d2_pos<'py>(mut slf: PyRefMut<'py, Self>, v: f64) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_max_d2_pos(v);
+        slf
+    }
+    pub fn link_max_theta_vel<'py>(mut slf: PyRefMut<'py, Self>, v: f64) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_max_theta_vel(v);
+        slf
+    }
+    pub fn link_max_speed_diff<'py>(mut slf: PyRefMut<'py, Self>, v: f64) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_max_speed_diff(v);
+        slf
+    }
+
+    /* Linking – scales */
+    pub fn link_theta0<'py>(mut slf: PyRefMut<'py, Self>, v: f64) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_theta0(v);
+        slf
+    }
+    pub fn link_v0<'py>(mut slf: PyRefMut<'py, Self>, v: f64) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_v0(v);
+        slf
+    }
+    pub fn link_flux_sigma_floor<'py>(mut slf: PyRefMut<'py, Self>, v: f64) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_flux_sigma_floor(v);
+        slf
+    }
+    pub fn link_gap_rho<'py>(mut slf: PyRefMut<'py, Self>, v: f64) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_gap_rho(v);
+        slf
+    }
+    pub fn link_vel_eps_days<'py>(mut slf: PyRefMut<'py, Self>, v: f64) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_vel_eps_days(v);
+        slf
+    }
+
+    /* Linking – limits & optional cap */
+    pub fn link_top_k_per_left<'py>(mut slf: PyRefMut<'py, Self>, v: usize) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_top_k_per_left(v);
+        slf
+    }
+    pub fn link_max_total_edges<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        v: Option<usize>,
+    ) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_max_total_edges(v);
+        slf
+    }
+    pub fn link_clear_max_total_edges<'py>(mut slf: PyRefMut<'py, Self>) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_clear_max_total_edges();
+        slf
+    }
+    pub fn link_max_cost<'py>(mut slf: PyRefMut<'py, Self>, v: Option<f64>) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_max_cost(v);
+        slf
+    }
+    pub fn link_clear_max_cost<'py>(mut slf: PyRefMut<'py, Self>) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_clear_max_cost();
+        slf
+    }
+    pub fn link_max_speed_rad_per_day<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        v: Option<f64>,
+    ) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_max_speed_rad_per_day(v);
+        slf
+    }
+
+    /// Validate and return an owning configuration.
+    ///
+    /// Note: this borrows `self` (no move). We clone the Rust builder under the hood.
+    pub fn build(&self) -> PyResult<PyFinkFatParams> {
+        // Ensure `FinkFatParamsBuilder: Clone`
+        let inner = self.inner.clone().build().map_err(to_py_err)?;
+        Ok(PyFinkFatParams { inner })
     }
 }
 
-/* ----------------------- Module registration helper ----------------------- */
+/* ------------------------------- Registration ------------------------------- */
 
-/// Register parameter bindings into the Python module.
-///
-/// This is called from the crate’s Python entry point to expose
-/// [`PyFinkFatParams`] and [`PyFinkFatParamsBuilder`] to Python.
-///
-/// Arguments
-/// ---------
-/// * `m` – destination Python module.
-///
-/// Return
-/// ------
-/// * `PyResult<()>` – `Ok(())` on success.
+/// Register [`PyFinkFatParams`] and [`PyFinkFatParamsBuilder`] to Python.
 pub fn register_params_module(m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<PyFinkFatParams>()?;
     m.add_class::<PyFinkFatParamsBuilder>()?;

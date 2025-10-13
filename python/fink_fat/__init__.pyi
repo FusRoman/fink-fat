@@ -1,7 +1,7 @@
 from .fink_fat_params import (
-    PyFinkFatParams,
-    PyFinkFatParamsBuilder,
-    PyFinkFatParamsDict,
+    FinkFatParams,
+    FinkFatParamsBuilder,
+    FinkFatParamsDict,
 )
 
 from .alerts import (
@@ -28,7 +28,7 @@ __all__ = [
     "PairCols",
     "TripletCols",
     "LinkUIDs",
-    "PyFinkFatParams",
-    "PyFinkFatParamsBuilder",
-    "PyFinkFatParamsDict",
+    "FinkFatParams",
+    "FinkFatParamsBuilder",
+    "FinkFatParamsDict",
 ]
