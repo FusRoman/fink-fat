@@ -47,10 +47,10 @@ use pyo3::{
 
 use crate::{
     alerts::AlertStore,
-    params::params_binding::PyFinkFatParams,
+    params::{engine_params::InterNightLinkConfig, params_binding::PyFinkFatParams},
     propagation::{
-        engine::{build_id_to_index, link_pair_with_binner, LinkResult, PairLinkConfig},
-        features::{FeatureExtractParams, SeedNode},
+        engine::{build_id_to_index, link_pair_with_binner, LinkResult},
+        features::SeedNode,
         solver::{AssignmentSolver, GreedySolver},
     },
     seeding::{healpix_binners::HealpixBinner, space_time_bucket::SpatialBinner, Pairs, Triplets},
@@ -65,9 +65,8 @@ use crate::{
 /// ### Why this shape?
 /// At link time you only need the **seed list** of night *N* as “left” and the
 /// seed list of night *N+1* as “right”. Persisting `pairs`/`triplets` along with
-/// the seeds is convenient if you ever want to **re-extract** features later
-/// (e.g. with different [`FeatureExtractParams`]), but for standard runs the
-/// stored `seeds` are sufficient for `N → N+1` linking.
+/// the seeds is convenient if you ever want to **re-extract** features later,
+/// but for standard runs the stored `seeds` are sufficient for `N → N+1` linking.
 ///
 /// ### Fields
 /// - `night_id` — integer night identifier (monotonic),
@@ -110,7 +109,7 @@ pub struct NightSnapshot {
 pub fn continue_linking<S, B>(
     prev: &NightSnapshot,
     curr: &NightSnapshot,
-    cfg: &PairLinkConfig,
+    cfg: &InterNightLinkConfig,
     solver: &S,
     binner: &B,
 ) -> LinkResult
@@ -170,9 +169,7 @@ impl RollingLinkState {
         &mut self,
         curr_store: &AlertStore,
         curr_night_id: NightId,
-        seeding_params: &PyFinkFatParams,
-        extract_params: &FeatureExtractParams,
-        cfg: &PairLinkConfig,
+        params: &PyFinkFatParams,
         solver: &S,
         binner: &B,
     ) -> (Option<LinkResult>, NightSnapshot)
@@ -180,8 +177,7 @@ impl RollingLinkState {
         S: AssignmentSolver,
         B: SpatialBinner,
     {
-        let curr_snap =
-            curr_store.build_snapshot_from_store(curr_night_id, seeding_params, extract_params);
+        let curr_snap = curr_store.build_snapshot_from_store(curr_night_id, params);
 
         println!(
             "Built NightSnapshot for night_id={} with {} seeds",
@@ -190,7 +186,7 @@ impl RollingLinkState {
         );
 
         let pair_res = if let Some(prev_snap) = &self.last {
-            let res = continue_linking(prev_snap, &curr_snap, cfg, solver, binner);
+            let res = continue_linking(prev_snap, &curr_snap, &params.inner.link, solver, binner);
             self.pair_results.push(res.clone());
 
             println!(
@@ -286,9 +282,7 @@ impl RollingLinkState {
         flux_err: PyReadonlyArray1<f32>,
         band: PyReadonlyArray1<u8>,
         night_id: NightId,
-        seeding_params: &PyFinkFatParams,
-        feature_params: &FeatureExtractParams,
-        pair_config: &PairLinkConfig,
+        params: &PyFinkFatParams,
     ) -> PyResult<()> {
         // 1) Build the per-night store from numpy
         let curr_store = AlertStore::from_numpy(
@@ -310,9 +304,8 @@ impl RollingLinkState {
         );
 
         // 2) Build the snapshot (seeding + features)
-        let sb = HealpixBinner::new(seeding_params.healpix_depth());
-        let curr_snap =
-            curr_store.build_snapshot_from_store(night_id, seeding_params, feature_params);
+        let sb = HealpixBinner::new(params.healpix_depth());
+        let curr_snap = curr_store.build_snapshot_from_store(night_id, params);
 
         println!(
             "Built NightSnapshot for night_id={} with {} seeds",
@@ -322,7 +315,13 @@ impl RollingLinkState {
 
         // 3) Link to previous if present, and update TrackRegistry
         if let Some(prev_snap) = &self.last {
-            let res = continue_linking(prev_snap, &curr_snap, pair_config, &GreedySolver, &sb);
+            let res = continue_linking(
+                prev_snap,
+                &curr_snap,
+                &params.inner.link,
+                &GreedySolver,
+                &sb,
+            );
 
             println!(
                 "Linked night_id={} ({} seeds) → night_id={} ({} seeds) with {} matches",

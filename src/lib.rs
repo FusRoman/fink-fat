@@ -1,5 +1,7 @@
 use pyo3::prelude::*;
 
+use crate::propagation::linking::RollingLinkState;
+
 pub mod alerts;
 pub mod errors;
 pub mod params;
@@ -59,22 +61,15 @@ impl From<AlertId> for usize {
 }
 
 /// A Python module implemented in Rust.
-#[cfg(feature = "python-extension")]
+//#[cfg(feature = "python-extension")]
 #[pymodule]
 fn fink_fat(m: &Bound<'_, PyModule>) -> PyResult<()> {
     use crate::{
-        params::params_binding::register_params_module,
-        propagation::{
-            engine::PairLinkConfig, features::FeatureExtractParams, linking::RollingLinkState,
-        },
-        track_registry::DetectConflictPolicy,
+        params::params_binding::register_params_module, track_registry::DetectConflictPolicy,
     };
 
     m.add_class::<alerts::Alert>()?;
     m.add_class::<alerts::AlertStore>()?;
-
-    m.add_class::<FeatureExtractParams>()?;
-    m.add_class::<PairLinkConfig>()?;
     m.add_class::<RollingLinkState>()?;
 
     m.add_class::<DetectConflictPolicy>()?;

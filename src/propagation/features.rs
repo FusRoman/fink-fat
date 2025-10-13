@@ -47,10 +47,10 @@
 //! returning a list of records or a dict-of-arrays ready for `pandas.DataFrame`.
 
 use ahash::AHashMap;
-use pyo3::{pyclass, pymethods};
 
 use crate::{
     alerts::{Alert, AlertStore},
+    params::propagator_params::{ModelNoise, PredictorParams},
     seeding::{
         space_time_bucket::{SpatialBinner, SpatialKey},
         Pair, Pairs, Triplet, Triplets,
@@ -163,153 +163,6 @@ pub struct SeedNode {
     pub dec_mid: f64,
 }
 
-/// Tuning parameters for feature extraction.
-///
-/// # Overview
-/// Controls the construction of simple, interpretable covariances and optional
-/// guardrails. We **do not** inject process noise directly here; rather, we
-/// produce base covariances that downstream prediction can inflate with a
-/// model-noise schedule (e.g., curvature growing with |Δt|).
-///
-/// # Fields
-/// - `max_speed_rad_per_day` – Optional guardrail. If present, pair seeds whose
-///   inferred sky-plane speed exceeds this threshold are **discarded**.
-///   Useful to avoid degenerate pairs with tiny Δt or mis-associations.
-///
-/// # See also
-/// - [`extract_pair_features`]
-/// - [`extract_triplet_features`]
-#[pyclass(module = "fink_fat")]
-#[derive(Clone, Copy, Debug)]
-pub struct FeatureExtractParams {
-    /// Optional maximum sky-plane speed (rad/day). Use `None` to disable.
-    pub max_speed_rad_per_day: Option<f64>,
-}
-
-#[pymethods]
-impl FeatureExtractParams {
-    #[new]
-    fn new(max_speed_rad_per_day: Option<f64>) -> Self {
-        Self {
-            max_speed_rad_per_day,
-        }
-    }
-}
-
-/// Additive model-noise schedule to cover unmodeled curvature and model mismatch.
-///
-/// Overview
-/// --------
-/// `ModelNoise` parameterizes a simple, time-dependent variance term `Q(Δt)` that
-/// is **added per axis** to the predicted plane covariance:
-/// `Σ_p(t) ≈ Σ_pos + Δt² Σ_vel + Q(Δt)`. It is mainly useful for **pairs**
-/// (constant-velocity seeds) where true motion exhibits curvature between nights.
-/// For **triplets**, you can still keep a small `Q` to hedge against residual
-/// modeling errors.
-///
-/// Form
-/// ----
-/// The schedule is a low-order polynomial of the time gap magnitude:
-/// `Q(Δt) = q0 + q1 · |Δt| + q2 · Δt²`,
-/// where `Δt = t_target − epoch_mid` in **days**. All coefficients must be
-/// non-negative to preserve positive semidefiniteness.
-///
-/// Fields
-/// ------
-/// - `q0` — Static variance floor (rad^2). Compensates for small systematics
-///   and projection approximations even at `Δt = 0`.
-/// - `q1` — Linear growth (rad^2/day). Captures slow drift-like effects that scale
-///   approximately with elapsed time (e.g., small bias in velocity).
-/// - `q2` — Quadratic growth (rad^2/day^2). Covers curvature-like divergence that
-///   increases faster with `|Δt|`.
-///
-/// Units
-/// -----
-/// - `q0` in **radians^2**,
-/// - `q1` in **radians^2/day** (multiplied by `|Δt|`),
-/// - `q2` in **radians^2/day^2** (multiplied by `Δt²`).
-///
-/// Notes
-/// -----
-/// - Start conservatively for pairs, e.g. `q0 ≈ (0.15″ in rad)^2`, small `q1`,
-///   and a `q2` tuned on simulation (Sorcha) to reach high recall over 1–2 days.
-/// - For triplets (with `acc_xy`), you can set `{q0,q1,q2}` smaller, but not
-///   strictly zero if you want to absorb residual modeling error.
-/// - The polynomial is **isotropic** here (same on x and y). If later you adopt
-///   anisotropic propagation, switch to a 2D form or inject cross-terms downstream.
-///
-/// Examples
-/// --------
-/// ```ignore
-/// // 0.15 arcsec in radians, squared:
-/// let q0 = (0.15_f64.to_radians() / 3600.0).powi(2);
-/// let noise = ModelNoise { q0, q1: 0.0, q2: 5e-14 };
-/// ```
-#[derive(Clone, Copy, Debug)]
-pub struct ModelNoise {
-    pub q0: f64,
-    pub q1: f64,
-    pub q2: f64,
-}
-
-/// Parameters controlling sky-cone prediction for candidate retrieval.
-///
-/// Overview
-/// --------
-/// `PredictorParams` governs how the **predicted plane covariance** at a target
-/// epoch is converted into a **sky-cone search**:
-/// 1) compute `Σ_p(t)` (including [`ModelNoise`]),
-/// 2) take a conservative **k-sigma circle** whose radius is
-///    `r = k_sigma · sqrt(λ_max(Σ_p))`,
-/// 3) optionally **pad** that radius by one spatial-cell radius to ensure
-///    coverage with coarse binners (e.g., HEALPix).
-///
-/// Fields
-/// ------
-/// - `k_sigma` — Confidence multiplier (e.g., `3.0` for 3σ coverage on the largest
-///   principal axis). Larger values increase recall but also the number of candidates.
-/// - `noise` — Additive variance schedule `Q(Δt)` plugged into the plane covariance
-///   before radius extraction. See [`ModelNoise`].
-/// - `pad_cell_radius` — If `true`, add `binner.cell_radius()` to the cone radius
-///   to compensate for cell-boundary effects in approximate cone coverage.
-///
-/// Units
-/// -----
-/// - `k_sigma` dimensionless,
-/// - `noise` in squared radians units consistent with covariance,
-/// - Cone radius returned by prediction is in **radians**.
-///
-/// Notes
-/// -----
-/// - Start with `k_sigma = 3.0`. If recall is low on validation, increase a bit
-///   (3.5–4.0). After an IOD confirmation stage, you can tighten it back.
-/// - `pad_cell_radius = true` is recommended when your spatial binner performs
-///   **cell-based coverage** rather than exact geometric cone slicing.
-/// - Excessive inflation increases fan-out; cap downstream candidates (Top-K)
-///   and apply strict scoring cuts (Mahalanobis) to keep runtime bounded.
-///
-/// Examples
-/// --------
-/// ```ignore
-/// let params = PredictorParams {
-///     k_sigma: 3.0,
-///     noise: ModelNoise { q0: 1e-12, q1: 0.0, q2: 5e-14 },
-///     pad_cell_radius: true,
-/// };
-/// // Predict a cone and query candidates:
-/// let (ra, dec, radius) = seed.predict_cone(t_target, &binner, params);
-/// let cand: Vec<SeedId> = index.cone_query(&binner, ra, dec, radius).collect();
-/// ```
-#[derive(Clone, Copy, Debug)]
-pub struct PredictorParams {
-    /// k-sigma inflation (e.g., 3.0).
-    pub k_sigma: f64,
-    /// Model noise coefficients Q(Δt) = q0 + q1|Δt| + q2 Δt².
-    pub noise: ModelNoise,
-    /// If true, add one spatial cell radius to the cone (safety padding).
-    pub pad_cell_radius: bool,
-}
-
 /* --------------------------- Public API --------------------------- */
 
 impl SeedNode {
@@ -420,7 +273,7 @@ impl SeedNode {
         t_target: f64,
         index: &SeedSpatialIndex,
         binner: &Bs,
-        params: PredictorParams,
+        params: &PredictorParams,
     ) -> Vec<SeedId> {
         let (ra, dec, radius) = self.predict_cone(t_target, binner, params);
         index.cone_query(binner, ra, dec, radius).collect()
@@ -493,10 +346,10 @@ impl SeedNode {
         &self,
         t_target: f64,
         binner: &Bs,
-        params: PredictorParams,
+        params: &PredictorParams,
     ) -> (f64, f64, f64) {
         // 1) Mean & covariance in the tangent plane at t_target
-        let (p, cov) = self.predict_on_plane(t_target, params.noise);
+        let (p, cov) = self.predict_on_plane(t_target, &params.noise);
 
         // 2) Cone center on the sky (inverse gnomonic about the same center)
         let (ra, dec) = tangent_to_radec(p[0], p[1], self.center_ra, self.center_dec);
@@ -583,11 +436,7 @@ impl SeedNode {
     ///   propagation that keeps cross-covariances and (optionally) acceleration
     ///   uncertainty.
     #[inline]
-    pub(crate) fn predict_on_plane(
-        &self,
-        t_target: f64,
-        noise: ModelNoise,
-    ) -> ([f64; 2], [[f64; 2]; 2]) {
+    pub fn predict_on_plane(&self, t_target: f64, noise: &ModelNoise) -> ([f64; 2], [[f64; 2]; 2]) {
         let dt = t_target - self.epoch_mid;
 
         // ---- Mean position on the plane -------------------------------------
@@ -602,7 +451,9 @@ impl SeedNode {
 
         // ---- Variance (diagonal heuristic) ----------------------------------
         // Q(Δt) grows with |Δt| to cover unmodeled curvature / mismatch.
-        let q = noise.q0 + noise.q1 * dt.abs() + noise.q2 * dt * dt;
+        let q = noise.variance_floor
+            + noise.drift_per_day * dt.abs()
+            + noise.curvature_per_day2 * dt * dt;
 
         // Per-axis variance: σ_pos² + (Δt²) σ_vel² + Q(Δt).
         // Off-diagonals are set to zero by design (see doc above).
@@ -660,8 +511,8 @@ impl SeedNode {
 pub fn extract_pair_features(
     store: &AlertStore,
     pairs: &Pairs,
-    params: &FeatureExtractParams,
     night_id: NightId,
+    max_speed_rad_per_day: Option<f64>,
 ) -> Vec<SeedNode> {
     let mut out = Vec::with_capacity(pairs.len());
     for (seed_id, &Pair { a: ia, b: ib }) in pairs.iter().enumerate() {
@@ -692,7 +543,7 @@ pub fn extract_pair_features(
         let vy = (pb[1] - pa[1]) * inv_dt;
 
         // Speed guardrail without sqrt: compare squared norms
-        if let Some(vmax) = params.max_speed_rad_per_day {
+        if let Some(vmax) = max_speed_rad_per_day {
             let speed2 = vx.mul_add(vx, vy * vy);
             let vmax2 = vmax * vmax;
             if speed2 > vmax2 {
@@ -1629,10 +1480,8 @@ mod feature_extract_tests {
         let feats = extract_pair_features(
             &store,
             &pairs,
-            &FeatureExtractParams {
-                max_speed_rad_per_day: Some(0.01), // keep it
-            },
             3156,
+            Some(0.01), // keep it
         );
         assert_eq!(feats.len(), 1);
         let s = &feats[0];
@@ -1672,14 +1521,7 @@ mod feature_extract_tests {
         let (store, pairs) =
             synthetic_pair_from_plane(ra0, dec0, tm, dt, p0, v, 1u8, 2e-6, 2e-6, (10.0, 10.0));
 
-        let feats = extract_pair_features(
-            &store,
-            &pairs,
-            &FeatureExtractParams {
-                max_speed_rad_per_day: Some(0.05),
-            },
-            1,
-        );
+        let feats = extract_pair_features(&store, &pairs, 1, Some(0.05));
         assert_eq!(feats.len(), 0, "Fast pair should have been filtered out");
     }
 
@@ -1753,8 +1595,8 @@ mod feature_extract_tests {
             let feats = extract_pair_features(
                 &store,
                 &pairs,
-                &FeatureExtractParams { max_speed_rad_per_day: Some(0.05) },
                 42,
+                Some(0.05)
             );
 
             prop_assume!(!feats.is_empty());
@@ -2049,15 +1891,15 @@ mod feature_extract_tests {
             let params = PredictorParams {
                 k_sigma: 3.0,
                 noise: ModelNoise {
-                    q0: 0.0,
-                    q1: 0.0,
-                    q2: 1e-10,
+                    variance_floor: 0.0,
+                    drift_per_day: 0.0,
+                    curvature_per_day2: 1e-10,
                 },
                 pad_cell_radius: false,
             };
 
-            let (_, _, r1) = seed.predict_cone(epoch_mid + 0.1, &binner, params);
-            let (_, _, r2) = seed.predict_cone(epoch_mid + 0.3, &binner, params);
+            let (_, _, r1) = seed.predict_cone(epoch_mid + 0.1, &binner, &params);
+            let (_, _, r2) = seed.predict_cone(epoch_mid + 0.3, &binner, &params);
             assert!(r2 > r1, "radius should increase with |dt|");
         }
 
@@ -2113,14 +1955,14 @@ mod feature_extract_tests {
             let params = PredictorParams {
                 k_sigma: 0.0, // cone from cov may be ~0, but we will pad by cell radius
                 noise: ModelNoise {
-                    q0: 0.0,
-                    q1: 0.0,
-                    q2: 0.0,
+                    variance_floor: 0.0,
+                    drift_per_day: 0.0,
+                    curvature_per_day2: 0.0,
                 },
                 pad_cell_radius: true,
             };
 
-            let cand = seed_a.cone_candidates(epoch_b, &index_b, &binner, params);
+            let cand = seed_a.cone_candidates(epoch_b, &index_b, &binner, &params);
             assert!(
                 cand.contains(&seed_b.seed_id),
                 "true target must be included"
@@ -2198,11 +2040,11 @@ mod feature_extract_tests {
                 let binner = GridBinner::new(5e-3);
                 let params = PredictorParams {
                     k_sigma: 3.0,
-                    noise: ModelNoise { q0: 0.0, q1: 0.0, q2: 1e-12 }, // non-negative
+                    noise: ModelNoise { variance_floor: 0.0, drift_per_day: 0.0, curvature_per_day2: 1e-12 }, // non-negative
                     pad_cell_radius: false,
                 };
-                let (_, _, r1) = seed.predict_cone(epoch + dt1, &binner, params);
-                let (_, _, r2) = seed.predict_cone(epoch + dt2, &binner, params);
+                let (_, _, r1) = seed.predict_cone(epoch + dt1, &binner, &params);
+                let (_, _, r2) = seed.predict_cone(epoch + dt2, &binner, &params);
                 prop_assert!(r2 >= r1, "radius must not shrink when |dt| increases");
             }
 
@@ -2239,11 +2081,11 @@ mod feature_extract_tests {
 
                 let params = PredictorParams {
                     k_sigma: 0.0, // rely on padding to at least cover center cell
-                    noise: ModelNoise { q0: 0.0, q1: 0.0, q2: 0.0 },
+                    noise: ModelNoise { variance_floor: 0.0, drift_per_day: 0.0, curvature_per_day2: 0.0 },
                     pad_cell_radius: true,
                 };
 
-                let cand = seed.cone_candidates(epoch, &index, &binner, params);
+                let cand = seed.cone_candidates(epoch, &index, &binner, &params);
                 prop_assert!(cand.contains(&seed_target.seed_id));
             }
         }

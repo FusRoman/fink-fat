@@ -48,6 +48,8 @@
 //! Together, these modules form the **seeding configuration layer** for the
 //! Fink-FAT pipeline.
 
+use serde::{Deserialize, Serialize};
+
 use crate::{errors::ParamError, MjdTt};
 
 /// Global parameters controlling **spatio-temporal bucketing** of alerts.
@@ -80,7 +82,7 @@ use crate::{errors::ParamError, MjdTt};
 /// ------
 /// * [`ParamError::Inconsistent`] – if `healpix_depth > 29`.
 /// * [`ParamError::NonFiniteOrNegativeTime`] – if time bin width is ≤ 0 or NaN/Inf.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BinningParams {
     /// Spatial resolution parameter for HEALPix (nested).
     ///
