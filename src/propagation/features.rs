@@ -500,9 +500,7 @@ impl SeedNode {
 ///
 /// # Examples
 /// ```ignore
-/// let features = extract_pair_features(&store, &pairs, FeatureExtractParams {
-///     max_speed_rad_per_day: Some(0.05), // ≈ 2.9 deg/day
-/// }, night_id);
+/// let features = extract_pair_features(&store, &pairs, 0.05, night_id);
 /// assert!(!features.is_empty());
 /// ```
 ///
@@ -618,9 +616,7 @@ pub fn extract_pair_features(
 ///
 /// # Examples
 /// ```ignore
-/// let features = extract_triplet_features(&store, &triplets, FeatureExtractParams {
-///     max_speed_rad_per_day: None,
-/// }, night_id);
+/// let features = extract_triplet_features(&store, &triplets, night_id);
 /// assert!(features.iter().all(|s| s.acc_xy.is_some()));
 /// ```
 ///
