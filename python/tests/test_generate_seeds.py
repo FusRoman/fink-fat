@@ -3,7 +3,7 @@ import math
 import numpy as np
 
 # Le module PyO3 exposé par ta crate (d'après #[pyclass(module = "fink_fat")])
-from fink_fat import AlertStore, PyFinkFatParams  # type: ignore
+from fink_fat import AlertStore, FinkFatParams  # type: ignore
 
 
 def arcsec_to_rad(x: float) -> float:
@@ -19,15 +19,17 @@ def build_store_from_triplets(start_mjd: float, triplets):
     n = len(triplets)
     dia_source_id = np.arange(1, n + 1, dtype=np.uint64)
     ra = np.array([t[0] for t in triplets], dtype=np.float64)
-    ra_err = np.full(n, np.deg2rad(0.5/3600), dtype=np.float64) # 0.5" error
+    ra_err = np.full(n, np.deg2rad(0.5 / 3600), dtype=np.float64)  # 0.5" error
     dec = np.array([t[1] for t in triplets], dtype=np.float64)
-    dec_err = np.full(n, np.deg2rad(0.5/3600), dtype=np.float64) # 0.5" error
+    dec_err = np.full(n, np.deg2rad(0.5 / 3600), dtype=np.float64)  # 0.5" error
     mjd_tt = np.array([start_mjd + t[2] for t in triplets], dtype=np.float64)
     flux = np.zeros(n, dtype=np.float32)
     flux_err = np.zeros(n, dtype=np.float32)
     band = np.ones(n, dtype=np.uint8)
 
-    return AlertStore.from_numpy(dia_source_id, ra, ra_err, dec, dec_err, mjd_tt, flux, flux_err, band)
+    return AlertStore.from_numpy(
+        dia_source_id, ra, ra_err, dec, dec_err, mjd_tt, flux, flux_err, band
+    )
 
 
 def normalize_pair(a, b):
@@ -65,7 +67,7 @@ def test_pairs_kept_without_triplet():
 
     # Bins de 10 min ; Δt_max = 15 min ; Δθ_max = 10"
     params = (
-        PyFinkFatParams.builder()
+        FinkFatParams.builder()
         .healpix_depth(9)
         .time_bin_width_days(10.0 / 1440.0)
         .pair_max_dt(15.0 / 1440.0)
@@ -108,7 +110,7 @@ def test_same_timebin_toggle():
     store = build_store_from_triplets(start, triplets)
 
     params = (
-        PyFinkFatParams.builder()
+        FinkFatParams.builder()
         .healpix_depth(9)
         .time_bin_width_days(20.0 / 1440.0)
         .pair_max_dt(30.0 / 1440.0)
@@ -128,7 +130,7 @@ def test_same_timebin_toggle():
     assert trips == []
 
     params = (
-        PyFinkFatParams.builder()
+        FinkFatParams.builder()
         .healpix_depth(9)
         .time_bin_width_days(20.0 / 1440.0)
         .pair_max_dt(30.0 / 1440.0)
@@ -165,7 +167,7 @@ def test_triplet_linear_motion_and_pairs_present():
     store = build_store_from_triplets(start, triplets)
 
     params = (
-        PyFinkFatParams.builder()
+        FinkFatParams.builder()
         .healpix_depth(10)
         .time_bin_width_days(10.0 / 1440.0)
         .pair_max_dt(25.0 / 1440.0)
@@ -211,7 +213,7 @@ def test_output_types_and_shapes():
     store = build_store_from_triplets(start, triplets)
 
     params = (
-        PyFinkFatParams.builder()
+        FinkFatParams.builder()
         .healpix_depth(8)
         .time_bin_width_days(10.0 / 1440.0)
         .pair_max_dt(10.0 / 1440.0)
