@@ -581,7 +581,8 @@ impl FlowBuilder {
     ///
     /// This is a thin wrapper over `FlowProblem::add_link_arcs`. It assumes that
     /// both layers `(left_night, right_night)` have already been ingested via
-    /// [`ingest_night`](crate::propagation::flow::FlowBuilder::ingest_night). If a seed is unknown, you will get `FlowError::UnknownSeed`.
+    /// [`ingest_night`](crate::propagation::flow::FlowBuilder::ingest_night).
+    /// If a seed is unknown, you will get `FlowError::UnknownSeed`.
     pub fn add_links_between(
         &mut self,
         left_night: NightId,
