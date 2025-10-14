@@ -357,23 +357,6 @@ impl PredictorParamsBuilder {
         self
     }
 
-    /* -------- Backward-compat flat setters (deprecated q0/q1/q2 names) -------- */
-    /// Deprecated: use `set_noise_variance_floor`.
-    #[deprecated(note = "Use `set_noise_variance_floor()` instead of `set_q0()`.")]
-    pub fn set_q0(self, v: f64) -> Self {
-        self.set_noise_variance_floor(v)
-    }
-    /// Deprecated: use `set_noise_drift_per_day`.
-    #[deprecated(note = "Use `set_noise_drift_per_day()` instead of `set_q1()`.")]
-    pub fn set_q1(self, v: f64) -> Self {
-        self.set_noise_drift_per_day(v)
-    }
-    /// Deprecated: use `set_noise_curvature_per_day2`.
-    #[deprecated(note = "Use `set_noise_curvature_per_day2()` instead of `set_q2()`.")]
-    pub fn set_q2(self, v: f64) -> Self {
-        self.set_noise_curvature_per_day2(v)
-    }
-
     /// Enable/disable padding by the spatial cell radius.
     pub fn pad_cell_radius(mut self, yes: bool) -> Self {
         self.pad_cell_radius = yes;

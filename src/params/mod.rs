@@ -90,6 +90,7 @@
 
 pub mod binning_params;
 pub mod engine_params;
+pub mod min_cost_flow_params;
 pub mod pair_params;
 pub mod params_binding;
 pub mod propagator_params;
@@ -104,6 +105,7 @@ use crate::{
     params::{
         binning_params::{BinningParams, BinningParamsBuilder},
         engine_params::{InterNightLinkConfig, InterNightLinkConfigBuilder},
+        min_cost_flow_params::{MinCostFlowConfig, MinCostFlowConfigBuilder},
         pair_params::{PairParams, PairParamsBuilder},
         triplet_params::{TripletParams, TripletParamsBuilder},
     },
@@ -173,6 +175,9 @@ pub struct FinkFatParams {
     /// See [`engine_params::InterNightLinkConfig`].
     #[serde(default)]
     pub link: InterNightLinkConfig,
+    /// Min-Cost Flow backend configuration for the global linker.
+    #[serde(default)]
+    pub mcf: MinCostFlowConfig,
     /// Whether to show progress bars during seeding/linking.
     #[serde(default)]
     pub show_progress: bool,
@@ -193,6 +198,7 @@ impl Default for FinkFatParams {
             pairs: PairParams::default(),
             triplets: TripletParams::default(),
             link: InterNightLinkConfig::default(),
+            mcf: MinCostFlowConfig::default(),
             show_progress: false,
         }
     }
@@ -328,6 +334,7 @@ pub struct FinkFatParamsBuilder {
     pairs: PairParamsBuilder,
     triplets: TripletParamsBuilder,
     link: InterNightLinkConfigBuilder,
+    mcf: MinCostFlowConfigBuilder,
     show_progress: bool,
 }
 
@@ -339,6 +346,7 @@ impl Default for FinkFatParamsBuilder {
             pairs: PairParamsBuilder::default(),
             triplets: TripletParamsBuilder::default(),
             link: InterNightLinkConfigBuilder::new(),
+            mcf: MinCostFlowConfigBuilder::new(),
             show_progress: false,
         }
     }
@@ -533,6 +541,32 @@ impl FinkFatParamsBuilder {
         self
     }
 
+    // Min-Cost Flow
+    pub fn lambda_start(mut self, v: f64) -> Self {
+        self.mcf = self.mcf.lambda_start(v);
+        self
+    }
+
+    pub fn lambda_end(mut self, v: f64) -> Self {
+        self.mcf = self.mcf.lambda_end(v);
+        self
+    }
+
+    pub fn gap_penalty_weight(mut self, v: f64) -> Self {
+        self.mcf = self.mcf.gap_penalty_weight(v);
+        self
+    }
+
+    pub fn max_revisit_gap(mut self, v: u32) -> Self {
+        self.mcf = self.mcf.max_revisit_gap(v);
+        self
+    }
+
+    pub fn max_total_flow(mut self, v: Option<u32>) -> Self {
+        self.mcf = self.mcf.max_total_flow(v);
+        self
+    }
+
     /* -------------------- Nested setters via closure ------------------- */
 
     /// Configure `binning` via its builder.
@@ -587,6 +621,19 @@ impl FinkFatParamsBuilder {
         self
     }
 
+    /// Configure min-cost flow backend via its builder.
+    ///
+    /// Notes
+    /// -----
+    /// This closure-based API is **not** exposed in Python bindings.
+    pub fn with_mcf<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(MinCostFlowConfigBuilder) -> MinCostFlowConfigBuilder,
+    {
+        self.mcf = f(self.mcf);
+        self
+    }
+
     /// Build the full [`FinkFatParams`] (apply defaults for unspecified fields) and validate.
     ///
     /// Return
@@ -598,12 +645,14 @@ impl FinkFatParamsBuilder {
         let pairs = self.pairs.build()?;
         let triplets = self.triplets.build()?;
         let link = self.link.build()?;
+        let mcf = self.mcf.build()?;
 
         let cfg = FinkFatParams {
             binning,
             pairs,
             triplets,
             link,
+            mcf,
             show_progress: self.show_progress,
         };
         cfg.validate()?;

@@ -60,8 +60,78 @@ use crate::{
         scoring::ScoredEdge,
         solver::{Assignment, AssignmentSolver, BipartiteProblem, Edge},
     },
+    seeding::space_time_bucket::SpatialBinner,
     NightId,
 };
+
+/* -------------------------- Top-K Edge Generation ------------------------- */
+
+/// Génère les **edges scorés Top-K** de `left` vers `right`, sans résoudre.
+/// Respecte `cfg.limits` (Top-K, max_cost, max_total_edges).
+pub fn generate_topk_edges_between<B: SpatialBinner>(
+    left: &[SeedNode],
+    right: &[SeedNode],
+    cfg: &InterNightLinkConfig,
+    binner: &B,
+    right_id_to_index: &AHashMap<SeedId, usize>,
+) -> Vec<Edge> {
+    let night_left = left.first().map(|s| s.night_id).unwrap_or(0);
+    let night_right = right.first().map(|s| s.night_id).unwrap_or(0);
+
+    // Δ revisits (≥ 1)
+    let delta_revisit: u32 = night_right.saturating_sub(night_left).max(1);
+
+    // 0) index spatial côté "right"
+    let index_right = SeedSpatialIndex::build(right, binner);
+
+    // 1) génération/scoring Top-K
+    let mut edges: Vec<Edge> = Vec::with_capacity(left.len() * cfg.limits.top_k_per_left);
+    let t_right_med = median_epoch(right);
+
+    for i in left {
+        // (a) cône au temps médian (couverture) -> ids candidats
+        let (ra_c, dec_c, r_c) = i.predict_cone(t_right_med, binner, &cfg.predict);
+        let cand_iter = SeedSpatialIndex::cone_query(&index_right, binner, ra_c, dec_c, r_c);
+
+        // (b) score fin seed-par-seed au vrai epoch de j
+        let mut scored: Vec<ScoredEdge> = Vec::new();
+        for j_id in cand_iter {
+            if let Some(&j_idx) = right_id_to_index.get(&j_id) {
+                let j = &right[j_idx];
+                if let Some(se) = ScoredEdge::score(i, j, cfg, delta_revisit) {
+                    if let Some(cmax) = cfg.limits.max_cost {
+                        if se.cost > cmax {
+                            continue;
+                        }
+                    }
+                    scored.push(se);
+                }
+            }
+        }
+
+        // (c) Top-K par coût croissant
+        scored.sort_by(|a, b| a.cost.total_cmp(&b.cost));
+        scored.truncate(cfg.limits.top_k_per_left);
+
+        // (d) conversion -> Edge nu pour MCF
+        edges.extend(scored.into_iter().map(|se| Edge {
+            from: se.from,
+            to: se.to,
+            cost: se.cost,
+            dt_days: se.dt_days,
+        }));
+    }
+
+    // 2) Cap global optionnel
+    if let Some(max_e) = cfg.limits.max_total_edges {
+        if edges.len() > max_e {
+            edges.sort_by(|a, b| a.cost.total_cmp(&b.cost));
+            edges.truncate(max_e);
+        }
+    }
+
+    edges
+}
 
 /* ------------------------------- Results --------------------------------- */
 
@@ -126,76 +196,7 @@ where
 {
     let night_left = left.first().map(|s| s.night_id).unwrap_or(0);
     let night_right = right.first().map(|s| s.night_id).unwrap_or(0);
-
-    // Infer revisit gap (ensure at least 1)
-    let delta_revisit: u32 = night_right.saturating_sub(night_left).max(1);
-
-    // 0) Build spatial index for the right night
-    let index_right = SeedSpatialIndex::build(right, binner);
-
-    // 1) Candidate generation + scoring (Top-K per left)
-    let mut edges: Vec<Edge> = Vec::with_capacity(left.len() * cfg.limits.top_k_per_left);
-
-    // Coarse target epoch for coverage
-    let t_right_med = median_epoch(right);
-
-    println!(
-        "Linking nights {}→{} ({} left, {} right) at Δ={} revisits",
-        night_left,
-        night_right,
-        left.len(),
-        right.len(),
-        delta_revisit
-    );
-
-    for i in left {
-        // (a) coarse coverage at median epoch to fetch candidate ids
-        let (ra_c, dec_c, r_c) = i.predict_cone(t_right_med, binner, &cfg.predict);
-        let cand_iter = SeedSpatialIndex::cone_query(&index_right, binner, ra_c, dec_c, r_c);
-
-        // Collect and **score** each candidate at its own epoch t_j
-        let mut scored: Vec<ScoredEdge> = Vec::new();
-        for j_id in cand_iter {
-            if let Some(&j_idx) = right_id_to_index.get(&j_id) {
-                let j = &right[j_idx];
-                if let Some(se) = ScoredEdge::score(i, j, cfg, delta_revisit) {
-                    // Optional cost cutoff
-                    if let Some(cmax) = cfg.limits.max_cost {
-                        if se.cost > cmax {
-                            continue;
-                        }
-                    }
-                    scored.push(se);
-                }
-            }
-        }
-
-        // Keep Top-K by increasing cost
-        scored.sort_by(|a, b| a.cost.total_cmp(&b.cost));
-        scored.truncate(cfg.limits.top_k_per_left);
-
-        // Append to sparse edge list
-        edges.extend(scored.into_iter().map(|se| Edge {
-            from: se.from,
-            to: se.to,
-            cost: se.cost,
-            dt_days: se.dt_days,
-        }));
-    }
-
-    println!(
-        "Generated {} candidate edges (avg {:.1} per left seed)",
-        edges.len(),
-        edges.len() as f64 / left.len() as f64
-    );
-
-    // Optional total edge cap (globally)
-    if let Some(max_e) = cfg.limits.max_total_edges {
-        if edges.len() > max_e {
-            edges.sort_by(|a, b| a.cost.total_cmp(&b.cost));
-            edges.truncate(max_e);
-        }
-    }
+    let edges = generate_topk_edges_between(left, right, cfg, binner, right_id_to_index);
 
     // Build problem and solve
     let left_ids: Vec<SeedId> = left.iter().map(|s| s.seed_id).collect();
