@@ -731,3 +731,368 @@ pub fn solve_and_extract<S: MinCostFlowSolver>(
 
     Ok(upd)
 }
+
+#[cfg(test)]
+mod flow_graph_tests {
+    use super::*;
+    use crate::propagation::features::{SeedId, SeedNode};
+    use crate::propagation::solver::Edge;
+    use proptest::prelude::*;
+
+    /* ------------------------------- Utilities ------------------------------- */
+
+    /// Minimal deterministic seed fabric.
+    ///
+    /// This constructs a SeedNode whose tangent plane is centered at `(center_ra, center_dec)`,
+    /// with a simple kinematics model. We keep epochs close so that the predicted cone
+    /// overlaps the counterpart on the right night under permissive gating.
+    #[allow(clippy::too_many_arguments)]
+    fn mk_seed(seed_id: u64) -> SeedNode {
+        SeedNode::new(
+            seed_id,
+            0,
+            0.0,
+            [0.0, 0.0],
+            [0.0, 0.0],
+            // unit-ish covariances (diagonal) to avoid degenerate scoring
+            [[1e-12, 0.0], [0.0, 1e-12]],
+            [[1e-12, 0.0], [0.0, 1e-12]],
+            None,
+            1000.0,
+            10.0,
+            0,
+            2,
+            Vec::new(), // not used in these tests
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        )
+    }
+
+    fn mk_seeds(base: SeedId, n: usize) -> Vec<SeedNode> {
+        (0..n).map(|i| mk_seed(base + i as SeedId)).collect()
+    }
+
+    fn arcs_of_kind(pb: &FlowProblem, kind: ArcKind) -> Vec<&FlowArc> {
+        pb.arcs.iter().filter(|a| a.kind == kind).collect()
+    }
+
+    /* ------------------------------ Unit tests ------------------------------ */
+
+    #[test]
+    fn source_and_sink_initialized_and_seed_nodes_start_after_them() {
+        let pb = FlowProblem::new(MinCostFlowConfig::default());
+        assert_eq!(pb.source, 0);
+        assert_eq!(pb.sink, 1);
+        assert_eq!(pb.nodes.len(), 2);
+        assert!(pb.nodes[0].seed.is_none());
+        assert!(pb.nodes[1].seed.is_none());
+    }
+
+    #[test]
+    fn add_layer_populates_nodes_layers_and_index() {
+        let mut pb = FlowProblem::new(MinCostFlowConfig::default());
+        let seeds = mk_seeds(100, 3);
+        let night: NightId = 42;
+
+        let idx = pb.add_layer(night, &seeds).expect("add_layer ok");
+        assert_eq!(idx, 0);
+        assert_eq!(pb.layers.len(), 1);
+        assert_eq!(pb.layers[0].night, night);
+        assert_eq!(pb.layers[0].node_ids.len(), seeds.len());
+        assert_eq!(pb.nodes.len(), 2 + seeds.len());
+
+        // index_of doit refléter seed<->node
+        for (k, nid) in &pb.index_of {
+            assert_eq!(pb.nodes[*nid as usize].seed.unwrap(), *k);
+        }
+    }
+
+    #[test]
+    fn start_and_end_arcs_have_expected_shape_and_costs() {
+        let cfg = MinCostFlowConfig::default();
+        let mut pb = FlowProblem::new(cfg.clone());
+        let seeds = mk_seeds(10, 4);
+        let layer = pb.add_layer(1, &seeds).unwrap();
+
+        let n_start = pb.add_start_arcs(layer).unwrap();
+        let n_end = pb.add_end_arcs(layer).unwrap();
+        assert_eq!(n_start, seeds.len());
+        assert_eq!(n_end, seeds.len());
+
+        let starts = arcs_of_kind(&pb, ArcKind::Start);
+        let ends = arcs_of_kind(&pb, ArcKind::End);
+        assert_eq!(starts.len(), seeds.len());
+        assert_eq!(ends.len(), seeds.len());
+
+        for a in starts {
+            assert_eq!(a.from, pb.source);
+            assert!(pb.nodes[a.to as usize].seed.is_some());
+            assert!((a.cost - cfg.lambda_start).abs() < 1e-12);
+            assert_eq!(a.capacity, 1);
+            assert!(matches!(a.kind, ArcKind::Start));
+            assert!(a.left.is_none());
+            assert!(a.right.is_some());
+        }
+
+        for a in ends {
+            assert!(pb.nodes[a.from as usize].seed.is_some());
+            assert_eq!(a.to, pb.sink);
+            assert!((a.cost - cfg.lambda_end).abs() < 1e-12);
+            assert_eq!(a.capacity, 1);
+            assert!(matches!(a.kind, ArcKind::End));
+            assert!(a.left.is_some());
+            assert!(a.right.is_none());
+        }
+    }
+
+    #[test]
+    fn link_arcs_go_forward_in_time_and_match_index() {
+        let mut pb = FlowProblem::new(MinCostFlowConfig::default());
+        let left_night: NightId = 5;
+        let right_night: NightId = 6;
+
+        let left_seeds = mk_seeds(1_000, 3);
+        let right_seeds = mk_seeds(2_000, 2);
+
+        pb.add_layer(left_night, &left_seeds).unwrap();
+        pb.add_layer(right_night, &right_seeds).unwrap();
+
+        let mut edges = Vec::new();
+        for (i, l) in left_seeds.iter().enumerate() {
+            for (j, r) in right_seeds.iter().enumerate() {
+                edges.push(Edge {
+                    from: l.seed_id,
+                    to: r.seed_id,
+                    cost: (i + j) as f64,
+                    dt_days: 0.5,
+                });
+            }
+        }
+
+        let created = pb
+            .add_link_arcs(left_night, right_night, &edges)
+            .expect("add_link_arcs ok");
+        assert_eq!(created, edges.len());
+
+        for a in pb.arcs.iter().filter(|a| a.kind == ArcKind::Link) {
+            let lk = a.left.expect("left seed present");
+            let rk = a.right.expect("right seed present");
+            assert_eq!(lk.night, left_night);
+            assert_eq!(rk.night, right_night);
+
+            let from_seed = pb.nodes[a.from as usize].seed.unwrap();
+            let to_seed = pb.nodes[a.to as usize].seed.unwrap();
+            assert_eq!(from_seed, lk);
+            assert_eq!(to_seed, rk);
+
+            // invariant temporel (le module construit « vers l’avant »)
+            assert!(lk.night < rk.night, "link must go forward in time");
+            assert_eq!(a.capacity, 1);
+            assert!(a.cost.is_finite());
+        }
+    }
+
+    #[test]
+    fn solve_and_extract_with_null_solver_reports_zero_flow() {
+        let cfg = MinCostFlowConfig::default();
+        let mut builder = FlowBuilder::new(cfg);
+
+        let l1 = mk_seeds(10, 2);
+        let l2 = mk_seeds(20, 3);
+        builder.ingest_night(100, &l1).unwrap();
+        builder.ingest_night(101, &l2).unwrap();
+
+        let edges = vec![
+            Edge {
+                from: 10,
+                to: 20,
+                cost: 1.0,
+                dt_days: 0.5,
+            },
+            Edge {
+                from: 11,
+                to: 21,
+                cost: 2.0,
+                dt_days: 0.5,
+            },
+        ];
+        builder.add_links_between(100, 101, &edges).unwrap();
+
+        let upd = solve_and_extract(&builder, &NullFlowSolver).expect("solve ok");
+        assert_eq!(upd.night, 101);
+        assert_eq!(upd.n_layers, 2);
+        assert_eq!(upd.total_flow, 0);
+        assert!(upd.trajectories.is_empty());
+        assert_eq!(upd.total_nodes, builder.pb.nodes.len());
+        assert_eq!(upd.total_arcs, builder.pb.arcs.len());
+    }
+
+    #[test]
+    fn flowsolution_paths_extracts_chains() {
+        // Build a synthetic solution with two chains (no standalone singleton).
+        // Path A: (n=1,s=10) -> (n=2,s=20) -> (n=3,s=30)
+        // Path B: (n=2,s=21) -> (n=3,s=31)
+        let a1 = SeedKey { night: 1, seed: 10 };
+        let a2 = SeedKey { night: 2, seed: 20 };
+        let a3 = SeedKey { night: 3, seed: 30 };
+        let b1 = SeedKey { night: 2, seed: 21 };
+        let b2 = SeedKey { night: 3, seed: 31 };
+
+        let mut succ = ahash::AHashMap::new();
+        let mut pred = ahash::AHashMap::new();
+
+        succ.insert(a1, a2);
+        pred.insert(a2, a1);
+        succ.insert(a2, a3);
+        pred.insert(a3, a2);
+        succ.insert(b1, b2);
+        pred.insert(b2, b1);
+
+        let sol = FlowSolution {
+            total_flow: 2,
+            active_arcs: vec![],
+            succ_of: succ,
+            pred_of: pred,
+        };
+
+        let paths = sol.paths();
+        // Sorted by head (night, seed): heads are a1 (1,10) then b1 (2,21).
+        assert_eq!(paths.len(), 2);
+        assert_eq!(paths[0], vec![a1, a2, a3]);
+        assert_eq!(paths[1], vec![b1, b2]);
+    }
+
+    /* -------------------------- Property-based tests ------------------------- */
+
+    proptest! {
+        #[test]
+        fn prop_layers_start_end_arcs_and_index_are_consistent(
+            nights in prop::collection::vec(1u32..200u32, 1..=4),
+            seeds_per in prop::collection::vec(0usize..=5, 1..=4),
+            lambda_start in 0f64..10_000f64,
+            lambda_end in 0f64..10_000f64,
+        ) {
+            prop_assume!(nights.len() == seeds_per.len());
+
+            // nuits strictement croissantes (pour rester simple)
+            let mut nights_sorted = nights.clone();
+            nights_sorted.sort_unstable();
+            nights_sorted.dedup();
+            prop_assume!(!nights_sorted.is_empty());
+
+            // aligne `seeds_per` sur la taille réelle
+            let mut seeds_per_clean = Vec::with_capacity(nights_sorted.len());
+            for i in 0..nights_sorted.len() {
+                seeds_per_clean.push(seeds_per.get(i).copied().unwrap_or(0));
+            }
+
+            let cfg = MinCostFlowConfig {
+                lambda_start: lambda_start.abs(),
+                lambda_end: lambda_end.abs(),
+                ..Default::default()
+            };
+
+            let mut builder = FlowBuilder::new(cfg.clone());
+
+            let mut total_seeds = 0usize;
+            for (i, &night) in nights_sorted.iter().enumerate() {
+                let nseeds = seeds_per_clean[i];
+                let base = (i as SeedId) * 10_000;
+                let seeds = mk_seeds(base, nseeds);
+                let layer = builder.ingest_night(night, &seeds).unwrap();
+
+                assert_eq!(layer.night, night);
+                assert_eq!(layer.n_seeds, nseeds);
+                assert_eq!(layer.n_start_arcs, nseeds);
+                assert_eq!(layer.n_end_arcs, nseeds);
+
+                total_seeds += nseeds;
+            }
+
+            let pb = &builder.pb;
+            assert_eq!(pb.layers.len(), nights_sorted.len());
+            assert_eq!(pb.nodes.len(), 2 + total_seeds);
+
+            let starts = arcs_of_kind(pb, ArcKind::Start);
+            let ends = arcs_of_kind(pb, ArcKind::End);
+            assert_eq!(starts.len(), total_seeds);
+            assert_eq!(ends.len(), total_seeds);
+
+            // index_of couvre tous les seeds
+            let mut counted = 0usize;
+            for n in pb.nodes.iter().skip(2) {
+                let sk = n.seed.expect("seed node must have SeedKey");
+                let got = pb.index_of.get(&sk).copied().expect("indexed");
+                assert_eq!(got, n.id);
+                counted += 1;
+            }
+            assert_eq!(counted, total_seeds);
+
+            for a in starts {
+                assert!((a.cost - cfg.lambda_start).abs() < 1e-9);
+                assert_eq!(a.capacity, 1);
+                assert_eq!(a.from, pb.source);
+                assert!(a.right.is_some());
+            }
+            for a in ends {
+                assert!((a.cost - cfg.lambda_end).abs() < 1e-9);
+                assert_eq!(a.capacity, 1);
+                assert_eq!(a.to, pb.sink);
+                assert!(a.left.is_some());
+            }
+        }
+
+        #[test]
+        fn prop_link_arcs_forward_in_time_and_consistent_with_index(
+            left_night in 1u32..100u32,
+            gap in 1u32..5u32,
+            n_left in 1usize..=5,
+            n_right in 1usize..=5,
+            costs in prop::collection::vec(0f64..100f64, 1..=32),
+        ) {
+            let right_night = left_night + gap;
+
+            let mut pb = FlowProblem::new(MinCostFlowConfig::default());
+            let left = mk_seeds(10_000, n_left);
+            let right = mk_seeds(20_000, n_right);
+            pb.add_layer(left_night, &left).unwrap();
+            pb.add_layer(right_night, &right).unwrap();
+
+            let mut edges = Vec::new();
+            let mut k = 0usize;
+            'outer: for l in &left {
+                for r in &right {
+                    if k >= costs.len() { break 'outer; }
+                    edges.push(Edge {
+                        from: l.seed_id,
+                        to: r.seed_id,
+                        cost: costs[k].abs(),
+                        dt_days: gap as f64
+                    });
+                    k += 1;
+                }
+            }
+            let created = pb.add_link_arcs(left_night, right_night, &edges).unwrap();
+            assert_eq!(created, edges.len());
+
+            for a in pb.arcs.iter().filter(|a| a.kind == ArcKind::Link) {
+                let lk = a.left.unwrap();
+                let rk = a.right.unwrap();
+                assert_eq!(lk.night, left_night);
+                assert_eq!(rk.night, right_night);
+                assert!(lk.night < rk.night);
+
+                let from_idx = *pb.index_of.get(&lk).expect("from indexed");
+                let to_idx = *pb.index_of.get(&rk).expect("to indexed");
+                assert_eq!(from_idx, a.from);
+                assert_eq!(to_idx, a.to);
+
+                assert_eq!(a.capacity, 1);
+                assert!(a.cost.is_finite());
+                assert!(a.dt_days >= 0.0);
+            }
+        }
+    }
+}
