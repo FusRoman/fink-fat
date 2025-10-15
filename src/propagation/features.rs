@@ -157,6 +157,10 @@ pub struct SeedNode {
     pub center_ra: f64,
     /// **ICRS** tangent-plane center used during extraction (rad).
     pub center_dec: f64,
+    /// Precomputed trigonometric helpers for the tangent center.
+    cos_dec0: f64,
+    /// Precomputed trigonometric helpers for the tangent center.
+    sin_dec0: f64,
     /// Sky position in radians at `epoch_mid`, projected back from `pos_xy` around `(center_ra, center_dec)`.
     pub ra_mid: f64,
     /// Sky position in radians at `epoch_mid`, projected back from `pos_xy` around `(center_ra, center_dec)`.
@@ -166,6 +170,120 @@ pub struct SeedNode {
 /* --------------------------- Public API --------------------------- */
 
 impl SeedNode {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        seed_id: u64,
+        night_id: NightId,
+        epoch_mid: f64,
+        pos_xy: [f64; 2],
+        vel_xy: [f64; 2],
+        cov_pos: [[f64; 2]; 2],
+        cov_vel: [[f64; 2]; 2],
+        acc_xy: Option<[f64; 2]>,
+        flux_mean: f32,
+        flux_std: f32,
+        band: u8,
+        n_obs: u16,
+        members: Vec<AlertId>,
+        center_ra: f64,
+        center_dec: f64,
+        ra_mid: f64,
+        dec_mid: f64,
+    ) -> Self {
+        Self {
+            seed_id,
+            night_id,
+            epoch_mid,
+            pos_xy,
+            vel_xy,
+            cov_pos,
+            cov_vel,
+            acc_xy,
+            flux_mean,
+            flux_std,
+            band,
+            n_obs,
+            members,
+            center_ra,
+            center_dec,
+            cos_dec0: center_dec.cos(),
+            sin_dec0: center_dec.sin(),
+            ra_mid,
+            dec_mid,
+        }
+    }
+
+    /// Project a sky direction `(α, δ)` onto the **gnomonic tangent plane** centered at `(α₀, δ₀)`.
+    ///
+    /// Compared to a naive implementation, this routine accepts the precomputed
+    /// `sin(δ₀)` and `cos(δ₀)` of the projection center to avoid recomputing them
+    /// at every call (hot path in scoring).
+    ///
+    /// Mathematical form
+    /// -----------------
+    /// Using Δα = α − α₀ (in radians) and the usual spherical trig:
+    ///
+    /// ```text
+    /// denom = sin(δ)·sin(δ₀) + cos(δ)·cos(δ₀)·cos(Δα)
+    /// x     = [cos(δ)·sin(Δα)] / denom
+    /// y     = [cos(δ₀)·sin(δ) − sin(δ₀)·cos(δ)·cos(Δα)] / denom
+    /// ```
+    ///
+    /// Arguments
+    /// ---------
+    /// * `ra`        – Right ascension α of the point to project (radians).
+    /// * `dec`       – Declination δ of the point to project (radians).
+    /// * `ra0`       – Right ascension α₀ of the projection center (radians).
+    /// * `dec0`      – Declination δ₀ of the projection center (radians).
+    /// * `sin_dec0`  – Precomputed `sin(δ₀)` for the projection center.
+    /// * `cos_dec0`  – Precomputed `cos(δ₀)` for the projection center.
+    ///
+    /// Return
+    /// ------
+    /// * `[x, y]` – Coordinates in the tangent plane centered at `(α₀, δ₀)`.
+    ///
+    /// Notes
+    /// -----
+    /// * **Numerical guard:** When `denom` is extremely small (point near the
+    ///   90° great circle from the center), the projection explodes. We clamp
+    ///   `denom` away from zero by `EPS = 1e-15` to avoid `Inf/NaN`. This keeps
+    ///   the function total but callers should still gate on a reasonable field
+    ///   radius upstream.
+    /// * **RA wrapping:** The formula is invariant to `2π` wrapping; no need to
+    ///   normalize `Δα` explicitly.
+    /// * **Performance:** Precomputing `(sin(δ₀), cos(δ₀))` per seed (night center)
+    ///   significantly reduces trig overhead in hot loops.
+    ///
+    /// See also
+    /// --------
+    /// * `SeedNode` – Store `sin_dec0`/`cos_dec0` on the seed to reuse them.
+    ///
+    #[inline]
+    pub fn radec_to_tangent_precomp(&self, ra: f64, dec: f64) -> [f64; 2] {
+        // Δα and basic trig
+        let delta_ra = ra - self.center_ra;
+        let (sin_dra, cos_dra) = delta_ra.sin_cos();
+        let (sin_dec, cos_dec) = dec.sin_cos();
+
+        // Denominator of the gnomonic projection
+        let mut denom = sin_dec * self.sin_dec0 + cos_dec * self.cos_dec0 * cos_dra;
+
+        // Numerical guard against poles of the projection (|denom| → 0)
+        // Keep the sign to preserve orientation.
+        const EPS: f64 = 1e-15;
+        if denom.abs() < EPS {
+            denom = if denom.is_sign_negative() { -EPS } else { EPS };
+        }
+
+        // x = (cosδ · sinΔα) / denom
+        let x = (cos_dec * sin_dra) / denom;
+
+        // y = (cosδ₀ · sinδ − sinδ₀ · cosδ · cosΔα) / denom
+        let y = (self.cos_dec0 * sin_dec - self.sin_dec0 * cos_dec * cos_dra) / denom;
+
+        [x, y]
+    }
+
     /// Resolve all member alerts of a seed (checked).
     ///
     /// Return
@@ -576,6 +694,8 @@ pub fn extract_pair_features(
             members: vec![ia, ib],
             center_ra: ra0,
             center_dec: dec0,
+            cos_dec0: dec0.cos(),
+            sin_dec0: dec0.sin(),
             ra_mid,
             dec_mid,
         });
@@ -688,6 +808,8 @@ pub fn extract_triplet_features(
             members: vec![ia, ib, ic],
             center_ra: ra0,
             center_dec: dec0,
+            cos_dec0: dec0.cos(),
+            sin_dec0: dec0.sin(),
             ra_mid,
             dec_mid,
         });
@@ -1720,6 +1842,8 @@ mod feature_extract_tests {
                 members: vec![],
                 center_ra,
                 center_dec,
+                cos_dec0: center_dec.cos(),
+                sin_dec0: center_dec.sin(),
                 ra_mid,
                 dec_mid,
             }
@@ -1939,6 +2063,8 @@ mod feature_extract_tests {
                 members: vec![],
                 center_ra,
                 center_dec,
+                cos_dec0: center_dec.cos(),
+                sin_dec0: center_dec.sin(),
                 ra_mid: ra_b,
                 dec_mid: dec_b,
             };
@@ -2071,6 +2197,7 @@ mod feature_extract_tests {
                     flux_mean: 0.0, flux_std: 0.0, band: 0, n_obs: 2,
                     members: vec![],
                     center_ra, center_dec,
+                    cos_dec0: center_dec.cos(), sin_dec0: center_dec.sin(),
                     ra_mid: seed.ra_mid, dec_mid: seed.dec_mid,
                 };
                 let index = SeedSpatialIndex::build(std::slice::from_ref(&seed_target), &binner);

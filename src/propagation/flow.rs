@@ -21,6 +21,7 @@
 //! a time-expanded graph and to push solutions into the `TrackRegistry`.
 
 use ahash::AHashMap;
+use pyo3::{pyclass, pymethods};
 
 use crate::params::min_cost_flow_params::MinCostFlowConfig;
 use crate::propagation::features::{SeedId, SeedNode};
@@ -158,6 +159,12 @@ pub struct FlowProblem {
     pub layers: Vec<NightLayer>,
     /// Mapping `(night, seed) → NodeId` for quick lookups.
     pub index_of: AHashMap<SeedKey, NodeId>,
+}
+
+impl Default for FlowProblem {
+    fn default() -> Self {
+        Self::new(MinCostFlowConfig::default())
+    }
 }
 
 impl FlowProblem {
@@ -528,6 +535,7 @@ pub struct LayerSummary {
 
 /// Facade to build/update a `FlowProblem` as nights arrive.
 /// This is the MCF counterpart of the pairwise engine wiring.
+#[derive(Clone, Debug, Default)]
 pub struct FlowBuilder {
     pub pb: FlowProblem,
 }
@@ -598,6 +606,7 @@ impl FlowBuilder {
 /* -------------------------------------------------------------------------- */
 
 /// Result of running an incremental MCF update after ingesting a new night.
+#[pyclass(module = "fink_fat")]
 #[derive(Clone, Debug)]
 pub struct FlowUpdate {
     pub night: NightId,
@@ -607,6 +616,38 @@ pub struct FlowUpdate {
     pub total_flow: u32,
     /// Extracted trajectories as `SeedKey` paths (order preserved).
     pub trajectories: Vec<Vec<SeedKey>>,
+}
+
+fn format_number_underscore<T: ToString>(n: T, sep: &str) -> String {
+    let s = n.to_string();
+    // coupe en blocs de 3 en partant de la fin, puis rejoint avec "_"
+    s.as_bytes()
+        .rchunks(3)
+        .rev()
+        .map(|c| std::str::from_utf8(c).unwrap())
+        .collect::<Vec<_>>()
+        .join(sep)
+}
+
+#[pymethods]
+impl FlowUpdate {
+    /// Number of trajectories extracted in this update.
+    #[getter]
+    pub fn n_trajectories(&self) -> usize {
+        self.trajectories.len()
+    }
+
+    pub fn __repr__(&self) -> String {
+        format!(
+            "FlowUpdate(night={}, n_layers={}, total_nodes={}, total_arcs={}, total_flow={}, n_trajectories={})",
+            self.night,
+            format_number_underscore(self.n_layers, "_"),
+            format_number_underscore(self.total_nodes, "_"),
+            format_number_underscore(self.total_arcs, "_"),
+            format_number_underscore(self.total_flow, "_"),
+            format_number_underscore(self.n_trajectories(), "_"),
+        )
+    }
 }
 
 /// Generic interface for **min-cost flow** backends.
@@ -619,6 +660,46 @@ pub trait MinCostFlowSolver {
     /// - guarantee **conservation** at internal nodes,
     /// - minimize the **total cost**.
     fn solve(&self, pb: &FlowProblem) -> Result<FlowSolution, FlowError>;
+}
+
+/// A trivial Min-Cost Flow solver that performs **no optimization**.
+///
+/// This backend is useful to **exercise graph construction** at scale (layers,
+/// nodes, link arcs), collect builder/runtime metrics, and validate the
+/// end-to-end plumbing without paying any solving cost.
+///
+/// Behavior
+/// --------
+/// * Returns a `FlowSolution` with:
+///   - `total_flow = 0`,
+///   - `active_arcs = []`,
+///   - empty successor/predecessor maps (`succ_of`, `pred_of`).
+/// * Never fails on a well-formed `FlowProblem`.
+///
+/// Notes
+/// -----
+/// Downstream extractors (`solve_and_extract`) should handle this gracefully,
+/// typically yielding **zero trajectories** while still exposing the **graph
+/// counts** (layers/nodes/arcs) that you want to benchmark.
+///
+/// See also
+/// --------
+/// * [`MinCostFlowSolver`] – trait implemented by real backends (SSP, cost-scaling, …).
+/// * [`FlowProblem`] / [`FlowSolution`] – graph model and solution container.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NullFlowSolver;
+
+impl MinCostFlowSolver for NullFlowSolver {
+    fn solve(&self, _pb: &FlowProblem) -> Result<FlowSolution, FlowError> {
+        // We deliberately **do not** activate any arc and we do not build paths.
+        // This keeps the solution consistent but with zero flow.
+        Ok(FlowSolution {
+            total_flow: 0,
+            active_arcs: Vec::new(),
+            succ_of: ahash::AHashMap::new(),
+            pred_of: ahash::AHashMap::new(),
+        })
+    }
 }
 
 /// High-level entry-point to **solve** the current flow and extract trajectories.

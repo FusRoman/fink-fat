@@ -229,7 +229,7 @@ impl PyFinkFatParams {
     /// Gate on velocity direction mismatch (radians).
     #[getter]
     pub fn link_max_theta_vel(&self) -> f64 {
-        self.inner.link.scoring.gates.max_theta_vel
+        self.inner.link.scoring.gates.max_theta_vel()
     }
 
     /// Gate on absolute speed difference (rad/day).
@@ -294,6 +294,37 @@ impl PyFinkFatParams {
     #[getter]
     pub fn link_max_speed_rad_per_day(&self) -> Option<f64> {
         self.inner.link.max_speed_rad_per_day
+    }
+
+    /* -------------------------------- Linking: Min Cost Flow ------------------------ */
+    #[getter]
+    pub fn link_mcf_lambda_start(&self) -> f64 {
+        self.inner.link.mcf.lambda_start
+    }
+
+    #[getter]
+    pub fn link_mcf_lambda_end(&self) -> f64 {
+        self.inner.link.mcf.lambda_end
+    }
+
+    #[getter]
+    pub fn link_mcf_gap_penalty_weight(&self) -> f64 {
+        self.inner.link.mcf.gap_penalty_weight
+    }
+
+    #[getter]
+    pub fn link_mcf_max_revisit_gap(&self) -> u32 {
+        self.inner.link.mcf.max_revisit_gap
+    }
+
+    #[getter]
+    pub fn link_mcf_max_total_flow(&self) -> Option<u32> {
+        self.inner.link.mcf.max_total_flow
+    }
+
+    #[getter]
+    pub fn link_mcf_horizon_nights(&self) -> usize {
+        self.inner.link.mcf.horizon_nights
     }
 
     /* -------------------------------- Utilities ---------------------------- */
@@ -646,6 +677,50 @@ impl PyFinkFatParamsBuilder {
     ) -> PyRefMut<'py, Self> {
         let inner = mem::take(&mut slf.inner);
         slf.inner = inner.link_max_speed_rad_per_day(v);
+        slf
+    }
+
+    /* Linking – Min cost flow */
+    pub fn link_mcf_lambda_start<'py>(mut slf: PyRefMut<'py, Self>, v: f64) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_mcf_lambda_start(v);
+        slf
+    }
+    pub fn link_mcf_lambda_end<'py>(mut slf: PyRefMut<'py, Self>, v: f64) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_mcf_lambda_end(v);
+        slf
+    }
+    pub fn link_mcf_gap_penalty_weight<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        v: f64,
+    ) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_mcf_gap_penalty_weight(v);
+        slf
+    }
+    pub fn link_mcf_max_revisit_gap<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        v: u32,
+    ) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_mcf_max_revisit_gap(v);
+        slf
+    }
+    pub fn link_mcf_max_total_flow<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        v: Option<u32>,
+    ) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_mcf_max_total_flow(v);
+        slf
+    }
+    pub fn link_mcf_horizon_nights<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        v: usize,
+    ) -> PyRefMut<'py, Self> {
+        let inner = mem::take(&mut slf.inner);
+        slf.inner = inner.link_mcf_horizon_nights(v);
         slf
     }
 

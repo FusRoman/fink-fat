@@ -170,25 +170,25 @@ fn make_snapshot(night_id: NightId, n_seeds: usize, members_per_seed: usize) -> 
             next_alert_idx += 1;
         }
 
-        let seed = SeedNode {
-            seed_id: sid as u64,
+        let seed = SeedNode::new(
+            sid as u64,
             night_id,
-            epoch_mid: 60_000.0,   // MJD TT
-            pos_xy: [0.0, 0.0],    // rad
-            vel_xy: [1e-4, -1e-4], // rad/day
-            cov_pos: [[(1e-6_f64).powi(2), 0.0], [0.0, (1e-6_f64).powi(2)]],
-            cov_vel: [[(1e-6_f64).powi(2), 0.0], [0.0, (1e-6_f64).powi(2)]],
-            acc_xy: None,
-            flux_mean: 1000.0,
-            flux_std: 50.0,
-            band: 2,
-            n_obs: members_per_seed as u16,
+            60_000.0,      // MJD TT
+            [0.0, 0.0],    // rad
+            [1e-4, -1e-4], // rad/day
+            [[(1e-6_f64).powi(2), 0.0], [0.0, (1e-6_f64).powi(2)]],
+            [[(1e-6_f64).powi(2), 0.0], [0.0, (1e-6_f64).powi(2)]],
+            None,
+            1000.0,
+            50.0,
+            2,
+            members_per_seed as u16,
             members,
-            center_ra: 1.0,  // rad
-            center_dec: 0.1, // rad
-            ra_mid: 1.0,     // rad
-            dec_mid: 0.1,    // rad
-        };
+            1.0, // rad
+            0.1, // rad
+            1.0, // rad
+            0.1, // rad
+        );
         seeds.push(seed);
     }
 

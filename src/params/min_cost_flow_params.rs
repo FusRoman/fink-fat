@@ -20,6 +20,8 @@ pub struct MinCostFlowConfig {
     pub max_revisit_gap: u32,
     /// Optional maximum number of trajectories (total flow units).
     pub max_total_flow: Option<u32>,
+    /// How many **previous nights** to connect to the current one (Δ=1..H).
+    pub horizon_nights: usize,
 }
 
 impl Default for MinCostFlowConfig {
@@ -30,6 +32,7 @@ impl Default for MinCostFlowConfig {
             gap_penalty_weight: 0.0,
             max_revisit_gap: 1,
             max_total_flow: None,
+            horizon_nights: 1,
         }
     }
 }
@@ -167,27 +170,9 @@ impl MinCostFlowConfigBuilder {
         self
     }
 
-    /* --------------------------- Flat setters ----------------------------- */
-    /* Mirrors the fluent API but friendlier for Python keyword wiring. */
-
-    pub fn set_lambda_start(mut self, v: f64) -> Self {
-        self.inner.lambda_start = v;
-        self
-    }
-    pub fn set_lambda_end(mut self, v: f64) -> Self {
-        self.inner.lambda_end = v;
-        self
-    }
-    pub fn set_gap_penalty_weight(mut self, v: f64) -> Self {
-        self.inner.gap_penalty_weight = v;
-        self
-    }
-    pub fn set_max_revisit_gap(mut self, v: u32) -> Self {
-        self.inner.max_revisit_gap = v;
-        self
-    }
-    pub fn set_max_total_flow(mut self, v: Option<u32>) -> Self {
-        self.inner.max_total_flow = v;
+    /// Set `horizon_nights` (≥ 1).
+    pub fn horizon_nights(mut self, v: usize) -> Self {
+        self.inner.horizon_nights = v;
         self
     }
 
@@ -214,6 +199,9 @@ impl MinCostFlowConfigBuilder {
                 "gap_penalty_weight" => ParamError::Inconsistent(
                     "MinCostFlowConfig: `gap_penalty_weight` must be finite and >= 0.",
                 ),
+                "horizon_nights" => {
+                    ParamError::Inconsistent("MinCostFlowConfig: `horizon_nights` must be >= 1.")
+                }
                 _ => {
                     ParamError::Inconsistent("MinCostFlowConfig: penalty must be finite and >= 0.")
                 }

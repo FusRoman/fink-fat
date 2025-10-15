@@ -1069,25 +1069,25 @@ mod track_registry_test {
     /// Only the fields needed by TrackRegistry::assign_seed_members are relevant here.
     /// The remaining fields receive plausible dummy values.
     fn make_seed(seed_id: u64, night_id: NightId, members: Vec<AlertId>) -> SeedNode {
-        SeedNode {
+        SeedNode::new(
             seed_id,
             night_id,
-            epoch_mid: 60_000.0,
-            pos_xy: [0.0, 0.0],
-            vel_xy: [1e-4, -1e-4],
-            cov_pos: [[(1e-6_f64).powi(2), 0.0], [0.0, (1e-6_f64).powi(2)]],
-            cov_vel: [[(1e-6_f64).powi(2), 0.0], [0.0, (1e-6_f64).powi(2)]],
-            acc_xy: None,
-            flux_mean: 1000.0,
-            flux_std: 50.0,
-            band: 2,
-            n_obs: members.len() as u16,
+            60_000.0,
+            [0.0, 0.0],
+            [1e-4, -1e-4],
+            [[(1e-6_f64).powi(2), 0.0], [0.0, (1e-6_f64).powi(2)]],
+            [[(1e-6_f64).powi(2), 0.0], [0.0, (1e-6_f64).powi(2)]],
+            None,
+            1000.0,
+            50.0,
+            2,
+            members.len() as u16,
             members,
-            center_ra: 1.0,
-            center_dec: 0.1,
-            ra_mid: 1.0,
-            dec_mid: 0.1,
-        }
+            1.0,
+            0.1,
+            1.0,
+            0.1,
+        )
     }
 
     /// Minimal helper to create an AlertStore containing at least the alert at `aid.idx()`.

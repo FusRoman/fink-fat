@@ -91,3 +91,12 @@ top_k_per_left = 10
 max_total_edges = 200000
 # Optional hard cap on per-edge cost before assignment (None to disable).
 max_cost = 10.0
+
+# Minimum cost flow parameters
+[link.mcf]
+lambda_start = 0.5          # Initial link cost weight (dimensionless).
+lambda_end = 0.5            # Final link cost weight (dimensionless).
+gap_penalty_weight = 0.1   # Gap penalty weight (dimensionless).
+max_revisit_gap = 3     # Max allowed revisit gap for gap penalties (in number of time bins).
+max_total_flow = 1000000  # Global cap on the total flow through the network (None to disable).
+horizon_nights = 5        # Number of nights in the rolling horizon.

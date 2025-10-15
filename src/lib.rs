@@ -1,7 +1,11 @@
 use pyo3::prelude::*;
 
 #[cfg(feature = "python-extension")]
+use crate::propagation::flow::FlowUpdate;
+#[cfg(feature = "python-extension")]
 use crate::propagation::linking::RollingLinkState;
+#[cfg(feature = "python-extension")]
+use crate::propagation::linking_flow::RollingFlowState;
 
 pub mod alerts;
 pub mod errors;
@@ -74,6 +78,9 @@ fn fink_fat(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<alerts::Alert>()?;
     m.add_class::<alerts::AlertStore>()?;
     m.add_class::<RollingLinkState>()?;
+
+    m.add_class::<RollingFlowState>()?;
+    m.add_class::<FlowUpdate>()?;
 
     m.add_class::<DetectConflictPolicy>()?;
 

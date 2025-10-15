@@ -1,15 +1,13 @@
-// src/propagation/scoring_params.rs
-
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Serialize};
+use std::fmt;
 
 use crate::{
     errors::{ParamError, ScoreParamError},
     params::propagator_params::ModelNoise,
 };
-use std::fmt;
 
 /* -------------------------------------------------------------------------- */
-/*  Core types (as in your snippet)                                            */
+/*  Core types                                                                 */
 /* -------------------------------------------------------------------------- */
 
 /// Additive weights for the edge **cost**.
@@ -54,23 +52,106 @@ impl Default for ScoreWeights {
 }
 
 /// **Hard** gates: if any is violated, the edge is rejected (`None`).
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+///
+/// Notes
+/// -----
+/// * `max_theta_vel` is intentionally **private** to force using the in-place setter,
+///   keeping the cached cosine `max_theta_vel_cos` in sync.
+/// * `max_theta_vel_cos` is **not serialized**; during deserialization we recompute it.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct ScoreGates {
     /// Max Mahalanobis `d²_pos` (e.g., `~9.0` ≈ 3σ in 2D).
     pub max_d2_pos: f64,
     /// Max angle between velocity directions (**radians**).
-    pub max_theta_vel: f64,
+    max_theta_vel: f64,
+    /// Precomputed cos(max_theta_vel) for efficiency.
+    #[serde(skip)]
+    max_theta_vel_cos: f64,
     /// Max **absolute** speed difference (**radians/day**).
     pub max_speed_diff: f64,
 }
 
+// Manual `Deserialize` to refresh the cosine cache automatically.
+impl<'de> Deserialize<'de> for ScoreGates {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: de::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct GatesDe {
+            max_d2_pos: f64,
+            max_theta_vel: f64,
+            max_speed_diff: f64,
+        }
+        let g = GatesDe::deserialize(deserializer)?;
+        Ok(ScoreGates::new(
+            g.max_d2_pos,
+            g.max_theta_vel,
+            g.max_speed_diff,
+        ))
+    }
+}
+
 impl Default for ScoreGates {
     fn default() -> Self {
+        Self::new(
+            9.0,                   // ≈ 3σ in 2D
+            10.0_f64.to_radians(), // ~10°
+            f64::INFINITY,         // disabled by default
+        )
+    }
+}
+
+impl ScoreGates {
+    #[inline]
+    pub fn new(max_d2_pos: f64, max_theta_vel: f64, max_speed_diff: f64) -> Self {
         Self {
-            max_d2_pos: 9.0,                      // ≈ 3σ in 2D
-            max_theta_vel: 10.0_f64.to_radians(), // ~10°
-            max_speed_diff: f64::INFINITY,        // disabled by default
+            max_d2_pos,
+            max_theta_vel,
+            max_theta_vel_cos: max_theta_vel.cos(),
+            max_speed_diff,
         }
+    }
+
+    /// Accessor for the configured `max_theta_vel` (radians).
+    #[inline]
+    pub fn max_theta_vel(&self) -> f64 {
+        self.max_theta_vel
+    }
+
+    /// Accessor for the precomputed `cos(max_theta_vel)`.
+    #[inline]
+    pub fn cos_max_theta_vel(&self) -> f64 {
+        debug_assert!(
+            (self.max_theta_vel_cos - self.max_theta_vel.cos()).abs() < 1e-15,
+            "ScoreGates cache out of sync: use `set_max_theta_vel_in_place` for mutations"
+        );
+        self.max_theta_vel_cos
+    }
+
+    /// In-place setter that keeps the cached cosine in sync.
+    #[inline]
+    pub fn set_max_theta_vel_in_place(&mut self, v: f64) {
+        self.max_theta_vel = v;
+        self.max_theta_vel_cos = v.cos();
+    }
+
+    /// In-place setter for `max_d2_pos`.
+    #[inline]
+    pub fn set_max_d2_pos_in_place(&mut self, v: f64) {
+        self.max_d2_pos = v;
+    }
+
+    /// In-place setter for `max_speed_diff`.
+    #[inline]
+    pub fn set_max_speed_diff_in_place(&mut self, v: f64) {
+        self.max_speed_diff = v;
+    }
+
+    /// Recompute `max_theta_vel_cos` from `max_theta_vel`.
+    #[inline]
+    pub fn refresh(&mut self) {
+        self.max_theta_vel_cos = self.max_theta_vel.cos();
     }
 }
 
@@ -106,10 +187,6 @@ impl Default for ScoreScales {
 }
 
 /// Complete configuration to score edges.
-///
-/// - `weights` shape the additive objective,
-/// - `gates` prune implausible candidates early,
-/// - `scales` normalize penalties and set numerical steps.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ScoreConfig {
     /// Additive weights for the cost.
@@ -198,8 +275,9 @@ impl ScoreGatesBuilder {
         Self::default()
     }
 
-    pub fn build(self) -> Result<ScoreGates, ParamError> {
-        let g = self.inner;
+    pub fn build(mut self) -> Result<ScoreGates, ParamError> {
+        let g = &mut self.inner;
+
         // max_d2_pos and max_theta_vel must be finite and >= 0
         for (name, v) in [
             ("max_d2_pos", g.max_d2_pos),
@@ -216,18 +294,21 @@ impl ScoreGatesBuilder {
                 g.max_speed_diff,
             )));
         }
-        Ok(g)
+
+        // Ensure cosine cache is up-to-date even if fields were set directly.
+        g.refresh();
+        Ok(*g)
     }
 
-    pub fn max_d2_pos(&mut self, v: f64) -> &mut Self {
+    pub fn max_d2_pos(mut self, v: f64) -> Self {
         self.inner.max_d2_pos = v;
         self
     }
-    pub fn max_theta_vel(&mut self, v: f64) -> &mut Self {
-        self.inner.max_theta_vel = v;
+    pub fn max_theta_vel(mut self, v: f64) -> Self {
+        self.inner.set_max_theta_vel_in_place(v);
         self
     }
-    pub fn max_speed_diff(&mut self, v: f64) -> &mut Self {
+    pub fn max_speed_diff(mut self, v: f64) -> Self {
         self.inner.max_speed_diff = v;
         self
     }
@@ -290,49 +371,8 @@ impl ScoreScalesBuilder {
 
 /// Builder for [`ScoreConfig`].
 ///
-/// Two usage styles are supported:
-///
-/// 1) **Ergonomic Rust style** with nested builders via closures:
-///
-/// ```rust
-/// use fink_fat::params::propagator_params::ModelNoise;
-/// use fink_fat::params::scoring_params::ScoreConfigBuilder;
-///
-/// let cfg = ScoreConfigBuilder::new()
-///     .with_noise(ModelNoise::default())
-///     .with_weights(|w| {
-///         w.w_pos(0.7)
-///          .w_flux(0.4)
-///     })
-///     .with_gates(|g| {
-///         g.max_d2_pos(12.0)
-///          .max_theta_vel((8.0f64).to_radians())
-///     })
-///     .with_scales(|s| {
-///         s.theta0((4.0f64).to_radians())
-///          .v0(0.006)
-///     })
-///     .build()
-///     .expect("valid config");
-/// ```
-///
-/// 2) **Python-friendly flat setters** (no closures/generics to bind):
-///
-/// ```rust
-/// use fink_fat::params::propagator_params::ModelNoise;
-/// use fink_fat::params::scoring_params::ScoreConfigBuilder;
-///
-/// let cfg = ScoreConfigBuilder::new()
-///     .with_noise(ModelNoise::default())
-///     .set_w_pos(0.7)
-///     .set_w_flux(0.4)
-///     .set_max_d2_pos(12.0)
-///     .set_max_theta_vel((8.0f64).to_radians())
-///     .set_theta0((4.0f64).to_radians())
-///     .set_v0(0.006)
-///     .build()
-///     .unwrap();
-/// ```
+/// Two usage styles are supported: nested closures (ergonomique Rust) ou
+/// flat setters (Python-friendly).
 #[derive(Clone, Debug, Default)]
 pub struct ScoreConfigBuilder {
     noise: Option<ModelNoise>,
@@ -348,10 +388,6 @@ impl ScoreConfigBuilder {
     }
 
     /// Override the model noise used for `i`’s prediction covariance at `t_j`.
-    ///
-    /// Arguments
-    /// ---------
-    /// * `noise` – Noise model parameters (domain-specific type).
     pub fn with_noise(mut self, noise: ModelNoise) -> Self {
         self.noise = Some(noise);
         self
@@ -425,7 +461,8 @@ impl ScoreConfigBuilder {
         self
     }
     pub fn set_max_theta_vel(mut self, v: f64) -> Self {
-        self.gates.max_theta_vel = v;
+        // keep cache in sync
+        self.gates.set_max_theta_vel_in_place(v);
         self
     }
     pub fn set_max_speed_diff(mut self, v: f64) -> Self {
@@ -456,13 +493,7 @@ impl ScoreConfigBuilder {
     }
 
     /// Validate and build the final [`ScoreConfig`].
-    ///
-    /// Return
-    /// ------
-    /// * `Ok(ScoreConfig)` if all parameters pass basic sanity checks.
-    /// * `Err(ScoreParamError)` on invalid weights, gates, or scales.
     pub fn build(self) -> Result<ScoreConfig, ParamError> {
-        // Validate components using their sub-builders (re-use logic).
         let weights = ScoreWeightsBuilder {
             inner: self.weights,
         }
@@ -493,7 +524,7 @@ impl fmt::Display for ScoreConfig {
              gates: {{ max_d2_pos:{:.3}, max_theta_vel:{:.3} rad, max_speed_diff:{:?} rad/day }}, \
              scales: {{ theta0:{:.3} rad, v0:{:.6} rad/day, flux_sigma_floor:{:.3} nJy, gap_rho:{:.3}, vel_eps_days:{:.6} d }} }}",
             w.w_pos, w.w_vel_dir, w.w_vel_norm, w.w_flux, w.w_gap, w.w_band_mismatch,
-            g.max_d2_pos, g.max_theta_vel, g.max_speed_diff,
+            g.max_d2_pos, g.max_theta_vel(), g.max_speed_diff,
             s.theta0, s.v0, s.flux_sigma_floor, s.gap_rho, s.vel_eps_days
         )
     }
@@ -514,6 +545,8 @@ mod tests {
         assert!((cfg.weights.w_pos - 0.5).abs() < 1e-12);
         assert!(cfg.gates.max_speed_diff.is_infinite());
         assert!((cfg.scales.theta0 - (5.0f64).to_radians()).abs() < 1e-12);
+        // Cache coherent
+        assert!((cfg.gates.cos_max_theta_vel() - cfg.gates.max_theta_vel().cos()).abs() < 1e-15);
     }
 
     #[test]
@@ -527,6 +560,28 @@ mod tests {
         assert!((cfg.weights.w_pos - 0.9).abs() < 1e-12);
         assert!((cfg.gates.max_d2_pos - 16.0).abs() < 1e-12);
         assert!((cfg.scales.theta0 - (3.0f64).to_radians()).abs() < 1e-12);
+        // Cache coherent
+        assert!((cfg.gates.cos_max_theta_vel() - cfg.gates.max_theta_vel().cos()).abs() < 1e-15);
+    }
+
+    #[test]
+    fn gates_runtime_mutation_keeps_cache_in_sync() {
+        let mut gates = ScoreGates::default();
+        let c0 = gates.cos_max_theta_vel();
+        // mutate with the in-place setter
+        gates.set_max_theta_vel_in_place((30.0f64).to_radians());
+        let c1 = gates.cos_max_theta_vel();
+        assert!(c1 != c0);
+        assert!((c1 - gates.max_theta_vel().cos()).abs() < 1e-15);
+    }
+
+    #[test]
+    fn builder_mutation_keeps_cache_in_sync() {
+        let gates = ScoreGatesBuilder::new()
+            .max_theta_vel((25.0f64).to_radians())
+            .build()
+            .unwrap();
+        assert!((gates.cos_max_theta_vel() - (25.0f64).to_radians().cos()).abs() < 1e-15);
     }
 
     #[test]
@@ -557,5 +612,20 @@ mod tests {
             .build()
             .unwrap();
         assert!(cfg.gates.max_speed_diff.is_infinite());
+    }
+
+    #[test]
+    fn serde_toml_roundtrip_refreshes_cache() {
+        // Build a TOML string that sets an angle but NOT the cosine cache
+        let toml = r#"
+            max_d2_pos = 11.0
+            max_theta_vel = 0.34906585   # ~20 deg
+            max_speed_diff = 0.01
+        "#;
+        // Deserialize a bare ScoreGates (simulates a section of a larger file)
+        let gates: ScoreGates = toml::from_str(toml).unwrap();
+        // The implementation of Deserialize recomputes the cosine cache
+        assert!((gates.max_theta_vel() - 0.34906585).abs() < 1e-6);
+        assert!((gates.cos_max_theta_vel() - gates.max_theta_vel().cos()).abs() < 1e-12);
     }
 }

@@ -172,34 +172,46 @@ impl ScoredEdge {
             i.vel_xy
         };
 
-        // Estimate v_j in i's plane via symmetric finite difference of (RA,Dec)->plane.
+        // finite diff on j (gardé, optimisé ci-dessous)
         let eps = cfg.scoring.scales.vel_eps_days;
+        let inv_2eps = 1.0 / (2.0 * eps); // NEW
         let (ra_p, dec_p) = j.predict_radec(t_j + eps);
         let (ra_m, dec_m) = j.predict_radec(t_j - eps);
-        let p_plus = radec_to_tangent(ra_p, dec_p, i.center_ra, i.center_dec);
-        let p_minus = radec_to_tangent(ra_m, dec_m, i.center_ra, i.center_dec);
+        let p_plus = i.radec_to_tangent_precomp(ra_p, dec_p); // NEW
+        let p_minus = i.radec_to_tangent_precomp(ra_m, dec_m); // NEW
         let vj = [
-            (p_plus[0] - p_minus[0]) / (2.0 * eps),
-            (p_plus[1] - p_minus[1]) / (2.0 * eps),
+            (p_plus[0] - p_minus[0]) * inv_2eps, // division ⇒ mul
+            (p_plus[1] - p_minus[1]) * inv_2eps,
         ];
 
         let norm_vi = l2_norm(vi[0], vi[1]);
         let norm_vj = l2_norm(vj[0], vj[1]);
 
-        // If one norm is ~0, skip velocity terms (they're not informative).
         let (mut vel_angle, mut vel_speed_diff) = (None, None);
         if norm_vi > 0.0 && norm_vj > 0.0 {
-            let cosang = ((vi[0] * vj[0] + vi[1] * vj[1]) / (norm_vi * norm_vj)).clamp(-1.0, 1.0);
-            let theta = cosang.acos(); // radians
-            let dv = (norm_vi - norm_vj).abs();
+            // dot/(‖vi‖‖vj‖)
+            let inv_norms = 1.0 / (norm_vi * norm_vj);
+            let cosang = ((vi[0] * vj[0] + vi[1] * vj[1]) * inv_norms).clamp(-1.0, 1.0);
 
-            // Hard gates #2-3
-            if theta > cfg.scoring.gates.max_theta_vel || dv > cfg.scoring.gates.max_speed_diff {
+            // Gate angle via cos threshold (no acos)
+            let cos_max = cfg.scoring.gates.cos_max_theta_vel(); // NEW helper (see below)
+            if cosang < cos_max {
                 return None;
             }
 
-            vel_angle = Some(theta);
-            vel_speed_diff = Some(dv);
+            // Gate speed
+            let dv = (norm_vi - norm_vj).abs();
+            if dv > cfg.scoring.gates.max_speed_diff {
+                return None;
+            }
+
+            // Only compute acos if we will actually use/report it
+            if cfg.scoring.weights.w_vel_dir > 0.0 {
+                vel_angle = Some(cosang.acos());
+            }
+            if cfg.scoring.weights.w_vel_norm > 0.0 {
+                vel_speed_diff = Some(dv);
+            }
         }
 
         // --- 5) Photometry ----------------------------------------------------
@@ -277,6 +289,7 @@ mod scoring_tests {
 
     use crate::params::{
         engine_params::CandidateLimits,
+        min_cost_flow_params::MinCostFlowConfig,
         propagator_params::PredictorParams,
         scoring_params::{ScoreConfig, ScoreGates, ScoreScales, ScoreWeights},
     };
@@ -312,31 +325,32 @@ mod scoring_tests {
         band: u8,
     ) -> SeedNode {
         let (ra_mid, dec_mid) = tangent_to_radec(pos_xy[0], pos_xy[1], ra0, dec0);
-        SeedNode {
+
+        SeedNode::new(
             seed_id,
-            night_id: 0,
-            epoch_mid: 59000.0,
+            0,
+            59000.0,
             pos_xy,
             vel_xy,
-            cov_pos: [
+            [
                 [(0.2_f64.to_radians() / 3600.0).powi(2), 0.0],
                 [0.0, (0.2_f64.to_radians() / 3600.0).powi(2)],
             ],
-            cov_vel: [
+            [
                 [(0.02_f64.to_radians() / 3600.0).powi(2), 0.0],
                 [0.0, (0.02_f64.to_radians() / 3600.0).powi(2)],
             ],
-            acc_xy: None,
+            None,
             flux_mean,
-            flux_std: 50.0,
+            50.0,
             band,
-            n_obs: 2,
-            members: vec![],
-            center_ra: ra0,
-            center_dec: dec0,
+            2,
+            vec![],
+            ra0,
+            dec0,
             ra_mid,
             dec_mid,
-        }
+        )
     }
 
     fn default_cfg() -> InterNightLinkConfig {
@@ -350,6 +364,7 @@ mod scoring_tests {
             predict: PredictorParams::default(),
             scoring: score,
             limits: CandidateLimits::default(),
+            mcf: MinCostFlowConfig::default(),
             max_speed_rad_per_day: None,
         }
     }
@@ -383,7 +398,9 @@ mod scoring_tests {
         let j = mk_seed(2, ra0, dec0, [0.0, 0.0], [0.0, 1e-3], 1000.0, 1);
 
         let mut cfg = default_cfg();
-        cfg.scoring.gates.max_theta_vel = 5.0_f64.to_radians(); // 5° tolerance
+        cfg.scoring
+            .gates
+            .set_max_theta_vel_in_place(5.0_f64.to_radians()); // 5° tolerance
         let e = ScoredEdge::score(&i, &j, &cfg, 1);
         assert!(e.is_none(), "90° should be gated out");
     }
@@ -454,8 +471,8 @@ mod scoring_tests {
             let i  = mk_seed(1, ra0, dec0, [0.0, 0.0], [1e-3, 0.0], 1000.0, 1);
             let j0 = mk_seed(2, ra0, dec0, [0.0, 0.0], [1e-3, 0.0], 1000.0, 1);
             let mut cfg = default_cfg();
-            cfg.scoring.gates.max_theta_vel = 20.0_f64.to_radians();
-            cfg.scoring.gates.max_speed_diff = 2e-3;
+            cfg.scoring.gates.set_max_theta_vel_in_place(20.0_f64.to_radians());
+            cfg.scoring.gates.set_max_speed_diff_in_place(2e-3);
 
             // Combined plane variance S at dt=0 (same recipe as scorer)
             let (_p_hat, s_i) = i.predict_on_plane(j0.epoch_mid, &cfg.predict.noise);
@@ -493,7 +510,7 @@ mod scoring_tests {
             let j = mk_seed(2, ra0, dec0, [0.0, 0.0], vj, 1000.0, 1);
 
             let mut cfg = default_cfg();
-            cfg.scoring.gates.max_theta_vel = 30.0_f64.to_radians();
+            cfg.scoring.gates.set_max_theta_vel_in_place(30.0_f64.to_radians());
             let e = ScoredEdge::score(&i, &j, &cfg, 1);
             prop_assert!(e.is_none());
         }

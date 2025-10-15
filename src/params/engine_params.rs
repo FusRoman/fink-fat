@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     errors::{EngineParamError, ParamError},
     params::{
+        min_cost_flow_params::{MinCostFlowConfig, MinCostFlowConfigBuilder},
         propagator_params::{ModelNoise, PredictorParams, PredictorParamsBuilder},
         scoring_params::{ScoreConfig, ScoreConfigBuilder},
     },
@@ -31,6 +32,7 @@ pub struct CandidateLimits {
     /// Use `None` to disable.
     ///
     /// If exceeded, the global edge list is sorted by cost and truncated.
+    #[serde(default)]
     pub max_total_edges: Option<usize>,
     /// Optional **hard cost cutoff**: discard edges with `cost > max_cost`.
     ///
@@ -71,6 +73,9 @@ pub struct InterNightLinkConfig {
     ///
     /// See [`CandidateLimits`].
     pub limits: CandidateLimits,
+    /// Min-Cost Flow backend configuration for the global linker.
+    /// See [`MinCostFlowConfig`].
+    pub mcf: MinCostFlowConfig,
 
     pub max_speed_rad_per_day: Option<f64>,
 }
@@ -93,6 +98,7 @@ impl Default for InterNightLinkConfig {
                 scales: Default::default(),
             },
             limits: Default::default(),
+            mcf: MinCostFlowConfig::default(),
             max_speed_rad_per_day: None,
         }
     }
@@ -232,6 +238,7 @@ pub struct InterNightLinkConfigBuilder {
     predict: PredictorParamsBuilder,
     scoring: ScoreConfigBuilder,
     limits: CandidateLimitsBuilder,
+    mcf: MinCostFlowConfigBuilder,
     max_speed_rad_per_day: Option<f64>,
 }
 
@@ -241,6 +248,7 @@ impl Default for InterNightLinkConfigBuilder {
             predict: PredictorParamsBuilder::new(), // defaults: k=3.0, pad=true, noise=0
             scoring: ScoreConfigBuilder::new(),     // your defaults for scoring
             limits: CandidateLimitsBuilder::new(),  // top_k=8, etc.
+            mcf: MinCostFlowConfigBuilder::default(),
             max_speed_rad_per_day: None,
         }
     }
@@ -278,6 +286,15 @@ impl InterNightLinkConfigBuilder {
         F: FnOnce(&mut CandidateLimitsBuilder) -> &mut CandidateLimitsBuilder,
     {
         let _ = f(&mut self.limits);
+        self
+    }
+
+    /// Mutate min-cost flow configuration via its own builder (by-value).
+    pub fn with_mcf<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(MinCostFlowConfigBuilder) -> MinCostFlowConfigBuilder,
+    {
+        self.mcf = f(self.mcf);
         self
     }
 
@@ -392,6 +409,37 @@ impl InterNightLinkConfigBuilder {
         self
     }
 
+    /* Min-Cost Flow configuration */
+    pub fn set_lambda_start(mut self, v: f64) -> Self {
+        self.mcf = self.mcf.lambda_start(v);
+        self
+    }
+
+    pub fn set_lambda_end(mut self, v: f64) -> Self {
+        self.mcf = self.mcf.lambda_end(v);
+        self
+    }
+
+    pub fn set_gap_penalty_weight(mut self, v: f64) -> Self {
+        self.mcf = self.mcf.gap_penalty_weight(v);
+        self
+    }
+
+    pub fn set_max_revisit_gap(mut self, v: u32) -> Self {
+        self.mcf = self.mcf.max_revisit_gap(v);
+        self
+    }
+
+    pub fn set_max_total_flow(mut self, v: Option<u32>) -> Self {
+        self.mcf = self.mcf.max_total_flow(v);
+        self
+    }
+
+    pub fn set_horizon_nights(mut self, v: usize) -> Self {
+        self.mcf = self.mcf.horizon_nights(v);
+        self
+    }
+
     /// Validate and build the final configuration.
     pub fn build(self) -> Result<InterNightLinkConfig, ParamError> {
         // Predictor + Scoring delegate to their own validation.
@@ -407,10 +455,13 @@ impl InterNightLinkConfigBuilder {
 
         let limits = self.limits.build()?;
 
+        let mcf = self.mcf.build()?;
+
         Ok(InterNightLinkConfig {
             predict,
             scoring,
             limits,
+            mcf,
             max_speed_rad_per_day: self.max_speed_rad_per_day,
         })
     }
