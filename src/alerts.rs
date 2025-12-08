@@ -42,7 +42,7 @@ use pyo3::{
 use numpy::PyReadonlyArray1;
 
 use crate::{
-    params::params_binding::PyFinkFatParams,
+    params::{params_binding::PyFinkFatParams, FinkFatParams},
     progress::{make_bar, make_multi_progress},
     propagation::{
         features::{extract_pair_features, extract_triplet_features, SeedNode},
@@ -157,7 +157,7 @@ impl Alert {
 /// ------
 /// Instances are exposed in `fink_fat.AlertStore`.
 #[pyclass(module = "fink_fat")]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AlertStore {
     /// Night anchor (TT): floor of the minimum `mjd_tt` in `alerts`.
     pub start_mjd: f64,
@@ -186,15 +186,14 @@ impl AlertStore {
     pub fn build_snapshot_from_store(
         &self,
         night_id: NightId,
-        params: &PyFinkFatParams,
+        params: &FinkFatParams,
     ) -> NightSnapshot {
         // 1) Seeding (no progress UI)
-        let sb = HealpixBinner::new(params.healpix_depth());
-        let tb = UniformTimeBinner::new(self.start_mjd, params.time_bin_width_days());
+        let sb = HealpixBinner::new(params.binning.healpix_depth);
+        let tb = UniformTimeBinner::new(self.start_mjd, params.binning.time_bin_width_days);
         let index = build_index_from_alerts_precise(&self.alerts, &sb, &tb);
-        let pairs = generate_pairs(&index, &self.alerts, &sb, &tb, &params.inner);
-        let triplets =
-            generate_triplets_from_pairs(&index, &self.alerts, &sb, &tb, &params.inner, &pairs);
+        let pairs = generate_pairs(&index, &self.alerts, &sb, &tb, params);
+        let triplets = generate_triplets_from_pairs(&index, &self.alerts, &sb, &tb, params, &pairs);
 
         // 2) Feature extraction
         let mut seeds = Vec::with_capacity(pairs.len() + triplets.len());
@@ -202,7 +201,7 @@ impl AlertStore {
             self,
             &pairs,
             night_id,
-            params.inner.link.max_speed_rad_per_day,
+            params.link.max_speed_rad_per_day,
         ));
         seeds.extend(extract_triplet_features(self, &triplets, night_id));
         renumber_seed_ids(&mut seeds);
@@ -248,9 +247,9 @@ impl AlertStore {
     ///
     /// The iterator short-circuits to `None` if any id is out-of-bounds.
     #[inline]
-    pub fn get_many(
+    pub fn get_many<'a>(
         &self,
-        ids: impl IntoIterator<Item = AlertId>,
+        ids: impl IntoIterator<Item = &'a AlertId>,
     ) -> Option<impl Iterator<Item = &Alert>> {
         let mut v = Vec::new();
         for id in ids {

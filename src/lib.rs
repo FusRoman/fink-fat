@@ -1,11 +1,17 @@
 use pyo3::prelude::*;
 
 #[cfg(feature = "python-extension")]
+use crate::graph::ingest::NightIngestionReport;
+#[cfg(feature = "python-extension")]
+use crate::graph::stats::GraphStats;
+#[cfg(feature = "python-extension")]
+use crate::linking::PyRollingGraphBuilder;
+#[cfg(feature = "python-extension")]
+use crate::linking::SolveRunReport;
+#[cfg(feature = "python-extension")]
 use crate::propagation::flow::FlowUpdate;
 #[cfg(feature = "python-extension")]
 use crate::propagation::linking::RollingLinkState;
-#[cfg(feature = "python-extension")]
-use crate::propagation::linking_flow::RollingFlowState;
 
 pub mod alerts;
 pub mod errors;
@@ -16,6 +22,12 @@ pub mod seeding;
 pub mod propagation;
 
 pub mod track_registry;
+
+pub mod graph;
+
+pub mod linking;
+
+pub mod solver;
 
 /// Strong-typed aliases (adapt to your real types).
 pub type MjdTt = f64; // days (TT)
@@ -79,10 +91,14 @@ fn fink_fat(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<alerts::AlertStore>()?;
     m.add_class::<RollingLinkState>()?;
 
-    m.add_class::<RollingFlowState>()?;
     m.add_class::<FlowUpdate>()?;
 
     m.add_class::<DetectConflictPolicy>()?;
+
+    m.add_class::<PyRollingGraphBuilder>()?;
+    m.add_class::<NightIngestionReport>()?;
+    m.add_class::<GraphStats>()?;
+    m.add_class::<SolveRunReport>()?;
 
     register_params_module(m)?;
 

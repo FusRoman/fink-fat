@@ -36,8 +36,7 @@
 //! - `crate::propagation::solver` — pluggable bipartite solvers (Greedy, Hungarian stub),
 //! - `crate::track_registry` — detection-to-track assignment and exports.
 
-use std::{collections::BTreeMap, sync::Arc};
-
+use ahash::AHashMap;
 use numpy::PyReadonlyArray1;
 use pyo3::{
     pyclass, pymethods,
@@ -149,7 +148,7 @@ pub struct RollingLinkState {
     tracks: TrackRegistry,
     /// Optional: keep all per-night stores in memory if you want to access them later.
     /// Beware of memory usage if you run over many nights!
-    stores_by_night: BTreeMap<NightId, Arc<AlertStore>>,
+    stores_by_night: AHashMap<NightId, AlertStore>,
 }
 
 impl RollingLinkState {
@@ -177,7 +176,7 @@ impl RollingLinkState {
         S: AssignmentSolver,
         B: SpatialBinner,
     {
-        let curr_snap = curr_store.build_snapshot_from_store(curr_night_id, params);
+        let curr_snap = curr_store.build_snapshot_from_store(curr_night_id, &params.inner);
 
         println!(
             "Built NightSnapshot for night_id={} with {} seeds",
@@ -229,7 +228,7 @@ impl RollingLinkState {
             last: None,
             pair_results: Vec::new(),
             tracks: TrackRegistry::new(conflict_policy),
-            stores_by_night: BTreeMap::new(),
+            stores_by_night: AHashMap::new(),
         }
     }
 
@@ -300,7 +299,7 @@ impl RollingLinkState {
 
         // 2) Build the snapshot (seeding + features)
         let sb = HealpixBinner::new(params.healpix_depth());
-        let curr_snap = curr_store.build_snapshot_from_store(night_id, params);
+        let curr_snap = curr_store.build_snapshot_from_store(night_id, &params.inner);
 
         println!(
             "Built NightSnapshot for night_id={} with {} seeds",
@@ -348,7 +347,7 @@ impl RollingLinkState {
 
         // 4) Update rolling “last” snapshot and register the store for later
         self.last = Some(curr_snap);
-        self.stores_by_night.insert(night_id, Arc::new(curr_store));
+        self.stores_by_night.insert(night_id, curr_store);
 
         Ok(())
     }

@@ -275,7 +275,7 @@ impl ScoreGatesBuilder {
         Self::default()
     }
 
-    pub fn build(mut self) -> Result<ScoreGates, ParamError> {
+    pub fn build(&mut self) -> Result<ScoreGates, ParamError> {
         let g = &mut self.inner;
 
         // max_d2_pos and max_theta_vel must be finite and >= 0
@@ -300,15 +300,15 @@ impl ScoreGatesBuilder {
         Ok(*g)
     }
 
-    pub fn max_d2_pos(mut self, v: f64) -> Self {
+    pub fn max_d2_pos(&mut self, v: f64) -> &mut Self {
         self.inner.max_d2_pos = v;
         self
     }
-    pub fn max_theta_vel(mut self, v: f64) -> Self {
+    pub fn max_theta_vel(&mut self, v: f64) -> &mut Self {
         self.inner.set_max_theta_vel_in_place(v);
         self
     }
-    pub fn max_speed_diff(mut self, v: f64) -> Self {
+    pub fn max_speed_diff(&mut self, v: f64) -> &mut Self {
         self.inner.max_speed_diff = v;
         self
     }

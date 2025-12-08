@@ -65,6 +65,10 @@ pub enum FlowError {
     /// Registry integration error (conflict, policy violation, etc.).
     #[error("registry update failed: {0}")]
     Registry(&'static str),
+
+    /// Internal error (should not happen).
+    #[error("internal error: {0}")]
+    Internal(&'static str),
 }
 
 /* -------------------------------------------------------------------------- */
@@ -159,6 +163,22 @@ pub struct FlowProblem {
     pub layers: Vec<NightLayer>,
     /// Mapping `(night, seed) → NodeId` for quick lookups.
     pub index_of: AHashMap<SeedKey, NodeId>,
+
+    /* ------------------- NEW: zero-copy CSR adjacencies ------------------- */
+    /// CSR offsets for outgoing arcs; length = nodes.len() + 1.
+    /// Outgoing arcs of node `u` are in `out_adj[out_off[u] .. out_off[u+1]]`.
+    pub out_off: Vec<u32>,
+    /// Flat array of arc ids for outgoing adjacency.
+    pub out_adj: Vec<ArcId>,
+
+    /// CSR offsets for incoming arcs; length = nodes.len() + 1.
+    /// Incoming arcs of node `v` are in `in_adj[in_off[v] .. in_off[v+1]]`.
+    pub in_off: Vec<u32>,
+    /// Flat array of arc ids for incoming adjacency.
+    pub in_adj: Vec<ArcId>,
+
+    /// Internal flag: CSR indices are up-to-date w.r.t. `arcs` and `nodes`.
+    csr_ready: bool,
 }
 
 impl Default for FlowProblem {
@@ -174,13 +194,10 @@ impl FlowProblem {
     /// -----
     /// Source has `NodeId=0`, Sink has `NodeId=1`. Seed nodes start at 2.
     pub fn new(cfg: MinCostFlowConfig) -> Self {
-        // Source (id = 0)
-        // Sink (id = 1)
         let nodes = vec![
             FlowNode { id: 0, seed: None },
             FlowNode { id: 1, seed: None },
         ];
-
         FlowProblem {
             cfg,
             source: 0,
@@ -189,7 +206,146 @@ impl FlowProblem {
             arcs: Vec::new(),
             layers: Vec::new(),
             index_of: AHashMap::new(),
+            out_off: Vec::new(),
+            out_adj: Vec::new(),
+            in_off: Vec::new(),
+            in_adj: Vec::new(),
+            csr_ready: false,
         }
+    }
+
+    /// Mark CSR indices invalid after any graph mutation.
+    #[inline]
+    fn invalidate_csr(&mut self) {
+        self.csr_ready = false;
+    }
+
+    /// Build CSR indices from current `arcs`. O(E) time, O(E) memory.
+    pub fn rebuild_csr(&mut self) {
+        let n = self.nodes.len();
+        let e = self.arcs.len();
+
+        self.out_off.clear();
+        self.out_adj.clear();
+        self.in_off.clear();
+        self.in_adj.clear();
+
+        self.out_off.resize(n + 1, 0);
+        self.in_off.resize(n + 1, 0);
+        self.out_adj.resize(e, 0);
+        self.in_adj.resize(e, 0);
+
+        // 1) Degree counts
+        for a in &self.arcs {
+            self.out_off[a.from as usize] += 1;
+            self.in_off[a.to as usize] += 1;
+        }
+        // 2) Prefix sums → offsets
+        let mut acc = 0u32;
+        for x in self.out_off.iter_mut() {
+            let c = *x;
+            *x = acc;
+            acc += c;
+        }
+        let mut acc2 = 0u32;
+        for x in self.in_off.iter_mut() {
+            let c = *x;
+            *x = acc2;
+            acc2 += c;
+        }
+
+        // 3) Fill adjacency using cursors
+        let mut cur_out = self.out_off.clone();
+        let mut cur_in = self.in_off.clone();
+        for a in &self.arcs {
+            let i = cur_out[a.from as usize] as usize;
+            self.out_adj[i] = a.id;
+            cur_out[a.from as usize] += 1;
+
+            let j = cur_in[a.to as usize] as usize;
+            self.in_adj[j] = a.id;
+            cur_in[a.to as usize] += 1;
+        }
+
+        self.csr_ready = true;
+    }
+
+    /// Ensure CSR indices exist; rebuild lazily if not ready.
+    #[inline]
+    pub fn ensure_csr(&mut self) {
+        if !self.csr_ready {
+            self.rebuild_csr();
+        }
+    }
+
+    /// Slice of outgoing arcs for node `u`.
+    #[inline]
+    pub fn out_arcs(&self, u: NodeId) -> &[ArcId] {
+        debug_assert!(self.csr_ready, "call ensure_csr() before using CSR slices");
+        let u = u as usize;
+        &self.out_adj[self.out_off[u] as usize..self.out_off[u + 1] as usize]
+    }
+
+    /// Slice of incoming arcs for node `v`.
+    #[inline]
+    pub fn in_arcs(&self, v: NodeId) -> &[ArcId] {
+        debug_assert!(self.csr_ready, "call ensure_csr() before using CSR slices");
+        let v = v as usize;
+        &self.in_adj[self.in_off[v] as usize..self.in_off[v + 1] as usize]
+    }
+
+    /// Remove all **Start** arcs that target any node in `layer_idx`.
+    pub fn remove_start_arcs_in_layer(&mut self, layer_idx: usize) -> Result<usize, FlowError> {
+        let layer = self
+            .layers
+            .get(layer_idx)
+            .ok_or(FlowError::InvalidGraph("layer index out of bounds"))?;
+        let node_mask: ahash::AHashSet<NodeId> = layer.node_ids.iter().copied().collect();
+
+        let mut kept = Vec::with_capacity(self.arcs.len());
+        let mut removed = 0usize;
+        for a in self.arcs.drain(..) {
+            let is_start_here = a.kind == ArcKind::Start && node_mask.contains(&a.to);
+            if is_start_here {
+                removed += 1;
+            } else {
+                kept.push(a);
+            }
+        }
+        // Reassign arc ids for stability.
+        for (i, a) in kept.iter_mut().enumerate() {
+            a.id = i as u32;
+        }
+        self.arcs = kept;
+        self.invalidate_csr();
+        Ok(removed)
+    }
+
+    /// Remove all **End** arcs that leave any node in `layer_idx`.
+    pub fn remove_end_arcs_in_layer(&mut self, layer_idx: usize) -> Result<usize, FlowError> {
+        let layer = self
+            .layers
+            .get(layer_idx)
+            .ok_or(FlowError::InvalidGraph("layer index out of bounds"))?;
+        let node_mask: ahash::AHashSet<NodeId> = layer.node_ids.iter().copied().collect();
+
+        let mut kept = Vec::with_capacity(self.arcs.len());
+        let mut removed = 0usize;
+        for a in self.arcs.drain(..) {
+            let is_end_here = a.kind == ArcKind::End && node_mask.contains(&a.from);
+            if is_end_here {
+                removed += 1;
+            } else {
+                kept.push(a);
+            }
+        }
+        // Reassign arc ids for stability.
+        for (i, a) in kept.iter_mut().enumerate() {
+            a.id = i as u32;
+        }
+        self.arcs = kept;
+        self.invalidate_csr();
+        Ok(removed)
     }
 
     /// Add a **night layer** with one node per seed. Returns the `NightLayer` index.
@@ -233,6 +389,7 @@ impl FlowProblem {
         }
 
         let layer = NightLayer { night, node_ids };
+        self.invalidate_csr(); // NEW
         self.layers.push(layer);
         Ok(self.layers.len() - 1)
     }
@@ -270,6 +427,8 @@ impl FlowProblem {
             });
             created += 1;
         }
+
+        self.invalidate_csr(); // NEW
         Ok(created)
     }
 
@@ -306,6 +465,8 @@ impl FlowProblem {
             });
             created += 1;
         }
+
+        self.invalidate_csr(); // NEW
         Ok(created)
     }
 
@@ -374,6 +535,7 @@ impl FlowProblem {
             created += 1;
         }
 
+        self.invalidate_csr(); // NEW
         Ok(created)
     }
 }
@@ -573,15 +735,45 @@ impl FlowBuilder {
         night: NightId,
         seeds: &[SeedNode],
     ) -> Result<LayerSummary, FlowError> {
-        let layer_idx = self.pb.add_layer(night, seeds)?;
-        let n_start = self.pb.add_start_arcs(layer_idx)?;
-        let n_end = self.pb.add_end_arcs(layer_idx)?;
+        // 1) Add the layer.
+        let new_idx = self.pb.add_layer(night, seeds)?;
+
+        // 2) Compute indices.
+        let n_layers = self.pb.layers.len();
+        let last_idx = new_idx;
+        let prev_last_idx = last_idx.checked_sub(1);
+
+        // 3) We will count only the arcs created as part of this update (for telemetry).
+        let mut n_start_created = 0usize;
+        let mut n_end_created = 0usize;
+
+        // 4) If there was a previous last layer, make it **startable** now,
+        //    and ensure it no longer ends directly into Sink.
+        if let Some(prev_idx) = prev_last_idx {
+            // Remove old End arcs from the previous last (N_{k} → Sink).
+            let _removed = self.pb.remove_end_arcs_in_layer(prev_idx)?;
+            // Add Start arcs from Source to N_{k} (if not already there).
+            // (Idempotent: add_start_arcs simply adds one per seed.)
+            n_start_created += self.pb.add_start_arcs(prev_idx)?;
+        }
+
+        // 5) On the current last layer:
+        //    - do NOT add Start arcs (forbid Source → N_last → Sink),
+        //    - add End arcs only if we have at least two layers (N_{k-1} exists).
+        if n_layers >= 2 {
+            n_end_created += self.pb.add_end_arcs(last_idx)?;
+        } else {
+            // With a single layer, ensure no stray Start/End arcs exist.
+            // (If you never added any before on layer 0, this is a no-op.)
+            let _ = self.pb.remove_start_arcs_in_layer(last_idx)?;
+            let _ = self.pb.remove_end_arcs_in_layer(last_idx)?;
+        }
 
         Ok(LayerSummary {
             night,
             n_seeds: seeds.len(),
-            n_start_arcs: n_start,
-            n_end_arcs: n_end,
+            n_start_arcs: n_start_created,
+            n_end_arcs: n_end_created,
         })
     }
 
@@ -708,11 +900,22 @@ impl MinCostFlowSolver for NullFlowSolver {
 /// The function is pure w.r.t. the builder: it does not mutate the `FlowBuilder`
 /// nor its underlying `FlowProblem`.
 pub fn solve_and_extract<S: MinCostFlowSolver>(
-    builder: &FlowBuilder,
+    builder: &mut FlowBuilder,
     solver: &S,
 ) -> Result<FlowUpdate, FlowError> {
+    // Ensure CSR indices exist (lazy build)
+    builder.pb.ensure_csr(); // NEW
+
     // 1) Solve the current time-expanded min-cost flow.
     let sol = solver.solve(&builder.pb)?;
+
+    println!(
+        "[MCF] Solved flow: total_flow = {}, active_arcs = {}",
+        sol.total_flow,
+        sol.active_arcs.len()
+    );
+
+    println!("Making paths...");
 
     // 2) Reconstruct disjoint Source→Sink paths as ordered SeedKey sequences.
     let trajectories = sol.paths();
@@ -776,6 +979,19 @@ mod flow_graph_tests {
 
     fn arcs_of_kind(pb: &FlowProblem, kind: ArcKind) -> Vec<&FlowArc> {
         pb.arcs.iter().filter(|a| a.kind == kind).collect()
+    }
+
+    fn count_starts(pb: &FlowProblem) -> usize {
+        pb.arcs.iter().filter(|a| a.kind == ArcKind::Start).count()
+    }
+    fn count_ends(pb: &FlowProblem) -> usize {
+        pb.arcs.iter().filter(|a| a.kind == ArcKind::End).count()
+    }
+    fn is_node_in_layer(pb: &FlowProblem, layer_idx: usize, node_id: NodeId) -> bool {
+        pb.layers[layer_idx]
+            .node_ids
+            .iter()
+            .any(|&nid| nid == node_id)
     }
 
     /* ------------------------------ Unit tests ------------------------------ */
@@ -920,7 +1136,7 @@ mod flow_graph_tests {
         ];
         builder.add_links_between(100, 101, &edges).unwrap();
 
-        let upd = solve_and_extract(&builder, &NullFlowSolver).expect("solve ok");
+        let upd = solve_and_extract(&mut builder, &NullFlowSolver).expect("solve ok");
         assert_eq!(upd.night, 101);
         assert_eq!(upd.n_layers, 2);
         assert_eq!(upd.total_flow, 0);
@@ -964,85 +1180,94 @@ mod flow_graph_tests {
         assert_eq!(paths[1], vec![b1, b2]);
     }
 
+    // ------------------ [NEW] : Terminal-arc policy tests ------------------
+
+    #[test]
+    fn builder_policy_no_start_on_last_and_end_only_on_last() {
+        let mut builder = FlowBuilder::new(MinCostFlowConfig::default());
+
+        // N1 arrives: no Start/End arcs anywhere.
+        let n1 = mk_seeds(10_000, 3);
+        let l1 = builder.ingest_night(100, &n1).unwrap();
+        assert_eq!(l1.n_start_arcs, 0);
+        assert_eq!(l1.n_end_arcs, 0);
+        assert_eq!(count_starts(&builder.pb), 0);
+        assert_eq!(count_ends(&builder.pb), 0);
+
+        // N2 arrives:
+        // - N1 becomes "startable" => add Start arcs on N1,
+        // - N2 becomes "endable"   => add End arcs on N2,
+        // - never add Start arcs on the last layer (N2).
+        let n2 = mk_seeds(20_000, 2);
+        let l2 = builder.ingest_night(101, &n2).unwrap();
+        assert_eq!(l2.n_start_arcs, n1.len()); // N1 Start arcs
+        assert_eq!(l2.n_end_arcs, n2.len()); // N2 End arcs
+                                             // Global counts after N2:
+        assert_eq!(count_starts(&builder.pb), n1.len());
+        assert_eq!(count_ends(&builder.pb), n2.len());
+
+        // N3 arrives:
+        // - remove End arcs from N2 (to forbid Source→N2→Sink),
+        // - add Start arcs on N2 (so Source→N2→N3→Sink becomes possible),
+        // - add End arcs on N3,
+        // - never add Start arcs on the last layer (N3).
+        let n3 = mk_seeds(30_000, 4);
+        let l3 = builder.ingest_night(102, &n3).unwrap();
+        assert_eq!(l3.n_start_arcs, n2.len()); // N2 Start arcs
+        assert_eq!(l3.n_end_arcs, n3.len()); // N3 End arcs
+
+        // Global post-N3:
+        // - Start arcs exist on N1 and N2, not on N3
+        assert_eq!(count_starts(&builder.pb), n1.len() + n2.len());
+        // - End arcs exist only on N3
+        assert_eq!(count_ends(&builder.pb), n3.len());
+
+        // Structural checks: no Start into last layer; End only from last layer.
+        let last_idx = builder.pb.layers.len() - 1;
+        for a in builder.pb.arcs.iter().filter(|a| a.kind == ArcKind::Start) {
+            assert!(
+                !is_node_in_layer(&builder.pb, last_idx, a.to),
+                "no Start on last layer"
+            );
+            assert_eq!(a.from, builder.pb.source);
+        }
+        for a in builder.pb.arcs.iter().filter(|a| a.kind == ArcKind::End) {
+            assert!(
+                is_node_in_layer(&builder.pb, last_idx, a.from),
+                "End only from last layer"
+            );
+            assert_eq!(a.to, builder.pb.sink);
+        }
+    }
+
+    #[test]
+    fn builder_policy_forbids_two_hop_paths() {
+        // Asserts the policy forbids Source→seed→Sink by:
+        // - ensuring there are no Start arcs into the last layer,
+        // - ensuring there are End arcs only from the last layer.
+        let mut builder = FlowBuilder::new(MinCostFlowConfig::default());
+        let n1 = mk_seeds(1_000, 1);
+        let n2 = mk_seeds(2_000, 1);
+        let n3 = mk_seeds(3_000, 1);
+        builder.ingest_night(10, &n1).unwrap();
+        builder.ingest_night(11, &n2).unwrap();
+        builder.ingest_night(12, &n3).unwrap();
+
+        let last_idx = builder.pb.layers.len() - 1;
+
+        // No Start arcs into the last layer
+        for a in builder.pb.arcs.iter().filter(|a| a.kind == ArcKind::Start) {
+            assert!(!is_node_in_layer(&builder.pb, last_idx, a.to));
+        }
+        // End arcs only from the last layer
+        for a in builder.pb.arcs.iter().filter(|a| a.kind == ArcKind::End) {
+            assert!(is_node_in_layer(&builder.pb, last_idx, a.from));
+        }
+    }
+
     /* -------------------------- Property-based tests ------------------------- */
 
     proptest! {
-        #[test]
-        fn prop_layers_start_end_arcs_and_index_are_consistent(
-            nights in prop::collection::vec(1u32..200u32, 1..=4),
-            seeds_per in prop::collection::vec(0usize..=5, 1..=4),
-            lambda_start in 0f64..10_000f64,
-            lambda_end in 0f64..10_000f64,
-        ) {
-            prop_assume!(nights.len() == seeds_per.len());
-
-            // nuits strictement croissantes (pour rester simple)
-            let mut nights_sorted = nights.clone();
-            nights_sorted.sort_unstable();
-            nights_sorted.dedup();
-            prop_assume!(!nights_sorted.is_empty());
-
-            // aligne `seeds_per` sur la taille réelle
-            let mut seeds_per_clean = Vec::with_capacity(nights_sorted.len());
-            for i in 0..nights_sorted.len() {
-                seeds_per_clean.push(seeds_per.get(i).copied().unwrap_or(0));
-            }
-
-            let cfg = MinCostFlowConfig {
-                lambda_start: lambda_start.abs(),
-                lambda_end: lambda_end.abs(),
-                ..Default::default()
-            };
-
-            let mut builder = FlowBuilder::new(cfg.clone());
-
-            let mut total_seeds = 0usize;
-            for (i, &night) in nights_sorted.iter().enumerate() {
-                let nseeds = seeds_per_clean[i];
-                let base = (i as SeedId) * 10_000;
-                let seeds = mk_seeds(base, nseeds);
-                let layer = builder.ingest_night(night, &seeds).unwrap();
-
-                assert_eq!(layer.night, night);
-                assert_eq!(layer.n_seeds, nseeds);
-                assert_eq!(layer.n_start_arcs, nseeds);
-                assert_eq!(layer.n_end_arcs, nseeds);
-
-                total_seeds += nseeds;
-            }
-
-            let pb = &builder.pb;
-            assert_eq!(pb.layers.len(), nights_sorted.len());
-            assert_eq!(pb.nodes.len(), 2 + total_seeds);
-
-            let starts = arcs_of_kind(pb, ArcKind::Start);
-            let ends = arcs_of_kind(pb, ArcKind::End);
-            assert_eq!(starts.len(), total_seeds);
-            assert_eq!(ends.len(), total_seeds);
-
-            // index_of couvre tous les seeds
-            let mut counted = 0usize;
-            for n in pb.nodes.iter().skip(2) {
-                let sk = n.seed.expect("seed node must have SeedKey");
-                let got = pb.index_of.get(&sk).copied().expect("indexed");
-                assert_eq!(got, n.id);
-                counted += 1;
-            }
-            assert_eq!(counted, total_seeds);
-
-            for a in starts {
-                assert!((a.cost - cfg.lambda_start).abs() < 1e-9);
-                assert_eq!(a.capacity, 1);
-                assert_eq!(a.from, pb.source);
-                assert!(a.right.is_some());
-            }
-            for a in ends {
-                assert!((a.cost - cfg.lambda_end).abs() < 1e-9);
-                assert_eq!(a.capacity, 1);
-                assert_eq!(a.to, pb.sink);
-                assert!(a.left.is_some());
-            }
-        }
 
         #[test]
         fn prop_link_arcs_forward_in_time_and_consistent_with_index(
@@ -1092,6 +1317,473 @@ mod flow_graph_tests {
                 assert_eq!(a.capacity, 1);
                 assert!(a.cost.is_finite());
                 assert!(a.dt_days >= 0.0);
+            }
+        }
+
+        /// Property test for the final invariants enforced by the "no Source→seed→Sink" policy.
+        ///
+        /// Rationale
+        /// ---------
+        /// The builder policy guarantees a *final shape* for terminal arcs after all nights
+        /// have been ingested:
+        ///   - Start arcs (Source→seed) exist on **all layers except the last one**, with
+        ///     exactly **one Start per seed** on those non-last layers; **no Start** is allowed
+        ///     into the last layer.
+        ///   - End arcs (seed→Sink) exist **only on the last layer**, with exactly **one End
+        ///     per seed** on the last layer. In the special case where there is only a single
+        ///     layer (L == 1), there must be **zero End arcs overall**.
+        ///
+        /// Why we check *final* invariants only
+        /// ------------------------------------
+        /// During ingestion, per-step increments (the counts returned by `ingest_night`) can
+        /// legitimately be zero in edge cases (e.g., first layer, deduplicated nights, or when
+        /// a previous last layer had zero seeds so no terminals are added/removed). Therefore,
+        /// asserting the *final* graph shape is both simpler and robust to such edge cases.
+        ///
+        /// What we assert
+        /// --------------
+        /// After all nights are ingested:
+        ///   1) Global counts:
+        ///        - total Start arcs  == sum of seeds in all layers **except** the last;
+        ///        - total End arcs    == number of seeds in the last layer (except if L == 1, then 0).
+        ///   2) Per-layer structure:
+        ///        - each seed in a non-last layer has exactly one **incoming Start** and **zero** outgoing End;
+        ///        - each seed in the last layer has **zero** incoming Start and exactly one **outgoing End**
+        ///          (except when L == 1 → zero End total).
+        ///   3) Arc metadata sanity:
+        ///        - Start: from Source, correct cost and capacity, never target the last layer;
+        ///        - End: to Sink, correct cost and capacity, originate only from the last layer
+        ///          (unless L == 1, in which case there must be none).
+        ///   4) Indexing sanity:
+        ///        - `index_of` maps every seed key to its node id.
+        #[test]
+        fn prop_terminal_policy_final_invariants_hold(
+            nights in prop::collection::vec(1u32..200u32, 1..=6),
+            seeds_per in prop::collection::vec(0usize..=5, 1..=6),
+            lambda_start in 0f64..10_000f64,
+            lambda_end   in 0f64..10_000f64,
+        ) {
+            // Enforce strictly increasing unique nights: the policy is defined on chronologically
+            // ordered layers. Duplicates can appear in the generator; we deduplicate here.
+            let mut nights_sorted = nights.clone();
+            nights_sorted.sort_unstable();
+            nights_sorted.dedup();
+            prop_assume!(!nights_sorted.is_empty());
+
+            // Align the seeds_per vector to the deduplicated nights.
+            let mut seeds_per_clean = Vec::with_capacity(nights_sorted.len());
+            for i in 0..nights_sorted.len() {
+                seeds_per_clean.push(seeds_per.get(i).copied().unwrap_or(0));
+            }
+
+            let cfg = MinCostFlowConfig {
+                lambda_start: lambda_start.abs(),
+                lambda_end:   lambda_end.abs(),
+                ..Default::default()
+            };
+
+            let mut builder = FlowBuilder::new(cfg.clone());
+
+            // Ingest all nights. We do NOT assert per-step increments here; we will only
+            // check the final shape (global + per-layer invariants).
+            let mut total_seeds = 0usize;
+            for (i, &night) in nights_sorted.iter().enumerate() {
+                let nseeds = seeds_per_clean[i];
+                let base = (i as SeedId) * 10_000;
+                let seeds = mk_seeds(base, nseeds);
+                let _ = builder.ingest_night(night, &seeds).unwrap();
+                total_seeds += nseeds;
+            }
+
+            // Build CSR once before using in_arcs()/out_arcs() slices.
+            builder.pb.ensure_csr();
+
+            let pb = &builder.pb;
+            let layer_len = pb.layers.len();
+            prop_assume!(layer_len > 0); // guaranteed by previous assumption
+
+            // Collect per-layer sizes from the graph (authoritative).
+            let last_idx = layer_len - 1;
+            let mut size_per_layer: Vec<usize> = Vec::with_capacity(layer_len);
+            for li in 0..layer_len {
+                size_per_layer.push(pb.layers[li].node_ids.len());
+            }
+
+            // Expected global counts:
+            //  - total Starts: sum of seeds on all non-last layers,
+            //  - total Ends:   #seeds on the last layer, except if layer_len == 1 (then 0).
+            let expected_starts: usize = size_per_layer.iter().take(layer_len.saturating_sub(1)).sum();
+            let expected_ends: usize = if layer_len == 1 { 0 } else { size_per_layer[last_idx] };
+
+            // Actual global counts pulled from the arc list.
+            let starts = pb.arcs.iter().filter(|a| a.kind == ArcKind::Start).collect::<Vec<_>>();
+            let ends   = pb.arcs.iter().filter(|a| a.kind == ArcKind::End).collect::<Vec<_>>();
+
+            prop_assert_eq!(starts.len(), expected_starts, "total Start arcs mismatch");
+            prop_assert_eq!(ends.len(),   expected_ends,   "total End arcs mismatch");
+
+            // ---------- Per-layer structure: Start arcs ----------
+            // Non-last layers: exactly one incoming Start per seed.
+            // Last layer:      strictly zero incoming Start per seed.
+            for li in 0..layer_len {
+                for &nid in &pb.layers[li].node_ids {
+                    let in_slice = pb.in_arcs(nid);
+                    let n_start_here = in_slice
+                        .iter()
+                        .filter(|&&aid| pb.arcs[aid as usize].kind == ArcKind::Start)
+                        .count();
+                    if li == last_idx {
+                        prop_assert_eq!(n_start_here, 0, "no Start into the last layer");
+                    } else {
+                        prop_assert_eq!(n_start_here, 1, "exactly one Start into non-last layers");
+                    }
+                }
+            }
+
+            // ---------- Per-layer structure: End arcs ----------
+            // If L == 1 → zero End arcs anywhere (single-layer graphs cannot end).
+            // Else:
+            //   - Last layer:      exactly one outgoing End per seed,
+            //   - Non-last layers: zero outgoing End per seed.
+            for li in 0..layer_len {
+                for &nid in &pb.layers[li].node_ids {
+                    let out_slice = pb.out_arcs(nid);
+                    let n_end_here = out_slice
+                        .iter()
+                        .filter(|&&aid| pb.arcs[aid as usize].kind == ArcKind::End)
+                        .count();
+
+                    if layer_len == 1 {
+                        prop_assert_eq!(n_end_here, 0, "single-layer graph must have zero End arcs");
+                    } else if li == last_idx {
+                        prop_assert_eq!(n_end_here, 1, "exactly one End from the last layer");
+                    } else {
+                        prop_assert_eq!(n_end_here, 0, "no End from non-last layers");
+                    }
+                }
+            }
+
+            // ---------- Arc metadata sanity checks ----------
+            // Start arcs:
+            for a in &starts {
+                prop_assert!((a.cost - cfg.lambda_start).abs() < 1e-9, "Start cost mismatch");
+                prop_assert_eq!(a.capacity, 1, "Start capacity must be 1");
+                prop_assert_eq!(a.from, pb.source, "Start must originate at Source");
+                prop_assert!(a.right.is_some(), "Start should carry the right SeedKey");
+                // Must not target a node in the last layer.
+                let targets_last = pb.layers[last_idx].node_ids.contains(&a.to);
+                prop_assert!(!targets_last, "no Start allowed into last layer");
+            }
+
+            // End arcs:
+            for a in &ends {
+                prop_assert!((a.cost - cfg.lambda_end).abs() < 1e-9, "End cost mismatch");
+                prop_assert_eq!(a.capacity, 1, "End capacity must be 1");
+                prop_assert_eq!(a.to, pb.sink, "End must terminate at Sink");
+                prop_assert!(a.left.is_some(), "End should carry the left SeedKey");
+                if layer_len == 1 {
+                    // With a single layer, the set `ends` should already be empty (global check above),
+                    // so we should not even enter this branch. Keep the assertion for clarity.
+                    prop_assert!(false, "no End arcs expected when layer_len == 1");
+                } else {
+                    // Must originate from a node in the last layer only.
+                    let from_is_last = pb.layers[last_idx].node_ids.contains(&a.from);
+                    prop_assert!(from_is_last, "End must originate from the last layer only");
+                }
+            }
+
+            // ---------- Indexing sanity ----------
+            // Every seed node (all layers) must have an entry in `index_of` that maps
+            // to the node id that carries it.
+            let mut counted = 0usize;
+            for n in pb.nodes.iter().skip(2) { // skip Source/Sink
+                let sk = n.seed.expect("seed node must have SeedKey");
+                let got = pb.index_of.get(&sk).copied().expect("indexed");
+                prop_assert_eq!(got, n.id, "index_of must map SeedKey to the right node id");
+                counted += 1;
+            }
+            prop_assert_eq!(counted, total_seeds, "index_of coverage mismatch");
+        }
+    }
+
+    mod flow_csr_tests {
+        use super::*;
+
+        /* ------------------------------ CSR tests -------------------------------- */
+
+        /// Naive degree counters for validation against CSR.
+        fn naive_degrees(pb: &FlowProblem) -> (Vec<usize>, Vec<usize>) {
+            let n = pb.nodes.len();
+            let mut dout = vec![0usize; n];
+            let mut din = vec![0usize; n];
+            for a in &pb.arcs {
+                dout[a.from as usize] += 1;
+                din[a.to as usize] += 1;
+            }
+            (dout, din)
+        }
+
+        /// Check internal CSR invariants against the raw arc list.
+        fn assert_csr_consistency(pb: &FlowProblem) {
+            let n = pb.nodes.len();
+            let e = pb.arcs.len();
+
+            // Basic sizes
+            assert_eq!(pb.out_off.len(), n + 1, "out_off must have length n+1");
+            assert_eq!(pb.in_off.len(), n + 1, "in_off must have length n+1");
+            assert_eq!(pb.out_adj.len(), e, "out_adj must have length |E|");
+            assert_eq!(pb.in_adj.len(), e, "in_adj must have length |E|");
+
+            // Last offsets are cumulative degree sums and equal to |E|
+            assert_eq!(pb.out_off[n] as usize, e, "last out_off must be |E|");
+            assert_eq!(pb.in_off[n] as usize, e, "last in_off must be |E|");
+
+            // Prefix-sum monotonicity
+            for w in pb.out_off.windows(2) {
+                assert!(w[0] <= w[1], "out_off must be non-decreasing");
+            }
+            for w in pb.in_off.windows(2) {
+                assert!(w[0] <= w[1], "in_off must be non-decreasing");
+            }
+
+            // Degrees per node from CSR == naive scan
+            let (dout, din) = naive_degrees(pb);
+            for u in 0..n {
+                let csr_dout = (pb.out_off[u + 1] - pb.out_off[u]) as usize;
+                let csr_din = (pb.in_off[u + 1] - pb.in_off[u]) as usize;
+                assert_eq!(csr_dout, dout[u], "out-degree mismatch at node {}", u);
+                assert_eq!(csr_din, din[u], "in-degree mismatch at node {}", u);
+            }
+
+            // Every arc id appears exactly once in out_adj and in_adj
+            {
+                let mut seen_out = vec![0u8; e];
+                for &aid in &pb.out_adj {
+                    let idx = aid as usize;
+                    assert!(idx < e, "arc id out of range in out_adj");
+                    seen_out[idx] += 1;
+                }
+                for (i, c) in seen_out.iter().enumerate() {
+                    assert_eq!(*c, 1, "arc {} must appear exactly once in out_adj", i);
+                }
+            }
+            {
+                let mut seen_in = vec![0u8; e];
+                for &aid in &pb.in_adj {
+                    let idx = aid as usize;
+                    assert!(idx < e, "arc id out of range in in_adj");
+                    seen_in[idx] += 1;
+                }
+                for (i, c) in seen_in.iter().enumerate() {
+                    assert_eq!(*c, 1, "arc {} must appear exactly once in in_adj", i);
+                }
+            }
+
+            // Slices returned by helpers match arc endpoints
+            for u in 0..n as u32 {
+                for &aid in pb.out_arcs(u) {
+                    let a = &pb.arcs[aid as usize];
+                    assert_eq!(a.from, u, "out_arcs slice must only contain arcs leaving u");
+                }
+            }
+            for v in 0..n as u32 {
+                for &aid in pb.in_arcs(v) {
+                    let a = &pb.arcs[aid as usize];
+                    assert_eq!(a.to, v, "in_arcs slice must only contain arcs entering v");
+                }
+            }
+        }
+
+        #[test]
+        fn csr_on_empty_graph_and_slices_are_empty() {
+            let mut pb = FlowProblem::new(MinCostFlowConfig::default());
+            // No layers/arcs yet; only Source/Sink nodes exist.
+            pb.ensure_csr();
+            assert!(pb.csr_ready, "CSR must be marked ready after ensure_csr()");
+            assert_csr_consistency(&pb);
+
+            // Source and Sink have zero degrees, hence empty slices.
+            assert!(pb.out_arcs(pb.source).is_empty());
+            assert!(pb.in_arcs(pb.source).is_empty());
+            assert!(pb.out_arcs(pb.sink).is_empty());
+            assert!(pb.in_arcs(pb.sink).is_empty());
+        }
+
+        #[test]
+        fn csr_includes_start_and_end_arcs_in_expected_nodes() {
+            let cfg = MinCostFlowConfig::default();
+            let mut pb = FlowProblem::new(cfg);
+            let seeds = mk_seeds(42, 3);
+            let layer_idx = pb.add_layer(7, &seeds).unwrap();
+
+            // Add start & end arcs then build CSR.
+            pb.add_start_arcs(layer_idx).unwrap();
+            pb.add_end_arcs(layer_idx).unwrap();
+
+            // CSR not yet built -> ensure_csr must rebuild.
+            assert!(!pb.csr_ready);
+            pb.ensure_csr();
+            assert!(pb.csr_ready);
+
+            // All Start arcs must appear in out_arcs(Source) and in_arcs(seed).
+            let start_ids: Vec<ArcId> = pb
+                .arcs
+                .iter()
+                .filter(|a| a.kind == ArcKind::Start)
+                .map(|a| a.id)
+                .collect();
+
+            for &aid in pb.out_arcs(pb.source) {
+                assert_eq!(pb.arcs[aid as usize].kind, ArcKind::Start);
+            }
+            // Each seed must have exactly one incoming Start arc.
+            for &nid in &pb.layers[0].node_ids {
+                let in_slice = pb.in_arcs(nid);
+                let n_start_here = in_slice
+                    .iter()
+                    .filter(|&&aid| pb.arcs[aid as usize].kind == ArcKind::Start)
+                    .count();
+                assert_eq!(
+                    n_start_here, 1,
+                    "each seed must have one Start arc incoming"
+                );
+            }
+
+            // All End arcs must appear in in_arcs(Sink) and out_arcs(seed).
+            for &aid in pb.in_arcs(pb.sink) {
+                assert_eq!(pb.arcs[aid as usize].kind, ArcKind::End);
+            }
+            for &nid in &pb.layers[0].node_ids {
+                let out_slice = pb.out_arcs(nid);
+                let n_end_here = out_slice
+                    .iter()
+                    .filter(|&&aid| pb.arcs[aid as usize].kind == ArcKind::End)
+                    .count();
+                assert_eq!(n_end_here, 1, "each seed must have one End arc outgoing");
+            }
+
+            // Global CSR consistency
+            assert_csr_consistency(&pb);
+
+            // And all Start/End arc ids should be referenced somewhere in CSR.
+            for aid in start_ids {
+                let found = pb.out_arcs(pb.source).iter().any(|&x| x == aid);
+                assert!(found, "every Start arc must be in out_arcs(Source)");
+            }
+            let end_ids: Vec<ArcId> = pb
+                .arcs
+                .iter()
+                .filter(|a| a.kind == ArcKind::End)
+                .map(|a| a.id)
+                .collect();
+            for aid in end_ids {
+                let found = pb.in_arcs(pb.sink).iter().any(|&x| x == aid);
+                assert!(found, "every End arc must be in in_arcs(Sink)");
+            }
+        }
+
+        #[test]
+        fn csr_invalidates_on_mutation_and_rebuilds_lazily() {
+            let mut pb = FlowProblem::new(MinCostFlowConfig::default());
+            let left = mk_seeds(1_000, 2);
+            let right = mk_seeds(2_000, 2);
+            pb.add_layer(10, &left).unwrap();
+            pb.add_layer(11, &right).unwrap();
+
+            // Build some arcs then build CSR.
+            pb.add_start_arcs(0).unwrap();
+            pb.add_end_arcs(0).unwrap();
+            pb.ensure_csr();
+            assert!(pb.csr_ready);
+
+            // Mutate (add links) -> csr_ready must be false.
+            let mut edges = Vec::new();
+            for l in &left {
+                for r in &right {
+                    edges.push(Edge {
+                        from: l.seed_id,
+                        to: r.seed_id,
+                        cost: 1.0,
+                        dt_days: 1.0,
+                    });
+                }
+            }
+            pb.add_link_arcs(10, 11, &edges).unwrap();
+            assert!(!pb.csr_ready, "mutations must invalidate CSR");
+
+            // Lazy rebuild
+            pb.ensure_csr();
+            assert!(pb.csr_ready, "ensure_csr() must rebuild after invalidation");
+            assert_csr_consistency(&pb);
+        }
+
+        proptest! {
+            /// Build small random layered graphs, connect **all** pairs between consecutive
+            /// nights, and check CSR invariants systematically.
+            #[test]
+            fn prop_csr_consistent_on_random_layered_graphs(
+                nights in prop::collection::vec(1u32..150, 1..=4),
+                per_layer in prop::collection::vec(0usize..=5, 1..=4),
+            ) {
+                // Ensure strictly increasing unique nights.
+                let mut nights = nights;
+                nights.sort_unstable();
+                nights.dedup();
+                prop_assume!(!nights.is_empty());
+
+                // Align per-layer sizes
+                let mut per = Vec::with_capacity(nights.len());
+                for i in 0..nights.len() {
+                    per.push(*per_layer.get(i).unwrap_or(&0usize));
+                }
+
+                let mut pb = FlowProblem::new(MinCostFlowConfig::default());
+
+                // Ingest layers and Start/End arcs
+                let mut layer_seeds: Vec<Vec<SeedNode>> = Vec::new();
+                for (i, &n) in nights.iter().enumerate() {
+                    let seeds = mk_seeds((i as SeedId) * 10_000, per[i]);
+                    pb.add_layer(n, &seeds).unwrap();
+                    pb.add_start_arcs(i).unwrap();
+                    pb.add_end_arcs(i).unwrap();
+                    layer_seeds.push(seeds);
+                }
+
+                // Fully connect consecutive nights with Link arcs (dense bipartite).
+                for i in 0..nights.len().saturating_sub(1) {
+                    let left_n = nights[i];
+                    let right_n = nights[i+1];
+                    let mut edges = Vec::new();
+                    for l in &layer_seeds[i] {
+                        for r in &layer_seeds[i+1] {
+                            edges.push(Edge {
+                                from: l.seed_id,
+                                to: r.seed_id,
+                                cost: ((l.seed_id as i64 - r.seed_id as i64).abs() as f64).sqrt() + 0.1,
+                                dt_days: (right_n - left_n) as f64
+                            });
+                        }
+                    }
+                    pb.add_link_arcs(left_n, right_n, &edges).unwrap();
+                }
+
+                // Build CSR & validate
+                pb.ensure_csr();
+                assert!(pb.csr_ready);
+                assert_csr_consistency(&pb);
+
+                // Spot-check a few nodes: out_arcs/in_arcs slices contain proper arc ends.
+                let n = pb.nodes.len() as u32;
+                for u in 0..n {
+                    for &aid in pb.out_arcs(u) {
+                        let a = &pb.arcs[aid as usize];
+                        prop_assert_eq!(a.from, u);
+                    }
+                    for &aid in pb.in_arcs(u) {
+                        let a = &pb.arcs[aid as usize];
+                        prop_assert_eq!(a.to, u);
+                    }
+                }
             }
         }
     }

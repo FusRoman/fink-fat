@@ -881,7 +881,7 @@ pub type SeedId = u64;
 /// --------
 /// - [`SpatialBinner`] — provides `key_for`, `neighbors`, and `cell_radius`.
 /// - [`SeedNode::predict_cone`] — to compute the (RA, Dec, radius) for a query.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct SeedSpatialIndex {
     by_cell: AHashMap<SpatialKey, Vec<SeedId>>,
 }
@@ -1347,7 +1347,7 @@ fn lambda_max_2x2(a: [[f64; 2]; 2]) -> f64 {
 /// assert!((dec - (dec0 - 2e-4)).abs() < 1e-12);
 /// ```
 #[inline]
-fn tangent_to_radec(x: f64, y: f64, ra0: f64, dec0: f64) -> (f64, f64) {
+pub(crate) fn tangent_to_radec(x: f64, y: f64, ra0: f64, dec0: f64) -> (f64, f64) {
     let rho2 = x * x + y * y;
     if rho2 < 1e-24 {
         return (ra0.rem_euclid(TWO_PI), dec0);

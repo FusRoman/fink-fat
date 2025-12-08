@@ -28,4 +28,5 @@ dev = [
     "pytest>=8.4.2",
     "black>=25.9.0",
     "ipython>=9.6.0",
+    "scikit-learn>=1.7.2",
 ]

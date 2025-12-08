@@ -197,7 +197,7 @@
 //! - [`TrackRegistry::collect_detection_columns`] — typed export buffers.
 //! - [`TrackRegistry::export_detection_dict_py`] — Python dict for DataFrame.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::collections::BTreeMap;
 
 use ahash::{AHashMap, AHashSet};
 
@@ -210,6 +210,7 @@ use pyo3::{
 use crate::{
     alerts::AlertStore,
     errors::FinkFatError,
+    graph::ingest::TrajectoryRaw,
     propagation::{
         engine::LinkResult,
         features::{SeedId, SeedNode},
@@ -412,6 +413,16 @@ impl TrackRegistry {
         }
     }
 
+    /// Number of distinct trajectories ever created.
+    ///
+    /// Returns
+    /// -------
+    /// `usize`
+    ///     The number of distinct trajectories.
+    pub fn num_trajectories(&self) -> usize {
+        self.parent.len()
+    }
+
     /* ------------------------ DSU helpers ------------------------ */
 
     /// Create a new DSU singleton set if missing.
@@ -484,6 +495,18 @@ impl TrackRegistry {
             t = p;
         }
         t
+    }
+
+    /// Canonical (DSU-root) id, read-only (no path compression).
+    #[inline]
+    pub fn canonical_id_ro(&self, t: TrajectoryId) -> TrajectoryId {
+        self.dsu_find_ro(t)
+    }
+
+    /// Canonical (DSU-root) id with path compression (faster for many queries).
+    #[inline]
+    pub fn canonical_id(&mut self, t: TrajectoryId) -> TrajectoryId {
+        self.dsu_find(t)
     }
 
     /// Union by size; keep the **minimum id** as the representative.
@@ -814,6 +837,47 @@ impl TrackRegistry {
         }
     }
 
+    /// Assign one reconstructed trajectory to a fresh trajectory id
+    /// and attach all its detections under the configured conflict policy.
+    ///
+    /// Return the canonical (post-DSU) trajectory id.
+    pub fn assign_reconstructed(&mut self, traj: &TrajectoryRaw) -> TrajectoryId {
+        // Allocate a fresh trajectory id by minting a dummy "seed key":
+        // We use the first (night, seed_id) of the path for determinism; if empty, fallback.
+        let t = if let Some((night, sid)) = traj.seeds.first().cloned() {
+            let key = SeedKey {
+                night_id: night,
+                seed_id: sid as u64,
+            };
+            self.ensure_seed_traj(key)
+        } else {
+            // Degenerate case: no seeds; just create a new id off a dummy.
+            let key = SeedKey {
+                night_id: 0,
+                seed_id: 0,
+            };
+            self.ensure_seed_traj(key)
+        };
+
+        // Assign all detections to this trajectory
+        for (night, aid) in &traj.detections {
+            let dk = DetectKey {
+                night_id: *night,
+                alert_id: *aid,
+            };
+            self.assign_detection(dk, t);
+        }
+        t
+    }
+
+    /// Bulk assign many reconstructions.
+    pub fn assign_reconstructed_many(&mut self, trajs: &[TrajectoryRaw]) -> Vec<TrajectoryId> {
+        trajs
+            .iter()
+            .map(|tr| self.assign_reconstructed(tr))
+            .collect()
+    }
+
     /* ------------------------ Reads (canonicalized) ------------------------ */
 
     /// Iterate over `(DetectKey, TrajectoryId)` rows with canonical ids, deterministically ordered.
@@ -964,7 +1028,7 @@ impl TrackRegistry {
     /// - JD is computed as `mjd_tt + 2_400_000.5` (TT days).
     pub fn collect_detection_columns(
         &self,
-        stores_by_night: &BTreeMap<NightId, Arc<AlertStore>>,
+        stores_by_night: &AHashMap<NightId, AlertStore>,
     ) -> Result<ExportColumns, FinkFatError> {
         let mut out = ExportColumns::default();
         for (dk, tid) in self.iter_detection_assignments() {
@@ -1006,7 +1070,7 @@ impl TrackRegistry {
     pub fn export_detection_dict_py(
         &self,
         py: pyo3::Python<'_>,
-        stores_by_night: &BTreeMap<NightId, Arc<AlertStore>>,
+        stores_by_night: &AHashMap<NightId, AlertStore>,
     ) -> pyo3::PyResult<Py<PyDict>> {
         let cols = self
             .collect_detection_columns(stores_by_night)
@@ -1058,9 +1122,6 @@ mod track_registry_test {
     use crate::alerts::Alert;
 
     use super::*;
-
-    use std::collections::BTreeMap;
-    use std::sync::Arc;
 
     use proptest::prelude::*;
 
@@ -1376,8 +1437,8 @@ mod track_registry_test {
         let seed = make_seed(0, night, vec![aid]);
 
         // Alert store with the needed alert
-        let store = Arc::new(make_store_with_alert(aid));
-        let mut stores = BTreeMap::new();
+        let store = make_store_with_alert(aid);
+        let mut stores = AHashMap::new();
         stores.insert(night, store.clone());
 
         // Assign and export
