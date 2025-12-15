@@ -7,6 +7,7 @@ pub mod error;
 pub mod astro_math;
 pub mod night_store;
 pub mod night_id;
+pub mod graph;
 
 pub use units::{MjdTt, Radians};
 pub use alerts::{Alert, AlertId};

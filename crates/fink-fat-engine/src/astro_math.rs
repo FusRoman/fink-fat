@@ -376,6 +376,16 @@ pub fn lambda_max_2x2(a: [[f64; 2]; 2]) -> f64 {
     0.5 * (tr + rad)
 }
 
+/// Euclidean L2 norm of a 2D vector.
+///
+/// Uses `f64::hypot(x, y)` for better numerical stability than
+/// `sqrt(x*x + y*y)`.
+#[inline]
+pub fn l2_norm(x: f64, y: f64) -> f64 {
+    x.hypot(y)
+}
+
+
 /* --------------------------- Private helpers --------------------------- */
 
 /// Spherical → cartesian unit vector.
