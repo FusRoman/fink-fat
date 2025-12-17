@@ -9,6 +9,7 @@ pub mod night_store;
 pub mod night_id;
 pub mod graph;
 pub mod solver;
+pub mod trajectory;
 
 pub use units::{MjdTt, Radians};
 pub use alerts::{Alert, AlertId};
