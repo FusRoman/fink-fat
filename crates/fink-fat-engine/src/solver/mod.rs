@@ -1,6 +1,7 @@
 pub mod components;
 pub mod solver_manager;
-pub mod solver_trivial;
+pub mod trivial_solver;
+pub mod min_cost_flow;
 
 use crate::graph::edge_id::EdgeId;
 use crate::graph::graph::InterNightGraph;

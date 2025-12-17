@@ -3,9 +3,9 @@ use std::time::Instant;
 use crate::{
     graph::{graph::InterNightGraph, node_id::NodeId},
     solver::{
-        components::{ComponentStats, ConnectedComponents},
-        solver_trivial::TrivialSolver,
         Solver, SolverOutput,
+        components::{ComponentStats, ConnectedComponents},
+        trivial_solver::TrivialSolver,
     },
 };
 
@@ -192,8 +192,10 @@ impl SolverManager {
                             }
 
                             if window_nodes.len() >= 2 {
-                                let parts =
-                                    ConnectedComponents::recompute_local_exact(graph, &window_nodes);
+                                let parts = ConnectedComponents::recompute_local_exact(
+                                    graph,
+                                    &window_nodes,
+                                );
                                 for comp in parts {
                                     if comp.len() < 2 {
                                         continue;
@@ -232,6 +234,8 @@ impl SolverManager {
                                 .unwrap_or(std::cmp::Ordering::Equal)
                         });
 
+                        let nb_tracks = tracks.len();
+
                         SolverOutput {
                             tracks,
                             proposed_deactivations,
@@ -240,7 +244,7 @@ impl SolverManager {
                                 n_nodes: st.n_nodes,
                                 m_active_edges: st.m_active_edges,
                                 n_candidates: nodes.len() as u32,
-                                n_selected: tracks.len() as u32,
+                                n_selected: nb_tracks as u32,
                                 time_spent_s: t0.elapsed().as_secs_f64(),
                                 ..Default::default()
                             },
