@@ -1,4 +1,5 @@
 pub mod components;
+pub mod csr_adjacency;
 
 /// Disjoint Set Union (Union-Find) with path compression and union by size.
 ///

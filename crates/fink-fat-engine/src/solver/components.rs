@@ -12,7 +12,7 @@ use ahash::AHashMap;
 
 use crate::{
     graph::{edge::Edge, graph::InterNightGraph, node_id::NodeId},
-    solver::UnionFind,
+    solver::{UnionFind, csr_adjacency::CsrAdj},
 };
 
 /// Connected components result (undirected view).
@@ -131,52 +131,28 @@ impl ConnectedComponents {
             return Vec::new();
         }
 
-        // Mark membership of the local subset for O(1) checks.
-        let mut in_subset = vec![false; graph.nodes.len()];
-        for &nid in nodes {
-            in_subset[nid.idx()] = true;
-        }
+        let csr = CsrAdj::build_active_undirected(graph, nodes);
 
         let mut visited = vec![false; graph.nodes.len()];
         let mut out: Vec<Vec<NodeId>> = Vec::new();
-        let mut queue: std::collections::VecDeque<NodeId> = std::collections::VecDeque::new();
+        let mut stack: Vec<NodeId> = Vec::new();
 
         for &start in nodes {
             if visited[start.idx()] {
                 continue;
             }
 
-            // Start a new local component.
+            let mut comp = Vec::new();
             visited[start.idx()] = true;
-            queue.clear();
-            queue.push_back(start);
+            stack.push(start);
 
-            let mut comp: Vec<NodeId> = Vec::new();
-
-            while let Some(u) = queue.pop_front() {
+            while let Some(u) = stack.pop() {
                 comp.push(u);
 
-                // Traverse both out + in adjacency to treat edges as undirected.
-                for &eid in &graph.out_adj[u.idx()] {
-                    let e = &graph.edges[eid.idx()];
-                    if !e.active {
-                        continue;
-                    }
-                    let v = e.to;
-                    if in_subset[v.idx()] && !visited[v.idx()] {
+                for &v in csr.neighbors(u) {
+                    if !visited[v.idx()] {
                         visited[v.idx()] = true;
-                        queue.push_back(v);
-                    }
-                }
-                for &eid in &graph.in_adj[u.idx()] {
-                    let e = &graph.edges[eid.idx()];
-                    if !e.active {
-                        continue;
-                    }
-                    let v = e.from;
-                    if in_subset[v.idx()] && !visited[v.idx()] {
-                        visited[v.idx()] = true;
-                        queue.push_back(v);
+                        stack.push(v);
                     }
                 }
             }
