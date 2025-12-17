@@ -10,65 +10,10 @@
 
 use ahash::AHashMap;
 
-use crate::graph::{edge::Edge, node_id::NodeId};
-
-/// Disjoint Set Union (Union-Find) with path compression and union by size.
-///
-/// Notes
-/// -----
-/// - Indices are `usize` and refer to node indices in `InterNightGraph::nodes`.
-/// - This DSU is intended for *undirected* connectivity.
-#[derive(Debug, Clone)]
-pub struct UnionFind {
-    parent: Vec<usize>,
-    size: Vec<u32>,
-}
-
-impl UnionFind {
-    /// Create a DSU over `n` elements: 0..n-1.
-    pub fn new(n: usize) -> Self {
-        let mut parent = Vec::with_capacity(n);
-        let mut size = Vec::with_capacity(n);
-        for i in 0..n {
-            parent.push(i);
-            size.push(1);
-        }
-        Self { parent, size }
-    }
-
-    /// Find the representative (root) of `x` with path compression.
-    #[inline]
-    pub fn find(&mut self, mut x: usize) -> usize {
-        // Iterative path compression (two-pass).
-        let mut root = x;
-        while self.parent[root] != root {
-            root = self.parent[root];
-        }
-        while self.parent[x] != x {
-            let p = self.parent[x];
-            self.parent[x] = root;
-            x = p;
-        }
-        root
-    }
-
-    /// Union the sets containing `a` and `b`.
-    #[inline]
-    pub fn union(&mut self, a: usize, b: usize) {
-        let mut ra = self.find(a);
-        let mut rb = self.find(b);
-        if ra == rb {
-            return;
-        }
-
-        // Union by size: attach smaller tree under larger tree.
-        if self.size[ra] < self.size[rb] {
-            std::mem::swap(&mut ra, &mut rb);
-        }
-        self.parent[rb] = ra;
-        self.size[ra] += self.size[rb];
-    }
-}
+use crate::{
+    graph::{edge::Edge, graph::InterNightGraph, node_id::NodeId},
+    solver::UnionFind,
+};
 
 /// Connected components result (undirected view).
 ///
@@ -129,5 +74,116 @@ impl ConnectedComponents {
             comp_of_node,
             sizes,
         }
+    }
+
+    /// Build components from an existing Union-Find (union-only, may be coarse after deletions).
+    pub fn from_union_find(n_nodes: usize, uf: &mut UnionFind) -> Self {
+        debug_assert_eq!(
+            n_nodes,
+            uf.len(),
+            "UnionFind size must match graph node count"
+        );
+
+        let mut root_to_comp: AHashMap<usize, u32> = AHashMap::default();
+        let mut comp_of_node: Vec<u32> = vec![0; n_nodes];
+        let mut components: Vec<Vec<NodeId>> = Vec::new();
+
+        for i in 0..n_nodes {
+            let r = uf.find(i);
+            let cid = *root_to_comp.entry(r).or_insert_with(|| {
+                let new_id = components.len() as u32;
+                components.push(Vec::new());
+                new_id
+            });
+
+            comp_of_node[i] = cid;
+            components[cid as usize].push(NodeId::from(i as u64));
+        }
+
+        let mut sizes = Vec::with_capacity(components.len());
+        for c in &components {
+            sizes.push(c.len() as u32);
+        }
+
+        Self {
+            components,
+            comp_of_node,
+            sizes,
+        }
+    }
+
+    /// Recompute exact connected components on a subset of nodes, using only ACTIVE edges.
+    ///
+    /// Parameters
+    /// ----------
+    /// graph
+    ///     Full graph storage (nodes/edges + adjacency).
+    /// nodes
+    ///     Subset of nodes to consider (typically: nodes in one coarse DSU component
+    ///     or impacted region after deactivations).
+    ///
+    /// Returns
+    /// -------
+    /// Vec<Vec<NodeId>>
+    ///     Exact components within `nodes` (undirected view, ACTIVE edges only).
+    pub fn recompute_local_exact(graph: &InterNightGraph, nodes: &[NodeId]) -> Vec<Vec<NodeId>> {
+        if nodes.is_empty() {
+            return Vec::new();
+        }
+
+        // Mark membership of the local subset for O(1) checks.
+        let mut in_subset = vec![false; graph.nodes.len()];
+        for &nid in nodes {
+            in_subset[nid.idx()] = true;
+        }
+
+        let mut visited = vec![false; graph.nodes.len()];
+        let mut out: Vec<Vec<NodeId>> = Vec::new();
+        let mut queue: std::collections::VecDeque<NodeId> = std::collections::VecDeque::new();
+
+        for &start in nodes {
+            if visited[start.idx()] {
+                continue;
+            }
+
+            // Start a new local component.
+            visited[start.idx()] = true;
+            queue.clear();
+            queue.push_back(start);
+
+            let mut comp: Vec<NodeId> = Vec::new();
+
+            while let Some(u) = queue.pop_front() {
+                comp.push(u);
+
+                // Traverse both out + in adjacency to treat edges as undirected.
+                for &eid in &graph.out_adj[u.idx()] {
+                    let e = &graph.edges[eid.idx()];
+                    if !e.active {
+                        continue;
+                    }
+                    let v = e.to;
+                    if in_subset[v.idx()] && !visited[v.idx()] {
+                        visited[v.idx()] = true;
+                        queue.push_back(v);
+                    }
+                }
+                for &eid in &graph.in_adj[u.idx()] {
+                    let e = &graph.edges[eid.idx()];
+                    if !e.active {
+                        continue;
+                    }
+                    let v = e.from;
+                    if in_subset[v.idx()] && !visited[v.idx()] {
+                        visited[v.idx()] = true;
+                        queue.push_back(v);
+                    }
+                }
+            }
+
+            out.push(comp);
+        }
+
+        out
     }
 }

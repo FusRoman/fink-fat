@@ -83,6 +83,8 @@ pub struct Edge {
     pub cost: f64,
     /// Time gap in days (TT) between the two seeds (positive).
     pub dt_days: f64,
+    /// Whether the edge is currently active (used by solvers / CC exact recompute).
+    pub active: bool,
 }
 
 impl Edge {
@@ -101,6 +103,7 @@ impl Edge {
             to,
             cost,
             dt_days,
+            active: true,
         }
     }
 

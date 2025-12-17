@@ -1,12 +1,17 @@
 use ahash::AHashMap;
 
 use crate::{
-    engine_config::edge_config::EdgeConfig, graph::{
+    engine_config::edge_config::EdgeConfig,
+    graph::{
         edge::{Edge, EdgeId},
         layer::NightLayer,
         node::Node,
         node_id::NodeId,
-    }, night_id::NightId, seeding::{seed_id::SeedId, seed_node::SeedNode, seed_spatial_index::SeedSpatialIndex}, solver::components::ConnectedComponents, spacetime_bucket::spatial_binner::SpatialBinner
+    },
+    night_id::NightId,
+    seeding::{seed_id::SeedId, seed_node::SeedNode, seed_spatial_index::SeedSpatialIndex},
+    solver::{UnionFind, components::ConnectedComponents},
+    spacetime_bucket::spatial_binner::SpatialBinner,
 };
 
 #[derive(Debug)]
@@ -17,6 +22,9 @@ pub struct InterNightGraph {
     pub in_adj: Vec<Vec<EdgeId>>,
     pub layers: Vec<NightLayer>,
     night_to_layer_idx: AHashMap<NightId, usize>,
+    /// Incremental DSU built from edges as they are added (union-only).
+    /// After edge deactivation, this becomes a *coarse* over-approximation.
+    uf: UnionFind,
 }
 
 impl InterNightGraph {
@@ -28,6 +36,7 @@ impl InterNightGraph {
             in_adj: Vec::new(),
             layers: Vec::new(),
             night_to_layer_idx: AHashMap::default(),
+            uf: UnionFind::new(0),
         }
     }
 
@@ -48,6 +57,9 @@ impl InterNightGraph {
 
         let start: NodeId = self.nodes.len().into();
         let mut layer = NightLayer::new(night, start..start + seeds.len() as u64);
+
+        // Ensure DSU covers all nodes (union-find is indexed by node idx).
+        self.uf.extend(seeds.len());
 
         for (i, &seed) in seeds.iter().enumerate() {
             let nid = start + i as u64;
@@ -138,7 +150,18 @@ impl InterNightGraph {
             self.out_adj[edge.from.idx()].push(eid);
             self.in_adj[edge.to.idx()].push(eid);
 
+            // Incremental union on insertion (undirected connectivity)
+            self.uf.union(edge.from.idx(), edge.to.idx());
+
             self.edges.push(edge);
+        }
+    }
+
+    pub fn deactivate_edges(&mut self, eids: &[EdgeId]) {
+        for &eid in eids {
+            if let Some(e) = self.edges.get_mut(eid.idx()) {
+                e.active = false;
+            }
         }
     }
 
@@ -148,7 +171,11 @@ impl InterNightGraph {
     /// -----
     /// This is typically used to route components to different solvers
     /// (trivial / min-cost flow / blob-breaker).
-    pub fn connected_components(&self) -> ConnectedComponents {
-        ConnectedComponents::compute(self.nodes.len(), &self.edges)
+    pub fn connected_components(&mut self) -> ConnectedComponents {
+        ConnectedComponents::from_union_find(self.nodes.len(), &mut self.uf)
+    }
+
+    pub fn connected_components_local_exact(&self, nodes: &[NodeId]) -> Vec<Vec<NodeId>> {
+        ConnectedComponents::recompute_local_exact(self, nodes)
     }
 }
