@@ -2,12 +2,7 @@ use ahash::AHashMap;
 
 use crate::{
     engine_config::edge_config::EdgeConfig,
-    graph::{
-        edge::{Edge, EdgeId},
-        layer::NightLayer,
-        node::Node,
-        node_id::NodeId,
-    },
+    graph::{edge::Edge, edge_id::EdgeId, layer::NightLayer, node::Node, node_id::NodeId},
     night_id::NightId,
     seeding::{seed_id::SeedId, seed_node::SeedNode, seed_spatial_index::SeedSpatialIndex},
     solver::{UnionFind, components::ConnectedComponents},
