@@ -5,6 +5,7 @@ use crate::{
     solver::{
         Solver, SolverOutput,
         components::{ComponentStats, ConnectedComponents},
+        min_cost_flow::MinCostFlowSolver,
         trivial_solver::TrivialSolver,
     },
 };
@@ -119,6 +120,8 @@ impl SolverManager {
         // Trivial solver instance (you can move this into SolverManager later).
         let trivial = TrivialSolver::default();
 
+        let min_cost_flow = MinCostFlowSolver::default();
+
         let mut outputs: Vec<SolverOutput> = Vec::with_capacity(plan.items.len());
 
         for item in &plan.items {
@@ -129,19 +132,7 @@ impl SolverManager {
             let mut out: SolverOutput = match item.choice {
                 SolverChoice::Trivial => trivial.solve(graph, nodes, st),
 
-                SolverChoice::MinCostFlow => {
-                    // TODO: implement MCF solver.
-                    // Placeholder output:
-                    SolverOutput {
-                        diag: crate::solver::SolverDiagnostics {
-                            solver_name: "min_cost_flow",
-                            n_nodes: st.n_nodes,
-                            m_active_edges: st.m_active_edges,
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    }
-                }
+                SolverChoice::MinCostFlow => min_cost_flow.solve(graph, nodes, st),
 
                 SolverChoice::BlobBreaker => {
                     let t0 = Instant::now();
