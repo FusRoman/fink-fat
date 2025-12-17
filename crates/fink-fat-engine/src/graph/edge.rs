@@ -1,4 +1,4 @@
-//! Directed edge model (hypothesis linking two seeds across nights).
+//! Directed edge model (hypothesis linking two nodes across nights).
 
 use ahash::AHashMap;
 use bincode::{Decode, Encode};
@@ -7,7 +7,7 @@ use std::fmt;
 
 use crate::{
     engine_config::edge_config::EdgeConfig,
-    graph::score::ScoredEdge,
+    graph::{node_id::NodeId, score::ScoredEdge},
     night_id::NightId,
     seeding::{seed_id::SeedId, seed_node::SeedNode, seed_spatial_index::SeedSpatialIndex},
     spacetime_bucket::spatial_binner::SpatialBinner,
@@ -68,7 +68,7 @@ impl From<usize> for EdgeId {
     }
 }
 
-/// Directed link from an older seed to a newer seed (forward in time).
+/// Directed link from an older node to a newer node (forward in time).
 ///
 /// Cost
 /// ----
@@ -78,15 +78,15 @@ impl From<usize> for EdgeId {
 #[derive(Clone, Debug)]
 pub struct Edge {
     pub id: EdgeId,
-    pub from: SeedId,
-    pub to: SeedId,
+    pub from: NodeId,
+    pub to: NodeId,
     pub cost: f64,
     /// Time gap in days (TT) between the two seeds (positive).
     pub dt_days: f64,
 }
 
 impl Edge {
-    pub fn new(id: EdgeId, from: SeedId, to: SeedId, cost: f64, dt_days: f64) -> Self {
+    pub fn new(id: EdgeId, from: NodeId, to: NodeId, cost: f64, dt_days: f64) -> Self {
         assert!(
             cost.is_finite() && cost > 0.0,
             "Edge cost must be finite and > 0."
@@ -107,7 +107,11 @@ impl Edge {
     /* -------------------------- Top-K Edge Generation ------------------------- */
 
     /// Generate **Top-K scored** edges from `left` to `right` using a prebuilt index.
-    /// Respects `cfg.limits` (Top-K, max_cost, max_total_edges).
+    ///
+    /// Notes
+    /// -----
+    /// This version returns edges already expressed in graph space (`NodeId`),
+    /// avoiding any `(night, seed) -> NodeId` resolution during insertion.
     pub fn generate_topk_edges<B: SpatialBinner>(
         id_start: EdgeId,
         left: &[SeedNode],
@@ -116,6 +120,8 @@ impl Edge {
         binner: &B,
         index_right: &SeedSpatialIndex,
         t_right_med: f64,
+        left_seed_to_node: &AHashMap<SeedId, NodeId>,
+        right_seed_to_node: &AHashMap<SeedId, NodeId>,
         right_id_to_index: &AHashMap<SeedId, usize>,
     ) -> Vec<Self> {
         // Δ revisits (≥ 1)
@@ -129,6 +135,11 @@ impl Edge {
         let mut next_id = id_start.0;
 
         for i in left {
+            let from_nid = match left_seed_to_node.get(&i.seed_id) {
+                Some(&nid) => nid,
+                None => continue, // left seed not present in graph layer (should not happen)
+            };
+
             // (a) coarse cone at median time → candidate ids
             let (ra_c, dec_c, r_c) =
                 i.predict_cone(t_right_med, binner, &edge_config.predictor_config);
@@ -155,19 +166,25 @@ impl Edge {
 
             // (c) Top-K via partial selection instead of full sort
             let k = edge_config.top_k_per_left.min(scored.len());
-            if k > 0 {
-                let (_, _, _) =
-                    scored.select_nth_unstable_by(k - 1, |a, b| a.cost.total_cmp(&b.cost));
-                scored[..k].sort_by(|a, b| a.cost.total_cmp(&b.cost));
-                scored.truncate(k);
+            if k == 0 {
+                continue;
+            }
 
-                // (d) convert to Edge with ids
-                for se in scored {
-                    let id = EdgeId(next_id);
-                    next_id += 1;
+            let (_, _, _) = scored.select_nth_unstable_by(k - 1, |a, b| a.cost.total_cmp(&b.cost));
+            scored[..k].sort_by(|a, b| a.cost.total_cmp(&b.cost));
+            scored.truncate(k);
 
-                    edges.push(Edge::new(id, se.from, se.to, se.cost, se.dt_days));
-                }
+            // (d) convert to Edge with ids (NodeId-based)
+            for se in scored {
+                let to_nid = match right_seed_to_node.get(&se.to) {
+                    Some(&nid) => nid,
+                    None => continue, // right seed not present in graph layer (should not happen)
+                };
+
+                let id = EdgeId(next_id);
+                next_id += 1;
+
+                edges.push(Edge::new(id, from_nid, to_nid, se.cost, se.dt_days));
             }
         }
 
@@ -176,7 +193,6 @@ impl Edge {
             if edges.len() > max_e {
                 let (_, _, _) =
                     edges.select_nth_unstable_by(max_e - 1, |a, b| a.cost.total_cmp(&b.cost));
-                // sort only the kept prefix to stabilize order for determinism
                 edges[..max_e].sort_by(|a, b| a.cost.total_cmp(&b.cost));
                 edges.truncate(max_e);
             }
