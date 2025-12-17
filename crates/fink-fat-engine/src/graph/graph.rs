@@ -1,16 +1,12 @@
 use ahash::AHashMap;
 
 use crate::{
-    engine_config::edge_config::EdgeConfig,
-    graph::{
+    engine_config::edge_config::EdgeConfig, graph::{
         edge::{Edge, EdgeId},
         layer::NightLayer,
         node::Node,
         node_id::NodeId,
-    },
-    night_id::NightId,
-    seeding::{seed_id::SeedId, seed_node::SeedNode, seed_spatial_index::SeedSpatialIndex},
-    spacetime_bucket::spatial_binner::SpatialBinner,
+    }, night_id::NightId, seeding::{seed_id::SeedId, seed_node::SeedNode, seed_spatial_index::SeedSpatialIndex}, solver::components::ConnectedComponents, spacetime_bucket::spatial_binner::SpatialBinner
 };
 
 #[derive(Debug)]
@@ -144,5 +140,15 @@ impl InterNightGraph {
 
             self.edges.push(edge);
         }
+    }
+
+    /// Compute connected components (undirected view) using DSU.
+    ///
+    /// Notes
+    /// -----
+    /// This is typically used to route components to different solvers
+    /// (trivial / min-cost flow / blob-breaker).
+    pub fn connected_components(&self) -> ConnectedComponents {
+        ConnectedComponents::compute(self.nodes.len(), &self.edges)
     }
 }
