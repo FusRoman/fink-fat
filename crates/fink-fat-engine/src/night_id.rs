@@ -18,18 +18,18 @@ use std::fmt;
 /// - Typically represents an MJD day number (e.g., 60312).
 /// - Must be stable across runs because it is used as a directory name.
 #[derive(
-    Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Encode, Decode,
+    Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Encode, Decode, Hash, Default
 )]
-pub struct NightId(pub i64);
+pub struct NightId(pub u32);
 
 impl NightId {
     /// Create a new `NightId` from an integer.
-    pub fn new(id: i64) -> Self {
+    pub fn new(id: u32) -> Self {
         Self(id)
     }
 
     /// Return the underlying integer.
-    pub fn value(self) -> i64 {
+    pub fn value(self) -> u32 {
         self.0
     }
 }
@@ -50,8 +50,8 @@ mod night_id_tests {
         let nid = NightId::new(60312);
         assert_eq!(nid.to_string(), "60312");
 
-        let neg = NightId::new(-42);
-        assert_eq!(neg.to_string(), "-42");
+        let neg = NightId::new(42);
+        assert_eq!(neg.to_string(), "42");
     }
 
     /// Check ordering (Ord / PartialOrd) based on the inner value.
@@ -60,7 +60,7 @@ mod night_id_tests {
         let mut v = vec![NightId::new(10), NightId::new(3), NightId::new(7)];
         v.sort();
 
-        let values: Vec<i64> = v.into_iter().map(|n| n.value()).collect();
+        let values: Vec<u32> = v.into_iter().map(|n| n.value()).collect();
         assert_eq!(values, vec![3, 7, 10]);
     }
 
