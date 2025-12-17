@@ -8,11 +8,14 @@
 //! The graph is directed, but for connected components we treat edges as
 //! undirected links between nodes.
 
+pub mod csr_adjacency;
+pub mod union_find;
+
 use ahash::AHashMap;
 
 use crate::{
     graph::{edge::Edge, graph::InterNightGraph, node_id::NodeId},
-    solver::{UnionFind, csr_adjacency::CsrAdj},
+    solver::components::{csr_adjacency::CsrAdj, union_find::UnionFind},
 };
 
 /// Connected components result (undirected view).
@@ -30,6 +33,20 @@ pub struct ConnectedComponents {
     pub components: Vec<Vec<NodeId>>,
     pub comp_of_node: Vec<u32>,
     pub sizes: Vec<u32>,
+}
+
+/// Per-component statistics used for solver routing and diagnostics.
+///
+/// This module is solver-agnostic: it only describes structural properties
+/// of connected components in the inter-night graph.
+#[derive(Copy, Clone, Debug, Default)]
+pub struct ComponentStats {
+    /// Number of nodes in the component.
+    pub n_nodes: u32,
+    /// Number of ACTIVE directed edges internal to the component.
+    pub m_active_edges: u32,
+    /// Night span = max(night) - min(night).
+    pub night_span: u32,
 }
 
 impl ConnectedComponents {
@@ -161,5 +178,44 @@ impl ConnectedComponents {
         }
 
         out
+    }
+
+    /// Compute cheap, solver-agnostic statistics for each component.
+    pub fn compute_stats(&self, graph: &InterNightGraph) -> Vec<ComponentStats> {
+        let n_comp = self.components.len();
+        let mut stats = vec![ComponentStats::default(); n_comp];
+
+        // Node counts + night span
+        for (cid, nodes) in self.components.iter().enumerate() {
+            let mut min_night = u32::MAX;
+            let mut max_night = 0u32;
+
+            for &nid in nodes {
+                let night = graph.nodes[nid.idx()].night.0;
+                min_night = min_night.min(night);
+                max_night = max_night.max(night);
+            }
+
+            stats[cid].n_nodes = nodes.len() as u32;
+            stats[cid].night_span = if min_night == u32::MAX {
+                0
+            } else {
+                max_night - min_night
+            };
+        }
+
+        // Active internal edges
+        for e in &graph.edges {
+            if !e.active {
+                continue;
+            }
+            let cu = self.comp_of_node[e.from.idx()] as usize;
+            let cv = self.comp_of_node[e.to.idx()] as usize;
+            if cu == cv {
+                stats[cu].m_active_edges += 1;
+            }
+        }
+
+        stats
     }
 }

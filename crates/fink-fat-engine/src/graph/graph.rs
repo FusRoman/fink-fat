@@ -5,7 +5,7 @@ use crate::{
     graph::{edge::Edge, edge_id::EdgeId, layer::NightLayer, node::Node, node_id::NodeId},
     night_id::NightId,
     seeding::{seed_id::SeedId, seed_node::SeedNode, seed_spatial_index::SeedSpatialIndex},
-    solver::{UnionFind, components::ConnectedComponents},
+    solver::components::{ConnectedComponents, union_find::UnionFind},
     spacetime_bucket::spatial_binner::SpatialBinner,
 };
 
