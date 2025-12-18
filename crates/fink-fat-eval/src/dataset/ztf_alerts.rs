@@ -742,13 +742,6 @@ fn build_iter_with_mag(
     min_mjd
 }
 
-/// Backward-compatible API: keep returning only the engine store.
-///
-/// If you want to evaluate truth later, call [`alert_store_with_truth_from_lazyframe`].
-pub fn alert_store_from_lazyframe(lf: LazyFrame, cfg: AlertIngestConfig) -> Result<AlertStore> {
-    Ok(alert_store_with_truth_from_lazyframe(lf, cfg)?.store)
-}
-
 /// AlertStore augmented with per-alert truth association (`trajectory_id`).
 ///
 /// Overview
@@ -855,6 +848,74 @@ impl AlertStoreWithTruth {
             mean_len,
             max_len,
         )
+    }
+
+    /// Iterate over all alerts associated with a given `trajectory_id`.
+    ///
+    /// Parameters
+    /// ----------
+    /// tid : i32
+    ///     Truth trajectory identifier.
+    ///
+    /// Returns
+    /// -------
+    /// impl Iterator<Item = &Alert>
+    ///     Iterator over alerts whose `trajectory_id == tid`.
+    ///
+    /// Notes
+    /// -----
+    /// - Runs in O(n) time.
+    /// - Zero allocation.
+    /// - Preserves alert order (time / row order).
+    /// - If `tid <= 0`, this will typically return an empty iterator.
+    pub fn alerts_for_trajectory<'a>(&'a self, tid: i32) -> impl Iterator<Item = &'a Alert> + 'a {
+        // Version A: si AlertStore expose un slice
+        self.store
+            .alerts
+            .iter()
+            .zip(self.trajectory_id.iter())
+            .filter_map(move |(alert, &t)| if t == tid { Some(alert) } else { None })
+    }
+
+    /// Collect all alerts associated with a given truth trajectory.
+    ///
+    /// Overview
+    /// --------
+    /// This is a convenience wrapper around [`alerts_for_trajectory`] that
+    /// materializes the result into a `Vec<&Alert>`. It is intended for
+    /// evaluation or analysis code that needs to iterate multiple times over
+    /// the same trajectory, or perform operations requiring a concrete
+    /// collection (sorting, random access, statistics, etc.).
+    ///
+    /// Parameters
+    /// ----------
+    /// tid : i32
+    ///     Truth trajectory identifier to select. By convention,
+    ///     `tid <= 0` usually indicates "no truth association" and will
+    ///     typically return an empty vector.
+    ///
+    /// Returns
+    /// -------
+    /// Vec<&Alert>
+    ///     All alerts belonging to the given truth trajectory, in the same
+    ///     order as stored in the underlying [`AlertStore`] (i.e. dense
+    ///     `AlertId` / row order).
+    ///
+    /// Notes
+    /// -----
+    /// - This method allocates a new `Vec` to store references to the alerts.
+    /// - Internally, it relies on [`alerts_for_trajectory`] and therefore
+    ///   runs in **O(n)** time, where `n` is the total number of alerts.
+    /// - For single-pass processing or performance-critical paths, prefer
+    ///   using the iterator returned by [`alerts_for_trajectory`] directly
+    ///   to avoid the allocation.
+    ///
+    /// See also
+    /// --------
+    /// - [`alerts_for_trajectory`] – Zero-allocation iterator over alerts of
+    ///   a given truth trajectory.
+    pub fn alerts_for_trajectory_vec(&self, tid: i32) -> Vec<&Alert> {
+        self.alerts_for_trajectory(tid).collect()
     }
 }
 
@@ -1066,4 +1127,11 @@ pub fn alert_store_with_truth_from_lazyframe(
         store,
         trajectory_id,
     })
+}
+
+/// Backward-compatible API: keep returning only the engine store.
+///
+/// If you want to evaluate truth later, call [`alert_store_with_truth_from_lazyframe`].
+pub fn alert_store_from_lazyframe(lf: LazyFrame, cfg: AlertIngestConfig) -> Result<AlertStore> {
+    Ok(alert_store_with_truth_from_lazyframe(lf, cfg)?.store)
 }

@@ -20,12 +20,24 @@ fn main() {
 
     println!("{}", alert_store);
 
-    for alert in alert_store.store.iter().take(50) {
+    for alert in alert_store.store.iter().take(10) {
         println!(
             "alert {:?} : {} (trajectory_id: {})",
             alert.id,
             alert,
             alert_store.trajectory_id[alert.id.idx()]
+        );
+    }
+
+    println!("===============\n\nAlerts for trajectory_id = 33803:");
+
+    let traj_id = 33803;
+    for alert in alert_store.alerts_for_trajectory(traj_id) {
+        println!(
+            "Trajectory {} alert {:?} : {}",
+            traj_id,
+            alert.id,
+            alert,
         );
     }
 }
