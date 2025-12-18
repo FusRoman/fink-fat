@@ -16,10 +16,11 @@
 //! - **deterministic** (same input → same in-memory store),
 //! - **robust** to Parquet writer differences (dtypes, chunking, etc.).
 //!
-//! This file therefore provides two main entry points:
+//! This file therefore provides two ingestion entry points:
 //! - [`scan_ztf_alerts`]: builds a normalized [`LazyFrame`] (predicate/projection pushdown).
-//! - [`alert_store_from_lazyframe`]: materializes a [`LazyFrame`] into an engine [`AlertStore`]
-//!   using a fast contiguous-slice path when possible, with a chunk-safe iterator fallback.
+//! - [`alert_store_from_lazyframe`]: materializes a [`LazyFrame`] into an engine [`AlertStore`].
+//! - [`alert_store_with_truth_from_lazyframe`]: same as above, but also extracts a
+//!   truth-association sidecar aligned with [`AlertId`] (evaluation workloads).
 //!
 //! Dataset schema
 //! --------------
@@ -31,7 +32,7 @@
 //! - `magpsf`, `sigmapsf` (Float32): optional photometry proxy (stored as `flux`, `flux_err`).
 //! - `nid` (Int32): night id (optional scan filter).
 //! - `ssnamenr` (String): optional truth label (not used by the engine ingestion).
-//! - `trajectory_id` (Int32): optional truth association (optional scan filter).
+//! - `trajectory_id` (Int32): optional truth association (scan filter + evaluation sidecar).
 //!
 //! Units & conversions
 //! -------------------
@@ -43,6 +44,28 @@
 //! - `ra/dec` are often provided in degrees → convert using `cfg.radec_in_degrees`.
 //! - `jd` is often provided as JD → convert to MJD via `cfg.jd_to_mjd` (subtract 2_400_000.5).
 //!
+//! Truth association (evaluation)
+//! -----------------------------
+//! Many evaluation datasets provide a per-alert `trajectory_id` that encodes the
+//! *ground-truth* object which generated the alert (e.g., simulated truth tracks
+//! or cross-matched labels).
+//!
+//! The core engine [`Alert`] does not store this field. For evaluation, this
+//! module offers [`AlertStoreWithTruth`], which pairs:
+//! - an [`AlertStore`] (engine-ready alerts),
+//! - a `Vec<i32>` of `trajectory_id` values aligned with dense [`AlertId`] order.
+//!
+//! This design keeps the engine types unchanged while enabling fast evaluation:
+//! - O(1) truth lookup: `truth[alert_id.idx()]`.
+//! - No extra allocations or per-row overhead beyond a single `Vec<i32>`.
+//!
+//! The [`fmt::Display`] implementation for [`AlertStoreWithTruth`] reuses the
+//! underlying store display and adds summary statistics over truth trajectories
+//! (by default, only `trajectory_id > 0` are considered truth-associated):
+//! - number of alerts with truth and fraction of total,
+//! - number of unique truth trajectories,
+//! - min / mean / max trajectory length (in alerts).
+//!
 //! Performance model
 //! -----------------
 //! When Polars columns are backed by a single contiguous Arrow buffer, we can access them as
@@ -53,10 +76,16 @@
 //! `into_no_null_iter()` which iterates chunk-by-chunk efficiently and avoids per-row indexing
 //! overhead (`get(i)`), while remaining allocation-free.
 //!
+//! The truth sidecar extraction follows the same strategy:
+//! - fast path: `cont_slice()` → `to_vec()`,
+//! - fallback: `into_no_null_iter().collect()`.
+//!
 //! See also
 //! --------
 //! - [`AlertIngestConfig`] for ingestion-time conversion options.
 //! - `dataset::schema::cols` for canonical column names used across the crate.
+
+use std::{collections::HashMap, fmt};
 
 use anyhow::{Context, Result};
 use fink_fat_engine::{Alert, AlertId, alerts::AlertStore};
@@ -713,23 +742,241 @@ fn build_iter_with_mag(
     min_mjd
 }
 
-/// Build an engine [`AlertStore`] from a Polars [`LazyFrame`].
+/// Backward-compatible API: keep returning only the engine store.
 ///
-/// This is the main ingestion routine used by `fink-fat-eval` after a dataset scan.
+/// If you want to evaluate truth later, call [`alert_store_with_truth_from_lazyframe`].
+pub fn alert_store_from_lazyframe(lf: LazyFrame, cfg: AlertIngestConfig) -> Result<AlertStore> {
+    Ok(alert_store_with_truth_from_lazyframe(lf, cfg)?.store)
+}
+
+/// AlertStore augmented with per-alert truth association (`trajectory_id`).
+///
+/// Overview
+/// --------
+/// This wrapper is intended for evaluation workflows where each alert may carry
+/// a ground-truth trajectory identifier (`trajectory_id`) that should remain
+/// aligned with the engine [`AlertId`] after ingestion.
+///
+/// The core engine [`Alert`] does not store truth metadata. Instead, we keep a
+/// **sidecar vector** aligned with dense row order:
+/// `trajectory_id[alert_id.idx()]` is the truth id for that alert.
+///
+/// Notes
+/// -----
+/// - By convention in evaluation datasets, `trajectory_id <= 0` often means
+///   "no truth association". The provided statistics helper treats those as
+///   non-associated by default.
+/// - Alignment relies on the ingestion guarantee that [`AlertId`] is dense and
+///   matches the row order of the collected [`DataFrame`].
+#[derive(Debug)]
+pub struct AlertStoreWithTruth {
+    /// Engine-ready alert store.
+    pub store: AlertStore,
+    /// Truth trajectory id aligned with dense `AlertId` order.
+    pub trajectory_id: Vec<i32>,
+}
+
+impl AlertStoreWithTruth {
+    /// Return the truth trajectory id for a given alert.
+    ///
+    /// Parameters
+    /// ----------
+    /// id : AlertId
+    ///     Dense alert identifier into this store.
+    ///
+    /// Returns
+    /// -------
+    /// i32
+    ///     Truth id associated with the alert (may be <= 0 if unassociated).
+    ///
+    /// Notes
+    /// -----
+    /// This is an O(1) lookup into the sidecar vector.
+    #[inline]
+    pub fn truth_for(&self, id: AlertId) -> i32 {
+        self.trajectory_id[id.idx()]
+    }
+
+    /// Compute basic summary statistics over truth trajectories (`trajectory_id > 0`).
+    ///
+    /// This routine groups alerts by their `trajectory_id` and reports basic
+    /// distribution statistics over per-trajectory lengths (number of alerts).
+    ///
+    /// Returns
+    /// -------
+    /// (usize, usize, usize, usize, f64, usize)
+    ///     Tuple of:
+    ///     - `n_alerts_total`: total number of alerts in the store,
+    ///     - `n_alerts_with_truth`: number of alerts with `trajectory_id > 0`,
+    ///     - `n_unique_trajectories`: number of distinct `trajectory_id > 0`,
+    ///     - `min_len`: minimum trajectory length (alerts),
+    ///     - `mean_len`: mean trajectory length (alerts),
+    ///     - `max_len`: maximum trajectory length (alerts).
+    ///
+    /// Notes
+    /// -----
+    /// - Only `trajectory_id > 0` are considered truth-associated.
+    /// - The computation allocates a hash map of size `n_unique_trajectories`.
+    fn truth_stats(&self) -> (usize, usize, usize, usize, f64, usize) {
+        let n_alerts_total = self.trajectory_id.len();
+
+        // Count number of alerts per truth trajectory id.
+        let mut counts: HashMap<i32, usize> = HashMap::new();
+        let mut n_alerts_with_truth = 0usize;
+
+        for &tid in &self.trajectory_id {
+            if tid > 0 {
+                n_alerts_with_truth += 1;
+                *counts.entry(tid).or_insert(0) += 1;
+            }
+        }
+
+        let n_unique = counts.len();
+        if n_unique == 0 {
+            return (n_alerts_total, 0, 0, 0, 0.0, 0);
+        }
+
+        let mut min_len = usize::MAX;
+        let mut max_len = 0usize;
+        let mut sum_len = 0usize;
+
+        for &c in counts.values() {
+            min_len = min_len.min(c);
+            max_len = max_len.max(c);
+            sum_len += c;
+        }
+
+        let mean_len = (sum_len as f64) / (n_unique as f64);
+        (
+            n_alerts_total,
+            n_alerts_with_truth,
+            n_unique,
+            min_len,
+            mean_len,
+            max_len,
+        )
+    }
+}
+
+/// Human-readable summary for evaluation logs.
+///
+/// This display implementation reuses the underlying [`AlertStore`] display and
+/// appends truth association statistics (see [`AlertStoreWithTruth::truth_stats`]).
+///
+/// Notes
+/// -----
+/// The statistics consider only `trajectory_id > 0` as truth-associated by default.
+impl fmt::Display for AlertStoreWithTruth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Reuse the engine store Display.
+        writeln!(f, "{}", self.store)?;
+
+        // Truth stats.
+        let (n_total, n_truth, n_traj, min_len, mean_len, max_len) = self.truth_stats();
+        let frac_truth = if n_total == 0 {
+            0.0
+        } else {
+            (n_truth as f64) / (n_total as f64)
+        };
+
+        writeln!(f, "Truth association")?;
+        writeln!(f, "----------------")?;
+        writeln!(f, "alerts total            : {}", n_total)?;
+        writeln!(
+            f,
+            "alerts with truth       : {} ({:.2}%)",
+            n_truth,
+            100.0 * frac_truth
+        )?;
+
+        if n_traj == 0 {
+            writeln!(f, "unique trajectories      : 0")?;
+            writeln!(f, "trajectory length (alerts): n/a")?;
+            return Ok(());
+        }
+
+        writeln!(f, "unique trajectories      : {}", n_traj)?;
+        writeln!(f, "trajectory length (alerts)")?;
+        writeln!(f, "  min                   : {}", min_len)?;
+        writeln!(f, "  mean                  : {:.2}", mean_len)?;
+        writeln!(f, "  max                   : {}", max_len)?;
+
+        Ok(())
+    }
+}
+
+/// Borrowed view of truth-association column.
+struct TruthCols<'a> {
+    trajectory_id: &'a Int32Chunked,
+}
+
+/// Load truth-association column from a Polars [`DataFrame`].
+///
+/// Parameters
+/// ----------
+/// df : &DataFrame
+///     Collected frame (typically from `LazyFrame::collect()`).
+///
+/// Returns
+/// -------
+/// TruthCols
+///     Borrowed typed view of `trajectory_id` (no allocations).
+///
+/// Errors
+/// ------
+/// Returns an error if:
+/// - the `trajectory_id` column is missing,
+/// - dtype is not Int32,
+/// - the column contains null values.
+///
+/// Notes
+/// -----
+/// The evaluation path assumes no-null truth ids for simplicity and speed.
+/// If you need to support nulls, change the extraction to `into_iter()` and
+/// store `Vec<Option<i32>>` instead.
+#[inline]
+fn load_truth_cols<'a>(df: &'a DataFrame) -> Result<TruthCols<'a>> {
+    let trajectory_id = df
+        .column(cols::TRAJECTORY_ID)?
+        .as_materialized_series()
+        .i32()
+        .context("trajectory_id not Int32")?;
+
+    anyhow::ensure!(trajectory_id.null_count() == 0, "trajectory_id has nulls");
+
+    Ok(TruthCols { trajectory_id })
+}
+
+/// Extract an Int32 column into a `Vec<i32>` efficiently.
+///
+/// Notes
+/// -----
+/// - Fast path: a single contiguous Arrow buffer (`cont_slice()`) => `to_vec()`.
+/// - Fallback: chunk-safe no-null iterator (`into_no_null_iter().collect()`).
+#[inline]
+fn extract_i32_vec(ca: &Int32Chunked) -> Vec<i32> {
+    if let Some(sl) = try_i32(ca) {
+        sl.to_vec()
+    } else {
+        ca.into_no_null_iter().collect()
+    }
+}
+
+/// Build an engine [`AlertStore`] plus an aligned `trajectory_id` sidecar.
+///
+/// This is the evaluation-oriented ingestion routine. It performs the same alert
+/// materialization as [`alert_store_from_lazyframe`], but also extracts
+/// `trajectory_id` into a contiguous `Vec<i32>` aligned with dense [`AlertId`].
 ///
 /// Pipeline
 /// --------
 /// 1. Collect the `LazyFrame` into a `DataFrame`.
-/// 2. Extract required typed columns (`candid`, `ra`, `dec`, `jd`, `fid`), with null checks.
-/// 3. Optionally extract photometry-proxy columns (`magpsf`, `sigmapsf`), with null checks.
-/// 4. Compute ingestion constants:
-///    - `angle_scale` (degrees → radians, if requested),
-///    - `jd_offset` (JD → MJD, if requested),
-///    - `sigma_rad` default astrometric uncertainty (arcsec → radians).
-/// 5. Build `Vec<Alert>` with:
-///    - a contiguous-slice fast path when possible,
-///    - a chunk-safe iterator fallback otherwise.
-/// 6. Compute `start_mjd` as `floor(min(mjd_tt))` (computed on-the-fly during building).
+/// 2. Extract required typed columns (see [`load_base_cols`]) with null checks.
+/// 3. Extract truth-association column (see [`load_truth_cols`]) with null checks.
+/// 4. Optionally extract photometry-proxy columns (`magpsf`, `sigmapsf`).
+/// 5. Build `Vec<Alert>` with contiguous-slice fast path or iterator fallback.
+/// 6. Extract `trajectory_id` with contiguous-slice fast path or iterator fallback.
+/// 7. Compute `start_mjd` as `floor(min(mjd_tt))`.
 ///
 /// Parameters
 /// ----------
@@ -740,48 +987,48 @@ fn build_iter_with_mag(
 ///
 /// Returns
 /// -------
-/// AlertStore
-///     A contiguous store of engine alerts suitable for seeding and linking.
+/// AlertStoreWithTruth
+///     The engine store plus a truth sidecar aligned with dense [`AlertId`].
 ///
 /// Errors
 /// ------
 /// Returns an error if:
 /// - the lazy plan cannot be collected,
-/// - required columns are missing or have incompatible dtypes,
-/// - required columns contain null values,
+/// - required columns are missing / invalid / contain nulls,
+/// - `trajectory_id` is missing / invalid / contains nulls,
 /// - photometry-proxy columns are requested but missing / invalid.
 ///
 /// Notes
 /// -----
-/// - `Alert::dia_source_id` is populated from `candid` (ZTF-like identifier).
-/// - `Alert::flux` / `Alert::flux_err` store `magpsf` / `sigmapsf` as a *proxy* when enabled.
-/// - No TT conversion is applied; `mjd_tt` is treated as "MJD-like days" for evaluation.
-/// - The output `AlertId` is dense and matches the row order of the collected frame.
-pub fn alert_store_from_lazyframe(lf: LazyFrame, cfg: AlertIngestConfig) -> Result<AlertStore> {
-    // Collect the lazy computation plan. This is the point where IO happens.
+/// - Truth association is returned as a sidecar to avoid modifying engine types.
+/// - Alignment is guaranteed by using row order consistently for both alerts and truth.
+pub fn alert_store_with_truth_from_lazyframe(
+    lf: LazyFrame,
+    cfg: AlertIngestConfig,
+) -> Result<AlertStoreWithTruth> {
+    // Collect once.
     let df = lf
         .collect()
         .context("Failed to collect LazyFrame into a DataFrame")?;
 
-    // Extract required columns (typed) and validate that we have no nulls.
+    // Required columns.
     let base = load_base_cols(&df)?;
 
-    // Output: store alerts in a single contiguous Vec for cache-friendly downstream passes.
+    // Optional truth column (required for evaluation here).
+    let truth = load_truth_cols(&df)?;
+
     let n = df.height();
     let mut alerts = Vec::with_capacity(n);
 
-    // Precompute conversion constants once.
+    // Conversion constants.
     let deg2rad = std::f64::consts::PI / 180.0;
     let sigma_rad = cfg.default_sigma_arcsec * deg2rad / 3600.0;
     let jd_offset = if cfg.jd_to_mjd { 2_400_000.5 } else { 0.0 };
     let angle_scale = if cfg.radec_in_degrees { deg2rad } else { 1.0 };
 
-    // Choose the best building strategy depending on data contiguity and config.
+    // Build alerts (your existing logic).
     let min_mjd = if cfg.store_mag_as_flux_proxy {
-        // Load photometry-proxy columns only if requested.
         let mag = load_mag_cols(&df)?;
-
-        // Fast path if all required + optional columns are backed by contiguous buffers.
         if let (Some(sl), Some((mag_sl, sig_sl))) = (try_base_slices(&base), try_mag_slices(&mag)) {
             build_contiguous_with_mag(
                 n,
@@ -794,11 +1041,9 @@ pub fn alert_store_from_lazyframe(lf: LazyFrame, cfg: AlertIngestConfig) -> Resu
                 &mut alerts,
             )
         } else {
-            // Fallback: chunk-safe no-null iterators (still fast, no per-row get()).
             build_iter_with_mag(&base, &mag, angle_scale, jd_offset, sigma_rad, &mut alerts)
         }
     } else {
-        // No photometry requested: only required columns matter.
         if let Some(sl) = try_base_slices(&base) {
             build_contiguous_no_mag(n, sl, angle_scale, jd_offset, sigma_rad, &mut alerts)
         } else {
@@ -806,6 +1051,19 @@ pub fn alert_store_from_lazyframe(lf: LazyFrame, cfg: AlertIngestConfig) -> Resu
         }
     };
 
-    // Engine convention: start_mjd is the floor of the minimum mjd in the store.
-    Ok(AlertStore::new(min_mjd.floor(), alerts))
+    // Extract truth sidecar (aligned with row order / AlertId).
+    let trajectory_id = extract_i32_vec(truth.trajectory_id);
+    anyhow::ensure!(
+        trajectory_id.len() == n,
+        "trajectory_id length mismatch: got {}, expected {}",
+        trajectory_id.len(),
+        n
+    );
+
+    let store = AlertStore::new(min_mjd.floor(), alerts);
+
+    Ok(AlertStoreWithTruth {
+        store,
+        trajectory_id,
+    })
 }
