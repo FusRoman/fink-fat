@@ -1,0 +1,14 @@
+[package]
+name = "fink-fat-eval"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+camino = "1.2.2"
+polars = { version = "=0.52.0", default-features = false, features = [
+    "lazy",
+    "parquet",
+    "fmt"
+] }
+fink-fat-engine = { path = "../fink-fat-engine" }
