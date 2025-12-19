@@ -192,7 +192,7 @@ struct Cli {
     /// When disabled, pairs must belong to strictly different time bins,
     /// which can reduce false positives at the cost of missing very
     /// closely spaced detections.
-    #[arg(long, default_value_t = true)]
+    #[arg(long, default_value_t = false)]
     allow_same_timebin: bool,
 
     /// HEALPix depth used for spatial candidate binning.

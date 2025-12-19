@@ -57,8 +57,9 @@ use crate::dataset::ztf_alerts::{
 use crate::dataset::{ParquetSource, ingest_config::AlertIngestConfig};
 use crate::grid::{linspace, logspace};
 use crate::seeding::plotting::{
-    AngularUnit, PairPlotConfig, extract_pair_features, plot_pairs_dt_hist,
-    plot_pairs_scatter_dt_sep, plot_pairs_sep_hist, plot_pairs_tradeoff_vs_sep_threshold,
+    AngularUnit, PairPlotConfig, extract_pair_features, plot_pairs_cost_vs_sep_threshold,
+    plot_pairs_dt_hist, plot_pairs_global_tradeoff_vs_sep_threshold, plot_pairs_scatter_dt_sep,
+    plot_pairs_sep_hist, plot_pairs_tradeoff_vs_sep_threshold,
 };
 use crate::seeding::seed_gen::generate_pairs_and_triplets_ids_only;
 
@@ -255,6 +256,18 @@ pub fn run_pairs_posthoc_sweep(cfg: &PairsPosthocSweepConfig) -> Result<()> {
         out_dir_std,
         &cfg.plot,
     )?;
+
+    // Global metrics: purity_overall (global) + consecutive_recall (global completeness proxy)
+    plot_pairs_global_tradeoff_vs_sep_threshold(
+        &store,
+        &pairs,
+        &feats,
+        &thresholds,
+        out_dir_std,
+        &cfg.plot,
+    )?;
+
+    plot_pairs_cost_vs_sep_threshold(&store, &pairs, &feats, &thresholds, out_dir_std, &cfg.plot)?;
 
     Ok(())
 }

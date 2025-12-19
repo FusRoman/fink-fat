@@ -724,6 +724,283 @@ pub fn plot_pairs_tradeoff_vs_sep_threshold(
     Ok(out)
 }
 
+/// Plot a 1D sweep: global purity (overall) and global completeness (proxy) vs a separation threshold.
+///
+/// Overview
+/// --------
+/// This plot complements [`plot_pairs_tradeoff_vs_sep_threshold`] by using
+/// **global** metrics:
+/// - **Global purity**: [`PairMetrics::purity_overall`] = `n_true / n_total`
+///   over *all* generated pairs (including unknown truth endpoints).
+/// - **Global completeness (proxy)**: [`PairMetrics::consecutive_recall`], i.e.
+///   the fraction of *consecutive truth pairs* that are present in the generated
+///   output after applying `sep <= threshold`.
+///
+/// The completeness definition is a scalable proxy: exact recall over all
+/// same-trajectory pairs is O(k²) per trajectory and is not tractable at
+/// survey scale.
+///
+/// Arguments
+/// ---------
+/// * `store` – Store with truth association.
+/// * `pairs` – Full generated pairs superset (generated with a large max_sep).
+/// * `feats` – Per-pair features aligned with `pairs` (must have same length).
+/// * `thresholds_rad` – Threshold values in **radians** (monotonic increasing recommended).
+/// * `out_dir` – Output directory.
+/// * `cfg` – Plot configuration, including the angular display unit.
+///
+/// Return
+/// ------
+/// * `Ok(PathBuf)` with the written PNG path on success.
+/// * `Err(anyhow::Error)` if inputs are inconsistent or plotting fails.
+///
+/// Output
+/// ------
+/// Writes `pairs_global_tradeoff_sep_threshold.png`.
+///
+/// Notes
+/// -----
+/// * This is a post-hoc sweep: it filters a fixed superset of pairs.
+/// * Filtering is performed in radians; only the x-axis is converted to
+///   `cfg.angular_unit`.
+/// * `purity_overall` will typically **decrease** when the threshold increases,
+///   as more unknown/incorrect pairs are retained.
+/// * `consecutive_recall` will typically **increase** with the threshold.
+pub fn plot_pairs_global_tradeoff_vs_sep_threshold(
+    store: &AlertStoreWithTruth,
+    pairs: &Pairs,
+    feats: &[PairFeat],
+    thresholds_rad: &[f64],
+    out_dir: &Path,
+    cfg: &PairPlotConfig,
+) -> Result<PathBuf> {
+    let out = ensure_out_path(out_dir, "pairs_global_tradeoff_sep_threshold.png")?;
+
+    {
+        anyhow::ensure!(
+            feats.len() == pairs.len(),
+            "feats and pairs must be aligned"
+        );
+
+        // Keep (Pair, sep_rad) aligned with thresholds.
+        let pair_sep: Vec<(Pair, f64)> = pairs
+            .iter()
+            .copied()
+            .zip(feats.iter().map(|f| f.sep_rad))
+            .collect();
+
+        let mut xs_rad = Vec::with_capacity(thresholds_rad.len());
+        let mut purity = Vec::with_capacity(thresholds_rad.len());
+        let mut completeness = Vec::with_capacity(thresholds_rad.len());
+
+        for &thr_rad in thresholds_rad {
+            let filtered: Pairs = pair_sep
+                .iter()
+                .filter(|(_, s_rad)| *s_rad <= thr_rad)
+                .map(|(p, _)| *p)
+                .collect();
+
+            let m: PairMetrics = pair_metrics(store, &filtered);
+
+            xs_rad.push(thr_rad);
+            purity.push(m.purity_overall);
+            completeness.push(m.consecutive_recall);
+        }
+
+        // Display conversion for x-axis.
+        let scale = cfg.angular_unit.scale_from_rad();
+        let xs_disp: Vec<f64> = xs_rad.iter().map(|&x| x * scale).collect();
+
+        let x_lo = *xs_disp.first().unwrap_or(&0.0);
+        let x_hi = *xs_disp.last().unwrap_or(&1.0);
+
+        let root = BitMapBackend::new(&out, (cfg.width, cfg.height)).into_drawing_area();
+        root.fill(&WHITE)?;
+
+        let title = format!(
+            "Pairs: global purity & completeness vs separation threshold [{}]",
+            cfg.angular_unit.label()
+        );
+
+        let mut chart = ChartBuilder::on(&root)
+            .caption(title, ("sans-serif", 28))
+            .margin(15)
+            .x_label_area_size(40)
+            .y_label_area_size(60)
+            .build_cartesian_2d(x_lo..x_hi, 0.0f64..1.0f64)?;
+
+        chart
+            .configure_mesh()
+            .x_desc(format!(
+                "separation threshold [{}]",
+                cfg.angular_unit.label()
+            ))
+            .y_desc("ratio")
+            .draw()?;
+
+        // Global purity (overall): green
+        chart
+            .draw_series(LineSeries::new(
+                xs_disp.iter().copied().zip(purity.iter().copied()),
+                &RGBColor(80, 160, 80),
+            ))?
+            .label("purity_overall (global)")
+            .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &RGBColor(80, 160, 80)));
+
+        // Global completeness proxy: blue
+        chart
+            .draw_series(LineSeries::new(
+                xs_disp.iter().copied().zip(completeness.iter().copied()),
+                &RGBColor(80, 80, 220),
+            ))?
+            .label("consecutive_recall (global completeness proxy)")
+            .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &RGBColor(80, 80, 220)));
+
+        chart
+            .configure_series_labels()
+            .border_style(&BLACK)
+            .draw()?;
+    }
+
+    Ok(out)
+}
+
+/// Plot a post-hoc sweep cost curve: number of kept pairs vs separation threshold.
+///
+/// Overview
+/// --------
+/// This plot complements quality tradeoff curves by showing the **computational cost**
+/// implied by a separation threshold. Even if purity/recall look good, a threshold
+/// that keeps too many pairs may be infeasible at survey scale.
+///
+/// For each threshold `thr`, we filter the pre-generated superset of pairs with
+/// `sep_rad <= thr` and compute:
+/// - `n_pairs_kept(thr)`
+/// - `pairs_per_alert(thr) = n_pairs_kept / n_alerts`
+///
+/// Arguments
+/// ---------
+/// * `store` – Alert store with truth association (used for `n_alerts`).
+/// * `pairs` – Full generated pair superset.
+/// * `feats` – Per-pair features aligned with `pairs` (must match length).
+/// * `thresholds_rad` – Increasing separation thresholds (radians).
+/// * `out_dir` – Output directory.
+/// * `cfg` – Plot configuration (size + angular display unit).
+///
+/// Return
+/// ------
+/// * `Ok(PathBuf)` – Path to the written PNG file.
+/// * `Err(anyhow::Error)` – If inputs are inconsistent or plotting fails.
+///
+/// Notes
+/// -----
+/// * This is **post-hoc**: it does not re-run seeding.
+/// * The y-axis uses `log10(n_pairs_kept)` to remain readable across orders of magnitude.
+///   If `n_pairs_kept == 0`, we plot 0.0 by convention.
+pub fn plot_pairs_cost_vs_sep_threshold(
+    store: &AlertStoreWithTruth,
+    pairs: &Pairs,
+    feats: &[PairFeat],
+    thresholds_rad: &[f64],
+    out_dir: &Path,
+    cfg: &PairPlotConfig,
+) -> Result<PathBuf> {
+    let out = ensure_out_path(out_dir, "pairs_cost_vs_sep_threshold.png")?;
+
+    {
+        anyhow::ensure!(
+            feats.len() == pairs.len(),
+            "feats and pairs must be aligned"
+        );
+
+        // Pre-zip for cheap filtering by sep.
+        let pair_sep: Vec<(Pair, f64)> = pairs
+            .iter()
+            .copied()
+            .zip(feats.iter().map(|f| f.sep_rad))
+            .collect();
+
+        let n_alerts = store.store.alerts.len().max(1) as f64;
+
+        let mut xs_rad = Vec::with_capacity(thresholds_rad.len());
+        let mut log10_n_pairs = Vec::with_capacity(thresholds_rad.len());
+        let mut pairs_per_alert = Vec::with_capacity(thresholds_rad.len());
+
+        for &thr_rad in thresholds_rad {
+            let n_kept = pair_sep.iter().filter(|(_, s)| *s <= thr_rad).count();
+            let n_kept_f = n_kept as f64;
+
+            xs_rad.push(thr_rad);
+            log10_n_pairs.push(if n_kept == 0 { 0.0 } else { n_kept_f.log10() });
+            pairs_per_alert.push(n_kept_f / n_alerts);
+        }
+
+        // Display conversion for x-axis.
+        let scale = cfg.angular_unit.scale_from_rad();
+        let xs_disp: Vec<f64> = xs_rad.iter().map(|&x| x * scale).collect();
+        let x_lo = *xs_disp.first().unwrap_or(&0.0);
+        let x_hi = *xs_disp.last().unwrap_or(&1.0);
+
+        // y-range: derive from data with a small pad.
+        let y0_min = log10_n_pairs.iter().copied().fold(f64::INFINITY, f64::min);
+        let y0_max = log10_n_pairs
+            .iter()
+            .copied()
+            .fold(f64::NEG_INFINITY, f64::max);
+
+        let mut y_lo = if y0_min.is_finite() { y0_min } else { 0.0 };
+        let mut y_hi = if y0_max.is_finite() { y0_max } else { 1.0 };
+        if y_lo == y_hi {
+            y_hi = y_lo + 1.0;
+        }
+        let pad = 0.05 * (y_hi - y_lo);
+        y_lo -= pad;
+        y_hi += pad;
+
+        let root = BitMapBackend::new(&out, (cfg.width, cfg.height)).into_drawing_area();
+        root.fill(&WHITE)?;
+
+        let title = format!(
+            "Pairs: cost vs separation threshold [{}]",
+            cfg.angular_unit.label()
+        );
+
+        let mut chart = ChartBuilder::on(&root)
+            .caption(title, ("sans-serif", 28))
+            .margin(15)
+            .x_label_area_size(40)
+            .y_label_area_size(70)
+            .build_cartesian_2d(x_lo..x_hi, y_lo..y_hi)?;
+
+        chart
+            .configure_mesh()
+            .x_desc(format!(
+                "separation threshold [{}]",
+                cfg.angular_unit.label()
+            ))
+            .y_desc("log10(n_pairs_kept)")
+            .draw()?;
+
+        // Curve: log10(n_pairs_kept)
+        chart
+            .draw_series(LineSeries::new(
+                xs_disp.iter().copied().zip(log10_n_pairs.iter().copied()),
+                &BLACK,
+            ))?
+            .label("log10(n_pairs_kept)")
+            .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &BLACK));
+
+        // Annotate pairs_per_alert in legend only (optional): we keep plot simple.
+        // If you want it as a second curve, we can add a second axis later.
+
+        chart
+            .configure_series_labels()
+            .border_style(&BLACK)
+            .draw()?;
+    }
+    Ok(out)
+}
+
 /* ------------------------------ Drawing helpers ------------------------------ */
 
 fn draw_scatter_by_label_with_unit<DB: DrawingBackend, S: Into<ShapeStyle> + Clone>(
