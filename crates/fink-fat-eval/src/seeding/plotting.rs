@@ -33,6 +33,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use clap::ValueEnum;
 use plotters::coord::types::{RangedCoordf64, RangedCoordi32};
 use plotters::prelude::*;
 
@@ -43,6 +44,50 @@ use fink_fat_engine::{
 
 use crate::dataset::ztf_alerts::AlertStoreWithTruth;
 use crate::seeding::metrics::{PairMetrics, pair_metrics};
+
+/// Angular unit used for plot display.
+///
+/// Notes
+/// -----
+/// Internally, all angular quantities are stored and computed in **radians**.
+/// This enum only controls **axis labels and value conversion for plotting**.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]
+pub enum AngularUnit {
+    /// Radians (default).
+    #[value(name = "rad")]
+    Radian,
+    /// Degrees.
+    #[value(name = "deg")]
+    Degree,
+    /// Arcminutes.
+    #[value(name = "arcmin")]
+    ArcMinute,
+    /// Arcseconds.
+    #[value(name = "arcsec")]
+    ArcSecond,
+}
+
+impl AngularUnit {
+    #[inline]
+    pub fn scale_from_rad(self) -> f64 {
+        match self {
+            AngularUnit::Radian => 1.0,
+            AngularUnit::Degree => 180.0 / std::f64::consts::PI,
+            AngularUnit::ArcMinute => 60.0 * 180.0 / std::f64::consts::PI,
+            AngularUnit::ArcSecond => 3600.0 * 180.0 / std::f64::consts::PI,
+        }
+    }
+
+    #[inline]
+    pub fn label(self) -> &'static str {
+        match self {
+            AngularUnit::Radian => "rad",
+            AngularUnit::Degree => "deg",
+            AngularUnit::ArcMinute => "arcmin",
+            AngularUnit::ArcSecond => "arcsec",
+        }
+    }
+}
 
 /// Label attached to a generated pair for plotting.
 ///
@@ -92,6 +137,9 @@ pub struct PairPlotConfig {
 
     /// Maximum number of points in scatter plots (downsample for huge outputs).
     pub scatter_max_points: usize,
+
+    /// Angular unit used for plotting (radians internally).
+    pub angular_unit: AngularUnit,
 }
 
 impl Default for PairPlotConfig {
@@ -104,6 +152,7 @@ impl Default for PairPlotConfig {
             dt_range: None,
             sep_range: None,
             scatter_max_points: 200_000,
+            angular_unit: AngularUnit::Radian,
         }
     }
 }
@@ -361,11 +410,15 @@ pub fn plot_pairs_dt_hist(
     Ok(out)
 }
 
-/// Plot a histogram of angular separation (radians), split by truth label.
+/// Plot a histogram of angular separation, split by truth label.
 ///
 /// Output
 /// ------
 /// Writes `pairs_sep_hist.png`.
+///
+/// Notes
+/// -----
+/// - Separations are displayed in `cfg.angular_unit` (internally stored in radians).
 pub fn plot_pairs_sep_hist(
     feats: &[PairFeat],
     out_dir: &Path,
@@ -374,23 +427,25 @@ pub fn plot_pairs_sep_hist(
     let out = ensure_out_path(out_dir, "pairs_sep_hist.png")?;
 
     {
+        let scale = cfg.angular_unit.scale_from_rad();
+
         let sep_true: Vec<f64> = feats
             .iter()
             .filter(|f| f.label == PairTruthLabel::True)
-            .map(|f| f.sep_rad)
+            .map(|f| f.sep_rad * scale)
             .collect();
         let sep_cont: Vec<f64> = feats
             .iter()
             .filter(|f| f.label == PairTruthLabel::Contaminated)
-            .map(|f| f.sep_rad)
+            .map(|f| f.sep_rad * scale)
             .collect();
         let sep_unk: Vec<f64> = feats
             .iter()
             .filter(|f| f.label == PairTruthLabel::Unknown)
-            .map(|f| f.sep_rad)
+            .map(|f| f.sep_rad * scale)
             .collect();
 
-        let all_sep: Vec<f64> = feats.iter().map(|f| f.sep_rad).collect();
+        let all_sep: Vec<f64> = feats.iter().map(|f| f.sep_rad * scale).collect();
         let (lo, hi) = cfg.sep_range.unwrap_or_else(|| infer_range(&all_sep));
 
         let h_true = histogram(&sep_true, cfg.sep_bins, lo, hi);
@@ -407,11 +462,13 @@ pub fn plot_pairs_sep_hist(
         let root = BitMapBackend::new(&out, (cfg.width, cfg.height)).into_drawing_area();
         root.fill(&WHITE)?;
 
+        let title = format!(
+            "Pairs: angular separation histogram ({}) by truth label",
+            cfg.angular_unit.label()
+        );
+
         let mut chart = ChartBuilder::on(&root)
-            .caption(
-                "Pairs: angular separation histogram (rad) by truth label",
-                ("sans-serif", 28),
-            )
+            .caption(title, ("sans-serif", 28))
             .margin(15)
             .x_label_area_size(40)
             .y_label_area_size(60)
@@ -419,7 +476,7 @@ pub fn plot_pairs_sep_hist(
 
         chart
             .configure_mesh()
-            .x_desc("angular separation [rad]")
+            .x_desc(format!("angular separation [{}]", cfg.angular_unit.label()))
             .y_desc("count")
             .draw()?;
 
@@ -453,6 +510,7 @@ pub fn plot_pairs_sep_hist(
             .border_style(&BLACK)
             .draw()?;
     }
+
     Ok(out)
 }
 
@@ -464,10 +522,7 @@ pub fn plot_pairs_sep_hist(
 ///
 /// Notes
 /// -----
-/// This plot is often the best single diagnostic:
-/// - true links should cluster in a compact region,
-/// - contaminated links often populate tails (large Δt / large separation),
-/// - unknown links show where truth is missing (dataset limitation).
+/// - Separations are displayed in `cfg.angular_unit` (internally stored in radians).
 pub fn plot_pairs_scatter_dt_sep(
     feats: &[PairFeat],
     out_dir: &Path,
@@ -477,10 +532,11 @@ pub fn plot_pairs_scatter_dt_sep(
 
     {
         let all_dt: Vec<f64> = feats.iter().map(|f| f.dt).collect();
-        let all_sep: Vec<f64> = feats.iter().map(|f| f.sep_rad).collect();
-
         let (x_lo, x_hi) = cfg.dt_range.unwrap_or_else(|| infer_range(&all_dt));
-        let (y_lo, y_hi) = cfg.sep_range.unwrap_or_else(|| infer_range(&all_sep));
+
+        let scale = cfg.angular_unit.scale_from_rad();
+        let all_sep_disp: Vec<f64> = feats.iter().map(|f| f.sep_rad * scale).collect();
+        let (y_lo, y_hi) = cfg.sep_range.unwrap_or_else(|| infer_range(&all_sep_disp));
 
         // Downsample if needed (deterministic): take a stride.
         let stride = (feats.len() / cfg.scatter_max_points).max(1);
@@ -488,11 +544,13 @@ pub fn plot_pairs_scatter_dt_sep(
         let root = BitMapBackend::new(&out, (cfg.width, cfg.height)).into_drawing_area();
         root.fill(&WHITE)?;
 
+        let title = format!(
+            "Pairs: scatter Δt vs separation ({}; colored by truth label)",
+            cfg.angular_unit.label()
+        );
+
         let mut chart = ChartBuilder::on(&root)
-            .caption(
-                "Pairs: scatter Δt vs separation (colored by truth label)",
-                ("sans-serif", 28),
-            )
+            .caption(title, ("sans-serif", 28))
             .margin(15)
             .x_label_area_size(40)
             .y_label_area_size(60)
@@ -501,32 +559,35 @@ pub fn plot_pairs_scatter_dt_sep(
         chart
             .configure_mesh()
             .x_desc("Δt [days]")
-            .y_desc("angular separation [rad]")
+            .y_desc(format!("angular separation [{}]", cfg.angular_unit.label()))
             .draw()?;
 
-        // We draw unknown first (grey), then contaminated (red), then true (green),
+        // Draw unknown first (grey), then contaminated (red), then true (green)
         // so true points appear on top.
-        draw_scatter_by_label(
+        draw_scatter_by_label_with_unit(
             &mut chart,
             feats,
             stride,
             PairTruthLabel::Unknown,
+            scale,
             &RGBColor(150, 150, 150).mix(0.45),
             "unknown",
         )?;
-        draw_scatter_by_label(
+        draw_scatter_by_label_with_unit(
             &mut chart,
             feats,
             stride,
             PairTruthLabel::Contaminated,
+            scale,
             &RGBColor(220, 80, 80).mix(0.60),
             "contaminated",
         )?;
-        draw_scatter_by_label(
+        draw_scatter_by_label_with_unit(
             &mut chart,
             feats,
             stride,
             PairTruthLabel::True,
+            scale,
             &RGBColor(80, 160, 80).mix(0.60),
             "true",
         )?;
@@ -536,6 +597,7 @@ pub fn plot_pairs_scatter_dt_sep(
             .border_style(&BLACK)
             .draw()?;
     }
+
     Ok(out)
 }
 
@@ -549,8 +611,14 @@ pub fn plot_pairs_scatter_dt_sep(
 ///     Store with truth association.
 /// pairs : &Pairs
 ///     Full generated pairs. We will filter pairs by `sep_rad <= threshold`.
+/// feats : &[PairFeat]
+///     Per-pair features aligned with `pairs`.
 /// thresholds_rad : &[f64]
-///     Threshold values in radians (must be increasing for a clean plot).
+///     Threshold values in **radians** (must be increasing for a clean plot).
+/// out_dir : &Path
+///     Output directory.
+/// cfg : &PairPlotConfig
+///     Plot configuration, including the angular display unit.
 ///
 /// Output
 /// ------
@@ -559,8 +627,8 @@ pub fn plot_pairs_scatter_dt_sep(
 /// Notes
 /// -----
 /// - This is a *post-hoc* sweep: it does not re-run the seeding algorithm.
-///   It answers: “If I had cut at threshold T, what would quality look like?”
-/// - `consecutive_recall` uses your proxy metric (consecutive truth pairs).
+/// - Filtering is performed in **radians**. Only the **x-axis display** is converted
+///   to `cfg.angular_unit`.
 pub fn plot_pairs_tradeoff_vs_sep_threshold(
     store: &AlertStoreWithTruth,
     pairs: &Pairs,
@@ -572,8 +640,6 @@ pub fn plot_pairs_tradeoff_vs_sep_threshold(
     let out = ensure_out_path(out_dir, "pairs_tradeoff_sep_threshold.png")?;
 
     {
-        // Build an aligned vector (pair, sep) to filter quickly.
-        // This assumes `feats.len() == pairs.len()` and same order.
         anyhow::ensure!(
             feats.len() == pairs.len(),
             "feats and pairs must be aligned"
@@ -582,34 +648,43 @@ pub fn plot_pairs_tradeoff_vs_sep_threshold(
         let pair_sep: Vec<(Pair, f64)> = pairs
             .iter()
             .copied()
-            .zip(feats.iter().map(|f| f.sep_rad))
+            .zip(feats.iter().map(|f| f.sep_rad)) // radians
             .collect();
 
-        let mut xs = Vec::with_capacity(thresholds_rad.len());
+        let mut xs_rad = Vec::with_capacity(thresholds_rad.len());
         let mut prec = Vec::with_capacity(thresholds_rad.len());
         let mut rec = Vec::with_capacity(thresholds_rad.len());
 
-        for &thr in thresholds_rad {
+        for &thr_rad in thresholds_rad {
             let filtered: Pairs = pair_sep
                 .iter()
-                .filter(|(_, s)| *s <= thr)
+                .filter(|(_, s_rad)| *s_rad <= thr_rad)
                 .map(|(p, _)| *p)
                 .collect();
 
             let m: PairMetrics = pair_metrics(store, &filtered);
-            xs.push(thr);
+            xs_rad.push(thr_rad);
             prec.push(m.precision_on_truth);
             rec.push(m.consecutive_recall);
         }
 
-        let x_lo = *xs.first().unwrap_or(&0.0);
-        let x_hi = *xs.last().unwrap_or(&1.0);
+        // Display conversion for x-axis.
+        let scale = cfg.angular_unit.scale_from_rad();
+        let xs_disp: Vec<f64> = xs_rad.iter().map(|&x| x * scale).collect();
+
+        let x_lo = *xs_disp.first().unwrap_or(&0.0);
+        let x_hi = *xs_disp.last().unwrap_or(&1.0);
 
         let root = BitMapBackend::new(&out, (cfg.width, cfg.height)).into_drawing_area();
         root.fill(&WHITE)?;
 
+        let title = format!(
+            "Pairs: quality vs separation threshold [{}]",
+            cfg.angular_unit.label()
+        );
+
         let mut chart = ChartBuilder::on(&root)
-            .caption("Pairs: quality vs separation threshold", ("sans-serif", 28))
+            .caption(title, ("sans-serif", 28))
             .margin(15)
             .x_label_area_size(40)
             .y_label_area_size(60)
@@ -617,13 +692,16 @@ pub fn plot_pairs_tradeoff_vs_sep_threshold(
 
         chart
             .configure_mesh()
-            .x_desc("separation threshold [rad]")
+            .x_desc(format!(
+                "separation threshold [{}]",
+                cfg.angular_unit.label()
+            ))
             .y_desc("ratio")
             .draw()?;
 
         chart
             .draw_series(LineSeries::new(
-                xs.iter().copied().zip(prec.iter().copied()),
+                xs_disp.iter().copied().zip(prec.iter().copied()),
                 &RGBColor(80, 160, 80),
             ))?
             .label("precision_on_truth")
@@ -631,7 +709,7 @@ pub fn plot_pairs_tradeoff_vs_sep_threshold(
 
         chart
             .draw_series(LineSeries::new(
-                xs.iter().copied().zip(rec.iter().copied()),
+                xs_disp.iter().copied().zip(rec.iter().copied()),
                 &RGBColor(80, 80, 220),
             ))?
             .label("consecutive_recall (proxy)")
@@ -642,10 +720,39 @@ pub fn plot_pairs_tradeoff_vs_sep_threshold(
             .border_style(&BLACK)
             .draw()?;
     }
+
     Ok(out)
 }
 
 /* ------------------------------ Drawing helpers ------------------------------ */
+
+fn draw_scatter_by_label_with_unit<DB: DrawingBackend, S: Into<ShapeStyle> + Clone>(
+    chart: &mut ChartContext<'_, DB, Cartesian2d<RangedCoordf64, RangedCoordf64>>,
+    feats: &[PairFeat],
+    stride: usize,
+    target: PairTruthLabel,
+    sep_scale: f64,
+    style: S,
+    label: &str,
+) -> Result<()>
+where
+    DB::ErrorType: 'static,
+{
+    let style: ShapeStyle = style.into();
+
+    let series = feats
+        .iter()
+        .step_by(stride)
+        .filter(move |f| f.label == target)
+        .map(|f| Circle::new((f.dt, f.sep_rad * sep_scale), 2, style.clone().filled()));
+
+    chart
+        .draw_series(series)?
+        .label(label)
+        .legend(move |(x, y)| Circle::new((x + 8, y), 4, style.clone().filled()));
+
+    Ok(())
+}
 
 fn draw_hist_series<DB: DrawingBackend, S: Into<ShapeStyle> + Clone>(
     chart: &mut ChartContext<'_, DB, Cartesian2d<RangedCoordf64, RangedCoordi32>>,
@@ -677,33 +784,6 @@ where
         .legend(move |(x, y)| {
             Rectangle::new([(x, y - 5), (x + 18, y + 5)], style.clone().filled())
         });
-
-    Ok(())
-}
-
-fn draw_scatter_by_label<DB: DrawingBackend, S: Into<ShapeStyle> + Clone>(
-    chart: &mut ChartContext<'_, DB, Cartesian2d<RangedCoordf64, RangedCoordf64>>,
-    feats: &[PairFeat],
-    stride: usize,
-    target: PairTruthLabel,
-    style: S,
-    label: &str,
-) -> Result<()>
-where
-    DB::ErrorType: 'static,
-{
-    let style: ShapeStyle = style.into();
-
-    let series = feats
-        .iter()
-        .step_by(stride)
-        .filter(move |f| f.label == target)
-        .map(|f| Circle::new((f.dt, f.sep_rad), 2, style.clone().filled()));
-
-    chart
-        .draw_series(series)?
-        .label(label)
-        .legend(move |(x, y)| Circle::new((x + 8, y), 4, style.clone().filled()));
 
     Ok(())
 }
