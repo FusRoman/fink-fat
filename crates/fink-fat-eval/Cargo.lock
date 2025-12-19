@@ -715,6 +715,7 @@ dependencies = [
  "anyhow",
  "approx",
  "camino",
+ "comfy-table",
  "fink-fat-engine",
  "polars",
  "prop-test",

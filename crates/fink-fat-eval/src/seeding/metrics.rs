@@ -88,8 +88,12 @@
 //! - [`crate::dataset::ztf_alerts::AlertStoreWithTruth`] — engine store + truth sidecar.
 //! - `fink-fat-engine::seeding::{pairs, triplets}` — seed generation algorithms.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+};
 
+use comfy_table::{Cell, Table, presets::UTF8_FULL};
 use fink_fat_engine::{
     AlertId,
     seeding::{
@@ -559,6 +563,276 @@ pub fn triplet_metrics(store: &AlertStoreWithTruth, triplets: &Triplets) -> Trip
         consecutive_recall,
         n_consecutive_truth_triplets,
         n_consecutive_truth_triplets_found,
+    }
+}
+
+/// Format a ratio as a human-friendly percentage string.
+///
+/// Overview
+/// --------
+/// This helper converts a ratio expressed as a fraction in `[0, 1]` into a
+/// percentage string with two decimals, e.g.:
+/// - `0.0  -> "0.00%"`
+/// - `0.5  -> "50.00%"`
+/// - `1.0  -> "100.00%"`
+///
+/// Parameters
+/// ----------
+/// x : f64
+///     Ratio as a floating-point fraction (typically in `[0, 1]`).
+///
+/// Returns
+/// -------
+/// String
+///     Percentage string formatted as `"xx.xx%"`.
+///
+/// Notes
+/// -----
+/// - This function does not clamp the input. If `x < 0.0` or `x > 1.0`,
+///   the output will reflect that (e.g. `1.2 -> "120.00%"`).
+/// - `NaN` and infinities are formatted using Rust's default float formatting.
+#[inline]
+fn pct(x: f64) -> String {
+    format!("{:.2}%", 100.0 * x)
+}
+
+/// Format an integer value for terminal display.
+///
+/// Overview
+/// --------
+/// This helper keeps numeric rendering intentionally simple and dependency-free.
+/// It currently formats a `usize` using the standard decimal representation.
+///
+/// Parameters
+/// ----------
+/// x : usize
+///     Value to format.
+///
+/// Returns
+/// -------
+/// String
+///     Decimal string representation of `x`.
+///
+/// Notes
+/// -----
+/// - We intentionally do not add thousand separators here to avoid extra
+///   dependencies and locale issues.
+/// - If you want grouped formatting (e.g. `1_000_000`), consider adding an
+///   optional feature using a dedicated crate and formatting only at the UI layer.
+#[inline]
+fn n(x: usize) -> String {
+    x.to_string()
+}
+
+/// Build a 2-column row for a [`comfy_table::Table`].
+///
+/// Overview
+/// --------
+/// The pretty terminal output for metrics uses a fixed 2-column layout:
+/// - left column: a descriptive label (`k`)
+/// - right column: a value (`v`)
+///
+/// This helper ensures:
+/// - a consistent row shape (`[Cell; 2]`),
+/// - a small call-site footprint (`t.add_row(row2(...))`),
+/// - uniform handling of value types through `Into<Cell>`.
+///
+/// Parameters
+/// ----------
+/// k : &str
+///     Row label (left column).
+/// v : impl Into<Cell>
+///     Row value (right column). Typically a `String`, `&str`, or `Cell`.
+///
+/// Returns
+/// -------
+/// [Cell; 2]
+///     Two cells representing one table row: `[label, value]`.
+///
+/// Notes
+/// -----
+/// - This is purely a UI helper and has no impact on metric computation.
+/// - The returned array can be passed directly to `Table::add_row`.
+#[inline]
+fn row2<'a>(k: &str, v: impl Into<Cell>) -> [Cell; 2] {
+    [Cell::new(k), v.into()]
+}
+
+/// Render [`PairMetrics`] as a pretty terminal table.
+///
+/// Overview
+/// --------
+/// This function builds a [`comfy_table::Table`] (UTF-8 box drawing preset)
+/// describing the pair metrics in a compact, readable layout.
+///
+/// The table is intended for:
+/// - evaluation logs,
+/// - benchmark summaries,
+/// - quick CLI inspection of seeding quality.
+///
+/// Parameters
+/// ----------
+/// m : &PairMetrics
+///     Pair metrics to render.
+///
+/// Returns
+/// -------
+/// Table
+///     A fully populated table ready to be printed (e.g. via `println!("{table}")`).
+///
+/// Notes
+/// -----
+/// - Rendering is deterministic.
+/// - This function is UI-only: it does not recompute metrics, it only formats
+///   the already aggregated fields of [`PairMetrics`].
+/// - Column names are fixed to keep output stable for parsing / log scraping.
+pub fn pair_table(m: &PairMetrics) -> Table {
+    let mut t = Table::new();
+    t.load_preset(UTF8_FULL);
+    t.set_header(vec!["Pair metrics", "Value"]);
+
+    t.add_row(row2("total pairs", n(m.n_total)));
+    t.add_row(row2("true pairs", n(m.n_true)));
+    t.add_row(row2("contaminated (truth mismatch)", n(m.n_contaminated)));
+
+    t.add_row(row2(
+        "truth-defined pairs (both endpoints)",
+        n(m.n_both_truth),
+    ));
+    t.add_row(row2("one truth endpoint", n(m.n_one_truth)));
+    t.add_row(row2("no truth endpoints", n(m.n_none_truth)));
+
+    t.add_row(row2(
+        "precision on truth-defined",
+        pct(m.precision_on_truth),
+    ));
+    t.add_row(row2("purity overall", pct(m.purity_overall)));
+
+    t.add_row(row2(
+        "consecutive truth pairs (possible)",
+        n(m.n_consecutive_truth_pairs),
+    ));
+    t.add_row(row2(
+        "consecutive truth pairs (found)",
+        n(m.n_consecutive_truth_pairs_found),
+    ));
+    t.add_row(row2("consecutive recall", pct(m.consecutive_recall)));
+
+    t
+}
+
+/// Render [`TripletMetrics`] as a pretty terminal table.
+///
+/// Overview
+/// --------
+/// This function builds a [`comfy_table::Table`] (UTF-8 box drawing preset)
+/// describing the triplet metrics in a compact, readable layout.
+///
+/// Parameters
+/// ----------
+/// m : &TripletMetrics
+///     Triplet metrics to render.
+///
+/// Returns
+/// -------
+/// Table
+///     A fully populated table ready to be printed.
+///
+/// Notes
+/// -----
+/// - Rendering is deterministic.
+/// - This function is UI-only and does not recompute metrics.
+/// - The layout mirrors [`pair_table`] to keep logs consistent across seed types.
+pub fn triplet_table(m: &TripletMetrics) -> Table {
+    let mut t = Table::new();
+    t.load_preset(UTF8_FULL);
+    t.set_header(vec!["Triplet metrics", "Value"]);
+
+    t.add_row(row2("total triplets", n(m.n_total)));
+    t.add_row(row2("true triplets", n(m.n_true)));
+    t.add_row(row2("contaminated (truth mismatch)", n(m.n_contaminated)));
+
+    t.add_row(row2(
+        "truth-defined triplets (all 3 endpoints)",
+        n(m.n_all_truth),
+    ));
+    t.add_row(row2("partial truth (1-2 endpoints)", n(m.n_partial_truth)));
+    t.add_row(row2("no truth endpoints", n(m.n_none_truth)));
+
+    t.add_row(row2(
+        "precision on truth-defined",
+        pct(m.precision_on_truth),
+    ));
+    t.add_row(row2("purity overall", pct(m.purity_overall)));
+
+    t.add_row(row2(
+        "consecutive truth triplets (possible)",
+        n(m.n_consecutive_truth_triplets),
+    ));
+    t.add_row(row2(
+        "consecutive truth triplets (found)",
+        n(m.n_consecutive_truth_triplets_found),
+    ));
+    t.add_row(row2("consecutive recall", pct(m.consecutive_recall)));
+
+    t
+}
+
+/// Pretty display for [`PairMetrics`].
+///
+/// Overview
+/// --------
+/// This implementation prints pair metrics as a terminal-friendly table.
+/// It is intended for interactive evaluation and benchmark logs.
+///
+/// Parameters
+/// ----------
+/// f : &mut fmt::Formatter<'_>
+///     Formatter provided by the standard formatting machinery.
+///
+/// Returns
+/// -------
+/// fmt::Result
+///     Formatting result from `write!`.
+///
+/// Notes
+/// -----
+/// - This is a presentation layer only: the values are assumed to have been
+///   computed already by [`pair_metrics`].
+/// - If you want a compact, one-line output for high-volume logs, consider
+///   adding a dedicated `to_compact_line()` helper alongside this `Display`.
+impl fmt::Display for PairMetrics {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let table = pair_table(self);
+        return write!(f, "{table}");
+    }
+}
+
+/// Pretty display for [`TripletMetrics`].
+///
+/// Overview
+/// --------
+/// This implementation prints triplet metrics as a terminal-friendly table.
+/// It mirrors the layout of [`PairMetrics`] to keep logs consistent.
+///
+/// Parameters
+/// ----------
+/// f : &mut fmt::Formatter<'_>
+///     Formatter provided by the standard formatting machinery.
+///
+/// Returns
+/// -------
+/// fmt::Result
+///     Formatting result from `write!`.
+///
+/// Notes
+/// -----
+/// - This is presentation-only and assumes metrics were computed by
+///   [`triplet_metrics`].
+impl fmt::Display for TripletMetrics {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let table = triplet_table(self);
+        return write!(f, "{table}");
     }
 }
 
