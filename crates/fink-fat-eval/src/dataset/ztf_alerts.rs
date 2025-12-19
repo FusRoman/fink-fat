@@ -144,14 +144,14 @@ impl Default for ZtfAlertScan {
 ///
 /// Parameters
 /// ----------
-/// path : &ParquetSource
+/// * path : &ParquetSource
 ///     Parquet dataset location.
-/// scan : ZtfAlertScan
+/// * scan : ZtfAlertScan
 ///     Scan configuration (filters and projection).
 ///
 /// Returns
 /// -------
-/// LazyFrame
+/// * LazyFrame :
 ///     A lazy computation plan with explicit casting and optional filtering.
 ///
 /// Errors
@@ -213,7 +213,7 @@ pub fn scan_ztf_alerts(path: &ParquetSource, scan: ZtfAlertScan) -> Result<LazyF
 ///
 /// Parameters
 /// ----------
-/// ca : &Int64Chunked
+/// * ca : &Int64Chunked
 ///     Chunked array to view as a contiguous slice.
 ///
 /// Returns
@@ -854,12 +854,12 @@ impl AlertStoreWithTruth {
     ///
     /// Parameters
     /// ----------
-    /// tid : i32
+    /// * tid : i32
     ///     Truth trajectory identifier.
     ///
     /// Returns
     /// -------
-    /// impl Iterator<Item = &Alert>
+    /// * impl Iterator<Item = &Alert>
     ///     Iterator over alerts whose `trajectory_id == tid`.
     ///
     /// Notes
@@ -889,14 +889,14 @@ impl AlertStoreWithTruth {
     ///
     /// Parameters
     /// ----------
-    /// tid : i32
+    /// * tid : i32
     ///     Truth trajectory identifier to select. By convention,
     ///     `tid <= 0` usually indicates "no truth association" and will
     ///     typically return an empty vector.
     ///
     /// Returns
     /// -------
-    /// Vec<&Alert>
+    /// * Vec<&Alert>
     ///     All alerts belonging to the given truth trajectory, in the same
     ///     order as stored in the underlying [`AlertStore`] (i.e. dense
     ///     `AlertId` / row order).
@@ -975,7 +975,7 @@ struct TruthCols<'a> {
 ///
 /// Parameters
 /// ----------
-/// df : &DataFrame
+/// * df : &DataFrame
 ///     Collected frame (typically from `LazyFrame::collect()`).
 ///
 /// Returns
@@ -1041,14 +1041,14 @@ fn extract_i32_vec(ca: &Int32Chunked) -> Vec<i32> {
 ///
 /// Parameters
 /// ----------
-/// lf : LazyFrame
+/// * lf : LazyFrame
 ///     Polars lazy plan containing at least the required columns.
-/// cfg : AlertIngestConfig
+/// * cfg : AlertIngestConfig
 ///     Conversion options and default uncertainties.
 ///
 /// Returns
 /// -------
-/// AlertStoreWithTruth
+/// * AlertStoreWithTruth : 
 ///     The engine store plus a truth sidecar aligned with dense [`AlertId`].
 ///
 /// Errors

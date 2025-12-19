@@ -16,9 +16,11 @@
 //! -----
 //! - "Oracle" seeds here are derived from truth and represent an upper bound.
 //! - Replace the `build_oracle_*` calls with your real seeding generator
-//!   once `gen_seed.rs` is wired (pairs/triplets from `fink-fat-engine`).
+//!   once `seed_gen.rs` is wired (pairs/triplets from `fink-fat-engine`).
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
+use camino::Utf8PathBuf;
+use clap::Parser;
 
 use fink_fat_engine::{
     AlertId,
@@ -28,33 +30,48 @@ use fink_fat_engine::{
     },
 };
 
-use fink_fat_eval::{dataset::{
-    ParquetSource, ingest_config::AlertIngestConfig, ztf_alerts::{
-        AlertStoreWithTruth, ZtfAlertScan, alert_store_with_truth_from_lazyframe, scan_ztf_alerts,
-    }
-}, seeding::metrics::{pair_metrics, triplet_metrics}};
+use fink_fat_eval::{
+    dataset::{
+        ParquetSource,
+        ingest_config::AlertIngestConfig,
+        ztf_alerts::{
+            AlertStoreWithTruth, ZtfAlertScan, alert_store_with_truth_from_lazyframe,
+            scan_ztf_alerts,
+        },
+    },
+    seeding::metrics::{pair_metrics, triplet_metrics},
+};
+
+/// Pretty terminal display for oracle seeding metrics (pairs & triplets).
+#[derive(Parser, Debug)]
+#[command(
+    name = "metrics-terminal",
+    about = "Compute oracle (truth-consecutive) pair/triplet seeding metrics and print them to the terminal.",
+    long_about = None
+)]
+struct Cli {
+    /// Input ZTF-like alerts Parquet file.
+    #[arg(value_name = "ALERTS.parquet")]
+    parquet: Utf8PathBuf,
+
+    /// Keep only alerts having a truth association (trajectory_id > 0).
+    #[arg(long)]
+    only_truth: bool,
+}
 
 fn main() -> Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-
-    if args.len() < 2 {
-        bail!(
-            "Missing Parquet path.\n\
-             Usage: cargo run --example metrics_terminal -- <path/to/file.parquet> [--only-truth]"
-        );
-    }
-
-    let parquet_path = &args[1];
-    let only_truth = args.iter().any(|a| a == "--only-truth");
+    let cli = Cli::parse();
 
     // ---------------------------------------------------------------------
     // Ingest Parquet -> AlertStoreWithTruth
     // ---------------------------------------------------------------------
-    let parquet_source = ParquetSource::new(parquet_path)
-        .with_context(|| format!("Failed to open parquet source: {parquet_path}"))?;
+    let parquet_path_str = cli.parquet.to_string();
+
+    let parquet_source = ParquetSource::new(&cli.parquet)
+        .with_context(|| format!("Failed to open parquet source: {parquet_path_str}"))?;
 
     let scan = ZtfAlertScan {
-        only_truth,
+        only_truth: cli.only_truth,
         ..Default::default()
     };
 
