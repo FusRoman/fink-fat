@@ -12,3 +12,7 @@ polars = { version = "=0.52.0", default-features = false, features = [
     "fmt"
 ] }
 fink-fat-engine = { path = "../fink-fat-engine" }
+
+[dev-dependencies]
+approx = "0.5.1"
+prop-test = "0.1.1"

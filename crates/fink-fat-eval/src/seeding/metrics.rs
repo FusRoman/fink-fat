@@ -561,3 +561,304 @@ pub fn triplet_metrics(store: &AlertStoreWithTruth, triplets: &Triplets) -> Trip
         n_consecutive_truth_triplets_found,
     }
 }
+
+#[cfg(test)]
+mod seed_metrics_tests {
+    use super::*;
+    use approx::{assert_abs_diff_eq, assert_relative_eq};
+    use prop_test::proptest::{self, strategy::ValueTree, test_runner::TestRunner};
+    use proptest::prelude::*;
+
+    use fink_fat_engine::{Alert, alerts::AlertStore};
+
+    fn mk_alert(id: usize, mjd_tt: f64) -> Alert {
+        Alert {
+            id: AlertId::from(id),
+            dia_source_id: id as u64,
+            ra: 0.0,
+            ra_err: 0.0,
+            dec: 0.0,
+            dec_err: 0.0,
+            mjd_tt,
+            flux: 0.0,
+            flux_err: 0.0,
+            band: 1,
+        }
+    }
+
+    /// Build a tiny `AlertStoreWithTruth` for testing.
+    ///
+    /// Notes
+    /// -----
+    /// - `trajectory_id.len()` must match `times.len()`.
+    /// - Alerts are created with dense `AlertId` matching row order.
+    fn mk_store_with_truth(trajectory_id: Vec<i32>, times: Vec<f64>) -> AlertStoreWithTruth {
+        assert_eq!(trajectory_id.len(), times.len());
+        let alerts: Vec<Alert> = times
+            .into_iter()
+            .enumerate()
+            .map(|(i, t)| mk_alert(i, t))
+            .collect();
+
+        let min_mjd = alerts
+            .iter()
+            .map(|a| a.mjd_tt)
+            .fold(f64::INFINITY, f64::min);
+
+        let store = AlertStore::new(min_mjd.floor(), alerts);
+        AlertStoreWithTruth {
+            store,
+            trajectory_id,
+        }
+    }
+
+    fn pair_builder(a: usize, b: usize) -> Pair {
+        Pair {
+            a: AlertId::from(a),
+            b: AlertId::from(b),
+        }
+    }
+
+    fn triplet_builder(a: usize, b: usize, c: usize) -> Triplet {
+        Triplet {
+            a: AlertId::from(a),
+            b: AlertId::from(b),
+            c: AlertId::from(c),
+        }
+    }
+
+    #[test]
+    fn unit_pair_metrics_basic_counts() {
+        // Two truth trajectories:
+        // tid=10: alerts 0,1,2
+        // tid=20: alerts 3,4
+        // tid<=0: alert 5 (unassociated)
+        let store = mk_store_with_truth(
+            vec![10, 10, 10, 20, 20, 0],
+            vec![1.0, 2.0, 3.0, 1.5, 2.5, 9.0],
+        );
+
+        // Pairs: 4 total
+        // (0,1) true (both truth, same tid)
+        // (1,3) contaminated (both truth, different tid)
+        // (4,5) one_truth (tid(5)=0)
+        // (2,5) one_truth
+        let pairs: Pairs = vec![
+            pair_builder(0, 1),
+            pair_builder(1, 3),
+            pair_builder(4, 5),
+            pair_builder(2, 5),
+        ];
+
+        let m = pair_metrics(&store, &pairs);
+
+        assert_eq!(m.n_total, 4);
+        assert_eq!(m.n_both_truth, 2); // (0,1), (1,3)
+        assert_eq!(m.n_one_truth, 2); // (4,5), (2,5)
+        assert_eq!(m.n_none_truth, 0);
+
+        assert_eq!(m.n_true, 1);
+        assert_eq!(m.n_contaminated, 1);
+
+        assert_relative_eq!(m.precision_on_truth, 1.0 / 2.0, epsilon = 1e-12);
+        assert_relative_eq!(m.purity_overall, 1.0 / 4.0, epsilon = 1e-12);
+
+        // Consecutive truth pairs:
+        // tid=10 times: (0@1.0, 1@2.0, 2@3.0) -> (0,1) and (1,2)
+        // tid=20 times: (3@1.5, 4@2.5) -> (3,4)
+        // possible = 3
+        // found: only (0,1) is present -> 1
+        assert_eq!(m.n_consecutive_truth_pairs, 3);
+        assert_eq!(m.n_consecutive_truth_pairs_found, 1);
+        assert_relative_eq!(m.consecutive_recall, 1.0 / 3.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn unit_triplet_metrics_basic_counts() {
+        // tid=10: 0,1,2
+        // tid=20: 3,4,5
+        // plus an unassociated 6
+        let store = mk_store_with_truth(
+            vec![10, 10, 10, 20, 20, 20, 0],
+            vec![1.0, 2.0, 3.0, 10.0, 11.0, 12.0, 0.5],
+        );
+
+        // Triplets:
+        // (0,1,2) true
+        // (3,4,6) partial truth (6 is unassociated)
+        // (1,3,4) contaminated (all truth but different tids)
+        let triplets: Triplets = vec![
+            triplet_builder(0, 1, 2),
+            triplet_builder(3, 4, 6),
+            triplet_builder(1, 3, 4),
+        ];
+
+        let m = triplet_metrics(&store, &triplets);
+
+        assert_eq!(m.n_total, 3);
+        assert_eq!(m.n_all_truth, 2); // (0,1,2) and (1,3,4)
+        assert_eq!(m.n_partial_truth, 1); // (3,4,6)
+        assert_eq!(m.n_none_truth, 0);
+
+        assert_eq!(m.n_true, 1);
+        assert_eq!(m.n_contaminated, 1);
+
+        assert_relative_eq!(m.precision_on_truth, 1.0 / 2.0, epsilon = 1e-12);
+        assert_relative_eq!(m.purity_overall, 1.0 / 3.0, epsilon = 1e-12);
+
+        // Consecutive truth triplets:
+        // tid=10: 0,1,2 -> one consecutive triplet (0,1,2)
+        // tid=20: 3,4,5 -> one consecutive triplet (3,4,5)
+        // possible=2, found=1 (only (0,1,2) present)
+        assert_eq!(m.n_consecutive_truth_triplets, 2);
+        assert_eq!(m.n_consecutive_truth_triplets_found, 1);
+        assert_relative_eq!(m.consecutive_recall, 0.5, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn unit_perfect_consecutive_pairs_have_recall_1() {
+        // One trajectory tid=7 of length 5
+        let store = mk_store_with_truth(vec![7, 7, 7, 7, 7], vec![5.0, 4.0, 3.0, 2.0, 1.0]);
+
+        // Build exactly the consecutive truth pairs, *in time order*.
+        // Times are decreasing in row order, but the metric sorts by mjd_tt.
+        // Sorted by time: ids (4,3,2,1,0)
+        let pairs: Pairs = vec![
+            pair_builder(4, 3),
+            pair_builder(3, 2),
+            pair_builder(2, 1),
+            pair_builder(1, 0),
+        ];
+
+        let m = pair_metrics(&store, &pairs);
+
+        assert_eq!(m.n_consecutive_truth_pairs, 4);
+        assert_eq!(m.n_consecutive_truth_pairs_found, 4);
+        assert_abs_diff_eq!(m.consecutive_recall, 1.0, epsilon = 1e-12);
+
+        // All pairs are true and both endpoints truth-associated.
+        assert_eq!(m.n_both_truth, 4);
+        assert_eq!(m.n_true, 4);
+        assert_abs_diff_eq!(m.precision_on_truth, 1.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(m.purity_overall, 1.0, epsilon = 1e-12);
+    }
+
+    /* --------------------------------------------------------------------- */
+    /* Property-based tests (proptest)                                        */
+    /* --------------------------------------------------------------------- */
+
+    // Generate a small store with:
+    // - N alerts (N <= 25)
+    // - truth ids in [0..=5] (0 means unassociated)
+    // - times are arbitrary finite floats
+    prop_compose! {
+        fn arb_store()
+            (n in 1usize..=25)
+            (tids in prop::collection::vec(0i32..=5, n),
+             // avoid NaN/infinite to keep sorting/metrics stable
+             times in prop::collection::vec(-1.0e6f64..=1.0e6f64, n))
+            -> AlertStoreWithTruth
+        {
+            mk_store_with_truth(tids, times)
+        }
+    }
+
+    prop_compose! {
+        fn arb_pairs(n_alerts: usize)
+            (m in 0usize..=200)
+            (pairs in prop::collection::vec((0usize..n_alerts, 0usize..n_alerts), m))
+            -> Pairs
+        {
+            pairs.into_iter().map(|(a,b)| pair_builder(a,b)).collect()
+        }
+    }
+
+    prop_compose! {
+        fn arb_triplets(n_alerts: usize)
+            (m in 0usize..=200)
+            (triplets in prop::collection::vec((0usize..n_alerts, 0usize..n_alerts, 0usize..n_alerts), m))
+            -> Triplets
+        {
+            triplets.into_iter().map(|(a,b,c)| triplet_builder(a,b,c)).collect()
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn prop_pair_metrics_invariants(store in arb_store()) {
+            let n = store.trajectory_id.len();
+            let pairs = arb_pairs(n).new_tree(&mut TestRunner::default()).unwrap().current();
+
+            let m = pair_metrics(&store, &pairs);
+
+            // Basic partition invariants.
+            prop_assert_eq!(m.n_total, pairs.len());
+            prop_assert_eq!(m.n_both_truth + m.n_one_truth + m.n_none_truth, m.n_total);
+
+            // True/contaminated must be within both-truth pairs.
+            prop_assert!(m.n_true <= m.n_both_truth);
+            prop_assert!(m.n_contaminated <= m.n_both_truth);
+
+            // Ratios must be in [0,1] (or 0 when denominator 0).
+            prop_assert!(0.0 <= m.precision_on_truth && m.precision_on_truth <= 1.0);
+            prop_assert!(0.0 <= m.purity_overall && m.purity_overall <= 1.0);
+            prop_assert!(0.0 <= m.consecutive_recall && m.consecutive_recall <= 1.0);
+
+            // Coverage counters are consistent.
+            prop_assert!(m.n_consecutive_truth_pairs_found <= m.n_consecutive_truth_pairs);
+        }
+
+        #[test]
+        fn prop_triplet_metrics_invariants(store in arb_store()) {
+            let n = store.trajectory_id.len();
+            let triplets = arb_triplets(n).new_tree(&mut TestRunner::default()).unwrap().current();
+
+            let m = triplet_metrics(&store, &triplets);
+
+            prop_assert_eq!(m.n_total, triplets.len());
+            prop_assert_eq!(m.n_all_truth + m.n_partial_truth + m.n_none_truth, m.n_total);
+
+            prop_assert!(m.n_true <= m.n_all_truth);
+            prop_assert!(m.n_contaminated <= m.n_all_truth);
+
+            prop_assert!(0.0 <= m.precision_on_truth && m.precision_on_truth <= 1.0);
+            prop_assert!(0.0 <= m.purity_overall && m.purity_overall <= 1.0);
+            prop_assert!(0.0 <= m.consecutive_recall && m.consecutive_recall <= 1.0);
+
+            prop_assert!(m.n_consecutive_truth_triplets_found <= m.n_consecutive_truth_triplets);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn prop_perfect_consecutive_pairs_recall_is_one(
+            // one truth trajectory id > 0
+            n in 2usize..=25,
+            tid in 1i32..=10,
+            // strict monotone times guarantee unique ordering
+            base in -1.0e6f64..=1.0e6f64,
+            step in 1.0e-3f64..=1.0e3f64
+        ) {
+            let tids = vec![tid; n];
+
+            // times increasing: base + i*step
+            let times: Vec<f64> = (0..n).map(|i| base + (i as f64) * step).collect();
+            let store = mk_store_with_truth(tids, times);
+
+            // consecutive pairs in time order are exactly (0,1), (1,2), ...
+            let pairs: Pairs = (0..(n-1)).map(|i| pair_builder(i, i+1)).collect();
+
+            let m = pair_metrics(&store, &pairs);
+
+            prop_assert_eq!(m.n_consecutive_truth_pairs, n-1);
+            prop_assert_eq!(m.n_consecutive_truth_pairs_found, n-1);
+            prop_assert!( (m.consecutive_recall - 1.0).abs() <= 1e-12 );
+
+            // all true
+            prop_assert_eq!(m.n_true, n-1);
+            prop_assert_eq!(m.n_contaminated, 0);
+            prop_assert!( (m.precision_on_truth - 1.0).abs() <= 1e-12 );
+            prop_assert!( (m.purity_overall - 1.0).abs() <= 1e-12 );
+        }
+    }
+}
