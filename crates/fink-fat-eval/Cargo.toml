@@ -24,3 +24,7 @@ prop-test = "0.1.1"
 [[bin]]
 name = "pairs_posthoc_sweep"
 path = "src/bin/seeding/pairs_posthoc_sweep.rs"
+
+[[bin]]
+name = "pairs-multinight"
+path = "src/bin/seeding/pairs_multinight.rs"
