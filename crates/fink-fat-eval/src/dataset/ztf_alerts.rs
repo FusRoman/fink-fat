@@ -41,9 +41,10 @@
 //! - [`AlertLoadMode::Oracle`]:
 //!     Keep only alerts that are *known asteroids* either via
 //!     `trajectory_id > 0` (truth) OR `fink_class == "Solar System MPC"`.
-//! - [`AlertLoadMode::Fink`]:
+//! - [`AlertLoadMode::FinkTruth`]:
 //!     Keep only alerts that are *plausible Solar System candidates* according to the broker:
-//!     `fink_class ∈ {"Solar System MPC", "Solar System candidate", "Unknown"}`.
+//!     `fink_class ∈ {"Solar System MPC", "Solar System candidate"}`
+//!    OR `fink_class == "Unknown"` and `nalerthist <= 1` (reject unknown objects with a longer alert history).
 //! - [`AlertLoadMode::All`]:
 //!     Keep all alerts regardless of `trajectory_id` / `fink_class`.
 //!
@@ -103,8 +104,15 @@ pub enum AlertLoadMode {
     /// Fink broker mode: keep only plausible asteroid-like alerts.
     ///
     /// Filter:
-    /// - `fink_class ∈ {"Solar System MPC", "Solar System candidate", "Unknown"}`.
-    Fink,
+    /// - `fink_class ∈ {"Solar System MPC", "Solar System candidate"}`.
+    /// OR `fink_class == "Unknown"` and `nalerthist <= 1`.
+    FinkTruth,
+    /// Fink broker mode: keep only plausible asteroid-like alerts.
+    ///
+    /// Filter:
+    /// - `fink_class ∈ {"Solar System candidate"}`
+    /// OR `fink_class == "Unknown"` and `nalerthist <= 1`.
+    FinkCandidate,
     /// No filtering based on truth/class.
     All,
 }
@@ -194,6 +202,7 @@ pub fn scan_ztf_alerts(path: &ParquetSource, scan: ZtfAlertScan) -> Result<LazyF
         col(cols::SSNAMENR).cast(DataType::String),
         col(cols::TRAJECTORY_ID).cast(DataType::Int32),
         col(cols::FINK_CLASS).cast(DataType::String),
+        col(cols::NALERTHIST).cast(DataType::Int32),
     ]);
 
     // Optional filters (lazy predicates).
@@ -215,13 +224,36 @@ pub fn scan_ztf_alerts(path: &ParquetSource, scan: ZtfAlertScan) -> Result<LazyF
                     .or(col(cols::FINK_CLASS).eq(lit("Solar System MPC"))),
             );
         }
-        AlertLoadMode::Fink => {
-            lf = lf.filter(
-                col(cols::FINK_CLASS)
-                    .eq(lit("Solar System MPC"))
-                    .or(col(cols::FINK_CLASS).eq(lit("Solar System candidate")))
-                    .or(col(cols::FINK_CLASS).eq(lit("Unknown"))),
-            );
+        AlertLoadMode::FinkTruth => {
+            // Keep only broker-plausible asteroid-like alerts:
+            // fink_class ∈ {"Solar System MPC", "Solar System candidate"}
+            // OR fink_class == "Unknown" and nalerthist <= 1 (reject objects with a longer alert history).
+
+            let class_to_keep = vec!["Solar System MPC", "Solar System candidate"];
+
+            let class_list = Series::new("class_list".into(), class_to_keep)
+                .implode()?
+                .into_series();
+
+            let class_ok = col(cols::FINK_CLASS).is_in(lit(class_list), false);
+
+            let unknown_and_history_ok = col(cols::FINK_CLASS)
+                .eq(lit("Unknown"))
+                .and(col(cols::NALERTHIST).lt_eq(lit(1i32)));
+
+            lf = lf.filter(class_ok.or(unknown_and_history_ok));
+        }
+        AlertLoadMode::FinkCandidate => {
+            // Keep only broker-plausible asteroid-like alerts:
+            // fink_class ∈ {"Solar System candidate"}
+            // OR fink_class == "Unknown" and nalerthist <= 1 (reject objects with a longer alert history).
+            let class_ok = col(cols::FINK_CLASS).eq(lit("Solar System candidate"));
+
+            let unknown_and_history_ok = col(cols::FINK_CLASS)
+                .eq(lit("Unknown"))
+                .and(col(cols::NALERTHIST).lt_eq(lit(1i32)));
+
+            lf = lf.filter(class_ok.or(unknown_and_history_ok));
         }
     }
 
@@ -239,6 +271,7 @@ pub fn scan_ztf_alerts(path: &ParquetSource, scan: ZtfAlertScan) -> Result<LazyF
             col(cols::SSNAMENR),
             col(cols::TRAJECTORY_ID),
             col(cols::FINK_CLASS),
+            col(cols::NALERTHIST),
         ]);
     }
 
@@ -1063,7 +1096,7 @@ fn extract_i32_vec(ca: &Int32Chunked) -> Vec<i32> {
 ///
 /// Returns
 /// -------
-/// * AlertStoreWithTruth : 
+/// * AlertStoreWithTruth :
 ///     The engine store plus a truth sidecar aligned with dense [`AlertId`].
 ///
 /// Errors

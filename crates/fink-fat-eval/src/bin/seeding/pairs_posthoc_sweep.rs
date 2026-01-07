@@ -82,8 +82,13 @@ enum CliLoadMode {
     /// `trajectory_id > 0` OR `fink_class == "Solar System MPC"`.
     Oracle,
     /// Load broker-plausible asteroid-like alerts:
-    /// `fink_class ∈ {"Solar System MPC", "Solar System candidate", "Unknown"}`.
-    Fink,
+    /// `fink_class ∈ {"Solar System MPC", "Solar System candidate"}`
+    /// or `fink_class == "Unknown"` and `nalerthist <= 1`.
+    FinkTruth,
+    /// Load broker-plausible asteroid-like alerts + candidates:
+    /// `fink_class == "Solar System candidate"`
+    /// or `fink_class == "Unknown"` and `nalerthist <= 1`.
+    FinkCandidate,
     /// Load everything (no truth/class filtering).
     All,
 }
@@ -92,7 +97,8 @@ impl From<CliLoadMode> for AlertLoadMode {
     fn from(v: CliLoadMode) -> Self {
         match v {
             CliLoadMode::Oracle => AlertLoadMode::Oracle,
-            CliLoadMode::Fink => AlertLoadMode::Fink,
+            CliLoadMode::FinkTruth => AlertLoadMode::FinkTruth,
+            CliLoadMode::FinkCandidate => AlertLoadMode::FinkCandidate,
             CliLoadMode::All => AlertLoadMode::All,
         }
     }

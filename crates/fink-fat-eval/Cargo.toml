@@ -9,7 +9,8 @@ camino = "1.2.2"
 polars = { version = "=0.52.0", default-features = false, features = [
     "lazy",
     "parquet",
-    "fmt"
+    "fmt",
+    "is_in"
 ] }
 fink-fat-engine = { path = "../fink-fat-engine" }
 comfy-table = "7.2.1"

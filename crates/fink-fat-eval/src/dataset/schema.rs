@@ -15,6 +15,7 @@ pub mod cols {
     pub const SSNAMENR: &str = "ssnamenr";
     pub const TRAJECTORY_ID: &str = "trajectory_id";
     pub const FINK_CLASS: &str = "fink_class";
+    pub const NALERTHIST : &str = "nalerthist";
 }
 
 /// Expected dtypes (best effort) after casting.
@@ -36,5 +37,6 @@ pub fn ztf_alerts_expected_schema() -> Schema {
         (cols::SSNAMENR.into(), DataType::String),
         (cols::TRAJECTORY_ID.into(), DataType::Int64),
         (cols::FINK_CLASS.into(), DataType::String),
+        (cols::NALERTHIST.into(), DataType::Int32),
     ])
 }
