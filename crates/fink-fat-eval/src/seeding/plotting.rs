@@ -1088,6 +1088,467 @@ pub fn plot_pairs_omega_hist(
     Ok(out)
 }
 
+// -------------------------------------------------------------------------------------------------
+// Multi-night summary plots
+// -------------------------------------------------------------------------------------------------
+//
+// These plots operate on the per-night summary table (DataFrame) produced by
+// `seeding-multinight-eval`. They are designed for capacity planning and
+// regression detection.
+//
+// Expected columns (as written by the multi-night binary):
+// - nid (Int32)
+// - n_alerts (Int64)
+// - n_pairs (Int64)
+// - n_triplets (Int64)
+// - dt_bucket_ms, dt_pairs_ms, dt_triplets_ms (Float64)
+// - pair_purity_overall, pair_precision_on_truth, pair_consecutive_recall (Float64)
+// - triplet_* counterparts (Float64 or NaN)
+//
+// Output PNG files:
+// - multinight_alerts_per_night.png
+// - multinight_runtime_vs_alerts.png
+// - multinight_pairs_per_alert.png
+// - multinight_quality_tradeoff_pairs.png
+// - multinight_triplets_per_alert.png (optional, if triplets columns exist)
+
+use polars::prelude::{DataFrame, DataType};
+
+/// Plot configuration for multi-night summary plots.
+#[derive(Debug, Clone)]
+pub struct MultiNightPlotConfig {
+    /// Output image width (pixels).
+    pub width: u32,
+    /// Output image height (pixels).
+    pub height: u32,
+    /// If true, use log10 scaling on the y-axis for cost-like quantities.
+    pub log_cost: bool,
+}
+
+impl Default for MultiNightPlotConfig {
+    fn default() -> Self {
+        Self {
+            width: 1400,
+            height: 900,
+            log_cost: true,
+        }
+    }
+}
+
+/// Generate a standard set of multi-night summary plots.
+///
+/// Arguments
+/// ---------
+/// * `df` – Per-night summary table (one row per night).
+/// * `out_dir` – Output directory for PNG files.
+/// * `cfg` – Plot configuration.
+///
+/// Return
+/// ------
+/// * `Ok(Vec<PathBuf>)` – paths of written PNG files.
+/// * `Err(anyhow::Error)` on I/O, schema mismatch, or plotting failure.
+pub fn plot_multinight_summary(
+    df: &DataFrame,
+    out_dir: &Path,
+    cfg: &MultiNightPlotConfig,
+) -> Result<Vec<PathBuf>> {
+    let mut outs = Vec::new();
+    outs.push(plot_multinight_alerts_per_night(df, out_dir, cfg)?);
+    outs.push(plot_multinight_runtime_vs_alerts(df, out_dir, cfg)?);
+    outs.push(plot_multinight_pairs_per_alert(df, out_dir, cfg)?);
+    outs.push(plot_multinight_quality_tradeoff_pairs(df, out_dir, cfg)?);
+
+    // Triplets plot only if column exists (and not all zeros).
+    if df.column("n_triplets").is_ok() {
+        outs.push(plot_multinight_triplets_per_alert(df, out_dir, cfg)?);
+    }
+    Ok(outs)
+}
+
+fn col_i32(df: &DataFrame, name: &str) -> Result<Vec<i32>> {
+    let s = df
+        .column(name)
+        .with_context(|| format!("missing column '{name}'"))?;
+    let s = s
+        .cast(&DataType::Int32)
+        .with_context(|| format!("failed to cast '{name}' to Int32"))?;
+    Ok(s.i32().unwrap().into_no_null_iter().collect())
+}
+
+fn col_i64(df: &DataFrame, name: &str) -> Result<Vec<i64>> {
+    let s = df
+        .column(name)
+        .with_context(|| format!("missing column '{name}'"))?;
+    let s = s
+        .cast(&DataType::Int64)
+        .with_context(|| format!("failed to cast '{name}' to Int64"))?;
+    Ok(s.i64().unwrap().into_no_null_iter().collect())
+}
+
+fn col_f64(df: &DataFrame, name: &str) -> Result<Vec<f64>> {
+    let s = df
+        .column(name)
+        .with_context(|| format!("missing column '{name}'"))?;
+    let s = s
+        .cast(&DataType::Float64)
+        .with_context(|| format!("failed to cast '{name}' to Float64"))?;
+    // allow nulls -> treat as NaN
+    let ca = s.f64().unwrap();
+    Ok(ca.into_iter().map(|o| o.unwrap_or(f64::NAN)).collect())
+}
+
+fn log10_or_nan(x: f64) -> f64 {
+    if x.is_finite() && x > 0.0 {
+        x.log10()
+    } else {
+        f64::NAN
+    }
+}
+
+/// 1) Alerts per night (bar plot).
+fn plot_multinight_alerts_per_night(
+    df: &DataFrame,
+    out_dir: &Path,
+    cfg: &MultiNightPlotConfig,
+) -> Result<PathBuf> {
+    let out = ensure_out_path(out_dir, "multinight_alerts_per_night.png")?;
+    {
+        let nid = col_i32(df, "nid").or_else(|_| col_i32(df, crate::dataset::schema::cols::NID))?;
+        let n_alerts = col_i64(df, "n_alerts")?;
+
+        let n = nid.len().min(n_alerts.len());
+        anyhow::ensure!(n > 0, "empty summary table");
+
+        let max_y = n_alerts.iter().take(n).copied().max().unwrap_or(1) as i32;
+
+        let root = BitMapBackend::new(&out, (cfg.width, cfg.height)).into_drawing_area();
+        root.fill(&WHITE)?;
+
+        let mut chart = ChartBuilder::on(&root)
+            .caption("Multi-night: alerts per night", ("sans-serif", 28))
+            .margin(15)
+            .x_label_area_size(40)
+            .y_label_area_size(80)
+            .build_cartesian_2d(0..(n as i32), 0..(max_y + 1))?;
+
+        chart
+            .configure_mesh()
+            .x_desc("night index (sorted by nid)")
+            .y_desc("n_alerts")
+            .draw()?;
+
+        chart.draw_series((0..n).map(|i| {
+            Rectangle::new(
+                [(i as i32, 0), (i as i32 + 1, n_alerts[i] as i32)],
+                RGBColor(80, 80, 220).mix(0.45).filled(),
+            )
+        }))?;
+    }
+    Ok(out)
+}
+
+/// 2) Runtime vs alerts (scatter): dt_pairs_ms vs n_alerts (+ optional log10).
+fn plot_multinight_runtime_vs_alerts(
+    df: &DataFrame,
+    out_dir: &Path,
+    cfg: &MultiNightPlotConfig,
+) -> Result<PathBuf> {
+    let out = ensure_out_path(out_dir, "multinight_runtime_vs_alerts.png")?;
+    {
+        let n_alerts = col_i64(df, "n_alerts")?;
+        let dt_bucket = col_f64(df, "dt_bucket_ms")?;
+        let dt_pairs = col_f64(df, "dt_pairs_ms")?;
+        let dt_trip =
+            col_f64(df, "dt_triplets_ms").unwrap_or_else(|_| vec![f64::NAN; n_alerts.len()]);
+
+        let n = n_alerts.len();
+
+        let xs: Vec<f64> = n_alerts.iter().take(n).map(|&x| x as f64).collect();
+
+        // log option only on Y (cost), keep X linear so "alerts" is interpretable.
+        let y_bucket: Vec<f64> = dt_bucket
+            .iter()
+            .take(n)
+            .map(|&y| if cfg.log_cost { log10_or_nan(y) } else { y })
+            .collect();
+        let y_pairs: Vec<f64> = dt_pairs
+            .iter()
+            .take(n)
+            .map(|&y| if cfg.log_cost { log10_or_nan(y) } else { y })
+            .collect();
+        let y_trip: Vec<f64> = dt_trip
+            .iter()
+            .take(n)
+            .map(|&y| if cfg.log_cost { log10_or_nan(y) } else { y })
+            .collect();
+
+        let x_lo = xs.iter().copied().fold(f64::INFINITY, f64::min);
+        let x_hi = xs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+
+        let mut y_lo = f64::INFINITY;
+        let mut y_hi = f64::NEG_INFINITY;
+        for &y in y_bucket.iter().chain(&y_pairs).chain(&y_trip) {
+            if y.is_finite() {
+                y_lo = y_lo.min(y);
+                y_hi = y_hi.max(y);
+            }
+        }
+        if !y_lo.is_finite() || !y_hi.is_finite() || y_lo == y_hi {
+            y_lo = 0.0;
+            y_hi = 1.0;
+        }
+        let pad = 0.05 * (y_hi - y_lo);
+        y_lo -= pad;
+        y_hi += pad;
+
+        let root = BitMapBackend::new(&out, (cfg.width, cfg.height)).into_drawing_area();
+        root.fill(&WHITE)?;
+
+        let y_label = if cfg.log_cost {
+            "log10(runtime_ms)"
+        } else {
+            "runtime_ms"
+        };
+
+        let mut chart = ChartBuilder::on(&root)
+            .caption("Multi-night: runtime vs alerts", ("sans-serif", 28))
+            .margin(15)
+            .x_label_area_size(50)
+            .y_label_area_size(90)
+            .build_cartesian_2d(x_lo..x_hi, y_lo..y_hi)?;
+
+        chart
+            .configure_mesh()
+            .x_desc("n_alerts")
+            .y_desc(y_label)
+            .draw()?;
+
+        // bucket-index
+        chart
+            .draw_series(
+                xs.iter()
+                    .copied()
+                    .zip(y_bucket.iter().copied())
+                    .filter(|(_, y)| y.is_finite())
+                    .map(|(x, y)| Circle::new((x, y), 3, RGBColor(80, 80, 220).mix(0.55).filled())),
+            )?
+            .label("bucket_index")
+            .legend(|(x, y)| Circle::new((x + 8, y), 4, RGBColor(80, 80, 220).mix(0.55).filled()));
+
+        // pairs
+        chart
+            .draw_series(
+                xs.iter()
+                    .copied()
+                    .zip(y_pairs.iter().copied())
+                    .filter(|(_, y)| y.is_finite())
+                    .map(|(x, y)| Circle::new((x, y), 3, RGBColor(80, 160, 80).mix(0.55).filled())),
+            )?
+            .label("pairs")
+            .legend(|(x, y)| Circle::new((x + 8, y), 4, RGBColor(80, 160, 80).mix(0.55).filled()));
+
+        // triplets (optional)
+        chart
+            .draw_series(
+                xs.iter()
+                    .copied()
+                    .zip(y_trip.iter().copied())
+                    .filter(|(_, y)| y.is_finite())
+                    .map(|(x, y)| Circle::new((x, y), 3, RGBColor(220, 80, 80).mix(0.55).filled())),
+            )?
+            .label("triplets")
+            .legend(|(x, y)| Circle::new((x + 8, y), 4, RGBColor(220, 80, 80).mix(0.55).filled()));
+
+        chart
+            .configure_series_labels()
+            .border_style(&BLACK)
+            .draw()?;
+    }
+    Ok(out)
+}
+
+/// 3) Pairs per alert (bar or line): n_pairs / n_alerts.
+fn plot_multinight_pairs_per_alert(
+    df: &DataFrame,
+    out_dir: &Path,
+    cfg: &MultiNightPlotConfig,
+) -> Result<PathBuf> {
+    let out = ensure_out_path(out_dir, "multinight_pairs_per_alert.png")?;
+    {
+        let nid = col_i32(df, "nid").or_else(|_| col_i32(df, crate::dataset::schema::cols::NID))?;
+        let n_alerts = col_i64(df, "n_alerts")?;
+        let n_pairs = col_i64(df, "n_pairs")?;
+
+        let n = nid.len().min(n_alerts.len()).min(n_pairs.len());
+        anyhow::ensure!(n > 0, "empty summary table");
+
+        let vals: Vec<f64> = (0..n)
+            .map(|i| (n_pairs[i] as f64) / (n_alerts[i].max(1) as f64))
+            .collect();
+
+        let y_lo = 0.0;
+        let mut y_hi = vals.iter().copied().fold(0.0, f64::max);
+        if y_hi <= 0.0 {
+            y_hi = 1.0;
+        }
+        let pad = 0.05 * y_hi;
+        let y_hi = y_hi + pad;
+
+        let root = BitMapBackend::new(&out, (cfg.width, cfg.height)).into_drawing_area();
+        root.fill(&WHITE)?;
+
+        let mut chart = ChartBuilder::on(&root)
+            .caption("Multi-night: pairs per alert", ("sans-serif", 28))
+            .margin(15)
+            .x_label_area_size(50)
+            .y_label_area_size(90)
+            .build_cartesian_2d(0..(n as i32), y_lo..y_hi)?;
+
+        chart
+            .configure_mesh()
+            .x_desc("night index (sorted by nid)")
+            .y_desc("n_pairs / n_alerts")
+            .draw()?;
+
+        chart.draw_series((0..n).map(|i| {
+            Rectangle::new(
+                [(i as i32, 0.0), (i as i32 + 1, vals[i])],
+                RGBColor(80, 160, 80).mix(0.45).filled(),
+            )
+        }))?;
+    }
+    Ok(out)
+}
+
+/// 4) Quality tradeoff for pairs: purity_overall vs consecutive_recall,
+/// annotated by cost proxy (pairs per alert).
+fn plot_multinight_quality_tradeoff_pairs(
+    df: &DataFrame,
+    out_dir: &Path,
+    cfg: &MultiNightPlotConfig,
+) -> Result<PathBuf> {
+    let out = ensure_out_path(out_dir, "multinight_quality_tradeoff_pairs.png")?;
+    {
+        let n_alerts = col_i64(df, "n_alerts")?;
+        let n_pairs = col_i64(df, "n_pairs")?;
+        let purity = col_f64(df, "pair_purity_overall")?;
+        let recall = col_f64(df, "pair_consecutive_recall")?;
+
+        let n = n_alerts
+            .len()
+            .min(n_pairs.len())
+            .min(purity.len())
+            .min(recall.len());
+        anyhow::ensure!(n > 0, "empty summary table");
+
+        // bubble radius based on pairs/alert (clamped)
+        let cost: Vec<f64> = (0..n)
+            .map(|i| (n_pairs[i] as f64) / (n_alerts[i].max(1) as f64))
+            .collect();
+
+        let mut cost_lo = f64::INFINITY;
+        let mut cost_hi = f64::NEG_INFINITY;
+        for &c in &cost {
+            if c.is_finite() {
+                cost_lo = cost_lo.min(c);
+                cost_hi = cost_hi.max(c);
+            }
+        }
+        if !cost_lo.is_finite() || !cost_hi.is_finite() || cost_lo == cost_hi {
+            cost_lo = 0.0;
+            cost_hi = 1.0;
+        }
+
+        let root = BitMapBackend::new(&out, (cfg.width, cfg.height)).into_drawing_area();
+        root.fill(&WHITE)?;
+
+        let mut chart = ChartBuilder::on(&root)
+            .caption(
+                "Multi-night: pair quality tradeoff (bubble size ~ pairs/alert)",
+                ("sans-serif", 28),
+            )
+            .margin(15)
+            .x_label_area_size(60)
+            .y_label_area_size(70)
+            .build_cartesian_2d(0.0f64..1.0f64, 0.0f64..1.0f64)?;
+
+        chart
+            .configure_mesh()
+            .x_desc("consecutive_recall (completeness proxy)")
+            .y_desc("purity_overall")
+            .draw()?;
+
+        chart.draw_series((0..n).filter_map(|i| {
+            let x = recall[i];
+            let y = purity[i];
+            if !(x.is_finite() && y.is_finite()) {
+                return None;
+            }
+            let c = cost[i];
+            let t = ((c - cost_lo) / (cost_hi - cost_lo)).clamp(0.0, 1.0);
+            let r = (3.0 + 10.0 * t).round() as i32;
+            Some(Circle::new(
+                (x, y),
+                r,
+                RGBColor(80, 80, 220).mix(0.35).filled(),
+            ))
+        }))?;
+    }
+    Ok(out)
+}
+
+/// 5) Triplets per alert (optional).
+fn plot_multinight_triplets_per_alert(
+    df: &DataFrame,
+    out_dir: &Path,
+    cfg: &MultiNightPlotConfig,
+) -> Result<PathBuf> {
+    let out = ensure_out_path(out_dir, "multinight_triplets_per_alert.png")?;
+    {
+        let n_alerts = col_i64(df, "n_alerts")?;
+        let n_trip = col_i64(df, "n_triplets")?;
+
+        let n = n_alerts.len().min(n_trip.len());
+        anyhow::ensure!(n > 0, "empty summary table");
+
+        let vals: Vec<f64> = (0..n)
+            .map(|i| (n_trip[i] as f64) / (n_alerts[i].max(1) as f64))
+            .collect();
+
+        let y_lo = 0.0;
+        let mut y_hi = vals.iter().copied().fold(0.0, f64::max);
+        if y_hi <= 0.0 {
+            y_hi = 1.0;
+        }
+        let pad = 0.05 * y_hi;
+        let y_hi = y_hi + pad;
+
+        let root = BitMapBackend::new(&out, (cfg.width, cfg.height)).into_drawing_area();
+        root.fill(&WHITE)?;
+
+        let mut chart = ChartBuilder::on(&root)
+            .caption("Multi-night: triplets per alert", ("sans-serif", 28))
+            .margin(15)
+            .x_label_area_size(50)
+            .y_label_area_size(90)
+            .build_cartesian_2d(0..(n as i32), y_lo..y_hi)?;
+
+        chart
+            .configure_mesh()
+            .x_desc("night index (sorted by nid)")
+            .y_desc("n_triplets / n_alerts")
+            .draw()?;
+
+        chart.draw_series((0..n).map(|i| {
+            Rectangle::new(
+                [(i as i32, 0.0), (i as i32 + 1, vals[i])],
+                RGBColor(220, 80, 80).mix(0.45).filled(),
+            )
+        }))?;
+    }
+    Ok(out)
+}
+
 /* ------------------------------ Drawing helpers ------------------------------ */
 
 fn draw_scatter_by_label_with_unit<DB: DrawingBackend, S: Into<ShapeStyle> + Clone>(

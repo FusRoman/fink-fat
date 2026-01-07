@@ -29,14 +29,15 @@ use fink_fat_engine::{
 
 use fink_fat_eval::{
     cli::common::{CommonBinningArgs, CommonPairGenArgs, CommonScanArgs},
-    dataset::schema::cols,
     dataset::{
         ParquetSource,
         ingest_config::AlertIngestConfig,
+        schema::cols,
         ztf_alerts::{alert_store_with_truth_from_lazyframe, scan_ztf_alerts},
     },
     seeding::{
         metrics::{pair_metrics, triplet_metrics},
+        plotting::{MultiNightPlotConfig, plot_multinight_summary},
         seed_gen::generate_pairs_and_triplets_ids_only,
     },
 };
@@ -368,6 +369,17 @@ fn main() -> Result<()> {
         for (nid, err) in failed {
             eprintln!("  - nid={nid}: {err}");
         }
+    }
+
+    let plot_cfg = MultiNightPlotConfig {
+        width: 1400,
+        height: 900,
+        log_cost: true,
+    };
+
+    let outs = plot_multinight_summary(&df, cli.scan.out_dir.as_std_path(), &plot_cfg)?;
+    for p in outs {
+        eprintln!("Wrote plot {}", p.display());
     }
 
     Ok(())
