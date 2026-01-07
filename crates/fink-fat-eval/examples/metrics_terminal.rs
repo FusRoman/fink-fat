@@ -35,8 +35,8 @@ use fink_fat_eval::{
         ParquetSource,
         ingest_config::AlertIngestConfig,
         ztf_alerts::{
-            AlertStoreWithTruth, ZtfAlertScan, alert_store_with_truth_from_lazyframe,
-            scan_ztf_alerts,
+            AlertLoadMode, AlertStoreWithTruth, ZtfAlertScan,
+            alert_store_with_truth_from_lazyframe, scan_ztf_alerts,
         },
     },
     seeding::metrics::{pair_metrics, triplet_metrics},
@@ -71,7 +71,7 @@ fn main() -> Result<()> {
         .with_context(|| format!("Failed to open parquet source: {parquet_path_str}"))?;
 
     let scan = ZtfAlertScan {
-        only_truth: cli.only_truth,
+        mode: AlertLoadMode::Oracle,
         ..Default::default()
     };
 

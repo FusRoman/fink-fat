@@ -27,9 +27,7 @@
 use fink_fat_eval::dataset::{
     ParquetSource,
     ztf_alerts::{
-        ZtfAlertScan,
-        scan_ztf_alerts,
-        alert_store_with_truth_from_lazyframe,
+        AlertLoadMode, ZtfAlertScan, alert_store_with_truth_from_lazyframe, scan_ztf_alerts
     },
 };
 
@@ -46,7 +44,7 @@ fn main() -> anyhow::Result<()> {
     // - keep only alerts associated with a truth trajectory,
     // - keep minimal columns for ingestion.
     let scan = ZtfAlertScan {
-        only_truth: true,
+        mode: AlertLoadMode::Oracle,
         ..Default::default()
     };
 

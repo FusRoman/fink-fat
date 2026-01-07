@@ -33,6 +33,19 @@
 //! - `nid` (Int32): night id (optional scan filter).
 //! - `ssnamenr` (String): optional truth label (not used by the engine ingestion).
 //! - `trajectory_id` (Int32): optional truth association (scan filter + evaluation sidecar).
+//! - `fink_class` (String): Fink classification label.
+//!
+//! Loading modes
+//! -------------
+//! This module supports three **loading modes** (see [`AlertLoadMode`]):
+//! - [`AlertLoadMode::Oracle`]:
+//!     Keep only alerts that are *known asteroids* either via
+//!     `trajectory_id > 0` (truth) OR `fink_class == "Solar System MPC"`.
+//! - [`AlertLoadMode::Fink`]:
+//!     Keep only alerts that are *plausible Solar System candidates* according to the broker:
+//!     `fink_class ∈ {"Solar System MPC", "Solar System candidate", "Unknown"}`.
+//! - [`AlertLoadMode::All`]:
+//!     Keep all alerts regardless of `trajectory_id` / `fink_class`.
 //!
 //! Units & conversions
 //! -------------------
@@ -47,24 +60,12 @@
 //! Truth association (evaluation)
 //! -----------------------------
 //! Many evaluation datasets provide a per-alert `trajectory_id` that encodes the
-//! *ground-truth* object which generated the alert (e.g., simulated truth tracks
-//! or cross-matched labels).
+//! *ground-truth* object which generated the alert.
 //!
 //! The core engine [`Alert`] does not store this field. For evaluation, this
 //! module offers [`AlertStoreWithTruth`], which pairs:
 //! - an [`AlertStore`] (engine-ready alerts),
 //! - a `Vec<i32>` of `trajectory_id` values aligned with dense [`AlertId`] order.
-//!
-//! This design keeps the engine types unchanged while enabling fast evaluation:
-//! - O(1) truth lookup: `truth[alert_id.idx()]`.
-//! - No extra allocations or per-row overhead beyond a single `Vec<i32>`.
-//!
-//! The [`fmt::Display`] implementation for [`AlertStoreWithTruth`] reuses the
-//! underlying store display and adds summary statistics over truth trajectories
-//! (by default, only `trajectory_id > 0` are considered truth-associated):
-//! - number of alerts with truth and fraction of total,
-//! - number of unique truth trajectories,
-//! - min / mean / max trajectory length (in alerts).
 //!
 //! Performance model
 //! -----------------
@@ -75,10 +76,6 @@
 //! for Float32 columns (`magpsf`, `sigmapsf`). In that case, the module falls back to
 //! `into_no_null_iter()` which iterates chunk-by-chunk efficiently and avoids per-row indexing
 //! overhead (`get(i)`), while remaining allocation-free.
-//!
-//! The truth sidecar extraction follows the same strategy:
-//! - fast path: `cont_slice()` → `to_vec()`,
-//! - fallback: `into_no_null_iter().collect()`.
 //!
 //! See also
 //! --------
@@ -95,6 +92,23 @@ use crate::dataset::{ParquetSource, ingest_config::AlertIngestConfig};
 
 use super::schema::cols;
 
+/// Alert loading mode (truth/broker driven filters).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum AlertLoadMode {
+    /// Oracle mode: keep only known asteroids.
+    ///
+    /// Filter:
+    /// - `trajectory_id > 0` OR `fink_class == "Solar System MPC"`.
+    Oracle,
+    /// Fink broker mode: keep only plausible asteroid-like alerts.
+    ///
+    /// Filter:
+    /// - `fink_class ∈ {"Solar System MPC", "Solar System candidate", "Unknown"}`.
+    Fink,
+    /// No filtering based on truth/class.
+    All,
+}
+
 /// A convenient wrapper to configure a scan on the alert Parquet file.
 ///
 /// Notes
@@ -105,14 +119,14 @@ use super::schema::cols;
 /// Fields
 /// ------
 /// - `nid`: optional filter by night id (`nid` column).
-/// - `only_truth`: if `true`, keep only alerts with `trajectory_id > 0`.
+/// - `mode`: loading mode controlling truth/class filtering.
 /// - `minimal`: if `true`, project only the minimal subset of columns.
 #[derive(Clone, Debug)]
 pub struct ZtfAlertScan {
     /// Optional filter on `nid` (night id).
     pub nid: Option<i32>,
-    /// Optional filter to keep only alerts with a non-zero trajectory id (truth-associated).
-    pub only_truth: bool,
+    /// Loading mode controlling truth / Fink-class filters.
+    pub mode: AlertLoadMode,
     /// Optional projection: keep only the minimal columns needed by the engine.
     pub minimal: bool,
 }
@@ -123,12 +137,12 @@ impl Default for ZtfAlertScan {
     /// Defaults
     /// --------
     /// - No `nid` filter.
-    /// - Keep all alerts regardless of truth association.
+    /// - Load all alerts (`mode = All`).
     /// - Enable minimal projection (reduces IO and memory).
     fn default() -> Self {
         Self {
             nid: None,
-            only_truth: false,
+            mode: AlertLoadMode::All,
             minimal: true,
         }
     }
@@ -179,15 +193,36 @@ pub fn scan_ztf_alerts(path: &ParquetSource, scan: ZtfAlertScan) -> Result<LazyF
         col(cols::NID).cast(DataType::Int32),
         col(cols::SSNAMENR).cast(DataType::String),
         col(cols::TRAJECTORY_ID).cast(DataType::Int32),
+        col(cols::FINK_CLASS).cast(DataType::String),
     ]);
 
     // Optional filters (lazy predicates).
     if let Some(nid) = scan.nid {
         lf = lf.filter(col(cols::NID).eq(lit(nid)));
     }
-    if scan.only_truth {
-        // Note: `trajectory_id` is Int32, but comparing with i64 is fine (Polars casts).
-        lf = lf.filter(col(cols::TRAJECTORY_ID).gt(lit(0i64)));
+
+    // Mode-dependent filtering.
+    match scan.mode {
+        AlertLoadMode::All => {
+            // No extra filter.
+        }
+        AlertLoadMode::Oracle => {
+            // Keep only known asteroids:
+            // trajectory_id > 0 OR fink_class == "Solar System MPC"
+            lf = lf.filter(
+                col(cols::TRAJECTORY_ID)
+                    .gt(lit(0i64))
+                    .or(col(cols::FINK_CLASS).eq(lit("Solar System MPC"))),
+            );
+        }
+        AlertLoadMode::Fink => {
+            lf = lf.filter(
+                col(cols::FINK_CLASS)
+                    .eq(lit("Solar System MPC"))
+                    .or(col(cols::FINK_CLASS).eq(lit("Solar System candidate")))
+                    .or(col(cols::FINK_CLASS).eq(lit("Unknown"))),
+            );
+        }
     }
 
     // Optional projection (reduce IO + memory footprint).
@@ -203,6 +238,7 @@ pub fn scan_ztf_alerts(path: &ParquetSource, scan: ZtfAlertScan) -> Result<LazyF
             col(cols::NID),
             col(cols::SSNAMENR),
             col(cols::TRAJECTORY_ID),
+            col(cols::FINK_CLASS),
         ]);
     }
 
@@ -329,27 +365,27 @@ struct MagCols<'a> {
 #[inline]
 fn load_base_cols<'a>(df: &'a DataFrame) -> Result<BaseCols<'a>> {
     let candid = df
-        .column("candid")?
+        .column(cols::CANDID)?
         .as_materialized_series()
         .i64()
         .context("candid not Int64")?;
     let ra = df
-        .column("ra")?
+        .column(cols::RA)?
         .as_materialized_series()
         .f64()
         .context("ra not Float64")?;
     let dec = df
-        .column("dec")?
+        .column(cols::DEC)?
         .as_materialized_series()
         .f64()
         .context("dec not Float64")?;
     let jd = df
-        .column("jd")?
+        .column(cols::JD)?
         .as_materialized_series()
         .f64()
         .context("jd not Float64")?;
     let fid = df
-        .column("fid")?
+        .column(cols::FID)?
         .as_materialized_series()
         .i32()
         .context("fid not Int32")?;
@@ -391,12 +427,12 @@ fn load_base_cols<'a>(df: &'a DataFrame) -> Result<BaseCols<'a>> {
 #[inline]
 fn load_mag_cols<'a>(df: &'a DataFrame) -> Result<MagCols<'a>> {
     let magpsf = df
-        .column("magpsf")?
+        .column(cols::MAGPSF)?
         .as_materialized_series()
         .f32()
         .context("magpsf not Float32")?;
     let sigmapsf = df
-        .column("sigmapsf")?
+        .column(cols::SIGMAPSF)?
         .as_materialized_series()
         .f32()
         .context("sigmapsf not Float32")?;
@@ -869,7 +905,6 @@ impl AlertStoreWithTruth {
     /// - Preserves alert order (time / row order).
     /// - If `tid <= 0`, this will typically return an empty iterator.
     pub fn alerts_for_trajectory<'a>(&'a self, tid: i32) -> impl Iterator<Item = &'a Alert> + 'a {
-        // Version A: si AlertStore expose un slice
         self.store
             .alerts
             .iter()
@@ -882,38 +917,18 @@ impl AlertStoreWithTruth {
     /// Overview
     /// --------
     /// This is a convenience wrapper around [`alerts_for_trajectory`] that
-    /// materializes the result into a `Vec<&Alert>`. It is intended for
-    /// evaluation or analysis code that needs to iterate multiple times over
-    /// the same trajectory, or perform operations requiring a concrete
-    /// collection (sorting, random access, statistics, etc.).
+    /// materializes the result into a `Vec<&Alert>`.
     ///
     /// Parameters
     /// ----------
     /// * tid : i32
-    ///     Truth trajectory identifier to select. By convention,
-    ///     `tid <= 0` usually indicates "no truth association" and will
-    ///     typically return an empty vector.
+    ///     Truth trajectory identifier to select.
     ///
     /// Returns
     /// -------
     /// * Vec<&Alert>
     ///     All alerts belonging to the given truth trajectory, in the same
-    ///     order as stored in the underlying [`AlertStore`] (i.e. dense
-    ///     `AlertId` / row order).
-    ///
-    /// Notes
-    /// -----
-    /// - This method allocates a new `Vec` to store references to the alerts.
-    /// - Internally, it relies on [`alerts_for_trajectory`] and therefore
-    ///   runs in **O(n)** time, where `n` is the total number of alerts.
-    /// - For single-pass processing or performance-critical paths, prefer
-    ///   using the iterator returned by [`alerts_for_trajectory`] directly
-    ///   to avoid the allocation.
-    ///
-    /// See also
-    /// --------
-    /// - [`alerts_for_trajectory`] – Zero-allocation iterator over alerts of
-    ///   a given truth trajectory.
+    ///     order as stored in the underlying [`AlertStore`].
     pub fn alerts_for_trajectory_vec(&self, tid: i32) -> Vec<&Alert> {
         self.alerts_for_trajectory(tid).collect()
     }
@@ -1075,7 +1090,7 @@ pub fn alert_store_with_truth_from_lazyframe(
     // Required columns.
     let base = load_base_cols(&df)?;
 
-    // Optional truth column (required for evaluation here).
+    // Truth column (required here).
     let truth = load_truth_cols(&df)?;
 
     let n = df.height();
@@ -1087,7 +1102,7 @@ pub fn alert_store_with_truth_from_lazyframe(
     let jd_offset = if cfg.jd_to_mjd { 2_400_000.5 } else { 0.0 };
     let angle_scale = if cfg.radec_in_degrees { deg2rad } else { 1.0 };
 
-    // Build alerts (your existing logic).
+    // Build alerts.
     let min_mjd = if cfg.store_mag_as_flux_proxy {
         let mag = load_mag_cols(&df)?;
         if let (Some(sl), Some((mag_sl, sig_sl))) = (try_base_slices(&base), try_mag_slices(&mag)) {
@@ -1104,12 +1119,10 @@ pub fn alert_store_with_truth_from_lazyframe(
         } else {
             build_iter_with_mag(&base, &mag, angle_scale, jd_offset, sigma_rad, &mut alerts)
         }
+    } else if let Some(sl) = try_base_slices(&base) {
+        build_contiguous_no_mag(n, sl, angle_scale, jd_offset, sigma_rad, &mut alerts)
     } else {
-        if let Some(sl) = try_base_slices(&base) {
-            build_contiguous_no_mag(n, sl, angle_scale, jd_offset, sigma_rad, &mut alerts)
-        } else {
-            build_iter_no_mag(&base, angle_scale, jd_offset, sigma_rad, &mut alerts)
-        }
+        build_iter_no_mag(&base, angle_scale, jd_offset, sigma_rad, &mut alerts)
     };
 
     // Extract truth sidecar (aligned with row order / AlertId).

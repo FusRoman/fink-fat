@@ -8,7 +8,7 @@ pub mod dataset;
 fn main() {
     let parquet_source = ParquetSource::new("../../test_exp/ztf_alert.parquet").unwrap();
     let scan = ZtfAlertScan {
-        only_truth: true,
+        mode: dataset::ztf_alerts::AlertLoadMode::Oracle,
         ..Default::default()
     };
 
@@ -33,11 +33,6 @@ fn main() {
 
     let traj_id = 33803;
     for alert in alert_store.alerts_for_trajectory(traj_id) {
-        println!(
-            "Trajectory {} alert {:?} : {}",
-            traj_id,
-            alert.id,
-            alert,
-        );
+        println!("Trajectory {} alert {:?} : {}", traj_id, alert.id, alert,);
     }
 }

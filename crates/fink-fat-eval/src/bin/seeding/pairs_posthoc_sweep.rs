@@ -46,6 +46,7 @@
 //! cargo run -p fink-fat-eval --bin pairs-posthoc-sweep -- \
 //!   alerts.parquet \
 //!   --out-dir out_pairs \
+//!   --mode fink \
 //!   --gen-max-omega "30 arcsec/min" \
 //!   --sweep-min-omega "1 arcsec/min" \
 //!   --sweep-steps 40 \
@@ -62,15 +63,40 @@
 
 use anyhow::Result;
 use camino::Utf8PathBuf;
-use clap::{ArgAction, Parser};
+use clap::{ArgAction, Parser, ValueEnum};
 
 use fink_fat_eval::angular_speed::AngularSpeed;
 use fink_fat_eval::dataset::ingest_config::AlertIngestConfig;
-use fink_fat_eval::dataset::ztf_alerts::ZtfAlertScan;
+use fink_fat_eval::dataset::ztf_alerts::{AlertLoadMode, ZtfAlertScan};
 use fink_fat_eval::seeding::pairs_sweep::{
     PairsPosthocSweepConfig, default_plot_config, run_pairs_posthoc_sweep,
 };
 use fink_fat_eval::seeding::plotting::AngularUnit;
+
+/// CLI-facing loading mode.
+///
+/// This maps to [`AlertLoadMode`] in the library.
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum CliLoadMode {
+    /// Load only "oracle" asteroids:
+    /// `trajectory_id > 0` OR `fink_class == "Solar System MPC"`.
+    Oracle,
+    /// Load broker-plausible asteroid-like alerts:
+    /// `fink_class ∈ {"Solar System MPC", "Solar System candidate", "Unknown"}`.
+    Fink,
+    /// Load everything (no truth/class filtering).
+    All,
+}
+
+impl From<CliLoadMode> for AlertLoadMode {
+    fn from(v: CliLoadMode) -> Self {
+        match v {
+            CliLoadMode::Oracle => AlertLoadMode::Oracle,
+            CliLoadMode::Fink => AlertLoadMode::Fink,
+            CliLoadMode::All => AlertLoadMode::All,
+        }
+    }
+}
 
 /// Command-line interface for the post-hoc pair sweep tool.
 ///
@@ -94,9 +120,15 @@ use fink_fat_eval::seeding::plotting::AngularUnit;
     after_help = "\
 Examples:
   pairs-posthoc-sweep alerts.parquet --out-dir out_pairs \\
+    --mode fink \\
     --gen-max-omega \"30 arcsec/min\" \\
     --sweep-min-omega \"1 arcsec/min\" \\
     --sweep-steps 40 --logspace
+
+Modes:
+  --mode all     : ingest all alerts (no class/truth filtering)
+  --mode fink    : keep only broker-plausible asteroid-like classes
+  --mode oracle  : keep only known asteroids (truth OR 'Solar System MPC')
 
 Tips:
   - Ensure: --gen-max-omega >= max swept omega (otherwise the sweep is biased).
@@ -147,14 +179,19 @@ struct Cli {
     #[arg(long, value_name = "NID", help_heading = "Scan")]
     nid: Option<i32>,
 
-    /// Keep only alerts with an associated truth trajectory.
+    /// Alert loading mode (truth / broker filtering).
     ///
-    /// When enabled, alerts without a known trajectory identifier are
-    /// discarded at scan time. This simplifies diagnostics by removing
-    /// "unknown" regions but may hide areas where truth information is
-    /// missing or incomplete.
-    #[arg(long, help_heading = "Scan")]
-    only_truth: bool,
+    /// - `oracle`: keep only known asteroids (truth OR "Solar System MPC").
+    /// - `fink`: keep only broker-plausible asteroid-like classes.
+    /// - `all`: keep all alerts.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = CliLoadMode::All,
+        value_name = "MODE",
+        help_heading = "Scan"
+    )]
+    mode: CliLoadMode,
 
     /// Use a minimal column projection when scanning the Parquet file.
     ///
@@ -349,14 +386,14 @@ fn main() -> Result<()> {
 
         scan: ZtfAlertScan {
             nid: cli.nid,
-            only_truth: cli.only_truth,
+            mode: cli.mode.into(),
             minimal: cli.minimal,
         },
         ingest: AlertIngestConfig::default(),
 
         max_dt_days: cli.max_dt,
 
-        // New: omega-based sweep (stored as rad/day)
+        // Omega-based sweep (stored as rad/day)
         gen_max_angular_speed_rad_per_day: cli.gen_max_omega.as_rad_per_day(),
         sweep_min_angular_speed_rad_per_day: cli.sweep_min_omega.as_rad_per_day(),
         sweep_steps: cli.sweep_steps,

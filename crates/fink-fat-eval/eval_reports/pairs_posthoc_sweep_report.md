@@ -9,12 +9,12 @@ The goal is to tune the **angular-speed cut** used to retain candidate pairs, wi
 
 - Input: `../../test_exp/ztf_dataset_2025.parquet`
 - Night filter: `--nid 3122`
-- Truth filtering: `--only-truth` (pairs involve only alerts with a truth `trajectory_id`)
+- Loading mode: `--mode oracle` (keep only asteroid alerts: trajectory_id > 0 or fink_class == "Solar System MPC")
 
 ### Command line
 
 ```bash
-cargo run --release -p fink-fat-eval --bin pairs_posthoc_sweep --   ../../test_exp/ztf_dataset_2025.parquet   --out-dir out_pairs   --nid 3122   --angular-unit arcmin   --gen-max-omega "35 arcmin/day"   --sweep-min-omega "1 arcmin/day"   --max-dt 0.1   --sweep-steps 100   --only-truth   --allow-same-timebin
+cargo run --release -p fink-fat-eval --bin pairs_posthoc_sweep -- ../../test_exp/ztf_dataset_2025.parquet --out-dir out_pairs --nid 3122 --angular-unit arcmin --gen-max-omega "35 arcmin/day" --sweep-min-omega "1 arcmin/day" --max-dt 0.1 --sweep-steps 100 --allow-same-timebin --mode oracle
 ```
 
 ### Configuration highlights
