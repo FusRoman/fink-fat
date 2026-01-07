@@ -9,30 +9,22 @@
 //! The workflow is designed for survey-scale datasets (ZTF/LSST-like):
 //!
 //! 1. **Scan + ingest** an alert Parquet dataset into an [`AlertStoreWithTruth`].
-//! 2. **Generate pairs once** using a deliberately large maximum separation
-//!    (`gen_max_sep_rad`) so the candidate set is a superset.
+//! 2. **Generate pairs once** using a deliberately large maximum angular speed
+//!    (`gen_max_angular_speed_rad_per_day`) so the candidate set is a superset.
 //! 3. **Extract features** on that fixed superset (Δt, separation, labels).
 //! 4. **Plot diagnostics** (histograms, scatter) on the full superset.
-//! 5. **Sweep post-hoc cuts** of the form `sep <= thr` for a grid of thresholds,
-//!    and plot a tradeoff curve (e.g., quality vs threshold).
+//! 5. **Sweep post-hoc kinematic cuts** of the form `sep <= ω_thr * dt` for a
+//!    grid of ω thresholds, and plot a tradeoff curve.
 //!
-//! This approach is extremely useful to answer questions like:
+//! This approach answers questions like:
 //! - Where is the knee point between completeness and contamination?
 //! - Do false links concentrate at large Δt or large separation?
-//! - How sensitive are metrics to the separation threshold?
-//!
-//! What this module does NOT do
-//! ----------------------------
-//! * It does **not** re-run seeding for each threshold. The sweep is purely a
-//!   post-hoc filter on a pre-generated superset.
-//! * It does **not** perform a multi-parameter optimization loop (only a 1D
-//!   separation threshold sweep, as written here).
+//! - How sensitive are metrics to the **angular speed** threshold?
 //!
 //! Notes
 //! -----
-//! * You must ensure `gen_max_sep_rad >= sweep_min_sep_rad` and that
-//!   `gen_max_sep_rad` is at least as large as the **largest** threshold you
-//!   want to test.
+//! * You must ensure `gen_max_angular_speed_rad_per_day` is at least as large
+//!   as the **largest** ω threshold you want to test.
 //! * The uniform time binner origin `t0` is inferred from the minimum `mjd_tt`
 //!   in the dataset by default (see [`infer_t0_mjd_tt`]) to make binning stable
 //!   and reproducible for a fixed dataset.
@@ -45,10 +37,10 @@
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 
+use fink_fat_engine::MjdTt;
 use fink_fat_engine::engine_config::pair_config::PairConfig;
 use fink_fat_engine::spacetime_bucket::healpix_binner::HealpixBinner;
 use fink_fat_engine::spacetime_bucket::uniform_time_binner::UniformTimeBinner;
-use fink_fat_engine::{MjdTt, Radians};
 
 use crate::FiniteOr;
 use crate::dataset::ztf_alerts::{
@@ -57,51 +49,29 @@ use crate::dataset::ztf_alerts::{
 use crate::dataset::{ParquetSource, ingest_config::AlertIngestConfig};
 use crate::grid::{linspace, logspace};
 use crate::seeding::plotting::{
-    AngularUnit, PairPlotConfig, extract_pair_features, plot_pairs_cost_vs_sep_threshold,
-    plot_pairs_dt_hist, plot_pairs_global_tradeoff_vs_sep_threshold, plot_pairs_scatter_dt_sep,
-    plot_pairs_sep_hist, plot_pairs_tradeoff_vs_sep_threshold,
+    AngularUnit, PairPlotConfig, extract_pair_features, plot_pairs_cost_vs_omega_threshold,
+    plot_pairs_dt_hist, plot_pairs_global_tradeoff_vs_omega_threshold, plot_pairs_omega_hist,
+    plot_pairs_scatter_dt_sep, plot_pairs_sep_hist, plot_pairs_tradeoff_vs_omega_threshold,
 };
 use crate::seeding::seed_gen::generate_pairs_and_triplets_ids_only;
 
-/// Configuration for a post-hoc sweep on pair separation thresholds.
+/// Configuration for a post-hoc sweep on pair **angular-speed** thresholds.
 ///
-/// This configuration is intentionally *portable* across binaries and tests:
-/// it contains all inputs needed to ingest a dataset, generate a pair superset,
-/// and produce a suite of diagnostic plots.
+/// Post-hoc sweep cut:
+/// -------------------
+/// A pair (a,b) is **kept** under threshold ω if:
 ///
-/// Arguments
-/// ---------
-/// * `parquet` – Input alert Parquet file (UTF-8 path).
-/// * `out_dir` – Output directory where plots will be written.
-/// * `scan` – Scan configuration applied at Parquet read time (e.g., `nid`,
-///   `only_truth`, `minimal` projection).
-/// * `ingest` – Ingestion configuration (schema expectations, normalization).
-/// * `max_dt_days` – Pair generation maximum Δt (days, TT). This is applied
-///   during generation and is **not** swept post-hoc.
-/// * `gen_max_sep_rad` – Maximum separation (radians) used to generate the
-///   superset of pairs.
-/// * `sweep_min_sep_rad` – Minimum separation threshold (radians) for the
-///   post-hoc sweep.
-/// * `sweep_steps` – Number of thresholds in the sweep grid.
-/// * `logspace` – If `true`, use a log-spaced sweep grid; otherwise linear.
-/// * `max_flux_difference` – Photometric gating for pair generation.
-/// * `allow_same_timebin` – Whether pairs within the same time bin are allowed.
-/// * `healpix_depth` – HEALPix depth used for spatial candidate binning.
-/// * `time_bin_days` – Uniform time-bin width (days).
-/// * `plot` – Plot configuration (size, display angular unit, etc.).
+/// `sep(a,b) <= ω * dt(a,b)`
 ///
-/// Return
-/// ------
-/// * This is a pure configuration container and does not return a value.
+/// where:
+/// - `sep` is great-circle separation (radians),
+/// - `dt` is `mjd_tt(b) - mjd_tt(a)` (days),
+/// - ω is in radians/day.
 ///
-/// Notes
-/// -----
-/// * The post-hoc sweep only changes the separation threshold `sep <= thr`.
-///   If you want to study the interaction between Δt and separation, you must
-///   either re-run generation with different `max_dt_days` values or extend this
-///   module to support a 2D sweep.
-/// * `gen_max_sep_rad` must be chosen conservatively so the generated superset
-///   remains tractable in memory/time while still covering the sweep range.
+/// Generation superset:
+/// --------------------
+/// Pairs are generated once using `gen_max_angular_speed_rad_per_day` (large),
+/// so post-hoc filtering only removes pairs.
 #[derive(Clone, Debug)]
 pub struct PairsPosthocSweepConfig {
     pub parquet: Utf8PathBuf,
@@ -110,10 +80,19 @@ pub struct PairsPosthocSweepConfig {
     pub scan: ZtfAlertScan,
     pub ingest: AlertIngestConfig,
 
+    /// Pair generation max Δt (days, TT). Not swept post-hoc.
     pub max_dt_days: f64,
-    pub gen_max_sep_rad: f64,
-    pub sweep_min_sep_rad: f64,
+
+    /// Max angular speed used to generate the pair superset (rad/day).
+    pub gen_max_angular_speed_rad_per_day: f64,
+
+    /// Minimum ω threshold for the post-hoc sweep (rad/day).
+    pub sweep_min_angular_speed_rad_per_day: f64,
+
+    /// Number of thresholds in the sweep grid.
     pub sweep_steps: usize,
+
+    /// If true, use a log-spaced ω sweep grid.
     pub logspace: bool,
 
     pub max_flux_difference: f32,
@@ -151,16 +130,18 @@ impl PairsPosthocSweepConfig {
             "max_dt must be finite and >= 0"
         );
         anyhow::ensure!(
-            self.gen_max_sep_rad.is_finite() && self.gen_max_sep_rad >= 0.0,
-            "gen_max_sep must be finite and >= 0"
+            self.gen_max_angular_speed_rad_per_day.is_finite()
+                && self.gen_max_angular_speed_rad_per_day >= 0.0,
+            "gen_max_angular_speed must be finite and >= 0"
         );
         anyhow::ensure!(
-            self.sweep_min_sep_rad.is_finite() && self.sweep_min_sep_rad > 0.0,
-            "sweep_min_sep must be finite and > 0"
+            self.sweep_min_angular_speed_rad_per_day.is_finite()
+                && self.sweep_min_angular_speed_rad_per_day > 0.0,
+            "sweep_min_angular_speed must be finite and > 0"
         );
         anyhow::ensure!(
-            self.gen_max_sep_rad >= self.sweep_min_sep_rad,
-            "gen_max_sep must be >= sweep_min_sep"
+            self.gen_max_angular_speed_rad_per_day >= self.sweep_min_angular_speed_rad_per_day,
+            "gen_max_angular_speed must be >= sweep_min_angular_speed"
         );
         anyhow::ensure!(
             self.time_bin_days.is_finite() && self.time_bin_days > 0.0,
@@ -177,28 +158,14 @@ impl PairsPosthocSweepConfig {
 /// -----
 /// 1. Scan + ingest alerts into [`AlertStoreWithTruth`].
 /// 2. Build spatial/time binners (HEALPix + uniform bins).
-/// 3. Generate a superset of pairs with `gen_max_sep_rad`.
+/// 3. Generate a superset of pairs with `gen_max_angular_speed`.
 /// 4. Extract features and plot diagnostics on the superset.
-/// 5. Sweep `sep <= thr` thresholds post-hoc and plot the tradeoff curve.
-///
-/// Arguments
-/// ---------
-/// * `cfg` – Pipeline configuration (dataset, generation parameters, sweep grid,
-///   and plotting configuration).
-///
-/// Return
-/// ------
-/// * `Ok(())` on success (plots written to `cfg.out_dir`).
-/// * `Err(anyhow::Error)` if ingestion, generation, feature extraction, or
-///   plotting fails.
+/// 5. Sweep ω thresholds post-hoc and plot the tradeoff curve.
 ///
 /// Notes
 /// -----
 /// * The sweep is purely post-hoc: it filters the already-generated superset.
-///   If `cfg.gen_max_sep_rad` is too small, the sweep results will be biased
-///   because candidate pairs beyond that separation never existed.
-/// * Output files are deterministic given a fixed dataset and configuration
-///   (subject to floating-point rounding and any nondeterminism upstream).
+///   If `cfg.gen_max_angular_speed_rad_per_day` is too small, results will be biased.
 pub fn run_pairs_posthoc_sweep(cfg: &PairsPosthocSweepConfig) -> Result<()> {
     cfg.validate()?;
 
@@ -217,10 +184,10 @@ pub fn run_pairs_posthoc_sweep(cfg: &PairsPosthocSweepConfig) -> Result<()> {
     let t0 = infer_t0_mjd_tt(&store);
     let time = UniformTimeBinner::new(t0, cfg.time_bin_days);
 
-    // 3) Generate pairs once with a large `gen_max_sep_rad`
+    // 3) Generate pairs once with a large `gen_max_angular_speed`
     let pair_cfg = PairConfig {
         max_dt: cfg.max_dt_days,
-        max_sep: cfg.gen_max_sep_rad,
+        max_angular_speed: cfg.gen_max_angular_speed_rad_per_day,
         max_flux_difference: cfg.max_flux_difference,
         allow_same_timebin: cfg.allow_same_timebin,
     };
@@ -233,7 +200,7 @@ pub fn run_pairs_posthoc_sweep(cfg: &PairsPosthocSweepConfig) -> Result<()> {
         &Default::default(),
     );
 
-    // 4) Extract features + produce diagnostic plots
+    // 4) Extract features + diagnostic plots
     let feats = extract_pair_features(&store, &pairs)?;
     let out_dir_std = cfg.out_dir.as_std_path();
 
@@ -241,33 +208,49 @@ pub fn run_pairs_posthoc_sweep(cfg: &PairsPosthocSweepConfig) -> Result<()> {
     plot_pairs_sep_hist(&feats, out_dir_std, &cfg.plot)?;
     plot_pairs_scatter_dt_sep(&feats, out_dir_std, &cfg.plot)?;
 
-    // 5) Post-hoc sweep: vary separation threshold without re-running seeding
-    let thresholds: Vec<Radians> = if cfg.logspace {
-        logspace(cfg.sweep_min_sep_rad, cfg.gen_max_sep_rad, cfg.sweep_steps)
+    // 5) Post-hoc sweep: vary ω threshold without re-running seeding
+    let thresholds_omega: Vec<f64> = if cfg.logspace {
+        logspace(
+            cfg.sweep_min_angular_speed_rad_per_day,
+            cfg.gen_max_angular_speed_rad_per_day,
+            cfg.sweep_steps,
+        )
     } else {
-        linspace(cfg.sweep_min_sep_rad, cfg.gen_max_sep_rad, cfg.sweep_steps)
+        linspace(
+            cfg.sweep_min_angular_speed_rad_per_day,
+            cfg.gen_max_angular_speed_rad_per_day,
+            cfg.sweep_steps,
+        )
     };
 
-    plot_pairs_tradeoff_vs_sep_threshold(
+    plot_pairs_tradeoff_vs_omega_threshold(
         &store,
         &pairs,
         &feats,
-        &thresholds,
+        &thresholds_omega,
         out_dir_std,
         &cfg.plot,
     )?;
 
-    // Global metrics: purity_overall (global) + consecutive_recall (global completeness proxy)
-    plot_pairs_global_tradeoff_vs_sep_threshold(
+    plot_pairs_global_tradeoff_vs_omega_threshold(
         &store,
         &pairs,
         &feats,
-        &thresholds,
+        &thresholds_omega,
         out_dir_std,
         &cfg.plot,
     )?;
 
-    plot_pairs_cost_vs_sep_threshold(&store, &pairs, &feats, &thresholds, out_dir_std, &cfg.plot)?;
+    plot_pairs_cost_vs_omega_threshold(
+        &store,
+        &pairs,
+        &feats,
+        &thresholds_omega,
+        out_dir_std,
+        &cfg.plot,
+    )?;
+
+    plot_pairs_omega_hist(&feats, out_dir_std, &cfg.plot)?;
 
     Ok(())
 }

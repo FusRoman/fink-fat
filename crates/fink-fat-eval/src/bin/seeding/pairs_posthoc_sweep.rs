@@ -9,9 +9,9 @@
 //!
 //! 1. Ingest a ZTF/LSST-like alert dataset from a Parquet file,
 //! 2. Generate a **superset of candidate pairs once**, using a deliberately
-//!    large angular separation (`--gen-max-sep`),
-//! 3. Apply a **post-hoc sweep** of separation thresholds
-//!    (`sep <= thr`) *without re-running seeding*,
+//!    large angular speed (`--gen-max-omega`),
+//! 3. Apply a **post-hoc sweep** of angular-speed thresholds
+//!    (`sep <= omega * dt`) *without re-running seeding*,
 //! 4. Produce diagnostic plots to study tradeoffs between completeness and
 //!    contamination.
 //!
@@ -22,15 +22,15 @@
 //! -----------------------------------------
 //! * Where is the knee point between false links and missed associations?
 //! * Do spurious pairs concentrate at large Δt or large separation?
-//! * How sensitive are metrics to the angular separation cut?
+//! * How sensitive are metrics to the angular-speed cut?
 //!
 //! What this tool does NOT do
 //! --------------------------
 //! * It does **not** re-run pair generation for each threshold.
 //! * It does **not** optimize multiple parameters simultaneously.
 //!
-//! Because of this, it is critical that `--gen-max-sep` is **greater than or
-//! equal to** the maximum separation threshold tested during the sweep.
+//! Because of this, it is critical that `--gen-max-omega` is **greater than or
+//! equal to** the maximum angular-speed threshold tested during the sweep.
 //!
 //! Outputs
 //! -------
@@ -38,7 +38,7 @@
 //! * Δt histogram,
 //! * separation histogram,
 //! * Δt vs separation scatter plot,
-//! * tradeoff curve (quality vs separation threshold).
+//! * tradeoff curve (quality vs omega threshold).
 //!
 //! Usage
 //! -----
@@ -46,8 +46,8 @@
 //! cargo run -p fink-fat-eval --bin pairs-posthoc-sweep -- \
 //!   alerts.parquet \
 //!   --out-dir out_pairs \
-//!   --gen-max-sep 0.01 rad \
-//!   --sweep-min-sep 10 arcsec \
+//!   --gen-max-omega "30 arcsec/min" \
+//!   --sweep-min-omega "1 arcsec/min" \
 //!   --sweep-steps 40 \
 //!   --logspace
 //! ```
@@ -62,9 +62,9 @@
 
 use anyhow::Result;
 use camino::Utf8PathBuf;
-use clap::Parser;
+use clap::{ArgAction, Parser};
 
-use fink_fat_eval::angle::Angle;
+use fink_fat_eval::angular_speed::AngularSpeed;
 use fink_fat_eval::dataset::ingest_config::AlertIngestConfig;
 use fink_fat_eval::dataset::ztf_alerts::ZtfAlertScan;
 use fink_fat_eval::seeding::pairs_sweep::{
@@ -80,12 +80,36 @@ use fink_fat_eval::seeding::plotting::AngularUnit;
 /// - post-hoc threshold sweep,
 /// - diagnostic plot generation.
 ///
-/// All angles are parsed using [`Angle`], allowing human-friendly units
-/// while maintaining an internal representation in radians.
+/// Angular speeds are parsed using [`AngularSpeed`], which reuses [`Angle`] for
+/// the numerator and supports a small set of time units for the denominator.
+/// Internally, values are converted to **radians per day**.
 #[derive(Parser, Debug)]
 #[command(
     name = "pairs-posthoc-sweep",
-    about = "Generate pairs with a large max_sep, then post-hoc sweep sep thresholds and plot metrics."
+    version,
+    about = "Generate pairs with a large max_omega, then post-hoc sweep omega thresholds and plot metrics.",
+    long_about = None,
+    disable_help_subcommand = true,
+    verbatim_doc_comment,
+    after_help = "\
+Examples:
+  pairs-posthoc-sweep alerts.parquet --out-dir out_pairs \\
+    --gen-max-omega \"30 arcsec/min\" \\
+    --sweep-min-omega \"1 arcsec/min\" \\
+    --sweep-steps 40 --logspace
+
+Tips:
+  - Ensure: --gen-max-omega >= max swept omega (otherwise the sweep is biased).
+  - Use --minimal/--no-minimal to control I/O (projection pushdown).
+  - Start with a single night using --nid for quick iteration.
+",
+    help_template = "\
+{before-help}{name} {version}
+{about-with-newline}
+{usage-heading} {usage}
+
+{all-args}{after-help}
+"
 )]
 struct Cli {
     /// Input ZTF/LSST-like alerts Parquet file.
@@ -95,14 +119,20 @@ struct Cli {
     ///
     /// The dataset may contain one or multiple nights; optional filtering
     /// can be applied via `--nid`.
-    #[arg(value_name = "ALERTS.parquet")]
+    #[arg(value_name = "ALERTS.parquet", help_heading = "I/O")]
     parquet: Utf8PathBuf,
 
     /// Output directory where all diagnostic plots will be written.
     ///
     /// The directory is created if it does not exist. Existing files
     /// may be overwritten.
-    #[arg(short, long, default_value = "out_pairs")]
+    #[arg(
+        short,
+        long,
+        default_value = "out_pairs",
+        value_name = "DIR",
+        help_heading = "I/O"
+    )]
     out_dir: Utf8PathBuf,
 
     /// Optional filter on the night identifier (`nid`).
@@ -114,7 +144,7 @@ struct Cli {
     /// - visually inspecting a single night's behavior.
     ///
     /// If omitted, alerts from all nights present in the dataset are used.
-    #[arg(long)]
+    #[arg(long, value_name = "NID", help_heading = "Scan")]
     nid: Option<i32>,
 
     /// Keep only alerts with an associated truth trajectory.
@@ -123,7 +153,7 @@ struct Cli {
     /// discarded at scan time. This simplifies diagnostics by removing
     /// "unknown" regions but may hide areas where truth information is
     /// missing or incomplete.
-    #[arg(long)]
+    #[arg(long, help_heading = "Scan")]
     only_truth: bool,
 
     /// Use a minimal column projection when scanning the Parquet file.
@@ -133,7 +163,14 @@ struct Cli {
     ///
     /// This should almost always be enabled unless additional columns
     /// are explicitly needed for custom analysis.
-    #[arg(long, default_value_t = true)]
+    ///
+    /// Disable with `--no-minimal`.
+    #[arg(
+        long,
+        default_value_t = true,
+        action = ArgAction::Set,
+        help_heading = "Scan"
+    )]
     minimal: bool,
 
     /// Maximum allowed time difference Δt for pair generation (days, TT).
@@ -143,40 +180,74 @@ struct Cli {
     ///
     /// This parameter is *not* swept post-hoc: changing it requires
     /// regenerating the pair superset.
-    #[arg(long, default_value_t = 0.06)]
+    #[arg(
+        long,
+        default_value_t = 0.06,
+        value_name = "DAYS",
+        help_heading = "Pair generation"
+    )]
     max_dt: f64,
 
-    /// Maximum angular separation used to generate the pair superset.
+    /// Maximum angular speed used to generate the pair superset.
     ///
-    /// This value must be **greater than or equal to** the maximum separation
+    /// Pairs are generated with the kinematic cut:
+    /// `sep(a,b) <= omega_max * dt(a,b)`.
+    ///
+    /// This value must be **greater than or equal to** the maximum omega
     /// threshold tested during the post-hoc sweep.
     ///
     /// A larger value increases completeness of the superset but may
     /// significantly increase runtime and memory usage.
-    #[arg(long, default_value = "0.01 rad")]
-    gen_max_sep: Angle,
-
-    /// Minimum angular separation threshold for the post-hoc sweep.
     ///
-    /// The sweep evaluates cuts of the form `sep <= thr` starting from
-    /// this minimum value up to `--gen-max-sep`.
-    #[arg(long, default_value = "1e-5 rad")]
-    sweep_min_sep: Angle,
+    /// Examples:
+    /// - "10 arcsec/hour"
+    /// - "30 arcsec/min"
+    /// - "0.02 rad/day"
+    #[arg(
+        long,
+        default_value = "30 arcsec/min",
+        value_name = "OMEGA",
+        help_heading = "Pair generation",
+        long_help = "Maximum angular speed used to generate the pair superset.\n\
+Pairs are generated with: sep(a,b) <= omega_max * dt(a,b).\n\
+This value must be >= the maximum swept omega (otherwise the sweep is biased).\n\
+Examples: \"10 arcsec/hour\", \"30 arcsec/min\", \"0.02 rad/day\"."
+    )]
+    gen_max_omega: AngularSpeed,
 
-    /// Number of separation thresholds evaluated in the sweep.
+    /// Minimum angular-speed threshold for the post-hoc sweep.
+    ///
+    /// The sweep evaluates cuts of the form `sep <= omega * dt` starting from
+    /// this minimum value up to `--gen-max-omega`.
+    #[arg(
+        long,
+        default_value = "1 arcsec/min",
+        value_name = "OMEGA",
+        help_heading = "Sweep"
+    )]
+    sweep_min_omega: AngularSpeed,
+
+    /// Number of omega thresholds evaluated in the sweep.
     ///
     /// This controls the resolution of the tradeoff curve:
     /// - too small → coarse diagnostics,
     /// - too large → diminishing returns and longer runtime.
-    #[arg(long, default_value_t = 40)]
+    #[arg(long, default_value_t = 40, value_name = "N", help_heading = "Sweep")]
     sweep_steps: usize,
 
-    /// Use logarithmic spacing for the separation threshold sweep.
+    /// Use logarithmic spacing for the omega threshold sweep.
     ///
     /// Log spacing is strongly recommended when thresholds span several
     /// orders of magnitude, as it provides better resolution at small
-    /// separations where performance often changes rapidly.
-    #[arg(long, default_value_t = true)]
+    /// omega where performance often changes rapidly.
+    ///
+    /// Disable with `--no-logspace`.
+    #[arg(
+        long,
+        default_value_t = true,
+        action = ArgAction::Set,
+        help_heading = "Sweep"
+    )]
     logspace: bool,
 
     /// Maximum allowed flux difference between alerts in a pair.
@@ -184,7 +255,12 @@ struct Cli {
     /// This parameter controls photometric gating during pair generation.
     /// Setting it to a very large value effectively disables flux-based
     /// filtering.
-    #[arg(long, default_value_t = 1.0e9)]
+    #[arg(
+        long,
+        default_value_t = 1.0e9,
+        value_name = "FLUX",
+        help_heading = "Pair generation"
+    )]
     max_flux_difference: f32,
 
     /// Allow pairs formed by alerts falling in the same time bin.
@@ -192,7 +268,7 @@ struct Cli {
     /// When disabled, pairs must belong to strictly different time bins,
     /// which can reduce false positives at the cost of missing very
     /// closely spaced detections.
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = false, help_heading = "Pair generation")]
     allow_same_timebin: bool,
 
     /// HEALPix depth used for spatial candidate binning.
@@ -200,7 +276,12 @@ struct Cli {
     /// Higher values correspond to smaller sky cells:
     /// - larger depth → fewer spatial candidates per cell,
     /// - smaller depth → more candidates but lower binning overhead.
-    #[arg(long, default_value_t = 8)]
+    #[arg(
+        long,
+        default_value_t = 8,
+        value_name = "DEPTH",
+        help_heading = "Binning"
+    )]
     healpix_depth: u8,
 
     /// Width of uniform time bins (days).
@@ -208,19 +289,24 @@ struct Cli {
     /// This controls the temporal discretization used to limit candidate
     /// searches. Smaller bins reduce temporal fan-out but increase the
     /// number of bins.
-    #[arg(long, default_value_t = 0.01)]
+    #[arg(
+        long,
+        default_value_t = 0.01,
+        value_name = "DAYS",
+        help_heading = "Binning"
+    )]
     time_bin_days: f64,
 
     /// Width of generated plots, in pixels.
     ///
     /// This affects all output figures uniformly.
-    #[arg(long, default_value_t = 1400)]
+    #[arg(long, default_value_t = 1400, value_name = "PX", help_heading = "Plot")]
     width: u32,
 
     /// Height of generated plots, in pixels.
     ///
     /// This affects all output figures uniformly.
-    #[arg(long, default_value_t = 900)]
+    #[arg(long, default_value_t = 900, value_name = "PX", help_heading = "Plot")]
     height: u32,
 
     /// Angular unit used for display in plots.
@@ -228,7 +314,13 @@ struct Cli {
     /// This setting affects axis labels, tick formatting, and legends,
     /// but does not change any internal computations (which are always
     /// performed in radians).
-    #[arg(long, value_enum, default_value_t = AngularUnit::Radian)]
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = AngularUnit::Radian,
+        value_name = "UNIT",
+        help_heading = "Plot"
+    )]
     angular_unit: AngularUnit,
 }
 
@@ -263,8 +355,10 @@ fn main() -> Result<()> {
         ingest: AlertIngestConfig::default(),
 
         max_dt_days: cli.max_dt,
-        gen_max_sep_rad: cli.gen_max_sep.as_radians(),
-        sweep_min_sep_rad: cli.sweep_min_sep.as_radians(),
+
+        // New: omega-based sweep (stored as rad/day)
+        gen_max_angular_speed_rad_per_day: cli.gen_max_omega.as_rad_per_day(),
+        sweep_min_angular_speed_rad_per_day: cli.sweep_min_omega.as_rad_per_day(),
         sweep_steps: cli.sweep_steps,
         logspace: cli.logspace,
 

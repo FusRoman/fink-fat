@@ -157,6 +157,19 @@ impl Default for PairPlotConfig {
     }
 }
 
+/// Kinematic post-hoc cut: keep pair iff sep <= omega * dt.
+/// - sep in radians
+/// - omega in rad/day
+/// - dt in days
+#[inline]
+fn kinematic_keep(sep_rad: f64, dt_days: f64, omega_rad_per_day: f64) -> bool {
+    // Robust: handle dt<=0 gracefully (should not happen for ordered pairs).
+    if !(dt_days > 0.0) {
+        return false;
+    }
+    sep_rad <= omega_rad_per_day * dt_days
+}
+
 /// Return truth id (`trajectory_id`) for alert `id` (may be <= 0).
 #[inline]
 fn tid(store: &AlertStoreWithTruth, id: AlertId) -> i32 {
@@ -629,15 +642,15 @@ pub fn plot_pairs_scatter_dt_sep(
 /// - This is a *post-hoc* sweep: it does not re-run the seeding algorithm.
 /// - Filtering is performed in **radians**. Only the **x-axis display** is converted
 ///   to `cfg.angular_unit`.
-pub fn plot_pairs_tradeoff_vs_sep_threshold(
+pub fn plot_pairs_tradeoff_vs_omega_threshold(
     store: &AlertStoreWithTruth,
     pairs: &Pairs,
     feats: &[PairFeat],
-    thresholds_rad: &[f64],
+    thresholds_omega: &[f64], // rad/day
     out_dir: &Path,
     cfg: &PairPlotConfig,
 ) -> Result<PathBuf> {
-    let out = ensure_out_path(out_dir, "pairs_tradeoff_sep_threshold.png")?;
+    let out = ensure_out_path(out_dir, "pairs_tradeoff_omega_threshold.png")?;
 
     {
         anyhow::ensure!(
@@ -645,46 +658,39 @@ pub fn plot_pairs_tradeoff_vs_sep_threshold(
             "feats and pairs must be aligned"
         );
 
-        let pair_sep: Vec<(Pair, f64)> = pairs
-            .iter()
-            .copied()
-            .zip(feats.iter().map(|f| f.sep_rad)) // radians
-            .collect();
+        // Pre-zip for cheap filtering.
+        let pair_feat: Vec<(Pair, PairFeat)> =
+            pairs.iter().copied().zip(feats.iter().copied()).collect();
 
-        let mut xs_rad = Vec::with_capacity(thresholds_rad.len());
-        let mut prec = Vec::with_capacity(thresholds_rad.len());
-        let mut rec = Vec::with_capacity(thresholds_rad.len());
+        let mut xs = Vec::with_capacity(thresholds_omega.len());
+        let mut prec = Vec::with_capacity(thresholds_omega.len());
+        let mut rec = Vec::with_capacity(thresholds_omega.len());
 
-        for &thr_rad in thresholds_rad {
-            let filtered: Pairs = pair_sep
+        for &omega in thresholds_omega {
+            let filtered: Pairs = pair_feat
                 .iter()
-                .filter(|(_, s_rad)| *s_rad <= thr_rad)
+                .filter(|(_, f)| kinematic_keep(f.sep_rad, f.dt, omega))
                 .map(|(p, _)| *p)
                 .collect();
 
             let m: PairMetrics = pair_metrics(store, &filtered);
-            xs_rad.push(thr_rad);
+            xs.push(omega);
             prec.push(m.precision_on_truth);
             rec.push(m.consecutive_recall);
         }
 
-        // Display conversion for x-axis.
-        let scale = cfg.angular_unit.scale_from_rad();
-        let xs_disp: Vec<f64> = xs_rad.iter().map(|&x| x * scale).collect();
-
-        let x_lo = *xs_disp.first().unwrap_or(&0.0);
-        let x_hi = *xs_disp.last().unwrap_or(&1.0);
+        // Optional: choose an omega display unit? For now keep rad/day on x-axis.
+        let x_lo = *xs.first().unwrap_or(&0.0);
+        let x_hi = *xs.last().unwrap_or(&1.0);
 
         let root = BitMapBackend::new(&out, (cfg.width, cfg.height)).into_drawing_area();
         root.fill(&WHITE)?;
 
-        let title = format!(
-            "Pairs: quality vs separation threshold [{}]",
-            cfg.angular_unit.label()
-        );
-
         let mut chart = ChartBuilder::on(&root)
-            .caption(title, ("sans-serif", 28))
+            .caption(
+                "Pairs: quality vs angular speed threshold (rad/day)",
+                ("sans-serif", 28),
+            )
             .margin(15)
             .x_label_area_size(40)
             .y_label_area_size(60)
@@ -692,16 +698,13 @@ pub fn plot_pairs_tradeoff_vs_sep_threshold(
 
         chart
             .configure_mesh()
-            .x_desc(format!(
-                "separation threshold [{}]",
-                cfg.angular_unit.label()
-            ))
+            .x_desc("angular speed threshold ω [rad/day]")
             .y_desc("ratio")
             .draw()?;
 
         chart
             .draw_series(LineSeries::new(
-                xs_disp.iter().copied().zip(prec.iter().copied()),
+                xs.iter().copied().zip(prec.iter().copied()),
                 &RGBColor(80, 160, 80),
             ))?
             .label("precision_on_truth")
@@ -709,7 +712,7 @@ pub fn plot_pairs_tradeoff_vs_sep_threshold(
 
         chart
             .draw_series(LineSeries::new(
-                xs_disp.iter().copied().zip(rec.iter().copied()),
+                xs.iter().copied().zip(rec.iter().copied()),
                 &RGBColor(80, 80, 220),
             ))?
             .label("consecutive_recall (proxy)")
@@ -720,7 +723,6 @@ pub fn plot_pairs_tradeoff_vs_sep_threshold(
             .border_style(&BLACK)
             .draw()?;
     }
-
     Ok(out)
 }
 
@@ -766,15 +768,15 @@ pub fn plot_pairs_tradeoff_vs_sep_threshold(
 /// * `purity_overall` will typically **decrease** when the threshold increases,
 ///   as more unknown/incorrect pairs are retained.
 /// * `consecutive_recall` will typically **increase** with the threshold.
-pub fn plot_pairs_global_tradeoff_vs_sep_threshold(
+pub fn plot_pairs_global_tradeoff_vs_omega_threshold(
     store: &AlertStoreWithTruth,
     pairs: &Pairs,
     feats: &[PairFeat],
-    thresholds_rad: &[f64],
+    thresholds_omega: &[f64],
     out_dir: &Path,
     cfg: &PairPlotConfig,
 ) -> Result<PathBuf> {
-    let out = ensure_out_path(out_dir, "pairs_global_tradeoff_sep_threshold.png")?;
+    let out = ensure_out_path(out_dir, "pairs_global_tradeoff_omega_threshold.png")?;
 
     {
         anyhow::ensure!(
@@ -782,48 +784,37 @@ pub fn plot_pairs_global_tradeoff_vs_sep_threshold(
             "feats and pairs must be aligned"
         );
 
-        // Keep (Pair, sep_rad) aligned with thresholds.
-        let pair_sep: Vec<(Pair, f64)> = pairs
-            .iter()
-            .copied()
-            .zip(feats.iter().map(|f| f.sep_rad))
-            .collect();
+        let pair_feat: Vec<(Pair, PairFeat)> =
+            pairs.iter().copied().zip(feats.iter().copied()).collect();
 
-        let mut xs_rad = Vec::with_capacity(thresholds_rad.len());
-        let mut purity = Vec::with_capacity(thresholds_rad.len());
-        let mut completeness = Vec::with_capacity(thresholds_rad.len());
+        let mut xs = Vec::with_capacity(thresholds_omega.len());
+        let mut purity = Vec::with_capacity(thresholds_omega.len());
+        let mut completeness = Vec::with_capacity(thresholds_omega.len());
 
-        for &thr_rad in thresholds_rad {
-            let filtered: Pairs = pair_sep
+        for &omega in thresholds_omega {
+            let filtered: Pairs = pair_feat
                 .iter()
-                .filter(|(_, s_rad)| *s_rad <= thr_rad)
+                .filter(|(_, f)| kinematic_keep(f.sep_rad, f.dt, omega))
                 .map(|(p, _)| *p)
                 .collect();
 
             let m: PairMetrics = pair_metrics(store, &filtered);
-
-            xs_rad.push(thr_rad);
+            xs.push(omega);
             purity.push(m.purity_overall);
             completeness.push(m.consecutive_recall);
         }
 
-        // Display conversion for x-axis.
-        let scale = cfg.angular_unit.scale_from_rad();
-        let xs_disp: Vec<f64> = xs_rad.iter().map(|&x| x * scale).collect();
-
-        let x_lo = *xs_disp.first().unwrap_or(&0.0);
-        let x_hi = *xs_disp.last().unwrap_or(&1.0);
+        let x_lo = *xs.first().unwrap_or(&0.0);
+        let x_hi = *xs.last().unwrap_or(&1.0);
 
         let root = BitMapBackend::new(&out, (cfg.width, cfg.height)).into_drawing_area();
         root.fill(&WHITE)?;
 
-        let title = format!(
-            "Pairs: global purity & completeness vs separation threshold [{}]",
-            cfg.angular_unit.label()
-        );
-
         let mut chart = ChartBuilder::on(&root)
-            .caption(title, ("sans-serif", 28))
+            .caption(
+                "Pairs: global purity & completeness vs ω threshold (rad/day)",
+                ("sans-serif", 28),
+            )
             .margin(15)
             .x_label_area_size(40)
             .y_label_area_size(60)
@@ -831,26 +822,21 @@ pub fn plot_pairs_global_tradeoff_vs_sep_threshold(
 
         chart
             .configure_mesh()
-            .x_desc(format!(
-                "separation threshold [{}]",
-                cfg.angular_unit.label()
-            ))
+            .x_desc("angular speed threshold ω [rad/day]")
             .y_desc("ratio")
             .draw()?;
 
-        // Global purity (overall): green
         chart
             .draw_series(LineSeries::new(
-                xs_disp.iter().copied().zip(purity.iter().copied()),
+                xs.iter().copied().zip(purity.iter().copied()),
                 &RGBColor(80, 160, 80),
             ))?
             .label("purity_overall (global)")
             .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &RGBColor(80, 160, 80)));
 
-        // Global completeness proxy: blue
         chart
             .draw_series(LineSeries::new(
-                xs_disp.iter().copied().zip(completeness.iter().copied()),
+                xs.iter().copied().zip(completeness.iter().copied()),
                 &RGBColor(80, 80, 220),
             ))?
             .label("consecutive_recall (global completeness proxy)")
@@ -861,7 +847,6 @@ pub fn plot_pairs_global_tradeoff_vs_sep_threshold(
             .border_style(&BLACK)
             .draw()?;
     }
-
     Ok(out)
 }
 
@@ -897,51 +882,47 @@ pub fn plot_pairs_global_tradeoff_vs_sep_threshold(
 /// * This is **post-hoc**: it does not re-run seeding.
 /// * The y-axis uses `log10(n_pairs_kept)` to remain readable across orders of magnitude.
 ///   If `n_pairs_kept == 0`, we plot 0.0 by convention.
-pub fn plot_pairs_cost_vs_sep_threshold(
+pub fn plot_pairs_cost_vs_omega_threshold(
     store: &AlertStoreWithTruth,
     pairs: &Pairs,
     feats: &[PairFeat],
-    thresholds_rad: &[f64],
+    thresholds_omega: &[f64],
     out_dir: &Path,
     cfg: &PairPlotConfig,
 ) -> Result<PathBuf> {
-    let out = ensure_out_path(out_dir, "pairs_cost_vs_sep_threshold.png")?;
-
+    let out = ensure_out_path(out_dir, "pairs_cost_vs_omega_threshold.png")?;
     {
         anyhow::ensure!(
             feats.len() == pairs.len(),
             "feats and pairs must be aligned"
         );
 
-        // Pre-zip for cheap filtering by sep.
-        let pair_sep: Vec<(Pair, f64)> = pairs
-            .iter()
-            .copied()
-            .zip(feats.iter().map(|f| f.sep_rad))
-            .collect();
+        let pair_feat: Vec<(Pair, PairFeat)> =
+            pairs.iter().copied().zip(feats.iter().copied()).collect();
 
         let n_alerts = store.store.alerts.len().max(1) as f64;
 
-        let mut xs_rad = Vec::with_capacity(thresholds_rad.len());
-        let mut log10_n_pairs = Vec::with_capacity(thresholds_rad.len());
-        let mut pairs_per_alert = Vec::with_capacity(thresholds_rad.len());
+        let mut xs = Vec::with_capacity(thresholds_omega.len());
+        let mut log10_n_pairs = Vec::with_capacity(thresholds_omega.len());
 
-        for &thr_rad in thresholds_rad {
-            let n_kept = pair_sep.iter().filter(|(_, s)| *s <= thr_rad).count();
+        for &omega in thresholds_omega {
+            let n_kept = pair_feat
+                .iter()
+                .filter(|(_, f)| kinematic_keep(f.sep_rad, f.dt, omega))
+                .count();
+
             let n_kept_f = n_kept as f64;
 
-            xs_rad.push(thr_rad);
+            xs.push(omega);
             log10_n_pairs.push(if n_kept == 0 { 0.0 } else { n_kept_f.log10() });
-            pairs_per_alert.push(n_kept_f / n_alerts);
+
+            let _pairs_per_alert = n_kept_f / n_alerts;
+            // (Optionnel) tu peux aussi tracer pairs_per_alert sur un 2e axe plus tard.
         }
 
-        // Display conversion for x-axis.
-        let scale = cfg.angular_unit.scale_from_rad();
-        let xs_disp: Vec<f64> = xs_rad.iter().map(|&x| x * scale).collect();
-        let x_lo = *xs_disp.first().unwrap_or(&0.0);
-        let x_hi = *xs_disp.last().unwrap_or(&1.0);
+        let x_lo = *xs.first().unwrap_or(&0.0);
+        let x_hi = *xs.last().unwrap_or(&1.0);
 
-        // y-range: derive from data with a small pad.
         let y0_min = log10_n_pairs.iter().copied().fold(f64::INFINITY, f64::min);
         let y0_max = log10_n_pairs
             .iter()
@@ -960,13 +941,8 @@ pub fn plot_pairs_cost_vs_sep_threshold(
         let root = BitMapBackend::new(&out, (cfg.width, cfg.height)).into_drawing_area();
         root.fill(&WHITE)?;
 
-        let title = format!(
-            "Pairs: cost vs separation threshold [{}]",
-            cfg.angular_unit.label()
-        );
-
         let mut chart = ChartBuilder::on(&root)
-            .caption(title, ("sans-serif", 28))
+            .caption("Pairs: cost vs ω threshold (rad/day)", ("sans-serif", 28))
             .margin(15)
             .x_label_area_size(40)
             .y_label_area_size(70)
@@ -974,30 +950,141 @@ pub fn plot_pairs_cost_vs_sep_threshold(
 
         chart
             .configure_mesh()
-            .x_desc(format!(
-                "separation threshold [{}]",
-                cfg.angular_unit.label()
-            ))
+            .x_desc("angular speed threshold ω [rad/day]")
             .y_desc("log10(n_pairs_kept)")
             .draw()?;
 
-        // Curve: log10(n_pairs_kept)
         chart
             .draw_series(LineSeries::new(
-                xs_disp.iter().copied().zip(log10_n_pairs.iter().copied()),
+                xs.iter().copied().zip(log10_n_pairs.iter().copied()),
                 &BLACK,
             ))?
             .label("log10(n_pairs_kept)")
             .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &BLACK));
-
-        // Annotate pairs_per_alert in legend only (optional): we keep plot simple.
-        // If you want it as a second curve, we can add a second axis later.
 
         chart
             .configure_series_labels()
             .border_style(&BLACK)
             .draw()?;
     }
+    Ok(out)
+}
+
+/// Plot a histogram of angular speed ω = sep / Δt, split by truth label.
+///
+/// Output
+/// ------
+/// Writes `pairs_omega_hist.png`.
+///
+/// Notes
+/// -----
+/// - ω is computed as `sep_rad / dt_days` (rad/day).
+/// - Pairs with `dt <= 0` or non-finite values are ignored.
+/// - Only the **display unit** changes with `cfg.angular_unit`:
+///   the x-axis is in `{unit}/day` (e.g. `arcsec/day`), while internal
+///   computation remains rad/day.
+pub fn plot_pairs_omega_hist(
+    feats: &[PairFeat],
+    out_dir: &Path,
+    cfg: &PairPlotConfig,
+) -> Result<PathBuf> {
+    let out = ensure_out_path(out_dir, "pairs_omega_hist.png")?;
+
+    {
+        let scale = cfg.angular_unit.scale_from_rad(); // angle unit per rad
+
+        // Helper: compute ω in display units (unit/day), skip dt<=0.
+        let omega_disp = |f: &PairFeat| -> Option<f64> {
+            if !(f.dt > 0.0) {
+                return None;
+            }
+            let w = (f.sep_rad * scale) / f.dt;
+            if w.is_finite() { Some(w) } else { None }
+        };
+
+        let w_true: Vec<f64> = feats
+            .iter()
+            .filter(|f| f.label == PairTruthLabel::True)
+            .filter_map(omega_disp)
+            .collect();
+
+        let w_cont: Vec<f64> = feats
+            .iter()
+            .filter(|f| f.label == PairTruthLabel::Contaminated)
+            .filter_map(omega_disp)
+            .collect();
+
+        let w_unk: Vec<f64> = feats
+            .iter()
+            .filter(|f| f.label == PairTruthLabel::Unknown)
+            .filter_map(omega_disp)
+            .collect();
+
+        let all_w: Vec<f64> = feats.iter().filter_map(omega_disp).collect();
+        let (lo, hi) = infer_range(&all_w);
+
+        // Reuse sep_bins for ω (or add omega_bins to cfg if you prefer).
+        let h_true = histogram(&w_true, cfg.sep_bins, lo, hi);
+        let h_cont = histogram(&w_cont, cfg.sep_bins, lo, hi);
+        let h_unk = histogram(&w_unk, cfg.sep_bins, lo, hi);
+
+        let y_max = *h_true
+            .iter()
+            .chain(&h_cont)
+            .chain(&h_unk)
+            .max()
+            .unwrap_or(&1) as i32;
+
+        let root = BitMapBackend::new(&out, (cfg.width, cfg.height)).into_drawing_area();
+        root.fill(&WHITE)?;
+
+        let unit = cfg.angular_unit.label();
+        let title = format!("Pairs: angular speed histogram (ω in {unit}/day) by truth label");
+
+        let mut chart = ChartBuilder::on(&root)
+            .caption(title, ("sans-serif", 28))
+            .margin(15)
+            .x_label_area_size(40)
+            .y_label_area_size(60)
+            .build_cartesian_2d(lo..hi, 0..(y_max + 1))?;
+
+        chart
+            .configure_mesh()
+            .x_desc(format!("ω = sep / Δt [{unit}/day]"))
+            .y_desc("count")
+            .draw()?;
+
+        draw_hist_series(
+            &mut chart,
+            &h_unk,
+            lo,
+            hi,
+            &RGBColor(160, 160, 160).mix(0.35),
+            "unknown",
+        )?;
+        draw_hist_series(
+            &mut chart,
+            &h_cont,
+            lo,
+            hi,
+            &RGBColor(220, 80, 80).mix(0.35),
+            "contaminated",
+        )?;
+        draw_hist_series(
+            &mut chart,
+            &h_true,
+            lo,
+            hi,
+            &RGBColor(80, 160, 80).mix(0.35),
+            "true",
+        )?;
+
+        chart
+            .configure_series_labels()
+            .border_style(&BLACK)
+            .draw()?;
+    }
+
     Ok(out)
 }
 

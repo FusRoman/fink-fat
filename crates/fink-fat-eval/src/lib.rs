@@ -2,6 +2,8 @@ pub mod dataset;
 pub mod seeding;
 pub mod angle;
 pub mod grid;
+pub mod angular_speed;
+
 
 
 /// Replace NaN/Inf by a fallback.

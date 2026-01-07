@@ -1,90 +1,69 @@
 //! # Pair Parameters
 //!
 //! This section defines thresholds for **pair generation**: the minimal
-//! seeding unit consisting of two alerts `(a, b)` close in time, on-sky
-//! separation, and brightness. Pairs form the first step of trajectory
-//! construction in the Fink-FAT pipeline.
+//! seeding unit consisting of two alerts `(a, b)` close in time and brightness,
+//! and consistent with a maximum **angular speed**.
 //!
 //! ## Overview
 //! -----------
 //! * **Temporal window** (`max_dt`) – how far apart in time two alerts
 //!   can be (in days, TT).
-//! * **Angular separation** (`max_sep`) – maximum on-sky distance between
-//!   alerts, in radians (great-circle distance).
+//! * **Angular speed** (`max_angular_speed`) – maximum allowed on-sky angular
+//!   speed, in **radians per day**. The geometric constraint becomes
+//!   `ang_sep(a, b) / Δt ≤ max_angular_speed`.
 //! * **Photometric similarity** (`max_flux_difference`) – restricts pairs
 //!   to alerts of comparable brightness.
 //! * **Time-bin constraints** (`allow_same_timebin`) – whether alerts from
 //!   the same temporal bucket may form a pair.
 //!
+//! ## Derived cap for spatial search
+//! -------------------------------
+//! The bucket-neighborhood search needs a maximum separation radius. We derive
+//! a conservative cap:
+//!
+//! `sep_cap = max_angular_speed * max_dt`
+//!
+//! This cap is used only to decide which spatial buckets to visit; the true
+//! acceptance criterion remains the per-candidate speed check.
+//!
 //! ## Typical values
 //! -----------------
 //! For ZTF/LSST intra-night cadence, defaults are tuned to capture most
 //! plausible moving-object pairs while limiting contamination:
-//! * `max_dt = 0.06 d` (~86.4 min, typical revisit).
-//! * `max_sep = 0.003 rad` (~10.3 arcmin).
-//! * `max_flux_difference = 5.0` (~1.75 mag).
-//! * `allow_same_timebin = true`.
+//! * `max_dt = 0.06 d` (~86.4 min)
+//! * `max_angular_speed ≈ 0.05 rad/d` (~10 arcmin over 0.06 d; order-of-magnitude)
+//! * `max_flux_difference = 5.0` (~1.75 mag)
+//! * `allow_same_timebin = true`
 //!
 //! ## Errors
 //! ---------
 //! Validation can fail with:
-//! * [`ParamError::NonFiniteOrNegativeTime`] – invalid `max_dt`.
-//! * [`ParamError::NonFiniteOrNegativeAngle`] – invalid `max_sep`.
-//! * [`ParamError::NonFiniteOrNegativePhotometry`] – invalid `max_flux_difference`.
+//! * [`SeedError::NonFiniteOrNegativeTime`] – invalid `max_dt`.
+//! * [`SeedError::NonFiniteOrNegativeAngle`] – invalid `max_angular_speed`.
+//! * [`SeedError::NonFiniteOrNegativePhotometry`] – invalid `max_flux_difference`.
 //!
 //! ## See also
 //! -----------
 //! * [`BinningParams`](crate::params::binning_params::BinningParams) – controls spatial/temporal bucket sizes.
 //! * [`TripletParams`](crate::params::triplet_params::TripletParams) – extends pairs into triplets for initial orbit seeds.
 
-use crate::{MjdTt, Radians, error::SeedError};
+use crate::{MjdTt, error::SeedError};
 
 /// Parameters controlling **pair generation** between alerts `(a, b)`.
 ///
 /// A "pair" is the minimal seed of a possible trajectory, defined by two
-/// distinct alerts close in time, space, and photometry. These thresholds
-/// filter out unphysical or unlikely combinations while retaining
-/// plausible asteroid candidates.
-///
-/// Overview
-/// --------
-/// * **Temporal proximity** (`max_dt`) – restricts how far apart in time
-///   the two alerts can be.
-/// * **Angular separation** (`max_sep`) – maximum allowed on-sky distance
-///   between the alerts (great-circle separation).
-/// * **Photometric consistency** (`max_flux_difference`) – restricts pairs
-///   to alerts of comparable brightness (in flux units or Δmag).
-/// * **Bin constraints** (`allow_same_timebin`) – whether two alerts from
-///   the same temporal bucket may still form a valid pair.
-///
-/// Units
-/// -----
-/// * `max_dt`: **days (TT)**, must be ≥ 0 and finite.
-/// * `max_sep`: **radians**, must be ≥ 0 and finite.
-/// * `max_flux_difference`: arbitrary flux scale (dimensionless), must be ≥ 0.
-/// * `allow_same_timebin`: boolean flag.
-///
-/// Defaults
-/// --------
-/// Tuned for **intra-night LSST/ZTF cadence**:
-/// * `max_dt` = 0.06 days (~86.4 min, typical LSST revisit window).
-/// * `max_sep` = 0.003 rad (~10.3 arcmin, compatible with fast movers).
-/// * `max_flux_difference` = 5.0 (~1.75 mag, generous to account for noise).
-/// * `allow_same_timebin` = true.
-///
-/// Errors
-/// ------
-/// * [`ParamError::NonFiniteOrNegativeTime`] if `max_dt` ≤ 0 or not finite.
-/// * [`ParamError::NonFiniteOrNegativeAngle`] if `max_sep` ≤ 0 or not finite.
-/// * [`ParamError::NonFiniteOrNegativePhotometry`] if `max_flux_difference` ≤ 0
-///   or not finite.
+/// distinct alerts close in time, consistent with a maximum angular speed,
+/// and with compatible photometry.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PairConfig {
     /// Maximum allowed Δt between alerts a and b (days, TT).
     pub max_dt: MjdTt,
 
-    /// Maximum allowed angular separation between alerts (radians).
-    pub max_sep: Radians,
+    /// Maximum allowed angular speed (radians per day).
+    ///
+    /// A candidate pair `(a, b)` must satisfy:
+    /// `ang_sep(a, b) / (t_b - t_a) ≤ max_angular_speed`.
+    pub max_angular_speed: f64,
 
     /// Maximum allowed photometric difference (e.g. flux units or Δmag).
     pub max_flux_difference: f32,
@@ -99,13 +78,13 @@ impl Default for PairConfig {
     /// Defaults
     /// --------
     /// * `max_dt` = 0.06 days (~86.4 min)
-    /// * `max_sep` = 0.003 rad (~10.3 arcmin)
+    /// * `max_angular_speed` ≈ 0.05 rad/day (order-of-magnitude)
     /// * `max_flux_difference` = 5.0
     /// * `allow_same_timebin` = true
     fn default() -> Self {
         Self {
             max_dt: 0.06,
-            max_sep: 3.0e-3,
+            max_angular_speed: 5.0e-2,
             max_flux_difference: 5.0,
             allow_same_timebin: true,
         }
@@ -114,17 +93,15 @@ impl Default for PairConfig {
 
 impl PairConfig {
     /// Validate internal consistency and numeric ranges.
-    ///
-    /// Return
-    /// ------
-    /// * `Ok(())` if valid.
-    /// * `Err(ParamError)` if any value is invalid or non-finite.
     pub fn validate(&self) -> Result<(), SeedError> {
         if !self.max_dt.is_finite() || self.max_dt < 0.0 {
             return Err(SeedError::NonFiniteOrNegativeTime("pairs.max_dt"));
         }
-        if !self.max_sep.is_finite() || self.max_sep < 0.0 {
-            return Err(SeedError::NonFiniteOrNegativeAngle("pairs.max_sep"));
+        if !self.max_angular_speed.is_finite() || self.max_angular_speed < 0.0 {
+            // Reuse the "angle" error kind for this angular-rate parameter.
+            return Err(SeedError::NonFiniteOrNegativeAngle(
+                "pairs.max_angular_speed",
+            ));
         }
         if !self.max_flux_difference.is_finite() || self.max_flux_difference < 0.0 {
             return Err(SeedError::NonFiniteOrNegativePhotometry(
@@ -134,19 +111,20 @@ impl PairConfig {
         Ok(())
     }
 
+    /// Derived conservative maximum separation (radians) used for spatial neighborhood search:
+    /// `sep_cap = max_angular_speed * max_dt`.
+    #[inline]
+    pub fn sep_cap(&self) -> f64 {
+        (self.max_angular_speed * self.max_dt).max(0.0)
+    }
+
     /// Start building a [`PairConfig`] with chainable setters.
-    ///
-    /// See also
-    /// --------
-    /// * [`PairConfigBuilder`] for builder pattern usage.
     pub fn builder() -> PairConfigBuilder {
         PairConfigBuilder::default()
     }
 }
 
 /// Builder for [`PairConfig`].
-///
-/// Provides a chainable API to construct and validate pair thresholds.
 #[derive(Clone, Debug, Default)]
 pub struct PairConfigBuilder {
     params: PairConfig,
@@ -159,9 +137,9 @@ impl PairConfigBuilder {
         self
     }
 
-    /// Set maximum angular separation between alerts (radians).
-    pub fn max_sep(mut self, v: Radians) -> Self {
-        self.params.max_sep = v;
+    /// Set maximum angular speed (radians per day).
+    pub fn max_angular_speed(mut self, v: f64) -> Self {
+        self.params.max_angular_speed = v;
         self
     }
 
@@ -178,15 +156,10 @@ impl PairConfigBuilder {
     }
 
     /// Finalize builder and validate constraints.
-    ///
-    /// Return
-    /// ------
-    /// * `Ok(PairConfig)` if all values are valid.
-    /// * `Err(ParamError)` if validation fails.
     pub fn build(self) -> Result<PairConfig, SeedError> {
         let p = PairConfig {
             max_dt: self.params.max_dt,
-            max_sep: self.params.max_sep,
+            max_angular_speed: self.params.max_angular_speed,
             max_flux_difference: self.params.max_flux_difference,
             allow_same_timebin: self.params.allow_same_timebin,
         };

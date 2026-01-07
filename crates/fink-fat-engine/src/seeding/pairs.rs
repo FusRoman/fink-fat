@@ -3,16 +3,16 @@
 //! Overview
 //! --------
 //! This module constructs ordered pairs `(a, b)` of detections that satisfy
-//! simple **temporal**, **angular**, and **photometric** constraints:
+//! simple **temporal**, **kinematic**, and **photometric** constraints:
 //!
 //! - strictly increasing times: `t_b > t_a`,
 //! - time separation within `max_dt`,
-//! - angular separation ≤ `max_sep` (via unit-vector dot product),
+//! - **angular speed constraint**: `ang_sep(a, b) / (t_b - t_a) ≤ max_angular_speed`,
 //! - flux similarity (`|flux(a) − flux(b)| ≤ max_flux_difference`).
 //!
-//! Pairs form the foundational building block of the seeding pipeline.  
-//! Higher-order seeds (triplets, multi-night tracks, graph edges, etc.) are
-//! constructed on top of these pairs.
+//! Compared to a fixed separation cut (`max_sep`), the angular-speed constraint
+//! better matches asteroid-like motion: allowed separation scales linearly with
+//! Δt (a "wedge" in (Δt, Δθ) space).
 //!
 //! Algorithmic structure
 //! ---------------------
@@ -57,7 +57,7 @@ use crate::{
 /// Overview
 /// --------
 /// A pair captures a short-baseline displacement consistent with asteroid-like
-/// motion. Only pairs satisfying time-ordering and geometric/photometric
+/// motion. Only pairs satisfying time-ordering and kinematic/photometric
 /// constraints are produced.
 ///
 /// Fields
@@ -318,33 +318,16 @@ fn cached_time_targets<'a, Bt: TimeBinner>(
 
 /// Scan a single candidate bucket for alert pairs `(a, b)` starting from anchor `a`.
 ///
-/// Hot loop
-/// --------
-/// This function implements the performance-critical inner loop:
+/// Kinematic constraint
+/// --------------------
+/// Let `dt = t_b - t_a` (days, > 0) and `sep = ang_sep(a, b)` (radians).
+/// A candidate passes iff:
 ///
-/// - Candidates are sorted by time.
-/// - A binary search skips all alerts with `t_b ≤ t_a`.
-/// - Sequential scan continues until `t_b > t_a + max_dt`.
-/// - Angular and flux cuts are applied.
+/// `sep / dt ≤ max_angular_speed`  ⇔  `sep ≤ max_angular_speed * dt`
 ///
-/// Arguments
-/// ---------
-/// * `bucket_index` – Global spatio-temporal index containing all buckets.
-/// * `tables` – Lookup tables for time, flux, and unit vectors.
-/// * `anchor` – Precomputed anchor context.
-/// * `config` – Pair configuration.
-/// * `spatial_key` – Spatial key of the bucket.
-/// * `time_bin` – Time key of the bucket.
-/// * `cos_angle_threshold` – `cos(max_sep)`; fast angular threshold.
-/// * `pairs_out` – Output accumulator.
-///
-/// Return
-/// ------
-/// None explicitly; valid pairs are appended to `pairs_out`.
-///
-/// Notes
-/// -----
-/// Allocation-free, branch-minimal inner loop for maximal throughput.
+/// We implement this via dot products:
+/// `cos(sep) = dot(u_a, u_b)` and require:
+/// `dot ≥ cos(max_angular_speed * dt)`.
 #[inline]
 fn scan_bucket_for_anchor(
     bucket_index: &BucketIndex<AlertId>,
@@ -353,7 +336,6 @@ fn scan_bucket_for_anchor(
     config: &PairConfig,
     space_key: SpatialKey,
     time_bin: TimeBin,
-    cos_angle_threshold: f64,
     pairs_out: &mut Pairs,
 ) {
     // Locate bucket.
@@ -390,12 +372,19 @@ fn scan_bucket_for_anchor(
             continue;
         }
 
-        // Flux + angular tests.
+        // Flux test.
         let flux_ok = (anchor.anchor_flux - fluxes_by_id[candidate_id.idx()]).abs()
             <= config.max_flux_difference;
 
-        let angular_ok = dot3(anchor.anchor_unit_vector, vectors_by_id[candidate_id.idx()])
-            >= cos_angle_threshold;
+        // Angular-speed test.
+        let dt = t - anchor.anchor_time; // dt > 0 because of lower_bound_gt_ids
+        // Allowed separation = omega * dt (radians). Clamp to π to avoid "always true"
+        // behavior for absurdly large omega.
+        let max_sep_dt = (config.max_angular_speed * dt).min(std::f64::consts::PI);
+        let cos_thresh = max_sep_dt.cos();
+
+        let angular_ok =
+            dot3(anchor.anchor_unit_vector, vectors_by_id[candidate_id.idx()]) >= cos_thresh;
 
         if flux_ok && angular_ok {
             pairs_out.push((anchor.anchor_id, candidate_id).into());
@@ -409,15 +398,13 @@ fn scan_bucket_for_anchor(
 
 /// Generate all valid `(a, b)` pairs according to the pair-generation rules.
 ///
-/// Overview
-/// --------
-/// For each anchor alert `a`, this function inspects only the relevant spatial
-/// and temporal neighborhoods (determined by bucket indexing). Each candidate
-/// detection `b` must satisfy:
+/// Constraints
+/// -----------
+/// Each candidate detection `b` must satisfy:
 ///
 /// 1. `t_b > t_a`  
 /// 2. `t_b − t_a ≤ max_dt`  
-/// 3. `ang_sep(a, b) ≤ max_sep`  
+/// 3. `ang_sep(a, b) / (t_b − t_a) ≤ max_angular_speed`  
 /// 4. `|flux(a) − flux(b)| ≤ max_flux_difference`  
 ///
 /// Arguments
@@ -434,9 +421,9 @@ fn scan_bucket_for_anchor(
 ///
 /// Notes
 /// -----
-/// - No panics in normal paths (assertions only in debug mode).
-/// - Designed to scale to millions of alerts per LSST night.
-/// - Allocation-free inner loops.
+/// Spatial neighbor expansion uses a derived cap on angular separation:
+/// `sep_cap = max_angular_speed * max_dt`, so we only visit buckets that could
+/// possibly contain valid matches.
 pub fn generate_pairs<Bs: SpatialBinner, Bt: TimeBinner>(
     bucket_index: &BucketIndex<AlertId>,
     alerts: &[Alert],
@@ -452,8 +439,9 @@ pub fn generate_pairs<Bs: SpatialBinner, Bt: TimeBinner>(
 
     let lookup_tables = PairLookupTables::build(alerts);
 
-    let spatial_search_radius = config.max_sep + spatial_binner.cell_radius();
-    let cos_angle_threshold = config.max_sep.cos();
+    // Spatial search radius: cap + cell radius.
+    let sep_cap = (config.max_angular_speed * config.max_dt).max(0.0);
+    let spatial_search_radius = sep_cap + spatial_binner.cell_radius();
 
     let mut spatial_neighbor_cache = AHashMap::<SpatialKey, Vec<SpatialKey>>::new();
     let mut timebin_target_cache = AHashMap::<TimeBin, Vec<TimeBin>>::new();
@@ -493,7 +481,6 @@ pub fn generate_pairs<Bs: SpatialBinner, Bt: TimeBinner>(
                         config,
                         target_space_key,
                         target_time_bin,
-                        cos_angle_threshold,
                         &mut pairs_out,
                     );
                 }
@@ -595,7 +582,7 @@ mod pair_gen_tests {
         let spatial_binner = HealpixBinner::new(10); // NSIDE=1024
         let time_binner = UniformTimeBinner::new(60000.0, 10.0 / 1440.0); // 10 min bins
 
-        // Two alerts ~5" apart and 8 min apart -> should match (Δt<=10 min, sep<=10").
+        // Two alerts ~5" apart and 8 min apart.
         let t0 = 60000.10;
         let dec0 = 0.2;
         let a1 = mk_alert(0_u32.into(), 1.0, dec0, t0, 1, 1000.0);
@@ -614,11 +601,16 @@ mod pair_gen_tests {
         let alerts = vec![a1.clone(), a2.clone(), a3.clone()];
         let bucket_index = build_bucket_index(&alerts, &spatial_binner, &time_binner);
 
+        // Allow up to ~10" over 10 minutes.
+        let max_dt = 10.0 / 1440.0;
+        let max_sep = arcsec_to_rad(10.0);
+        let omega = max_sep / max_dt;
+
         let config = PairConfig {
-            max_dt: 10.0 / 1440.0,        // 10 min
-            max_sep: arcsec_to_rad(10.0), // 10"
+            max_dt,
+            max_angular_speed: omega,
             allow_same_timebin: false,
-            max_flux_difference: 10.0, // large
+            max_flux_difference: 10.0,
         };
 
         let pairs = generate_pairs(
@@ -659,9 +651,13 @@ mod pair_gen_tests {
         let alerts = vec![a1.clone(), a2.clone()];
         let bucket_index = build_bucket_index(&alerts, &spatial_binner, &time_binner);
 
+        let max_dt = 5.0 / 1440.0;
+        let max_sep = arcsec_to_rad(4.0);
+        let omega = max_sep / max_dt * 1.1; // Slightly generous.
+
         let config_no_same = PairConfig {
-            max_dt: 30.0 / 1440.0,       // 30 min
-            max_sep: arcsec_to_rad(8.0), // 8"
+            max_dt,
+            max_angular_speed: omega,
             allow_same_timebin: false,
             max_flux_difference: 10.0,
         };
@@ -677,8 +673,8 @@ mod pair_gen_tests {
         assert!(pairs_no_same.is_empty());
 
         let config_same = PairConfig {
-            max_dt: 30.0 / 1440.0,       // 30 min
-            max_sep: arcsec_to_rad(8.0), // 8"
+            max_dt,
+            max_angular_speed: omega,
             allow_same_timebin: true,
             max_flux_difference: 10.0,
         };
@@ -697,7 +693,8 @@ mod pair_gen_tests {
         assert_eq!(j, 1_u32.into());
     }
 
-    /// Ensure all pairs respect time ordering and contain distinct ids.
+    /// Ensure all pairs respect time ordering, distinct ids,
+    /// and the angular-speed constraint.
     #[test]
     fn pairs_time_order_and_distinct_ids() {
         let spatial_binner = HealpixBinner::new(8);
@@ -727,9 +724,25 @@ mod pair_gen_tests {
         let alerts = vec![a0, a1, a2];
         let bucket_index = build_bucket_index(&alerts, &spatial_binner, &time_binner);
 
+        // ------------------------------------------------------------------
+        // Kinematic limits:
+        // - a0 → a1 : 5" in 5 min
+        // - a0 → a2 : 9" in 10 min  (worst-case sep/dt)
+        // ------------------------------------------------------------------
+        let dt01 = 5.0 / 1440.0;
+        let dt02 = 10.0 / 1440.0;
+
+        let sep01 = arcsec_to_rad(5.0);
+        let sep02 = arcsec_to_rad(9.0);
+
+        let omega_max = (sep01 / dt01).max(sep02 / dt02);
+
+        // Add a small safety margin to avoid floating-point edge failures.
+        let omega = 1.1 * omega_max;
+
         let config = PairConfig {
-            max_dt: 15.0 / 1440.0,
-            max_sep: arcsec_to_rad(15.0),
+            max_dt: 15.0 / 1440.0, // 15 min
+            max_angular_speed: omega,
             allow_same_timebin: true,
             max_flux_difference: 1e6,
         };
@@ -745,8 +758,22 @@ mod pair_gen_tests {
         for Pair { a, b } in &pairs {
             let alert_a = find_alert(&alerts, *a);
             let alert_b = find_alert(&alerts, *b);
+
+            // Time ordering and distinct ids.
             assert!(alert_b.mjd_tt > alert_a.mjd_tt, "t_b must be > t_a");
             assert_ne!(a, b, "Pairs must not contain identical ids");
+
+            // Kinematic constraint: Δθ ≤ ω_max · Δt
+            let dt = alert_b.mjd_tt - alert_a.mjd_tt;
+            let d = ang_sep(alert_a.ra, alert_a.dec, alert_b.ra, alert_b.dec);
+
+            assert!(
+                d <= config.max_angular_speed * dt + 1e-15,
+                "angular speed violation: Δθ={} rad, Δt={} d, vmax={} rad/d",
+                d,
+                dt,
+                config.max_angular_speed
+            );
         }
     }
 
@@ -754,7 +781,7 @@ mod pair_gen_tests {
     /// via different bucket paths.
     #[test]
     fn pairs_duplicates_are_deduplicated() {
-        let spatial_binner = HealpixBinner::new(6); // coarser bins → more overlaps
+        let spatial_binner = HealpixBinner::new(6);
         let time_binner = UniformTimeBinner::new(60000.0, 2.0 / 1440.0); // 2 min bins
 
         let t0 = 60000.0;
@@ -783,9 +810,14 @@ mod pair_gen_tests {
         let alerts = vec![a0, a1, a2];
         let bucket_index = build_bucket_index(&alerts, &spatial_binner, &time_binner);
 
+        // Allow ~15" over 10 minutes (generous here).
+        let max_dt = 10.0 / 1440.0;
+        let max_sep = arcsec_to_rad(15.0);
+        let omega = max_sep / max_dt;
+
         let config = PairConfig {
-            max_dt: 10.0 / 1440.0,
-            max_sep: arcsec_to_rad(15.0),
+            max_dt,
+            max_angular_speed: omega,
             allow_same_timebin: true,
             max_flux_difference: 10.0,
         };
@@ -835,9 +867,14 @@ mod pair_gen_tests {
         let alerts = vec![a, b, c, n1, n2];
         let bucket_index = build_bucket_index(&alerts, &spatial_binner, &time_binner);
 
+        // We want to allow up to ~20" over 15 minutes.
+        let max_dt = 15.0 / 1440.0;
+        let max_sep = arcsec_to_rad(20.0);
+        let omega = max_sep / max_dt;
+
         let config = PairConfig {
-            max_dt: 15.0 / 1440.0,        // 15 min → can link a→b, b→c, a→c
-            max_sep: arcsec_to_rad(20.0), // 20"
+            max_dt,
+            max_angular_speed: omega,
             allow_same_timebin: true,
             max_flux_difference: 100.0,
         };
@@ -862,14 +899,13 @@ mod pair_gen_tests {
         assert!(pair_set.contains(&(1_u32.into(), 2_u32.into())));
         assert!(pair_set.contains(&(0_u32.into(), 2_u32.into())));
 
-        // Noise should not form tight pairs with the track given max_sep and flux cuts.
+        // Every pair respects the speed cut.
         for &Pair { a: i, b: j } in &pairs {
-            if i.idx() >= 3 || j.idx() >= 3 {
-                let aa = find_alert(&alerts, i);
-                let bb = find_alert(&alerts, j);
-                let d = ang_sep(aa.ra, aa.dec, bb.ra, bb.dec);
-                assert!(d <= config.max_sep);
-            }
+            let aa = find_alert(&alerts, i);
+            let bb = find_alert(&alerts, j);
+            let dt = bb.mjd_tt - aa.mjd_tt;
+            let d = ang_sep(aa.ra, aa.dec, bb.ra, bb.dec);
+            assert!(d <= config.max_angular_speed * dt + 1e-12);
         }
     }
 
@@ -890,8 +926,7 @@ mod pair_gen_tests {
         }
 
         fn time_strategy() -> impl Strategy<Value = f64> {
-            // ~4h window
-            60000.0f64..60000.1667f64 // 0.1667 ~ 4h
+            60000.0f64..60000.1667f64 // ~4h window
         }
 
         proptest! {
@@ -914,14 +949,20 @@ mod pair_gen_tests {
                 let spatial_binner = HealpixBinner::new(8);
                 let time_binner = UniformTimeBinner::new(60000.0, 10.0 / 1440.0); // 10 min bins
 
+                // Allow ~20" over 30 minutes.
+                let max_dt = 30.0 / 1440.0;
+                let max_sep = arcsec_to_rad(20.0);
+                let omega = max_sep / max_dt;
+
                 let config = PairConfig {
-                    max_dt: 30.0 / 1440.0,              // 30 min
-                    max_sep: arcsec_to_rad(20.0),       // 20"
-                    allow_same_timebin: false,          // enforce strictly later bins
-                    max_flux_difference: 1e6,           // effectively disable flux cuts
+                    max_dt,
+                    max_angular_speed: omega,
+                    allow_same_timebin: false,
+                    max_flux_difference: 1e6,
                 };
 
-                let search_radius = config.max_sep + spatial_binner.cell_radius();
+                let sep_cap = config.max_angular_speed * config.max_dt;
+                let search_radius = sep_cap + spatial_binner.cell_radius();
 
                 // Build alerts with dummy band & flux.
                 let alerts: Vec<Alert> = triples.iter().enumerate()
@@ -952,9 +993,10 @@ mod pair_gen_tests {
                     prop_assert!(alert_b.mjd_tt > alert_a.mjd_tt);
                     prop_assert!((alert_b.mjd_tt - alert_a.mjd_tt) <= config.max_dt);
 
-                    // Angular constraint.
+                    let dt = alert_b.mjd_tt - alert_a.mjd_tt;
                     let d = ang_sep(alert_a.ra, alert_a.dec, alert_b.ra, alert_b.dec);
-                    prop_assert!(d <= config.max_sep);
+                    prop_assert!(d <= config.max_angular_speed * dt + 1e-12);
+                    prop_assert!(d <= sep_cap + 1e-12);
 
                     // Bucket compatibility: b must lie in a spatial neighbor cell within search_radius
                     // and in a time bin within the allowed range.
@@ -997,8 +1039,8 @@ mod pair_gen_tests {
         let t0 = 60000.0;
         let dec0: f64 = 0.25;
 
-        let slow_sep = arcsec_to_rad(5.0) / dec0.cos(); // ~5" in 5 min → slow
-        let fast_sep = arcsec_to_rad(100.0) / dec0.cos(); // ~100" in 5 min → fast
+        let slow_sep = arcsec_to_rad(5.0) / dec0.cos(); // ~5" in 5 min
+        let fast_sep = arcsec_to_rad(100.0) / dec0.cos(); // ~100" in 5 min
 
         let a = Alert {
             id: 0_u32.into(),

@@ -19,3 +19,7 @@ clap = { version = "4.5.53", features = ["derive"] }
 [dev-dependencies]
 approx = "0.5.1"
 prop-test = "0.1.1"
+
+[[bin]]
+name = "pairs_posthoc_sweep"
+path = "src/bin/seeding/pairs_posthoc_sweep.rs"
