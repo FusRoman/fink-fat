@@ -47,14 +47,25 @@
 //! * [`BinningParams`](crate::params::binning_params::BinningParams) – controls spatial/temporal bucket sizes.
 //! * [`TripletParams`](crate::params::triplet_params::TripletParams) – extends pairs into triplets for initial orbit seeds.
 
-use crate::{MjdTt, error::SeedError};
+use serde::{Deserialize, Serialize};
+
+use crate::{error::SeedError, MjdTt};
 
 /// Parameters controlling **pair generation** between alerts `(a, b)`.
 ///
 /// A "pair" is the minimal seed of a possible trajectory, defined by two
 /// distinct alerts close in time, consistent with a maximum angular speed,
 /// and with compatible photometry.
-#[derive(Clone, Copy, Debug, PartialEq)]
+///
+/// Notes
+/// -----
+/// This struct is `serde`-deserializable to support robust configuration loading
+/// (YAML + environment overrides) via the `config` crate.
+///
+/// - Unknown keys are rejected (`deny_unknown_fields`) to catch YAML typos early.
+/// - Missing fields are filled from [`Default`] (`serde(default)`).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct PairConfig {
     /// Maximum allowed Δt between alerts a and b (days, TT).
     pub max_dt: MjdTt,

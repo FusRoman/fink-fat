@@ -148,7 +148,7 @@ pub struct ModelNoise {
 ///   **cell-based coverage** rather than exact geometric cone slicing.
 /// - Excessive inflation increases fan-out; cap downstream candidates (Top-K)
 ///   and apply strict scoring cuts (Mahalanobis) to keep runtime bounded.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PredictorParams {
     /// k-sigma inflation (e.g., 3.0).
     pub k_sigma: f64,
@@ -156,6 +156,41 @@ pub struct PredictorParams {
     pub noise: ModelNoise,
     /// If true, add one spatial cell radius to the cone (safety padding).
     pub pad_cell_radius: bool,
+}
+
+impl PredictorParams {
+    /// Validate numeric ranges and physical sanity.
+    ///
+    /// This is required when `PredictorParams` is deserialized directly
+    /// from configuration files (YAML/env), bypassing the builder.
+    pub fn validate(&self) -> Result<(), PredictorParamError> {
+        if !self.k_sigma.is_finite() || self.k_sigma <= 0.0 {
+            return Err(PredictorParamError::InvalidKSigma(self.k_sigma));
+        }
+
+        let n = self.noise;
+        for (name, v) in [
+            ("variance_floor", n.variance_floor),
+            ("drift_per_day", n.drift_per_day),
+            ("curvature_per_day2", n.curvature_per_day2),
+        ] {
+            if !v.is_finite() || v < 0.0 {
+                return Err(PredictorParamError::InvalidNoiseCoeff { name, value: v });
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl Default for PredictorParams {
+    fn default() -> Self {
+        Self {
+            k_sigma: 3.0,
+            noise: ModelNoise::default(),
+            pad_cell_radius: true,
+        }
+    }
 }
 
 /* -------------------------------------------------------------------------- */

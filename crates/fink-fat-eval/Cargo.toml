@@ -28,3 +28,7 @@ path = "src/bin/seeding/pairs_posthoc_sweep.rs"
 [[bin]]
 name = "pairs-multinight"
 path = "src/bin/seeding/pairs_multinight.rs"
+
+[[bin]]
+name = "score-distribution"
+path = "src/bin/scoring/score_distribution.rs"

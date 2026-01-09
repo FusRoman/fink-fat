@@ -42,14 +42,14 @@
 //! stochasticity must come from upstream seed building or noise realizations.
 //!
 //! ## Gating vs. weighting
-//! - **Hard gates** (`ScoreGates`) immediately **reject** an edge (return `None`).
-//! - **Weights** (`ScoreWeights`) control **relative influence** of accepted terms.
+//! - **Hard gates** immediately **reject** an edge (return `None`).
+//! - **Weights** control **relative influence** of accepted terms.
 //!
 //! ## Tuning strategy
-//! - Start with conservative position gating (`max_d2_pos ≈ 9.0`, about 3σ in 2D),
+//! - Start with conservative position gating (`max_d2 ≈ 9.0`, about 3σ in 2D),
 //! - Enable velocity **direction** first (`theta0` a few degrees), then **speed**,
 //! - Calibrate photometry with a realistic `flux_sigma_floor`,
-//! - Set `gap_rho` near 1 for linear penalties in missed revisits, increase to
+//! - Set `rho` near 1 for linear penalties in missed revisits, increase to
 //!   penalize long gaps more aggressively.
 //!
 //! ## Failure modes & guards
@@ -67,8 +67,8 @@
 use crate::{
     astro_math::{l2_norm, radec_to_tangent},
     engine_config::score_config::{
-        GapScoreConfig, InterNightScoreConfig, NumericConfig, PhotometryScoreConfig,
-        PositionScoreConfig, PredictConfig, VelocityScoreConfig,
+        GapScore, NumericConfig, PhotometryScore, PositionScore, PredictConfig,
+        ScoreConfig, VelocityScore,
     },
     seeding::{seed_id::SeedId, seed_node::SeedNode},
 };
@@ -139,7 +139,7 @@ impl ScoredEdge {
     pub fn score(
         i: &SeedNode,
         j: &SeedNode,
-        cfg: &InterNightScoreConfig,
+        cfg: &ScoreConfig,
         delta_revisit: u32,
     ) -> Option<Self> {
         // 1) Position term
@@ -185,7 +185,7 @@ impl ScoredEdge {
 /* ------------------------------ Helpers ------------------------------ */
 
 /// Compute the position term `d²_pos` on the tangent plane of `i`,
-/// including the hard gate on `max_d2_pos`.
+/// including the hard gate on `position.max_d2`.
 ///
 /// Returns `None` if the Mahalanobis distance is non-finite or exceeds
 /// the configured gate.
@@ -193,7 +193,7 @@ fn compute_position_term(
     i: &SeedNode,
     j: &SeedNode,
     predict: &PredictConfig,
-    cfg: &PositionScoreConfig,
+    cfg: &PositionScore,
     numeric: &NumericConfig,
 ) -> Option<f64> {
     let t_j = j.plane.epoch_mid;
@@ -226,7 +226,7 @@ fn compute_position_term(
 
     let d2_pos = dx * dx * inv_sxx + dy * dy * inv_syy;
 
-    if !d2_pos.is_finite() || d2_pos > cfg.gate.max_d2_pos {
+    if !d2_pos.is_finite() || d2_pos > cfg.max_d2 {
         return None;
     }
     Some(d2_pos)
@@ -236,19 +236,19 @@ fn compute_position_term(
 /// evaluated on `i`'s plane at `t_j = j.epoch_mid`.
 ///
 /// This function enforces the velocity gates:
-/// - angular gate via `cos_max_theta_vel`,
-/// - speed gate via `max_speed_diff`.
+/// - direction gate via `velocity.max_theta`,
+/// - speed gate via `velocity.max_speed_diff`.
 ///
 /// Returns
 /// -------
-/// * `None` if any velocity gate is violated,
+/// * `None` if any velocity gate is violated or if a non-finite value is produced,
 /// * `Some((vel_angle_rad, vel_speed_diff))` otherwise, with `None` entries
 ///   when the corresponding weight is zero or velocities are degenerate.
 fn compute_velocity_terms(
     i: &SeedNode,
     j: &SeedNode,
     dt_days: f64,
-    cfg: &VelocityScoreConfig,
+    cfg: &VelocityScore,
 ) -> Option<(Option<f64>, Option<f64>)> {
     // Predict velocity of i at t_j on its plane.
     let vi = if let Some(a) = i.plane.acc_xy {
@@ -262,7 +262,10 @@ fn compute_velocity_terms(
 
     // Symmetric finite difference for j, measured in i's plane.
     let t_j = j.plane.epoch_mid;
-    let eps = cfg.scale.vel_eps_days;
+    let eps = cfg.vel_eps_days;
+    if !eps.is_finite() || eps <= 0.0 {
+        return None;
+    }
     let inv_2eps = 1.0 / (2.0 * eps);
 
     let (ra_p, dec_p) = j.predict_radec(t_j + eps);
@@ -287,20 +290,24 @@ fn compute_velocity_terms(
     let inv_norms = 1.0 / (norm_vi * norm_vj);
     let cosang = ((vi[0] * vj[0] + vi[1] * vj[1]) * inv_norms).clamp(-1.0, 1.0);
 
+    if !cosang.is_finite() {
+        return None;
+    }
+
     // Direction gate
-    if cosang < cfg.gate.cos_max_theta_vel() {
+    if cosang < cfg.cos_max_theta() {
         return None;
     }
 
     // Speed gate
     let dv = (norm_vi - norm_vj).abs();
-    if dv > cfg.gate.max_speed_diff {
+    if !dv.is_finite() || dv > cfg.max_speed_diff {
         return None;
     }
 
     // Diagnostics only if weighted
-    let vel_angle_rad = (cfg.weight.w_vel_dir > 0.0).then(|| cosang.acos());
-    let vel_speed_diff = (cfg.weight.w_vel_norm > 0.0).then(|| dv);
+    let vel_angle_rad = (cfg.w_dir > 0.0).then(|| cosang.acos());
+    let vel_speed_diff = (cfg.w_norm > 0.0).then(|| dv);
 
     Some((vel_angle_rad, vel_speed_diff))
 }
@@ -310,8 +317,8 @@ fn compute_velocity_terms(
 /// No hard gate is applied: if the term cannot be evaluated reliably
 /// (non-finite or zero variance), this function returns `None` and the
 /// photometric term simply does not contribute to the cost.
-fn compute_flux_z(i: &SeedNode, j: &SeedNode, cfg: &PhotometryScoreConfig) -> Option<f64> {
-    if cfg.weight.w_flux <= 0.0 {
+fn compute_flux_z(i: &SeedNode, j: &SeedNode, cfg: &PhotometryScore) -> Option<f64> {
+    if cfg.w_flux <= 0.0 {
         return None;
     }
 
@@ -319,7 +326,7 @@ fn compute_flux_z(i: &SeedNode, j: &SeedNode, cfg: &PhotometryScoreConfig) -> Op
     let s_i = i.photom.flux_std as f64;
     let s_j = j.photom.flux_std as f64;
 
-    let sigma_floor = cfg.scale.flux_sigma_floor;
+    let sigma_floor = cfg.flux_sigma_floor;
     let sigma_sq = s_i * s_i + s_j * s_j + sigma_floor * sigma_floor;
 
     if !sigma_sq.is_finite() || sigma_sq <= 0.0 {
@@ -331,10 +338,10 @@ fn compute_flux_z(i: &SeedNode, j: &SeedNode, cfg: &PhotometryScoreConfig) -> Op
 }
 
 /// Compute the gap penalty `(Δ - 1)^rho` for `Δ > 1`, or `0` otherwise.
-fn compute_gap_penalty(delta_revisit: u32, cfg: &GapScoreConfig) -> f64 {
+fn compute_gap_penalty(delta_revisit: u32, cfg: &GapScore) -> f64 {
     if delta_revisit > 1 {
         let delta = (delta_revisit as f64) - 1.0;
-        delta.powf(cfg.scale.rho)
+        delta.powf(cfg.rho)
     } else {
         0.0
     }
@@ -345,31 +352,31 @@ fn compute_gap_penalty(delta_revisit: u32, cfg: &GapScoreConfig) -> f64 {
 ///
 /// This function is pure: it does not perform any gating, it simply
 /// applies the configured weights.
-fn compose_cost(components: &ScoreComponents, cfg: &InterNightScoreConfig) -> f64 {
+fn compose_cost(components: &ScoreComponents, cfg: &ScoreConfig) -> f64 {
     let mut cost = 0.0;
 
     // Position
-    cost += cfg.position.weight.w_pos * components.d2_pos;
+    cost += cfg.position.w_pos * components.d2_pos;
 
     // Velocity
     if let Some(theta) = components.vel_angle_rad {
-        cost += cfg.velocity.weight.w_vel_dir * (theta / cfg.velocity.scale.theta0);
+        cost += cfg.velocity.w_dir * (theta / cfg.velocity.theta0);
     }
     if let Some(dv) = components.vel_speed_diff {
-        cost += cfg.velocity.weight.w_vel_norm * (dv / cfg.velocity.scale.v0);
+        cost += cfg.velocity.w_norm * (dv / cfg.velocity.v0);
     }
 
     // Photometry
     if let Some(z) = components.z_flux {
-        cost += cfg.photometry.weight.w_flux * z;
+        cost += cfg.photometry.w_flux * z;
     }
 
     // Gap
-    cost += cfg.gap.weight.w_gap * components.gap_penalty;
+    cost += cfg.gap.w_gap * components.gap_penalty;
 
     // Band mismatch
     if components.band_mismatch {
-        cost += cfg.band.weight.w_band_mismatch;
+        cost += cfg.band.w_band_mismatch;
     }
 
     cost

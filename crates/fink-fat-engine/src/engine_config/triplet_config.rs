@@ -43,12 +43,14 @@
 
 /* -------------------------- Triplet Params -------------------------- */
 
+use serde::{Deserialize, Serialize};
+
 use crate::{MjdTt, Radians, error::SeedError};
 
 /// Parameters controlling **triplet generation** `(a, b, c)`.
 ///
 /// See module-level docs for overview, defaults, and error conditions.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TripletConfig {
     /// Maximum Δt between consecutive neighbors `(a→b and b→c)`, in days (TT).
     pub max_dt_between: MjdTt,
