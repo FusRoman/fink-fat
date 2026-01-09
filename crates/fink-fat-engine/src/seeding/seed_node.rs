@@ -36,19 +36,15 @@
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
+use std::fmt::{self, Display, Formatter};
+
 use crate::{
-    Alert, AlertId, MjdTt, Radians,
-    alerts::AlertStore,
-    astro_math::{fit_quad_1d, radec_to_tangent, spherical_midpoint, tangent_to_radec},
-    engine_config::propagator_config::PredictorParams,
-    night_id::NightId,
-    seeding::{
+    Alert, AlertId, MjdTt, Radians, alerts::AlertStore, astro_math::{fit_quad_1d, radec_to_tangent, spherical_midpoint, tangent_to_radec}, display_format::indent_block, engine_config::propagator_config::PredictorParams, night_id::NightId, seeding::{
         photometry::Photometry,
         seed_id::SeedId,
         seed_spatial_index::SeedSpatialIndex,
         tangent_plane::{TangentCenter, TangentPlaneModel},
-    },
-    spacetime_bucket::spatial_binner::SpatialBinner,
+    }, spacetime_bucket::spatial_binner::SpatialBinner
 };
 
 /// Compact intra-night seed object used in the inter-night graph.
@@ -82,6 +78,41 @@ pub struct SeedNode {
 
     /// Alert identifiers forming the seed, sorted by observation time.
     pub members: Vec<AlertId>,
+}
+
+impl Display for SeedNode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        writeln!(f, "SeedNode {{")?;
+
+        writeln!(f, "  id        : {}", self.seed_id)?;
+        writeln!(f, "  night     : {}", self.night_id)?;
+        writeln!(f, "  n_obs     : {}", self.n_obs)?;
+        writeln!(f)?;
+
+        writeln!(
+            f,
+            "  plane     : {}",
+            indent_block(&self.plane.to_string(), 14)
+        )?;
+        writeln!(f)?;
+        writeln!(
+            f,
+            "  photom   : {}",
+            indent_block(&self.photom.to_string(), 14)
+        )?;
+        writeln!(f)?;
+
+        write!(f, "  members  : [")?;
+        for (i, id) in self.members.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{id}")?;
+        }
+        writeln!(f, "]")?;
+
+        writeln!(f, "}}")
+    }
 }
 
 impl SeedNode {
@@ -351,8 +382,7 @@ impl SeedNode {
 
         // Simple two-point flux statistics.
         let flux_mean = (alert_a.flux + alert_b.flux) * 0.5;
-        let flux_std =
-            ((alert_a.flux - flux_mean).abs() + (alert_b.flux - flux_mean).abs()) * 0.5;
+        let flux_std = ((alert_a.flux - flux_mean).abs() + (alert_b.flux - flux_mean).abs()) * 0.5;
         let photom = Photometry::new(flux_mean, flux_std, alert_a.band);
 
         let plane = TangentPlaneModel::new(
@@ -462,9 +492,10 @@ impl SeedNode {
 
         // Three-point flux statistics.
         let flux_mean = (alert_a.flux + alert_b.flux + alert_c.flux) / 3.0;
-        let flux_std =
-            ((alert_a.flux - flux_mean).abs() + (alert_b.flux - flux_mean).abs() + (alert_c.flux - flux_mean).abs())
-                / 3.0;
+        let flux_std = ((alert_a.flux - flux_mean).abs()
+            + (alert_b.flux - flux_mean).abs()
+            + (alert_c.flux - flux_mean).abs())
+            / 3.0;
         let photom = Photometry::new(flux_mean, flux_std, alert_a.band);
 
         let plane = TangentPlaneModel::new(

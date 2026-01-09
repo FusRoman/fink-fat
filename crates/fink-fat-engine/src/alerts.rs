@@ -41,6 +41,12 @@ use serde::{Deserialize, Serialize};
 )]
 pub struct AlertId(u32);
 
+impl Display for AlertId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        write!(f, "AlertId({})", self.0)
+    }
+}
+
 impl AlertId {
     /// Create a new `AlertId` from a 0-based index.
     #[inline]

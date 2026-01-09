@@ -10,6 +10,7 @@ pub mod night_id;
 pub mod graph;
 pub mod solver;
 pub mod trajectory;
+pub mod display_format;
 
 pub use units::{MjdTt, Radians};
 pub use alerts::{Alert, AlertId};

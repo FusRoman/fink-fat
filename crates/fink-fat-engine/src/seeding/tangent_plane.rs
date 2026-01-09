@@ -25,10 +25,12 @@
 
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
+use std::fmt::{self, Display, Formatter};
 
 use crate::{
     MjdTt, Radians,
     astro_math::{lambda_max_2x2, radec_to_tangent, tangent_to_radec},
+    display_format::{fmt_mat2, fmt_vec2},
     engine_config::propagator_config::ModelNoise,
 };
 
@@ -55,6 +57,20 @@ pub struct TangentCenter {
     pub sin_dec0: f64,
     /// Precomputed `cos(δ₀)` for potential optimisation.
     pub cos_dec0: f64,
+}
+
+impl Display for TangentCenter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        writeln!(f, "TangentCenter {{")?;
+
+        writeln!(f, "  ra0       : {}", self.ra0)?;
+        writeln!(f, "  dec0      : {}", self.dec0)?;
+
+        writeln!(f, "  sin_dec0  : {:.6e}", self.sin_dec0)?;
+        writeln!(f, "  cos_dec0  : {:.6e}", self.cos_dec0)?;
+
+        write!(f, "}}")
+    }
 }
 
 impl TangentCenter {
@@ -157,6 +173,34 @@ pub struct TangentPlaneModel {
     pub ra_mid: Radians,
     /// Mean Dec of the arc in ICRS (radians, mostly for QA / debugging).
     pub dec_mid: Radians,
+}
+
+impl Display for TangentPlaneModel {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        writeln!(f, "TangentPlaneModel {{")?;
+
+        writeln!(f, "  center    : {}", self.center)?;
+        writeln!(f, "  epoch_mid : {}", self.epoch_mid)?;
+
+        writeln!(f, "  pos_xy    : {}", fmt_vec2(self.pos_xy))?;
+        writeln!(f, "  vel_xy    : {}", fmt_vec2(self.vel_xy))?;
+        writeln!(
+            f,
+            "  acc_xy    : {}",
+            match self.acc_xy {
+                Some(a) => fmt_vec2(a).to_string(),
+                None => "None".to_string(),
+            }
+        )?;
+
+        writeln!(f, "  cov_pos   : {}", fmt_mat2(self.cov_pos))?;
+        writeln!(f, "  cov_vel   : {}", fmt_mat2(self.cov_vel))?;
+
+        writeln!(f, "  ra_mid    : {}", self.ra_mid)?;
+        writeln!(f, "  dec_mid   : {}", self.dec_mid)?;
+
+        write!(f, "}}")
+    }
 }
 
 impl TangentPlaneModel {
