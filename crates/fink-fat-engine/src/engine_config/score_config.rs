@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::engine_config::{error::ScoringConfigError, propagator_config::ModelNoise};
+use crate::engine_config::units::{de_angle_rad, de_ang_speed_rad_per_day, de_time_days};
 
 /// Configuration for inter-night edge scoring.
 ///
@@ -186,8 +187,10 @@ impl Default for PositionScore {
 #[serde(default, deny_unknown_fields)]
 pub struct VelocityScore {
     /// Maximum allowed direction mismatch (radians).
+    #[serde(deserialize_with = "de_angle_rad")]
     pub max_theta: f64,
     /// Maximum allowed absolute speed mismatch (rad/day).
+    #[serde(deserialize_with = "de_ang_speed_rad_per_day")]
     pub max_speed_diff: f64,
 
     /// Weight for direction mismatch term.
@@ -196,10 +199,13 @@ pub struct VelocityScore {
     pub w_norm: f64,
 
     /// Finite difference half-step around t_j for estimating v_j (days).
+    #[serde(deserialize_with = "de_time_days")]
     pub vel_eps_days: f64,
     /// Normalization angle scale for direction mismatch.
+    #[serde(deserialize_with = "de_angle_rad")]
     pub theta0: f64,
     /// Normalization speed scale for speed mismatch (rad/day).
+    #[serde(deserialize_with = "de_ang_speed_rad_per_day")]
     pub v0: f64,
 }
 

@@ -4,6 +4,7 @@ pub mod pair_config;
 pub mod propagator_config;
 pub mod score_config;
 pub mod triplet_config;
+pub mod units;
 
 use camino::Utf8Path;
 use config::{Config, Environment, File};
@@ -114,6 +115,8 @@ mod engine_config_tests {
     };
 
     use camino::Utf8PathBuf;
+
+    use approx::{assert_relative_eq, assert_ulps_eq};
 
     /* --------------------------------------------------------------------- */
     /*  Global env lock (env vars are process-global; tests must not race)    */
@@ -433,5 +436,157 @@ edges:
             ConfigError::Edges(_) => {}
             _ => panic!("expected ConfigError::Edges, got {err:?}"),
         }
+    }
+
+    #[test]
+    fn yaml_accepts_units_for_pairs_and_triplets() {
+        let _guard = env_lock().lock().unwrap();
+        let _clear = EnvGuard::clear("FINK_FAT__");
+
+        // pairs.max_dt: "86.4 min" = 0.06 day
+        // pairs.max_angular_speed: "180 arcsec/hour"
+        //   = 180 arcsec * 24 = 4320 arcsec/day = 1.2 deg/day
+        let yaml = r#"
+version: 1
+
+pairs:
+  max_dt: "86.4 min"
+  max_angular_speed: "180 arcsec/hour"
+  allow_same_timebin: true
+
+triplets:
+  max_dt_between: "57.6 min"
+  max_pair_sep: "9 arcmin"
+  max_predicted_residual: "48 arcsec"
+  enforce_time_order: true
+"#;
+
+        let path = write_tmp_yaml(yaml);
+        let cfg =
+            load_engine_config_validated(&path).expect("config should load with unit strings");
+
+        // Time → days
+        assert_relative_eq!(cfg.pairs.max_dt, 0.06, epsilon = 1e-15);
+        assert_relative_eq!(cfg.triplets.max_dt_between, 0.04, epsilon = 1e-15);
+
+        // Angles → radians
+        let expected_pair_sep = (9.0_f64 / 60.0_f64).to_radians();
+        assert_relative_eq!(
+            cfg.triplets.max_pair_sep,
+            expected_pair_sep,
+            max_relative = 1e-13
+        );
+
+        let expected_residual = (48.0_f64 / 3600.0_f64).to_radians();
+        assert_relative_eq!(
+            cfg.triplets.max_predicted_residual,
+            expected_residual,
+            max_relative = 1e-13
+        );
+
+        // Angular speed → rad/day
+        let expected_speed = (1.2_f64).to_radians();
+        assert_relative_eq!(
+            cfg.pairs.max_angular_speed,
+            expected_speed,
+            max_relative = 1e-13
+        );
+    }
+
+    #[test]
+    fn yaml_accepts_units_for_scoring_velocity() {
+        let _guard = env_lock().lock().unwrap();
+        let _clear = EnvGuard::clear("FINK_FAT__");
+
+        let yaml = r#"
+version: 1
+scoring:
+  velocity:
+    max_theta: "15 arcmin"
+    max_speed_diff: "3 arcmin/day"
+    vel_eps_days: "1.44 min"
+    theta0: "6 arcmin"
+    v0: "1 arcmin/day"
+"#;
+
+        let path = write_tmp_yaml(yaml);
+        let cfg =
+            load_engine_config_validated(&path).expect("config should load with unit strings");
+
+        let v = &cfg.scoring.velocity;
+
+        let exp_max_theta = (15.0_f64 / 60.0_f64).to_radians();
+        assert_relative_eq!(v.max_theta, exp_max_theta, max_relative = 1e-13);
+
+        let exp_max_speed_diff = (3.0_f64 / 60.0_f64).to_radians();
+        assert_relative_eq!(v.max_speed_diff, exp_max_speed_diff, max_relative = 1e-13);
+
+        let exp_vel_eps_days = 1.44_f64 / (24.0_f64 * 60.0_f64);
+        assert_relative_eq!(v.vel_eps_days, exp_vel_eps_days, max_relative = 1e-14);
+
+        let exp_theta0 = (6.0_f64 / 60.0_f64).to_radians();
+        assert_relative_eq!(v.theta0, exp_theta0, max_relative = 1e-13);
+
+        let exp_v0 = (1.0_f64 / 60.0_f64).to_radians();
+        assert_relative_eq!(v.v0, exp_v0, max_relative = 1e-13);
+    }
+
+    #[test]
+    fn yaml_rejects_invalid_unit_strings() {
+        let _guard = env_lock().lock().unwrap();
+        let _clear = EnvGuard::clear("FINK_FAT__");
+
+        let yaml = r#"
+version: 1
+triplets:
+  max_pair_sep: "10 parsec"
+"#;
+
+        let path = write_tmp_yaml(yaml);
+        let err = load_engine_config_validated(&path).unwrap_err();
+
+        match err {
+            ConfigError::ConfigRs(_) => {}
+            _ => panic!("expected ConfigError::ConfigRs, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn yaml_rejects_invalid_rate_syntax() {
+        let _guard = env_lock().lock().unwrap();
+        let _clear = EnvGuard::clear("FINK_FAT__");
+
+        let yaml = r#"
+version: 1
+pairs:
+  max_angular_speed: "10 arcmin"
+"#;
+
+        let path = write_tmp_yaml(yaml);
+        let err = load_engine_config_validated(&path).unwrap_err();
+
+        match err {
+            ConfigError::ConfigRs(_) => {}
+            _ => panic!("expected ConfigError::ConfigRs, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn numeric_values_still_pass_through_unchanged() {
+        let _guard = env_lock().lock().unwrap();
+        let _clear = EnvGuard::clear("FINK_FAT__");
+
+        let yaml = r#"
+version: 1
+pairs:
+  max_dt: 0.123456
+"#;
+
+        let path = write_tmp_yaml(yaml);
+        let cfg =
+            load_engine_config_validated(&path).expect("numeric values should still be accepted");
+
+        // Numeric → exact passthrough
+        assert_ulps_eq!(cfg.pairs.max_dt, 0.123456, max_ulps = 0);
     }
 }

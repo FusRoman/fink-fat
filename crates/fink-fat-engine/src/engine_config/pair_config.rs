@@ -50,6 +50,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{error::SeedError, MjdTt};
+use crate::engine_config::units::{de_ang_speed_rad_per_day, de_time_days};
 
 /// Parameters controlling **pair generation** between alerts `(a, b)`.
 ///
@@ -68,12 +69,14 @@ use crate::{error::SeedError, MjdTt};
 #[serde(default, deny_unknown_fields)]
 pub struct PairConfig {
     /// Maximum allowed Δt between alerts a and b (days, TT).
+    #[serde(deserialize_with = "de_time_days")]
     pub max_dt: MjdTt,
 
     /// Maximum allowed angular speed (radians per day).
     ///
     /// A candidate pair `(a, b)` must satisfy:
     /// `ang_sep(a, b) / (t_b - t_a) ≤ max_angular_speed`.
+    #[serde(deserialize_with = "de_ang_speed_rad_per_day")]
     pub max_angular_speed: f64,
 
     /// Maximum allowed photometric difference (e.g. flux units or Δmag).

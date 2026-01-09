@@ -46,6 +46,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{MjdTt, Radians, error::SeedError};
+use crate::engine_config::units::{de_angle_rad, de_time_days};
+
 
 /// Parameters controlling **triplet generation** `(a, b, c)`.
 ///
@@ -53,12 +55,15 @@ use crate::{MjdTt, Radians, error::SeedError};
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TripletConfig {
     /// Maximum Δt between consecutive neighbors `(a→b and b→c)`, in days (TT).
+    #[serde(deserialize_with = "de_time_days")]
     pub max_dt_between: MjdTt,
 
     /// Maximum angular separation for neighbor pairs `(a↔b and b↔c)`, in radians.
+    #[serde(deserialize_with = "de_angle_rad")]
     pub max_pair_sep: Radians,
 
     /// Maximum linear prediction residual at `c` when extrapolating `a→b`, in radians.
+    #[serde(deserialize_with = "de_angle_rad")]
     pub max_predicted_residual: Radians,
 
     /// Enforce strict time ordering: require `t(a) < t(b) < t(c)`.
