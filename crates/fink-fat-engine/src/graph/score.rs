@@ -67,8 +67,8 @@
 use crate::{
     astro_math::{l2_norm, radec_to_tangent},
     engine_config::score_config::{
-        GapScore, NumericConfig, PhotometryScore, PositionScore, PredictConfig,
-        ScoreConfig, VelocityScore,
+        GapScore, NumericConfig, PhotometryScore, PositionScore, PredictConfig, ScoreConfig,
+        VelocityScore,
     },
     seeding::{seed_id::SeedId, seed_node::SeedNode},
 };
@@ -106,7 +106,7 @@ pub struct ScoreComponents {
     pub z_flux: Option<f64>,
     /// Gap penalty `(Δ - 1)^rho` (0 if `Δ ≤ 1`).
     pub gap_penalty: f64,
-    /// True if bands differ (`band(i) != band(j)`).
+    /// True if seed band sets do not overlap (no common filter).
     pub band_mismatch: bool,
 }
 
@@ -151,14 +151,18 @@ impl ScoredEdge {
         // 3) Velocity terms
         let (vel_angle_rad, vel_speed_diff) = compute_velocity_terms(i, j, dt_days, &cfg.velocity)?;
 
-        // 4) Photometry
-        let z_flux = compute_flux_z(i, j, &cfg.photometry);
-
         // 5) Gap penalty
         let gap_penalty = compute_gap_penalty(delta_revisit, &cfg.gap);
 
-        // 6) Band mismatch
-        let band_mismatch = i.photom.band != j.photom.band;
+        // 6) Band overlap / mismatch
+        let band_mismatch = !i.photom.shares_any_band(&j.photom);
+
+        // 4) Photometry (only if bands overlap)
+        let z_flux = if band_mismatch {
+            None
+        } else {
+            compute_flux_z(i, j, &cfg.photometry)
+        };
 
         // 7) Compose
         let components = ScoreComponents {

@@ -39,12 +39,19 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display, Formatter};
 
 use crate::{
-    Alert, AlertId, MjdTt, Radians, alerts::AlertStore, astro_math::{fit_quad_1d, radec_to_tangent, spherical_midpoint, tangent_to_radec}, display_format::indent_block, engine_config::propagator_config::PredictorParams, night_id::NightId, seeding::{
+    Alert, AlertId, MjdTt, Radians,
+    alerts::AlertStore,
+    astro_math::{fit_quad_1d, radec_to_tangent, spherical_midpoint, tangent_to_radec},
+    display_format::indent_block,
+    engine_config::propagator_config::PredictorParams,
+    night_id::NightId,
+    seeding::{
         photometry::Photometry,
         seed_id::SeedId,
         seed_spatial_index::SeedSpatialIndex,
         tangent_plane::{TangentCenter, TangentPlaneModel},
-    }, spacetime_bucket::spatial_binner::SpatialBinner
+    },
+    spacetime_bucket::spatial_binner::SpatialBinner,
 };
 
 /// Compact intra-night seed object used in the inter-night graph.
@@ -383,7 +390,12 @@ impl SeedNode {
         // Simple two-point flux statistics.
         let flux_mean = (alert_a.flux + alert_b.flux) * 0.5;
         let flux_std = ((alert_a.flux - flux_mean).abs() + (alert_b.flux - flux_mean).abs()) * 0.5;
-        let photom = Photometry::new(flux_mean, flux_std, alert_a.band);
+        let photom = Photometry::from_pair(
+            flux_mean as f32,
+            flux_std as f32,
+            alert_a.band,
+            alert_b.band,
+        );
 
         let plane = TangentPlaneModel::new(
             center,
@@ -496,7 +508,14 @@ impl SeedNode {
             + (alert_b.flux - flux_mean).abs()
             + (alert_c.flux - flux_mean).abs())
             / 3.0;
-        let photom = Photometry::new(flux_mean, flux_std, alert_a.band);
+
+        let photom = Photometry::from_triplet(
+            flux_mean as f32,
+            flux_std as f32,
+            alert_a.band,
+            alert_b.band,
+            alert_c.band,
+        );
 
         let plane = TangentPlaneModel::new(
             center,

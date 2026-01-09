@@ -385,7 +385,6 @@ pub fn l2_norm(x: f64, y: f64) -> f64 {
     x.hypot(y)
 }
 
-
 /* --------------------------- Private helpers --------------------------- */
 
 /// Spherical → cartesian unit vector.
@@ -399,11 +398,15 @@ fn sph_to_cart(ra: Radians, dec: Radians) -> (f64, f64, f64) {
 /// Cartesian → spherical (ra in [0, 2π)).
 #[inline]
 fn cart_to_sph(x: f64, y: f64, z: f64) -> (Radians, Radians) {
-    let r2 = x * x + y * y + z * z;
-    let r = r2.sqrt();
-    let inv_r = 1.0 / r;
-    let dec = (z * inv_r).asin();
+    // hypot(x,y) is stable for tiny x,y (near poles)
+    let rho = x.hypot(y);
+
+    // declination robust near poles
+    let dec = z.atan2(rho);
+
+    // RA: still fine, but ill-defined when rho ~ 0 (exact pole)
     let ra = y.atan2(x).rem_euclid(TAU);
+
     (ra, dec)
 }
 
@@ -862,8 +865,18 @@ mod astro_math_tests {
             prop_assert!(abs_diff_eq!(norm, 1.0, epsilon = 1e-12));
 
             let (ra2, dec2) = cart_to_sph(x, y, z);
-            // RA est normalisée dans [0, 2π)
-            prop_assert!(abs_diff_eq!(ra2, ra.rem_euclid(TAU), epsilon = 1e-12));
+
+            // Check vector roundtrip (always well-defined)
+            let (x2, y2, z2) = sph_to_cart(ra2, dec2);
+            prop_assert!(abs_diff_eq!(x2, x, epsilon = 1e-12));
+            prop_assert!(abs_diff_eq!(y2, y, epsilon = 1e-12));
+            prop_assert!(abs_diff_eq!(z2, z, epsilon = 1e-12));
+
+            // Optional: check angles when RA is well-conditioned
+            let rho = x.hypot(y);
+            if rho > 1e-10 {
+                prop_assert!(abs_diff_eq!(ra2, ra.rem_euclid(TAU), epsilon = 1e-12));
+            }
             prop_assert!(abs_diff_eq!(dec2, dec, epsilon = 1e-12));
         }
     }

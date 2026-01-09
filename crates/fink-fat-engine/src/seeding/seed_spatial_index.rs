@@ -204,7 +204,7 @@ mod seed_spatial_index_tests {
             seed_id: SeedId::new(seed_id),
             night_id: NightId::new(1),
             plane,
-            photom: crate::seeding::photometry::Photometry::new(1000.0, 0.0, 1),
+            photom: crate::seeding::photometry::Photometry::from_pair(1.0, 0.1, 1, 2),
             n_obs: 2,
             members: vec![],
         }
