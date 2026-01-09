@@ -5,6 +5,7 @@ pub mod grid;
 pub mod angular_speed;
 pub mod cli;
 pub mod scoring;
+pub mod bin_utils;
 
 
 

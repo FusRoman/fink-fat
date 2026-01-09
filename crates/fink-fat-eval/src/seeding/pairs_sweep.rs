@@ -37,14 +37,13 @@
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 
-use fink_fat_engine::MjdTt;
 use fink_fat_engine::engine_config::pair_config::PairConfig;
 use fink_fat_engine::spacetime_bucket::healpix_binner::HealpixBinner;
 use fink_fat_engine::spacetime_bucket::uniform_time_binner::UniformTimeBinner;
 
-use crate::FiniteOr;
+use crate::bin_utils::infer_t0_mjd_tt;
 use crate::dataset::ztf_alerts::{
-    AlertStoreWithTruth, ZtfAlertScan, alert_store_with_truth_from_lazyframe, scan_ztf_alerts,
+    ZtfAlertScan, alert_store_with_truth_from_lazyframe, scan_ztf_alerts,
 };
 use crate::dataset::{ParquetSource, ingest_config::AlertIngestConfig};
 use crate::grid::{linspace, logspace};
@@ -253,40 +252,6 @@ pub fn run_pairs_posthoc_sweep(cfg: &PairsPosthocSweepConfig) -> Result<()> {
     plot_pairs_omega_hist(&feats, out_dir_std, &cfg.plot)?;
 
     Ok(())
-}
-
-/// Infer a robust origin `t0` for uniform time bins from the dataset.
-///
-/// The uniform time binner computes bin indices as:
-///
-/// ```text
-/// bin(t) = floor((t - t0) / dt)
-/// ```
-///
-/// Choosing `t0 = min(mjd_tt)` makes the binning deterministic for a fixed
-/// dataset, which is sufficient for post-hoc studies and diagnostic tools.
-///
-/// Arguments
-/// ---------
-/// * `store` – Ingested alerts and truth sidecar.
-///
-/// Return
-/// ------
-/// * `MjdTt` – The minimum `mjd_tt` found in the dataset.
-///   If the store is empty or only contains non-finite times, returns `0.0`.
-///
-/// Notes
-/// -----
-/// * For production pipelines that compare results across datasets, you may
-///   prefer a fixed global origin (e.g., a reference MJD) instead of `min(t)`.
-pub fn infer_t0_mjd_tt(store: &AlertStoreWithTruth) -> MjdTt {
-    store
-        .store
-        .alerts
-        .iter()
-        .map(|a| a.mjd_tt)
-        .fold(f64::INFINITY, |acc, x| acc.min(x))
-        .if_finite_or(0.0)
 }
 
 /// Convenience helper to build a [`PairPlotConfig`] with a chosen angular unit and size.

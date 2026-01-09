@@ -16,7 +16,7 @@
 //! -------
 //! Writes `multinight_seeding_summary.csv` into `--out-dir`.
 
-use std::{fs, time::Duration};
+use std::fs;
 
 use anyhow::{Context, Result};
 use clap::{ArgAction, Parser};
@@ -28,13 +28,9 @@ use fink_fat_engine::{
 };
 
 use fink_fat_eval::{
+    bin_utils::{fmt_ms, infer_t0_mjd_tt, ingest_one_night, resolve_nids},
     cli::common::{CommonBinningArgs, CommonPairGenArgs, CommonScanArgs},
-    dataset::{
-        ParquetSource,
-        ingest_config::AlertIngestConfig,
-        schema::cols,
-        ztf_alerts::{alert_store_with_truth_from_lazyframe, scan_ztf_alerts},
-    },
+    dataset::{ParquetSource, ingest_config::AlertIngestConfig, schema::cols},
     seeding::{
         metrics::{pair_metrics, triplet_metrics},
         plotting::{MultiNightPlotConfig, plot_multinight_summary},
@@ -95,55 +91,6 @@ struct Cli {
     continue_on_error: bool,
 }
 
-fn parse_nids_csv(s: &str) -> Result<Vec<i32>> {
-    let mut out = Vec::new();
-    for raw in s.split(',') {
-        let t = raw.trim();
-        if t.is_empty() {
-            continue;
-        }
-        let nid: i32 = t
-            .parse()
-            .with_context(|| format!("invalid nid value: '{t}'"))?;
-        out.push(nid);
-    }
-    out.sort_unstable();
-    out.dedup();
-    Ok(out)
-}
-
-/// List distinct `nid` values from the parquet file (best-effort).
-fn discover_nids(parquet_path: &camino::Utf8PathBuf) -> Result<Vec<i32>> {
-    let pl_path = PlPath::from_str(parquet_path.as_path().as_str());
-    let lf = LazyFrame::scan_parquet(pl_path, ScanArgsParquet::default())
-        .with_context(|| format!("failed to scan parquet: {}", parquet_path))?;
-
-    let df = lf
-        .select([col(cols::NID)])
-        .unique(None, UniqueKeepStrategy::First)
-        .sort(
-            [cols::NID],
-            SortMultipleOptions::default().with_maintain_order(true),
-        )
-        .collect()
-        .context("failed to collect unique nid list")?;
-
-    let s = df
-        .column(cols::NID)
-        .with_context(|| format!("missing column '{}' while discovering nids", cols::NID))?;
-
-    let s = s
-        .cast(&DataType::Int32)
-        .context("failed to cast nid to Int32")?;
-    let ca = s.i32().context("nid is not Int32 after cast")?;
-
-    Ok(ca.into_no_null_iter().collect())
-}
-
-fn fmt_ms(d: Duration) -> f64 {
-    d.as_secs_f64() * 1.0e3
-}
-
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -153,20 +100,8 @@ fn main() -> Result<()> {
     let source = ParquetSource::new(&cli.scan.parquet)
         .with_context(|| format!("failed to open parquet source: {}", cli.scan.parquet))?;
 
-    // Determine which nights to process.
-    let mut nids = if let Some(s) = &cli.nids {
-        parse_nids_csv(s)?
-    } else {
-        discover_nids(&cli.scan.parquet)?
-    };
-
-    if let Some(max_nights) = cli.max_nights {
-        if nids.len() > max_nights {
-            nids.truncate(max_nights);
-        }
-    }
-    anyhow::ensure!(!nids.is_empty(), "no nights to process (empty nid list)");
-
+    // Determine which nights to process (shared logic).
+    let nids = resolve_nids(&cli.scan.parquet, cli.nids.as_deref(), cli.max_nights)?;
     eprintln!(
         "Processing {} night(s). Output dir: {}",
         nids.len(),
@@ -214,27 +149,19 @@ fn main() -> Result<()> {
         eprintln!("\n[{}/{}] nid={}", k + 1, nids.len(), nid);
 
         let mut run_one = || -> Result<()> {
-            let scan = fink_fat_eval::dataset::ztf_alerts::ZtfAlertScan {
-                nid: Some(nid),
-                mode: cli.scan.mode.into(),
-                minimal: cli.scan.minimal,
-            };
-
-            let lf = scan_ztf_alerts(&source, scan)?;
-            let store = alert_store_with_truth_from_lazyframe(lf, ingest_cfg.clone())
-                .with_context(|| format!("failed to ingest nid={nid}"))?;
+            let store = ingest_one_night(
+                &source,
+                nid,
+                cli.scan.mode.into(),
+                cli.scan.minimal,
+                &ingest_cfg,
+            )?;
 
             let n_alerts = store.store.alerts.len() as i64;
             eprintln!("  alerts: {}", n_alerts);
 
             // binners (origin inferred per night: stable and usually desirable for a per-night benchmark)
-            let t0 = store
-                .store
-                .alerts
-                .iter()
-                .map(|a| a.mjd_tt)
-                .fold(f64::INFINITY, |acc, x| acc.min(x));
-
+            let t0 = infer_t0_mjd_tt(&store);
             let spatial = HealpixBinner::new(cli.binning.healpix_depth);
             let time = UniformTimeBinner::new(cli.binning.time_bin_days, t0);
 

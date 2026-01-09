@@ -1,3 +1,5 @@
 target/
 out_pairs/
 multi_nights/
+out_scores/
+score_optim/
