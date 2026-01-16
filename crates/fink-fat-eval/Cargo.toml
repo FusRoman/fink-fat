@@ -10,7 +10,8 @@ polars = { version = "=0.52.0", default-features = false, features = [
     "lazy",
     "parquet",
     "fmt",
-    "is_in"
+    "is_in",
+    "dtype-u8"
 ] }
 fink-fat-engine = { path = "../fink-fat-engine" }
 comfy-table = "7.2.1"
@@ -19,6 +20,8 @@ clap = { version = "4.5.53", features = ["derive"] }
 rand = "0.9.2"
 serde = "1.0.228"
 serde_yaml = "0.9.34"
+rayon = "1.11.0"
+num_cpus = "1.17.0"
 
 [dev-dependencies]
 approx = "0.5.1"
@@ -37,5 +40,9 @@ name = "score-distribution"
 path = "src/bin/scoring/score_distribution.rs"
 
 [[bin]]
-name = "score-optimization"
-path = "src/bin/scoring/score_optimize_weights.rs"
+name = "inspect-scoring-components"
+path = "src/bin/scoring/inspect_scoring_components.rs"
+
+[[bin]]
+name = "optimize-position-params"
+path = "src/bin/scoring/optimize_position_params.rs"

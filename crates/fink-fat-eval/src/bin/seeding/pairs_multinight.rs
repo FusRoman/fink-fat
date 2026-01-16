@@ -24,6 +24,7 @@ use polars::prelude::*;
 
 use fink_fat_engine::{
     engine_config::{pair_config::PairConfig, triplet_config::TripletConfig},
+    night_id::NightId,
     spacetime_bucket::{healpix_binner::HealpixBinner, uniform_time_binner::UniformTimeBinner},
 };
 
@@ -151,7 +152,7 @@ fn main() -> Result<()> {
         let mut run_one = || -> Result<()> {
             let store = ingest_one_night(
                 &source,
-                nid,
+                NightId(nid as u32),
                 cli.scan.mode.into(),
                 cli.scan.minimal,
                 &ingest_cfg,

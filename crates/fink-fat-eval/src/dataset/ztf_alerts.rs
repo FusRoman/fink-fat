@@ -86,7 +86,9 @@
 use std::{collections::HashMap, fmt};
 
 use anyhow::{Context, Result};
-use fink_fat_engine::{Alert, AlertId, alerts::AlertStore};
+use fink_fat_engine::{
+    Alert, AlertId, alerts::AlertStore, night_id::NightId, seeding::seed_node::SeedNode,
+};
 use polars::prelude::*;
 
 use crate::dataset::{ParquetSource, ingest_config::AlertIngestConfig};
@@ -132,7 +134,7 @@ pub enum AlertLoadMode {
 #[derive(Clone, Debug)]
 pub struct ZtfAlertScan {
     /// Optional filter on `nid` (night id).
-    pub nid: Option<i32>,
+    pub nid: Option<NightId>,
     /// Loading mode controlling truth / Fink-class filters.
     pub mode: AlertLoadMode,
     /// Optional projection: keep only the minimal columns needed by the engine.
@@ -197,8 +199,8 @@ pub fn scan_ztf_alerts(path: &ParquetSource, scan: ZtfAlertScan) -> Result<LazyF
         col(cols::JD).cast(DataType::Float64),
         col(cols::MAGPSF).cast(DataType::Float32),
         col(cols::SIGMAPSF).cast(DataType::Float32),
-        col(cols::FID).cast(DataType::Int32),
-        col(cols::NID).cast(DataType::Int32),
+        col(cols::FID).cast(DataType::UInt8),
+        col(cols::NID).cast(DataType::UInt32),
         col(cols::SSNAMENR).cast(DataType::String),
         col(cols::TRAJECTORY_ID).cast(DataType::Int32),
         col(cols::FINK_CLASS).cast(DataType::String),
@@ -207,7 +209,7 @@ pub fn scan_ztf_alerts(path: &ParquetSource, scan: ZtfAlertScan) -> Result<LazyF
 
     // Optional filters (lazy predicates).
     if let Some(nid) = scan.nid {
-        lf = lf.filter(col(cols::NID).eq(lit(nid)));
+        lf = lf.filter(col(cols::NID).eq(lit(nid.0 as u32)));
     }
 
     // Mode-dependent filtering.
@@ -311,6 +313,11 @@ fn try_i32(ca: &Int32Chunked) -> Option<&[i32]> {
     ca.cont_slice().ok()
 }
 
+#[inline]
+fn try_u8(ca: &UInt8Chunked) -> Option<&[u8]> {
+    ca.cont_slice().ok()
+}
+
 /// Attempt to obtain a contiguous slice for a Float64 column.
 ///
 /// Parameters
@@ -357,7 +364,7 @@ struct BaseCols<'a> {
     ra: &'a Float64Chunked,
     dec: &'a Float64Chunked,
     jd: &'a Float64Chunked,
-    fid: &'a Int32Chunked,
+    fid: &'a UInt8Chunked,
 }
 
 /// Borrowed views of optional photometry-proxy columns.
@@ -420,8 +427,8 @@ fn load_base_cols<'a>(df: &'a DataFrame) -> Result<BaseCols<'a>> {
     let fid = df
         .column(cols::FID)?
         .as_materialized_series()
-        .i32()
-        .context("fid not Int32")?;
+        .u8()
+        .context("fid not UInt8")?;
 
     // Null checks once: unlocks no-null iterators and eliminates per-row Option overhead.
     anyhow::ensure!(candid.null_count() == 0, "candid has nulls");
@@ -487,7 +494,7 @@ struct BaseSlices<'a> {
     ra: &'a [f64],
     dec: &'a [f64],
     jd: &'a [f64],
-    fid: &'a [i32],
+    fid: &'a [u8],
 }
 
 /// Try to obtain contiguous slices for the required columns.
@@ -509,7 +516,7 @@ fn try_base_slices<'a>(b: &BaseCols<'a>) -> Option<BaseSlices<'a>> {
         ra: try_f64(b.ra)?,
         dec: try_f64(b.dec)?,
         jd: try_f64(b.jd)?,
-        fid: try_i32(b.fid)?,
+        fid: try_u8(b.fid)?,
     })
 }
 
@@ -564,7 +571,7 @@ fn push_alert(
     mjd_tt: f64,
     flux: f32,
     flux_err: f32,
-    band_i32: i32,
+    band: u8,
     sigma_rad: f64,
 ) {
     alerts.push(Alert {
@@ -577,7 +584,7 @@ fn push_alert(
         mjd_tt,
         flux,
         flux_err,
-        band: band_i32.clamp(0, 255) as u8,
+        band: band,
     });
 }
 
@@ -857,6 +864,35 @@ impl AlertStoreWithTruth {
     #[inline]
     pub fn truth_for(&self, id: AlertId) -> i32 {
         self.trajectory_id[id.idx()]
+    }
+
+    /// Compute a "seed truth id"
+    /// Returns Some(traj_id) iff all members share the same traj_id > 0.
+    ///
+    /// Parameters
+    /// ----------
+    /// seed : &SeedNode
+    ///     Seed node containing member alert ids.
+    ///
+    /// Returns
+    /// -------
+    /// Option<i32>
+    ///     `Some(traj_id)` if all members share the same truth id > 0,
+    ///     `None` otherwise (differing ids or any id <= 0).
+    pub fn seed_truth_id(&self, seed: &SeedNode) -> Option<i32> {
+        let mut t0: Option<i32> = None;
+        for &mid in &seed.members {
+            let tid = self.truth_for(mid);
+            if tid <= 0 {
+                return None;
+            }
+            match t0 {
+                None => t0 = Some(tid),
+                Some(x) if x == tid => {}
+                Some(_) => return None,
+            }
+        }
+        t0
     }
 
     /// Compute basic summary statistics over truth trajectories (`trajectory_id > 0`).
@@ -1180,4 +1216,215 @@ pub fn alert_store_with_truth_from_lazyframe(
 /// If you want to evaluate truth later, call [`alert_store_with_truth_from_lazyframe`].
 pub fn alert_store_from_lazyframe(lf: LazyFrame, cfg: AlertIngestConfig) -> Result<AlertStore> {
     Ok(alert_store_with_truth_from_lazyframe(lf, cfg)?.store)
+}
+
+/// Per-night accumulator used while streaming rows.
+struct NightAcc {
+    next_idx: usize,
+    min_mjd: f64,
+    alerts: Vec<Alert>,
+    truth: Vec<i32>,
+}
+
+impl NightAcc {
+    fn new() -> Self {
+        Self {
+            next_idx: 0,
+            min_mjd: f64::INFINITY,
+            alerts: Vec::new(),
+            truth: Vec::new(),
+        }
+    }
+}
+
+pub type NightStore = HashMap<NightId, AlertStoreWithTruth>;
+
+/// Build a map `nid -> AlertStoreWithTruth` from a collected DataFrame in a single pass.
+///
+/// Notes
+/// -----
+/// - Assumes the input `LazyFrame` already contains (at least) the canonical columns
+///   and is already casted to expected dtypes (as done in `scan_ztf_alerts`).
+/// - Builds *dense* `AlertId` per night by maintaining a per-night counter.
+/// - Uses chunk-safe no-null iterators to avoid slow per-row indexing.
+pub fn stores_by_nid_from_lazyframe(lf: LazyFrame, cfg: &AlertIngestConfig) -> Result<NightStore> {
+    // Collect once (the expensive step).
+    let df = lf
+        .collect()
+        .context("Failed to collect LazyFrame into a DataFrame")?;
+
+    // Load typed views (reusing your existing helpers).
+    let base = load_base_cols(&df)?;
+    let truth_cols = load_truth_cols(&df)?;
+
+    // Need nid column too.
+    let nid_ca = df
+        .column(cols::NID)?
+        .as_materialized_series()
+        .u32()
+        .context("nid not UInt32")?;
+    anyhow::ensure!(nid_ca.null_count() == 0, "nid has nulls");
+
+    // Conversion constants.
+    let deg2rad = std::f64::consts::PI / 180.0;
+    let sigma_rad = cfg.default_sigma_arcsec * deg2rad / 3600.0;
+    let jd_offset = if cfg.jd_to_mjd { 2_400_000.5 } else { 0.0 };
+    let angle_scale = if cfg.radec_in_degrees { deg2rad } else { 1.0 };
+
+    // Optional mag columns.
+    let mag_cols = if cfg.store_mag_as_flux_proxy {
+        Some(load_mag_cols(&df)?)
+    } else {
+        None
+    };
+
+    let mut out: HashMap<u32, NightAcc> = HashMap::new();
+
+    if let Some(mag) = mag_cols {
+        // Stream all rows with photometry proxy.
+        for (((((((candid, ra_v), dec_v), jd_v), fid_v), nid_v), tid_v), (mag_v, sig_v)) in base
+            .candid
+            .into_no_null_iter()
+            .zip(base.ra.into_no_null_iter())
+            .zip(base.dec.into_no_null_iter())
+            .zip(base.jd.into_no_null_iter())
+            .zip(base.fid.into_no_null_iter())
+            .zip(nid_ca.into_no_null_iter())
+            .zip(truth_cols.trajectory_id.into_no_null_iter())
+            .zip(
+                mag.magpsf
+                    .into_no_null_iter()
+                    .zip(mag.sigmapsf.into_no_null_iter()),
+            )
+        {
+            let ra_val = ra_v * angle_scale;
+            let dec_val = dec_v * angle_scale;
+            let mjd_tt = jd_v - jd_offset;
+
+            let acc = out.entry(nid_v).or_insert_with(NightAcc::new);
+            acc.min_mjd = acc.min_mjd.min(mjd_tt);
+
+            let idx = acc.next_idx;
+            acc.next_idx += 1;
+
+            acc.alerts.push(Alert {
+                id: AlertId::from(idx),
+                dia_source_id: candid as u64,
+                ra: ra_val,
+                ra_err: sigma_rad,
+                dec: dec_val,
+                dec_err: sigma_rad,
+                mjd_tt,
+                flux: mag_v,
+                flux_err: sig_v,
+                band: fid_v.clamp(0, 255) as u8,
+            });
+
+            acc.truth.push(tid_v);
+        }
+    } else {
+        // Stream all rows without photometry proxy.
+        for ((((((candid, ra_v), dec_v), jd_v), fid_v), nid_v), tid_v) in base
+            .candid
+            .into_no_null_iter()
+            .zip(base.ra.into_no_null_iter())
+            .zip(base.dec.into_no_null_iter())
+            .zip(base.jd.into_no_null_iter())
+            .zip(base.fid.into_no_null_iter())
+            .zip(nid_ca.into_no_null_iter())
+            .zip(truth_cols.trajectory_id.into_no_null_iter())
+        {
+            let ra_val = ra_v * angle_scale;
+            let dec_val = dec_v * angle_scale;
+            let mjd_tt = jd_v - jd_offset;
+
+            let acc = out.entry(nid_v).or_insert_with(NightAcc::new);
+            acc.min_mjd = acc.min_mjd.min(mjd_tt);
+
+            let idx = acc.next_idx;
+            acc.next_idx += 1;
+
+            acc.alerts.push(Alert {
+                id: AlertId::from(idx),
+                dia_source_id: candid as u64,
+                ra: ra_val,
+                ra_err: sigma_rad,
+                dec: dec_val,
+                dec_err: sigma_rad,
+                mjd_tt,
+                flux: 0.0,
+                flux_err: 0.0,
+                band: fid_v.clamp(0, 255) as u8,
+            });
+
+            acc.truth.push(tid_v);
+        }
+    }
+
+    // Finalize into engine stores.
+    let mut stores: NightStore = HashMap::with_capacity(out.len());
+    for (nid, acc) in out {
+        // If a night ended up empty (shouldn't happen), skip safely.
+        if acc.alerts.is_empty() {
+            continue;
+        }
+
+        // Engine convention: start_mjd = floor(min(mjd_tt)).
+        let store = AlertStore::new(acc.min_mjd.floor(), acc.alerts);
+
+        stores.insert(
+            NightId(nid),
+            AlertStoreWithTruth {
+                store,
+                trajectory_id: acc.truth,
+            },
+        );
+    }
+
+    Ok(stores)
+}
+
+/// Scan ZTF alerts from a Parquet source and build per-night alert stores with truth.
+///
+/// This is the evaluation-oriented ingestion routine. It scans all nights from the given
+/// Parquet source, builds per-night engine [`AlertStore`] plus truth sidecars, and returns
+/// a map `nid -> AlertStoreWithTruth`.
+///
+/// Parameters
+/// ----------
+/// * source : &ParquetSource
+///     Parquet source containing ZTF alert data.
+/// * mode : AlertLoadMode
+///     Loading mode (full vs minimal).
+/// * minimal : bool
+///     Whether to load minimal columns only.
+/// * ingest_cfg : &AlertIngestConfig
+///     Ingestion configuration options.
+///
+/// Returns
+/// -------
+/// * HashMap<i32, AlertStoreWithTruth>
+///     Map from `nid` to per-night alert store with truth sidecar.
+///
+/// Errors
+/// ------
+/// Returns an error if:
+/// - scanning fails,
+/// - required columns are missing / invalid / contain nulls,
+/// - `trajectory_id` is missing / invalid / contains nulls,
+/// - photometry-proxy columns are requested but missing / invalid.
+pub fn collect_nights(
+    source: &ParquetSource,
+    mode: AlertLoadMode,
+    minimal: bool,
+    ingest_cfg: &AlertIngestConfig,
+) -> Result<NightStore> {
+    let scan = ZtfAlertScan {
+        nid: None,
+        mode,
+        minimal,
+    };
+
+    let lf = scan_ztf_alerts(source, scan)?;
+    stores_by_nid_from_lazyframe(lf, ingest_cfg)
 }

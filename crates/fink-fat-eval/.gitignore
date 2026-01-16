@@ -3,3 +3,7 @@ out_pairs/
 multi_nights/
 out_scores/
 score_optim/
+out_inspect/
+score_optim_gates
+score_optim_weights/
+out/

@@ -12,18 +12,22 @@
 
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
-use fink_fat_engine::MjdTt;
+use fink_fat_engine::{MjdTt, night_id::NightId};
 use polars::prelude::*;
+use rand::{Rng, rngs::StdRng};
 
-use crate::{FiniteOr, dataset::{
-    ParquetSource,
-    ingest_config::AlertIngestConfig,
-    schema::cols,
-    ztf_alerts::{
-        AlertLoadMode, AlertStoreWithTruth, ZtfAlertScan, alert_store_with_truth_from_lazyframe,
-        scan_ztf_alerts,
+use crate::{
+    FiniteOr,
+    dataset::{
+        ParquetSource,
+        ingest_config::AlertIngestConfig,
+        schema::cols,
+        ztf_alerts::{
+            AlertLoadMode, AlertStoreWithTruth, ZtfAlertScan,
+            alert_store_with_truth_from_lazyframe, scan_ztf_alerts,
+        },
     },
-}};
+};
 
 /// Format a [`std::time::Duration`] in milliseconds.
 #[inline]
@@ -108,7 +112,7 @@ pub fn resolve_nids(
 /// Ingest a single night into an [`AlertStoreWithTruth`].
 pub fn ingest_one_night(
     source: &ParquetSource,
-    nid: i32,
+    nid: NightId,
     mode: AlertLoadMode,
     minimal: bool,
     ingest_cfg: &AlertIngestConfig,
@@ -158,4 +162,11 @@ pub fn infer_t0_mjd_tt(store: &AlertStoreWithTruth) -> MjdTt {
         .map(|a| a.mjd_tt)
         .fold(f64::INFINITY, |acc, x| acc.min(x))
         .if_finite_or(0.0)
+}
+
+// Log-uniform helper.
+pub fn logu(rng: &mut StdRng, lo: f64, hi: f64) -> f64 {
+    let a = lo.ln();
+    let b = hi.ln();
+    (a + rng.random_range(0.0..1.0) * (b - a)).exp()
 }

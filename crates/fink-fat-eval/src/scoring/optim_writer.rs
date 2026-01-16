@@ -18,8 +18,6 @@ use serde::Serialize;
 
 use fink_fat_engine::engine_config::{EngineConfig, score_config::ScoreConfig};
 
-use super::score_optim::Candidate;
-
 /// Write the best scoring configuration to YAML files.
 ///
 /// Files
@@ -29,24 +27,12 @@ use super::score_optim::Candidate;
 pub fn write_best_scoring_yamls(
     out_dir: &Utf8Path,
     engine_cfg: &EngineConfig,
-    base_scoring: &ScoreConfig,
-    best: &Candidate,
+    best_scoring: ScoreConfig,
 ) -> Result<(camino::Utf8PathBuf, camino::Utf8PathBuf)> {
     #[derive(Serialize)]
     struct ScoringPatch<'a> {
         scoring: &'a ScoreConfig,
     }
-
-    // Build updated scoring from base.
-    let mut best_scoring = base_scoring.clone();
-    best_scoring.position.w_pos = best.w_pos;
-    best_scoring.velocity.w_dir = best.w_dir;
-    best_scoring.velocity.w_norm = best.w_norm;
-    best_scoring.photometry.w_flux = best.w_flux;
-    best_scoring.gap.w_gap = best.w_gap;
-    best_scoring.band.w_band_mismatch = best.w_band;
-    best_scoring.velocity.theta0 = best.theta0;
-    best_scoring.velocity.v0 = best.v0;
 
     // Patch YAML
     let patch_path = out_dir.join("best_scoring.yaml");

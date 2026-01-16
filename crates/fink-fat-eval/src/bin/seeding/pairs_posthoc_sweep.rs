@@ -7,6 +7,7 @@
 use anyhow::Result;
 use clap::{ArgAction, Parser};
 
+use fink_fat_engine::night_id::NightId;
 use fink_fat_eval::{
     angular_speed::AngularSpeed,
     cli::common::{CommonBinningArgs, CommonPairGenArgs, CommonPlotArgs, CommonScanArgs},
@@ -83,7 +84,7 @@ fn main() -> Result<()> {
         out_dir: cli.scan.out_dir,
 
         scan: ZtfAlertScan {
-            nid: cli.scan.nid,
+            nid: cli.scan.nid.map(NightId),
             mode: cli.scan.mode.into(),
             minimal: cli.scan.minimal,
         },

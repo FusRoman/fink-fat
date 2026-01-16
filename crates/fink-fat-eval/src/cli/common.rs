@@ -157,7 +157,7 @@ pub struct CommonScanArgs {
     ///
     /// When set, only alerts belonging to this night are ingested.
     #[arg(long, value_name = "NID", help_heading = "Scan")]
-    pub nid: Option<i32>,
+    pub nid: Option<u32>,
 
     /// Alert loading mode (truth / broker filtering).
     #[arg(

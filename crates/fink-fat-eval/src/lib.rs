@@ -6,6 +6,7 @@ pub mod angular_speed;
 pub mod cli;
 pub mod scoring;
 pub mod bin_utils;
+pub mod night_seeds;
 
 
 
