@@ -1,11 +1,11 @@
+pub mod edge_item;
 pub mod graph_metrics;
 pub mod metrics;
-pub mod edge_item;
 
 use crate::scoring::{
     frozen_pairs::LabeledEdge,
     optimization_metrics::{
-        edge_item::EdgeItem, graph_metrics::GraphRankingMetrics, metrics::Metrics
+        edge_item::EdgeItem, graph_metrics::GraphRankingMetrics, metrics::Metrics,
     },
 };
 
@@ -122,7 +122,7 @@ impl EdgeSeparationMetrics {
         // 2) Compute metrics.
         let metric_summary = edge_item.summary(pop.n_good, pop.n_bad);
 
-        let graph_ranking_metrics = GraphRankingMetrics::graph_ranking_metrics(edges);
+        let graph_ranking_metrics = GraphRankingMetrics::from_labeled_edges(edges);
 
         Some(Self {
             n_good: pop.n_good,
