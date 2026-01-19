@@ -7,3 +7,4 @@ out_inspect/
 score_optim_gates
 score_optim_weights/
 out/
+frozen_pairs/

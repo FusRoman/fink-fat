@@ -64,7 +64,7 @@ The binary wrote the following plots to `out_pairs/`:
 
 ### 1) Δt distribution (`pairs_dt_hist.png`)
 
-![Pairs: pairs dt histogram](../out_pairs/pairs_dt_hist.png)
+![Pairs: pairs dt histogram](../../out_pairs/pairs_dt_hist.png)
 
 The Δt histogram shows a **very strong spike at very small Δt**, followed by a structured distribution up to the configured maximum (**0.1 day**).
 
@@ -77,7 +77,7 @@ The Δt histogram shows a **very strong spike at very small Δt**, followed by a
 
 ### 2) Separation distribution (`pairs_sep_hist.png`)
 
-![Pairs: pairs sep histogram](../out_pairs/pairs_sep_hist.png)
+![Pairs: pairs sep histogram](../../out_pairs/pairs_sep_hist.png)
 
 Separation is strongly concentrated at **small values** for true pairs, with a visibly heavier tail for contaminated pairs.
 
@@ -89,7 +89,7 @@ This is exactly what we want from a kinematic filter: large separations (given r
 
 ### 3) Δt vs separation scatter (`pairs_scatter_dt_sep.png`)
 
-![Pairs: pairs scatter dt histogram](../out_pairs/pairs_scatter_dt_sep.png)
+![Pairs: pairs scatter dt histogram](../../out_pairs/pairs_scatter_dt_sep.png)
 
 The scatter plot shows:
 - A clear **positive envelope**: larger Δt allows larger separations.
@@ -100,7 +100,7 @@ You can visually interpret the kinematic cut \(\mathrm{sep} \le \omega\,\Delta t
 
 ### 4) Angular-speed distribution (`pairs_omega_hist.png`)
 
-![Pairs: pairs omega histogram](../out_pairs/pairs_omega_hist.png)
+![Pairs: pairs omega histogram](../../out_pairs/pairs_omega_hist.png)
 
 With \(\omega = \mathrm{sep}/\Delta t\) (displayed in **arcmin/day**):
 - The distribution peaks roughly around **12–15 arcmin/day** for true pairs.
@@ -112,7 +112,7 @@ This provides an empirical justification for sweeping ω rather than a fixed sep
 
 #### Precision/recall proxy (`pairs_tradeoff_omega_threshold.png`)
 
-![Pairs: pairs tradeoff omega threshold](../out_pairs/pairs_tradeoff_omega_threshold.png)
+![Pairs: pairs tradeoff omega threshold](../../out_pairs/pairs_tradeoff_omega_threshold.png)
 
 - **Precision on truth** stays high across the sweep (**≈0.99**, slowly decreasing as ω increases).
 - **Consecutive recall (proxy)** rises sharply and then saturates:
@@ -130,13 +130,13 @@ At this value (from visual inspection of the curve):
 
 #### Global purity/completeness (`pairs_global_tradeoff_omega_threshold.png`)
 
-![Pairs: pairs global tradeoff omega threshold](../out_pairs/pairs_global_tradeoff_omega_threshold.png)
+![Pairs: pairs global tradeoff omega threshold](../../out_pairs/pairs_global_tradeoff_omega_threshold.png)
 
 Because you ran with `--only-truth`, the global purity curve is very close to the truth-only precision curve. The same “knee” is visible.
 
 ### 6) Cost curve (`pairs_cost_vs_omega_threshold.png`)
 
-![Pairs: pairs cost vs omega threshold](../out_pairs/pairs_cost_vs_omega_threshold.png)
+![Pairs: pairs cost vs omega threshold](../../out_pairs/pairs_cost_vs_omega_threshold.png)
 
 The cost curve reports **log10(n_pairs_kept)** as ω increases:
 

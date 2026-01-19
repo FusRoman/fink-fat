@@ -102,7 +102,7 @@ This run writes:
 
 ### 1) Alert volume per night (`multinight_alerts_per_night.png`)
 
-![Multi-night: alerts per night](../multi_nights/multinight_alerts_per_night.png)
+![Multi-night: alerts per night](../../multi_nights/multinight_alerts_per_night.png)
 
 Alert volume varies substantially across nights (from a few hundred alerts to ~2×10⁵).
 This variability directly drives both **runtime** and **pair/triplet combinatorics**.
@@ -113,7 +113,7 @@ This variability directly drives both **runtime** and **pair/triplet combinatori
 
 ### 2) Pairs per alert (`multinight_pairs_per_alert.png`)
 
-![Multi-night: pairs per alert](../multi_nights/multinight_pairs_per_alert.png)
+![Multi-night: pairs per alert](../../multi_nights/multinight_pairs_per_alert.png)
 
 Pairs per alert is a practical proxy for **combinatorial cost**.
 The distribution spans a wide range, with a central band around ~0.5–0.9 pairs/alert,
@@ -125,7 +125,7 @@ and noticeably smaller values on low-volume nights.
 
 ### 3) Triplets per alert (`multinight_triplets_per_alert.png`)
 
-![Multi-night: triplets per alert](../multi_nights/multinight_triplets_per_alert.png)
+![Multi-night: triplets per alert](../../multi_nights/multinight_triplets_per_alert.png)
 
 Triplets are much rarer than pairs (typically ≤ a few percent per alert), and many nights have **zero** triplets
 under this configuration (non-zero on **36** nights).
@@ -145,7 +145,7 @@ under this configuration (non-zero on **36** nights).
 
 ### 4) Runtime scaling (`multinight_runtime_vs_alerts.png`)
 
-![Multi-night: runtime vs alerts](../multi_nights/multinight_runtime_vs_alerts.png)
+![Multi-night: runtime vs alerts](../../multi_nights/multinight_runtime_vs_alerts.png)
 
 The plot shows per-night runtime for:
 - bucket index build,
@@ -161,7 +161,7 @@ as a function of the number of alerts.
 
 ### 5) Pair quality tradeoff (`multinight_quality_tradeoff_pairs.png`)
 
-![Multi-night: pair quality tradeoff](../multi_nights/multinight_quality_tradeoff_pairs.png)
+![Multi-night: pair quality tradeoff](../../multi_nights/multinight_quality_tradeoff_pairs.png)
 
 Each bubble is a night:
 - x-axis: `pair_consecutive_recall` (completeness proxy)
