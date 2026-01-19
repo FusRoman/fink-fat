@@ -31,7 +31,7 @@ use fink_fat_eval::{
         ingest_config::AlertIngestConfig,
         ztf_alerts::{NightStore, collect_nights},
     },
-    night_seeds::NightSeeds,
+    night_seeds::SeedStore,
     scoring::{
         frozen_pairs::EdgeSampling, optim_writer::write_best_scoring_yamls,
         optimizer_position_params::optimize_scoring_params,
@@ -77,20 +77,10 @@ fn main() -> Result<()> {
 
     println!("Generating seeds...");
 
-    let seed_store = NightSeeds::generate_nightseed_store(
-        &night_store,
-        &engine_cfg,
-        cli.binning.healpix_depth,
-        cli.binning.time_bin_days,
-        cli.pairs_only,
-    )?;
+    let seed_store =
+        SeedStore::seed_store_from_night_store_truth(&night_store, true, 1.0, Some(42), None);
 
-    println!(
-        "Number of total seeds: {}",
-        seed_store
-            .iter()
-            .fold(0, |acc, (_, night_seeds)| { acc + night_seeds.seeds.len() })
-    );
+    println!("{seed_store}");
 
     let sampling = EdgeSampling {
         sample_right_per_left: 2048,
