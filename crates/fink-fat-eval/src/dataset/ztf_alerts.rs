@@ -1428,3 +1428,32 @@ pub fn collect_nights(
     let lf = scan_ztf_alerts(source, scan)?;
     stores_by_nid_from_lazyframe(lf, ingest_cfg)
 }
+
+/// Retrieve alerts by their ids from a per-night store.
+////
+/// Parameters
+/// ----------
+/// store : &NightStore
+///     Map from `NightId` to per-night alert stores.
+/// nid : NightId
+///     Night identifier to select.
+/// alert_ids : &[AlertId]
+///     Slice of alert ids to retrieve.
+///
+/// Returns
+/// -------
+/// Option<Vec<&Alert>>
+///     `Some(Vec<&Alert>)` if the night exists, containing references to the
+///     requested alerts found in that night (missing alerts are skipped).
+pub fn get_alerts_from_night_store<'a>(
+    store: &'a NightStore,
+    nid: &NightId,
+    alert_ids: &[AlertId],
+) -> Option<Vec<&'a Alert>> {
+    store.get(&nid).map(|ns| {
+        alert_ids
+            .iter()
+            .filter_map(|&aid| ns.store.alerts.get(aid.idx()))
+            .collect()
+    })
+}
