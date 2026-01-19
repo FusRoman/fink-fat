@@ -55,7 +55,7 @@
 //! - Tie handling: ties on `cost` follow the sort order; in practice, exact ties are rare
 //!   unless costs are quantized.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt};
 
 use fink_fat_engine::seeding::seed_id::SeedId;
 
@@ -96,6 +96,31 @@ pub struct GraphRankingMetrics {
     pub hit_at_5: f64,
     /// Hit@10 over sources with at least one true edge.
     pub hit_at_10: f64,
+}
+
+impl fmt::Display for GraphRankingMetrics {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Graph ranking metrics")?;
+        writeln!(f, "---------------------")?;
+
+        writeln!(f, "Sources")?;
+        writeln!(f, "  Total sources        : {}", self.n_sources_total)?;
+        writeln!(f, "  With true edge       : {}", self.n_sources_with_good)?;
+        writeln!(f, "  Coverage             : {:.4}", self.coverage)?;
+
+        writeln!(f)?;
+        writeln!(f, "Ranking quality (per source, first true edge)")?;
+        writeln!(f, "  MRR                  : {:.6}", self.mrr)?;
+        writeln!(f, "  Mean rank            : {:.4}", self.mean_rank)?;
+
+        writeln!(f)?;
+        writeln!(f, "Hit@K")?;
+        writeln!(f, "  Hit@1                : {:.4}", self.hit_at_1)?;
+        writeln!(f, "  Hit@5                : {:.4}", self.hit_at_5)?;
+        writeln!(f, "  Hit@10               : {:.4}", self.hit_at_10)?;
+
+        Ok(())
+    }
 }
 
 impl GraphRankingMetrics {

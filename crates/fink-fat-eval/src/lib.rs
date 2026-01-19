@@ -7,7 +7,7 @@ pub mod cli;
 pub mod scoring;
 pub mod bin_utils;
 pub mod night_seeds;
-
+pub mod io;
 
 
 /// Replace NaN/Inf by a fallback.

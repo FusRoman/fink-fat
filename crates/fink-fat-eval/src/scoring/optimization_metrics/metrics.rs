@@ -1,3 +1,5 @@
+use std::fmt;
+
 /// Operating characteristics of a binary decision threshold on `cost`.
 ///
 /// Overview
@@ -387,6 +389,47 @@ pub struct MetricsSummary {
     pub fpr_at_tpr_95: f64,
     pub fpr_at_tpr_99: f64,
     pub tpr_at_fpr_1e3: f64,
+}
+
+impl fmt::Display for MetricsSummary {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Metrics summary")?;
+        writeln!(f, "---------------")?;
+
+        writeln!(f, "Global metrics")?;
+        writeln!(f, "  AUC (ROC)          : {:.6}", self.auc)?;
+        writeln!(f, "  AUC (PR)           : {:.6}", self.auc_pr)?;
+        writeln!(f, "  KS                 : {:.6}", self.ks)?;
+
+        writeln!(f)?;
+        writeln!(f, "Best operating points")?;
+
+        writeln!(
+            f,
+            "  Youden J           : J={:.6} @ cost={:.6}  (TPR={:.4}, FPR={:.4}, P={:.4})",
+            self.best_youden.best_j,
+            self.best_youden.threshold_cost,
+            self.best_youden.tpr,
+            self.best_youden.fpr,
+            self.best_youden.precision,
+        )?;
+
+        writeln!(
+            f,
+            "  F1 max             : F1={:.6} @ cost={:.6}",
+            self.best_f1.best_f1, self.best_f1.op.threshold_cost,
+        )?;
+        writeln!(f, "    └─ MCC @ F1      : {:.6}", self.mcc_at_best_f1)?;
+
+        writeln!(f)?;
+        writeln!(f, "Low-contamination regime")?;
+        writeln!(f, "  FPR @ TPR=0.90     : {:.2e}", self.fpr_at_tpr_90)?;
+        writeln!(f, "  FPR @ TPR=0.95     : {:.2e}", self.fpr_at_tpr_95)?;
+        writeln!(f, "  FPR @ TPR=0.99     : {:.2e}", self.fpr_at_tpr_99)?;
+        writeln!(f, "  TPR @ FPR=1e-3     : {:.4}", self.tpr_at_fpr_1e3)?;
+
+        Ok(())
+    }
 }
 
 /// Metrics computed from a set of [`EdgeItem`].

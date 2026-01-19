@@ -4,18 +4,21 @@
 
 use std::collections::HashMap;
 
+use camino::Utf8Path;
 use fink_fat_engine::{
     engine_config::score_config::ScoreConfig, graph::score::ScoredEdge, night_id::NightId,
 };
 use rand::{Rng, RngCore, SeedableRng, rngs::StdRng};
+use serde::{Deserialize, Serialize};
 
 use crate::night_seeds::{LabeledEdge, NightSeeds, SeedStore};
+use crate::io::{read_bin, write_bin};
 
 /// Represents a frozen candidate edge between two seeds. The pair is identified
 /// by the night IDs of the left and right seed and their indices within the
 /// corresponding `NightSeeds::seeds` vectors. The `same` field encodes whether
 /// the two seeds share the same truth ID (both truth IDs present and equal).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FrozenPair {
     /// Night ID of the left seed.
     pub a_nid: NightId,
@@ -110,6 +113,11 @@ impl FrozenPair {
         };
 
         for delta in 1..=horizon {
+            let t0 = std::time::Instant::now();
+            let before_out_len = out.len();
+
+            println!("Generating frozen pairs for delta = {delta} ...");
+
             // Deterministic RNG split per delta (mirrors labeled_edges_by_delta style).
             let delta_seed =
                 base_rng.next_u64() ^ (delta as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
@@ -151,9 +159,42 @@ impl FrozenPair {
                     &mut out,
                 );
             }
+
+            println!(
+                "  - delta = {delta}: generated {} frozen pairs in {:.2?}\n\n",
+                out.len() - before_out_len,
+                t0.elapsed()
+            );
         }
 
         out
+    }
+
+    /// Write frozen pairs to a binary file.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `path` – Output file path.
+    /// * `frozen_pairs` – Slice of frozen pairs to write.
+    ///
+    /// Return
+    /// ------
+    /// * `anyhow::Result<()>` – I/O result.
+    pub fn write(path: &Utf8Path, frozen_pairs: &[Self]) -> anyhow::Result<()> {
+        write_bin(path, frozen_pairs)
+    }
+
+    /// Read frozen pairs from a binary file.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `path` – Input file path.
+    ///
+    /// Return
+    /// ------
+    /// * `anyhow::Result<Vec<FrozenPair>>` – Read frozen pairs.
+    pub fn read(path: &Utf8Path) -> anyhow::Result<Vec<Self>> {
+        read_bin(path)
     }
 }
 

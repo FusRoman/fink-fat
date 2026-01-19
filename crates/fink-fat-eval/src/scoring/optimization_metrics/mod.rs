@@ -2,6 +2,8 @@ pub mod edge_item;
 pub mod graph_metrics;
 pub mod metrics;
 
+use std::fmt;
+
 use crate::{
     night_seeds::LabeledEdge,
     scoring::optimization_metrics::{
@@ -93,6 +95,48 @@ pub struct EdgeSeparationMetrics {
     pub edge_metrics: MetricsSummary,
 
     pub graph_ranking_metrics: Option<GraphRankingMetrics>,
+}
+
+impl fmt::Display for EdgeSeparationMetrics {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Edge separation metrics")?;
+        writeln!(f, "-----------------------")?;
+
+        let n_total = self.n_good.saturating_add(self.n_bad);
+        let good_frac = if n_total > 0 {
+            (self.n_good as f64) / (n_total as f64)
+        } else {
+            f64::NAN
+        };
+
+        writeln!(f, "Population")?;
+        writeln!(f, "  Good edges (same)     : {}", self.n_good)?;
+        writeln!(f, "  Bad edges (diff)      : {}", self.n_bad)?;
+        if n_total > 0 {
+            writeln!(f, "  Good fraction         : {:.4}", good_frac)?;
+        } else {
+            writeln!(f, "  Good fraction         : NaN (empty)")?;
+        }
+
+        writeln!(f)?;
+        // Reuse MetricsSummary display.
+        writeln!(f, "{}", self.edge_metrics)?;
+
+        writeln!(f)?;
+        match self.graph_ranking_metrics {
+            Some(m) => {
+                // Reuse GraphRankingMetrics display.
+                writeln!(f, "{m}")?;
+            }
+            None => {
+                writeln!(f, "Graph ranking metrics")?;
+                writeln!(f, "---------------------")?;
+                writeln!(f, "  (not computed)")?;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl EdgeSeparationMetrics {

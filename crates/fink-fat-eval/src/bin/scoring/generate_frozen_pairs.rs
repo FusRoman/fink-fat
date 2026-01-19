@@ -1,16 +1,15 @@
-/// Command-line tool to optimize position scoring parameters
-/// using balanced inter-night edge samples.
-//// The tool performs a random search over position scoring parameters,
-/// evaluating each candidate configuration on a set of balanced inter-night edges
-/// frozen from the provided dataset. The goal is to minimize the false positive rate (FPR)
-/// at a target true positive rate (TPR) by adjusting scoring parameters related to position differences.
-
+/// Command-line tool to generate frozen pairs
+/// from a dataset of alerts.
+/// The tool processes alerts from multiple nights,
+/// generates seeds based on truth information,
+/// and creates frozen pairs for scoring evaluation.
+/// 
 /// Example command to run the tool:
 /// ```bash
 /// clear && cargo run \
 ///     --release \
 ///     -p fink-fat-eval \
-///     --bin optimize-position-params \
+///     --bin generate-frozen-pairs \
 ///     ../../test_exp/ztf_dataset_2025.parquet \
 ///     --engine-config src/bin/scoring/config_engine.yaml \
 ///     --jobs 8 \
@@ -21,17 +20,17 @@
 use std::fs;
 
 use anyhow::{Context, Result};
+use camino::Utf8Path;
 use clap::Parser;
 use fink_fat_engine::engine_config::{EngineConfig, load_engine_config_validated};
 use fink_fat_eval::{
-    bin_utils::resolve_nids,
     cli::scoring::Cli,
     dataset::{
         ParquetSource,
         ingest_config::AlertIngestConfig,
         ztf_alerts::{NightStore, collect_nights},
     },
-    night_seeds::{LabeledEdgesByDelta, LabeledEdgesByDeltaDisplay, SeedStore},
+    night_seeds::SeedStore,
     scoring::frozen_pairs::FrozenPair,
 };
 use rayon::ThreadPoolBuilder;
@@ -52,13 +51,6 @@ fn main() -> Result<()> {
         .with_context(|| format!("failed to open parquet source: {}", cli.scan.parquet))?;
     let ingest_cfg = AlertIngestConfig::default();
 
-    // Determine night IDs
-    let nids = resolve_nids(&cli.scan.parquet, cli.nids.as_deref(), cli.max_nights)?;
-    anyhow::ensure!(
-        nids.len() >= 2,
-        "need at least 2 nights to inspect inter-night edges"
-    );
-
     let jobs = cli.jobs.unwrap_or_else(num_cpus::get);
     println!("Using {jobs} parallel jobs (threads)");
 
@@ -75,35 +67,27 @@ fn main() -> Result<()> {
     println!("Generating seeds...");
 
     let seed_store =
-        SeedStore::seed_store_from_night_store_truth(&night_store, true, 1.1, Some(42), None);
+        SeedStore::seed_store_from_night_store_truth(&night_store, true, 1.5, Some(42), None);
 
     println!("{seed_store}");
 
+    println!("Generating frozen pairs...");
+
     let frozen_pairs =
-        FrozenPair::frozen_pairs(&seed_store, &engine_cfg.scoring, 10, 1.0, Some(42));
+        FrozenPair::frozen_pairs(&seed_store, &engine_cfg.scoring, 15, 1.5, Some(42));
 
-    let edges =
-        FrozenPair::eval_cfg_on_frozen_pairs(&seed_store, &frozen_pairs, &engine_cfg.scoring);
+    println!("Total frozen pairs generated: {}", frozen_pairs.len());
 
-    println!("Total frozen pairs evaluated: {}", edges.len());
-    println!(
-        "  - good edges: {}",
-        edges.iter().filter(|e| e.same).count()
-    );
-    println!(
-        "  - bad edges: {}",
-        edges.iter().filter(|e| !e.same).count()
-    );
+    println!("Writing results...");
+    let frozen_pair_path = Utf8Path::new(&cli.scan.out_dir).join("frozen_pairs_by_delta.bin");
+    FrozenPair::write(&frozen_pair_path, &frozen_pairs)
+        .with_context(|| format!("write frozen pairs to {}", frozen_pair_path))?;
 
-    let buckets: LabeledEdgesByDelta = seed_store.labeled_edges_by_delta(
-        &engine_cfg.scoring,
-        10,
-        false,
-        Some(2_000_000),
-        Some(42),
-    );
+    let seed_store_path = Utf8Path::new(&cli.scan.out_dir).join("seed_store.bin");
+    seed_store
+        .write(&seed_store_path)
+        .with_context(|| "write seed store")?;
 
-    println!("{}", LabeledEdgesByDeltaDisplay(&buckets));
-
+    println!("Done.");
     Ok(())
 }

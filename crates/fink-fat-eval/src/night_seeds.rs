@@ -4,6 +4,7 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
+use camino::Utf8Path;
 use fink_fat_engine::{
     Alert,
     engine_config::{EngineConfig, score_config::ScoreConfig},
@@ -13,8 +14,10 @@ use fink_fat_engine::{
     spacetime_bucket::{healpix_binner::HealpixBinner, uniform_time_binner::UniformTimeBinner},
 };
 
+use crate::io::{read_bin, write_bin};
 use anyhow::Result;
 use rand::{Rng, RngCore, SeedableRng, rngs::StdRng};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     bin_utils::{fmt_ms, infer_t0_mjd_tt},
@@ -24,7 +27,7 @@ use crate::{
 
 use rayon::prelude::*;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct NightSeeds {
     pub nid: NightId,
     pub seeds: Vec<SeedNode>,
@@ -274,7 +277,7 @@ impl NightSeeds {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct SeedStore {
     inner: HashMap<NightId, NightSeeds>,
 }
@@ -637,6 +640,37 @@ impl SeedStore {
         }
 
         out
+    }
+
+    /// Write the `SeedStore` to a binary file.
+    ///
+    /// Parameters
+    /// ----------
+    /// path : &Utf8Path
+    ///     The file path to write the binary data to.
+    ///
+    /// Returns
+    /// -------
+    /// anyhow::Result<()>
+    ///     An empty result indicating success or failure.
+    pub fn write(&self, path: &Utf8Path) -> anyhow::Result<()> {
+        write_bin(path, self)
+    }
+
+    /// Read a `SeedStore` from a binary file.
+    ///
+    /// Parameters
+    /// ----------
+    /// path : &Utf8Path
+    ///     The file path to read the binary data from.
+    ///
+    /// Returns
+    /// -------
+    /// anyhow::Result<SeedStore>
+    ///     The read `SeedStore` or an error.
+    pub fn read(path: &Utf8Path) -> anyhow::Result<Self> {
+        let store: SeedStore = read_bin(path)?;
+        Ok(store)
     }
 }
 

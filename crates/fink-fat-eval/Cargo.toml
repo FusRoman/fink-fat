@@ -11,7 +11,7 @@ polars = { version = "=0.52.0", default-features = false, features = [
     "parquet",
     "fmt",
     "is_in",
-    "dtype-u8"
+    "dtype-u8",
 ] }
 fink-fat-engine = { path = "../fink-fat-engine" }
 comfy-table = "7.2.1"
@@ -22,6 +22,7 @@ serde = "1.0.228"
 serde_yaml = "0.9.34"
 rayon = "1.11.0"
 num_cpus = "1.17.0"
+bitcode = { version = "0.6.9", features = ["serde"] }
 
 [dev-dependencies]
 approx = "0.5.1"
@@ -44,5 +45,9 @@ name = "inspect-scoring-components"
 path = "src/bin/scoring/inspect_scoring_components.rs"
 
 [[bin]]
-name = "optimize-position-params"
-path = "src/bin/scoring/optimize_position_params.rs"
+name = "generate-frozen-pairs"
+path = "src/bin/scoring/generate_frozen_pairs.rs"
+
+[[bin]]
+name = "evaluate-scoring"
+path = "src/bin/scoring/evaluate_scoring.rs"
