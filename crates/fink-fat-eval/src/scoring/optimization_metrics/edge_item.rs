@@ -130,7 +130,7 @@ fn for_each_tie_block(
 /// - The distinction between `cost` and `score` avoids ambiguity between
 ///   *threshold-based* and *ranking-based* metrics.
 #[derive(Debug, Clone, Copy)]
-pub(in crate::scoring::optimization_metrics) struct EdgeItem {
+pub struct EdgeItem {
     pub cost: f64,
     pub score: f64, // typically -cost
     pub is_good: bool,

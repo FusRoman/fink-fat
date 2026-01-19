@@ -3,7 +3,7 @@
 /// The tool processes alerts from multiple nights,
 /// generates seeds based on truth information,
 /// and creates frozen pairs for scoring evaluation.
-/// 
+///
 /// Example command to run the tool:
 /// ```bash
 /// clear && cargo run \
@@ -67,14 +67,13 @@ fn main() -> Result<()> {
     println!("Generating seeds...");
 
     let seed_store =
-        SeedStore::seed_store_from_night_store_truth(&night_store, true, 1.5, Some(42), None);
+        SeedStore::seed_store_from_night_store_truth(&night_store, true, 1., Some(42), None);
 
     println!("{seed_store}");
 
     println!("Generating frozen pairs...");
 
-    let frozen_pairs =
-        FrozenPair::frozen_pairs(&seed_store, &engine_cfg.scoring, 15, 1.5, Some(42));
+    let frozen_pairs = FrozenPair::frozen_pairs(&seed_store, &engine_cfg.scoring, 15, 1., Some(42));
 
     println!("Total frozen pairs generated: {}", frozen_pairs.len());
 
