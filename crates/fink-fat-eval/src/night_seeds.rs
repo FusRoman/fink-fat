@@ -260,7 +260,7 @@ impl NightSeeds {
     }
 
     /// Get all true seeds in this night.
-    /// 
+    ///
     /// Returns
     /// -------
     /// Vec<&SeedNode>

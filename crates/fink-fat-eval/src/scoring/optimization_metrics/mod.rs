@@ -2,9 +2,9 @@ pub mod edge_item;
 pub mod graph_metrics;
 pub mod metrics;
 
-use crate::scoring::{
-    frozen_pairs::LabeledEdge,
-    optimization_metrics::{
+use crate::{
+    night_seeds::LabeledEdge,
+    scoring::optimization_metrics::{
         edge_item::EdgeItem, graph_metrics::GraphRankingMetrics, metrics::Metrics,
     },
 };

@@ -2,67 +2,14 @@
 // Frozen pairs generation
 // -----------------------------------------------------------------------------
 
-use fink_fat_engine::{graph::score::ScoredEdge, night_id::NightId};
-use rand::{SeedableRng, seq::index::sample};
+use std::collections::HashMap;
 
-use crate::night_seeds::{NightSeeds, SeedStore};
+use fink_fat_engine::{
+    engine_config::score_config::ScoreConfig, graph::score::ScoredEdge, night_id::NightId,
+};
+use rand::{Rng, RngCore, SeedableRng, rngs::StdRng};
 
-/// Configuration for balanced inter-night sampling.
-#[derive(Debug, Clone)]
-pub struct EdgeSampling {
-    /// Number of right seeds sampled per left seed.
-    ///
-    /// This controls the main runtime knob: total score calls per night pair
-    /// are approximately `O(|left| * sample_right_per_left)` (before early-stop).
-    pub sample_right_per_left: usize,
-
-    /// Target edges per class (same AND diff) **kept per night pair**.
-    ///
-    /// Total kept per pair is at most `2 * target_per_class`.
-    pub target_per_class: usize,
-
-    /// Hard cap on the number of seed-pair score attempts per night pair.
-    ///
-    /// This bounds runtime even when `ScoredEdge::score` rejects most pairs.
-    pub max_tested_pairs_per_night_pair: usize,
-
-    /// Limit night pairs to `j <= i + max_night_jump` in sorted night order.
-    ///
-    /// - `Some(1)` means only consecutive nights.
-    /// - `Some(2)` allows a 2-night jump, etc.
-    /// - `None` scores all `(i, j)` with `i < j` (can be huge).
-    pub max_night_jump: Option<u32>,
-
-    /// If true, only consider edges where both endpoints have truth ids.
-    pub only_truth: bool,
-
-    /// Base RNG seed (deterministic per night pair).
-    pub base_seed: u64,
-}
-
-impl Default for EdgeSampling {
-    fn default() -> Self {
-        Self {
-            sample_right_per_left: 32,
-            target_per_class: 2_000,
-            max_tested_pairs_per_night_pair: 200_000,
-            max_night_jump: Some(2),
-            only_truth: true,
-            base_seed: 42,
-        }
-    }
-}
-
-/// Scored edge with a truth label.
-///
-/// Notes
-/// -----
-/// `same=true` means both endpoints have a truth id and they match.
-#[derive(Clone, Debug)]
-pub struct LabeledEdge {
-    pub same: bool,
-    pub edge: ScoredEdge,
-}
+use crate::night_seeds::{LabeledEdge, NightSeeds, SeedStore};
 
 /// Represents a frozen candidate edge between two seeds. The pair is identified
 /// by the night IDs of the left and right seed and their indices within the
@@ -84,180 +31,258 @@ pub struct FrozenPair {
     pub delta: u32,
 }
 
-/// Helper: return the list of eligible seed indices on one side.
-///
-/// If `only_truth` is true, keeps only seeds for which a truth ID is present.
-fn eligible_seed_indices(truth: &[Option<i32>], only_truth: bool) -> Vec<usize> {
-    if !only_truth {
-        return (0..truth.len()).collect();
+impl FrozenPair {
+    pub fn compute_score_edge(
+        &self,
+        seed_store: &SeedStore,
+        scoring_cfg: &ScoreConfig,
+    ) -> Option<ScoredEdge> {
+        let a_seeds = seed_store.get(&self.a_nid)?;
+        let b_seeds = seed_store.get(&self.b_nid)?;
+
+        let a_seed = &a_seeds.seeds[self.a_idx];
+        let b_seed = &b_seeds.seeds[self.b_idx];
+
+        let delta_revisit = self.b_nid.0.saturating_sub(self.a_nid.0);
+
+        ScoredEdge::score(a_seed, b_seed, scoring_cfg, delta_revisit)
     }
-    truth
+
+    pub fn eval_cfg_on_frozen_pairs(
+        store: &SeedStore,
+        frozen: &[Self],
+        cfg: &ScoreConfig,
+    ) -> Vec<LabeledEdge> {
+        let mut out: Vec<LabeledEdge> = Vec::with_capacity(frozen.len());
+
+        for p in frozen {
+            if let Some(edge) = p.compute_score_edge(store, cfg) {
+                out.push(LabeledEdge {
+                    same: p.same,
+                    edge: edge,
+                });
+            }
+        }
+        out
+    }
+
+    /// Build a sampled set of frozen inter-night seed pairs up to a given horizon.
+    ///
+    /// Strategy (per (night, night+delta))
+    /// -------------------------------
+    /// 1) Enumerate **all true pairs**: all `(i, j)` where both seeds have a truth id
+    ///    and `tid(i) == tid(j)`.
+    /// 2) Sample **false pairs**: random `(i, j)` with `tid(i) != tid(j)` until reaching:
+    ///    `target_false = round(false_to_true_ratio * n_true_pairs_for_this_night_pair)`.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `horizon` – Maximum night separation to consider (in days / `NightId` units).
+    /// * `false_to_true_ratio` – False pairs budget relative to the number of true pairs.
+    /// * `seed` – Optional RNG seed for deterministic sampling.
+    ///
+    /// Return
+    /// ------
+    /// * `Vec<FrozenPair>` – Sampled frozen pairs across all (night, delta).
+    ///
+    /// Notes
+    /// -----
+    /// * Pairs are **directed**: `(n → n+delta)`.
+    /// * `same=true` iff both endpoints have a truth id and they match.
+    /// * Nights missing from the store for a given `(n, n+delta)` are skipped.
+    pub fn frozen_pairs(
+        seed_store: &SeedStore,
+        cfg: &ScoreConfig,
+        horizon: u32,
+        false_to_true_ratio: f64,
+        seed: Option<u64>,
+    ) -> Vec<Self> {
+        let mut out: Vec<FrozenPair> = Vec::new();
+
+        // Deterministic iteration order.
+        let mut night_ids: Vec<NightId> = seed_store.keys().copied().collect();
+        night_ids.sort_unstable();
+
+        // One RNG stream for the whole procedure (deterministic if seed is provided).
+        let mut base_rng = match seed {
+            Some(s) => StdRng::seed_from_u64(s),
+            None => StdRng::from_os_rng(),
+        };
+
+        for delta in 1..=horizon {
+            // Deterministic RNG split per delta (mirrors labeled_edges_by_delta style).
+            let delta_seed =
+                base_rng.next_u64() ^ (delta as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            let mut rng = StdRng::seed_from_u64(delta_seed);
+
+            for &a_nid in night_ids.iter() {
+                let b_nid = NightId(a_nid.0.saturating_add(delta));
+
+                let Some(src) = seed_store.get(&a_nid) else {
+                    continue;
+                };
+                let Some(dst) = seed_store.get(&b_nid) else {
+                    continue;
+                };
+
+                // 1) First pass: accept ONLY true pairs that pass gates.
+                let n_before_true = out.len();
+                push_true_frozen_pairs_only_gated(a_nid, b_nid, src, dst, cfg, delta, &mut out);
+                let n_new_true_accepted = out.len() - n_before_true;
+
+                if n_new_true_accepted == 0 {
+                    continue;
+                }
+
+                // 2) Second pass: sample false pairs that pass gates,
+                // sized relative to accepted true pairs for this (night, delta).
+                let target_false = ((false_to_true_ratio.max(0.0)) * (n_new_true_accepted as f64))
+                    .round() as usize;
+
+                sample_false_frozen_pairs_gated(
+                    a_nid,
+                    b_nid,
+                    src,
+                    dst,
+                    cfg,
+                    delta,
+                    target_false,
+                    &mut rng,
+                    &mut out,
+                );
+            }
+        }
+
+        out
+    }
+}
+
+fn push_true_frozen_pairs_only_gated(
+    a_nid: NightId,
+    b_nid: NightId,
+    src: &NightSeeds,
+    dst: &NightSeeds,
+    cfg: &ScoreConfig,
+    delta: u32,
+    out: &mut Vec<FrozenPair>,
+) {
+    // Group src indices by tid
+    let mut src_by_tid: HashMap<i32, Vec<usize>> = HashMap::new();
+    for (idx, t) in src.truth.iter().enumerate() {
+        if let Some(tid) = t {
+            src_by_tid.entry(*tid).or_default().push(idx);
+        }
+    }
+
+    // Group dst indices by tid
+    let mut dst_by_tid: HashMap<i32, Vec<usize>> = HashMap::new();
+    for (idx, t) in dst.truth.iter().enumerate() {
+        if let Some(tid) = t {
+            dst_by_tid.entry(*tid).or_default().push(idx);
+        }
+    }
+
+    for (tid, a_list) in src_by_tid.iter() {
+        let Some(b_list) = dst_by_tid.get(tid) else {
+            continue;
+        };
+
+        for &a_idx in a_list.iter() {
+            for &b_idx in b_list.iter() {
+                // Gate check (same as labeled_edges_by_delta true pass)
+                let a_seed = &src.seeds[a_idx];
+                let b_seed = &dst.seeds[b_idx];
+
+                if ScoredEdge::score(a_seed, b_seed, cfg, delta).is_none() {
+                    continue;
+                }
+
+                out.push(FrozenPair {
+                    a_nid,
+                    b_nid,
+                    a_idx,
+                    b_idx,
+                    same: true,
+                    delta,
+                });
+            }
+        }
+    }
+}
+
+fn sample_false_frozen_pairs_gated(
+    a_nid: NightId,
+    b_nid: NightId,
+    src: &NightSeeds,
+    dst: &NightSeeds,
+    cfg: &ScoreConfig,
+    delta: u32,
+    target_false: usize,
+    rng: &mut StdRng,
+    out: &mut Vec<FrozenPair>,
+) {
+    if target_false == 0 {
+        return;
+    }
+
+    // Build pools restricted to Some(tid) to ensure “different asteroid”.
+    let src_pool: Vec<(usize, i32)> = src
+        .truth
         .iter()
         .enumerate()
-        .filter_map(|(i, t)| t.is_some().then_some(i))
-        .collect()
-}
+        .filter_map(|(i, t)| t.map(|tid| (i, tid)))
+        .collect();
 
-/// Deterministic RNG seed for a given night pair.
-///
-/// This replicates the mixing used in `score_edge_gen` to produce per-pair seeds.
-fn seed_for_pair(base_seed: u64, nid_a: i32, nid_b: i32) -> [u8; 32] {
-    // See `score_edge_gen.rs` for the rationale. We reproduce the mixing here.
-    fn mix64(mut x: u64) -> u64 {
-        x = x.wrapping_add(0x9e3779b97f4a7c15);
-        let mut z = x;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
-        z ^ (z >> 31)
+    let dst_pool: Vec<(usize, i32)> = dst
+        .truth
+        .iter()
+        .enumerate()
+        .filter_map(|(j, t)| t.map(|tid| (j, tid)))
+        .collect();
+
+    if src_pool.is_empty() || dst_pool.is_empty() {
+        return;
     }
-    let a = nid_a as i64 as u64;
-    let b = nid_b as i64 as u64;
-    let s0 = mix64(base_seed ^ a.wrapping_mul(0xD6E8FEB86659FD93) ^ b.rotate_left(7));
-    let s1 =
-        mix64(base_seed.rotate_left(17) ^ b.wrapping_mul(0xA5A3564E27F9C8D1) ^ a.rotate_left(9));
-    let s2 =
-        mix64(base_seed.rotate_left(33) ^ a.wrapping_mul(0x9E3779B97F4A7C15) ^ b.rotate_left(13));
-    let s3 =
-        mix64(base_seed.rotate_left(49) ^ b.wrapping_mul(0xBF58476D1CE4E5B9) ^ a.rotate_left(19));
-    let mut out = [0u8; 32];
-    out[0..8].copy_from_slice(&s0.to_le_bytes());
-    out[8..16].copy_from_slice(&s1.to_le_bytes());
-    out[16..24].copy_from_slice(&s2.to_le_bytes());
-    out[24..32].copy_from_slice(&s3.to_le_bytes());
-    out
-}
 
-/// Build night index pairs `(i, j)` with an optional maximum jump.
-///
-/// Parameters
-/// ----------
-/// * `n` – Number of nights (already sorted by nid).
-/// * `max_jump` – Optional jump constraint.
-///
-/// Returns
-/// -------
-/// * `Vec<(usize, usize)>` – All `(i, j)` with `i < j` and `j < i+1+max_jump` when set.
-#[inline]
-pub fn night_pairs_with_jump(nights: &[&NightSeeds], max_jump: Option<u32>) -> Vec<(usize, usize)> {
-    let mut pairs = Vec::new();
-    for i in 0..nights.len() {
-        for j in (i + 1)..nights.len() {
-            let delta = (nights[j].nid.0) - (nights[i].nid.0);
-            if delta <= 0 {
-                continue;
-            }
-            if let Some(m) = max_jump {
-                if (delta as u32) > m {
-                    break; // nights triés, donc delta ne fera qu'augmenter
-                }
-            }
-            pairs.push((i, j));
+    // Avoid duplicates among accepted false pairs (stability).
+    let mut used: std::collections::HashSet<(usize, usize)> =
+        std::collections::HashSet::with_capacity(target_false.saturating_mul(2));
+
+    let mut accepted = 0usize;
+    let mut attempts = 0usize;
+
+    // Rejection sampling: many candidates may be gated out, keep bounded.
+    let max_attempts = target_false.saturating_mul(50).max(10_000);
+
+    while accepted < target_false && attempts < max_attempts {
+        attempts += 1;
+
+        let (a_idx, ta) = src_pool[rng.random_range(0..src_pool.len())];
+        let (b_idx, tb) = dst_pool[rng.random_range(0..dst_pool.len())];
+
+        if ta == tb {
+            continue; // would be true
         }
-    }
-    pairs
-}
+        if !used.insert((a_idx, b_idx)) {
+            continue; // duplicate
+        }
 
-/// Freeze a balanced set of inter-night seed pairs for evaluation.
-///
-/// This mirrors the sampling strategy used in `generate_balanced_inter_night_edges` but
-/// does not call `ScoredEdge::score`. Instead it records the seed indices and
-/// their class label (`same` or `diff`). The returned list contains, for each
-/// night pair, an equal number of `same` and `diff` pairs up to
-/// `sampling.target_per_class`.
-pub fn freeze_balanced_edge_pairs(
-    seed_store: &SeedStore,
-    sampling: &EdgeSampling,
-) -> Vec<FrozenPair> {
-    // Sort nights deterministically by nid.
-    let mut nights: Vec<&NightSeeds> = seed_store.values().collect();
-    nights.sort_unstable_by_key(|n| n.nid);
-    // Build candidate night pairs.
-    let pairs = night_pairs_with_jump(&nights, sampling.max_night_jump);
-    let mut out_pairs: Vec<FrozenPair> = Vec::new();
-    // Process each night pair sequentially.
-    for (i, j) in pairs {
-        let a = nights[i];
-        let b = nights[j];
+        let a_seed = &src.seeds[a_idx];
+        let b_seed = &dst.seeds[b_idx];
 
-        // Number of night steps between the two revisits (>= 1).
-        let delta_i64 = (b.nid.0 as i64) - (a.nid.0 as i64);
-        if delta_i64 <= 0 {
+        // Gate check: must be accepted by score() like labeled_edges_by_delta false pass
+        if ScoredEdge::score(a_seed, b_seed, cfg, delta).is_none() {
             continue;
         }
-        let delta = delta_i64 as u32;
 
-        // Build eligible indices on both sides.
-        let left_idx = eligible_seed_indices(&a.truth, sampling.only_truth);
-        let right_idx = eligible_seed_indices(&b.truth, sampling.only_truth);
-        if left_idx.is_empty() || right_idx.is_empty() {
-            continue;
-        }
-        let k = sampling.sample_right_per_left.min(right_idx.len());
-        // Create per-pair RNG.
-        let seed = seed_for_pair(sampling.base_seed, a.nid.0 as i32, b.nid.0 as i32);
-        let mut rng = rand::rngs::StdRng::from_seed(seed);
-        let mut same_list: Vec<FrozenPair> = Vec::new();
-        let mut diff_list: Vec<FrozenPair> = Vec::new();
-        let mut tested_pairs = 0usize;
-        'outer: for &ia in &left_idx {
-            // Early stop when both buckets filled.
-            if same_list.len() >= sampling.target_per_class
-                && diff_list.len() >= sampling.target_per_class
-            {
-                break;
-            }
-            // Hard cap on score attempts.
-            if tested_pairs >= sampling.max_tested_pairs_per_night_pair {
-                break;
-            }
-            // Sample k distinct indices on the right side.
-            let picked = sample(&mut rng, right_idx.len(), k);
-            for pick in picked.iter() {
-                if tested_pairs >= sampling.max_tested_pairs_per_night_pair {
-                    break 'outer;
-                }
-                let ib = right_idx[pick];
-                let ti = a.truth[ia];
-                let tj = b.truth[ib];
-                tested_pairs += 1;
-                let same = match (ti, tj) {
-                    (Some(x), Some(y)) => x == y,
-                    _ => false,
-                };
-                if same {
-                    if same_list.len() < sampling.target_per_class {
-                        same_list.push(FrozenPair {
-                            a_nid: a.nid,
-                            b_nid: b.nid,
-                            a_idx: ia,
-                            b_idx: ib,
-                            same: true,
-                            delta,
-                        });
-                    }
-                } else if diff_list.len() < sampling.target_per_class {
-                    diff_list.push(FrozenPair {
-                        a_nid: a.nid,
-                        b_nid: b.nid,
-                        a_idx: ia,
-                        b_idx: ib,
-                        same: false,
-                        delta,
-                    });
-                }
-                if same_list.len() >= sampling.target_per_class
-                    && diff_list.len() >= sampling.target_per_class
-                {
-                    break 'outer;
-                }
-            }
-        }
-        // Truncate to equal lengths.
-        let keep = same_list.len().min(diff_list.len());
-        for idx in 0..keep {
-            out_pairs.push(same_list[idx].clone());
-            out_pairs.push(diff_list[idx].clone());
-        }
+        out.push(FrozenPair {
+            a_nid,
+            b_nid,
+            a_idx,
+            b_idx,
+            same: false,
+            delta,
+        });
+        accepted += 1;
     }
-    out_pairs
 }

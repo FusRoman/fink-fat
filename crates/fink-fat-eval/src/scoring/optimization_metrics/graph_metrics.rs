@@ -59,7 +59,7 @@ use std::collections::HashMap;
 
 use fink_fat_engine::seeding::seed_id::SeedId;
 
-use crate::scoring::frozen_pairs::LabeledEdge;
+use crate::night_seeds::LabeledEdge;
 
 /// Graph-aware ranking metrics computed per source seed (`from`).
 ///

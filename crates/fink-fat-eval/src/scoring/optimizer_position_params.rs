@@ -6,10 +6,8 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use rayon::prelude::*;
 
-use crate::night_seeds::SeedStore;
-use crate::scoring::frozen_pairs::{
-    EdgeSampling, FrozenPair, LabeledEdge, freeze_balanced_edge_pairs,
-};
+use crate::night_seeds::{LabeledEdge, SeedStore};
+use crate::scoring::frozen_pairs::FrozenPair;
 use crate::scoring::optimization_metrics::EdgeSeparationMetrics;
 use anyhow::Result;
 use fink_fat_engine::graph::score::ScoredEdge;
@@ -209,154 +207,154 @@ enum IterOutcome {
     },
 }
 
-/// Optimise a subset of scoring parameters to minimise `FPR@TPR`.
-///
-/// (Refactored version: smaller helpers, same semantics as before.)
-pub fn optimize_scoring_params(
-    seed_store: &SeedStore,
-    engine_cfg: &EngineConfig,
-    sampling: &EdgeSampling,
-) -> Result<OptimisationResult> {
-    println!("\n\n === Starting optimization ===\n");
+// Optimise a subset of scoring parameters to minimise `FPR@TPR`.
+//
+// (Refactored version: smaller helpers, same semantics as before.)
+// pub fn optimize_scoring_params(
+//     seed_store: &SeedStore,
+//     engine_cfg: &EngineConfig,
+//     sampling: &EdgeSampling,
+// ) -> Result<OptimisationResult> {
+//     println!("\n\n === Starting optimization ===\n");
 
-    let frozen_pairs = freeze_balanced_edge_pairs(&seed_store, &sampling);
+//     let frozen_pairs = freeze_balanced_edge_pairs(&seed_store, &sampling);
 
-    println!("\n\n === Summary of frozen balanced pairs ===");
+//     println!("\n\n === Summary of frozen balanced pairs ===");
 
-    println!(
-        "[score-opt] total frozen balanced pairs: {}",
-        frozen_pairs.len()
-    );
+//     println!(
+//         "[score-opt] total frozen balanced pairs: {}",
+//         frozen_pairs.len()
+//     );
 
-    let nb_good = frozen_pairs.iter().filter(|p| p.same).count();
-    let nb_bad = frozen_pairs.len() - nb_good;
+//     let nb_good = frozen_pairs.iter().filter(|p| p.same).count();
+//     let nb_bad = frozen_pairs.len() - nb_good;
 
-    println!("[score-opt]   good pairs: {}", nb_good);
-    println!("[score-opt]   bad pairs:  {}", nb_bad);
+//     println!("[score-opt]   good pairs: {}", nb_good);
+//     println!("[score-opt]   bad pairs:  {}", nb_bad);
 
-    // 2) Initialize RNG, stats, and best accumulator.
-    let mut rng = rand::rngs::StdRng::seed_from_u64(42_u64);
-    let mut stats = OptStats::default();
-    let mut best = BestSoFar::default();
+//     // 2) Initialize RNG, stats, and best accumulator.
+//     let mut rng = rand::rngs::StdRng::seed_from_u64(42_u64);
+//     let mut stats = OptStats::default();
+//     let mut best = BestSoFar::default();
 
-    println!("\n\n === Random search iterations ===");
-    let num_iters = 5000;
+//     println!("\n\n === Random search iterations ===");
+//     let num_iters = 5000;
 
-    // 3) Random search loop (parallel evaluation).
-    //
-    // IMPORTANT: we keep the same RNG semantics by sampling candidates sequentially,
-    // then evaluating them in parallel.
-    let candidates: Vec<_> = (0..num_iters)
-        .map(|_| sample_candidate_cfg(&mut rng, &engine_cfg))
-        .collect();
+//     // 3) Random search loop (parallel evaluation).
+//     //
+//     // IMPORTANT: we keep the same RNG semantics by sampling candidates sequentially,
+//     // then evaluating them in parallel.
+//     let candidates: Vec<_> = (0..num_iters)
+//         .map(|_| sample_candidate_cfg(&mut rng, &engine_cfg))
+//         .collect();
 
-    println!(
-        "[score-opt] sampled {} candidate configurations.",
-        candidates.len()
-    );
+//     println!(
+//         "[score-opt] sampled {} candidate configurations.",
+//         candidates.len()
+//     );
 
-    println!("[score-opt] evaluating candidates in parallel...");
+//     println!("[score-opt] evaluating candidates in parallel...");
 
-    // Parallel evaluation only (no shared mutation, no prints here).
-    let mut outcomes: Vec<IterOutcome> = candidates
-        .par_iter()
-        .enumerate()
-        .map(|(iter0, cfg)| {
-            let eval = match validate_and_eval_candidate(cfg, &seed_store, &frozen_pairs) {
-                Ok(x) => x,
-                Err(err) => {
-                    return IterOutcome::Invalid {
-                        iter0,
-                        // If your error type isn't anyhow::Error, store it directly.
-                        err: err.into(),
-                    };
-                }
-            };
+//     // Parallel evaluation only (no shared mutation, no prints here).
+//     let mut outcomes: Vec<IterOutcome> = candidates
+//         .par_iter()
+//         .enumerate()
+//         .map(|(iter0, cfg)| {
+//             let eval = match validate_and_eval_candidate(cfg, &seed_store, &frozen_pairs) {
+//                 Ok(x) => x,
+//                 Err(err) => {
+//                     return IterOutcome::Invalid {
+//                         iter0,
+//                         // If your error type isn't anyhow::Error, store it directly.
+//                         err: err.into(),
+//                     };
+//                 }
+//             };
 
-            let Some((metrics_opt, _, _)) = eval else {
-                return IterOutcome::Unreachable { iter0 };
-            };
+//             let Some((metrics_opt, _, _)) = eval else {
+//                 return IterOutcome::Unreachable { iter0 };
+//             };
 
-            IterOutcome::Ok {
-                iter0,
-                cfg: cfg.clone(),
-                metrics_opt,
-            }
-        })
-        .collect();
+//             IterOutcome::Ok {
+//                 iter0,
+//                 cfg: cfg.clone(),
+//                 metrics_opt,
+//             }
+//         })
+//         .collect();
 
-    println!("[score-opt] processing evaluation results...");
+//     println!("[score-opt] processing evaluation results...");
 
-    // To preserve the original "online" behavior (stats/logging/best update),
-    // we process results in iteration order.
-    outcomes.sort_by_key(|o| match o {
-        IterOutcome::Invalid { iter0, .. } => *iter0,
-        IterOutcome::Unreachable { iter0 } => *iter0,
-        IterOutcome::Ok { iter0, .. } => *iter0,
-    });
+//     // To preserve the original "online" behavior (stats/logging/best update),
+//     // we process results in iteration order.
+//     outcomes.sort_by_key(|o| match o {
+//         IterOutcome::Invalid { iter0, .. } => *iter0,
+//         IterOutcome::Unreachable { iter0 } => *iter0,
+//         IterOutcome::Ok { iter0, .. } => *iter0,
+//     });
 
-    for outcome in outcomes {
-        let iter0 = match &outcome {
-            IterOutcome::Invalid { iter0, .. } => *iter0,
-            IterOutcome::Unreachable { iter0 } => *iter0,
-            IterOutcome::Ok { iter0, .. } => *iter0,
-        };
-        let iter = iter0 + 1;
+//     for outcome in outcomes {
+//         let iter0 = match &outcome {
+//             IterOutcome::Invalid { iter0, .. } => *iter0,
+//             IterOutcome::Unreachable { iter0 } => *iter0,
+//             IterOutcome::Ok { iter0, .. } => *iter0,
+//         };
+//         let iter = iter0 + 1;
 
-        match outcome {
-            IterOutcome::Invalid { iter0, err } => {
-                stats.invalid += 1;
-                // Keep the same "occasional log" behavior.
-                if (iter0 % 50) == 0 {
-                    eprintln!(
-                        "[score-opt][{:>4}/{}] invalid candidate (skipped): {:?}",
-                        iter, num_iters, err
-                    );
-                }
-            }
-            IterOutcome::Unreachable { .. } => {
-                stats.unreachable += 1;
-                println!(
-                    "[score-opt][{:>4}/{}] candidate unreachable (skipped)",
-                    iter, num_iters
-                );
-            }
-            IterOutcome::Ok {
-                cfg, metrics_opt, ..
-            } => {
-                let fpr_99 = metrics_opt.unwrap().edge_metrics.fpr_at_tpr_99;
-                let fpr_95 = metrics_opt.unwrap().edge_metrics.fpr_at_tpr_95;
+//         match outcome {
+//             IterOutcome::Invalid { iter0, err } => {
+//                 stats.invalid += 1;
+//                 // Keep the same "occasional log" behavior.
+//                 if (iter0 % 50) == 0 {
+//                     eprintln!(
+//                         "[score-opt][{:>4}/{}] invalid candidate (skipped): {:?}",
+//                         iter, num_iters, err
+//                     );
+//                 }
+//             }
+//             IterOutcome::Unreachable { .. } => {
+//                 stats.unreachable += 1;
+//                 println!(
+//                     "[score-opt][{:>4}/{}] candidate unreachable (skipped)",
+//                     iter, num_iters
+//                 );
+//             }
+//             IterOutcome::Ok {
+//                 cfg, metrics_opt, ..
+//             } => {
+//                 let fpr_99 = metrics_opt.unwrap().edge_metrics.fpr_at_tpr_99;
+//                 let fpr_95 = metrics_opt.unwrap().edge_metrics.fpr_at_tpr_95;
 
-                if fpr_99.is_finite() && fpr_99 < best.fpr {
-                    let prev = best.fpr;
+//                 if fpr_99.is_finite() && fpr_99 < best.fpr {
+//                     let prev = best.fpr;
 
-                    best.cfg = Some(cfg.clone());
-                    best.metrics = metrics_opt;
+//                     best.cfg = Some(cfg.clone());
+//                     best.metrics = metrics_opt;
 
-                    println!(
-                        "[score-opt][{:>4}/{}] NEW BEST! \n{} \n\t(prev {:.6}, Δ {:.6}) \n\tFPR@0.95:\n{}",
-                        iter,
-                        num_iters,
-                        fpr_99,
-                        prev,
-                        prev - fpr_99,
-                        fpr_95
-                    );
-                }
-            }
-        }
-    }
+//                     println!(
+//                         "[score-opt][{:>4}/{}] NEW BEST! \n{} \n\t(prev {:.6}, Δ {:.6}) \n\tFPR@0.95:\n{}",
+//                         iter,
+//                         num_iters,
+//                         fpr_99,
+//                         prev,
+//                         prev - fpr_99,
+//                         fpr_95
+//                     );
+//                 }
+//             }
+//         }
+//     }
 
-    println!("\n\n === Optimization complete ===\n");
+//     println!("\n\n === Optimization complete ===\n");
 
-    println!("\n\n Best params found:\n{:#?}", best.cfg);
-    if let Some(metrics) = &best.metrics {
-        println!("\nBest metrics:\n{:#?}", metrics);
-    }
+//     println!("\n\n Best params found:\n{:#?}", best.cfg);
+//     if let Some(metrics) = &best.metrics {
+//         println!("\nBest metrics:\n{:#?}", metrics);
+//     }
 
-    Ok(OptimisationResult {
-        best_cfg: best.cfg,
-        best_fpr: best.fpr,
-        best_metrics: best.metrics,
-    })
-}
+//     Ok(OptimisationResult {
+//         best_cfg: best.cfg,
+//         best_fpr: best.fpr,
+//         best_metrics: best.metrics,
+//     })
+// }

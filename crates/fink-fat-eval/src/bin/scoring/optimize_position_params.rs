@@ -22,22 +22,18 @@ use std::fs;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use fink_fat_engine::{engine_config::{EngineConfig, load_engine_config_validated}, night_id::NightId};
+use fink_fat_engine::engine_config::{EngineConfig, load_engine_config_validated};
 use fink_fat_eval::{
     bin_utils::resolve_nids,
     cli::scoring::Cli,
     dataset::{
         ParquetSource,
         ingest_config::AlertIngestConfig,
-        ztf_alerts::{NightStore, collect_nights, get_alerts_from_night_store},
+        ztf_alerts::{NightStore, collect_nights},
     },
     night_seeds::{LabeledEdgesByDelta, LabeledEdgesByDeltaDisplay, SeedStore},
-    scoring::{
-        frozen_pairs::EdgeSampling, optim_writer::write_best_scoring_yamls,
-        optimizer_position_params::optimize_scoring_params,
-    },
+    scoring::frozen_pairs::FrozenPair,
 };
-use polars::prelude::row_encode::encode_rows_unordered;
 use rayon::ThreadPoolBuilder;
 
 fn main() -> Result<()> {
@@ -83,59 +79,31 @@ fn main() -> Result<()> {
 
     println!("{seed_store}");
 
-    let night_id = NightId(3134);
+    let frozen_pairs =
+        FrozenPair::frozen_pairs(&seed_store, &engine_cfg.scoring, 10, 1.0, Some(42));
 
-    let seeds = seed_store.get(&night_id).unwrap();
-    println!("{seeds}");
+    let edges =
+        FrozenPair::eval_cfg_on_frozen_pairs(&seed_store, &frozen_pairs, &engine_cfg.scoring);
 
-    let true_seeds = seeds.get_true_seeds();
-    println!("True seeds: {}", true_seeds.len());
+    println!("Total frozen pairs evaluated: {}", edges.len());
     println!(
-        "Example true seed IDs: {:?}",
-        true_seeds.iter().take(10).map(|s| s.seed_id).collect::<Vec<_>>()
+        "  - good edges: {}",
+        edges.iter().filter(|e| e.same).count()
+    );
+    println!(
+        "  - bad edges: {}",
+        edges.iter().filter(|e| !e.same).count()
     );
 
-    let alerts_id = &true_seeds.get(0).unwrap().members;
+    let buckets: LabeledEdgesByDelta = seed_store.labeled_edges_by_delta(
+        &engine_cfg.scoring,
+        10,
+        false,
+        Some(2_000_000),
+        Some(42),
+    );
 
-    let alerts = get_alerts_from_night_store(&night_store, &night_id, alerts_id);
-
-    println!("\nExample alerts for first true seed:\n");
-    for alert in alerts.iter().take(5) {
-        println!("\n{alert:?}\n");
-    }
-
-    // let buckets: LabeledEdgesByDelta =
-    //     seed_store.labeled_edges_by_delta(&engine_cfg.scoring, 10, false, Some(2_000_000), Some(42));
-
-    // println!("{}", LabeledEdgesByDeltaDisplay(&buckets));
-
-    // let sampling = EdgeSampling {
-    //     sample_right_per_left: 2048,
-    //     max_night_jump: Some(15),
-    //     target_per_class: 300_000,
-    //     only_truth: false,
-    //     base_seed: cli.rng_seed,
-    //     max_tested_pairs_per_night_pair: 1_000_000,
-    // };
-
-    // println!("\n\n === Starting optimization ===\n");
-
-    // let optim_result = optimize_scoring_params(&seed_store, &engine_cfg, &sampling)?;
-
-    // println!("\n\n === Optimization complete ===\n");
-    // println!("Best config found:");
-    // println!("{:?}", optim_result.best_cfg);
-    // println!("\n\nBest FPR at target TPR: \n{:.6}", optim_result.best_fpr);
-    // println!(
-    //     "\n\nBest separation metrics: \n{:?}",
-    //     optim_result.best_metrics
-    // );
-
-    // write_best_scoring_yamls(
-    //     &cli.scan.out_dir,
-    //     &engine_cfg,
-    //     optim_result.best_cfg.unwrap(),
-    // )?;
+    println!("{}", LabeledEdgesByDeltaDisplay(&buckets));
 
     Ok(())
 }
