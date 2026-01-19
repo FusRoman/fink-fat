@@ -24,6 +24,7 @@ use clap::Parser;
 use fink_fat_engine::engine_config::{EngineConfig, load_engine_config_validated};
 use fink_fat_eval::{
     cli::scoring::Cli,
+    log, log_section, log_timing,
     night_seeds::SeedStore,
     scoring::frozen_pairs::{FrozenPair, compute_fast_objective},
 };
@@ -31,25 +32,29 @@ use rayon::ThreadPoolBuilder;
 
 fn main() -> Result<()> {
     let t0 = std::time::Instant::now();
-
     let cli = Cli::parse();
 
-    // Load engine configuration
+    // -------------------------------------------------------------------------
+    // Engine config
+    // -------------------------------------------------------------------------
     let engine_cfg: EngineConfig = load_engine_config_validated(&cli.engine_config)
         .with_context(|| format!("load engine config {}", cli.engine_config))?;
 
     let jobs = cli.jobs.unwrap_or_else(num_cpus::get);
-    println!("Using {jobs} parallel jobs (threads)");
+
+    log!(cli, "Using {jobs} parallel jobs (threads)");
 
     ThreadPoolBuilder::new()
         .num_threads(jobs)
         .build_global()
         .ok();
 
-    let t_init= std::time::Instant::now();
-    println!("Script initialized in {:.1?}", t_init.duration_since(t0));
+    log_timing!(cli, "Script initialized", t0.elapsed());
 
-    println!("\n=============== Loading data ==================\n");
+    // -------------------------------------------------------------------------
+    // Load data
+    // -------------------------------------------------------------------------
+    log_section!(cli, "Loading data");
 
     let seed_store_path = Utf8Path::new(&cli.scan.out_dir).join("seed_store.bin");
     let seed_store = SeedStore::read(&seed_store_path)
@@ -59,40 +64,53 @@ fn main() -> Result<()> {
     let frozen_pairs = FrozenPair::read(&frozen_pair_path)
         .with_context(|| format!("read frozen pairs from {}", frozen_pair_path))?;
 
-    println!("Seed store: {seed_store}");
-    println!("Total frozen pairs loaded: {}", frozen_pairs.len());
+    log!(cli, "Seed store: {seed_store}");
+    log!(cli, "Total frozen pairs loaded: {}", frozen_pairs.len());
+    log_timing!(cli, "Time to load data", t0.elapsed());
 
-    let t_load = std::time::Instant::now();
-    println!("Time to load data: {:.1?}", t_load.duration_since(t0));
+    // -------------------------------------------------------------------------
+    // Evaluate
+    // -------------------------------------------------------------------------
+    log_section!(cli, "Evaluating pairs");
 
-    println!("\n=============== Evaluating pairs ==================\n");
+    let t_eval_start = std::time::Instant::now();
 
-    if let Some((items, stats)) = FrozenPair::eval_cfg_fast_items(
+    let eval = FrozenPair::eval_cfg_fast_items(
         &seed_store,
         &frozen_pairs,
         &engine_cfg.scoring,
         Some(500_000),
-    ) {
-        let t_eval = std::time::Instant::now();
-        println!(
-            "Time to evaluate frozen pairs: {:.1?}",
-            t_eval.duration_since(t_load)
-        );
+    );
 
-        println!("\n=============== Computing metrics ==================\n");
-
-        let metrics = compute_fast_objective(&items, stats, 0.95, 0.5, 0.5);
-
-        println!("FPR at 95% TPR:");
-        println!("{metrics}");
-
-        let t_metrics = std::time::Instant::now();
-        println!("Time to compute metrics: {:.1?}", t_metrics.duration_since(t_eval));
-
-        println!("\nTotal time: {:.1?}", t_metrics.duration_since(t0));
-
-        Ok(())
-    } else {
+    let Some((items, stats)) = eval else {
         anyhow::bail!("no frozen pairs could be evaluated with the provided configuration");
+    };
+
+    log_timing!(cli, "Time to evaluate frozen pairs", t_eval_start.elapsed());
+
+    // -------------------------------------------------------------------------
+    // Metrics
+    // -------------------------------------------------------------------------
+    log_section!(cli, "Computing metrics");
+
+    let t_metrics_start = std::time::Instant::now();
+
+    let objective = compute_fast_objective(
+        &items, stats, 0.95, // target TPR
+        0.5,  // min accept good rate
+        0.5,  // penalty weight
+    );
+
+    if cli.quiet {
+        // Machine-friendly output (Optuna)
+        println!("{objective}");
+    } else {
+        println!("Objective (FPR@TPR=0.95 + penalties):");
+        println!("{objective}");
     }
+
+    log_timing!(cli, "Time to compute metrics", t_metrics_start.elapsed());
+    log_timing!(cli, "Total time", t0.elapsed());
+
+    Ok(())
 }

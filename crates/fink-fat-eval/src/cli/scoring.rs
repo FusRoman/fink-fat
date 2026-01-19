@@ -3,7 +3,6 @@ use clap::{ArgAction, Parser};
 
 use crate::cli::common::{CommonBinningArgs, CommonScanArgs};
 
-
 /// Inspect scoring components + seed tangent-plane values.
 ///
 /// This CLI mirrors the options from the original monolithic binary.
@@ -80,4 +79,12 @@ pub struct Cli {
     /// Number of parallel jobs (threads). Defaults to number of CPU cores.
     #[arg(long, help_heading = "Scan")]
     pub jobs: Option<usize>,
+
+    /// Silence all human-readable output (JSON / scalar only).
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    pub quiet: bool,
+
+    /// Increase verbosity (-v, -vv).
+    #[arg(short = 'v', long, action = clap::ArgAction::Count)]
+    pub verbose: u8,
 }
