@@ -23,7 +23,7 @@ use camino::Utf8Path;
 use clap::Parser;
 use fink_fat_engine::engine_config::{EngineConfig, load_engine_config_validated};
 use fink_fat_eval::{
-    cli::scoring::Cli,
+    cli::scoring::{Cli, update_score_config},
     log, log_section, log_timing,
     night_seeds::SeedStore,
     scoring::frozen_pairs::{FrozenPair, compute_fast_objective},
@@ -39,6 +39,8 @@ fn main() -> Result<()> {
     // -------------------------------------------------------------------------
     let engine_cfg: EngineConfig = load_engine_config_validated(&cli.engine_config)
         .with_context(|| format!("load engine config {}", cli.engine_config))?;
+
+    let updated_config = update_score_config(&cli, &engine_cfg);
 
     let jobs = cli.jobs.unwrap_or_else(num_cpus::get);
 
@@ -78,8 +80,8 @@ fn main() -> Result<()> {
     let eval = FrozenPair::eval_cfg_fast_items(
         &seed_store,
         &frozen_pairs,
-        &engine_cfg.scoring,
-        Some(500_000),
+        &updated_config.scoring,
+        cli.budget,
     );
 
     let Some((items, stats)) = eval else {
@@ -96,16 +98,16 @@ fn main() -> Result<()> {
     let t_metrics_start = std::time::Instant::now();
 
     let objective = compute_fast_objective(
-        &items, stats, 0.95, // target TPR
-        0.5,  // min accept good rate
-        0.5,  // penalty weight
+        &items, stats, cli.target_tpr, // target TPR
+        cli.min_accept_good,  // min accept good rate
+        cli.penalty_weight,  // penalty weight
     );
 
     if cli.quiet {
         // Machine-friendly output (Optuna)
         println!("{objective}");
     } else {
-        println!("Objective (FPR@TPR=0.95 + penalties):");
+        println!("Objective (FPR@TPR={} + penalties):", cli.target_tpr);
         println!("{objective}");
     }
 

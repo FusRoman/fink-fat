@@ -9,8 +9,8 @@ use fink_fat_engine::{
     engine_config::score_config::ScoreConfig, graph::score::ScoredEdge, night_id::NightId,
 };
 use rand::{Rng, RngCore, SeedableRng, rngs::StdRng};
-use serde::{Deserialize, Serialize};
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::io::{read_bin, write_bin};
 use crate::night_seeds::{LabeledEdge, NightSeeds, SeedStore};
@@ -194,10 +194,25 @@ impl FrozenPair {
         budget: Option<usize>,
     ) -> Option<(Vec<EdgeItem>, FastEvalStats)> {
         let n = budget.unwrap_or(frozen.len()).min(frozen.len());
-        let frozen = &frozen[..n];
+
+        let good_indices: Vec<usize> = frozen
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| p.same.then_some(i))
+            .collect();
+        let mut pairs: Vec<&FrozenPair> = good_indices.iter().take(n/2).map(|&i| &frozen[i]).collect();
+
+
+        let bad_indices: Vec<usize> = frozen
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| (!p.same).then_some(i))
+            .collect();
+        let bad_pairs: Vec<&FrozenPair> = bad_indices.iter().take(n/2).map(|&i| &frozen[i]).collect();
+        pairs.extend(bad_pairs);
 
         // Parallel map -> local accumulation -> reduce (no mutex).
-        let (items, stats) = frozen
+        let (items, stats) = pairs
             .par_iter()
             .map(|p| {
                 // Local counters for this one pair.

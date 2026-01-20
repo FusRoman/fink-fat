@@ -1,5 +1,6 @@
 use camino::Utf8PathBuf;
 use clap::{ArgAction, Parser};
+use fink_fat_engine::engine_config::EngineConfig;
 
 use crate::cli::common::{CommonBinningArgs, CommonScanArgs};
 
@@ -80,11 +81,138 @@ pub struct Cli {
     #[arg(long, help_heading = "Scan")]
     pub jobs: Option<usize>,
 
-    /// Silence all human-readable output (JSON / scalar only).
-    #[arg(long, action = clap::ArgAction::SetTrue)]
+    // -------------------------------------------------------------------------
+    // Optuna / tuning controls
+    // -------------------------------------------------------------------------
+    /// Evaluate only the first N frozen pairs (deterministic prefix).
+    ///
+    /// This enables multi-fidelity optimization (e.g. 50k → 200k → 1M).
+    #[arg(long, value_name = "N", help_heading = "Optimization")]
+    pub budget: Option<usize>,
+
+    /// Target true positive rate (TPR) used for FPR@TPR objective.
+    #[arg(
+        long,
+        value_name = "TPR",
+        default_value_t = 0.95,
+        help_heading = "Optimization"
+    )]
+    pub target_tpr: f64,
+
+    /// Minimum accepted-good fraction required to avoid degenerate solutions.
+    ///
+    /// Penalty is applied when:
+    /// `accept_good_rate < min_accept_good`.
+    #[arg(
+        long,
+        value_name = "RATE",
+        default_value_t = 0.50,
+        help_heading = "Optimization"
+    )]
+    pub min_accept_good: f64,
+
+    /// Weight of the acceptance penalty term.
+    #[arg(
+        long,
+        value_name = "W",
+        default_value_t = 0.50,
+        help_heading = "Optimization"
+    )]
+    pub penalty_weight: f64,
+
+    // -------------------------------------------------------------------------
+    // ScoreConfig overrides (gates)
+    // -------------------------------------------------------------------------
+    #[arg(long, value_name = "variance_floor", help_heading = "Overrides")]
+    pub variance_floor: Option<f64>,
+
+    #[arg(long, value_name = "drift_per_day", help_heading = "Overrides")]
+    pub drift_per_day: Option<f64>,
+
+    #[arg(long, value_name = "curvature_per_day", help_heading = "Overrides")]
+    pub curvature_per_day: Option<f64>,
+
+    #[arg(long, value_name = "theta_zero", help_heading = "Overrides")]
+    pub theta_zero: Option<f64>,
+
+    #[arg(long, value_name = "v_zero", help_heading = "Overrides")]
+    pub v_zero: Option<f64>,
+
+    #[arg(long, value_name = "w_dir", help_heading = "Overrides")]
+    pub w_dir: Option<f64>,
+
+    #[arg(long, value_name = "w_norm", help_heading = "Overrides")]
+    pub w_norm: Option<f64>,
+
+    #[arg(long, value_name = "w_flux", help_heading = "Overrides")]
+    pub w_flux: Option<f64>,
+    #[arg(long, value_name = "flux_sigma_floor", help_heading = "Overrides")]
+    pub flux_sigma_floor: Option<f64>,
+
+    #[arg(long, value_name = "w_gap", help_heading = "Overrides")]
+    pub w_gap: Option<f64>,
+
+    #[arg(long, value_name = "rho", help_heading = "Overrides")]
+    pub rho: Option<f64>,
+
+    #[arg(long, value_name = "w_band_mismatch", help_heading = "Overrides")]
+    pub w_band_mismatch: Option<f64>,
+
+    // -------------------------------------------------------------------------
+    // Logging
+    // -------------------------------------------------------------------------
+    /// Silence all human-readable output (machine-friendly output only).
+    #[arg(long, action = clap::ArgAction::SetTrue, help_heading = "Logging")]
     pub quiet: bool,
 
     /// Increase verbosity (-v, -vv).
-    #[arg(short = 'v', long, action = clap::ArgAction::Count)]
+    #[arg(short = 'v', long, action = clap::ArgAction::Count, help_heading = "Logging")]
     pub verbose: u8,
+}
+
+pub fn update_score_config(cli: &Cli, engine_config: &EngineConfig) -> EngineConfig {
+    let mut updated_cfg = engine_config.clone();
+
+    if let Some(max_d2) = cli.variance_floor {
+        updated_cfg.scoring.predict.noise.variance_floor = max_d2;
+    }
+    if let Some(drift_per_day) = cli.drift_per_day {
+        updated_cfg.scoring.predict.noise.drift_per_day = drift_per_day;
+    }
+    if let Some(curvature_per_day) = cli.curvature_per_day {
+        updated_cfg.scoring.predict.noise.curvature_per_day2 = curvature_per_day;
+    }
+
+    if let Some(theta_zero) = cli.theta_zero {
+        updated_cfg.scoring.velocity.theta0 = theta_zero;
+    }
+    if let Some(v_zero) = cli.v_zero {
+        updated_cfg.scoring.velocity.v0 = v_zero;
+    }
+    if let Some(w_dir) = cli.w_dir {
+        updated_cfg.scoring.velocity.w_dir = w_dir;
+    }
+    if let Some(w_norm) = cli.w_norm {
+        updated_cfg.scoring.velocity.w_norm = w_norm;
+    }
+
+    if let Some(w_flux) = cli.w_flux {
+        updated_cfg.scoring.photometry.w_flux = w_flux;
+    }
+    if let Some(flux_sigma_floor) = cli.flux_sigma_floor {
+        updated_cfg.scoring.photometry.flux_sigma_floor = flux_sigma_floor;
+    }
+
+    if let Some(w_gap) = cli.w_gap {
+        updated_cfg.scoring.gap.w_gap = w_gap;
+    }
+    if let Some(rho) = cli.rho {
+        updated_cfg.scoring.gap.rho = rho;
+    }
+
+    if let Some(w_band_mismatch) = cli.w_band_mismatch {
+        updated_cfg.scoring.band.w_band_mismatch = w_band_mismatch;
+    }
+
+    updated_cfg
 }
