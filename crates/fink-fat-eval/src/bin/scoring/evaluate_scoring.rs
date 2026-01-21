@@ -80,7 +80,7 @@ fn main() -> Result<()> {
     let eval = FrozenPair::eval_cfg_fast_items(
         &seed_store,
         &frozen_pairs,
-        &updated_config.scoring,
+        &updated_config.edges.score_config,
         cli.budget,
     );
 

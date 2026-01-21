@@ -73,7 +73,7 @@ fn main() -> Result<()> {
 
     println!("Generating frozen pairs...");
 
-    let frozen_pairs = FrozenPair::frozen_pairs(&seed_store, &engine_cfg.scoring, 15, 1., Some(42));
+    let frozen_pairs = FrozenPair::frozen_pairs(&seed_store, &engine_cfg.edges.score_config, 15, 1., Some(42));
 
     println!("Total frozen pairs generated: {}", frozen_pairs.len());
 

@@ -41,7 +41,7 @@ pub fn fmt_ms(d: std::time::Duration) -> f64 {
 /// --------
 /// - `"3122"`
 /// - `"3122, 3145,3156"`
-pub fn parse_nids_csv(s: &str) -> Result<Vec<i32>> {
+pub fn parse_nids_csv(s: &str) -> Result<Vec<u32>> {
     let mut out = Vec::new();
     for raw in s.split(',') {
         let t = raw.trim();
@@ -49,7 +49,7 @@ pub fn parse_nids_csv(s: &str) -> Result<Vec<i32>> {
             continue;
         }
         out.push(
-            t.parse::<i32>()
+            t.parse::<u32>()
                 .with_context(|| format!("invalid nid value: '{t}'"))?,
         );
     }
@@ -92,11 +92,14 @@ pub fn resolve_nids(
     parquet_path: &Utf8PathBuf,
     nids_csv: Option<&str>,
     max_nights: Option<usize>,
-) -> Result<Vec<i32>> {
+) -> Result<Vec<u32>> {
     let mut nids = if let Some(s) = nids_csv {
         parse_nids_csv(s)?
     } else {
         discover_nids(parquet_path)?
+            .iter()
+            .map(|&nid| nid as u32)
+            .collect()
     };
 
     if let Some(max_n) = max_nights {

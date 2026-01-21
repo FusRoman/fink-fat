@@ -40,6 +40,10 @@ pub struct Cli {
     #[arg(long, value_name = "N", help_heading = "Scan")]
     pub max_nights: Option<usize>,
 
+    /// Limit number of nights processed (after sorting / selection).
+    #[arg(long, value_name = "N", help_heading = "Scan", default_value_t = 1)]
+    pub consecutive_window: usize,
+
     /// Disable triplet generation (pairs-only).
     #[arg(long, default_value_t = false, help_heading = "Seeding")]
     pub pairs_only: bool,
@@ -174,44 +178,49 @@ pub fn update_score_config(cli: &Cli, engine_config: &EngineConfig) -> EngineCon
     let mut updated_cfg = engine_config.clone();
 
     if let Some(max_d2) = cli.variance_floor {
-        updated_cfg.scoring.predict.noise.variance_floor = max_d2;
+        updated_cfg.edges.score_config.predict.noise.variance_floor = max_d2;
     }
     if let Some(drift_per_day) = cli.drift_per_day {
-        updated_cfg.scoring.predict.noise.drift_per_day = drift_per_day;
+        updated_cfg.edges.score_config.predict.noise.drift_per_day = drift_per_day;
     }
     if let Some(curvature_per_day) = cli.curvature_per_day {
-        updated_cfg.scoring.predict.noise.curvature_per_day2 = curvature_per_day;
+        updated_cfg
+            .edges
+            .score_config
+            .predict
+            .noise
+            .curvature_per_day2 = curvature_per_day;
     }
 
     if let Some(theta_zero) = cli.theta_zero {
-        updated_cfg.scoring.velocity.theta0 = theta_zero;
+        updated_cfg.edges.score_config.velocity.theta0 = theta_zero;
     }
     if let Some(v_zero) = cli.v_zero {
-        updated_cfg.scoring.velocity.v0 = v_zero;
+        updated_cfg.edges.score_config.velocity.v0 = v_zero;
     }
     if let Some(w_dir) = cli.w_dir {
-        updated_cfg.scoring.velocity.w_dir = w_dir;
+        updated_cfg.edges.score_config.velocity.w_dir = w_dir;
     }
     if let Some(w_norm) = cli.w_norm {
-        updated_cfg.scoring.velocity.w_norm = w_norm;
+        updated_cfg.edges.score_config.velocity.w_norm = w_norm;
     }
 
     if let Some(w_flux) = cli.w_flux {
-        updated_cfg.scoring.photometry.w_flux = w_flux;
+        updated_cfg.edges.score_config.photometry.w_flux = w_flux;
     }
     if let Some(flux_sigma_floor) = cli.flux_sigma_floor {
-        updated_cfg.scoring.photometry.flux_sigma_floor = flux_sigma_floor;
+        updated_cfg.edges.score_config.photometry.flux_sigma_floor = flux_sigma_floor;
     }
 
     if let Some(w_gap) = cli.w_gap {
-        updated_cfg.scoring.gap.w_gap = w_gap;
+        updated_cfg.edges.score_config.gap.w_gap = w_gap;
     }
     if let Some(rho) = cli.rho {
-        updated_cfg.scoring.gap.rho = rho;
+        updated_cfg.edges.score_config.gap.rho = rho;
     }
 
     if let Some(w_band_mismatch) = cli.w_band_mismatch {
-        updated_cfg.scoring.band.w_band_mismatch = w_band_mismatch;
+        updated_cfg.edges.score_config.band.w_band_mismatch = w_band_mismatch;
     }
 
     updated_cfg

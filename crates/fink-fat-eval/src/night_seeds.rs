@@ -20,7 +20,7 @@ use rand::{Rng, RngCore, SeedableRng, rngs::StdRng};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    bin_utils::{fmt_ms, infer_t0_mjd_tt},
+    bin_utils::infer_t0_mjd_tt,
     dataset::ztf_alerts::{AlertStoreWithTruth, NightStore},
     seeding::seed_gen::generate_pairs_and_triplets,
 };
@@ -84,14 +84,10 @@ impl NightSeeds {
         time_bin_days: f64,
         pairs_only: bool,
     ) -> Result<Self> {
-        let n_alerts = store.store.alerts.len();
-        eprintln!("  alerts: {}", n_alerts);
-
         let t0 = infer_t0_mjd_tt(&store);
         let spatial = HealpixBinner::new(healpix_depth);
         let time = UniformTimeBinner::new(time_bin_days, t0);
 
-        let t_gen = std::time::Instant::now();
         let out = generate_pairs_and_triplets(
             &store,
             nid,
@@ -102,25 +98,13 @@ impl NightSeeds {
             None,
         )?;
 
-        eprintln!(
-            "  seeding: bucket={:.3}ms pairs={:.3}ms pair_feat={:.3}ms triplets={:.3}ms trip_feat={:.3}ms",
-            fmt_ms(out.timings.bucket_index),
-            fmt_ms(out.timings.pairs),
-            fmt_ms(out.timings.pair_features),
-            fmt_ms(out.timings.triplets),
-            fmt_ms(out.timings.triplet_features),
-        );
-        eprintln!(
-            "  seeds: pairs={} triplets={} (elapsed {:.3} ms)",
-            out.pair_seeds.len(),
-            out.triplet_seeds.len(),
-            fmt_ms(t_gen.elapsed())
-        );
-
         let mut seeds = out.pair_seeds;
         if !pairs_only {
             seeds.extend(out.triplet_seeds);
         }
+        // Sort seeds by observation time.
+        // very important for edge generation as it suppose a time ordering
+        seeds.sort_by(|a, b| a.plane.epoch_mid.total_cmp(&b.plane.epoch_mid));
 
         let truth: Vec<Option<i32>> = seeds.iter().map(|s| store.seed_truth_id(s)).collect();
 

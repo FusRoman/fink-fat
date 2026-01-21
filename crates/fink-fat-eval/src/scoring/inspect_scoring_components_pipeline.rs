@@ -272,7 +272,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         let edges = sample_scored_edges_between(
             &night_a,
             &night_b,
-            &engine_cfg.scoring,
+            &engine_cfg.edges.score_config,
             cli.only_truth,
             cli.sample_right_per_left,
             cli.max_edges_per_pair,

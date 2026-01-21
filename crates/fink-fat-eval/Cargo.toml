@@ -23,6 +23,7 @@ serde_yaml = "0.9.34"
 rayon = "1.11.0"
 num_cpus = "1.17.0"
 bitcode = { version = "0.6.9", features = ["serde"] }
+ahash = "0.8.12"
 
 [dev-dependencies]
 approx = "0.5.1"
@@ -51,3 +52,7 @@ path = "src/bin/scoring/generate_frozen_pairs.rs"
 [[bin]]
 name = "evaluate-scoring"
 path = "src/bin/scoring/evaluate_scoring.rs"
+
+[[bin]]
+name = "evaluate-edges"
+path = "src/bin/scoring/evaluate_edges.rs"

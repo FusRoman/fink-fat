@@ -2,9 +2,8 @@ use std::fmt;
 
 use fink_fat_engine::engine_config::EngineConfig;
 use fink_fat_engine::engine_config::score_config::ScoreConfig;
+use rand::Rng;
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
-use rayon::prelude::*;
 
 use crate::night_seeds::{LabeledEdge, SeedStore};
 use crate::scoring::frozen_pairs::FrozenPair;
@@ -87,7 +86,7 @@ impl fmt::Display for EvalStats {
 /// - `position.max_d2`: uniform in [1, 50]
 /// - `position.w_pos`: uniform in [0.1, 5]
 pub fn sample_candidate_cfg(rng: &mut StdRng, engine_cfg: &EngineConfig) -> ScoreConfig {
-    let mut cfg = engine_cfg.scoring.clone();
+    let mut cfg = engine_cfg.edges.score_config.clone();
 
     let min_var_pow = rng.random_range(-12.0..-4.0);
     cfg.numeric.min_variance = 10f64.powf(min_var_pow);
@@ -189,22 +188,6 @@ pub fn validate_and_eval_candidate(
 ) -> Result<Option<(Option<EdgeSeparationMetrics>, usize, EvalStats)>, anyhow::Error> {
     cfg.validate()?; // treat validation errors as "hard invalid"
     Ok(evaluate_cfg_on_frozen_pairs(cfg, seed_store, frozen_pairs))
-}
-
-// --- helper: what each iteration produces (thread-safe, Send) ---------------
-enum IterOutcome {
-    Invalid {
-        iter0: usize,
-        err: anyhow::Error, // or your concrete error type
-    },
-    Unreachable {
-        iter0: usize,
-    },
-    Ok {
-        iter0: usize,
-        cfg: ScoreConfig,
-        metrics_opt: Option<EdgeSeparationMetrics>,
-    },
 }
 
 // Optimise a subset of scoring parameters to minimise `FPR@TPR`.

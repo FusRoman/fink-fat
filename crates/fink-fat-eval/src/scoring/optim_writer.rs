@@ -44,7 +44,7 @@ pub fn write_best_scoring_yamls(
 
     // Full engine YAML
     let mut best_engine = engine_cfg.clone();
-    best_engine.scoring = best_scoring;
+    best_engine.edges.score_config = best_scoring;
 
     let full_path = out_dir.join("best_scoring_full_engine.yaml");
     let s =

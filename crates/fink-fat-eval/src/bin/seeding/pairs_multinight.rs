@@ -120,7 +120,7 @@ fn main() -> Result<()> {
     let triplet_cfg = TripletConfig::default();
 
     // CSV columns
-    let mut v_nid: Vec<i32> = Vec::with_capacity(nids.len());
+    let mut v_nid: Vec<u32> = Vec::with_capacity(nids.len());
     let mut v_n_alerts: Vec<i64> = Vec::with_capacity(nids.len());
 
     let mut v_n_pairs: Vec<i64> = Vec::with_capacity(nids.len());
@@ -144,7 +144,7 @@ fn main() -> Result<()> {
     let mut v_trip_n_true: Vec<i64> = Vec::with_capacity(nids.len());
     let mut v_trip_n_contaminated: Vec<i64> = Vec::with_capacity(nids.len());
 
-    let mut failed: Vec<(i32, String)> = Vec::new();
+    let mut failed: Vec<(u32, String)> = Vec::new();
 
     for (k, &nid) in nids.iter().enumerate() {
         eprintln!("\n[{}/{}] nid={}", k + 1, nids.len(), nid);
@@ -152,7 +152,7 @@ fn main() -> Result<()> {
         let mut run_one = || -> Result<()> {
             let store = ingest_one_night(
                 &source,
-                NightId(nid as u32),
+                NightId(nid),
                 cli.scan.mode.into(),
                 cli.scan.minimal,
                 &ingest_cfg,
