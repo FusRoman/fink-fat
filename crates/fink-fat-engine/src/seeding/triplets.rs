@@ -776,11 +776,7 @@ pub fn extract_triplet_features(
         let seed_id = SeedId::new(i as u64);
 
         out.push(SeedNode::from_triplet(
-            seed_id,
-            night_id,
-            alert_a,
-            alert_b,
-            alert_c,
+            seed_id, night_id, alert_a, alert_b, alert_c,
         ));
     }
     out
@@ -862,6 +858,10 @@ mod triplet_gen_tests {
 
         fn bin_width(&self) -> f64 {
             self.width
+        }
+
+        fn bin_start(&self, bin: i64) -> MjdTt {
+            self.t0 + (bin as f64) * self.width
         }
     }
 

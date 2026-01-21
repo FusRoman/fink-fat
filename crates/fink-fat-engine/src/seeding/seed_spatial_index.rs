@@ -158,7 +158,7 @@ impl SeedSpatialIndex {
 
         cover_keys
             .into_iter()
-            .filter_map(move |space_key| {
+            .filter_map(|space_key| {
                 // We always query the single nightly time bin `TimeBin(0)`.
                 let key = BucketKey {
                     space_key,

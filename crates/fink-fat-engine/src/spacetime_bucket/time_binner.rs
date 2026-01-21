@@ -31,6 +31,14 @@ pub trait TimeBinner {
 
     /// The **bin width** in days.
     fn bin_width(&self) -> MjdTt;
+
+    /// Return the start time of bin `k`.
+    fn bin_start(&self, k: i64) -> MjdTt;
+
+    /// Return the end time of bin `k`.
+    fn bin_end(&self, k: i64) -> MjdTt {
+        self.bin_start(k) + self.bin_width()
+    }
 }
 
 /// Enumerate **target time bins** starting from `k0`, bounded by `max_dt`.

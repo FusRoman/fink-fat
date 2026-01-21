@@ -156,6 +156,10 @@ pub struct PredictorParams {
     pub noise: ModelNoise,
     /// If true, add one spatial cell radius to the cone (safety padding).
     pub pad_cell_radius: bool,
+    /// Time bin size used when recovering seeds from time binner. (Days, TT)
+    pub time_bin_dt: f64,
+    /// Velocity slack (rad/day) added to cone radius to account for velocity uncertainty.
+    pub v_slack: f64,
 }
 
 impl PredictorParams {
@@ -189,6 +193,8 @@ impl Default for PredictorParams {
             k_sigma: 3.0,
             noise: ModelNoise::default(),
             pad_cell_radius: true,
+            time_bin_dt: 0.021, // 30.24 minutes in days
+            v_slack: 0.0,
         }
     }
 }
@@ -313,6 +319,8 @@ pub struct PredictorParamsBuilder {
     k_sigma: f64,
     noise: ModelNoise,
     pad_cell_radius: bool,
+    time_bin_dt: f64,
+    v_slack: f64,
 }
 
 impl Default for PredictorParamsBuilder {
@@ -321,6 +329,8 @@ impl Default for PredictorParamsBuilder {
             k_sigma: 3.0,
             noise: ModelNoise::default(),
             pad_cell_radius: true,
+            time_bin_dt: 0.021, // 30.24 minutes in days
+            v_slack: 0.0,
         }
     }
 }
@@ -338,6 +348,26 @@ impl PredictorParamsBuilder {
     /// * `v` – sigma multiplier for the cone radius (dimensionless).
     pub fn k_sigma(mut self, v: f64) -> Self {
         self.k_sigma = v;
+        self
+    }
+
+    /// Set the time bin size used when recovering seeds from time binner. (Days, TT)
+    ///
+    /// Arguments
+    /// ---------
+    /// * `v` – time bin size in days.
+    pub fn time_bin_dt(mut self, v: f64) -> Self {
+        self.time_bin_dt = v;
+        self
+    }
+
+    /// Set the velocity slack (rad/day) added to cone radius to account for velocity uncertainty.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `v` – velocity slack in rad/day.
+    pub fn v_slack(mut self, v: f64) -> Self {
+        self.v_slack = v;
         self
     }
 
@@ -396,6 +426,8 @@ impl PredictorParamsBuilder {
             k_sigma: self.k_sigma,
             noise,
             pad_cell_radius: self.pad_cell_radius,
+            time_bin_dt: self.time_bin_dt,
+            v_slack: self.v_slack,
         })
     }
 

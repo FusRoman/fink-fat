@@ -33,6 +33,7 @@
 //! - Photometry is minimalistic by design—only what is required for scoring
 //!   or band-matching at linkage time.
 
+use ahash::AHashMap;
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
@@ -43,7 +44,8 @@ use crate::{
     alerts::AlertStore,
     astro_math::{fit_quad_1d, radec_to_tangent, spherical_midpoint, tangent_to_radec},
     display_format::indent_block,
-    engine_config::propagator_config::PredictorParams,
+    engine_config::{edge_config::EdgeConfig, propagator_config::PredictorParams},
+    graph::score::ScoredEdge,
     night_id::NightId,
     seeding::{
         photometry::Photometry,
@@ -51,7 +53,7 @@ use crate::{
         seed_spatial_index::SeedSpatialIndex,
         tangent_plane::{TangentCenter, TangentPlaneModel},
     },
-    spacetime_bucket::spatial_binner::SpatialBinner,
+    spacetime_bucket::{spatial_binner::SpatialBinner, time_binner::TimeBinner},
 };
 
 /// Compact intra-night seed object used in the inter-night graph.
@@ -246,6 +248,214 @@ impl SeedNode {
             radius += binner.cell_radius();
         }
         (ra, dec, radius)
+    }
+
+    /// Score inter-night edge candidates from this seed to a **time-sorted** set of
+    /// right-hand seeds using **spatio-temporal binning** followed by **exact
+    /// kinematic scoring**.
+    ///
+    /// This implementation targets the common case where:
+    /// - all `right` seeds belong to a **single night**,
+    /// - `right` is **sorted by `SeedNode::plane.epoch_mid` (ascending)**,
+    /// - you want to reduce spatial candidate fan-out by indexing **per time bin**
+    ///   rather than indexing the whole night at once,
+    /// - the time partitioning is provided by a generic [`TimeBinner`] (uniform,
+    ///   cadence-aware, etc.).
+    ///
+    /// The algorithm proceeds as follows:
+    ///
+    /// 1. **Time binning**  
+    ///    The time span covered by `right` is partitioned into time bins using
+    ///    `time_binner.bins_in_range(t_min_r, t_max_r)`. When using a
+    ///    [`UniformTimeBinner`], bins are typically anchored at the earliest epoch
+    ///    of the night to ensure stable, reproducible partitioning.
+    ///
+    /// 2. **Build a spatial index per time bin**  
+    ///    For each time bin `[t0, t1)` we identify the contiguous slice
+    ///    `right[lo..hi)` (because `right` is time-sorted) and build a dedicated
+    ///    [`SeedSpatialIndex`] from that slice only. This makes the coarse spatial
+    ///    search **time-consistent by construction**: returned candidates belong to
+    ///    the queried bin.
+    ///
+    /// 3. **Per-bin coarse spatial search**  
+    ///    For each bin:
+    ///    - choose a reference epoch `t_center` (bin midpoint),
+    ///    - propagate this seed to `t_center` using [`SeedNode::predict_cone`],
+    ///    - inflate the cone radius by a conservative time margin
+    ///      `(|v| + v_slack) · (Δt / 2)` where `Δt = time_binner.bin_width()`,
+    ///      so the cone covers any target epoch within the bin.
+    ///    The inflated cone is then queried against the bin-local spatial index.
+    ///
+    /// 4. **Exact scoring**  
+    ///    Each spatial candidate is evaluated with [`ScoredEdge::score`] at the
+    ///    **true epoch** of the right-hand seed. Returned [`ScoredEdge`] values
+    ///    encode final kinematic and photometric consistency.
+    ///
+    /// The result is a list of scored edges suitable for subsequent Top-K selection
+    /// or global graph construction.
+    ///
+    /// # Parameters
+    ///
+    /// * `right` – Slice of candidate right-hand seeds, **sorted by
+    ///   `plane.epoch_mid`** (ascending).
+    /// * `spatial_binner` – Spatial binner used for cone queries (e.g. HEALPix).
+    /// * `time_binner` – Time binner defining the binning scheme (uniform bins,
+    ///   cadence-aware bins, etc.). Must provide `bins_in_range`, `bin_start`,
+    ///   `bin_end`, and `bin_width`.
+    /// * `edge_config` – Edge and predictor configuration, including:
+    ///   - predictor noise and padding parameters,
+    ///   - optional velocity slack `v_slack`.
+    /// * `delta_revisit` – Revisit separation between `left` and `right` nights,
+    ///   expressed as an integer ≥ 1.
+    /// * `right_id_to_index` – Mapping from `SeedId` to index in `right`,
+    ///   consistent with the sorted order.
+    ///
+    /// # Returns
+    ///
+    /// * `Vec<ScoredEdge>` – All scored edge candidates from this seed to `right`
+    ///   seeds that pass the per-bin spatial prefilter and the exact scorer. The
+    ///   vector is **not sorted** and may contain more entries than the final Top-K;
+    ///   downstream code is expected to perform selection or truncation.
+    ///
+    /// # Invariants
+    ///
+    /// - `right` **must** be sorted by `SeedNode::plane.epoch_mid`.
+    /// - `right_id_to_index` must refer to indices in `right` (same ordering).
+    /// - `time_binner` must be consistent with the timestamps in `right`
+    ///   (i.e. `bin_start/bin_end/bin_width` form a coherent partitioning).
+    ///
+    /// # Complexity
+    ///
+    /// Notation
+    /// --------
+    /// Let:
+    /// - `N = right.len()` be the number of right-hand seeds (one night).
+    /// - `B` be the number of time bins returned by `time_binner.bins_in_range(...)`.
+    /// - `n_b` be the number of seeds in bin `b` (so `Σ_b n_b = N`).
+    /// - `C_b` be the number of candidates returned by the bin-local cone query.
+    /// - `score_cost` be the cost of one [`ScoredEdge::score`] call.
+    ///
+    /// This method (spatio-temporal: spatial index per bin)
+    /// ----------------------------------------------------
+    /// For each bin `b`, we:
+    /// - build a [`SeedSpatialIndex`] on `right[lo..hi)` of size `n_b`,
+    /// - issue one cone query on that index (returns `C_b` candidates),
+    /// - score each candidate.
+    ///
+    /// Total cost:
+    /// - Index building: `Σ_b O(n_b) = O(N)` (each right seed is inserted once into
+    ///   exactly one bin-local index across the whole loop).
+    /// - Scoring: `Σ_b (C_b · score_cost)`.
+    ///
+    /// Overall:
+    /// `O(N + (Σ_b C_b) · score_cost)`.
+    ///
+    /// Comparison with other binning/indexing strategies
+    /// -------------------------------------------------
+    /// - **Nightly spatial index only (no time bins)**:
+    ///   `O(N + C_night · score_cost)` where `C_night` is candidates from one nightly query.
+    /// - **Time bins + nightly index + membership filtering** (old approach):
+    ///   `O(N + B · C_night + (Σ_b C'_b) · score_cost)` where `C'_b` are survivors after
+    ///   filtering candidates into `[lo, hi)`. This can be expensive when `B` is large
+    ///   because you pay `B · C_night` candidate visits even if few survive.
+    /// - **This approach (index per bin)**:
+    ///   `O(N + (Σ_b C_b) · score_cost)` with `C_b` typically much smaller than `C_night`
+    ///   in crowded nights because the spatial search is restricted to a time slice
+    ///   *upfront*.
+    ///
+    /// # Notes
+    ///
+    /// - Building a spatial index per bin increases preprocessing work (more, smaller
+    ///   indices) but can substantially reduce candidate fan-out when the nightly
+    ///   index is crowded.
+    /// - The coarse cone is intentionally conservative; false positives are expected
+    ///   and filtered out by the exact scorer.
+    ///
+    /// # See also
+    ///
+    /// * [`TimeBinner`] – Time partitioning interface (uniform or custom).
+    /// * [`UniformTimeBinner`] – Uniform partitioning of the MJD(TT) axis.
+    /// * [`SeedNode::predict_cone`] – Coarse kinematic prediction used for
+    ///   spatial prefiltering.
+    /// * [`SeedSpatialIndex`] – Bucket-based spatial index used per time bin.
+    /// * [`ScoredEdge::score`] – Exact inter-night edge scoring routine.
+    pub fn score_edge_candidates<B: SpatialBinner, T: TimeBinner>(
+        &self,
+        right: &[SeedNode], // sorted by epoch_mid
+        spatial_binner: &B,
+        time_binner: &T,
+        edge_config: &EdgeConfig,
+        delta_revisit: u32,
+        right_id_to_index: &AHashMap<SeedId, usize>,
+    ) -> Vec<ScoredEdge> {
+        let mut scored: Vec<ScoredEdge> = Vec::with_capacity(32);
+
+        // Trivial case: no right-hand seeds.
+        if right.is_empty() {
+            return scored;
+        }
+
+        // Right-hand time span (O(1) because `right` is time-sorted).
+        let t_min_r = right[0].plane.epoch_mid;
+        let t_max_r = right[right.len() - 1].plane.epoch_mid;
+
+        // Stable uniform binning anchored on the first right-hand epoch.
+        let bins = time_binner.bins_in_range(t_min_r, t_max_r);
+
+        // Left seed speed on tangent plane (rad/day), with optional slack.
+        let v = self.plane.vel_xy;
+        let speed = (v[0].mul_add(v[0], v[1] * v[1])).sqrt();
+        let v_slack = edge_config.predictor_config.v_slack; // rad/day
+        let speed_eff = (speed + v_slack).max(0.0);
+
+        // Half-bin width used for conservative time padding.
+        let dt_half = 0.5 * time_binner.bin_width().max(1e-12);
+
+        // Iterate over time bins and query a spatial index built for that bin only.
+        for bin in bins {
+            let t0 = time_binner.bin_start(bin.0);
+            let t1 = time_binner.bin_end(bin.0);
+            let t_center = 0.5 * (t0 + t1);
+
+            // Identify the contiguous sub-slice of `right` that belongs to this bin.
+            let lo = lower_bound_epoch(right, t0);
+            let hi = lower_bound_epoch(right, t1);
+            if lo == hi {
+                continue;
+            }
+
+            // Build a spatial index for this time bin only.
+            //
+            // Note: this avoids a nightly cone query + time membership filtering.
+            let index_bin = SeedSpatialIndex::build(&right[lo..hi], spatial_binner);
+
+            // Coarse cone at the bin center + time padding to cover the full bin.
+            let (ra_c, dec_c, mut r_c) =
+                self.predict_cone(t_center, spatial_binner, &edge_config.predictor_config);
+            r_c += speed_eff * dt_half;
+
+            // Query the bin-local index and score candidates at their true epochs.
+            for j_id in index_bin.cone_query(spatial_binner, ra_c, dec_c, r_c) {
+                let Some(&j_idx) = right_id_to_index.get(&j_id) else {
+                    continue;
+                };
+
+                // Safety check: ensure the global index belongs to this bin slice.
+                // This should always hold if `right_id_to_index` matches `right`.
+                if j_idx < lo || j_idx >= hi {
+                    continue;
+                }
+
+                let j = &right[j_idx];
+                if let Some(se) =
+                    ScoredEdge::score(self, j, &edge_config.score_config, delta_revisit)
+                {
+                    scored.push(se);
+                }
+            }
+        }
+
+        scored
     }
 
     /// Retrieve **candidate neighbour seeds** from a [`SeedSpatialIndex`]
@@ -540,6 +750,73 @@ impl SeedNode {
     }
 }
 
+/// Find the leftmost index in a time-sorted slice whose epoch is not earlier
+/// than a given target time.
+///
+/// This function performs a **binary search** on a slice of [`SeedNode`]
+/// assumed to be sorted in **ascending order** by
+/// [`SeedNode::plane.epoch_mid`]. It returns the smallest index `i` such that:
+///
+/// ```text
+/// right[i].plane.epoch_mid >= t_target
+/// ```
+///
+/// If **all** seeds have `epoch_mid < t_target`, the function returns
+/// `right.len()`. The returned index therefore always satisfies:
+///
+/// ```text
+/// 0 <= i <= right.len()
+/// ```
+///
+/// This routine is typically used to:
+/// - compute the lower bound of a **time bin** `[t0, t1)`,
+/// - derive a contiguous slice `right[i..j)` containing all seeds whose
+///   epochs fall within a given time interval,
+/// - perform O(1) time-membership checks when combined with a second call
+///   for the upper bound.
+///
+/// # Parameters
+///
+/// * `right` – Slice of [`SeedNode`] sorted by `plane.epoch_mid` (ascending).
+/// * `t_target` – Target epoch (MJD TT) serving as the lower bound.
+///
+/// # Returns
+///
+/// * `usize` – The smallest index `i` such that
+///   `right[i].plane.epoch_mid >= t_target`, or `right.len()` if no such
+///   element exists.
+///
+/// # Complexity
+///
+/// * **Time**: `O(log N)` where `N = right.len()`.
+/// * **Space**: `O(1)`.
+///
+/// # Panics
+///
+/// This function does not panic.
+///
+/// # Notes
+///
+/// This is a specialised, allocation-free equivalent of
+/// [`slice::partition_point`] tailored to `SeedNode` and explicit epoch
+/// access. It is kept inline for performance in tight loops.
+#[inline]
+fn lower_bound_epoch(right: &[SeedNode], t_target: f64) -> usize {
+    let mut lower = 0usize;
+    let mut upper = right.len();
+
+    while lower < upper {
+        let mid = lower + (upper - lower) / 2;
+        if right[mid].plane.epoch_mid < t_target {
+            lower = mid + 1;
+        } else {
+            upper = mid;
+        }
+    }
+
+    lower
+}
+
 #[cfg(test)]
 mod seed_node_tests {
     use super::*;
@@ -584,6 +861,8 @@ mod seed_node_tests {
             },
             k_sigma: 3.0,
             pad_cell_radius: true,
+            time_bin_dt: 1.0,
+            v_slack: 0.0,
         }
     }
 

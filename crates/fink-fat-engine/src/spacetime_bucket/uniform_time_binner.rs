@@ -67,42 +67,6 @@ impl UniformTimeBinner {
         self.t0
     }
 
-    /// Compute the start time of bin `k`.
-    ///
-    /// Formula
-    /// -------
-    /// `t_start = t0 + k·dt`
-    ///
-    /// Parameters
-    /// ----------
-    /// * `k` — Bin index (integer).
-    ///
-    /// Returns
-    /// -------
-    /// Start time of bin `k` (days, MJD TT).
-    #[inline]
-    pub fn bin_start(&self, k: i64) -> MjdTt {
-        self.t0 + (k as f64) * self.dt
-    }
-
-    /// Compute the end time of bin `k`.
-    ///
-    /// Formula
-    /// -------
-    /// `t_end = t0 + (k+1)·dt`
-    ///
-    /// Parameters
-    /// ----------
-    /// * `k` — Bin index (integer).
-    ///
-    /// Returns
-    /// -------
-    /// End time of bin `k` (days, MJD TT).
-    #[inline]
-    pub fn bin_end(&self, k: i64) -> MjdTt {
-        self.t0 + ((k + 1) as f64) * self.dt
-    }
-
     /// Compute the bin index for time `t`.
     ///
     /// Formula
@@ -191,6 +155,24 @@ impl TimeBinner for UniformTimeBinner {
     #[inline]
     fn bin_width(&self) -> MjdTt {
         self.dt
+    }
+
+    /// Compute the start time of bin `k`.
+    ///
+    /// Formula
+    /// -------
+    /// `t_start = t0 + k·dt`
+    ///
+    /// Parameters
+    /// ----------
+    /// * `k` — Bin index (integer).
+    ///
+    /// Returns
+    /// -------
+    /// Start time of bin `k` (days, MJD TT).
+    #[inline]
+    fn bin_start(&self, k: i64) -> MjdTt {
+        self.t0 + (k as f64) * self.dt
     }
 }
 

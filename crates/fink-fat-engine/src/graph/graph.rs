@@ -4,9 +4,9 @@ use crate::{
     engine_config::edge_config::EdgeConfig,
     graph::{edge::Edge, edge_id::EdgeId, layer::NightLayer, node::Node, node_id::NodeId},
     night_id::NightId,
-    seeding::{seed_id::SeedId, seed_node::SeedNode, seed_spatial_index::SeedSpatialIndex},
+    seeding::{seed_id::SeedId, seed_node::SeedNode},
     solver::components::{ConnectedComponents, union_find::UnionFind},
-    spacetime_bucket::spatial_binner::SpatialBinner,
+    spacetime_bucket::{spatial_binner::SpatialBinner, time_binner::TimeBinner},
 };
 
 #[derive(Debug)]
@@ -69,14 +69,13 @@ impl InterNightGraph {
         self.layers.push(layer);
     }
 
-    pub fn add_inter_night_edges<B: SpatialBinner>(
+    pub fn add_inter_night_edges<B: SpatialBinner, T: TimeBinner>(
         &mut self,
         left_nodes: &[SeedNode],
-        right_nodes: &[SeedNode],
+        right_nodes: &mut [SeedNode],
         edge_config: &EdgeConfig,
-        binner: &B,
-        index_right: &SeedSpatialIndex,
-        t_right_med: f64,
+        spatial_binner: &B,
+        time_binner: &T,
     ) {
         assert!(!left_nodes.is_empty(), "left_nodes must not be empty");
         assert!(!right_nodes.is_empty(), "right_nodes must not be empty");
@@ -109,12 +108,6 @@ impl InterNightGraph {
             self.add_night_layer(night_left, &seeds);
         }
 
-        /* ---------- build right SeedId -> index mapping ---------- */
-        let mut right_id_to_index = AHashMap::with_capacity(right_nodes.len());
-        for (i, sn) in right_nodes.iter().enumerate() {
-            right_id_to_index.insert(sn.seed_id, i);
-        }
-
         /* ---------- borrow seed->node maps from layers ---------- */
         let left_lidx = self.night_to_layer_idx[&night_left];
         let right_lidx = self.night_to_layer_idx[&night_right];
@@ -125,17 +118,24 @@ impl InterNightGraph {
         /* ---------- generate NodeId-based edges ---------- */
         let id_start = EdgeId::from(self.edges.len());
 
+        /* ---------- Sort right nodes by epoch mid time ---------- */
+        // required by generate_topk_edges()
+        right_nodes.sort_by(|a, b| {
+            a.plane
+                .epoch_mid
+                .partial_cmp(&b.plane.epoch_mid)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
         let new_edges = Edge::generate_topk_edges(
             id_start,
             left_nodes,
             right_nodes,
             edge_config,
-            binner,
-            index_right,
-            t_right_med,
+            spatial_binner,
+            time_binner,
             left_seed_to_node,
             right_seed_to_node,
-            &right_id_to_index,
         );
 
         /* ---------- insert edges into graph without node_id_of() ---------- */

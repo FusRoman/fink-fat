@@ -166,6 +166,10 @@ mod bucket_tests {
             // 1 day bins.
             1.0
         }
+
+        fn bin_start(&self, k: i64) -> MjdTt {
+            k as f64
+        }
     }
 
     /// Helper to build a minimal `Alert` for tests.
@@ -391,6 +395,10 @@ mod bucket_tests {
             fn bin_width(&self) -> MjdTt {
                 // 0.1 day bins.
                 0.1
+            }
+
+            fn bin_start(&self, k: i64) -> MjdTt {
+                k as f64 * 0.1
             }
         }
 

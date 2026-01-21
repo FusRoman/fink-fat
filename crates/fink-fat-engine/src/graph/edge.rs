@@ -4,10 +4,10 @@ use ahash::AHashMap;
 
 use crate::{
     engine_config::edge_config::EdgeConfig,
-    graph::{edge_id::EdgeId, node_id::NodeId, score::ScoredEdge},
+    graph::{edge_id::EdgeId, node_id::NodeId},
     night_id::NightId,
-    seeding::{seed_id::SeedId, seed_node::SeedNode, seed_spatial_index::SeedSpatialIndex},
-    spacetime_bucket::spatial_binner::SpatialBinner,
+    seeding::{seed_id::SeedId, seed_node::SeedNode},
+    spacetime_bucket::{spatial_binner::SpatialBinner, time_binner::TimeBinner},
 };
 
 /// Directed link from an older node to a newer node (forward in time).
@@ -57,22 +57,27 @@ impl Edge {
     /// -----
     /// This version returns edges already expressed in graph space (`NodeId`),
     /// avoiding any `(night, seed) -> NodeId` resolution during insertion.
-    pub fn generate_topk_edges<B: SpatialBinner>(
+    pub fn generate_topk_edges<B: SpatialBinner, T: TimeBinner>(
         id_start: EdgeId,
         left: &[SeedNode],
         right: &[SeedNode],
         edge_config: &EdgeConfig,
-        binner: &B,
-        index_right: &SeedSpatialIndex,
-        t_right_med: f64,
+        spatial_binner: &B,
+        time_binner: &T,
         left_seed_to_node: &AHashMap<SeedId, NodeId>,
         right_seed_to_node: &AHashMap<SeedId, NodeId>,
-        right_id_to_index: &AHashMap<SeedId, usize>,
     ) -> Vec<Self> {
         // Δ revisits (≥ 1)
         let night_left: NightId = left.first().map(|s| s.night_id).unwrap_or_default();
         let night_right: NightId = right.first().map(|s| s.night_id).unwrap_or_default();
         let delta_revisit: u32 = night_right.0.saturating_sub(night_left.0).max(1);
+
+        /* ---------- build right SeedId -> index mapping ---------- */
+        let right_id_to_index: AHashMap<_, _> = right
+            .iter()
+            .enumerate()
+            .map(|(i, sn)| (sn.seed_id, i))
+            .collect();
 
         // 1) generation/scoring Top-K
         let mut edges: Vec<Edge> = Vec::with_capacity(left.len() * edge_config.top_k_per_left);
@@ -85,29 +90,14 @@ impl Edge {
                 None => continue, // left seed not present in graph layer (should not happen)
             };
 
-            // (a) coarse cone at median time → candidate ids
-            let (ra_c, dec_c, r_c) =
-                i.predict_cone(t_right_med, binner, &edge_config.predictor_config);
-            let cand_iter = SeedSpatialIndex::cone_query(index_right, binner, ra_c, dec_c, r_c);
-
-            // (b) fine score per candidate at its true epoch; early gate & cmax
-            let mut scored: Vec<ScoredEdge> = Vec::with_capacity(32);
-
-            for j_id in cand_iter {
-                if let Some(&j_idx) = right_id_to_index.get(&j_id) {
-                    let j = &right[j_idx];
-                    if let Some(se) =
-                        ScoredEdge::score(i, j, &edge_config.score_config, delta_revisit)
-                    {
-                        if let Some(cmax) = edge_config.max_total_edges {
-                            if se.cost > cmax as f64 {
-                                continue;
-                            }
-                        }
-                        scored.push(se);
-                    }
-                }
-            }
+            let mut scored = i.score_edge_candidates(
+                right,
+                spatial_binner,
+                time_binner,
+                edge_config,
+                delta_revisit,
+                &right_id_to_index,
+            );
 
             // (c) Top-K via partial selection instead of full sort
             let k = edge_config.top_k_per_left.min(scored.len());
