@@ -11,11 +11,7 @@ use config::{Config, Environment, File};
 use serde::{Deserialize, Serialize};
 
 use crate::engine_config::{
-    edge_config::{EdgeConfig, EdgeConfigFile},
-    error::ConfigError,
-    pair_config::PairConfig,
-    propagator_config::PredictorParams,
-    score_config::ScoreConfig,
+    edge_config::EdgeConfig, error::ConfigError, pair_config::PairConfig,
     triplet_config::TripletConfig,
 };
 
@@ -33,9 +29,7 @@ pub struct EngineConfig {
 
     pub pairs: PairConfig,
     pub triplets: TripletConfig,
-    pub predictor: PredictorParams,
-    pub scoring: ScoreConfig,
-    pub edges: EdgeConfigFile,
+    pub edges: EdgeConfig,
 }
 
 impl Default for EngineConfig {
@@ -44,9 +38,7 @@ impl Default for EngineConfig {
             version: 1,
             pairs: PairConfig::default(),
             triplets: TripletConfig::default(),
-            predictor: PredictorParams::default(),
-            scoring: ScoreConfig::default(),
-            edges: EdgeConfigFile::default(),
+            edges: EdgeConfig::default(),
         }
     }
 }
@@ -62,26 +54,10 @@ impl EngineConfig {
         self.pairs.validate()?;
         self.triplets.validate()?;
 
-        // PredictorParams -> ConfigError via #[from]
-        self.predictor.validate()?;
-
-        // ScoringConfigError -> ConfigError via #[from]
-        self.scoring.validate()?;
-
         // EdgeConfigError -> ConfigError via #[from]
         self.edges.validate()?;
 
         Ok(())
-    }
-
-    /// Build the runtime edge configuration used by the linker/scorer.
-    pub fn to_edge_config(&self) -> EdgeConfig {
-        EdgeConfig {
-            top_k_per_left: self.edges.top_k_per_left,
-            max_total_edges: self.edges.max_total_edges,
-            predictor_config: self.predictor,
-            score_config: self.scoring.clone(),
-        }
     }
 }
 
@@ -219,7 +195,7 @@ version: 1
         assert_eq!(cfg.edges.max_total_edges, None);
 
         // Predictor must be valid
-        assert!(cfg.predictor.k_sigma > 0.0);
+        assert!(cfg.edges.predictor_config.k_sigma > 0.0);
     }
 
     #[test]
@@ -346,7 +322,7 @@ edges:
             load_engine_config_validated(&path).expect("config should load with env overrides");
 
         assert!((cfg.pairs.max_dt - 0.05).abs() < 1e-12);
-        assert!((cfg.scoring.position.max_d2 - 9.0).abs() < 1e-12);
+        assert!((cfg.edges.score_config.position.max_d2 - 9.0).abs() < 1e-12);
         assert_eq!(cfg.edges.top_k_per_left, 42);
     }
 
@@ -371,7 +347,7 @@ version: 1
 
         assert_eq!(cfg.pairs.allow_same_timebin, false);
         assert_eq!(cfg.edges.max_total_edges, Some(12345));
-        assert_eq!(cfg.predictor.pad_cell_radius, false);
+        assert_eq!(cfg.edges.predictor_config.pad_cell_radius, false);
     }
 
     #[test]
@@ -407,16 +383,10 @@ edges:
         let path = write_tmp_yaml(yaml);
 
         let cfg = load_engine_config_validated(&path).expect("config should load");
-        let e = cfg.to_edge_config();
+        let e = cfg.edges;
 
         assert_eq!(e.top_k_per_left, 42);
         assert_eq!(e.max_total_edges, Some(1000));
-
-        // predictor copied
-        assert!((e.predictor_config.k_sigma - cfg.predictor.k_sigma).abs() < 1e-12);
-
-        // scoring cloned
-        assert!((e.score_config.position.max_d2 - cfg.scoring.position.max_d2).abs() < 1e-12);
     }
 
     #[test]
@@ -513,7 +483,7 @@ scoring:
         let cfg =
             load_engine_config_validated(&path).expect("config should load with unit strings");
 
-        let v = &cfg.scoring.velocity;
+        let v = &cfg.edges.score_config.velocity;
 
         let exp_max_theta = (15.0_f64 / 60.0_f64).to_radians();
         assert_relative_eq!(v.max_theta, exp_max_theta, max_relative = 1e-13);

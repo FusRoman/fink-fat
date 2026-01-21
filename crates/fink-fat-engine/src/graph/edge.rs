@@ -1,5 +1,7 @@
 //! Directed edge model (hypothesis linking two nodes across nights).
 
+use std::fmt::{self, Display, Formatter};
+
 use ahash::AHashMap;
 
 use crate::{
@@ -27,6 +29,16 @@ pub struct Edge<'a> {
     pub dt_days: f64,
     /// Whether the edge is currently active (used by solvers / CC exact recompute).
     pub active: bool,
+}
+
+impl<'a> Display for Edge<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Edge {{ id: {}, from: {}, to: {}, Δt: {:.3} d, cost: {:.6}, active: {} }}",
+            self.id, self.from.seed_id, self.to.seed_id, self.dt_days, self.cost, self.active,
+        )
+    }
 }
 
 impl<'a> Edge<'a> {
