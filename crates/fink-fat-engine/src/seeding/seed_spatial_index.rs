@@ -1,9 +1,9 @@
 // src/seeding/seed_spatial_index.rs
 
-//! Per-night spatial index for `SeedNode`s built on top of generic buckets.
+//! Per-night spatial index for [`SeedNode`] built on top of generic buckets.
 //!
-//! This module provides a thin wrapper, [`SeedSpatialIndex`], around
-//! [`BucketIndex<SeedId>`] that is specialised for **intra-night** operations:
+//! This module provides a thin wrapper, [`SeedSpatialIndex`], around a
+//! [`BucketIndex`] that is specialised for **single-night** operations:
 //!
 //! - all seeds are indexed using their tangent-plane mid-position
 //!   `(plane.ra_mid, plane.dec_mid)`,
@@ -12,24 +12,31 @@
 //! - queries are expressed as *approximate cone searches* on the sky using
 //!   the [`SpatialBinner`] API.
 //!
+//! Unlike earlier versions that stored only identifiers, this index stores
+//! **borrowed references** to seeds (`&SeedNode`). This allows callers to
+//! retrieve candidate seeds directly without an additional `SeedId -> index`
+//! lookup, at the cost of tying the index lifetime to the underlying seed slice.
+//!
 //! Typical usage
 //! -------------
 //! ```ignore
 //! let index = SeedSpatialIndex::build(&seeds, &binner);
 //!
-//! let candidates: Vec<SeedId> = index
+//! // Collect borrowed candidate seeds (no extra indirection).
+//! let candidates: Vec<&SeedNode> = index
 //!     .cone_query(&binner, ra, dec, search_radius)
 //!     .collect();
 //! ```
 //!
-//! The resulting `SeedId`s can then be passed to more accurate geometric
-//! filters (e.g. exact angular separation) or to higher-level linkage logic.
+//! The returned candidates are **cell-level approximate** and are typically
+//! passed to more accurate geometric filters (exact angular separation) or to
+//! higher-level linkage/scoring logic.
 
 use std::collections::HashMap;
 
 use crate::{
     Radians,
-    seeding::{seed_id::SeedId, seed_node::SeedNode},
+    seeding::seed_node::SeedNode,
     spacetime_bucket::{
         bucket::{Bucket, BucketIndex, BucketKey},
         spatial_binner::{SpatialBinner, SpatialKey},
@@ -39,21 +46,26 @@ use crate::{
 
 /// Per-night spatial index for seeds.
 ///
-/// This is a thin, domain-specific wrapper around [`BucketIndex<SeedId>`]
+/// This is a thin, domain-specific wrapper around [`BucketIndex<&SeedNode>`]
 /// that:
 ///
-/// - stores only `SeedId` values (no full `SeedNode` payload),
+/// - stores **borrowed references** to [`SeedNode`] (no cloning, no payload copy),
 /// - groups seeds by their spatial cell,
 /// - uses a single `TimeBin(0)` for the entire night.
-#[derive(Clone, Debug, Default)]
-pub struct SeedSpatialIndex {
+///
+/// # Lifetimes
+///
+/// The index borrows the seed slice passed to [`SeedSpatialIndex::build`].
+/// Therefore, the underlying `seeds: &[SeedNode]` must outlive the index.
+#[derive(Clone, Debug)]
+pub struct SeedSpatialIndex<'a> {
     /// Underlying bucket index storing the mapping
-    /// `(space_key, TimeBin(0)) → Vec<SeedId>`.
-    inner: BucketIndex<SeedId>,
+    /// `(space_key, TimeBin(0)) → Vec<&SeedNode>`.
+    inner: BucketIndex<&'a SeedNode>,
 }
 
-impl SeedSpatialIndex {
-    /// Build a per-night spatial index from a slice of `SeedNode`.
+impl<'a> SeedSpatialIndex<'a> {
+    /// Build a per-night spatial index from a slice of [`SeedNode`].
     ///
     /// Each seed is:
     ///
@@ -73,16 +85,16 @@ impl SeedSpatialIndex {
     ///
     /// Notes
     /// -----
-    /// - This method does **not** deduplicate seeds: if the same `SeedId`
-    ///   occurs multiple times in `seeds`, it will appear multiple times in
-    ///   the corresponding bucket.
-    /// - The temporal axis is deliberately collapsed: if you need multi-night
-    ///   or time-resolved indexing, use the generic [`BucketIndex`] directly
-    ///   or build a higher-level structure.
-    pub fn build<Bs: SpatialBinner>(seeds: &[SeedNode], binner: &Bs) -> Self {
+    /// - This method does **not** deduplicate seeds. If the same `SeedNode`
+    ///   reference (or effectively the same physical seed) appears multiple times
+    ///   in `seeds`, it will appear multiple times in the corresponding bucket.
+    /// - The temporal axis is deliberately collapsed. If you need time-resolved
+    ///   indexing, build multiple indices (e.g. per time bin) or use the generic
+    ///   [`BucketIndex`] directly with meaningful [`TimeBin`] values.
+    pub fn build<Bs: SpatialBinner>(seeds: &'a [SeedNode], binner: &Bs) -> Self {
         // Buckets are keyed by (spatial cell, time bin). Here the time bin is
         // always `TimeBin(0)` because the index is scoped to a single night.
-        let mut buckets: HashMap<BucketKey, Bucket<SeedId>> = HashMap::new();
+        let mut buckets: HashMap<BucketKey, Bucket<&'a SeedNode>> = HashMap::new();
 
         for s in seeds {
             let space_key = binner.key_for(s.plane.ra_mid, s.plane.dec_mid);
@@ -93,14 +105,14 @@ impl SeedSpatialIndex {
             };
 
             // Lazily create the bucket for this spatial cell, then push
-            // the seed identifier into its member list.
+            // the borrowed seed reference into its member list.
             buckets
                 .entry(key)
                 .or_insert_with(|| Bucket {
                     members: Vec::new(),
                 })
                 .members
-                .push(s.seed_id);
+                .push(s);
         }
 
         SeedSpatialIndex {
@@ -112,18 +124,18 @@ impl SeedSpatialIndex {
     ///
     /// This can be useful when generic bucket operations are required or when
     /// debugging the internal layout of the index.
-    pub fn inner(&self) -> &BucketIndex<SeedId> {
+    pub fn inner(&self) -> &BucketIndex<&'a SeedNode> {
         &self.inner
     }
 
-    /// Perform an approximate cone search in the seed index.
+    /// Perform an approximate cone search in the per-night seed index.
     ///
     /// The query is evaluated by:
     ///
     /// 1. Projecting the cone centre `(ra, dec)` to a [`SpatialKey`].
     /// 2. Asking the [`SpatialBinner`] for all neighbour cells that intersect
     ///    the cone of angular radius `radius`.
-    /// 3. Collecting all `SeedId`s found in the buckets
+    /// 3. Collecting all [`SeedNode`] references found in the buckets
     ///    `(space_key, TimeBin(0))` for those cells.
     ///
     /// Arguments
@@ -135,8 +147,8 @@ impl SeedSpatialIndex {
     ///
     /// Return
     /// ------
-    /// * An iterator over all `SeedId`s in the spatial cells that cover
-    ///   the requested cone.
+    /// * An iterator over borrowed [`SeedNode`] references in the spatial cells
+    ///   that cover the requested cone.
     ///
     /// Notes
     /// -----
@@ -146,13 +158,13 @@ impl SeedSpatialIndex {
     ///     approximate cover.
     /// - Downstream code should apply a precise angular separation filter if
     ///   strict cone membership is required.
-    pub fn cone_query<'a, Bs: SpatialBinner>(
+    pub fn cone_query<Bs: SpatialBinner>(
         &'a self,
         binner: &'a Bs,
         ra: Radians,
         dec: Radians,
         radius: Radians,
-    ) -> impl Iterator<Item = SeedId> + 'a {
+    ) -> impl Iterator<Item = &'a SeedNode> + 'a {
         let center_key: SpatialKey = binner.key_for(ra, dec);
         let cover_keys: Vec<SpatialKey> = binner.neighbors(center_key, radius);
 
@@ -174,6 +186,8 @@ impl SeedSpatialIndex {
 mod seed_spatial_index_tests {
     use super::*;
     use proptest::prelude::*;
+
+    use std::ptr;
 
     use crate::{
         astro_math::arcsec_to_rad,
@@ -210,6 +224,19 @@ mod seed_spatial_index_tests {
         }
     }
 
+    /// True if `items` contains the exact borrowed reference `needle`.
+    fn contains_ref<'a>(items: &[&'a SeedNode], needle: &'a SeedNode) -> bool {
+        items.iter().any(|x| ptr::eq(*x, needle))
+    }
+
+    /// True if `bucket.members` contains the exact borrowed reference `needle`.
+    fn bucket_contains_ref<'a>(
+        bucket: &crate::spacetime_bucket::bucket::Bucket<&'a SeedNode>,
+        needle: &'a SeedNode,
+    ) -> bool {
+        bucket.members.iter().any(|x| ptr::eq(*x, needle))
+    }
+
     /* ------------------------- unit tests ------------------------- */
 
     #[test]
@@ -221,65 +248,70 @@ mod seed_spatial_index_tests {
         let s2 = mk_seed(1, 1.0 + arcsec_to_rad(1.0) / 0.2f64.cos(), 0.2);
         let s3 = mk_seed(2, 2.0, -0.1);
 
-        let index = SeedSpatialIndex::build(&[s1.clone(), s2.clone(), s3.clone()], &binner);
+        // IMPORTANT: keep seeds in a stable Vec so the index can borrow them.
+        let seeds = vec![s1, s2, s3];
+
+        let index = SeedSpatialIndex::build(&seeds, &binner);
         let inner = index.inner();
 
-        // Check that all buckets use TimeBin(0) and contain the expected SeedId members.
+        // Compute bucket keys (all must use TimeBin(0)).
         let key1 = BucketKey {
-            space_key: binner.key_for(s1.plane.ra_mid, s1.plane.dec_mid),
+            space_key: binner.key_for(seeds[0].plane.ra_mid, seeds[0].plane.dec_mid),
             time_bin: TimeBin(0),
         };
         let key2 = BucketKey {
-            space_key: binner.key_for(s2.plane.ra_mid, s2.plane.dec_mid),
+            space_key: binner.key_for(seeds[1].plane.ra_mid, seeds[1].plane.dec_mid),
             time_bin: TimeBin(0),
         };
         let key3 = BucketKey {
-            space_key: binner.key_for(s3.plane.ra_mid, s3.plane.dec_mid),
+            space_key: binner.key_for(seeds[2].plane.ra_mid, seeds[2].plane.dec_mid),
             time_bin: TimeBin(0),
         };
 
         let b1 = inner.buckets.get(&key1).expect("bucket for s1");
-        assert!(b1.members.contains(&s1.seed_id));
+        assert!(bucket_contains_ref(b1, &seeds[0]));
 
         let b2 = inner.buckets.get(&key2).expect("bucket for s2");
-        assert!(b2.members.contains(&s2.seed_id));
+        assert!(bucket_contains_ref(b2, &seeds[1]));
 
         let b3 = inner.buckets.get(&key3).expect("bucket for s3");
-        assert!(b3.members.contains(&s3.seed_id));
+        assert!(bucket_contains_ref(b3, &seeds[2]));
 
         // s1 and s2 might be same cell depending on NSIDE; if so, both members appear together.
         if key1.space_key == key2.space_key {
             let b = inner.buckets.get(&key1).unwrap();
-            assert!(b.members.contains(&s1.seed_id) && b.members.contains(&s2.seed_id));
+            assert!(bucket_contains_ref(b, &seeds[0]) && bucket_contains_ref(b, &seeds[1]));
         }
     }
 
     #[test]
-    fn cone_query_returns_ids_covering_cone() {
+    fn cone_query_returns_seeds_covering_cone() {
         let binner = HealpixBinner::new(8);
 
         // Place seeds close to each other; small radius should cover both if same cell,
         // otherwise a slightly larger radius should get neighbor cells too.
         let ra = 1.5;
         let dec = 0.3;
+
         let s_primary = mk_seed(10, ra, dec);
         let s_neighbor = mk_seed(11, ra + arcsec_to_rad(30.0) / dec.cos(), dec);
 
-        let index = SeedSpatialIndex::build(&[s_primary.clone(), s_neighbor.clone()], &binner);
+        let seeds = vec![s_primary, s_neighbor];
+        let index = SeedSpatialIndex::build(&seeds, &binner);
 
         // Query with radius including at least cell_radius to ensure coverage of the containing cell.
         let radius = binner.cell_radius().max(arcsec_to_rad(45.0)); // 45" cone
-        let found: Vec<SeedId> = index.cone_query(&binner, ra, dec, radius).collect();
+        let found: Vec<&SeedNode> = index.cone_query(&binner, ra, dec, radius).collect();
 
-        // At least the primary seed must be found.
-        assert!(found.contains(&s_primary.seed_id));
+        // At least the primary seed must be found (by reference identity).
+        assert!(contains_ref(&found, &seeds[0]));
 
         // Depending on binner neighbors, the neighbor seed may also be found.
         // If not, increase radius and check again.
-        if !found.contains(&s_neighbor.seed_id) {
+        if !contains_ref(&found, &seeds[1]) {
             let radius2 = radius * 2.0;
-            let found2: Vec<SeedId> = index.cone_query(&binner, ra, dec, radius2).collect();
-            assert!(found2.contains(&s_neighbor.seed_id));
+            let found2: Vec<&SeedNode> = index.cone_query(&binner, ra, dec, radius2).collect();
+            assert!(contains_ref(&found2, &seeds[1]));
         }
     }
 
@@ -289,17 +321,18 @@ mod seed_spatial_index_tests {
         let s1 = mk_seed(0, 0.5, 0.1);
         let s2 = mk_seed(1, 0.501, 0.101);
 
-        let index = SeedSpatialIndex::build(&[s1.clone(), s2.clone()], &binner);
+        let seeds = vec![s1, s2];
+        let index = SeedSpatialIndex::build(&seeds, &binner);
         let inner = index.inner();
 
-        // Compute keys and verify buckets exist with matching members.
-        for s in [&s1, &s2] {
+        // Compute keys and verify buckets exist with matching members (by reference identity).
+        for s in [&seeds[0], &seeds[1]] {
             let key = BucketKey {
                 space_key: binner.key_for(s.plane.ra_mid, s.plane.dec_mid),
                 time_bin: TimeBin(0),
             };
             let bucket = inner.buckets.get(&key).expect("bucket must exist");
-            assert!(bucket.members.contains(&s.seed_id));
+            assert!(bucket_contains_ref(bucket, s));
         }
     }
 
@@ -319,14 +352,14 @@ mod seed_spatial_index_tests {
         })]
 
         /// For random seed positions, querying a cone centered on a seed with
-        /// radius ≥ cell_radius must return that seed.
+        /// radius ≥ cell_radius must return that seed (by reference identity).
         #[test]
         fn prop_cone_query_includes_center_seed(
             pts in proptest::collection::vec((ra_strategy(), dec_strategy()), 1..50)
         ) {
             let binner = HealpixBinner::new(8);
 
-            // Build seeds from points.
+            // Keep seeds in a Vec so the index can borrow them.
             let seeds: Vec<SeedNode> = pts.iter().enumerate().map(|(i, (ra, dec))| {
                 mk_seed(i as u64, *ra, *dec)
             }).collect();
@@ -336,8 +369,8 @@ mod seed_spatial_index_tests {
             // For each seed, query cone at its mid-position and ensure it is included.
             for s in &seeds {
                 let radius = binner.cell_radius().max(arcsec_to_rad(1.0));
-                let found: Vec<SeedId> = index.cone_query(&binner, s.plane.ra_mid, s.plane.dec_mid, radius).collect();
-                prop_assert!(found.contains(&s.seed_id));
+                let found: Vec<&SeedNode> = index.cone_query(&binner, s.plane.ra_mid, s.plane.dec_mid, radius).collect();
+                prop_assert!(contains_ref(&found, s));
             }
         }
 
@@ -347,11 +380,13 @@ mod seed_spatial_index_tests {
             pts in proptest::collection::vec((ra_strategy(), dec_strategy()), 0..40)
         ) {
             let binner = HealpixBinner::new(7);
+
             let seeds: Vec<SeedNode> = pts.iter().enumerate().map(|(i, (ra, dec))| {
                 mk_seed(i as u64, *ra, *dec)
             }).collect();
 
             let index = SeedSpatialIndex::build(&seeds, &binner);
+
             for (key, _) in &index.inner().buckets {
                 prop_assert_eq!(key.time_bin, TimeBin(0));
             }

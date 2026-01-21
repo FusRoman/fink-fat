@@ -34,10 +34,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::seeding::seed_node::SeedNode;
-use crate::seeding::seed_spatial_index::SeedSpatialIndex;
-use crate::{
-    error::FinkFatError, night_id::NightId, spacetime_bucket::spatial_binner::SpatialBinner,
-};
+use crate::{error::FinkFatError, night_id::NightId};
 
 /// File name constants for on-disk artifacts.
 ///
@@ -86,8 +83,6 @@ pub struct NightSeeds {
     pub night_id: NightId,
     /// All intra-night seeds for that night.
     pub seeds: Vec<SeedNode>,
-    /// Spatial index built from `seeds` for fast cone queries.
-    pub spatial_index: SeedSpatialIndex,
 }
 
 /// Per-night storage manager.
@@ -237,11 +232,7 @@ impl NightStore {
     /// Return
     /// ------
     /// * `NightSeeds` with all seeds and a fresh spatial index.
-    pub fn load_night_seeds<Bs: SpatialBinner>(
-        &self,
-        summary: &NightSummary,
-        binner: &Bs,
-    ) -> Result<NightSeeds, FinkFatError> {
+    pub fn load_night_seeds(&self, summary: &NightSummary) -> Result<NightSeeds, FinkFatError> {
         // Recompute directory from night_id
         let night_dir = self.night_dir(summary.night_id);
         let seeds_path = night_dir.join(SEEDS_FILE);
@@ -249,7 +240,7 @@ impl NightStore {
         let file = fs::File::open(seeds_path.as_std_path()).map_err(FinkFatError::from)?;
         let mut reader = BufReader::new(file);
 
-        // bincode 2.x decode 🔧
+        // bincode 2.x decode
         let seeds: Vec<SeedNode> =
             bincode::decode_from_std_read(&mut reader, bincode::config::standard())
                 .map_err(FinkFatError::from)?;
@@ -262,12 +253,9 @@ impl NightStore {
             )));
         }
 
-        let spatial_index = SeedSpatialIndex::build(&seeds, binner);
-
         Ok(NightSeeds {
             night_id: summary.night_id,
             seeds,
-            spatial_index,
         })
     }
 }

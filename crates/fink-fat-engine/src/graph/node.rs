@@ -1,6 +1,10 @@
 //! Node model (one per **seed** in a given night/layer).
 
-use crate::{graph::node_id::NodeId, night_id::NightId, seeding::seed_id::SeedId};
+use crate::{
+    graph::node_id::NodeId,
+    night_id::NightId,
+    seeding::{seed_node::SeedNode},
+};
 
 /// Graph node representing one **seed** detection/tracklet within a night.
 ///
@@ -10,15 +14,15 @@ use crate::{graph::node_id::NodeId, night_id::NightId, seeding::seed_id::SeedId}
 /// Per-seed kinematic features live upstream; link scoring is already done
 /// when edges get created.
 #[derive(Clone, Debug)]
-pub struct Node {
+pub struct Node<'a> {
     pub id: NodeId,
     pub night: NightId,
-    pub seed: SeedId,
+    pub seed: &'a SeedNode,
 }
 
-impl Node {
+impl<'a> Node<'a> {
     /// Create a node for a seed at a given night. `id` is assigned by the graph.
-    pub fn new(id: NodeId, night: NightId, seed: SeedId) -> Self {
+    pub fn new(id: NodeId, night: NightId, seed: &'a SeedNode) -> Self {
         Self { id, night, seed }
     }
 }

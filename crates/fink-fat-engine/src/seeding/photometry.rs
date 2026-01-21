@@ -10,7 +10,7 @@ use std::fmt::{self, Display, Formatter};
 /// - pairs: `[b0, b1, 0]`
 /// - triplets: `[b0, b1, b2]`
 /// with `n_bands` indicating how many entries are valid.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, Encode, Decode)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Encode, Decode, PartialEq)]
 pub struct Photometry {
     pub flux_mean: f32,
     pub flux_std: f32,
