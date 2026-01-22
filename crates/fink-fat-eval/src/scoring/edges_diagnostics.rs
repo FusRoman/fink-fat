@@ -1,7 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    fmt::{self, Display, Formatter},
-};
+use std::fmt::{self, Display, Formatter};
 
 use ahash::{AHashMap, AHashSet};
 use fink_fat_engine::{

@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, fs, time::Instant};
 
+use ahash::AHashMap;
 use anyhow::{Context, Result};
 use clap::Parser;
 
@@ -12,6 +13,7 @@ use fink_fat_engine::{
 
 use fink_fat_eval::{
     bin_utils::resolve_nids,
+    buflog, buflog_section, buflog_timing, buflog2,
     cli::scoring::Cli,
     dataset::{
         ParquetSource,
@@ -21,10 +23,13 @@ use fink_fat_eval::{
     log, log_section, log_timing, log2,
     night_seeds::SeedStore,
     scoring::edges_diagnostics::{
-        EdgesStatsDisplay, diagnose_missed_true_edges, edge_truth_counts_between_nights,
-        edge_truth_diagnostics, print_miss_report,
+        EdgesStatsDisplay, MissReason, diagnose_missed_true_edges,
+        edge_truth_counts_between_nights, edge_truth_diagnostics,
     },
 };
+
+use indicatif::{ProgressBar, ProgressStyle};
+use rayon::prelude::*;
 
 /// Per-pair summary we accumulate.
 #[derive(Debug, Clone, Copy, Default)]
@@ -135,22 +140,15 @@ fn build_night_pairs(
     out
 }
 
-fn eval_pair(
+/// Step 1: build the time binner (anchored on `right`) and generate Top-K edges.
+fn step_generate_topk_edges<'a>(
+    logbuf: &mut String,
     cli: &Cli,
-    left: &fink_fat_eval::night_seeds::NightSeeds,
-    right: &fink_fat_eval::night_seeds::NightSeeds,
+    left: &'a fink_fat_eval::night_seeds::NightSeeds,
+    right: &'a fink_fat_eval::night_seeds::NightSeeds,
     engine_cfg: &EngineConfig,
     spatial_binner: &HealpixBinner,
-    gap_days: usize,
-) -> Result<PairSummary> {
-    log_section!(
-        cli,
-        &format!(
-            "Pair {:?} -> {:?} (gap = {} night(s))",
-            left.nid, right.nid, gap_days
-        )
-    );
-
+) -> (UniformTimeBinner, Vec<Edge<'a>>) {
     // Build time binner anchored on the right night (stable).
     let t_timebin = Instant::now();
     let min_time = right
@@ -160,7 +158,7 @@ fn eval_pair(
         .fold(f64::INFINITY, f64::min);
 
     let time_binner = UniformTimeBinner::new(min_time, 30.0 / 60.0 / 24.0); // 30 minutes
-    log_timing!(cli, "build time binner", t_timebin.elapsed());
+    buflog_timing!(logbuf, cli, "build time binner", t_timebin.elapsed());
 
     // Edge generation
     let t_edges = Instant::now();
@@ -172,8 +170,10 @@ fn eval_pair(
         spatial_binner,
         &time_binner,
     );
-    log_timing!(cli, "generate_topk_edges", t_edges.elapsed());
-    log!(
+    buflog_timing!(logbuf, cli, "generate_topk_edges", t_edges.elapsed());
+
+    buflog!(
+        logbuf,
         cli,
         "Edges: total={}, active={} (left seeds={}, right seeds={})",
         edges.len(),
@@ -183,75 +183,197 @@ fn eval_pair(
     );
 
     // Optional detailed view
-    log2!(
+    buflog2!(
+        logbuf,
         cli,
         "{}",
         EdgesStatsDisplay::new(&edges).top_k(20).only_active(false)
     );
 
-    // Truth counts
-    let t_truth = Instant::now();
-    let (n_true, n_false, n_true_possible, recall) =
-        edge_truth_counts_between_nights(left, right, &edges);
-    log_timing!(cli, "edge_truth_counts_between_nights", t_truth.elapsed());
+    (time_binner, edges)
+}
 
-    log!(cli, "true edges in produced set  : {}", n_true);
-    log!(cli, "false edges in produced set : {}", n_false);
-    log!(cli, "true edges possible (oracle): {}", n_true_possible);
-    log!(cli, "true-edge recall: {:.4}", recall);
-
-    // Diagnostics (top-k vs generation misses, etc.)
+/// Step 2: run `edge_truth_diagnostics` and log the summary.
+fn step_edge_truth_diagnostics<'a>(
+    logbuf: &mut String,
+    cli: &Cli,
+    left: &'a fink_fat_eval::night_seeds::NightSeeds,
+    right: &'a fink_fat_eval::night_seeds::NightSeeds,
+    edges: &[Edge<'a>],
+    engine_cfg: &EngineConfig,
+    spatial_binner: &HealpixBinner,
+    time_binner: &UniformTimeBinner,
+) -> fink_fat_eval::scoring::edges_diagnostics::EdgeTruthSummary {
     let t_diag = Instant::now();
     let diag = edge_truth_diagnostics(
         left,
         right,
-        &edges,
+        edges,
         &engine_cfg.edges,
         spatial_binner,
-        &time_binner,
+        time_binner,
     );
-    log_timing!(cli, "edge_truth_diagnostics", t_diag.elapsed());
+    buflog_timing!(logbuf, cli, "edge_truth_diagnostics", t_diag.elapsed());
 
-    log!(
+    buflog!(
+        logbuf,
         cli,
         "Generated true/false edges: {} / {}",
         diag.true_edges_generated,
         diag.false_edges_generated
     );
-    log!(
+    buflog!(
+        logbuf,
         cli,
         "True edges possible (oracle): {}",
         diag.true_edges_possible
     );
-    log!(
+    buflog!(
+        logbuf,
         cli,
         "Missed by top-k: {}, missed by prefilter: {}",
         diag.true_edges_missed_top_k,
         diag.true_edges_missed_generation
     );
-    log!(cli, "Recall (diag): {:.4}", diag.recall());
+    buflog!(logbuf, cli, "Recall (diag): {:.4}", diag.recall());
 
-    // Miss report (potentially expensive)
+    diag
+}
+
+/// Step 3: run `diagnose_missed_true_edges` and log the (buffered) miss report summary.
+/// Returns `(counts, details_len)` so you can later format/print if desired.
+fn step_diagnose_missed_true_edges(
+    logbuf: &mut String,
+    cli: &Cli,
+    left: &fink_fat_eval::night_seeds::NightSeeds,
+    right: &fink_fat_eval::night_seeds::NightSeeds,
+    engine_cfg: &EngineConfig,
+    spatial_binner: &HealpixBinner,
+    time_binner: &UniformTimeBinner,
+    gap_days: usize,
+) -> (AHashMap<MissReason, usize>, usize) {
     let t_miss = Instant::now();
     let (counts, details) = diagnose_missed_true_edges(
         left,
         right,
         &engine_cfg.edges,
         spatial_binner,
-        &time_binner,
+        time_binner,
         gap_days.max(1) as u32,
     );
-    log_timing!(cli, "diagnose_missed_true_edges", t_miss.elapsed());
+    buflog_timing!(logbuf, cli, "diagnose_missed_true_edges", t_miss.elapsed());
 
-    // Keep report verbose-only, it can be long
     if !cli.quiet && cli.verbose >= 2 {
-        print_miss_report(&counts, &details, 20);
+        // Still not printing details here (stdout) to keep parallel logs clean.
+        buflog!(
+            logbuf,
+            cli,
+            "Miss report: total_missed={} (use -vv and/or add buffered formatter for details)",
+            details.len()
+        );
     } else {
-        log!(
+        buflog!(
+            logbuf,
             cli,
             "Miss report: total_missed={} (use -vv to print details)",
             details.len()
         );
+    }
+
+    (counts, details.len())
+}
+
+/// Controls which evaluation steps are executed.
+#[derive(Debug, Clone, Copy)]
+struct EvalSteps {
+    pub diagnostics: bool,
+    pub miss_diagnosis: bool,
+}
+
+impl EvalSteps {
+    fn all() -> Self {
+        Self {
+            diagnostics: true,
+            miss_diagnosis: true,
+        }
+    }
+}
+
+fn eval_pair_with_log(
+    logbuf: &mut String,
+    cli: &Cli,
+    left: &fink_fat_eval::night_seeds::NightSeeds,
+    right: &fink_fat_eval::night_seeds::NightSeeds,
+    engine_cfg: &EngineConfig,
+    spatial_binner: &HealpixBinner,
+    gap_days: usize,
+    steps: EvalSteps,
+) -> Result<PairSummary> {
+    buflog_section!(
+        logbuf,
+        cli,
+        &format!(
+            "Pair {:?} -> {:?} (gap = {} night(s))",
+            left.nid, right.nid, gap_days
+        )
+    );
+
+    // 1) generate edges (+ time binner)
+    let (time_binner, edges) =
+        step_generate_topk_edges(logbuf, cli, left, right, engine_cfg, spatial_binner);
+
+    // Truth counts (kept as-is: you already had it here)
+    let t_truth = Instant::now();
+    let (n_true, n_false, n_true_possible, recall) =
+        edge_truth_counts_between_nights(left, right, &edges);
+    buflog_timing!(
+        logbuf,
+        cli,
+        "edge_truth_counts_between_nights",
+        t_truth.elapsed()
+    );
+
+    buflog!(logbuf, cli, "true edges in produced set  : {}", n_true);
+    buflog!(logbuf, cli, "false edges in produced set : {}", n_false);
+    buflog!(
+        logbuf,
+        cli,
+        "true edges possible (oracle): {}",
+        n_true_possible
+    );
+    buflog!(logbuf, cli, "true-edge recall: {:.4}", recall);
+
+    // 2) diagnostics summary
+    let diag = if steps.diagnostics {
+        Some(step_edge_truth_diagnostics(
+            logbuf,
+            cli,
+            left,
+            right,
+            &edges,
+            engine_cfg,
+            spatial_binner,
+            &time_binner,
+        ))
+    } else {
+        buflog!(logbuf, cli, "edge_truth_diagnostics: skipped");
+        None
+    };
+
+    // 3) missed edges diagnosis (kept for logging only)
+    if steps.miss_diagnosis {
+        let _ = step_diagnose_missed_true_edges(
+            logbuf,
+            cli,
+            left,
+            right,
+            engine_cfg,
+            spatial_binner,
+            &time_binner,
+            gap_days,
+        );
+    } else {
+        buflog!(logbuf, cli, "diagnose_missed_true_edges: skipped");
     }
 
     Ok(PairSummary {
@@ -259,10 +381,10 @@ fn eval_pair(
         n_false,
         n_true_possible,
         recall,
-        missed_top_k: diag.true_edges_missed_top_k,
-        missed_generation: diag.true_edges_missed_generation,
-        true_generated: diag.true_edges_generated,
-        false_generated: diag.false_edges_generated,
+        missed_top_k: diag.as_ref().map_or(0, |d| d.true_edges_missed_top_k),
+        missed_generation: diag.as_ref().map_or(0, |d| d.true_edges_missed_generation),
+        true_generated: diag.as_ref().map_or(0, |d| d.true_edges_generated),
+        false_generated: diag.as_ref().map_or(0, |d| d.false_edges_generated),
     })
 }
 
@@ -314,8 +436,8 @@ fn main() -> Result<()> {
     anyhow::ensure!(nids.len() >= 2, "need at least 2 nights to evaluate edges");
 
     let consecutive_window: usize = 1;
-    let gap_min: usize = 2;
-    let gap_max: usize = 5;
+    let gap_min: usize = 0;
+    let gap_max: usize = 0;
 
     let t_pairs = Instant::now();
     let pairs = build_night_pairs(&to_night_ids(nids), consecutive_window, gap_min, gap_max);
@@ -340,33 +462,122 @@ fn main() -> Result<()> {
 
     let nb_pairs = pairs.len();
 
-    for (idx, (left_nid, right_nid, gap)) in pairs.into_iter().enumerate() {
-        log!(
-            &cli,
-            "[{}/{}] evaluating {:?} -> {:?} (gap={})",
-            idx + 1,
-            nb_pairs,
-            left_nid,
-            right_nid,
-            gap
-        );
+    #[derive(Debug)]
+    struct PairOut {
+        idx: usize,
+        gap: usize,
+        summary: Option<PairSummary>,
+        log: String,
+    }
 
-        let Some(left) = night_seeds.get(&left_nid) else {
-            log!(&cli, "skip {:?}: not present in SeedStore", left_nid);
-            continue;
-        };
-        let Some(right) = night_seeds.get(&right_nid) else {
-            log!(&cli, "skip {:?}: not present in SeedStore", right_nid);
-            continue;
-        };
+    let pb = ProgressBar::new(nb_pairs as u64);
+    pb.set_style(
+    ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta_precise}) {msg}")
+        .unwrap()
+        .progress_chars("=>-"),
+);
+    pb.enable_steady_tick(std::time::Duration::from_millis(120));
+    pb.set_message("starting…");
 
-        let t_pair = Instant::now();
-        let summary = eval_pair(&cli, left, right, &engine_cfg, &spatial_binner, gap)?;
-        log_timing!(&cli, "pair total", t_pair.elapsed());
+    // 1) Compute in parallel (no stdout).
+    let outs: Result<Vec<PairOut>> = pairs
+        .par_iter()
+        .enumerate()
+        .map(|(idx, (left_nid, right_nid, gap))| -> Result<PairOut> {
+            let mut logbuf = String::new();
+            pb.set_message(format!("{:?} -> {:?} (gap={})", left_nid, right_nid, gap));
 
-        by_gap.entry(gap).or_default().push(summary);
+            buflog!(
+                &mut logbuf,
+                &cli,
+                "[{}/{}] evaluating {:?} -> {:?} (gap={})",
+                idx + 1,
+                nb_pairs,
+                left_nid,
+                right_nid,
+                gap
+            );
 
-        println!("\n ____________________________________________________________\n\n");
+            let Some(left) = night_seeds.get(left_nid) else {
+                buflog!(
+                    &mut logbuf,
+                    &cli,
+                    "skip {:?}: not present in SeedStore",
+                    left_nid
+                );
+                pb.inc(1);
+                return Ok(PairOut {
+                    idx,
+                    gap: *gap,
+                    summary: None,
+                    log: logbuf,
+                });
+            };
+
+            let Some(right) = night_seeds.get(right_nid) else {
+                buflog!(
+                    &mut logbuf,
+                    &cli,
+                    "skip {:?}: not present in SeedStore",
+                    right_nid
+                );
+                pb.inc(1);
+                return Ok(PairOut {
+                    idx,
+                    gap: *gap,
+                    summary: None,
+                    log: logbuf,
+                });
+            };
+
+            let steps = EvalSteps {
+                diagnostics: false,
+                miss_diagnosis: false,
+            };
+
+            let t_pair = Instant::now();
+            let summary = eval_pair_with_log(
+                &mut logbuf,
+                &cli,
+                left,
+                right,
+                &engine_cfg,
+                &spatial_binner,
+                *gap,
+                steps,
+            )?;
+            buflog_timing!(&mut logbuf, &cli, "pair total", t_pair.elapsed());
+
+            // nice separator (buffered)
+            if !cli.quiet {
+                logbuf.push_str(
+                    "\n ____________________________________________________________\n\n",
+                );
+            }
+
+            pb.inc(1);
+            Ok(PairOut {
+                idx,
+                gap: *gap,
+                summary: Some(summary),
+                log: logbuf,
+            })
+        })
+        .collect();
+
+    // 2) Flush logs in original order + aggregate sequentially.
+    let mut outs = outs?;
+    pb.finish_with_message("done");
+
+    outs.sort_by_key(|o| o.idx);
+
+    for o in outs {
+        if !cli.quiet {
+            print!("{}", o.log);
+        }
+        if let Some(summary) = o.summary {
+            by_gap.entry(o.gap).or_default().push(summary);
+        }
     }
 
     log_section!(&cli, "Final report");

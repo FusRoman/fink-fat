@@ -24,6 +24,7 @@ rayon = "1.11.0"
 num_cpus = "1.17.0"
 bitcode = { version = "0.6.9", features = ["serde"] }
 ahash = "0.8.12"
+indicatif = "0.18.3"
 
 [dev-dependencies]
 approx = "0.5.1"
