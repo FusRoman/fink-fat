@@ -32,11 +32,11 @@
 //! passed to more accurate geometric filters (exact angular separation) or to
 //! higher-level linkage/scoring logic.
 
-use std::collections::HashMap;
+use ahash::AHashMap;
 
 use crate::{
     Radians,
-    seeding::seed_node::SeedNode,
+    seeding::{seed_id::SeedId, seed_node::SeedNode},
     spacetime_bucket::{
         bucket::{Bucket, BucketIndex, BucketKey},
         spatial_binner::{SpatialBinner, SpatialKey},
@@ -94,7 +94,7 @@ impl<'a> SeedSpatialIndex<'a> {
     pub fn build<Bs: SpatialBinner>(seeds: &'a [SeedNode], binner: &Bs) -> Self {
         // Buckets are keyed by (spatial cell, time bin). Here the time bin is
         // always `TimeBin(0)` because the index is scoped to a single night.
-        let mut buckets: HashMap<BucketKey, Bucket<&'a SeedNode>> = HashMap::new();
+        let mut buckets: AHashMap<BucketKey, Bucket<&'a SeedNode>> = AHashMap::new();
 
         for s in seeds {
             let space_key = binner.key_for(s.plane.ra_mid, s.plane.dec_mid);
@@ -179,6 +179,43 @@ impl<'a> SeedSpatialIndex<'a> {
                 self.inner.buckets.get(&key)
             })
             .flat_map(|bucket| bucket.members.iter().copied())
+    }
+
+    /// Low-allocation cone query that outputs `SeedId`s.
+    ///
+    /// This avoids returning `&SeedNode` references, which would otherwise
+    /// tie the output lifetime to the temporary per-bin `SeedSpatialIndex`
+    /// (and cause borrow-checker issues when reusing buffers across bins).
+    #[inline]
+    pub fn cone_query_ids_into<Bs: SpatialBinner>(
+        &self,
+        binner: &Bs,
+        ra_center: Radians,
+        dec_center: Radians,
+        radius: Radians,
+        cover_keys_buf: &mut Vec<SpatialKey>,
+        out_ids: &mut Vec<SeedId>,
+    ) {
+        out_ids.clear();
+
+        let center_key = binner.key_for(ra_center, dec_center);
+
+        // Reuse caller buffer: no allocation here.
+        binner.neighbors_into(center_key, radius, cover_keys_buf);
+
+        let time_bin = TimeBin(0);
+
+        for &space_key in cover_keys_buf.iter() {
+            let bucket_key = BucketKey {
+                space_key,
+                time_bin,
+            };
+
+            if let Some(bucket) = self.inner.buckets.get(&bucket_key) {
+                // bucket.members: Vec<&'a SeedNode>
+                out_ids.extend(bucket.members.iter().map(|sn| sn.seed_id));
+            }
+        }
     }
 }
 
@@ -389,6 +426,197 @@ mod seed_spatial_index_tests {
 
             for (key, _) in &index.inner().buckets {
                 prop_assert_eq!(key.time_bin, TimeBin(0));
+            }
+        }
+    }
+
+    mod cone_query_id_into_test {
+        use super::super::*;
+        use super::*;
+
+        /* ------------------------- tests: cone_query_ids_into ------------------------- */
+
+        #[test]
+        fn cone_query_ids_into_includes_center_seed_id() {
+            let binner = HealpixBinner::new(8);
+
+            let ra = 1.2;
+            let dec = -0.4;
+
+            let s0 = mk_seed(123, ra, dec);
+            let s1 = mk_seed(124, ra + arcsec_to_rad(10.0) / dec.cos(), dec);
+
+            let seeds = vec![s0, s1];
+            let index = SeedSpatialIndex::build(&seeds, &binner);
+
+            let mut cover = Vec::<SpatialKey>::new();
+            let mut out = Vec::<SeedId>::new();
+
+            let radius = binner.cell_radius().max(arcsec_to_rad(1.0));
+
+            index.cone_query_ids_into(&binner, ra, dec, radius, &mut cover, &mut out);
+
+            assert!(out.contains(&seeds[0].seed_id));
+        }
+
+        #[test]
+        fn cone_query_ids_into_clears_output_and_does_not_shrink_buffers() {
+            let binner = HealpixBinner::new(8);
+
+            let ra = 0.7;
+            let dec = 0.2;
+
+            let seeds = vec![mk_seed(1, ra, dec), mk_seed(2, ra, dec)];
+            let index = SeedSpatialIndex::build(&seeds, &binner);
+
+            let mut cover = Vec::<SpatialKey>::with_capacity(64);
+            let mut out = Vec::<SeedId>::with_capacity(64);
+
+            // Pre-fill buffers to ensure function clears `out_ids`.
+            cover.extend(std::iter::repeat(binner.key_for(ra, dec)).take(10));
+            out.extend([SeedId::new(999), SeedId::new(1000)]);
+
+            let cap_cover_before = cover.capacity();
+            let cap_out_before = out.capacity();
+
+            let radius = binner.cell_radius().max(arcsec_to_rad(1.0));
+            index.cone_query_ids_into(&binner, ra, dec, radius, &mut cover, &mut out);
+
+            // Must have cleared the output (no stale IDs).
+            assert!(!out.contains(&SeedId::new(999)));
+            assert!(!out.contains(&SeedId::new(1000)));
+
+            // “Low-allocation”: should not shrink caller buffers.
+            assert_eq!(cover.capacity(), cap_cover_before);
+            assert_eq!(out.capacity(), cap_out_before);
+        }
+
+        #[test]
+        fn cone_query_ids_into_matches_cone_query_as_set() {
+            let binner = HealpixBinner::new(8);
+
+            let ra = 2.1;
+            let dec = 0.35;
+
+            let s0 = mk_seed(10, ra, dec);
+            let s1 = mk_seed(11, ra + arcsec_to_rad(40.0) / dec.cos(), dec);
+            let s2 = mk_seed(12, ra - arcsec_to_rad(40.0) / dec.cos(), dec);
+
+            let seeds = vec![s0, s1, s2];
+            let index = SeedSpatialIndex::build(&seeds, &binner);
+
+            let radius = binner.cell_radius().max(arcsec_to_rad(90.0));
+
+            let found_refs: Vec<&SeedNode> = index.cone_query(&binner, ra, dec, radius).collect();
+            let mut ids_from_refs: Vec<SeedId> = found_refs.iter().map(|s| s.seed_id).collect();
+            ids_from_refs.sort_unstable();
+            ids_from_refs.dedup();
+
+            let mut cover = Vec::<SpatialKey>::new();
+            let mut out = Vec::<SeedId>::new();
+
+            index.cone_query_ids_into(&binner, ra, dec, radius, &mut cover, &mut out);
+
+            let mut out_dedup = out.clone();
+            out_dedup.sort_unstable();
+            out_dedup.dedup();
+
+            assert_eq!(out_dedup, ids_from_refs);
+        }
+
+        #[test]
+        fn cone_query_ids_into_keeps_duplicates_when_seeds_are_duplicated_in_input() {
+            let binner = HealpixBinner::new(8);
+
+            let ra = 1.0;
+            let dec = 0.1;
+
+            // Same seed_id, same coordinates, duplicated twice in the seed slice.
+            let s = mk_seed(42, ra, dec);
+            let seeds = vec![s.clone(), s];
+
+            let index = SeedSpatialIndex::build(&seeds, &binner);
+
+            let radius = binner.cell_radius().max(arcsec_to_rad(1.0));
+
+            let mut cover = Vec::<SpatialKey>::new();
+            let mut out = Vec::<SeedId>::new();
+
+            index.cone_query_ids_into(&binner, ra, dec, radius, &mut cover, &mut out);
+
+            let count = out.iter().filter(|&&id| id == SeedId::new(42)).count();
+            assert_eq!(count, 2, "expected duplicate SeedId to appear twice");
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig {
+                cases: 32,
+                .. ProptestConfig::default()
+            })]
+
+            /// For random seed positions, querying a cone centered on a seed with
+            /// radius ≥ cell_radius must return that seed_id.
+            #[test]
+            fn prop_cone_query_ids_into_includes_center_seed_id(
+                pts in proptest::collection::vec((ra_strategy(), dec_strategy()), 1..50)
+            ) {
+                let binner = HealpixBinner::new(8);
+
+                let seeds: Vec<SeedNode> = pts.iter().enumerate().map(|(i, (ra, dec))| {
+                    mk_seed(i as u64, *ra, *dec)
+                }).collect();
+
+                let index = SeedSpatialIndex::build(&seeds, &binner);
+
+                let mut cover = Vec::<SpatialKey>::new();
+                let mut out = Vec::<SeedId>::new();
+
+                let radius = binner.cell_radius().max(arcsec_to_rad(1.0));
+
+                for s in &seeds {
+                    index.cone_query_ids_into(
+                        &binner,
+                        s.plane.ra_mid,
+                        s.plane.dec_mid,
+                        radius,
+                        &mut cover,
+                        &mut out
+                    );
+
+                    prop_assert!(out.contains(&s.seed_id));
+                }
+            }
+
+            /// cone_query_ids_into should produce the same candidate-id set as cone_query.
+            #[test]
+            fn prop_cone_query_ids_into_matches_cone_query_as_set(
+                pts in proptest::collection::vec((ra_strategy(), dec_strategy()), 1..80),
+                q in (ra_strategy(), dec_strategy())
+            ) {
+                let binner = HealpixBinner::new(8);
+
+                let seeds: Vec<SeedNode> = pts.iter().enumerate().map(|(i, (ra, dec))| {
+                    mk_seed(i as u64, *ra, *dec)
+                }).collect();
+
+                let index = SeedSpatialIndex::build(&seeds, &binner);
+
+                let radius = binner.cell_radius().max(arcsec_to_rad(1.0));
+
+                let found_refs: Vec<&SeedNode> = index.cone_query(&binner, q.0, q.1, radius).collect();
+                let mut ids_from_refs: Vec<SeedId> = found_refs.iter().map(|s| s.seed_id).collect();
+                ids_from_refs.sort_unstable();
+                ids_from_refs.dedup();
+
+                let mut cover = Vec::<SpatialKey>::new();
+                let mut out = Vec::<SeedId>::new();
+
+                index.cone_query_ids_into(&binner, q.0, q.1, radius, &mut cover, &mut out);
+
+                out.sort_unstable();
+                out.dedup();
+
+                prop_assert_eq!(out, ids_from_refs);
             }
         }
     }

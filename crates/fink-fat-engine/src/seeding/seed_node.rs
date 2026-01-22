@@ -33,6 +33,7 @@
 //! - Photometry is minimalistic by design—only what is required for scoring
 //!   or band-matching at linkage time.
 
+use ahash::AHashMap;
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
@@ -52,7 +53,10 @@ use crate::{
         seed_spatial_index::SeedSpatialIndex,
         tangent_plane::{TangentCenter, TangentPlaneModel},
     },
-    spacetime_bucket::{spatial_binner::SpatialBinner, time_binner::TimeBinner},
+    spacetime_bucket::{
+        spatial_binner::{SpatialBinner, SpatialKey},
+        time_binner::TimeBinner,
+    },
 };
 
 /// Compact intra-night seed object used in the inter-night graph.
@@ -380,6 +384,11 @@ impl SeedNode {
         let pred_cfg = &edge_config.predictor_config;
         let score_cfg = &edge_config.score_config;
 
+        // Build once: SeedId -> &SeedNode for the whole right slice.
+        // (Assumes SeedId uniqueness within the night slice, which is your invariant.)
+        let right_by_id: AHashMap<SeedId, &SeedNode> =
+            right.iter().map(|s| (s.seed_id, s)).collect();
+
         // Time span in O(1) because `right` is time-sorted.
         let t_min_r = right[0].plane.epoch_mid;
         let t_max_r = right[right.len() - 1].plane.epoch_mid;
@@ -390,32 +399,35 @@ impl SeedNode {
         }
 
         // Left seed speed on tangent plane (rad/day), with optional slack.
-        let v = self.plane.vel_xy;
-        let speed = (v[0].mul_add(v[0], v[1] * v[1])).sqrt();
-        let speed_eff = (speed + pred_cfg.v_slack).max(0.0);
+        let v_xy = self.plane.vel_xy;
+        let speed = (v_xy[0].mul_add(v_xy[0], v_xy[1] * v_xy[1])).sqrt();
+        let effective_speed = (speed + pred_cfg.v_slack).max(0.0);
 
         // Half-bin width used for conservative time padding.
-        let dt_half = 0.5 * time_binner.bin_width().max(1e-12);
+        let half_bin_width_days = 0.5 * time_binner.bin_width().max(1e-12);
 
         // Monotone scan pointers for the bin slices.
-        // Invariant: `0 <= lo <= hi <= right.len()`, and both only increase.
         let mut lo: usize = 0;
         let mut hi: usize = 0;
 
-        for bin in bins {
-            let t0 = time_binner.bin_start(bin.0);
-            let t1 = time_binner.bin_end(bin.0);
-            let t_center = 0.5 * (t0 + t1);
+        // Reused buffers.
+        let mut cover_keys_buf: Vec<SpatialKey> = Vec::with_capacity(256);
+        let mut candidate_ids_buf: Vec<SeedId> = Vec::with_capacity(1024);
 
-            // Advance `lo` to first index with epoch_mid >= t0.
-            while lo < right.len() && right[lo].plane.epoch_mid < t0 {
+        for bin in bins {
+            let bin_start = time_binner.bin_start(bin.0);
+            let bin_end = time_binner.bin_end(bin.0);
+            let bin_center = 0.5 * (bin_start + bin_end);
+
+            // Advance `lo` to first index with epoch_mid >= bin_start.
+            while lo < right.len() && right[lo].plane.epoch_mid < bin_start {
                 lo += 1;
             }
-            // Ensure `hi >= lo`, then advance `hi` to first index with epoch_mid >= t1.
+            // Ensure `hi >= lo`, then advance `hi` to first index with epoch_mid >= bin_end.
             if hi < lo {
                 hi = lo;
             }
-            while hi < right.len() && right[hi].plane.epoch_mid < t1 {
+            while hi < right.len() && right[hi].plane.epoch_mid < bin_end {
                 hi += 1;
             }
 
@@ -423,19 +435,30 @@ impl SeedNode {
                 continue;
             }
 
-            // Build a spatial index for this time bin only.
+            // Build a spatial index for this time bin only (borrows right[lo..hi]).
             let index_bin = SeedSpatialIndex::build(&right[lo..hi], spatial_binner);
 
             // Coarse cone at bin center + time padding to cover the full bin.
-            let (ra_c, dec_c, mut r_c) = self.predict_cone(t_center, spatial_binner, pred_cfg);
-            r_c += speed_eff * dt_half;
+            let (ra_center, dec_center, mut cone_radius) =
+                self.predict_cone(bin_center, spatial_binner, pred_cfg);
 
-            // Query the bin-local index and score candidates at their true epochs.
-            scored.extend(
-                index_bin
-                    .cone_query(spatial_binner, ra_c, dec_c, r_c)
-                    .filter_map(|j| ScoredEdge::score(self, j, score_cfg, delta_revisit)),
+            cone_radius += effective_speed * half_bin_width_days;
+
+            // Fill candidate_ids_buf with SeedIds only (no borrowed refs).
+            index_bin.cone_query_ids_into(
+                spatial_binner,
+                ra_center,
+                dec_center,
+                cone_radius,
+                &mut cover_keys_buf,
+                &mut candidate_ids_buf,
             );
+
+            // Exact scoring at each candidate's true epoch.
+            scored.extend(candidate_ids_buf.iter().filter_map(|&sid| {
+                let &target_seed = right_by_id.get(&sid)?;
+                ScoredEdge::score(self, target_seed, score_cfg, delta_revisit)
+            }));
         }
 
         scored
@@ -1107,6 +1130,563 @@ mod seed_node_tests {
 
             let d = ang_sep(rp, dp, rc, dc);
             prop_assert!(d <= rad + 1e-12);
+        }
+    }
+
+    mod score_edge_candidates_test {
+        use super::super::*;
+        use super::*;
+        /* ------------------------- helpers: score_edge_candidates ------------------------- */
+
+        fn mk_edge_config_for_tests(predictor: PredictorParams) -> EdgeConfig {
+            // Assumption: EdgeConfig has a predictor_config + score_config and implements Default.
+            // If your EdgeConfig is different, adapt this helper accordingly.
+            EdgeConfig {
+                predictor_config: predictor,
+                ..Default::default()
+            }
+        }
+
+        /// Brute-force reference: score every right seed with the exact scorer,
+        /// without any spatial/time prefilter.
+        fn brute_force_scores(
+            left: &SeedNode,
+            right: &[SeedNode],
+            edge_config: &EdgeConfig,
+            delta_revisit: u32,
+        ) -> Vec<ScoredEdge> {
+            right
+                .iter()
+                .filter_map(|r| {
+                    ScoredEdge::score(left, r, &edge_config.score_config, delta_revisit)
+                })
+                .collect()
+        }
+
+        fn dedup_pairs(mut v: Vec<(SeedId, SeedId)>) -> Vec<(SeedId, SeedId)> {
+            v.sort_unstable();
+            v.dedup();
+            v
+        }
+
+        /// A TimeBinner that returns no bins (to test early return path).
+        #[derive(Clone, Copy, Debug)]
+        struct EmptyTimeBinner;
+
+        impl TimeBinner for EmptyTimeBinner {
+            fn bins_in_range(
+                &self,
+                _t_min: f64,
+                _t_max: f64,
+            ) -> Vec<crate::spacetime_bucket::time_binner::TimeBin> {
+                Vec::new()
+            }
+            fn bin_start(&self, _bin: i64) -> f64 {
+                0.0
+            }
+            fn bin_end(&self, _bin: i64) -> f64 {
+                0.0
+            }
+            fn bin_width(&self) -> f64 {
+                1.0
+            }
+
+            fn bin_for(&self, _: MjdTt) -> crate::spacetime_bucket::time_binner::TimeBin {
+                todo!()
+            }
+        }
+
+        /* ------------------------- unit tests: score_edge_candidates ------------------------- */
+
+        #[test]
+        fn score_edge_candidates_empty_right_returns_empty() {
+            let spatial_binner = HealpixBinner::new(8);
+            let params = default_predictor_params();
+            let edge_config = mk_edge_config_for_tests(params);
+            let delta = 1_u32;
+
+            let t0 = 60000.0;
+            let a = mk_alert(AlertId::new(0), 1.0, 0.2, t0, 1, 1000.0);
+            let b = mk_alert(
+                AlertId::new(1),
+                1.0 + arcsec_to_rad(5.0) / 0.2f64.cos(),
+                0.2,
+                t0 + 5.0 / 1440.0,
+                1,
+                1000.0,
+            );
+            let left = SeedNode::from_pair(SeedId::new(0), NightId::new(1), &a, &b, None).unwrap();
+
+            let out = left.score_edge_candidates(
+                &[],
+                &spatial_binner,
+                &UniformTimeBinner::new(t0, 5.0 / 1440.0),
+                &edge_config,
+                delta,
+            );
+
+            assert!(out.is_empty());
+        }
+
+        #[test]
+        fn score_edge_candidates_empty_bins_returns_empty() {
+            let spatial_binner = HealpixBinner::new(8);
+            let params = default_predictor_params();
+            let edge_config = mk_edge_config_for_tests(params);
+
+            let t0 = 60000.0;
+            let dec: f64 = 0.25;
+            let dr = arcsec_to_rad(6.0) / dec.cos();
+
+            let a = mk_alert(AlertId::new(0), 1.0, dec, t0, 1, 1000.0);
+            let b = mk_alert(
+                AlertId::new(1),
+                1.0 + dr,
+                dec,
+                t0 + 10.0 / 1440.0,
+                1,
+                1001.0,
+            );
+            let left = SeedNode::from_pair(SeedId::new(0), NightId::new(1), &a, &b, None).unwrap();
+
+            // Right contains something, but time_binner returns no bins => empty output.
+            let right = vec![left.clone()];
+
+            let out = left.score_edge_candidates(
+                &right,
+                &spatial_binner,
+                &EmptyTimeBinner,
+                &edge_config,
+                1,
+            );
+
+            assert!(out.is_empty());
+        }
+
+        #[test]
+        fn score_edge_candidates_single_bin_huge_cone_matches_bruteforce() {
+            let spatial_binner = HealpixBinner::new(4); // coarse cells => easier to cover
+            let mut params = default_predictor_params();
+            // Make the cone very generous so spatial prefilter should not reject anything.
+            params.k_sigma = 1e6;
+            params.pad_cell_radius = true;
+            params.v_slack = 1e6;
+
+            let edge_config = mk_edge_config_for_tests(params);
+            let delta = 1_u32;
+
+            let t0 = 60000.0;
+            let dec: f64 = 0.2;
+            let dr = arcsec_to_rad(10.0) / dec.cos();
+
+            let a = mk_alert(AlertId::new(0), 2.0, dec, t0, 1, 1000.0);
+            let b = mk_alert(AlertId::new(1), 2.0 + dr, dec, t0 + 5.0 / 1440.0, 1, 1000.0);
+            let left = SeedNode::from_pair(SeedId::new(10), NightId::new(1), &a, &b, None).unwrap();
+
+            // Build a "right night" with multiple seeds, strictly increasing epoch_mid.
+            let mut right: Vec<SeedNode> = Vec::new();
+            for i in 0..12 {
+                let dt = (i as f64 + 1.0) * (5.0 / 1440.0);
+                let a_i = mk_alert(
+                    AlertId::new(100 + 2 * i),
+                    2.0 + (i as f64) * dr,
+                    dec,
+                    t0 + dt,
+                    1,
+                    1000.0,
+                );
+                let b_i = mk_alert(
+                    AlertId::new(100 + 2 * i + 1),
+                    2.0 + (i as f64 + 1.0) * dr,
+                    dec,
+                    t0 + dt + 1.0 / 1440.0,
+                    1,
+                    1000.0,
+                );
+                let sn = SeedNode::from_pair(
+                    SeedId::new(1000 + i as u64),
+                    NightId::new(2),
+                    &a_i,
+                    &b_i,
+                    None,
+                )
+                .unwrap();
+                right.push(sn);
+            }
+            right.sort_by(|x, y| x.plane.epoch_mid.partial_cmp(&y.plane.epoch_mid).unwrap());
+
+            // One bin covering everything (big width).
+            let time_binner = UniformTimeBinner::new(t0, 10.0); // 10 days => 1 bin
+
+            let out = left.score_edge_candidates(
+                &right,
+                &spatial_binner,
+                &time_binner,
+                &edge_config,
+                delta,
+            );
+            let brute = brute_force_scores(&left, &right, &edge_config, delta);
+
+            let out_pairs = dedup_pairs(out.iter().map(|e| (e.from, e.to)).collect());
+            let brute_pairs = dedup_pairs(brute.iter().map(|e| (e.from, e.to)).collect());
+
+            assert_eq!(
+                out_pairs, brute_pairs,
+                "With extremely large cone, spatio-temporal prefilter should not drop any accepted edges"
+            );
+        }
+
+        #[test]
+        fn score_edge_candidates_multi_bins_huge_cone_matches_bruteforce() {
+            let spatial_binner = HealpixBinner::new(5);
+            let mut params = default_predictor_params();
+            params.k_sigma = 1e6;
+            params.pad_cell_radius = true;
+            params.v_slack = 1e6;
+            params.time_bin_dt = 1.0 / 24.0; // 1 hour, but note: score_edge_candidates uses TimeBinner::bin_width()
+
+            let edge_config = mk_edge_config_for_tests(params);
+            let delta = 2_u32;
+
+            let t0 = 60000.0;
+            let dec: f64 = 0.15;
+            let dr = arcsec_to_rad(12.0) / dec.cos();
+
+            let a = mk_alert(AlertId::new(0), 1.5, dec, t0, 1, 1000.0);
+            let b = mk_alert(AlertId::new(1), 1.5 + dr, dec, t0 + 3.0 / 1440.0, 1, 1000.0);
+            let left = SeedNode::from_pair(SeedId::new(1), NightId::new(1), &a, &b, None).unwrap();
+
+            // Right seeds spread across a few hours => multiple uniform bins.
+            let mut right: Vec<SeedNode> = Vec::new();
+            for i in 0..40 {
+                let t = t0 + (i as f64) * (6.0 / 1440.0); // every 6 minutes
+                let a_i = mk_alert(
+                    AlertId::new(200 + 2 * i),
+                    1.5 + (i as f64) * dr,
+                    dec,
+                    t,
+                    1,
+                    1000.0,
+                );
+                let b_i = mk_alert(
+                    AlertId::new(200 + 2 * i + 1),
+                    1.5 + (i as f64 + 1.0) * dr,
+                    dec,
+                    t + 1.0 / 1440.0,
+                    1,
+                    1000.0,
+                );
+                right.push(
+                    SeedNode::from_pair(
+                        SeedId::new(10_000 + i as u64),
+                        NightId::new(2),
+                        &a_i,
+                        &b_i,
+                        None,
+                    )
+                    .unwrap(),
+                );
+            }
+            right.sort_by(|x, y| x.plane.epoch_mid.partial_cmp(&y.plane.epoch_mid).unwrap());
+
+            let time_binner = UniformTimeBinner::new(t0, 30.0 / 1440.0); // 30 min bins
+
+            let out = left.score_edge_candidates(
+                &right,
+                &spatial_binner,
+                &time_binner,
+                &edge_config,
+                delta,
+            );
+            let brute = brute_force_scores(&left, &right, &edge_config, delta);
+
+            let out_pairs = dedup_pairs(out.iter().map(|e| (e.from, e.to)).collect());
+            let brute_pairs = dedup_pairs(brute.iter().map(|e| (e.from, e.to)).collect());
+
+            assert_eq!(out_pairs, brute_pairs);
+        }
+
+        #[test]
+        fn score_edge_candidates_result_is_subset_of_bruteforce_for_normal_cones() {
+            let spatial_binner = HealpixBinner::new(8);
+            let params = default_predictor_params(); // normal-sized cone
+            let edge_config = mk_edge_config_for_tests(params);
+            let delta = 1_u32;
+
+            let t0 = 60000.0;
+            let dec: f64 = 0.25;
+            let dr = arcsec_to_rad(5.0) / dec.cos();
+
+            let a = mk_alert(AlertId::new(0), 1.0, dec, t0, 1, 1000.0);
+            let b = mk_alert(AlertId::new(1), 1.0 + dr, dec, t0 + 5.0 / 1440.0, 1, 1000.0);
+            let left = SeedNode::from_pair(SeedId::new(0), NightId::new(1), &a, &b, None).unwrap();
+
+            let mut right: Vec<SeedNode> = Vec::new();
+            for i in 0..30 {
+                let t = t0 + (i as f64) * (10.0 / 1440.0);
+                let ra_i = 1.0 + (i as f64) * dr;
+                let a_i = mk_alert(AlertId::new(300 + 2 * i), ra_i, dec, t, 1, 1000.0);
+                let b_i = mk_alert(
+                    AlertId::new(300 + 2 * i + 1),
+                    ra_i + dr,
+                    dec,
+                    t + 1.0 / 1440.0,
+                    1,
+                    1000.0,
+                );
+                right.push(
+                    SeedNode::from_pair(
+                        SeedId::new(5000 + i as u64),
+                        NightId::new(2),
+                        &a_i,
+                        &b_i,
+                        None,
+                    )
+                    .unwrap(),
+                );
+            }
+            right.sort_by(|x, y| x.plane.epoch_mid.partial_cmp(&y.plane.epoch_mid).unwrap());
+
+            let time_binner = UniformTimeBinner::new(t0, 1.0 / 24.0); // 1 hour bins
+
+            let out = left.score_edge_candidates(
+                &right,
+                &spatial_binner,
+                &time_binner,
+                &edge_config,
+                delta,
+            );
+            let brute = brute_force_scores(&left, &right, &edge_config, delta);
+
+            let out_pairs: std::collections::HashSet<(SeedId, SeedId)> =
+                out.iter().map(|e| (e.from, e.to)).collect();
+            let brute_pairs: std::collections::HashSet<(SeedId, SeedId)> =
+                brute.iter().map(|e| (e.from, e.to)).collect();
+
+            assert!(
+                out_pairs.is_subset(&brute_pairs),
+                "Prefilter must never invent edges; it can only drop brute-force accepted edges"
+            );
+        }
+
+        #[test]
+        fn score_edge_candidates_no_duplicate_pairs_in_output() {
+            let spatial_binner = HealpixBinner::new(8);
+            let mut params = default_predictor_params();
+            params.k_sigma = 1e6;
+            params.v_slack = 1e6;
+            let edge_config = mk_edge_config_for_tests(params);
+
+            let t0 = 60000.0;
+            let dec: f64 = 0.25;
+            let dr = arcsec_to_rad(5.0) / dec.cos();
+
+            let a = mk_alert(AlertId::new(0), 1.0, dec, t0, 1, 1000.0);
+            let b = mk_alert(AlertId::new(1), 1.0 + dr, dec, t0 + 5.0 / 1440.0, 1, 1000.0);
+            let left = SeedNode::from_pair(SeedId::new(0), NightId::new(1), &a, &b, None).unwrap();
+
+            let mut right: Vec<SeedNode> = Vec::new();
+            for i in 0..20 {
+                let t = t0 + (i as f64) * (6.0 / 1440.0);
+                let a_i = mk_alert(
+                    AlertId::new(400 + 2 * i),
+                    1.0 + (i as f64) * dr,
+                    dec,
+                    t,
+                    1,
+                    1000.0,
+                );
+                let b_i = mk_alert(
+                    AlertId::new(400 + 2 * i + 1),
+                    1.0 + (i as f64 + 1.0) * dr,
+                    dec,
+                    t + 1.0 / 1440.0,
+                    1,
+                    1000.0,
+                );
+                right.push(
+                    SeedNode::from_pair(
+                        SeedId::new(6000 + i as u64),
+                        NightId::new(2),
+                        &a_i,
+                        &b_i,
+                        None,
+                    )
+                    .unwrap(),
+                );
+            }
+            right.sort_by(|x, y| x.plane.epoch_mid.partial_cmp(&y.plane.epoch_mid).unwrap());
+
+            let out = left.score_edge_candidates(
+                &right,
+                &spatial_binner,
+                &UniformTimeBinner::new(t0, 30.0 / 1440.0),
+                &edge_config,
+                1,
+            );
+
+            let pairs: Vec<(SeedId, SeedId)> = out.iter().map(|e| (e.from, e.to)).collect();
+            let pairs_uniq = dedup_pairs(pairs.clone());
+            assert_eq!(
+                pairs_uniq.len(),
+                pairs.len(),
+                "output must not contain duplicate (from,to) edges"
+            );
+        }
+
+        #[test]
+        fn score_edge_candidates_duplicate_seed_ids_in_right_does_not_panic() {
+            // This tests the internal `right_by_id: AHashMap<SeedId, &SeedNode>`
+            // overwrite behavior. It’s an invariant violation in production,
+            // but the function should remain robust (no panic).
+            let spatial_binner = HealpixBinner::new(8);
+            let mut params = default_predictor_params();
+            params.k_sigma = 1e6;
+            params.v_slack = 1e6;
+            let edge_config = mk_edge_config_for_tests(params);
+
+            let t0 = 60000.0;
+            let dec: f64 = 0.2;
+            let dr = arcsec_to_rad(5.0) / dec.cos();
+
+            let a = mk_alert(AlertId::new(0), 1.0, dec, t0, 1, 1000.0);
+            let b = mk_alert(AlertId::new(1), 1.0 + dr, dec, t0 + 5.0 / 1440.0, 1, 1000.0);
+            let left = SeedNode::from_pair(SeedId::new(0), NightId::new(1), &a, &b, None).unwrap();
+
+            let sid = SeedId::new(999);
+
+            let a1 = mk_alert(AlertId::new(10), 1.1, dec, t0 + 20.0 / 1440.0, 1, 1000.0);
+            let b1 = mk_alert(
+                AlertId::new(11),
+                1.1 + dr,
+                dec,
+                t0 + 21.0 / 1440.0,
+                1,
+                1000.0,
+            );
+            let r1 = SeedNode::from_pair(sid, NightId::new(2), &a1, &b1, None).unwrap();
+
+            let a2 = mk_alert(AlertId::new(12), 1.2, dec, t0 + 40.0 / 1440.0, 1, 1000.0);
+            let b2 = mk_alert(
+                AlertId::new(13),
+                1.2 + dr,
+                dec,
+                t0 + 41.0 / 1440.0,
+                1,
+                1000.0,
+            );
+            let r2 = SeedNode::from_pair(sid, NightId::new(2), &a2, &b2, None).unwrap();
+
+            let mut right = vec![r1, r2];
+            right.sort_by(|x, y| x.plane.epoch_mid.partial_cmp(&y.plane.epoch_mid).unwrap());
+
+            let _out = left.score_edge_candidates(
+                &right,
+                &spatial_binner,
+                &UniformTimeBinner::new(t0, 1.0),
+                &edge_config,
+                1,
+            );
+
+            // No assert needed: "does not panic" is the test.
+            // If you want: assert output edges refer to sid only when present.
+        }
+
+        /* ------------------------- proptest: score_edge_candidates ------------------------- */
+
+        proptest! {
+            #![proptest_config(ProptestConfig {
+                cases: 48,
+                .. ProptestConfig::default()
+            })]
+
+            /// With an extremely large cone (huge k_sigma + v_slack), the spatio-temporal
+            /// prefilter should not remove any edge that the exact scorer accepts.
+            #[test]
+            fn prop_score_edge_candidates_matches_bruteforce_when_cone_is_huge(
+                // Generate a strictly increasing list of times (sorted) and mild motion.
+                n in 1usize..40
+            ) {
+                let spatial_binner = HealpixBinner::new(5);
+
+                let mut params = default_predictor_params();
+                params.k_sigma = 1e6;
+                params.pad_cell_radius = true;
+                params.v_slack = 1e6;
+
+                let edge_config = mk_edge_config_for_tests(params);
+                let delta = 1u32;
+
+                let t0 = 60000.0;
+                let dec: f64 = 0.25;
+                let dr = arcsec_to_rad(5.0) / dec.cos();
+
+                // Left seed
+                let a = mk_alert(AlertId::new(0), 1.0, dec, t0, 1, 1000.0);
+                let b = mk_alert(AlertId::new(1), 1.0 + dr, dec, t0 + 5.0/1440.0, 1, 1000.0);
+                let left = SeedNode::from_pair(SeedId::new(0), NightId::new(1), &a, &b, None).unwrap();
+
+                // Right seeds
+                let mut right: Vec<SeedNode> = Vec::with_capacity(n);
+                for i in 0..n {
+                    let t = t0 + (i as f64) * (7.0/1440.0); // 7 minutes step => sorted by construction
+                    let ra_i = 1.0 + (i as f64)*dr;
+                    let a_i = mk_alert(AlertId::new(500 + 2*i as u32), ra_i, dec, t, 1, 1000.0);
+                    let b_i = mk_alert(AlertId::new(500 + 2*i as u32 + 1), ra_i + dr, dec, t + 1.0/1440.0, 1, 1000.0);
+                    right.push(SeedNode::from_pair(SeedId::new(10_000 + i as u64), NightId::new(2), &a_i, &b_i, None).unwrap());
+                }
+                right.sort_by(|x,y| x.plane.epoch_mid.partial_cmp(&y.plane.epoch_mid).unwrap());
+
+                let time_binner = UniformTimeBinner::new(t0, 30.0/1440.0); // 30 min bins (multi-bin typically)
+
+                let out = left.score_edge_candidates(&right, &spatial_binner, &time_binner, &edge_config, delta);
+                let brute = brute_force_scores(&left, &right, &edge_config, delta);
+
+                let out_pairs = dedup_pairs(out.iter().map(|e| (e.from, e.to)).collect());
+                let brute_pairs = dedup_pairs(brute.iter().map(|e| (e.from, e.to)).collect());
+
+                prop_assert_eq!(out_pairs, brute_pairs);
+            }
+
+            /// For normal predictor parameters, score_edge_candidates must never invent edges:
+            /// output ⊆ brute-force accepted edges.
+            #[test]
+            fn prop_score_edge_candidates_is_subset_of_bruteforce(
+                n in 1usize..60
+            ) {
+                let spatial_binner = HealpixBinner::new(8);
+                let params = default_predictor_params();
+                let edge_config = mk_edge_config_for_tests(params);
+                let delta = 1u32;
+
+                let t0 = 60000.0;
+                let dec: f64 = 0.3;
+                let dr = arcsec_to_rad(4.0) / dec.cos();
+
+                let a = mk_alert(AlertId::new(0), 2.0, dec, t0, 1, 1000.0);
+                let b = mk_alert(AlertId::new(1), 2.0 + dr, dec, t0 + 5.0/1440.0, 1, 1000.0);
+                let left = SeedNode::from_pair(SeedId::new(0), NightId::new(1), &a, &b, None).unwrap();
+
+                let mut right: Vec<SeedNode> = Vec::with_capacity(n);
+                for i in 0..n {
+                    let t = t0 + (i as f64) * (9.0/1440.0);
+                    let ra_i = 2.0 + (i as f64)*dr;
+                    let a_i = mk_alert(AlertId::new(800 + 2*i as u32), ra_i, dec, t, 1, 1000.0);
+                    let b_i = mk_alert(AlertId::new(800 + 2*i as u32 + 1), ra_i + dr, dec, t + 1.0/1440.0, 1, 1000.0);
+                    right.push(SeedNode::from_pair(SeedId::new(20_000 + i as u64), NightId::new(2), &a_i, &b_i, None).unwrap());
+                }
+                right.sort_by(|x,y| x.plane.epoch_mid.partial_cmp(&y.plane.epoch_mid).unwrap());
+
+                let time_binner = UniformTimeBinner::new(t0, 45.0/1440.0);
+
+                let out = left.score_edge_candidates(&right, &spatial_binner, &time_binner, &edge_config, delta);
+                let brute = brute_force_scores(&left, &right, &edge_config, delta);
+
+                let out_set: std::collections::HashSet<(SeedId, SeedId)> = out.iter().map(|e| (e.from, e.to)).collect();
+                let brute_set: std::collections::HashSet<(SeedId, SeedId)> = brute.iter().map(|e| (e.from, e.to)).collect();
+
+                prop_assert!(out_set.is_subset(&brute_set));
+            }
         }
     }
 }

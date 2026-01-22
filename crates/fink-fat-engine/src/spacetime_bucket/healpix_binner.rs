@@ -34,6 +34,8 @@
 //! This serves as a characteristic angular size used to decide between
 //! local-neighbor vs. cone-coverage strategies.
 
+use std::cell::RefCell;
+
 use cdshealpix as chpx;
 use chpx::nested;
 use chpx::nested::Layer;
@@ -58,6 +60,11 @@ pub struct HealpixBinner {
     /// Characteristic cell radius (radians).  
     /// Defined as the maximum center→vertex distance at the equator.
     cell_radius: Radians,
+}
+
+thread_local! {
+    static HEALPIX_NEIGHBOUR_BUF: RefCell<Vec<u64>> =
+        RefCell::new(Vec::with_capacity(8));
 }
 
 impl HealpixBinner {
@@ -110,6 +117,41 @@ impl SpatialBinner for HealpixBinner {
         // cdshealpix expects (lon, lat) in radians
         let h = self.layer.hash(ra, dec);
         SpatialKey(h)
+    }
+
+    fn neighbors_into(&self, key: SpatialKey, ang_radius: Radians, out: &mut Vec<SpatialKey>) {
+        out.clear();
+
+        let SpatialKey(pixel_hash) = key;
+
+        // Compute local cell radius at pixel center (lat-dependent).
+        let (lon_center, lat_center) = self.layer.center(pixel_hash);
+        let local_cell_radius =
+            chpx::largest_center_to_vertex_distance(self.depth, lon_center, lat_center);
+
+        if ang_radius <= local_cell_radius {
+            // Local mode: <= 9 pixels (center + up to 8 neighbours).
+            out.reserve(9);
+            out.push(SpatialKey(pixel_hash));
+
+            HEALPIX_NEIGHBOUR_BUF.with(|buf_cell| {
+                let mut buf = buf_cell.borrow_mut();
+                buf.clear();
+
+                self.layer.append_bulk_neighbours(pixel_hash, &mut buf);
+
+                // Copy hashes into output as SpatialKey.
+                out.extend(buf.iter().copied().map(SpatialKey));
+            });
+        } else {
+            // Cone mode: may return many pixels.
+            let hashes =
+                nested::cone_coverage_approx_flat(self.depth, lon_center, lat_center, ang_radius);
+
+            // If `hashes` supports iter/len, this is allocation-free here.
+            out.reserve(hashes.len());
+            out.extend(hashes.iter().copied().map(SpatialKey));
+        }
     }
 
     /// Return neighboring pixels of a given key within `ang_radius`.
@@ -406,6 +448,107 @@ mod healpix_binner_tests {
                     "cone coverage at 1.5× local_rc should be ≥ local neighbors"
                 );
             }
+        }
+    }
+
+    mod neighbor_into_test {
+        use super::super::*;
+        use super::*;
+
+        /* ------------------------- tests: neighbors_into ------------------------- */
+
+        fn as_set(v: &[SpatialKey]) -> HashSet<SpatialKey> {
+            v.iter().copied().collect()
+        }
+
+        #[test]
+        fn test_neighbors_into_clears_and_includes_center_local_mode() {
+            let b = HealpixBinner::new(6);
+            let (ra, dec) = (1.0_f64, 0.3_f64);
+            let key = b.key_for(ra, dec);
+
+            let r = b.cell_radius();
+
+            // Pre-fill buffer with junk to ensure clear() is applied.
+            let mut out = vec![SpatialKey(999), SpatialKey(1000)];
+
+            b.neighbors_into(key, r, &mut out);
+
+            assert!(
+                !out.is_empty(),
+                "neighbors_into must write at least the center key"
+            );
+            assert!(out.len() <= 9, "local mode should not exceed 9 entries");
+            assert!(
+                out.contains(&key),
+                "neighbors_into must include the center key"
+            );
+            assert_eq!(uniq_len(&out), out.len(), "neighbors_into must be unique");
+        }
+
+        #[test]
+        fn test_neighbors_into_matches_neighbors_local_mode_as_set() {
+            let b = HealpixBinner::new(7);
+            let (ra, dec) = (0.9_f64, -0.2_f64);
+            let key = b.key_for(ra, dec);
+
+            let r = b.cell_radius();
+
+            let v = b.neighbors(key, r);
+
+            let mut out = Vec::<SpatialKey>::new();
+            b.neighbors_into(key, r, &mut out);
+
+            assert_eq!(
+                as_set(&v),
+                as_set(&out),
+                "neighbors_into must match neighbors (set-wise)"
+            );
+            assert_eq!(uniq_len(&out), out.len(), "neighbors_into must be unique");
+            assert!(out.contains(&key));
+        }
+
+        #[test]
+        fn test_neighbors_into_matches_neighbors_cone_mode_as_set() {
+            let b = HealpixBinner::new(7);
+            let (ra, dec) = (2.2_f64, 0.1_f64);
+            let key = b.key_for(ra, dec);
+
+            let big_r = 3.0 * b.cell_radius();
+
+            let v = b.neighbors(key, big_r);
+
+            let mut out = Vec::<SpatialKey>::new();
+            b.neighbors_into(key, big_r, &mut out);
+
+            assert!(out.contains(&key), "cone coverage must include center");
+            assert_eq!(
+                as_set(&v),
+                as_set(&out),
+                "neighbors_into must match neighbors (set-wise)"
+            );
+            assert_eq!(uniq_len(&out), out.len(), "neighbors_into must be unique");
+        }
+
+        #[test]
+        fn test_neighbors_into_does_not_shrink_preallocated_buffer() {
+            let b = HealpixBinner::new(6);
+            let (ra, dec) = (1.7_f64, 0.25_f64);
+            let key = b.key_for(ra, dec);
+
+            let mut out = Vec::<SpatialKey>::with_capacity(256);
+            out.extend([SpatialKey(1), SpatialKey(2), SpatialKey(3)]);
+
+            let cap_before = out.capacity();
+
+            // Run both modes.
+            let r_local = b.cell_radius();
+            b.neighbors_into(key, r_local, &mut out);
+            assert_eq!(out.capacity(), cap_before);
+
+            let r_cone = 4.0 * r_local;
+            b.neighbors_into(key, r_cone, &mut out);
+            assert_eq!(out.capacity(), cap_before);
         }
     }
 }

@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use ahash::AHashMap;
+
 use crate::{
     AlertId, MjdTt, Radians,
     alerts::Alert,
@@ -39,7 +41,7 @@ pub struct Bucket<Id> {
 #[derive(Clone, Debug, Default)]
 pub struct BucketIndex<Id> {
     /// Memberships keyed by `(SpatialKey, TimeBin)`.
-    pub buckets: HashMap<BucketKey, Bucket<Id>>,
+    pub buckets: AHashMap<BucketKey, Bucket<Id>>,
 }
 
 /// Compute the joint `BucketKey` for a single alert sample.
@@ -88,7 +90,7 @@ where
     Bs: SpatialBinner,
     Bt: TimeBinner,
 {
-    let mut buckets: HashMap<BucketKey, Bucket<AlertId>> = HashMap::new();
+    let mut buckets: AHashMap<BucketKey, Bucket<AlertId>> = AHashMap::new();
 
     // 1) Group alerts into buckets.
     for alert in alerts {
@@ -143,6 +145,10 @@ mod bucket_tests {
         fn cell_radius(&self) -> Radians {
             // Arbitrary positive value; not used in these tests.
             1.0
+        }
+
+        fn neighbors_into(&self, key: SpatialKey, ang_radius: Radians, out: &mut Vec<SpatialKey>) {
+            todo!()
         }
     }
 
@@ -297,6 +303,15 @@ mod bucket_tests {
                 // Arbitrary positive radius.
                 1.0
             }
+
+            fn neighbors_into(
+                &self,
+                key: SpatialKey,
+                ang_radius: Radians,
+                out: &mut Vec<SpatialKey>,
+            ) {
+                todo!()
+            }
         }
 
         let sb = SplitSpatialBinner;
@@ -376,6 +391,15 @@ mod bucket_tests {
             fn cell_radius(&self) -> Radians {
                 // Cell size consistent with the 0.5 rad "bucket" we used.
                 0.5
+            }
+
+            fn neighbors_into(
+                &self,
+                key: SpatialKey,
+                ang_radius: Radians,
+                out: &mut Vec<SpatialKey>,
+            ) {
+                todo!()
             }
         }
 

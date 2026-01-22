@@ -27,6 +27,11 @@ pub trait SpatialBinner {
     /// `SpatialKey` – the spatial cell id covering `(ra, dec)`.
     fn key_for(&self, ra: Radians, dec: Radians) -> SpatialKey;
 
+    /// Write neighbor keys into `out` (which is cleared by the callee).
+    ///
+    /// This avoids allocating a new Vec on every query.
+    fn neighbors_into(&self, key: SpatialKey, ang_radius: Radians, out: &mut Vec<SpatialKey>);
+
     /// Enumerate neighbor cells needed to cover an **angular radius** around `key`.
     ///
     /// The radius is in **radians** and typically chosen as a small multiple of the
@@ -36,7 +41,12 @@ pub trait SpatialBinner {
     /// -----
     /// Implementations usually **include `key` itself** in the returned list,
     /// but callers should not rely on this unless documented by the concrete type.
-    fn neighbors(&self, key: SpatialKey, ang_radius: Radians) -> Vec<SpatialKey>;
+    #[inline]
+    fn neighbors(&self, key: SpatialKey, ang_radius: Radians) -> Vec<SpatialKey> {
+        let mut out = Vec::new();
+        self.neighbors_into(key, ang_radius, &mut out);
+        out
+    }
 
     /// Characteristic angular **radius** for a single cell (radians).
     ///

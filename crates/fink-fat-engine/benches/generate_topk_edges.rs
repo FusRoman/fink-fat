@@ -1,0 +1,534 @@
+use std::hint::black_box;
+use std::time::Duration;
+
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use fink_fat_engine::spacetime_bucket::healpix_binner::HealpixBinner;
+use fink_fat_engine::spacetime_bucket::uniform_time_binner::UniformTimeBinner;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
+
+use fink_fat_engine::{
+    Alert,
+    engine_config::edge_config::EdgeConfig,
+    graph::edge::Edge,
+    graph::edge_id::EdgeId,
+    night_id::NightId,
+    seeding::{seed_id::SeedId, seed_node::SeedNode},
+};
+
+// -----------------------------------------------------------------------------
+// Helpers: synthetic data generation
+// -----------------------------------------------------------------------------
+
+/// Build a minimal [`Alert`] suitable for creating seeds in benchmarks.
+///
+/// Notes
+/// -----
+/// - This is **not** intended to be physically accurate: the goal is to generate
+///   stable, deterministic inputs that exercise the linking code paths.
+/// - RA/Dec errors are fixed to a small constant to keep the seed model stable.
+/// - Flux errors are a simple proportional rule-of-thumb (never below 1).
+fn make_alert(
+    alert_index: u32,
+    dia_source_id: u64,
+    ra_rad: f64,
+    dec_rad: f64,
+    mjd_tt: f64,
+    band: u8,
+    flux: f32,
+) -> Alert {
+    // `AlertId` is a dense 0-based index into an `AlertStore`.
+    // For synthetic benchmarks we only need it to be unique and deterministic.
+    let alert_id = fink_fat_engine::AlertId::new(alert_index);
+
+    Alert {
+        id: alert_id,
+        dia_source_id,
+        ra: ra_rad,
+        ra_err: 1.0e-6, // ~0.2 arcsec in radians
+        dec: dec_rad,
+        dec_err: 1.0e-6,
+        mjd_tt,
+        flux,
+        flux_err: (0.1 * flux.abs()).max(1.0) as f32,
+        band,
+    }
+}
+
+/// Build `num_seeds` [`SeedNode`] values for a single night using a pair-based model.
+///
+/// The intent is to create a *pseudo track* (monotone time, slowly varying RA/Dec)
+/// so that the spatial/time prefiltering in `score_edge_candidates` is exercised,
+/// but without requiring real alert streams.
+///
+/// Parameters
+/// ----------
+/// rng : &mut StdRng
+///     RNG used only to add small, deterministic jitter.
+/// night_id : NightId
+///     Night identifier assigned to all seeds.
+/// seed_id_base : u64
+///     Base value for generating unique [`SeedId`] values.
+/// num_seeds : usize
+///     Number of seeds to generate.
+/// start_mjd_tt : f64
+///     Start time (MJD TT) for the first seed.
+/// seed_time_step_days : f64
+///     Time step (days) between successive seeds (controls density along time).
+/// start_ra_rad : f64
+///     RA of the first seed (radians).
+/// start_dec_rad : f64
+///     Dec of the first seed (radians).
+/// ra_drift_rad_per_seed : f64
+///     Linear RA drift applied per seed (radians/seed).
+/// dec_drift_rad_per_seed : f64
+///     Linear Dec drift applied per seed (radians/seed).
+/// max_speed_rad_per_day : Option<f64>
+///     Optional speed filter passed to [`SeedNode::from_pair`].
+///
+/// Returns
+/// -------
+/// Vec<SeedNode>
+///     Seeds time-sorted by `plane.epoch_mid` to satisfy the invariant required
+///     by `SeedNode::score_edge_candidates`.
+fn make_seeds_pair_model(
+    rng: &mut StdRng,
+    night_id: NightId,
+    seed_id_base: u64,
+    num_seeds: usize,
+    start_mjd_tt: f64,
+    seed_time_step_days: f64,
+    start_ra_rad: f64,
+    start_dec_rad: f64,
+    ra_drift_rad_per_seed: f64,
+    dec_drift_rad_per_seed: f64,
+    max_speed_rad_per_day: Option<f64>,
+) -> Vec<SeedNode> {
+    let mut seeds: Vec<SeedNode> = Vec::with_capacity(num_seeds);
+
+    // We generate a smooth pseudo-trajectory with small jitter so that:
+    // - seeds do not collapse into a single HEALPix cell,
+    // - cone queries and candidate scoring still return a non-trivial workload.
+    for seed_index in 0..num_seeds {
+        let seed_id = SeedId(seed_id_base + seed_index as u64);
+
+        // Spread seeds over time (keeps `right` easy to sort by epoch_mid).
+        let time_alert_a = start_mjd_tt + (seed_index as f64) * seed_time_step_days;
+        let time_alert_b = time_alert_a + (seed_time_step_days * 0.5).max(1e-6);
+
+        // Small angular jitter (radians). Kept tiny to preserve a coherent track.
+        let ra_jitter = (rng.random::<f64>() - 0.5) * 1e-4;
+        let dec_jitter = (rng.random::<f64>() - 0.5) * 1e-4;
+
+        // Drift RA/Dec smoothly with the seed index.
+        let ra_a = start_ra_rad + (seed_index as f64) * ra_drift_rad_per_seed + ra_jitter;
+        let dec_a = start_dec_rad + (seed_index as f64) * dec_drift_rad_per_seed + dec_jitter;
+
+        // Second detection is offset slightly along the same drift direction.
+        let ra_b = ra_a + ra_drift_rad_per_seed * 0.5;
+        let dec_b = dec_a + dec_drift_rad_per_seed * 0.5;
+
+        // Alternate bands to ensure photometry code paths are exercised.
+        let band_a = (seed_index % 2) as u8;
+        let band_b = ((seed_index + 1) % 2) as u8;
+
+        // Flux with mild noise.
+        let flux_a = 1000.0 + (rng.random::<f32>() - 0.5) * 50.0;
+        let flux_b = flux_a + (rng.random::<f32>() - 0.5) * 20.0;
+
+        // Ensure unique and stable synthetic identifiers.
+        let dia_source_id = 1_000_000 + seed_index as u64;
+
+        // Two alerts forming the seed pair.
+        let alert_a = make_alert(
+            (seed_index as u32) * 2,
+            dia_source_id,
+            ra_a,
+            dec_a,
+            time_alert_a,
+            band_a,
+            flux_a,
+        );
+        let alert_b = make_alert(
+            (seed_index as u32) * 2 + 1,
+            dia_source_id,
+            ra_b,
+            dec_b,
+            time_alert_b,
+            band_b,
+            flux_b,
+        );
+
+        // Build the seed node from the alert pair.
+        let seed_node =
+            SeedNode::from_pair(seed_id, night_id, &alert_a, &alert_b, max_speed_rad_per_day)
+                .expect("SeedNode::from_pair failed (speed filter too strict?)");
+
+        seeds.push(seed_node);
+    }
+
+    // IMPORTANT: `score_edge_candidates` assumes `right` is sorted by epoch_mid.
+    seeds.sort_by(|a, b| a.plane.epoch_mid.total_cmp(&b.plane.epoch_mid));
+    seeds
+}
+
+/// Construct the spatial + time binners used by `SeedNode::score_edge_candidates`.
+///
+/// Parameters
+/// ----------
+/// t0 : f64
+///     Origin (MJD TT) for uniform time binning. A good choice is the minimum
+///     `epoch_mid` of the right-hand seeds so time-bin indices remain small and
+///     stable in logs/diagnostics.
+///
+/// Notes
+/// -----
+/// - The Healpix resolution (here `10`) and the uniform bin width are key
+///   knobs that strongly affect runtime by changing candidate fan-out.
+/// - Keep them stable while profiling; sweep them later if needed.
+fn make_binners(t0: f64) -> (HealpixBinner, UniformTimeBinner) {
+    let spatial_binner = HealpixBinner::new(10);
+
+    // 5 minutes in days. Smaller bins -> more bins (more indices), but tighter
+    // time consistency; larger bins -> fewer indices, but potentially more
+    // spatial candidates per bin.
+    let bin_width_days = 5.0 / 1440.0;
+
+    let time_binner = UniformTimeBinner::new(t0, bin_width_days);
+    (spatial_binner, time_binner)
+}
+
+// -----------------------------------------------------------------------------
+// Benchmarks
+// -----------------------------------------------------------------------------
+
+/// End-to-end benchmark for [`Edge::generate_topk_edges`].
+///
+/// This measures the full pipeline cost:
+/// - per-left candidate generation + scoring,
+/// - per-left Top-K extraction,
+/// - conversion to final `Edge` objects,
+/// - optional global truncation.
+fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
+    let mut group = c.benchmark_group("generate_topk_edges/e2e");
+
+    // Typical scaling cases.
+    // L = number of left seeds, R = number of right seeds, K = top-k per left.
+    let cases = [
+        (32usize, 512usize, 8usize),
+        (64usize, 1024usize, 8usize),
+        (128usize, 2048usize, 8usize),
+    ];
+
+    let mut rng = StdRng::seed_from_u64(42);
+
+    for (num_left_seeds, num_right_seeds, top_k_per_left) in cases {
+        let left_night = NightId(100);
+        let right_night = NightId(101);
+
+        // Synthetic inputs: coherent pseudo-track + deterministic jitter.
+        let left_seeds = make_seeds_pair_model(
+            &mut rng,
+            left_night,
+            1,
+            num_left_seeds,
+            60000.0,
+            2.0 / 1440.0, // 2-minute spacing
+            1.0,
+            0.5,
+            5e-5,
+            2e-5,
+            None,
+        );
+
+        let right_seeds = make_seeds_pair_model(
+            &mut rng,
+            right_night,
+            1_000_000,
+            num_right_seeds,
+            60001.0,
+            2.0 / 1440.0,
+            1.01,
+            0.51,
+            5e-5,
+            2e-5,
+            None,
+        );
+
+        // Use the minimum right epoch as time origin so bin indices stay small.
+        let time_origin = right_seeds
+            .first()
+            .map(|seed| seed.plane.epoch_mid)
+            .unwrap_or(60001.0);
+
+        let (spatial_binner, time_binner) = make_binners(time_origin);
+
+        // Base configuration for the tested function.
+        let mut edge_config = EdgeConfig::default();
+        edge_config.top_k_per_left = top_k_per_left;
+        edge_config.max_total_edges = None;
+
+        group.throughput(Throughput::Elements(
+            (num_left_seeds * top_k_per_left) as u64,
+        ));
+
+        group.bench_with_input(
+            BenchmarkId::new(
+                "no_cap",
+                format!("L{num_left_seeds}_R{num_right_seeds}_K{top_k_per_left}"),
+            ),
+            &(num_left_seeds, num_right_seeds, top_k_per_left),
+            |b, _| {
+                b.iter(|| {
+                    let edges = Edge::generate_topk_edges(
+                        black_box(EdgeId(0)),
+                        black_box(&left_seeds),
+                        black_box(&right_seeds),
+                        black_box(&edge_config),
+                        black_box(&spatial_binner),
+                        black_box(&time_binner),
+                    );
+                    black_box(edges.len())
+                })
+            },
+        );
+
+        // Variant with a global edge cap: adds an extra selection + partial sort step.
+        let mut edge_config_capped = edge_config.clone();
+        edge_config_capped.max_total_edges = Some((num_left_seeds * top_k_per_left / 4).max(1));
+
+        group.bench_with_input(
+            BenchmarkId::new(
+                "global_cap",
+                format!("L{num_left_seeds}_R{num_right_seeds}_K{top_k_per_left}"),
+            ),
+            &(num_left_seeds, num_right_seeds, top_k_per_left),
+            |b, _| {
+                b.iter(|| {
+                    let edges = Edge::generate_topk_edges(
+                        black_box(EdgeId(0)),
+                        black_box(&left_seeds),
+                        black_box(&right_seeds),
+                        black_box(&edge_config_capped),
+                        black_box(&spatial_binner),
+                        black_box(&time_binner),
+                    );
+                    black_box(edges.len())
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
+/// Component benchmarks to isolate major contributors.
+///
+/// This helps decide whether optimizations should target:
+/// - candidate generation (bin slicing + index build + cone query),
+/// - exact scoring,
+/// - Top-K selection and sorting,
+/// - fixed overheads per call.
+fn bench_generate_topk_edges_components(c: &mut Criterion) {
+    let mut group = c.benchmark_group("generate_topk_edges/components");
+
+    // -----------------------------------------------------------------------------
+    // Component benchmarks should be *cheap enough* to sample.
+    //
+    // The previous "total" version (scoring all left seeds for a large (L,R))
+    // is effectively:
+    //   cost ~ O(L * score_edge_candidates(right))
+    // which can easily become minutes per sample and makes Criterion unusable.
+    //
+    // Here we instead benchmark:
+    // - score_edge_candidates for a *single* left seed (per_left_1)
+    // - score_edge_candidates for a small batch of left seeds (per_left_16)
+    // and keep (L,R) at a moderate size by default.
+    // -----------------------------------------------------------------------------
+
+    // Moderate size for decomposition (keep it close to e2e cases).
+    let num_left_seeds: usize = 1_024;
+    let num_right_seeds: usize = 4_096;
+    let top_k_per_left: usize = 8;
+
+    let mut rng = StdRng::seed_from_u64(7);
+
+    let left_night = NightId(200);
+    let right_night = NightId(201);
+
+    let left_seeds = make_seeds_pair_model(
+        &mut rng,
+        left_night,
+        10,
+        num_left_seeds,
+        61000.0,
+        2.0 / 1440.0,
+        2.0,
+        0.3,
+        6e-5,
+        3e-5,
+        None,
+    );
+
+    let right_seeds = make_seeds_pair_model(
+        &mut rng,
+        right_night,
+        2_000_000,
+        num_right_seeds,
+        61001.0,
+        2.0 / 1440.0,
+        2.01,
+        0.31,
+        6e-5,
+        3e-5,
+        None,
+    );
+
+    // Use the minimum right epoch as time origin so time-bin indices stay small.
+    let time_origin = right_seeds
+        .first()
+        .map(|seed| seed.plane.epoch_mid)
+        .unwrap_or(61001.0);
+
+    let (spatial_binner, time_binner) = make_binners(time_origin);
+
+    let mut edge_config = EdgeConfig::default();
+    edge_config.top_k_per_left = top_k_per_left;
+    edge_config.max_total_edges = None;
+
+    // Revisit separation Δ nights (>= 1) for scoring.
+    // Using the actual night ids from the synthetic seeds keeps this consistent.
+    let delta_revisit: u32 = right_seeds[0]
+        .night_id
+        .0
+        .saturating_sub(left_seeds[0].night_id.0)
+        .max(1);
+
+    // -----------------------------------------------------------------------------
+    // 1) Candidate generation + scoring per single left seed.
+    //
+    // This is the primary bottleneck in most configurations (bin slicing,
+    // per-bin index build, cone queries, and exact scoring).
+    // -----------------------------------------------------------------------------
+    group.bench_function("score_edge_candidates/per_left_1", |b| {
+        let left_seed = &left_seeds[0];
+        b.iter(|| {
+            let scored = left_seed.score_edge_candidates(
+                black_box(&right_seeds),
+                black_box(&spatial_binner),
+                black_box(&time_binner),
+                black_box(&edge_config),
+                black_box(delta_revisit),
+            );
+            black_box(scored.len())
+        })
+    });
+
+    // -----------------------------------------------------------------------------
+    // 1b) Candidate generation + scoring for a small batch of left seeds.
+    //
+    // This reduces measurement noise (amortizes per-call jitter) and gives a
+    // number you can extrapolate to e2e time as ~ (L / batch) * cost(batch).
+    // -----------------------------------------------------------------------------
+    group.bench_function("score_edge_candidates/per_left_16", |b| {
+        let left_batch: &[SeedNode] = &left_seeds[..16.min(left_seeds.len())];
+        b.iter(|| {
+            let mut total_candidates: usize = 0;
+            for left_seed in left_batch {
+                let scored = left_seed.score_edge_candidates(
+                    black_box(&right_seeds),
+                    black_box(&spatial_binner),
+                    black_box(&time_binner),
+                    black_box(&edge_config),
+                    black_box(delta_revisit),
+                );
+                total_candidates += scored.len();
+            }
+            black_box(total_candidates)
+        })
+    });
+
+    // -----------------------------------------------------------------------------
+    // 2) Top-K selection cost only (pure selection on synthetic scalar costs).
+    //
+    // This isolates the cost of:
+    // - select_nth_unstable
+    // - sorting the top-k prefix
+    // - truncation
+    //
+    // It does *not* include scoring or allocations done upstream.
+    // -----------------------------------------------------------------------------
+    group.bench_function("topk_select_only", |b| {
+        b.iter(|| {
+            // NOTE: If you want to isolate selection further, pre-generate a vector
+            // and clone it here. This version includes RNG cost but is still useful
+            // as an order-of-magnitude indicator.
+            let mut synthetic_costs: Vec<f64> = (0..2048).map(|_| rng.random::<f64>()).collect();
+
+            let k = top_k_per_left.min(synthetic_costs.len());
+            if k > 0 {
+                let _ = synthetic_costs.select_nth_unstable_by(k - 1, |a, b| a.total_cmp(b));
+                synthetic_costs[..k].sort_by(|a, b| a.total_cmp(b));
+                synthetic_costs.truncate(k);
+            }
+
+            black_box(synthetic_costs.len())
+        })
+    });
+
+    // -----------------------------------------------------------------------------
+    // 3) End-to-end with a small left slice to highlight fixed per-call overhead.
+    //
+    // This includes map construction, per-left loop overhead, etc., but keeps the
+    // number of left seeds small to remain sample-friendly.
+    // -----------------------------------------------------------------------------
+    group.bench_function("e2e_small_left", |b| {
+        let left_small: &[SeedNode] = &left_seeds[..32.min(left_seeds.len())];
+        b.iter(|| {
+            let edges = Edge::generate_topk_edges(
+                black_box(EdgeId(0)),
+                black_box(left_small),
+                black_box(&right_seeds),
+                black_box(&edge_config),
+                black_box(&spatial_binner),
+                black_box(&time_binner),
+            );
+            black_box(edges.len())
+        })
+    });
+
+    group.finish();
+}
+
+// -----------------------------------------------------------------------------
+// Criterion configuration
+// -----------------------------------------------------------------------------
+
+/// Criterion configuration tuned for "expensive" end-to-end benchmarks.
+///
+/// The default Criterion configuration targets ~100 samples and can become
+/// impractically slow when each iteration is expensive (e.g. many scoring calls).
+///
+/// We reduce:
+/// - sample count,
+/// - warmup time,
+/// - measurement time,
+/// and slightly increase tolerated noise to get actionable numbers quickly.
+fn criterion_config() -> Criterion {
+    Criterion::default()
+        .with_plots()
+        .sample_size(10)
+        .warm_up_time(Duration::from_secs(1))
+        .measurement_time(Duration::from_secs(4))
+        .noise_threshold(0.05)
+}
+
+criterion_group! {
+    name = benches;
+    config = criterion_config();
+    targets =
+        bench_generate_topk_edges_end_to_end,
+        bench_generate_topk_edges_components
+}
+
+criterion_main!(benches);

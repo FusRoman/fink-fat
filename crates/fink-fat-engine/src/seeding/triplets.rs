@@ -821,6 +821,10 @@ mod triplet_gen_tests {
         fn cell_radius(&self) -> Radians {
             0.0
         }
+
+        fn neighbors_into(&self, key: SpatialKey, ang_radius: Radians, out: &mut Vec<SpatialKey>) {
+            todo!()
+        }
     }
 
     /// Dummy time binner: uniform bins of fixed width starting from `t0`.
