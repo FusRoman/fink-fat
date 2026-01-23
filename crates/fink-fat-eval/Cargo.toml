@@ -23,7 +23,7 @@ serde_yaml = "0.9.34"
 rayon = "1.11.0"
 num_cpus = "1.17.0"
 bitcode = { version = "0.6.9", features = ["serde"] }
-ahash = "0.8.12"
+ahash = { version = "0.8.12", features = ["serde"] }
 indicatif = "0.18.3"
 
 [dev-dependencies]
@@ -47,8 +47,8 @@ name = "inspect-scoring-components"
 path = "src/bin/scoring/inspect_scoring_components.rs"
 
 [[bin]]
-name = "generate-frozen-pairs"
-path = "src/bin/scoring/generate_frozen_pairs.rs"
+name = "generate-seed-store"
+path = "src/bin/scoring/generate_seed_store.rs"
 
 [[bin]]
 name = "evaluate-scoring"

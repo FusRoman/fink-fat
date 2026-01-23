@@ -21,10 +21,13 @@ use fink_fat_eval::{
         ztf_alerts::{NightStore, collect_nights},
     },
     log, log_section, log_timing, log2,
-    night_seeds::SeedStore,
-    scoring::edges_diagnostics::{
-        EdgesStatsDisplay, MissReason, diagnose_missed_true_edges,
-        edge_truth_counts_between_nights, edge_truth_diagnostics,
+    night_seeds::{LabeledEdge, NightSeeds, SeedStore},
+    scoring::{
+        edges_diagnostics::{
+            EdgeTruthSummary, EdgesStatsDisplay, MissReason, diagnose_missed_true_edges,
+            edge_truth_counts_between_nights, edge_truth_diagnostics, print_miss_report,
+        },
+        optimization_metrics::EdgeSeparationMetrics,
     },
 };
 
@@ -40,8 +43,8 @@ struct PairSummary {
     recall: f64,
     missed_top_k: usize,
     missed_generation: usize,
-    true_generated: usize,
-    false_generated: usize,
+    // true_generated: usize,
+    // false_generated: usize,
 }
 
 #[derive(Debug, Default)]
@@ -144,8 +147,8 @@ fn build_night_pairs(
 fn step_generate_topk_edges<'a>(
     logbuf: &mut String,
     cli: &Cli,
-    left: &'a fink_fat_eval::night_seeds::NightSeeds,
-    right: &'a fink_fat_eval::night_seeds::NightSeeds,
+    left: &'a NightSeeds,
+    right: &'a NightSeeds,
     engine_cfg: &EngineConfig,
     spatial_binner: &HealpixBinner,
 ) -> (UniformTimeBinner, Vec<Edge<'a>>) {
@@ -197,13 +200,13 @@ fn step_generate_topk_edges<'a>(
 fn step_edge_truth_diagnostics<'a>(
     logbuf: &mut String,
     cli: &Cli,
-    left: &'a fink_fat_eval::night_seeds::NightSeeds,
-    right: &'a fink_fat_eval::night_seeds::NightSeeds,
+    left: &'a NightSeeds,
+    right: &'a NightSeeds,
     edges: &[Edge<'a>],
     engine_cfg: &EngineConfig,
     spatial_binner: &HealpixBinner,
     time_binner: &UniformTimeBinner,
-) -> fink_fat_eval::scoring::edges_diagnostics::EdgeTruthSummary {
+) -> EdgeTruthSummary {
     let t_diag = Instant::now();
     let diag = edge_truth_diagnostics(
         left,
@@ -245,8 +248,8 @@ fn step_edge_truth_diagnostics<'a>(
 fn step_diagnose_missed_true_edges(
     logbuf: &mut String,
     cli: &Cli,
-    left: &fink_fat_eval::night_seeds::NightSeeds,
-    right: &fink_fat_eval::night_seeds::NightSeeds,
+    left: &NightSeeds,
+    right: &NightSeeds,
     engine_cfg: &EngineConfig,
     spatial_binner: &HealpixBinner,
     time_binner: &UniformTimeBinner,
@@ -263,14 +266,11 @@ fn step_diagnose_missed_true_edges(
     );
     buflog_timing!(logbuf, cli, "diagnose_missed_true_edges", t_miss.elapsed());
 
+    // Toujours logguer le total (niveau -v)
     if !cli.quiet && cli.verbose >= 2 {
-        // Still not printing details here (stdout) to keep parallel logs clean.
-        buflog!(
-            logbuf,
-            cli,
-            "Miss report: total_missed={} (use -vv and/or add buffered formatter for details)",
-            details.len()
-        );
+        buflog!(logbuf, cli, "Miss report: total_missed={}", details.len());
+
+        print_miss_report(logbuf, cli, &counts, &details, /*max_show=*/ 20);
     } else {
         buflog!(
             logbuf,
@@ -288,22 +288,14 @@ fn step_diagnose_missed_true_edges(
 struct EvalSteps {
     pub diagnostics: bool,
     pub miss_diagnosis: bool,
-}
-
-impl EvalSteps {
-    fn all() -> Self {
-        Self {
-            diagnostics: true,
-            miss_diagnosis: true,
-        }
-    }
+    pub metrics: bool,
 }
 
 fn eval_pair_with_log(
     logbuf: &mut String,
     cli: &Cli,
-    left: &fink_fat_eval::night_seeds::NightSeeds,
-    right: &fink_fat_eval::night_seeds::NightSeeds,
+    left: &NightSeeds,
+    right: &NightSeeds,
     engine_cfg: &EngineConfig,
     spatial_binner: &HealpixBinner,
     gap_days: usize,
@@ -342,6 +334,41 @@ fn eval_pair_with_log(
         n_true_possible
     );
     buflog!(logbuf, cli, "true-edge recall: {:.4}", recall);
+
+    if steps.metrics {
+        // 1.a) compute optimization metrics
+        let t_metrics = Instant::now();
+        let labeled_edges: Vec<LabeledEdge> = edges
+            .clone()
+            .into_iter()
+            .map(|e| LabeledEdge::from_edge(e, left, right))
+            .collect();
+
+        let Some(metrics) = EdgeSeparationMetrics::edge_metrics(&labeled_edges, n_true_possible)
+        else {
+            buflog!(
+                logbuf,
+                cli,
+                "Not enough true edges to compute optimization metrics"
+            );
+            return Ok(PairSummary {
+                n_true,
+                n_false,
+                n_true_possible,
+                recall,
+                missed_top_k: 0,
+                missed_generation: 0,
+            });
+        };
+
+        buflog_timing!(
+            logbuf,
+            cli,
+            "compute optimization metrics",
+            t_metrics.elapsed()
+        );
+        buflog!(logbuf, cli, "Optimization metrics: {}", metrics);
+    }
 
     // 2) diagnostics summary
     let diag = if steps.diagnostics {
@@ -383,8 +410,8 @@ fn eval_pair_with_log(
         recall,
         missed_top_k: diag.as_ref().map_or(0, |d| d.true_edges_missed_top_k),
         missed_generation: diag.as_ref().map_or(0, |d| d.true_edges_missed_generation),
-        true_generated: diag.as_ref().map_or(0, |d| d.true_edges_generated),
-        false_generated: diag.as_ref().map_or(0, |d| d.false_edges_generated),
+        // true_generated: diag.as_ref().map_or(0, |d| d.true_edges_generated),
+        // false_generated: diag.as_ref().map_or(0, |d| d.false_edges_generated),
     })
 }
 
@@ -435,7 +462,7 @@ fn main() -> Result<()> {
     log_timing!(&cli, "resolve_nids", t_resolve.elapsed());
     anyhow::ensure!(nids.len() >= 2, "need at least 2 nights to evaluate edges");
 
-    let consecutive_window: usize = 1;
+    let consecutive_window: usize = 5;
     let gap_min: usize = 0;
     let gap_max: usize = 0;
 
@@ -452,7 +479,6 @@ fn main() -> Result<()> {
         gap_min,
         gap_max
     );
-    log2!(&cli, "Pairs: {pairs:?}");
 
     let spatial_binner = HealpixBinner::new(cli.binning.healpix_depth);
 
@@ -533,6 +559,7 @@ fn main() -> Result<()> {
             let steps = EvalSteps {
                 diagnostics: false,
                 miss_diagnosis: false,
+                metrics: true,
             };
 
             let t_pair = Instant::now();

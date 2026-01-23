@@ -4,11 +4,12 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
+use ahash::AHashMap;
 use camino::Utf8Path;
 use fink_fat_engine::{
     Alert,
     engine_config::{EngineConfig, score_config::ScoreConfig},
-    graph::score::ScoredEdge,
+    graph::{edge::Edge, edge_id::EdgeId, score::ScoredEdge},
     night_id::NightId,
     seeding::{seed_id::SeedId, seed_node::SeedNode},
     spacetime_bucket::{healpix_binner::HealpixBinner, uniform_time_binner::UniformTimeBinner},
@@ -27,11 +28,118 @@ use crate::{
 
 use rayon::prelude::*;
 
+/// Container holding all intra-night seeds and their associated truth information.
+///
+/// `NightSeeds` represents the **complete seeding output for a single night**
+/// and serves as the primary unit exchanged between:
+/// - intra-night seeding,
+/// - inter-night edge generation,
+/// - scoring and evaluation pipelines.
+///
+/// It bundles together:
+/// - the ordered list of generated seeds,
+/// - per-seed truth labels (when available),
+/// - pre-aggregated statistics derived from truth labels for fast evaluation.
+///
+/// This structure is intentionally **read-only after construction** and is
+/// designed to be cheaply shared across evaluation routines.
+///
+/// Invariants
+/// ----------
+/// - All `seeds` belong to the same night `nid`.
+/// - `seeds` are sorted by increasing `plane.epoch_mid`.
+/// - `truth` contains **exactly one entry per seed**.
+/// - `truth_counts` is consistent with `truth`:
+///   for any truth id `t`,
+///   `truth_counts[t] == number of seeds s such that truth[s.seed_id] == Some(t)`.
+///
+/// Notes
+/// -----
+/// - A seed with `truth = None` corresponds to:
+///   - either an unassociated detection set,
+///   - or a seed whose members have inconsistent truth labels.
+/// - Truth information is used **only for evaluation and calibration**;
+///   it must never influence the operational linking or scoring logic.
+///
+/// Typical usage
+/// -------------
+/// - Computing the number of theoretically possible true edges between nights.
+/// - Evaluating recall ceilings for a given seeding or gating configuration.
+/// - Producing labeled datasets for score and gate optimization.
+///
+/// See also
+/// --------
+/// - [`SeedNode`] – compact representation of an intra-night seed.
+/// - [`generate_seeds_from_store`] – construction of `NightSeeds` from alerts.
+/// - [`nb_true_possible_edges`] – combinatorial count of true inter-night edges.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NightSeeds {
+    /// Night identifier shared by all seeds in this container.
+    ///
+    /// This is typically the survey-specific night index (e.g. LSST night),
+    /// and is used to:
+    /// - enforce temporal ordering,
+    /// - group seeds for inter-night linking,
+    /// - label outputs during evaluation and logging.
     pub nid: NightId,
+
+    /// Ordered list of all intra-night seeds generated for this night.
+    ///
+    /// Each [`SeedNode`] represents a pair or triplet of detections fitted
+    /// by a local tangent-plane kinematic model.
+    ///
+    /// Ordering
+    /// --------
+    /// Seeds are sorted by increasing `plane.epoch_mid`.  
+    /// This ordering is **required** by downstream components such as:
+    /// - temporal gating,
+    /// - directed edge generation,
+    /// - reproducible iteration during evaluation.
     pub seeds: Vec<SeedNode>,
-    pub truth: Vec<Option<i32>>,
+
+    /// Per-seed truth association map.
+    ///
+    /// Maps each [`SeedId`] to:
+    /// - `Some(truth_id)` if the seed is fully associated with a known object,
+    /// - `None` if the seed has no valid or consistent truth association.
+    ///
+    /// Semantics
+    /// ---------
+    /// - `truth_id` is an opaque integer label (typically an asteroid identifier).
+    /// - Two seeds sharing the same `truth_id` are considered to belong to the
+    ///   same physical object.
+    ///
+    /// Usage
+    /// -----
+    /// This map is used exclusively for:
+    /// - labeling candidate edges as true / false,
+    /// - computing evaluation metrics (ROC, PR, recall ceilings),
+    /// - generating frozen datasets for optimization.
+    pub truth: AHashMap<SeedId, Option<i32>>,
+
+    /// Pre-aggregated counts of seeds per truth identifier.
+    ///
+    /// For each `truth_id = t`, this map stores:
+    /// ```
+    /// truth_counts[t] = number of seeds s such that truth[s.seed_id] == Some(t)
+    /// ```
+    ///
+    /// Motivation
+    /// ----------
+    /// This field exists to accelerate evaluation routines that require
+    /// **combinatorial counts**, such as:
+    /// - the number of theoretically possible true edges between two nights,
+    /// - upper bounds on achievable recall.
+    ///
+    /// By caching these counts at construction time, expensive per-call
+    /// recomputation over all seeds is avoided.
+    ///
+    /// Notes
+    /// -----
+    /// - Seeds with `truth = None` are not represented in this map.
+    /// - This field must remain consistent with `truth`; it should be computed
+    ///   once during construction and treated as immutable.
+    pub truth_counts: AHashMap<i32, u64>,
 }
 
 impl fmt::Display for NightSeeds {
@@ -42,8 +150,8 @@ impl fmt::Display for NightSeeds {
             .truth
             .iter()
             .fold((0usize, 0usize), |(t, n), v| match v {
-                Some(_) => (t + 1, n),
-                None => (t, n + 1),
+                (_, Some(_)) => (t + 1, n),
+                (_, None) => (t, n + 1),
             });
 
         write!(
@@ -55,6 +163,110 @@ impl fmt::Display for NightSeeds {
 }
 
 impl NightSeeds {
+    pub fn get_truth(&self, seedid: &SeedId) -> Option<i32> {
+        self.truth.get(seedid).copied().flatten()
+    }
+
+    fn build_truth_counts(truth: &AHashMap<SeedId, Option<i32>>) -> AHashMap<i32, u64> {
+        let mut m = AHashMap::new();
+        for tid in truth.values().copied().flatten() {
+            *m.entry(tid).or_insert(0) += 1;
+        }
+        m
+    }
+
+    /// Compute the number of *theoretically possible* true inter-night edges.
+    ///
+    /// This function counts how many **true edges could exist in principle**
+    /// between the seeds of `self` (left night) and `right` (right night),
+    /// assuming no geometric, temporal, or kinematic gating.
+    ///
+    /// Definition
+    /// ----------
+    /// Two seeds form a *true edge* if they share the same truth identifier
+    /// (`truth_id`). For a given `truth_id = t`:
+    ///
+    /// ```text
+    /// possible_true_edges(t) = n_left(t) × n_right(t)
+    /// ```
+    ///
+    /// where:
+    /// - `n_left(t)`  is the number of seeds in `self` associated with `t`,
+    /// - `n_right(t)` is the number of seeds in `right` associated with `t`.
+    ///
+    /// The total number of possible true edges is the sum over all shared
+    /// truth identifiers:
+    ///
+    /// ```text
+    /// Σ_t n_left(t) × n_right(t)
+    /// ```
+    ///
+    /// Purpose
+    /// -------
+    /// This quantity represents an **upper bound on recall** for any inter-night
+    /// linking or scoring configuration:
+    /// - if a pipeline recovers `N_true` edges,
+    /// - the maximum achievable recall is `N_true / nb_true_possible_edges`.
+    ///
+    /// It is therefore used exclusively for:
+    /// - evaluation and benchmarking,
+    /// - diagnostic reporting,
+    /// - calibration of gates and scores.
+    ///
+    /// Performance
+    /// -----------
+    /// - Runs in `O(min(U_left, U_right))`, where `U_*` is the number of distinct
+    ///   truth identifiers present in each night.
+    /// - Uses pre-aggregated [`truth_counts`] to avoid scanning individual seeds.
+    /// - Iterates over the smaller map to minimize hash lookups.
+    ///
+    /// Notes
+    /// -----
+    /// - Seeds with `truth = None` are ignored by construction.
+    /// - This function performs **no allocation**.
+    /// - The result depends only on truth labels and is independent of
+    ///   spatial or temporal constraints.
+    ///
+    /// Parameters
+    /// ----------
+    /// right : &NightSeeds
+    ///     The seed container of the later night.
+    ///
+    /// Returns
+    /// -------
+    /// u64
+    ///     The total number of theoretically possible true edges between the two nights.
+    ///
+    /// See also
+    /// --------
+    /// - [`truth_counts`] – cached per-night counts of seeds per truth identifier.
+    /// - [`EdgeSeparationMetrics::n_true_possible`] – usage in evaluation summaries.
+    pub fn nb_true_possible_edges(&self, right: &NightSeeds) -> u64 {
+        // Iterate over the smaller truth-count map to reduce the number
+        // of hash lookups and improve cache locality.
+        if self.truth_counts.len() <= right.truth_counts.len() {
+            // For each truth_id present in the left night:
+            // - retrieve how many seeds share the same truth_id in the right night,
+            // - add the Cartesian product cl × cr to the total.
+            self.truth_counts
+                .iter()
+                .map(|(tid, &cl)| {
+                    // If the truth_id does not exist in the right night,
+                    // there are zero possible true edges for this id.
+                    right.truth_counts.get(tid).map_or(0, |&cr| cl * cr)
+                })
+                .sum()
+        } else {
+            // Symmetric case: iterate over the right night if it has fewer
+            // distinct truth identifiers.
+            right
+                .truth_counts
+                .iter()
+                .map(|(tid, &cr)| self.truth_counts.get(tid).map_or(0, |&cl| cl * cr))
+                .sum()
+        }
+    }
+
     /// Generate seeds for a single night from its alert store.
     ///
     /// Parameters
@@ -106,9 +318,19 @@ impl NightSeeds {
         // very important for edge generation as it suppose a time ordering
         seeds.sort_by(|a, b| a.plane.epoch_mid.total_cmp(&b.plane.epoch_mid));
 
-        let truth: Vec<Option<i32>> = seeds.iter().map(|s| store.seed_truth_id(s)).collect();
+        let truth: AHashMap<SeedId, Option<i32>> = seeds
+            .iter()
+            .map(|s| (s.seed_id, store.seed_truth_id(s)))
+            .collect();
 
-        Ok(NightSeeds { nid, seeds, truth })
+        let truth_counts = NightSeeds::build_truth_counts(&truth);
+
+        Ok(NightSeeds {
+            nid,
+            seeds,
+            truth,
+            truth_counts,
+        })
     }
 
     /// Build `NightSeeds` for one night.
@@ -142,7 +364,7 @@ impl NightSeeds {
 
         // Build all true seeds (consecutive pairs + optional triplets).
         let mut seeds: Vec<SeedNode> = Vec::new();
-        let mut truth: Vec<Option<i32>> = Vec::new();
+        let mut truth: AHashMap<SeedId, Option<i32>> = AHashMap::new();
 
         for (tid, alerts) in by_traj.iter() {
             if alerts.len() >= 2 {
@@ -154,7 +376,7 @@ impl NightSeeds {
                         SeedNode::from_pair(sid, nid, w[0], w[1], max_speed_rad_per_day)
                     {
                         seeds.push(node);
-                        truth.push(Some(*tid));
+                        truth.insert(sid, Some(*tid));
                     }
                 }
             }
@@ -166,7 +388,7 @@ impl NightSeeds {
 
                     let node = SeedNode::from_triplet(sid, nid, w[0], w[1], w[2]);
                     seeds.push(node);
-                    truth.push(Some(*tid));
+                    truth.insert(sid, Some(*tid));
                 }
             }
         }
@@ -213,7 +435,7 @@ impl NightSeeds {
 
                 if let Some(node) = SeedNode::from_pair(sid, nid, a, b, max_speed_rad_per_day) {
                     seeds.push(node);
-                    truth.push(None);
+                    truth.insert(sid, None);
                     n_false_added += 1;
                 }
             } else {
@@ -238,12 +460,19 @@ impl NightSeeds {
 
                 let node = SeedNode::from_triplet(sid, nid, trip[0], trip[1], trip[2]);
                 seeds.push(node);
-                truth.push(None);
+                truth.insert(sid, None);
                 n_false_added += 1;
             }
         }
 
-        NightSeeds { nid, seeds, truth }
+        let truth_counts = NightSeeds::build_truth_counts(&truth);
+
+        NightSeeds {
+            nid,
+            seeds,
+            truth,
+            truth_counts,
+        }
     }
 
     /// Get all true seeds in this night.
@@ -255,8 +484,13 @@ impl NightSeeds {
     pub fn get_true_seeds(&self) -> Vec<&SeedNode> {
         self.seeds
             .iter()
-            .zip(self.truth.iter())
-            .filter_map(|(s, t)| if t.is_some() { Some(s) } else { None })
+            .filter_map(|s| {
+                if self.truth.get(&s.seed_id).is_some() {
+                    Some(s)
+                } else {
+                    None
+                }
+            })
             .collect()
     }
 }
@@ -296,8 +530,8 @@ impl fmt::Display for SeedStore {
 
         for (_, ns) in nights.iter() {
             total_seeds += ns.seeds.len();
-            for (seed, truth) in ns.seeds.iter().zip(ns.truth.iter()) {
-                if truth.is_some() {
+            for seed in ns.seeds.iter() {
+                if ns.truth.get(&seed.seed_id).is_some() {
                     total_true += 1;
                 } else {
                     total_false += 1;
@@ -326,7 +560,7 @@ impl fmt::Display for SeedStore {
 
             for (nid, ns) in nights {
                 let n = ns.seeds.len();
-                let n_true = ns.truth.iter().filter(|t| t.is_some()).count();
+                let n_true = ns.truth.iter().filter(|(_, t)| t.is_some()).count();
                 let n_false = n - n_true;
                 let n_pairs = ns.seeds.iter().filter(|s| s.n_obs == 2).count();
                 let n_triplets = ns.seeds.iter().filter(|s| s.n_obs == 3).count();
@@ -461,7 +695,7 @@ impl SeedStore {
         self.inner
             .values()
             .flat_map(|ns| ns.truth.iter())
-            .filter(|t| t.is_some())
+            .filter(|(_, t)| t.is_some())
             .count()
     }
 
@@ -469,7 +703,7 @@ impl SeedStore {
         self.inner
             .values()
             .flat_map(|ns| ns.truth.iter())
-            .filter(|t| t.is_none())
+            .filter(|(_, t)| t.is_none())
             .count()
     }
 
@@ -478,7 +712,7 @@ impl SeedStore {
         self.inner.iter().flat_map(|(&nid, ns)| {
             ns.seeds
                 .iter()
-                .zip(ns.truth.iter())
+                .filter_map(|s| ns.truth.get(&s.seed_id).map(|t| (s, t)))
                 .map(move |(s, t)| (nid, s, *t))
         })
     }
@@ -528,13 +762,13 @@ impl SeedStore {
     /// * Nights that do not exist in the store for a given `(n, n+delta)` are skipped.
     /// * Complexity can be large: per delta, this is O(|S_n| × |S_{n+delta}|) scoring.
     pub fn labeled_edges_by_delta(
-        &self,
+        &'_ self,
         cfg: &ScoreConfig,
         horizon: u32,
         balance_per_delta: bool,
         max_edges_per_class: Option<usize>,
         seed: Option<u64>,
-    ) -> LabeledEdgesByDelta {
+    ) -> LabeledEdgesByDelta<'_> {
         let mut out: LabeledEdgesByDelta = HashMap::new();
 
         // Deterministic iteration order.
@@ -658,27 +892,29 @@ impl SeedStore {
     }
 }
 
-fn push_true_edges_only(
-    src: &NightSeeds,
-    dst: &NightSeeds,
+fn push_true_edges_only<'a>(
+    src: &'a NightSeeds,
+    dst: &'a NightSeeds,
     cfg: &ScoreConfig,
     delta: u32,
-    edges_true: &mut Vec<LabeledEdge>,
+    edges_true: &mut Vec<LabeledEdge<'a>>,
 ) {
     // Group seeds by trajectory id (only Some(tid))
-    let mut src_by_tid: HashMap<i32, Vec<&SeedNode>> = HashMap::new();
-    for (s, t) in src.seeds.iter().zip(src.truth.iter()) {
-        if let Some(tid) = t {
-            src_by_tid.entry(*tid).or_default().push(s);
+    let mut src_by_tid: HashMap<i32, Vec<&'a SeedNode>> = HashMap::new();
+    for (s, (_, truth)) in src.seeds.iter().zip(src.truth.iter()) {
+        if let Some(truth) = truth {
+            src_by_tid.entry(*truth).or_default().push(s);
         }
     }
 
-    let mut dst_by_tid: HashMap<i32, Vec<&SeedNode>> = HashMap::new();
-    for (s, t) in dst.seeds.iter().zip(dst.truth.iter()) {
-        if let Some(tid) = t {
-            dst_by_tid.entry(*tid).or_default().push(s);
+    let mut dst_by_tid: HashMap<i32, Vec<&'a SeedNode>> = HashMap::new();
+    for (s, (_, truth)) in dst.seeds.iter().zip(dst.truth.iter()) {
+        if let Some(truth) = truth {
+            dst_by_tid.entry(*truth).or_default().push(s);
         }
     }
+
+    let mut edge_id = 0u64; // dummy, will be overwritten
 
     // Only score matching tid groups
     for (tid, src_list) in src_by_tid.iter() {
@@ -691,34 +927,36 @@ fn push_true_edges_only(
                 let Some(edge) = ScoredEdge::score(i, j, cfg, delta) else {
                     continue;
                 };
+                let edge = Edge::new(EdgeId(edge_id), i, j, edge.cost, edge.dt_days);
+                edge_id += 1;
                 edges_true.push(LabeledEdge { same: true, edge });
             }
         }
     }
 }
 
-fn sample_false_edges(
-    src: &NightSeeds,
-    dst: &NightSeeds,
+fn sample_false_edges<'a>(
+    src: &'a NightSeeds,
+    dst: &'a NightSeeds,
     cfg: &ScoreConfig,
     delta: u32,
     target_false: usize,
     rng: &mut StdRng,
-    edges_false: &mut Vec<LabeledEdge>,
+    edges_false: &mut Vec<LabeledEdge<'a>>,
 ) {
     // Build pools restricted to Some(tid) to ensure “different asteroid”.
-    let src_pool: Vec<(&SeedNode, i32)> = src
+    let src_pool: Vec<(&'a SeedNode, i32)> = src
         .seeds
         .iter()
         .zip(src.truth.iter())
-        .filter_map(|(s, t)| t.map(|tid| (s, tid)))
+        .filter_map(|(s, (_, truth))| truth.map(|tid| (s, tid)))
         .collect();
 
-    let dst_pool: Vec<(&SeedNode, i32)> = dst
+    let dst_pool: Vec<(&'a SeedNode, i32)> = dst
         .seeds
         .iter()
         .zip(dst.truth.iter())
-        .filter_map(|(s, t)| t.map(|tid| (s, tid)))
+        .filter_map(|(s, (_, truth))| truth.map(|tid| (s, tid)))
         .collect();
 
     if src_pool.is_empty() || dst_pool.is_empty() || target_false == 0 {
@@ -731,6 +969,8 @@ fn sample_false_edges(
     // Rejection sampling: scoring may gate out many candidates.
     // Keep this bounded.
     let max_attempts = (target_false.saturating_mul(50)).max(10_000);
+
+    let mut edge_id = 0u64; // dummy, will be overwritten
 
     while accepted < target_false && attempts < max_attempts {
         attempts += 1;
@@ -746,6 +986,8 @@ fn sample_false_edges(
             continue;
         };
 
+        let edge = Edge::new(EdgeId(edge_id), i, j, edge.cost, edge.dt_days);
+        edge_id += 1;
         edges_false.push(LabeledEdge { same: false, edge });
         accepted += 1;
     }
@@ -774,18 +1016,30 @@ fn downsample_in_place<T>(v: &mut Vec<T>, k: usize, rng: &mut StdRng) {
 /// -----
 /// `same=true` means both endpoints have a truth id and they match.
 #[derive(Clone, Debug)]
-pub struct LabeledEdge {
+pub struct LabeledEdge<'a> {
     pub same: bool,
-    pub edge: ScoredEdge,
+    pub edge: Edge<'a>,
+}
+
+impl<'a> LabeledEdge<'a> {
+    pub fn from_edge(edge: Edge<'a>, left: &NightSeeds, right: &NightSeeds) -> Self {
+        let same = match (
+            left.get_truth(&edge.from.seed_id),
+            right.get_truth(&edge.to.seed_id),
+        ) {
+            (Some(tid1), Some(tid2)) => tid1 == tid2,
+            _ => false,
+        };
+        Self { same, edge }
+    }
 }
 
 /// Buckets of labeled edges by night separation `delta` (1..=horizon).
-pub type LabeledEdgesByDelta = HashMap<u32, Vec<LabeledEdge>>;
+pub type LabeledEdgesByDelta<'a> = HashMap<u32, Vec<LabeledEdge<'a>>>;
 
 /// Display-friendly wrapper around `LabeledEdgesByDelta`.
 #[derive(Debug, Clone)]
-pub struct LabeledEdgesByDeltaDisplay<'a>(pub &'a LabeledEdgesByDelta);
-
+pub struct LabeledEdgesByDeltaDisplay<'a>(pub &'a LabeledEdgesByDelta<'a>);
 impl<'a> fmt::Display for LabeledEdgesByDeltaDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let map = self.0;
@@ -910,4 +1164,158 @@ impl<'a> fmt::Display for LabeledEdgesByDeltaDisplay<'a> {
 fn minmax_update(minv: &mut f64, maxv: &mut f64, x: f64) {
     *minv = (*minv).min(x);
     *maxv = (*maxv).max(x);
+}
+
+#[cfg(test)]
+mod night_seeds_tests {
+    use super::*;
+    use ahash::AHashMap;
+    use prop_test::prelude::{Strategy, prop, prop_assert_eq, proptest};
+
+    /// Build a minimal `NightSeeds` suitable for testing `nb_true_possible_edges`.
+    ///
+    /// The function under test only depends on `truth_counts`, so we can keep
+    /// `seeds` and `truth` empty.
+    fn mk_night_with_counts(nid: u32, counts: &[(i32, u64)]) -> NightSeeds {
+        let mut truth_counts: AHashMap<i32, u64> = AHashMap::new();
+        for &(tid, c) in counts {
+            truth_counts.insert(tid, c);
+        }
+        NightSeeds {
+            nid: NightId::new(nid),
+            seeds: Vec::new(),
+            truth: AHashMap::new(),
+            truth_counts,
+        }
+    }
+
+    /// Slow but obviously-correct reference implementation.
+    fn expected_nb_true_possible_edges(
+        left: &AHashMap<i32, u64>,
+        right: &AHashMap<i32, u64>,
+    ) -> u64 {
+        let mut total = 0u64;
+        for (tid, &cl) in left.iter() {
+            if let Some(&cr) = right.get(tid) {
+                total = total.saturating_add(cl.saturating_mul(cr));
+            }
+        }
+        total
+    }
+
+    #[test]
+    fn nb_true_possible_edges_empty_both_is_zero() {
+        let left = mk_night_with_counts(1, &[]);
+        let right = mk_night_with_counts(2, &[]);
+        assert_eq!(left.nb_true_possible_edges(&right), 0);
+    }
+
+    #[test]
+    fn nb_true_possible_edges_disjoint_truth_ids_is_zero() {
+        let left = mk_night_with_counts(1, &[(10, 3), (11, 2)]);
+        let right = mk_night_with_counts(2, &[(20, 7), (21, 1)]);
+        assert_eq!(left.nb_true_possible_edges(&right), 0);
+    }
+
+    #[test]
+    fn nb_true_possible_edges_single_overlap_matches_product() {
+        let left = mk_night_with_counts(1, &[(42, 3)]);
+        let right = mk_night_with_counts(2, &[(42, 5)]);
+        assert_eq!(left.nb_true_possible_edges(&right), 15);
+    }
+
+    #[test]
+    fn nb_true_possible_edges_multiple_overlaps_sum_of_products() {
+        // Overlap on {1, 3}; disjoint on {2} and {4}
+        let left = mk_night_with_counts(1, &[(1, 2), (2, 10), (3, 4)]);
+        let right = mk_night_with_counts(2, &[(1, 7), (3, 1), (4, 99)]);
+        // expected: 2*7 + 4*1 = 18
+        assert_eq!(left.nb_true_possible_edges(&right), 18);
+    }
+
+    #[test]
+    fn nb_true_possible_edges_is_symmetric() {
+        let left = mk_night_with_counts(1, &[(1, 2), (2, 3), (3, 4)]);
+        let right = mk_night_with_counts(2, &[(2, 10), (3, 1)]);
+        assert_eq!(
+            left.nb_true_possible_edges(&right),
+            right.nb_true_possible_edges(&left)
+        );
+    }
+
+    #[test]
+    fn nb_true_possible_edges_same_inputs_equals_sum_of_squares() {
+        let left = mk_night_with_counts(1, &[(5, 2), (7, 3)]);
+        // expected: 2*2 + 3*3 = 13
+        assert_eq!(left.nb_true_possible_edges(&left), 13);
+    }
+
+    // -------------------------
+    // Property-based tests
+    // -------------------------
+
+    /// Strategy: build small maps {truth_id -> count} with bounded values to avoid overflow.
+    fn truth_counts_strategy() -> impl Strategy<Value = AHashMap<i32, u64>> {
+        // Distinct keys, size 0..50, counts 0..2000
+        prop::collection::hash_map(-1000i32..1000i32, 0u64..2000u64, 0..50)
+            .prop_map(|hm| hm.into_iter().collect::<AHashMap<_, _>>())
+    }
+
+    proptest! {
+        #[test]
+        fn prop_matches_reference(left in truth_counts_strategy(), right in truth_counts_strategy()) {
+            let ln = NightSeeds {
+                nid: NightId::new(1),
+                seeds: Vec::new(),
+                truth: AHashMap::new(),
+                truth_counts: left.clone(),
+            };
+            let rn = NightSeeds {
+                nid: NightId::new(2),
+                seeds: Vec::new(),
+                truth: AHashMap::new(),
+                truth_counts: right.clone(),
+            };
+
+            let got = ln.nb_true_possible_edges(&rn);
+            let exp = expected_nb_true_possible_edges(&left, &right);
+            prop_assert_eq!(got, exp);
+        }
+
+        #[test]
+        fn prop_is_symmetric(left in truth_counts_strategy(), right in truth_counts_strategy()) {
+            let ln = NightSeeds {
+                nid: NightId::new(1),
+                seeds: Vec::new(),
+                truth: AHashMap::new(),
+                truth_counts: left,
+            };
+            let rn = NightSeeds {
+                nid: NightId::new(2),
+                seeds: Vec::new(),
+                truth: AHashMap::new(),
+                truth_counts: right,
+            };
+
+            prop_assert_eq!(ln.nb_true_possible_edges(&rn), rn.nb_true_possible_edges(&ln));
+        }
+
+        #[test]
+        fn prop_empty_right_gives_zero(left in truth_counts_strategy()) {
+            let ln = NightSeeds {
+                nid: NightId::new(1),
+                seeds: Vec::new(),
+                truth: AHashMap::new(),
+                truth_counts: left,
+            };
+            let rn = NightSeeds {
+                nid: NightId::new(2),
+                seeds: Vec::new(),
+                truth: AHashMap::new(),
+                truth_counts: AHashMap::new(),
+            };
+
+            prop_assert_eq!(ln.nb_true_possible_edges(&rn), 0);
+        }
+    }
 }

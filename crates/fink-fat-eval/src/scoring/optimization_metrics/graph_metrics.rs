@@ -164,7 +164,7 @@ impl GraphRankingMetrics {
             let is_true_edge = labeled_edge.same;
 
             candidates_by_source
-                .entry(source_seed)
+                .entry(source_seed.seed_id)
                 .or_default()
                 .push((edge_cost, is_true_edge));
         }

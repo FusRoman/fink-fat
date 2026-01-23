@@ -2,6 +2,8 @@ use std::fmt;
 
 use fink_fat_engine::engine_config::EngineConfig;
 use fink_fat_engine::engine_config::score_config::ScoreConfig;
+use fink_fat_engine::graph::edge::Edge;
+use fink_fat_engine::graph::edge_id::EdgeId;
 use rand::Rng;
 use rand::rngs::StdRng;
 
@@ -125,6 +127,7 @@ fn evaluate_cfg_on_frozen_pairs(
 
     let mut accepted_costs: Vec<(f64, bool)> = Vec::with_capacity(frozen_pairs.len());
 
+    let mut edge_id = 0u64;
     for p in frozen_pairs {
         if p.same {
             tot_good += 1
@@ -154,6 +157,9 @@ fn evaluate_cfg_on_frozen_pairs(
                 }
             }
 
+            let edge = Edge::new(EdgeId(edge_id), si, sj, edge.cost, edge.dt_days);
+            edge_id += 1;
+
             edges.push(LabeledEdge { same: p.same, edge });
         }
     }
@@ -172,7 +178,7 @@ fn evaluate_cfg_on_frozen_pairs(
         return None;
     }
 
-    let metrics = EdgeSeparationMetrics::edge_metrics(&edges);
+    let metrics = EdgeSeparationMetrics::edge_metrics(&edges, tot_good);
     Some((metrics, edges.len(), stats))
 }
 

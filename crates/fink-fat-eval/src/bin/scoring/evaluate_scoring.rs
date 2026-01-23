@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 /// Command-line tool to optimize position scoring parameters
 /// using balanced inter-night edge samples.
 //// The tool performs a random search over position scoring parameters,
@@ -7,28 +9,152 @@
 
 /// Example command to run the tool:
 /// ```bash
-/// clear && cargo run \
-///     --release \
-///     -p fink-fat-eval \
-///     --bin optimize-position-params \
+/// clear && cargo run     \
+///     --release     \
+///     -p fink-fat-eval     \
+///     --bin evaluate-scoring \
 ///     ../../test_exp/ztf_dataset_2025.parquet \
-///     --engine-config src/bin/scoring/config_engine.yaml \
-///     --jobs 8 \
-///     --only-truth false \
+///     --engine-config src/bin/scoring/config_engine_best.yaml \
 ///     --mode fink-truth \
-///     --rng-seed 04071997
+///     --max-nights 5 \
+///     --jobs 1 \
+///     --quiet \
+///     --out-dir seed_store
 /// ```
 use anyhow::{Context, Result};
 use camino::Utf8Path;
 use clap::Parser;
-use fink_fat_engine::engine_config::{EngineConfig, load_engine_config_validated};
-use fink_fat_eval::{
-    cli::scoring::{Cli, update_score_config},
-    log, log_section, log_timing,
-    night_seeds::SeedStore,
-    scoring::frozen_pairs::{FrozenPair, compute_fast_objective},
+use fink_fat_engine::{
+    engine_config::{EngineConfig, load_engine_config_validated},
+    graph::{edge::Edge, edge_id::EdgeId},
+    night_id::NightId,
+    spacetime_bucket::{healpix_binner::HealpixBinner, uniform_time_binner::UniformTimeBinner},
 };
+use fink_fat_eval::{
+    bin_utils::resolve_nids,
+    buflog, buflog_timing, buflog2,
+    cli::scoring::{Cli, update_score_config},
+    log, log_section, log_timing, log2,
+    night_seeds::{LabeledEdge, NightSeeds, SeedStore},
+    scoring::{
+        edges_diagnostics::EdgesStatsDisplay,
+        optimization_metrics::{
+            EdgeSeparationMetrics,
+            objective::{
+                LinkingObjectiveConfig, 
+                objective_linking_quality,
+            },
+        },
+    },
+};
+use indicatif::{ProgressBar, ProgressStyle};
 use rayon::ThreadPoolBuilder;
+
+use rayon::prelude::*;
+
+/// Build the list of (left, right, gap) pairs to evaluate.
+///
+/// - `consecutive_window`: evaluates i -> i+1..i+W
+/// - `gap_min..=gap_max`: evaluates i -> i+gap for each gap in the range
+///
+/// Returned `gap` is the number of nights between `left` and `right` (>= 1).
+fn build_night_pairs(
+    nids: &[NightId],
+    consecutive_window: usize,
+    gap_min: usize,
+    gap_max: usize,
+) -> Vec<(NightId, NightId, usize)> {
+    let mut out = Vec::new();
+    if nids.len() < 2 {
+        return out;
+    }
+
+    let w = consecutive_window.max(1);
+
+    // 1) Sliding consecutive window: i -> i+1..i+w
+    for i in 0..nids.len().saturating_sub(1) {
+        for k in 1..=w {
+            let j = i + k;
+            if j >= nids.len() {
+                break;
+            }
+            out.push((nids[i], nids[j], k));
+        }
+    }
+
+    // 2) Explicit gaps: i -> i+gap_min..i+gap_max
+    if gap_min >= 1 && gap_max >= gap_min {
+        for i in 0..nids.len() {
+            for g in gap_min..=gap_max {
+                let j = i + g;
+                if j >= nids.len() {
+                    break;
+                }
+                out.push((nids[i], nids[j], g));
+            }
+        }
+    }
+
+    out
+}
+
+/// Convert resolved i32 night ids into typed NightId.
+fn to_night_ids(nids: Vec<u32>) -> Vec<NightId> {
+    nids.into_iter().map(NightId).collect()
+}
+
+/// Step 1: build the time binner (anchored on `right`) and generate Top-K edges.
+fn step_generate_topk_edges<'a>(
+    logbuf: &mut String,
+    cli: &Cli,
+    left: &'a NightSeeds,
+    right: &'a NightSeeds,
+    engine_cfg: &EngineConfig,
+    spatial_binner: &HealpixBinner,
+) -> (UniformTimeBinner, Vec<Edge<'a>>) {
+    // Build time binner anchored on the right night (stable).
+    let t_timebin = Instant::now();
+    let min_time = right
+        .seeds
+        .iter()
+        .map(|s| s.plane.epoch_mid)
+        .fold(f64::INFINITY, f64::min);
+
+    let time_binner = UniformTimeBinner::new(min_time, 30.0 / 60.0 / 24.0); // 30 minutes
+    buflog_timing!(logbuf, cli, "build time binner", t_timebin.elapsed());
+
+    // Edge generation
+    let t_edges = Instant::now();
+    let edges = Edge::generate_topk_edges(
+        EdgeId(0),
+        &left.seeds,
+        &right.seeds,
+        &engine_cfg.edges,
+        spatial_binner,
+        &time_binner,
+    );
+    buflog_timing!(logbuf, cli, "generate_topk_edges", t_edges.elapsed());
+
+    buflog!(
+        logbuf,
+        cli,
+        "Edges: total={}, active={} (left seeds={}, right seeds={})",
+        edges.len(),
+        edges.iter().filter(|e| e.active).count(),
+        left.seeds.len(),
+        right.seeds.len()
+    );
+
+    // Optional detailed view
+    buflog2!(
+        logbuf,
+        cli,
+        "{}",
+        EdgesStatsDisplay::new(&edges).top_k(20).only_active(false)
+    );
+
+    (time_binner, edges)
+}
 
 fn main() -> Result<()> {
     let t0 = std::time::Instant::now();
@@ -59,60 +185,146 @@ fn main() -> Result<()> {
     log_section!(cli, "Loading data");
 
     let seed_store_path = Utf8Path::new(&cli.scan.out_dir).join("seed_store.bin");
-    let seed_store = SeedStore::read(&seed_store_path)
-        .with_context(|| format!("read seed store from {}", seed_store_path))?;
-
-    let frozen_pair_path = Utf8Path::new(&cli.scan.out_dir).join("frozen_pairs_by_delta.bin");
-    let frozen_pairs = FrozenPair::read(&frozen_pair_path)
-        .with_context(|| format!("read frozen pairs from {}", frozen_pair_path))?;
+    let seed_store = SeedStore::read(&seed_store_path)?;
 
     log!(cli, "Seed store: {seed_store}");
-    log!(cli, "Total frozen pairs loaded: {}", frozen_pairs.len());
     log_timing!(cli, "Time to load data", t0.elapsed());
+
+    log!(&cli, "SeedStore nights: {}", seed_store.len());
+    log2!(&cli, "{seed_store}");
+
+    log_section!(&cli, "Night pair selection");
+
+    let t_resolve = Instant::now();
+    let nids: Vec<u32> = resolve_nids(&cli.scan.parquet, cli.nids.as_deref(), cli.max_nights)?;
+    log_timing!(&cli, "resolve_nids", t_resolve.elapsed());
+    anyhow::ensure!(nids.len() >= 2, "need at least 2 nights to evaluate edges");
+
+    let consecutive_window: usize = 5;
+    let gap_min: usize = 0;
+    let gap_max: usize = 0;
+
+    let t_pairs = Instant::now();
+    let pairs = build_night_pairs(&to_night_ids(nids), consecutive_window, gap_min, gap_max);
+    log_timing!(&cli, "build_night_pairs", t_pairs.elapsed());
+    anyhow::ensure!(!pairs.is_empty(), "no night pairs to evaluate");
+
+    log!(
+        &cli,
+        "Pairs to evaluate: {} (consecutive_window={}, gap=[{},{}])",
+        pairs.len(),
+        consecutive_window,
+        gap_min,
+        gap_max
+    );
+
+    let spatial_binner = HealpixBinner::new(cli.binning.healpix_depth);
+
+    log_section!(&cli, "Evaluation loop");
+
+    let nb_pairs = pairs.len();
+
+    let pb = if cli.quiet {
+        ProgressBar::hidden()
+    } else {
+        let pb = ProgressBar::new(nb_pairs as u64);
+        pb.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta_precise}) {msg}",
+        )
+        .unwrap()
+        .progress_chars("=>-"),
+    );
+        pb.enable_steady_tick(std::time::Duration::from_millis(120));
+        pb.set_message("starting…");
+        pb
+    };
 
     // -------------------------------------------------------------------------
     // Evaluate
     // -------------------------------------------------------------------------
-    log_section!(cli, "Evaluating pairs");
 
-    let t_eval_start = std::time::Instant::now();
+    // 1) Compute in parallel (no stdout).
+    let outs: Vec<Option<EdgeSeparationMetrics>> = pairs
+        .par_iter()
+        .enumerate()
+        .map(
+            |(idx, (left_nid, right_nid, gap))| -> Option<EdgeSeparationMetrics> {
+                let mut logbuf = String::new();
+                pb.set_message(format!("{:?} -> {:?} (gap={})", left_nid, right_nid, gap));
 
-    let eval = FrozenPair::eval_cfg_fast_items(
-        &seed_store,
-        &frozen_pairs,
-        &updated_config.edges.score_config,
-        cli.budget,
-    );
+                buflog!(
+                    &mut logbuf,
+                    &cli,
+                    "[{}/{}] evaluating {:?} -> {:?} (gap={})",
+                    idx + 1,
+                    nb_pairs,
+                    left_nid,
+                    right_nid,
+                    gap
+                );
 
-    let Some((items, stats)) = eval else {
-        anyhow::bail!("no frozen pairs could be evaluated with the provided configuration");
-    };
+                let left = seed_store.get(left_nid).unwrap();
+                let right = seed_store.get(right_nid).unwrap();
 
-    log_timing!(cli, "Time to evaluate frozen pairs", t_eval_start.elapsed());
+                let t_pair = Instant::now();
 
-    // -------------------------------------------------------------------------
-    // Metrics
-    // -------------------------------------------------------------------------
-    log_section!(cli, "Computing metrics");
+                // Step 1: generate top-k edges
+                let (_, edges) = step_generate_topk_edges(
+                    &mut logbuf,
+                    &cli,
+                    left,
+                    right,
+                    &updated_config,
+                    &spatial_binner,
+                );
 
-    let t_metrics_start = std::time::Instant::now();
+                let t_metrics = Instant::now();
+                let labeled_edges: Vec<LabeledEdge> = edges
+                    .clone()
+                    .into_iter()
+                    .map(|e| LabeledEdge::from_edge(e, left, right))
+                    .collect();
 
-    let objective = compute_fast_objective(
-        &items, stats, cli.target_tpr, // target TPR
-        cli.min_accept_good,  // min accept good rate
-        cli.penalty_weight,  // penalty weight
-    );
+                let metrics = EdgeSeparationMetrics::edge_metrics(
+                    &labeled_edges,
+                    left.nb_true_possible_edges(right) as usize,
+                );
 
-    if cli.quiet {
-        // Machine-friendly output (Optuna)
-        println!("{objective}");
-    } else {
-        println!("Objective (FPR@TPR={} + penalties):", cli.target_tpr);
-        println!("{objective}");
-    }
+                buflog_timing!(
+                    logbuf,
+                    cli,
+                    "compute optimization metrics",
+                    t_metrics.elapsed()
+                );
 
-    log_timing!(cli, "Time to compute metrics", t_metrics_start.elapsed());
-    log_timing!(cli, "Total time", t0.elapsed());
+                buflog_timing!(&mut logbuf, &cli, "pair total", t_pair.elapsed());
+
+                // nice separator (buffered)
+                if !cli.quiet {
+                    logbuf.push_str(
+                        "\n ____________________________________________________________\n\n",
+                    );
+                }
+
+                pb.inc(1);
+                metrics
+            },
+        )
+        .collect();
+
+    pb.finish_with_message("evaluation complete");
+
+    // 2) Aggregate results and print to stdout.
+    let agg_metrics = EdgeSeparationMetrics::aggregate(&outs).unwrap();
+
+    log_section!(&cli, "Final aggregated metrics");
+    log!(&cli, "{}", agg_metrics);
+
+    let cfg = LinkingObjectiveConfig::default();
+    let obj = objective_linking_quality(&agg_metrics, cfg);
+
+    println!("{obj}");
 
     Ok(())
 }

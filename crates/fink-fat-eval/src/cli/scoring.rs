@@ -142,6 +142,9 @@ pub struct Cli {
     #[arg(long, value_name = "v_zero", help_heading = "Overrides")]
     pub v_zero: Option<f64>,
 
+    #[arg(long, value_name = "vel_eps_day", help_heading = "Overrides")]
+    pub vel_eps_day: Option<f64>,
+
     #[arg(long, value_name = "w_dir", help_heading = "Overrides")]
     pub w_dir: Option<f64>,
 
@@ -198,6 +201,10 @@ pub fn update_score_config(cli: &Cli, engine_config: &EngineConfig) -> EngineCon
     if let Some(v_zero) = cli.v_zero {
         updated_cfg.edges.score_config.velocity.v0 = v_zero;
     }
+    if let Some(vel_eps_day) = cli.vel_eps_day {
+        updated_cfg.edges.score_config.velocity.vel_eps_days = vel_eps_day;
+    }
+
     if let Some(w_dir) = cli.w_dir {
         updated_cfg.edges.score_config.velocity.w_dir = w_dir;
     }

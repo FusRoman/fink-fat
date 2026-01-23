@@ -5,6 +5,8 @@
 use std::collections::HashMap;
 
 use camino::Utf8Path;
+use fink_fat_engine::graph::edge::Edge;
+use fink_fat_engine::graph::edge_id::EdgeId;
 use fink_fat_engine::{
     engine_config::score_config::ScoreConfig, graph::score::ScoredEdge, night_id::NightId,
 };
@@ -54,15 +56,24 @@ impl FrozenPair {
         ScoredEdge::score(a_seed, b_seed, scoring_cfg, delta_revisit)
     }
 
-    pub fn eval_cfg_on_frozen_pairs(
-        store: &SeedStore,
+    pub fn eval_cfg_on_frozen_pairs<'a>(
+        store: &'a SeedStore,
         frozen: &[Self],
         cfg: &ScoreConfig,
-    ) -> Vec<LabeledEdge> {
-        let mut out: Vec<LabeledEdge> = Vec::with_capacity(frozen.len());
+    ) -> Vec<LabeledEdge<'a>> {
+        let mut out: Vec<LabeledEdge<'a>> = Vec::with_capacity(frozen.len());
 
+        let mut edge_id = 0u64;
         for p in frozen {
             if let Some(edge) = p.compute_score_edge(store, cfg) {
+                let edge = Edge::new(
+                    EdgeId(edge_id), // dummy, will be overwritten
+                    &store.get(&p.a_nid).unwrap().seeds[p.a_idx],
+                    &store.get(&p.b_nid).unwrap().seeds[p.b_idx],
+                    edge.cost,
+                    edge.dt_days,
+                );
+                edge_id += 1;
                 out.push(LabeledEdge {
                     same: p.same,
                     edge: edge,
@@ -200,15 +211,22 @@ impl FrozenPair {
             .enumerate()
             .filter_map(|(i, p)| p.same.then_some(i))
             .collect();
-        let mut pairs: Vec<&FrozenPair> = good_indices.iter().take(n/2).map(|&i| &frozen[i]).collect();
-
+        let mut pairs: Vec<&FrozenPair> = good_indices
+            .iter()
+            .take(n / 2)
+            .map(|&i| &frozen[i])
+            .collect();
 
         let bad_indices: Vec<usize> = frozen
             .iter()
             .enumerate()
             .filter_map(|(i, p)| (!p.same).then_some(i))
             .collect();
-        let bad_pairs: Vec<&FrozenPair> = bad_indices.iter().take(n/2).map(|&i| &frozen[i]).collect();
+        let bad_pairs: Vec<&FrozenPair> = bad_indices
+            .iter()
+            .take(n / 2)
+            .map(|&i| &frozen[i])
+            .collect();
         pairs.extend(bad_pairs);
 
         // Parallel map -> local accumulation -> reduce (no mutex).
@@ -317,16 +335,16 @@ fn push_true_frozen_pairs_only_gated(
 ) {
     // Group src indices by tid
     let mut src_by_tid: HashMap<i32, Vec<usize>> = HashMap::new();
-    for (idx, t) in src.truth.iter().enumerate() {
-        if let Some(tid) = t {
+    for (idx, (_, truth)) in src.truth.iter().enumerate() {
+        if let Some(tid) = truth {
             src_by_tid.entry(*tid).or_default().push(idx);
         }
     }
 
     // Group dst indices by tid
     let mut dst_by_tid: HashMap<i32, Vec<usize>> = HashMap::new();
-    for (idx, t) in dst.truth.iter().enumerate() {
-        if let Some(tid) = t {
+    for (idx, (_, truth)) in dst.truth.iter().enumerate() {
+        if let Some(tid) = truth {
             dst_by_tid.entry(*tid).or_default().push(idx);
         }
     }
@@ -379,14 +397,14 @@ fn sample_false_frozen_pairs_gated(
         .truth
         .iter()
         .enumerate()
-        .filter_map(|(i, t)| t.map(|tid| (i, tid)))
+        .filter_map(|(i, (_, t))| t.map(|tid| (i, tid)))
         .collect();
 
     let dst_pool: Vec<(usize, i32)> = dst
         .truth
         .iter()
         .enumerate()
-        .filter_map(|(j, t)| t.map(|tid| (j, tid)))
+        .filter_map(|(j, (_, t))| t.map(|tid| (j, tid)))
         .collect();
 
     if src_pool.is_empty() || dst_pool.is_empty() {

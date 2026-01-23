@@ -8,7 +8,7 @@ use fink_fat_engine::{
     spacetime_bucket::{spatial_binner::SpatialBinner, time_binner::TimeBinner},
 };
 
-use crate::night_seeds::NightSeeds;
+use crate::{buflog, buflog2, cli::scoring::Cli, night_seeds::NightSeeds};
 
 use fink_fat_engine::{
     astro_math::{l2_norm, radec_to_tangent},
@@ -185,28 +185,13 @@ pub fn edge_truth_counts_between_nights<'a>(
         "right NightSeeds: seeds/truth length mismatch"
     );
 
-    // Map SeedId -> truth_id for fast lookup when scanning edges.
-    let left_truth_by_seed: AHashMap<SeedId, Option<i32>> = left
-        .seeds
-        .iter()
-        .zip(left.truth.iter())
-        .map(|(s, t)| (s.seed_id, *t))
-        .collect();
-
-    let right_truth_by_seed: AHashMap<SeedId, Option<i32>> = right
-        .seeds
-        .iter()
-        .zip(right.truth.iter())
-        .map(|(s, t)| (s.seed_id, *t))
-        .collect();
-
     // Count true/false among produced edges.
     let mut n_true_edges = 0usize;
     let mut n_false_edges = 0usize;
 
     for e in edges {
-        let tl = left_truth_by_seed.get(&e.from.seed_id).copied().flatten();
-        let tr = right_truth_by_seed.get(&e.to.seed_id).copied().flatten();
+        let tl = left.get_truth(&e.from.seed_id);
+        let tr = right.get_truth(&e.to.seed_id);
 
         match (tl, tr) {
             (Some(a), Some(b)) if a == b => n_true_edges += 1,
@@ -214,28 +199,7 @@ pub fn edge_truth_counts_between_nights<'a>(
         }
     }
 
-    // Count how many true edges exist in principle between the nights:
-    // for each truth_id t, all pairs left(t) x right(t) are "true edges".
-    let mut left_counts: AHashMap<i32, usize> = AHashMap::new();
-    for &t in &left.truth {
-        if let Some(tid) = t {
-            *left_counts.entry(tid).or_insert(0) += 1;
-        }
-    }
-
-    let mut right_counts: AHashMap<i32, usize> = AHashMap::new();
-    for &t in &right.truth {
-        if let Some(tid) = t {
-            *right_counts.entry(tid).or_insert(0) += 1;
-        }
-    }
-
-    let mut n_true_edges_possible = 0usize;
-    for (tid, &cl) in &left_counts {
-        if let Some(&cr) = right_counts.get(tid) {
-            n_true_edges_possible += cl * cr;
-        }
-    }
+    let n_true_edges_possible = left.nb_true_possible_edges(right) as usize;
 
     let recall = if n_true_edges_possible > 0 {
         (n_true_edges as f64) / (n_true_edges_possible as f64)
@@ -291,29 +255,17 @@ pub fn edge_truth_diagnostics<'a, B: SpatialBinner, T: TimeBinner>(
         "NightSeeds.right: mismatch seeds/truth lengths"
     );
 
-    let left_truth_by_id: AHashMap<SeedId, Option<i32>> = left
-        .seeds
-        .iter()
-        .zip(left.truth.iter())
-        .map(|(s, t)| (s.seed_id, *t))
-        .collect();
-
-    let right_truth_by_id: AHashMap<SeedId, Option<i32>> = right
-        .seeds
-        .iter()
-        .zip(right.truth.iter())
-        .map(|(s, t)| (s.seed_id, *t))
-        .collect();
-
     let mut true_edges_generated = 0usize;
     let mut false_edges_generated = 0usize;
 
     // Compute the revisit separation (Δ nights), enforced to be ≥ 1.
     let delta_revisit: u32 = right.nid.0.saturating_sub(left.nid.0).max(1);
 
+    let right_index = SeedSpatialIndex::build(&right.seeds, spatial_binner, time_binner);
+
     for e in edges {
-        let tl = left_truth_by_id.get(&e.from.seed_id).copied().flatten();
-        let tr = right_truth_by_id.get(&e.to.seed_id).copied().flatten();
+        let tl = left.get_truth(&e.from.seed_id);
+        let tr = right.get_truth(&e.to.seed_id);
 
         match (tl, tr) {
             (Some(a), Some(b)) if a == b => true_edges_generated += 1,
@@ -322,15 +274,15 @@ pub fn edge_truth_diagnostics<'a, B: SpatialBinner, T: TimeBinner>(
     }
 
     let mut left_counts: AHashMap<i32, usize> = AHashMap::new();
-    for &t in &left.truth {
-        if let Some(tid) = t {
-            *left_counts.entry(tid).or_insert(0) += 1;
+    for (_, truth) in &left.truth {
+        if let Some(tid) = truth {
+            *left_counts.entry(*tid).or_insert(0) += 1;
         }
     }
     let mut right_counts: AHashMap<i32, usize> = AHashMap::new();
-    for &t in &right.truth {
-        if let Some(tid) = t {
-            *right_counts.entry(tid).or_insert(0) += 1;
+    for (_, truth) in &right.truth {
+        if let Some(tid) = truth {
+            *right_counts.entry(*tid).or_insert(0) += 1;
         }
     }
     let mut true_edges_possible = 0usize;
@@ -344,20 +296,15 @@ pub fn edge_truth_diagnostics<'a, B: SpatialBinner, T: TimeBinner>(
     let mut true_edges_missed_top_k = 0usize;
 
     for src in &left.seeds {
-        let src_truth = left_truth_by_id.get(&src.seed_id).copied().flatten();
+        let src_truth = left.get_truth(&src.seed_id);
 
         if src_truth.is_none() {
             continue;
         }
         let tid = src_truth.unwrap();
 
-        let mut scored = src.score_edge_candidates(
-            &right.seeds,
-            spatial_binner,
-            time_binner,
-            config,
-            delta_revisit,
-        );
+        let mut scored =
+            src.score_edge_candidates(&right.seeds, &right_index, config, delta_revisit);
 
         let k = top_k.min(scored.len());
         if k > 0 {
@@ -367,14 +314,8 @@ pub fn edge_truth_diagnostics<'a, B: SpatialBinner, T: TimeBinner>(
         }
 
         let mut true_scored: Vec<SeedId> = Vec::new();
-        for se in src.score_edge_candidates(
-            &right.seeds,
-            spatial_binner,
-            time_binner,
-            config,
-            delta_revisit,
-        ) {
-            if let Some(truth_r) = right_truth_by_id.get(&se.to).and_then(|&t| t) {
+        for se in src.score_edge_candidates(&right.seeds, &right_index, config, delta_revisit) {
+            if let Some(truth_r) = right.get_truth(&se.to) {
                 if truth_r == tid {
                     true_scored.push(se.to);
                 }
@@ -383,7 +324,7 @@ pub fn edge_truth_diagnostics<'a, B: SpatialBinner, T: TimeBinner>(
 
         let mut true_in_top: Vec<SeedId> = Vec::new();
         for se in scored {
-            if let Some(truth_r) = right_truth_by_id.get(&se.to).and_then(|&t| t) {
+            if let Some(truth_r) = right.get_truth(&se.to) {
                 if truth_r == tid {
                     true_in_top.push(se.to);
                 }
@@ -436,27 +377,6 @@ pub struct MissedTrueEdge {
     pub scorer_reject: Option<ScoreRejectDetail>,
 }
 
-fn build_truth_maps(
-    left: &NightSeeds,
-    right: &NightSeeds,
-) -> (AHashMap<SeedId, Option<i32>>, AHashMap<SeedId, Option<i32>>) {
-    let left_truth: AHashMap<SeedId, Option<i32>> = left
-        .seeds
-        .iter()
-        .zip(left.truth.iter())
-        .map(|(s, t)| (s.seed_id, *t))
-        .collect();
-
-    let right_truth: AHashMap<SeedId, Option<i32>> = right
-        .seeds
-        .iter()
-        .zip(right.truth.iter())
-        .map(|(s, t)| (s.seed_id, *t))
-        .collect();
-
-    (left_truth, right_truth)
-}
-
 fn oracle_true_pairs(
     left: &NightSeeds,
     right: &NightSeeds,
@@ -485,10 +405,6 @@ fn oracle_true_pairs(
     pairs
 }
 
-fn hits_from_scored_edges(scored: &[ScoredEdge]) -> AHashSet<(SeedId, SeedId)> {
-    scored.iter().map(|se| (se.from, se.to)).collect()
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ScoreRejectKind {
     // Position gate
@@ -498,8 +414,6 @@ pub enum ScoreRejectKind {
     // Velocity gate / numeric issues
     VelEpsInvalid,
     VelPredictNonFinite,
-    VelCosNonFinite,
-    VelDirGate,
     VelDvNonFinite,
     VelSpeedGate,
 }
@@ -513,8 +427,6 @@ pub struct ScoreRejectDetail {
     pub max_d2: f64,
 
     pub eps_days: f64,
-    pub cosang: f64,
-    pub cos_min: f64,
 
     pub dv: f64,
     pub max_speed_diff: f64,
@@ -541,8 +453,6 @@ fn explain_score_reject(
                     d2_pos,
                     max_d2: cfg.position.max_d2,
                     eps_days: f64::NAN,
-                    cosang: f64::NAN,
-                    cos_min: f64::NAN,
                     dv: f64::NAN,
                     max_speed_diff: cfg.velocity.max_speed_diff,
                 });
@@ -553,8 +463,6 @@ fn explain_score_reject(
                     d2_pos,
                     max_d2: cfg.position.max_d2,
                     eps_days: f64::NAN,
-                    cosang: f64::NAN,
-                    cos_min: f64::NAN,
                     dv: f64::NAN,
                     max_speed_diff: cfg.velocity.max_speed_diff,
                 });
@@ -615,8 +523,6 @@ fn compute_position_term_mirror(
             d2_pos,
             max_d2: cfg.max_d2,
             eps_days: f64::NAN,
-            cosang: f64::NAN,
-            cos_min: f64::NAN,
             dv: f64::NAN,
             max_speed_diff: f64::NAN,
         });
@@ -627,8 +533,6 @@ fn compute_position_term_mirror(
             d2_pos,
             max_d2: cfg.max_d2,
             eps_days: f64::NAN,
-            cosang: f64::NAN,
-            cos_min: f64::NAN,
             dv: f64::NAN,
             max_speed_diff: f64::NAN,
         });
@@ -663,8 +567,6 @@ fn compute_velocity_terms_mirror(
             d2_pos: f64::NAN,
             max_d2: f64::NAN,
             eps_days: eps,
-            cosang: f64::NAN,
-            cos_min: cfg.cos_max_theta(),
             dv: f64::NAN,
             max_speed_diff: cfg.max_speed_diff,
         });
@@ -679,8 +581,6 @@ fn compute_velocity_terms_mirror(
             d2_pos: f64::NAN,
             max_d2: f64::NAN,
             eps_days: eps,
-            cosang: f64::NAN,
-            cos_min: cfg.cos_max_theta(),
             dv: f64::NAN,
             max_speed_diff: cfg.max_speed_diff,
         });
@@ -698,8 +598,6 @@ fn compute_velocity_terms_mirror(
             d2_pos: f64::NAN,
             max_d2: f64::NAN,
             eps_days: eps,
-            cosang: f64::NAN,
-            cos_min: cfg.cos_max_theta(),
             dv: f64::NAN,
             max_speed_diff: cfg.max_speed_diff,
         });
@@ -719,37 +617,6 @@ fn compute_velocity_terms_mirror(
         return Ok(());
     }
 
-    let inv_norms = 1.0 / (norm_vi * norm_vj);
-    let cosang = ((vi[0] * vj[0] + vi[1] * vj[1]) * inv_norms).clamp(-1.0, 1.0);
-
-    if !cosang.is_finite() {
-        return Err(ScoreRejectDetail {
-            kind: ScoreRejectKind::VelCosNonFinite,
-            d2_pos: f64::NAN,
-            max_d2: f64::NAN,
-            eps_days: eps,
-            cosang,
-            cos_min: cfg.cos_max_theta(),
-            dv: f64::NAN,
-            max_speed_diff: cfg.max_speed_diff,
-        });
-    }
-
-    // Direction gate
-    let cos_min = cfg.cos_max_theta();
-    if cosang < cos_min {
-        return Err(ScoreRejectDetail {
-            kind: ScoreRejectKind::VelDirGate,
-            d2_pos: f64::NAN,
-            max_d2: f64::NAN,
-            eps_days: eps,
-            cosang,
-            cos_min,
-            dv: f64::NAN,
-            max_speed_diff: cfg.max_speed_diff,
-        });
-    }
-
     // Speed gate
     let dv = (norm_vi - norm_vj).abs();
     if !dv.is_finite() {
@@ -758,8 +625,6 @@ fn compute_velocity_terms_mirror(
             d2_pos: f64::NAN,
             max_d2: f64::NAN,
             eps_days: eps,
-            cosang,
-            cos_min,
             dv,
             max_speed_diff: cfg.max_speed_diff,
         });
@@ -770,8 +635,6 @@ fn compute_velocity_terms_mirror(
             d2_pos: f64::NAN,
             max_d2: f64::NAN,
             eps_days: eps,
-            cosang,
-            cos_min,
             dv,
             max_speed_diff: cfg.max_speed_diff,
         });
@@ -788,10 +651,8 @@ pub fn diagnose_missed_true_edges<B: SpatialBinner, T: TimeBinner>(
     time_binner: &T,
     delta_revisit: u32,
 ) -> (AHashMap<MissReason, usize>, Vec<MissedTrueEdge>) {
-    let (left_truth, right_truth) = build_truth_maps(left, right);
-
     // Toutes les arêtes vraies oracle (potentielles)
-    let oracle = oracle_true_pairs(left, right, &left_truth, &right_truth);
+    let oracle = oracle_true_pairs(left, right, &left.truth, &right.truth);
 
     // Pour savoir si une arête vraie est déjà produite, on la recalcule au même niveau que top-k:
     // => on génère tous les scored edges via score_edge_candidates pour chaque seed gauche,
@@ -800,14 +661,12 @@ pub fn diagnose_missed_true_edges<B: SpatialBinner, T: TimeBinner>(
     // Ici, on veut juste savoir "miss préfiltrage" => si elle n'est même pas scorée candidate.
     // On construit un ensemble des couples (from,to) effectivement scorés-candidats (avant top-k).
     let mut scored_candidates: AHashSet<(SeedId, SeedId)> = AHashSet::new();
+
+    let right_index = SeedSpatialIndex::build(&right.seeds, spatial_binner, time_binner);
+
     for src in &left.seeds {
-        let scored = src.score_edge_candidates(
-            &right.seeds,
-            spatial_binner,
-            time_binner,
-            edge_config,
-            delta_revisit,
-        );
+        let scored =
+            src.score_edge_candidates(&right.seeds, &right_index, edge_config, delta_revisit);
         scored_candidates.extend(scored.iter().map(|se| (se.from, se.to)));
     }
 
@@ -921,7 +780,6 @@ pub fn diagnose_missed_true_edges<B: SpatialBinner, T: TimeBinner>(
         }
 
         // Build bin-local spatial index and do cone query (exactly like algo)
-        let index_bin = SeedSpatialIndex::build(&right.seeds[lo..hi], spatial_binner);
 
         let t_center = 0.5 * (t0 + t1);
         let v = src.plane.vel_xy;
@@ -933,7 +791,7 @@ pub fn diagnose_missed_true_edges<B: SpatialBinner, T: TimeBinner>(
         r_c += speed_eff * dt_half;
 
         let mut was_spatial_candidate = false;
-        for cand in index_bin.cone_query(spatial_binner, ra_c, dec_c, r_c) {
+        for cand in right_index.cone_query(ra_c, dec_c, r_c, t_center) {
             if cand.seed_id == to {
                 was_spatial_candidate = true;
                 // It was returned by spatial query; check scorer.
@@ -1002,22 +860,43 @@ pub fn diagnose_missed_true_edges<B: SpatialBinner, T: TimeBinner>(
 }
 
 pub fn print_miss_report(
+    logbuf: &mut String,
+    cli: &Cli,
     counts: &AHashMap<MissReason, usize>,
     details: &[MissedTrueEdge],
     max_show: usize,
 ) {
     let n = details.len();
-    println!("Miss report (true edges missed by prefilter): n={}", n);
+    buflog!(
+        logbuf,
+        cli,
+        "Miss report (true edges missed by prefilter): n={}",
+        n
+    );
 
     let get = |r| counts.get(&r).copied().unwrap_or(0);
-    println!("  NotInTimeBin     : {}", get(MissReason::NotInTimeBin));
-    println!("  NotInSpatialCone : {}", get(MissReason::NotInSpatialCone));
-    println!("  RejectedByScorer : {}", get(MissReason::RejectedByScorer));
+    buflog!(
+        logbuf,
+        cli,
+        "  NotInTimeBin     : {}",
+        get(MissReason::NotInTimeBin)
+    );
+    buflog!(
+        logbuf,
+        cli,
+        "  NotInSpatialCone : {}",
+        get(MissReason::NotInSpatialCone)
+    );
+    buflog!(
+        logbuf,
+        cli,
+        "  RejectedByScorer : {}",
+        get(MissReason::RejectedByScorer)
+    );
 
     // -------------------------------------------------------------------------
     // Breakdown for scorer rejections
     // -------------------------------------------------------------------------
-    let mut n_rej_with_detail: usize = 0;
     let mut n_rej_without_detail: usize = 0;
 
     // Use BTreeMap for stable, deterministic print order.
@@ -1029,7 +908,6 @@ pub fn print_miss_report(
         .filter(|m| m.reason == MissReason::RejectedByScorer)
     {
         if let Some(r) = m.scorer_reject {
-            n_rej_with_detail += 1;
             *by_kind.entry(r.kind).or_insert(0) += 1;
         } else {
             n_rej_without_detail += 1;
@@ -1037,17 +915,19 @@ pub fn print_miss_report(
     }
 
     if get(MissReason::RejectedByScorer) > 0 {
-        println!("  RejectedByScorer breakdown:");
+        buflog!(logbuf, cli, "  RejectedByScorer breakdown:");
         if !by_kind.is_empty() {
             for (k, v) in &by_kind {
-                println!("    {:?}: {}", k, v);
+                buflog!(logbuf, cli, "    {:?}: {}", k, v);
             }
         } else {
-            println!("    (no detailed reasons collected)");
+            buflog!(logbuf, cli, "    (no detailed reasons collected)");
         }
 
         if n_rej_without_detail > 0 {
-            println!(
+            buflog!(
+                logbuf,
+                cli,
                 "    note: {} scorer rejections had no ScoreRejectDetail attached",
                 n_rej_without_detail
             );
@@ -1055,13 +935,12 @@ pub fn print_miss_report(
     }
 
     // -------------------------------------------------------------------------
-    // Show a small sample (first `max_show`)
+    // Show a small sample (first `max_show`) -- keep this at -vv
     // -------------------------------------------------------------------------
     for (i, m) in details.iter().take(max_show).enumerate() {
         match m.reason {
             MissReason::RejectedByScorer => {
                 if let Some(r) = m.scorer_reject {
-                    // Print extra numeric context depending on rejection kind
                     let extra = match r.kind {
                         ScoreRejectKind::PosNonFinite => {
                             format!("d2_pos={:.6} (non-finite) max_d2={:.6}", r.d2_pos, r.max_d2)
@@ -1076,14 +955,6 @@ pub fn print_miss_report(
                             "predict_radec/projection produced non-finite values (eps={:.6})",
                             r.eps_days
                         ),
-                        ScoreRejectKind::VelCosNonFinite => format!(
-                            "cosang={:.6} (non-finite) cos_min={:.6} eps={:.6}",
-                            r.cosang, r.cos_min, r.eps_days
-                        ),
-                        ScoreRejectKind::VelDirGate => format!(
-                            "cosang={:.6} < cos_min={:.6} (dir gate) eps={:.6}",
-                            r.cosang, r.cos_min, r.eps_days
-                        ),
                         ScoreRejectKind::VelDvNonFinite => format!(
                             "dv={:.6} (non-finite) max_speed_diff={:.6} eps={:.6}",
                             r.dv, r.max_speed_diff, r.eps_days
@@ -1094,7 +965,9 @@ pub fn print_miss_report(
                         ),
                     };
 
-                    println!(
+                    buflog2!(
+                        logbuf,
+                        cli,
                         "  #{:<3} tid={}  {} -> {}  reason={:?}/{:?}  to_epoch={:.6}  bin=[{:.6},{:.6})  cone_r={:.6}  |  {}",
                         i + 1,
                         m.truth_id,
@@ -1109,8 +982,9 @@ pub fn print_miss_report(
                         extra
                     );
                 } else {
-                    // Scorer rejection but no detail (should be rare if you always call explain_score_reject)
-                    println!(
+                    buflog2!(
+                        logbuf,
+                        cli,
                         "  #{:<3} tid={}  {} -> {}  reason={:?}  to_epoch={:.6}  bin=[{:.6},{:.6})  cone_r={:.6}  |  (no ScoreRejectDetail)",
                         i + 1,
                         m.truth_id,
@@ -1125,8 +999,9 @@ pub fn print_miss_report(
                 }
             }
             _ => {
-                // Keep original compact formatting for non-scorer misses
-                println!(
+                buflog2!(
+                    logbuf,
+                    cli,
                     "  #{:<3} tid={}  {} -> {}  reason={:?}  to_epoch={:.6}  bin=[{:.6},{:.6})  cone_r={:.6}",
                     i + 1,
                     m.truth_id,

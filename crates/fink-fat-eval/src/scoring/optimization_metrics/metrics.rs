@@ -53,7 +53,7 @@ use std::fmt;
 /// - All rates are stored explicitly to avoid recomputation and to make
 ///   diagnostic logging easier.
 /// - `recall` is duplicated from `tpr` to emphasize its use in PR-based metrics.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct OperatingPoint {
     pub threshold_cost: f64,
     pub tp: usize,
@@ -253,7 +253,7 @@ impl OperatingPoint {
 /// --------
 /// * [`BestF1`] – threshold optimized for precision–recall balance.
 /// * [`fpr_at_tpr_on_cost`] – thresholds under fixed recall constraints.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct BestYouden {
     pub best_j: f64,
     pub threshold_cost: f64,
@@ -299,7 +299,7 @@ pub struct BestYouden {
 /// --------
 /// * [`BestYouden`] – symmetric ROC-based threshold.
 /// * [`tpr_at_fpr_on_cost`] – thresholds under strict contamination limits.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct BestF1 {
     pub best_f1: f64,
     pub op: OperatingPoint,
