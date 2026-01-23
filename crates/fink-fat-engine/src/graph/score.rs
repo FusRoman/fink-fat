@@ -207,8 +207,7 @@ impl ScoredEdge {
     ///   - the observed position to be projected onto `i`’s plane,
     ///   - the target identifier stored in `to`.
     /// * `cfg` – Scoring configuration controlling both:
-    ///   - **hard gates** (e.g. `position.max_d2`, `velocity.max_theta`,
-    ///     `velocity.max_speed_diff`),
+    ///   - **hard gates** (e.g. `position.max_d2`, `velocity.max_speed_diff`),
     ///   - **weights/normalizations** used to compose the final scalar `cost`,
     ///   - predictor and numeric-stability knobs (e.g. `predict.noise`,
     ///     `numeric.min_variance`).
@@ -238,8 +237,7 @@ impl ScoredEdge {
     ///    - Predict / extrapolate `i`’s plane velocity to `t_j` (optional acceleration),
     ///    - Estimate `j`’s plane velocity via symmetric finite difference using
     ///      `velocity.vel_eps_days`,
-    ///    - Apply direction gate (`velocity.max_theta`) and speed gate
-    ///      (`velocity.max_speed_diff`).
+    ///    - Apply speed gate (`velocity.max_speed_diff`).
     ///
     /// 4. **Band consistency**:
     ///    - Determine whether the two seeds share at least one band.
@@ -501,12 +499,6 @@ fn compute_position_term(
 ///
 ///        cos(θ) = (vᵢ · vⱼ) / (|vᵢ| |vⱼ|)
 ///
-///    - A hard direction gate is enforced:
-///
-///        θ ≤ max_theta   ⇔   cos(θ) ≥ cos(max_theta)
-///
-///    - If violated, the candidate is rejected.
-///
 /// 5. **Speed consistency**
 ///    - The absolute difference in speed is computed:
 ///
@@ -532,7 +524,6 @@ fn compute_position_term(
 /// * `dt_days` – Time offset (in days) between the reference epoch of `i`
 ///   and the epoch `t_j`.
 /// * `cfg` – Velocity scoring configuration, including:
-///   - direction gate (`max_theta`),
 ///   - speed gate (`max_speed_diff`),
 ///   - finite-difference step (`vel_eps_days`),
 ///   - scoring weights (`w_dir`, `w_norm`).
@@ -603,11 +594,6 @@ fn compute_velocity_terms(
     let cosang = ((vi[0] * vj[0] + vi[1] * vj[1]) * inv_norms).clamp(-1.0, 1.0);
 
     if !cosang.is_finite() {
-        return None;
-    }
-
-    // Direction gate
-    if cosang < cfg.cos_max_theta() {
         return None;
     }
 

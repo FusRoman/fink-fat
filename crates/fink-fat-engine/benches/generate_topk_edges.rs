@@ -2,6 +2,7 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use fink_fat_engine::seeding::seed_spatial_index::SeedSpatialIndex;
 use fink_fat_engine::spacetime_bucket::healpix_binner::HealpixBinner;
 use fink_fat_engine::spacetime_bucket::uniform_time_binner::UniformTimeBinner;
 use rand::rngs::StdRng;
@@ -391,6 +392,7 @@ fn bench_generate_topk_edges_components(c: &mut Criterion) {
         .unwrap_or(61001.0);
 
     let (spatial_binner, time_binner) = make_binners(time_origin);
+    let right_index = SeedSpatialIndex::build(&right_seeds, &spatial_binner, &time_binner);
 
     let mut edge_config = EdgeConfig::default();
     edge_config.top_k_per_left = top_k_per_left;
@@ -415,8 +417,7 @@ fn bench_generate_topk_edges_components(c: &mut Criterion) {
         b.iter(|| {
             let scored = left_seed.score_edge_candidates(
                 black_box(&right_seeds),
-                black_box(&spatial_binner),
-                black_box(&time_binner),
+                black_box(&right_index),
                 black_box(&edge_config),
                 black_box(delta_revisit),
             );
@@ -437,8 +438,7 @@ fn bench_generate_topk_edges_components(c: &mut Criterion) {
             for left_seed in left_batch {
                 let scored = left_seed.score_edge_candidates(
                     black_box(&right_seeds),
-                    black_box(&spatial_binner),
-                    black_box(&time_binner),
+                    black_box(&right_index),
                     black_box(&edge_config),
                     black_box(delta_revisit),
                 );

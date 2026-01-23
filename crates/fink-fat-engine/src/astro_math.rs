@@ -345,20 +345,92 @@ pub fn tangent_to_radec(x: f64, y: f64, ra0: Radians, dec0: Radians) -> (Radians
     (ra.rem_euclid(TAU), dec)
 }
 
-/// Fit a quadratic through three samples x(t) = p0 + v·t + 0.5·a·t².
+/// Fit a 1D quadratic motion model through three time samples.
 ///
-/// Times should be given **relative** to some origin (par ex. `t - t_mid`).
+/// This function fits the kinematic model:
+///
+/// ```text
+/// x(t) = p0 + v · t + 0.5 · a · t²
+/// ```
+///
+/// through **exactly three samples** `(tᵢ, xᵢ)` using an analytic solution.
+/// It returns the position `p0`, velocity `v`, and acceleration `a` evaluated
+/// at `t = 0`.
+///
+/// # Assumptions
+/// - The three time samples are **distinct** (`t0 ≠ t1 ≠ t2`).
+/// - Times are given **relative to a chosen origin**, typically:
+///   `t = epoch - t_mid`.
+/// - The motion between the samples is well approximated by **constant
+///   acceleration** (quadratic trajectory).
+///
+/// # Why this formulation?
+/// Instead of solving a full linear system, this implementation:
+/// - first estimates local velocities using finite differences,
+/// - then derives the acceleration from the *change in velocity*,
+/// - and finally recovers `(p0, v)` consistently.
+///
+/// This is:
+/// - numerically stable for small time spans,
+/// - fast (no matrix inversion),
+/// - well suited for short-arc astrometric fitting (pairs/triplets).
+///
+/// # Arguments
+/// * `dt` – Array of three time offsets `[t0, t1, t2]` (in days),
+///          expressed **relative to the same origin**.
+/// * `x`  – Array of three scalar positions `[x0, x1, x2]` corresponding
+///          to the times in `dt`.
+///
+/// # Returns
+/// `(p0, v, a)` where:
+/// - `p0` – position at `t = 0`,
+/// - `v`  – velocity at `t = 0`,
+/// - `a`  – constant acceleration.
+///
+/// # Notes
+/// - The reference time `t = 0` does **not** need to coincide with any of
+///   the sample times.
+/// - In practice, choosing `t = 0` near the middle sample (`t1`) reduces
+///   numerical correlations between `p0`, `v`, and `a`.
+///
+/// # Panics
+/// This function will panic if two time samples are equal
+/// (division by zero).
 #[inline]
 pub fn fit_quad_1d(dt: [f64; 3], x: [f64; 3]) -> (f64, f64, f64) {
+    // Unpack time samples
     let (t0, t1, t2) = (dt[0], dt[1], dt[2]);
+
+    // Inverse time intervals between consecutive samples
+    // (used for finite-difference velocity estimates)
     let inv_01 = 1.0 / (t1 - t0);
     let inv_12 = 1.0 / (t2 - t1);
+
+    // First-order finite-difference velocities on [t0, t1] and [t1, t2]
     let d01 = (x[1] - x[0]) * inv_01;
     let d12 = (x[2] - x[1]) * inv_12;
+
+    // Inverse total time span (t2 - t0)
     let inv_20 = 1.0 / (t2 - t0);
+
+    // Acceleration is twice the slope of the velocity change:
+    //
+    //   a = 2 · (d12 − d01) / (t2 − t0)
+    //
+    // This follows from the quadratic model where velocity varies linearly.
     let a = 2.0 * (d12 - d01) * inv_20;
+
+    // Velocity at t = 0.
+    //
+    // We start from the velocity on [t0, t1] and remove the contribution
+    // of acceleration evaluated at the midpoint of the interval.
     let v = d01 - 0.5 * a * (t0 + t1);
+
+    // Position at t = 0, obtained by rearranging:
+    //
+    //   x(t1) = p0 + v·t1 + 0.5·a·t1²
     let p0 = x[1] - v * t1 - 0.5 * a * t1 * t1;
+
     (p0, v, a)
 }
 

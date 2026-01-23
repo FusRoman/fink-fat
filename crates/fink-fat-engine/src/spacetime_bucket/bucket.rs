@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use ahash::AHashMap;
 
 use crate::{
@@ -30,18 +28,18 @@ pub struct BucketKey {
 /// `members` are sorted by **increasing MJD(TT)** with [`AlertId`] as
 /// **tie-break** on exact time equality.
 #[derive(Clone, Debug)]
-pub struct Bucket<Id> {
+pub struct Bucket<Object> {
     /// List of alert identifiers belonging to that bucket (sorted; see invariant).
-    pub members: Vec<Id>,
+    pub members: Vec<Object>,
 }
 
 /// Global index of all buckets for a given night or time span.
 ///
 /// This is a thin wrapper around a `HashMap` keyed by [`BucketKey`].
 #[derive(Clone, Debug, Default)]
-pub struct BucketIndex<Id> {
+pub struct BucketIndex<Object> {
     /// Memberships keyed by `(SpatialKey, TimeBin)`.
-    pub buckets: AHashMap<BucketKey, Bucket<Id>>,
+    pub buckets: AHashMap<BucketKey, Bucket<Object>>,
 }
 
 /// Compute the joint `BucketKey` for a single alert sample.

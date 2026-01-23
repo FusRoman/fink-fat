@@ -45,9 +45,6 @@ pub enum ScoringConfigError {
     #[error("scoring.position.max_d2 must be finite and > 0 (got {value})")]
     InvalidMaxD2Pos { value: f64 },
 
-    #[error("scoring.velocity.max_theta must be finite and >= 0 (got {value})")]
-    InvalidMaxThetaVel { value: f64 },
-
     #[error("scoring.velocity.max_speed_diff must be finite and >= 0 (got {value})")]
     InvalidMaxSpeedDiff { value: f64 },
 

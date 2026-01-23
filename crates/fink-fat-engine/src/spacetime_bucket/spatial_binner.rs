@@ -1,4 +1,5 @@
 use crate::Radians;
+use std::fmt::Debug;
 
 /// Compact spatial cell identifier.
 ///

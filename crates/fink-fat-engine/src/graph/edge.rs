@@ -8,7 +8,7 @@ use crate::{
     engine_config::edge_config::EdgeConfig,
     graph::edge_id::EdgeId,
     night_id::NightId,
-    seeding::{seed_id::SeedId, seed_node::SeedNode},
+    seeding::{seed_id::SeedId, seed_node::SeedNode, seed_spatial_index::SeedSpatialIndex},
     spacetime_bucket::{spatial_binner::SpatialBinner, time_binner::TimeBinner},
 };
 
@@ -174,16 +174,13 @@ impl<'a> Edge<'a> {
         let mut edges: Vec<Self> = Vec::with_capacity(left.len() * top_k);
         let mut next_id = id_start.0;
 
+        let right_index = SeedSpatialIndex::build(right, spatial_binner, time_binner);
+
         // Process each left-hand seed independently.
         for src in left {
             // Generate and score all candidate edges from this source seed.
-            let mut scored = src.score_edge_candidates(
-                right,
-                spatial_binner,
-                time_binner,
-                edge_config,
-                delta_revisit,
-            );
+            let mut scored =
+                src.score_edge_candidates(right, &right_index, edge_config, delta_revisit);
 
             // Retain only the Top-K lowest-cost edges for this source.
             let k = top_k.min(scored.len());

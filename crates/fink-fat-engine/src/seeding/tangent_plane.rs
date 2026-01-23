@@ -257,7 +257,7 @@ impl TangentPlaneModel {
     /// Project `(RA, Dec)` to the tangent plane using the model centre.
     ///
     /// This method mirrors [`TangentCenter::radec_to_tangent`] but is defined
-    /// on the model for convenience. It forwards to the robust implementation
+    /// on the model for convenience. It forwards to the implementation
     /// in `astro_math`.
     ///
     /// Arguments
@@ -276,7 +276,7 @@ impl TangentPlaneModel {
     ///   simply delegates to `radec_to_tangent`.
     #[inline]
     pub fn radec_to_tangent_precomp(&self, ra: Radians, dec: Radians) -> [f64; 2] {
-        // Use the robust projection defined in astro_math.rs.
+        // Use the projection defined in astro_math.rs.
         radec_to_tangent(ra, dec, self.center.ra0, self.center.dec0)
     }
 

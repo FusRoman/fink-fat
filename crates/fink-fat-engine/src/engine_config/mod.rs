@@ -472,7 +472,6 @@ triplets:
 version: 1
 scoring:
   velocity:
-    max_theta: "15 arcmin"
     max_speed_diff: "3 arcmin/day"
     vel_eps_days: "1.44 min"
     theta0: "6 arcmin"
@@ -484,9 +483,6 @@ scoring:
             load_engine_config_validated(&path).expect("config should load with unit strings");
 
         let v = &cfg.edges.score_config.velocity;
-
-        let exp_max_theta = (15.0_f64 / 60.0_f64).to_radians();
-        assert_relative_eq!(v.max_theta, exp_max_theta, max_relative = 1e-13);
 
         let exp_max_speed_diff = (3.0_f64 / 60.0_f64).to_radians();
         assert_relative_eq!(v.max_speed_diff, exp_max_speed_diff, max_relative = 1e-13);

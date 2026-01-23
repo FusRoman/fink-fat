@@ -53,10 +53,7 @@ use crate::{
         seed_spatial_index::SeedSpatialIndex,
         tangent_plane::{TangentCenter, TangentPlaneModel},
     },
-    spacetime_bucket::{
-        spatial_binner::{SpatialBinner, SpatialKey},
-        time_binner::TimeBinner,
-    },
+    spacetime_bucket::spatial_binner::{SpatialBinner, SpatialKey},
 };
 
 /// Compact intra-night seed object used in the inter-night graph.
@@ -234,7 +231,7 @@ impl SeedNode {
     ///   - the error model in `predictor_params.noise`,
     ///   - an optional spatial-cell padding.
     #[inline]
-    pub fn predict_cone<Bs: SpatialBinner>(
+    pub fn predict_cone<Bs: SpatialBinner + ?Sized>(
         &self,
         t_target: MjdTt,
         binner: &Bs,
@@ -367,11 +364,10 @@ impl SeedNode {
     /// * [`SeedNode::predict_cone`] – Coarse kinematic prediction.
     /// * [`SeedSpatialIndex`] – Bucket-based spatial index used per time bin.
     /// * [`ScoredEdge::score`] – Exact inter-night edge scoring routine.
-    pub fn score_edge_candidates<B: SpatialBinner, T: TimeBinner>(
+    pub fn score_edge_candidates(
         &self,
         right: &[SeedNode], // sorted by epoch_mid
-        spatial_binner: &B,
-        time_binner: &T,
+        right_seed_index: &SeedSpatialIndex,
         edge_config: &EdgeConfig,
         delta_revisit: u32,
     ) -> Vec<ScoredEdge> {
@@ -389,67 +385,35 @@ impl SeedNode {
         let right_by_id: AHashMap<SeedId, &SeedNode> =
             right.iter().map(|s| (s.seed_id, s)).collect();
 
-        // Time span in O(1) because `right` is time-sorted.
-        let t_min_r = right[0].plane.epoch_mid;
-        let t_max_r = right[right.len() - 1].plane.epoch_mid;
-
-        let bins = time_binner.bins_in_range(t_min_r, t_max_r);
-        if bins.is_empty() {
-            return scored;
-        }
-
         // Left seed speed on tangent plane (rad/day), with optional slack.
         let v_xy = self.plane.vel_xy;
         let speed = (v_xy[0].mul_add(v_xy[0], v_xy[1] * v_xy[1])).sqrt();
         let effective_speed = (speed + pred_cfg.v_slack).max(0.0);
 
         // Half-bin width used for conservative time padding.
-        let half_bin_width_days = 0.5 * time_binner.bin_width().max(1e-12);
-
-        // Monotone scan pointers for the bin slices.
-        let mut lo: usize = 0;
-        let mut hi: usize = 0;
+        let half_bin_width_days = 0.5 * right_seed_index.time_binner.bin_width().max(1e-12);
 
         // Reused buffers.
         let mut cover_keys_buf: Vec<SpatialKey> = Vec::with_capacity(256);
         let mut candidate_ids_buf: Vec<SeedId> = Vec::with_capacity(1024);
 
-        for bin in bins {
-            let bin_start = time_binner.bin_start(bin.0);
-            let bin_end = time_binner.bin_end(bin.0);
+        for bin in right_seed_index.time_bins.iter() {
+            let bin_start = right_seed_index.time_binner.bin_start(bin.0);
+            let bin_end = right_seed_index.time_binner.bin_end(bin.0);
             let bin_center = 0.5 * (bin_start + bin_end);
-
-            // Advance `lo` to first index with epoch_mid >= bin_start.
-            while lo < right.len() && right[lo].plane.epoch_mid < bin_start {
-                lo += 1;
-            }
-            // Ensure `hi >= lo`, then advance `hi` to first index with epoch_mid >= bin_end.
-            if hi < lo {
-                hi = lo;
-            }
-            while hi < right.len() && right[hi].plane.epoch_mid < bin_end {
-                hi += 1;
-            }
-
-            if lo == hi {
-                continue;
-            }
-
-            // Build a spatial index for this time bin only (borrows right[lo..hi]).
-            let index_bin = SeedSpatialIndex::build(&right[lo..hi], spatial_binner);
 
             // Coarse cone at bin center + time padding to cover the full bin.
             let (ra_center, dec_center, mut cone_radius) =
-                self.predict_cone(bin_center, spatial_binner, pred_cfg);
+                self.predict_cone(bin_center, right_seed_index.spatial_binner, pred_cfg);
 
             cone_radius += effective_speed * half_bin_width_days;
 
             // Fill candidate_ids_buf with SeedIds only (no borrowed refs).
-            index_bin.cone_query_ids_into(
-                spatial_binner,
+            right_seed_index.cone_query_ids_into(
                 ra_center,
                 dec_center,
                 cone_radius,
+                bin_center,
                 &mut cover_keys_buf,
                 &mut candidate_ids_buf,
             );
@@ -508,7 +472,7 @@ impl SeedNode {
     ) -> Vec<&'a SeedNode> {
         // Use the tangent-plane cone prediction to query the spatial index.
         let (ra, dec, radius) = self.predict_cone(t_target, binner, params);
-        index.cone_query(binner, ra, dec, radius).collect()
+        index.cone_query(ra, dec, radius, t_target).collect()
     }
 
     /// Build a [`SeedNode`] from a **pair** of alerts.
@@ -975,10 +939,10 @@ mod seed_node_tests {
     #[test]
     fn cone_candidates_returns_seed_ids_in_cover_cells() {
         let spatial_binner = HealpixBinner::new(8);
-        let time_binner = UniformTimeBinner::new(60000.0, 5.0 / 1440.0);
         let params = default_predictor_params();
 
         let t0 = 60010.0;
+        let time_binner = UniformTimeBinner::new(t0, 5.0 / 1440.0);
         let dec: f64 = 0.3;
         let dr = arcsec_to_rad(6.0) / dec.cos();
 
@@ -999,7 +963,8 @@ mod seed_node_tests {
 
         let vec_seed = vec![s1.clone(), s2.clone()];
         // Build a spatial index and bucket index (for completeness).
-        let index = SeedSpatialIndex::build(&vec_seed, &spatial_binner);
+        let index = SeedSpatialIndex::build(&vec_seed, &spatial_binner, &time_binner);
+
         let _bucket_index = build_bucket_index(
             &vec![a.clone(), b.clone(), c.clone()],
             &spatial_binner,
@@ -1007,11 +972,11 @@ mod seed_node_tests {
         );
 
         // Query around s1 prediction near time of c, expect to find s2 (future position).
-        let (ra, dec, radius) = s1.predict_cone(c.mjd_tt, &spatial_binner, &params);
-        let candidates: Vec<&SeedNode> =
-            index.cone_query(&spatial_binner, ra, dec, radius).collect();
+        let t_target = s2.plane.epoch_mid;
+        let (ra, dec, radius) = s1.predict_cone(t_target, &spatial_binner, &params);
+        let candidates: Vec<&SeedNode> = index.cone_query(ra, dec, radius, t_target).collect();
 
-        assert!(candidates.contains(&&s2));
+        assert!(candidates.iter().any(|sn| sn.seed_id == s2.seed_id));
     }
 
     /* ------------------------- property-based tests ------------------------- */
@@ -1169,43 +1134,19 @@ mod seed_node_tests {
             v
         }
 
-        /// A TimeBinner that returns no bins (to test early return path).
-        #[derive(Clone, Copy, Debug)]
-        struct EmptyTimeBinner;
-
-        impl TimeBinner for EmptyTimeBinner {
-            fn bins_in_range(
-                &self,
-                _t_min: f64,
-                _t_max: f64,
-            ) -> Vec<crate::spacetime_bucket::time_binner::TimeBin> {
-                Vec::new()
-            }
-            fn bin_start(&self, _bin: i64) -> f64 {
-                0.0
-            }
-            fn bin_end(&self, _bin: i64) -> f64 {
-                0.0
-            }
-            fn bin_width(&self) -> f64 {
-                1.0
-            }
-
-            fn bin_for(&self, _: MjdTt) -> crate::spacetime_bucket::time_binner::TimeBin {
-                todo!()
-            }
-        }
-
         /* ------------------------- unit tests: score_edge_candidates ------------------------- */
 
         #[test]
         fn score_edge_candidates_empty_right_returns_empty() {
             let spatial_binner = HealpixBinner::new(8);
+
             let params = default_predictor_params();
             let edge_config = mk_edge_config_for_tests(params);
             let delta = 1_u32;
 
             let t0 = 60000.0;
+            let time_binner = UniformTimeBinner::new(t0, 5.0 / 1440.0);
+
             let a = mk_alert(AlertId::new(0), 1.0, 0.2, t0, 1, 1000.0);
             let b = mk_alert(
                 AlertId::new(1),
@@ -1216,49 +1157,10 @@ mod seed_node_tests {
                 1000.0,
             );
             let left = SeedNode::from_pair(SeedId::new(0), NightId::new(1), &a, &b, None).unwrap();
+            let right = &[];
+            let right_index = SeedSpatialIndex::build(right, &spatial_binner, &time_binner);
 
-            let out = left.score_edge_candidates(
-                &[],
-                &spatial_binner,
-                &UniformTimeBinner::new(t0, 5.0 / 1440.0),
-                &edge_config,
-                delta,
-            );
-
-            assert!(out.is_empty());
-        }
-
-        #[test]
-        fn score_edge_candidates_empty_bins_returns_empty() {
-            let spatial_binner = HealpixBinner::new(8);
-            let params = default_predictor_params();
-            let edge_config = mk_edge_config_for_tests(params);
-
-            let t0 = 60000.0;
-            let dec: f64 = 0.25;
-            let dr = arcsec_to_rad(6.0) / dec.cos();
-
-            let a = mk_alert(AlertId::new(0), 1.0, dec, t0, 1, 1000.0);
-            let b = mk_alert(
-                AlertId::new(1),
-                1.0 + dr,
-                dec,
-                t0 + 10.0 / 1440.0,
-                1,
-                1001.0,
-            );
-            let left = SeedNode::from_pair(SeedId::new(0), NightId::new(1), &a, &b, None).unwrap();
-
-            // Right contains something, but time_binner returns no bins => empty output.
-            let right = vec![left.clone()];
-
-            let out = left.score_edge_candidates(
-                &right,
-                &spatial_binner,
-                &EmptyTimeBinner,
-                &edge_config,
-                1,
-            );
+            let out = left.score_edge_candidates(right, &right_index, &edge_config, delta);
 
             assert!(out.is_empty());
         }
@@ -1317,14 +1219,9 @@ mod seed_node_tests {
 
             // One bin covering everything (big width).
             let time_binner = UniformTimeBinner::new(t0, 10.0); // 10 days => 1 bin
+            let right_index = SeedSpatialIndex::build(&right, &spatial_binner, &time_binner);
 
-            let out = left.score_edge_candidates(
-                &right,
-                &spatial_binner,
-                &time_binner,
-                &edge_config,
-                delta,
-            );
+            let out = left.score_edge_candidates(&right, &right_index, &edge_config, delta);
             let brute = brute_force_scores(&left, &right, &edge_config, delta);
 
             let out_pairs = dedup_pairs(out.iter().map(|e| (e.from, e.to)).collect());
@@ -1390,14 +1287,9 @@ mod seed_node_tests {
             right.sort_by(|x, y| x.plane.epoch_mid.partial_cmp(&y.plane.epoch_mid).unwrap());
 
             let time_binner = UniformTimeBinner::new(t0, 30.0 / 1440.0); // 30 min bins
+            let right_index = SeedSpatialIndex::build(&right, &spatial_binner, &time_binner);
 
-            let out = left.score_edge_candidates(
-                &right,
-                &spatial_binner,
-                &time_binner,
-                &edge_config,
-                delta,
-            );
+            let out = left.score_edge_candidates(&right, &right_index, &edge_config, delta);
             let brute = brute_force_scores(&left, &right, &edge_config, delta);
 
             let out_pairs = dedup_pairs(out.iter().map(|e| (e.from, e.to)).collect());
@@ -1448,14 +1340,9 @@ mod seed_node_tests {
             right.sort_by(|x, y| x.plane.epoch_mid.partial_cmp(&y.plane.epoch_mid).unwrap());
 
             let time_binner = UniformTimeBinner::new(t0, 1.0 / 24.0); // 1 hour bins
+            let right_index = SeedSpatialIndex::build(&right, &spatial_binner, &time_binner);
 
-            let out = left.score_edge_candidates(
-                &right,
-                &spatial_binner,
-                &time_binner,
-                &edge_config,
-                delta,
-            );
+            let out = left.score_edge_candidates(&right, &right_index, &edge_config, delta);
             let brute = brute_force_scores(&left, &right, &edge_config, delta);
 
             let out_pairs: std::collections::HashSet<(SeedId, SeedId)> =
@@ -1516,14 +1403,10 @@ mod seed_node_tests {
                 );
             }
             right.sort_by(|x, y| x.plane.epoch_mid.partial_cmp(&y.plane.epoch_mid).unwrap());
+            let time_binner = UniformTimeBinner::new(t0, 30.0 / 1440.0);
+            let right_index = SeedSpatialIndex::build(&right, &spatial_binner, &time_binner);
 
-            let out = left.score_edge_candidates(
-                &right,
-                &spatial_binner,
-                &UniformTimeBinner::new(t0, 30.0 / 1440.0),
-                &edge_config,
-                1,
-            );
+            let out = left.score_edge_candidates(&right, &right_index, &edge_config, 1);
 
             let pairs: Vec<(SeedId, SeedId)> = out.iter().map(|e| (e.from, e.to)).collect();
             let pairs_uniq = dedup_pairs(pairs.clone());
@@ -1579,14 +1462,10 @@ mod seed_node_tests {
 
             let mut right = vec![r1, r2];
             right.sort_by(|x, y| x.plane.epoch_mid.partial_cmp(&y.plane.epoch_mid).unwrap());
+            let time_binner = UniformTimeBinner::new(t0, 1.0);
+            let right_index = SeedSpatialIndex::build(&right, &spatial_binner, &time_binner);
 
-            let _out = left.score_edge_candidates(
-                &right,
-                &spatial_binner,
-                &UniformTimeBinner::new(t0, 1.0),
-                &edge_config,
-                1,
-            );
+            let _out = left.score_edge_candidates(&right, &right_index, &edge_config, 1);
 
             // No assert needed: "does not panic" is the test.
             // If you want: assert output edges refer to sid only when present.
@@ -1638,8 +1517,9 @@ mod seed_node_tests {
                 right.sort_by(|x,y| x.plane.epoch_mid.partial_cmp(&y.plane.epoch_mid).unwrap());
 
                 let time_binner = UniformTimeBinner::new(t0, 30.0/1440.0); // 30 min bins (multi-bin typically)
+                let right_index = SeedSpatialIndex::build(&right, &spatial_binner, &time_binner);
 
-                let out = left.score_edge_candidates(&right, &spatial_binner, &time_binner, &edge_config, delta);
+                let out = left.score_edge_candidates(&right, &right_index, &edge_config, delta);
                 let brute = brute_force_scores(&left, &right, &edge_config, delta);
 
                 let out_pairs = dedup_pairs(out.iter().map(|e| (e.from, e.to)).collect());
@@ -1678,8 +1558,9 @@ mod seed_node_tests {
                 right.sort_by(|x,y| x.plane.epoch_mid.partial_cmp(&y.plane.epoch_mid).unwrap());
 
                 let time_binner = UniformTimeBinner::new(t0, 45.0/1440.0);
+                let right_index = SeedSpatialIndex::build(&right, &spatial_binner, &time_binner);
 
-                let out = left.score_edge_candidates(&right, &spatial_binner, &time_binner, &edge_config, delta);
+                let out = left.score_edge_candidates(&right, &right_index, &edge_config, delta);
                 let brute = brute_force_scores(&left, &right, &edge_config, delta);
 
                 let out_set: std::collections::HashSet<(SeedId, SeedId)> = out.iter().map(|e| (e.from, e.to)).collect();

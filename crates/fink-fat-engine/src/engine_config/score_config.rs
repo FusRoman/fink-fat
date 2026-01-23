@@ -75,10 +75,6 @@ impl ScoreConfig {
         }
 
         // velocity
-        let th = self.velocity.max_theta;
-        if !th.is_finite() || th < 0.0 {
-            return Err(ScoringConfigError::InvalidMaxThetaVel { value: th });
-        }
         let dv = self.velocity.max_speed_diff;
         if !dv.is_finite() || dv < 0.0 {
             return Err(ScoringConfigError::InvalidMaxSpeedDiff { value: dv });
@@ -186,9 +182,6 @@ impl Default for PositionScore {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct VelocityScore {
-    /// Maximum allowed direction mismatch (radians).
-    #[serde(deserialize_with = "de_angle_rad")]
-    pub max_theta: f64,
     /// Maximum allowed absolute speed mismatch (rad/day).
     #[serde(deserialize_with = "de_ang_speed_rad_per_day")]
     pub max_speed_diff: f64,
@@ -209,17 +202,9 @@ pub struct VelocityScore {
     pub v0: f64,
 }
 
-impl VelocityScore {
-    #[inline]
-    pub fn cos_max_theta(&self) -> f64 {
-        self.max_theta.cos()
-    }
-}
-
 impl Default for VelocityScore {
     fn default() -> Self {
         Self {
-            max_theta: 0.3,
             max_speed_diff: 0.02,
             w_dir: 1.0,
             w_norm: 1.0,
