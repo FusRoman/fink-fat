@@ -1,4 +1,4 @@
-use crate::graph::{edge_id::EdgeId, node_id::NodeId};
+use crate::graph::{edge::edge_id::EdgeId, node_id::NodeId};
 
 /// One trajectory hypothesis produced by a solver.
 ///

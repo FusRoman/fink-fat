@@ -12,7 +12,7 @@ use fink_fat_engine::{
     Alert,
     engine_config::edge_config::EdgeConfig,
     graph::edge::Edge,
-    graph::edge_id::EdgeId,
+    graph::edge::edge_id::EdgeId,
     night_id::NightId,
     seeding::{seed_id::SeedId, seed_node::SeedNode},
 };

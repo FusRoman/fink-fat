@@ -1,6 +1,6 @@
 use crate::{
     engine_config::edge_config::EdgeConfig,
-    graph::{edge::Edge, edge_id::EdgeId, node::Node},
+    graph::{edge::Edge, edge::edge_id::EdgeId, node::Node},
     seeding::seed_node::SeedNode,
     spacetime_bucket::{spatial_binner::SpatialBinner, time_binner::TimeBinner},
 };

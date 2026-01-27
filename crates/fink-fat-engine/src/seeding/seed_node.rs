@@ -45,7 +45,7 @@ use crate::{
     astro_math::{fit_quad_1d, radec_to_tangent, spherical_midpoint, tangent_to_radec},
     display_format::indent_block,
     engine_config::{edge_config::EdgeConfig, propagator_config::PredictorParams},
-    graph::score::ScoredEdge,
+    graph::edge::score::ScoredEdge,
     night_id::NightId,
     seeding::{
         photometry::Photometry,
