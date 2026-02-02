@@ -8,3 +8,8 @@ score_optim_gates
 score_optim_weights/
 out/
 frozen_pairs/
+ml_out*
+optuna
+seed_store/
+edge_features_dataset/
+evaluate_edges_output/

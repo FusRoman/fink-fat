@@ -45,9 +45,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{MjdTt, Radians, error::SeedError};
 use crate::engine_config::units::{de_angle_rad, de_time_days};
-
+use crate::{MjdTt, Radians, error::SeedError};
 
 /// Parameters controlling **triplet generation** `(a, b, c)`.
 ///

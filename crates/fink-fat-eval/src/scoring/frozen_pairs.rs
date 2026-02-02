@@ -6,9 +6,9 @@ use std::collections::HashMap;
 
 use camino::Utf8Path;
 use fink_fat_engine::graph::edge::Edge;
-use fink_fat_engine::graph::edge_id::EdgeId;
+use fink_fat_engine::graph::edge::edge_id::EdgeId;
 use fink_fat_engine::{
-    engine_config::score_config::ScoreConfig, graph::score::ScoredEdge, night_id::NightId,
+    engine_config::score_config::ScoreConfig, graph::edge::score::ScoredEdge, night_id::NightId,
 };
 use rand::{Rng, RngCore, SeedableRng, rngs::StdRng};
 use rayon::prelude::*;

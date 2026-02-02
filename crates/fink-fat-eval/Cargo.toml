@@ -57,3 +57,11 @@ path = "src/bin/scoring/evaluate_scoring.rs"
 [[bin]]
 name = "evaluate-edges"
 path = "src/bin/scoring/evaluate_edges.rs"
+
+[[bin]]
+name = "evaluate-edge-features"
+path = "src/bin/scoring/evaluate_edge_features.rs"
+
+[[bin]]
+name = "generate-features"
+path = "src/bin/scoring/generate_features.rs"

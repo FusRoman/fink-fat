@@ -3,7 +3,7 @@ use std::fmt::{self, Display, Formatter};
 use ahash::{AHashMap, AHashSet};
 use fink_fat_engine::{
     engine_config::edge_config::EdgeConfig,
-    graph::{edge::Edge, score::ScoredEdge},
+    graph::{edge::Edge, edge::score::ScoredEdge},
     seeding::{seed_id::SeedId, seed_node::SeedNode, seed_spatial_index::SeedSpatialIndex},
     spacetime_bucket::{spatial_binner::SpatialBinner, time_binner::TimeBinner},
 };

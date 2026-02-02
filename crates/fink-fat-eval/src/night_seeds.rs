@@ -9,14 +9,18 @@ use camino::Utf8Path;
 use fink_fat_engine::{
     Alert,
     engine_config::{EngineConfig, score_config::ScoreConfig},
-    graph::{edge::Edge, edge_id::EdgeId, score::ScoredEdge},
+    graph::edge::{Edge, edge_id::EdgeId, score::ScoredEdge},
     night_id::NightId,
     seeding::{seed_id::SeedId, seed_node::SeedNode},
     spacetime_bucket::{healpix_binner::HealpixBinner, uniform_time_binner::UniformTimeBinner},
 };
 
-use crate::io::{read_bin, write_bin};
-use anyhow::Result;
+use crate::{
+    cli::scoring::Cli,
+    dataset::{ParquetSource, ingest_config::AlertIngestConfig, ztf_alerts::collect_nights},
+    io::{read_bin, write_bin},
+};
+use anyhow::{Context, Result};
 use rand::{Rng, RngCore, SeedableRng, rngs::StdRng};
 use serde::{Deserialize, Serialize};
 
@@ -165,6 +169,13 @@ impl fmt::Display for NightSeeds {
 impl NightSeeds {
     pub fn get_truth(&self, seedid: &SeedId) -> Option<i32> {
         self.truth.get(seedid).copied().flatten()
+    }
+
+    pub fn edge_truth(&self, right: &NightSeeds, edge: &Edge) -> Option<bool> {
+        let t_from = self.get_truth(&edge.from.seed_id)?;
+        let t_to = right.get_truth(&edge.to.seed_id)?;
+
+        Some(t_from == t_to)
     }
 
     fn build_truth_counts(truth: &AHashMap<SeedId, Option<i32>>) -> AHashMap<i32, u64> {
@@ -890,6 +901,17 @@ impl SeedStore {
         let store: SeedStore = read_bin(path)?;
         Ok(store)
     }
+}
+
+pub fn generate_seed_store(cli: &Cli, engine_cfg: &EngineConfig) -> Result<SeedStore> {
+    let source = ParquetSource::new(&cli.scan.parquet)
+        .with_context(|| format!("failed to open parquet source: {}", cli.scan.parquet))?;
+
+    let ingest_cfg = AlertIngestConfig::default();
+    let night_store: NightStore =
+        collect_nights(&source, cli.scan.mode.into(), cli.scan.minimal, &ingest_cfg)?;
+
+    SeedStore::generate_nightseed_store(&night_store, &engine_cfg, 8, 1.0, false)
 }
 
 fn push_true_edges_only<'a>(

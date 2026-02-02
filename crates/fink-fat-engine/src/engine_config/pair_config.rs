@@ -49,8 +49,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{error::SeedError, MjdTt};
 use crate::engine_config::units::{de_ang_speed_rad_per_day, de_time_days};
+use crate::{MjdTt, error::SeedError};
 
 /// Parameters controlling **pair generation** between alerts `(a, b)`.
 ///

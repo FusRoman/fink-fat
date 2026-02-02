@@ -327,12 +327,7 @@ impl TangentPlaneModel {
         let dt = t_target - self.epoch_mid;
 
         // Kinematic propagation on the tangent plane.
-        let mut px = self.pos_xy[0] + self.vel_xy[0] * dt;
-        let mut py = self.pos_xy[1] + self.vel_xy[1] * dt;
-        if let Some(a) = self.acc_xy {
-            px += 0.5 * a[0] * dt * dt;
-            py += 0.5 * a[1] * dt * dt;
-        }
+        let (px, py) = self.predict_position(dt, dt * dt);
 
         // Time-dependent noise model.
         let q = noise.variance_floor
@@ -344,6 +339,49 @@ impl TangentPlaneModel {
         let syy = self.cov_pos[1][1] + dt * dt * self.cov_vel[1][1] + q;
 
         ([px, py], [[sxx, 0.0], [0.0, syy]])
+    }
+
+    /// Predict position on the tangent plane after dt days.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `dt` – Time difference from `epoch_mid` (days).
+    /// * `dt_sq` – Square of the time difference (days²).
+    ///
+    /// Return
+    /// ------
+    /// * `(x, y)` – Predicted position on the tangent plane (radians).
+    #[inline]
+    pub fn predict_position(&self, dt: f64, dt_sq: f64) -> (Radians, Radians) {
+        // Kinematic propagation on the tangent plane.
+        let mut px = self.pos_xy[0] + self.vel_xy[0] * dt;
+        let mut py = self.pos_xy[1] + self.vel_xy[1] * dt;
+        if let Some(a) = self.acc_xy {
+            px += 0.5 * a[0] * dt_sq;
+            py += 0.5 * a[1] * dt_sq;
+        }
+        (px, py)
+    }
+
+    /// Predict velocity on the tangent plane after dt days.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `dt` – Time difference from `epoch_mid` (days).
+    ///
+    /// Return
+    /// ------
+    /// * `(vx, vy)` – Predicted velocity on the tangent plane (radians/day).
+    #[inline]
+    pub fn predict_velocity(&self, dt: f64) -> (Radians, Radians) {
+        // Kinematic propagation on the tangent plane.
+        let mut vx = self.vel_xy[0];
+        let mut vy = self.vel_xy[1];
+        if let Some(a) = self.acc_xy {
+            vx += a[0] * dt;
+            vy += a[1] * dt;
+        }
+        (vx, vy)
     }
 
     /// Predict sky coordinates `(RA, Dec)` at a target epoch.
@@ -375,12 +413,7 @@ impl TangentPlaneModel {
         let dt = t_target - self.epoch_mid;
 
         // Kinematic propagation on the tangent plane.
-        let mut px = self.pos_xy[0] + self.vel_xy[0] * dt;
-        let mut py = self.pos_xy[1] + self.vel_xy[1] * dt;
-        if let Some(a) = self.acc_xy {
-            px += 0.5 * a[0] * dt * dt;
-            py += 0.5 * a[1] * dt * dt;
-        }
+        let (px, py) = self.predict_position(dt, dt * dt);
 
         // Convert back to the celestial sphere using the robust inverse
         // gnomonic projection from astro_math.

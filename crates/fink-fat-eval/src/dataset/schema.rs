@@ -15,7 +15,7 @@ pub mod cols {
     pub const SSNAMENR: &str = "ssnamenr";
     pub const TRAJECTORY_ID: &str = "trajectory_id";
     pub const FINK_CLASS: &str = "fink_class";
-    pub const NALERTHIST : &str = "nalerthist";
+    pub const NALERTHIST: &str = "nalerthist";
 }
 
 /// Expected dtypes (best effort) after casting.

@@ -18,7 +18,19 @@ use std::fmt;
 /// - Typically represents an MJD day number (e.g., 60312).
 /// - Must be stable across runs because it is used as a directory name.
 #[derive(
-    Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Encode, Decode, Hash, Default
+    Copy,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    Hash,
+    Default,
 )]
 pub struct NightId(pub u32);
 

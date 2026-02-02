@@ -173,11 +173,11 @@ pub struct CommonScanArgs {
     ///
     /// When enabled, only the columns required for seeding + truth metrics are read.
     /// This reduces:
-    /// 
+    ///
     /// - Parquet I/O (projection pushdown),
-    /// 
+    ///
     /// - memory use,
-    /// 
+    ///
     /// - deserialization overhead.
     ///
     /// You should disable this only if a downstream analysis explicitly needs extra columns.
@@ -198,10 +198,10 @@ pub struct CommonScanArgs {
 // pair generation tractable.
 //
 // Design intuition :
-// 
+//
 // - Higher `--healpix-depth` → smaller sky cells → fewer candidates per cell
 //   (often faster, but more overhead in indexing).
-// 
+//
 // - Smaller `--time-bin-days` → finer time bins → fewer candidates per bin
 //   (often faster, but more bins to manage).
 //
@@ -213,9 +213,9 @@ pub struct CommonBinningArgs {
     /// Higher values correspond to smaller sky pixels.
     ///
     /// Tradeoff :
-    /// 
+    ///
     /// - Larger depth: lower candidate fan-out, potentially faster pair search.
-    /// 
+    ///
     /// - Too large: more indexing overhead and risk of splitting close neighbors
     /// across many pixels (may require looking at neighbor pixels).
     #[arg(
@@ -231,9 +231,9 @@ pub struct CommonBinningArgs {
     /// This controls temporal discretization for bucket-based candidate search.
     ///
     /// Notes :
-    /// 
+    ///
     /// - Smaller bins reduce temporal fan-out but increase the number of bins.
-    /// 
+    ///
     /// - This is independent from `--max-dt` which controls the *search horizon*.
     #[arg(
         long,
@@ -290,10 +290,10 @@ pub struct CommonPairGenArgs {
     /// Setting a very large value effectively disables flux-based filtering.
     ///
     /// Notes :
-    /// 
+    ///
     /// - The unit corresponds to whatever "flux" quantity the engine uses for
     ///   gating (often derived from magnitude; see engine config).
-    /// 
+    ///
     /// - In many survey-like datasets, photometric gating is a second-order
     ///   effect compared to kinematic gating.
     #[arg(
@@ -338,4 +338,17 @@ pub struct CommonPlotArgs {
         help_heading = "Plot"
     )]
     pub angular_unit: AngularUnit,
+
+    /// Plot log1p(cost) instead of cost.
+    #[arg(long, default_value_t = false, help_heading = "Plot")]
+    pub log_cost: bool,
+
+    /// Output PNG filename.
+    #[arg(
+        long,
+        default_value = "score_distribution.png",
+        value_name = "FILE",
+        help_heading = "I/O"
+    )]
+    pub out_png: String,
 }

@@ -1,14 +1,13 @@
-pub mod dataset;
-pub mod seeding;
 pub mod angle;
-pub mod grid;
 pub mod angular_speed;
-pub mod cli;
-pub mod scoring;
 pub mod bin_utils;
-pub mod night_seeds;
+pub mod cli;
+pub mod dataset;
+pub mod grid;
 pub mod io;
-
+pub mod night_seeds;
+pub mod scoring;
+pub mod seeding;
 
 /// Replace NaN/Inf by a fallback.
 pub trait FiniteOr {

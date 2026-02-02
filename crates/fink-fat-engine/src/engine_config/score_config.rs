@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::engine_config::units::{de_ang_speed_rad_per_day, de_angle_rad, de_time_days};
 use crate::engine_config::{error::ScoringConfigError, propagator_config::ModelNoise};
-use crate::engine_config::units::{de_angle_rad, de_ang_speed_rad_per_day, de_time_days};
 
 /// Configuration for inter-night edge scoring.
 ///

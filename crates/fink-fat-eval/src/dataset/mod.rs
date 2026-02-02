@@ -1,6 +1,6 @@
+pub mod ingest_config;
 pub mod schema;
 pub mod ztf_alerts;
-pub mod ingest_config;
 
 use anyhow::Result;
 use camino::{Utf8Path, Utf8PathBuf};

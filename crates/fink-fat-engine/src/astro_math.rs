@@ -56,6 +56,421 @@ pub fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
+/// Compute the dot product of two 2D vectors.
+///
+/// This is a minimal, branch-free helper intended for hot paths where
+/// small fixed-size vectors (`[f64; 2]`) are preferred over heap-allocated
+/// linear algebra types.
+///
+/// The dot product is defined as:
+/// ```text
+/// a · b = a₀ b₀ + a₁ b₁
+/// ```
+///
+/// Arguments
+/// ---------
+/// * `a` – First 2D vector `[x, y]`.
+/// * `b` – Second 2D vector `[x, y]`.
+///
+/// Return
+/// ------
+/// Scalar dot product `a · b`.
+///
+/// Notes
+/// -----
+/// - No normalization or safety checks are performed.
+/// - This function is intentionally trivial and inlined to avoid
+///   pulling a full linear algebra dependency for 2D operations.
+#[inline]
+pub fn dot2(a: [f64; 2], b: [f64; 2]) -> f64 {
+    a[0] * b[0] + a[1] * b[1]
+}
+
+/// Multiply a 2×2 matrix by a 2D vector.
+///
+/// This helper evaluates the linear transformation:
+/// ```text
+/// [ m00 m01 ] [ v0 ] = [ m00·v0 + m01·v1 ]
+/// [ m10 m11 ] [ v1 ]   [ m10·v0 + m11·v1 ]
+/// ```
+///
+/// Arguments
+/// ---------
+/// * `m` – 2×2 matrix stored in row-major order.
+/// * `v` – 2D vector `[v0, v1]`.
+///
+/// Return
+/// ------
+/// Resulting 2D vector `m · v`.
+///
+/// Notes
+/// -----
+/// - The matrix is assumed to be small and dense.
+/// - No symmetry or conditioning assumptions are required.
+/// - This function is used extensively in innovation and covariance
+///   computations where allocating a generic matrix type would be
+///   unnecessary overhead.
+#[inline]
+pub fn mat_vec2(m: [[f64; 2]; 2], v: [f64; 2]) -> [f64; 2] {
+    [
+        m[0][0] * v[0] + m[0][1] * v[1],
+        m[1][0] * v[0] + m[1][1] * v[1],
+    ]
+}
+
+/// Clamp a scalar to the interval [−1, 1], with NaN/Inf protection.
+///
+/// This helper is primarily intended for quantities that should lie
+/// within trigonometric bounds, such as:
+/// - cosine of an angle,
+/// - normalized dot products.
+///
+/// Arguments
+/// ---------
+/// * `x` – Input scalar value.
+///
+/// Return
+/// ------
+/// Value clamped to the interval `[−1, 1]`.
+/// Returns `0.0` if `x` is not finite.
+///
+/// Notes
+/// -----
+/// - Returning `0.0` for non-finite inputs avoids propagating NaNs
+///   into downstream computations (e.g. `acos`, ML features).
+/// - This behavior is intentional and favors robustness over strict
+///   error signaling.
+#[inline]
+pub fn clamp_unit(x: f64) -> f64 {
+    if x.is_finite() {
+        x.max(-1.0).min(1.0)
+    } else {
+        0.0
+    }
+}
+
+/// Compute a numerically safe natural logarithm.
+///
+/// This helper returns `ln(x)` only when the input is strictly positive
+/// and finite. Otherwise, it returns `0.0`.
+///
+/// Arguments
+/// ---------
+/// * `x` – Input scalar value.
+///
+/// Return
+/// ------
+/// `ln(x)` if `x > 0` and finite, otherwise `0.0`.
+///
+/// Notes
+/// -----
+/// - This function is typically used for log-transformed features
+///   (e.g. `log(chi² + ε)`) where negative or non-finite values are
+///   not meaningful.
+/// - Returning `0.0` instead of `-∞` or `NaN` avoids destabilizing
+///   downstream ML pipelines.
+#[inline]
+pub fn safe_ln(x: f64) -> f64 {
+    if x.is_finite() && x > 0.0 {
+        x.ln()
+    } else {
+        0.0
+    }
+}
+
+/// Invert a symmetric 2×2 matrix with numerical safeguards.
+///
+/// This routine computes the inverse of a **symmetric** matrix:
+/// ```text
+/// [ a  b ]
+/// [ b  d ]
+/// ```
+///
+/// with additional protections against:
+/// - non-finite entries,
+/// - near-singular determinants,
+/// - poorly conditioned covariance matrices.
+///
+/// A diagonal floor is applied before inversion to ensure numerical
+/// stability.
+///
+/// Arguments
+/// ---------
+/// * `m` – Symmetric 2×2 matrix (only the symmetric part is used).
+/// * `floor` – Minimum allowed value for diagonal terms and determinant
+///             regularization.
+///
+/// Return
+/// ------
+/// Inverse 2×2 matrix.
+///
+/// Notes
+/// -----
+/// - If the determinant is too small or non-finite, the function falls
+///   back to a **diagonal inverse**:
+///   ```text
+///   inv ≈ diag(1/a, 1/d)
+///   ```
+///   effectively discarding off-diagonal correlations.
+/// - This behavior is intentional and favors robustness over exactness
+///   in degenerate cases.
+/// - Designed primarily for inverting innovation or covariance matrices
+///   in short-arc astrometric linking.
+#[inline]
+pub fn invert_sym_2x2(m: [[f64; 2]; 2], floor: f64) -> [[f64; 2]; 2] {
+    let mut a = m[0][0];
+    let mut b = 0.5 * (m[0][1] + m[1][0]);
+    let mut d = m[1][1];
+
+    if !a.is_finite() || a < floor {
+        a = floor;
+    }
+    if !d.is_finite() || d < floor {
+        d = floor;
+    }
+    if !b.is_finite() {
+        b = 0.0
+    }
+
+    let det = a * d - b * b;
+    if !det.is_finite() || det <= floor {
+        return [[1.0 / a.max(floor), 0.0], [0.0, 1.0 / d.max(floor)]];
+    }
+
+    let inv_det = 1.0 / det;
+    [[d * inv_det, -b * inv_det], [-b * inv_det, a * inv_det]]
+}
+
+/// Compute the trace of a 2×2 matrix.
+///
+/// The trace is defined as the sum of diagonal elements:
+/// ```text
+/// tr(M) = M₀₀ + M₁₁
+/// ```
+///
+/// Arguments
+/// ---------
+/// * `m` – 2×2 matrix.
+///
+/// Return
+/// ------
+/// Trace of the matrix.
+///
+/// Notes
+/// -----
+/// - For covariance matrices, the trace represents the **total variance**
+///   and is often used as a scalar uncertainty proxy.
+/// - This helper avoids repeated indexing boilerplate and improves
+///   readability at call sites.
+#[inline]
+pub fn trace_2x2(m: [[f64; 2]; 2]) -> f64 {
+    m[0][0] + m[1][1]
+}
+
+/// Multiply two 2×2 matrices.
+///
+/// This routine evaluates the standard matrix product:
+/// ```text
+/// C = A · B
+/// ```
+/// where:
+/// ```text
+/// Cᵢⱼ = Σₖ Aᵢₖ Bₖⱼ
+/// ```
+///
+/// The matrices are stored in **row-major** order:
+/// ```text
+/// [ m00 m01 ]
+/// [ m10 m11 ]
+/// ```
+///
+/// Arguments
+/// ---------
+/// * `a` – Left-hand 2×2 matrix.
+/// * `b` – Right-hand 2×2 matrix.
+///
+/// Return
+/// ------
+/// Product matrix `a · b` as a 2×2 matrix.
+///
+/// Notes
+/// -----
+/// - This helper is intentionally minimal and allocation-free.
+/// - Designed for small fixed-size matrices where introducing a full
+///   linear algebra library would be unnecessary overhead.
+/// - Common use cases include:
+///   - verifying numerical inverses (`inv · m ≈ I`),
+///   - propagating 2D covariance matrices,
+///   - composing local linear transformations.
+///
+/// See also
+/// --------
+/// * [`mat_vec2`] – Matrix–vector multiplication for 2D vectors.
+/// * [`invert_sym_2x2`] – Robust inversion of symmetric 2×2 matrices.
+#[inline]
+pub fn mat_mul2(a: [[f64; 2]; 2], b: [[f64; 2]; 2]) -> [[f64; 2]; 2] {
+    [
+        [
+            a[0][0] * b[0][0] + a[0][1] * b[1][0],
+            a[0][0] * b[0][1] + a[0][1] * b[1][1],
+        ],
+        [
+            a[1][0] * b[0][0] + a[1][1] * b[1][0],
+            a[1][0] * b[0][1] + a[1][1] * b[1][1],
+        ],
+    ]
+}
+
+/// Compute the determinant of a symmetric 2×2 matrix.
+///
+/// This function evaluates the determinant of a matrix assumed to be
+/// **symmetric**, of the form:
+/// ```text
+/// [ a  b ]
+/// [ b  d ]
+/// ```
+///
+/// The determinant is given by:
+/// ```text
+/// det = a·d − b²
+/// ```
+///
+/// To improve numerical robustness, the off-diagonal term `b` is obtained
+/// by symmetrizing the input:
+/// ```text
+/// b = 0.5 · (m₀₁ + m₁₀)
+/// ```
+///
+/// Arguments
+/// ---------
+/// * `m` – Symmetric 2×2 matrix (only the symmetric part is used).
+///
+/// Return
+/// ------
+/// Determinant of the matrix.
+///
+/// Notes
+/// -----
+/// - This helper is intended primarily for covariance and information
+///   matrices, which are symmetric by construction.
+/// - The determinant is commonly used to:
+///   - test positive-definiteness (`det > 0`),
+///   - detect near-singular matrices,
+///   - choose between exact inversion and a fallback strategy.
+/// - No explicit checks for symmetry or finiteness are performed; callers
+///   are expected to handle pathological inputs if needed.
+///
+/// See also
+/// --------
+/// * [`invert_sym_2x2`] – Robust inversion of symmetric 2×2 matrices.
+/// * [`lambda_max_2x2`] – Largest eigenvalue of a symmetric 2×2 matrix.
+#[inline]
+pub fn det_sym_2x2(m: [[f64; 2]; 2]) -> f64 {
+    // Determinant of symmetric 2x2: a*d - b^2 (symmetrize b)
+    let a = m[0][0];
+    let b = 0.5 * (m[0][1] + m[1][0]);
+    let d = m[1][1];
+    a * d - b * b
+}
+
+/// Compute the lower-triangular Cholesky factor `L` of a symmetric 2×2 matrix.
+///
+/// This routine factorizes a **symmetric** matrix:
+/// ```text
+/// M = [ a  b ]
+///     [ b  d ]
+/// ```
+/// into:
+/// ```text
+/// M = L · Lᵀ,   with  L = [ l00  0  ]
+///                      [ l10  l11]
+/// ```
+///
+/// The implementation is specialized for 2×2 and designed for **hot paths**
+/// (innovation whitening, covariance normalization, gating).
+///
+/// Numerical robustness
+/// --------------------
+/// This function applies safety guards before factorization:
+/// - symmetrizes the off-diagonal term `b`,
+/// - floors diagonal terms to at least `floor`,
+/// - treats non-finite entries as invalid (returns `None`),
+/// - checks positive definiteness via the implied Schur complement:
+///   `t = d - (b² / a)` and requires `t > floor`.
+///
+/// If the matrix is not numerically positive definite, returns `None`.
+///
+/// Arguments
+/// ---------
+/// * `m` – Symmetric 2×2 matrix (only the symmetric part is used).
+/// * `floor` – Minimum allowed value for diagonal terms and for the Schur complement.
+///             Typical values: `1e-20` for radians² covariances, or `1e-12` in more
+///             conservative settings.
+///
+/// Return
+/// ------
+/// * `Some(L)` where `L` is a 2×2 lower-triangular matrix stored in row-major order:
+///   ```text
+///   [ l00  0.0 ]
+///   [ l10  l11 ]
+///   ```
+/// * `None` if the input is not finite or not positive definite after flooring.
+///
+/// Notes
+/// -----
+/// - For a 2×2 symmetric matrix, positive definiteness is equivalent to:
+///   `a > 0` and `det(M) > 0`.
+///   This routine uses an equivalent check via the Schur complement.
+/// - If you want a *fallback* behavior (diagonal-only whitening), implement that
+///   at the call site when `None` is returned.
+///
+/// See also
+/// --------
+/// * [`invert_sym_2x2`] – Robust inversion with diagonal fallback.
+/// * [`det_sym_2x2`] – Determinant of a symmetric 2×2 matrix.
+#[inline]
+pub fn cholesky_lower_sym_2x2(m: [[f64; 2]; 2], floor: f64) -> Option<[[f64; 2]; 2]> {
+    // Symmetrize and extract.
+    let mut a = m[0][0];
+    let mut d = m[1][1];
+    let b = 0.5 * (m[0][1] + m[1][0]);
+
+    // Validate and floor diagonal terms.
+    if !a.is_finite() || !d.is_finite() || !b.is_finite() || !floor.is_finite() || floor <= 0.0 {
+        return None;
+    }
+    if a < floor {
+        a = floor;
+    }
+    if d < floor {
+        d = floor;
+    }
+
+    // Cholesky for 2×2 SPD:
+    // l00 = sqrt(a)
+    // l10 = b / l00
+    // l11 = sqrt(d - l10^2)
+    let l00 = a.sqrt();
+    if !l00.is_finite() || l00 <= 0.0 {
+        return None;
+    }
+
+    let l10 = b / l00;
+    let t = d - l10 * l10;
+
+    // Require strictly positive Schur complement (with floor).
+    if !t.is_finite() || t < floor {
+        return None;
+    }
+
+    let l11 = t.sqrt();
+    if !l11.is_finite() || l11 <= 0.0 {
+        return None;
+    }
+
+    Some([[l00, 0.0], [l10, l11]])
+}
+
 /// Wrap an angle into the interval (−π, π].
 ///
 /// This is useful when working with longitudes or right ascensions where
@@ -1205,6 +1620,473 @@ mod astro_math_tests {
                     k * l,
                     epsilon = 1e-9 * (1.0 + k.abs().max(l.abs()))
                 ));
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod algebra2_tests {
+        use super::*;
+        use approx::assert_abs_diff_eq;
+
+        // -----------------------------------------------------------------------------
+        // Helpers for tests
+        // -----------------------------------------------------------------------------
+
+        #[inline]
+        fn is_finite_mat2(m: [[f64; 2]; 2]) -> bool {
+            m[0][0].is_finite() && m[0][1].is_finite() && m[1][0].is_finite() && m[1][1].is_finite()
+        }
+
+        #[inline]
+        fn is_finite_vec2(v: [f64; 2]) -> bool {
+            v[0].is_finite() && v[1].is_finite()
+        }
+
+        // A reasonable range for random floats to avoid overflow in products.
+        fn finite_f64() -> impl Strategy<Value = f64> {
+            -1.0e150f64..=1.0e150f64
+        }
+
+        // Generate a symmetric positive-definite (SPD) 2x2 matrix:
+        // [[a, b],
+        //  [b, d]]
+        // with det > 0 and a,d > 0.
+        fn spd_sym_2x2() -> BoxedStrategy<[[f64; 2]; 2]> {
+            // Keep values moderate to avoid pathological conditioning.
+            (
+                1.0e-6f64..=1.0e3f64,
+                1.0e-6f64..=1.0e3f64,
+                -0.999f64..=0.999f64,
+            )
+                .prop_map(|(a, d, rho)| {
+                    // b = rho * sqrt(a*d) ensures |b| < sqrt(a*d) => det > 0
+                    let b = rho * (a * d).sqrt();
+                    [[a, b], [b, d]]
+                })
+                .boxed()
+        }
+
+        // -----------------------------------------------------------------------------
+        // Unit tests
+        // -----------------------------------------------------------------------------
+
+        #[test]
+        fn dot2_matches_manual() {
+            let a = [1.0, 2.0];
+            let b = [3.0, 4.0];
+            assert_abs_diff_eq!(dot2(a, b), 11.0, epsilon = 0.0);
+        }
+
+        #[test]
+        fn mat_vec2_matches_manual() {
+            let m = [[1.0, 2.0], [3.0, 4.0]];
+            let v = [5.0, 6.0];
+            let out = mat_vec2(m, v);
+            assert_abs_diff_eq!(out[0], 1.0 * 5.0 + 2.0 * 6.0, epsilon = 0.0);
+            assert_abs_diff_eq!(out[1], 3.0 * 5.0 + 4.0 * 6.0, epsilon = 0.0);
+        }
+
+        #[test]
+        fn clamp_unit_basic_cases() {
+            assert_abs_diff_eq!(clamp_unit(0.5), 0.5, epsilon = 0.0);
+            assert_abs_diff_eq!(clamp_unit(2.0), 1.0, epsilon = 0.0);
+            assert_abs_diff_eq!(clamp_unit(-2.0), -1.0, epsilon = 0.0);
+        }
+
+        #[test]
+        fn clamp_unit_non_finite_returns_zero() {
+            assert_abs_diff_eq!(clamp_unit(f64::NAN), 0.0, epsilon = 0.0);
+            assert_abs_diff_eq!(clamp_unit(f64::INFINITY), 0.0, epsilon = 0.0);
+            assert_abs_diff_eq!(clamp_unit(f64::NEG_INFINITY), 0.0, epsilon = 0.0);
+        }
+
+        #[test]
+        fn safe_ln_basic_cases() {
+            assert_abs_diff_eq!(safe_ln(1.0), 0.0, epsilon = 0.0);
+            assert_abs_diff_eq!(safe_ln(std::f64::consts::E), 1.0, epsilon = 1e-15);
+            assert_abs_diff_eq!(safe_ln(0.0), 0.0, epsilon = 0.0);
+            assert_abs_diff_eq!(safe_ln(-1.0), 0.0, epsilon = 0.0);
+        }
+
+        #[test]
+        fn safe_ln_non_finite_returns_zero() {
+            assert_abs_diff_eq!(safe_ln(f64::NAN), 0.0, epsilon = 0.0);
+            assert_abs_diff_eq!(safe_ln(f64::INFINITY), 0.0, epsilon = 0.0);
+            assert_abs_diff_eq!(safe_ln(f64::NEG_INFINITY), 0.0, epsilon = 0.0);
+        }
+
+        #[test]
+        fn trace_2x2_basic() {
+            let m = [[1.0, 2.0], [3.0, 4.0]];
+            assert_abs_diff_eq!(trace_2x2(m), 5.0, epsilon = 0.0);
+        }
+
+        #[test]
+        fn invert_sym_2x2_identity() {
+            let floor = 1e-20;
+            let m = [[1.0, 0.0], [0.0, 1.0]];
+            let inv = invert_sym_2x2(m, floor);
+
+            assert_abs_diff_eq!(inv[0][0], 1.0, epsilon = 0.0);
+            assert_abs_diff_eq!(inv[0][1], 0.0, epsilon = 0.0);
+            assert_abs_diff_eq!(inv[1][0], 0.0, epsilon = 0.0);
+            assert_abs_diff_eq!(inv[1][1], 1.0, epsilon = 0.0);
+        }
+
+        #[test]
+        fn invert_sym_2x2_near_singular_falls_back_to_diagonal() {
+            let floor = 1e-12;
+
+            // a*d - b^2 == 0 -> singular (exact). Should trigger fallback.
+            let a: f64 = 2.0;
+            let d = 8.0;
+            let b = (a * d).sqrt(); // det = 0
+            let m = [[a, b], [b, d]];
+
+            let inv = invert_sym_2x2(m, floor);
+
+            // Fallback should return diagonal inverse (off-diagonals ~0).
+            assert_abs_diff_eq!(inv[0][1], 0.0, epsilon = 0.0);
+            assert_abs_diff_eq!(inv[1][0], 0.0, epsilon = 0.0);
+            assert_abs_diff_eq!(inv[0][0], 1.0 / a, epsilon = 1e-15);
+            assert_abs_diff_eq!(inv[1][1], 1.0 / d, epsilon = 1e-15);
+        }
+
+        // -----------------------------------------------------------------------------
+        // Property-based tests
+        // -----------------------------------------------------------------------------
+
+        proptest! {
+            #[test]
+            fn prop_dot2_is_commutative(
+                a in finite_f64(), b in finite_f64(), c in finite_f64(), d in finite_f64()
+            ) {
+                let u = [a, b];
+                let v = [c, d];
+                let uv = dot2(u, v);
+                let vu = dot2(v, u);
+
+                prop_assert!(uv.is_finite() && vu.is_finite());
+                let tol = 1e-12 * (uv.abs().max(vu.abs()).max(1.0));
+                prop_assert!((uv - vu).abs() <= tol);
+            }
+
+            #[test]
+            fn prop_dot2_linearity_in_first_argument(
+                a in finite_f64(), b in finite_f64(),
+                c in finite_f64(), d in finite_f64(),
+                e in finite_f64(), f in finite_f64(),
+            ) {
+                let u = [a, b];
+                let v = [c, d];
+                let w = [e, f];
+
+                let uv = [u[0] + v[0], u[1] + v[1]];
+                let lhs = dot2(uv, w);
+                let rhs = dot2(u, w) + dot2(v, w);
+
+                prop_assert!(lhs.is_finite() && rhs.is_finite());
+                let tol = 1e-9 * (lhs.abs().max(rhs.abs()).max(1.0));
+                prop_assert!((lhs - rhs).abs() <= tol);
+            }
+
+            #[test]
+            fn prop_mat_vec2_matches_expanded(
+                m00 in finite_f64(), m01 in finite_f64(), m10 in finite_f64(), m11 in finite_f64(),
+                v0 in finite_f64(), v1 in finite_f64()
+            ) {
+                let m = [[m00, m01], [m10, m11]];
+                let v = [v0, v1];
+                let out = mat_vec2(m, v);
+
+                let exp0 = m00 * v0 + m01 * v1;
+                let exp1 = m10 * v0 + m11 * v1;
+
+                prop_assert!(out[0].is_finite() && out[1].is_finite());
+                prop_assert!((out[0] - exp0).abs() <= 0.0);
+                prop_assert!((out[1] - exp1).abs() <= 0.0);
+            }
+
+            #[test]
+            fn prop_mat_vec2_is_linear_in_vector(
+                m00 in finite_f64(), m01 in finite_f64(), m10 in finite_f64(), m11 in finite_f64(),
+                a in finite_f64(), b in finite_f64(),
+                c in finite_f64(), d in finite_f64(),
+            ) {
+                let m = [[m00, m01], [m10, m11]];
+                let u = [a, b];
+                let v = [c, d];
+                let uv = [u[0] + v[0], u[1] + v[1]];
+
+                let lhs = mat_vec2(m, uv);
+                let rhs_u = mat_vec2(m, u);
+                let rhs_v = mat_vec2(m, v);
+                let rhs = [rhs_u[0] + rhs_v[0], rhs_u[1] + rhs_v[1]];
+
+                prop_assert!(is_finite_vec2(lhs) && is_finite_vec2(rhs));
+                let tol0 = 1e-9 * (lhs[0].abs().max(rhs[0].abs()).max(1.0));
+                let tol1 = 1e-9 * (lhs[1].abs().max(rhs[1].abs()).max(1.0));
+                prop_assert!((lhs[0] - rhs[0]).abs() <= tol0);
+                prop_assert!((lhs[1] - rhs[1]).abs() <= tol1);
+            }
+
+            #[test]
+            fn prop_clamp_unit_bounds(x in any::<f64>()) {
+                let y = clamp_unit(x);
+                prop_assert!(y.is_finite());
+                prop_assert!(y >= -1.0 && y <= 1.0);
+            }
+
+            #[test]
+            fn prop_safe_ln_behavior(x in any::<f64>()) {
+                let y = safe_ln(x);
+                prop_assert!(y.is_finite());
+
+                if x.is_finite() && x > 0.0 {
+                    prop_assert!((y - x.ln()).abs() <= 0.0);
+                } else {
+                    prop_assert!(y == 0.0);
+                }
+            }
+
+            #[test]
+            fn prop_trace_2x2_matches_sum(
+                m00 in finite_f64(), m01 in finite_f64(), m10 in finite_f64(), m11 in finite_f64()
+            ) {
+                let m = [[m00, m01], [m10, m11]];
+                let tr = trace_2x2(m);
+                prop_assert!(tr.is_finite());
+                prop_assert!((tr - (m00 + m11)).abs() <= 0.0);
+            }
+
+            #[test]
+            fn prop_invert_sym_2x2_spd_is_inverse_both_sides_and_symmetric_when_not_fallback(
+                m in spd_sym_2x2(),
+                floor in 1e-20f64..=1e-12f64
+            ) {
+                // SPD => determinant should be > 0.
+                let det = det_sym_2x2(m);
+                prop_assert!(det.is_finite() && det > 0.0);
+
+                let inv = invert_sym_2x2(m, floor);
+                prop_assert!(is_finite_mat2(inv));
+
+                // Check inv * m ≈ I
+                let left = mat_mul2(inv, m);
+                prop_assert!(is_finite_mat2(left));
+
+                // Check m * inv ≈ I
+                let right = mat_mul2(m, inv);
+                prop_assert!(is_finite_mat2(right));
+
+                // Tolerance: moderate since m range is controlled.
+                let eps = 1e-9;
+
+                // inv*m
+                prop_assert!((left[0][0] - 1.0).abs() <= eps);
+                prop_assert!(left[0][1].abs() <= eps);
+                prop_assert!(left[1][0].abs() <= eps);
+                prop_assert!((left[1][1] - 1.0).abs() <= eps);
+
+                // m*inv
+                prop_assert!((right[0][0] - 1.0).abs() <= eps);
+                prop_assert!(right[0][1].abs() <= eps);
+                prop_assert!(right[1][0].abs() <= eps);
+                prop_assert!((right[1][1] - 1.0).abs() <= eps);
+
+                // Symmetry check for the non-fallback path:
+                // For SPD and "reasonable" floor, we expect det > floor => we should not fallback.
+                // In that case, the inverse of a symmetric matrix should also be symmetric.
+                if det > floor {
+                    let tol = 1e-12 * inv[0][1].abs().max(inv[1][0].abs()).max(1.0);
+                    prop_assert!((inv[0][1] - inv[1][0]).abs() <= tol);
+                }
+            }
+
+            #[test]
+            fn prop_invert_sym_2x2_output_is_finite_for_reasonable_inputs(
+                a in finite_f64(), b in finite_f64(), d in finite_f64(),
+                floor in 1e-20f64..=1e-12f64
+            ) {
+                // General symmetric matrix (may be indefinite).
+                let m = [[a, b], [b, d]];
+                let inv = invert_sym_2x2(m, floor);
+
+                // Even with odd inputs, we expect finite output due to flooring and fallback.
+                prop_assert!(is_finite_mat2(inv));
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod cholesky_tests {
+        use super::*;
+        use approx::assert_relative_eq;
+
+        /// Compute L * L^T for a lower-triangular 2×2 matrix:
+        /// L = [[l00, 0], [l10, l11]]
+        #[inline]
+        fn ll_t(l: [[f64; 2]; 2]) -> [[f64; 2]; 2] {
+            let l00 = l[0][0];
+            let l10 = l[1][0];
+            let l11 = l[1][1];
+
+            [[l00 * l00, l00 * l10], [l00 * l10, l10 * l10 + l11 * l11]]
+        }
+
+        /// Symmetrize a 2×2 matrix (used for comparison since the API expects symmetric input).
+        #[inline]
+        fn sym(m: [[f64; 2]; 2]) -> [[f64; 2]; 2] {
+            let b = 0.5 * (m[0][1] + m[1][0]);
+            [[m[0][0], b], [b, m[1][1]]]
+        }
+
+        /// Add `eps * I` to a 2×2 matrix.
+        #[inline]
+        fn add_eps_i(m: [[f64; 2]; 2], eps: f64) -> [[f64; 2]; 2] {
+            [[m[0][0] + eps, m[0][1]], [m[1][0], m[1][1] + eps]]
+        }
+
+        /// Construct SPD matrix from any 2×2 A via M = A A^T + eps I.
+        #[inline]
+        fn make_spd_from_a(a: [[f64; 2]; 2], eps: f64) -> [[f64; 2]; 2] {
+            // A A^T
+            let m00 = a[0][0] * a[0][0] + a[0][1] * a[0][1];
+            let m01 = a[0][0] * a[1][0] + a[0][1] * a[1][1];
+            let m11 = a[1][0] * a[1][0] + a[1][1] * a[1][1];
+            add_eps_i([[m00, m01], [m01, m11]], eps)
+        }
+
+        #[test]
+        fn cholesky_identity() {
+            let m = [[1.0, 0.0], [0.0, 1.0]];
+            let l = cholesky_lower_sym_2x2(m, 1e-20).expect("I should be SPD");
+            assert_relative_eq!(l[0][0], 1.0, max_relative = 1e-12);
+            assert_relative_eq!(l[0][1], 0.0, max_relative = 1e-12);
+            assert_relative_eq!(l[1][1], 1.0, max_relative = 1e-12);
+
+            let recon = ll_t(l);
+            assert_relative_eq!(recon[0][0], 1.0, max_relative = 1e-12);
+            assert_relative_eq!(recon[0][1], 0.0, max_relative = 1e-12);
+            assert_relative_eq!(recon[1][0], 0.0, max_relative = 1e-12);
+            assert_relative_eq!(recon[1][1], 1.0, max_relative = 1e-12);
+        }
+
+        #[test]
+        fn cholesky_simple_spd() {
+            // SPD: [[4, 2], [2, 3]]
+            let m = [[4.0, 2.0], [2.0, 3.0]];
+            let l = cholesky_lower_sym_2x2(m, 1e-20).expect("matrix should be SPD");
+
+            // L should be lower triangular with positive diagonal.
+            assert!(l[0][0] > 0.0);
+            assert_relative_eq!(l[0][1], 0.0, max_relative = 0.0);
+            assert!(l[1][1] > 0.0);
+
+            // Reconstruction must match.
+            let recon = ll_t(l);
+            let ms = sym(m);
+            assert_relative_eq!(recon[0][0], ms[0][0], max_relative = 1e-12);
+            assert_relative_eq!(recon[0][1], ms[0][1], max_relative = 1e-12);
+            assert_relative_eq!(recon[1][0], ms[1][0], max_relative = 1e-12);
+            assert_relative_eq!(recon[1][1], ms[1][1], max_relative = 1e-12);
+        }
+
+        #[test]
+        fn cholesky_rejects_non_spd() {
+            // Not SPD: determinant <= 0 (even with positive diagonal)
+            let m = [[1.0, 2.0], [2.0, 1.0]]; // det = -3
+            assert!(cholesky_lower_sym_2x2(m, 1e-20).is_none());
+
+            // Non-finite input should be rejected.
+            let m_nan = [[f64::NAN, 0.0], [0.0, 1.0]];
+            assert!(cholesky_lower_sym_2x2(m_nan, 1e-20).is_none());
+
+            // Negative diagonal is *floored* and can become factorisable.
+            let m_neg = [[-1.0, 0.0], [0.0, 1.0]];
+            assert!(cholesky_lower_sym_2x2(m_neg, 1e-20).is_some());
+        }
+
+        #[test]
+        fn cholesky_floors_small_diagonal() {
+            let m = [[0.0, 0.0], [0.0, 0.0]];
+            let floor = 1e-6;
+
+            let l = cholesky_lower_sym_2x2(m, floor).expect("floored zero matrix should factorize");
+
+            // Triangular + positive diagonal
+            assert!(l[0][0] > 0.0);
+            assert_eq!(l[0][1], 0.0);
+            assert!(l[1][1] > 0.0);
+
+            let recon = ll_t(l);
+            assert_relative_eq!(recon[0][0], floor, max_relative = 1e-12);
+            assert_relative_eq!(recon[1][1], floor, max_relative = 1e-12);
+            assert_relative_eq!(recon[0][1], 0.0, max_relative = 0.0);
+            assert_relative_eq!(recon[1][0], 0.0, max_relative = 0.0);
+        }
+
+        // -------------------------------------------------------------------------
+        // Property-based tests
+        // -------------------------------------------------------------------------
+
+        proptest! {
+            #[test]
+            fn prop_cholesky_reconstructs_spd(
+                a00 in -10.0f64..10.0,
+                a01 in -10.0f64..10.0,
+                a10 in -10.0f64..10.0,
+                a11 in -10.0f64..10.0,
+            ) {
+                // Build SPD matrix from arbitrary A: M = A A^T + eps I.
+                let a = [[a00, a01], [a10, a11]];
+                let eps = 1e-3;
+                let m = make_spd_from_a(a, eps);
+
+                let floor = 1e-20;
+                let l = cholesky_lower_sym_2x2(m, floor).expect("constructed SPD must factorize");
+
+                // Invariants: lower-triangular and positive diagonal.
+                prop_assert!(l[0][0].is_finite() && l[0][0] > 0.0);
+                prop_assert!(l[1][1].is_finite() && l[1][1] > 0.0);
+                prop_assert_eq!(l[0][1], 0.0);
+
+                // Reconstruction accuracy: L L^T ≈ M (relative tolerance).
+                let recon = ll_t(l);
+
+                // Use a tolerance that scales with the matrix magnitude.
+                // This avoids flaky failures when M is very large.
+                let scale = m[0][0].abs().max(m[1][1].abs()).max(1.0);
+                let tol = 1e-10 * scale;
+
+                prop_assert!((recon[0][0] - m[0][0]).abs() <= tol);
+                prop_assert!((recon[0][1] - m[0][1]).abs() <= tol);
+                prop_assert!((recon[1][0] - m[1][0]).abs() <= tol);
+                prop_assert!((recon[1][1] - m[1][1]).abs() <= tol);
+            }
+
+            #[test]
+            fn prop_cholesky_matches_spd_conditions(
+                a in 1e-6f64..100.0,
+                d in 1e-6f64..100.0,
+                b in -10.0f64..10.0,
+            ) {
+                // For symmetric 2×2: SPD iff a>0 and det>0.
+                // We'll craft det using a, d, b and check behavior.
+                let m = [[a, b], [b, d]];
+                let det = det_sym_2x2(m);
+
+                let floor = 1e-20;
+                let chol = cholesky_lower_sym_2x2(m, floor);
+
+                if det > 0.0 {
+                    // It *should* factorize (almost always) for positive det and positive diag.
+                    // There are rare numeric edge cases, but with these ranges it should pass.
+                    prop_assert!(chol.is_some());
+                } else {
+                    prop_assert!(chol.is_none());
+                }
             }
         }
     }

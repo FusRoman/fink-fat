@@ -6,7 +6,7 @@ use clap::Parser;
 
 use fink_fat_engine::{
     engine_config::{EngineConfig, load_engine_config_validated},
-    graph::{edge::Edge, edge_id::EdgeId},
+    graph::edge::{Edge, edge_id::EdgeId},
     night_id::NightId,
     spacetime_bucket::{healpix_binner::HealpixBinner, uniform_time_binner::UniformTimeBinner},
 };
@@ -28,6 +28,7 @@ use fink_fat_eval::{
             edge_truth_counts_between_nights, edge_truth_diagnostics, print_miss_report,
         },
         optimization_metrics::EdgeSeparationMetrics,
+        plotting::plot_two_histograms,
     },
 };
 
@@ -289,6 +290,7 @@ struct EvalSteps {
     pub diagnostics: bool,
     pub miss_diagnosis: bool,
     pub metrics: bool,
+    pub plot_scores: bool,
 }
 
 fn eval_pair_with_log(
@@ -313,6 +315,52 @@ fn eval_pair_with_log(
     // 1) generate edges (+ time binner)
     let (time_binner, edges) =
         step_generate_topk_edges(logbuf, cli, left, right, engine_cfg, spatial_binner);
+
+    let cost_limit = 200.0;
+    let edges = edges
+        .into_iter()
+        .filter(|e| e.cost <= cost_limit)
+        .collect::<Vec<Edge>>();
+
+    // Plot score histogram
+    if steps.plot_scores {
+        let mut scores_same: Vec<f64> = Vec::new();
+        let mut scores_diff: Vec<f64> = Vec::new();
+
+        for edge in &edges {
+            let truth = left.edge_truth(right, edge);
+            match truth {
+                Some(true) => scores_same.push(edge.cost),
+                Some(false) => scores_diff.push(edge.cost),
+                None => {}
+            }
+        }
+        // ------------------------------------------------------------------
+        // Plot
+        // ------------------------------------------------------------------
+        let out_png = cli.scan.out_dir.join(&cli.plot.out_png);
+        let title = if cli.plot.log_cost {
+            "Inter-night score distribution (log1p(cost))"
+        } else {
+            "Inter-night score distribution (cost)"
+        };
+        let xlab = if cli.plot.log_cost {
+            "log1p(cost)"
+        } else {
+            "cost"
+        };
+        plot_two_histograms(
+            &out_png,
+            cli.plot.width,
+            cli.plot.height,
+            title,
+            xlab,
+            &scores_same,
+            &scores_diff,
+            cli.bins,
+        )?;
+        buflog!(logbuf, cli, "Plotted score histograms to {}", out_png);
+    }
 
     // Truth counts (kept as-is: you already had it here)
     let t_truth = Instant::now();
@@ -557,9 +605,10 @@ fn main() -> Result<()> {
             };
 
             let steps = EvalSteps {
-                diagnostics: false,
-                miss_diagnosis: false,
+                diagnostics: true,
+                miss_diagnosis: true,
                 metrics: true,
+                plot_scores: true,
             };
 
             let t_pair = Instant::now();

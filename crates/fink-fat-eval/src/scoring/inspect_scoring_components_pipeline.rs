@@ -15,18 +15,22 @@ use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 use fink_fat_engine::{
     AlertId,
     engine_config::{EngineConfig, load_engine_config_validated},
-    graph::score::ScoredEdge,
+    graph::edge::score::ScoredEdge,
     night_id::NightId,
     seeding::seed_node::SeedNode,
     spacetime_bucket::{healpix_binner::HealpixBinner, uniform_time_binner::UniformTimeBinner},
 };
 
 use crate::{
-    bin_utils::{infer_t0_mjd_tt, ingest_one_night, resolve_nids}, cli::scoring::Cli, dataset::{
+    bin_utils::{infer_t0_mjd_tt, ingest_one_night, resolve_nids},
+    cli::scoring::Cli,
+    dataset::{
         ParquetSource,
         ingest_config::AlertIngestConfig,
         ztf_alerts::{AlertLoadMode, AlertStoreWithTruth},
-    }, scoring::inspect_scoring_components_plots::{frac_none, plot_hist, plot_overlay_hist}, seeding::seed_gen::generate_pairs_and_triplets
+    },
+    scoring::inspect_scoring_components_plots::{frac_none, plot_hist, plot_overlay_hist},
+    seeding::seed_gen::generate_pairs_and_triplets,
 };
 
 /// Lightweight container for per-night seeds and their associated truth labels.

@@ -145,7 +145,12 @@ mod bucket_tests {
             1.0
         }
 
-        fn neighbors_into(&self, key: SpatialKey, ang_radius: Radians, out: &mut Vec<SpatialKey>) {
+        fn neighbors_into(
+            &self,
+            _key: SpatialKey,
+            _ang_radius: Radians,
+            _out: &mut Vec<SpatialKey>,
+        ) {
             todo!()
         }
     }
@@ -304,9 +309,9 @@ mod bucket_tests {
 
             fn neighbors_into(
                 &self,
-                key: SpatialKey,
-                ang_radius: Radians,
-                out: &mut Vec<SpatialKey>,
+                _key: SpatialKey,
+                _ang_radius: Radians,
+                _out: &mut Vec<SpatialKey>,
             ) {
                 todo!()
             }
@@ -393,9 +398,9 @@ mod bucket_tests {
 
             fn neighbors_into(
                 &self,
-                key: SpatialKey,
-                ang_radius: Radians,
-                out: &mut Vec<SpatialKey>,
+                _key: SpatialKey,
+                _ang_radius: Radians,
+                _out: &mut Vec<SpatialKey>,
             ) {
                 todo!()
             }

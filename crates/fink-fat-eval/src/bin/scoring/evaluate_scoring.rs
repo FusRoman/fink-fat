@@ -26,7 +26,7 @@ use camino::Utf8Path;
 use clap::Parser;
 use fink_fat_engine::{
     engine_config::{EngineConfig, load_engine_config_validated},
-    graph::{edge::Edge, edge_id::EdgeId},
+    graph::edge::{Edge, edge_id::EdgeId},
     night_id::NightId,
     spacetime_bucket::{healpix_binner::HealpixBinner, uniform_time_binner::UniformTimeBinner},
 };
@@ -40,10 +40,7 @@ use fink_fat_eval::{
         edges_diagnostics::EdgesStatsDisplay,
         optimization_metrics::{
             EdgeSeparationMetrics,
-            objective::{
-                LinkingObjectiveConfig, 
-                objective_linking_quality,
-            },
+            objective::{LinkingObjectiveConfig, objective_linking_quality},
         },
     },
 };

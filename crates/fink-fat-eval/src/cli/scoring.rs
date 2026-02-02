@@ -2,7 +2,7 @@ use camino::Utf8PathBuf;
 use clap::{ArgAction, Parser};
 use fink_fat_engine::engine_config::EngineConfig;
 
-use crate::cli::common::{CommonBinningArgs, CommonScanArgs};
+use crate::cli::common::{CommonBinningArgs, CommonPlotArgs, CommonScanArgs};
 
 /// Inspect scoring components + seed tangent-plane values.
 ///
@@ -22,6 +22,9 @@ pub struct Cli {
 
     #[command(flatten)]
     pub binning: CommonBinningArgs,
+
+    #[command(flatten)]
+    pub plot: CommonPlotArgs,
 
     /// YAML engine configuration (pairs/triplets/predictor/scoring/edges).
     #[arg(

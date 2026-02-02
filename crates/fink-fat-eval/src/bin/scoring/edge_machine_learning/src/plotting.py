@@ -27,6 +27,9 @@ from sklearn.calibration import CalibrationDisplay
 from sklearn.inspection import permutation_importance
 from sklearn.model_selection import learning_curve
 import time
+import logging
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------
 # Helpers
@@ -429,25 +432,35 @@ def plot_hit_at_k_curve(
 def save_all_standard_plots(
     *,
     model: ClassifierMixin,
-    df_test: pd.DataFrame,
     X_test: np.ndarray,
     y_test: np.ndarray,
     feature_names: Sequence[str],
     out_dir: Union[str, Path],
     prefix: str = "",
-    group_col: str = "from_seed_id",
-    label_col: str = "is_true_edge",
+    threshold: float = 0.5,
 ) -> None:
     """
-    Génère un pack standard de plots dans out_dir.
+    Generate a standard plot pack in out_dir.
 
-    Attend df_test (avec colonnes debug optionnelles) + X_test/y_test.
+    Parameters
+    ----------
+    threshold : float, default 0.5
+        Decision threshold used to build y_pred for confusion matrix plots.
     """
     out = _ensure_dir(out_dir)
     assert out is not None
 
+    logger.info("Computing model probabilities...")
+    t_before = time.time()
+
     y_proba = _get_proba(model, X_test)
-    y_pred = (y_proba >= 0.5).astype(int)
+    y_pred = (y_proba >= float(threshold)).astype(int)
+
+    logger.info(
+        "Model probabilities computed in %.2f seconds (threshold=%.6f).",
+        time.time() - t_before,
+        float(threshold),
+    )
 
     t_before = time.time()
     plot_roc_pr_curves(y_test, y_proba, out_dir=out, prefix=prefix)
@@ -471,31 +484,31 @@ def save_all_standard_plots(
     _ = plot_feature_importance(model, feature_names, out_dir=out, prefix=prefix)
     print(f"Feature importance plotted in {time.time() - t_before:.2f} seconds.")
 
-    t_before = time.time()
-    # permutation importance (always possible but potentially expensive)
-    plot_permutation_importance(
-        model,
-        X_test,
-        y_test,
-        feature_names,
-        scoring="roc_auc",
-        n_repeats=8,
-        out_dir=out,
-        prefix=prefix,
-    )
-    print(f"Permutation importance plotted in {time.time() - t_before:.2f} seconds.")
+    # t_before = time.time()
+    # # permutation importance (always possible but potentially expensive)
+    # plot_permutation_importance(
+    #     model,
+    #     X_test,
+    #     y_test,
+    #     feature_names,
+    #     scoring="roc_auc",
+    #     n_repeats=8,
+    #     out_dir=out,
+    #     prefix=prefix,
+    # )
+    # print(f"Permutation importance plotted in {time.time() - t_before:.2f} seconds.")
     print("All feature importance plots done.\n")
 
-    t_before = time.time()
-    # ranking-like eval / curve si group_col existe
-    df_scored = df_test.copy()
-    df_scored["y_proba"] = y_proba
-    _ = plot_hit_at_k_curve(
-        df_scored,
-        group_col=group_col,
-        label_col=label_col,
-        score_col="y_proba",
-        out_dir=out,
-        prefix=prefix,
-    )
-    print(f"Hit@K curve plotted in {time.time() - t_before:.2f} seconds.")
+    # t_before = time.time()
+    # # ranking-like eval / curve si group_col existe
+    # df_scored = df_test.copy()
+    # df_scored["y_proba"] = y_proba
+    # _ = plot_hit_at_k_curve(
+    #     df_scored,
+    #     group_col=group_col,
+    #     label_col=label_col,
+    #     score_col="y_proba",
+    #     out_dir=out,
+    #     prefix=prefix,
+    # )
+    # print(f"Hit@K curve plotted in {time.time() - t_before:.2f} seconds.")

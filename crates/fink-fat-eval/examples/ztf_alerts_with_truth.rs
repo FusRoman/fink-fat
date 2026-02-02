@@ -27,7 +27,7 @@
 use fink_fat_eval::dataset::{
     ParquetSource,
     ztf_alerts::{
-        AlertLoadMode, ZtfAlertScan, alert_store_with_truth_from_lazyframe, scan_ztf_alerts
+        AlertLoadMode, ZtfAlertScan, alert_store_with_truth_from_lazyframe, scan_ztf_alerts,
     },
 };
 
@@ -37,8 +37,7 @@ fn main() -> anyhow::Result<()> {
     // ---------------------------------------------------------------------
 
     // Parquet dataset containing ZTF-like alerts with a `trajectory_id` column.
-    let parquet_source =
-        ParquetSource::new("../../test_exp/ztf_alert.parquet")?;
+    let parquet_source = ParquetSource::new("../../test_exp/ztf_alert.parquet")?;
 
     // Configure a lazy scan:
     // - keep only alerts associated with a truth trajectory,
@@ -56,8 +55,7 @@ fn main() -> anyhow::Result<()> {
     let lf = scan_ztf_alerts(&parquet_source, scan)?;
 
     // Materialize into an engine store + truth sidecar.
-    let alert_store =
-        alert_store_with_truth_from_lazyframe(lf, Default::default())?;
+    let alert_store = alert_store_with_truth_from_lazyframe(lf, Default::default())?;
 
     // ---------------------------------------------------------------------
     // Global summary
@@ -92,12 +90,7 @@ fn main() -> anyhow::Result<()> {
     println!("\n===============\nAlerts for trajectory_id = {}:", traj_id);
 
     for alert in alert_store.alerts_for_trajectory(traj_id) {
-        println!(
-            "trajectory {} alert {:?}: {}",
-            traj_id,
-            alert.id,
-            alert,
-        );
+        println!("trajectory {} alert {:?}: {}", traj_id, alert.id, alert,);
     }
 
     Ok(())

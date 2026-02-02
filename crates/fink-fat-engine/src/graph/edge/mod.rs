@@ -1,50 +1,26 @@
-pub mod score;
 pub mod edge_id;
 pub mod edge_prediction;
-
+pub mod features;
+pub mod score;
 
 use std::fmt::{self, Display, Formatter};
 
 use ahash::AHashMap;
 
 use crate::{
+    astro_math::{lambda_max_2x2, trace_2x2},
     engine_config::edge_config::EdgeConfig,
-    graph::edge::edge_id::EdgeId,
+    graph::edge::{
+        edge_id::EdgeId,
+        features::{
+            EdgeFeatures, EdgeModelFeatures, EdgePhotometryFeatures, EdgePositionFeatures,
+            EdgeUncertaintyFeatures, EdgeVelocityFeatures, FeatureCore,
+        },
+    },
     night_id::NightId,
     seeding::{seed_id::SeedId, seed_node::SeedNode, seed_spatial_index::SeedSpatialIndex},
     spacetime_bucket::{spatial_binner::SpatialBinner, time_binner::TimeBinner},
 };
-
-/// Vecteur de caractéristiques dérivées d'une arête.
-///
-/// Chaque champ est documenté et représente une grandeur physique ou
-/// photométrique déduite des deux `SeedNode` reliés.
-#[derive(Clone, Debug)]
-pub struct EdgeFeatures {
-    pub dt_days: f64,
-    pub dt_days_sq: f64,
-    pub inv_dt_days: f64,
-    pub d2_pos: f64,
-    pub log_d2_pos: f64,
-    pub resid_norm: f64,
-    pub resid_dx: f64,
-    pub resid_dy: f64,
-    pub speed_from: f64,
-    pub speed_to: f64,
-    pub speed_diff: f64,
-    pub distance_travelled: f64,
-    pub n_obs_from: f64,
-    pub n_obs_to: f64,
-    pub trace_cov_pos_from: f64,
-    pub trace_cov_pos_to: f64,
-    pub trace_cov_vel_from: f64,
-    pub trace_cov_vel_to: f64,
-    pub flux_abs_diff: f64,
-    pub z_flux: f64,
-    pub flux_std_ratio: f64,
-    pub band_shared: f64,
-    pub has_acc: f64,
-}
 
 /// Directed link from an older node to a newer node (forward in time).
 ///
@@ -254,131 +230,124 @@ impl<'a> Edge<'a> {
         edges
     }
 
+    // -------------------------------------------------------------------------
+    // Feature API (high-level)
+    // -------------------------------------------------------------------------
+
+    /// Compute the full cadence-robust feature set.
+    #[inline]
     pub fn compute_features(&self) -> EdgeFeatures {
-        let dt = self.dt_days;
-        let dt_sq = if dt.is_finite() { dt * dt } else { 0.0 };
-        let inv_dt = if dt.is_finite() && dt > 0.0 {
-            1.0 / dt
-        } else {
-            0.0
-        };
+        // Build shared intermediate quantities once.
+        let core = FeatureCore::from_edge(self);
 
-        // Propagation déterministe du seed `from` à l'époque de `to`.
-        let mut px = self.from.plane.pos_xy[0] + self.from.plane.vel_xy[0] * dt;
-        let mut py = self.from.plane.pos_xy[1] + self.from.plane.vel_xy[1] * dt;
-        // Application de l’accélération si présente.
-        let has_acc = if let Some(a) = self.from.plane.acc_xy {
-            px += 0.5 * a[0] * dt_sq;
-            py += 0.5 * a[1] * dt_sq;
-            1.0
-        } else {
-            0.0
-        };
-
-        // Projection du seed cible sur le plan tangent du seed source.
-        let p_j = self
-            .from
-            .plane
-            .radec_to_tangent_precomp(self.to.plane.ra_mid, self.to.plane.dec_mid);
-        let dx = p_j[0] - px;
-        let dy = p_j[1] - py;
-        let resid_norm = (dx * dx + dy * dy).sqrt();
-
-        // Propagation diagonale des covariances : Σ̂_i + Σ_pos_j.
-        let var_x_from = self.from.plane.cov_pos[0][0] + dt_sq * self.from.plane.cov_vel[0][0];
-        let var_y_from = self.from.plane.cov_pos[1][1] + dt_sq * self.from.plane.cov_vel[1][1];
-        let var_x = var_x_from + self.to.plane.cov_pos[0][0];
-        let var_y = var_y_from + self.to.plane.cov_pos[1][1];
-        let var_floor = 1e-20_f64;
-        let vx = if var_x.is_finite() && var_x > var_floor {
-            var_x
-        } else {
-            var_floor
-        };
-        let vy = if var_y.is_finite() && var_y > var_floor {
-            var_y
-        } else {
-            var_floor
-        };
-
-        let d2_pos = (dx * dx) / vx + (dy * dy) / vy;
-        let log_d2_pos = if d2_pos.is_finite() {
-            let eps = 1e-16_f64;
-            (d2_pos + eps).ln()
-        } else {
-            0.0
-        };
-
-        // Vitesses prédictives et différences.
-        let mut vx_i = self.from.plane.vel_xy[0];
-        let mut vy_i = self.from.plane.vel_xy[1];
-        if let Some(a) = self.from.plane.acc_xy {
-            vx_i += a[0] * dt;
-            vy_i += a[1] * dt;
+        EdgeFeatures {
+            position: self.position_features(&core),
+            velocity: self.velocity_features(&core),
+            uncertainty: self.uncertainty_features(),
+            photometry: self.photometry_features(),
+            model: EdgeModelFeatures {
+                has_acc: core.has_acc,
+            },
         }
-        let speed_from = (vx_i * vx_i + vy_i * vy_i).sqrt();
-        let speed_to = (self.to.plane.vel_xy[0].powi(2) + self.to.plane.vel_xy[1].powi(2)).sqrt();
-        let speed_diff = (speed_from - speed_to).abs();
-        let distance_travelled = speed_from * dt;
+    }
 
-        // Covariances et nombre d’observations.
-        let n_obs_from = self.from.n_obs as f64;
-        let n_obs_to = self.to.n_obs as f64;
-        let trace_cov_pos_from = self.from.plane.cov_pos[0][0] + self.from.plane.cov_pos[1][1];
-        let trace_cov_pos_to = self.to.plane.cov_pos[0][0] + self.to.plane.cov_pos[1][1];
-        let trace_cov_vel_from = self.from.plane.cov_vel[0][0] + self.from.plane.cov_vel[1][1];
-        let trace_cov_vel_to = self.to.plane.cov_vel[0][0] + self.to.plane.cov_vel[1][1];
+    /// Compute only position/innovation features.
+    #[inline]
+    fn position_features(&self, core: &FeatureCore) -> EdgePositionFeatures {
+        EdgePositionFeatures {
+            chi2_pos: core.chi2_pos,
+            log_chi2_pos: core.log_chi2_pos,
+            z_dx: core.z_dx,
+            z_dy: core.z_dy,
+            z_resid_norm: core.z_resid_norm,
+            z_along: core.z_along,
+            z_cross: core.z_cross,
+            chol_z1: core.chol_z1,
+            chol_z2: core.chol_z2,
+            chol_z_norm: core.chol_z_norm,
+        }
+    }
 
-        // Photométrie : différence absolue et z‑score avec un plancher de variance.
+    /// Compute only velocity/kinematic features.
+    #[inline]
+    fn velocity_features(&self, core: &FeatureCore) -> EdgeVelocityFeatures {
+        EdgeVelocityFeatures {
+            cos_dtheta_v: core.cos_dtheta_v,
+            rel_speed_diff: core.rel_speed_diff,
+            innov_speed_ratio: core.innov_speed_ratio,
+        }
+    }
+
+    /// Compute only uncertainty/quality ratio features.
+    #[inline]
+    fn uncertainty_features(&self) -> EdgeUncertaintyFeatures {
+        let eps = FeatureCore::EPS;
+
+        let cpos_from = self.from.plane.cov_pos;
+        let cpos_to = self.to.plane.cov_pos;
+
+        let cvel_from = self.from.plane.cov_vel;
+        let cvel_to = self.to.plane.cov_vel;
+
+        let tr_pos_from = trace_2x2(cpos_from).max(0.0);
+        let tr_pos_to = trace_2x2(cpos_to).max(0.0);
+        let cov_pos_ratio = FeatureCore::safe_div(tr_pos_to, tr_pos_from + eps);
+
+        let tr_vel_from = trace_2x2(cvel_from).max(0.0);
+        let tr_vel_to = trace_2x2(cvel_to).max(0.0);
+        let cov_vel_ratio = FeatureCore::safe_div(tr_vel_to, tr_vel_from + eps);
+
+        let anisotropy_pos_from =
+            FeatureCore::safe_div(lambda_max_2x2(cpos_from), trace_2x2(cpos_from) + eps);
+        let anisotropy_pos_to =
+            FeatureCore::safe_div(lambda_max_2x2(cpos_to), trace_2x2(cpos_to) + eps);
+
+        EdgeUncertaintyFeatures {
+            cov_pos_ratio,
+            cov_vel_ratio,
+            anisotropy_pos_from: FeatureCore::finite_or_zero(anisotropy_pos_from),
+            anisotropy_pos_to: FeatureCore::finite_or_zero(anisotropy_pos_to),
+        }
+    }
+
+    /// Compute only photometry features.
+    #[inline]
+    fn photometry_features(&self) -> EdgePhotometryFeatures {
         let flux_i = self.from.photom.flux_mean as f64;
         let flux_j = self.to.photom.flux_mean as f64;
         let flux_abs_diff = (flux_j - flux_i).abs();
+
         let sigma_i = self.from.photom.flux_std as f64;
         let sigma_j = self.to.photom.flux_std as f64;
+
+        // Variance floor is intentionally large-ish (in flux units) to avoid
+        // exploding z-scores for tiny reported uncertainties.
         let sigma_floor = 1.0_f64;
-        let pooled_var = sigma_i.powi(2) + sigma_j.powi(2) + sigma_floor.powi(2);
-        let z_flux = if pooled_var > 0.0 {
+        let pooled_var = sigma_i * sigma_i + sigma_j * sigma_j + sigma_floor * sigma_floor;
+
+        let z_flux = if pooled_var.is_finite() && pooled_var > 0.0 {
             flux_abs_diff / pooled_var.sqrt()
         } else {
             0.0
         };
-        let flux_std_ratio = if sigma_i > 0.0 {
+
+        let flux_std_ratio = if sigma_i.is_finite() && sigma_i > 0.0 {
             sigma_j / sigma_i
         } else {
             0.0
         };
 
-        // Indicateur de partage de bandes.
         let band_shared = if self.from.photom.shares_any_band(&self.to.photom) {
             1.0
         } else {
             0.0
         };
 
-        EdgeFeatures {
-            dt_days: dt,
-            dt_days_sq: dt_sq,
-            inv_dt_days: inv_dt,
-            d2_pos,
-            log_d2_pos,
-            resid_norm,
-            resid_dx: dx,
-            resid_dy: dy,
-            speed_from,
-            speed_to,
-            speed_diff,
-            distance_travelled,
-            n_obs_from,
-            n_obs_to,
-            trace_cov_pos_from,
-            trace_cov_pos_to,
-            trace_cov_vel_from,
-            trace_cov_vel_to,
-            flux_abs_diff,
-            z_flux,
-            flux_std_ratio,
+        EdgePhotometryFeatures {
+            flux_abs_diff: FeatureCore::finite_or_zero(flux_abs_diff),
+            z_flux: FeatureCore::finite_or_zero(z_flux),
+            flux_std_ratio: FeatureCore::finite_or_zero(flux_std_ratio),
             band_shared,
-            has_acc,
         }
     }
 }

@@ -1,4 +1,7 @@
-use crate::scoring::optimization_metrics::{BestYouden, metrics::{BestF1, Metrics, OperatingPoint}};
+use crate::scoring::optimization_metrics::{
+    BestYouden,
+    metrics::{BestF1, Metrics, OperatingPoint},
+};
 
 /// Iterate over contiguous **tie blocks** of equal keys in a `(key, is_good)` array.
 ///

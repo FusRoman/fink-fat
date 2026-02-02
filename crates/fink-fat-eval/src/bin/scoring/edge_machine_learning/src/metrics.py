@@ -7,15 +7,42 @@ from sklearn.metrics import (
     average_precision_score,
     confusion_matrix,
     classification_report,
+    brier_score_loss,
+    log_loss,
 )
 
 
 def eval_classification(
     y_true: np.ndarray, y_proba: np.ndarray, threshold: float = 0.5
 ) -> dict:
+    """
+    Evaluate classification quality for probabilistic binary predictions.
+
+    Notes
+    -----
+    - Adds calibration-sensitive metrics: Brier score and log loss.
+    - Clips probabilities to avoid infinite log loss when models output exact 0/1.
+    """
+    from sklearn.metrics import brier_score_loss, log_loss
+
+    y_true = np.asarray(y_true).astype(int)
+    y_proba = np.asarray(y_proba).astype(float)
+
+    # Avoid logloss inf on exact 0/1 (can happen with tree ensembles)
+    eps = 1e-15
+    y_proba_clip = np.clip(y_proba, eps, 1.0 - eps)
+
     y_pred = (y_proba >= threshold).astype(int)
 
-    out = {}
+    out: dict = {}
+
+    # Calibration/probabilistic metrics (lower is better)
+    out["brier"] = float(brier_score_loss(y_true, y_proba))
+    out["logloss"] = float(
+        log_loss(y_true, np.c_[1.0 - y_proba_clip, y_proba_clip], labels=[0, 1])
+    )
+
+    # Ranking metrics (higher is better); undefined if y_true is single-class
     out["roc_auc"] = (
         roc_auc_score(y_true, y_proba) if len(np.unique(y_true)) > 1 else float("nan")
     )

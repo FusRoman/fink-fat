@@ -3,7 +3,7 @@ use std::fmt;
 use fink_fat_engine::engine_config::EngineConfig;
 use fink_fat_engine::engine_config::score_config::ScoreConfig;
 use fink_fat_engine::graph::edge::Edge;
-use fink_fat_engine::graph::edge_id::EdgeId;
+use fink_fat_engine::graph::edge::edge_id::EdgeId;
 use rand::Rng;
 use rand::rngs::StdRng;
 
@@ -11,7 +11,7 @@ use crate::night_seeds::{LabeledEdge, SeedStore};
 use crate::scoring::frozen_pairs::FrozenPair;
 use crate::scoring::optimization_metrics::EdgeSeparationMetrics;
 use anyhow::Result;
-use fink_fat_engine::graph::score::ScoredEdge;
+use fink_fat_engine::graph::edge::score::ScoredEdge;
 
 /// Result of a single optimisation run.
 #[derive(Debug, Clone)]

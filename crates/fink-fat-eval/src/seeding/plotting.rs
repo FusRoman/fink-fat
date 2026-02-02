@@ -287,36 +287,27 @@ fn infer_range(values: &[f64]) -> (f64, f64) {
     (lo - pad, hi + pad)
 }
 
-/// Build a simple histogram (counts) for a slice of values.
-///
-/// Returns
-/// -------
-/// (Vec<usize>, f64, f64)
-///     `(counts, lo, hi)` where `counts.len() == bins` and values are binned
-///     uniformly on `[lo, hi]`.
-fn histogram(values: &[f64], bins: usize, lo: f64, hi: f64) -> Vec<usize> {
-    let mut counts = vec![0usize; bins];
-    if bins == 0 || !(hi > lo) {
-        return counts;
+/// Build histogram counts for values in [xmin, xmax] with `bins` bins.
+pub fn histogram(values: &[f64], xmin: f64, xmax: f64, bins: usize) -> Vec<usize> {
+    let mut h = vec![0usize; bins];
+    if values.is_empty() || !(xmin < xmax) || bins == 0 {
+        return h;
     }
-
-    let scale = (bins as f64) / (hi - lo);
-
+    let w = (xmax - xmin) / (bins as f64);
     for &x in values {
-        if !x.is_finite() {
+        if !x.is_finite() || x < xmin || x > xmax {
             continue;
         }
-        let mut k = ((x - lo) * scale).floor() as isize;
+        let mut k = ((x - xmin) / w) as isize;
         if k < 0 {
-            continue;
+            k = 0;
         }
         if k as usize >= bins {
             k = (bins as isize) - 1;
         }
-        counts[k as usize] += 1;
+        h[k as usize] += 1;
     }
-
-    counts
+    h
 }
 
 /// Plot a histogram of Δt (days), split by truth label.
@@ -357,9 +348,9 @@ pub fn plot_pairs_dt_hist(
         let all_dt: Vec<f64> = feats.iter().map(|f| f.dt).collect();
         let (lo, hi) = cfg.dt_range.unwrap_or_else(|| infer_range(&all_dt));
 
-        let h_true = histogram(&dt_true, cfg.dt_bins, lo, hi);
-        let h_cont = histogram(&dt_cont, cfg.dt_bins, lo, hi);
-        let h_unk = histogram(&dt_unk, cfg.dt_bins, lo, hi);
+        let h_true = histogram(&dt_true, lo, hi, cfg.dt_bins);
+        let h_cont = histogram(&dt_cont, lo, hi, cfg.dt_bins);
+        let h_unk = histogram(&dt_unk, lo, hi, cfg.dt_bins);
 
         let y_max = *h_true
             .iter()
@@ -461,9 +452,9 @@ pub fn plot_pairs_sep_hist(
         let all_sep: Vec<f64> = feats.iter().map(|f| f.sep_rad * scale).collect();
         let (lo, hi) = cfg.sep_range.unwrap_or_else(|| infer_range(&all_sep));
 
-        let h_true = histogram(&sep_true, cfg.sep_bins, lo, hi);
-        let h_cont = histogram(&sep_cont, cfg.sep_bins, lo, hi);
-        let h_unk = histogram(&sep_unk, cfg.sep_bins, lo, hi);
+        let h_true = histogram(&sep_true, lo, hi, cfg.sep_bins);
+        let h_cont = histogram(&sep_cont, lo, hi, cfg.sep_bins);
+        let h_unk = histogram(&sep_unk, lo, hi, cfg.sep_bins);
 
         let y_max = *h_true
             .iter()
@@ -1024,9 +1015,9 @@ pub fn plot_pairs_omega_hist(
         let (lo, hi) = infer_range(&all_w);
 
         // Reuse sep_bins for ω (or add omega_bins to cfg if you prefer).
-        let h_true = histogram(&w_true, cfg.sep_bins, lo, hi);
-        let h_cont = histogram(&w_cont, cfg.sep_bins, lo, hi);
-        let h_unk = histogram(&w_unk, cfg.sep_bins, lo, hi);
+        let h_true = histogram(&w_true, lo, hi, cfg.sep_bins);
+        let h_cont = histogram(&w_cont, lo, hi, cfg.sep_bins);
+        let h_unk = histogram(&w_unk, lo, hi, cfg.sep_bins);
 
         let y_max = *h_true
             .iter()

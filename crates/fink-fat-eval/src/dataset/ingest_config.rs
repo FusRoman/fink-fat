@@ -1,4 +1,3 @@
-
 /// Ingestion configuration when converting a Polars `LazyFrame` into an engine `AlertStore`.
 #[derive(Clone, Debug)]
 pub struct AlertIngestConfig {

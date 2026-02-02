@@ -162,6 +162,48 @@ impl SeedNode {
             .collect()
     }
 
+    /// Deterministically propagate `from` to `t_to = t_from + dt` on the tangent plane.
+    ///
+    /// Motion model
+    /// ------------
+    /// Uses a constant-velocity model by default:
+    /// `p(t) = p0 + v0 · dt`
+    ///
+    /// If the seed contains an acceleration term, uses constant-acceleration:
+    /// `p(t) = p0 + v0 · dt + 0.5 · a · dt²`
+    /// `v(t) = v0 + a · dt`
+    ///
+    /// Arguments
+    /// ---------
+    /// * `from` – Source seed node providing position/velocity (and optional acceleration).
+    /// * `dt` – Time difference to propagate (days).
+    /// * `dt_sq` – Precomputed `dt²` for efficiency.
+    ///
+    /// Return
+    /// ------
+    /// `(p_pred, v_pred, has_acc)` where:
+    /// * `p_pred` – Predicted position `[x, y]` at target epoch on the source tangent plane.
+    /// * `v_pred` – Predicted velocity `[vx, vy]` at target epoch on the source tangent plane.
+    /// * `has_acc` – `1.0` if acceleration is used, else `0.0`.
+    ///
+    /// Notes
+    /// -----
+    /// This routine assumes the tangent plane of `from` remains a valid local
+    /// linearization over the time gap `dt`, which is the case for typical
+    /// inter-night asteroid linking at small angular scales.
+    #[inline]
+    pub(crate) fn propagate_from(&self, dt: f64, dt_sq: f64) -> ([f64; 2], [f64; 2], f64) {
+        let (px, py) = self.plane.predict_position(dt, dt_sq);
+        let (vx, vy) = self.plane.predict_velocity(dt);
+        let has_acc = if self.plane.acc_xy.is_some() {
+            1.0
+        } else {
+            0.0
+        };
+
+        ([px, py], [vx, vy], has_acc)
+    }
+
     /// Predict the sky position `(RA, Dec)` at a target epoch using the
     /// underlying tangent-plane model.
     ///
