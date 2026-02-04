@@ -8,6 +8,7 @@ use crate::engine_config::{
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct EdgeConfig {
+    pub edge_ranking_model_path: String,
     pub top_k_per_left: usize,
     pub max_total_edges: Option<usize>,
     pub predictor_config: PredictorParams,
@@ -17,6 +18,7 @@ pub struct EdgeConfig {
 impl Default for EdgeConfig {
     fn default() -> Self {
         Self {
+            edge_ranking_model_path: "model.onnx".to_string(),
             top_k_per_left: 32,
             max_total_edges: None,
             predictor_config: PredictorParams::default(),

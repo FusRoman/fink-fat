@@ -41,7 +41,6 @@ use crate::{
 /// - [`EdgeVelocityFeatures`] for relative kinematic consistency,
 /// - [`EdgeUncertaintyFeatures`] for uncertainty/quality ratios (dimensionless),
 /// - [`EdgePhotometryFeatures`] for (mostly cadence-invariant) photometry,
-/// - [`EdgeModelFeatures`] for model indicators (e.g. acceleration enabled).
 ///
 /// This provides:
 /// - better readability at call sites,
@@ -61,8 +60,6 @@ pub struct EdgeFeatures {
     pub uncertainty: EdgeUncertaintyFeatures,
     /// Photometry consistency (normalized flux differences, band sharing).
     pub photometry: EdgePhotometryFeatures,
-    /// Model indicator features (e.g. whether acceleration was used).
-    pub model: EdgeModelFeatures,
 }
 
 /// Position/innovation consistency features (dimensionless).
@@ -194,21 +191,20 @@ pub struct EdgeUncertaintyFeatures {
     /// `tr(Cpos_to) / (tr(Cpos_from) + eps)`.
     ///
     /// Trace is the sum of variances, used as a scalar total uncertainty proxy.
-    pub cov_pos_ratio: f64,
+    // pub cov_pos_ratio: f64,
 
     /// Trace ratio of velocity covariance:
     /// `tr(Cvel_to) / (tr(Cvel_from) + eps)`.
     pub cov_vel_ratio: f64,
+    // Anisotropy proxy at `from`:
+    // `lambda_max(Cpos_from) / (tr(Cpos_from) + eps)`.
+    //
+    // Values closer to 1 mean the covariance is dominated by a single direction.
+    // pub anisotropy_pos_from: f64,
 
-    /// Anisotropy proxy at `from`:
-    /// `lambda_max(Cpos_from) / (tr(Cpos_from) + eps)`.
-    ///
-    /// Values closer to 1 mean the covariance is dominated by a single direction.
-    pub anisotropy_pos_from: f64,
-
-    /// Anisotropy proxy at `to`:
-    /// `lambda_max(Cpos_to) / (tr(Cpos_to) + eps)`.
-    pub anisotropy_pos_to: f64,
+    // Anisotropy proxy at `to`:
+    // `lambda_max(Cpos_to) / (tr(Cpos_to) + eps)`.
+    // pub anisotropy_pos_to: f64,
 }
 
 /// Photometry features (mostly cadence-invariant).
@@ -218,9 +214,6 @@ pub struct EdgeUncertaintyFeatures {
 /// provided photometric calibration is comparable.
 #[derive(Clone, Debug)]
 pub struct EdgePhotometryFeatures {
-    /// Absolute flux difference: `|flux_to - flux_from|`.
-    pub flux_abs_diff: f64,
-
     /// Normalized flux difference (z-score):
     /// `|flux_to - flux_from| / sqrt(σ_from² + σ_to² + σ_floor²)`.
     ///
@@ -236,17 +229,6 @@ pub struct EdgePhotometryFeatures {
     /// Band-sharing indicator:
     /// `1.0` if both seeds share at least one photometric band, otherwise `0.0`.
     pub band_shared: f64,
-}
-
-/// Model indicator features.
-///
-/// These features explicitly encode which kinematic model was used when
-/// predicting `from` → `to`.
-#[derive(Clone, Debug)]
-pub struct EdgeModelFeatures {
-    /// `1.0` if the `from` seed includes an acceleration term (quadratic model),
-    /// otherwise `0.0`.
-    pub has_acc: f64,
 }
 
 // -----------------------------------------------------------------------------
@@ -268,9 +250,6 @@ pub struct EdgeModelFeatures {
 /// without breaking external code.
 #[derive(Clone, Debug)]
 pub(crate) struct FeatureCore {
-    /// 1.0 if acceleration is enabled for propagation, else 0.0.
-    pub(crate) has_acc: f64,
-
     // ----------------------------- Position features -----------------------------
     /// Mahalanobis innovation distance `rᵀ S⁻¹ r`.
     pub(crate) chi2_pos: f64,
@@ -348,7 +327,7 @@ impl FeatureCore {
         let dt_ok = dt.is_finite() && dt > 0.0;
 
         // Propagate `from` seed state to the epoch of `to` (on the `from` tangent plane).
-        let (p_pred, v_pred, has_acc) = e.from.propagate_from(dt, dt_sq);
+        let (p_pred, v_pred, _) = e.from.propagate_from(dt, dt_sq);
 
         // Project the target seed position onto the tangent plane of `from`.
         let p_to = Self::project_to_on_from(e.from, e.to);
@@ -417,8 +396,6 @@ impl FeatureCore {
         };
 
         Self {
-            has_acc,
-
             chi2_pos,
             log_chi2_pos: Self::finite_or_zero(log_chi2_pos),
 
@@ -811,24 +788,12 @@ pub enum EdgeFeatureKey {
     // ---------------------------------------------------------------------
     // Uncertainty-related features
     // ---------------------------------------------------------------------
-    /// Ratio of positional covariance determinants.
-    UncertaintyCovPosRatio,
-
     /// Ratio of velocity covariance determinants.
     UncertaintyCovVelRatio,
-
-    /// Positional covariance anisotropy for the left node.
-    UncertaintyAnisotropyPosFrom,
-
-    /// Positional covariance anisotropy for the right node.
-    UncertaintyAnisotropyPosTo,
 
     // ---------------------------------------------------------------------
     // Photometry-related features
     // ---------------------------------------------------------------------
-    /// Absolute flux difference between the two detections.
-    PhotometryFluxAbsDiff,
-
     /// Flux difference expressed as a Z-score.
     PhotometryZFlux,
 
@@ -837,12 +802,6 @@ pub enum EdgeFeatureKey {
 
     /// Indicator of shared photometric band.
     PhotometryBandShared,
-
-    // ---------------------------------------------------------------------
-    // Model / bookkeeping features
-    // ---------------------------------------------------------------------
-    /// Indicator that acceleration terms were used in the model.
-    ModelHasAcc,
 }
 
 impl EdgeFeatureKey {
@@ -878,19 +837,12 @@ impl EdgeFeatureKey {
             Self::VelocityInnovSpeedRatio => 12,
 
             // Uncertainty (13..17)
-            Self::UncertaintyCovPosRatio => 13,
-            Self::UncertaintyCovVelRatio => 14,
-            Self::UncertaintyAnisotropyPosFrom => 15,
-            Self::UncertaintyAnisotropyPosTo => 16,
+            Self::UncertaintyCovVelRatio => 13,
 
             // Photometry (17..21)
-            Self::PhotometryFluxAbsDiff => 17,
-            Self::PhotometryZFlux => 18,
-            Self::PhotometryFluxStdRatio => 19,
-            Self::PhotometryBandShared => 20,
-
-            // Model (21)
-            Self::ModelHasAcc => 21,
+            Self::PhotometryZFlux => 14,
+            Self::PhotometryFluxStdRatio => 15,
+            Self::PhotometryBandShared => 16,
         }
     }
 
@@ -923,19 +875,12 @@ impl EdgeFeatureKey {
             Self::VelocityInnovSpeedRatio => "velocity.innov_speed_ratio",
 
             // Uncertainty
-            Self::UncertaintyCovPosRatio => "uncertainty.cov_pos_ratio",
             Self::UncertaintyCovVelRatio => "uncertainty.cov_vel_ratio",
-            Self::UncertaintyAnisotropyPosFrom => "uncertainty.anisotropy_pos_from",
-            Self::UncertaintyAnisotropyPosTo => "uncertainty.anisotropy_pos_to",
 
             // Photometry
-            Self::PhotometryFluxAbsDiff => "photometry.flux_abs_diff",
             Self::PhotometryZFlux => "photometry.z_flux",
             Self::PhotometryFluxStdRatio => "photometry.flux_std_ratio",
             Self::PhotometryBandShared => "photometry.band_shared",
-
-            // Model
-            Self::ModelHasAcc => "model.has_acc",
         }
     }
 }
@@ -949,7 +894,7 @@ impl EdgeFeatureKey {
 /// - exported column names.
 ///
 /// Changing this ordering is a **breaking change** for downstream consumers.
-pub const EDGE_FEATURE_KEYS: [EdgeFeatureKey; 22] = [
+pub const EDGE_FEATURE_KEYS: [EdgeFeatureKey; 17] = [
     // Position
     EdgeFeatureKey::PositionChi2Pos,
     EdgeFeatureKey::PositionLogChi2Pos,
@@ -966,17 +911,11 @@ pub const EDGE_FEATURE_KEYS: [EdgeFeatureKey; 22] = [
     EdgeFeatureKey::VelocityRelSpeedDiff,
     EdgeFeatureKey::VelocityInnovSpeedRatio,
     // Uncertainty
-    EdgeFeatureKey::UncertaintyCovPosRatio,
     EdgeFeatureKey::UncertaintyCovVelRatio,
-    EdgeFeatureKey::UncertaintyAnisotropyPosFrom,
-    EdgeFeatureKey::UncertaintyAnisotropyPosTo,
     // Photometry
-    EdgeFeatureKey::PhotometryFluxAbsDiff,
     EdgeFeatureKey::PhotometryZFlux,
     EdgeFeatureKey::PhotometryFluxStdRatio,
     EdgeFeatureKey::PhotometryBandShared,
-    // Model
-    EdgeFeatureKey::ModelHasAcc,
 ];
 
 impl EdgeFeatures {
@@ -1016,15 +955,10 @@ impl EdgeFeatures {
             EdgeFeatureKey::VelocityCosDthetaV => self.velocity.cos_dtheta_v,
             EdgeFeatureKey::VelocityRelSpeedDiff => self.velocity.rel_speed_diff,
             EdgeFeatureKey::VelocityInnovSpeedRatio => self.velocity.innov_speed_ratio,
-            EdgeFeatureKey::UncertaintyCovPosRatio => self.uncertainty.cov_pos_ratio,
             EdgeFeatureKey::UncertaintyCovVelRatio => self.uncertainty.cov_vel_ratio,
-            EdgeFeatureKey::UncertaintyAnisotropyPosFrom => self.uncertainty.anisotropy_pos_from,
-            EdgeFeatureKey::UncertaintyAnisotropyPosTo => self.uncertainty.anisotropy_pos_to,
-            EdgeFeatureKey::PhotometryFluxAbsDiff => self.photometry.flux_abs_diff,
             EdgeFeatureKey::PhotometryZFlux => self.photometry.z_flux,
             EdgeFeatureKey::PhotometryFluxStdRatio => self.photometry.flux_std_ratio,
             EdgeFeatureKey::PhotometryBandShared => self.photometry.band_shared,
-            EdgeFeatureKey::ModelHasAcc => self.model.has_acc,
         }
     }
 

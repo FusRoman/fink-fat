@@ -570,6 +570,7 @@ dependencies = [
  "chrono",
  "config",
  "criterion",
+ "ndarray",
  "once_cell",
  "ort",
  "proptest",

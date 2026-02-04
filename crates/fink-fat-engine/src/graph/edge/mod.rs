@@ -8,13 +8,13 @@ use std::fmt::{self, Display, Formatter};
 use ahash::AHashMap;
 
 use crate::{
-    astro_math::{lambda_max_2x2, trace_2x2},
+    astro_math::trace_2x2,
     engine_config::edge_config::EdgeConfig,
     graph::edge::{
         edge_id::EdgeId,
         features::{
-            EdgeFeatures, EdgeModelFeatures, EdgePhotometryFeatures, EdgePositionFeatures,
-            EdgeUncertaintyFeatures, EdgeVelocityFeatures, FeatureCore,
+            EdgeFeatures, EdgePhotometryFeatures, EdgePositionFeatures, EdgeUncertaintyFeatures,
+            EdgeVelocityFeatures, FeatureCore,
         },
     },
     night_id::NightId,
@@ -245,9 +245,6 @@ impl<'a> Edge<'a> {
             velocity: self.velocity_features(&core),
             uncertainty: self.uncertainty_features(),
             photometry: self.photometry_features(),
-            model: EdgeModelFeatures {
-                has_acc: core.has_acc,
-            },
         }
     }
 
@@ -283,31 +280,14 @@ impl<'a> Edge<'a> {
     fn uncertainty_features(&self) -> EdgeUncertaintyFeatures {
         let eps = FeatureCore::EPS;
 
-        let cpos_from = self.from.plane.cov_pos;
-        let cpos_to = self.to.plane.cov_pos;
-
         let cvel_from = self.from.plane.cov_vel;
         let cvel_to = self.to.plane.cov_vel;
-
-        let tr_pos_from = trace_2x2(cpos_from).max(0.0);
-        let tr_pos_to = trace_2x2(cpos_to).max(0.0);
-        let cov_pos_ratio = FeatureCore::safe_div(tr_pos_to, tr_pos_from + eps);
 
         let tr_vel_from = trace_2x2(cvel_from).max(0.0);
         let tr_vel_to = trace_2x2(cvel_to).max(0.0);
         let cov_vel_ratio = FeatureCore::safe_div(tr_vel_to, tr_vel_from + eps);
 
-        let anisotropy_pos_from =
-            FeatureCore::safe_div(lambda_max_2x2(cpos_from), trace_2x2(cpos_from) + eps);
-        let anisotropy_pos_to =
-            FeatureCore::safe_div(lambda_max_2x2(cpos_to), trace_2x2(cpos_to) + eps);
-
-        EdgeUncertaintyFeatures {
-            cov_pos_ratio,
-            cov_vel_ratio,
-            anisotropy_pos_from: FeatureCore::finite_or_zero(anisotropy_pos_from),
-            anisotropy_pos_to: FeatureCore::finite_or_zero(anisotropy_pos_to),
-        }
+        EdgeUncertaintyFeatures { cov_vel_ratio }
     }
 
     /// Compute only photometry features.
@@ -344,7 +324,6 @@ impl<'a> Edge<'a> {
         };
 
         EdgePhotometryFeatures {
-            flux_abs_diff: FeatureCore::finite_or_zero(flux_abs_diff),
             z_flux: FeatureCore::finite_or_zero(z_flux),
             flux_std_ratio: FeatureCore::finite_or_zero(flux_std_ratio),
             band_shared,

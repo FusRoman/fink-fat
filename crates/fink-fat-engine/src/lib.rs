@@ -11,6 +11,7 @@ pub mod solver;
 pub mod spacetime_bucket;
 pub mod trajectory;
 pub mod units;
+pub mod fink_fat;
 
 pub use alerts::{Alert, AlertId};
 pub use units::{MjdTt, Radians};
