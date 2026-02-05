@@ -14,7 +14,7 @@ pub struct TimeBin(pub i64);
 /// Time binning interface.
 ///
 /// Implement this for your time partitioner (uniform bins, cadence-aware bins…).
-pub trait TimeBinner {
+pub trait TimeBinner: Sync {
     /// Return the **time bin** covering `mjd_tt`.
     ///
     /// Parameters
@@ -55,7 +55,7 @@ pub trait TimeBinner {
 /// Return
 /// ------
 /// Iterator over `TimeBin` values: `k0 (+0|+1) .. k0 + ceil(max_dt / bin_width)`.
-pub fn time_targets<Bt: TimeBinner>(
+pub fn time_targets<Bt: TimeBinner + Sync>(
     tb: &Bt,
     k0: TimeBin,
     max_dt: f64,

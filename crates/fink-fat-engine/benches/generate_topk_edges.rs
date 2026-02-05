@@ -4,7 +4,7 @@ use std::time::Duration;
 use camino::Utf8Path;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use fink_fat_engine::graph::edge::edge_features::EdgeFeatures;
-use fink_fat_engine::graph::edge::edge_prediction::EdgeRankingModel;
+use fink_fat_engine::graph::edge::edge_prediction::{EdgeRankingModel, EdgeRankingModelPool};
 use fink_fat_engine::graph::edge::ranking_topk::rank_topk_edges_for_left;
 use fink_fat_engine::seeding::seed_spatial_index::SeedSpatialIndex;
 use fink_fat_engine::spacetime_bucket::healpix_binner::HealpixBinner;
@@ -288,8 +288,7 @@ fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
             ),
             &(num_left_seeds, num_right_seeds, top_k_per_left),
             |b, _| {
-                let mut model = EdgeRankingModel::load_edge_ranking_model(model_path)
-                    .expect("Failed to load ONNX edge ranking model");
+                let pool = EdgeRankingModelPool::new(model_path);
 
                 b.iter(|| {
                     let edges = Edge::generate_topk_edges(
@@ -299,7 +298,7 @@ fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
                         black_box(&edge_config),
                         black_box(&spatial_binner),
                         black_box(&time_binner),
-                        black_box(Some(&mut model)),
+                        black_box(Some(&pool)),
                     )
                     .expect("generate_topk_edges failed");
 
@@ -318,8 +317,7 @@ fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
             ),
             &(num_left_seeds, num_right_seeds, top_k_per_left),
             |b, _| {
-                let mut model = EdgeRankingModel::load_edge_ranking_model(model_path)
-                    .expect("Failed to load ONNX edge ranking model");
+                let pool = EdgeRankingModelPool::new(model_path);
 
                 b.iter(|| {
                     let edges = Edge::generate_topk_edges(
@@ -329,7 +327,7 @@ fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
                         black_box(&edge_config_capped),
                         black_box(&spatial_binner),
                         black_box(&time_binner),
-                        black_box(Some(&mut model)),
+                        black_box(Some(&pool)),
                     )
                     .expect("generate_topk_edges failed");
 
@@ -553,8 +551,7 @@ fn bench_generate_topk_edges_components(c: &mut Criterion) {
     // -----------------------------------------------------------------------------
     group.bench_function("e2e_small_left", |b| {
         let left_small: &[SeedNode] = &left_seeds[..32.min(left_seeds.len())];
-        let mut model = EdgeRankingModel::load_edge_ranking_model(model_path)
-            .expect("Failed to load ONNX edge ranking model");
+        let pool = EdgeRankingModelPool::new(model_path);
 
         b.iter(|| {
             let edges = Edge::generate_topk_edges(
@@ -564,7 +561,7 @@ fn bench_generate_topk_edges_components(c: &mut Criterion) {
                 black_box(&edge_config),
                 black_box(&spatial_binner),
                 black_box(&time_binner),
-                black_box(Some(&mut model)),
+                black_box(Some(&pool)),
             )
             .expect("generate_topk_edges failed");
 

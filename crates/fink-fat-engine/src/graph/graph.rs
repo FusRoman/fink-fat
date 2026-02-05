@@ -4,7 +4,7 @@ use crate::{
         edge::{
             Edge,
             edge_id::EdgeId,
-            edge_prediction::{EdgeModelError, EdgeRankingModel},
+            edge_prediction::{EdgeModelError, EdgeRankingModelPool},
         },
         node::Node,
     },
@@ -33,7 +33,7 @@ impl<'a, 'b> InterNightGraph<'a> {
         edge_config: &'b EdgeConfig,
         spatial_binner: &'a B,
         time_binner: &'a T,
-        model: Option<&mut EdgeRankingModel>,
+        model_pool: Option<&EdgeRankingModelPool>,
     ) -> Result<(), EdgeModelError> {
         assert!(!left_nodes.is_empty(), "left_nodes must not be empty");
         assert!(!right_nodes.is_empty(), "right_nodes must not be empty");
@@ -70,7 +70,7 @@ impl<'a, 'b> InterNightGraph<'a> {
             edge_config,
             spatial_binner,
             time_binner,
-            model,
+            model_pool,
         )?;
 
         /* ---------- insert edges into graph without node_id_of() ---------- */

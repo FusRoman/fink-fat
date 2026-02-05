@@ -28,6 +28,7 @@
 //! run inference in parallel, use one [`EdgeRankingModel`] per worker thread or
 //! guard a shared model with a mutex (the latter may reduce throughput).
 
+use std::cell::RefCell;
 use std::ops::Index;
 
 use ndarray::Array2;
@@ -35,10 +36,11 @@ use once_cell::sync::OnceCell;
 use ort::value::Tensor;
 use thiserror::Error;
 
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
 
 use ort::session::Session;
 use ort::session::builder::GraphOptimizationLevel;
+use thread_local::ThreadLocal;
 
 use crate::graph::edge::edge_features::EdgeFeatures;
 
@@ -82,6 +84,54 @@ fn init_ort_once() {
     ORT_INIT.get_or_init(|| {
         ort::init().commit();
     });
+}
+
+/// Per-thread pool of ONNX edge-ranking models.
+///
+/// Notes
+/// -----
+/// `ort::Session::run` requires `&mut Session`, so a single `EdgeRankingModel`
+/// cannot be shared across Rayon threads without a lock. This pool provides a
+/// lazily-initialized model instance per worker thread.
+pub struct EdgeRankingModelPool {
+    model_path: Utf8PathBuf,
+    models: ThreadLocal<RefCell<Option<EdgeRankingModel>>>,
+}
+
+impl EdgeRankingModelPool {
+    /// Create a new pool for a given ONNX model path.
+    pub fn new(model_path: impl AsRef<Utf8Path>) -> Self {
+        Self {
+            model_path: model_path.as_ref().to_path_buf(),
+            models: ThreadLocal::new(),
+        }
+    }
+
+    /// Run a closure with the current thread's model instance (lazy init).
+    pub fn with_mut<R>(
+        &self,
+        f: impl FnOnce(&mut EdgeRankingModel) -> Result<R, EdgeModelError>,
+    ) -> Result<R, EdgeModelError> {
+        let cell = self.models.get_or(|| RefCell::new(None));
+
+        // Lazy per-thread init (fallible).
+        if cell.borrow().is_none() {
+            let model = EdgeRankingModel::load_edge_ranking_model(&self.model_path)?;
+            *cell.borrow_mut() = Some(model);
+        }
+
+        // Safe: we just ensured it's Some.
+        let mut borrow = cell.borrow_mut();
+        let model = borrow.as_mut().expect("model must be initialized");
+        f(model)
+    }
+
+    /// Clear the current thread's model (rarely needed; useful for tests).
+    pub fn clear_current_thread(&self) {
+        if let Some(cell) = self.models.get() {
+            *cell.borrow_mut() = None;
+        }
+    }
 }
 
 /// High-level wrapper for an ONNX edge-ranking model.

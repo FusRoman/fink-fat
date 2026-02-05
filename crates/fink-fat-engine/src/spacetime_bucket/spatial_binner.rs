@@ -15,7 +15,7 @@ pub struct SpatialKey(pub u64);
 /// Spatial binning interface.
 ///
 /// Implement this for your sky partitioner (HEALPix, HTM, lon/lat grid…).
-pub trait SpatialBinner {
+pub trait SpatialBinner: Sync {
     /// Return the spatial cell for a given sky position.
     ///
     /// Parameters

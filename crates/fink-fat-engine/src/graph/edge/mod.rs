@@ -16,7 +16,7 @@ use crate::{
     graph::edge::{
         edge_features::EdgeFeatures,
         edge_id::EdgeId,
-        edge_prediction::{EdgeModelError, EdgeRankingModel},
+        edge_prediction::{EdgeModelError, EdgeRankingModelPool},
         ranking_topk::rank_topk_edges_for_left,
     },
     seeding::{seed_node::SeedNode, seed_spatial_index::SeedSpatialIndex},
@@ -164,60 +164,172 @@ impl<'a, 'b, 'c> Edge<'a> {
         edge_config: &'c EdgeConfig,
         spatial_binner: &'b B,
         time_binner: &'b T,
-        mut model: Option<&mut EdgeRankingModel>,
+        model_pool: Option<&EdgeRankingModelPool>,
     ) -> Result<Vec<Self>, EdgeModelError> {
+        let right_index = SeedSpatialIndex::build(right, spatial_binner, time_binner);
+        let chunk_size = edge_config.parallel_left_batch_size.max(1);
         let top_k = edge_config.top_k_per_left;
 
-        // Capacity guess: in "emit_all_edges" mode we don't know final size.
-        let mut edges = if edge_config.emit_all_edges {
-            Vec::new()
-        } else {
-            Vec::with_capacity(left.len() * top_k)
-        };
-
-        let right_index = SeedSpatialIndex::build(right, spatial_binner, time_binner);
-
-        // Scratch buffer used by the ML top-k path (unchanged).
-        let mut tmp: smallvec::SmallVec<[(&SeedNode, f64); 32]> = smallvec::SmallVec::new();
-
-        for src in left.iter() {
-            if edge_config.emit_all_edges {
-                // No ML, no Top-K: emit every candidate produced by the prefilter.
-                for to in src.seed_edge_candidates(&right_index, edge_config) {
-                    edges.push(Edge::new(
-                        id_start,
-                        src,
-                        to,
-                        EdgeFeatures::compute_features(src, to).kinematic_log_likelihood_cost(),
-                        src.delta_days(to),
-                    ));
-                }
-            } else {
-                // Current behavior: ML ranking + top-k pruning
-                let model_ref = model.as_deref_mut().ok_or(EdgeModelError::MissingModel)?;
-
-                rank_topk_edges_for_left(
-                    src,
+        match edge_config.parallel_left_batches {
+            true => build_edges_parallel(
+                left,
+                chunk_size,
+                &right_index,
+                edge_config,
+                top_k,
+                model_pool,
+                id_start,
+            ),
+            false => {
+                let ids = edge_id_iter(id_start);
+                build_edges_sequential(
+                    left,
+                    chunk_size,
                     &right_index,
                     edge_config,
-                    model_ref,
                     top_k,
-                    edge_config.onnx_batch_size,
-                    &mut tmp,
-                )?;
-
-                for (right_candidate, edge_cost) in tmp.iter() {
-                    edges.push(Edge::new(
-                        id_start,
-                        src,
-                        *right_candidate,
-                        *edge_cost,
-                        src.delta_days(right_candidate),
-                    ));
-                }
+                    model_pool,
+                    ids,
+                )
             }
         }
-
-        Ok(edges)
     }
+}
+
+fn edge_id_iter(start: EdgeId) -> impl Iterator<Item = EdgeId> {
+    (start.0..).map(EdgeId)
+}
+
+fn process_chunk_emit_all<'a>(
+    chunk: &'a [SeedNode],
+    right_index: &SeedSpatialIndex<'a, '_>,
+    edge_config: &EdgeConfig,
+    ids: &mut impl Iterator<Item = EdgeId>,
+) -> Result<Vec<Edge<'a>>, EdgeModelError> {
+    let mut local_edges: Vec<Edge<'a>> = Vec::new();
+
+    for src in chunk.iter() {
+        for to in src.seed_edge_candidates(right_index, edge_config) {
+            local_edges.push(Edge::new(
+                ids.next().expect("EdgeId iterator exhausted"),
+                src,
+                to,
+                EdgeFeatures::compute_features(src, to).kinematic_log_likelihood_cost(),
+                src.delta_days(to),
+            ));
+        }
+    }
+
+    Ok(local_edges)
+}
+
+fn process_chunk_ml_topk<'a>(
+    chunk: &'a [SeedNode],
+    right_index: &SeedSpatialIndex<'a, '_>,
+    edge_config: &EdgeConfig,
+    top_k: usize,
+    model_pool: &EdgeRankingModelPool,
+    ids: &mut impl Iterator<Item = EdgeId>,
+) -> Result<Vec<Edge<'a>>, EdgeModelError> {
+    let mut local_edges: Vec<Edge<'a>> = Vec::new();
+    let mut tmp: smallvec::SmallVec<[(&SeedNode, f64); 32]> = smallvec::SmallVec::new();
+
+    for src in chunk.iter() {
+        model_pool.with_mut(|model| {
+            rank_topk_edges_for_left(
+                src,
+                right_index,
+                edge_config,
+                model,
+                top_k,
+                edge_config.onnx_batch_size,
+                &mut tmp,
+            )
+        })?;
+
+        for (right_candidate, edge_cost) in tmp.iter() {
+            local_edges.push(Edge::new(
+                ids.next().expect("EdgeId iterator exhausted"),
+                src,
+                *right_candidate,
+                *edge_cost,
+                src.delta_days(right_candidate),
+            ));
+        }
+    }
+
+    Ok(local_edges)
+}
+
+fn process_chunk<'a>(
+    chunk: &'a [SeedNode],
+    right_index: &SeedSpatialIndex<'a, '_>,
+    edge_config: &EdgeConfig,
+    top_k: usize,
+    model_pool: Option<&EdgeRankingModelPool>,
+    ids: &mut impl Iterator<Item = EdgeId>,
+) -> Result<Vec<Edge<'a>>, EdgeModelError> {
+    match edge_config.emit_all_edges {
+        true => process_chunk_emit_all(chunk, right_index, edge_config, ids),
+        false => {
+            let pool = model_pool.ok_or(EdgeModelError::MissingModel)?;
+            process_chunk_ml_topk(chunk, right_index, edge_config, top_k, pool, ids)
+        }
+    }
+}
+
+fn build_edges_parallel<'a>(
+    left: &'a [SeedNode],
+    chunk_size: usize,
+    right_index: &SeedSpatialIndex<'a, '_>,
+    edge_config: &EdgeConfig,
+    top_k: usize,
+    model_pool: Option<&EdgeRankingModelPool>,
+    id_start: EdgeId,
+) -> Result<Vec<Edge<'a>>, EdgeModelError> {
+    use rayon::prelude::*;
+
+    left.par_chunks(chunk_size)
+        .enumerate()
+        .map(|(i, chunk)| {
+            // Upper bound: worst case per chunk
+            let max_edges = match edge_config.emit_all_edges {
+                true => chunk.len(),
+                false => chunk.len() * top_k,
+            };
+
+            let base = id_start.0 + i as u64 * max_edges as u64;
+            let mut ids = (base..).map(EdgeId);
+
+            process_chunk(chunk, right_index, edge_config, top_k, model_pool, &mut ids)
+        })
+        .try_reduce(Vec::new, |mut a, mut b| {
+            a.append(&mut b);
+            Ok(a)
+        })
+}
+
+fn build_edges_sequential<'a>(
+    left: &'a [SeedNode],
+    chunk_size: usize,
+    right_index: &SeedSpatialIndex<'a, '_>,
+    edge_config: &EdgeConfig,
+    top_k: usize,
+    model_pool: Option<&EdgeRankingModelPool>,
+    mut ids: impl Iterator<Item = EdgeId>,
+) -> Result<Vec<Edge<'a>>, EdgeModelError> {
+    let mut edges: Vec<Edge<'a>> = Vec::new();
+
+    for chunk in left.chunks(chunk_size) {
+        edges.extend(process_chunk(
+            chunk,
+            right_index,
+            edge_config,
+            top_k,
+            model_pool,
+            &mut ids,
+        )?);
+    }
+
+    Ok(edges)
 }
