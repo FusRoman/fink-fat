@@ -44,7 +44,7 @@ use crate::{
     astro_math::{dot3, unit_vec},
     engine_config::pair_config::PairConfig,
     night_id::NightId,
-    seeding::{seed_id::SeedId, seed_node::SeedNode},
+    seeding::seed_node::SeedNode,
     spacetime_bucket::{
         bucket::{BucketIndex, BucketKey},
         spatial_binner::{SpatialBinner, SpatialKey},
@@ -522,14 +522,11 @@ pub fn extract_pair_features(
     max_speed_rad_per_day: Option<f64>,
 ) -> Vec<SeedNode> {
     let mut out = Vec::with_capacity(pairs.len());
-    for (i, &Pair { a: ia, b: ib }) in pairs.iter().enumerate() {
+    for &Pair { a: ia, b: ib } in pairs.iter() {
         let alert_a = &store.alerts[ia.idx()];
         let alert_b = &store.alerts[ib.idx()];
-        let seed_id = SeedId::new(i as u64);
 
-        if let Some(seed) =
-            SeedNode::from_pair(seed_id, night_id, alert_a, alert_b, max_speed_rad_per_day)
-        {
+        if let Some(seed) = SeedNode::from_pair(night_id, alert_a, alert_b, max_speed_rad_per_day) {
             out.push(seed);
         }
     }
@@ -1088,9 +1085,6 @@ mod pair_gen_tests {
         // Extract features with no speed filter → both seeds should be present.
         let seeds_all = extract_pair_features(&store, &pairs, NightId::new(42), None);
         assert_eq!(seeds_all.len(), 2);
-        // Order and SeedId assignment preserved.
-        assert_eq!(seeds_all[0].seed_id, SeedId::new(0));
-        assert_eq!(seeds_all[1].seed_id, SeedId::new(1));
         // Members match input pairs.
         assert_eq!(seeds_all[0].members, vec![a.id, b.id]);
         assert_eq!(seeds_all[1].members, vec![b.id, c.id]);
@@ -1171,8 +1165,6 @@ mod pair_gen_tests {
 
                 // Basic invariants per seed.
                 for (k, seed) in seeds.iter().enumerate() {
-                    // SeedId assignment follows pair order.
-                    prop_assert_eq!(seed.seed_id, SeedId::new(k as u64));
                     // Members are exactly the pair ids and ordered.
                     let Pair { a, b } = pairs[k];
                     prop_assert_eq!(seed.members.clone(), vec![a, b]);

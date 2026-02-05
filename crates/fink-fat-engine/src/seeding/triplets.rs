@@ -68,7 +68,7 @@ use crate::{
     astro_math::{dot3, planar_offset_fast, unit_vec},
     engine_config::triplet_config::TripletConfig,
     night_id::NightId,
-    seeding::{pairs::Pair, seed_id::SeedId, seed_node::SeedNode},
+    seeding::{pairs::Pair, seed_node::SeedNode},
     spacetime_bucket::{
         bucket::{BucketIndex, BucketKey},
         spatial_binner::{SpatialBinner, SpatialKey},
@@ -760,24 +760,18 @@ pub fn extract_triplet_features(
 ) -> Vec<SeedNode> {
     // Preallocate; one seed per triplet.
     let mut out = Vec::with_capacity(trips.len());
-    for (
-        i,
-        &Triplet {
-            a: alert_id_a,
-            b: alert_id_b,
-            c: alert_id_c,
-        },
-    ) in trips.iter().enumerate()
+    for &Triplet {
+        a: alert_id_a,
+        b: alert_id_b,
+        c: alert_id_c,
+    } in trips.iter()
     {
         // Resolve ids to alerts; indexing is safe here by construction of store.
         let alert_a = &store.alerts[alert_id_a.idx()];
         let alert_b = &store.alerts[alert_id_b.idx()];
         let alert_c = &store.alerts[alert_id_c.idx()];
-        let seed_id = SeedId::new(i as u64);
 
-        out.push(SeedNode::from_triplet(
-            seed_id, night_id, alert_a, alert_b, alert_c,
-        ));
+        out.push(SeedNode::from_triplet(night_id, alert_a, alert_b, alert_c));
     }
     out
 }
@@ -1312,10 +1306,6 @@ mod triplet_gen_tests {
 
         assert_eq!(seeds.len(), 2);
 
-        // SeedId assignment follows input order.
-        assert_eq!(seeds[0].seed_id, SeedId::new(0));
-        assert_eq!(seeds[1].seed_id, SeedId::new(1));
-
         // Night id propagation.
         assert_eq!(seeds[0].night_id, night_id);
         assert_eq!(seeds[1].night_id, night_id);
@@ -1397,7 +1387,6 @@ mod triplet_gen_tests {
 
                 // Check invariants per seed.
                 for (k, seed) in seeds.iter().enumerate() {
-                    prop_assert_eq!(seed.seed_id, SeedId::new(k as u64));
                     prop_assert_eq!(seed.n_obs, 3);
                     let Triplet { a, b, c } = trips[k];
                     prop_assert_eq!(seed.members.clone(), vec![a, b, c]);

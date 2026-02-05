@@ -47,7 +47,6 @@ use crate::{
     night_id::NightId,
     seeding::{
         photometry::Photometry,
-        seed_id::SeedId,
         seed_spatial_index::SeedSpatialIndex,
         tangent_plane::{TangentCenter, TangentPlaneModel},
     },
@@ -68,9 +67,6 @@ use crate::{
 /// All prediction logic is delegated to `TangentPlaneModel`.
 #[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode, PartialEq)]
 pub struct SeedNode {
-    /// Globally unique seed identifier.
-    pub seed_id: SeedId,
-
     /// Night identifier (intra-night seeds cannot mix nights).
     pub night_id: NightId,
 
@@ -91,7 +87,6 @@ impl Display for SeedNode {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         writeln!(f, "SeedNode {{")?;
 
-        writeln!(f, "  id        : {}", self.seed_id)?;
         writeln!(f, "  night     : {}", self.night_id)?;
         writeln!(f, "  n_obs     : {}", self.n_obs)?;
         writeln!(f)?;
@@ -532,7 +527,6 @@ impl SeedNode {
     /// * This is intended as a cheap, robust intra-night model; it is not a
     ///   substitute for a full orbit fit.
     pub fn from_pair(
-        seed_id: SeedId,
         night_id: NightId,
         alert_a: &Alert,
         alert_b: &Alert,
@@ -602,7 +596,6 @@ impl SeedNode {
         );
 
         Some(SeedNode {
-            seed_id,
             night_id,
             plane,
             photom,
@@ -659,7 +652,6 @@ impl SeedNode {
     /// * The characteristic time `dt_char` is clamped to `1e-6` to avoid
     ///   numerical blow-up for nearly simultaneous observations.
     pub fn from_triplet(
-        seed_id: SeedId,
         night_id: NightId,
         alert_a: &Alert,
         alert_b: &Alert,
@@ -722,7 +714,6 @@ impl SeedNode {
         );
 
         SeedNode {
-            seed_id,
             night_id,
             plane,
             photom,
@@ -799,10 +790,9 @@ mod seed_node_tests {
             1002.0,
         );
 
-        let sn = SeedNode::from_pair(SeedId::new(7), NightId::new(42), &a, &b, None)
+        let sn = SeedNode::from_pair(NightId::new(42), &a, &b, None)
             .expect("pair should produce a seed");
 
-        assert_eq!(sn.seed_id, SeedId::new(7));
         assert_eq!(sn.night_id, NightId::new(42));
         assert_eq!(sn.n_obs, 2);
         assert_eq!(sn.members, vec![a.id, b.id]);
@@ -850,8 +840,8 @@ mod seed_node_tests {
 
         let vmax = (speed_slow + speed_fast) * 0.5;
 
-        let keep = SeedNode::from_pair(SeedId::new(0), NightId::new(1), &a, &b_slow, Some(vmax));
-        let drop = SeedNode::from_pair(SeedId::new(1), NightId::new(1), &a, &b_fast, Some(vmax));
+        let keep = SeedNode::from_pair(NightId::new(1), &a, &b_slow, Some(vmax));
+        let drop = SeedNode::from_pair(NightId::new(1), &a, &b_fast, Some(vmax));
 
         assert!(keep.is_some());
         assert!(drop.is_none());
@@ -881,9 +871,8 @@ mod seed_node_tests {
             1002.0,
         );
 
-        let sn = SeedNode::from_triplet(SeedId::new(3), NightId::new(99), &a, &b, &c);
+        let sn = SeedNode::from_triplet(NightId::new(99), &a, &b, &c);
 
-        assert_eq!(sn.seed_id, SeedId::new(3));
         assert_eq!(sn.night_id, NightId::new(99));
         assert_eq!(sn.n_obs, 3);
         assert_eq!(sn.members, vec![a.id, b.id, c.id]);
@@ -911,7 +900,7 @@ mod seed_node_tests {
 
         let store = AlertStore::new(t0.floor(), vec![a.clone(), b.clone()]);
 
-        let sn = SeedNode::from_pair(SeedId::new(0), NightId::new(1), &a, &b, None).unwrap();
+        let sn = SeedNode::from_pair(NightId::new(1), &a, &b, None).unwrap();
         let refs = sn.resolve_seed_members(&store).expect("valid ids");
 
         assert_eq!(refs.len(), 2);
@@ -935,7 +924,7 @@ mod seed_node_tests {
             1000.0,
         );
 
-        let sn = SeedNode::from_pair(SeedId::new(1), NightId::new(5), &a, &b, None).unwrap();
+        let sn = SeedNode::from_pair(NightId::new(5), &a, &b, None).unwrap();
 
         let predict_params = default_predictor_params();
         let tb = b.mjd_tt;
@@ -970,8 +959,8 @@ mod seed_node_tests {
             1002.0,
         );
 
-        let s1 = SeedNode::from_pair(SeedId::new(0), NightId::new(9), &a, &b, None).unwrap();
-        let s2 = SeedNode::from_pair(SeedId::new(1), NightId::new(9), &b, &c, None).unwrap();
+        let s1 = SeedNode::from_pair(NightId::new(9), &a, &b, None).unwrap();
+        let s2 = SeedNode::from_pair(NightId::new(9), &b, &c, None).unwrap();
 
         let vec_seed = vec![s1.clone(), s2.clone()];
         // Build a spatial index and bucket index (for completeness).
@@ -988,7 +977,7 @@ mod seed_node_tests {
         let (ra, dec, radius) = s1.predict_cone(t_target, &spatial_binner, &params);
         let candidates: Vec<&SeedNode> = index.cone_query(ra, dec, radius, t_target).collect();
 
-        assert!(candidates.iter().any(|sn| sn.seed_id == s2.seed_id));
+        assert!(candidates.iter().any(|sn| sn.night_id == s2.night_id));
     }
 
     /* ------------------------- property-based tests ------------------------- */
@@ -1030,7 +1019,7 @@ mod seed_node_tests {
                 let a = &alerts[i];
                 let b = &alerts[i+1];
                 if b.mjd_tt <= a.mjd_tt { continue; }
-                if let Some(sn) = SeedNode::from_pair(SeedId::new(i as u64), NightId::new(1), a, b, None) {
+                if let Some(sn) = SeedNode::from_pair(NightId::new(1), a, b, None) {
                     count += 1;
                     prop_assert_eq!(sn.n_obs, 2);
                     prop_assert_eq!(sn.members, vec![a.id, b.id]);
@@ -1061,7 +1050,7 @@ mod seed_node_tests {
                 let (a, b, c) = (&alerts[i], &alerts[i+1], &alerts[i+2]);
                 if !(a.mjd_tt < b.mjd_tt && b.mjd_tt < c.mjd_tt) { continue; }
 
-                let sn = SeedNode::from_triplet(SeedId::new(i as u64), NightId::new(2), a, b, c);
+                let sn = SeedNode::from_triplet(NightId::new(2), a, b, c);
                 built += 1;
 
                 prop_assert_eq!(sn.n_obs, 3);
@@ -1095,7 +1084,7 @@ mod seed_node_tests {
             let b = &alerts[1];
             if b.mjd_tt <= a.mjd_tt { return Ok(()); }
 
-            let sn = match SeedNode::from_pair(SeedId::new(0), NightId::new(3), a, b, None) {
+            let sn = match SeedNode::from_pair(NightId::new(3), a, b, None) {
                 Some(s) => s,
                 None => return Ok(()),
             };

@@ -2,9 +2,7 @@
 
 use std::ops::Range;
 
-use ahash::AHashMap;
-
-use crate::{graph::node_id::NodeId, night_id::NightId, seeding::seed_id::SeedId};
+use crate::{graph::node_id::NodeId, night_id::NightId};
 
 /// A **layer** groups the nodes of a single night and provides fast lookup.
 #[derive(Clone, Debug)]
@@ -13,8 +11,6 @@ pub struct NightLayer {
     pub night: NightId,
     /// Half-open range [start, end) of node IDs for this night in the graph.
     pub node_range: Range<NodeId>,
-    /// Optional dense mapping from `SeedId` → `NodeId` for quick resolution.
-    pub seed_to_node: AHashMap<SeedId, NodeId>,
 }
 
 impl NightLayer {
@@ -22,7 +18,6 @@ impl NightLayer {
         Self {
             night,
             node_range,
-            seed_to_node: AHashMap::default(),
         }
     }
 

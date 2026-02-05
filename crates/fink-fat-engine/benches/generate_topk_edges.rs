@@ -13,11 +13,8 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 use fink_fat_engine::{
-    Alert,
-    engine_config::edge_config::EdgeConfig,
-    graph::edge::Edge,
-    night_id::NightId,
-    seeding::{seed_id::SeedId, seed_node::SeedNode},
+    Alert, engine_config::edge_config::EdgeConfig, graph::edge::Edge, night_id::NightId,
+    seeding::seed_node::SeedNode,
 };
 use smallvec::SmallVec;
 
@@ -99,7 +96,6 @@ fn make_alert(
 fn make_seeds_pair_model(
     rng: &mut StdRng,
     night_id: NightId,
-    seed_id_base: u64,
     num_seeds: usize,
     start_mjd_tt: f64,
     seed_time_step_days: f64,
@@ -115,8 +111,6 @@ fn make_seeds_pair_model(
     // - seeds do not collapse into a single HEALPix cell,
     // - cone queries and candidate scoring still return a non-trivial workload.
     for seed_index in 0..num_seeds {
-        let seed_id = SeedId(seed_id_base + seed_index as u64);
-
         // Spread seeds over time (keeps `right` easy to sort by epoch_mid).
         let time_alert_a = start_mjd_tt + (seed_index as f64) * seed_time_step_days;
         let time_alert_b = time_alert_a + (seed_time_step_days * 0.5).max(1e-6);
@@ -165,9 +159,8 @@ fn make_seeds_pair_model(
         );
 
         // Build the seed node from the alert pair.
-        let seed_node =
-            SeedNode::from_pair(seed_id, night_id, &alert_a, &alert_b, max_speed_rad_per_day)
-                .expect("SeedNode::from_pair failed (speed filter too strict?)");
+        let seed_node = SeedNode::from_pair(night_id, &alert_a, &alert_b, max_speed_rad_per_day)
+            .expect("SeedNode::from_pair failed (speed filter too strict?)");
 
         seeds.push(seed_node);
     }
@@ -239,7 +232,6 @@ fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
         let left_seeds = make_seeds_pair_model(
             &mut rng,
             left_night,
-            1,
             num_left_seeds,
             60000.0,
             2.0 / 1440.0, // 2-minute spacing
@@ -253,7 +245,6 @@ fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
         let right_seeds = make_seeds_pair_model(
             &mut rng,
             right_night,
-            1_000_000,
             num_right_seeds,
             60001.0,
             2.0 / 1440.0,
@@ -378,7 +369,6 @@ fn bench_generate_topk_edges_components(c: &mut Criterion) {
     let left_seeds = make_seeds_pair_model(
         &mut rng,
         left_night,
-        10,
         num_left_seeds,
         61000.0,
         2.0 / 1440.0,
@@ -392,7 +382,6 @@ fn bench_generate_topk_edges_components(c: &mut Criterion) {
     let right_seeds = make_seeds_pair_model(
         &mut rng,
         right_night,
-        2_000_000,
         num_right_seeds,
         61001.0,
         2.0 / 1440.0,

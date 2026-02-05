@@ -50,7 +50,7 @@ pub mod velocity_features;
 pub mod edge_prediction;
 pub mod ranking_topk;
 
-use std::fmt::{self, Display, Formatter};
+use std::fmt;
 
 use crate::{
     engine_config::edge_config::EdgeConfig,
@@ -106,16 +106,12 @@ pub struct Edge<'a> {
     pub active: bool,
 }
 
-impl<'a> Display for Edge<'a> {
-    /// Human-readable edge formatting.
-    ///
-    /// Intended for logging and debugging. The format is stable enough to be
-    /// readable but not intended as a machine-parseable serialization.
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+impl<'a> fmt::Display for Edge<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Edge {{ from: {}, to: {}, Δt: {:.3} d, cost: {:.6}, active: {} }}",
-            self.from.seed_id, self.to.seed_id, self.dt_days, self.cost, self.active,
+            "Edge {{ from: {}, to: {}, dt_days: {:.3}, cost: {:.4}, active: {} }}",
+            self.from, self.to, self.dt_days, self.cost, self.active,
         )
     }
 }
