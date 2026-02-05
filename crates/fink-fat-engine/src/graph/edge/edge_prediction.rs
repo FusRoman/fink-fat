@@ -1,15 +1,20 @@
 //! ONNX edge-ranking inference utilities (ONNX Runtime via `ort`).
 //!
-//! This module provides a small, fast wrapper around an ONNX classification model
-//! used to score candidate inter-night edges in the fink-fat graph. The typical
-//! workflow is:
+//! This module provides a small, high-throughput wrapper around an ONNX
+//! classification model used to score candidate inter-night edges in the
+//! `fink-fat` graph.
+//!
+//! Typical workflow
+//! ----------------
 //! 1. Load an ONNX model once (process-wide ORT init + session build).
 //! 2. Resolve the indices of the relevant outputs (e.g. `probabilities`, `label`).
 //! 3. Run inference repeatedly on batches of [`EdgeFeatures`].
 //!
-//! The design is intentionally optimized for high call counts:
-//! - output lookup by **index** (no string scan in the hot path),
-//! - input preparation as a contiguous `[N, D]` matrix,
+//! Performance-oriented design
+//! ---------------------------
+//! The hot inference path is optimized for very high call counts:
+//! - output lookup by **index** (resolved once at load time, no string scans),
+//! - input preparation as a contiguous `[N, D]` float matrix,
 //! - minimal post-processing for `p(class=1)` extraction.
 //!
 //! Output conventions
@@ -27,6 +32,19 @@
 //! cached allocations), so `Session::run` requires `&mut Session`. If you want to
 //! run inference in parallel, use one [`EdgeRankingModel`] per worker thread or
 //! guard a shared model with a mutex (the latter may reduce throughput).
+//!
+//! Recommended patterns:
+//! - **Rayon / multi-thread**: use [`EdgeRankingModelPool`] (one model per thread).
+//! - **Single-thread**: use [`EdgeRankingModel`] directly.
+//!
+//! Numerical stability & errors
+//! ----------------------------
+//! This module tries to fail early and explicitly when assumptions are violated:
+//! - missing model file -> [`EdgeModelError::ModelNotFound`],
+//! - missing `"probabilities"` output -> error,
+//! - unexpected tensor shapes -> error with the reported shape.
+//!
+//! The goal is to make model/export mismatch issues obvious (and fixable).
 
 use std::cell::RefCell;
 use std::ops::Index;
@@ -48,6 +66,8 @@ use crate::graph::edge::edge_features::EdgeFeatures;
 ///
 /// ONNX Runtime maintains global state (environment, allocators, logging).
 /// Initializing it more than once is unnecessary and can be problematic.
+///
+/// This is intentionally process-wide and is used by [`init_ort_once`].
 static ORT_INIT: OnceCell<()> = OnceCell::new();
 
 /// Errors that can occur while loading the model or running ONNX inference.
@@ -60,11 +80,14 @@ pub enum EdgeModelError {
     /// The provided model path does not exist.
     ///
     /// This is returned early to provide a clear user-facing message instead of
-    /// a lower-level ORT error.
+    /// a lower-level ORT error that may be harder to interpret.
     #[error("ONNX model file not found: {0}")]
     ModelNotFound(String),
 
-    /// ML ranking was requested but no EdgeRankingModel was provided.
+    /// ML ranking was requested but no `EdgeRankingModel` was provided.
+    ///
+    /// This is useful when ranking is optional and the caller explicitly enables it
+    /// in a configuration, but forgets to provide a loaded model.
     #[error("ML ranking requested but no EdgeRankingModel was provided")]
     MissingModel,
 }
@@ -80,6 +103,10 @@ pub enum EdgeModelError {
 /// * It is intentionally private; callers should rely on public constructors
 ///   (e.g. [`EdgeRankingModel::load_edge_ranking_model`]) which guarantee ORT is
 ///   initialized.
+///
+/// Implementation detail
+/// ---------------------
+/// `OnceCell` ensures thread-safe, one-time initialization.
 fn init_ort_once() {
     ORT_INIT.get_or_init(|| {
         ort::init().commit();
@@ -88,11 +115,21 @@ fn init_ort_once() {
 
 /// Per-thread pool of ONNX edge-ranking models.
 ///
-/// Notes
-/// -----
-/// `ort::Session::run` requires `&mut Session`, so a single `EdgeRankingModel`
-/// cannot be shared across Rayon threads without a lock. This pool provides a
-/// lazily-initialized model instance per worker thread.
+/// Why this exists
+/// ---------------
+/// `ort::Session::run` requires `&mut Session`. This means a single
+/// [`EdgeRankingModel`] cannot be used concurrently across threads without
+/// synchronization.
+///
+/// This pool provides:
+/// - one lazily initialized model instance per worker thread,
+/// - no locks on the hot path once initialized,
+/// - an ergonomic API (`with_mut`) to run inference.
+///
+/// Attributes
+/// ----------
+/// * `model_path` – Path to the `.onnx` model file used for per-thread loading.
+/// * `models` – Thread-local storage holding an optional model for each thread.
 pub struct EdgeRankingModelPool {
     model_path: Utf8PathBuf,
     models: ThreadLocal<RefCell<Option<EdgeRankingModel>>>,
@@ -100,6 +137,19 @@ pub struct EdgeRankingModelPool {
 
 impl EdgeRankingModelPool {
     /// Create a new pool for a given ONNX model path.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `model_path` – Path to the `.onnx` file (UTF-8).
+    ///
+    /// Return
+    /// ------
+    /// A pool that will lazily load one [`EdgeRankingModel`] per thread.
+    ///
+    /// Notes
+    /// -----
+    /// Model loading is deferred until the first call to [`Self::with_mut`]
+    /// on a given thread.
     pub fn new(model_path: impl AsRef<Utf8Path>) -> Self {
         Self {
             model_path: model_path.as_ref().to_path_buf(),
@@ -108,6 +158,25 @@ impl EdgeRankingModelPool {
     }
 
     /// Run a closure with the current thread's model instance (lazy init).
+    ///
+    /// This method:
+    /// 1. retrieves the per-thread cell,
+    /// 2. loads the model if not already loaded for this thread (fallible),
+    /// 3. passes `&mut EdgeRankingModel` to the provided closure.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `f` – Closure executed with a mutable reference to the thread-local model.
+    ///
+    /// Return
+    /// ------
+    /// * `Ok(R)` – Return value of the closure on success.
+    /// * `Err(EdgeModelError)` – If model loading or inference fails.
+    ///
+    /// Notes
+    /// -----
+    /// This avoids locking but does incur a per-call `RefCell` borrow, which is
+    /// typically negligible compared to inference cost.
     pub fn with_mut<R>(
         &self,
         f: impl FnOnce(&mut EdgeRankingModel) -> Result<R, EdgeModelError>,
@@ -126,7 +195,12 @@ impl EdgeRankingModelPool {
         f(model)
     }
 
-    /// Clear the current thread's model (rarely needed; useful for tests).
+    /// Clear the current thread's model instance (rarely needed).
+    ///
+    /// This is primarily useful for tests or benchmarks where you want to:
+    /// - force a reload,
+    /// - validate initialization behavior,
+    /// - or measure session creation time separately.
     pub fn clear_current_thread(&self) {
         if let Some(cell) = self.models.get() {
             *cell.borrow_mut() = None;
@@ -142,6 +216,11 @@ impl EdgeRankingModelPool {
 ///   ([`EdgeModelOutputs`]).
 ///
 /// It is intended to be constructed once and reused for many inference calls.
+///
+/// Attributes
+/// ----------
+/// * `session` – ORT session owning the loaded model and execution state.
+/// * `outputs` – Resolved output indices for fast extraction.
 pub struct EdgeRankingModel {
     session: Session,
     outputs: EdgeModelOutputs,
@@ -153,7 +232,7 @@ impl EdgeRankingModel {
     /// This is the main entry point to create an inference-ready model. It:
     /// 1. Initializes ONNX Runtime (process-wide) if needed,
     /// 2. Builds an optimized ORT session for the given `.onnx` file,
-    /// 3. Resolves output indices for fast inference (e.g. finds `probabilities`).
+    /// 3. Resolves output indices for fast inference (e.g. finds `"probabilities"`).
     ///
     /// Arguments
     /// ---------
@@ -169,11 +248,12 @@ impl EdgeRankingModel {
     ///
     /// Notes
     /// -----
-    /// * Output resolution currently relies on output names:
-    ///   - required: `"probabilities"`
-    ///   - optional: `"label"`
-    /// * If your exporter uses different output names, adapt
-    ///   [`EdgeModelOutputs::resolve_output_indices`].
+    /// Output resolution currently relies on output names:
+    /// - required: `"probabilities"`
+    /// - optional: `"label"`
+    ///
+    /// If your exporter uses different output names, adapt
+    /// [`EdgeModelOutputs::resolve_output_indices`].
     pub fn load_edge_ranking_model(
         model_path: impl AsRef<Utf8Path>,
     ) -> Result<Self, EdgeModelError> {
@@ -186,6 +266,10 @@ impl EdgeRankingModel {
     ///
     /// This can be useful to inspect model inputs/outputs or metadata, e.g. for
     /// debugging or logging.
+    ///
+    /// Return
+    /// ------
+    /// Reference to the underlying ORT [`Session`].
     pub fn session(&self) -> &Session {
         &self.session
     }
@@ -194,6 +278,10 @@ impl EdgeRankingModel {
     ///
     /// This exposes the indices of semantic outputs (probabilities/label) that
     /// were resolved at load time, allowing the caller to inspect the mapping.
+    ///
+    /// Return
+    /// ------
+    /// Reference to [`EdgeModelOutputs`].
     pub fn outputs(&self) -> &EdgeModelOutputs {
         &self.outputs
     }
@@ -220,17 +308,26 @@ impl EdgeRankingModel {
     ///
     /// Performance
     /// -----------
-    /// * Output selection is by index (resolved once), avoiding repeated string
+    /// - Output selection is by index (resolved once), avoiding repeated string
     ///   comparisons in the hot path.
-    /// * For maximum throughput, prefer batching many edges per call.
+    /// - For maximum throughput, prefer batching many edges per call.
     pub fn predict_proba(&mut self, batch: &[EdgeFeatures]) -> Result<Array2<f32>, EdgeModelError> {
+        // Convert structured EdgeFeatures into the dense model input matrix.
         let input = build_input_tensor(batch)?;
+
+        // Run inference (mutable session as required by ORT).
         let outputs = self.session.run(ort::inputs![input])?;
 
+        // Extract by pre-resolved index: avoids name lookup in the hot path.
         let v = outputs.index(self.outputs.probabilities);
 
+        // Convert ORT tensor into (shape, flat_data).
         let (shape, data) = v.try_extract_tensor::<f32>()?;
+
+        // Validate expected 2D output and convert dims to usize.
         let (n, k) = expect_2d_usize(shape)?;
+
+        // Rebuild an owned ndarray matrix from the flat row-major buffer.
         array2_from_flat((n, k), data)
     }
 
@@ -250,9 +347,9 @@ impl EdgeRankingModel {
     ///
     /// Notes
     /// -----
-    /// * Assumes the model exports `probabilities` with shape `[N, 2]` and uses
-    ///   column 1 as the positive class. A debug assertion checks `ncols == 2`
-    ///   in debug builds.
+    /// - Assumes the model exports `probabilities` with shape `[N, 2]`.
+    /// - Column 1 is treated as the positive class (`class=1`).
+    /// - A debug assertion checks `ncols == 2` in debug builds.
     pub fn predict_positive_proba(
         &mut self,
         batch: &[EdgeFeatures],
@@ -284,6 +381,7 @@ impl EdgeRankingModel {
         &mut self,
         batch: &[EdgeFeatures],
     ) -> Result<Option<Vec<i64>>, EdgeModelError> {
+        // If the exporter did not include labels, treat this as "not available".
         let Some(label_idx) = self.outputs.label else {
             return Ok(None);
         };
@@ -339,16 +437,17 @@ impl EdgeModelOutputs {
     /// Return
     /// ------
     /// * `Ok(EdgeModelOutputs)` on success.
-    /// * `Err(EdgeModelError)` if `probabilities` cannot be found.
+    /// * `Err(EdgeModelError)` if `"probabilities"` cannot be found.
     ///
     /// Notes
     /// -----
-    /// * Output naming depends on the export toolchain. If your model uses
-    ///   different names, change the match strings here.
+    /// Output naming depends on the export toolchain. If your model uses
+    /// different names, change the match strings here.
     fn resolve_output_indices(session: &Session) -> Result<Self, EdgeModelError> {
         let mut prob_idx = None;
         let mut label_idx = None;
 
+        // One-time scan of session outputs. This is not on the hot inference path.
         for (i, out) in session.outputs().iter().enumerate() {
             match out.name() {
                 "probabilities" => prob_idx = Some(i),
@@ -393,14 +492,17 @@ impl EdgeModelOutputs {
 /// * The optimization level is currently set to `Level3`, which usually yields
 ///   best throughput for repeated inference, at the cost of longer session build.
 fn load_edge_model_session(model_path: impl AsRef<Utf8Path>) -> Result<Session, EdgeModelError> {
+    // Ensure ORT global init has happened.
     init_ort_once();
 
     let path = model_path.as_ref();
 
+    // Nice early error message (instead of an ORT file error).
     if !path.exists() {
         return Err(EdgeModelError::ModelNotFound(path.as_str().to_string()));
     }
 
+    // Build session with aggressive graph optimizations (good for throughput).
     let session = Session::builder()?
         .with_optimization_level(GraphOptimizationLevel::Level3)?
         .commit_from_file(path.as_std_path())?;
@@ -424,12 +526,17 @@ fn load_edge_model_session(model_path: impl AsRef<Utf8Path>) -> Result<Session, 
 /// Notes
 /// -----
 /// * The feature ordering must match training exactly.
-/// * Values are cast from `f64` to `f32`.
+/// * Values are cast from `f64` to `f32` to match the model input dtype.
+/// * This allocates an `Array2` and fills it row-by-row; batch sizes should be
+///   tuned for throughput and memory usage.
 fn features_to_array2_f32(batch: &[EdgeFeatures]) -> Array2<f32> {
     let n = batch.len();
     let d = EdgeFeatures::len_flat();
 
+    // Allocate a dense contiguous buffer.
     let mut x = Array2::<f32>::zeros((n, d));
+
+    // Fill row-by-row in canonical feature order.
     for (i, feat) in batch.iter().enumerate() {
         for (j, v) in feat.iter_flat().enumerate() {
             x[(i, j)] = v as f32;
@@ -469,6 +576,12 @@ fn build_input_tensor(batch: &[EdgeFeatures]) -> Result<Tensor<f32>, EdgeModelEr
 /// ------
 /// * `Ok((n, k))` – Converted dimensions.
 /// * `Err(EdgeModelError)` – If `shape.len() != 2` or any dimension is invalid.
+///
+/// Notes
+/// -----
+/// The dimension names in error messages (`N`, `D`) are meant to be human-friendly
+/// and may represent `(batch_size, n_classes)` or `(batch_size, n_features)`
+/// depending on context.
 fn expect_2d_usize(shape: &[i64]) -> Result<(usize, usize), EdgeModelError> {
     if shape.len() != 2 {
         return Err(EdgeModelError::Ort(ort::Error::new(format!(

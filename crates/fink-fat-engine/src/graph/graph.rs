@@ -3,7 +3,6 @@ use crate::{
     graph::{
         edge::{
             Edge,
-            edge_id::EdgeId,
             edge_prediction::{EdgeModelError, EdgeRankingModelPool},
         },
         node::Node,
@@ -51,9 +50,6 @@ impl<'a, 'b> InterNightGraph<'a> {
             "right_nodes must all belong to the same night"
         );
 
-        /* ---------- generate NodeId-based edges ---------- */
-        let id_start = EdgeId::from(self.edges.len());
-
         /* ---------- Sort right nodes by epoch mid time ---------- */
         // required by generate_topk_edges()
         right_nodes.sort_by(|a, b| {
@@ -63,8 +59,7 @@ impl<'a, 'b> InterNightGraph<'a> {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        let new_edges = Edge::generate_topk_edges(
-            id_start,
+        let new_edges = Edge::build_edges(
             left_nodes,
             right_nodes,
             edge_config,
@@ -78,13 +73,5 @@ impl<'a, 'b> InterNightGraph<'a> {
             self.edges.push(edge);
         }
         Ok(())
-    }
-
-    pub fn deactivate_edges(&mut self, eids: &[EdgeId]) {
-        for &eid in eids {
-            if let Some(e) = self.edges.get_mut(eid.idx()) {
-                e.active = false;
-            }
-        }
     }
 }

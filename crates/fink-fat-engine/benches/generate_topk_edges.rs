@@ -16,7 +16,6 @@ use fink_fat_engine::{
     Alert,
     engine_config::edge_config::EdgeConfig,
     graph::edge::Edge,
-    graph::edge::edge_id::EdgeId,
     night_id::NightId,
     seeding::{seed_id::SeedId, seed_node::SeedNode},
 };
@@ -291,8 +290,7 @@ fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
                 let pool = EdgeRankingModelPool::new(model_path);
 
                 b.iter(|| {
-                    let edges = Edge::generate_topk_edges(
-                        black_box(EdgeId(0)),
+                    let edges = Edge::build_edges(
                         black_box(&left_seeds),
                         black_box(&right_seeds),
                         black_box(&edge_config),
@@ -320,8 +318,7 @@ fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
                 let pool = EdgeRankingModelPool::new(model_path);
 
                 b.iter(|| {
-                    let edges = Edge::generate_topk_edges(
-                        black_box(EdgeId(0)),
+                    let edges = Edge::build_edges(
                         black_box(&left_seeds),
                         black_box(&right_seeds),
                         black_box(&edge_config_capped),
@@ -554,8 +551,7 @@ fn bench_generate_topk_edges_components(c: &mut Criterion) {
         let pool = EdgeRankingModelPool::new(model_path);
 
         b.iter(|| {
-            let edges = Edge::generate_topk_edges(
-                black_box(EdgeId(0)),
+            let edges = Edge::build_edges(
                 black_box(left_small),
                 black_box(&right_seeds),
                 black_box(&edge_config),

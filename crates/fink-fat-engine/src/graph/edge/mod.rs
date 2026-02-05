@@ -1,13 +1,54 @@
+// -----------------------------------------------------------------------------
+// Edge module: edges + feature computation + optional ML Top-K ranking
+// -----------------------------------------------------------------------------
+//
+// This module contains the main edge construction pipeline of the fink-fat
+// engine. It exposes:
+//
+// - The `Edge<'a>` type: a directed link `from -> to` storing references to
+//   `SeedNode`s plus a solver-friendly scalar cost.
+// - Structured, cadence-robust feature computation (`EdgeFeatures` and friends).
+// - Optional ML ranking via ONNX (see `edge_prediction` + `ranking_topk`).
+// - Parallel and sequential implementations for building inter-night edges.
+//
+// Two operational modes
+// ---------------------
+// The behavior is controlled by `EdgeConfig`:
+//
+// 1) emit_all_edges = true
+//    - No ML ranking and no Top-K pruning.
+//    - Emit every candidate returned by `SeedNode::seed_edge_candidates`.
+//    - Cost is derived from `EdgeFeatures::kinematic_log_likelihood_cost()`.
+//
+// 2) emit_all_edges = false
+//    - ML Top-K ranking is enabled.
+//    - For each left seed, candidates are batched, scored by ONNX, and only the
+//      Top-K highest `p(class=1)` candidates are kept.
+//    - Cost is still derived from the feature cost, but the candidate set is
+//      reduced by the ML model.
+//
+// Parallelism
+// -----------
+// Edge building can be run sequentially or with Rayon (`parallel_left_batches`).
+// Because ONNX Runtime requires `&mut Session`, multi-thread inference is handled
+// via `EdgeRankingModelPool` (one model instance per worker thread).
+//
+// Lifetimes
+// ---------
+// `Edge<'a>` stores references to `SeedNode`s, so the input slices must outlive
+// the returned edges.
+//
+// -----------------------------------------------------------------------------
+
 pub mod edge_features;
+pub mod feature_core;
 pub mod photometry_features;
 pub mod position_features;
 pub mod uncertainty_features;
 pub mod velocity_features;
 
-pub mod edge_id;
 pub mod edge_prediction;
 pub mod ranking_topk;
-pub mod score;
 
 use std::fmt::{self, Display, Formatter};
 
@@ -15,7 +56,6 @@ use crate::{
     engine_config::edge_config::EdgeConfig,
     graph::edge::{
         edge_features::EdgeFeatures,
-        edge_id::EdgeId,
         edge_prediction::{EdgeModelError, EdgeRankingModelPool},
         ranking_topk::rank_topk_edges_for_left,
     },
@@ -25,16 +65,40 @@ use crate::{
 
 /// Directed link from an older node to a newer node (forward in time).
 ///
+/// This edge is the solver-facing representation of a potential inter-night link.
+/// It stores references to the original [`SeedNode`] objects to avoid any later
+/// ID → node resolution step.
+///
 /// Cost
 /// ----
-/// `cost` is a **dimensionless** score already aggregated upstream:
-/// lower is better. Enforce strictly **positive** costs to avoid
-/// degeneracies in later solvers.
+/// `cost` is a **dimensionless** scalar where lower is better. It is assumed to
+/// already aggregate all the information needed by downstream solvers.
+///
+/// We enforce strictly **positive** costs (`> 0`) to avoid degeneracies:
+/// - zero-cost cycles,
+/// - ambiguous shortest paths,
+/// - instability in optimization routines expecting positive weights.
+///
+/// Attributes
+/// ----------
+/// * `from` – Source [`SeedNode`] (older epoch).
+/// * `to` – Target [`SeedNode`] (newer epoch).
+/// * `cost` – Finite strictly positive edge weight (dimensionless).
+/// * `dt_days` – Time gap in days (TT), strictly positive.
+/// * `active` – Runtime flag for pruning / solver logic / recomputation.
+///
+/// Notes
+/// -----
+/// - `active` is not part of feature computation; it is a graph-level control flag.
+/// - If you need to store ML probability as well, keep it separate from `cost`
+///   (or add a dedicated field).
 #[derive(Clone, Debug)]
 pub struct Edge<'a> {
-    pub id: EdgeId,
+    /// Source seed (older epoch).
     pub from: &'a SeedNode,
+    /// Target seed (newer epoch).
     pub to: &'a SeedNode,
+    /// Solver-facing cost (dimensionless, strictly positive).
     pub cost: f64,
     /// Time gap in days (TT) between the two seeds (positive).
     pub dt_days: f64,
@@ -43,17 +107,42 @@ pub struct Edge<'a> {
 }
 
 impl<'a> Display for Edge<'a> {
+    /// Human-readable edge formatting.
+    ///
+    /// Intended for logging and debugging. The format is stable enough to be
+    /// readable but not intended as a machine-parseable serialization.
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Edge {{ id: {}, from: {}, to: {}, Δt: {:.3} d, cost: {:.6}, active: {} }}",
-            self.id, self.from.seed_id, self.to.seed_id, self.dt_days, self.cost, self.active,
+            "Edge {{ from: {}, to: {}, Δt: {:.3} d, cost: {:.6}, active: {} }}",
+            self.from.seed_id, self.to.seed_id, self.dt_days, self.cost, self.active,
         )
     }
 }
 
 impl<'a, 'b, 'c> Edge<'a> {
-    pub fn new(id: EdgeId, from: &'a SeedNode, to: &'a SeedNode, cost: f64, dt_days: f64) -> Self {
+    /// Create a new active edge with validated `cost` and `dt_days`.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `from` – Source seed node.
+    /// * `to` – Target seed node.
+    /// * `cost` – Edge cost (must be finite and strictly positive).
+    /// * `dt_days` – Time separation in days (must be finite and strictly positive).
+    ///
+    /// Return
+    /// ------
+    /// A new [`Edge`] with `active = true`.
+    ///
+    /// Panics
+    /// ------
+    /// Panics if `cost` or `dt_days` are not finite or not strictly positive.
+    ///
+    /// Notes
+    /// -----
+    /// These assertions are deliberate because invalid weights can silently
+    /// break downstream solvers (e.g. negative cycles, NaN propagation).
+    pub fn new(from: &'a SeedNode, to: &'a SeedNode, cost: f64, dt_days: f64) -> Self {
         assert!(
             cost.is_finite() && cost > 0.0,
             "Edge cost must be finite and > 0."
@@ -63,7 +152,6 @@ impl<'a, 'b, 'c> Edge<'a> {
             "dt_days must be finite and > 0."
         );
         Self {
-            id,
             from,
             to,
             cost,
@@ -72,93 +160,66 @@ impl<'a, 'b, 'c> Edge<'a> {
         }
     }
 
-    /* -------------------------- Top-K Edge Generation ------------------------- */
+    /* -------------------------- Edge construction API ------------------------- */
 
-    /// Generate **Top-K scored directed edges** from a set of left-hand seeds to a
-    /// set of right-hand seeds.
+    /// Build directed edges from a set of left-hand seeds to a set of right-hand seeds.
     ///
-    /// Overview
-    /// --------
-    /// This routine builds the inter-night graph edges between two consecutive
-    /// (or non-consecutive) nights by:
+    /// This is the main entrypoint to construct the inter-night bipartite edge
+    /// set between two seed slices (typically two nights).
     ///
-    /// 1. Scoring candidate edges **independently for each left-hand seed** using
-    ///    [`SeedNode::score_edge_candidates`], which applies spatio-temporal
-    ///    prefiltering followed by exact kinematic scoring.
-    /// 2. Retaining only the **Top-K lowest-cost edges per left seed** using
-    ///    partial selection (no full sort).
-    /// 3. Converting scored edges into final [`Edge`] objects that directly store
-    ///    references to the source and target [`SeedNode`]s.
-    /// 4. Optionally enforcing a **global cap** on the total number of edges
-    ///    produced across all left-hand seeds.
+    /// Behavior (two modes)
+    /// --------------------
+    /// Controlled by `edge_config.emit_all_edges`:
     ///
-    /// The returned edges are immediately usable by downstream graph solvers
-    /// (e.g. min-cost flow) without any additional `(night, seed) → node`
-    /// resolution step.
+    /// - If `true`:
+    ///   - emits *all* candidate edges returned by `SeedNode::seed_edge_candidates`,
+    ///   - computes `EdgeFeatures` for each candidate,
+    ///   - uses `EdgeFeatures::kinematic_log_likelihood_cost()` as the edge cost.
     ///
-    /// Assumptions
+    /// - If `false`:
+    ///   - requires `model_pool` to be `Some(...)`,
+    ///   - ranks candidates per-left seed using ONNX ML (`rank_topk_edges_for_left`),
+    ///   - keeps only `top_k_per_left` best candidates (by `p(class=1)`),
+    ///   - uses the derived feature cost as the edge cost.
+    ///
+    /// Parallelism
     /// -----------
-    /// - All `left` seeds belong to the same night.
-    /// - All `right` seeds belong to the same (later) night.
-    /// - `right` contains **all seeds referenced by scored edges** (by `SeedId`).
-    /// - Costs returned by [`ScoredEdge::score`] are **dimensionless** and
-    ///   strictly comparable (lower is better).
+    /// Controlled by `edge_config.parallel_left_batches`:
+    /// - If `true`: uses Rayon to process chunks of left seeds in parallel.
+    /// - If `false`: processes chunks sequentially.
     ///
-    /// Parameters
-    /// ----------
-    /// * `id_start` – First [`EdgeId`] to assign; subsequent edges are assigned
-    ///   monotonically increasing IDs.
+    /// Chunking is controlled by `edge_config.parallel_left_batch_size`.
+    ///
+    /// Arguments
+    /// ---------
     /// * `left` – Slice of source seeds (earlier night).
     /// * `right` – Slice of target seeds (later night).
     /// * `edge_config` – Configuration controlling:
-    ///   - per-left Top-K (`top_k_per_left`),
-    ///   - optional global edge cap (`max_total_edges`),
-    ///   - scoring and predictor parameters.
-    /// * `spatial_binner` – Spatial partitioner used during candidate generation
-    ///   (e.g. HEALPix).
-    /// * `time_binner` – Time binning strategy used during candidate generation
-    ///   (uniform or custom).
+    ///   - candidate search constraints,
+    ///   - `emit_all_edges` toggle,
+    ///   - `top_k_per_left` for ML mode,
+    ///   - parallel chunking and ONNX batch sizes.
+    /// * `spatial_binner` – Spatial partitioner used for indexing `right` seeds.
+    /// * `time_binner` – Time binning strategy used for indexing `right` seeds.
+    /// * `model_pool` – Optional per-thread ML model pool:
+    ///   - required if `emit_all_edges == false`,
+    ///   - ignored otherwise.
     ///
-    /// Returns
-    /// -------
-    /// * `Vec<Edge<'a>>` – Directed edges from `left` to `right`, each carrying:
-    ///   - references to the source and target `SeedNode`,
-    ///   - the aggregated cost,
-    ///   - the inter-night time difference `dt_days`.
-    ///
-    /// The vector is sorted **only if** a global cap is applied; otherwise the
-    /// order reflects per-left Top-K extraction.
-    ///
-    /// Complexity
-    /// ----------
-    /// Let:
-    /// - `L = left.len()`
-    /// - `K = edge_config.top_k_per_left`
-    /// - `C_i` be the number of scored candidates generated for left seed `i`
-    ///
-    /// Per left seed:
-    /// - Candidate generation: cost of `score_edge_candidates`
-    /// - Top-K selection: `O(C_i)` via `select_nth_unstable`
-    ///
-    /// Total:
-    /// - `O(Σ_i C_i + L · K)` for per-left processing
-    /// - Optional global cap: `O(E)` where `E ≤ L · K`
-    ///
-    /// Memory
+    /// Return
     /// ------
-    /// - Stores at most `L · K` edges before optional global truncation.
-    /// - Uses a temporary `HashMap<SeedId, &SeedNode>` for safe ID → node resolution.
+    /// * `Ok(Vec<Edge<'a>>)` – List of constructed edges containing references to
+    ///   `SeedNode`s from `left` and `right`.
+    /// * `Err(EdgeModelError)` – If ML mode is enabled and:
+    ///   - the model pool is missing,
+    ///   - or inference fails.
     ///
     /// Notes
     /// -----
-    /// - Partial selection is used instead of full sorting to keep runtime linear
-    ///   in the number of scored candidates.
-    /// - The `SeedId → &SeedNode` map avoids relying on any implicit relationship
-    ///   between `SeedId` and slice indices in `right`.
-    /// - This function is intentionally sequential; parallelism is expected to be
-    ///   handled at a higher level (e.g. across night pairs).
-    pub fn generate_topk_edges<B: SpatialBinner, T: TimeBinner>(
-        id_start: EdgeId,
+    /// - The returned edge list is **not globally sorted** by default.
+    ///   If you need global ordering (e.g. for deterministic truncation),
+    ///   sort the result at the call site.
+    /// - `SeedSpatialIndex::build` is called once and shared across chunks.
+    pub fn build_edges<B: SpatialBinner, T: TimeBinner>(
         left: &'a [SeedNode],
         right: &'a [SeedNode],
         edge_config: &'c EdgeConfig,
@@ -166,10 +227,14 @@ impl<'a, 'b, 'c> Edge<'a> {
         time_binner: &'b T,
         model_pool: Option<&EdgeRankingModelPool>,
     ) -> Result<Vec<Self>, EdgeModelError> {
+        // Build an index over the right-hand seeds for fast candidate lookup.
         let right_index = SeedSpatialIndex::build(right, spatial_binner, time_binner);
+
+        // Chunking and per-left Top-K.
         let chunk_size = edge_config.parallel_left_batch_size.max(1);
         let top_k = edge_config.top_k_per_left;
 
+        // Select sequential or parallel execution strategy.
         match edge_config.parallel_left_batches {
             true => build_edges_parallel(
                 left,
@@ -178,63 +243,107 @@ impl<'a, 'b, 'c> Edge<'a> {
                 edge_config,
                 top_k,
                 model_pool,
-                id_start,
             ),
-            false => {
-                let ids = edge_id_iter(id_start);
-                build_edges_sequential(
-                    left,
-                    chunk_size,
-                    &right_index,
-                    edge_config,
-                    top_k,
-                    model_pool,
-                    ids,
-                )
-            }
+            false => build_edges_sequential(
+                left,
+                chunk_size,
+                &right_index,
+                edge_config,
+                top_k,
+                model_pool,
+            ),
         }
     }
 }
 
-fn edge_id_iter(start: EdgeId) -> impl Iterator<Item = EdgeId> {
-    (start.0..).map(EdgeId)
-}
-
+/// Process a chunk of left seeds by emitting *all* candidate edges (no ML / no Top-K).
+///
+/// This is the fast-path for the "emit all edges" debugging mode.
+///
+/// Arguments
+/// ---------
+/// * `chunk` – Slice of left-hand seeds processed together.
+/// * `right_index` – Spatial index over right-hand seeds.
+/// * `edge_config` – Candidate-generation configuration (search constraints).
+///
+/// Return
+/// ------
+/// * `Ok(Vec<Edge<'a>>)` – All candidate edges for this chunk.
+/// * `Err(EdgeModelError)` – Currently never returned here, but kept to share the
+///   same error type as the ML path.
+///
+/// Notes
+/// -----
+/// - This can generate a very large number of edges; use with care.
+/// - Cost is computed from cadence-robust features (parameter-free heuristic).
 fn process_chunk_emit_all<'a>(
     chunk: &'a [SeedNode],
     right_index: &SeedSpatialIndex<'a, '_>,
     edge_config: &EdgeConfig,
-    ids: &mut impl Iterator<Item = EdgeId>,
 ) -> Result<Vec<Edge<'a>>, EdgeModelError> {
     let mut local_edges: Vec<Edge<'a>> = Vec::new();
 
     for src in chunk.iter() {
         for to in src.seed_edge_candidates(right_index, edge_config) {
-            local_edges.push(Edge::new(
-                ids.next().expect("EdgeId iterator exhausted"),
-                src,
-                to,
-                EdgeFeatures::compute_features(src, to).kinematic_log_likelihood_cost(),
-                src.delta_days(to),
-            ));
+            // Compute cost from structured features (cadence-robust).
+            let cost = EdgeFeatures::compute_features(src, to).kinematic_log_likelihood_cost();
+
+            // NOTE: ensure dt_days is computed as a positive time gap.
+            // If your `delta_days` is defined as `to - from`, the correct call is:
+            //     src.delta_days(to)
+            // not `src.delta_days(to)` depending on your API.
+            //
+            // Keep this consistent everywhere to avoid negative dt_days.
+            let dt_days = src.delta_days(to);
+
+            local_edges.push(Edge::new(src, to, cost, dt_days));
         }
     }
 
     Ok(local_edges)
 }
 
+/// Process a chunk of left seeds using ML Top-K pruning per-left seed.
+///
+/// For each source seed:
+/// - generate candidates,
+/// - compute features in batches,
+/// - run ONNX to obtain `p(class=1)`,
+/// - keep only the Top-K candidates,
+/// - emit edges with solver cost derived from features.
+///
+/// Arguments
+/// ---------
+/// * `chunk` – Slice of left-hand seeds processed together.
+/// * `right_index` – Spatial index over right-hand seeds.
+/// * `edge_config` – Candidate-generation and ONNX batching configuration.
+/// * `top_k` – Number of candidates kept per left seed.
+/// * `model_pool` – Per-thread model pool used to run ONNX inference.
+///
+/// Return
+/// ------
+/// * `Ok(Vec<Edge<'a>>)` – ML-pruned edges for this chunk.
+/// * `Err(EdgeModelError)` – If ONNX inference fails.
+///
+/// Notes
+/// -----
+/// - `tmp` is reused to avoid allocations. It stores `(to, edge_cost)` for one `src`.
+/// - We run `model_pool.with_mut(...)` per `src` so the model used is the current
+///   thread’s instance (no locks).
 fn process_chunk_ml_topk<'a>(
     chunk: &'a [SeedNode],
     right_index: &SeedSpatialIndex<'a, '_>,
     edge_config: &EdgeConfig,
     top_k: usize,
     model_pool: &EdgeRankingModelPool,
-    ids: &mut impl Iterator<Item = EdgeId>,
 ) -> Result<Vec<Edge<'a>>, EdgeModelError> {
     let mut local_edges: Vec<Edge<'a>> = Vec::new();
+
+    // Temporary per-left output: avoids heap allocation for small top_k.
     let mut tmp: smallvec::SmallVec<[(&SeedNode, f64); 32]> = smallvec::SmallVec::new();
 
     for src in chunk.iter() {
+        // Run ranking using the current thread’s model instance.
         model_pool.with_mut(|model| {
             rank_topk_edges_for_left(
                 src,
@@ -247,37 +356,69 @@ fn process_chunk_ml_topk<'a>(
             )
         })?;
 
+        // Materialize edges for the winners.
         for (right_candidate, edge_cost) in tmp.iter() {
-            local_edges.push(Edge::new(
-                ids.next().expect("EdgeId iterator exhausted"),
-                src,
-                *right_candidate,
-                *edge_cost,
-                src.delta_days(right_candidate),
-            ));
+            let dt_days = src.delta_days(right_candidate);
+            local_edges.push(Edge::new(src, *right_candidate, *edge_cost, dt_days));
         }
     }
 
     Ok(local_edges)
 }
 
+/// Process one chunk of left seeds according to `edge_config.emit_all_edges`.
+///
+/// This small dispatcher keeps the sequential/parallel loops clean.
+///
+/// Arguments
+/// ---------
+/// * `chunk` – Slice of left-hand seeds processed together.
+/// * `right_index` – Spatial index over right-hand seeds.
+/// * `edge_config` – Edge configuration controlling the mode.
+/// * `top_k` – Top-K per-left used in ML mode.
+/// * `model_pool` – Required in ML mode, ignored in emit-all mode.
+///
+/// Return
+/// ------
+/// * `Ok(Vec<Edge<'a>>)` – Edges produced for this chunk.
+/// * `Err(EdgeModelError::MissingModel)` if ML mode is enabled without a pool.
+/// * `Err(EdgeModelError)` if ONNX inference fails.
 fn process_chunk<'a>(
     chunk: &'a [SeedNode],
     right_index: &SeedSpatialIndex<'a, '_>,
     edge_config: &EdgeConfig,
     top_k: usize,
     model_pool: Option<&EdgeRankingModelPool>,
-    ids: &mut impl Iterator<Item = EdgeId>,
 ) -> Result<Vec<Edge<'a>>, EdgeModelError> {
     match edge_config.emit_all_edges {
-        true => process_chunk_emit_all(chunk, right_index, edge_config, ids),
+        true => process_chunk_emit_all(chunk, right_index, edge_config),
         false => {
             let pool = model_pool.ok_or(EdgeModelError::MissingModel)?;
-            process_chunk_ml_topk(chunk, right_index, edge_config, top_k, pool, ids)
+            process_chunk_ml_topk(chunk, right_index, edge_config, top_k, pool)
         }
     }
 }
 
+/// Build edges by processing `left` in parallel chunks with Rayon.
+///
+/// Arguments
+/// ---------
+/// * `left` – Slice of left-hand seeds.
+/// * `chunk_size` – Number of left seeds per Rayon task.
+/// * `right_index` – Spatial index over right-hand seeds.
+/// * `edge_config` – Edge configuration controlling mode and batching.
+/// * `top_k` – Top-K per-left used in ML mode.
+/// * `model_pool` – Optional model pool, required in ML mode.
+///
+/// Return
+/// ------
+/// * `Ok(Vec<Edge<'a>>)` – Concatenated edges from all chunks.
+/// * `Err(EdgeModelError)` – If processing any chunk fails.
+///
+/// Notes
+/// -----
+/// - Uses `try_reduce` to concatenate vectors efficiently without global locks.
+/// - Each chunk returns its own `Vec<Edge>` which is appended into the accumulator.
 fn build_edges_parallel<'a>(
     left: &'a [SeedNode],
     chunk_size: usize,
@@ -285,30 +426,39 @@ fn build_edges_parallel<'a>(
     edge_config: &EdgeConfig,
     top_k: usize,
     model_pool: Option<&EdgeRankingModelPool>,
-    id_start: EdgeId,
 ) -> Result<Vec<Edge<'a>>, EdgeModelError> {
     use rayon::prelude::*;
 
     left.par_chunks(chunk_size)
-        .enumerate()
-        .map(|(i, chunk)| {
-            // Upper bound: worst case per chunk
-            let max_edges = match edge_config.emit_all_edges {
-                true => chunk.len(),
-                false => chunk.len() * top_k,
-            };
-
-            let base = id_start.0 + i as u64 * max_edges as u64;
-            let mut ids = (base..).map(EdgeId);
-
-            process_chunk(chunk, right_index, edge_config, top_k, model_pool, &mut ids)
-        })
+        .map(|chunk| process_chunk(chunk, right_index, edge_config, top_k, model_pool))
         .try_reduce(Vec::new, |mut a, mut b| {
             a.append(&mut b);
             Ok(a)
         })
 }
 
+/// Build edges by processing `left` sequentially in chunks.
+///
+/// Arguments
+/// ---------
+/// * `left` – Slice of left-hand seeds.
+/// * `chunk_size` – Number of left seeds per chunk.
+/// * `right_index` – Spatial index over right-hand seeds.
+/// * `edge_config` – Edge configuration controlling mode and batching.
+/// * `top_k` – Top-K per-left used in ML mode.
+/// * `model_pool` – Optional model pool, required in ML mode.
+///
+/// Return
+/// ------
+/// * `Ok(Vec<Edge<'a>>)` – Concatenated edges from all chunks.
+/// * `Err(EdgeModelError)` – If processing any chunk fails.
+///
+/// Notes
+/// -----
+/// Chunking is still useful in sequential mode because it:
+/// - bounds temporary memory growth,
+/// - aligns behavior with the parallel implementation,
+/// - keeps code structure consistent.
 fn build_edges_sequential<'a>(
     left: &'a [SeedNode],
     chunk_size: usize,
@@ -316,7 +466,6 @@ fn build_edges_sequential<'a>(
     edge_config: &EdgeConfig,
     top_k: usize,
     model_pool: Option<&EdgeRankingModelPool>,
-    mut ids: impl Iterator<Item = EdgeId>,
 ) -> Result<Vec<Edge<'a>>, EdgeModelError> {
     let mut edges: Vec<Edge<'a>> = Vec::new();
 
@@ -327,7 +476,6 @@ fn build_edges_sequential<'a>(
             edge_config,
             top_k,
             model_pool,
-            &mut ids,
         )?);
     }
 
