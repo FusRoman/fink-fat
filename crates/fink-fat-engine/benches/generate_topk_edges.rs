@@ -1,7 +1,11 @@
 use std::hint::black_box;
 use std::time::Duration;
 
+use camino::Utf8Path;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use fink_fat_engine::graph::edge::edge_features::EdgeFeatures;
+use fink_fat_engine::graph::edge::edge_prediction::EdgeRankingModel;
+use fink_fat_engine::graph::edge::ranking_topk::rank_topk_edges_for_left;
 use fink_fat_engine::seeding::seed_spatial_index::SeedSpatialIndex;
 use fink_fat_engine::spacetime_bucket::healpix_binner::HealpixBinner;
 use fink_fat_engine::spacetime_bucket::uniform_time_binner::UniformTimeBinner;
@@ -16,6 +20,7 @@ use fink_fat_engine::{
     night_id::NightId,
     seeding::{seed_id::SeedId, seed_node::SeedNode},
 };
+use smallvec::SmallVec;
 
 // -----------------------------------------------------------------------------
 // Helpers: synthetic data generation
@@ -211,6 +216,10 @@ fn make_binners(t0: f64) -> (HealpixBinner, UniformTimeBinner) {
 /// - conversion to final `Edge` objects,
 /// - optional global truncation.
 fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
+    let model_path = std::env::var("FINK_FAT_EDGE_ONNX")
+        .expect("Missing env var FINK_FAT_EDGE_ONNX (path to .onnx model)");
+    let model_path = Utf8Path::new(&model_path);
+
     let mut group = c.benchmark_group("generate_topk_edges/e2e");
 
     // Typical scaling cases.
@@ -280,6 +289,9 @@ fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
             ),
             &(num_left_seeds, num_right_seeds, top_k_per_left),
             |b, _| {
+                let mut model = EdgeRankingModel::load_edge_ranking_model(model_path)
+                    .expect("Failed to load ONNX edge ranking model");
+
                 b.iter(|| {
                     let edges = Edge::generate_topk_edges(
                         black_box(EdgeId(0)),
@@ -288,7 +300,10 @@ fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
                         black_box(&edge_config),
                         black_box(&spatial_binner),
                         black_box(&time_binner),
-                    );
+                        black_box(&mut model),
+                    )
+                    .expect("generate_topk_edges failed");
+
                     black_box(edges.len())
                 })
             },
@@ -305,6 +320,9 @@ fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
             ),
             &(num_left_seeds, num_right_seeds, top_k_per_left),
             |b, _| {
+                let mut model = EdgeRankingModel::load_edge_ranking_model(model_path)
+                    .expect("Failed to load ONNX edge ranking model");
+
                 b.iter(|| {
                     let edges = Edge::generate_topk_edges(
                         black_box(EdgeId(0)),
@@ -313,7 +331,10 @@ fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
                         black_box(&edge_config_capped),
                         black_box(&spatial_binner),
                         black_box(&time_binner),
-                    );
+                        black_box(&mut model),
+                    )
+                    .expect("generate_topk_edges failed");
+
                     black_box(edges.len())
                 })
             },
@@ -331,6 +352,10 @@ fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
 /// - Top-K selection and sorting,
 /// - fixed overheads per call.
 fn bench_generate_topk_edges_components(c: &mut Criterion) {
+    let model_path = std::env::var("FINK_FAT_EDGE_ONNX")
+        .expect("Missing env var FINK_FAT_EDGE_ONNX (path to .onnx model)");
+    let model_path = Utf8Path::new(&model_path);
+
     let mut group = c.benchmark_group("generate_topk_edges/components");
 
     // -----------------------------------------------------------------------------
@@ -398,30 +423,62 @@ fn bench_generate_topk_edges_components(c: &mut Criterion) {
     edge_config.top_k_per_left = top_k_per_left;
     edge_config.max_total_edges = None;
 
-    // Revisit separation Δ nights (>= 1) for scoring.
-    // Using the actual night ids from the synthetic seeds keeps this consistent.
-    let delta_revisit: u32 = right_seeds[0]
-        .night_id
-        .0
-        .saturating_sub(left_seeds[0].night_id.0)
-        .max(1);
-
     // -----------------------------------------------------------------------------
     // 1) Candidate generation + scoring per single left seed.
     //
     // This is the primary bottleneck in most configurations (bin slicing,
     // per-bin index build, cone queries, and exact scoring).
     // -----------------------------------------------------------------------------
-    group.bench_function("score_edge_candidates/per_left_1", |b| {
+    group.bench_function("seed_edge_candidates/per_left_1", |b| {
         let left_seed = &left_seeds[0];
         b.iter(|| {
-            let scored = left_seed.score_edge_candidates(
-                black_box(&right_seeds),
+            let mut n: usize = 0;
+            for _to in
+                left_seed.seed_edge_candidates(black_box(&right_index), black_box(&edge_config))
+            {
+                n += 1;
+            }
+            black_box(n)
+        })
+    });
+
+    group.bench_function("seed_edge_candidates_plus_features/per_left_1", |b| {
+        let left_seed = &left_seeds[0];
+        b.iter(|| {
+            let mut n: usize = 0;
+            for to in
+                left_seed.seed_edge_candidates(black_box(&right_index), black_box(&edge_config))
+            {
+                // measure the "feature extraction" cost (CPU)
+                let f = EdgeFeatures::compute_features(left_seed, to);
+                black_box(f);
+                n += 1;
+            }
+            black_box(n)
+        })
+    });
+
+    group.bench_function("rank_topk_edges_for_left/per_left_1", |b| {
+        let left_seed = &left_seeds[0];
+        let mut model = EdgeRankingModel::load_edge_ranking_model(model_path)
+            .expect("Failed to load ONNX edge ranking model");
+
+        // Reusable output buffer
+        let mut out: SmallVec<[(&SeedNode, f32); 32]> = SmallVec::new();
+
+        b.iter(|| {
+            rank_topk_edges_for_left(
+                black_box(left_seed),
                 black_box(&right_index),
                 black_box(&edge_config),
-                black_box(delta_revisit),
-            );
-            black_box(scored.len())
+                black_box(&mut model),
+                black_box(top_k_per_left),
+                black_box(100), // batch_size
+                black_box(&mut out),
+            )
+            .expect("rank_topk_edges_for_left failed");
+
+            black_box(out.len())
         })
     });
 
@@ -431,20 +488,35 @@ fn bench_generate_topk_edges_components(c: &mut Criterion) {
     // This reduces measurement noise (amortizes per-call jitter) and gives a
     // number you can extrapolate to e2e time as ~ (L / batch) * cost(batch).
     // -----------------------------------------------------------------------------
-    group.bench_function("score_edge_candidates/per_left_16", |b| {
+    group.bench_function("seed_edge_candidates/per_left_16", |b| {
         let left_batch: &[SeedNode] = &left_seeds[..16.min(left_seeds.len())];
         b.iter(|| {
-            let mut total_candidates: usize = 0;
+            let mut total: usize = 0;
             for left_seed in left_batch {
-                let scored = left_seed.score_edge_candidates(
-                    black_box(&right_seeds),
-                    black_box(&right_index),
-                    black_box(&edge_config),
-                    black_box(delta_revisit),
-                );
-                total_candidates += scored.len();
+                for _to in
+                    left_seed.seed_edge_candidates(black_box(&right_index), black_box(&edge_config))
+                {
+                    total += 1;
+                }
             }
-            black_box(total_candidates)
+            black_box(total)
+        })
+    });
+
+    group.bench_function("seed_edge_candidates_plus_features/per_left_16", |b| {
+        let left_batch: &[SeedNode] = &left_seeds[..16.min(left_seeds.len())];
+        b.iter(|| {
+            let mut total: usize = 0;
+            for left_seed in left_batch {
+                for to in
+                    left_seed.seed_edge_candidates(black_box(&right_index), black_box(&edge_config))
+                {
+                    let f = EdgeFeatures::compute_features(left_seed, to);
+                    black_box(f);
+                    total += 1;
+                }
+            }
+            black_box(total)
         })
     });
 
@@ -484,6 +556,9 @@ fn bench_generate_topk_edges_components(c: &mut Criterion) {
     // -----------------------------------------------------------------------------
     group.bench_function("e2e_small_left", |b| {
         let left_small: &[SeedNode] = &left_seeds[..32.min(left_seeds.len())];
+        let mut model = EdgeRankingModel::load_edge_ranking_model(model_path)
+            .expect("Failed to load ONNX edge ranking model");
+
         b.iter(|| {
             let edges = Edge::generate_topk_edges(
                 black_box(EdgeId(0)),
@@ -492,7 +567,10 @@ fn bench_generate_topk_edges_components(c: &mut Criterion) {
                 black_box(&edge_config),
                 black_box(&spatial_binner),
                 black_box(&time_binner),
-            );
+                black_box(&mut model),
+            )
+            .expect("generate_topk_edges failed");
+
             black_box(edges.len())
         })
     });

@@ -40,7 +40,7 @@ use camino::Utf8Path;
 use ort::session::Session;
 use ort::session::builder::GraphOptimizationLevel;
 
-use crate::graph::edge::features::EdgeFeatures;
+use crate::graph::edge::edge_features::EdgeFeatures;
 
 /// Global guard to ensure `ort::init().commit()` is run at most once.
 ///
@@ -482,8 +482,10 @@ fn array2_from_flat(shape: (usize, usize), data: &[f32]) -> Result<Array2<f32>, 
 
 #[cfg(test)]
 mod edge_prediction_test {
-    use crate::graph::edge::features::{
-        EdgePhotometryFeatures, EdgePositionFeatures, EdgeUncertaintyFeatures, EdgeVelocityFeatures,
+
+    use crate::graph::edge::{
+        photometry_features::EdgePhotometryFeatures, position_features::EdgePositionFeatures,
+        uncertainty_features::EdgeUncertaintyFeatures, velocity_features::EdgeVelocityFeatures,
     };
 
     use super::*;
@@ -514,9 +516,7 @@ mod edge_prediction_test {
                 rel_speed_diff: base + 11.0,
                 innov_speed_ratio: base + 12.0,
             },
-            uncertainty: EdgeUncertaintyFeatures {
-                cov_vel_ratio: base + 14.0,
-            },
+            uncertainty: EdgeUncertaintyFeatures(base + 14.0),
             photometry: EdgePhotometryFeatures {
                 z_flux: base + 18.0,
                 flux_std_ratio: base + 19.0,

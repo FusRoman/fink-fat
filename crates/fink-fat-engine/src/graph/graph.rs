@@ -1,6 +1,13 @@
 use crate::{
     engine_config::edge_config::EdgeConfig,
-    graph::{edge::Edge, edge::edge_id::EdgeId, node::Node},
+    graph::{
+        edge::{
+            Edge,
+            edge_id::EdgeId,
+            edge_prediction::{EdgeModelError, EdgeRankingModel},
+        },
+        node::Node,
+    },
     seeding::seed_node::SeedNode,
     spacetime_bucket::{spatial_binner::SpatialBinner, time_binner::TimeBinner},
 };
@@ -11,7 +18,7 @@ pub struct InterNightGraph<'a> {
     pub edges: Vec<Edge<'a>>,
 }
 
-impl<'a> InterNightGraph<'a> {
+impl<'a, 'b> InterNightGraph<'a> {
     pub fn new() -> Self {
         Self {
             nodes: Vec::new(),
@@ -23,10 +30,11 @@ impl<'a> InterNightGraph<'a> {
         &mut self,
         left_nodes: &'a [SeedNode],
         right_nodes: &'a mut [SeedNode],
-        edge_config: &EdgeConfig,
-        spatial_binner: &B,
-        time_binner: &T,
-    ) {
+        edge_config: &'b EdgeConfig,
+        spatial_binner: &'a B,
+        time_binner: &'a T,
+        model: &mut EdgeRankingModel,
+    ) -> Result<(), EdgeModelError> {
         assert!(!left_nodes.is_empty(), "left_nodes must not be empty");
         assert!(!right_nodes.is_empty(), "right_nodes must not be empty");
 
@@ -62,12 +70,14 @@ impl<'a> InterNightGraph<'a> {
             edge_config,
             spatial_binner,
             time_binner,
-        );
+            model,
+        )?;
 
         /* ---------- insert edges into graph without node_id_of() ---------- */
         for edge in new_edges {
             self.edges.push(edge);
         }
+        Ok(())
     }
 
     pub fn deactivate_edges(&mut self, eids: &[EdgeId]) {

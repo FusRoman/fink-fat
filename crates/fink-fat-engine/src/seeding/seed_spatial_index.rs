@@ -172,13 +172,13 @@ impl<'a, 'b> SeedSpatialIndex<'a, 'b> {
     ///     approximate cover.
     /// - Downstream code should apply a precise angular separation filter if
     ///   strict cone membership is required.
-    pub fn cone_query(
-        &'a self,
+    pub fn cone_query<'s>(
+        &'s self,
         ra: Radians,
         dec: Radians,
         radius: Radians,
         time: MjdTt,
-    ) -> impl Iterator<Item = &'a SeedNode> + 'a {
+    ) -> impl Iterator<Item = &'a SeedNode> + 's {
         let center_key: SpatialKey = self.spatial_binner.key_for(ra, dec);
         let time_key = self.time_binner.bin_for(time);
 

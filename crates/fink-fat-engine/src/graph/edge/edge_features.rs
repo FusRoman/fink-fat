@@ -24,7 +24,10 @@ use crate::{
     astro_math::{
         cholesky_lower_sym_2x2, clamp_unit, dot2, invert_sym_2x2, l2_norm, mat_vec2, safe_ln,
     },
-    graph::edge::Edge,
+    graph::edge::{
+        photometry_features::EdgePhotometryFeatures, position_features::EdgePositionFeatures,
+        uncertainty_features::EdgeUncertaintyFeatures, velocity_features::EdgeVelocityFeatures,
+    },
     seeding::seed_node::SeedNode,
 };
 
@@ -62,173 +65,118 @@ pub struct EdgeFeatures {
     pub photometry: EdgePhotometryFeatures,
 }
 
-/// Position/innovation consistency features (dimensionless).
-///
-/// Definitions
-/// -----------
-/// Consider an edge from seed `i` ("from") to seed `j` ("to").
-///
-/// We build:
-/// - a predicted position on the tangent plane of `i` propagated to the epoch of `j`,
-/// - an innovation (residual) `r = p_to - p_pred`,
-/// - an innovation covariance matrix `S`,
-/// - its inverse `S⁻¹` (robustly inverted with numerical guards).
-///
-/// Then:
-/// - `chi2_pos = rᵀ S⁻¹ r`
-/// - diagonal-based z-scores `z_dx`, `z_dy`
-/// - along/cross track z-scores using the predicted motion direction.
-///
-/// All features are **dimensionless**.
-#[derive(Clone, Debug)]
-pub struct EdgePositionFeatures {
-    /// Mahalanobis squared distance of the position innovation: `rᵀ S⁻¹ r`.
-    ///
-    /// This behaves like a χ² statistic with ~2 degrees of freedom when:
-    /// - the model is correct,
-    /// - the covariance is meaningful,
-    /// - residuals are Gaussian on the tangent plane.
-    pub chi2_pos: f64,
+impl EdgeFeatures {
+    // -------------------------------------------------------------------------
+    // Feature API (high-level)
+    // -------------------------------------------------------------------------
 
-    /// `log(chi2_pos + eps)` for numerical stability and better dynamic range.
-    ///
-    /// Log-transform is useful for ML since `chi2_pos` is heavy-tailed.
-    pub log_chi2_pos: f64,
+    /// Compute the full cadence-robust feature set.
+    #[inline]
+    pub fn compute_features(from: &SeedNode, to: &SeedNode) -> Self {
+        // Build shared intermediate quantities once.
+        let core = FeatureCore::from_nodes(from, to);
 
-    /// Normalized x residual using diagonal scaling: `dx / sqrt(S_xx)`.
-    ///
-    /// This is a cheap, robust z-score approximation that ignores correlations.
-    pub z_dx: f64,
+        EdgeFeatures {
+            position: EdgePositionFeatures::position_features(&core),
+            velocity: EdgeVelocityFeatures::velocity_features(&core),
+            uncertainty: EdgeUncertaintyFeatures::uncertainty_features(from, to),
+            photometry: EdgePhotometryFeatures::photometry_features(from, to),
+        }
+    }
 
-    /// Normalized y residual using diagonal scaling: `dy / sqrt(S_yy)`.
+    /// Return the total number of scalar leaf features.
     ///
-    /// This is a cheap, robust z-score approximation that ignores correlations.
-    pub z_dy: f64,
+    /// This value is constant and corresponds to the length of
+    /// [`EDGE_FEATURE_KEYS`].
+    #[inline]
+    pub const fn len_flat() -> usize {
+        EDGE_FEATURE_KEYS.len()
+    }
 
-    /// Euclidean norm of `(z_dx, z_dy)`.
+    /// Return an iterator over all canonical feature names.
     ///
-    /// Useful as a scalar "how surprising is the innovation" proxy.
-    pub z_resid_norm: f64,
+    /// This is allocation-free and preserves the canonical ordering.
+    #[inline]
+    pub fn flat_names() -> impl Iterator<Item = &'static str> {
+        EDGE_FEATURE_KEYS.into_iter().map(|k| k.path())
+    }
 
-    /// Along-track normalized residual.
+    /// Retrieve a feature value using a type-safe [`EdgeFeatureKey`].
     ///
-    /// Let `u` be the unit vector along predicted velocity. Then:
-    /// `z_along = (r·u) / sqrt(uᵀ S u)`.
-    ///
-    /// This captures whether the residual is consistent **along motion**.
-    pub z_along: f64,
+    /// This is the **preferred access method** in core Rust code.
+    #[inline]
+    pub fn get(&self, key: EdgeFeatureKey) -> f64 {
+        match key {
+            EdgeFeatureKey::PositionChi2Pos => self.position.chi2_pos,
+            EdgeFeatureKey::PositionLogChi2Pos => self.position.log_chi2_pos,
+            EdgeFeatureKey::PositionZDx => self.position.z_dx,
+            EdgeFeatureKey::PositionZDy => self.position.z_dy,
+            EdgeFeatureKey::PositionZResidNorm => self.position.z_resid_norm,
+            EdgeFeatureKey::PositionZAlong => self.position.z_along,
+            EdgeFeatureKey::PositionZCross => self.position.z_cross,
+            EdgeFeatureKey::PositionCholZ1 => self.position.chol_z1,
+            EdgeFeatureKey::PositionCholZ2 => self.position.chol_z2,
+            EdgeFeatureKey::PositionCholZNorm => self.position.chol_z_norm,
+            EdgeFeatureKey::VelocityCosDthetaV => self.velocity.cos_dtheta_v,
+            EdgeFeatureKey::VelocityRelSpeedDiff => self.velocity.rel_speed_diff,
+            EdgeFeatureKey::VelocityInnovSpeedRatio => self.velocity.innov_speed_ratio,
+            EdgeFeatureKey::UncertaintyCovVelRatio => self.uncertainty.cov_vel_ratio(),
+            EdgeFeatureKey::PhotometryZFlux => self.photometry.z_flux,
+            EdgeFeatureKey::PhotometryFluxStdRatio => self.photometry.flux_std_ratio,
+            EdgeFeatureKey::PhotometryBandShared => self.photometry.band_shared,
+        }
+    }
 
-    /// Cross-track normalized residual.
+    /// Return the `(name, value)` pair of the `idx`-th feature.
     ///
-    /// Let `n` be the unit vector orthogonal to the predicted velocity direction.
-    /// Then: `z_cross = (r·n) / sqrt(nᵀ S n)`.
+    /// The index refers to the canonical flat ordering.
+    #[inline]
+    pub fn flat_at_with_name(&self, idx: usize) -> Option<(&'static str, f64)> {
+        let key = *EDGE_FEATURE_KEYS.get(idx)?;
+        Some((key.path(), self.get(key)))
+    }
+
+    /// Return the value of the `idx`-th feature in canonical order.
+    #[inline]
+    pub fn flat_at(&self, idx: usize) -> Option<f64> {
+        let key = *EDGE_FEATURE_KEYS.get(idx)?;
+        Some(self.get(key))
+    }
+
+    /// Iterate over all `(name, value)` feature pairs.
     ///
-    /// Cross-track errors often separate true links from spurious ones.
-    pub z_cross: f64,
+    /// This is the most convenient iterator for plotting and diagnostics.
+    #[inline]
+    pub fn iter_flat_with_name(&self) -> EdgeFeaturesFlatNameIter<'_> {
+        EdgeFeaturesFlatNameIter { f: self, i: 0 }
+    }
 
-    /// Whitened (Cholesky) residual component along the first axis.
+    /// Iterate over all feature values in canonical order.
     ///
-    /// This is obtained by factorizing the innovation covariance `S = L·Lᵀ` and
-    /// solving `L · z = r`, where `r` is the innovation vector.
-    /// In practice:
-    /// `chol_z1 = r_x / L₀₀`.
-    pub chol_z1: f64,
+    /// This is the preferred iterator for ML export paths.
+    #[inline]
+    pub fn iter_flat(&self) -> EdgeFeaturesIter<'_> {
+        EdgeFeaturesIter { f: self, i: 0 }
+    }
 
-    /// Whitened (Cholesky) residual component along the second axis.
+    /// Collect all feature values into a `Vec<f64>` (canonical order).
     ///
-    /// Using the same factorization `S = L·Lᵀ`, the second component is
-    /// `chol_z2 = (r_y − L₁₀ · chol_z1) / L₁₁`.
+    /// Avoid in hot paths.
+    #[inline]
+    pub fn flat_values_vec(&self) -> Vec<f64> {
+        EDGE_FEATURE_KEYS.iter().map(|&k| self.get(k)).collect()
+    }
+
+    /// Collect all `(name, value)` pairs into a `Vec`.
     ///
-    /// Together, `(chol_z1, chol_z2)` are *fully decorrelated* and expressed in
-    /// units of sigma.
-    pub chol_z2: f64,
-
-    /// Euclidean norm of the whitened residuals.
-    ///
-    /// This is exactly `sqrt(chi2_pos)`, since `chi2_pos = zᵀ z` for the
-    /// whitened residual `z`.
-    pub chol_z_norm: f64,
-}
-
-/// Velocity/kinematic consistency features (dimensionless).
-///
-/// These features aim to measure whether the kinematics inferred from the
-/// "from" seed and the "to" seed are compatible in a cadence-invariant way.
-#[derive(Clone, Debug)]
-pub struct EdgeVelocityFeatures {
-    /// Cosine of the angle between:
-    /// - predicted velocity at the target epoch (propagated from `from`),
-    /// - velocity estimated at `to`.
-    ///
-    /// Values near:
-    /// - `1` indicate aligned directions,
-    /// - `0` indicate orthogonal motion,
-    /// - `-1` indicate opposite motion.
-    pub cos_dtheta_v: f64,
-
-    /// Relative speed difference:
-    /// `| |v_to| - |v_pred| | / (|v_to| + |v_pred| + eps)`.
-    ///
-    /// This is dimensionless and reduces sensitivity to cadence variations.
-    pub rel_speed_diff: f64,
-
-    /// Innovation-induced speed ratio:
-    /// `( |r| / dt ) / |v_pred|`.
-    ///
-    /// Intuition:
-    /// - `|r|/dt` is the *effective* velocity implied by the position mismatch,
-    /// - dividing by `|v_pred|` normalizes by the expected motion scale.
-    pub innov_speed_ratio: f64,
-}
-
-/// Uncertainty/quality ratios (dimensionless).
-///
-/// These features quantify how the uncertainty evolves between the two seeds,
-/// and provide simple condition / anisotropy proxies for the local covariance.
-#[derive(Clone, Debug)]
-pub struct EdgeUncertaintyFeatures {
-    /// Trace ratio of position covariance:
-    /// `tr(Cpos_to) / (tr(Cpos_from) + eps)`.
-    ///
-    /// Trace is the sum of variances, used as a scalar total uncertainty proxy.
-    // pub cov_pos_ratio: f64,
-
-    /// Trace ratio of velocity covariance:
-    /// `tr(Cvel_to) / (tr(Cvel_from) + eps)`.
-    pub cov_vel_ratio: f64,
-    // Anisotropy proxy at `from`:
-    // `lambda_max(Cpos_from) / (tr(Cpos_from) + eps)`.
-    //
-    // Values closer to 1 mean the covariance is dominated by a single direction.
-    // pub anisotropy_pos_from: f64,
-
-    // Anisotropy proxy at `to`:
-    // `lambda_max(Cpos_to) / (tr(Cpos_to) + eps)`.
-    // pub anisotropy_pos_to: f64,
-}
-
-/// Photometry features (mostly cadence-invariant).
-///
-/// These features depend mainly on flux statistics aggregated within each seed.
-/// They tend to be more transferable across cadences than raw geometric features,
-/// provided photometric calibration is comparable.
-#[derive(Clone, Debug)]
-pub struct EdgePhotometryFeatures {
-    /// Normalized flux difference (z-score):
-    /// `|flux_to - flux_from| / sqrt(σ_from² + σ_to² + σ_floor²)`.
-    ///
-    /// A variance floor is used to avoid infinite z-scores for extremely small
-    /// reported uncertainties.
-    pub z_flux: f64,
-
-    /// Flux uncertainty ratio `sigma_to / sigma_from` (0 if undefined).
-    ///
-    /// This can indicate changes in S/N or data quality.
-    pub flux_std_ratio: f64,
-
-    /// Band-sharing indicator:
-    /// `1.0` if both seeds share at least one photometric band, otherwise `0.0`.
-    pub band_shared: f64,
+    /// Avoid in hot paths.
+    #[inline]
+    pub fn flat_named_vec(&self) -> Vec<(&'static str, f64)> {
+        EDGE_FEATURE_KEYS
+            .iter()
+            .map(|&k| (k.path(), self.get(k)))
+            .collect()
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -318,25 +266,25 @@ impl FeatureCore {
     /// This function is designed to be called once per edge and then reused to
     /// construct multiple feature families.
     #[inline]
-    pub(crate) fn from_edge(e: &Edge<'_>) -> Self {
+    pub(crate) fn from_nodes(from: &SeedNode, to: &SeedNode) -> Self {
         // Time separation in days (TT). Used for propagation and covariance growth.
-        let dt = e.dt_days;
+        let dt = to.delta_days(from);
         let dt_sq = dt * dt;
 
         // Whether dt is usable as a positive finite number.
         let dt_ok = dt.is_finite() && dt > 0.0;
 
         // Propagate `from` seed state to the epoch of `to` (on the `from` tangent plane).
-        let (p_pred, v_pred, _) = e.from.propagate_from(dt, dt_sq);
+        let (p_pred, v_pred, _) = from.propagate_from(dt, dt_sq);
 
         // Project the target seed position onto the tangent plane of `from`.
-        let p_to = Self::project_to_on_from(e.from, e.to);
+        let p_to = Self::project_to_on_from(from, to);
 
         // Innovation / residual on the tangent plane: r = observed - predicted.
         let r = [p_to[0] - p_pred[0], p_to[1] - p_pred[1]];
 
         // Innovation covariance S: accounts for prediction uncertainty and target uncertainty.
-        let s = Self::innovation_cov(e.from, e.to, dt_sq);
+        let s = Self::innovation_cov(from, to, dt_sq);
 
         // Robust inverse of S (with flooring and fallback).
         let s_inv = invert_sym_2x2(s, Self::FLOOR);
@@ -378,7 +326,7 @@ impl FeatureCore {
         };
 
         // Velocity estimated at `to` (already in the same tangent-plane frame).
-        let v_to = [e.to.plane.vel_xy[0], e.to.plane.vel_xy[1]];
+        let v_to = [to.plane.vel_xy[0], to.plane.vel_xy[1]];
         let v_to_norm = l2_norm(v_to[0], v_to[1]);
 
         // Directional agreement between predicted and target velocities.
@@ -917,102 +865,6 @@ pub const EDGE_FEATURE_KEYS: [EdgeFeatureKey; 17] = [
     EdgeFeatureKey::PhotometryFluxStdRatio,
     EdgeFeatureKey::PhotometryBandShared,
 ];
-
-impl EdgeFeatures {
-    /// Return the total number of scalar leaf features.
-    ///
-    /// This value is constant and corresponds to the length of
-    /// [`EDGE_FEATURE_KEYS`].
-    #[inline]
-    pub const fn len_flat() -> usize {
-        EDGE_FEATURE_KEYS.len()
-    }
-
-    /// Return an iterator over all canonical feature names.
-    ///
-    /// This is allocation-free and preserves the canonical ordering.
-    #[inline]
-    pub fn flat_names() -> impl Iterator<Item = &'static str> {
-        EDGE_FEATURE_KEYS.into_iter().map(|k| k.path())
-    }
-
-    /// Retrieve a feature value using a type-safe [`EdgeFeatureKey`].
-    ///
-    /// This is the **preferred access method** in core Rust code.
-    #[inline]
-    pub fn get(&self, key: EdgeFeatureKey) -> f64 {
-        match key {
-            EdgeFeatureKey::PositionChi2Pos => self.position.chi2_pos,
-            EdgeFeatureKey::PositionLogChi2Pos => self.position.log_chi2_pos,
-            EdgeFeatureKey::PositionZDx => self.position.z_dx,
-            EdgeFeatureKey::PositionZDy => self.position.z_dy,
-            EdgeFeatureKey::PositionZResidNorm => self.position.z_resid_norm,
-            EdgeFeatureKey::PositionZAlong => self.position.z_along,
-            EdgeFeatureKey::PositionZCross => self.position.z_cross,
-            EdgeFeatureKey::PositionCholZ1 => self.position.chol_z1,
-            EdgeFeatureKey::PositionCholZ2 => self.position.chol_z2,
-            EdgeFeatureKey::PositionCholZNorm => self.position.chol_z_norm,
-            EdgeFeatureKey::VelocityCosDthetaV => self.velocity.cos_dtheta_v,
-            EdgeFeatureKey::VelocityRelSpeedDiff => self.velocity.rel_speed_diff,
-            EdgeFeatureKey::VelocityInnovSpeedRatio => self.velocity.innov_speed_ratio,
-            EdgeFeatureKey::UncertaintyCovVelRatio => self.uncertainty.cov_vel_ratio,
-            EdgeFeatureKey::PhotometryZFlux => self.photometry.z_flux,
-            EdgeFeatureKey::PhotometryFluxStdRatio => self.photometry.flux_std_ratio,
-            EdgeFeatureKey::PhotometryBandShared => self.photometry.band_shared,
-        }
-    }
-
-    /// Return the `(name, value)` pair of the `idx`-th feature.
-    ///
-    /// The index refers to the canonical flat ordering.
-    #[inline]
-    pub fn flat_at_with_name(&self, idx: usize) -> Option<(&'static str, f64)> {
-        let key = *EDGE_FEATURE_KEYS.get(idx)?;
-        Some((key.path(), self.get(key)))
-    }
-
-    /// Return the value of the `idx`-th feature in canonical order.
-    #[inline]
-    pub fn flat_at(&self, idx: usize) -> Option<f64> {
-        let key = *EDGE_FEATURE_KEYS.get(idx)?;
-        Some(self.get(key))
-    }
-
-    /// Iterate over all `(name, value)` feature pairs.
-    ///
-    /// This is the most convenient iterator for plotting and diagnostics.
-    #[inline]
-    pub fn iter_flat_with_name(&self) -> EdgeFeaturesFlatNameIter<'_> {
-        EdgeFeaturesFlatNameIter { f: self, i: 0 }
-    }
-
-    /// Iterate over all feature values in canonical order.
-    ///
-    /// This is the preferred iterator for ML export paths.
-    #[inline]
-    pub fn iter_flat(&self) -> EdgeFeaturesIter<'_> {
-        EdgeFeaturesIter { f: self, i: 0 }
-    }
-
-    /// Collect all feature values into a `Vec<f64>` (canonical order).
-    ///
-    /// Avoid in hot paths.
-    #[inline]
-    pub fn flat_values_vec(&self) -> Vec<f64> {
-        EDGE_FEATURE_KEYS.iter().map(|&k| self.get(k)).collect()
-    }
-
-    /// Collect all `(name, value)` pairs into a `Vec`.
-    ///
-    /// Avoid in hot paths.
-    #[inline]
-    pub fn flat_named_vec(&self) -> Vec<(&'static str, f64)> {
-        EDGE_FEATURE_KEYS
-            .iter()
-            .map(|&k| (k.path(), self.get(k)))
-            .collect()
-    }
-}
 
 /// Iterator over `(name, value)` pairs of an [`EdgeFeatures`] instance.
 ///

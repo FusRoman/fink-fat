@@ -1,24 +1,26 @@
+pub mod edge_features;
+pub mod photometry_features;
+pub mod position_features;
+pub mod uncertainty_features;
+pub mod velocity_features;
+
 pub mod edge_id;
 pub mod edge_prediction;
-pub mod features;
+pub mod ranking_topk;
 pub mod score;
 
 use std::fmt::{self, Display, Formatter};
 
-use ahash::AHashMap;
+use smallvec::SmallVec;
 
 use crate::{
-    astro_math::trace_2x2,
     engine_config::edge_config::EdgeConfig,
     graph::edge::{
         edge_id::EdgeId,
-        features::{
-            EdgeFeatures, EdgePhotometryFeatures, EdgePositionFeatures, EdgeUncertaintyFeatures,
-            EdgeVelocityFeatures, FeatureCore,
-        },
+        edge_prediction::{EdgeModelError, EdgeRankingModel},
+        ranking_topk::rank_topk_edges_for_left,
     },
-    night_id::NightId,
-    seeding::{seed_id::SeedId, seed_node::SeedNode, seed_spatial_index::SeedSpatialIndex},
+    seeding::{seed_node::SeedNode, seed_spatial_index::SeedSpatialIndex},
     spacetime_bucket::{spatial_binner::SpatialBinner, time_binner::TimeBinner},
 };
 
@@ -51,7 +53,7 @@ impl<'a> Display for Edge<'a> {
     }
 }
 
-impl<'a> Edge<'a> {
+impl<'a, 'b, 'c> Edge<'a> {
     pub fn new(id: EdgeId, from: &'a SeedNode, to: &'a SeedNode, cost: f64, dt_days: f64) -> Self {
         assert!(
             cost.is_finite() && cost > 0.0,
@@ -160,173 +162,41 @@ impl<'a> Edge<'a> {
         id_start: EdgeId,
         left: &'a [SeedNode],
         right: &'a [SeedNode],
-        edge_config: &EdgeConfig,
-        spatial_binner: &B,
-        time_binner: &T,
-    ) -> Vec<Self> {
-        // Compute the revisit separation (Δ nights), enforced to be ≥ 1.
-        // This is passed downstream to scoring for time-dependent penalties.
-        let night_left: NightId = left.first().map(|s| s.night_id).unwrap_or_default();
-        let night_right: NightId = right.first().map(|s| s.night_id).unwrap_or_default();
-        let delta_revisit: u32 = night_right.0.saturating_sub(night_left.0).max(1);
-
+        edge_config: &'c EdgeConfig,
+        spatial_binner: &'b B,
+        time_binner: &'b T,
+        model: &mut EdgeRankingModel,
+    ) -> Result<Vec<Self>, EdgeModelError> {
         let top_k = edge_config.top_k_per_left;
-        let max_total = edge_config.max_total_edges;
 
-        // Build once: mapping from SeedId to &SeedNode for the right-hand night.
-        //
-        // This avoids relying on any implicit `SeedId -> index` correspondence
-        // and guarantees safe resolution when converting ScoredEdge → Edge.
-        let right_by_id: AHashMap<SeedId, &SeedNode> =
-            right.iter().map(|s| (s.seed_id, s)).collect();
-
-        // Upper bound: at most `left.len() * top_k` edges before global truncation.
-        let mut edges: Vec<Self> = Vec::with_capacity(left.len() * top_k);
-        let mut next_id = id_start.0;
+        let mut edges = Vec::with_capacity(left.len() * top_k);
 
         let right_index = SeedSpatialIndex::build(right, spatial_binner, time_binner);
 
-        // Process each left-hand seed independently.
-        for src in left {
-            // Generate and score all candidate edges from this source seed.
-            let mut scored =
-                src.score_edge_candidates(right, &right_index, edge_config, delta_revisit);
+        let mut tmp: SmallVec<[(&SeedNode, f32); 32]> = SmallVec::new();
 
-            // Retain only the Top-K lowest-cost edges for this source.
-            let k = top_k.min(scored.len());
-            if k == 0 {
-                continue;
-            }
+        for src in left.iter() {
+            rank_topk_edges_for_left(
+                src,
+                &right_index,
+                edge_config,
+                model,
+                top_k,
+                edge_config.onnx_batch_size,
+                &mut tmp,
+            )?;
 
-            // Partial selection: ensures the K smallest-cost elements are in [..k).
-            let _ = scored.select_nth_unstable_by(k - 1, |a, b| a.cost.total_cmp(&b.cost));
-            scored[..k].sort_by(|a, b| a.cost.total_cmp(&b.cost));
-            scored.truncate(k);
-
-            // Convert scored edges into final graph edges.
-            edges.extend(scored.into_iter().map(|se| {
-                let id = EdgeId(next_id);
-                next_id += 1;
-
-                // Resolve the target seed safely via SeedId.
-                let to = *right_by_id
-                    .get(&se.to)
-                    .expect("ScoredEdge::to must refer to a SeedNode in `right`");
-
-                Edge::new(id, src, to, se.cost, se.dt_days)
-            }));
-        }
-
-        // Optional global cap on total number of edges.
-        // Applied after per-left Top-K extraction.
-        if let Some(max_e) = max_total {
-            if edges.len() > max_e {
-                let _ = edges.select_nth_unstable_by(max_e - 1, |a, b| a.cost.total_cmp(&b.cost));
-                edges[..max_e].sort_by(|a, b| a.cost.total_cmp(&b.cost));
-                edges.truncate(max_e);
+            for (right_candidate, proba) in tmp.iter() {
+                edges.push(Edge::new(
+                    id_start,
+                    src,
+                    *right_candidate,
+                    *proba as f64,
+                    src.delta_days(right_candidate),
+                ));
             }
         }
 
-        edges
-    }
-
-    // -------------------------------------------------------------------------
-    // Feature API (high-level)
-    // -------------------------------------------------------------------------
-
-    /// Compute the full cadence-robust feature set.
-    #[inline]
-    pub fn compute_features(&self) -> EdgeFeatures {
-        // Build shared intermediate quantities once.
-        let core = FeatureCore::from_edge(self);
-
-        EdgeFeatures {
-            position: self.position_features(&core),
-            velocity: self.velocity_features(&core),
-            uncertainty: self.uncertainty_features(),
-            photometry: self.photometry_features(),
-        }
-    }
-
-    /// Compute only position/innovation features.
-    #[inline]
-    fn position_features(&self, core: &FeatureCore) -> EdgePositionFeatures {
-        EdgePositionFeatures {
-            chi2_pos: core.chi2_pos,
-            log_chi2_pos: core.log_chi2_pos,
-            z_dx: core.z_dx,
-            z_dy: core.z_dy,
-            z_resid_norm: core.z_resid_norm,
-            z_along: core.z_along,
-            z_cross: core.z_cross,
-            chol_z1: core.chol_z1,
-            chol_z2: core.chol_z2,
-            chol_z_norm: core.chol_z_norm,
-        }
-    }
-
-    /// Compute only velocity/kinematic features.
-    #[inline]
-    fn velocity_features(&self, core: &FeatureCore) -> EdgeVelocityFeatures {
-        EdgeVelocityFeatures {
-            cos_dtheta_v: core.cos_dtheta_v,
-            rel_speed_diff: core.rel_speed_diff,
-            innov_speed_ratio: core.innov_speed_ratio,
-        }
-    }
-
-    /// Compute only uncertainty/quality ratio features.
-    #[inline]
-    fn uncertainty_features(&self) -> EdgeUncertaintyFeatures {
-        let eps = FeatureCore::EPS;
-
-        let cvel_from = self.from.plane.cov_vel;
-        let cvel_to = self.to.plane.cov_vel;
-
-        let tr_vel_from = trace_2x2(cvel_from).max(0.0);
-        let tr_vel_to = trace_2x2(cvel_to).max(0.0);
-        let cov_vel_ratio = FeatureCore::safe_div(tr_vel_to, tr_vel_from + eps);
-
-        EdgeUncertaintyFeatures { cov_vel_ratio }
-    }
-
-    /// Compute only photometry features.
-    #[inline]
-    fn photometry_features(&self) -> EdgePhotometryFeatures {
-        let flux_i = self.from.photom.flux_mean as f64;
-        let flux_j = self.to.photom.flux_mean as f64;
-        let flux_abs_diff = (flux_j - flux_i).abs();
-
-        let sigma_i = self.from.photom.flux_std as f64;
-        let sigma_j = self.to.photom.flux_std as f64;
-
-        // Variance floor is intentionally large-ish (in flux units) to avoid
-        // exploding z-scores for tiny reported uncertainties.
-        let sigma_floor = 1.0_f64;
-        let pooled_var = sigma_i * sigma_i + sigma_j * sigma_j + sigma_floor * sigma_floor;
-
-        let z_flux = if pooled_var.is_finite() && pooled_var > 0.0 {
-            flux_abs_diff / pooled_var.sqrt()
-        } else {
-            0.0
-        };
-
-        let flux_std_ratio = if sigma_i.is_finite() && sigma_i > 0.0 {
-            sigma_j / sigma_i
-        } else {
-            0.0
-        };
-
-        let band_shared = if self.from.photom.shares_any_band(&self.to.photom) {
-            1.0
-        } else {
-            0.0
-        };
-
-        EdgePhotometryFeatures {
-            z_flux: FeatureCore::finite_or_zero(z_flux),
-            flux_std_ratio: FeatureCore::finite_or_zero(flux_std_ratio),
-            band_shared,
-        }
+        Ok(edges)
     }
 }

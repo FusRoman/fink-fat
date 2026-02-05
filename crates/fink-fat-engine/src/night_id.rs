@@ -14,7 +14,7 @@ use std::fmt;
 ///
 /// Notes
 /// -----
-/// - By default wraps an `i64`.
+/// - By default wraps an `u32`.
 /// - Typically represents an MJD day number (e.g., 60312).
 /// - Must be stable across runs because it is used as a directory name.
 #[derive(
