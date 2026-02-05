@@ -17,6 +17,7 @@ use crate::seeding::seed_spatial_index::SeedSpatialIndex;
 struct TopKItem<'a> {
     proba: f32,
     to: &'a SeedNode,
+    edge_cost: f64,
 }
 
 impl<'a> PartialEq for TopKItem<'a> {
@@ -130,7 +131,11 @@ fn flush_batch<'a>(
 
     let probas = model.predict_positive_proba(batch_features.as_slice())?;
 
-    for (right_candidate, proba) in batch_to.drain(..).zip(probas.into_iter()) {
+    for ((right_candidate, proba), edge_features) in batch_to
+        .drain(..)
+        .zip(probas.into_iter())
+        .zip(batch_features.iter())
+    {
         if proba <= top.threshold() {
             continue;
         }
@@ -138,6 +143,7 @@ fn flush_batch<'a>(
         top.push(TopKItem {
             proba,
             to: right_candidate,
+            edge_cost: edge_features.kinematic_log_likelihood_cost(),
         });
     }
 
@@ -168,7 +174,7 @@ pub fn rank_topk_edges_for_left<'a, 'b>(
     model: &mut EdgeRankingModel,
     topk: usize,
     batch_size: usize,
-    out: &mut SmallVec<[(&'a SeedNode, f32); 32]>,
+    out: &mut SmallVec<[(&'a SeedNode, f64); 32]>,
 ) -> Result<(), EdgeModelError> {
     out.clear();
 
@@ -193,7 +199,7 @@ pub fn rank_topk_edges_for_left<'a, 'b>(
     out.extend(
         top.into_sorted_desc()
             .into_iter()
-            .map(|it| (it.to, it.proba)),
+            .map(|it| (it.to, it.edge_cost)),
     );
     Ok(())
 }

@@ -84,6 +84,49 @@ impl EdgeFeatures {
         }
     }
 
+    /// Return an additive negative-log-likelihood-like cost for graph solvers.
+    ///
+    /// The cost is designed to be:
+    /// - physically motivated (Gaussian innovations on the tangent plane),
+    /// - mostly parameter-free (only numerical epsilons),
+    /// - additive along a trajectory (sum of per-edge costs).
+    ///
+    /// Definition (up to additive constants)
+    /// ------------------------------------
+    /// cost =
+    ///   0.5 * chi2_pos
+    /// + 0.5 * chi2_vel
+    /// + 0.5 * z_flux^2
+    /// + 0.5 * log(flux_std_ratio)^2
+    /// - log(eps_band + band_shared)
+    ///
+    /// Notes
+    /// -----
+    /// - `band_shared` is expected to be 0 or 1.
+    /// - `flux_std_ratio` can be 0 if undefined; we guard with an epsilon.
+    #[inline]
+    pub fn kinematic_log_likelihood_cost(&self) -> f64 {
+        // Numerical epsilons (not tunable model parameters).
+        let eps = 1e-12_f64;
+        let eps_band = 1e-3_f64;
+
+        let chi2_pos = self.position.chi2_pos.max(0.0);
+        let chi2_vel = self.velocity.chi2_vel.max(0.0);
+
+        let z_flux = self.photometry.z_flux;
+        let ln_flux_std_ratio = safe_ln(self.photometry.flux_std_ratio.abs() + eps);
+
+        let band_shared = self.photometry.band_shared.clamp(0.0, 1.0);
+        let band_term = -safe_ln(eps_band + band_shared);
+
+        let cost = 0.5 * (chi2_pos + chi2_vel)
+            + 0.5 * (z_flux * z_flux)
+            + 0.5 * (ln_flux_std_ratio * ln_flux_std_ratio)
+            + band_term;
+
+        FeatureCore::finite_or_zero(cost)
+    }
+
     /// Return the total number of scalar leaf features.
     ///
     /// This value is constant and corresponds to the length of
@@ -196,7 +239,6 @@ impl EdgeFeatures {
 /// The public structs are meant to be stable API for ML export.
 /// `FeatureCore` is intentionally `pub(crate)` so we can refactor internals
 /// without breaking external code.
-#[derive(Clone, Debug)]
 pub(crate) struct FeatureCore {
     // ----------------------------- Position features -----------------------------
     /// Mahalanobis innovation distance `rᵀ S⁻¹ r`.
@@ -229,6 +271,11 @@ pub(crate) struct FeatureCore {
     pub(crate) rel_speed_diff: f64,
     /// Innovation-induced speed ratio.
     pub(crate) innov_speed_ratio: f64,
+
+    /// Velocity innovation Mahalanobis distance `dvᵀ S_vel⁻¹ dv`.
+    pub(crate) chi2_vel: f64,
+    /// Log transform of `chi2_vel`.
+    pub(crate) log_chi2_vel: f64,
 }
 
 impl FeatureCore {
@@ -343,6 +390,18 @@ impl FeatureCore {
             0.0
         };
 
+        // Velocity innovation: dv = v_to - v_pred (same epoch as `to`).
+        // Note: this assumes both velocities are expressed in (approximately) the same tangent frame.
+        let dv = [v_to[0] - v_pred[0], v_to[1] - v_pred[1]];
+
+        // Innovation covariance in velocity space.
+        let s_vel = Self::innovation_cov_vel(from, to);
+        let s_vel_inv = invert_sym_2x2(s_vel, Self::FLOOR);
+
+        // Mahalanobis distance in velocity space.
+        let chi2_vel = Self::finite_or_zero(dot2(dv, mat_vec2(s_vel_inv, dv)).max(0.0));
+        let log_chi2_vel = safe_ln(chi2_vel + 1e-16);
+
         Self {
             chi2_pos,
             log_chi2_pos: Self::finite_or_zero(log_chi2_pos),
@@ -360,6 +419,9 @@ impl FeatureCore {
             cos_dtheta_v,
             rel_speed_diff,
             innov_speed_ratio: Self::finite_or_zero(innov_speed_ratio),
+
+            chi2_vel,
+            log_chi2_vel: Self::finite_or_zero(log_chi2_vel),
         }
     }
     // -------------------------------------------------------------------------
@@ -445,6 +507,19 @@ impl FeatureCore {
                 cov_pred[1][0] + cpos_to[1][0],
                 cov_pred[1][1] + cpos_to[1][1] + Self::FLOOR,
             ],
+        ]
+    }
+
+    /// Innovation covariance in velocity space:
+    /// S_vel = C_vel(from) + C_vel(to) + floor·I.
+    #[inline]
+    fn innovation_cov_vel(from: &SeedNode, to: &SeedNode) -> [[f64; 2]; 2] {
+        let c1 = from.plane.cov_vel;
+        let c2 = to.plane.cov_vel;
+
+        [
+            [c1[0][0] + c2[0][0] + Self::FLOOR, c1[0][1] + c2[0][1]],
+            [c1[1][0] + c2[1][0], c1[1][1] + c2[1][1] + Self::FLOOR],
         ]
     }
 

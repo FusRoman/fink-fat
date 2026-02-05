@@ -461,7 +461,7 @@ fn bench_generate_topk_edges_components(c: &mut Criterion) {
             .expect("Failed to load ONNX edge ranking model");
 
         // Reusable output buffer
-        let mut out: SmallVec<[(&SeedNode, f32); 32]> = SmallVec::new();
+        let mut out: SmallVec<[(&SeedNode, f64); 32]> = SmallVec::new();
 
         b.iter(|| {
             rank_topk_edges_for_left(

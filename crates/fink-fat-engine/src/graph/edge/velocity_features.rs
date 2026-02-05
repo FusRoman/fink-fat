@@ -29,6 +29,18 @@ pub struct EdgeVelocityFeatures {
     /// - `|r|/dt` is the *effective* velocity implied by the position mismatch,
     /// - dividing by `|v_pred|` normalizes by the expected motion scale.
     pub innov_speed_ratio: f64,
+
+    /// Velocity innovation Mahalanobis distance:
+    /// `dvᵀ S_vel⁻¹ dv`, where `dv = v_to - v_pred` and
+    /// `S_vel = cov_vel_pred`.
+    ///
+    /// This behaves like a χ² statistic with ~2 degrees of freedom when:
+    /// - velocities are expressed in the same tangent-plane frame,
+    /// - covariance estimates are meaningful.
+    pub chi2_vel: f64,
+
+    /// `log(chi2_vel + eps)` for numerical stability and better dynamic range.
+    pub log_chi2_vel: f64,
 }
 
 impl EdgeVelocityFeatures {
@@ -39,6 +51,8 @@ impl EdgeVelocityFeatures {
             cos_dtheta_v: core.cos_dtheta_v,
             rel_speed_diff: core.rel_speed_diff,
             innov_speed_ratio: core.innov_speed_ratio,
+            chi2_vel: core.chi2_vel,
+            log_chi2_vel: core.log_chi2_vel,
         }
     }
 }

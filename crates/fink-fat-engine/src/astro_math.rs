@@ -1299,14 +1299,13 @@ mod astro_math_tests {
 
     #[test]
     fn sph_to_cart_produces_unit_vectors() {
-        // Quelques points fixes + check que la norme est ~1.
         let samples = &[
             (0.0, 0.0),
             (PI / 3.0, 0.1),
             (PI, 0.5),
             (1.7 * PI, -0.4),
-            (0.0, PI / 2.0 - 1e-6),  // proche du pôle
-            (0.0, -PI / 2.0 + 1e-6), // proche de l'autre pôle
+            (0.0, PI / 2.0 - 1e-6),
+            (0.0, -PI / 2.0 + 1e-6),
         ];
 
         for &(ra, dec) in samples {
@@ -1340,7 +1339,6 @@ mod astro_math_tests {
     }
 
     fn any_dec() -> impl Strategy<Value = f64> {
-        // on évite les pôles exacts pour garder une marge
         (-PI / 2.0 + 1e-6)..(PI / 2.0 - 1e-6)
     }
 
@@ -1397,17 +1395,15 @@ mod astro_math_tests {
 
     #[test]
     fn spherical_midpoint_handles_nearly_antipodal_without_nan() {
-        // Points ~antipodaux sur l'équateur
         let ra1 = 0.0;
         let dec1 = 0.0;
-        let ra2 = PI; // opposé
+        let ra2 = PI;
         let dec2 = 0.0;
 
         let (ram, decm) = spherical_midpoint(ra1, dec1, ra2, dec2);
         assert!(ram.is_finite());
         assert!(decm.is_finite());
 
-        // Le résultat doit toujours être sur la sphère unité.
         let (x, y, z) = sph_to_cart(ram, decm);
         let r2 = x * x + y * y + z * z;
         assert!(abs_diff_eq!(r2, 1.0, epsilon = 1e-12));
@@ -1423,11 +1419,9 @@ mod astro_math_tests {
         ) {
             let (ram, decm) = spherical_midpoint(ra1, dec1, ra2, dec2);
 
-            // Coordonnées finies
             prop_assert!(ram.is_finite());
             prop_assert!(decm.is_finite());
 
-            // Sur la sphère unité
             let (x, y, z) = sph_to_cart(ram, decm);
             let r2 = x*x + y*y + z*z;
             prop_assert!(abs_diff_eq!(r2, 1.0, epsilon = 1e-12));
@@ -1454,7 +1448,6 @@ mod astro_math_tests {
 
     #[test]
     fn radec_tangent_handles_cosc_zero_without_nan() {
-        // Choisir un point ~90° loin du centre pour forcer cosc → 0.
         let ra0 = 0.0;
         let dec0 = 0.0;
 
@@ -1484,13 +1477,10 @@ mod astro_math_tests {
         #[test]
         fn prop_gnomonic_roundtrip_small_offsets(
             ra0 in any_ra(),
-            dec0 in -0.8f64..0.8,  // on reste loin des pôles pour la gnomonique
+            dec0 in -0.8f64..0.8,
             dx in small_plane(),
             dy in small_plane(),
         ) {
-            // 1. Part de petites coordonnées planes autour du centre,
-            // 2. Va sur la sphère,
-            // 3. Re-projette sur le plan.
             let (ra, dec) = tangent_to_radec(dx, dy, ra0, dec0);
             let [x2, y2] = radec_to_tangent(ra, dec, ra0, dec0);
 
@@ -1506,7 +1496,6 @@ mod astro_math_tests {
             d_ra in -5e-3f64..5e-3,
             d_dec in -5e-3f64..5e-3,
         ) {
-            // Centre proche du point
             let ra0 = (ra + d_ra).rem_euclid(TAU);
             let dec0 = (dec + d_dec).clamp(-0.8, 0.8);
 
@@ -1543,7 +1532,6 @@ mod astro_math_tests {
     proptest! {
         #[test]
         fn prop_fit_quad_1d_recovers_coeffs(
-            // temps strictement croissants pour éviter les divisions par zéro
             t0 in -1.0f64..0.0,
             t1 in 0.0f64..1.0,
             t2 in 1.1f64..2.0,
@@ -1558,7 +1546,6 @@ mod astro_math_tests {
 
             let (p0, v, a) = fit_quad_1d(dt, x);
 
-            // La tolérance peut être un peu plus large en prop-test
             prop_assert!(abs_diff_eq!(p0, p0_true, epsilon = 1e-10));
             prop_assert!(abs_diff_eq!(v, v_true, epsilon = 1e-10));
             prop_assert!(abs_diff_eq!(a, a_true, epsilon = 1e-10));
@@ -1591,7 +1578,6 @@ mod astro_math_tests {
 
     #[test]
     fn lambda_max_2x2_non_negative_for_simple_covariances() {
-        // matrice de covariance simple PSD
         let a = [[1e-4, 2e-5], [2e-5, 3e-4]];
         let lmax = lambda_max_2x2(a);
         assert!(lmax >= 0.0);
@@ -1605,7 +1591,6 @@ mod astro_math_tests {
             a12 in -1e2f64..1e2,
             k in 0.0f64..1e3
         ) {
-            // matrice symétrique
             let a = [[a11, a12], [a12, a22]];
             let l = lambda_max_2x2(a);
 

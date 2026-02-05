@@ -14,6 +14,7 @@ use std::fmt::{self, Display, Formatter};
 use crate::{
     engine_config::edge_config::EdgeConfig,
     graph::edge::{
+        edge_features::EdgeFeatures,
         edge_id::EdgeId,
         edge_prediction::{EdgeModelError, EdgeRankingModel},
         ranking_topk::rank_topk_edges_for_left,
@@ -177,21 +178,19 @@ impl<'a, 'b, 'c> Edge<'a> {
         let right_index = SeedSpatialIndex::build(right, spatial_binner, time_binner);
 
         // Scratch buffer used by the ML top-k path (unchanged).
-        let mut tmp: smallvec::SmallVec<[(&SeedNode, f32); 32]> = smallvec::SmallVec::new();
-
-        // Global counter used only to generate strictly positive costs
-        // without requiring ML scores.
-        let mut emitted: u64 = 0;
+        let mut tmp: smallvec::SmallVec<[(&SeedNode, f64); 32]> = smallvec::SmallVec::new();
 
         for src in left.iter() {
             if edge_config.emit_all_edges {
                 // No ML, no Top-K: emit every candidate produced by the prefilter.
                 for to in src.seed_edge_candidates(&right_index, edge_config) {
-                    // Edge::new requires cost > 0. We assign a tiny monotonic offset to avoid ties.
-                    emitted += 1;
-                    let cost = 1.0_f64 + (emitted as f64) * 1e-12;
-
-                    edges.push(Edge::new(id_start, src, to, cost, src.delta_days(to)));
+                    edges.push(Edge::new(
+                        id_start,
+                        src,
+                        to,
+                        EdgeFeatures::compute_features(src, to).kinematic_log_likelihood_cost(),
+                        src.delta_days(to),
+                    ));
                 }
             } else {
                 // Current behavior: ML ranking + top-k pruning
@@ -207,12 +206,12 @@ impl<'a, 'b, 'c> Edge<'a> {
                     &mut tmp,
                 )?;
 
-                for (right_candidate, proba) in tmp.iter() {
+                for (right_candidate, edge_cost) in tmp.iter() {
                     edges.push(Edge::new(
                         id_start,
                         src,
                         *right_candidate,
-                        *proba as f64,
+                        *edge_cost,
                         src.delta_days(right_candidate),
                     ));
                 }

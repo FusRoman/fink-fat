@@ -501,6 +501,10 @@ mod edge_prediction_test {
     ///
     /// We intentionally fill every scalar leaf feature with a deterministic
     /// pattern, so we can verify canonical ordering and casting.
+    /// Build a fully-populated `EdgeFeatures` instance for tests.
+    ///
+    /// We intentionally fill every scalar leaf feature with a deterministic
+    /// pattern, so we can verify canonical ordering and casting.
     fn dummy_edge_features(base: f64) -> EdgeFeatures {
         EdgeFeatures {
             position: EdgePositionFeatures {
@@ -519,12 +523,14 @@ mod edge_prediction_test {
                 cos_dtheta_v: base + 10.0,
                 rel_speed_diff: base + 11.0,
                 innov_speed_ratio: base + 12.0,
+                chi2_vel: base + 13.0,
+                log_chi2_vel: base + 14.0,
             },
-            uncertainty: EdgeUncertaintyFeatures(base + 14.0),
+            uncertainty: EdgeUncertaintyFeatures(base + 15.0),
             photometry: EdgePhotometryFeatures {
-                z_flux: base + 18.0,
-                flux_std_ratio: base + 19.0,
-                band_shared: base + 20.0,
+                z_flux: base + 16.0,
+                flux_std_ratio: base + 17.0,
+                band_shared: base + 18.0,
             },
         }
     }
