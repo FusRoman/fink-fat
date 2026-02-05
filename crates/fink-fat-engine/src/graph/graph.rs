@@ -33,7 +33,7 @@ impl<'a, 'b> InterNightGraph<'a> {
         edge_config: &'b EdgeConfig,
         spatial_binner: &'a B,
         time_binner: &'a T,
-        model: &mut EdgeRankingModel,
+        model: Option<&mut EdgeRankingModel>,
     ) -> Result<(), EdgeModelError> {
         assert!(!left_nodes.is_empty(), "left_nodes must not be empty");
         assert!(!right_nodes.is_empty(), "right_nodes must not be empty");

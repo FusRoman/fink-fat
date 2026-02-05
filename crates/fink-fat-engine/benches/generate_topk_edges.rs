@@ -276,7 +276,6 @@ fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
         // Base configuration for the tested function.
         let mut edge_config = EdgeConfig::default();
         edge_config.top_k_per_left = top_k_per_left;
-        edge_config.max_total_edges = None;
 
         group.throughput(Throughput::Elements(
             (num_left_seeds * top_k_per_left) as u64,
@@ -300,7 +299,7 @@ fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
                         black_box(&edge_config),
                         black_box(&spatial_binner),
                         black_box(&time_binner),
-                        black_box(&mut model),
+                        black_box(Some(&mut model)),
                     )
                     .expect("generate_topk_edges failed");
 
@@ -310,8 +309,7 @@ fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
         );
 
         // Variant with a global edge cap: adds an extra selection + partial sort step.
-        let mut edge_config_capped = edge_config.clone();
-        edge_config_capped.max_total_edges = Some((num_left_seeds * top_k_per_left / 4).max(1));
+        let edge_config_capped = edge_config.clone();
 
         group.bench_with_input(
             BenchmarkId::new(
@@ -331,7 +329,7 @@ fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
                         black_box(&edge_config_capped),
                         black_box(&spatial_binner),
                         black_box(&time_binner),
-                        black_box(&mut model),
+                        black_box(Some(&mut model)),
                     )
                     .expect("generate_topk_edges failed");
 
@@ -421,7 +419,6 @@ fn bench_generate_topk_edges_components(c: &mut Criterion) {
 
     let mut edge_config = EdgeConfig::default();
     edge_config.top_k_per_left = top_k_per_left;
-    edge_config.max_total_edges = None;
 
     // -----------------------------------------------------------------------------
     // 1) Candidate generation + scoring per single left seed.
@@ -567,7 +564,7 @@ fn bench_generate_topk_edges_components(c: &mut Criterion) {
                 black_box(&edge_config),
                 black_box(&spatial_binner),
                 black_box(&time_binner),
-                black_box(&mut model),
+                black_box(Some(&mut model)),
             )
             .expect("generate_topk_edges failed");
 

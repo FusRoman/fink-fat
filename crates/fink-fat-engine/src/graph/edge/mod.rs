@@ -11,8 +11,6 @@ pub mod score;
 
 use std::fmt::{self, Display, Formatter};
 
-use smallvec::SmallVec;
-
 use crate::{
     engine_config::edge_config::EdgeConfig,
     graph::edge::{
@@ -165,35 +163,59 @@ impl<'a, 'b, 'c> Edge<'a> {
         edge_config: &'c EdgeConfig,
         spatial_binner: &'b B,
         time_binner: &'b T,
-        model: &mut EdgeRankingModel,
+        mut model: Option<&mut EdgeRankingModel>,
     ) -> Result<Vec<Self>, EdgeModelError> {
         let top_k = edge_config.top_k_per_left;
 
-        let mut edges = Vec::with_capacity(left.len() * top_k);
+        // Capacity guess: in "emit_all_edges" mode we don't know final size.
+        let mut edges = if edge_config.emit_all_edges {
+            Vec::new()
+        } else {
+            Vec::with_capacity(left.len() * top_k)
+        };
 
         let right_index = SeedSpatialIndex::build(right, spatial_binner, time_binner);
 
-        let mut tmp: SmallVec<[(&SeedNode, f32); 32]> = SmallVec::new();
+        // Scratch buffer used by the ML top-k path (unchanged).
+        let mut tmp: smallvec::SmallVec<[(&SeedNode, f32); 32]> = smallvec::SmallVec::new();
+
+        // Global counter used only to generate strictly positive costs
+        // without requiring ML scores.
+        let mut emitted: u64 = 0;
 
         for src in left.iter() {
-            rank_topk_edges_for_left(
-                src,
-                &right_index,
-                edge_config,
-                model,
-                top_k,
-                edge_config.onnx_batch_size,
-                &mut tmp,
-            )?;
+            if edge_config.emit_all_edges {
+                // No ML, no Top-K: emit every candidate produced by the prefilter.
+                for to in src.seed_edge_candidates(&right_index, edge_config) {
+                    // Edge::new requires cost > 0. We assign a tiny monotonic offset to avoid ties.
+                    emitted += 1;
+                    let cost = 1.0_f64 + (emitted as f64) * 1e-12;
 
-            for (right_candidate, proba) in tmp.iter() {
-                edges.push(Edge::new(
-                    id_start,
+                    edges.push(Edge::new(id_start, src, to, cost, src.delta_days(to)));
+                }
+            } else {
+                // Current behavior: ML ranking + top-k pruning
+                let model_ref = model.as_deref_mut().ok_or(EdgeModelError::MissingModel)?;
+
+                rank_topk_edges_for_left(
                     src,
-                    *right_candidate,
-                    *proba as f64,
-                    src.delta_days(right_candidate),
-                ));
+                    &right_index,
+                    edge_config,
+                    model_ref,
+                    top_k,
+                    edge_config.onnx_batch_size,
+                    &mut tmp,
+                )?;
+
+                for (right_candidate, proba) in tmp.iter() {
+                    edges.push(Edge::new(
+                        id_start,
+                        src,
+                        *right_candidate,
+                        *proba as f64,
+                        src.delta_days(right_candidate),
+                    ));
+                }
             }
         }
 

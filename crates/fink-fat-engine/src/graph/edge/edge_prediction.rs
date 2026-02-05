@@ -61,6 +61,10 @@ pub enum EdgeModelError {
     /// a lower-level ORT error.
     #[error("ONNX model file not found: {0}")]
     ModelNotFound(String),
+
+    /// ML ranking was requested but no EdgeRankingModel was provided.
+    #[error("ML ranking requested but no EdgeRankingModel was provided")]
+    MissingModel,
 }
 
 /// Initialize ONNX Runtime once for the whole process.

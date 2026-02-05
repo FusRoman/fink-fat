@@ -192,7 +192,6 @@ version: 1
 
         // A few stable default checks:
         assert_eq!(cfg.edges.top_k_per_left, 32);
-        assert_eq!(cfg.edges.max_total_edges, None);
 
         // Predictor must be valid
         assert!(cfg.edges.predictor_config.k_sigma > 0.0);
@@ -346,7 +345,6 @@ version: 1
             load_engine_config_validated(&path).expect("config should load with env overrides");
 
         assert_eq!(cfg.pairs.allow_same_timebin, false);
-        assert_eq!(cfg.edges.max_total_edges, Some(12345));
         assert_eq!(cfg.edges.predictor_config.pad_cell_radius, false);
     }
 
@@ -378,7 +376,6 @@ version: 1
 version: 1
 edges:
   top_k_per_left: 42
-  max_total_edges: 1000
 "#;
         let path = write_tmp_yaml(yaml);
 
@@ -386,7 +383,6 @@ edges:
         let e = cfg.edges;
 
         assert_eq!(e.top_k_per_left, 42);
-        assert_eq!(e.max_total_edges, Some(1000));
     }
 
     #[test]
