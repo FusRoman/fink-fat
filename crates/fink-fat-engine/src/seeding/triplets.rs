@@ -54,6 +54,7 @@ use crate::{
     astro_math::{dot3, planar_offset_fast, unit_vec},
     engine_config::triplet_config::TripletConfig,
     night_id::NightId,
+    persistence::seed_node::SeedKey,
     seeding::{pairs::Pair, seed_node::SeedNode},
     spacetime_bucket::{
         bucket::{BucketIndex, BucketKey},
@@ -370,8 +371,16 @@ pub fn extract_triplet_features<'alert_lf>(
     night_id: NightId,
 ) -> Vec<SeedNode<'alert_lf>> {
     let mut out = Vec::with_capacity(trips.len());
-    for &Triplet { a, b, c } in trips.iter() {
-        out.push(SeedNode::from_triplet(night_id, a, b, c));
+    for (idx, &Triplet { a, b, c }) in trips.iter().enumerate() {
+        out.push(SeedNode::from_triplet(
+            SeedKey {
+                night_id,
+                idx_in_night: idx as u32,
+            },
+            a,
+            b,
+            c,
+        ));
     }
     out
 }
@@ -388,6 +397,7 @@ mod triplet_gen_tests {
         alerts::Alert,
         astro_math::{ang_sep, arcsec_to_rad, planar_offset_fast},
         engine_config::triplet_config::TripletConfig,
+        persistence::alert::AlertKey,
         spacetime_bucket::{
             bucket::build_alert_bucket_index,
             spatial_binner::{SpatialBinner, SpatialKey},
@@ -464,6 +474,10 @@ mod triplet_gen_tests {
     fn mk_alert(i: usize, ra: f64, dec: f64, mjd_tt: f64, band: u8, flux: f32) -> Alert {
         let pos_err = arcsec_to_rad(0.5);
         Alert {
+            key: AlertKey {
+                night_id: NightId(0),
+                idx_in_night: i as u32,
+            },
             dia_source_id: i as u64,
             ra,
             ra_err: pos_err,
@@ -785,8 +799,8 @@ mod triplet_gen_tests {
         let seeds = extract_triplet_features(&trips, night_id);
 
         assert_eq!(seeds.len(), 2);
-        assert_eq!(seeds[0].night_id, night_id);
-        assert_eq!(seeds[1].night_id, night_id);
+        assert_eq!(seeds[0].night_id(), night_id);
+        assert_eq!(seeds[1].night_id(), night_id);
 
         assert_eq!(seeds[0].n_obs, 3);
         assert_eq!(seeds[1].n_obs, 3);
@@ -839,7 +853,7 @@ mod triplet_gen_tests {
                 prop_assert_eq!(seeds.len(), trips.len());
                 for seed in seeds.iter() {
                     prop_assert_eq!(seed.n_obs, 3);
-                    prop_assert_eq!(seed.night_id, night_id);
+                    prop_assert_eq!(seed.night_id(), night_id);
                 }
             }
         }

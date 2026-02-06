@@ -62,6 +62,7 @@ use crate::{
     astro_math::{dot3, unit_vec},
     engine_config::pair_config::PairConfig,
     night_id::NightId,
+    persistence::seed_node::SeedKey,
     seeding::seed_node::SeedNode,
     spacetime_bucket::{
         bucket::{BucketIndex, BucketKey},
@@ -417,8 +418,16 @@ pub fn extract_pair_features<'alert_lf>(
     max_speed_rad_per_day: Option<f64>,
 ) -> Vec<SeedNode<'alert_lf>> {
     let mut out = Vec::with_capacity(pairs.len());
-    for &Pair { a, b } in pairs.iter() {
-        if let Some(seed) = SeedNode::from_pair(night_id, a, b, max_speed_rad_per_day) {
+    for (idx, &Pair { a, b }) in pairs.iter().enumerate() {
+        if let Some(seed) = SeedNode::from_pair(
+            SeedKey {
+                night_id,
+                idx_in_night: idx as u32,
+            },
+            a,
+            b,
+            max_speed_rad_per_day,
+        ) {
             out.push(seed);
         }
     }
@@ -433,6 +442,7 @@ mod pair_gen_tests {
 
     use crate::astro_math::{ang_sep, arcsec_to_rad};
     use crate::engine_config::pair_config::PairConfig;
+    use crate::persistence::alert::AlertKey;
     use crate::spacetime_bucket::bucket::{BucketKey, build_alert_bucket_index};
     use crate::spacetime_bucket::healpix_binner::HealpixBinner;
     use crate::spacetime_bucket::uniform_time_binner::UniformTimeBinner;
@@ -442,6 +452,10 @@ mod pair_gen_tests {
     /// Construct a minimal `Alert` for testing.
     fn mk_alert(i: usize, ra: f64, dec: f64, mjd_tt: f64, band: u8, flux: f32) -> Alert {
         Alert {
+            key: AlertKey {
+                night_id: NightId(0),
+                idx_in_night: i as u32,
+            },
             dia_source_id: i as u64,
             ra,
             ra_err: 0.5 * PI / (180.0 * 3600.0), // ~0.5 arcsec in radians

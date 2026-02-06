@@ -11,6 +11,7 @@ pub mod spacetime_bucket;
 pub mod pipeline;
 pub mod trajectory;
 pub mod units;
+pub mod persistence;
 
 pub use alerts::Alert;
 pub use units::{MjdTt, Radians};

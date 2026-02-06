@@ -33,13 +33,13 @@ impl<'seed_lf, 'alert_lf> InterNightGraph<'seed_lf, 'alert_lf> {
         debug_assert!(
             left_nodes
                 .iter()
-                .all(|s| s.night_id == left_nodes[0].night_id),
+                .all(|s| s.night_id() == left_nodes[0].night_id()),
             "left_nodes must all belong to the same night"
         );
         debug_assert!(
             right_nodes
                 .iter()
-                .all(|s| s.night_id == right_nodes[0].night_id),
+                .all(|s| s.night_id() == right_nodes[0].night_id()),
             "right_nodes must all belong to the same night"
         );
 

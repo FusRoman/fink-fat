@@ -1,6 +1,8 @@
 use ahash::AHashMap;
 
-use crate::{Alert, night_id::NightId};
+use crate::{
+    Alert, night_id::NightId, persistence::alert::{AlertKey}
+};
 
 /// Contiguous store of alerts for (typically) a single night.
 ///
@@ -23,6 +25,11 @@ impl AlertStore {
         Self(AHashMap::new())
     }
 
+    /// Create an `AlertStore` from a pre-existing map of night IDs to alert vectors.
+    pub fn from_map(map: AHashMap<NightId, Vec<Alert>>) -> Self {
+        Self(map)
+    }
+
     /// Insert a vector of alerts for a given night.
     pub fn insert(&mut self, night_id: NightId, alerts: Vec<Alert>) {
         self.0.insert(night_id, alerts);
@@ -41,5 +48,11 @@ impl AlertStore {
     /// Get an iterator over all alerts for a specific night, if it exists.
     pub fn iter_night(&self, night_id: &NightId) -> Option<impl Iterator<Item = &Alert>> {
         self.0.get(night_id).map(|alerts| alerts.iter())
+    }
+
+    /// Get an alert by its key (night ID + index within night).
+    pub fn get_by_key(&self, key: AlertKey) -> Option<&Alert> {
+        let vec = self.0.get(&key.night_id)?;
+        vec.get(key.idx_in_night as usize)
     }
 }

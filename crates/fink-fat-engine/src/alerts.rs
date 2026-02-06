@@ -51,6 +51,10 @@ use std::{
     hash::{Hash, Hasher},
 };
 
+use serde::{Deserialize, Serialize};
+
+use crate::persistence::alert::AlertKey;
+
 /// Single detection in the alert stream.
 ///
 /// This record is intentionally compact and cloneable so it can be moved across
@@ -73,8 +77,10 @@ use std::{
 ///   Those may exist upstream but are not required for the core linking logic.
 /// - The engine frequently borrows `&Alert` references in indices and seeds
 ///   rather than copying these fields repeatedly.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Alert {
+    /// Unique identifier for the alert, used for disk persistance.
+    pub key: AlertKey,
     /// LSST diaSourceId (stable, 64-bit).
     pub dia_source_id: u64,
     /// Right ascension (radians).

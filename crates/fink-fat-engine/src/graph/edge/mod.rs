@@ -50,7 +50,9 @@ pub mod velocity_features;
 pub mod edge_prediction;
 pub mod ranking_topk;
 
-use std::fmt;
+use std::{fmt, ops::Deref};
+
+use serde::{Deserialize, Serialize};
 
 use crate::{
     engine_config::edge_config::EdgeConfig,
@@ -63,11 +65,7 @@ use crate::{
     spacetime_bucket::{spatial_binner::SpatialBinner, time_binner::TimeBinner},
 };
 
-/// Directed link from an older node to a newer node (forward in time).
-///
-/// This edge is the solver-facing representation of a potential inter-night link.
-/// It stores references to the original [`SeedNode`] objects to avoid any later
-/// ID → node resolution step.
+/// Core edge data that can be cheaply cloned and passed around.
 ///
 /// Cost
 /// ----
@@ -81,8 +79,6 @@ use crate::{
 ///
 /// Attributes
 /// ----------
-/// * `from` – Source [`SeedNode`] (older epoch).
-/// * `to` – Target [`SeedNode`] (newer epoch).
 /// * `cost` – Finite strictly positive edge weight (dimensionless).
 /// * `dt_days` – Time gap in days (TT), strictly positive.
 /// * `active` – Runtime flag for pruning / solver logic / recomputation.
@@ -92,18 +88,41 @@ use crate::{
 /// - `active` is not part of feature computation; it is a graph-level control flag.
 /// - If you need to store ML probability as well, keep it separate from `cost`
 ///   (or add a dedicated field).
-#[derive(Clone, Debug)]
-pub struct Edge<'seed_lf, 'alert_lf> {
-    /// Source seed (older epoch).
-    pub from: &'seed_lf SeedNode<'alert_lf>,
-    /// Target seed (newer epoch).
-    pub to: &'seed_lf SeedNode<'alert_lf>,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EdgeCore {
     /// Solver-facing cost (dimensionless, strictly positive).
     pub cost: f64,
     /// Time gap in days (TT) between the two seeds (positive).
     pub dt_days: f64,
     /// Whether the edge is currently active (used by solvers / CC exact recompute).
     pub active: bool,
+}
+
+/// Directed link from an older node to a newer node (forward in time).
+///
+/// This edge is the solver-facing representation of a potential inter-night link.
+/// It stores references to the original [`SeedNode`] objects to avoid any later
+/// ID → node resolution step.
+///
+/// Attributes
+/// ----------
+/// * `core` – Core edge data (cost, dt_days, active) that can be cheaply cloned and passed around).
+/// * `from` – Source [`SeedNode`] (older epoch).
+/// * `to` – Target [`SeedNode`] (newer epoch).
+#[derive(Clone, Debug)]
+pub struct Edge<'seed_lf, 'alert_lf> {
+    pub core: EdgeCore,
+    /// Source seed (older epoch).
+    pub from: &'seed_lf SeedNode<'alert_lf>,
+    /// Target seed (newer epoch).
+    pub to: &'seed_lf SeedNode<'alert_lf>,
+}
+
+impl<'seed_lf, 'alert_lf> Deref for Edge<'seed_lf, 'alert_lf> {
+    type Target = EdgeCore;
+    fn deref(&self) -> &Self::Target {
+        &self.core
+    }
 }
 
 impl<'seed_lf, 'alert_lf> fmt::Display for Edge<'seed_lf, 'alert_lf> {
@@ -155,9 +174,11 @@ impl<'seed_lf, 'alert_lf> Edge<'seed_lf, 'alert_lf> {
         Self {
             from,
             to,
-            cost,
-            dt_days,
-            active: true,
+            core: EdgeCore {
+                cost,
+                dt_days,
+                active: true,
+            },
         }
     }
 
@@ -281,8 +302,7 @@ fn process_chunk_emit_all<'seed_lf, 'alert_lf>(
     chunk: &'seed_lf [SeedNode<'alert_lf>],
     right_index: &SeedSpatialIndex<'seed_lf, '_, 'alert_lf>,
     edge_config: &EdgeConfig,
-) -> Result<Vec<Edge<'seed_lf, 'alert_lf>>, EdgeModelError>
-{
+) -> Result<Vec<Edge<'seed_lf, 'alert_lf>>, EdgeModelError> {
     let mut local_edges: Vec<Edge<'seed_lf, 'alert_lf>> = Vec::new();
 
     for src in chunk.iter() {
@@ -335,7 +355,8 @@ fn process_chunk_ml_topk<'seed_lf, 'alert_lf>(
     let mut local_edges: Vec<Edge<'seed_lf, 'alert_lf>> = Vec::new();
 
     // Temporary per-left output: avoids heap allocation for small top_k.
-    let mut tmp: smallvec::SmallVec<[(&'seed_lf SeedNode<'alert_lf>, f64); 32]> = smallvec::SmallVec::new();
+    let mut tmp: smallvec::SmallVec<[(&'seed_lf SeedNode<'alert_lf>, f64); 32]> =
+        smallvec::SmallVec::new();
 
     for src in chunk.iter() {
         // Run ranking using the current thread’s model instance.

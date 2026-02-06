@@ -53,7 +53,12 @@
 //! - [`SeedSpatialIndex`] – spatio-temporal bucket index used for fast queries.
 //! - [`EdgeFeatures::compute_features`] – exact feature extraction for edges.
 
-use std::fmt::{self, Display, Formatter};
+use std::{
+    fmt::{self, Display, Formatter},
+    ops::Deref,
+};
+
+use serde::{Deserialize, Serialize};
 
 use crate::{
     Alert, MjdTt, Radians,
@@ -61,6 +66,7 @@ use crate::{
     display_format::indent_block,
     engine_config::{edge_config::EdgeConfig, propagator_config::PredictorParams},
     night_id::NightId,
+    persistence::seed_node::{SeedKey, SeedNodeOwned},
     seeding::{
         photometry::Photometry,
         seed_spatial_index::SeedSpatialIndex,
@@ -92,10 +98,10 @@ use crate::{
 /// `SeedNode<'alert_lf>` borrows alerts. This is deliberate for performance, but
 /// implies that seeds cannot outlive the alert storage that owns the `Alert`
 /// objects.
-#[derive(Clone, Debug)]
-pub struct SeedNode<'alert_lf> {
-    /// Night identifier (intra-night seeds cannot mix nights).
-    pub night_id: NightId,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SeedNodeCore {
+    /// Seed identifier: night ID + index within the night. This is used for persistence and indexing.
+    pub key: SeedKey,
 
     /// Local tangent-plane kinematic model (position/velocity/(optional) acceleration).
     pub plane: TangentPlaneModel,
@@ -105,6 +111,23 @@ pub struct SeedNode<'alert_lf> {
 
     /// Number of detections used to form the seed (2 = pair, 3 = triplet).
     pub n_obs: u16,
+}
+
+impl SeedNodeCore {
+    #[inline]
+    pub fn night_id(&self) -> NightId {
+        self.key.night_id
+    }
+}
+
+/// Seed node with borrowed alert references.
+/// This is the main struct used for seeding and graph construction.
+///
+/// The `core` field contains the cloneable seed data, while `members` holds references to the original alerts.
+#[derive(Clone, Debug)]
+pub struct SeedNode<'alert_lf> {
+    /// Core seed data (model + metadata) that can be cheaply cloned and passed around.
+    pub core: SeedNodeCore,
 
     /// Member detections forming the seed, sorted by observation time.
     ///
@@ -113,11 +136,20 @@ pub struct SeedNode<'alert_lf> {
     pub members: Vec<&'alert_lf Alert>,
 }
 
+impl<'a> Deref for SeedNode<'a> {
+    type Target = SeedNodeCore;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.core
+    }
+}
+
 impl Display for SeedNode<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         writeln!(f, "SeedNode {{")?;
 
-        writeln!(f, "  night     : {}", self.night_id)?;
+        writeln!(f, "  night     : {}", self.night_id())?;
         writeln!(f, "  n_obs     : {}", self.n_obs)?;
         writeln!(f)?;
 
@@ -149,6 +181,21 @@ impl Display for SeedNode<'_> {
 }
 
 impl<'alert_lf> SeedNode<'alert_lf> {
+    /// Convert this `SeedNode` with borrowed alert references into an owned version.
+    /// The owned version clones the core data and stores owned `AlertKey` references
+    /// instead of `&Alert`.
+    ///
+    /// Returns
+    /// ------
+    /// SeedNodeOwned
+    ///     An owned version of this seed, with cloned core data and owned alert keys.
+    pub fn to_owned(&self) -> SeedNodeOwned {
+        SeedNodeOwned {
+            core: self.core.clone(),
+            members: self.members.iter().map(|a| a.key.clone()).collect(),
+        }
+    }
+
     /// Deterministically propagate this seed model by `dt` on its tangent plane.
     ///
     /// This is a low-level helper used by scoring and candidate search logic.
@@ -426,7 +473,7 @@ impl<'alert_lf> SeedNode<'alert_lf> {
     /// - Covariances are approximated as isotropic using `max(ra_err, dec_err)`.
     /// - The model is meant as a cheap, robust intra-night approximation.
     pub fn from_pair(
-        night_id: NightId,
+        seed_key: SeedKey,
         alert_a: &'alert_lf Alert,
         alert_b: &'alert_lf Alert,
         max_speed_rad_per_day: Option<f64>,
@@ -488,10 +535,12 @@ impl<'alert_lf> SeedNode<'alert_lf> {
         );
 
         Some(SeedNode {
-            night_id,
-            plane,
-            photom,
-            n_obs: 2,
+            core: SeedNodeCore {
+                key: seed_key,
+                plane,
+                photom,
+                n_obs: 2,
+            },
             members: vec![alert_a, alert_b],
         })
     }
@@ -524,7 +573,7 @@ impl<'alert_lf> SeedNode<'alert_lf> {
     /// - Uncertainty estimates are coarse and isotropic (similar philosophy as pairs).
     /// - This is still an approximation of true orbital motion.
     pub fn from_triplet(
-        night_id: NightId,
+        seed_key: SeedKey,
         alert_a: &'alert_lf Alert,
         alert_b: &'alert_lf Alert,
         alert_c: &'alert_lf Alert,
@@ -584,10 +633,12 @@ impl<'alert_lf> SeedNode<'alert_lf> {
         );
 
         SeedNode {
-            night_id,
-            plane,
-            photom,
-            n_obs: 3,
+            core: SeedNodeCore {
+                key: seed_key,
+                plane,
+                photom,
+                n_obs: 3,
+            },
             members: vec![alert_a, alert_b, alert_c],
         }
     }
@@ -601,6 +652,7 @@ mod seed_node_tests {
     use crate::{
         astro_math::{ang_sep, arcsec_to_rad},
         engine_config::propagator_config::{ModelNoise, PredictorParams},
+        persistence::alert::AlertKey,
         spacetime_bucket::{healpix_binner::HealpixBinner, uniform_time_binner::UniformTimeBinner},
     };
 
@@ -610,6 +662,10 @@ mod seed_node_tests {
 
     fn mk_alert(source_id: u64, ra: f64, dec: f64, mjd_tt: f64, band: u8, flux: f32) -> Alert {
         Alert {
+            key: AlertKey {
+                night_id: NightId::new(0),
+                idx_in_night: source_id as u32,
+            },
             dia_source_id: source_id,
             ra,
             ra_err: arcsec_to_rad(0.5),
@@ -651,10 +707,18 @@ mod seed_node_tests {
         ];
         let (a, b) = (&alerts[0], &alerts[1]);
 
-        let sn =
-            SeedNode::from_pair(NightId::new(42), a, b, None).expect("pair should produce a seed");
+        let sn = SeedNode::from_pair(
+            SeedKey {
+                night_id: NightId::new(42),
+                idx_in_night: 0,
+            },
+            a,
+            b,
+            None,
+        )
+        .expect("pair should produce a seed");
 
-        assert_eq!(sn.night_id, NightId::new(42));
+        assert_eq!(sn.night_id(), NightId::new(42));
         assert_eq!(sn.n_obs, 2);
 
         // members are references now
@@ -698,8 +762,24 @@ mod seed_node_tests {
 
         let vmax = (speed_slow + speed_fast) * 0.5;
 
-        let keep = SeedNode::from_pair(NightId::new(1), a, b_slow, Some(vmax));
-        let drop = SeedNode::from_pair(NightId::new(1), a, b_fast, Some(vmax));
+        let keep = SeedNode::from_pair(
+            SeedKey {
+                night_id: NightId::new(1),
+                idx_in_night: 0,
+            },
+            a,
+            b_slow,
+            Some(vmax),
+        );
+        let drop = SeedNode::from_pair(
+            SeedKey {
+                night_id: NightId::new(1),
+                idx_in_night: 0,
+            },
+            a,
+            b_fast,
+            Some(vmax),
+        );
 
         assert!(keep.is_some());
         assert!(drop.is_none());
@@ -718,9 +798,17 @@ mod seed_node_tests {
         ];
         let (a, b, c) = (&alerts[0], &alerts[1], &alerts[2]);
 
-        let sn = SeedNode::from_triplet(NightId::new(99), a, b, c);
+        let sn = SeedNode::from_triplet(
+            SeedKey {
+                night_id: NightId::new(99),
+                idx_in_night: 0,
+            },
+            a,
+            b,
+            c,
+        );
 
-        assert_eq!(sn.night_id, NightId::new(99));
+        assert_eq!(sn.night_id(), NightId::new(99));
         assert_eq!(sn.n_obs, 3);
 
         assert_eq!(sn.members.len(), 3);
@@ -745,7 +833,16 @@ mod seed_node_tests {
         ];
         let (a, b) = (&alerts[0], &alerts[1]);
 
-        let sn = SeedNode::from_pair(NightId::new(5), a, b, None).unwrap();
+        let sn = SeedNode::from_pair(
+            SeedKey {
+                night_id: NightId::new(5),
+                idx_in_night: 0,
+            },
+            a,
+            b,
+            None,
+        )
+        .unwrap();
 
         let predict_params = default_predictor_params();
         let tb = b.mjd_tt;
@@ -785,9 +882,36 @@ mod seed_node_tests {
         let b = &alerts[1];
         let c = &alerts[2];
 
-        let left = SeedNode::from_pair(NightId::new(9), a, b, None).unwrap();
-        let right1 = SeedNode::from_pair(NightId::new(10), b, c, None).unwrap();
-        let right2 = SeedNode::from_pair(NightId::new(10), a, c, None).unwrap();
+        let left = SeedNode::from_pair(
+            SeedKey {
+                night_id: NightId::new(9),
+                idx_in_night: 0,
+            },
+            a,
+            b,
+            None,
+        )
+        .unwrap();
+        let right1 = SeedNode::from_pair(
+            SeedKey {
+                night_id: NightId::new(10),
+                idx_in_night: 0,
+            },
+            b,
+            c,
+            None,
+        )
+        .unwrap();
+        let right2 = SeedNode::from_pair(
+            SeedKey {
+                night_id: NightId::new(10),
+                idx_in_night: 0,
+            },
+            a,
+            c,
+            None,
+        )
+        .unwrap();
 
         let rights = vec![right1, right2];
 
@@ -802,7 +926,7 @@ mod seed_node_tests {
         // We don't assert exact count; just ensure no lifetime/borrow issue and deterministic content.
         assert!(cand.len() <= rights.len());
         for s in cand {
-            assert_eq!(s.night_id, NightId::new(10));
+            assert_eq!(s.night_id(), NightId::new(10));
         }
     }
 
@@ -842,7 +966,15 @@ mod seed_node_tests {
                 let b = &alerts[i+1];
                 if b.mjd_tt <= a.mjd_tt { continue; }
 
-                if let Some(sn) = SeedNode::from_pair(NightId::new(1), a, b, None) {
+                if let Some(sn) = SeedNode::from_pair(
+                    SeedKey {
+                        night_id: NightId::new(1),
+                        idx_in_night: 0,
+                    },
+                    a,
+                    b,
+                    None,
+                ) {
                     count += 1;
                     prop_assert_eq!(sn.n_obs, 2);
                     prop_assert_eq!(sn.members.len(), 2);
@@ -873,7 +1005,15 @@ mod seed_node_tests {
                 let (a, b, c) = (&alerts[i], &alerts[i+1], &alerts[i+2]);
                 if !(a.mjd_tt < b.mjd_tt && b.mjd_tt < c.mjd_tt) { continue; }
 
-                let sn = SeedNode::from_triplet(NightId::new(2), a, b, c);
+                let sn = SeedNode::from_triplet(
+                    SeedKey {
+                        night_id: NightId::new(2),
+                        idx_in_night: 0,
+                    },
+                    a,
+                    b,
+                    c,
+                );
                 built += 1;
 
                 prop_assert_eq!(sn.n_obs, 3);
@@ -907,7 +1047,15 @@ mod seed_node_tests {
             let b = &alerts[1];
             if b.mjd_tt <= a.mjd_tt { return Ok(()); }
 
-            let sn = match SeedNode::from_pair(NightId::new(3), a, b, None) {
+            let sn = match SeedNode::from_pair(
+                SeedKey {
+                    night_id: NightId::new(3),
+                    idx_in_night: 0,
+                },
+                a,
+                b,
+                None,
+            ) {
                 Some(s) => s,
                 None => return Ok(()),
             };
