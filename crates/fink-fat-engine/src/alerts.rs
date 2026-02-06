@@ -12,8 +12,6 @@
 //! - [`AlertId`] is a **0-based** dense integer index into an `AlertStore`.
 
 use std::fmt::{Display, Formatter, Result};
-
-use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 /// Dense identifier for an alert within a contiguous store.
@@ -35,9 +33,7 @@ use serde::{Deserialize, Serialize};
     Hash,
     Default,
     Serialize,
-    Deserialize,
-    Encode,
-    Decode,
+    Deserialize
 )]
 pub struct AlertId(u32);
 

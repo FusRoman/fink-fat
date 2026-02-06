@@ -2,11 +2,10 @@ pub mod edge_config;
 pub mod error;
 pub mod pair_config;
 pub mod propagator_config;
-pub mod score_config;
 pub mod triplet_config;
 pub mod units;
 
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
 use config::{Config, Environment, File};
 use serde::{Deserialize, Serialize};
 
@@ -30,6 +29,7 @@ pub struct EngineConfig {
     pub pairs: PairConfig,
     pub triplets: TripletConfig,
     pub edges: EdgeConfig,
+    storage_path: String,
 }
 
 impl Default for EngineConfig {
@@ -39,6 +39,7 @@ impl Default for EngineConfig {
             pairs: PairConfig::default(),
             triplets: TripletConfig::default(),
             edges: EdgeConfig::default(),
+            storage_path: "./storage".to_string(),
         }
     }
 }
@@ -58,6 +59,14 @@ impl EngineConfig {
         self.edges.validate()?;
 
         Ok(())
+    }
+
+    pub fn storage_path(&self) -> &Utf8Path {
+        Utf8Path::new(&self.storage_path)
+    }
+
+    pub fn storage_path_buf(&self) -> Utf8PathBuf {
+        Utf8PathBuf::from(&self.storage_path)
     }
 }
 
@@ -302,9 +311,6 @@ predictor:
 version: 1
 pairs:
   max_dt: 0.06
-scoring:
-  position:
-    max_d2: 25.0
 edges:
   top_k_per_left: 10
 "#;
@@ -321,7 +327,6 @@ edges:
             load_engine_config_validated(&path).expect("config should load with env overrides");
 
         assert!((cfg.pairs.max_dt - 0.05).abs() < 1e-12);
-        assert!((cfg.edges.score_config.position.max_d2 - 9.0).abs() < 1e-12);
         assert_eq!(cfg.edges.top_k_per_left, 42);
     }
 
@@ -457,40 +462,6 @@ triplets:
             expected_speed,
             max_relative = 1e-13
         );
-    }
-
-    #[test]
-    fn yaml_accepts_units_for_scoring_velocity() {
-        let _guard = env_lock().lock().unwrap();
-        let _clear = EnvGuard::clear("FINK_FAT__");
-
-        let yaml = r#"
-version: 1
-scoring:
-  velocity:
-    max_speed_diff: "3 arcmin/day"
-    vel_eps_days: "1.44 min"
-    theta0: "6 arcmin"
-    v0: "1 arcmin/day"
-"#;
-
-        let path = write_tmp_yaml(yaml);
-        let cfg =
-            load_engine_config_validated(&path).expect("config should load with unit strings");
-
-        let v = &cfg.edges.score_config.velocity;
-
-        let exp_max_speed_diff = (3.0_f64 / 60.0_f64).to_radians();
-        assert_relative_eq!(v.max_speed_diff, exp_max_speed_diff, max_relative = 1e-13);
-
-        let exp_vel_eps_days = 1.44_f64 / (24.0_f64 * 60.0_f64);
-        assert_relative_eq!(v.vel_eps_days, exp_vel_eps_days, max_relative = 1e-14);
-
-        let exp_theta0 = (6.0_f64 / 60.0_f64).to_radians();
-        assert_relative_eq!(v.theta0, exp_theta0, max_relative = 1e-13);
-
-        let exp_v0 = (1.0_f64 / 60.0_f64).to_radians();
-        assert_relative_eq!(v.v0, exp_v0, max_relative = 1e-13);
     }
 
     #[test]

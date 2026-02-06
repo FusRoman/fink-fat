@@ -2,12 +2,13 @@ use camino::Utf8Path;
 
 use crate::{
     engine_config::{EngineConfig, load_engine_config_validated},
-    graph::edge::edge_prediction::EdgeRankingModelPool,
+    graph::edge::edge_prediction::EdgeRankingModelPool, storage::seed_store::SeedStore,
 };
 
 pub struct FinkFat {
     pub engine_config: EngineConfig,
     pub edge_ranking_models: EdgeRankingModelPool,
+    pub seed_store: SeedStore,
 }
 
 impl FinkFat {
@@ -27,6 +28,7 @@ impl FinkFat {
         Self {
             engine_config,
             edge_ranking_models,
+            seed_store: SeedStore::new(),
         }
     }
 }

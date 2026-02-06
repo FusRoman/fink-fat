@@ -1,12 +1,3 @@
-//! Unique identifier for an observation night in fink-fat.
-//!
-//! Overview
-//! --------
-//! A `NightId` is a lightweight wrapper around an integer (typically an MJD
-//! truncated to integer days). It is used as the filesystem key for storing
-//! per-night data (`<root>/nights/<night_id>/`).
-
-use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -18,19 +9,7 @@ use std::fmt;
 /// - Typically represents an MJD day number (e.g., 60312).
 /// - Must be stable across runs because it is used as a directory name.
 #[derive(
-    Copy,
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Serialize,
-    Deserialize,
-    Encode,
-    Decode,
-    Hash,
-    Default,
+    Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash, Default,
 )]
 pub struct NightId(pub u32);
 
@@ -87,23 +66,5 @@ mod night_id_tests {
 
         let decoded: NightId = serde_json::from_str(&json).expect("deserialize NightId from JSON");
         assert_eq!(decoded, original);
-    }
-
-    /// Check bincode 2.x round-trip using Encode/Decode.
-    #[test]
-    fn test_bincode_roundtrip() {
-        let original = NightId::new(12345);
-
-        let cfg = bincode::config::standard();
-
-        // Encode to Vec<u8>
-        let bytes = bincode::encode_to_vec(&original, cfg).expect("encode NightId with bincode");
-
-        // Decode back; decode_from_slice returns (value, bytes_read)
-        let (decoded, consumed): (NightId, usize) =
-            bincode::decode_from_slice(&bytes, cfg).expect("decode NightId with bincode");
-
-        assert_eq!(decoded, original);
-        assert_eq!(consumed, bytes.len());
     }
 }

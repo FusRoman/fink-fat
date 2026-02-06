@@ -5,7 +5,7 @@ pub mod engine_config;
 pub mod error;
 pub mod graph;
 pub mod night_id;
-pub mod night_store;
+pub mod storage;
 pub mod seeding;
 pub mod solver;
 pub mod spacetime_bucket;

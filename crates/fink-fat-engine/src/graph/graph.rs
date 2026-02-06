@@ -4,8 +4,7 @@ use crate::{
         edge::{
             Edge,
             edge_prediction::{EdgeModelError, EdgeRankingModelPool},
-        },
-        node::Node,
+        }
     },
     seeding::seed_node::SeedNode,
     spacetime_bucket::{spatial_binner::SpatialBinner, time_binner::TimeBinner},
@@ -13,14 +12,12 @@ use crate::{
 
 #[derive(Debug)]
 pub struct InterNightGraph<'a> {
-    pub nodes: Vec<Node<'a>>,
     pub edges: Vec<Edge<'a>>,
 }
 
 impl<'a, 'b> InterNightGraph<'a> {
     pub fn new() -> Self {
         Self {
-            nodes: Vec::new(),
             edges: Vec::new(),
         }
     }

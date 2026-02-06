@@ -33,7 +33,6 @@
 //! - Photometry is minimalistic by design—only what is required for scoring
 //!   or band-matching at linkage time.
 
-use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 use std::fmt::{self, Display, Formatter};
@@ -65,7 +64,7 @@ use crate::{
 ///
 /// This makes `SeedNode` cheap to serialize, hash, index, or store in memory.
 /// All prediction logic is delegated to `TangentPlaneModel`.
-#[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SeedNode {
     /// Night identifier (intra-night seeds cannot mix nights).
     pub night_id: NightId,

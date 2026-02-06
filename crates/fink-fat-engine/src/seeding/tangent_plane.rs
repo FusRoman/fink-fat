@@ -23,7 +23,6 @@
 //!    [`TangentPlaneModel::predict_cone_base`].
 //! 4. Use the cone for spatial indexing or candidate search.
 
-use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display, Formatter};
 
@@ -47,7 +46,7 @@ use crate::{
 ///
 /// - documents the geometry explicitly,
 /// - allows future optimisations if needed.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, Encode, Decode, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 pub struct TangentCenter {
     /// Tangent-plane centre right ascension α₀ (radians, ICRS).
     pub ra0: Radians,
@@ -149,7 +148,7 @@ impl TangentCenter {
 ///
 /// They are propagated in a **simplified, diagonal form** using the
 /// [`ModelNoise`] parameters when predicting on the plane.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, Encode, Decode, PartialEq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 pub struct TangentPlaneModel {
     /// Tangent-plane centre and cached trigonometric terms.
     pub center: TangentCenter,

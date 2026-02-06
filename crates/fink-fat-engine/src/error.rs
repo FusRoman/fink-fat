@@ -76,18 +76,6 @@ pub enum FinkFatError {
     Message(String),
 }
 
-impl From<bincode::error::EncodeError> for FinkFatError {
-    fn from(err: bincode::error::EncodeError) -> Self {
-        Self::BincodeEncode(err.to_string())
-    }
-}
-
-impl From<bincode::error::DecodeError> for FinkFatError {
-    fn from(err: bincode::error::DecodeError) -> Self {
-        Self::BincodeDecode(err.to_string())
-    }
-}
-
 impl From<String> for FinkFatError {
     fn from(msg: String) -> Self {
         Self::Message(msg)

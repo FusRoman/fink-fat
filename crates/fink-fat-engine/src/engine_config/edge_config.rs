@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-use crate::engine_config::{
-    error::EdgeConfigError, propagator_config::PredictorParams, score_config::ScoreConfig,
-};
+use crate::engine_config::{error::EdgeConfigError, propagator_config::PredictorParams};
 
-fn default_false() -> bool { false }
+fn default_false() -> bool {
+    false
+}
 
 /// Runtime configuration actually used by the engine.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -30,7 +30,6 @@ pub struct EdgeConfig {
     pub parallel_left_batch_size: usize,
 
     pub predictor_config: PredictorParams,
-    pub score_config: ScoreConfig,
 }
 
 impl Default for EdgeConfig {
@@ -43,7 +42,6 @@ impl Default for EdgeConfig {
             parallel_left_batches: false,
             parallel_left_batch_size: 512,
             predictor_config: PredictorParams::default(),
-            score_config: ScoreConfig::default(),
         }
     }
 }
