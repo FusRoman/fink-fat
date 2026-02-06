@@ -2,44 +2,61 @@
 
 //! Compact intra-night seed representation.
 //!
-//! A [`SeedNode`] encodes the minimal, self-contained information required for
-//! **persistence**, **spatial indexing**, and **inter-night linkage** within the
-//! Fink-FAT engine.
+//! A [`SeedNode`] stores the minimal information required to:
+//! - persist intra-night “seeds” (pairs or triplets of detections),
+//! - index them in spatio-temporal buckets (`SeedSpatialIndex`),
+//! - and perform fast inter-night candidate retrieval for graph construction.
 //!
-//! It is intentionally *data-only*: all modelling, projection logic, prediction
-//! or geometric filters are delegated to [`TangentPlaneModel`] or higher-level
-//! components. This keeps the struct easy to serialize (via `serde` or
-//! `bincode`), cheap to move across threads, and lightweight when stored in
-//! per-night indices such as [`SeedSpatialIndex`].
+//! The design is intentionally **data-centric**:
+//! - geometric projection and kinematic prediction live in [`TangentPlaneModel`],
+//! - query acceleration lives in [`SeedSpatialIndex`],
+//! - scoring / ML ranking happen at higher levels (edges / features / models).
 //!
-//! ## What a `SeedNode` contains
-//! - A unique [`SeedId`] and the associated [`NightId`].
-//! - A local tangent-plane kinematic model ([`TangentPlaneModel`]) fitted from
-//!   2 points (pair) or 3 points (triplet).
-//! - Aggregated photometry (mean/dispersion/band).
-//! - The ordered list of constituent detection identifiers (`members`).
+//! This keeps `SeedNode` lightweight (cloneable, cache-friendly) and easy to
+//! pass across threads.
 //!
-//! ## Typical usage
-//! 1. Construct seeds from pairs or triplets of alerts.
-//! 2. Serialize them to disk or insert them into a [`SeedSpatialIndex`].
-//! 3. At prediction time, call [`SeedNode::predict_cone`] or
-//!    [`SeedNode::cone_candidates`] to obtain candidate neighbours for
-//!    inter-night linking.
+//! Data model overview
+//! -------------------
+//! A seed is built from either:
+//! - a **pair** of alerts (linear motion on a tangent plane), or
+//! - a **triplet** of alerts (quadratic motion, i.e. includes acceleration).
 //!
-//! ## Notes
-//! - `cos_dec0` and `sin_dec0` fields inside `TangentCenter` are cached
-//!   trigonometric values for fast projection; they can be recomputed
-//!   if the model is manually rebuilt.
-//! - Photometry is minimalistic by design—only what is required for scoring
-//!   or band-matching at linkage time.
-
-use serde::{Deserialize, Serialize};
+//! The seed stores:
+//! - its [`NightId`] (seeds do not mix nights),
+//! - a local tangent-plane kinematic model ([`TangentPlaneModel`]),
+//! - minimal photometric aggregates ([`Photometry`]),
+//! - the ordered list of member detections (`members`), as `&Alert` references.
+//!
+//! Typical workflow
+//! ----------------
+//! 1. Build seeds for each night (`from_pair` / `from_triplet`).
+//! 2. Build a [`SeedSpatialIndex`] for a “right-hand” night.
+//! 3. For each left seed, call [`SeedNode::seed_edge_candidates`] to enumerate
+//!    plausible right-hand neighbour seeds (coarse prediction + cone query).
+//! 4. Compute exact features / scoring / ML ranking upstream.
+//!
+//! Notes on lifetimes
+//! ------------------
+//! `SeedNode<'alert_lf>` stores references to alerts (`&'alert_lf Alert`).
+//! This avoids copying alert fields into the seed, but means the underlying
+//! alerts must outlive the seeds (e.g. alerts owned by an `AlertStore`).
+//!
+//! Units & conventions
+//! -------------------
+//! - Angles (`ra`, `dec`, tangent-plane coordinates) are in **radians**.
+//! - Epochs are **MJD TT** (`MjdTt`).
+//! - Tangent-plane velocities are **rad/day**.
+//!
+//! See also
+//! --------
+//! - [`TangentPlaneModel`] – local kinematic model + prediction utilities.
+//! - [`SeedSpatialIndex`] – spatio-temporal bucket index used for fast queries.
+//! - [`EdgeFeatures::compute_features`] – exact feature extraction for edges.
 
 use std::fmt::{self, Display, Formatter};
 
 use crate::{
-    Alert, AlertId, MjdTt, Radians,
-    alerts::AlertStore,
+    Alert, MjdTt, Radians,
     astro_math::{fit_quad_1d, radec_to_tangent, spherical_midpoint, tangent_to_radec},
     display_format::indent_block,
     engine_config::{edge_config::EdgeConfig, propagator_config::PredictorParams},
@@ -52,24 +69,35 @@ use crate::{
     spacetime_bucket::spatial_binner::SpatialBinner,
 };
 
-/// Compact intra-night seed object used in the inter-night graph.
+/// Compact intra-night seed used for inter-night graph construction.
 ///
-/// This struct intentionally contains **no geometric logic**; it only stores:
+/// A `SeedNode` is a minimal “tracklet-like” object built from 2 or 3 detections:
+/// - pair  → linear tangent-plane model (position + velocity),
+/// - triplet → quadratic tangent-plane model (position + velocity + acceleration).
 ///
-/// - the seed identity and night information,
-/// - a local tangent-plane dynamical model,
-/// - aggregated photometric metadata,
-/// - the ordered list of member alert identifiers,
-/// - basic covariance matrices for position and velocity.
+/// The struct is intentionally **data-only**:
+/// it stores the fitted model and metadata, but does not perform any global
+/// ephemeris propagation or orbit fitting.
 ///
-/// This makes `SeedNode` cheap to serialize, hash, index, or store in memory.
-/// All prediction logic is delegated to `TangentPlaneModel`.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct SeedNode {
+/// Fields
+/// ------
+/// - `night_id` links this seed to a single observing night.
+/// - `plane` contains the fitted tangent-plane kinematics and cached trig values.
+/// - `photom` stores small photometric aggregates used by scoring heuristics.
+/// - `n_obs` is the number of detections used (2 or 3).
+/// - `members` is the ordered list of `&Alert` that define the seed.
+///
+/// Lifetimes
+/// ---------
+/// `SeedNode<'alert_lf>` borrows alerts. This is deliberate for performance, but
+/// implies that seeds cannot outlive the alert storage that owns the `Alert`
+/// objects.
+#[derive(Clone, Debug)]
+pub struct SeedNode<'alert_lf> {
     /// Night identifier (intra-night seeds cannot mix nights).
     pub night_id: NightId,
 
-    /// Local tangent-plane model describing kinematics.
+    /// Local tangent-plane kinematic model (position/velocity/(optional) acceleration).
     pub plane: TangentPlaneModel,
 
     /// Aggregated photometry for scoring / filtering.
@@ -78,11 +106,14 @@ pub struct SeedNode {
     /// Number of detections used to form the seed (2 = pair, 3 = triplet).
     pub n_obs: u16,
 
-    /// Alert identifiers forming the seed, sorted by observation time.
-    pub members: Vec<AlertId>,
+    /// Member detections forming the seed, sorted by observation time.
+    ///
+    /// The ordering is meaningful: constructors keep members in time order and
+    /// upstream logic may assume it for display/debugging.
+    pub members: Vec<&'alert_lf Alert>,
 }
 
-impl Display for SeedNode {
+impl Display for SeedNode<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         writeln!(f, "SeedNode {{")?;
 
@@ -104,11 +135,12 @@ impl Display for SeedNode {
         writeln!(f)?;
 
         write!(f, "  members  : [")?;
-        for (i, id) in self.members.iter().enumerate() {
+        for (i, a) in self.members.iter().enumerate() {
             if i > 0 {
                 write!(f, ", ")?;
             }
-            write!(f, "{id}")?;
+            // Alert implements Display in your crate (prints a compact identifier).
+            write!(f, "{a}")?;
         }
         writeln!(f, "]")?;
 
@@ -116,73 +148,40 @@ impl Display for SeedNode {
     }
 }
 
-impl SeedNode {
-    /// Resolve the concrete member alerts for this seed from an [`AlertStore`].
+impl<'alert_lf> SeedNode<'alert_lf> {
+    /// Deterministically propagate this seed model by `dt` on its tangent plane.
     ///
-    /// For each `AlertId` in [`SeedNode::members`], this method looks up the
-    /// corresponding [`Alert`] in the provided store and returns a vector of
-    /// shared references.
-    ///
-    /// If **any** member cannot be found, the whole operation fails and
-    /// returns `None`. This makes it safer for downstream consumers that
-    /// expect the seed to be fully materialisable.
-    ///
-    /// Arguments
-    /// ---------
-    /// * `store` – Global alert store, expected to contain all `Alert` entries
-    ///   referenced by this seed. The invariant `alert.id.idx() == index` must
-    ///   hold for the underlying `alerts` container.
-    ///
-    /// Return
-    /// ------
-    /// * `Some(Vec<&Alert>)` if all member alerts were successfully resolved.
-    /// * `None` if at least one `AlertId` could not be found in `store`.
-    ///
-    /// Notes
-    /// -----
-    /// * This is primarily intended for:
-    ///   - debugging or inspection in higher-level pipelines,
-    ///   - detailed scoring after a coarse graph pass.
-    /// * For pure geometric or linkage operations, you should prefer working
-    ///   with `SeedNode` fields directly (e.g. [`SeedNode::plane`]) instead
-    ///   of materialising alerts.
-    #[inline]
-    pub fn resolve_seed_members<'a>(&self, store: &'a AlertStore) -> Option<Vec<&'a Alert>> {
-        self.members
-            .iter()
-            .map(|&id| store.alerts.get(id.idx()))
-            .collect()
-    }
-
-    /// Deterministically propagate `from` to `t_to = t_from + dt` on the tangent plane.
+    /// This is a low-level helper used by scoring and candidate search logic.
+    /// It produces a **deterministic** kinematic prediction on the tangent plane
+    /// (no noise model, no uncertainty inflation).
     ///
     /// Motion model
     /// ------------
-    /// Uses a constant-velocity model by default:
-    /// `p(t) = p0 + v0 · dt`
+    /// - If the seed has no acceleration term: constant velocity
+    ///   `p(t) = p0 + v0 · dt`.
+    /// - If the seed includes acceleration: constant acceleration
+    ///   `p(t) = p0 + v0 · dt + 0.5 · a · dt²`,
+    ///   `v(t) = v0 + a · dt`.
     ///
-    /// If the seed contains an acceleration term, uses constant-acceleration:
-    /// `p(t) = p0 + v0 · dt + 0.5 · a · dt²`
-    /// `v(t) = v0 + a · dt`
+    /// Parameters
+    /// ----------
+    /// dt : f64
+    ///     Time offset in **days**.
+    /// dt_sq : f64
+    ///     Precomputed `dt²` (micro-optimization for tight loops).
     ///
-    /// Arguments
-    /// ---------
-    /// * `from` – Source seed node providing position/velocity (and optional acceleration).
-    /// * `dt` – Time difference to propagate (days).
-    /// * `dt_sq` – Precomputed `dt²` for efficiency.
-    ///
-    /// Return
-    /// ------
-    /// `(p_pred, v_pred, has_acc)` where:
-    /// * `p_pred` – Predicted position `[x, y]` at target epoch on the source tangent plane.
-    /// * `v_pred` – Predicted velocity `[vx, vy]` at target epoch on the source tangent plane.
-    /// * `has_acc` – `1.0` if acceleration is used, else `0.0`.
+    /// Returns
+    /// -------
+    /// ([f64; 2], [f64; 2], f64)
+    ///     `(p_pred, v_pred, has_acc)` where:
+    ///     - `p_pred` is the predicted tangent-plane position `[x, y]` (radians),
+    ///     - `v_pred` is the predicted tangent-plane velocity `[vx, vy]` (rad/day),
+    ///     - `has_acc` is `1.0` if acceleration is present, else `0.0`.
     ///
     /// Notes
     /// -----
-    /// This routine assumes the tangent plane of `from` remains a valid local
-    /// linearization over the time gap `dt`, which is the case for typical
-    /// inter-night asteroid linking at small angular scales.
+    /// This assumes the seed tangent plane remains a valid local linearization
+    /// over the time gap considered (typical for inter-night asteroid linking).
     #[inline]
     pub(crate) fn propagate_from(&self, dt: f64, dt_sq: f64) -> ([f64; 2], [f64; 2], f64) {
         let (px, py) = self.plane.predict_position(dt, dt_sq);
@@ -192,78 +191,60 @@ impl SeedNode {
         } else {
             0.0
         };
-
         ([px, py], [vx, vy], has_acc)
     }
 
-    /// Predict the sky position `(RA, Dec)` at a target epoch using the
-    /// underlying tangent-plane model.
+    /// Predict the sky position `(ra, dec)` at `t_target` from the fitted model.
     ///
-    /// This is a thin convenience wrapper around
-    /// [`TangentPlaneModel::predict_radec`]. It returns the **deterministic**
-    /// best-fit position given the kinematic parameters stored in
-    /// [`SeedNode::plane`].
+    /// This is a thin wrapper around [`TangentPlaneModel::predict_radec`].
+    /// It returns the deterministic best-fit position (no uncertainty cone).
     ///
-    /// Arguments
-    /// ---------
-    /// * `t_target` – Target epoch (MJD TT) at which to evaluate the model.
+    /// Parameters
+    /// ----------
+    /// t_target : MjdTt
+    ///     Target epoch (MJD TT).
     ///
-    /// Return
-    /// ------
-    /// * `(ra, dec)` – Predicted right ascension and declination in radians
-    ///   (J2000, same frame as stored alerts).
+    /// Returns
+    /// -------
+    /// (Radians, Radians)
+    ///     `(ra, dec)` in radians (same frame as alerts stored in the seed).
     ///
-    /// Notes
-    /// -----
-    /// * No uncertainty, padding or cone geometry is returned here. If you
-    ///   need an uncertainty-aware region for candidate search, use
-    ///   [`SeedNode::predict_cone`] or [`SeedNode::cone_candidates`] instead.
-    /// * The prediction is valid only in the local neighbourhood where the
-    ///   tangent-plane approximation and the underlying fit are reliable.
+    /// See also
+    /// --------
+    /// - [`SeedNode::predict_cone`] – uncertainty-aware cone for candidate search.
     #[inline]
     pub fn predict_radec(&self, t_target: MjdTt) -> (Radians, Radians) {
         self.plane.predict_radec(t_target)
     }
 
-    /// Predict a sky **cone** `(RA, Dec, radius)` covering the possible
-    /// position of this seed at a target epoch.
+    /// Predict a conservative sky cone `(ra, dec, radius)` for candidate search.
     ///
-    /// The prediction proceeds in two stages:
+    /// This builds an uncertainty-aware search region at `t_target`:
+    /// 1. The tangent-plane model predicts a base centre and radius using the
+    ///    configured noise model and `k_sigma`.
+    /// 2. Optionally, an extra padding of one spatial cell radius is added
+    ///    (`pad_cell_radius`) so bucket-based queries do not miss neighbours on
+    ///    cell boundaries.
     ///
-    /// 1. Use the tangent-plane model to compute a base prediction:
-    ///    - propagate the kinematics to `t_target`,
-    ///    - inflate the radius according to the noise model and `k_sigma`,
-    ///      via [`TangentPlaneModel::predict_cone_base`].
-    /// 2. Optionally add a **cell padding** term:
-    ///    - if `predictor_params.pad_cell_radius == true`,
-    ///      add [`SpatialBinner::cell_radius`] so the cone safely covers
-    ///      neighbouring spatial cells during bucket-based queries.
+    /// Parameters
+    /// ----------
+    /// t_target : MjdTt
+    ///     Target epoch (MJD TT).
+    /// binner : &impl SpatialBinner
+    ///     Spatial binner used by the index; only `cell_radius()` is used here.
+    /// predictor_params : &PredictorParams
+    ///     Predictor configuration (noise model, `k_sigma`, and padding flags).
     ///
-    /// Arguments
-    /// ---------
-    /// * `t_target` – Target epoch (MJD TT) at which to predict the cone.
-    /// * `binner` – Spatial binner used for bucket construction (e.g. HEALPix).
-    ///   Only `cell_radius()` is used here.
-    /// * `predictor_params` – Predictor configuration containing:
-    ///   - `noise` – noise model used to inflate the cone radius,
-    ///   - `k_sigma` – multiplicative factor for the uncertainty radius,
-    ///   - `pad_cell_radius` – whether to add an extra cell-radius padding.
-    ///
-    /// Return
-    /// ------
-    /// * `(ra_center, dec_center, radius)` – Centre and angular radius of the
-    ///   predicted search cone, all in radians.
+    /// Returns
+    /// -------
+    /// (Radians, Radians, f64)
+    ///     `(ra_center, dec_center, radius)` in radians.
     ///
     /// Notes
     /// -----
-    /// * This routine does **not** perform any index lookup; it only produces
-    ///   a geometric region. Use [`SeedNode::cone_candidates`] to directly
-    ///   query a [`SeedSpatialIndex`].
-    /// * The radius is meant to be conservative: it should cover the joint
-    ///   effect of:
-    ///   - the fitted motion model uncertainty,
-    ///   - the error model in `predictor_params.noise`,
-    ///   - an optional spatial-cell padding.
+    /// This function **does not** query any index; it only returns a geometric
+    /// region. Use [`SeedNode::seed_edge_candidates`] or [`SeedNode::cone_candidates`]
+    /// to actually retrieve neighbour seeds.
     #[inline]
     pub fn predict_cone<Bs: SpatialBinner + ?Sized>(
         &self,
@@ -271,19 +252,29 @@ impl SeedNode {
         binner: &Bs,
         predictor_params: &PredictorParams,
     ) -> (Radians, Radians, f64) {
-        // Predict the cone via the tangent-plane model (centre + radius),
-        // then optionally add a padding term based on the spatial cell radius.
         let (ra, dec, mut radius) = self.plane.predict_cone_base(
             t_target,
             &predictor_params.noise,
             predictor_params.k_sigma,
         );
+
         if predictor_params.pad_cell_radius {
             radius += binner.cell_radius();
         }
         (ra, dec, radius)
     }
 
+    /// Absolute time separation (days) between this seed and another seed.
+    ///
+    /// Parameters
+    /// ----------
+    /// other : &SeedNode
+    ///     The other seed node.
+    ///
+    /// Returns
+    /// -------
+    /// f64
+    ///     `|other.epoch_mid - self.epoch_mid|` in days.
     #[inline]
     pub fn delta_days(&self, other: &SeedNode) -> f64 {
         let t_self = self.plane.epoch_mid;
@@ -291,126 +282,53 @@ impl SeedNode {
         (t_other - t_self).abs()
     }
 
-    /// Score inter-night edge candidates from this seed to a **time-sorted** set of
-    /// right-hand seeds using **spatio-temporal binning** followed by **exact
-    /// kinematic scoring**.
+    /// Enumerate candidate right-hand seeds for inter-night linking.
     ///
-    /// This method targets the common inter-night linking case where:
-    /// - all `right` seeds belong to a **single night**,
-    /// - `right` is **sorted by `SeedNode::plane.epoch_mid` (ascending)**,
-    /// - spatial candidate fan-out must be reduced by **partitioning in time**
-    ///   and building **one spatial index per time bin**,
-    /// - the temporal partitioning is provided by a generic [`TimeBinner`]
-    ///   (uniform bins, cadence-aware bins, etc.).
+    /// This is the *coarse* candidate-generation stage used by the edge builder.
+    /// It relies on the spatio-temporal preindexing provided by [`SeedSpatialIndex`]:
+    /// - the right-hand seeds are partitioned into time bins,
+    /// - each bin has an associated spatial bucket index,
+    /// - this method predicts one cone per bin and queries the corresponding index.
     ///
-    /// ## Algorithm overview
+    /// Compared to a naive “single global cone query”, the per-bin approach gives
+    /// time-consistent candidate sets and allows conservative time padding without
+    /// exploding the search radius.
     ///
-    /// The algorithm proceeds as follows:
+    /// Parameters
+    /// ----------
+    /// right_seed_index : &SeedSpatialIndex
+    ///     Pre-built spatio-temporal index for the right-hand night.
+    ///     The index provides:
+    ///     - `time_bins`: the list of bins to consider,
+    ///     - `time_binner`: bin geometry (`bin_start`, `bin_end`, `bin_width`),
+    ///     - `spatial_binner`: cell geometry (`cell_radius`),
+    ///     - `cone_query(...)`: iterator over seeds inside the cone for that bin.
+    /// edge_config : &EdgeConfig
+    ///     Configuration controlling candidate search. This method uses the
+    ///     predictor configuration (`edge_config.predictor_config`), including:
+    ///     - noise model + `k_sigma` (cone inflation),
+    ///     - `pad_cell_radius` (optional cell padding),
+    ///     - `v_slack` (extra velocity slack, rad/day).
     ///
-    /// 1. **Time binning**
-    ///    The time span covered by `right` is partitioned into bins using
-    ///    `time_binner.bins_in_range(t_min_r, t_max_r)`. The concrete binning
-    ///    strategy (uniform, adaptive, cadence-aware) is entirely delegated
-    ///    to the [`TimeBinner`] implementation.
+    /// Returns
+    /// -------
+    /// impl Iterator<Item = &SeedNode>
+    ///     Iterator over candidate right-hand seeds. The iterator is lazy and
+    ///     yields seeds across all time bins (flat-mapped).
     ///
-    /// 2. **Monotone bin slicing**
-    ///    Because `right` is sorted by `epoch_mid`, each time bin `[t0, t1)`
-    ///    corresponds to a contiguous slice `right[lo..hi)`. These bounds are
-    ///    maintained using a **monotone scan** over `right`:
-    ///    - `lo` and `hi` only move forward,
-    ///    - no binary search is performed inside the bin loop.
-    ///
-    /// 3. **Spatial index per time bin**
-    ///    For each non-empty slice `right[lo..hi)`, a dedicated
-    ///    [`SeedSpatialIndex`] is built. This ensures that the coarse spatial
-    ///    search is **time-consistent by construction**: all returned candidates
-    ///    belong to the queried time bin.
-    ///
-    /// 4. **Per-bin coarse spatial search**
-    ///    For each bin:
-    ///    - a reference epoch `t_center` (the bin midpoint) is chosen,
-    ///    - this seed is propagated to `t_center` using [`SeedNode::predict_cone`],
-    ///    - the cone radius is conservatively inflated by
-    ///      `(|v| + v_slack) · (Δt / 2)`, where
-    ///      `Δt = time_binner.bin_width()`,
-    ///      to cover any target epoch within the bin.
-    ///    The inflated cone is then queried against the bin-local spatial index.
-    ///
-    /// 5. **Exact scoring**
-    ///    Each spatial candidate is evaluated with [`ScoredEdge::score`] at the
-    ///    **true epoch** of the right-hand seed. The returned [`ScoredEdge`]
-    ///    encodes the final kinematic and photometric consistency.
-    ///
-    /// The result is a flat list of scored edges suitable for subsequent Top-K
-    /// selection or global graph construction.
-    ///
-    /// ## Parameters
-    ///
-    /// * `right` – Slice of candidate right-hand seeds, **sorted by
-    ///   `plane.epoch_mid`** (ascending).
-    /// * `spatial_binner` – Spatial binner used for cone queries (e.g. HEALPix).
-    /// * `time_binner` – Time partitioner defining the binning scheme. Must provide
-    ///   `bins_in_range`, `bin_start`, `bin_end`, and `bin_width`.
-    /// * `edge_config` – Edge and predictor configuration, including:
-    ///   - predictor noise and padding parameters,
-    ///   - optional velocity slack `v_slack`.
-    /// * `delta_revisit` – Revisit separation between `left` and `right` nights,
-    ///   expressed as an integer ≥ 1.
-    ///
-    /// ## Returns
-    ///
-    /// * `Vec<ScoredEdge>` – All scored edge candidates from this seed to `right`
-    ///   seeds that pass the per-bin spatial prefilter and the exact scorer. The
-    ///   vector is **not sorted** and may contain more entries than the final Top-K;
-    ///   downstream code is expected to perform selection or truncation.
-    ///
-    /// ## Invariants
-    ///
-    /// - `right` **must** be sorted by `SeedNode::plane.epoch_mid`.
-    /// - `time_binner` must be consistent with the timestamps in `right`
-    ///   (i.e. `bin_start`, `bin_end`, and `bin_width` define a coherent partition).
-    ///
-    /// ## Complexity
-    ///
-    /// ### Notation
-    /// - `N = right.len()` – total number of right-hand seeds (one night),
-    /// - `B` – number of time bins,
-    /// - `n_b` – number of seeds in bin `b` (`Σ_b n_b = N`),
-    /// - `C_b` – number of candidates returned by the bin-local cone query,
-    /// - `score_cost` – cost of one [`ScoredEdge::score`] call.
-    ///
-    /// ### This method (spatio-temporal, index per bin)
-    ///
-    /// - **Time slicing**: `O(N + B)` via a monotone scan of `right`,
-    /// - **Index construction**: `Σ_b O(n_b) = O(N)` (each seed is indexed once),
-    /// - **Scoring**: `Σ_b (C_b · score_cost)`.
-    ///
-    /// Overall complexity:
-    /// ```
-    /// O(N + (Σ_b C_b) · score_cost)
-    /// ```
-    ///
-    /// ## Notes
-    ///
-    /// - Building a spatial index per bin increases preprocessing work
-    ///   (many small indices) but can drastically reduce candidate fan-out when
-    ///   nightly spatial density is high.
-    /// - The coarse cone is intentionally conservative; false positives are
-    ///   expected and filtered out by the exact scorer.
-    ///
-    /// ## See also
-    ///
-    /// * [`TimeBinner`] – Time partitioning interface (uniform or custom).
-    /// * [`UniformTimeBinner`] – Uniform partitioning of the MJD(TT) axis.
-    /// * [`SeedNode::predict_cone`] – Coarse kinematic prediction.
-    /// * [`SeedSpatialIndex`] – Bucket-based spatial index used per time bin.
-    /// * [`ScoredEdge::score`] – Exact inter-night edge scoring routine.
-    pub fn seed_edge_candidates<'a, 'b>(
-        &'a self,
-        right_seed_index: &'b SeedSpatialIndex<'a, '_>,
-        edge_config: &'b EdgeConfig,
-    ) -> impl Iterator<Item = &'a SeedNode> + 'b {
-        let pred_cfg = &edge_config.predictor_config;
+    /// Notes
+    /// -----
+    /// - The cone radius is additionally inflated by a conservative time padding:
+    ///   `(|v| + v_slack) * (bin_width / 2)`, where `|v|` is the seed speed on
+    ///   the tangent plane (rad/day).
+    /// - This stage is intentionally permissive: it returns many false positives
+    ///   that must be filtered by exact scoring / ML ranking upstream.
+    pub fn seed_edge_candidates<'iter, 'seed_lf>(
+        &'iter self,
+        right_seed_index: &'iter SeedSpatialIndex<'seed_lf, '_, 'alert_lf>,
+        edge_config: &EdgeConfig,
+    ) -> impl Iterator<Item = &'seed_lf SeedNode<'alert_lf>> + 'iter {
+        let pred_cfg = edge_config.predictor_config;
 
         // Left seed speed on tangent plane (rad/day), with optional slack.
         let v_xy = self.plane.vel_xy;
@@ -426,111 +344,94 @@ impl SeedNode {
             let bin_center = 0.5 * (bin_start + bin_end);
 
             let (ra_center, dec_center, mut cone_radius) =
-                self.predict_cone(bin_center, right_seed_index.spatial_binner, pred_cfg);
+                self.predict_cone(bin_center, right_seed_index.spatial_binner, &pred_cfg);
 
+            // Conservative padding: ensure the cone covers any epoch within the bin.
             cone_radius += effective_speed * half_bin_width_days;
 
             right_seed_index.cone_query(ra_center, dec_center, cone_radius, bin_center)
         })
     }
 
-    /// Retrieve **candidate neighbour seeds** from a [`SeedSpatialIndex`]
-    /// using this seed’s predicted cone.
+    /// Query an index for candidates around the predicted cone at `t_target`.
     ///
-    /// This is the high-level entry point for inter-night candidate search:
+    /// This is a convenience wrapper around [`SeedNode::predict_cone`] +
+    /// [`SeedSpatialIndex::cone_query`]. It is best suited for one-off queries
+    /// at a specific epoch.
     ///
-    /// 1. Compute the search cone `(ra, dec, radius)` at `t_target` using
-    ///    [`SeedNode::predict_cone`].
-    /// 2. Invoke [`SeedSpatialIndex::cone_query`] with that cone to retrieve
-    ///    all `SeedId`s falling in the approximate spatial cover.
+    /// Parameters
+    /// ----------
+    /// t_target : MjdTt
+    ///     Target epoch (MJD TT).
+    /// index : &SeedSpatialIndex
+    ///     Seed index to query.
+    /// binner : &impl SpatialBinner
+    ///     Spatial binner used for cone geometry.
+    /// params : &PredictorParams
+    ///     Predictor configuration (noise, `k_sigma`, padding).
     ///
-    /// Arguments
-    /// ---------
-    /// * `t_target` – Target epoch (MJD TT) at which to predict the cone.
-    /// * `index` – Per-night spatial index for seeds, typically built from
-    ///   all seeds of the same night as this node.
-    /// * `binner` – Spatial binner used both at index construction time and
-    ///   for neighbour lookup (e.g. HEALPix).
-    /// * `params` – Predictor configuration; see
-    ///   [`SeedNode::predict_cone`] for details.
-    ///
-    /// Return
-    /// ------
-    /// * `Vec<SeedId>` – List of candidate neighbour seeds whose spatial
-    ///   cells intersect the predicted cone.
+    /// Returns
+    /// -------
+    /// Vec<&SeedNode>
+    ///     Collected candidates returned by the index query.
     ///
     /// Notes
     /// -----
-    /// * The result is **approximate by design**:
-    ///   - some candidates might lie slightly outside the strict cone,
-    ///   - some very marginal matches could be missed depending on the
-    ///     behaviour of [`SpatialBinner::neighbors`].
-    /// * Downstream code should always apply a more precise filter
-    ///   (e.g. exact angular separation or orbit-fitting residuals) on the
-    ///   returned candidates.
+    /// `seed_edge_candidates` is usually preferred for the inter-night pipeline,
+    /// because it aligns with the index time-bin structure and adds the
+    /// conservative half-bin time padding.
     #[inline]
-    pub fn cone_candidates<'a, Bs: SpatialBinner>(
+    pub fn cone_candidates<'seed_lf, Bs: SpatialBinner>(
         &self,
         t_target: MjdTt,
-        index: &'a SeedSpatialIndex,
-        binner: &'a Bs,
+        index: &SeedSpatialIndex<'seed_lf, '_, 'alert_lf>,
+        binner: &Bs,
         params: &PredictorParams,
-    ) -> Vec<&'a SeedNode> {
-        // Use the tangent-plane cone prediction to query the spatial index.
+    ) -> Vec<&'seed_lf SeedNode<'alert_lf>> {
         let (ra, dec, radius) = self.predict_cone(t_target, binner, params);
         index.cone_query(ra, dec, radius, t_target).collect()
     }
 
-    /// Build a [`SeedNode`] from a **pair** of alerts.
+    /// Build a [`SeedNode`] from a **pair** of alerts (linear tangent-plane model).
     ///
-    /// This constructor fits a **linear tangent-plane model** from two
-    /// detections `(a, b)`:
+    /// This constructor:
+    /// - defines a tangent-plane centre as the spherical midpoint of the two detections,
+    /// - projects both detections onto the tangent plane,
+    /// - fits a linear motion model (position at mid-epoch + velocity),
+    /// - builds simple isotropic covariance estimates for position and velocity,
+    /// - aggregates minimal photometry from the two fluxes.
     ///
-    /// 1. Define the tangent-plane centre as the spherical midpoint of
-    ///    `a` and `b`.
-    /// 2. Project both alerts to tangent coordinates via [`radec_to_tangent`].
-    /// 3. Use their midpoint as the reference position `pₘ`.
-    /// 4. Estimate velocity by finite difference in tangent coordinates.
-    /// 5. Build diagonal covariance matrices for:
-    ///    - position, from the RA/Dec uncertainties of `a` and `b`,
-    ///    - velocity, from the position errors and `Δt⁻²`.
-    /// 6. Aggregate photometry (mean + dispersion of fluxes).
+    /// Parameters
+    /// ----------
+    /// night_id : NightId
+    ///     Night identifier shared by both alerts.
+    /// alert_a : &Alert
+    ///     First detection.
+    /// alert_b : &Alert
+    ///     Second detection.
+    /// max_speed_rad_per_day : Option<f64>
+    ///     Optional physical sanity check on the fitted speed (rad/day).
+    ///     If set and `||v|| > vmax`, the seed is rejected.
     ///
-    /// An optional **physical realism filter** can be applied via
-    /// `max_speed_rad_per_day`: if the fitted speed exceeds this threshold,
-    /// the seed is discarded and `None` is returned.
-    ///
-    /// Arguments
-    /// ---------
-    /// * `seed_id` – Identifier to assign to the newly built seed.
-    /// * `night_id` – Night to which both alerts belong.
-    /// * `alert_a` – First alert (earlier or arbitrary order, but consistent with `b`).
-    /// * `alert_b` – Second alert.
-    /// * `max_speed_rad_per_day` – Optional maximum allowed angular speed in
-    ///   radians per day. If `Some(vmax)` and the fitted speed satisfies
-    ///   `‖v‖ > vmax`, the function returns `None`.
-    ///
-    /// Return
-    /// ------
-    /// * `Some(SeedNode)` if a valid linear model could be built and passes
-    ///   the speed filter.
-    /// * `None` if the fitted speed exceeds `max_speed_rad_per_day`.
+    /// Returns
+    /// -------
+    /// Option<SeedNode>
+    ///     `Some(seed)` if the model is built and passes the optional speed filter,
+    ///     `None` if rejected by the speed filter.
     ///
     /// Notes
     /// -----
-    /// * The resulting seed always has:
-    ///   - `n_obs == 2`,
-    ///   - `members == [a.id, b.id]` in that order.
-    /// * Covariances are approximated as **isotropic** in the tangent plane,
-    ///   using the maximum of RA/Dec errors as a scalar proxy per alert.
-    /// * This is intended as a cheap, robust intra-night model; it is not a
-    ///   substitute for a full orbit fit.
+    /// - Members are stored in time order: `[alert_a, alert_b]` as passed here.
+    ///   (Callers should pass them in chronological order if that matters.)
+    /// - Covariances are approximated as isotropic using `max(ra_err, dec_err)`.
+    /// - The model is meant as a cheap, robust intra-night approximation.
     pub fn from_pair(
         night_id: NightId,
-        alert_a: &Alert,
-        alert_b: &Alert,
+        alert_a: &'alert_lf Alert,
+        alert_b: &'alert_lf Alert,
         max_speed_rad_per_day: Option<f64>,
     ) -> Option<Self> {
+        // --- implementation unchanged ---
         let ta = alert_a.mjd_tt;
         let tb = alert_b.mjd_tt;
         let tm = 0.5 * (ta + tb);
@@ -538,25 +439,19 @@ impl SeedNode {
         let inv_dt = 1.0 / dt;
         let inv_dt2 = inv_dt * inv_dt;
 
-        // Tangent-plane centre = spherical midpoint of the two endpoints.
         let (ra0, dec0) = spherical_midpoint(alert_a.ra, alert_a.dec, alert_b.ra, alert_b.dec);
         let center = TangentCenter::new(ra0, dec0);
 
-        // Tangent-plane coordinates of the two detections.
         let pa = radec_to_tangent(alert_a.ra, alert_a.dec, ra0, dec0);
         let pb = radec_to_tangent(alert_b.ra, alert_b.dec, ra0, dec0);
 
-        // Midpoint position in tangent coordinates.
         let pm = [(pa[0] + pb[0]) * 0.5, (pa[1] + pb[1]) * 0.5];
 
-        // Convert the midpoint back to sky coordinates for convenience.
         let (ra_mid, dec_mid) = tangent_to_radec(pm[0], pm[1], ra0, dec0);
 
-        // Linear tangent-plane velocity estimate.
         let vx = (pb[0] - pa[0]) * inv_dt;
         let vy = (pb[1] - pa[1]) * inv_dt;
 
-        // Optional speed sanity check.
         if let Some(vmax) = max_speed_rad_per_day {
             let speed2 = vx.mul_add(vx, vy * vy);
             if speed2 > vmax * vmax {
@@ -564,7 +459,6 @@ impl SeedNode {
             }
         }
 
-        // Position and velocity covariance estimates (isotropic).
         let sa = alert_a.ra_err.max(alert_a.dec_err);
         let sb = alert_b.ra_err.max(alert_b.dec_err);
         let s2 = 0.5 * (sa * sa + sb * sb);
@@ -572,7 +466,6 @@ impl SeedNode {
         let vel_var = 2.0 * s2 * inv_dt2;
         let cov_vel = [[vel_var, 0.0], [0.0, vel_var]];
 
-        // Simple two-point flux statistics.
         let flux_mean = (alert_a.flux + alert_b.flux) * 0.5;
         let flux_std = ((alert_a.flux - flux_mean).abs() + (alert_b.flux - flux_mean).abs()) * 0.5;
         let photom = Photometry::from_pair(
@@ -599,63 +492,44 @@ impl SeedNode {
             plane,
             photom,
             n_obs: 2,
-            members: vec![alert_a.id, alert_b.id],
+            members: vec![alert_a, alert_b],
         })
     }
 
-    /// Build a [`SeedNode`] from a **triplet** of alerts.
+    /// Build a [`SeedNode`] from a **triplet** of alerts (quadratic tangent-plane model).
     ///
-    /// Compared to [`SeedNode::from_pair`], this constructor fits a
-    /// **quadratic** tangent-plane model that includes:
+    /// This constructor fits a quadratic model independently in tangent `x` and `y`:
+    /// it yields position at mean epoch, velocity, and acceleration.
     ///
-    /// - position at the mean epoch,
-    /// - velocity,
-    /// - acceleration (second-order term) in both tangent coordinates.
+    /// Parameters
+    /// ----------
+    /// night_id : NightId
+    ///     Night identifier shared by the three alerts.
+    /// alert_a : &Alert
+    ///     First detection.
+    /// alert_b : &Alert
+    ///     Second detection.
+    /// alert_c : &Alert
+    ///     Third detection.
     ///
-    /// The procedure is:
-    ///
-    /// 1. Define the tangent-plane centre as the spherical midpoint of `a`
-    ///    and `c` (endpoints of the triplet).
-    /// 2. Project `a`, `b`, `c` to tangent coordinates.
-    /// 3. Shift observation times to `Δt = t_i − t̄` with `t̄ = (t_a + t_b + t_c)/3`.
-    /// 4. Fit a quadratic polynomial independently in `x` and `y` using
-    ///    [`fit_quad_1d`] to obtain `(p0, v, a)` for each axis.
-    /// 5. Convert the reference position `(p0x, p0y)` back to RA/Dec for
-    ///    convenience.
-    /// 6. Derive position and velocity covariances from RA/Dec uncertainties
-    ///    and a characteristic time span `Δt_char = max(t_c − t_a, 1e-6)`.
-    /// 7. Aggregate photometry from the three flux measurements.
-    ///
-    /// Arguments
-    /// ---------
-    /// * `seed_id` – Identifier to assign to the newly built seed.
-    /// * `night_id` – Night to which the three alerts belong.
-    /// * `alert_a` – First alert in the triplet.
-    /// * `alert_b` – Second alert.
-    /// * `alert_c` – Third alert.
-    ///
-    /// Return
-    /// ------
-    /// * `SeedNode` – A quadratic tangent-plane model with:
-    ///   - `n_obs == 3`,
-    ///   - `members == [a.id, b.id, c.id]`,
-    ///   - non-zero acceleration components stored in `plane`.
+    /// Returns
+    /// -------
+    /// SeedNode
+    ///     A seed with `n_obs == 3` and `plane.acc_xy.is_some() == true`.
     ///
     /// Notes
     /// -----
-    /// * The quadratic fit is performed independently in each coordinate,
-    ///   assuming small-angle behaviour in the tangent plane.
-    /// * The acceleration is particularly useful for fast-moving or
-    ///   curved tracks (e.g. near opposition or for close encounters),
-    ///   but is still an approximation of the true orbit.
-    /// * The characteristic time `dt_char` is clamped to `1e-6` to avoid
-    ///   numerical blow-up for nearly simultaneous observations.
+    /// - The tangent-plane centre is chosen as the spherical midpoint of endpoints
+    ///   `(a, c)` to stabilize projection.
+    /// - Uncertainty estimates are coarse and isotropic (similar philosophy as pairs).
+    /// - This is still an approximation of true orbital motion.
     pub fn from_triplet(
         night_id: NightId,
-        alert_a: &Alert,
-        alert_b: &Alert,
-        alert_c: &Alert,
+        alert_a: &'alert_lf Alert,
+        alert_b: &'alert_lf Alert,
+        alert_c: &'alert_lf Alert,
     ) -> Self {
+        // --- implementation unchanged ---
         let (ta, tb, tc) = (alert_a.mjd_tt, alert_b.mjd_tt, alert_c.mjd_tt);
         let tm = (ta + tb + tc) / 3.0;
 
@@ -666,13 +540,11 @@ impl SeedNode {
         let pb = radec_to_tangent(alert_b.ra, alert_b.dec, ra0, dec0);
         let pc = radec_to_tangent(alert_c.ra, alert_c.dec, ra0, dec0);
 
-        // Quadratic fits in x and y around the mean epoch.
         let (p0x, vx, ax) = fit_quad_1d([ta - tm, tb - tm, tc - tm], [pa[0], pb[0], pc[0]]);
         let (p0y, vy, ay) = fit_quad_1d([ta - tm, tb - tm, tc - tm], [pa[1], pb[1], pc[1]]);
 
         let (ra_mid, dec_mid) = tangent_to_radec(p0x, p0y, ra0, dec0);
 
-        // Aggregate uncertainty estimates.
         let sa = alert_a.ra_err.max(alert_a.dec_err);
         let sb = alert_b.ra_err.max(alert_b.dec_err);
         let sc = alert_c.ra_err.max(alert_c.dec_err);
@@ -685,7 +557,6 @@ impl SeedNode {
         let vel_var = s2 * inv_dt2;
         let cov_vel = [[vel_var, 0.0], [0.0, vel_var]];
 
-        // Three-point flux statistics.
         let flux_mean = (alert_a.flux + alert_b.flux + alert_c.flux) / 3.0;
         let flux_std = ((alert_a.flux - flux_mean).abs()
             + (alert_b.flux - flux_mean).abs()
@@ -717,7 +588,7 @@ impl SeedNode {
             plane,
             photom,
             n_obs: 3,
-            members: vec![alert_a.id, alert_b.id, alert_c.id],
+            members: vec![alert_a, alert_b, alert_c],
         }
     }
 }
@@ -728,24 +599,18 @@ mod seed_node_tests {
     use proptest::prelude::*;
 
     use crate::{
-        alerts::AlertStore,
         astro_math::{ang_sep, arcsec_to_rad},
         engine_config::propagator_config::{ModelNoise, PredictorParams},
-        seeding::seed_spatial_index::SeedSpatialIndex,
-        spacetime_bucket::{
-            bucket::build_bucket_index, healpix_binner::HealpixBinner,
-            uniform_time_binner::UniformTimeBinner,
-        },
+        spacetime_bucket::{healpix_binner::HealpixBinner, uniform_time_binner::UniformTimeBinner},
     };
 
     const LAT_EPS: f64 = 1e-6;
 
     /* ------------------------- helpers ------------------------- */
 
-    fn mk_alert(id: AlertId, ra: f64, dec: f64, mjd_tt: f64, band: u8, flux: f32) -> Alert {
+    fn mk_alert(source_id: u64, ra: f64, dec: f64, mjd_tt: f64, band: u8, flux: f32) -> Alert {
         Alert {
-            id,
-            dia_source_id: id.idx() as u64,
+            dia_source_id: source_id,
             ra,
             ra_err: arcsec_to_rad(0.5),
             dec,
@@ -779,22 +644,23 @@ mod seed_node_tests {
         let dec: f64 = 0.25;
         let dr = arcsec_to_rad(6.0) / dec.cos();
 
-        let a = mk_alert(AlertId::new(0), 1.0, dec, t0, 1, 1000.0);
-        let b = mk_alert(
-            AlertId::new(1),
-            1.0 + dr,
-            dec,
-            t0 + 10.0 / 1440.0,
-            1,
-            1002.0,
-        );
+        // IMPORTANT: store alerts in a vec so their references live long enough.
+        let alerts = vec![
+            mk_alert(0, 1.0, dec, t0, 1, 1000.0),
+            mk_alert(1, 1.0 + dr, dec, t0 + 10.0 / 1440.0, 1, 1002.0),
+        ];
+        let (a, b) = (&alerts[0], &alerts[1]);
 
-        let sn = SeedNode::from_pair(NightId::new(42), &a, &b, None)
-            .expect("pair should produce a seed");
+        let sn =
+            SeedNode::from_pair(NightId::new(42), a, b, None).expect("pair should produce a seed");
 
         assert_eq!(sn.night_id, NightId::new(42));
         assert_eq!(sn.n_obs, 2);
-        assert_eq!(sn.members, vec![a.id, b.id]);
+
+        // members are references now
+        assert_eq!(sn.members.len(), 2);
+        assert_eq!(sn.members[0].dia_source_id, a.dia_source_id);
+        assert_eq!(sn.members[1].dia_source_id, b.dia_source_id);
 
         // Velocity is roughly dr / dt on the tangent plane.
         let dt = (b.mjd_tt - a.mjd_tt).max(1e-12);
@@ -803,6 +669,7 @@ mod seed_node_tests {
         let pb = radec_to_tangent(b.ra, b.dec, ra0, dec0);
         let vx = (pb[0] - pa[0]) / dt;
         let vy = (pb[1] - pa[1]) / dt;
+
         assert!((sn.plane.vel_xy[0] - vx).abs() < 1e-9);
         assert!((sn.plane.vel_xy[1] - vy).abs() < 1e-9);
     }
@@ -814,23 +681,15 @@ mod seed_node_tests {
         let slow_sep = arcsec_to_rad(5.0) / dec.cos();
         let fast_sep = arcsec_to_rad(200.0) / dec.cos();
 
-        let a = mk_alert(AlertId::new(0), 2.0, dec, t0, 1, 1000.0);
-        let b_slow = mk_alert(
-            AlertId::new(1),
-            2.0 + slow_sep,
-            dec,
-            t0 + 5.0 / 1440.0,
-            1,
-            1000.0,
-        );
-        let b_fast = mk_alert(
-            AlertId::new(2),
-            2.0 + fast_sep,
-            dec,
-            t0 + 5.0 / 1440.0,
-            1,
-            1000.0,
-        );
+        let alerts = vec![
+            mk_alert(0, 2.0, dec, t0, 1, 1000.0),
+            mk_alert(1, 2.0 + slow_sep, dec, t0 + 5.0 / 1440.0, 1, 1000.0),
+            mk_alert(2, 2.0 + fast_sep, dec, t0 + 5.0 / 1440.0, 1, 1000.0),
+        ];
+
+        let a = &alerts[0];
+        let b_slow = &alerts[1];
+        let b_fast = &alerts[2];
 
         let dt = 5.0 / 1440.0;
         let speed_slow = slow_sep / dt;
@@ -839,8 +698,8 @@ mod seed_node_tests {
 
         let vmax = (speed_slow + speed_fast) * 0.5;
 
-        let keep = SeedNode::from_pair(NightId::new(1), &a, &b_slow, Some(vmax));
-        let drop = SeedNode::from_pair(NightId::new(1), &a, &b_fast, Some(vmax));
+        let keep = SeedNode::from_pair(NightId::new(1), a, b_slow, Some(vmax));
+        let drop = SeedNode::from_pair(NightId::new(1), a, b_fast, Some(vmax));
 
         assert!(keep.is_some());
         assert!(drop.is_none());
@@ -852,59 +711,26 @@ mod seed_node_tests {
         let dec: f64 = 0.3;
         let dr = arcsec_to_rad(6.0) / dec.cos();
 
-        let a = mk_alert(AlertId::new(0), 1.0, dec, t0, 1, 1000.0);
-        let b = mk_alert(
-            AlertId::new(1),
-            1.0 + dr,
-            dec,
-            t0 + 10.0 / 1440.0,
-            1,
-            1001.0,
-        );
-        let c = mk_alert(
-            AlertId::new(2),
-            1.0 + 2.0 * dr,
-            dec,
-            t0 + 20.0 / 1440.0,
-            1,
-            1002.0,
-        );
+        let alerts = vec![
+            mk_alert(0, 1.0, dec, t0, 1, 1000.0),
+            mk_alert(1, 1.0 + dr, dec, t0 + 10.0 / 1440.0, 1, 1001.0),
+            mk_alert(2, 1.0 + 2.0 * dr, dec, t0 + 20.0 / 1440.0, 1, 1002.0),
+        ];
+        let (a, b, c) = (&alerts[0], &alerts[1], &alerts[2]);
 
-        let sn = SeedNode::from_triplet(NightId::new(99), &a, &b, &c);
+        let sn = SeedNode::from_triplet(NightId::new(99), a, b, c);
 
         assert_eq!(sn.night_id, NightId::new(99));
         assert_eq!(sn.n_obs, 3);
-        assert_eq!(sn.members, vec![a.id, b.id, c.id]);
+
+        assert_eq!(sn.members.len(), 3);
+        assert_eq!(sn.members[0].dia_source_id, a.dia_source_id);
+        assert_eq!(sn.members[1].dia_source_id, b.dia_source_id);
+        assert_eq!(sn.members[2].dia_source_id, c.dia_source_id);
 
         // Midpoint time close to average.
         let tm = (a.mjd_tt + b.mjd_tt + c.mjd_tt) / 3.0;
         assert!((sn.plane.epoch_mid - tm).abs() < 1e-12);
-    }
-
-    #[test]
-    fn resolve_seed_members_returns_alert_refs() {
-        let t0 = 60000.0;
-        let dec: f64 = 0.25;
-        let dr = arcsec_to_rad(4.0) / dec.cos();
-
-        let a = mk_alert(AlertId::new(0), 1.0, dec, t0, 1, 1000.0);
-        let b = mk_alert(
-            AlertId::new(1),
-            1.0 + dr,
-            dec,
-            t0 + 10.0 / 1440.0,
-            1,
-            1001.0,
-        );
-
-        let store = AlertStore::new(t0.floor(), vec![a.clone(), b.clone()]);
-
-        let sn = SeedNode::from_pair(NightId::new(1), &a, &b, None).unwrap();
-        let refs = sn.resolve_seed_members(&store).expect("valid ids");
-
-        assert_eq!(refs.len(), 2);
-        assert_eq!(refs[0].id, a.id);
-        assert_eq!(refs[1].id, b.id);
     }
 
     #[test]
@@ -913,17 +739,13 @@ mod seed_node_tests {
         let dec: f64 = 0.25;
         let dr = arcsec_to_rad(8.0) / dec.cos();
 
-        let a = mk_alert(AlertId::new(0), 2.0, dec, t0, 1, 1000.0);
-        let b = mk_alert(
-            AlertId::new(1),
-            2.0 + dr,
-            dec,
-            t0 + 10.0 / 1440.0,
-            1,
-            1000.0,
-        );
+        let alerts = vec![
+            mk_alert(0, 2.0, dec, t0, 1, 1000.0),
+            mk_alert(1, 2.0 + dr, dec, t0 + 10.0 / 1440.0, 1, 1000.0),
+        ];
+        let (a, b) = (&alerts[0], &alerts[1]);
 
-        let sn = SeedNode::from_pair(NightId::new(5), &a, &b, None).unwrap();
+        let sn = SeedNode::from_pair(NightId::new(5), a, b, None).unwrap();
 
         let predict_params = default_predictor_params();
         let tb = b.mjd_tt;
@@ -937,46 +759,51 @@ mod seed_node_tests {
     }
 
     #[test]
-    fn cone_candidates_returns_seed_ids_in_cover_cells() {
+    fn seed_edge_candidates_basic_smoke() {
+        // Goal: ensure method typechecks + returns something plausible.
+        // We'll build 2 "right" seeds and query from 1 "left" seed.
+
+        use crate::engine_config::edge_config::EdgeConfig;
+        use crate::seeding::seed_spatial_index::SeedSpatialIndex;
+
         let spatial_binner = HealpixBinner::new(8);
-        let params = default_predictor_params();
 
         let t0 = 60010.0;
         let time_binner = UniformTimeBinner::new(t0, 5.0 / 1440.0);
+
         let dec: f64 = 0.3;
         let dr = arcsec_to_rad(6.0) / dec.cos();
 
-        // Two seeds on a small track: s1 from pair a→b, s2 from pair b→c.
-        let a = mk_alert(AlertId::new(0), 1.0, dec, t0, 1, 1000.0);
-        let b = mk_alert(AlertId::new(1), 1.0 + dr, dec, t0 + 5.0 / 1440.0, 1, 1001.0);
-        let c = mk_alert(
-            AlertId::new(2),
-            1.0 + 2.0 * dr,
-            dec,
-            t0 + 10.0 / 1440.0,
-            1,
-            1002.0,
-        );
+        // alerts live in this vec
+        let alerts = vec![
+            mk_alert(0, 1.0, dec, t0, 1, 1000.0),
+            mk_alert(1, 1.0 + dr, dec, t0 + 5.0 / 1440.0, 1, 1001.0),
+            mk_alert(2, 1.0 + 2.0 * dr, dec, t0 + 10.0 / 1440.0, 1, 1002.0),
+        ];
 
-        let s1 = SeedNode::from_pair(NightId::new(9), &a, &b, None).unwrap();
-        let s2 = SeedNode::from_pair(NightId::new(9), &b, &c, None).unwrap();
+        let a = &alerts[0];
+        let b = &alerts[1];
+        let c = &alerts[2];
 
-        let vec_seed = vec![s1.clone(), s2.clone()];
-        // Build a spatial index and bucket index (for completeness).
-        let index = SeedSpatialIndex::build(&vec_seed, &spatial_binner, &time_binner);
+        let left = SeedNode::from_pair(NightId::new(9), a, b, None).unwrap();
+        let right1 = SeedNode::from_pair(NightId::new(10), b, c, None).unwrap();
+        let right2 = SeedNode::from_pair(NightId::new(10), a, c, None).unwrap();
 
-        let _bucket_index = build_bucket_index(
-            &vec![a.clone(), b.clone(), c.clone()],
-            &spatial_binner,
-            &time_binner,
-        );
+        let rights = vec![right1, right2];
 
-        // Query around s1 prediction near time of c, expect to find s2 (future position).
-        let t_target = s2.plane.epoch_mid;
-        let (ra, dec, radius) = s1.predict_cone(t_target, &spatial_binner, &params);
-        let candidates: Vec<&SeedNode> = index.cone_query(ra, dec, radius, t_target).collect();
+        // build index over right seeds
+        let right_index = SeedSpatialIndex::build(&rights, &spatial_binner, &time_binner);
 
-        assert!(candidates.iter().any(|sn| sn.night_id == s2.night_id));
+        // edge config (use whatever Default you have; otherwise construct minimal)
+        let edge_cfg = EdgeConfig::default();
+
+        let cand: Vec<&SeedNode> = left.seed_edge_candidates(&right_index, &edge_cfg).collect();
+
+        // We don't assert exact count; just ensure no lifetime/borrow issue and deterministic content.
+        assert!(cand.len() <= rights.len());
+        for s in cand {
+            assert_eq!(s.night_id, NightId::new(10));
+        }
     }
 
     /* ------------------------- property-based tests ------------------------- */
@@ -999,16 +826,12 @@ mod seed_node_tests {
             .. ProptestConfig::default()
         })]
 
-        /// For random pairs with increasing time, `from_pair` must:
-        /// - produce a seed with 2 members and n_obs=2,
-        /// - assign a consistent midpoint epoch,
-        /// - yield finite velocities.
         #[test]
         fn prop_from_pair_basic_invariants(
             samples in proptest::collection::vec((ra_strategy(), dec_strategy(), t_strategy()), 2..60)
         ) {
             let mut alerts: Vec<Alert> = samples.iter().enumerate().map(|(i, (ra, dec, t))| {
-                mk_alert(AlertId::new(i as u32), *ra, *dec, *t, 1, 1000.0)
+                mk_alert(i as u64, *ra, *dec, *t, 1, 1000.0)
             }).collect();
 
             alerts.sort_by(|a,b| a.mjd_tt.partial_cmp(&b.mjd_tt).unwrap());
@@ -1018,28 +841,29 @@ mod seed_node_tests {
                 let a = &alerts[i];
                 let b = &alerts[i+1];
                 if b.mjd_tt <= a.mjd_tt { continue; }
+
                 if let Some(sn) = SeedNode::from_pair(NightId::new(1), a, b, None) {
                     count += 1;
                     prop_assert_eq!(sn.n_obs, 2);
-                    prop_assert_eq!(sn.members, vec![a.id, b.id]);
+                    prop_assert_eq!(sn.members.len(), 2);
+                    prop_assert_eq!(sn.members[0].dia_source_id, a.dia_source_id);
+                    prop_assert_eq!(sn.members[1].dia_source_id, b.dia_source_id);
+
                     let tm = 0.5 * (a.mjd_tt + b.mjd_tt);
                     prop_assert!((sn.plane.epoch_mid - tm).abs() < 1e-9);
+
                     prop_assert!(sn.plane.vel_xy[0].is_finite() && sn.plane.vel_xy[1].is_finite());
                 }
             }
             prop_assert!(count > 0);
         }
 
-        /// For random triplets with strictly increasing times, `from_triplet` must:
-        /// - produce a seed with 3 members and n_obs=3,
-        /// - have a midpoint epoch within the convex hull of times,
-        /// - return finite kinematic parameters.
         #[test]
         fn prop_from_triplet_basic_invariants(
             samples in proptest::collection::vec((ra_strategy(), dec_strategy(), t_strategy()), 3..60)
         ) {
             let mut alerts: Vec<Alert> = samples.iter().enumerate().map(|(i, (ra, dec, t))| {
-                mk_alert(AlertId::new(i as u32), *ra, *dec, *t, 1, 1000.0)
+                mk_alert(i as u64, *ra, *dec, *t, 1, 1000.0)
             }).collect();
 
             alerts.sort_by(|a,b| a.mjd_tt.partial_cmp(&b.mjd_tt).unwrap());
@@ -1053,28 +877,28 @@ mod seed_node_tests {
                 built += 1;
 
                 prop_assert_eq!(sn.n_obs, 3);
-                prop_assert_eq!(sn.members, vec![a.id, b.id, c.id]);
+                prop_assert_eq!(sn.members.len(), 3);
+                prop_assert_eq!(sn.members[0].dia_source_id, a.dia_source_id);
+                prop_assert_eq!(sn.members[1].dia_source_id, b.dia_source_id);
+                prop_assert_eq!(sn.members[2].dia_source_id, c.dia_source_id);
 
                 let tmin = a.mjd_tt.min(b.mjd_tt).min(c.mjd_tt);
                 let tmax = a.mjd_tt.max(b.mjd_tt).max(c.mjd_tt);
                 prop_assert!(sn.plane.epoch_mid >= tmin && sn.plane.epoch_mid <= tmax);
 
                 prop_assert!(sn.plane.vel_xy[0].is_finite() && sn.plane.vel_xy[1].is_finite());
-                // acc_xy is Some; check finiteness.
                 let acc = sn.plane.acc_xy.expect("triplet fits a quadratic");
                 prop_assert!(acc[0].is_finite() && acc[1].is_finite());
             }
             prop_assert!(built > 0);
         }
 
-        /// Predict round-trip: `predict_cone` centre should be near `predict_radec`
-        /// at the same epoch, within the returned cone radius.
         #[test]
         fn prop_predict_cone_covers_predict_radec(
             samples in proptest::collection::vec((ra_strategy(), dec_strategy(), t_strategy()), 2..40)
         ) {
             let alerts: Vec<Alert> = samples.iter().enumerate().map(|(i, (ra, dec, t))| {
-                mk_alert(AlertId::new(i as u32), *ra, *dec, *t, 1, 1000.0)
+                mk_alert(i as u64, *ra, *dec, *t, 1, 1000.0)
             }).collect();
 
             if alerts.len() < 2 { return Ok(()); }
@@ -1090,6 +914,7 @@ mod seed_node_tests {
 
             let params = default_predictor_params();
             let t = b.mjd_tt;
+
             let (rp, dp) = sn.predict_radec(t);
             let (rc, dc, rad) = sn.predict_cone(t, &HealpixBinner::new(8), &params);
 

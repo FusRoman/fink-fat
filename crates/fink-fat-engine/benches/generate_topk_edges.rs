@@ -31,7 +31,6 @@ use smallvec::SmallVec;
 /// - RA/Dec errors are fixed to a small constant to keep the seed model stable.
 /// - Flux errors are a simple proportional rule-of-thumb (never below 1).
 fn make_alert(
-    alert_index: u32,
     dia_source_id: u64,
     ra_rad: f64,
     dec_rad: f64,
@@ -39,12 +38,7 @@ fn make_alert(
     band: u8,
     flux: f32,
 ) -> Alert {
-    // `AlertId` is a dense 0-based index into an `AlertStore`.
-    // For synthetic benchmarks we only need it to be unique and deterministic.
-    let alert_id = fink_fat_engine::AlertId::new(alert_index);
-
     Alert {
-        id: alert_id,
         dia_source_id,
         ra: ra_rad,
         ra_err: 1.0e-6, // ~0.2 arcsec in radians
@@ -104,68 +98,57 @@ fn make_seeds_pair_model(
     ra_drift_rad_per_seed: f64,
     dec_drift_rad_per_seed: f64,
     max_speed_rad_per_day: Option<f64>,
-) -> Vec<SeedNode> {
-    let mut seeds: Vec<SeedNode> = Vec::with_capacity(num_seeds);
+) -> Vec<SeedNode<'static>> {
+    let mut seeds: Vec<SeedNode<'static>> = Vec::with_capacity(num_seeds);
 
-    // We generate a smooth pseudo-trajectory with small jitter so that:
-    // - seeds do not collapse into a single HEALPix cell,
-    // - cone queries and candidate scoring still return a non-trivial workload.
+    // NOTE (bench-only):
+    // We leak the alerts to obtain &'static Alert references.
+    // This avoids lifetime issues because SeedNode::from_pair stores references.
+    // Criterion benchmarks build inputs once, so this is a pragmatic solution.
     for seed_index in 0..num_seeds {
-        // Spread seeds over time (keeps `right` easy to sort by epoch_mid).
         let time_alert_a = start_mjd_tt + (seed_index as f64) * seed_time_step_days;
         let time_alert_b = time_alert_a + (seed_time_step_days * 0.5).max(1e-6);
 
-        // Small angular jitter (radians). Kept tiny to preserve a coherent track.
         let ra_jitter = (rng.random::<f64>() - 0.5) * 1e-4;
         let dec_jitter = (rng.random::<f64>() - 0.5) * 1e-4;
 
-        // Drift RA/Dec smoothly with the seed index.
         let ra_a = start_ra_rad + (seed_index as f64) * ra_drift_rad_per_seed + ra_jitter;
         let dec_a = start_dec_rad + (seed_index as f64) * dec_drift_rad_per_seed + dec_jitter;
 
-        // Second detection is offset slightly along the same drift direction.
         let ra_b = ra_a + ra_drift_rad_per_seed * 0.5;
         let dec_b = dec_a + dec_drift_rad_per_seed * 0.5;
 
-        // Alternate bands to ensure photometry code paths are exercised.
         let band_a = (seed_index % 2) as u8;
         let band_b = ((seed_index + 1) % 2) as u8;
 
-        // Flux with mild noise.
         let flux_a = 1000.0 + (rng.random::<f32>() - 0.5) * 50.0;
         let flux_b = flux_a + (rng.random::<f32>() - 0.5) * 20.0;
 
-        // Ensure unique and stable synthetic identifiers.
         let dia_source_id = 1_000_000 + seed_index as u64;
 
-        // Two alerts forming the seed pair.
-        let alert_a = make_alert(
-            (seed_index as u32) * 2,
+        let alert_a: &'static Alert = Box::leak(Box::new(make_alert(
             dia_source_id,
             ra_a,
             dec_a,
             time_alert_a,
             band_a,
             flux_a,
-        );
-        let alert_b = make_alert(
-            (seed_index as u32) * 2 + 1,
+        )));
+        let alert_b: &'static Alert = Box::leak(Box::new(make_alert(
             dia_source_id,
             ra_b,
             dec_b,
             time_alert_b,
             band_b,
             flux_b,
-        );
+        )));
 
-        // Build the seed node from the alert pair.
-        let seed_node = SeedNode::from_pair(night_id, &alert_a, &alert_b, max_speed_rad_per_day)
+        let seed_node = SeedNode::from_pair(night_id, alert_a, alert_b, max_speed_rad_per_day)
             .expect("SeedNode::from_pair failed (speed filter too strict?)");
 
         seeds.push(seed_node);
     }
 
-    // IMPORTANT: `score_edge_candidates` assumes `right` is sorted by epoch_mid.
     seeds.sort_by(|a, b| a.plane.epoch_mid.total_cmp(&b.plane.epoch_mid));
     seeds
 }
@@ -223,6 +206,7 @@ fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
     ];
 
     let mut rng = StdRng::seed_from_u64(42);
+    let mut rng2 = rng.clone();
 
     for (num_left_seeds, num_right_seeds, top_k_per_left) in cases {
         let left_night = NightId(100);
@@ -243,7 +227,7 @@ fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
         );
 
         let right_seeds = make_seeds_pair_model(
-            &mut rng,
+            &mut rng2,
             right_night,
             num_right_seeds,
             60001.0,
@@ -366,8 +350,10 @@ fn bench_generate_topk_edges_components(c: &mut Criterion) {
     let left_night = NightId(200);
     let right_night = NightId(201);
 
+    let mut rng1 = rng.clone();
+    let mut rng2 = rng.clone();
     let left_seeds = make_seeds_pair_model(
-        &mut rng,
+        &mut rng1,
         left_night,
         num_left_seeds,
         61000.0,
@@ -500,7 +486,6 @@ fn bench_generate_topk_edges_components(c: &mut Criterion) {
             black_box(total)
         })
     });
-
     // -----------------------------------------------------------------------------
     // 2) Top-K selection cost only (pure selection on synthetic scalar costs).
     //
@@ -516,7 +501,7 @@ fn bench_generate_topk_edges_components(c: &mut Criterion) {
             // NOTE: If you want to isolate selection further, pre-generate a vector
             // and clone it here. This version includes RNG cost but is still useful
             // as an order-of-magnitude indicator.
-            let mut synthetic_costs: Vec<f64> = (0..2048).map(|_| rng.random::<f64>()).collect();
+            let mut synthetic_costs: Vec<f64> = (0..2048).map(|_| rng2.random::<f64>()).collect();
 
             let k = top_k_per_left.min(synthetic_costs.len());
             if k > 0 {

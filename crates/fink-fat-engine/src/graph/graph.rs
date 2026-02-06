@@ -1,34 +1,30 @@
 use crate::{
     engine_config::edge_config::EdgeConfig,
-    graph::{
-        edge::{
-            Edge,
-            edge_prediction::{EdgeModelError, EdgeRankingModelPool},
-        }
+    graph::edge::{
+        Edge,
+        edge_prediction::{EdgeModelError, EdgeRankingModelPool},
     },
     seeding::seed_node::SeedNode,
     spacetime_bucket::{spatial_binner::SpatialBinner, time_binner::TimeBinner},
 };
 
 #[derive(Debug)]
-pub struct InterNightGraph<'a> {
-    pub edges: Vec<Edge<'a>>,
+pub struct InterNightGraph<'seed_lf, 'alert_lf> {
+    pub edges: Vec<Edge<'seed_lf, 'alert_lf>>,
 }
 
-impl<'a, 'b> InterNightGraph<'a> {
+impl<'seed_lf, 'alert_lf> InterNightGraph<'seed_lf, 'alert_lf> {
     pub fn new() -> Self {
-        Self {
-            edges: Vec::new(),
-        }
+        Self { edges: Vec::new() }
     }
 
     pub fn add_inter_night_edges<B: SpatialBinner, T: TimeBinner>(
         &mut self,
-        left_nodes: &'a [SeedNode],
-        right_nodes: &'a mut [SeedNode],
-        edge_config: &'b EdgeConfig,
-        spatial_binner: &'a B,
-        time_binner: &'a T,
+        left_nodes: &'seed_lf [SeedNode<'alert_lf>],
+        right_nodes: &'seed_lf mut [SeedNode<'alert_lf>],
+        edge_config: &EdgeConfig,
+        spatial_binner: &B,
+        time_binner: &T,
         model_pool: Option<&EdgeRankingModelPool>,
     ) -> Result<(), EdgeModelError> {
         assert!(!left_nodes.is_empty(), "left_nodes must not be empty");

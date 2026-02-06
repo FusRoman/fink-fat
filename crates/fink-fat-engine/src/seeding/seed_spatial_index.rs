@@ -1,36 +1,54 @@
 // src/seeding/seed_spatial_index.rs
 
-//! Per-night spatial index for [`SeedNode`] built on top of generic buckets.
+//! Spatio-temporal bucket index for per-night (or per-slice) seed queries.
 //!
-//! This module provides a thin wrapper, [`SeedSpatialIndex`], around a
-//! [`BucketIndex`] that is specialised for **single-night** operations:
+//! This module defines [`SeedSpatialIndex`], a thin, domain-specific wrapper
+//! around a generic [`BucketIndex`] that stores **borrowed references** to
+//! [`SeedNode`] objects.
 //!
-//! - all seeds are indexed using their tangent-plane mid-position
-//!   `(plane.ra_mid, plane.dec_mid)`,
-//! - the temporal dimension is collapsed to a single [`TimeBin`] value
-//!   (`TimeBin(0)`) because all seeds are assumed to belong to the same night,
-//! - queries are expressed as *approximate cone searches* on the sky using
-//!   the [`SpatialBinner`] API.
+//! Purpose
+//! -------
+//! Inter-night linking requires repeatedly querying “right-hand” seeds near a
+//! predicted sky position and epoch. A naive scan over all right seeds is
+//! prohibitively expensive. [`SeedSpatialIndex`] accelerates this by:
+//! - discretizing the sky into spatial cells (`SpatialBinner`),
+//! - discretizing time into bins (`TimeBinner`),
+//! - storing seeds into buckets keyed by `(SpatialKey, TimeBin)`,
+//! - supporting fast *approximate* cone queries that return candidate seeds.
 //!
-//! Unlike earlier versions that stored only identifiers, this index stores
-//! **borrowed references** to seeds (`&SeedNode`). This allows callers to
-//! retrieve candidate seeds directly without an additional `SeedId -> index`
-//! lookup, at the cost of tying the index lifetime to the underlying seed slice.
+//! Key idea
+//! --------
+//! Rather than returning integer IDs, this index stores `&SeedNode` references.
+//! This removes a `SeedId -> SeedNode` indirection in hot loops and is
+//! cache-friendly, but ties the index lifetime to the underlying seed slice.
 //!
 //! Typical usage
 //! -------------
 //! ```ignore
-//! let index = SeedSpatialIndex::build(&seeds, &binner);
+//! // Build once per right-hand slice (night / night-pair / time window).
+//! let index = SeedSpatialIndex::build(&right_seeds, &spatial_binner, &time_binner);
 //!
-//! // Collect borrowed candidate seeds (no extra indirection).
+//! // Query many times: returns borrowed seeds.
 //! let candidates: Vec<&SeedNode> = index
-//!     .cone_query(&binner, ra, dec, search_radius)
+//!     .cone_query(ra, dec, radius, t_target)
 //!     .collect();
 //! ```
 //!
-//! The returned candidates are **cell-level approximate** and are typically
-//! passed to more accurate geometric filters (exact angular separation) or to
-//! higher-level linkage/scoring logic.
+//! Approximate nature of queries
+//! ----------------------------
+//! Cone queries operate at the **cell cover** level: they return all seeds in
+//! spatial cells reported by [`SpatialBinner::neighbors`] for the requested
+//! radius (and for the relevant time bin). As a result:
+//! - some returned seeds can lie slightly outside the strict geometric cone,
+//! - some strict cone members could be missed if the cover is approximate.
+//!
+//! Downstream scoring code should apply exact geometry / kinematic checks.
+//!
+//! See also
+//! --------
+//! - [`SeedNode::predict_cone`] – builds conservative search cones.
+//! - [`SeedNode::seed_edge_candidates`] – iterates per time-bin queries.
+//! - [`BucketIndex`] – generic bucket storage underlying this wrapper.
 
 use ahash::{AHashMap, AHashSet};
 
@@ -44,64 +62,76 @@ use crate::{
     },
 };
 
-/// Per-night spatial index for seeds.
+/// Spatio-temporal bucket index storing references to [`SeedNode`] values.
 ///
-/// This is a thin, domain-specific wrapper around [`BucketIndex<&SeedNode>`]
-/// that:
+/// Internally, this wraps a [`BucketIndex<&SeedNode>`] keyed by:
+/// - `SpatialKey` from [`SpatialBinner::key_for`], using `(seed.plane.ra_mid, seed.plane.dec_mid)`,
+/// - `TimeBin` from [`TimeBinner::bin_for`], using `seed.plane.epoch_mid`.
 ///
-/// - stores **borrowed references** to [`SeedNode`] (no cloning, no payload copy),
-/// - groups seeds by their spatial cell,
-/// - uses a single `TimeBin(0)` for the entire night.
+/// The index is typically built for all seeds of a “right-hand” night, but can
+/// also be used for any pre-filtered slice of seeds as long as the caller
+/// provides a compatible `TimeBinner`.
 ///
-/// # Lifetimes
+/// Lifetimes
+/// ---------
+/// - `'seed_lf`: lifetime of the seed slice passed to [`SeedSpatialIndex::build`].
+/// - `'alert_lf`: lifetime of alerts borrowed by each seed.
+/// - `'binner_lf`: lifetime of the binner references stored in the index.
 ///
-/// The index borrows the seed slice passed to [`SeedSpatialIndex::build`].
-/// Therefore, the underlying `seeds: &[SeedNode]` must outlive the index.
+/// Because the index stores `&SeedNode`, the underlying slice must outlive the
+/// index.
 #[derive(Clone)]
-pub struct SeedSpatialIndex<'a, 'b> {
-    /// Underlying bucket index storing the mapping
-    /// `(space_key, TimeBin(0)) → Vec<&SeedNode>`.
-    inner: BucketIndex<&'a SeedNode>,
-    pub spatial_binner: &'b dyn SpatialBinner,
-    pub time_binner: &'b dyn TimeBinner,
+pub struct SeedSpatialIndex<'seed_lf, 'binner_lf, 'alert_lf> {
+    /// Underlying bucket index mapping `(space_key, time_bin) -> members`.
+    inner: BucketIndex<&'seed_lf SeedNode<'alert_lf>>,
+
+    /// Spatial binner used for key computation and neighbor cover queries.
+    pub spatial_binner: &'binner_lf dyn SpatialBinner,
+
+    /// Time binner used to map epochs to discrete bins.
+    pub time_binner: &'binner_lf dyn TimeBinner,
+
+    /// Set of time bins that are present in `inner`.
+    ///
+    /// This is useful for iterating only existing bins (e.g. in
+    /// `SeedNode::seed_edge_candidates`) rather than scanning an arbitrary time range.
     pub time_bins: AHashSet<TimeBin>,
 }
 
-impl<'a, 'b> SeedSpatialIndex<'a, 'b> {
-    /// Build a per-night spatial index from a slice of [`SeedNode`].
+impl<'seed_lf, 'binner_lf, 'alert_lf> SeedSpatialIndex<'seed_lf, 'binner_lf, 'alert_lf> {
+    /// Build a spatio-temporal seed index from a slice of [`SeedNode`].
     ///
-    /// Each seed is:
+    /// Each seed is inserted into exactly one bucket:
+    /// - `space_key = spatial_binner.key_for(seed.plane.ra_mid, seed.plane.dec_mid)`
+    /// - `time_bin  = time_binner.bin_for(seed.plane.epoch_mid)`
     ///
-    /// 1. Mapped to a spatial cell via its tangent-plane mid-position
-    ///    `(plane.ra_mid, plane.dec_mid)`.
-    /// 2. Inserted into the bucket associated with that cell and the unique
-    ///    nightly time bin `TimeBin(0)`.
+    /// Parameters
+    /// ----------
+    /// seeds : &[SeedNode]
+    ///     Seeds to index (commonly all seeds from one night, already in memory).
+    /// spatial_binner : &impl SpatialBinner
+    ///     Spatial discretization backend (e.g. HEALPix).
+    /// time_binner : &impl TimeBinner
+    ///     Time discretization backend (e.g. uniform bins).
     ///
-    /// Arguments
-    /// ---------
-    /// * `seeds` – Collection of seeds to index (typically all seeds of one night).
-    /// * `binner` – Spatial binner that maps sky coordinates to discrete cells.
-    ///
-    /// Return
-    /// ------
-    /// * `SeedSpatialIndex` – A new index ready for cone searches.
+    /// Returns
+    /// -------
+    /// SeedSpatialIndex
+    ///     A new index storing borrowed references to the input seeds.
     ///
     /// Notes
     /// -----
-    /// - This method does **not** deduplicate seeds. If the same `SeedNode`
-    ///   reference (or effectively the same physical seed) appears multiple times
-    ///   in `seeds`, it will appear multiple times in the corresponding bucket.
-    /// - The temporal axis is deliberately collapsed. If you need time-resolved
-    ///   indexing, build multiple indices (e.g. per time bin) or use the generic
-    ///   [`BucketIndex`] directly with meaningful [`TimeBin`] values.
+    /// - No deduplication is performed. If the same `SeedNode` reference is present
+    ///   multiple times in `seeds`, it will be inserted multiple times.
+    /// - The choice of `time_binner` (origin + bin width) impacts candidate fan-out.
+    ///   Keep it consistent across indexing and queries.
     pub fn build<Bs: SpatialBinner, Ts: TimeBinner>(
-        seeds: &'a [SeedNode],
-        spatial_binner: &'b Bs,
-        time_binner: &'b Ts,
+        seeds: &'seed_lf [SeedNode<'alert_lf>],
+        spatial_binner: &'binner_lf Bs,
+        time_binner: &'binner_lf Ts,
     ) -> Self {
-        // Buckets are keyed by (spatial cell, time bin). Here the time bin is
-        // always `TimeBin(0)` because the index is scoped to a single night.
-        let mut buckets: AHashMap<BucketKey, Bucket<&'a SeedNode>> = AHashMap::new();
+        let mut buckets: AHashMap<BucketKey, Bucket<&'seed_lf SeedNode<'alert_lf>>> =
+            AHashMap::new();
         let mut time_bins: AHashSet<TimeBin> = AHashSet::new();
 
         for s in seeds {
@@ -114,8 +144,6 @@ impl<'a, 'b> SeedSpatialIndex<'a, 'b> {
                 time_bin: time_key,
             };
 
-            // Lazily create the bucket for this spatial cell, then push
-            // the borrowed seed reference into its member list.
             buckets
                 .entry(key)
                 .or_insert_with(|| Bucket {
@@ -133,55 +161,61 @@ impl<'a, 'b> SeedSpatialIndex<'a, 'b> {
         }
     }
 
-    /// Read-only access to the underlying bucket index.
+    /// Borrow the underlying [`BucketIndex`].
     ///
-    /// This can be useful when generic bucket operations are required or when
-    /// debugging the internal layout of the index.
-    pub fn inner(&self) -> &BucketIndex<&'a SeedNode> {
+    /// This is useful for debugging or when you need generic bucket-level
+    /// inspection not exposed by this wrapper.
+    #[inline]
+    pub fn inner(&self) -> &BucketIndex<&'seed_lf SeedNode<'alert_lf>> {
         &self.inner
     }
 
-    /// Perform an approximate cone search in the per-night seed index.
+    /// Perform an approximate cone query at a given epoch.
     ///
-    /// The query is evaluated by:
+    /// The query proceeds as:
+    /// 1. Convert `(ra, dec)` to a central spatial cell key.
+    /// 2. Ask the spatial binner for a set of neighboring spatial keys whose
+    ///    cells cover (approximately) the cone of radius `radius`.
+    /// 3. Convert `time` to `time_bin = time_binner.bin_for(time)`.
+    /// 4. For each covered spatial key, lookup the bucket `(space_key, time_bin)`
+    ///    and yield all member seeds found in that bucket.
     ///
-    /// 1. Projecting the cone centre `(ra, dec)` to a [`SpatialKey`].
-    /// 2. Asking the [`SpatialBinner`] for all neighbour cells that intersect
-    ///    the cone of angular radius `radius`.
-    /// 3. Collecting all [`SeedNode`] references found in the buckets
-    ///    `(space_key, TimeBin(0))` for those cells.
+    /// Parameters
+    /// ----------
+    /// ra : Radians
+    ///     Right ascension of the cone center (radians).
+    /// dec : Radians
+    ///     Declination of the cone center (radians).
+    /// radius : Radians
+    ///     Angular cone radius (radians).
+    /// time : MjdTt
+    ///     Target epoch (MJD TT). Determines which `TimeBin` is queried.
     ///
-    /// Arguments
-    /// ---------
-    /// * `binner` – The same spatial binner that was used to build the index.
-    /// * `ra` – Right ascension of the cone centre (radians).
-    /// * `dec` – Declination of the cone centre (radians).
-    /// * `radius` – Angular radius of the search cone (radians).
-    /// * `time` – Target epoch (MJD TT) for the search.
-    ///
-    /// Return
-    /// ------
-    /// * An iterator over borrowed [`SeedNode`] references in the spatial cells
-    ///   that cover the requested cone.
+    /// Returns
+    /// -------
+    /// impl Iterator<Item = &SeedNode>
+    ///     Borrowed candidate seeds from the covered spatial cells in the
+    ///     relevant time bin.
     ///
     /// Notes
     /// -----
-    /// - The search is **cell-level approximate**:
-    ///   - some returned seeds might lie just outside the exact cone;
-    ///   - seeds may be missed if the `SpatialBinner` only provides an
-    ///     approximate cover.
-    /// - Downstream code should apply a precise angular separation filter if
-    ///   strict cone membership is required.
-    pub fn cone_query<'s>(
-        &'s self,
+    /// - This is **cell-cover approximate**. It is intended as a fast prefilter.
+    /// - Downstream code should apply exact geometry / kinematic scoring.
+    /// - If `time` maps to a bin that contains no seeds (not in `time_bins`),
+    ///   the iterator will be empty.
+    pub fn cone_query(
+        &self,
         ra: Radians,
         dec: Radians,
         radius: Radians,
         time: MjdTt,
-    ) -> impl Iterator<Item = &'a SeedNode> + 's {
+    ) -> impl Iterator<Item = &'seed_lf SeedNode<'alert_lf>> + '_ {
         let center_key: SpatialKey = self.spatial_binner.key_for(ra, dec);
         let time_key = self.time_binner.bin_for(time);
 
+        // Cell cover for the requested radius.
+        // For HealpixBinner this is expected to be unique; other SpatialBinner
+        // implementations may or may not guarantee uniqueness.
         let cover_keys: Vec<SpatialKey> = self.spatial_binner.neighbors(center_key, radius);
 
         cover_keys
@@ -220,7 +254,7 @@ mod seed_spatial_index_tests {
     /* ------------------------- helpers ------------------------- */
 
     // Build a minimal SeedNode with given (ra_mid, dec_mid). Plane fields are simple constants.
-    fn mk_seed(ra_mid: f64, dec_mid: f64) -> SeedNode {
+    fn mk_seed<'alert_lf>(ra_mid: f64, dec_mid: f64) -> SeedNode<'alert_lf> {
         let center = TangentCenter::new(ra_mid, dec_mid);
         let plane = TangentPlaneModel::new(
             center,
@@ -243,14 +277,14 @@ mod seed_spatial_index_tests {
     }
 
     /// True if `items` contains the exact borrowed reference `needle`.
-    fn contains_ref<'a>(items: &[&'a SeedNode], needle: &'a SeedNode) -> bool {
+    fn contains_ref(items: &[&SeedNode], needle: &SeedNode) -> bool {
         items.iter().any(|x| ptr::eq(*x, needle))
     }
 
     /// True if `bucket.members` contains the exact borrowed reference `needle`.
-    fn bucket_contains_ref<'a>(
-        bucket: &crate::spacetime_bucket::bucket::Bucket<&'a SeedNode>,
-        needle: &'a SeedNode,
+    fn bucket_contains_ref(
+        bucket: &crate::spacetime_bucket::bucket::Bucket<&SeedNode>,
+        needle: &SeedNode,
     ) -> bool {
         bucket.members.iter().any(|x| ptr::eq(*x, needle))
     }

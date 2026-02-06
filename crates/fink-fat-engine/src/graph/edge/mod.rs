@@ -5,7 +5,7 @@
 // This module contains the main edge construction pipeline of the fink-fat
 // engine. It exposes:
 //
-// - The `Edge<'a>` type: a directed link `from -> to` storing references to
+// - The `Edge<'alert_lf>` type: a directed link `from -> to` storing references to
 //   `SeedNode`s plus a solver-friendly scalar cost.
 // - Structured, cadence-robust feature computation (`EdgeFeatures` and friends).
 // - Optional ML ranking via ONNX (see `edge_prediction` + `ranking_topk`).
@@ -35,7 +35,7 @@
 //
 // Lifetimes
 // ---------
-// `Edge<'a>` stores references to `SeedNode`s, so the input slices must outlive
+// `Edge<'alert_lf>` stores references to `SeedNode`s, so the input slices must outlive
 // the returned edges.
 //
 // -----------------------------------------------------------------------------
@@ -93,11 +93,11 @@ use crate::{
 /// - If you need to store ML probability as well, keep it separate from `cost`
 ///   (or add a dedicated field).
 #[derive(Clone, Debug)]
-pub struct Edge<'a> {
+pub struct Edge<'seed_lf, 'alert_lf> {
     /// Source seed (older epoch).
-    pub from: &'a SeedNode,
+    pub from: &'seed_lf SeedNode<'alert_lf>,
     /// Target seed (newer epoch).
-    pub to: &'a SeedNode,
+    pub to: &'seed_lf SeedNode<'alert_lf>,
     /// Solver-facing cost (dimensionless, strictly positive).
     pub cost: f64,
     /// Time gap in days (TT) between the two seeds (positive).
@@ -106,7 +106,7 @@ pub struct Edge<'a> {
     pub active: bool,
 }
 
-impl<'a> fmt::Display for Edge<'a> {
+impl<'seed_lf, 'alert_lf> fmt::Display for Edge<'seed_lf, 'alert_lf> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -116,7 +116,7 @@ impl<'a> fmt::Display for Edge<'a> {
     }
 }
 
-impl<'a, 'b, 'c> Edge<'a> {
+impl<'seed_lf, 'alert_lf> Edge<'seed_lf, 'alert_lf> {
     /// Create a new active edge with validated `cost` and `dt_days`.
     ///
     /// Arguments
@@ -138,7 +138,12 @@ impl<'a, 'b, 'c> Edge<'a> {
     /// -----
     /// These assertions are deliberate because invalid weights can silently
     /// break downstream solvers (e.g. negative cycles, NaN propagation).
-    pub fn new(from: &'a SeedNode, to: &'a SeedNode, cost: f64, dt_days: f64) -> Self {
+    pub fn new(
+        from: &'seed_lf SeedNode<'alert_lf>,
+        to: &'seed_lf SeedNode<'alert_lf>,
+        cost: f64,
+        dt_days: f64,
+    ) -> Self {
         assert!(
             cost.is_finite() && cost > 0.0,
             "Edge cost must be finite and > 0."
@@ -203,7 +208,7 @@ impl<'a, 'b, 'c> Edge<'a> {
     ///
     /// Return
     /// ------
-    /// * `Ok(Vec<Edge<'a>>)` – List of constructed edges containing references to
+    /// * `Ok(Vec<Edge<'alert_lf>>)` – List of constructed edges containing references to
     ///   `SeedNode`s from `left` and `right`.
     /// * `Err(EdgeModelError)` – If ML mode is enabled and:
     ///   - the model pool is missing,
@@ -216,11 +221,11 @@ impl<'a, 'b, 'c> Edge<'a> {
     ///   sort the result at the call site.
     /// - `SeedSpatialIndex::build` is called once and shared across chunks.
     pub fn build_edges<B: SpatialBinner, T: TimeBinner>(
-        left: &'a [SeedNode],
-        right: &'a [SeedNode],
-        edge_config: &'c EdgeConfig,
-        spatial_binner: &'b B,
-        time_binner: &'b T,
+        left: &'seed_lf [SeedNode<'alert_lf>],
+        right: &'seed_lf [SeedNode<'alert_lf>],
+        edge_config: &EdgeConfig,
+        spatial_binner: &B,
+        time_binner: &T,
         model_pool: Option<&EdgeRankingModelPool>,
     ) -> Result<Vec<Self>, EdgeModelError> {
         // Build an index over the right-hand seeds for fast candidate lookup.
@@ -264,7 +269,7 @@ impl<'a, 'b, 'c> Edge<'a> {
 ///
 /// Return
 /// ------
-/// * `Ok(Vec<Edge<'a>>)` – All candidate edges for this chunk.
+/// * `Ok(Vec<Edge<'alert_lf>>)` – All candidate edges for this chunk.
 /// * `Err(EdgeModelError)` – Currently never returned here, but kept to share the
 ///   same error type as the ML path.
 ///
@@ -272,24 +277,18 @@ impl<'a, 'b, 'c> Edge<'a> {
 /// -----
 /// - This can generate a very large number of edges; use with care.
 /// - Cost is computed from cadence-robust features (parameter-free heuristic).
-fn process_chunk_emit_all<'a>(
-    chunk: &'a [SeedNode],
-    right_index: &SeedSpatialIndex<'a, '_>,
+fn process_chunk_emit_all<'seed_lf, 'alert_lf>(
+    chunk: &'seed_lf [SeedNode<'alert_lf>],
+    right_index: &SeedSpatialIndex<'seed_lf, '_, 'alert_lf>,
     edge_config: &EdgeConfig,
-) -> Result<Vec<Edge<'a>>, EdgeModelError> {
-    let mut local_edges: Vec<Edge<'a>> = Vec::new();
+) -> Result<Vec<Edge<'seed_lf, 'alert_lf>>, EdgeModelError>
+{
+    let mut local_edges: Vec<Edge<'seed_lf, 'alert_lf>> = Vec::new();
 
     for src in chunk.iter() {
         for to in src.seed_edge_candidates(right_index, edge_config) {
             // Compute cost from structured features (cadence-robust).
             let cost = EdgeFeatures::compute_features(src, to).kinematic_log_likelihood_cost();
-
-            // NOTE: ensure dt_days is computed as a positive time gap.
-            // If your `delta_days` is defined as `to - from`, the correct call is:
-            //     src.delta_days(to)
-            // not `src.delta_days(to)` depending on your API.
-            //
-            // Keep this consistent everywhere to avoid negative dt_days.
             let dt_days = src.delta_days(to);
 
             local_edges.push(Edge::new(src, to, cost, dt_days));
@@ -318,7 +317,7 @@ fn process_chunk_emit_all<'a>(
 ///
 /// Return
 /// ------
-/// * `Ok(Vec<Edge<'a>>)` – ML-pruned edges for this chunk.
+/// * `Ok(Vec<Edge<'alert_lf>>)` – ML-pruned edges for this chunk.
 /// * `Err(EdgeModelError)` – If ONNX inference fails.
 ///
 /// Notes
@@ -326,17 +325,17 @@ fn process_chunk_emit_all<'a>(
 /// - `tmp` is reused to avoid allocations. It stores `(to, edge_cost)` for one `src`.
 /// - We run `model_pool.with_mut(...)` per `src` so the model used is the current
 ///   thread’s instance (no locks).
-fn process_chunk_ml_topk<'a>(
-    chunk: &'a [SeedNode],
-    right_index: &SeedSpatialIndex<'a, '_>,
+fn process_chunk_ml_topk<'seed_lf, 'alert_lf>(
+    chunk: &'seed_lf [SeedNode<'alert_lf>],
+    right_index: &SeedSpatialIndex<'seed_lf, '_, 'alert_lf>,
     edge_config: &EdgeConfig,
     top_k: usize,
     model_pool: &EdgeRankingModelPool,
-) -> Result<Vec<Edge<'a>>, EdgeModelError> {
-    let mut local_edges: Vec<Edge<'a>> = Vec::new();
+) -> Result<Vec<Edge<'seed_lf, 'alert_lf>>, EdgeModelError> {
+    let mut local_edges: Vec<Edge<'seed_lf, 'alert_lf>> = Vec::new();
 
     // Temporary per-left output: avoids heap allocation for small top_k.
-    let mut tmp: smallvec::SmallVec<[(&SeedNode, f64); 32]> = smallvec::SmallVec::new();
+    let mut tmp: smallvec::SmallVec<[(&'seed_lf SeedNode<'alert_lf>, f64); 32]> = smallvec::SmallVec::new();
 
     for src in chunk.iter() {
         // Run ranking using the current thread’s model instance.
@@ -376,16 +375,16 @@ fn process_chunk_ml_topk<'a>(
 ///
 /// Return
 /// ------
-/// * `Ok(Vec<Edge<'a>>)` – Edges produced for this chunk.
+/// * `Ok(Vec<Edge<'alert_lf>>)` – Edges produced for this chunk.
 /// * `Err(EdgeModelError::MissingModel)` if ML mode is enabled without a pool.
 /// * `Err(EdgeModelError)` if ONNX inference fails.
-fn process_chunk<'a>(
-    chunk: &'a [SeedNode],
-    right_index: &SeedSpatialIndex<'a, '_>,
+fn process_chunk<'seed_lf, 'alert_lf>(
+    chunk: &'seed_lf [SeedNode<'alert_lf>],
+    right_index: &SeedSpatialIndex<'seed_lf, '_, 'alert_lf>,
     edge_config: &EdgeConfig,
     top_k: usize,
     model_pool: Option<&EdgeRankingModelPool>,
-) -> Result<Vec<Edge<'a>>, EdgeModelError> {
+) -> Result<Vec<Edge<'seed_lf, 'alert_lf>>, EdgeModelError> {
     match edge_config.emit_all_edges {
         true => process_chunk_emit_all(chunk, right_index, edge_config),
         false => {
@@ -408,21 +407,21 @@ fn process_chunk<'a>(
 ///
 /// Return
 /// ------
-/// * `Ok(Vec<Edge<'a>>)` – Concatenated edges from all chunks.
+/// * `Ok(Vec<Edge<'alert_lf>>)` – Concatenated edges from all chunks.
 /// * `Err(EdgeModelError)` – If processing any chunk fails.
 ///
 /// Notes
 /// -----
 /// - Uses `try_reduce` to concatenate vectors efficiently without global locks.
 /// - Each chunk returns its own `Vec<Edge>` which is appended into the accumulator.
-fn build_edges_parallel<'a>(
-    left: &'a [SeedNode],
+fn build_edges_parallel<'seed_lf, 'alert_lf>(
+    left: &'seed_lf [SeedNode<'alert_lf>],
     chunk_size: usize,
-    right_index: &SeedSpatialIndex<'a, '_>,
+    right_index: &SeedSpatialIndex<'seed_lf, '_, 'alert_lf>,
     edge_config: &EdgeConfig,
     top_k: usize,
     model_pool: Option<&EdgeRankingModelPool>,
-) -> Result<Vec<Edge<'a>>, EdgeModelError> {
+) -> Result<Vec<Edge<'seed_lf, 'alert_lf>>, EdgeModelError> {
     use rayon::prelude::*;
 
     left.par_chunks(chunk_size)
@@ -446,7 +445,7 @@ fn build_edges_parallel<'a>(
 ///
 /// Return
 /// ------
-/// * `Ok(Vec<Edge<'a>>)` – Concatenated edges from all chunks.
+/// * `Ok(Vec<Edge<'alert_lf>>)` – Concatenated edges from all chunks.
 /// * `Err(EdgeModelError)` – If processing any chunk fails.
 ///
 /// Notes
@@ -455,15 +454,15 @@ fn build_edges_parallel<'a>(
 /// - bounds temporary memory growth,
 /// - aligns behavior with the parallel implementation,
 /// - keeps code structure consistent.
-fn build_edges_sequential<'a>(
-    left: &'a [SeedNode],
+fn build_edges_sequential<'seed_lf, 'alert_lf>(
+    left: &'seed_lf [SeedNode<'alert_lf>],
     chunk_size: usize,
-    right_index: &SeedSpatialIndex<'a, '_>,
+    right_index: &SeedSpatialIndex<'seed_lf, '_, 'alert_lf>,
     edge_config: &EdgeConfig,
     top_k: usize,
     model_pool: Option<&EdgeRankingModelPool>,
-) -> Result<Vec<Edge<'a>>, EdgeModelError> {
-    let mut edges: Vec<Edge<'a>> = Vec::new();
+) -> Result<Vec<Edge<'seed_lf, 'alert_lf>>, EdgeModelError> {
+    let mut edges: Vec<Edge<'seed_lf, 'alert_lf>> = Vec::new();
 
     for chunk in left.chunks(chunk_size) {
         edges.extend(process_chunk(

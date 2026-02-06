@@ -1,243 +1,172 @@
 //! Alert data model for the Fink-FAT engine.
 //!
-//! This module defines the core alert types used throughout the engine.
-//! It is intentionally free of any Python bindings or seeding logic so it
-//! can be reused from pure Rust crates (engine, evaluation, CLI).
+//! This module defines the core detection record (`Alert`) used throughout
+//! the Fink-FAT engine pipeline (pairing, seeding, graph construction,
+//! ML ranking, trajectory reconstruction).
 //!
-//! Units & Conventions
+//! That separation keeps the `Alert` type reusable across crates (engine,
+//! evaluation, CLI) and makes it easy to benchmark and test.
+//!
+//! Units & conventions
 //! -------------------
-//! - `ra`, `dec` are in **radians** (ICRS, J2000).
-//! - `mjd_tt` is **Modified Julian Date in TT (Terrestrial Time)**.
-//! - `flux` is PSF **difference** flux (e.g. nJy), and `flux_err` its error.
-//! - [`AlertId`] is a **0-based** dense integer index into an `AlertStore`.
+//! - `ra`, `dec` are in **radians** (ICRS/J2000 conventions as provided upstream).
+//! - `ra_err`, `dec_err` are **1σ** uncertainties in **radians**.
+//! - `mjd_tt` is **Modified Julian Date** in **TT** (Terrestrial Time), in days.
+//! - `flux` is PSF **difference** flux (units depend on upstream; often nJy),
+//!   and `flux_err` is the corresponding 1σ uncertainty.
+//! - `band` is a compact integer photometric band code.
+//!
+//! Ordering, hashing, and determinism
+//! ----------------------------------
+//! Many parts of the pipeline rely on deterministic iteration order:
+//! - bucket members are sorted by time,
+//! - candidate enumeration is reproducible,
+//! - benchmarks and tests do not depend on hash-map iteration order.
+//!
+//! To support that, `Alert` implements:
+//! - [`Ord`] / [`PartialOrd`] with a total ordering (primary key: `mjd_tt`),
+//! - [`Hash`], [`Eq`], [`PartialEq`] using stable bitwise representations for floats.
+//!
+//! Important: float equality & hashing
+//! -----------------------------------
+//! Floating-point fields (`f64`, `f32`) are compared / hashed using their raw bit
+//! patterns (`to_bits()`), not epsilon-based approximate equality. This choice:
+//! - makes `Eq`/`Hash` **sound** and deterministic,
+//! - allows using alerts as keys in hash sets/maps,
+//! - avoids surprising behavior due to floating rounding tolerance.
+//!
+//! Consequences:
+//! - Values that are numerically “close” but not bit-identical are **not equal**.
+//! - Different NaN payloads are treated as **different** values.
+//!
+//! See also
+//! --------
+//! - `spacetime_bucket::bucket` – bucket index relies on `Ord` to sort members.
+//! - `seeding::pairs` – deduplicates pairs using alert pointer identity.
+//! - `seeding::seed_node` – seeds borrow `&Alert` references.
 
-use std::fmt::{Display, Formatter, Result};
-use serde::{Deserialize, Serialize};
-
-/// Dense identifier for an alert within a contiguous store.
-///
-/// This is a 0-based index into a [`Vec<Alert>`] or [`AlertStore::alerts`].
-///
-/// Invariants
-/// ----------
-/// - `idx()` must always be `< alerts.len()` when used for indexing.
-/// - IDs are assumed to be dense (no gaps) within a given store.
-#[derive(
-    Copy,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Ord,
-    PartialOrd,
-    Hash,
-    Default,
-    Serialize,
-    Deserialize
-)]
-pub struct AlertId(u32);
-
-impl Display for AlertId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        write!(f, "AlertId({})", self.0)
-    }
-}
-
-impl AlertId {
-    /// Create a new `AlertId` from a 0-based index.
-    #[inline]
-    pub fn new(idx: u32) -> Self {
-        Self(idx)
-    }
-
-    /// Return the underlying 0-based index as `usize`.
-    #[inline]
-    pub fn idx(self) -> usize {
-        self.0 as usize
-    }
-}
-
-impl From<u32> for AlertId {
-    #[inline]
-    fn from(value: u32) -> Self {
-        AlertId::new(value)
-    }
-}
-
-impl From<AlertId> for u32 {
-    #[inline]
-    fn from(id: AlertId) -> Self {
-        id.0
-    }
-}
-
-impl From<usize> for AlertId {
-    #[inline]
-    fn from(value: usize) -> Self {
-        AlertId::new(value as u32)
-    }
-}
-
-/// Return the **first index** `i` such that `times_by_id[ids[i]] > key_time`.
-///
-/// This is a standard lower-bound search on a **time-sorted** `ids` slice,
-/// implemented to avoid allocations and keep the inner loop branch-light.
-///
-/// Arguments
-/// ---------
-/// * `ids` – Slice of `AlertId` **sorted by time** (ascending).
-/// * `key_time` – Threshold time (days).
-/// * `times_by_id` – Dense table `AlertId → mjd_tt`.
-#[inline]
-pub(crate) fn lower_bound_gt_ids(ids: &[AlertId], key_time: f64, times_by_id: &[f64]) -> usize {
-    let (mut lo, mut hi) = (0usize, ids.len());
-    while lo < hi {
-        let mid = (lo + hi) / 2;
-        let t = times_by_id[ids[mid].idx()];
-        if t > key_time { hi = mid } else { lo = mid + 1 }
-    }
-    lo
-}
+use std::{
+    cmp::Ordering,
+    fmt::{Display, Formatter, Result},
+    hash::{Hash, Hasher},
+};
 
 /// Single detection in the alert stream.
 ///
 /// This record is intentionally compact and cloneable so it can be moved across
-/// threads and used as a building block for seeding, graph construction and
+/// threads and used as a building block for seeding, graph construction, and
 /// trajectory reconstruction.
 ///
 /// Fields
 /// ------
-/// - `id` – [`AlertId`] assigned on ingestion; indexes `alerts[id.idx()]`.
-/// - `dia_source_id` – LSST `diaSourceId` (stable, 64-bit).
-/// - `ra`, `dec` – ICRS coordinates in **radians**.
-/// - `ra_err`, `dec_err` – 1-sigma uncertainties on `ra` and `dec` in **radians**.
-/// - `mjd_tt` – **MJD (TT)** timestamp of the detection.
-/// - `flux`, `flux_err` – PSF **difference** flux and its uncertainty
+/// - `dia_source_id` – LSST `diaSourceId` (stable 64-bit identifier).
+/// - `ra`, `dec` – ICRS sky coordinates in **radians**.
+/// - `ra_err`, `dec_err` – 1σ uncertainties on `ra` and `dec` in **radians**.
+/// - `mjd_tt` – detection epoch in **MJD (TT)**, in days.
+/// - `flux`, `flux_err` – PSF difference flux and its 1σ uncertainty
 ///   (units depend on upstream).
 /// - `band` – integer photometric band code.
+///
+/// Notes
+/// -----
+/// - The struct does not encode provenance (visit, detector, etc.) by design.
+///   Those may exist upstream but are not required for the core linking logic.
+/// - The engine frequently borrows `&Alert` references in indices and seeds
+///   rather than copying these fields repeatedly.
 #[derive(Clone, Debug, Default)]
 pub struct Alert {
-    pub id: AlertId,
-    pub dia_source_id: u64, // from LSST
-    pub ra: f64,            // rad
-    pub ra_err: f64,        // rad
-    pub dec: f64,           // rad
-    pub dec_err: f64,       // rad
-    pub mjd_tt: f64,        // days (TT)
-    pub flux: f32,          // psf flux (difference image, e.g. nJy)
-    pub flux_err: f32,      // psf flux error
-    pub band: u8,           // photometric band
+    /// LSST diaSourceId (stable, 64-bit).
+    pub dia_source_id: u64,
+    /// Right ascension (radians).
+    pub ra: f64,
+    /// 1σ uncertainty on RA (radians).
+    pub ra_err: f64,
+    /// Declination (radians).
+    pub dec: f64,
+    /// 1σ uncertainty on Dec (radians).
+    pub dec_err: f64,
+    /// Detection epoch (MJD TT, days).
+    pub mjd_tt: f64,
+    /// PSF difference flux (units depend on upstream, e.g. nJy).
+    pub flux: f32,
+    /// 1σ uncertainty on flux (same units as `flux`).
+    pub flux_err: f32,
+    /// Photometric band code.
+    pub band: u8,
 }
 
-/* ------------------------ Display / Debug ------------------------- */
+/* ------------------------ Equality / Ordering ------------------------- */
+
+impl PartialEq for Alert {
+    fn eq(&self, other: &Self) -> bool {
+        // We use bitwise float equality to make Eq/Hash sound and deterministic.
+        self.dia_source_id == other.dia_source_id
+            && self.band == other.band
+            && self.mjd_tt.to_bits() == other.mjd_tt.to_bits()
+            && self.ra.to_bits() == other.ra.to_bits()
+            && self.dec.to_bits() == other.dec.to_bits()
+            && self.ra_err.to_bits() == other.ra_err.to_bits()
+            && self.dec_err.to_bits() == other.dec_err.to_bits()
+            && self.flux.to_bits() == other.flux.to_bits()
+            && self.flux_err.to_bits() == other.flux_err.to_bits()
+    }
+}
+
+impl Eq for Alert {}
+
+impl PartialOrd for Alert {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Alert {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Primary sort key: observation time.
+        self.mjd_tt
+            .total_cmp(&other.mjd_tt)
+            // Deterministic tie-breakers.
+            .then_with(|| self.dia_source_id.cmp(&other.dia_source_id))
+            .then_with(|| self.band.cmp(&other.band))
+            .then_with(|| self.ra.total_cmp(&other.ra))
+            .then_with(|| self.dec.total_cmp(&other.dec))
+            .then_with(|| self.ra_err.total_cmp(&other.ra_err))
+            .then_with(|| self.dec_err.total_cmp(&other.dec_err))
+            .then_with(|| self.flux.total_cmp(&other.flux))
+            .then_with(|| self.flux_err.total_cmp(&other.flux_err))
+    }
+}
+
+/* ----------------------------- Hash ---------------------------------- */
+
+impl Hash for Alert {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.dia_source_id.hash(state);
+        self.band.hash(state);
+
+        // Hash float fields by raw bits to match Eq and ensure determinism.
+        self.mjd_tt.to_bits().hash(state);
+        self.ra.to_bits().hash(state);
+        self.dec.to_bits().hash(state);
+        self.ra_err.to_bits().hash(state);
+        self.dec_err.to_bits().hash(state);
+
+        self.flux.to_bits().hash(state);
+        self.flux_err.to_bits().hash(state);
+    }
+}
+
+/* ------------------------ Display ------------------------------------ */
 
 impl Display for Alert {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        // Compact single-line rendering for logs.
+        // Compact single-line rendering for logs and debugging output.
         write!(
             f,
-            "Alert(id={}, dia_source_id={}, ra={:.6} rad, dec={:.6} rad, mjd_tt={:.5}, \
-             flux={:.3}±{:.3} nJy, band={})",
-            self.id.idx(),
-            self.dia_source_id,
-            self.ra,
-            self.dec,
-            self.mjd_tt,
-            self.flux,
-            self.flux_err,
-            self.band
-        )
-    }
-}
-
-/// Contiguous store of alerts for (typically) a single night.
-///
-/// The vector `alerts` is indexed by [`AlertId`] (0-based) and provides
-/// cache-friendly iteration for the seeding and linking pipeline.
-///
-/// Design
-/// ------
-/// - `start_mjd` is the **floor** of the minimum `mjd_tt` in the store and
-///   can serve as origin for uniform time binning in time-based indexing
-///   structures.
-/// - Alerts are treated as immutable after construction to simplify sharing
-///   across threads.
-#[derive(Debug, Clone)]
-pub struct AlertStore {
-    /// Night anchor (TT): floor of the minimum `mjd_tt` in `alerts`.
-    pub start_mjd: f64,
-    /// All alerts, densely indexed by [`AlertId`].
-    pub alerts: Vec<Alert>,
-}
-
-impl AlertStore {
-    /// Construct a new `AlertStore` from a start MJD anchor and a vector of alerts.
-    ///
-    /// The caller is responsible for ensuring that:
-    /// - `start_mjd` is consistent with the minimum `mjd_tt` in `alerts`,
-    /// - alert IDs are dense and compatible with their position in the vector.
-    pub fn new(start_mjd: f64, alerts: Vec<Alert>) -> Self {
-        Self { start_mjd, alerts }
-    }
-
-    /// Number of alerts in the store.
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.alerts.len()
-    }
-
-    /// Return `true` if the store contains no alerts.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.alerts.is_empty()
-    }
-
-    /// Borrow one alert by id (checked).
-    ///
-    /// Return
-    /// ------
-    /// * `Some(&Alert)` if the id is within bounds,
-    /// * `None` otherwise.
-    #[inline]
-    pub fn get(&self, id: AlertId) -> Option<&Alert> {
-        self.alerts.get(id.idx())
-    }
-
-    /// Iterate over all alerts in the store.
-    #[inline]
-    pub fn iter(&self) -> impl Iterator<Item = &Alert> {
-        self.alerts.iter()
-    }
-
-    /// Iterate over all alert ids in the store (0-based, dense).
-    #[inline]
-    pub fn ids(&self) -> impl Iterator<Item = AlertId> {
-        (0..self.alerts.len()).map(|i| AlertId::new(i as u32))
-    }
-
-    /// Resolve an arbitrary list of `AlertId`s into borrowed `&Alert`s (checked).
-    ///
-    /// The iterator short-circuits to `None` if any id is out-of-bounds.
-    pub fn get_many<'a>(
-        &self,
-        ids: impl IntoIterator<Item = &'a AlertId>,
-    ) -> Option<impl Iterator<Item = &Alert>> {
-        let mut v = Vec::new();
-        for id in ids {
-            v.push(self.alerts.get(id.idx())?);
-        }
-        Some(v.into_iter())
-    }
-}
-
-impl Display for AlertStore {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        // Lightweight summary without iterating the alerts.
-        write!(
-            f,
-            "AlertStore(start_mjd={:.5}, n_alerts={})",
-            self.start_mjd,
-            self.alerts.len()
+            "Alert(dia_source_id={}, ra={:.6} rad, dec={:.6} rad, mjd_tt={:.5}, \
+             flux={:.3}±{:.3}, band={})",
+            self.dia_source_id, self.ra, self.dec, self.mjd_tt, self.flux, self.flux_err, self.band
         )
     }
 }

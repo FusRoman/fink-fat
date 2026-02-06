@@ -2,16 +2,17 @@ use camino::Utf8Path;
 
 use crate::{
     engine_config::{EngineConfig, load_engine_config_validated},
-    graph::edge::edge_prediction::EdgeRankingModelPool, storage::seed_store::SeedStore,
+    graph::edge::edge_prediction::EdgeRankingModelPool, storage::{alert_store::AlertStore, seed_store::SeedStore},
 };
 
-pub struct FinkFat {
+pub struct FinkFat<'alert_lf> {
     pub engine_config: EngineConfig,
     pub edge_ranking_models: EdgeRankingModelPool,
-    pub seed_store: SeedStore,
+    pub alert_store: AlertStore,
+    pub seed_store: SeedStore<'alert_lf>,
 }
 
-impl FinkFat {
+impl<'alert_lf> FinkFat<'alert_lf> {
     pub fn new(engine_config_path: impl AsRef<Utf8Path>) -> Self {
         let Ok(engine_config) = load_engine_config_validated(engine_config_path.as_ref()) else {
             panic!(
@@ -28,6 +29,7 @@ impl FinkFat {
         Self {
             engine_config,
             edge_ranking_models,
+            alert_store: AlertStore::new(),
             seed_store: SeedStore::new(),
         }
     }
