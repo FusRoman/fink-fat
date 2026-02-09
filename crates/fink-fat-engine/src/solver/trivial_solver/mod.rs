@@ -201,32 +201,32 @@ impl TrivialSolver {
     }
 }
 
-        // ---------------------------------------------------------------------
-        // Helper function (IMPORTANT: not a closure)
-        // ---------------------------------------------------------------------
-        fn build_from<'seed_lf, 'alert_lf>(
-            start: usize,
-            component_nodes: &[&'seed_lf SeedNode<'alert_lf>],
-            next: &[Option<u32>],
-            chosen_edge_cost: &[f64],
-            visited: &mut [bool],
-        ) -> (Vec<&'seed_lf SeedNode<'alert_lf>>, f64) {
-            let mut nodes = Vec::new();
-            let mut cost = 0.0;
+// ---------------------------------------------------------------------
+// Helper function (IMPORTANT: not a closure)
+// ---------------------------------------------------------------------
+fn build_from<'seed_lf, 'alert_lf>(
+    start: usize,
+    component_nodes: &[&'seed_lf SeedNode<'alert_lf>],
+    next: &[Option<u32>],
+    chosen_edge_cost: &[f64],
+    visited: &mut [bool],
+) -> (Vec<&'seed_lf SeedNode<'alert_lf>>, f64) {
+    let mut nodes = Vec::new();
+    let mut cost = 0.0;
 
-            let mut cur = start as u32;
-            while !visited[cur as usize] {
-                visited[cur as usize] = true;
-                nodes.push(component_nodes[cur as usize]);
+    let mut cur = start as u32;
+    while !visited[cur as usize] {
+        visited[cur as usize] = true;
+        nodes.push(component_nodes[cur as usize]);
 
-                let s = cur as usize;
-                if let Some(nxt) = next[s] {
-                    cost += chosen_edge_cost[s];
-                    cur = nxt;
-                } else {
-                    break;
-                }
-            }
-
-            (nodes, cost)
+        let s = cur as usize;
+        if let Some(nxt) = next[s] {
+            cost += chosen_edge_cost[s];
+            cur = nxt;
+        } else {
+            break;
         }
+    }
+
+    (nodes, cost)
+}
