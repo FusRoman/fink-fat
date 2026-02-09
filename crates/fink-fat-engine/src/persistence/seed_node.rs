@@ -10,7 +10,8 @@ use crate::{
         SEED_STORE_SCHEMA_VERSION,
         alert::AlertKey,
         alert_store::AlertStore,
-        envelope::{DiskEnvelope, PersistenceIoError},
+        envelope::DiskEnvelope,
+        error::{BorrowError, PersistenceIoError},
         layout::PersistenceLayout,
         manifest::Manifest,
     },
@@ -40,13 +41,13 @@ impl SeedNodeOwned {
     pub fn to_borrowed<'alert_lf>(
         &self,
         alerts: &'alert_lf AlertStore,
-    ) -> Result<SeedNode<'alert_lf>, String> {
+    ) -> Result<SeedNode<'alert_lf>, BorrowError> {
         let mut members: Vec<&'alert_lf Alert> = Vec::with_capacity(self.members.len());
 
         for k in &self.members {
             let a = alerts
                 .get_by_key(*k)
-                .ok_or_else(|| format!("Missing alert for key {:?}", k))?;
+                .ok_or_else(|| BorrowError::MissingAlert(*k))?;
             members.push(a);
         }
 

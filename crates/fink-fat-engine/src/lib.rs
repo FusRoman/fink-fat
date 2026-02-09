@@ -1,4 +1,3 @@
-pub mod alerts;
 pub mod astro_math;
 pub mod display_format;
 pub mod engine_config;

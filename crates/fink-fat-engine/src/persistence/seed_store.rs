@@ -4,8 +4,11 @@ use serde::{Deserialize, Serialize};
 use crate::{
     night_id::NightId,
     persistence::{
-        alert_store::AlertStore, envelope::PersistenceIoError, layout::PersistenceLayout,
-        manifest::Manifest, seed_node::SeedNodeOwned, seed_node::SeedNodeOwnedSlice,
+        alert_store::AlertStore,
+        error::{BorrowError, PersistenceIoError},
+        layout::PersistenceLayout,
+        manifest::Manifest,
+        seed_node::{SeedNodeOwned, SeedNodeOwnedSlice},
     },
     pipeline::seed_store::SeedStore,
     seeding::seed_node::SeedNode,
@@ -23,7 +26,7 @@ impl SeedStoreOwned {
         self.0.insert(night_id, seeds);
     }
 
-    pub fn to_borrowed<'a>(&self, alerts: &'a AlertStore) -> Result<SeedStore<'a>, String> {
+    pub fn to_borrowed<'a>(&self, alerts: &'a AlertStore) -> Result<SeedStore<'a>, BorrowError> {
         let mut map: AHashMap<NightId, Vec<SeedNode<'a>>> = AHashMap::with_capacity(self.0.len());
 
         for (night_id, seeds_owned) in self.0.iter() {

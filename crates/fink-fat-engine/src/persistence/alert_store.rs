@@ -5,7 +5,7 @@ use crate::{
     night_id::NightId,
     persistence::{
         alert::{Alert, AlertKey, AlertSlice},
-        envelope::PersistenceIoError,
+        error::PersistenceIoError,
         layout::PersistenceLayout,
         manifest::Manifest,
     },

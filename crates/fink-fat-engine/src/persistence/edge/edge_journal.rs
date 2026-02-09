@@ -34,7 +34,8 @@ use crate::persistence::EDGE_JOURNAL_SCHEMA_VERSION;
 use crate::persistence::edge::delta_chunk::EdgeDeltaChunk;
 use crate::persistence::edge::edge_op::EdgeOp;
 use crate::persistence::edge::{EdgeKey, EdgeOwned};
-use crate::persistence::envelope::{DiskEnvelope, PersistenceIoError};
+use crate::persistence::envelope::DiskEnvelope;
+use crate::persistence::error::PersistenceIoError;
 use crate::persistence::layout::PersistenceLayout;
 use crate::persistence::manifest::{EdgeDeltaEntry, Manifest};
 

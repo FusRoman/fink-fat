@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     graph::edge::{Edge, EdgeCore},
-    persistence::seed_node::SeedKey,
+    persistence::{error::BorrowError, seed_node::SeedKey},
     pipeline::seed_store::SeedStore,
 };
 
@@ -43,13 +43,13 @@ impl EdgeOwned {
     pub fn to_borrowed<'seed, 'alert>(
         &self,
         seeds: &'seed SeedStore<'alert>,
-    ) -> Result<Edge<'seed, 'alert>, String> {
+    ) -> Result<Edge<'seed, 'alert>, BorrowError> {
         let from = seeds
             .get_by_key(self.from)
-            .ok_or_else(|| format!("Missing seed for key {:?}", self.from))?;
+            .ok_or_else(|| BorrowError::MissingSeed(self.from))?;
         let to = seeds
             .get_by_key(self.to)
-            .ok_or_else(|| format!("Missing seed for key {:?}", self.to))?;
+            .ok_or_else(|| BorrowError::MissingSeed(self.to))?;
 
         Ok(Edge {
             core: self.core.clone(),

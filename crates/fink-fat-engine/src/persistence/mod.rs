@@ -2,9 +2,11 @@ pub mod alert;
 pub mod alert_store;
 pub mod edge;
 pub mod envelope;
+pub mod error;
 pub mod graph;
 pub mod layout;
 pub mod manifest;
+pub mod runtime_state;
 pub mod seed_node;
 pub mod seed_store;
 
@@ -19,11 +21,16 @@ use crate::{
     persistence::{
         alert::AlertSlice,
         alert_store::AlertStore,
-        edge::{edge_journal::{EdgeJournalStore, NightWindow}, edge_op::EdgeOp},
-        envelope::{DiskEnvelope, PersistenceIoError},
+        edge::{
+            edge_journal::{EdgeJournalStore, NightWindow},
+            edge_op::EdgeOp,
+        },
+        envelope::DiskEnvelope,
+        error::{PersistenceError, PersistenceIoError},
         graph::GraphOwned,
         layout::PersistenceLayout,
         manifest::{Manifest, NightManifestEntry},
+        runtime_state::RuntimeState,
         seed_node::{SeedNodeOwned, SeedNodeOwnedSlice},
         seed_store::SeedStoreOwned,
     },
@@ -44,25 +51,6 @@ pub const GRAPH_SCHEMA_VERSION: u32 = 1;
 /// Optional: top-level state/manifest schema version (if you persist one).
 pub const STATE_SCHEMA_VERSION: u32 = 1;
 
-/// Loaded runtime state built from persisted artifacts.
-///
-/// This matches the runtime needs:
-/// - `AlertStore` owns the alert vectors (per night).
-/// - `SeedStoreOwned` owns `SeedNodeOwned`.
-/// - `InterNightGraph<'seed,'alert>` owns `Edge<'seed,'alert>` that borrow seeds.
-///
-/// Notes
-/// -----
-/// This struct is meant to be created and then moved into your runtime engine
-/// (or into a `FinkFat` instance).
-pub struct RuntimeState {
-    pub manifest: Manifest,
-    pub window: Option<NightWindow>,
-    pub alert_store: AlertStore,
-    pub seed_store: SeedStoreOwned,
-    pub graph: GraphOwned,
-}
-
 /// High-level persistence orchestrator.
 #[derive(Clone, Debug)]
 pub struct PersistenceManager {
@@ -82,9 +70,7 @@ impl PersistenceManager {
     /// -------
     /// Result<Self, PersistenceIoError>
     ///     Ready-to-use persistence manager.
-    pub fn open_or_create(
-        storage_root: impl Into<Utf8PathBuf>,
-    ) -> Result<Self, PersistenceIoError> {
+    pub fn open_or_create(storage_root: impl Into<Utf8PathBuf>) -> Result<Self, PersistenceError> {
         let layout = PersistenceLayout::new(storage_root);
         let edge_journal = EdgeJournalStore::new(layout.clone());
 
@@ -95,23 +81,20 @@ impl PersistenceManager {
     }
 
     /// Load the manifest if present, otherwise create a fresh one.
-    pub fn load_or_init_manifest(
-        &self,
-        created_unix_s: i64,
-    ) -> Result<Manifest, PersistenceIoError> {
+    pub fn load_or_init_manifest(&self, created_unix_s: i64) -> Result<Manifest, PersistenceError> {
         let mpath = self.layout.manifest_path();
         match Manifest::load(&mpath) {
             Ok(m) => Ok(m),
             Err(PersistenceIoError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
                 Ok(Manifest::new(created_unix_s))
             }
-            Err(e) => Err(e),
+            Err(e) => Err(PersistenceError::Io(e)),
         }
     }
 
     /// Save the manifest to disk.
-    pub fn save_manifest(&self, manifest: &Manifest) -> Result<(), PersistenceIoError> {
-        manifest.save(&self.layout.manifest_path())
+    pub fn save_manifest(&self, manifest: &Manifest) -> Result<(), PersistenceError> {
+        Ok(manifest.save(&self.layout.manifest_path())?)
     }
 
     /// Compute the edge/window policy from config and current manifest.
@@ -189,7 +172,7 @@ impl PersistenceManager {
         &self,
         cfg: &EngineConfig,
         created_unix_s: i64,
-    ) -> Result<RuntimeState, PersistenceIoError> {
+    ) -> Result<RuntimeState, PersistenceError> {
         let manifest = self.load_or_init_manifest(created_unix_s)?;
         let window = self.compute_window(&manifest, cfg);
 
@@ -250,7 +233,7 @@ impl PersistenceManager {
         alerts: Vec<Alert>,
         seeds: Vec<SeedNodeOwned>,
         edge_ops: Vec<EdgeOp>,
-    ) -> Result<Manifest, PersistenceIoError> {
+    ) -> Result<Manifest, PersistenceError> {
         // 1) write alerts + seeds
         self.save_night_manifest(
             &mut manifest,
@@ -289,7 +272,7 @@ impl PersistenceManager {
         cfg: &EngineConfig,
         checkpoint_night_id: NightId,
         created_unix_s: i64,
-    ) -> Result<(), PersistenceIoError> {
+    ) -> Result<(), PersistenceError> {
         let window = self.compute_window(manifest, cfg);
         self.edge_journal.compact_to_snapshot(
             manifest,

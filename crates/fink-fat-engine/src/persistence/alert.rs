@@ -57,10 +57,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     night_id::NightId,
     persistence::{
-        ALERT_STORE_SCHEMA_VERSION,
-        envelope::{DiskEnvelope, PersistenceIoError},
-        layout::PersistenceLayout,
-        manifest::Manifest,
+        ALERT_STORE_SCHEMA_VERSION, envelope::DiskEnvelope, error::PersistenceIoError,
+        layout::PersistenceLayout, manifest::Manifest,
     },
 };
 

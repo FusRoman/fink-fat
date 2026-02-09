@@ -1,5 +1,7 @@
 use crate::{
-    graph::InterNightGraph, persistence::edge::EdgeOwned, pipeline::seed_store::SeedStore,
+    graph::InterNightGraph,
+    persistence::{edge::EdgeOwned, error::BorrowError},
+    pipeline::seed_store::SeedStore,
 };
 
 pub struct GraphOwned {
@@ -10,7 +12,7 @@ impl GraphOwned {
     pub fn to_borrowed<'seed, 'alert>(
         &self,
         seeds: &'seed SeedStore<'alert>,
-    ) -> Result<InterNightGraph<'seed, 'alert>, String> {
+    ) -> Result<InterNightGraph<'seed, 'alert>, BorrowError> {
         let mut edges = Vec::with_capacity(self.edges.len());
         for e in &self.edges {
             edges.push(e.to_borrowed(seeds)?);

@@ -28,13 +28,14 @@ use camino::{Utf8Path, Utf8PathBuf};
 use crate::{
     engine_config::EngineConfig,
     night_id::NightId,
-    persistence::{edge::edge_journal::NightWindow, layout::PersistenceLayout},
+    persistence::{
+        edge::edge_journal::NightWindow, error::PersistenceIoError, layout::PersistenceLayout,
+    },
 };
 
 use super::{
     ALERT_STORE_SCHEMA_VERSION, EDGE_JOURNAL_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION,
-    SEED_STORE_SCHEMA_VERSION, STATE_SCHEMA_VERSION,
-    envelope::{DiskEnvelope, PersistenceIoError},
+    SEED_STORE_SCHEMA_VERSION, STATE_SCHEMA_VERSION, envelope::DiskEnvelope,
 };
 
 /// Entry describing the on-disk artifacts for a single night.
