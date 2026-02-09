@@ -7,6 +7,7 @@ use crate::{
         seed_store::SeedStoreOwned,
     },
     seeding::seed_node::SeedNode,
+    solver::components::seed_index::SeedGlobalIndex,
 };
 
 pub struct SeedStore<'alert_lf>(AHashMap<NightId, Vec<SeedNode<'alert_lf>>>);
@@ -49,5 +50,24 @@ impl<'alert_lf> SeedStore<'alert_lf> {
     pub fn get_by_key(&self, key: SeedKey) -> Option<&SeedNode<'alert_lf>> {
         let vec = self.0.get(&key.night_id)?;
         vec.get(key.idx_in_night as usize)
+    }
+
+    #[inline]
+    pub fn len_for_night(&self, night_id: &NightId) -> Option<usize> {
+        self.0.get(night_id).map(|v| v.len())
+    }
+
+    pub fn night_ids_sorted(&self) -> Vec<NightId> {
+        let mut night_ids: Vec<NightId> = self.0.keys().copied().collect();
+        night_ids.sort();
+        night_ids
+    }
+
+    pub fn build_global_index(&self) -> SeedGlobalIndex {
+        SeedGlobalIndex::build(self)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&NightId, &Vec<SeedNode<'alert_lf>>)> {
+        self.0.iter()
     }
 }
