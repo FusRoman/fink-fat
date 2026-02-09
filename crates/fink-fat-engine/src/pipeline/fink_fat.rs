@@ -2,7 +2,7 @@ use camino::Utf8Path;
 
 use crate::{
     engine_config::{EngineConfig, load_engine_config_validated},
-    graph::{edge::edge_prediction::EdgeRankingModelPool, graph::InterNightGraph},
+    graph::{InterNightGraph, edge::edge_prediction::EdgeRankingModelPool},
     pipeline::{alert_store::AlertStore, seed_store::SeedStore},
 };
 

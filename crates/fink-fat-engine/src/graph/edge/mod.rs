@@ -61,6 +61,7 @@ use crate::{
         edge_prediction::{EdgeModelError, EdgeRankingModelPool},
         ranking_topk::rank_topk_edges_for_left,
     },
+    persistence::edge::EdgeOwned,
     seeding::{seed_node::SeedNode, seed_spatial_index::SeedSpatialIndex},
     spacetime_bucket::{spatial_binner::SpatialBinner, time_binner::TimeBinner},
 };
@@ -179,6 +180,26 @@ impl<'seed_lf, 'alert_lf> Edge<'seed_lf, 'alert_lf> {
                 dt_days,
                 active: true,
             },
+        }
+    }
+
+    /// Convert this edge into an owned version that can be serialized.
+    ///
+    /// This extracts the necessary information from the `from` and `to` seeds
+    /// to reconstruct the edge later without needing to serialize the entire
+    /// `SeedNode`s. It relies on the fact that each `SeedNode` has a unique
+    /// key (night ID + index in night) that can be used to look it up in a
+    /// `SeedStore`.
+    ///
+    /// Return
+    /// ------
+    ///     An `EdgeOwned` containing the core edge data and the keys of the `from`
+    ///     and `to` seeds.
+    pub fn to_owned(&self) -> EdgeOwned {
+        EdgeOwned {
+            core: self.core.clone(),
+            from: self.from.core.key,
+            to: self.to.core.key,
         }
     }
 
