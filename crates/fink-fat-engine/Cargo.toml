@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-ahash = "0.8.12"
+ahash = { version = "0.8.12", features = ["serde"] }
 bitcode = { version = "0.6.9", features = ["serde"] }
 camino = "1.2.1"
 cdshealpix = "0.7.3"
