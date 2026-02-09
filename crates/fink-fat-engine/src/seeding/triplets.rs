@@ -394,7 +394,6 @@ mod triplet_gen_tests {
 
     use crate::{
         MjdTt, Radians,
-        alerts::Alert,
         astro_math::{ang_sep, arcsec_to_rad, planar_offset_fast},
         engine_config::triplet_config::TripletConfig,
         persistence::alert::AlertKey,

@@ -5,13 +5,13 @@ pub mod engine_config;
 pub mod error;
 pub mod graph;
 pub mod night_id;
+pub mod persistence;
+pub mod pipeline;
 pub mod seeding;
 pub mod solver;
 pub mod spacetime_bucket;
-pub mod pipeline;
 pub mod trajectory;
 pub mod units;
-pub mod persistence;
 
-pub use alerts::Alert;
+pub use persistence::alert::Alert;
 pub use units::{MjdTt, Radians};

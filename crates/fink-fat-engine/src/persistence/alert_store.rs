@@ -1,7 +1,14 @@
 use ahash::AHashMap;
+use camino::Utf8PathBuf;
 
 use crate::{
-    Alert, night_id::NightId, persistence::alert::{AlertKey}
+    night_id::NightId,
+    persistence::{
+        alert::{Alert, AlertKey, AlertSlice},
+        envelope::PersistenceIoError,
+        layout::PersistenceLayout,
+        manifest::Manifest,
+    },
 };
 
 /// Contiguous store of alerts for (typically) a single night.
@@ -54,5 +61,41 @@ impl AlertStore {
     pub fn get_by_key(&self, key: AlertKey) -> Option<&Alert> {
         let vec = self.0.get(&key.night_id)?;
         vec.get(key.idx_in_night as usize)
+    }
+
+    /// Iterate over (night_id, alerts) pairs.
+    pub fn as_map_iter(&self) -> impl Iterator<Item = (&NightId, &Vec<Alert>)> {
+        self.0.iter()
+    }
+
+    /// Get the internal map size (#nights).
+    pub fn n_nights(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Persist all nights currently present in an `AlertStore`.
+    ///
+    /// This is a convenience function that:
+    /// - iterates over the store,
+    /// - writes each night file,
+    /// - updates the manifest entries.
+    ///
+    /// Notes
+    /// -----
+    /// - This does **not** remove old manifest entries. If you want a "sync" behavior
+    ///   (drop nights not present in the store), do it at call site.
+    pub fn save_alert_night(
+        &self,
+        night_id: NightId,
+        layout: &PersistenceLayout,
+        manifest: &mut Manifest,
+    ) -> Result<Utf8PathBuf, PersistenceIoError> {
+        let alerts = self.0.get(&night_id).ok_or_else(|| {
+            PersistenceIoError::Other(format!("No alerts for night_id {}", night_id))
+        })?;
+        let path = alerts
+            .as_slice()
+            .save_alerts_night(layout, manifest, night_id)?;
+        return Ok(path);
     }
 }

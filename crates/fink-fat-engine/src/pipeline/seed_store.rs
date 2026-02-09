@@ -1,6 +1,13 @@
 use ahash::AHashMap;
 
-use crate::{night_id::NightId, persistence::{seed_node::SeedKey, seed_store::{NightSeedsOwned, SeedStoreOwned}}, seeding::seed_node::SeedNode};
+use crate::{
+    night_id::NightId,
+    persistence::{
+        seed_node::{SeedKey, SeedNodeOwned},
+        seed_store::SeedStoreOwned,
+    },
+    seeding::seed_node::SeedNode,
+};
 
 pub struct SeedStore<'alert_lf>(AHashMap<NightId, Vec<SeedNode<'alert_lf>>>);
 
@@ -17,18 +24,15 @@ impl<'alert_lf> SeedStore<'alert_lf> {
 
     /// Convert this `SeedStore` into an owned version that can be serialized.
     pub fn to_owned(&self) -> SeedStoreOwned {
-        let mut nights = Vec::with_capacity(self.0.len());
+        let mut map = AHashMap::with_capacity(self.0.len());
 
         for (night_id, seeds) in self.0.iter() {
-            let owned_seeds = seeds.iter().map(|s| s.to_owned()).collect();
-            nights.push(NightSeedsOwned {
-                night_id: *night_id,
-                seeds: owned_seeds,
-            });
+            let owned_seeds: Vec<SeedNodeOwned> = seeds.iter().map(|s| s.to_owned()).collect();
+
+            map.insert(*night_id, owned_seeds);
         }
 
-        nights.sort_by_key(|b| b.night_id);
-        SeedStoreOwned { nights }
+        SeedStoreOwned(map)
     }
 
     /// Insert a vector of seed nodes for a given night.

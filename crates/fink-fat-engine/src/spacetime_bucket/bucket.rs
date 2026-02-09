@@ -34,8 +34,7 @@
 use ahash::AHashMap;
 
 use crate::{
-    MjdTt, Radians,
-    alerts::Alert,
+    Alert, MjdTt, Radians,
     spacetime_bucket::{
         spatial_binner::{SpatialBinner, SpatialKey},
         time_binner::{TimeBin, TimeBinner},

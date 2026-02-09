@@ -1,12 +1,19 @@
 use std::ops::Deref;
 
+use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     Alert,
     night_id::NightId,
-    persistence::alert::AlertKey,
-    pipeline::alert_store::AlertStore,
+    persistence::{
+        SEED_STORE_SCHEMA_VERSION,
+        alert::AlertKey,
+        alert_store::AlertStore,
+        envelope::{DiskEnvelope, PersistenceIoError},
+        layout::PersistenceLayout,
+        manifest::Manifest,
+    },
     seeding::seed_node::{SeedNode, SeedNodeCore},
 };
 
@@ -47,5 +54,34 @@ impl SeedNodeOwned {
             core: self.core.clone(),
             members,
         })
+    }
+}
+
+pub trait SeedNodeOwnedSlice {
+    fn save_seeds_night(
+        &self,
+        layout: &PersistenceLayout,
+        manifest: &Manifest,
+        night_id: NightId,
+    ) -> Result<Utf8PathBuf, PersistenceIoError>;
+}
+
+impl SeedNodeOwnedSlice for &[SeedNodeOwned] {
+    fn save_seeds_night(
+        &self,
+        layout: &PersistenceLayout,
+        manifest: &Manifest,
+        night_id: NightId,
+    ) -> Result<Utf8PathBuf, PersistenceIoError> {
+        let abs_path = layout.seeds_night_path(night_id);
+
+        // Write payload (enveloped).
+        let env = DiskEnvelope::new(
+            self.to_vec(),
+            SEED_STORE_SCHEMA_VERSION,
+            manifest.created_unix_s,
+        );
+        env.save_enveloped(&abs_path)?;
+        Ok(abs_path)
     }
 }

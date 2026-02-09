@@ -29,6 +29,7 @@ pub struct EngineConfig {
     pub pairs: PairConfig,
     pub triplets: TripletConfig,
     pub edges: EdgeConfig,
+    max_gap_nights: u8,
     storage_path: String,
 }
 
@@ -39,6 +40,7 @@ impl Default for EngineConfig {
             pairs: PairConfig::default(),
             triplets: TripletConfig::default(),
             edges: EdgeConfig::default(),
+            max_gap_nights: 3,
             storage_path: "./storage".to_string(),
         }
     }
@@ -67,6 +69,10 @@ impl EngineConfig {
 
     pub fn storage_path_buf(&self) -> Utf8PathBuf {
         Utf8PathBuf::from(&self.storage_path)
+    }
+
+    pub fn max_gap_nights(&self) -> u8 {
+        self.max_gap_nights
     }
 }
 

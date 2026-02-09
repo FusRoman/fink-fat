@@ -284,6 +284,10 @@ pub enum PersistenceIoError {
     /// Envelope validation error (magic/version).
     #[error(transparent)]
     Envelope(#[from] EnvelopeError),
+
+    /// Any other error (e.g., missing data for payload construction).
+    #[error("other error: {0}")]
+    Other(String),
 }
 
 /// Encode a value into bytes using `bitcode`.

@@ -3,7 +3,8 @@ use camino::Utf8Path;
 use crate::{
     engine_config::{EngineConfig, load_engine_config_validated},
     graph::{InterNightGraph, edge::edge_prediction::EdgeRankingModelPool},
-    pipeline::{alert_store::AlertStore, seed_store::SeedStore},
+    persistence::alert_store::AlertStore,
+    pipeline::seed_store::SeedStore,
 };
 
 pub struct FinkFat<'seed_lf, 'alert_lf> {
