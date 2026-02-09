@@ -47,8 +47,19 @@
 
 use std::{
     cmp::Ordering,
-    fmt::{Display, Formatter, Result},
+    fmt::{Display, Formatter, Result as FmtResult},
     hash::{Hash, Hasher},
+};
+
+use camino::Utf8PathBuf;
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    night_id::NightId,
+    persistence::{
+        ALERT_STORE_SCHEMA_VERSION, envelope::DiskEnvelope, error::PersistenceIoError,
+        layout::PersistenceLayout, manifest::Manifest,
+    },
 };
 
 /// Single detection in the alert stream.
@@ -73,8 +84,10 @@ use std::{
 ///   Those may exist upstream but are not required for the core linking logic.
 /// - The engine frequently borrows `&Alert` references in indices and seeds
 ///   rather than copying these fields repeatedly.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Alert {
+    /// Unique identifier for the alert, used for disk persistance.
+    pub key: AlertKey,
     /// LSST diaSourceId (stable, 64-bit).
     pub dia_source_id: u64,
     /// Right ascension (radians).
@@ -160,7 +173,7 @@ impl Hash for Alert {
 /* ------------------------ Display ------------------------------------ */
 
 impl Display for Alert {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         // Compact single-line rendering for logs and debugging output.
         write!(
             f,
@@ -169,4 +182,56 @@ impl Display for Alert {
             self.dia_source_id, self.ra, self.dec, self.mjd_tt, self.flux, self.flux_err, self.band
         )
     }
+}
+
+/* ------------------------ Alert Slice trait ------------------------------------ */
+
+pub trait AlertSlice {
+    fn save_alerts_night(
+        &self,
+        layout: &PersistenceLayout,
+        manifest: &Manifest,
+        night_id: NightId,
+    ) -> Result<Utf8PathBuf, PersistenceIoError>;
+}
+
+impl AlertSlice for &[Alert] {
+    /// Write the alerts of a single night to disk and upsert the manifest entry.
+    ///
+    /// Behavior
+    /// --------
+    /// - Writes `DiskEnvelope<Vec<Alert>>` to `layout.alerts_night_path(night_id)`.
+    /// - Upserts `manifest.nights` for `night_id`:
+    ///   - sets `alerts_rel_path`,
+    ///   - sets `n_alerts`,
+    ///   - preserves existing `seeds_rel_path` if present; otherwise fills it with
+    ///     the default `layout.seeds_night_path(night_id)` relative path.
+    ///   - preserves `n_seeds` if present.
+    ///
+    /// Returns
+    /// -------
+    /// Ok(()) on success, or `PersistenceIoError` on I/O / decode / envelope failure.
+    fn save_alerts_night(
+        &self,
+        layout: &PersistenceLayout,
+        manifest: &Manifest,
+        night_id: NightId,
+    ) -> Result<Utf8PathBuf, PersistenceIoError> {
+        let abs_path = layout.alerts_night_path(night_id);
+
+        // Write payload (enveloped).
+        let env = DiskEnvelope::new(
+            self.to_vec(),
+            ALERT_STORE_SCHEMA_VERSION,
+            manifest.created_unix_s,
+        );
+        env.save_enveloped(&abs_path)?;
+        Ok(abs_path)
+    }
+}
+
+#[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct AlertKey {
+    pub night_id: NightId,
+    pub idx_in_night: u32,
 }

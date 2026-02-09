@@ -31,6 +31,20 @@ impl fmt::Display for NightId {
     }
 }
 
+impl From<u32> for NightId {
+    #[inline]
+    fn from(v: u32) -> Self {
+        NightId(v)
+    }
+}
+
+impl From<NightId> for u32 {
+    #[inline]
+    fn from(n: NightId) -> Self {
+        n.0
+    }
+}
+
 #[cfg(test)]
 mod night_id_tests {
     use super::NightId;

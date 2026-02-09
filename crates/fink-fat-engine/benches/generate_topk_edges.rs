@@ -6,6 +6,8 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use fink_fat_engine::graph::edge::edge_features::EdgeFeatures;
 use fink_fat_engine::graph::edge::edge_prediction::{EdgeRankingModel, EdgeRankingModelPool};
 use fink_fat_engine::graph::edge::ranking_topk::rank_topk_edges_for_left;
+use fink_fat_engine::persistence::alert::AlertKey;
+use fink_fat_engine::persistence::seed_node::SeedKey;
 use fink_fat_engine::seeding::seed_spatial_index::SeedSpatialIndex;
 use fink_fat_engine::spacetime_bucket::healpix_binner::HealpixBinner;
 use fink_fat_engine::spacetime_bucket::uniform_time_binner::UniformTimeBinner;
@@ -39,6 +41,10 @@ fn make_alert(
     flux: f32,
 ) -> Alert {
     Alert {
+        key: AlertKey {
+            night_id: NightId(0),
+            idx_in_night: dia_source_id as u32,
+        },
         dia_source_id,
         ra: ra_rad,
         ra_err: 1.0e-6, // ~0.2 arcsec in radians
@@ -143,8 +149,16 @@ fn make_seeds_pair_model(
             flux_b,
         )));
 
-        let seed_node = SeedNode::from_pair(night_id, alert_a, alert_b, max_speed_rad_per_day)
-            .expect("SeedNode::from_pair failed (speed filter too strict?)");
+        let seed_node = SeedNode::from_pair(
+            SeedKey {
+                night_id: night_id,
+                idx_in_night: seed_index as u32,
+            },
+            alert_a,
+            alert_b,
+            max_speed_rad_per_day,
+        )
+        .expect("SeedNode::from_pair failed (speed filter too strict?)");
 
         seeds.push(seed_node);
     }

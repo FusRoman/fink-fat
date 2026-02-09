@@ -1,6 +1,6 @@
-// pub mod components;
-// pub mod solver_manager;
-// pub mod trivial_solver;
+pub mod components;
+pub mod solver_manager;
+pub mod trivial_solver;
 // pub mod min_cost_flow;
 
 // use crate::graph::edge_id::EdgeId;

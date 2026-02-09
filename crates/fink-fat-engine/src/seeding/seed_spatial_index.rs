@@ -241,8 +241,9 @@ mod seed_spatial_index_tests {
     use crate::{
         astro_math::arcsec_to_rad,
         night_id::NightId,
+        persistence::seed_node::SeedKey,
         seeding::{
-            seed_node::SeedNode,
+            seed_node::{SeedNode, SeedNodeCore},
             tangent_plane::{TangentCenter, TangentPlaneModel},
         },
         spacetime_bucket::{
@@ -268,10 +269,15 @@ mod seed_spatial_index_tests {
             dec_mid,
         );
         SeedNode {
-            night_id: NightId::new(1),
-            plane,
-            photom: crate::seeding::photometry::Photometry::from_pair(1.0, 0.1, 1, 2),
-            n_obs: 2,
+            core: SeedNodeCore {
+                key: SeedKey {
+                    night_id: NightId::new(1),
+                    idx_in_night: 0,
+                },
+                plane,
+                photom: crate::seeding::photometry::Photometry::from_pair(1.0, 0.1, 1, 2),
+                n_obs: 2,
+            },
             members: vec![],
         }
     }
