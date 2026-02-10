@@ -104,11 +104,14 @@ impl SolverManager {
     /// into your existing `SolverOutput`.
     pub fn run_plan<'edge_lf, 'seed_lf, 'alert_lf>(
         &self,
-        comps: &'seed_lf ConnectedComponents<'seed_lf, 'alert_lf>,
+        comps: &'edge_lf ConnectedComponents<'edge_lf, 'seed_lf, 'alert_lf>,
         graph: &'edge_lf RuntimeGraph<'seed_lf, 'alert_lf>,
         _seed_store: &'seed_lf SeedStore<'alert_lf>,
         plan: &SolvePlan,
-    ) -> Vec<SolverOutput<'edge_lf, 'seed_lf, 'alert_lf>> {
+    ) -> Vec<SolverOutput<'edge_lf, 'seed_lf, 'alert_lf>>
+    where
+        'edge_lf: 'seed_lf,
+    {
         // Trivial solver instance
         let trivial = TrivialSolver::default();
 
@@ -118,9 +121,7 @@ impl SolverManager {
         for item in &plan.items {
             // For "trivial", we usually want active edges only.
             let out = match item.choice {
-                SolverChoice::Trivial => {
-                    trivial.solve(&graph, comps.component_nodes(item.component_id))
-                }
+                SolverChoice::Trivial => trivial.solve(&graph, &comps, item.component_id),
                 SolverChoice::MinCostFlow => {
                     todo!("MinCostFlowSolver not implemented yet (new API)")
                 }

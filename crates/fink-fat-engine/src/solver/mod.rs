@@ -1,4 +1,8 @@
-use crate::{graph::RuntimeGraph, seeding::seed_node::SeedNode, trajectory::TrackHypothesis};
+use crate::{
+    graph::RuntimeGraph,
+    solver::components::{ComponentId, ConnectedComponents},
+    trajectory::TrackHypothesis,
+};
 
 pub mod components;
 pub mod min_cost_flow;
@@ -55,6 +59,9 @@ pub trait Solver<'edge_lf, 'seed_lf, 'alert_lf> {
     fn solve(
         &self,
         graph: &'edge_lf RuntimeGraph<'seed_lf, 'alert_lf>,
-        component_nodes: &[&'seed_lf SeedNode<'alert_lf>],
-    ) -> SolverOutput<'edge_lf, 'seed_lf, 'alert_lf>;
+        cc: &'edge_lf ConnectedComponents<'edge_lf, 'seed_lf, 'alert_lf>,
+        component_id: ComponentId,
+    ) -> SolverOutput<'edge_lf, 'seed_lf, 'alert_lf>
+    where
+        'edge_lf: 'seed_lf;
 }
