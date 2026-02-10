@@ -2,9 +2,7 @@ use crate::{
     graph::InterNightGraph,
     pipeline::seed_store::SeedStore,
     solver::{
-        components::{
-            ConnectedComponents, component_stats::ComponentStats, seed_index::SeedGlobalIndex,
-        },
+        components::{ConnectedComponents, component_stats::ComponentStats},
         trivial_solver::{TrivialSolver, TrivialSolverOutput},
     },
 };
@@ -198,13 +196,12 @@ impl<'seed_lf, 'alert_lf> ConnectedComponentsRuntime<'seed_lf, 'alert_lf> {
     /// - `edges` is the global edge slice
     pub fn build(
         seed_store: &'seed_lf SeedStore<'alert_lf>,
-        index: &SeedGlobalIndex,
         components: ConnectedComponents,
         edges: &'seed_lf [Edge<'seed_lf, 'alert_lf>],
     ) -> Self {
         // Single pass over SeedStore: build node lists + min/max night bounds.
         let (components_ref, night_bounds) =
-            components.materialize_components_with_bounds(seed_store, index);
+            components.materialize_components_with_bounds(seed_store);
 
         // Stats: nodes + bounds
         let mut stats = vec![ComponentStats::default(); components.n_components as usize];

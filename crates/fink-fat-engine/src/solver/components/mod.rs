@@ -129,8 +129,7 @@ impl ConnectedComponents {
 
     pub fn materialize_components_with_bounds<'seed_lf, 'alert_lf>(
         &self,
-        seed_store: &'seed_lf SeedStore<'alert_lf>,
-        index: &SeedGlobalIndex,
+        seed_store: &'seed_lf SeedStore<'alert_lf>
     ) -> (
         Vec<Vec<&'seed_lf SeedNode<'alert_lf>>>,
         Vec<Option<(NightId, NightId)>>,
@@ -147,8 +146,7 @@ impl ConnectedComponents {
 
         for (night_id, seeds) in seed_store.iter() {
             for seed in seeds {
-                let gid = index.idx_of_key(seed.core.key);
-                let cid = self.comp_of_node[gid] as usize;
+                let cid = self.compid_of_node(seed.core.key) as usize;
 
                 components[cid].push(seed);
 
