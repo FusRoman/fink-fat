@@ -54,7 +54,7 @@ pub trait Solver<'edge_lf, 'seed_lf, 'alert_lf> {
     ///     Candidate tracks and optional deactivation suggestions.
     fn solve(
         &self,
-        graph: &'edge_lf RuntimeGraph,
+        graph: &'edge_lf RuntimeGraph<'seed_lf, 'alert_lf>,
         component_nodes: &[&'seed_lf SeedNode<'alert_lf>],
     ) -> SolverOutput<'edge_lf, 'seed_lf, 'alert_lf>;
 }

@@ -2,8 +2,7 @@ use crate::{
     graph::RuntimeGraph,
     pipeline::seed_store::SeedStore,
     solver::{
-        components::ConnectedComponents,
-        trivial_solver::{TrivialSolver, TrivialSolverOutput},
+        Solver, SolverOutput, components::ConnectedComponents, trivial_solver::TrivialSolver,
     },
 };
 
@@ -103,28 +102,24 @@ impl SolverManager {
     ///
     /// Note: When you implement MCF / blob-breaker, you can unify the output type
     /// into your existing `SolverOutput`.
-    pub fn run_plan<'seed_lf, 'alert_lf>(
+    pub fn run_plan<'edge_lf, 'seed_lf, 'alert_lf>(
         &self,
         comps: &'seed_lf ConnectedComponents<'seed_lf, 'alert_lf>,
-        graph: &RuntimeGraph<'seed_lf, 'alert_lf>,
+        graph: &'edge_lf RuntimeGraph<'seed_lf, 'alert_lf>,
         _seed_store: &'seed_lf SeedStore<'alert_lf>,
         plan: &SolvePlan,
-    ) -> Vec<TrivialSolverOutput<'seed_lf, 'alert_lf>> {
+    ) -> Vec<SolverOutput<'edge_lf, 'seed_lf, 'alert_lf>> {
         // Trivial solver instance
         let trivial = TrivialSolver::default();
 
-        let mut outputs: Vec<TrivialSolverOutput<'seed_lf, 'alert_lf>> =
+        let mut outputs: Vec<SolverOutput<'edge_lf, 'seed_lf, 'alert_lf>> =
             Vec::with_capacity(plan.items.len());
 
         for item in &plan.items {
             // For "trivial", we usually want active edges only.
             let out = match item.choice {
                 SolverChoice::Trivial => {
-                    trivial.solve_component(
-                        &graph.edges,
-                        comps.component_nodes(item.component_id),
-                        /*active_only=*/ true,
-                    )
+                    trivial.solve(&graph, comps.component_nodes(item.component_id))
                 }
                 SolverChoice::MinCostFlow => {
                     todo!("MinCostFlowSolver not implemented yet (new API)")

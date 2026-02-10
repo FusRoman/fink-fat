@@ -9,9 +9,9 @@ use crate::{graph::edge::Edge, seeding::seed_node::SeedNode};
 #[derive(Clone, Debug)]
 pub struct TrackHypothesis<'edge_lf, 'seed_lf, 'alert_lf> {
     /// Nodes in strictly increasing time (night / epoch order).
-    nodes: Vec<&'seed_lf SeedNode<'alert_lf>>,
+    pub nodes: Vec<&'seed_lf SeedNode<'alert_lf>>,
     /// Edges used to connect the nodes (typically len = nodes.len() - 1).
-    edges: Vec<&'edge_lf Edge<'seed_lf, 'alert_lf>>,
+    pub edges: Vec<&'edge_lf Edge<'seed_lf, 'alert_lf>>,
     /// Additive cost / score returned by the solver (lower is better if cost).
     pub cost: f64,
 
