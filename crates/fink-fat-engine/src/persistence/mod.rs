@@ -206,7 +206,7 @@ impl PersistenceManager {
 
         // 3) Load edges owned via edge journal (snapshot + deltas), then convert to borrowed graph.
         let edges_owned = self.edge_journal.load_edges(&manifest, window)?;
-        let graph_owned = GraphOwned { edges: edges_owned };
+        let graph_owned = GraphOwned::from_edges(edges_owned);
 
         Ok(RuntimeState {
             manifest,

@@ -1,5 +1,5 @@
 use crate::{
-    graph::InterNightGraph,
+    graph::RuntimeGraph,
     pipeline::seed_store::SeedStore,
     solver::{
         components::ConnectedComponents,
@@ -106,7 +106,7 @@ impl SolverManager {
     pub fn run_plan<'seed_lf, 'alert_lf>(
         &self,
         comps: &'seed_lf ConnectedComponents<'seed_lf, 'alert_lf>,
-        graph: &InterNightGraph<'seed_lf, 'alert_lf>,
+        graph: &RuntimeGraph<'seed_lf, 'alert_lf>,
         _seed_store: &'seed_lf SeedStore<'alert_lf>,
         plan: &SolvePlan,
     ) -> Vec<TrivialSolverOutput<'seed_lf, 'alert_lf>> {

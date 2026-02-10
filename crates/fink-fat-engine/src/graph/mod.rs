@@ -1,28 +1,44 @@
 pub mod edge;
 
+use ahash::AHashMap;
+
 use crate::{
     engine_config::edge_config::EdgeConfig,
     graph::edge::{
         Edge,
         edge_prediction::{EdgeModelError, EdgeRankingModelPool},
     },
-    persistence::graph::GraphOwned,
+    persistence::{graph::GraphOwned, seed_node::SeedKey},
     seeding::seed_node::SeedNode,
     spacetime_bucket::{spatial_binner::SpatialBinner, time_binner::TimeBinner},
 };
 
+#[derive(Debug, Clone)]
+pub struct GraphCore {
+    pub in_deg: AHashMap<SeedKey, usize>,
+    pub out_deg: AHashMap<SeedKey, usize>,
+}
+
 #[derive(Debug)]
-pub struct InterNightGraph<'seed_lf, 'alert_lf> {
+pub struct RuntimeGraph<'seed_lf, 'alert_lf> {
+    pub core: GraphCore,
     pub edges: Vec<Edge<'seed_lf, 'alert_lf>>,
 }
 
-impl<'seed_lf, 'alert_lf> InterNightGraph<'seed_lf, 'alert_lf> {
+impl<'seed_lf, 'alert_lf> RuntimeGraph<'seed_lf, 'alert_lf> {
     pub fn new() -> Self {
-        Self { edges: Vec::new() }
+        Self {
+            core: GraphCore {
+                in_deg: AHashMap::new(),
+                out_deg: AHashMap::new(),
+            },
+            edges: Vec::new(),
+        }
     }
 
     pub fn to_owned(&self) -> GraphOwned {
         GraphOwned {
+            core: self.core.clone(),
             edges: self.edges.iter().map(|e| e.to_owned()).collect(),
         }
     }
@@ -72,6 +88,13 @@ impl<'seed_lf, 'alert_lf> InterNightGraph<'seed_lf, 'alert_lf> {
 
         /* ---------- insert edges into graph without node_id_of() ---------- */
         for edge in new_edges {
+
+            let from = edge.from.core.key;
+            let to = edge.to.core.key;
+
+            *self.core.out_deg.entry(from).or_insert(0) += 1;
+            *self.core.in_deg.entry(to).or_insert(0) += 1;
+
             self.edges.push(edge);
         }
         Ok(())

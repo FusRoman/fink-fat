@@ -2,7 +2,7 @@ use camino::Utf8Path;
 
 use crate::{
     engine_config::{EngineConfig, load_engine_config_validated},
-    graph::{InterNightGraph, edge::edge_prediction::EdgeRankingModelPool},
+    graph::{RuntimeGraph, edge::edge_prediction::EdgeRankingModelPool},
     persistence::alert_store::AlertStore,
     pipeline::seed_store::SeedStore,
 };
@@ -23,7 +23,7 @@ pub struct FinkFat<'seed_lf, 'alert_lf> {
     pub seed_store: &'seed_lf SeedStore<'alert_lf>,
 
     /// Borrowed graph view built from persisted edges + `seed_store`.
-    pub graph: InterNightGraph<'seed_lf, 'alert_lf>,
+    pub graph: RuntimeGraph<'seed_lf, 'alert_lf>,
 }
 
 impl<'seed_lf, 'alert_lf> FinkFat<'seed_lf, 'alert_lf> {
@@ -52,7 +52,7 @@ impl<'seed_lf, 'alert_lf> FinkFat<'seed_lf, 'alert_lf> {
         edge_ranking_models: EdgeRankingModelPool,
         alert_store: &'alert_lf AlertStore,
         seed_store: &'seed_lf SeedStore<'alert_lf>,
-        graph: InterNightGraph<'seed_lf, 'alert_lf>,
+        graph: RuntimeGraph<'seed_lf, 'alert_lf>,
     ) -> Self {
         Self {
             engine_config,
