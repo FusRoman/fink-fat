@@ -122,7 +122,7 @@ impl SolverManager {
                 SolverChoice::Trivial => {
                     trivial.solve_component(
                         &graph.edges,
-                        comps.comp_nodes(item.component_id),
+                        comps.component_nodes(item.component_id),
                         /*active_only=*/ true,
                     )
                 }
