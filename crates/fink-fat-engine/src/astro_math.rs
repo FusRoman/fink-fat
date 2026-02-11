@@ -11,7 +11,7 @@
 
 use std::f64::consts::{PI, TAU};
 
-use crate::{Radians, units::Arcsec};
+use crate::{Radian, units::Arcsec};
 
 /// Convert equatorial coordinates `(ra, dec)` to a 3D unit vector on the
 /// celestial sphere.
@@ -34,7 +34,7 @@ use crate::{Radians, units::Arcsec};
 /// ------
 /// 3D unit vector `[x, y, z]` on the unit sphere.
 #[inline]
-pub fn unit_vec(ra: Radians, dec: Radians) -> [f64; 3] {
+pub fn unit_vec(ra: Radian, dec: Radian) -> [f64; 3] {
     let cos_dec = dec.cos();
     [cos_dec * ra.cos(), cos_dec * ra.sin(), dec.sin()]
 }
@@ -487,7 +487,7 @@ pub fn cholesky_lower_sym_2x2(m: [[f64; 2]; 2], floor: f64) -> Option<[[f64; 2];
 /// ------
 /// Angle in radians wrapped to the principal interval (−π, π].
 #[inline]
-pub fn wrap_pm_pi(x: Radians) -> Radians {
+pub fn wrap_pm_pi(x: Radian) -> Radian {
     let two_pi = 2.0 * PI;
     let mut y = (x + PI) % two_pi;
     if y < 0.0 {
@@ -519,12 +519,12 @@ pub fn wrap_pm_pi(x: Radians) -> Radians {
 /// `(dx, dy)` tangent-plane offsets in **radians**.
 #[inline]
 pub fn planar_offset_fast(
-    ra0: Radians,
-    dec0: Radians,
+    ra0: Radian,
+    dec0: Radian,
     cos_dec0: f64,
-    ra: Radians,
-    dec: Radians,
-) -> (Radians, Radians) {
+    ra: Radian,
+    dec: Radian,
+) -> (Radian, Radian) {
     let dx = wrap_pm_pi(ra - ra0) * cos_dec0;
     let dy = dec - dec0;
     (dx, dy)
@@ -543,7 +543,7 @@ pub fn planar_offset_fast(
 /// ------
 /// Angle in radians.
 #[inline]
-pub fn arcsec_to_rad(x: Arcsec) -> Radians {
+pub fn arcsec_to_rad(x: Arcsec) -> Radian {
     x * PI / (180.0 * 3600.0)
 }
 
@@ -612,11 +612,11 @@ pub fn ang_sep(ra1: f64, dec1: f64, ra2: f64, dec2: f64) -> f64 {
 /// * https://en.wikipedia.org/wiki/Great-circle_distance
 #[inline]
 pub fn angular_separation_vincenty(
-    lon1: Radians,
-    lat1: Radians,
-    lon2: Radians,
-    lat2: Radians,
-) -> Radians {
+    lon1: Radian,
+    lat1: Radian,
+    lon2: Radian,
+    lat2: Radian,
+) -> Radian {
     let dlon = lon2 - lon1;
 
     let (slon, clon) = dlon.sin_cos();
@@ -709,11 +709,11 @@ const NORM_MIN: f64 = 1e-16;
 /// midpoint, but stable and very good to define a tangent-plane center.
 #[inline]
 pub fn spherical_midpoint(
-    ra1: Radians,
-    dec1: Radians,
-    ra2: Radians,
-    dec2: Radians,
-) -> (Radians, Radians) {
+    ra1: Radian,
+    dec1: Radian,
+    ra2: Radian,
+    dec2: Radian,
+) -> (Radian, Radian) {
     let (x1, y1, z1) = sph_to_cart(ra1, dec1);
     let (x2, y2, z2) = sph_to_cart(ra2, dec2);
     let (x, y, z) = (x1 + x2, y1 + y2, z1 + z2);
@@ -725,7 +725,7 @@ pub fn spherical_midpoint(
 ///
 /// Angles in radians. `(x, y)` are in radians on the tangent plane.
 #[inline]
-pub fn radec_to_tangent(ra: Radians, dec: Radians, ra0: Radians, dec0: Radians) -> [f64; 2] {
+pub fn radec_to_tangent(ra: Radian, dec: Radian, ra0: Radian, dec0: Radian) -> [f64; 2] {
     let (sdec, cdec) = dec.sin_cos();
     let (sdec0, cdec0) = dec0.sin_cos();
     let dra = ra - ra0;
@@ -744,7 +744,7 @@ pub fn radec_to_tangent(ra: Radians, dec: Radians, ra0: Radians, dec0: Radians) 
 ///
 /// All angles in radians. `ra` is normalized to `[0, 2π)`.
 #[inline]
-pub fn tangent_to_radec(x: f64, y: f64, ra0: Radians, dec0: Radians) -> (Radians, Radians) {
+pub fn tangent_to_radec(x: f64, y: f64, ra0: Radian, dec0: Radian) -> (Radian, Radian) {
     let rho2 = x * x + y * y;
     if rho2 < 1e-24 {
         return (ra0.rem_euclid(TAU), dec0);
@@ -876,7 +876,7 @@ pub fn l2_norm(x: f64, y: f64) -> f64 {
 
 /// Spherical → cartesian unit vector.
 #[inline]
-fn sph_to_cart(ra: Radians, dec: Radians) -> (f64, f64, f64) {
+fn sph_to_cart(ra: Radian, dec: Radian) -> (f64, f64, f64) {
     let (sdec, cdec) = dec.sin_cos();
     let (sra, cra) = ra.sin_cos();
     (cdec * cra, cdec * sra, sdec)
@@ -884,7 +884,7 @@ fn sph_to_cart(ra: Radians, dec: Radians) -> (f64, f64, f64) {
 
 /// Cartesian → spherical (ra in [0, 2π)).
 #[inline]
-fn cart_to_sph(x: f64, y: f64, z: f64) -> (Radians, Radians) {
+fn cart_to_sph(x: f64, y: f64, z: f64) -> (Radian, Radian) {
     // hypot(x,y) is stable for tiny x,y (near poles)
     let rho = x.hypot(y);
 

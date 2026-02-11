@@ -100,6 +100,10 @@
 //! finite costs). Sorting uses `partial_cmp` with an equality fallback; NaN costs
 //! can lead to unstable ordering and should be avoided in production.
 
+use std::cmp::Ordering;
+
+use ahash::AHashMap;
+
 use crate::{
     engine_config::solver_config::bounded_beam_config::BoundedBeamConfig,
     graph::{RuntimeGraph, edge::Edge},
@@ -214,7 +218,7 @@ impl BoundedBeamSolver {
         // Early exit: even a full component path cannot satisfy `min_nodes`.
         if n_nodes < cfg.min_nodes {
             return SolverOutput {
-                tracks: Vec::new(),
+                tracks: AHashMap::new(),
                 diag,
             };
         }
@@ -225,7 +229,7 @@ impl BoundedBeamSolver {
         // Beam search requires at least one start point.
         if sources.is_empty() {
             return SolverOutput {
-                tracks: Vec::new(),
+                tracks: AHashMap::new(),
                 diag,
             };
         }
@@ -620,6 +624,7 @@ fn expand_beam<'edge_lf, 'seed_lf, 'alert_lf>(
 ///
 /// Arguments
 /// ---------
+/// * `tmp_track_id` – Temporary track id before final assignment after orbit fitting.
 /// * `terminal_state_id` – State pool index representing the end of a path.
 /// * `states` – State pool.
 /// * `component_nodes` – Component nodes in local index order.
@@ -688,9 +693,19 @@ fn reconstruct_track<'edge_lf, 'seed_lf, 'alert_lf>(
 /// - Costs are expected to be finite and non-NaN.
 fn sort_and_truncate_tracks<'edge_lf, 'seed_lf, 'alert_lf>(
     cfg: &BoundedBeamConfig,
-    tracks: &mut Vec<TrackHypothesis<'edge_lf, 'seed_lf, 'alert_lf>>,
+    tracks: &mut AHashMap<u32, TrackHypothesis<'edge_lf, 'seed_lf, 'alert_lf>>,
 ) {
-    tracks.sort_by(|a, b| {
+    // Rien à faire si déjà <= max_tracks
+    if tracks.len() <= cfg.max_tracks {
+        return;
+    }
+
+    // 1) Materialize en vec pour pouvoir trier
+    let mut items: Vec<(u32, TrackHypothesis<'edge_lf, 'seed_lf, 'alert_lf>)> =
+        tracks.drain().collect();
+
+    // 2) Tri (meilleur d'abord)
+    items.sort_by(|(_ka, a), (_kb, b)| {
         let a_edges = a.edges.len().max(1) as f64;
         let b_edges = b.edges.len().max(1) as f64;
 
@@ -699,18 +714,18 @@ fn sort_and_truncate_tracks<'edge_lf, 'seed_lf, 'alert_lf>(
 
         a_avg
             .partial_cmp(&b_avg)
-            .unwrap_or(std::cmp::Ordering::Equal)
+            .unwrap_or(Ordering::Equal)
+            // tie-break: préférer les tracks plus longues
             .then_with(|| b.edges.len().cmp(&a.edges.len()))
-            .then_with(|| {
-                a.cost
-                    .partial_cmp(&b.cost)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+            // tie-break: coût total plus faible
+            .then_with(|| a.cost.partial_cmp(&b.cost).unwrap_or(Ordering::Equal))
     });
 
-    if tracks.len() > cfg.max_tracks {
-        tracks.truncate(cfg.max_tracks);
-    }
+    // 3) Tronque au top-K
+    items.truncate(cfg.max_tracks);
+
+    // 4) Réinsère dans la hashmap (capacity correcte)
+    tracks.extend(items);
 }
 
 // -----------------------------------------------------------------------------
@@ -761,7 +776,7 @@ fn sort_and_truncate_tracks<'edge_lf, 'seed_lf, 'alert_lf>(
 ///
 /// Return
 /// ------
-/// * `Vec<TrackHypothesis>` – Candidate tracks sorted and truncated.
+/// * `AHashMap<u32, TrackHypothesis>` – Candidate tracks sorted and truncated.
 ///
 /// Notes
 /// -----
@@ -774,10 +789,10 @@ fn enumerate_beam_tracks_from_component_view<'edge_lf, 'seed_lf, 'alert_lf>(
     component_out_edges: &[Vec<&'edge_lf Edge<'seed_lf, 'alert_lf>>],
     sources_local: &[LocalIdx],
     diag: &mut SolverDiagnostics,
-) -> Vec<TrackHypothesis<'edge_lf, 'seed_lf, 'alert_lf>> {
+) -> AHashMap<u32, TrackHypothesis<'edge_lf, 'seed_lf, 'alert_lf>> {
     let n = component_nodes.len();
     if n == 0 {
-        return Vec::new();
+        return AHashMap::new();
     }
 
     // Convert sources (LocalIdx) into indices used by local vectors.
@@ -787,7 +802,7 @@ fn enumerate_beam_tracks_from_component_view<'edge_lf, 'seed_lf, 'alert_lf>(
         .collect::<Vec<_>>();
 
     if sources.is_empty() {
-        return Vec::new();
+        return AHashMap::new();
     }
 
     // 1) Build solver adjacency (sorted + pruned).
@@ -846,10 +861,18 @@ fn enumerate_beam_tracks_from_component_view<'edge_lf, 'seed_lf, 'alert_lf>(
     }
 
     // 5) Reconstruct tracks.
-    let mut tracks: Vec<TrackHypothesis<'edge_lf, 'seed_lf, 'alert_lf>> = terminal_states
+    let mut tracks: AHashMap<u32, TrackHypothesis<'edge_lf, 'seed_lf, 'alert_lf>> = terminal_states
         .into_iter()
-        .map(|sid| reconstruct_track(sid, &states, component_nodes))
-        .filter(|t| t.nodes.len() >= cfg.min_nodes)
+        .enumerate()
+        .filter_map(|(tmp_track_id, sid)| {
+            let t = reconstruct_track(sid, &states, component_nodes);
+
+            if t.nodes.len() >= cfg.min_nodes {
+                Some((tmp_track_id as u32, t))
+            } else {
+                None
+            }
+        })
         .collect();
 
     // 6) Rank + truncate.

@@ -13,7 +13,7 @@ pub type MJDTT = f64;
 
 /// Angle in radians, typically used for right ascension, declination,
 /// and small-angle offsets on the sky.
-pub type Radians = f64;
+pub type Radian = f64;
 
 /// Angle in arcseconds.
 pub type Arcsec = f64;

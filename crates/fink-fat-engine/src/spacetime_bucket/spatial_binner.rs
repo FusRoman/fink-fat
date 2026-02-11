@@ -1,4 +1,4 @@
-use crate::Radians;
+use crate::Radian;
 use std::fmt::Debug;
 
 /// Compact spatial cell identifier.
@@ -26,12 +26,12 @@ pub trait SpatialBinner: Sync {
     /// Return
     /// ------
     /// `SpatialKey` – the spatial cell id covering `(ra, dec)`.
-    fn key_for(&self, ra: Radians, dec: Radians) -> SpatialKey;
+    fn key_for(&self, ra: Radian, dec: Radian) -> SpatialKey;
 
     /// Write neighbor keys into `out` (which is cleared by the callee).
     ///
     /// This avoids allocating a new Vec on every query.
-    fn neighbors_into(&self, key: SpatialKey, ang_radius: Radians, out: &mut Vec<SpatialKey>);
+    fn neighbors_into(&self, key: SpatialKey, ang_radius: Radian, out: &mut Vec<SpatialKey>);
 
     /// Enumerate neighbor cells needed to cover an **angular radius** around `key`.
     ///
@@ -43,7 +43,7 @@ pub trait SpatialBinner: Sync {
     /// Implementations usually **include `key` itself** in the returned list,
     /// but callers should not rely on this unless documented by the concrete type.
     #[inline]
-    fn neighbors(&self, key: SpatialKey, ang_radius: Radians) -> Vec<SpatialKey> {
+    fn neighbors(&self, key: SpatialKey, ang_radius: Radian) -> Vec<SpatialKey> {
         let mut out = Vec::new();
         self.neighbors_into(key, ang_radius, &mut out);
         out
@@ -52,5 +52,5 @@ pub trait SpatialBinner: Sync {
     /// Characteristic angular **radius** for a single cell (radians).
     ///
     /// This can drive the choice of neighbor coverage (e.g., `k × cell_radius()`).
-    fn cell_radius(&self) -> Radians;
+    fn cell_radius(&self) -> Radian;
 }

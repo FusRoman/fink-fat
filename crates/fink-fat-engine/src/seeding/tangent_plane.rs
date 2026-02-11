@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display, Formatter};
 
 use crate::{
-    MJDTT, Radians,
+    MJDTT, Radian,
     astro_math::{lambda_max_2x2, radec_to_tangent, tangent_to_radec},
     display_format::{fmt_mat2, fmt_vec2},
     engine_config::propagator_config::ModelNoise,
@@ -49,9 +49,9 @@ use crate::{
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 pub struct TangentCenter {
     /// Tangent-plane centre right ascension α₀ (radians, ICRS).
-    pub ra0: Radians,
+    pub ra0: Radian,
     /// Tangent-plane centre declination δ₀ (radians, ICRS).
-    pub dec0: Radians,
+    pub dec0: Radian,
     /// Precomputed `sin(δ₀)` for potential optimisation.
     pub sin_dec0: f64,
     /// Precomputed `cos(δ₀)` for potential optimisation.
@@ -93,7 +93,7 @@ impl TangentCenter {
     ///   `astro_math::radec_to_tangent`; this keeps the struct self-describing
     ///   and ready for lower-level optimisations if required.
     #[inline]
-    pub fn new(ra0: Radians, dec0: Radians) -> Self {
+    pub fn new(ra0: Radian, dec0: Radian) -> Self {
         let (sin_dec0, cos_dec0) = dec0.sin_cos();
         Self {
             ra0,
@@ -122,7 +122,7 @@ impl TangentCenter {
     /// * This method does not use `sin_dec0` and `cos_dec0` directly; it
     ///   simply forwards to the robust implementation in `astro_math`.
     #[inline]
-    pub fn radec_to_tangent(&self, ra: Radians, dec: Radians) -> [f64; 2] {
+    pub fn radec_to_tangent(&self, ra: Radian, dec: Radian) -> [f64; 2] {
         radec_to_tangent(ra, dec, self.ra0, self.dec0)
     }
 }
@@ -169,9 +169,9 @@ pub struct TangentPlaneModel {
     pub cov_vel: [[f64; 2]; 2],
 
     /// Mean RA of the arc in ICRS (radians, mostly for QA / debugging).
-    pub ra_mid: Radians,
+    pub ra_mid: Radian,
     /// Mean Dec of the arc in ICRS (radians, mostly for QA / debugging).
-    pub dec_mid: Radians,
+    pub dec_mid: Radian,
 }
 
 impl Display for TangentPlaneModel {
@@ -237,8 +237,8 @@ impl TangentPlaneModel {
         acc_xy: Option<[f64; 2]>,
         cov_pos: [[f64; 2]; 2],
         cov_vel: [[f64; 2]; 2],
-        ra_mid: Radians,
-        dec_mid: Radians,
+        ra_mid: Radian,
+        dec_mid: Radian,
     ) -> Self {
         Self {
             center,
@@ -274,7 +274,7 @@ impl TangentPlaneModel {
     ///   cached trigonometric terms explicitly; the current implementation
     ///   simply delegates to `radec_to_tangent`.
     #[inline]
-    pub fn radec_to_tangent_precomp(&self, ra: Radians, dec: Radians) -> [f64; 2] {
+    pub fn radec_to_tangent_precomp(&self, ra: Radian, dec: Radian) -> [f64; 2] {
         // Use the projection defined in astro_math.rs.
         radec_to_tangent(ra, dec, self.center.ra0, self.center.dec0)
     }
@@ -351,7 +351,7 @@ impl TangentPlaneModel {
     /// ------
     /// * `(x, y)` – Predicted position on the tangent plane (radians).
     #[inline]
-    pub fn predict_position(&self, dt: f64, dt_sq: f64) -> (Radians, Radians) {
+    pub fn predict_position(&self, dt: f64, dt_sq: f64) -> (Radian, Radian) {
         // Kinematic propagation on the tangent plane.
         let mut px = self.pos_xy[0] + self.vel_xy[0] * dt;
         let mut py = self.pos_xy[1] + self.vel_xy[1] * dt;
@@ -372,7 +372,7 @@ impl TangentPlaneModel {
     /// ------
     /// * `(vx, vy)` – Predicted velocity on the tangent plane (radians/day).
     #[inline]
-    pub fn predict_velocity(&self, dt: f64) -> (Radians, Radians) {
+    pub fn predict_velocity(&self, dt: f64) -> (Radian, Radian) {
         // Kinematic propagation on the tangent plane.
         let mut vx = self.vel_xy[0];
         let mut vy = self.vel_xy[1];
@@ -408,7 +408,7 @@ impl TangentPlaneModel {
     ///   drifts far from the reference centre or outside the validity time
     ///   range of the fit.
     #[inline]
-    pub fn predict_radec(&self, t_target: MJDTT) -> (Radians, Radians) {
+    pub fn predict_radec(&self, t_target: MJDTT) -> (Radian, Radian) {
         let dt = t_target - self.epoch_mid;
 
         // Kinematic propagation on the tangent plane.
@@ -459,7 +459,7 @@ impl TangentPlaneModel {
         t_target: MJDTT,
         noise: &ModelNoise,
         k_sigma: f64,
-    ) -> (Radians, Radians, f64) {
+    ) -> (Radian, Radian, f64) {
         // Predict position and covariance on the tangent plane.
         let (p, cov) = self.predict_on_plane(t_target, noise);
 

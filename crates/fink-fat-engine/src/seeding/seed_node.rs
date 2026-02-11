@@ -61,7 +61,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Alert, MJDTT, Radians,
+    Alert, MJDTT, Radian,
     astro_math::{fit_quad_1d, radec_to_tangent, spherical_midpoint, tangent_to_radec},
     display_format::indent_block,
     engine_config::{edge_config::EdgeConfig, propagator_config::PredictorParams},
@@ -253,14 +253,14 @@ impl<'alert_lf> SeedNode<'alert_lf> {
     ///
     /// Returns
     /// -------
-    /// (Radians, Radians)
+    /// (Radian, Radian)
     ///     `(ra, dec)` in radians (same frame as alerts stored in the seed).
     ///
     /// See also
     /// --------
     /// - [`SeedNode::predict_cone`] – uncertainty-aware cone for candidate search.
     #[inline]
-    pub fn predict_radec(&self, t_target: MJDTT) -> (Radians, Radians) {
+    pub fn predict_radec(&self, t_target: MJDTT) -> (Radian, Radian) {
         self.plane.predict_radec(t_target)
     }
 
@@ -284,7 +284,7 @@ impl<'alert_lf> SeedNode<'alert_lf> {
     ///
     /// Returns
     /// -------
-    /// (Radians, Radians, f64)
+    /// (Radian, Radian, f64)
     ///     `(ra_center, dec_center, radius)` in radians.
     ///
     /// Notes
@@ -298,7 +298,7 @@ impl<'alert_lf> SeedNode<'alert_lf> {
         t_target: MJDTT,
         binner: &Bs,
         predictor_params: &PredictorParams,
-    ) -> (Radians, Radians, f64) {
+    ) -> (Radian, Radian, f64) {
         let (ra, dec, mut radius) = self.plane.predict_cone_base(
             t_target,
             &predictor_params.noise,

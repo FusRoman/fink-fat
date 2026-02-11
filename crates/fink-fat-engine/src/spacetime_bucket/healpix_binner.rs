@@ -40,7 +40,7 @@ use cdshealpix as chpx;
 use chpx::nested;
 use chpx::nested::Layer;
 
-use crate::Radians;
+use crate::Radian;
 use crate::spacetime_bucket::spatial_binner::{SpatialBinner, SpatialKey};
 
 /// Spatial binner backed by **HEALPix** (NESTED scheme).
@@ -59,7 +59,7 @@ pub struct HealpixBinner {
     layer: &'static Layer,
     /// Characteristic cell radius (radians).  
     /// Defined as the maximum center→vertex distance at the equator.
-    cell_radius: Radians,
+    cell_radius: Radian,
 }
 
 thread_local! {
@@ -113,13 +113,13 @@ impl SpatialBinner for HealpixBinner {
     /// -------
     /// [`SpatialKey`] wrapping the NESTED HEALPix hash.
     #[inline]
-    fn key_for(&self, ra: Radians, dec: Radians) -> SpatialKey {
+    fn key_for(&self, ra: Radian, dec: Radian) -> SpatialKey {
         // cdshealpix expects (lon, lat) in radians
         let h = self.layer.hash(ra, dec);
         SpatialKey(h)
     }
 
-    fn neighbors_into(&self, key: SpatialKey, ang_radius: Radians, out: &mut Vec<SpatialKey>) {
+    fn neighbors_into(&self, key: SpatialKey, ang_radius: Radian, out: &mut Vec<SpatialKey>) {
         out.clear();
 
         let SpatialKey(pixel_hash) = key;
@@ -171,7 +171,7 @@ impl SpatialBinner for HealpixBinner {
     /// Returns
     /// -------
     /// Vector of [`SpatialKey`] covering the neighborhood.
-    fn neighbors(&self, key: SpatialKey, ang_radius: Radians) -> Vec<SpatialKey> {
+    fn neighbors(&self, key: SpatialKey, ang_radius: Radian) -> Vec<SpatialKey> {
         let SpatialKey(h) = key;
 
         // Local characteristic radius at this pixel center
@@ -204,7 +204,7 @@ impl SpatialBinner for HealpixBinner {
     ///   but this value is used as a **simple threshold** for switching
     ///   between local-neighbor vs cone-based search.
     #[inline]
-    fn cell_radius(&self) -> Radians {
+    fn cell_radius(&self) -> Radian {
         self.cell_radius
     }
 }

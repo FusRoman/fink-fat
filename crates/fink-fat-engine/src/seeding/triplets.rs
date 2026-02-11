@@ -393,7 +393,7 @@ mod triplet_gen_tests {
     use std::f64::consts::PI;
 
     use crate::{
-        MJDTT, Radians,
+        MJDTT, Radian,
         astro_math::{ang_sep, arcsec_to_rad, planar_offset_fast},
         engine_config::triplet_config::TripletConfig,
         persistence::alert::AlertKey,
@@ -412,22 +412,22 @@ mod triplet_gen_tests {
     struct DummySpatialBinner;
 
     impl SpatialBinner for DummySpatialBinner {
-        fn key_for(&self, _ra: Radians, _dec: Radians) -> SpatialKey {
+        fn key_for(&self, _ra: Radian, _dec: Radian) -> SpatialKey {
             SpatialKey(0)
         }
 
-        fn neighbors(&self, _key: SpatialKey, _ang_radius: Radians) -> Vec<SpatialKey> {
+        fn neighbors(&self, _key: SpatialKey, _ang_radius: Radian) -> Vec<SpatialKey> {
             vec![SpatialKey(0)]
         }
 
-        fn cell_radius(&self) -> Radians {
+        fn cell_radius(&self) -> Radian {
             0.0
         }
 
         fn neighbors_into(
             &self,
             _key: SpatialKey,
-            _ang_radius: Radians,
+            _ang_radius: Radian,
             _out: &mut Vec<SpatialKey>,
         ) {
             // Not needed in these tests.

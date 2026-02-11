@@ -34,7 +34,7 @@
 use ahash::AHashMap;
 
 use crate::{
-    Alert, MJDTT, Radians,
+    Alert, MJDTT, Radian,
     spacetime_bucket::{
         spatial_binner::{SpatialBinner, SpatialKey},
         time_binner::{TimeBin, TimeBinner},
@@ -118,9 +118,9 @@ pub struct BucketIndex<Object> {
 ///
 /// Parameters
 /// ----------
-/// ra : Radians
+/// ra : Radian
 ///     Right ascension (radians).
-/// dec : Radians
+/// dec : Radian
 ///     Declination (radians).
 /// mjd_tt : MJDTT
 ///     Observation epoch (MJD TT).
@@ -135,8 +135,8 @@ pub struct BucketIndex<Object> {
 ///     Combined spatial + temporal bucket key.
 #[inline]
 fn bucket_key_for<Bs: SpatialBinner, Bt: TimeBinner>(
-    ra: Radians,
-    dec: Radians,
+    ra: Radian,
+    dec: Radian,
     mjd_tt: MJDTT,
     sb: &Bs,
     tb: &Bt,
@@ -225,16 +225,16 @@ mod bucket_tests {
     struct DummySpatialBinner;
 
     impl SpatialBinner for DummySpatialBinner {
-        fn key_for(&self, _ra: Radians, _dec: Radians) -> SpatialKey {
+        fn key_for(&self, _ra: Radian, _dec: Radian) -> SpatialKey {
             SpatialKey(0)
         }
 
-        fn neighbors(&self, key: SpatialKey, _ang_radius: Radians) -> Vec<SpatialKey> {
+        fn neighbors(&self, key: SpatialKey, _ang_radius: Radian) -> Vec<SpatialKey> {
             // Trivial implementation: only the cell itself.
             vec![key]
         }
 
-        fn cell_radius(&self) -> Radians {
+        fn cell_radius(&self) -> Radian {
             // Arbitrary positive value; not used in these tests.
             1.0
         }
@@ -242,7 +242,7 @@ mod bucket_tests {
         fn neighbors_into(
             &self,
             _key: SpatialKey,
-            _ang_radius: Radians,
+            _ang_radius: Radian,
             _out: &mut Vec<SpatialKey>,
         ) {
             todo!()
@@ -276,7 +276,7 @@ mod bucket_tests {
     }
 
     /// Helper to build a minimal `Alert` for tests.
-    fn mk_alert(dia_source_id: u64, ra: Radians, dec: Radians, mjd_tt: MJDTT) -> Alert {
+    fn mk_alert(dia_source_id: u64, ra: Radian, dec: Radian, mjd_tt: MJDTT) -> Alert {
         Alert {
             dia_source_id,
             ra,
@@ -386,7 +386,7 @@ mod bucket_tests {
         // Spatial binner that splits by RA at π
         struct SplitSpatialBinner;
         impl SpatialBinner for SplitSpatialBinner {
-            fn key_for(&self, ra: Radians, _dec: Radians) -> SpatialKey {
+            fn key_for(&self, ra: Radian, _dec: Radian) -> SpatialKey {
                 if ra < PI {
                     SpatialKey(0)
                 } else {
@@ -394,12 +394,12 @@ mod bucket_tests {
                 }
             }
 
-            fn neighbors(&self, key: SpatialKey, _ang_radius: Radians) -> Vec<SpatialKey> {
+            fn neighbors(&self, key: SpatialKey, _ang_radius: Radian) -> Vec<SpatialKey> {
                 // Minimal implementation for tests: just return the cell itself.
                 vec![key]
             }
 
-            fn cell_radius(&self) -> Radians {
+            fn cell_radius(&self) -> Radian {
                 // Arbitrary positive radius.
                 1.0
             }
@@ -407,7 +407,7 @@ mod bucket_tests {
             fn neighbors_into(
                 &self,
                 _key: SpatialKey,
-                _ang_radius: Radians,
+                _ang_radius: Radian,
                 _out: &mut Vec<SpatialKey>,
             ) {
                 todo!()
@@ -497,17 +497,17 @@ mod bucket_tests {
     fn bucket_key_for_uses_both_spatial_and_time_binners() {
         struct TestSpatialBinner;
         impl SpatialBinner for TestSpatialBinner {
-            fn key_for(&self, ra: Radians, _dec: Radians) -> SpatialKey {
+            fn key_for(&self, ra: Radian, _dec: Radian) -> SpatialKey {
                 // encode ra bucket roughly as integer
                 SpatialKey((ra / 0.5).floor() as u64)
             }
 
-            fn neighbors(&self, key: SpatialKey, _ang_radius: Radians) -> Vec<SpatialKey> {
+            fn neighbors(&self, key: SpatialKey, _ang_radius: Radian) -> Vec<SpatialKey> {
                 // Minimal impl: only the given key.
                 vec![key]
             }
 
-            fn cell_radius(&self) -> Radians {
+            fn cell_radius(&self) -> Radian {
                 // Cell size consistent with the 0.5 rad "bucket" we used.
                 0.5
             }
@@ -515,7 +515,7 @@ mod bucket_tests {
             fn neighbors_into(
                 &self,
                 _key: SpatialKey,
-                _ang_radius: Radians,
+                _ang_radius: Radian,
                 _out: &mut Vec<SpatialKey>,
             ) {
                 todo!()

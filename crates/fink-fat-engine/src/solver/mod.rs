@@ -72,7 +72,11 @@
 //! - `bounded_beam` – bounded beam-search enumeration inside one component.
 //! - `min_cost_flow` – (optional) global optimization solver for larger components.
 
+use ahash::AHashMap;
+use outfit::{MJD, trajectories::batch_reader::ObservationBatch};
+
 use crate::{
+    Alert, Radian,
     graph::RuntimeGraph,
     solver::components::{ComponentId, ConnectedComponents},
     trajectory::TrackHypothesis,
@@ -210,10 +214,211 @@ pub struct SolverOutput<'edge_lf, 'seed_lf, 'alert_lf> {
     ///
     /// In most solvers, tracks are sorted from best to worst, but callers should
     /// not rely on that unless explicitly documented by the solver implementation.
-    pub tracks: Vec<TrackHypothesis<'edge_lf, 'seed_lf, 'alert_lf>>,
+    ///
+    /// The key is a temporary track id assigned during reconstruction; final track ids are
+    /// typically assigned after orbit fitting and persistence.
+    pub tracks: AHashMap<u32, TrackHypothesis<'edge_lf, 'seed_lf, 'alert_lf>>,
 
     /// Diagnostics for monitoring and tuning.
     pub diag: SolverDiagnostics,
+}
+
+use std::borrow::Cow;
+use std::cmp::Ordering;
+
+impl<'edge_lf, 'seed_lf, 'alert_lf> SolverOutput<'edge_lf, 'seed_lf, 'alert_lf> {
+    /// Flatten all solver tracks into a single [`ObservationBatch`].
+    ///
+    /// This helper converts the solver output (a set of independent
+    /// [`TrackHypothesis`] values) into the *tabular*, solver-agnostic representation
+    /// expected by downstream routines (orbit fitting, IOD, batch scoring, etc.).
+    ///
+    /// Output layout
+    /// -------------
+    /// The returned batch is a **flat concatenation** of observations from all tracks:
+    ///
+    /// - `trajectory_id[i]` identifies which track the *i-th* observation belongs to.
+    /// - `ra[i]`, `dec[i]`, and `time[i]` store the angular position and epoch of the
+    ///   *i-th* observation.
+    ///
+    /// All arrays have identical length `N` (number of flattened observations):
+    ///
+    /// ```text
+    /// trajectory_id.len() == ra.len() == dec.len() == time.len() == N
+    /// ```
+    ///
+    /// Track association
+    /// -----------------
+    /// Each flattened observation is assigned the `temp_id` of its parent track:
+    ///
+    /// - All observations originating from the same [`TrackHypothesis`] share the
+    ///   same `trajectory_id` value.
+    /// - The batch can therefore contain multiple tracks simultaneously while still
+    ///   being groupable by `trajectory_id`.
+    ///
+    /// Determinism
+    /// -----------
+    /// [`AHashMap`] iteration order is not stable. To ensure deterministic output
+    /// (useful for tests, reproducible pipelines, and stable diagnostics), tracks
+    /// are processed in ascending key order:
+    ///
+    /// 1. Collect all track keys (`temp_id`).
+    /// 2. Sort them with `sort_unstable()`.
+    /// 3. Flatten tracks in that sorted order.
+    ///
+    /// This guarantees a stable global concatenation order *given the same input tracks*.
+    ///
+    /// Per-track ordering
+    /// ------------------
+    /// Observations inside each track are explicitly normalized to time order:
+    ///
+    /// - Alerts collected from the track’s seed nodes are sorted by `mjd_tt` ascending.
+    ///
+    /// Even if the solver builds tracks from time-ordered seeds, this normalization
+    /// is helpful because:
+    /// - seed membership may overlap across consecutive seeds,
+    /// - the concatenation of multiple seeds is not guaranteed to be strictly sorted
+    ///   without an explicit global sort step.
+    ///
+    /// Deduplication strategy
+    /// ----------------------
+    /// Within each track, alerts are deduplicated **after sorting**, using the pointer
+    /// identity of the borrowed alert reference:
+    ///
+    /// ```rust,ignore
+    /// alerts.dedup_by_key(|a| *a as *const Alert);
+    /// ```
+    ///
+    /// This removes duplicates produced when multiple seeds in a track share member
+    /// alerts (common in overlapping triplets / pairs).
+    ///
+    /// Notes:
+    /// - Pointer-based dedup assumes that identical logical alerts are represented
+    ///   by the same in-memory `Alert` instance (typical when alerts come from a
+    ///   central store and seeds hold references).
+    /// - If alerts have a known stable identifier (e.g. `candid`, `(night_id, idx)`,
+    ///   etc.), prefer dedup by that identifier to be robust to alternative memory
+    ///   layouts.
+    ///
+    /// Uncertainty aggregation
+    /// -----------------------
+    /// [`ObservationBatch`] models angular uncertainties as a **single uniform**
+    /// 1-σ value for RA and for DEC, applied to the entire batch.
+    ///
+    /// This implementation sets:
+    ///
+    /// - `error_ra = max(alert.ra_err)` across all flattened observations
+    /// - `error_dec = max(alert.dec_err)` across all flattened observations
+    ///
+    /// This is a conservative choice that avoids under-weighting any point.
+    ///
+    /// If you need a different policy (e.g. median, mean, per-track values, or
+    /// per-observation uncertainties), implement it at the call site or change
+    /// the `ObservationBatch` model.
+    ///
+    /// Allocation and lifetime behavior
+    /// -------------------------------
+    /// This method constructs **owned** buffers (`Vec<T>`) and returns them as
+    /// `Cow::Owned(...)`.
+    ///
+    /// - The returned batch does **not** borrow from `self` despite taking `&self`.
+    /// - The lifetime parameter of the returned [`ObservationBatch`] is therefore
+    ///   irrelevant to safety in the current implementation (it contains no borrowed
+    ///   slices).
+    ///
+    /// Capacity planning
+    /// -----------------
+    /// To reduce reallocations, the method first estimates an upper bound for the
+    /// number of produced observations by summing `seed.members.len()` across all
+    /// seeds of all tracks. This is a *safe upper bound* because deduplication may
+    /// remove some elements, but it remains a good heuristic for reserving memory.
+    ///
+    /// Complexity
+    /// ----------
+    /// Let:
+    /// - `T` be the number of tracks,
+    /// - `M_t` be the number of collected alert references for track `t`
+    ///   (before deduplication).
+    ///
+    /// Then:
+    /// - Sorting track ids: `O(T log T)`
+    /// - For each track: sorting alerts: `O(M_t log M_t)`
+    /// - Dedup + flatten: `O(sum_t M_t)`
+    ///
+    /// Total: `O(T log T + sum_t (M_t log M_t))`
+    ///
+    /// Panics
+    /// ------
+    /// This method does not intentionally panic. If `mjd_tt` contains NaNs, the
+    /// `partial_cmp` used for sorting falls back to `Ordering::Equal`, which keeps
+    /// the sort total but may result in a less meaningful ordering for those entries.
+    ///
+    /// See also
+    /// --------
+    /// - [`TrackHypothesis`]: single-trajectory solver output.
+    /// - [`ObservationBatch::from_radians_borrowed`]: zero-copy construction when
+    ///   upstream already has contiguous slices (not the case here).
+    pub fn to_observation_batch(&'_ self) -> ObservationBatch<'_> {
+        // --- 0) Stable track order (deterministic)
+        let mut track_ids: Vec<u32> = self.tracks.keys().copied().collect();
+        track_ids.sort_unstable();
+
+        // --- 1) Capacity estimate (avoid reallocations)
+        let mut cap: usize = 0;
+        for tid in &track_ids {
+            let trk = &self.tracks[tid];
+            for seed in &trk.nodes {
+                cap += seed.members.len();
+            }
+        }
+
+        // --- 2) Flat buffers
+        let mut trajectory_id: Vec<u32> = Vec::with_capacity(cap);
+        let mut ra: Vec<Radian> = Vec::with_capacity(cap);
+        let mut dec: Vec<Radian> = Vec::with_capacity(cap);
+        let mut time: Vec<MJD> = Vec::with_capacity(cap);
+
+        // Uniform batch-level uncertainties (choose your policy)
+        let mut max_ra_err: Radian = 0.0;
+        let mut max_dec_err: Radian = 0.0;
+
+        // --- 3) Flatten per track
+        for tid in track_ids {
+            let trk = &self.tracks[&tid];
+
+            let mut alerts: Vec<&Alert> = trk
+                .nodes
+                .iter()
+                .flat_map(|seed| seed.members.iter().copied())
+                .collect();
+
+            // Ensure time order inside this track
+            alerts.sort_by(|a, b| a.mjd_tt.partial_cmp(&b.mjd_tt).unwrap_or(Ordering::Equal));
+
+            // Dedup (pointer-based). Replace with a stable alert id if available.
+            alerts.dedup_by_key(|a| *a as *const Alert);
+
+            for a in alerts {
+                trajectory_id.push(tid);
+
+                ra.push(a.ra);
+                dec.push(a.dec);
+                time.push(a.mjd_tt);
+
+                max_ra_err = max_ra_err.max(a.ra_err);
+                max_dec_err = max_dec_err.max(a.dec_err);
+            }
+        }
+
+        ObservationBatch {
+            trajectory_id: Cow::Owned(trajectory_id),
+            ra: Cow::Owned(ra),
+            dec: Cow::Owned(dec),
+            time: Cow::Owned(time),
+            error_ra: max_ra_err,
+            error_dec: max_dec_err,
+        }
+    }
 }
 
 /// A solver that extracts trajectory hypotheses from a connected component.

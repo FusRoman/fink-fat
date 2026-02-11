@@ -213,7 +213,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::engine_config::units::{de_angle_rad, de_time_days};
-use crate::{MJDTT, Radians, error::SeedError};
+use crate::{MJDTT, Radian, error::SeedError};
 
 /// Parameters controlling **triplet generation** `(a, b, c)`.
 ///
@@ -276,7 +276,7 @@ pub struct TripletConfig {
     /// -------------
     /// Parsed with [`de_angle_rad`].
     #[serde(deserialize_with = "de_angle_rad")]
-    pub max_pair_sep: Radians,
+    pub max_pair_sep: Radian,
 
     /// Maximum residual at `c` when extrapolating a linear motion model from `a→b`.
     ///
@@ -304,7 +304,7 @@ pub struct TripletConfig {
     /// -------------
     /// Parsed with [`de_angle_rad`].
     #[serde(deserialize_with = "de_angle_rad")]
-    pub max_predicted_residual: Radians,
+    pub max_predicted_residual: Radian,
 
     /// Enforce strict time ordering: require `t(a) < t(b) < t(c)`.
     ///
@@ -384,13 +384,13 @@ impl TripletConfigBuilder {
     }
 
     /// Set maximum angular separation between neighbor alerts (radians).
-    pub fn max_pair_sep(mut self, v: Radians) -> Self {
+    pub fn max_pair_sep(mut self, v: Radian) -> Self {
         self.params.max_pair_sep = v;
         self
     }
 
     /// Set maximum allowed prediction residual at `c` (radians).
-    pub fn max_predicted_residual(mut self, v: Radians) -> Self {
+    pub fn max_predicted_residual(mut self, v: Radian) -> Self {
         self.params.max_predicted_residual = v;
         self
     }

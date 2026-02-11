@@ -1,6 +1,10 @@
 pub mod track_id;
 
-use crate::{graph::edge::Edge, seeding::seed_node::SeedNode};
+use crate::{
+    graph::edge::Edge,
+    seeding::seed_node::SeedNode,
+    trajectory::track_id::{TrackId, track_id_from_nodes},
+};
 
 /// One trajectory hypothesis produced by a solver.
 ///
@@ -21,7 +25,7 @@ pub struct TrackHypothesis<'edge_lf, 'seed_lf, 'alert_lf> {
     pub night_span: u32,
 }
 
-impl TrackHypothesis<'_, '_, '_> {
+impl<'edge_lf, 'seed_lf, 'alert_lf> TrackHypothesis<'edge_lf, 'seed_lf, 'alert_lf> {
     /// Get the number of nodes in the hypothesis.
     pub fn n_nodes(&self) -> usize {
         self.nodes.len()
@@ -30,5 +34,9 @@ impl TrackHypothesis<'_, '_, '_> {
     /// Get the number of edges in the hypothesis.
     pub fn n_edges(&self) -> usize {
         self.edges.len()
+    }
+
+    pub fn track_id(&self) -> TrackId {
+        track_id_from_nodes(&self.nodes)
     }
 }

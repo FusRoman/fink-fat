@@ -1,79 +1,230 @@
-//! Deterministic persistent track identifiers with year prefix (from alert epochs).
+//! # Track identifiers (`TrackId`)
 //!
-//! Format
-//! ------
+//! This module provides **deterministic** and **persistent** identifiers for
+//! trajectory hypotheses (“tracks”), designed to be:
+//!
+//! - **Human-readable**.
+//! - **Deterministic**: the same track content yields the same identifier across runs.
+//! - **Persistent**: no dependence on wall-clock time, RNG, thread scheduling, or counters.
+//!
+//! The output is intended for:
+//! - logging and debugging (stable labels),
+//! - persistence on disk (stable file / record identifiers),
+//! - cross-run reproducibility (recomputing a run produces the same ids),
+//! - downstream tooling (plots, metrics, exports).
+//!
+//! ## Identifier format
+//!
+//! The string representation is:
+//!
+//! ```text
 //! TRK{YYYY}{suffix}
+//! ```
 //!
 //! Example:
+//!
+//! ```text
 //! TRK2026abvurssmkq
+//! ```
 //!
-//! Year source
-//! -----------
-//! The year is derived from the **earliest alert epoch** (`Alert.mjd_tt`) among
-//! all alerts referenced by the track nodes. This avoids relying on `NightId`
-//! semantics (which may not be MJD).
+//! Where:
+//! - `TRK` is a fixed prefix.
+//! - `YYYY` is a 4-digit Gregorian year.
+//! - `suffix` is a fixed-length alphabetic token (`a`–`z`) derived from a stable hash.
 //!
-//! Determinism & persistence
-//! -------------------------
-//! - The year prefix is deterministic because it is derived from alert epochs.
-//! - The suffix is derived from a deterministic hash of the ordered `SeedKey` list,
-//!   using `ahash` with fixed keys.
+//! The goal is to remain compact while being easy to copy/paste and visually scan.
 //!
-//! Notes
-//! -----
-//! - This is deterministic across runs, but the exact suffix is not guaranteed
-//!   stable across *ahash version upgrades*. If long-term stability across
-//!   dependency upgrades is required, replace the hash with a fixed algorithm
-//!   (e.g., FNV-1a / BLAKE3).
-//! - The input node order must be deterministic (tracks are expected to be time-ordered).
+//! ## How the year is chosen
+//!
+//! The year is derived from the **earliest alert epoch** (`Alert.mjd_tt`) among all
+//! alerts referenced by the track nodes:
+//!
+//! - Each [`SeedNode`] stores `members: Vec<&Alert>` (borrowed alert references).
+//! - The year prefix is computed from the minimum `mjd_tt` across all those members.
+//!
+//! This choice ensures that the year does **not** depend on any meaning attached to
+//! `NightId` (which may not always be an MJD day in all pipelines).
+//!
+//! **Why "earliest alert"?**
+//! - It is robust to input ordering issues (we take a minimum).
+//! - It is stable across runs.
+//! - It is consistent with the notion that a track “starts” at the earliest detection.
+//!
+//! ## How the suffix is computed
+//!
+//! The suffix is derived from an `ahash` hasher configured with **fixed seeds**:
+//!
+//! - We hash the ordered list of [`SeedKey`] extracted from the ordered `nodes` slice.
+//! - The node order is therefore part of the identity.
+//! - A fixed-length base-26 encoding maps the final `u64` hash into `a`–`z` characters.
+//!
+//! The seeds are constants and **must not be changed** once identifiers are in use,
+//! otherwise previously persisted tracks will no longer match recomputed identifiers.
+//!
+//! ### Stability caveat
+//!
+//! The construction is deterministic across runs as long as:
+//! - the hashing seeds remain unchanged, and
+//! - the `ahash` implementation (crate version / algorithm) remains unchanged.
+//!
+//! If long-term stability across dependency upgrades is required, prefer a fixed,
+//! standardized hash algorithm (e.g. BLAKE3) or an internal “frozen” hash (e.g. FNV-1a).
+//!
+//! ## Expected invariants
+//!
+//! - `track_id_from_nodes` expects `nodes` to be the **track order** used elsewhere
+//!   (typically increasing time). The function does not reorder nodes.
+//! - Each `SeedNode` is expected to contain at least one alert member.
+//!
+//! These invariants are enforced with assertions / panics:
+//! - empty input slices are rejected,
+//! - tracks without alerts are rejected.
+//!
+//! ## Performance notes
+//!
+//! - Year extraction is `O(total_members)` (scans alerts to find a minimum epoch).
+//! - Suffix hashing is `O(n_nodes)` (hash each `SeedKey` once).
+//! - The encoding step is `O(width)` where `width` is a small constant.
+//!
+//! This is designed to be negligible compared to solver and scoring costs.
+//!
+//! ## API overview
+//!
+//! - [`TrackId`] – newtype wrapper around the string identifier.
+//! - [`track_id_from_nodes`] – main entrypoint in most pipelines.
+//! - [`track_id_from_seed_keys_with_year`] – lower-level helper when the year is already known.
+//!
+//! Internal helpers:
+//! - `earliest_alert_mjd_tt` – scan members and return the minimum epoch.
+//! - `mjd_to_year` – convert MJD(TT) to Gregorian year (civil-year extraction).
+//! - `encode_base26_u64` – fixed-width base-26 alphabet encoding.
+//!
+//! ## Examples
+//!
+//! Generating an id from a track hypothesis nodes:
+//!
+//! ```ignore
+//! let id = track_id_from_nodes(&track.nodes);
+//! println!("{}", id.as_str());
+//! ```
+//!
+//! Generating an id when year is already computed externally:
+//!
+//! ```ignore
+//! let id = track_id_from_seed_keys_with_year(&seed_keys, 2026);
+//! ```
+//!
+//! The string can be stored directly, or wrapped in [`TrackId`] for type safety.
 
+use std::hash::BuildHasher;
 use std::hash::{Hash, Hasher};
 
 use ahash::RandomState;
-use std::hash::BuildHasher;
 
 use crate::{persistence::seed_node::SeedKey, seeding::seed_node::SeedNode};
 
+/// Identifier for a trajectory hypothesis.
+///
+/// This is a **newtype wrapper** around a `String` to provide:
+/// - stronger typing in APIs,
+/// - easier refactors (if a compact binary form is introduced later),
+/// - optional trait derivations (`Eq`, `Hash`, etc.) without affecting call sites.
+///
+/// The inner string follows the module format:
+///
+/// ```text
+/// TRK{YYYY}{suffix}
+/// ```
+///
+/// See the module-level documentation for details.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TrackId(pub String);
 
 impl TrackId {
+    /// Return the identifier as a string slice.
+    ///
+    /// This is the preferred way to access the underlying representation for
+    /// logging, serialization, or persistence.
+    #[inline]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
-/// Compute a deterministic track ID from ordered seed keys + alert epochs for year prefix.
+/// Compute a deterministic track ID from ordered seed keys and an explicit year.
 ///
-/// - `keys` must be in deterministic order (track node order).
-/// - `year_mjd_min` must be derived deterministically from the same track content.
+/// This is a lower-level helper used when:
+/// - the caller already computed the year (e.g., from alert metadata),
+/// - or the caller wants to force a specific year prefix.
+///
+/// Determinism
+/// -----------
+/// Given the same `(year, keys)` pair, the returned identifier is deterministic:
+/// - it does not depend on thread scheduling,
+/// - it does not depend on wall-clock time,
+/// - it does not depend on randomness.
+///
+/// Canonicalization requirement
+/// ----------------------------
+/// The slice `keys` must be in a deterministic order. In typical usage this order
+/// is the track node order (time-ordered).
+///
+/// Hash construction
+/// -----------------
+/// - A deterministic `ahash::RandomState` is built from fixed seeds.
+/// - The number of keys is hashed first to avoid ambiguity across concatenations.
+/// - Each `SeedKey` is then hashed in order.
+/// - The resulting `u64` is encoded as base-26 letters (`a`–`z`) with fixed width.
+///
+/// Arguments
+/// ---------
+/// * `keys` – Ordered list of seed identifiers defining the track content.
+/// * `year` – 4-digit Gregorian year to embed in the identifier.
+///
+/// Return
+/// ------
+/// * `TrackId` – A `TRK{YYYY}{suffix}` identifier.
+///
+/// Panics
+/// ------
+/// Panics if `keys` is empty. The empty track case is considered a logic error.
 pub fn track_id_from_seed_keys_with_year(keys: &[SeedKey], year: u32) -> TrackId {
     assert!(
         !keys.is_empty(),
         "Cannot generate TrackId from empty key list"
     );
 
-    // 4 seeds fixes → DO NOT CHANGE once deployed
+    // -------------------------------------------------------------------------
+    // Deterministic hashing configuration
+    // -------------------------------------------------------------------------
+    //
+    // These seeds define the stable hashing behavior within the project.
+    // They MUST remain constant once identifiers are used in persisted outputs.
+    //
+    // If these values change, previously persisted TrackIds will no longer match
+    // recomputed identifiers.
     const K1: u64 = 0x6A09_E667_F3BC_C909;
     const K2: u64 = 0xBB67_AE85_84CA_A73B;
     const K3: u64 = 0x3C6E_F372_FE94_F82B;
     const K4: u64 = 0xA54F_F53A_5F1D_36F1;
 
-    // Deterministic RandomState
     let build_hasher = RandomState::with_seeds(K1, K2, K3, K4);
     let mut hasher = build_hasher.build_hasher();
 
-    // Hash length first (avoid ambiguity)
+    // Hash length first to avoid ambiguity:
+    // e.g. keys=[A,B] should not collide with keys=[A,B,C] truncated in some way.
     (keys.len() as u64).hash(&mut hasher);
 
-    // Hash ordered keys
+    // Hash ordered keys (order-sensitive).
     for k in keys {
         k.hash(&mut hasher);
     }
 
     let h = hasher.finish();
 
-    // 12 letters ~ 56 bits mapped from u64, compact and ZTF-ish.
+    // 12 letters encodes ~56 bits worth of information in base-26.
+    // This is compact, while keeping collisions unlikely for
+    // practical track volumes.
     let suffix = encode_base26_u64(h, 12);
 
     TrackId(format!("TRK{}{}", year, suffix))
@@ -81,24 +232,36 @@ pub fn track_id_from_seed_keys_with_year(keys: &[SeedKey], year: u32) -> TrackId
 
 /// Compute a deterministic track ID from the ordered track nodes.
 ///
-/// Year prefix is derived from the earliest `Alert.mjd_tt` referenced by the nodes.
+/// This is the main entrypoint used by solvers / trajectory builders.
+///
+/// Steps
+/// -----
+/// 1) Scan all alert members referenced by the nodes and compute:
+///    `mjd_min = min(alert.mjd_tt)`.
+/// 2) Convert `mjd_min` into a 4-digit Gregorian year using [`mjd_to_year`].
+/// 3) Extract the ordered list of `SeedKey` from the ordered nodes slice.
+/// 4) Produce the final identifier using [`track_id_from_seed_keys_with_year`].
+///
+/// Arguments
+/// ---------
+/// * `nodes` – Ordered list of seed nodes forming the track. The order is part
+///   of the identity and should match the solver’s notion of track order.
+///
+/// Return
+/// ------
+/// * `TrackId` – A `TRK{YYYY}{suffix}` identifier.
+///
+/// Panics
+/// ------
+/// Panics if `nodes` is empty, or if nodes contain no alerts (members list empty).
 pub fn track_id_from_nodes<'seed_lf, 'alert_lf>(
     nodes: &[&'seed_lf SeedNode<'alert_lf>],
 ) -> TrackId {
-    assert!(
-        !nodes.is_empty(),
-        "Cannot generate TrackId from empty node list"
-    );
-
-    // -------------------------------------------------------------------------
-    // 1) Extract year from earliest alert epoch across the track
-    // -------------------------------------------------------------------------
+    // 1) Year prefix from earliest alert epoch
     let mjd_min = earliest_alert_mjd_tt(nodes);
     let year = mjd_to_year(mjd_min);
 
-    // -------------------------------------------------------------------------
-    // 2) Hash ordered seed keys for the suffix (deterministic)
-    // -------------------------------------------------------------------------
+    // 2) Suffix from ordered seed keys
     let mut keys = Vec::with_capacity(nodes.len());
     for n in nodes {
         keys.push(n.core.key);
@@ -109,14 +272,30 @@ pub fn track_id_from_nodes<'seed_lf, 'alert_lf>(
 
 /// Return the minimum alert epoch (MJD TT) among all alerts referenced by nodes.
 ///
-/// This is robust even if, for any reason, members are not perfectly sorted.
+/// This helper makes the year computation robust to:
+/// - nodes not being perfectly ordered,
+/// - members not being perfectly ordered inside each node.
+///
+/// It scans *all* alert members referenced by the nodes and returns the minimum.
+/// The result is used to determine the year prefix.
+///
+/// Arguments
+/// ---------
+/// * `nodes` – Track nodes whose alerts are scanned.
+///
+/// Return
+/// ------
+/// * `f64` – The minimum `mjd_tt` found among all referenced alerts.
+///
+/// Panics
+/// ------
+/// Panics if no alert member is present at all (track nodes without alerts).
 fn earliest_alert_mjd_tt<'seed_lf, 'alert_lf>(nodes: &[&'seed_lf SeedNode<'alert_lf>]) -> f64 {
     let mut best: Option<f64> = None;
 
     for node in nodes {
         for &a in &node.members {
             let mjd = a.mjd_tt;
-
             best = match best {
                 None => Some(mjd),
                 Some(cur) => Some(cur.min(mjd)),
@@ -129,8 +308,35 @@ fn earliest_alert_mjd_tt<'seed_lf, 'alert_lf>(nodes: &[&'seed_lf SeedNode<'alert
 
 /// Convert MJD (TT) to Gregorian year.
 ///
-/// Uses JD = MJD + 2400000.5 then standard JD->Gregorian conversion.
-/// Precision is sufficient for extracting the year.
+/// This function is intentionally limited in scope:
+/// it only extracts the civil year corresponding to the epoch, which is
+/// sufficient to build the `YYYY` prefix in track identifiers.
+///
+/// Algorithm
+/// ---------
+/// - Convert MJD to JD:
+///
+///   ```text
+///   JD = MJD + 2400000.5
+///   ```
+///
+/// - Convert JD to the Gregorian calendar year using a standard
+///   Julian Day Number → Gregorian conversion.
+///
+/// Accuracy and conventions
+/// ------------------------
+/// - Uses the common civil-day convention `Z = floor(JD + 0.5)`.
+/// - Sufficient for year extraction in survey-like MJD ranges.
+/// - Does not attempt to model leap seconds or time scale subtleties:
+///   the input is MJD(TT) and we only need the year.
+///
+/// Arguments
+/// ---------
+/// * `mjd` – Epoch in MJD TT (days).
+///
+/// Return
+/// ------
+/// * `u32` – Gregorian year (e.g. 2026).
 fn mjd_to_year(mjd: f64) -> u32 {
     let jd = mjd + 2_400_000.5;
 
@@ -147,14 +353,36 @@ fn mjd_to_year(mjd: f64) -> u32 {
     let d = (365.25 * c).floor();
     let e = ((b - d) / 30.6001).floor();
 
-    // day = b - d - (30.6001*e).floor() + f  (unused)
-    // month = if e < 14 { e - 1 } else { e - 13 } (unused)
     let year = if e < 14.0 { c - 4716.0 } else { c - 4715.0 };
-
     year as u32
 }
 
-/// Encode a u64 into base-26 letters (a-z), fixed width.
+/// Encode a `u64` into a fixed-width base-26 alphabetic string (`a`–`z`).
+///
+/// Encoding scheme
+/// ---------------
+/// - `0` maps to `"aaaa...a"` (all `a`).
+/// - The last character varies fastest.
+/// - This is equivalent to representing the number in base-26 where digits are
+///   mapped to letters (`0 -> 'a'`, `25 -> 'z'`).
+///
+/// The output is **fixed-width**: it always contains exactly `width` characters.
+/// This ensures stable formatting and easy parsing.
+///
+/// Arguments
+/// ---------
+/// * `value` – Integer value to encode.
+/// * `width` – Number of base-26 digits to emit.
+///
+/// Return
+/// ------
+/// * `String` – Alphabetic base-26 representation with length `width`.
+///
+/// Notes
+/// -----
+/// - If `width` is too small, higher-order information is truncated (because the
+///   repeated division discards remaining digits). This is intentional for compact IDs.
+/// - Choose `width` based on the desired collision envelope (tradeoff with length).
 fn encode_base26_u64(mut value: u64, width: usize) -> String {
     let mut chars = vec!['a'; width];
     for i in (0..width).rev() {
@@ -197,7 +425,7 @@ mod track_id_tests {
         // Epoch (your Alert uses `mjd_tt: MJDTT`; in your current code it behaves like f64).
         a.mjd_tt = mjd_tt;
 
-        // Angles: use `.into()` to support both `type Radians = f64` and `struct Radians(f64)`.
+        // Angles: use `.into()` to support both `type Radian = f64` and `struct Radian(f64)`.
         a.ra = ra_rad.into();
         a.dec = dec_rad.into();
 
