@@ -100,14 +100,12 @@
 //! finite costs). Sorting uses `partial_cmp` with an equality fallback; NaN costs
 //! can lead to unstable ordering and should be avoided in production.
 
-pub mod bounded_beam_config;
-
 use crate::{
+    engine_config::solver_config::bounded_beam_config::BoundedBeamConfig,
     graph::{RuntimeGraph, edge::Edge},
     seeding::seed_node::SeedNode,
     solver::{
         Solver, SolverDiagnostics, SolverOutput,
-        bounded_beam::bounded_beam_config::BoundedBeamConfig,
         components::{ComponentId, ConnectedComponents, LocalIdx},
     },
     trajectory::TrackHypothesis,

@@ -193,8 +193,8 @@ impl<'seed_lf, 'alert_lf> Edge<'seed_lf, 'alert_lf> {
     ///
     /// Return
     /// ------
-    ///     An `EdgeOwned` containing the core edge data and the keys of the `from`
-    ///     and `to` seeds.
+    ///   An `EdgeOwned` containing the core edge data and the keys of the `from`
+    ///   and `to` seeds.
     pub fn to_owned(&self) -> EdgeOwned {
         EdgeOwned {
             core: self.core.clone(),

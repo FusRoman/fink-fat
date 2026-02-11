@@ -101,15 +101,13 @@ pub mod union_find;
 use ahash::AHashMap;
 
 use crate::{
+    engine_config::solver_config::solver_policy::{SolverChoice, SolverPolicy, SolverRoutingMode},
     graph::{RuntimeGraph, edge::Edge},
     night_id::NightId,
     persistence::seed_node::SeedKey,
     pipeline::seed_store::SeedStore,
     seeding::seed_node::SeedNode,
-    solver::{
-        components::{seed_index::SeedGlobalIndex, union_find::UnionFind},
-        solver_manager::{SolverChoice, SolverPolicy, SolverRoutingMode},
-    },
+    solver::components::{seed_index::SeedGlobalIndex, union_find::UnionFind},
 };
 
 /// Dense identifier for a connected component.
@@ -925,13 +923,10 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
     ///
     /// 3) Budgeted MCF vs BlobBreaker
     ///    Otherwise, estimate the MCF runtime:
-    ///
-    ///        t_est = k_mcf_s_per_edge_logn * m_active_edges * log2(n_nodes + 1)
-    ///
-    ///    If:
-    ///        t_est <= mcf_budget_s
-    ///    route to `SolverChoice::MinCostFlow`,
-    ///    else route to `SolverChoice::BlobBreaker`.
+    ///      `t_est = k_mcf_s_per_edge_logn * m_active_edges * log2(n_nodes + 1)`
+    /// 
+    ///     If `t_est <= mcf_budget_s`, route to `SolverChoice::MinCostFlow`,
+    ///       else route to `SolverChoice::BlobBreaker`.
     ///
     ///    Rationale:
     ///    Use MCF when the predicted runtime fits within the allowed budget,

@@ -1,51 +1,179 @@
-//! # Pair Parameters
+//! # Pair generation configuration (`PairConfig`)
 //!
-//! This section defines thresholds for **pair generation**: the minimal
-//! seeding unit consisting of two alerts `(a, b)` close in time and brightness,
-//! and consistent with a maximum **angular speed**.
+//! This module defines the configuration parameters used to generate **pairs**
+//! of alerts `(a, b)` within a single night (or within a short time window).
 //!
-//! ## Overview
-//! -----------
-//! * **Temporal window** (`max_dt`) – how far apart in time two alerts
-//!   can be (in days, TT).
-//! * **Angular speed** (`max_angular_speed`) – maximum allowed on-sky angular
-//!   speed, in **radians per day**. The geometric constraint becomes
-//!   `ang_sep(a, b) / Δt ≤ max_angular_speed`.
-//! * **Photometric similarity** (`max_flux_difference`) – restricts pairs
-//!   to alerts of comparable brightness.
-//! * **Time-bin constraints** (`allow_same_timebin`) – whether alerts from
-//!   the same temporal bucket may form a pair.
+//! A **pair** is the smallest seeding unit in the engine: two detections that
+//! are close in time, consistent with a maximum on-sky **angular speed**, and
+//! compatible in photometry.
 //!
-//! ## Derived cap for spatial search
-//! -------------------------------
-//! The bucket-neighborhood search needs a maximum separation radius. We derive
-//! a conservative cap:
+//! Pair generation is designed as a **cheap, conservative pre-filter**:
+//! it should keep most plausible moving-object candidates while limiting the
+//! combinatorial explosion that would occur if every alert could pair with many
+//! others.
 //!
-//! `sep_cap = max_angular_speed * max_dt`
+//! -----------------------------------------------------------------------------
+//! Conceptual model
+//! -----------------------------------------------------------------------------
 //!
-//! This cap is used only to decide which spatial buckets to visit; the true
-//! acceptance criterion remains the per-candidate speed check.
+//! For two alerts `a` (anchor) and `b` (candidate), with `t_b > t_a`:
 //!
-//! ## Typical values
-//! -----------------
-//! For ZTF/LSST intra-night cadence, defaults are tuned to capture most
-//! plausible moving-object pairs while limiting contamination:
-//! * `max_dt = 0.06 d` (~86.4 min)
-//! * `max_angular_speed ≈ 0.05 rad/d` (~10 arcmin over 0.06 d; order-of-magnitude)
-//! * `max_flux_difference = 5.0` (~1.75 mag)
-//! * `allow_same_timebin = true`
+//! - Temporal constraint:
+//!   - `Δt = t_b - t_a` must be within `max_dt`.
+//! - Kinematic constraint (angular speed):
+//!   - Let `Δθ = ang_sep(a, b)` be the on-sky angular separation (radians).
+//!   - The candidate must satisfy:
+//!     `Δθ / Δt ≤ max_angular_speed`.
+//! - Photometric constraint:
+//!   - The candidate must satisfy a configurable brightness / flux similarity
+//!     test controlled by `max_flux_difference`.
 //!
-//! ## Errors
-//! ---------
+//! The exact photometry metric depends on the pairing implementation (flux space,
+//! magnitude space, normalized flux difference, etc.). This configuration
+//! parameter is intentionally **unit-agnostic** at the config level: it must
+//! match what the pairing kernel expects.
+//!
+//! -----------------------------------------------------------------------------
+//! Spatial bucket search and `sep_cap()`
+//! -----------------------------------------------------------------------------
+//!
+//! The pair builder typically queries a spatio-temporal index (bucket grid) to
+//! avoid scanning all alerts. To do that, it needs an **upper bound** on the
+//! maximum possible separation between two alerts that could pass the kinematic
+//! constraint.
+//!
+//! A conservative bound is:
+//!
+//! ```text
+//! sep_cap = max_angular_speed * max_dt
+//! ```
+//!
+//! This bound is used only for **index traversal** (which buckets to visit).
+//! The actual acceptance test remains the per-candidate inequality
+//! `Δθ / Δt ≤ max_angular_speed`.
+//!
+//! -----------------------------------------------------------------------------
+//! Serialization and units
+//! -----------------------------------------------------------------------------
+//!
+//! This configuration is `serde`-deserializable (YAML / TOML / JSON) and uses
+//! project-level unit parsers to make configuration files human-friendly.
+//!
+//! ## Numeric vs string quantities
+//!
+//! For fields that use `deserialize_with = ...` from `engine_config::units`:
+//!
+//! - A **numeric YAML scalar** is accepted and is interpreted as already being
+//!   in **canonical engine units**.
+//! - A **string YAML scalar** is accepted and is parsed as a `<value><unit>`
+//!   quantity.
+//!
+//! Concretely for [`PairConfig`]:
+//!
+//! - `max_dt` uses [`de_time_days`] and is stored as **days (TT)**.
+//!   - Numeric form: `0.06` means `0.06 days`.
+//!   - String form: `"86.4 min"`, `"1.44 h"`, `"30 sec"`, `"0.06 day"` are accepted.
+//! - `max_angular_speed` uses [`de_ang_speed_rad_per_day`] and is stored as
+//!   **radians per day**.
+//!   - Numeric form: `5.0e-2` means `0.05 rad/day`.
+//!   - String form: must be written as an explicit rate `<angle>/<time>`:
+//!     `"35 arcmin/day"`, `"2 arcsec / hour"`, `"0.05 rad/day"`.
+//!
+//! ## Supported units (as implemented in `units.rs`)
+//!
+//! Time units (case-insensitive):
+//! - `day`, `days`, `d`, `jour`, `jours`
+//! - `hour`, `hours`, `h`, `heure`, `heures`
+//! - `min`, `minute`, `minutes`
+//! - `sec`, `second`, `seconds`, `s`, `seconde`, `secondes`
+//!
+//! Angle units (case-insensitive):
+//! - `rad`, `radian`, `radians`
+//! - `deg`, `degree`, `degrees`, plus basic French aliases `degre`, `degres`
+//! - `arcmin`, `arcminute`, `arcminutes`
+//! - `arcsec`, `arcsecond`, `arcseconds`
+//!
+//! The parser also supports a best-effort “no whitespace” form for `<value><unit>`
+//! (e.g. `"0.05rad"`, `"1e-3deg"`).
+//!
+//! For rates, the denominator can optionally be prefixed with `"per"`
+//! (e.g. `"35 arcmin/per day"`).
+//!
+//! -----------------------------------------------------------------------------
+//! Typical defaults and tuning guidelines
+//! -----------------------------------------------------------------------------
+//!
+//! The provided [`Default`] values are intended to be compatible with LSST/ZTF-like
+//! intra-night cadence (order-of-magnitude, conservative):
+//!
+//! - `max_dt = 0.06 d` (~86.4 min)
+//! - `max_angular_speed = 0.05 rad/d`
+//! - `max_flux_difference = 5.0`
+//! - `allow_same_timebin = true`
+//!
+//! Tuning suggestions:
+//!
+//! - If too many pairs are produced (high contamination):
+//!   - decrease `max_dt`,
+//!   - decrease `max_angular_speed`,
+//!   - tighten `max_flux_difference`,
+//!   - or set `allow_same_timebin = false` (if your time-binning is coarse and
+//!     produces many same-bin candidates).
+//! - If too few pairs are produced (low recall):
+//!   - increase `max_dt` slightly,
+//!   - increase `max_angular_speed` if you target fast movers,
+//!   - loosen `max_flux_difference` if photometry is noisy.
+//!
+//! -----------------------------------------------------------------------------
+//! Configuration examples (YAML)
+//! -----------------------------------------------------------------------------
+//!
+//! Canonical-unit numeric form:
+//!
+//! ```yaml
+//! pairs:
+//!   max_dt: 0.06                 # days (TT)
+//!   max_angular_speed: 5.0e-2    # rad/day
+//!   max_flux_difference: 5.0     # must match pairing kernel's photometry metric
+//!   allow_same_timebin: true
+//! ```
+//!
+//! Human-friendly string form:
+//!
+//! ```yaml
+//! pairs:
+//!   max_dt: "86.4 min"
+//!   max_angular_speed: "35 arcmin/day"
+//!   max_flux_difference: 5.0
+//!   allow_same_timebin: true
+//! ```
+//!
+//! Unknown keys are rejected (`deny_unknown_fields`) to catch YAML typos early.
+//!
+//! -----------------------------------------------------------------------------
+//! Errors and validation
+//! -----------------------------------------------------------------------------
+//!
+//! [`PairConfig::validate`] enforces basic numeric validity:
+//! - finite values,
+//! - non-negative constraints.
+//!
 //! Validation can fail with:
-//! * [`SeedError::NonFiniteOrNegativeTime`] – invalid `max_dt`.
-//! * [`SeedError::NonFiniteOrNegativeAngle`] – invalid `max_angular_speed`.
-//! * [`SeedError::NonFiniteOrNegativePhotometry`] – invalid `max_flux_difference`.
+//! - [`SeedError::NonFiniteOrNegativeTime`] for `pairs.max_dt`,
+//! - [`SeedError::NonFiniteOrNegativeAngle`] for `pairs.max_angular_speed`,
+//! - [`SeedError::NonFiniteOrNegativePhotometry`] for `pairs.max_flux_difference`.
 //!
-//! ## See also
-//! -----------
-//! * [`BinningParams`](crate::params::binning_params::BinningParams) – controls spatial/temporal bucket sizes.
-//! * [`TripletParams`](crate::params::triplet_params::TripletParams) – extends pairs into triplets for initial orbit seeds.
+//! Unit parsing failures (string quantities) are surfaced by serde as
+//! deserialization errors with an explicit message from `engine_config::units`
+//! (unsupported unit, malformed `<angle>/<time>` rate, etc.).
+//!
+//! -----------------------------------------------------------------------------
+//! See also
+//! -----------------------------------------------------------------------------
+//!
+//! - `BinningParams` (spatial/temporal bucket sizing) influences the cost/recall
+//!   trade-off of neighborhood search.
+//! - `TripletConfig` extends validated pairs into higher-quality seeds.
 
 use serde::{Deserialize, Serialize};
 
@@ -58,31 +186,86 @@ use crate::{MjdTt, error::SeedError};
 /// distinct alerts close in time, consistent with a maximum angular speed,
 /// and with compatible photometry.
 ///
+/// Behavior
+/// --------
+/// A candidate pair `(a, b)` is considered only if it passes:
+///
+/// - Temporal gating: `t_b > t_a` and `Δt ≤ max_dt`.
+/// - Kinematic gating: `ang_sep(a, b) / Δt ≤ max_angular_speed`.
+/// - Photometric gating: the implementation-specific brightness similarity
+///   test using `max_flux_difference`.
+///
 /// Notes
 /// -----
-/// This struct is `serde`-deserializable to support robust configuration loading
-/// (YAML + environment overrides) via the `config` crate.
-///
+/// - This struct is `serde`-deserializable to support robust configuration loading
+///   (YAML + environment overrides) via the `config` crate.
 /// - Unknown keys are rejected (`deny_unknown_fields`) to catch YAML typos early.
 /// - Missing fields are filled from [`Default`] (`serde(default)`).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PairConfig {
-    /// Maximum allowed Δt between alerts a and b (days, TT).
+    /// Maximum allowed time separation `Δt` between alerts `a` and `b`.
+    ///
+    /// Units
+    /// -----
+    /// - Canonical: **days (TT)**.
+    ///
+    /// YAML forms
+    /// ---------
+    /// - numeric (already in days): `0.06`
+    /// - string with units: `"86.4 min"`, `"1.44 h"`, `"30 sec"`, `"0.06 day"`
+    ///
+    /// Serialization
+    /// -------------
+    /// Parsed with [`de_time_days`].
     #[serde(deserialize_with = "de_time_days")]
     pub max_dt: MjdTt,
 
-    /// Maximum allowed angular speed (radians per day).
+    /// Maximum allowed on-sky angular speed.
     ///
+    /// Units
+    /// -----
+    /// - Canonical: **radians per day**.
+    ///
+    /// YAML forms
+    /// ---------
+    /// - numeric (already in rad/day): `5.0e-2`
+    /// - string with explicit rate: `"35 arcmin/day"`, `"2 arcsec / hour"`, `"0.05 rad/day"`
+    ///
+    /// Acceptance test
+    /// ---------------
     /// A candidate pair `(a, b)` must satisfy:
-    /// `ang_sep(a, b) / (t_b - t_a) ≤ max_angular_speed`.
+    ///
+    /// ```text
+    /// ang_sep(a, b) / (t_b - t_a) ≤ max_angular_speed
+    /// ```
+    ///
+    /// Serialization
+    /// -------------
+    /// Parsed with [`de_ang_speed_rad_per_day`].
     #[serde(deserialize_with = "de_ang_speed_rad_per_day")]
     pub max_angular_speed: f64,
 
-    /// Maximum allowed photometric difference (e.g. flux units or Δmag).
+    /// Maximum allowed photometric difference between the two alerts.
+    ///
+    /// Important
+    /// ---------
+    /// This value is **dimensionless at the configuration layer**. Its meaning
+    /// depends on the pair generation kernel:
+    /// - raw flux difference threshold,
+    /// - magnitude difference threshold,
+    /// - normalized residual threshold,
+    /// - or any other scalar similarity metric.
     pub max_flux_difference: f32,
 
-    /// Whether to allow pairs formed from alerts inside the same time bin.
+    /// Whether to allow pairs formed from alerts inside the same **time bin**.
+    ///
+    /// Context
+    /// -------
+    /// Many pipelines pre-bin alerts in time to reduce the neighborhood search.
+    /// Depending on the bin width, allowing same-bin pairing can:
+    /// - increase recall,
+    /// - increase contamination.
     pub allow_same_timebin: bool,
 }
 
@@ -91,10 +274,10 @@ impl Default for PairConfig {
     ///
     /// Defaults
     /// --------
-    /// * `max_dt` = 0.06 days (~86.4 min)
-    /// * `max_angular_speed` ≈ 0.05 rad/day (order-of-magnitude)
-    /// * `max_flux_difference` = 5.0
-    /// * `allow_same_timebin` = true
+    /// - `max_dt = 0.06` days (~86.4 minutes)
+    /// - `max_angular_speed = 5.0e-2` rad/day (order-of-magnitude)
+    /// - `max_flux_difference = 5.0`
+    /// - `allow_same_timebin = true`
     fn default() -> Self {
         Self {
             max_dt: 0.06,
@@ -125,8 +308,12 @@ impl PairConfig {
         Ok(())
     }
 
-    /// Derived conservative maximum separation (radians) used for spatial neighborhood search:
-    /// `sep_cap = max_angular_speed * max_dt`.
+    /// Conservative maximum separation (radians) used for **spatial neighborhood**
+    /// traversal in the bucket index:
+    ///
+    /// ```text
+    /// sep_cap = max_angular_speed * max_dt
+    /// ```
     #[inline]
     pub fn sep_cap(&self) -> f64 {
         (self.max_angular_speed * self.max_dt).max(0.0)
@@ -145,13 +332,13 @@ pub struct PairConfigBuilder {
 }
 
 impl PairConfigBuilder {
-    /// Set maximum Δt between alerts (days, TT).
+    /// Set maximum allowed `Δt` between alerts (days, TT).
     pub fn max_dt(mut self, v: MjdTt) -> Self {
         self.params.max_dt = v;
         self
     }
 
-    /// Set maximum angular speed (radians per day).
+    /// Set maximum allowed angular speed (radians per day).
     pub fn max_angular_speed(mut self, v: f64) -> Self {
         self.params.max_angular_speed = v;
         self

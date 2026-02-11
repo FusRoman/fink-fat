@@ -72,6 +72,8 @@
 //! This configuration does not alter graph correctness assumptions;
 //! it only bounds exploration and output.
 
+use serde::{Deserialize, Serialize};
+
 /// Configuration knobs for the [`BoundedBeamSolver`].
 ///
 /// This structure controls both:
@@ -81,7 +83,7 @@
 /// The solver enumerates candidate directed paths inside one connected
 /// component. Without constraints, path enumeration can become expensive
 /// in highly branching structures. These parameters ensure bounded behavior.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BoundedBeamConfig {
     /// Maximum number of tracks returned per component.
     ///

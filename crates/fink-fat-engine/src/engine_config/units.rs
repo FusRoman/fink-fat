@@ -1,47 +1,175 @@
-//! Human-friendly unit parsing for YAML configuration.
+//! # Human-friendly unit parsing for YAML configuration (`units`)
 //!
-//! Overview
-//! --------
-//! This module enables config fields to be specified either as:
-//! - a raw number (assumed to already be in engine internal units), OR
-//! - a string with explicit units (e.g. "35 arcmin/day", "2 arcsec/hour").
+//! This module provides **serde deserialization helpers** to parse quantities
+//! from configuration files (typically YAML) in a human-friendly way.
 //!
-//! Internal canonical units
-//! ------------------------
-//! - Angles: radians
-//! - Time: days
-//! - Angular speed: radians/day
+//! The goal is to allow end-users to write either:
+//! - **raw numeric values** already expressed in the engine’s canonical units, or
+//! - **strings with explicit units**, such as `"35 arcmin/day"`, `"2 arcsec/hour"`,
+//!   `"90 min"`, `"1.5 deg"`.
 //!
-//! Accepted angle units
-//! --------------------
-//! - "rad", "radian", "radians"
-//! - "deg", "degree", "degrees"
-//! - "arcmin", "arcminute", "arcminutes"
-//! - "arcsec", "arcsecond", "arcseconds"
-//! - French aliases: "degre", "degres", "minute d'arc", "seconde d'arc" (basic)
+//! The engine internally uses canonical units, and the deserializers convert
+//! any supported input representation into those canonical units.
 //!
-//! Accepted time units
-//! -------------------
-//! - "day", "days", "d", "jour", "jours"
-//! - "hour", "hours", "h", "heure", "heures"
-//! - "min", "minute", "minutes"
-//! - "sec", "second", "seconds", "s", "seconde", "secondes"
+//! -----------------------------------------------------------------------------
+//! Canonical internal units
+//! -----------------------------------------------------------------------------
 //!
-//! Accepted rate syntax
-//! --------------------
-//! "<angle>/<time>" with optional spaces, e.g.:
-//! - "35 arcmin/day"
-//! - "2 arcsec / hour"
-//! - "0.05 rad/day"
+//! All conversions performed by this module target the following internal units:
+//!
+//! - **Angles**: radians
+//! - **Time**: days
+//! - **Angular speed**: radians per day
+//!
+//! The public entry points (`de_*`) always return `f64` in canonical units.
+//!
+//! -----------------------------------------------------------------------------
+//! Accepted YAML syntaxes
+//! -----------------------------------------------------------------------------
+//!
+//! For a field declared as `deserialize_with = "...":`
+//!
+//! 1) Numeric input (already in canonical units)
+//! --------------------------------------------
+//! The YAML value can be a number:
+//!
+//! ```yaml
+//! pairs:
+//!   max_dt: 0.06
+//!   max_angular_speed: 5.0e-2
+//! ```
+//!
+//! In this case, the value is interpreted as already being in canonical units:
+//! - `max_dt` is taken as **days**,
+//! - `max_angular_speed` is taken as **rad/day**.
+//!
+//! 2) String input with units
+//! --------------------------
+//! The YAML value can be a string containing a number and a unit:
+//!
+//! ```yaml
+//! pairs:
+//!   max_dt: "86.4 min"
+//!   max_angular_speed: "35 arcmin/day"
+//! triplets:
+//!   max_pair_sep: "8.6 arcmin"
+//!   max_predicted_residual: "2.75 arcmin"
+//! ```
+//!
+//! The module supports both `"value unit"` and a best-effort `"valueunit"` form:
+//! - `"0.05 rad"` and `"0.05rad"` are both accepted,
+//! - `"35 arcmin"` and `"35arcmin"` are both accepted.
+//!
+//! For angular speeds, the expected syntax is:
+//!
+//! ```text
+//! <angle> / <time>
+//! ```
+//!
+//! Examples:
+//! - `"35 arcmin/day"`
+//! - `"2 arcsec / hour"`
+//! - `"0.05 rad/day"`
+//!
+//! Notes:
+//! - Exactly one `'/'` separator must be present for angular speeds.
+//! - The numerator must be a valid angle quantity (value + angle unit).
+//! - The denominator must be a time unit (optionally prefixed by `"per"`).
+//!
+//! -----------------------------------------------------------------------------
+//! Supported units
+//! -----------------------------------------------------------------------------
+//!
+//! Angle units
+//! ----------
+//! Accepted angle units (case-insensitive):
+//! - `"rad"`, `"radian"`, `"radians"`
+//! - `"deg"`, `"degree"`, `"degrees"`
+//! - `"arcmin"`, `"arcminute"`, `"arcminutes"`
+//! - `"arcsec"`, `"arcsecond"`, `"arcseconds"`
+//!
+//! Basic French aliases (best-effort):
+//! - `"degre"`, `"degres"` (treated as degrees)
+//! - any string containing both `"minute"` and `"arc"` is normalized to
+//!   a private `"minute-d-arc"` token and treated as arcminutes
+//! - any string containing both `"seconde"` and `"arc"` is normalized to
+//!   a private `"seconde-d-arc"` token and treated as arcseconds
+//!
+//! The French handling is intentionally minimal: it is not a full locale system,
+//! only a convenience for common notations like `"minute d'arc"` / `"seconde d'arc"`.
+//!
+//! Time units
+//! ----------
+//! Accepted time units (case-insensitive):
+//! - `"day"`, `"days"`, `"d"`, `"jour"`, `"jours"`
+//! - `"hour"`, `"hours"`, `"h"`, `"heure"`, `"heures"`
+//! - `"min"`, `"minute"`, `"minutes"`
+//! - `"sec"`, `"second"`, `"seconds"`, `"s"`, `"seconde"`, `"secondes"`
+//!
+//! For angular speeds, the denominator supports the same time units.
+//!
+//! -----------------------------------------------------------------------------
+//! Error handling and validation philosophy
+//! -----------------------------------------------------------------------------
+//!
+//! This module is intended to surface configuration mistakes early.
+//! When parsing fails, the returned error message attempts to be explicit about:
+//! - what unit was unsupported,
+//! - what the expected unit families are,
+//! - or what part of the syntax is malformed.
+//!
+//! Typical error cases include:
+//! - unknown/unsupported units (`"foobar"`),
+//! - missing unit in a string quantity (`"12"` as a string instead of a number),
+//! - malformed angular speed strings (missing `'/'`, too many separators, missing denominator).
+//!
+//! -----------------------------------------------------------------------------
+//! Implementation notes
+//! -----------------------------------------------------------------------------
+//!
+//! - The deserialization accepts `f64` numeric values or strings via an untagged
+//!   enum (`NumOrStr`).
+//! - `normalize_unit()` lowercases and does minimal punctuation normalization,
+//!   including replacing typographic apostrophes `’` by `'`.
+//! - `"valueunit"` parsing is implemented by scanning for the longest prefix
+//!   that parses as `f64`, and treating the remainder as the unit string.
+//!
+//! -----------------------------------------------------------------------------
+//! Public API
+//! -----------------------------------------------------------------------------
+//!
+//! The intended usage is through `serde` field attributes:
+//!
+//! ```rust, ignore
+//! #[serde(deserialize_with = "de_time_days")]
+//! pub max_dt: f64;
+//!
+//! #[serde(deserialize_with = "de_angle_rad")]
+//! pub max_pair_sep: f64;
+//!
+//! #[serde(deserialize_with = "de_ang_speed_rad_per_day")]
+//! pub max_angular_speed: f64;
+//! ```
+//!
+//! Each function converts the YAML value into canonical units:
+//! - [`de_time_days`]: time → days
+//! - [`de_angle_rad`]: angle → radians
+//! - [`de_ang_speed_rad_per_day`]: angular speed → radians/day
 
 use serde::Deserialize;
 use serde::de;
 
-/// Serde helper: accept either a number or a string.
+/// Serde helper: accept either a number (`f64`) or a string (`String`).
+///
+/// This enum is used to support human-friendly YAML:
+/// - numeric scalars are assumed to already be in canonical units,
+/// - string scalars are parsed with unit suffixes.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum NumOrStr {
+    /// Raw numeric value (already in canonical units).
     Num(f64),
+    /// String quantity with explicit unit(s), e.g. `"90 min"` or `"35 arcmin/day"`.
     Str(String),
 }
 
@@ -49,7 +177,20 @@ enum NumOrStr {
 /*  Public serde entry points (deserialize_with = ...)                         */
 /* -------------------------------------------------------------------------- */
 
-/// Deserialize a time quantity into **days** (f64).
+/// Deserialize a time quantity into **days** (`f64`).
+///
+/// Accepted inputs
+/// ---------------
+/// - Numeric YAML scalar (assumed **days**):
+///   - `0.06`
+/// - String with explicit time unit:
+///   - `"86.4 min"`, `"1.5 hour"`, `"30 sec"`, `"0.06 day"`, `"1 jour"`.
+///
+/// Errors
+/// ------
+/// Returns a serde error if:
+/// - the string cannot be parsed as `<value> <unit>` (or `<value><unit>`),
+/// - or the unit is not a supported time unit.
 pub fn de_time_days<'de, D>(deserializer: D) -> Result<f64, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -60,7 +201,20 @@ where
     }
 }
 
-/// Deserialize an angle quantity into **radians** (f64).
+/// Deserialize an angle quantity into **radians** (`f64`).
+///
+/// Accepted inputs
+/// ---------------
+/// - Numeric YAML scalar (assumed **radians**):
+///   - `2.5e-3`
+/// - String with explicit angle unit:
+///   - `"8.6 arcmin"`, `"0.1 deg"`, `"0.05 rad"`, `"1e-3deg"`.
+///
+/// Errors
+/// ------
+/// Returns a serde error if:
+/// - the string cannot be parsed as `<value> <unit>` (or `<value><unit>`),
+/// - or the unit is not a supported angle unit.
 pub fn de_angle_rad<'de, D>(deserializer: D) -> Result<f64, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -71,7 +225,28 @@ where
     }
 }
 
-/// Deserialize an angular speed into **radians/day** (f64).
+/// Deserialize an angular speed into **radians/day** (`f64`).
+///
+/// Accepted inputs
+/// ---------------
+/// - Numeric YAML scalar (assumed **radians/day**):
+///   - `5.0e-2`
+/// - String of the form `<angle>/<time>`, with optional spaces:
+///   - `"35 arcmin/day"`
+///   - `"2 arcsec / hour"`
+///   - `"0.05 rad/day"`
+///
+/// The denominator may optionally start with `"per"`:
+/// - `"35 arcmin/per day"`
+/// - `"2 arcsec/per hour"`
+///
+/// Errors
+/// ------
+/// Returns a serde error if:
+/// - the string is missing `'/'`,
+/// - has more than one `'/'`,
+/// - the numerator cannot be parsed as an angle quantity,
+/// - or the denominator unit is not a supported time unit.
 pub fn de_ang_speed_rad_per_day<'de, D>(deserializer: D) -> Result<f64, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -86,6 +261,13 @@ where
 /*  Parsers                                                                    */
 /* -------------------------------------------------------------------------- */
 
+/// Parse a time quantity and return the value expressed in **days**.
+///
+/// Expected syntax:
+/// - `"<value> <unit>"` (preferred)
+/// - `"<value><unit>"` (best-effort)
+///
+/// Supported units are documented at the module level.
 fn parse_time_days(input: &str) -> Result<f64, String> {
     let (value, unit) = split_value_unit(input)?;
     let u = normalize_unit(&unit);
@@ -105,6 +287,13 @@ fn parse_time_days(input: &str) -> Result<f64, String> {
     Ok(days)
 }
 
+/// Parse an angle quantity and return the value expressed in **radians**.
+///
+/// Expected syntax:
+/// - `"<value> <unit>"` (preferred)
+/// - `"<value><unit>"` (best-effort)
+///
+/// Supported units are documented at the module level.
 fn parse_angle_rad(input: &str) -> Result<f64, String> {
     let (value, unit) = split_value_unit(input)?;
     let u = normalize_unit(&unit);
@@ -127,6 +316,23 @@ fn parse_angle_rad(input: &str) -> Result<f64, String> {
     Ok(rad)
 }
 
+/// Parse an angular speed and return the value expressed in **radians/day**.
+///
+/// Expected syntax:
+/// ```text
+/// <angle> / <time>
+/// ```
+///
+/// Examples:
+/// - `"35 arcmin/day"`
+/// - `"2 arcsec / hour"`
+/// - `"0.05 rad/day"`
+///
+/// Numerator parsing:
+/// - must be a valid angle quantity accepted by [`parse_angle_rad`].
+///
+/// Denominator parsing:
+/// - must be a supported time unit (optionally prefixed by `"per"`).
 fn parse_ang_speed_rad_per_day(input: &str) -> Result<f64, String> {
     // Accept "35 arcmin/day" or "35 arcmin / day"
     let s = input.trim();
@@ -168,6 +374,21 @@ fn parse_ang_speed_rad_per_day(input: &str) -> Result<f64, String> {
 /*  Small helpers                                                              */
 /* -------------------------------------------------------------------------- */
 
+/// Split a quantity string into `(value, unit)`.
+///
+/// Accepted forms
+/// --------------
+/// - `"<value> <unit>"`
+/// - `"<value><unit>"` (best-effort)
+///
+/// Examples:
+/// - `"35 arcmin"` → `(35.0, "arcmin")`
+/// - `"1e-3deg"` → `(1e-3, "deg")`
+///
+/// Errors
+/// ------
+/// Returns an error if the input is empty, cannot be parsed, or contains too
+/// many whitespace tokens.
 fn split_value_unit(input: &str) -> Result<(f64, String), String> {
     let s = input.trim();
     // Accept either "35 arcmin" or "35arcmin" (best effort).
@@ -196,6 +417,15 @@ fn split_value_unit(input: &str) -> Result<(f64, String), String> {
     Ok((num, unit))
 }
 
+/// Split a string into a leading numeric prefix and a trailing unit suffix.
+///
+/// This function scans for the **longest prefix** that parses as `f64`.
+/// It supports scientific notation.
+///
+/// Examples:
+/// - `"0.05rad"` → `(0.05, "rad")`
+/// - `"35arcmin"` → `(35.0, "arcmin")`
+/// - `"1e-3deg"` → `(0.001, "deg")`
 fn split_leading_number(s: &str) -> Option<(f64, String)> {
     // Find the longest prefix that parses as f64.
     // Works for: "0.05rad", "35arcmin", "1e-3deg".
@@ -211,6 +441,21 @@ fn split_leading_number(s: &str) -> Option<(f64, String)> {
     None
 }
 
+/// Normalize a unit token for matching.
+///
+/// Behavior
+/// --------
+/// - Lowercases.
+/// - Trims whitespace.
+/// - Replaces typographic apostrophe `’` by `'`.
+/// - Applies a minimal French alias mapping for `"minute d'arc"` / `"seconde d'arc"`
+///   by detecting `"minute"+"arc"` or `"seconde"+"arc"` and returning internal
+///   tokens `"minute-d-arc"` / `"seconde-d-arc"`.
+///
+/// Notes
+/// -----
+/// The French handling is intentionally conservative and not meant to be a
+/// comprehensive localization layer.
 fn normalize_unit(u: &str) -> String {
     let s = u.trim().to_lowercase();
 
