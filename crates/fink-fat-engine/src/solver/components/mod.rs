@@ -1,111 +1,99 @@
-//! Connected component construction for the Fink-FAT inter-night graph.
+//! Connected component construction for the inter-night graph.
 //!
 //! Overview
 //! --------
-//! This module computes **connected components** over the *undirected view* of
-//! the inter-night graph, then builds a **restricted directed subgraph per component**
-//! (adjacency + local degrees + sources/sinks) that can be consumed efficiently
-//! by solvers such as the *trivial beam-search solver*.
+//! This module computes **connected components** over the *undirected view* of the
+//! inter-night graph and materializes, for each component, a **restricted directed
+//! subgraph** that can be consumed efficiently by solvers.
 //!
-//! Why two views of the graph?
-//! ---------------------------
-//! - For component detection we want *undirected* connectivity:
-//!   if there exists *any* directed edge between two seeds (either direction),
-//!   we consider them in the same "blob" for later solving.
-//! - For solving, we need the *directed* structure (time-forward edges) to
-//!   enumerate paths and build trajectory hypotheses.
+//! The primary goal is to provide solvers with a component-local representation:
 //!
-//! ID spaces and mappings
-//! ----------------------
-//! The engine uses **three levels of identifiers** for seeds:
+//! - the list of nodes in the component (borrowed seed references),
+//! - a directed outgoing adjacency restricted to those nodes (borrowed edge references),
+//! - local in/out degrees inside that restricted directed subgraph,
+//! - precomputed local sources and sinks.
+//!
+//! This keeps solvers focused on the local combinatorial problem and avoids repeated
+//! global scans or per-solver reconstruction of adjacency.
+//!
+//! Connectivity vs directed structure
+//! ---------------------------------
+//! The component partition is computed using **undirected connectivity**:
+//! two nodes belong to the same component if there exists a path between them when
+//! ignoring edge directions.
+//!
+//! Solvers, however, operate on a **directed time-forward** structure:
+//! edges are intended to connect older to newer nights. This module therefore
+//! builds a directed adjacency per component and enforces a time-forward guard
+//! (`night(to) > night(from)`) when inserting edges into that adjacency.
+//!
+//! Identifier spaces and mappings
+//! ------------------------------
+//! The engine uses three related identifier spaces for seeds:
 //!
 //! 1) `SeedKey` (stable key)
-//!    - Identifies a seed uniquely across nights.
-//!    - `(night_id, idx_in_night)` where `idx_in_night` is the seed’s index in its night.
+//!    - Unique identifier for a seed across runs and persistence.
+//!    - Typically `(night_id, idx_in_night)`.
 //!
-//! 2) `global_idx` (dense index 0..N_total-1)
+//! 2) `global_idx` (dense index in `0..N_total`)
 //!    - Built by `SeedGlobalIndex` from the `SeedStore`.
-//!    - Used by Union-Find to compute components efficiently.
+//!    - Used by Union-Find to compute connectivity efficiently.
 //!
-//! 3) `local_idx` (dense index inside a component)
+//! 3) `local_idx` (dense index inside one component)
 //!    - Index into `component_ref[component_id]`.
-//!    - Used by solvers operating on *one* component at a time.
+//!    - Used by solvers to index component-local arrays.
 //!
-//! The relationships are:
-//!
-//! ```text
-//! SeedKey  <->  global_idx  --(comp_of_node)-->  component_id
-//!    \                                         /
-//!     \-> (local_of_key) -> (component_id, local_idx)
-//! ```
-//!
-//! Example
-//! -------
-//! Suppose we have 2 components (C0 and C1). Global seeds are indexed 0..7.
+//! The mapping relationships are:
 //!
 //! ```text
-//! global_idx:  0   1   2   3   4   5   6   7
-//! comp_of_node:0   0   0   0   1   1   1   1
-//!
-//! component_ref[0] (C0): local_idx -> SeedKey
-//!   0 -> (N10,0)
-//!   1 -> (N10,3)
-//!   2 -> (N11,1)
-//!   3 -> (N12,0)
-//!
-//! component_ref[1] (C1):
-//!   0 -> (N10,2)
-//!   1 -> (N11,0)
-//!   2 -> (N11,4)
-//!   3 -> (N12,2)
-//! ```
-//!
-//! Then the restricted directed adjacency for C0 is stored as:
-//!
-//! ```text
-//! component_out[0][local_u] = list of outgoing edges (&Edge) within C0
-//! component_in_deg_local[0][local_u] = local in-degree in C0
-//! component_out_deg_local[0][local_u] = local out-degree in C0
+//! SeedKey <-> global_idx --(comp_of_node)--> component_id
+//!    \                                      /
+//!     \-> local_of_key: SeedKey -> (component_id, local_idx)
 //! ```
 //!
 //! Directed adjacency layout
 //! -------------------------
-//! `component_out` is a 3-level nested vector with the following meaning:
+//! The restricted directed adjacency is stored as:
 //!
 //! ```text
-//! component_out[component_id][local_u] = Vec<EdgeRef>
+//! component_out[component_id][local_u] = Vec<&Edge>
 //! ```
 //!
-//! where `EdgeRef` is a reference to the *global* edge stored in `RuntimeGraph.edges`.
+//! Each adjacency list contains references to the **global** edges stored in
+//! `RuntimeGraph.edges`.
 //!
 //! Lifetime model
 //! --------------
-//! This module stores `&Edge` references inside `ConnectedComponents`.
-//! This is safe as long as `ConnectedComponents` lives no longer than the
-//! `RuntimeGraph` it was built from (same `'edge_lf` lifetime).
+//! `ConnectedComponents` stores borrowed references:
+//!
+//! - `&SeedNode` references borrowed from the `SeedStore` (via `component_ref`),
+//! - `&Edge` references borrowed from the `RuntimeGraph.edges` (via `component_out`).
+//!
+//! Therefore, `ConnectedComponents` must not outlive:
+//! - the `RuntimeGraph` used to build it (edge references),
+//! - the `SeedStore` / seeds used to build it (seed references).
 //!
 //! Active-only mode
 //! ----------------
-//! If `active_only == true`:
-//! - only active edges are used for Union-Find connectivity,
-//! - only active edges are inserted into the restricted directed adjacency.
+//! The `compute()` method supports an `active_only` flag:
 //!
-//! This matches the typical “solve on active edges” behavior.
+//! - if `active_only == true`:
+//!   - Union-Find connectivity uses only edges with `edge.core.active == true`,
+//!   - the restricted directed adjacency also includes only active edges.
+//!
+//! This matches the typical solver behavior that operates on active edges only.
 //!
 //! Notes
 //! -----
-//! - The restricted directed adjacency enforces *time-forward edges*
-//!   (`night(to) > night(from)`). Back-edges are ignored.
-//! - The adjacency lists are **not** globally deduplicated.
-//!   (They should not contain duplicates if the graph builder does not emit any.)
-//! - `graph.core.out_deg` is used as a best-effort capacity hint to reduce
-//!   adjacency list reallocations.
+//! - The restricted directed adjacency ignores "back-edges" where `night(to) <= night(from)`.
+//! - The adjacency lists are not globally deduplicated.
+//! - `graph.core.out_deg` is used as a best-effort capacity hint to reduce reallocations.
 //!
 //! See also
 //! --------
-//! - `seed_index::SeedGlobalIndex` for the dense global indexing.
+//! - `seed_index::SeedGlobalIndex` for dense global indexing.
 //! - `union_find::UnionFind` for connectivity.
-//! - `solver_manager::SolverPolicy` for solver selection heuristics.
+//! - `solver_manager::SolverPolicy` for solver routing heuristics.
 
 pub mod seed_index;
 pub mod union_find;
@@ -120,20 +108,21 @@ use crate::{
     seeding::seed_node::SeedNode,
     solver::{
         components::{seed_index::SeedGlobalIndex, union_find::UnionFind},
-        solver_manager::{SolverChoice, SolverPolicy},
+        solver_manager::{SolverChoice, SolverPolicy, SolverRoutingMode},
     },
 };
 
 /// Dense identifier for a connected component.
 ///
-/// Components are assigned dense ids `[0, n_components)` by `dense_components()`.
+/// Components are assigned dense ids `[0, n_components)` during component
+/// materialization.
 pub type ComponentId = u32;
 
 /// Borrowed node references grouped per component.
 ///
 /// Layout
 /// ------
-/// `component_ref[cid]` is a list of node references belonging to the component `cid`.
+/// `component_ref[cid]` is the list of nodes belonging to component `cid`.
 pub type ComponentRef<'seed_lf, 'alert_lf> = Vec<Vec<&'seed_lf SeedNode<'alert_lf>>>;
 
 /// Night bounds per component.
@@ -150,12 +139,9 @@ pub type LocalIdx = u32;
 
 /// Reference to a global edge stored in `RuntimeGraph.edges`.
 ///
-/// This module stores `&Edge` references for fast solver access without
-/// rebuilding adjacency lists.
-///
 /// Lifetime
 /// --------
-/// - `'edge_lf` ties the reference to the lifetime of the `RuntimeGraph`.
+/// `'edge_lf` ties this reference to the lifetime of the `RuntimeGraph`.
 pub type EdgeRef<'edge_lf, 'seed_lf, 'alert_lf> = &'edge_lf Edge<'seed_lf, 'alert_lf>;
 
 /// Per-component directed adjacency (restricted to the component nodes).
@@ -163,7 +149,7 @@ pub type EdgeRef<'edge_lf, 'seed_lf, 'alert_lf> = &'edge_lf Edge<'seed_lf, 'aler
 /// Layout
 /// ------
 /// `component_out[cid][local_u] = Vec<EdgeRef>` lists outgoing edges from `local_u`
-/// *that stay inside the same component*.
+/// that stay inside the same component.
 pub type ComponentOut<'edge_lf, 'seed_lf, 'alert_lf> =
     Vec<Vec<Vec<EdgeRef<'edge_lf, 'seed_lf, 'alert_lf>>>>;
 
@@ -177,24 +163,31 @@ pub type ComponentDegLocal = Vec<Vec<u32>>;
 
 /// Connected components plus per-component restricted directed adjacency.
 ///
-/// This structure is the "bridge" between:
-/// - the global inter-night graph (`RuntimeGraph`) and
-/// - per-component solvers that need *local* directed structure.
+/// This structure provides a component-local graph view suitable for solvers:
+/// - component membership (`component_ref`),
+/// - night bounds (`component_night_bound`),
+/// - restricted directed adjacency (`component_out`) using borrowed `&Edge` refs,
+/// - local degrees and precomputed sources/sinks.
 ///
 /// Stored information
 /// ------------------
-/// - **Undirected connectivity** (via `comp_of_node`) computed by Union-Find.
-/// - **Component membership** as borrowed seed references (`component_ref`).
-/// - **Night span bounds** (`component_night_bound`).
-/// - **Active intra-component edge counts** (`component_active_edge`).
-/// - **Restricted directed subgraph** per component:
-///   - outgoing adjacency (`component_out`),
-///   - local degrees (`component_in_deg_local`, `component_out_deg_local`),
-///   - local sources and sinks (`component_sources_local`, `component_sinks_local`).
+/// Connectivity:
+/// - `index`: `SeedKey <-> global_idx` mapping.
+/// - `comp_of_node[global_idx] = component_id`.
+///
+/// Component materialization:
+/// - `component_ref[component_id]`: borrowed nodes.
+/// - `component_night_bound[component_id]`: `(min_night, max_night)` bounds.
+/// - `component_active_edge[component_id]`: count of active intra-component edges.
+///
+/// Restricted directed subgraph per component:
+/// - `component_out[component_id][local_u]`: outgoing adjacency as `&Edge`.
+/// - `component_in_deg_local`, `component_out_deg_local`.
+/// - `component_sources_local`, `component_sinks_local`.
 ///
 /// Lifetime model
 /// --------------
-/// The directed adjacency stores `&Edge` references. Therefore:
+/// The adjacency stores `&Edge` references. Therefore:
 /// - the `RuntimeGraph` used to build this object must outlive it (`'edge_lf`),
 /// - the `SeedStore` / `SeedNode` references must outlive it (`'seed_lf`, `'alert_lf`).
 #[derive(Debug, Clone)]
@@ -209,7 +202,7 @@ pub struct ConnectedComponents<'edge_lf, 'seed_lf, 'alert_lf> {
     /// `comp_of_node[global_idx] = component_id`.
     comp_of_node: Vec<ComponentId>,
 
-    /// Number of components (dense ids 0..n_components-1).
+    /// Number of components (dense ids `0..n_components-1`).
     pub n_components: u32,
 
     /// Nodes of each component as borrowed references.
@@ -218,7 +211,7 @@ pub struct ConnectedComponents<'edge_lf, 'seed_lf, 'alert_lf> {
     /// Night bounds per component (min,max).
     component_night_bound: ComponentNightBound,
 
-    /// Number of *active* edges that stay within each component.
+    /// Number of active edges that stay within each component.
     component_active_edge: Vec<u32>,
 
     // ---------------------------------------------------------------------
@@ -229,16 +222,16 @@ pub struct ConnectedComponents<'edge_lf, 'seed_lf, 'alert_lf> {
     /// Layout
     /// ------
     /// `component_out[cid][local_u] = Vec<EdgeRef>` contains edges:
-    /// - whose `from` key corresponds to `local_u`,
-    /// - whose `to` key is also in the same component `cid`,
-    /// - optionally restricted to active edges only (depending on `active_only` in `compute()`),
-    /// - and always respecting `night(to) > night(from)` (back-edges ignored).
+    /// - whose `from` corresponds to `local_u`,
+    /// - whose `to` is also in the same component `cid`,
+    /// - included only if allowed by `active_only` at `compute()` time,
+    /// - and satisfying the time-forward guard `night(to) > night(from)`.
     component_out: ComponentOut<'edge_lf, 'seed_lf, 'alert_lf>,
 
-    /// Local in-degree per node in the restricted directed subgraph.
+    /// Local in-degree per node inside the restricted directed subgraph.
     component_in_deg_local: ComponentDegLocal,
 
-    /// Local out-degree per node in the restricted directed subgraph.
+    /// Local out-degree per node inside the restricted directed subgraph.
     component_out_deg_local: ComponentDegLocal,
 
     /// Precomputed local sources per component.
@@ -251,8 +244,8 @@ pub struct ConnectedComponents<'edge_lf, 'seed_lf, 'alert_lf> {
     ///
     /// Notes
     /// -----
-    /// - If a component has no such node (degenerate case), a fallback list is built:
-    ///   all nodes with local out-degree > 0.
+    /// If a component has no sources (degenerate case), a fallback list is used:
+    /// all nodes with local out-degree > 0.
     component_sources_local: Vec<Vec<LocalIdx>>,
 
     /// Precomputed local sinks per component.
@@ -264,44 +257,58 @@ pub struct ConnectedComponents<'edge_lf, 'seed_lf, 'alert_lf> {
 }
 
 impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'alert_lf> {
-    /// Compute connected components and build per-component directed adjacency.
+    /// Compute connected components and build per-component restricted directed adjacency.
     ///
-    /// Behavior
-    /// --------
-    /// 1) Build a dense `global_idx` mapping for all seeds (`SeedGlobalIndex`).
-    /// 2) Run Union-Find on the **undirected** view of the graph:
-    ///    each directed edge `(u -> v)` unions nodes `u` and `v`.
-    /// 3) Convert Union-Find roots to dense component ids (`0..C-1`) stored in `comp_of_node`.
-    /// 4) Count active intra-component edges for diagnostics / policy decisions.
-    /// 5) Build:
-    ///    - `component_ref`: borrowed nodes per component,
-    ///    - `component_night_bound`: min/max nights per component,
-    ///    - `local_of_key`: `SeedKey -> (component_id, local_idx)`.
-    /// 6) Build the restricted **directed** subgraph per component:
-    ///    adjacency + degrees + local sources/sinks.
+    /// This is the main entrypoint that materializes both:
+    /// - the undirected component partition,
+    /// - the solver-facing directed subgraph per component.
+    ///
+    /// Algorithm
+    /// ---------
+    /// 1) Build the dense global index (`SeedGlobalIndex`) for all seeds.
+    ///
+    /// 2) Run Union-Find on undirected connectivity:
+    ///    - for each directed edge `(u -> v)`, union `(u, v)`,
+    ///    - optionally restricted to active edges only (`active_only`).
+    ///
+    /// 3) Convert Union-Find roots to dense component ids (`0..C-1`):
+    ///    - store `comp_of_node[global_idx] = component_id`.
+    ///
+    /// 4) Count active intra-component edges for each component:
+    ///    - used for diagnostics and solver routing policies.
+    ///
+    /// 5) Materialize component membership and indexing:
+    ///    - build `component_ref[cid] = Vec<&SeedNode>`,
+    ///    - compute `component_night_bound[cid] = (min_night, max_night)`,
+    ///    - build `local_of_key: SeedKey -> (component_id, local_idx)`.
+    ///
+    /// 6) Build the restricted directed subgraph per component:
+    ///    - `component_out[cid][local_u] = Vec<&Edge>` inside the component,
+    ///    - local in/out degrees,
+    ///    - sources and sinks.
     ///
     /// Arguments
     /// ---------
     /// * `seed_store` – Seed storage grouped by night; used to build the global index and
-    ///   to populate `component_ref`.
+    ///   materialize node references per component.
     /// * `graph` – Runtime graph containing:
     ///   - `graph.edges`: global directed edges storing references to `SeedNode`s,
     ///   - `graph.core`: global degree maps used as capacity hints.
     /// * `active_only` – If `true`:
-    ///   - Union-Find only considers active edges,
-    ///   - directed adjacency only includes active edges.
+    ///   - Union-Find considers only `edge.core.active == true`,
+    ///   - adjacency includes only active edges.
     ///
     /// Return
     /// ------
     /// `ConnectedComponents` containing:
-    /// - component membership for each node,
-    /// - borrowed node lists per component,
-    /// - restricted directed adjacency and local degrees.
+    /// - membership and night bounds,
+    /// - restricted directed adjacency and local degrees,
+    /// - sources/sinks for solver initialization.
     ///
     /// Notes
     /// -----
-    /// - This function assumes the `RuntimeGraph` edges are time-forward.
-    ///   It still enforces `night(to) > night(from)` defensively when building adjacency.
+    /// - The directed adjacency enforces `night(to) > night(from)` defensively.
+    /// - Component ids are dense and stable for the duration of this object.
     pub fn compute(
         seed_store: &'seed_lf SeedStore<'alert_lf>,
         graph: &'edge_lf RuntimeGraph<'seed_lf, 'alert_lf>,
@@ -310,22 +317,22 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
         let index = SeedGlobalIndex::build(seed_store);
         let n_total = index.n_total();
 
-        // 1) Union-Find on nodes (undirected view).
+        // 1) Union-Find over the undirected view of the graph.
         let mut uf = UnionFind::new(n_total);
         Self::union_edges(&index, &mut uf, &graph.edges, active_only);
 
-        // 2) Dense component ids + comp_of_node.
+        // 2) Assign dense component ids.
         let (comp_of_node, n_components) = Self::dense_components(&mut uf, n_total);
 
-        // 3) Count active intra-component edges (always active ones).
+        // 3) Count active intra-component edges for diagnostics and policies.
         let component_active_edge =
             Self::count_active_intra_edges(&index, &graph.edges, &comp_of_node, n_components);
 
-        // 4) Build component -> node refs, night bounds, and local_of_key.
+        // 4) Materialize component membership lists and per-component bounds.
         let (component_ref, component_night_bound, local_of_key) =
             Self::build_refs_bounds_and_local_map(seed_store, &index, &comp_of_node, n_components);
 
-        // 5) Build restricted directed adjacency + local degrees + sources/sinks.
+        // 5) Build the restricted directed subgraph per component.
         let (
             component_out,
             component_in_deg_local,
@@ -362,21 +369,21 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
     // Internal helpers (undirected connectivity)
     // -------------------------------------------------------------------------
 
-    /// Union all graph edges in Union-Find (undirected view).
+    /// Union all graph edges in Union-Find using an undirected interpretation.
     ///
-    /// Each directed edge `(from -> to)` is treated as an undirected connection,
+    /// Each directed edge `(from -> to)` is treated as an undirected connection
     /// and unions the two corresponding nodes.
     ///
     /// Arguments
     /// ---------
-    /// * `index` – Global dense index mapping `SeedKey -> global_idx`.
-    /// * `uf` – Union-Find data structure updated in-place.
+    /// * `index` – Dense global index mapping `SeedKey -> global_idx`.
+    /// * `uf` – Union-Find updated in-place.
     /// * `edges` – Global directed edges.
-    /// * `active_only` – If `true`, unions only edges with `edge.core.active == true`.
+    /// * `active_only` – If `true`, union only edges with `edge.core.active == true`.
     ///
     /// Notes
     /// -----
-    /// - This step groups together all nodes that are connected by at least one edge,
+    /// - This step groups together nodes that are connected by at least one edge,
     ///   regardless of direction.
     fn union_edges(index: &SeedGlobalIndex, uf: &mut UnionFind, edges: &[Edge], active_only: bool) {
         for e in edges {
@@ -428,11 +435,11 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
 
     /// Count the number of active edges whose endpoints lie in the same component.
     ///
-    /// This is used primarily for solver policy decisions / diagnostics.
+    /// This is used as a component-level signal for diagnostics and routing policies.
     ///
     /// Arguments
     /// ---------
-    /// * `index` – Global dense index mapping.
+    /// * `index` – Dense global index mapping.
     /// * `edges` – Global directed edges.
     /// * `comp_of_node` – Component id for each global node index.
     /// * `n_components` – Number of components.
@@ -440,12 +447,11 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
     /// Return
     /// ------
     /// `Vec<u32>` of length `n_components` where `counts[cid]` is the number of
-    /// **active** edges fully contained inside component `cid`.
+    /// active edges fully contained inside component `cid`.
     ///
     /// Notes
     /// -----
-    /// - This function *always* counts only active edges, regardless of the
-    ///   `active_only` flag used when computing connectivity.
+    /// - This function counts active edges only, independent of `active_only`.
     fn count_active_intra_edges(
         index: &SeedGlobalIndex,
         edges: &[Edge],
@@ -475,15 +481,17 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
     // Internal helpers (component membership lists + bounds)
     // -------------------------------------------------------------------------
 
-    /// Build:
-    /// - `component_ref`: borrowed nodes per component,
-    /// - `component_night_bound`: min/max nights per component,
+    /// Build the component membership lists, night bounds, and local indexing map.
+    ///
+    /// This step materializes:
+    /// - `component_ref[cid]`: borrowed seed references,
+    /// - `component_night_bound[cid]`: `(min_night, max_night)` span,
     /// - `local_of_key`: `SeedKey -> (component_id, local_idx)`.
     ///
     /// Arguments
     /// ---------
     /// * `seed_store` – Seed storage grouped by night.
-    /// * `index` – Global dense index mapping.
+    /// * `index` – Dense global index mapping.
     /// * `comp_of_node` – Component id for each global node index.
     /// * `n_components` – Number of components.
     ///
@@ -493,10 +501,8 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
     ///
     /// Notes
     /// -----
-    /// - The order of `component_ref[cid]` is the iteration order of `seed_store.iter()`.
-    ///   It is deterministic if `SeedStore::iter()` is deterministic.
-    /// - `local_of_key` is the bridge needed later to convert an edge endpoint (`SeedKey`)
-    ///   into a component-local index.
+    /// - `local_of_key` is used later to map edge endpoints to component-local indices.
+    /// - The order of nodes in each component is the iteration order of `seed_store.iter()`.
     fn build_refs_bounds_and_local_map(
         seed_store: &'seed_lf SeedStore<'alert_lf>,
         index: &SeedGlobalIndex,
@@ -507,7 +513,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
         ComponentNightBound,
         AHashMap<SeedKey, (ComponentId, LocalIdx)>,
     ) {
-        // Pre-compute component sizes to reserve capacity.
+        // Pre-compute component sizes to reserve capacity in `component_ref`.
         let mut sizes = vec![0u32; n_components];
         for &cid in comp_of_node {
             sizes[cid as usize] += 1;
@@ -520,6 +526,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
         let mut local_of_key: AHashMap<SeedKey, (ComponentId, LocalIdx)> = AHashMap::default();
         local_of_key.reserve(index.n_total());
 
+        // Track per-component min/max nights during materialization.
         let mut min_night: Vec<Option<NightId>> = vec![None; n_components];
         let mut max_night: Vec<Option<NightId>> = vec![None; n_components];
 
@@ -560,16 +567,16 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
     /// Build the restricted directed subgraph per component.
     ///
     /// This step constructs:
-    /// - `component_out[cid][local_u]` outgoing adjacency (as `&Edge` references),
-    /// - `in_deg_local` and `out_deg_local` inside the restricted subgraph,
-    /// - `sources_local` and `sinks_local` (precomputed solver entry/exit points).
+    /// - `component_out[cid][local_u]`: outgoing adjacency inside the component,
+    /// - `component_in_deg_local`, `component_out_deg_local`: local degrees,
+    /// - `component_sources_local`, `component_sinks_local`: solver entry/exit points.
     ///
     /// Arguments
     /// ---------
-    /// * `graph` – Global runtime graph (`edges` + global degrees in `graph.core`).
-    /// * `active_only` – If `true`, only active edges are included.
+    /// * `graph` – Global runtime graph (edges + global degrees in `graph.core`).
+    /// * `active_only` – If `true`, include only active edges.
     /// * `n_components` – Number of components.
-    /// * `component_ref` – Borrowed node lists per component, used for sizing.
+    /// * `component_ref` – Borrowed node lists per component (for sizing).
     /// * `local_of_key` – `SeedKey -> (component_id, local_idx)` mapping.
     /// * `comp_of_node` – `global_idx -> component_id` mapping.
     /// * `index` – Global dense index mapping.
@@ -580,7 +587,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
     ///
     /// Notes
     /// -----
-    /// - Enforces time-forward directed edges (`night(to) > night(from)`); back-edges are ignored.
+    /// - Enforces time-forward edges (`night(to) > night(from)`); back-edges are ignored.
     /// - Uses `graph.core.out_deg` as a best-effort capacity hint for adjacency allocation.
     fn build_local_digraph(
         graph: &'edge_lf RuntimeGraph<'seed_lf, 'alert_lf>,
@@ -597,7 +604,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
         Vec<Vec<LocalIdx>>,
         Vec<Vec<LocalIdx>>,
     ) {
-        // Allocate per-component node arrays.
+        // Allocate per-component adjacency and degree arrays in component-local space.
         let mut component_out: ComponentOut<'edge_lf, 'seed_lf, 'alert_lf> = (0..n_components)
             .map(|cid| {
                 let n = component_ref[cid].len();
@@ -613,10 +620,8 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
             .map(|cid| vec![0u32; component_ref[cid].len()])
             .collect();
 
-        // Exploit graph.core degrees to reserve outgoing capacities (best-effort).
-        //
-        // We do *not* assume global out-degree equals intra-component out-degree;
-        // it is only an upper bound / hint.
+        // Best-effort capacity reservation:
+        // global out-degree is an upper bound for intra-component out-degree.
         for cid in 0..n_components {
             for (lu, node) in component_ref[cid].iter().enumerate() {
                 let key = node.core.key;
@@ -625,20 +630,21 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
             }
         }
 
-        // Single pass over edges: keep only intra-component directed edges.
+        // Single pass over global edges:
+        // keep only edges fully inside the same component and time-forward.
         for e in graph.edges.iter() {
             if active_only && !e.core.active {
                 continue;
             }
 
-            // Enforce time-forward directed edges (gaps allowed).
+            // Enforce time-forward structure.
             let n0 = e.from.core.night_id().value();
             let n1 = e.to.core.night_id().value();
             if n1 <= n0 {
                 continue;
             }
 
-            // Fast component id check using global index.
+            // Fast component check in global index space.
             let u_gid = index.idx_of_key(e.from.core.key);
             let v_gid = index.idx_of_key(e.to.core.key);
             let cu = comp_of_node[u_gid];
@@ -647,7 +653,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
                 continue;
             }
 
-            // Convert endpoints to component-local indices.
+            // Convert endpoints to component-local indices using `local_of_key`.
             let Some(&(cid_u, lu)) = local_of_key.get(&e.from.core.key) else {
                 continue;
             };
@@ -660,18 +666,18 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
             let lu_usize = lu as usize;
             let lv_usize = lv as usize;
 
+            // Insert adjacency and update local degrees.
             component_out[cid][lu_usize].push(e);
             out_deg_local[cid][lu_usize] += 1;
             in_deg_local[cid][lv_usize] += 1;
         }
 
-        // Precompute sources/sinks in the restricted digraph.
+        // Precompute sources and sinks in each restricted digraph.
         //
-        // A source is a node with (in_deg==0, out_deg>0).
-        // A sink is a node with (out_deg==0).
+        // - source: in_deg == 0 and out_deg > 0
+        // - sink: out_deg == 0
         //
-        // If a component has no sources (degenerate case), we fall back to
-        // "any node with out_deg>0" as allowed starting points.
+        // If no sources exist, fall back to "any node with out_deg > 0".
         let mut sources_local: Vec<Vec<LocalIdx>> = Vec::with_capacity(n_components);
         let mut sinks_local: Vec<Vec<LocalIdx>> = Vec::with_capacity(n_components);
 
@@ -715,7 +721,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
     }
 
     // -------------------------------------------------------------------------
-    // Unified getters / accessors
+    // Accessors
     // -------------------------------------------------------------------------
 
     /// Return the component id containing a given seed key.
@@ -726,11 +732,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
     ///
     /// Return
     /// ------
-    /// `ComponentId` for the connected component that contains this seed.
-    ///
-    /// Notes
-    /// -----
-    /// - This lookup uses the global dense index (`SeedGlobalIndex`) + `comp_of_node`.
+    /// Component id containing this seed.
     pub fn component_id_of_seed(&self, seed_key: SeedKey) -> ComponentId {
         let gid = self.index.idx_of_key(seed_key);
         self.comp_of_node[gid]
@@ -744,7 +746,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
     ///
     /// Return
     /// ------
-    /// `&[&SeedNode]` slice of nodes in this component, in component-local order.
+    /// Slice of nodes in this component in component-local order.
     pub fn component_nodes(&self, component_id: ComponentId) -> &[&SeedNode<'alert_lf>] {
         &self.component_ref[component_id as usize]
     }
@@ -762,7 +764,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
         self.component_ref[component_id as usize].len()
     }
 
-    /// Return the number of *active* edges whose endpoints are inside the component.
+    /// Return the number of active edges whose endpoints are inside the component.
     ///
     /// Arguments
     /// ---------
@@ -770,17 +772,12 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
     ///
     /// Return
     /// ------
-    /// Count of active intra-component edges.
-    ///
-    /// Notes
-    /// -----
-    /// - This is a per-component diagnostic / policy input, not necessarily the number
-    ///   of edges present in `component_out` (which depends on `active_only` during compute).
+    /// Active intra-component edge count.
     pub fn component_active_edges(&self, component_id: ComponentId) -> u32 {
         self.component_active_edge[component_id as usize]
     }
 
-    /// Return the (min_night, max_night) bounds for the component, if any.
+    /// Return the `(min_night, max_night)` bounds for the component, if any.
     ///
     /// Arguments
     /// ---------
@@ -788,14 +785,12 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
     ///
     /// Return
     /// ------
-    /// `Some((min_night, max_night))` if the component is non-empty, otherwise `None`.
+    /// `Some((min_night, max_night))` if the component is non-empty, else `None`.
     pub fn component_night_bounds(&self, component_id: ComponentId) -> Option<(NightId, NightId)> {
         self.component_night_bound[component_id as usize]
     }
 
-    /// Return the night span (integer days) for the component.
-    ///
-    /// This is `max_night - min_night` with saturating subtraction.
+    /// Return the night span (integer day difference) for the component.
     ///
     /// Arguments
     /// ---------
@@ -823,13 +818,8 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
     ///
     /// Return
     /// ------
-    /// Slice where `out[local_u]` is the list of `&Edge` outgoing from `local_u`
-    /// within the component.
-    ///
-    /// Notes
-    /// -----
-    /// - The adjacency is built at `compute()` time, so solvers do not need to rescan
-    ///   `graph.edges` to build local structure.
+    /// Slice where `out[local_u]` is the list of outgoing `&Edge` from `local_u`
+    /// restricted to the component.
     pub fn component_out_edges(
         &self,
         component_id: ComponentId,
@@ -845,8 +835,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
     ///
     /// Return
     /// ------
-    /// Slice where `in_deg[local_u]` is the number of incoming edges to `local_u`
-    /// within the restricted directed subgraph.
+    /// Slice where `in_deg[local_u]` is the local in-degree of `local_u`.
     pub fn component_in_deg_local(&self, component_id: ComponentId) -> &[u32] {
         &self.component_in_deg_local[component_id as usize]
     }
@@ -859,8 +848,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
     ///
     /// Return
     /// ------
-    /// Slice where `out_deg[local_u]` is the number of outgoing edges from `local_u`
-    /// within the restricted directed subgraph.
+    /// Slice where `out_deg[local_u]` is the local out-degree of `local_u`.
     pub fn component_out_deg_local(&self, component_id: ComponentId) -> &[u32] {
         &self.component_out_deg_local[component_id as usize]
     }
@@ -879,8 +867,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
     ///
     /// Notes
     /// -----
-    /// - If the component has no such node, this returns a fallback list:
-    ///   all nodes with `out_deg_local[u] > 0`.
+    /// - If no such node exists, this returns a fallback list of nodes with `out_deg > 0`.
     pub fn component_sources_local(&self, component_id: ComponentId) -> &[LocalIdx] {
         &self.component_sources_local[component_id as usize]
     }
@@ -898,18 +885,62 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
         &self.component_sinks_local[component_id as usize]
     }
 
-    /// Classify a component into a solver choice using the current policy.
+    /// Classify a component into a solver choice using the given policy.
     ///
-    /// Strategy
-    /// --------
-    /// - Use a trivial solver for small components.
-    /// - Reject very wide night spans from Min-Cost Flow (MCF).
-    /// - Otherwise estimate MCF time and choose between MCF and BlobBreaker.
+    /// This method selects a `SolverChoice` for a given connected component
+    /// based on:
+    /// - global routing mode (`Force` vs `Heuristics`),
+    /// - component size (number of nodes),
+    /// - number of active intra-component edges,
+    /// - night span,
+    /// - estimated min-cost flow runtime vs time budget.
+    ///
+    /// Decision logic
+    /// --------------
+    /// The classification proceeds in the following order:
+    ///
+    /// 0) Global override
+    ///    If `solver_policy.routing == Force(choice)`, the provided `choice`
+    ///    is returned immediately for all components.
+    ///
+    /// 1) Tiny component fast path (Trivial solver)
+    ///    If both:
+    ///    - `n_nodes <= trivial_max_nodes`, and
+    ///    - `m_active_edges <= trivial_max_active_edges`,
+    ///    the component is routed to `SolverChoice::Trivial`.
+    ///
+    ///    Rationale:
+    ///    Small and sparse components are cheap to solve with a lightweight,
+    ///    bounded enumeration strategy.
+    ///
+    /// 2) Excessive night span (BlobBreaker)
+    ///    If:
+    ///    - `night_span > max_night_span_for_mcf`,
+    ///    the component is routed to `SolverChoice::BlobBreaker`.
+    ///
+    ///    Rationale:
+    ///    Very wide temporal spans tend to induce complex combinatorics.
+    ///    Even if node/edge counts are moderate, the structure may be
+    ///    unfavorable for global optimization (MCF).
+    ///
+    /// 3) Budgeted MCF vs BlobBreaker
+    ///    Otherwise, estimate the MCF runtime:
+    ///
+    ///        t_est = k_mcf_s_per_edge_logn * m_active_edges * log2(n_nodes + 1)
+    ///
+    ///    If:
+    ///        t_est <= mcf_budget_s
+    ///    route to `SolverChoice::MinCostFlow`,
+    ///    else route to `SolverChoice::BlobBreaker`.
+    ///
+    ///    Rationale:
+    ///    Use MCF when the predicted runtime fits within the allowed budget,
+    ///    otherwise fall back to a decomposition-based strategy.
     ///
     /// Arguments
     /// ---------
     /// * `component_id` – Dense component id.
-    /// * `solver_policy` – Policy containing thresholds and time budget model.
+    /// * `solver_policy` – Policy containing routing mode, thresholds, and time model.
     ///
     /// Return
     /// ------
@@ -917,28 +948,37 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
     ///
     /// Notes
     /// -----
-    /// - This classification uses:
-    ///   - component size,
-    ///   - night span,
-    ///   - number of active intra-component edges.
+    /// - The routing is deterministic for fixed component statistics and policy.
+    /// - The time model is intentionally simple and should be calibrated empirically.
+    /// - This method does not execute any solver; it only selects one.
     pub fn classify(
         &self,
         component_id: ComponentId,
         solver_policy: &SolverPolicy,
     ) -> SolverChoice {
-        let n = self.component_size(component_id);
-
-        if n <= solver_policy.trivial_max_nodes as usize {
-            return SolverChoice::Trivial;
+        // 0) Optional global override
+        match solver_policy.routing {
+            SolverRoutingMode::Force(choice) => return choice,
+            SolverRoutingMode::Heuristics => {}
         }
 
+        let n = self.component_size(component_id) as u32;
+        let m_active = self.component_active_edges(component_id);
+
+        // 1) Tiny components: trivial fast path (bounded by nodes and active edges)
+        if n <= solver_policy.trivial_max_nodes
+            && m_active <= solver_policy.trivial_max_active_edges
+        {
+            return SolverChoice::BoundedBeam;
+        }
+
+        // 2) Large night span: avoid MCF
         if self.component_night_span(component_id) > solver_policy.max_night_span_for_mcf {
             return SolverChoice::BlobBreaker;
         }
 
-        let t_est =
-            solver_policy.estimate_mcf_time_s(n as u32, self.component_active_edges(component_id));
-
+        // 3) Budgeted MCF vs blob-breaker
+        let t_est = solver_policy.estimate_mcf_time_s(n, m_active);
         if t_est <= solver_policy.mcf_budget_s {
             SolverChoice::MinCostFlow
         } else {

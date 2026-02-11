@@ -4,6 +4,7 @@ pub mod pair_config;
 pub mod propagator_config;
 pub mod triplet_config;
 pub mod units;
+pub mod solver_config;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use config::{Config, Environment, File};
