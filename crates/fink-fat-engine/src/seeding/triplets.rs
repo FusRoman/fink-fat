@@ -393,7 +393,7 @@ mod triplet_gen_tests {
     use std::f64::consts::PI;
 
     use crate::{
-        MjdTt, Radians,
+        MJDTT, Radians,
         astro_math::{ang_sep, arcsec_to_rad, planar_offset_fast},
         engine_config::triplet_config::TripletConfig,
         persistence::alert::AlertKey,
@@ -437,23 +437,23 @@ mod triplet_gen_tests {
 
     /// Dummy time binner: uniform bins of fixed width starting from `t0`.
     struct DummyTimeBinner {
-        t0: MjdTt,
+        t0: MJDTT,
         width: f64,
     }
 
     impl DummyTimeBinner {
-        fn new(t0: MjdTt, width: f64) -> Self {
+        fn new(t0: MJDTT, width: f64) -> Self {
             Self { t0, width }
         }
     }
 
     impl TimeBinner for DummyTimeBinner {
-        fn bin_for(&self, mjd_tt: MjdTt) -> TimeBin {
+        fn bin_for(&self, mjd_tt: MJDTT) -> TimeBin {
             let idx = ((mjd_tt - self.t0) / self.width).floor() as i64;
             TimeBin(idx)
         }
 
-        fn bins_in_range(&self, t0: MjdTt, t1: MjdTt) -> Vec<TimeBin> {
+        fn bins_in_range(&self, t0: MJDTT, t1: MJDTT) -> Vec<TimeBin> {
             let i0 = ((t0 - self.t0) / self.width).floor() as i64;
             let i1 = ((t1 - self.t0) / self.width).ceil() as i64;
             (i0..=i1).map(TimeBin).collect()
@@ -463,7 +463,7 @@ mod triplet_gen_tests {
             self.width
         }
 
-        fn bin_start(&self, bin: i64) -> MjdTt {
+        fn bin_start(&self, bin: i64) -> MJDTT {
             self.t0 + (bin as f64) * self.width
         }
     }

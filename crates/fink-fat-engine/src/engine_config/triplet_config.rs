@@ -213,7 +213,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::engine_config::units::{de_angle_rad, de_time_days};
-use crate::{MjdTt, Radians, error::SeedError};
+use crate::{MJDTT, Radians, error::SeedError};
 
 /// Parameters controlling **triplet generation** `(a, b, c)`.
 ///
@@ -253,7 +253,7 @@ pub struct TripletConfig {
     /// -------------
     /// Parsed with [`de_time_days`].
     #[serde(deserialize_with = "de_time_days")]
-    pub max_dt_between: MjdTt,
+    pub max_dt_between: MJDTT,
 
     /// Maximum angular separation allowed for consecutive neighbors.
     ///
@@ -378,7 +378,7 @@ pub struct TripletConfigBuilder {
 
 impl TripletConfigBuilder {
     /// Set maximum `Δt` between consecutive neighbors (days, TT).
-    pub fn max_dt_between(mut self, v: MjdTt) -> Self {
+    pub fn max_dt_between(mut self, v: MJDTT) -> Self {
         self.params.max_dt_between = v;
         self
     }

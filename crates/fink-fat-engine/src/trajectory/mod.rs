@@ -1,3 +1,5 @@
+pub mod track_id;
+
 use crate::{graph::edge::Edge, seeding::seed_node::SeedNode};
 
 /// One trajectory hypothesis produced by a solver.

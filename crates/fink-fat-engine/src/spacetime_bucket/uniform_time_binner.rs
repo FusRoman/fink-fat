@@ -28,7 +28,7 @@
 //! downward by a small epsilon proportional to the bin width.
 
 use crate::{
-    MjdTt,
+    MJDTT,
     spacetime_bucket::time_binner::{TimeBin, TimeBinner},
 };
 
@@ -40,9 +40,9 @@ use crate::{
 #[derive(Clone, Copy, Debug)]
 pub struct UniformTimeBinner {
     /// Origin of the binning scheme (days, MJD TT).
-    t0: MjdTt,
+    t0: MJDTT,
     /// Bin width (days, strictly > 0).
-    dt: MjdTt,
+    dt: MJDTT,
 }
 
 impl UniformTimeBinner {
@@ -56,14 +56,14 @@ impl UniformTimeBinner {
     /// Panics
     /// ------
     /// Panics if `dt_days <= 0.0`.
-    pub fn new(t0: MjdTt, dt_days: MjdTt) -> Self {
+    pub fn new(t0: MJDTT, dt_days: MJDTT) -> Self {
         assert!(dt_days > 0.0, "bin width must be > 0");
         Self { t0, dt: dt_days }
     }
 
     /// Return the origin `t0` of the binning (days, MJD TT).
     #[inline]
-    pub fn origin(&self) -> MjdTt {
+    pub fn origin(&self) -> MJDTT {
         self.t0
     }
 
@@ -77,7 +77,7 @@ impl UniformTimeBinner {
     /// -----
     /// Handles negative values correctly by relying on `floor`.
     #[inline]
-    fn bin_index(&self, t: MjdTt) -> i64 {
+    fn bin_index(&self, t: MJDTT) -> i64 {
         ((t - self.t0) / self.dt).floor() as i64
     }
 
@@ -106,7 +106,7 @@ impl TimeBinner for UniformTimeBinner {
     /// -------
     /// * [`TimeBin`] — Bin containing `mjd_tt`.
     #[inline]
-    fn bin_for(&self, mjd_tt: MjdTt) -> TimeBin {
+    fn bin_for(&self, mjd_tt: MJDTT) -> TimeBin {
         TimeBin(self.bin_index(mjd_tt))
     }
 
@@ -127,7 +127,7 @@ impl TimeBinner for UniformTimeBinner {
     /// Returns
     /// -------
     /// Vector of [`TimeBin`] covering the interval `[t0, t1]`.
-    fn bins_in_range(&self, t0: MjdTt, t1: MjdTt) -> Vec<TimeBin> {
+    fn bins_in_range(&self, t0: MJDTT, t1: MJDTT) -> Vec<TimeBin> {
         if t0.is_nan() || t1.is_nan() {
             return Vec::new();
         }
@@ -153,7 +153,7 @@ impl TimeBinner for UniformTimeBinner {
 
     /// Return the bin width (days, MJD TT).
     #[inline]
-    fn bin_width(&self) -> MjdTt {
+    fn bin_width(&self) -> MJDTT {
         self.dt
     }
 
@@ -171,7 +171,7 @@ impl TimeBinner for UniformTimeBinner {
     /// -------
     /// Start time of bin `k` (days, MJD TT).
     #[inline]
-    fn bin_start(&self, k: i64) -> MjdTt {
+    fn bin_start(&self, k: i64) -> MJDTT {
         self.t0 + (k as f64) * self.dt
     }
 }

@@ -9,7 +9,7 @@
 /// ----------
 /// - Same zero-point as standard MJD,
 /// - Time scale is TT (not UTC/TAI).
-pub type MjdTt = f64;
+pub type MJDTT = f64;
 
 /// Angle in radians, typically used for right ascension, declination,
 /// and small-angle offsets on the sky.

@@ -178,7 +178,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::engine_config::units::{de_ang_speed_rad_per_day, de_time_days};
-use crate::{MjdTt, error::SeedError};
+use crate::{MJDTT, error::SeedError};
 
 /// Parameters controlling **pair generation** between alerts `(a, b)`.
 ///
@@ -219,7 +219,7 @@ pub struct PairConfig {
     /// -------------
     /// Parsed with [`de_time_days`].
     #[serde(deserialize_with = "de_time_days")]
-    pub max_dt: MjdTt,
+    pub max_dt: MJDTT,
 
     /// Maximum allowed on-sky angular speed.
     ///
@@ -333,7 +333,7 @@ pub struct PairConfigBuilder {
 
 impl PairConfigBuilder {
     /// Set maximum allowed `Δt` between alerts (days, TT).
-    pub fn max_dt(mut self, v: MjdTt) -> Self {
+    pub fn max_dt(mut self, v: MJDTT) -> Self {
         self.params.max_dt = v;
         self
     }

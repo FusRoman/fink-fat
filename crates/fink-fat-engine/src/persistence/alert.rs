@@ -55,11 +55,10 @@ use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    night_id::NightId,
-    persistence::{
+    MJDTT, Radians, night_id::NightId, persistence::{
         ALERT_STORE_SCHEMA_VERSION, envelope::DiskEnvelope, error::PersistenceIoError,
         layout::PersistenceLayout, manifest::Manifest,
-    },
+    }, units::Arcsec
 };
 
 /// Single detection in the alert stream.
@@ -91,15 +90,15 @@ pub struct Alert {
     /// LSST diaSourceId (stable, 64-bit).
     pub dia_source_id: u64,
     /// Right ascension (radians).
-    pub ra: f64,
+    pub ra: Radians,
     /// 1σ uncertainty on RA (radians).
-    pub ra_err: f64,
+    pub ra_err: Arcsec,
     /// Declination (radians).
-    pub dec: f64,
+    pub dec: Radians,
     /// 1σ uncertainty on Dec (radians).
-    pub dec_err: f64,
+    pub dec_err: Arcsec,
     /// Detection epoch (MJD TT, days).
-    pub mjd_tt: f64,
+    pub mjd_tt: MJDTT,
     /// PSF difference flux (units depend on upstream, e.g. nJy).
     pub flux: f32,
     /// 1σ uncertainty on flux (same units as `flux`).

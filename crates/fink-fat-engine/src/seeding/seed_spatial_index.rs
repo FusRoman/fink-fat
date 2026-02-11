@@ -53,7 +53,7 @@
 use ahash::{AHashMap, AHashSet};
 
 use crate::{
-    MjdTt, Radians,
+    MJDTT, Radians,
     seeding::seed_node::SeedNode,
     spacetime_bucket::{
         bucket::{Bucket, BucketIndex, BucketKey},
@@ -188,7 +188,7 @@ impl<'seed_lf, 'binner_lf, 'alert_lf> SeedSpatialIndex<'seed_lf, 'binner_lf, 'al
     ///     Declination of the cone center (radians).
     /// radius : Radians
     ///     Angular cone radius (radians).
-    /// time : MjdTt
+    /// time : MJDTT
     ///     Target epoch (MJD TT). Determines which `TimeBin` is queried.
     ///
     /// Returns
@@ -208,7 +208,7 @@ impl<'seed_lf, 'binner_lf, 'alert_lf> SeedSpatialIndex<'seed_lf, 'binner_lf, 'al
         ra: Radians,
         dec: Radians,
         radius: Radians,
-        time: MjdTt,
+        time: MJDTT,
     ) -> impl Iterator<Item = &'seed_lf SeedNode<'alert_lf>> + '_ {
         let center_key: SpatialKey = self.spatial_binner.key_for(ra, dec);
         let time_key = self.time_binner.bin_for(time);

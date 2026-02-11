@@ -13,4 +13,4 @@ pub mod trajectory;
 pub mod units;
 
 pub use persistence::alert::Alert;
-pub use units::{MjdTt, Radians};
+pub use units::{MJDTT, Radians};

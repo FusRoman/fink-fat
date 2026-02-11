@@ -1,4 +1,4 @@
-use crate::MjdTt;
+use crate::MJDTT;
 
 /// Compact time bin identifier.
 ///
@@ -20,23 +20,23 @@ pub trait TimeBinner: Sync {
     /// Parameters
     /// ----------
     /// - `mjd_tt`: Time stamp in MJD(TT) days.
-    fn bin_for(&self, mjd_tt: MjdTt) -> TimeBin;
+    fn bin_for(&self, mjd_tt: MJDTT) -> TimeBin;
 
     /// Enumerate all bins **overlapping** the closed interval `[t0, t1]`.
     ///
     /// Parameters
     /// ----------
     /// - `t0`, `t1`: Start/end in MJD(TT) days (no ordering required; implementations may swap).
-    fn bins_in_range(&self, t0: MjdTt, t1: MjdTt) -> Vec<TimeBin>;
+    fn bins_in_range(&self, t0: MJDTT, t1: MJDTT) -> Vec<TimeBin>;
 
     /// The **bin width** in days.
-    fn bin_width(&self) -> MjdTt;
+    fn bin_width(&self) -> MJDTT;
 
     /// Return the start time of bin `k`.
-    fn bin_start(&self, k: i64) -> MjdTt;
+    fn bin_start(&self, k: i64) -> MJDTT;
 
     /// Return the end time of bin `k`.
-    fn bin_end(&self, k: i64) -> MjdTt {
+    fn bin_end(&self, k: i64) -> MJDTT {
         self.bin_start(k) + self.bin_width()
     }
 }

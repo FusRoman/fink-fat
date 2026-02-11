@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display, Formatter};
 
 use crate::{
-    MjdTt, Radians,
+    MJDTT, Radians,
     astro_math::{lambda_max_2x2, radec_to_tangent, tangent_to_radec},
     display_format::{fmt_mat2, fmt_vec2},
     engine_config::propagator_config::ModelNoise,
@@ -154,7 +154,7 @@ pub struct TangentPlaneModel {
     pub center: TangentCenter,
 
     /// Reference epoch (typically the middle of the arc), in MJD TT.
-    pub epoch_mid: MjdTt,
+    pub epoch_mid: MJDTT,
 
     /// Position on the tangent plane at `epoch_mid` (radians).
     pub pos_xy: [f64; 2],
@@ -231,7 +231,7 @@ impl TangentPlaneModel {
     #[inline]
     pub fn new(
         center: TangentCenter,
-        epoch_mid: MjdTt,
+        epoch_mid: MJDTT,
         pos_xy: [f64; 2],
         vel_xy: [f64; 2],
         acc_xy: Option<[f64; 2]>,
@@ -320,7 +320,7 @@ impl TangentPlaneModel {
     #[inline]
     pub fn predict_on_plane(
         &self,
-        t_target: MjdTt,
+        t_target: MJDTT,
         noise: &ModelNoise,
     ) -> ([f64; 2], [[f64; 2]; 2]) {
         let dt = t_target - self.epoch_mid;
@@ -408,7 +408,7 @@ impl TangentPlaneModel {
     ///   drifts far from the reference centre or outside the validity time
     ///   range of the fit.
     #[inline]
-    pub fn predict_radec(&self, t_target: MjdTt) -> (Radians, Radians) {
+    pub fn predict_radec(&self, t_target: MJDTT) -> (Radians, Radians) {
         let dt = t_target - self.epoch_mid;
 
         // Kinematic propagation on the tangent plane.
@@ -456,7 +456,7 @@ impl TangentPlaneModel {
     #[inline]
     pub fn predict_cone_base(
         &self,
-        t_target: MjdTt,
+        t_target: MJDTT,
         noise: &ModelNoise,
         k_sigma: f64,
     ) -> (Radians, Radians, f64) {

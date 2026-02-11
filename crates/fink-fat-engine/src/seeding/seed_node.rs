@@ -44,7 +44,7 @@
 //! Units & conventions
 //! -------------------
 //! - Angles (`ra`, `dec`, tangent-plane coordinates) are in **radians**.
-//! - Epochs are **MJD TT** (`MjdTt`).
+//! - Epochs are **MJD TT** (`MJDTT`).
 //! - Tangent-plane velocities are **rad/day**.
 //!
 //! See also
@@ -61,7 +61,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Alert, MjdTt, Radians,
+    Alert, MJDTT, Radians,
     astro_math::{fit_quad_1d, radec_to_tangent, spherical_midpoint, tangent_to_radec},
     display_format::indent_block,
     engine_config::{edge_config::EdgeConfig, propagator_config::PredictorParams},
@@ -248,7 +248,7 @@ impl<'alert_lf> SeedNode<'alert_lf> {
     ///
     /// Parameters
     /// ----------
-    /// t_target : MjdTt
+    /// t_target : MJDTT
     ///     Target epoch (MJD TT).
     ///
     /// Returns
@@ -260,7 +260,7 @@ impl<'alert_lf> SeedNode<'alert_lf> {
     /// --------
     /// - [`SeedNode::predict_cone`] – uncertainty-aware cone for candidate search.
     #[inline]
-    pub fn predict_radec(&self, t_target: MjdTt) -> (Radians, Radians) {
+    pub fn predict_radec(&self, t_target: MJDTT) -> (Radians, Radians) {
         self.plane.predict_radec(t_target)
     }
 
@@ -275,7 +275,7 @@ impl<'alert_lf> SeedNode<'alert_lf> {
     ///
     /// Parameters
     /// ----------
-    /// t_target : MjdTt
+    /// t_target : MJDTT
     ///     Target epoch (MJD TT).
     /// binner : &impl SpatialBinner
     ///     Spatial binner used by the index; only `cell_radius()` is used here.
@@ -295,7 +295,7 @@ impl<'alert_lf> SeedNode<'alert_lf> {
     #[inline]
     pub fn predict_cone<Bs: SpatialBinner + ?Sized>(
         &self,
-        t_target: MjdTt,
+        t_target: MJDTT,
         binner: &Bs,
         predictor_params: &PredictorParams,
     ) -> (Radians, Radians, f64) {
@@ -408,7 +408,7 @@ impl<'alert_lf> SeedNode<'alert_lf> {
     ///
     /// Parameters
     /// ----------
-    /// t_target : MjdTt
+    /// t_target : MJDTT
     ///     Target epoch (MJD TT).
     /// index : &SeedSpatialIndex
     ///     Seed index to query.
@@ -430,7 +430,7 @@ impl<'alert_lf> SeedNode<'alert_lf> {
     #[inline]
     pub fn cone_candidates<'seed_lf, Bs: SpatialBinner>(
         &self,
-        t_target: MjdTt,
+        t_target: MJDTT,
         index: &SeedSpatialIndex<'seed_lf, '_, 'alert_lf>,
         binner: &Bs,
         params: &PredictorParams,

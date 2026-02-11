@@ -34,7 +34,7 @@
 use ahash::AHashMap;
 
 use crate::{
-    Alert, MjdTt, Radians,
+    Alert, MJDTT, Radians,
     spacetime_bucket::{
         spatial_binner::{SpatialBinner, SpatialKey},
         time_binner::{TimeBin, TimeBinner},
@@ -122,7 +122,7 @@ pub struct BucketIndex<Object> {
 ///     Right ascension (radians).
 /// dec : Radians
 ///     Declination (radians).
-/// mjd_tt : MjdTt
+/// mjd_tt : MJDTT
 ///     Observation epoch (MJD TT).
 /// sb : &impl SpatialBinner
 ///     Spatial discretization backend.
@@ -137,7 +137,7 @@ pub struct BucketIndex<Object> {
 fn bucket_key_for<Bs: SpatialBinner, Bt: TimeBinner>(
     ra: Radians,
     dec: Radians,
-    mjd_tt: MjdTt,
+    mjd_tt: MJDTT,
     sb: &Bs,
     tb: &Bt,
 ) -> BucketKey {
@@ -253,11 +253,11 @@ mod bucket_tests {
     struct DummyTimeBinner;
 
     impl TimeBinner for DummyTimeBinner {
-        fn bin_for(&self, mjd_tt: MjdTt) -> TimeBin {
+        fn bin_for(&self, mjd_tt: MJDTT) -> TimeBin {
             TimeBin(mjd_tt.floor() as i64)
         }
 
-        fn bins_in_range(&self, t0: MjdTt, t1: MjdTt) -> Vec<TimeBin> {
+        fn bins_in_range(&self, t0: MJDTT, t1: MJDTT) -> Vec<TimeBin> {
             // Inclusive range of integer days between min(t0, t1) and max(t0, t1).
             let (t_min, t_max) = if t0 <= t1 { (t0, t1) } else { (t1, t0) };
             let start = t_min.floor() as i64;
@@ -265,18 +265,18 @@ mod bucket_tests {
             (start..=end).map(TimeBin).collect()
         }
 
-        fn bin_width(&self) -> MjdTt {
+        fn bin_width(&self) -> MJDTT {
             // 1 day bins.
             1.0
         }
 
-        fn bin_start(&self, k: i64) -> MjdTt {
+        fn bin_start(&self, k: i64) -> MJDTT {
             k as f64
         }
     }
 
     /// Helper to build a minimal `Alert` for tests.
-    fn mk_alert(dia_source_id: u64, ra: Radians, dec: Radians, mjd_tt: MjdTt) -> Alert {
+    fn mk_alert(dia_source_id: u64, ra: Radians, dec: Radians, mjd_tt: MJDTT) -> Alert {
         Alert {
             dia_source_id,
             ra,
@@ -524,23 +524,23 @@ mod bucket_tests {
 
         struct TestTimeBinner;
         impl TimeBinner for TestTimeBinner {
-            fn bin_for(&self, mjd_tt: MjdTt) -> TimeBin {
+            fn bin_for(&self, mjd_tt: MJDTT) -> TimeBin {
                 TimeBin((mjd_tt * 10.0).floor() as i64) // 0.1 day bins
             }
 
-            fn bins_in_range(&self, t0: MjdTt, t1: MjdTt) -> Vec<TimeBin> {
+            fn bins_in_range(&self, t0: MJDTT, t1: MJDTT) -> Vec<TimeBin> {
                 let (t_min, t_max) = if t0 <= t1 { (t0, t1) } else { (t1, t0) };
                 let start = (t_min * 10.0).floor() as i64;
                 let end = (t_max * 10.0).floor() as i64;
                 (start..=end).map(TimeBin).collect()
             }
 
-            fn bin_width(&self) -> MjdTt {
+            fn bin_width(&self) -> MJDTT {
                 // 0.1 day bins.
                 0.1
             }
 
-            fn bin_start(&self, k: i64) -> MjdTt {
+            fn bin_start(&self, k: i64) -> MJDTT {
                 k as f64 * 0.1
             }
         }
