@@ -224,14 +224,6 @@ pub struct ConnectedComponents<'edge_lf, 'seed_lf, 'alert_lf> {
     // ---------------------------------------------------------------------
     // Directed intra-component graph (restricted adjacency + degrees)
     // ---------------------------------------------------------------------
-    /// Map each seed key to its component-local coordinates.
-    ///
-    /// Layout
-    /// ------
-    /// `local_of_key[SeedKey] = (component_id, local_idx)`
-    /// where `local_idx` indexes into `component_ref[component_id]`.
-    local_of_key: AHashMap<SeedKey, (ComponentId, LocalIdx)>,
-
     /// Outgoing adjacency lists (restricted to each component).
     ///
     /// Layout
@@ -358,7 +350,6 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
             component_night_bound,
             component_active_edge,
 
-            local_of_key,
             component_out,
             component_in_deg_local,
             component_out_deg_local,
