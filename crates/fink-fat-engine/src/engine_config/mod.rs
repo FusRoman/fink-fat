@@ -174,9 +174,12 @@ use camino::{Utf8Path, Utf8PathBuf};
 use config::{Config, Environment, File};
 use serde::{Deserialize, Serialize};
 
-use crate::engine_config::{
-    edge_config::EdgeConfig, error::ConfigError, pair_config::PairConfig,
-    solver_config::SolverConfig, triplet_config::TripletConfig,
+use crate::{
+    MJDTT,
+    engine_config::{
+        edge_config::EdgeConfig, error::ConfigError, pair_config::PairConfig,
+        solver_config::SolverConfig, triplet_config::TripletConfig, units::de_time_days,
+    },
 };
 
 /// Root configuration for the engine (serde-friendly).
@@ -238,6 +241,67 @@ pub struct EngineConfig {
     /// Keeping this small reduces candidate fan-out and runtime.
     max_gap_nights: u8,
 
+    /// Healpix depth used for spatial binning (nested representation).
+    ///
+    /// Overview
+    /// --------
+    /// Controls the angular resolution of the HEALPix tessellation used to
+    /// index sky positions (via `cdshealpix`, nested scheme).
+    ///
+    /// The subdivision follows:
+    /// - `nside = 2^depth`
+    /// - `npix = 12 × nside²`
+    ///
+    /// Increasing `depth`:
+    /// - increases the number of pixels,
+    /// - decreases pixel angular size,
+    /// - improves spatial selectivity.
+    ///
+    /// Role in the engine
+    /// ------------------
+    /// Used for:
+    /// - intra-night alert/seed spatial binning,
+    /// - spatial pre-filtering during inter-night edge construction.
+    ///
+    /// Trade-off
+    /// ---------
+    /// - Low depth → coarse grid → more candidates per pixel (higher fan-out).
+    /// - High depth → fine grid → better pruning but more indexing overhead.
+    ///
+    /// Typical values in astronomical use cases are between 5 and 12.
+    ///
+    /// Must remain consistent across pipeline stages to preserve deterministic
+    /// graph construction.
+    pub healpix_depth: u8,
+
+    /// Time bin width (days, MJD TT) used for temporal binning.
+    ///
+    /// Overview
+    /// --------
+    /// Controls the resolution of the uniform time binning scheme
+    /// (`UniformTimeBinner`) used during inter-night edge construction.
+    ///
+    /// Time is partitioned into fixed-width bins:
+    /// - width = `time_binner_width` (days, MJD TT),
+    /// - bin index: `k = floor((t - t0) / dt)`.
+    ///
+    /// Role in the engine
+    /// ------------------
+    /// Used to:
+    /// - index seeds by time,
+    /// - restrict candidate searches to compatible temporal windows,
+    /// - reduce combinatorial explosion in edge generation.
+    ///
+    /// Trade-off
+    /// ---------
+    /// - Large width → coarse temporal grouping → more candidates per bin.
+    /// - Small width → finer pruning → more bins and indexing overhead.
+    ///
+    /// Must be strictly positive. Very small values increase index fragmentation
+    /// without significant gain beyond typical astrometric timing precision.
+    #[serde(deserialize_with = "de_time_days")]
+    pub time_binner_width: MJDTT,
+
     /// Root directory used for persistence (seeds, edges, trajectories, logs).
     ///
     /// The directory is stored as a UTF-8 string and exposed via:
@@ -263,6 +327,8 @@ impl Default for EngineConfig {
             edges: EdgeConfig::default(),
             solver_config: SolverConfig::default(),
             max_gap_nights: 3,
+            healpix_depth: 8,
+            time_binner_width: 0.021, // ~30 min in days
             storage_path: "./storage".to_string(),
         }
     }
@@ -300,6 +366,40 @@ impl EngineConfig {
     pub fn validate(&self) -> Result<(), ConfigError> {
         if self.version != 1 {
             return Err(ConfigError::UnsupportedVersion(self.version));
+        }
+
+        let storage_path = self.storage_path();
+        if storage_path.as_str().is_empty() {
+            return Err(ConfigError::Invalid {
+                msg: "storage_path must not be empty".to_string(),
+            });
+        }
+
+        if storage_path.is_file() {
+            return Err(ConfigError::Invalid {
+                msg: format!(
+                    "storage_path must be a directory, got file path '{}'",
+                    storage_path
+                ),
+            });
+        }
+
+        if self.healpix_depth > 29 {
+            return Err(ConfigError::Invalid {
+                msg: format!(
+                    "healpix_depth must be between 0 and 29, got {}",
+                    self.healpix_depth
+                ),
+            });
+        }
+
+        if self.time_binner_width <= 0.0 {
+            return Err(ConfigError::Invalid {
+                msg: format!(
+                    "time_binner_width must be positive, got {}",
+                    self.time_binner_width
+                ),
+            });
         }
 
         // SeedError -> ConfigError via #[from]

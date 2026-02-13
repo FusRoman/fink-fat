@@ -54,6 +54,7 @@
 //! - [`EdgeFeatures::compute_features`] – exact feature extraction for edges.
 
 use std::{
+    cmp::Ordering,
     fmt::{self, Display, Formatter},
     ops::Deref,
 };
@@ -120,6 +121,69 @@ impl SeedNodeCore {
     }
 }
 
+impl PartialEq for SeedNodeCore {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+            && self.n_obs == other.n_obs
+            // comparaison bitwise / total pour f64
+            && self.plane.epoch_mid.to_bits() == other.plane.epoch_mid.to_bits()
+            && self.plane.pos_xy[0].to_bits() == other.plane.pos_xy[0].to_bits()
+            && self.plane.pos_xy[1].to_bits() == other.plane.pos_xy[1].to_bits()
+            && self.plane.vel_xy[0].to_bits() == other.plane.vel_xy[0].to_bits()
+            && self.plane.vel_xy[1].to_bits() == other.plane.vel_xy[1].to_bits()
+            && match (self.plane.acc_xy, other.plane.acc_xy) {
+                (None, None) => true,
+                (Some(a), Some(b)) => a[0].to_bits() == b[0].to_bits() && a[1].to_bits() == b[1].to_bits(),
+                _ => false,
+            }
+            // photom (floats f32)
+            && self.photom.flux_mean.to_bits() == other.photom.flux_mean.to_bits()
+            && self.photom.flux_std.to_bits() == other.photom.flux_std.to_bits()
+            && self.photom.n_bands == other.photom.n_bands
+            && self.photom.bands == other.photom.bands
+    }
+}
+
+impl Eq for SeedNodeCore {}
+
+impl PartialOrd for SeedNodeCore {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for SeedNodeCore {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // clé principale : epoch_mid
+        self.plane
+            .epoch_mid
+            .total_cmp(&other.plane.epoch_mid)
+            // tie-breakers déterministes
+            .then_with(|| self.key.night_id.cmp(&other.key.night_id))
+            .then_with(|| self.key.idx_in_night.cmp(&other.key.idx_in_night))
+            .then_with(|| self.n_obs.cmp(&other.n_obs))
+            // optionnel : position/vitesse pour rendre total + stable
+            .then_with(|| self.plane.pos_xy[0].total_cmp(&other.plane.pos_xy[0]))
+            .then_with(|| self.plane.pos_xy[1].total_cmp(&other.plane.pos_xy[1]))
+            .then_with(|| self.plane.vel_xy[0].total_cmp(&other.plane.vel_xy[0]))
+            .then_with(|| self.plane.vel_xy[1].total_cmp(&other.plane.vel_xy[1]))
+            .then_with(|| match (self.plane.acc_xy, other.plane.acc_xy) {
+                (None, None) => Ordering::Equal,
+                (None, Some(_)) => Ordering::Less, // règle arbitraire mais stable
+                (Some(_), None) => Ordering::Greater,
+                (Some(a), Some(b)) => a[0].total_cmp(&b[0]).then_with(|| a[1].total_cmp(&b[1])),
+            })
+            // photom
+            .then_with(|| {
+                (self.photom.flux_mean as f64).total_cmp(&(other.photom.flux_mean as f64))
+            })
+            .then_with(|| (self.photom.flux_std as f64).total_cmp(&(other.photom.flux_std as f64)))
+            .then_with(|| self.photom.n_bands.cmp(&other.photom.n_bands))
+            .then_with(|| self.photom.bands.cmp(&other.photom.bands))
+    }
+}
+
 /// Seed node with borrowed alert references.
 /// This is the main struct used for seeding and graph construction.
 ///
@@ -142,6 +206,25 @@ impl<'a> Deref for SeedNode<'a> {
     #[inline]
     fn deref(&self) -> &Self::Target {
         &self.core
+    }
+}
+
+impl<'a> PartialEq for SeedNode<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        self.core == other.core
+    }
+}
+impl<'a> Eq for SeedNode<'a> {}
+
+impl<'a> PartialOrd for SeedNode<'a> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<'a> Ord for SeedNode<'a> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.core.cmp(&other.core)
     }
 }
 
@@ -660,7 +743,7 @@ mod seed_node_tests {
 
     /* ------------------------- helpers ------------------------- */
 
-    fn mk_alert(source_id: u64, ra: f64, dec: f64, mjd_tt: f64, band: u8, flux: f32) -> Alert {
+    fn mk_alert(source_id: u64, ra: f64, dec: f64, mjd_tt: f64, band: u8, flux: f64) -> Alert {
         Alert {
             key: AlertKey {
                 night_id: NightId::new(0),

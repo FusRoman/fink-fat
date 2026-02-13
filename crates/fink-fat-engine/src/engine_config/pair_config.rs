@@ -256,7 +256,7 @@ pub struct PairConfig {
     /// - magnitude difference threshold,
     /// - normalized residual threshold,
     /// - or any other scalar similarity metric.
-    pub max_flux_difference: f32,
+    pub max_flux_difference: f64,
 
     /// Whether to allow pairs formed from alerts inside the same **time bin**.
     ///
@@ -345,7 +345,7 @@ impl PairConfigBuilder {
     }
 
     /// Set maximum allowed photometric difference (dimensionless).
-    pub fn max_flux_difference(mut self, v: f32) -> Self {
+    pub fn max_flux_difference(mut self, v: f64) -> Self {
         self.params.max_flux_difference = v;
         self
     }

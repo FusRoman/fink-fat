@@ -139,7 +139,7 @@ pub enum ConfigError {
     /// The message is `'static` so it can be used as a stable identifier in tests
     /// or for downstream mapping to user-facing help.
     #[error("invalid config: {msg}")]
-    Invalid { msg: &'static str },
+    Invalid { msg: String },
 
     /// Pairs/triplets configuration error.
     ///

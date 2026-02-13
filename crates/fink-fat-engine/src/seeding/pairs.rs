@@ -450,7 +450,7 @@ mod pair_gen_tests {
     /* ------------------------- helpers ------------------------- */
 
     /// Construct a minimal `Alert` for testing.
-    fn mk_alert(i: usize, ra: f64, dec: f64, mjd_tt: f64, band: u8, flux: f32) -> Alert {
+    fn mk_alert(i: usize, ra: f64, dec: f64, mjd_tt: f64, band: u8, flux: f64) -> Alert {
         Alert {
             key: AlertKey {
                 night_id: NightId(0),

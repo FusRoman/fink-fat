@@ -3,14 +3,13 @@ pub mod edge;
 use ahash::AHashMap;
 
 use crate::{
+    MJDTT,
     engine_config::edge_config::EdgeConfig,
-    graph::edge::{
-        Edge,
-        edge_prediction::{EdgeModelError, EdgeRankingModelPool},
-    },
+    graph::edge::{Edge, edge_prediction::EdgeRankingModelPool, error::EdgeBuilderError},
     persistence::{graph::GraphOwned, seed_node::SeedKey},
+    pipeline::progress_sink::ProgressSink,
     seeding::seed_node::SeedNode,
-    spacetime_bucket::{spatial_binner::SpatialBinner, time_binner::TimeBinner},
+    spacetime_bucket::spatial_binner::SpatialBinner,
 };
 
 #[derive(Debug, Clone)]
@@ -43,15 +42,16 @@ impl<'seed_lf, 'alert_lf> RuntimeGraph<'seed_lf, 'alert_lf> {
         }
     }
 
-    pub fn add_inter_night_edges<B: SpatialBinner, T: TimeBinner>(
+    pub fn add_inter_night_edges<B: SpatialBinner>(
         &mut self,
         left_nodes: &'seed_lf [SeedNode<'alert_lf>],
-        right_nodes: &'seed_lf mut [SeedNode<'alert_lf>],
+        right_nodes: &'seed_lf [SeedNode<'alert_lf>],
         edge_config: &EdgeConfig,
         spatial_binner: &B,
-        time_binner: &T,
+        time_binner_width: MJDTT,
         model_pool: Option<&EdgeRankingModelPool>,
-    ) -> Result<(), EdgeModelError> {
+        progress_sink: &dyn ProgressSink,
+    ) -> Result<(), EdgeBuilderError> {
         assert!(!left_nodes.is_empty(), "left_nodes must not be empty");
         assert!(!right_nodes.is_empty(), "right_nodes must not be empty");
 
@@ -68,27 +68,26 @@ impl<'seed_lf, 'alert_lf> RuntimeGraph<'seed_lf, 'alert_lf> {
             "right_nodes must all belong to the same night"
         );
 
-        /* ---------- Sort right nodes by epoch mid time ---------- */
-        // required by generate_topk_edges()
-        right_nodes.sort_by(|a, b| {
-            a.plane
-                .epoch_mid
-                .partial_cmp(&b.plane.epoch_mid)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        // Invariant: right_nodes are sorted by epoch_mid (and tie-breakers) already.
+        //
+        // This is required by generate_topk_edges() / candidate search logic that relies
+        // on monotonic epoch ordering.
+        debug_assert!(
+            right_nodes.windows(2).all(|w| w[0] <= w[1]),
+            "right_nodes must be sorted (SeedNode Ord: epoch_mid primary key)"
+        );
 
         let new_edges = Edge::build_edges(
             left_nodes,
             right_nodes,
             edge_config,
             spatial_binner,
-            time_binner,
+            time_binner_width,
             model_pool,
+            progress_sink,
         )?;
 
-        /* ---------- insert edges into graph without node_id_of() ---------- */
         for edge in new_edges {
-
             let from = edge.from.core.key;
             let to = edge.to.core.key;
 
@@ -97,6 +96,7 @@ impl<'seed_lf, 'alert_lf> RuntimeGraph<'seed_lf, 'alert_lf> {
 
             self.edges.push(edge);
         }
+
         Ok(())
     }
 }

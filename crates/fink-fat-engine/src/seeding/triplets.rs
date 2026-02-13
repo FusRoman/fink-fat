@@ -470,7 +470,7 @@ mod triplet_gen_tests {
 
     /* ------------------------- helpers ------------------------- */
 
-    fn mk_alert(i: usize, ra: f64, dec: f64, mjd_tt: f64, band: u8, flux: f32) -> Alert {
+    fn mk_alert(i: usize, ra: f64, dec: f64, mjd_tt: f64, band: u8, flux: f64) -> Alert {
         let pos_err = arcsec_to_rad(0.5);
         Alert {
             key: AlertKey {

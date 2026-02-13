@@ -1,9 +1,10 @@
 use crate::{
     engine_config::EngineConfig,
     graph::edge::edge_prediction::EdgeRankingModelPool,
+    night_id::NightWindow,
     persistence::{
-        alert_store::AlertStore, edge::edge_journal::NightWindow, error::PersistenceError,
-        graph::GraphOwned, manifest::Manifest, seed_store::SeedStoreOwned,
+        alert_store::AlertStore, error::PersistenceError, graph::GraphOwned, manifest::Manifest,
+        seed_store::SeedStoreOwned,
     },
     pipeline::fink_fat::FinkFat,
 };

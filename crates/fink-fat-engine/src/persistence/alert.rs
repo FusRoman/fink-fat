@@ -102,9 +102,9 @@ pub struct Alert {
     /// Detection epoch (MJD TT, days).
     pub mjd_tt: MJDTT,
     /// PSF difference flux (units depend on upstream, e.g. nJy).
-    pub flux: f32,
+    pub flux: f64,
     /// 1σ uncertainty on flux (same units as `flux`).
-    pub flux_err: f32,
+    pub flux_err: f64,
     /// Photometric band code.
     pub band: u8,
 }
@@ -194,6 +194,8 @@ pub trait AlertSlice {
         manifest: &Manifest,
         night_id: NightId,
     ) -> Result<Utf8PathBuf, PersistenceIoError>;
+
+    fn get_t0(&self) -> Option<MJDTT>;
 }
 
 impl AlertSlice for &[Alert] {
@@ -228,6 +230,15 @@ impl AlertSlice for &[Alert] {
         );
         env.save_enveloped(&abs_path)?;
         Ok(abs_path)
+    }
+
+    /// Get the `mjd_tt` of the first alert in the night, if it exists.
+    ///
+    /// Returns
+    /// -------
+    /// - `Ok(Some(mjd_tt))`
+    fn get_t0(&self) -> Option<MJDTT> {
+        self.first().map(|alert| alert.mjd_tt)
     }
 }
 

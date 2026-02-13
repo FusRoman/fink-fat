@@ -319,7 +319,7 @@ pub struct TripletConfig {
     /// This value is **dimensionless at the configuration layer**. Its meaning
     /// depends on the photometry check used by the triplet generator
     /// (flux space, magnitude space, normalized residual, etc.).
-    pub max_flux_difference: f32,
+    pub max_flux_difference: f64,
 }
 
 impl Default for TripletConfig {
@@ -402,7 +402,7 @@ impl TripletConfigBuilder {
     }
 
     /// Set maximum allowed photometric difference.
-    pub fn max_flux_difference(mut self, v: f32) -> Self {
+    pub fn max_flux_difference(mut self, v: f64) -> Self {
         self.params.max_flux_difference = v;
         self
     }

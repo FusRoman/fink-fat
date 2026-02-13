@@ -8,6 +8,7 @@ use fink_fat_engine::graph::edge::edge_prediction::{EdgeRankingModel, EdgeRankin
 use fink_fat_engine::graph::edge::ranking_topk::rank_topk_edges_for_left;
 use fink_fat_engine::persistence::alert::AlertKey;
 use fink_fat_engine::persistence::seed_node::SeedKey;
+use fink_fat_engine::pipeline::progress_sink::NoopProgress;
 use fink_fat_engine::seeding::seed_spatial_index::SeedSpatialIndex;
 use fink_fat_engine::spacetime_bucket::healpix_binner::HealpixBinner;
 use fink_fat_engine::spacetime_bucket::uniform_time_binner::UniformTimeBinner;
@@ -38,7 +39,7 @@ fn make_alert(
     dec_rad: f64,
     mjd_tt: f64,
     band: u8,
-    flux: f32,
+    flux: f64,
 ) -> Alert {
     Alert {
         key: AlertKey {
@@ -52,7 +53,7 @@ fn make_alert(
         dec_err: 1.0e-6,
         mjd_tt,
         flux,
-        flux_err: (0.1 * flux.abs()).max(1.0) as f32,
+        flux_err: (0.1 * flux.abs()).max(1.0),
         band,
     }
 }
@@ -127,8 +128,8 @@ fn make_seeds_pair_model(
         let band_a = (seed_index % 2) as u8;
         let band_b = ((seed_index + 1) % 2) as u8;
 
-        let flux_a = 1000.0 + (rng.random::<f32>() - 0.5) * 50.0;
-        let flux_b = flux_a + (rng.random::<f32>() - 0.5) * 20.0;
+        let flux_a = 1000.0 + (rng.random::<f64>() - 0.5) * 50.0;
+        let flux_b = flux_a + (rng.random::<f64>() - 0.5) * 20.0;
 
         let dia_source_id = 1_000_000 + seed_index as u64;
 
@@ -259,7 +260,7 @@ fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
             .map(|seed| seed.plane.epoch_mid)
             .unwrap_or(60001.0);
 
-        let (spatial_binner, time_binner) = make_binners(time_origin);
+        let (spatial_binner, _) = make_binners(time_origin);
 
         // Base configuration for the tested function.
         let mut edge_config = EdgeConfig::default();
@@ -284,8 +285,9 @@ fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
                         black_box(&right_seeds),
                         black_box(&edge_config),
                         black_box(&spatial_binner),
-                        black_box(&time_binner),
+                        black_box(time_origin),
                         black_box(Some(&pool)),
+                        black_box(&NoopProgress {}),
                     )
                     .expect("generate_topk_edges failed");
 
@@ -312,8 +314,9 @@ fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
                         black_box(&right_seeds),
                         black_box(&edge_config_capped),
                         black_box(&spatial_binner),
-                        black_box(&time_binner),
+                        black_box(time_origin),
                         black_box(Some(&pool)),
+                        black_box(&NoopProgress {}),
                     )
                     .expect("generate_topk_edges failed");
 
@@ -544,8 +547,9 @@ fn bench_generate_topk_edges_components(c: &mut Criterion) {
                 black_box(&right_seeds),
                 black_box(&edge_config),
                 black_box(&spatial_binner),
-                black_box(&time_binner),
+                black_box(time_origin),
                 black_box(Some(&pool)),
+                black_box(&NoopProgress {}),
             )
             .expect("generate_topk_edges failed");
 

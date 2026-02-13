@@ -29,7 +29,7 @@ use std::fs;
 use ahash::AHashMap;
 use serde::{Deserialize, Serialize};
 
-use crate::night_id::NightId;
+use crate::night_id::{NightId, NightWindow};
 use crate::persistence::EDGE_JOURNAL_SCHEMA_VERSION;
 use crate::persistence::edge::delta_chunk::EdgeDeltaChunk;
 use crate::persistence::edge::edge_op::EdgeOp;
@@ -50,27 +50,6 @@ pub struct EdgeSnapshot {
     pub created_unix_s: i64,
     /// Full edge set at the checkpoint.
     pub edges: Vec<EdgeOwned>,
-}
-
-/// Sliding window constraint used when loading or compacting.
-///
-/// Notes
-/// -----
-/// The policy is applied based on edge endpoints' seed night IDs:
-/// an edge is kept only if BOTH `from.night_id` and `to.night_id` are within
-/// `[min_night, max_night]`.
-#[derive(Copy, Clone, Debug)]
-pub struct NightWindow {
-    pub min_night: NightId,
-    pub max_night: NightId,
-}
-
-impl NightWindow {
-    /// Return true if `night_id` is within the inclusive window.
-    #[inline]
-    pub fn contains(&self, night_id: NightId) -> bool {
-        night_id >= self.min_night && night_id <= self.max_night
-    }
 }
 
 /// High-level helper to manage edge snapshot + delta journal.

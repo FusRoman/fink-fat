@@ -52,7 +52,6 @@ use std::ops::Index;
 use ndarray::Array2;
 use once_cell::sync::OnceCell;
 use ort::value::Tensor;
-use thiserror::Error;
 
 use camino::{Utf8Path, Utf8PathBuf};
 
@@ -61,6 +60,7 @@ use ort::session::builder::GraphOptimizationLevel;
 use thread_local::ThreadLocal;
 
 use crate::graph::edge::edge_features::EdgeFeatures;
+use crate::graph::edge::error::EdgeModelError;
 
 /// Global guard to ensure `ort::init().commit()` is run at most once.
 ///
@@ -69,28 +69,6 @@ use crate::graph::edge::edge_features::EdgeFeatures;
 ///
 /// This is intentionally process-wide and is used by [`init_ort_once`].
 static ORT_INIT: OnceCell<()> = OnceCell::new();
-
-/// Errors that can occur while loading the model or running ONNX inference.
-#[derive(Debug, Error)]
-pub enum EdgeModelError {
-    /// ONNX Runtime / `ort` error (session build, tensor extraction, run failure, etc.).
-    #[error("ONNX Runtime error: {0}")]
-    Ort(#[from] ort::Error),
-
-    /// The provided model path does not exist.
-    ///
-    /// This is returned early to provide a clear user-facing message instead of
-    /// a lower-level ORT error that may be harder to interpret.
-    #[error("ONNX model file not found: {0}")]
-    ModelNotFound(String),
-
-    /// ML ranking was requested but no `EdgeRankingModel` was provided.
-    ///
-    /// This is useful when ranking is optional and the caller explicitly enables it
-    /// in a configuration, but forgets to provide a loaded model.
-    #[error("ML ranking requested but no EdgeRankingModel was provided")]
-    MissingModel,
-}
 
 /// Initialize ONNX Runtime once for the whole process.
 ///

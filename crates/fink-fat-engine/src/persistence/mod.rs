@@ -17,14 +17,11 @@ use camino::Utf8PathBuf;
 use crate::{
     Alert,
     engine_config::EngineConfig,
-    night_id::NightId,
+    night_id::{NightId, NightWindow},
     persistence::{
         alert::AlertSlice,
         alert_store::AlertStore,
-        edge::{
-            edge_journal::{EdgeJournalStore, NightWindow},
-            edge_op::EdgeOp,
-        },
+        edge::{edge_journal::EdgeJournalStore, edge_op::EdgeOp},
         envelope::DiskEnvelope,
         error::{PersistenceError, PersistenceIoError},
         graph::GraphOwned,
@@ -183,7 +180,7 @@ impl PersistenceManager {
                 .nights
                 .iter()
                 .cloned()
-                .filter(|e| e.night_id >= w.min_night && e.night_id <= w.max_night)
+                .filter(|e| e.night_id >= w.start && e.night_id <= w.end)
                 .collect(),
         };
 
@@ -298,7 +295,7 @@ impl PersistenceManager {
         let mut deleted = 0u64;
 
         for e in &manifest.nights {
-            if e.night_id >= window.min_night && e.night_id <= window.max_night {
+            if e.night_id >= window.start && e.night_id <= window.end {
                 continue;
             }
 

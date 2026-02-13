@@ -27,10 +27,8 @@ use camino::{Utf8Path, Utf8PathBuf};
 
 use crate::{
     engine_config::EngineConfig,
-    night_id::NightId,
-    persistence::{
-        edge::edge_journal::NightWindow, error::PersistenceIoError, layout::PersistenceLayout,
-    },
+    night_id::{NightId, NightWindow},
+    persistence::{error::PersistenceIoError, layout::PersistenceLayout},
 };
 
 use super::{
@@ -291,8 +289,8 @@ impl Manifest {
         let min_night = NightId(max_night.0.saturating_sub(g));
 
         Some(NightWindow {
-            min_night,
-            max_night,
+            start: min_night,
+            end: max_night,
         })
     }
 

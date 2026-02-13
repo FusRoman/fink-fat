@@ -2,6 +2,11 @@ use std::io;
 
 use thiserror::Error;
 
+use crate::{
+    graph::edge::error::EdgeBuilderError, persistence::error::PersistenceIoError,
+    pipeline::stages::PipelineStage,
+};
+
 #[derive(Debug, Error)]
 pub enum SeedError {
     /// A time interval must be finite and non-negative.
@@ -101,4 +106,43 @@ pub enum PredictorParamError {
     /// Noise coefficients must be finite and non-negative.
     #[error("invalid noise coefficient `{name}` = {value:?} (expect finite and >= 0)")]
     InvalidNoiseCoeff { name: &'static str, value: f64 },
+}
+
+#[derive(Debug, Error)]
+pub enum EngineError {
+    /// The pipeline plan is invalid (stages, window, invariants, etc).
+    #[error("invalid pipeline plan: {0}")]
+    InvalidPlan(&'static str),
+
+    /// A pipeline stage failed with a message that is specific but not (yet) typed.
+    ///
+    /// This is useful as a temporary catch-all while the project evolves.
+    #[error("stage {stage:?} failed: {message}")]
+    StageFailed {
+        stage: PipelineStage,
+        message: String,
+    },
+
+    /// Pipeline was cancelled by the caller (hooks).
+    #[error("pipeline cancelled")]
+    Cancelled,
+
+    // -------------------------------------------------------------------------
+    // Wrappers for lower-level subsystems (add as you wire real calls)
+    // -------------------------------------------------------------------------
+    /// Seeding subsystem error.
+    #[error(transparent)]
+    Seed(#[from] SeedError),
+
+    /// Edge building / ML inference error.
+    #[error(transparent)]
+    Edge(#[from] EdgeBuilderError),
+
+    /// Persistence I/O (manifest, stores, journals, etc).
+    #[error(transparent)]
+    Persistence(#[from] PersistenceIoError),
+
+    /// Generic engine error (if you already use `FinkFatError` as a top-level error).
+    #[error(transparent)]
+    FinkFat(#[from] FinkFatError),
 }
