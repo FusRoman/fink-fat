@@ -121,6 +121,7 @@ use crate::{
 /// -----------
 /// `AHashMap` iteration order is not deterministic. Functions in this impl that
 /// need deterministic ordering explicitly sort night IDs before producing output.
+#[derive(Debug)]
 pub struct SeedStore<'alert_lf>(AHashMap<NightId, Vec<SeedNode<'alert_lf>>>);
 
 impl<'alert_lf> SeedStore<'alert_lf> {
@@ -280,29 +281,24 @@ impl<'alert_lf> SeedStore<'alert_lf> {
         self.0.remove(&n)
     }
 
-    /// Enumerate eligible inter-night `(left_night, right_night)` pairs anchored to
-    /// the **latest night** present in the store within a requested [`NightWindow`].
+    /// Enumerate eligible inter-night `(left_night, right_night)` pairs for edge construction.
     ///
-    /// This iterator is a building block for *sliding-window* inter-night stages,
-    /// where the pipeline treats a "current" night as the right-hand side and
-    /// connects it to a bounded set of earlier nights on the left-hand side.
+    /// This iterator is a core building block for *sliding-window* inter-night stages,
+    /// where the pipeline connects seeds from earlier nights (`left_night`) to seeds
+    /// from a reference night (`right_night`).
     ///
     /// Overview
     /// --------
     /// The function proceeds in two conceptual steps:
     ///
-    /// 1. **Select `right_night`**:
-    ///    - Collect nights that are both:
-    ///      - present in the store (`self`), and
-    ///      - inside `night_window` (inclusive bounds),
-    ///    - choose `right_night` as the maximum (latest) among them.
+    /// 1. **Select the anchor `right_night`**:
+    ///    - Collect all nights present in the store,
+    ///    - delegate to `pairing_mode.latest_night_in_range()` to determine the
+    ///      reference night according to mode-specific logic.
     ///
-    /// 2. **Select eligible `left_night`**:
-    ///    - Enforce that `left_night < right_night` (strictly earlier),
-    ///    - enforce a maximum temporal gap:
-    ///      `right_night.value() - left_night.value() <= max_gap_nights`,
-    ///      implemented as the lower bound:
-    ///      `left_night.value() >= right_night.value() - max_gap_nights`.
+    /// 2. **Select eligible `left_night` candidates**:
+    ///    - Delegate to `pairing_mode.eligible_left_nights()` to filter candidates
+    ///      based on mode-specific constraints.
     ///
     /// The iterator emits one pair per eligible `left_night`:
     ///
@@ -310,98 +306,116 @@ impl<'alert_lf> SeedStore<'alert_lf> {
     /// (left_0, right), (left_1, right), ..., (left_k, right)
     /// ```
     ///
-    /// Behavior
-    /// --------
-    /// This function has two modes depending on whether `night_window` is a single night.
+    /// where `left_i < right` for all emitted pairs.
     ///
-    /// ### Multi-night windows (`night_window.is_single() == false`)
+    /// Behavior by pairing mode
+    /// ------------------------
     ///
-    /// - `right_night` is the latest night present in the store inside `night_window`.
-    /// - `left_night` candidates are restricted to:
-    ///   - nights present in the store,
-    ///   - inside `night_window`,
-    ///   - earlier than `right_night`,
-    ///   - within `max_gap_nights` of `right_night`.
+    /// ### Single-night mode
     ///
-    /// This corresponds to the interpretation:
-    /// **the window bounds both the anchor (`right`) and the candidates (`left`)**.
+    /// The pairing mode is configured with:
+    /// - `anchor`: The reference night to process.
+    /// - `max_gap`: Maximum allowed difference between `right` and `left` in night IDs.
     ///
-    /// ### Single-night windows (`night_window.is_single() == true`)
+    /// Selection logic:
+    /// - `right_night = anchor` (if present in the store),
+    /// - `left_night` candidates satisfy:
+    ///   - `left < right`,
+    ///   - `right.value() - left.value() <= max_gap`,
+    ///   - present in the store.
     ///
-    /// Single-night runs are common in orchestration: the pipeline is asked to process
-    /// “the current night” only, but still needs to link it with earlier nights.
+    /// **No range restriction is applied to left candidates beyond the gap constraint.**
     ///
-    /// In this special case:
-    /// - `right_night` is that single night *if it exists in the store*,
-    /// - `left_night` candidates are searched in the store using only:
-    ///   - `left_night < right_night`,
-    ///   - the gap constraint (`right - left <= max_gap_nights`),
-    ///   - **without** requiring `left_night` to be inside `night_window`.
+    /// This mode is typically used in orchestration pipelines where processing is
+    /// requested for a specific "current" night, but edges must still be constructed
+    /// with earlier nights within the lookback window.
     ///
-    /// In other words: a single-night window anchors `right_night`, but does not
-    /// constrain the search space for `left_night` beyond the gap rule.
-    ///
-    /// This matches the typical pipeline pattern:
-    ///
+    /// Example:
     /// ```text
-    /// current = night_window.single_night()
-    /// for prev in store.nights_in_gap_before(current):
-    ///     build_edges(prev, current)
+    /// current_night = 60200
+    /// max_gap = 7
+    /// available_nights = [60190, 60193, 60195, 60198, 60200]
+    ///
+    /// right = 60200 (anchor, present in store)
+    /// left candidates = [60193, 60195, 60198]
+    ///   (60190 is excluded because 60200 - 60190 = 10 > 7)
+    ///
+    /// Output pairs: (60193, 60200), (60195, 60200), (60198, 60200)
+    /// ```
+    ///
+    /// ### Multi-night batch mode
+    ///
+    /// The pairing mode is configured with:
+    /// - `start`, `end`: Inclusive range bounds.
+    ///
+    /// Selection logic:
+    /// - `right_night` is the latest night present in the store within `[start, end]`,
+    /// - `left_night` candidates satisfy:
+    ///   - `start <= left < right`,
+    ///   - present in the store.
+    ///
+    /// **The range `[start, end]` constrains both the anchor and the left candidates.**
+    ///
+    /// This mode is typically used in batch processing where the pipeline operates
+    /// over a bounded multi-night window (e.g., reprocessing an observing season).
+    ///
+    /// Example:
+    /// ```text
+    /// start = 60195, end = 60200
+    /// available_nights = [60190, 60193, 60195, 60198, 60200]
+    ///
+    /// right = 60200 (latest in [60195, 60200])
+    /// left candidates = [60195, 60198]
+    ///   (60190, 60193 are excluded because < start)
+    ///
+    /// Output pairs: (60195, 60200), (60198, 60200)
     /// ```
     ///
     /// Semantics
     /// ---------
-    /// - `night_window` bounds are inclusive (`start..=end`).
     /// - Only nights present in the store are considered.
     /// - Only pairs with `left_night < right_night` are emitted.
-    /// - The gap constraint is applied on underlying `u32` values:
-    ///   `right.value() - left.value() <= max_gap_nights`.
-    /// - If `max_gap_nights == 0`, the iterator yields no pairs.
-    /// - If there is no night present in the store within `night_window`,
+    /// - If no night is present in the store satisfying the mode constraints,
     ///   the iterator yields no pairs (no `right_night` anchor).
+    /// - If no eligible `left_night` exists for the selected `right_night`,
+    ///   the iterator yields no pairs.
     ///
     /// Ordering
     /// --------
-    /// The output ordering is deterministic:
-    /// - `right_night` is constant (the selected latest night),
+    /// Output is deterministic:
+    /// - `right_night` is constant (the selected reference night),
     /// - `left_night` values are emitted in strictly increasing order.
-    ///
-    /// Determinism
-    /// -----------
-    /// - The selection of `right_night` is deterministic because it is derived from
-    ///   a sorted list of nights present in the window.
-    /// - The `left_night` set is collected and sorted before emission.
     ///
     /// Complexity
     /// ----------
     /// Let:
-    /// - `Nw` be the number of nights present in the store within `night_window`,
-    /// - `Ns` be the total number of nights present in the store,
-    /// - `K` be the number of emitted pairs.
+    /// - $N_s$ be the total number of nights present in the store,
+    /// - $K$ be the number of emitted pairs.
     ///
     /// The cost is:
-    /// - selecting `right_night`: `O(Nw log Nw)` due to sorting within the window,
-    /// - collecting `left_night` candidates:
-    ///   - multi-night window: filters over `Ns` keys, then sorts `K` elements,
-    ///   - single-night window: same, but without the window containment test,
-    /// - sorting `left_night`: `O(K log K)`,
-    /// - emitting: `O(K)`.
+    /// - Collecting available nights: $O(N_s)$,
+    /// - Sorting available nights: $O(N_s \log N_s)$,
+    /// - Selecting `right_night`: $O(N_s)$ (worst case, linear scan),
+    /// - Filtering and sorting `left_night` candidates: $O(K \log K)$,
+    /// - Emitting pairs: $O(K)$.
     ///
-    /// In practice, `Ns` is typically small compared to alert counts, and this
-    /// iterator is intended to be used at the night granularity.
+    /// Overall: $O(N_s \log N_s + K \log K)$.
+    ///
+    /// In practice, $N_s$ is typically small (order of hundreds to thousands),
+    /// and this iterator is intended to be used at the night granularity.
     ///
     /// Memory
     /// ------
     /// - Allocates intermediate vectors:
-    ///   - `nights_in_window` (nights present inside the window),
-    ///   - `lefts` (eligible left nights).
-    /// - No additional allocations during iteration once the state is built.
+    ///   - `nights`: all night IDs present in the store,
+    ///   - internal allocations within `pairing_mode.night_pairs_iter()`.
+    /// - The iterator itself owns the collected pairs (materialized before emission).
     ///
     /// Arguments
     /// ---------
-    /// * `night_window` – Inclusive bounds used to select the anchor `right_night`.
-    /// * `max_gap_nights` – Maximum allowed difference between `right_night` and
-    ///   `left_night` in units of night IDs.
+    /// * `pairing_mode` – Pairing mode configuration controlling:
+    ///   - anchor selection logic,
+    ///   - left candidate filtering rules.
     ///
     /// Return
     /// ------
@@ -411,18 +425,21 @@ impl<'alert_lf> SeedStore<'alert_lf> {
     ///
     /// Notes
     /// -----
-    /// - This helper does **not** enumerate all pairs within `night_window`.
-    ///   It enumerates only pairs anchored to the selected latest night.
-    /// - If the store contains sparse nights (missing IDs), the gap constraint is
-    ///   evaluated on the numeric difference of IDs, not on “count of available nights”.
+    /// - This function does **not** enumerate all pairwise combinations of nights.
+    ///   It enumerates only pairs anchored to a single selected `right_night`.
+    /// - If the store contains sparse nights (missing IDs), gap constraints in
+    ///   single-night mode are evaluated on the numeric difference of IDs, not on
+    ///   the count of available nights.
+    /// - The implementation delegates pair generation to `PairingMode::night_pairs_iter()`,
+    ///   which encapsulates mode-specific logic.
     #[inline]
     pub fn night_pairs_iter(
         &self,
-        night_window: PairingMode,
+        pairing_mode: PairingMode,
     ) -> impl Iterator<Item = (NightId, NightId)> {
         let mut nights: Vec<NightId> = self.0.keys().copied().collect();
         nights.sort();
-        night_window.night_pairs_iter(nights)
+        pairing_mode.night_pairs_iter(nights)
     }
 }
 
