@@ -2,7 +2,7 @@ use ahash::AHashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    night_id::{NightId, NightWindow},
+    night_id::{NightId, PairingMode},
     persistence::{
         alert_store::AlertStore,
         error::{BorrowError, PersistenceIoError},
@@ -30,7 +30,7 @@ impl SeedStoreOwned {
     fn to_borrowed_impl<'alert_lf>(
         &self,
         alerts: &'alert_lf AlertStore,
-        night_window: Option<NightWindow>,
+        night_window: Option<PairingMode>,
     ) -> Result<SeedStore<'alert_lf>, BorrowError> {
         let mut map: AHashMap<NightId, Vec<SeedNode<'alert_lf>>> =
             AHashMap::with_capacity(self.0.len());
@@ -62,7 +62,7 @@ impl SeedStoreOwned {
     pub fn to_borrowed_window<'alert_lf>(
         &self,
         alerts: &'alert_lf AlertStore,
-        night_window: NightWindow,
+        night_window: PairingMode,
     ) -> Result<SeedStore<'alert_lf>, BorrowError> {
         self.to_borrowed_impl(alerts, Some(night_window))
     }

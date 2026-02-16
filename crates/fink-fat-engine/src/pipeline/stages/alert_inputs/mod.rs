@@ -104,6 +104,7 @@ pub mod storage;
 
 use crate::{
     error::EngineError,
+    night_id::PairingMode,
     pipeline::{
         PipelineContext,
         hooks::{PipelineHooks, StageMeta, StageReport},
@@ -256,7 +257,17 @@ pub fn run(
             //
             // The night window is derived from which nights are present in the ingested store.
             // Later stages use it to iterate deterministically over the active nights.
-            ctx.runtime_state.window = new_alert_store.get_night_window();
+            // In the case where we ingest a single night, the window is effectively a singleton (window.is_single == true).
+            let last_night =
+                new_alert_store
+                    .last_night()
+                    .ok_or_else(|| EngineError::StageFailed {
+                        stage: PipelineStage::IngestNights,
+                        message: "ingested AlertStore contains no nights".to_string(),
+                    })?;
+            let max_gap = ctx.engine_config.max_gap_nights();
+            // The ok will normally never trigger because the max_gap has already been validated at config level.
+            ctx.runtime_state.window = PairingMode::single_night(last_night, max_gap).ok();
             stage_sink.inc(1);
 
             // -----------------------------------------------------------------

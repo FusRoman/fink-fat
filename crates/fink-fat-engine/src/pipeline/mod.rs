@@ -8,7 +8,7 @@ use crate::{
     engine_config::EngineConfig,
     error::EngineError,
     graph::edge::edge_prediction::EdgeRankingModelPool,
-    night_id::NightWindow,
+    night_id::PairingMode,
     persistence::{PersistenceManager, runtime_state::RuntimeState},
     pipeline::{
         hooks::{PipelineHooks, StageMeta, StageReport},
@@ -25,7 +25,7 @@ pub struct PipelineInputs {
 
 #[derive(Clone, Debug)]
 pub struct PipelinePlan {
-    pub window: Option<NightWindow>,
+    pub window: Option<PairingMode>,
     pub stages: Vec<PipelineStage>,
     pub persist: PersistPolicy,
     pub inputs: PipelineInputs,

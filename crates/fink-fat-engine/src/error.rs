@@ -3,7 +3,8 @@ use std::io;
 use thiserror::Error;
 
 use crate::{
-    graph::edge::error::EdgeBuilderError, persistence::error::PersistenceIoError,
+    graph::edge::error::EdgeBuilderError,
+    persistence::error::{PersistenceError, PersistenceIoError},
     pipeline::stages::PipelineStage,
 };
 
@@ -79,6 +80,9 @@ pub enum FinkFatError {
     /// General domain-level errors with human-readable context.
     #[error("fink-fat error: {0}")]
     Message(String),
+
+    #[error("Invalid Night window: {0}")]
+    InvalidNightWindow(String),
 }
 
 impl From<String> for FinkFatError {
@@ -140,9 +144,15 @@ pub enum EngineError {
 
     /// Persistence I/O (manifest, stores, journals, etc).
     #[error(transparent)]
-    Persistence(#[from] PersistenceIoError),
+    Persistence(#[from] PersistenceError),
 
     /// Generic engine error (if you already use `FinkFatError` as a top-level error).
     #[error(transparent)]
     FinkFat(#[from] FinkFatError),
+}
+
+impl From<PersistenceIoError> for EngineError {
+    fn from(err: PersistenceIoError) -> Self {
+        EngineError::Persistence(PersistenceError::Io(err))
+    }
 }

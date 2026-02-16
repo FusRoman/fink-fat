@@ -1,7 +1,7 @@
 use crate::{
     error::EngineError,
     graph::RuntimeGraph,
-    night_id::NightWindow,
+    night_id::PairingMode,
     pipeline::{
         PipelineContext,
         hooks::{PipelineHooks, StageMeta, StageReport},
@@ -45,12 +45,12 @@ pub fn run(
             // -----------------------------------------------------------------
             // 0) Preconditions
             // -----------------------------------------------------------------
-            let window: NightWindow =
+            let window: PairingMode =
                 ctx.runtime_state
                     .window
                     .ok_or_else(|| EngineError::StageFailed {
                         stage: PipelineStage::BuildEdges,
-                        message: "missing RuntimeState.window (NightWindow)".to_string(),
+                        message: "missing RuntimeState.window (PairingMode)".to_string(),
                     })?;
 
             let edge_config = &ctx.engine_config.edges;
@@ -86,9 +86,7 @@ pub fn run(
             // -----------------------------------------------------------------
             // 4) Determine (left -> latest-right) pairs
             // -----------------------------------------------------------------
-            let mut pairs = seed_store
-                .night_pairs_to_latest_in_window_iter(window, max_gap)
-                .peekable();
+            let mut pairs = seed_store.night_pairs_iter(window).peekable();
 
             // If there is no eligible pair, nothing to do.
             let Some((_, right_night)) = pairs.peek().copied() else {

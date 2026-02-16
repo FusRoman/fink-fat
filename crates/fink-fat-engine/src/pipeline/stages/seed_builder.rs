@@ -218,7 +218,7 @@ pub fn run(
             // This is deterministic and avoids tying progress to potentially huge
             // intermediate cardinalities (pairs/triplets), which can vary widely.
             // -----------------------------------------------------------------
-            let nights_to_process: Vec<_> = ctx.runtime_state.alert_store.nights();
+            let nights_to_process: Vec<_> = ctx.runtime_state.alert_store.nights_sorted();
             stage_sink.set_total(nights_to_process.len() as u64);
 
             // -----------------------------------------------------------------

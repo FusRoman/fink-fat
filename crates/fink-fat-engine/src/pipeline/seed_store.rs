@@ -85,7 +85,7 @@
 use ahash::AHashMap;
 
 use crate::{
-    night_id::{NightId, NightWindow},
+    night_id::{NightId, PairingMode},
     persistence::{
         seed_node::{SeedKey, SeedNodeOwned},
         seed_store::SeedStoreOwned,
@@ -246,41 +246,38 @@ impl<'alert_lf> SeedStore<'alert_lf> {
 
     /// Iterate over night IDs present in the store (hash-map iteration order).
     ///
+    /// Return
+    /// ------
+    /// An iterator yielding `&NightId` values corresponding to the keys in the internal map.
+    ///
     /// Notes
     /// -----
-    /// - The iteration order is not deterministic.
+    /// - The iteration order is not deterministic. Prefer [`nights_sorted`] if stable ordering is required.
     #[inline]
     pub fn nights(&self) -> impl Iterator<Item = &NightId> {
         self.0.keys()
+    }
+
+    /// Get a sorted list of night IDs currently present in the store.
+    ///
+    /// Return
+    /// ------
+    /// A `Vec<NightId>` containing all night IDs in the store, sorted in increasing order.
+    ///
+    /// Notes
+    /// -----
+    /// - The sorting is done at call time; the internal map does not maintain order.
+    #[inline]
+    pub fn nights_sorted(&self) -> Vec<NightId> {
+        let mut night_ids: Vec<NightId> = self.nights().copied().collect();
+        night_ids.sort();
+        night_ids
     }
 
     /// Remove and return the seeds for night `n`, if present.
     #[inline]
     pub fn remove(&mut self, n: NightId) -> Option<Vec<SeedNode<'alert_lf>>> {
         self.0.remove(&n)
-    }
-
-    /// Collect nights present in the store and inside `night_window`,
-    /// sorted in increasing order.
-    ///
-    /// Semantics
-    /// ---------
-    /// - Only nights present in the store are returned.
-    /// - `night_window` bounds are inclusive.
-    ///
-    /// Determinism
-    /// -----------
-    /// Returned vector is sorted increasingly, stable across runs.
-    #[inline]
-    fn sorted_nights_in_window(&self, night_window: NightWindow) -> Vec<NightId> {
-        let mut nights: Vec<NightId> = self
-            .0
-            .keys()
-            .copied()
-            .filter(|&n| night_window.contains(n))
-            .collect();
-        nights.sort();
-        nights
     }
 
     /// Enumerate eligible inter-night `(left_night, right_night)` pairs anchored to
@@ -419,427 +416,381 @@ impl<'alert_lf> SeedStore<'alert_lf> {
     /// - If the store contains sparse nights (missing IDs), the gap constraint is
     ///   evaluated on the numeric difference of IDs, not on “count of available nights”.
     #[inline]
-    pub fn night_pairs_to_latest_in_window_iter(
+    pub fn night_pairs_iter(
         &self,
-        night_window: NightWindow,
-        max_gap_nights: u8,
+        night_window: PairingMode,
     ) -> impl Iterator<Item = (NightId, NightId)> {
-        // Early-out: a gap of 0 forbids any strictly earlier left night.
-        // (Even if the same night existed, we require `left < right`.)
-        let state = (max_gap_nights != 0).then(|| {
-            // 1) Determine `right`:
-            // collect nights present in the store within `night_window` and
-            // select the maximum one (latest). If none exist, nothing to emit.
-            let mut nights_in_window = self.sorted_nights_in_window(night_window);
-            let right = match nights_in_window.pop() {
-                Some(r) => r,
-                None => return None,
-            };
-
-            // Compute the lower bound for eligible `left` nights:
-            // we require `right - left <= max_gap_nights`
-            // <=> `left >= right - max_gap_nights`.
-            //
-            // Use saturating arithmetic to avoid underflow when `right` is small.
-            let right_u32 = right.0;
-            let min_left = right_u32.saturating_sub(max_gap_nights as u32);
-
-            // 2) Collect eligible `left` nights.
-            //
-            // Multi-night windows preserve the "window restricts left candidates"
-            // interpretation. Single-night windows are a pipeline convenience:
-            // the window picks the current `right` only, and `left` candidates are
-            // searched outside the window but inside the gap constraint.
-            let constrain_left_to_window = !night_window.is_single();
-
-            let mut lefts: Vec<NightId> = self
-                .0
-                .keys()
-                .copied()
-                .filter(|&n| {
-                    // Must be strictly earlier than `right`.
-                    if n >= right {
-                        return false;
-                    }
-
-                    // Must satisfy the gap lower bound: n >= min_left.
-                    if n.0 < min_left {
-                        return false;
-                    }
-
-                    // Optional window constraint:
-                    // - enabled for multi-night windows,
-                    // - disabled for single-night windows (current-night mode).
-                    if constrain_left_to_window && !night_window.contains(n) {
-                        return false;
-                    }
-
-                    true
-                })
-                .collect();
-
-            // If there are no eligible `left`s, keep the anchor `right` but emit nothing.
-            // Returning an empty vector avoids special-casing downstream iteration.
-            if lefts.is_empty() {
-                return Some((Vec::new(), right));
-            }
-
-            // Deterministic emission: sort eligible left nights increasingly.
-            lefts.sort();
-
-            Some((lefts, right))
-        });
-
-        // Flatten the optional state into an iterator, then emit one pair per left.
-        state
-            .flatten()
-            .into_iter()
-            .flat_map(|(lefts, right)| lefts.into_iter().map(move |l| (l, right)))
-    }
-
-    /// Eager version returning all `(left, latest)` pairs as a `Vec`.
-    ///
-    /// Overview
-    /// --------
-    /// This is a thin wrapper over
-    /// [`SeedStore::night_pairs_to_latest_in_window_iter`]
-    /// collecting the iterator into a vector.
-    ///
-    /// When to use
-    /// -----------
-    /// - Use the iterator version when streaming pairs directly into
-    ///   edge construction logic.
-    /// - Use this version when:
-    ///   - the full pair set must be materialized,
-    ///   - debugging or logging requires inspection,
-    ///   - deterministic truncation or sorting is needed downstream.
-    ///
-    /// Complexity
-    /// ----------
-    /// Same as iterator version, plus `O(K)` allocation for the resulting vector.
-    pub fn night_pairs_to_latest_in_window(
-        &self,
-        night_window: NightWindow,
-        max_gap_nights: u8,
-    ) -> Vec<(NightId, NightId)> {
-        self.night_pairs_to_latest_in_window_iter(night_window, max_gap_nights)
-            .collect()
+        let mut nights: Vec<NightId> = self.0.keys().copied().collect();
+        nights.sort();
+        night_window.night_pairs_iter(nights)
     }
 }
 
 #[cfg(test)]
-mod night_pairs_to_latest_in_window_tests {
+mod night_pairs_iter_tests {
     use super::*;
-    use ahash::AHashMap;
     use proptest::prelude::*;
+
+    fn nid(v: u32) -> NightId {
+        NightId(v)
+    }
 
     fn make_store(nights: &[u32]) -> SeedStore<'static> {
         let mut map: AHashMap<NightId, Vec<SeedNode<'static>>> = AHashMap::new();
         for &n in nights {
-            // We never inspect seeds for night-pair enumeration, so empty vectors are enough.
+            // Empty seed vectors are sufficient for night-pair enumeration tests
             map.insert(NightId(n), Vec::new());
         }
         SeedStore::from_map(map)
     }
 
-    fn win(start: u32, end: u32) -> NightWindow {
-        // Assumes NightWindow::new(start, end) validates (start <= end) and is infallible or returns Result.
-        // If your API differs, adapt this helper only; the rest of the tests stay the same.
-        #[allow(clippy::unwrap_used)]
-        {
-            NightWindow::new(NightId(start), NightId(end))
-        }
-    }
-
-    /// Brute-force reference implementation matching the doc/spec of
-    /// `night_pairs_to_latest_in_window_iter`.
-    fn reference_pairs_to_latest(
-        nights: &[u32],
-        window: NightWindow,
-        max_gap: u8,
-    ) -> Vec<(NightId, NightId)> {
-        if max_gap == 0 {
-            return vec![];
-        }
-
-        // right = latest night present inside window
-        let mut in_window: Vec<u32> = nights
-            .iter()
-            .copied()
-            .filter(|&n| window.contains(NightId(n)))
-            .collect();
-        in_window.sort_unstable();
-        let Some(&right_u32) = in_window.last() else {
-            return vec![];
-        };
-
-        let right = NightId(right_u32);
-        let min_left = right_u32.saturating_sub(max_gap as u32);
-        let constrain_left_to_window = !window.is_single();
-
-        let mut lefts: Vec<u32> = nights
-            .iter()
-            .copied()
-            .filter(|&n| {
-                if n >= right_u32 {
-                    return false;
-                }
-                if n < min_left {
-                    return false;
-                }
-                if constrain_left_to_window && !window.contains(NightId(n)) {
-                    return false;
-                }
-                true
-            })
-            .collect();
-
-        lefts.sort_unstable();
-        lefts.into_iter().map(|l| (NightId(l), right)).collect()
-    }
+    // -------------------------------------------------------------------------
+    // Single-night mode tests
+    // -------------------------------------------------------------------------
 
     #[test]
-    fn max_gap_zero_is_always_empty() {
-        let store = make_store(&[10, 11, 12]);
-        let w = win(10, 12);
-
-        let got: Vec<_> = store.night_pairs_to_latest_in_window_iter(w, 0).collect();
-        assert!(got.is_empty());
-
-        let got_vec = store.night_pairs_to_latest_in_window(w, 0);
-        assert!(got_vec.is_empty());
-    }
-
-    #[test]
-    fn empty_store_is_empty() {
+    fn single_night_empty_store() {
         let store = make_store(&[]);
-        let w = win(100, 200);
-
-        let got: Vec<_> = store.night_pairs_to_latest_in_window_iter(w, 5).collect();
-        assert!(got.is_empty());
+        let mode = PairingMode::single_night(nid(100), 10).unwrap();
+        let pairs: Vec<_> = store.night_pairs_iter(mode).collect();
+        assert_eq!(pairs, vec![]);
     }
 
     #[test]
-    fn no_right_night_in_window_is_empty_even_if_store_has_nights() {
-        let store = make_store(&[1, 2, 3, 4]);
-        let w = win(10, 12);
-
-        let got: Vec<_> = store.night_pairs_to_latest_in_window_iter(w, 5).collect();
-        assert!(got.is_empty());
+    fn single_night_anchor_not_in_store() {
+        let store = make_store(&[10, 20, 30]);
+        let mode = PairingMode::single_night(nid(100), 10).unwrap();
+        let pairs: Vec<_> = store.night_pairs_iter(mode).collect();
+        assert_eq!(pairs, vec![]);
     }
 
     #[test]
-    fn picks_latest_right_in_window_and_emits_lefts_sorted_increasing() {
-        let store = make_store(&[10, 12, 13, 20, 21]);
-        let w = win(10, 21);
-        let max_gap = 3;
-
-        // right = 21
-        // eligible lefts: 18..=20 present -> 20 only
-        let got: Vec<_> = store
-            .night_pairs_to_latest_in_window_iter(w, max_gap)
-            .collect();
-        assert_eq!(got, vec![(NightId(20), NightId(21))]);
+    fn single_night_no_eligible_lefts() {
+        let store = make_store(&[100]);
+        let mode = PairingMode::single_night(nid(100), 10).unwrap();
+        let pairs: Vec<_> = store.night_pairs_iter(mode).collect();
+        assert_eq!(pairs, vec![]);
     }
 
     #[test]
-    fn multi_night_window_constrains_lefts_to_window() {
-        // Store has a left candidate outside the window but within gap.
-        let store = make_store(&[90, 95, 100]);
-        let w = win(95, 100); // multi-night (95..=100)
-        let max_gap = 20;
+    fn single_night_basic() {
+        let store = make_store(&[85, 92, 100]);
+        let mode = PairingMode::single_night(nid(100), 10).unwrap();
+        let pairs: Vec<_> = store.night_pairs_iter(mode).collect();
 
-        // right = 100; left candidates within gap: 80..=99 => {90,95}
-        // BUT multi-night window constrains lefts to window => {95} only.
-        let got: Vec<_> = store
-            .night_pairs_to_latest_in_window_iter(w, max_gap)
-            .collect();
-        assert_eq!(got, vec![(NightId(95), NightId(100))]);
+        // 85 is outside gap (100 - 85 = 15 > 10)
+        // 92 is within gap
+        assert_eq!(pairs, vec![(nid(92), nid(100))]);
     }
 
     #[test]
-    fn single_night_window_does_not_constrain_lefts_to_window() {
-        let store = make_store(&[90, 95, 100]);
-        let w = win(100, 100); // single-night
-        let max_gap = 20;
+    fn single_night_multiple_lefts() {
+        let store = make_store(&[90, 92, 95, 100]);
+        let mode = PairingMode::single_night(nid(100), 10).unwrap();
+        let pairs: Vec<_> = store.night_pairs_iter(mode).collect();
 
-        // right = 100; left candidates within gap: {90,95} (both allowed, window does not constrain)
-        let got: Vec<_> = store
-            .night_pairs_to_latest_in_window_iter(w, max_gap)
-            .collect();
+        // All nights within gap
         assert_eq!(
-            got,
-            vec![(NightId(90), NightId(100)), (NightId(95), NightId(100))]
+            pairs,
+            vec![
+                (nid(90), nid(100)),
+                (nid(92), nid(100)),
+                (nid(95), nid(100)),
+            ]
         );
     }
 
     #[test]
-    fn saturating_sub_prevents_underflow_for_small_right() {
+    fn single_night_saturating_sub() {
         let store = make_store(&[0, 1, 2]);
-        let w = win(2, 2); // right = 2
-        let max_gap = 250; // huge; min_left must saturate to 0
+        let mode = PairingMode::single_night(nid(2), 250).unwrap();
+        let pairs: Vec<_> = store.night_pairs_iter(mode).collect();
 
-        let got: Vec<_> = store
-            .night_pairs_to_latest_in_window_iter(w, max_gap)
-            .collect();
+        // min_left = 2 - 250 saturates to 0
+        // eligible: 0, 1
+        assert_eq!(pairs, vec![(nid(0), nid(2)), (nid(1), nid(2))]);
+    }
+
+    // -------------------------------------------------------------------------
+    // Multi-night batch mode tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn batch_range_empty_store() {
+        let store = make_store(&[]);
+        let mode = PairingMode::batch_range(nid(50), nid(100)).unwrap();
+        let pairs: Vec<_> = store.night_pairs_iter(mode).collect();
+        assert_eq!(pairs, vec![]);
+    }
+
+    #[test]
+    fn batch_range_no_nights_in_range() {
+        let store = make_store(&[10, 20, 30]);
+        let mode = PairingMode::batch_range(nid(50), nid(100)).unwrap();
+        let pairs: Vec<_> = store.night_pairs_iter(mode).collect();
+        assert_eq!(pairs, vec![]);
+    }
+
+    #[test]
+    fn batch_range_only_right_in_range() {
+        let store = make_store(&[100]);
+        let mode = PairingMode::batch_range(nid(50), nid(100)).unwrap();
+        let pairs: Vec<_> = store.night_pairs_iter(mode).collect();
+        assert_eq!(pairs, vec![]);
+    }
+
+    #[test]
+    fn batch_range_basic() {
+        let store = make_store(&[40, 60, 80, 100]);
+        let mode = PairingMode::batch_range(nid(50), nid(100)).unwrap();
+        let pairs: Vec<_> = store.night_pairs_iter(mode).collect();
+
+        // right = 100
+        // left candidates: 60, 80 (40 is outside range, 100 is right)
+        assert_eq!(pairs, vec![(nid(60), nid(100)), (nid(80), nid(100))]);
+    }
+
+    #[test]
+    fn batch_range_all_in_range() {
+        let store = make_store(&[50, 60, 70, 80, 90, 100]);
+        let mode = PairingMode::batch_range(nid(50), nid(100)).unwrap();
+        let pairs: Vec<_> = store.night_pairs_iter(mode).collect();
+
+        // right = 100
+        // All others are eligible lefts
         assert_eq!(
-            got,
-            vec![(NightId(0), NightId(2)), (NightId(1), NightId(2))]
+            pairs,
+            vec![
+                (nid(50), nid(100)),
+                (nid(60), nid(100)),
+                (nid(70), nid(100)),
+                (nid(80), nid(100)),
+                (nid(90), nid(100)),
+            ]
         );
     }
 
     #[test]
-    fn iterator_and_vec_api_are_equivalent() {
-        let store = make_store(&[10, 11, 12, 20]);
-        let w = win(10, 20);
-        let max_gap = 15;
+    fn batch_range_partial_overlap() {
+        let store = make_store(&[10, 20, 30, 40, 50, 60]);
+        let mode = PairingMode::batch_range(nid(25), nid(55)).unwrap();
+        let pairs: Vec<_> = store.night_pairs_iter(mode).collect();
 
-        let it: Vec<_> = store
-            .night_pairs_to_latest_in_window_iter(w, max_gap)
-            .collect();
-        let vec_api = store.night_pairs_to_latest_in_window(w, max_gap);
-        assert_eq!(it, vec_api);
+        // right = 50 (latest in [25, 55])
+        // left candidates: 30, 40 (in range and < 50)
+        assert_eq!(pairs, vec![(nid(30), nid(50)), (nid(40), nid(50))]);
     }
 
     #[test]
-    fn deterministic_output_independent_of_hashmap_insertion_order() {
-        let nights_a = vec![10, 12, 13, 20, 21];
-        let nights_b = vec![21, 20, 13, 12, 10]; // reverse insertion order
+    fn batch_range_equal_bounds() {
+        let store = make_store(&[50]);
+        let mode = PairingMode::batch_range(nid(50), nid(50)).unwrap();
+        let pairs: Vec<_> = store.night_pairs_iter(mode).collect();
 
-        let store_a = make_store(&nights_a);
-        let store_b = make_store(&nights_b);
+        // right = 50, no lefts possible
+        assert_eq!(pairs, vec![]);
+    }
 
-        let w = win(10, 21);
-        let max_gap = 15;
+    // -------------------------------------------------------------------------
+    // Determinism tests
+    // -------------------------------------------------------------------------
 
-        let a: Vec<_> = store_a
-            .night_pairs_to_latest_in_window_iter(w, max_gap)
-            .collect();
-        let b: Vec<_> = store_b
-            .night_pairs_to_latest_in_window_iter(w, max_gap)
-            .collect();
-        assert_eq!(a, b);
+    #[test]
+    fn deterministic_ordering_single_night() {
+        let store = make_store(&[17, 15, 16, 20]);
+        let mode = PairingMode::single_night(nid(20), 5).unwrap();
+
+        let pairs: Vec<_> = store.night_pairs_iter(mode).collect();
+        // Should be sorted by left
+        assert_eq!(
+            pairs,
+            vec![(nid(15), nid(20)), (nid(16), nid(20)), (nid(17), nid(20)),]
+        );
     }
 
     #[test]
-    fn all_emitted_pairs_respect_invariants() {
-        let store = make_store(&[1, 3, 4, 10, 12, 13]);
-        let w = win(3, 13);
-        let max_gap = 9;
+    fn deterministic_ordering_batch_range() {
+        let store = make_store(&[25, 15, 20, 10, 30]);
+        let mode = PairingMode::batch_range(nid(10), nid(30)).unwrap();
 
-        let pairs: Vec<_> = store
-            .night_pairs_to_latest_in_window_iter(w, max_gap)
-            .collect();
-        for (l, r) in pairs {
-            assert!(l < r, "must have left < right");
-            let gap = r.0 - l.0;
-            assert!(gap <= max_gap as u32, "gap must be <= max_gap_nights");
-            // right must be inside window by construction
-            assert!(w.contains(r));
-            // For this window (multi-night), left must also be inside.
-            assert!(w.contains(l));
-        }
+        let pairs: Vec<_> = store.night_pairs_iter(mode).collect();
+        // right = 30, lefts sorted
+        assert_eq!(
+            pairs,
+            vec![
+                (nid(10), nid(30)),
+                (nid(15), nid(30)),
+                (nid(20), nid(30)),
+                (nid(25), nid(30)),
+            ]
+        );
     }
 
-    // -----------------------
+    // -------------------------------------------------------------------------
     // Property-based tests
-    // -----------------------
+    // -------------------------------------------------------------------------
 
     prop_compose! {
-        fn unique_nights_vec()
-            (mut v in proptest::collection::vec(0u32..500u32, 0..60))
-            -> Vec<u32>
-        {
-            v.sort_unstable();
-            v.dedup();
-            v
+        fn unique_nights_vec()(v in prop::collection::vec(0u32..1000, 0..50)) -> Vec<u32> {
+            let mut sorted = v;
+            sorted.sort_unstable();
+            sorted.dedup();
+            sorted
         }
-    }
-
-    fn window_from_bounds(a: u32, b: u32) -> NightWindow {
-        let (start, end) = if a <= b { (a, b) } else { (b, a) };
-        win(start, end)
     }
 
     proptest! {
+        /// All pairs must have left < right
         #[test]
-        fn prop_matches_reference_spec(
+        fn prop_left_less_than_right(
             nights in unique_nights_vec(),
-            a in 0u32..500u32,
-            b in 0u32..500u32,
-            max_gap in any::<u8>(),
+            anchor in 10u32..1000,
+            gap in 1u8..100,
         ) {
             let store = make_store(&nights);
-            let w = window_from_bounds(a, b);
+            let mode = PairingMode::single_night(nid(anchor), gap).unwrap();
+            let pairs = store.night_pairs_iter(mode);
 
-            let got: Vec<(NightId, NightId)> = store.night_pairs_to_latest_in_window_iter(w, max_gap).collect();
-            let expect = reference_pairs_to_latest(&nights, w, max_gap);
-
-            prop_assert_eq!(got, expect);
+            for (left, right) in pairs {
+                prop_assert!(left < right);
+            }
         }
 
+        /// Single-night: all lefts must respect gap constraint
         #[test]
-        fn prop_vec_api_equals_iter_api(
+        fn prop_single_night_gap_constraint(
             nights in unique_nights_vec(),
-            a in 0u32..500u32,
-            b in 0u32..500u32,
-            max_gap in any::<u8>(),
+            anchor in 10u32..1000,
+            gap in 1u8..100,
         ) {
             let store = make_store(&nights);
-            let w = window_from_bounds(a, b);
+            let mode = PairingMode::single_night(nid(anchor), gap).unwrap();
+            let pairs = store.night_pairs_iter(mode);
 
-            let it: Vec<_> = store.night_pairs_to_latest_in_window_iter(w, max_gap).collect();
-            let vec_api = store.night_pairs_to_latest_in_window(w, max_gap);
-
-            prop_assert_eq!(it, vec_api);
+            for (left, right) in pairs {
+                let actual_gap = right.0 - left.0;
+                prop_assert!(actual_gap <= gap as u32);
+            }
         }
 
+        /// Single-night: right must be the anchor (if present)
         #[test]
-        fn prop_output_is_sorted_by_left_for_nonempty_output(
+        fn prop_single_night_right_is_anchor(
             nights in unique_nights_vec(),
-            a in 0u32..500u32,
-            b in 0u32..500u32,
-            max_gap in 1u8..=255u8,
+            anchor in 10u32..1000,
+            gap in 1u8..100,
         ) {
             let store = make_store(&nights);
-            let w = window_from_bounds(a, b);
+            let mode = PairingMode::single_night(nid(anchor), gap).unwrap();
+            let pairs = store.night_pairs_iter(mode).collect::<Vec<_>>();
 
-            let got: Vec<_> = store.night_pairs_to_latest_in_window_iter(w, max_gap).collect();
-            if got.len() >= 2 {
-                for i in 1..got.len() {
-                    prop_assert!(got[i-1].0 < got[i].0, "left nights must be strictly increasing");
-                    prop_assert_eq!(got[i-1].1, got[i].1, "right night must be constant");
+            if !pairs.is_empty() {
+                let expected_anchor = mode.anchor().unwrap();
+                for (_, right) in pairs {
+                    prop_assert_eq!(right, expected_anchor);
                 }
             }
         }
 
+        /// Batch range: all lefts must be in range
         #[test]
-        fn prop_all_pairs_obey_constraints(
+        fn prop_batch_range_lefts_in_range(
             nights in unique_nights_vec(),
-            a in 0u32..500u32,
-            b in 0u32..500u32,
-            max_gap in any::<u8>(),
+            start in 0u32..400,
+            end in 400u32..500,
         ) {
             let store = make_store(&nights);
-            let w = window_from_bounds(a, b);
+            let mode = PairingMode::batch_range(nid(start), nid(end)).unwrap();
+            let pairs = store.night_pairs_iter(mode);
 
-            let got: Vec<_> = store.night_pairs_to_latest_in_window_iter(w, max_gap).collect();
+            for (left, _) in pairs {
+                prop_assert!(left.0 >= start);
+                prop_assert!(left.0 <= end);
+            }
+        }
 
-            // Either empty (common) or every pair respects the rules.
-            for (l, r) in got {
-                prop_assert!(l < r);
+        /// Batch range: right must be latest in range
+        #[test]
+        fn prop_batch_range_right_is_latest(
+            nights in unique_nights_vec(),
+            start in 0u32..400,
+            end in 400u32..500,
+        ) {
+            let store = make_store(&nights);
+            let mode = PairingMode::batch_range(nid(start), nid(end)).unwrap();
+            let pairs = store.night_pairs_iter(mode).collect::<Vec<_>>();
 
-                // right must be in window (anchor selected from window)
-                prop_assert!(w.contains(r));
+            if !pairs.is_empty() {
+                let (_, right) = pairs[0];
 
-                let gap = r.0 - l.0;
-                prop_assert!(gap <= max_gap as u32);
+                // right should be the max night in [start, end] present in store
+                let expected_right = nights
+                    .iter()
+                    .map(|&n| nid(n))
+                    .filter(|&n| n.0 >= start && n.0 <= end)
+                    .max();
 
-                // For multi-night windows, left must also be in window.
-                if !w.is_single() {
-                    prop_assert!(w.contains(l));
+                if let Some(expected) = expected_right {
+                    prop_assert_eq!(right, expected);
+                }
+
+                // All pairs should have same right
+                for (_, r) in &pairs {
+                    prop_assert_eq!(*r, right);
                 }
             }
+        }
+
+        /// All left nights must be present in the store
+        #[test]
+        fn prop_all_lefts_in_store(
+            nights in unique_nights_vec(),
+            anchor in 10u32..1000,
+            gap in 1u8..100,
+        ) {
+            let store = make_store(&nights);
+            let mode = PairingMode::single_night(nid(anchor), gap).unwrap();
+            let pairs = store.night_pairs_iter(mode);
+
+            let store_nights: std::collections::HashSet<u32> = nights.into_iter().collect();
+
+            for (left, _) in pairs {
+                prop_assert!(store_nights.contains(&left.0));
+            }
+        }
+
+        /// Determinism: repeated calls yield same result
+        #[test]
+        fn prop_deterministic(
+            nights in unique_nights_vec(),
+            anchor in 10u32..1000,
+            gap in 1u8..100,
+        ) {
+            let store = make_store(&nights);
+            let mode = PairingMode::single_night(nid(anchor), gap).unwrap();
+
+            let pairs1 = store.night_pairs_iter(mode).collect::<Vec<_>>();
+            let pairs2 = store.night_pairs_iter(mode).collect::<Vec<_>>();
+
+            prop_assert_eq!(pairs1, pairs2);
+        }
+
+        /// Output is sorted
+        #[test]
+        fn prop_output_sorted(
+            nights in unique_nights_vec(),
+            start in 0u32..400,
+            end in 400u32..500,
+        ) {
+            let store = make_store(&nights);
+            let mode = PairingMode::batch_range(nid(start), nid(end)).unwrap();
+            let pairs = store.night_pairs_iter(mode).collect::<Vec<_>>();
+
+            let lefts: Vec<NightId> = pairs.iter().map(|(l, _)| *l).collect();
+            let mut sorted_lefts = lefts.clone();
+            sorted_lefts.sort();
+
+            prop_assert_eq!(lefts, sorted_lefts);
         }
     }
 }

@@ -17,7 +17,8 @@ use camino::Utf8PathBuf;
 use crate::{
     Alert,
     engine_config::EngineConfig,
-    night_id::{NightId, NightWindow},
+    error::{EngineError, FinkFatError},
+    night_id::{NightId, PairingMode},
     persistence::{
         alert::AlertSlice,
         alert_store::AlertStore,
@@ -97,7 +98,11 @@ impl PersistenceManager {
     /// Compute the edge/window policy from config and current manifest.
     ///
     /// Returns `None` if the manifest is empty.
-    pub fn compute_window(&self, manifest: &Manifest, cfg: &EngineConfig) -> Option<NightWindow> {
+    pub fn compute_window(
+        &self,
+        manifest: &Manifest,
+        cfg: &EngineConfig,
+    ) -> Result<Option<PairingMode>, FinkFatError> {
         manifest.compute_edge_window_from_config(cfg)
     }
 
@@ -169,9 +174,9 @@ impl PersistenceManager {
         &self,
         cfg: &EngineConfig,
         created_unix_s: i64,
-    ) -> Result<RuntimeState, PersistenceError> {
+    ) -> Result<RuntimeState, EngineError> {
         let manifest = self.load_or_init_manifest(created_unix_s)?;
-        let window = self.compute_window(&manifest, cfg);
+        let window = self.compute_window(&manifest, cfg)?;
 
         // Select nights to load
         let nights_to_load: Vec<NightManifestEntry> = match window {
@@ -180,7 +185,7 @@ impl PersistenceManager {
                 .nights
                 .iter()
                 .cloned()
-                .filter(|e| e.night_id >= w.start && e.night_id <= w.end)
+                .filter(|e| e.night_id >= w.start() && e.night_id <= w.end())
                 .collect(),
         };
 
@@ -230,7 +235,7 @@ impl PersistenceManager {
         alerts: Vec<Alert>,
         seeds: Vec<SeedNodeOwned>,
         edge_ops: Vec<EdgeOp>,
-    ) -> Result<Manifest, PersistenceError> {
+    ) -> Result<Manifest, EngineError> {
         // 1) write alerts + seeds
         self.save_night_manifest(
             &mut manifest,
@@ -252,7 +257,7 @@ impl PersistenceManager {
         self.save_manifest(&manifest)?;
 
         // 4) optional cleanup of old nights outside window (to avoid disk growth)
-        let window = self.compute_window(&manifest, cfg);
+        let window = self.compute_window(&manifest, cfg)?;
         if let Some(w) = window {
             self.cleanup_old_nights(&manifest, w)?;
         }
@@ -269,8 +274,8 @@ impl PersistenceManager {
         cfg: &EngineConfig,
         checkpoint_night_id: NightId,
         created_unix_s: i64,
-    ) -> Result<(), PersistenceError> {
-        let window = self.compute_window(manifest, cfg);
+    ) -> Result<(), EngineError> {
+        let window = self.compute_window(manifest, cfg)?;
         self.edge_journal.compact_to_snapshot(
             manifest,
             checkpoint_night_id,
@@ -290,12 +295,12 @@ impl PersistenceManager {
     pub fn cleanup_old_nights(
         &self,
         manifest: &Manifest,
-        window: NightWindow,
+        window: PairingMode,
     ) -> Result<u64, PersistenceIoError> {
         let mut deleted = 0u64;
 
         for e in &manifest.nights {
-            if e.night_id >= window.start && e.night_id <= window.end {
+            if e.night_id >= window.start() && e.night_id <= window.end() {
                 continue;
             }
 

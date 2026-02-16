@@ -26,9 +26,7 @@ use serde::{Deserialize, Serialize};
 use camino::{Utf8Path, Utf8PathBuf};
 
 use crate::{
-    engine_config::EngineConfig,
-    night_id::{NightId, NightWindow},
-    persistence::{error::PersistenceIoError, layout::PersistenceLayout},
+    engine_config::EngineConfig, error::FinkFatError, night_id::{NightId, PairingMode}, persistence::{error::PersistenceIoError, layout::PersistenceLayout}
 };
 
 use super::{
@@ -282,16 +280,16 @@ impl Manifest {
     pub fn compute_edge_window_from_config(
         &self,
         engine_config: &EngineConfig,
-    ) -> Option<NightWindow> {
-        let max_night = self.max_night_id()?;
-        let g = engine_config.max_gap_nights() as u32;
+    ) -> Result<Option<PairingMode>, FinkFatError> {
+        let max_night = match self.max_night_id() {
+            Some(n) => n,
+            None => return Ok(None),
+        };
 
+        let g = engine_config.max_gap_nights() as u32;
         let min_night = NightId(max_night.0.saturating_sub(g));
 
-        Some(NightWindow {
-            start: min_night,
-            end: max_night,
-        })
+        PairingMode::batch_range(min_night, max_night).map(Some)
     }
 
     /// Add or replace the entry for one night.

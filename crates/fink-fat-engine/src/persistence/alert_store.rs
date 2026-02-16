@@ -67,7 +67,7 @@ use camino::Utf8PathBuf;
 
 use crate::{
     MJDTT,
-    night_id::{NightId, NightWindow},
+    night_id::{NightId, PairingMode},
     persistence::{
         alert::{Alert, AlertKey, AlertSlice},
         error::PersistenceIoError,
@@ -125,6 +125,22 @@ impl AlertStore {
         Self(map)
     }
 
+    /// Get a list of night IDs currently present in the store.
+    ///
+    /// Return
+    /// ------
+    /// An iterator yielding `NightId` values corresponding to the keys in the internal map.
+    ///
+    /// Notes
+    /// -----
+    /// - The order is not guaranteed to be stable or sorted, as it depends on the
+    ///   internal state of the hash map.
+    /// - If the store is empty, returns an empty vector.
+    #[inline]
+    pub fn nights(&self) -> impl Iterator<Item = &NightId> {
+        self.0.keys()
+    }
+
     /// Get a sorted list of night IDs currently present in the store.
     ///
     /// Return
@@ -135,33 +151,26 @@ impl AlertStore {
     /// -----
     /// - If the store is empty, returns an empty vector.
     /// - The sorting is done at call time; the internal map does not maintain order.
-    pub fn nights(&self) -> Vec<NightId> {
-        let mut v: Vec<NightId> = self.0.keys().copied().collect();
+    #[inline]
+    pub fn nights_sorted(&self) -> Vec<NightId> {
+        let mut v: Vec<NightId> = self.nights().copied().collect();
         v.sort();
         v
     }
 
-    /// Get the night window covering all nights currently present in the store.
+    /// Get the latest night ID present in the store, if any.
     ///
     /// Return
     /// ------
-    /// - `Some(NightWindow)` if the store contains at least one night, where
-    ///   `start` is the minimum night ID and `end` is the maximum night ID.
-    /// - `None` if the store is empty (no nights).
+    /// - `Some(NightId)` corresponding to the maximum night ID in the store.
+    /// - `None` if the store is empty.
     ///
     /// Notes
     /// -----
-    /// - This is a convenience function that derives a window from the night IDs.
-    pub fn get_night_window(&self) -> Option<NightWindow> {
-        let night_ids = self.nights();
-        if night_ids.is_empty() {
-            None
-        } else {
-            Some(NightWindow {
-                start: night_ids.first().unwrap().to_owned(),
-                end: night_ids.last().unwrap().to_owned(),
-            })
-        }
+    /// - This is a convenience method that relies on `nights_sorted` to find the maximum night ID.
+    #[inline]
+    pub fn last_night(&self) -> Option<NightId> {
+        self.nights_sorted().last().copied()
     }
 
     /// Get the MJD TT of the first alert in a given night, if it exists.
@@ -178,10 +187,10 @@ impl AlertStore {
     ///
     /// Notes
     /// -----
-    /// - Return the first alert's `mjd_tt` of the night only if the alerts are sorted by time 
+    /// - Return the first alert's `mjd_tt` of the night only if the alerts are sorted by time
     ///     (e.g., after calling `sort_each_night_and_rekey`).
-    /// - Should be the case if the alerts have been 
-    ///     ingested using the [`crate::pipeline::stages::PipelineStage::IngestNights`] stage, 
+    /// - Should be the case if the alerts have been
+    ///     ingested using the [`crate::pipeline::stages::PipelineStage::IngestNights`] stage,
     ///     which calls `sort_each_night_and_rekey` after loading.
     pub fn night_t0(&self, night_id: &NightId) -> Option<MJDTT> {
         self.0
@@ -332,28 +341,80 @@ impl AlertStore {
         self.0.iter()
     }
 
-    /// Iterate over `(night_id, alerts)` pairs for nights within a specified window.
+    /// Iterate over `(night_id, alerts)` pairs for nights within a specified pairing window.
+    ///
+    /// Overview
+    /// --------
+    /// This method filters the alert store to return only the nights that are relevant
+    /// for pairing according to the given `PairingMode`. It identifies a "right night"
+    /// (the most recent eligible night) and collects all valid "left nights" that can
+    /// be paired with it.
     ///
     /// Arguments
     /// ---------
-    /// * `night_window` – Window to filter nights.
+    /// * `night_window` – Pairing mode defining which nights are eligible.
     ///
-    /// Return
-    /// ------
-    /// An iterator over `(night_id, alerts)` pairs where `night_id` is within the window.
+    /// Returns
+    /// -------
+    /// An iterator yielding `(night_id, &[Alert])` tuples for nights within the window.
+    ///
+    /// Behavior
+    /// --------
+    /// 1. Identifies the **right night**: the latest night in the store that is
+    ///    contained in the pairing mode's range.
+    /// 2. Collects **left nights**: all nights eligible to pair with the right night
+    ///    according to the mode's constraints (see `PairingMode::eligible_left_nights`).
+    /// 3. Includes the **right night itself** in the output.
+    /// 4. Returns an **empty iterator** if no valid right night exists.
+    ///
+    /// Output guarantees
+    /// -----------------
+    /// - **Sorted**: nights are returned in increasing order.
+    /// - **Deduplicated**: each night appears at most once.
+    /// - **Deterministic**: output is reproducible for the same inputs.
     ///
     /// Notes
     /// -----
-    /// - The order is hash-dependent and not deterministic.
-    /// - This is a convenient filter for operations that only need a subset of nights.
+    /// - For **single-night mode**: left nights satisfy `left < right` and
+    ///   `right - left <= max_gap`.
+    /// - For **batch mode**: left nights satisfy `left < right` and `start <= left`.
+    /// - The right night itself is always included if it exists in the store and
+    ///   is within the pairing mode's range.
     pub fn night_window_iter(
         &self,
-        night_window: NightWindow,
+        night_window: PairingMode,
     ) -> impl Iterator<Item = (NightId, &[Alert])> {
-        self.0
-            .iter()
-            .filter(move |(night_id, _)| night_window.contains(**night_id))
-            .map(|(night_id, alerts)| (*night_id, alerts.as_slice()))
+        // Collect all available nights from the store
+        let available_nights: Vec<NightId> = self.nights_sorted();
+
+        // Build the set of nights to return (lefts + right)
+        let nights_to_return: Vec<NightId> = if let Some(right_night) = self
+            .last_night()
+            .and_then(|last_night| night_window.contains(last_night).then_some(last_night))
+        {
+            let mut lefts = night_window.eligible_left_nights(&available_nights, right_night);
+
+            // Add the right night itself
+            lefts.push(right_night);
+
+            // Ensure sorted and deduplicated
+            lefts.sort();
+            lefts.dedup();
+
+            lefts
+        } else {
+            // No right night found, return empty
+            Vec::new()
+        };
+
+        // Convert to owned Vec for the iterator to avoid lifetime issues
+        let store_ref = &self.0;
+
+        nights_to_return.into_iter().filter_map(move |night_id| {
+            store_ref
+                .get(&night_id)
+                .map(|alerts| (night_id, alerts.as_slice()))
+        })
     }
 
     /// Get the internal map size (number of nights present).
@@ -494,5 +555,272 @@ impl AlertStore {
             .save_alerts_night(layout, manifest, night_id)?;
 
         Ok(path)
+    }
+}
+
+#[cfg(test)]
+mod night_window_iter_tests {
+    use super::*;
+
+    fn nid(v: u32) -> NightId {
+        NightId(v)
+    }
+
+    fn make_alert_store(nights: &[u32]) -> AlertStore {
+        let mut map: AHashMap<NightId, Vec<Alert>> = AHashMap::new();
+        for &n in nights {
+            // Create dummy alerts for each night
+            map.insert(nid(n), vec![Alert::default()]);
+        }
+        AlertStore(map)
+    }
+
+    // -------------------------------------------------------------------------
+    // Single-night mode tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn single_night_empty_store() {
+        let store = make_alert_store(&[]);
+        let mode = PairingMode::single_night(nid(100), 10).unwrap();
+        let nights: Vec<_> = store.night_window_iter(mode).map(|(n, _)| n).collect();
+        assert_eq!(nights, vec![]);
+    }
+
+    #[test]
+    fn single_night_anchor_not_in_store() {
+        let store = make_alert_store(&[10, 20, 30]);
+        let mode = PairingMode::single_night(nid(100), 10).unwrap();
+        let nights: Vec<_> = store.night_window_iter(mode).map(|(n, _)| n).collect();
+        assert_eq!(nights, vec![]);
+    }
+
+    #[test]
+    fn single_night_only_anchor() {
+        let store = make_alert_store(&[100]);
+        let mode = PairingMode::single_night(nid(100), 10).unwrap();
+        let nights: Vec<_> = store.night_window_iter(mode).map(|(n, _)| n).collect();
+        // Only the anchor itself
+        assert_eq!(nights, vec![nid(100)]);
+    }
+
+    #[test]
+    fn single_night_with_lefts() {
+        let store = make_alert_store(&[85, 92, 95, 100]);
+        let mode = PairingMode::single_night(nid(100), 10).unwrap();
+        let nights: Vec<_> = store.night_window_iter(mode).map(|(n, _)| n).collect();
+        // 85 is outside gap, 92 and 95 are within gap, plus the anchor
+        assert_eq!(nights, vec![nid(92), nid(95), nid(100)]);
+    }
+
+    #[test]
+    fn single_night_alerts_present() {
+        let store = make_alert_store(&[90, 95, 100]);
+        let mode = PairingMode::single_night(nid(100), 10).unwrap();
+
+        let results: Vec<_> = store.night_window_iter(mode).collect();
+
+        // Check all nights have alerts
+        assert_eq!(results.len(), 3);
+        for (night_id, alerts) in results {
+            assert!(!alerts.is_empty(), "Night {} should have alerts", night_id);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Multi-night batch mode tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn batch_range_empty_store() {
+        let store = make_alert_store(&[]);
+        let mode = PairingMode::batch_range(nid(50), nid(100)).unwrap();
+        let nights: Vec<_> = store.night_window_iter(mode).map(|(n, _)| n).collect();
+        assert_eq!(nights, vec![]);
+    }
+
+    #[test]
+    fn batch_range_no_nights_in_range() {
+        let store = make_alert_store(&[10, 20, 30]);
+        let mode = PairingMode::batch_range(nid(50), nid(100)).unwrap();
+        let nights: Vec<_> = store.night_window_iter(mode).map(|(n, _)| n).collect();
+        assert_eq!(nights, vec![]);
+    }
+
+    #[test]
+    fn batch_range_only_right() {
+        let store = make_alert_store(&[100]);
+        let mode = PairingMode::batch_range(nid(50), nid(100)).unwrap();
+        let nights: Vec<_> = store.night_window_iter(mode).map(|(n, _)| n).collect();
+        // Only the right night
+        assert_eq!(nights, vec![nid(100)]);
+    }
+
+    #[test]
+    fn batch_range_with_lefts() {
+        let store = make_alert_store(&[40, 60, 80, 100]);
+        let mode = PairingMode::batch_range(nid(50), nid(100)).unwrap();
+        let nights: Vec<_> = store.night_window_iter(mode).map(|(n, _)| n).collect();
+        // 40 is below start, 60 and 80 are in range, plus 100 as right
+        assert_eq!(nights, vec![nid(60), nid(80), nid(100)]);
+    }
+
+    #[test]
+    fn batch_range_all_in_range() {
+        let store = make_alert_store(&[50, 60, 70, 80, 90, 100]);
+        let mode = PairingMode::batch_range(nid(50), nid(100)).unwrap();
+        let nights: Vec<_> = store.night_window_iter(mode).map(|(n, _)| n).collect();
+        // All nights are in [50, 100]
+        assert_eq!(
+            nights,
+            vec![nid(50), nid(60), nid(70), nid(80), nid(90), nid(100)]
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Ordering and determinism
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn output_is_sorted() {
+        let store = make_alert_store(&[100, 90, 95, 85, 92]);
+        let mode = PairingMode::single_night(nid(100), 10).unwrap();
+        let nights: Vec<_> = store.night_window_iter(mode).map(|(n, _)| n).collect();
+
+        // Should be sorted
+        let mut sorted = nights.clone();
+        sorted.sort();
+        assert_eq!(nights, sorted);
+    }
+
+    #[test]
+    fn deterministic_output() {
+        let store = make_alert_store(&[90, 92, 95, 100]);
+        let mode = PairingMode::single_night(nid(100), 10).unwrap();
+
+        let nights1: Vec<_> = store.night_window_iter(mode).map(|(n, _)| n).collect();
+        let nights2: Vec<_> = store.night_window_iter(mode).map(|(n, _)| n).collect();
+
+        assert_eq!(nights1, nights2);
+    }
+
+    #[test]
+    fn no_duplicates() {
+        let store = make_alert_store(&[90, 95, 100]);
+        let mode = PairingMode::single_night(nid(100), 10).unwrap();
+        let nights: Vec<_> = store.night_window_iter(mode).map(|(n, _)| n).collect();
+
+        let unique_nights: std::collections::HashSet<_> = nights.iter().collect();
+        assert_eq!(nights.len(), unique_nights.len());
+    }
+
+    // -------------------------------------------------------------------------
+    // Property-based tests
+    // -------------------------------------------------------------------------
+
+    use proptest::prelude::*;
+
+    proptest! {
+        /// All returned nights must be present in the store
+        #[test]
+        fn prop_all_nights_in_store(
+            nights in prop::collection::vec(0u32..1000, 0..50).prop_map(|v| {
+                let mut sorted = v;
+                sorted.sort();
+                sorted.dedup();
+                sorted
+            }),
+            anchor in 10u32..1000,
+            gap in 1u8..100,
+        ) {
+            let store = make_alert_store(&nights);
+            let mode = PairingMode::single_night(nid(anchor), gap).unwrap();
+
+            let returned_nights: Vec<_> = store
+                .night_window_iter(mode)
+                .map(|(n, _)| n.0)
+                .collect();
+
+            let store_nights: std::collections::HashSet<_> = nights.into_iter().collect();
+
+            for night in returned_nights {
+                prop_assert!(store_nights.contains(&night));
+            }
+        }
+
+        /// Right night is always included if present and in range
+        #[test]
+        fn prop_right_always_included(
+            nights in prop::collection::vec(0u32..1000, 1..50).prop_map(|v| {
+                let mut sorted = v;
+                sorted.sort();
+                sorted.dedup();
+                sorted
+            }),
+            anchor in 10u32..1000,
+            gap in 1u8..100,
+        ) {
+            let mut nights_with_anchor = nights.clone();
+            nights_with_anchor.push(anchor);
+            nights_with_anchor.sort();
+            nights_with_anchor.dedup();
+
+            let store = make_alert_store(&nights_with_anchor);
+            let mode = PairingMode::single_night(nid(anchor), gap).unwrap();
+
+            let returned_nights: Vec<_> = store
+                .night_window_iter(mode)
+                .map(|(n, _)| n)
+                .collect();
+
+            if !returned_nights.is_empty() {
+                prop_assert!(returned_nights.contains(&nid(anchor)));
+            }
+        }
+
+        /// All alerts are non-empty
+        #[test]
+        fn prop_all_alerts_non_empty(
+            nights in prop::collection::vec(0u32..500, 1..30).prop_map(|v| {
+                let mut sorted = v;
+                sorted.sort();
+                sorted.dedup();
+                sorted
+            }),
+            start in 0u32..400,
+            end in 400u32..500,
+        ) {
+            let store = make_alert_store(&nights);
+            let mode = PairingMode::batch_range(nid(start), nid(end)).unwrap();
+
+            for (night_id, alerts) in store.night_window_iter(mode) {
+                prop_assert!(
+                    !alerts.is_empty(),
+                    "Night {} should have alerts",
+                    night_id
+                );
+            }
+        }
+
+        /// Output is always sorted
+        #[test]
+        fn prop_output_sorted(
+            nights in prop::collection::vec(0u32..1000, 0..50),
+            anchor in 10u32..1000,
+            gap in 1u8..100,
+        ) {
+            let store = make_alert_store(&nights);
+            let mode = PairingMode::single_night(nid(anchor), gap).unwrap();
+
+            let returned: Vec<_> = store
+                .night_window_iter(mode)
+                .map(|(n, _)| n)
+                .collect();
+
+            let mut sorted = returned.clone();
+            sorted.sort();
+
+            prop_assert_eq!(returned, sorted);
+        }
     }
 }

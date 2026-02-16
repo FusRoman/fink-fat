@@ -1,7 +1,7 @@
 use crate::{
     engine_config::EngineConfig,
     graph::edge::edge_prediction::EdgeRankingModelPool,
-    night_id::NightWindow,
+    night_id::PairingMode,
     persistence::{
         alert_store::AlertStore, error::PersistenceError, graph::GraphOwned, manifest::Manifest,
         seed_store::SeedStoreOwned,
@@ -22,7 +22,7 @@ use crate::{
 /// (or into a `FinkFat` instance).
 pub struct RuntimeState {
     pub manifest: Manifest,
-    pub window: Option<NightWindow>,
+    pub window: Option<PairingMode>,
     pub alert_store: AlertStore,
     pub seed_store: SeedStoreOwned,
     pub graph: GraphOwned,

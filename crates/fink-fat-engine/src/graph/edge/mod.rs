@@ -386,9 +386,8 @@ impl<'seed_lf, 'alert_lf> Edge<'seed_lf, 'alert_lf> {
         // Init: total work = number of left seeds (units = seeds processed)
         progress_sink.set_total(left.len() as u64);
 
-        let right_seed_t0 = right
-            .iter()
-            .min()
+        // right seed are sorted by epoch_mid, so the first one has the minimum epoch.
+        let right_seed_t0 = right.first()
             .map(|s| s.plane.epoch_mid)
             .ok_or_else(|| {
                 EdgeBuilderError::InvalidSeeds(

@@ -29,7 +29,7 @@ use std::fs;
 use ahash::AHashMap;
 use serde::{Deserialize, Serialize};
 
-use crate::night_id::{NightId, NightWindow};
+use crate::night_id::{NightId, PairingMode};
 use crate::persistence::EDGE_JOURNAL_SCHEMA_VERSION;
 use crate::persistence::edge::delta_chunk::EdgeDeltaChunk;
 use crate::persistence::edge::edge_op::EdgeOp;
@@ -137,7 +137,7 @@ impl EdgeJournalStore {
     pub fn load_edges(
         &self,
         manifest: &Manifest,
-        window: Option<NightWindow>,
+        window: Option<PairingMode>,
     ) -> Result<Vec<EdgeOwned>, PersistenceIoError> {
         let mut map: AHashMap<EdgeKey, EdgeOwned> = AHashMap::new();
 
@@ -213,7 +213,7 @@ impl EdgeJournalStore {
         manifest: &mut Manifest,
         checkpoint_night_id: NightId,
         created_unix_s: i64,
-        window: Option<NightWindow>,
+        window: Option<PairingMode>,
     ) -> Result<(), PersistenceIoError> {
         // Rebuild current edges (snapshot + deltas)
         let edges = self.load_edges(manifest, window)?;
@@ -365,7 +365,7 @@ impl EdgeJournalStore {
 
     /// Decide whether an edge key is inside a window.
     #[inline]
-    fn edge_key_in_window(&self, key: EdgeKey, w: NightWindow) -> bool {
+    fn edge_key_in_window(&self, key: EdgeKey, w: PairingMode) -> bool {
         w.contains(key.from.night_id) && w.contains(key.to.night_id)
     }
 }
