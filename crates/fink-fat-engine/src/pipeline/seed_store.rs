@@ -163,7 +163,27 @@ impl<'alert_lf> SeedStore<'alert_lf> {
             map.insert(*night_id, owned_seeds);
         }
 
-        SeedStoreOwned(map)
+        SeedStoreOwned::from_map(map)
+    }
+
+    /// Test if the store is empty (contains no nights).
+    ///
+    /// Return
+    /// ------
+    /// `true` if the store contains no entries, `false` otherwise.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Get the total number of nights present in the store.
+    ///
+    /// Return
+    /// ------
+    /// The number of unique `NightId` keys in the store.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 
     /// Insert a vector of seed nodes for a given night.
@@ -207,13 +227,23 @@ impl<'alert_lf> SeedStore<'alert_lf> {
         self.0.get(night_id).map(|v| v.len())
     }
 
+    /// Return the list of night IDs currently present in the store.
+    ///
+    /// Return
+    /// ------
+    /// A vector of `NightId` values corresponding to the keys in the internal map.
+    #[inline]
+    pub fn night_ids(&self) -> Vec<NightId> {
+        self.0.keys().copied().collect()
+    }
+
     /// Return all night IDs present in the store, sorted increasingly.
     ///
     /// Determinism
     /// -----------
     /// This function provides a stable ordering across runs.
     pub fn night_ids_sorted(&self) -> Vec<NightId> {
-        let mut night_ids: Vec<NightId> = self.0.keys().copied().collect();
+        let mut night_ids: Vec<NightId> = self.night_ids();
         night_ids.sort();
         night_ids
     }

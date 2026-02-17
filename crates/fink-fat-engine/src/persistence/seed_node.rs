@@ -18,13 +18,13 @@ use crate::{
     seeding::seed_node::{SeedNode, SeedNodeCore},
 };
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Default)]
 pub struct SeedKey {
     pub night_id: NightId,
     pub idx_in_night: u32,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct SeedNodeOwned {
     pub core: SeedNodeCore,
     pub members: Vec<AlertKey>,

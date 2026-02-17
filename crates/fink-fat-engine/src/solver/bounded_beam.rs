@@ -112,7 +112,7 @@ use crate::{
         Solver, SolverDiagnostics, SolverOutput,
         components::{ComponentId, ConnectedComponents, LocalIdx},
     },
-    trajectory::TrackHypothesis,
+    trajectory::{TrackCore, TrackHypothesis},
 };
 
 // -----------------------------------------------------------------------------
@@ -669,8 +669,10 @@ fn reconstruct_track<'edge_lf, 'seed_lf, 'alert_lf>(
     TrackHypothesis {
         nodes,
         edges: edge_rev,
-        cost: st.total_cost,
-        night_span,
+        core: TrackCore {
+            cost: st.total_cost,
+            night_span,
+        },
     }
 }
 
@@ -709,8 +711,8 @@ fn sort_and_truncate_tracks<'edge_lf, 'seed_lf, 'alert_lf>(
         let a_edges = a.edges.len().max(1) as f64;
         let b_edges = b.edges.len().max(1) as f64;
 
-        let a_avg = a.cost / a_edges;
-        let b_avg = b.cost / b_edges;
+        let a_avg = a.core.cost / a_edges;
+        let b_avg = b.core.cost / b_edges;
 
         a_avg
             .partial_cmp(&b_avg)
@@ -718,7 +720,12 @@ fn sort_and_truncate_tracks<'edge_lf, 'seed_lf, 'alert_lf>(
             // tie-break: préférer les tracks plus longues
             .then_with(|| b.edges.len().cmp(&a.edges.len()))
             // tie-break: coût total plus faible
-            .then_with(|| a.cost.partial_cmp(&b.cost).unwrap_or(Ordering::Equal))
+            .then_with(|| {
+                a.core
+                    .cost
+                    .partial_cmp(&b.core.cost)
+                    .unwrap_or(Ordering::Equal)
+            })
     });
 
     // 3) Tronque au top-K

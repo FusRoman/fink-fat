@@ -187,6 +187,10 @@ pub struct SolverDiagnostics {
     pub n_selected: u32,
 }
 
+pub type HypothesisId = u32;
+pub type HypothesisSet<'edge_lf, 'seed_lf, 'alert_lf> =
+    AHashMap<HypothesisId, TrackHypothesis<'edge_lf, 'seed_lf, 'alert_lf>>;
+
 /// Output of a solver pass over a connected component.
 ///
 /// This is the common return type of the [`Solver`] trait.
@@ -217,7 +221,7 @@ pub struct SolverOutput<'edge_lf, 'seed_lf, 'alert_lf> {
     ///
     /// The key is a temporary track id assigned during reconstruction; final track ids are
     /// typically assigned after orbit fitting and persistence.
-    pub tracks: AHashMap<u32, TrackHypothesis<'edge_lf, 'seed_lf, 'alert_lf>>,
+    pub tracks: HypothesisSet<'edge_lf, 'seed_lf, 'alert_lf>,
 
     /// Diagnostics for monitoring and tuning.
     pub diag: SolverDiagnostics,
@@ -418,6 +422,22 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> SolverOutput<'edge_lf, 'seed_lf, 'alert_lf> 
             error_ra: max_ra_err,
             error_dec: max_dec_err,
         }
+    }
+
+    pub fn merge_solver_output(
+        all_solver_output: &[Self],
+    ) -> HypothesisSet<'edge_lf, 'seed_lf, 'alert_lf> {
+        let mut merged: HypothesisSet<'edge_lf, 'seed_lf, 'alert_lf> = AHashMap::new();
+        let mut next_id: HypothesisId = 0;
+
+        for output in all_solver_output {
+            for trk in output.tracks.values() {
+                merged.insert(next_id, trk.clone());
+                next_id += 1;
+            }
+        }
+
+        merged
     }
 }
 

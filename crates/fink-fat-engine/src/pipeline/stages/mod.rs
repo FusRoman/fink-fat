@@ -1,6 +1,8 @@
 pub mod alert_inputs;
 pub mod edge_builder;
 pub mod seed_builder;
+pub mod solve_run;
+
 
 use std::{fmt, time::Instant};
 
@@ -18,7 +20,6 @@ pub enum PipelineStage {
     IngestNights,
     BuildSeeds,
     BuildEdges,
-    ConnectedComponents,
     Solve,
     PersistOutputs,
 }
@@ -56,9 +57,6 @@ impl PipelineStage {
             PipelineStage::IngestNights => alert_inputs::run(ctx, hooks, stage_sink),
             PipelineStage::BuildSeeds => seed_builder::run(ctx, hooks, stage_sink),
             PipelineStage::BuildEdges => edge_builder::run(ctx, hooks, stage_sink),
-            PipelineStage::ConnectedComponents => {
-                todo!()
-            }
             PipelineStage::Solve => todo!(),
             PipelineStage::PersistOutputs => todo!(),
         }
@@ -69,7 +67,6 @@ impl PipelineStage {
             PipelineStage::IngestNights => "Ingest nights",
             PipelineStage::BuildSeeds => "Build seeds",
             PipelineStage::BuildEdges => "Build edges",
-            PipelineStage::ConnectedComponents => "Connected components",
             PipelineStage::Solve => "Solve",
             PipelineStage::PersistOutputs => "Persist outputs",
         }

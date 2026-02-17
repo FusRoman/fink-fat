@@ -9,6 +9,7 @@ pub mod manifest;
 pub mod runtime_state;
 pub mod seed_node;
 pub mod seed_store;
+pub mod track_hypothesis;
 
 use std::fs;
 

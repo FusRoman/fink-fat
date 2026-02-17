@@ -46,7 +46,7 @@ use crate::{
 ///
 /// - documents the geometry explicitly,
 /// - allows future optimisations if needed.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Default)]
 pub struct TangentCenter {
     /// Tangent-plane centre right ascension α₀ (radians, ICRS).
     pub ra0: Radian,
@@ -148,7 +148,7 @@ impl TangentCenter {
 ///
 /// They are propagated in a **simplified, diagonal form** using the
 /// [`ModelNoise`] parameters when predicting on the plane.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct TangentPlaneModel {
     /// Tangent-plane centre and cached trigonometric terms.
     pub center: TangentCenter,

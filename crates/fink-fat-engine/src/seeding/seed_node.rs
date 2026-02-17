@@ -99,7 +99,7 @@ use crate::{
 /// `SeedNode<'alert_lf>` borrows alerts. This is deliberate for performance, but
 /// implies that seeds cannot outlive the alert storage that owns the `Alert`
 /// objects.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct SeedNodeCore {
     /// Seed identifier: night ID + index within the night. This is used for persistence and indexing.
     pub key: SeedKey,

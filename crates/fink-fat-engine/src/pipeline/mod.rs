@@ -15,6 +15,7 @@ use crate::{
         progress_sink::{NoopProgress, ProgressSink},
         stages::{PipelineStage, alert_inputs::input_uri::InputUri},
     },
+    solver::{HypothesisSet, solver_manager::SolverManager},
 };
 
 #[derive(Clone, Debug)]
@@ -44,6 +45,8 @@ pub struct PipelineContext<'rt> {
     pub runtime_state: &'rt mut RuntimeState,
     pub engine_config: &'rt EngineConfig,
     pub edge_models: &'rt EdgeRankingModelPool,
+    pub solver_manager: &'rt SolverManager,
+    pub track_hypotheses: HypothesisSet<'rt, 'rt, 'rt>,
 }
 
 pub struct PipelineRunner {
