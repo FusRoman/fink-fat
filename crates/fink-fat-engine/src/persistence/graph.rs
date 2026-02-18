@@ -3,7 +3,7 @@ use ahash::AHashMap;
 use crate::{
     graph::{GraphCore, RuntimeGraph},
     persistence::{edge::EdgeOwned, error::BorrowError},
-    pipeline::seed_store::SeedStore,
+    seeding::store::SeedStore,
 };
 
 pub struct GraphOwned {
@@ -29,10 +29,10 @@ impl GraphOwned {
         Self { core, edges }
     }
 
-    pub fn to_borrowed<'seed, 'alert>(
+    pub fn to_borrowed<'seed>(
         &self,
-        seeds: &'seed SeedStore<'alert>,
-    ) -> Result<RuntimeGraph<'seed, 'alert>, BorrowError> {
+        seeds: &'seed SeedStore,
+    ) -> Result<RuntimeGraph<'seed>, BorrowError> {
         let mut edges = Vec::with_capacity(self.edges.len());
         for e in &self.edges {
             edges.push(e.to_borrowed(seeds)?);

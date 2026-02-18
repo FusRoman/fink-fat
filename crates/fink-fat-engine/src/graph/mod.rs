@@ -6,9 +6,9 @@ use crate::{
     MJDTT,
     engine_config::edge_config::EdgeConfig,
     graph::edge::{Edge, edge_prediction::EdgeRankingModelPool, error::EdgeBuilderError},
-    persistence::{graph::GraphOwned, seed_node::SeedKey},
+    persistence::graph::GraphOwned,
     pipeline::progress_sink::ProgressSink,
-    seeding::SeedNode,
+    seeding::{SeedKey, SeedNode},
     spacetime_bucket::spatial_binner::SpatialBinner,
 };
 
@@ -19,12 +19,12 @@ pub struct GraphCore {
 }
 
 #[derive(Debug)]
-pub struct RuntimeGraph<'seed_lf, 'alert_lf> {
+pub struct RuntimeGraph<'seed_lf> {
     pub core: GraphCore,
-    pub edges: Vec<Edge<'seed_lf, 'alert_lf>>,
+    pub edges: Vec<Edge<'seed_lf>>,
 }
 
-impl<'seed_lf, 'alert_lf> RuntimeGraph<'seed_lf, 'alert_lf> {
+impl<'seed_lf> RuntimeGraph<'seed_lf> {
     pub fn new() -> Self {
         Self {
             core: GraphCore {
@@ -44,8 +44,8 @@ impl<'seed_lf, 'alert_lf> RuntimeGraph<'seed_lf, 'alert_lf> {
 
     pub fn add_inter_night_edges<B: SpatialBinner>(
         &mut self,
-        left_nodes: &'seed_lf [SeedNode<'alert_lf>],
-        right_nodes: &'seed_lf [SeedNode<'alert_lf>],
+        left_nodes: &'seed_lf [SeedNode],
+        right_nodes: &'seed_lf [SeedNode],
         edge_config: &EdgeConfig,
         spatial_binner: &B,
         time_binner_width: MJDTT,
@@ -88,8 +88,8 @@ impl<'seed_lf, 'alert_lf> RuntimeGraph<'seed_lf, 'alert_lf> {
         )?;
 
         for edge in new_edges {
-            let from = edge.from.core.key;
-            let to = edge.to.core.key;
+            let from = edge.from.key();
+            let to = edge.to.key();
 
             *self.core.out_deg.entry(from).or_insert(0) += 1;
             *self.core.in_deg.entry(to).or_insert(0) += 1;

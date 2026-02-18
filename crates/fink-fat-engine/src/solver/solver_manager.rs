@@ -54,7 +54,7 @@
 use crate::{
     engine_config::solver_config::solver_policy::{SolverChoice, SolverPolicy, SolverRoutingMode},
     graph::RuntimeGraph,
-    pipeline::seed_store::SeedStore,
+    seeding::store::SeedStore,
     solver::{
         Solver, SolverOutput, bounded_beam::BoundedBeamSolver, components::ConnectedComponents,
     },
@@ -172,13 +172,13 @@ impl SolverManager {
     /// - Only the bounded beam solver is currently implemented here.
     /// - Other solver choices are placeholders.
     /// - The returned vector preserves plan order for reproducible downstream processing.
-    pub fn run_plan<'edge_lf, 'seed_lf, 'alert_lf>(
+    pub fn run_plan<'edge_lf, 'seed_lf>(
         &self,
-        comps: &'edge_lf ConnectedComponents<'edge_lf, 'seed_lf, 'alert_lf>,
-        graph: &'edge_lf RuntimeGraph<'seed_lf, 'alert_lf>,
-        _seed_store: &'seed_lf SeedStore<'alert_lf>,
+        comps: &'edge_lf ConnectedComponents<'edge_lf, 'seed_lf>,
+        graph: &'edge_lf RuntimeGraph<'seed_lf>,
+        _seed_store: &'seed_lf SeedStore,
         plan: &SolvePlan,
-    ) -> Vec<SolverOutput<'edge_lf, 'seed_lf, 'alert_lf>>
+    ) -> Vec<SolverOutput<'edge_lf, 'seed_lf>>
     where
         'edge_lf: 'seed_lf,
     {
@@ -186,7 +186,7 @@ impl SolverManager {
         // These can later become fields or be constructed lazily if needed.
         let bounded_beam = BoundedBeamSolver::default();
 
-        let mut outputs: Vec<SolverOutput<'edge_lf, 'seed_lf, 'alert_lf>> =
+        let mut outputs: Vec<SolverOutput<'edge_lf, 'seed_lf>> =
             Vec::with_capacity(plan.items.len());
 
         for item in &plan.items {

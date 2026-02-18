@@ -1,6 +1,8 @@
+use thiserror::Error;
+
 use crate::{alerts::{AlertKey, DiaSourceId}, night_id::NightId};
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Error)]
 pub enum InsertError {
     #[error(
         "Night mismatch: expected {expected:?}, found {found:?} at index {index} (dia_source_id: {dia_source_id})"

@@ -5,8 +5,6 @@ pub mod graph;
 pub mod layout;
 pub mod manifest;
 pub mod runtime_state;
-pub mod seed_node;
-pub mod seed_store;
 pub mod track_hypothesis;
 
 use std::fs;
@@ -14,7 +12,12 @@ use std::fs;
 use camino::Utf8PathBuf;
 
 use crate::{
-    Alert, alerts::{AlertSlice, store::AlertStore}, engine_config::EngineConfig, error::{EngineError, FinkFatError}, night_id::{NightId, PairingMode}, persistence::{
+    Alert,
+    alerts::{AlertSlice, store::AlertStore},
+    engine_config::EngineConfig,
+    error::{EngineError, FinkFatError},
+    night_id::{NightId, PairingMode},
+    persistence::{
         edge::{edge_journal::EdgeJournalStore, edge_op::EdgeOp},
         envelope::DiskEnvelope,
         error::{PersistenceError, PersistenceIoError},
@@ -22,9 +25,8 @@ use crate::{
         layout::PersistenceLayout,
         manifest::{Manifest, NightManifestEntry},
         runtime_state::RuntimeState,
-        seed_node::{SeedNodeOwned, SeedNodeOwnedSlice},
-        seed_store::SeedStoreOwned,
-    }
+    },
+    seeding::{SeedNode, SeedNodeSlice, store::SeedStore},
 };
 
 /// Alert store schema version.
@@ -110,7 +112,7 @@ impl PersistenceManager {
         night_id: NightId,
         created_unix_s: i64,
         alerts: &[Alert],
-        seeds: &[SeedNodeOwned],
+        seeds: &[SeedNode],
     ) -> Result<(), PersistenceIoError> {
         let abs_alert_path = alerts.save_alerts_night(&self.layout, manifest, night_id)?;
         let abs_seed_path = seeds.save_seeds_night(&self.layout, manifest, night_id)?;
@@ -145,9 +147,9 @@ impl PersistenceManager {
     pub fn load_seeds_for_night(
         &self,
         relpath: &Utf8PathBuf,
-    ) -> Result<Vec<SeedNodeOwned>, PersistenceIoError> {
+    ) -> Result<Vec<SeedNode>, PersistenceIoError> {
         let path = self.layout.resolve_relative(relpath);
-        DiskEnvelope::<Vec<SeedNodeOwned>>::load_enveloped(&path, SEED_STORE_SCHEMA_VERSION)
+        DiskEnvelope::<Vec<SeedNode>>::load_enveloped(&path, SEED_STORE_SCHEMA_VERSION)
     }
 
     // -------------------------------------------------------------------------
@@ -190,12 +192,12 @@ impl PersistenceManager {
         }
 
         // 2) Load seeds owned then convert to borrowed into runtime SeedStore
-        let mut seed_store: SeedStoreOwned = SeedStoreOwned::new();
+        let mut seed_store: SeedStore = SeedStore::new();
 
         nights_to_load.iter().try_for_each(|entry| {
             self.load_seeds_for_night(&entry.seeds_rel_path().to_path_buf())
                 .map(|payload| {
-                    seed_store.insert(entry.night_id, payload);
+                    seed_store.insert_vec_seed(entry.night_id, payload);
                 })
         })?;
 
@@ -226,7 +228,7 @@ impl PersistenceManager {
         night_id: NightId,
         created_unix_s: i64,
         alerts: Vec<Alert>,
-        seeds: Vec<SeedNodeOwned>,
+        seeds: Vec<SeedNode>,
         edge_ops: Vec<EdgeOp>,
     ) -> Result<Manifest, EngineError> {
         // 1) write alerts + seeds

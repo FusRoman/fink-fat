@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     graph::edge::{Edge, EdgeCore},
-    persistence::{error::BorrowError, seed_node::SeedKey},
-    pipeline::seed_store::SeedStore,
+    persistence::error::BorrowError,
+    seeding::{SeedKey, store::SeedStore},
 };
 
 /// Stable identity for an edge in the persisted graph.
@@ -40,15 +40,12 @@ pub struct EdgeOwned {
 }
 
 impl EdgeOwned {
-    pub fn to_borrowed<'seed, 'alert>(
-        &self,
-        seeds: &'seed SeedStore<'alert>,
-    ) -> Result<Edge<'seed, 'alert>, BorrowError> {
+    pub fn to_borrowed<'seed>(&self, seeds: &'seed SeedStore) -> Result<Edge<'seed>, BorrowError> {
         let from = seeds
-            .get_by_key(self.from)
+            .try_get_seed(self.from)
             .ok_or_else(|| BorrowError::MissingSeed(self.from))?;
         let to = seeds
-            .get_by_key(self.to)
+            .try_get_seed(self.to)
             .ok_or_else(|| BorrowError::MissingSeed(self.to))?;
 
         Ok(Edge {

@@ -110,7 +110,7 @@ use crate::{
         progress_sink::ProgressSink,
         stages::{PipelineStage, run_stage},
     },
-    seeding::{SeedNode, pairs, triplets},
+    seeding::{pairs, triplets},
     spacetime_bucket::{
         bucket::build_alert_bucket_index, healpix_binner::HealpixBinner,
         uniform_time_binner::UniformTimeBinner,
@@ -269,7 +269,12 @@ pub fn run(
                     pairs::generate_pairs(&bucket_index, &spatial_binner, &time_binner, pair_cfg);
                 total_pairs += ps.len() as u64;
 
-                let pair_seeds = pairs::extract_pair_features(&ps, night_id, None);
+                let pair_seeds = pairs::extract_pair_features(
+                    &ps,
+                    &mut ctx.runtime_state.seed_store,
+                    night_id,
+                    None,
+                );
                 night_sink.inc(1);
 
                 // 4.4) Generate triplets + extract features (borrowed).
@@ -282,22 +287,25 @@ pub fn run(
                 );
                 total_triplets += ts.len() as u64;
 
-                let triplets_seeds: Vec<SeedNode<'_>> =
-                    triplets::extract_triplet_features(&ts, night_id);
+                let triplets_seeds = triplets::extract_triplet_features(
+                    &ts,
+                    &mut ctx.runtime_state.seed_store,
+                    night_id,
+                );
                 night_sink.inc(1);
 
                 // 4.5) Convert to owned + sort + store.
                 // sort is important for the edge builder as it relies on the right nodes to be sorted by epoch_mid for efficient edge generation.
                 // a dichotomic search is performed to find the relevant right nodes, and if they are not sorted by epoch_mid, we would need to sort them at each iteration of the edge builder, which would be very costly.
-                let mut all_seeds: Vec<SeedNode<'_>> =
-                    Vec::with_capacity(pair_seeds.len() + triplets_seeds.len());
+                let mut all_seeds = Vec::with_capacity(pair_seeds.len() + triplets_seeds.len());
                 all_seeds.extend(pair_seeds);
                 all_seeds.extend(triplets_seeds);
                 all_seeds.sort();
-                let owned_seeds = all_seeds.iter().map(|s| s.to_owned()).collect::<Vec<_>>();
-                total_seeds += owned_seeds.len() as u64;
+                total_seeds += all_seeds.len() as u64;
 
-                ctx.runtime_state.seed_store.insert(night_id, owned_seeds);
+                ctx.runtime_state
+                    .seed_store
+                    .insert_vec_seed(night_id, all_seeds);
                 night_sink.inc(1);
 
                 night_sink.finish();

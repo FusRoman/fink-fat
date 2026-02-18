@@ -95,6 +95,7 @@
 //! - `union_find::UnionFind` for connectivity.
 //! - `solver_manager::SolverPolicy` for solver routing heuristics.
 
+pub mod error;
 pub mod seed_index;
 pub mod union_find;
 
@@ -104,10 +105,10 @@ use crate::{
     engine_config::solver_config::solver_policy::{SolverChoice, SolverPolicy, SolverRoutingMode},
     graph::{RuntimeGraph, edge::Edge},
     night_id::NightId,
-    persistence::seed_node::SeedKey,
-    pipeline::seed_store::SeedStore,
-    seeding::SeedNode,
-    solver::components::{seed_index::SeedGlobalIndex, union_find::UnionFind},
+    seeding::{SeedKey, SeedNode, store::SeedStore},
+    solver::components::{
+        error::ComponentError, seed_index::SeedGlobalIndex, union_find::UnionFind,
+    },
 };
 
 /// Dense identifier for a connected component.
@@ -121,7 +122,7 @@ pub type ComponentId = u32;
 /// Layout
 /// ------
 /// `component_ref[cid]` is the list of nodes belonging to component `cid`.
-pub type ComponentRef<'seed_lf, 'alert_lf> = Vec<Vec<&'seed_lf SeedNode<'alert_lf>>>;
+pub type ComponentRef<'seed_lf> = Vec<Vec<&'seed_lf SeedNode>>;
 
 /// Night bounds per component.
 ///
@@ -140,7 +141,7 @@ pub type LocalIdx = u32;
 /// Lifetime
 /// --------
 /// `'edge_lf` ties this reference to the lifetime of the `RuntimeGraph`.
-pub type EdgeRef<'edge_lf, 'seed_lf, 'alert_lf> = &'edge_lf Edge<'seed_lf, 'alert_lf>;
+pub type EdgeRef<'edge_lf, 'seed_lf> = &'edge_lf Edge<'seed_lf>;
 
 /// Per-component directed adjacency (restricted to the component nodes).
 ///
@@ -148,8 +149,7 @@ pub type EdgeRef<'edge_lf, 'seed_lf, 'alert_lf> = &'edge_lf Edge<'seed_lf, 'aler
 /// ------
 /// `component_out[cid][local_u] = Vec<EdgeRef>` lists outgoing edges from `local_u`
 /// that stay inside the same component.
-pub type ComponentOut<'edge_lf, 'seed_lf, 'alert_lf> =
-    Vec<Vec<Vec<EdgeRef<'edge_lf, 'seed_lf, 'alert_lf>>>>;
+pub type ComponentOut<'edge_lf, 'seed_lf> = Vec<Vec<Vec<EdgeRef<'edge_lf, 'seed_lf>>>>;
 
 /// Local degrees in the restricted directed subgraph.
 ///
@@ -158,6 +158,22 @@ pub type ComponentOut<'edge_lf, 'seed_lf, 'alert_lf> =
 /// `component_in_deg_local[cid][local_u]` = in-degree of `local_u` within the restricted subgraph.
 /// `component_out_deg_local[cid][local_u]` = out-degree of `local_u` within the restricted subgraph.
 pub type ComponentDegLocal = Vec<Vec<u32>>;
+
+/// Precomputed local sources and sinks per component.
+type ComponentData<'seed_lf> = (
+    ComponentRef<'seed_lf>,
+    ComponentNightBound,
+    AHashMap<SeedKey, (ComponentId, LocalIdx)>,
+);
+
+/// Return type of `build_local_digraph()`.
+type ComponentGraphData<'edge_lf, 'seed_lf> = (
+    ComponentOut<'edge_lf, 'seed_lf>,
+    ComponentDegLocal,
+    ComponentDegLocal,
+    Vec<Vec<LocalIdx>>,
+    Vec<Vec<LocalIdx>>,
+);
 
 /// Connected components plus per-component restricted directed adjacency.
 ///
@@ -189,7 +205,7 @@ pub type ComponentDegLocal = Vec<Vec<u32>>;
 /// - the `RuntimeGraph` used to build this object must outlive it (`'edge_lf`),
 /// - the `SeedStore` / `SeedNode` references must outlive it (`'seed_lf`, `'alert_lf`).
 #[derive(Debug, Clone)]
-pub struct ConnectedComponents<'edge_lf, 'seed_lf, 'alert_lf> {
+pub struct ConnectedComponents<'edge_lf, 'seed_lf> {
     /// Dense global seed index (SeedKey <-> global_idx).
     index: SeedGlobalIndex,
 
@@ -204,7 +220,7 @@ pub struct ConnectedComponents<'edge_lf, 'seed_lf, 'alert_lf> {
     pub n_components: u32,
 
     /// Nodes of each component as borrowed references.
-    component_ref: ComponentRef<'seed_lf, 'alert_lf>,
+    component_ref: ComponentRef<'seed_lf>,
 
     /// Night bounds per component (min,max).
     component_night_bound: ComponentNightBound,
@@ -224,7 +240,7 @@ pub struct ConnectedComponents<'edge_lf, 'seed_lf, 'alert_lf> {
     /// - whose `to` is also in the same component `cid`,
     /// - included only if allowed by `active_only` at `compute()` time,
     /// - and satisfying the time-forward guard `night(to) > night(from)`.
-    component_out: ComponentOut<'edge_lf, 'seed_lf, 'alert_lf>,
+    component_out: ComponentOut<'edge_lf, 'seed_lf>,
 
     /// Local in-degree per node inside the restricted directed subgraph.
     component_in_deg_local: ComponentDegLocal,
@@ -254,7 +270,7 @@ pub struct ConnectedComponents<'edge_lf, 'seed_lf, 'alert_lf> {
     component_sinks_local: Vec<Vec<LocalIdx>>,
 }
 
-impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'alert_lf> {
+impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
     /// Compute connected components and build per-component restricted directed adjacency.
     ///
     /// This is the main entrypoint that materializes both:
@@ -308,27 +324,32 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
     /// - The directed adjacency enforces `night(to) > night(from)` defensively.
     /// - Component ids are dense and stable for the duration of this object.
     pub fn compute(
-        seed_store: &'seed_lf SeedStore<'alert_lf>,
-        graph: &'edge_lf RuntimeGraph<'seed_lf, 'alert_lf>,
+        seed_store: &'seed_lf SeedStore,
+        graph: &'edge_lf RuntimeGraph<'seed_lf>,
         active_only: bool,
-    ) -> Self {
-        let index = SeedGlobalIndex::build(seed_store);
+    ) -> Result<Self, ComponentError> {
+        let index = SeedGlobalIndex::build(seed_store)?;
         let n_total = index.n_total();
 
         // 1) Union-Find over the undirected view of the graph.
         let mut uf = UnionFind::new(n_total);
-        Self::union_edges(&index, &mut uf, &graph.edges, active_only);
+        Self::union_edges(seed_store, &index, &mut uf, &graph.edges, active_only)?;
 
         // 2) Assign dense component ids.
         let (comp_of_node, n_components) = Self::dense_components(&mut uf, n_total);
 
         // 3) Count active intra-component edges for diagnostics and policies.
-        let component_active_edge =
-            Self::count_active_intra_edges(&index, &graph.edges, &comp_of_node, n_components);
+        let component_active_edge = Self::count_active_intra_edges(
+            seed_store,
+            &index,
+            &graph.edges,
+            &comp_of_node,
+            n_components,
+        )?;
 
         // 4) Materialize component membership lists and per-component bounds.
         let (component_ref, component_night_bound, local_of_key) =
-            Self::build_refs_bounds_and_local_map(seed_store, &index, &comp_of_node, n_components);
+            Self::build_refs_bounds_and_local_map(seed_store, &index, &comp_of_node, n_components)?;
 
         // 5) Build the restricted directed subgraph per component.
         let (
@@ -338,6 +359,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
             component_sources_local,
             component_sinks_local,
         ) = Self::build_local_digraph(
+            seed_store,
             graph,
             active_only,
             n_components,
@@ -345,9 +367,9 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
             &local_of_key,
             &comp_of_node,
             &index,
-        );
+        )?;
 
-        Self {
+        Ok(Self {
             index,
             comp_of_node,
             n_components: n_components as u32,
@@ -360,7 +382,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
             component_out_deg_local,
             component_sources_local,
             component_sinks_local,
-        }
+        })
     }
 
     // -------------------------------------------------------------------------
@@ -383,15 +405,23 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
     /// -----
     /// - This step groups together nodes that are connected by at least one edge,
     ///   regardless of direction.
-    fn union_edges(index: &SeedGlobalIndex, uf: &mut UnionFind, edges: &[Edge], active_only: bool) {
+    fn union_edges(
+        seed_store: &'seed_lf SeedStore,
+        index: &SeedGlobalIndex,
+        uf: &mut UnionFind,
+        edges: &[Edge],
+        active_only: bool,
+    ) -> Result<(), ComponentError> {
         for e in edges {
             if active_only && !e.core.active {
                 continue;
             }
-            let u = index.idx_of_key(e.from.core.key);
-            let v = index.idx_of_key(e.to.core.key);
+            let u = index.idx_of_key(seed_store, e.from.key())?;
+
+            let v = index.idx_of_key(seed_store, e.to.key())?;
             uf.union(u, v);
         }
+        Ok(())
     }
 
     /// Assign dense component ids to Union-Find roots.
@@ -451,19 +481,20 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
     /// -----
     /// - This function counts active edges only, independent of `active_only`.
     fn count_active_intra_edges(
+        seed_store: &'seed_lf SeedStore,
         index: &SeedGlobalIndex,
         edges: &[Edge],
         comp_of_node: &[ComponentId],
         n_components: usize,
-    ) -> Vec<u32> {
+    ) -> Result<Vec<u32>, ComponentError> {
         let mut counts = vec![0u32; n_components];
 
         for e in edges {
             if !e.core.active {
                 continue;
             }
-            let u = index.idx_of_key(e.from.core.key);
-            let v = index.idx_of_key(e.to.core.key);
+            let u = index.idx_of_key(seed_store, e.from.key())?;
+            let v = index.idx_of_key(seed_store, e.to.key())?;
 
             let cu = comp_of_node[u];
             let cv = comp_of_node[v];
@@ -472,7 +503,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
             }
         }
 
-        counts
+        Ok(counts)
     }
 
     // -------------------------------------------------------------------------
@@ -502,22 +533,18 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
     /// - `local_of_key` is used later to map edge endpoints to component-local indices.
     /// - The order of nodes in each component is the iteration order of `seed_store.iter()`.
     fn build_refs_bounds_and_local_map(
-        seed_store: &'seed_lf SeedStore<'alert_lf>,
+        seed_store: &'seed_lf SeedStore,
         index: &SeedGlobalIndex,
         comp_of_node: &[ComponentId],
         n_components: usize,
-    ) -> (
-        ComponentRef<'seed_lf, 'alert_lf>,
-        ComponentNightBound,
-        AHashMap<SeedKey, (ComponentId, LocalIdx)>,
-    ) {
+    ) -> Result<ComponentData<'seed_lf>, ComponentError> {
         // Pre-compute component sizes to reserve capacity in `component_ref`.
         let mut sizes = vec![0u32; n_components];
         for &cid in comp_of_node {
             sizes[cid as usize] += 1;
         }
 
-        let mut component_ref: ComponentRef<'seed_lf, 'alert_lf> = (0..n_components)
+        let mut component_ref: ComponentRef<'seed_lf> = (0..n_components)
             .map(|cid| Vec::with_capacity(sizes[cid] as usize))
             .collect();
 
@@ -530,12 +557,12 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
 
         for (night_id, seeds) in seed_store.iter() {
             for seed in seeds {
-                let gid = index.idx_of_key(seed.core.key);
+                let gid = index.idx_of_key(seed_store, seed.key())?;
                 let cid = comp_of_node[gid] as usize;
 
                 let local_idx = component_ref[cid].len() as u32;
                 component_ref[cid].push(seed);
-                local_of_key.insert(seed.core.key, (cid as u32, local_idx));
+                local_of_key.insert(seed.key(), (cid as u32, local_idx));
 
                 min_night[cid] = Some(match min_night[cid] {
                     None => *night_id,
@@ -555,7 +582,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
             })
             .collect();
 
-        (component_ref, component_night_bound, local_of_key)
+        Ok((component_ref, component_night_bound, local_of_key))
     }
 
     // -------------------------------------------------------------------------
@@ -588,22 +615,17 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
     /// - Enforces time-forward edges (`night(to) > night(from)`); back-edges are ignored.
     /// - Uses `graph.core.out_deg` as a best-effort capacity hint for adjacency allocation.
     fn build_local_digraph(
-        graph: &'edge_lf RuntimeGraph<'seed_lf, 'alert_lf>,
+        seed_store: &'seed_lf SeedStore,
+        graph: &'edge_lf RuntimeGraph<'seed_lf>,
         active_only: bool,
         n_components: usize,
-        component_ref: &ComponentRef<'seed_lf, 'alert_lf>,
+        component_ref: &ComponentRef<'seed_lf>,
         local_of_key: &AHashMap<SeedKey, (ComponentId, LocalIdx)>,
         comp_of_node: &[ComponentId],
         index: &SeedGlobalIndex,
-    ) -> (
-        ComponentOut<'edge_lf, 'seed_lf, 'alert_lf>,
-        ComponentDegLocal,
-        ComponentDegLocal,
-        Vec<Vec<LocalIdx>>,
-        Vec<Vec<LocalIdx>>,
-    ) {
+    ) -> Result<ComponentGraphData<'edge_lf, 'seed_lf>, ComponentError> {
         // Allocate per-component adjacency and degree arrays in component-local space.
-        let mut component_out: ComponentOut<'edge_lf, 'seed_lf, 'alert_lf> = (0..n_components)
+        let mut component_out: ComponentOut<'edge_lf, 'seed_lf> = (0..n_components)
             .map(|cid| {
                 let n = component_ref[cid].len();
                 (0..n).map(|_| Vec::new()).collect::<Vec<_>>()
@@ -622,7 +644,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
         // global out-degree is an upper bound for intra-component out-degree.
         for cid in 0..n_components {
             for (lu, node) in component_ref[cid].iter().enumerate() {
-                let key = node.core.key;
+                let key = node.key();
                 let cap = graph.core.out_deg.get(&key).copied().unwrap_or(0);
                 component_out[cid][lu].reserve(cap.min(64));
             }
@@ -636,15 +658,15 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
             }
 
             // Enforce time-forward structure.
-            let n0 = e.from.core.night_id().value();
-            let n1 = e.to.core.night_id().value();
+            let n0 = e.from.night_id().value();
+            let n1 = e.to.night_id().value();
             if n1 <= n0 {
                 continue;
             }
 
             // Fast component check in global index space.
-            let u_gid = index.idx_of_key(e.from.core.key);
-            let v_gid = index.idx_of_key(e.to.core.key);
+            let u_gid = index.idx_of_key(seed_store, e.from.key())?;
+            let v_gid = index.idx_of_key(seed_store, e.to.key())?;
             let cu = comp_of_node[u_gid];
             let cv = comp_of_node[v_gid];
             if cu != cv {
@@ -652,10 +674,10 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
             }
 
             // Convert endpoints to component-local indices using `local_of_key`.
-            let Some(&(cid_u, lu)) = local_of_key.get(&e.from.core.key) else {
+            let Some(&(cid_u, lu)) = local_of_key.get(&e.from.key()) else {
                 continue;
             };
-            let Some(&(_, lv)) = local_of_key.get(&e.to.core.key) else {
+            let Some(&(_, lv)) = local_of_key.get(&e.to.key()) else {
                 continue;
             };
             debug_assert_eq!(cid_u, cu);
@@ -709,13 +731,13 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
             sinks_local.push(snks);
         }
 
-        (
+        Ok((
             component_out,
             in_deg_local,
             out_deg_local,
             sources_local,
             sinks_local,
-        )
+        ))
     }
 
     // -------------------------------------------------------------------------
@@ -731,9 +753,13 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
     /// Return
     /// ------
     /// Component id containing this seed.
-    pub fn component_id_of_seed(&self, seed_key: SeedKey) -> ComponentId {
-        let gid = self.index.idx_of_key(seed_key);
-        self.comp_of_node[gid]
+    pub fn component_id_of_seed(
+        &self,
+        seed_store: &SeedStore,
+        seed_key: SeedKey,
+    ) -> Result<ComponentId, ComponentError> {
+        let gid = self.index.idx_of_key(seed_store, seed_key)?;
+        Ok(self.comp_of_node[gid])
     }
 
     /// Return the nodes of a component as borrowed references.
@@ -745,7 +771,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
     /// Return
     /// ------
     /// Slice of nodes in this component in component-local order.
-    pub fn component_nodes(&self, component_id: ComponentId) -> &[&SeedNode<'alert_lf>] {
+    pub fn component_nodes(&self, component_id: ComponentId) -> &[&SeedNode] {
         &self.component_ref[component_id as usize]
     }
 
@@ -821,7 +847,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf, 'ale
     pub fn component_out_edges(
         &self,
         component_id: ComponentId,
-    ) -> &[Vec<EdgeRef<'edge_lf, 'seed_lf, 'alert_lf>>] {
+    ) -> &[Vec<EdgeRef<'edge_lf, 'seed_lf>>] {
         &self.component_out[component_id as usize]
     }
 

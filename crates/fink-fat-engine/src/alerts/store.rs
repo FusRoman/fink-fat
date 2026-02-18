@@ -1484,8 +1484,6 @@ mod alert_store_tests {
         fn night_window_iter_batch_partial_range() {
             let store = make_multi_night_store();
 
-            println!("{:?}", store.nights().collect::<Vec<_>>());
-
             // Batch mode: [100, 102]
             // Available: 100, 101 (103, 105 are outside)
             // Right = 101 (latest in range)
@@ -1590,11 +1588,7 @@ mod alert_store_tests {
                 end: nid(105),
             };
 
-            println!("{:?}", store.nights().collect::<Vec<_>>());
-
             let mut collected: Vec<_> = store.night_window_iter(mode).collect();
-
-            println!("{:?}", collected);
 
             collected.sort_by_key(|(night, _)| *night);
 

@@ -6,6 +6,7 @@ use crate::{
     graph::edge::error::EdgeBuilderError,
     persistence::error::{PersistenceError, PersistenceIoError},
     pipeline::stages::PipelineStage,
+    solver::components::error::ComponentError,
 };
 
 #[derive(Debug, Error)]
@@ -149,6 +150,10 @@ pub enum EngineError {
     /// Generic engine error (if you already use `FinkFatError` as a top-level error).
     #[error(transparent)]
     FinkFat(#[from] FinkFatError),
+
+    /// Component error
+    #[error(transparent)]
+    Component(#[from] ComponentError),
 }
 
 impl From<PersistenceIoError> for EngineError {

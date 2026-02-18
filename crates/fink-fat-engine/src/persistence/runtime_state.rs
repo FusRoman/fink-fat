@@ -1,7 +1,8 @@
 use crate::{
-    alerts::store::AlertStore, engine_config::EngineConfig, graph::edge::edge_prediction::EdgeRankingModelPool, night_id::PairingMode, persistence::{error::PersistenceError, graph::GraphOwned, manifest::Manifest,
-        seed_store::SeedStoreOwned,
-    }, pipeline::fink_fat::FinkFat
+    alerts::store::AlertStore,
+    night_id::PairingMode,
+    persistence::{graph::GraphOwned, manifest::Manifest},
+    seeding::store::SeedStore,
 };
 
 /// Loaded runtime state built from persisted artifacts.
@@ -19,42 +20,6 @@ pub struct RuntimeState {
     pub manifest: Manifest,
     pub window: Option<PairingMode>,
     pub alert_store: AlertStore,
-    pub seed_store: SeedStoreOwned,
+    pub seed_store: SeedStore,
     pub graph: GraphOwned,
-}
-
-impl RuntimeState {
-    /// Build borrowed runtime views and run a closure with a temporary `FinkFat`.
-    ///
-    /// This avoids self-referential structs:
-    /// - `RuntimeState` owns persisted payloads (`AlertStore`, `SeedStoreOwned`, `GraphOwned`)
-    /// - we build borrowed views (`SeedStore<'alert>`, `InterNightGraph<'seed,'alert>`)
-    /// - we instantiate `FinkFat` only for the duration of `f`.
-    ///
-    /// Notes
-    /// -----
-    /// - The returned `FinkFat` **must not escape** the closure: it contains borrows
-    ///   tied to `self`.
-    pub fn with_borrowed<R>(
-        &self,
-        engine_config: EngineConfig,
-        edge_ranking_models: EdgeRankingModelPool,
-        f: impl for<'seed_lf, 'alert_lf> FnOnce(FinkFat<'seed_lf, 'alert_lf>) -> R,
-    ) -> Result<R, PersistenceError> {
-        let alert_store = &self.alert_store;
-
-        let seed_store = self.seed_store.to_borrowed(alert_store)?;
-
-        let graph = self.graph.to_borrowed(&seed_store)?;
-
-        let ff = FinkFat::from_parts(
-            engine_config,
-            edge_ranking_models,
-            alert_store,
-            &seed_store,
-            graph,
-        );
-
-        Ok(f(ff))
-    }
 }

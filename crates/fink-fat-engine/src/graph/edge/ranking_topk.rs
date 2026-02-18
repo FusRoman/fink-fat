@@ -67,13 +67,13 @@ use crate::seeding::seed_spatial_index::SeedSpatialIndex;
 /// - We store `edge_cost` because it is computed from features; computing it
 ///   later would require recomputing features (expensive).
 #[derive(Debug)]
-struct TopKItem<'seed_lf, 'alert_lf> {
+struct TopKItem<'seed_lf> {
     proba: f32,
-    to: &'seed_lf SeedNode<'alert_lf>,
+    to: &'seed_lf SeedNode,
     edge_cost: f64,
 }
 
-impl<'seed_lf, 'alert_lf> PartialEq for TopKItem<'seed_lf, 'alert_lf> {
+impl<'seed_lf> PartialEq for TopKItem<'seed_lf> {
     /// Equality is based on raw float bits to avoid NaN corner cases.
     ///
     /// Using `to_bits()` makes equality:
@@ -85,9 +85,9 @@ impl<'seed_lf, 'alert_lf> PartialEq for TopKItem<'seed_lf, 'alert_lf> {
     }
 }
 
-impl<'seed_lf, 'alert_lf> Eq for TopKItem<'seed_lf, 'alert_lf> {}
+impl<'seed_lf> Eq for TopKItem<'seed_lf> {}
 
-impl<'seed_lf, 'alert_lf> PartialOrd for TopKItem<'seed_lf, 'alert_lf> {
+impl<'seed_lf> PartialOrd for TopKItem<'seed_lf> {
     /// Partial ordering used by `BinaryHeap`.
     ///
     /// We reverse the comparison so that Rust's max-heap `BinaryHeap` behaves
@@ -99,7 +99,7 @@ impl<'seed_lf, 'alert_lf> PartialOrd for TopKItem<'seed_lf, 'alert_lf> {
     }
 }
 
-impl<'seed_lf, 'alert_lf> Ord for TopKItem<'seed_lf, 'alert_lf> {
+impl<'seed_lf> Ord for TopKItem<'seed_lf> {
     /// Total ordering for heap operations.
     ///
     /// `total_cmp` provides a total float order (handles NaNs deterministically).
@@ -130,12 +130,12 @@ impl<'seed_lf, 'alert_lf> Ord for TopKItem<'seed_lf, 'alert_lf> {
 /// - When `k == 0`, the structure keeps nothing.
 /// - Capacity is set to `k + 1` (saturated) to reduce reallocations.
 #[derive(Debug)]
-struct TopK<'seed_lf, 'alert_lf> {
+struct TopK<'seed_lf> {
     k: usize,
-    heap: BinaryHeap<TopKItem<'seed_lf, 'alert_lf>>,
+    heap: BinaryHeap<TopKItem<'seed_lf>>,
 }
 
-impl<'seed_lf, 'alert_lf> TopK<'seed_lf, 'alert_lf> {
+impl<'seed_lf> TopK<'seed_lf> {
     /// Create an empty Top-K container.
     ///
     /// Arguments
@@ -194,7 +194,7 @@ impl<'seed_lf, 'alert_lf> TopK<'seed_lf, 'alert_lf> {
     /// -----
     /// This is the core "pruning" operation and is designed to be very cheap.
     #[inline]
-    fn push(&mut self, item: TopKItem<'seed_lf, 'alert_lf>) {
+    fn push(&mut self, item: TopKItem<'seed_lf>) {
         if self.k == 0 {
             return;
         }
@@ -231,7 +231,7 @@ impl<'seed_lf, 'alert_lf> TopK<'seed_lf, 'alert_lf> {
     /// -----
     /// Popping from the heap does not guarantee sorted order, so we explicitly
     /// sort the resulting vector.
-    fn into_sorted_desc(mut self) -> Vec<TopKItem<'seed_lf, 'alert_lf>> {
+    fn into_sorted_desc(mut self) -> Vec<TopKItem<'seed_lf>> {
         let mut out = Vec::with_capacity(self.heap.len());
         while let Some(it) = self.heap.pop() {
             out.push(it);
@@ -274,11 +274,11 @@ impl<'seed_lf, 'alert_lf> TopK<'seed_lf, 'alert_lf> {
 /// We compute `edge_cost` only for candidates that pass the current threshold.
 /// That avoids wasting work when Top-K is already "tight".
 #[inline]
-fn flush_batch<'seed_lf, 'alert_lf>(
+fn flush_batch<'seed_lf>(
     model: &mut EdgeRankingModel,
-    top: &mut TopK<'seed_lf, 'alert_lf>,
+    top: &mut TopK<'seed_lf>,
     batch_features: &mut Vec<EdgeFeatures>,
-    batch_to: &mut Vec<&'seed_lf SeedNode<'alert_lf>>,
+    batch_to: &mut Vec<&'seed_lf SeedNode>,
 ) -> Result<(), EdgeModelError> {
     if batch_features.is_empty() {
         // Nothing to do (and ensures batch_to is also empty in normal usage).
@@ -351,14 +351,14 @@ fn flush_batch<'seed_lf, 'alert_lf>(
 ///   does not matter because we keep Top-K.
 /// - `EdgeRankingModel::predict_positive_proba` preserves the input row order.
 /// - The model score `proba` is comparable across candidates for the same `src`.
-pub fn rank_topk_edges_for_left<'seed_lf, 'alert_lf>(
-    src: &'seed_lf SeedNode<'alert_lf>,
-    right_index: &SeedSpatialIndex<'seed_lf, '_, 'alert_lf>,
+pub fn rank_topk_edges_for_left<'seed_lf>(
+    src: &'seed_lf SeedNode,
+    right_index: &SeedSpatialIndex<'seed_lf, '_>,
     edge_config: &EdgeConfig,
     model: &mut EdgeRankingModel,
     topk: usize,
     batch_size: usize,
-    out: &mut SmallVec<[(&'seed_lf SeedNode<'alert_lf>, f64); 32]>,
+    out: &mut SmallVec<[(&'seed_lf SeedNode, f64); 32]>,
 ) -> Result<(), EdgeModelError> {
     // Output is provided by caller to avoid allocations in hot paths.
     out.clear();
@@ -367,11 +367,11 @@ pub fn rank_topk_edges_for_left<'seed_lf, 'alert_lf>(
     let batch_size = batch_size.max(1);
 
     // Fixed-capacity Top-K structure (stores only the best candidates).
-    let mut top: TopK<'seed_lf, 'alert_lf> = TopK::new(topk);
+    let mut top: TopK<'seed_lf> = TopK::new(topk);
 
     // Batch buffers reused across flushes.
     let mut batch_features: Vec<EdgeFeatures> = Vec::with_capacity(batch_size);
-    let mut batch_to: Vec<&'seed_lf SeedNode<'alert_lf>> = Vec::with_capacity(batch_size);
+    let mut batch_to: Vec<&'seed_lf SeedNode> = Vec::with_capacity(batch_size);
     // Generate candidate right nodes and batch them for ONNX inference.
     for to in src.seed_edge_candidates(right_index, edge_config) {
         // Compute structured features (expensive-ish but pure).
