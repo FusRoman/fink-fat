@@ -55,7 +55,7 @@ use crate::{
     engine_config::triplet_config::TripletConfig,
     night_id::NightId,
     persistence::seed_node::SeedKey,
-    seeding::{pairs::Pair, seed_node::SeedNode},
+    seeding::{SeedNode, pairs::Pair},
     spacetime_bucket::{
         bucket::{BucketIndex, BucketKey},
         spatial_binner::{SpatialBinner, SpatialKey},

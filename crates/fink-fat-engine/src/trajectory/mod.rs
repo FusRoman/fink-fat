@@ -2,7 +2,7 @@ pub mod track_id;
 
 use crate::{
     graph::edge::Edge,
-    seeding::seed_node::SeedNode,
+    seeding::SeedNode,
     trajectory::track_id::{TrackId, track_id_from_nodes},
 };
 

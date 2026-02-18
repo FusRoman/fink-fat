@@ -32,9 +32,7 @@
 //
 // -----------------------------------------------------------------------------
 
-use crate::{
-    astro_math::trace_2x2, graph::edge::feature_core::FeatureCore, seeding::seed_node::SeedNode,
-};
+use crate::{astro_math::trace_2x2, graph::edge::feature_core::FeatureCore, seeding::SeedNode};
 
 /// Uncertainty/quality ratios (dimensionless).
 ///

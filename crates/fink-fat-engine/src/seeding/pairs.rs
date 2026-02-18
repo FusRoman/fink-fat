@@ -63,7 +63,7 @@ use crate::{
     engine_config::pair_config::PairConfig,
     night_id::NightId,
     persistence::seed_node::SeedKey,
-    seeding::seed_node::SeedNode,
+    seeding::SeedNode,
     spacetime_bucket::{
         bucket::{BucketIndex, BucketKey},
         spatial_binner::{SpatialBinner, SpatialKey},

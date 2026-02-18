@@ -8,7 +8,7 @@ use crate::{
     graph::edge::{Edge, edge_prediction::EdgeRankingModelPool, error::EdgeBuilderError},
     persistence::{graph::GraphOwned, seed_node::SeedKey},
     pipeline::progress_sink::ProgressSink,
-    seeding::seed_node::SeedNode,
+    seeding::SeedNode,
     spacetime_bucket::spatial_binner::SpatialBinner,
 };
 

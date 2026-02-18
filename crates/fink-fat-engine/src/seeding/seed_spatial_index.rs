@@ -54,7 +54,7 @@ use ahash::{AHashMap, AHashSet};
 
 use crate::{
     MJDTT, Radian,
-    seeding::seed_node::SeedNode,
+    seeding::SeedNode,
     spacetime_bucket::{
         bucket::{Bucket, BucketIndex, BucketKey},
         spatial_binner::{SpatialBinner, SpatialKey},
@@ -243,7 +243,7 @@ mod seed_spatial_index_tests {
         night_id::NightId,
         persistence::seed_node::SeedKey,
         seeding::{
-            seed_node::{SeedNode, SeedNodeCore},
+            SeedNode, SeedNodeCore,
             tangent_plane::{TangentCenter, TangentPlaneModel},
         },
         spacetime_bucket::{

@@ -90,7 +90,7 @@ use crate::{
         seed_node::{SeedKey, SeedNodeOwned},
         seed_store::SeedStoreOwned,
     },
-    seeding::seed_node::SeedNode,
+    seeding::SeedNode,
     solver::components::seed_index::SeedGlobalIndex,
 };
 

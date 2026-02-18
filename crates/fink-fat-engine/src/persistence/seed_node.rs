@@ -10,7 +10,7 @@ use crate::{
         error::{BorrowError, PersistenceIoError},
         layout::PersistenceLayout,
         manifest::Manifest,
-    }, seeding::seed_node::{SeedNode, SeedNodeCore}
+    }, seeding::{SeedNode, SeedNodeCore}
 };
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Default)]

@@ -166,7 +166,7 @@ use crate::{
     },
     persistence::edge::EdgeOwned,
     pipeline::progress_sink::ProgressSink,
-    seeding::{seed_node::SeedNode, seed_spatial_index::SeedSpatialIndex},
+    seeding::{SeedNode, seed_spatial_index::SeedSpatialIndex},
     spacetime_bucket::{spatial_binner::SpatialBinner, uniform_time_binner::UniformTimeBinner},
 };
 

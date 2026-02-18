@@ -121,7 +121,7 @@ use std::hash::{Hash, Hasher};
 
 use ahash::RandomState;
 
-use crate::{persistence::seed_node::SeedKey, seeding::seed_node::SeedNode};
+use crate::{persistence::seed_node::SeedKey, seeding::SeedNode};
 
 /// Identifier for a trajectory hypothesis.
 ///

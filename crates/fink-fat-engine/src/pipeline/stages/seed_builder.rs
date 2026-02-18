@@ -102,15 +102,19 @@
 //! - If you need per-night instrumentation, insert timers around the bucketization/pairs/triplets steps.
 
 use crate::{
-    alerts::AlertSlice, error::EngineError, pipeline::{
+    alerts::AlertSlice,
+    error::EngineError,
+    pipeline::{
         PipelineContext,
         hooks::{PipelineHooks, StageMeta, StageReport},
         progress_sink::ProgressSink,
         stages::{PipelineStage, run_stage},
-    }, seeding::{pairs, seed_node::SeedNode, triplets}, spacetime_bucket::{
+    },
+    seeding::{SeedNode, pairs, triplets},
+    spacetime_bucket::{
         bucket::build_alert_bucket_index, healpix_binner::HealpixBinner,
         uniform_time_binner::UniformTimeBinner,
-    }
+    },
 };
 
 /// Run the `BuildSeeds` pipeline stage.

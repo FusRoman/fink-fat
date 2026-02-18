@@ -27,7 +27,7 @@
 //   ensure stable feature export (Parquet / ONNX).
 //
 
-use crate::{graph::edge::feature_core::FeatureCore, seeding::seed_node::SeedNode};
+use crate::{graph::edge::feature_core::FeatureCore, seeding::SeedNode};
 
 /// Photometry features for an edge (mostly cadence-invariant).
 ///

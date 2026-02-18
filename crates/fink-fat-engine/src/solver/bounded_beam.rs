@@ -107,7 +107,7 @@ use ahash::AHashMap;
 use crate::{
     engine_config::solver_config::bounded_beam_config::BoundedBeamConfig,
     graph::{RuntimeGraph, edge::Edge},
-    seeding::seed_node::SeedNode,
+    seeding::SeedNode,
     solver::{
         Solver, SolverDiagnostics, SolverOutput,
         components::{ComponentId, ConnectedComponents, LocalIdx},

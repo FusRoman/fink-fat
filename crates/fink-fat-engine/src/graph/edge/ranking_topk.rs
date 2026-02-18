@@ -47,7 +47,7 @@ use crate::engine_config::edge_config::EdgeConfig;
 use crate::graph::edge::edge_features::EdgeFeatures;
 use crate::graph::edge::edge_prediction::EdgeRankingModel;
 use crate::graph::edge::error::EdgeModelError;
-use crate::seeding::seed_node::SeedNode;
+use crate::seeding::SeedNode;
 use crate::seeding::seed_spatial_index::SeedSpatialIndex;
 
 /// Heap item storing one candidate edge and its ML probability.

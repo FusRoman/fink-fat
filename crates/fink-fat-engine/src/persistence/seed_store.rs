@@ -11,7 +11,7 @@ use crate::{
         seed_node::{SeedKey, SeedNodeOwned, SeedNodeOwnedSlice},
     },
     pipeline::seed_store::SeedStore,
-    seeding::seed_node::SeedNode,
+    seeding::SeedNode,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -100,7 +100,7 @@ mod seed_store_owned_tests {
         alerts::AlertKey,
         night_id::{NightId, PairingMode},
         persistence::seed_node::{SeedKey, SeedNodeOwned},
-        seeding::seed_node::SeedNodeCore,
+        seeding::SeedNodeCore,
     };
 
     // -------------------------------------------------------------------------
