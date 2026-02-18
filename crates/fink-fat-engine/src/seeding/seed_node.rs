@@ -733,9 +733,9 @@ mod seed_node_tests {
     use proptest::prelude::*;
 
     use crate::{
+        AlertKey,
         astro_math::{ang_sep, arcsec_to_rad},
         engine_config::propagator_config::{ModelNoise, PredictorParams},
-        persistence::alert::AlertKey,
         spacetime_bucket::{healpix_binner::HealpixBinner, uniform_time_binner::UniformTimeBinner},
     };
 
@@ -747,9 +747,8 @@ mod seed_node_tests {
         Alert {
             key: AlertKey {
                 night_id: NightId::new(0),
-                idx_in_night: source_id as u32,
+                dia_source_id: source_id,
             },
-            dia_source_id: source_id,
             ra,
             ra_err: arcsec_to_rad(0.5),
             dec,
@@ -806,8 +805,8 @@ mod seed_node_tests {
 
         // members are references now
         assert_eq!(sn.members.len(), 2);
-        assert_eq!(sn.members[0].dia_source_id, a.dia_source_id);
-        assert_eq!(sn.members[1].dia_source_id, b.dia_source_id);
+        assert_eq!(sn.members[0].key.dia_source_id, a.key.dia_source_id);
+        assert_eq!(sn.members[1].key.dia_source_id, b.key.dia_source_id);
 
         // Velocity is roughly dr / dt on the tangent plane.
         let dt = (b.mjd_tt - a.mjd_tt).max(1e-12);
@@ -895,9 +894,9 @@ mod seed_node_tests {
         assert_eq!(sn.n_obs, 3);
 
         assert_eq!(sn.members.len(), 3);
-        assert_eq!(sn.members[0].dia_source_id, a.dia_source_id);
-        assert_eq!(sn.members[1].dia_source_id, b.dia_source_id);
-        assert_eq!(sn.members[2].dia_source_id, c.dia_source_id);
+        assert_eq!(sn.members[0].key.dia_source_id, a.key.dia_source_id);
+        assert_eq!(sn.members[1].key.dia_source_id, b.key.dia_source_id);
+        assert_eq!(sn.members[2].key.dia_source_id, c.key.dia_source_id);
 
         // Midpoint time close to average.
         let tm = (a.mjd_tt + b.mjd_tt + c.mjd_tt) / 3.0;
@@ -1061,8 +1060,8 @@ mod seed_node_tests {
                     count += 1;
                     prop_assert_eq!(sn.n_obs, 2);
                     prop_assert_eq!(sn.members.len(), 2);
-                    prop_assert_eq!(sn.members[0].dia_source_id, a.dia_source_id);
-                    prop_assert_eq!(sn.members[1].dia_source_id, b.dia_source_id);
+                    prop_assert_eq!(sn.members[0].key.dia_source_id, a.key.dia_source_id);
+                    prop_assert_eq!(sn.members[1].key.dia_source_id, b.key.dia_source_id);
 
                     let tm = 0.5 * (a.mjd_tt + b.mjd_tt);
                     prop_assert!((sn.plane.epoch_mid - tm).abs() < 1e-9);
@@ -1101,9 +1100,9 @@ mod seed_node_tests {
 
                 prop_assert_eq!(sn.n_obs, 3);
                 prop_assert_eq!(sn.members.len(), 3);
-                prop_assert_eq!(sn.members[0].dia_source_id, a.dia_source_id);
-                prop_assert_eq!(sn.members[1].dia_source_id, b.dia_source_id);
-                prop_assert_eq!(sn.members[2].dia_source_id, c.dia_source_id);
+                prop_assert_eq!(sn.members[0].key.dia_source_id, a.key.dia_source_id);
+                prop_assert_eq!(sn.members[1].key.dia_source_id, b.key.dia_source_id);
+                prop_assert_eq!(sn.members[2].key.dia_source_id, c.key.dia_source_id);
 
                 let tmin = a.mjd_tt.min(b.mjd_tt).min(c.mjd_tt);
                 let tmax = a.mjd_tt.max(b.mjd_tt).max(c.mjd_tt);

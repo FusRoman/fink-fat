@@ -1,9 +1,9 @@
 use camino::Utf8Path;
 
 use crate::{
+    AlertStore,
     engine_config::{EngineConfig, load_engine_config_validated},
     graph::{RuntimeGraph, edge::edge_prediction::EdgeRankingModelPool},
-    persistence::alert_store::AlertStore,
     pipeline::seed_store::SeedStore,
 };
 

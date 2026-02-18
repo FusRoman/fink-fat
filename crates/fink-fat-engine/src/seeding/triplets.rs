@@ -393,10 +393,9 @@ mod triplet_gen_tests {
     use std::f64::consts::PI;
 
     use crate::{
-        MJDTT, Radian,
+        AlertKey, MJDTT, Radian,
         astro_math::{ang_sep, arcsec_to_rad, planar_offset_fast},
         engine_config::triplet_config::TripletConfig,
-        persistence::alert::AlertKey,
         spacetime_bucket::{
             bucket::build_alert_bucket_index,
             spatial_binner::{SpatialBinner, SpatialKey},
@@ -475,9 +474,8 @@ mod triplet_gen_tests {
         Alert {
             key: AlertKey {
                 night_id: NightId(0),
-                idx_in_night: i as u32,
+                dia_source_id: i as u64,
             },
-            dia_source_id: i as u64,
             ra,
             ra_err: pos_err,
             dec,

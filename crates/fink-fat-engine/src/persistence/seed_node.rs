@@ -4,18 +4,13 @@ use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Alert,
-    night_id::NightId,
-    persistence::{
+    Alert, alerts::{AlertKey, store::AlertStore}, night_id::NightId, persistence::{
         SEED_STORE_SCHEMA_VERSION,
-        alert::AlertKey,
-        alert_store::AlertStore,
         envelope::DiskEnvelope,
         error::{BorrowError, PersistenceIoError},
         layout::PersistenceLayout,
         manifest::Manifest,
-    },
-    seeding::seed_node::{SeedNode, SeedNodeCore},
+    }, seeding::seed_node::{SeedNode, SeedNodeCore}
 };
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Default)]

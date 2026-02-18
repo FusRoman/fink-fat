@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::persistence::{alert::AlertKey, seed_node::SeedKey};
+use crate::{AlertKey, persistence::seed_node::SeedKey};
 
 /// Errors raised when validating a [`DiskEnvelope`].
 ///

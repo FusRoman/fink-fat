@@ -1,5 +1,3 @@
-pub mod alert;
-pub mod alert_store;
 pub mod edge;
 pub mod envelope;
 pub mod error;
@@ -16,13 +14,7 @@ use std::fs;
 use camino::Utf8PathBuf;
 
 use crate::{
-    Alert,
-    engine_config::EngineConfig,
-    error::{EngineError, FinkFatError},
-    night_id::{NightId, PairingMode},
-    persistence::{
-        alert::AlertSlice,
-        alert_store::AlertStore,
+    Alert, alerts::{AlertSlice, store::AlertStore}, engine_config::EngineConfig, error::{EngineError, FinkFatError}, night_id::{NightId, PairingMode}, persistence::{
         edge::{edge_journal::EdgeJournalStore, edge_op::EdgeOp},
         envelope::DiskEnvelope,
         error::{PersistenceError, PersistenceIoError},
@@ -32,7 +24,7 @@ use crate::{
         runtime_state::RuntimeState,
         seed_node::{SeedNodeOwned, SeedNodeOwnedSlice},
         seed_store::SeedStoreOwned,
-    },
+    }
 };
 
 /// Alert store schema version.

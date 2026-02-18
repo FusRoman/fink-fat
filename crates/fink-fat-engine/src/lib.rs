@@ -1,3 +1,4 @@
+pub mod alerts;
 pub mod astro_math;
 pub mod display_format;
 pub mod engine_config;
@@ -12,5 +13,5 @@ pub mod spacetime_bucket;
 pub mod trajectory;
 pub mod units;
 
-pub use persistence::alert::Alert;
+pub use crate::alerts::{Alert, AlertKey, store::AlertStore};
 pub use units::{MJDTT, Radian};

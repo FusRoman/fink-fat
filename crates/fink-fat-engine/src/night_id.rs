@@ -256,66 +256,62 @@ impl PairingMode {
             .max()
     }
 
-    /// Collect eligible left nights for pairing with a given right night.
+    /// Filter available nights according to the pairing mode constraints.
     ///
-    /// Overview
+    /// Behavior
     /// --------
-    /// Given a `right_night` (typically the latest night in the range) and a list
-    /// of `available_nights`, this function returns all nights that are eligible
-    /// to be paired as "left" candidates according to the pairing mode.
+    /// - **Single-night mode**: Returns nights within `max_gap` days before the anchor.
+    ///   Fails if the anchor is not in the valid range.
+    /// - **Batch-range mode**: Returns nights within `[start, end]`.
     ///
-    /// Behavior by mode
-    /// ----------------
-    ///
-    /// ### Single-night mode
-    ///
-    /// Constraints:
-    /// 1. `left < right`
-    /// 2. `right - left <= max_gap`
-    ///
-    /// No additional range constraint is applied.
-    ///
-    /// ### Multi-night batch mode
-    ///
-    /// Constraints:
-    /// 1. `left < right`
-    /// 2. `start <= left < right`
+    /// Arguments
+    /// ---------
+    /// * `available_nights` – Slice of nights to filter (need not be sorted).
     ///
     /// Returns
     /// -------
-    /// * `Vec<NightId>` – Sorted list of eligible left nights (increasing order).
+    /// * `Ok(Vec<NightId>)` – Filtered nights in **sorted increasing order**.
+    /// * `Err(FinkFatError)` – If anchor validation fails in single-night mode.
     ///
-    /// Determinism
-    /// -----------
-    /// Output is deterministic: the returned vector is sorted increasingly.
-    pub fn eligible_left_nights(
+    /// Complexity
+    /// ----------
+    /// Let `N` be the length of `available_nights` and `M` the number of nights retained.
+    /// - Time: `O(N + M log M)` due to filtering and sorting.
+    /// - Space: `O(M)` for the output vector.
+    pub fn filter_nights(
         &self,
         available_nights: &[NightId],
-        right_night: NightId,
-    ) -> Vec<NightId> {
-        let mut lefts: Vec<NightId> = match self {
-            Self::SingleNight { max_gap, .. } => {
+    ) -> Result<Vec<NightId>, FinkFatError> {
+        let mut nights: Vec<NightId> = match self {
+            Self::SingleNight { anchor, max_gap } => {
+                if !available_nights.contains(anchor) {
+                    return Err(FinkFatError::Message(format!(
+                        "Anchor night {} is not within the valid range defined by the pairing mode",
+                        anchor
+                    )));
+                }
+
                 // Single-night mode: use gap constraint only
-                let min_left = right_night.0.saturating_sub(*max_gap as u32);
+                let min_left = anchor.0.saturating_sub(*max_gap as u32);
 
                 available_nights
                     .iter()
                     .copied()
-                    .filter(|&n| n < right_night && n.0 >= min_left)
+                    .filter(|&n| n <= *anchor && n.0 >= min_left)
                     .collect()
             }
-            Self::BatchRange { start, .. } => {
-                // Multi-night batch mode: constrain to range [start, right)
+            Self::BatchRange { start, end } => {
+                // Multi-night batch mode: constrain to range [start, end]
                 available_nights
                     .iter()
                     .copied()
-                    .filter(|&n| n < right_night && n >= *start)
+                    .filter(|&n| n <= *end && n >= *start)
                     .collect()
             }
         };
 
-        lefts.sort();
-        lefts
+        nights.sort();
+        Ok(nights)
     }
 
     /// Generate `(left, right)` night pairs according to this pairing mode.
@@ -326,7 +322,7 @@ impl PairingMode {
     /// 1. Finds the latest night present in `available_nights` within the range
     ///    (the "right" anchor).
     /// 2. Collects eligible "left" nights using the mode-specific logic.
-    /// 3. Yields `(left, right)` pairs for each eligible left.
+    /// 3. Yields `(left, right)` pairs for each eligible left **where left < right**.
     ///
     /// Behavior by mode
     /// ----------------
@@ -344,8 +340,9 @@ impl PairingMode {
     ///
     /// Edge cases
     /// ----------
-    /// - If `available_nights` is empty: returns empty iterator.
-    /// - If no night is present in the range: returns empty iterator.
+    /// - If `available_nights` is empty: returns empty vector.
+    /// - If no night is present in the range: returns empty vector.
+    /// - If `right` is the only night in range: returns empty vector.
     ///
     /// Ordering
     /// --------
@@ -383,9 +380,12 @@ impl PairingMode {
         };
 
         // Collect eligible left nights and emit pairs.
-        self.eligible_left_nights(&available_nights, right)
+        // Important: filter out nights >= right to ensure left < right invariant.
+        self.filter_nights(&available_nights)
+            .unwrap_or_default()
             .into_iter()
-            .map(move |l| (l, right))
+            .filter(|&l| l < right)
+            .map(|l| (l, right))
             .collect::<Vec<_>>()
             .into_iter()
     }
@@ -526,11 +526,11 @@ mod pairing_mode_tests {
     }
 
     // -------------------------------------------------------------------------
-    // eligible_left_nights logic
+    // filter_nights logic
     // -------------------------------------------------------------------------
 
     #[cfg(test)]
-    mod eligible_left_nights_tests {
+    mod filter_nights_tests {
         use super::*;
 
         fn nid(v: u32) -> NightId {
@@ -544,65 +544,80 @@ mod pairing_mode_tests {
         #[test]
         fn single_night_empty_available() {
             let mode = PairingMode::single_night(nid(100), 10).unwrap();
-            let lefts = mode.eligible_left_nights(&[], nid(100));
-            assert_eq!(lefts, vec![]);
+            let result = mode.filter_nights(&[]);
+            // Should fail because anchor is not in available nights
+            assert!(result.is_err());
         }
 
         #[test]
-        fn single_night_no_eligible_lefts() {
+        fn single_night_anchor_not_present() {
+            let mode = PairingMode::single_night(nid(100), 10).unwrap();
+            let available = vec![nid(90), nid(92), nid(95)];
+            let result = mode.filter_nights(&available);
+            // Should fail because anchor (100) is not in available nights
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn single_night_only_anchor() {
             let mode = PairingMode::single_night(nid(100), 10).unwrap();
             let available = vec![nid(100), nid(110), nid(120)];
-            let lefts = mode.eligible_left_nights(&available, nid(100));
-            assert_eq!(lefts, vec![]);
+            let lefts = mode.filter_nights(&available).unwrap();
+            assert_eq!(lefts, vec![nid(100)]);
         }
 
         #[test]
-        fn single_night_all_outside_gap() {
+        fn single_night_all_outside_gap_err() {
             let mode = PairingMode::single_night(nid(100), 5).unwrap();
             let available = vec![nid(80), nid(85), nid(90)];
-            let lefts = mode.eligible_left_nights(&available, nid(100));
-            // All nights are more than 5 nights before 100
-            assert_eq!(lefts, vec![]);
+            let lefts = mode.filter_nights(&available);
+            // All nights except 100 are more than 5 nights before 100
+            assert!(lefts.is_err());
+            assert!(lefts
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("Anchor night 100 is not within the valid range"));
         }
 
         #[test]
         fn single_night_some_in_gap() {
             let mode = PairingMode::single_night(nid(100), 10).unwrap();
             let available = vec![nid(80), nid(92), nid(95), nid(100)];
-            let lefts = mode.eligible_left_nights(&available, nid(100));
+            let lefts = mode.filter_nights(&available).unwrap();
             // 80 is outside gap (100 - 80 = 20 > 10)
             // 92, 95 are within gap
-            assert_eq!(lefts, vec![nid(92), nid(95)]);
+            assert_eq!(lefts, vec![nid(92), nid(95), nid(100)]);
         }
 
         #[test]
         fn single_night_exact_gap_boundary() {
             let mode = PairingMode::single_night(nid(100), 10).unwrap();
-            let available = vec![nid(89), nid(90), nid(91)];
-            let lefts = mode.eligible_left_nights(&available, nid(100));
+            let available = vec![nid(89), nid(90), nid(91), nid(100)];
+            let lefts = mode.filter_nights(&available).unwrap();
             // 89 is outside (100 - 89 = 11 > 10)
             // 90 is exactly at boundary (100 - 90 = 10)
             // 91 is within gap
-            assert_eq!(lefts, vec![nid(90), nid(91)]);
+            assert_eq!(lefts, vec![nid(90), nid(91), nid(100)]);
         }
 
         #[test]
         fn single_night_saturating_sub() {
             let mode = PairingMode::single_night(nid(5), 100).unwrap();
-            let available = vec![nid(0), nid(1), nid(3), nid(4)];
-            let lefts = mode.eligible_left_nights(&available, nid(5));
+            let available = vec![nid(0), nid(1), nid(3), nid(4), nid(5)];
+            let lefts = mode.filter_nights(&available).unwrap();
             // min_left = 5 - 100 saturates to 0
             // All nights < 5 are eligible
-            assert_eq!(lefts, vec![nid(0), nid(1), nid(3), nid(4)]);
+            assert_eq!(lefts, vec![nid(0), nid(1), nid(3), nid(4), nid(5)]);
         }
 
         #[test]
         fn single_night_unsorted_input() {
             let mode = PairingMode::single_night(nid(100), 10).unwrap();
-            let available = vec![nid(95), nid(92), nid(98), nid(91)];
-            let lefts = mode.eligible_left_nights(&available, nid(100));
+            let available = vec![nid(95), nid(92), nid(98), nid(91), nid(100)];
+            let lefts = mode.filter_nights(&available).unwrap();
             // Output should be sorted
-            assert_eq!(lefts, vec![nid(91), nid(92), nid(95), nid(98)]);
+            assert_eq!(lefts, vec![nid(91), nid(92), nid(95), nid(98), nid(100)]);
         }
 
         // -------------------------------------------------------------------------
@@ -612,7 +627,7 @@ mod pairing_mode_tests {
         #[test]
         fn batch_range_empty_available() {
             let mode = PairingMode::batch_range(nid(50), nid(100)).unwrap();
-            let lefts = mode.eligible_left_nights(&[], nid(100));
+            let lefts = mode.filter_nights(&[]).unwrap();
             assert_eq!(lefts, vec![]);
         }
 
@@ -620,15 +635,16 @@ mod pairing_mode_tests {
         fn batch_range_no_eligible_lefts() {
             let mode = PairingMode::batch_range(nid(50), nid(100)).unwrap();
             let available = vec![nid(100), nid(110), nid(120)];
-            let lefts = mode.eligible_left_nights(&available, nid(100));
-            assert_eq!(lefts, vec![]);
+            let lefts = mode.filter_nights(&available).unwrap();
+            // 100 is at end boundary, included
+            assert_eq!(lefts, vec![nid(100)]);
         }
 
         #[test]
         fn batch_range_all_outside_range() {
             let mode = PairingMode::batch_range(nid(50), nid(100)).unwrap();
             let available = vec![nid(10), nid(20), nid(30), nid(40)];
-            let lefts = mode.eligible_left_nights(&available, nid(100));
+            let lefts = mode.filter_nights(&available).unwrap();
             // All nights are below start=50
             assert_eq!(lefts, vec![]);
         }
@@ -637,40 +653,38 @@ mod pairing_mode_tests {
         fn batch_range_some_in_range() {
             let mode = PairingMode::batch_range(nid(50), nid(100)).unwrap();
             let available = vec![nid(40), nid(60), nid(80), nid(100), nid(110)];
-            let lefts = mode.eligible_left_nights(&available, nid(100));
+            let lefts = mode.filter_nights(&available).unwrap();
             // 40 is below start
-            // 60, 80 are in range [50, 100)
-            // 100 is the right night (excluded)
-            // 110 is above right
-            assert_eq!(lefts, vec![nid(60), nid(80)]);
+            // 60, 80, 100 are in range [50, 100]
+            // 110 is above end
+            assert_eq!(lefts, vec![nid(60), nid(80), nid(100)]);
         }
 
         #[test]
         fn batch_range_all_in_range() {
             let mode = PairingMode::batch_range(nid(50), nid(100)).unwrap();
             let available = vec![nid(50), nid(60), nid(70), nid(80), nid(90)];
-            let lefts = mode.eligible_left_nights(&available, nid(100));
-            // All are in [50, 100) and < 100
+            let lefts = mode.filter_nights(&available).unwrap();
+            // All are in [50, 100]
             assert_eq!(lefts, vec![nid(50), nid(60), nid(70), nid(80), nid(90)]);
         }
 
         #[test]
         fn batch_range_exact_boundaries() {
             let mode = PairingMode::batch_range(nid(50), nid(100)).unwrap();
-            let available = vec![nid(49), nid(50), nid(99), nid(100)];
-            let lefts = mode.eligible_left_nights(&available, nid(100));
+            let available = vec![nid(49), nid(50), nid(99), nid(100), nid(101)];
+            let lefts = mode.filter_nights(&available).unwrap();
             // 49 is below start
-            // 50 is at start (included)
-            // 99 is within range
-            // 100 is the right night (excluded)
-            assert_eq!(lefts, vec![nid(50), nid(99)]);
+            // 50, 99, 100 are in range [50, 100]
+            // 101 is above end
+            assert_eq!(lefts, vec![nid(50), nid(99), nid(100)]);
         }
 
         #[test]
         fn batch_range_unsorted_input() {
             let mode = PairingMode::batch_range(nid(50), nid(100)).unwrap();
             let available = vec![nid(80), nid(60), nid(90), nid(70)];
-            let lefts = mode.eligible_left_nights(&available, nid(100));
+            let lefts = mode.filter_nights(&available).unwrap();
             // Output should be sorted
             assert_eq!(lefts, vec![nid(60), nid(70), nid(80), nid(90)]);
         }
@@ -679,9 +693,9 @@ mod pairing_mode_tests {
         fn batch_range_equal_start_end() {
             let mode = PairingMode::batch_range(nid(50), nid(50)).unwrap();
             let available = vec![nid(40), nid(50), nid(60)];
-            let lefts = mode.eligible_left_nights(&available, nid(50));
-            // start = end = 50, so no lefts possible
-            assert_eq!(lefts, vec![]);
+            let lefts = mode.filter_nights(&available).unwrap();
+            // start = end = 50, only 50 itself is in range
+            assert_eq!(lefts, vec![nid(50)]);
         }
 
         // -------------------------------------------------------------------------
@@ -689,30 +703,20 @@ mod pairing_mode_tests {
         // -------------------------------------------------------------------------
 
         #[test]
-        fn right_not_in_available() {
-            let mode = PairingMode::single_night(nid(100), 10).unwrap();
-            let available = vec![nid(90), nid(92), nid(95)];
-            // Even if right=100 is not in available, we still check eligibility
-            let lefts = mode.eligible_left_nights(&available, nid(100));
-            assert_eq!(lefts, vec![nid(90), nid(92), nid(95)]);
-        }
-
-        #[test]
-        fn right_equals_left_candidate() {
+        fn single_night_right_equals_left_candidate() {
             let mode = PairingMode::single_night(nid(100), 10).unwrap();
             let available = vec![nid(100)];
-            let lefts = mode.eligible_left_nights(&available, nid(100));
-            // 100 cannot be left of itself
-            assert_eq!(lefts, vec![]);
+            let lefts = mode.filter_nights(&available).unwrap();
+            assert_eq!(lefts, vec![nid(100)]);
         }
 
         #[test]
         fn duplicates_in_available() {
             let mode = PairingMode::single_night(nid(100), 10).unwrap();
-            let available = vec![nid(90), nid(92), nid(92), nid(95), nid(95)];
-            let lefts = mode.eligible_left_nights(&available, nid(100));
-            // Duplicates should be preserved (caller's responsibility to dedup if needed)
-            assert_eq!(lefts, vec![nid(90), nid(92), nid(92), nid(95), nid(95)]);
+            let available = vec![nid(90), nid(92), nid(92), nid(95), nid(95), nid(100)];
+            let lefts = mode.filter_nights(&available).unwrap();
+            // Duplicates should be preserved
+            assert_eq!(lefts, vec![nid(90), nid(92), nid(92), nid(95), nid(95), nid(100)]);
         }
 
         // -------------------------------------------------------------------------
@@ -720,68 +724,73 @@ mod pairing_mode_tests {
         // -------------------------------------------------------------------------
 
         proptest! {
-            /// All returned lefts must be strictly less than right
+            /// All returned lefts must be less than or equal to anchor in single-night mode
             #[test]
-            fn prop_all_lefts_less_than_right(
-                nights in prop::collection::vec(0u32..1000, 0..100),
-                right in 10u32..1000,
+            fn prop_all_lefts_less_than_or_equal_to_anchor(
+                mut nights in prop::collection::vec(0u32..1000, 1..100),
+                anchor in 10u32..1000,
                 gap in 1u8..100,
             ) {
-                let mode = PairingMode::single_night(nid(right), gap).unwrap();
+                // Ensure anchor is in the list
+                nights.push(anchor);
+                let mode = PairingMode::single_night(nid(anchor), gap).unwrap();
                 let available: Vec<NightId> = nights.into_iter().map(nid).collect();
-                let lefts = mode.eligible_left_nights(&available, nid(right));
+                let lefts = mode.filter_nights(&available).unwrap();
 
                 for &left in &lefts {
-                    prop_assert!(left < nid(right));
+                    prop_assert!(left <= nid(anchor));
                 }
             }
 
             /// Single-night: all lefts must respect gap constraint
             #[test]
             fn prop_single_night_lefts_respect_gap(
-                nights in prop::collection::vec(0u32..1000, 0..100),
-                right in 10u32..1000,
+                mut nights in prop::collection::vec(0u32..1000, 1..100),
+                anchor in 10u32..1000,
                 gap in 1u8..100,
             ) {
-                let mode = PairingMode::single_night(nid(right), gap).unwrap();
+                // Ensure anchor is in the list
+                nights.push(anchor);
+                let mode = PairingMode::single_night(nid(anchor), gap).unwrap();
                 let available: Vec<NightId> = nights.into_iter().map(nid).collect();
-                let lefts = mode.eligible_left_nights(&available, nid(right));
+                let lefts = mode.filter_nights(&available).unwrap();
 
-                let min_left = right.saturating_sub(gap as u32);
+                let min_left = anchor.saturating_sub(gap as u32);
 
                 for &left in &lefts {
                     prop_assert!(left.0 >= min_left);
-                    prop_assert!(left.0 < right);
+                    prop_assert!(left.0 <= anchor);
                 }
             }
 
-            /// Batch range: all lefts must be in [start, right)
+            /// Batch range: all lefts must be in [start, end]
             #[test]
             fn prop_batch_range_lefts_in_range(
                 nights in prop::collection::vec(0u32..500, 0..100),
                 start in 0u32..400,
-                right in 400u32..500,
+                end in 400u32..500,
             ) {
-                let mode = PairingMode::batch_range(nid(start), nid(right)).unwrap();
+                let mode = PairingMode::batch_range(nid(start), nid(end)).unwrap();
                 let available: Vec<NightId> = nights.into_iter().map(nid).collect();
-                let lefts = mode.eligible_left_nights(&available, nid(right));
+                let lefts = mode.filter_nights(&available).unwrap();
 
                 for &left in &lefts {
                     prop_assert!(left.0 >= start);
-                    prop_assert!(left.0 < right);
+                    prop_assert!(left.0 <= end);
                 }
             }
 
             /// Output is always sorted
             #[test]
             fn prop_output_sorted(
-                nights in prop::collection::vec(0u32..1000, 0..100),
-                right in 10u32..1000,
+                mut nights in prop::collection::vec(0u32..1000, 1..100),
+                anchor in 10u32..1000,
                 gap in 1u8..100,
             ) {
-                let mode = PairingMode::single_night(nid(right), gap).unwrap();
+                nights.push(anchor);
+                let mode = PairingMode::single_night(nid(anchor), gap).unwrap();
                 let available: Vec<NightId> = nights.into_iter().map(nid).collect();
-                let lefts = mode.eligible_left_nights(&available, nid(right));
+                let lefts = mode.filter_nights(&available).unwrap();
 
                 let mut sorted = lefts.clone();
                 sorted.sort();
@@ -792,13 +801,14 @@ mod pairing_mode_tests {
             /// All returned lefts must be present in available
             #[test]
             fn prop_all_lefts_in_available(
-                nights in prop::collection::vec(0u32..1000, 0..100),
-                right in 10u32..1000,
+                mut nights in prop::collection::vec(0u32..1000, 1..100),
+                anchor in 10u32..1000,
                 gap in 1u8..100,
             ) {
-                let mode = PairingMode::single_night(nid(right), gap).unwrap();
+                nights.push(anchor);
+                let mode = PairingMode::single_night(nid(anchor), gap).unwrap();
                 let available: Vec<NightId> = nights.into_iter().map(nid).collect();
-                let lefts = mode.eligible_left_nights(&available, nid(right));
+                let lefts = mode.filter_nights(&available).unwrap();
 
                 let available_set: std::collections::HashSet<_> = available.iter().collect();
 
@@ -810,56 +820,62 @@ mod pairing_mode_tests {
             /// Determinism: repeated calls yield same result
             #[test]
             fn prop_deterministic(
-                nights in prop::collection::vec(0u32..1000, 0..100),
-                right in 10u32..1000,
+                mut nights in prop::collection::vec(0u32..1000, 1..100),
+                anchor in 10u32..1000,
                 gap in 1u8..100,
             ) {
-                let mode = PairingMode::single_night(nid(right), gap).unwrap();
+                nights.push(anchor);
+                let mode = PairingMode::single_night(nid(anchor), gap).unwrap();
                 let available: Vec<NightId> = nights.into_iter().map(nid).collect();
 
-                let lefts1 = mode.eligible_left_nights(&available, nid(right));
-                let lefts2 = mode.eligible_left_nights(&available, nid(right));
+                let lefts1 = mode.filter_nights(&available).unwrap();
+                let lefts2 = mode.filter_nights(&available).unwrap();
 
                 prop_assert_eq!(lefts1, lefts2);
             }
 
-            /// If right is very small, saturating_sub prevents underflow
+            /// If anchor is very small, saturating_sub prevents underflow
             #[test]
             fn prop_saturating_sub_safe(
-                nights in prop::collection::vec(0u32..20, 0..20),
-                right in 0u32..10,
+                mut nights in prop::collection::vec(0u32..20, 1..20),
+                anchor in 0u32..10,
                 gap in 1u8..255,
             ) {
-                let mode = PairingMode::single_night(nid(right), gap).unwrap();
+                nights.push(anchor);
+                let mode = PairingMode::single_night(nid(anchor), gap).unwrap();
                 let available: Vec<NightId> = nights.into_iter().map(nid).collect();
 
                 // Should not panic
-                let _lefts = mode.eligible_left_nights(&available, nid(right));
+                let _lefts = mode.filter_nights(&available).unwrap();
             }
 
             /// Comparison with brute-force reference
             #[test]
             fn prop_matches_brute_force(
-                nights in prop::collection::vec(0u32..500, 0..50).prop_map(|v| {
-                    let mut sorted = v;
-                    sorted.sort();
-                    sorted.dedup();
-                    sorted
+                nights in prop::collection::vec(0u32..500, 0..50).prop_map(|mut v| {
+                    v.sort();
+                    v.dedup();
+                    v
                 }),
-                right in 50u32..500,
+                anchor in 50u32..500,
                 gap in 1u8..100,
             ) {
-                let mode = PairingMode::single_night(nid(right), gap).unwrap();
-                let available: Vec<NightId> = nights.iter().map(|&n| nid(n)).collect();
+                let mut nights_with_anchor = nights.clone();
+                nights_with_anchor.push(anchor);
+                nights_with_anchor.sort();
+                nights_with_anchor.dedup();
 
-                let result = mode.eligible_left_nights(&available, nid(right));
+                let mode = PairingMode::single_night(nid(anchor), gap).unwrap();
+                let available: Vec<NightId> = nights_with_anchor.iter().map(|&n| nid(n)).collect();
+
+                let result = mode.filter_nights(&available).unwrap();
 
                 // Brute-force reference
-                let min_left = right.saturating_sub(gap as u32);
+                let min_left = anchor.saturating_sub(gap as u32);
                 let mut expected: Vec<NightId> = available
                     .iter()
                     .copied()
-                    .filter(|&n| n < nid(right) && n.0 >= min_left)
+                    .filter(|&n| n <= nid(anchor) && n.0 >= min_left)
                     .collect();
                 expected.sort();
 
@@ -872,8 +888,13 @@ mod pairing_mode_tests {
     // Pairing logic
     // -------------------------------------------------------------------------
 
+    #[cfg(test)]
     mod pairing_tests {
         use super::*;
+
+        fn nid(v: u32) -> NightId {
+            NightId(v)
+        }
 
         /// Helper: brute-force reference implementation
         fn reference_pairs(available: &[NightId], mode: PairingMode) -> Vec<(NightId, NightId)> {
@@ -883,7 +904,11 @@ mod pairing_mode_tests {
             };
 
             let mut lefts: Vec<NightId> = match mode {
-                PairingMode::SingleNight { max_gap, .. } => {
+                PairingMode::SingleNight { anchor, max_gap } => {
+                    // In single-night mode, right must be anchor
+                    if !available.contains(&anchor) {
+                        return vec![];
+                    }
                     let min_left = right.0.saturating_sub(max_gap as u32);
                     available
                         .iter()
@@ -933,9 +958,29 @@ mod pairing_mode_tests {
             let available = vec![nid(40), nid(60), nid(80), nid(100)];
             let pairs = mode.night_pairs(available);
 
-            // right = 100
-            // left candidates: 60, 80 (40 is outside range)
+            // right = 100 (max in range)
+            // left candidates: 60, 80 (must be < right and >= start)
+            // 40 is outside range (< 50)
+            // 100 cannot be left of itself
             assert_eq!(pairs, vec![(nid(60), nid(100)), (nid(80), nid(100))]);
+        }
+
+        #[test]
+        fn batch_range_all_nights_in_range() {
+            let mode = PairingMode::batch_range(nid(50), nid(100)).unwrap();
+            let available = vec![nid(50), nid(60), nid(80), nid(100)];
+            let pairs = mode.night_pairs(available);
+
+            // right = 100
+            // left candidates: 50, 60, 80 (all < right)
+            assert_eq!(
+                pairs,
+                vec![
+                    (nid(50), nid(100)),
+                    (nid(60), nid(100)),
+                    (nid(80), nid(100))
+                ]
+            );
         }
 
         #[test]
@@ -947,14 +992,61 @@ mod pairing_mode_tests {
         }
 
         #[test]
+        fn batch_range_single_night_in_range() {
+            let mode = PairingMode::batch_range(nid(50), nid(100)).unwrap();
+            let available = vec![nid(10), nid(75), nid(110)];
+            let pairs = mode.night_pairs(available);
+
+            // right = 75 (only night in range)
+            // No nights < 75 in range
+            assert_eq!(pairs, vec![]);
+        }
+
+        #[test]
+        fn batch_range_right_equals_end() {
+            let mode = PairingMode::batch_range(nid(50), nid(100)).unwrap();
+            let available = vec![nid(50), nid(60), nid(100), nid(110)];
+            let pairs = mode.night_pairs(available);
+
+            // right = 100 (end boundary)
+            // left candidates: 50, 60 (both < 100)
+            assert_eq!(pairs, vec![(nid(50), nid(100)), (nid(60), nid(100))]);
+        }
+
+        #[test]
         fn saturating_sub_prevents_underflow() {
             let mode = PairingMode::single_night(nid(2), 250).unwrap();
             let available = vec![nid(0), nid(1), nid(2)];
             let pairs = mode.night_pairs(available);
 
             // min_left = 2 - 250 saturates to 0
-            // eligible: 0, 1
+            // eligible: 0, 1 (both < 2)
             assert_eq!(pairs, vec![(nid(0), nid(2)), (nid(1), nid(2))]);
+        }
+
+        #[test]
+        fn single_night_no_lefts() {
+            let mode = PairingMode::single_night(nid(100), 5).unwrap();
+            let available = vec![nid(100), nid(110)];
+            let pairs = mode.night_pairs(available);
+            // No nights < 100 within gap
+            assert_eq!(pairs, vec![]);
+        }
+
+        #[test]
+        fn unsorted_input() {
+            let mode = PairingMode::single_night(nid(100), 10).unwrap();
+            let available = vec![nid(100), nid(92), nid(95), nid(90)];
+            let pairs = mode.night_pairs(available);
+            // Output should be sorted by left
+            assert_eq!(
+                pairs,
+                vec![
+                    (nid(90), nid(100)),
+                    (nid(92), nid(100)),
+                    (nid(95), nid(100))
+                ]
+            );
         }
 
         // Property-based tests
@@ -972,7 +1064,7 @@ mod pairing_mode_tests {
                 let pairs = mode.night_pairs(available);
 
                 for (left, right) in pairs {
-                    prop_assert!(left < right);
+                    prop_assert!(left < right, "left={:?} must be < right={:?}", left, right);
                 }
             }
 
@@ -989,11 +1081,14 @@ mod pairing_mode_tests {
 
                 for (left, right) in pairs {
                     let actual_gap = right.0 - left.0;
-                    prop_assert!(actual_gap <= gap as u32);
+                    prop_assert!(
+                        actual_gap <= gap as u32,
+                        "gap={} exceeds max_gap={}", actual_gap, gap
+                    );
                 }
             }
 
-            /// Batch range pairs must have left in range
+            /// Batch range pairs must have left in range [start, right)
             #[test]
             fn prop_batch_range_left_in_range(
                 nights in prop::collection::vec(0u32..500, 0..50),
@@ -1004,9 +1099,19 @@ mod pairing_mode_tests {
                 let available: Vec<NightId> = nights.into_iter().map(nid).collect();
                 let pairs = mode.night_pairs(available);
 
-                for (left, _) in pairs {
-                    prop_assert!(left.0 >= start);
-                    prop_assert!(left.0 < end);
+                for (left, right) in &pairs {
+                    prop_assert!(
+                        left.0 >= start,
+                        "left={} must be >= start={}", left.0, start
+                    );
+                    prop_assert!(
+                        left < right,
+                        "left={:?} must be < right={:?}", left, right
+                    );
+                    prop_assert!(
+                        right.0 <= end,
+                        "right={} must be <= end={}", right.0, end
+                    );
                 }
             }
 
@@ -1028,9 +1133,67 @@ mod pairing_mode_tests {
                 let result = mode.night_pairs(available.clone());
                 let expected = reference_pairs(&available, mode);
 
-                if !result.is_empty() {
-                    prop_assert_eq!(result, expected);
+                prop_assert_eq!(result, expected);
+            }
+
+            /// Batch range: output matches reference
+            #[test]
+            fn prop_batch_matches_reference(
+                nights in prop::collection::vec(0u32..500, 0..50).prop_map(|v| {
+                    let mut sorted = v;
+                    sorted.sort();
+                    sorted.dedup();
+                    sorted
+                }),
+                start in 0u32..400,
+                end in 400u32..500,
+            ) {
+                let mode = PairingMode::batch_range(nid(start), nid(end)).unwrap();
+                let available: Vec<NightId> = nights.iter().map(|&n| nid(n)).collect();
+
+                let result = mode.night_pairs(available.clone());
+                let expected = reference_pairs(&available, mode);
+
+                prop_assert_eq!(result, expected);
+            }
+
+            /// Pairs are sorted by left
+            #[test]
+            fn prop_pairs_sorted(
+                nights in prop::collection::vec(0u32..1000, 0..50),
+                anchor in 10u32..1000,
+                gap in 1u8..100,
+            ) {
+                let mode = PairingMode::single_night(nid(anchor), gap).unwrap();
+                let available: Vec<NightId> = nights.into_iter().map(nid).collect();
+                let pairs = mode.night_pairs(available);
+
+                for window in pairs.windows(2) {
+                    prop_assert!(
+                        window[0].0 <= window[1].0,
+                        "pairs not sorted: {:?} > {:?}", window[0], window[1]
+                    );
                 }
+            }
+
+            /// No duplicate pairs
+            #[test]
+            fn prop_no_duplicate_pairs(
+                nights in prop::collection::vec(0u32..1000, 0..50).prop_map(|v| {
+                    let mut sorted = v;
+                    sorted.sort();
+                    sorted.dedup();
+                    sorted
+                }),
+                anchor in 10u32..1000,
+                gap in 1u8..100,
+            ) {
+                let mode = PairingMode::single_night(nid(anchor), gap).unwrap();
+                let available: Vec<NightId> = nights.into_iter().map(nid).collect();
+                let pairs = mode.night_pairs(available);
+
+                let unique_count = pairs.iter().collect::<std::collections::HashSet<_>>().len();
+                prop_assert_eq!(pairs.len(), unique_count, "found duplicate pairs");
             }
         }
     }

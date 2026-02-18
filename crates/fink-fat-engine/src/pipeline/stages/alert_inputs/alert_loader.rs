@@ -26,11 +26,8 @@ use tokio::runtime::Runtime;
 use url::Url;
 
 use crate::{
+    Alert, AlertKey, AlertStore,
     night_id::NightId,
-    persistence::{
-        alert::{Alert, AlertKey},
-        alert_store::AlertStore,
-    },
     pipeline::stages::alert_inputs::{input_uri::InputUri, storage::resolve_input_uri},
 };
 
@@ -218,9 +215,8 @@ fn build_alerts_from_batches(
             let alert = Alert {
                 key: AlertKey {
                     night_id,
-                    idx_in_night: vec_night.len() as u32,
+                    dia_source_id: dia,
                 },
-                dia_source_id: dia,
                 ra: ra.value(i),
                 ra_err: ra_err.value(i),
                 dec: dec.value(i),
@@ -382,8 +378,8 @@ mod alert_loader_tests {
         assert_eq!(night_vec.len(), 2);
 
         // Ordre et contenu
-        assert_eq!(night_vec[0].dia_source_id, 10);
-        assert_eq!(night_vec[1].dia_source_id, 11);
+        assert_eq!(night_vec[0].key.dia_source_id, 10);
+        assert_eq!(night_vec[1].key.dia_source_id, 11);
 
         assert_eq!(night_vec[0].ra, 1.0);
         assert_eq!(night_vec[1].ra, 2.0);
@@ -394,11 +390,8 @@ mod alert_loader_tests {
         assert_eq!(night_vec[0].band, 1);
         assert_eq!(night_vec[1].band, 2);
 
-        // Clés auto-construites
         assert_eq!(night_vec[0].key.night_id, NightId(42));
         assert_eq!(night_vec[1].key.night_id, NightId(42));
-        assert_eq!(night_vec[0].key.idx_in_night, 0);
-        assert_eq!(night_vec[1].key.idx_in_night, 1);
     }
 
     #[test]

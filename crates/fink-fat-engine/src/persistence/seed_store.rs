@@ -2,9 +2,9 @@ use ahash::AHashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    alerts::store::AlertStore,
     night_id::{NightId, PairingMode},
     persistence::{
-        alert_store::AlertStore,
         error::{BorrowError, PersistenceIoError},
         layout::PersistenceLayout,
         manifest::Manifest,
@@ -97,12 +97,9 @@ mod seed_store_owned_tests {
     use super::*;
     use crate::{
         Alert,
+        alerts::AlertKey,
         night_id::{NightId, PairingMode},
-        persistence::{
-            alert::AlertKey,
-            alert_store::AlertStore,
-            seed_node::{SeedKey, SeedNodeOwned},
-        },
+        persistence::seed_node::{SeedKey, SeedNodeOwned},
         seeding::seed_node::SeedNodeCore,
     };
 
@@ -143,7 +140,7 @@ mod seed_store_owned_tests {
                 let alert = Alert {
                     key: AlertKey {
                         night_id,
-                        idx_in_night: idx as u32,
+                        dia_source_id: idx as u64,
                     },
                     ..Default::default()
                 };
@@ -171,11 +168,11 @@ mod seed_store_owned_tests {
             let alert_keys = vec![
                 AlertKey {
                     night_id,
-                    idx_in_night: 0,
+                    dia_source_id: 0,
                 },
                 AlertKey {
                     night_id,
-                    idx_in_night: 1,
+                    dia_source_id: 1,
                 },
             ];
             let seed = make_seed_owned(night_id, 0, alert_keys);
@@ -206,11 +203,11 @@ mod seed_store_owned_tests {
                 vec![
                     AlertKey {
                         night_id,
-                        idx_in_night: 0,
+                        dia_source_id: 0,
                     },
                     AlertKey {
                         night_id,
-                        idx_in_night: 1,
+                        dia_source_id: 1,
                     },
                 ],
             ),
@@ -220,11 +217,11 @@ mod seed_store_owned_tests {
                 vec![
                     AlertKey {
                         night_id,
-                        idx_in_night: 2,
+                        dia_source_id: 2,
                     },
                     AlertKey {
                         night_id,
-                        idx_in_night: 3,
+                        dia_source_id: 3,
                     },
                 ],
             ),
@@ -247,7 +244,7 @@ mod seed_store_owned_tests {
             0,
             vec![AlertKey {
                 night_id,
-                idx_in_night: 0,
+                dia_source_id: 0,
             }],
         );
         store.insert(night_id, vec![seed1]);
@@ -259,7 +256,7 @@ mod seed_store_owned_tests {
                 0,
                 vec![AlertKey {
                     night_id,
-                    idx_in_night: 0,
+                    dia_source_id: 0,
                 }],
             ),
             make_seed_owned(
@@ -267,7 +264,7 @@ mod seed_store_owned_tests {
                 1,
                 vec![AlertKey {
                     night_id,
-                    idx_in_night: 1,
+                    dia_source_id: 1,
                 }],
             ),
         ];
@@ -286,7 +283,7 @@ mod seed_store_owned_tests {
                 0,
                 vec![AlertKey {
                     night_id,
-                    idx_in_night: 0,
+                    dia_source_id: 0,
                 }],
             );
             store.insert(night_id, vec![seed]);
@@ -322,11 +319,11 @@ mod seed_store_owned_tests {
             vec![
                 AlertKey {
                     night_id,
-                    idx_in_night: 0,
+                    dia_source_id: 0,
                 },
                 AlertKey {
                     night_id,
-                    idx_in_night: 1,
+                    dia_source_id: 1,
                 },
             ],
         );
@@ -350,7 +347,7 @@ mod seed_store_owned_tests {
                 0,
                 vec![AlertKey {
                     night_id,
-                    idx_in_night: 0,
+                    dia_source_id: 0,
                 }],
             );
             store.insert(night_id, vec![seed]);
@@ -376,7 +373,7 @@ mod seed_store_owned_tests {
             0,
             vec![AlertKey {
                 night_id,
-                idx_in_night: 999,
+                dia_source_id: 999,
             }],
         );
         store.insert(night_id, vec![seed]);
@@ -781,7 +778,7 @@ mod seed_store_owned_tests {
             0,
             vec![AlertKey {
                 night_id,
-                idx_in_night: 999,
+                dia_source_id: 999,
             }],
         );
         store.insert(night_id, vec![seed]);

@@ -45,6 +45,9 @@
 //! - `seeding::pairs` – deduplicates pairs using alert pointer identity.
 //! - `seeding::seed_node` – seeds borrow `&Alert` references.
 
+pub mod store;
+pub mod error;
+
 use std::{
     cmp::Ordering,
     fmt::{Display, Formatter, Result as FmtResult},
@@ -62,6 +65,14 @@ use crate::{
         layout::PersistenceLayout, manifest::Manifest,
     },
 };
+
+pub type DiaSourceId = u64;
+
+#[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct AlertKey {
+    pub night_id: NightId,
+    pub dia_source_id: DiaSourceId,
+}
 
 /// Single detection in the alert stream.
 ///
@@ -89,8 +100,6 @@ use crate::{
 pub struct Alert {
     /// Unique identifier for the alert, used for disk persistance.
     pub key: AlertKey,
-    /// LSST diaSourceId (stable, 64-bit).
-    pub dia_source_id: u64,
     /// Right ascension (radians).
     pub ra: Radian,
     /// 1σ uncertainty on RA (radians).
@@ -114,7 +123,7 @@ pub struct Alert {
 impl PartialEq for Alert {
     fn eq(&self, other: &Self) -> bool {
         // We use bitwise float equality to make Eq/Hash sound and deterministic.
-        self.dia_source_id == other.dia_source_id
+        self.key.dia_source_id == other.key.dia_source_id
             && self.band == other.band
             && self.mjd_tt.to_bits() == other.mjd_tt.to_bits()
             && self.ra.to_bits() == other.ra.to_bits()
@@ -141,7 +150,7 @@ impl Ord for Alert {
         self.mjd_tt
             .total_cmp(&other.mjd_tt)
             // Deterministic tie-breakers.
-            .then_with(|| self.dia_source_id.cmp(&other.dia_source_id))
+            .then_with(|| self.key.dia_source_id.cmp(&other.key.dia_source_id))
             .then_with(|| self.band.cmp(&other.band))
             .then_with(|| self.ra.total_cmp(&other.ra))
             .then_with(|| self.dec.total_cmp(&other.dec))
@@ -156,7 +165,7 @@ impl Ord for Alert {
 
 impl Hash for Alert {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.dia_source_id.hash(state);
+        self.key.dia_source_id.hash(state);
         self.band.hash(state);
 
         // Hash float fields by raw bits to match Eq and ensure determinism.
@@ -180,7 +189,13 @@ impl Display for Alert {
             f,
             "Alert(dia_source_id={}, ra={:.6} rad, dec={:.6} rad, mjd_tt={:.5}, \
              flux={:.3}±{:.3}, band={})",
-            self.dia_source_id, self.ra, self.dec, self.mjd_tt, self.flux, self.flux_err, self.band
+            self.key.dia_source_id,
+            self.ra,
+            self.dec,
+            self.mjd_tt,
+            self.flux,
+            self.flux_err,
+            self.band
         )
     }
 }
@@ -240,10 +255,4 @@ impl AlertSlice for &[Alert] {
     fn get_t0(&self) -> Option<MJDTT> {
         self.first().map(|alert| alert.mjd_tt)
     }
-}
-
-#[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct AlertKey {
-    pub night_id: NightId,
-    pub idx_in_night: u32,
 }

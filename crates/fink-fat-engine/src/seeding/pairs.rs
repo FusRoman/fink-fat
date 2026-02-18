@@ -440,9 +440,9 @@ mod pair_gen_tests {
     use std::collections::HashSet;
     use std::f64::consts::PI;
 
+    use crate::AlertKey;
     use crate::astro_math::{ang_sep, arcsec_to_rad};
     use crate::engine_config::pair_config::PairConfig;
-    use crate::persistence::alert::AlertKey;
     use crate::spacetime_bucket::bucket::{BucketKey, build_alert_bucket_index};
     use crate::spacetime_bucket::healpix_binner::HealpixBinner;
     use crate::spacetime_bucket::uniform_time_binner::UniformTimeBinner;
@@ -454,9 +454,8 @@ mod pair_gen_tests {
         Alert {
             key: AlertKey {
                 night_id: NightId(0),
-                idx_in_night: i as u32,
+                dia_source_id: i as u64,
             },
-            dia_source_id: i as u64,
             ra,
             ra_err: 0.5 * PI / (180.0 * 3600.0), // ~0.5 arcsec in radians
             dec,
