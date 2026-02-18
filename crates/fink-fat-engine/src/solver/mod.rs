@@ -76,13 +76,10 @@ use ahash::AHashMap;
 use outfit::{MJD, trajectories::batch_reader::ObservationBatch};
 
 use crate::{
-    Alert, AlertStore, Radian,
-    graph::RuntimeGraph,
-    solver::{
+    Alert, AlertStore, Radian, graph::AlertLinkageDAG, solver::{
         components::{ComponentId, ConnectedComponents},
         error::SolverError,
-    },
-    trajectory::TrackHypothesis,
+    }, trajectory::TrackHypothesis
 };
 
 pub mod bounded_beam;
@@ -505,7 +502,7 @@ pub trait Solver<'edge_lf, 'seed_lf> {
     ///   mutate edge flags elsewhere in the pipeline.
     fn solve(
         &self,
-        graph: &'edge_lf RuntimeGraph<'seed_lf>,
+        graph: &'edge_lf AlertLinkageDAG,
         cc: &'edge_lf ConnectedComponents<'edge_lf, 'seed_lf>,
         component_id: ComponentId,
     ) -> SolverOutput<'edge_lf, 'seed_lf>

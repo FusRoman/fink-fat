@@ -53,7 +53,7 @@
 
 use crate::{
     engine_config::solver_config::solver_policy::{SolverChoice, SolverPolicy, SolverRoutingMode},
-    graph::RuntimeGraph,
+    graph::AlertLinkageDAG,
     seeding::store::SeedStore,
     solver::{
         Solver, SolverOutput, bounded_beam::BoundedBeamSolver, components::ConnectedComponents,
@@ -175,7 +175,7 @@ impl SolverManager {
     pub fn run_plan<'edge_lf, 'seed_lf>(
         &self,
         comps: &'edge_lf ConnectedComponents<'edge_lf, 'seed_lf>,
-        graph: &'edge_lf RuntimeGraph<'seed_lf>,
+        graph: &'edge_lf AlertLinkageDAG,
         _seed_store: &'seed_lf SeedStore,
         plan: &SolvePlan,
     ) -> Vec<SolverOutput<'edge_lf, 'seed_lf>>

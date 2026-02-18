@@ -1,8 +1,6 @@
 use crate::{
-    alerts::store::AlertStore,
-    night_id::PairingMode,
-    persistence::{graph::GraphOwned, manifest::Manifest},
-    seeding::store::SeedStore,
+    alerts::store::AlertStore, graph::AlertLinkageDAG, night_id::PairingMode,
+    persistence::manifest::Manifest, seeding::store::SeedStore,
 };
 
 /// Loaded runtime state built from persisted artifacts.
@@ -21,5 +19,5 @@ pub struct RuntimeState {
     pub window: Option<PairingMode>,
     pub alert_store: AlertStore,
     pub seed_store: SeedStore,
-    pub graph: GraphOwned,
+    pub graph: AlertLinkageDAG,
 }

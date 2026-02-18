@@ -106,7 +106,7 @@ use ahash::AHashMap;
 
 use crate::{
     engine_config::solver_config::bounded_beam_config::BoundedBeamConfig,
-    graph::{RuntimeGraph, edge::Edge},
+    graph::{AlertLinkageDAG, edge::Edge},
     seeding::{SeedKey, SeedNode},
     solver::{
         Solver, SolverDiagnostics, SolverOutput,
@@ -191,7 +191,7 @@ impl BoundedBeamSolver {
     /// - If the component has no sources, this returns an empty output.
     pub fn solve_component_cc<'edge_lf, 'seed_lf>(
         &self,
-        graph: &'edge_lf RuntimeGraph<'seed_lf>,
+        graph: &'edge_lf AlertLinkageDAG,
         cc: &'edge_lf ConnectedComponents<'edge_lf, 'seed_lf>,
         component_id: ComponentId,
     ) -> SolverOutput<'edge_lf, 'seed_lf>
@@ -259,7 +259,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> Solver<'edge_lf, 'seed_lf> for BoundedBeamSo
     /// This is the trait entrypoint used by orchestration code.
     fn solve(
         &self,
-        graph: &'edge_lf RuntimeGraph<'seed_lf>,
+        graph: &'edge_lf AlertLinkageDAG,
         cc: &'edge_lf ConnectedComponents<'edge_lf, 'seed_lf>,
         component_id: ComponentId,
     ) -> SolverOutput<'edge_lf, 'seed_lf>
@@ -288,11 +288,11 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> Solver<'edge_lf, 'seed_lf> for BoundedBeamSo
 /// - Keeping references avoids copying edge payloads.
 /// - Caching `dst` and `cost` reduces overhead inside the inner beam loop.
 #[derive(Clone, Copy, Debug)]
-struct OutEdge<'edge_lf, 'seed_lf> {
+struct OutEdge<'edge_lf> {
     /// Destination node (component-local index).
     dst: usize,
     /// Borrowed reference to the original edge.
-    edge: &'edge_lf Edge<'seed_lf>,
+    edge: &'edge_lf Edge,
     /// Cached edge cost (lower is better).
     cost: f64,
 }
@@ -302,7 +302,7 @@ struct OutEdge<'edge_lf, 'seed_lf> {
 /// Layout
 /// ------
 /// `out[u]` is the list of outgoing edges from local node `u`.
-type Adjacency<'edge_lf, 'seed_lf> = Vec<Vec<OutEdge<'edge_lf, 'seed_lf>>>;
+type Adjacency<'edge_lf> = Vec<Vec<OutEdge<'edge_lf>>>;
 
 /// Beam search state stored as a node in an implicit path tree.
 ///
@@ -319,10 +319,10 @@ type Adjacency<'edge_lf, 'seed_lf> = Vec<Vec<OutEdge<'edge_lf, 'seed_lf>>>;
 /// - `first_night`, `last_night`: cached night bounds (fast span computation),
 /// - `source`: root source node local id (used for per-source caps).
 #[derive(Clone, Copy, Debug)]
-struct State<'edge_lf, 'seed_lf> {
+struct State<'edge_lf> {
     last: usize,
     parent: Option<usize>, // index into `states`
-    in_edge: Option<&'edge_lf Edge<'seed_lf>>,
+    in_edge: Option<&'edge_lf Edge>,
     total_cost: f64,
     n_edges: u32,
     first_night: u32,
@@ -373,9 +373,9 @@ struct State<'edge_lf, 'seed_lf> {
 fn build_solver_adjacency<'edge_lf, 'seed_lf>(
     cfg: &BoundedBeamConfig,
     component_nodes: &[&'seed_lf SeedNode],
-    component_out_edges: &[Vec<&'edge_lf Edge<'seed_lf>>],
+    component_out_edges: &[Vec<&'edge_lf Edge>],
     diag: &mut SolverDiagnostics,
-) -> Adjacency<'edge_lf, 'seed_lf> {
+) -> Adjacency<'edge_lf> {
     // Build SeedKey -> local index for destinations.
     // This is small (component-local) and prevents repeated O(n) scans.
     let mut local_of_key: ahash::AHashMap<SeedKey, usize> = ahash::AHashMap::default();
@@ -386,15 +386,15 @@ fn build_solver_adjacency<'edge_lf, 'seed_lf>(
     }
 
     let n = component_nodes.len();
-    let mut out: Adjacency<'edge_lf, 'seed_lf> = (0..n).map(|_| Vec::new()).collect();
+    let mut out: Adjacency<'edge_lf> = (0..n).map(|_| Vec::new()).collect();
 
     for (u, edges_u) in component_out_edges.iter().enumerate() {
         // Convert and cache (dst, cost) for faster expansion.
-        let mut buf: Vec<OutEdge<'edge_lf, 'seed_lf>> = Vec::with_capacity(edges_u.len());
+        let mut buf: Vec<OutEdge<'edge_lf>> = Vec::with_capacity(edges_u.len());
 
         for &e in edges_u.iter() {
             // Destination must be inside the component (guaranteed by CC).
-            let Some(&dst) = local_of_key.get(&e.to.key()) else {
+            let Some(&dst) = local_of_key.get(&e.to) else {
                 // Defensive fallback: skip malformed edges.
                 continue;
             };
@@ -405,7 +405,7 @@ fn build_solver_adjacency<'edge_lf, 'seed_lf>(
             buf.push(OutEdge {
                 dst,
                 edge: e,
-                cost: e.core.cost,
+                cost: e.cost,
             });
         }
 
@@ -454,8 +454,8 @@ fn build_solver_adjacency<'edge_lf, 'seed_lf>(
 fn init_beam_states<'edge_lf, 'seed_lf, 'alert_lf>(
     sources: &[usize],
     component_nodes: &[&'seed_lf SeedNode],
-) -> (Vec<State<'edge_lf, 'seed_lf>>, Vec<usize>) {
-    let mut states: Vec<State<'edge_lf, 'seed_lf>> = Vec::new();
+) -> (Vec<State<'edge_lf>>, Vec<usize>) {
+    let mut states: Vec<State<'edge_lf>> = Vec::new();
     let mut beam: Vec<usize> = Vec::new();
 
     for &s in sources {
@@ -492,7 +492,7 @@ fn init_beam_states<'edge_lf, 'seed_lf, 'alert_lf>(
 /// Return
 /// ------
 /// `true` if the node has no outgoing edges.
-fn is_sink<'edge_lf, 'seed_lf>(out: &Adjacency<'edge_lf, 'seed_lf>, u: usize) -> bool {
+fn is_sink<'edge_lf>(out: &Adjacency<'edge_lf>, u: usize) -> bool {
     out[u].is_empty()
 }
 
@@ -531,9 +531,9 @@ fn is_sink<'edge_lf, 'seed_lf>(out: &Adjacency<'edge_lf, 'seed_lf>, u: usize) ->
 /// - `cfg.min_nodes` (minimum track length in nodes).
 fn expand_beam<'edge_lf, 'seed_lf>(
     cfg: &BoundedBeamConfig,
-    out: &Adjacency<'edge_lf, 'seed_lf>,
+    out: &Adjacency<'edge_lf>,
     component_nodes: &[&'seed_lf SeedNode],
-    states: &mut Vec<State<'edge_lf, 'seed_lf>>,
+    states: &mut Vec<State<'edge_lf>>,
     beam: &[usize],
     terminal_states: &mut Vec<usize>,
     emitted_per_source: &mut [u32],
@@ -634,11 +634,11 @@ fn expand_beam<'edge_lf, 'seed_lf>(
 /// - The returned `night_span` is computed from cached `(first_night, last_night)`.
 fn reconstruct_track<'edge_lf, 'seed_lf>(
     terminal_state_id: usize,
-    states: &[State<'edge_lf, 'seed_lf>],
+    states: &[State<'edge_lf>],
     component_nodes: &[&'seed_lf SeedNode],
 ) -> TrackHypothesis<'edge_lf, 'seed_lf> {
     let mut node_idx_rev: Vec<usize> = Vec::new();
-    let mut edge_rev: Vec<&'edge_lf Edge<'seed_lf>> = Vec::new();
+    let mut edge_rev: Vec<&'edge_lf Edge> = Vec::new();
 
     let mut cur = Some(terminal_state_id);
     while let Some(id) = cur {
@@ -785,9 +785,9 @@ fn sort_and_truncate_tracks<'edge_lf, 'seed_lf>(
 /// - `cfg.max_out_per_node` pruning is applied here so it can be tuned per solver.
 fn enumerate_beam_tracks_from_component_view<'edge_lf, 'seed_lf>(
     cfg: &BoundedBeamConfig,
-    _graph: &RuntimeGraph<'seed_lf>,
+    _graph: &AlertLinkageDAG,
     component_nodes: &[&'seed_lf SeedNode],
-    component_out_edges: &[Vec<&'edge_lf Edge<'seed_lf>>],
+    component_out_edges: &[Vec<&'edge_lf Edge>],
     sources_local: &[LocalIdx],
     diag: &mut SolverDiagnostics,
 ) -> AHashMap<u32, TrackHypothesis<'edge_lf, 'seed_lf>> {

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     night_id::NightId,
     persistence::{
-        EDGE_JOURNAL_SCHEMA_VERSION, edge::edge_op::EdgeOp, envelope::DiskEnvelope,
+        EDGE_JOURNAL_SCHEMA_VERSION, edge_journal::edge_op::EdgeOp, envelope::DiskEnvelope,
         error::PersistenceIoError,
     },
 };

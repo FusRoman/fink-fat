@@ -306,7 +306,7 @@ impl SeedStore {
 #[cfg(test)]
 mod seed_store_tests {
     use super::*;
-    use crate::{Alert, AlertStore, alerts::AlertKey, night_id::NightId};
+    use crate::{alerts::AlertKey, night_id::NightId};
 
     // -------------------------------------------------------------------------
     // Test helpers
@@ -326,58 +326,6 @@ mod seed_store_tests {
             members: alert_keys,
             ..Default::default()
         }
-    }
-
-    /// Create a test `AlertStore` with dummy alerts.
-    /// Each alert has ID = index and is properly keyed.
-    fn make_alert_store_with_nights(nights: &[(NightId, usize)]) -> AlertStore {
-        let mut map = AHashMap::new();
-
-        for &(night_id, n_alerts) in nights {
-            let mut alerts = Vec::new();
-            for idx in 0..n_alerts {
-                let alert = Alert {
-                    key: AlertKey {
-                        night_id,
-                        dia_source_id: idx as u64,
-                    },
-                    ..Default::default()
-                };
-                alerts.push(alert);
-            }
-            map.insert(night_id, alerts);
-        }
-
-        AlertStore::from_map(map)
-    }
-
-    /// Create a simple alert store with consecutive nights.
-    fn make_alert_store(max_night_id: u32, alerts_per_night: usize) -> AlertStore {
-        let nights: Vec<_> = (0..=max_night_id)
-            .map(|n| (nid(n), alerts_per_night))
-            .collect();
-        make_alert_store_with_nights(&nights)
-    }
-
-    /// Create a store from a list of night IDs with one seed per night.
-    fn make_store_from_nights(nights: &[u32]) -> SeedStore {
-        let mut store = SeedStore::new();
-        for &night in nights {
-            let night_id = nid(night);
-            let alert_keys = vec![
-                AlertKey {
-                    night_id,
-                    dia_source_id: 0,
-                },
-                AlertKey {
-                    night_id,
-                    dia_source_id: 1,
-                },
-            ];
-            let seed = make_seed_owned(night_id, 0, alert_keys);
-            store.insert_vec_seed(night_id, vec![seed]);
-        }
-        store
     }
 
     // -------------------------------------------------------------------------

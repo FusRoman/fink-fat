@@ -36,31 +36,22 @@ pub fn run(
                     })?;
 
             // -----------------------------------------------------------------
-            // 2) Prepare runtime graph (borrowed)
+            // 1) Construct connected components
             // -----------------------------------------------------------------
-            let graph = ctx
-                .runtime_state
-                .graph
-                .to_borrowed(&ctx.runtime_state.seed_store)
-                .map_err(|e| EngineError::StageFailed {
-                    stage: PipelineStage::Solve,
-                    message: format!("graph.to_borrowed failed: {e:?}"),
-                })?;
+            let components = ConnectedComponents::compute(
+                &ctx.runtime_state.seed_store,
+                &ctx.runtime_state.graph,
+                true,
+            )?;
 
             // -----------------------------------------------------------------
-            // 3) Construct connected components
-            // -----------------------------------------------------------------
-            let components =
-                ConnectedComponents::compute(&ctx.runtime_state.seed_store, &graph, true)?;
-
-            // -----------------------------------------------------------------
-            // 4) Make solve plan
+            // 2) Make solve plan
             // -----------------------------------------------------------------
             let plan = ctx.solver_manager.make_plan(&components);
 
             let results = ctx.solver_manager.run_plan(
                 &components,
-                &graph,
+                &ctx.runtime_state.graph,
                 &ctx.runtime_state.seed_store,
                 &plan,
             );

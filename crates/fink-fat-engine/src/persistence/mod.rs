@@ -1,7 +1,6 @@
-pub mod edge;
+pub mod edge_journal;
 pub mod envelope;
 pub mod error;
-pub mod graph;
 pub mod layout;
 pub mod manifest;
 pub mod runtime_state;
@@ -16,12 +15,12 @@ use crate::{
     alerts::{AlertSlice, store::AlertStore},
     engine_config::EngineConfig,
     error::{EngineError, FinkFatError},
+    graph::AlertLinkageDAG,
     night_id::{NightId, PairingMode},
     persistence::{
-        edge::{edge_journal::EdgeJournalStore, edge_op::EdgeOp},
+        edge_journal::{EdgeJournalStore, edge_op::EdgeOp},
         envelope::DiskEnvelope,
         error::{PersistenceError, PersistenceIoError},
-        graph::GraphOwned,
         layout::PersistenceLayout,
         manifest::{Manifest, NightManifestEntry},
         runtime_state::RuntimeState,
@@ -203,7 +202,7 @@ impl PersistenceManager {
 
         // 3) Load edges owned via edge journal (snapshot + deltas), then convert to borrowed graph.
         let edges_owned = self.edge_journal.load_edges(&manifest, window)?;
-        let graph_owned = GraphOwned::from_edges(edges_owned);
+        let graph_owned = AlertLinkageDAG::from_edges(edges_owned);
 
         Ok(RuntimeState {
             manifest,

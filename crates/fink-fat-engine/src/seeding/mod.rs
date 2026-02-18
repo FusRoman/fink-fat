@@ -91,6 +91,12 @@ pub struct SeedKey {
     pub unique_id: SeedId,
 }
 
+impl Display for SeedKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "SeedKey(nid={} sid={})", self.night_id, self.unique_id)
+    }
+}
+
 /// Seed node with borrowed alert references.
 /// This is the main struct used for seeding and graph construction.
 ///

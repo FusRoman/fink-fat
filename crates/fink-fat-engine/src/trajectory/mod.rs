@@ -31,7 +31,7 @@ pub struct TrackHypothesis<'edge_lf, 'seed_lf> {
     /// Nodes in strictly increasing time (night / epoch order).
     pub nodes: Vec<&'seed_lf SeedNode>,
     /// Edges used to connect the nodes (typically len = nodes.len() - 1).
-    pub edges: Vec<&'edge_lf Edge<'seed_lf>>,
+    pub edges: Vec<&'edge_lf Edge>,
 
     /// Core track metadata (cost, night span).
     pub core: TrackCore,

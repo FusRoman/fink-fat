@@ -6,46 +6,50 @@ use crate::{
     MJDTT,
     engine_config::edge_config::EdgeConfig,
     graph::edge::{Edge, edge_prediction::EdgeRankingModelPool, error::EdgeBuilderError},
-    persistence::graph::GraphOwned,
     pipeline::progress_sink::ProgressSink,
     seeding::{SeedKey, SeedNode},
     spacetime_bucket::spatial_binner::SpatialBinner,
 };
 
-#[derive(Debug, Clone)]
-pub struct GraphCore {
+#[derive(Debug)]
+pub struct AlertLinkageDAG {
     pub in_deg: AHashMap<SeedKey, usize>,
     pub out_deg: AHashMap<SeedKey, usize>,
+    pub edges: Vec<Edge>,
 }
 
-#[derive(Debug)]
-pub struct RuntimeGraph<'seed_lf> {
-    pub core: GraphCore,
-    pub edges: Vec<Edge<'seed_lf>>,
-}
-
-impl<'seed_lf> RuntimeGraph<'seed_lf> {
+impl AlertLinkageDAG {
     pub fn new() -> Self {
         Self {
-            core: GraphCore {
-                in_deg: AHashMap::new(),
-                out_deg: AHashMap::new(),
-            },
+            in_deg: AHashMap::new(),
+            out_deg: AHashMap::new(),
             edges: Vec::new(),
         }
     }
 
-    pub fn to_owned(&self) -> GraphOwned {
-        GraphOwned {
-            core: self.core.clone(),
-            edges: self.edges.iter().map(|e| e.to_owned()).collect(),
+    pub fn from_edges(edges: Vec<Edge>) -> Self {
+        let mut in_deg = AHashMap::new();
+        let mut out_deg = AHashMap::new();
+
+        for edge in &edges {
+            let from = edge.from;
+            let to = edge.to;
+
+            *out_deg.entry(from).or_insert(0) += 1;
+            *in_deg.entry(to).or_insert(0) += 1;
+        }
+
+        Self {
+            in_deg,
+            out_deg,
+            edges,
         }
     }
 
     pub fn add_inter_night_edges<B: SpatialBinner>(
         &mut self,
-        left_nodes: &'seed_lf [SeedNode],
-        right_nodes: &'seed_lf [SeedNode],
+        left_nodes: &[SeedNode],
+        right_nodes: &[SeedNode],
         edge_config: &EdgeConfig,
         spatial_binner: &B,
         time_binner_width: MJDTT,
@@ -88,11 +92,11 @@ impl<'seed_lf> RuntimeGraph<'seed_lf> {
         )?;
 
         for edge in new_edges {
-            let from = edge.from.key();
-            let to = edge.to.key();
+            let from = edge.from;
+            let to = edge.to;
 
-            *self.core.out_deg.entry(from).or_insert(0) += 1;
-            *self.core.in_deg.entry(to).or_insert(0) += 1;
+            *self.out_deg.entry(from).or_insert(0) += 1;
+            *self.in_deg.entry(to).or_insert(0) += 1;
 
             self.edges.push(edge);
         }

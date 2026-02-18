@@ -3,7 +3,7 @@ use ahash::AHashMap;
 use crate::{
     night_id::NightId,
     seeding::{SeedKey, store::SeedStore},
-    solver::components::error::ComponentError,
+    solver::components::error::{ComponentError, SeedOrigin},
 };
 
 /// Dense identifier used for seeds in global index space.
@@ -76,16 +76,20 @@ impl SeedGlobalIndex {
     /// Return
     /// ------
     /// * `Ok(usize)` – Dense index of the seed key.
-    /// * `Err(ComponentError::SeedKeyInIndexNotFound)` – If the seed key is not found in the seed store's reverse index.
+    /// * `Err(ComponentError::SeedKeyNotFound)` – If the seed key is not found in the seed store's reverse index.
     #[inline]
     pub fn idx_of_key(
         &self,
         seed_store: &SeedStore,
         key: SeedKey,
     ) -> Result<usize, ComponentError> {
-        let (night_id, index_in_vec) = seed_store
-            .get_reverse_index(key)
-            .ok_or(ComponentError::SeedKeyInIndexNotFound(key))?;
+        let (night_id, index_in_vec) =
+            seed_store
+                .get_reverse_index(key)
+                .ok_or(ComponentError::SeedKeyNotFound {
+                    key,
+                    origin: SeedOrigin::Index,
+                })?;
 
         Ok((self.base[&night_id] + (index_in_vec as u32)) as usize)
     }
