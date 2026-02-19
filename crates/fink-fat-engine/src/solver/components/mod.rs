@@ -1021,3 +1021,1140 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
         }
     }
 }
+
+#[cfg(test)]
+mod connected_components_tests {
+    use super::*;
+    use crate::{
+        Alert, AlertKey,
+        astro_math::arcsec_to_rad,
+        engine_config::solver_config::solver_policy::{
+            SolverChoice, SolverPolicy, SolverRoutingMode,
+        },
+        graph::AlertLinkageDAG,
+        graph::edge::Edge,
+        night_id::NightId,
+        seeding::{SeedKey, SeedNode, store::SeedStore},
+    };
+    use ahash::AHashSet;
+    use proptest::prelude::*;
+
+    // =========================================================================
+    // Helpers
+    // =========================================================================
+
+    fn nid(v: u32) -> NightId {
+        NightId::from(v)
+    }
+
+    /// Build a minimal `Alert` with given parameters.
+    fn mk_alert(source_id: u64, night_id: NightId, mjd_tt: f64) -> Alert {
+        Alert {
+            key: AlertKey {
+                night_id,
+                dia_source_id: source_id,
+            },
+            ra: 1.0,
+            ra_err: arcsec_to_rad(0.5),
+            dec: 0.1,
+            dec_err: arcsec_to_rad(0.5),
+            mjd_tt,
+            flux: 1000.0,
+            flux_err: 10.0,
+            band: 1,
+        }
+    }
+
+    /// Insert `count` seeds into `store` for `night_id`, built from alert pairs.
+    /// Returns the `SeedKey`s in insertion order.
+    fn insert_seeds(
+        store: &mut SeedStore,
+        night_id: NightId,
+        count: usize,
+        source_id_offset: u64,
+    ) -> Vec<SeedKey> {
+        let mut keys = Vec::with_capacity(count);
+        let t0 = 60000.0 + night_id.value() as f64;
+
+        for i in 0..count {
+            let sid_a = source_id_offset + (2 * i) as u64;
+            let sid_b = source_id_offset + (2 * i + 1) as u64;
+            let dt = 30.0 / 1440.0; // 30 min
+            let alert_a = mk_alert(sid_a, night_id, t0 + i as f64 * 0.01);
+            let alert_b = mk_alert(sid_b, night_id, t0 + i as f64 * 0.01 + dt);
+
+            if let Some(seed) = SeedNode::from_pair(store, night_id, &alert_a, &alert_b, None) {
+                keys.push(seed.key());
+                store.insert_vec_seed(night_id, vec![seed]);
+            }
+        }
+        keys
+    }
+
+    /// Build a store + record from a spec: `(night_id_u32, seed_count)`.
+    fn build_store(spec: &[(u32, usize)]) -> (SeedStore, Vec<(NightId, Vec<SeedKey>)>) {
+        let mut store = SeedStore::new();
+        let mut record = Vec::new();
+        let mut source_id_offset: u64 = 0;
+
+        for &(n, count) in spec {
+            let night_id = nid(n);
+            let keys = insert_seeds(&mut store, night_id, count, source_id_offset);
+            record.push((night_id, keys));
+            source_id_offset += (count as u64) * 2 + 100;
+        }
+        (store, record)
+    }
+
+    /// Create a directed edge between two seed keys.
+    fn mk_edge(from: SeedKey, to: SeedKey, cost: f64, active: bool) -> Edge {
+        Edge {
+            from,
+            to,
+            cost,
+            dt_days: 1.0,
+            active,
+        }
+    }
+
+    /// Build an `AlertLinkageDAG` from a list of edges.
+    fn build_graph(edges: Vec<Edge>) -> AlertLinkageDAG {
+        AlertLinkageDAG::from_edges(edges)
+    }
+
+    // =========================================================================
+    // Unit tests — empty / trivial cases
+    // =========================================================================
+
+    #[test]
+    fn empty_store_empty_graph_gives_zero_components() {
+        let store = SeedStore::new();
+        let graph = build_graph(vec![]);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        assert_eq!(cc.n_components, 0);
+    }
+
+    #[test]
+    fn single_seed_no_edges_produces_one_singleton_component() {
+        let (store, record) = build_store(&[(10, 1)]);
+        let graph = build_graph(vec![]);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        assert_eq!(cc.n_components, 1);
+        assert_eq!(cc.component_size(0), 1);
+        assert_eq!(cc.component_active_edges(0), 0);
+
+        // Night bounds should be the single night.
+        let bounds = cc.component_night_bounds(0).unwrap();
+        assert_eq!(bounds, (nid(10), nid(10)));
+
+        // Night span is 0 for a single-night component.
+        assert_eq!(cc.component_night_span(0), 0);
+
+        // Sources and sinks: no edges, so no sources; all nodes are sinks.
+        assert!(cc.component_sources_local(0).is_empty());
+        assert_eq!(cc.component_sinks_local(0).len(), 1);
+
+        // Accessor: component_id_of_seed
+        let key = record[0].1[0];
+        assert_eq!(cc.component_id_of_seed(&store, key).unwrap(), 0);
+    }
+
+    #[test]
+    fn isolated_seeds_across_nights_produce_singleton_components() {
+        let (store, _) = build_store(&[(10, 1), (11, 1), (12, 1)]);
+        let graph = build_graph(vec![]);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        assert_eq!(cc.n_components, 3);
+        for cid in 0..3 {
+            assert_eq!(cc.component_size(cid), 1);
+        }
+    }
+
+    // =========================================================================
+    // Unit tests — linear chain (N0 -> N1 -> N2)
+    // =========================================================================
+
+    #[test]
+    fn linear_chain_forms_single_component() {
+        let (store, record) = build_store(&[(10, 1), (11, 1), (12, 1)]);
+        let k0 = record[0].1[0];
+        let k1 = record[1].1[0];
+        let k2 = record[2].1[0];
+
+        let edges = vec![mk_edge(k0, k1, 1.0, true), mk_edge(k1, k2, 1.0, true)];
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        assert_eq!(cc.n_components, 1);
+        assert_eq!(cc.component_size(0), 3);
+        assert_eq!(cc.component_active_edges(0), 2);
+        assert_eq!(cc.component_night_span(0), 2); // 12 - 10
+
+        // The node on night 10 should be a source (in_deg=0, out_deg>0).
+        let sources = cc.component_sources_local(0);
+        assert!(!sources.is_empty());
+
+        // The node on night 12 should be a sink (out_deg=0).
+        let sinks = cc.component_sinks_local(0);
+        assert!(!sinks.is_empty());
+    }
+
+    // =========================================================================
+    // Unit tests — two disjoint components
+    // =========================================================================
+
+    #[test]
+    fn two_disjoint_chains_form_two_components() {
+        // Component A: night 10 -> night 11
+        // Component B: night 20 -> night 21
+        let (store, record) = build_store(&[(10, 1), (11, 1), (20, 1), (21, 1)]);
+        let ka0 = record[0].1[0]; // night 10
+        let ka1 = record[1].1[0]; // night 11
+        let kb0 = record[2].1[0]; // night 20
+        let kb1 = record[3].1[0]; // night 21
+
+        let edges = vec![mk_edge(ka0, ka1, 1.0, true), mk_edge(kb0, kb1, 2.0, true)];
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        assert_eq!(cc.n_components, 2);
+
+        // Each component should have 2 nodes.
+        let sizes: AHashSet<usize> = (0..2).map(|cid| cc.component_size(cid)).collect();
+        assert_eq!(sizes, AHashSet::from_iter([2]));
+
+        // Both endpoints of edge A should be in the same component.
+        let ca0 = cc.component_id_of_seed(&store, ka0).unwrap();
+        let ca1 = cc.component_id_of_seed(&store, ka1).unwrap();
+        assert_eq!(ca0, ca1);
+
+        // Both endpoints of edge B should be in the same component.
+        let cb0 = cc.component_id_of_seed(&store, kb0).unwrap();
+        let cb1 = cc.component_id_of_seed(&store, kb1).unwrap();
+        assert_eq!(cb0, cb1);
+
+        // The two chains should be in different components.
+        assert_ne!(ca0, cb0);
+    }
+
+    // =========================================================================
+    // Unit tests — active_only filtering
+    // =========================================================================
+
+    #[test]
+    fn active_only_ignores_inactive_edges_for_connectivity() {
+        let (store, record) = build_store(&[(10, 1), (11, 1), (12, 1)]);
+        let k0 = record[0].1[0];
+        let k1 = record[1].1[0];
+        let k2 = record[2].1[0];
+
+        // k0 -> k1 is active, k1 -> k2 is INACTIVE
+        let edges = vec![mk_edge(k0, k1, 1.0, true), mk_edge(k1, k2, 1.0, false)];
+        let graph = build_graph(edges);
+
+        // Without active_only: single component (all edges used for connectivity).
+        let cc_all = ConnectedComponents::compute(&store, &graph, false).unwrap();
+        assert_eq!(cc_all.n_components, 1);
+
+        // With active_only: the inactive edge is ignored, so k2 is isolated.
+        let cc_active = ConnectedComponents::compute(&store, &graph, true).unwrap();
+        assert_eq!(cc_active.n_components, 2);
+    }
+
+    #[test]
+    fn active_only_excludes_inactive_edges_from_adjacency() {
+        let (store, record) = build_store(&[(10, 2), (11, 1)]);
+        let k0a = record[0].1[0]; // night 10, seed 0
+        let k0b = record[0].1[1]; // night 10, seed 1
+        let k1 = record[1].1[0]; // night 11
+
+        // Both edges point forward, but only first is active.
+        let edges = vec![
+            mk_edge(k0a, k1, 1.0, true),
+            mk_edge(k0b, k1, 1.0, false),
+        ];
+        let graph = build_graph(edges);
+
+        let cc = ConnectedComponents::compute(&store, &graph, true).unwrap();
+
+        // k0b is disconnected (active_only), so we expect 2 components.
+        assert_eq!(cc.n_components, 2);
+
+        // Find the component with k0a and k1.
+        let cid = cc.component_id_of_seed(&store, k0a).unwrap();
+        assert_eq!(cc.component_id_of_seed(&store, k1).unwrap(), cid);
+
+        // In that component, the adjacency should have exactly 1 edge.
+        let out = cc.component_out_edges(cid);
+        let total_edges: usize = out.iter().map(|adj| adj.len()).sum();
+        assert_eq!(total_edges, 1);
+    }
+
+    // =========================================================================
+    // Unit tests — directed adjacency and degree invariants
+    // =========================================================================
+
+    #[test]
+    fn adjacency_degrees_match_edge_count() {
+        //   night 10: [s0, s1]
+        //   night 11: [s2]
+        //   edges: s0 -> s2, s1 -> s2  (both time-forward and active)
+        let (store, record) = build_store(&[(10, 2), (11, 1)]);
+        let s0 = record[0].1[0];
+        let s1 = record[0].1[1];
+        let s2 = record[1].1[0];
+
+        let edges = vec![mk_edge(s0, s2, 1.0, true), mk_edge(s1, s2, 2.0, true)];
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        assert_eq!(cc.n_components, 1);
+        let cid: ComponentId = 0;
+        let n = cc.component_size(cid);
+        assert_eq!(n, 3);
+
+        let in_deg = cc.component_in_deg_local(cid);
+        let out_deg = cc.component_out_deg_local(cid);
+
+        // Sum of in-degrees == sum of out-degrees == number of directed edges.
+        let sum_in: u32 = in_deg.iter().sum();
+        let sum_out: u32 = out_deg.iter().sum();
+        assert_eq!(sum_in, sum_out);
+        assert_eq!(sum_in, 2); // 2 time-forward edges
+
+        // component_out adjacency total edge count must match.
+        let out_edges = cc.component_out_edges(cid);
+        let adj_total: usize = out_edges.iter().map(|adj| adj.len()).sum();
+        assert_eq!(adj_total, 2);
+    }
+
+    #[test]
+    fn back_edges_are_excluded_from_adjacency() {
+        // night 11 -> night 10 is a back-edge (not time-forward).
+        let (store, record) = build_store(&[(10, 1), (11, 1)]);
+        let k10 = record[0].1[0];
+        let k11 = record[1].1[0];
+
+        // Back-edge: night 11 to night 10 (wrong direction).
+        let edges = vec![Edge {
+            from: k11,
+            to: k10,
+            cost: 1.0,
+            dt_days: 1.0,
+            active: true,
+        }];
+        let graph = build_graph(edges);
+
+        // active_only=false: back-edge still participates in connectivity
+        // (Union-Find is undirected) but not in the directed adjacency.
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+        assert_eq!(cc.n_components, 1);
+        assert_eq!(cc.component_size(0), 2);
+
+        // The directed adjacency should have zero edges (back-edge filtered out).
+        let out = cc.component_out_edges(0);
+        let total: usize = out.iter().map(|adj| adj.len()).sum();
+        assert_eq!(total, 0);
+
+        // Since there are no directed edges, all nodes are sinks.
+        assert_eq!(cc.component_sinks_local(0).len(), 2);
+    }
+
+    // =========================================================================
+    // Unit tests — sources and sinks definitions
+    // =========================================================================
+
+    #[test]
+    fn sources_have_zero_in_degree_and_positive_out_degree() {
+        // Chain: s0 -> s1 -> s2
+        let (store, record) = build_store(&[(10, 1), (11, 1), (12, 1)]);
+        let k0 = record[0].1[0];
+        let k1 = record[1].1[0];
+        let k2 = record[2].1[0];
+
+        let edges = vec![mk_edge(k0, k1, 1.0, true), mk_edge(k1, k2, 1.5, true)];
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        let cid: ComponentId = 0;
+        let sources = cc.component_sources_local(cid);
+        let in_deg = cc.component_in_deg_local(cid);
+        let out_deg = cc.component_out_deg_local(cid);
+
+        for &src in sources {
+            assert_eq!(in_deg[src as usize], 0, "source must have in_deg == 0");
+            assert!(
+                out_deg[src as usize] > 0,
+                "source must have out_deg > 0"
+            );
+        }
+    }
+
+    #[test]
+    fn sinks_have_zero_out_degree() {
+        let (store, record) = build_store(&[(10, 1), (11, 1), (12, 1)]);
+        let k0 = record[0].1[0];
+        let k1 = record[1].1[0];
+        let k2 = record[2].1[0];
+
+        let edges = vec![mk_edge(k0, k1, 1.0, true), mk_edge(k1, k2, 1.5, true)];
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        let cid: ComponentId = 0;
+        let sinks = cc.component_sinks_local(cid);
+        let out_deg = cc.component_out_deg_local(cid);
+
+        for &snk in sinks {
+            assert_eq!(out_deg[snk as usize], 0, "sink must have out_deg == 0");
+        }
+    }
+
+    // =========================================================================
+    // Unit tests — night bounds
+    // =========================================================================
+
+    #[test]
+    fn night_bounds_reflect_min_max_nights_in_component() {
+        let (store, record) = build_store(&[(5, 1), (10, 1), (20, 1)]);
+        let k5 = record[0].1[0];
+        let k10 = record[1].1[0];
+        let k20 = record[2].1[0];
+
+        // All connected: single component spanning nights 5..20.
+        let edges = vec![mk_edge(k5, k10, 1.0, true), mk_edge(k10, k20, 1.0, true)];
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        assert_eq!(cc.n_components, 1);
+        let bounds = cc.component_night_bounds(0).unwrap();
+        assert_eq!(bounds.0, nid(5));
+        assert_eq!(bounds.1, nid(20));
+        assert_eq!(cc.component_night_span(0), 15);
+    }
+
+    // =========================================================================
+    // Unit tests — classify (solver routing)
+    // =========================================================================
+
+    #[test]
+    fn classify_force_mode_returns_forced_choice() {
+        let (store, record) = build_store(&[(10, 2), (11, 2)]);
+        let k0 = record[0].1[0];
+        let k1 = record[1].1[0];
+
+        let edges = vec![mk_edge(k0, k1, 1.0, true)];
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        let policy = SolverPolicy {
+            routing: SolverRoutingMode::Force(SolverChoice::MinCostFlow),
+            ..Default::default()
+        };
+
+        for cid in 0..cc.n_components {
+            assert_eq!(cc.classify(cid, &policy), SolverChoice::MinCostFlow);
+        }
+    }
+
+    #[test]
+    fn classify_tiny_component_returns_bounded_beam() {
+        let (store, record) = build_store(&[(10, 1), (11, 1)]);
+        let k0 = record[0].1[0];
+        let k1 = record[1].1[0];
+
+        let edges = vec![mk_edge(k0, k1, 1.0, true)];
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        let policy = SolverPolicy {
+            routing: SolverRoutingMode::Heuristics,
+            trivial_max_nodes: 10,
+            trivial_max_active_edges: 20,
+            ..Default::default()
+        };
+
+        let cid = cc.component_id_of_seed(&store, k0).unwrap();
+        assert_eq!(cc.classify(cid, &policy), SolverChoice::BoundedBeam);
+    }
+
+    #[test]
+    fn classify_large_night_span_returns_blob_breaker() {
+        // Component spanning many nights.
+        let (store, record) = build_store(&[(1, 1), (100, 1)]);
+        let k0 = record[0].1[0];
+        let k1 = record[1].1[0];
+
+        let edges = vec![mk_edge(k0, k1, 1.0, true)];
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        let policy = SolverPolicy {
+            routing: SolverRoutingMode::Heuristics,
+            trivial_max_nodes: 1,        // too small to be trivial
+            trivial_max_active_edges: 0,  // too small to be trivial
+            max_night_span_for_mcf: 4,
+            ..Default::default()
+        };
+
+        let cid = cc.component_id_of_seed(&store, k0).unwrap();
+        assert_eq!(cc.classify(cid, &policy), SolverChoice::BlobBreaker);
+    }
+
+    #[test]
+    fn classify_within_mcf_budget_returns_min_cost_flow() {
+        let (store, record) = build_store(&[(10, 3), (11, 3)]);
+        let k0 = record[0].1[0];
+        let k1 = record[0].1[1];
+        let k2 = record[0].1[2];
+        let k3 = record[1].1[0];
+        let k4 = record[1].1[1];
+        let k5 = record[1].1[2];
+
+        // Fully connected bipartite: 9 edges.
+        let mut edges = Vec::new();
+        for &from in &[k0, k1, k2] {
+            for &to in &[k3, k4, k5] {
+                edges.push(mk_edge(from, to, 1.0, true));
+            }
+        }
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        let policy = SolverPolicy {
+            routing: SolverRoutingMode::Heuristics,
+            trivial_max_nodes: 2,         // 6 nodes > 2, not trivial
+            trivial_max_active_edges: 2,  // 9 edges > 2
+            max_night_span_for_mcf: 10,
+            mcf_budget_s: 1000.0,         // generous budget
+            k_mcf_s_per_edge_logn: 1e-8,
+            ..Default::default()
+        };
+
+        let cid = cc.component_id_of_seed(&store, k0).unwrap();
+        assert_eq!(cc.classify(cid, &policy), SolverChoice::MinCostFlow);
+    }
+
+    // =========================================================================
+    // Unit tests — component_active_edges counts only active intra-component
+    // =========================================================================
+
+    #[test]
+    fn component_active_edges_counts_only_active() {
+        let (store, record) = build_store(&[(10, 2), (11, 2)]);
+        let s0 = record[0].1[0];
+        let s1 = record[0].1[1];
+        let s2 = record[1].1[0];
+        let s3 = record[1].1[1];
+
+        // 3 active edges + 1 inactive edge
+        let edges = vec![
+            mk_edge(s0, s2, 1.0, true),
+            mk_edge(s0, s3, 1.0, true),
+            mk_edge(s1, s2, 1.0, true),
+            mk_edge(s1, s3, 1.0, false), // inactive
+        ];
+        let graph = build_graph(edges);
+
+        // active_only=false: all 4 edges join, single component.
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+        assert_eq!(cc.n_components, 1);
+        // component_active_edges always counts active only (independent of active_only flag).
+        assert_eq!(cc.component_active_edges(0), 3);
+    }
+
+    // =========================================================================
+    // Unit tests — multiple seeds per night, diamond topology
+    // =========================================================================
+
+    #[test]
+    fn diamond_topology_degrees_are_correct() {
+        //     s0 (night 10)
+        //    /    \
+        //  s1      s2 (night 11)
+        //    \    /
+        //     s3 (night 12)
+        let (store, record) = build_store(&[(10, 1), (11, 2), (12, 1)]);
+        let s0 = record[0].1[0]; // night 10
+        let s1 = record[1].1[0]; // night 11
+        let s2 = record[1].1[1]; // night 11
+        let s3 = record[2].1[0]; // night 12
+
+        let edges = vec![
+            mk_edge(s0, s1, 1.0, true),
+            mk_edge(s0, s2, 1.0, true),
+            mk_edge(s1, s3, 1.0, true),
+            mk_edge(s2, s3, 1.0, true),
+        ];
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        assert_eq!(cc.n_components, 1);
+        let cid: ComponentId = 0;
+        assert_eq!(cc.component_size(cid), 4);
+        assert_eq!(cc.component_active_edges(cid), 4);
+
+        // Sum of in_deg == sum of out_deg == 4.
+        let in_deg = cc.component_in_deg_local(cid);
+        let out_deg = cc.component_out_deg_local(cid);
+        let sum_in: u32 = in_deg.iter().sum();
+        let sum_out: u32 = out_deg.iter().sum();
+        assert_eq!(sum_in, 4);
+        assert_eq!(sum_out, 4);
+
+        // There should be exactly 1 source (s0) and 1 sink (s3).
+        assert_eq!(cc.component_sources_local(cid).len(), 1);
+        assert_eq!(cc.component_sinks_local(cid).len(), 1);
+    }
+
+    // =========================================================================
+    // Unit tests — component_nodes returns correct nodes
+    // =========================================================================
+
+    #[test]
+    fn component_nodes_returns_all_seeds_in_component() {
+        let (store, record) = build_store(&[(10, 2), (11, 1)]);
+        let s0 = record[0].1[0];
+        let s1 = record[0].1[1];
+        let s2 = record[1].1[0];
+
+        let edges = vec![mk_edge(s0, s2, 1.0, true)];
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        // s0 and s2 are connected; s1 is isolated.
+        let cid_s0 = cc.component_id_of_seed(&store, s0).unwrap();
+        let cid_s1 = cc.component_id_of_seed(&store, s1).unwrap();
+        assert_ne!(cid_s0, cid_s1);
+
+        let nodes_s0: AHashSet<SeedKey> = cc
+            .component_nodes(cid_s0)
+            .iter()
+            .map(|n| n.key())
+            .collect();
+        assert!(nodes_s0.contains(&s0));
+        assert!(nodes_s0.contains(&s2));
+        assert_eq!(nodes_s0.len(), 2);
+    }
+
+    // =========================================================================
+    // Unit tests — component_id_of_seed error on unknown key
+    // =========================================================================
+
+    #[test]
+    fn component_id_of_seed_unknown_key_returns_error() {
+        let (store, _) = build_store(&[(10, 1)]);
+        let graph = build_graph(vec![]);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        let bad_key = SeedKey {
+            night_id: nid(999),
+            unique_id: 12345,
+        };
+        assert!(cc.component_id_of_seed(&store, bad_key).is_err());
+    }
+
+    // =========================================================================
+    // Property-based tests (proptest)
+    // =========================================================================
+
+    /// Strategy: generate a graph with `n_nights` nights, `seeds_per_night` seeds each,
+    /// and random edges between consecutive nights.
+    fn arb_graph_spec() -> impl Strategy<Value = (Vec<(u32, usize)>, Vec<(usize, usize, usize, usize, bool)>)>
+    {
+        // 2..6 nights, 1..5 seeds each.
+        let nights = prop::collection::vec((1u32..50, 1usize..5), 2..6);
+
+        nights.prop_flat_map(|night_spec| {
+            let spec = night_spec.clone();
+            let n_nights = spec.len();
+            // Generate up to 15 random edge descriptors between consecutive night pairs.
+            let edges = prop::collection::vec(
+                (
+                    0usize..n_nights.saturating_sub(1), // night pair index
+                    0usize..5,                           // from seed idx (clamped later)
+                    0usize..5,                           // to seed idx (clamped later)
+                    0usize..5,                           // dummy (unused in uniform case)
+                    any::<bool>(),                       // active
+                ),
+                0..15,
+            );
+            (Just(spec), edges)
+        })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(200))]
+
+        /// Every seed key must map to exactly one component id.
+        #[test]
+        fn prop_every_seed_belongs_to_exactly_one_component(
+            (spec, edge_descs) in arb_graph_spec()
+        ) {
+            let (store, record) = build_store(&spec);
+
+            // Build edges from descriptors.
+            let mut edges = Vec::new();
+            for (pair_idx, from_idx, to_idx, _, active) in &edge_descs {
+                let pair_idx = *pair_idx;
+                if pair_idx + 1 >= record.len() { continue; }
+
+                let (_, ref from_keys) = record[pair_idx];
+                let (_, ref to_keys) = record[pair_idx + 1];
+                if from_keys.is_empty() || to_keys.is_empty() { continue; }
+
+                let from = from_keys[from_idx % from_keys.len()];
+                let to = to_keys[to_idx % to_keys.len()];
+                edges.push(mk_edge(from, to, 1.0, *active));
+            }
+            let graph = build_graph(edges);
+            let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+            // Every key must be assigned a valid component id.
+            for (_, keys) in &record {
+                for &key in keys {
+                    let cid = cc.component_id_of_seed(&store, key).unwrap();
+                    prop_assert!(cid < cc.n_components);
+                }
+            }
+        }
+
+        /// The total number of nodes across all components equals the total seed count.
+        #[test]
+        fn prop_total_nodes_across_components_equals_store_size(
+            (spec, edge_descs) in arb_graph_spec()
+        ) {
+            let (store, record) = build_store(&spec);
+            let total_seeds: usize = record.iter().map(|(_, keys)| keys.len()).sum();
+
+            let mut edges = Vec::new();
+            for (pair_idx, from_idx, to_idx, _, active) in &edge_descs {
+                let pair_idx = *pair_idx;
+                if pair_idx + 1 >= record.len() { continue; }
+                let (_, ref from_keys) = record[pair_idx];
+                let (_, ref to_keys) = record[pair_idx + 1];
+                if from_keys.is_empty() || to_keys.is_empty() { continue; }
+                let from = from_keys[from_idx % from_keys.len()];
+                let to = to_keys[to_idx % to_keys.len()];
+                edges.push(mk_edge(from, to, 1.0, *active));
+            }
+            let graph = build_graph(edges);
+            let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+            let total_in_components: usize = (0..cc.n_components)
+                .map(|cid| cc.component_size(cid))
+                .sum();
+            prop_assert_eq!(total_in_components, total_seeds);
+        }
+
+        /// Component ids are dense: `0..n_components`.
+        #[test]
+        fn prop_component_ids_are_dense(
+            (spec, edge_descs) in arb_graph_spec()
+        ) {
+            let (store, record) = build_store(&spec);
+
+            let mut edges = Vec::new();
+            for (pair_idx, from_idx, to_idx, _, active) in &edge_descs {
+                let pair_idx = *pair_idx;
+                if pair_idx + 1 >= record.len() { continue; }
+                let (_, ref from_keys) = record[pair_idx];
+                let (_, ref to_keys) = record[pair_idx + 1];
+                if from_keys.is_empty() || to_keys.is_empty() { continue; }
+                let from = from_keys[from_idx % from_keys.len()];
+                let to = to_keys[to_idx % to_keys.len()];
+                edges.push(mk_edge(from, to, 1.0, *active));
+            }
+            let graph = build_graph(edges);
+            let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+            let mut seen_ids: AHashSet<ComponentId> = AHashSet::default();
+            for (_, keys) in &record {
+                for &key in keys {
+                    let cid = cc.component_id_of_seed(&store, key).unwrap();
+                    seen_ids.insert(cid);
+                }
+            }
+            prop_assert_eq!(seen_ids.len(), cc.n_components as usize);
+            for cid in 0..cc.n_components {
+                prop_assert!(seen_ids.contains(&cid));
+            }
+        }
+
+        /// Sum of local in-degrees == sum of local out-degrees in each component.
+        #[test]
+        fn prop_in_degree_sum_equals_out_degree_sum_per_component(
+            (spec, edge_descs) in arb_graph_spec()
+        ) {
+            let (store, record) = build_store(&spec);
+
+            let mut edges = Vec::new();
+            for (pair_idx, from_idx, to_idx, _, active) in &edge_descs {
+                let pair_idx = *pair_idx;
+                if pair_idx + 1 >= record.len() { continue; }
+                let (_, ref from_keys) = record[pair_idx];
+                let (_, ref to_keys) = record[pair_idx + 1];
+                if from_keys.is_empty() || to_keys.is_empty() { continue; }
+                let from = from_keys[from_idx % from_keys.len()];
+                let to = to_keys[to_idx % to_keys.len()];
+                edges.push(mk_edge(from, to, 1.0, *active));
+            }
+            let graph = build_graph(edges);
+            let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+            for cid in 0..cc.n_components {
+                let in_deg = cc.component_in_deg_local(cid);
+                let out_deg = cc.component_out_deg_local(cid);
+                let sum_in: u32 = in_deg.iter().sum();
+                let sum_out: u32 = out_deg.iter().sum();
+                prop_assert_eq!(
+                    sum_in, sum_out,
+                    "component {}: sum_in={} != sum_out={}", cid, sum_in, sum_out
+                );
+            }
+        }
+
+        /// Out-degree of local node matches number of adjacency entries.
+        #[test]
+        fn prop_out_degree_matches_adjacency_len(
+            (spec, edge_descs) in arb_graph_spec()
+        ) {
+            let (store, record) = build_store(&spec);
+
+            let mut edges = Vec::new();
+            for (pair_idx, from_idx, to_idx, _, active) in &edge_descs {
+                let pair_idx = *pair_idx;
+                if pair_idx + 1 >= record.len() { continue; }
+                let (_, ref from_keys) = record[pair_idx];
+                let (_, ref to_keys) = record[pair_idx + 1];
+                if from_keys.is_empty() || to_keys.is_empty() { continue; }
+                let from = from_keys[from_idx % from_keys.len()];
+                let to = to_keys[to_idx % to_keys.len()];
+                edges.push(mk_edge(from, to, 1.0, *active));
+            }
+            let graph = build_graph(edges);
+            let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+            for cid in 0..cc.n_components {
+                let out_deg = cc.component_out_deg_local(cid);
+                let out_edges = cc.component_out_edges(cid);
+                for (lu, adj) in out_edges.iter().enumerate() {
+                    prop_assert_eq!(
+                        adj.len() as u32,
+                        out_deg[lu],
+                        "component {}, local node {}: adj.len()={} != out_deg={}",
+                        cid, lu, adj.len(), out_deg[lu]
+                    );
+                }
+            }
+        }
+
+        /// All sinks have out-degree 0.
+        #[test]
+        fn prop_sinks_have_zero_out_degree(
+            (spec, edge_descs) in arb_graph_spec()
+        ) {
+            let (store, record) = build_store(&spec);
+
+            let mut edges = Vec::new();
+            for (pair_idx, from_idx, to_idx, _, active) in &edge_descs {
+                let pair_idx = *pair_idx;
+                if pair_idx + 1 >= record.len() { continue; }
+                let (_, ref from_keys) = record[pair_idx];
+                let (_, ref to_keys) = record[pair_idx + 1];
+                if from_keys.is_empty() || to_keys.is_empty() { continue; }
+                let from = from_keys[from_idx % from_keys.len()];
+                let to = to_keys[to_idx % to_keys.len()];
+                edges.push(mk_edge(from, to, 1.0, *active));
+            }
+            let graph = build_graph(edges);
+            let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+            for cid in 0..cc.n_components {
+                let out_deg = cc.component_out_deg_local(cid);
+                for &snk in cc.component_sinks_local(cid) {
+                    prop_assert_eq!(
+                        out_deg[snk as usize], 0,
+                        "component {}: sink local_idx={} has out_deg={}",
+                        cid, snk, out_deg[snk as usize]
+                    );
+                }
+            }
+        }
+
+        /// Sources either have (in_deg==0 && out_deg>0) or the fallback applies.
+        #[test]
+        fn prop_sources_invariant(
+            (spec, edge_descs) in arb_graph_spec()
+        ) {
+            let (store, record) = build_store(&spec);
+
+            let mut edges = Vec::new();
+            for (pair_idx, from_idx, to_idx, _, active) in &edge_descs {
+                let pair_idx = *pair_idx;
+                if pair_idx + 1 >= record.len() { continue; }
+                let (_, ref from_keys) = record[pair_idx];
+                let (_, ref to_keys) = record[pair_idx + 1];
+                if from_keys.is_empty() || to_keys.is_empty() { continue; }
+                let from = from_keys[from_idx % from_keys.len()];
+                let to = to_keys[to_idx % to_keys.len()];
+                edges.push(mk_edge(from, to, 1.0, *active));
+            }
+            let graph = build_graph(edges);
+            let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+            for cid in 0..cc.n_components {
+                let in_deg = cc.component_in_deg_local(cid);
+                let out_deg = cc.component_out_deg_local(cid);
+                let sources = cc.component_sources_local(cid);
+
+                // Check if there exist any "true sources" (in_deg==0 && out_deg>0).
+                let n = cc.component_size(cid);
+                let true_sources: Vec<u32> = (0..n as u32)
+                    .filter(|&u| in_deg[u as usize] == 0 && out_deg[u as usize] > 0)
+                    .collect();
+
+                if !true_sources.is_empty() {
+                    // Normal case: sources must exactly match true sources.
+                    let source_set: AHashSet<u32> = sources.iter().copied().collect();
+                    let true_set: AHashSet<u32> = true_sources.iter().copied().collect();
+                    prop_assert_eq!(
+                        source_set, true_set,
+                        "component {}: source sets differ", cid
+                    );
+                } else {
+                    // Fallback: sources are all nodes with out_deg > 0.
+                    let fallback: Vec<u32> = (0..n as u32)
+                        .filter(|&u| out_deg[u as usize] > 0)
+                        .collect();
+                    let source_set: AHashSet<u32> = sources.iter().copied().collect();
+                    let fallback_set: AHashSet<u32> = fallback.iter().copied().collect();
+                    prop_assert_eq!(
+                        source_set, fallback_set,
+                        "component {}: fallback source sets differ", cid
+                    );
+                }
+            }
+        }
+
+        /// Night bounds are consistent with the nodes in the component.
+        #[test]
+        fn prop_night_bounds_are_consistent(
+            (spec, edge_descs) in arb_graph_spec()
+        ) {
+            let (store, record) = build_store(&spec);
+
+            let mut edges = Vec::new();
+            for (pair_idx, from_idx, to_idx, _, active) in &edge_descs {
+                let pair_idx = *pair_idx;
+                if pair_idx + 1 >= record.len() { continue; }
+                let (_, ref from_keys) = record[pair_idx];
+                let (_, ref to_keys) = record[pair_idx + 1];
+                if from_keys.is_empty() || to_keys.is_empty() { continue; }
+                let from = from_keys[from_idx % from_keys.len()];
+                let to = to_keys[to_idx % to_keys.len()];
+                edges.push(mk_edge(from, to, 1.0, *active));
+            }
+            let graph = build_graph(edges);
+            let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+            for cid in 0..cc.n_components {
+                let nodes = cc.component_nodes(cid);
+                if nodes.is_empty() { continue; }
+
+                let actual_min = nodes.iter().map(|n| n.night_id()).min().unwrap();
+                let actual_max = nodes.iter().map(|n| n.night_id()).max().unwrap();
+
+                let bounds = cc.component_night_bounds(cid);
+                prop_assert!(bounds.is_some(), "non-empty component {} has None bounds", cid);
+                let (bmin, bmax) = bounds.unwrap();
+                prop_assert_eq!(bmin, actual_min, "component {}: min night mismatch", cid);
+                prop_assert_eq!(bmax, actual_max, "component {}: max night mismatch", cid);
+            }
+        }
+
+        /// Edges in the adjacency only connect nodes within the same component.
+        #[test]
+        fn prop_adjacency_edges_are_intra_component(
+            (spec, edge_descs) in arb_graph_spec()
+        ) {
+            let (store, record) = build_store(&spec);
+
+            let mut edges = Vec::new();
+            for (pair_idx, from_idx, to_idx, _, active) in &edge_descs {
+                let pair_idx = *pair_idx;
+                if pair_idx + 1 >= record.len() { continue; }
+                let (_, ref from_keys) = record[pair_idx];
+                let (_, ref to_keys) = record[pair_idx + 1];
+                if from_keys.is_empty() || to_keys.is_empty() { continue; }
+                let from = from_keys[from_idx % from_keys.len()];
+                let to = to_keys[to_idx % to_keys.len()];
+                edges.push(mk_edge(from, to, 1.0, *active));
+            }
+            let graph = build_graph(edges);
+            let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+            for cid in 0..cc.n_components {
+                let nodes = cc.component_nodes(cid);
+                let node_keys: AHashSet<SeedKey> = nodes.iter().map(|n| n.key()).collect();
+                let out = cc.component_out_edges(cid);
+
+                for adj in out {
+                    for edge in adj {
+                        prop_assert!(
+                            node_keys.contains(&edge.from),
+                            "component {}: edge.from {} not in component",
+                            cid, edge.from
+                        );
+                        prop_assert!(
+                            node_keys.contains(&edge.to),
+                            "component {}: edge.to {} not in component",
+                            cid, edge.to
+                        );
+                    }
+                }
+            }
+        }
+
+        /// Edges in the directed adjacency are time-forward: night(to) > night(from).
+        #[test]
+        fn prop_adjacency_edges_are_time_forward(
+            (spec, edge_descs) in arb_graph_spec()
+        ) {
+            let (store, record) = build_store(&spec);
+
+            let mut edges = Vec::new();
+            for (pair_idx, from_idx, to_idx, _, active) in &edge_descs {
+                let pair_idx = *pair_idx;
+                if pair_idx + 1 >= record.len() { continue; }
+                let (_, ref from_keys) = record[pair_idx];
+                let (_, ref to_keys) = record[pair_idx + 1];
+                if from_keys.is_empty() || to_keys.is_empty() { continue; }
+                let from = from_keys[from_idx % from_keys.len()];
+                let to = to_keys[to_idx % to_keys.len()];
+                edges.push(mk_edge(from, to, 1.0, *active));
+            }
+            let graph = build_graph(edges);
+            let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+            for cid in 0..cc.n_components {
+                let out = cc.component_out_edges(cid);
+                for adj in out {
+                    for edge in adj {
+                        prop_assert!(
+                            edge.to.night_id > edge.from.night_id,
+                            "component {}: edge not time-forward: from_nid={} to_nid={}",
+                            cid, edge.from.night_id.value(), edge.to.night_id.value()
+                        );
+                    }
+                }
+            }
+        }
+
+        /// active_only=true produces at least as many components as active_only=false
+        /// (more restrictive connectivity → more or equal components).
+        #[test]
+        fn prop_active_only_produces_at_least_as_many_components(
+            (spec, edge_descs) in arb_graph_spec()
+        ) {
+            let (store, record) = build_store(&spec);
+
+            let mut edges = Vec::new();
+            for (pair_idx, from_idx, to_idx, _, active) in &edge_descs {
+                let pair_idx = *pair_idx;
+                if pair_idx + 1 >= record.len() { continue; }
+                let (_, ref from_keys) = record[pair_idx];
+                let (_, ref to_keys) = record[pair_idx + 1];
+                if from_keys.is_empty() || to_keys.is_empty() { continue; }
+                let from = from_keys[from_idx % from_keys.len()];
+                let to = to_keys[to_idx % to_keys.len()];
+                edges.push(mk_edge(from, to, 1.0, *active));
+            }
+            let graph = build_graph(edges);
+
+            let cc_all = ConnectedComponents::compute(&store, &graph, false).unwrap();
+            let cc_active = ConnectedComponents::compute(&store, &graph, true).unwrap();
+
+            prop_assert!(
+                cc_active.n_components >= cc_all.n_components,
+                "active_only should produce >= components: {} < {}",
+                cc_active.n_components,
+                cc_all.n_components
+            );
+        }
+
+        /// classify with Force routing always returns the forced choice.
+        #[test]
+        fn prop_classify_force_returns_forced(
+            (spec, edge_descs) in arb_graph_spec(),
+            choice in prop_oneof![
+                Just(SolverChoice::BoundedBeam),
+                Just(SolverChoice::MinCostFlow),
+                Just(SolverChoice::BlobBreaker),
+            ]
+        ) {
+            let (store, record) = build_store(&spec);
+
+            let mut edges = Vec::new();
+            for (pair_idx, from_idx, to_idx, _, active) in &edge_descs {
+                let pair_idx = *pair_idx;
+                if pair_idx + 1 >= record.len() { continue; }
+                let (_, ref from_keys) = record[pair_idx];
+                let (_, ref to_keys) = record[pair_idx + 1];
+                if from_keys.is_empty() || to_keys.is_empty() { continue; }
+                let from = from_keys[from_idx % from_keys.len()];
+                let to = to_keys[to_idx % to_keys.len()];
+                edges.push(mk_edge(from, to, 1.0, *active));
+            }
+            let graph = build_graph(edges);
+            let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+            let policy = SolverPolicy {
+                routing: SolverRoutingMode::Force(choice),
+                ..Default::default()
+            };
+
+            for cid in 0..cc.n_components {
+                prop_assert_eq!(cc.classify(cid, &policy), choice);
+            }
+        }
+
+        /// component_night_span == max_night - min_night for each component.
+        #[test]
+        fn prop_night_span_matches_bounds(
+            (spec, edge_descs) in arb_graph_spec()
+        ) {
+            let (store, record) = build_store(&spec);
+
+            let mut edges = Vec::new();
+            for (pair_idx, from_idx, to_idx, _, active) in &edge_descs {
+                let pair_idx = *pair_idx;
+                if pair_idx + 1 >= record.len() { continue; }
+                let (_, ref from_keys) = record[pair_idx];
+                let (_, ref to_keys) = record[pair_idx + 1];
+                if from_keys.is_empty() || to_keys.is_empty() { continue; }
+                let from = from_keys[from_idx % from_keys.len()];
+                let to = to_keys[to_idx % to_keys.len()];
+                edges.push(mk_edge(from, to, 1.0, *active));
+            }
+            let graph = build_graph(edges);
+            let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+            for cid in 0..cc.n_components {
+                let span = cc.component_night_span(cid);
+                match cc.component_night_bounds(cid) {
+                    Some((lo, hi)) => {
+                        let expected = u32::from(hi).saturating_sub(u32::from(lo));
+                        prop_assert_eq!(span, expected, "component {}: span mismatch", cid);
+                    }
+                    None => {
+                        prop_assert_eq!(span, 0, "component {}: missing bounds but span != 0", cid);
+                    }
+                }
+            }
+        }
+    }
+}
