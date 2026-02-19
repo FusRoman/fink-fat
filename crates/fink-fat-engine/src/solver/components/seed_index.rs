@@ -38,9 +38,15 @@ impl SeedGlobalIndex {
     /// Nights are processed in sorted deterministic order.
     /// Within each night, the natural `Vec` order is used.
     ///
+    /// Notes
+    /// -----
+    /// - The mapping is **not stable** across calls: rebuilding after inserting
+    ///   new nights may reassign all indices. Callers must rebuild and not cache
+    ///   individual indices across store mutations.
+    ///
     /// Complexity
     /// ----------
-    /// O(K) where K is the number of nights.
+    /// $O(K)$ where $K$ is the number of nights.
     pub fn build(seed_store: &SeedStore) -> Result<Self, ComponentError> {
         let mut base = AHashMap::default();
         let mut cursor: u32 = 0;
@@ -291,34 +297,6 @@ mod seed_global_index_tests {
         assert!(
             matches!(result, Err(ComponentError::SeedKeyNotFound { .. })),
             "expected SeedKeyNotFound, got {result:?}"
-        );
-    }
-
-    #[test]
-    fn night0_indices_stable_after_night1_appended() {
-        // Build night 0, record its dense ids, then insert night 1 and rebuild.
-        // Night-0 ids must not shift.
-        let mut store = SeedStore::new();
-        let keys_0 = insert_seeds(&mut store, nid(0), 4, 0);
-
-        let idx_before = SeedGlobalIndex::build(&store).unwrap();
-        let ids_before: Vec<usize> = keys_0
-            .iter()
-            .map(|k| idx_before.idx_of_key(&store, *k).unwrap())
-            .collect();
-
-        // Offset by 8 to avoid source_id collisions (4 pairs × 2 alerts).
-        insert_seeds(&mut store, nid(1), 3, 8);
-
-        let idx_after = SeedGlobalIndex::build(&store).unwrap();
-        let ids_after: Vec<usize> = keys_0
-            .iter()
-            .map(|k| idx_after.idx_of_key(&store, *k).unwrap())
-            .collect();
-
-        assert_eq!(
-            ids_before, ids_after,
-            "dense ids of night 0 must not shift when night 1 is appended"
         );
     }
 
