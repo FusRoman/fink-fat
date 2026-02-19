@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::persistence::edge::{EdgeKey, EdgeOwned};
+use crate::graph::edge::{Edge, EdgeKey};
 
 /// One journal operation to transform the edge set.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -13,7 +13,7 @@ pub enum EdgeOp {
         /// Edge identity.
         key: EdgeKey,
         /// Edge payload (core + endpoints).
-        edge: EdgeOwned,
+        edge: Edge,
     },
 
     /// Remove an edge for the given `(from, to)` key.

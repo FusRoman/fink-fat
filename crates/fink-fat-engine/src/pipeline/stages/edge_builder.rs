@@ -1,6 +1,5 @@
 use crate::{
     error::EngineError,
-    graph::RuntimeGraph,
     night_id::PairingMode,
     pipeline::{
         PipelineContext,
@@ -56,49 +55,31 @@ pub fn run(
             let edge_config = &ctx.engine_config.edges;
 
             // -----------------------------------------------------------------
-            // 1) Build borrowed seeds for this window
-            // -----------------------------------------------------------------
-            // IMPORTANT: `seed_store` must stay alive until `graph_rt.to_owned()`,
-            // because `RuntimeGraph` edges borrow `SeedNode` references.
-            let seed_store = ctx
-                .runtime_state
-                .seed_store
-                .to_borrowed_window(&ctx.runtime_state.alert_store, window)
-                .map_err(|e| EngineError::StageFailed {
-                    stage: PipelineStage::BuildEdges,
-                    message: format!("seed_store.to_borrowed_window failed: {e:?}"),
-                })?;
-
-            // -----------------------------------------------------------------
-            // 2) Prepare runtime graph (borrowed)
-            // -----------------------------------------------------------------
-            let mut graph_rt: RuntimeGraph<'_, '_> = RuntimeGraph::new();
-
-            // -----------------------------------------------------------------
             // 3) Early exit: gap=0 => no possible (left<right) pair
             // -----------------------------------------------------------------
             let max_gap = ctx.engine_config.max_gap_nights();
             if max_gap == 0 {
-                ctx.runtime_state.graph = graph_rt.to_owned();
                 return Ok(vec![("pairs_processed", 0), ("edges_added", 0)]);
             }
 
             // -----------------------------------------------------------------
             // 4) Determine (left -> latest-right) pairs
             // -----------------------------------------------------------------
-            let mut pairs = seed_store.night_pairs_iter(window).peekable();
+            let mut pairs = ctx
+                .runtime_state
+                .seed_store
+                .night_pairs_iter(window)
+                .peekable();
 
             // If there is no eligible pair, nothing to do.
             let Some((_, right_night)) = pairs.peek().copied() else {
-                ctx.runtime_state.graph = graph_rt.to_owned();
                 return Ok(vec![("pairs_processed", 0), ("edges_added", 0)]);
             };
 
             // `right_nodes` must exist and be non-empty, otherwise nothing to connect.
-            let right_nodes = match seed_store.get(&right_night) {
-                Some(v) if !v.is_empty() => v.as_slice(),
+            let right_nodes = match ctx.runtime_state.seed_store.get(&right_night) {
+                Some(v) if !v.is_empty() => v,
                 _ => {
-                    ctx.runtime_state.graph = graph_rt.to_owned();
                     return Ok(vec![("pairs_processed", 0), ("edges_added", 0)]);
                 }
             };
@@ -119,11 +100,11 @@ pub fn run(
             // -----------------------------------------------------------------
             // 6) Build edges for each left night -> right night
             // -----------------------------------------------------------------
-            let edges_before = graph_rt.edges.len() as u64;
+            let edges_before = ctx.runtime_state.graph.edges.len() as u64;
             let mut pairs_processed: u64 = 0;
 
             for (left_night, _) in pairs {
-                let Some(left_vec) = seed_store.get(&left_night) else {
+                let Some(left_vec) = ctx.runtime_state.seed_store.get(&left_night) else {
                     // Defensive: iterator is derived from keys, so this should not happen
                     continue;
                 };
@@ -131,9 +112,10 @@ pub fn run(
                     continue;
                 }
 
-                graph_rt
+                ctx.runtime_state
+                    .graph
                     .add_inter_night_edges(
-                        left_vec.as_slice(),
+                        left_vec,
                         right_nodes,
                         edge_config,
                         &spatial_binner,
@@ -150,11 +132,6 @@ pub fn run(
 
                 pairs_processed += 1;
             }
-
-            // -----------------------------------------------------------------
-            // 7) Convert to owned and store in runtime state
-            // -----------------------------------------------------------------
-            ctx.runtime_state.graph = graph_rt.to_owned();
 
             let edges_added =
                 (ctx.runtime_state.graph.edges.len() as u64).saturating_sub(edges_before);

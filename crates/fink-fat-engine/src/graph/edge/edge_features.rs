@@ -39,7 +39,7 @@ use crate::{
         position_features::EdgePositionFeatures, uncertainty_features::EdgeUncertaintyFeatures,
         velocity_features::EdgeVelocityFeatures,
     },
-    seeding::seed_node::SeedNode,
+    seeding::SeedNode,
 };
 
 /// Cadence-robust edge feature set.

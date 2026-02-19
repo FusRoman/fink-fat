@@ -54,8 +54,7 @@ use crate::{
     astro_math::{dot3, planar_offset_fast, unit_vec},
     engine_config::triplet_config::TripletConfig,
     night_id::NightId,
-    persistence::seed_node::SeedKey,
-    seeding::{pairs::Pair, seed_node::SeedNode},
+    seeding::{SeedNode, pairs::Pair, store::SeedStore},
     spacetime_bucket::{
         bucket::{BucketIndex, BucketKey},
         spatial_binner::{SpatialBinner, SpatialKey},
@@ -368,19 +367,12 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
 ///     One seed per triplet, preserving input order.
 pub fn extract_triplet_features<'alert_lf>(
     trips: &Triplets<'alert_lf>,
+    seed_store: &mut SeedStore,
     night_id: NightId,
-) -> Vec<SeedNode<'alert_lf>> {
+) -> Vec<SeedNode> {
     let mut out = Vec::with_capacity(trips.len());
-    for (idx, &Triplet { a, b, c }) in trips.iter().enumerate() {
-        out.push(SeedNode::from_triplet(
-            SeedKey {
-                night_id,
-                idx_in_night: idx as u32,
-            },
-            a,
-            b,
-            c,
-        ));
+    for &Triplet { a, b, c } in trips.iter() {
+        out.push(SeedNode::from_triplet(seed_store, night_id, a, b, c));
     }
     out
 }
@@ -393,10 +385,9 @@ mod triplet_gen_tests {
     use std::f64::consts::PI;
 
     use crate::{
-        MJDTT, Radian,
+        AlertKey, MJDTT, Radian,
         astro_math::{ang_sep, arcsec_to_rad, planar_offset_fast},
         engine_config::triplet_config::TripletConfig,
-        persistence::alert::AlertKey,
         spacetime_bucket::{
             bucket::build_alert_bucket_index,
             spatial_binner::{SpatialBinner, SpatialKey},
@@ -475,9 +466,8 @@ mod triplet_gen_tests {
         Alert {
             key: AlertKey {
                 night_id: NightId(0),
-                idx_in_night: i as u32,
+                dia_source_id: i as u64,
             },
-            dia_source_id: i as u64,
             ra,
             ra_err: pos_err,
             dec,
@@ -795,7 +785,10 @@ mod triplet_gen_tests {
         ];
 
         let night_id = NightId::new(99);
-        let seeds = extract_triplet_features(&trips, night_id);
+
+        let seed_store = &mut SeedStore::new();
+
+        let seeds = extract_triplet_features(&trips, seed_store, night_id);
 
         assert_eq!(seeds.len(), 2);
         assert_eq!(seeds[0].night_id(), night_id);
@@ -847,7 +840,8 @@ mod triplet_gen_tests {
                 }
 
                 let night_id = NightId::new(7);
-                let seeds = extract_triplet_features(&trips, night_id);
+                let seed_store = &mut SeedStore::new();
+                let seeds = extract_triplet_features(&trips, seed_store, night_id);
 
                 prop_assert_eq!(seeds.len(), trips.len());
                 for seed in seeds.iter() {

@@ -76,14 +76,15 @@ use ahash::AHashMap;
 use outfit::{MJD, trajectories::batch_reader::ObservationBatch};
 
 use crate::{
-    Alert, Radian,
-    graph::RuntimeGraph,
-    solver::components::{ComponentId, ConnectedComponents},
-    trajectory::TrackHypothesis,
+    Alert, AlertStore, Radian, graph::AlertLinkageDAG, solver::{
+        components::{ComponentId, ConnectedComponents},
+        error::SolverError,
+    }, trajectory::TrackHypothesis
 };
 
 pub mod bounded_beam;
 pub mod components;
+pub mod error;
 pub mod min_cost_flow;
 pub mod solver_manager;
 
@@ -188,8 +189,8 @@ pub struct SolverDiagnostics {
 }
 
 pub type HypothesisId = u32;
-pub type HypothesisSet<'edge_lf, 'seed_lf, 'alert_lf> =
-    AHashMap<HypothesisId, TrackHypothesis<'edge_lf, 'seed_lf, 'alert_lf>>;
+pub type HypothesisSet<'edge_lf, 'seed_lf> =
+    AHashMap<HypothesisId, TrackHypothesis<'edge_lf, 'seed_lf>>;
 
 /// Output of a solver pass over a connected component.
 ///
@@ -213,7 +214,7 @@ pub type HypothesisSet<'edge_lf, 'seed_lf, 'alert_lf> =
 /// - `'seed_lf`: lifetime of borrowed seeds,
 /// - `'alert_lf`: lifetime of borrowed alerts inside seeds.
 #[derive(Clone, Debug, Default)]
-pub struct SolverOutput<'edge_lf, 'seed_lf, 'alert_lf> {
+pub struct SolverOutput<'edge_lf, 'seed_lf> {
     /// Candidate tracks returned by the solver.
     ///
     /// In most solvers, tracks are sorted from best to worst, but callers should
@@ -221,7 +222,7 @@ pub struct SolverOutput<'edge_lf, 'seed_lf, 'alert_lf> {
     ///
     /// The key is a temporary track id assigned during reconstruction; final track ids are
     /// typically assigned after orbit fitting and persistence.
-    pub tracks: HypothesisSet<'edge_lf, 'seed_lf, 'alert_lf>,
+    pub tracks: HypothesisSet<'edge_lf, 'seed_lf>,
 
     /// Diagnostics for monitoring and tuning.
     pub diag: SolverDiagnostics,
@@ -230,7 +231,7 @@ pub struct SolverOutput<'edge_lf, 'seed_lf, 'alert_lf> {
 use std::borrow::Cow;
 use std::cmp::Ordering;
 
-impl<'edge_lf, 'seed_lf, 'alert_lf> SolverOutput<'edge_lf, 'seed_lf, 'alert_lf> {
+impl<'edge_lf, 'seed_lf> SolverOutput<'edge_lf, 'seed_lf> {
     /// Flatten all solver tracks into a single [`ObservationBatch`].
     ///
     /// This helper converts the solver output (a set of independent
@@ -362,7 +363,10 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> SolverOutput<'edge_lf, 'seed_lf, 'alert_lf> 
     /// - [`TrackHypothesis`]: single-trajectory solver output.
     /// - [`ObservationBatch::from_radians_borrowed`]: zero-copy construction when
     ///   upstream already has contiguous slices (not the case here).
-    pub fn to_observation_batch(&'_ self) -> ObservationBatch<'_> {
+    pub fn to_observation_batch(
+        &'_ self,
+        alert_store: &AlertStore,
+    ) -> Result<ObservationBatch<'_>, SolverError> {
         // --- 0) Stable track order (deterministic)
         let mut track_ids: Vec<u32> = self.tracks.keys().copied().collect();
         track_ids.sort_unstable();
@@ -390,17 +394,12 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> SolverOutput<'edge_lf, 'seed_lf, 'alert_lf> 
         for tid in track_ids {
             let trk = &self.tracks[&tid];
 
-            let mut alerts: Vec<&Alert> = trk
-                .nodes
-                .iter()
-                .flat_map(|seed| seed.members.iter().copied())
-                .collect();
+            let mut alerts: Vec<Alert> = trk
+                .get_alerts(&alert_store)
+                .map_err(|e| SolverError::OrbitFitConversionError(e.to_string()))?;
 
             // Ensure time order inside this track
             alerts.sort_by(|a, b| a.mjd_tt.partial_cmp(&b.mjd_tt).unwrap_or(Ordering::Equal));
-
-            // Dedup (pointer-based). Replace with a stable alert id if available.
-            alerts.dedup_by_key(|a| *a as *const Alert);
 
             for a in alerts {
                 trajectory_id.push(tid);
@@ -414,20 +413,18 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> SolverOutput<'edge_lf, 'seed_lf, 'alert_lf> 
             }
         }
 
-        ObservationBatch {
+        Ok(ObservationBatch {
             trajectory_id: Cow::Owned(trajectory_id),
             ra: Cow::Owned(ra),
             dec: Cow::Owned(dec),
             time: Cow::Owned(time),
             error_ra: max_ra_err,
             error_dec: max_dec_err,
-        }
+        })
     }
 
-    pub fn merge_solver_output(
-        all_solver_output: &[Self],
-    ) -> HypothesisSet<'edge_lf, 'seed_lf, 'alert_lf> {
-        let mut merged: HypothesisSet<'edge_lf, 'seed_lf, 'alert_lf> = AHashMap::new();
+    pub fn merge_solver_output(all_solver_output: &[Self]) -> HypothesisSet<'edge_lf, 'seed_lf> {
+        let mut merged: HypothesisSet<'edge_lf, 'seed_lf> = AHashMap::new();
         let mut next_id: HypothesisId = 0;
 
         for output in all_solver_output {
@@ -462,7 +459,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> SolverOutput<'edge_lf, 'seed_lf, 'alert_lf> 
 /// ----------------------
 /// The trait does not impose `Send`/`Sync`. Threading concerns are handled at
 /// higher levels (e.g. solver manager) depending on the broader architecture.
-pub trait Solver<'edge_lf, 'seed_lf, 'alert_lf> {
+pub trait Solver<'edge_lf, 'seed_lf> {
     /// A short stable name for logs and metrics.
     ///
     /// The name should be:
@@ -505,10 +502,10 @@ pub trait Solver<'edge_lf, 'seed_lf, 'alert_lf> {
     ///   mutate edge flags elsewhere in the pipeline.
     fn solve(
         &self,
-        graph: &'edge_lf RuntimeGraph<'seed_lf, 'alert_lf>,
-        cc: &'edge_lf ConnectedComponents<'edge_lf, 'seed_lf, 'alert_lf>,
+        graph: &'edge_lf AlertLinkageDAG,
+        cc: &'edge_lf ConnectedComponents<'edge_lf, 'seed_lf>,
         component_id: ComponentId,
-    ) -> SolverOutput<'edge_lf, 'seed_lf, 'alert_lf>
+    ) -> SolverOutput<'edge_lf, 'seed_lf>
     where
         'edge_lf: 'seed_lf;
 }

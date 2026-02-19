@@ -54,7 +54,7 @@ use ahash::{AHashMap, AHashSet};
 
 use crate::{
     MJDTT, Radian,
-    seeding::seed_node::SeedNode,
+    seeding::SeedNode,
     spacetime_bucket::{
         bucket::{Bucket, BucketIndex, BucketKey},
         spatial_binner::{SpatialBinner, SpatialKey},
@@ -81,9 +81,9 @@ use crate::{
 /// Because the index stores `&SeedNode`, the underlying slice must outlive the
 /// index.
 #[derive(Clone)]
-pub struct SeedSpatialIndex<'seed_lf, 'binner_lf, 'alert_lf> {
+pub struct SeedSpatialIndex<'seed_lf, 'binner_lf> {
     /// Underlying bucket index mapping `(space_key, time_bin) -> members`.
-    inner: BucketIndex<&'seed_lf SeedNode<'alert_lf>>,
+    inner: BucketIndex<&'seed_lf SeedNode>,
 
     /// Spatial binner used for key computation and neighbor cover queries.
     pub spatial_binner: &'binner_lf dyn SpatialBinner,
@@ -98,7 +98,7 @@ pub struct SeedSpatialIndex<'seed_lf, 'binner_lf, 'alert_lf> {
     pub time_bins: AHashSet<TimeBin>,
 }
 
-impl<'seed_lf, 'binner_lf, 'alert_lf> SeedSpatialIndex<'seed_lf, 'binner_lf, 'alert_lf> {
+impl<'seed_lf, 'binner_lf> SeedSpatialIndex<'seed_lf, 'binner_lf> {
     /// Build a spatio-temporal seed index from a slice of [`SeedNode`].
     ///
     /// Each seed is inserted into exactly one bucket:
@@ -126,12 +126,11 @@ impl<'seed_lf, 'binner_lf, 'alert_lf> SeedSpatialIndex<'seed_lf, 'binner_lf, 'al
     /// - The choice of `time_binner` (origin + bin width) impacts candidate fan-out.
     ///   Keep it consistent across indexing and queries.
     pub fn build<Bs: SpatialBinner, Ts: TimeBinner>(
-        seeds: &'seed_lf [SeedNode<'alert_lf>],
+        seeds: &'seed_lf [SeedNode],
         spatial_binner: &'binner_lf Bs,
         time_binner: &'binner_lf Ts,
     ) -> Self {
-        let mut buckets: AHashMap<BucketKey, Bucket<&'seed_lf SeedNode<'alert_lf>>> =
-            AHashMap::new();
+        let mut buckets: AHashMap<BucketKey, Bucket<&'seed_lf SeedNode>> = AHashMap::new();
         let mut time_bins: AHashSet<TimeBin> = AHashSet::new();
 
         for s in seeds {
@@ -166,7 +165,7 @@ impl<'seed_lf, 'binner_lf, 'alert_lf> SeedSpatialIndex<'seed_lf, 'binner_lf, 'al
     /// This is useful for debugging or when you need generic bucket-level
     /// inspection not exposed by this wrapper.
     #[inline]
-    pub fn inner(&self) -> &BucketIndex<&'seed_lf SeedNode<'alert_lf>> {
+    pub fn inner(&self) -> &BucketIndex<&'seed_lf SeedNode> {
         &self.inner
     }
 
@@ -209,7 +208,7 @@ impl<'seed_lf, 'binner_lf, 'alert_lf> SeedSpatialIndex<'seed_lf, 'binner_lf, 'al
         dec: Radian,
         radius: Radian,
         time: MJDTT,
-    ) -> impl Iterator<Item = &'seed_lf SeedNode<'alert_lf>> + '_ {
+    ) -> impl Iterator<Item = &'seed_lf SeedNode> + '_ {
         let center_key: SpatialKey = self.spatial_binner.key_for(ra, dec);
         let time_key = self.time_binner.bin_for(time);
 
@@ -241,9 +240,8 @@ mod seed_spatial_index_tests {
     use crate::{
         astro_math::arcsec_to_rad,
         night_id::NightId,
-        persistence::seed_node::SeedKey,
         seeding::{
-            seed_node::{SeedNode, SeedNodeCore},
+            SeedKey, SeedNode,
             tangent_plane::{TangentCenter, TangentPlaneModel},
         },
         spacetime_bucket::{
@@ -255,7 +253,7 @@ mod seed_spatial_index_tests {
     /* ------------------------- helpers ------------------------- */
 
     // Build a minimal SeedNode with given (ra_mid, dec_mid). Plane fields are simple constants.
-    fn mk_seed<'alert_lf>(ra_mid: f64, dec_mid: f64) -> SeedNode<'alert_lf> {
+    fn mk_seed(uniq_id: u64, ra_mid: f64, dec_mid: f64) -> SeedNode {
         let center = TangentCenter::new(ra_mid, dec_mid);
         let plane = TangentPlaneModel::new(
             center,
@@ -269,15 +267,14 @@ mod seed_spatial_index_tests {
             dec_mid,
         );
         SeedNode {
-            core: SeedNodeCore {
-                key: SeedKey {
-                    night_id: NightId::new(1),
-                    idx_in_night: 0,
-                },
-                plane,
-                photom: crate::seeding::photometry::Photometry::from_pair(1.0, 0.1, 1, 2),
-                n_obs: 2,
+            key: SeedKey {
+                night_id: NightId::new(1),
+                unique_id: uniq_id,
             },
+            plane,
+            photom: crate::seeding::photometry::Photometry::from_pair(1.0, 0.1, 1, 2),
+            n_obs: 2,
+
             members: vec![],
         }
     }
@@ -288,10 +285,7 @@ mod seed_spatial_index_tests {
     }
 
     /// True if `bucket.members` contains the exact borrowed reference `needle`.
-    fn bucket_contains_ref(
-        bucket: &crate::spacetime_bucket::bucket::Bucket<&SeedNode>,
-        needle: &SeedNode,
-    ) -> bool {
+    fn bucket_contains_ref(bucket: &Bucket<&SeedNode>, needle: &SeedNode) -> bool {
         bucket.members.iter().any(|x| ptr::eq(*x, needle))
     }
 
@@ -303,9 +297,9 @@ mod seed_spatial_index_tests {
         let time_binner = UniformTimeBinner::new(60000.0, 1.0);
 
         // Two seeds in the same cell, one in a neighboring cell.
-        let s1 = mk_seed(1.0, 0.2);
-        let s2 = mk_seed(1.0 + arcsec_to_rad(1.0) / 0.2f64.cos(), 0.2);
-        let s3 = mk_seed(2.0, -0.1);
+        let s1 = mk_seed(1, 1.0, 0.2);
+        let s2 = mk_seed(2, 1.0 + arcsec_to_rad(1.0) / 0.2f64.cos(), 0.2);
+        let s3 = mk_seed(3, 2.0, -0.1);
 
         // IMPORTANT: keep seeds in a stable Vec so the index can borrow them.
         let seeds = vec![s1, s2, s3];
@@ -353,8 +347,8 @@ mod seed_spatial_index_tests {
         let ra = 1.5;
         let dec = 0.3;
 
-        let s_primary = mk_seed(ra, dec);
-        let s_neighbor = mk_seed(ra + arcsec_to_rad(30.0) / dec.cos(), dec);
+        let s_primary = mk_seed(1, ra, dec);
+        let s_neighbor = mk_seed(2, ra + arcsec_to_rad(30.0) / dec.cos(), dec);
         let t_target = s_primary.plane.epoch_mid;
 
         let seeds = vec![s_primary, s_neighbor];
@@ -379,8 +373,8 @@ mod seed_spatial_index_tests {
     fn inner_exposes_consistent_mapping() {
         let spatial_binner = HealpixBinner::new(7);
         let time_binner = UniformTimeBinner::new(60000.0, 1.0);
-        let s1 = mk_seed(0.5, 0.1);
-        let s2 = mk_seed(0.501, 0.101);
+        let s1 = mk_seed(1, 0.5, 0.1);
+        let s2 = mk_seed(2, 0.501, 0.101);
 
         let seeds = vec![s1, s2];
         let index = SeedSpatialIndex::build(&seeds, &spatial_binner, &time_binner);
@@ -422,8 +416,8 @@ mod seed_spatial_index_tests {
             let time_binner = UniformTimeBinner::new(60000.0, 1.0);
 
             // Keep seeds in a Vec so the index can borrow them.
-            let seeds: Vec<SeedNode> = pts.iter().map(|(ra, dec)| {
-                mk_seed(*ra, *dec)
+            let seeds: Vec<SeedNode> = pts.iter().enumerate().map(|(i, (ra, dec))| {
+                mk_seed(i as u64 + 1, *ra, *dec)
             }).collect();
 
             let index = SeedSpatialIndex::build(&seeds, &spatial_binner, &time_binner);
@@ -444,8 +438,8 @@ mod seed_spatial_index_tests {
             let spatial_binner = HealpixBinner::new(7);
             let time_binner = UniformTimeBinner::new(60000.0, 1.0);
 
-            let seeds: Vec<SeedNode> = pts.iter().map(|(ra, dec)| {
-                mk_seed(*ra, *dec)
+            let seeds: Vec<SeedNode> = pts.iter().enumerate().map(|(i, (ra, dec))| {
+                mk_seed(i as u64 + 1, *ra, *dec)
             }).collect();
 
             let index = SeedSpatialIndex::build(&seeds, &spatial_binner, &time_binner);

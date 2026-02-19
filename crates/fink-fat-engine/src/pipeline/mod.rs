@@ -1,7 +1,5 @@
-pub mod fink_fat;
 pub mod hooks;
 pub mod progress_sink;
-pub mod seed_store;
 pub mod stages;
 
 use crate::{
@@ -46,7 +44,7 @@ pub struct PipelineContext<'rt> {
     pub engine_config: &'rt EngineConfig,
     pub edge_models: &'rt EdgeRankingModelPool,
     pub solver_manager: &'rt SolverManager,
-    pub track_hypotheses: HypothesisSet<'rt, 'rt, 'rt>,
+    pub track_hypotheses: HypothesisSet<'rt, 'rt>,
 }
 
 pub struct PipelineRunner {

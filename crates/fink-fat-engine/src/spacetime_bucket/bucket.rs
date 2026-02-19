@@ -217,6 +217,8 @@ where
 
 #[cfg(test)]
 mod bucket_tests {
+    use crate::{AlertKey, night_id::NightId};
+
     use super::*;
 
     use std::f64::consts::PI;
@@ -278,7 +280,10 @@ mod bucket_tests {
     /// Helper to build a minimal `Alert` for tests.
     fn mk_alert(dia_source_id: u64, ra: Radian, dec: Radian, mjd_tt: MJDTT) -> Alert {
         Alert {
-            dia_source_id,
+            key: AlertKey {
+                night_id: NightId(42), // dummy value
+                dia_source_id,
+            },
             ra,
             dec,
             mjd_tt,
@@ -303,7 +308,7 @@ mod bucket_tests {
         let tb = DummyTimeBinner;
 
         let a0 = mk_alert(0, 1.0, 0.1, 59000.25);
-        let a0_id = a0.dia_source_id;
+        let a0_id = a0.key.dia_source_id;
         let alerts = vec![a0];
 
         let index = build_alert_bucket_index(&alerts, &sb, &tb);
@@ -319,7 +324,7 @@ mod bucket_tests {
             .get(&key)
             .expect("missing bucket for single alert");
         assert_eq!(bucket.members.len(), 1);
-        assert_eq!(bucket.members[0].dia_source_id, a0_id);
+        assert_eq!(bucket.members[0].key.dia_source_id, a0_id);
     }
 
     #[test]
@@ -349,7 +354,7 @@ mod bucket_tests {
             bucket
                 .members
                 .iter()
-                .map(|a| a.dia_source_id)
+                .map(|a| a.key.dia_source_id)
                 .collect::<Vec<_>>(),
             vec![0, 1]
         );
@@ -377,7 +382,7 @@ mod bucket_tests {
             };
             let bucket = index.buckets.get(&key).expect("missing bucket");
             assert_eq!(bucket.members.len(), 1);
-            assert_eq!(bucket.members[0].dia_source_id, alert.dia_source_id);
+            assert_eq!(bucket.members[0].key.dia_source_id, alert.key.dia_source_id);
         }
     }
 
@@ -422,8 +427,8 @@ mod bucket_tests {
         let a1 = mk_alert(1, 3.5, 0.0, t); // RA > π -> cell 1
 
         // Capture ids and keys before moving alerts into the vector.
-        let a0_id = a0.dia_source_id;
-        let a1_id = a1.dia_source_id;
+        let a0_id = a0.key.dia_source_id;
+        let a1_id = a1.key.dia_source_id;
         let key0 = BucketKey {
             space_key: sb.key_for(a0.ra, a0.dec),
             time_bin: tb.bin_for(a0.mjd_tt),
@@ -444,14 +449,14 @@ mod bucket_tests {
         assert_eq!(
             b0.members
                 .iter()
-                .map(|a| a.dia_source_id)
+                .map(|a| a.key.dia_source_id)
                 .collect::<Vec<_>>(),
             vec![a0_id]
         );
         assert_eq!(
             b1.members
                 .iter()
-                .map(|a| a.dia_source_id)
+                .map(|a| a.key.dia_source_id)
                 .collect::<Vec<_>>(),
             vec![a1_id]
         );
@@ -487,7 +492,7 @@ mod bucket_tests {
             bucket
                 .members
                 .iter()
-                .map(|a| a.dia_source_id)
+                .map(|a| a.key.dia_source_id)
                 .collect::<Vec<_>>(),
             vec![1, 0, 2]
         );

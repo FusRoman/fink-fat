@@ -46,7 +46,7 @@ use crate::{
     astro_math::{
         cholesky_lower_sym_2x2, clamp_unit, dot2, invert_sym_2x2, l2_norm, mat_vec2, safe_ln,
     },
-    seeding::seed_node::SeedNode,
+    seeding::SeedNode,
 };
 
 /// Shared intermediate computations reused across feature sub-sets.

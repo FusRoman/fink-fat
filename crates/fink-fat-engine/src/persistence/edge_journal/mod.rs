@@ -24,16 +24,19 @@
 //!
 //! The manifest tracks which files exist and in which order to apply them.
 
+pub mod delta_chunk;
+pub mod edge_op;
+
 use std::fs;
 
 use ahash::AHashMap;
 use serde::{Deserialize, Serialize};
 
+use crate::graph::edge::{Edge, EdgeKey};
 use crate::night_id::{NightId, PairingMode};
 use crate::persistence::EDGE_JOURNAL_SCHEMA_VERSION;
-use crate::persistence::edge::delta_chunk::EdgeDeltaChunk;
-use crate::persistence::edge::edge_op::EdgeOp;
-use crate::persistence::edge::{EdgeKey, EdgeOwned};
+use crate::persistence::edge_journal::delta_chunk::EdgeDeltaChunk;
+use crate::persistence::edge_journal::edge_op::EdgeOp;
 use crate::persistence::envelope::DiskEnvelope;
 use crate::persistence::error::PersistenceIoError;
 use crate::persistence::layout::PersistenceLayout;
@@ -49,7 +52,7 @@ pub struct EdgeSnapshot {
     /// Unix timestamp (seconds) for traceability.
     pub created_unix_s: i64,
     /// Full edge set at the checkpoint.
-    pub edges: Vec<EdgeOwned>,
+    pub edges: Vec<Edge>,
 }
 
 /// High-level helper to manage edge snapshot + delta journal.
@@ -138,8 +141,8 @@ impl EdgeJournalStore {
         &self,
         manifest: &Manifest,
         window: Option<PairingMode>,
-    ) -> Result<Vec<EdgeOwned>, PersistenceIoError> {
-        let mut map: AHashMap<EdgeKey, EdgeOwned> = AHashMap::new();
+    ) -> Result<Vec<Edge>, PersistenceIoError> {
+        let mut map: AHashMap<EdgeKey, Edge> = AHashMap::new();
 
         // 1) Load snapshot if present.
         if let Some(rel) = manifest.edge_journal.snapshot_rel_path() {
@@ -150,8 +153,7 @@ impl EdgeJournalStore {
             )?;
 
             for e in snapshot.edges {
-                let key = EdgeKey::new(e.from, e.to);
-                map.insert(key, e);
+                map.insert(e.key(), e);
             }
         }
 
@@ -344,7 +346,7 @@ impl EdgeJournalStore {
     /// converting to borrowed edges using `SeedStore`.
     fn apply_ops(
         &self,
-        map: &mut AHashMap<EdgeKey, EdgeOwned>,
+        map: &mut AHashMap<EdgeKey, Edge>,
         ops: Vec<EdgeOp>,
     ) -> Result<(), PersistenceIoError> {
         for op in ops {
@@ -369,3 +371,57 @@ impl EdgeJournalStore {
         w.contains(key.from.night_id) && w.contains(key.to.night_id)
     }
 }
+
+// use serde::{Deserialize, Serialize};
+
+// use crate::{
+//     graph::edge::{Edge, EdgeCore},
+//     persistence::error::BorrowError,
+//     seeding::{SeedKey, store::SeedStore},
+// };
+
+// /// Stable identity for an edge in the persisted graph.
+// ///
+// /// Notes
+// /// -----
+// /// This assumes there is at most one edge per `(from, to)` pair.
+// /// That matches the usual Fink-FAT semantics: a directed link between two seeds.
+// #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+// pub struct EdgeKey {
+//     /// Source seed (older epoch).
+//     pub from: SeedKey,
+//     /// Target seed (newer epoch).
+//     pub to: SeedKey,
+// }
+
+// impl EdgeKey {
+//     /// Construct an [`EdgeKey`] from two seed keys.
+//     #[inline]
+//     pub fn new(from: SeedKey, to: SeedKey) -> Self {
+//         Self { from, to }
+//     }
+// }
+
+// #[derive(Clone, Debug, Serialize, Deserialize)]
+// pub struct EdgeOwned {
+//     pub core: EdgeCore,
+//     pub from: SeedKey,
+//     pub to: SeedKey,
+// }
+
+// impl EdgeOwned {
+//     pub fn to_borrowed<'seed>(&self, seeds: &'seed SeedStore) -> Result<Edge<'seed>, BorrowError> {
+//         let from = seeds
+//             .try_get_seed(self.from)
+//             .ok_or_else(|| BorrowError::MissingSeed(self.from))?;
+//         let to = seeds
+//             .try_get_seed(self.to)
+//             .ok_or_else(|| BorrowError::MissingSeed(self.to))?;
+
+//         Ok(Edge {
+//             core: self.core.clone(),
+//             from,
+//             to,
+//         })
+//     }
+// }

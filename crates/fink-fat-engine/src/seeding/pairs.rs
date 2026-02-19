@@ -62,8 +62,7 @@ use crate::{
     astro_math::{dot3, unit_vec},
     engine_config::pair_config::PairConfig,
     night_id::NightId,
-    persistence::seed_node::SeedKey,
-    seeding::seed_node::SeedNode,
+    seeding::{SeedNode, store::SeedStore},
     spacetime_bucket::{
         bucket::{BucketIndex, BucketKey},
         spatial_binner::{SpatialBinner, SpatialKey},
@@ -414,20 +413,13 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
 ///   if produced by [`generate_pairs`]).
 pub fn extract_pair_features<'alert_lf>(
     pairs: &Pairs<'alert_lf>,
+    seed_store: &mut SeedStore,
     night_id: NightId,
     max_speed_rad_per_day: Option<f64>,
-) -> Vec<SeedNode<'alert_lf>> {
+) -> Vec<SeedNode> {
     let mut out = Vec::with_capacity(pairs.len());
-    for (idx, &Pair { a, b }) in pairs.iter().enumerate() {
-        if let Some(seed) = SeedNode::from_pair(
-            SeedKey {
-                night_id,
-                idx_in_night: idx as u32,
-            },
-            a,
-            b,
-            max_speed_rad_per_day,
-        ) {
+    for &Pair { a, b } in pairs.iter() {
+        if let Some(seed) = SeedNode::from_pair(seed_store, night_id, a, b, max_speed_rad_per_day) {
             out.push(seed);
         }
     }
@@ -440,9 +432,9 @@ mod pair_gen_tests {
     use std::collections::HashSet;
     use std::f64::consts::PI;
 
+    use crate::AlertKey;
     use crate::astro_math::{ang_sep, arcsec_to_rad};
     use crate::engine_config::pair_config::PairConfig;
-    use crate::persistence::alert::AlertKey;
     use crate::spacetime_bucket::bucket::{BucketKey, build_alert_bucket_index};
     use crate::spacetime_bucket::healpix_binner::HealpixBinner;
     use crate::spacetime_bucket::uniform_time_binner::UniformTimeBinner;
@@ -454,9 +446,8 @@ mod pair_gen_tests {
         Alert {
             key: AlertKey {
                 night_id: NightId(0),
-                idx_in_night: i as u32,
+                dia_source_id: i as u64,
             },
-            dia_source_id: i as u64,
             ra,
             ra_err: 0.5 * PI / (180.0 * 3600.0), // ~0.5 arcsec in radians
             dec,
@@ -891,7 +882,9 @@ mod pair_gen_tests {
             },
         ];
 
-        let seeds_all = extract_pair_features(&pairs, NightId::new(42), None);
+        let mut seed_store = SeedStore::new();
+
+        let seeds_all = extract_pair_features(&pairs, &mut seed_store, NightId::new(42), None);
         assert_eq!(seeds_all.len(), 2);
 
         // Speed threshold between slow and fast.
@@ -901,7 +894,8 @@ mod pair_gen_tests {
         assert!(speed_fast > speed_slow);
 
         let vmax = (speed_slow + speed_fast) * 0.5;
-        let seeds_filtered = extract_pair_features(&pairs, NightId::new(42), Some(vmax));
+        let seeds_filtered =
+            extract_pair_features(&pairs, &mut seed_store, NightId::new(42), Some(vmax));
 
         assert_eq!(seeds_filtered.len(), 1);
 
@@ -952,7 +946,8 @@ mod pair_gen_tests {
                     }
                 }
 
-                let seeds = extract_pair_features(&pairs, NightId::new(7), Some(f64::INFINITY));
+                let mut seed_store = SeedStore::new();
+                let seeds = extract_pair_features(&pairs, &mut seed_store, NightId::new(7), Some(f64::INFINITY));
 
                 prop_assert_eq!(seeds.len(), pairs.len());
 
