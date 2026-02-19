@@ -51,6 +51,7 @@
 //! - [`SeedSpatialIndex`] – spatio-temporal bucket index used for fast queries.
 //! - [`EdgeFeatures::compute_features`] – exact feature extraction for edges.
 
+pub mod error;
 pub mod pairs;
 pub mod photometry;
 pub mod seed_spatial_index;
@@ -67,7 +68,7 @@ use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Alert, AlertKey, MJDTT, Radian,
+    Alert, AlertKey, AlertStore, MJDTT, Radian,
     astro_math::{fit_quad_1d, radec_to_tangent, spherical_midpoint, tangent_to_radec},
     display_format::indent_block,
     engine_config::{edge_config::EdgeConfig, propagator_config::PredictorParams},
@@ -77,6 +78,7 @@ use crate::{
         layout::PersistenceLayout, manifest::Manifest,
     },
     seeding::{
+        error::SeedingError,
         photometry::Photometry,
         seed_spatial_index::SeedSpatialIndex,
         store::{SeedId, SeedStore},
@@ -214,6 +216,20 @@ impl SeedNode {
     /// NightId of this seed (same as `self.key.night_id`).
     pub fn night_id(&self) -> NightId {
         self.key.night_id
+    }
+
+    pub fn resolve_members<'store>(
+        &self,
+        alert_store: &'store AlertStore,
+    ) -> Result<Vec<&'store Alert>, SeedingError> {
+        self.members
+            .iter()
+            .map(|&alert_key| {
+                alert_store
+                    .get_by_key(alert_key)
+                    .ok_or(SeedingError::AlertKeyNotFound(alert_key))
+            })
+            .collect()
     }
 
     /// Deterministically propagate this seed model by `dt` on its tangent plane.

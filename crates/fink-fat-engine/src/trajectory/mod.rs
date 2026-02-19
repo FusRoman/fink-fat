@@ -3,8 +3,8 @@ pub mod track_id;
 
 use crate::{
     Alert, AlertStore,
-    graph::edge::Edge,
-    seeding::SeedNode,
+    graph::edge::EdgeKey,
+    seeding::{SeedKey, error::SeedingError, store::SeedStore},
     trajectory::{
         error::TrackError,
         track_id::{TrackId, track_id_from_nodes},
@@ -18,11 +18,11 @@ use crate::{
 /// - edges are useful to deactivate selected links,
 /// - nodes are useful for inspection and downstream building blocks.
 #[derive(Clone, Debug)]
-pub struct TrackHypothesis<'edge_lf, 'seed_lf> {
+pub struct TrackHypothesis {
     /// Nodes in strictly increasing time (night / epoch order).
-    pub nodes: Vec<&'seed_lf SeedNode>,
+    pub nodes: Vec<SeedKey>,
     /// Edges used to connect the nodes (typically len = nodes.len() - 1).
-    pub edges: Vec<&'edge_lf Edge>,
+    pub edges: Vec<EdgeKey>,
 
     /// Additive cost / score returned by the solver (lower is better if cost).
     pub cost: f64,
@@ -31,7 +31,7 @@ pub struct TrackHypothesis<'edge_lf, 'seed_lf> {
     pub night_span: u32,
 }
 
-impl<'edge_lf, 'seed_lf> TrackHypothesis<'edge_lf, 'seed_lf> {
+impl TrackHypothesis {
     /// Get the number of nodes in the hypothesis.
     pub fn n_nodes(&self) -> usize {
         self.nodes.len()
@@ -42,8 +42,24 @@ impl<'edge_lf, 'seed_lf> TrackHypothesis<'edge_lf, 'seed_lf> {
         self.edges.len()
     }
 
-    pub fn track_id(&self, store: &AlertStore) -> Result<TrackId, TrackError> {
-        track_id_from_nodes(store, &self.nodes)
+    pub fn track_id(
+        &self,
+        alert_store: &AlertStore,
+        seed_store: &SeedStore,
+    ) -> Result<TrackId, TrackError> {
+        let seeds = self
+            .nodes
+            .iter()
+            .map(|&seed_key| {
+                seed_store
+                    .try_get_seed(seed_key)
+                    .ok_or(TrackError::SeedingError(SeedingError::SeedKeyNotFound(
+                        seed_key,
+                    )))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        track_id_from_nodes(alert_store, &seeds)
     }
 
     /// Get owned copies of all alerts in this track.
@@ -56,16 +72,25 @@ impl<'edge_lf, 'seed_lf> TrackHypothesis<'edge_lf, 'seed_lf> {
     /// ------
     /// * `Ok(Vec<Alert>)` – Cloned alerts in observation time order.
     /// * `Err(TrackError::AlertKeyNotFound)` – If any alert key is missing from store.
-    pub fn get_alerts(&self, store: &AlertStore) -> Result<Vec<Alert>, TrackError> {
+    pub fn get_alerts(
+        &self,
+        alert_store: &AlertStore,
+        seed_store: &SeedStore,
+    ) -> Result<Vec<Alert>, TrackError> {
         self.nodes
             .iter()
-            .flat_map(|seed| seed.members.iter())
-            .map(|&alert_id| {
-                store
-                    .get_by_key(alert_id)
+            .map(|&seed_key| {
+                let seed = seed_store
+                    .try_get_seed(seed_key)
+                    .ok_or(SeedingError::SeedKeyNotFound(seed_key))?;
+
+                Ok(seed
+                    .resolve_members(alert_store)?
+                    .into_iter()
                     .cloned()
-                    .ok_or_else(|| TrackError::AlertKeyNotFound(alert_id.into()))
+                    .collect::<Vec<_>>())
             })
             .collect::<Result<Vec<_>, _>>()
+            .map(|nested| nested.into_iter().flatten().collect())
     }
 }

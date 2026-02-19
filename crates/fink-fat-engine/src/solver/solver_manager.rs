@@ -178,7 +178,7 @@ impl SolverManager {
         graph: &'edge_lf AlertLinkageDAG,
         _seed_store: &'seed_lf SeedStore,
         plan: &SolvePlan,
-    ) -> Vec<SolverOutput<'edge_lf, 'seed_lf>>
+    ) -> Vec<SolverOutput>
     where
         'edge_lf: 'seed_lf,
     {
@@ -186,8 +186,7 @@ impl SolverManager {
         // These can later become fields or be constructed lazily if needed.
         let bounded_beam = BoundedBeamSolver::default();
 
-        let mut outputs: Vec<SolverOutput<'edge_lf, 'seed_lf>> =
-            Vec::with_capacity(plan.items.len());
+        let mut outputs: Vec<SolverOutput> = Vec::with_capacity(plan.items.len());
 
         for item in &plan.items {
             // Dispatch by solver family.

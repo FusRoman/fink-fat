@@ -44,7 +44,7 @@ pub struct PipelineContext<'rt> {
     pub engine_config: &'rt EngineConfig,
     pub edge_models: &'rt EdgeRankingModelPool,
     pub solver_manager: &'rt SolverManager,
-    pub track_hypotheses: HypothesisSet<'rt, 'rt>,
+    pub track_hypotheses: HypothesisSet,
 }
 
 pub struct PipelineRunner {

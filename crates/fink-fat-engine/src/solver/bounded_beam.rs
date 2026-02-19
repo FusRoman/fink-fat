@@ -194,7 +194,7 @@ impl BoundedBeamSolver {
         graph: &'edge_lf AlertLinkageDAG,
         cc: &'edge_lf ConnectedComponents<'edge_lf, 'seed_lf>,
         component_id: ComponentId,
-    ) -> SolverOutput<'edge_lf, 'seed_lf>
+    ) -> SolverOutput
     where
         'edge_lf: 'seed_lf,
     {
@@ -262,7 +262,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> Solver<'edge_lf, 'seed_lf> for BoundedBeamSo
         graph: &'edge_lf AlertLinkageDAG,
         cc: &'edge_lf ConnectedComponents<'edge_lf, 'seed_lf>,
         component_id: ComponentId,
-    ) -> SolverOutput<'edge_lf, 'seed_lf>
+    ) -> SolverOutput
     where
         'edge_lf: 'seed_lf,
     {
@@ -636,7 +636,7 @@ fn reconstruct_track<'edge_lf, 'seed_lf>(
     terminal_state_id: usize,
     states: &[State<'edge_lf>],
     component_nodes: &[&'seed_lf SeedNode],
-) -> TrackHypothesis<'edge_lf, 'seed_lf> {
+) -> TrackHypothesis {
     let mut node_idx_rev: Vec<usize> = Vec::new();
     let mut edge_rev: Vec<&'edge_lf Edge> = Vec::new();
 
@@ -662,8 +662,8 @@ fn reconstruct_track<'edge_lf, 'seed_lf>(
     let night_span = st.last_night - st.first_night;
 
     TrackHypothesis {
-        nodes,
-        edges: edge_rev,
+        nodes: nodes.iter().map(|&n| n.key()).collect(),
+        edges: edge_rev.into_iter().map(|e| e.key()).collect(),
         cost: st.total_cost,
         night_span,
     }
@@ -688,7 +688,7 @@ fn reconstruct_track<'edge_lf, 'seed_lf>(
 /// - Costs are expected to be finite and non-NaN.
 fn sort_and_truncate_tracks<'edge_lf, 'seed_lf>(
     cfg: &BoundedBeamConfig,
-    tracks: &mut AHashMap<u32, TrackHypothesis<'edge_lf, 'seed_lf>>,
+    tracks: &mut AHashMap<u32, TrackHypothesis>,
 ) {
     // Rien à faire si déjà <= max_tracks
     if tracks.len() <= cfg.max_tracks {
@@ -696,7 +696,7 @@ fn sort_and_truncate_tracks<'edge_lf, 'seed_lf>(
     }
 
     // 1) Materialize en vec pour pouvoir trier
-    let mut items: Vec<(u32, TrackHypothesis<'edge_lf, 'seed_lf>)> = tracks.drain().collect();
+    let mut items: Vec<(u32, TrackHypothesis)> = tracks.drain().collect();
 
     // 2) Tri (meilleur d'abord)
     items.sort_by(|(_ka, a), (_kb, b)| {
@@ -783,7 +783,7 @@ fn enumerate_beam_tracks_from_component_view<'edge_lf, 'seed_lf>(
     component_out_edges: &[Vec<&'edge_lf Edge>],
     sources_local: &[LocalIdx],
     diag: &mut SolverDiagnostics,
-) -> AHashMap<u32, TrackHypothesis<'edge_lf, 'seed_lf>> {
+) -> AHashMap<u32, TrackHypothesis> {
     let n = component_nodes.len();
     if n == 0 {
         return AHashMap::new();
@@ -855,7 +855,7 @@ fn enumerate_beam_tracks_from_component_view<'edge_lf, 'seed_lf>(
     }
 
     // 5) Reconstruct tracks.
-    let mut tracks: AHashMap<u32, TrackHypothesis<'edge_lf, 'seed_lf>> = terminal_states
+    let mut tracks: AHashMap<u32, TrackHypothesis> = terminal_states
         .into_iter()
         .enumerate()
         .filter_map(|(tmp_track_id, sid)| {
@@ -889,10 +889,7 @@ mod bounded_beam_tests {
         graph::edge::Edge,
         night_id::NightId,
         seeding::{SeedKey, SeedNode, store::SeedStore},
-        solver::{
-            Solver, SolverOutput,
-            components::ConnectedComponents,
-        },
+        solver::{Solver, SolverOutput, components::ConnectedComponents},
     };
     use ahash::AHashSet;
     use proptest::prelude::*;
@@ -991,7 +988,7 @@ mod bounded_beam_tests {
         solver: &BoundedBeamSolver,
         graph: &'e AlertLinkageDAG,
         cc: &'e ConnectedComponents<'e, 's>,
-    ) -> Vec<SolverOutput<'e, 's>> {
+    ) -> Vec<SolverOutput> {
         (0..cc.n_components)
             .map(|cid| solver.solve(graph, cc, cid))
             .collect()
@@ -1100,9 +1097,9 @@ mod bounded_beam_tests {
         assert_eq!(trk.edges.len(), 2);
 
         // Nodes are in time-forward order.
-        assert_eq!(trk.nodes[0].night_id(), nid(10));
-        assert_eq!(trk.nodes[1].night_id(), nid(11));
-        assert_eq!(trk.nodes[2].night_id(), nid(12));
+        assert_eq!(trk.nodes[0].night_id, nid(10));
+        assert_eq!(trk.nodes[1].night_id, nid(11));
+        assert_eq!(trk.nodes[2].night_id, nid(12));
 
         // Cost is sum of edge costs.
         assert!((trk.cost - 3.0).abs() < 1e-12);
@@ -1357,7 +1354,7 @@ mod bounded_beam_tests {
         for trk in output.tracks.values() {
             for w in trk.nodes.windows(2) {
                 assert!(
-                    w[0].night_id() < w[1].night_id(),
+                    w[0].night_id < w[1].night_id,
                     "nodes must be in strictly increasing night order"
                 );
             }
@@ -1380,15 +1377,15 @@ mod bounded_beam_tests {
 
         for trk in output.tracks.values() {
             assert_eq!(trk.edges.len(), trk.nodes.len() - 1);
-            for (i, edge) in trk.edges.iter().enumerate() {
+            for (i, ek) in trk.edges.iter().enumerate() {
                 assert_eq!(
-                    edge.from,
-                    trk.nodes[i].key(),
+                    ek.from,
+                    trk.nodes[i],
                     "edge.from must match nodes[i]"
                 );
                 assert_eq!(
-                    edge.to,
-                    trk.nodes[i + 1].key(),
+                    ek.to,
+                    trk.nodes[i + 1],
                     "edge.to must match nodes[i+1]"
                 );
             }
@@ -1410,7 +1407,11 @@ mod bounded_beam_tests {
         let output = solver.solve(&graph, &cc, 0);
 
         for trk in output.tracks.values() {
-            let edge_cost_sum: f64 = trk.edges.iter().map(|e| e.cost).sum();
+            let edge_cost_sum: f64 = trk
+                .edges
+                .iter()
+                .map(|ek| graph.edge_by_key(ek).unwrap().cost)
+                .sum();
             assert!(
                 (trk.cost - edge_cost_sum).abs() < 1e-12,
                 "track cost {} != sum of edge costs {}",
@@ -1435,8 +1436,8 @@ mod bounded_beam_tests {
         let output = solver.solve(&graph, &cc, 0);
 
         for trk in output.tracks.values() {
-            let first_night = trk.nodes.first().unwrap().night_id().value();
-            let last_night = trk.nodes.last().unwrap().night_id().value();
+            let first_night = trk.nodes.first().unwrap().night_id.value();
+            let last_night = trk.nodes.last().unwrap().night_id.value();
             assert_eq!(trk.night_span, last_night - first_night);
         }
     }
@@ -1576,10 +1577,7 @@ mod bounded_beam_tests {
         let adj = build_solver_adjacency(&cfg, component_nodes, component_out, &mut diag);
 
         // Find the local index of s0.
-        let s0_local = component_nodes
-            .iter()
-            .position(|n| n.key() == s0)
-            .unwrap();
+        let s0_local = component_nodes.iter().position(|n| n.key() == s0).unwrap();
 
         // adj[s0_local] should have at most 3 entries, sorted by cost.
         assert!(adj[s0_local].len() <= 3);
@@ -1632,8 +1630,8 @@ mod bounded_beam_tests {
     // =========================================================================
 
     /// Strategy: generate a graph with n_nights and random edges.
-    fn arb_graph_spec(
-    ) -> impl Strategy<Value = (Vec<(u32, usize)>, Vec<(usize, usize, usize, f64, bool)>)> {
+    fn arb_graph_spec()
+    -> impl Strategy<Value = (Vec<(u32, usize)>, Vec<(usize, usize, usize, f64, bool)>)> {
         let nights = prop::collection::vec((1u32..50, 1usize..4), 2..6);
 
         nights.prop_flat_map(|night_spec| {
@@ -1653,11 +1651,15 @@ mod bounded_beam_tests {
         })
     }
 
-    /// Build edges from descriptors.
+    /// Build edges from descriptors, deduplicating by `(from, to)`.
+    ///
+    /// `EdgeKey` assumes at most one edge per `(from, to)` pair, so later
+    /// descriptors overwrite earlier ones sharing the same endpoints.
     fn edges_from_descs(
         record: &[(NightId, Vec<SeedKey>)],
         descs: &[(usize, usize, usize, f64, bool)],
     ) -> Vec<Edge> {
+        let mut seen: AHashMap<(SeedKey, SeedKey), usize> = AHashMap::new();
         let mut edges = Vec::new();
         for &(pair_idx, from_idx, to_idx, cost, active) in descs {
             if pair_idx + 1 >= record.len() {
@@ -1670,7 +1672,13 @@ mod bounded_beam_tests {
             }
             let from = from_keys[from_idx % from_keys.len()];
             let to = to_keys[to_idx % to_keys.len()];
-            edges.push(mk_edge(from, to, cost, active));
+            let pair = (from, to);
+            if let Some(&idx) = seen.get(&pair) {
+                edges[idx] = mk_edge(from, to, cost, active);
+            } else {
+                seen.insert(pair, edges.len());
+                edges.push(mk_edge(from, to, cost, active));
+            }
         }
         edges
     }
@@ -1745,9 +1753,9 @@ mod bounded_beam_tests {
                 for trk in output.tracks.values() {
                     for w in trk.nodes.windows(2) {
                         prop_assert!(
-                            w[0].night_id() < w[1].night_id(),
+                            w[0].night_id < w[1].night_id,
                             "nodes not time-forward: {} >= {}",
-                            w[0].night_id().value(), w[1].night_id().value()
+                            w[0].night_id.value(), w[1].night_id.value()
                         );
                     }
                 }
@@ -1772,9 +1780,9 @@ mod bounded_beam_tests {
                     prop_assert_eq!(
                         trk.edges.len(), trk.nodes.len().saturating_sub(1)
                     );
-                    for (i, edge) in trk.edges.iter().enumerate() {
-                        prop_assert_eq!(edge.from, trk.nodes[i].key());
-                        prop_assert_eq!(edge.to, trk.nodes[i + 1].key());
+                    for (i, ek) in trk.edges.iter().enumerate() {
+                        prop_assert_eq!(ek.from, trk.nodes[i]);
+                        prop_assert_eq!(ek.to, trk.nodes[i + 1]);
                     }
                 }
             }
@@ -1795,7 +1803,11 @@ mod bounded_beam_tests {
 
             for output in &outputs {
                 for trk in output.tracks.values() {
-                    let edge_sum: f64 = trk.edges.iter().map(|e| e.cost).sum();
+                    let edge_sum: f64 = trk
+                        .edges
+                        .iter()
+                        .map(|ek| graph.edge_by_key(ek).unwrap().cost)
+                        .sum();
                     prop_assert!(
                         (trk.cost - edge_sum).abs() < 1e-9,
                         "cost {} != edge sum {}", trk.cost, edge_sum
@@ -1819,8 +1831,8 @@ mod bounded_beam_tests {
 
             for output in &outputs {
                 for trk in output.tracks.values() {
-                    let first = trk.nodes.first().unwrap().night_id().value();
-                    let last = trk.nodes.last().unwrap().night_id().value();
+                    let first = trk.nodes.first().unwrap().night_id.value();
+                    let last = trk.nodes.last().unwrap().night_id.value();
                     prop_assert_eq!(
                         trk.night_span, last - first,
                         "night_span {} != {} - {}", trk.night_span, last, first
@@ -1851,8 +1863,8 @@ mod bounded_beam_tests {
                 for trk in output.tracks.values() {
                     for node in &trk.nodes {
                         prop_assert!(
-                            all_keys.contains(&node.key()),
-                            "track node key {:?} not in store", node.key()
+                            all_keys.contains(node),
+                            "track node key {:?} not in store", node
                         );
                     }
                 }
@@ -1895,11 +1907,12 @@ mod bounded_beam_tests {
 
             for output in &outputs {
                 for trk in output.tracks.values() {
-                    for edge in &trk.edges {
+                    for ek in &trk.edges {
+                        let edge = graph.edge_by_key(ek).unwrap();
                         prop_assert!(
                             edge.active,
                             "track edge {} -> {} is inactive under active_only CC",
-                            edge.from, edge.to
+                            ek.from, ek.to
                         );
                     }
                 }

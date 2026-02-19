@@ -303,10 +303,7 @@ fn earliest_alert_mjd_tt<'seed_lf>(
     let mut best: Option<f64> = None;
 
     for node in nodes {
-        for &a in &node.members {
-            let alert = alert_store
-                .get_by_key(a)
-                .ok_or_else(|| TrackError::AlertKeyNotFound(a))?;
+        for &alert in &node.resolve_members(alert_store)? {
             let mjd = alert.mjd_tt;
             best = match best {
                 None => Some(mjd),

@@ -5,7 +5,7 @@ use ahash::AHashMap;
 use crate::{
     MJDTT,
     engine_config::edge_config::EdgeConfig,
-    graph::edge::{Edge, edge_prediction::EdgeRankingModelPool, error::EdgeBuilderError},
+    graph::edge::{Edge, EdgeKey, edge_prediction::EdgeRankingModelPool, error::EdgeBuilderError},
     pipeline::progress_sink::ProgressSink,
     seeding::{SeedKey, SeedNode},
     spacetime_bucket::spatial_binner::SpatialBinner,
@@ -16,6 +16,11 @@ pub struct AlertLinkageDAG {
     pub in_deg: AHashMap<SeedKey, usize>,
     pub out_deg: AHashMap<SeedKey, usize>,
     pub edges: Vec<Edge>,
+    /// Reverse index: `EdgeKey` → position in `edges`.
+    ///
+    /// Maintained automatically by constructors and mutation methods so that
+    /// `edge_index[key] == i` iff `edges[i].key() == key`.
+    edge_index: AHashMap<EdgeKey, usize>,
 }
 
 impl AlertLinkageDAG {
@@ -24,25 +29,29 @@ impl AlertLinkageDAG {
             in_deg: AHashMap::new(),
             out_deg: AHashMap::new(),
             edges: Vec::new(),
+            edge_index: AHashMap::new(),
         }
     }
 
     pub fn from_edges(edges: Vec<Edge>) -> Self {
         let mut in_deg = AHashMap::new();
         let mut out_deg = AHashMap::new();
+        let mut edge_index = AHashMap::with_capacity(edges.len());
 
-        for edge in &edges {
+        for (i, edge) in edges.iter().enumerate() {
             let from = edge.from;
             let to = edge.to;
 
             *out_deg.entry(from).or_insert(0) += 1;
             *in_deg.entry(to).or_insert(0) += 1;
+            edge_index.insert(edge.key(), i);
         }
 
         Self {
             in_deg,
             out_deg,
             edges,
+            edge_index,
         }
     }
 
@@ -98,9 +107,43 @@ impl AlertLinkageDAG {
             *self.out_deg.entry(from).or_insert(0) += 1;
             *self.in_deg.entry(to).or_insert(0) += 1;
 
+            let idx = self.edges.len();
+            self.edge_index.insert(edge.key(), idx);
             self.edges.push(edge);
         }
 
         Ok(())
+    }
+
+    /// Return a reference to the edge identified by `key`, or `None` if absent.
+    ///
+    /// Complexity: O(1) amortized (hash-map lookup).
+    ///
+    /// Arguments
+    /// ---------
+    /// * `key` – Identity of the edge (source + target seed keys).
+    ///
+    /// Return
+    /// ------
+    /// `Some(&Edge)` if found, `None` otherwise.
+    #[inline]
+    pub fn edge_by_key(&self, key: &EdgeKey) -> Option<&Edge> {
+        self.edge_index.get(key).map(|&i| &self.edges[i])
+    }
+
+    /// Return a mutable reference to the edge identified by `key`, or `None`.
+    ///
+    /// Complexity: O(1) amortized.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `key` – Identity of the edge.
+    ///
+    /// Return
+    /// ------
+    /// `Some(&mut Edge)` if found, `None` otherwise.
+    #[inline]
+    pub fn edge_by_key_mut(&mut self, key: &EdgeKey) -> Option<&mut Edge> {
+        self.edge_index.get(key).map(|&i| &mut self.edges[i])
     }
 }

@@ -56,7 +56,7 @@ pub fn run(
                 &plan,
             );
 
-            let all_hypothesis = SolverOutput::merge_solver_output(&results);
+            ctx.track_hypotheses = SolverOutput::merge_solver_output(&results);
 
             Ok(vec![])
         },

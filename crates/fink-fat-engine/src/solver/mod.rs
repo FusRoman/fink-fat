@@ -76,10 +76,14 @@ use ahash::AHashMap;
 use outfit::{MJD, trajectories::batch_reader::ObservationBatch};
 
 use crate::{
-    Alert, AlertStore, Radian, graph::AlertLinkageDAG, solver::{
+    Alert, AlertStore, Radian,
+    graph::AlertLinkageDAG,
+    seeding::store::SeedStore,
+    solver::{
         components::{ComponentId, ConnectedComponents},
         error::SolverError,
-    }, trajectory::TrackHypothesis
+    },
+    trajectory::TrackHypothesis,
 };
 
 pub mod bounded_beam;
@@ -189,8 +193,7 @@ pub struct SolverDiagnostics {
 }
 
 pub type HypothesisId = u32;
-pub type HypothesisSet<'edge_lf, 'seed_lf> =
-    AHashMap<HypothesisId, TrackHypothesis<'edge_lf, 'seed_lf>>;
+pub type HypothesisSet = AHashMap<HypothesisId, TrackHypothesis>;
 
 /// Output of a solver pass over a connected component.
 ///
@@ -214,7 +217,7 @@ pub type HypothesisSet<'edge_lf, 'seed_lf> =
 /// - `'seed_lf`: lifetime of borrowed seeds,
 /// - `'alert_lf`: lifetime of borrowed alerts inside seeds.
 #[derive(Clone, Debug, Default)]
-pub struct SolverOutput<'edge_lf, 'seed_lf> {
+pub struct SolverOutput {
     /// Candidate tracks returned by the solver.
     ///
     /// In most solvers, tracks are sorted from best to worst, but callers should
@@ -222,7 +225,7 @@ pub struct SolverOutput<'edge_lf, 'seed_lf> {
     ///
     /// The key is a temporary track id assigned during reconstruction; final track ids are
     /// typically assigned after orbit fitting and persistence.
-    pub tracks: HypothesisSet<'edge_lf, 'seed_lf>,
+    pub tracks: HypothesisSet,
 
     /// Diagnostics for monitoring and tuning.
     pub diag: SolverDiagnostics,
@@ -231,7 +234,7 @@ pub struct SolverOutput<'edge_lf, 'seed_lf> {
 use std::borrow::Cow;
 use std::cmp::Ordering;
 
-impl<'edge_lf, 'seed_lf> SolverOutput<'edge_lf, 'seed_lf> {
+impl SolverOutput {
     /// Flatten all solver tracks into a single [`ObservationBatch`].
     ///
     /// This helper converts the solver output (a set of independent
@@ -364,8 +367,9 @@ impl<'edge_lf, 'seed_lf> SolverOutput<'edge_lf, 'seed_lf> {
     /// - [`ObservationBatch::from_radians_borrowed`]: zero-copy construction when
     ///   upstream already has contiguous slices (not the case here).
     pub fn to_observation_batch(
-        &'_ self,
+        &self,
         alert_store: &AlertStore,
+        seed_store: &SeedStore,
     ) -> Result<ObservationBatch<'_>, SolverError> {
         // --- 0) Stable track order (deterministic)
         let mut track_ids: Vec<u32> = self.tracks.keys().copied().collect();
@@ -376,7 +380,11 @@ impl<'edge_lf, 'seed_lf> SolverOutput<'edge_lf, 'seed_lf> {
         for tid in &track_ids {
             let trk = &self.tracks[tid];
             for seed in &trk.nodes {
-                cap += seed.members.len();
+                cap += seed_store
+                    .try_get_seed(*seed)
+                    .ok_or(SolverError::SeedKeyNotFound(*seed))?
+                    .members
+                    .len();
             }
         }
 
@@ -395,7 +403,7 @@ impl<'edge_lf, 'seed_lf> SolverOutput<'edge_lf, 'seed_lf> {
             let trk = &self.tracks[&tid];
 
             let mut alerts: Vec<Alert> = trk
-                .get_alerts(&alert_store)
+                .get_alerts(&alert_store, &seed_store)
                 .map_err(|e| SolverError::OrbitFitConversionError(e.to_string()))?;
 
             // Ensure time order inside this track
@@ -423,8 +431,8 @@ impl<'edge_lf, 'seed_lf> SolverOutput<'edge_lf, 'seed_lf> {
         })
     }
 
-    pub fn merge_solver_output(all_solver_output: &[Self]) -> HypothesisSet<'edge_lf, 'seed_lf> {
-        let mut merged: HypothesisSet<'edge_lf, 'seed_lf> = AHashMap::new();
+    pub fn merge_solver_output(all_solver_output: &[Self]) -> HypothesisSet {
+        let mut merged: HypothesisSet = AHashMap::new();
         let mut next_id: HypothesisId = 0;
 
         for output in all_solver_output {
@@ -505,7 +513,7 @@ pub trait Solver<'edge_lf, 'seed_lf> {
         graph: &'edge_lf AlertLinkageDAG,
         cc: &'edge_lf ConnectedComponents<'edge_lf, 'seed_lf>,
         component_id: ComponentId,
-    ) -> SolverOutput<'edge_lf, 'seed_lf>
+    ) -> SolverOutput
     where
         'edge_lf: 'seed_lf;
 }
