@@ -1,5 +1,0 @@
-schema_version = "1"
-
-[binning]
-healpix_depth = 40        # volontairement invalide (NSIDE=2^40, démesuré)
-time_bin_width_days = 0.02
