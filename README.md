@@ -26,4 +26,8 @@ Installation of the external dependencies: follow this [link](https://github.com
 
 ## Documentation
 
-All documentation for this project is hosted [here](https://github.com/FusRoman/fink-fat/wiki)
+To build documentation:
+```bash
+RUSTDOCFLAGS="--html-in-header $(pwd)/katex-header.html" cargo doc --workspace --open
+```
+

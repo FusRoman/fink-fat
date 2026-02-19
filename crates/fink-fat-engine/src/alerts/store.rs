@@ -3,29 +3,36 @@
 //! Overview
 //! --------
 //! This module defines [`AlertStore`], a lightweight container that groups
-//! [`Alert`](crate::persistence::alert::Alert) values by [`NightId`](crate::night_id::NightId)
+//! [`Alert`](crate::alerts::Alert) values by [`NightId`](crate::night_id::NightId)
 //! using an [`AHashMap`](ahash::AHashMap).
 //!
 //! The structure is optimized for the Fink-FAT pipeline common access patterns:
 //! - **batch processing per night** (seeding is typically intra-night),
 //! - **contiguous iteration** within a night (`Vec<Alert>`),
-//! - **fast key lookup** by `(night_id, idx_in_night)` via [`AlertKey`](crate::persistence::alert::AlertKey),
+//! - **fast key lookup** by `(night_id, dia_source_id)` via [`AlertKey`](crate::alerts::AlertKey),
+//! - **O(1) reverse lookup** from [`DiaSourceId`](crate::alerts::DiaSourceId) to vector position
+//!   via an internal `id_to_location` index,
 //! - **cheap merging** of partial stores without cloning via `Vec::append`.
 //!
 //! Data model
 //! ----------
 //! - The store maps each `night_id` to a `Vec<Alert>`.
-//! - The index within the vector is the *in-night* alert index.
-//! - An [`AlertKey`](crate::persistence::alert::AlertKey) can be used to retrieve
-//!   a specific alert: `(night_id, idx_in_night)`.
+//! - The position within the vector is the *in-night* positional index.
+//! - An [`AlertKey`](crate::alerts::AlertKey) `(night_id, dia_source_id)` can be used
+//!   to retrieve a specific alert via the internal reverse index.
 //!
 //! Invariants and conventions
 //! --------------------------
 //! This type is intentionally small and does not enforce strong invariants on its own,
 //! but the pipeline typically relies on the following conventions:
 //!
-//! - **Stable indexing per night:** `idx_in_night` refers to the index in the stored vector.
-//!   Any reordering of `Vec<Alert>` will change the meaning of existing keys.
+//! - **Stable reverse index:** the internal `id_to_location` map caches each alert's
+//!   vector position. Any reordering or removal of alerts within a `Vec<Alert>` will
+//!   invalidate this index unless a rebuilding method (such as
+//!   [`AlertStore::sort_each_night_and_rekey`]) is invoked afterwards.
+//! - **Identifier uniqueness:** each [`DiaSourceId`](crate::alerts::DiaSourceId) must
+//!   appear at most once across all nights. Duplicate insertions are rejected by
+//!   [`AlertStore::insert_alert`].
 //! - **Immutability by convention:** alerts are treated as immutable once inserted, which
 //!   simplifies sharing across threads and avoids hard-to-debug aliasing issues.
 //! - **Night completeness is contextual:** a night may contain a subset of all alerts
@@ -57,8 +64,10 @@
 //! - This module does not expose deletion APIs or compaction logic.
 //! - Thread-safety is handled at higher layers (e.g., by partitioning nights or using
 //!   immutable sharing patterns).
-//! - The store does not validate that `AlertKey.idx_in_night` matches `Alert` internal
-//!   fields (if any). Keys are treated as external indices into vectors.
+//! - The store does not validate consistency between `AlertKey.dia_source_id` and the
+//!   reverse index on bulk operations. Use [`AlertStore::sort_each_night_and_rekey`]
+//!   or [`AlertStore::merge_in_place`] (which rebuild the index internally) after any
+//!   external mutation of the per-night vectors.
 
 use std::collections::hash_map::Entry;
 
@@ -83,8 +92,9 @@ use crate::{
 /// - **Grouping by night:** each key is a [`NightId`](crate::night_id::NightId).
 /// - **Contiguous storage:** alerts for a night are in a `Vec<Alert>` for
 ///   cache-friendly iteration.
-/// - **Index-based addressing:** [`AlertKey`](crate::persistence::alert::AlertKey)
-///   locates an alert by `(night_id, idx_in_night)`.
+/// - **Key-based addressing:** [`AlertKey`](crate::alerts::AlertKey) pairs a
+///   `NightId` with a [`DiaSourceId`](crate::alerts::DiaSourceId); the internal
+///   reverse index resolves the `dia_source_id` to the vector position in O(1).
 ///
 /// See the module-level documentation for invariants and performance notes.
 #[derive(Debug, Clone)]
@@ -124,11 +134,16 @@ impl AlertStore {
     /// ---------
     /// * `map` – Map from [`NightId`](crate::night_id::NightId) to `Vec<Alert>`.
     ///
+    /// Return
+    /// ------
+    /// A new `AlertStore` with its reverse index (`id_to_location`) built from the
+    /// provided map.
+    ///
     /// Notes
     /// -----
-    /// - No validation is performed on alert ordering or key consistency.
-    /// - The caller is responsible for ensuring that `idx_in_night` conventions
-    ///   match vector indexing if keys are used later.
+    /// - No validation is performed on alert ordering or `dia_source_id` uniqueness.
+    /// - The reverse index is built during construction, mapping each
+    ///   `dia_source_id` to its `(night_id, vec_index)` pair.
     pub fn from_map(map: AHashMap<NightId, Vec<Alert>>) -> Self {
         // Build reverse index for stable lookups
         let mut id_to_location = AHashMap::new();
@@ -148,7 +163,14 @@ impl AlertStore {
     ///
     /// Arguments
     /// ---------
-    /// * `alert` – The `Alert` to insert. Its `key.night_id` determines the night it belongs to.
+    /// * `alert` – The [`Alert`](crate::alerts::Alert) to insert. Its `key.night_id`
+    ///   determines the target night.
+    ///
+    /// Return
+    /// ------
+    /// * `Ok(())` – The alert was successfully inserted and the reverse index updated.
+    /// * `Err(InsertError::DuplicateId)` – An alert with the same `dia_source_id`
+    ///   already exists in the store.
     pub fn insert_alert(&mut self, alert: Alert) -> Result<(), InsertError> {
         // Check for duplicate dia_source_id
         let night_id = alert.key.night_id;
@@ -279,6 +301,10 @@ impl AlertStore {
 
     /// Get the vector of alerts for a given night, if it exists.
     ///
+    /// Arguments
+    /// ---------
+    /// * `night_id` – Night identifier to query.
+    ///
     /// Return
     /// ------
     /// - `Some(&Vec<Alert>)` if the night exists.
@@ -287,7 +313,7 @@ impl AlertStore {
     /// Notes
     /// -----
     /// - The returned vector should be treated as immutable by convention to keep
-    ///   key stability (`AlertKey.idx_in_night`).
+    ///   the reverse index (`id_to_location`) consistent with vector positions.
     pub fn get(&self, night_id: &NightId) -> Option<&Vec<Alert>> {
         self.alerts_by_night.get(night_id)
     }
@@ -300,11 +326,21 @@ impl AlertStore {
     /// - If `night_id` is present, returns a mutable reference to its vector.
     /// - Otherwise, inserts `Vec::new()` and returns a mutable reference to it.
     ///
+    /// Arguments
+    /// ---------
+    /// * `night_id` – Night identifier.
+    ///
+    /// Return
+    /// ------
+    /// Mutable reference to the `Vec<Alert>` for the given night.
+    ///
     /// Notes
     /// -----
-    /// - Mutating the vector (especially reordering/removals) may invalidate any
-    ///   previously issued [`AlertKey`](crate::persistence::alert::AlertKey) that
-    ///   expects stable indices.
+    /// - Mutating the vector (especially reordering/removals) may invalidate the
+    ///   internal `id_to_location` reverse index. Call
+    ///   [`sort_each_night_and_rekey`](Self::sort_each_night_and_rekey) or
+    ///   [`merge_in_place`](Self::merge_in_place) after bulk mutations to
+    ///   rebuild the index.
     pub fn get_or_init(&mut self, night_id: NightId) -> &mut Vec<Alert> {
         self.alerts_by_night.entry(night_id).or_default()
     }
@@ -320,9 +356,15 @@ impl AlertStore {
     /// * `night_id` – Night identifier.
     /// * `capacity` – Initial capacity used when creating the vector.
     ///
+    /// Return
+    /// ------
+    /// Mutable reference to the `Vec<Alert>` for the given night.
+    ///
     /// Notes
     /// -----
     /// - The capacity hint can reduce reallocations when pushing alerts.
+    /// - Same mutation caveats as [`get_or_init`](Self::get_or_init):
+    ///   modifications to the returned vector may invalidate the reverse index.
     pub fn get_or_init_with_capacity(
         &mut self,
         night_id: NightId,
@@ -333,24 +375,26 @@ impl AlertStore {
             .or_insert_with(|| Vec::with_capacity(capacity))
     }
 
-    /// Get an alert by its key (night ID + index within night).
+    /// Get an alert by its composite key (night ID + `dia_source_id`).
     ///
     /// This is the canonical constant-time lookup for pipeline components that
-    /// carry compact references via [`AlertKey`](crate::persistence::alert::AlertKey).
+    /// carry compact references via [`AlertKey`](crate::alerts::AlertKey).
     ///
     /// Arguments
     /// ---------
-    /// * `key` – Alert location: `(night_id, idx_in_night)`.
+    /// * `key` – Composite alert identifier: `(night_id, dia_source_id)`.
     ///
     /// Return
     /// ------
-    /// - `Some(&Alert)` if the night exists and the index is in bounds.
+    /// - `Some(&Alert)` if the night exists and the `dia_source_id` is found
+    ///   in the reverse index with a valid vector position.
     /// - `None` otherwise.
     ///
     /// Notes
     /// -----
-    /// - If alerts are reordered or removed from the per-night vector, previously
-    ///   created keys may no longer refer to the intended alert.
+    /// - Internally resolves `dia_source_id` to a vector index via `id_to_location`.
+    /// - If alerts have been reordered or removed without rebuilding the index,
+    ///   the returned reference may be incorrect or `None`.
     pub fn get_by_key(&self, key: AlertKey) -> Option<&Alert> {
         let vec = self.alerts_by_night.get(&key.night_id)?;
         vec.get(self.id_to_location.get(&key.dia_source_id)?.1)
@@ -365,10 +409,13 @@ impl AlertStore {
     /// Return
     /// ------
     /// - `Some(&Alert)` if an alert with the given `dia_source_id` exists in the store.
+    /// - `None` if the `dia_source_id` is not present in the reverse index or the
+    ///   referenced night/position is invalid.
     ///
     /// Notes
     /// -----
-    /// - This method provides O(1) lookup by `dia_source_id` using the internal `id_to_location` index.
+    /// - This method provides O(1) lookup by `dia_source_id` using the internal
+    ///   `id_to_location` index.
     pub fn get_by_id(&self, dia_source_id: DiaSourceId) -> Option<&Alert> {
         let (night_id, idx_in_night) = self.id_to_location.get(&dia_source_id)?;
         let vec = self.alerts_by_night.get(night_id)?;
@@ -391,6 +438,10 @@ impl AlertStore {
     }
 
     /// Get an iterator over all alerts for a specific night, if it exists.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `night_id` – Night identifier to iterate over.
     ///
     /// Return
     /// ------
@@ -433,8 +484,8 @@ impl AlertStore {
     /// ---------
     /// * `night_window` – Pairing mode defining which nights are eligible.
     ///
-    /// Returns
-    /// -------
+    /// Return
+    /// ------
     /// An iterator yielding `(night_id, &[Alert])` tuples for nights within the window.
     ///
     /// Behavior
@@ -545,36 +596,43 @@ impl AlertStore {
         }
     }
 
-    /// Sort alerts within each night by their `mjd_tt` and rekey them according to their new index.
+    /// Sort alerts within each night by their `mjd_tt` and rebuild the reverse index.
     ///
-    /// This is a utility function that can be used after inserting or merging alerts to ensure that
-    /// the alerts within each night are ordered by observation time (`mjd_tt`) and that their
-    /// corresponding `AlertKey.idx_in_night` values reflect this new order.
+    /// This is a utility function that should be called after inserting or merging
+    /// alerts to ensure that alerts within each night are ordered by observation
+    /// time and that the internal `id_to_location` index reflects the new
+    /// vector positions.
     ///
     /// Behavior
     /// --------
     /// For each night in the store:
-    /// - The vector of alerts is sorted in-place by `mjd_tt` using `sort_unstable`.
-    /// - After sorting, each alert's `AlertKey.idx_in_night` is updated to match its new index in the vector.
+    /// 1. The vector of alerts is sorted in-place using
+    ///    [`sort_unstable`](slice::sort_unstable) (primary key: `mjd_tt`,
+    ///    tie-breakers follow the [`Ord`] implementation on [`Alert`](crate::alerts::Alert)).
+    /// 2. After all nights are sorted, the reverse index is fully rebuilt
+    ///    to re-map every `dia_source_id` to its new vector position.
     ///
-    /// - This operation modifies the internal state of the store and may invalidate any previously
-    ///   issued `AlertKey` values that expect stable indices. It should be used with caution
-    ///   and typically only once after all insertions/merges are complete.
+    /// This operation modifies the internal state of the store. Any vector
+    /// index previously obtained from `id_to_location` is invalid until the
+    /// rebuild completes. It should typically be called once after all
+    /// insertions/merges are complete.
     ///
     /// Complexity
     /// ----------
     /// Let `N` be the number of nights and `K` the total number of alerts across all nights.
     /// - Time: `O(K log K)` in the worst case (if all alerts are in one night),
-    ///     but typically `O(N * M log M)` where   `M` is the average number of alerts per night.
-    /// - Space: `O(1)` extra (sort is in-place, rekeying is done in-place).
+    ///   but typically `O(N * M log M)` where `M` is the average number of alerts per night,
+    ///   plus `O(K)` for the index rebuild.
+    /// - Space: `O(1)` extra (sort is in-place, index rebuild reuses the existing map).
     ///
     /// Notes
     /// -----
     /// - Sorting is done by `mjd_tt` to ensure temporal ordering within each night,
-    ///     which is a common convention for alert processing.
-    /// - After this operation, the `idx_in_night` field of each alert's key will
-    ///     match its index in the sorted vector, which can be important for
-    ///     downstream components that rely on key-based access.
+    ///   which is a common convention for alert processing.
+    /// - After this operation, the `id_to_location` reverse index is consistent
+    ///   with the sorted vectors, which is important for downstream components
+    ///   that rely on [`get_by_key`](Self::get_by_key) or
+    ///   [`get_by_id`](Self::get_by_id).
     pub fn sort_each_night_and_rekey(&mut self) {
         for (_, v) in self.alerts_by_night.iter_mut() {
             v.sort_unstable();

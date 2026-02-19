@@ -1,36 +1,34 @@
-// -----------------------------------------------------------------------------
-// Cadence-robust edge features (structured)
-// -----------------------------------------------------------------------------
-//
-// This module defines a cadence-robust feature set for **inter-night edges**
-// (directed links) between two `SeedNode` objects.
-//
-// Why "cadence-robust"?
-// ---------------------
-// Survey cadence affects the distribution of `dt` (time gaps) between nights.
-// Any feature that depends strongly on `dt` (e.g., raw residual distances) will
-// not generalize well across cadences (ZTF → LSST, rolling cadence, weather gaps).
-//
-// The feature design here favors:
-// - normalized innovations (Mahalanobis / z-scores) rather than raw distances,
-// - along-track / cross-track decomposition rather than axis-aligned residuals,
-// - angular and relative quantities (dimensionless ratios),
-// - robust numerical guards (floors, epsilons, finite checks).
-//
-// Design philosophy
-// -----------------
-// - `FeatureCore` computes expensive shared intermediates once per edge.
-// - Public feature families (`position`, `velocity`, `uncertainty`, `photometry`)
-//   are stable, readable containers used for ML export (Parquet / Arrow / ONNX).
-// - Flat feature access is provided via:
-//   - `EdgeFeatureKey` (type-safe, compile-time checked),
-//   - canonical string paths (`EdgeFeatureKey::path()`),
-//   - canonical ordering (`EDGE_FEATURE_KEYS`) and allocation-free iterators.
-//
-// Any change to the canonical ordering or to the string paths is a breaking
-// change for downstream consumers (Python training code, ONNX export, plots, etc.).
-//
-// -----------------------------------------------------------------------------
+//! Cadence-robust edge features (structured)
+//!
+//! This module defines a cadence-robust feature set for **inter-night edges**
+//! (directed links) between two `SeedNode` objects.
+//!
+//! Why "cadence-robust"?
+//! ---------------------
+//! Survey cadence affects the distribution of `dt` (time gaps) between nights.
+//! Any feature that depends strongly on `dt` (e.g., raw residual distances) will
+//! not generalize well across cadences (ZTF → LSST, rolling cadence, weather gaps).
+//!
+//! The feature design here favors:
+//! - normalized innovations (Mahalanobis / z-scores) rather than raw distances,
+//! - along-track / cross-track decomposition rather than axis-aligned residuals,
+//! - angular and relative quantities (dimensionless ratios),
+//! - robust numerical guards (floors, epsilons, finite checks).
+//!
+//! Design philosophy
+//! -----------------
+//! - `FeatureCore` computes expensive shared intermediates once per edge.
+//! - Public feature families (`position`, `velocity`, `uncertainty`, `photometry`)
+//!   are stable, readable containers used for ML export (Parquet / Arrow / ONNX).
+//! - Flat feature access is provided via:
+//!   - `EdgeFeatureKey` (type-safe, compile-time checked),
+//!   - canonical string paths (`EdgeFeatureKey::path()`),
+//!   - canonical ordering (`EDGE_FEATURE_KEYS`) and allocation-free iterators.
+//!
+//! Any change to the canonical ordering or to the string paths is a breaking
+//! change for downstream consumers (Python training code, ONNX export, plots, etc.).
+//!
+//! -----------------------------------------------------------------------------
 
 use crate::{
     astro_math::safe_ln,
@@ -132,8 +130,8 @@ impl EdgeFeatures {
     /// Motivation
     /// ----------
     /// Many graph solvers (shortest path, min-cost flow, assignment, etc.) operate
-    /// on **additive edge costs**. If per-edge costs approximate `-log p(edge)`,
-    /// summing them along a path approximates `-log p(trajectory)` (up to constants).
+    /// on **additive edge costs**. If per-edge costs approximate $-\ln p(\text{edge})$,
+    /// summing them along a path approximates $-\ln p(\text{trajectory})$ (up to constants).
     ///
     /// The cost is designed to be:
     /// - physically motivated (Gaussian innovations on the tangent plane),
@@ -141,24 +139,25 @@ impl EdgeFeatures {
     /// - additive along a trajectory (sum of per-edge costs),
     /// - stable (finite, avoids NaNs/Infs).
     ///
-    /// Definition (up to additive constants)
-    /// ------------------------------------
-    /// ```text
-    /// cost =
-    ///   0.5 * chi2_pos
-    /// + 0.5 * chi2_vel
-    /// + 0.5 * z_flux^2
-    /// + 0.5 * log(flux_std_ratio)^2
-    /// - log(eps_band + band_shared)
-    /// ```
+    /// Definition
+    /// ----------
+    /// Up to additive constants:
+    ///
+    /// $$\begin{align} c &= \frac{1}{2}\chi^2\_{\mathrm{pos}} \\ &+ \frac{1}{2}\chi^2\_{\mathrm{vel}} \\ &+ \frac{1}{2}z\_{\mathrm{flux}}^{2} \\ &+ \frac{1}{2}\bigl[\ln(|r\_{\sigma}| + \varepsilon)\bigr]^2 \\ &- \ln(\varepsilon\_{\mathrm{band}} + b\_{\mathrm{shared}}) \end{align}$$
+    ///
+    /// where $r\_{\sigma}$ is `flux_std_ratio` and $b\_{\mathrm{shared}} \in \{0, 1\}$.
     ///
     /// Term interpretation
     /// -------------------
-    /// - `chi2_pos`: penalizes geometric inconsistency normalized by uncertainties.
-    /// - `chi2_vel`: penalizes velocity inconsistency normalized by uncertainties.
-    /// - `z_flux^2`: penalizes photometric inconsistency (scale-free).
-    /// - `log(flux_std_ratio)^2`: penalizes large changes in flux scatter (quality proxy).
-    /// - `-log(eps_band + band_shared)`: encourages band overlap when possible.
+    /// - $\chi^2\_{\mathrm{pos}}$: penalizes geometric inconsistency normalized by
+    ///   uncertainties (position-space Mahalanobis distance).
+    /// - $\chi^2\_{\mathrm{vel}}$: penalizes velocity inconsistency normalized by
+    ///   uncertainties (velocity-space Mahalanobis distance).
+    /// - $z\_{\mathrm{flux}}^{\,2}$: penalizes photometric inconsistency (scale-free).
+    /// - $[\ln(|r\_{\sigma}| + \varepsilon)]^2$: penalizes large changes in flux
+    ///   scatter (quality proxy).
+    /// - $-\ln(\varepsilon\_{\mathrm{band}} + b\_{\mathrm{shared}})$: encourages band
+    ///   overlap when possible.
     ///
     /// Return
     /// ------
@@ -166,8 +165,8 @@ impl EdgeFeatures {
     ///
     /// Notes
     /// -----
-    /// - `band_shared` is expected to be in `{0,1}` but we clamp defensively.
-    /// - `flux_std_ratio` can be 0 if undefined; we guard with `eps`.
+    /// - $b\_{\mathrm{shared}}$ is expected in $\{0,1\}$ but is clamped defensively.
+    /// - `flux_std_ratio` can be 0 if undefined; we guard with $\varepsilon$.
     /// - This is a *heuristic* scoring function. ML ranking may still outperform
     ///   this in practice, but this provides a strong, interpretable baseline.
     #[inline]

@@ -1,31 +1,29 @@
-// -----------------------------------------------------------------------------
-// Edge photometry features
-// -----------------------------------------------------------------------------
-//
-// This module defines a small set of photometry-based features for an edge
-// between two seeds (`from -> to`).
-//
-// Design goals
-// ------------
-// - Keep features *mostly cadence-invariant*: avoid explicit dependence on `dt`
-//   or geometric propagation, so they generalize better across survey strategies.
-// - Use robust scalar summaries already aggregated inside each `SeedNode`
-//   (mean flux, flux scatter, observed bands).
-// - Ensure numerical stability: avoid NaNs/Infs in exported ML datasets.
-//
-// Notes on fluxes
-// --------------
-// We assume `SeedNode.photom` stores *comparable* flux measurements across seeds.
-// In practice, transferability depends on consistent photometric calibration
-// and bandpass definitions (e.g., same instrument/filter set or well-calibrated
-// cross-instrument mapping).
-//
-// -----------------------------------------------------------------------------
-//
-// Dependencies:
-// - `FeatureCore::finite_or_zero` is used as a shared sanitization policy to
-//   ensure stable feature export (Parquet / ONNX).
-//
+//! Edge photometry features
+//!
+//! This module defines a small set of photometry-based features for an edge
+//! between two seeds (`from -> to`).
+//!
+//! Design goals
+//! ------------
+//! - Keep features *mostly cadence-invariant*: avoid explicit dependence on `dt`
+//!   or geometric propagation, so they generalize better across survey strategies.
+//! - Use robust scalar summaries already aggregated inside each `SeedNode`
+//!   (mean flux, flux scatter, observed bands).
+//! - Ensure numerical stability: avoid NaNs/Infs in exported ML datasets.
+//!
+//! Notes on fluxes
+//! --------------
+//! We assume `SeedNode.photom` stores *comparable* flux measurements across seeds.
+//! In practice, transferability depends on consistent photometric calibration
+//! and bandpass definitions (e.g., same instrument/filter set or well-calibrated
+//! cross-instrument mapping).
+//!
+//! -----------------------------------------------------------------------------
+//!
+//! Dependencies:
+//! - `FeatureCore::finite_or_zero` is used as a shared sanitization policy to
+//!   ensure stable feature export (Parquet / ONNX).
+//!
 
 use crate::{graph::edge::feature_core::FeatureCore, seeding::SeedNode};
 
@@ -37,13 +35,17 @@ use crate::{graph::edge::feature_core::FeatureCore, seeding::SeedNode};
 ///
 /// Attributes
 /// ----------
-/// * `z_flux` – Normalized absolute flux difference between seeds.
-/// * `flux_std_ratio` – Ratio of flux standard deviations (proxy for S/N or quality change).
-/// * `band_shared` – Indicator whether seeds share at least one photometric band (0/1).
+/// * `z_flux` – Normalized absolute flux difference:
+///   $z\_f = \frac{|\bar{f}\_{\mathrm{to}} - \bar{f}\_{\mathrm{from}}|}{\sqrt{\sigma\_{\mathrm{from}}^2 + \sigma\_{\mathrm{to}}^2 + \sigma\_{\mathrm{floor}}^2}}$.
+/// * `flux_std_ratio` – Ratio of flux standard deviations:
+///   $r\_{\sigma} = \sigma\_{\mathrm{to}} / \sigma\_{\mathrm{from}}$.
+/// * `band_shared` – Indicator whether seeds share at least one photometric
+///   band ($0$ or $1$).
 #[derive(Clone, Debug)]
 pub struct EdgePhotometryFeatures {
     /// Normalized flux difference (z-score):
-    /// `|flux_to - flux_from| / sqrt(σ_from² + σ_to² + σ_floor²)`.
+    ///
+    /// $$z\_f = \frac{|\bar{f}\_{\mathrm{to}} - \bar{f}\_{\mathrm{from}}|}{\sqrt{\sigma\_{\mathrm{from}}^2 + \sigma\_{\mathrm{to}}^2 + \sigma\_{\mathrm{floor}}^2}}$$
     ///
     /// Interpretation
     /// --------------
@@ -52,25 +54,29 @@ pub struct EdgePhotometryFeatures {
     ///
     /// Numerical stability
     /// -------------------
-    /// A variance floor is included to prevent exploding z-scores when
-    /// `σ_from` and/or `σ_to` are extremely small or underestimated.
+    /// A variance floor $\sigma\_{\mathrm{floor}}^2$ is included to prevent exploding
+    /// z-scores when $\sigma\_{\mathrm{from}}$ and/or $\sigma\_{\mathrm{to}}$ are
+    /// extremely small or underestimated.
     pub z_flux: f64,
 
-    /// Flux uncertainty ratio `sigma_to / sigma_from` (0 if undefined).
+    /// Flux uncertainty ratio:
+    /// $r\_{\sigma} = \sigma\_{\mathrm{to}} \,/\, \sigma\_{\mathrm{from}}$
+    /// ($0$ if undefined).
     ///
     /// Interpretation
     /// --------------
-    /// - Values > 1 can indicate the target seed is noisier (lower S/N).
-    /// - Values < 1 can indicate the target seed is cleaner (higher S/N).
+    /// - $r\_{\sigma} > 1$: the target seed is noisier (lower S/N).
+    /// - $r\_{\sigma} < 1$: the target seed is cleaner (higher S/N).
     ///
     /// Notes
     /// -----
-    /// This ratio is only meaningful if both `sigma_from` and `sigma_to`
-    /// are computed consistently across seeds.
+    /// This ratio is only meaningful if both $\sigma\_{\mathrm{from}}$ and
+    /// $\sigma\_{\mathrm{to}}$ are computed consistently across seeds.
     pub flux_std_ratio: f64,
 
     /// Band-sharing indicator:
-    /// `1.0` if both seeds share at least one photometric band, otherwise `0.0`.
+    /// $b\_{\mathrm{shared}} = 1$ if both seeds share at least one photometric band,
+    /// otherwise $0$.
     ///
     /// Why this matters
     /// ----------------
@@ -85,12 +91,12 @@ impl EdgePhotometryFeatures {
     ///
     /// Overview
     /// --------
-    /// 1. Extract per-seed aggregated flux statistics (mean and standard deviation).
-    /// 2. Compute an absolute flux difference `|Δflux|`.
-    /// 3. Normalize `|Δflux|` by a pooled uncertainty:
-    ///    `sqrt(σ_from² + σ_to² + σ_floor²)`.
-    /// 4. Compute the uncertainty ratio `σ_to / σ_from` as a simple quality proxy.
-    /// 5. Compute a band-sharing indicator (0/1).
+    /// 1. Extract per-seed aggregated flux statistics ($\bar{f}$, $\sigma$).
+    /// 2. Compute an absolute flux difference $|\bar{f}\_{\mathrm{to}} - \bar{f}\_{\mathrm{from}}|$.
+    /// 3. Normalize by a pooled uncertainty:
+    ///    $\sqrt{\sigma\_{\mathrm{from}}^2 + \sigma\_{\mathrm{to}}^2 + \sigma\_{\mathrm{floor}}^2}$.
+    /// 4. Compute the uncertainty ratio $r\_{\sigma} = \sigma\_{\mathrm{to}} / \sigma\_{\mathrm{from}}$.
+    /// 5. Compute a band-sharing indicator ($0$ or $1$).
     ///
     /// Arguments
     /// ---------
@@ -103,9 +109,9 @@ impl EdgePhotometryFeatures {
     ///
     /// Notes
     /// -----
-    /// - This method does not use time separation `dt`; it is intended to be
+    /// - This method does not use time separation $\Delta t$; it is intended to be
     ///   relatively robust to cadence changes.
-    /// - Non-finite intermediate values are mapped to `0.0` via
+    /// - Non-finite intermediate values are mapped to $0$ via
     ///   [`FeatureCore::finite_or_zero`].
     #[inline]
     pub fn photometry_features(from: &SeedNode, to: &SeedNode) -> Self {

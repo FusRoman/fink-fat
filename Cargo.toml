@@ -1,12 +1,13 @@
 [package]
 name = "fink-fat"
 version = "1.0.0"
-edition = "2021"
+edition = "2024"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-[lib]
-name = "fink_fat"
-crate-type = ["rlib", "cdylib"]
+[workspace]
+members = [
+    "crates/fink-fat-engine",
+]
+resolver = "2"
 
 [dependencies]
 ahash = "0.8.12"
@@ -27,19 +28,9 @@ proptest = "1.8.0"
 rand = "0.9.2"
 tempfile = "3.23.0"
 
-[features]
-python-extension = ["pyo3/extension-module"]
-
-# make sure default features don't include it
-default = []
-
 
 [profile.release]
 debug = true      # conserve les symboles
 strip = "none"
 lto = "thin"
 codegen-units = 1
-
-[[bench]]
-name = "track_registry_update"
-harness = false

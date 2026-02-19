@@ -1,46 +1,44 @@
-// -----------------------------------------------------------------------------
-// Feature core (shared intermediates)
-// -----------------------------------------------------------------------------
-//
-// This module defines `FeatureCore`, an internal helper used to compute "core"
-// intermediate quantities once per edge (`from`, `to`) and reuse them across
-// multiple public feature families (position, velocity, photometry, etc.).
-//
-// Why this exists
-// ---------------
-// Edge feature computation often needs the same expensive building blocks:
-// - propagation from `from` epoch to `to` epoch on the tangent plane,
-// - tangent-plane projection,
-// - innovation vector r and innovation covariance S,
-// - robust normalization / whitening,
-// - kinematic consistency checks in velocity space.
-//
-// `FeatureCore` consolidates these computations to:
-// - avoid duplicated work,
-// - keep the public feature mapping code short (`EdgeFeatures { ... }`),
-// - centralize numerical guards (floors, eps, NaN handling).
-//
-// Numerical robustness philosophy
-// ------------------------------
-// This code is used in ML pipelines at LSST scale. We prioritize:
-// - determinism and stability (avoid NaNs/Infs in datasets),
-// - fast, branch-light computations,
-// - well-defined fallbacks for degenerate cases (singular covariances, dt<=0).
-//
-// In practice we:
-// - floor covariance diagonals (`FLOOR`) to avoid singularities,
-// - clamp dot/angle derived metrics (e.g., cos in [-1, 1]),
-// - map non-finite results to 0.0 (`finite_or_zero`).
-//
-// Units & frames
-// --------------
-// - Positions and velocities are expressed on the tangent plane of `from`
-//   (a small-angle local linearization).
-// - Coordinates returned by `radec_to_tangent_precomp` are in radians on that plane.
-// - `dt` is in days.
-// - Covariances are 2×2 matrices consistent with the tangent-plane coordinate system.
-//
-// -----------------------------------------------------------------------------
+//! Feature core (shared intermediates)
+//!
+//! This module defines `FeatureCore`, an internal helper used to compute "core"
+//! intermediate quantities once per edge (`from`, `to`) and reuse them across
+//! multiple public feature families (position, velocity, photometry, etc.).
+//!
+//! Why this exists
+//! ---------------
+//! Edge feature computation often needs the same expensive building blocks:
+//! - propagation from `from` epoch to `to` epoch on the tangent plane,
+//! - tangent-plane projection,
+//! - innovation vector r and innovation covariance S,
+//! - robust normalization / whitening,
+//! - kinematic consistency checks in velocity space.
+//!
+//! `FeatureCore` consolidates these computations to:
+//! - avoid duplicated work,
+//! - keep the public feature mapping code short (`EdgeFeatures { ... }`),
+//! - centralize numerical guards (floors, eps, NaN handling).
+//!
+//! Numerical robustness philosophy
+//! ------------------------------
+//! This code is used in ML pipelines at LSST scale. We prioritize:
+//! - determinism and stability (avoid NaNs/Infs in datasets),
+//! - fast, branch-light computations,
+//! - well-defined fallbacks for degenerate cases (singular covariances, dt<=0).
+//!
+//! In practice we:
+//! - floor covariance diagonals (`FLOOR`) to avoid singularities,
+//! - clamp dot/angle derived metrics (e.g., cos in [-1, 1]),
+//! - map non-finite results to 0.0 (`finite_or_zero`).
+//!
+//! Units & frames
+//! --------------
+//! - Positions and velocities are expressed on the tangent plane of `from`
+//!   (a small-angle local linearization).
+//! - Coordinates returned by `radec_to_tangent_precomp` are in radians on that plane.
+//! - `dt` is in days.
+//! - Covariances are 2×2 matrices consistent with the tangent-plane coordinate system.
+//!
+//! -----------------------------------------------------------------------------
 
 use crate::{
     astro_math::{
@@ -52,8 +50,8 @@ use crate::{
 /// Shared intermediate computations reused across feature sub-sets.
 ///
 /// This internal struct:
-/// - computes once the expensive/central quantities (innovation `r`, covariance `S`,
-///   predicted velocity direction, etc.),
+/// - computes once the expensive/central quantities (innovation $\mathbf{r}$,
+///   covariance $\mathbf{S}$, predicted velocity direction, etc.),
 /// - stores the final scalar values reused in multiple feature families,
 /// - keeps high-level feature mapping (`EdgeFeatures { ... }`) short and readable.
 ///
@@ -61,8 +59,8 @@ use crate::{
 /// ------------------
 /// All stored scalars are intended to be **finite** in normal operation. When the
 /// underlying computations encounter invalid inputs (NaNs/Infs), singular matrices,
-/// or degenerate kinematics (e.g., |v|≈0), we fall back to stable defaults and/or
-/// sanitize outputs via [`FeatureCore::finite_or_zero`].
+/// or degenerate kinematics (e.g., $|\mathbf{v}| \approx 0$), we fall back to
+/// stable defaults and/or sanitize outputs via [`FeatureCore::finite_or_zero`].
 ///
 /// Implementation note
 /// -------------------
@@ -72,62 +70,92 @@ use crate::{
 ///
 /// Attributes
 /// ----------
-/// Position family
-/// * `chi2_pos` – Mahalanobis innovation distance `rᵀ S⁻¹ r` in position space.
-/// * `log_chi2_pos` – `ln(chi2_pos + small)` for dynamic range compression.
-/// * `z_dx` – Diagonal z-score for x residual: `dx / sqrt(S_xx)`.
-/// * `z_dy` – Diagonal z-score for y residual: `dy / sqrt(S_yy)`.
-/// * `z_resid_norm` – `hypot(z_dx, z_dy)` (magnitude proxy in sigma units).
+/// **Position family**
+///
+/// * `chi2_pos` – Mahalanobis innovation distance:
+///   $\chi^2\_{\mathrm{pos}} = \mathbf{r}^\top \mathbf{S}^{-1} \mathbf{r}$.
+/// * `log_chi2_pos` – $\ln(\chi^2\_{\mathrm{pos}} + \varepsilon)$ for dynamic
+///   range compression.
+/// * `z_dx` – Diagonal z-score for $x$ residual:
+///   $z\_{\Delta x} = r\_x \,/\, \sqrt{S\_{xx}}$.
+/// * `z_dy` – Diagonal z-score for $y$ residual:
+///   $z\_{\Delta y} = r\_y \,/\, \sqrt{S\_{yy}}$.
+/// * `z_resid_norm` – $\sqrt{z\_{\Delta x}^2 + z\_{\Delta y}^2}$ (magnitude
+///   proxy in sigma units).
 /// * `z_along` – Along-track z-score (projected on predicted velocity direction).
 /// * `z_cross` – Cross-track z-score (perpendicular to predicted direction).
 ///
-/// Whitening family (Cholesky)
-/// * `chol_z1` – Whitened residual component along first axis (solve L z = r).
-/// * `chol_z2` – Whitened residual component along second axis.
-/// * `chol_z_norm` – `hypot(chol_z1, chol_z2)` (≈ sqrt(chi2) if S is SPD).
+/// **Whitening family (Cholesky)**
 ///
-/// Velocity family
-/// * `cos_dtheta_v` – Cosine of angle between predicted and target velocities.
-/// * `rel_speed_diff` – Scale-free speed mismatch `|a-b|/(a+b+eps)`.
-/// * `innov_speed_ratio` – Ratio `( |r|/dt ) / |v_pred|` (innovation-as-speed vs predicted speed).
-/// * `chi2_vel` – Mahalanobis distance in velocity space `dvᵀ S_vel⁻¹ dv`.
-/// * `log_chi2_vel` – `ln(chi2_vel + small)` for ML friendliness.
+/// Given the Cholesky factorization $\mathbf{S} = \mathbf{L}\,\mathbf{L}^\top$
+/// and solving $\mathbf{L}\,\mathbf{z} = \mathbf{r}$:
+///
+/// * `chol_z1` – First whitened component $z\_1$.
+/// * `chol_z2` – Second whitened component $z\_2$.
+/// * `chol_z_norm` – $\|\mathbf{z}\| = \sqrt{z\_1^2 + z\_2^2} \approx \sqrt{\chi^2\_{\mathrm{pos}}}$
+///   when $\mathbf{S}$ is SPD.
+///
+/// **Velocity family**
+///
+/// * `cos_dtheta_v` – $\cos \Delta\theta\_v = \hat{\mathbf{v}}\_{\mathrm{pred}} \cdot \hat{\mathbf{v}}\_{\mathrm{to}}$.
+/// * `rel_speed_diff` – Scale-free speed mismatch:
+///   $\frac{| \|\mathbf{v}\_{\mathrm{to}}\| - \|\mathbf{v}\_{\mathrm{pred}}\| |}{\|\mathbf{v}\_{\mathrm{to}}\| + \|\mathbf{v}\_{\mathrm{pred}}\| + \varepsilon}$.
+/// * `innov_speed_ratio` – $\frac{\|\mathbf{r}\| / \Delta t}{\|\mathbf{v}\_{\mathrm{pred}}\| + \varepsilon}$.
+/// * `chi2_vel` – Velocity-space Mahalanobis distance:
+///   $\chi^2\_{\mathrm{vel}} = \delta\mathbf{v}^\top \mathbf{S}\_{\mathrm{vel}}^{-1} \delta\mathbf{v}$.
+/// * `log_chi2_vel` – $\ln(\chi^2\_{\mathrm{vel}} + \varepsilon)$.
 pub(crate) struct FeatureCore {
     // ----------------------------- Position features -----------------------------
-    /// Mahalanobis innovation distance `rᵀ S⁻¹ r`.
+    /// Mahalanobis innovation distance:
+    /// $\chi^2\_{\mathrm{pos}} = \mathbf{r}^\top \mathbf{S}^{-1} \mathbf{r}$.
     pub(crate) chi2_pos: f64,
-    /// Log transform of `chi2_pos`.
+    /// Log-compressed position $\chi^2$:
+    /// $\ln(\chi^2\_{\mathrm{pos}} + \varepsilon)$.
     pub(crate) log_chi2_pos: f64,
-    /// Diagonal z-score for x residual.
+    /// Diagonal z-score for $x$ residual:
+    /// $z\_{\Delta x} = r\_x / \sqrt{S\_{xx}}$.
     pub(crate) z_dx: f64,
-    /// Diagonal z-score for y residual.
+    /// Diagonal z-score for $y$ residual:
+    /// $z\_{\Delta y} = r\_y / \sqrt{S\_{yy}}$.
     pub(crate) z_dy: f64,
-    /// Norm of diagonal z-scores.
+    /// Norm of diagonal z-scores:
+    /// $\sqrt{z\_{\Delta x}^2 + z\_{\Delta y}^2}$.
     pub(crate) z_resid_norm: f64,
-    /// Along-track z-score.
+    /// Along-track z-score:
+    /// $z\_\parallel = (\mathbf{r} \cdot \hat{\mathbf{u}}) / \sqrt{\hat{\mathbf{u}}^\top \mathbf{S} \hat{\mathbf{u}}}$.
     pub(crate) z_along: f64,
-    /// Cross-track z-score.
+    /// Cross-track z-score:
+    /// $z\_\perp = (\mathbf{r} \cdot \hat{\mathbf{n}}) / \sqrt{\hat{\mathbf{n}}^\top \mathbf{S} \hat{\mathbf{n}}}$.
     pub(crate) z_cross: f64,
 
     // ----------------------- Whitening (Cholesky) features -----------------------
-    /// Whitened (Cholesky) residual component along the first axis.
+    /// First whitened residual component $z\_1 = r\_x / L\_{00}$,
+    /// from solving $\mathbf{L}\,\mathbf{z} = \mathbf{r}$.
     pub(crate) chol_z1: f64,
-    /// Whitened (Cholesky) residual component along the second axis.
+    /// Second whitened residual component
+    /// $z\_2 = (r\_y - L\_{10}\,z\_1) / L\_{11}$.
     pub(crate) chol_z2: f64,
-    /// Euclidean norm of the whitened residuals (sqrt of chi2).
+    /// Euclidean norm of the whitened residuals:
+    /// $\|\mathbf{z}\| = \sqrt{z\_1^2 + z\_2^2} \approx \sqrt{\chi^2\_{\mathrm{pos}}}$.
     pub(crate) chol_z_norm: f64,
 
     // ----------------------------- Velocity features -----------------------------
-    /// Cosine of the angle between predicted and target velocities.
+    /// Cosine of the angle between predicted and target velocities:
+    /// $\cos \Delta\theta\_v = \hat{\mathbf{v}}\_{\mathrm{pred}} \cdot \hat{\mathbf{v}}\_{\mathrm{to}}$.
     pub(crate) cos_dtheta_v: f64,
-    /// Relative speed difference.
+    /// Relative speed difference:
+    /// $\frac{|\,\|\mathbf{v}\_{\mathrm{to}}\| - \|\mathbf{v}\_{\mathrm{pred}}\|\,|}{\|\mathbf{v}\_{\mathrm{to}}\| + \|\mathbf{v}\_{\mathrm{pred}}\| + \varepsilon}$.
     pub(crate) rel_speed_diff: f64,
-    /// Innovation-induced speed ratio.
+    /// Innovation-induced speed ratio:
+    /// $\frac{\|\mathbf{r}\| / \Delta t}{\|\mathbf{v}\_{\mathrm{pred}}\| + \varepsilon}$.
     pub(crate) innov_speed_ratio: f64,
 
-    /// Velocity innovation Mahalanobis distance `dvᵀ S_vel⁻¹ dv`.
+    /// Velocity innovation Mahalanobis distance:
+    /// $\chi^2\_{\mathrm{vel}} = \delta\mathbf{v}^\top \mathbf{S}\_{\mathrm{vel}}^{-1} \delta\mathbf{v}$,
+    /// where $\delta\mathbf{v} = \mathbf{v}\_{\mathrm{to}} - \mathbf{v}\_{\mathrm{pred}}$.
     pub(crate) chi2_vel: f64,
-    /// Log transform of `chi2_vel`.
+    /// Log-compressed velocity $\chi^2$:
+    /// $\ln(\chi^2\_{\mathrm{vel}} + \varepsilon)$.
     pub(crate) log_chi2_vel: f64,
 }
 
@@ -156,14 +184,15 @@ impl FeatureCore {
     ///
     /// Overview
     /// --------
-    /// 1. Compute the time separation `dt` between seeds (days).
-    /// 2. Propagate the "from" seed on its tangent plane to the epoch of "to".
-    /// 3. Project the "to" seed position onto the "from" tangent plane.
-    /// 4. Build the innovation vector `r = p_to - p_pred`.
-    /// 5. Build the innovation covariance `S` in position space.
-    /// 6. Compute normalized innovation metrics (Mahalanobis, z-scores, whitening).
+    /// 1. Compute the time separation $\Delta t$ between seeds (days).
+    /// 2. Propagate the `from` seed on its tangent plane to the epoch of `to`.
+    /// 3. Project the `to` seed position onto the `from` tangent plane.
+    /// 4. Build the innovation vector $\mathbf{r} = \mathbf{p}\_{\mathrm{to}} - \mathbf{p}\_{\mathrm{pred}}$.
+    /// 5. Build the innovation covariance $\mathbf{S}$ in position space.
+    /// 6. Compute normalized innovation metrics (Mahalanobis $\chi^2$,
+    ///    z-scores, Cholesky whitening).
     /// 7. Compute kinematic consistency metrics (velocity angle/speed mismatch).
-    /// 8. Compute velocity-space Mahalanobis metrics using `S_vel`.
+    /// 8. Compute velocity-space Mahalanobis metrics using $\mathbf{S}\_{\mathrm{vel}}$.
     ///
     /// Arguments
     /// ---------
@@ -179,13 +208,13 @@ impl FeatureCore {
     /// -----
     /// - This function is meant to be called **once per edge**.
     /// - All outputs are sanitized to be finite where possible.
-    /// - When `dt` is invalid (non-finite or `<= 0`), metrics that depend on `dt`
-    ///   fall back to `0.0`.
+    /// - When $\Delta t$ is invalid (non-finite or $\leq 0$), metrics that
+    ///   depend on $\Delta t$ fall back to $0$.
     ///
     /// Performance
     /// -----------
-    /// Most operations are small fixed-size linear algebra (2×2), optimized for
-    /// hot loops over many candidate edges.
+    /// Most operations are small fixed-size linear algebra ($2 \times 2$),
+    /// optimized for hot loops over many candidate edges.
     #[inline]
     pub(crate) fn from_nodes(from: &SeedNode, to: &SeedNode) -> Self {
         // ---------------------------------------------------------------------
@@ -376,39 +405,42 @@ impl FeatureCore {
             .radec_to_tangent_precomp(to.plane.ra_mid, to.plane.dec_mid)
     }
 
-    /// Build the innovation covariance matrix `S` in position space.
+    /// Build the innovation covariance matrix $\mathbf{S}$ in position space.
     ///
     /// Definition
     /// ----------
-    /// We use a simple propagation of uncertainty:
-    /// ```text
-    /// C_pred ≈ Cpos_from + dt^2 · Cvel_from
-    /// S      = C_pred + Cpos_to + floor·I
-    /// ```
+    /// We use a simple constant-velocity propagation of uncertainty:
+    ///
+    /// $$\mathbf{C}\_{\mathrm{pred}} = \mathbf{C}^{\mathrm{pos}}\_{\mathrm{from}} + \Delta t^{2} \mathbf{C}^{\mathrm{vel}}\_{\mathrm{from}}$$
+    ///
+    /// $$\mathbf{S} = \mathbf{C}\_{\mathrm{pred}} + \mathbf{C}^{\mathrm{pos}}\_{\mathrm{to}} + \varepsilon\_f \mathbf{I}$$
+    ///
+    /// where $\varepsilon\_f$ is a small diagonal floor.
     ///
     /// Interpretation
     /// --------------
-    /// - `Cpos_from`: position uncertainty at the `from` epoch.
-    /// - `Cvel_from`: velocity uncertainty at the `from` epoch.
-    /// - multiplying by `dt²` approximates how velocity uncertainty grows into
-    ///   position uncertainty over a time gap `dt`.
-    /// - adding `Cpos_to` accounts for measurement uncertainty at the `to` epoch.
+    /// - $\mathbf{C}^{\mathrm{pos}}\_{\mathrm{from}}$: position uncertainty at the `from` epoch.
+    /// - $\mathbf{C}^{\mathrm{vel}}\_{\mathrm{from}}$: velocity uncertainty at the `from` epoch.
+    /// - Multiplying by $\Delta t^{2}$ approximates how velocity uncertainty
+    ///   grows into position uncertainty over the time gap $\Delta t$.
+    /// - Adding $\mathbf{C}^{\mathrm{pos}}\_{\mathrm{to}}$ accounts for measurement
+    ///   uncertainty at the `to` epoch.
     ///
     /// Arguments
     /// ---------
     /// * `from` – Source seed node providing position/velocity covariances.
     /// * `to` – Target seed node providing position covariance at its epoch.
-    /// * `dt_sq` – Precomputed `dt²` (days²).
+    /// * `dt_sq` – Precomputed $\Delta t^{2}$ (days²).
     ///
     /// Return
     /// ------
-    /// Innovation covariance matrix `S` (2×2).
+    /// Innovation covariance matrix $\mathbf{S}$ ($2 \times 2$).
     ///
     /// Notes
     /// -----
-    /// A small diagonal floor is added to prevent:
+    /// A small diagonal floor $\varepsilon\_f \mathbf{I}$ is added to prevent:
     /// - singular matrices,
-    /// - `sqrt(0)` in z-score computations,
+    /// - $\sqrt{0}$ in z-score computations,
     /// - unstable inversion in Mahalanobis distance,
     /// - Cholesky failures due to borderline numerical PSD-ness.
     #[inline]
@@ -445,13 +477,11 @@ impl FeatureCore {
         ]
     }
 
-    /// Build the innovation covariance matrix `S_vel` in velocity space.
+    /// Build the innovation covariance matrix $\mathbf{S}\_{\mathrm{vel}}$ in velocity space.
     ///
     /// Definition
     /// ----------
-    /// ```text
-    /// S_vel = Cvel_from + Cvel_to + floor·I
-    /// ```
+    /// $$\mathbf{S}\_{\mathrm{vel}} = \mathbf{C}^{\mathrm{vel}}\_{\mathrm{from}} + \mathbf{C}^{\mathrm{vel}}\_{\mathrm{to}} + \varepsilon\_f \mathbf{I}$$
     ///
     /// Arguments
     /// ---------
@@ -460,7 +490,8 @@ impl FeatureCore {
     ///
     /// Return
     /// ------
-    /// Innovation covariance matrix in velocity space `S_vel` (2×2).
+    /// Innovation covariance matrix in velocity space $\mathbf{S}\_{\mathrm{vel}}$
+    /// ($2 \times 2$).
     ///
     /// Notes
     /// -----
@@ -477,28 +508,28 @@ impl FeatureCore {
         ]
     }
 
-    /// Compute cheap diagonal-based z-scores for the innovation `r`.
+    /// Compute cheap diagonal-based z-scores for the innovation $\mathbf{r}$.
     ///
     /// Definition
     /// ----------
-    /// We use only the diagonal terms of `S`:
-    /// - `z_dx = r_x / sqrt(S_xx)`
-    /// - `z_dy = r_y / sqrt(S_yy)`
-    /// - `z_norm = hypot(z_dx, z_dy)`
+    /// We use only the diagonal terms of $\mathbf{S}$:
+    ///
+    /// $$z\_{\Delta x} = \frac{r\_x}{\sqrt{S\_{xx}}} ,\quad z\_{\Delta y} = \frac{r\_y}{\sqrt{S\_{yy}}} ,\quad z\_{\mathrm{norm}} = \sqrt{z\_{\Delta x}^2 + z\_{\Delta y}^2}$$
     ///
     /// Arguments
     /// ---------
-    /// * `r` – Innovation vector `[dx, dy]` (tangent-plane radians).
-    /// * `s` – Innovation covariance matrix `S` (2×2).
+    /// * `r` – Innovation vector $[r\_x,\, r\_y]$ (tangent-plane radians).
+    /// * `s` – Innovation covariance matrix $\mathbf{S}$ ($2 \times 2$).
     ///
     /// Return
     /// ------
-    /// `(z_dx, z_dy, z_norm)` – diagonal z-scores and their Euclidean norm.
+    /// $(z\_{\Delta x},\; z\_{\Delta y},\; z\_{\mathrm{norm}})$ – diagonal z-scores
+    /// and their Euclidean norm.
     ///
     /// Notes
     /// -----
     /// This approximation:
-    /// - ignores correlation between x and y,
+    /// - ignores correlation between $x$ and $y$,
     /// - is robust and cheap,
     /// - is useful as an ML feature even when whitening fails.
     #[inline]
@@ -521,37 +552,38 @@ impl FeatureCore {
         )
     }
 
-    /// Compute along-track and cross-track z-scores based on the predicted velocity direction.
+    /// Compute along-track and cross-track z-scores based on the predicted
+    /// velocity direction.
     ///
     /// Definitions
     /// -----------
-    /// Let `u` be the unit vector along predicted velocity `v_pred`:
-    /// `u = v_pred / |v_pred|`.
+    /// Let $\hat{\mathbf{u}}$ be the unit vector along predicted velocity
+    /// $\mathbf{v}\_{\mathrm{pred}}$:
     ///
-    /// Let `n` be its perpendicular unit vector:
-    /// `n = (-u_y, u_x)`.
+    /// $$\hat{\mathbf{u}} = \frac{\mathbf{v}\_{\mathrm{pred}}}{\|\mathbf{v}\_{\mathrm{pred}}\|}$$
+    ///
+    /// Let $\hat{\mathbf{n}}$ be its perpendicular:
+    /// $\hat{\mathbf{n}} = (-\hat{u}\_y,\; \hat{u}\_x)$.
     ///
     /// Then:
-    /// - `z_along = (r·u) / sqrt(uᵀ S u)`
-    /// - `z_cross = (r·n) / sqrt(nᵀ S n)`
+    ///
+    /// $$z\_\parallel = \frac{\mathbf{r} \cdot \hat{\mathbf{u}}}{\sqrt{\hat{\mathbf{u}}^\top \mathbf{S} \hat{\mathbf{u}}}} ,\qquad z\_\perp = \frac{\mathbf{r} \cdot \hat{\mathbf{n}}}{\sqrt{\hat{\mathbf{n}}^\top \mathbf{S} \hat{\mathbf{n}}}}$$
     ///
     /// Arguments
     /// ---------
-    /// * `r` – Innovation vector `[dx, dy]`.
-    /// * `s` – Innovation covariance matrix `S` (2×2).
+    /// * `r` – Innovation vector $[r\_x,\, r\_y]$.
+    /// * `s` – Innovation covariance matrix $\mathbf{S}$ ($2 \times 2$).
     /// * `v_pred` – Predicted velocity vector at the target epoch.
     ///
     /// Return
     /// ------
-    /// `(z_along, z_cross, v_norm)` where:
-    /// * `z_along` – along-track z-score,
-    /// * `z_cross` – cross-track z-score,
-    /// * `v_norm` – speed `|v_pred|`.
+    /// $(z\_\parallel,\; z\_\perp,\; \|\mathbf{v}\_{\mathrm{pred}}\|)$.
     ///
     /// Notes
     /// -----
-    /// If `|v_pred|` is invalid or zero, we fall back to a fixed orthonormal basis:
-    /// `u=(1,0)`, `n=(0,1)`.
+    /// If $\|\mathbf{v}\_{\mathrm{pred}}\|$ is invalid or zero, we fall back to a
+    /// fixed orthonormal basis: $\hat{\mathbf{u}} = (1,0)$,
+    /// $\hat{\mathbf{n}} = (0,1)$.
     ///
     /// This makes the feature well-defined even for seeds with poorly constrained
     /// motion (e.g., too few detections, or numerical artifacts).
@@ -589,23 +621,25 @@ impl FeatureCore {
         )
     }
 
-    /// Compute `cos(angle)` between two vectors given their norms.
+    /// Compute $\cos(\theta)$ between two vectors given their norms.
+    ///
+    /// $$\cos \theta = \operatorname{clamp}\_{[-1, 1]}\!\left(\frac{\mathbf{a} \cdot \mathbf{b}}{\|\mathbf{a}\|\;\|\mathbf{b}\|}\right)$$
     ///
     /// Arguments
     /// ---------
     /// * `a` – First vector.
-    /// * `a_norm` – Precomputed `|a|`.
+    /// * `a_norm` – Precomputed $\|\mathbf{a}\|$.
     /// * `b` – Second vector.
-    /// * `b_norm` – Precomputed `|b|`.
+    /// * `b_norm` – Precomputed $\|\mathbf{b}\|$.
     ///
     /// Return
     /// ------
-    /// Cosine of the angle in `[-1, 1]` (clamped and finite), or `0.0` if invalid.
+    /// Cosine of the angle in $[-1, 1]$ (clamped and finite), or $0$ if invalid.
     ///
     /// Notes
     /// -----
     /// - Using precomputed norms avoids recomputing square roots in hot paths.
-    /// - Clamping avoids tiny numerical drift outside [-1,1] that could occur
+    /// - Clamping avoids tiny numerical drift outside $[-1, 1]$ that could occur
     ///   due to floating-point rounding.
     #[inline]
     pub(crate) fn cos_between(a: [f64; 2], a_norm: f64, b: [f64; 2], b_norm: f64) -> f64 {
@@ -617,10 +651,11 @@ impl FeatureCore {
         }
     }
 
-    /// Relative speed difference: `|a - b| / (a + b + eps)`.
+    /// Relative speed difference:
+    /// $\frac{|a - b|}{a + b + \varepsilon}$.
     ///
     /// This is a scale-free measure of mismatch between two speeds:
-    /// - 0 means same speed,
+    /// - $0$ means same speed,
     /// - larger values indicate increasing mismatch,
     /// - the denominator keeps the value bounded and stable when speeds grow.
     ///
@@ -631,11 +666,11 @@ impl FeatureCore {
     ///
     /// Return
     /// ------
-    /// Relative speed mismatch (finite), or `0.0` if invalid.
+    /// Relative speed mismatch (finite), or $0$ if invalid.
     ///
     /// Notes
     /// -----
-    /// We include [`FeatureCore::EPS`] to avoid division by zero in edge cases.
+    /// We include $\varepsilon$ to avoid division by zero in edge cases.
     #[inline]
     pub(crate) fn rel_speed_diff(a: f64, b: f64) -> f64 {
         if (a + b).is_finite() && (a + b) > 0.0 {

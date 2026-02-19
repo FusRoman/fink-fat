@@ -44,6 +44,3 @@ debug = true
 [[bench]]
 name = "generate_topk_edges"
 harness = false
-
-[build]
-rustdocflags = ["--html-in-header", "katex-header.html"]
