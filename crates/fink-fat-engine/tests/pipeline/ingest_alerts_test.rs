@@ -1,0 +1,289 @@
+//! Integration test for the `IngestNights` pipeline stage.
+//!
+//! This test exercises the full `PipelineRunner::run` path with a single
+//! `PipelineStage::IngestNights` stage, loading synthetic alerts from a
+//! Parquet file generated via the `synthetic_alerts` module.
+
+use tempfile::TempDir;
+
+use fink_fat_engine::{
+    AlertStore,
+    engine_config::EngineConfig,
+    error::EngineError,
+    graph::AlertLinkageDAG,
+    graph::edge::edge_prediction::EdgeRankingModelPool,
+    night_id::{NightId, PairingMode},
+    persistence::{PersistenceManager, manifest::Manifest, runtime_state::RuntimeState},
+    pipeline::{
+        PersistPolicy, PipelineContext, PipelineInputs, PipelineOutput, PipelinePlan,
+        PipelineRunner,
+        hooks::{PipelineHooks, StageMeta, StageReport},
+        stages::{PipelineStage, alert_inputs::input_uri::InputUri},
+    },
+    seeding::store::SeedStore,
+    solver::{HypothesisSet, solver_manager::SolverManager},
+};
+
+use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
+
+// ---------------------------------------------------------------------------
+// No-op pipeline hooks (the engine has no default implementation)
+// ---------------------------------------------------------------------------
+
+struct NoopHooks;
+
+impl PipelineHooks for NoopHooks {
+    fn on_stage_start(&self, _stage: PipelineStage, _meta: StageMeta) {}
+    fn on_stage_progress(&self, _stage: PipelineStage, _delta: u64) {}
+    fn on_stage_end(&self, _stage: PipelineStage, _report: StageReport) {}
+}
+
+// ---------------------------------------------------------------------------
+// Helper: build a minimal `EngineConfig` with a custom storage path
+// ---------------------------------------------------------------------------
+
+fn engine_config_with_storage(storage_dir: &TempDir) -> EngineConfig {
+    let storage_path = storage_dir.path().to_str().unwrap();
+    let yaml = format!(
+        r#"
+version: 1
+storage_path: "{storage_path}"
+"#
+    );
+    serde_yaml::from_str(&yaml).expect("deserialize minimal EngineConfig")
+}
+
+// ---------------------------------------------------------------------------
+// Integration tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ingest_nights_stage_loads_alerts_and_populates_runtime_state() {
+    // ---- 1) Generate synthetic dataset and write to Parquet ----
+    let n_trajectories = 3;
+    let n_nights = 3;
+    let obs_per_night = 2;
+    let start_night_id = 60000_u32;
+
+    let dataset = SyntheticDatasetBuilder::new()
+        .population(AsteroidPopulation::MainBelt, n_trajectories)
+        .n_nights(n_nights)
+        .obs_per_night(obs_per_night)
+        .start_night_id(start_night_id)
+        .seed(42)
+        .build();
+
+    let expected_total_alerts = n_trajectories * n_nights * obs_per_night;
+    assert_eq!(dataset.n_alerts(), expected_total_alerts);
+
+    let data_dir = TempDir::new().expect("create data temp dir");
+    let storage_dir = TempDir::new().expect("create storage temp dir");
+    let parquet_path = data_dir.path().join("test_alerts.parquet");
+    let alerts_uri = dataset.write_parquet(&parquet_path);
+
+    // ---- 2) Build engine infrastructure ----
+    let engine_config = engine_config_with_storage(&storage_dir);
+    let persistence = PersistenceManager::open_or_create(
+        engine_config.storage_path_buf(),
+    )
+    .expect("open persistence");
+
+    let edge_models = EdgeRankingModelPool::new("unused_model.onnx");
+    let solver_manager = SolverManager::default();
+    let track_hypotheses: HypothesisSet = HypothesisSet::default();
+
+    // ---- 3) Build the pipeline plan ----
+    let plan = PipelinePlan {
+        window: None, // IngestNights will compute it from the data
+        stages: vec![PipelineStage::IngestNights],
+        persist: PersistPolicy::None,
+        inputs: PipelineInputs {
+            alerts_uri,
+        },
+    };
+
+    // ---- 4) Build empty runtime state ----
+    let mut runtime_state = RuntimeState {
+        manifest: Manifest::new(0),
+        window: None,
+        alert_store: AlertStore::new(),
+        seed_store: SeedStore::new(),
+        graph: AlertLinkageDAG::new(),
+    };
+
+    // ---- 5) Build context and runner ----
+    let runner = PipelineRunner { plan: plan.clone() };
+    let hooks = NoopHooks;
+
+    let mut ctx = PipelineContext {
+        plan: &plan,
+        persistence: &persistence,
+        runtime_state: &mut runtime_state,
+        engine_config: &engine_config,
+        edge_models: &edge_models,
+        solver_manager: &solver_manager,
+        track_hypotheses,
+    };
+
+    // ---- 6) Run the pipeline ----
+    let output: PipelineOutput = runner
+        .run(&mut ctx, &hooks)
+        .expect("pipeline should succeed");
+
+    // ---- 7) Verify pipeline output ----
+    assert_eq!(output.reports.len(), 1, "exactly one stage report expected");
+    let (stage, report) = &output.reports[0];
+    assert_eq!(*stage, PipelineStage::IngestNights);
+
+    let counters: std::collections::HashMap<&str, u64> =
+        report.counters.iter().copied().collect();
+    assert_eq!(
+        counters.get("n_alerts").copied(),
+        Some(expected_total_alerts as u64),
+        "expected {expected_total_alerts} alerts total"
+    );
+    assert_eq!(
+        counters.get("n_nights").copied(),
+        Some(n_nights as u64),
+        "expected {n_nights} distinct nights"
+    );
+
+    // ---- 8) Verify runtime state: alert store ----
+    let store = &ctx.runtime_state.alert_store;
+    assert_eq!(
+        store.n_alerts(),
+        expected_total_alerts,
+        "alert store should hold all alerts"
+    );
+    assert_eq!(
+        store.n_nights(),
+        n_nights,
+        "alert store should hold the correct number of nights"
+    );
+
+    // Each night should have (n_trajectories × obs_per_night) alerts.
+    let expected_per_night = n_trajectories * obs_per_night;
+    for night_offset in 0..n_nights {
+        let nid = NightId(start_night_id + night_offset as u32);
+        let night_alerts = store
+            .get(&nid)
+            .unwrap_or_else(|| panic!("night {:?} should be present", nid));
+        assert_eq!(
+            night_alerts.len(),
+            expected_per_night,
+            "night {nid:?} should have {expected_per_night} alerts"
+        );
+
+        // ---- 9) Verify alerts are time-ordered within each night ----
+        for w in night_alerts.windows(2) {
+            assert!(
+                w[0].mjd_tt <= w[1].mjd_tt,
+                "alerts should be time-ordered within night {nid:?}"
+            );
+        }
+
+        // ---- 10) Verify alert keys are consistent ----
+        for alert in night_alerts {
+            assert_eq!(
+                alert.key.night_id, nid,
+                "alert key night_id must match the night"
+            );
+        }
+    }
+
+    // ---- 11) Verify runtime window was set ----
+    assert!(
+        ctx.runtime_state.window.is_some(),
+        "runtime window should be set after IngestNights"
+    );
+
+    let last_night_id = NightId(start_night_id + (n_nights as u32) - 1);
+    match ctx.runtime_state.window.unwrap() {
+        PairingMode::SingleNight { anchor, .. } => {
+            assert_eq!(
+                anchor, last_night_id,
+                "anchor night should be the last ingested night"
+            );
+        }
+        other => panic!("expected SingleNight pairing mode, got: {:?}", other),
+    }
+
+    // ---- 12) Verify all dia_source_ids are unique ----
+    let all_dia_ids: Vec<u64> = store
+        .nights()
+        .flat_map(|nid| {
+            store
+                .get(nid)
+                .unwrap()
+                .iter()
+                .map(|a| a.key.dia_source_id)
+        })
+        .collect();
+    assert_eq!(all_dia_ids.len(), expected_total_alerts);
+
+    let mut sorted_ids = all_dia_ids.clone();
+    sorted_ids.sort_unstable();
+    sorted_ids.dedup();
+    assert_eq!(
+        sorted_ids.len(),
+        expected_total_alerts,
+        "all dia_source_ids must be unique"
+    );
+}
+
+#[test]
+fn ingest_nights_stage_fails_on_missing_parquet_file() {
+    let storage_dir = TempDir::new().expect("create storage temp dir");
+    let engine_config = engine_config_with_storage(&storage_dir);
+    let persistence =
+        PersistenceManager::open_or_create(engine_config.storage_path_buf())
+            .expect("open persistence");
+
+    let edge_models = EdgeRankingModelPool::new("unused.onnx");
+    let solver_manager = SolverManager::default();
+    let track_hypotheses: HypothesisSet = HypothesisSet::default();
+
+    let plan = PipelinePlan {
+        window: None,
+        stages: vec![PipelineStage::IngestNights],
+        persist: PersistPolicy::None,
+        inputs: PipelineInputs {
+            alerts_uri: InputUri("file:///nonexistent/path/alerts.parquet".to_string()),
+        },
+    };
+
+    let mut runtime_state = RuntimeState {
+        manifest: Manifest::new(0),
+        window: None,
+        alert_store: AlertStore::new(),
+        seed_store: SeedStore::new(),
+        graph: AlertLinkageDAG::new(),
+    };
+
+    let runner = PipelineRunner { plan: plan.clone() };
+    let hooks = NoopHooks;
+
+    let mut ctx = PipelineContext {
+        plan: &plan,
+        persistence: &persistence,
+        runtime_state: &mut runtime_state,
+        engine_config: &engine_config,
+        edge_models: &edge_models,
+        solver_manager: &solver_manager,
+        track_hypotheses,
+    };
+
+    let result = runner.run(&mut ctx, &hooks);
+
+    assert!(result.is_err(), "pipeline should fail for missing file");
+    match result.err().unwrap() {
+        EngineError::StageFailed { stage, message } => {
+            assert_eq!(stage, PipelineStage::IngestNights);
+            assert!(
+                !message.is_empty(),
+                "error message should describe the failure"
+            );
+        }
+        other => panic!("expected StageFailed, got: {other:?}"),
+    }
+}
