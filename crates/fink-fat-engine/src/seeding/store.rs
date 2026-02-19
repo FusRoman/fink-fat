@@ -254,6 +254,13 @@ impl SeedStore {
         Ok(())
     }
 
+    pub fn sort_night(&mut self, night_id: NightId) {
+        if let Some(seeds) = self.seeds.get_mut(&night_id) {
+            seeds.sort();
+            self.rebuild_index_at_night(night_id);
+        }
+    }
+
     pub(crate) fn get_reverse_index(&self, key: SeedKey) -> Option<(NightId, usize)> {
         self.id_to_location.get(&key).cloned()
     }
@@ -440,6 +447,200 @@ mod seed_store_tests {
         assert!(store.contains_night(&nid(100)));
         assert!(store.contains_night(&nid(101)));
         assert!(store.contains_night(&nid(102)));
+    }
+
+    #[cfg(test)]
+    mod sort_night_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        // ── helpers ──────────────────────────────────────────────────────────────
+
+        /// Realistic MJD (TT) range covering ZTF and early Rubin operations.
+        ///
+        /// ZTF first light: ~MJD 58119 (2018-01-01)
+        /// Rubin early ops:  ~MJD 61000 (2026)
+        const MJD_MIN: f64 = 58_000.0;
+        const MJD_MAX: f64 = 62_000.0;
+
+        /// Build a minimal `SeedNode` for ordering and reverse-index tests.
+        ///
+        /// Only `key` and `plane.epoch_mid` (MJD TT) are meaningful here;
+        /// all other fields are left at their `Default` values.
+        fn make_seed(night_id: NightId, unique_id: SeedId, epoch_mid_mjd: f64) -> SeedNode {
+            let key = SeedKey {
+                night_id,
+                unique_id,
+            };
+            let mut seed = SeedNode::default();
+            seed.key = key;
+            seed.plane.epoch_mid = epoch_mid_mjd;
+            seed
+        }
+
+        fn night(n: u32) -> NightId {
+            NightId::from(n)
+        }
+
+        // ── unit tests ────────────────────────────────────────────────────────────
+
+        /// After `sort_night`, seeds within the target night are in ascending
+        /// `epoch_mid` order and the reverse index resolves every key to the
+        /// correct position.
+        ///
+        /// The five `epoch_mid` values span a single realistic ZTF night
+        /// (sub-second cadence within ~MJD 59000), inserted deliberately out of
+        /// order to exercise the sort.
+        #[test]
+        fn sort_night_seeds_are_ordered_and_index_is_coherent() {
+            let mut store = SeedStore::new();
+            let nid = night(0);
+
+            // Five observations within a single ZTF night, out of order.
+            // Offsets are in days (a few minutes apart).
+            let base_mjd = 59_000.0_f64;
+            let offsets = [0.003, 0.001, 0.004, 0.0015, 0.002];
+
+            let keys: Vec<SeedKey> = offsets
+                .iter()
+                .map(|&dt| store.insert_seed(nid, make_seed(nid, 0, base_mjd + dt)))
+                .collect();
+
+            store.sort_night(nid);
+
+            // Seeds must be in ascending epoch_mid order.
+            let seeds = store.get(&nid).expect("night must exist");
+            for w in seeds.windows(2) {
+                assert!(
+                    w[0].plane.epoch_mid <= w[1].plane.epoch_mid,
+                    "seeds out of epoch_mid order after sort_night: {} > {}",
+                    w[0].plane.epoch_mid,
+                    w[1].plane.epoch_mid,
+                );
+            }
+
+            // Every inserted key must still resolve to the slot that holds it.
+            for key in &keys {
+                let (resolved_night, idx) = store
+                    .get_reverse_index(*key)
+                    .expect("key must be present in reverse index after sort_night");
+
+                assert_eq!(resolved_night, nid, "night mismatch in reverse index");
+
+                let seed_at_idx = store
+                    .get(&nid)
+                    .and_then(|s| s.get(idx))
+                    .expect("index must point to a valid slot");
+
+                assert_eq!(
+                    seed_at_idx.key, *key,
+                    "reverse index points to wrong seed after sort_night"
+                );
+            }
+        }
+
+        /// `sort_night` must not disturb seeds or the reverse index of nights
+        /// other than the one being sorted.
+        ///
+        /// Night A (sorted) and night B (untouched) each span a different
+        /// realistic MJD window so their observations cannot be confused.
+        #[test]
+        fn sort_night_does_not_affect_other_nights() {
+            let mut store = SeedStore::new();
+            let nid_a = night(0); // e.g. a ZTF night
+            let nid_b = night(1); // e.g. an earlier ZTF night
+
+            // Night B: three observations on MJD ~58500, inserted out of order.
+            let base_b = 58_500.0_f64;
+            let keys_b: Vec<SeedKey> = [0.009, 0.002, 0.007]
+                .iter()
+                .map(|&dt| store.insert_seed(nid_b, make_seed(nid_b, 0, base_b + dt)))
+                .collect();
+
+            // Night A: two observations on MJD ~59000, out of order.
+            let base_a = 59_000.0_f64;
+            store.insert_seed(nid_a, make_seed(nid_a, 0, base_a + 0.005));
+            store.insert_seed(nid_a, make_seed(nid_a, 0, base_a + 0.001));
+
+            // Snapshot night B's key order before sorting night A.
+            let snapshot_b: Vec<SeedKey> =
+                store.get(&nid_b).unwrap().iter().map(|s| s.key).collect();
+
+            store.sort_night(nid_a);
+
+            // Night B's order must be unchanged.
+            let after_b: Vec<SeedKey> = store.get(&nid_b).unwrap().iter().map(|s| s.key).collect();
+
+            assert_eq!(
+                snapshot_b, after_b,
+                "sort_night must not reorder seeds from other nights"
+            );
+
+            // Night B's reverse index must still be fully coherent.
+            for key in &keys_b {
+                let (resolved_night, idx) = store
+                    .get_reverse_index(*key)
+                    .expect("key from night B must still be in reverse index");
+
+                assert_eq!(resolved_night, nid_b, "night mismatch for night B key");
+                assert_eq!(
+                    store.get(&nid_b).unwrap()[idx].key,
+                    *key,
+                    "reverse index points to wrong slot in night B"
+                );
+            }
+        }
+
+        // ── proptest ──────────────────────────────────────────────────────────────
+
+        proptest! {
+            /// For any non-empty sequence of valid MJD (TT) values in
+            /// `[MJD_MIN, MJD_MAX]`, `sort_night` must:
+            ///
+            /// 1. Produce a slice sorted in ascending `epoch_mid` order.
+            /// 2. Leave the reverse index fully coherent: every key resolves to
+            ///    the slot that actually holds it.
+            ///
+            /// The range `[58 000, 62 000]` covers ZTF operations and early
+            /// Rubin commissioning, and excludes non-finite values that have no
+            /// physical meaning for MJD timestamps.
+            #[test]
+            fn sort_night_index_coherent_for_arbitrary_mjd(
+                epoch_mids in prop::collection::vec(MJD_MIN..=MJD_MAX, 1..=64)
+            ) {
+                let mut store = SeedStore::new();
+                let nid = night(0);
+
+                let keys: Vec<SeedKey> = epoch_mids
+                    .iter()
+                    .map(|&mjd| store.insert_seed(nid, make_seed(nid, 0, mjd)))
+                    .collect();
+
+                store.sort_night(nid);
+
+                let seeds = store.get(&nid).expect("night must exist after inserts");
+
+                // 1. Sorted order.
+                for w in seeds.windows(2) {
+                    prop_assert!(
+                        w[0].plane.epoch_mid <= w[1].plane.epoch_mid,
+                        "epoch_mid out of order: {} > {}",
+                        w[0].plane.epoch_mid,
+                        w[1].plane.epoch_mid,
+                    );
+                }
+
+                // 2. Full reverse-index coherence.
+                for key in &keys {
+                    let (resolved_night, idx) = store
+                        .get_reverse_index(*key)
+                        .ok_or_else(|| TestCaseError::fail("key missing from reverse index"))?;
+
+                    prop_assert_eq!(resolved_night, nid);
+                    prop_assert_eq!(store.get(&nid).unwrap()[idx].key, *key);
+                }
+            }
+        }
     }
 }
 

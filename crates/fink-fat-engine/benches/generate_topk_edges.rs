@@ -3,13 +3,14 @@ use std::time::Duration;
 
 use camino::Utf8Path;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use fink_fat_engine::AlertKey;
 use fink_fat_engine::graph::edge::edge_features::EdgeFeatures;
 use fink_fat_engine::graph::edge::edge_prediction::{EdgeRankingModel, EdgeRankingModelPool};
 use fink_fat_engine::graph::edge::ranking_topk::rank_topk_edges_for_left;
-use fink_fat_engine::persistence::alert::AlertKey;
-use fink_fat_engine::persistence::seed_node::SeedKey;
 use fink_fat_engine::pipeline::progress_sink::NoopProgress;
+use fink_fat_engine::seeding::SeedNode;
 use fink_fat_engine::seeding::seed_spatial_index::SeedSpatialIndex;
+use fink_fat_engine::seeding::store::SeedStore;
 use fink_fat_engine::spacetime_bucket::healpix_binner::HealpixBinner;
 use fink_fat_engine::spacetime_bucket::uniform_time_binner::UniformTimeBinner;
 use rand::rngs::StdRng;
@@ -17,7 +18,6 @@ use rand::{Rng, SeedableRng};
 
 use fink_fat_engine::{
     Alert, engine_config::edge_config::EdgeConfig, graph::edge::Edge, night_id::NightId,
-    seeding::seed_node::SeedNode,
 };
 use smallvec::SmallVec;
 
@@ -44,9 +44,8 @@ fn make_alert(
     Alert {
         key: AlertKey {
             night_id: NightId(0),
-            idx_in_night: dia_source_id as u32,
+            dia_source_id: dia_source_id,
         },
-        dia_source_id,
         ra: ra_rad,
         ra_err: 1.0e-6, // ~0.2 arcsec in radians
         dec: dec_rad,
@@ -105,8 +104,8 @@ fn make_seeds_pair_model(
     ra_drift_rad_per_seed: f64,
     dec_drift_rad_per_seed: f64,
     max_speed_rad_per_day: Option<f64>,
-) -> Vec<SeedNode<'static>> {
-    let mut seeds: Vec<SeedNode<'static>> = Vec::with_capacity(num_seeds);
+) -> Vec<SeedNode> {
+    let mut seed_store: SeedStore = SeedStore::new();
 
     // NOTE (bench-only):
     // We leak the alerts to obtain &'static Alert references.
@@ -151,21 +150,19 @@ fn make_seeds_pair_model(
         )));
 
         let seed_node = SeedNode::from_pair(
-            SeedKey {
-                night_id: night_id,
-                idx_in_night: seed_index as u32,
-            },
+            &mut seed_store,
+            night_id,
             alert_a,
             alert_b,
             max_speed_rad_per_day,
         )
         .expect("SeedNode::from_pair failed (speed filter too strict?)");
 
-        seeds.push(seed_node);
+        seed_store.insert_seed(night_id, seed_node);
     }
 
-    seeds.sort_by(|a, b| a.plane.epoch_mid.total_cmp(&b.plane.epoch_mid));
-    seeds
+    seed_store.sort_night(night_id);
+    seed_store.get(&night_id).unwrap_or_default().to_vec()
 }
 
 /// Construct the spatial + time binners used by `SeedNode::score_edge_candidates`.
