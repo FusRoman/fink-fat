@@ -11,15 +11,6 @@ use crate::{
     },
 };
 
-#[derive(Clone, Debug)]
-pub struct TrackCore {
-    /// Additive cost / score returned by the solver (lower is better if cost).
-    pub cost: f64,
-
-    /// Optional quick metadata (useful for routing / debug).
-    pub night_span: u32,
-}
-
 /// One trajectory hypothesis produced by a solver.
 ///
 /// A hypothesis is an ordered chain in time.
@@ -33,8 +24,11 @@ pub struct TrackHypothesis<'edge_lf, 'seed_lf> {
     /// Edges used to connect the nodes (typically len = nodes.len() - 1).
     pub edges: Vec<&'edge_lf Edge>,
 
-    /// Core track metadata (cost, night span).
-    pub core: TrackCore,
+    /// Additive cost / score returned by the solver (lower is better if cost).
+    pub cost: f64,
+
+    /// Optional quick metadata (useful for routing / debug).
+    pub night_span: u32,
 }
 
 impl<'edge_lf, 'seed_lf> TrackHypothesis<'edge_lf, 'seed_lf> {

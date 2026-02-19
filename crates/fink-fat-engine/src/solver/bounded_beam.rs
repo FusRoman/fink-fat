@@ -112,7 +112,7 @@ use crate::{
         Solver, SolverDiagnostics, SolverOutput,
         components::{ComponentId, ConnectedComponents, LocalIdx},
     },
-    trajectory::{TrackCore, TrackHypothesis},
+    trajectory::TrackHypothesis,
 };
 
 // -----------------------------------------------------------------------------
@@ -664,10 +664,8 @@ fn reconstruct_track<'edge_lf, 'seed_lf>(
     TrackHypothesis {
         nodes,
         edges: edge_rev,
-        core: TrackCore {
-            cost: st.total_cost,
-            night_span,
-        },
+        cost: st.total_cost,
+        night_span,
     }
 }
 
@@ -705,8 +703,8 @@ fn sort_and_truncate_tracks<'edge_lf, 'seed_lf>(
         let a_edges = a.edges.len().max(1) as f64;
         let b_edges = b.edges.len().max(1) as f64;
 
-        let a_avg = a.core.cost / a_edges;
-        let b_avg = b.core.cost / b_edges;
+        let a_avg = a.cost / a_edges;
+        let b_avg = b.cost / b_edges;
 
         a_avg
             .partial_cmp(&b_avg)
@@ -714,12 +712,7 @@ fn sort_and_truncate_tracks<'edge_lf, 'seed_lf>(
             // tie-break: préférer les tracks plus longues
             .then_with(|| b.edges.len().cmp(&a.edges.len()))
             // tie-break: coût total plus faible
-            .then_with(|| {
-                a.core
-                    .cost
-                    .partial_cmp(&b.core.cost)
-                    .unwrap_or(Ordering::Equal)
-            })
+            .then_with(|| a.cost.partial_cmp(&b.cost).unwrap_or(Ordering::Equal))
     });
 
     // 3) Tronque au top-K
@@ -837,10 +830,10 @@ fn enumerate_beam_tracks_from_component_view<'edge_lf, 'seed_lf>(
             &mut expansions,
         );
 
-        if next.is_empty() {
+        beam = next;
+        if beam.is_empty() {
             break;
         }
-        beam = next;
     }
 
     // 4) Also consider sinks still present in the beam (in case we exited early).
@@ -879,4 +872,1063 @@ fn enumerate_beam_tracks_from_component_view<'edge_lf, 'seed_lf>(
     // 6) Rank + truncate.
     sort_and_truncate_tracks(cfg, &mut tracks);
     tracks
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod bounded_beam_tests {
+    use super::*;
+    use crate::{
+        Alert, AlertKey,
+        astro_math::arcsec_to_rad,
+        engine_config::solver_config::bounded_beam_config::BoundedBeamConfig,
+        graph::AlertLinkageDAG,
+        graph::edge::Edge,
+        night_id::NightId,
+        seeding::{SeedKey, SeedNode, store::SeedStore},
+        solver::{
+            Solver, SolverOutput,
+            components::ConnectedComponents,
+        },
+    };
+    use ahash::AHashSet;
+    use proptest::prelude::*;
+
+    // =========================================================================
+    // Helpers (same pattern as connected_components_tests)
+    // =========================================================================
+
+    fn nid(v: u32) -> NightId {
+        NightId::from(v)
+    }
+
+    fn mk_alert(source_id: u64, night_id: NightId, mjd_tt: f64) -> Alert {
+        Alert {
+            key: AlertKey {
+                night_id,
+                dia_source_id: source_id,
+            },
+            ra: 1.0,
+            ra_err: arcsec_to_rad(0.5),
+            dec: 0.1,
+            dec_err: arcsec_to_rad(0.5),
+            mjd_tt,
+            flux: 1000.0,
+            flux_err: 10.0,
+            band: 1,
+        }
+    }
+
+    fn insert_seeds(
+        store: &mut SeedStore,
+        night_id: NightId,
+        count: usize,
+        source_id_offset: u64,
+    ) -> Vec<SeedKey> {
+        let mut keys = Vec::with_capacity(count);
+        let t0 = 60000.0 + night_id.value() as f64;
+
+        for i in 0..count {
+            let sid_a = source_id_offset + (2 * i) as u64;
+            let sid_b = source_id_offset + (2 * i + 1) as u64;
+            let dt = 30.0 / 1440.0;
+            let alert_a = mk_alert(sid_a, night_id, t0 + i as f64 * 0.01);
+            let alert_b = mk_alert(sid_b, night_id, t0 + i as f64 * 0.01 + dt);
+
+            if let Some(seed) = SeedNode::from_pair(store, night_id, &alert_a, &alert_b, None) {
+                keys.push(seed.key());
+                store.insert_vec_seed(night_id, vec![seed]);
+            }
+        }
+        keys
+    }
+
+    fn build_store(spec: &[(u32, usize)]) -> (SeedStore, Vec<(NightId, Vec<SeedKey>)>) {
+        let mut store = SeedStore::new();
+        let mut record = Vec::new();
+        let mut source_id_offset: u64 = 0;
+
+        for &(n, count) in spec {
+            let night_id = nid(n);
+            let keys = insert_seeds(&mut store, night_id, count, source_id_offset);
+            record.push((night_id, keys));
+            source_id_offset += (count as u64) * 2 + 100;
+        }
+        (store, record)
+    }
+
+    fn mk_edge(from: SeedKey, to: SeedKey, cost: f64, active: bool) -> Edge {
+        Edge {
+            from,
+            to,
+            cost,
+            dt_days: 1.0,
+            active,
+        }
+    }
+
+    fn build_graph(edges: Vec<Edge>) -> AlertLinkageDAG {
+        AlertLinkageDAG::from_edges(edges)
+    }
+
+    /// Default config with relaxed limits for testing.
+    fn test_cfg() -> BoundedBeamConfig {
+        BoundedBeamConfig {
+            max_tracks: 100,
+            min_nodes: 2,
+            beam_width: 64,
+            max_out_per_node: 16,
+            max_tracks_per_source: 32,
+            max_expansions: 100_000,
+        }
+    }
+
+    /// Solve all components and collect all tracks into a flat vec.
+    fn solve_all<'e: 's, 's>(
+        solver: &BoundedBeamSolver,
+        graph: &'e AlertLinkageDAG,
+        cc: &'e ConnectedComponents<'e, 's>,
+    ) -> Vec<SolverOutput<'e, 's>> {
+        (0..cc.n_components)
+            .map(|cid| solver.solve(graph, cc, cid))
+            .collect()
+    }
+
+    // =========================================================================
+    // Unit tests — BoundedBeamSolver construction
+    // =========================================================================
+
+    #[test]
+    fn solver_name_is_bounded_beam() {
+        let solver = BoundedBeamSolver::default();
+        assert_eq!(solver.name(), "bounded_beam");
+    }
+
+    #[test]
+    fn new_stores_config() {
+        let cfg = BoundedBeamConfig {
+            max_tracks: 42,
+            min_nodes: 5,
+            beam_width: 128,
+            max_out_per_node: 4,
+            max_tracks_per_source: 10,
+            max_expansions: 9999,
+        };
+        let solver = BoundedBeamSolver::new(cfg.clone());
+        assert_eq!(solver.cfg.max_tracks, 42);
+        assert_eq!(solver.cfg.min_nodes, 5);
+        assert_eq!(solver.cfg.beam_width, 128);
+        assert_eq!(solver.cfg.max_out_per_node, 4);
+        assert_eq!(solver.cfg.max_tracks_per_source, 10);
+        assert_eq!(solver.cfg.max_expansions, 9999);
+    }
+
+    // =========================================================================
+    // Unit tests — empty / trivial inputs
+    // =========================================================================
+
+    #[test]
+    fn empty_store_returns_empty_output() {
+        let store = SeedStore::new();
+        let graph = build_graph(vec![]);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+        let solver = BoundedBeamSolver::new(test_cfg());
+
+        assert_eq!(cc.n_components, 0);
+        let outputs = solve_all(&solver, &graph, &cc);
+        assert!(outputs.is_empty());
+    }
+
+    #[test]
+    fn singleton_component_no_edges_returns_empty_tracks() {
+        let (store, _) = build_store(&[(10, 1)]);
+        let graph = build_graph(vec![]);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+        let solver = BoundedBeamSolver::new(test_cfg());
+
+        let output = solver.solve(&graph, &cc, 0);
+        // A single node cannot form a track with min_nodes >= 2.
+        assert!(output.tracks.is_empty());
+    }
+
+    #[test]
+    fn component_too_small_for_min_nodes_returns_empty() {
+        // 2 nodes, 1 edge. With min_nodes=3, no track can be emitted.
+        let (store, record) = build_store(&[(10, 1), (11, 1)]);
+        let k0 = record[0].1[0];
+        let k1 = record[1].1[0];
+        let edges = vec![mk_edge(k0, k1, 1.0, true)];
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        let cfg = BoundedBeamConfig {
+            min_nodes: 3,
+            ..test_cfg()
+        };
+        let solver = BoundedBeamSolver::new(cfg);
+        let output = solver.solve(&graph, &cc, 0);
+        assert!(output.tracks.is_empty());
+    }
+
+    // =========================================================================
+    // Unit tests — simple linear chain
+    // =========================================================================
+
+    #[test]
+    fn linear_chain_produces_one_track() {
+        // N10 -> N11 -> N12: a single source-to-sink path.
+        let (store, record) = build_store(&[(10, 1), (11, 1), (12, 1)]);
+        let k0 = record[0].1[0];
+        let k1 = record[1].1[0];
+        let k2 = record[2].1[0];
+
+        let edges = vec![mk_edge(k0, k1, 1.0, true), mk_edge(k1, k2, 2.0, true)];
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        let solver = BoundedBeamSolver::new(test_cfg());
+        let output = solver.solve(&graph, &cc, 0);
+
+        assert_eq!(output.tracks.len(), 1);
+        let trk = output.tracks.values().next().unwrap();
+
+        // Track must have 3 nodes and 2 edges.
+        assert_eq!(trk.nodes.len(), 3);
+        assert_eq!(trk.edges.len(), 2);
+
+        // Nodes are in time-forward order.
+        assert_eq!(trk.nodes[0].night_id(), nid(10));
+        assert_eq!(trk.nodes[1].night_id(), nid(11));
+        assert_eq!(trk.nodes[2].night_id(), nid(12));
+
+        // Cost is sum of edge costs.
+        assert!((trk.cost - 3.0).abs() < 1e-12);
+
+        // Night span = 12 - 10 = 2.
+        assert_eq!(trk.night_span, 2);
+    }
+
+    #[test]
+    fn linear_chain_min_nodes_2_emits_partial_and_full() {
+        // N10 -> N11 -> N12. With min_nodes=2, partial paths (2-node) ending at
+        // intermediate sinks *also* get emitted. But since N11 is not a sink
+        // (it has outgoing edges to N12), only the full 3-node path is emitted.
+        let (store, record) = build_store(&[(10, 1), (11, 1), (12, 1)]);
+        let k0 = record[0].1[0];
+        let k1 = record[1].1[0];
+        let k2 = record[2].1[0];
+
+        let edges = vec![mk_edge(k0, k1, 1.0, true), mk_edge(k1, k2, 2.0, true)];
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        let cfg = BoundedBeamConfig {
+            min_nodes: 2,
+            ..test_cfg()
+        };
+        let solver = BoundedBeamSolver::new(cfg);
+        let output = solver.solve(&graph, &cc, 0);
+
+        // Only 1 track: N10->N11->N12. N11 is not a sink so no partial track.
+        assert_eq!(output.tracks.len(), 1);
+    }
+
+    // =========================================================================
+    // Unit tests — diamond topology
+    // =========================================================================
+
+    #[test]
+    fn diamond_topology_finds_both_paths() {
+        //     s0 (N10)
+        //    /    \
+        //  s1      s2 (N11)
+        //    \    /
+        //     s3 (N12)
+        let (store, record) = build_store(&[(10, 1), (11, 2), (12, 1)]);
+        let s0 = record[0].1[0];
+        let s1 = record[1].1[0];
+        let s2 = record[1].1[1];
+        let s3 = record[2].1[0];
+
+        let edges = vec![
+            mk_edge(s0, s1, 1.0, true),
+            mk_edge(s0, s2, 2.0, true),
+            mk_edge(s1, s3, 1.0, true),
+            mk_edge(s2, s3, 1.0, true),
+        ];
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        let cfg = BoundedBeamConfig {
+            min_nodes: 3,
+            ..test_cfg()
+        };
+        let solver = BoundedBeamSolver::new(cfg);
+        let output = solver.solve(&graph, &cc, 0);
+
+        // Two distinct 3-node paths: s0->s1->s3 (cost 2.0) and s0->s2->s3 (cost 3.0).
+        assert_eq!(output.tracks.len(), 2);
+
+        // All tracks have 3 nodes and 2 edges.
+        for trk in output.tracks.values() {
+            assert_eq!(trk.nodes.len(), 3);
+            assert_eq!(trk.edges.len(), 2);
+        }
+    }
+
+    // =========================================================================
+    // Unit tests — max_tracks truncation
+    // =========================================================================
+
+    #[test]
+    fn max_tracks_limits_output_size() {
+        // Fan-out: s0 -> {s1, s2, s3, s4} -> s5
+        // Each path produces a track: s0->si->s5, so 4 tracks.
+        // max_tracks = 2 should truncate.
+        let (store, record) = build_store(&[(10, 1), (11, 4), (12, 1)]);
+        let s0 = record[0].1[0];
+        let s_mid: Vec<SeedKey> = record[1].1.clone();
+        let s5 = record[2].1[0];
+
+        let mut edges = Vec::new();
+        for (i, &sm) in s_mid.iter().enumerate() {
+            edges.push(mk_edge(s0, sm, (i + 1) as f64, true));
+            edges.push(mk_edge(sm, s5, 1.0, true));
+        }
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        let cfg = BoundedBeamConfig {
+            max_tracks: 2,
+            min_nodes: 3,
+            ..test_cfg()
+        };
+        let solver = BoundedBeamSolver::new(cfg);
+        let output = solver.solve(&graph, &cc, 0);
+
+        assert!(output.tracks.len() <= 2);
+    }
+
+    // =========================================================================
+    // Unit tests — max_tracks_per_source cap
+    // =========================================================================
+
+    #[test]
+    fn max_tracks_per_source_limits_emission() {
+        // s0 -> {s1, s2, s3} -> s4 : three 3-node paths, all from source s0.
+        // max_tracks_per_source = 1: only one track should be emitted.
+        let (store, record) = build_store(&[(10, 1), (11, 3), (12, 1)]);
+        let s0 = record[0].1[0];
+        let s_mid: Vec<SeedKey> = record[1].1.clone();
+        let s4 = record[2].1[0];
+
+        let mut edges = Vec::new();
+        for (i, &sm) in s_mid.iter().enumerate() {
+            edges.push(mk_edge(s0, sm, (i + 1) as f64, true));
+            edges.push(mk_edge(sm, s4, 1.0, true));
+        }
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        let cfg = BoundedBeamConfig {
+            max_tracks: 100,
+            max_tracks_per_source: 1,
+            min_nodes: 3,
+            ..test_cfg()
+        };
+        let solver = BoundedBeamSolver::new(cfg);
+        let output = solver.solve(&graph, &cc, 0);
+
+        assert_eq!(output.tracks.len(), 1);
+    }
+
+    // =========================================================================
+    // Unit tests — max_out_per_node pruning
+    // =========================================================================
+
+    #[test]
+    fn max_out_per_node_limits_branching() {
+        // s0 has 5 outgoing edges to N11 seeds. max_out_per_node=2 should prune.
+        let (store, record) = build_store(&[(10, 1), (11, 5), (12, 1)]);
+        let s0 = record[0].1[0];
+        let s_mid: Vec<SeedKey> = record[1].1.clone();
+        let s_sink = record[2].1[0];
+
+        let mut edges = Vec::new();
+        for (i, &sm) in s_mid.iter().enumerate() {
+            edges.push(mk_edge(s0, sm, (i + 1) as f64, true));
+            edges.push(mk_edge(sm, s_sink, 1.0, true));
+        }
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        let cfg = BoundedBeamConfig {
+            max_out_per_node: 2,
+            min_nodes: 3,
+            ..test_cfg()
+        };
+        let solver = BoundedBeamSolver::new(cfg);
+        let output = solver.solve(&graph, &cc, 0);
+
+        // With max_out_per_node=2 from s0, at most 2 paths are reachable.
+        assert!(output.tracks.len() <= 2);
+    }
+
+    // =========================================================================
+    // Unit tests — max_expansions budget
+    // =========================================================================
+
+    #[test]
+    fn max_expansions_limits_work() {
+        // Build a longer chain: N1 -> N2 -> N3 -> N4 -> N5
+        let (store, record) = build_store(&[(1, 1), (2, 1), (3, 1), (4, 1), (5, 1)]);
+        let keys: Vec<SeedKey> = record.iter().map(|(_, ks)| ks[0]).collect();
+
+        let mut edges = Vec::new();
+        for i in 0..keys.len() - 1 {
+            edges.push(mk_edge(keys[i], keys[i + 1], 1.0, true));
+        }
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        // max_expansions=1: only one step can happen.
+        let cfg = BoundedBeamConfig {
+            max_expansions: 1,
+            min_nodes: 2,
+            ..test_cfg()
+        };
+        let solver = BoundedBeamSolver::new(cfg);
+        let output = solver.solve(&graph, &cc, 0);
+
+        // The solver may find partial tracks or nothing, depending on when
+        // the budget cuts in; the important thing is it terminates and
+        // n_candidates is bounded.
+        assert!(output.diag.n_candidates <= 5); // bounded work
+    }
+
+    // =========================================================================
+    // Unit tests — diagnostics
+    // =========================================================================
+
+    #[test]
+    fn diagnostics_are_populated() {
+        let (store, record) = build_store(&[(10, 1), (11, 1), (12, 1)]);
+        let k0 = record[0].1[0];
+        let k1 = record[1].1[0];
+        let k2 = record[2].1[0];
+
+        let edges = vec![mk_edge(k0, k1, 1.0, true), mk_edge(k1, k2, 2.0, true)];
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        let solver = BoundedBeamSolver::new(test_cfg());
+        let output = solver.solve(&graph, &cc, 0);
+
+        assert_eq!(output.diag.solver_name, "bounded_beam");
+        assert_eq!(output.diag.component_id, 0);
+        assert_eq!(output.diag.n_nodes, 3);
+        assert!(output.diag.n_candidates > 0);
+        assert_eq!(output.diag.n_selected, output.tracks.len() as u32);
+    }
+
+    // =========================================================================
+    // Unit tests — track invariants
+    // =========================================================================
+
+    #[test]
+    fn track_nodes_are_time_ordered() {
+        // 5-night chain.
+        let (store, record) = build_store(&[(10, 1), (11, 1), (12, 1), (13, 1), (14, 1)]);
+        let keys: Vec<SeedKey> = record.iter().map(|(_, ks)| ks[0]).collect();
+
+        let mut edges = Vec::new();
+        for i in 0..keys.len() - 1 {
+            edges.push(mk_edge(keys[i], keys[i + 1], 1.0, true));
+        }
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        let solver = BoundedBeamSolver::new(test_cfg());
+        let output = solver.solve(&graph, &cc, 0);
+
+        for trk in output.tracks.values() {
+            for w in trk.nodes.windows(2) {
+                assert!(
+                    w[0].night_id() < w[1].night_id(),
+                    "nodes must be in strictly increasing night order"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn track_edges_match_consecutive_nodes() {
+        let (store, record) = build_store(&[(10, 1), (11, 1), (12, 1)]);
+        let k0 = record[0].1[0];
+        let k1 = record[1].1[0];
+        let k2 = record[2].1[0];
+
+        let edges = vec![mk_edge(k0, k1, 1.0, true), mk_edge(k1, k2, 2.0, true)];
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        let solver = BoundedBeamSolver::new(test_cfg());
+        let output = solver.solve(&graph, &cc, 0);
+
+        for trk in output.tracks.values() {
+            assert_eq!(trk.edges.len(), trk.nodes.len() - 1);
+            for (i, edge) in trk.edges.iter().enumerate() {
+                assert_eq!(
+                    edge.from,
+                    trk.nodes[i].key(),
+                    "edge.from must match nodes[i]"
+                );
+                assert_eq!(
+                    edge.to,
+                    trk.nodes[i + 1].key(),
+                    "edge.to must match nodes[i+1]"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn track_cost_equals_sum_of_edge_costs() {
+        let (store, record) = build_store(&[(10, 1), (11, 1), (12, 1)]);
+        let k0 = record[0].1[0];
+        let k1 = record[1].1[0];
+        let k2 = record[2].1[0];
+
+        let edges = vec![mk_edge(k0, k1, 1.5, true), mk_edge(k1, k2, 2.5, true)];
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        let solver = BoundedBeamSolver::new(test_cfg());
+        let output = solver.solve(&graph, &cc, 0);
+
+        for trk in output.tracks.values() {
+            let edge_cost_sum: f64 = trk.edges.iter().map(|e| e.cost).sum();
+            assert!(
+                (trk.cost - edge_cost_sum).abs() < 1e-12,
+                "track cost {} != sum of edge costs {}",
+                trk.cost,
+                edge_cost_sum
+            );
+        }
+    }
+
+    #[test]
+    fn track_night_span_matches_first_last() {
+        let (store, record) = build_store(&[(5, 1), (10, 1), (20, 1)]);
+        let k0 = record[0].1[0];
+        let k1 = record[1].1[0];
+        let k2 = record[2].1[0];
+
+        let edges = vec![mk_edge(k0, k1, 1.0, true), mk_edge(k1, k2, 1.0, true)];
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        let solver = BoundedBeamSolver::new(test_cfg());
+        let output = solver.solve(&graph, &cc, 0);
+
+        for trk in output.tracks.values() {
+            let first_night = trk.nodes.first().unwrap().night_id().value();
+            let last_night = trk.nodes.last().unwrap().night_id().value();
+            assert_eq!(trk.night_span, last_night - first_night);
+        }
+    }
+
+    // =========================================================================
+    // Unit tests — sort_and_truncate_tracks ranking
+    // =========================================================================
+
+    #[test]
+    fn sort_and_truncate_prefers_lower_avg_cost() {
+        // Two tracks with different costs and same length.
+        // Track A: cost=2.0, 2 edges => avg=1.0
+        // Track B: cost=6.0, 2 edges => avg=3.0
+        // After sort, A should be retained when max_tracks=1.
+        let (store, record) = build_store(&[(10, 2), (11, 1), (12, 1)]);
+        let s0a = record[0].1[0];
+        let s0b = record[0].1[1];
+        let s1 = record[1].1[0];
+        let s2 = record[2].1[0];
+
+        // Path A: s0a -> s1 -> s2 (cost 1+1=2)
+        // Path B: s0b -> s1 -> s2 (cost 5+1=6)
+        let edges = vec![
+            mk_edge(s0a, s1, 1.0, true),
+            mk_edge(s0b, s1, 5.0, true),
+            mk_edge(s1, s2, 1.0, true),
+        ];
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        let cfg = BoundedBeamConfig {
+            max_tracks: 1,
+            min_nodes: 3,
+            ..test_cfg()
+        };
+        let solver = BoundedBeamSolver::new(cfg);
+        let output = solver.solve(&graph, &cc, 0);
+
+        assert_eq!(output.tracks.len(), 1);
+        let trk = output.tracks.values().next().unwrap();
+        // The cheaper path (avg cost 1.0) should win.
+        assert!((trk.cost - 2.0).abs() < 1e-12);
+    }
+
+    // =========================================================================
+    // Unit tests — disjoint components solved independently
+    // =========================================================================
+
+    #[test]
+    fn disjoint_components_solved_independently() {
+        // Two disjoint 3-night chains.
+        let (store, record) = build_store(&[(10, 1), (11, 1), (12, 1), (20, 1), (21, 1), (22, 1)]);
+        let ka = [record[0].1[0], record[1].1[0], record[2].1[0]];
+        let kb = [record[3].1[0], record[4].1[0], record[5].1[0]];
+
+        let edges = vec![
+            mk_edge(ka[0], ka[1], 1.0, true),
+            mk_edge(ka[1], ka[2], 1.0, true),
+            mk_edge(kb[0], kb[1], 2.0, true),
+            mk_edge(kb[1], kb[2], 2.0, true),
+        ];
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        assert_eq!(cc.n_components, 2);
+
+        let solver = BoundedBeamSolver::new(test_cfg());
+        let outputs = solve_all(&solver, &graph, &cc);
+
+        // Each component should produce exactly 1 track.
+        for output in &outputs {
+            assert_eq!(output.tracks.len(), 1);
+        }
+    }
+
+    // =========================================================================
+    // Unit tests — active_only edge filtering
+    // =========================================================================
+
+    #[test]
+    fn active_only_cc_excludes_inactive_edges() {
+        // N10 -> N11 (active), N11 -> N12 (inactive).
+        // With active_only CC, N12 is disconnected.
+        let (store, record) = build_store(&[(10, 1), (11, 1), (12, 1)]);
+        let k0 = record[0].1[0];
+        let k1 = record[1].1[0];
+        let k2 = record[2].1[0];
+
+        let edges = vec![mk_edge(k0, k1, 1.0, true), mk_edge(k1, k2, 1.0, false)];
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, true).unwrap();
+
+        let solver = BoundedBeamSolver::new(test_cfg());
+        let outputs = solve_all(&solver, &graph, &cc);
+
+        // The active component has only k0, k1 — emits a 2-node track.
+        let total_tracks: usize = outputs.iter().map(|o| o.tracks.len()).sum();
+        assert_eq!(total_tracks, 1);
+
+        let trk = outputs
+            .iter()
+            .flat_map(|o| o.tracks.values())
+            .next()
+            .unwrap();
+        assert_eq!(trk.nodes.len(), 2);
+    }
+
+    // =========================================================================
+    // Unit tests — build_solver_adjacency
+    // =========================================================================
+
+    #[test]
+    fn build_solver_adjacency_prunes_and_sorts() {
+        // 1 source with 5 outgoing edges (costs 5,3,1,4,2). max_out=3.
+        // After sort+prune: costs [1,2,3].
+        let (store, record) = build_store(&[(10, 1), (11, 5)]);
+        let s0 = record[0].1[0];
+        let s_right: Vec<SeedKey> = record[1].1.clone();
+
+        let costs = [5.0, 3.0, 1.0, 4.0, 2.0];
+        let mut edges = Vec::new();
+        for (i, &sm) in s_right.iter().enumerate() {
+            edges.push(mk_edge(s0, sm, costs[i], true));
+        }
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        let cid = cc.component_id_of_seed(&store, s0).unwrap();
+        let component_nodes = cc.component_nodes(cid);
+        let component_out = cc.component_out_edges(cid);
+
+        let cfg = BoundedBeamConfig {
+            max_out_per_node: 3,
+            ..test_cfg()
+        };
+        let mut diag = SolverDiagnostics::default();
+        let adj = build_solver_adjacency(&cfg, component_nodes, component_out, &mut diag);
+
+        // Find the local index of s0.
+        let s0_local = component_nodes
+            .iter()
+            .position(|n| n.key() == s0)
+            .unwrap();
+
+        // adj[s0_local] should have at most 3 entries, sorted by cost.
+        assert!(adj[s0_local].len() <= 3);
+        for w in adj[s0_local].windows(2) {
+            assert!(w[0].cost <= w[1].cost, "adjacency must be sorted by cost");
+        }
+        // n_candidates should reflect edges seen before pruning.
+        assert!(diag.n_candidates >= 3);
+    }
+
+    // =========================================================================
+    // Unit tests — wider DAG
+    // =========================================================================
+
+    #[test]
+    fn wider_dag_produces_multiple_tracks() {
+        // N10: [a0, a1]   N11: [b0, b1]   N12: [c0]
+        // Edges: a0->b0, a0->b1, a1->b0, a1->b1, b0->c0, b1->c0
+        let (store, record) = build_store(&[(10, 2), (11, 2), (12, 1)]);
+        let a0 = record[0].1[0];
+        let a1 = record[0].1[1];
+        let b0 = record[1].1[0];
+        let b1 = record[1].1[1];
+        let c0 = record[2].1[0];
+
+        let edges = vec![
+            mk_edge(a0, b0, 1.0, true),
+            mk_edge(a0, b1, 2.0, true),
+            mk_edge(a1, b0, 3.0, true),
+            mk_edge(a1, b1, 4.0, true),
+            mk_edge(b0, c0, 1.0, true),
+            mk_edge(b1, c0, 1.0, true),
+        ];
+        let graph = build_graph(edges);
+        let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+        let cfg = BoundedBeamConfig {
+            min_nodes: 3,
+            ..test_cfg()
+        };
+        let solver = BoundedBeamSolver::new(cfg);
+        let output = solver.solve(&graph, &cc, 0);
+
+        // 4 possible 3-node paths: a0->b0->c0, a0->b1->c0, a1->b0->c0, a1->b1->c0.
+        assert_eq!(output.tracks.len(), 4);
+    }
+
+    // =========================================================================
+    // Property-based tests
+    // =========================================================================
+
+    /// Strategy: generate a graph with n_nights and random edges.
+    fn arb_graph_spec(
+    ) -> impl Strategy<Value = (Vec<(u32, usize)>, Vec<(usize, usize, usize, f64, bool)>)> {
+        let nights = prop::collection::vec((1u32..50, 1usize..4), 2..6);
+
+        nights.prop_flat_map(|night_spec| {
+            let spec = night_spec.clone();
+            let n_nights = spec.len();
+            let edges = prop::collection::vec(
+                (
+                    0usize..n_nights.saturating_sub(1),
+                    0usize..4,
+                    0usize..4,
+                    1.0f64..10.0f64,
+                    any::<bool>(),
+                ),
+                0..20,
+            );
+            (Just(spec), edges)
+        })
+    }
+
+    /// Build edges from descriptors.
+    fn edges_from_descs(
+        record: &[(NightId, Vec<SeedKey>)],
+        descs: &[(usize, usize, usize, f64, bool)],
+    ) -> Vec<Edge> {
+        let mut edges = Vec::new();
+        for &(pair_idx, from_idx, to_idx, cost, active) in descs {
+            if pair_idx + 1 >= record.len() {
+                continue;
+            }
+            let (_, ref from_keys) = record[pair_idx];
+            let (_, ref to_keys) = record[pair_idx + 1];
+            if from_keys.is_empty() || to_keys.is_empty() {
+                continue;
+            }
+            let from = from_keys[from_idx % from_keys.len()];
+            let to = to_keys[to_idx % to_keys.len()];
+            edges.push(mk_edge(from, to, cost, active));
+        }
+        edges
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(150))]
+
+        /// Every emitted track has at least min_nodes nodes.
+        #[test]
+        fn prop_tracks_satisfy_min_nodes(
+            (spec, edge_descs) in arb_graph_spec(),
+            min_nodes in 2usize..5
+        ) {
+            let (store, record) = build_store(&spec);
+            let edges = edges_from_descs(&record, &edge_descs);
+            let graph = build_graph(edges);
+            let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+            let cfg = BoundedBeamConfig { min_nodes, ..test_cfg() };
+            let solver = BoundedBeamSolver::new(cfg);
+            let outputs = solve_all(&solver, &graph, &cc);
+
+            for output in &outputs {
+                for trk in output.tracks.values() {
+                    prop_assert!(
+                        trk.nodes.len() >= min_nodes,
+                        "track has {} nodes < min_nodes={}",
+                        trk.nodes.len(), min_nodes
+                    );
+                }
+            }
+        }
+
+        /// Total number of emitted tracks per component <= max_tracks.
+        #[test]
+        fn prop_tracks_bounded_by_max_tracks(
+            (spec, edge_descs) in arb_graph_spec(),
+            max_tracks in 1usize..10
+        ) {
+            let (store, record) = build_store(&spec);
+            let edges = edges_from_descs(&record, &edge_descs);
+            let graph = build_graph(edges);
+            let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+            let cfg = BoundedBeamConfig { max_tracks, min_nodes: 2, ..test_cfg() };
+            let solver = BoundedBeamSolver::new(cfg);
+            let outputs = solve_all(&solver, &graph, &cc);
+
+            for output in &outputs {
+                prop_assert!(
+                    output.tracks.len() <= max_tracks,
+                    "component {} emitted {} tracks > max_tracks={}",
+                    output.diag.component_id, output.tracks.len(), max_tracks
+                );
+            }
+        }
+
+        /// Track nodes are strictly time-ordered (night_id strictly increasing).
+        #[test]
+        fn prop_track_nodes_time_ordered(
+            (spec, edge_descs) in arb_graph_spec()
+        ) {
+            let (store, record) = build_store(&spec);
+            let edges = edges_from_descs(&record, &edge_descs);
+            let graph = build_graph(edges);
+            let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+            let solver = BoundedBeamSolver::new(test_cfg());
+            let outputs = solve_all(&solver, &graph, &cc);
+
+            for output in &outputs {
+                for trk in output.tracks.values() {
+                    for w in trk.nodes.windows(2) {
+                        prop_assert!(
+                            w[0].night_id() < w[1].night_id(),
+                            "nodes not time-forward: {} >= {}",
+                            w[0].night_id().value(), w[1].night_id().value()
+                        );
+                    }
+                }
+            }
+        }
+
+        /// Track edges match consecutive node pairs.
+        #[test]
+        fn prop_track_edges_match_nodes(
+            (spec, edge_descs) in arb_graph_spec()
+        ) {
+            let (store, record) = build_store(&spec);
+            let edges = edges_from_descs(&record, &edge_descs);
+            let graph = build_graph(edges);
+            let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+            let solver = BoundedBeamSolver::new(test_cfg());
+            let outputs = solve_all(&solver, &graph, &cc);
+
+            for output in &outputs {
+                for trk in output.tracks.values() {
+                    prop_assert_eq!(
+                        trk.edges.len(), trk.nodes.len().saturating_sub(1)
+                    );
+                    for (i, edge) in trk.edges.iter().enumerate() {
+                        prop_assert_eq!(edge.from, trk.nodes[i].key());
+                        prop_assert_eq!(edge.to, trk.nodes[i + 1].key());
+                    }
+                }
+            }
+        }
+
+        /// Track cost equals sum of edge costs.
+        #[test]
+        fn prop_track_cost_is_edge_sum(
+            (spec, edge_descs) in arb_graph_spec()
+        ) {
+            let (store, record) = build_store(&spec);
+            let edges = edges_from_descs(&record, &edge_descs);
+            let graph = build_graph(edges);
+            let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+            let solver = BoundedBeamSolver::new(test_cfg());
+            let outputs = solve_all(&solver, &graph, &cc);
+
+            for output in &outputs {
+                for trk in output.tracks.values() {
+                    let edge_sum: f64 = trk.edges.iter().map(|e| e.cost).sum();
+                    prop_assert!(
+                        (trk.cost - edge_sum).abs() < 1e-9,
+                        "cost {} != edge sum {}", trk.cost, edge_sum
+                    );
+                }
+            }
+        }
+
+        /// Track night_span matches first/last node night difference.
+        #[test]
+        fn prop_track_night_span_consistent(
+            (spec, edge_descs) in arb_graph_spec()
+        ) {
+            let (store, record) = build_store(&spec);
+            let edges = edges_from_descs(&record, &edge_descs);
+            let graph = build_graph(edges);
+            let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+            let solver = BoundedBeamSolver::new(test_cfg());
+            let outputs = solve_all(&solver, &graph, &cc);
+
+            for output in &outputs {
+                for trk in output.tracks.values() {
+                    let first = trk.nodes.first().unwrap().night_id().value();
+                    let last = trk.nodes.last().unwrap().night_id().value();
+                    prop_assert_eq!(
+                        trk.night_span, last - first,
+                        "night_span {} != {} - {}", trk.night_span, last, first
+                    );
+                }
+            }
+        }
+
+        /// Track nodes reference existing seeds in the store.
+        #[test]
+        fn prop_track_nodes_exist_in_store(
+            (spec, edge_descs) in arb_graph_spec()
+        ) {
+            let (store, record) = build_store(&spec);
+            let all_keys: AHashSet<SeedKey> = record
+                .iter()
+                .flat_map(|(_, ks)| ks.iter().copied())
+                .collect();
+
+            let edges = edges_from_descs(&record, &edge_descs);
+            let graph = build_graph(edges);
+            let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+            let solver = BoundedBeamSolver::new(test_cfg());
+            let outputs = solve_all(&solver, &graph, &cc);
+
+            for output in &outputs {
+                for trk in output.tracks.values() {
+                    for node in &trk.nodes {
+                        prop_assert!(
+                            all_keys.contains(&node.key()),
+                            "track node key {:?} not in store", node.key()
+                        );
+                    }
+                }
+            }
+        }
+
+        /// n_selected in diagnostics matches the actual track count.
+        #[test]
+        fn prop_diag_n_selected_matches_tracks_len(
+            (spec, edge_descs) in arb_graph_spec()
+        ) {
+            let (store, record) = build_store(&spec);
+            let edges = edges_from_descs(&record, &edge_descs);
+            let graph = build_graph(edges);
+            let cc = ConnectedComponents::compute(&store, &graph, false).unwrap();
+
+            let solver = BoundedBeamSolver::new(test_cfg());
+            let outputs = solve_all(&solver, &graph, &cc);
+
+            for output in &outputs {
+                prop_assert_eq!(
+                    output.diag.n_selected as usize,
+                    output.tracks.len()
+                );
+            }
+        }
+
+        /// active_only=true emits tracks only using active edges.
+        #[test]
+        fn prop_active_only_tracks_use_active_edges(
+            (spec, edge_descs) in arb_graph_spec()
+        ) {
+            let (store, record) = build_store(&spec);
+            let edges = edges_from_descs(&record, &edge_descs);
+            let graph = build_graph(edges);
+            let cc = ConnectedComponents::compute(&store, &graph, true).unwrap();
+
+            let solver = BoundedBeamSolver::new(test_cfg());
+            let outputs = solve_all(&solver, &graph, &cc);
+
+            for output in &outputs {
+                for trk in output.tracks.values() {
+                    for edge in &trk.edges {
+                        prop_assert!(
+                            edge.active,
+                            "track edge {} -> {} is inactive under active_only CC",
+                            edge.from, edge.to
+                        );
+                    }
+                }
+            }
+        }
+
+        /// Solver is deterministic: same inputs yield same outputs.
+        #[test]
+        fn prop_solver_is_deterministic(
+            (spec, edge_descs) in arb_graph_spec()
+        ) {
+            let (store, record) = build_store(&spec);
+            let edges = edges_from_descs(&record, &edge_descs);
+
+            let graph1 = build_graph(edges.clone());
+            let cc1 = ConnectedComponents::compute(&store, &graph1, false).unwrap();
+            let solver = BoundedBeamSolver::new(test_cfg());
+            let outputs1 = solve_all(&solver, &graph1, &cc1);
+
+            let graph2 = build_graph(edges);
+            let cc2 = ConnectedComponents::compute(&store, &graph2, false).unwrap();
+            let outputs2 = solve_all(&solver, &graph2, &cc2);
+
+            prop_assert_eq!(outputs1.len(), outputs2.len());
+            for (o1, o2) in outputs1.iter().zip(outputs2.iter()) {
+                prop_assert_eq!(o1.tracks.len(), o2.tracks.len());
+                prop_assert_eq!(o1.diag.n_selected, o2.diag.n_selected);
+                prop_assert_eq!(o1.diag.n_candidates, o2.diag.n_candidates);
+            }
+        }
+    }
 }

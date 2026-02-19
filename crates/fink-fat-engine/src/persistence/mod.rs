@@ -4,7 +4,6 @@ pub mod error;
 pub mod layout;
 pub mod manifest;
 pub mod runtime_state;
-pub mod track_hypothesis;
 
 use std::fs;
 
