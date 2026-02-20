@@ -308,6 +308,13 @@ pub struct EngineConfig {
     /// - [`EngineConfig::storage_path`] (`&Utf8Path`)
     /// - [`EngineConfig::storage_path_buf`] (`Utf8PathBuf`)
     storage_path: String,
+
+    /// Number of delta steps after which the graph is compacted.
+    /// This is a safeguard to keep load times bounded by preventing an unbounded number of deltas.
+    ///
+    /// When the number of delta files in the journal exceeds this threshold,
+    /// the stage triggers a full compaction (snapshot rebuild + delta pruning).
+    pub compact_graph_every_delta: usize,
 }
 
 impl Default for EngineConfig {
@@ -330,6 +337,7 @@ impl Default for EngineConfig {
             healpix_depth: 8,
             time_binner_width: 0.021, // ~30 min in days
             storage_path: "./storage".to_string(),
+            compact_graph_every_delta: 20,
         }
     }
 }

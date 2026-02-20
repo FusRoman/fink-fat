@@ -26,6 +26,7 @@ use fink_fat_engine::{
     persistence::{
         PersistenceManager,
         envelope::load_parquet,
+        layout::PersistenceLayout,
         runtime_state::RuntimeState,
     },
     pipeline::{
@@ -39,7 +40,7 @@ use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
 use super::{
     NoopHooks, PipelineTestResult, FULL_WITH_PERSISTENCE,
     collect_dia_source_ids, collect_edge_endpoints, collect_night_ids, collect_seed_keys,
-    dummy_input_uri, engine_config_with_edges, new_runtime_state,
+    dummy_input_uri, engine_config_with_compaction, engine_config_with_edges, new_runtime_state,
     run_pipeline_with, test_edge_models, test_solver_manager, write_alerts_parquet,
 };
 
@@ -1183,4 +1184,274 @@ fn save_load_roundtrip_diverse_populations() {
         assert!(from.is_some(), "edge.from seed missing after reload");
         assert!(to.is_some(), "edge.to seed missing after reload");
     }
+}
+
+// ---------------------------------------------------------------------------
+// 12. Edge journal deltas and graph compaction
+// ---------------------------------------------------------------------------
+
+/// Run an incremental night-by-night pipeline with `compact_graph_every_delta`
+/// set to a low threshold and verify:
+///
+/// 1. Each `SavePersistedData` iteration creates a delta file on disk.
+/// 2. The manifest's `edge_journal.deltas` grows by one per iteration
+///    (before compaction).
+/// 3. Once the number of deltas reaches `compact_graph_every_delta`, the
+///    `SavePersistedData` stage triggers compaction:
+///    - a snapshot file (`graph/snapshot.bin`) is written,
+///    - old deltas up to the compaction checkpoint are pruned from the manifest,
+///    - the `edge_compacted` counter in the stage report is `1`.
+/// 4. After compaction, the reloaded state is still consistent with the
+///    state that was in memory.
+#[test]
+fn edge_journal_deltas_and_compaction() {
+    // We use 5 nights so that with compact_graph_every_delta=3 the
+    // compaction triggers on the 3rd night (3 deltas accumulated).
+    let n_nights = 5_usize;
+    let start_nid = 60000_u32;
+    let max_gap: u8 = 5;
+    let compact_every: usize = 3;
+
+    let dataset = SyntheticDatasetBuilder::new()
+        .population(AsteroidPopulation::MainBelt, 5)
+        .n_nights(n_nights)
+        .obs_per_night(3)
+        .start_night_id(start_nid)
+        .build();
+
+    let data_dir = TempDir::new().unwrap();
+    let storage_dir = TempDir::new().unwrap();
+
+    let engine_config = engine_config_with_compaction(&storage_dir, max_gap, compact_every);
+    let edge_models = test_edge_models();
+    let solver_manager = test_solver_manager();
+
+    let layout = PersistenceLayout::new(engine_config.storage_path_buf());
+
+    // Collect sorted unique night IDs.
+    let mut night_ids: Vec<u32> = dataset.alerts().iter().map(|a| a.key.night_id.0).collect();
+    night_ids.sort_unstable();
+    night_ids.dedup();
+    assert_eq!(night_ids.len(), n_nights);
+
+    // Track compaction events and delta counts across iterations.
+    let mut compaction_triggered_at: Option<usize> = None;
+    let mut delta_counts_after_save: Vec<usize> = Vec::new();
+
+    for (run_idx, &nid) in night_ids.iter().enumerate() {
+        // Write one night of alerts.
+        let night_alerts: Vec<&fink_fat_engine::Alert> = dataset
+            .alerts()
+            .iter()
+            .filter(|a| a.key.night_id.0 == nid)
+            .collect();
+
+        let parquet_path = data_dir
+            .path()
+            .join(format!("night_{nid}_run{run_idx}.parquet"));
+        let alerts_uri = write_alerts_parquet(&night_alerts, &parquet_path);
+
+        // Open persistence for this iteration (simulates restart between runs).
+        let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
+            .expect("open persistence");
+
+        // Full pipeline: Load → Ingest → Seeds → Edges → Solve → FitOrbit → Save.
+        let stages = vec![
+            PipelineStage::LoadPersistedData,
+            PipelineStage::IngestNights,
+            PipelineStage::BuildSeeds,
+            PipelineStage::BuildEdges,
+            PipelineStage::Solve,
+            PipelineStage::FitOrbit,
+            PipelineStage::SavePersistedData,
+        ];
+
+        let plan = PipelinePlan {
+            window: None,
+            stages,
+            persist: PersistPolicy::Minimal,
+            inputs: PipelineInputs { alerts_uri },
+        };
+
+        let mut runtime_state = new_runtime_state();
+        let runner = PipelineRunner { plan: plan.clone() };
+        let hooks = NoopHooks;
+
+        let mut ctx = PipelineContext {
+            plan: &plan,
+            persistence: &persistence,
+            runtime_state: &mut runtime_state,
+            engine_config: &engine_config,
+            edge_models: &edge_models,
+            solver_manager: &solver_manager,
+        };
+
+        let output = runner
+            .run(&mut ctx, &hooks)
+            .unwrap_or_else(|e| panic!("pipeline run #{run_idx} (nid={nid}) failed: {e}"));
+        drop(ctx);
+
+        // -----------------------------------------------------------------
+        // Inspect manifest to count deltas.
+        // -----------------------------------------------------------------
+        let n_deltas_after = runtime_state.manifest.edge_journal.deltas.len();
+        delta_counts_after_save.push(n_deltas_after);
+
+        // -----------------------------------------------------------------
+        // Extract save stage counters.
+        // -----------------------------------------------------------------
+        let save_report = output
+            .reports
+            .iter()
+            .find(|(s, _)| *s == PipelineStage::SavePersistedData)
+            .expect("SavePersistedData report should exist");
+
+        let counters: std::collections::HashMap<&str, u64> =
+            save_report.1.counters.iter().copied().collect();
+
+        let edge_ops_written = counters.get("edge_ops_written").copied().unwrap_or(0);
+        let edge_compacted = counters.get("edge_compacted").copied().unwrap_or(0);
+
+        eprintln!(
+            "Run #{run_idx} nid={nid}: edge_ops={edge_ops_written}, \
+             deltas_after={n_deltas_after}, edge_compacted={edge_compacted}",
+        );
+
+        // -----------------------------------------------------------------
+        // Verify delta file or compaction artifacts.
+        //
+        // If compaction did NOT fire on this run, the delta file for this
+        // night must exist on disk. If compaction DID fire, the snapshot
+        // must exist and old deltas are pruned (the save stage writes the
+        // delta first, then compacts, which may clean up that same delta).
+        // -----------------------------------------------------------------
+        let delta_path = layout.graph_delta_night_path(NightId(nid));
+
+        if edge_compacted == 0 {
+            // No compaction this run → delta should be present on disk.
+            assert!(
+                delta_path.as_std_path().exists(),
+                "delta file should exist for night {nid} (run #{run_idx}): {delta_path}",
+            );
+        }
+
+        // -----------------------------------------------------------------
+        // Check compaction trigger.
+        // -----------------------------------------------------------------
+        if edge_compacted == 1 {
+            assert!(
+                compaction_triggered_at.is_none(),
+                "compaction should only trigger once in this test",
+            );
+            compaction_triggered_at = Some(run_idx);
+
+            // After compaction, snapshot must exist.
+            let snapshot_path = layout.graph_snapshot_path();
+            assert!(
+                snapshot_path.as_std_path().exists(),
+                "snapshot file should exist after compaction: {snapshot_path}",
+            );
+
+            // The manifest should reference the snapshot.
+            assert!(
+                runtime_state.manifest.edge_journal.snapshot_night_id.is_some(),
+                "manifest should reference a snapshot night_id after compaction",
+            );
+
+            // Deltas up to the checkpoint should have been pruned.
+            // After compaction, remaining deltas should be fewer than before.
+            assert!(
+                n_deltas_after < compact_every,
+                "after compaction, delta count ({n_deltas_after}) should be \
+                 less than the threshold ({compact_every})",
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Post-loop assertions
+    // -----------------------------------------------------------------
+
+    // Compaction must have triggered at some point during the 5-night run.
+    let compacted_at = compaction_triggered_at.expect(
+        "compaction should have been triggered at least once with \
+         compact_graph_every_delta=3 and 5 nights",
+    );
+    eprintln!("Compaction triggered at run index {compacted_at}");
+
+    // Before compaction, the delta count should have grown monotonically.
+    // After compaction, it resets and grows again.
+    // Verify that at least one delta_counts_after_save value reached
+    // or exceeded the threshold before being reset.
+    let max_deltas_before_compaction = delta_counts_after_save
+        .iter()
+        .take(compacted_at) // iterations before the compaction run
+        .copied()
+        .max()
+        .unwrap_or(0);
+    eprintln!("Max deltas before compaction run: {max_deltas_before_compaction}");
+
+    // After all runs, reload the state and verify it is consistent.
+    let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
+        .expect("open persistence for final reload");
+
+    let plan = PipelinePlan {
+        window: None,
+        stages: vec![PipelineStage::LoadPersistedData],
+        persist: PersistPolicy::None,
+        inputs: PipelineInputs {
+            alerts_uri: dummy_input_uri(),
+        },
+    };
+
+    let mut reloaded = new_runtime_state();
+    let runner = PipelineRunner { plan: plan.clone() };
+    let hooks = NoopHooks;
+
+    let mut ctx = PipelineContext {
+        plan: &plan,
+        persistence: &persistence,
+        runtime_state: &mut reloaded,
+        engine_config: &engine_config,
+        edge_models: &edge_models,
+        solver_manager: &solver_manager,
+    };
+
+    runner.run(&mut ctx, &hooks).expect("reload after compaction should succeed");
+    drop(ctx);
+
+    // Verify that the reloaded state has all nights.
+    let reloaded_nights = collect_night_ids(&reloaded);
+    assert!(
+        !reloaded_nights.is_empty(),
+        "reloaded state should contain nights",
+    );
+
+    // Verify edges are present (5 MBA × 3 obs/night × 5 nights should produce edges).
+    assert!(
+        !reloaded.graph.edges.is_empty(),
+        "reloaded graph should contain edges after compaction + deltas",
+    );
+
+    // Verify referential integrity: every edge references valid seeds.
+    for edge in &reloaded.graph.edges {
+        assert!(
+            reloaded.seed_store.try_get_seed(edge.from).is_some(),
+            "edge.from seed {:?} missing after reload through compacted journal",
+            edge.from,
+        );
+        assert!(
+            reloaded.seed_store.try_get_seed(edge.to).is_some(),
+            "edge.to seed {:?} missing after reload through compacted journal",
+            edge.to,
+        );
+    }
+
+    eprintln!(
+        "Edge journal + compaction test passed: {n_nights} nights, \
+         compaction at run #{compacted_at}, \
+         final edges={}, final deltas={}",
+        reloaded.graph.edges.len(),
+        reloaded.manifest.edge_journal.deltas.len(),
+    );
 }

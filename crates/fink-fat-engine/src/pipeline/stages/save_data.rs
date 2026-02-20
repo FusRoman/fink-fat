@@ -10,12 +10,6 @@ use crate::{
     },
 };
 
-/// Default compaction interval: compact the edge snapshot every N deltas.
-///
-/// When the number of delta files in the journal exceeds this threshold,
-/// the stage triggers a full compaction (snapshot rebuild + delta pruning).
-const COMPACT_EVERY_N_DELTAS: usize = 10;
-
 /// Return the current Unix timestamp (seconds).
 fn now_unix_s() -> i64 {
     SystemTime::now()
@@ -104,7 +98,7 @@ pub fn run(
             //    rebuild the snapshot to keep load times bounded.
             // -----------------------------------------------------------------
             let n_deltas = manifest.edge_journal.deltas.len();
-            let compacted = if n_deltas >= COMPACT_EVERY_N_DELTAS {
+            let compacted = if n_deltas >= ctx.engine_config.compact_graph_every_delta {
                 ctx.persistence.compact_edges_and_cleanup(
                     &mut manifest,
                     ctx.engine_config,

@@ -108,6 +108,29 @@ edges:
     serde_yaml::from_str(&yaml).expect("deserialize EngineConfig with emit_all_edges")
 }
 
+/// Build an `EngineConfig` with `emit_all_edges: true`, a custom
+/// `max_gap_nights`, and a custom `compact_graph_every_delta` threshold.
+///
+/// Suitable for tests that verify edge journal compaction behavior.
+pub(crate) fn engine_config_with_compaction(
+    storage_dir: &TempDir,
+    max_gap_nights: u8,
+    compact_every: usize,
+) -> EngineConfig {
+    let storage_path = storage_dir.path().to_str().unwrap();
+    let yaml = format!(
+        r#"
+version: 1
+storage_path: "{storage_path}"
+max_gap_nights: {max_gap_nights}
+compact_graph_every_delta: {compact_every}
+edges:
+  emit_all_edges: true
+"#
+    );
+    serde_yaml::from_str(&yaml).expect("deserialize EngineConfig with compaction threshold")
+}
+
 // ---------------------------------------------------------------------------
 // RuntimeState factory
 // ---------------------------------------------------------------------------
