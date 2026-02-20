@@ -12,81 +12,12 @@
 use tempfile::TempDir;
 
 use fink_fat_engine::{
-    engine_config::EngineConfig,
-    graph::edge::edge_prediction::EdgeRankingModelPool,
     night_id::NightId,
-    persistence::PersistenceManager,
-    pipeline::{
-        PersistPolicy, PipelineContext, PipelineInputs, PipelineOutput, PipelinePlan,
-        PipelineRunner,
-        stages::PipelineStage,
-    },
-    solver::{solver_manager::SolverManager},
+    pipeline::stages::PipelineStage,
 };
 
 use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
-use super::{NoopHooks, engine_config_with_edges, new_runtime_state};
-
-// ---------------------------------------------------------------------------
-// Helper: run the three-stage pipeline and return output + context parts
-// ---------------------------------------------------------------------------
-
-/// Run `IngestNights → BuildSeeds → BuildEdges` and return the pipeline output.
-///
-/// The runtime state is mutated in-place through `ctx`.
-fn run_three_stage_pipeline(
-    dataset: &crate::synthetic_alerts::SyntheticDataset,
-    data_dir: &TempDir,
-    storage_dir: &TempDir,
-    max_gap_nights: u8,
-) -> (
-    PipelineOutput,
-    fink_fat_engine::persistence::runtime_state::RuntimeState,
-    EngineConfig,
-) {
-    let parquet_path = data_dir.path().join("test_alerts.parquet");
-    let alerts_uri = dataset.write_parquet(&parquet_path);
-
-    let engine_config = engine_config_with_edges(storage_dir, max_gap_nights);
-    let persistence =
-        PersistenceManager::open_or_create(engine_config.storage_path_buf())
-            .expect("open persistence");
-    let edge_models = EdgeRankingModelPool::new("unused.onnx");
-    let solver_manager = SolverManager::default();
-
-    let plan = PipelinePlan {
-        window: None,
-        stages: vec![
-            PipelineStage::IngestNights,
-            PipelineStage::BuildSeeds,
-            PipelineStage::BuildEdges,
-        ],
-        persist: PersistPolicy::None,
-        inputs: PipelineInputs { alerts_uri },
-    };
-
-    let mut runtime_state = new_runtime_state();
-
-    let runner = PipelineRunner { plan: plan.clone() };
-    let hooks = NoopHooks;
-
-    let mut ctx = PipelineContext {
-        plan: &plan,
-        persistence: &persistence,
-        runtime_state: &mut runtime_state,
-        engine_config: &engine_config,
-        edge_models: &edge_models,
-        solver_manager: &solver_manager,
-    };
-
-    let output = runner
-        .run(&mut ctx, &hooks)
-        .expect("three-stage pipeline should succeed");
-
-    drop(ctx);
-
-    (output, runtime_state, engine_config)
-}
+use super::{PipelineTestResult, run_pipeline, THROUGH_EDGES};
 
 // ---------------------------------------------------------------------------
 // Integration tests
@@ -112,8 +43,8 @@ fn three_stage_pipeline_produces_edges_between_nights() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let (output, runtime_state, _engine_config) =
-        run_three_stage_pipeline(&dataset, &data_dir, &storage_dir, max_gap_nights);
+    let PipelineTestResult { output, state: runtime_state, .. } =
+        run_pipeline(&dataset, &data_dir, &storage_dir, THROUGH_EDGES, max_gap_nights);
 
     // ---- 2) Verify we got three stage reports ----
     assert_eq!(output.reports.len(), 3, "expected 3 stage reports");
@@ -238,8 +169,8 @@ fn edges_respect_max_gap_window() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let (output, runtime_state, _) =
-        run_three_stage_pipeline(&dataset, &data_dir, &storage_dir, max_gap_nights);
+    let PipelineTestResult { output, state: runtime_state, .. } =
+        run_pipeline(&dataset, &data_dir, &storage_dir, THROUGH_EDGES, max_gap_nights);
 
     assert_eq!(output.reports.len(), 3);
 
@@ -289,8 +220,8 @@ fn larger_gap_includes_more_left_nights() {
     // --- Run with max_gap=1 ---
     let data_dir_1 = TempDir::new().unwrap();
     let storage_dir_1 = TempDir::new().unwrap();
-    let (output_gap1, state_gap1, _) =
-        run_three_stage_pipeline(&dataset, &data_dir_1, &storage_dir_1, 1);
+    let PipelineTestResult { output: output_gap1, state: state_gap1, .. } =
+        run_pipeline(&dataset, &data_dir_1, &storage_dir_1, THROUGH_EDGES, 1);
 
     let counters_gap1: std::collections::HashMap<&str, u64> =
         output_gap1.reports[2].1.counters.iter().copied().collect();
@@ -300,8 +231,8 @@ fn larger_gap_includes_more_left_nights() {
     // --- Run with max_gap=3 ---
     let data_dir_3 = TempDir::new().unwrap();
     let storage_dir_3 = TempDir::new().unwrap();
-    let (output_gap3, state_gap3, _) =
-        run_three_stage_pipeline(&dataset, &data_dir_3, &storage_dir_3, 3);
+    let PipelineTestResult { output: output_gap3, state: state_gap3, .. } =
+        run_pipeline(&dataset, &data_dir_3, &storage_dir_3, THROUGH_EDGES, 3);
 
     let counters_gap3: std::collections::HashMap<&str, u64> =
         output_gap3.reports[2].1.counters.iter().copied().collect();
@@ -356,8 +287,8 @@ fn edges_connect_distinct_nights_from_diverse_populations() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let (output, runtime_state, _) =
-        run_three_stage_pipeline(&dataset, &data_dir, &storage_dir, max_gap_nights);
+    let PipelineTestResult { output, state: runtime_state, .. } =
+        run_pipeline(&dataset, &data_dir, &storage_dir, THROUGH_EDGES, max_gap_nights);
 
     assert_eq!(output.reports.len(), 3);
 

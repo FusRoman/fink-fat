@@ -18,100 +18,23 @@ use tempfile::TempDir;
 
 use fink_fat_engine::{
     Alert,
-    engine_config::{
-        EngineConfig,
-        solver_config::{
-            bounded_beam_config::BoundedBeamConfig,
-            solver_policy::{SolverChoice, SolverPolicy},
-        },
-    },
-    graph::edge::edge_prediction::EdgeRankingModelPool,
     night_id::NightId,
     persistence::PersistenceManager,
     pipeline::{
-        PersistPolicy, PipelineContext, PipelineInputs, PipelineOutput, PipelinePlan,
-        PipelineRunner,
+        PersistPolicy, PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner,
         stages::PipelineStage,
     },
-    solver::{HypothesisSet, solver_manager::SolverManager},
     trajectory::TrackHypothesis,
 };
 
 use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
 use super::{
-    NoopHooks, engine_config_with_edges, new_runtime_state,
-    match_truth_to_hypotheses, write_alerts_parquet,
+    NoopHooks, PipelineTestResult, THROUGH_SOLVE,
+    engine_config_with_edges, match_truth_to_hypotheses, new_runtime_state,
+    run_incremental_pipeline, run_pipeline,
+    test_edge_models, test_solver_manager, test_solver_manager_with_min_nodes,
+    write_alerts_parquet,
 };
-
-// ---------------------------------------------------------------------------
-// Helper: run the four-stage pipeline and return output + context parts
-// ---------------------------------------------------------------------------
-
-/// Run `IngestNights → BuildSeeds → BuildEdges → Solve` and return the
-/// pipeline output, runtime state, engine config, and the hypothesis set.
-fn run_four_stage_pipeline(
-    dataset: &crate::synthetic_alerts::SyntheticDataset,
-    data_dir: &TempDir,
-    storage_dir: &TempDir,
-    max_gap_nights: u8,
-) -> (
-    PipelineOutput,
-    fink_fat_engine::persistence::runtime_state::RuntimeState,
-    EngineConfig,
-    HypothesisSet,
-) {
-    let parquet_path = data_dir.path().join("test_alerts.parquet");
-    let alerts_uri = dataset.write_parquet(&parquet_path);
-
-    let engine_config = engine_config_with_edges(storage_dir, max_gap_nights);
-    let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
-        .expect("open persistence");
-    let edge_models = EdgeRankingModelPool::new("unused.onnx");
-    // Force bounded beam solver with min_nodes=2 so that single-run edge
-    // structures (all edges target the last night) can still produce tracks.
-    let solver_manager = SolverManager {
-        policy: SolverPolicy::forced(SolverChoice::BoundedBeam),
-        bounded_beam_config: BoundedBeamConfig {
-            min_nodes: 2,
-            ..Default::default()
-        },
-    };
-
-    let plan = PipelinePlan {
-        window: None,
-        stages: vec![
-            PipelineStage::IngestNights,
-            PipelineStage::BuildSeeds,
-            PipelineStage::BuildEdges,
-            PipelineStage::Solve,
-        ],
-        persist: PersistPolicy::None,
-        inputs: PipelineInputs { alerts_uri },
-    };
-
-    let mut runtime_state = new_runtime_state();
-
-    let runner = PipelineRunner { plan: plan.clone() };
-    let hooks = NoopHooks;
-
-    let mut ctx = PipelineContext {
-        plan: &plan,
-        persistence: &persistence,
-        runtime_state: &mut runtime_state,
-        engine_config: &engine_config,
-        edge_models: &edge_models,
-        solver_manager: &solver_manager,
-    };
-
-    let output = runner
-        .run(&mut ctx, &hooks)
-        .expect("four-stage pipeline should succeed");
-
-    let hypotheses = std::mem::take(&mut ctx.runtime_state.track_hypotheses);
-    drop(ctx);
-
-    (output, runtime_state, engine_config, hypotheses)
-}
 
 // ---------------------------------------------------------------------------
 // Integration tests
@@ -137,8 +60,9 @@ fn four_stage_pipeline_produces_hypotheses() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let (output, runtime_state, _engine_config, hypotheses) =
-        run_four_stage_pipeline(&dataset, &data_dir, &storage_dir, max_gap_nights);
+    let PipelineTestResult { output, state: runtime_state, .. } =
+        run_pipeline(&dataset, &data_dir, &storage_dir, THROUGH_SOLVE, max_gap_nights);
+    let hypotheses = &runtime_state.track_hypotheses;
 
     // ---- 1) Verify we got four stage reports ----
     assert_eq!(output.reports.len(), 4, "expected 4 stage reports");
@@ -176,7 +100,7 @@ fn four_stage_pipeline_produces_hypotheses() {
     );
 
     // ---- 4) Verify each hypothesis has valid structure ----
-    for (_hid, track) in &hypotheses {
+    for (_hid, track) in hypotheses {
         // Each track must have at least 2 nodes (a track links multiple seeds).
         assert!(
             track.n_nodes() >= 2,
@@ -258,8 +182,9 @@ fn solver_recovers_main_belt_trajectories() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let (_output, runtime_state, _engine_config, hypotheses) =
-        run_four_stage_pipeline(&dataset, &data_dir, &storage_dir, max_gap_nights);
+    let PipelineTestResult { state: runtime_state, .. } =
+        run_pipeline(&dataset, &data_dir, &storage_dir, THROUGH_SOLVE, max_gap_nights);
+    let hypotheses = &runtime_state.track_hypotheses;
 
     assert!(
         !hypotheses.is_empty(),
@@ -325,8 +250,9 @@ fn solver_handles_diverse_populations() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let (output, runtime_state, _engine_config, hypotheses) =
-        run_four_stage_pipeline(&dataset, &data_dir, &storage_dir, max_gap_nights);
+    let PipelineTestResult { output, state: runtime_state, .. } =
+        run_pipeline(&dataset, &data_dir, &storage_dir, THROUGH_SOLVE, max_gap_nights);
+    let hypotheses = &runtime_state.track_hypotheses;
 
     // ---- 1) Pipeline must complete all four stages ----
     assert_eq!(output.reports.len(), 4);
@@ -339,7 +265,7 @@ fn solver_handles_diverse_populations() {
     );
 
     // ---- 3) All hypotheses have valid structure ----
-    for (_, track) in &hypotheses {
+    for (_, track) in hypotheses {
         assert!(track.n_nodes() >= 2);
         assert_eq!(track.n_edges(), track.n_nodes() - 1);
         assert!(track.cost.is_finite());
@@ -415,12 +341,13 @@ fn track_night_span_is_consistent() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let (_output, runtime_state, _engine_config, hypotheses) =
-        run_four_stage_pipeline(&dataset, &data_dir, &storage_dir, max_gap_nights);
+    let PipelineTestResult { state: runtime_state, .. } =
+        run_pipeline(&dataset, &data_dir, &storage_dir, THROUGH_SOLVE, max_gap_nights);
+    let hypotheses = &runtime_state.track_hypotheses;
 
     assert!(!hypotheses.is_empty());
 
-    for (&hid, track) in &hypotheses {
+    for (&hid, track) in hypotheses {
         // Compute actual night span from node keys.
         let nights: Vec<NightId> = track.nodes.iter().map(|sk| sk.night_id).collect();
         let min_night = nights.iter().min().unwrap();
@@ -472,12 +399,13 @@ fn hypotheses_have_no_duplicate_nodes() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let (_output, _runtime_state, _engine_config, hypotheses) =
-        run_four_stage_pipeline(&dataset, &data_dir, &storage_dir, max_gap_nights);
+    let PipelineTestResult { state: runtime_state, .. } =
+        run_pipeline(&dataset, &data_dir, &storage_dir, THROUGH_SOLVE, max_gap_nights);
+    let hypotheses = &runtime_state.track_hypotheses;
 
     assert!(!hypotheses.is_empty());
 
-    for (&hid, track) in &hypotheses {
+    for (&hid, track) in hypotheses {
         let unique_nodes: HashSet<_> = track.nodes.iter().collect();
         assert_eq!(
             unique_nodes.len(),
@@ -505,8 +433,9 @@ fn more_data_yields_more_hypotheses() {
 
     let data_dir_s = TempDir::new().unwrap();
     let storage_dir_s = TempDir::new().unwrap();
-    let (_, _, _, hyp_small) =
-        run_four_stage_pipeline(&dataset_small, &data_dir_s, &storage_dir_s, max_gap_nights);
+    let PipelineTestResult { state: state_small, .. } =
+        run_pipeline(&dataset_small, &data_dir_s, &storage_dir_s, THROUGH_SOLVE, max_gap_nights);
+    let hyp_small = &state_small.track_hypotheses;
 
     // Large dataset: 10 trajectories, 5 nights.
     let dataset_large = SyntheticDatasetBuilder::new()
@@ -519,8 +448,9 @@ fn more_data_yields_more_hypotheses() {
 
     let data_dir_l = TempDir::new().unwrap();
     let storage_dir_l = TempDir::new().unwrap();
-    let (_, _, _, hyp_large) =
-        run_four_stage_pipeline(&dataset_large, &data_dir_l, &storage_dir_l, max_gap_nights);
+    let PipelineTestResult { state: state_large, .. } =
+        run_pipeline(&dataset_large, &data_dir_l, &storage_dir_l, THROUGH_SOLVE, max_gap_nights);
+    let hyp_large = &state_large.track_hypotheses;
 
     assert!(
         !hyp_small.is_empty(),
@@ -565,8 +495,9 @@ fn solver_all_five_populations() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let (output, runtime_state, _engine_config, hypotheses) =
-        run_four_stage_pipeline(&dataset, &data_dir, &storage_dir, max_gap_nights);
+    let PipelineTestResult { output, state: runtime_state, .. } =
+        run_pipeline(&dataset, &data_dir, &storage_dir, THROUGH_SOLVE, max_gap_nights);
+    let hypotheses = &runtime_state.track_hypotheses;
 
     // ---- 1) Pipeline runs all four stages successfully ----
     assert_eq!(output.reports.len(), 4);
@@ -579,7 +510,7 @@ fn solver_all_five_populations() {
     );
 
     // ---- 2) All hypotheses are structurally valid ----
-    for (_, track) in &hypotheses {
+    for (_, track) in hypotheses {
         assert!(track.n_nodes() >= 2);
         assert_eq!(track.n_edges(), track.n_nodes() - 1);
         assert!(track.cost.is_finite());
@@ -632,12 +563,13 @@ fn hypothesis_edges_connect_consecutive_nodes() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let (_output, runtime_state, _engine_config, hypotheses) =
-        run_four_stage_pipeline(&dataset, &data_dir, &storage_dir, 4);
+    let PipelineTestResult { state: runtime_state, .. } =
+        run_pipeline(&dataset, &data_dir, &storage_dir, THROUGH_SOLVE, 4);
+    let hypotheses = &runtime_state.track_hypotheses;
 
     assert!(!hypotheses.is_empty());
 
-    for (&hid, track) in &hypotheses {
+    for (&hid, track) in hypotheses {
         assert_eq!(
             track.edges.len(),
             track.nodes.len() - 1,
@@ -692,12 +624,16 @@ fn solver_is_deterministic() {
     // Run 1
     let data_dir_1 = TempDir::new().unwrap();
     let storage_dir_1 = TempDir::new().unwrap();
-    let (_, _, _, hyp1) = run_four_stage_pipeline(&dataset, &data_dir_1, &storage_dir_1, 3);
+    let PipelineTestResult { state: state1, .. } =
+        run_pipeline(&dataset, &data_dir_1, &storage_dir_1, THROUGH_SOLVE, 3);
+    let hyp1 = &state1.track_hypotheses;
 
     // Run 2
     let data_dir_2 = TempDir::new().unwrap();
     let storage_dir_2 = TempDir::new().unwrap();
-    let (_, _, _, hyp2) = run_four_stage_pipeline(&dataset, &data_dir_2, &storage_dir_2, 3);
+    let PipelineTestResult { state: state2, .. } =
+        run_pipeline(&dataset, &data_dir_2, &storage_dir_2, THROUGH_SOLVE, 3);
+    let hyp2 = &state2.track_hypotheses;
 
     assert_eq!(
         hyp1.len(),
@@ -745,99 +681,6 @@ fn solver_is_deterministic() {
 // persists across pipeline invocations — each run only receives one night of
 // new alerts but can build edges to seeds from all previously ingested nights.
 
-// ---------------------------------------------------------------------------
-// Helper: run the four-stage pipeline incrementally, night by night
-// ---------------------------------------------------------------------------
-
-/// Run `IngestNights → BuildSeeds → BuildEdges → Solve` once per unique
-/// night in the dataset, preserving `RuntimeState` across iterations.
-///
-/// Returns the final runtime state and the hypothesis set produced by the
-/// **last** solver run (which has access to the complete graph).
-fn run_incremental_pipeline(
-    dataset: &crate::synthetic_alerts::SyntheticDataset,
-    data_dir: &TempDir,
-    storage_dir: &TempDir,
-    max_gap_nights: u8,
-    min_nodes: usize,
-) -> (
-    fink_fat_engine::persistence::runtime_state::RuntimeState,
-    EngineConfig,
-    HypothesisSet,
-) {
-    let engine_config = engine_config_with_edges(storage_dir, max_gap_nights);
-    let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
-        .expect("open persistence");
-    let edge_models = EdgeRankingModelPool::new("unused.onnx");
-    let solver_manager = SolverManager {
-        policy: SolverPolicy::forced(SolverChoice::BoundedBeam),
-        bounded_beam_config: BoundedBeamConfig {
-            min_nodes,
-            ..Default::default()
-        },
-    };
-
-    let mut runtime_state = new_runtime_state();
-
-    // Collect unique sorted night IDs from the dataset.
-    let mut night_ids: Vec<u32> = dataset
-        .alerts()
-        .iter()
-        .map(|a| a.key.night_id.0)
-        .collect();
-    night_ids.sort_unstable();
-    night_ids.dedup();
-
-    let mut last_hypotheses = HypothesisSet::default();
-
-    for (run_idx, &nid) in night_ids.iter().enumerate() {
-        // Filter alerts belonging to this night.
-        let night_alerts: Vec<&Alert> = dataset
-            .alerts()
-            .iter()
-            .filter(|a| a.key.night_id.0 == nid)
-            .collect();
-
-        // Write per-night parquet file.
-        let parquet_path = data_dir
-            .path()
-            .join(format!("night_{nid}_run{run_idx}.parquet"));
-        let alerts_uri = write_alerts_parquet(&night_alerts, &parquet_path);
-
-        let plan = PipelinePlan {
-            window: None,
-            stages: vec![
-                PipelineStage::IngestNights,
-                PipelineStage::BuildSeeds,
-                PipelineStage::BuildEdges,
-                PipelineStage::Solve,
-            ],
-            persist: PersistPolicy::None,
-            inputs: PipelineInputs { alerts_uri },
-        };
-
-        let runner = PipelineRunner { plan: plan.clone() };
-        let hooks = NoopHooks;
-
-        let mut ctx = PipelineContext {
-            plan: &plan,
-            persistence: &persistence,
-            runtime_state: &mut runtime_state,
-            engine_config: &engine_config,
-            edge_models: &edge_models,
-            solver_manager: &solver_manager,
-        };
-
-        runner
-            .run(&mut ctx, &hooks)
-            .unwrap_or_else(|e| panic!("pipeline run for night {nid} failed: {e}"));
-
-        last_hypotheses = std::mem::take(&mut ctx.runtime_state.track_hypotheses);
-    }
-
-    (runtime_state, engine_config, last_hypotheses)
-}
-
 // ===========================================================================
 // Incremental integration tests
 // ===========================================================================
@@ -864,8 +707,10 @@ fn incremental_pipeline_produces_long_tracks() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let (runtime_state, _engine_config, hypotheses) =
-        run_incremental_pipeline(&dataset, &data_dir, &storage_dir, max_gap_nights, min_nodes);
+    let solver_manager = test_solver_manager_with_min_nodes(min_nodes);
+    let PipelineTestResult { state: runtime_state, .. } =
+        run_incremental_pipeline(&dataset, &data_dir, &storage_dir, max_gap_nights, &solver_manager, |_| THROUGH_SOLVE.to_vec());
+    let hypotheses = &runtime_state.track_hypotheses;
 
     // ---- 1) Must produce hypotheses ----
     assert!(
@@ -874,7 +719,7 @@ fn incremental_pipeline_produces_long_tracks() {
     );
 
     // ---- 2) All tracks must have at least min_nodes nodes ----
-    for (&hid, track) in &hypotheses {
+    for (&hid, track) in hypotheses {
         assert!(
             track.n_nodes() >= min_nodes,
             "hypothesis {hid}: expected >= {min_nodes} nodes, got {}",
@@ -933,8 +778,10 @@ fn incremental_recovers_mba_trajectories() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let (runtime_state, _engine_config, hypotheses) =
-        run_incremental_pipeline(&dataset, &data_dir, &storage_dir, max_gap_nights, min_nodes);
+    let solver_manager = test_solver_manager_with_min_nodes(min_nodes);
+    let PipelineTestResult { state: runtime_state, .. } =
+        run_incremental_pipeline(&dataset, &data_dir, &storage_dir, max_gap_nights, &solver_manager, |_| THROUGH_SOLVE.to_vec());
+    let hypotheses = &runtime_state.track_hypotheses;
 
     assert!(
         !hypotheses.is_empty(),
@@ -1003,8 +850,10 @@ fn incremental_diverse_populations() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let (runtime_state, _engine_config, hypotheses) =
-        run_incremental_pipeline(&dataset, &data_dir, &storage_dir, max_gap_nights, min_nodes);
+    let solver_manager = test_solver_manager_with_min_nodes(min_nodes);
+    let PipelineTestResult { state: runtime_state, .. } =
+        run_incremental_pipeline(&dataset, &data_dir, &storage_dir, max_gap_nights, &solver_manager, |_| THROUGH_SOLVE.to_vec());
+    let hypotheses = &runtime_state.track_hypotheses;
 
     assert!(
         !hypotheses.is_empty(),
@@ -1012,7 +861,7 @@ fn incremental_diverse_populations() {
     );
 
     // All tracks must span min_nodes+ nodes and be time-ordered.
-    for (_, track) in &hypotheses {
+    for (_, track) in hypotheses {
         assert!(track.n_nodes() >= min_nodes);
         let nights: Vec<NightId> = track.nodes.iter().map(|sk| sk.night_id).collect();
         for w in nights.windows(2) {
@@ -1077,14 +926,8 @@ fn incremental_graph_grows_over_nights() {
     let engine_config = engine_config_with_edges(&storage_dir, max_gap_nights);
     let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
         .expect("open persistence");
-    let edge_models = EdgeRankingModelPool::new("unused.onnx");
-    let solver_manager = SolverManager {
-        policy: SolverPolicy::forced(SolverChoice::BoundedBeam),
-        bounded_beam_config: BoundedBeamConfig {
-            min_nodes: 2,
-            ..Default::default()
-        },
-    };
+    let edge_models = test_edge_models();
+    let solver_manager = test_solver_manager();
 
     let mut runtime_state = new_runtime_state();
 
@@ -1208,8 +1051,10 @@ fn incremental_all_five_populations() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let (runtime_state, _engine_config, hypotheses) =
-        run_incremental_pipeline(&dataset, &data_dir, &storage_dir, max_gap_nights, min_nodes);
+    let solver_manager = test_solver_manager_with_min_nodes(min_nodes);
+    let PipelineTestResult { state: runtime_state, .. } =
+        run_incremental_pipeline(&dataset, &data_dir, &storage_dir, max_gap_nights, &solver_manager, |_| THROUGH_SOLVE.to_vec());
+    let hypotheses = &runtime_state.track_hypotheses;
 
     assert!(
         !hypotheses.is_empty(),
@@ -1217,7 +1062,7 @@ fn incremental_all_five_populations() {
     );
 
     // All tracks must have >= min_nodes.
-    for (_, track) in &hypotheses {
+    for (_, track) in hypotheses {
         assert!(track.n_nodes() >= min_nodes);
         assert_eq!(track.n_edges(), track.n_nodes() - 1);
         assert!(track.cost.is_finite());
@@ -1267,14 +1112,17 @@ fn incremental_is_deterministic() {
     // Run 1
     let data_dir_1 = TempDir::new().unwrap();
     let storage_dir_1 = TempDir::new().unwrap();
-    let (_, _, hyp1) =
-        run_incremental_pipeline(&dataset, &data_dir_1, &storage_dir_1, max_gap_nights, min_nodes);
+    let solver_manager = test_solver_manager_with_min_nodes(min_nodes);
+    let PipelineTestResult { state: state1, .. } =
+        run_incremental_pipeline(&dataset, &data_dir_1, &storage_dir_1, max_gap_nights, &solver_manager, |_| THROUGH_SOLVE.to_vec());
+    let hyp1 = &state1.track_hypotheses;
 
     // Run 2
     let data_dir_2 = TempDir::new().unwrap();
     let storage_dir_2 = TempDir::new().unwrap();
-    let (_, _, hyp2) =
-        run_incremental_pipeline(&dataset, &data_dir_2, &storage_dir_2, max_gap_nights, min_nodes);
+    let PipelineTestResult { state: state2, .. } =
+        run_incremental_pipeline(&dataset, &data_dir_2, &storage_dir_2, max_gap_nights, &solver_manager, |_| THROUGH_SOLVE.to_vec());
+    let hyp2 = &state2.track_hypotheses;
 
     assert_eq!(
         hyp1.len(),
@@ -1318,12 +1166,14 @@ fn incremental_edges_form_consecutive_chains() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let (runtime_state, _engine_config, hypotheses) =
-        run_incremental_pipeline(&dataset, &data_dir, &storage_dir, 3, 4);
+    let solver_manager = test_solver_manager_with_min_nodes(4);
+    let PipelineTestResult { state: runtime_state, .. } =
+        run_incremental_pipeline(&dataset, &data_dir, &storage_dir, 3, &solver_manager, |_| THROUGH_SOLVE.to_vec());
+    let hypotheses = &runtime_state.track_hypotheses;
 
     assert!(!hypotheses.is_empty());
 
-    for (&hid, track) in &hypotheses {
+    for (&hid, track) in hypotheses {
         assert_eq!(
             track.edges.len(),
             track.nodes.len() - 1,

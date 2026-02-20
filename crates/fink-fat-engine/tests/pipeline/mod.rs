@@ -7,6 +7,7 @@ mod build_edges_test;
 mod build_seeds_test;
 mod fit_orbit_test;
 mod ingest_alerts_test;
+mod persistence_test;
 mod solver_stage_test;
 
 // ===========================================================================
@@ -30,19 +31,28 @@ use tempfile::TempDir;
 
 use fink_fat_engine::{
     Alert, AlertStore,
-    engine_config::EngineConfig,
-    graph::AlertLinkageDAG,
-    persistence::{manifest::Manifest, runtime_state::RuntimeState},
+    engine_config::{
+        EngineConfig,
+        solver_config::{
+            bounded_beam_config::BoundedBeamConfig,
+            solver_policy::{SolverChoice, SolverPolicy},
+        },
+    },
+    graph::{AlertLinkageDAG, edge::edge_prediction::EdgeRankingModelPool},
+    night_id::NightId,
+    persistence::{PersistenceManager, manifest::Manifest, runtime_state::RuntimeState},
     pipeline::{
+        PersistPolicy, PipelineContext, PipelineInputs, PipelineOutput, PipelinePlan,
+        PipelineRunner,
         hooks::{PipelineHooks, StageMeta, StageReport},
         stages::{PipelineStage, alert_inputs::input_uri::InputUri},
     },
-    seeding::store::SeedStore,
-    solver::HypothesisSet,
+    seeding::{SeedKey, store::SeedStore},
+    solver::{HypothesisSet, solver_manager::SolverManager},
     trajectory::TrackHypothesis,
 };
 
-use crate::synthetic_alerts::TrajectoryTruth;
+use crate::synthetic_alerts::{SyntheticDataset, TrajectoryTruth};
 
 // ---------------------------------------------------------------------------
 // No-op pipeline hooks
@@ -266,4 +276,352 @@ pub(crate) fn match_truth_to_hypotheses(
             (tidx, best_id, best_score)
         })
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Common factory functions
+// ---------------------------------------------------------------------------
+
+/// Build a `SolverManager` suitable for tests (bounded beam, `min_nodes = 2`).
+pub(crate) fn test_solver_manager() -> SolverManager {
+    test_solver_manager_with_min_nodes(2)
+}
+
+/// Build a `SolverManager` with a custom `min_nodes` threshold.
+pub(crate) fn test_solver_manager_with_min_nodes(min_nodes: usize) -> SolverManager {
+    SolverManager {
+        policy: SolverPolicy::forced(SolverChoice::BoundedBeam),
+        bounded_beam_config: BoundedBeamConfig {
+            min_nodes,
+            ..Default::default()
+        },
+    }
+}
+
+/// Create an `EdgeRankingModelPool` pointing to a dummy ONNX path.
+///
+/// Tests that use `emit_all_edges = true` never evaluate the model, so this
+/// is safe even though the file does not exist.
+pub(crate) fn test_edge_models() -> EdgeRankingModelPool {
+    EdgeRankingModelPool::new("unused.onnx")
+}
+
+/// A dummy `InputUri` suitable for pipelines that start with `LoadPersistedData`
+/// (no actual alert ingestion).
+pub(crate) fn dummy_input_uri() -> InputUri {
+    InputUri("file:///dev/null".to_string())
+}
+
+// ---------------------------------------------------------------------------
+// RuntimeState inspection helpers
+// ---------------------------------------------------------------------------
+
+/// Collect all `SeedKey`s present in the seed store (across all nights).
+pub(crate) fn collect_seed_keys(state: &RuntimeState) -> HashSet<SeedKey> {
+    let mut keys = HashSet::new();
+    for (_nid, seeds) in state.seed_store.iter() {
+        for seed in seeds {
+            keys.insert(seed.key());
+        }
+    }
+    keys
+}
+
+/// Collect all `dia_source_id`s present in the alert store.
+pub(crate) fn collect_dia_source_ids(state: &RuntimeState) -> HashSet<u64> {
+    state
+        .alert_store
+        .iter()
+        .map(|a| a.key.dia_source_id)
+        .collect()
+}
+
+/// Collect the set of `(from, to)` seed-key pairs from all edges.
+pub(crate) fn collect_edge_endpoints(state: &RuntimeState) -> HashSet<(SeedKey, SeedKey)> {
+    state
+        .graph
+        .edges
+        .iter()
+        .map(|e| (e.from, e.to))
+        .collect()
+}
+
+/// Collect night IDs from the alert store (sorted).
+pub(crate) fn collect_night_ids(state: &RuntimeState) -> Vec<NightId> {
+    state.alert_store.nights_sorted()
+}
+
+// ---------------------------------------------------------------------------
+// Common pipeline stage sequences
+// ---------------------------------------------------------------------------
+
+/// `IngestNights` only.
+pub(crate) const INGEST_ONLY: &[PipelineStage] = &[PipelineStage::IngestNights];
+
+/// `IngestNights → BuildSeeds`.
+pub(crate) const THROUGH_SEEDS: &[PipelineStage] = &[
+    PipelineStage::IngestNights,
+    PipelineStage::BuildSeeds,
+];
+
+/// `IngestNights → BuildSeeds → BuildEdges`.
+pub(crate) const THROUGH_EDGES: &[PipelineStage] = &[
+    PipelineStage::IngestNights,
+    PipelineStage::BuildSeeds,
+    PipelineStage::BuildEdges,
+];
+
+/// `IngestNights → BuildSeeds → BuildEdges → Solve`.
+pub(crate) const THROUGH_SOLVE: &[PipelineStage] = &[
+    PipelineStage::IngestNights,
+    PipelineStage::BuildSeeds,
+    PipelineStage::BuildEdges,
+    PipelineStage::Solve,
+];
+
+/// `IngestNights → BuildSeeds → BuildEdges → Solve → FitOrbit`.
+pub(crate) const THROUGH_ORBIT: &[PipelineStage] = &[
+    PipelineStage::IngestNights,
+    PipelineStage::BuildSeeds,
+    PipelineStage::BuildEdges,
+    PipelineStage::Solve,
+    PipelineStage::FitOrbit,
+];
+
+/// Full persistence round-trip:
+/// `LoadPersistedData → Ingest → Seeds → Edges → Solve → FitOrbit → Save`.
+pub(crate) const FULL_WITH_PERSISTENCE: &[PipelineStage] = &[
+    PipelineStage::LoadPersistedData,
+    PipelineStage::IngestNights,
+    PipelineStage::BuildSeeds,
+    PipelineStage::BuildEdges,
+    PipelineStage::Solve,
+    PipelineStage::FitOrbit,
+    PipelineStage::SavePersistedData,
+];
+
+// ---------------------------------------------------------------------------
+// Pipeline result container
+// ---------------------------------------------------------------------------
+
+/// Output from a test pipeline run.
+pub(crate) struct PipelineTestResult {
+    pub output: PipelineOutput,
+    pub state: RuntimeState,
+    pub engine_config: EngineConfig,
+}
+
+// ---------------------------------------------------------------------------
+// One-shot pipeline runners
+// ---------------------------------------------------------------------------
+
+/// Run a pipeline with the default test solver (`BoundedBeam`, `min_nodes = 2`)
+/// and no persistence.
+///
+/// Uses `engine_config_with_edges`, which enables the edge builder in
+/// `emit_all_edges` mode.
+pub(crate) fn run_pipeline(
+    dataset: &SyntheticDataset,
+    data_dir: &TempDir,
+    storage_dir: &TempDir,
+    stages: &[PipelineStage],
+    max_gap_nights: u8,
+) -> PipelineTestResult {
+    let solver_manager = test_solver_manager();
+    run_pipeline_with(
+        dataset,
+        data_dir,
+        storage_dir,
+        stages,
+        max_gap_nights,
+        &solver_manager,
+        PersistPolicy::None,
+    )
+}
+
+/// Run a pipeline with a custom solver and persist policy.
+///
+/// Uses `engine_config_with_edges`, which enables the edge builder in
+/// `emit_all_edges` mode.
+pub(crate) fn run_pipeline_with(
+    dataset: &SyntheticDataset,
+    data_dir: &TempDir,
+    storage_dir: &TempDir,
+    stages: &[PipelineStage],
+    max_gap_nights: u8,
+    solver_manager: &SolverManager,
+    persist: PersistPolicy,
+) -> PipelineTestResult {
+    let parquet_path = data_dir.path().join("test_alerts.parquet");
+    let alerts_uri = dataset.write_parquet(&parquet_path);
+
+    let engine_config = engine_config_with_edges(storage_dir, max_gap_nights);
+    let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
+        .expect("open persistence");
+    let edge_models = test_edge_models();
+
+    let plan = PipelinePlan {
+        window: None,
+        stages: stages.to_vec(),
+        persist,
+        inputs: PipelineInputs { alerts_uri },
+    };
+
+    let mut runtime_state = new_runtime_state();
+    let runner = PipelineRunner { plan: plan.clone() };
+    let hooks = NoopHooks;
+
+    let mut ctx = PipelineContext {
+        plan: &plan,
+        persistence: &persistence,
+        runtime_state: &mut runtime_state,
+        engine_config: &engine_config,
+        edge_models: &edge_models,
+        solver_manager,
+    };
+
+    let output = runner
+        .run(&mut ctx, &hooks)
+        .expect("pipeline should succeed");
+    drop(ctx);
+
+    PipelineTestResult {
+        output,
+        state: runtime_state,
+        engine_config,
+    }
+}
+
+/// Run a pipeline with a minimal engine config (no edge builder setup).
+///
+/// Uses `SolverManager::default()` and `PersistPolicy::None`.
+pub(crate) fn run_pipeline_minimal(
+    dataset: &SyntheticDataset,
+    data_dir: &TempDir,
+    storage_dir: &TempDir,
+    stages: &[PipelineStage],
+) -> PipelineTestResult {
+    let parquet_path = data_dir.path().join("test_alerts.parquet");
+    let alerts_uri = dataset.write_parquet(&parquet_path);
+
+    let engine_config = engine_config_minimal(storage_dir);
+    let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
+        .expect("open persistence");
+    let edge_models = test_edge_models();
+    let solver_manager = SolverManager::default();
+
+    let plan = PipelinePlan {
+        window: None,
+        stages: stages.to_vec(),
+        persist: PersistPolicy::None,
+        inputs: PipelineInputs { alerts_uri },
+    };
+
+    let mut runtime_state = new_runtime_state();
+    let runner = PipelineRunner { plan: plan.clone() };
+    let hooks = NoopHooks;
+
+    let mut ctx = PipelineContext {
+        plan: &plan,
+        persistence: &persistence,
+        runtime_state: &mut runtime_state,
+        engine_config: &engine_config,
+        edge_models: &edge_models,
+        solver_manager: &solver_manager,
+    };
+
+    let output = runner
+        .run(&mut ctx, &hooks)
+        .expect("pipeline should succeed");
+    drop(ctx);
+
+    PipelineTestResult {
+        output,
+        state: runtime_state,
+        engine_config,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Incremental (night-by-night) pipeline runner
+// ---------------------------------------------------------------------------
+
+/// Run the pipeline incrementally — once per unique night in the dataset —
+/// preserving `RuntimeState` across iterations.
+///
+/// `stages_fn(is_last_night)` returns the stage list for each iteration.
+/// This allows including extra stages (e.g. `FitOrbit`) only on the last night.
+///
+/// Returns the pipeline output from the **last** iteration and the final
+/// cumulative runtime state.
+pub(crate) fn run_incremental_pipeline(
+    dataset: &SyntheticDataset,
+    data_dir: &TempDir,
+    storage_dir: &TempDir,
+    max_gap_nights: u8,
+    solver_manager: &SolverManager,
+    stages_fn: impl Fn(bool) -> Vec<PipelineStage>,
+) -> PipelineTestResult {
+    let engine_config = engine_config_with_edges(storage_dir, max_gap_nights);
+    let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
+        .expect("open persistence");
+    let edge_models = test_edge_models();
+
+    let mut runtime_state = new_runtime_state();
+
+    let mut night_ids: Vec<u32> = dataset.alerts().iter().map(|a| a.key.night_id.0).collect();
+    night_ids.sort_unstable();
+    night_ids.dedup();
+
+    let n_total = night_ids.len();
+    let mut last_output = None;
+
+    for (run_idx, &nid) in night_ids.iter().enumerate() {
+        let night_alerts: Vec<&Alert> = dataset
+            .alerts()
+            .iter()
+            .filter(|a| a.key.night_id.0 == nid)
+            .collect();
+
+        let parquet_path = data_dir
+            .path()
+            .join(format!("night_{nid}_run{run_idx}.parquet"));
+        let alerts_uri = write_alerts_parquet(&night_alerts, &parquet_path);
+
+        let is_last = run_idx + 1 == n_total;
+        let stages = stages_fn(is_last);
+
+        let plan = PipelinePlan {
+            window: None,
+            stages,
+            persist: PersistPolicy::None,
+            inputs: PipelineInputs { alerts_uri },
+        };
+
+        let runner = PipelineRunner { plan: plan.clone() };
+        let hooks = NoopHooks;
+
+        let mut ctx = PipelineContext {
+            plan: &plan,
+            persistence: &persistence,
+            runtime_state: &mut runtime_state,
+            engine_config: &engine_config,
+            edge_models: &edge_models,
+            solver_manager,
+        };
+
+        let output = runner
+            .run(&mut ctx, &hooks)
+            .unwrap_or_else(|e| panic!("pipeline run for night {nid} failed: {e}"));
+
+        if is_last {
+            last_output = Some(output);
+        }
+    }
+
+    PipelineTestResult {
+        output: last_output.expect("dataset must contain at least one night"),
+        state: runtime_state,
+        engine_config,
+    }
 }

@@ -8,19 +8,19 @@ use tempfile::TempDir;
 
 use fink_fat_engine::{
     error::EngineError,
-    graph::edge::edge_prediction::EdgeRankingModelPool,
     night_id::{NightId, PairingMode},
     persistence::PersistenceManager,
     pipeline::{
-        PersistPolicy, PipelineContext, PipelineInputs, PipelineOutput, PipelinePlan,
-        PipelineRunner,
+        PersistPolicy, PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner,
         stages::{PipelineStage, alert_inputs::input_uri::InputUri},
     },
-    solver::{solver_manager::SolverManager},
 };
 
 use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
-use super::{NoopHooks, engine_config_minimal, new_runtime_state};
+use super::{
+    NoopHooks, PipelineTestResult, INGEST_ONLY,
+    engine_config_minimal, new_runtime_state, run_pipeline_minimal, test_edge_models,
+};
 
 // ---------------------------------------------------------------------------
 // Integration tests
@@ -47,51 +47,12 @@ fn ingest_nights_stage_loads_alerts_and_populates_runtime_state() {
 
     let data_dir = TempDir::new().expect("create data temp dir");
     let storage_dir = TempDir::new().expect("create storage temp dir");
-    let parquet_path = data_dir.path().join("test_alerts.parquet");
-    let alerts_uri = dataset.write_parquet(&parquet_path);
 
-    // ---- 2) Build engine infrastructure ----
-    let engine_config = engine_config_minimal(&storage_dir);
-    let persistence = PersistenceManager::open_or_create(
-        engine_config.storage_path_buf(),
-    )
-    .expect("open persistence");
+    // ---- 2) Run the pipeline ----
+    let PipelineTestResult { output, state, .. } =
+        run_pipeline_minimal(&dataset, &data_dir, &storage_dir, INGEST_ONLY);
 
-    let edge_models = EdgeRankingModelPool::new("unused_model.onnx");
-    let solver_manager = SolverManager::default();
-
-    // ---- 3) Build the pipeline plan ----
-    let plan = PipelinePlan {
-        window: None, // IngestNights will compute it from the data
-        stages: vec![PipelineStage::IngestNights],
-        persist: PersistPolicy::None,
-        inputs: PipelineInputs {
-            alerts_uri,
-        },
-    };
-
-    // ---- 4) Build empty runtime state ----
-    let mut runtime_state = new_runtime_state();
-
-    // ---- 5) Build context and runner ----
-    let runner = PipelineRunner { plan: plan.clone() };
-    let hooks = NoopHooks;
-
-    let mut ctx = PipelineContext {
-        plan: &plan,
-        persistence: &persistence,
-        runtime_state: &mut runtime_state,
-        engine_config: &engine_config,
-        edge_models: &edge_models,
-        solver_manager: &solver_manager,
-    };
-
-    // ---- 6) Run the pipeline ----
-    let output: PipelineOutput = runner
-        .run(&mut ctx, &hooks)
-        .expect("pipeline should succeed");
-
-    // ---- 7) Verify pipeline output ----
+    // ---- 3) Verify pipeline output ----
     assert_eq!(output.reports.len(), 1, "exactly one stage report expected");
     let (stage, report) = &output.reports[0];
     assert_eq!(*stage, PipelineStage::IngestNights);
@@ -109,8 +70,8 @@ fn ingest_nights_stage_loads_alerts_and_populates_runtime_state() {
         "expected {n_nights} distinct nights"
     );
 
-    // ---- 8) Verify runtime state: alert store ----
-    let store = &ctx.runtime_state.alert_store;
+    // ---- 4) Verify runtime state: alert store ----
+    let store = &state.alert_store;
     assert_eq!(
         store.n_alerts(),
         expected_total_alerts,
@@ -135,7 +96,7 @@ fn ingest_nights_stage_loads_alerts_and_populates_runtime_state() {
             "night {nid:?} should have {expected_per_night} alerts"
         );
 
-        // ---- 9) Verify alerts are time-ordered within each night ----
+        // ---- 5) Verify alerts are time-ordered within each night ----
         for w in night_alerts.windows(2) {
             assert!(
                 w[0].mjd_tt <= w[1].mjd_tt,
@@ -143,7 +104,7 @@ fn ingest_nights_stage_loads_alerts_and_populates_runtime_state() {
             );
         }
 
-        // ---- 10) Verify alert keys are consistent ----
+        // ---- 6) Verify alert keys are consistent ----
         for alert in night_alerts {
             assert_eq!(
                 alert.key.night_id, nid,
@@ -152,14 +113,14 @@ fn ingest_nights_stage_loads_alerts_and_populates_runtime_state() {
         }
     }
 
-    // ---- 11) Verify runtime window was set ----
+    // ---- 7) Verify runtime window was set ----
     assert!(
-        ctx.runtime_state.window.is_some(),
+        state.window.is_some(),
         "runtime window should be set after IngestNights"
     );
 
     let last_night_id = NightId(start_night_id + (n_nights as u32) - 1);
-    match ctx.runtime_state.window.unwrap() {
+    match state.window.unwrap() {
         PairingMode::SingleNight { anchor, .. } => {
             assert_eq!(
                 anchor, last_night_id,
@@ -169,7 +130,7 @@ fn ingest_nights_stage_loads_alerts_and_populates_runtime_state() {
         other => panic!("expected SingleNight pairing mode, got: {:?}", other),
     }
 
-    // ---- 12) Verify all dia_source_ids are unique ----
+    // ---- 8) Verify all dia_source_ids are unique ----
     let all_dia_ids: Vec<u64> = store
         .nights()
         .flat_map(|nid| {
@@ -200,8 +161,8 @@ fn ingest_nights_stage_fails_on_missing_parquet_file() {
         PersistenceManager::open_or_create(engine_config.storage_path_buf())
             .expect("open persistence");
 
-    let edge_models = EdgeRankingModelPool::new("unused.onnx");
-    let solver_manager = SolverManager::default();
+    let edge_models = test_edge_models();
+    let solver_manager = fink_fat_engine::solver::solver_manager::SolverManager::default();
 
     let plan = PipelinePlan {
         window: None,

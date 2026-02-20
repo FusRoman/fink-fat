@@ -17,190 +17,21 @@ use outfit::ObjectNumber;
 use tempfile::TempDir;
 
 use fink_fat_engine::{
-    Alert,
-    engine_config::{
-        EngineConfig,
-        solver_config::{
-            bounded_beam_config::BoundedBeamConfig,
-            solver_policy::{SolverChoice, SolverPolicy},
-        },
-    },
-    graph::edge::edge_prediction::EdgeRankingModelPool,
     persistence::PersistenceManager,
     pipeline::{
-        PersistPolicy, PipelineContext, PipelineInputs, PipelineOutput, PipelinePlan,
-        PipelineRunner, stages::PipelineStage,
+        PersistPolicy, PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner,
+        stages::PipelineStage,
     },
-    solver::{HypothesisSet, solver_manager::SolverManager},
+    solver::HypothesisSet,
 };
 
-use super::{
-    NoopHooks, engine_config_with_edges, match_truth_to_hypotheses, new_runtime_state,
-    write_alerts_parquet,
-};
 use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
-
-// ---------------------------------------------------------------------------
-// Helper: run the five-stage pipeline and return output + context parts
-// ---------------------------------------------------------------------------
-
-/// Run `IngestNights → BuildSeeds → BuildEdges → Solve → FitOrbit` and
-/// return the pipeline output, runtime state, engine config, and hypotheses.
-fn run_five_stage_pipeline(
-    dataset: &crate::synthetic_alerts::SyntheticDataset,
-    data_dir: &TempDir,
-    storage_dir: &TempDir,
-    max_gap_nights: u8,
-) -> (
-    PipelineOutput,
-    fink_fat_engine::persistence::runtime_state::RuntimeState,
-    EngineConfig,
-    HypothesisSet,
-) {
-    let parquet_path = data_dir.path().join("test_alerts.parquet");
-    let alerts_uri = dataset.write_parquet(&parquet_path);
-
-    let engine_config = engine_config_with_edges(storage_dir, max_gap_nights);
-    let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
-        .expect("open persistence");
-    let edge_models = EdgeRankingModelPool::new("unused.onnx");
-    let solver_manager = SolverManager {
-        policy: SolverPolicy::forced(SolverChoice::BoundedBeam),
-        bounded_beam_config: BoundedBeamConfig {
-            min_nodes: 2,
-            ..Default::default()
-        },
-    };
-
-    let plan = PipelinePlan {
-        window: None,
-        stages: vec![
-            PipelineStage::IngestNights,
-            PipelineStage::BuildSeeds,
-            PipelineStage::BuildEdges,
-            PipelineStage::Solve,
-            PipelineStage::FitOrbit,
-        ],
-        persist: PersistPolicy::None,
-        inputs: PipelineInputs { alerts_uri },
-    };
-
-    let mut runtime_state = new_runtime_state();
-
-    let runner = PipelineRunner { plan: plan.clone() };
-    let hooks = NoopHooks;
-
-    let mut ctx = PipelineContext {
-        plan: &plan,
-        persistence: &persistence,
-        runtime_state: &mut runtime_state,
-        engine_config: &engine_config,
-        edge_models: &edge_models,
-        solver_manager: &solver_manager,
-    };
-
-    let output = runner
-        .run(&mut ctx, &hooks)
-        .expect("five-stage pipeline should succeed");
-
-    let hypotheses = std::mem::take(&mut ctx.runtime_state.track_hypotheses);
-    drop(ctx);
-
-    (output, runtime_state, engine_config, hypotheses)
-}
-
-/// Run the five-stage pipeline incrementally (night by night), preserving
-/// `RuntimeState` across iterations.
-///
-/// Returns the final runtime state, engine config, and the hypothesis set
-/// produced by the **last** solver+fit_orbit run.
-fn run_incremental_five_stage_pipeline(
-    dataset: &crate::synthetic_alerts::SyntheticDataset,
-    data_dir: &TempDir,
-    storage_dir: &TempDir,
-    max_gap_nights: u8,
-    min_nodes: usize,
-) -> (
-    fink_fat_engine::persistence::runtime_state::RuntimeState,
-    EngineConfig,
-    HypothesisSet,
-) {
-    let engine_config = engine_config_with_edges(storage_dir, max_gap_nights);
-    let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
-        .expect("open persistence");
-    let edge_models = EdgeRankingModelPool::new("unused.onnx");
-    let solver_manager = SolverManager {
-        policy: SolverPolicy::forced(SolverChoice::BoundedBeam),
-        bounded_beam_config: BoundedBeamConfig {
-            min_nodes,
-            ..Default::default()
-        },
-    };
-
-    let mut runtime_state = new_runtime_state();
-
-    // Collect unique sorted night IDs from the dataset.
-    let mut night_ids: Vec<u32> = dataset.alerts().iter().map(|a| a.key.night_id.0).collect();
-    night_ids.sort_unstable();
-    night_ids.dedup();
-
-    let mut last_hypotheses = HypothesisSet::default();
-
-    let n_nights_total = night_ids.len();
-
-    for (run_idx, &nid) in night_ids.iter().enumerate() {
-        let night_alerts: Vec<&Alert> = dataset
-            .alerts()
-            .iter()
-            .filter(|a| a.key.night_id.0 == nid)
-            .collect();
-
-        let parquet_path = data_dir
-            .path()
-            .join(format!("night_{nid}_run{run_idx}.parquet"));
-        let alerts_uri = write_alerts_parquet(&night_alerts, &parquet_path);
-
-        // Only include FitOrbit on the last night (earlier iterations may
-        // have no hypotheses yet, and FitOrbit errors on empty input).
-        let is_last = run_idx + 1 == n_nights_total;
-        let mut stages = vec![
-            PipelineStage::IngestNights,
-            PipelineStage::BuildSeeds,
-            PipelineStage::BuildEdges,
-            PipelineStage::Solve,
-        ];
-        if is_last {
-            stages.push(PipelineStage::FitOrbit);
-        }
-
-        let plan = PipelinePlan {
-            window: None,
-            stages,
-            persist: PersistPolicy::None,
-            inputs: PipelineInputs { alerts_uri },
-        };
-
-        let runner = PipelineRunner { plan: plan.clone() };
-        let hooks = NoopHooks;
-
-        let mut ctx = PipelineContext {
-            plan: &plan,
-            persistence: &persistence,
-            runtime_state: &mut runtime_state,
-            engine_config: &engine_config,
-            edge_models: &edge_models,
-            solver_manager: &solver_manager,
-        };
-
-        runner
-            .run(&mut ctx, &hooks)
-            .unwrap_or_else(|e| panic!("pipeline run for night {nid} failed: {e}"));
-
-        last_hypotheses = std::mem::take(&mut ctx.runtime_state.track_hypotheses);
-    }
-
-    (runtime_state, engine_config, last_hypotheses)
-}
+use super::{
+    NoopHooks, PipelineTestResult, THROUGH_SOLVE, THROUGH_ORBIT,
+    engine_config_with_edges, match_truth_to_hypotheses, new_runtime_state,
+    run_incremental_pipeline, run_pipeline,
+    test_solver_manager, test_solver_manager_with_min_nodes, test_edge_models,
+};
 
 // ---------------------------------------------------------------------------
 // Integration tests
@@ -227,8 +58,9 @@ fn five_stage_pipeline_produces_orbit_results() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let (output, runtime_state, _engine_config, hypotheses) =
-        run_five_stage_pipeline(&dataset, &data_dir, &storage_dir, max_gap_nights);
+    let PipelineTestResult { output, state: runtime_state, .. } =
+        run_pipeline(&dataset, &data_dir, &storage_dir, THROUGH_ORBIT, max_gap_nights);
+    let hypotheses = &runtime_state.track_hypotheses;
 
     // ---- 1) Verify we got five stage reports ----
     assert_eq!(output.reports.len(), 5, "expected 5 stage reports");
@@ -292,8 +124,8 @@ fn main_belt_orbits_are_physically_plausible() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let (_output, runtime_state, _engine_config, _hypotheses) =
-        run_five_stage_pipeline(&dataset, &data_dir, &storage_dir, max_gap_nights);
+    let PipelineTestResult { state: runtime_state, .. } =
+        run_pipeline(&dataset, &data_dir, &storage_dir, THROUGH_ORBIT, max_gap_nights);
 
     let orbit_results = &runtime_state.orbit_results;
 
@@ -384,8 +216,9 @@ fn fit_orbit_diverse_populations() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let (output, runtime_state, _engine_config, hypotheses) =
-        run_five_stage_pipeline(&dataset, &data_dir, &storage_dir, max_gap_nights);
+    let PipelineTestResult { output, state: runtime_state, .. } =
+        run_pipeline(&dataset, &data_dir, &storage_dir, THROUGH_ORBIT, max_gap_nights);
+    let hypotheses = &runtime_state.track_hypotheses;
 
     // ---- 1) Pipeline must complete all five stages ----
     assert_eq!(output.reports.len(), 5);
@@ -458,7 +291,7 @@ fn fit_orbit_diverse_populations() {
     // ---- 6) Report per-population recovery for diagnostics ----
     let matches = match_truth_to_hypotheses(
         &ground_truth,
-        &hypotheses,
+        hypotheses,
         &runtime_state.alert_store,
         &runtime_state.seed_store,
     );
@@ -516,8 +349,8 @@ fn fit_orbit_all_five_populations() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let (output, runtime_state, _engine_config, _hypotheses) =
-        run_five_stage_pipeline(&dataset, &data_dir, &storage_dir, max_gap_nights);
+    let PipelineTestResult { output, state: runtime_state, .. } =
+        run_pipeline(&dataset, &data_dir, &storage_dir, THROUGH_ORBIT, max_gap_nights);
 
     // Five stages completed.
     assert_eq!(output.reports.len(), 5);
@@ -581,8 +414,8 @@ fn corrected_orbits_have_lower_rms_than_preliminary() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let (_output, runtime_state, _engine_config, _hypotheses) =
-        run_five_stage_pipeline(&dataset, &data_dir, &storage_dir, max_gap_nights);
+    let PipelineTestResult { state: runtime_state, .. } =
+        run_pipeline(&dataset, &data_dir, &storage_dir, THROUGH_ORBIT, max_gap_nights);
 
     let orbit_results = &runtime_state.orbit_results;
 
@@ -642,8 +475,9 @@ fn orbit_result_keys_match_hypothesis_ids() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let (_output, runtime_state, _engine_config, hypotheses) =
-        run_five_stage_pipeline(&dataset, &data_dir, &storage_dir, max_gap_nights);
+    let PipelineTestResult { state: runtime_state, .. } =
+        run_pipeline(&dataset, &data_dir, &storage_dir, THROUGH_ORBIT, max_gap_nights);
+    let hypotheses = &runtime_state.track_hypotheses;
 
     let orbit_results = &runtime_state.orbit_results;
 
@@ -696,13 +530,16 @@ fn incremental_pipeline_fits_orbits() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let (runtime_state, _engine_config, hypotheses) = run_incremental_five_stage_pipeline(
-        &dataset,
-        &data_dir,
-        &storage_dir,
-        max_gap_nights,
-        min_nodes,
+    let solver_manager = test_solver_manager_with_min_nodes(min_nodes);
+    let PipelineTestResult { state: runtime_state, .. } = run_incremental_pipeline(
+        &dataset, &data_dir, &storage_dir, max_gap_nights, &solver_manager,
+        |is_last| {
+            let mut s = THROUGH_SOLVE.to_vec();
+            if is_last { s.push(PipelineStage::FitOrbit); }
+            s
+        },
     );
+    let hypotheses = &runtime_state.track_hypotheses;
 
     let orbit_results = &runtime_state.orbit_results;
 
@@ -767,13 +604,16 @@ fn incremental_diverse_populations_with_orbit_fit() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let (runtime_state, _engine_config, hypotheses) = run_incremental_five_stage_pipeline(
-        &dataset,
-        &data_dir,
-        &storage_dir,
-        max_gap_nights,
-        min_nodes,
+    let solver_manager = test_solver_manager_with_min_nodes(min_nodes);
+    let PipelineTestResult { state: runtime_state, .. } = run_incremental_pipeline(
+        &dataset, &data_dir, &storage_dir, max_gap_nights, &solver_manager,
+        |is_last| {
+            let mut s = THROUGH_SOLVE.to_vec();
+            if is_last { s.push(PipelineStage::FitOrbit); }
+            s
+        },
     );
+    let hypotheses = &runtime_state.track_hypotheses;
 
     let orbit_results = &runtime_state.orbit_results;
 
@@ -815,7 +655,7 @@ fn incremental_diverse_populations_with_orbit_fit() {
     if !hypotheses.is_empty() {
         let matches = match_truth_to_hypotheses(
             &ground_truth,
-            &hypotheses,
+            hypotheses,
             &runtime_state.alert_store,
             &runtime_state.seed_store,
         );
@@ -858,14 +698,14 @@ fn fit_orbit_is_deterministic() {
     // Run 1
     let data_dir1 = TempDir::new().unwrap();
     let storage_dir1 = TempDir::new().unwrap();
-    let (_output1, state1, _, _hyp1) =
-        run_five_stage_pipeline(&dataset, &data_dir1, &storage_dir1, max_gap_nights);
+    let PipelineTestResult { state: state1, .. } =
+        run_pipeline(&dataset, &data_dir1, &storage_dir1, THROUGH_ORBIT, max_gap_nights);
 
     // Run 2
     let data_dir2 = TempDir::new().unwrap();
     let storage_dir2 = TempDir::new().unwrap();
-    let (_output2, state2, _, _hyp2) =
-        run_five_stage_pipeline(&dataset, &data_dir2, &storage_dir2, max_gap_nights);
+    let PipelineTestResult { state: state2, .. } =
+        run_pipeline(&dataset, &data_dir2, &storage_dir2, THROUGH_ORBIT, max_gap_nights);
 
     let orbits1 = &state1.orbit_results;
     let orbits2 = &state2.orbit_results;
@@ -947,14 +787,8 @@ fn fit_orbit_does_not_crash_on_empty_hypotheses() {
     let engine_config = engine_config_with_edges(&storage_dir, max_gap_nights);
     let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
         .expect("open persistence");
-    let edge_models = EdgeRankingModelPool::new("unused.onnx");
-    let solver_manager = SolverManager {
-        policy: SolverPolicy::forced(SolverChoice::BoundedBeam),
-        bounded_beam_config: BoundedBeamConfig {
-            min_nodes: 2,
-            ..Default::default()
-        },
-    };
+    let edge_models = test_edge_models();
+    let solver_manager = test_solver_manager();
 
     let mut runtime_state = new_runtime_state();
 

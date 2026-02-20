@@ -8,19 +8,12 @@
 use tempfile::TempDir;
 
 use fink_fat_engine::{
-    graph::edge::edge_prediction::EdgeRankingModelPool,
     night_id::NightId,
-    persistence::PersistenceManager,
-    pipeline::{
-        PersistPolicy, PipelineContext, PipelineInputs, PipelineOutput, PipelinePlan,
-        PipelineRunner,
-        stages::PipelineStage,
-    },
-    solver::{solver_manager::SolverManager},
+    pipeline::stages::PipelineStage,
 };
 
 use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
-use super::{NoopHooks, engine_config_minimal, new_runtime_state};
+use super::{PipelineTestResult, run_pipeline_minimal, THROUGH_SEEDS};
 
 // ---------------------------------------------------------------------------
 // Integration tests
@@ -48,51 +41,14 @@ fn ingest_then_build_seeds_produces_seeds_for_each_night() {
     let expected_total_alerts = n_trajectories * n_nights * obs_per_night;
     assert_eq!(dataset.n_alerts(), expected_total_alerts);
 
-    // ---- 2) Write to Parquet ----
+    // ---- 2) Run the pipeline (IngestNights + BuildSeeds) ----
     let data_dir = TempDir::new().expect("create data temp dir");
     let storage_dir = TempDir::new().expect("create storage temp dir");
-    let parquet_path = data_dir.path().join("test_alerts.parquet");
-    let alerts_uri = dataset.write_parquet(&parquet_path);
 
-    // ---- 3) Build engine infrastructure ----
-    let engine_config = engine_config_minimal(&storage_dir);
-    let persistence =
-        PersistenceManager::open_or_create(engine_config.storage_path_buf())
-            .expect("open persistence");
+    let PipelineTestResult { output, state, .. } =
+        run_pipeline_minimal(&dataset, &data_dir, &storage_dir, THROUGH_SEEDS);
 
-    let edge_models = EdgeRankingModelPool::new("unused_model.onnx");
-    let solver_manager = SolverManager::default();
-
-    // ---- 4) Build pipeline plan: IngestNights → BuildSeeds ----
-    let plan = PipelinePlan {
-        window: None,
-        stages: vec![PipelineStage::IngestNights, PipelineStage::BuildSeeds],
-        persist: PersistPolicy::None,
-        inputs: PipelineInputs { alerts_uri },
-    };
-
-    // ---- 5) Build empty runtime state ----
-    let mut runtime_state = new_runtime_state();
-
-    // ---- 6) Build context and runner ----
-    let runner = PipelineRunner { plan: plan.clone() };
-    let hooks = NoopHooks;
-
-    let mut ctx = PipelineContext {
-        plan: &plan,
-        persistence: &persistence,
-        runtime_state: &mut runtime_state,
-        engine_config: &engine_config,
-        edge_models: &edge_models,
-        solver_manager: &solver_manager,
-    };
-
-    // ---- 7) Run the pipeline (IngestNights + BuildSeeds) ----
-    let output: PipelineOutput = runner
-        .run(&mut ctx, &hooks)
-        .expect("pipeline should succeed");
-
-    // ---- 8) Verify we got two stage reports ----
+    // ---- 3) Verify we got two stage reports ----
     assert_eq!(output.reports.len(), 2, "expected 2 stage reports");
 
     let (stage_0, report_0) = &output.reports[0];
@@ -140,7 +96,7 @@ fn ingest_then_build_seeds_produces_seeds_for_each_night() {
     );
 
     // ---- 11) Verify seed store is populated ----
-    let seed_store = &ctx.runtime_state.seed_store;
+    let seed_store = &state.seed_store;
     assert_eq!(
         seed_store.n_nights(),
         n_nights,
@@ -165,7 +121,7 @@ fn ingest_then_build_seeds_produces_seeds_for_each_night() {
         total_seeds_in_store += night_seeds.len();
 
         // ---- 12) Verify seed members reference valid alerts ----
-        let alert_store = &ctx.runtime_state.alert_store;
+        let alert_store = &state.alert_store;
         let night_alerts = alert_store
             .get(&nid)
             .expect("alert store should have this night");
@@ -236,38 +192,9 @@ fn build_seeds_with_mixed_populations() {
 
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
-    let parquet_path = data_dir.path().join("mixed_alerts.parquet");
-    let alerts_uri = dataset.write_parquet(&parquet_path);
 
-    let engine_config = engine_config_minimal(&storage_dir);
-
-    let persistence =
-        PersistenceManager::open_or_create(engine_config.storage_path_buf()).unwrap();
-    let edge_models = EdgeRankingModelPool::new("unused.onnx");
-    let solver_manager = SolverManager::default();
-
-    let plan = PipelinePlan {
-        window: None,
-        stages: vec![PipelineStage::IngestNights, PipelineStage::BuildSeeds],
-        persist: PersistPolicy::None,
-        inputs: PipelineInputs { alerts_uri },
-    };
-
-    let mut runtime_state = new_runtime_state();
-
-    let runner = PipelineRunner { plan: plan.clone() };
-    let hooks = NoopHooks;
-
-    let mut ctx = PipelineContext {
-        plan: &plan,
-        persistence: &persistence,
-        runtime_state: &mut runtime_state,
-        engine_config: &engine_config,
-        edge_models: &edge_models,
-        solver_manager: &solver_manager,
-    };
-
-    let output = runner.run(&mut ctx, &hooks).expect("pipeline should succeed");
+    let PipelineTestResult { output, state, .. } =
+        run_pipeline_minimal(&dataset, &data_dir, &storage_dir, THROUGH_SEEDS);
 
     // Both stages should succeed.
     assert_eq!(output.reports.len(), 2);
@@ -275,10 +202,10 @@ fn build_seeds_with_mixed_populations() {
     assert_eq!(output.reports[1].0, PipelineStage::BuildSeeds);
 
     // Alert store should have all alerts.
-    assert_eq!(ctx.runtime_state.alert_store.n_alerts(), expected_total_alerts);
+    assert_eq!(state.alert_store.n_alerts(), expected_total_alerts);
 
     // Seed store should be populated for all nights.
-    let seed_store = &ctx.runtime_state.seed_store;
+    let seed_store = &state.seed_store;
     assert_eq!(seed_store.n_nights(), n_nights);
 
     // Count total seeds — we expect at least some (the exact count depends
