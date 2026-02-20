@@ -12,55 +12,20 @@
 use tempfile::TempDir;
 
 use fink_fat_engine::{
-    AlertStore,
     engine_config::EngineConfig,
-    graph::AlertLinkageDAG,
     graph::edge::edge_prediction::EdgeRankingModelPool,
     night_id::NightId,
-    persistence::{PersistenceManager, manifest::Manifest, runtime_state::RuntimeState},
+    persistence::PersistenceManager,
     pipeline::{
         PersistPolicy, PipelineContext, PipelineInputs, PipelineOutput, PipelinePlan,
         PipelineRunner,
-        hooks::{PipelineHooks, StageMeta, StageReport},
         stages::PipelineStage,
     },
-    seeding::store::SeedStore,
     solver::{HypothesisSet, solver_manager::SolverManager},
 };
 
 use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
-
-// ---------------------------------------------------------------------------
-// No-op pipeline hooks
-// ---------------------------------------------------------------------------
-
-struct NoopHooks;
-
-impl PipelineHooks for NoopHooks {
-    fn on_stage_start(&self, _stage: PipelineStage, _meta: StageMeta) {}
-    fn on_stage_progress(&self, _stage: PipelineStage, _delta: u64) {}
-    fn on_stage_end(&self, _stage: PipelineStage, _report: StageReport) {}
-}
-
-// ---------------------------------------------------------------------------
-// Helper: build an EngineConfig with emit_all_edges = true
-// ---------------------------------------------------------------------------
-
-/// Build an `EngineConfig` with `emit_all_edges: true` and a custom
-/// `max_gap_nights` so that the edge builder works without an ONNX model.
-fn engine_config_edges(storage_dir: &TempDir, max_gap_nights: u8) -> EngineConfig {
-    let storage_path = storage_dir.path().to_str().unwrap();
-    let yaml = format!(
-        r#"
-version: 1
-storage_path: "{storage_path}"
-max_gap_nights: {max_gap_nights}
-edges:
-  emit_all_edges: true
-"#
-    );
-    serde_yaml::from_str(&yaml).expect("deserialize EngineConfig with emit_all_edges")
-}
+use super::{NoopHooks, engine_config_with_edges, new_runtime_state};
 
 // ---------------------------------------------------------------------------
 // Helper: run the three-stage pipeline and return output + context parts
@@ -76,13 +41,13 @@ fn run_three_stage_pipeline(
     max_gap_nights: u8,
 ) -> (
     PipelineOutput,
-    RuntimeState,
+    fink_fat_engine::persistence::runtime_state::RuntimeState,
     EngineConfig,
 ) {
     let parquet_path = data_dir.path().join("test_alerts.parquet");
     let alerts_uri = dataset.write_parquet(&parquet_path);
 
-    let engine_config = engine_config_edges(storage_dir, max_gap_nights);
+    let engine_config = engine_config_with_edges(storage_dir, max_gap_nights);
     let persistence =
         PersistenceManager::open_or_create(engine_config.storage_path_buf())
             .expect("open persistence");
@@ -101,13 +66,7 @@ fn run_three_stage_pipeline(
         inputs: PipelineInputs { alerts_uri },
     };
 
-    let mut runtime_state = RuntimeState {
-        manifest: Manifest::new(0),
-        window: None,
-        alert_store: AlertStore::new(),
-        seed_store: SeedStore::new(),
-        graph: AlertLinkageDAG::new(),
-    };
+    let mut runtime_state = new_runtime_state();
 
     let runner = PipelineRunner { plan: plan.clone() };
     let hooks = NoopHooks;
@@ -126,8 +85,6 @@ fn run_three_stage_pipeline(
         .run(&mut ctx, &hooks)
         .expect("three-stage pipeline should succeed");
 
-    // Move runtime_state out (we re-bind it since ctx borrows it mutably).
-    // We need to drop ctx first, so we clone what we need.
     drop(ctx);
 
     (output, runtime_state, engine_config)

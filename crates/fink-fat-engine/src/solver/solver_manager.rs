@@ -52,8 +52,12 @@
 //! - Other solver choices are wired as `todo!()` placeholders.
 
 use crate::{
-    engine_config::solver_config::solver_policy::{SolverChoice, SolverPolicy, SolverRoutingMode},
+    engine_config::solver_config::{
+        bounded_beam_config::BoundedBeamConfig,
+        solver_policy::{SolverChoice, SolverPolicy, SolverRoutingMode},
+    },
     graph::AlertLinkageDAG,
+    pipeline::progress_sink::ProgressSink,
     seeding::store::SeedStore,
     solver::{
         Solver, SolverOutput, bounded_beam::BoundedBeamSolver, components::ConnectedComponents,
@@ -102,12 +106,16 @@ pub struct SolvePlan {
 pub struct SolverManager {
     /// Routing policy controlling solver selection.
     pub policy: SolverPolicy,
+
+    /// Configuration for the bounded beam solver.
+    pub bounded_beam_config: BoundedBeamConfig,
 }
 
 impl Default for SolverManager {
     fn default() -> Self {
         Self {
             policy: SolverPolicy::default(),
+            bounded_beam_config: BoundedBeamConfig::default(),
         }
     }
 }
@@ -178,13 +186,13 @@ impl SolverManager {
         graph: &'edge_lf AlertLinkageDAG,
         _seed_store: &'seed_lf SeedStore,
         plan: &SolvePlan,
+        progress_sink: &dyn ProgressSink,
     ) -> Vec<SolverOutput>
     where
         'edge_lf: 'seed_lf,
     {
         // Solver instances used by this manager.
-        // These can later become fields or be constructed lazily if needed.
-        let bounded_beam = BoundedBeamSolver::default();
+        let bounded_beam = BoundedBeamSolver::new(self.bounded_beam_config.clone());
 
         let mut outputs: Vec<SolverOutput> = Vec::with_capacity(plan.items.len());
 
@@ -203,8 +211,8 @@ impl SolverManager {
             };
 
             outputs.push(out);
+            progress_sink.inc(1);
         }
-
         outputs
     }
 }

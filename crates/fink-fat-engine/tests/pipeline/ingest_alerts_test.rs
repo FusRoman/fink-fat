@@ -7,51 +7,20 @@
 use tempfile::TempDir;
 
 use fink_fat_engine::{
-    AlertStore,
-    engine_config::EngineConfig,
     error::EngineError,
-    graph::AlertLinkageDAG,
     graph::edge::edge_prediction::EdgeRankingModelPool,
     night_id::{NightId, PairingMode},
-    persistence::{PersistenceManager, manifest::Manifest, runtime_state::RuntimeState},
+    persistence::PersistenceManager,
     pipeline::{
         PersistPolicy, PipelineContext, PipelineInputs, PipelineOutput, PipelinePlan,
         PipelineRunner,
-        hooks::{PipelineHooks, StageMeta, StageReport},
         stages::{PipelineStage, alert_inputs::input_uri::InputUri},
     },
-    seeding::store::SeedStore,
     solver::{HypothesisSet, solver_manager::SolverManager},
 };
 
 use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
-
-// ---------------------------------------------------------------------------
-// No-op pipeline hooks (the engine has no default implementation)
-// ---------------------------------------------------------------------------
-
-struct NoopHooks;
-
-impl PipelineHooks for NoopHooks {
-    fn on_stage_start(&self, _stage: PipelineStage, _meta: StageMeta) {}
-    fn on_stage_progress(&self, _stage: PipelineStage, _delta: u64) {}
-    fn on_stage_end(&self, _stage: PipelineStage, _report: StageReport) {}
-}
-
-// ---------------------------------------------------------------------------
-// Helper: build a minimal `EngineConfig` with a custom storage path
-// ---------------------------------------------------------------------------
-
-fn engine_config_with_storage(storage_dir: &TempDir) -> EngineConfig {
-    let storage_path = storage_dir.path().to_str().unwrap();
-    let yaml = format!(
-        r#"
-version: 1
-storage_path: "{storage_path}"
-"#
-    );
-    serde_yaml::from_str(&yaml).expect("deserialize minimal EngineConfig")
-}
+use super::{NoopHooks, engine_config_minimal, new_runtime_state};
 
 // ---------------------------------------------------------------------------
 // Integration tests
@@ -82,7 +51,7 @@ fn ingest_nights_stage_loads_alerts_and_populates_runtime_state() {
     let alerts_uri = dataset.write_parquet(&parquet_path);
 
     // ---- 2) Build engine infrastructure ----
-    let engine_config = engine_config_with_storage(&storage_dir);
+    let engine_config = engine_config_minimal(&storage_dir);
     let persistence = PersistenceManager::open_or_create(
         engine_config.storage_path_buf(),
     )
@@ -103,13 +72,7 @@ fn ingest_nights_stage_loads_alerts_and_populates_runtime_state() {
     };
 
     // ---- 4) Build empty runtime state ----
-    let mut runtime_state = RuntimeState {
-        manifest: Manifest::new(0),
-        window: None,
-        alert_store: AlertStore::new(),
-        seed_store: SeedStore::new(),
-        graph: AlertLinkageDAG::new(),
-    };
+    let mut runtime_state = new_runtime_state();
 
     // ---- 5) Build context and runner ----
     let runner = PipelineRunner { plan: plan.clone() };
@@ -234,7 +197,7 @@ fn ingest_nights_stage_loads_alerts_and_populates_runtime_state() {
 #[test]
 fn ingest_nights_stage_fails_on_missing_parquet_file() {
     let storage_dir = TempDir::new().expect("create storage temp dir");
-    let engine_config = engine_config_with_storage(&storage_dir);
+    let engine_config = engine_config_minimal(&storage_dir);
     let persistence =
         PersistenceManager::open_or_create(engine_config.storage_path_buf())
             .expect("open persistence");
@@ -252,13 +215,7 @@ fn ingest_nights_stage_fails_on_missing_parquet_file() {
         },
     };
 
-    let mut runtime_state = RuntimeState {
-        manifest: Manifest::new(0),
-        window: None,
-        alert_store: AlertStore::new(),
-        seed_store: SeedStore::new(),
-        graph: AlertLinkageDAG::new(),
-    };
+    let mut runtime_state = new_runtime_state();
 
     let runner = PipelineRunner { plan: plan.clone() };
     let hooks = NoopHooks;

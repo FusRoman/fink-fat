@@ -57,7 +57,7 @@ impl PipelineStage {
             PipelineStage::IngestNights => alert_inputs::run(ctx, hooks, stage_sink),
             PipelineStage::BuildSeeds => seed_builder::run(ctx, hooks, stage_sink),
             PipelineStage::BuildEdges => edge_builder::run(ctx, hooks, stage_sink),
-            PipelineStage::Solve => todo!(),
+            PipelineStage::Solve => solve_run::run(ctx, hooks, stage_sink),
             PipelineStage::PersistOutputs => todo!(),
         }
     }
