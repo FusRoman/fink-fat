@@ -158,6 +158,14 @@ impl PipelineRunner {
             return Err(EngineError::InvalidPlan("no stages specified"));
         }
 
+        // Stages must be in strictly increasing canonical order.
+        if self.plan.stages.windows(2).any(|w| w[0] >= w[1]) {
+            return Err(EngineError::InvalidPlan(
+                "stages must be in strictly increasing order \
+                 (Load < Ingest < Seeds < Edges < Solve < FitOrbit < Save)",
+            ));
+        }
+
         // Avoid SavePersistedData without persistence policy.
         if self.plan.stages.contains(&PipelineStage::SavePersistedData)
             && matches!(self.plan.persist, PersistPolicy::None)

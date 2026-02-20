@@ -79,11 +79,25 @@ pub fn run(
 
             let orbit_results =
                 traj_set.estimate_all_orbits_in_batches_parallel(&env_state, &mut rng, &default);
+            let nb_orbit = orbit_results.len() as u64;
 
             ctx.runtime_state.orbit_results = orbit_results;
             stage_sink.inc(1);
 
-            Ok(vec![])
+            let nb_successful_fits = ctx
+                .runtime_state
+                .orbit_results
+                .iter()
+                .filter(|(_, res)| res.is_ok())
+                .count() as u64;
+            let nb_failed_fits = nb_orbit - nb_successful_fits;
+
+            Ok(vec![
+                ("total_hypotheses", track_hypothesis.len() as u64),
+                ("total_orbits", nb_orbit),
+                ("successful_fits", nb_successful_fits),
+                ("failed_fits", nb_failed_fits),
+            ])
         },
     )
 }

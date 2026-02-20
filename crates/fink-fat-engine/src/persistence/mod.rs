@@ -51,6 +51,11 @@ pub struct PersistenceManager {
 }
 
 impl PersistenceManager {
+    /// Access the persistence layout (directory structure / path helpers).
+    pub fn layout(&self) -> &PersistenceLayout {
+        &self.layout
+    }
+
     /// Open an existing persistence root or create a new one if missing.
     ///
     /// Parameters
@@ -201,15 +206,15 @@ impl PersistenceManager {
         })?;
 
         // 3) Load edges owned via edge journal (snapshot + deltas), then convert to borrowed graph.
-        let edges_owned = self.edge_journal.load_edges(&manifest, window)?;
-        let graph_owned = AlertLinkageDAG::from_edges(edges_owned);
+        let edges = self.edge_journal.load_edges(&manifest, window)?;
+        let graph = AlertLinkageDAG::from_edges(edges);
 
         Ok(RuntimeState {
             manifest,
             window,
             alert_store,
             seed_store,
-            graph: graph_owned,
+            graph: graph,
             track_hypotheses: HypothesisSet::new(),
             orbit_results: FullOrbitResult::default(),
         })
@@ -228,20 +233,9 @@ impl PersistenceManager {
         cfg: &EngineConfig,
         night_id: NightId,
         created_unix_s: i64,
-        alerts: Vec<Alert>,
-        seeds: Vec<SeedNode>,
         edge_ops: Vec<EdgeOp>,
     ) -> Result<Manifest, EngineError> {
-        // 1) write alerts + seeds
-        self.save_night_manifest(
-            &mut manifest,
-            night_id,
-            created_unix_s,
-            alerts.as_slice(),
-            seeds.as_slice(),
-        )?;
-
-        // 2) write edge delta
+        // 1) write edge delta
         self.edge_journal.write_delta_for_night(
             &mut manifest,
             night_id,
@@ -249,10 +243,10 @@ impl PersistenceManager {
             edge_ops,
         )?;
 
-        // 3) persist manifest
+        // 2) persist manifest
         self.save_manifest(&manifest)?;
 
-        // 4) optional cleanup of old nights outside window (to avoid disk growth)
+        // 3) optional cleanup of old nights outside window (to avoid disk growth)
         let window = self.compute_window(&manifest, cfg)?;
         if let Some(w) = window {
             self.cleanup_old_nights(&manifest, w)?;

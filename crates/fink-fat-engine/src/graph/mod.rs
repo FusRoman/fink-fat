@@ -6,6 +6,7 @@ use crate::{
     MJDTT,
     engine_config::edge_config::EdgeConfig,
     graph::edge::{Edge, EdgeKey, edge_prediction::EdgeRankingModelPool, error::EdgeBuilderError},
+    persistence::edge_journal::edge_op::EdgeOp,
     pipeline::progress_sink::ProgressSink,
     seeding::{SeedKey, SeedNode},
     spacetime_bucket::spatial_binner::SpatialBinner,
@@ -21,6 +22,12 @@ pub struct AlertLinkageDAG {
     /// Maintained automatically by constructors and mutation methods so that
     /// `edge_index[key] == i` iff `edges[i].key() == key`.
     edge_index: AHashMap<EdgeKey, usize>,
+    /// Pending edge operations accumulated since the last persistence flush.
+    ///
+    /// Every mutation method (`add_inter_night_edges`, future `remove_edge`,
+    /// `deactivate_edge`, …) appends the corresponding [`EdgeOp`] here.
+    /// The save stage drains this buffer and writes it as a journal delta.
+    pending_ops: Vec<EdgeOp>,
 }
 
 impl AlertLinkageDAG {
@@ -30,9 +37,14 @@ impl AlertLinkageDAG {
             out_deg: AHashMap::new(),
             edges: Vec::new(),
             edge_index: AHashMap::new(),
+            pending_ops: Vec::new(),
         }
     }
 
+    /// Build a DAG from a pre-existing edge set (e.g. loaded from disk).
+    ///
+    /// The `pending_ops` buffer starts empty because these edges are already
+    /// persisted — they do not need to be written again.
     pub fn from_edges(edges: Vec<Edge>) -> Self {
         let mut in_deg = AHashMap::new();
         let mut out_deg = AHashMap::new();
@@ -52,7 +64,26 @@ impl AlertLinkageDAG {
             out_deg,
             edges,
             edge_index,
+            pending_ops: Vec::new(),
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Pending operations (journal integration)
+    // -------------------------------------------------------------------------
+
+    /// Drain all pending edge operations accumulated since the last flush.
+    ///
+    /// After calling this, the internal buffer is empty. The caller is
+    /// responsible for persisting the returned ops via the edge journal.
+    pub fn drain_pending_ops(&mut self) -> Vec<EdgeOp> {
+        std::mem::take(&mut self.pending_ops)
+    }
+
+    /// Number of pending (unflushed) edge operations.
+    #[inline]
+    pub fn n_pending_ops(&self) -> usize {
+        self.pending_ops.len()
     }
 
     pub fn add_inter_night_edges<B: SpatialBinner>(
@@ -107,8 +138,16 @@ impl AlertLinkageDAG {
             *self.out_deg.entry(from).or_insert(0) += 1;
             *self.in_deg.entry(to).or_insert(0) += 1;
 
+            let key = edge.key();
             let idx = self.edges.len();
-            self.edge_index.insert(edge.key(), idx);
+            self.edge_index.insert(key, idx);
+
+            // Track the operation for the journal delta.
+            self.pending_ops.push(EdgeOp::Upsert {
+                key,
+                edge: edge.clone(),
+            });
+
             self.edges.push(edge);
         }
 
