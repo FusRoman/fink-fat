@@ -1,4 +1,5 @@
 use std::hint::black_box;
+use std::sync::Arc;
 use std::time::Duration;
 
 use camino::Utf8Path;
@@ -54,6 +55,7 @@ fn make_alert(
         flux,
         flux_err: (0.1 * flux.abs()).max(1.0),
         band,
+        observer_mpc_code: Arc::new("I41".to_string()),
     }
 }
 

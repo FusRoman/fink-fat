@@ -712,6 +712,7 @@ mod alert_store_tests {
             flux: 100.0,
             flux_err: 10.0,
             band: 0,
+            ..Default::default()
         }
     }
 

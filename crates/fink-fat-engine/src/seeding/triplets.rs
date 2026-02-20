@@ -476,6 +476,7 @@ mod triplet_gen_tests {
             flux,
             flux_err: 0.0,
             band,
+            ..Default::default()
         }
     }
 

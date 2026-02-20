@@ -8,6 +8,7 @@ pub mod runtime_state;
 use std::fs;
 
 use camino::Utf8PathBuf;
+use outfit::FullOrbitResult;
 
 use crate::{
     Alert,
@@ -24,7 +25,7 @@ use crate::{
         manifest::{Manifest, NightManifestEntry},
         runtime_state::RuntimeState,
     },
-    seeding::{SeedNode, SeedNodeSlice, store::SeedStore},
+    seeding::{SeedNode, SeedNodeSlice, store::SeedStore}, solver::HypothesisSet,
 };
 
 /// Alert store schema version.
@@ -209,6 +210,8 @@ impl PersistenceManager {
             alert_store,
             seed_store,
             graph: graph_owned,
+            track_hypotheses: HypothesisSet::new(),
+            orbit_results: FullOrbitResult::default(),
         })
     }
 

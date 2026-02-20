@@ -67,7 +67,9 @@ use std::f64::consts::PI;
 use std::path::Path;
 use std::sync::Arc;
 
-use arrow_array::{ArrayRef, Float64Array, RecordBatch, UInt32Array, UInt64Array, UInt8Array};
+use arrow_array::{
+    ArrayRef, Float64Array, RecordBatch, StringArray, UInt32Array, UInt64Array, UInt8Array,
+};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::parquet::arrow::ArrowWriter;
 use rand::rngs::StdRng;
@@ -206,6 +208,8 @@ pub struct TrajectoryTruth {
     pub vdec: f64,
     /// Base apparent magnitude.
     pub magnitude: f64,
+    /// MPC observatory code used for all observations in this trajectory.
+    pub observer_mpc_code: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -304,6 +308,7 @@ impl SyntheticDataset {
         let mut fluxes = Vec::with_capacity(n);
         let mut flux_errs = Vec::with_capacity(n);
         let mut bands = Vec::with_capacity(n);
+        let mut observer_codes: Vec<String> = Vec::with_capacity(n);
 
         for alert in &self.alerts {
             night_ids.push(alert.key.night_id.0);
@@ -316,6 +321,7 @@ impl SyntheticDataset {
             fluxes.push(alert.flux);
             flux_errs.push(alert.flux_err);
             bands.push(alert.band);
+            observer_codes.push((*alert.observer_mpc_code).clone());
         }
 
         RecordBatch::try_new(
@@ -331,6 +337,7 @@ impl SyntheticDataset {
                 Arc::new(Float64Array::from(fluxes)) as ArrayRef,
                 Arc::new(Float64Array::from(flux_errs)) as ArrayRef,
                 Arc::new(UInt8Array::from(bands)) as ArrayRef,
+                Arc::new(StringArray::from(observer_codes)) as ArrayRef,
             ],
         )
         .expect("build record batch")
@@ -350,6 +357,7 @@ fn parquet_alert_schema() -> Arc<Schema> {
         Field::new("flux", DataType::Float64, false),
         Field::new("flux_err", DataType::Float64, false),
         Field::new("band", DataType::UInt8, false),
+        Field::new("observer_mpc_code", DataType::Utf8, false),
     ]))
 }
 
@@ -375,6 +383,7 @@ struct PopulationRequest {
 /// | `start_mjd`           | 60000.5       |
 /// | `night_gap_days`      | 1.0           |
 /// | `intra_night_gap_days`| 0.02 (~29 min)|
+/// | `observer_mpc_code`   | `"I41"`       |
 /// | `seed`                | 42            |
 pub struct SyntheticDatasetBuilder {
     populations: Vec<PopulationRequest>,
@@ -384,6 +393,7 @@ pub struct SyntheticDatasetBuilder {
     start_mjd: f64,
     night_gap_days: f64,
     intra_night_gap_days: f64,
+    observer_mpc_code: String,
     rng_seed: u64,
 }
 
@@ -404,6 +414,7 @@ impl SyntheticDatasetBuilder {
             start_mjd: 60000.5, // middle of the first night
             night_gap_days: 1.0,
             intra_night_gap_days: 0.02, // ~29 minutes
+            observer_mpc_code: "I41".to_string(),
             rng_seed: 42,
         }
     }
@@ -460,6 +471,12 @@ impl SyntheticDatasetBuilder {
         self
     }
 
+    /// MPC observatory code assigned to all generated alerts (default: `"I41"`).
+    pub fn observer_mpc_code(mut self, code: impl Into<String>) -> Self {
+        self.observer_mpc_code = code.into();
+        self
+    }
+
     /// RNG seed for reproducibility (default: 42).
     pub fn seed(mut self, s: u64) -> Self {
         self.rng_seed = s;
@@ -488,6 +505,7 @@ impl SyntheticDatasetBuilder {
         let mut ground_truth: Vec<TrajectoryTruth> = Vec::new();
         let mut next_dia_source_id: u64 = 1;
         let mut trajectory_id: usize = 0;
+        let observer_arc = Arc::new(self.observer_mpc_code.clone());
 
         for req in &self.populations {
             for _ in 0..req.count {
@@ -502,6 +520,7 @@ impl SyntheticDatasetBuilder {
                     self.night_gap_days,
                     self.intra_night_gap_days,
                     &mut next_dia_source_id,
+                    &observer_arc,
                 );
                 all_alerts.extend(alerts);
                 ground_truth.push(truth);
@@ -575,6 +594,7 @@ fn generate_trajectory(
     night_gap_days: f64,
     intra_night_gap_days: f64,
     next_id: &mut u64,
+    observer_mpc_code: &Arc<String>,
 ) -> (Vec<Alert>, TrajectoryTruth) {
     let (speed_lo, speed_hi) = population.speed_range_rad_per_day();
     let (mag_lo, mag_hi) = population.magnitude_range();
@@ -660,6 +680,7 @@ fn generate_trajectory(
                 flux,
                 flux_err,
                 band,
+                observer_mpc_code: Arc::clone(observer_mpc_code),
             });
         }
     }
@@ -674,6 +695,7 @@ fn generate_trajectory(
         vra,
         vdec,
         magnitude,
+        observer_mpc_code: (**observer_mpc_code).clone(),
     };
 
     (alerts, truth)

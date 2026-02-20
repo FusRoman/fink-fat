@@ -1,6 +1,8 @@
+use outfit::FullOrbitResult;
+
 use crate::{
     alerts::store::AlertStore, graph::AlertLinkageDAG, night_id::PairingMode,
-    persistence::manifest::Manifest, seeding::store::SeedStore,
+    persistence::manifest::Manifest, seeding::store::SeedStore, solver::HypothesisSet,
 };
 
 /// Loaded runtime state built from persisted artifacts.
@@ -20,4 +22,6 @@ pub struct RuntimeState {
     pub alert_store: AlertStore,
     pub seed_store: SeedStore,
     pub graph: AlertLinkageDAG,
+    pub track_hypotheses: HypothesisSet,
+    pub orbit_results: FullOrbitResult,
 }

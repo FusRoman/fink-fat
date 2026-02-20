@@ -138,6 +138,7 @@ mod seed_global_index_tests {
             flux: 1000.0,
             flux_err: 10.0,
             band: 1,
+            ..Default::default()
         }
     }
 

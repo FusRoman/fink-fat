@@ -5,6 +5,7 @@
 
 mod build_edges_test;
 mod build_seeds_test;
+mod fit_orbit_test;
 mod ingest_alerts_test;
 mod solver_stage_test;
 
@@ -19,9 +20,12 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
-use arrow_array::{ArrayRef, Float64Array, RecordBatch, UInt32Array, UInt64Array, UInt8Array};
+use arrow_array::{
+    ArrayRef, Float64Array, RecordBatch, StringArray, UInt32Array, UInt64Array, UInt8Array,
+};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::parquet::arrow::ArrowWriter;
+use outfit::FullOrbitResult;
 use tempfile::TempDir;
 
 use fink_fat_engine::{
@@ -106,6 +110,8 @@ pub(crate) fn new_runtime_state() -> RuntimeState {
         alert_store: AlertStore::new(),
         seed_store: SeedStore::new(),
         graph: AlertLinkageDAG::new(),
+        track_hypotheses: HypothesisSet::new(),
+        orbit_results: FullOrbitResult::default(),
     }
 }
 
@@ -126,6 +132,7 @@ fn parquet_alert_schema() -> Arc<Schema> {
         Field::new("flux", DataType::Float64, false),
         Field::new("flux_err", DataType::Float64, false),
         Field::new("band", DataType::UInt8, false),
+        Field::new("observer_mpc_code", DataType::Utf8, false),
     ]))
 }
 
@@ -148,6 +155,7 @@ pub(crate) fn write_alerts_parquet(alerts: &[&Alert], path: &Path) -> InputUri {
     let mut fluxes = Vec::with_capacity(n);
     let mut flux_errs = Vec::with_capacity(n);
     let mut bands = Vec::with_capacity(n);
+    let mut observer_codes: Vec<String> = Vec::with_capacity(n);
 
     for alert in alerts {
         night_ids.push(alert.key.night_id.0);
@@ -160,6 +168,7 @@ pub(crate) fn write_alerts_parquet(alerts: &[&Alert], path: &Path) -> InputUri {
         fluxes.push(alert.flux);
         flux_errs.push(alert.flux_err);
         bands.push(alert.band);
+        observer_codes.push((*alert.observer_mpc_code).clone());
     }
 
     let batch = RecordBatch::try_new(
@@ -175,6 +184,7 @@ pub(crate) fn write_alerts_parquet(alerts: &[&Alert], path: &Path) -> InputUri {
             Arc::new(Float64Array::from(fluxes)) as ArrayRef,
             Arc::new(Float64Array::from(flux_errs)) as ArrayRef,
             Arc::new(UInt8Array::from(bands)) as ArrayRef,
+            Arc::new(StringArray::from(observer_codes)) as ArrayRef,
         ],
     )
     .expect("build record batch");

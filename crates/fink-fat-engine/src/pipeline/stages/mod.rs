@@ -2,7 +2,7 @@ pub mod alert_inputs;
 pub mod edge_builder;
 pub mod seed_builder;
 pub mod solve_run;
-
+pub mod fit_orbit;
 
 use std::{fmt, time::Instant};
 
@@ -17,11 +17,13 @@ use crate::{
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PipelineStage {
+    LoadPersistedData,
     IngestNights,
     BuildSeeds,
     BuildEdges,
     Solve,
-    PersistOutputs,
+    FitOrbit,
+    SavePersistedData,
 }
 
 fn run_stage(
@@ -58,7 +60,10 @@ impl PipelineStage {
             PipelineStage::BuildSeeds => seed_builder::run(ctx, hooks, stage_sink),
             PipelineStage::BuildEdges => edge_builder::run(ctx, hooks, stage_sink),
             PipelineStage::Solve => solve_run::run(ctx, hooks, stage_sink),
-            PipelineStage::PersistOutputs => todo!(),
+            PipelineStage::FitOrbit => fit_orbit::run(ctx, hooks, stage_sink),
+            PipelineStage::LoadPersistedData | PipelineStage::SavePersistedData => {
+                unimplemented!("Persistence stages are not implemented yet")
+            }
         }
     }
 
@@ -68,7 +73,9 @@ impl PipelineStage {
             PipelineStage::BuildSeeds => "Build seeds",
             PipelineStage::BuildEdges => "Build edges",
             PipelineStage::Solve => "Solve",
-            PipelineStage::PersistOutputs => "Persist outputs",
+            PipelineStage::FitOrbit => "Fit orbit",
+            PipelineStage::LoadPersistedData => "Load persisted data",
+            PipelineStage::SavePersistedData => "Save persisted data",
         }
     }
 }

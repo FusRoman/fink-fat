@@ -16,7 +16,7 @@ use fink_fat_engine::{
         PipelineRunner,
         stages::PipelineStage,
     },
-    solver::{HypothesisSet, solver_manager::SolverManager},
+    solver::{solver_manager::SolverManager},
 };
 
 use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
@@ -62,7 +62,6 @@ fn ingest_then_build_seeds_produces_seeds_for_each_night() {
 
     let edge_models = EdgeRankingModelPool::new("unused_model.onnx");
     let solver_manager = SolverManager::default();
-    let track_hypotheses: HypothesisSet = HypothesisSet::default();
 
     // ---- 4) Build pipeline plan: IngestNights → BuildSeeds ----
     let plan = PipelinePlan {
@@ -86,7 +85,6 @@ fn ingest_then_build_seeds_produces_seeds_for_each_night() {
         engine_config: &engine_config,
         edge_models: &edge_models,
         solver_manager: &solver_manager,
-        track_hypotheses,
     };
 
     // ---- 7) Run the pipeline (IngestNights + BuildSeeds) ----
@@ -247,7 +245,6 @@ fn build_seeds_with_mixed_populations() {
         PersistenceManager::open_or_create(engine_config.storage_path_buf()).unwrap();
     let edge_models = EdgeRankingModelPool::new("unused.onnx");
     let solver_manager = SolverManager::default();
-    let track_hypotheses: HypothesisSet = HypothesisSet::default();
 
     let plan = PipelinePlan {
         window: None,
@@ -268,7 +265,6 @@ fn build_seeds_with_mixed_populations() {
         engine_config: &engine_config,
         edge_models: &edge_models,
         solver_manager: &solver_manager,
-        track_hypotheses,
     };
 
     let output = runner.run(&mut ctx, &hooks).expect("pipeline should succeed");

@@ -21,7 +21,7 @@ use fink_fat_engine::{
         PipelineRunner,
         stages::PipelineStage,
     },
-    solver::{HypothesisSet, solver_manager::SolverManager},
+    solver::{solver_manager::SolverManager},
 };
 
 use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
@@ -53,7 +53,6 @@ fn run_three_stage_pipeline(
             .expect("open persistence");
     let edge_models = EdgeRankingModelPool::new("unused.onnx");
     let solver_manager = SolverManager::default();
-    let track_hypotheses: HypothesisSet = HypothesisSet::default();
 
     let plan = PipelinePlan {
         window: None,
@@ -78,7 +77,6 @@ fn run_three_stage_pipeline(
         engine_config: &engine_config,
         edge_models: &edge_models,
         solver_manager: &solver_manager,
-        track_hypotheses,
     };
 
     let output = runner

@@ -57,14 +57,17 @@ pub fn run(
 
             stage_sink.inc(1);
 
-            ctx.track_hypotheses = SolverOutput::merge_solver_output(&results);
+            ctx.runtime_state.track_hypotheses = SolverOutput::merge_solver_output(&results);
 
             stage_sink.inc(1);
 
             Ok(vec![
                 ("components", components.n_components as u64),
                 ("plan_items", plan.items.len() as u64),
-                ("hypotheses", ctx.track_hypotheses.len() as u64),
+                (
+                    "hypotheses",
+                    ctx.runtime_state.track_hypotheses.len() as u64,
+                ),
             ])
         },
     )

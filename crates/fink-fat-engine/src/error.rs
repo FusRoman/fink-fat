@@ -1,12 +1,13 @@
 use std::io;
 
+use outfit::OutfitError;
 use thiserror::Error;
 
 use crate::{
     graph::edge::error::EdgeBuilderError,
     persistence::error::{PersistenceError, PersistenceIoError},
     pipeline::stages::PipelineStage,
-    solver::components::error::ComponentError,
+    solver::{components::error::ComponentError, error::SolverError},
 };
 
 #[derive(Debug, Error)]
@@ -154,6 +155,14 @@ pub enum EngineError {
     /// Component error
     #[error(transparent)]
     Component(#[from] ComponentError),
+
+    /// Solver error
+    #[error(transparent)]
+    Solver(#[from] SolverError),
+
+    /// Outfit error
+    #[error(transparent)]
+    Outfit(#[from] OutfitError),
 }
 
 impl From<PersistenceIoError> for EngineError {

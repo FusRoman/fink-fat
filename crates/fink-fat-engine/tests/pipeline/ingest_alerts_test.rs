@@ -16,7 +16,7 @@ use fink_fat_engine::{
         PipelineRunner,
         stages::{PipelineStage, alert_inputs::input_uri::InputUri},
     },
-    solver::{HypothesisSet, solver_manager::SolverManager},
+    solver::{solver_manager::SolverManager},
 };
 
 use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
@@ -59,7 +59,6 @@ fn ingest_nights_stage_loads_alerts_and_populates_runtime_state() {
 
     let edge_models = EdgeRankingModelPool::new("unused_model.onnx");
     let solver_manager = SolverManager::default();
-    let track_hypotheses: HypothesisSet = HypothesisSet::default();
 
     // ---- 3) Build the pipeline plan ----
     let plan = PipelinePlan {
@@ -85,7 +84,6 @@ fn ingest_nights_stage_loads_alerts_and_populates_runtime_state() {
         engine_config: &engine_config,
         edge_models: &edge_models,
         solver_manager: &solver_manager,
-        track_hypotheses,
     };
 
     // ---- 6) Run the pipeline ----
@@ -204,7 +202,6 @@ fn ingest_nights_stage_fails_on_missing_parquet_file() {
 
     let edge_models = EdgeRankingModelPool::new("unused.onnx");
     let solver_manager = SolverManager::default();
-    let track_hypotheses: HypothesisSet = HypothesisSet::default();
 
     let plan = PipelinePlan {
         window: None,
@@ -227,7 +224,6 @@ fn ingest_nights_stage_fails_on_missing_parquet_file() {
         engine_config: &engine_config,
         edge_models: &edge_models,
         solver_manager: &solver_manager,
-        track_hypotheses,
     };
 
     let result = runner.run(&mut ctx, &hooks);

@@ -76,7 +76,6 @@ fn run_four_stage_pipeline(
             ..Default::default()
         },
     };
-    let track_hypotheses: HypothesisSet = HypothesisSet::default();
 
     let plan = PipelinePlan {
         window: None,
@@ -102,14 +101,13 @@ fn run_four_stage_pipeline(
         engine_config: &engine_config,
         edge_models: &edge_models,
         solver_manager: &solver_manager,
-        track_hypotheses,
     };
 
     let output = runner
         .run(&mut ctx, &hooks)
         .expect("four-stage pipeline should succeed");
 
-    let hypotheses = std::mem::take(&mut ctx.track_hypotheses);
+    let hypotheses = std::mem::take(&mut ctx.runtime_state.track_hypotheses);
     drop(ctx);
 
     (output, runtime_state, engine_config, hypotheses)
@@ -821,7 +819,6 @@ fn run_incremental_pipeline(
         let runner = PipelineRunner { plan: plan.clone() };
         let hooks = NoopHooks;
 
-        let track_hypotheses = HypothesisSet::default();
         let mut ctx = PipelineContext {
             plan: &plan,
             persistence: &persistence,
@@ -829,14 +826,13 @@ fn run_incremental_pipeline(
             engine_config: &engine_config,
             edge_models: &edge_models,
             solver_manager: &solver_manager,
-            track_hypotheses,
         };
 
         runner
             .run(&mut ctx, &hooks)
             .unwrap_or_else(|e| panic!("pipeline run for night {nid} failed: {e}"));
 
-        last_hypotheses = std::mem::take(&mut ctx.track_hypotheses);
+        last_hypotheses = std::mem::take(&mut ctx.runtime_state.track_hypotheses);
     }
 
     (runtime_state, engine_config, last_hypotheses)
@@ -1138,7 +1134,6 @@ fn incremental_graph_grows_over_nights() {
             engine_config: &engine_config,
             edge_models: &edge_models,
             solver_manager: &solver_manager,
-            track_hypotheses: HypothesisSet::default(),
         };
 
         runner

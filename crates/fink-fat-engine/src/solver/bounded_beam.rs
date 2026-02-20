@@ -916,6 +916,7 @@ mod bounded_beam_tests {
             flux: 1000.0,
             flux_err: 10.0,
             band: 1,
+            ..Default::default()
         }
     }
 

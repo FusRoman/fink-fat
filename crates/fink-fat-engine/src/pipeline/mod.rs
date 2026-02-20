@@ -13,7 +13,7 @@ use crate::{
         progress_sink::{NoopProgress, ProgressSink},
         stages::{PipelineStage, alert_inputs::input_uri::InputUri},
     },
-    solver::{HypothesisSet, solver_manager::SolverManager},
+    solver::solver_manager::SolverManager,
 };
 
 #[derive(Clone, Debug)]
@@ -44,7 +44,6 @@ pub struct PipelineContext<'rt> {
     pub engine_config: &'rt EngineConfig,
     pub edge_models: &'rt EdgeRankingModelPool,
     pub solver_manager: &'rt SolverManager,
-    pub track_hypotheses: HypothesisSet,
 }
 
 pub struct PipelineRunner {
@@ -159,12 +158,12 @@ impl PipelineRunner {
             return Err(EngineError::InvalidPlan("no stages specified"));
         }
 
-        // Avoid PersistOutputs without persistence policy.
-        if self.plan.stages.contains(&PipelineStage::PersistOutputs)
+        // Avoid SavePersistedData without persistence policy.
+        if self.plan.stages.contains(&PipelineStage::SavePersistedData)
             && matches!(self.plan.persist, PersistPolicy::None)
         {
             return Err(EngineError::InvalidPlan(
-                "PersistOutputs stage requires persist != None",
+                "SavePersistedData stage requires persist != None",
             ));
         }
 

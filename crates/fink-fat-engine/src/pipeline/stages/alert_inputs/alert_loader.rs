@@ -16,8 +16,9 @@
 
 use std::sync::Arc;
 
+use ahash::AHashMap;
 use arrow_array::{
-    Array, RecordBatch,
+    Array, RecordBatch, StringArray, StringViewArray,
     cast::AsArray,
     types::{Float64Type, UInt8Type, UInt32Type, UInt64Type},
 };
@@ -44,6 +45,7 @@ pub struct AlertParquetColumns {
     pub flux: &'static str,
     pub flux_err: &'static str,
     pub band: &'static str,
+    pub observer_mpc_code: &'static str,
 }
 
 impl Default for AlertParquetColumns {
@@ -59,6 +61,7 @@ impl Default for AlertParquetColumns {
             flux: "flux",
             flux_err: "flux_err",
             band: "band",
+            observer_mpc_code: "observer_mpc_code",
         }
     }
 }
@@ -128,6 +131,7 @@ pub async fn load_alerts_from_parquet_uri(
         col(columns.flux),
         col(columns.flux_err),
         col(columns.band),
+        col(columns.observer_mpc_code),
     ])?;
 
     // 5) Execute and collect batches
@@ -173,8 +177,10 @@ fn build_alerts_from_batches(
     let mut out = AlertStore::new();
     let mut global_row = 0usize;
 
+    // Intern pool: String -> Arc<String>
+    let mut observer_pool: AHashMap<String, Arc<String>> = AHashMap::new();
+
     for batch in batches {
-        // Fetch arrays by column name
         let night_id = col_u32(batch, c.night_id)?;
         let dia_source_id = col_u64(batch, c.dia_source_id)?;
         let ra = col_f64(batch, c.ra)?;
@@ -185,6 +191,7 @@ fn build_alerts_from_batches(
         let flux = col_f64(batch, c.flux)?;
         let flux_err = col_f64(batch, c.flux_err)?;
         let band = col_u8(batch, c.band)?;
+        let observer_mpc_code = col_string(batch, c.observer_mpc_code)?;
 
         let n = batch.num_rows();
 
@@ -199,6 +206,7 @@ fn build_alerts_from_batches(
                 || flux.is_null(i)
                 || flux_err.is_null(i)
                 || band.is_null(i)
+                || observer_mpc_code.is_null(i)
             {
                 return Err(LoadAlertsError::Arrow(format!(
                     "null value in required columns at global row {global_row}"
@@ -211,7 +219,17 @@ fn build_alerts_from_batches(
             let dia = dia_source_id.value(i);
             let mjd = mjd_tt.value(i);
 
-            // Adapt these conversions to your actual wrapper types.
+            // -------- Interning --------
+            let code_str = observer_mpc_code.value(i);
+
+            let observer_arc = if let Some(existing) = observer_pool.get(code_str) {
+                Arc::clone(existing)
+            } else {
+                let arc = Arc::new(code_str.to_string());
+                observer_pool.insert(code_str.to_string(), Arc::clone(&arc));
+                arc
+            };
+
             let alert = Alert {
                 key: AlertKey {
                     night_id,
@@ -225,6 +243,7 @@ fn build_alerts_from_batches(
                 flux: flux.value(i),
                 flux_err: flux_err.value(i),
                 band: band.value(i),
+                observer_mpc_code: observer_arc,
             };
 
             vec_night.push(alert);
@@ -290,11 +309,56 @@ fn col_u8<'a>(
         .ok_or_else(|| LoadAlertsError::Arrow(format!("column '{name}' is not UInt8")))
 }
 
+/// Wrapper for string columns that may be stored as `Utf8` or `Utf8View`.
+///
+/// DataFusion may return either representation depending on its configuration
+/// and the Parquet file layout. This enum abstracts over both so the rest of
+/// the loader can use a uniform `.is_null()` / `.value()` interface.
+enum StringCol<'a> {
+    Utf8(&'a StringArray),
+    View(&'a StringViewArray),
+}
+
+impl StringCol<'_> {
+    #[inline]
+    fn is_null(&self, i: usize) -> bool {
+        match self {
+            StringCol::Utf8(a) => a.is_null(i),
+            StringCol::View(a) => a.is_null(i),
+        }
+    }
+    #[inline]
+    fn value(&self, i: usize) -> &str {
+        match self {
+            StringCol::Utf8(a) => a.value(i),
+            StringCol::View(a) => a.value(i),
+        }
+    }
+}
+
+fn col_string<'a>(batch: &'a RecordBatch, name: &str) -> Result<StringCol<'a>, LoadAlertsError> {
+    let idx = col_index(batch, name)?;
+    let col = batch.column(idx);
+
+    if let Some(arr) = col.as_any().downcast_ref::<StringArray>() {
+        return Ok(StringCol::Utf8(arr));
+    }
+    if let Some(arr) = col.as_any().downcast_ref::<StringViewArray>() {
+        return Ok(StringCol::View(arr));
+    }
+
+    Err(LoadAlertsError::Arrow(format!(
+        "column '{name}' is not a string type (expected Utf8 or Utf8View)"
+    )))
+}
+
 #[cfg(test)]
 mod alert_loader_tests {
     use super::*;
 
-    use arrow_array::{ArrayRef, Float64Array, RecordBatch, UInt8Array, UInt32Array, UInt64Array};
+    use arrow_array::{
+        ArrayRef, Float64Array, RecordBatch, StringArray, UInt8Array, UInt32Array, UInt64Array,
+    };
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use std::sync::Arc;
 
@@ -316,6 +380,7 @@ mod alert_loader_tests {
             Field::new(c.flux, DataType::Float64, true),
             Field::new(c.flux_err, DataType::Float64, true),
             Field::new(c.band, DataType::UInt8, true),
+            Field::new(c.observer_mpc_code, DataType::Utf8, true),
         ]))
     }
 
@@ -332,11 +397,12 @@ mod alert_loader_tests {
         let flux: ArrayRef = Arc::new(Float64Array::from(vec![12.0_f64, 13.0_f64]));
         let flux_err: ArrayRef = Arc::new(Float64Array::from(vec![1.2_f64, 1.3_f64]));
         let band: ArrayRef = Arc::new(UInt8Array::from(vec![1_u8, 2_u8]));
+        let obs_code: ArrayRef = Arc::new(StringArray::from(vec!["I41", "I41"]));
 
         RecordBatch::try_new(
             schema,
             vec![
-                night_id, dia, ra, ra_err, dec, dec_err, mjd, flux, flux_err, band,
+                night_id, dia, ra, ra_err, dec, dec_err, mjd, flux, flux_err, band, obs_code,
             ],
         )
         .unwrap()
@@ -355,11 +421,12 @@ mod alert_loader_tests {
         let flux: ArrayRef = Arc::new(Float64Array::from(vec![12.0_f64]));
         let flux_err: ArrayRef = Arc::new(Float64Array::from(vec![1.2_f64]));
         let band: ArrayRef = Arc::new(UInt8Array::from(vec![1_u8]));
+        let obs_code: ArrayRef = Arc::new(StringArray::from(vec!["I41"]));
 
         RecordBatch::try_new(
             schema,
             vec![
-                night_id, dia, ra, ra_err, dec, dec_err, mjd, flux, flux_err, band,
+                night_id, dia, ra, ra_err, dec, dec_err, mjd, flux, flux_err, band, obs_code,
             ],
         )
         .unwrap()
@@ -513,11 +580,12 @@ mod alert_loader_tests {
         let flux: ArrayRef = Arc::new(Float64Array::from(vec![12.0_f64, 13.0_f64]));
         let flux_err: ArrayRef = Arc::new(Float64Array::from(vec![1.2_f64, 1.3_f64]));
         let band: ArrayRef = Arc::new(UInt8Array::from(vec![1_u8, 2_u8]));
+        let obs_code: ArrayRef = Arc::new(StringArray::from(vec!["I41", "I41"]));
 
         let batch = RecordBatch::try_new(
             schema,
             vec![
-                night_id, dia, ra, ra_err, dec, dec_err, mjd, flux, flux_err, band,
+                night_id, dia, ra, ra_err, dec, dec_err, mjd, flux, flux_err, band, obs_code,
             ],
         )
         .unwrap();

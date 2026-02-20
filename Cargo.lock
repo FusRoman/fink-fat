@@ -3432,6 +3432,7 @@ dependencies = [
  "quick-xml 0.37.5",
  "rand",
  "rand_distr",
+ "rayon",
  "roots",
  "serde",
  "smallvec",

@@ -69,7 +69,7 @@ pub mod error;
 use std::{
     cmp::Ordering,
     fmt::{Display, Formatter, Result as FmtResult},
-    hash::{Hash, Hasher},
+    hash::{Hash, Hasher}, sync::Arc,
 };
 
 use camino::Utf8PathBuf;
@@ -149,6 +149,8 @@ pub struct Alert {
     pub flux_err: f64,
     /// Photometric band code.
     pub band: u8,
+    /// Observer reference
+    pub observer_mpc_code: Arc<String>,
 }
 
 /* ------------------------ Equality / Ordering ------------------------- */
