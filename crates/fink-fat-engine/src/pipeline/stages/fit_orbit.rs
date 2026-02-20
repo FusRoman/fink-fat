@@ -28,7 +28,7 @@ pub fn run(
         },
         stage_sink,
         |stage_sink| {
-            stage_sink.set_total(3); // 3 main steps: convert, build, fit
+            stage_sink.set_total(3); // 3 main steps: convert, build, fit, export
 
             let track_hypothesis = &ctx.runtime_state.track_hypotheses;
 
@@ -50,9 +50,10 @@ pub fn run(
             // missing alerts/seeds). Return empty results rather than failing.
             let mut iter_obs_batch = obs_batches_by_obs.iter();
             let Some((mpc_code_first, obs_batch_first)) = iter_obs_batch.next() else {
-                ctx.runtime_state.orbit_results = FullOrbitResult::default();
                 stage_sink.inc(2);
-                return Ok(vec![]);
+                return Err(EngineError::OrbitFitting(
+                    "no resolved observations for any hypothesis".to_string(),
+                ));
             };
 
             let mut env_state = Outfit::new("horizon:DE440", ErrorModel::FCCT14)?;

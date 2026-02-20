@@ -80,6 +80,10 @@
 //!   types used by this module.
 
 use camino::Utf8Path;
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::parquet::arrow::ArrowWriter;
+use datafusion::parquet::file::properties::WriterProperties;
+use datafusion::{arrow::array::RecordBatch, parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     fs::{self, File},
@@ -475,6 +479,78 @@ fn read_all(path: &Utf8Path) -> Result<Vec<u8>, PersistenceIoError> {
     Ok(buf)
 }
 
+// =============================================================================
+// Parquet I/O helpers
+// =============================================================================
+
+/// Write a single Arrow `RecordBatch` to a Parquet file atomically.
+///
+/// Behavior
+/// --------
+/// Performs an **atomic write** using the same "temp file + rename" strategy
+/// as [`DiskEnvelope::save_enveloped`]:
+///
+/// 1. Create parent directories if needed.
+/// 2. Write `<path>.tmp` with the Parquet content.
+/// 3. Flush, sync, and rename to `path`.
+///
+/// Arguments
+/// ---------
+/// * `path`  - Destination Parquet file path.
+/// * `batch` - Arrow `RecordBatch` to write.
+///
+/// Return
+/// ------
+/// `Ok(())` on success, otherwise a [`PersistenceIoError`].
+pub fn save_parquet(path: &Utf8Path, batch: &RecordBatch) -> Result<(), PersistenceIoError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent.as_std_path())?;
+    }
+
+    let tmp_path = Utf8Path::new(&format!("{}.tmp", path)).to_path_buf();
+    let file = File::create(tmp_path.as_std_path())?;
+
+    let props = WriterProperties::builder().build();
+    let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props))
+        .map_err(|e| PersistenceIoError::Arrow(e.to_string()))?;
+
+    writer
+        .write(batch)
+        .map_err(|e| PersistenceIoError::Arrow(e.to_string()))?;
+
+    writer
+        .close()
+        .map_err(|e| PersistenceIoError::Arrow(e.to_string()))?;
+
+    fs::rename(tmp_path.as_std_path(), path.as_std_path())?;
+    Ok(())
+}
+
+/// Read all record batches from a Parquet file.
+///
+/// Arguments
+/// ---------
+/// * `path` - Input Parquet file path.
+///
+/// Return
+/// ------
+/// `Ok(Vec<RecordBatch>)` containing every row group.
+pub fn load_parquet(path: &Utf8Path) -> Result<(SchemaRef, Vec<RecordBatch>), PersistenceIoError> {
+    let file = File::open(path.as_std_path())?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)
+        .map_err(|e| PersistenceIoError::Arrow(e.to_string()))?;
+    let schema = builder.schema().clone();
+    let reader = builder
+        .build()
+        .map_err(|e| PersistenceIoError::Arrow(e.to_string()))?;
+
+    let batches: Vec<RecordBatch> = reader
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| PersistenceIoError::Arrow(e.to_string()))?;
+
+    Ok((schema, batches))
+}
+
 #[cfg(test)]
 mod envelope_tests {
     use super::*;
@@ -787,5 +863,239 @@ mod envelope_tests {
             !bytes.is_empty(),
             "serialized file should not be empty for a non-empty payload"
         );
+    }
+
+    // =====================================================================
+    // Parquet I/O tests
+    // =====================================================================
+
+    use arrow_array::{ArrayRef, Float64Array, Int32Array, StringArray, UInt64Array};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use std::sync::Arc;
+
+    /// Build a simple two-column RecordBatch for test purposes.
+    fn make_test_batch() -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+        ]));
+
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["alpha", "beta", "gamma"])) as ArrayRef,
+            ],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn save_parquet_creates_file() {
+        let dir = tempdir().unwrap();
+        let path = tmp_path_for(&dir, "test.parquet");
+
+        let batch = make_test_batch();
+        save_parquet(&path, &batch).unwrap();
+
+        assert!(path.exists(), "parquet file must exist after save");
+
+        let bytes = read_bytes(&path);
+        assert!(
+            bytes.len() > 4,
+            "parquet file should contain more than just a header"
+        );
+    }
+
+    #[test]
+    fn save_parquet_creates_parent_directories() {
+        let dir = tempdir().unwrap();
+        let path = to_utf8_pathbuf(dir.path().join("a/b/c/nested.parquet"));
+
+        let batch = make_test_batch();
+        save_parquet(&path, &batch).unwrap();
+
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn save_parquet_is_atomic_and_leaves_no_tmp_file() {
+        let dir = tempdir().unwrap();
+        let path = tmp_path_for(&dir, "atomic.parquet");
+        let tmp_path = Utf8Path::new(&format!("{}.tmp", path)).to_path_buf();
+
+        let batch = make_test_batch();
+        save_parquet(&path, &batch).unwrap();
+
+        assert!(path.exists());
+        assert!(!tmp_path.exists(), "temporary file must be renamed away");
+    }
+
+    #[test]
+    fn save_and_load_parquet_roundtrip() {
+        let dir = tempdir().unwrap();
+        let path = tmp_path_for(&dir, "roundtrip.parquet");
+
+        let batch = make_test_batch();
+        save_parquet(&path, &batch).unwrap();
+
+        let (schema, batches) = load_parquet(&path).unwrap();
+
+        // Schema should match.
+        assert_eq!(schema.fields().len(), 2);
+        assert_eq!(schema.field(0).name(), "id");
+        assert_eq!(schema.field(1).name(), "name");
+
+        // Exactly one batch with 3 rows.
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 3);
+        assert_eq!(batches[0].num_columns(), 2);
+
+        // Verify column values.
+        let ids = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("column 0 should be Int32Array");
+        assert_eq!(ids.values(), &[1, 2, 3]);
+
+        let names = batches[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("column 1 should be StringArray");
+        assert_eq!(names.value(0), "alpha");
+        assert_eq!(names.value(1), "beta");
+        assert_eq!(names.value(2), "gamma");
+    }
+
+    #[test]
+    fn save_and_load_parquet_roundtrip_multi_type() {
+        let dir = tempdir().unwrap();
+        let path = tmp_path_for(&dir, "multi_type.parquet");
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("track_id", DataType::Utf8, false),
+            Field::new("dia_source_id", DataType::UInt64, false),
+            Field::new("score", DataType::Float64, false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(vec!["TRK2026abc", "TRK2026abc", "TRK2026xyz"]))
+                    as ArrayRef,
+                Arc::new(UInt64Array::from(vec![100_u64, 200, 300])) as ArrayRef,
+                Arc::new(Float64Array::from(vec![0.95, 0.87, 0.42])) as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        save_parquet(&path, &batch).unwrap();
+
+        let (schema, batches) = load_parquet(&path).unwrap();
+        assert_eq!(schema.fields().len(), 3);
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 3);
+
+        let track_ids = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(track_ids.value(0), "TRK2026abc");
+        assert_eq!(track_ids.value(2), "TRK2026xyz");
+
+        let dia_ids = batches[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap();
+        assert_eq!(dia_ids.value(0), 100);
+        assert_eq!(dia_ids.value(1), 200);
+        assert_eq!(dia_ids.value(2), 300);
+
+        let scores = batches[0]
+            .column(2)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        assert!((scores.value(0) - 0.95).abs() < 1e-12);
+        assert!((scores.value(2) - 0.42).abs() < 1e-12);
+    }
+
+    #[test]
+    fn save_parquet_overwrites_existing_file() {
+        let dir = tempdir().unwrap();
+        let path = tmp_path_for(&dir, "overwrite.parquet");
+
+        // Write first batch.
+        let batch1 = make_test_batch();
+        save_parquet(&path, &batch1).unwrap();
+
+        // Write a different batch to the same path.
+        let schema2 = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Float64, false),
+        ]));
+        let batch2 = RecordBatch::try_new(
+            schema2,
+            vec![Arc::new(Float64Array::from(vec![1.0, 2.0])) as ArrayRef],
+        )
+        .unwrap();
+        save_parquet(&path, &batch2).unwrap();
+
+        // Load should return the second batch.
+        let (schema, batches) = load_parquet(&path).unwrap();
+        assert_eq!(schema.fields().len(), 1);
+        assert_eq!(schema.field(0).name(), "x");
+        assert_eq!(batches[0].num_rows(), 2);
+    }
+
+    #[test]
+    fn load_parquet_err_on_missing_file() {
+        let dir = tempdir().unwrap();
+        let path = tmp_path_for(&dir, "nonexistent.parquet");
+
+        let err = load_parquet(&path).unwrap_err();
+        assert!(
+            matches!(err, PersistenceIoError::Io(_)),
+            "expected Io error for missing file, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn load_parquet_err_on_corrupted_file() {
+        let dir = tempdir().unwrap();
+        let path = tmp_path_for(&dir, "corrupt.parquet");
+
+        // Write garbage that is not valid Parquet.
+        std::fs::write(path.as_std_path(), b"this is not parquet data").unwrap();
+
+        let err = load_parquet(&path).unwrap_err();
+        assert!(
+            matches!(err, PersistenceIoError::Arrow(_)),
+            "expected Arrow error for corrupted parquet, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn save_and_load_parquet_empty_batch() {
+        let dir = tempdir().unwrap();
+        let path = tmp_path_for(&dir, "empty.parquet");
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("col", DataType::Int32, false),
+        ]));
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(Vec::<i32>::new())) as ArrayRef])
+                .unwrap();
+
+        save_parquet(&path, &batch).unwrap();
+
+        let (schema, batches) = load_parquet(&path).unwrap();
+        assert_eq!(schema.fields().len(), 1);
+
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 0, "empty batch should produce 0 rows on reload");
     }
 }

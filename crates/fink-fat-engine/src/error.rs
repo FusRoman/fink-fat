@@ -163,6 +163,10 @@ pub enum EngineError {
     /// Outfit error
     #[error(transparent)]
     Outfit(#[from] OutfitError),
+
+    /// Orbit fitting error
+    #[error("orbit fitting error: {0}")]
+    OrbitFitting(String),
 }
 
 impl From<PersistenceIoError> for EngineError {

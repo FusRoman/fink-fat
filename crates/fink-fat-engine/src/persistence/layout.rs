@@ -108,6 +108,41 @@ impl PersistenceLayout {
     }
 
     // -------------------------------------------------------------------------
+    // Orbit exports (Parquet files, one set per night)
+    // -------------------------------------------------------------------------
+
+    /// Directory containing orbit export Parquet files.
+    pub fn orbits_dir(&self) -> Utf8PathBuf {
+        self.root.join("orbits")
+    }
+
+    /// Path to the track-members Parquet file for one night.
+    ///
+    /// This file maps each trajectory (`track_id`) to its constituent alerts
+    /// (`dia_source_id`), enabling downstream joins.
+    ///
+    /// Example
+    /// -------
+    /// `orbits/track_members-nid=<NightId>.parquet`
+    pub fn track_members_night_path(&self, night_id: NightId) -> Utf8PathBuf {
+        self.orbits_dir()
+            .join(format!("track_members-nid={night_id}.parquet"))
+    }
+
+    /// Path to the orbital-parameters Parquet file for one night.
+    ///
+    /// This file contains one row per trajectory with Keplerian orbital elements,
+    /// reference epoch, RMS, and orbit type.
+    ///
+    /// Example
+    /// -------
+    /// `orbits/orbital_params-nid=<NightId>.parquet`
+    pub fn orbital_params_night_path(&self, night_id: NightId) -> Utf8PathBuf {
+        self.orbits_dir()
+            .join(format!("orbital_params-nid={night_id}.parquet"))
+    }
+
+    // -------------------------------------------------------------------------
     // Relative path helpers (manifest storage)
     // -------------------------------------------------------------------------
 

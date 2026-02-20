@@ -39,6 +39,10 @@ pub enum PersistenceIoError {
     #[error("bitcode error: {0}")]
     Bitcode(String),
 
+    /// Arrow / Parquet error (schema construction, record batch build, writer).
+    #[error("arrow/parquet error: {0}")]
+    Arrow(String),
+
     /// Envelope validation error (magic/version).
     #[error(transparent)]
     Envelope(#[from] EnvelopeError),
