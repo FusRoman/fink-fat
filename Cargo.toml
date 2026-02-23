@@ -1,18 +1,23 @@
-[package]
-name = "fink-fat"
-readme = "README.md"
-description = "FINK-FAT: Fink Asteroid Tracker, a software to track asteroids in an alert stream such as Fink's.It provides a graph-based representation of the linked alerts and implements algorithms to predict potential asteroid detections and track them over time."
-
-[workspace]
-members = ["crates/fink-fat-engine"]
-resolver = "2"
-
 [workspace.package]
 edition = "2024"
 version = "1.0.0"
 authors = ["Roman Le Montagner <roman.le-montagner@ijclab.in2p3.fr>"]
 categories = ["science"]
 license-file = "LICENSE"
+
+[package]
+name = "fink-fat"
+readme = "README.md"
+description = "FINK-FAT: Fink Asteroid Tracker, a software to track asteroids in an alert stream such as Fink's.It provides a graph-based representation of the linked alerts and implements algorithms to predict potential asteroid detections and track them over time."
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+categories.workspace = true
+license-file.workspace = true
+
+[workspace]
+members = ["crates/fink-fat-engine"]
+resolver = "2"
 
 [workspace.dependencies]
 rand = "0.9.2"
