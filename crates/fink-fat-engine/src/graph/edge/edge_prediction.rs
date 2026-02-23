@@ -676,25 +676,14 @@ mod edge_prediction_test {
         }
     }
 
-    fn model_path() -> Result<Utf8PathBuf, String> {
-        match std::env::var("FINK_FAT_ONNX_MODEL") {
-            Ok(p) if !p.is_empty() => Ok(Utf8PathBuf::from(p)),
-            Ok(_) => Err(
-                "Environment variable FINK_FAT_ONNX_MODEL is set but empty.\n\
-Please set it to the path of the ONNX model, e.g.:\n\
-export FINK_FAT_ONNX_MODEL=/path/to/edge_classifier.onnx"
-                    .to_string(),
-            ),
-            Err(_) => Err("Environment variable FINK_FAT_ONNX_MODEL is not set.\n\
-Please set it to the path of the ONNX model, e.g.:\n\
-export FINK_FAT_ONNX_MODEL=/path/to/edge_classifier.onnx"
-                .to_string()),
-        }
+    fn model_path() -> Utf8PathBuf {
+        let manifest_dir = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        manifest_dir.join("tests/ml_model/edge_classifier.onnx")
     }
 
     #[test]
     fn ort_can_initialize_and_load_model() {
-        let path = model_path().expect("Missing FINK_FAT_ONNX_MODEL");
+        let path = model_path();
 
         assert!(
             path.exists(),
@@ -827,7 +816,7 @@ export FINK_FAT_ONNX_MODEL=/path/to/edge_classifier.onnx"
 
     #[test]
     fn edge_ranking_model_loads_and_resolves_outputs() {
-        let path = model_path().expect("Missing FINK_FAT_ONNX_MODEL");
+        let path = model_path();
 
         let model = EdgeRankingModel::load_edge_ranking_model(&path)
             .expect("Failed to load EdgeRankingModel");
@@ -848,7 +837,7 @@ export FINK_FAT_ONNX_MODEL=/path/to/edge_classifier.onnx"
 
     #[test]
     fn edge_ranking_model_predict_proba_runs_and_shapes_match() {
-        let path = model_path().expect("Missing FINK_FAT_ONNX_MODEL");
+        let path = model_path();
 
         let mut model =
             EdgeRankingModel::load_edge_ranking_model(&path).expect("Failed to load model");
@@ -867,7 +856,7 @@ export FINK_FAT_ONNX_MODEL=/path/to/edge_classifier.onnx"
 
     #[test]
     fn edge_ranking_model_predict_positive_proba_is_in_0_1() {
-        let path = model_path().expect("Missing FINK_FAT_ONNX_MODEL");
+        let path = model_path();
 
         let mut model =
             EdgeRankingModel::load_edge_ranking_model(&path).expect("Failed to load model");
@@ -885,7 +874,7 @@ export FINK_FAT_ONNX_MODEL=/path/to/edge_classifier.onnx"
 
     #[test]
     fn edge_ranking_model_predict_label_matches_batch_len_if_present() {
-        let path = model_path().expect("Missing FINK_FAT_ONNX_MODEL");
+        let path = model_path();
 
         let mut model =
             EdgeRankingModel::load_edge_ranking_model(&path).expect("Failed to load model");
