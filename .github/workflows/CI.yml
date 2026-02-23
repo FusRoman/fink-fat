@@ -108,6 +108,7 @@ jobs:
       - name: Generate coverage (lcov, all features)
         env:
           RAYON_NUM_THREADS: 2
+          RUST_TEST_THREADS: 1
         run: |
           cargo llvm-cov \
             --workspace \
