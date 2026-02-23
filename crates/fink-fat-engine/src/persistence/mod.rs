@@ -25,7 +25,8 @@ use crate::{
         manifest::{Manifest, NightManifestEntry},
         runtime_state::RuntimeState,
     },
-    seeding::{SeedNode, SeedNodeSlice, store::SeedStore}, solver::HypothesisSet,
+    seeding::{SeedNode, SeedNodeSlice, store::SeedStore},
+    solver::HypothesisSet,
 };
 
 /// Alert store schema version.

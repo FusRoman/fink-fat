@@ -47,7 +47,11 @@ pub fn run(
 
             let n_nights = state.alert_store.n_nights() as u64;
             let n_alerts = state.alert_store.n_alerts() as u64;
-            let n_seeds = state.seed_store.iter().map(|(_, v)| v.len() as u64).sum::<u64>();
+            let n_seeds = state
+                .seed_store
+                .iter()
+                .map(|(_, v)| v.len() as u64)
+                .sum::<u64>();
             let n_edges = state.graph.edges.len() as u64;
 
             // Populate the runtime state with loaded data.

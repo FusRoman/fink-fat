@@ -39,12 +39,6 @@ proptest = "1.9.0"
 serde_yaml = "0.9.34"
 tempfile = { workspace = true }
 
-[profile.bench]
-opt-level = 3
-lto = "thin"
-codegen-units = 1
-debug = true
-
 [[bench]]
 name = "generate_topk_edges"
 harness = false

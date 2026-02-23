@@ -83,7 +83,9 @@ use camino::Utf8Path;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::file::properties::WriterProperties;
-use datafusion::{arrow::array::RecordBatch, parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder};
+use datafusion::{
+    arrow::array::RecordBatch, parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder,
+};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     fs::{self, File},
@@ -983,8 +985,11 @@ mod envelope_tests {
         let batch = RecordBatch::try_new(
             schema,
             vec![
-                Arc::new(StringArray::from(vec!["TRK2026abc", "TRK2026abc", "TRK2026xyz"]))
-                    as ArrayRef,
+                Arc::new(StringArray::from(vec![
+                    "TRK2026abc",
+                    "TRK2026abc",
+                    "TRK2026xyz",
+                ])) as ArrayRef,
                 Arc::new(UInt64Array::from(vec![100_u64, 200, 300])) as ArrayRef,
                 Arc::new(Float64Array::from(vec![0.95, 0.87, 0.42])) as ArrayRef,
             ],
@@ -1034,9 +1039,7 @@ mod envelope_tests {
         save_parquet(&path, &batch1).unwrap();
 
         // Write a different batch to the same path.
-        let schema2 = Arc::new(Schema::new(vec![
-            Field::new("x", DataType::Float64, false),
-        ]));
+        let schema2 = Arc::new(Schema::new(vec![Field::new("x", DataType::Float64, false)]));
         let batch2 = RecordBatch::try_new(
             schema2,
             vec![Arc::new(Float64Array::from(vec![1.0, 2.0])) as ArrayRef],
@@ -1083,12 +1086,12 @@ mod envelope_tests {
         let dir = tempdir().unwrap();
         let path = tmp_path_for(&dir, "empty.parquet");
 
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("col", DataType::Int32, false),
-        ]));
-        let batch =
-            RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(Vec::<i32>::new())) as ArrayRef])
-                .unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int32Array::from(Vec::<i32>::new())) as ArrayRef],
+        )
+        .unwrap();
 
         save_parquet(&path, &batch).unwrap();
 

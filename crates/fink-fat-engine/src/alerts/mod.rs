@@ -63,13 +63,14 @@
 //! - [`crate::seeding::pairs`] – deduplicates pairs by alert pointer identity.
 //! - [`crate::seeding::SeedNode`] – seeds reference alerts via
 //!   [`AlertKey`] members.
-pub mod store;
 pub mod error;
+pub mod store;
 
 use std::{
     cmp::Ordering,
     fmt::{Display, Formatter, Result as FmtResult},
-    hash::{Hash, Hasher}, sync::Arc,
+    hash::{Hash, Hasher},
+    sync::Arc,
 };
 
 use camino::Utf8PathBuf;

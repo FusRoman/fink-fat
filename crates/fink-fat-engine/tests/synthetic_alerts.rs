@@ -68,7 +68,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use arrow_array::{
-    ArrayRef, Float64Array, RecordBatch, StringArray, UInt32Array, UInt64Array, UInt8Array,
+    ArrayRef, Float64Array, RecordBatch, StringArray, UInt8Array, UInt32Array, UInt64Array,
 };
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::parquet::arrow::ArrowWriter;
@@ -76,8 +76,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 use fink_fat_engine::{
-    Alert, AlertKey, AlertStore,
-    night_id::NightId,
+    Alert, AlertKey, AlertStore, night_id::NightId,
     pipeline::stages::alert_inputs::input_uri::InputUri,
 };
 
@@ -764,16 +763,8 @@ mod synthetic_alerts_tests {
         for alert in ds.alerts() {
             assert!(alert.ra >= 0.0, "RA must be >= 0: {}", alert.ra);
             assert!(alert.ra < 2.0 * PI, "RA must be < 2π: {}", alert.ra);
-            assert!(
-                alert.dec >= -PI / 2.0,
-                "Dec must be >= -π/2: {}",
-                alert.dec
-            );
-            assert!(
-                alert.dec <= PI / 2.0,
-                "Dec must be <= π/2: {}",
-                alert.dec
-            );
+            assert!(alert.dec >= -PI / 2.0, "Dec must be >= -π/2: {}", alert.dec);
+            assert!(alert.dec <= PI / 2.0, "Dec must be <= π/2: {}", alert.dec);
             assert!(alert.ra_err > 0.0, "ra_err must be positive");
             assert!(alert.dec_err > 0.0, "dec_err must be positive");
             assert!(alert.flux_err > 0.0, "flux_err must be positive");
@@ -907,8 +898,8 @@ mod synthetic_alerts_tests {
         use fink_fat_engine::pipeline::stages::alert_inputs::alert_loader::{
             AlertParquetColumns, load_alerts_sync,
         };
-        let store = load_alerts_sync(&uri, AlertParquetColumns::default())
-            .expect("load back from parquet");
+        let store =
+            load_alerts_sync(&uri, AlertParquetColumns::default()).expect("load back from parquet");
         assert_eq!(store.n_alerts(), ds.n_alerts());
         assert_eq!(store.n_nights(), 2);
     }
@@ -931,11 +922,7 @@ mod synthetic_alerts_tests {
         let pops: Vec<AsteroidPopulation> =
             ds.ground_truth().iter().map(|t| t.population).collect();
         for pop in AsteroidPopulation::ALL {
-            assert!(
-                pops.contains(&pop),
-                "missing population {:?}",
-                pop
-            );
+            assert!(pops.contains(&pop), "missing population {:?}", pop);
         }
     }
 }

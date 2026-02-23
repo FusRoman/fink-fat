@@ -25,13 +25,12 @@ use fink_fat_engine::{
     solver::HypothesisSet,
 };
 
-use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
 use super::{
-    NoopHooks, PipelineTestResult, THROUGH_SOLVE, THROUGH_ORBIT,
-    engine_config_with_edges, match_truth_to_hypotheses, new_runtime_state,
-    run_incremental_pipeline, run_pipeline,
-    test_solver_manager, test_solver_manager_with_min_nodes, test_edge_models,
+    NoopHooks, PipelineTestResult, THROUGH_ORBIT, THROUGH_SOLVE, engine_config_with_edges,
+    match_truth_to_hypotheses, new_runtime_state, run_incremental_pipeline, run_pipeline,
+    test_edge_models, test_solver_manager, test_solver_manager_with_min_nodes,
 };
+use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
 
 // ---------------------------------------------------------------------------
 // Integration tests
@@ -58,8 +57,17 @@ fn five_stage_pipeline_produces_orbit_results() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let PipelineTestResult { output, state: runtime_state, .. } =
-        run_pipeline(&dataset, &data_dir, &storage_dir, THROUGH_ORBIT, max_gap_nights);
+    let PipelineTestResult {
+        output,
+        state: runtime_state,
+        ..
+    } = run_pipeline(
+        &dataset,
+        &data_dir,
+        &storage_dir,
+        THROUGH_ORBIT,
+        max_gap_nights,
+    );
     let hypotheses = &runtime_state.track_hypotheses;
 
     // ---- 1) Verify we got five stage reports ----
@@ -124,8 +132,16 @@ fn main_belt_orbits_are_physically_plausible() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let PipelineTestResult { state: runtime_state, .. } =
-        run_pipeline(&dataset, &data_dir, &storage_dir, THROUGH_ORBIT, max_gap_nights);
+    let PipelineTestResult {
+        state: runtime_state,
+        ..
+    } = run_pipeline(
+        &dataset,
+        &data_dir,
+        &storage_dir,
+        THROUGH_ORBIT,
+        max_gap_nights,
+    );
 
     let orbit_results = &runtime_state.orbit_results;
 
@@ -216,8 +232,17 @@ fn fit_orbit_diverse_populations() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let PipelineTestResult { output, state: runtime_state, .. } =
-        run_pipeline(&dataset, &data_dir, &storage_dir, THROUGH_ORBIT, max_gap_nights);
+    let PipelineTestResult {
+        output,
+        state: runtime_state,
+        ..
+    } = run_pipeline(
+        &dataset,
+        &data_dir,
+        &storage_dir,
+        THROUGH_ORBIT,
+        max_gap_nights,
+    );
     let hypotheses = &runtime_state.track_hypotheses;
 
     // ---- 1) Pipeline must complete all five stages ----
@@ -349,8 +374,17 @@ fn fit_orbit_all_five_populations() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let PipelineTestResult { output, state: runtime_state, .. } =
-        run_pipeline(&dataset, &data_dir, &storage_dir, THROUGH_ORBIT, max_gap_nights);
+    let PipelineTestResult {
+        output,
+        state: runtime_state,
+        ..
+    } = run_pipeline(
+        &dataset,
+        &data_dir,
+        &storage_dir,
+        THROUGH_ORBIT,
+        max_gap_nights,
+    );
 
     // Five stages completed.
     assert_eq!(output.reports.len(), 5);
@@ -414,8 +448,16 @@ fn corrected_orbits_have_lower_rms_than_preliminary() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let PipelineTestResult { state: runtime_state, .. } =
-        run_pipeline(&dataset, &data_dir, &storage_dir, THROUGH_ORBIT, max_gap_nights);
+    let PipelineTestResult {
+        state: runtime_state,
+        ..
+    } = run_pipeline(
+        &dataset,
+        &data_dir,
+        &storage_dir,
+        THROUGH_ORBIT,
+        max_gap_nights,
+    );
 
     let orbit_results = &runtime_state.orbit_results;
 
@@ -475,8 +517,16 @@ fn orbit_result_keys_match_hypothesis_ids() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let PipelineTestResult { state: runtime_state, .. } =
-        run_pipeline(&dataset, &data_dir, &storage_dir, THROUGH_ORBIT, max_gap_nights);
+    let PipelineTestResult {
+        state: runtime_state,
+        ..
+    } = run_pipeline(
+        &dataset,
+        &data_dir,
+        &storage_dir,
+        THROUGH_ORBIT,
+        max_gap_nights,
+    );
     let hypotheses = &runtime_state.track_hypotheses;
 
     let orbit_results = &runtime_state.orbit_results;
@@ -531,11 +581,20 @@ fn incremental_pipeline_fits_orbits() {
     let storage_dir = TempDir::new().unwrap();
 
     let solver_manager = test_solver_manager_with_min_nodes(min_nodes);
-    let PipelineTestResult { state: runtime_state, .. } = run_incremental_pipeline(
-        &dataset, &data_dir, &storage_dir, max_gap_nights, &solver_manager,
+    let PipelineTestResult {
+        state: runtime_state,
+        ..
+    } = run_incremental_pipeline(
+        &dataset,
+        &data_dir,
+        &storage_dir,
+        max_gap_nights,
+        &solver_manager,
         |is_last| {
             let mut s = THROUGH_SOLVE.to_vec();
-            if is_last { s.push(PipelineStage::FitOrbit); }
+            if is_last {
+                s.push(PipelineStage::FitOrbit);
+            }
             s
         },
     );
@@ -605,11 +664,20 @@ fn incremental_diverse_populations_with_orbit_fit() {
     let storage_dir = TempDir::new().unwrap();
 
     let solver_manager = test_solver_manager_with_min_nodes(min_nodes);
-    let PipelineTestResult { state: runtime_state, .. } = run_incremental_pipeline(
-        &dataset, &data_dir, &storage_dir, max_gap_nights, &solver_manager,
+    let PipelineTestResult {
+        state: runtime_state,
+        ..
+    } = run_incremental_pipeline(
+        &dataset,
+        &data_dir,
+        &storage_dir,
+        max_gap_nights,
+        &solver_manager,
         |is_last| {
             let mut s = THROUGH_SOLVE.to_vec();
-            if is_last { s.push(PipelineStage::FitOrbit); }
+            if is_last {
+                s.push(PipelineStage::FitOrbit);
+            }
             s
         },
     );
@@ -698,14 +766,24 @@ fn fit_orbit_is_deterministic() {
     // Run 1
     let data_dir1 = TempDir::new().unwrap();
     let storage_dir1 = TempDir::new().unwrap();
-    let PipelineTestResult { state: state1, .. } =
-        run_pipeline(&dataset, &data_dir1, &storage_dir1, THROUGH_ORBIT, max_gap_nights);
+    let PipelineTestResult { state: state1, .. } = run_pipeline(
+        &dataset,
+        &data_dir1,
+        &storage_dir1,
+        THROUGH_ORBIT,
+        max_gap_nights,
+    );
 
     // Run 2
     let data_dir2 = TempDir::new().unwrap();
     let storage_dir2 = TempDir::new().unwrap();
-    let PipelineTestResult { state: state2, .. } =
-        run_pipeline(&dataset, &data_dir2, &storage_dir2, THROUGH_ORBIT, max_gap_nights);
+    let PipelineTestResult { state: state2, .. } = run_pipeline(
+        &dataset,
+        &data_dir2,
+        &storage_dir2,
+        THROUGH_ORBIT,
+        max_gap_nights,
+    );
 
     let orbits1 = &state1.orbit_results;
     let orbits2 = &state2.orbit_results;

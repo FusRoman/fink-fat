@@ -5,7 +5,10 @@
 
 use thiserror::Error;
 
-use crate::{alerts::{AlertKey, DiaSourceId}, night_id::NightId};
+use crate::{
+    alerts::{AlertKey, DiaSourceId},
+    night_id::NightId,
+};
 
 /// Error returned when inserting an alert into the [`AlertStore`](crate::alerts::store::AlertStore) fails.
 ///

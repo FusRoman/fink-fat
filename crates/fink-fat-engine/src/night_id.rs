@@ -573,11 +573,13 @@ mod pairing_mode_tests {
             let lefts = mode.filter_nights(&available);
             // All nights except 100 are more than 5 nights before 100
             assert!(lefts.is_err());
-            assert!(lefts
-                .err()
-                .unwrap()
-                .to_string()
-                .contains("Anchor night 100 is not within the valid range"));
+            assert!(
+                lefts
+                    .err()
+                    .unwrap()
+                    .to_string()
+                    .contains("Anchor night 100 is not within the valid range")
+            );
         }
 
         #[test]
@@ -716,7 +718,10 @@ mod pairing_mode_tests {
             let available = vec![nid(90), nid(92), nid(92), nid(95), nid(95), nid(100)];
             let lefts = mode.filter_nights(&available).unwrap();
             // Duplicates should be preserved
-            assert_eq!(lefts, vec![nid(90), nid(92), nid(92), nid(95), nid(95), nid(100)]);
+            assert_eq!(
+                lefts,
+                vec![nid(90), nid(92), nid(92), nid(95), nid(95), nid(100)]
+            );
         }
 
         // -------------------------------------------------------------------------

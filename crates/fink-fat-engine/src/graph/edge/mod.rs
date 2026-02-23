@@ -124,7 +124,7 @@
 //! ```text
 //!     EdgeBuilderError::ModelError(EdgeModelError)
 //! ```
-//! 
+//!
 //! No function in this module returns `EdgeModelError` directly.
 //!
 //! -----------------------------------------------------------------------------

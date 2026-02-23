@@ -9,9 +9,7 @@ use crate::{
     graph::AlertLinkageDAG,
     night_id::{NightId, PairingMode},
     persistence::{
-        envelope::save_parquet,
-        error::PersistenceIoError,
-        layout::PersistenceLayout,
+        envelope::save_parquet, error::PersistenceIoError, layout::PersistenceLayout,
         manifest::Manifest,
     },
     seeding::store::SeedStore,
@@ -128,8 +126,7 @@ impl RuntimeState {
         // -----------------------------------------------------------------
 
         // Deterministic iteration order (sorted by hypothesis id).
-        let mut sorted_ids: Vec<HypothesisId> =
-            self.track_hypotheses.keys().copied().collect();
+        let mut sorted_ids: Vec<HypothesisId> = self.track_hypotheses.keys().copied().collect();
         sorted_ids.sort_unstable();
 
         // Accumulators for track-members Parquet.
@@ -270,9 +267,7 @@ mod tests {
         graph::{AlertLinkageDAG, edge::EdgeKey},
         night_id::NightId,
         persistence::{
-            envelope::load_parquet,
-            layout::PersistenceLayout,
-            manifest::Manifest,
+            envelope::load_parquet, layout::PersistenceLayout, manifest::Manifest,
             runtime_state::RuntimeState,
         },
         seeding::{SeedNode, store::SeedStore},
@@ -346,9 +341,33 @@ mod tests {
         let mut seed_store = SeedStore::new();
 
         let sk_a = seed_store.insert_seed(nid1, make_seed(vec![a10.key, a11.key]));
-        let sk_b = seed_store.insert_seed(nid2, make_seed(vec![AlertKey { night_id: nid2, dia_source_id: 20 }, AlertKey { night_id: nid2, dia_source_id: 21 }]));
+        let sk_b = seed_store.insert_seed(
+            nid2,
+            make_seed(vec![
+                AlertKey {
+                    night_id: nid2,
+                    dia_source_id: 20,
+                },
+                AlertKey {
+                    night_id: nid2,
+                    dia_source_id: 21,
+                },
+            ]),
+        );
         let sk_c = seed_store.insert_seed(nid1, make_seed(vec![a12.key, a13.key]));
-        let sk_d = seed_store.insert_seed(nid2, make_seed(vec![AlertKey { night_id: nid2, dia_source_id: 22 }, AlertKey { night_id: nid2, dia_source_id: 23 }]));
+        let sk_d = seed_store.insert_seed(
+            nid2,
+            make_seed(vec![
+                AlertKey {
+                    night_id: nid2,
+                    dia_source_id: 22,
+                },
+                AlertKey {
+                    night_id: nid2,
+                    dia_source_id: 23,
+                },
+            ]),
+        );
 
         // -- Track hypotheses ---------------------------------------------
         let mut hypotheses: HypothesisSet = AHashMap::new();
@@ -356,7 +375,10 @@ mod tests {
             0,
             TrackHypothesis {
                 nodes: vec![sk_a, sk_b],
-                edges: vec![EdgeKey { from: sk_a, to: sk_b }],
+                edges: vec![EdgeKey {
+                    from: sk_a,
+                    to: sk_b,
+                }],
                 cost: 1.0,
                 night_span: 1,
             },
@@ -365,7 +387,10 @@ mod tests {
             1,
             TrackHypothesis {
                 nodes: vec![sk_c, sk_d],
-                edges: vec![EdgeKey { from: sk_c, to: sk_d }],
+                edges: vec![EdgeKey {
+                    from: sk_c,
+                    to: sk_d,
+                }],
                 cost: 2.0,
                 night_span: 1,
             },
@@ -480,9 +505,7 @@ mod tests {
         let layout = PersistenceLayout::new(utf8(dir.path().to_path_buf()));
         let state = make_test_state();
 
-        state
-            .export_orbit_parquets(&layout, NightId(2))
-            .unwrap();
+        state.export_orbit_parquets(&layout, NightId(2)).unwrap();
 
         let path = layout.track_members_night_path(NightId(2));
         let (schema, batches) = load_parquet(&path).unwrap();
@@ -537,9 +560,7 @@ mod tests {
         let layout = PersistenceLayout::new(utf8(dir.path().to_path_buf()));
         let state = make_test_state();
 
-        state
-            .export_orbit_parquets(&layout, NightId(2))
-            .unwrap();
+        state.export_orbit_parquets(&layout, NightId(2)).unwrap();
 
         let path = layout.orbital_params_night_path(NightId(2));
         let (schema, batches) = load_parquet(&path).unwrap();
@@ -587,9 +608,7 @@ mod tests {
         let layout = PersistenceLayout::new(utf8(dir.path().to_path_buf()));
         let state = make_test_state();
 
-        state
-            .export_orbit_parquets(&layout, NightId(2))
-            .unwrap();
+        state.export_orbit_parquets(&layout, NightId(2)).unwrap();
 
         let path = layout.orbital_params_night_path(NightId(2));
         let (_schema, batches) = load_parquet(&path).unwrap();
@@ -632,9 +651,7 @@ mod tests {
         // Remove orbit result for hyp 1 → only hyp 0 should appear in orbital params.
         state.orbit_results.remove(&ObjectNumber::Int(1));
 
-        state
-            .export_orbit_parquets(&layout, NightId(2))
-            .unwrap();
+        state.export_orbit_parquets(&layout, NightId(2)).unwrap();
 
         // Track members should still have rows for both hypotheses (they have
         // valid seeds/alerts even without orbit results).
@@ -656,12 +673,8 @@ mod tests {
         let layout = PersistenceLayout::new(utf8(dir.path().to_path_buf()));
         let state = make_test_state();
 
-        state
-            .export_orbit_parquets(&layout, NightId(10))
-            .unwrap();
-        state
-            .export_orbit_parquets(&layout, NightId(20))
-            .unwrap();
+        state.export_orbit_parquets(&layout, NightId(10)).unwrap();
+        state.export_orbit_parquets(&layout, NightId(20)).unwrap();
 
         assert!(layout.track_members_night_path(NightId(10)).exists());
         assert!(layout.track_members_night_path(NightId(20)).exists());

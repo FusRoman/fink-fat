@@ -1273,10 +1273,7 @@ mod connected_components_tests {
         let k1 = record[1].1[0]; // night 11
 
         // Both edges point forward, but only first is active.
-        let edges = vec![
-            mk_edge(k0a, k1, 1.0, true),
-            mk_edge(k0b, k1, 1.0, false),
-        ];
+        let edges = vec![mk_edge(k0a, k1, 1.0, true), mk_edge(k0b, k1, 1.0, false)];
         let graph = build_graph(edges);
 
         let cc = ConnectedComponents::compute(&store, &graph, true).unwrap();
@@ -1387,10 +1384,7 @@ mod connected_components_tests {
 
         for &src in sources {
             assert_eq!(in_deg[src as usize], 0, "source must have in_deg == 0");
-            assert!(
-                out_deg[src as usize] > 0,
-                "source must have out_deg > 0"
-            );
+            assert!(out_deg[src as usize] > 0, "source must have out_deg > 0");
         }
     }
 
@@ -1496,7 +1490,7 @@ mod connected_components_tests {
         let policy = SolverPolicy {
             routing: SolverRoutingMode::Heuristics,
             trivial_max_nodes: 1,        // too small to be trivial
-            trivial_max_active_edges: 0,  // too small to be trivial
+            trivial_max_active_edges: 0, // too small to be trivial
             max_night_span_for_mcf: 4,
             ..Default::default()
         };
@@ -1527,10 +1521,10 @@ mod connected_components_tests {
 
         let policy = SolverPolicy {
             routing: SolverRoutingMode::Heuristics,
-            trivial_max_nodes: 2,         // 6 nodes > 2, not trivial
-            trivial_max_active_edges: 2,  // 9 edges > 2
+            trivial_max_nodes: 2,        // 6 nodes > 2, not trivial
+            trivial_max_active_edges: 2, // 9 edges > 2
             max_night_span_for_mcf: 10,
-            mcf_budget_s: 1000.0,         // generous budget
+            mcf_budget_s: 1000.0, // generous budget
             k_mcf_s_per_edge_logn: 1e-8,
             ..Default::default()
         };
@@ -1631,11 +1625,8 @@ mod connected_components_tests {
         let cid_s1 = cc.component_id_of_seed(&store, s1).unwrap();
         assert_ne!(cid_s0, cid_s1);
 
-        let nodes_s0: AHashSet<SeedKey> = cc
-            .component_nodes(cid_s0)
-            .iter()
-            .map(|n| n.key())
-            .collect();
+        let nodes_s0: AHashSet<SeedKey> =
+            cc.component_nodes(cid_s0).iter().map(|n| n.key()).collect();
         assert!(nodes_s0.contains(&s0));
         assert!(nodes_s0.contains(&s2));
         assert_eq!(nodes_s0.len(), 2);
@@ -1664,8 +1655,8 @@ mod connected_components_tests {
 
     /// Strategy: generate a graph with `n_nights` nights, `seeds_per_night` seeds each,
     /// and random edges between consecutive nights.
-    fn arb_graph_spec() -> impl Strategy<Value = (Vec<(u32, usize)>, Vec<(usize, usize, usize, usize, bool)>)>
-    {
+    fn arb_graph_spec()
+    -> impl Strategy<Value = (Vec<(u32, usize)>, Vec<(usize, usize, usize, usize, bool)>)> {
         // 2..6 nights, 1..5 seeds each.
         let nights = prop::collection::vec((1u32..50, 1usize..5), 2..6);
 
@@ -1676,10 +1667,10 @@ mod connected_components_tests {
             let edges = prop::collection::vec(
                 (
                     0usize..n_nights.saturating_sub(1), // night pair index
-                    0usize..5,                           // from seed idx (clamped later)
-                    0usize..5,                           // to seed idx (clamped later)
-                    0usize..5,                           // dummy (unused in uniform case)
-                    any::<bool>(),                       // active
+                    0usize..5,                          // from seed idx (clamped later)
+                    0usize..5,                          // to seed idx (clamped later)
+                    0usize..5,                          // dummy (unused in uniform case)
+                    any::<bool>(),                      // active
                 ),
                 0..15,
             );

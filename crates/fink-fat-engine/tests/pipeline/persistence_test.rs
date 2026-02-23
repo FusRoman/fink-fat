@@ -24,9 +24,7 @@ use tempfile::TempDir;
 use fink_fat_engine::{
     night_id::NightId,
     persistence::{
-        PersistenceManager,
-        envelope::load_parquet,
-        layout::PersistenceLayout,
+        PersistenceManager, envelope::load_parquet, layout::PersistenceLayout,
         runtime_state::RuntimeState,
     },
     pipeline::{
@@ -36,13 +34,13 @@ use fink_fat_engine::{
     seeding::SeedKey,
 };
 
-use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
 use super::{
-    NoopHooks, PipelineTestResult, FULL_WITH_PERSISTENCE,
-    collect_dia_source_ids, collect_edge_endpoints, collect_night_ids, collect_seed_keys,
-    dummy_input_uri, engine_config_with_compaction, engine_config_with_edges, new_runtime_state,
-    run_pipeline_with, test_edge_models, test_solver_manager, write_alerts_parquet,
+    FULL_WITH_PERSISTENCE, NoopHooks, PipelineTestResult, collect_dia_source_ids,
+    collect_edge_endpoints, collect_night_ids, collect_seed_keys, dummy_input_uri,
+    engine_config_with_compaction, engine_config_with_edges, new_runtime_state, run_pipeline_with,
+    test_edge_models, test_solver_manager, write_alerts_parquet,
 };
+use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
 
 // ===========================================================================
 // Integration tests
@@ -68,8 +66,18 @@ fn full_pipeline_fresh_storage_does_not_crash() {
     let storage_dir = TempDir::new().unwrap();
 
     let sm = test_solver_manager();
-    let PipelineTestResult { output, state: _state, engine_config: _cfg } = run_pipeline_with(
-        &dataset, &data_dir, &storage_dir, FULL_WITH_PERSISTENCE, 3, &sm, PersistPolicy::Full,
+    let PipelineTestResult {
+        output,
+        state: _state,
+        engine_config: _cfg,
+    } = run_pipeline_with(
+        &dataset,
+        &data_dir,
+        &storage_dir,
+        FULL_WITH_PERSISTENCE,
+        3,
+        &sm,
+        PersistPolicy::Full,
     );
 
     // 7 stage reports expected.
@@ -107,8 +115,18 @@ fn save_creates_expected_disk_artifacts() {
     let storage_dir = TempDir::new().unwrap();
 
     let sm = test_solver_manager();
-    let PipelineTestResult { output: _output, state, engine_config } = run_pipeline_with(
-        &dataset, &data_dir, &storage_dir, FULL_WITH_PERSISTENCE, 3, &sm, PersistPolicy::Full,
+    let PipelineTestResult {
+        output: _output,
+        state,
+        engine_config,
+    } = run_pipeline_with(
+        &dataset,
+        &data_dir,
+        &storage_dir,
+        FULL_WITH_PERSISTENCE,
+        3,
+        &sm,
+        PersistPolicy::Full,
     );
 
     let layout = fink_fat_engine::persistence::layout::PersistenceLayout::new(
@@ -189,8 +207,18 @@ fn orbit_parquet_files_have_valid_content() {
     let storage_dir = TempDir::new().unwrap();
 
     let sm = test_solver_manager();
-    let PipelineTestResult { output: _output, state, engine_config } = run_pipeline_with(
-        &dataset, &data_dir, &storage_dir, FULL_WITH_PERSISTENCE, 4, &sm, PersistPolicy::Full,
+    let PipelineTestResult {
+        output: _output,
+        state,
+        engine_config,
+    } = run_pipeline_with(
+        &dataset,
+        &data_dir,
+        &storage_dir,
+        FULL_WITH_PERSISTENCE,
+        4,
+        &sm,
+        PersistPolicy::Full,
     );
 
     let layout = fink_fat_engine::persistence::layout::PersistenceLayout::new(
@@ -276,8 +304,18 @@ fn load_restores_alerts_seeds_and_edges_after_save() {
 
     // --- Phase 1: Run full pipeline with Save ---
     let sm = test_solver_manager();
-    let PipelineTestResult { output: _output1, state: state_after_save, engine_config } = run_pipeline_with(
-        &dataset, &data_dir, &storage_dir, FULL_WITH_PERSISTENCE, max_gap, &sm, PersistPolicy::Full,
+    let PipelineTestResult {
+        output: _output1,
+        state: state_after_save,
+        engine_config,
+    } = run_pipeline_with(
+        &dataset,
+        &data_dir,
+        &storage_dir,
+        FULL_WITH_PERSISTENCE,
+        max_gap,
+        &sm,
+        PersistPolicy::Full,
     );
 
     // Snapshot what was in memory after save.
@@ -451,9 +489,8 @@ fn incremental_pipeline_with_persistence_accumulates_state() {
             .join(format!("night_{nid}_run{run_idx}.parquet"));
         let alerts_uri = write_alerts_parquet(&night_alerts, &parquet_path);
 
-        let persistence =
-            PersistenceManager::open_or_create(engine_config.storage_path_buf())
-                .expect("open persistence");
+        let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
+            .expect("open persistence");
 
         // Build stage list: always Load + Ingest + Seeds + Edges + Solve + Save.
         // Include FitOrbit only on the last night.
@@ -585,7 +622,11 @@ fn incremental_pipeline_with_persistence_accumulates_state() {
         "Incremental pipeline final: {} nights, {} alerts, {} seeds, {} edges, {} hypotheses",
         final_state.alert_store.n_nights(),
         final_state.alert_store.n_alerts(),
-        final_state.seed_store.iter().map(|(_, s)| s.len()).sum::<usize>(),
+        final_state
+            .seed_store
+            .iter()
+            .map(|(_, s)| s.len())
+            .sum::<usize>(),
         final_state.graph.edges.len(),
         final_state.track_hypotheses.len(),
     );
@@ -624,8 +665,11 @@ fn reload_after_incremental_persistence_is_consistent() {
     night_ids.dedup();
 
     // --- Phase 1: Incremental ingestion with Save ---
-    let mut last_state_snapshot: Option<(HashSet<u64>, HashSet<SeedKey>, HashSet<(SeedKey, SeedKey)>)> =
-        None;
+    let mut last_state_snapshot: Option<(
+        HashSet<u64>,
+        HashSet<SeedKey>,
+        HashSet<(SeedKey, SeedKey)>,
+    )> = None;
 
     for (run_idx, &nid) in night_ids.iter().enumerate() {
         let night_alerts: Vec<&fink_fat_engine::Alert> = dataset
@@ -634,14 +678,11 @@ fn reload_after_incremental_persistence_is_consistent() {
             .filter(|a| a.key.night_id.0 == nid)
             .collect();
 
-        let parquet_path = data_dir
-            .path()
-            .join(format!("incr_night_{nid}.parquet"));
+        let parquet_path = data_dir.path().join(format!("incr_night_{nid}.parquet"));
         let alerts_uri = write_alerts_parquet(&night_alerts, &parquet_path);
 
-        let persistence =
-            PersistenceManager::open_or_create(engine_config.storage_path_buf())
-                .expect("open persistence");
+        let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
+            .expect("open persistence");
 
         let stages = vec![
             PipelineStage::LoadPersistedData,
@@ -786,8 +827,18 @@ fn save_stage_reports_meaningful_counters() {
     let storage_dir = TempDir::new().unwrap();
 
     let sm = test_solver_manager();
-    let PipelineTestResult { output, state: _state, engine_config: _cfg } = run_pipeline_with(
-        &dataset, &data_dir, &storage_dir, FULL_WITH_PERSISTENCE, 3, &sm, PersistPolicy::Full,
+    let PipelineTestResult {
+        output,
+        state: _state,
+        engine_config: _cfg,
+    } = run_pipeline_with(
+        &dataset,
+        &data_dir,
+        &storage_dir,
+        FULL_WITH_PERSISTENCE,
+        3,
+        &sm,
+        PersistPolicy::Full,
     );
 
     // Find the save stage report.
@@ -835,8 +886,18 @@ fn load_stage_reports_meaningful_counters() {
 
     // Phase 1: Save
     let sm = test_solver_manager();
-    let PipelineTestResult { output: _output1, state: state1, engine_config } = run_pipeline_with(
-        &dataset, &data_dir, &storage_dir, FULL_WITH_PERSISTENCE, 3, &sm, PersistPolicy::Full,
+    let PipelineTestResult {
+        output: _output1,
+        state: state1,
+        engine_config,
+    } = run_pipeline_with(
+        &dataset,
+        &data_dir,
+        &storage_dir,
+        FULL_WITH_PERSISTENCE,
+        3,
+        &sm,
+        PersistPolicy::Full,
     );
 
     // Phase 2: Load
@@ -945,9 +1006,8 @@ fn manifest_tracks_all_nights_after_multiple_saves() {
             .join(format!("manifest_test_night_{nid}.parquet"));
         let alerts_uri = write_alerts_parquet(&night_alerts, &parquet_path);
 
-        let persistence =
-            PersistenceManager::open_or_create(engine_config.storage_path_buf())
-                .expect("open persistence");
+        let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
+            .expect("open persistence");
 
         let plan = PipelinePlan {
             window: None,
@@ -986,9 +1046,7 @@ fn manifest_tracks_all_nights_after_multiple_saves() {
     // Now load the manifest directly and check it.
     let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
         .expect("reopen persistence");
-    let manifest = persistence
-        .load_or_init_manifest(0)
-        .expect("load manifest");
+    let manifest = persistence.load_or_init_manifest(0).expect("load manifest");
 
     // The manifest should reference all n_nights.
     let manifest_nids: Vec<NightId> = manifest.nights.iter().map(|e| e.night_id).collect();
@@ -1121,8 +1179,18 @@ fn save_load_roundtrip_diverse_populations() {
 
     // Save
     let sm = test_solver_manager();
-    let PipelineTestResult { output: _output, state: state_saved, engine_config } = run_pipeline_with(
-        &dataset, &data_dir, &storage_dir, FULL_WITH_PERSISTENCE, 3, &sm, PersistPolicy::Full,
+    let PipelineTestResult {
+        output: _output,
+        state: state_saved,
+        engine_config,
+    } = run_pipeline_with(
+        &dataset,
+        &data_dir,
+        &storage_dir,
+        FULL_WITH_PERSISTENCE,
+        3,
+        &sm,
+        PersistPolicy::Full,
     );
 
     let saved_dia_ids = collect_dia_source_ids(&state_saved);
@@ -1354,7 +1422,11 @@ fn edge_journal_deltas_and_compaction() {
 
             // The manifest should reference the snapshot.
             assert!(
-                runtime_state.manifest.edge_journal.snapshot_night_id.is_some(),
+                runtime_state
+                    .manifest
+                    .edge_journal
+                    .snapshot_night_id
+                    .is_some(),
                 "manifest should reference a snapshot night_id after compaction",
             );
 
@@ -1417,7 +1489,9 @@ fn edge_journal_deltas_and_compaction() {
         solver_manager: &solver_manager,
     };
 
-    runner.run(&mut ctx, &hooks).expect("reload after compaction should succeed");
+    runner
+        .run(&mut ctx, &hooks)
+        .expect("reload after compaction should succeed");
     drop(ctx);
 
     // Verify that the reloaded state has all nights.

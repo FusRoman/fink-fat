@@ -26,7 +26,10 @@ use serde::{Deserialize, Serialize};
 use camino::{Utf8Path, Utf8PathBuf};
 
 use crate::{
-    engine_config::EngineConfig, error::FinkFatError, night_id::{NightId, PairingMode}, persistence::{error::PersistenceIoError, layout::PersistenceLayout}
+    engine_config::EngineConfig,
+    error::FinkFatError,
+    night_id::{NightId, PairingMode},
+    persistence::{error::PersistenceIoError, layout::PersistenceLayout},
 };
 
 use super::{

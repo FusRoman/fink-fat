@@ -7,13 +7,10 @@
 
 use tempfile::TempDir;
 
-use fink_fat_engine::{
-    night_id::NightId,
-    pipeline::stages::PipelineStage,
-};
+use fink_fat_engine::{night_id::NightId, pipeline::stages::PipelineStage};
 
+use super::{PipelineTestResult, THROUGH_SEEDS, run_pipeline_minimal};
 use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
-use super::{PipelineTestResult, run_pipeline_minimal, THROUGH_SEEDS};
 
 // ---------------------------------------------------------------------------
 // Integration tests
@@ -128,7 +125,8 @@ fn ingest_then_build_seeds_produces_seeds_for_each_night() {
 
         for seed in night_seeds {
             assert_eq!(
-                seed.night_id(), nid,
+                seed.night_id(),
+                nid,
                 "seed night_id must match the night it was stored under"
             );
             // Each seed member should reference an alert in the same night.
@@ -155,10 +153,7 @@ fn ingest_then_build_seeds_produces_seeds_for_each_night() {
 
         // ---- 13) Verify seeds are sorted (required by edge builder) ----
         for w in night_seeds.windows(2) {
-            assert!(
-                w[0] <= w[1],
-                "seeds within a night must be sorted"
-            );
+            assert!(w[0] <= w[1], "seeds within a night must be sorted");
         }
     }
 

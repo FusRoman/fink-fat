@@ -1379,16 +1379,8 @@ mod bounded_beam_tests {
         for trk in output.tracks.values() {
             assert_eq!(trk.edges.len(), trk.nodes.len() - 1);
             for (i, ek) in trk.edges.iter().enumerate() {
-                assert_eq!(
-                    ek.from,
-                    trk.nodes[i],
-                    "edge.from must match nodes[i]"
-                );
-                assert_eq!(
-                    ek.to,
-                    trk.nodes[i + 1],
-                    "edge.to must match nodes[i+1]"
-                );
+                assert_eq!(ek.from, trk.nodes[i], "edge.from must match nodes[i]");
+                assert_eq!(ek.to, trk.nodes[i + 1], "edge.to must match nodes[i+1]");
             }
         }
     }

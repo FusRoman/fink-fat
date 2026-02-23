@@ -16,11 +16,11 @@ use fink_fat_engine::{
     },
 };
 
-use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
 use super::{
-    NoopHooks, PipelineTestResult, INGEST_ONLY,
-    engine_config_minimal, new_runtime_state, run_pipeline_minimal, test_edge_models,
+    INGEST_ONLY, NoopHooks, PipelineTestResult, engine_config_minimal, new_runtime_state,
+    run_pipeline_minimal, test_edge_models,
 };
+use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
 
 // ---------------------------------------------------------------------------
 // Integration tests
@@ -57,8 +57,7 @@ fn ingest_nights_stage_loads_alerts_and_populates_runtime_state() {
     let (stage, report) = &output.reports[0];
     assert_eq!(*stage, PipelineStage::IngestNights);
 
-    let counters: std::collections::HashMap<&str, u64> =
-        report.counters.iter().copied().collect();
+    let counters: std::collections::HashMap<&str, u64> = report.counters.iter().copied().collect();
     assert_eq!(
         counters.get("n_alerts").copied(),
         Some(expected_total_alerts as u64),
@@ -133,13 +132,7 @@ fn ingest_nights_stage_loads_alerts_and_populates_runtime_state() {
     // ---- 8) Verify all dia_source_ids are unique ----
     let all_dia_ids: Vec<u64> = store
         .nights()
-        .flat_map(|nid| {
-            store
-                .get(nid)
-                .unwrap()
-                .iter()
-                .map(|a| a.key.dia_source_id)
-        })
+        .flat_map(|nid| store.get(nid).unwrap().iter().map(|a| a.key.dia_source_id))
         .collect();
     assert_eq!(all_dia_ids.len(), expected_total_alerts);
 
@@ -157,9 +150,8 @@ fn ingest_nights_stage_loads_alerts_and_populates_runtime_state() {
 fn ingest_nights_stage_fails_on_missing_parquet_file() {
     let storage_dir = TempDir::new().expect("create storage temp dir");
     let engine_config = engine_config_minimal(&storage_dir);
-    let persistence =
-        PersistenceManager::open_or_create(engine_config.storage_path_buf())
-            .expect("open persistence");
+    let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
+        .expect("open persistence");
 
     let edge_models = test_edge_models();
     let solver_manager = fink_fat_engine::solver::solver_manager::SolverManager::default();

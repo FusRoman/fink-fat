@@ -22,7 +22,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use arrow_array::{
-    ArrayRef, Float64Array, RecordBatch, StringArray, UInt32Array, UInt64Array, UInt8Array,
+    ArrayRef, Float64Array, RecordBatch, StringArray, UInt8Array, UInt32Array, UInt64Array,
 };
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::parquet::arrow::ArrowWriter;
@@ -91,10 +91,7 @@ storage_path: "{storage_path}"
 /// `max_gap_nights` so that the edge builder works without an ONNX model.
 ///
 /// Suitable for tests that run `BuildEdges` and/or `Solve`.
-pub(crate) fn engine_config_with_edges(
-    storage_dir: &TempDir,
-    max_gap_nights: u8,
-) -> EngineConfig {
+pub(crate) fn engine_config_with_edges(storage_dir: &TempDir, max_gap_nights: u8) -> EngineConfig {
     let storage_path = storage_dir.path().to_str().unwrap();
     let yaml = format!(
         r#"
@@ -361,12 +358,7 @@ pub(crate) fn collect_dia_source_ids(state: &RuntimeState) -> HashSet<u64> {
 
 /// Collect the set of `(from, to)` seed-key pairs from all edges.
 pub(crate) fn collect_edge_endpoints(state: &RuntimeState) -> HashSet<(SeedKey, SeedKey)> {
-    state
-        .graph
-        .edges
-        .iter()
-        .map(|e| (e.from, e.to))
-        .collect()
+    state.graph.edges.iter().map(|e| (e.from, e.to)).collect()
 }
 
 /// Collect night IDs from the alert store (sorted).
@@ -382,10 +374,8 @@ pub(crate) fn collect_night_ids(state: &RuntimeState) -> Vec<NightId> {
 pub(crate) const INGEST_ONLY: &[PipelineStage] = &[PipelineStage::IngestNights];
 
 /// `IngestNights → BuildSeeds`.
-pub(crate) const THROUGH_SEEDS: &[PipelineStage] = &[
-    PipelineStage::IngestNights,
-    PipelineStage::BuildSeeds,
-];
+pub(crate) const THROUGH_SEEDS: &[PipelineStage] =
+    &[PipelineStage::IngestNights, PipelineStage::BuildSeeds];
 
 /// `IngestNights → BuildSeeds → BuildEdges`.
 pub(crate) const THROUGH_EDGES: &[PipelineStage] = &[

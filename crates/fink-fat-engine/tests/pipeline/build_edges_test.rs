@@ -11,13 +11,10 @@
 
 use tempfile::TempDir;
 
-use fink_fat_engine::{
-    night_id::NightId,
-    pipeline::stages::PipelineStage,
-};
+use fink_fat_engine::{night_id::NightId, pipeline::stages::PipelineStage};
 
+use super::{PipelineTestResult, THROUGH_EDGES, run_pipeline};
 use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
-use super::{PipelineTestResult, run_pipeline, THROUGH_EDGES};
 
 // ---------------------------------------------------------------------------
 // Integration tests
@@ -43,8 +40,17 @@ fn three_stage_pipeline_produces_edges_between_nights() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let PipelineTestResult { output, state: runtime_state, .. } =
-        run_pipeline(&dataset, &data_dir, &storage_dir, THROUGH_EDGES, max_gap_nights);
+    let PipelineTestResult {
+        output,
+        state: runtime_state,
+        ..
+    } = run_pipeline(
+        &dataset,
+        &data_dir,
+        &storage_dir,
+        THROUGH_EDGES,
+        max_gap_nights,
+    );
 
     // ---- 2) Verify we got three stage reports ----
     assert_eq!(output.reports.len(), 3, "expected 3 stage reports");
@@ -73,7 +79,8 @@ fn three_stage_pipeline_produces_edges_between_nights() {
     // ---- 4) Verify the graph contains edges ----
     let graph = &runtime_state.graph;
     assert_eq!(
-        graph.edges.len() as u64, edges_added,
+        graph.edges.len() as u64,
+        edges_added,
         "graph edge count must match reported edges_added"
     );
 
@@ -124,10 +131,7 @@ fn three_stage_pipeline_produces_edges_between_nights() {
 
         // Both seed keys must exist in the seed store.
         assert!(
-            runtime_state
-                .seed_store
-                .try_get_seed(edge.from)
-                .is_some(),
+            runtime_state.seed_store.try_get_seed(edge.from).is_some(),
             "edge.from {:?} must exist in seed store",
             edge.from
         );
@@ -169,8 +173,17 @@ fn edges_respect_max_gap_window() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let PipelineTestResult { output, state: runtime_state, .. } =
-        run_pipeline(&dataset, &data_dir, &storage_dir, THROUGH_EDGES, max_gap_nights);
+    let PipelineTestResult {
+        output,
+        state: runtime_state,
+        ..
+    } = run_pipeline(
+        &dataset,
+        &data_dir,
+        &storage_dir,
+        THROUGH_EDGES,
+        max_gap_nights,
+    );
 
     assert_eq!(output.reports.len(), 3);
 
@@ -220,8 +233,11 @@ fn larger_gap_includes_more_left_nights() {
     // --- Run with max_gap=1 ---
     let data_dir_1 = TempDir::new().unwrap();
     let storage_dir_1 = TempDir::new().unwrap();
-    let PipelineTestResult { output: output_gap1, state: state_gap1, .. } =
-        run_pipeline(&dataset, &data_dir_1, &storage_dir_1, THROUGH_EDGES, 1);
+    let PipelineTestResult {
+        output: output_gap1,
+        state: state_gap1,
+        ..
+    } = run_pipeline(&dataset, &data_dir_1, &storage_dir_1, THROUGH_EDGES, 1);
 
     let counters_gap1: std::collections::HashMap<&str, u64> =
         output_gap1.reports[2].1.counters.iter().copied().collect();
@@ -231,8 +247,11 @@ fn larger_gap_includes_more_left_nights() {
     // --- Run with max_gap=3 ---
     let data_dir_3 = TempDir::new().unwrap();
     let storage_dir_3 = TempDir::new().unwrap();
-    let PipelineTestResult { output: output_gap3, state: state_gap3, .. } =
-        run_pipeline(&dataset, &data_dir_3, &storage_dir_3, THROUGH_EDGES, 3);
+    let PipelineTestResult {
+        output: output_gap3,
+        state: state_gap3,
+        ..
+    } = run_pipeline(&dataset, &data_dir_3, &storage_dir_3, THROUGH_EDGES, 3);
 
     let counters_gap3: std::collections::HashMap<&str, u64> =
         output_gap3.reports[2].1.counters.iter().copied().collect();
@@ -287,8 +306,17 @@ fn edges_connect_distinct_nights_from_diverse_populations() {
     let data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
-    let PipelineTestResult { output, state: runtime_state, .. } =
-        run_pipeline(&dataset, &data_dir, &storage_dir, THROUGH_EDGES, max_gap_nights);
+    let PipelineTestResult {
+        output,
+        state: runtime_state,
+        ..
+    } = run_pipeline(
+        &dataset,
+        &data_dir,
+        &storage_dir,
+        THROUGH_EDGES,
+        max_gap_nights,
+    );
 
     assert_eq!(output.reports.len(), 3);
 
@@ -317,11 +345,8 @@ fn edges_connect_distinct_nights_from_diverse_populations() {
 
     // Verify that edges originate from multiple left nights
     // (with max_gap=3 and 3 nights, we should have edges from night 0 and night 1).
-    let left_nights: std::collections::HashSet<NightId> = graph
-        .edges
-        .iter()
-        .map(|e| e.from.night_id)
-        .collect();
+    let left_nights: std::collections::HashSet<NightId> =
+        graph.edges.iter().map(|e| e.from.night_id).collect();
     assert!(
         left_nights.len() >= 1,
         "edges should originate from at least one left night"
