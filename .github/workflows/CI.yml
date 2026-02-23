@@ -10,8 +10,43 @@ permissions:
   contents: read
 
 jobs:
-  rust-tests:
-    name: Rust tests
+  fmt:
+    name: Format check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  check:
+    name: Cargo check
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -25,18 +60,12 @@ jobs:
         with:
           cache-on-failure: true
 
-      - name: Run cargo tests
-        run: |
-          cargo test --all --all-targets --verbose
+      - name: cargo check
+        run: cargo check --all-targets --all-features
 
-  python-tests:
-    name: Python tests (maturin + pytest)
+  doc:
+    name: Documentation check
     runs-on: ubuntu-latest
-    needs: rust-tests
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12"]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -49,30 +78,24 @@ jobs:
         with:
           cache-on-failure: true
 
-      - name: Setup Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - name: cargo doc
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    needs: [fmt, clippy, check, doc]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
         with:
-          python-version: ${{ matrix.python-version }}
+          cache-on-failure: true
 
-      - name: Create virtualenv (.venv)
-        run: |
-          python -m venv .venv
-          ./.venv/bin/python -V
-
-      - name: Upgrade pip & install test deps (in .venv)
-        run: |
-          ./.venv/bin/python -m pip install --upgrade pip wheel setuptools
-          ./.venv/bin/pip install pytest pytest-cov maturin
-
-      - name: Build and develop-install the extension (maturin)
-        run: |
-          ./.venv/bin/maturin develop --release --features python-extension
-
-      - name: Show installed package info
-        run: |
-          ./.venv/bin/python -c "import sys; print('Python:', sys.version)"
-          ./.venv/bin/python -c "import fink_fat as m; print('fink_fat:', getattr(m,'__version__','unknown')); print('from:', m.__file__)"
-
-      - name: Run pytest
-        run: |
-          ./.venv/bin/pytest -q --maxfail=1 --disable-warnings -ra
+      - name: cargo test
+        run: cargo test --all --all-targets --all-features --verbose
