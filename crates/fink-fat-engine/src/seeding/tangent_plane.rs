@@ -229,6 +229,7 @@ impl TangentPlaneModel {
     /// * Higher-level builders (e.g. from pairs or triplets) are responsible
     ///   for ensuring the physical consistency of the parameters.
     #[inline]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         center: TangentCenter,
         epoch_mid: MJDTT,

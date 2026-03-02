@@ -143,7 +143,7 @@ pub fn mat_vec2(m: [[f64; 2]; 2], v: [f64; 2]) -> [f64; 2] {
 #[inline]
 pub fn clamp_unit(x: f64) -> f64 {
     if x.is_finite() {
-        x.max(-1.0).min(1.0)
+        x.clamp(-1.0, 1.0)
     } else {
         0.0
     }
@@ -198,7 +198,7 @@ pub fn safe_ln(x: f64) -> f64 {
 /// ---------
 /// * `m` – Symmetric 2×2 matrix (only the symmetric part is used).
 /// * `floor` – Minimum allowed value for diagonal terms and determinant
-///             regularization.
+///   regularization.
 ///
 /// Return
 /// ------
@@ -404,8 +404,8 @@ pub fn det_sym_2x2(m: [[f64; 2]; 2]) -> f64 {
 /// ---------
 /// * `m` – Symmetric 2×2 matrix (only the symmetric part is used).
 /// * `floor` – Minimum allowed value for diagonal terms and for the Schur complement.
-///             Typical values: `1e-20` for radians² covariances, or `1e-12` in more
-///             conservative settings.
+///   Typical values: `1e-20` for radians² covariances, or `1e-12` in more
+///   conservative settings.
 ///
 /// Return
 /// ------
@@ -792,9 +792,9 @@ pub fn tangent_to_radec(x: f64, y: f64, ra0: Radian, dec0: Radian) -> (Radian, R
 ///
 /// # Arguments
 /// * `dt` – Array of three time offsets `[t0, t1, t2]` (in days),
-///          expressed **relative to the same origin**.
+///   expressed **relative to the same origin**.
 /// * `x`  – Array of three scalar positions `[x0, x1, x2]` corresponding
-///          to the times in `dt`.
+///   to the times in `dt`.
 ///
 /// # Returns
 /// `(p0, v, a)` where:

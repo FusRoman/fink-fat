@@ -51,18 +51,18 @@ pub fn run(
             let mut alerts_saved: u64 = 0;
             let nights_sorted = ctx.runtime_state.alert_store.nights_sorted();
             for &nid in &nights_sorted {
-                if let Some(alerts) = ctx.runtime_state.alert_store.get(&nid) {
-                    if let Some(seeds) = ctx.runtime_state.seed_store.get(&nid) {
-                        ctx.persistence.save_night_manifest(
-                            &mut manifest,
-                            nid,
-                            created_unix_s,
-                            alerts,
-                            seeds,
-                            ctx.engine_config.binary_compression,
-                        )?;
-                        alerts_saved += alerts.len() as u64;
-                    }
+                if let Some(alerts) = ctx.runtime_state.alert_store.get(&nid)
+                    && let Some(seeds) = ctx.runtime_state.seed_store.get(&nid)
+                {
+                    ctx.persistence.save_night_manifest(
+                        &mut manifest,
+                        nid,
+                        created_unix_s,
+                        alerts,
+                        seeds,
+                        ctx.engine_config.binary_compression,
+                    )?;
+                    alerts_saved += alerts.len() as u64;
                 }
             }
             stage_sink.inc(1);

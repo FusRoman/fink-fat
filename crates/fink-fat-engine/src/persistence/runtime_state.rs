@@ -85,6 +85,12 @@ fn orbital_params_schema() -> Arc<Schema> {
     ]))
 }
 
+impl Default for RuntimeState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RuntimeState {
     // ---------------------------------------------------------------------------
     // RuntimeState factory

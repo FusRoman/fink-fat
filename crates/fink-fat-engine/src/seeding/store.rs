@@ -55,6 +55,12 @@ pub struct SeedStore {
     free_ids: Vec<SeedId>,
 }
 
+impl Default for SeedStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SeedStore {
     /// Create a new empty seed store.
     ///
@@ -147,7 +153,7 @@ impl SeedStore {
 
         seed.key = key;
 
-        let night_seeds = self.seeds.entry(night_id).or_insert_with(Vec::new);
+        let night_seeds = self.seeds.entry(night_id).or_default();
         let idx = night_seeds.len();
         night_seeds.push(seed);
 
@@ -236,10 +242,7 @@ impl SeedStore {
     }
 
     pub fn insert_vec_seed(&mut self, night_id: NightId, seeds: Vec<SeedNode>) {
-        self.seeds
-            .entry(night_id)
-            .or_insert_with(Vec::new)
-            .extend(seeds);
+        self.seeds.entry(night_id).or_default().extend(seeds);
         self.rebuild_index_at_night(night_id);
     }
 
@@ -286,7 +289,7 @@ impl SeedStore {
     }
 
     pub fn contains_night(&self, night_id: &NightId) -> bool {
-        self.seeds.contains_key(&night_id)
+        self.seeds.contains_key(night_id)
     }
 
     pub fn get(&self, night_id: &NightId) -> Option<&[SeedNode]> {

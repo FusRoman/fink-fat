@@ -39,7 +39,7 @@ pub fn run_single_night(cli_args: NightRunArgs) -> Result<(), EngineError> {
 
     let plan = PipelinePlan {
         stages: FULL_WITH_PERSISTENCE.to_vec(),
-        persist: engine_config.pipeline_policy.clone(),
+        persist: engine_config.pipeline_policy,
         inputs: PipelineInputs {
             alerts_uri: cli_args.alerts,
         },
@@ -54,7 +54,7 @@ pub fn run_single_night(cli_args: NightRunArgs) -> Result<(), EngineError> {
     };
 
     let solver_manager = SolverManager {
-        policy: engine_config.solver_config.solver_policy.clone(),
+        policy: engine_config.solver_config.solver_policy,
         bounded_beam_config: engine_config.solver_config.bounded_beam.clone(),
     };
 
@@ -69,7 +69,6 @@ pub fn run_single_night(cli_args: NightRunArgs) -> Result<(), EngineError> {
     };
 
     let run_results = runner.run(&mut ctx, hooks.as_ref())?;
-    drop(ctx);
 
     println!("Pipeline run complete. Final stage reports:");
     for (stage_meta, stage_report) in run_results.reports {

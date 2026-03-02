@@ -102,22 +102,13 @@ pub struct SolvePlan {
 /// Notes
 /// -----
 /// - This object does not own the graph or components; it only orchestrates.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct SolverManager {
     /// Routing policy controlling solver selection.
     pub policy: SolverPolicy,
 
     /// Configuration for the bounded beam solver.
     pub bounded_beam_config: BoundedBeamConfig,
-}
-
-impl Default for SolverManager {
-    fn default() -> Self {
-        Self {
-            policy: SolverPolicy::default(),
-            bounded_beam_config: BoundedBeamConfig::default(),
-        }
-    }
 }
 
 impl SolverManager {
@@ -144,7 +135,7 @@ impl SolverManager {
         let mut items = Vec::with_capacity(comps.n_components as usize);
 
         for cid in 0..comps.n_components {
-            let cid_u32 = cid as u32;
+            let cid_u32 = cid;
 
             let choice = match self.policy.routing {
                 SolverRoutingMode::Heuristics => comps.classify(cid_u32, &self.policy),

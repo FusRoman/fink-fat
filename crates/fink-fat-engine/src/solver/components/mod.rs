@@ -272,7 +272,7 @@ pub struct ConnectedComponents<'edge_lf, 'seed_lf> {
     component_sinks_local: Vec<Vec<LocalIdx>>,
 }
 
-impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
+impl<'edge_lf, 'seed_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
     /// Compute connected components and build per-component restricted directed adjacency.
     ///
     /// This is the main entrypoint that materializes both:
@@ -450,14 +450,14 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
         let mut comp_of_node = vec![0u32; n_total];
         let mut n_components: ComponentId = 0;
 
-        for i in 0..n_total {
+        for (i, slot) in comp_of_node.iter_mut().enumerate() {
             let r = uf.find(i);
             let cid = *root_to_cid.entry(r).or_insert_with(|| {
                 let c = n_components;
                 n_components += 1;
                 c
             });
-            comp_of_node[i] = cid;
+            *slot = cid;
         }
 
         (comp_of_node, n_components as usize)
@@ -616,6 +616,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
     /// -----
     /// - Enforces time-forward edges (`night(to) > night(from)`); back-edges are ignored.
     /// - Uses `graph.core.out_deg` as a best-effort capacity hint for adjacency allocation.
+    #[allow(clippy::too_many_arguments)]
     fn build_local_digraph(
         seed_store: &'seed_lf SeedStore,
         graph: &'edge_lf AlertLinkageDAG,
@@ -662,7 +663,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
             let get_seed = |key| {
                 seed_store
                     .try_get_seed(key)
-                    .ok_or_else(|| ComponentError::SeedKeyNotFound {
+                    .ok_or(ComponentError::SeedKeyNotFound {
                         key,
                         origin: SeedOrigin::Store,
                     })
@@ -734,8 +735,8 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
             }
 
             if srcs.is_empty() {
-                for u in 0..n {
-                    if out_deg_local[cid][u] > 0 {
+                for (u, &outdeg_u) in out_deg_local[cid].iter().enumerate() {
+                    if outdeg_u > 0 {
                         srcs.push(u as u32);
                     }
                 }
@@ -945,7 +946,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
     ///    If both:
     ///    - `n_nodes <= trivial_max_nodes`, and
     ///    - `m_active_edges <= trivial_max_active_edges`,
-    ///    the component is routed to `SolverChoice::Trivial`.
+    ///      the component is routed to `SolverChoice::Trivial`.
     ///
     ///    Rationale:
     ///    Small and sparse components are cheap to solve with a lightweight,
@@ -954,7 +955,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
     /// 2) Excessive night span (BlobBreaker)
     ///    If:
     ///    - `night_span > max_night_span_for_mcf`,
-    ///    the component is routed to `SolverChoice::BlobBreaker`.
+    ///      the component is routed to `SolverChoice::BlobBreaker`.
     ///
     ///    Rationale:
     ///    Very wide temporal spans tend to induce complex combinatorics.
@@ -963,10 +964,10 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
     ///
     /// 3) Budgeted MCF vs BlobBreaker
     ///    Otherwise, estimate the MCF runtime:
-    ///      `t_est = k_mcf_s_per_edge_logn * m_active_edges * log2(n_nodes + 1)`
+    ///    `t_est = k_mcf_s_per_edge_logn * m_active_edges * log2(n_nodes + 1)`
     ///
-    ///     If `t_est <= mcf_budget_s`, route to `SolverChoice::MinCostFlow`,
-    ///       else route to `SolverChoice::BlobBreaker`.
+    ///    If `t_est <= mcf_budget_s`, route to `SolverChoice::MinCostFlow`,
+    ///    else route to `SolverChoice::BlobBreaker`.
     ///
     ///    Rationale:
     ///    Use MCF when the predicted runtime fits within the allowed budget,

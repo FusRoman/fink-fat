@@ -400,7 +400,7 @@ pub fn to_observation_batch<'a>(
         let trk = &hypothesis_set[&tid];
 
         let mut alerts: Vec<Alert> = trk
-            .get_alerts(&alert_store, &seed_store)
+            .get_alerts(alert_store, seed_store)
             .map_err(|e| SolverError::OrbitFitConversionError(e.to_string()))?;
 
         // Ensure time order inside this track

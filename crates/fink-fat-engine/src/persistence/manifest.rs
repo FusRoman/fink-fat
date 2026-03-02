@@ -267,6 +267,12 @@ pub struct EdgeJournalManifest {
     pub deltas: Vec<EdgeDeltaEntry>,
 }
 
+impl Default for EdgeJournalManifest {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EdgeJournalManifest {
     /// Create an empty edge journal manifest.
     ///
@@ -320,7 +326,7 @@ impl EdgeJournalManifest {
     /// starts from an empty baseline.
     #[inline]
     pub fn snapshot_rel_path(&self) -> Option<&Utf8Path> {
-        self.snapshot_relpath.as_ref().map(|rel| Utf8Path::new(rel))
+        self.snapshot_relpath.as_ref().map(Utf8Path::new)
     }
 
     /// Set or replace the snapshot metadata.
@@ -428,6 +434,12 @@ pub struct Manifest {
 
     /// Optional ML model metadata.
     pub model: Option<ModelManifestEntry>,
+}
+
+impl Default for Manifest {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Manifest {

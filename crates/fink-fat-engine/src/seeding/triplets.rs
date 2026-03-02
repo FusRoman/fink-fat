@@ -233,7 +233,7 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
 
     for &Pair { a, b } in pairs {
         // Optional enforcement: require strict ordering on the input pairs.
-        if cfg.enforce_time_order && !(a.mjd_tt < b.mjd_tt) {
+        if cfg.enforce_time_order && a.mjd_tt >= b.mjd_tt {
             continue;
         }
 

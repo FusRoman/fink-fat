@@ -55,7 +55,7 @@ pub fn run(
 
             let first_obs = env_state.get_observer_from_mpc_code(mpc_code_first);
             let mut traj_set =
-                TrajectorySet::new_from_vec(&mut env_state, &obs_batch_first, first_obs)?;
+                TrajectorySet::new_from_vec(&mut env_state, obs_batch_first, first_obs)?;
 
             for (mpc_code, obs_batch) in iter_obs_batch {
                 let observer = env_state.get_observer_from_mpc_code(mpc_code);

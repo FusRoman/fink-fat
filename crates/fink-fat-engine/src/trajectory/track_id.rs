@@ -258,9 +258,9 @@ pub fn track_id_from_seed_keys_with_year(keys: &[SeedKey], year: u32) -> TrackId
 /// Panics
 /// ------
 /// Panics if `nodes` is empty, or if nodes contain no alerts (members list empty).
-pub fn track_id_from_nodes<'seed_lf>(
+pub fn track_id_from_nodes(
     alert_store: &AlertStore,
-    nodes: &[&'seed_lf SeedNode],
+    nodes: &[&SeedNode],
 ) -> Result<TrackId, TrackError> {
     // 1) Year prefix from earliest alert epoch
     let mjd_min = earliest_alert_mjd_tt(alert_store, nodes)?;
@@ -296,10 +296,7 @@ pub fn track_id_from_nodes<'seed_lf>(
 /// Panics
 /// ------
 /// Panics if no alert member is present at all (track nodes without alerts).
-fn earliest_alert_mjd_tt<'seed_lf>(
-    alert_store: &AlertStore,
-    nodes: &[&'seed_lf SeedNode],
-) -> Result<f64, TrackError> {
+fn earliest_alert_mjd_tt(alert_store: &AlertStore, nodes: &[&SeedNode]) -> Result<f64, TrackError> {
     let mut best: Option<f64> = None;
 
     for node in nodes {

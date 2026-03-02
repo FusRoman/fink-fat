@@ -95,7 +95,7 @@ impl<'seed_lf> PartialOrd for TopKItem<'seed_lf> {
     /// - the *smallest* probability is at the top,
     /// - which gives an O(1) "current threshold" for Top-K.
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(other.proba.total_cmp(&self.proba))
+        Some(self.cmp(other))
     }
 }
 

@@ -59,10 +59,10 @@
 //!    ---------------------------------
 //!    - ML Top-K ranking is enabled.
 //!    - For each left seed:
-//!        • candidates are generated,
-//!        • features are computed,
-//!        • ONNX inference produces p(class=1),
-//!        • only the Top-K highest-probability candidates are retained.
+//!      • candidates are generated,
+//!      • features are computed,
+//!      • ONNX inference produces p(class=1),
+//!      • only the Top-K highest-probability candidates are retained.
 //!    - The solver-facing edge cost is still derived from features.
 //!    - Requires `model_pool` to be provided.
 //!
@@ -497,7 +497,7 @@ fn process_chunk_ml_topk(
         // Materialize edges for the winners.
         for (right_candidate, edge_cost) in tmp.iter() {
             let dt_days = src.delta_days(right_candidate);
-            local_edges.push(Edge::new(src, *right_candidate, *edge_cost, dt_days));
+            local_edges.push(Edge::new(src, right_candidate, *edge_cost, dt_days));
         }
     }
 

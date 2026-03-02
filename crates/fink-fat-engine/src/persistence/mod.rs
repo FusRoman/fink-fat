@@ -185,8 +185,8 @@ impl PersistenceManager {
             Some(w) => manifest
                 .nights
                 .iter()
+                .filter(|&e| e.night_id >= w.start() && e.night_id <= w.end())
                 .cloned()
-                .filter(|e| e.night_id >= w.start() && e.night_id <= w.end())
                 .collect(),
         };
 
@@ -216,7 +216,7 @@ impl PersistenceManager {
             window,
             alert_store,
             seed_store,
-            graph: graph,
+            graph,
             track_hypotheses: HypothesisSet::new(),
             orbit_results: FullOrbitResult::default(),
         })
@@ -299,7 +299,7 @@ impl PersistenceManager {
             }
 
             // Delete alerts file (best-effort)
-            let ap = self.layout.resolve_relative(&e.alerts_rel_path());
+            let ap = self.layout.resolve_relative(e.alerts_rel_path());
             match fs::remove_file(ap.as_std_path()) {
                 Ok(()) => deleted += 1,
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -307,7 +307,7 @@ impl PersistenceManager {
             }
 
             // Delete seeds file (best-effort)
-            let sp = self.layout.resolve_relative(&e.seeds_rel_path());
+            let sp = self.layout.resolve_relative(e.seeds_rel_path());
             match fs::remove_file(sp.as_std_path()) {
                 Ok(()) => deleted += 1,
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}

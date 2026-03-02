@@ -120,7 +120,7 @@ pub type Pairs<'alert_lf> = Vec<Pair<'alert_lf>>;
 /// The vector is:
 /// - sorted (`sort_unstable`) and
 /// - deduplicated (`dedup`)
-/// to ensure deterministic behavior and to avoid redundant scans.
+///   to ensure deterministic behavior and to avoid redundant scans.
 #[inline]
 fn cached_spatial_neighbors<'cache, Bs: SpatialBinner>(
     cache: &'cache mut AHashMap<SpatialKey, Vec<SpatialKey>>,

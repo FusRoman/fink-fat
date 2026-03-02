@@ -30,6 +30,12 @@ pub struct AlertLinkageDAG {
     pending_ops: Vec<EdgeOp>,
 }
 
+impl Default for AlertLinkageDAG {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AlertLinkageDAG {
     pub fn new() -> Self {
         Self {
@@ -86,6 +92,7 @@ impl AlertLinkageDAG {
         self.pending_ops.len()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn add_inter_night_edges<B: SpatialBinner>(
         &mut self,
         left_nodes: &[SeedNode],

@@ -112,6 +112,12 @@ pub struct AlertStore {
     pub(self) id_to_location: AHashMap<DiaSourceId, (NightId, usize)>,
 }
 
+impl Default for AlertStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AlertStore {
     /// Create a new empty `AlertStore`.
     ///
@@ -266,10 +272,10 @@ impl AlertStore {
     /// Notes
     /// -----
     /// - Return the first alert's `mjd_tt` of the night only if the alerts are sorted by time
-    ///     (e.g., after calling `sort_each_night_and_rekey`).
+    ///   (e.g., after calling `sort_each_night_and_rekey`).
     /// - Should be the case if the alerts have been
-    ///     ingested using the [`crate::pipeline::stages::PipelineStage::IngestNights`] stage,
-    ///     which calls `sort_each_night_and_rekey` after loading.
+    ///   ingested using the [`crate::pipeline::stages::PipelineStage::IngestNights`] stage,
+    ///   which calls `sort_each_night_and_rekey` after loading.
     pub fn night_t0(&self, night_id: &NightId) -> Option<MJDTT> {
         self.alerts_by_night
             .get(night_id)

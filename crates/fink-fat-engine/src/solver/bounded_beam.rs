@@ -248,7 +248,7 @@ impl BoundedBeamSolver {
     }
 }
 
-impl<'edge_lf, 'seed_lf, 'alert_lf> Solver<'edge_lf, 'seed_lf> for BoundedBeamSolver {
+impl<'edge_lf, 'seed_lf> Solver<'edge_lf, 'seed_lf> for BoundedBeamSolver {
     /// Stable solver name for logs and metrics.
     fn name(&self) -> &'static str {
         "bounded_beam"
@@ -451,7 +451,7 @@ fn build_solver_adjacency<'edge_lf, 'seed_lf>(
 /// -----
 /// - Root states have `parent = None` and `in_edge = None`.
 /// - `total_cost = 0.0` and `n_edges = 0` for roots.
-fn init_beam_states<'edge_lf, 'seed_lf, 'alert_lf>(
+fn init_beam_states<'edge_lf, 'seed_lf>(
     sources: &[usize],
     component_nodes: &[&'seed_lf SeedNode],
 ) -> (Vec<State<'edge_lf>>, Vec<usize>) {
@@ -529,10 +529,11 @@ fn is_sink<'edge_lf>(out: &Adjacency<'edge_lf>, u: usize) -> bool {
 /// - `cfg.max_tracks` (global output cap),
 /// - `cfg.max_tracks_per_source` (per-source cap),
 /// - `cfg.min_nodes` (minimum track length in nodes).
-fn expand_beam<'edge_lf, 'seed_lf>(
+#[allow(clippy::too_many_arguments)]
+fn expand_beam<'edge_lf>(
     cfg: &BoundedBeamConfig,
     out: &Adjacency<'edge_lf>,
-    component_nodes: &[&'seed_lf SeedNode],
+    component_nodes: &[&SeedNode],
     states: &mut Vec<State<'edge_lf>>,
     beam: &[usize],
     terminal_states: &mut Vec<usize>,
@@ -686,10 +687,7 @@ fn reconstruct_track<'edge_lf, 'seed_lf>(
 /// -----
 /// - `edges.len().max(1)` prevents division by zero for degenerate tracks.
 /// - Costs are expected to be finite and non-NaN.
-fn sort_and_truncate_tracks<'edge_lf, 'seed_lf>(
-    cfg: &BoundedBeamConfig,
-    tracks: &mut AHashMap<u32, TrackHypothesis>,
-) {
+fn sort_and_truncate_tracks(cfg: &BoundedBeamConfig, tracks: &mut AHashMap<u32, TrackHypothesis>) {
     // Rien à faire si déjà <= max_tracks
     if tracks.len() <= cfg.max_tracks {
         return;
@@ -776,11 +774,11 @@ fn sort_and_truncate_tracks<'edge_lf, 'seed_lf>(
 /// -----
 /// - `diag.n_candidates` counts edges *seen* before pruning.
 /// - `cfg.max_out_per_node` pruning is applied here so it can be tuned per solver.
-fn enumerate_beam_tracks_from_component_view<'edge_lf, 'seed_lf>(
+fn enumerate_beam_tracks_from_component_view(
     cfg: &BoundedBeamConfig,
     _graph: &AlertLinkageDAG,
-    component_nodes: &[&'seed_lf SeedNode],
-    component_out_edges: &[Vec<&'edge_lf Edge>],
+    component_nodes: &[&SeedNode],
+    component_out_edges: &[Vec<&Edge>],
     sources_local: &[LocalIdx],
     diag: &mut SolverDiagnostics,
 ) -> AHashMap<u32, TrackHypothesis> {

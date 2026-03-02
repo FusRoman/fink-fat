@@ -15,7 +15,7 @@
 //! - easy to *identify*,
 //! - safe to *validate*,
 //! - and robust to *schema evolution*,
-//! every payload is wrapped in a versioned envelope that contains:
+//!   every payload is wrapped in a versioned envelope that contains:
 //!
 //! - a **magic signature** ([`DISK_MAGIC`]) to detect wrong file types early,
 //! - a **schema version** (`schema_version`) to gate compatibility,
@@ -66,7 +66,7 @@
 //! on the same filesystem. Readers will observe either:
 //! - the old complete file, or
 //! - the new complete file,
-//! but never a truncated intermediate state.
+//!   but never a truncated intermediate state.
 //!
 //! Notes
 //! -----

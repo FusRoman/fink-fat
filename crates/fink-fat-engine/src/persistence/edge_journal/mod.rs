@@ -162,10 +162,10 @@ impl EdgeJournalStore {
         // 2) Apply deltas in chronological order.
         //    (manifest.edge_journal.deltas is already sorted by night_id)
         for d in &manifest.edge_journal.deltas {
-            if let Some(w) = window {
-                if !w.contains(d.night_id) {
-                    continue;
-                }
+            if let Some(w) = window
+                && !w.contains(d.night_id)
+            {
+                continue;
             }
 
             let path = self.layout.resolve_relative(d.delta_rel_path());
