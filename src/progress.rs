@@ -1,7 +1,7 @@
 //! indicatif-backed implementation of [`PipelineHooks`] and [`StageProgress`].
 //!
 //! Enable it at the CLI level with `--progress`.  When the flag is absent the
-//! pipeline falls back to [`NoopHooks`] with zero overhead.
+//! pipeline falls back to [`fink_fat_engine::pipeline::hooks::NoopHooks`] with zero overhead.
 
 use std::sync::Arc;
 
