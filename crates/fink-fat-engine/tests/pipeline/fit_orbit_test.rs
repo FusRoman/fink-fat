@@ -27,8 +27,8 @@ use fink_fat_engine::{
 
 use super::{
     NoopHooks, PipelineTestResult, THROUGH_ORBIT, THROUGH_SOLVE, engine_config_with_edges,
-    match_truth_to_hypotheses, run_incremental_pipeline, run_pipeline,
-    test_edge_models, test_solver_manager, test_solver_manager_with_min_nodes,
+    match_truth_to_hypotheses, run_incremental_pipeline, run_pipeline, test_edge_models,
+    test_solver_manager, test_solver_manager_with_min_nodes,
 };
 use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
 

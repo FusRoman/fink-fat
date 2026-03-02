@@ -37,8 +37,8 @@ use fink_fat_engine::{
 use super::{
     FULL_WITH_PERSISTENCE, NoopHooks, PipelineTestResult, collect_dia_source_ids,
     collect_edge_endpoints, collect_night_ids, collect_seed_keys, dummy_input_uri,
-    engine_config_with_compaction, engine_config_with_edges, run_pipeline_with,
-    test_edge_models, test_solver_manager, write_alerts_parquet,
+    engine_config_with_compaction, engine_config_with_edges, run_pipeline_with, test_edge_models,
+    test_solver_manager, write_alerts_parquet,
 };
 use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
 

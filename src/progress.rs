@@ -70,7 +70,8 @@ impl StageProgress for IndicatifProgress {
     }
 
     fn finish(&self) {
-        self.pb.finish_with_message(format!("{} ✔", self.pb.message()));
+        self.pb
+            .finish_with_message(format!("{} ✔", self.pb.message()));
     }
 
     fn child(&self, meta: StageMeta) -> Arc<dyn StageProgress> {

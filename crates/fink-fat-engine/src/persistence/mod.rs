@@ -122,8 +122,10 @@ impl PersistenceManager {
         seeds: &[SeedNode],
         compression: Compression,
     ) -> Result<(), PersistenceIoError> {
-        let abs_alert_path = alerts.save_alerts_night(&self.layout, manifest, night_id, compression)?;
-        let abs_seed_path = seeds.save_seeds_night(&self.layout, manifest, night_id, compression)?;
+        let abs_alert_path =
+            alerts.save_alerts_night(&self.layout, manifest, night_id, compression)?;
+        let abs_seed_path =
+            seeds.save_seeds_night(&self.layout, manifest, night_id, compression)?;
 
         let entry = NightManifestEntry::new(
             night_id,
@@ -173,10 +175,7 @@ impl PersistenceManager {
     /// - converts `SeedNodeOwned` -> `SeedNode<'alert>` using the `AlertStore`,
     /// - loads edges via snapshot + delta journal and converts them to borrowed
     ///   edges using the `SeedStore`.
-    pub fn load_runtime_state(
-        &self,
-        cfg: &EngineConfig,
-    ) -> Result<RuntimeState, EngineError> {
+    pub fn load_runtime_state(&self, cfg: &EngineConfig) -> Result<RuntimeState, EngineError> {
         let manifest = self.load_or_init_manifest()?;
         let window = self.compute_window(&manifest, cfg)?;
 

@@ -7,15 +7,19 @@
 use tempfile::TempDir;
 
 use fink_fat_engine::{
-    engine_config::pipeline_policy::PersistPolicy, error::EngineError, night_id::{NightId, PairingMode}, persistence::{PersistenceManager, runtime_state::RuntimeState}, pipeline::{
+    engine_config::pipeline_policy::PersistPolicy,
+    error::EngineError,
+    night_id::{NightId, PairingMode},
+    persistence::{PersistenceManager, runtime_state::RuntimeState},
+    pipeline::{
         PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner,
         stages::{PipelineStage, alert_inputs::input_uri::InputUri},
-    }
+    },
 };
 
 use super::{
-    INGEST_ONLY, NoopHooks, PipelineTestResult, engine_config_minimal,
-    run_pipeline_minimal, test_edge_models,
+    INGEST_ONLY, NoopHooks, PipelineTestResult, engine_config_minimal, run_pipeline_minimal,
+    test_edge_models,
 };
 use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
 

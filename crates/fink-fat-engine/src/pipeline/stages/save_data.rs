@@ -1,11 +1,13 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
-    engine_config::pipeline_policy::PersistPolicy, error::EngineError, pipeline::{
+    engine_config::pipeline_policy::PersistPolicy,
+    error::EngineError,
+    pipeline::{
         PipelineContext,
         hooks::{PipelineHooks, StageMeta, StageReport},
         stages::{PipelineStage, run_stage},
-    }
+    },
 };
 
 /// Return the current Unix timestamp (seconds).

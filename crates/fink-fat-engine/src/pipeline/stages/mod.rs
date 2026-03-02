@@ -61,7 +61,9 @@ pub(super) fn run_stage(
     stage: PipelineStage,
     hooks: &dyn PipelineHooks,
     meta: StageMeta,
-    stage_run: impl FnOnce(&dyn crate::pipeline::hooks::StageProgress) -> Result<Vec<(&'static str, u64)>, EngineError>,
+    stage_run: impl FnOnce(
+        &dyn crate::pipeline::hooks::StageProgress,
+    ) -> Result<Vec<(&'static str, u64)>, EngineError>,
 ) -> Result<StageReport, EngineError> {
     let sink = hooks.on_stage_start(stage, meta);
 

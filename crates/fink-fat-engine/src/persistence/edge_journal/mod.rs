@@ -239,7 +239,12 @@ impl EdgeJournalStore {
             )));
         };
 
-        let env = DiskEnvelope::new(snapshot, EDGE_JOURNAL_SCHEMA_VERSION, created_unix_s, compression);
+        let env = DiskEnvelope::new(
+            snapshot,
+            EDGE_JOURNAL_SCHEMA_VERSION,
+            created_unix_s,
+            compression,
+        );
         env.save_enveloped(&path)?;
 
         // Update manifest snapshot metadata and drop old deltas.

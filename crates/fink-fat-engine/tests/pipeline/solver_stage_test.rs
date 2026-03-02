@@ -17,17 +17,20 @@ use std::collections::{HashMap, HashSet};
 use tempfile::TempDir;
 
 use fink_fat_engine::{
-    Alert, engine_config::pipeline_policy::PersistPolicy, night_id::NightId, persistence::{PersistenceManager, runtime_state::RuntimeState}, pipeline::{
-        PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner,
-        stages::PipelineStage,
-    }, trajectory::TrackHypothesis
+    Alert,
+    engine_config::pipeline_policy::PersistPolicy,
+    night_id::NightId,
+    persistence::{PersistenceManager, runtime_state::RuntimeState},
+    pipeline::{
+        PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner, stages::PipelineStage,
+    },
+    trajectory::TrackHypothesis,
 };
 
 use super::{
     NoopHooks, PipelineTestResult, THROUGH_SOLVE, engine_config_with_edges,
-    match_truth_to_hypotheses, run_incremental_pipeline, run_pipeline,
-    test_edge_models, test_solver_manager, test_solver_manager_with_min_nodes,
-    write_alerts_parquet,
+    match_truth_to_hypotheses, run_incremental_pipeline, run_pipeline, test_edge_models,
+    test_solver_manager, test_solver_manager_with_min_nodes, write_alerts_parquet,
 };
 use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
 

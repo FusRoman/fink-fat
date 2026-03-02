@@ -120,7 +120,7 @@ impl Compression {
     pub(crate) fn as_byte(self) -> u8 {
         match self {
             Compression::None => 0,
-            Compression::Lz4  => 1,
+            Compression::Lz4 => 1,
             Compression::Zstd => 2,
             Compression::Gzip => 3,
         }
@@ -220,8 +220,7 @@ impl Compression {
         }
 
         let algo = Compression::from_byte(framed[0])?;
-        let original_len =
-            u64::from_le_bytes(framed[1..9].try_into().unwrap()) as usize;
+        let original_len = u64::from_le_bytes(framed[1..9].try_into().unwrap()) as usize;
         let payload = &framed[FRAME_HEADER_LEN..];
 
         let out: Vec<u8> = match algo {
@@ -260,7 +259,8 @@ mod compression_tests {
         let framed = algo.compress(data).expect("compress must succeed");
         let got = Compression::decompress(&framed).expect("decompress must succeed");
         assert_eq!(
-            got, data,
+            got,
+            data,
             "roundtrip failed for {:?} with {} bytes",
             algo,
             data.len()
@@ -269,7 +269,12 @@ mod compression_tests {
 
     #[test]
     fn roundtrip_empty_all_algorithms() {
-        for algo in [Compression::None, Compression::Lz4, Compression::Zstd, Compression::Gzip] {
+        for algo in [
+            Compression::None,
+            Compression::Lz4,
+            Compression::Zstd,
+            Compression::Gzip,
+        ] {
             roundtrip(algo, b"");
         }
     }
@@ -277,17 +282,25 @@ mod compression_tests {
     #[test]
     fn roundtrip_small_payload_all_algorithms() {
         let data = b"Hello, Fink-FAT compression!";
-        for algo in [Compression::None, Compression::Lz4, Compression::Zstd, Compression::Gzip] {
+        for algo in [
+            Compression::None,
+            Compression::Lz4,
+            Compression::Zstd,
+            Compression::Gzip,
+        ] {
             roundtrip(algo, data);
         }
     }
 
     #[test]
     fn roundtrip_large_repetitive_payload() {
-        let data: Vec<u8> = (0..100_000_u64)
-            .flat_map(|i| i.to_le_bytes())
-            .collect();
-        for algo in [Compression::None, Compression::Lz4, Compression::Zstd, Compression::Gzip] {
+        let data: Vec<u8> = (0..100_000_u64).flat_map(|i| i.to_le_bytes()).collect();
+        for algo in [
+            Compression::None,
+            Compression::Lz4,
+            Compression::Zstd,
+            Compression::Gzip,
+        ] {
             roundtrip(algo, &data);
         }
     }
@@ -336,7 +349,7 @@ mod compression_tests {
     fn frame_header_algorithm_byte_matches_variant() {
         for (algo, expected_byte) in [
             (Compression::None, 0u8),
-            (Compression::Lz4,  1u8),
+            (Compression::Lz4, 1u8),
             (Compression::Zstd, 2u8),
             (Compression::Gzip, 3u8),
         ] {
@@ -351,7 +364,12 @@ mod compression_tests {
     #[test]
     fn frame_header_original_len_is_correct() {
         let data = vec![7u8; 1234];
-        for algo in [Compression::None, Compression::Lz4, Compression::Zstd, Compression::Gzip] {
+        for algo in [
+            Compression::None,
+            Compression::Lz4,
+            Compression::Zstd,
+            Compression::Gzip,
+        ] {
             let framed = algo.compress(&data).unwrap();
             let stored_len = u64::from_le_bytes(framed[1..9].try_into().unwrap());
             assert_eq!(stored_len, 1234, "{algo:?}: stored original_len mismatch");

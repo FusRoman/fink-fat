@@ -554,7 +554,12 @@ impl Manifest {
     /// * `Ok(())` on success.
     /// * `Err(PersistenceIoError)` if serialization or the write fails.
     pub fn save(&self, path: &Utf8Path) -> Result<(), PersistenceIoError> {
-        let env = DiskEnvelope::new(self.clone(), STATE_SCHEMA_VERSION, self.created_unix_s, Compression::None);
+        let env = DiskEnvelope::new(
+            self.clone(),
+            STATE_SCHEMA_VERSION,
+            self.created_unix_s,
+            Compression::None,
+        );
         env.save_enveloped_json(path)
     }
 
@@ -652,10 +657,8 @@ mod tests {
             Some(30),
         );
         m.edge_journal.upsert_delta(delta);
-        m.edge_journal.set_snapshot(
-            Utf8PathBuf::from("graph/snapshot.bin"),
-            nid(100),
-        );
+        m.edge_journal
+            .set_snapshot(Utf8PathBuf::from("graph/snapshot.bin"), nid(100));
 
         m.model = Some(ModelManifestEntry {
             model_path: "models/edge_model.onnx".to_string(),
@@ -726,11 +729,8 @@ mod tests {
 
     #[test]
     fn delta_entry_stores_relpath_and_ops() {
-        let entry = EdgeDeltaEntry::new(
-            nid(7),
-            Utf8PathBuf::from("graph/delta-nid=7.bin"),
-            Some(99),
-        );
+        let entry =
+            EdgeDeltaEntry::new(nid(7), Utf8PathBuf::from("graph/delta-nid=7.bin"), Some(99));
 
         assert_eq!(entry.night_id, nid(7));
         assert_eq!(
@@ -745,11 +745,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let layout = layout_in(&dir);
 
-        let entry = EdgeDeltaEntry::new(
-            nid(99),
-            Utf8PathBuf::from("graph/delta-nid=99.bin"),
-            None,
-        );
+        let entry = EdgeDeltaEntry::new(nid(99), Utf8PathBuf::from("graph/delta-nid=99.bin"), None);
 
         let expected = layout.root().join("graph/delta-nid=99.bin");
         assert_eq!(entry.delta_abs_path(&layout), expected);
@@ -838,9 +834,21 @@ mod tests {
     fn journal_upsert_delta_appends_and_keeps_sorted() {
         let mut j = EdgeJournalManifest::new();
 
-        j.upsert_delta(EdgeDeltaEntry::new(nid(3), Utf8PathBuf::from("g/d3.bin"), None));
-        j.upsert_delta(EdgeDeltaEntry::new(nid(1), Utf8PathBuf::from("g/d1.bin"), None));
-        j.upsert_delta(EdgeDeltaEntry::new(nid(2), Utf8PathBuf::from("g/d2.bin"), None));
+        j.upsert_delta(EdgeDeltaEntry::new(
+            nid(3),
+            Utf8PathBuf::from("g/d3.bin"),
+            None,
+        ));
+        j.upsert_delta(EdgeDeltaEntry::new(
+            nid(1),
+            Utf8PathBuf::from("g/d1.bin"),
+            None,
+        ));
+        j.upsert_delta(EdgeDeltaEntry::new(
+            nid(2),
+            Utf8PathBuf::from("g/d2.bin"),
+            None,
+        ));
 
         let ids: Vec<NightId> = j.deltas.iter().map(|e| e.night_id).collect();
         assert_eq!(ids, vec![nid(1), nid(2), nid(3)]);
@@ -850,8 +858,16 @@ mod tests {
     fn journal_upsert_delta_replaces_same_night() {
         let mut j = EdgeJournalManifest::new();
 
-        j.upsert_delta(EdgeDeltaEntry::new(nid(5), Utf8PathBuf::from("old.bin"), Some(10)));
-        j.upsert_delta(EdgeDeltaEntry::new(nid(5), Utf8PathBuf::from("new.bin"), Some(99)));
+        j.upsert_delta(EdgeDeltaEntry::new(
+            nid(5),
+            Utf8PathBuf::from("old.bin"),
+            Some(10),
+        ));
+        j.upsert_delta(EdgeDeltaEntry::new(
+            nid(5),
+            Utf8PathBuf::from("new.bin"),
+            Some(99),
+        ));
 
         assert_eq!(j.deltas.len(), 1);
         assert_eq!(j.deltas[0].delta_rel_path(), Utf8Path::new("new.bin"));
@@ -915,9 +931,18 @@ mod tests {
     fn manifest_new_has_correct_schema_versions() {
         let m = Manifest::new();
 
-        assert_eq!(m.alert_store_schema_version, crate::persistence::ALERT_STORE_SCHEMA_VERSION);
-        assert_eq!(m.seed_store_schema_version, crate::persistence::SEED_STORE_SCHEMA_VERSION);
-        assert_eq!(m.graph_schema_version, crate::persistence::GRAPH_SCHEMA_VERSION);
+        assert_eq!(
+            m.alert_store_schema_version,
+            crate::persistence::ALERT_STORE_SCHEMA_VERSION
+        );
+        assert_eq!(
+            m.seed_store_schema_version,
+            crate::persistence::SEED_STORE_SCHEMA_VERSION
+        );
+        assert_eq!(
+            m.graph_schema_version,
+            crate::persistence::GRAPH_SCHEMA_VERSION
+        );
         assert_eq!(m.state_schema_version, STATE_SCHEMA_VERSION);
     }
 
@@ -1086,8 +1111,8 @@ mod tests {
     #[test]
     fn save_and_load_roundtrip_empty_manifest() {
         let dir = tempdir().unwrap();
-        let path = Utf8PathBuf::from_path_buf(dir.path().join("manifest.json"))
-            .expect("UTF-8 path");
+        let path =
+            Utf8PathBuf::from_path_buf(dir.path().join("manifest.json")).expect("UTF-8 path");
 
         let m = Manifest::new();
         m.save(&path).unwrap();
@@ -1107,8 +1132,8 @@ mod tests {
     #[test]
     fn save_and_load_roundtrip_populated_manifest() {
         let dir = tempdir().unwrap();
-        let path = Utf8PathBuf::from_path_buf(dir.path().join("manifest.json"))
-            .expect("UTF-8 path");
+        let path =
+            Utf8PathBuf::from_path_buf(dir.path().join("manifest.json")).expect("UTF-8 path");
 
         let m = sample_manifest();
         m.save(&path).unwrap();
@@ -1142,15 +1167,15 @@ mod tests {
     #[test]
     fn save_produces_valid_json_file() {
         let dir = tempdir().unwrap();
-        let path = Utf8PathBuf::from_path_buf(dir.path().join("manifest.json"))
-            .expect("UTF-8 path");
+        let path =
+            Utf8PathBuf::from_path_buf(dir.path().join("manifest.json")).expect("UTF-8 path");
 
         sample_manifest().save(&path).unwrap();
 
         let content = std::fs::read_to_string(path.as_std_path()).unwrap();
         // The file must parse as valid JSON and contain the magic string.
-        let v: serde_json::Value = serde_json::from_str(&content)
-            .expect("saved manifest must be valid JSON");
+        let v: serde_json::Value =
+            serde_json::from_str(&content).expect("saved manifest must be valid JSON");
         assert_eq!(v["magic"].as_str().unwrap(), JSON_MAGIC);
         assert_eq!(
             v["schema_version"].as_u64().unwrap(),
@@ -1161,8 +1186,8 @@ mod tests {
     #[test]
     fn save_creates_parent_directories() {
         let dir = tempdir().unwrap();
-        let path = Utf8PathBuf::from_path_buf(dir.path().join("a/b/c/manifest.json"))
-            .expect("UTF-8 path");
+        let path =
+            Utf8PathBuf::from_path_buf(dir.path().join("a/b/c/manifest.json")).expect("UTF-8 path");
 
         Manifest::new().save(&path).unwrap();
 
@@ -1172,8 +1197,8 @@ mod tests {
     #[test]
     fn save_is_atomic_no_tmp_file_remains() {
         let dir = tempdir().unwrap();
-        let path = Utf8PathBuf::from_path_buf(dir.path().join("manifest.json"))
-            .expect("UTF-8 path");
+        let path =
+            Utf8PathBuf::from_path_buf(dir.path().join("manifest.json")).expect("UTF-8 path");
         let tmp =
             Utf8PathBuf::from_path_buf(dir.path().join("manifest.json.tmp")).expect("UTF-8 path");
 
@@ -1186,8 +1211,8 @@ mod tests {
     #[test]
     fn save_overwrites_existing_file() {
         let dir = tempdir().unwrap();
-        let path = Utf8PathBuf::from_path_buf(dir.path().join("manifest.json"))
-            .expect("UTF-8 path");
+        let path =
+            Utf8PathBuf::from_path_buf(dir.path().join("manifest.json")).expect("UTF-8 path");
 
         let mut m1 = Manifest::new();
         m1.upsert_night(NightManifestEntry::new(
@@ -1209,8 +1234,8 @@ mod tests {
     #[test]
     fn load_refreshes_created_unix_s() {
         let dir = tempdir().unwrap();
-        let path = Utf8PathBuf::from_path_buf(dir.path().join("manifest.json"))
-            .expect("UTF-8 path");
+        let path =
+            Utf8PathBuf::from_path_buf(dir.path().join("manifest.json")).expect("UTF-8 path");
 
         // Force a very old created_unix_s on disk via the JSON directly.
         let mut m = Manifest::new();
@@ -1238,8 +1263,8 @@ mod tests {
     #[test]
     fn load_fails_on_wrong_schema_version() {
         let dir = tempdir().unwrap();
-        let path = Utf8PathBuf::from_path_buf(dir.path().join("manifest.json"))
-            .expect("UTF-8 path");
+        let path =
+            Utf8PathBuf::from_path_buf(dir.path().join("manifest.json")).expect("UTF-8 path");
 
         // Write a JSON envelope with an unexpected schema_version.
         let wrong_version = STATE_SCHEMA_VERSION + 1;
@@ -1249,7 +1274,11 @@ mod tests {
             "created_unix_s": 0_i64,
             "payload": Manifest::new()
         });
-        std::fs::write(path.as_std_path(), serde_json::to_string_pretty(&json).unwrap()).unwrap();
+        std::fs::write(
+            path.as_std_path(),
+            serde_json::to_string_pretty(&json).unwrap(),
+        )
+        .unwrap();
 
         let err = Manifest::load(&path).unwrap_err();
         assert!(
@@ -1264,8 +1293,8 @@ mod tests {
     #[test]
     fn load_fails_on_wrong_magic() {
         let dir = tempdir().unwrap();
-        let path = Utf8PathBuf::from_path_buf(dir.path().join("manifest.json"))
-            .expect("UTF-8 path");
+        let path =
+            Utf8PathBuf::from_path_buf(dir.path().join("manifest.json")).expect("UTF-8 path");
 
         let json = serde_json::json!({
             "magic": "WRONGMAGIC",
@@ -1273,7 +1302,11 @@ mod tests {
             "created_unix_s": 0_i64,
             "payload": Manifest::new()
         });
-        std::fs::write(path.as_std_path(), serde_json::to_string_pretty(&json).unwrap()).unwrap();
+        std::fs::write(
+            path.as_std_path(),
+            serde_json::to_string_pretty(&json).unwrap(),
+        )
+        .unwrap();
 
         let err = Manifest::load(&path).unwrap_err();
         assert!(
@@ -1288,8 +1321,8 @@ mod tests {
     #[test]
     fn load_fails_on_corrupt_bytes() {
         let dir = tempdir().unwrap();
-        let path = Utf8PathBuf::from_path_buf(dir.path().join("manifest.json"))
-            .expect("UTF-8 path");
+        let path =
+            Utf8PathBuf::from_path_buf(dir.path().join("manifest.json")).expect("UTF-8 path");
 
         std::fs::write(path.as_std_path(), b"this is not json at all").unwrap();
 
@@ -1303,8 +1336,8 @@ mod tests {
     #[test]
     fn load_fails_on_missing_file() {
         let dir = tempdir().unwrap();
-        let path = Utf8PathBuf::from_path_buf(dir.path().join("does_not_exist.json"))
-            .expect("UTF-8 path");
+        let path =
+            Utf8PathBuf::from_path_buf(dir.path().join("does_not_exist.json")).expect("UTF-8 path");
 
         let err = Manifest::load(&path).unwrap_err();
         assert!(

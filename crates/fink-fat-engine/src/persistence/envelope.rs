@@ -432,8 +432,8 @@ impl<T: DeserializeOwned + Serialize> DiskEnvelope<T> {
             payload: &self.payload,
         };
 
-        let json =
-            serde_json::to_string_pretty(&helper).map_err(|e| PersistenceIoError::Json(e.to_string()))?;
+        let json = serde_json::to_string_pretty(&helper)
+            .map_err(|e| PersistenceIoError::Json(e.to_string()))?;
         atomic_write_utf8(path, json.as_bytes())?;
         Ok(())
     }
@@ -476,8 +476,8 @@ impl<T: DeserializeOwned + Serialize> DiskEnvelope<T> {
         }
 
         let bytes = read_all(path)?;
-        let helper: JsonEnvelopeOwned<T> = serde_json::from_slice(&bytes)
-            .map_err(|e| PersistenceIoError::Json(e.to_string()))?;
+        let helper: JsonEnvelopeOwned<T> =
+            serde_json::from_slice(&bytes).map_err(|e| PersistenceIoError::Json(e.to_string()))?;
 
         if helper.magic != JSON_MAGIC {
             return Err(PersistenceIoError::Envelope(EnvelopeError::InvalidMagic));
@@ -1080,7 +1080,7 @@ mod envelope_tests {
 
         for (algo, expected_byte) in [
             (C::None, 0u8),
-            (C::Lz4,  1u8),
+            (C::Lz4, 1u8),
             (C::Zstd, 2u8),
             (C::Gzip, 3u8),
         ] {
@@ -1091,10 +1091,7 @@ mod envelope_tests {
             env.save_enveloped(&path).unwrap();
 
             let bytes = read_bytes(&path);
-            assert!(
-                !bytes.is_empty(),
-                "{algo:?}: file must not be empty"
-            );
+            assert!(!bytes.is_empty(), "{algo:?}: file must not be empty");
             assert_eq!(
                 bytes[0], expected_byte,
                 "{algo:?}: first on-disk byte should be the algorithm discriminant {expected_byte}"
@@ -1148,7 +1145,12 @@ mod envelope_tests {
 
         let dir = tempdir().unwrap();
 
-        for algo in [Compression::None, Compression::Lz4, Compression::Zstd, Compression::Gzip] {
+        for algo in [
+            Compression::None,
+            Compression::Lz4,
+            Compression::Zstd,
+            Compression::Gzip,
+        ] {
             let path = tmp_path_for(&dir, &format!("agnostic_{algo:?}.bin"));
             DiskEnvelope::new(payload.clone(), 2, 0, algo)
                 .save_enveloped(&path)
@@ -1171,7 +1173,12 @@ mod envelope_tests {
 
         let dir = tempdir().unwrap();
 
-        for algo in [Compression::None, Compression::Lz4, Compression::Zstd, Compression::Gzip] {
+        for algo in [
+            Compression::None,
+            Compression::Lz4,
+            Compression::Zstd,
+            Compression::Gzip,
+        ] {
             let path = tmp_path_for(&dir, &format!("field_{algo:?}.bin"));
             let env = DiskEnvelope::new(payload.clone(), 1, 42, algo);
             env.save_enveloped(&path).unwrap();
