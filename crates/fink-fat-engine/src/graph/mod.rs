@@ -7,7 +7,7 @@ use crate::{
     engine_config::edge_config::EdgeConfig,
     graph::edge::{Edge, EdgeKey, edge_prediction::EdgeRankingModelPool, error::EdgeBuilderError},
     persistence::edge_journal::edge_op::EdgeOp,
-    pipeline::progress_sink::ProgressSink,
+    pipeline::hooks::StageProgress,
     seeding::{SeedKey, SeedNode},
     spacetime_bucket::spatial_binner::SpatialBinner,
 };
@@ -94,7 +94,7 @@ impl AlertLinkageDAG {
         spatial_binner: &B,
         time_binner_width: MJDTT,
         model_pool: Option<&EdgeRankingModelPool>,
-        progress_sink: &dyn ProgressSink,
+        progress_sink: &dyn StageProgress,
     ) -> Result<(), EdgeBuilderError> {
         assert!(!left_nodes.is_empty(), "left_nodes must not be empty");
         assert!(!right_nodes.is_empty(), "right_nodes must not be empty");

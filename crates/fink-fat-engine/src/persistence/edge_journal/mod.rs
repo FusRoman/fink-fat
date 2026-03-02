@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
 use crate::graph::edge::{Edge, EdgeKey};
 use crate::night_id::{NightId, PairingMode};
 use crate::persistence::EDGE_JOURNAL_SCHEMA_VERSION;
+use crate::persistence::compression::Compression;
 use crate::persistence::edge_journal::delta_chunk::EdgeDeltaChunk;
 use crate::persistence::edge_journal::edge_op::EdgeOp;
 use crate::persistence::envelope::DiskEnvelope;
@@ -98,6 +99,7 @@ impl EdgeJournalStore {
         night_id: NightId,
         created_unix_s: i64,
         ops: Vec<EdgeOp>,
+        compression: Compression,
     ) -> Result<(), PersistenceIoError> {
         let path = self.layout.graph_delta_night_path(night_id);
         let Some(rel) = self.layout.to_relative(&path) else {
@@ -110,7 +112,7 @@ impl EdgeJournalStore {
         };
 
         let len_ops = ops.len() as u64;
-        EdgeDeltaChunk::write(&path, night_id, created_unix_s, ops)?;
+        EdgeDeltaChunk::write(&path, night_id, created_unix_s, ops, compression)?;
 
         // Update manifest
         manifest
@@ -216,6 +218,7 @@ impl EdgeJournalStore {
         checkpoint_night_id: NightId,
         created_unix_s: i64,
         window: Option<PairingMode>,
+        compression: Compression,
     ) -> Result<(), PersistenceIoError> {
         // Rebuild current edges (snapshot + deltas)
         let edges = self.load_edges(manifest, window)?;
@@ -236,7 +239,7 @@ impl EdgeJournalStore {
             )));
         };
 
-        let env = DiskEnvelope::new(snapshot, EDGE_JOURNAL_SCHEMA_VERSION, created_unix_s);
+        let env = DiskEnvelope::new(snapshot, EDGE_JOURNAL_SCHEMA_VERSION, created_unix_s, compression);
         env.save_enveloped(&path)?;
 
         // Update manifest snapshot metadata and drop old deltas.

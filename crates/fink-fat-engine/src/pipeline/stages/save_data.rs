@@ -1,13 +1,11 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
-    error::EngineError,
-    pipeline::{
-        PersistPolicy, PipelineContext,
+    engine_config::pipeline_policy::PersistPolicy, error::EngineError, pipeline::{
+        PipelineContext,
         hooks::{PipelineHooks, StageMeta, StageReport},
-        progress_sink::ProgressSink,
         stages::{PipelineStage, run_stage},
-    },
+    }
 };
 
 /// Return the current Unix timestamp (seconds).
@@ -21,7 +19,6 @@ fn now_unix_s() -> i64 {
 pub fn run(
     ctx: &mut PipelineContext<'_>,
     hooks: &dyn PipelineHooks,
-    stage_sink: &dyn ProgressSink,
 ) -> Result<StageReport, EngineError> {
     run_stage(
         PipelineStage::SavePersistedData,
@@ -30,10 +27,7 @@ pub fn run(
             label: PipelineStage::SavePersistedData.label().to_string(),
             total: Some(5),
         },
-        stage_sink,
         |stage_sink| {
-            stage_sink.set_total(5);
-
             let created_unix_s = now_unix_s();
             let persist_policy = ctx.plan.persist;
 
@@ -63,6 +57,7 @@ pub fn run(
                             created_unix_s,
                             alerts,
                             seeds,
+                            ctx.engine_config.binary_compression,
                         )?;
                         alerts_saved += alerts.len() as u64;
                     }

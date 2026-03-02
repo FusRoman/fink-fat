@@ -108,6 +108,7 @@ fn init_ort_once() {
 /// ----------
 /// * `model_path` – Path to the `.onnx` model file used for per-thread loading.
 /// * `models` – Thread-local storage holding an optional model for each thread.
+#[derive(Debug)]
 pub struct EdgeRankingModelPool {
     model_path: Utf8PathBuf,
     models: ThreadLocal<RefCell<Option<EdgeRankingModel>>>,
@@ -199,6 +200,7 @@ impl EdgeRankingModelPool {
 /// ----------
 /// * `session` – ORT session owning the loaded model and execution state.
 /// * `outputs` – Resolved output indices for fast extraction.
+#[derive(Debug)]
 pub struct EdgeRankingModel {
     session: Session,
     outputs: EdgeModelOutputs,

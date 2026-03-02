@@ -13,7 +13,6 @@ use crate::{
     pipeline::{
         PipelineContext,
         hooks::{PipelineHooks, StageMeta, StageReport},
-        progress_sink::ProgressSink,
     },
 };
 
@@ -58,19 +57,17 @@ impl Ord for PipelineStage {
     }
 }
 
-fn run_stage(
+pub(super) fn run_stage(
     stage: PipelineStage,
     hooks: &dyn PipelineHooks,
     meta: StageMeta,
-    progress: &dyn ProgressSink,
-    stage_run: impl FnOnce(&dyn ProgressSink) -> Result<Vec<(&'static str, u64)>, EngineError>,
+    stage_run: impl FnOnce(&dyn crate::pipeline::hooks::StageProgress) -> Result<Vec<(&'static str, u64)>, EngineError>,
 ) -> Result<StageReport, EngineError> {
-    hooks.on_stage_start(stage, meta.clone());
-    let stage_sink = progress.child(meta);
+    let sink = hooks.on_stage_start(stage, meta);
 
     let t0 = Instant::now();
-    let counters = stage_run(stage_sink.as_ref())?;
-    stage_sink.finish();
+    let counters = stage_run(sink.as_ref())?;
+    sink.finish();
 
     let report = StageReport {
         elapsed_ms: t0.elapsed().as_millis(),
@@ -81,20 +78,19 @@ fn run_stage(
 }
 
 impl PipelineStage {
-    pub fn run<'s, 'a>(
+    pub fn run(
         self,
         ctx: &mut PipelineContext<'_>,
         hooks: &dyn PipelineHooks,
-        stage_sink: &dyn ProgressSink,
     ) -> Result<StageReport, EngineError> {
         match self {
-            PipelineStage::IngestNights => alert_inputs::run(ctx, hooks, stage_sink),
-            PipelineStage::BuildSeeds => seed_builder::run(ctx, hooks, stage_sink),
-            PipelineStage::BuildEdges => edge_builder::run(ctx, hooks, stage_sink),
-            PipelineStage::Solve => solve_run::run(ctx, hooks, stage_sink),
-            PipelineStage::FitOrbit => fit_orbit::run(ctx, hooks, stage_sink),
-            PipelineStage::SavePersistedData => save_data::run(ctx, hooks, stage_sink),
-            PipelineStage::LoadPersistedData => load_data::run(ctx, hooks, stage_sink),
+            PipelineStage::IngestNights => alert_inputs::run(ctx, hooks),
+            PipelineStage::BuildSeeds => seed_builder::run(ctx, hooks),
+            PipelineStage::BuildEdges => edge_builder::run(ctx, hooks),
+            PipelineStage::Solve => solve_run::run(ctx, hooks),
+            PipelineStage::FitOrbit => fit_orbit::run(ctx, hooks),
+            PipelineStage::SavePersistedData => save_data::run(ctx, hooks),
+            PipelineStage::LoadPersistedData => load_data::run(ctx, hooks),
         }
     }
 

@@ -1,27 +1,15 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use crate::{
     error::EngineError,
     pipeline::{
         PipelineContext,
         hooks::{PipelineHooks, StageMeta, StageReport},
-        progress_sink::ProgressSink,
         stages::{PipelineStage, run_stage},
     },
 };
 
-/// Return the current Unix timestamp (seconds).
-fn now_unix_s() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
-}
-
 pub fn run(
     ctx: &mut PipelineContext<'_>,
     hooks: &dyn PipelineHooks,
-    stage_sink: &dyn ProgressSink,
 ) -> Result<StageReport, EngineError> {
     run_stage(
         PipelineStage::LoadPersistedData,
@@ -30,12 +18,7 @@ pub fn run(
             label: PipelineStage::LoadPersistedData.label().to_string(),
             total: Some(1),
         },
-        stage_sink,
         |stage_sink| {
-            stage_sink.set_total(1);
-
-            let created_unix_s = now_unix_s();
-
             // Delegate to PersistenceManager::load_runtime_state which:
             //   1. Loads/initializes the manifest.
             //   2. Computes the sliding window from engine config.
@@ -43,7 +26,7 @@ pub fn run(
             //   4. Replays the edge journal (snapshot + deltas) into a graph.
             let state = ctx
                 .persistence
-                .load_runtime_state(ctx.engine_config, created_unix_s)?;
+                .load_runtime_state(ctx.engine_config)?;
 
             let n_nights = state.alert_store.n_nights() as u64;
             let n_alerts = state.alert_store.n_alerts() as u64;

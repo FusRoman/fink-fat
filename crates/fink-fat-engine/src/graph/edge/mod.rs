@@ -153,7 +153,7 @@ use crate::{
         error::{EdgeBuilderError, EdgeModelError},
         ranking_topk::rank_topk_edges_for_left,
     },
-    pipeline::progress_sink::ProgressSink,
+    pipeline::hooks::StageProgress,
     seeding::{SeedKey, SeedNode, seed_spatial_index::SeedSpatialIndex},
     spacetime_bucket::{spatial_binner::SpatialBinner, uniform_time_binner::UniformTimeBinner},
 };
@@ -351,7 +351,7 @@ impl Edge {
         spatial_binner: &B,
         time_binner_width: MJDTT,
         model_pool: Option<&EdgeRankingModelPool>,
-        progress_sink: &dyn ProgressSink,
+        progress_sink: &dyn StageProgress,
     ) -> Result<Vec<Self>, EdgeBuilderError> {
         // Init: total work = number of left seeds (units = seeds processed)
         progress_sink.set_total(left.len() as u64);
@@ -566,7 +566,7 @@ fn build_edges_parallel(
     edge_config: &EdgeConfig,
     top_k: usize,
     model_pool: Option<&EdgeRankingModelPool>,
-    progress_sink: &dyn ProgressSink,
+    progress_sink: &dyn StageProgress,
 ) -> Result<Vec<Edge>, EdgeBuilderError> {
     use rayon::prelude::*;
 
@@ -615,7 +615,7 @@ fn build_edges_sequential(
     edge_config: &EdgeConfig,
     top_k: usize,
     model_pool: Option<&EdgeRankingModelPool>,
-    progress_sink: &dyn ProgressSink,
+    progress_sink: &dyn StageProgress,
 ) -> Result<Vec<Edge>, EdgeBuilderError> {
     let mut edges: Vec<Edge> = Vec::new();
 

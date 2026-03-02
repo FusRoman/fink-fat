@@ -43,6 +43,14 @@ pub enum PersistenceIoError {
     #[error("arrow/parquet error: {0}")]
     Arrow(String),
 
+    /// JSON encode/decode error.
+    #[error("json error: {0}")]
+    Json(String),
+
+    /// Compression or decompression error.
+    #[error("compression error: {0}")]
+    Compression(String),
+
     /// Envelope validation error (magic/version).
     #[error(transparent)]
     Envelope(#[from] EnvelopeError),

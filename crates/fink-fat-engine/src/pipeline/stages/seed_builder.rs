@@ -6,7 +6,7 @@
 //! [`AlertStore`](crate::persistence::alert_store::AlertStore) (stored in `ctx.runtime_state.alert_store`).
 //!
 //! In addition to seed generation, this stage participates in the pipeline's
-//! **hierarchical progress reporting** via the [`ProgressSink`](crate::pipeline::progress_sink::ProgressSink)
+//! **hierarchical progress reporting** via the [`StageProgress`](crate::pipeline::hooks::StageProgress)
 //! abstraction. The stage does not depend on any concrete UI (CLI progress bars, logs, metrics);
 //! it only emits structured progress events to the provided sink.
 //!
@@ -41,7 +41,7 @@
 //!
 //! Progress reporting
 //! ------------------
-//! The `BuildSeeds` stage uses `ProgressSink` in a **two-level model**:
+//! The `BuildSeeds` stage uses `StageProgress` in a **two-level model**:
 //!
 //! - **Stage-level progress**: `1 unit = 1 processed night`.
 //!   The stage calls `stage_sink.set_total(n_nights)` once, then `stage_sink.inc(1)`
@@ -98,7 +98,7 @@
 //! - If you later add additional seed families (e.g. higher-order seeds), they should be built
 //!   in the same pattern: compute borrowed features → convert to owned → persist in `seed_store`.
 //! - If finer-grained progress is required (e.g. per-bucket or per-pair), introduce additional
-//!   nested scopes under the per-night sink using `ProgressSink::child()`.
+//!   nested scopes under the per-night sink using `StageProgress::child()`.
 //! - If you need per-night instrumentation, insert timers around the bucketization/pairs/triplets steps.
 
 use crate::{
@@ -107,7 +107,6 @@ use crate::{
     pipeline::{
         PipelineContext,
         hooks::{PipelineHooks, StageMeta, StageReport},
-        progress_sink::ProgressSink,
         stages::{PipelineStage, run_stage},
     },
     seeding::{pairs, triplets},
@@ -183,16 +182,14 @@ use crate::{
 pub fn run(
     ctx: &mut PipelineContext<'_>,
     hooks: &dyn PipelineHooks,
-    stage_sink: &dyn ProgressSink,
 ) -> Result<StageReport, EngineError> {
     run_stage(
         PipelineStage::BuildSeeds,
         hooks,
         StageMeta {
             label: PipelineStage::BuildSeeds.label().to_string(),
-            total: None,
+            total: None, // dynamic: determined by number of nights at runtime
         },
-        stage_sink,
         |stage_sink| {
             // -----------------------------------------------------------------
             // 0) Preconditions: a BuildSeeds run requires a NightWindow.

@@ -8,7 +8,7 @@
 //! runtime [`AlertStore`](crate::persistence::alert_store::AlertStore).
 //!
 //! In addition to data ingestion, this stage participates in the **hierarchical
-//! progress reporting system** of the pipeline through a [`ProgressSink`].
+//! progress reporting system** of the pipeline through a [`StageProgress`].
 //! The stage does not depend on any specific UI or CLI implementation.
 //! Instead, it reports structured progress events to an abstract sink,
 //! allowing the caller (e.g. CLI) to render progress bars, logs, or metrics.
@@ -28,7 +28,7 @@
 //!
 //! Progress Reporting
 //! ------------------
-//! This stage reports its internal progress through the [`ProgressSink`] provided
+//! This stage reports its internal progress through the [`StageProgress`] provided
 //! by the pipeline runner.
 //!
 //! The stage defines **four logical units of work** and calls:
@@ -44,7 +44,7 @@
 //! 4. Merging the new `AlertStore` into runtime state.
 //!
 //! The exact rendering of this progress (progress bars, logs, metrics)
-//! is delegated to the `ProgressSink` implementation.
+//! is delegated to the `StageProgress` implementation.
 //!
 //! This design ensures:
 //!
@@ -96,7 +96,7 @@
 //! - If partial loading based on `NightWindow` becomes necessary, filtering
 //!   may be performed either via DataFusion predicate pushdown or post-load filtering.
 //! - Finer-grained progress reporting (e.g. per-night ingestion) can be implemented
-//!   by introducing nested `ProgressSink::child()` scopes.
+//!   by introducing nested `StageProgress::child()` scopes.
 
 pub mod alert_loader;
 pub mod input_uri;
@@ -108,10 +108,9 @@ use crate::{
     pipeline::{
         PipelineContext,
         hooks::{PipelineHooks, StageMeta, StageReport},
-        progress_sink::ProgressSink,
         stages::{
             PipelineStage,
-            alert_inputs::alert_loader::{AlertParquetColumns, load_alerts_sync},
+            alert_inputs::alert_loader::{AlertParquetColumns, LoadAlertsError, load_alerts_sync},
             run_stage,
         },
     },
@@ -130,7 +129,7 @@ use crate::{
 /// - emits structured lifecycle hooks (`on_stage_start`, `on_stage_end`),
 /// - measures execution time,
 /// - collects stage-level counters,
-/// - and integrates hierarchical progress reporting via [`ProgressSink`].
+/// - and integrates hierarchical progress reporting via [`StageProgress`].
 ///
 /// Synchronous Boundary
 /// --------------------
@@ -157,7 +156,7 @@ use crate::{
 /// 4. Merging the new `AlertStore` into runtime state.
 ///
 /// The exact rendering of this progress (progress bars, logs, metrics, etc.)
-/// is determined by the concrete implementation of [`ProgressSink`].
+/// is determined by the concrete implementation of [`StageProgress`].
 ///
 /// If the provided sink is a no-op implementation, progress reporting has
 /// zero runtime cost beyond the method calls.
@@ -192,26 +191,22 @@ use crate::{
 /// -----
 /// - Progress units are **logical milestones**, not proportional to alert count.
 ///   If finer-grained progress (e.g., per-batch or per-night) is required,
-///   nested progress scopes may be introduced using `ProgressSink::child()`.
+//   nested progress scopes may be introduced using `StageProgress::child()`.
 ///
 /// - The stage does not perform partial ingestion or filtering by
 ///   `NightWindow`. All alerts provided by the input URI are loaded.
 pub fn run(
     ctx: &mut PipelineContext<'_>,
     hooks: &dyn PipelineHooks,
-    stage_sink: &dyn ProgressSink,
 ) -> Result<StageReport, EngineError> {
     run_stage(
         PipelineStage::IngestNights,
         hooks,
         StageMeta {
             label: PipelineStage::IngestNights.label().to_string(),
-            total: None,
+            total: Some(4),
         },
-        stage_sink,
         |stage_sink| {
-            stage_sink.set_total(4);
-
             // -----------------------------------------------------------------
             // 1) Retrieve the input URI from the pipeline plan.
             // -----------------------------------------------------------------
@@ -231,9 +226,15 @@ pub fn run(
             // `load_alerts_sync` wraps the async execution (object_store + DataFusion)
             // behind a sync API so the pipeline runner stays sync.
             let mut new_alert_store = load_alerts_sync(uri, AlertParquetColumns::default())
-                .map_err(|e| EngineError::StageFailed {
-                    stage: PipelineStage::IngestNights,
-                    message: format!("failed to load alerts from {}: {e:?}", uri.0),
+                .map_err(|e| match e {
+                    LoadAlertsError::NotFound(_) => EngineError::StageFailed {
+                        stage: PipelineStage::IngestNights,
+                        message: format!("file not found: {}", uri.0),
+                    },
+                    _ => EngineError::StageFailed {
+                        stage: PipelineStage::IngestNights,
+                        message: format!("failed to load alerts from {}: {e:?}", uri.0),
+                    },
                 })?;
             stage_sink.inc(1);
 

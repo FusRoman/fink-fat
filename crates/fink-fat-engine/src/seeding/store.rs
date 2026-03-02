@@ -3,7 +3,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     night_id::{NightId, PairingMode},
-    persistence::{error::PersistenceIoError, layout::PersistenceLayout, manifest::Manifest},
+    persistence::{
+        compression::Compression, error::PersistenceIoError, layout::PersistenceLayout,
+        manifest::Manifest,
+    },
     seeding::{SeedKey, SeedNode, SeedNodeSlice},
     solver::components::{error::ComponentError, seed_index::SeedGlobalIndex},
 };
@@ -245,11 +248,12 @@ impl SeedStore {
         layout: &PersistenceLayout,
         manifest: &mut Manifest,
         night_id: NightId,
+        compression: Compression,
     ) -> Result<(), PersistenceIoError> {
         if let Some(seeds) = self.seeds.get(&night_id) {
             seeds
                 .as_slice()
-                .save_seeds_night(layout, manifest, night_id)?;
+                .save_seeds_night(layout, manifest, night_id, compression)?;
         }
         Ok(())
     }

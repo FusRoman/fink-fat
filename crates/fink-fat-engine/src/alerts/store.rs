@@ -78,7 +78,10 @@ use crate::{
     MJDTT,
     alerts::{Alert, AlertKey, AlertSlice, DiaSourceId, error::InsertError},
     night_id::{NightId, PairingMode},
-    persistence::{error::PersistenceIoError, layout::PersistenceLayout, manifest::Manifest},
+    persistence::{
+        compression::Compression, error::PersistenceIoError, layout::PersistenceLayout,
+        manifest::Manifest,
+    },
 };
 
 /// In-memory store of alerts grouped by night.
@@ -671,6 +674,7 @@ impl AlertStore {
         night_id: NightId,
         layout: &PersistenceLayout,
         manifest: &mut Manifest,
+        compression: Compression,
     ) -> Result<Utf8PathBuf, PersistenceIoError> {
         let alerts = self.alerts_by_night.get(&night_id).ok_or_else(|| {
             PersistenceIoError::Other(format!("No alerts for night_id {}", night_id))
@@ -678,7 +682,7 @@ impl AlertStore {
 
         let path = alerts
             .as_slice()
-            .save_alerts_night(layout, manifest, night_id)?;
+            .save_alerts_night(layout, manifest, night_id, compression)?;
 
         Ok(path)
     }

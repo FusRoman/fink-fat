@@ -3,7 +3,6 @@ use crate::{
     pipeline::{
         PipelineContext,
         hooks::{PipelineHooks, StageMeta, StageReport},
-        progress_sink::ProgressSink,
         stages::{PipelineStage, run_stage},
     },
     solver::{SolverOutput, components::ConnectedComponents},
@@ -12,19 +11,15 @@ use crate::{
 pub fn run(
     ctx: &mut PipelineContext<'_>,
     hooks: &dyn PipelineHooks,
-    stage_sink: &dyn ProgressSink,
 ) -> Result<StageReport, EngineError> {
     run_stage(
         PipelineStage::Solve,
         hooks,
         StageMeta {
             label: PipelineStage::Solve.label().to_string(),
-            total: None,
+            total: Some(3),
         },
-        stage_sink,
         |stage_sink| {
-            stage_sink.set_total(3); // 3 main steps: components, plan, run
-
             // -----------------------------------------------------------------
             // 1) Construct connected components
             // -----------------------------------------------------------------

@@ -80,8 +80,8 @@ use crate::{
     MJDTT, Radian,
     night_id::NightId,
     persistence::{
-        ALERT_STORE_SCHEMA_VERSION, envelope::DiskEnvelope, error::PersistenceIoError,
-        layout::PersistenceLayout, manifest::Manifest,
+        ALERT_STORE_SCHEMA_VERSION, compression::Compression, envelope::DiskEnvelope,
+        error::PersistenceIoError, layout::PersistenceLayout, manifest::Manifest,
     },
 };
 
@@ -269,6 +269,7 @@ pub trait AlertSlice {
     /// * `layout` – Persistence directory layout.
     /// * `manifest` – Current run manifest (used for timestamps).
     /// * `night_id` – Night identifier for the target file path.
+    /// * `compression` – Binary compression algorithm to apply.
     ///
     /// Return
     /// ------
@@ -279,6 +280,7 @@ pub trait AlertSlice {
         layout: &PersistenceLayout,
         manifest: &Manifest,
         night_id: NightId,
+        compression: Compression,
     ) -> Result<Utf8PathBuf, PersistenceIoError>;
 
     /// Return the epoch of the first alert in the slice.
@@ -315,6 +317,7 @@ impl AlertSlice for &[Alert] {
         layout: &PersistenceLayout,
         manifest: &Manifest,
         night_id: NightId,
+        compression: Compression,
     ) -> Result<Utf8PathBuf, PersistenceIoError> {
         let abs_path = layout.alerts_night_path(night_id);
 
@@ -323,6 +326,7 @@ impl AlertSlice for &[Alert] {
             self.to_vec(),
             ALERT_STORE_SCHEMA_VERSION,
             manifest.created_unix_s,
+            compression,
         );
         env.save_enveloped(&abs_path)?;
         Ok(abs_path)

@@ -57,7 +57,7 @@ use crate::{
         solver_policy::{SolverChoice, SolverPolicy, SolverRoutingMode},
     },
     graph::AlertLinkageDAG,
-    pipeline::progress_sink::ProgressSink,
+    pipeline::hooks::StageProgress,
     seeding::store::SeedStore,
     solver::{
         Solver, SolverOutput, bounded_beam::BoundedBeamSolver, components::ConnectedComponents,
@@ -186,7 +186,7 @@ impl SolverManager {
         graph: &'edge_lf AlertLinkageDAG,
         _seed_store: &'seed_lf SeedStore,
         plan: &SolvePlan,
-        progress_sink: &dyn ProgressSink,
+        progress_sink: &dyn StageProgress,
     ) -> Vec<SolverOutput>
     where
         'edge_lf: 'seed_lf,

@@ -1,3 +1,4 @@
+pub mod compression;
 pub mod edge_journal;
 pub mod envelope;
 pub mod error;
@@ -18,6 +19,7 @@ use crate::{
     graph::AlertLinkageDAG,
     night_id::{NightId, PairingMode},
     persistence::{
+        compression::Compression,
         edge_journal::{EdgeJournalStore, edge_op::EdgeOp},
         envelope::DiskEnvelope,
         error::{PersistenceError, PersistenceIoError},
@@ -79,12 +81,12 @@ impl PersistenceManager {
     }
 
     /// Load the manifest if present, otherwise create a fresh one.
-    pub fn load_or_init_manifest(&self, created_unix_s: i64) -> Result<Manifest, PersistenceError> {
+    pub fn load_or_init_manifest(&self) -> Result<Manifest, PersistenceError> {
         let mpath = self.layout.manifest_path();
         match Manifest::load(&mpath) {
             Ok(m) => Ok(m),
             Err(PersistenceIoError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
-                Ok(Manifest::new(created_unix_s))
+                Ok(Manifest::new())
             }
             Err(e) => Err(PersistenceError::Io(e)),
         }
@@ -118,9 +120,10 @@ impl PersistenceManager {
         created_unix_s: i64,
         alerts: &[Alert],
         seeds: &[SeedNode],
+        compression: Compression,
     ) -> Result<(), PersistenceIoError> {
-        let abs_alert_path = alerts.save_alerts_night(&self.layout, manifest, night_id)?;
-        let abs_seed_path = seeds.save_seeds_night(&self.layout, manifest, night_id)?;
+        let abs_alert_path = alerts.save_alerts_night(&self.layout, manifest, night_id, compression)?;
+        let abs_seed_path = seeds.save_seeds_night(&self.layout, manifest, night_id, compression)?;
 
         let entry = NightManifestEntry::new(
             night_id,
@@ -173,9 +176,8 @@ impl PersistenceManager {
     pub fn load_runtime_state(
         &self,
         cfg: &EngineConfig,
-        created_unix_s: i64,
     ) -> Result<RuntimeState, EngineError> {
-        let manifest = self.load_or_init_manifest(created_unix_s)?;
+        let manifest = self.load_or_init_manifest()?;
         let window = self.compute_window(&manifest, cfg)?;
 
         // Select nights to load
@@ -242,6 +244,7 @@ impl PersistenceManager {
             night_id,
             created_unix_s,
             edge_ops,
+            cfg.binary_compression,
         )?;
 
         // 2) persist manifest
@@ -272,6 +275,7 @@ impl PersistenceManager {
             checkpoint_night_id,
             created_unix_s,
             window,
+            cfg.binary_compression,
         )?;
 
         self.save_manifest(manifest)?;

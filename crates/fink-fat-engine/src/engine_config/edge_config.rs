@@ -208,7 +208,7 @@ pub struct EdgeConfig {
     /// -----
     /// - In full emission mode (`emit_all_edges = true`), this path is typically unused.
     /// - The file is not validated here; failures usually surface during model loading.
-    pub edge_ranking_model_path: String,
+    pub edge_ranking_model_path: Option<String>,
 
     /// Maximum number of edges retained **per left seed** in ML Top-K mode.
     ///
@@ -305,7 +305,7 @@ pub struct EdgeConfig {
 impl Default for EdgeConfig {
     fn default() -> Self {
         Self {
-            edge_ranking_model_path: "model.onnx".to_string(),
+            edge_ranking_model_path: None,
             top_k_per_left: 32,
             onnx_batch_size: 128,
             emit_all_edges: false,
@@ -339,6 +339,7 @@ impl EdgeConfig {
         if self.top_k_per_left == 0 {
             return Err(EdgeConfigError::TopKPerLeftZero);
         }
+
         Ok(())
     }
 }

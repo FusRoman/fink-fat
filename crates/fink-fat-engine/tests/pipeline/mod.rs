@@ -26,7 +26,7 @@ use arrow_array::{
 };
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::parquet::arrow::ArrowWriter;
-use outfit::FullOrbitResult;
+use fink_fat_engine::engine_config::pipeline_policy::PersistPolicy;
 use tempfile::TempDir;
 
 use fink_fat_engine::{
@@ -38,13 +38,11 @@ use fink_fat_engine::{
             solver_policy::{SolverChoice, SolverPolicy},
         },
     },
-    graph::{AlertLinkageDAG, edge::edge_prediction::EdgeRankingModelPool},
+    graph::edge::edge_prediction::EdgeRankingModelPool,
     night_id::NightId,
-    persistence::{PersistenceManager, manifest::Manifest, runtime_state::RuntimeState},
+    persistence::{PersistenceManager, runtime_state::RuntimeState},
     pipeline::{
-        PersistPolicy, PipelineContext, PipelineInputs, PipelineOutput, PipelinePlan,
-        PipelineRunner,
-        hooks::{PipelineHooks, StageMeta, StageReport},
+        PipelineContext, PipelineInputs, PipelineOutput, PipelinePlan, PipelineRunner,
         stages::{PipelineStage, alert_inputs::input_uri::InputUri},
     },
     seeding::{SeedKey, store::SeedStore},
@@ -58,15 +56,8 @@ use crate::synthetic_alerts::{SyntheticDataset, TrajectoryTruth};
 // No-op pipeline hooks
 // ---------------------------------------------------------------------------
 
-/// A no-op implementation of [`PipelineHooks`] for tests that don't need
-/// progress reporting.
-pub(crate) struct NoopHooks;
-
-impl PipelineHooks for NoopHooks {
-    fn on_stage_start(&self, _stage: PipelineStage, _meta: StageMeta) {}
-    fn on_stage_progress(&self, _stage: PipelineStage, _delta: u64) {}
-    fn on_stage_end(&self, _stage: PipelineStage, _report: StageReport) {}
-}
+// Re-export the library's built-in no-op hooks so test modules can use it.
+pub(crate) use fink_fat_engine::pipeline::hooks::NoopHooks;
 
 // ---------------------------------------------------------------------------
 // EngineConfig builders
@@ -126,23 +117,6 @@ edges:
 "#
     );
     serde_yaml::from_str(&yaml).expect("deserialize EngineConfig with compaction threshold")
-}
-
-// ---------------------------------------------------------------------------
-// RuntimeState factory
-// ---------------------------------------------------------------------------
-
-/// Create a fresh, empty [`RuntimeState`] with default stores.
-pub(crate) fn new_runtime_state() -> RuntimeState {
-    RuntimeState {
-        manifest: Manifest::new(0),
-        window: None,
-        alert_store: AlertStore::new(),
-        seed_store: SeedStore::new(),
-        graph: AlertLinkageDAG::new(),
-        track_hypotheses: HypothesisSet::new(),
-        orbit_results: FullOrbitResult::default(),
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -322,8 +296,8 @@ pub(crate) fn test_solver_manager_with_min_nodes(min_nodes: usize) -> SolverMana
 ///
 /// Tests that use `emit_all_edges = true` never evaluate the model, so this
 /// is safe even though the file does not exist.
-pub(crate) fn test_edge_models() -> EdgeRankingModelPool {
-    EdgeRankingModelPool::new("unused.onnx")
+pub(crate) fn test_edge_models() -> Option<EdgeRankingModelPool> {
+    Some(EdgeRankingModelPool::new("unused.onnx"))
 }
 
 /// A dummy `InputUri` suitable for pipelines that start with `LoadPersistedData`
@@ -474,13 +448,12 @@ pub(crate) fn run_pipeline_with(
     let edge_models = test_edge_models();
 
     let plan = PipelinePlan {
-        window: None,
         stages: stages.to_vec(),
         persist,
         inputs: PipelineInputs { alerts_uri },
     };
 
-    let mut runtime_state = new_runtime_state();
+    let mut runtime_state = RuntimeState::new();
     let runner = PipelineRunner { plan: plan.clone() };
     let hooks = NoopHooks;
 
@@ -524,13 +497,12 @@ pub(crate) fn run_pipeline_minimal(
     let solver_manager = SolverManager::default();
 
     let plan = PipelinePlan {
-        window: None,
         stages: stages.to_vec(),
         persist: PersistPolicy::None,
         inputs: PipelineInputs { alerts_uri },
     };
 
-    let mut runtime_state = new_runtime_state();
+    let mut runtime_state = RuntimeState::new();
     let runner = PipelineRunner { plan: plan.clone() };
     let hooks = NoopHooks;
 
@@ -580,7 +552,7 @@ pub(crate) fn run_incremental_pipeline(
         .expect("open persistence");
     let edge_models = test_edge_models();
 
-    let mut runtime_state = new_runtime_state();
+    let mut runtime_state = RuntimeState::new();
 
     let mut night_ids: Vec<u32> = dataset.alerts().iter().map(|a| a.key.night_id.0).collect();
     night_ids.sort_unstable();
@@ -605,7 +577,6 @@ pub(crate) fn run_incremental_pipeline(
         let stages = stages_fn(is_last);
 
         let plan = PipelinePlan {
-            window: None,
             stages,
             persist: PersistPolicy::None,
             inputs: PipelineInputs { alerts_uri },

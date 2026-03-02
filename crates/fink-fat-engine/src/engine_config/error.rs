@@ -87,7 +87,10 @@ use thiserror::Error;
 
 use config::ConfigError as ConfigRsError;
 
-use crate::error::{PredictorParamError, SeedError};
+use crate::{
+    error::{PredictorParamError, SeedError},
+    graph::edge::error::EdgeModelError,
+};
 
 /// Top-level configuration error returned by config loading and validation.
 ///
@@ -190,4 +193,8 @@ pub enum EdgeConfigError {
     /// such as invalid `k_sigma` or noise parameters.
     #[error("edges.predictor_config error: {0}")]
     PredictorConfig(#[from] PredictorParamError),
+
+    /// Edge Model Error
+    #[error(transparent)]
+    EdgeModel(#[from] EdgeModelError),
 }

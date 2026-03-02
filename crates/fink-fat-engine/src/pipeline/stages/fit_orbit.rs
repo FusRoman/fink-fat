@@ -8,7 +8,6 @@ use crate::{
     pipeline::{
         PipelineContext,
         hooks::{PipelineHooks, StageMeta, StageReport},
-        progress_sink::ProgressSink,
         stages::{PipelineStage, run_stage},
     },
     solver::to_observation_batch,
@@ -17,19 +16,15 @@ use crate::{
 pub fn run(
     ctx: &mut PipelineContext<'_>,
     hooks: &dyn PipelineHooks,
-    stage_sink: &dyn ProgressSink,
 ) -> Result<StageReport, EngineError> {
     run_stage(
         PipelineStage::FitOrbit,
         hooks,
         StageMeta {
             label: PipelineStage::FitOrbit.label().to_string(),
-            total: None,
+            total: Some(3),
         },
-        stage_sink,
         |stage_sink| {
-            stage_sink.set_total(3); // 3 main steps: convert, build, fit, export
-
             let track_hypothesis = &ctx.runtime_state.track_hypotheses;
 
             // Early return: nothing to fit when there are no hypotheses.

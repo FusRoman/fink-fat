@@ -74,8 +74,8 @@ use crate::{
     engine_config::{edge_config::EdgeConfig, propagator_config::PredictorParams},
     night_id::NightId,
     persistence::{
-        SEED_STORE_SCHEMA_VERSION, envelope::DiskEnvelope, error::PersistenceIoError,
-        layout::PersistenceLayout, manifest::Manifest,
+        SEED_STORE_SCHEMA_VERSION, compression::Compression, envelope::DiskEnvelope,
+        error::PersistenceIoError, layout::PersistenceLayout, manifest::Manifest,
     },
     seeding::{
         error::SeedingError,
@@ -688,6 +688,7 @@ pub trait SeedNodeSlice {
         layout: &PersistenceLayout,
         manifest: &Manifest,
         night_id: NightId,
+        compression: Compression,
     ) -> Result<Utf8PathBuf, PersistenceIoError>;
 }
 
@@ -697,6 +698,7 @@ impl SeedNodeSlice for &[SeedNode] {
         layout: &PersistenceLayout,
         manifest: &Manifest,
         night_id: NightId,
+        compression: Compression,
     ) -> Result<Utf8PathBuf, PersistenceIoError> {
         let abs_path = layout.seeds_night_path(night_id);
 
@@ -705,6 +707,7 @@ impl SeedNodeSlice for &[SeedNode] {
             self.to_vec(),
             SEED_STORE_SCHEMA_VERSION,
             manifest.created_unix_s,
+            compression,
         );
         env.save_enveloped(&abs_path)?;
         Ok(abs_path)

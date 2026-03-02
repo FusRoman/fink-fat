@@ -1,9 +1,14 @@
-//! Versioned persistence envelope and binary I/O for Fink-FAT on-disk payloads.
+//! Versioned persistence envelope and binary/JSON I/O for Fink-FAT on-disk payloads.
 //!
 //! Overview
 //! --------
 //! This module defines a small, stable container [`DiskEnvelope<T>`] and a set of
-//! minimal binary I/O helpers to persist Fink-FAT artifacts on disk.
+//! I/O helpers to persist Fink-FAT artifacts on disk in two complementary formats:
+//!
+//! - **Binary** (`bitcode`): compact, used for high-volume artifacts such as alerts,
+//!   seeds, and edge journals.
+//! - **JSON** (pretty-printed): human-readable, used for index files such as the
+//!   [`crate::persistence::manifest::Manifest`].
 //!
 //! The persistence layer writes many heterogeneous payloads (alerts, seeds, graph
 //! snapshots, edge journals, trajectories, …). To make those files:
@@ -30,16 +35,23 @@
 //! - **Robustness**: atomic writes prevent partially-written files.
 //! - **Simplicity**: helpers stay local and do not require a complex I/O layer.
 //!
-//! Encoding format
-//! ---------------
-//! Serialization uses the `bitcode` crate (with `serde`) to produce a compact
-//! binary representation.
-//!
-//! The exact byte-level format is an implementation detail of `bitcode`.
-//! Consequently, long-term persistence guarantees are achieved via:
+//! Encoding formats
+//! -----------------
+//! **Binary encoding** uses the `bitcode` crate (`serde`) for a compact binary
+//! representation. The exact byte-level layout is an implementation detail of
+//! `bitcode`. Long-term stability is achieved via:
 //! - a stable envelope layout (this module),
 //! - explicit schema versions (per payload type),
 //! - and consistent migration/rejection policy at load time.
+//!
+//! **JSON encoding** uses `serde_json` in pretty-printed mode. The `magic` field
+//! is stored as the human-readable string [`JSON_MAGIC`] (`"FINKFAT"`) rather
+//! than the raw byte array used in the binary format. This makes JSON files fully
+//! readable with any text editor.
+//!
+//! Use [`DiskEnvelope::save_enveloped`] / [`DiskEnvelope::load_enveloped`] for
+//! binary I/O and [`DiskEnvelope::save_enveloped_json`] /
+//! [`DiskEnvelope::load_enveloped_json`] for JSON I/O.
 //!
 //! Atomic writes
 //! ------------
@@ -92,7 +104,10 @@ use std::{
     io::{Read, Write},
 };
 
-use crate::persistence::error::{EnvelopeError, PersistenceIoError};
+use crate::persistence::{
+    compression::Compression,
+    error::{EnvelopeError, PersistenceIoError},
+};
 
 /// Magic bytes used to identify Fink-FAT persistence files.
 ///
@@ -155,6 +170,11 @@ pub struct DiskEnvelope<T> {
     /// Unix timestamp (seconds) stored for traceability.
     pub created_unix_s: i64,
 
+    /// Compression algorithm applied when writing this envelope with
+    /// [`DiskEnvelope::save_enveloped`]. The algorithm is also embedded in
+    /// the binary frame so the reader never needs to specify it.
+    pub compression: Compression,
+
     /// The persisted payload.
     pub payload: T,
 }
@@ -181,11 +201,17 @@ impl<T: DeserializeOwned + Serialize> DiskEnvelope<T> {
     /// This does not perform any I/O. Use [`DiskEnvelope::save_enveloped`] to
     /// write the envelope to disk.
     #[inline]
-    pub fn new(payload: T, schema_version: u32, created_unix_s: i64) -> Self {
+    pub fn new(
+        payload: T,
+        schema_version: u32,
+        created_unix_s: i64,
+        compression: Compression,
+    ) -> Self {
         Self {
             magic: DISK_MAGIC,
             schema_version,
             created_unix_s,
+            compression,
             payload,
         }
     }
@@ -302,18 +328,21 @@ impl<T: DeserializeOwned + Serialize> DiskEnvelope<T> {
             magic: [u8; 8],
             schema_version: u32,
             created_unix_s: i64,
+            compression: Compression,
             payload: &'a T,
         }
 
         let env = DiskEnvelopeRef {
-            magic: super::envelope::DISK_MAGIC,
+            magic: DISK_MAGIC,
             schema_version: self.schema_version,
             created_unix_s: self.created_unix_s,
+            compression: self.compression,
             payload: &self.payload,
         };
 
-        let bytes = encode_bytes(&env)?;
-        atomic_write_utf8(path, &bytes)?;
+        let raw = encode_bytes(&env)?;
+        let framed = self.compression.compress(&raw)?;
+        atomic_write_utf8(path, &framed)?;
         Ok(())
     }
 
@@ -353,12 +382,130 @@ impl<T: DeserializeOwned + Serialize> DiskEnvelope<T> {
     /// `Bitcode`), or the envelope validation may fail early if schema versions
     /// differ.
     pub fn load_enveloped(path: &Utf8Path, schema_version: u32) -> Result<T, PersistenceIoError> {
-        let bytes = read_all(path)?;
-        let env: DiskEnvelope<T> = decode_bytes(&bytes)?;
+        let framed = read_all(path)?;
+        let raw = Compression::decompress(&framed)?;
+        let env: DiskEnvelope<T> = decode_bytes(&raw)?;
         env.into_payload(schema_version)
             .map_err(PersistenceIoError::from)
     }
+
+    /// Write the enveloped payload to disk as a pretty-printed JSON file.
+    ///
+    /// The on-disk format is a JSON object with four keys:
+    /// `magic`, `schema_version`, `created_unix_s`, and `payload`.
+    /// The magic field is stored as the human-readable string `"FINKFAT"`.
+    ///
+    /// Behavior
+    /// --------
+    /// Performs an **atomic write** identical to [`DiskEnvelope::save_enveloped`]:
+    /// - serialize to UTF-8 JSON,
+    /// - write `<path>.tmp`,
+    /// - `flush()` + `sync_all()` the temporary file,
+    /// - rename the temporary file to `path`.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `path` - Destination file path. Parent directories are created if needed.
+    ///
+    /// Return
+    /// ------
+    /// `Ok(())` on success, otherwise a [`PersistenceIoError`].
+    ///
+    /// Errors
+    /// ------
+    /// - [`PersistenceIoError::Io`] — If any filesystem operation fails.
+    /// - [`PersistenceIoError::Json`] — If serialization fails.
+    pub fn save_enveloped_json(&self, path: &Utf8Path) -> Result<(), PersistenceIoError> {
+        /// Borrowed view for zero-copy serialization to JSON.
+        #[derive(serde::Serialize)]
+        struct JsonEnvelopeRef<'a, U> {
+            magic: &'a str,
+            schema_version: u32,
+            created_unix_s: i64,
+            payload: &'a U,
+        }
+
+        let helper = JsonEnvelopeRef {
+            magic: JSON_MAGIC,
+            schema_version: self.schema_version,
+            created_unix_s: self.created_unix_s,
+            payload: &self.payload,
+        };
+
+        let json =
+            serde_json::to_string_pretty(&helper).map_err(|e| PersistenceIoError::Json(e.to_string()))?;
+        atomic_write_utf8(path, json.as_bytes())?;
+        Ok(())
+    }
+
+    /// Load a payload from a JSON-encoded envelope file.
+    ///
+    /// The file is expected to contain a JSON object produced by
+    /// [`DiskEnvelope::save_enveloped_json`]. The `magic` string and
+    /// `schema_version` are validated before the payload is returned.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `path` - Source JSON file path.
+    /// * `schema_version` - Expected schema version for payload type `T`.
+    ///
+    /// Return
+    /// ------
+    /// - `Ok(T)` if the file is readable, parses successfully, and passes
+    ///   header validation.
+    /// - `Err(PersistenceIoError)` otherwise.
+    ///
+    /// Errors
+    /// ------
+    /// - [`PersistenceIoError::Io`] — If the file cannot be opened or read.
+    /// - [`PersistenceIoError::Json`] — If JSON parsing fails.
+    /// - [`PersistenceIoError::Envelope`] — If the magic string or schema
+    ///   version are invalid.
+    pub fn load_enveloped_json(
+        path: &Utf8Path,
+        schema_version: u32,
+    ) -> Result<T, PersistenceIoError> {
+        /// Owned deserialization target for JSON envelopes.
+        #[derive(serde::Deserialize)]
+        struct JsonEnvelopeOwned<U> {
+            magic: String,
+            schema_version: u32,
+            #[allow(dead_code)]
+            created_unix_s: i64,
+            payload: U,
+        }
+
+        let bytes = read_all(path)?;
+        let helper: JsonEnvelopeOwned<T> = serde_json::from_slice(&bytes)
+            .map_err(|e| PersistenceIoError::Json(e.to_string()))?;
+
+        if helper.magic != JSON_MAGIC {
+            return Err(PersistenceIoError::Envelope(EnvelopeError::InvalidMagic));
+        }
+        if helper.schema_version != schema_version {
+            return Err(PersistenceIoError::Envelope(
+                EnvelopeError::UnsupportedSchemaVersion {
+                    found: helper.schema_version,
+                    supported: schema_version,
+                },
+            ));
+        }
+
+        Ok(helper.payload)
+    }
 }
+
+/// Human-readable magic string written into JSON envelopes.
+///
+/// Used instead of the binary [`DISK_MAGIC`] constant to keep JSON files
+/// fully human-readable without embedded null bytes.
+///
+/// Validation contract
+/// -------------------
+/// [`DiskEnvelope::load_enveloped_json`] compares the `magic` field in the
+/// JSON file against this constant and returns
+/// [`EnvelopeError::InvalidMagic`] on mismatch.
+pub const JSON_MAGIC: &str = "FINKFAT";
 
 /// Encode a value into bytes using `bitcode`.
 ///
@@ -591,7 +738,7 @@ mod envelope_tests {
             v: vec![1, 2, 3],
         };
 
-        let env = DiskEnvelope::new(payload, 42, 123);
+        let env = DiskEnvelope::new(payload, 42, 123, Compression::None);
         env.validate(42).unwrap();
     }
 
@@ -603,7 +750,7 @@ mod envelope_tests {
             v: vec![],
         };
 
-        let mut env = DiskEnvelope::new(payload, 1, 0);
+        let mut env = DiskEnvelope::new(payload, 1, 0, Compression::None);
         env.magic = *b"NOTFINK\0";
 
         let err = env.validate(1).unwrap_err();
@@ -618,7 +765,7 @@ mod envelope_tests {
             v: vec![],
         };
 
-        let env = DiskEnvelope::new(payload, 7, 0);
+        let env = DiskEnvelope::new(payload, 7, 0, Compression::None);
         let err = env.validate(8).unwrap_err();
 
         assert!(matches!(
@@ -638,7 +785,7 @@ mod envelope_tests {
             v: vec![10, -5],
         };
 
-        let env = DiskEnvelope::new(payload.clone(), 3, 999);
+        let env = DiskEnvelope::new(payload.clone(), 3, 999, Compression::None);
         let got = env.into_payload(3).unwrap();
         assert_eq!(got, payload);
     }
@@ -651,7 +798,7 @@ mod envelope_tests {
             v: vec![10, -5],
         };
 
-        let env = DiskEnvelope::new(payload, 3, 999);
+        let env = DiskEnvelope::new(payload, 3, 999, Compression::None);
         let err = env.into_payload(4).unwrap_err();
         assert!(matches!(
             err,
@@ -673,7 +820,7 @@ mod envelope_tests {
             v: vec![1, 2, 3, 4],
         };
 
-        let env = DiskEnvelope::new(payload.clone(), 10, 1_700_000_000);
+        let env = DiskEnvelope::new(payload.clone(), 10, 1_700_000_000, Compression::None);
         env.save_enveloped(&path).unwrap();
 
         let got = DiskEnvelope::<DummyPayload>::load_enveloped(&path, 10).unwrap();
@@ -691,7 +838,7 @@ mod envelope_tests {
             v: vec![],
         };
 
-        let env = DiskEnvelope::new(payload.clone(), 1, 0);
+        let env = DiskEnvelope::new(payload.clone(), 1, 0, Compression::None);
         env.save_enveloped(&nested).unwrap();
 
         assert!(nested.exists());
@@ -711,7 +858,7 @@ mod envelope_tests {
             v: vec![9],
         };
 
-        let env = DiskEnvelope::new(payload, 1, 0);
+        let env = DiskEnvelope::new(payload, 1, 0, Compression::None);
         env.save_enveloped(&path).unwrap();
 
         assert!(path.exists());
@@ -731,6 +878,7 @@ mod envelope_tests {
             },
             1,
             0,
+            Compression::None,
         );
         env1.save_enveloped(&path).unwrap();
         let got1 = DiskEnvelope::<DummyPayload>::load_enveloped(&path, 1).unwrap();
@@ -751,6 +899,7 @@ mod envelope_tests {
             },
             1,
             0,
+            Compression::None,
         );
         env2.save_enveloped(&path).unwrap();
 
@@ -771,7 +920,10 @@ mod envelope_tests {
         let path = tmp_path_for(&dir, "corrupt.bin");
 
         // Write random bytes that are not valid bitcode for DiskEnvelope<DummyPayload>.
-        std::fs::write(path.as_std_path(), b"this is not bitcode").unwrap();
+        // Wrap in a valid Compression::None frame so the decompression step passes,
+        // then let bitcode decoding fail.
+        let framed = Compression::None.compress(b"this is not bitcode").unwrap();
+        std::fs::write(path.as_std_path(), framed).unwrap();
 
         let err = DiskEnvelope::<DummyPayload>::load_enveloped(&path, 1).unwrap_err();
         assert!(
@@ -789,6 +941,7 @@ mod envelope_tests {
             magic: *b"BADMAGIC",
             schema_version: 1,
             created_unix_s: 0,
+            compression: Compression::None,
             payload: DummyPayload {
                 a: 1,
                 b: "x".to_string(),
@@ -796,8 +949,9 @@ mod envelope_tests {
             },
         };
 
-        let bytes = encode_bytes(&env).unwrap();
-        atomic_write_utf8(&path, &bytes).unwrap();
+        let raw = encode_bytes(&env).unwrap();
+        let framed = Compression::None.compress(&raw).unwrap();
+        atomic_write_utf8(&path, &framed).unwrap();
 
         let err = DiskEnvelope::<DummyPayload>::load_enveloped(&path, 1).unwrap_err();
         assert!(
@@ -822,11 +976,13 @@ mod envelope_tests {
             },
             7,
             0,
+            Compression::None,
         );
 
         // Write with schema_version=7
-        let bytes = encode_bytes(&env).unwrap();
-        atomic_write_utf8(&path, &bytes).unwrap();
+        let raw = encode_bytes(&env).unwrap();
+        let framed = Compression::None.compress(&raw).unwrap();
+        atomic_write_utf8(&path, &framed).unwrap();
 
         // Read expecting schema_version=8 -> should fail at envelope validation.
         let err = DiskEnvelope::<DummyPayload>::load_enveloped(&path, 8).unwrap_err();
@@ -856,6 +1012,7 @@ mod envelope_tests {
             },
             1,
             0,
+            Compression::None,
         );
 
         env.save_enveloped(&path).unwrap();
@@ -865,6 +1022,170 @@ mod envelope_tests {
             !bytes.is_empty(),
             "serialized file should not be empty for a non-empty payload"
         );
+    }
+
+    // =====================================================================
+    // Compression integration tests (envelope-level)
+    // =====================================================================
+
+    /// Roundtrip helper: save with `algo`, load back, compare payload.
+    fn compression_roundtrip(algo: Compression) {
+        let dir = tempdir().unwrap();
+        let path = tmp_path_for(&dir, "payload.bin");
+
+        let payload = DummyPayload {
+            a: 99,
+            b: "compression test".to_string(),
+            v: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+        };
+
+        let env = DiskEnvelope::new(payload.clone(), 1, 0, algo);
+        env.save_enveloped(&path).unwrap();
+
+        let got = DiskEnvelope::<DummyPayload>::load_enveloped(&path, 1).unwrap();
+        assert_eq!(got, payload, "roundtrip failed for {algo:?}");
+    }
+
+    #[test]
+    fn compression_roundtrip_none() {
+        compression_roundtrip(Compression::None);
+    }
+
+    #[test]
+    fn compression_roundtrip_lz4() {
+        compression_roundtrip(Compression::Lz4);
+    }
+
+    #[test]
+    fn compression_roundtrip_zstd() {
+        compression_roundtrip(Compression::Zstd);
+    }
+
+    #[test]
+    fn compression_roundtrip_gzip() {
+        compression_roundtrip(Compression::Gzip);
+    }
+
+    /// Verify that the first byte of the on-disk file matches the expected
+    /// algorithm discriminant, so compression is actually applied.
+    #[test]
+    fn on_disk_frame_header_algo_byte_reflects_chosen_compression() {
+        use crate::persistence::compression::Compression as C;
+
+        let payload = DummyPayload {
+            a: 1,
+            b: "algo byte check".to_string(),
+            v: vec![],
+        };
+
+        for (algo, expected_byte) in [
+            (C::None, 0u8),
+            (C::Lz4,  1u8),
+            (C::Zstd, 2u8),
+            (C::Gzip, 3u8),
+        ] {
+            let dir = tempdir().unwrap();
+            let path = tmp_path_for(&dir, "header.bin");
+
+            let env = DiskEnvelope::new(payload.clone(), 1, 0, algo);
+            env.save_enveloped(&path).unwrap();
+
+            let bytes = read_bytes(&path);
+            assert!(
+                !bytes.is_empty(),
+                "{algo:?}: file must not be empty"
+            );
+            assert_eq!(
+                bytes[0], expected_byte,
+                "{algo:?}: first on-disk byte should be the algorithm discriminant {expected_byte}"
+            );
+        }
+    }
+
+    /// Files written with a compressing algorithm should be smaller than
+    /// uncompressed for a highly repetitive payload.
+    #[test]
+    fn compressed_file_is_smaller_than_uncompressed_for_repetitive_payload() {
+        // Build a large, repetitive payload that compresses well.
+        let payload = DummyPayload {
+            a: 0,
+            b: "x".repeat(4096),
+            v: vec![42i64; 2048],
+        };
+
+        let dir = tempdir().unwrap();
+
+        let uncompressed_path = tmp_path_for(&dir, "none.bin");
+        DiskEnvelope::new(payload.clone(), 1, 0, Compression::None)
+            .save_enveloped(&uncompressed_path)
+            .unwrap();
+        let uncompressed_size = read_bytes(&uncompressed_path).len();
+
+        for algo in [Compression::Lz4, Compression::Zstd, Compression::Gzip] {
+            let path = tmp_path_for(&dir, &format!("{algo:?}.bin"));
+            DiskEnvelope::new(payload.clone(), 1, 0, algo)
+                .save_enveloped(&path)
+                .unwrap();
+            let compressed_size = read_bytes(&path).len();
+
+            assert!(
+                compressed_size < uncompressed_size,
+                "{algo:?}: compressed file ({compressed_size} B) should be smaller \
+                 than uncompressed ({uncompressed_size} B)"
+            );
+        }
+    }
+
+    /// Files written with different algorithms all decode to the same payload,
+    /// confirming that `load_enveloped` auto-detects the algorithm.
+    #[test]
+    fn load_is_algorithm_agnostic() {
+        let payload = DummyPayload {
+            a: 7,
+            b: "agnostic".to_string(),
+            v: vec![-1, 0, 1],
+        };
+
+        let dir = tempdir().unwrap();
+
+        for algo in [Compression::None, Compression::Lz4, Compression::Zstd, Compression::Gzip] {
+            let path = tmp_path_for(&dir, &format!("agnostic_{algo:?}.bin"));
+            DiskEnvelope::new(payload.clone(), 2, 0, algo)
+                .save_enveloped(&path)
+                .unwrap();
+
+            let got = DiskEnvelope::<DummyPayload>::load_enveloped(&path, 2).unwrap();
+            assert_eq!(got, payload, "{algo:?}: payload mismatch after load");
+        }
+    }
+
+    /// Verify the envelope's `compression` field is preserved across a
+    /// write/read cycle.
+    #[test]
+    fn envelope_compression_field_is_round_tripped() {
+        let payload = DummyPayload {
+            a: 3,
+            b: "field check".to_string(),
+            v: vec![100],
+        };
+
+        let dir = tempdir().unwrap();
+
+        for algo in [Compression::None, Compression::Lz4, Compression::Zstd, Compression::Gzip] {
+            let path = tmp_path_for(&dir, &format!("field_{algo:?}.bin"));
+            let env = DiskEnvelope::new(payload.clone(), 1, 42, algo);
+            env.save_enveloped(&path).unwrap();
+
+            // Read the raw envelope (not just the payload) to inspect the field.
+            let framed = read_bytes(&path);
+            let raw = Compression::decompress(&framed).unwrap();
+            let loaded_env: DiskEnvelope<DummyPayload> = decode_bytes(&raw).unwrap();
+
+            assert_eq!(
+                loaded_env.compression, algo,
+                "{algo:?}: `compression` field inside envelope should be preserved"
+            );
+        }
     }
 
     // =====================================================================

@@ -23,6 +23,7 @@ use arrow_array::{
     types::{Float64Type, UInt8Type, UInt32Type, UInt64Type},
 };
 use datafusion::{error::DataFusionError, object_store::ObjectStore, prelude::*};
+use object_store::Error as ObjStoreError;
 use tokio::runtime::Runtime;
 use url::Url;
 
@@ -69,6 +70,8 @@ impl Default for AlertParquetColumns {
 /// Error type for Parquet alert loading.
 #[derive(Debug)]
 pub enum LoadAlertsError {
+    /// The resource pointed to by the URI does not exist in the backing store.
+    NotFound(String),
     Resolve(String),
     DataFusion(DataFusionError),
     Arrow(String),
@@ -109,6 +112,25 @@ pub async fn load_alerts_from_parquet_uri(
     // 1) Resolve URI -> object_store backend + object_store path
     let resolved =
         resolve_input_uri(input).map_err(|e| LoadAlertsError::Resolve(format!("{e:?}")))?;
+
+    // 1b) Existence check for schemes where a synchronous stat is unreliable
+    //     but an async head() is available: file:// and hdfs://.
+    //     For https:// we skip this check (HEAD semantics vary per server).
+    let scheme = url.scheme();
+    if scheme == "file" || scheme == "hdfs" {
+        match resolved.store.head(&resolved.path).await {
+            Ok(_) => {}
+            Err(ObjStoreError::NotFound { .. }) => {
+                return Err(LoadAlertsError::NotFound(input.0.clone()));
+            }
+            Err(e) => {
+                return Err(LoadAlertsError::Resolve(format!(
+                    "store head error for '{}': {e:?}",
+                    input.0
+                )));
+            }
+        }
+    }
 
     // 2) Build a DataFusion context with the store registered for this URL
     let ctx = build_session_context_with_store(&url, resolved.store.clone())?;

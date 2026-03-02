@@ -22,14 +22,14 @@ use std::collections::HashSet;
 use tempfile::TempDir;
 
 use fink_fat_engine::{
+    engine_config::pipeline_policy::PersistPolicy,
     night_id::NightId,
     persistence::{
         PersistenceManager, envelope::load_parquet, layout::PersistenceLayout,
         runtime_state::RuntimeState,
     },
     pipeline::{
-        PersistPolicy, PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner,
-        stages::PipelineStage,
+        PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner, stages::PipelineStage,
     },
     seeding::SeedKey,
 };
@@ -37,7 +37,7 @@ use fink_fat_engine::{
 use super::{
     FULL_WITH_PERSISTENCE, NoopHooks, PipelineTestResult, collect_dia_source_ids,
     collect_edge_endpoints, collect_night_ids, collect_seed_keys, dummy_input_uri,
-    engine_config_with_compaction, engine_config_with_edges, new_runtime_state, run_pipeline_with,
+    engine_config_with_compaction, engine_config_with_edges, run_pipeline_with,
     test_edge_models, test_solver_manager, write_alerts_parquet,
 };
 use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
@@ -334,7 +334,6 @@ fn load_restores_alerts_seeds_and_edges_after_save() {
 
     // We use a dummy URI because IngestNights is not in the plan.
     let plan = PipelinePlan {
-        window: None,
         stages: vec![PipelineStage::LoadPersistedData],
         persist: PersistPolicy::None,
         inputs: PipelineInputs {
@@ -342,7 +341,7 @@ fn load_restores_alerts_seeds_and_edges_after_save() {
         },
     };
 
-    let mut loaded_state = new_runtime_state();
+    let mut loaded_state = RuntimeState::new();
     let runner = PipelineRunner { plan: plan.clone() };
     let hooks = NoopHooks;
 
@@ -508,7 +507,6 @@ fn incremental_pipeline_with_persistence_accumulates_state() {
         stages.push(PipelineStage::SavePersistedData);
 
         let plan = PipelinePlan {
-            window: None,
             stages,
             persist: if is_last {
                 PersistPolicy::Full
@@ -518,7 +516,7 @@ fn incremental_pipeline_with_persistence_accumulates_state() {
             inputs: PipelineInputs { alerts_uri },
         };
 
-        let mut runtime_state = new_runtime_state();
+        let mut runtime_state = RuntimeState::new();
         let runner = PipelineRunner { plan: plan.clone() };
         let hooks = NoopHooks;
 
@@ -694,13 +692,12 @@ fn reload_after_incremental_persistence_is_consistent() {
         ];
 
         let plan = PipelinePlan {
-            window: None,
             stages,
             persist: PersistPolicy::Minimal,
             inputs: PipelineInputs { alerts_uri },
         };
 
-        let mut runtime_state = new_runtime_state();
+        let mut runtime_state = RuntimeState::new();
         let runner = PipelineRunner { plan: plan.clone() };
         let hooks = NoopHooks;
 
@@ -738,7 +735,6 @@ fn reload_after_incremental_persistence_is_consistent() {
         .expect("reopen persistence");
 
     let plan = PipelinePlan {
-        window: None,
         stages: vec![PipelineStage::LoadPersistedData],
         persist: PersistPolicy::None,
         inputs: PipelineInputs {
@@ -746,7 +742,7 @@ fn reload_after_incremental_persistence_is_consistent() {
         },
     };
 
-    let mut reloaded_state = new_runtime_state();
+    let mut reloaded_state = RuntimeState::new();
     let runner = PipelineRunner { plan: plan.clone() };
     let hooks = NoopHooks;
 
@@ -907,7 +903,6 @@ fn load_stage_reports_meaningful_counters() {
     let solver_manager = test_solver_manager();
 
     let plan = PipelinePlan {
-        window: None,
         stages: vec![PipelineStage::LoadPersistedData],
         persist: PersistPolicy::None,
         inputs: PipelineInputs {
@@ -915,7 +910,7 @@ fn load_stage_reports_meaningful_counters() {
         },
     };
 
-    let mut loaded_state = new_runtime_state();
+    let mut loaded_state = RuntimeState::new();
     let runner = PipelineRunner { plan: plan.clone() };
     let hooks = NoopHooks;
 
@@ -1010,7 +1005,6 @@ fn manifest_tracks_all_nights_after_multiple_saves() {
             .expect("open persistence");
 
         let plan = PipelinePlan {
-            window: None,
             stages: vec![
                 PipelineStage::LoadPersistedData,
                 PipelineStage::IngestNights,
@@ -1023,7 +1017,7 @@ fn manifest_tracks_all_nights_after_multiple_saves() {
             inputs: PipelineInputs { alerts_uri },
         };
 
-        let mut runtime_state = new_runtime_state();
+        let mut runtime_state = RuntimeState::new();
         let runner = PipelineRunner { plan: plan.clone() };
         let hooks = NoopHooks;
 
@@ -1046,7 +1040,7 @@ fn manifest_tracks_all_nights_after_multiple_saves() {
     // Now load the manifest directly and check it.
     let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
         .expect("reopen persistence");
-    let manifest = persistence.load_or_init_manifest(0).expect("load manifest");
+    let manifest = persistence.load_or_init_manifest().expect("load manifest");
 
     // The manifest should reference all n_nights.
     let manifest_nids: Vec<NightId> = manifest.nights.iter().map(|e| e.night_id).collect();
@@ -1109,7 +1103,6 @@ fn load_on_empty_storage_yields_empty_state() {
     let solver_manager = test_solver_manager();
 
     let plan = PipelinePlan {
-        window: None,
         stages: vec![PipelineStage::LoadPersistedData],
         persist: PersistPolicy::None,
         inputs: PipelineInputs {
@@ -1117,7 +1110,7 @@ fn load_on_empty_storage_yields_empty_state() {
         },
     };
 
-    let mut runtime_state = new_runtime_state();
+    let mut runtime_state = RuntimeState::new();
     let runner = PipelineRunner { plan: plan.clone() };
     let hooks = NoopHooks;
 
@@ -1204,7 +1197,6 @@ fn save_load_roundtrip_diverse_populations() {
     let solver_manager = test_solver_manager();
 
     let plan = PipelinePlan {
-        window: None,
         stages: vec![PipelineStage::LoadPersistedData],
         persist: PersistPolicy::None,
         inputs: PipelineInputs {
@@ -1212,7 +1204,7 @@ fn save_load_roundtrip_diverse_populations() {
         },
     };
 
-    let mut reloaded = new_runtime_state();
+    let mut reloaded = RuntimeState::new();
     let runner = PipelineRunner { plan: plan.clone() };
     let hooks = NoopHooks;
 
@@ -1335,13 +1327,12 @@ fn edge_journal_deltas_and_compaction() {
         ];
 
         let plan = PipelinePlan {
-            window: None,
             stages,
             persist: PersistPolicy::Minimal,
             inputs: PipelineInputs { alerts_uri },
         };
 
-        let mut runtime_state = new_runtime_state();
+        let mut runtime_state = RuntimeState::new();
         let runner = PipelineRunner { plan: plan.clone() };
         let hooks = NoopHooks;
 
@@ -1468,7 +1459,6 @@ fn edge_journal_deltas_and_compaction() {
         .expect("open persistence for final reload");
 
     let plan = PipelinePlan {
-        window: None,
         stages: vec![PipelineStage::LoadPersistedData],
         persist: PersistPolicy::None,
         inputs: PipelineInputs {
@@ -1476,7 +1466,7 @@ fn edge_journal_deltas_and_compaction() {
         },
     };
 
-    let mut reloaded = new_runtime_state();
+    let mut reloaded = RuntimeState::new();
     let runner = PipelineRunner { plan: plan.clone() };
     let hooks = NoopHooks;
 

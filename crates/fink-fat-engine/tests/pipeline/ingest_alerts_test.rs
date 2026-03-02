@@ -7,17 +7,14 @@
 use tempfile::TempDir;
 
 use fink_fat_engine::{
-    error::EngineError,
-    night_id::{NightId, PairingMode},
-    persistence::PersistenceManager,
-    pipeline::{
-        PersistPolicy, PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner,
+    engine_config::pipeline_policy::PersistPolicy, error::EngineError, night_id::{NightId, PairingMode}, persistence::{PersistenceManager, runtime_state::RuntimeState}, pipeline::{
+        PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner,
         stages::{PipelineStage, alert_inputs::input_uri::InputUri},
-    },
+    }
 };
 
 use super::{
-    INGEST_ONLY, NoopHooks, PipelineTestResult, engine_config_minimal, new_runtime_state,
+    INGEST_ONLY, NoopHooks, PipelineTestResult, engine_config_minimal,
     run_pipeline_minimal, test_edge_models,
 };
 use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
@@ -157,7 +154,6 @@ fn ingest_nights_stage_fails_on_missing_parquet_file() {
     let solver_manager = fink_fat_engine::solver::solver_manager::SolverManager::default();
 
     let plan = PipelinePlan {
-        window: None,
         stages: vec![PipelineStage::IngestNights],
         persist: PersistPolicy::None,
         inputs: PipelineInputs {
@@ -165,7 +161,7 @@ fn ingest_nights_stage_fails_on_missing_parquet_file() {
         },
     };
 
-    let mut runtime_state = new_runtime_state();
+    let mut runtime_state = RuntimeState::new();
 
     let runner = PipelineRunner { plan: plan.clone() };
     let hooks = NoopHooks;

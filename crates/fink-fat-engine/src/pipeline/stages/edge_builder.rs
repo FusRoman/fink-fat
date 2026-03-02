@@ -4,7 +4,6 @@ use crate::{
     pipeline::{
         PipelineContext,
         hooks::{PipelineHooks, StageMeta, StageReport},
-        progress_sink::ProgressSink,
         stages::{PipelineStage, run_stage},
     },
     spacetime_bucket::healpix_binner::HealpixBinner,
@@ -30,7 +29,6 @@ use crate::{
 pub fn run(
     ctx: &mut PipelineContext<'_>,
     hooks: &dyn PipelineHooks,
-    stage_sink: &dyn ProgressSink,
 ) -> Result<StageReport, EngineError> {
     run_stage(
         PipelineStage::BuildEdges,
@@ -39,7 +37,6 @@ pub fn run(
             label: PipelineStage::BuildEdges.label().to_string(),
             total: None,
         },
-        stage_sink,
         |stage_sink| {
             // -----------------------------------------------------------------
             // 0) Preconditions
@@ -90,13 +87,6 @@ pub fn run(
             let spatial_binner = HealpixBinner::new(ctx.engine_config.healpix_depth);
             let time_binner_width = ctx.engine_config.time_binner_width;
 
-            // ML pool is required only in ML mode (emit_all_edges=false)
-            let model_pool = if edge_config.emit_all_edges {
-                None
-            } else {
-                Some(ctx.edge_models)
-            };
-
             // -----------------------------------------------------------------
             // 6) Build edges for each left night -> right night
             // -----------------------------------------------------------------
@@ -120,7 +110,7 @@ pub fn run(
                         edge_config,
                         &spatial_binner,
                         time_binner_width,
-                        model_pool,
+                        ctx.edge_models.as_ref(),
                         stage_sink,
                     )
                     .map_err(|e| EngineError::StageFailed {

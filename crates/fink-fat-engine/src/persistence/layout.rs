@@ -49,7 +49,7 @@ impl PersistenceLayout {
 
     /// Path to the top-level manifest file.
     pub fn manifest_path(&self) -> Utf8PathBuf {
-        self.root.join("manifest.bin")
+        self.root.join("manifest.json")
     }
 
     /// Directory containing per-night alerts.

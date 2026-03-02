@@ -95,6 +95,8 @@
 //!
 //! storage_path: "./storage"
 //! max_gap_nights: 3
+//! compact_graph_every_delta: 20
+//! binary_compression: "None"
 //!
 //! pairs:
 //!   max_dt: "86.4 min"
@@ -141,6 +143,9 @@
 //!     max_out_per_node: 8
 //!     max_tracks_per_source: 8
 //!     max_expansions: 50000
+//!
+//! pipeline_policy:
+//!   PersistPolicy: Full
 //! ```
 //!
 //! Notes
@@ -165,6 +170,7 @@
 pub mod edge_config;
 pub mod error;
 pub mod pair_config;
+pub mod pipeline_policy;
 pub mod propagator_config;
 pub mod solver_config;
 pub mod triplet_config;
@@ -178,8 +184,10 @@ use crate::{
     MJDTT,
     engine_config::{
         edge_config::EdgeConfig, error::ConfigError, pair_config::PairConfig,
-        solver_config::SolverConfig, triplet_config::TripletConfig, units::de_time_days,
+        pipeline_policy::PersistPolicy, solver_config::SolverConfig, triplet_config::TripletConfig,
+        units::de_time_days,
     },
+    persistence::compression::Compression,
 };
 
 /// Root configuration for the engine (serde-friendly).
@@ -226,6 +234,23 @@ pub struct EngineConfig {
 
     /// Solver selection and solver-specific configuration.
     pub solver_config: SolverConfig,
+
+    /// pipeline policy configuration
+    pub pipeline_policy: PersistPolicy,
+
+    /// Compression algorithm used when writing binary persistence blobs
+    /// (alerts, seeds, edge journal deltas and snapshots).
+    ///
+    /// The choice is stored inside every [`crate::persistence::envelope::DiskEnvelope`]
+    /// and embedded in the binary frame, so readers never need to know the
+    /// algorithm in advance.
+    ///
+    /// Defaults to [`Compression::None`] (no compression). For production
+    /// deployments where disk I/O is a bottleneck, [`Compression::Zstd`] is
+    /// recommended.
+    ///
+    /// YAML values: `"None"`, `"Lz4"`, `"Zstd"`, `"Gzip"`.
+    pub binary_compression: Compression,
 
     /// Maximum number of nights that can be skipped when linking (`gap` constraint).
     ///
@@ -338,6 +363,8 @@ impl Default for EngineConfig {
             time_binner_width: 0.021, // ~30 min in days
             storage_path: "./storage".to_string(),
             compact_graph_every_delta: 20,
+            pipeline_policy: PersistPolicy::Full,
+            binary_compression: Compression::None,
         }
     }
 }
