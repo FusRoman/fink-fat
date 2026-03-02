@@ -18,7 +18,7 @@ const FULL_WITH_PERSISTENCE: &[PipelineStage] = &[
     PipelineStage::LoadPersistedData,
     PipelineStage::IngestNights,
     PipelineStage::BuildSeeds,
-    // PipelineStage::BuildEdges,
+    PipelineStage::BuildEdges,
     // PipelineStage::Solve,
     // PipelineStage::FitOrbit,
     PipelineStage::SavePersistedData,

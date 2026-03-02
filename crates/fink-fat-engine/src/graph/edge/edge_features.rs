@@ -185,9 +185,17 @@ impl EdgeFeatures {
         // Guard ratio before log: abs() handles negative drift, eps avoids ln(0).
         let ln_flux_std_ratio = safe_ln(self.photometry.flux_std_ratio.abs() + eps);
 
-        // Encourage band overlap; clamp ensures the input stays in [0,1].
+        // Encourage band overlap: zero cost when bands are shared, fixed positive
+        // penalty otherwise.
+        // The previous formulation `-ln(eps_band + band_shared)` yielded a slightly
+        // negative value when band_shared = 1 (ln(1.001) > 0), which could make the
+        // total cost negative and trigger an `Edge::new` construction error.
         let band_shared = self.photometry.band_shared.clamp(0.0, 1.0);
-        let band_term = -safe_ln(eps_band + band_shared);
+        let band_term = if band_shared > 0.5 {
+            0.0_f64
+        } else {
+            -safe_ln(eps_band) // ≈ +6.907, penalises absence of shared band
+        };
 
         // Quadratic penalties resemble Gaussian negative log-likelihood terms.
         let cost = 0.5 * (chi2_pos + chi2_vel)
@@ -676,3 +684,531 @@ impl<'a> Iterator for EdgeFeaturesIter<'a> {
 }
 
 impl<'a> ExactSizeIterator for EdgeFeaturesIter<'a> {}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        Alert, AlertKey,
+        night_id::NightId,
+        seeding::{SeedNode, store::SeedStore},
+    };
+    use proptest::prelude::*;
+    use std::sync::Arc;
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+
+    /// Minimal alert factory.
+    fn make_alert(id: u64, night: u32, mjd: f64, ra: f64, dec: f64, band: u8, flux: f64) -> Alert {
+        let arcsec = std::f64::consts::PI / (180.0 * 3600.0);
+        Alert {
+            key: AlertKey {
+                night_id: NightId::new(night),
+                dia_source_id: id,
+            },
+            ra,
+            ra_err: arcsec,
+            dec,
+            dec_err: arcsec,
+            mjd_tt: mjd,
+            flux,
+            flux_err: flux * 0.05,
+            band,
+            observer_mpc_code: Arc::new("500".into()),
+        }
+    }
+
+    /// Build a SeedNode from two alerts using the public `from_pair` constructor.
+    fn make_seed_from_pair(
+        store: &mut SeedStore,
+        night: u32,
+        id_a: u64,
+        id_b: u64,
+        mjd_a: f64,
+        ra: f64,
+        dec: f64,
+        vx_rad_day: f64, // approx angular speed in RA
+        band: u8,
+        flux: f64,
+    ) -> SeedNode {
+        // dt = 0.5 h intra-night
+        let dt = 0.5 / 24.0;
+        let ra_b = ra + vx_rad_day * dt;
+        let a = make_alert(id_a, night, mjd_a, ra, dec, band, flux);
+        let b = make_alert(id_b, night, mjd_a + dt, ra_b, dec, band, flux);
+        SeedNode::from_pair(store, NightId::new(night), &a, &b, None)
+            .expect("from_pair should succeed for simple test alerts")
+    }
+
+    /// Two seeds separated by ~1 day with consistent kinematics.
+    ///
+    /// Uses band `1` (shared across both seeds).
+    fn seed_pair_consistent() -> (SeedNode, SeedNode) {
+        let mut store = SeedStore::new();
+        let ra = 0.5_f64;
+        let dec = 0.1_f64;
+        let vx = 3e-3; // ~0.17 °/day
+
+        let from = make_seed_from_pair(&mut store, 1, 10, 11, 60000.0, ra, dec, vx, 1, 1000.0);
+        // To-seed: starts where from ends after ~1 day, same velocity
+        let to = make_seed_from_pair(
+            &mut store,
+            2,
+            20,
+            21,
+            60001.0,
+            ra + vx * 1.0,
+            dec,
+            vx,
+            1,
+            1000.0,
+        );
+        (from, to)
+    }
+
+    /// Construct an [`EdgeFeatures`] directly from raw scalars, bypassing `SeedNode`.
+    ///
+    /// Useful for unit-testing `kinematic_log_likelihood_cost` in isolation.
+    fn make_features(
+        chi2_pos: f64,
+        chi2_vel: f64,
+        z_flux: f64,
+        flux_std_ratio: f64,
+        band_shared: f64,
+    ) -> EdgeFeatures {
+        use crate::graph::edge::{
+            photometry_features::EdgePhotometryFeatures, position_features::EdgePositionFeatures,
+            uncertainty_features::EdgeUncertaintyFeatures, velocity_features::EdgeVelocityFeatures,
+        };
+        EdgeFeatures {
+            position: EdgePositionFeatures {
+                chi2_pos,
+                log_chi2_pos: (chi2_pos + 1e-12).ln(),
+                z_dx: 0.0,
+                z_dy: 0.0,
+                z_resid_norm: chi2_pos.sqrt().max(0.0),
+                z_along: 0.0,
+                z_cross: 0.0,
+                chol_z1: 0.0,
+                chol_z2: 0.0,
+                chol_z_norm: chi2_pos.sqrt().max(0.0),
+            },
+            velocity: EdgeVelocityFeatures {
+                cos_dtheta_v: 1.0,
+                rel_speed_diff: 0.0,
+                innov_speed_ratio: 0.0,
+                chi2_vel,
+                log_chi2_vel: (chi2_vel + 1e-12).ln(),
+            },
+            uncertainty: EdgeUncertaintyFeatures(1.0),
+            photometry: EdgePhotometryFeatures {
+                z_flux,
+                flux_std_ratio,
+                band_shared,
+            },
+        }
+    }
+
+    // =========================================================================
+    // Unit tests – kinematic_log_likelihood_cost
+    // =========================================================================
+
+    /// Regression: band_shared = 1 with near-zero other terms previously gave < 0.
+    #[test]
+    fn cost_positive_band_shared_near_zero_other_terms() {
+        let f = make_features(0.0, 0.0, 0.0, 1.0, 1.0);
+        let cost = f.kinematic_log_likelihood_cost();
+        assert!(
+            cost > 0.0,
+            "cost must be > 0 when band_shared=1, got {cost}"
+        );
+    }
+
+    #[test]
+    fn cost_positive_band_not_shared() {
+        let f = make_features(0.0, 0.0, 0.0, 1.0, 0.0);
+        let cost = f.kinematic_log_likelihood_cost();
+        assert!(
+            cost > 0.0,
+            "cost must be > 0 when band_shared=0, got {cost}"
+        );
+    }
+
+    /// Sharing a band must give a strictly lower (better) cost than not sharing.
+    #[test]
+    fn cost_band_shared_lower_than_not_shared() {
+        let chi2 = 2.0;
+        let shared = make_features(chi2, chi2, 0.5, 1.0, 1.0);
+        let not_shared = make_features(chi2, chi2, 0.5, 1.0, 0.0);
+        assert!(
+            shared.kinematic_log_likelihood_cost() < not_shared.kinematic_log_likelihood_cost(),
+            "shared-band cost {} should be < not-shared cost {}",
+            shared.kinematic_log_likelihood_cost(),
+            not_shared.kinematic_log_likelihood_cost()
+        );
+    }
+
+    /// When band_shared = 1, band_term = 0.
+    /// The cost must equal exactly 0.5*(chi2_pos + chi2_vel) + 0.5*z² + 0.5*ln²(eps).
+    #[test]
+    fn cost_formula_band_shared() {
+        let eps = 1e-12_f64;
+        // flux_std_ratio=0 → ln_term = 0.5 * ln(eps)²
+        let ln_ratio_sq = (0_f64 + eps).ln().powi(2);
+        let expected = 0.5 * ln_ratio_sq; // chi2=0, z_flux=0, band_term=0
+        let f = make_features(0.0, 0.0, 0.0, 0.0, 1.0);
+        let cost = f.kinematic_log_likelihood_cost();
+        assert!(
+            (cost - expected).abs() < 1e-10,
+            "cost {cost} ≠ expected {expected}"
+        );
+    }
+
+    /// When band not shared, band_term = -ln(eps_band) ≈ +6.907.
+    #[test]
+    fn cost_formula_band_not_shared() {
+        let eps = 1e-12_f64;
+        let eps_band = 1e-3_f64;
+        let ln_ratio_sq = (0_f64 + eps).ln().powi(2);
+        let expected = 0.5 * ln_ratio_sq + (-eps_band.ln());
+        let f = make_features(0.0, 0.0, 0.0, 0.0, 0.0);
+        let cost = f.kinematic_log_likelihood_cost();
+        assert!(
+            (cost - expected).abs() < 1e-10,
+            "cost {cost} ≠ expected {expected}"
+        );
+    }
+
+    /// Large chi2 must not produce NaN or Inf.
+    #[test]
+    fn cost_finite_for_large_chi2() {
+        let f = make_features(1e8, 1e8, 100.0, 1e6, 0.0);
+        let cost = f.kinematic_log_likelihood_cost();
+        assert!(
+            cost.is_finite(),
+            "cost should be finite for large chi2, got {cost}"
+        );
+        assert!(cost > 0.0, "cost should be > 0 for large chi2, got {cost}");
+    }
+
+    /// NaN inputs are sanitized by `finite_or_zero` – cost must remain finite.
+    #[test]
+    fn cost_finite_for_nan_inputs() {
+        let f = make_features(f64::NAN, f64::NAN, f64::NAN, f64::NAN, 0.5);
+        let cost = f.kinematic_log_likelihood_cost();
+        assert!(
+            cost.is_finite(),
+            "cost should be finite even for NaN inputs, got {cost}"
+        );
+    }
+
+    /// Inf inputs are sanitized to 0 – cost must remain finite.
+    #[test]
+    fn cost_finite_for_inf_inputs() {
+        let f = make_features(f64::INFINITY, f64::INFINITY, f64::INFINITY, 0.0, 1.0);
+        let cost = f.kinematic_log_likelihood_cost();
+        assert!(
+            cost.is_finite(),
+            "cost should be finite even for Inf inputs, got {cost}"
+        );
+    }
+
+    /// Negative chi2 (numeric drift) is clamped to 0 internally.
+    #[test]
+    fn cost_handles_negative_chi2() {
+        let f = make_features(-1.0, -5.0, 0.0, 1.0, 1.0);
+        let cost = f.kinematic_log_likelihood_cost();
+        assert!(
+            cost > 0.0,
+            "cost must be > 0 with negative chi2 inputs, got {cost}"
+        );
+        assert!(cost.is_finite());
+    }
+
+    // =========================================================================
+    // Unit tests – EdgeFeatureKey (index stability & path uniqueness)
+    // =========================================================================
+
+    #[test]
+    fn len_flat_is_17() {
+        assert_eq!(EdgeFeatures::len_flat(), 17);
+    }
+
+    #[test]
+    fn edge_feature_keys_array_len_is_17() {
+        assert_eq!(EDGE_FEATURE_KEYS.len(), 17);
+    }
+
+    /// Each key's `index()` must match its position in `EDGE_FEATURE_KEYS`.
+    #[test]
+    fn key_indices_match_position_in_canonical_array() {
+        for (pos, &key) in EDGE_FEATURE_KEYS.iter().enumerate() {
+            assert_eq!(
+                key.index(),
+                pos,
+                "{key:?}.index() = {} but its position is {pos}",
+                key.index()
+            );
+        }
+    }
+
+    /// All string paths must be unique.
+    #[test]
+    fn key_paths_are_unique() {
+        let paths: std::collections::HashSet<&'static str> =
+            EDGE_FEATURE_KEYS.iter().map(|k| k.path()).collect();
+        assert_eq!(
+            paths.len(),
+            EDGE_FEATURE_KEYS.len(),
+            "duplicate paths in EDGE_FEATURE_KEYS"
+        );
+    }
+
+    /// All indices must be unique.
+    #[test]
+    fn key_indices_are_unique() {
+        let indices: std::collections::HashSet<usize> =
+            EDGE_FEATURE_KEYS.iter().map(|k| k.index()).collect();
+        assert_eq!(
+            indices.len(),
+            EDGE_FEATURE_KEYS.len(),
+            "duplicate indices in EDGE_FEATURE_KEYS"
+        );
+    }
+
+    /// `flat_names()` returns exactly `len_flat()` items.
+    #[test]
+    fn flat_names_length() {
+        assert_eq!(EdgeFeatures::flat_names().count(), 17);
+    }
+
+    // =========================================================================
+    // Unit tests – compute_features on real SeedNodes
+    // =========================================================================
+
+    #[test]
+    fn compute_features_all_finite() {
+        let (from, to) = seed_pair_consistent();
+        let f = EdgeFeatures::compute_features(&from, &to);
+        for (name, val) in f.iter_flat_with_name() {
+            assert!(val.is_finite(), "feature '{name}' is not finite: {val}");
+        }
+    }
+
+    #[test]
+    fn iter_flat_length_equals_len_flat() {
+        let (from, to) = seed_pair_consistent();
+        let f = EdgeFeatures::compute_features(&from, &to);
+        assert_eq!(f.iter_flat().count(), EdgeFeatures::len_flat());
+    }
+
+    #[test]
+    fn exact_size_iterator_consistent() {
+        let (from, to) = seed_pair_consistent();
+        let f = EdgeFeatures::compute_features(&from, &to);
+        let mut it = f.iter_flat();
+        assert_eq!(it.len(), 17);
+        it.next();
+        assert_eq!(it.len(), 16);
+    }
+
+    #[test]
+    fn flat_values_vec_length() {
+        let (from, to) = seed_pair_consistent();
+        let f = EdgeFeatures::compute_features(&from, &to);
+        assert_eq!(f.flat_values_vec().len(), 17);
+    }
+
+    /// `get(key)` must match the value returned by `iter_flat` at `key.index()`.
+    #[test]
+    fn get_consistent_with_iter_flat() {
+        let (from, to) = seed_pair_consistent();
+        let f = EdgeFeatures::compute_features(&from, &to);
+        let vals: Vec<f64> = f.iter_flat().collect();
+        for &key in &EDGE_FEATURE_KEYS {
+            let via_get = f.get(key);
+            let via_iter = vals[key.index()];
+            assert_eq!(
+                via_get,
+                via_iter,
+                "get({key:?}) = {via_get}, iter[{}] = {via_iter}",
+                key.index()
+            );
+        }
+    }
+
+    /// `flat_at` must return `None` for indices ≥ `len_flat()`.
+    #[test]
+    fn flat_at_out_of_bounds_returns_none() {
+        let (from, to) = seed_pair_consistent();
+        let f = EdgeFeatures::compute_features(&from, &to);
+        assert!(f.flat_at(17).is_none());
+        assert!(f.flat_at(100).is_none());
+    }
+
+    /// `iter_flat_with_name` and `flat_named_vec` must agree.
+    #[test]
+    fn iter_flat_with_name_matches_flat_named_vec() {
+        let (from, to) = seed_pair_consistent();
+        let f = EdgeFeatures::compute_features(&from, &to);
+        let via_iter: Vec<_> = f.iter_flat_with_name().collect();
+        let via_vec = f.flat_named_vec();
+        assert_eq!(via_iter, via_vec);
+    }
+
+    /// `compute_features` is deterministic.
+    #[test]
+    fn compute_features_is_deterministic() {
+        let (from, to) = seed_pair_consistent();
+        let f1 = EdgeFeatures::compute_features(&from, &to);
+        let f2 = EdgeFeatures::compute_features(&from, &to);
+        assert_eq!(f1.flat_values_vec(), f2.flat_values_vec());
+    }
+
+    /// `kinematic_log_likelihood_cost` is finite and > 0 on a real consistent pair.
+    #[test]
+    fn cost_positive_finite_on_consistent_pair() {
+        let (from, to) = seed_pair_consistent();
+        let f = EdgeFeatures::compute_features(&from, &to);
+        let cost = f.kinematic_log_likelihood_cost();
+        assert!(
+            cost.is_finite(),
+            "cost not finite on consistent seed pair: {cost}"
+        );
+        assert!(cost > 0.0, "cost not > 0 on consistent seed pair: {cost}");
+    }
+
+    /// When both seeds use different bands, the cost must be strictly higher
+    /// than when they share a band (all other parameters equal).
+    #[test]
+    fn cost_higher_when_bands_differ() {
+        let mut store = SeedStore::new();
+        let ra = 0.5;
+        let dec = 0.1;
+        let vx = 3e-3;
+        // Shared band
+        let from_shared = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, 1000.0);
+        let to_shared =
+            make_seed_from_pair(&mut store, 2, 2, 3, 60001.0, ra + vx, dec, vx, 1, 1000.0);
+        // Different bands (band 1 vs band 2)
+        let from_diff = make_seed_from_pair(&mut store, 1, 4, 5, 60000.0, ra, dec, vx, 1, 1000.0);
+        let to_diff =
+            make_seed_from_pair(&mut store, 2, 6, 7, 60001.0, ra + vx, dec, vx, 2, 1000.0);
+
+        let cost_shared = EdgeFeatures::compute_features(&from_shared, &to_shared)
+            .kinematic_log_likelihood_cost();
+        let cost_diff =
+            EdgeFeatures::compute_features(&from_diff, &to_diff).kinematic_log_likelihood_cost();
+
+        assert!(
+            cost_diff > cost_shared,
+            "cost with different bands ({cost_diff}) should be > shared ({cost_shared})"
+        );
+    }
+
+    // =========================================================================
+    // Proptest – kinematic_log_likelihood_cost robustness
+    // =========================================================================
+
+    proptest! {
+        /// For any combination of well-formed (or slightly degenerate) feature
+        /// values, the cost must always be finite and strictly > 0.
+        #[test]
+        fn prop_cost_always_finite_positive(
+            chi2_pos       in  0.0f64..1e6,
+            chi2_vel       in  0.0f64..1e6,
+            z_flux         in -100.0f64..100.0,
+            flux_std_ratio in -1e4f64..1e4,
+            band           in 0u8..2,
+        ) {
+            let f = make_features(chi2_pos, chi2_vel, z_flux, flux_std_ratio, band as f64);
+            let cost = f.kinematic_log_likelihood_cost();
+            prop_assert!(cost.is_finite(), "cost not finite: {cost}");
+            prop_assert!(cost > 0.0,       "cost not > 0: {cost}");
+        }
+
+        /// Sharing a band must *never* raise the cost compared to not sharing,
+        /// all else being equal.
+        #[test]
+        fn prop_band_shared_never_raises_cost(
+            chi2_pos       in 0.0f64..1e4,
+            chi2_vel       in 0.0f64..1e4,
+            z_flux         in -50.0f64..50.0,
+            flux_std_ratio in 0.0f64..100.0,
+        ) {
+            let shared     = make_features(chi2_pos, chi2_vel, z_flux, flux_std_ratio, 1.0);
+            let not_shared = make_features(chi2_pos, chi2_vel, z_flux, flux_std_ratio, 0.0);
+            prop_assert!(
+                shared.kinematic_log_likelihood_cost() <= not_shared.kinematic_log_likelihood_cost(),
+                "shared {} > not-shared {}",
+                shared.kinematic_log_likelihood_cost(),
+                not_shared.kinematic_log_likelihood_cost()
+            );
+        }
+
+        /// A larger chi2 must (weakly) increase the cost.
+        #[test]
+        fn prop_larger_chi2_increases_cost(
+            base  in 0.0f64..1e4,
+            delta in 0.0f64..1e4,
+        ) {
+            let low  = make_features(base, base, 0.0, 1.0, 1.0);
+            let high = make_features(base + delta, base + delta, 0.0, 1.0, 1.0);
+            prop_assert!(
+                high.kinematic_log_likelihood_cost() >= low.kinematic_log_likelihood_cost(),
+                "higher chi2 gave lower cost: {} vs {}",
+                high.kinematic_log_likelihood_cost(),
+                low.kinematic_log_likelihood_cost()
+            );
+        }
+
+        /// `get` must agree with `iter_flat` for all 17 keys, on physically
+        /// plausible seeds built from arbitrary (but valid) kinematic parameters.
+        #[test]
+        fn prop_get_consistent_with_iter(
+            epoch_offset   in 0.1f64..10.0,
+            vx             in -1e-2f64..1e-2,
+            flux_mean      in 100.0f64..5000.0,
+            flux_delta_pct in -0.3f64..0.3,    // flux variation between nights
+        ) {
+            let mut store = SeedStore::new();
+            let ra  = 0.5_f64;
+            let dec = 0.1_f64;
+            let flux_to = flux_mean * (1.0 + flux_delta_pct);
+            let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, flux_mean);
+            let to   = make_seed_from_pair(&mut store, 2, 2, 3, 60000.0 + epoch_offset,
+                                           ra + vx * epoch_offset, dec, vx, 1, flux_to.max(1.0));
+            let f = EdgeFeatures::compute_features(&from, &to);
+            let vals: Vec<f64> = f.iter_flat().collect();
+            for &key in &EDGE_FEATURE_KEYS {
+                prop_assert_eq!(f.get(key), vals[key.index()]);
+            }
+        }
+
+        /// All feature values produced by `compute_features` must be finite for
+        /// physically reasonable seeds.
+        #[test]
+        fn prop_compute_features_all_finite(
+            epoch_offset in 0.1f64..10.0,
+            vx           in -1e-2f64..1e-2,
+            flux_mean    in 100.0f64..5000.0,
+        ) {
+            let mut store = SeedStore::new();
+            let ra  = 0.5_f64;
+            let dec = 0.1_f64;
+            let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, flux_mean);
+            let to   = make_seed_from_pair(&mut store, 2, 2, 3, 60000.0 + epoch_offset,
+                                           ra + vx * epoch_offset, dec, vx, 1, flux_mean);
+            let f = EdgeFeatures::compute_features(&from, &to);
+            for (name, val) in f.iter_flat_with_name() {
+                prop_assert!(val.is_finite(), "feature '{name}' not finite: {val}");
+            }
+        }
+    }
+}

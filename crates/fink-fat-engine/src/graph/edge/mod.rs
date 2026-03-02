@@ -146,6 +146,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     MJDTT,
+    alerts::DiaSourceId,
     engine_config::edge_config::EdgeConfig,
     graph::edge::{
         edge_features::EdgeFeatures,
@@ -235,32 +236,48 @@ impl Edge {
     ///
     /// Return
     /// ------
-    /// A new [`Edge`] with `active = true`.
+    /// `Ok(Edge)` with `active = true`, or an [`EdgeBuilderError::ConstructionError`]
+    /// if any invariant is violated.
     ///
-    /// Panics
+    /// Errors
     /// ------
-    /// Panics if `cost` or `dt_days` are not finite or not strictly positive.
+    /// Returns [`EdgeBuilderError::ConstructionError`] if:
+    /// - `cost` is not finite or not strictly positive, or
+    /// - `dt_days` is not finite or not strictly positive.
     ///
     /// Notes
     /// -----
-    /// These assertions are deliberate because invalid weights can silently
-    /// break downstream solvers (e.g. negative cycles, NaN propagation).
-    pub fn new(from: &SeedNode, to: &SeedNode, cost: f64, dt_days: f64) -> Self {
-        assert!(
-            cost.is_finite() && cost > 0.0,
-            "Edge cost must be finite and > 0."
-        );
-        assert!(
-            dt_days.is_finite() && dt_days > 0.0,
-            "dt_days must be finite and > 0."
-        );
-        Self {
+    /// Returning an error rather than panicking allows callers to handle
+    /// degenerate weights gracefully without aborting the process.
+    pub fn new(
+        from: &SeedNode,
+        to: &SeedNode,
+        cost: f64,
+        dt_days: f64,
+    ) -> Result<Self, EdgeBuilderError> {
+        if !cost.is_finite() || cost <= 0.0 {
+            let from_ids: Vec<DiaSourceId> = from.members.iter().map(|k| k.dia_source_id).collect();
+            let to_ids: Vec<DiaSourceId> = to.members.iter().map(|k| k.dia_source_id).collect();
+            return Err(EdgeBuilderError::ConstructionError(format!(
+                "Edge cost must be finite and > 0, got {cost} \
+                 (from dia_source_ids={from_ids:?}, to dia_source_ids={to_ids:?})",
+            )));
+        }
+        if !dt_days.is_finite() || dt_days <= 0.0 {
+            let from_ids: Vec<DiaSourceId> = from.members.iter().map(|k| k.dia_source_id).collect();
+            let to_ids: Vec<DiaSourceId> = to.members.iter().map(|k| k.dia_source_id).collect();
+            return Err(EdgeBuilderError::ConstructionError(format!(
+                "dt_days must be finite and > 0, got {dt_days} \
+                 (from dia_source_ids={from_ids:?}, to dia_source_ids={to_ids:?})",
+            )));
+        }
+        Ok(Self {
             from: from.key(),
             to: to.key(),
             cost,
             dt_days,
             active: true,
-        }
+        })
     }
 
     /// Get the stable identity key for this edge.
@@ -434,7 +451,7 @@ fn process_chunk_emit_all<'seed_lf>(
             let cost = EdgeFeatures::compute_features(src, to).kinematic_log_likelihood_cost();
             let dt_days = src.delta_days(to);
 
-            local_edges.push(Edge::new(src, to, cost, dt_days));
+            local_edges.push(Edge::new(src, to, cost, dt_days)?);
         }
     }
 
@@ -497,7 +514,7 @@ fn process_chunk_ml_topk(
         // Materialize edges for the winners.
         for (right_candidate, edge_cost) in tmp.iter() {
             let dt_days = src.delta_days(right_candidate);
-            local_edges.push(Edge::new(src, right_candidate, *edge_cost, dt_days));
+            local_edges.push(Edge::new(src, right_candidate, *edge_cost, dt_days)?);
         }
     }
 
