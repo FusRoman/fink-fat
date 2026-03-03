@@ -125,6 +125,8 @@ impl PipelineHooks for IndicatifHooks {
             format!("{}ms  {}", report.elapsed_ms, counters.join("  "))
         };
         // `println_*` prints above the active bars to avoid flickering.
-        let _ = self.mp.println(format!("  → {summary}"));
+        let _ = self
+            .mp
+            .println(format!(" (Stage {}) → {summary}", _stage.label()));
     }
 }

@@ -27,6 +27,7 @@ use crate::{
         manifest::{Manifest, NightManifestEntry},
         runtime_state::RuntimeState,
     },
+    pipeline::hooks::StageProgress,
     seeding::{SeedNode, SeedNodeSlice, store::SeedStore},
     solver::HypothesisSet,
 };
@@ -178,9 +179,15 @@ impl PersistenceManager {
     /// - converts `SeedNodeOwned` -> `SeedNode<'alert>` using the `AlertStore`,
     /// - loads edges via snapshot + delta journal and converts them to borrowed
     ///   edges using the `SeedStore`.
-    pub fn load_runtime_state(&self, cfg: &EngineConfig) -> Result<RuntimeState, EngineError> {
+    pub fn load_runtime_state(
+        &self,
+        cfg: &EngineConfig,
+        stage_sink: &dyn StageProgress,
+    ) -> Result<RuntimeState, EngineError> {
         let manifest = self.load_or_init_manifest()?;
         let window = self.compute_window(&manifest, cfg)?;
+
+        stage_sink.inc(1);
 
         // Select nights to load
         let nights_to_load: Vec<NightManifestEntry> = match window {
@@ -193,12 +200,16 @@ impl PersistenceManager {
                 .collect(),
         };
 
+        stage_sink.inc(1);
+
         // 1) Load alerts into runtime AlertStore
         let mut alert_store = AlertStore::new();
         for entry in &nights_to_load {
             let payload = self.load_alerts_for_night(&entry.alerts_rel_path().to_path_buf())?;
             alert_store.insert(entry.night_id, payload);
         }
+
+        stage_sink.inc(1);
 
         // 2) Load seeds owned then convert to borrowed into runtime SeedStore
         let mut seed_store: SeedStore = SeedStore::new();
@@ -210,9 +221,13 @@ impl PersistenceManager {
                 })
         })?;
 
-        // 3) Load edges owned via edge journal (snapshot + deltas), then convert to borrowed graph.
+        stage_sink.inc(1);
+
+        // 3) Load edges owned via edge journal (snapshot + deltas), then convert to graph.
         let edges = self.edge_journal.load_edges(&manifest, window)?;
+        stage_sink.inc(1);
         let graph = AlertLinkageDAG::from_edges(edges);
+        stage_sink.inc(1);
 
         Ok(RuntimeState {
             manifest,

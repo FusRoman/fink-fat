@@ -25,11 +25,7 @@ const FULL_WITH_PERSISTENCE: &[PipelineStage] = &[
 ];
 
 pub fn run_single_night(cli_args: NightRunArgs) -> Result<(), EngineError> {
-    println!("Night-run mode");
-    println!("  alerts : {}", cli_args.alerts);
-    println!("  config : {}", cli_args.config);
     let engine_config = load_config(&cli_args.config)?;
-    println!("Loaded engine config: {:#?}", engine_config);
     let persistence = PersistenceManager::open_or_create(engine_config.clone().storage_path_buf())?;
     let model_pool = engine_config
         .edges

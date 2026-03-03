@@ -16,7 +16,7 @@ pub fn run(
         hooks,
         StageMeta {
             label: PipelineStage::LoadPersistedData.label().to_string(),
-            total: Some(1),
+            total: Some(6), // We don't know the total number of nights/alerts/seeds/edges until we load the manifest and window.
         },
         |stage_sink| {
             // Delegate to PersistenceManager::load_runtime_state which:
@@ -24,7 +24,9 @@ pub fn run(
             //   2. Computes the sliding window from engine config.
             //   3. Loads alerts and seeds for nights in the window.
             //   4. Replays the edge journal (snapshot + deltas) into a graph.
-            let state = ctx.persistence.load_runtime_state(ctx.engine_config)?;
+            let state = ctx
+                .persistence
+                .load_runtime_state(ctx.engine_config, stage_sink)?;
 
             let n_nights = state.alert_store.n_nights() as u64;
             let n_alerts = state.alert_store.n_alerts() as u64;
