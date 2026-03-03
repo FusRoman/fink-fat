@@ -54,19 +54,17 @@ fn ingest_then_build_seeds_produces_seeds_for_each_night() {
     let (stage_1, report_1) = &output.reports[1];
     assert_eq!(*stage_1, PipelineStage::BuildSeeds);
 
-    // ---- 9) Verify IngestNights counters ----
+    // ---- 9) Verify IngestNights counters (from the last night's run) ----
     let ingest_counters: std::collections::HashMap<&str, u64> =
         report_0.counters.iter().copied().collect();
+    // The pipeline runs night-by-night; the last run ingested exactly one night.
     assert_eq!(
         ingest_counters.get("n_alerts").copied(),
-        Some(expected_total_alerts as u64),
+        Some((n_trajectories * obs_per_night) as u64),
     );
-    assert_eq!(
-        ingest_counters.get("n_nights").copied(),
-        Some(n_nights as u64),
-    );
+    assert_eq!(ingest_counters.get("n_nights").copied(), Some(1_u64),);
 
-    // ---- 10) Verify BuildSeeds counters ----
+    // ---- 10) Verify BuildSeeds counters (from the last night's run) ----
     let seed_counters: std::collections::HashMap<&str, u64> =
         report_1.counters.iter().copied().collect();
 
@@ -75,13 +73,16 @@ fn ingest_then_build_seeds_produces_seeds_for_each_night() {
     let reported_pairs = seed_counters.get("pairs").copied().unwrap_or(0);
     let reported_seeds = seed_counters.get("seeds").copied().unwrap_or(0);
 
+    // The pipeline is incremental: the last run's BuildSeeds only processes
+    // the anchor night (1 night, 1 night's worth of alerts).
     assert_eq!(
-        reported_nights, n_nights as u64,
-        "BuildSeeds should process all {n_nights} nights"
+        reported_nights, 1_u64,
+        "BuildSeeds should process exactly 1 night per incremental run"
     );
     assert_eq!(
-        reported_alerts, expected_total_alerts as u64,
-        "BuildSeeds should see all {expected_total_alerts} alerts"
+        reported_alerts,
+        (n_trajectories * obs_per_night) as u64,
+        "BuildSeeds should see only the anchor night's alerts"
     );
     assert!(
         reported_pairs > 0,
@@ -92,12 +93,12 @@ fn ingest_then_build_seeds_produces_seeds_for_each_night() {
         "BuildSeeds should produce at least some seeds"
     );
 
-    // ---- 11) Verify seed store is populated ----
+    // ---- 11) Verify seed store is populated for ALL nights (cumulative state) ----
     let seed_store = &state.seed_store;
     assert_eq!(
         seed_store.n_nights(),
         n_nights,
-        "seed store should contain seeds for all {n_nights} nights"
+        "seed store should contain seeds for all {n_nights} nights (accumulated across runs)"
     );
 
     let mut total_seeds_in_store: usize = 0;
@@ -117,7 +118,7 @@ fn ingest_then_build_seeds_produces_seeds_for_each_night() {
         );
         total_seeds_in_store += night_seeds.len();
 
-        // ---- 12) Verify seed members reference valid alerts ----
+        // ---- 12) Verify seed members reference valid alerts (cumulative state) ----
         let alert_store = &state.alert_store;
         let night_alerts = alert_store
             .get(&nid)
@@ -157,10 +158,19 @@ fn ingest_then_build_seeds_produces_seeds_for_each_night() {
         }
     }
 
-    // ---- 14) Verify total seed count matches reported counter ----
+    // ---- 14) Verify total seed count across ALL nights in store ----
+    // reported_seeds is from the last run only; check it's consistent with that night.
+    let last_night_seeds = seed_store
+        .get(&NightId(start_night_id + (n_nights as u32) - 1))
+        .map(|s| s.len())
+        .unwrap_or(0);
     assert_eq!(
-        total_seeds_in_store as u64, reported_seeds,
-        "total seeds in store must match the reported counter"
+        last_night_seeds as u64, reported_seeds,
+        "last night seeds in store must match the reported counter from the last run"
+    );
+    assert!(
+        total_seeds_in_store > 0,
+        "total seeds across all nights must be > 0"
     );
 }
 
@@ -203,8 +213,7 @@ fn build_seeds_with_mixed_populations() {
     let seed_store = &state.seed_store;
     assert_eq!(seed_store.n_nights(), n_nights);
 
-    // Count total seeds — we expect at least some (the exact count depends
-    // on pair/triplet config defaults and the synthetic data geometry).
+    // Count total seeds across all nights (cumulative state) — we expect at least some.
     let total_seeds: usize = (0..n_nights)
         .map(|i| {
             let nid = NightId(start_night_id + i as u32);
@@ -216,11 +225,15 @@ fn build_seeds_with_mixed_populations() {
         "mixed-population dataset should produce seeds"
     );
 
-    // Verify the BuildSeeds counter is consistent.
+    // The BuildSeeds counter comes from the last incremental run (anchor night only).
+    // Verify it is consistent with the last night's seeds in the store.
+    let last_night_seeds = seed_store
+        .len_night(&NightId(start_night_id + (n_nights as u32) - 1))
+        .unwrap_or(0);
     let seed_counters: std::collections::HashMap<&str, u64> =
         output.reports[1].1.counters.iter().copied().collect();
     assert_eq!(
         seed_counters.get("seeds").copied().unwrap_or(0),
-        total_seeds as u64,
+        last_night_seeds as u64,
     );
 }

@@ -439,40 +439,69 @@ pub(crate) fn run_pipeline_with(
     solver_manager: &SolverManager,
     persist: PersistPolicy,
 ) -> PipelineTestResult {
-    let parquet_path = data_dir.path().join("test_alerts.parquet");
-    let alerts_uri = dataset.write_parquet(&parquet_path);
-
+    // Run the pipeline **incrementally**, one night at a time.
+    //
+    // This mirrors the real production usage where `IngestNights` loads only
+    // the new night's alerts and `BuildSeeds` only builds seeds for that new
+    // night (the `SingleNight` anchor). Previous nights' seeds are accumulated
+    // in `runtime_state` across iterations.
     let engine_config = engine_config_with_edges(storage_dir, max_gap_nights);
     let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
         .expect("open persistence");
     let edge_models = test_edge_models();
 
-    let plan = PipelinePlan {
-        stages: stages.to_vec(),
-        persist,
-        inputs: PipelineInputs { alerts_uri },
-    };
-
     let mut runtime_state = RuntimeState::new();
-    let runner = PipelineRunner { plan: plan.clone() };
-    let hooks = NoopHooks;
 
-    let mut ctx = PipelineContext {
-        plan: &plan,
-        persistence: &persistence,
-        runtime_state: &mut runtime_state,
-        engine_config: &engine_config,
-        edge_models: &edge_models,
-        solver_manager,
-    };
+    let mut night_ids: Vec<u32> = dataset.alerts().iter().map(|a| a.key.night_id.0).collect();
+    night_ids.sort_unstable();
+    night_ids.dedup();
 
-    let output = runner
-        .run(&mut ctx, &hooks)
-        .expect("pipeline should succeed");
-    drop(ctx);
+    let n_total = night_ids.len();
+    let mut last_output = None;
+
+    for (run_idx, &nid) in night_ids.iter().enumerate() {
+        let night_alerts: Vec<&Alert> = dataset
+            .alerts()
+            .iter()
+            .filter(|a| a.key.night_id.0 == nid)
+            .collect();
+
+        let parquet_path = data_dir
+            .path()
+            .join(format!("night_{nid}_run{run_idx}.parquet"));
+        let alerts_uri = write_alerts_parquet(&night_alerts, &parquet_path);
+
+        let plan = PipelinePlan {
+            stages: stages.to_vec(),
+            persist: persist.clone(),
+            inputs: PipelineInputs { alerts_uri },
+        };
+
+        let runner = PipelineRunner { plan: plan.clone() };
+        let hooks = NoopHooks;
+
+        let mut ctx = PipelineContext {
+            plan: &plan,
+            persistence: &persistence,
+            runtime_state: &mut runtime_state,
+            engine_config: &engine_config,
+            edge_models: &edge_models,
+            solver_manager,
+        };
+
+        let output = runner
+            .run(&mut ctx, &hooks)
+            .unwrap_or_else(|e| panic!("pipeline run for night {nid} failed: {e}"));
+        drop(ctx);
+
+        let is_last = run_idx + 1 == n_total;
+        if is_last {
+            last_output = Some(output);
+        }
+    }
 
     PipelineTestResult {
-        output,
+        output: last_output.expect("dataset must contain at least one night"),
         state: runtime_state,
         engine_config,
     }
@@ -481,47 +510,74 @@ pub(crate) fn run_pipeline_with(
 /// Run a pipeline with a minimal engine config (no edge builder setup).
 ///
 /// Uses `SolverManager::default()` and `PersistPolicy::None`.
+///
+/// Runs incrementally (one Parquet file per night) so that `BuildSeeds`
+/// processes only the anchor night on each iteration, matching the
+/// production `SingleNight` semantics.
 pub(crate) fn run_pipeline_minimal(
     dataset: &SyntheticDataset,
     data_dir: &TempDir,
     storage_dir: &TempDir,
     stages: &[PipelineStage],
 ) -> PipelineTestResult {
-    let parquet_path = data_dir.path().join("test_alerts.parquet");
-    let alerts_uri = dataset.write_parquet(&parquet_path);
-
     let engine_config = engine_config_minimal(storage_dir);
     let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
         .expect("open persistence");
     let edge_models = test_edge_models();
     let solver_manager = SolverManager::default();
 
-    let plan = PipelinePlan {
-        stages: stages.to_vec(),
-        persist: PersistPolicy::None,
-        inputs: PipelineInputs { alerts_uri },
-    };
-
     let mut runtime_state = RuntimeState::new();
-    let runner = PipelineRunner { plan: plan.clone() };
-    let hooks = NoopHooks;
 
-    let mut ctx = PipelineContext {
-        plan: &plan,
-        persistence: &persistence,
-        runtime_state: &mut runtime_state,
-        engine_config: &engine_config,
-        edge_models: &edge_models,
-        solver_manager: &solver_manager,
-    };
+    let mut night_ids: Vec<u32> = dataset.alerts().iter().map(|a| a.key.night_id.0).collect();
+    night_ids.sort_unstable();
+    night_ids.dedup();
 
-    let output = runner
-        .run(&mut ctx, &hooks)
-        .expect("pipeline should succeed");
-    drop(ctx);
+    let n_total = night_ids.len();
+    let mut last_output = None;
+
+    for (run_idx, &nid) in night_ids.iter().enumerate() {
+        let night_alerts: Vec<&Alert> = dataset
+            .alerts()
+            .iter()
+            .filter(|a| a.key.night_id.0 == nid)
+            .collect();
+
+        let parquet_path = data_dir
+            .path()
+            .join(format!("night_{nid}_run{run_idx}.parquet"));
+        let alerts_uri = write_alerts_parquet(&night_alerts, &parquet_path);
+
+        let plan = PipelinePlan {
+            stages: stages.to_vec(),
+            persist: PersistPolicy::None,
+            inputs: PipelineInputs { alerts_uri },
+        };
+
+        let runner = PipelineRunner { plan: plan.clone() };
+        let hooks = NoopHooks;
+
+        let mut ctx = PipelineContext {
+            plan: &plan,
+            persistence: &persistence,
+            runtime_state: &mut runtime_state,
+            engine_config: &engine_config,
+            edge_models: &edge_models,
+            solver_manager: &solver_manager,
+        };
+
+        let output = runner
+            .run(&mut ctx, &hooks)
+            .unwrap_or_else(|e| panic!("pipeline run for night {nid} failed: {e}"));
+        drop(ctx);
+
+        let is_last = run_idx + 1 == n_total;
+        if is_last {
+            last_output = Some(output);
+        }
+    }
 
     PipelineTestResult {
-        output,
+        output: last_output.expect("dataset must contain at least one night"),
         state: runtime_state,
         engine_config,
     }

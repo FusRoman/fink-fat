@@ -212,10 +212,12 @@ pub fn run(
             // ----------------------------
             // - 1 unit = 1 processed night.
             //
-            // This is deterministic and avoids tying progress to potentially huge
-            // intermediate cardinalities (pairs/triplets), which can vary widely.
+            // Use `night_window_nights` so the total reflects only the nights
+            // that `night_window_iter` will actually yield (e.g. in SingleNight
+            // mode that is exactly one night — the anchor — regardless of how
+            // many nights are present in the alert store).
             // -----------------------------------------------------------------
-            let nights_to_process: Vec<_> = ctx.runtime_state.alert_store.nights_sorted();
+            let nights_to_process = ctx.runtime_state.alert_store.night_window_nights(*window);
             stage_sink.set_total(nights_to_process.len() as u64);
 
             // -----------------------------------------------------------------

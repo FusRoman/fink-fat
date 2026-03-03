@@ -485,9 +485,16 @@ impl AlertStore {
     /// Overview
     /// --------
     /// This method filters the alert store to return only the nights that are relevant
-    /// for pairing according to the given `PairingMode`. It identifies a "right night"
-    /// (the most recent eligible night) and collects all valid "left nights" that can
-    /// be paired with it.
+    /// for seed building according to the given `PairingMode`.
+    ///
+    /// Behavior by mode
+    /// ----------------
+    /// - **`SingleNight` mode**: returns **only the anchor night** if it is present in the
+    ///   store. Previous nights within the gap are intentionally excluded because they
+    ///   already have seeds built and persisted from earlier pipeline runs; rebuilding
+    ///   them would be redundant and costly.
+    /// - **`BatchRange` mode**: returns all nights within `[start, end]` that exist in
+    ///   the store, in sorted ascending order.
     ///
     /// Arguments
     /// ---------
@@ -495,40 +502,35 @@ impl AlertStore {
     ///
     /// Return
     /// ------
-    /// An iterator yielding `(night_id, &[Alert])` tuples for nights within the window.
-    ///
-    /// Behavior
-    /// --------
-    /// 1. Identifies the **right night**: the latest night in the store that is
-    ///    contained in the pairing mode's range.
-    /// 2. Collects **left nights**: all nights eligible to pair with the right night
-    ///    according to the mode's constraints (see `PairingMode::eligible_left_nights`).
-    /// 3. Includes the **right night itself** in the output.
-    /// 4. Returns an **empty iterator** if no valid right night exists.
+    /// An iterator yielding `(night_id, &[Alert])` tuples for the selected nights.
     ///
     /// Output guarantees
     /// -----------------
     /// - **Sorted**: nights are returned in increasing order.
     /// - **Deduplicated**: each night appears at most once.
     /// - **Deterministic**: output is reproducible for the same inputs.
-    ///
-    /// Notes
-    /// -----
-    /// - For **single-night mode**: left nights satisfy `left < right` and
-    ///   `right - left <= max_gap`.
-    /// - For **batch mode**: left nights satisfy `left < right` and `start <= left`.
-    /// - The right night itself is always included if it exists in the store and
-    ///   is within the pairing mode's range.
     pub fn night_window_iter(
         &self,
         night_window: PairingMode,
     ) -> impl Iterator<Item = (NightId, &[Alert])> {
         let available_nights: Vec<NightId> = self.nights_sorted();
 
-        // Convert to owned Vec, or empty Vec if error
-        let night_in_window = night_window
-            .filter_nights(&available_nights)
-            .unwrap_or_default();
+        // In SingleNight mode only process the anchor night: previous nights already
+        // have their seeds built and persisted, rebuilding them is unnecessary.
+        // In BatchRange mode fall back to filter_nights which returns all nights in
+        // [start, end] sorted.
+        let night_in_window: Vec<NightId> = match night_window {
+            PairingMode::SingleNight { anchor, .. } => {
+                if self.alerts_by_night.contains_key(&anchor) {
+                    vec![anchor]
+                } else {
+                    vec![]
+                }
+            }
+            _ => night_window
+                .filter_nights(&available_nights)
+                .unwrap_or_default(),
+        };
 
         let store_ref = &self.alerts_by_night;
 
@@ -537,6 +539,36 @@ impl AlertStore {
                 .get(&night_id)
                 .map(|alerts| (night_id, alerts.as_slice()))
         })
+    }
+
+    /// Return the sorted list of night IDs that [`night_window_iter`] would yield
+    /// for the given pairing mode.
+    ///
+    /// This is a lightweight companion to [`night_window_iter`]: it applies the
+    /// same filtering logic and returns only the identifiers, without borrowing
+    /// the alert slices. Useful for progress reporting and counter initialisation
+    /// before the actual iteration.
+    ///
+    /// Behavior
+    /// --------
+    /// - **`SingleNight` mode**: returns `[anchor]` if the anchor is present,
+    ///   otherwise `[]`.
+    /// - **`BatchRange` mode**: returns all nights within `[start, end]` that
+    ///   exist in the store, in sorted ascending order.
+    pub fn night_window_nights(&self, night_window: PairingMode) -> Vec<NightId> {
+        match night_window {
+            PairingMode::SingleNight { anchor, .. } => {
+                if self.alerts_by_night.contains_key(&anchor) {
+                    vec![anchor]
+                } else {
+                    vec![]
+                }
+            }
+            _ => {
+                let available = self.nights_sorted();
+                night_window.filter_nights(&available).unwrap_or_default()
+            }
+        }
     }
 
     /// Get the internal map size (number of nights present).
@@ -1429,56 +1461,48 @@ mod alert_store_tests {
             let store = make_multi_night_store();
 
             // Anchor on night 105, max_gap = 1
-            // Should include: 103 (left) and 105 (right/anchor)
+            // SingleNight mode: only the anchor night is returned regardless of gap.
             let mode = PairingMode::SingleNight {
                 anchor: nid(105),
                 max_gap: 1,
             };
 
-            let mut collected: Vec<_> = store.night_window_iter(mode).collect();
-
-            collected.sort_by_key(|(night, _)| *night);
+            let collected: Vec<_> = store.night_window_iter(mode).collect();
 
             assert_eq!(collected.len(), 1);
-            assert_eq!(collected[0].0, nid(105)); // anchor itself
+            assert_eq!(collected[0].0, nid(105)); // only the anchor night
         }
 
         #[test]
         fn night_window_iter_single_night_with_gap_2() {
             let store = make_multi_night_store();
             // Anchor on night 105, max_gap = 2
-            // Should include: 103 (105-103=2), 105 (anchor)
+            // SingleNight mode: only the anchor night is returned regardless of gap.
             let mode = PairingMode::SingleNight {
                 anchor: nid(105),
                 max_gap: 2,
             };
 
-            let mut collected: Vec<_> = store.night_window_iter(mode).collect();
-            collected.sort_by_key(|(night, _)| *night);
+            let collected: Vec<_> = store.night_window_iter(mode).collect();
 
-            assert_eq!(collected.len(), 2);
-            assert_eq!(collected[0].0, nid(103));
-            assert_eq!(collected[1].0, nid(105));
+            assert_eq!(collected.len(), 1);
+            assert_eq!(collected[0].0, nid(105)); // only the anchor night
         }
 
         #[test]
         fn night_window_iter_single_night_large_gap() {
             let store = make_multi_night_store();
             // Anchor on night 105, max_gap = 10
-            // Should include all nights <= 105
+            // SingleNight mode: only the anchor night is returned regardless of gap.
             let mode = PairingMode::SingleNight {
                 anchor: nid(105),
                 max_gap: 10,
             };
 
-            let mut collected: Vec<_> = store.night_window_iter(mode).collect();
-            collected.sort_by_key(|(night, _)| *night);
+            let collected: Vec<_> = store.night_window_iter(mode).collect();
 
-            assert_eq!(collected.len(), 4);
-            assert_eq!(collected[0].0, nid(100));
-            assert_eq!(collected[1].0, nid(101));
-            assert_eq!(collected[2].0, nid(103));
-            assert_eq!(collected[3].0, nid(105));
+            assert_eq!(collected.len(), 1);
+            assert_eq!(collected[0].0, nid(105)); // only the anchor night
         }
 
         #[test]

@@ -59,15 +59,18 @@ fn ingest_nights_stage_loads_alerts_and_populates_runtime_state() {
     assert_eq!(*stage, PipelineStage::IngestNights);
 
     let counters: std::collections::HashMap<&str, u64> = report.counters.iter().copied().collect();
+    // The pipeline runs incrementally (one night at a time); the last run
+    // ingested one night worth of alerts.
+    let expected_last_night_alerts = (n_trajectories * obs_per_night) as u64;
     assert_eq!(
         counters.get("n_alerts").copied(),
-        Some(expected_total_alerts as u64),
-        "expected {expected_total_alerts} alerts total"
+        Some(expected_last_night_alerts),
+        "expected {expected_last_night_alerts} alerts in the last incremental run"
     );
     assert_eq!(
         counters.get("n_nights").copied(),
-        Some(n_nights as u64),
-        "expected {n_nights} distinct nights"
+        Some(1_u64),
+        "expected 1 night per incremental run"
     );
 
     // ---- 4) Verify runtime state: alert store ----
