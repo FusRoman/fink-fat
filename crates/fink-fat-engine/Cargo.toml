@@ -33,7 +33,7 @@ flate2 = { version = "1.0", default-features = false, features = ["rust_backend"
 smallvec = "1.15.1"
 thread_local = "1.1.9"
 url = "2.5.8"
-tokio = { version = "=1.49.0" }
+tokio = { version = "=1.49.0", features = ["rt-multi-thread"] }
 
 [dev-dependencies]
 approx = "0.5.1"
