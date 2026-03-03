@@ -613,7 +613,7 @@ impl Manifest {
 // =============================================================================
 
 #[cfg(test)]
-mod tests {
+mod manifest_tests {
     use super::*;
     use camino::Utf8PathBuf;
     use tempfile::tempdir;
@@ -1294,9 +1294,13 @@ mod tests {
         .unwrap();
 
         let err = Manifest::load(&path).unwrap_err();
+        let inner = match &err {
+            PersistenceIoError::WithPath { source, .. } => source.as_ref(),
+            e => e,
+        };
         assert!(
             matches!(
-                err,
+                inner,
                 PersistenceIoError::Envelope(EnvelopeError::UnsupportedSchemaVersion { .. })
             ),
             "expected UnsupportedSchemaVersion, got {err:?}"
@@ -1322,9 +1326,13 @@ mod tests {
         .unwrap();
 
         let err = Manifest::load(&path).unwrap_err();
+        let inner = match &err {
+            PersistenceIoError::WithPath { source, .. } => source.as_ref(),
+            e => e,
+        };
         assert!(
             matches!(
-                err,
+                inner,
                 PersistenceIoError::Envelope(EnvelopeError::InvalidMagic)
             ),
             "expected InvalidMagic, got {err:?}"
@@ -1340,8 +1348,12 @@ mod tests {
         std::fs::write(path.as_std_path(), b"this is not json at all").unwrap();
 
         let err = Manifest::load(&path).unwrap_err();
+        let inner = match &err {
+            PersistenceIoError::WithPath { source, .. } => source.as_ref(),
+            e => e,
+        };
         assert!(
-            matches!(err, PersistenceIoError::Json(_)),
+            matches!(inner, PersistenceIoError::Json(_)),
             "expected Json error, got {err:?}"
         );
     }
@@ -1353,8 +1365,12 @@ mod tests {
             Utf8PathBuf::from_path_buf(dir.path().join("does_not_exist.json")).expect("UTF-8 path");
 
         let err = Manifest::load(&path).unwrap_err();
+        let inner = match &err {
+            PersistenceIoError::WithPath { source, .. } => source.as_ref(),
+            e => e,
+        };
         assert!(
-            matches!(err, PersistenceIoError::Io(_)),
+            matches!(inner, PersistenceIoError::Io(_)),
             "expected Io error, got {err:?}"
         );
     }

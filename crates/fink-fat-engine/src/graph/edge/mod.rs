@@ -370,9 +370,6 @@ impl Edge {
         model_pool: Option<&EdgeRankingModelPool>,
         progress_sink: &dyn StageProgress,
     ) -> Result<Vec<Self>, EdgeBuilderError> {
-        // Init: total work = number of left seeds (units = seeds processed)
-        progress_sink.set_total(left.len() as u64);
-
         // right seed are sorted by epoch_mid, so the first one has the minimum epoch.
         let right_seed_t0 = right.first().map(|s| s.plane.epoch_mid).ok_or_else(|| {
             EdgeBuilderError::InvalidSeeds(
@@ -390,7 +387,7 @@ impl Edge {
         let top_k = edge_config.top_k_per_left;
 
         // Select sequential or parallel execution strategy.
-        let res = match edge_config.parallel_left_batches {
+        match edge_config.parallel_left_batches {
             true => build_edges_parallel(
                 left,
                 chunk_size,
@@ -409,12 +406,7 @@ impl Edge {
                 model_pool,
                 progress_sink,
             ),
-        };
-
-        // Clean: always finish, whether Ok or Err
-        progress_sink.finish();
-
-        res
+        }
     }
 }
 

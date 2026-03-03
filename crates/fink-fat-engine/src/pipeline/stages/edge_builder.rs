@@ -90,17 +90,33 @@ pub fn run(
             // -----------------------------------------------------------------
             // 6) Build edges for each left night -> right night
             // -----------------------------------------------------------------
+
+            // Pre-collect valid left nights so we can compute the grand total
+            // of left seeds upfront and set the progress total *once* before
+            // the loop (avoids the counter overshooting on multi-pair runs).
+            let valid_left_nights: Vec<_> = pairs
+                .filter_map(|(left_night, _)| {
+                    let v = ctx.runtime_state.seed_store.get(&left_night)?;
+                    if v.is_empty() { None } else { Some(left_night) }
+                })
+                .collect();
+
+            let total_left_seeds: u64 = valid_left_nights
+                .iter()
+                .filter_map(|n| ctx.runtime_state.seed_store.get(n))
+                .map(|v| v.len() as u64)
+                .sum();
+
+            stage_sink.set_total(total_left_seeds);
+
             let edges_before = ctx.runtime_state.graph.edges.len() as u64;
             let mut pairs_processed: u64 = 0;
 
-            for (left_night, _) in pairs {
+            for left_night in valid_left_nights {
                 let Some(left_vec) = ctx.runtime_state.seed_store.get(&left_night) else {
-                    // Defensive: iterator is derived from keys, so this should not happen
+                    // Defensive: should not happen since we pre-collected valid nights
                     continue;
                 };
-                if left_vec.is_empty() {
-                    continue;
-                }
 
                 ctx.runtime_state
                     .graph
