@@ -85,9 +85,10 @@ impl PersistenceManager {
         let mpath = self.layout.manifest_path();
         match Manifest::load(&mpath) {
             Ok(m) => Ok(m),
-            Err(PersistenceIoError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
-                Ok(Manifest::new())
-            }
+            // Manifest not found yet → start fresh. Use `is_not_found()` rather
+            // than matching on `Io(e)` directly because the error may now be
+            // wrapped inside a `WithPath` annotation.
+            Err(e) if e.is_not_found() => Ok(Manifest::new()),
             Err(e) => Err(PersistenceError::Io(e)),
         }
     }
@@ -151,6 +152,7 @@ impl PersistenceManager {
     ) -> Result<Vec<Alert>, PersistenceIoError> {
         let path = self.layout.resolve_relative(relpath);
         DiskEnvelope::<Vec<Alert>>::load_enveloped(&path, ALERT_STORE_SCHEMA_VERSION)
+            .map_err(|e| e.with_path(&path))
     }
 
     /// Load seeds payload for one night.
@@ -160,6 +162,7 @@ impl PersistenceManager {
     ) -> Result<Vec<SeedNode>, PersistenceIoError> {
         let path = self.layout.resolve_relative(relpath);
         DiskEnvelope::<Vec<SeedNode>>::load_enveloped(&path, SEED_STORE_SCHEMA_VERSION)
+            .map_err(|e| e.with_path(&path))
     }
 
     // -------------------------------------------------------------------------

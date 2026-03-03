@@ -598,7 +598,8 @@ impl Manifest {
     ///   or if the magic string or schema version do not match.
     pub fn load(path: &Utf8Path) -> Result<Self, PersistenceIoError> {
         let mut manifest =
-            DiskEnvelope::<Manifest>::load_enveloped_json(path, STATE_SCHEMA_VERSION)?;
+            DiskEnvelope::<Manifest>::load_enveloped_json(path, STATE_SCHEMA_VERSION)
+                .map_err(|e| e.with_path(path))?;
         manifest.created_unix_s = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()

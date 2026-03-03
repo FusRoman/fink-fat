@@ -58,6 +58,55 @@ pub enum PersistenceIoError {
     /// Any other error (e.g., missing data for payload construction).
     #[error("other error: {0}")]
     Other(String),
+
+    /// A persistence error annotated with the file path that triggered it.
+    ///
+    /// Wrap any [`PersistenceIoError`] with `.with_path(path)` at a load/save
+    /// site to ensure the failing path is always visible in error messages.
+    #[error("error for path `{path}`: {source}")]
+    WithPath {
+        /// The file path that was being accessed when the error occurred.
+        path: String,
+        /// The underlying error.
+        #[source]
+        source: Box<PersistenceIoError>,
+    },
+}
+
+impl PersistenceIoError {
+    /// Annotate this error with a file path for better diagnostics.
+    ///
+    /// Use this at every load/save call site so that the failing path is
+    /// always surfaced in the error message, e.g.:
+    ///
+    /// ```no_run
+    /// # use camino::Utf8Path;
+    /// # use fink_fat_engine::persistence::error::PersistenceIoError;
+    /// # fn example(path: &Utf8Path) -> Result<(), PersistenceIoError> {
+    /// some_load(path).map_err(|e| e.with_path(path))?;
+    /// # Ok(()) }
+    /// # fn some_load(_: &Utf8Path) -> Result<(), PersistenceIoError> { Ok(()) }
+    /// ```
+    #[inline]
+    pub fn with_path(self, path: impl std::fmt::Display) -> Self {
+        Self::WithPath {
+            path: path.to_string(),
+            source: Box::new(self),
+        }
+    }
+
+    /// Returns `true` if this error (or an error nested inside a [`WithPath`]
+    /// wrapper) is an [`std::io::Error`] with [`std::io::ErrorKind::NotFound`].
+    ///
+    /// Use this helper instead of matching on `Io(e)` directly so that the
+    /// check still works after a `.with_path()` annotation.
+    pub fn is_not_found(&self) -> bool {
+        match self {
+            Self::Io(e) => e.kind() == std::io::ErrorKind::NotFound,
+            Self::WithPath { source, .. } => source.is_not_found(),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Error)]

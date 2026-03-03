@@ -152,7 +152,8 @@ impl EdgeJournalStore {
             let snapshot: EdgeSnapshot = DiskEnvelope::<EdgeSnapshot>::load_enveloped(
                 &snap_path,
                 EDGE_JOURNAL_SCHEMA_VERSION,
-            )?;
+            )
+            .map_err(|e| e.with_path(&snap_path))?;
 
             for e in snapshot.edges {
                 map.insert(e.key(), e);
@@ -170,7 +171,8 @@ impl EdgeJournalStore {
 
             let path = self.layout.resolve_relative(d.delta_rel_path());
             let delta: EdgeDeltaChunk =
-                DiskEnvelope::<EdgeDeltaChunk>::load_enveloped(&path, EDGE_JOURNAL_SCHEMA_VERSION)?;
+                DiskEnvelope::<EdgeDeltaChunk>::load_enveloped(&path, EDGE_JOURNAL_SCHEMA_VERSION)
+                    .map_err(|e| e.with_path(&path))?;
 
             self.apply_ops(&mut map, delta.ops)?;
         }
