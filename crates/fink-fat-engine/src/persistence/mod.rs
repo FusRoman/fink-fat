@@ -16,7 +16,7 @@ use crate::{
     alerts::{AlertSlice, store::AlertStore},
     engine_config::EngineConfig,
     error::{EngineError, FinkFatError},
-    graph::AlertLinkageDAG,
+    graph::{AlertLinkageDAG, edge::Edge},
     night_id::{NightId, PairingMode},
     persistence::{
         compression::Compression,
@@ -278,6 +278,15 @@ impl PersistenceManager {
 
     /// Compact edges to a snapshot and cleanup unreferenced deltas on disk.
     ///
+    /// The caller provides the current in-memory edge set so that no disk reload
+    /// is needed. This is the primary optimisation over the old design, which
+    /// re-read every delta file even though the full edge set was already live
+    /// in `RuntimeState.graph`.
+    ///
+    /// This also handles `cleanup_old_nights` so that callers that skip
+    /// `commit_night` (because compaction is preferred) still benefit from
+    /// the sliding-window file cleanup.
+    ///
     /// Recommended strategy: compact every `k` nights or when deltas count grows.
     pub fn compact_edges_and_cleanup(
         &self,
@@ -285,15 +294,22 @@ impl PersistenceManager {
         cfg: &EngineConfig,
         checkpoint_night_id: NightId,
         created_unix_s: i64,
+        edges: Vec<Edge>,
     ) -> Result<(), EngineError> {
         let window = self.compute_window(manifest, cfg)?;
         self.edge_journal.compact_to_snapshot(
             manifest,
             checkpoint_night_id,
             created_unix_s,
+            edges,
             window,
             cfg.binary_compression,
         )?;
+
+        // Mirror the cleanup that `commit_night` would have done.
+        if let Some(w) = window {
+            self.cleanup_old_nights(manifest, w)?;
+        }
 
         self.save_manifest(manifest)?;
         Ok(())

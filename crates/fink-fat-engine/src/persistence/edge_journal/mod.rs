@@ -185,7 +185,7 @@ impl EdgeJournalStore {
         Ok(map.into_values().collect())
     }
 
-    /// Compact snapshot + deltas into a new snapshot at `checkpoint_night_id`.
+    /// Compact a set of in-memory edges into a new snapshot at `checkpoint_night_id`.
     ///
     /// Parameters
     /// ----------
@@ -195,8 +195,13 @@ impl EdgeJournalStore {
     ///     Night to record as the snapshot checkpoint.
     /// created_unix_s : i64
     ///     Unix timestamp stored in the snapshot envelope.
-    /// window : Option<NightWindow>
-    ///     Optional sliding window to apply during compaction.
+    /// edges : Vec<Edge>
+    ///     The full current edge set (already in memory — no disk reload needed).
+    ///     These are typically taken directly from `RuntimeState.graph.edges`.
+    /// window : Option<PairingMode>
+    ///     Optional sliding window; used to drop edges outside the active range
+    ///     before writing the snapshot (defensive filter — caller-provided edges
+    ///     are expected to already respect the window).
     ///
     /// Returns
     /// -------
@@ -205,13 +210,14 @@ impl EdgeJournalStore {
     ///
     /// Behavior
     /// --------
-    /// - Reconstruct current edges using [`load_edges`].
     /// - Write a new `EdgeSnapshot` to `edges/snapshot.bin`.
     /// - Update manifest snapshot metadata.
     /// - Drop all deltas with `night_id <= checkpoint_night_id` from the manifest.
     ///
     /// Notes
     /// -----
+    /// - This does not reload edges from disk; the caller must supply the
+    ///   complete in-memory edge set.
     /// - This does not delete files from disk (yet). It only updates the manifest.
     ///   You can add a cleanup step once you are comfortable with the workflow.
     pub fn compact_to_snapshot(
@@ -219,11 +225,18 @@ impl EdgeJournalStore {
         manifest: &mut Manifest,
         checkpoint_night_id: NightId,
         created_unix_s: i64,
+        edges: Vec<Edge>,
         window: Option<PairingMode>,
         compression: Compression,
     ) -> Result<(), PersistenceIoError> {
-        // Rebuild current edges (snapshot + deltas)
-        let edges = self.load_edges(manifest, window)?;
+        // Optionally filter by window (defensive: edges should already be filtered).
+        let edges: Vec<Edge> = match window {
+            Some(w) => edges
+                .into_iter()
+                .filter(|e| w.contains(e.from.night_id) && w.contains(e.to.night_id))
+                .collect(),
+            None => edges,
+        };
 
         let snapshot = EdgeSnapshot {
             checkpoint_night_id,

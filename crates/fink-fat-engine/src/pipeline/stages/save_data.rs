@@ -27,7 +27,7 @@ pub fn run(
         hooks,
         StageMeta {
             label: PipelineStage::SavePersistedData.label().to_string(),
-            total: Some(5),
+            total: Some(4), // 1 for alerts + 1 for edges + 1 for orbits (if full) + 1 for manifest
         },
         |stage_sink| {
             let created_unix_s = now_unix_s();
@@ -68,42 +68,53 @@ pub fn run(
             stage_sink.inc(1);
 
             // -----------------------------------------------------------------
-            // 2. Write edge journal delta (only operations from this run).
+            // 2 + 3. Drain pending edge operations and decide: write a delta
+            //         or compact the entire history into a new snapshot.
             //
             //    The DAG accumulates EdgeOps in an internal buffer whenever
-            //    edges are added, removed, or mutated. We drain that buffer
-            //    so only the *incremental* changes are written as a delta.
+            //    edges are added, removed, or mutated.  We drain that buffer
+            //    here so the decision can be made before touching disk.
+            //
+            //    Compaction path (preferred when the delta count is high):
+            //      - Pass the current in-memory edge set directly to
+            //        `compact_edges_and_cleanup`.  No delta file is written;
+            //        the snapshot replaces the entire history in one write.
+            //      - Avoids the costly reload of every previous delta that the
+            //        old design performed inside `compact_to_snapshot`.
+            //
+            //    Delta path:
+            //      - Write an incremental delta for this run's operations only
+            //        via `commit_night` (which also handles file cleanup).
             // -----------------------------------------------------------------
             let edge_ops = ctx.runtime_state.graph.drain_pending_ops();
             let n_edge_ops = edge_ops.len() as u64;
 
-            ctx.persistence
-                .commit_night(
-                    manifest.clone(),
-                    ctx.engine_config,
-                    current_night,
-                    created_unix_s,
-                    edge_ops,
-                )
-                .map(|m| manifest = m)?;
-            stage_sink.inc(1);
-
-            // -----------------------------------------------------------------
-            // 3. Periodic edge compaction.
-            //
-            //    When the number of accumulated deltas exceeds the threshold,
-            //    rebuild the snapshot to keep load times bounded.
-            // -----------------------------------------------------------------
+            // Check *before* writing: would this run's delta push us over the
+            // compaction threshold?
             let n_deltas = manifest.edge_journal.deltas.len();
-            let compacted = if n_deltas >= ctx.engine_config.compact_graph_every_delta {
+            let should_compact =
+                n_deltas.saturating_add(1) >= ctx.engine_config.compact_graph_every_delta;
+
+            let compacted = if should_compact {
+                // Pass the in-memory edge set directly — no disk reload needed.
+                let edges = ctx.runtime_state.graph.edges.clone();
                 ctx.persistence.compact_edges_and_cleanup(
                     &mut manifest,
                     ctx.engine_config,
                     current_night,
                     created_unix_s,
+                    edges,
                 )?;
                 true
             } else {
+                // Write an incremental delta for this run's edge operations.
+                manifest = ctx.persistence.commit_night(
+                    manifest.clone(),
+                    ctx.engine_config,
+                    current_night,
+                    created_unix_s,
+                    edge_ops,
+                )?;
                 false
             };
             stage_sink.inc(1);
