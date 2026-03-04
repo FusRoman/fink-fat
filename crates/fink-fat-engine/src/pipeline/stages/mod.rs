@@ -63,6 +63,8 @@ pub(super) fn run_stage(
     meta: StageMeta,
     stage_run: impl FnOnce(&dyn StageProgress) -> Result<Vec<(&'static str, u64)>, EngineError>,
 ) -> Result<StageReport, EngineError> {
+    tracing::info!(stage = stage.label(), "stage starting");
+
     let sink = hooks.on_stage_start(stage, meta);
 
     let t0 = Instant::now();
@@ -73,6 +75,14 @@ pub(super) fn run_stage(
         elapsed_ms: t0.elapsed().as_millis(),
         counters,
     };
+
+    tracing::info!(
+        stage = stage.label(),
+        elapsed_ms = report.elapsed_ms,
+        counters = ?report.counters,
+        "stage complete",
+    );
+
     hooks.on_stage_end(stage, report.clone());
     Ok(report)
 }

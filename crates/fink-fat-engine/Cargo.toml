@@ -12,6 +12,7 @@ rand = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 camino = { workspace = true }
+tracing = { workspace = true }
 ahash = { version = "0.8.12", features = ["serde"] }
 arrow-array = "57.3.0"
 bitcode = { version = "0.6.9", features = ["serde"] }

@@ -33,6 +33,10 @@ pub struct NightRunArgs {
     /// Display indicatif progress bars during the pipeline run
     #[arg(long, default_value_t = false)]
     pub progress: bool,
+
+    /// Enable logging to file and terminal (log level is read from the config file)
+    #[arg(long, default_value_t = false)]
+    pub logs: bool,
 }
 
 /// Arguments for the `reprocessing` subcommand

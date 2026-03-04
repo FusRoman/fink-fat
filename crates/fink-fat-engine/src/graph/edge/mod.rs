@@ -386,8 +386,23 @@ impl Edge {
         let chunk_size = edge_config.parallel_left_batch_size.max(1);
         let top_k = edge_config.top_k_per_left;
 
+        tracing::debug!(
+            n_left = left.len(),
+            n_right = right.len(),
+            chunk_size,
+            top_k,
+            parallel = edge_config.parallel_left_batches,
+            emit_all_edges = edge_config.emit_all_edges,
+            "build_edges starting",
+        );
+        tracing::trace!(
+            right_seed_t0,
+            time_binner_width,
+            "right-side time binner initialised",
+        );
+
         // Select sequential or parallel execution strategy.
-        match edge_config.parallel_left_batches {
+        let edges = match edge_config.parallel_left_batches {
             true => build_edges_parallel(
                 left,
                 chunk_size,
@@ -406,8 +421,32 @@ impl Edge {
                 model_pool,
                 progress_sink,
             ),
-        }
+        }?;
+
+        let (cost_min, cost_max, cost_mean) = edge_cost_stats(&edges);
+        tracing::debug!(
+            n_edges = edges.len(),
+            cost_min,
+            cost_max,
+            cost_mean,
+            "build_edges complete"
+        );
+        Ok(edges)
     }
+}
+
+/// Compute min, max, and mean cost from a slice of edges.
+/// Returns `(0.0, 0.0, 0.0)` if the slice is empty.
+#[inline]
+fn edge_cost_stats(edges: &[Edge]) -> (f64, f64, f64) {
+    if edges.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+    let (mn, mx, s) = edges.iter().fold(
+        (f64::INFINITY, f64::NEG_INFINITY, 0.0_f64),
+        |(mn, mx, s), e| (mn.min(e.cost), mx.max(e.cost), s + e.cost),
+    );
+    (mn, mx, s / edges.len() as f64)
 }
 
 /// Process a chunk of left seeds by emitting *all* candidate edges (no ML / no Top-K).
@@ -445,6 +484,18 @@ fn process_chunk_emit_all<'seed_lf>(
 
             local_edges.push(Edge::new(src, to, cost, dt_days)?);
         }
+    }
+
+    if tracing::enabled!(tracing::Level::TRACE) {
+        let (cost_min, cost_max, cost_mean) = edge_cost_stats(&local_edges);
+        tracing::trace!(
+            chunk_size = chunk.len(),
+            edges_in_chunk = local_edges.len(),
+            cost_min,
+            cost_max,
+            cost_mean,
+            "process_chunk_emit_all",
+        );
     }
 
     Ok(local_edges)
@@ -508,6 +559,19 @@ fn process_chunk_ml_topk(
             let dt_days = src.delta_days(right_candidate);
             local_edges.push(Edge::new(src, right_candidate, *edge_cost, dt_days)?);
         }
+    }
+
+    if tracing::enabled!(tracing::Level::TRACE) {
+        let (cost_min, cost_max, cost_mean) = edge_cost_stats(&local_edges);
+        tracing::trace!(
+            chunk_size = chunk.len(),
+            top_k,
+            edges_in_chunk = local_edges.len(),
+            cost_min,
+            cost_max,
+            cost_mean,
+            "process_chunk_ml_topk",
+        );
     }
 
     Ok(local_edges)
@@ -579,8 +643,17 @@ fn build_edges_parallel(
 ) -> Result<Vec<Edge>, EdgeBuilderError> {
     use rayon::prelude::*;
 
-    left.par_chunks(chunk_size)
-        .map(|chunk| {
+    let n_chunks = left.chunks(chunk_size).count();
+    tracing::debug!(
+        n_left = left.len(),
+        chunk_size,
+        n_chunks,
+        "build_edges_parallel starting"
+    );
+
+    let edges = left
+        .par_chunks(chunk_size)
+        .map(|chunk| -> Result<Vec<Edge>, EdgeBuilderError> {
             let out = process_chunk(chunk, right_index, edge_config, top_k, model_pool)?;
 
             // Update: once per chunk to avoid too many calls
@@ -588,10 +661,13 @@ fn build_edges_parallel(
 
             Ok(out)
         })
-        .try_reduce(Vec::new, |mut a, mut b| {
+        .try_reduce(Vec::<Edge>::new, |mut a, mut b| {
             a.append(&mut b);
             Ok(a)
-        })
+        })?;
+
+    tracing::debug!(n_edges = edges.len(), "build_edges_parallel complete");
+    Ok(edges)
 }
 
 /// Build edges by processing `left` sequentially in chunks.
@@ -626,6 +702,14 @@ fn build_edges_sequential(
     model_pool: Option<&EdgeRankingModelPool>,
     progress_sink: &dyn StageProgress,
 ) -> Result<Vec<Edge>, EdgeBuilderError> {
+    let n_chunks = left.chunks(chunk_size).count();
+    tracing::debug!(
+        n_left = left.len(),
+        chunk_size,
+        n_chunks,
+        "build_edges_sequential starting"
+    );
+
     let mut edges: Vec<Edge> = Vec::new();
 
     for chunk in left.chunks(chunk_size) {
@@ -637,9 +721,10 @@ fn build_edges_sequential(
             model_pool,
         )?);
 
-        // Update: mark this chunk’s seeds as processed
+        // Update: mark this chunk's seeds as processed
         progress_sink.inc(chunk.len() as u64);
     }
 
+    tracing::debug!(n_edges = edges.len(), "build_edges_sequential complete");
     Ok(edges)
 }

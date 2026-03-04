@@ -132,7 +132,20 @@ impl SolverManager {
     /// - The plan order is `component_id` ascending (`0..n_components`).
     /// - Keeping this plan explicit makes routing easy to inspect and reuse.
     pub fn make_plan(&self, comps: &ConnectedComponents) -> SolvePlan {
+        let routing_mode = match self.policy.routing {
+            SolverRoutingMode::Heuristics => "heuristics",
+            SolverRoutingMode::Force(_) => "force",
+        };
+        tracing::debug!(
+            n_components = comps.n_components,
+            routing_mode,
+            "make_plan starting",
+        );
+
         let mut items = Vec::with_capacity(comps.n_components as usize);
+        let mut n_bounded_beam = 0u32;
+        let mut n_mcf = 0u32;
+        let mut n_blob_breaker = 0u32;
 
         for cid in 0..comps.n_components {
             let cid_u32 = cid;
@@ -142,11 +155,19 @@ impl SolverManager {
                 SolverRoutingMode::Force(c) => c,
             };
 
+            match choice {
+                SolverChoice::BoundedBeam => n_bounded_beam += 1,
+                SolverChoice::MinCostFlow => n_mcf += 1,
+                SolverChoice::BlobBreaker => n_blob_breaker += 1,
+            }
+
             items.push(WorkItem {
                 component_id: cid_u32,
                 choice,
             });
         }
+
+        tracing::debug!(n_bounded_beam, n_mcf, n_blob_breaker, "make_plan complete");
 
         SolvePlan { items }
     }
@@ -185,6 +206,8 @@ impl SolverManager {
         // Solver instances used by this manager.
         let bounded_beam = BoundedBeamSolver::new(self.bounded_beam_config.clone());
 
+        tracing::debug!(n_items = plan.items.len(), "run_plan starting");
+
         let mut outputs: Vec<SolverOutput> = Vec::with_capacity(plan.items.len());
 
         for item in &plan.items {
@@ -201,9 +224,31 @@ impl SolverManager {
                 }
             };
 
+            if out.diag.n_selected > 0 {
+                tracing::trace!(
+                    component_id = item.component_id,
+                    solver = out.diag.solver_name,
+                    n_nodes = out.diag.n_nodes,
+                    n_tracks = out.diag.n_selected,
+                    n_candidates = out.diag.n_candidates,
+                    n_expansions = out.diag.n_expansions,
+                    "component solved",
+                );
+            }
+
             outputs.push(out);
             progress_sink.inc(1);
         }
+
+        let total_tracks: u32 = outputs.iter().map(|o| o.diag.n_selected).sum();
+        let n_with_tracks = outputs.iter().filter(|o| o.diag.n_selected > 0).count();
+        tracing::debug!(
+            n_outputs = outputs.len(),
+            total_tracks,
+            n_with_tracks,
+            "run_plan complete",
+        );
+
         outputs
     }
 }

@@ -107,6 +107,16 @@ pub fn run(
                 .map(|v| v.len() as u64)
                 .sum();
 
+            tracing::debug!(
+                n_left_nights = valid_left_nights.len(),
+                total_left_seeds,
+                %right_night,
+                max_gap,
+                emit_all_edges = ctx.engine_config.edges.emit_all_edges,
+                parallel = ctx.engine_config.edges.parallel_left_batches,
+                "BuildEdges starting",
+            );
+
             stage_sink.set_total(total_left_seeds);
 
             let edges_before = ctx.runtime_state.graph.edges.len() as u64;
@@ -141,6 +151,8 @@ pub fn run(
 
             let edges_added =
                 (ctx.runtime_state.graph.edges.len() as u64).saturating_sub(edges_before);
+
+            tracing::debug!(pairs_processed, edges_added, "BuildEdges complete");
 
             Ok(vec![
                 ("pairs_processed", pairs_processed),

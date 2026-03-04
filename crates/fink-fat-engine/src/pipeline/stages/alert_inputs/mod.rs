@@ -216,6 +216,8 @@ pub fn run(
             // via DataFusion.
             let uri = &ctx.plan.inputs.alerts_uri;
 
+            tracing::debug!(uri = %uri.0, "loading alerts");
+
             // -----------------------------------------------------------------
             // 2) Load alerts into a fresh AlertStore.
             // -----------------------------------------------------------------
@@ -236,6 +238,13 @@ pub fn run(
                         message: format!("failed to load alerts from {}: {e:?}", uri.0),
                     },
                 })?;
+
+            tracing::debug!(
+                n_alerts = new_alert_store.n_alerts(),
+                n_nights = new_alert_store.n_nights(),
+                "alerts loaded (pre-normalization)",
+            );
+
             stage_sink.inc(1);
 
             // -----------------------------------------------------------------
@@ -251,6 +260,22 @@ pub fn run(
             // some internal representation depending on implementation details.
             let n_new_alerts = new_alert_store.n_alerts();
             let n_new_nights = new_alert_store.n_nights();
+
+            tracing::debug!(
+                n_alerts = n_new_alerts,
+                n_nights = n_new_nights,
+                "alerts normalised (post sort-and-rekey)",
+            );
+
+            // TRACE: one line per night with its alert count — too verbose for DEBUG
+            // but invaluable when diagnosing per-night ingestion issues.
+            if tracing::enabled!(tracing::Level::TRACE) {
+                let nights = new_alert_store.nights_sorted();
+                for nid in &nights {
+                    let count = new_alert_store.get(nid).map(|v| v.len()).unwrap_or(0);
+                    tracing::trace!(night_id = %nid, n_alerts = count, "night detail");
+                }
+            }
 
             // -----------------------------------------------------------------
             // 4) Update the runtime night window.
@@ -269,6 +294,13 @@ pub fn run(
             let max_gap = ctx.engine_config.max_gap_nights();
             // The ok will normally never trigger because the max_gap has already been validated at config level.
             ctx.runtime_state.window = PairingMode::single_night(last_night, max_gap).ok();
+
+            tracing::debug!(
+                last_night = %last_night,
+                max_gap_nights = max_gap,
+                "night window updated",
+            );
+
             stage_sink.inc(1);
 
             // -----------------------------------------------------------------
@@ -284,6 +316,13 @@ pub fn run(
             ctx.runtime_state
                 .alert_store
                 .merge_in_place(new_alert_store);
+
+            tracing::debug!(
+                total_alerts = ctx.runtime_state.alert_store.n_alerts(),
+                total_nights = ctx.runtime_state.alert_store.n_nights(),
+                "alert store merged into runtime state",
+            );
+
             stage_sink.inc(1);
 
             // -----------------------------------------------------------------

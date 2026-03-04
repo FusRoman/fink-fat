@@ -333,6 +333,13 @@ impl<'edge_lf, 'seed_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
         let index = SeedGlobalIndex::build(seed_store)?;
         let n_total = index.n_total();
 
+        tracing::debug!(
+            n_seeds = n_total,
+            n_edges = graph.edges.len(),
+            active_only,
+            "ConnectedComponents starting",
+        );
+
         // 1) Union-Find over the undirected view of the graph.
         let mut uf = UnionFind::new(n_total);
         Self::union_edges(seed_store, &index, &mut uf, &graph.edges, active_only)?;
@@ -371,7 +378,7 @@ impl<'edge_lf, 'seed_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
             &index,
         )?;
 
-        Ok(Self {
+        let cc = Self {
             index,
             comp_of_node,
             n_components: n_components as u32,
@@ -384,7 +391,32 @@ impl<'edge_lf, 'seed_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
             component_out_deg_local,
             component_sources_local,
             component_sinks_local,
-        })
+        };
+
+        let total_active_edges: u32 = cc.component_active_edge.iter().sum();
+        let n_isolated = cc.component_active_edge.iter().filter(|&&e| e == 0).count();
+        let n_multi_node = (0..n_components)
+            .filter(|&c| cc.component_size(c as u32) > 1)
+            .count();
+        let max_component_size = (0..n_components)
+            .map(|c| cc.component_size(c as u32))
+            .max()
+            .unwrap_or(0);
+        let total_sources: usize = (0..n_components)
+            .map(|c| cc.component_sources_local(c as u32).len())
+            .sum();
+
+        tracing::debug!(
+            n_components,
+            n_isolated,
+            n_multi_node,
+            max_component_size,
+            total_active_edges,
+            total_sources,
+            "ConnectedComponents complete",
+        );
+
+        Ok(cc)
     }
 
     // -------------------------------------------------------------------------
@@ -993,33 +1025,49 @@ impl<'edge_lf, 'seed_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
         solver_policy: &SolverPolicy,
     ) -> SolverChoice {
         // 0) Optional global override
-        match solver_policy.routing {
-            SolverRoutingMode::Force(choice) => return choice,
-            SolverRoutingMode::Heuristics => {}
+        if let SolverRoutingMode::Force(choice) = solver_policy.routing {
+            tracing::trace!(component_id, solver = "forced", "classify");
+            return choice;
         }
 
         let n = self.component_size(component_id) as u32;
         let m_active = self.component_active_edges(component_id);
+        let night_span = self.component_night_span(component_id);
 
         // 1) Tiny components: trivial fast path (bounded by nodes and active edges)
-        if n <= solver_policy.trivial_max_nodes
+        let choice = if n <= solver_policy.trivial_max_nodes
             && m_active <= solver_policy.trivial_max_active_edges
         {
-            return SolverChoice::BoundedBeam;
-        }
+            SolverChoice::BoundedBeam
 
         // 2) Large night span: avoid MCF
-        if self.component_night_span(component_id) > solver_policy.max_night_span_for_mcf {
-            return SolverChoice::BlobBreaker;
-        }
-
-        // 3) Budgeted MCF vs blob-breaker
-        let t_est = solver_policy.estimate_mcf_time_s(n, m_active);
-        if t_est <= solver_policy.mcf_budget_s {
-            SolverChoice::MinCostFlow
-        } else {
+        } else if night_span > solver_policy.max_night_span_for_mcf {
             SolverChoice::BlobBreaker
-        }
+        } else {
+            // 3) Budgeted MCF vs blob-breaker
+            let t_est = solver_policy.estimate_mcf_time_s(n, m_active);
+            if t_est <= solver_policy.mcf_budget_s {
+                SolverChoice::MinCostFlow
+            } else {
+                SolverChoice::BlobBreaker
+            }
+        };
+
+        let solver_name = match choice {
+            SolverChoice::BoundedBeam => "bounded_beam",
+            SolverChoice::MinCostFlow => "min_cost_flow",
+            SolverChoice::BlobBreaker => "blob_breaker",
+        };
+        tracing::trace!(
+            component_id,
+            n_nodes = n,
+            m_active_edges = m_active,
+            night_span,
+            solver = solver_name,
+            "classify",
+        );
+
+        choice
     }
 }
 

@@ -223,6 +223,17 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
     // Dot-product threshold for ang_sep(b,c) <= max_pair_sep.
     let cos_pair_threshold = cfg.max_pair_sep.cos();
 
+    tracing::debug!(
+        n_input_pairs = pairs.len(),
+        max_dt_between = cfg.max_dt_between,
+        max_pair_sep = cfg.max_pair_sep,
+        max_predicted_residual = cfg.max_predicted_residual,
+        max_flux_difference = cfg.max_flux_difference,
+        enforce_time_order = cfg.enforce_time_order,
+        search_radius,
+        "generate_triplets_from_pairs starting",
+    );
+
     let mut spatial_neighbor_cache: AHashMap<SpatialKey, Vec<SpatialKey>> = AHashMap::new();
     let mut timebin_target_cache: AHashMap<TimeBin, Vec<TimeBin>> = AHashMap::new();
 
@@ -231,9 +242,17 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
     // Dedup because a triplet may be discovered through different (space,time) neighbor paths.
     let mut seen: AHashSet<(usize, usize, usize)> = AHashSet::new();
 
+    // Rejection counters.
+    let mut n_skipped_time_order: u64 = 0;
+    let mut n_rejected_flux: u64 = 0;
+    let mut n_rejected_angular: u64 = 0;
+    let mut n_rejected_residual: u64 = 0;
+    let mut n_dedup_skipped: u64 = 0;
+
     for &Pair { a, b } in pairs {
         // Optional enforcement: require strict ordering on the input pairs.
         if cfg.enforce_time_order && a.mjd_tt >= b.mjd_tt {
+            n_skipped_time_order += 1;
             continue;
         }
 
@@ -295,12 +314,14 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
 
                     // Flux similarity between b and c.
                     if (flux_b - c.flux).abs() > cfg.max_flux_difference {
+                        n_rejected_flux += 1;
                         continue;
                     }
 
                     // Pairwise angular consistency: ang_sep(b,c) <= max_pair_sep
                     let u_c = unit_vec(c.ra, c.dec);
                     if dot3(u_b, u_c) < cos_pair_threshold {
+                        n_rejected_angular += 1;
                         continue;
                     }
 
@@ -323,6 +344,7 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
 
                     let resid = ((dx_act - dx_pred).powi(2) + (dy_act - dy_pred).powi(2)).sqrt();
                     if resid > cfg.max_predicted_residual {
+                        n_rejected_residual += 1;
                         continue;
                     }
 
@@ -334,6 +356,8 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
                     );
                     if seen.insert(key) {
                         out.push(Triplet { a, b, c });
+                    } else {
+                        n_dedup_skipped += 1;
                     }
                 }
             }
@@ -346,6 +370,16 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
             .then_with(|| t1.b.cmp(t2.b))
             .then_with(|| t1.c.cmp(t2.c))
     });
+
+    tracing::debug!(
+        n_triplets = out.len(),
+        n_skipped_time_order,
+        n_rejected_flux,
+        n_rejected_angular,
+        n_rejected_residual,
+        n_dedup_skipped,
+        "generate_triplets_from_pairs complete",
+    );
 
     out
 }

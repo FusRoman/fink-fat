@@ -143,6 +143,27 @@ impl PersistenceLayout {
     }
 
     // -------------------------------------------------------------------------
+    // Log files (one per pipeline run, named by session timestamp)
+    // -------------------------------------------------------------------------
+
+    /// Directory containing per-run log files.
+    pub fn logs_dir(&self) -> Utf8PathBuf {
+        self.root.join("logs")
+    }
+
+    /// Path to the log file for one pipeline run.
+    ///
+    /// `run_id` is typically a UTC datetime string formatted as
+    /// `YYYY-MM-DDTHH-MM-SS`, produced by the CLI before the pipeline starts.
+    ///
+    /// Example
+    /// -------
+    /// `logs/run-2026-03-04T14-30-00.log`
+    pub fn log_run_path(&self, run_id: &str) -> Utf8PathBuf {
+        self.logs_dir().join(format!("run-{run_id}.log"))
+    }
+
+    // -------------------------------------------------------------------------
     // Relative path helpers (manifest storage)
     // -------------------------------------------------------------------------
 

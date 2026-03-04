@@ -220,6 +220,13 @@ pub fn run(
             let nights_to_process = ctx.runtime_state.alert_store.night_window_nights(*window);
             stage_sink.set_total(nights_to_process.len() as u64);
 
+            tracing::debug!(
+                n_nights = nights_to_process.len(),
+                healpix_depth = ctx.engine_config.healpix_depth,
+                time_binner_width = ctx.engine_config.time_binner_width,
+                "BuildSeeds starting",
+            );
+
             // -----------------------------------------------------------------
             // 3) Global counters (reported via StageReport).
             // -----------------------------------------------------------------
@@ -232,7 +239,10 @@ pub fn run(
             // 4) Process each night in the requested window.
             // -----------------------------------------------------------------
             for (night_id, alerts) in ctx.runtime_state.alert_store.night_window_iter(*window) {
-                total_alerts += alerts.len() as u64;
+                let n_alerts = alerts.len();
+                total_alerts += n_alerts as u64;
+
+                tracing::debug!(%night_id, n_alerts, "processing night");
 
                 // -------------------------------------------------------------
                 // Night sub-scope (optional but recommended)
@@ -257,16 +267,20 @@ pub fn run(
                     ),
                 })?;
                 let time_binner = UniformTimeBinner::new(t0, ctx.engine_config.time_binner_width);
+                tracing::trace!(%night_id, t0, time_binner_width = ctx.engine_config.time_binner_width, "t0 and time binner initialised");
                 night_sink.inc(1);
 
                 // 4.2) Build the (space, time) bucket index.
                 let bucket_index = build_alert_bucket_index(alerts, &spatial_binner, &time_binner);
+                tracing::trace!(%night_id, n_buckets = bucket_index.buckets.len(), "bucket index built");
                 night_sink.inc(1);
 
                 // 4.3) Generate candidate pairs.
                 let ps =
                     pairs::generate_pairs(&bucket_index, &spatial_binner, &time_binner, pair_cfg);
-                total_pairs += ps.len() as u64;
+                let n_pairs = ps.len();
+                total_pairs += n_pairs as u64;
+                tracing::debug!(%night_id, n_pairs, "pairs generated");
 
                 let pair_seeds = pairs::extract_pair_features(
                     &ps,
@@ -274,6 +288,7 @@ pub fn run(
                     night_id,
                     None,
                 );
+                tracing::trace!(%night_id, n_pair_seeds = pair_seeds.len(), "pair features extracted");
                 night_sink.inc(1);
 
                 // 4.4) Generate triplets + extract features (borrowed).
@@ -284,13 +299,16 @@ pub fn run(
                     triplet_cfg,
                     &ps,
                 );
-                total_triplets += ts.len() as u64;
+                let n_triplets = ts.len();
+                total_triplets += n_triplets as u64;
+                tracing::debug!(%night_id, n_triplets, "triplets generated");
 
                 let triplets_seeds = triplets::extract_triplet_features(
                     &ts,
                     &mut ctx.runtime_state.seed_store,
                     night_id,
                 );
+                tracing::trace!(%night_id, n_triplet_seeds = triplets_seeds.len(), "triplet features extracted");
                 night_sink.inc(1);
 
                 // 4.5) Convert to owned + sort + store.
@@ -300,7 +318,9 @@ pub fn run(
                 all_seeds.extend(pair_seeds);
                 all_seeds.extend(triplets_seeds);
                 all_seeds.sort();
-                total_seeds += all_seeds.len() as u64;
+                let n_night_seeds = all_seeds.len();
+                total_seeds += n_night_seeds as u64;
+                tracing::debug!(%night_id, n_night_seeds, "seeds converted to owned and sorted");
 
                 ctx.runtime_state
                     .seed_store
@@ -312,6 +332,15 @@ pub fn run(
                 // 1 unit = 1 processed night
                 stage_sink.inc(1);
             }
+
+            tracing::debug!(
+                total_nights = nights_to_process.len(),
+                total_alerts,
+                total_pairs,
+                total_triplets,
+                total_seeds,
+                "BuildSeeds complete",
+            );
 
             Ok(vec![
                 ("nights", nights_to_process.len() as u64),

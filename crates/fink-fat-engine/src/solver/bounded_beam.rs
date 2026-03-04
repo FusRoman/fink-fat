@@ -213,6 +213,7 @@ impl BoundedBeamSolver {
             time_spent_s: 0.0,
             n_candidates: 0,
             n_selected: 0,
+            n_expansions: 0,
         };
 
         // Early exit: even a full component path cannot satisfy `min_nodes`.
@@ -244,6 +245,17 @@ impl BoundedBeamSolver {
         );
 
         diag.n_selected = tracks.len() as u32;
+        if diag.n_selected > 0 {
+            tracing::trace!(
+                component_id,
+                n_nodes,
+                n_tracks = diag.n_selected,
+                n_candidates = diag.n_candidates,
+                n_expansions = diag.n_expansions,
+                budget_exhausted = diag.n_expansions >= self.cfg.max_expansions as u32,
+                "solve_component_cc found tracks",
+            );
+        }
         SolverOutput { tracks, diag }
     }
 }
@@ -851,6 +863,9 @@ fn enumerate_beam_tracks_from_component_view(
             }
         }
     }
+
+    // Track expansion count in diagnostics (used for budget diagnostics).
+    diag.n_expansions = expansions as u32;
 
     // 5) Reconstruct tracks.
     let mut tracks: AHashMap<u32, TrackHypothesis> = terminal_states

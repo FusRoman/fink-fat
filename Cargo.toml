@@ -25,12 +25,17 @@ serde = { version = "1.0.228", features = ["derive"] }
 thiserror = "2.0.17"
 camino = "1.2.1"
 tempfile = "3.23.0"
+tracing = "0.1"
 fink-fat-engine = { path = "crates/fink-fat-engine" }
 
 [dependencies]
 clap = { version = "4.5.60", features = ["cargo", "derive"] }
 indicatif = "0.18.0"
 camino = { workspace = true }
+chrono = "0.4"
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-appender = "0.2"
 fink-fat-engine = { workspace = true }
 
 [dev-dependencies]

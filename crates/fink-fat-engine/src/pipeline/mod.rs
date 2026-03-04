@@ -48,6 +48,11 @@ impl PipelineRunner {
     ) -> Result<PipelineOutput, EngineError> {
         self.validate_plan()?;
 
+        tracing::info!(
+            stages = ?self.plan.stages.iter().map(|s| s.label()).collect::<Vec<_>>(),
+            "pipeline starting",
+        );
+
         // ---------------------------------------------------------------------
         // Execute stages in plan order.
         // ---------------------------------------------------------------------
@@ -66,6 +71,8 @@ impl PipelineRunner {
             let report = stage.run(ctx, hooks)?;
             reports.push((stage, report));
         }
+
+        tracing::info!("pipeline complete");
 
         Ok(PipelineOutput { reports })
     }

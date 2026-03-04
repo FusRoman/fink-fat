@@ -99,6 +99,22 @@ impl IndicatifHooks {
             mp: Arc::new(MultiProgress::new()),
         }
     }
+
+    /// Build an [`IndicatifHooks`] that uses an externally owned [`MultiProgress`].
+    ///
+    /// Use this when you need to share the same `MultiProgress` with the
+    /// logging layer so that log lines are printed above the active bars.
+    pub fn with_mp(mp: Arc<MultiProgress>) -> Self {
+        Self { mp }
+    }
+
+    /// Return a clone of the shared [`MultiProgress`] handle.
+    ///
+    /// Pass this to [`crate::logging::init_logging`] so that log lines are
+    /// routed through [`MultiProgress::println`] instead of raw stderr.
+    pub fn multi_progress(&self) -> Arc<MultiProgress> {
+        self.mp.clone()
+    }
 }
 
 impl Default for IndicatifHooks {

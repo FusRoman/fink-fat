@@ -244,10 +244,21 @@ pub fn run(
             let current_night = match ctx.runtime_state.alert_store.last_night() {
                 Some(n) => n,
                 None => {
+                    tracing::debug!("SavePersistedData: no alerts in store, skipping");
                     stage_sink.inc(3); // Increment all remaining steps since there's no data to save.
                     return Ok(vec![("skipped", 1)]);
                 }
             };
+
+            let n_nights = ctx.runtime_state.alert_store.n_nights();
+            let n_edges = ctx.runtime_state.graph.edges.len();
+            tracing::debug!(
+                current_night = current_night.0,
+                n_nights,
+                n_edges,
+                persist_policy = ?persist_policy,
+                "SavePersistedData starting",
+            );
 
             // ----------------------------------------------------------------
             // Prepare inputs for concurrent I/O.
@@ -265,6 +276,14 @@ pub fn run(
                 >= ctx.engine_config.compact_graph_every_delta;
             let edges_for_compact = should_compact.then(|| ctx.runtime_state.graph.edges.clone());
 
+            tracing::trace!(
+                n_edge_ops,
+                should_compact,
+                n_deltas_so_far = manifest.edge_journal.deltas.len(),
+                compact_threshold = ctx.engine_config.compact_graph_every_delta,
+                "edge journal write plan",
+            );
+
             let nights_sorted = ctx.runtime_state.alert_store.nights_sorted();
             let night_tasks: Vec<NightSaveTask> = nights_sorted
                 .iter()
@@ -279,6 +298,12 @@ pub fn run(
             let engine_config = ctx.engine_config;
             let layout = persistence.layout();
             let compression = engine_config.binary_compression;
+
+            tracing::trace!(
+                n_night_tasks = night_tasks.len(),
+                compression = ?compression,
+                "starting parallel night file writes",
+            );
 
             // Snapshot of the manifest used by night-write threads for envelope
             // metadata; `created_unix_s` is set so all envelopes share the same
@@ -346,6 +371,12 @@ pub fn run(
                 .into_iter()
                 .collect::<Result<_, PersistenceIoError>>()?;
 
+            tracing::trace!(
+                n_nights_written = night_entries.len(),
+                edge_compacted = compacted,
+                "parallel I/O complete",
+            );
+
             let mut manifest = manifest;
             let alerts_saved = apply_night_entries(&mut manifest, &night_entries, layout);
             manifest.edge_journal = manifest_after_edges.edge_journal;
@@ -356,9 +387,11 @@ pub fn run(
             // ----------------------------------------------------------------
             let mut orbits_exported: u64 = 0;
             if matches!(persist_policy, PersistPolicy::Full) {
+                tracing::trace!("exporting orbit Parquet files (Full persistence policy)");
                 ctx.runtime_state
                     .export_orbit_parquets(ctx.persistence.layout(), current_night)?;
                 orbits_exported = ctx.runtime_state.orbit_results.len() as u64;
+                tracing::trace!(orbits_exported, "orbit Parquet export complete");
             }
             stage_sink.inc(1);
 
@@ -371,6 +404,16 @@ pub fn run(
             ctx.persistence.save_manifest(&manifest)?;
             ctx.runtime_state.manifest = manifest;
             stage_sink.inc(1);
+
+            tracing::debug!(
+                current_night = current_night.0,
+                nights_saved = nights_sorted.len(),
+                alerts_saved,
+                n_edge_ops,
+                edge_compacted = compacted,
+                orbits_exported,
+                "SavePersistedData complete",
+            );
 
             Ok(vec![
                 ("current_night", current_night.0 as u64),

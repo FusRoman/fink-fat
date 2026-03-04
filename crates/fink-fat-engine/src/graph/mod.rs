@@ -128,6 +128,16 @@ impl AlertLinkageDAG {
             "right_nodes must be sorted (SeedNode Ord: epoch_mid primary key)"
         );
 
+        let left_night = left_nodes[0].night_id();
+        let right_night = right_nodes[0].night_id();
+        tracing::debug!(
+            %left_night,
+            %right_night,
+            n_left = left_nodes.len(),
+            n_right = right_nodes.len(),
+            "add_inter_night_edges",
+        );
+
         let new_edges = Edge::build_edges(
             left_nodes,
             right_nodes,
@@ -137,6 +147,9 @@ impl AlertLinkageDAG {
             model_pool,
             progress_sink,
         )?;
+
+        let n_new_edges = new_edges.len();
+        tracing::debug!(%left_night, %right_night, n_new_edges, "edges built");
 
         for edge in new_edges {
             let from = edge.from;

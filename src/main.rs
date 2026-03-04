@@ -1,4 +1,5 @@
 pub mod init_cli;
+pub mod logging;
 pub mod progress;
 pub mod single_night_runner;
 

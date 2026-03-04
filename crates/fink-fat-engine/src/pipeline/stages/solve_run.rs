@@ -21,6 +21,18 @@ pub fn run(
         },
         |stage_sink| {
             // -----------------------------------------------------------------
+            // Early exit: no edges means nothing to link across nights.
+            // -----------------------------------------------------------------
+            if ctx.runtime_state.graph.edges.is_empty() {
+                tracing::debug!("Solve: no edges in graph, skipping solver");
+                return Ok(vec![
+                    ("components", 0),
+                    ("plan_items", 0),
+                    ("hypotheses", 0),
+                ]);
+            }
+
+            // -----------------------------------------------------------------
             // 1) Construct connected components
             // -----------------------------------------------------------------
             let components = ConnectedComponents::compute(

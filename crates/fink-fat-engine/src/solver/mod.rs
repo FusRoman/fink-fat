@@ -190,6 +190,12 @@ pub struct SolverDiagnostics {
     /// -----
     /// - For solvers returning tracks, this is typically `tracks.len()`.
     pub n_selected: u32,
+
+    /// Number of search expansions performed (beam steps, arc iterations, etc.).
+    ///
+    /// Useful to diagnose budget exhaustion: if `n_expansions >= cfg.max_expansions`
+    /// the solver was cut short by the exploration budget.
+    pub n_expansions: u32,
 }
 
 pub type HypothesisId = u32;

@@ -19,6 +19,8 @@ pub fn run(
             total: Some(6), // We don't know the total number of nights/alerts/seeds/edges until we load the manifest and window.
         },
         |stage_sink| {
+            tracing::debug!("LoadPersistedData starting");
+
             // Delegate to PersistenceManager::load_runtime_state which:
             //   1. Loads/initializes the manifest.
             //   2. Computes the sliding window from engine config.
@@ -36,6 +38,14 @@ pub fn run(
                 .map(|(_, v)| v.len() as u64)
                 .sum::<u64>();
             let n_edges = state.graph.edges.len() as u64;
+
+            tracing::debug!(
+                n_nights,
+                n_alerts,
+                n_seeds,
+                n_edges,
+                "LoadPersistedData complete",
+            );
 
             // Populate the runtime state with loaded data.
             ctx.runtime_state.manifest = state.manifest;

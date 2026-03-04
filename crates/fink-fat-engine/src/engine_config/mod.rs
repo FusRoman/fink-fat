@@ -169,6 +169,7 @@
 
 pub mod edge_config;
 pub mod error;
+pub mod log_level;
 pub mod pair_config;
 pub mod pipeline_policy;
 pub mod propagator_config;
@@ -183,7 +184,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     MJDTT,
     engine_config::{
-        edge_config::EdgeConfig, error::ConfigError, pair_config::PairConfig,
+        edge_config::EdgeConfig, error::ConfigError, log_level::LogLevel, pair_config::PairConfig,
         pipeline_policy::PersistPolicy, solver_config::SolverConfig, triplet_config::TripletConfig,
         units::de_time_days,
     },
@@ -340,6 +341,13 @@ pub struct EngineConfig {
     /// When the number of delta files in the journal exceeds this threshold,
     /// the stage triggers a full compaction (snapshot rebuild + delta pruning).
     pub compact_graph_every_delta: usize,
+
+    /// Minimum log level that the CLI subscriber will record.
+    ///
+    /// Accepted YAML values: `"trace"`, `"debug"`, `"info"`, `"warn"`, `"error"`.
+    /// Defaults to `"info"`. This value is only read by the CLI; the engine
+    /// itself only emits tracing events and does not install any subscriber.
+    pub log_level: LogLevel,
 }
 
 impl Default for EngineConfig {
@@ -365,6 +373,7 @@ impl Default for EngineConfig {
             compact_graph_every_delta: 20,
             pipeline_policy: PersistPolicy::Full,
             binary_compression: Compression::None,
+            log_level: LogLevel::default(),
         }
     }
 }
