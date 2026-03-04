@@ -200,7 +200,7 @@ impl EdgeFeatures {
         FeatureCore::finite_or_zero(kin_cost + phot_cost).max(f64::EPSILON)
     }
 
-    /// Extract positional and velocity χ² values, optionally inflated with CWNA
+    /// Extract positional and velocity χ² values, optionally inflated with CWNA (Continuous White Noise Acceleration)
     /// process noise.
     ///
     /// Behavior
