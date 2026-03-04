@@ -281,7 +281,7 @@ impl EdgeFeatures {
     /// * `chi2_pos` – Positional Mahalanobis distance $\chi^2_{\mathrm{pos}}$.
     /// * `chi2_vel` – Velocity Mahalanobis distance $\chi^2_{\mathrm{vel}}$.
     /// * `cfg`      – Cost configuration; `variant`, `cauchy_scale`, and `student_nu`
-    ///               are read here.
+    ///   are read here.
     ///
     /// Return
     /// ------
