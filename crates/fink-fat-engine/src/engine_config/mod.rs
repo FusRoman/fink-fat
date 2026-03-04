@@ -12,13 +12,13 @@
 //!
 //! In the runtime pipeline, the main sections map to major engine stages:
 //!
-//! - [`PairConfig`](crate::engine_config::pair_config::PairConfig):
+//! - [`PairConfig`]:
 //!   intra-night pair generation pre-filter.
-//! - [`TripletConfig`](crate::engine_config::triplet_config::TripletConfig):
+//! - [`TripletConfig`]:
 //!   intra-night triplet generation, producing higher-quality seeds.
-//! - [`EdgeConfig`](crate::engine_config::edge_config::EdgeConfig):
+//! - [`EdgeConfig`]:
 //!   inter-night edge construction (candidate retrieval + features + optional ML Top-K).
-//! - [`SolverConfig`](crate::engine_config::solver_config::SolverConfig):
+//! - [`SolverConfig`]:
 //!   solver selection and solver-specific policies.
 //!
 //! Additional global knobs:
@@ -153,7 +153,7 @@
 //! - The `policy.routing` field is serialized using Serde’s default enum encoding:
 //!   - `Heuristics` is written as the plain variant name,
 //!   - `Force(choice)` is written as a map like `{ Force: BoundedBeam }`.
-//! - The `bounded_beam` block corresponds to [`BoundedBeamConfig`] and provides
+//! - The `bounded_beam` block corresponds to [`BoundedBeamConfig`](crate::engine_config::solver_config::bounded_beam_config::BoundedBeamConfig) and provides
 //!   hard guardrails on exploration and output size.
 //! - If additional solver families are added later, `solver_config` may grow
 //!   with extra sub-sections; keep the routing policy independent from solver

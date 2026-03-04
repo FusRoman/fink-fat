@@ -363,7 +363,7 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
 ///
 /// Returns
 /// -------
-/// Vec<SeedNode>
+/// `Vec<SeedNode>`
 ///     One seed per triplet, preserving input order.
 pub fn extract_triplet_features<'alert_lf>(
     trips: &Triplets<'alert_lf>,

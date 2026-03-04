@@ -241,7 +241,7 @@ pub fn track_id_from_seed_keys_with_year(keys: &[SeedKey], year: u32) -> TrackId
 /// -----
 /// 1) Scan all alert members referenced by the nodes and compute:
 ///    `mjd_min = min(alert.mjd_tt)`.
-/// 2) Convert `mjd_min` into a 4-digit Gregorian year using [`mjd_to_year`].
+/// 2) Convert `mjd_min` into a 4-digit Gregorian year using `mjd_to_year`.
 /// 3) Extract the ordered list of `SeedKey` from the ordered nodes slice.
 /// 4) Produce the final identifier using [`track_id_from_seed_keys_with_year`].
 ///

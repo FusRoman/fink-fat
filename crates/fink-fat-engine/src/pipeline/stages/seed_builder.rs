@@ -3,7 +3,7 @@
 //! Overview
 //! --------
 //! This stage constructs **intra-night seeds** from the alerts already loaded in the
-//! [`AlertStore`](crate::persistence::alert_store::AlertStore) (stored in `ctx.runtime_state.alert_store`).
+//! [`AlertStore`](crate::alerts::store::AlertStore) (stored in `ctx.runtime_state.alert_store`).
 //!
 //! In addition to seed generation, this stage participates in the pipeline's
 //! **hierarchical progress reporting** via the [`StageProgress`](crate::pipeline::hooks::StageProgress)
@@ -15,17 +15,17 @@
 //! The seed-building pipeline is:
 //!
 //! 1. **Bucketization** of alerts in (space, time) using:
-//!    - [`HealpixBinner`](crate::spacetime_bucket::healpix_binner::HealpixBinner) for sky partitioning,
-//!    - [`UniformTimeBinner`](crate::spacetime_bucket::uniform_time_binner::UniformTimeBinner) for time partitioning,
-//!    - [`build_alert_bucket_index`](crate::spacetime_bucket::bucket::build_alert_bucket_index) to build the index.
-//! 2. **Pair generation** using [`pairs::generate_pairs`](crate::seeding::pairs::generate_pairs).
+//!    - [`HealpixBinner`] for sky partitioning,
+//!    - [`UniformTimeBinner`] for time partitioning,
+//!    - [`build_alert_bucket_index`] to build the index.
+//! 2. **Pair generation** using [`pairs::generate_pairs`].
 //! 3. **Triplet generation** from those pairs using
-//!    [`triplets::generate_triplets_from_pairs`](crate::seeding::triplets::generate_triplets_from_pairs).
+//!    [`triplets::generate_triplets_from_pairs`].
 //! 4. **Feature extraction** to build `SeedNode<'alert_lf>` that **borrow alerts**
-//!    with [`triplets::extract_triplet_features`](crate::seeding::triplets::extract_triplet_features).
+//!    with [`triplets::extract_triplet_features`].
 //! 5. **Ownership conversion**: immediately convert each borrowed `SeedNode<'_>` into a
-//!    [`SeedNodeOwned`](crate::persistence::seed_node::SeedNodeOwned) using
-//!    [`SeedNode::to_owned`](crate::seeding::seed_node::SeedNode::to_owned), and store it into
+//!    `SeedNodeOwned` using
+//!    `SeedNode::to_owned`, and store it into
 //!    `ctx.runtime_state.seed_store`.
 //!
 //! Why borrowed → owned?
@@ -64,7 +64,7 @@
 //!
 //! Inputs
 //! ------
-//! - `ctx.runtime_state.window`: [`NightWindow`](crate::night_id::NightWindow) defining which nights are processed.
+//! - `ctx.runtime_state.window`: `NightWindow` defining which nights are processed.
 //! - `ctx.runtime_state.alert_store`: per-night alert vectors.
 //! - `ctx.engine_config.pairs`: pair generation configuration.
 //! - `ctx.engine_config.triplets`: triplet generation configuration.
@@ -74,12 +74,12 @@
 //! Outputs
 //! -------
 //! - `ctx.runtime_state.seed_store`: filled with `SeedNodeOwned` per processed night.
-//! - Returns a [`StageReport`](crate::pipeline::hooks::StageReport) with counters:
+//! - Returns a [`StageReport`] with counters:
 //!   - `nights`, `alerts`, `pairs`, `triplets`, `seeds`.
 //!
 //! Error handling
 //! --------------
-//! This stage fails with [`EngineError::StageFailed`](crate::error::EngineError::StageFailed) if:
+//! This stage fails with [`EngineError::StageFailed`] if:
 //! - no `NightWindow` is present in runtime state,
 //! - a processed night contains zero alerts (cannot derive `t0` for time binning).
 //!
@@ -121,7 +121,7 @@ use crate::{
 /// Overview
 /// --------
 /// This function executes the `BuildSeeds` stage for the nights specified by the runtime
-/// [`NightWindow`]. For each processed night, it:
+/// `NightWindow`. For each processed night, it:
 ///
 /// - bucketizes alerts in (space, time),
 /// - generates candidate pairs,
@@ -130,7 +130,7 @@ use crate::{
 /// - converts each borrowed seed to an owned representation (`SeedNodeOwned`),
 /// - stores owned seeds into `ctx.runtime_state.seed_store`.
 ///
-/// This stage is invoked via [`run_stage`], which integrates lifecycle hooks and
+/// This stage is invoked via `run_stage`, which integrates lifecycle hooks and
 /// stage-level timing/counters.
 ///
 /// Progress reporting contract

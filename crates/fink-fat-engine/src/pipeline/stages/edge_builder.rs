@@ -19,7 +19,7 @@ use crate::{
 ///   - `left_night < right_night`
 ///   - `right_night - left_night <= max_gap_nights`
 /// - For each pair, build candidate edges between `left` seeds and `right` seeds
-///   using [`RuntimeGraph::add_inter_night_edges`].
+///   using `RuntimeGraph::add_inter_night_edges`.
 ///
 /// Notes
 /// -----

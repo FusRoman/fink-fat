@@ -137,14 +137,14 @@ impl TangentCenter {
 /// ```
 ///
 /// where:
-/// - `(x₀, y₀)` is [`pos_xy`] at [`epoch_mid`],
-/// - `(vₓ, v_y)` is [`vel_xy`],
-/// - `(aₓ, a_y)` is optional [`acc_xy`].
+/// - `pos_xy` at `epoch_mid`,
+/// - `(vₓ, v_y)` is `vel_xy`,
+/// - `(aₓ, a_y)` is optional `acc_xy`.
 ///
 /// Two covariance matrices are stored:
 ///
-/// - [`cov_pos`] — position covariance at `epoch_mid` (rad²),
-/// - [`cov_vel`] — velocity covariance (rad²/day²).
+/// - `cov_pos` — position covariance at `epoch_mid` (rad²),
+/// - `cov_vel` — velocity covariance (rad²/day²).
 ///
 /// They are propagated in a **simplified, diagonal form** using the
 /// [`ModelNoise`] parameters when predicting on the plane.

@@ -43,7 +43,7 @@ use std::collections::BinaryHeap;
 
 use smallvec::SmallVec;
 
-use crate::engine_config::edge_config::EdgeConfig;
+use crate::engine_config::edge_config::{CostConfig, EdgeConfig};
 use crate::graph::edge::edge_features::EdgeFeatures;
 use crate::graph::edge::edge_prediction::EdgeRankingModel;
 use crate::graph::edge::error::EdgeModelError;
@@ -275,6 +275,8 @@ impl<'seed_lf> TopK<'seed_lf> {
 /// That avoids wasting work when Top-K is already "tight".
 #[inline]
 fn flush_batch<'seed_lf>(
+    src: &SeedNode,
+    cost_config: &CostConfig,
     model: &mut EdgeRankingModel,
     top: &mut TopK<'seed_lf>,
     batch_features: &mut Vec<EdgeFeatures>,
@@ -292,21 +294,17 @@ fn flush_batch<'seed_lf>(
     // - candidate seed node (drained),
     // - probability for that candidate,
     // - feature reference (to compute edge_cost if needed).
-    for ((right_candidate, proba), edge_features) in batch_to
-        .drain(..)
-        .zip(probas.into_iter())
-        .zip(batch_features.iter())
-    {
+    for (right_candidate, proba) in batch_to.drain(..).zip(probas.into_iter()) {
         // Cheap early reject if this candidate can't enter the current Top-K set.
         if proba <= top.threshold() {
             continue;
         }
 
-        // Keep candidate: store its score and derived cost.
+        // Keep candidate: compute edge cost using the configured cost function.
         top.push(TopKItem {
             proba,
             to: right_candidate,
-            edge_cost: edge_features.kinematic_log_likelihood_cost(),
+            edge_cost: EdgeFeatures::compute_cost(src, right_candidate, cost_config),
         });
     }
 
@@ -382,17 +380,28 @@ pub fn rank_topk_edges_for_left<'seed_lf>(
 
         // Flush when batch is full.
         if batch_features.len() >= batch_size {
-            flush_batch(model, &mut top, &mut batch_features, &mut batch_to)?;
+            flush_batch(
+                src,
+                &edge_config.cost_config,
+                model,
+                &mut top,
+                &mut batch_features,
+                &mut batch_to,
+            )?;
         }
     }
 
     // Final flush for any remaining candidates.
-    flush_batch(model, &mut top, &mut batch_features, &mut batch_to)?;
+    flush_batch(
+        src,
+        &edge_config.cost_config,
+        model,
+        &mut top,
+        &mut batch_features,
+        &mut batch_to,
+    )?;
 
     // Emit winners into output buffer (best probability first).
-    //
-    // We output (to, edge_cost). If later you also need probabilities, you can
-    // store them in the output tuple, or expose a second function returning them.
     out.extend(
         top.into_sorted_desc()
             .into_iter()

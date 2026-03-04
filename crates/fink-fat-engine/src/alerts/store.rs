@@ -3,14 +3,14 @@
 //! Overview
 //! --------
 //! This module defines [`AlertStore`], a lightweight container that groups
-//! [`Alert`](crate::alerts::Alert) values by [`NightId`](crate::night_id::NightId)
-//! using an [`AHashMap`](ahash::AHashMap).
+//! [`Alert`] values by [`NightId`]
+//! using an [`AHashMap`].
 //!
 //! The structure is optimized for the Fink-FAT pipeline common access patterns:
 //! - **batch processing per night** (seeding is typically intra-night),
 //! - **contiguous iteration** within a night (`Vec<Alert>`),
-//! - **fast key lookup** by `(night_id, dia_source_id)` via [`AlertKey`](crate::alerts::AlertKey),
-//! - **O(1) reverse lookup** from [`DiaSourceId`](crate::alerts::DiaSourceId) to vector position
+//! - **fast key lookup** by `(night_id, dia_source_id)` via [`AlertKey`],
+//! - **O(1) reverse lookup** from [`DiaSourceId`] to vector position
 //!   via an internal `id_to_location` index,
 //! - **cheap merging** of partial stores without cloning via `Vec::append`.
 //!
@@ -18,7 +18,7 @@
 //! ----------
 //! - The store maps each `night_id` to a `Vec<Alert>`.
 //! - The position within the vector is the *in-night* positional index.
-//! - An [`AlertKey`](crate::alerts::AlertKey) `(night_id, dia_source_id)` can be used
+//! - An [`AlertKey`] `(night_id, dia_source_id)` can be used
 //!   to retrieve a specific alert via the internal reverse index.
 //!
 //! Invariants and conventions
@@ -30,7 +30,7 @@
 //!   vector position. Any reordering or removal of alerts within a `Vec<Alert>` will
 //!   invalidate this index unless a rebuilding method (such as
 //!   [`AlertStore::sort_each_night_and_rekey`]) is invoked afterwards.
-//! - **Identifier uniqueness:** each [`DiaSourceId`](crate::alerts::DiaSourceId) must
+//! - **Identifier uniqueness:** each [`DiaSourceId`] must
 //!   appear at most once across all nights. Duplicate insertions are rejected by
 //!   [`AlertStore::insert_alert`].
 //! - **Immutability by convention:** alerts are treated as immutable once inserted, which
@@ -52,7 +52,7 @@
 //! The store includes a convenience helper [`AlertStore::save_alert_night`] to persist
 //! the alerts for a given night using the project persistence layer:
 //! - `AlertSlice::save_alerts_night(layout, manifest, night_id)` is used to write data
-//!   and update the [`Manifest`](crate::persistence::manifest::Manifest).
+//!   and update the [`Manifest`].
 //!
 //! This helper is intentionally conservative:
 //! - it only writes the requested night,
@@ -92,11 +92,11 @@ use crate::{
 ///
 /// Key properties
 /// --------------
-/// - **Grouping by night:** each key is a [`NightId`](crate::night_id::NightId).
+/// - **Grouping by night:** each key is a [`NightId`].
 /// - **Contiguous storage:** alerts for a night are in a `Vec<Alert>` for
 ///   cache-friendly iteration.
-/// - **Key-based addressing:** [`AlertKey`](crate::alerts::AlertKey) pairs a
-///   `NightId` with a [`DiaSourceId`](crate::alerts::DiaSourceId); the internal
+/// - **Key-based addressing:** [`AlertKey`] pairs a
+///   `NightId` with a [`DiaSourceId`]; the internal
 ///   reverse index resolves the `dia_source_id` to the vector position in O(1).
 ///
 /// See the module-level documentation for invariants and performance notes.
@@ -123,7 +123,7 @@ impl AlertStore {
     ///
     /// Behavior
     /// --------
-    /// - Allocates an empty internal [`AHashMap`](ahash::AHashMap).
+    /// - Allocates an empty internal [`AHashMap`].
     /// - No nights are present initially.
     ///
     /// Complexity
@@ -141,7 +141,7 @@ impl AlertStore {
     ///
     /// Arguments
     /// ---------
-    /// * `map` – Map from [`NightId`](crate::night_id::NightId) to `Vec<Alert>`.
+    /// * `map` – Map from [`NightId`] to `Vec<Alert>`.
     ///
     /// Return
     /// ------
@@ -172,7 +172,7 @@ impl AlertStore {
     ///
     /// Arguments
     /// ---------
-    /// * `alert` – The [`Alert`](crate::alerts::Alert) to insert. Its `key.night_id`
+    /// * `alert` – The [`Alert`] to insert. Its `key.night_id`
     ///   determines the target night.
     ///
     /// Return
@@ -387,7 +387,7 @@ impl AlertStore {
     /// Get an alert by its composite key (night ID + `dia_source_id`).
     ///
     /// This is the canonical constant-time lookup for pipeline components that
-    /// carry compact references via [`AlertKey`](crate::alerts::AlertKey).
+    /// carry compact references via [`AlertKey`].
     ///
     /// Arguments
     /// ---------
@@ -541,10 +541,10 @@ impl AlertStore {
         })
     }
 
-    /// Return the sorted list of night IDs that [`night_window_iter`] would yield
+    /// Return the sorted list of night IDs that [`Self::night_window_iter`] would yield
     /// for the given pairing mode.
     ///
-    /// This is a lightweight companion to [`night_window_iter`]: it applies the
+    /// This is a lightweight companion to [`Self::night_window_iter`]: it applies the
     /// same filtering logic and returns only the identifiers, without borrowing
     /// the alert slices. Useful for progress reporting and counter initialisation
     /// before the actual iteration.
@@ -649,7 +649,7 @@ impl AlertStore {
     /// For each night in the store:
     /// 1. The vector of alerts is sorted in-place using
     ///    [`sort_unstable`](slice::sort_unstable) (primary key: `mjd_tt`,
-    ///    tie-breakers follow the [`Ord`] implementation on [`Alert`](crate::alerts::Alert)).
+    ///    tie-breakers follow the [`Ord`] implementation on [`Alert`]).
     /// 2. After all nights are sorted, the reverse index is fully rebuilt
     ///    to re-map every `dia_source_id` to its new vector position.
     ///

@@ -11,7 +11,7 @@
 //! and tuning.
 //!
 //! Solvers are intended to operate on:
-//! - the global runtime graph ([`RuntimeGraph`]) as the backing storage for nodes/edges,
+//! - the global runtime graph (`RuntimeGraph`) as the backing storage for nodes/edges,
 //! - a component-local view provided by [`ConnectedComponents`] (nodes, restricted
 //!   adjacency, sources/sinks, degrees, etc.).
 //!
@@ -54,7 +54,7 @@
 //! --------------
 //! The solver API is designed to avoid copying large graph structures.
 //!
-//! - [`RuntimeGraph`] stores edges referencing seed nodes.
+//! - `RuntimeGraph` stores edges referencing seed nodes.
 //! - [`TrackHypothesis`] typically borrows those same edges and nodes.
 //!
 //! Therefore, [`SolverOutput`] is generic over lifetimes:

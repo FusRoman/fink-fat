@@ -609,7 +609,7 @@ pub fn ang_sep(ra1: f64, dec1: f64, ra2: f64, dec2: f64) -> f64 {
 ///
 /// See also
 /// --------
-/// * https://en.wikipedia.org/wiki/Great-circle_distance
+/// * <https://en.wikipedia.org/wiki/Great-circle_distance>
 #[inline]
 pub fn angular_separation_vincenty(
     lon1: Radian,

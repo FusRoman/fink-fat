@@ -5,10 +5,10 @@
 //! This stage is responsible for ingesting a batch of alerts (typically a Parquet dataset)
 //! from an [`InputUri`](crate::pipeline::stages::alert_inputs::input_uri::InputUri) specified
 //! in the [`PipelinePlan`](crate::pipeline::PipelinePlan), and materializing them into the
-//! runtime [`AlertStore`](crate::persistence::alert_store::AlertStore).
+//! runtime [`AlertStore`](crate::alerts::store::AlertStore).
 //!
 //! In addition to data ingestion, this stage participates in the **hierarchical
-//! progress reporting system** of the pipeline through a [`StageProgress`].
+//! progress reporting system** of the pipeline through a [`StageProgress`](crate::pipeline::hooks::StageProgress).
 //! The stage does not depend on any specific UI or CLI implementation.
 //! Instead, it reports structured progress events to an abstract sink,
 //! allowing the caller (e.g. CLI) to render progress bars, logs, or metrics.
@@ -18,17 +18,17 @@
 //! The ingestion pipeline performs the following logical steps:
 //!
 //! 1. Read the input URI (`ctx.plan.inputs.alerts_uri`).
-//! 2. Load alerts synchronously via [`load_alerts_sync`](crate::pipeline::stages::alert_inputs::alert_loader::load_alerts_sync),
+//! 2. Load alerts synchronously via [`load_alerts_sync`],
 //!    which internally relies on DataFusion and the `object_store` abstraction.
 //! 3. Normalize the resulting store (sort alerts per night, compute/refresh keys) via
 //!    `AlertStore::sort_each_night_and_rekey()`.
-//! 4. Derive the runtime [`NightWindow`](crate::night_id::NightWindow) from the ingested alerts.
+//! 4. Derive the runtime `NightWindow` from the ingested alerts.
 //! 5. Merge the newly ingested store into `ctx.runtime_state.alert_store`.
 //! 6. Return counters (`n_alerts`, `n_nights`) for stage reporting.
 //!
 //! Progress Reporting
 //! ------------------
-//! This stage reports its internal progress through the [`StageProgress`] provided
+//! This stage reports its internal progress through the [`StageProgress`](crate::pipeline::hooks::StageProgress) provided
 //! by the pipeline runner.
 //!
 //! The stage defines **four logical units of work** and calls:
@@ -85,7 +85,7 @@
 //!
 //! Error Handling
 //! --------------
-//! This stage returns [`EngineError::StageFailed`](crate::error::EngineError::StageFailed) if:
+//! This stage returns [`EngineError::StageFailed`] if:
 //!
 //! - Alert loading fails (I/O, schema mismatch, missing columns, decoding errors, etc.).
 //!
@@ -121,15 +121,15 @@ use crate::{
 /// Overview
 /// --------
 /// This function executes the `IngestNights` stage within the pipeline lifecycle.
-/// It loads alerts from the input URI specified in the [`PipelinePlan`], normalizes
-/// per-night ordering and alert keying, updates the runtime [`NightWindow`], and
-/// merges the resulting [`AlertStore`] into the pipeline [`RuntimeState`].
+/// It loads alerts from the input URI specified in the [`PipelinePlan`](crate::pipeline::PipelinePlan), normalizes
+/// per-night ordering and alert keying, updates the runtime `NightWindow`, and
+/// merges the resulting [`AlertStore`](crate::alerts::store::AlertStore) into the pipeline [`RuntimeState`](crate::persistence::runtime_state::RuntimeState).
 ///
-/// This stage is invoked through [`run_stage`], which:
+/// This stage is invoked through `run_stage`, which:
 /// - emits structured lifecycle hooks (`on_stage_start`, `on_stage_end`),
 /// - measures execution time,
 /// - collects stage-level counters,
-/// - and integrates hierarchical progress reporting via [`StageProgress`].
+/// - and integrates hierarchical progress reporting via [`StageProgress`](crate::pipeline::hooks::StageProgress).
 ///
 /// Synchronous Boundary
 /// --------------------
@@ -156,7 +156,7 @@ use crate::{
 /// 4. Merging the new `AlertStore` into runtime state.
 ///
 /// The exact rendering of this progress (progress bars, logs, metrics, etc.)
-/// is determined by the concrete implementation of [`StageProgress`].
+/// is determined by the concrete implementation of [`StageProgress`](crate::pipeline::hooks::StageProgress).
 ///
 /// If the provided sink is a no-op implementation, progress reporting has
 /// zero runtime cost beyond the method calls.

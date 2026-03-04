@@ -297,7 +297,7 @@ pub trait AlertSlice {
 
 impl AlertSlice for &[Alert] {
     /// Write the alerts of a single night to disk inside a
-    /// [`DiskEnvelope`](crate::persistence::envelope::DiskEnvelope).
+    /// [`DiskEnvelope`].
     ///
     /// The file is written to the path determined by
     /// [`PersistenceLayout::alerts_night_path`](crate::persistence::layout::PersistenceLayout::alerts_night_path).

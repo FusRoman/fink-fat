@@ -153,9 +153,9 @@
 //! See also
 //! -----------------------------------------------------------------------------
 //!
-//! - [`SeedNode::predict_cone`](crate::propagation::features::SeedNode::predict_cone):
+//! - `SeedNode::predict_cone`:
 //!   uses these parameters to produce `(ra, dec, radius)`.
-//! - [`SeedNode::predict_on_plane`](crate::propagation::features::SeedNode::predict_on_plane):
+//! - `SeedNode::predict_on_plane`:
 //!   returns mean & diagonal covariance on the tangent plane.
 
 use std::fmt;

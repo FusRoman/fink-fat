@@ -14,7 +14,7 @@
 //!
 //! Conceptual pipeline
 //! -------------------
-//! 1) Build [`ConnectedComponents`] from the global [`RuntimeGraph`] and [`SeedStore`].
+//! 1) Build [`ConnectedComponents`] from the global `RuntimeGraph` and [`SeedStore`].
 //!
 //! 2) For each component, compute a routing decision ([`SolverChoice`]).
 //!

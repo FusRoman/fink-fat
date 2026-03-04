@@ -233,7 +233,7 @@ impl EdgeRankingModel {
     /// - optional: `"label"`
     ///
     /// If your exporter uses different output names, adapt
-    /// [`EdgeModelOutputs::resolve_output_indices`].
+    /// `EdgeModelOutputs::resolve_output_indices`.
     pub fn load_edge_ranking_model(
         model_path: impl AsRef<Utf8Path>,
     ) -> Result<Self, EdgeModelError> {
@@ -396,10 +396,10 @@ impl EdgeRankingModel {
 ///   `[N]`.
 #[derive(Debug, Clone)]
 pub struct EdgeModelOutputs {
-    /// Index of the `probabilities` output (Tensor<f32>, shape [N, 2]).
+    /// Index of the `probabilities` output (`Tensor<f32>`, shape `[N, 2]`).
     pub probabilities: usize,
 
-    /// Optional index of the `label` output (Tensor<i64>, shape [N]).
+    /// Optional index of the `label` output (`Tensor<i64>`, shape `[N]`).
     pub label: Option<usize>,
 }
 

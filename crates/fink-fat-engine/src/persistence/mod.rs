@@ -64,7 +64,7 @@ impl PersistenceManager {
     ///
     /// Parameters
     /// ----------
-    /// storage_root : impl Into<Utf8PathBuf>
+    /// storage_root : `impl Into<Utf8PathBuf>`
     ///     Root directory for persisted state (e.g. `engine_config.storage_path()`).
     ///
     /// Returns

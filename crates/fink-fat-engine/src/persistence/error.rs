@@ -2,7 +2,7 @@ use thiserror::Error;
 
 use crate::{AlertKey, seeding::SeedKey};
 
-/// Errors raised when validating a [`DiskEnvelope`].
+/// Errors raised when validating a [`DiskEnvelope`](crate::persistence::envelope::DiskEnvelope).
 ///
 /// Notes
 /// -----
@@ -10,7 +10,7 @@ use crate::{AlertKey, seeding::SeedKey};
 /// Actual I/O and encoding/decoding errors are reported as [`PersistenceIoError`].
 #[derive(Debug, thiserror::Error)]
 pub enum EnvelopeError {
-    /// The file signature does not match [`DISK_MAGIC`].
+    /// The file signature does not match [`DISK_MAGIC`](crate::persistence::envelope::DISK_MAGIC).
     ///
     /// This usually means:
     /// - the wrong file path was provided, or
@@ -95,7 +95,7 @@ impl PersistenceIoError {
         }
     }
 
-    /// Returns `true` if this error (or an error nested inside a [`WithPath`]
+    /// Returns `true` if this error (or an error nested inside a [`Self::WithPath`]
     /// wrapper) is an [`std::io::Error`] with [`std::io::ErrorKind::NotFound`].
     ///
     /// Use this helper instead of matching on `Io(e)` directly so that the

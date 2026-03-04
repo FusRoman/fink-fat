@@ -49,7 +49,7 @@
 //! --------
 //! - [`TangentPlaneModel`] – local kinematic model + prediction utilities.
 //! - [`SeedSpatialIndex`] – spatio-temporal bucket index used for fast queries.
-//! - [`EdgeFeatures::compute_features`] – exact feature extraction for edges.
+//! - [`EdgeFeatures::compute_features`](crate::graph::edge::edge_features::EdgeFeatures::compute_features) – exact feature extraction for edges.
 
 pub mod error;
 pub mod pairs;
@@ -494,13 +494,13 @@ impl SeedNode {
     ///   First detection.
     /// * alert_b : &Alert
     ///   Second detection.
-    /// * max_speed_rad_per_day : Option<f64>
+    /// * max_speed_rad_per_day : `Option<f64>`
     ///   Optional physical sanity check on the fitted speed (rad/day).
     ///   If set and `||v|| > vmax`, the seed is rejected.
     ///
     /// Returns
     /// -------
-    /// * Option<SeedNode>
+    /// * `Option<SeedNode>`
     ///   `Some(seed)` if the model is built and passes the optional speed filter,
     ///   `None` if rejected by the speed filter.
     ///

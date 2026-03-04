@@ -51,8 +51,8 @@
 //!    ---------------------------------
 //!    - All candidates returned by `SeedNode::seed_edge_candidates` are emitted.
 //!    - No ML model is used.
-//!    - Cost is derived purely from structured physics-inspired features via
-//!      `EdgeFeatures::kinematic_log_likelihood_cost()`.
+//!    - Cost is derived from `EdgeFeatures::compute_cost` using the variant
+//!      configured in `edge_config.cost` (default: `gaussian_chi2`).
 //!    - This mode is deterministic and useful for debugging or full graph builds.
 //!
 //! 2) emit_all_edges = false
@@ -308,8 +308,8 @@ impl Edge {
     /// - If `true`:
     ///   - emits *all* candidate edges returned by `SeedNode::seed_edge_candidates`,
     ///   - computes `EdgeFeatures`,
-    ///   - derives the solver cost from
-    ///     `EdgeFeatures::kinematic_log_likelihood_cost()`.
+    ///   - derives the solver cost from `EdgeFeatures::compute_cost` using
+    ///     the variant configured in `edge_config.cost`.
     ///
     /// - If `false`:
     ///   - requires `model_pool` to be `Some(...)`,
@@ -439,8 +439,8 @@ fn process_chunk_emit_all<'seed_lf>(
 
     for src in chunk.iter() {
         for to in src.seed_edge_candidates(right_index, edge_config) {
-            // Compute cost from structured features (cadence-robust).
-            let cost = EdgeFeatures::compute_features(src, to).kinematic_log_likelihood_cost();
+            // Compute cost using the configured cost function (covariance model + loss).
+            let cost = EdgeFeatures::compute_cost(src, to, &edge_config.cost_config);
             let dt_days = src.delta_days(to);
 
             local_edges.push(Edge::new(src, to, cost, dt_days)?);

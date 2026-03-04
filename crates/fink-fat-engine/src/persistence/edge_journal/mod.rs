@@ -81,7 +81,7 @@ impl EdgeJournalStore {
     ///     Night producing the delta.
     /// created_unix_s : i64
     ///     Unix timestamp stored in the delta envelope.
-    /// ops : Vec<EdgeOp>
+    /// ops : `Vec<EdgeOp>`
     ///     Edge operations to persist.
     ///
     /// Returns
@@ -130,14 +130,14 @@ impl EdgeJournalStore {
     /// ----------
     /// manifest : &Manifest
     ///     Manifest describing snapshot and delta files.
-    /// window : Option<NightWindow>
+    /// window : `Option<PairingMode>`
     ///     Optional sliding window filter applied while replaying deltas.
     ///     If provided, only deltas within the window are applied, and edges
     ///     outside the window are dropped from the final output.
     ///
     /// Returns
     /// -------
-    /// Result<Vec<EdgeOwned>, PersistenceIoError>
+    /// `Result<Vec<Edge>, PersistenceIoError>`
     ///     The reconstructed edge set.
     pub fn load_edges(
         &self,
@@ -195,10 +195,10 @@ impl EdgeJournalStore {
     ///     Night to record as the snapshot checkpoint.
     /// created_unix_s : i64
     ///     Unix timestamp stored in the snapshot envelope.
-    /// edges : Vec<Edge>
+    /// edges : `Vec<Edge>`
     ///     The full current edge set (already in memory — no disk reload needed).
     ///     These are typically taken directly from `RuntimeState.graph.edges`.
-    /// window : Option<PairingMode>
+    /// window : `Option<PairingMode>`
     ///     Optional sliding window; used to drop edges outside the active range
     ///     before writing the snapshot (defensive filter — caller-provided edges
     ///     are expected to already respect the window).

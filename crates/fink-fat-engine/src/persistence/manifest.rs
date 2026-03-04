@@ -1,7 +1,7 @@
 //! Persistence manifest for Fink-FAT.
 //!
 //! The manifest is a small JSON index file (wrapped in a
-//! [`DiskEnvelope`](crate::persistence::envelope::DiskEnvelope)) that
+//! [`DiskEnvelope`]) that
 //! describes which persistence artifacts exist on disk and how to reassemble
 //! the pipeline state efficiently at startup.
 //!

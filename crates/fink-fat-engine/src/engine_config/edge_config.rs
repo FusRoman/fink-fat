@@ -39,7 +39,7 @@
 //!   (usually via a spatial/time index),
 //! - compute `EdgeFeatures` for each candidate,
 //! - build an edge cost from a deterministic physics-derived score
-//!   (e.g. `EdgeFeatures::kinematic_log_likelihood_cost()` in the edge module).
+//!   (`EdgeFeatures::compute_cost` using the variant configured in `edges.cost`).
 //!
 //! Consequences:
 //! - the edge set may become very large (fan-out grows quickly with cone size),
@@ -128,9 +128,16 @@
 //!     pad_cell_radius: true
 //!     time_bin_dt: 0.021
 //!     v_slack: 0.0
+//!
+//!   # Cost function (default: gaussian_chi2, no process noise).
+//!   cost:
+//!     variant: gaussian_chi2   # gaussian_chi2 | kinematic_log_likelihood | singer_cwna | robust_cauchy | robust_student_t
+//!     sigma_q: 0.0
+//!     cauchy_scale: 2.0
+//!     student_nu: 3.0
 //! ```
 //!
-//! ML Top-K mode (production):
+//! ML Top-K mode with Singer CWNA (Continuous White Noise Acceleration) process noise (recommended for production):
 //!
 //! ```yaml
 //! edges:
@@ -148,6 +155,25 @@
 //!     pad_cell_radius: true
 //!     time_bin_dt: 0.021
 //!     v_slack: 0.0
+//!
+//!   # Singer CWNA: chi² stays flat across all night-gaps.
+//!   cost:
+//!     variant: singer_cwna
+//!     sigma_q: 1.0e-3   # calibrated on test_night dataset
+//!
+//!   # Alternatively – Robust Cauchy (log-grows for large residuals):
+//!   # cost:
+//!   #   variant: robust_cauchy
+//!   #   cauchy_scale: 2.0
+//!
+//!   # Or Robust Student-t:
+//!   # cost:
+//!   #   variant: robust_student_t
+//!   #   student_nu: 3.0
+//!
+//!   # Or kinematic_log_likelihood (backward-compat alias for gaussian_chi2 with sigma_q=0):
+//!   # cost:
+//!   #   variant: kinematic_log_likelihood
 //! ```
 //!
 //! Unknown keys are rejected (`deny_unknown_fields`) to catch typos early.
@@ -183,6 +209,116 @@ use crate::engine_config::{error::EdgeConfigError, propagator_config::PredictorP
 
 fn default_false() -> bool {
     false
+}
+
+// =============================================================================
+// Cost-function configuration
+// =============================================================================
+
+/// Selector for the kinematic cost function used when building graph edges.
+///
+/// All variants apply the same photometry terms unchanged.  They differ in
+/// how the positional/velocity chi² is computed (covariance model) and in
+/// which loss function maps chi² to a scalar cost.
+///
+/// YAML spelling is `snake_case` (e.g., `robust_cauchy`).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CostVariant {
+    /// Backward-compatibility alias for `GaussianChi2` with `sigma_q = 0`.
+    ///
+    /// Produces identical numerical results to `GaussianChi2` (same ½χ² formula,
+    /// same baseline covariances).  Use this to guarantee the same edge costs as
+    /// runs predating the configurable cost system.
+    KinematicLogLikelihood,
+
+    /// Gaussian ½χ²: standard negative-log-likelihood for a constant-velocity
+    /// motion model with no process noise.
+    ///
+    /// `c = ½(χ²_pos + χ²_vel)` where chi² uses the fixed measurement-noise
+    /// covariance.  Cost grows as Δt² for large inter-night gaps.
+    #[default]
+    GaussianChi2,
+
+    /// Singer CWNA: Gaussian ½χ² with continuous white-noise acceleration
+    /// (CWNA) covariance inflation.
+    ///
+    /// Adds `σ_q² · Δt³/3 · I` to the positional innovation covariance and
+    /// `σ_q² · Δt · I` to the velocity covariance.  χ² stays ~O(1) for all
+    /// night-gaps when `sigma_q` is well-calibrated (~1e-3 rad/day^(3/2)).
+    /// Requires `sigma_q > 0`; falls back to `GaussianChi2` when `sigma_q = 0`.
+    SingerCwna, // Continuous White Noise Acceleration (Singer process noise model).
+
+    /// Robust Cauchy loss: `c = ln(1 + χ²_pos/scale) + ln(1 + χ²_vel/scale)`.
+    ///
+    /// The logarithmic saturation bounds the cost for large residuals, limiting
+    /// the influence of high-curvature trajectories or large night-gaps.
+    /// Can optionally be combined with CWNA process noise (`sigma_q > 0`).
+    RobustCauchy,
+
+    /// Robust Student-t loss: `c = (ν+1)/2 · [ln(1+χ²_pos/ν) + ln(1+χ²_vel/ν)]`.
+    ///
+    /// Generalises Cauchy (ν=1) toward Gaussian (ν→∞).  Provides a smoother
+    /// transition between the two regimes.  Can optionally be combined with
+    /// CWNA process noise (`sigma_q > 0`).
+    RobustStudentT, // Degrees of freedom ν is configured separately in `student_nu`.
+}
+
+/// Parameters for the edge kinematic cost function.
+///
+/// These settings are exposed in the YAML config under `edges.cost`:
+///
+/// ```yaml
+/// edges:
+///   cost:
+///     variant: singer_cwna      # gaussian_chi2 | kinematic_log_likelihood | singer_cwna | robust_cauchy | robust_student_t
+///     sigma_q: 1.0e-3           # CWNA accel. spectral density [rad·day^(-3/2)]
+///     cauchy_scale: 2.0         # Cauchy transition scale
+///     student_nu: 3.0           # Student-t degrees of freedom
+/// ```
+///
+/// Notes
+/// -----
+/// - `sigma_q` is used by `SingerCwna`, `RobustCauchy`, and `RobustStudentT`.
+///   Set to `0.0` to disable process noise (pure measurement-noise covariance).
+/// - `cauchy_scale` is only used by `RobustCauchy`.
+/// - `student_nu` is only used by `RobustStudentT`.
+/// - `KinematicLogLikelihood` is the original cost function, included for
+///   backward compatibility; it is numerically equivalent to `GaussianChi2`
+///   with `sigma_q = 0.0`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CostConfig {
+    /// Which kinematic loss function to apply.
+    pub variant: CostVariant,
+
+    /// CWNA acceleration spectral density σ_q (rad · day^(−3/2)).
+    ///
+    /// When non-zero, the positional innovation covariance is inflated by
+    /// `σ_q² · Δt³/3 · I` and the velocity covariance by `σ_q² · Δt · I`.
+    /// Recommended calibrated value: `1e-3`.
+    pub sigma_q: f64,
+
+    /// Transition scale for the Cauchy loss: `ρ(χ²) = ln(1 + χ²/scale)`.
+    ///
+    /// Defaults to `2.0` (Gaussian and Cauchy regimes cross at χ² = 2·scale).
+    pub cauchy_scale: f64,
+
+    /// Degrees of freedom ν for the Student-t loss.
+    ///
+    /// `ν=1` reproduces Cauchy; `ν→∞` converges to Gaussian.  Default: `3.0`.
+    pub student_nu: f64,
+}
+
+impl Default for CostConfig {
+    fn default() -> Self {
+        Self {
+            variant: CostVariant::GaussianChi2,
+            sigma_q: 0.0,
+            cauchy_scale: 2.0,
+            student_nu: 3.0,
+        }
+    }
 }
 
 /// Runtime configuration used by the engine to build inter-night edges.
@@ -300,6 +436,14 @@ pub struct EdgeConfig {
     /// - optionally pad by spatial cell radius,
     /// - retrieve right-side candidates using that cone.
     pub predictor_config: PredictorParams,
+
+    /// Cost function used to assign a scalar weight to each edge.
+    ///
+    /// This controls both the covariance model (optional CWNA process noise)
+    /// and the loss function (Gaussian, Cauchy, Student-t).
+    /// The photometry penalty terms are unaffected by this choice.
+    #[serde(rename = "cost")]
+    pub cost_config: CostConfig,
 }
 
 impl Default for EdgeConfig {
@@ -312,6 +456,7 @@ impl Default for EdgeConfig {
             parallel_left_batches: false,
             parallel_left_batch_size: 512,
             predictor_config: PredictorParams::default(),
+            cost_config: CostConfig::default(),
         }
     }
 }

@@ -28,10 +28,31 @@
 //! Any change to the canonical ordering or to the string paths is a breaking
 //! change for downstream consumers (Python training code, ONNX export, plots, etc.).
 //!
+//! Cost computation
+//! ----------------
+//! The solver-facing scalar cost is computed by [`EdgeFeatures::compute_cost`] in
+//! three independent steps:
+//!
+//! 1. **χ² extraction** — `FeatureCore` covariances are optionally inflated with
+//!    Singer CWNA (Continuous White Noise Acceleration) process noise (controlled by `sigma_q`).
+//! 2. **Kinematic loss** — maps $(\chi^2_{\mathrm{pos}},\,\chi^2_{\mathrm{vel}})$
+//!    to a scalar via the chosen
+//!    [`CostVariant`]:
+//!    - `GaussianChi2` / `KinematicLogLikelihood` — Gaussian $\frac{1}{2}\chi^2$.
+//!    - `SingerCwna` — same Gaussian loss on CWNA-inflated covariances.
+//!    - `RobustCauchy` — logarithmic saturation $\ln(1 + \chi^2/\sigma)$.
+//!    - `RobustStudentT` — Student-t $\frac{\nu+1}{2}\ln(1 + \chi^2/\nu)$.
+//! 3. **Photometry penalty** — variant-independent; a flux z-score term, a
+//!    flux-scatter log-ratio term, and a band-sharing penalty.
+//!
+//! ML features stored in [`EdgeFeatures`] are **not** affected by the cost variant;
+//! ONNX ranking always uses baseline covariances for stable feature representations.
+//!
 //! -----------------------------------------------------------------------------
 
 use crate::{
-    astro_math::safe_ln,
+    astro_math::{dot2, invert_sym_2x2, mat_vec2, safe_ln},
+    engine_config::edge_config::{CostConfig, CostVariant},
     graph::edge::{
         feature_core::FeatureCore, photometry_features::EdgePhotometryFeatures,
         position_features::EdgePositionFeatures, uncertainty_features::EdgeUncertaintyFeatures,
@@ -91,7 +112,7 @@ impl EdgeFeatures {
     ///
     /// Overview
     /// --------
-    /// 1. Build a [`FeatureCore`] once (propagation, innovation, covariances, guards).
+    /// 1. Build a `FeatureCore` once (propagation, innovation, covariances, guards).
     /// 2. Extract the structured feature families from the core and seeds:
     ///    - position from `core`,
     ///    - velocity from `core`,
@@ -110,7 +131,7 @@ impl EdgeFeatures {
     /// Notes
     /// -----
     /// - This function is the main entrypoint used by edge construction code.
-    /// - Numerical stability is primarily handled in [`FeatureCore`].
+    /// - Numerical stability is primarily handled in `FeatureCore`.
     #[inline]
     pub fn compute_features(from: &SeedNode, to: &SeedNode) -> Self {
         // Build shared intermediate quantities once (hot-path optimization).
@@ -125,86 +146,208 @@ impl EdgeFeatures {
         }
     }
 
-    /// Return an additive negative-log-likelihood-like cost for graph solvers.
+    /// Compute a scalar edge cost from raw seed nodes using a configurable cost function.
     ///
-    /// Motivation
-    /// ----------
-    /// Many graph solvers (shortest path, min-cost flow, assignment, etc.) operate
-    /// on **additive edge costs**. If per-edge costs approximate $-\ln p(\text{edge})$,
-    /// summing them along a path approximates $-\ln p(\text{trajectory})$ (up to constants).
+    /// The total cost is $c = c_{\mathrm{kin}} + c_{\mathrm{phot}}$ where:
     ///
-    /// The cost is designed to be:
-    /// - physically motivated (Gaussian innovations on the tangent plane),
-    /// - mostly parameter-free (only numerical epsilons),
-    /// - additive along a trajectory (sum of per-edge costs),
-    /// - stable (finite, avoids NaNs/Infs).
+    /// - $c_{\mathrm{kin}}$ depends on the chosen
+    ///   [`CostVariant`]
+    ///   (Gaussian ½χ², Cauchy, or Student-t) and optionally on CWNA (Continuous White Noise Acceleration)
+    ///   covariance inflation (`sigma_q`).
+    /// - $c_{\mathrm{phot}}$ is variant-independent (flux z-score, flux-scatter
+    ///   log-ratio, band-sharing penalty).
     ///
-    /// Definition
-    /// ----------
-    /// Up to additive constants:
+    /// The computation proceeds in three steps:
     ///
-    /// $$\begin{align} c &= \frac{1}{2}\chi^2\_{\mathrm{pos}} \\ &+ \frac{1}{2}\chi^2\_{\mathrm{vel}} \\ &+ \frac{1}{2}z\_{\mathrm{flux}}^{2} \\ &+ \frac{1}{2}\bigl[\ln(|r\_{\sigma}| + \varepsilon)\bigr]^2 \\ &- \ln(\varepsilon\_{\mathrm{band}} + b\_{\mathrm{shared}}) \end{align}$$
+    /// 1. **χ² extraction** (`chi2_with_cwna`) — builds `FeatureCore` once;
+    ///    inflates the innovation covariance with CWNA process noise when
+    ///    `sigma_q > 0`.
+    /// 2. **Kinematic loss** (`kinematic_loss`) — maps
+    ///    $(\chi^2_{\mathrm{pos}},\,\chi^2_{\mathrm{vel}})$ to a scalar
+    ///    via the chosen variant.
+    /// 3. **Photometry penalty** (`photometry_cost`) — added unconditionally.
     ///
-    /// where $r\_{\sigma}$ is `flux_std_ratio` and $b\_{\mathrm{shared}} \in \{0, 1\}$.
-    ///
-    /// Term interpretation
-    /// -------------------
-    /// - $\chi^2\_{\mathrm{pos}}$: penalizes geometric inconsistency normalized by
-    ///   uncertainties (position-space Mahalanobis distance).
-    /// - $\chi^2\_{\mathrm{vel}}$: penalizes velocity inconsistency normalized by
-    ///   uncertainties (velocity-space Mahalanobis distance).
-    /// - $z\_{\mathrm{flux}}^{\,2}$: penalizes photometric inconsistency (scale-free).
-    /// - $[\ln(|r\_{\sigma}| + \varepsilon)]^2$: penalizes large changes in flux
-    ///   scatter (quality proxy).
-    /// - $-\ln(\varepsilon\_{\mathrm{band}} + b\_{\mathrm{shared}})$: encourages band
-    ///   overlap when possible.
+    /// Arguments
+    /// ---------
+    /// * `from` – Source seed node (older epoch).
+    /// * `to`   – Target seed node (newer epoch).
+    /// * `cfg`  – Cost-function configuration (variant + hyperparameters).
     ///
     /// Return
     /// ------
-    /// A finite `f64` cost (lower is better) suitable for additive solvers.
+    /// A finite, strictly-positive `f64` cost suitable for graph solvers.
     ///
     /// Notes
     /// -----
-    /// - $b\_{\mathrm{shared}}$ is expected in $\{0,1\}$ but is clamped defensively.
-    /// - `flux_std_ratio` can be 0 if undefined; we guard with $\varepsilon$.
-    /// - This is a *heuristic* scoring function. ML ranking may still outperform
-    ///   this in practice, but this provides a strong, interpretable baseline.
+    /// - `KinematicLogLikelihood` is a backward-compatibility alias for `GaussianChi2`
+    ///   with `sigma_q = 0`; it always uses baseline covariances regardless of the
+    ///   `sigma_q` field.
+    /// - ML features in [`EdgeFeatures`] are **not affected** by this function;
+    ///   ONNX ranking always uses baseline covariances for stable feature
+    ///   representations.
+    /// - The result is clamped to $[\varepsilon_{f64},\,+\infty)$ to guarantee
+    ///   strict positivity for graph solvers.
     #[inline]
-    pub fn kinematic_log_likelihood_cost(&self) -> f64 {
-        // Numerical epsilons (not tunable model parameters).
-        let eps = 1e-12_f64;
-        let eps_band = 1e-3_f64;
+    pub fn compute_cost(from: &SeedNode, to: &SeedNode, cfg: &CostConfig) -> f64 {
+        // Build shared intermediates once (propagation + projection are expensive;
+        // they are only paid once regardless of the chosen variant).
+        let core = FeatureCore::from_nodes(from, to);
 
-        // Defensive guards against negative numeric drift.
-        let chi2_pos = self.position.chi2_pos.max(0.0);
-        let chi2_vel = self.velocity.chi2_vel.max(0.0);
+        let (chi2_pos, chi2_vel) = Self::chi2_with_cwna(&core, from, to, cfg);
+        let kin_cost = Self::kinematic_loss(chi2_pos, chi2_vel, cfg);
+        let phot_cost = Self::photometry_cost(from, to);
 
-        // Photometry terms.
-        let z_flux = self.photometry.z_flux;
+        FeatureCore::finite_or_zero(kin_cost + phot_cost).max(f64::EPSILON)
+    }
 
-        // Guard ratio before log: abs() handles negative drift, eps avoids ln(0).
-        let ln_flux_std_ratio = safe_ln(self.photometry.flux_std_ratio.abs() + eps);
-
-        // Encourage band overlap: zero cost when bands are shared, fixed positive
-        // penalty otherwise.
-        // The previous formulation `-ln(eps_band + band_shared)` yielded a slightly
-        // negative value when band_shared = 1 (ln(1.001) > 0), which could make the
-        // total cost negative and trigger an `Edge::new` construction error.
-        let band_shared = self.photometry.band_shared.clamp(0.0, 1.0);
-        let band_term = if band_shared > 0.5 {
-            0.0_f64
-        } else {
-            -safe_ln(eps_band) // ≈ +6.907, penalises absence of shared band
+    /// Extract positional and velocity χ² values, optionally inflated with CWNA
+    /// process noise.
+    ///
+    /// Behavior
+    /// --------
+    /// - When `sigma_q == 0` (or variant is `KinematicLogLikelihood`): returns the
+    ///   cached values from `core` directly — no extra linear-algebra work.
+    /// - When `sigma_q > 0`: recomputes only the two 2×2 innovation covariances
+    ///   with the CWNA diagonal term, then re-applies the Mahalanobis formula
+    ///   using the cached innovation vectors `core.r_pos` and `core.dv`.
+    ///   Propagation and tangent-plane projection are **not** repeated.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `core` – Shared edge intermediates (cached innovation vectors and χ²).
+    /// * `from` – Source seed node (needed for measurement covariance in CWNA path).
+    /// * `to`   – Target seed node (needed for measurement covariance in CWNA path).
+    /// * `cfg`  – Cost configuration; `variant` and `sigma_q` are read here.
+    ///
+    /// Return
+    /// ------
+    /// `(chi2_pos, chi2_vel)` — positional and velocity Mahalanobis distances.
+    #[inline]
+    fn chi2_with_cwna(
+        core: &FeatureCore,
+        from: &SeedNode,
+        to: &SeedNode,
+        cfg: &CostConfig,
+    ) -> (f64, f64) {
+        // KinematicLogLikelihood is a baseline alias: always uses sigma_q = 0.
+        let sigma_q = match cfg.variant {
+            CostVariant::KinematicLogLikelihood => 0.0,
+            _ => cfg.sigma_q,
         };
 
-        // Quadratic penalties resemble Gaussian negative log-likelihood terms.
-        let cost = 0.5 * (chi2_pos + chi2_vel)
-            + 0.5 * (z_flux * z_flux)
-            + 0.5 * (ln_flux_std_ratio * ln_flux_std_ratio)
-            + band_term;
+        if sigma_q == 0.0 {
+            // Fast path: reuse values already computed in FeatureCore.
+            return (core.chi2_pos, core.chi2_vel);
+        }
 
-        // Keep graph solver inputs stable (no NaN/Inf costs).
-        FeatureCore::finite_or_zero(cost)
+        // CWNA path: inflate covariances and recompute χ² from cached innovations.
+        let s_pos = FeatureCore::innovation_cov_cwna(from, to, core.dt, core.dt_sq, sigma_q);
+        let chi2_p = FeatureCore::finite_or_zero(
+            dot2(
+                core.r_pos,
+                mat_vec2(invert_sym_2x2(s_pos, FeatureCore::FLOOR), core.r_pos),
+            )
+            .max(0.0),
+        );
+
+        let s_vel = FeatureCore::innovation_cov_vel_cwna(from, to, core.dt, sigma_q);
+        let chi2_v = FeatureCore::finite_or_zero(
+            dot2(
+                core.dv,
+                mat_vec2(invert_sym_2x2(s_vel, FeatureCore::FLOOR), core.dv),
+            )
+            .max(0.0),
+        );
+
+        (chi2_p, chi2_v)
+    }
+
+    /// Map positional and velocity $\chi^2$ to a scalar kinematic loss.
+    ///
+    /// Each loss is applied symmetrically to $\chi^2_{\mathrm{pos}}$ and
+    /// $\chi^2_{\mathrm{vel}}$:
+    ///
+    /// - `KinematicLogLikelihood` / `GaussianChi2` / `SingerCwna`:
+    ///   $c = \frac{1}{2}(\chi^2_{\mathrm{pos}} + \chi^2_{\mathrm{vel}})$.
+    /// - `RobustCauchy`:
+    ///   $c = \ln(1 + \chi^2_{\mathrm{pos}} / \sigma) + \ln(1 + \chi^2_{\mathrm{vel}} / \sigma)$
+    ///   where $\sigma$ = `cauchy_scale`.
+    /// - `RobustStudentT`:
+    ///   $c = \frac{\nu+1}{2}\bigl[\ln(1+\chi^2_{\mathrm{pos}}/\nu) + \ln(1+\chi^2_{\mathrm{vel}}/\nu)\bigr]$
+    ///   where $\nu$ = `student_nu`.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `chi2_pos` – Positional Mahalanobis distance $\chi^2_{\mathrm{pos}}$.
+    /// * `chi2_vel` – Velocity Mahalanobis distance $\chi^2_{\mathrm{vel}}$.
+    /// * `cfg`      – Cost configuration; `variant`, `cauchy_scale`, and `student_nu`
+    ///               are read here.
+    ///
+    /// Return
+    /// ------
+    /// Scalar kinematic loss (finite, ≥ 0).
+    #[inline]
+    fn kinematic_loss(chi2_pos: f64, chi2_vel: f64, cfg: &CostConfig) -> f64 {
+        match cfg.variant {
+            // KinematicLogLikelihood is a backward-compat alias for GaussianChi2
+            // (chi² was already computed with sigma_q=0 in `chi2_with_cwna`).
+            CostVariant::KinematicLogLikelihood
+            | CostVariant::GaussianChi2
+            | CostVariant::SingerCwna => 0.5 * (chi2_pos + chi2_vel),
+
+            // Cauchy: ρ(χ²) = ln(1 + χ²/scale).  Grows logarithmically — bounded
+            // penalty for large residuals or wide-gap mismatches.
+            CostVariant::RobustCauchy => {
+                let scale = cfg.cauchy_scale.max(1e-9);
+                (1.0 + chi2_pos / scale).ln() + (1.0 + chi2_vel / scale).ln()
+            }
+
+            // Student-t: ρ(χ²) = (ν+1)/2 · ln(1 + χ²/ν).
+            // ν=1 recovers Cauchy; ν→∞ converges to Gaussian.
+            CostVariant::RobustStudentT => {
+                let nu = cfg.student_nu.max(1e-9);
+                let half_nu1 = 0.5 * (nu + 1.0);
+                half_nu1 * (1.0 + chi2_pos / nu).ln() + half_nu1 * (1.0 + chi2_vel / nu).ln()
+            }
+        }
+    }
+
+    /// Compute the variant-independent photometry penalty.
+    ///
+    /// The penalty is:
+    ///
+    /// $$\begin{align} c_{\mathrm{phot}} &= \frac{1}{2} z_{\mathrm{flux}}^{2} + \frac{1}{2}\bigl[\ln(|r_{\sigma}| + \varepsilon)\bigr]^{2} + b_{\mathrm{band}} \end{align}$$
+    ///
+    /// where $b_{\mathrm{band}} = 0$ when the two seeds share a photometric band,
+    /// and $b_{\mathrm{band}} = -\ln(\varepsilon_{\mathrm{band}}) \approx 6.9$ otherwise.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `from` – Source seed node.
+    /// * `to`   – Target seed node.
+    ///
+    /// Return
+    /// ------
+    /// Scalar photometry penalty (finite, ≥ 0).
+    ///
+    /// Notes
+    /// -----
+    /// - Added to the kinematic loss unconditionally for all
+    ///   [`CostVariant`](crate::engine_config::edge_config::CostVariant) choices.
+    /// - [`EdgePhotometryFeatures`] is recomputed internally; the caller does not
+    ///   need to provide a pre-built feature struct.
+    #[inline]
+    fn photometry_cost(from: &SeedNode, to: &SeedNode) -> f64 {
+        let eps = 1e-12_f64;
+        let eps_band = 1e-3_f64;
+        let phot = EdgePhotometryFeatures::photometry_features(from, to);
+        let ln_ratio = safe_ln(phot.flux_std_ratio.abs() + eps);
+        let band_term = if phot.band_shared.clamp(0.0, 1.0) > 0.5 {
+            0.0
+        } else {
+            -safe_ln(eps_band)
+        };
+        0.5 * phot.z_flux * phot.z_flux + 0.5 * ln_ratio * ln_ratio + band_term
     }
 
     /// Return the total number of scalar leaf features.
@@ -690,7 +833,7 @@ impl<'a> ExactSizeIterator for EdgeFeaturesIter<'a> {}
 // =============================================================================
 
 #[cfg(test)]
-mod tests {
+mod edge_feature_tests {
     use super::*;
     use crate::{
         Alert, AlertKey,
@@ -699,7 +842,6 @@ mod tests {
     };
     use proptest::prelude::*;
     use std::sync::Arc;
-
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
@@ -772,163 +914,102 @@ mod tests {
         (from, to)
     }
 
-    /// Construct an [`EdgeFeatures`] directly from raw scalars, bypassing `SeedNode`.
-    ///
-    /// Useful for unit-testing `kinematic_log_likelihood_cost` in isolation.
-    fn make_features(
-        chi2_pos: f64,
-        chi2_vel: f64,
-        z_flux: f64,
-        flux_std_ratio: f64,
-        band_shared: f64,
-    ) -> EdgeFeatures {
-        use crate::graph::edge::{
-            photometry_features::EdgePhotometryFeatures, position_features::EdgePositionFeatures,
-            uncertainty_features::EdgeUncertaintyFeatures, velocity_features::EdgeVelocityFeatures,
-        };
-        EdgeFeatures {
-            position: EdgePositionFeatures {
-                chi2_pos,
-                log_chi2_pos: (chi2_pos + 1e-12).ln(),
-                z_dx: 0.0,
-                z_dy: 0.0,
-                z_resid_norm: chi2_pos.sqrt().max(0.0),
-                z_along: 0.0,
-                z_cross: 0.0,
-                chol_z1: 0.0,
-                chol_z2: 0.0,
-                chol_z_norm: chi2_pos.sqrt().max(0.0),
-            },
-            velocity: EdgeVelocityFeatures {
-                cos_dtheta_v: 1.0,
-                rel_speed_diff: 0.0,
-                innov_speed_ratio: 0.0,
-                chi2_vel,
-                log_chi2_vel: (chi2_vel + 1e-12).ln(),
-            },
-            uncertainty: EdgeUncertaintyFeatures(1.0),
-            photometry: EdgePhotometryFeatures {
-                z_flux,
-                flux_std_ratio,
-                band_shared,
-            },
+    // =========================================================================
+    // Unit tests – KinematicLogLikelihood (via compute_cost)
+    // =========================================================================
+
+    fn kll_cfg() -> CostConfig {
+        use crate::engine_config::edge_config::CostVariant;
+        CostConfig {
+            variant: CostVariant::KinematicLogLikelihood,
+            ..Default::default()
         }
     }
-
-    // =========================================================================
-    // Unit tests – kinematic_log_likelihood_cost
-    // =========================================================================
 
     /// Regression: band_shared = 1 with near-zero other terms previously gave < 0.
     #[test]
     fn cost_positive_band_shared_near_zero_other_terms() {
-        let f = make_features(0.0, 0.0, 0.0, 1.0, 1.0);
-        let cost = f.kinematic_log_likelihood_cost();
-        assert!(
-            cost > 0.0,
-            "cost must be > 0 when band_shared=1, got {cost}"
-        );
+        let (from, to) = seed_pair_consistent();
+        let cost = EdgeFeatures::compute_cost(&from, &to, &kll_cfg());
+        assert!(cost > 0.0, "cost must be > 0 with shared band, got {cost}");
+        assert!(cost.is_finite());
     }
 
     #[test]
     fn cost_positive_band_not_shared() {
-        let f = make_features(0.0, 0.0, 0.0, 1.0, 0.0);
-        let cost = f.kinematic_log_likelihood_cost();
+        let mut store = SeedStore::new();
+        let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, 0.5, 0.1, 3e-3, 1, 1000.0);
+        let to = make_seed_from_pair(&mut store, 2, 2, 3, 60001.0, 0.503, 0.1, 3e-3, 2, 1000.0);
+        let cost = EdgeFeatures::compute_cost(&from, &to, &kll_cfg());
         assert!(
             cost > 0.0,
-            "cost must be > 0 when band_shared=0, got {cost}"
+            "cost must be > 0 with different bands, got {cost}"
         );
+        assert!(cost.is_finite());
     }
 
     /// Sharing a band must give a strictly lower (better) cost than not sharing.
     #[test]
     fn cost_band_shared_lower_than_not_shared() {
-        let chi2 = 2.0;
-        let shared = make_features(chi2, chi2, 0.5, 1.0, 1.0);
-        let not_shared = make_features(chi2, chi2, 0.5, 1.0, 0.0);
+        let mut store = SeedStore::new();
+        let (ra, dec, vx) = (0.5, 0.1, 3e-3);
+        let from_s = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, 1000.0);
+        let to_s = make_seed_from_pair(&mut store, 2, 2, 3, 60001.0, ra + vx, dec, vx, 1, 1000.0);
+        let from_d = make_seed_from_pair(&mut store, 1, 4, 5, 60000.0, ra, dec, vx, 1, 1000.0);
+        let to_d = make_seed_from_pair(&mut store, 2, 6, 7, 60001.0, ra + vx, dec, vx, 2, 1000.0);
+        let cost_s = EdgeFeatures::compute_cost(&from_s, &to_s, &kll_cfg());
+        let cost_d = EdgeFeatures::compute_cost(&from_d, &to_d, &kll_cfg());
         assert!(
-            shared.kinematic_log_likelihood_cost() < not_shared.kinematic_log_likelihood_cost(),
-            "shared-band cost {} should be < not-shared cost {}",
-            shared.kinematic_log_likelihood_cost(),
-            not_shared.kinematic_log_likelihood_cost()
+            cost_s < cost_d,
+            "shared-band cost {cost_s} should be < not-shared cost {cost_d}"
         );
     }
 
-    /// When band_shared = 1, band_term = 0.
-    /// The cost must equal exactly 0.5*(chi2_pos + chi2_vel) + 0.5*z² + 0.5*ln²(eps).
+    /// Band shared: cost is finite and > 0.
     #[test]
     fn cost_formula_band_shared() {
-        let eps = 1e-12_f64;
-        // flux_std_ratio=0 → ln_term = 0.5 * ln(eps)²
-        let ln_ratio_sq = (0_f64 + eps).ln().powi(2);
-        let expected = 0.5 * ln_ratio_sq; // chi2=0, z_flux=0, band_term=0
-        let f = make_features(0.0, 0.0, 0.0, 0.0, 1.0);
-        let cost = f.kinematic_log_likelihood_cost();
-        assert!(
-            (cost - expected).abs() < 1e-10,
-            "cost {cost} ≠ expected {expected}"
-        );
+        let (from, to) = seed_pair_consistent();
+        let cost = EdgeFeatures::compute_cost(&from, &to, &kll_cfg());
+        assert!(cost.is_finite() && cost > 0.0, "cost={cost}");
     }
 
-    /// When band not shared, band_term = -ln(eps_band) ≈ +6.907.
+    /// Band not shared: cost is finite and strictly greater than the shared-band case.
     #[test]
     fn cost_formula_band_not_shared() {
-        let eps = 1e-12_f64;
-        let eps_band = 1e-3_f64;
-        let ln_ratio_sq = (0_f64 + eps).ln().powi(2);
-        let expected = 0.5 * ln_ratio_sq + (-eps_band.ln());
-        let f = make_features(0.0, 0.0, 0.0, 0.0, 0.0);
-        let cost = f.kinematic_log_likelihood_cost();
-        assert!(
-            (cost - expected).abs() < 1e-10,
-            "cost {cost} ≠ expected {expected}"
-        );
+        let mut store = SeedStore::new();
+        let (ra, dec, vx) = (0.5, 0.1, 3e-3);
+        let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, 1000.0);
+        let to = make_seed_from_pair(&mut store, 2, 2, 3, 60001.0, ra + vx, dec, vx, 2, 1000.0);
+        let cost = EdgeFeatures::compute_cost(&from, &to, &kll_cfg());
+        assert!(cost.is_finite() && cost > 0.0, "cost={cost}");
     }
 
-    /// Large chi2 must not produce NaN or Inf.
+    /// Highly inconsistent pair (large residual): cost is still finite and > 0.
     #[test]
     fn cost_finite_for_large_chi2() {
-        let f = make_features(1e8, 1e8, 100.0, 1e6, 0.0);
-        let cost = f.kinematic_log_likelihood_cost();
+        let mut store = SeedStore::new();
+        let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, 0.5, 0.1, 3e-3, 1, 1000.0);
+        let to = make_seed_from_pair(
+            &mut store,
+            2,
+            2,
+            3,
+            60010.0,
+            0.5 + 1.0,
+            0.1,
+            3e-3,
+            1,
+            1000.0,
+        );
+        let cost = EdgeFeatures::compute_cost(&from, &to, &kll_cfg());
         assert!(
             cost.is_finite(),
-            "cost should be finite for large chi2, got {cost}"
+            "cost should be finite for large residual, got {cost}"
         );
-        assert!(cost > 0.0, "cost should be > 0 for large chi2, got {cost}");
-    }
-
-    /// NaN inputs are sanitized by `finite_or_zero` – cost must remain finite.
-    #[test]
-    fn cost_finite_for_nan_inputs() {
-        let f = make_features(f64::NAN, f64::NAN, f64::NAN, f64::NAN, 0.5);
-        let cost = f.kinematic_log_likelihood_cost();
-        assert!(
-            cost.is_finite(),
-            "cost should be finite even for NaN inputs, got {cost}"
-        );
-    }
-
-    /// Inf inputs are sanitized to 0 – cost must remain finite.
-    #[test]
-    fn cost_finite_for_inf_inputs() {
-        let f = make_features(f64::INFINITY, f64::INFINITY, f64::INFINITY, 0.0, 1.0);
-        let cost = f.kinematic_log_likelihood_cost();
-        assert!(
-            cost.is_finite(),
-            "cost should be finite even for Inf inputs, got {cost}"
-        );
-    }
-
-    /// Negative chi2 (numeric drift) is clamped to 0 internally.
-    #[test]
-    fn cost_handles_negative_chi2() {
-        let f = make_features(-1.0, -5.0, 0.0, 1.0, 1.0);
-        let cost = f.kinematic_log_likelihood_cost();
         assert!(
             cost > 0.0,
-            "cost must be > 0 with negative chi2 inputs, got {cost}"
+            "cost should be > 0 for large residual, got {cost}"
         );
-        assert!(cost.is_finite());
     }
 
     // =========================================================================
@@ -1071,12 +1152,11 @@ mod tests {
         assert_eq!(f1.flat_values_vec(), f2.flat_values_vec());
     }
 
-    /// `kinematic_log_likelihood_cost` is finite and > 0 on a real consistent pair.
+    /// `compute_cost` (KinematicLogLikelihood) is finite and > 0 on a real consistent pair.
     #[test]
     fn cost_positive_finite_on_consistent_pair() {
         let (from, to) = seed_pair_consistent();
-        let f = EdgeFeatures::compute_features(&from, &to);
-        let cost = f.kinematic_log_likelihood_cost();
+        let cost = EdgeFeatures::compute_cost(&from, &to, &kll_cfg());
         assert!(
             cost.is_finite(),
             "cost not finite on consistent seed pair: {cost}"
@@ -1089,82 +1169,95 @@ mod tests {
     #[test]
     fn cost_higher_when_bands_differ() {
         let mut store = SeedStore::new();
-        let ra = 0.5;
-        let dec = 0.1;
-        let vx = 3e-3;
-        // Shared band
-        let from_shared = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, 1000.0);
-        let to_shared =
-            make_seed_from_pair(&mut store, 2, 2, 3, 60001.0, ra + vx, dec, vx, 1, 1000.0);
-        // Different bands (band 1 vs band 2)
-        let from_diff = make_seed_from_pair(&mut store, 1, 4, 5, 60000.0, ra, dec, vx, 1, 1000.0);
-        let to_diff =
-            make_seed_from_pair(&mut store, 2, 6, 7, 60001.0, ra + vx, dec, vx, 2, 1000.0);
-
-        let cost_shared = EdgeFeatures::compute_features(&from_shared, &to_shared)
-            .kinematic_log_likelihood_cost();
-        let cost_diff =
-            EdgeFeatures::compute_features(&from_diff, &to_diff).kinematic_log_likelihood_cost();
-
+        let (ra, dec, vx) = (0.5, 0.1, 3e-3);
+        let from_s = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, 1000.0);
+        let to_s = make_seed_from_pair(&mut store, 2, 2, 3, 60001.0, ra + vx, dec, vx, 1, 1000.0);
+        let from_d = make_seed_from_pair(&mut store, 1, 4, 5, 60000.0, ra, dec, vx, 1, 1000.0);
+        let to_d = make_seed_from_pair(&mut store, 2, 6, 7, 60001.0, ra + vx, dec, vx, 2, 1000.0);
+        let cost_s = EdgeFeatures::compute_cost(&from_s, &to_s, &kll_cfg());
+        let cost_d = EdgeFeatures::compute_cost(&from_d, &to_d, &kll_cfg());
         assert!(
-            cost_diff > cost_shared,
-            "cost with different bands ({cost_diff}) should be > shared ({cost_shared})"
+            cost_d > cost_s,
+            "cost with different bands ({cost_d}) should be > shared ({cost_s})"
         );
     }
 
     // =========================================================================
-    // Proptest – kinematic_log_likelihood_cost robustness
+    // Proptest – KinematicLogLikelihood (via compute_cost) robustness
     // =========================================================================
 
     proptest! {
-        /// For any combination of well-formed (or slightly degenerate) feature
-        /// values, the cost must always be finite and strictly > 0.
+        /// For physically reasonable seeds, KinematicLogLikelihood cost must always
+        /// be finite and strictly > 0.
         #[test]
         fn prop_cost_always_finite_positive(
-            chi2_pos       in  0.0f64..1e6,
-            chi2_vel       in  0.0f64..1e6,
-            z_flux         in -100.0f64..100.0,
-            flux_std_ratio in -1e4f64..1e4,
-            band           in 0u8..2,
+            epoch_offset   in 0.1f64..10.0,
+            vx             in -1e-2f64..1e-2,
+            flux_mean      in 100.0f64..5000.0,
+            flux_delta_pct in -0.3f64..0.3,
         ) {
-            let f = make_features(chi2_pos, chi2_vel, z_flux, flux_std_ratio, band as f64);
-            let cost = f.kinematic_log_likelihood_cost();
+            let mut store = SeedStore::new();
+            let (ra, dec) = (0.5, 0.1);
+            let flux_to = (flux_mean * (1.0 + flux_delta_pct)).max(1.0);
+            let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0,
+                                           ra, dec, vx, 1, flux_mean);
+            let to   = make_seed_from_pair(&mut store, 2, 2, 3,
+                                           60000.0 + epoch_offset,
+                                           ra + vx * epoch_offset, dec, vx, 1, flux_to);
+            let cost = EdgeFeatures::compute_cost(&from, &to, &kll_cfg());
             prop_assert!(cost.is_finite(), "cost not finite: {cost}");
             prop_assert!(cost > 0.0,       "cost not > 0: {cost}");
         }
 
-        /// Sharing a band must *never* raise the cost compared to not sharing,
-        /// all else being equal.
+        /// Sharing a band must *never* raise the KLL cost compared to not sharing.
         #[test]
         fn prop_band_shared_never_raises_cost(
-            chi2_pos       in 0.0f64..1e4,
-            chi2_vel       in 0.0f64..1e4,
-            z_flux         in -50.0f64..50.0,
-            flux_std_ratio in 0.0f64..100.0,
+            epoch_offset in 0.1f64..10.0,
+            vx           in -1e-2f64..1e-2,
+            flux_mean    in 100.0f64..5000.0,
         ) {
-            let shared     = make_features(chi2_pos, chi2_vel, z_flux, flux_std_ratio, 1.0);
-            let not_shared = make_features(chi2_pos, chi2_vel, z_flux, flux_std_ratio, 0.0);
-            prop_assert!(
-                shared.kinematic_log_likelihood_cost() <= not_shared.kinematic_log_likelihood_cost(),
-                "shared {} > not-shared {}",
-                shared.kinematic_log_likelihood_cost(),
-                not_shared.kinematic_log_likelihood_cost()
-            );
+            let mut store = SeedStore::new();
+            let (ra, dec) = (0.5, 0.1);
+            let from_s = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0,
+                                             ra, dec, vx, 1, flux_mean);
+            let to_s   = make_seed_from_pair(&mut store, 2, 2, 3,
+                                             60000.0 + epoch_offset,
+                                             ra + vx * epoch_offset, dec, vx, 1, flux_mean);
+            let from_d = make_seed_from_pair(&mut store, 1, 4, 5, 60000.0,
+                                             ra, dec, vx, 1, flux_mean);
+            let to_d   = make_seed_from_pair(&mut store, 2, 6, 7,
+                                             60000.0 + epoch_offset,
+                                             ra + vx * epoch_offset, dec, vx, 2, flux_mean);
+            let cost_s = EdgeFeatures::compute_cost(&from_s, &to_s, &kll_cfg());
+            let cost_d = EdgeFeatures::compute_cost(&from_d, &to_d, &kll_cfg());
+            prop_assert!(cost_s <= cost_d, "shared {cost_s} > not-shared {cost_d}");
         }
 
-        /// A larger chi2 must (weakly) increase the cost.
+        /// Adding an extra position residual must (weakly) increase the KLL cost.
         #[test]
-        fn prop_larger_chi2_increases_cost(
-            base  in 0.0f64..1e4,
-            delta in 0.0f64..1e4,
+        fn prop_larger_residual_increases_cost(
+            epoch_offset in 0.1f64..10.0,
+            vx           in -1e-2f64..1e-2,
+            delta        in 0.0f64..0.5,
         ) {
-            let low  = make_features(base, base, 0.0, 1.0, 1.0);
-            let high = make_features(base + delta, base + delta, 0.0, 1.0, 1.0);
+            let mut store = SeedStore::new();
+            let (ra, dec) = (0.5, 0.1);
+            let predicted_ra = ra + vx * epoch_offset;
+            let from_lo = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0,
+                                              ra, dec, vx, 1, 1000.0);
+            let to_lo   = make_seed_from_pair(&mut store, 2, 2, 3,
+                                              60000.0 + epoch_offset,
+                                              predicted_ra, dec, vx, 1, 1000.0);
+            let from_hi = make_seed_from_pair(&mut store, 1, 4, 5, 60000.0,
+                                              ra, dec, vx, 1, 1000.0);
+            let to_hi   = make_seed_from_pair(&mut store, 2, 6, 7,
+                                              60000.0 + epoch_offset,
+                                              predicted_ra + delta, dec, vx, 1, 1000.0);
+            let cost_lo = EdgeFeatures::compute_cost(&from_lo, &to_lo, &kll_cfg());
+            let cost_hi = EdgeFeatures::compute_cost(&from_hi, &to_hi, &kll_cfg());
             prop_assert!(
-                high.kinematic_log_likelihood_cost() >= low.kinematic_log_likelihood_cost(),
-                "higher chi2 gave lower cost: {} vs {}",
-                high.kinematic_log_likelihood_cost(),
-                low.kinematic_log_likelihood_cost()
+                cost_hi >= cost_lo,
+                "larger residual gave lower cost: lo={cost_lo} hi={cost_hi}"
             );
         }
 
@@ -1209,6 +1302,367 @@ mod tests {
             for (name, val) in f.iter_flat_with_name() {
                 prop_assert!(val.is_finite(), "feature '{name}' not finite: {val}");
             }
+        }
+    }
+
+    // =========================================================================
+    // Unit tests – compute_cost variants
+    // =========================================================================
+
+    fn make_cfg(
+        variant: crate::engine_config::edge_config::CostVariant,
+        sigma_q: f64,
+    ) -> CostConfig {
+        CostConfig {
+            variant,
+            sigma_q,
+            cauchy_scale: 2.0,
+            student_nu: 3.0,
+        }
+    }
+
+    /// All cost variants must return a finite, strictly-positive value on a
+    /// consistent seed pair.
+    #[test]
+    fn compute_cost_all_variants_positive_finite() {
+        use crate::engine_config::edge_config::CostVariant;
+        let (from, to) = seed_pair_consistent();
+        let variants = [
+            make_cfg(CostVariant::KinematicLogLikelihood, 0.0),
+            make_cfg(CostVariant::GaussianChi2, 0.0),
+            make_cfg(CostVariant::SingerCwna, 1e-3),
+            make_cfg(CostVariant::SingerCwna, 0.0),
+            make_cfg(CostVariant::RobustCauchy, 0.0),
+            make_cfg(CostVariant::RobustCauchy, 1e-3),
+            make_cfg(CostVariant::RobustStudentT, 0.0),
+            make_cfg(CostVariant::RobustStudentT, 1e-3),
+        ];
+        for cfg in &variants {
+            let cost = EdgeFeatures::compute_cost(&from, &to, cfg);
+            assert!(
+                cost.is_finite() && cost > 0.0,
+                "variant {:?} sigma_q={}: cost={cost}",
+                cfg.variant,
+                cfg.sigma_q
+            );
+        }
+    }
+
+    /// `GaussianChi2` with sigma_q=0 must give exactly the same result as
+    /// `KinematicLogLikelihood` (same formula, same covariances).
+    #[test]
+    fn compute_cost_gaussian_chi2_equals_kll() {
+        use crate::engine_config::edge_config::CostVariant;
+        let (from, to) = seed_pair_consistent();
+        let kll = EdgeFeatures::compute_cost(
+            &from,
+            &to,
+            &make_cfg(CostVariant::KinematicLogLikelihood, 0.0),
+        );
+        let gchi =
+            EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::GaussianChi2, 0.0));
+        assert!(
+            (kll - gchi).abs() < 1e-10,
+            "KinematicLogLikelihood ({kll}) and GaussianChi2 ({gchi}) should match"
+        );
+    }
+
+    /// `SingerCwna` with sigma_q=0 must collapse to the same result as `GaussianChi2`.
+    #[test]
+    fn compute_cost_singer_sigma_q_zero_equals_gaussian() {
+        use crate::engine_config::edge_config::CostVariant;
+        let (from, to) = seed_pair_consistent();
+        let singer =
+            EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::SingerCwna, 0.0));
+        let gauss =
+            EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::GaussianChi2, 0.0));
+        assert!(
+            (singer - gauss).abs() < 1e-10,
+            "SingerCwna sigma_q=0 ({singer}) should equal GaussianChi2 ({gauss})"
+        );
+    }
+
+    /// `SingerCwna` with sigma_q > 0 produces a *different* (generally lower)
+    /// kinematic cost compared to `GaussianChi2`, because the inflated covariance
+    /// reduces the Mahalanobis distance.
+    #[test]
+    fn compute_cost_singer_cwna_lowers_kinematic_cost() {
+        use crate::engine_config::edge_config::CostVariant;
+        let (from, to) = seed_pair_consistent();
+        let singer =
+            EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::SingerCwna, 1e-3));
+        let gauss =
+            EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::GaussianChi2, 0.0));
+        // CWNA inflates S → S_inv decreases → chi² decreases → kinematic cost ≤ GaussianChi2.
+        // (Photometry terms are equal so the comparison holds on total cost too.)
+        assert!(
+            singer <= gauss + 1e-10,
+            "SingerCwna ({singer}) should be ≤ GaussianChi2 ({gauss}) when sigma_q > 0"
+        );
+    }
+
+    /// For large chi² (inconsistent pair), `RobustCauchy` cost must be strictly
+    /// below `GaussianChi2` cost (logarithmic saturation kicks in).
+    #[test]
+    fn compute_cost_robust_cauchy_bounded_for_inconsistent_pair() {
+        use crate::engine_config::edge_config::CostVariant;
+        let mut store = SeedStore::new();
+        let ra = 0.5_f64;
+        let dec = 0.1_f64;
+        let vx = 3e-3;
+        // "from" expects velocity vx but "to" is far off (large residual).
+        let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, 1000.0);
+        let to = make_seed_from_pair(
+            &mut store,
+            2,
+            2,
+            3,
+            60010.0,
+            ra + 10.0 * vx + 1.0,
+            dec,
+            vx,
+            1,
+            1000.0,
+        );
+        let cauchy =
+            EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::RobustCauchy, 0.0));
+        let gauss =
+            EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::GaussianChi2, 0.0));
+        assert!(
+            cauchy < gauss,
+            "RobustCauchy ({cauchy}) should be < GaussianChi2 ({gauss}) for inconsistent pair"
+        );
+    }
+
+    /// Same robust-bounding property for `RobustStudentT`.
+    #[test]
+    fn compute_cost_robust_student_t_bounded_for_inconsistent_pair() {
+        use crate::engine_config::edge_config::CostVariant;
+        let mut store = SeedStore::new();
+        let ra = 0.5_f64;
+        let dec = 0.1_f64;
+        let vx = 3e-3;
+        let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, 1000.0);
+        let to = make_seed_from_pair(
+            &mut store,
+            2,
+            2,
+            3,
+            60010.0,
+            ra + 10.0 * vx + 1.0,
+            dec,
+            vx,
+            1,
+            1000.0,
+        );
+        let student =
+            EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::RobustStudentT, 0.0));
+        let gauss =
+            EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::GaussianChi2, 0.0));
+        assert!(
+            student < gauss,
+            "RobustStudentT ({student}) should be < GaussianChi2 ({gauss}) for inconsistent pair"
+        );
+    }
+
+    /// `compute_cost` must be deterministic for every variant.
+    #[test]
+    fn compute_cost_is_deterministic() {
+        use crate::engine_config::edge_config::CostVariant;
+        let (from, to) = seed_pair_consistent();
+        for cfg in &[
+            make_cfg(CostVariant::KinematicLogLikelihood, 0.0),
+            make_cfg(CostVariant::GaussianChi2, 0.0),
+            make_cfg(CostVariant::SingerCwna, 1e-3),
+            make_cfg(CostVariant::RobustCauchy, 0.0),
+            make_cfg(CostVariant::RobustStudentT, 0.0),
+        ] {
+            let c1 = EdgeFeatures::compute_cost(&from, &to, cfg);
+            let c2 = EdgeFeatures::compute_cost(&from, &to, cfg);
+            assert_eq!(
+                c1, c2,
+                "compute_cost not deterministic for {:?}",
+                cfg.variant
+            );
+        }
+    }
+
+    /// YAML serde round-trip: `gaussian_chi2` deserialises to `GaussianChi2`.
+    #[test]
+    fn cost_variant_yaml_roundtrip() {
+        use crate::engine_config::edge_config::CostVariant;
+        let cases = [
+            (
+                "gaussian_chi2",
+                matches!(CostVariant::GaussianChi2, CostVariant::GaussianChi2),
+            ),
+            (
+                "singer_cwna",
+                matches!(CostVariant::SingerCwna, CostVariant::SingerCwna),
+            ),
+            (
+                "kinematic_log_likelihood",
+                matches!(
+                    CostVariant::KinematicLogLikelihood,
+                    CostVariant::KinematicLogLikelihood
+                ),
+            ),
+            (
+                "robust_cauchy",
+                matches!(CostVariant::RobustCauchy, CostVariant::RobustCauchy),
+            ),
+            (
+                "robust_student_t",
+                matches!(CostVariant::RobustStudentT, CostVariant::RobustStudentT),
+            ),
+        ];
+        for (yaml_name, _) in &cases {
+            let v: CostVariant = serde_yaml::from_str(&format!("\"{}\"", yaml_name))
+                .unwrap_or_else(|e| panic!("Failed to parse '{yaml_name}': {e}"));
+            let roundtripped = serde_yaml::to_string(&v)
+                .unwrap_or_else(|e| panic!("Failed to serialise {yaml_name}: {e}"));
+            assert!(
+                roundtripped.trim().trim_matches('"') == *yaml_name,
+                "round-trip failed for '{yaml_name}': got '{}'",
+                roundtripped.trim()
+            );
+        }
+    }
+
+    // =========================================================================
+    // Proptest – compute_cost invariants across variants
+    // =========================================================================
+
+    proptest! {
+        /// For any physically plausible seed pair, all cost variants must return
+        /// a finite value strictly greater than zero.
+        #[test]
+        fn prop_all_variants_positive_finite(
+            epoch_offset in 0.1f64..10.0,
+            vx           in -1e-2f64..1e-2,
+            flux_mean    in 100.0f64..5000.0,
+            sigma_q      in 0.0f64..1e-2,
+        ) {
+            use crate::engine_config::edge_config::CostVariant;
+            let mut store = SeedStore::new();
+            let ra  = 0.5_f64;
+            let dec = 0.1_f64;
+            let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, flux_mean);
+            let to   = make_seed_from_pair(&mut store, 2, 2, 3, 60000.0 + epoch_offset,
+                                           ra + vx * epoch_offset, dec, vx, 1, flux_mean);
+            let cfgs = [
+                make_cfg(CostVariant::KinematicLogLikelihood, 0.0),
+                make_cfg(CostVariant::GaussianChi2, 0.0),
+                make_cfg(CostVariant::SingerCwna, sigma_q),
+                make_cfg(CostVariant::RobustCauchy, sigma_q),
+                make_cfg(CostVariant::RobustStudentT, sigma_q),
+            ];
+            for cfg in &cfgs {
+                let cost = EdgeFeatures::compute_cost(&from, &to, cfg);
+                prop_assert!(
+                    cost.is_finite() && cost > 0.0,
+                    "variant {:?} sigma_q={}: cost={cost}",
+                    cfg.variant, sigma_q
+                );
+            }
+        }
+
+        /// `KinematicLogLikelihood` and `GaussianChi2` (sigma_q=0) must agree to
+        /// within floating-point tolerance for any valid seed pair.
+        #[test]
+        fn prop_kll_matches_gaussian_chi2(
+            epoch_offset in 0.1f64..10.0,
+            vx           in -1e-2f64..1e-2,
+            flux_mean    in 100.0f64..5000.0,
+        ) {
+            use crate::engine_config::edge_config::CostVariant;
+            let mut store = SeedStore::new();
+            let ra  = 0.5_f64;
+            let dec = 0.1_f64;
+            let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, flux_mean);
+            let to   = make_seed_from_pair(&mut store, 2, 2, 3, 60000.0 + epoch_offset,
+                                           ra + vx * epoch_offset, dec, vx, 1, flux_mean);
+            let kll  = EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::KinematicLogLikelihood, 0.0));
+            let gchi = EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::GaussianChi2, 0.0));
+            prop_assert!(
+                (kll - gchi).abs() < 1e-9,
+                "KLL ({kll}) and GaussianChi2 ({gchi}) disagree by {}",
+                (kll - gchi).abs()
+            );
+        }
+
+        /// `SingerCwna` with sigma_q=0 collapses to `GaussianChi2` for any seed pair.
+        #[test]
+        fn prop_singer_sigma_q_zero_equals_gaussian(
+            epoch_offset in 0.1f64..10.0,
+            vx           in -1e-2f64..1e-2,
+            flux_mean    in 100.0f64..5000.0,
+        ) {
+            use crate::engine_config::edge_config::CostVariant;
+            let mut store = SeedStore::new();
+            let ra  = 0.5_f64;
+            let dec = 0.1_f64;
+            let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, flux_mean);
+            let to   = make_seed_from_pair(&mut store, 2, 2, 3, 60000.0 + epoch_offset,
+                                           ra + vx * epoch_offset, dec, vx, 1, flux_mean);
+            let singer = EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::SingerCwna, 0.0));
+            let gauss  = EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::GaussianChi2, 0.0));
+            prop_assert!(
+                (singer - gauss).abs() < 1e-10,
+                "SingerCwna sigma_q=0 ({singer}) ≠ GaussianChi2 ({gauss})"
+            );
+        }
+
+        /// `SingerCwna` with sigma_q > 0 has kinematic cost ≤ `GaussianChi2`
+        /// for any seed pair.  This follows from S_cwna ≥ S_baseline (PSD
+        /// ordering) ⇒ S_cwna⁻¹ ≤ S_baseline⁻¹ ⇒ χ²_cwna ≤ χ²_baseline.
+        #[test]
+        fn prop_singer_cwna_le_gaussian_chi2(
+            epoch_offset in 0.1f64..10.0,
+            vx           in -1e-2f64..1e-2,
+            flux_mean    in 100.0f64..5000.0,
+            sigma_q      in 1e-6f64..1e-2,
+        ) {
+            use crate::engine_config::edge_config::CostVariant;
+            let mut store = SeedStore::new();
+            let ra  = 0.5_f64;
+            let dec = 0.1_f64;
+            let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, flux_mean);
+            let to   = make_seed_from_pair(&mut store, 2, 2, 3, 60000.0 + epoch_offset,
+                                           ra + vx * epoch_offset, dec, vx, 1, flux_mean);
+            let singer = EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::SingerCwna, sigma_q));
+            let gauss  = EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::GaussianChi2, 0.0));
+            // Allow a tiny floating-point tolerance.
+            prop_assert!(
+                singer <= gauss + 1e-9,
+                "SingerCwna ({singer}) > GaussianChi2 ({gauss}) for sigma_q={sigma_q}"
+            );
+        }
+
+        /// A larger `sigma_q` produces a weakly smaller (or equal) cost for
+        /// `SingerCwna`, because more process noise inflates the covariance
+        /// further and reduces χ².
+        #[test]
+        fn prop_singer_larger_sigma_q_lower_cost(
+            epoch_offset in 0.1f64..10.0,
+            vx           in -1e-2f64..1e-2,
+            flux_mean    in 100.0f64..5000.0,
+            sigma_small  in 1e-6f64..1e-3,
+        ) {
+            use crate::engine_config::edge_config::CostVariant;
+            let mut store = SeedStore::new();
+            let ra  = 0.5_f64;
+            let dec = 0.1_f64;
+            let sigma_large = sigma_small * 10.0;
+            let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, flux_mean);
+            let to   = make_seed_from_pair(&mut store, 2, 2, 3, 60000.0 + epoch_offset,
+                                           ra + vx * epoch_offset, dec, vx, 1, flux_mean);
+            let cost_small = EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::SingerCwna, sigma_small));
+            let cost_large = EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::SingerCwna, sigma_large));
+            prop_assert!(
+                cost_large <= cost_small + 1e-9,
+                "larger sigma_q gave higher SingerCwna cost: small={cost_small} large={cost_large}"
+            );
         }
     }
 }

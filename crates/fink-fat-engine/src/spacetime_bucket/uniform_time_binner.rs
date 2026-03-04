@@ -22,7 +22,7 @@
 //!
 //! ## Boundary Handling
 //!
-//! The method [`bins_in_range`](crate::seeding::space_time_bucket::TimeBinner::bins_in_range) returns all bins overlapping the **closed**
+//! The method [`bins_in_range`](crate::spacetime_bucket::time_binner::TimeBinner::bins_in_range) returns all bins overlapping the **closed**
 //! interval `[a, b]`. To achieve closed-interval semantics while remaining
 //! robust against floating-point roundoff, the upper bound `b` is nudged
 //! downward by a small epsilon proportional to the bin width.

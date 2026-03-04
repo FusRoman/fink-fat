@@ -397,12 +397,12 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
 ///     Time-ordered detection pairs produced by [`generate_pairs`].
 /// night_id : NightId
 ///     Night identifier assigned to all resulting seeds.
-/// max_speed_rad_per_day : Option<f64>
+/// max_speed_rad_per_day : `Option<f64>`
 ///     Optional speed filter forwarded to [`SeedNode::from_pair`].
 ///
 /// Returns
 /// -------
-/// Vec<SeedNode>
+/// `Vec<SeedNode>`
 ///     Seeds successfully constructed from the input pairs.
 ///
 /// Notes

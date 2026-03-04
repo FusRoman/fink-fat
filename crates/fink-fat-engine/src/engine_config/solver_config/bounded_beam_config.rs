@@ -3,7 +3,7 @@
 //! Overview
 //! --------
 //! This module defines the configuration structure used by the
-//! [`BoundedBeamSolver`], which enumerates candidate directed paths inside a
+//! [`BoundedBeamSolver`](crate::solver::bounded_beam::BoundedBeamSolver), which enumerates candidate directed paths inside a
 //! time-forward DAG component using a **bounded beam search**.
 //!
 //! The solver is intentionally controlled and predictable: although path
@@ -74,7 +74,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Configuration knobs for the [`BoundedBeamSolver`].
+/// Configuration knobs for the [`BoundedBeamSolver`](crate::solver::bounded_beam::BoundedBeamSolver).
 ///
 /// This structure controls both:
 /// - beam search exploration,
@@ -166,7 +166,7 @@ pub struct BoundedBeamConfig {
 }
 
 impl Default for BoundedBeamConfig {
-    /// Default configuration for the [`BoundedBeamSolver`].
+    /// Default configuration for the [`BoundedBeamSolver`](crate::solver::bounded_beam::BoundedBeamSolver).
     ///
     /// These defaults provide:
     /// - moderate beam width,

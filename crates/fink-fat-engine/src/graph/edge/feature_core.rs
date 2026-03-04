@@ -157,6 +157,17 @@ pub(crate) struct FeatureCore {
     /// Log-compressed velocity $\chi^2$:
     /// $\ln(\chi^2\_{\mathrm{vel}} + \varepsilon)$.
     pub(crate) log_chi2_vel: f64,
+    // --- Cached intermediates reused by `compute_cost` -----------------------
+    /// Time gap $\Delta t$ from `from` to `to` (days).
+    pub(crate) dt: f64,
+    /// Precomputed $\Delta t^2$ (days²).
+    pub(crate) dt_sq: f64,
+    /// Position innovation $\mathbf{r} = \mathbf{p}\_{{\mathrm{to}}} - \mathbf{p}\_{{\mathrm{pred}}}$
+    /// on the `from` tangent plane (radians).
+    pub(crate) r_pos: [f64; 2],
+    /// Velocity innovation $\delta\mathbf{v} = \mathbf{v}\_{{\mathrm{to}}} - \mathbf{v}\_{{\mathrm{pred}}}$
+    /// (rad/day).
+    pub(crate) dv: [f64; 2],
 }
 
 impl FeatureCore {
@@ -172,7 +183,7 @@ impl FeatureCore {
     /// -------------
     /// This is intentionally *very small* to avoid biasing well-behaved cases,
     /// but large enough to avoid division-by-zero and catastrophic numeric blowups.
-    const FLOOR: f64 = 1e-20;
+    pub(crate) const FLOOR: f64 = 1e-20;
 
     /// Generic epsilon used in ratios and small denominators.
     ///
@@ -373,6 +384,12 @@ impl FeatureCore {
 
             chi2_vel,
             log_chi2_vel: Self::finite_or_zero(log_chi2_vel),
+
+            // Cached for reuse in compute_cost (avoids re-propagation/re-projection).
+            dt,
+            dt_sq,
+            r_pos: r,
+            dv,
         }
     }
 
@@ -506,6 +523,78 @@ impl FeatureCore {
             [c1[0][0] + c2[0][0] + Self::FLOOR, c1[0][1] + c2[0][1]],
             [c1[1][0] + c2[1][0], c1[1][1] + c2[1][1] + Self::FLOOR],
         ]
+    }
+
+    /// Build the positional innovation covariance with optional CWNA (Continuous White Noise Acceleration) process noise.
+    ///
+    /// Extends [`innovation_cov`] by adding the Singer/CWNA diagonal term:
+    ///
+    /// $$\mathbf{S}\_\text{pos} \mathrel{+}= \sigma_q^2 \cdot \frac{\Delta t^3}{3} \cdot \mathbf{I}$$
+    ///
+    /// When `sigma_q == 0.0` the result is identical to [`innovation_cov`].
+    ///
+    /// Arguments
+    /// ---------
+    /// * `from` – Source seed.
+    /// * `to` – Target seed.
+    /// * `dt` – Time gap $\Delta t$ (days).
+    /// * `dt_sq` – Precomputed $\Delta t^2$ (days²).
+    /// * `sigma_q` – CWNA spectral density (rad · day^(−3/2)), set `0.0` to disable.
+    ///
+    /// Return
+    /// ------
+    /// Positional innovation covariance $\mathbf{S}$ ($2 \times 2$).
+    #[inline]
+    pub(crate) fn innovation_cov_cwna(
+        from: &SeedNode,
+        to: &SeedNode,
+        dt: f64,
+        dt_sq: f64,
+        sigma_q: f64,
+    ) -> [[f64; 2]; 2] {
+        let mut s = Self::innovation_cov(from, to, dt_sq);
+        if sigma_q != 0.0 {
+            // Q_pos = σ_q² · dt³/3  (scalar, same for x and y)
+            let q = sigma_q * sigma_q * dt * dt_sq / 3.0;
+            s[0][0] += q;
+            s[1][1] += q;
+        }
+        s
+    }
+
+    /// Build the velocity innovation covariance with optional CWNA process noise.
+    ///
+    /// Extends [`innovation_cov_vel`] by adding the Singer/CWNA diagonal term:
+    ///
+    /// $$\mathbf{S}\_\text{vel} \mathrel{+}= \sigma_q^2 \cdot \Delta t \cdot \mathbf{I}$$
+    ///
+    /// When `sigma_q == 0.0` the result is identical to [`innovation_cov_vel`].
+    ///
+    /// Arguments
+    /// ---------
+    /// * `from` – Source seed.
+    /// * `to` – Target seed.
+    /// * `dt` – Time gap $\Delta t$ (days).
+    /// * `sigma_q` – CWNA spectral density (rad · day^(−3/2)), set `0.0` to disable.
+    ///
+    /// Return
+    /// ------
+    /// Velocity innovation covariance $\mathbf{S}\_{\mathrm{vel}}$ ($2 \times 2$).
+    #[inline]
+    pub(crate) fn innovation_cov_vel_cwna(
+        from: &SeedNode,
+        to: &SeedNode,
+        dt: f64,
+        sigma_q: f64,
+    ) -> [[f64; 2]; 2] {
+        let mut s = Self::innovation_cov_vel(from, to);
+        if sigma_q != 0.0 {
+            // Q_vel = σ_q² · dt  (scalar, same for vx and vy)
+            let q = sigma_q * sigma_q * dt;
+            s[0][0] += q;
+            s[1][1] += q;
+        }
+        s
     }
 
     /// Compute cheap diagonal-based z-scores for the innovation $\mathbf{r}$.

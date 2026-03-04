@@ -29,7 +29,7 @@
 //! ------------
 //! Every call to [`Compression::compress`] produces a *framed* byte vector
 //! whose first 9 bytes contain:
-//! - 1 byte: algorithm discriminant (see [`Compression::as_byte`]),
+//! - 1 byte: algorithm discriminant (see `Compression::as_byte`),
 //! - 8 bytes: original (uncompressed) length as little-endian `u64`.
 //!
 //! [`Compression::decompress`] reads the header to determine the algorithm
