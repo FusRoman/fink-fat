@@ -8,6 +8,7 @@ mod build_seeds_test;
 mod fit_orbit_test;
 mod ingest_alerts_test;
 mod persistence_test;
+mod solver_diag_stats_test;
 mod solver_stage_test;
 
 // ===========================================================================

@@ -82,16 +82,16 @@ pub fn run(
             let mut rng = StdRng::seed_from_u64(42_u64);
 
             let default = IODParams::builder()
-                .n_noise_realizations(10)
+                .n_noise_realizations(20)
                 .noise_scale(1.1)
-                .max_obs_for_triplets(10)
+                .max_obs_for_triplets(20)
                 .max_triplets(30)
                 .build()?;
 
             tracing::debug!(
-                n_noise_realizations = 10,
+                n_noise_realizations = 20,
                 noise_scale = 1.1_f64,
-                max_obs_for_triplets = 10,
+                max_obs_for_triplets = 20,
                 max_triplets = 30,
                 "running orbit estimation (parallel batches)",
             );
