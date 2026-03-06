@@ -187,6 +187,15 @@ pub enum EdgeConfigError {
     #[error("edges.max_total_edges must be > 0")]
     MaxTotalEdgesZero,
 
+    /// `edges.max_cost_cut` must be strictly positive when set.
+    ///
+    /// Since edge costs are strictly positive by construction, a cut value of
+    /// `0.0` or less would discard every candidate, silently disabling all
+    /// inter-night linking. Enforcing `> 0` keeps the configuration
+    /// unambiguous and prevents accidental runs with an empty graph.
+    #[error("edges.max_cost_cut must be > 0 when set (got {0})")]
+    MaxCostCutNotPositive(f64),
+
     /// `edges.predictor_config` is invalid.
     ///
     /// This error wraps any validation failure from the predictor configuration,

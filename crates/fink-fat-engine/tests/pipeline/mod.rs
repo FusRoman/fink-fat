@@ -79,8 +79,8 @@ storage_path: "{storage_path}"
     serde_yaml::from_str(&yaml).expect("deserialize minimal EngineConfig")
 }
 
-/// Build an `EngineConfig` with `emit_all_edges: true` and a custom
-/// `max_gap_nights` so that the edge builder works without an ONNX model.
+/// Build an `EngineConfig` with `top_k_per_left: ~` (no Top-K filtering) and a
+/// custom `max_gap_nights` so that the edge builder works without an ONNX model.
 ///
 /// Suitable for tests that run `BuildEdges` and/or `Solve`.
 pub(crate) fn engine_config_with_edges(storage_dir: &TempDir, max_gap_nights: u8) -> EngineConfig {
@@ -91,14 +91,14 @@ version: 1
 storage_path: "{storage_path}"
 max_gap_nights: {max_gap_nights}
 edges:
-  emit_all_edges: true
+  top_k_per_left: ~
 "#
     );
-    serde_yaml::from_str(&yaml).expect("deserialize EngineConfig with emit_all_edges")
+    serde_yaml::from_str(&yaml).expect("deserialize EngineConfig without Top-K filtering")
 }
 
-/// Build an `EngineConfig` with `emit_all_edges: true`, a custom
-/// `max_gap_nights`, and a custom `compact_graph_every_delta` threshold.
+/// Build an `EngineConfig` with `top_k_per_left: ~` (no Top-K filtering), a
+/// custom `max_gap_nights`, and a custom `compact_graph_every_delta` threshold.
 ///
 /// Suitable for tests that verify edge journal compaction behavior.
 pub(crate) fn engine_config_with_compaction(
@@ -114,7 +114,7 @@ storage_path: "{storage_path}"
 max_gap_nights: {max_gap_nights}
 compact_graph_every_delta: {compact_every}
 edges:
-  emit_all_edges: true
+  top_k_per_left: ~
 "#
     );
     serde_yaml::from_str(&yaml).expect("deserialize EngineConfig with compaction threshold")
@@ -295,8 +295,8 @@ pub(crate) fn test_solver_manager_with_min_nodes(min_nodes: usize) -> SolverMana
 
 /// Create an `EdgeRankingModelPool` pointing to a dummy ONNX path.
 ///
-/// Tests that use `emit_all_edges = true` never evaluate the model, so this
-/// is safe even though the file does not exist.
+/// Tests that use `top_k_per_left: ~` (no filtering) never evaluate the model,
+/// so this is safe even though the file does not exist.
 pub(crate) fn test_edge_models() -> Option<EdgeRankingModelPool> {
     Some(EdgeRankingModelPool::new("unused.onnx"))
 }
@@ -407,7 +407,7 @@ pub(crate) struct PipelineTestResult {
 /// and no persistence.
 ///
 /// Uses `engine_config_with_edges`, which enables the edge builder in
-/// `emit_all_edges` mode.
+/// no-filtering mode (`top_k_per_left: None`).
 pub(crate) fn run_pipeline(
     dataset: &SyntheticDataset,
     data_dir: &TempDir,
@@ -430,7 +430,7 @@ pub(crate) fn run_pipeline(
 /// Run a pipeline with a custom solver and persist policy.
 ///
 /// Uses `engine_config_with_edges`, which enables the edge builder in
-/// `emit_all_edges` mode.
+/// no-filtering mode (`top_k_per_left: None`).
 pub(crate) fn run_pipeline_with(
     dataset: &SyntheticDataset,
     data_dir: &TempDir,

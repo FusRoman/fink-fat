@@ -112,7 +112,7 @@
 //!   max_flux_difference: 5.0
 //!
 //! edges:
-//!   emit_all_edges: false
+//!   use_ml_ranking: false
 //!   edge_ranking_model_path: "edge_ranker.onnx"
 //!   top_k_per_left: 32
 //!   onnx_batch_size: 128
@@ -665,7 +665,7 @@ version: 1
         assert_eq!(cfg.storage_path(), Utf8Path::new("./storage"));
 
         assert_ulps_eq!(cfg.pairs.max_dt, 0.06, max_ulps = 0);
-        assert_eq!(cfg.edges.top_k_per_left, 32);
+        assert_eq!(cfg.edges.top_k_per_left, Some(32));
 
         // Predictor defaults are expected valid.
         assert!(cfg.edges.predictor_config.k_sigma > 0.0);
@@ -824,7 +824,7 @@ edges:
             load_engine_config_validated(&path).expect("config should load with env overrides");
 
         assert_relative_eq!(cfg.pairs.max_dt, 0.05, epsilon = 1e-15);
-        assert_eq!(cfg.edges.top_k_per_left, 42);
+        assert_eq!(cfg.edges.top_k_per_left, Some(42));
         assert_eq!(cfg.pairs.allow_same_timebin, false);
     }
 
@@ -1029,7 +1029,7 @@ edges:
             ]);
 
             let cfg = load_engine_config_validated(&path).expect("config should load");
-            prop_assert_eq!(cfg.edges.top_k_per_left, top_k_env);
+            prop_assert_eq!(cfg.edges.top_k_per_left, Some(top_k_env));
         }
     }
 }

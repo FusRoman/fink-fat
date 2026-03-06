@@ -6,8 +6,8 @@
 //! 3. `BuildEdges` constructs inter-night edges between seeds of neighboring
 //!    nights, respecting the `max_gap_nights` sliding window.
 //!
-//! The edge builder operates in `emit_all_edges = true` mode so that no
-//! ONNX model is required (physics-only cost, all candidates emitted).
+//! The edge builder operates in no-filtering mode (`top_k_per_left: None`) so
+//! that no ONNX model is required (physics-only cost, all candidates emitted).
 
 use tempfile::TempDir;
 

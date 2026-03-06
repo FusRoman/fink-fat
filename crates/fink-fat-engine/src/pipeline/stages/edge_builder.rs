@@ -112,7 +112,7 @@ pub fn run(
                 total_left_seeds,
                 %right_night,
                 max_gap,
-                emit_all_edges = ctx.engine_config.edges.emit_all_edges,
+                use_ml_ranking = ctx.engine_config.edges.use_ml_ranking,
                 parallel = ctx.engine_config.edges.parallel_left_batches,
                 "BuildEdges starting",
             );

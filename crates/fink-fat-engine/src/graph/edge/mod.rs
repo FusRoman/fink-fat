@@ -43,20 +43,22 @@
 //!
 //!
 //!
-//! Two operational modes
-//! ---------------------
-//! Controlled by `EdgeConfig.emit_all_edges`.
+//! Two operational modes (when Top-K is active)
+//! ----------------------------------------------
+//! Controlled by `EdgeConfig.use_ml_ranking` (only relevant when
+//! `top_k_per_left = Some(k)`):
 //!
-//! 1) emit_all_edges = true
-//!    ---------------------------------
-//!    - All candidates returned by `SeedNode::seed_edge_candidates` are emitted.
-//!    - No ML model is used.
+//! 1) use_ml_ranking = false (default)
+//!    ----------------------------------
+//!    - For each left seed, generate candidates and compute cost via
+//!      `EdgeFeatures::compute_cost`.
+//!    - Retain only the K lowest-cost candidates (cost-based Top-K).
+//!    - No ONNX model is required.
 //!    - Cost is derived from `EdgeFeatures::compute_cost` using the variant
 //!      configured in `edge_config.cost` (default: `gaussian_chi2`).
-//!    - This mode is deterministic and useful for debugging or full graph builds.
 //!
-//! 2) emit_all_edges = false
-//!    ---------------------------------
+//! 2) use_ml_ranking = true
+//!    ----------------------------------
 //!    - ML Top-K ranking is enabled.
 //!    - For each left seed:
 //!      • candidates are generated,
@@ -66,10 +68,8 @@
 //!    - The solver-facing edge cost is still derived from features.
 //!    - Requires `model_pool` to be provided.
 //!
-//! In ML mode:
-//!
-//! - If `model_pool` is `None`, an error is returned.
-//! - If ONNX inference fails, the error is propagated as `EdgeBuilderError::ModelError(...)`.
+//! When `top_k_per_left = None`, all candidates are emitted regardless of
+//! `use_ml_ranking`.
 //!
 //!
 //!
@@ -152,7 +152,7 @@ use crate::{
         edge_features::EdgeFeatures,
         edge_prediction::EdgeRankingModelPool,
         error::{EdgeBuilderError, EdgeModelError},
-        ranking_topk::rank_topk_edges_for_left,
+        ranking_topk::{rank_topk_edges_for_left, rank_topk_edges_for_left_by_cost},
     },
     pipeline::hooks::StageProgress,
     seeding::{SeedKey, SeedNode, seed_spatial_index::SeedSpatialIndex},
@@ -301,22 +301,22 @@ impl Edge {
     /// This is the main entrypoint to construct the inter-night bipartite edge
     /// set between two seed collections (typically two nights).
     ///
-    /// Behavior (two modes)
-    /// --------------------
-    /// Controlled by `edge_config.emit_all_edges`:
+    /// Behavior
+    /// --------
+    /// Controlled by `edge_config.top_k_per_left` and `edge_config.use_ml_ranking`:
     ///
-    /// - If `true`:
-    ///   - emits *all* candidate edges returned by `SeedNode::seed_edge_candidates`,
-    ///   - computes `EdgeFeatures`,
-    ///   - derives the solver cost from `EdgeFeatures::compute_cost` using
-    ///     the variant configured in `edge_config.cost`.
+    /// - `top_k_per_left = None`:
+    ///   - emits all candidate edges returned by `SeedNode::seed_edge_candidates`,
+    ///   - computes `EdgeFeatures` and derives solver cost.
     ///
-    /// - If `false`:
-    ///   - requires `model_pool` to be `Some(...)`,
-    ///   - ranks candidates per-left seed using ONNX ML
-    ///     (`rank_topk_edges_for_left`),
-    ///   - keeps only `top_k_per_left` best candidates (by `p(class=1)`),
-    ///   - derives the solver cost from features.
+    /// - `top_k_per_left = Some(k)`, `use_ml_ranking = false` (default):
+    ///   - ranks candidates per-left seed by physics-based cost,
+    ///   - keeps only the `k` lowest-cost candidates.
+    ///
+    /// - `top_k_per_left = Some(k)`, `use_ml_ranking = true`:
+    ///   - ranks candidates per-left seed using ONNX ML (`rank_topk_edges_for_left`),
+    ///   - keeps only the `k` highest-probability candidates.
+    ///   - requires `model_pool` to be `Some(...)`.
     ///
     /// Parallelism
     /// -----------
@@ -337,14 +337,14 @@ impl Edge {
     /// * `right` – Slice of target seeds (later epoch).
     /// * `edge_config` – Configuration controlling:
     ///   - candidate search constraints,
-    ///   - ML toggle,
-    ///   - Top-K pruning,
+    ///   - ranking strategy (`use_ml_ranking`),
+    ///   - Top-K limit (`top_k_per_left`),
     ///   - ONNX batching,
     ///   - parallelism.
     /// * `spatial_binner` – Spatial partitioner used to index `right`.
     /// * `time_binner_width` – Time bin width (days) for the uniform time index.
     /// * `model_pool` – Optional ML model pool:
-    ///   - required if `emit_all_edges == false`,
+    ///   - required if `use_ml_ranking == true`,
     ///   - ignored otherwise.
     /// * `progress_sink` – Progress reporter updated per processed chunk.
     ///
@@ -390,9 +390,9 @@ impl Edge {
             n_left = left.len(),
             n_right = right.len(),
             chunk_size,
-            top_k,
+            top_k = ?top_k,
             parallel = edge_config.parallel_left_batches,
-            emit_all_edges = edge_config.emit_all_edges,
+            use_ml_ranking = edge_config.use_ml_ranking,
             "build_edges starting",
         );
         tracing::trace!(
@@ -458,10 +458,13 @@ fn edge_cost_stats(edges: &[Edge]) -> (f64, f64, f64) {
 /// * `chunk` – Slice of left-hand seeds processed together.
 /// * `right_index` – Spatial index over right-hand seeds.
 /// * `edge_config` – Candidate-generation configuration (search constraints).
+///   When `edge_config.max_cost_cut` is set, candidates above the threshold are
+///   discarded before materialising the edge, even though no Top-K filtering is
+///   otherwise active.
 ///
 /// Return
 /// ------
-/// * `Ok(Vec<Edge>)` – All candidate edges for this chunk.
+/// * `Ok(Vec<Edge>)` – All candidate edges for this chunk (after optional cost cut).
 /// * `Err(EdgeBuilderError)` – Currently never returned here, but kept to share the
 ///   same error type as the ML path.
 ///
@@ -480,8 +483,13 @@ fn process_chunk_emit_all<'seed_lf>(
         for to in src.seed_edge_candidates(right_index, edge_config) {
             // Compute cost using the configured cost function (covariance model + loss).
             let cost = EdgeFeatures::compute_cost(src, to, &edge_config.cost_config);
-            let dt_days = src.delta_days(to);
 
+            // Hard cost cut: skip candidates whose cost exceeds the threshold.
+            if edge_config.max_cost_cut.is_some_and(|max| cost > max) {
+                continue;
+            }
+
+            let dt_days = src.delta_days(to);
             local_edges.push(Edge::new(src, to, cost, dt_days)?);
         }
     }
@@ -577,37 +585,96 @@ fn process_chunk_ml_topk(
     Ok(local_edges)
 }
 
-/// Process one chunk of left seeds according to `edge_config.emit_all_edges`.
+/// Process one chunk of left seeds using cost-based Top-K pruning per-left seed.
 ///
-/// This small dispatcher keeps the sequential/parallel loops clean.
+/// For each source seed:
+/// - generate candidates,
+/// - compute edge cost via [`EdgeFeatures::compute_cost`],
+/// - retain only the `top_k` candidates with the **lowest cost**.
+///
+/// Arguments
+/// ---------
+/// * `chunk` – Slice of left-hand seeds processed together.
+/// * `right_index` – Spatial index over right-hand seeds.
+/// * `edge_config` – Candidate-generation and cost function configuration.
+/// * `top_k` – Number of candidates kept per left seed.
+///
+/// Return
+/// ------
+/// * `Ok(Vec<Edge>)` – Cost-pruned edges for this chunk.
+/// * `Err(EdgeBuilderError)` – If edge construction fails (e.g. invalid cost or dt).
+fn process_chunk_cost_topk(
+    chunk: &[SeedNode],
+    right_index: &SeedSpatialIndex<'_, '_>,
+    edge_config: &EdgeConfig,
+    top_k: usize,
+) -> Result<Vec<Edge>, EdgeBuilderError> {
+    let mut local_edges: Vec<Edge> = Vec::new();
+    let mut tmp: smallvec::SmallVec<[(&SeedNode, f64); 32]> = smallvec::SmallVec::new();
+
+    for src in chunk.iter() {
+        rank_topk_edges_for_left_by_cost(src, right_index, edge_config, top_k, &mut tmp);
+
+        for (right_candidate, edge_cost) in tmp.iter() {
+            let dt_days = src.delta_days(right_candidate);
+            local_edges.push(Edge::new(src, right_candidate, *edge_cost, dt_days)?);
+        }
+    }
+
+    if tracing::enabled!(tracing::Level::TRACE) {
+        let (cost_min, cost_max, cost_mean) = edge_cost_stats(&local_edges);
+        tracing::trace!(
+            chunk_size = chunk.len(),
+            top_k,
+            edges_in_chunk = local_edges.len(),
+            cost_min,
+            cost_max,
+            cost_mean,
+            "process_chunk_cost_topk",
+        );
+    }
+
+    Ok(local_edges)
+}
+
+/// Process one chunk of left seeds according to the configured ranking strategy.
+///
+/// Dispatches to one of three implementations based on `top_k` and
+/// `edge_config.use_ml_ranking`:
+///
+/// - `top_k = None` → emit all candidate edges (no filtering).
+/// - `top_k = Some(k)` and `use_ml_ranking = true` → ML Top-K via ONNX.
+/// - `top_k = Some(k)` and `use_ml_ranking = false` → cost-based Top-K.
 ///
 /// Arguments
 /// ---------
 /// * `chunk` – Slice of left-hand seeds processed together.
 /// * `right_index` – Spatial index over right-hand seeds.
 /// * `edge_config` – Edge configuration controlling the mode.
-/// * `top_k` – Top-K per-left used in ML mode.
-/// * `model_pool` – Required in ML mode, ignored in emit-all mode.
+/// * `top_k` – Top-K per-left: `None` means emit all.
+/// * `model_pool` – Required when `use_ml_ranking = true`, ignored otherwise.
 ///
 /// Return
 /// ------
 /// * `Ok(Vec<Edge>)` – Edges produced for this chunk.
-/// * `Err(EdgeBuilderError::ModelError(EdgeModelError::MissingModel))` if ML mode is enabled without a pool.
+/// * `Err(EdgeBuilderError::ModelError(EdgeModelError::MissingModel))` if ML mode
+///   is requested without a pool.
 /// * `Err(EdgeBuilderError::ModelError)` if ONNX inference fails.
 fn process_chunk(
     chunk: &[SeedNode],
     right_index: &SeedSpatialIndex<'_, '_>,
     edge_config: &EdgeConfig,
-    top_k: usize,
+    top_k: Option<usize>,
     model_pool: Option<&EdgeRankingModelPool>,
 ) -> Result<Vec<Edge>, EdgeBuilderError> {
-    match edge_config.emit_all_edges {
-        true => process_chunk_emit_all(chunk, right_index, edge_config),
-        false => {
+    match top_k {
+        None => process_chunk_emit_all(chunk, right_index, edge_config),
+        Some(k) if edge_config.use_ml_ranking => {
             let pool =
                 model_pool.ok_or(EdgeBuilderError::ModelError(EdgeModelError::MissingModel))?;
-            process_chunk_ml_topk(chunk, right_index, edge_config, top_k, pool)
+            process_chunk_ml_topk(chunk, right_index, edge_config, k, pool)
         }
+        Some(k) => process_chunk_cost_topk(chunk, right_index, edge_config, k),
     }
 }
 
@@ -637,7 +704,7 @@ fn build_edges_parallel(
     chunk_size: usize,
     right_index: &SeedSpatialIndex<'_, '_>,
     edge_config: &EdgeConfig,
-    top_k: usize,
+    top_k: Option<usize>,
     model_pool: Option<&EdgeRankingModelPool>,
     progress_sink: &dyn StageProgress,
 ) -> Result<Vec<Edge>, EdgeBuilderError> {
@@ -698,7 +765,7 @@ fn build_edges_sequential(
     chunk_size: usize,
     right_index: &SeedSpatialIndex<'_, '_>,
     edge_config: &EdgeConfig,
-    top_k: usize,
+    top_k: Option<usize>,
     model_pool: Option<&EdgeRankingModelPool>,
     progress_sink: &dyn StageProgress,
 ) -> Result<Vec<Edge>, EdgeBuilderError> {

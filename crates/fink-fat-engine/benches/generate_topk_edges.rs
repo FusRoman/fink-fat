@@ -263,7 +263,7 @@ fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
 
         // Base configuration for the tested function.
         let mut edge_config = EdgeConfig::default();
-        edge_config.top_k_per_left = top_k_per_left;
+        edge_config.top_k_per_left = Some(top_k_per_left);
 
         group.throughput(Throughput::Elements(
             (num_left_seeds * top_k_per_left) as u64,
@@ -404,7 +404,7 @@ fn bench_generate_topk_edges_components(c: &mut Criterion) {
     let right_index = SeedSpatialIndex::build(&right_seeds, &spatial_binner, &time_binner);
 
     let mut edge_config = EdgeConfig::default();
-    edge_config.top_k_per_left = top_k_per_left;
+    edge_config.top_k_per_left = Some(top_k_per_left);
 
     // -----------------------------------------------------------------------------
     // 1) Candidate generation + scoring per single left seed.

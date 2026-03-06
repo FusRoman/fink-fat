@@ -6,8 +6,8 @@
 //! 3. `BuildEdges` constructs inter-night edges between seeds.
 //! 4. `Solve` runs the solver to produce trajectory hypotheses.
 //!
-//! The edge builder operates in `emit_all_edges = true` mode so that no
-//! ONNX model is required (physics-only cost, all candidates emitted).
+//! The edge builder operates in no-filtering mode (`top_k_per_left: None`) so
+//! that no ONNX model is required (physics-only cost, all candidates emitted).
 //!
 //! Ground-truth verification checks that the solver output recovers coherent
 //! trajectories matching the known synthetic trajectories.
