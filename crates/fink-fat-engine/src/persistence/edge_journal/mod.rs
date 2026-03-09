@@ -138,30 +138,54 @@ impl EdgeJournalStore {
     /// Returns
     /// -------
     /// `Result<Vec<Edge>, PersistenceIoError>`
-    ///     The reconstructed edge set.
+    ///     The reconstructed edge set, sorted by [`EdgeKey`].
+    ///
+    /// Memory strategy
+    /// ---------------
+    /// The snapshot is loaded directly into a `Vec<Edge>` (~56 B/edge), avoiding
+    /// the `AHashMap<EdgeKey, Edge>` intermediate that previously cost ~120 B/edge
+    /// (2× the final allocation) plus a peak double-allocation at conversion time.
+    ///
+    /// Delta ops are collected first into a **small** `AHashMap` whose size is
+    /// proportional to the number of ops (typically tens of deactivations after
+    /// compaction, never the full edge count).  They are then applied to the Vec
+    /// via binary search before the result is returned.
+    ///
+    /// Notes
+    /// -----
+    /// The returned `Vec<Edge>` is sorted by `EdgeKey` to satisfy the invariant
+    /// expected by [`crate::graph::AlertLinkageDAG::from_edges`].
     pub fn load_edges(
         &self,
         manifest: &Manifest,
         window: Option<PairingMode>,
     ) -> Result<Vec<Edge>, PersistenceIoError> {
-        let mut map: AHashMap<EdgeKey, Edge> = AHashMap::new();
-
-        // 1) Load snapshot if present.
-        if let Some(rel) = manifest.edge_journal.snapshot_rel_path() {
+        // ------------------------------------------------------------------
+        // 1. Load snapshot directly into Vec<Edge> (no intermediate AHashMap).
+        // ------------------------------------------------------------------
+        let mut edges: Vec<Edge> = if let Some(rel) = manifest.edge_journal.snapshot_rel_path() {
             let snap_path = self.layout.resolve_relative(rel);
             let snapshot: EdgeSnapshot = DiskEnvelope::<EdgeSnapshot>::load_enveloped(
                 &snap_path,
                 EDGE_JOURNAL_SCHEMA_VERSION,
             )
             .map_err(|e| e.with_path(&snap_path))?;
+            snapshot.edges
+        } else {
+            Vec::new()
+        };
+        // Snapshot edges are written sorted (see AlertLinkageDAG::from_edges).
+        // Re-sort defensively in case the snapshot was produced by an older version.
+        edges.sort_unstable_by_key(|e| e.key());
 
-            for e in snapshot.edges {
-                map.insert(e.key(), e);
-            }
-        }
+        // ------------------------------------------------------------------
+        // 2. Collect all delta ops into a small AHashMap (size ∝ delta count,
+        //    not snapshot size).  In the common post-compaction case this map
+        //    holds only a handful of deactivation ops.
+        // ------------------------------------------------------------------
+        let mut delta_upserts: AHashMap<EdgeKey, Edge> = AHashMap::new();
+        let mut delta_removes: AHashMap<EdgeKey, ()> = AHashMap::new();
 
-        // 2) Apply deltas in chronological order.
-        //    (manifest.edge_journal.deltas is already sorted by night_id)
         for d in &manifest.edge_journal.deltas {
             if let Some(w) = window
                 && !w.contains(d.night_id)
@@ -174,15 +198,65 @@ impl EdgeJournalStore {
                 DiskEnvelope::<EdgeDeltaChunk>::load_enveloped(&path, EDGE_JOURNAL_SCHEMA_VERSION)
                     .map_err(|e| e.with_path(&path))?;
 
-            self.apply_ops(&mut map, delta.ops)?;
+            for op in delta.ops {
+                match op {
+                    EdgeOp::Upsert { edge } => {
+                        let key = edge.key();
+                        delta_removes.remove(&key);
+                        delta_upserts.insert(key, edge);
+                    }
+                    EdgeOp::Remove { key } => {
+                        delta_upserts.remove(&key);
+                        delta_removes.insert(key, ());
+                    }
+                }
+            }
         }
 
-        // 3) Optionally enforce window on the final edge set.
+        // ------------------------------------------------------------------
+        // 3. Fast path: no delta ops → return snapshot Vec directly.
+        // ------------------------------------------------------------------
+        if delta_upserts.is_empty() && delta_removes.is_empty() {
+            if let Some(w) = window {
+                edges.retain(|e| self.edge_key_in_window(e.key(), w));
+            }
+            return Ok(edges);
+        }
+
+        // ------------------------------------------------------------------
+        // 4. Apply delta ops to the sorted Vec.
+        //
+        //    - Upsert of an existing key: binary search → update in place.
+        //    - Upsert of a new key: push to a side-vec (inserted later).
+        //    - Remove: mark via binary search.
+        // ------------------------------------------------------------------
+        let mut new_edges: Vec<Edge> = Vec::new();
+
+        for (key, updated_edge) in delta_upserts {
+            match edges.binary_search_by_key(&key, |e| e.key()) {
+                Ok(idx) => edges[idx] = updated_edge,
+                Err(_) => new_edges.push(updated_edge), // brand-new edge not in snapshot
+            }
+        }
+
+        if !delta_removes.is_empty() {
+            edges.retain(|e| !delta_removes.contains_key(&e.key()));
+        }
+
+        // Append new edges and re-sort to maintain the sorted invariant.
+        if !new_edges.is_empty() {
+            edges.append(&mut new_edges);
+            edges.sort_unstable_by_key(|e| e.key());
+        }
+
+        // ------------------------------------------------------------------
+        // 5. Optionally enforce window on the final edge set.
+        // ------------------------------------------------------------------
         if let Some(w) = window {
-            map.retain(|k, _| self.edge_key_in_window(*k, w));
+            edges.retain(|e| self.edge_key_in_window(e.key(), w));
         }
 
-        Ok(map.into_values().collect())
+        Ok(edges)
     }
 
     /// Compact a set of in-memory edges into a new snapshot at `checkpoint_night_id`.
@@ -195,9 +269,10 @@ impl EdgeJournalStore {
     ///     Night to record as the snapshot checkpoint.
     /// created_unix_s : i64
     ///     Unix timestamp stored in the snapshot envelope.
-    /// edges : `Vec<Edge>`
-    ///     The full current edge set (already in memory — no disk reload needed).
-    ///     These are typically taken directly from `RuntimeState.graph.edges`.
+    /// edges : `&[Edge]`
+    ///     The full current edge set (borrowed — no ownership transfer needed).
+    ///     The caller typically passes `&RuntimeState.graph.edges` directly,
+    ///     which avoids the ~4 GB clone that `Vec<Edge>` by value would require.
     /// window : `Option<PairingMode>`
     ///     Optional sliding window; used to drop edges outside the active range
     ///     before writing the snapshot (defensive filter — caller-provided edges
@@ -225,17 +300,18 @@ impl EdgeJournalStore {
         manifest: &mut Manifest,
         checkpoint_night_id: NightId,
         created_unix_s: i64,
-        edges: Vec<Edge>,
+        edges: &[Edge],
         window: Option<PairingMode>,
         compression: Compression,
     ) -> Result<(), PersistenceIoError> {
         // Optionally filter by window (defensive: edges should already be filtered).
         let edges: Vec<Edge> = match window {
             Some(w) => edges
-                .into_iter()
+                .iter()
                 .filter(|e| w.contains(e.from.night_id) && w.contains(e.to.night_id))
+                .cloned()
                 .collect(),
-            None => edges,
+            None => edges.to_vec(),
         };
 
         let snapshot = EdgeSnapshot {
@@ -361,33 +437,6 @@ impl EdgeJournalStore {
     }
 
     /// Apply a list of operations to an in-memory edge map.
-    ///
-    /// Notes
-    /// -----
-    /// This performs a purely logical update (no validation beyond basic
-    /// self-consistency). Validation (e.g. seed existence) happens later when
-    /// converting to borrowed edges using `SeedStore`.
-    fn apply_ops(
-        &self,
-        map: &mut AHashMap<EdgeKey, Edge>,
-        ops: Vec<EdgeOp>,
-    ) -> Result<(), PersistenceIoError> {
-        for op in ops {
-            match op {
-                EdgeOp::Upsert { key, edge } => {
-                    // Optional safety: ensure key matches edge endpoints
-                    // (defensive; remove if you want max speed)
-                    debug_assert!(key.from == edge.from && key.to == edge.to);
-                    map.insert(key, edge);
-                }
-                EdgeOp::Remove { key } => {
-                    map.remove(&key);
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// Decide whether an edge key is inside a window.
     #[inline]
     fn edge_key_in_window(&self, key: EdgeKey, w: PairingMode) -> bool {

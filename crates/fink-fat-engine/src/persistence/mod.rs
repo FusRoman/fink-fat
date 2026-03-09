@@ -388,7 +388,7 @@ impl PersistenceManager {
             manifest,
             checkpoint_night_id,
             created_unix_s,
-            edges,
+            edges.as_slice(),
             window,
             cfg.binary_compression,
         )?;
@@ -447,13 +447,17 @@ impl PersistenceManager {
     /// This is equivalent to [`PersistenceManager::compact_edges_and_cleanup`]
     /// minus the intermediate `save_manifest` call.  Callers that write the
     /// final manifest themselves should prefer this method.
+    ///
+    /// `edges` is borrowed (not moved) to avoid the ~4 GB clone that the
+    /// equivalent `Vec<Edge>` ownership transfer would require.  The caller
+    /// typically passes `&RuntimeState.graph.edges` directly.
     pub fn compact_edges(
         &self,
         manifest: &mut Manifest,
         cfg: &EngineConfig,
         checkpoint_night_id: NightId,
         created_unix_s: i64,
-        edges: Vec<Edge>,
+        edges: &[Edge],
     ) -> Result<(), EngineError> {
         // Use checkpoint_night_id as the window anchor so that edges built
         // *this* night (to.night_id == checkpoint_night_id) are included in

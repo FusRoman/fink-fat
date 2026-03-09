@@ -16,16 +16,17 @@ use crate::{
 pub struct AlertLinkageDAG {
     pub in_deg: AHashMap<SeedKey, usize>,
     pub out_deg: AHashMap<SeedKey, usize>,
-    pub edges: Vec<Edge>,
-    /// Reverse index: `EdgeKey` → position in `edges`.
+    /// All edges, kept **sorted by `EdgeKey`** at all times.
     ///
-    /// Maintained automatically by constructors and mutation methods so that
-    /// `edge_index[key] == i` iff `edges[i].key() == key`.
-    edge_index: AHashMap<EdgeKey, usize>,
+    /// Lookups and deactivations use `binary_search_by_key` (O(log n)),
+    /// which is sufficient given that deactivations are rare (~tens per run).
+    /// Maintaining sort order avoids the ~3.8 GB `AHashMap<EdgeKey, usize>`
+    /// reverse index that was previously held alongside the edge vector.
+    pub edges: Vec<Edge>,
     /// Pending edge operations accumulated since the last persistence flush.
     ///
-    /// Every mutation method (`add_inter_night_edges`, future `remove_edge`,
-    /// `deactivate_edge`, …) appends the corresponding [`EdgeOp`] here.
+    /// Every mutation method (`add_inter_night_edges`, `deactivate_edges`, …)
+    /// appends the corresponding [`EdgeOp`] here.
     /// The save stage drains this buffer and writes it as a journal delta.
     pending_ops: Vec<EdgeOp>,
 }
@@ -42,7 +43,6 @@ impl AlertLinkageDAG {
             in_deg: AHashMap::new(),
             out_deg: AHashMap::new(),
             edges: Vec::new(),
-            edge_index: AHashMap::new(),
             pending_ops: Vec::new(),
         }
     }
@@ -51,25 +51,24 @@ impl AlertLinkageDAG {
     ///
     /// The `pending_ops` buffer starts empty because these edges are already
     /// persisted — they do not need to be written again.
-    pub fn from_edges(edges: Vec<Edge>) -> Self {
+    ///
+    /// The edge vector is sorted by [`EdgeKey`] so that subsequent lookups
+    /// via [`Self::edge_by_key`] can use binary search.
+    pub fn from_edges(mut edges: Vec<Edge>) -> Self {
         let mut in_deg = AHashMap::new();
         let mut out_deg = AHashMap::new();
-        let mut edge_index = AHashMap::with_capacity(edges.len());
 
-        for (i, edge) in edges.iter().enumerate() {
-            let from = edge.from;
-            let to = edge.to;
-
-            *out_deg.entry(from).or_insert(0) += 1;
-            *in_deg.entry(to).or_insert(0) += 1;
-            edge_index.insert(edge.key(), i);
+        for edge in edges.iter() {
+            *out_deg.entry(edge.from).or_insert(0) += 1;
+            *in_deg.entry(edge.to).or_insert(0) += 1;
         }
+
+        edges.sort_unstable_by_key(|e| e.key());
 
         Self {
             in_deg,
             out_deg,
             edges,
-            edge_index,
             pending_ops: Vec::new(),
         }
     }
@@ -152,31 +151,25 @@ impl AlertLinkageDAG {
         tracing::debug!(%left_night, %right_night, n_new_edges, "edges built");
 
         for edge in new_edges {
-            let from = edge.from;
-            let to = edge.to;
-
-            *self.out_deg.entry(from).or_insert(0) += 1;
-            *self.in_deg.entry(to).or_insert(0) += 1;
-
-            let key = edge.key();
-            let idx = self.edges.len();
-            self.edge_index.insert(key, idx);
+            *self.out_deg.entry(edge.from).or_insert(0) += 1;
+            *self.in_deg.entry(edge.to).or_insert(0) += 1;
 
             // Track the operation for the journal delta.
-            self.pending_ops.push(EdgeOp::Upsert {
-                key,
-                edge: edge.clone(),
-            });
+            self.pending_ops.push(EdgeOp::Upsert { edge: edge.clone() });
 
             self.edges.push(edge);
         }
+        // Re-sort to maintain the sorted-by-EdgeKey invariant required by
+        // binary_search_by_key. Timsort on a mostly-sorted slice (existing
+        // edges + one appended batch) is nearly O(n).
+        self.edges.sort_unstable_by_key(|e| e.key());
 
         Ok(())
     }
 
     /// Return a reference to the edge identified by `key`, or `None` if absent.
     ///
-    /// Complexity: O(1) amortized (hash-map lookup).
+    /// Complexity: O(log n) — binary search on the sorted edge vector.
     ///
     /// Arguments
     /// ---------
@@ -187,12 +180,15 @@ impl AlertLinkageDAG {
     /// `Some(&Edge)` if found, `None` otherwise.
     #[inline]
     pub fn edge_by_key(&self, key: &EdgeKey) -> Option<&Edge> {
-        self.edge_index.get(key).map(|&i| &self.edges[i])
+        match self.edges.binary_search_by_key(key, |e| e.key()) {
+            Ok(idx) => Some(&self.edges[idx]),
+            Err(_) => None,
+        }
     }
 
     /// Return a mutable reference to the edge identified by `key`, or `None`.
     ///
-    /// Complexity: O(1) amortized.
+    /// Complexity: O(log n) — binary search on the sorted edge vector.
     ///
     /// Arguments
     /// ---------
@@ -203,7 +199,10 @@ impl AlertLinkageDAG {
     /// `Some(&mut Edge)` if found, `None` otherwise.
     #[inline]
     pub fn edge_by_key_mut(&mut self, key: &EdgeKey) -> Option<&mut Edge> {
-        self.edge_index.get(key).map(|&i| &mut self.edges[i])
+        match self.edges.binary_search_by_key(key, |e| e.key()) {
+            Ok(idx) => Some(&mut self.edges[idx]),
+            Err(_) => None,
+        }
     }
 
     /// Deactivate a set of edges identified by their keys.
@@ -231,7 +230,7 @@ impl AlertLinkageDAG {
         let mut n_deactivated: u64 = 0;
 
         for key in keys {
-            let Some(&idx) = self.edge_index.get(key) else {
+            let Ok(idx) = self.edges.binary_search_by_key(key, |e| e.key()) else {
                 continue;
             };
             if !self.edges[idx].active {
@@ -239,10 +238,8 @@ impl AlertLinkageDAG {
             }
 
             self.edges[idx].active = false;
-            let deactivated_edge = self.edges[idx].clone();
             self.pending_ops.push(EdgeOp::Upsert {
-                key: *key,
-                edge: deactivated_edge,
+                edge: self.edges[idx].clone(),
             });
             n_deactivated += 1;
         }
@@ -365,8 +362,8 @@ mod tests {
         let ops = dag.drain_pending_ops();
         assert_eq!(ops.len(), 1);
         match &ops[0] {
-            EdgeOp::Upsert { key: op_key, edge } => {
-                assert_eq!(*op_key, key);
+            EdgeOp::Upsert { edge } => {
+                assert_eq!(edge.key(), key);
                 assert!(!edge.active, "upserted edge must have active=false");
             }
             other => panic!("expected Upsert, got {other:?}"),

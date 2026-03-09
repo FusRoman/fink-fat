@@ -141,7 +141,11 @@ fn write_nights_parallel(
 }
 
 /// Inputs for [`write_edge_journal`], bundled to keep argument count low.
-struct EdgeJournalInput {
+///
+/// The lifetime `'edges` is the lifetime of the shared edge slice borrowed for
+/// compaction.  Using a reference instead of an owned `Vec<Edge>` avoids the
+/// ~4 GB clone that was previously required.
+struct EdgeJournalInput<'edges> {
     /// Manifest clone owned by the edge-write thread; only `edge_journal` is
     /// mutated, leaving `nights` untouched for the post-scope merge.
     manifest: Manifest,
@@ -151,8 +155,9 @@ struct EdgeJournalInput {
     /// incremental delta append.
     should_compact: bool,
     edge_ops: Vec<EdgeOp>,
-    /// Pre-cloned edge set, present only when `should_compact` is `true`.
-    edges_for_compact: Option<Vec<Edge>>,
+    /// Borrowed edge slice used when `should_compact` is `true`.
+    /// A reference avoids cloning ~74 M edges (~4 GB) into a temporary buffer.
+    edges_for_compact: Option<&'edges [Edge]>,
 }
 
 /// Write the edge journal for the current night — either a full snapshot
@@ -161,10 +166,10 @@ struct EdgeJournalInput {
 /// The manifest inside `input` is an owned clone; this function mutates only
 /// its `edge_journal` field so the result can be merged with the night-write
 /// manifest without conflict.
-fn write_edge_journal(
+fn write_edge_journal<'edges>(
     persistence: &PersistenceManager,
     engine_config: &EngineConfig,
-    input: EdgeJournalInput,
+    input: EdgeJournalInput<'edges>,
 ) -> Result<(Manifest, bool), EngineError> {
     let EdgeJournalInput {
         mut manifest,
@@ -285,12 +290,31 @@ pub fn run(
             // ----------------------------------------------------------------
             let manifest = ctx.runtime_state.manifest.clone();
 
-            let edge_ops = ctx.runtime_state.graph.drain_pending_ops();
-            let n_edge_ops = edge_ops.len() as u64;
-
+            // Decide compaction strategy before draining ops, so we can
+            // discard redundant Upsert ops when a full snapshot is about to
+            // be written anyway.
             let should_compact = manifest.edge_journal.deltas.len().saturating_add(1)
                 >= ctx.engine_config.compact_graph_every_delta;
-            let edges_for_compact = should_compact.then(|| ctx.runtime_state.graph.edges.clone());
+
+            // When compacting, the snapshot captures the full edge state;
+            // Upsert ops are therefore redundant and are discarded immediately
+            // after draining to free ~5 GB of pending-ops memory.
+            // Only Remove ops (edge deletions) would need to survive, but in
+            // normal operation they do not co-occur with compaction.
+            let (edge_ops, n_edge_ops) = {
+                let all_ops = ctx.runtime_state.graph.drain_pending_ops();
+                let n = all_ops.len() as u64;
+                if should_compact {
+                    // Drop all ops: snapshot is authoritative.
+                    (Vec::new(), n)
+                } else {
+                    (all_ops, n)
+                }
+            };
+
+            // Borrow the live edge slice for compaction; no clone needed.
+            let edges_for_compact: Option<&[Edge]> =
+                should_compact.then_some(ctx.runtime_state.graph.edges.as_slice());
 
             tracing::trace!(
                 n_edge_ops,

@@ -165,7 +165,7 @@ use crate::{
 /// -----
 /// This assumes there is at most one edge per `(from, to)` pair.
 /// That matches the usual Fink-FAT semantics: a directed link between two seeds.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub struct EdgeKey {
     /// Source seed (older epoch).
     pub from: SeedKey,

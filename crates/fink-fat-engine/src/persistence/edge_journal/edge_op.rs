@@ -9,10 +9,10 @@ pub enum EdgeOp {
     ///
     /// This is used both for new edges and for updating existing edges
     /// (cost/active, etc.).
+    ///
+    /// The key is implicit: `edge.key()` returns `EdgeKey { from: edge.from, to: edge.to }`.
     Upsert {
-        /// Edge identity.
-        key: EdgeKey,
-        /// Edge payload (core + endpoints).
+        /// Edge payload (core + endpoints). The identity key is `edge.key()`.
         edge: Edge,
     },
 

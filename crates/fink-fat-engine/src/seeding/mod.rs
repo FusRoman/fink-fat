@@ -87,7 +87,9 @@ use crate::{
     spacetime_bucket::spatial_binner::SpatialBinner,
 };
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Default)]
+#[derive(
+    Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Default,
+)]
 pub struct SeedKey {
     pub night_id: NightId,
     pub unique_id: SeedId,
