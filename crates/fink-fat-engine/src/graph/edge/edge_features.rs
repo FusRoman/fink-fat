@@ -203,25 +203,45 @@ impl EdgeFeatures {
     /// Extract positional and velocity χ² values, optionally inflated with CWNA (Continuous White Noise Acceleration)
     /// process noise.
     ///
+    /// Positional \u03c7\u00b2
+    /// -----------------
+    /// The positional term uses a **spherical residual** $d$ = [`FeatureCore::r_sph`] instead of
+    /// the 2-D gnomonic Mahalanobis:
+    ///
+    /// $$\chi^2\_{\mathrm{pos}} = \frac{d^{2}}{S\_{\mathrm{scalar}}}$$
+    ///
+    /// where $S\_{\mathrm{scalar}} = \operatorname{tr}(\mathbf{S}\_{\mathrm{pos}}) / 2$.
+    ///
+    /// Motivation: the gnomonic residual $\|\mathbf{r}\|$ diverges when the tangent-plane
+    /// denominator $\cos c \to 0$ (seed centres separated by $\gtrsim 45\deg$), leading to
+    /// $\chi^2\_{\mathrm{pos}} \sim 10^{20}$ for otherwise valid edges.  The great-circle
+    /// distance $d \in [0, \pi]$ is bounded and well-defined for any separation.
+    ///
+    /// Velocity \u03c7\u00b2
+    /// ----------------
+    /// The velocity term still uses the full 2-D Mahalanobis on the tangent-plane velocity
+    /// innovation $\delta\mathbf{v}$ (velocity residuals do not blow up).
+    ///
     /// Behavior
     /// --------
     /// - When `sigma_q == 0` (or variant is `KinematicLogLikelihood`): returns the
-    ///   cached values from `core` directly — no extra linear-algebra work.
-    /// - When `sigma_q > 0`: recomputes only the two 2×2 innovation covariances
-    ///   with the CWNA diagonal term, then re-applies the Mahalanobis formula
-    ///   using the cached innovation vectors `core.r_pos` and `core.dv`.
+    ///   cached spherical positional $\chi^2$ and the cached velocity $\chi^2$ from `core`
+    ///   directly — no extra linear-algebra work.
+    /// - When `sigma_q > 0`: recomputes only the two 2\u00d72 innovation covariances
+    ///   with the CWNA diagonal term, then applies the spherical formula for position
+    ///   and the 2-D Mahalanobis for velocity.
     ///   Propagation and tangent-plane projection are **not** repeated.
     ///
     /// Arguments
     /// ---------
-    /// * `core` – Shared edge intermediates (cached innovation vectors and χ²).
+    /// * `core` – Shared edge intermediates (cached `r_sph`, `s_pos_scalar`, `dv`).
     /// * `from` – Source seed node (needed for measurement covariance in CWNA path).
     /// * `to`   – Target seed node (needed for measurement covariance in CWNA path).
     /// * `cfg`  – Cost configuration; `variant` and `sigma_q` are read here.
     ///
     /// Return
     /// ------
-    /// `(chi2_pos, chi2_vel)` — positional and velocity Mahalanobis distances.
+    /// `(chi2_pos, chi2_vel)` — positional and velocity \u03c7\u00b2 values.
     #[inline]
     fn chi2_with_cwna(
         core: &FeatureCore,
@@ -236,20 +256,22 @@ impl EdgeFeatures {
         };
 
         if sigma_q == 0.0 {
-            // Fast path: reuse values already computed in FeatureCore.
-            return (core.chi2_pos, core.chi2_vel);
+            // Fast path: use the pre-computed spherical positional chi2 from FeatureCore.
+            // chi2_pos_sph = r_sph² / s_pos_scalar   (great-circle, no blow-up)
+            let chi2_p =
+                FeatureCore::finite_or_zero((core.r_sph * core.r_sph / core.s_pos_scalar).max(0.0));
+            return (chi2_p, core.chi2_vel);
         }
 
-        // CWNA path: inflate covariances and recompute χ² from cached innovations.
+        // CWNA path: inflate covariances with Singer process noise and recompute chi2.
+        //
+        // Positional chi2 uses spherical residual r_sph with a scalar S
+        // (isotropic approximation: S_scalar = tr(S_cwna) / 2).
         let s_pos = FeatureCore::innovation_cov_cwna(from, to, core.dt, core.dt_sq, sigma_q);
-        let chi2_p = FeatureCore::finite_or_zero(
-            dot2(
-                core.r_pos,
-                mat_vec2(invert_sym_2x2(s_pos, FeatureCore::FLOOR), core.r_pos),
-            )
-            .max(0.0),
-        );
+        let s_pos_scalar = ((s_pos[0][0] + s_pos[1][1]).max(FeatureCore::FLOOR)) / 2.0;
+        let chi2_p = FeatureCore::finite_or_zero((core.r_sph * core.r_sph / s_pos_scalar).max(0.0));
 
+        // Velocity chi2 still uses the full 2×2 Mahalanobis (no blow-up for velocity residuals).
         let s_vel = FeatureCore::innovation_cov_vel_cwna(from, to, core.dt, sigma_q);
         let chi2_v = FeatureCore::finite_or_zero(
             dot2(
@@ -1662,6 +1684,269 @@ mod edge_feature_tests {
             prop_assert!(
                 cost_large <= cost_small + 1e-9,
                 "larger sigma_q gave higher SingerCwna cost: small={cost_small} large={cost_large}"
+            );
+        }
+    }
+
+    // =========================================================================
+    // Unit tests – spherical residual stability (r_sph, chi2_pos_sph)
+    // =========================================================================
+
+    /// For a near-perfect prediction the spherical residual should be tiny.
+    #[test]
+    fn r_sph_small_for_consistent_prediction() {
+        let (from, to) = seed_pair_consistent();
+        let core = FeatureCore::from_nodes(&from, &to);
+        assert!(
+            core.r_sph.is_finite(),
+            "r_sph should be finite for consistent pair, got {}",
+            core.r_sph
+        );
+        assert!(core.r_sph >= 0.0, "r_sph should be ≥ 0, got {}", core.r_sph);
+        // Consistent pair: residual should be below 1 arcmin (2.9e-4 rad).
+        assert!(
+            core.r_sph < 3e-4,
+            "r_sph={} should be small for a consistent near-perfect edge",
+            core.r_sph
+        );
+    }
+
+    /// Spherical residual must be finite and in [0, π] even when seed centres
+    /// are 45° apart (gnomonic denominator is small but non-zero there).
+    #[test]
+    fn r_sph_finite_for_45deg_separation() {
+        use std::f64::consts::PI;
+        let mut store = SeedStore::new();
+        // from at (0, 0), to at (PI/4, 0) — 45° apart in RA.
+        let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, 0.0, 0.0, 3e-3, 1, 1000.0);
+        let to = make_seed_from_pair(&mut store, 2, 2, 3, 60001.0, PI / 4.0, 0.0, 3e-3, 1, 1000.0);
+        let core = FeatureCore::from_nodes(&from, &to);
+        assert!(
+            core.r_sph.is_finite(),
+            "r_sph must be finite at 45º sep, got {}",
+            core.r_sph
+        );
+        assert!(
+            core.r_sph >= 0.0 && core.r_sph <= PI + 1e-12,
+            "r_sph={} must be in [0, π]",
+            core.r_sph
+        );
+    }
+
+    /// At 90° the gnomonic denominator is zero — the old 2-D Mahalanobis blows
+    /// up to ~10^20. The spherical residual must remain finite and in [0, π].
+    #[test]
+    fn r_sph_finite_for_90deg_separation() {
+        use std::f64::consts::{FRAC_PI_2, PI};
+        let mut store = SeedStore::new();
+        // from at equator, to at north pole (90° away in Dec).
+        let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, 0.0, 0.0, 3e-3, 1, 1000.0);
+        let to = make_seed_from_pair(
+            &mut store, 2, 2, 3, 60001.0, 0.0, FRAC_PI_2, 3e-3, 1, 1000.0,
+        );
+        let core = FeatureCore::from_nodes(&from, &to);
+        assert!(
+            core.r_sph.is_finite(),
+            "r_sph must be finite at 90º sep (gnomonic singularity), got {}",
+            core.r_sph
+        );
+        assert!(
+            core.r_sph >= 0.0 && core.r_sph <= PI + 1e-12,
+            "r_sph={} must be in [0, π] at 90º sep",
+            core.r_sph
+        );
+    }
+
+    /// Near-antipodal seeds (179°): r_sph must still be finite.
+    #[test]
+    fn r_sph_finite_for_near_antipodal_seeds() {
+        use std::f64::consts::PI;
+        let mut store = SeedStore::new();
+        // from at (0, 0), to at (~π, 0) in RA — nearly 180° apart.
+        let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, 0.0, 0.0, 3e-3, 1, 1000.0);
+        let to = make_seed_from_pair(
+            &mut store,
+            2,
+            2,
+            3,
+            60001.0,
+            PI - 0.01,
+            0.0,
+            3e-3,
+            1,
+            1000.0,
+        );
+        let core = FeatureCore::from_nodes(&from, &to);
+        assert!(
+            core.r_sph.is_finite(),
+            "r_sph must be finite near antipodal sep, got {}",
+            core.r_sph
+        );
+        assert!(
+            core.r_sph >= 0.0 && core.r_sph <= PI + 1e-12,
+            "r_sph={} must be in [0, π]",
+            core.r_sph
+        );
+    }
+
+    /// `compute_cost` must be finite and positive for 90°-separated seeds,
+    /// for all cost variants.  This is the primary regression test for the
+    /// gnomonic projection blow-up.
+    #[test]
+    fn cost_finite_for_90deg_separation_all_variants() {
+        use crate::engine_config::edge_config::CostVariant;
+        use std::f64::consts::FRAC_PI_2;
+        let mut store = SeedStore::new();
+        let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, 0.0, 0.0, 3e-3, 1, 1000.0);
+        let to = make_seed_from_pair(
+            &mut store, 2, 2, 3, 60001.0, 0.0, FRAC_PI_2, 3e-3, 1, 1000.0,
+        );
+        for (label, cfg) in [
+            (
+                "KinematicLogLikelihood",
+                make_cfg(CostVariant::KinematicLogLikelihood, 0.0),
+            ),
+            ("GaussianChi2", make_cfg(CostVariant::GaussianChi2, 0.0)),
+            ("SingerCwna_0", make_cfg(CostVariant::SingerCwna, 0.0)),
+            ("SingerCwna_1e3", make_cfg(CostVariant::SingerCwna, 1e-3)),
+            ("RobustCauchy", make_cfg(CostVariant::RobustCauchy, 0.0)),
+            ("RobustStudentT", make_cfg(CostVariant::RobustStudentT, 0.0)),
+        ] {
+            let cost = EdgeFeatures::compute_cost(&from, &to, &cfg);
+            assert!(
+                cost.is_finite(),
+                "{label}: cost must be finite at 90º separation, got {cost}"
+            );
+            assert!(
+                cost > 0.0,
+                "{label}: cost must be > 0 at 90º separation, got {cost}"
+            );
+        }
+    }
+
+    /// `s_pos_scalar` must always be strictly positive and finite.
+    #[test]
+    fn s_pos_scalar_positive_finite() {
+        let (from, to) = seed_pair_consistent();
+        let core = FeatureCore::from_nodes(&from, &to);
+        assert!(
+            core.s_pos_scalar.is_finite() && core.s_pos_scalar > 0.0,
+            "s_pos_scalar must be > 0 and finite, got {}",
+            core.s_pos_scalar
+        );
+    }
+
+    // =========================================================================
+    // Proptest – spherical residual invariants across seed separations
+    // =========================================================================
+
+    proptest! {
+        /// `r_sph` is always in `[0, π]` regardless of seed sky positions.
+        #[test]
+        fn prop_r_sph_in_0_pi_range(
+            ra_from  in 0.0f64..std::f64::consts::TAU,
+            dec_from in -1.5f64..1.5,
+            ra_to    in 0.0f64..std::f64::consts::TAU,
+            dec_to   in -1.5f64..1.5,
+            epoch_offset in 0.1f64..10.0,
+            vx       in -1e-2f64..1e-2,
+        ) {
+            use std::f64::consts::PI;
+            let mut store = SeedStore::new();
+            let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra_from, dec_from, vx, 1, 1000.0);
+            let to   = make_seed_from_pair(&mut store, 2, 2, 3, 60000.0 + epoch_offset,
+                                           ra_to, dec_to, vx, 1, 1000.0);
+            let core = FeatureCore::from_nodes(&from, &to);
+            prop_assert!(
+                core.r_sph.is_finite(),
+                "r_sph is not finite: {}", core.r_sph
+            );
+            prop_assert!(
+                core.r_sph >= 0.0,
+                "r_sph < 0: {}", core.r_sph
+            );
+            prop_assert!(
+                core.r_sph <= PI + 1e-12,
+                "r_sph > π: {}", core.r_sph
+            );
+        }
+
+        /// `s_pos_scalar` is always strictly positive and finite.
+        #[test]
+        fn prop_s_pos_scalar_positive_finite(
+            ra_from  in 0.0f64..std::f64::consts::TAU,
+            dec_from in -1.5f64..1.5,
+            ra_to    in 0.0f64..std::f64::consts::TAU,
+            dec_to   in -1.5f64..1.5,
+            epoch_offset in 0.1f64..10.0,
+            vx in -1e-2f64..1e-2,
+        ) {
+            let mut store = SeedStore::new();
+            let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra_from, dec_from, vx, 1, 1000.0);
+            let to   = make_seed_from_pair(&mut store, 2, 2, 3, 60000.0 + epoch_offset,
+                                           ra_to, dec_to, vx, 1, 1000.0);
+            let core = FeatureCore::from_nodes(&from, &to);
+            prop_assert!(
+                core.s_pos_scalar.is_finite() && core.s_pos_scalar > 0.0,
+                "s_pos_scalar must be > 0 and finite, got {}", core.s_pos_scalar
+            );
+        }
+
+        /// The spherical chi2_pos used in the cost path is always finite,
+        /// non-negative, and bounded (no blow-up from gnomonic singularity),
+        /// for any combination of seed sky positions and sigma_q.
+        #[test]
+        fn prop_cost_chi2_pos_sph_finite_nonneg(
+            ra_from  in 0.0f64..std::f64::consts::TAU,
+            dec_from in -1.5f64..1.5,
+            ra_to    in 0.0f64..std::f64::consts::TAU,
+            dec_to   in -1.5f64..1.5,
+            epoch_offset in 0.1f64..10.0,
+            vx       in -1e-2f64..1e-2,
+            sigma_q  in 0.0f64..10.0,
+        ) {
+            use crate::engine_config::edge_config::CostVariant;
+            let mut store = SeedStore::new();
+            let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra_from, dec_from, vx, 1, 1000.0);
+            let to   = make_seed_from_pair(&mut store, 2, 2, 3, 60000.0 + epoch_offset,
+                                           ra_to, dec_to, vx, 1, 1000.0);
+            let cost = EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::SingerCwna, sigma_q));
+            prop_assert!(
+                cost.is_finite(),
+                "cost not finite for sigma_q={sigma_q}: {cost}"
+            );
+            prop_assert!(
+                cost > 0.0,
+                "cost not > 0 for sigma_q={sigma_q}: {cost}"
+            );
+        }
+
+        /// For any seed pair, the cost from chi2_with_cwna using the spherical
+        /// residual must not exceed ~10^10 (no blow-up, bounded by [r_sph ≤ π]).
+        ///
+        /// Old gnomonic formula could reach ~10^20 for seeds > 45° apart.
+        #[test]
+        fn prop_cost_bounded_no_gnomonic_blowup(
+            ra_from  in 0.0f64..std::f64::consts::TAU,
+            dec_from in -1.5f64..1.5,
+            ra_to    in 0.0f64..std::f64::consts::TAU,
+            dec_to   in -1.5f64..1.5,
+            epoch_offset in 0.1f64..10.0,
+            vx       in -1e-2f64..1e-2,
+        ) {
+            use crate::engine_config::edge_config::CostVariant;
+            // Maximum chi2_pos_sph = π² / s_pos_scalar_min.
+            // With 1-arcsec astrometry, s_pos_scalar_min ~ 2×10^{-11} rad²,
+            // giving chi2_pos_sph_max ~ π² / 2e-11 ~ 5e12, <<< 10^20.
+            let upper_bound = 1e14_f64;  // conservative
+            let mut store = SeedStore::new();
+            let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra_from, dec_from, vx, 1, 1000.0);
+            let to   = make_seed_from_pair(&mut store, 2, 2, 3, 60000.0 + epoch_offset,
+                                           ra_to, dec_to, vx, 1, 1000.0);
+            let cost = EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::GaussianChi2, 0.0));
+            prop_assert!(
+                cost < upper_bound,
+                "cost={cost} exceeds upper bound {upper_bound} (gnomonic blow-up?)"
             );
         }
     }
