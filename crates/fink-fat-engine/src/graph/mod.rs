@@ -205,4 +205,171 @@ impl AlertLinkageDAG {
     pub fn edge_by_key_mut(&mut self, key: &EdgeKey) -> Option<&mut Edge> {
         self.edge_index.get(key).map(|&i| &mut self.edges[i])
     }
+
+    /// Deactivate a set of edges identified by their keys.
+    ///
+    /// Each edge in `keys` is looked up via the internal `edge_index`. If
+    /// found and currently active, its `active` flag is set to `false` and an
+    /// [`EdgeOp::Upsert`] with `active = false` is appended to `pending_ops`
+    /// so that the deactivation is persisted by the next [`Self::drain_pending_ops`]
+    /// call in the `SaveData` stage.
+    ///
+    /// Edges that are already inactive or absent from the index are silently
+    /// skipped; the deactivation is therefore idempotent.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `keys` – Slice of [`EdgeKey`]s to deactivate. Duplicates are handled
+    ///   safely (the second occurrence will hit the already-inactive branch
+    ///   and be skipped).
+    ///
+    /// Return
+    /// ------
+    /// Number of edges that were actually deactivated (transitions from active
+    /// to inactive). Already-inactive or missing edges are not counted.
+    pub fn deactivate_edges(&mut self, keys: &[EdgeKey]) -> u64 {
+        let mut n_deactivated: u64 = 0;
+
+        for key in keys {
+            let Some(&idx) = self.edge_index.get(key) else {
+                continue;
+            };
+            if !self.edges[idx].active {
+                continue;
+            }
+
+            self.edges[idx].active = false;
+            let deactivated_edge = self.edges[idx].clone();
+            self.pending_ops.push(EdgeOp::Upsert {
+                key: *key,
+                edge: deactivated_edge,
+            });
+            n_deactivated += 1;
+        }
+
+        n_deactivated
+    }
+}
+
+// =============================================================================
+// Unit tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        graph::edge::{Edge, EdgeKey},
+        night_id::NightId,
+        persistence::edge_journal::edge_op::EdgeOp,
+        seeding::SeedKey,
+    };
+
+    /// Build a minimal `Edge` for testing (no `SeedNode` required).
+    fn make_edge(from: (u32, u64), to: (u32, u64)) -> Edge {
+        let from_key = SeedKey {
+            night_id: NightId(from.0),
+            unique_id: from.1,
+        };
+        let to_key = SeedKey {
+            night_id: NightId(to.0),
+            unique_id: to.1,
+        };
+        Edge {
+            cost: 1.0,
+            dt_days: 1.0,
+            active: true,
+            from: from_key,
+            to: to_key,
+        }
+    }
+
+    fn edge_key(from: (u32, u64), to: (u32, u64)) -> EdgeKey {
+        EdgeKey {
+            from: SeedKey {
+                night_id: NightId(from.0),
+                unique_id: from.1,
+            },
+            to: SeedKey {
+                night_id: NightId(to.0),
+                unique_id: to.1,
+            },
+        }
+    }
+
+    /// Active edges in `keys` are deactivated; count matches; untouched
+    /// edges remain active.
+    #[test]
+    fn deactivate_edges_count_and_active_flag() {
+        let e0 = make_edge((0, 0), (1, 0));
+        let e1 = make_edge((0, 1), (1, 1));
+        let e2 = make_edge((0, 2), (1, 2));
+
+        let mut dag = AlertLinkageDAG::from_edges(vec![e0, e1, e2]);
+        // `from_edges` starts with an empty pending buffer.
+        assert_eq!(dag.n_pending_ops(), 0);
+
+        let keys = vec![edge_key((0, 0), (1, 0)), edge_key((0, 2), (1, 2))];
+        let n = dag.deactivate_edges(&keys);
+
+        assert_eq!(n, 2, "two active edges should be deactivated");
+        assert!(!dag.edge_by_key(&edge_key((0, 0), (1, 0))).unwrap().active);
+        assert!(
+            dag.edge_by_key(&edge_key((0, 1), (1, 1))).unwrap().active,
+            "untouched edge must remain active"
+        );
+        assert!(!dag.edge_by_key(&edge_key((0, 2), (1, 2))).unwrap().active);
+        assert_eq!(dag.n_pending_ops(), 2, "two Upsert ops appended");
+    }
+
+    /// Calling `deactivate_edges` a second time on an already-inactive edge
+    /// is idempotent: returns 0 and appends no extra op.
+    #[test]
+    fn deactivate_edges_idempotent() {
+        let e = make_edge((0, 0), (1, 0));
+        let mut dag = AlertLinkageDAG::from_edges(vec![e]);
+        let key = edge_key((0, 0), (1, 0));
+
+        assert_eq!(dag.deactivate_edges(&[key]), 1);
+        assert_eq!(dag.n_pending_ops(), 1);
+
+        // Second call: edge already inactive → no change.
+        assert_eq!(dag.deactivate_edges(&[key]), 0);
+        assert_eq!(
+            dag.n_pending_ops(),
+            1,
+            "no additional op on already-inactive edge"
+        );
+    }
+
+    /// Keys absent from the graph are silently ignored.
+    #[test]
+    fn deactivate_edges_missing_keys_are_ignored() {
+        let mut dag = AlertLinkageDAG::new();
+        let absent = edge_key((99, 99), (100, 100));
+        let n = dag.deactivate_edges(&[absent]);
+        assert_eq!(n, 0);
+        assert_eq!(dag.n_pending_ops(), 0);
+    }
+
+    /// The `EdgeOp` appended to `pending_ops` is an `Upsert` with the correct
+    /// key and `active = false`.
+    #[test]
+    fn deactivate_edges_generates_correct_upsert_ops() {
+        let e = make_edge((5, 3), (6, 7));
+        let key = edge_key((5, 3), (6, 7));
+        let mut dag = AlertLinkageDAG::from_edges(vec![e]);
+
+        dag.deactivate_edges(&[key]);
+
+        let ops = dag.drain_pending_ops();
+        assert_eq!(ops.len(), 1);
+        match &ops[0] {
+            EdgeOp::Upsert { key: op_key, edge } => {
+                assert_eq!(*op_key, key);
+                assert!(!edge.active, "upserted edge must have active=false");
+            }
+            other => panic!("expected Upsert, got {other:?}"),
+        }
+    }
 }

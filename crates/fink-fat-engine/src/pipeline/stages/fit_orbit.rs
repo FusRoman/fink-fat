@@ -1,5 +1,6 @@
 use outfit::{
-    ErrorModel, FullOrbitResult, IODParams, Outfit, TrajectoryFile, TrajectoryFit, TrajectorySet,
+    ErrorModel, FullOrbitResult, IODParams, ObjectNumber, Outfit, TrajectoryFile, TrajectoryFit,
+    TrajectorySet,
 };
 use rand::{SeedableRng, rngs::StdRng};
 
@@ -111,10 +112,35 @@ pub fn run(
                 .count() as u64;
             let nb_failed_fits = nb_orbit - nb_successful_fits;
 
+            // Deactivate all edges belonging to trajectories that received a
+            // confirmed orbit.  Once an orbit exists, the pipeline no longer
+            // tracks these trajectories through the graph; future propagation
+            // will be handled by the ephemeris system (not yet implemented).
+            // The deactivated edges are persisted as `EdgeOp::Upsert { active:
+            // false }` entries and flushed to the edge journal by `SaveData`.
+            let edges_to_deactivate: Vec<_> = {
+                let orbit_results = &ctx.runtime_state.orbit_results;
+                let track_hypotheses = &ctx.runtime_state.track_hypotheses;
+                orbit_results
+                    .iter()
+                    .filter(|(_, r)| r.is_ok())
+                    .filter_map(|(obj, _)| match obj {
+                        ObjectNumber::Int(hyp_id) => track_hypotheses.get(hyp_id),
+                        _ => None,
+                    })
+                    .flat_map(|track| track.edges.iter().copied())
+                    .collect()
+            };
+            let n_deactivated = ctx
+                .runtime_state
+                .graph
+                .deactivate_edges(&edges_to_deactivate);
+
             tracing::debug!(
                 nb_orbit,
                 nb_successful_fits,
                 nb_failed_fits,
+                n_deactivated,
                 "FitOrbit complete",
             );
 
@@ -123,6 +149,7 @@ pub fn run(
                 ("total_orbits", nb_orbit),
                 ("successful_fits", nb_successful_fits),
                 ("failed_fits", nb_failed_fits),
+                ("deactivated_edges", n_deactivated),
             ])
         },
     )

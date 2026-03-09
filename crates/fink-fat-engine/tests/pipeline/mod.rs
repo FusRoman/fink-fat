@@ -5,6 +5,7 @@
 
 mod build_edges_test;
 mod build_seeds_test;
+mod deactivation_test;
 mod fit_orbit_test;
 mod ingest_alerts_test;
 mod persistence_test;
