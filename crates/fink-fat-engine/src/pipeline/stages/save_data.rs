@@ -196,6 +196,22 @@ fn write_edge_journal(
     }
 }
 
+/// Return the on-disk size of `path` in bytes.
+///
+/// Returns `0` when the file is unreachable (not yet flushed, missing, or the
+/// call to [`std::fs::metadata`] fails for any reason).
+fn path_size_bytes(path: &Utf8PathBuf) -> u64 {
+    std::fs::metadata(path.as_std_path())
+        .map(|m| m.len())
+        .unwrap_or(0)
+}
+
+/// Convert a byte count to MiB.
+#[inline]
+fn to_mib(bytes: u64) -> f64 {
+    bytes as f64 / (1024.0 * 1024.0)
+}
+
 /// Upsert per-night file paths into `manifest.nights` and return the total
 /// number of alert records that were saved.
 ///
@@ -377,6 +393,37 @@ pub fn run(
                 "parallel I/O complete",
             );
 
+            // ----------------------------------------------------------------
+            // Measure on-disk sizes while we still own the paths.
+            //
+            // `edge_bytes` must be computed before `manifest_after_edges.edge_journal`
+            // is moved into `manifest`; `alerts_bytes` / `seeds_bytes` use the
+            // paths returned by the night-write threads.
+            // ----------------------------------------------------------------
+            let edge_bytes: u64 = if compacted {
+                manifest_after_edges
+                    .edge_journal
+                    .snapshot_abs_path(layout)
+                    .as_ref()
+                    .map(path_size_bytes)
+                    .unwrap_or(0)
+            } else {
+                manifest_after_edges
+                    .edge_journal
+                    .deltas
+                    .last()
+                    .map(|e| path_size_bytes(&e.delta_abs_path(layout)))
+                    .unwrap_or(0)
+            };
+            let alerts_bytes: u64 = night_entries
+                .iter()
+                .map(|(_, alert_path, _, _, _)| path_size_bytes(alert_path))
+                .sum();
+            let seeds_bytes: u64 = night_entries
+                .iter()
+                .map(|(_, _, seed_path, _, _)| path_size_bytes(seed_path))
+                .sum();
+
             let mut manifest = manifest;
             let alerts_saved = apply_night_entries(&mut manifest, &night_entries, layout);
             manifest.edge_journal = manifest_after_edges.edge_journal;
@@ -386,11 +433,17 @@ pub fn run(
             // Export orbit Parquet files (Full persistence policy only).
             // ----------------------------------------------------------------
             let mut orbits_exported: u64 = 0;
+            let mut track_members_bytes: u64 = 0;
+            let mut orbital_params_bytes: u64 = 0;
             if matches!(persist_policy, PersistPolicy::Full) {
                 tracing::trace!("exporting orbit Parquet files (Full persistence policy)");
                 ctx.runtime_state
                     .export_orbit_parquets(ctx.persistence.layout(), current_night)?;
                 orbits_exported = ctx.runtime_state.orbit_results.len() as u64;
+                track_members_bytes =
+                    path_size_bytes(&layout.track_members_night_path(current_night));
+                orbital_params_bytes =
+                    path_size_bytes(&layout.orbital_params_night_path(current_night));
                 tracing::trace!(orbits_exported, "orbit Parquet export complete");
             }
             stage_sink.inc(1);
@@ -402,6 +455,19 @@ pub fn run(
             // `write_edge_journal` nor `write_nights_parallel` writes it.
             // ----------------------------------------------------------------
             ctx.persistence.save_manifest(&manifest)?;
+            let manifest_bytes = path_size_bytes(&layout.manifest_path());
+            let orbits_bytes = track_members_bytes + orbital_params_bytes;
+            tracing::info!(
+                alerts_mib = to_mib(alerts_bytes),
+                seeds_mib = to_mib(seeds_bytes),
+                edge_journal_mib = to_mib(edge_bytes),
+                track_members_mib = to_mib(track_members_bytes),
+                orbital_params_mib = to_mib(orbital_params_bytes),
+                manifest_mib = to_mib(manifest_bytes),
+                total_mib =
+                    to_mib(alerts_bytes + seeds_bytes + edge_bytes + orbits_bytes + manifest_bytes),
+                "SavePersistedData: written to disk",
+            );
             ctx.runtime_state.manifest = manifest;
             stage_sink.inc(1);
 
