@@ -375,7 +375,15 @@ impl PersistenceManager {
         created_unix_s: i64,
         edges: Vec<Edge>,
     ) -> Result<(), EngineError> {
-        let window = self.compute_window(manifest, cfg)?;
+        // Use checkpoint_night_id as the window anchor so that edges built
+        // *this* night (to.night_id == checkpoint_night_id) are included in
+        // the snapshot.  The manifest does not yet contain the current night
+        // at this point, so compute_window(manifest, cfg) would produce a
+        // window ending at the *previous* max night and silently drop all
+        // edges to the current night.
+        let g = cfg.max_gap_nights() as u32;
+        let start = NightId(checkpoint_night_id.0.saturating_sub(g));
+        let window = PairingMode::batch_range(start, checkpoint_night_id).map(Some)?;
         self.edge_journal.compact_to_snapshot(
             manifest,
             checkpoint_night_id,
@@ -447,7 +455,15 @@ impl PersistenceManager {
         created_unix_s: i64,
         edges: Vec<Edge>,
     ) -> Result<(), EngineError> {
-        let window = self.compute_window(manifest, cfg)?;
+        // Use checkpoint_night_id as the window anchor so that edges built
+        // *this* night (to.night_id == checkpoint_night_id) are included in
+        // the snapshot.  The manifest does not yet contain the current night
+        // at this point, so compute_window(manifest, cfg) would produce a
+        // window ending at the *previous* max night and silently drop all
+        // edges to the current night.
+        let g = cfg.max_gap_nights() as u32;
+        let start = NightId(checkpoint_night_id.0.saturating_sub(g));
+        let window = PairingMode::batch_range(start, checkpoint_night_id).map(Some)?;
         self.edge_journal.compact_to_snapshot(
             manifest,
             checkpoint_night_id,

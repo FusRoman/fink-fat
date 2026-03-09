@@ -123,7 +123,12 @@ pub fn run(
             let mut pairs_processed: u64 = 0;
 
             for left_night in valid_left_nights {
+                tracing::trace!(%left_night, %right_night, "processing night pair");
                 let Some(left_vec) = ctx.runtime_state.seed_store.get(&left_night) else {
+                    tracing::warn!(
+                        %left_night,
+                        "left night has no seeds in SeedStore (unexpected since we pre-filtered valid nights)"
+                    );
                     // Defensive: should not happen since we pre-collected valid nights
                     continue;
                 };
