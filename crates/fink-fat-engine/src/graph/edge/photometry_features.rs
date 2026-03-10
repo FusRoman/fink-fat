@@ -112,7 +112,7 @@ impl EdgePhotometryFeatures {
     /// - This method does not use time separation $\Delta t$; it is intended to be
     ///   relatively robust to cadence changes.
     /// - Non-finite intermediate values are mapped to $0$ via
-    ///   [`FeatureCore::finite_or_zero`].
+    ///   `FeatureCore::finite_or_zero`.
     #[inline]
     pub fn photometry_features(from: &SeedNode, to: &SeedNode) -> Self {
         // ---------------------------------------------------------------------

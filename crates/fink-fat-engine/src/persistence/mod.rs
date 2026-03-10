@@ -1,3 +1,4 @@
+pub mod compression;
 pub mod edge_journal;
 pub mod envelope;
 pub mod error;
@@ -15,9 +16,10 @@ use crate::{
     alerts::{AlertSlice, store::AlertStore},
     engine_config::EngineConfig,
     error::{EngineError, FinkFatError},
-    graph::AlertLinkageDAG,
+    graph::{AlertLinkageDAG, edge::Edge},
     night_id::{NightId, PairingMode},
     persistence::{
+        compression::Compression,
         edge_journal::{EdgeJournalStore, edge_op::EdgeOp},
         envelope::DiskEnvelope,
         error::{PersistenceError, PersistenceIoError},
@@ -25,6 +27,7 @@ use crate::{
         manifest::{Manifest, NightManifestEntry},
         runtime_state::RuntimeState,
     },
+    pipeline::hooks::StageProgress,
     seeding::{SeedNode, SeedNodeSlice, store::SeedStore},
     solver::HypothesisSet,
 };
@@ -61,7 +64,7 @@ impl PersistenceManager {
     ///
     /// Parameters
     /// ----------
-    /// storage_root : impl Into<Utf8PathBuf>
+    /// storage_root : `impl Into<Utf8PathBuf>`
     ///     Root directory for persisted state (e.g. `engine_config.storage_path()`).
     ///
     /// Returns
@@ -79,13 +82,14 @@ impl PersistenceManager {
     }
 
     /// Load the manifest if present, otherwise create a fresh one.
-    pub fn load_or_init_manifest(&self, created_unix_s: i64) -> Result<Manifest, PersistenceError> {
+    pub fn load_or_init_manifest(&self) -> Result<Manifest, PersistenceError> {
         let mpath = self.layout.manifest_path();
         match Manifest::load(&mpath) {
             Ok(m) => Ok(m),
-            Err(PersistenceIoError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
-                Ok(Manifest::new(created_unix_s))
-            }
+            // Manifest not found yet → start fresh. Use `is_not_found()` rather
+            // than matching on `Io(e)` directly because the error may now be
+            // wrapped inside a `WithPath` annotation.
+            Err(e) if e.is_not_found() => Ok(Manifest::new()),
             Err(e) => Err(PersistenceError::Io(e)),
         }
     }
@@ -118,9 +122,12 @@ impl PersistenceManager {
         created_unix_s: i64,
         alerts: &[Alert],
         seeds: &[SeedNode],
+        compression: Compression,
     ) -> Result<(), PersistenceIoError> {
-        let abs_alert_path = alerts.save_alerts_night(&self.layout, manifest, night_id)?;
-        let abs_seed_path = seeds.save_seeds_night(&self.layout, manifest, night_id)?;
+        let abs_alert_path =
+            alerts.save_alerts_night(&self.layout, manifest, night_id, compression)?;
+        let abs_seed_path =
+            seeds.save_seeds_night(&self.layout, manifest, night_id, compression)?;
 
         let entry = NightManifestEntry::new(
             night_id,
@@ -146,6 +153,7 @@ impl PersistenceManager {
     ) -> Result<Vec<Alert>, PersistenceIoError> {
         let path = self.layout.resolve_relative(relpath);
         DiskEnvelope::<Vec<Alert>>::load_enveloped(&path, ALERT_STORE_SCHEMA_VERSION)
+            .map_err(|e| e.with_path(&path))
     }
 
     /// Load seeds payload for one night.
@@ -155,6 +163,7 @@ impl PersistenceManager {
     ) -> Result<Vec<SeedNode>, PersistenceIoError> {
         let path = self.layout.resolve_relative(relpath);
         DiskEnvelope::<Vec<SeedNode>>::load_enveloped(&path, SEED_STORE_SCHEMA_VERSION)
+            .map_err(|e| e.with_path(&path))
     }
 
     // -------------------------------------------------------------------------
@@ -166,56 +175,145 @@ impl PersistenceManager {
     /// This:
     /// - loads/initializes the manifest,
     /// - computes the sliding window from `max_gap_nights`,
-    /// - loads alerts and seeds for nights in the window,
-    /// - converts `SeedNodeOwned` -> `SeedNode<'alert>` using the `AlertStore`,
-    /// - loads edges via snapshot + delta journal and converts them to borrowed
-    ///   edges using the `SeedStore`.
+    /// - loads alerts, seeds, and edges **concurrently** using a multi-threaded
+    ///   tokio runtime: one blocking task per night (alerts + seeds together) and
+    ///   one blocking task for the edge journal (snapshot + deltas).
+    /// - populates the runtime stores sequentially once all I/O tasks complete.
+    ///
+    /// Concurrency strategy
+    /// --------------------
+    /// All three I/O phases (alerts, seeds, edges) are independent on disk.
+    /// `tokio::task::spawn_blocking` dispatches each blocking file read to the
+    /// thread pool so the OS can issue parallel read-ahead for multiple files.
+    /// The main thread joins all results via a `JoinSet` before building the
+    /// in-memory `AlertLinkageDAG`.
     pub fn load_runtime_state(
         &self,
         cfg: &EngineConfig,
-        created_unix_s: i64,
+        stage_sink: &dyn StageProgress,
     ) -> Result<RuntimeState, EngineError> {
-        let manifest = self.load_or_init_manifest(created_unix_s)?;
+        // ---------------------------------------------------------------
+        // 1. Load manifest (fast, sequential — JSON, single file).
+        // ---------------------------------------------------------------
+        let manifest = self.load_or_init_manifest()?;
+        stage_sink.inc(1);
+
+        // ---------------------------------------------------------------
+        // 2. Compute the sliding window from the manifest + engine config.
+        // ---------------------------------------------------------------
         let window = self.compute_window(&manifest, cfg)?;
 
-        // Select nights to load
+        // Select nights that fall inside the window.
         let nights_to_load: Vec<NightManifestEntry> = match window {
             None => Vec::new(),
             Some(w) => manifest
                 .nights
                 .iter()
+                .filter(|&e| e.night_id >= w.start() && e.night_id <= w.end())
                 .cloned()
-                .filter(|e| e.night_id >= w.start() && e.night_id <= w.end())
                 .collect(),
         };
+        stage_sink.inc(1);
 
-        // 1) Load alerts into runtime AlertStore
-        let mut alert_store = AlertStore::new();
-        for entry in &nights_to_load {
-            let payload = self.load_alerts_for_night(&entry.alerts_rel_path().to_path_buf())?;
-            alert_store.insert(entry.night_id, payload);
-        }
+        // ---------------------------------------------------------------
+        // 3–5. Parallel I/O: load all nights (alerts + seeds) and the
+        //      edge journal concurrently via tokio blocking tasks.
+        //
+        //  • One task per night reads both the alert file and the seed
+        //    file for that night (two reads, kept together for locality).
+        //  • One independent task loads the full edge journal (snapshot +
+        //    all delta files).
+        //  • All tasks run on tokio's blocking thread pool, allowing the
+        //    OS to overlap disk reads across different files.
+        // ---------------------------------------------------------------
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .build()
+            .expect("failed to build tokio runtime for parallel persistence I/O");
 
-        // 2) Load seeds owned then convert to borrowed into runtime SeedStore
-        let mut seed_store: SeedStore = SeedStore::new();
+        // `self` is `Clone` — each blocking task gets its own handle so
+        // there is no shared mutable state and no need for Arc/Mutex.
+        let pm = self.clone();
+        let nights_clone = nights_to_load.clone();
+        let manifest_for_edges = manifest.clone();
 
-        nights_to_load.iter().try_for_each(|entry| {
-            self.load_seeds_for_night(&entry.seeds_rel_path().to_path_buf())
-                .map(|payload| {
-                    seed_store.insert_vec_seed(entry.night_id, payload);
-                })
+        let (night_data, edges) = rt.block_on(async move {
+            use tokio::task::JoinSet;
+
+            type NightLoadResult = Result<(NightId, Vec<Alert>, Vec<SeedNode>), PersistenceIoError>;
+
+            // --- Spawn one task per night (alerts + seeds together) ----------
+            let mut night_handles: JoinSet<NightLoadResult> = JoinSet::new();
+
+            for entry in nights_clone {
+                let pm = pm.clone();
+                night_handles.spawn_blocking(move || {
+                    let alerts =
+                        pm.load_alerts_for_night(&entry.alerts_rel_path().to_path_buf())?;
+                    let seeds = pm.load_seeds_for_night(&entry.seeds_rel_path().to_path_buf())?;
+                    Ok((entry.night_id, alerts, seeds))
+                });
+            }
+
+            // --- Spawn edge-journal loading concurrently --------------------
+            let pm_edges = pm.clone();
+            let edge_task = tokio::task::spawn_blocking(move || {
+                pm_edges
+                    .edge_journal
+                    .load_edges(&manifest_for_edges, window)
+            });
+
+            // --- Collect per-night results -----------------------------------
+            let mut night_data: Vec<(NightId, Vec<Alert>, Vec<SeedNode>)> = Vec::new();
+            while let Some(res) = night_handles.join_next().await {
+                let item = res
+                    .map_err(|e| {
+                        PersistenceIoError::Io(std::io::Error::other(format!(
+                            "night I/O task panicked: {e}",
+                        )))
+                    })?
+                    .map_err(EngineError::from)?;
+                night_data.push(item);
+            }
+
+            // --- Collect edge result ----------------------------------------
+            let edges = edge_task
+                .await
+                .map_err(|e| {
+                    PersistenceIoError::Io(std::io::Error::other(format!(
+                        "edge I/O task panicked: {e}",
+                    )))
+                })?
+                .map_err(EngineError::from)?;
+
+            Ok::<_, EngineError>((night_data, edges))
         })?;
 
-        // 3) Load edges owned via edge journal (snapshot + deltas), then convert to borrowed graph.
-        let edges = self.edge_journal.load_edges(&manifest, window)?;
+        // All I/O is done — report progress as a batch.
+        stage_sink.inc(3); // alerts + seeds + edges
+
+        // ---------------------------------------------------------------
+        // 6. Populate stores sequentially (CPU, fast).
+        // ---------------------------------------------------------------
+        let mut alert_store = AlertStore::new();
+        let mut seed_store: SeedStore = SeedStore::new();
+
+        for (night_id, alerts, seeds) in night_data {
+            alert_store.insert(night_id, alerts);
+            seed_store.insert_vec_seed(night_id, seeds);
+        }
+
+        // ---------------------------------------------------------------
+        // 7. Build inter-night graph from the loaded edge set (CPU).
+        // ---------------------------------------------------------------
         let graph = AlertLinkageDAG::from_edges(edges);
+        stage_sink.inc(1);
 
         Ok(RuntimeState {
             manifest,
             window,
             alert_store,
             seed_store,
-            graph: graph,
+            graph,
             track_hypotheses: HypothesisSet::new(),
             orbit_results: FullOrbitResult::default(),
         })
@@ -242,6 +340,7 @@ impl PersistenceManager {
             night_id,
             created_unix_s,
             edge_ops,
+            cfg.binary_compression,
         )?;
 
         // 2) persist manifest
@@ -258,6 +357,15 @@ impl PersistenceManager {
 
     /// Compact edges to a snapshot and cleanup unreferenced deltas on disk.
     ///
+    /// The caller provides the current in-memory edge set so that no disk reload
+    /// is needed. This is the primary optimisation over the old design, which
+    /// re-read every delta file even though the full edge set was already live
+    /// in `RuntimeState.graph`.
+    ///
+    /// This also handles `cleanup_old_nights` so that callers that skip
+    /// `commit_night` (because compaction is preferred) still benefit from
+    /// the sliding-window file cleanup.
+    ///
     /// Recommended strategy: compact every `k` nights or when deltas count grows.
     pub fn compact_edges_and_cleanup(
         &self,
@@ -265,16 +373,114 @@ impl PersistenceManager {
         cfg: &EngineConfig,
         checkpoint_night_id: NightId,
         created_unix_s: i64,
+        edges: Vec<Edge>,
     ) -> Result<(), EngineError> {
-        let window = self.compute_window(manifest, cfg)?;
+        // Use checkpoint_night_id as the window anchor so that edges built
+        // *this* night (to.night_id == checkpoint_night_id) are included in
+        // the snapshot.  The manifest does not yet contain the current night
+        // at this point, so compute_window(manifest, cfg) would produce a
+        // window ending at the *previous* max night and silently drop all
+        // edges to the current night.
+        let g = cfg.max_gap_nights() as u32;
+        let start = NightId(checkpoint_night_id.0.saturating_sub(g));
+        let window = PairingMode::batch_range(start, checkpoint_night_id).map(Some)?;
         self.edge_journal.compact_to_snapshot(
             manifest,
             checkpoint_night_id,
             created_unix_s,
+            edges.as_slice(),
             window,
+            cfg.binary_compression,
         )?;
 
+        // Mirror the cleanup that `commit_night` would have done.
+        if let Some(w) = window {
+            self.cleanup_old_nights(manifest, w)?;
+        }
+
         self.save_manifest(manifest)?;
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------------
+    // Edge journal helpers without intermediate manifest save
+    //
+    // These are the preferred call sites when the caller manages the final
+    // manifest write itself (e.g. `save_data` Stage Phase E), avoiding one
+    // redundant `save_manifest` round-trip.
+    // -------------------------------------------------------------------------
+
+    /// Write an incremental edge delta for `night_id` and apply the sliding-
+    /// window cleanup, but do **not** save the manifest to disk.
+    ///
+    /// This is equivalent to [`PersistenceManager::commit_night`] minus the
+    /// intermediate `save_manifest` call.  Callers that write the final
+    /// manifest themselves (e.g. after merging concurrent stage results) should
+    /// prefer this method to avoid the redundant write.
+    pub fn write_edge_delta(
+        &self,
+        manifest: &mut Manifest,
+        cfg: &EngineConfig,
+        night_id: NightId,
+        created_unix_s: i64,
+        edge_ops: Vec<EdgeOp>,
+    ) -> Result<(), EngineError> {
+        self.edge_journal.write_delta_for_night(
+            manifest,
+            night_id,
+            created_unix_s,
+            edge_ops,
+            cfg.binary_compression,
+        )?;
+
+        let window = self.compute_window(manifest, cfg)?;
+        if let Some(w) = window {
+            self.cleanup_old_nights(manifest, w)?;
+        }
+
+        Ok(())
+    }
+
+    /// Compact the full in-memory edge set into a new snapshot, apply the
+    /// sliding-window cleanup, but do **not** save the manifest to disk.
+    ///
+    /// This is equivalent to [`PersistenceManager::compact_edges_and_cleanup`]
+    /// minus the intermediate `save_manifest` call.  Callers that write the
+    /// final manifest themselves should prefer this method.
+    ///
+    /// `edges` is borrowed (not moved) to avoid the ~4 GB clone that the
+    /// equivalent `Vec<Edge>` ownership transfer would require.  The caller
+    /// typically passes `&RuntimeState.graph.edges` directly.
+    pub fn compact_edges(
+        &self,
+        manifest: &mut Manifest,
+        cfg: &EngineConfig,
+        checkpoint_night_id: NightId,
+        created_unix_s: i64,
+        edges: &[Edge],
+    ) -> Result<(), EngineError> {
+        // Use checkpoint_night_id as the window anchor so that edges built
+        // *this* night (to.night_id == checkpoint_night_id) are included in
+        // the snapshot.  The manifest does not yet contain the current night
+        // at this point, so compute_window(manifest, cfg) would produce a
+        // window ending at the *previous* max night and silently drop all
+        // edges to the current night.
+        let g = cfg.max_gap_nights() as u32;
+        let start = NightId(checkpoint_night_id.0.saturating_sub(g));
+        let window = PairingMode::batch_range(start, checkpoint_night_id).map(Some)?;
+        self.edge_journal.compact_to_snapshot(
+            manifest,
+            checkpoint_night_id,
+            created_unix_s,
+            edges,
+            window,
+            cfg.binary_compression,
+        )?;
+
+        if let Some(w) = window {
+            self.cleanup_old_nights(manifest, w)?;
+        }
+
         Ok(())
     }
 
@@ -296,7 +502,7 @@ impl PersistenceManager {
             }
 
             // Delete alerts file (best-effort)
-            let ap = self.layout.resolve_relative(&e.alerts_rel_path());
+            let ap = self.layout.resolve_relative(e.alerts_rel_path());
             match fs::remove_file(ap.as_std_path()) {
                 Ok(()) => deleted += 1,
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -304,7 +510,7 @@ impl PersistenceManager {
             }
 
             // Delete seeds file (best-effort)
-            let sp = self.layout.resolve_relative(&e.seeds_rel_path());
+            let sp = self.layout.resolve_relative(e.seeds_rel_path());
             match fs::remove_file(sp.as_std_path()) {
                 Ok(()) => deleted += 1,
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}

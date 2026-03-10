@@ -1,3 +1,5 @@
+use std::{fmt::Display, str::FromStr};
+
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -8,6 +10,20 @@ pub struct InputUri(pub String);
 impl InputUri {
     pub fn parse(&self) -> Result<Url, url::ParseError> {
         Url::parse(&self.0)
+    }
+}
+
+impl FromStr for InputUri {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(InputUri(s.to_string()))
+    }
+}
+
+impl Display for InputUri {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 

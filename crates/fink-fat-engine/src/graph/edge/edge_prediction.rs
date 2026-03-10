@@ -108,6 +108,7 @@ fn init_ort_once() {
 /// ----------
 /// * `model_path` – Path to the `.onnx` model file used for per-thread loading.
 /// * `models` – Thread-local storage holding an optional model for each thread.
+#[derive(Debug)]
 pub struct EdgeRankingModelPool {
     model_path: Utf8PathBuf,
     models: ThreadLocal<RefCell<Option<EdgeRankingModel>>>,
@@ -199,6 +200,7 @@ impl EdgeRankingModelPool {
 /// ----------
 /// * `session` – ORT session owning the loaded model and execution state.
 /// * `outputs` – Resolved output indices for fast extraction.
+#[derive(Debug)]
 pub struct EdgeRankingModel {
     session: Session,
     outputs: EdgeModelOutputs,
@@ -231,7 +233,7 @@ impl EdgeRankingModel {
     /// - optional: `"label"`
     ///
     /// If your exporter uses different output names, adapt
-    /// [`EdgeModelOutputs::resolve_output_indices`].
+    /// `EdgeModelOutputs::resolve_output_indices`.
     pub fn load_edge_ranking_model(
         model_path: impl AsRef<Utf8Path>,
     ) -> Result<Self, EdgeModelError> {
@@ -394,10 +396,10 @@ impl EdgeRankingModel {
 ///   `[N]`.
 #[derive(Debug, Clone)]
 pub struct EdgeModelOutputs {
-    /// Index of the `probabilities` output (Tensor<f32>, shape [N, 2]).
+    /// Index of the `probabilities` output (`Tensor<f32>`, shape `[N, 2]`).
     pub probabilities: usize,
 
-    /// Optional index of the `label` output (Tensor<i64>, shape [N]).
+    /// Optional index of the `label` output (`Tensor<i64>`, shape `[N]`).
     pub label: Option<usize>,
 }
 

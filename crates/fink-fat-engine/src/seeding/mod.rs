@@ -49,7 +49,7 @@
 //! --------
 //! - [`TangentPlaneModel`] – local kinematic model + prediction utilities.
 //! - [`SeedSpatialIndex`] – spatio-temporal bucket index used for fast queries.
-//! - [`EdgeFeatures::compute_features`] – exact feature extraction for edges.
+//! - [`EdgeFeatures::compute_features`](crate::graph::edge::edge_features::EdgeFeatures::compute_features) – exact feature extraction for edges.
 
 pub mod error;
 pub mod pairs;
@@ -74,8 +74,8 @@ use crate::{
     engine_config::{edge_config::EdgeConfig, propagator_config::PredictorParams},
     night_id::NightId,
     persistence::{
-        SEED_STORE_SCHEMA_VERSION, envelope::DiskEnvelope, error::PersistenceIoError,
-        layout::PersistenceLayout, manifest::Manifest,
+        SEED_STORE_SCHEMA_VERSION, compression::Compression, envelope::DiskEnvelope,
+        error::PersistenceIoError, layout::PersistenceLayout, manifest::Manifest,
     },
     seeding::{
         error::SeedingError,
@@ -87,7 +87,9 @@ use crate::{
     spacetime_bucket::spatial_binner::SpatialBinner,
 };
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Default)]
+#[derive(
+    Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Default,
+)]
 pub struct SeedKey {
     pub night_id: NightId,
     pub unique_id: SeedId,
@@ -487,22 +489,22 @@ impl SeedNode {
     /// Arguments
     /// ---------
     /// * seed_store : &mut SeedStore
-    ///     Seed store used to generate a unique seed key for this night.
+    ///   Seed store used to generate a unique seed key for this night.
     /// * night_id : NightId
-    ///     Night identifier shared by the two alerts (seeds do not mix nights).
+    ///   Night identifier shared by the two alerts (seeds do not mix nights).
     /// * alert_a : &Alert
-    ///     First detection.
+    ///   First detection.
     /// * alert_b : &Alert
-    ///     Second detection.
-    /// * max_speed_rad_per_day : Option<f64>
-    ///     Optional physical sanity check on the fitted speed (rad/day).
-    ///     If set and `||v|| > vmax`, the seed is rejected.
+    ///   Second detection.
+    /// * max_speed_rad_per_day : `Option<f64>`
+    ///   Optional physical sanity check on the fitted speed (rad/day).
+    ///   If set and `||v|| > vmax`, the seed is rejected.
     ///
     /// Returns
     /// -------
-    /// * Option<SeedNode>
-    ///     `Some(seed)` if the model is built and passes the optional speed filter,
-    ///     `None` if rejected by the speed filter.
+    /// * `Option<SeedNode>`
+    ///   `Some(seed)` if the model is built and passes the optional speed filter,
+    ///   `None` if rejected by the speed filter.
     ///
     /// Notes
     /// -----
@@ -575,8 +577,8 @@ impl SeedNode {
 
         Some(SeedNode {
             key: seed_store.next_key(night_id),
-            plane: plane,
-            photom: photom,
+            plane,
+            photom,
             n_obs: 2,
             members: vec![alert_a.key, alert_b.key],
         })
@@ -590,20 +592,20 @@ impl SeedNode {
     /// Arguments
     /// ---------
     /// * seed_store : &mut SeedStore
-    ///     Seed store used to generate a unique seed key for this night.
+    ///   Seed store used to generate a unique seed key for this night.
     /// * night_id : NightId
-    ///     Night identifier shared by the three alerts (seeds do not mix nights).
+    ///   Night identifier shared by the three alerts (seeds do not mix nights).
     /// * alert_a : &Alert
-    ///     First detection.
+    ///   First detection.
     /// * alert_b : &Alert
-    ///     Second detection.
+    ///   Second detection.
     /// * alert_c : &Alert
-    ///     Third detection.
+    ///   Third detection.
     ///
     /// Returns
     /// -------
     /// * SeedNode
-    ///     A seed with `n_obs == 3` and `plane.acc_xy.is_some() == true`.
+    ///   A seed with `n_obs == 3` and `plane.acc_xy.is_some() == true`.
     ///
     /// Notes
     /// -----
@@ -674,8 +676,8 @@ impl SeedNode {
 
         SeedNode {
             key: seed_store.next_key(night_id),
-            plane: plane,
-            photom: photom,
+            plane,
+            photom,
             n_obs: 3,
             members: vec![alert_a.key, alert_b.key, alert_c.key],
         }
@@ -688,6 +690,7 @@ pub trait SeedNodeSlice {
         layout: &PersistenceLayout,
         manifest: &Manifest,
         night_id: NightId,
+        compression: Compression,
     ) -> Result<Utf8PathBuf, PersistenceIoError>;
 }
 
@@ -697,6 +700,7 @@ impl SeedNodeSlice for &[SeedNode] {
         layout: &PersistenceLayout,
         manifest: &Manifest,
         night_id: NightId,
+        compression: Compression,
     ) -> Result<Utf8PathBuf, PersistenceIoError> {
         let abs_path = layout.seeds_night_path(night_id);
 
@@ -705,6 +709,7 @@ impl SeedNodeSlice for &[SeedNode] {
             self.to_vec(),
             SEED_STORE_SCHEMA_VERSION,
             manifest.created_unix_s,
+            compression,
         );
         env.save_enveloped(&abs_path)?;
         Ok(abs_path)

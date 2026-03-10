@@ -8,7 +8,7 @@ use std::fmt::{self, Display, Formatter};
 /// `bands` stores the per-detection filter id(s) in time order:
 /// - pairs: `[b0, b1, 0]`
 /// - triplets: `[b0, b1, b2]`
-/// with `n_bands` indicating how many entries are valid.
+///   with `n_bands` indicating how many entries are valid.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct Photometry {
     pub flux_mean: f32,

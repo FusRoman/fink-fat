@@ -42,7 +42,8 @@
 
 use crate::{
     astro_math::{
-        cholesky_lower_sym_2x2, clamp_unit, dot2, invert_sym_2x2, l2_norm, mat_vec2, safe_ln,
+        ang_sep, cholesky_lower_sym_2x2, clamp_unit, dot2, invert_sym_2x2, l2_norm, mat_vec2,
+        safe_ln, tangent_to_radec,
     },
     seeding::SeedNode,
 };
@@ -157,6 +158,54 @@ pub(crate) struct FeatureCore {
     /// Log-compressed velocity $\chi^2$:
     /// $\ln(\chi^2\_{\mathrm{vel}} + \varepsilon)$.
     pub(crate) log_chi2_vel: f64,
+    // --- Cached intermediates reused by `compute_cost` -----------------------
+    /// Time gap $\Delta t$ from `from` to `to` (days).
+    pub(crate) dt: f64,
+    /// Precomputed $\Delta t^2$ (days²).
+    pub(crate) dt_sq: f64,
+    /// Position innovation $\mathbf{r} = \mathbf{p}\_{{\mathrm{to}}} - \mathbf{p}\_{{\mathrm{pred}}}$
+    /// on the `from` tangent plane (radians).
+    ///
+    /// Notes
+    /// -----
+    /// Not used by the current cost-function path, which relies on the spherical
+    /// residual [`r_sph`](Self::r_sph) instead.  Retained for potential debug use
+    /// and to keep the struct self-describing.
+    #[allow(dead_code)]
+    pub(crate) r_pos: [f64; 2],
+    /// Velocity innovation $\delta\mathbf{v} = \mathbf{v}\_{{\mathrm{to}}} - \mathbf{v}\_{{\mathrm{pred}}}$
+    /// (rad/day).
+    pub(crate) dv: [f64; 2],
+    /// Great-circle angular distance between the sky-back-projected predicted position
+    /// and `to.plane.ra_mid` / `to.plane.dec_mid` (radians, in $[0, \pi]$).
+    ///
+    /// Computed by:
+    /// 1. Inverting the gnomonic projection of `p_pred` via
+    ///    [`tangent_to_radec`](crate::astro_math::tangent_to_radec),
+    /// 2. Measuring the great-circle distance to `to` via
+    ///    [`ang_sep`](crate::astro_math::ang_sep).
+    ///
+    /// Unlike the tangent-plane Cartesian residual $\mathbf{r}$, this quantity is
+    /// bounded to $[0, \pi]$ and is stable for any angular separation between
+    /// the seed centres.  It is used **exclusively** in the cost-function path
+    /// to replace the 2-D Mahalanobis $\chi^2\_\mathrm{pos}$ which diverges when
+    /// the gnomonic projection denominator $\cos c \to 0$.
+    pub(crate) r_sph: f64,
+    /// Scalar positional innovation variance for the cost path (baseline, no CWNA).
+    ///
+    /// Defined as:
+    ///
+    /// $$S\_\mathrm{scalar} = \frac{S\_{xx} + S\_{yy}}{2} = \frac{\operatorname{tr}(\mathbf{S}\_\mathrm{pos})}{2}$$
+    ///
+    /// This isotropic approximation serves as the denominator in the
+    /// spherical positional $\chi^2$:
+    ///
+    /// $$\chi^2\_{\mathrm{pos,sph}} = \frac{d^{2}}{S\_\mathrm{scalar}}$$
+    ///
+    /// where $d$ is [`r_sph`](Self::r_sph).  Using the trace-half instead of
+    /// the full 2-D Mahalanobis is well-motivated when the residual is already
+    /// collapsed to a scalar great-circle distance.
+    pub(crate) s_pos_scalar: f64,
 }
 
 impl FeatureCore {
@@ -172,7 +221,7 @@ impl FeatureCore {
     /// -------------
     /// This is intentionally *very small* to avoid biasing well-behaved cases,
     /// but large enough to avoid division-by-zero and catastrophic numeric blowups.
-    const FLOOR: f64 = 1e-20;
+    pub(crate) const FLOOR: f64 = 1e-20;
 
     /// Generic epsilon used in ratios and small denominators.
     ///
@@ -238,6 +287,18 @@ impl FeatureCore {
         // - `_`: optional extra outputs (ignored here)
         let (p_pred, v_pred, _) = from.propagate_from(dt, dt_sq);
 
+        // Back-project the predicted tangent-plane position to sky coordinates,
+        // then measure the great-circle separation to the target position.
+        // This is stable for any angular separation between seed centres;
+        // it avoids the gnomonic denominator blow-up that affects `r` below.
+        let (ra_pred, dec_pred) = tangent_to_radec(
+            p_pred[0],
+            p_pred[1],
+            from.plane.center.ra0,
+            from.plane.center.dec0,
+        );
+        let r_sph = ang_sep(ra_pred, dec_pred, to.plane.ra_mid, to.plane.dec_mid);
+
         // ---------------------------------------------------------------------
         // 3) Project `to` onto `from` tangent plane
         // ---------------------------------------------------------------------
@@ -255,6 +316,10 @@ impl FeatureCore {
         // ---------------------------------------------------------------------
         // Innovation covariance S: accounts for prediction uncertainty and target uncertainty.
         let s = Self::innovation_cov(from, to, dt_sq);
+
+        // Scalar baseline positional variance for the cost path:
+        // S_scalar = tr(S) / 2 — isotropic proxy used with the spherical residual r_sph.
+        let s_pos_scalar = (s[0][0] + s[1][1]).max(Self::FLOOR) / 2.0;
 
         // Robust inverse of S (with flooring and fallback).
         // We assume `invert_sym_2x2` returns a usable matrix even if S is near-singular.
@@ -373,6 +438,14 @@ impl FeatureCore {
 
             chi2_vel,
             log_chi2_vel: Self::finite_or_zero(log_chi2_vel),
+
+            // Cached for reuse in compute_cost (avoids re-propagation/re-projection).
+            dt,
+            dt_sq,
+            r_pos: r,
+            dv,
+            r_sph,
+            s_pos_scalar,
         }
     }
 
@@ -506,6 +579,78 @@ impl FeatureCore {
             [c1[0][0] + c2[0][0] + Self::FLOOR, c1[0][1] + c2[0][1]],
             [c1[1][0] + c2[1][0], c1[1][1] + c2[1][1] + Self::FLOOR],
         ]
+    }
+
+    /// Build the positional innovation covariance with optional CWNA (Continuous White Noise Acceleration) process noise.
+    ///
+    /// Extends [`innovation_cov`] by adding the Singer/CWNA diagonal term:
+    ///
+    /// $$\mathbf{S}\_\text{pos} \mathrel{+}= \sigma_q^2 \cdot \frac{\Delta t^3}{3} \cdot \mathbf{I}$$
+    ///
+    /// When `sigma_q == 0.0` the result is identical to [`innovation_cov`].
+    ///
+    /// Arguments
+    /// ---------
+    /// * `from` – Source seed.
+    /// * `to` – Target seed.
+    /// * `dt` – Time gap $\Delta t$ (days).
+    /// * `dt_sq` – Precomputed $\Delta t^2$ (days²).
+    /// * `sigma_q` – CWNA spectral density (rad · day^(−3/2)), set `0.0` to disable.
+    ///
+    /// Return
+    /// ------
+    /// Positional innovation covariance $\mathbf{S}$ ($2 \times 2$).
+    #[inline]
+    pub(crate) fn innovation_cov_cwna(
+        from: &SeedNode,
+        to: &SeedNode,
+        dt: f64,
+        dt_sq: f64,
+        sigma_q: f64,
+    ) -> [[f64; 2]; 2] {
+        let mut s = Self::innovation_cov(from, to, dt_sq);
+        if sigma_q != 0.0 {
+            // Q_pos = σ_q² · dt³/3  (scalar, same for x and y)
+            let q = sigma_q * sigma_q * dt * dt_sq / 3.0;
+            s[0][0] += q;
+            s[1][1] += q;
+        }
+        s
+    }
+
+    /// Build the velocity innovation covariance with optional CWNA process noise.
+    ///
+    /// Extends [`innovation_cov_vel`] by adding the Singer/CWNA diagonal term:
+    ///
+    /// $$\mathbf{S}\_\text{vel} \mathrel{+}= \sigma_q^2 \cdot \Delta t \cdot \mathbf{I}$$
+    ///
+    /// When `sigma_q == 0.0` the result is identical to [`innovation_cov_vel`].
+    ///
+    /// Arguments
+    /// ---------
+    /// * `from` – Source seed.
+    /// * `to` – Target seed.
+    /// * `dt` – Time gap $\Delta t$ (days).
+    /// * `sigma_q` – CWNA spectral density (rad · day^(−3/2)), set `0.0` to disable.
+    ///
+    /// Return
+    /// ------
+    /// Velocity innovation covariance $\mathbf{S}\_{\mathrm{vel}}$ ($2 \times 2$).
+    #[inline]
+    pub(crate) fn innovation_cov_vel_cwna(
+        from: &SeedNode,
+        to: &SeedNode,
+        dt: f64,
+        sigma_q: f64,
+    ) -> [[f64; 2]; 2] {
+        let mut s = Self::innovation_cov_vel(from, to);
+        if sigma_q != 0.0 {
+            // Q_vel = σ_q² · dt  (scalar, same for vx and vy)
+            let q = sigma_q * sigma_q * dt;
+            s[0][0] += q;
+            s[1][1] += q;
+        }
+        s
     }
 
     /// Compute cheap diagonal-based z-scores for the innovation $\mathbf{r}$.

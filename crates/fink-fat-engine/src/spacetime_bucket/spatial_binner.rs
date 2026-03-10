@@ -36,7 +36,7 @@ pub trait SpatialBinner: Sync {
     /// Enumerate neighbor cells needed to cover an **angular radius** around `key`.
     ///
     /// The radius is in **radians** and typically chosen as a small multiple of the
-    /// cell's characteristic scale (see [`cell_radius`](crate::seeding::space_time_bucket::SpatialBinner::cell_radius)).
+    /// cell's characteristic scale (see [`cell_radius`](Self::cell_radius)).
     ///
     /// Notes
     /// -----

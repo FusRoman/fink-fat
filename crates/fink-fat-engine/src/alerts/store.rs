@@ -3,14 +3,14 @@
 //! Overview
 //! --------
 //! This module defines [`AlertStore`], a lightweight container that groups
-//! [`Alert`](crate::alerts::Alert) values by [`NightId`](crate::night_id::NightId)
-//! using an [`AHashMap`](ahash::AHashMap).
+//! [`Alert`] values by [`NightId`]
+//! using an [`AHashMap`].
 //!
 //! The structure is optimized for the Fink-FAT pipeline common access patterns:
 //! - **batch processing per night** (seeding is typically intra-night),
 //! - **contiguous iteration** within a night (`Vec<Alert>`),
-//! - **fast key lookup** by `(night_id, dia_source_id)` via [`AlertKey`](crate::alerts::AlertKey),
-//! - **O(1) reverse lookup** from [`DiaSourceId`](crate::alerts::DiaSourceId) to vector position
+//! - **fast key lookup** by `(night_id, dia_source_id)` via [`AlertKey`],
+//! - **O(1) reverse lookup** from [`DiaSourceId`] to vector position
 //!   via an internal `id_to_location` index,
 //! - **cheap merging** of partial stores without cloning via `Vec::append`.
 //!
@@ -18,7 +18,7 @@
 //! ----------
 //! - The store maps each `night_id` to a `Vec<Alert>`.
 //! - The position within the vector is the *in-night* positional index.
-//! - An [`AlertKey`](crate::alerts::AlertKey) `(night_id, dia_source_id)` can be used
+//! - An [`AlertKey`] `(night_id, dia_source_id)` can be used
 //!   to retrieve a specific alert via the internal reverse index.
 //!
 //! Invariants and conventions
@@ -30,7 +30,7 @@
 //!   vector position. Any reordering or removal of alerts within a `Vec<Alert>` will
 //!   invalidate this index unless a rebuilding method (such as
 //!   [`AlertStore::sort_each_night_and_rekey`]) is invoked afterwards.
-//! - **Identifier uniqueness:** each [`DiaSourceId`](crate::alerts::DiaSourceId) must
+//! - **Identifier uniqueness:** each [`DiaSourceId`] must
 //!   appear at most once across all nights. Duplicate insertions are rejected by
 //!   [`AlertStore::insert_alert`].
 //! - **Immutability by convention:** alerts are treated as immutable once inserted, which
@@ -52,7 +52,7 @@
 //! The store includes a convenience helper [`AlertStore::save_alert_night`] to persist
 //! the alerts for a given night using the project persistence layer:
 //! - `AlertSlice::save_alerts_night(layout, manifest, night_id)` is used to write data
-//!   and update the [`Manifest`](crate::persistence::manifest::Manifest).
+//!   and update the [`Manifest`].
 //!
 //! This helper is intentionally conservative:
 //! - it only writes the requested night,
@@ -78,7 +78,10 @@ use crate::{
     MJDTT,
     alerts::{Alert, AlertKey, AlertSlice, DiaSourceId, error::InsertError},
     night_id::{NightId, PairingMode},
-    persistence::{error::PersistenceIoError, layout::PersistenceLayout, manifest::Manifest},
+    persistence::{
+        compression::Compression, error::PersistenceIoError, layout::PersistenceLayout,
+        manifest::Manifest,
+    },
 };
 
 /// In-memory store of alerts grouped by night.
@@ -89,11 +92,11 @@ use crate::{
 ///
 /// Key properties
 /// --------------
-/// - **Grouping by night:** each key is a [`NightId`](crate::night_id::NightId).
+/// - **Grouping by night:** each key is a [`NightId`].
 /// - **Contiguous storage:** alerts for a night are in a `Vec<Alert>` for
 ///   cache-friendly iteration.
-/// - **Key-based addressing:** [`AlertKey`](crate::alerts::AlertKey) pairs a
-///   `NightId` with a [`DiaSourceId`](crate::alerts::DiaSourceId); the internal
+/// - **Key-based addressing:** [`AlertKey`] pairs a
+///   `NightId` with a [`DiaSourceId`]; the internal
 ///   reverse index resolves the `dia_source_id` to the vector position in O(1).
 ///
 /// See the module-level documentation for invariants and performance notes.
@@ -109,12 +112,18 @@ pub struct AlertStore {
     pub(self) id_to_location: AHashMap<DiaSourceId, (NightId, usize)>,
 }
 
+impl Default for AlertStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AlertStore {
     /// Create a new empty `AlertStore`.
     ///
     /// Behavior
     /// --------
-    /// - Allocates an empty internal [`AHashMap`](ahash::AHashMap).
+    /// - Allocates an empty internal [`AHashMap`].
     /// - No nights are present initially.
     ///
     /// Complexity
@@ -132,7 +141,7 @@ impl AlertStore {
     ///
     /// Arguments
     /// ---------
-    /// * `map` – Map from [`NightId`](crate::night_id::NightId) to `Vec<Alert>`.
+    /// * `map` – Map from [`NightId`] to `Vec<Alert>`.
     ///
     /// Return
     /// ------
@@ -163,7 +172,7 @@ impl AlertStore {
     ///
     /// Arguments
     /// ---------
-    /// * `alert` – The [`Alert`](crate::alerts::Alert) to insert. Its `key.night_id`
+    /// * `alert` – The [`Alert`] to insert. Its `key.night_id`
     ///   determines the target night.
     ///
     /// Return
@@ -263,10 +272,10 @@ impl AlertStore {
     /// Notes
     /// -----
     /// - Return the first alert's `mjd_tt` of the night only if the alerts are sorted by time
-    ///     (e.g., after calling `sort_each_night_and_rekey`).
+    ///   (e.g., after calling `sort_each_night_and_rekey`).
     /// - Should be the case if the alerts have been
-    ///     ingested using the [`crate::pipeline::stages::PipelineStage::IngestNights`] stage,
-    ///     which calls `sort_each_night_and_rekey` after loading.
+    ///   ingested using the [`crate::pipeline::stages::PipelineStage::IngestNights`] stage,
+    ///   which calls `sort_each_night_and_rekey` after loading.
     pub fn night_t0(&self, night_id: &NightId) -> Option<MJDTT> {
         self.alerts_by_night
             .get(night_id)
@@ -378,7 +387,7 @@ impl AlertStore {
     /// Get an alert by its composite key (night ID + `dia_source_id`).
     ///
     /// This is the canonical constant-time lookup for pipeline components that
-    /// carry compact references via [`AlertKey`](crate::alerts::AlertKey).
+    /// carry compact references via [`AlertKey`].
     ///
     /// Arguments
     /// ---------
@@ -476,9 +485,16 @@ impl AlertStore {
     /// Overview
     /// --------
     /// This method filters the alert store to return only the nights that are relevant
-    /// for pairing according to the given `PairingMode`. It identifies a "right night"
-    /// (the most recent eligible night) and collects all valid "left nights" that can
-    /// be paired with it.
+    /// for seed building according to the given `PairingMode`.
+    ///
+    /// Behavior by mode
+    /// ----------------
+    /// - **`SingleNight` mode**: returns **only the anchor night** if it is present in the
+    ///   store. Previous nights within the gap are intentionally excluded because they
+    ///   already have seeds built and persisted from earlier pipeline runs; rebuilding
+    ///   them would be redundant and costly.
+    /// - **`BatchRange` mode**: returns all nights within `[start, end]` that exist in
+    ///   the store, in sorted ascending order.
     ///
     /// Arguments
     /// ---------
@@ -486,40 +502,35 @@ impl AlertStore {
     ///
     /// Return
     /// ------
-    /// An iterator yielding `(night_id, &[Alert])` tuples for nights within the window.
-    ///
-    /// Behavior
-    /// --------
-    /// 1. Identifies the **right night**: the latest night in the store that is
-    ///    contained in the pairing mode's range.
-    /// 2. Collects **left nights**: all nights eligible to pair with the right night
-    ///    according to the mode's constraints (see `PairingMode::eligible_left_nights`).
-    /// 3. Includes the **right night itself** in the output.
-    /// 4. Returns an **empty iterator** if no valid right night exists.
+    /// An iterator yielding `(night_id, &[Alert])` tuples for the selected nights.
     ///
     /// Output guarantees
     /// -----------------
     /// - **Sorted**: nights are returned in increasing order.
     /// - **Deduplicated**: each night appears at most once.
     /// - **Deterministic**: output is reproducible for the same inputs.
-    ///
-    /// Notes
-    /// -----
-    /// - For **single-night mode**: left nights satisfy `left < right` and
-    ///   `right - left <= max_gap`.
-    /// - For **batch mode**: left nights satisfy `left < right` and `start <= left`.
-    /// - The right night itself is always included if it exists in the store and
-    ///   is within the pairing mode's range.
     pub fn night_window_iter(
         &self,
         night_window: PairingMode,
     ) -> impl Iterator<Item = (NightId, &[Alert])> {
         let available_nights: Vec<NightId> = self.nights_sorted();
 
-        // Convert to owned Vec, or empty Vec if error
-        let night_in_window = night_window
-            .filter_nights(&available_nights)
-            .unwrap_or_default();
+        // In SingleNight mode only process the anchor night: previous nights already
+        // have their seeds built and persisted, rebuilding them is unnecessary.
+        // In BatchRange mode fall back to filter_nights which returns all nights in
+        // [start, end] sorted.
+        let night_in_window: Vec<NightId> = match night_window {
+            PairingMode::SingleNight { anchor, .. } => {
+                if self.alerts_by_night.contains_key(&anchor) {
+                    vec![anchor]
+                } else {
+                    vec![]
+                }
+            }
+            _ => night_window
+                .filter_nights(&available_nights)
+                .unwrap_or_default(),
+        };
 
         let store_ref = &self.alerts_by_night;
 
@@ -528,6 +539,36 @@ impl AlertStore {
                 .get(&night_id)
                 .map(|alerts| (night_id, alerts.as_slice()))
         })
+    }
+
+    /// Return the sorted list of night IDs that [`Self::night_window_iter`] would yield
+    /// for the given pairing mode.
+    ///
+    /// This is a lightweight companion to [`Self::night_window_iter`]: it applies the
+    /// same filtering logic and returns only the identifiers, without borrowing
+    /// the alert slices. Useful for progress reporting and counter initialisation
+    /// before the actual iteration.
+    ///
+    /// Behavior
+    /// --------
+    /// - **`SingleNight` mode**: returns `[anchor]` if the anchor is present,
+    ///   otherwise `[]`.
+    /// - **`BatchRange` mode**: returns all nights within `[start, end]` that
+    ///   exist in the store, in sorted ascending order.
+    pub fn night_window_nights(&self, night_window: PairingMode) -> Vec<NightId> {
+        match night_window {
+            PairingMode::SingleNight { anchor, .. } => {
+                if self.alerts_by_night.contains_key(&anchor) {
+                    vec![anchor]
+                } else {
+                    vec![]
+                }
+            }
+            _ => {
+                let available = self.nights_sorted();
+                night_window.filter_nights(&available).unwrap_or_default()
+            }
+        }
     }
 
     /// Get the internal map size (number of nights present).
@@ -608,7 +649,7 @@ impl AlertStore {
     /// For each night in the store:
     /// 1. The vector of alerts is sorted in-place using
     ///    [`sort_unstable`](slice::sort_unstable) (primary key: `mjd_tt`,
-    ///    tie-breakers follow the [`Ord`] implementation on [`Alert`](crate::alerts::Alert)).
+    ///    tie-breakers follow the [`Ord`] implementation on [`Alert`]).
     /// 2. After all nights are sorted, the reverse index is fully rebuilt
     ///    to re-map every `dia_source_id` to its new vector position.
     ///
@@ -671,6 +712,7 @@ impl AlertStore {
         night_id: NightId,
         layout: &PersistenceLayout,
         manifest: &mut Manifest,
+        compression: Compression,
     ) -> Result<Utf8PathBuf, PersistenceIoError> {
         let alerts = self.alerts_by_night.get(&night_id).ok_or_else(|| {
             PersistenceIoError::Other(format!("No alerts for night_id {}", night_id))
@@ -678,7 +720,7 @@ impl AlertStore {
 
         let path = alerts
             .as_slice()
-            .save_alerts_night(layout, manifest, night_id)?;
+            .save_alerts_night(layout, manifest, night_id, compression)?;
 
         Ok(path)
     }
@@ -1419,56 +1461,48 @@ mod alert_store_tests {
             let store = make_multi_night_store();
 
             // Anchor on night 105, max_gap = 1
-            // Should include: 103 (left) and 105 (right/anchor)
+            // SingleNight mode: only the anchor night is returned regardless of gap.
             let mode = PairingMode::SingleNight {
                 anchor: nid(105),
                 max_gap: 1,
             };
 
-            let mut collected: Vec<_> = store.night_window_iter(mode).collect();
-
-            collected.sort_by_key(|(night, _)| *night);
+            let collected: Vec<_> = store.night_window_iter(mode).collect();
 
             assert_eq!(collected.len(), 1);
-            assert_eq!(collected[0].0, nid(105)); // anchor itself
+            assert_eq!(collected[0].0, nid(105)); // only the anchor night
         }
 
         #[test]
         fn night_window_iter_single_night_with_gap_2() {
             let store = make_multi_night_store();
             // Anchor on night 105, max_gap = 2
-            // Should include: 103 (105-103=2), 105 (anchor)
+            // SingleNight mode: only the anchor night is returned regardless of gap.
             let mode = PairingMode::SingleNight {
                 anchor: nid(105),
                 max_gap: 2,
             };
 
-            let mut collected: Vec<_> = store.night_window_iter(mode).collect();
-            collected.sort_by_key(|(night, _)| *night);
+            let collected: Vec<_> = store.night_window_iter(mode).collect();
 
-            assert_eq!(collected.len(), 2);
-            assert_eq!(collected[0].0, nid(103));
-            assert_eq!(collected[1].0, nid(105));
+            assert_eq!(collected.len(), 1);
+            assert_eq!(collected[0].0, nid(105)); // only the anchor night
         }
 
         #[test]
         fn night_window_iter_single_night_large_gap() {
             let store = make_multi_night_store();
             // Anchor on night 105, max_gap = 10
-            // Should include all nights <= 105
+            // SingleNight mode: only the anchor night is returned regardless of gap.
             let mode = PairingMode::SingleNight {
                 anchor: nid(105),
                 max_gap: 10,
             };
 
-            let mut collected: Vec<_> = store.night_window_iter(mode).collect();
-            collected.sort_by_key(|(night, _)| *night);
+            let collected: Vec<_> = store.night_window_iter(mode).collect();
 
-            assert_eq!(collected.len(), 4);
-            assert_eq!(collected[0].0, nid(100));
-            assert_eq!(collected[1].0, nid(101));
-            assert_eq!(collected[2].0, nid(103));
-            assert_eq!(collected[3].0, nid(105));
+            assert_eq!(collected.len(), 1);
+            assert_eq!(collected[0].0, nid(105)); // only the anchor night
         }
 
         #[test]

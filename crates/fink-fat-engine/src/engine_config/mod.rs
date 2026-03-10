@@ -12,13 +12,13 @@
 //!
 //! In the runtime pipeline, the main sections map to major engine stages:
 //!
-//! - [`PairConfig`](crate::engine_config::pair_config::PairConfig):
+//! - [`PairConfig`]:
 //!   intra-night pair generation pre-filter.
-//! - [`TripletConfig`](crate::engine_config::triplet_config::TripletConfig):
+//! - [`TripletConfig`]:
 //!   intra-night triplet generation, producing higher-quality seeds.
-//! - [`EdgeConfig`](crate::engine_config::edge_config::EdgeConfig):
+//! - [`EdgeConfig`]:
 //!   inter-night edge construction (candidate retrieval + features + optional ML Top-K).
-//! - [`SolverConfig`](crate::engine_config::solver_config::SolverConfig):
+//! - [`SolverConfig`]:
 //!   solver selection and solver-specific policies.
 //!
 //! Additional global knobs:
@@ -95,6 +95,8 @@
 //!
 //! storage_path: "./storage"
 //! max_gap_nights: 3
+//! compact_graph_every_delta: 20
+//! binary_compression: "None"
 //!
 //! pairs:
 //!   max_dt: "86.4 min"
@@ -110,7 +112,7 @@
 //!   max_flux_difference: 5.0
 //!
 //! edges:
-//!   emit_all_edges: false
+//!   use_ml_ranking: false
 //!   edge_ranking_model_path: "edge_ranker.onnx"
 //!   top_k_per_left: 32
 //!   onnx_batch_size: 128
@@ -141,6 +143,9 @@
 //!     max_out_per_node: 8
 //!     max_tracks_per_source: 8
 //!     max_expansions: 50000
+//!
+//! pipeline_policy:
+//!   PersistPolicy: Full
 //! ```
 //!
 //! Notes
@@ -148,7 +153,7 @@
 //! - The `policy.routing` field is serialized using Serde’s default enum encoding:
 //!   - `Heuristics` is written as the plain variant name,
 //!   - `Force(choice)` is written as a map like `{ Force: BoundedBeam }`.
-//! - The `bounded_beam` block corresponds to [`BoundedBeamConfig`] and provides
+//! - The `bounded_beam` block corresponds to [`BoundedBeamConfig`](crate::engine_config::solver_config::bounded_beam_config::BoundedBeamConfig) and provides
 //!   hard guardrails on exploration and output size.
 //! - If additional solver families are added later, `solver_config` may grow
 //!   with extra sub-sections; keep the routing policy independent from solver
@@ -164,7 +169,9 @@
 
 pub mod edge_config;
 pub mod error;
+pub mod log_level;
 pub mod pair_config;
+pub mod pipeline_policy;
 pub mod propagator_config;
 pub mod solver_config;
 pub mod triplet_config;
@@ -177,9 +184,11 @@ use serde::{Deserialize, Serialize};
 use crate::{
     MJDTT,
     engine_config::{
-        edge_config::EdgeConfig, error::ConfigError, pair_config::PairConfig,
-        solver_config::SolverConfig, triplet_config::TripletConfig, units::de_time_days,
+        edge_config::EdgeConfig, error::ConfigError, log_level::LogLevel, pair_config::PairConfig,
+        pipeline_policy::PersistPolicy, solver_config::SolverConfig, triplet_config::TripletConfig,
+        units::de_time_days,
     },
+    persistence::compression::Compression,
 };
 
 /// Root configuration for the engine (serde-friendly).
@@ -226,6 +235,23 @@ pub struct EngineConfig {
 
     /// Solver selection and solver-specific configuration.
     pub solver_config: SolverConfig,
+
+    /// pipeline policy configuration
+    pub pipeline_policy: PersistPolicy,
+
+    /// Compression algorithm used when writing binary persistence blobs
+    /// (alerts, seeds, edge journal deltas and snapshots).
+    ///
+    /// The choice is stored inside every [`crate::persistence::envelope::DiskEnvelope`]
+    /// and embedded in the binary frame, so readers never need to know the
+    /// algorithm in advance.
+    ///
+    /// Defaults to [`Compression::None`] (no compression). For production
+    /// deployments where disk I/O is a bottleneck, [`Compression::Zstd`] is
+    /// recommended.
+    ///
+    /// YAML values: `"None"`, `"Lz4"`, `"Zstd"`, `"Gzip"`.
+    pub binary_compression: Compression,
 
     /// Maximum number of nights that can be skipped when linking (`gap` constraint).
     ///
@@ -315,6 +341,13 @@ pub struct EngineConfig {
     /// When the number of delta files in the journal exceeds this threshold,
     /// the stage triggers a full compaction (snapshot rebuild + delta pruning).
     pub compact_graph_every_delta: usize,
+
+    /// Minimum log level that the CLI subscriber will record.
+    ///
+    /// Accepted YAML values: `"trace"`, `"debug"`, `"info"`, `"warn"`, `"error"`.
+    /// Defaults to `"info"`. This value is only read by the CLI; the engine
+    /// itself only emits tracing events and does not install any subscriber.
+    pub log_level: LogLevel,
 }
 
 impl Default for EngineConfig {
@@ -338,6 +371,9 @@ impl Default for EngineConfig {
             time_binner_width: 0.021, // ~30 min in days
             storage_path: "./storage".to_string(),
             compact_graph_every_delta: 20,
+            pipeline_policy: PersistPolicy::Full,
+            binary_compression: Compression::None,
+            log_level: LogLevel::default(),
         }
     }
 }
@@ -629,7 +665,7 @@ version: 1
         assert_eq!(cfg.storage_path(), Utf8Path::new("./storage"));
 
         assert_ulps_eq!(cfg.pairs.max_dt, 0.06, max_ulps = 0);
-        assert_eq!(cfg.edges.top_k_per_left, 32);
+        assert_eq!(cfg.edges.top_k_per_left, Some(32));
 
         // Predictor defaults are expected valid.
         assert!(cfg.edges.predictor_config.k_sigma > 0.0);
@@ -788,7 +824,7 @@ edges:
             load_engine_config_validated(&path).expect("config should load with env overrides");
 
         assert_relative_eq!(cfg.pairs.max_dt, 0.05, epsilon = 1e-15);
-        assert_eq!(cfg.edges.top_k_per_left, 42);
+        assert_eq!(cfg.edges.top_k_per_left, Some(42));
         assert_eq!(cfg.pairs.allow_same_timebin, false);
     }
 
@@ -993,7 +1029,7 @@ edges:
             ]);
 
             let cfg = load_engine_config_validated(&path).expect("config should load");
-            prop_assert_eq!(cfg.edges.top_k_per_left, top_k_env);
+            prop_assert_eq!(cfg.edges.top_k_per_left, Some(top_k_env));
         }
     }
 }

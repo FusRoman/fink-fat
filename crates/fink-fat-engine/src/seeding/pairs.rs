@@ -120,7 +120,7 @@ pub type Pairs<'alert_lf> = Vec<Pair<'alert_lf>>;
 /// The vector is:
 /// - sorted (`sort_unstable`) and
 /// - deduplicated (`dedup`)
-/// to ensure deterministic behavior and to avoid redundant scans.
+///   to ensure deterministic behavior and to avoid redundant scans.
 #[inline]
 fn cached_spatial_neighbors<'cache, Bs: SpatialBinner>(
     cache: &'cache mut AHashMap<SpatialKey, Vec<SpatialKey>>,
@@ -294,6 +294,17 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
     let sep_cap = (config.max_angular_speed * config.max_dt).max(0.0);
     let spatial_search_radius = sep_cap + spatial_binner.cell_radius();
 
+    tracing::debug!(
+        n_buckets = bucket_index.buckets.len(),
+        max_dt = config.max_dt,
+        max_angular_speed = config.max_angular_speed,
+        max_flux_difference = config.max_flux_difference,
+        allow_same_timebin = config.allow_same_timebin,
+        sep_cap,
+        spatial_search_radius,
+        "generate_pairs starting",
+    );
+
     let mut spatial_neighbor_cache = AHashMap::<SpatialKey, Vec<SpatialKey>>::new();
     let mut timebin_target_cache = AHashMap::<TimeBin, Vec<TimeBin>>::new();
 
@@ -302,6 +313,11 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
     let mut seen: AHashSet<(usize, usize)> = AHashSet::new();
 
     let mut out: Pairs<'alert_lf> = Vec::new();
+
+    // Rejection counters (reported at DEBUG level at the end).
+    let mut n_rejected_flux: u64 = 0;
+    let mut n_rejected_speed: u64 = 0;
+    let mut n_dedup_skipped: u64 = 0;
 
     for (bucket_key, bucket) in &bucket_index.buckets {
         let spatial_neighbors = cached_spatial_neighbors(
@@ -355,6 +371,7 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
 
                         // Flux similarity
                         if (flux_a - b.flux).abs() > config.max_flux_difference {
+                            n_rejected_flux += 1;
                             continue;
                         }
 
@@ -365,6 +382,7 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
 
                         let u_b = unit_vec(b.ra, b.dec);
                         if dot3(u_a, u_b) < cos_thresh {
+                            n_rejected_speed += 1;
                             continue;
                         }
 
@@ -372,6 +390,8 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
                         let key = (a as *const Alert as usize, b as *const Alert as usize);
                         if seen.insert(key) {
                             out.push(Pair { a, b });
+                        } else {
+                            n_dedup_skipped += 1;
                         }
                     }
                 }
@@ -381,6 +401,14 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
 
     // Deterministic ordering (handy for tests / reproducibility)
     out.sort_unstable_by(|p1, p2| p1.a.cmp(p2.a).then_with(|| p1.b.cmp(p2.b)));
+
+    tracing::debug!(
+        n_pairs = out.len(),
+        n_rejected_flux,
+        n_rejected_speed,
+        n_dedup_skipped,
+        "generate_pairs complete",
+    );
 
     out
 }
@@ -397,12 +425,12 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
 ///     Time-ordered detection pairs produced by [`generate_pairs`].
 /// night_id : NightId
 ///     Night identifier assigned to all resulting seeds.
-/// max_speed_rad_per_day : Option<f64>
+/// max_speed_rad_per_day : `Option<f64>`
 ///     Optional speed filter forwarded to [`SeedNode::from_pair`].
 ///
 /// Returns
 /// -------
-/// Vec<SeedNode>
+/// `Vec<SeedNode>`
 ///     Seeds successfully constructed from the input pairs.
 ///
 /// Notes

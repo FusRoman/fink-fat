@@ -22,14 +22,14 @@ use std::collections::HashSet;
 use tempfile::TempDir;
 
 use fink_fat_engine::{
+    engine_config::pipeline_policy::PersistPolicy,
     night_id::NightId,
     persistence::{
         PersistenceManager, envelope::load_parquet, layout::PersistenceLayout,
         runtime_state::RuntimeState,
     },
     pipeline::{
-        PersistPolicy, PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner,
-        stages::PipelineStage,
+        PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner, stages::PipelineStage,
     },
     seeding::SeedKey,
 };
@@ -37,8 +37,8 @@ use fink_fat_engine::{
 use super::{
     FULL_WITH_PERSISTENCE, NoopHooks, PipelineTestResult, collect_dia_source_ids,
     collect_edge_endpoints, collect_night_ids, collect_seed_keys, dummy_input_uri,
-    engine_config_with_compaction, engine_config_with_edges, new_runtime_state, run_pipeline_with,
-    test_edge_models, test_solver_manager, write_alerts_parquet,
+    engine_config_with_compaction, engine_config_with_edges, run_pipeline_with, test_edge_models,
+    test_solver_manager, write_alerts_parquet,
 };
 use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
 
@@ -334,7 +334,6 @@ fn load_restores_alerts_seeds_and_edges_after_save() {
 
     // We use a dummy URI because IngestNights is not in the plan.
     let plan = PipelinePlan {
-        window: None,
         stages: vec![PipelineStage::LoadPersistedData],
         persist: PersistPolicy::None,
         inputs: PipelineInputs {
@@ -342,7 +341,7 @@ fn load_restores_alerts_seeds_and_edges_after_save() {
         },
     };
 
-    let mut loaded_state = new_runtime_state();
+    let mut loaded_state = RuntimeState::new();
     let runner = PipelineRunner { plan: plan.clone() };
     let hooks = NoopHooks;
 
@@ -508,7 +507,6 @@ fn incremental_pipeline_with_persistence_accumulates_state() {
         stages.push(PipelineStage::SavePersistedData);
 
         let plan = PipelinePlan {
-            window: None,
             stages,
             persist: if is_last {
                 PersistPolicy::Full
@@ -518,7 +516,7 @@ fn incremental_pipeline_with_persistence_accumulates_state() {
             inputs: PipelineInputs { alerts_uri },
         };
 
-        let mut runtime_state = new_runtime_state();
+        let mut runtime_state = RuntimeState::new();
         let runner = PipelineRunner { plan: plan.clone() };
         let hooks = NoopHooks;
 
@@ -694,13 +692,12 @@ fn reload_after_incremental_persistence_is_consistent() {
         ];
 
         let plan = PipelinePlan {
-            window: None,
             stages,
             persist: PersistPolicy::Minimal,
             inputs: PipelineInputs { alerts_uri },
         };
 
-        let mut runtime_state = new_runtime_state();
+        let mut runtime_state = RuntimeState::new();
         let runner = PipelineRunner { plan: plan.clone() };
         let hooks = NoopHooks;
 
@@ -738,7 +735,6 @@ fn reload_after_incremental_persistence_is_consistent() {
         .expect("reopen persistence");
 
     let plan = PipelinePlan {
-        window: None,
         stages: vec![PipelineStage::LoadPersistedData],
         persist: PersistPolicy::None,
         inputs: PipelineInputs {
@@ -746,7 +742,7 @@ fn reload_after_incremental_persistence_is_consistent() {
         },
     };
 
-    let mut reloaded_state = new_runtime_state();
+    let mut reloaded_state = RuntimeState::new();
     let runner = PipelineRunner { plan: plan.clone() };
     let hooks = NoopHooks;
 
@@ -907,7 +903,6 @@ fn load_stage_reports_meaningful_counters() {
     let solver_manager = test_solver_manager();
 
     let plan = PipelinePlan {
-        window: None,
         stages: vec![PipelineStage::LoadPersistedData],
         persist: PersistPolicy::None,
         inputs: PipelineInputs {
@@ -915,7 +910,7 @@ fn load_stage_reports_meaningful_counters() {
         },
     };
 
-    let mut loaded_state = new_runtime_state();
+    let mut loaded_state = RuntimeState::new();
     let runner = PipelineRunner { plan: plan.clone() };
     let hooks = NoopHooks;
 
@@ -1010,7 +1005,6 @@ fn manifest_tracks_all_nights_after_multiple_saves() {
             .expect("open persistence");
 
         let plan = PipelinePlan {
-            window: None,
             stages: vec![
                 PipelineStage::LoadPersistedData,
                 PipelineStage::IngestNights,
@@ -1023,7 +1017,7 @@ fn manifest_tracks_all_nights_after_multiple_saves() {
             inputs: PipelineInputs { alerts_uri },
         };
 
-        let mut runtime_state = new_runtime_state();
+        let mut runtime_state = RuntimeState::new();
         let runner = PipelineRunner { plan: plan.clone() };
         let hooks = NoopHooks;
 
@@ -1046,7 +1040,7 @@ fn manifest_tracks_all_nights_after_multiple_saves() {
     // Now load the manifest directly and check it.
     let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
         .expect("reopen persistence");
-    let manifest = persistence.load_or_init_manifest(0).expect("load manifest");
+    let manifest = persistence.load_or_init_manifest().expect("load manifest");
 
     // The manifest should reference all n_nights.
     let manifest_nids: Vec<NightId> = manifest.nights.iter().map(|e| e.night_id).collect();
@@ -1109,7 +1103,6 @@ fn load_on_empty_storage_yields_empty_state() {
     let solver_manager = test_solver_manager();
 
     let plan = PipelinePlan {
-        window: None,
         stages: vec![PipelineStage::LoadPersistedData],
         persist: PersistPolicy::None,
         inputs: PipelineInputs {
@@ -1117,7 +1110,7 @@ fn load_on_empty_storage_yields_empty_state() {
         },
     };
 
-    let mut runtime_state = new_runtime_state();
+    let mut runtime_state = RuntimeState::new();
     let runner = PipelineRunner { plan: plan.clone() };
     let hooks = NoopHooks;
 
@@ -1204,7 +1197,6 @@ fn save_load_roundtrip_diverse_populations() {
     let solver_manager = test_solver_manager();
 
     let plan = PipelinePlan {
-        window: None,
         stages: vec![PipelineStage::LoadPersistedData],
         persist: PersistPolicy::None,
         inputs: PipelineInputs {
@@ -1212,7 +1204,7 @@ fn save_load_roundtrip_diverse_populations() {
         },
     };
 
-    let mut reloaded = new_runtime_state();
+    let mut reloaded = RuntimeState::new();
     let runner = PipelineRunner { plan: plan.clone() };
     let hooks = NoopHooks;
 
@@ -1335,13 +1327,12 @@ fn edge_journal_deltas_and_compaction() {
         ];
 
         let plan = PipelinePlan {
-            window: None,
             stages,
             persist: PersistPolicy::Minimal,
             inputs: PipelineInputs { alerts_uri },
         };
 
-        let mut runtime_state = new_runtime_state();
+        let mut runtime_state = RuntimeState::new();
         let runner = PipelineRunner { plan: plan.clone() };
         let hooks = NoopHooks;
 
@@ -1468,7 +1459,6 @@ fn edge_journal_deltas_and_compaction() {
         .expect("open persistence for final reload");
 
     let plan = PipelinePlan {
-        window: None,
         stages: vec![PipelineStage::LoadPersistedData],
         persist: PersistPolicy::None,
         inputs: PipelineInputs {
@@ -1476,7 +1466,7 @@ fn edge_journal_deltas_and_compaction() {
         },
     };
 
-    let mut reloaded = new_runtime_state();
+    let mut reloaded = RuntimeState::new();
     let runner = PipelineRunner { plan: plan.clone() };
     let hooks = NoopHooks;
 
@@ -1527,5 +1517,165 @@ fn edge_journal_deltas_and_compaction() {
          final edges={}, final deltas={}",
         reloaded.graph.edges.len(),
         reloaded.manifest.edge_journal.deltas.len(),
+    );
+}
+
+/// Regression test for the compaction-window bug.
+///
+/// When compaction fires on night N, the edge snapshot was previously filtered
+/// by a window anchored at the *previous* max night (N-1), not at N.  This
+/// caused every edge whose `to.night_id == N` to be silently dropped from the
+/// snapshot, breaking all 3-node chains through night N.
+///
+/// This test verifies that after compaction the reloaded graph still contains
+/// edges that point TO the compaction night.
+#[test]
+fn compaction_night_edges_are_not_lost() {
+    // Night layout (compact_every = 3):
+    //   Night 0 (nid = 60000): first run, no edges can be built yet
+    //   Night 1 (nid = 60001): edges 60000→60001 built, delta #1 saved
+    //   Night 2 (nid = 60002): edges …→60002 built, delta count = 2 before
+    //                           save → 2+1 = 3 >= 3 → COMPACTION fires.
+    //                           Previously, edges with to=60002 were lost here.
+    //   Night 3 (nid = 60003): edges …→60003 built, delta #1 saved (post-compact)
+    let n_nights = 4_usize;
+    let start_nid = 60000_u32;
+    let max_gap: u8 = 5;
+    let compact_every: usize = 3;
+
+    let dataset = SyntheticDatasetBuilder::new()
+        .population(AsteroidPopulation::MainBelt, 8)
+        .n_nights(n_nights)
+        .obs_per_night(3)
+        .start_night_id(start_nid)
+        .build();
+
+    let data_dir = TempDir::new().unwrap();
+    let storage_dir = TempDir::new().unwrap();
+
+    let engine_config = engine_config_with_compaction(&storage_dir, max_gap, compact_every);
+    let edge_models = test_edge_models();
+    let solver_manager = test_solver_manager();
+
+    let mut night_ids: Vec<u32> = dataset.alerts().iter().map(|a| a.key.night_id.0).collect();
+    night_ids.sort_unstable();
+    night_ids.dedup();
+    assert_eq!(night_ids.len(), n_nights);
+
+    // Run all nights in sequence, persisting between iterations.
+    let mut compaction_night_id: Option<u32> = None;
+
+    for (run_idx, &nid) in night_ids.iter().enumerate() {
+        let night_alerts: Vec<&fink_fat_engine::Alert> = dataset
+            .alerts()
+            .iter()
+            .filter(|a| a.key.night_id.0 == nid)
+            .collect();
+
+        let parquet_path = data_dir.path().join(format!("night_{nid}.parquet"));
+        let alerts_uri = write_alerts_parquet(&night_alerts, &parquet_path);
+
+        let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
+            .expect("open persistence");
+
+        let stages = vec![
+            PipelineStage::LoadPersistedData,
+            PipelineStage::IngestNights,
+            PipelineStage::BuildSeeds,
+            PipelineStage::BuildEdges,
+            PipelineStage::Solve,
+            PipelineStage::FitOrbit,
+            PipelineStage::SavePersistedData,
+        ];
+
+        let plan = PipelinePlan {
+            stages,
+            persist: PersistPolicy::Minimal,
+            inputs: PipelineInputs { alerts_uri },
+        };
+
+        let mut runtime_state = RuntimeState::new();
+        let runner = PipelineRunner { plan: plan.clone() };
+        let hooks = NoopHooks;
+
+        let mut ctx = PipelineContext {
+            plan: &plan,
+            persistence: &persistence,
+            runtime_state: &mut runtime_state,
+            engine_config: &engine_config,
+            edge_models: &edge_models,
+            solver_manager: &solver_manager,
+        };
+
+        let output = runner
+            .run(&mut ctx, &hooks)
+            .unwrap_or_else(|e| panic!("pipeline run #{run_idx} (nid={nid}) failed: {e}"));
+        drop(ctx);
+
+        // Detect the compaction night.
+        let save_report = output
+            .reports
+            .iter()
+            .find(|(s, _)| *s == PipelineStage::SavePersistedData)
+            .expect("SavePersistedData report");
+        let counters: std::collections::HashMap<&str, u64> =
+            save_report.1.counters.iter().copied().collect();
+        if counters.get("edge_compacted").copied().unwrap_or(0) == 1 {
+            compaction_night_id = Some(nid);
+        }
+    }
+
+    // Compaction must have fired.
+    let compact_nid = compaction_night_id
+        .expect("compaction should have fired during the 4-night run with compact_every=3");
+
+    // Reload the final state and verify edges TO the compaction night are present.
+    let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
+        .expect("reopen persistence for final check");
+
+    let plan = PipelinePlan {
+        stages: vec![PipelineStage::LoadPersistedData],
+        persist: PersistPolicy::None,
+        inputs: PipelineInputs {
+            alerts_uri: dummy_input_uri(),
+        },
+    };
+
+    let mut reloaded = RuntimeState::new();
+    let runner = PipelineRunner { plan: plan.clone() };
+    let hooks = NoopHooks;
+    let mut ctx = PipelineContext {
+        plan: &plan,
+        persistence: &persistence,
+        runtime_state: &mut reloaded,
+        engine_config: &engine_config,
+        edge_models: &edge_models,
+        solver_manager: &solver_manager,
+    };
+    runner.run(&mut ctx, &hooks).expect("final reload");
+    drop(ctx);
+
+    // The critical assertion: edges whose `to.night_id` equals the compaction
+    // night must still be present.  Before the fix, they were all dropped from
+    // the snapshot because the window was anchored at the *previous* max night.
+    let edges_to_compact_night: Vec<_> = reloaded
+        .graph
+        .edges
+        .iter()
+        .filter(|e| e.to.night_id.0 == compact_nid)
+        .collect();
+
+    assert!(
+        !edges_to_compact_night.is_empty(),
+        "Regression: edges to the compaction night (nid={compact_nid}) were \
+         lost from the snapshot.  The compaction window must include the \
+         current (checkpoint) night, not just the previous max night.",
+    );
+
+    eprintln!(
+        "Compaction window regression test passed: \
+         compaction night={compact_nid}, \
+         edges to that night preserved={}",
+        edges_to_compact_night.len(),
     );
 }

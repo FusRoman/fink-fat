@@ -7,18 +7,19 @@
 use tempfile::TempDir;
 
 use fink_fat_engine::{
+    engine_config::pipeline_policy::PersistPolicy,
     error::EngineError,
     night_id::{NightId, PairingMode},
-    persistence::PersistenceManager,
+    persistence::{PersistenceManager, runtime_state::RuntimeState},
     pipeline::{
-        PersistPolicy, PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner,
+        PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner,
         stages::{PipelineStage, alert_inputs::input_uri::InputUri},
     },
 };
 
 use super::{
-    INGEST_ONLY, NoopHooks, PipelineTestResult, engine_config_minimal, new_runtime_state,
-    run_pipeline_minimal, test_edge_models,
+    INGEST_ONLY, NoopHooks, PipelineTestResult, engine_config_minimal, run_pipeline_minimal,
+    test_edge_models,
 };
 use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
 
@@ -58,15 +59,18 @@ fn ingest_nights_stage_loads_alerts_and_populates_runtime_state() {
     assert_eq!(*stage, PipelineStage::IngestNights);
 
     let counters: std::collections::HashMap<&str, u64> = report.counters.iter().copied().collect();
+    // The pipeline runs incrementally (one night at a time); the last run
+    // ingested one night worth of alerts.
+    let expected_last_night_alerts = (n_trajectories * obs_per_night) as u64;
     assert_eq!(
         counters.get("n_alerts").copied(),
-        Some(expected_total_alerts as u64),
-        "expected {expected_total_alerts} alerts total"
+        Some(expected_last_night_alerts),
+        "expected {expected_last_night_alerts} alerts in the last incremental run"
     );
     assert_eq!(
         counters.get("n_nights").copied(),
-        Some(n_nights as u64),
-        "expected {n_nights} distinct nights"
+        Some(1_u64),
+        "expected 1 night per incremental run"
     );
 
     // ---- 4) Verify runtime state: alert store ----
@@ -157,7 +161,6 @@ fn ingest_nights_stage_fails_on_missing_parquet_file() {
     let solver_manager = fink_fat_engine::solver::solver_manager::SolverManager::default();
 
     let plan = PipelinePlan {
-        window: None,
         stages: vec![PipelineStage::IngestNights],
         persist: PersistPolicy::None,
         inputs: PipelineInputs {
@@ -165,7 +168,7 @@ fn ingest_nights_stage_fails_on_missing_parquet_file() {
         },
     };
 
-    let mut runtime_state = new_runtime_state();
+    let mut runtime_state = RuntimeState::new();
 
     let runner = PipelineRunner { plan: plan.clone() };
     let hooks = NoopHooks;

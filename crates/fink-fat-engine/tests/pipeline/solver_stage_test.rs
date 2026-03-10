@@ -6,8 +6,8 @@
 //! 3. `BuildEdges` constructs inter-night edges between seeds.
 //! 4. `Solve` runs the solver to produce trajectory hypotheses.
 //!
-//! The edge builder operates in `emit_all_edges = true` mode so that no
-//! ONNX model is required (physics-only cost, all candidates emitted).
+//! The edge builder operates in no-filtering mode (`top_k_per_left: None`) so
+//! that no ONNX model is required (physics-only cost, all candidates emitted).
 //!
 //! Ground-truth verification checks that the solver output recovers coherent
 //! trajectories matching the known synthetic trajectories.
@@ -18,20 +18,19 @@ use tempfile::TempDir;
 
 use fink_fat_engine::{
     Alert,
+    engine_config::pipeline_policy::PersistPolicy,
     night_id::NightId,
-    persistence::PersistenceManager,
+    persistence::{PersistenceManager, runtime_state::RuntimeState},
     pipeline::{
-        PersistPolicy, PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner,
-        stages::PipelineStage,
+        PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner, stages::PipelineStage,
     },
     trajectory::TrackHypothesis,
 };
 
 use super::{
     NoopHooks, PipelineTestResult, THROUGH_SOLVE, engine_config_with_edges,
-    match_truth_to_hypotheses, new_runtime_state, run_incremental_pipeline, run_pipeline,
-    test_edge_models, test_solver_manager, test_solver_manager_with_min_nodes,
-    write_alerts_parquet,
+    match_truth_to_hypotheses, run_incremental_pipeline, run_pipeline, test_edge_models,
+    test_solver_manager, test_solver_manager_with_min_nodes, write_alerts_parquet,
 };
 use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
 
@@ -1022,7 +1021,7 @@ fn incremental_graph_grows_over_nights() {
     let edge_models = test_edge_models();
     let solver_manager = test_solver_manager();
 
-    let mut runtime_state = new_runtime_state();
+    let mut runtime_state = RuntimeState::new();
 
     let mut night_ids: Vec<u32> = dataset.alerts().iter().map(|a| a.key.night_id.0).collect();
     night_ids.sort_unstable();
@@ -1045,7 +1044,6 @@ fn incremental_graph_grows_over_nights() {
         let alerts_uri = write_alerts_parquet(&night_alerts, &parquet_path);
 
         let plan = PipelinePlan {
-            window: None,
             stages: vec![
                 PipelineStage::IngestNights,
                 PipelineStage::BuildSeeds,

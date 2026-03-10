@@ -1,5 +1,6 @@
 use outfit::{
-    ErrorModel, FullOrbitResult, IODParams, Outfit, TrajectoryFile, TrajectoryFit, TrajectorySet,
+    ErrorModel, FullOrbitResult, IODParams, ObjectNumber, Outfit, TrajectoryFile, TrajectoryFit,
+    TrajectorySet,
 };
 use rand::{SeedableRng, rngs::StdRng};
 
@@ -8,7 +9,6 @@ use crate::{
     pipeline::{
         PipelineContext,
         hooks::{PipelineHooks, StageMeta, StageReport},
-        progress_sink::ProgressSink,
         stages::{PipelineStage, run_stage},
     },
     solver::to_observation_batch,
@@ -17,23 +17,22 @@ use crate::{
 pub fn run(
     ctx: &mut PipelineContext<'_>,
     hooks: &dyn PipelineHooks,
-    stage_sink: &dyn ProgressSink,
 ) -> Result<StageReport, EngineError> {
     run_stage(
         PipelineStage::FitOrbit,
         hooks,
         StageMeta {
             label: PipelineStage::FitOrbit.label().to_string(),
-            total: None,
+            total: Some(3),
         },
-        stage_sink,
         |stage_sink| {
-            stage_sink.set_total(3); // 3 main steps: convert, build, fit, export
-
             let track_hypothesis = &ctx.runtime_state.track_hypotheses;
+
+            tracing::debug!(n_hypotheses = track_hypothesis.len(), "FitOrbit starting",);
 
             // Early return: nothing to fit when there are no hypotheses.
             if track_hypothesis.is_empty() {
+                tracing::debug!("FitOrbit: no hypotheses, skipping orbit fitting");
                 ctx.runtime_state.orbit_results = FullOrbitResult::default();
                 stage_sink.inc(3);
                 return Ok(vec![]);
@@ -44,6 +43,11 @@ pub fn run(
                 &ctx.runtime_state.alert_store,
                 &ctx.runtime_state.seed_store,
             )?;
+
+            tracing::trace!(
+                n_obs_groups = obs_batches_by_obs.len(),
+                "observation batches resolved from hypotheses",
+            );
             stage_sink.inc(1);
 
             // No observations could be resolved (all hypotheses reference
@@ -56,26 +60,42 @@ pub fn run(
                 ));
             };
 
+            tracing::trace!("initialising Outfit environment (DE440 + FCCT14)");
             let mut env_state = Outfit::new("horizon:DE440", ErrorModel::FCCT14)?;
 
             let first_obs = env_state.get_observer_from_mpc_code(mpc_code_first);
             let mut traj_set =
-                TrajectorySet::new_from_vec(&mut env_state, &obs_batch_first, first_obs)?;
+                TrajectorySet::new_from_vec(&mut env_state, obs_batch_first, first_obs)?;
 
+            let mut n_obs_groups_loaded: usize = 1;
             for (mpc_code, obs_batch) in iter_obs_batch {
                 let observer = env_state.get_observer_from_mpc_code(mpc_code);
                 traj_set.add_from_vec(&mut env_state, obs_batch, observer)?;
+                n_obs_groups_loaded += 1;
             }
+
+            tracing::debug!(
+                n_obs_groups_loaded,
+                "TrajectorySet built from observation batches",
+            );
             stage_sink.inc(1);
 
             let mut rng = StdRng::seed_from_u64(42_u64);
 
             let default = IODParams::builder()
-                .n_noise_realizations(10)
+                .n_noise_realizations(20)
                 .noise_scale(1.1)
-                .max_obs_for_triplets(10)
+                .max_obs_for_triplets(20)
                 .max_triplets(30)
                 .build()?;
+
+            tracing::debug!(
+                n_noise_realizations = 20,
+                noise_scale = 1.1_f64,
+                max_obs_for_triplets = 20,
+                max_triplets = 30,
+                "running orbit estimation (parallel batches)",
+            );
 
             let orbit_results =
                 traj_set.estimate_all_orbits_in_batches_parallel(&env_state, &mut rng, &default);
@@ -92,11 +112,44 @@ pub fn run(
                 .count() as u64;
             let nb_failed_fits = nb_orbit - nb_successful_fits;
 
+            // Deactivate all edges belonging to trajectories that received a
+            // confirmed orbit.  Once an orbit exists, the pipeline no longer
+            // tracks these trajectories through the graph; future propagation
+            // will be handled by the ephemeris system (not yet implemented).
+            // The deactivated edges are persisted as `EdgeOp::Upsert { active:
+            // false }` entries and flushed to the edge journal by `SaveData`.
+            let edges_to_deactivate: Vec<_> = {
+                let orbit_results = &ctx.runtime_state.orbit_results;
+                let track_hypotheses = &ctx.runtime_state.track_hypotheses;
+                orbit_results
+                    .iter()
+                    .filter(|(_, r)| r.is_ok())
+                    .filter_map(|(obj, _)| match obj {
+                        ObjectNumber::Int(hyp_id) => track_hypotheses.get(hyp_id),
+                        _ => None,
+                    })
+                    .flat_map(|track| track.edges.iter().copied())
+                    .collect()
+            };
+            let n_deactivated = ctx
+                .runtime_state
+                .graph
+                .deactivate_edges(&edges_to_deactivate);
+
+            tracing::debug!(
+                nb_orbit,
+                nb_successful_fits,
+                nb_failed_fits,
+                n_deactivated,
+                "FitOrbit complete",
+            );
+
             Ok(vec![
                 ("total_hypotheses", track_hypothesis.len() as u64),
                 ("total_orbits", nb_orbit),
                 ("successful_fits", nb_successful_fits),
                 ("failed_fits", nb_failed_fits),
+                ("deactivated_edges", n_deactivated),
             ])
         },
     )

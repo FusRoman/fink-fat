@@ -23,6 +23,7 @@ use arrow_array::{
     types::{Float64Type, UInt8Type, UInt32Type, UInt64Type},
 };
 use datafusion::{error::DataFusionError, object_store::ObjectStore, prelude::*};
+use object_store::Error as ObjStoreError;
 use tokio::runtime::Runtime;
 use url::Url;
 
@@ -69,6 +70,8 @@ impl Default for AlertParquetColumns {
 /// Error type for Parquet alert loading.
 #[derive(Debug)]
 pub enum LoadAlertsError {
+    /// The resource pointed to by the URI does not exist in the backing store.
+    NotFound(String),
     Resolve(String),
     DataFusion(DataFusionError),
     Arrow(String),
@@ -106,20 +109,67 @@ pub async fn load_alerts_from_parquet_uri(
         .parse()
         .map_err(|e| LoadAlertsError::Resolve(format!("invalid uri: {e}")))?;
 
+    tracing::debug!(uri = %input.0, scheme = url.scheme(), "resolving input URI");
+
     // 1) Resolve URI -> object_store backend + object_store path
     let resolved =
         resolve_input_uri(input).map_err(|e| LoadAlertsError::Resolve(format!("{e:?}")))?;
 
+    tracing::trace!(
+        uri = %input.0,
+        store_path = %resolved.path,
+        "object store resolved",
+    );
+
+    // 1b) Existence check for schemes where a synchronous stat is unreliable
+    //     but an async head() is available: file:// and hdfs://.
+    //     For https:// we skip this check (HEAD semantics vary per server).
+    let scheme = url.scheme();
+    if scheme == "file" || scheme == "hdfs" {
+        tracing::trace!(uri = %input.0, scheme, "checking file existence via store head()");
+        match resolved.store.head(&resolved.path).await {
+            Ok(meta) => {
+                tracing::trace!(
+                    uri = %input.0,
+                    size_bytes = meta.size,
+                    "file exists",
+                );
+            }
+            Err(ObjStoreError::NotFound { .. }) => {
+                tracing::debug!(uri = %input.0, "file not found");
+                return Err(LoadAlertsError::NotFound(input.0.clone()));
+            }
+            Err(e) => {
+                tracing::debug!(uri = %input.0, error = ?e, "store head() error");
+                return Err(LoadAlertsError::Resolve(format!(
+                    "store head error for '{}': {e:?}",
+                    input.0
+                )));
+            }
+        }
+    }
+
     // 2) Build a DataFusion context with the store registered for this URL
+    tracing::trace!(uri = %input.0, "building DataFusion session context");
     let ctx = build_session_context_with_store(&url, resolved.store.clone())?;
 
     // 3) Read the parquet via DataFusion (using the original URI string)
     // DataFusion will route the I/O through the registered object store.
+    tracing::trace!(uri = %input.0, "opening Parquet dataset via DataFusion");
     let df = ctx
         .read_parquet(input.0.as_str(), ParquetReadOptions::default())
         .await?;
 
     // 4) Projection: select only columns needed to build Alert
+    tracing::trace!(
+        columns = ?[
+            columns.night_id, columns.dia_source_id,
+            columns.ra, columns.ra_err, columns.dec, columns.dec_err,
+            columns.mjd_tt, columns.flux, columns.flux_err,
+            columns.band, columns.observer_mpc_code,
+        ],
+        "applying column projection",
+    );
     let df = df.select(vec![
         col(columns.night_id),
         col(columns.dia_source_id),
@@ -135,10 +185,26 @@ pub async fn load_alerts_from_parquet_uri(
     ])?;
 
     // 5) Execute and collect batches
+    tracing::trace!(uri = %input.0, "executing DataFusion plan and collecting record batches");
     let batches = df.collect().await?;
+
+    let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    tracing::debug!(
+        uri = %input.0,
+        n_batches = batches.len(),
+        total_rows,
+        "record batches collected",
+    );
 
     // 6) Convert batches -> Vec<Alert>
     let alerts = build_alerts_from_batches(&batches, &columns)?;
+
+    tracing::debug!(
+        uri = %input.0,
+        n_alerts = alerts.n_alerts(),
+        n_nights = alerts.n_nights(),
+        "AlertStore built from batches",
+    );
 
     Ok(alerts)
 }
@@ -174,13 +240,23 @@ fn build_alerts_from_batches(
     batches: &[RecordBatch],
     c: &AlertParquetColumns,
 ) -> Result<AlertStore, LoadAlertsError> {
+    tracing::trace!(
+        n_batches = batches.len(),
+        "converting record batches to AlertStore"
+    );
+
     let mut out = AlertStore::new();
     let mut global_row = 0usize;
 
     // Intern pool: String -> Arc<String>
     let mut observer_pool: AHashMap<String, Arc<String>> = AHashMap::new();
 
-    for batch in batches {
+    for (batch_idx, batch) in batches.iter().enumerate() {
+        tracing::trace!(
+            batch_idx,
+            num_rows = batch.num_rows(),
+            "processing record batch",
+        );
         let night_id = col_u32(batch, c.night_id)?;
         let dia_source_id = col_u64(batch, c.dia_source_id)?;
         let ra = col_f64(batch, c.ra)?;

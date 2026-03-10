@@ -219,6 +219,15 @@ impl PairingMode {
         (end - start) + 1
     }
 
+    /// Whether the range contains no nights.
+    ///
+    /// This is always `false` for valid `PairingMode` instances since
+    /// both variants represent at least one night.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Whether `night` falls within the defined range.
     ///
     /// Behavior

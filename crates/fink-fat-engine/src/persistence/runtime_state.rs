@@ -28,6 +28,7 @@ use crate::{
 /// -----
 /// This struct is meant to be created and then moved into your runtime engine
 /// (or into a `FinkFat` instance).
+#[derive(Debug)]
 pub struct RuntimeState {
     pub manifest: Manifest,
     pub window: Option<PairingMode>,
@@ -84,7 +85,30 @@ fn orbital_params_schema() -> Arc<Schema> {
     ]))
 }
 
+impl Default for RuntimeState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RuntimeState {
+    // ---------------------------------------------------------------------------
+    // RuntimeState factory
+    // ---------------------------------------------------------------------------
+
+    /// Create a fresh, empty [`RuntimeState`] with default stores.
+    pub fn new() -> RuntimeState {
+        RuntimeState {
+            manifest: Manifest::new(),
+            window: None,
+            alert_store: AlertStore::new(),
+            seed_store: SeedStore::new(),
+            graph: AlertLinkageDAG::new(),
+            track_hypotheses: HypothesisSet::new(),
+            orbit_results: FullOrbitResult::default(),
+        }
+    }
+
     /// Export track members and orbital parameters as two Parquet files.
     ///
     /// This writes:
@@ -250,7 +274,7 @@ impl RuntimeState {
 }
 
 #[cfg(test)]
-mod tests {
+mod runtime_state_tests {
     use std::sync::Arc;
 
     use ahash::AHashMap;
@@ -433,7 +457,7 @@ mod tests {
         );
 
         RuntimeState {
-            manifest: Manifest::new(0),
+            manifest: Manifest::new(),
             window: None,
             alert_store,
             seed_store,
@@ -453,7 +477,7 @@ mod tests {
         let layout = PersistenceLayout::new(utf8(dir.path().to_path_buf()));
 
         let state = RuntimeState {
-            manifest: Manifest::new(0),
+            manifest: Manifest::new(),
             window: None,
             alert_store: AlertStore::new(),
             seed_store: SeedStore::new(),

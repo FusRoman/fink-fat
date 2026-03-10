@@ -11,7 +11,7 @@
 //! and tuning.
 //!
 //! Solvers are intended to operate on:
-//! - the global runtime graph ([`RuntimeGraph`]) as the backing storage for nodes/edges,
+//! - the global runtime graph (`RuntimeGraph`) as the backing storage for nodes/edges,
 //! - a component-local view provided by [`ConnectedComponents`] (nodes, restricted
 //!   adjacency, sources/sinks, degrees, etc.).
 //!
@@ -54,7 +54,7 @@
 //! --------------
 //! The solver API is designed to avoid copying large graph structures.
 //!
-//! - [`RuntimeGraph`] stores edges referencing seed nodes.
+//! - `RuntimeGraph` stores edges referencing seed nodes.
 //! - [`TrackHypothesis`] typically borrows those same edges and nodes.
 //!
 //! Therefore, [`SolverOutput`] is generic over lifetimes:
@@ -190,6 +190,12 @@ pub struct SolverDiagnostics {
     /// -----
     /// - For solvers returning tracks, this is typically `tracks.len()`.
     pub n_selected: u32,
+
+    /// Number of search expansions performed (beam steps, arc iterations, etc.).
+    ///
+    /// Useful to diagnose budget exhaustion: if `n_expansions >= cfg.max_expansions`
+    /// the solver was cut short by the exploration budget.
+    pub n_expansions: u32,
 }
 
 pub type HypothesisId = u32;
@@ -400,7 +406,7 @@ pub fn to_observation_batch<'a>(
         let trk = &hypothesis_set[&tid];
 
         let mut alerts: Vec<Alert> = trk
-            .get_alerts(&alert_store, &seed_store)
+            .get_alerts(alert_store, seed_store)
             .map_err(|e| SolverError::OrbitFitConversionError(e.to_string()))?;
 
         // Ensure time order inside this track

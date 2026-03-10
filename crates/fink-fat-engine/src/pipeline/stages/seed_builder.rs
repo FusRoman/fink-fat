@@ -3,10 +3,10 @@
 //! Overview
 //! --------
 //! This stage constructs **intra-night seeds** from the alerts already loaded in the
-//! [`AlertStore`](crate::persistence::alert_store::AlertStore) (stored in `ctx.runtime_state.alert_store`).
+//! [`AlertStore`](crate::alerts::store::AlertStore) (stored in `ctx.runtime_state.alert_store`).
 //!
 //! In addition to seed generation, this stage participates in the pipeline's
-//! **hierarchical progress reporting** via the [`ProgressSink`](crate::pipeline::progress_sink::ProgressSink)
+//! **hierarchical progress reporting** via the [`StageProgress`](crate::pipeline::hooks::StageProgress)
 //! abstraction. The stage does not depend on any concrete UI (CLI progress bars, logs, metrics);
 //! it only emits structured progress events to the provided sink.
 //!
@@ -15,17 +15,17 @@
 //! The seed-building pipeline is:
 //!
 //! 1. **Bucketization** of alerts in (space, time) using:
-//!    - [`HealpixBinner`](crate::spacetime_bucket::healpix_binner::HealpixBinner) for sky partitioning,
-//!    - [`UniformTimeBinner`](crate::spacetime_bucket::uniform_time_binner::UniformTimeBinner) for time partitioning,
-//!    - [`build_alert_bucket_index`](crate::spacetime_bucket::bucket::build_alert_bucket_index) to build the index.
-//! 2. **Pair generation** using [`pairs::generate_pairs`](crate::seeding::pairs::generate_pairs).
+//!    - [`HealpixBinner`] for sky partitioning,
+//!    - [`UniformTimeBinner`] for time partitioning,
+//!    - [`build_alert_bucket_index`] to build the index.
+//! 2. **Pair generation** using [`pairs::generate_pairs`].
 //! 3. **Triplet generation** from those pairs using
-//!    [`triplets::generate_triplets_from_pairs`](crate::seeding::triplets::generate_triplets_from_pairs).
+//!    [`triplets::generate_triplets_from_pairs`].
 //! 4. **Feature extraction** to build `SeedNode<'alert_lf>` that **borrow alerts**
-//!    with [`triplets::extract_triplet_features`](crate::seeding::triplets::extract_triplet_features).
+//!    with [`triplets::extract_triplet_features`].
 //! 5. **Ownership conversion**: immediately convert each borrowed `SeedNode<'_>` into a
-//!    [`SeedNodeOwned`](crate::persistence::seed_node::SeedNodeOwned) using
-//!    [`SeedNode::to_owned`](crate::seeding::seed_node::SeedNode::to_owned), and store it into
+//!    `SeedNodeOwned` using
+//!    `SeedNode::to_owned`, and store it into
 //!    `ctx.runtime_state.seed_store`.
 //!
 //! Why borrowed → owned?
@@ -41,7 +41,7 @@
 //!
 //! Progress reporting
 //! ------------------
-//! The `BuildSeeds` stage uses `ProgressSink` in a **two-level model**:
+//! The `BuildSeeds` stage uses `StageProgress` in a **two-level model**:
 //!
 //! - **Stage-level progress**: `1 unit = 1 processed night`.
 //!   The stage calls `stage_sink.set_total(n_nights)` once, then `stage_sink.inc(1)`
@@ -64,7 +64,7 @@
 //!
 //! Inputs
 //! ------
-//! - `ctx.runtime_state.window`: [`NightWindow`](crate::night_id::NightWindow) defining which nights are processed.
+//! - `ctx.runtime_state.window`: `NightWindow` defining which nights are processed.
 //! - `ctx.runtime_state.alert_store`: per-night alert vectors.
 //! - `ctx.engine_config.pairs`: pair generation configuration.
 //! - `ctx.engine_config.triplets`: triplet generation configuration.
@@ -74,12 +74,12 @@
 //! Outputs
 //! -------
 //! - `ctx.runtime_state.seed_store`: filled with `SeedNodeOwned` per processed night.
-//! - Returns a [`StageReport`](crate::pipeline::hooks::StageReport) with counters:
+//! - Returns a [`StageReport`] with counters:
 //!   - `nights`, `alerts`, `pairs`, `triplets`, `seeds`.
 //!
 //! Error handling
 //! --------------
-//! This stage fails with [`EngineError::StageFailed`](crate::error::EngineError::StageFailed) if:
+//! This stage fails with [`EngineError::StageFailed`] if:
 //! - no `NightWindow` is present in runtime state,
 //! - a processed night contains zero alerts (cannot derive `t0` for time binning).
 //!
@@ -98,7 +98,7 @@
 //! - If you later add additional seed families (e.g. higher-order seeds), they should be built
 //!   in the same pattern: compute borrowed features → convert to owned → persist in `seed_store`.
 //! - If finer-grained progress is required (e.g. per-bucket or per-pair), introduce additional
-//!   nested scopes under the per-night sink using `ProgressSink::child()`.
+//!   nested scopes under the per-night sink using `StageProgress::child()`.
 //! - If you need per-night instrumentation, insert timers around the bucketization/pairs/triplets steps.
 
 use crate::{
@@ -107,7 +107,6 @@ use crate::{
     pipeline::{
         PipelineContext,
         hooks::{PipelineHooks, StageMeta, StageReport},
-        progress_sink::ProgressSink,
         stages::{PipelineStage, run_stage},
     },
     seeding::{pairs, triplets},
@@ -122,7 +121,7 @@ use crate::{
 /// Overview
 /// --------
 /// This function executes the `BuildSeeds` stage for the nights specified by the runtime
-/// [`NightWindow`]. For each processed night, it:
+/// `NightWindow`. For each processed night, it:
 ///
 /// - bucketizes alerts in (space, time),
 /// - generates candidate pairs,
@@ -131,7 +130,7 @@ use crate::{
 /// - converts each borrowed seed to an owned representation (`SeedNodeOwned`),
 /// - stores owned seeds into `ctx.runtime_state.seed_store`.
 ///
-/// This stage is invoked via [`run_stage`], which integrates lifecycle hooks and
+/// This stage is invoked via `run_stage`, which integrates lifecycle hooks and
 /// stage-level timing/counters.
 ///
 /// Progress reporting contract
@@ -183,16 +182,14 @@ use crate::{
 pub fn run(
     ctx: &mut PipelineContext<'_>,
     hooks: &dyn PipelineHooks,
-    stage_sink: &dyn ProgressSink,
 ) -> Result<StageReport, EngineError> {
     run_stage(
         PipelineStage::BuildSeeds,
         hooks,
         StageMeta {
             label: PipelineStage::BuildSeeds.label().to_string(),
-            total: None,
+            total: None, // dynamic: determined by number of nights at runtime
         },
-        stage_sink,
         |stage_sink| {
             // -----------------------------------------------------------------
             // 0) Preconditions: a BuildSeeds run requires a NightWindow.
@@ -215,11 +212,20 @@ pub fn run(
             // ----------------------------
             // - 1 unit = 1 processed night.
             //
-            // This is deterministic and avoids tying progress to potentially huge
-            // intermediate cardinalities (pairs/triplets), which can vary widely.
+            // Use `night_window_nights` so the total reflects only the nights
+            // that `night_window_iter` will actually yield (e.g. in SingleNight
+            // mode that is exactly one night — the anchor — regardless of how
+            // many nights are present in the alert store).
             // -----------------------------------------------------------------
-            let nights_to_process: Vec<_> = ctx.runtime_state.alert_store.nights_sorted();
+            let nights_to_process = ctx.runtime_state.alert_store.night_window_nights(*window);
             stage_sink.set_total(nights_to_process.len() as u64);
+
+            tracing::debug!(
+                n_nights = nights_to_process.len(),
+                healpix_depth = ctx.engine_config.healpix_depth,
+                time_binner_width = ctx.engine_config.time_binner_width,
+                "BuildSeeds starting",
+            );
 
             // -----------------------------------------------------------------
             // 3) Global counters (reported via StageReport).
@@ -233,7 +239,10 @@ pub fn run(
             // 4) Process each night in the requested window.
             // -----------------------------------------------------------------
             for (night_id, alerts) in ctx.runtime_state.alert_store.night_window_iter(*window) {
-                total_alerts += alerts.len() as u64;
+                let n_alerts = alerts.len();
+                total_alerts += n_alerts as u64;
+
+                tracing::debug!(%night_id, n_alerts, "processing night");
 
                 // -------------------------------------------------------------
                 // Night sub-scope (optional but recommended)
@@ -258,16 +267,20 @@ pub fn run(
                     ),
                 })?;
                 let time_binner = UniformTimeBinner::new(t0, ctx.engine_config.time_binner_width);
+                tracing::trace!(%night_id, t0, time_binner_width = ctx.engine_config.time_binner_width, "t0 and time binner initialised");
                 night_sink.inc(1);
 
                 // 4.2) Build the (space, time) bucket index.
                 let bucket_index = build_alert_bucket_index(alerts, &spatial_binner, &time_binner);
+                tracing::trace!(%night_id, n_buckets = bucket_index.buckets.len(), "bucket index built");
                 night_sink.inc(1);
 
                 // 4.3) Generate candidate pairs.
                 let ps =
                     pairs::generate_pairs(&bucket_index, &spatial_binner, &time_binner, pair_cfg);
-                total_pairs += ps.len() as u64;
+                let n_pairs = ps.len();
+                total_pairs += n_pairs as u64;
+                tracing::debug!(%night_id, n_pairs, "pairs generated");
 
                 let pair_seeds = pairs::extract_pair_features(
                     &ps,
@@ -275,6 +288,7 @@ pub fn run(
                     night_id,
                     None,
                 );
+                tracing::trace!(%night_id, n_pair_seeds = pair_seeds.len(), "pair features extracted");
                 night_sink.inc(1);
 
                 // 4.4) Generate triplets + extract features (borrowed).
@@ -285,13 +299,16 @@ pub fn run(
                     triplet_cfg,
                     &ps,
                 );
-                total_triplets += ts.len() as u64;
+                let n_triplets = ts.len();
+                total_triplets += n_triplets as u64;
+                tracing::debug!(%night_id, n_triplets, "triplets generated");
 
                 let triplets_seeds = triplets::extract_triplet_features(
                     &ts,
                     &mut ctx.runtime_state.seed_store,
                     night_id,
                 );
+                tracing::trace!(%night_id, n_triplet_seeds = triplets_seeds.len(), "triplet features extracted");
                 night_sink.inc(1);
 
                 // 4.5) Convert to owned + sort + store.
@@ -301,7 +318,9 @@ pub fn run(
                 all_seeds.extend(pair_seeds);
                 all_seeds.extend(triplets_seeds);
                 all_seeds.sort();
-                total_seeds += all_seeds.len() as u64;
+                let n_night_seeds = all_seeds.len();
+                total_seeds += n_night_seeds as u64;
+                tracing::debug!(%night_id, n_night_seeds, "seeds converted to owned and sorted");
 
                 ctx.runtime_state
                     .seed_store
@@ -313,6 +332,15 @@ pub fn run(
                 // 1 unit = 1 processed night
                 stage_sink.inc(1);
             }
+
+            tracing::debug!(
+                total_nights = nights_to_process.len(),
+                total_alerts,
+                total_pairs,
+                total_triplets,
+                total_seeds,
+                "BuildSeeds complete",
+            );
 
             Ok(vec![
                 ("nights", nights_to_process.len() as u64),

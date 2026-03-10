@@ -43,33 +43,33 @@
 //!
 //!
 //!
-//! Two operational modes
-//! ---------------------
-//! Controlled by `EdgeConfig.emit_all_edges`.
+//! Two operational modes (when Top-K is active)
+//! ----------------------------------------------
+//! Controlled by `EdgeConfig.use_ml_ranking` (only relevant when
+//! `top_k_per_left = Some(k)`):
 //!
-//! 1) emit_all_edges = true
-//!    ---------------------------------
-//!    - All candidates returned by `SeedNode::seed_edge_candidates` are emitted.
-//!    - No ML model is used.
-//!    - Cost is derived purely from structured physics-inspired features via
-//!      `EdgeFeatures::kinematic_log_likelihood_cost()`.
-//!    - This mode is deterministic and useful for debugging or full graph builds.
+//! 1) use_ml_ranking = false (default)
+//!    ----------------------------------
+//!    - For each left seed, generate candidates and compute cost via
+//!      `EdgeFeatures::compute_cost`.
+//!    - Retain only the K lowest-cost candidates (cost-based Top-K).
+//!    - No ONNX model is required.
+//!    - Cost is derived from `EdgeFeatures::compute_cost` using the variant
+//!      configured in `edge_config.cost` (default: `gaussian_chi2`).
 //!
-//! 2) emit_all_edges = false
-//!    ---------------------------------
+//! 2) use_ml_ranking = true
+//!    ----------------------------------
 //!    - ML Top-K ranking is enabled.
 //!    - For each left seed:
-//!        • candidates are generated,
-//!        • features are computed,
-//!        • ONNX inference produces p(class=1),
-//!        • only the Top-K highest-probability candidates are retained.
+//!      • candidates are generated,
+//!      • features are computed,
+//!      • ONNX inference produces p(class=1),
+//!      • only the Top-K highest-probability candidates are retained.
 //!    - The solver-facing edge cost is still derived from features.
 //!    - Requires `model_pool` to be provided.
 //!
-//! In ML mode:
-//!
-//! - If `model_pool` is `None`, an error is returned.
-//! - If ONNX inference fails, the error is propagated as `EdgeBuilderError::ModelError(...)`.
+//! When `top_k_per_left = None`, all candidates are emitted regardless of
+//! `use_ml_ranking`.
 //!
 //!
 //!
@@ -146,14 +146,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     MJDTT,
+    alerts::DiaSourceId,
     engine_config::edge_config::EdgeConfig,
     graph::edge::{
         edge_features::EdgeFeatures,
         edge_prediction::EdgeRankingModelPool,
         error::{EdgeBuilderError, EdgeModelError},
-        ranking_topk::rank_topk_edges_for_left,
+        ranking_topk::{rank_topk_edges_for_left, rank_topk_edges_for_left_by_cost},
     },
-    pipeline::progress_sink::ProgressSink,
+    pipeline::hooks::StageProgress,
     seeding::{SeedKey, SeedNode, seed_spatial_index::SeedSpatialIndex},
     spacetime_bucket::{spatial_binner::SpatialBinner, uniform_time_binner::UniformTimeBinner},
 };
@@ -164,7 +165,7 @@ use crate::{
 /// -----
 /// This assumes there is at most one edge per `(from, to)` pair.
 /// That matches the usual Fink-FAT semantics: a directed link between two seeds.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub struct EdgeKey {
     /// Source seed (older epoch).
     pub from: SeedKey,
@@ -235,32 +236,48 @@ impl Edge {
     ///
     /// Return
     /// ------
-    /// A new [`Edge`] with `active = true`.
+    /// `Ok(Edge)` with `active = true`, or an [`EdgeBuilderError::ConstructionError`]
+    /// if any invariant is violated.
     ///
-    /// Panics
+    /// Errors
     /// ------
-    /// Panics if `cost` or `dt_days` are not finite or not strictly positive.
+    /// Returns [`EdgeBuilderError::ConstructionError`] if:
+    /// - `cost` is not finite or not strictly positive, or
+    /// - `dt_days` is not finite or not strictly positive.
     ///
     /// Notes
     /// -----
-    /// These assertions are deliberate because invalid weights can silently
-    /// break downstream solvers (e.g. negative cycles, NaN propagation).
-    pub fn new(from: &SeedNode, to: &SeedNode, cost: f64, dt_days: f64) -> Self {
-        assert!(
-            cost.is_finite() && cost > 0.0,
-            "Edge cost must be finite and > 0."
-        );
-        assert!(
-            dt_days.is_finite() && dt_days > 0.0,
-            "dt_days must be finite and > 0."
-        );
-        Self {
+    /// Returning an error rather than panicking allows callers to handle
+    /// degenerate weights gracefully without aborting the process.
+    pub fn new(
+        from: &SeedNode,
+        to: &SeedNode,
+        cost: f64,
+        dt_days: f64,
+    ) -> Result<Self, EdgeBuilderError> {
+        if !cost.is_finite() || cost <= 0.0 {
+            let from_ids: Vec<DiaSourceId> = from.members.iter().map(|k| k.dia_source_id).collect();
+            let to_ids: Vec<DiaSourceId> = to.members.iter().map(|k| k.dia_source_id).collect();
+            return Err(EdgeBuilderError::ConstructionError(format!(
+                "Edge cost must be finite and > 0, got {cost} \
+                 (from dia_source_ids={from_ids:?}, to dia_source_ids={to_ids:?})",
+            )));
+        }
+        if !dt_days.is_finite() || dt_days <= 0.0 {
+            let from_ids: Vec<DiaSourceId> = from.members.iter().map(|k| k.dia_source_id).collect();
+            let to_ids: Vec<DiaSourceId> = to.members.iter().map(|k| k.dia_source_id).collect();
+            return Err(EdgeBuilderError::ConstructionError(format!(
+                "dt_days must be finite and > 0, got {dt_days} \
+                 (from dia_source_ids={from_ids:?}, to dia_source_ids={to_ids:?})",
+            )));
+        }
+        Ok(Self {
             from: from.key(),
             to: to.key(),
             cost,
             dt_days,
             active: true,
-        }
+        })
     }
 
     /// Get the stable identity key for this edge.
@@ -284,22 +301,22 @@ impl Edge {
     /// This is the main entrypoint to construct the inter-night bipartite edge
     /// set between two seed collections (typically two nights).
     ///
-    /// Behavior (two modes)
-    /// --------------------
-    /// Controlled by `edge_config.emit_all_edges`:
+    /// Behavior
+    /// --------
+    /// Controlled by `edge_config.top_k_per_left` and `edge_config.use_ml_ranking`:
     ///
-    /// - If `true`:
-    ///   - emits *all* candidate edges returned by `SeedNode::seed_edge_candidates`,
-    ///   - computes `EdgeFeatures`,
-    ///   - derives the solver cost from
-    ///     `EdgeFeatures::kinematic_log_likelihood_cost()`.
+    /// - `top_k_per_left = None`:
+    ///   - emits all candidate edges returned by `SeedNode::seed_edge_candidates`,
+    ///   - computes `EdgeFeatures` and derives solver cost.
     ///
-    /// - If `false`:
-    ///   - requires `model_pool` to be `Some(...)`,
-    ///   - ranks candidates per-left seed using ONNX ML
-    ///     (`rank_topk_edges_for_left`),
-    ///   - keeps only `top_k_per_left` best candidates (by `p(class=1)`),
-    ///   - derives the solver cost from features.
+    /// - `top_k_per_left = Some(k)`, `use_ml_ranking = false` (default):
+    ///   - ranks candidates per-left seed by physics-based cost,
+    ///   - keeps only the `k` lowest-cost candidates.
+    ///
+    /// - `top_k_per_left = Some(k)`, `use_ml_ranking = true`:
+    ///   - ranks candidates per-left seed using ONNX ML (`rank_topk_edges_for_left`),
+    ///   - keeps only the `k` highest-probability candidates.
+    ///   - requires `model_pool` to be `Some(...)`.
     ///
     /// Parallelism
     /// -----------
@@ -320,14 +337,14 @@ impl Edge {
     /// * `right` – Slice of target seeds (later epoch).
     /// * `edge_config` – Configuration controlling:
     ///   - candidate search constraints,
-    ///   - ML toggle,
-    ///   - Top-K pruning,
+    ///   - ranking strategy (`use_ml_ranking`),
+    ///   - Top-K limit (`top_k_per_left`),
     ///   - ONNX batching,
     ///   - parallelism.
     /// * `spatial_binner` – Spatial partitioner used to index `right`.
     /// * `time_binner_width` – Time bin width (days) for the uniform time index.
     /// * `model_pool` – Optional ML model pool:
-    ///   - required if `emit_all_edges == false`,
+    ///   - required if `use_ml_ranking == true`,
     ///   - ignored otherwise.
     /// * `progress_sink` – Progress reporter updated per processed chunk.
     ///
@@ -351,11 +368,8 @@ impl Edge {
         spatial_binner: &B,
         time_binner_width: MJDTT,
         model_pool: Option<&EdgeRankingModelPool>,
-        progress_sink: &dyn ProgressSink,
+        progress_sink: &dyn StageProgress,
     ) -> Result<Vec<Self>, EdgeBuilderError> {
-        // Init: total work = number of left seeds (units = seeds processed)
-        progress_sink.set_total(left.len() as u64);
-
         // right seed are sorted by epoch_mid, so the first one has the minimum epoch.
         let right_seed_t0 = right.first().map(|s| s.plane.epoch_mid).ok_or_else(|| {
             EdgeBuilderError::InvalidSeeds(
@@ -372,8 +386,23 @@ impl Edge {
         let chunk_size = edge_config.parallel_left_batch_size.max(1);
         let top_k = edge_config.top_k_per_left;
 
+        tracing::debug!(
+            n_left = left.len(),
+            n_right = right.len(),
+            chunk_size,
+            top_k = ?top_k,
+            parallel = edge_config.parallel_left_batches,
+            use_ml_ranking = edge_config.use_ml_ranking,
+            "build_edges starting",
+        );
+        tracing::trace!(
+            right_seed_t0,
+            time_binner_width,
+            "right-side time binner initialised",
+        );
+
         // Select sequential or parallel execution strategy.
-        let res = match edge_config.parallel_left_batches {
+        let edges = match edge_config.parallel_left_batches {
             true => build_edges_parallel(
                 left,
                 chunk_size,
@@ -392,13 +421,32 @@ impl Edge {
                 model_pool,
                 progress_sink,
             ),
-        };
+        }?;
 
-        // Clean: always finish, whether Ok or Err
-        progress_sink.finish();
-
-        res
+        let (cost_min, cost_max, cost_mean) = edge_cost_stats(&edges);
+        tracing::debug!(
+            n_edges = edges.len(),
+            cost_min,
+            cost_max,
+            cost_mean,
+            "build_edges complete"
+        );
+        Ok(edges)
     }
+}
+
+/// Compute min, max, and mean cost from a slice of edges.
+/// Returns `(0.0, 0.0, 0.0)` if the slice is empty.
+#[inline]
+fn edge_cost_stats(edges: &[Edge]) -> (f64, f64, f64) {
+    if edges.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+    let (mn, mx, s) = edges.iter().fold(
+        (f64::INFINITY, f64::NEG_INFINITY, 0.0_f64),
+        |(mn, mx, s), e| (mn.min(e.cost), mx.max(e.cost), s + e.cost),
+    );
+    (mn, mx, s / edges.len() as f64)
 }
 
 /// Process a chunk of left seeds by emitting *all* candidate edges (no ML / no Top-K).
@@ -410,10 +458,13 @@ impl Edge {
 /// * `chunk` – Slice of left-hand seeds processed together.
 /// * `right_index` – Spatial index over right-hand seeds.
 /// * `edge_config` – Candidate-generation configuration (search constraints).
+///   When `edge_config.max_cost_cut` is set, candidates above the threshold are
+///   discarded before materialising the edge, even though no Top-K filtering is
+///   otherwise active.
 ///
 /// Return
 /// ------
-/// * `Ok(Vec<Edge>)` – All candidate edges for this chunk.
+/// * `Ok(Vec<Edge>)` – All candidate edges for this chunk (after optional cost cut).
 /// * `Err(EdgeBuilderError)` – Currently never returned here, but kept to share the
 ///   same error type as the ML path.
 ///
@@ -430,12 +481,29 @@ fn process_chunk_emit_all<'seed_lf>(
 
     for src in chunk.iter() {
         for to in src.seed_edge_candidates(right_index, edge_config) {
-            // Compute cost from structured features (cadence-robust).
-            let cost = EdgeFeatures::compute_features(src, to).kinematic_log_likelihood_cost();
-            let dt_days = src.delta_days(to);
+            // Compute cost using the configured cost function (covariance model + loss).
+            let cost = EdgeFeatures::compute_cost(src, to, &edge_config.cost_config);
 
-            local_edges.push(Edge::new(src, to, cost, dt_days));
+            // Hard cost cut: skip candidates whose cost exceeds the threshold.
+            if edge_config.max_cost_cut.is_some_and(|max| cost > max) {
+                continue;
+            }
+
+            let dt_days = src.delta_days(to);
+            local_edges.push(Edge::new(src, to, cost, dt_days)?);
         }
+    }
+
+    if tracing::enabled!(tracing::Level::TRACE) {
+        let (cost_min, cost_max, cost_mean) = edge_cost_stats(&local_edges);
+        tracing::trace!(
+            chunk_size = chunk.len(),
+            edges_in_chunk = local_edges.len(),
+            cost_min,
+            cost_max,
+            cost_mean,
+            "process_chunk_emit_all",
+        );
     }
 
     Ok(local_edges)
@@ -497,44 +565,116 @@ fn process_chunk_ml_topk(
         // Materialize edges for the winners.
         for (right_candidate, edge_cost) in tmp.iter() {
             let dt_days = src.delta_days(right_candidate);
-            local_edges.push(Edge::new(src, *right_candidate, *edge_cost, dt_days));
+            local_edges.push(Edge::new(src, right_candidate, *edge_cost, dt_days)?);
         }
+    }
+
+    if tracing::enabled!(tracing::Level::TRACE) {
+        let (cost_min, cost_max, cost_mean) = edge_cost_stats(&local_edges);
+        tracing::trace!(
+            chunk_size = chunk.len(),
+            top_k,
+            edges_in_chunk = local_edges.len(),
+            cost_min,
+            cost_max,
+            cost_mean,
+            "process_chunk_ml_topk",
+        );
     }
 
     Ok(local_edges)
 }
 
-/// Process one chunk of left seeds according to `edge_config.emit_all_edges`.
+/// Process one chunk of left seeds using cost-based Top-K pruning per-left seed.
 ///
-/// This small dispatcher keeps the sequential/parallel loops clean.
+/// For each source seed:
+/// - generate candidates,
+/// - compute edge cost via [`EdgeFeatures::compute_cost`],
+/// - retain only the `top_k` candidates with the **lowest cost**.
+///
+/// Arguments
+/// ---------
+/// * `chunk` – Slice of left-hand seeds processed together.
+/// * `right_index` – Spatial index over right-hand seeds.
+/// * `edge_config` – Candidate-generation and cost function configuration.
+/// * `top_k` – Number of candidates kept per left seed.
+///
+/// Return
+/// ------
+/// * `Ok(Vec<Edge>)` – Cost-pruned edges for this chunk.
+/// * `Err(EdgeBuilderError)` – If edge construction fails (e.g. invalid cost or dt).
+fn process_chunk_cost_topk(
+    chunk: &[SeedNode],
+    right_index: &SeedSpatialIndex<'_, '_>,
+    edge_config: &EdgeConfig,
+    top_k: usize,
+) -> Result<Vec<Edge>, EdgeBuilderError> {
+    let mut local_edges: Vec<Edge> = Vec::new();
+    let mut tmp: smallvec::SmallVec<[(&SeedNode, f64); 32]> = smallvec::SmallVec::new();
+
+    for src in chunk.iter() {
+        rank_topk_edges_for_left_by_cost(src, right_index, edge_config, top_k, &mut tmp);
+
+        for (right_candidate, edge_cost) in tmp.iter() {
+            let dt_days = src.delta_days(right_candidate);
+            local_edges.push(Edge::new(src, right_candidate, *edge_cost, dt_days)?);
+        }
+    }
+
+    if tracing::enabled!(tracing::Level::TRACE) {
+        let (cost_min, cost_max, cost_mean) = edge_cost_stats(&local_edges);
+        tracing::trace!(
+            chunk_size = chunk.len(),
+            top_k,
+            edges_in_chunk = local_edges.len(),
+            cost_min,
+            cost_max,
+            cost_mean,
+            "process_chunk_cost_topk",
+        );
+    }
+
+    Ok(local_edges)
+}
+
+/// Process one chunk of left seeds according to the configured ranking strategy.
+///
+/// Dispatches to one of three implementations based on `top_k` and
+/// `edge_config.use_ml_ranking`:
+///
+/// - `top_k = None` → emit all candidate edges (no filtering).
+/// - `top_k = Some(k)` and `use_ml_ranking = true` → ML Top-K via ONNX.
+/// - `top_k = Some(k)` and `use_ml_ranking = false` → cost-based Top-K.
 ///
 /// Arguments
 /// ---------
 /// * `chunk` – Slice of left-hand seeds processed together.
 /// * `right_index` – Spatial index over right-hand seeds.
 /// * `edge_config` – Edge configuration controlling the mode.
-/// * `top_k` – Top-K per-left used in ML mode.
-/// * `model_pool` – Required in ML mode, ignored in emit-all mode.
+/// * `top_k` – Top-K per-left: `None` means emit all.
+/// * `model_pool` – Required when `use_ml_ranking = true`, ignored otherwise.
 ///
 /// Return
 /// ------
 /// * `Ok(Vec<Edge>)` – Edges produced for this chunk.
-/// * `Err(EdgeBuilderError::ModelError(EdgeModelError::MissingModel))` if ML mode is enabled without a pool.
+/// * `Err(EdgeBuilderError::ModelError(EdgeModelError::MissingModel))` if ML mode
+///   is requested without a pool.
 /// * `Err(EdgeBuilderError::ModelError)` if ONNX inference fails.
 fn process_chunk(
     chunk: &[SeedNode],
     right_index: &SeedSpatialIndex<'_, '_>,
     edge_config: &EdgeConfig,
-    top_k: usize,
+    top_k: Option<usize>,
     model_pool: Option<&EdgeRankingModelPool>,
 ) -> Result<Vec<Edge>, EdgeBuilderError> {
-    match edge_config.emit_all_edges {
-        true => process_chunk_emit_all(chunk, right_index, edge_config),
-        false => {
+    match top_k {
+        None => process_chunk_emit_all(chunk, right_index, edge_config),
+        Some(k) if edge_config.use_ml_ranking => {
             let pool =
                 model_pool.ok_or(EdgeBuilderError::ModelError(EdgeModelError::MissingModel))?;
-            process_chunk_ml_topk(chunk, right_index, edge_config, top_k, pool)
+            process_chunk_ml_topk(chunk, right_index, edge_config, k, pool)
         }
+        Some(k) => process_chunk_cost_topk(chunk, right_index, edge_config, k),
     }
 }
 
@@ -564,14 +704,23 @@ fn build_edges_parallel(
     chunk_size: usize,
     right_index: &SeedSpatialIndex<'_, '_>,
     edge_config: &EdgeConfig,
-    top_k: usize,
+    top_k: Option<usize>,
     model_pool: Option<&EdgeRankingModelPool>,
-    progress_sink: &dyn ProgressSink,
+    progress_sink: &dyn StageProgress,
 ) -> Result<Vec<Edge>, EdgeBuilderError> {
     use rayon::prelude::*;
 
-    left.par_chunks(chunk_size)
-        .map(|chunk| {
+    let n_chunks = left.chunks(chunk_size).count();
+    tracing::debug!(
+        n_left = left.len(),
+        chunk_size,
+        n_chunks,
+        "build_edges_parallel starting"
+    );
+
+    let edges = left
+        .par_chunks(chunk_size)
+        .map(|chunk| -> Result<Vec<Edge>, EdgeBuilderError> {
             let out = process_chunk(chunk, right_index, edge_config, top_k, model_pool)?;
 
             // Update: once per chunk to avoid too many calls
@@ -579,10 +728,13 @@ fn build_edges_parallel(
 
             Ok(out)
         })
-        .try_reduce(Vec::new, |mut a, mut b| {
+        .try_reduce(Vec::<Edge>::new, |mut a, mut b| {
             a.append(&mut b);
             Ok(a)
-        })
+        })?;
+
+    tracing::debug!(n_edges = edges.len(), "build_edges_parallel complete");
+    Ok(edges)
 }
 
 /// Build edges by processing `left` sequentially in chunks.
@@ -613,10 +765,18 @@ fn build_edges_sequential(
     chunk_size: usize,
     right_index: &SeedSpatialIndex<'_, '_>,
     edge_config: &EdgeConfig,
-    top_k: usize,
+    top_k: Option<usize>,
     model_pool: Option<&EdgeRankingModelPool>,
-    progress_sink: &dyn ProgressSink,
+    progress_sink: &dyn StageProgress,
 ) -> Result<Vec<Edge>, EdgeBuilderError> {
+    let n_chunks = left.chunks(chunk_size).count();
+    tracing::debug!(
+        n_left = left.len(),
+        chunk_size,
+        n_chunks,
+        "build_edges_sequential starting"
+    );
+
     let mut edges: Vec<Edge> = Vec::new();
 
     for chunk in left.chunks(chunk_size) {
@@ -628,9 +788,10 @@ fn build_edges_sequential(
             model_pool,
         )?);
 
-        // Update: mark this chunk’s seeds as processed
+        // Update: mark this chunk's seeds as processed
         progress_sink.inc(chunk.len() as u64);
     }
 
+    tracing::debug!(n_edges = edges.len(), "build_edges_sequential complete");
     Ok(edges)
 }

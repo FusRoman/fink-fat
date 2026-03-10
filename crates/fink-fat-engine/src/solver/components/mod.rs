@@ -272,7 +272,7 @@ pub struct ConnectedComponents<'edge_lf, 'seed_lf> {
     component_sinks_local: Vec<Vec<LocalIdx>>,
 }
 
-impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
+impl<'edge_lf, 'seed_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
     /// Compute connected components and build per-component restricted directed adjacency.
     ///
     /// This is the main entrypoint that materializes both:
@@ -333,6 +333,13 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
         let index = SeedGlobalIndex::build(seed_store)?;
         let n_total = index.n_total();
 
+        tracing::debug!(
+            n_seeds = n_total,
+            n_edges = graph.edges.len(),
+            active_only,
+            "ConnectedComponents starting",
+        );
+
         // 1) Union-Find over the undirected view of the graph.
         let mut uf = UnionFind::new(n_total);
         Self::union_edges(seed_store, &index, &mut uf, &graph.edges, active_only)?;
@@ -371,7 +378,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
             &index,
         )?;
 
-        Ok(Self {
+        let cc = Self {
             index,
             comp_of_node,
             n_components: n_components as u32,
@@ -384,7 +391,32 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
             component_out_deg_local,
             component_sources_local,
             component_sinks_local,
-        })
+        };
+
+        let total_active_edges: u32 = cc.component_active_edge.iter().sum();
+        let n_isolated = cc.component_active_edge.iter().filter(|&&e| e == 0).count();
+        let n_multi_node = (0..n_components)
+            .filter(|&c| cc.component_size(c as u32) > 1)
+            .count();
+        let max_component_size = (0..n_components)
+            .map(|c| cc.component_size(c as u32))
+            .max()
+            .unwrap_or(0);
+        let total_sources: usize = (0..n_components)
+            .map(|c| cc.component_sources_local(c as u32).len())
+            .sum();
+
+        tracing::debug!(
+            n_components,
+            n_isolated,
+            n_multi_node,
+            max_component_size,
+            total_active_edges,
+            total_sources,
+            "ConnectedComponents complete",
+        );
+
+        Ok(cc)
     }
 
     // -------------------------------------------------------------------------
@@ -450,14 +482,14 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
         let mut comp_of_node = vec![0u32; n_total];
         let mut n_components: ComponentId = 0;
 
-        for i in 0..n_total {
+        for (i, slot) in comp_of_node.iter_mut().enumerate() {
             let r = uf.find(i);
             let cid = *root_to_cid.entry(r).or_insert_with(|| {
                 let c = n_components;
                 n_components += 1;
                 c
             });
-            comp_of_node[i] = cid;
+            *slot = cid;
         }
 
         (comp_of_node, n_components as usize)
@@ -616,6 +648,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
     /// -----
     /// - Enforces time-forward edges (`night(to) > night(from)`); back-edges are ignored.
     /// - Uses `graph.core.out_deg` as a best-effort capacity hint for adjacency allocation.
+    #[allow(clippy::too_many_arguments)]
     fn build_local_digraph(
         seed_store: &'seed_lf SeedStore,
         graph: &'edge_lf AlertLinkageDAG,
@@ -662,7 +695,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
             let get_seed = |key| {
                 seed_store
                     .try_get_seed(key)
-                    .ok_or_else(|| ComponentError::SeedKeyNotFound {
+                    .ok_or(ComponentError::SeedKeyNotFound {
                         key,
                         origin: SeedOrigin::Store,
                     })
@@ -734,8 +767,8 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
             }
 
             if srcs.is_empty() {
-                for u in 0..n {
-                    if out_deg_local[cid][u] > 0 {
+                for (u, &outdeg_u) in out_deg_local[cid].iter().enumerate() {
+                    if outdeg_u > 0 {
                         srcs.push(u as u32);
                     }
                 }
@@ -945,7 +978,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
     ///    If both:
     ///    - `n_nodes <= trivial_max_nodes`, and
     ///    - `m_active_edges <= trivial_max_active_edges`,
-    ///    the component is routed to `SolverChoice::Trivial`.
+    ///      the component is routed to `SolverChoice::Trivial`.
     ///
     ///    Rationale:
     ///    Small and sparse components are cheap to solve with a lightweight,
@@ -954,7 +987,7 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
     /// 2) Excessive night span (BlobBreaker)
     ///    If:
     ///    - `night_span > max_night_span_for_mcf`,
-    ///    the component is routed to `SolverChoice::BlobBreaker`.
+    ///      the component is routed to `SolverChoice::BlobBreaker`.
     ///
     ///    Rationale:
     ///    Very wide temporal spans tend to induce complex combinatorics.
@@ -963,10 +996,10 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
     ///
     /// 3) Budgeted MCF vs BlobBreaker
     ///    Otherwise, estimate the MCF runtime:
-    ///      `t_est = k_mcf_s_per_edge_logn * m_active_edges * log2(n_nodes + 1)`
+    ///    `t_est = k_mcf_s_per_edge_logn * m_active_edges * log2(n_nodes + 1)`
     ///
-    ///     If `t_est <= mcf_budget_s`, route to `SolverChoice::MinCostFlow`,
-    ///       else route to `SolverChoice::BlobBreaker`.
+    ///    If `t_est <= mcf_budget_s`, route to `SolverChoice::MinCostFlow`,
+    ///    else route to `SolverChoice::BlobBreaker`.
     ///
     ///    Rationale:
     ///    Use MCF when the predicted runtime fits within the allowed budget,
@@ -992,33 +1025,49 @@ impl<'edge_lf, 'seed_lf, 'alert_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
         solver_policy: &SolverPolicy,
     ) -> SolverChoice {
         // 0) Optional global override
-        match solver_policy.routing {
-            SolverRoutingMode::Force(choice) => return choice,
-            SolverRoutingMode::Heuristics => {}
+        if let SolverRoutingMode::Force(choice) = solver_policy.routing {
+            tracing::trace!(component_id, solver = "forced", "classify");
+            return choice;
         }
 
         let n = self.component_size(component_id) as u32;
         let m_active = self.component_active_edges(component_id);
+        let night_span = self.component_night_span(component_id);
 
         // 1) Tiny components: trivial fast path (bounded by nodes and active edges)
-        if n <= solver_policy.trivial_max_nodes
+        let choice = if n <= solver_policy.trivial_max_nodes
             && m_active <= solver_policy.trivial_max_active_edges
         {
-            return SolverChoice::BoundedBeam;
-        }
+            SolverChoice::BoundedBeam
 
         // 2) Large night span: avoid MCF
-        if self.component_night_span(component_id) > solver_policy.max_night_span_for_mcf {
-            return SolverChoice::BlobBreaker;
-        }
-
-        // 3) Budgeted MCF vs blob-breaker
-        let t_est = solver_policy.estimate_mcf_time_s(n, m_active);
-        if t_est <= solver_policy.mcf_budget_s {
-            SolverChoice::MinCostFlow
-        } else {
+        } else if night_span > solver_policy.max_night_span_for_mcf {
             SolverChoice::BlobBreaker
-        }
+        } else {
+            // 3) Budgeted MCF vs blob-breaker
+            let t_est = solver_policy.estimate_mcf_time_s(n, m_active);
+            if t_est <= solver_policy.mcf_budget_s {
+                SolverChoice::MinCostFlow
+            } else {
+                SolverChoice::BlobBreaker
+            }
+        };
+
+        let solver_name = match choice {
+            SolverChoice::BoundedBeam => "bounded_beam",
+            SolverChoice::MinCostFlow => "min_cost_flow",
+            SolverChoice::BlobBreaker => "blob_breaker",
+        };
+        tracing::trace!(
+            component_id,
+            n_nodes = n,
+            m_active_edges = m_active,
+            night_span,
+            solver = solver_name,
+            "classify",
+        );
+
+        choice
     }
 }
 

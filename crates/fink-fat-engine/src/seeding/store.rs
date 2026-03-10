@@ -3,7 +3,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     night_id::{NightId, PairingMode},
-    persistence::{error::PersistenceIoError, layout::PersistenceLayout, manifest::Manifest},
+    persistence::{
+        compression::Compression, error::PersistenceIoError, layout::PersistenceLayout,
+        manifest::Manifest,
+    },
     seeding::{SeedKey, SeedNode, SeedNodeSlice},
     solver::components::{error::ComponentError, seed_index::SeedGlobalIndex},
 };
@@ -50,6 +53,12 @@ pub struct SeedStore {
     /// Stored as a `Vec` (LIFO) for cache locality.
     /// Could use `VecDeque` for FIFO if temporal separation is desired.
     free_ids: Vec<SeedId>,
+}
+
+impl Default for SeedStore {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SeedStore {
@@ -144,7 +153,7 @@ impl SeedStore {
 
         seed.key = key;
 
-        let night_seeds = self.seeds.entry(night_id).or_insert_with(Vec::new);
+        let night_seeds = self.seeds.entry(night_id).or_default();
         let idx = night_seeds.len();
         night_seeds.push(seed);
 
@@ -233,10 +242,7 @@ impl SeedStore {
     }
 
     pub fn insert_vec_seed(&mut self, night_id: NightId, seeds: Vec<SeedNode>) {
-        self.seeds
-            .entry(night_id)
-            .or_insert_with(Vec::new)
-            .extend(seeds);
+        self.seeds.entry(night_id).or_default().extend(seeds);
         self.rebuild_index_at_night(night_id);
     }
 
@@ -245,11 +251,12 @@ impl SeedStore {
         layout: &PersistenceLayout,
         manifest: &mut Manifest,
         night_id: NightId,
+        compression: Compression,
     ) -> Result<(), PersistenceIoError> {
         if let Some(seeds) = self.seeds.get(&night_id) {
             seeds
                 .as_slice()
-                .save_seeds_night(layout, manifest, night_id)?;
+                .save_seeds_night(layout, manifest, night_id, compression)?;
         }
         Ok(())
     }
@@ -282,7 +289,7 @@ impl SeedStore {
     }
 
     pub fn contains_night(&self, night_id: &NightId) -> bool {
-        self.seeds.contains_key(&night_id)
+        self.seeds.contains_key(night_id)
     }
 
     pub fn get(&self, night_id: &NightId) -> Option<&[SeedNode]> {

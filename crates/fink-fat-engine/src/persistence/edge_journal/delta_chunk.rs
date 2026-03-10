@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     night_id::NightId,
     persistence::{
-        EDGE_JOURNAL_SCHEMA_VERSION, edge_journal::edge_op::EdgeOp, envelope::DiskEnvelope,
-        error::PersistenceIoError,
+        EDGE_JOURNAL_SCHEMA_VERSION, compression::Compression, edge_journal::edge_op::EdgeOp,
+        envelope::DiskEnvelope, error::PersistenceIoError,
     },
 };
 
@@ -38,9 +38,15 @@ impl EdgeDeltaChunk {
         night_id: NightId,
         created_unix_s: i64,
         ops: Vec<EdgeOp>,
+        compression: Compression,
     ) -> Result<(), PersistenceIoError> {
         let chunk = EdgeDeltaChunk::new(night_id, created_unix_s, ops);
-        let env = DiskEnvelope::new(chunk, EDGE_JOURNAL_SCHEMA_VERSION, created_unix_s);
+        let env = DiskEnvelope::new(
+            chunk,
+            EDGE_JOURNAL_SCHEMA_VERSION,
+            created_unix_s,
+            compression,
+        );
         env.save_enveloped(path)?;
         Ok(())
     }

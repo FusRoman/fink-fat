@@ -113,6 +113,11 @@ impl UnionFind {
         self.parent.len()
     }
 
+    /// Check if the `UnionFind` has no elements.
+    pub fn is_empty(&self) -> bool {
+        self.parent.is_empty()
+    }
+
     /// Find the representative (root) of `x` with path compression.
     ///
     /// The representative is the root of the tree containing `x`.

@@ -5,10 +5,10 @@
 //! This stage is responsible for ingesting a batch of alerts (typically a Parquet dataset)
 //! from an [`InputUri`](crate::pipeline::stages::alert_inputs::input_uri::InputUri) specified
 //! in the [`PipelinePlan`](crate::pipeline::PipelinePlan), and materializing them into the
-//! runtime [`AlertStore`](crate::persistence::alert_store::AlertStore).
+//! runtime [`AlertStore`](crate::alerts::store::AlertStore).
 //!
 //! In addition to data ingestion, this stage participates in the **hierarchical
-//! progress reporting system** of the pipeline through a [`ProgressSink`].
+//! progress reporting system** of the pipeline through a [`StageProgress`](crate::pipeline::hooks::StageProgress).
 //! The stage does not depend on any specific UI or CLI implementation.
 //! Instead, it reports structured progress events to an abstract sink,
 //! allowing the caller (e.g. CLI) to render progress bars, logs, or metrics.
@@ -18,17 +18,17 @@
 //! The ingestion pipeline performs the following logical steps:
 //!
 //! 1. Read the input URI (`ctx.plan.inputs.alerts_uri`).
-//! 2. Load alerts synchronously via [`load_alerts_sync`](crate::pipeline::stages::alert_inputs::alert_loader::load_alerts_sync),
+//! 2. Load alerts synchronously via [`load_alerts_sync`],
 //!    which internally relies on DataFusion and the `object_store` abstraction.
 //! 3. Normalize the resulting store (sort alerts per night, compute/refresh keys) via
 //!    `AlertStore::sort_each_night_and_rekey()`.
-//! 4. Derive the runtime [`NightWindow`](crate::night_id::NightWindow) from the ingested alerts.
+//! 4. Derive the runtime `NightWindow` from the ingested alerts.
 //! 5. Merge the newly ingested store into `ctx.runtime_state.alert_store`.
 //! 6. Return counters (`n_alerts`, `n_nights`) for stage reporting.
 //!
 //! Progress Reporting
 //! ------------------
-//! This stage reports its internal progress through the [`ProgressSink`] provided
+//! This stage reports its internal progress through the [`StageProgress`](crate::pipeline::hooks::StageProgress) provided
 //! by the pipeline runner.
 //!
 //! The stage defines **four logical units of work** and calls:
@@ -44,7 +44,7 @@
 //! 4. Merging the new `AlertStore` into runtime state.
 //!
 //! The exact rendering of this progress (progress bars, logs, metrics)
-//! is delegated to the `ProgressSink` implementation.
+//! is delegated to the `StageProgress` implementation.
 //!
 //! This design ensures:
 //!
@@ -85,7 +85,7 @@
 //!
 //! Error Handling
 //! --------------
-//! This stage returns [`EngineError::StageFailed`](crate::error::EngineError::StageFailed) if:
+//! This stage returns [`EngineError::StageFailed`] if:
 //!
 //! - Alert loading fails (I/O, schema mismatch, missing columns, decoding errors, etc.).
 //!
@@ -96,7 +96,7 @@
 //! - If partial loading based on `NightWindow` becomes necessary, filtering
 //!   may be performed either via DataFusion predicate pushdown or post-load filtering.
 //! - Finer-grained progress reporting (e.g. per-night ingestion) can be implemented
-//!   by introducing nested `ProgressSink::child()` scopes.
+//!   by introducing nested `StageProgress::child()` scopes.
 
 pub mod alert_loader;
 pub mod input_uri;
@@ -108,10 +108,9 @@ use crate::{
     pipeline::{
         PipelineContext,
         hooks::{PipelineHooks, StageMeta, StageReport},
-        progress_sink::ProgressSink,
         stages::{
             PipelineStage,
-            alert_inputs::alert_loader::{AlertParquetColumns, load_alerts_sync},
+            alert_inputs::alert_loader::{AlertParquetColumns, LoadAlertsError, load_alerts_sync},
             run_stage,
         },
     },
@@ -122,15 +121,15 @@ use crate::{
 /// Overview
 /// --------
 /// This function executes the `IngestNights` stage within the pipeline lifecycle.
-/// It loads alerts from the input URI specified in the [`PipelinePlan`], normalizes
-/// per-night ordering and alert keying, updates the runtime [`NightWindow`], and
-/// merges the resulting [`AlertStore`] into the pipeline [`RuntimeState`].
+/// It loads alerts from the input URI specified in the [`PipelinePlan`](crate::pipeline::PipelinePlan), normalizes
+/// per-night ordering and alert keying, updates the runtime `NightWindow`, and
+/// merges the resulting [`AlertStore`](crate::alerts::store::AlertStore) into the pipeline [`RuntimeState`](crate::persistence::runtime_state::RuntimeState).
 ///
-/// This stage is invoked through [`run_stage`], which:
+/// This stage is invoked through `run_stage`, which:
 /// - emits structured lifecycle hooks (`on_stage_start`, `on_stage_end`),
 /// - measures execution time,
 /// - collects stage-level counters,
-/// - and integrates hierarchical progress reporting via [`ProgressSink`].
+/// - and integrates hierarchical progress reporting via [`StageProgress`](crate::pipeline::hooks::StageProgress).
 ///
 /// Synchronous Boundary
 /// --------------------
@@ -157,7 +156,7 @@ use crate::{
 /// 4. Merging the new `AlertStore` into runtime state.
 ///
 /// The exact rendering of this progress (progress bars, logs, metrics, etc.)
-/// is determined by the concrete implementation of [`ProgressSink`].
+/// is determined by the concrete implementation of [`StageProgress`](crate::pipeline::hooks::StageProgress).
 ///
 /// If the provided sink is a no-op implementation, progress reporting has
 /// zero runtime cost beyond the method calls.
@@ -192,26 +191,22 @@ use crate::{
 /// -----
 /// - Progress units are **logical milestones**, not proportional to alert count.
 ///   If finer-grained progress (e.g., per-batch or per-night) is required,
-///   nested progress scopes may be introduced using `ProgressSink::child()`.
+//   nested progress scopes may be introduced using `StageProgress::child()`.
 ///
 /// - The stage does not perform partial ingestion or filtering by
 ///   `NightWindow`. All alerts provided by the input URI are loaded.
 pub fn run(
     ctx: &mut PipelineContext<'_>,
     hooks: &dyn PipelineHooks,
-    stage_sink: &dyn ProgressSink,
 ) -> Result<StageReport, EngineError> {
     run_stage(
         PipelineStage::IngestNights,
         hooks,
         StageMeta {
             label: PipelineStage::IngestNights.label().to_string(),
-            total: None,
+            total: Some(4),
         },
-        stage_sink,
         |stage_sink| {
-            stage_sink.set_total(4);
-
             // -----------------------------------------------------------------
             // 1) Retrieve the input URI from the pipeline plan.
             // -----------------------------------------------------------------
@@ -220,6 +215,8 @@ pub fn run(
             // The loader will resolve this URI into an object_store backend and read Parquet
             // via DataFusion.
             let uri = &ctx.plan.inputs.alerts_uri;
+
+            tracing::debug!(uri = %uri.0, "loading alerts");
 
             // -----------------------------------------------------------------
             // 2) Load alerts into a fresh AlertStore.
@@ -231,10 +228,23 @@ pub fn run(
             // `load_alerts_sync` wraps the async execution (object_store + DataFusion)
             // behind a sync API so the pipeline runner stays sync.
             let mut new_alert_store = load_alerts_sync(uri, AlertParquetColumns::default())
-                .map_err(|e| EngineError::StageFailed {
-                    stage: PipelineStage::IngestNights,
-                    message: format!("failed to load alerts from {}: {e:?}", uri.0),
+                .map_err(|e| match e {
+                    LoadAlertsError::NotFound(_) => EngineError::StageFailed {
+                        stage: PipelineStage::IngestNights,
+                        message: format!("file not found: {}", uri.0),
+                    },
+                    _ => EngineError::StageFailed {
+                        stage: PipelineStage::IngestNights,
+                        message: format!("failed to load alerts from {}: {e:?}", uri.0),
+                    },
                 })?;
+
+            tracing::debug!(
+                n_alerts = new_alert_store.n_alerts(),
+                n_nights = new_alert_store.n_nights(),
+                "alerts loaded (pre-normalization)",
+            );
+
             stage_sink.inc(1);
 
             // -----------------------------------------------------------------
@@ -250,6 +260,22 @@ pub fn run(
             // some internal representation depending on implementation details.
             let n_new_alerts = new_alert_store.n_alerts();
             let n_new_nights = new_alert_store.n_nights();
+
+            tracing::debug!(
+                n_alerts = n_new_alerts,
+                n_nights = n_new_nights,
+                "alerts normalised (post sort-and-rekey)",
+            );
+
+            // TRACE: one line per night with its alert count — too verbose for DEBUG
+            // but invaluable when diagnosing per-night ingestion issues.
+            if tracing::enabled!(tracing::Level::TRACE) {
+                let nights = new_alert_store.nights_sorted();
+                for nid in &nights {
+                    let count = new_alert_store.get(nid).map(|v| v.len()).unwrap_or(0);
+                    tracing::trace!(night_id = %nid, n_alerts = count, "night detail");
+                }
+            }
 
             // -----------------------------------------------------------------
             // 4) Update the runtime night window.
@@ -268,6 +294,13 @@ pub fn run(
             let max_gap = ctx.engine_config.max_gap_nights();
             // The ok will normally never trigger because the max_gap has already been validated at config level.
             ctx.runtime_state.window = PairingMode::single_night(last_night, max_gap).ok();
+
+            tracing::debug!(
+                last_night = %last_night,
+                max_gap_nights = max_gap,
+                "night window updated",
+            );
+
             stage_sink.inc(1);
 
             // -----------------------------------------------------------------
@@ -283,6 +316,13 @@ pub fn run(
             ctx.runtime_state
                 .alert_store
                 .merge_in_place(new_alert_store);
+
+            tracing::debug!(
+                total_alerts = ctx.runtime_state.alert_store.n_alerts(),
+                total_nights = ctx.runtime_state.alert_store.n_nights(),
+                "alert store merged into runtime state",
+            );
+
             stage_sink.inc(1);
 
             // -----------------------------------------------------------------

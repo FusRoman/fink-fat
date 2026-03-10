@@ -4,7 +4,6 @@ use crate::{
     pipeline::{
         PipelineContext,
         hooks::{PipelineHooks, StageMeta, StageReport},
-        progress_sink::ProgressSink,
         stages::{PipelineStage, run_stage},
     },
     spacetime_bucket::healpix_binner::HealpixBinner,
@@ -20,7 +19,7 @@ use crate::{
 ///   - `left_night < right_night`
 ///   - `right_night - left_night <= max_gap_nights`
 /// - For each pair, build candidate edges between `left` seeds and `right` seeds
-///   using [`RuntimeGraph::add_inter_night_edges`].
+///   using `RuntimeGraph::add_inter_night_edges`.
 ///
 /// Notes
 /// -----
@@ -30,7 +29,6 @@ use crate::{
 pub fn run(
     ctx: &mut PipelineContext<'_>,
     hooks: &dyn PipelineHooks,
-    stage_sink: &dyn ProgressSink,
 ) -> Result<StageReport, EngineError> {
     run_stage(
         PipelineStage::BuildEdges,
@@ -39,7 +37,6 @@ pub fn run(
             label: PipelineStage::BuildEdges.label().to_string(),
             total: None,
         },
-        stage_sink,
         |stage_sink| {
             // -----------------------------------------------------------------
             // 0) Preconditions
@@ -90,27 +87,51 @@ pub fn run(
             let spatial_binner = HealpixBinner::new(ctx.engine_config.healpix_depth);
             let time_binner_width = ctx.engine_config.time_binner_width;
 
-            // ML pool is required only in ML mode (emit_all_edges=false)
-            let model_pool = if edge_config.emit_all_edges {
-                None
-            } else {
-                Some(ctx.edge_models)
-            };
-
             // -----------------------------------------------------------------
             // 6) Build edges for each left night -> right night
             // -----------------------------------------------------------------
+
+            // Pre-collect valid left nights so we can compute the grand total
+            // of left seeds upfront and set the progress total *once* before
+            // the loop (avoids the counter overshooting on multi-pair runs).
+            let valid_left_nights: Vec<_> = pairs
+                .filter_map(|(left_night, _)| {
+                    let v = ctx.runtime_state.seed_store.get(&left_night)?;
+                    if v.is_empty() { None } else { Some(left_night) }
+                })
+                .collect();
+
+            let total_left_seeds: u64 = valid_left_nights
+                .iter()
+                .filter_map(|n| ctx.runtime_state.seed_store.get(n))
+                .map(|v| v.len() as u64)
+                .sum();
+
+            tracing::debug!(
+                n_left_nights = valid_left_nights.len(),
+                total_left_seeds,
+                %right_night,
+                max_gap,
+                use_ml_ranking = ctx.engine_config.edges.use_ml_ranking,
+                parallel = ctx.engine_config.edges.parallel_left_batches,
+                "BuildEdges starting",
+            );
+
+            stage_sink.set_total(total_left_seeds);
+
             let edges_before = ctx.runtime_state.graph.edges.len() as u64;
             let mut pairs_processed: u64 = 0;
 
-            for (left_night, _) in pairs {
+            for left_night in valid_left_nights {
+                tracing::trace!(%left_night, %right_night, "processing night pair");
                 let Some(left_vec) = ctx.runtime_state.seed_store.get(&left_night) else {
-                    // Defensive: iterator is derived from keys, so this should not happen
+                    tracing::warn!(
+                        %left_night,
+                        "left night has no seeds in SeedStore (unexpected since we pre-filtered valid nights)"
+                    );
+                    // Defensive: should not happen since we pre-collected valid nights
                     continue;
                 };
-                if left_vec.is_empty() {
-                    continue;
-                }
 
                 ctx.runtime_state
                     .graph
@@ -120,7 +141,7 @@ pub fn run(
                         edge_config,
                         &spatial_binner,
                         time_binner_width,
-                        model_pool,
+                        ctx.edge_models.as_ref(),
                         stage_sink,
                     )
                     .map_err(|e| EngineError::StageFailed {
@@ -135,6 +156,8 @@ pub fn run(
 
             let edges_added =
                 (ctx.runtime_state.graph.edges.len() as u64).saturating_sub(edges_before);
+
+            tracing::debug!(pairs_processed, edges_added, "BuildEdges complete");
 
             Ok(vec![
                 ("pairs_processed", pairs_processed),

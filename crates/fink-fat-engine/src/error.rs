@@ -4,6 +4,7 @@ use outfit::OutfitError;
 use thiserror::Error;
 
 use crate::{
+    engine_config::error::ConfigError,
     graph::edge::error::EdgeBuilderError,
     persistence::error::{PersistenceError, PersistenceIoError},
     pipeline::stages::PipelineStage,
@@ -167,6 +168,10 @@ pub enum EngineError {
     /// Orbit fitting error
     #[error("orbit fitting error: {0}")]
     OrbitFitting(String),
+
+    /// Config validation error
+    #[error(transparent)]
+    Config(#[from] ConfigError),
 }
 
 impl From<PersistenceIoError> for EngineError {
