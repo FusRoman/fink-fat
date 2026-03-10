@@ -26,6 +26,7 @@ thiserror = "2.0.17"
 camino = "1.2.1"
 tempfile = "3.23.0"
 tracing = "0.1"
+datafusion = { version = "52.1.0" }
 fink-fat-engine = { path = "crates/fink-fat-engine" }
 
 [dependencies]
@@ -40,6 +41,10 @@ fink-fat-engine = { workspace = true }
 
 [dev-dependencies]
 husky-rs = "0.1.5"
+# CLI integration test helpers
+assert_cmd = "2.0"
+tempfile = { workspace = true }
+datafusion = { workspace = true}
 
 [profile.release]
 opt-level = 3

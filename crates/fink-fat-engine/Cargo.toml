@@ -13,13 +13,13 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 camino = { workspace = true }
 tracing = { workspace = true }
+datafusion = { workspace = true }
 ahash = { version = "0.8.12", features = ["serde"] }
 arrow-array = "57.3.0"
 bitcode = { version = "0.6.9", features = ["serde"] }
 cdshealpix = "0.7.3"
 chrono = "0.4.42"
 config = "0.15.19"
-datafusion = { version = "52.1.0" }
 object_store = { version = "=0.12.5", features = ["http"] }
 hdfs-native-object-store = "0.15.0"
 ndarray = "0.17.2"
