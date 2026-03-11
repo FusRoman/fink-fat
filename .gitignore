@@ -86,3 +86,4 @@ test_config.toml
 test_exp/
 
 crates/fink-fat-engine/.github/agents/
+docs/
