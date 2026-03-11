@@ -6,38 +6,52 @@
 //! [`AlertStore`](crate::alerts::store::AlertStore) (stored in `ctx.runtime_state.alert_store`).
 //!
 //! In addition to seed generation, this stage participates in the pipeline's
-//! **hierarchical progress reporting** via the [`StageProgress`](crate::pipeline::hooks::StageProgress)
+//! **hierarchical progress reporting** via the [`StageProgress`]
 //! abstraction. The stage does not depend on any concrete UI (CLI progress bars, logs, metrics);
 //! it only emits structured progress events to the provided sink.
 //!
 //! Seed-building pipeline
 //! ----------------------
-//! The seed-building pipeline is:
+//! The seed-building pipeline runs in two phases:
 //!
-//! 1. **Bucketization** of alerts in (space, time) using:
+//! **Parallel phase** — one task per night, executed concurrently via Rayon
+//! (`par_iter`). Each task:
+//!
+//! 1. Bucketizes alerts in (space, time) using:
 //!    - [`HealpixBinner`] for sky partitioning,
 //!    - [`UniformTimeBinner`] for time partitioning,
 //!    - [`build_alert_bucket_index`] to build the index.
-//! 2. **Pair generation** using [`pairs::generate_pairs`].
-//! 3. **Triplet generation** from those pairs using
+//! 2. Generates pairs using [`pairs::generate_pairs`].
+//! 3. Generates triplets from those pairs using
 //!    [`triplets::generate_triplets_from_pairs`].
-//! 4. **Feature extraction** to build `SeedNode<'alert_lf>` that **borrow alerts**
-//!    with [`triplets::extract_triplet_features`].
-//! 5. **Ownership conversion**: immediately convert each borrowed `SeedNode<'_>` into a
-//!    `SeedNodeOwned` using
-//!    `SeedNode::to_owned`, and store it into
-//!    `ctx.runtime_state.seed_store`.
+//! 4. Extracts seed features into [`SeedNode`]s using a thread-local
+//!    [`crate::seeding::store::SeedStore`] for provisional key allocation.
+//! 5. Sorts seeds by `epoch_mid` (required by the edge builder's dichotomic search).
 //!
-//! Why borrowed → owned?
-//! --------------------
-//! Most of the seeding code works on `&Alert` references for performance and to avoid
-//! repeated allocation/copies while computing geometric and photometric features.
-//! This naturally produces `SeedNode<'alert_lf>` that contains `Vec<&Alert>` members.
+//! **Sequential merge phase** — runs after all parallel tasks have completed.
+//! For each night's result, `finalize_night_seeds`:
 //!
-//! However, `RuntimeState` is **not lifetime-parameterized**, and the pipeline persistence
-//! layer needs fully owned, serializable objects. Therefore, `BuildSeeds` performs the
-//! borrowed computation locally, then **immediately converts** to an owned representation
-//! (`SeedNodeOwned`) containing only stable identifiers (e.g. `AlertKey`) and owned core data.
+//! 1. Reserves `n` consecutive globally-unique seed IDs via
+//!    [`crate::seeding::store::SeedStore::alloc_ids_batch`].
+//! 2. Overwrites provisional keys with real [`SeedKey`]s.
+//! 3. Inserts finalized seeds into `ctx.runtime_state.seed_store`.
+//!
+//! Why a two-phase approach?
+//! -------------------------
+//! Night-level work (bucketization, pair generation, triplet generation, feature
+//! extraction) is CPU-intensive and fully independent across nights — a natural
+//! candidate for parallelism. However, key allocation in
+//! [`crate::seeding::store::SeedStore`] requires exclusive mutable access and
+//! cannot be shared safely across threads.
+//!
+//! The two-phase design resolves this tension:
+//!
+//! - The parallel phase uses a **thread-local** temporary `SeedStore` per night,
+//!   so key allocation is entirely local and requires no synchronization.
+//! - The sequential merge phase assigns **globally-unique** IDs by calling
+//!   [`crate::seeding::store::SeedStore::alloc_ids_batch`] (one call per night)
+//!   on the real pipeline store, which is safe because only one thread runs at
+//!   this point.
 //!
 //! Progress reporting
 //! ------------------
@@ -101,21 +115,175 @@
 //!   nested scopes under the per-night sink using `StageProgress::child()`.
 //! - If you need per-night instrumentation, insert timers around the bucketization/pairs/triplets steps.
 
+use rayon::prelude::*;
+
 use crate::{
+    Alert,
     alerts::AlertSlice,
+    engine_config::{pair_config::PairConfig, triplet_config::TripletConfig},
     error::EngineError,
     night_id::NightId,
     pipeline::{
         PipelineContext,
-        hooks::{PipelineHooks, StageMeta, StageReport},
+        hooks::{PipelineHooks, StageMeta, StageProgress, StageReport},
         stages::{PipelineStage, run_stage},
     },
-    seeding::{pairs, triplets},
+    seeding::{
+        SeedKey, SeedNode, pairs,
+        store::{SeedId, SeedStore},
+        triplets,
+    },
     spacetime_bucket::{
         bucket::build_alert_bucket_index, healpix_binner::HealpixBinner,
         uniform_time_binner::UniformTimeBinner,
     },
 };
+
+// ─────────────────────────────────────────────────────────────────
+// Per-night helpers
+// ─────────────────────────────────────────────────────────────────
+
+/// Per-night seed compilation result produced by [`process_one_night`].
+struct NightSeedResult {
+    night_id: NightId,
+    /// Candidate seeds sorted by `epoch_mid`, carrying provisional keys from
+    /// a thread-local [`SeedStore`]. Keys are reassigned in
+    /// [`finalize_night_seeds`] before insertion into the pipeline store.
+    seeds: Vec<SeedNode>,
+    /// Number of alerts in this night.
+    n_alerts: u64,
+    /// Number of intra-night pairs generated.
+    n_pairs: u64,
+    /// Number of intra-night triplets generated.
+    n_triplets: u64,
+}
+
+/// Process one observation night: bucketize, generate pairs and triplets, extract seed features.
+///
+/// Uses a thread-local [`SeedStore`] for provisional key allocation. Resulting
+/// seeds carry placeholder keys that must be replaced with real globally-unique
+/// keys by [`finalize_night_seeds`] before insertion into the pipeline seed store.
+///
+/// Arguments
+/// ---------
+/// * `night_id` – Identifier of the night being processed.
+/// * `alerts` – Alert slice for this night.
+/// * `spatial_binner` – Spatial partitioner for (space, time) bucket assignment.
+/// * `pair_cfg` – Pair generation configuration.
+/// * `triplet_cfg` – Triplet generation configuration.
+/// * `time_binner_width` – Time bin width in days.
+/// * `night_sink` – Progress sink for the per-night sub-scope (five milestones).
+///
+/// Return
+/// ------
+/// * `Ok(NightSeedResult)` – Alert, pair and triplet counts plus sorted seeds
+///   with provisional keys.
+/// * `Err(EngineError::StageFailed)` – If the alert slice is empty
+///   (cannot determine `t0` for time binning).
+fn process_one_night(
+    night_id: NightId,
+    alerts: &[Alert],
+    spatial_binner: &HealpixBinner,
+    pair_cfg: &PairConfig,
+    triplet_cfg: &TripletConfig,
+    time_binner_width: f64,
+    night_sink: &dyn StageProgress,
+) -> Result<NightSeedResult, EngineError> {
+    let n_alerts = alerts.len() as u64;
+
+    // Milestone 1: determine per-night t0 and initialise time binning.
+    let t0 = alerts.get_t0().ok_or_else(|| EngineError::StageFailed {
+        stage: PipelineStage::BuildSeeds,
+        message: format!(
+            "night {night_id} contains no alerts, cannot determine t0 for time binning"
+        ),
+    })?;
+    let time_binner = UniformTimeBinner::new(t0, time_binner_width);
+    tracing::trace!(%night_id, t0, time_binner_width, "t0 and time binner initialised");
+    night_sink.inc(1);
+
+    // Milestone 2: build the (space, time) bucket index.
+    let bucket_index = build_alert_bucket_index(alerts, spatial_binner, &time_binner);
+    tracing::trace!(%night_id, n_buckets = bucket_index.buckets.len(), "bucket index built");
+    night_sink.inc(1);
+
+    // Milestone 3: generate candidate pairs and extract pair-seed features.
+    // A thread-local SeedStore is used so that key allocation requires no
+    // shared mutable state. Keys are overwritten in finalize_night_seeds.
+    let ps = pairs::generate_pairs(&bucket_index, spatial_binner, &time_binner, pair_cfg);
+    let n_pairs = ps.len() as u64;
+    tracing::debug!(%night_id, n_pairs, "pairs generated");
+    let mut local_store = SeedStore::new();
+    let pair_seeds = pairs::extract_pair_features(&ps, &mut local_store, night_id, None);
+    tracing::trace!(%night_id, n_pair_seeds = pair_seeds.len(), "pair features extracted");
+    night_sink.inc(1);
+
+    // Milestone 4: generate candidate triplets and extract triplet-seed features.
+    let ts = triplets::generate_triplets_from_pairs(
+        &bucket_index,
+        spatial_binner,
+        &time_binner,
+        triplet_cfg,
+        &ps,
+    );
+    let n_triplets = ts.len() as u64;
+    tracing::debug!(%night_id, n_triplets, "triplets generated");
+    let triplet_seeds = triplets::extract_triplet_features(&ts, &mut local_store, night_id);
+    tracing::trace!(%night_id, n_triplet_seeds = triplet_seeds.len(), "triplet features extracted");
+    night_sink.inc(1);
+
+    // Milestone 5: combine and sort.
+    // Sorting by epoch_mid is required by the edge builder, which performs a
+    // dichotomic search over right-hand nodes.
+    let mut all_seeds = Vec::with_capacity(pair_seeds.len() + triplet_seeds.len());
+    all_seeds.extend(pair_seeds);
+    all_seeds.extend(triplet_seeds);
+    all_seeds.sort();
+    tracing::debug!(%night_id, n_night_seeds = all_seeds.len(), "seeds combined and sorted");
+    night_sink.inc(1);
+    night_sink.finish();
+
+    Ok(NightSeedResult {
+        night_id,
+        seeds: all_seeds,
+        n_alerts,
+        n_pairs,
+        n_triplets,
+    })
+}
+
+/// Assign real globally-unique keys to seeds and insert them into the pipeline seed store.
+///
+/// Calls [`SeedStore::alloc_ids_batch`] to atomically reserve exactly `n`
+/// consecutive IDs (where `n = result.seeds.len()`), overwrites each provisional
+/// key with a real [`SeedKey`], then calls [`SeedStore::insert_vec_seed`].
+///
+/// Arguments
+/// ---------
+/// * `result` – Night seed result produced by [`process_one_night`].
+/// * `seed_store` – Mutable pipeline seed store receiving the finalized seeds.
+///
+/// Return
+/// ------
+/// Number of seeds inserted (`result.seeds.len()`).
+fn finalize_night_seeds(result: NightSeedResult, seed_store: &mut SeedStore) -> u64 {
+    let n = result.seeds.len();
+    if n == 0 {
+        return 0;
+    }
+    let base_id: SeedId = seed_store.alloc_ids_batch(n);
+    let mut seeds = result.seeds;
+    for (i, seed) in seeds.iter_mut().enumerate() {
+        seed.set_key(SeedKey {
+            night_id: result.night_id,
+            unique_id: base_id + i as SeedId,
+        });
+    }
+    seed_store.insert_vec_seed(result.night_id, seeds);
+    n as u64
+}
+
+// ─────────────────────────────────────────────────────────────────
 
 /// Run the `BuildSeeds` pipeline stage.
 ///
@@ -195,9 +363,10 @@ pub fn run(
             let pair_cfg = &ctx.engine_config.pairs;
             let triplet_cfg = &ctx.engine_config.triplets;
             let spatial_binner = HealpixBinner::new(ctx.engine_config.healpix_depth);
+            let time_binner_width = ctx.engine_config.time_binner_width;
 
             // -----------------------------------------------------------------
-            // Early exit: no nights means no work.
+            // Collect night IDs to process.
             // -----------------------------------------------------------------
             let nights_to_process: Vec<NightId> =
                 ctx.runtime_state
@@ -212,117 +381,67 @@ pub fn run(
             tracing::debug!(
                 n_nights = nights_to_process.len(),
                 healpix_depth = ctx.engine_config.healpix_depth,
-                time_binner_width = ctx.engine_config.time_binner_width,
+                time_binner_width,
                 "BuildSeeds starting",
             );
 
             // -----------------------------------------------------------------
-            // 3) Global counters (reported via StageReport).
+            // Collect (NightId, &[Alert]) pairs upfront so Rayon can distribute
+            // them across threads without holding a mutable borrow on ctx.
+            // All night IDs are validated here; missing ones fail immediately.
+            // -----------------------------------------------------------------
+            let nights_with_alerts: Vec<(NightId, &[Alert])> = {
+                let night_iter = ctx
+                    .runtime_state
+                    .alert_store
+                    .night_iter(&nights_to_process)?;
+                nights_to_process.iter().copied().zip(night_iter).collect()
+            };
+
+            // -----------------------------------------------------------------
+            // Parallel phase: process each night independently.
+            // Each task uses its own local SeedStore for provisional key
+            // allocation — no shared mutable state is accessed.
+            // Results are collected in input order (par_iter preserves order).
+            // -----------------------------------------------------------------
+            let results: Vec<NightSeedResult> = nights_with_alerts
+                .par_iter()
+                .map(|&(night_id, alerts)| {
+                    let night_sink = stage_sink.child(StageMeta {
+                        label: format!("night {night_id}"),
+                        total: Some(5),
+                    });
+                    tracing::debug!(%night_id, n_alerts = alerts.len(), "processing night");
+                    process_one_night(
+                        night_id,
+                        alerts,
+                        &spatial_binner,
+                        pair_cfg,
+                        triplet_cfg,
+                        time_binner_width,
+                        &*night_sink,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            // -----------------------------------------------------------------
+            // Sequential merge phase: assign real global keys and insert seeds.
+            // Requires exclusive access to seed_store; runs after all parallel
+            // tasks have completed.
             // -----------------------------------------------------------------
             let mut total_alerts: u64 = 0;
             let mut total_pairs: u64 = 0;
             let mut total_triplets: u64 = 0;
             let mut total_seeds: u64 = 0;
 
-            // -----------------------------------------------------------------
-            // 4) Process each night in the requested window.
-            // -----------------------------------------------------------------
-            let night_iterator = ctx
-                .runtime_state
-                .alert_store
-                .night_iter(&nights_to_process)?;
-            let nights_data = nights_to_process.iter().zip(night_iterator);
-            for (night_id, alerts) in nights_data {
-                let n_alerts = alerts.len();
-                total_alerts += n_alerts as u64;
-
-                tracing::debug!(%night_id, n_alerts, "processing night");
-
-                // -------------------------------------------------------------
-                // Night sub-scope (optional but recommended)
-                // -------------------------------------------------------------
-                // 5 logical milestones:
-                // 1) t0 + time binner
-                // 2) bucket index
-                // 3) pairs
-                // 4) triplets + features
-                // 5) to_owned + insert
-                let night_sink = stage_sink.child(StageMeta {
-                    label: format!("night {night_id}"),
-                    total: Some(5),
-                });
-                night_sink.set_total(5);
-
-                // 4.1) Determine per-night `t0` for time binning.
-                let t0 = alerts.get_t0().ok_or_else(|| EngineError::StageFailed {
-                    stage: PipelineStage::BuildSeeds,
-                    message: format!(
-                        "night {night_id} contains no alerts, cannot determine t0 for time binning"
-                    ),
-                })?;
-                let time_binner = UniformTimeBinner::new(t0, ctx.engine_config.time_binner_width);
-                tracing::trace!(%night_id, t0, time_binner_width = ctx.engine_config.time_binner_width, "t0 and time binner initialised");
-                night_sink.inc(1);
-
-                // 4.2) Build the (space, time) bucket index.
-                let bucket_index = build_alert_bucket_index(alerts, &spatial_binner, &time_binner);
-                tracing::trace!(%night_id, n_buckets = bucket_index.buckets.len(), "bucket index built");
-                night_sink.inc(1);
-
-                // 4.3) Generate candidate pairs.
-                let ps =
-                    pairs::generate_pairs(&bucket_index, &spatial_binner, &time_binner, pair_cfg);
-                let n_pairs = ps.len();
-                total_pairs += n_pairs as u64;
-                tracing::debug!(%night_id, n_pairs, "pairs generated");
-
-                let pair_seeds = pairs::extract_pair_features(
-                    &ps,
-                    &mut ctx.runtime_state.seed_store,
-                    *night_id,
-                    None,
-                );
-                tracing::trace!(%night_id, n_pair_seeds = pair_seeds.len(), "pair features extracted");
-                night_sink.inc(1);
-
-                // 4.4) Generate triplets + extract features (borrowed).
-                let ts = triplets::generate_triplets_from_pairs(
-                    &bucket_index,
-                    &spatial_binner,
-                    &time_binner,
-                    triplet_cfg,
-                    &ps,
-                );
-                let n_triplets = ts.len();
-                total_triplets += n_triplets as u64;
-                tracing::debug!(%night_id, n_triplets, "triplets generated");
-
-                let triplets_seeds = triplets::extract_triplet_features(
-                    &ts,
-                    &mut ctx.runtime_state.seed_store,
-                    *night_id,
-                );
-                tracing::trace!(%night_id, n_triplet_seeds = triplets_seeds.len(), "triplet features extracted");
-                night_sink.inc(1);
-
-                // 4.5) Convert to owned + sort + store.
-                // sort is important for the edge builder as it relies on the right nodes to be sorted by epoch_mid for efficient edge generation.
-                // a dichotomic search is performed to find the relevant right nodes, and if they are not sorted by epoch_mid, we would need to sort them at each iteration of the edge builder, which would be very costly.
-                let mut all_seeds = Vec::with_capacity(pair_seeds.len() + triplets_seeds.len());
-                all_seeds.extend(pair_seeds);
-                all_seeds.extend(triplets_seeds);
-                all_seeds.sort();
-                let n_night_seeds = all_seeds.len();
-                total_seeds += n_night_seeds as u64;
-                tracing::debug!(%night_id, n_night_seeds, "seeds converted to owned and sorted");
-
-                ctx.runtime_state
-                    .seed_store
-                    .insert_vec_seed(*night_id, all_seeds);
-                night_sink.inc(1);
-
-                night_sink.finish();
-
+            for result in results {
+                total_alerts += result.n_alerts;
+                total_pairs += result.n_pairs;
+                total_triplets += result.n_triplets;
+                let night_id = result.night_id;
+                let n_seeds = finalize_night_seeds(result, &mut ctx.runtime_state.seed_store);
+                total_seeds += n_seeds;
+                tracing::debug!(%night_id, n_seeds, "seeds finalised and inserted");
                 // 1 unit = 1 processed night
                 stage_sink.inc(1);
             }

@@ -220,6 +220,21 @@ impl SeedNode {
         self.key.night_id
     }
 
+    /// Overwrite the seed key.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `key` – New key to assign.
+    ///
+    /// Notes
+    /// -----
+    /// Intended exclusively for re-keying seeds that were produced by a parallel
+    /// worker using a temporary local [`crate::seeding::store::SeedStore`], before
+    /// their final insertion into the pipeline seed store.
+    pub(crate) fn set_key(&mut self, key: SeedKey) {
+        self.key = key;
+    }
+
     pub fn resolve_members<'store>(
         &self,
         alert_store: &'store AlertStore,
