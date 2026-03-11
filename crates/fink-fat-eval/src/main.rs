@@ -1,38 +1,130 @@
-use crate::dataset::{
-    ParquetSource,
-    ztf_alerts::{ZtfAlertScan, alert_store_with_truth_from_lazyframe, scan_ztf_alerts},
+use anyhow::{Context, Result};
+use camino::Utf8Path;
+use chrono::Utc;
+use clap::Parser;
+use fink_fat_engine::{
+    engine_config::log_level::LogLevel,
+    engine_config::{EngineConfig, load_engine_config_validated},
+    graph::edge::edge_prediction::EdgeRankingModelPool,
+    persistence::{PersistenceManager, runtime_state::RuntimeState},
+    pipeline::{
+        PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner,
+        hooks::{NoopHooks, PipelineHooks},
+        stages::PipelineStage,
+    },
+    solver::solver_manager::SolverManager,
 };
 
-pub mod dataset;
+pub mod cli;
+pub mod edges;
+pub mod logging;
+pub mod seeding;
 
-fn main() {
-    let parquet_source = ParquetSource::new("../../test_exp/ztf_alert.parquet").unwrap();
-    let scan = ZtfAlertScan {
-        mode: dataset::ztf_alerts::AlertLoadMode::Oracle,
-        ..Default::default()
+use cli::{Cli, Commands, CommonArgs};
+
+use crate::edges::edge_evaluation;
+use crate::seeding::seeding_evaluation;
+
+pub fn load_config(config_path: &Utf8Path) -> Result<EngineConfig> {
+    load_engine_config_validated(config_path).context("failed to load engine config")
+}
+
+fn log_level_to_tracing(level: LogLevel) -> tracing::Level {
+    match level {
+        LogLevel::Trace => tracing::Level::TRACE,
+        LogLevel::Debug => tracing::Level::DEBUG,
+        LogLevel::Info => tracing::Level::INFO,
+        LogLevel::Warn => tracing::Level::WARN,
+        LogLevel::Error => tracing::Level::ERROR,
+    }
+}
+
+pub fn run_fink_fat(
+    cli_args: CommonArgs,
+    pipeline_stages: &[PipelineStage],
+    evaluation_postprocess: impl Fn(&PipelineContext) -> Result<()>,
+) -> Result<()> {
+    let engine_config = load_config(&cli_args.config)?;
+
+    let persistence = PersistenceManager::open_or_create(engine_config.clone().storage_path_buf())
+        .context("failed to open persistence")?;
+
+    // ── Logging setup ─────────────────────────────────────────────────────────
+    // The `_logging_guard` must stay alive until the process exits: dropping it
+    // signals the background file-writer thread to flush and terminate.
+    let run_id = Utc::now().format("%Y-%m-%dT%H-%M-%S").to_string();
+    let log_path = persistence.layout().log_run_path(&run_id);
+    let _logging_guard =
+        logging::init_logging(log_level_to_tracing(engine_config.log_level), &log_path)
+            .map_err(|e| anyhow::anyhow!("failed to initialise logging: {e}"))?;
+    tracing::info!(
+        log_file = %log_path,
+        level = %engine_config.log_level,
+        "logging initialised",
+    );
+
+    let model_pool = engine_config
+        .edges
+        .edge_ranking_model_path
+        .clone()
+        .map(|path| EdgeRankingModelPool::new(&path));
+
+    // ── Progress hooks ────────────────────────────────────────────────────────
+    // When both `--progress` and `--logs` are active we share one MultiProgress
+    // so the logging layer can route lines through `mp.println()` instead of
+    // writing directly to stderr (which would smear the progress bars).
+    let hooks: Box<dyn PipelineHooks> = Box::new(NoopHooks);
+
+    // ── Pipeline plan ─────────────────────────────────────────────────────────
+    let plan = PipelinePlan {
+        stages: pipeline_stages.to_vec(),
+        persist: engine_config.pipeline_policy,
+        inputs: PipelineInputs {
+            alerts_uri: cli_args.alerts,
+        },
     };
 
-    let lf = scan_ztf_alerts(&parquet_source, scan).unwrap();
+    let runner = PipelineRunner { plan: plan.clone() };
 
-    // println!("LazyFrame schema: {:?}", lf.last().collect());
+    let solver_manager = SolverManager {
+        policy: engine_config.solver_config.solver_policy,
+        bounded_beam_config: engine_config.solver_config.bounded_beam.clone(),
+    };
 
-    let alert_store = alert_store_with_truth_from_lazyframe(lf, Default::default()).unwrap();
+    let mut runtime_state = RuntimeState::new();
+    let mut ctx = PipelineContext {
+        plan: &plan,
+        persistence: &persistence,
+        runtime_state: &mut runtime_state,
+        engine_config: &engine_config,
+        edge_models: &model_pool,
+        solver_manager: &solver_manager,
+    };
 
-    println!("{}", alert_store);
+    runner
+        .run(&mut ctx, hooks.as_ref())
+        .context("pipeline failed")?;
 
-    for alert in alert_store.store.iter().take(10) {
-        println!(
-            "alert {:?} : {} (trajectory_id: {})",
-            alert.id,
-            alert,
-            alert_store.trajectory_id[alert.id.idx()]
-        );
-    }
+    evaluation_postprocess(&ctx).context("post-processing failed")?;
 
-    println!("===============\n\nAlerts for trajectory_id = 33803:");
+    Ok(())
+}
 
-    let traj_id = 33803;
-    for alert in alert_store.alerts_for_trajectory(traj_id) {
-        println!("Trajectory {} alert {:?} : {}", traj_id, alert.id, alert,);
-    }
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::SeedingEval(args) => run_fink_fat(
+            args.common,
+            &[PipelineStage::IngestNights, PipelineStage::BuildSeeds],
+            seeding_evaluation,
+        )?,
+        Commands::EdgeEval(args) => run_fink_fat(
+            args.common,
+            &[PipelineStage::IngestNights, PipelineStage::BuildEdges],
+            edge_evaluation,
+        )?,
+    };
+
+    Ok(())
 }

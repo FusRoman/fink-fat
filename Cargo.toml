@@ -16,7 +16,7 @@ categories.workspace = true
 license-file.workspace = true
 
 [workspace]
-members = ["crates/fink-fat-engine"]
+members = ["crates/fink-fat-engine", "crates/fink-fat-eval"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -26,17 +26,21 @@ thiserror = "2.0.17"
 camino = "1.2.1"
 tempfile = "3.23.0"
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-appender = "0.2"
+clap = { version = "4.5.60", features = ["cargo", "derive"] }
+chrono = "0.4"
 fink-fat-engine = { path = "crates/fink-fat-engine" }
 
 [dependencies]
-clap = { version = "4.5.60", features = ["cargo", "derive"] }
 indicatif = "0.18.0"
 camino = { workspace = true }
-chrono = "0.4"
+chrono = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-tracing-appender = "0.2"
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
 fink-fat-engine = { workspace = true }
+clap = { workspace = true }
 
 [dev-dependencies]
 husky-rs = "0.1.5"

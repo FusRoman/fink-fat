@@ -170,6 +170,11 @@ def main() -> None:
     for path in files:
         left, right, gap = parse_group_from_path(path)
 
+        if gap > 5:
+            # Skip large gaps (too few samples, not representative)
+            print(f"[ SKIP ] {Path(path).name}  (gap={gap} > 5)")
+            continue
+
         split = choose_split_for_left_night(
             left,
             gap,
