@@ -7,9 +7,20 @@
 
 use tempfile::TempDir;
 
-use fink_fat_engine::{night_id::NightId, pipeline::stages::PipelineStage};
+use fink_fat_engine::{
+    engine_config::pipeline_policy::PersistPolicy,
+    night_id::NightId,
+    persistence::{PersistenceManager, runtime_state::RuntimeState},
+    pipeline::{
+        PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner, stages::PipelineStage,
+    },
+    solver::solver_manager::SolverManager,
+};
 
-use super::{PipelineTestResult, THROUGH_SEEDS, run_pipeline_minimal};
+use super::{
+    NoopHooks, PipelineTestResult, THROUGH_SEEDS, engine_config_minimal, run_pipeline_minimal,
+    test_edge_models,
+};
 use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
 
 // ---------------------------------------------------------------------------
@@ -236,4 +247,180 @@ fn build_seeds_with_mixed_populations() {
         seed_counters.get("seeds").copied().unwrap_or(0),
         last_night_seeds as u64,
     );
+}
+
+#[test]
+fn build_seeds_multi_night_parquet_populates_seed_store_for_all_nights() {
+    // This test verifies that when IngestNights receives a Parquet file containing
+    // alerts from multiple nights in a single batch, BuildSeeds correctly builds
+    // and stores seeds for every one of those nights.
+    //
+    // Unlike the incremental tests above (which feed one night at a time),
+    // here ALL nights are written into a single Parquet and the pipeline is
+    // executed exactly once.
+
+    // ---- 1) Build a dataset spanning several nights ----
+    let n_trajectories = 4;
+    let n_nights = 3;
+    let obs_per_night = 3; // ≥ 3 so triplets can form
+    let start_night_id = 62000_u32;
+
+    let dataset = SyntheticDatasetBuilder::new()
+        .population(AsteroidPopulation::MainBelt, n_trajectories)
+        .n_nights(n_nights)
+        .obs_per_night(obs_per_night)
+        .start_night_id(start_night_id)
+        .seed(13)
+        .build();
+
+    let expected_total_alerts = n_trajectories * n_nights * obs_per_night;
+    assert_eq!(dataset.n_alerts(), expected_total_alerts);
+
+    // ---- 2) Write ALL nights into a single Parquet file ----
+    let data_dir = TempDir::new().expect("create data temp dir");
+    let storage_dir = TempDir::new().expect("create storage temp dir");
+
+    let parquet_path = data_dir.path().join("all_nights.parquet");
+    let alerts_uri = dataset.write_parquet(&parquet_path);
+
+    // ---- 3) Run IngestNights + BuildSeeds once (all nights in one shot) ----
+    let engine_config = engine_config_minimal(&storage_dir);
+    let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
+        .expect("open persistence");
+    let edge_models = test_edge_models();
+    let solver_manager = SolverManager::default();
+
+    let plan = PipelinePlan {
+        stages: THROUGH_SEEDS.to_vec(),
+        persist: PersistPolicy::None,
+        inputs: PipelineInputs { alerts_uri },
+    };
+
+    let mut runtime_state = RuntimeState::new();
+    let runner = PipelineRunner { plan: plan.clone() };
+
+    let mut ctx = PipelineContext {
+        plan: &plan,
+        persistence: &persistence,
+        runtime_state: &mut runtime_state,
+        engine_config: &engine_config,
+        edge_models: &edge_models,
+        solver_manager: &solver_manager,
+    };
+
+    runner
+        .run(&mut ctx, &NoopHooks)
+        .expect("IngestNights + BuildSeeds should succeed");
+
+    // ---- 4) SeedStore must contain an entry for every ingested night ----
+    let seed_store = &runtime_state.seed_store;
+    assert_eq!(
+        seed_store.n_nights(),
+        n_nights,
+        "seed store should contain exactly {n_nights} nights after a multi-night batch ingest"
+    );
+
+    // ---- 5) Each night must have at least one seed with valid keys ----
+    let alert_store = &runtime_state.alert_store;
+    for night_offset in 0..n_nights {
+        let nid = NightId(start_night_id + night_offset as u32);
+
+        assert!(
+            seed_store.contains_night(&nid),
+            "seed store should contain an entry for night {nid:?}"
+        );
+
+        let night_seeds = seed_store
+            .get(&nid)
+            .expect("seed store should have seeds for this night");
+
+        assert!(
+            !night_seeds.is_empty(),
+            "night {nid:?} should have at least one seed"
+        );
+
+        // All seeds' night_id must match the bucket they were stored under.
+        for seed in night_seeds {
+            assert_eq!(
+                seed.night_id(),
+                nid,
+                "seed.night_id() must match the night bucket"
+            );
+        }
+
+        // Each seed member must reference a real alert from the same night.
+        let night_alerts = alert_store
+            .get(&nid)
+            .expect("alert store should have this night");
+
+        for seed in night_seeds {
+            assert!(
+                seed.members.len() >= 2,
+                "seed should have at least 2 members (pair or triplet)"
+            );
+            for member_key in &seed.members {
+                assert_eq!(
+                    member_key.night_id, nid,
+                    "seed member must belong to the same night as the seed"
+                );
+                let found = night_alerts
+                    .iter()
+                    .any(|a| a.key.dia_source_id == member_key.dia_source_id);
+                assert!(
+                    found,
+                    "seed member dia_source_id {} not found in alert store for night {nid:?}",
+                    member_key.dia_source_id
+                );
+            }
+        }
+
+        // Seeds within each night must be sorted (required by edge builder).
+        for w in night_seeds.windows(2) {
+            assert!(w[0] <= w[1], "seeds must be sorted within night {nid:?}");
+        }
+    }
+
+    // ---- 6) new_night_ids must list every ingested night ----
+    let new_night_ids = runtime_state
+        .get_new_night_ids()
+        .expect("new_night_ids should be set");
+
+    assert_eq!(
+        new_night_ids.len(),
+        n_nights,
+        "new_night_ids should contain all {n_nights} nights from the batch ingest"
+    );
+
+    let expected_ids: Vec<NightId> = (0..n_nights)
+        .map(|i| NightId(start_night_id + i as u32))
+        .collect();
+    assert_eq!(
+        new_night_ids, &expected_ids,
+        "new_night_ids must match the sorted list of ingested nights"
+    );
+
+    // ---- 7) Seed counts must reflect ALL nights processed in a single run ----
+    // In a single-shot (non-incremental) run, BuildSeeds processes every night
+    // listed in new_night_ids. Verify the cumulative seed counts across all nights.
+    let total_seeds: usize = (0..n_nights)
+        .map(|i| {
+            let nid = NightId(start_night_id + i as u32);
+            seed_store.len_night(&nid).unwrap_or(0)
+        })
+        .sum();
+
+    assert!(
+        total_seeds > 0,
+        "total seeds across all nights must be > 0 after a multi-night batch run"
+    );
+
+    // Each night's seed count should individually be positive.
+    for night_offset in 0..n_nights {
+        let nid = NightId(start_night_id + night_offset as u32);
+        let n = seed_store.len_night(&nid).unwrap_or(0);
+        assert!(
+            n > 0,
+            "night {nid:?} must have at least one seed in a multi-night batch run"
+        );
+    }
 }

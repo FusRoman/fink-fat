@@ -59,3 +59,10 @@ pub enum InsertError {
     #[error("Duplicate dia_source_id: {0}")]
     DuplicateId(DiaSourceId),
 }
+
+#[derive(Debug, Error)]
+pub enum AlertStoreError {
+    /// The requested night ID was not found in the store.
+    #[error("Night ID not found: {0}")]
+    GetError(NightId),
+}

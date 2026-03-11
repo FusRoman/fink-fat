@@ -11,9 +11,20 @@
 
 use tempfile::TempDir;
 
-use fink_fat_engine::{night_id::NightId, pipeline::stages::PipelineStage};
+use fink_fat_engine::{
+    engine_config::pipeline_policy::PersistPolicy,
+    night_id::NightId,
+    persistence::{PersistenceManager, runtime_state::RuntimeState},
+    pipeline::{
+        PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner, stages::PipelineStage,
+    },
+    solver::solver_manager::SolverManager,
+};
 
-use super::{PipelineTestResult, THROUGH_EDGES, run_pipeline};
+use super::{
+    NoopHooks, PipelineTestResult, THROUGH_EDGES, engine_config_with_edges, run_pipeline,
+    test_edge_models, write_alerts_parquet,
+};
 use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
 
 // ---------------------------------------------------------------------------
@@ -352,4 +363,412 @@ fn edges_connect_distinct_nights_from_diverse_populations() {
         left_nights.len() >= 1,
         "edges should originate from at least one left night"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Batch-ingest tests (all nights in a single Parquet, single pipeline run)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn batch_ingest_builds_seeds_and_edges_for_all_new_nights() {
+    // When ALL nights are ingested in a single Parquet, new_night_ids contains
+    // every night. BuildSeeds must build seeds for each of them, and
+    // BuildEdges must then build edges between every valid (left, right) pair
+    // drawn purely from those new nights.
+
+    let n_trajectories = 4;
+    let n_nights = 4;
+    let obs_per_night = 3;
+    let start_night_id = 63000_u32;
+    let max_gap = 3_u8; // large enough to allow all pairs
+
+    let dataset = SyntheticDatasetBuilder::new()
+        .population(AsteroidPopulation::MainBelt, n_trajectories)
+        .n_nights(n_nights)
+        .obs_per_night(obs_per_night)
+        .start_night_id(start_night_id)
+        .seed(17)
+        .build();
+
+    // ---- Write all nights into one Parquet and run the three stages once ----
+    let data_dir = TempDir::new().unwrap();
+    let storage_dir = TempDir::new().unwrap();
+
+    let parquet_path = data_dir.path().join("all_nights.parquet");
+    let alerts_uri = dataset.write_parquet(&parquet_path);
+
+    let engine_config = engine_config_with_edges(&storage_dir, max_gap);
+    let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
+        .expect("open persistence");
+    let edge_models = test_edge_models();
+    let solver_manager = SolverManager::default();
+
+    let plan = PipelinePlan {
+        stages: THROUGH_EDGES.to_vec(),
+        persist: PersistPolicy::None,
+        inputs: PipelineInputs { alerts_uri },
+    };
+
+    let mut runtime_state = RuntimeState::new();
+    let mut ctx = PipelineContext {
+        plan: &plan,
+        persistence: &persistence,
+        runtime_state: &mut runtime_state,
+        engine_config: &engine_config,
+        edge_models: &edge_models,
+        solver_manager: &solver_manager,
+    };
+
+    PipelineRunner { plan: plan.clone() }
+        .run(&mut ctx, &NoopHooks)
+        .expect("batch pipeline run should succeed");
+
+    // ---- 1) Seeds must exist for every ingested night ----
+    let seed_store = &runtime_state.seed_store;
+    assert_eq!(
+        seed_store.n_nights(),
+        n_nights,
+        "seed store should have an entry for each of the {n_nights} ingested nights"
+    );
+    for night_offset in 0..n_nights {
+        let nid = NightId(start_night_id + night_offset as u32);
+        assert!(
+            seed_store.contains_night(&nid),
+            "seed store must contain night {nid:?}"
+        );
+        assert!(
+            seed_store.len_night(&nid).unwrap_or(0) > 0,
+            "night {nid:?} must have at least one seed"
+        );
+    }
+
+    // ---- 2) Edges must exist between the new nights ----
+    // With n_nights=4 nights and max_gap=3 (nights are consecutive integers),
+    // every (left, right) pair with left < right is valid:
+    //   right=N1: left={N0}          → 1 pair
+    //   right=N2: left={N0,N1}       → 2 pairs
+    //   right=N3: left={N0,N1,N2}    → 3 pairs
+    // Total: 6 pairs_processed
+    let graph = &runtime_state.graph;
+    assert!(
+        !graph.edges.is_empty(),
+        "edges must be produced when all nights are ingested at once"
+    );
+
+    // All edges must satisfy forward-in-time and gap constraints.
+    for edge in &graph.edges {
+        assert!(
+            edge.from.night_id < edge.to.night_id,
+            "edge must be forward in time: from={:?} to={:?}",
+            edge.from.night_id,
+            edge.to.night_id
+        );
+        let gap = edge.to.night_id.0 - edge.from.night_id.0;
+        assert!(
+            gap <= max_gap as u32,
+            "edge gap {gap} exceeds max_gap={max_gap}"
+        );
+        assert!(edge.cost.is_finite() && edge.cost > 0.0);
+        assert!(edge.dt_days.is_finite() && edge.dt_days > 0.0);
+    }
+
+    // Both the first and the last night must participate as left/right nodes
+    // (N0 only appears as left, N_{n-1} only as right).
+    let left_nights: std::collections::HashSet<NightId> =
+        graph.edges.iter().map(|e| e.from.night_id).collect();
+    let right_nights: std::collections::HashSet<NightId> =
+        graph.edges.iter().map(|e| e.to.night_id).collect();
+
+    assert!(
+        left_nights.contains(&NightId(start_night_id)),
+        "first night must appear as a left (source) night in edges"
+    );
+    assert!(
+        right_nights.contains(&NightId(start_night_id + (n_nights as u32) - 1)),
+        "last night must appear as a right (target) night in edges"
+    );
+}
+
+#[test]
+fn edges_connect_new_nights_to_previously_ingested_nights() {
+    // Verify the cross-batch edge scenario:
+    //   Run 1 — ingest nights {N0, N1} → seeds for N0, N1 + edge N0→N1.
+    //   Run 2 — ingest night  {N2}     → seeds for N2 + edges N0→N2, N1→N2.
+    //
+    // After run 2, the graph must contain edges from the *previous* nights
+    // (N0, N1) to the *new* night N2, not just the within-batch edge N0→N1.
+
+    let n_trajectories = 4;
+    let obs_per_night = 3;
+    let start_night_id = 64000_u32;
+    let max_gap = 3_u8;
+
+    // Build three nights of data.
+    let dataset = SyntheticDatasetBuilder::new()
+        .population(AsteroidPopulation::MainBelt, n_trajectories)
+        .n_nights(3)
+        .obs_per_night(obs_per_night)
+        .start_night_id(start_night_id)
+        .seed(31)
+        .build();
+
+    let data_dir = TempDir::new().unwrap();
+    let storage_dir = TempDir::new().unwrap();
+
+    let engine_config = engine_config_with_edges(&storage_dir, max_gap);
+    let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
+        .expect("open persistence");
+    let edge_models = test_edge_models();
+    let solver_manager = SolverManager::default();
+
+    let mut runtime_state = RuntimeState::new();
+
+    // Partition alerts by night.
+    let night0 = NightId(start_night_id);
+    let night1 = NightId(start_night_id + 1);
+    let night2 = NightId(start_night_id + 2);
+
+    let alerts_n0n1: Vec<&fink_fat_engine::Alert> = dataset
+        .alerts()
+        .iter()
+        .filter(|a| a.key.night_id == night0 || a.key.night_id == night1)
+        .collect();
+    let alerts_n2: Vec<&fink_fat_engine::Alert> = dataset
+        .alerts()
+        .iter()
+        .filter(|a| a.key.night_id == night2)
+        .collect();
+
+    // ---- Run 1: ingest nights N0 + N1 ----
+    let parquet_1 = data_dir.path().join("nights_0_1.parquet");
+    let uri_1 = write_alerts_parquet(&alerts_n0n1, &parquet_1);
+
+    let plan_1 = PipelinePlan {
+        stages: THROUGH_EDGES.to_vec(),
+        persist: PersistPolicy::None,
+        inputs: PipelineInputs { alerts_uri: uri_1 },
+    };
+    let mut ctx_1 = PipelineContext {
+        plan: &plan_1,
+        persistence: &persistence,
+        runtime_state: &mut runtime_state,
+        engine_config: &engine_config,
+        edge_models: &edge_models,
+        solver_manager: &solver_manager,
+    };
+    PipelineRunner {
+        plan: plan_1.clone(),
+    }
+    .run(&mut ctx_1, &NoopHooks)
+    .expect("run 1 should succeed");
+
+    let edges_after_run1 = runtime_state.graph.edges.len();
+    assert!(
+        edges_after_run1 > 0,
+        "run 1 should produce edges between N0 and N1"
+    );
+
+    // All run-1 edges must be N0 → N1.
+    for edge in &runtime_state.graph.edges {
+        assert_eq!(
+            edge.from.night_id, night0,
+            "run-1 edges must originate from N0"
+        );
+        assert_eq!(edge.to.night_id, night1, "run-1 edges must target N1");
+    }
+
+    // ---- Run 2: ingest night N2 only ----
+    let parquet_2 = data_dir.path().join("night_2.parquet");
+    let uri_2 = write_alerts_parquet(&alerts_n2, &parquet_2);
+
+    let plan_2 = PipelinePlan {
+        stages: THROUGH_EDGES.to_vec(),
+        persist: PersistPolicy::None,
+        inputs: PipelineInputs { alerts_uri: uri_2 },
+    };
+    let mut ctx_2 = PipelineContext {
+        plan: &plan_2,
+        persistence: &persistence,
+        runtime_state: &mut runtime_state,
+        engine_config: &engine_config,
+        edge_models: &edge_models,
+        solver_manager: &solver_manager,
+    };
+    PipelineRunner {
+        plan: plan_2.clone(),
+    }
+    .run(&mut ctx_2, &NoopHooks)
+    .expect("run 2 should succeed");
+
+    let edges_after_run2 = runtime_state.graph.edges.len();
+    assert!(
+        edges_after_run2 > edges_after_run1,
+        "run 2 must add edges from previous nights (N0, N1) to new night N2; \
+         got {edges_after_run2} total (was {edges_after_run1} after run 1)"
+    );
+
+    // After run 2 the graph must contain edges targeting N2 from both N0 and N1.
+    let targets_n2: Vec<_> = runtime_state
+        .graph
+        .edges
+        .iter()
+        .filter(|e| e.to.night_id == night2)
+        .collect();
+    assert!(
+        !targets_n2.is_empty(),
+        "run 2 must produce edges whose target is N2"
+    );
+
+    let sources_to_n2: std::collections::HashSet<NightId> =
+        targets_n2.iter().map(|e| e.from.night_id).collect();
+    assert!(
+        sources_to_n2.contains(&night0),
+        "N0 must connect to N2 (gap=2 ≤ max_gap={max_gap})"
+    );
+    assert!(
+        sources_to_n2.contains(&night1),
+        "N1 must connect to N2 (gap=1 ≤ max_gap={max_gap})"
+    );
+
+    // All edges in the full graph must satisfy the gap constraint.
+    for edge in &runtime_state.graph.edges {
+        let gap = edge.to.night_id.0 - edge.from.night_id.0;
+        assert!(
+            gap <= max_gap as u32,
+            "edge gap {gap} exceeds max_gap={max_gap}"
+        );
+        assert!(
+            edge.from.night_id < edge.to.night_id,
+            "edges must be forward in time"
+        );
+    }
+}
+
+#[test]
+fn max_gap_prevents_edges_between_distant_nights() {
+    // Verify that no edge is emitted when the night difference exceeds max_gap.
+    // We use a batch ingest (5 nights at once) and max_gap=2.
+    //
+    // With nights N0..N4 (consecutive integers) and max_gap=2:
+    //   valid pairs:  N0→N1, N0→N2, N1→N2, N1→N3, N2→N3, N2→N4, N3→N4
+    //   invalid gap:  anything with Δnight > 2 (N0→N3, N0→N4, N1→N4, ...)
+
+    let n_trajectories = 4;
+    let n_nights = 5;
+    let obs_per_night = 3;
+    let start_night_id = 65000_u32;
+    let max_gap = 2_u8;
+
+    let dataset = SyntheticDatasetBuilder::new()
+        .population(AsteroidPopulation::MainBelt, n_trajectories)
+        .n_nights(n_nights)
+        .obs_per_night(obs_per_night)
+        .start_night_id(start_night_id)
+        .seed(53)
+        .build();
+
+    let data_dir = TempDir::new().unwrap();
+    let storage_dir = TempDir::new().unwrap();
+
+    let parquet_path = data_dir.path().join("all_nights.parquet");
+    let alerts_uri = dataset.write_parquet(&parquet_path);
+
+    let engine_config = engine_config_with_edges(&storage_dir, max_gap);
+    let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
+        .expect("open persistence");
+    let edge_models = test_edge_models();
+    let solver_manager = SolverManager::default();
+
+    let plan = PipelinePlan {
+        stages: THROUGH_EDGES.to_vec(),
+        persist: PersistPolicy::None,
+        inputs: PipelineInputs { alerts_uri },
+    };
+
+    let mut runtime_state = RuntimeState::new();
+    let mut ctx = PipelineContext {
+        plan: &plan,
+        persistence: &persistence,
+        runtime_state: &mut runtime_state,
+        engine_config: &engine_config,
+        edge_models: &edge_models,
+        solver_manager: &solver_manager,
+    };
+
+    PipelineRunner { plan: plan.clone() }
+        .run(&mut ctx, &NoopHooks)
+        .expect("pipeline should succeed");
+
+    // ---- Edges must exist (sanity check) ----
+    assert!(
+        !runtime_state.graph.edges.is_empty(),
+        "edges should have been produced"
+    );
+
+    // ---- Every edge must satisfy the gap constraint ----
+    for edge in &runtime_state.graph.edges {
+        let gap = edge.to.night_id.0 - edge.from.night_id.0;
+        assert!(
+            gap <= max_gap as u32,
+            "edge gap {gap} exceeds max_gap={max_gap}: from={:?} to={:?}",
+            edge.from.night_id,
+            edge.to.night_id
+        );
+        assert!(
+            edge.from.night_id < edge.to.night_id,
+            "edges must be forward in time"
+        );
+    }
+
+    // ---- Edges that would violate the gap must be absent ----
+    // With 5 consecutive nights and max_gap=2, the pairs (N0,N3), (N0,N4),
+    // (N1,N4) have gap > 2 and must produce no edges.
+    let forbidden_pairs = [
+        (NightId(start_night_id), NightId(start_night_id + 3)),
+        (NightId(start_night_id), NightId(start_night_id + 4)),
+        (NightId(start_night_id + 1), NightId(start_night_id + 4)),
+    ];
+    for (left, right) in forbidden_pairs {
+        let found = runtime_state
+            .graph
+            .edges
+            .iter()
+            .any(|e| e.from.night_id == left && e.to.night_id == right);
+        assert!(
+            !found,
+            "no edge should exist between night {:?} and night {:?} (gap {} > max_gap={})",
+            left,
+            right,
+            right.0 - left.0,
+            max_gap
+        );
+    }
+
+    // ---- Night pairs within gap must have at least one edge ----
+    // Every pair (left, right) with Δ ≤ max_gap should produce edges because
+    // both nights have seeds.
+    let within_gap_pairs = [
+        (NightId(start_night_id), NightId(start_night_id + 1)),
+        (NightId(start_night_id), NightId(start_night_id + 2)),
+        (NightId(start_night_id + 1), NightId(start_night_id + 2)),
+        (NightId(start_night_id + 1), NightId(start_night_id + 3)),
+        (NightId(start_night_id + 2), NightId(start_night_id + 3)),
+        (NightId(start_night_id + 2), NightId(start_night_id + 4)),
+        (NightId(start_night_id + 3), NightId(start_night_id + 4)),
+    ];
+    for (left, right) in within_gap_pairs {
+        let found = runtime_state
+            .graph
+            .edges
+            .iter()
+            .any(|e| e.from.night_id == left && e.to.night_id == right);
+        assert!(
+            found,
+            "at least one edge should exist between night {:?} and night {:?} (gap {} ≤ max_gap={})",
+            left,
+            right,
+            right.0 - left.0,
+            max_gap
+        );
+    }
 }

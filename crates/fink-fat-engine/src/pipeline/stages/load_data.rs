@@ -49,7 +49,6 @@ pub fn run(
 
             // Populate the runtime state with loaded data.
             ctx.runtime_state.manifest = state.manifest;
-            ctx.runtime_state.window = state.window;
             ctx.runtime_state.alert_store = state.alert_store;
             ctx.runtime_state.seed_store = state.seed_store;
             ctx.runtime_state.graph = state.graph;

@@ -4,6 +4,7 @@ use outfit::OutfitError;
 use thiserror::Error;
 
 use crate::{
+    alerts::error::AlertStoreError,
     engine_config::error::ConfigError,
     graph::edge::error::EdgeBuilderError,
     persistence::error::{PersistenceError, PersistenceIoError},
@@ -172,6 +173,10 @@ pub enum EngineError {
     /// Config validation error
     #[error(transparent)]
     Config(#[from] ConfigError),
+
+    /// Alert store error
+    #[error(transparent)]
+    AlertStore(#[from] AlertStoreError),
 }
 
 impl From<PersistenceIoError> for EngineError {

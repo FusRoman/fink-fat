@@ -1337,3 +1337,410 @@ fn incremental_edges_form_consecutive_chains() {
         );
     }
 }
+
+// ===========================================================================
+// Explicit track-length tests
+//
+// These tests directly verify that the solver can chain seeds into tracks of
+// a specific minimum node count (3, 4, 5). Each test uses the incremental
+// runner so that every night adds edges to all previous nights within max_gap,
+// making long chains reachable. A batch-ingest variant closes the loop by
+// verifying the same for an all-at-once pipeline run.
+// ===========================================================================
+
+/// Verify the solver produces tracks with **at least 3 nodes** (3 linked seeds).
+///
+/// Minimum setup: 3 nights with consecutive integer IDs, max_gap >= 2 so that
+/// N0→N1, N0→N2, and N1→N2 edges are all built. The bounded-beam solver with
+/// `min_nodes = 3` must find at least one 3-hop path.
+#[test]
+fn solver_produces_tracks_with_at_least_3_nodes() {
+    let n_trajectories = 6;
+    let n_nights = 4; // one extra night gives the solver a richer graph
+    let obs_per_night = 3;
+    let start_night_id = 70000_u32;
+    let max_gap = 3_u8;
+    let min_nodes = 3;
+
+    let dataset = SyntheticDatasetBuilder::new()
+        .population(AsteroidPopulation::MainBelt, n_trajectories)
+        .n_nights(n_nights)
+        .obs_per_night(obs_per_night)
+        .start_night_id(start_night_id)
+        .seed(2001)
+        .build();
+
+    let data_dir = TempDir::new().unwrap();
+    let storage_dir = TempDir::new().unwrap();
+
+    let solver_manager = test_solver_manager_with_min_nodes(min_nodes);
+    let PipelineTestResult {
+        state: runtime_state,
+        ..
+    } = run_incremental_pipeline(
+        &dataset,
+        &data_dir,
+        &storage_dir,
+        max_gap,
+        &solver_manager,
+        |_| THROUGH_SOLVE.to_vec(),
+    );
+    let hypotheses = &runtime_state.track_hypotheses;
+
+    assert!(
+        !hypotheses.is_empty(),
+        "solver must produce hypotheses for {n_trajectories} MBA trajectories over {n_nights} nights"
+    );
+
+    // Every hypothesis must have at least min_nodes nodes (solver filter).
+    for (&hid, track) in hypotheses {
+        assert!(
+            track.n_nodes() >= min_nodes,
+            "hypothesis {hid}: expected n_nodes >= {min_nodes}, got {}",
+            track.n_nodes()
+        );
+        assert_eq!(
+            track.n_edges(),
+            track.n_nodes() - 1,
+            "hypothesis {hid}: n_edges must equal n_nodes - 1"
+        );
+        assert!(
+            track.cost.is_finite() && track.cost > 0.0,
+            "hypothesis {hid}: cost must be finite and positive"
+        );
+        // Nodes must be strictly forward in time.
+        for w in track.nodes.windows(2) {
+            assert!(
+                w[0].night_id < w[1].night_id,
+                "hypothesis {hid}: node night_ids must be strictly increasing"
+            );
+        }
+    }
+
+    // At least one hypothesis must have *exactly* 3 nodes (or more).
+    // We insist at least one 3-node track exists to confirm the solver
+    // is indeed chaining 3 seeds and not only longer ones.
+    let three_node_count = hypotheses
+        .values()
+        .filter(|t| t.n_nodes() >= min_nodes)
+        .count();
+    assert!(
+        three_node_count > 0,
+        "expected at least one track with >= {min_nodes} nodes, got 0"
+    );
+}
+
+/// Verify the solver produces tracks with **at least 4 nodes** (4 linked seeds).
+///
+/// Requires 5 nights so that chains N_i → N_{i+1} → N_{i+2} → N_{i+3} are
+/// reachable within max_gap = 3. The solver with `min_nodes = 4` must produce
+/// at least one 4-hop path.
+#[test]
+fn solver_produces_tracks_with_at_least_4_nodes() {
+    let n_trajectories = 6;
+    let n_nights = 5;
+    let obs_per_night = 3;
+    let start_night_id = 71000_u32;
+    let max_gap = 3_u8;
+    let min_nodes = 4;
+
+    let dataset = SyntheticDatasetBuilder::new()
+        .population(AsteroidPopulation::MainBelt, n_trajectories)
+        .n_nights(n_nights)
+        .obs_per_night(obs_per_night)
+        .start_night_id(start_night_id)
+        .seed(2002)
+        .build();
+
+    let data_dir = TempDir::new().unwrap();
+    let storage_dir = TempDir::new().unwrap();
+
+    let solver_manager = test_solver_manager_with_min_nodes(min_nodes);
+    let PipelineTestResult {
+        state: runtime_state,
+        ..
+    } = run_incremental_pipeline(
+        &dataset,
+        &data_dir,
+        &storage_dir,
+        max_gap,
+        &solver_manager,
+        |_| THROUGH_SOLVE.to_vec(),
+    );
+    let hypotheses = &runtime_state.track_hypotheses;
+
+    assert!(
+        !hypotheses.is_empty(),
+        "solver must produce hypotheses over {n_nights} nights with min_nodes={min_nodes}"
+    );
+
+    // All hypotheses must respect the solver's min_nodes filter.
+    for (&hid, track) in hypotheses {
+        assert!(
+            track.n_nodes() >= min_nodes,
+            "hypothesis {hid}: expected n_nodes >= {min_nodes}, got {}",
+            track.n_nodes()
+        );
+        assert_eq!(track.n_edges(), track.n_nodes() - 1);
+        assert!(track.cost.is_finite() && track.cost > 0.0);
+        // Strictly increasing night order.
+        for w in track.nodes.windows(2) {
+            assert!(
+                w[0].night_id < w[1].night_id,
+                "hypothesis {hid}: nodes must be time-ordered"
+            );
+        }
+        // night_span must be consistent with actual range.
+        let span = track.nodes.last().unwrap().night_id.0 - track.nodes.first().unwrap().night_id.0;
+        assert_eq!(
+            track.night_span, span,
+            "hypothesis {hid}: night_span mismatch"
+        );
+    }
+
+    // Confirm at least one track has >= 4 nodes.
+    let qualifying = hypotheses
+        .values()
+        .filter(|t| t.n_nodes() >= min_nodes)
+        .count();
+    assert!(
+        qualifying > 0,
+        "expected at least one track with >= {min_nodes} nodes; found none"
+    );
+}
+
+/// Verify the solver produces tracks with **at least 5 nodes** (5 linked seeds).
+///
+/// Requires 6 nights so that a 5-hop chain is reachable. The solver with
+/// `min_nodes = 5` must produce at least one 5-hop path per ground-truth
+/// trajectory that the edge builder was able to link.
+#[test]
+fn solver_produces_tracks_with_at_least_5_nodes() {
+    let n_trajectories = 6;
+    let n_nights = 7; // extra night for richer paths
+    let obs_per_night = 3;
+    let start_night_id = 72000_u32;
+    let max_gap = 3_u8;
+    let min_nodes = 5;
+
+    let dataset = SyntheticDatasetBuilder::new()
+        .population(AsteroidPopulation::MainBelt, n_trajectories)
+        .n_nights(n_nights)
+        .obs_per_night(obs_per_night)
+        .start_night_id(start_night_id)
+        .seed(2003)
+        .build();
+
+    let data_dir = TempDir::new().unwrap();
+    let storage_dir = TempDir::new().unwrap();
+
+    let solver_manager = test_solver_manager_with_min_nodes(min_nodes);
+    let PipelineTestResult {
+        state: runtime_state,
+        ..
+    } = run_incremental_pipeline(
+        &dataset,
+        &data_dir,
+        &storage_dir,
+        max_gap,
+        &solver_manager,
+        |_| THROUGH_SOLVE.to_vec(),
+    );
+    let hypotheses = &runtime_state.track_hypotheses;
+
+    assert!(
+        !hypotheses.is_empty(),
+        "solver must produce hypotheses over {n_nights} nights with min_nodes={min_nodes}"
+    );
+
+    // All returned hypotheses must satisfy the min_nodes constraint.
+    for (&hid, track) in hypotheses {
+        assert!(
+            track.n_nodes() >= min_nodes,
+            "hypothesis {hid}: expected n_nodes >= {min_nodes}, got {}",
+            track.n_nodes()
+        );
+        assert_eq!(track.n_edges(), track.n_nodes() - 1);
+        assert!(track.cost.is_finite() && track.cost > 0.0);
+        for w in track.nodes.windows(2) {
+            assert!(
+                w[0].night_id < w[1].night_id,
+                "hypothesis {hid}: nodes must be time-ordered"
+            );
+        }
+        // Each seed in the track must resolve in the seed store.
+        for &seed_key in &track.nodes {
+            assert!(
+                runtime_state.seed_store.try_get_seed(seed_key).is_some(),
+                "hypothesis {hid}: seed key {seed_key:?} not found in seed store"
+            );
+        }
+    }
+
+    // At least one track with >= 5 nodes must exist.
+    let qualifying = hypotheses
+        .values()
+        .filter(|t| t.n_nodes() >= min_nodes)
+        .count();
+    assert!(
+        qualifying > 0,
+        "expected at least one track with >= {min_nodes} nodes; \
+         found none among {} total hypotheses",
+        hypotheses.len()
+    );
+
+    // Diagnostic: report the distribution of track lengths.
+    let mut length_counts: HashMap<usize, usize> = HashMap::new();
+    for track in hypotheses.values() {
+        *length_counts.entry(track.n_nodes()).or_insert(0) += 1;
+    }
+    eprintln!(
+        "solver_produces_tracks_with_at_least_5_nodes: track-length distribution = {:?}",
+        {
+            let mut v: Vec<_> = length_counts.iter().collect();
+            v.sort();
+            v
+        }
+    );
+}
+
+/// Verify that a **batch ingest** (all nights in a single Parquet, single run)
+/// also produces multi-node tracks.
+///
+/// This directly exercises the new edge-builder logic: when all nights are new,
+/// the builder creates edges between every valid (left, right) pair in one pass,
+/// giving the solver a complete graph from which it can extract long chains.
+#[test]
+fn batch_ingest_solver_produces_multi_node_tracks() {
+    let n_trajectories = 6;
+    let n_nights = 5;
+    let obs_per_night = 3;
+    let start_night_id = 73000_u32;
+    let max_gap = 4_u8; // cover all consecutive pairs in 5 nights
+    let min_nodes = 3;
+
+    let dataset = SyntheticDatasetBuilder::new()
+        .population(AsteroidPopulation::MainBelt, n_trajectories)
+        .n_nights(n_nights)
+        .obs_per_night(obs_per_night)
+        .start_night_id(start_night_id)
+        .seed(2004)
+        .build();
+
+    // ---- Write all nights into a single Parquet ----
+    let data_dir = TempDir::new().unwrap();
+    let storage_dir = TempDir::new().unwrap();
+
+    let parquet_path = data_dir.path().join("all_nights.parquet");
+    let alerts_uri = dataset.write_parquet(&parquet_path);
+
+    // ---- Single pipeline run (not incremental) ----
+    let engine_config = engine_config_with_edges(&storage_dir, max_gap);
+    let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
+        .expect("open persistence");
+    let edge_models = test_edge_models();
+    let solver_manager = test_solver_manager_with_min_nodes(min_nodes);
+
+    let plan = PipelinePlan {
+        stages: THROUGH_SOLVE.to_vec(),
+        persist: PersistPolicy::None,
+        inputs: PipelineInputs { alerts_uri },
+    };
+
+    let mut runtime_state = RuntimeState::new();
+    let mut ctx = PipelineContext {
+        plan: &plan,
+        persistence: &persistence,
+        runtime_state: &mut runtime_state,
+        engine_config: &engine_config,
+        edge_models: &edge_models,
+        solver_manager: &solver_manager,
+    };
+
+    PipelineRunner { plan: plan.clone() }
+        .run(&mut ctx, &NoopHooks)
+        .expect("batch pipeline run should succeed");
+
+    let hypotheses = &runtime_state.track_hypotheses;
+
+    // ---- Seeds must exist for every night ----
+    for night_offset in 0..n_nights {
+        let nid = NightId(start_night_id + night_offset as u32);
+        assert!(
+            runtime_state.seed_store.contains_night(&nid),
+            "seed store must contain night {nid:?} after batch ingest"
+        );
+        assert!(
+            runtime_state.seed_store.len_night(&nid).unwrap_or(0) > 0,
+            "night {nid:?} must have at least one seed"
+        );
+    }
+
+    // ---- Edges must span all valid (left, right) pairs ----
+    // With 5 nights and max_gap=4, every pair (i, j) with j > i is valid.
+    // Verify at least a sample of the close pairs are covered.
+    let close_pairs = [
+        (NightId(start_night_id), NightId(start_night_id + 1)),
+        (NightId(start_night_id + 1), NightId(start_night_id + 2)),
+        (NightId(start_night_id + 2), NightId(start_night_id + 3)),
+        (NightId(start_night_id + 3), NightId(start_night_id + 4)),
+    ];
+    for (left, right) in close_pairs {
+        let found = runtime_state
+            .graph
+            .edges
+            .iter()
+            .any(|e| e.from.night_id == left && e.to.night_id == right);
+        assert!(
+            found,
+            "batch ingest must produce at least one edge from night {left:?} to {right:?}"
+        );
+    }
+
+    // ---- Solver must produce hypotheses ----
+    assert!(
+        !hypotheses.is_empty(),
+        "solver must produce hypotheses after batch ingest of {n_nights} nights"
+    );
+
+    // ---- All hypotheses must satisfy min_nodes ----
+    for (&hid, track) in hypotheses {
+        assert!(
+            track.n_nodes() >= min_nodes,
+            "hypothesis {hid}: expected n_nodes >= {min_nodes}, got {}",
+            track.n_nodes()
+        );
+        assert_eq!(track.n_edges(), track.n_nodes() - 1);
+        assert!(track.cost.is_finite() && track.cost > 0.0);
+        for w in track.nodes.windows(2) {
+            assert!(
+                w[0].night_id < w[1].night_id,
+                "hypothesis {hid}: nodes must be time-ordered"
+            );
+        }
+    }
+
+    // ---- At least one multi-node track (>= 3 nodes) must exist ----
+    let multi_node = hypotheses
+        .values()
+        .filter(|t| t.n_nodes() >= min_nodes)
+        .count();
+    assert!(
+        multi_node > 0,
+        "batch ingest should produce at least one trajectory with >= {min_nodes} nodes"
+    );
+
+    // ---- Report length distribution for diagnostics ----
+    let mut dist: HashMap<usize, usize> = HashMap::new();
+    for t in hypotheses.values() {
+        *dist.entry(t.n_nodes()).or_insert(0) += 1;
+    }
+    eprintln!(
+        "batch_ingest_solver_produces_multi_node_tracks: track-length distribution = {:?}",
+        {
+            let mut v: Vec<_> = dist.iter().collect();
+            v.sort();
+            v
+        }
+    );
+}

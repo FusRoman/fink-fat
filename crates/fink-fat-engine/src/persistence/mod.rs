@@ -9,7 +9,6 @@ pub mod runtime_state;
 use std::fs;
 
 use camino::Utf8PathBuf;
-use outfit::FullOrbitResult;
 
 use crate::{
     Alert,
@@ -29,7 +28,6 @@ use crate::{
     },
     pipeline::hooks::StageProgress,
     seeding::{SeedNode, SeedNodeSlice, store::SeedStore},
-    solver::HypothesisSet,
 };
 
 /// Alert store schema version.
@@ -308,15 +306,12 @@ impl PersistenceManager {
         let graph = AlertLinkageDAG::from_edges(edges);
         stage_sink.inc(1);
 
-        Ok(RuntimeState {
+        Ok(RuntimeState::from_disk(
             manifest,
-            window,
             alert_store,
             seed_store,
             graph,
-            track_hypotheses: HypothesisSet::new(),
-            orbit_results: FullOrbitResult::default(),
-        })
+        ))
     }
 
     // -------------------------------------------------------------------------

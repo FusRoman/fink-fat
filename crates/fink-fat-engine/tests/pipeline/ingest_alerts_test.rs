@@ -9,7 +9,7 @@ use tempfile::TempDir;
 use fink_fat_engine::{
     engine_config::pipeline_policy::PersistPolicy,
     error::EngineError,
-    night_id::{NightId, PairingMode},
+    night_id::NightId,
     persistence::{PersistenceManager, runtime_state::RuntimeState},
     pipeline::{
         PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner,
@@ -116,22 +116,23 @@ fn ingest_nights_stage_loads_alerts_and_populates_runtime_state() {
         }
     }
 
-    // ---- 7) Verify runtime window was set ----
-    assert!(
-        state.window.is_some(),
-        "runtime window should be set after IngestNights"
-    );
+    // ---- 7) Verify new_night_ids was set ----
+    let new_night_ids = state
+        .get_new_night_ids()
+        .expect("new_night_ids should be set after IngestNights");
 
+    // The pipeline runs incrementally (one night at a time); the last run
+    // ingested only the last night.
     let last_night_id = NightId(start_night_id + (n_nights as u32) - 1);
-    match state.window.unwrap() {
-        PairingMode::SingleNight { anchor, .. } => {
-            assert_eq!(
-                anchor, last_night_id,
-                "anchor night should be the last ingested night"
-            );
-        }
-        other => panic!("expected SingleNight pairing mode, got: {:?}", other),
-    }
+    assert_eq!(
+        new_night_ids.len(),
+        1,
+        "expected exactly 1 new night per incremental run"
+    );
+    assert_eq!(
+        new_night_ids[0], last_night_id,
+        "new night should be the last ingested night"
+    );
 
     // ---- 8) Verify all dia_source_ids are unique ----
     let all_dia_ids: Vec<u64> = store
@@ -147,6 +148,140 @@ fn ingest_nights_stage_loads_alerts_and_populates_runtime_state() {
         sorted_ids.len(),
         expected_total_alerts,
         "all dia_source_ids must be unique"
+    );
+}
+
+#[test]
+fn ingest_nights_stage_multi_night_parquet_creates_one_store_entry_per_night() {
+    // ---- 1) Build a dataset spanning several nights ----
+    let n_trajectories = 4;
+    let n_nights = 4;
+    let obs_per_night = 2;
+    let start_night_id = 61000_u32;
+
+    let dataset = SyntheticDatasetBuilder::new()
+        .population(AsteroidPopulation::MainBelt, n_trajectories)
+        .n_nights(n_nights)
+        .obs_per_night(obs_per_night)
+        .start_night_id(start_night_id)
+        .seed(7)
+        .build();
+
+    let expected_total_alerts = n_trajectories * n_nights * obs_per_night;
+    assert_eq!(dataset.n_alerts(), expected_total_alerts);
+
+    let data_dir = TempDir::new().expect("create data temp dir");
+    let storage_dir = TempDir::new().expect("create storage temp dir");
+
+    // ---- 2) Write ALL nights into a single Parquet file ----
+    let parquet_path = data_dir.path().join("all_nights.parquet");
+    let alerts_uri = dataset.write_parquet(&parquet_path);
+
+    // ---- 3) Run IngestNights once (all nights in one shot) ----
+    let engine_config = engine_config_minimal(&storage_dir);
+    let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
+        .expect("open persistence");
+    let edge_models = test_edge_models();
+    let solver_manager = fink_fat_engine::solver::solver_manager::SolverManager::default();
+
+    let plan = PipelinePlan {
+        stages: vec![PipelineStage::IngestNights],
+        persist: PersistPolicy::None,
+        inputs: PipelineInputs { alerts_uri },
+    };
+
+    let mut runtime_state = RuntimeState::new();
+    let runner = PipelineRunner { plan: plan.clone() };
+
+    let mut ctx = PipelineContext {
+        plan: &plan,
+        persistence: &persistence,
+        runtime_state: &mut runtime_state,
+        engine_config: &engine_config,
+        edge_models: &edge_models,
+        solver_manager: &solver_manager,
+    };
+
+    runner
+        .run(&mut ctx, &NoopHooks)
+        .expect("IngestNights should succeed");
+
+    // ---- 4) AlertStore must have one entry per night ----
+    let store = &runtime_state.alert_store;
+    assert_eq!(
+        store.n_nights(),
+        n_nights,
+        "alert store should contain exactly {n_nights} nights"
+    );
+    assert_eq!(
+        store.n_alerts(),
+        expected_total_alerts,
+        "alert store should hold all {expected_total_alerts} alerts"
+    );
+
+    // ---- 5) Each night must have the right alert count and consistent keys ----
+    let expected_per_night = n_trajectories * obs_per_night;
+    for night_offset in 0..n_nights {
+        let nid = NightId(start_night_id + night_offset as u32);
+        let night_alerts = store
+            .get(&nid)
+            .unwrap_or_else(|| panic!("night {nid:?} should be present in alert store"));
+
+        assert_eq!(
+            night_alerts.len(),
+            expected_per_night,
+            "night {nid:?} should have {expected_per_night} alerts, got {}",
+            night_alerts.len()
+        );
+
+        // Alert keys must reference the correct night.
+        for alert in night_alerts {
+            assert_eq!(
+                alert.key.night_id, nid,
+                "alert key.night_id must match the containing night bucket"
+            );
+        }
+
+        // Alerts must be time-ordered within each night.
+        for w in night_alerts.windows(2) {
+            assert!(
+                w[0].mjd_tt <= w[1].mjd_tt,
+                "alerts should be time-ordered within night {nid:?}"
+            );
+        }
+    }
+
+    // ---- 6) new_night_ids must contain all ingested nights (sorted) ----
+    let new_night_ids = runtime_state
+        .get_new_night_ids()
+        .expect("new_night_ids should be set after IngestNights");
+
+    assert_eq!(
+        new_night_ids.len(),
+        n_nights,
+        "new_night_ids should list all {n_nights} nights from the multi-night Parquet"
+    );
+
+    let expected_night_ids: Vec<NightId> = (0..n_nights)
+        .map(|i| NightId(start_night_id + i as u32))
+        .collect();
+    assert_eq!(
+        new_night_ids, &expected_night_ids,
+        "new_night_ids should match the sorted list of ingested nights"
+    );
+
+    // ---- 7) All dia_source_ids must be globally unique ----
+    let all_ids: Vec<u64> = store
+        .nights()
+        .flat_map(|nid| store.get(nid).unwrap().iter().map(|a| a.key.dia_source_id))
+        .collect();
+    let mut sorted = all_ids.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(
+        sorted.len(),
+        expected_total_alerts,
+        "all dia_source_ids must be unique across nights"
     );
 }
 

@@ -7,7 +7,7 @@ use outfit::{FullOrbitResult, ObjectNumber};
 use crate::{
     alerts::store::AlertStore,
     graph::AlertLinkageDAG,
-    night_id::{NightId, PairingMode},
+    night_id::NightId,
     persistence::{
         envelope::save_parquet, error::PersistenceIoError, layout::PersistenceLayout,
         manifest::Manifest,
@@ -20,9 +20,15 @@ use crate::{
 /// Loaded runtime state built from persisted artifacts.
 ///
 /// This matches the runtime needs:
-/// - `AlertStore` owns the alert vectors (per night).
-/// - `SeedStoreOwned` owns `SeedNodeOwned`.
-/// - `InterNightGraph<'seed,'alert>` owns `Edge<'seed,'alert>` that borrow seeds.
+/// - [`AlertStore`] owns the per-night alert vectors.
+/// - [`SeedStore`] owns `SeedNodeOwned` objects.
+/// - [`AlertLinkageDAG`] owns the fully-owned inter-night edge graph.
+/// - `track_hypotheses` holds the solver output for the current run.
+/// - `orbit_results` holds the orbit-fitting output.
+///
+/// The `new_night_id` field is set by `IngestNights` to advertise which nights were
+/// loaded in the current pipeline invocation; downstream stages (`BuildSeeds`,
+/// `BuildEdges`) read it via [`RuntimeState::get_new_night_ids`].
 ///
 /// Notes
 /// -----
@@ -31,7 +37,7 @@ use crate::{
 #[derive(Debug)]
 pub struct RuntimeState {
     pub manifest: Manifest,
-    pub window: Option<PairingMode>,
+    new_night_id: Option<Vec<NightId>>,
     pub alert_store: AlertStore,
     pub seed_store: SeedStore,
     pub graph: AlertLinkageDAG,
@@ -100,13 +106,58 @@ impl RuntimeState {
     pub fn new() -> RuntimeState {
         RuntimeState {
             manifest: Manifest::new(),
-            window: None,
+            new_night_id: None,
             alert_store: AlertStore::new(),
             seed_store: SeedStore::new(),
             graph: AlertLinkageDAG::new(),
             track_hypotheses: HypothesisSet::new(),
             orbit_results: FullOrbitResult::default(),
         }
+    }
+
+    /// Reconstruct a [`RuntimeState`] from previously persisted data.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `manifest`    – Persistence manifest loaded from disk.
+    /// * `alert_store` – Alert store restored from disk.
+    /// * `seed_store`  – Seed store restored from disk.
+    /// * `graph`       – Inter-night edge graph restored from disk.
+    ///
+    /// Return
+    /// ------
+    /// A [`RuntimeState`] with `new_night_id = None`, empty `track_hypotheses`,
+    /// and empty `orbit_results`.
+    pub fn from_disk(
+        manifest: Manifest,
+        alert_store: AlertStore,
+        seed_store: SeedStore,
+        graph: AlertLinkageDAG,
+    ) -> Self {
+        RuntimeState {
+            manifest,
+            new_night_id: None,
+            alert_store,
+            seed_store,
+            graph,
+            track_hypotheses: HypothesisSet::new(),
+            orbit_results: FullOrbitResult::default(),
+        }
+    }
+
+    /// Return the list of night IDs ingested during the current pipeline run.
+    ///
+    /// Set by the `IngestNights` stage; `None` if that stage has not run yet
+    /// in the current invocation.
+    pub fn get_new_night_ids(&self) -> Option<&Vec<NightId>> {
+        self.new_night_id.as_ref()
+    }
+
+    /// Record the night IDs ingested during the current pipeline run.
+    ///
+    /// Called exclusively by the `IngestNights` stage after successful ingestion.
+    pub(crate) fn set_new_night_ids(&mut self, night_ids: Vec<NightId>) {
+        self.new_night_id = Some(night_ids);
     }
 
     /// Export track members and orbital parameters as two Parquet files.
@@ -458,7 +509,7 @@ mod runtime_state_tests {
 
         RuntimeState {
             manifest: Manifest::new(),
-            window: None,
+            new_night_id: None,
             alert_store,
             seed_store,
             graph: AlertLinkageDAG::new(),
@@ -478,7 +529,7 @@ mod runtime_state_tests {
 
         let state = RuntimeState {
             manifest: Manifest::new(),
-            window: None,
+            new_night_id: None,
             alert_store: AlertStore::new(),
             seed_store: SeedStore::new(),
             graph: AlertLinkageDAG::new(),
