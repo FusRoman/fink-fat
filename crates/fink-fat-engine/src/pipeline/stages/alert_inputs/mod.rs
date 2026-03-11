@@ -104,7 +104,6 @@ pub mod storage;
 
 use crate::{
     error::EngineError,
-    night_id::PairingMode,
     pipeline::{
         PipelineContext,
         hooks::{PipelineHooks, StageMeta, StageReport},
@@ -122,7 +121,7 @@ use crate::{
 /// --------
 /// This function executes the `IngestNights` stage within the pipeline lifecycle.
 /// It loads alerts from the input URI specified in the [`PipelinePlan`](crate::pipeline::PipelinePlan), normalizes
-/// per-night ordering and alert keying, updates the runtime `NightWindow`, and
+/// per-night ordering and alert keying, updates the runtime `new_night_ids`, and
 /// merges the resulting [`AlertStore`](crate::alerts::store::AlertStore) into the pipeline [`RuntimeState`](crate::persistence::runtime_state::RuntimeState).
 ///
 /// This stage is invoked through `run_stage`, which:
@@ -278,28 +277,10 @@ pub fn run(
             }
 
             // -----------------------------------------------------------------
-            // 4) Update the runtime night window.
+            // 4) Update the runtime new night IDs.
             // -----------------------------------------------------------------
-            //
-            // The night window is derived from which nights are present in the ingested store.
-            // Later stages use it to iterate deterministically over the active nights.
-            // In the case where we ingest a single night, the window is effectively a singleton (window.is_single == true).
-            let last_night =
-                new_alert_store
-                    .last_night()
-                    .ok_or_else(|| EngineError::StageFailed {
-                        stage: PipelineStage::IngestNights,
-                        message: "ingested AlertStore contains no nights".to_string(),
-                    })?;
-            let max_gap = ctx.engine_config.max_gap_nights();
-            // The ok will normally never trigger because the max_gap has already been validated at config level.
-            ctx.runtime_state.window = PairingMode::single_night(last_night, max_gap).ok();
-
-            tracing::debug!(
-                last_night = %last_night,
-                max_gap_nights = max_gap,
-                "night window updated",
-            );
+            ctx.runtime_state
+                .set_new_night_ids(new_alert_store.nights_sorted());
 
             stage_sink.inc(1);
 

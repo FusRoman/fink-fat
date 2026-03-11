@@ -64,7 +64,7 @@
 //!
 //! Inputs
 //! ------
-//! - `ctx.runtime_state.window`: `NightWindow` defining which nights are processed.
+//! - `ctx.runtime_state.get_new_night_ids()`: list of night IDs ingested in the current run.
 //! - `ctx.runtime_state.alert_store`: per-night alert vectors.
 //! - `ctx.engine_config.pairs`: pair generation configuration.
 //! - `ctx.engine_config.triplets`: triplet generation configuration.
@@ -80,7 +80,7 @@
 //! Error handling
 //! --------------
 //! This stage fails with [`EngineError::StageFailed`] if:
-//! - no `NightWindow` is present in runtime state,
+//! - `get_new_night_ids()` returns `None` (i.e. `IngestNight` has not run yet),
 //! - a processed night contains zero alerts (cannot derive `t0` for time binning).
 //!
 //! Determinism & performance notes
@@ -104,6 +104,7 @@
 use crate::{
     alerts::AlertSlice,
     error::EngineError,
+    night_id::NightId,
     pipeline::{
         PipelineContext,
         hooks::{PipelineHooks, StageMeta, StageReport},
@@ -191,33 +192,21 @@ pub fn run(
             total: None, // dynamic: determined by number of nights at runtime
         },
         |stage_sink| {
-            // -----------------------------------------------------------------
-            // 0) Preconditions: a BuildSeeds run requires a NightWindow.
-            // -----------------------------------------------------------------
-            let window =
-                ctx.runtime_state
-                    .window
-                    .as_ref()
-                    .ok_or_else(|| EngineError::StageFailed {
-                        stage: PipelineStage::BuildSeeds,
-                        message: "no night window found in runtime state".to_string(),
-                    })?;
-
             let pair_cfg = &ctx.engine_config.pairs;
             let triplet_cfg = &ctx.engine_config.triplets;
             let spatial_binner = HealpixBinner::new(ctx.engine_config.healpix_depth);
 
             // -----------------------------------------------------------------
-            // Progress model (stage-level)
-            // ----------------------------
-            // - 1 unit = 1 processed night.
-            //
-            // Use `night_window_nights` so the total reflects only the nights
-            // that `night_window_iter` will actually yield (e.g. in SingleNight
-            // mode that is exactly one night — the anchor — regardless of how
-            // many nights are present in the alert store).
+            // Early exit: no nights means no work.
             // -----------------------------------------------------------------
-            let nights_to_process = ctx.runtime_state.alert_store.night_window_nights(*window);
+            let nights_to_process: Vec<NightId> =
+                ctx.runtime_state
+                    .get_new_night_ids()
+                    .ok_or_else(|| EngineError::StageFailed {
+                        stage: PipelineStage::BuildSeeds,
+                        message: "runtime state does not contain new night IDs\nThe stage IngestNight must be run before BuildSeeds".to_string(),
+                    })?
+                    .clone();
             stage_sink.set_total(nights_to_process.len() as u64);
 
             tracing::debug!(
@@ -238,7 +227,12 @@ pub fn run(
             // -----------------------------------------------------------------
             // 4) Process each night in the requested window.
             // -----------------------------------------------------------------
-            for (night_id, alerts) in ctx.runtime_state.alert_store.night_window_iter(*window) {
+            let night_iterator = ctx
+                .runtime_state
+                .alert_store
+                .night_iter(&nights_to_process)?;
+            let nights_data = nights_to_process.iter().zip(night_iterator);
+            for (night_id, alerts) in nights_data {
                 let n_alerts = alerts.len();
                 total_alerts += n_alerts as u64;
 
@@ -285,7 +279,7 @@ pub fn run(
                 let pair_seeds = pairs::extract_pair_features(
                     &ps,
                     &mut ctx.runtime_state.seed_store,
-                    night_id,
+                    *night_id,
                     None,
                 );
                 tracing::trace!(%night_id, n_pair_seeds = pair_seeds.len(), "pair features extracted");
@@ -306,7 +300,7 @@ pub fn run(
                 let triplets_seeds = triplets::extract_triplet_features(
                     &ts,
                     &mut ctx.runtime_state.seed_store,
-                    night_id,
+                    *night_id,
                 );
                 tracing::trace!(%night_id, n_triplet_seeds = triplets_seeds.len(), "triplet features extracted");
                 night_sink.inc(1);
@@ -324,7 +318,7 @@ pub fn run(
 
                 ctx.runtime_state
                     .seed_store
-                    .insert_vec_seed(night_id, all_seeds);
+                    .insert_vec_seed(*night_id, all_seeds);
                 night_sink.inc(1);
 
                 night_sink.finish();
