@@ -2279,6 +2279,7 @@ dependencies = [
 name = "fink-fat-eval"
 version = "1.0.0"
 dependencies = [
+ "ahash",
  "anyhow",
  "approx",
  "camino",

@@ -19,11 +19,13 @@ pub mod cli;
 pub mod edges;
 pub mod logging;
 pub mod seeding;
+pub mod truth_sso;
 
 use cli::{Cli, Commands, CommonArgs};
 
 use crate::edges::edge_evaluation;
 use crate::seeding::seeding_evaluation;
+use crate::truth_sso::{TruthSSOMap, load_truth_sso_map};
 
 pub fn load_config(config_path: &Utf8Path) -> Result<EngineConfig> {
     load_engine_config_validated(config_path).context("failed to load engine config")
@@ -42,9 +44,17 @@ fn log_level_to_tracing(level: LogLevel) -> tracing::Level {
 pub fn run_fink_fat(
     cli_args: CommonArgs,
     pipeline_stages: &[PipelineStage],
-    evaluation_postprocess: impl Fn(&PipelineContext) -> Result<()>,
+    evaluation_postprocess: impl Fn(&PipelineContext, &TruthSSOMap) -> Result<()>,
 ) -> Result<()> {
     let engine_config = load_config(&cli_args.config)?;
+
+    let alerts_url = cli_args
+        .alerts
+        .parse()
+        .context("failed to parse alerts URI")?;
+    let alerts_path = Utf8Path::new(alerts_url.path());
+    let truth_map =
+        load_truth_sso_map(alerts_path).context("failed to load truth SSO map from alerts URI")?;
 
     let persistence = PersistenceManager::open_or_create(engine_config.clone().storage_path_buf())
         .context("failed to open persistence")?;
@@ -105,7 +115,7 @@ pub fn run_fink_fat(
         .run(&mut ctx, hooks.as_ref())
         .context("pipeline failed")?;
 
-    evaluation_postprocess(&ctx).context("post-processing failed")?;
+    evaluation_postprocess(&ctx, &truth_map).context("post-processing failed")?;
 
     Ok(())
 }
