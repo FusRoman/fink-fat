@@ -34,7 +34,11 @@ fn main() -> Result<()> {
         }
         Commands::EdgeEval(args) => run_fink_fat(
             args.common,
-            &[PipelineStage::IngestNights, PipelineStage::BuildEdges],
+            &[
+                PipelineStage::IngestNights,
+                PipelineStage::BuildSeeds,
+                PipelineStage::BuildEdges,
+            ],
             edge_evaluation,
         )?,
     };

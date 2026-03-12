@@ -13,11 +13,7 @@ use fink_fat_engine::{
     solver::solver_manager::SolverManager,
 };
 
-use crate::{
-    cli::CommonArgs,
-    logging,
-    truth_sso::{TruthSSOMap, load_truth_sso_map},
-};
+use crate::{cli::CommonArgs, logging, truth_sso::TruthSSO};
 
 pub fn load_config(config_path: &Utf8Path) -> Result<EngineConfig> {
     load_engine_config_validated(config_path).context("failed to load engine config")
@@ -36,7 +32,7 @@ fn log_level_to_tracing(level: LogLevel) -> tracing::Level {
 pub fn run_fink_fat(
     cli_args: CommonArgs,
     pipeline_stages: &[PipelineStage],
-    evaluation_postprocess: impl Fn(&PipelineContext, &TruthSSOMap) -> Result<()>,
+    evaluation_postprocess: impl Fn(&PipelineContext, &TruthSSO) -> Result<()>,
 ) -> Result<()> {
     let engine_config = load_config(&cli_args.config)?;
 
@@ -45,8 +41,8 @@ pub fn run_fink_fat(
         .parse()
         .context("failed to parse alerts URI")?;
     let alerts_path = Utf8Path::new(alerts_url.path());
-    let truth_map =
-        load_truth_sso_map(alerts_path).context("failed to load truth SSO map from alerts URI")?;
+    let truth_sso =
+        TruthSSO::load(alerts_path).context("failed to load truth SSO map from alerts URI")?;
 
     let persistence = PersistenceManager::open_or_create(engine_config.clone().storage_path_buf())
         .context("failed to open persistence")?;
@@ -107,7 +103,7 @@ pub fn run_fink_fat(
         .run(&mut ctx, hooks.as_ref())
         .context("pipeline failed")?;
 
-    evaluation_postprocess(&ctx, &truth_map).context("post-processing failed")?;
+    evaluation_postprocess(&ctx, &truth_sso).context("post-processing failed")?;
 
     Ok(())
 }

@@ -21,7 +21,7 @@ use fink_fat_engine::{
     night_id::NightId,
 };
 
-use crate::truth_sso::{TrajId, TruthSSOMap};
+use crate::truth_sso::{TrajId, TruthSSO};
 
 use super::draw_helpers::MetricPlot;
 
@@ -65,11 +65,11 @@ pub struct TruthTripletData {
 /// ascending MJD.
 fn group_night_by_traj<'a>(
     night_alerts: &'a [Alert],
-    truth: &TruthSSOMap,
+    truth: &TruthSSO,
 ) -> AHashMap<TrajId, Vec<&'a Alert>> {
     let mut map: AHashMap<TrajId, Vec<&'a Alert>> = AHashMap::new();
     for alert in night_alerts {
-        if let Some(&traj_id) = truth.get(&alert.key.dia_source_id) {
+        if let Some(traj_id) = truth.get_truth_traj_id(&alert) {
             map.entry(traj_id).or_default().push(alert);
         }
     }
@@ -155,7 +155,7 @@ fn accumulate_triplet_metrics(alerts: &[&Alert], data: &mut TruthTripletData) {
 /// ground-truth trajectories.
 pub fn collect_truth_data(
     alert_store: &AlertStore,
-    truth: &TruthSSOMap,
+    truth: &TruthSSO,
 ) -> (TruthPairData, TruthTripletData) {
     let mut pairs = TruthPairData::default();
     let mut triplets = TruthTripletData::default();

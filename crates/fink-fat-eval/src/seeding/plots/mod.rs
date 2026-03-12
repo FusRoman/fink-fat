@@ -25,7 +25,7 @@ use anyhow::Result;
 use camino::Utf8Path;
 use fink_fat_engine::pipeline::PipelineContext;
 
-use crate::truth_sso::TruthSSOMap;
+use crate::truth_sso::TruthSSO;
 
 use seed_results::{NightResultRow, plot_seed_results};
 use truth_distributions::{
@@ -49,7 +49,7 @@ use truth_distributions::{
 /// - `seed_recovery.png` – number of recovered vs recoverable trajectories
 pub fn seeding_plots(
     ctx: &PipelineContext<'_>,
-    truth: &TruthSSOMap,
+    truth: &TruthSSO,
     out_dir: &Utf8Path,
 ) -> Result<()> {
     let alert_store = &ctx.runtime_state.alert_store;

@@ -2,11 +2,11 @@ pub mod plots;
 
 use std::fmt;
 
-use ahash::{AHashMap, AHashSet};
+use ahash::AHashSet;
 use anyhow::Result;
 use fink_fat_engine::{night_id::NightId, pipeline::PipelineContext};
 
-use crate::truth_sso::{SeedClass, TrajId, TruthSSOMap, classify_seed, get_truth_traj_id};
+use crate::truth_sso::{TrajId, TruthClass, TruthSSO};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Seed quality statistics
@@ -96,7 +96,7 @@ impl fmt::Display for SeedStats {
 /// and [`plots::seeding_plots`] (for plotting).
 pub fn compute_seeding_stats(
     ctx: &PipelineContext,
-    truth: &TruthSSOMap,
+    truth: &TruthSSO,
 ) -> Result<(SeedStats, Vec<(String, SeedStats)>)> {
     let seed_store = &ctx.runtime_state.seed_store;
     let alert_store = &ctx.runtime_state.alert_store;
@@ -107,25 +107,14 @@ pub fn compute_seeding_stats(
     let mut global = SeedStats::default();
     let mut per_night: Vec<(String, SeedStats)> = Vec::with_capacity(nights.len());
 
-    for night_id in &nights {
+    for night_id in nights {
         let seeds = match seed_store.get(night_id) {
             Some(s) => s,
             None => continue,
         };
 
         // ── Recoverable trajectories ──────────────────────────────────────────
-        let mut traj_alert_count: AHashMap<TrajId, usize> = AHashMap::new();
-        if let Some(night_alerts) = alert_store.get(night_id) {
-            for alert in night_alerts {
-                if let Some(traj_id) = get_truth_traj_id(truth, alert) {
-                    *traj_alert_count.entry(traj_id).or_insert(0) += 1;
-                }
-            }
-        }
-        let recoverable: AHashSet<TrajId> = traj_alert_count
-            .into_iter()
-            .filter_map(|(traj_id, count)| (count >= 2).then_some(traj_id))
-            .collect();
+        let recoverable: AHashSet<TrajId> = truth.recoverable_seeds(*night_id, 2).collect();
 
         // ── Classify seeds ────────────────────────────────────────────────────
         let mut night_stats = SeedStats {
@@ -137,18 +126,17 @@ pub fn compute_seeding_stats(
         for seed in seeds {
             night_stats.n_seeds += 1;
             let resolved = seed.resolve_members(alert_store).unwrap_or_default();
-            let class = classify_seed(truth, &resolved);
+            let class = truth.classify(&resolved);
             match class {
-                SeedClass::TruePositive => {
+                TruthClass::TruePositive => {
                     night_stats.n_true_positive += 1;
-                    if let Some(traj_id) =
-                        resolved.first().and_then(|a| get_truth_traj_id(truth, a))
+                    if let Some(traj_id) = resolved.first().and_then(|a| truth.get_truth_traj_id(a))
                     {
                         recovered.insert(traj_id);
                     }
                 }
-                SeedClass::FalsePositive => night_stats.n_false_positive += 1,
-                SeedClass::Unknown => night_stats.n_unknown += 1,
+                TruthClass::FalsePositive => night_stats.n_false_positive += 1,
+                TruthClass::Unknown => night_stats.n_unknown += 1,
             }
         }
         night_stats.n_recovered_trajs = recovered.intersection(&recoverable).count();
@@ -167,7 +155,7 @@ pub fn compute_seeding_stats(
 ///
 /// Calls [`compute_seeding_stats`] internally.  For plot output, use
 /// [`plots::seeding_plots`] in addition.
-pub fn seeding_evaluation(ctx: &PipelineContext, truth: &TruthSSOMap) -> Result<()> {
+pub fn seeding_evaluation(ctx: &PipelineContext, truth: &TruthSSO) -> Result<()> {
     let (global, per_night) = compute_seeding_stats(ctx, truth)?;
 
     tracing::info!("Seeding evaluation");
