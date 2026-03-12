@@ -46,6 +46,13 @@ clap = { workspace = true }
 [dev-dependencies]
 husky-rs = "0.1.5"
 
+[profile.dev]
+codegen-units = 128
+opt-level = 3
+
+[profile.dev.package."*"]
+opt-level = 3
+
 [profile.release]
 opt-level = 3
 strip = "none"
