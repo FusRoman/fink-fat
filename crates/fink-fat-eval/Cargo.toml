@@ -18,7 +18,15 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
 ahash = { workspace = true }
+plotters = "0.3.7"
 
 [dev-dependencies]
 approx = "0.5.1"
 prop-test = "0.1.1"
+
+[profile.dev]
+codegen-units = 256
+opt-level = 0
+
+[profile.dev.package."*"]
+opt-level = 3

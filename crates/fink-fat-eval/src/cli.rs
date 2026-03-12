@@ -35,6 +35,14 @@ pub struct CommonArgs {
 pub struct SeedingArgs {
     #[command(flatten)]
     pub common: CommonArgs,
+
+    /// Output directory for evaluation plots (PNG files).
+    ///
+    /// When set, a set of distribution and result charts is written to this
+    /// directory after evaluation completes.  The directory is created
+    /// automatically if it does not exist.
+    #[arg(long, value_name = "PLOT_DIR")]
+    pub plot_dir: Option<Utf8PathBuf>,
 }
 
 /// Arguments for the `edge-eval` subcommand

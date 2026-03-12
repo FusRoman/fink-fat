@@ -1,3 +1,5 @@
+pub mod plots;
+
 use std::fmt;
 
 use ahash::{AHashMap, AHashSet};
@@ -82,10 +84,20 @@ impl fmt::Display for SeedStats {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Evaluation entry-point
+// Stats computation (shared by logging and plotting)
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub fn seeding_evaluation(ctx: &PipelineContext, truth: &TruthSSOMap) -> Result<()> {
+/// Compute per-night seed statistics for all nights in the seed store.
+///
+/// Returns `(global, per_night)` where `per_night` is sorted by night ID and
+/// each element is `(night_label, SeedStats)`.
+///
+/// This is the shared core used by both [`seeding_evaluation`] (for logging)
+/// and [`plots::seeding_plots`] (for plotting).
+pub fn compute_seeding_stats(
+    ctx: &PipelineContext,
+    truth: &TruthSSOMap,
+) -> Result<(SeedStats, Vec<(String, SeedStats)>)> {
     let seed_store = &ctx.runtime_state.seed_store;
     let alert_store = &ctx.runtime_state.alert_store;
 
@@ -93,15 +105,7 @@ pub fn seeding_evaluation(ctx: &PipelineContext, truth: &TruthSSOMap) -> Result<
     nights.sort();
 
     let mut global = SeedStats::default();
-
-    tracing::info!("Seeding evaluation");
-    tracing::info!("{:-<72}", "");
-    tracing::info!(
-        "{:<10}  {}",
-        "night",
-        "seeds        TP        FP   unknown    purity"
-    );
-    tracing::info!("{:-<72}", "");
+    let mut per_night: Vec<(String, SeedStats)> = Vec::with_capacity(nights.len());
 
     for night_id in &nights {
         let seeds = match seed_store.get(night_id) {
@@ -110,8 +114,6 @@ pub fn seeding_evaluation(ctx: &PipelineContext, truth: &TruthSSOMap) -> Result<
         };
 
         // ── Recoverable trajectories ──────────────────────────────────────────
-        // Count alerts per traj_id on this night; any traj with ≥ 2 alerts
-        // could in principle produce at least one seed.
         let mut traj_alert_count: AHashMap<TrajId, usize> = AHashMap::new();
         if let Some(night_alerts) = alert_store.get(night_id) {
             for alert in night_alerts {
@@ -125,7 +127,7 @@ pub fn seeding_evaluation(ctx: &PipelineContext, truth: &TruthSSOMap) -> Result<
             .filter_map(|(traj_id, count)| (count >= 2).then_some(traj_id))
             .collect();
 
-        // ── Classify seeds and collect recovered trajectories ─────────────────
+        // ── Classify seeds ────────────────────────────────────────────────────
         let mut night_stats = SeedStats {
             n_recoverable_trajs: recoverable.len(),
             ..SeedStats::default()
@@ -134,15 +136,11 @@ pub fn seeding_evaluation(ctx: &PipelineContext, truth: &TruthSSOMap) -> Result<
 
         for seed in seeds {
             night_stats.n_seeds += 1;
-
             let resolved = seed.resolve_members(alert_store).unwrap_or_default();
-
             let class = classify_seed(truth, &resolved);
-
             match class {
                 SeedClass::TruePositive => {
                     night_stats.n_true_positive += 1;
-                    // Record which trajectory this TP seed covers.
                     if let Some(traj_id) =
                         resolved.first().and_then(|a| get_truth_traj_id(truth, a))
                     {
@@ -153,12 +151,36 @@ pub fn seeding_evaluation(ctx: &PipelineContext, truth: &TruthSSOMap) -> Result<
                 SeedClass::Unknown => night_stats.n_unknown += 1,
             }
         }
-
-        // Only count trajectories that were actually recoverable.
         night_stats.n_recovered_trajs = recovered.intersection(&recoverable).count();
-
-        tracing::info!("{:<10}  {}", night_id, night_stats);
         global.add_assign(night_stats);
+        per_night.push((night_id.to_string(), night_stats));
+    }
+
+    Ok((global, per_night))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Logging entry-point
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Evaluate seeding quality and write a summary to the tracing log.
+///
+/// Calls [`compute_seeding_stats`] internally.  For plot output, use
+/// [`plots::seeding_plots`] in addition.
+pub fn seeding_evaluation(ctx: &PipelineContext, truth: &TruthSSOMap) -> Result<()> {
+    let (global, per_night) = compute_seeding_stats(ctx, truth)?;
+
+    tracing::info!("Seeding evaluation");
+    tracing::info!("{:-<72}", "");
+    tracing::info!(
+        "{:<10}  {}",
+        "night",
+        "seeds        TP        FP   unknown    purity"
+    );
+    tracing::info!("{:-<72}", "");
+
+    for (label, stats) in &per_night {
+        tracing::info!("{:<10}  {}", label, stats);
     }
 
     tracing::info!("{:-<72}", "");
