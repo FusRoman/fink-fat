@@ -370,12 +370,31 @@ where
         .unwrap_or(1.0)
         .max(f64::EPSILON);
 
+    // y_min must be derived from data, not hardcoded to 0: when log_x is true
+    // the y values are in log₁₀ space and can be negative (original value < 1).
+    // Mapping a point below the chart's y range causes an integer overflow in
+    // plotters' coordinate translation.
+    let y_min_data = pvals
+        .iter()
+        .filter_map(|&(_, v)| if v.is_finite() { Some(v) } else { None })
+        .fold(f64::INFINITY, f64::min);
+    let y_min = if y_min_data.is_finite() {
+        // Add a small margin below the lowest value.
+        if y_min_data >= 0.0 {
+            0f64.min(y_min_data * 0.9)
+        } else {
+            y_min_data * 1.1
+        }
+    } else {
+        0.0
+    };
+
     let mut chart = ChartBuilder::on(area)
         .caption("Percentiles", ("sans-serif", 18))
         .margin(MARGIN)
         .x_label_area_size(40)
         .y_label_area_size(60)
-        .build_cartesian_2d(0f64..100f64, 0f64..y_max)
+        .build_cartesian_2d(0f64..100f64, y_min..y_max)
         .map_err(|e| anyhow::anyhow!("{e:?}"))?;
 
     {
