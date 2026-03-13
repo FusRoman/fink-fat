@@ -474,7 +474,7 @@ impl SeedNode {
                     // Normalised-offset cut: reject candidates whose actual angular
                     // separation from the predicted center exceeds max_norm * base_r.
                     // This is a pure FP zone visible in the predictor diagnostics.
-                    max_norm.map_or(true, |mn| {
+                    max_norm.is_none_or(|mn| {
                         ang_sep(ra_center, dec_center, to.plane.ra_mid, to.plane.dec_mid) / base_r
                             <= mn
                     })

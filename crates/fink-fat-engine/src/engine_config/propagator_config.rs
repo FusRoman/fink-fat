@@ -160,6 +160,7 @@
 
 use std::fmt;
 
+use outfit::constants::Radian;
 use serde::{Deserialize, Serialize};
 
 use crate::engine_config::units::de_angle_rad_opt;
@@ -329,7 +330,7 @@ pub struct PredictorParams {
     /// predicted radius).  Candidates whose ratio exceeds this threshold are
     /// **discarded before edge materialisation**.
     ///
-    /// This is complementary to [`max_cone_radius`]: `max_cone_radius` caps the
+    /// This is complementary to [`PredictorParams::max_cone_radius`]: `max_cone_radius` caps the
     /// *physical* query cone (useful when uncertainty is huge), while
     /// `max_norm_offset` caps the *normalised* ratio post-retrieval (useful when
     /// the distribution of FPs beyond a certain sigma multiple has zero TP overlap).
@@ -379,16 +380,16 @@ impl PredictorParams {
             }
         }
 
-        if let Some(r) = self.max_cone_radius {
-            if !r.is_finite() || r <= 0.0 {
-                return Err(PredictorParamError::InvalidMaxConeRadius(r));
-            }
+        if let Some(r) = self.max_cone_radius
+            && (!r.is_finite() || r <= 0.0)
+        {
+            return Err(PredictorParamError::InvalidMaxConeRadius(r));
         }
 
-        if let Some(n) = self.max_norm_offset {
-            if !n.is_finite() || n <= 0.0 {
-                return Err(PredictorParamError::InvalidMaxNormOffset(n));
-            }
+        if let Some(n) = self.max_norm_offset
+            && (!n.is_finite() || n <= 0.0)
+        {
+            return Err(PredictorParamError::InvalidMaxNormOffset(n));
         }
 
         Ok(())
@@ -665,9 +666,9 @@ impl PredictorParamsBuilder {
     /// Any computed cone radius that exceeds this value is clamped to it before
     /// the spatial index is queried.  Pass `None` to disable the cap (default).
     ///
-    /// Use [`crate::astro_math::arcmin_to_rad`] or similar to convert from
+    /// Use [`crate::astro_math::arcsec_to_rad`] or similar to convert from
     /// human-friendly units when constructing programmatically.
-    pub fn max_cone_radius(mut self, r: Option<f64>) -> Self {
+    pub fn max_cone_radius(mut self, r: Option<Radian>) -> Self {
         self.max_cone_radius = r;
         self
     }
@@ -694,16 +695,16 @@ impl PredictorParamsBuilder {
         }
         let noise = ModelNoiseBuilder { inner: self.noise }.build()?;
 
-        if let Some(r) = self.max_cone_radius {
-            if !r.is_finite() || r <= 0.0 {
-                return Err(PredictorParamError::InvalidMaxConeRadius(r));
-            }
+        if let Some(r) = self.max_cone_radius
+            && (!r.is_finite() || r <= 0.0)
+        {
+            return Err(PredictorParamError::InvalidMaxConeRadius(r));
         }
 
-        if let Some(n) = self.max_norm_offset {
-            if !n.is_finite() || n <= 0.0 {
-                return Err(PredictorParamError::InvalidMaxNormOffset(n));
-            }
+        if let Some(n) = self.max_norm_offset
+            && (!n.is_finite() || n <= 0.0)
+        {
+            return Err(PredictorParamError::InvalidMaxNormOffset(n));
         }
 
         Ok(PredictorParams {

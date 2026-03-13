@@ -237,7 +237,7 @@ impl AlertLinkageDAG {
 
             self.edges[idx].active = false;
             self.pending_ops.push(EdgeOp::Upsert {
-                edge: self.edges[idx].clone(),
+                edge: self.edges[idx],
             });
             n_deactivated += 1;
         }
@@ -251,7 +251,7 @@ impl AlertLinkageDAG {
 // =============================================================================
 
 #[cfg(test)]
-mod tests {
+mod graph_tests {
     use super::*;
     use crate::{
         graph::edge::{Edge, EdgeKey},
