@@ -16,3 +16,4 @@ evaluate_edges_output/
 eval_config.yml
 sso_fink_ztf_lc.parquet
 seeding_plots/
+edge_plots/

@@ -1,7 +1,11 @@
+pub mod plots;
+
 use std::fmt;
 
 use ahash::AHashSet;
 use anyhow::{Context, Result};
+use camino::Utf8Path;
+use fink_fat_engine::night_id::NightId;
 use fink_fat_engine::pipeline::PipelineContext;
 
 use crate::truth_sso::{TrajId, TruthClass, TruthSSO};
@@ -89,11 +93,17 @@ pub fn compute_edge_stats(ctx: &PipelineContext, truth: &TruthSSO) -> Result<Edg
 
     // ── Recoverable trajectories ──────────────────────────────────────────
     let max_gap = ctx.engine_config.max_gap_nights();
-    let recoverable: AHashSet<TrajId> = truth.recoverable_edges(2, max_gap).collect();
+    let recoverable: AHashSet<(TrajId, NightId, NightId)> =
+        truth.recoverable_edges(2, max_gap).collect();
+    let n_recoverable_trajs: usize = recoverable
+        .iter()
+        .map(|(t, _, _)| *t)
+        .collect::<AHashSet<_>>()
+        .len();
 
     let mut global = EdgeStats {
         n_edges: ctx.runtime_state.graph.edges.len(),
-        n_recoverable_trajs: recoverable.len(),
+        n_recoverable_trajs,
         ..EdgeStats::default()
     };
 
@@ -126,7 +136,11 @@ pub fn compute_edge_stats(ctx: &PipelineContext, truth: &TruthSSO) -> Result<Edg
             TruthClass::TruePositive => {
                 global.n_true_positive += 1;
                 if let Some(traj_id) = alerts.first().and_then(|a| truth.get_truth_traj_id(a)) {
-                    recovered.insert(traj_id);
+                    let from_night = from_seed.night_id();
+                    let to_night = to_seed.night_id();
+                    if recoverable.contains(&(traj_id, from_night, to_night)) {
+                        recovered.insert(traj_id);
+                    }
                 }
             }
             TruthClass::FalsePositive => global.n_false_positive += 1,
@@ -134,20 +148,29 @@ pub fn compute_edge_stats(ctx: &PipelineContext, truth: &TruthSSO) -> Result<Edg
         }
     }
 
-    global.n_recovered_trajs = recovered.intersection(&recoverable).count();
+    global.n_recovered_trajs = recovered.len();
     Ok(global)
 }
 
 /// Evaluate edge quality and write a summary to the tracing log.
 ///
-/// Calls [`compute_edge_stats`] internally.  For plot output, use
-/// [`plots::edge_plots`] in addition.
-pub fn edge_evaluation(ctx: &PipelineContext, truth: &TruthSSO) -> Result<()> {
+/// Calls [`compute_edge_stats`] internally.  When `plot_dir` is provided,
+/// feature distribution charts (TP vs FP) are also written via
+/// [`plots::edge_plots`].
+pub fn edge_evaluation(
+    ctx: &PipelineContext,
+    truth: &TruthSSO,
+    plot_dir: Option<&Utf8Path>,
+) -> Result<()> {
     let stats = compute_edge_stats(ctx, truth)?;
 
     tracing::info!("Edge evaluation");
     tracing::info!("{:-<72}", "");
     tracing::info!("TOTAL       {}", stats);
+
+    if let Some(dir) = plot_dir {
+        plots::edge_plots(ctx, truth, dir)?;
+    }
 
     Ok(())
 }

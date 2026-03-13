@@ -14,7 +14,6 @@ use crate::{
 
 #[derive(Debug)]
 pub struct AlertLinkageDAG {
-    pub in_deg: AHashMap<SeedKey, usize>,
     pub out_deg: AHashMap<SeedKey, usize>,
     /// All edges, kept **sorted by `EdgeKey`** at all times.
     ///
@@ -40,7 +39,6 @@ impl Default for AlertLinkageDAG {
 impl AlertLinkageDAG {
     pub fn new() -> Self {
         Self {
-            in_deg: AHashMap::new(),
             out_deg: AHashMap::new(),
             edges: Vec::new(),
             pending_ops: Vec::new(),
@@ -55,18 +53,15 @@ impl AlertLinkageDAG {
     /// The edge vector is sorted by [`EdgeKey`] so that subsequent lookups
     /// via [`Self::edge_by_key`] can use binary search.
     pub fn from_edges(mut edges: Vec<Edge>) -> Self {
-        let mut in_deg = AHashMap::new();
         let mut out_deg = AHashMap::new();
 
         for edge in edges.iter() {
             *out_deg.entry(edge.from).or_insert(0) += 1;
-            *in_deg.entry(edge.to).or_insert(0) += 1;
         }
 
         edges.sort_unstable_by_key(|e| e.key());
 
         Self {
-            in_deg,
             out_deg,
             edges,
             pending_ops: Vec::new(),
@@ -150,19 +145,22 @@ impl AlertLinkageDAG {
         let n_new_edges = new_edges.len();
         tracing::debug!(%left_night, %right_night, n_new_edges, "edges built");
 
+        let old_len = self.edges.len();
         for edge in new_edges {
             *self.out_deg.entry(edge.from).or_insert(0) += 1;
-            *self.in_deg.entry(edge.to).or_insert(0) += 1;
 
-            // Track the operation for the journal delta.
-            self.pending_ops.push(EdgeOp::Upsert { edge: edge.clone() });
-
+            // Edge is Copy, so both pushes below are cheap bitwise copies
+            // — no heap allocation, no .clone() call.
+            self.pending_ops.push(EdgeOp::Upsert { edge });
             self.edges.push(edge);
         }
-        // Re-sort to maintain the sorted-by-EdgeKey invariant required by
-        // binary_search_by_key. Timsort on a mostly-sorted slice (existing
-        // edges + one appended batch) is nearly O(n).
-        self.edges.sort_unstable_by_key(|e| e.key());
+        // Sorted-merge in two steps:
+        //   1. Sort only the new batch — O(m log m).
+        //   2. Stable sort the full vector. Timsort detects the two existing
+        //      sorted runs (old prefix + new suffix) and merges them in O(n+m).
+        // Total cost O(n + m log m) vs the previous O((n+m) log(n+m)).
+        self.edges[old_len..].sort_unstable_by_key(|e| e.key());
+        self.edges.sort_by_key(|e| e.key());
 
         Ok(())
     }

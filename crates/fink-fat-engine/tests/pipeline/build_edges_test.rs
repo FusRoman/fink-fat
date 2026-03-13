@@ -157,9 +157,6 @@ fn three_stage_pipeline_produces_edges_between_nights() {
     for edge in &graph.edges {
         let out = graph.out_deg.get(&edge.from).copied().unwrap_or(0);
         assert!(out > 0, "from-node must have out_deg > 0");
-
-        let in_d = graph.in_deg.get(&edge.to).copied().unwrap_or(0);
-        assert!(in_d > 0, "to-node must have in_deg > 0");
     }
 }
 

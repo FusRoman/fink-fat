@@ -50,6 +50,13 @@ pub struct SeedingArgs {
 pub struct EdgeArgs {
     #[command(flatten)]
     pub common: CommonArgs,
+
+    /// Output directory for edge evaluation plots (PNG files).
+    ///
+    /// When set, feature distribution charts (TP vs FP) are written here.
+    /// The directory is created automatically if it does not exist.
+    #[arg(long, value_name = "PLOT_DIR")]
+    pub plot_dir: Option<Utf8PathBuf>,
 }
 
 pub fn cli_builder() -> Cli {

@@ -8,6 +8,7 @@ license-file.workspace = true
 readme = "README.md"
 
 [dependencies]
+indicatif = { workspace = true }
 clap = { workspace = true }
 fink-fat-engine = { workspace = true }
 anyhow = "1.0.102"

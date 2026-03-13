@@ -200,7 +200,7 @@ pub struct EdgeKey {
 /// Notes
 /// -----
 /// - `active` is not part of feature computation; it is a graph-level control flag.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct Edge {
     /// Solver-facing cost (dimensionless, strictly positive).
     pub cost: f64,

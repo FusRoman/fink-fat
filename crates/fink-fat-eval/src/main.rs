@@ -6,13 +6,14 @@ use fink_fat_engine::pipeline::stages::PipelineStage;
 pub mod cli;
 pub mod edges;
 pub mod logging;
+pub mod progress;
 pub mod runner;
 pub mod seeding;
 pub mod truth_sso;
 
 use cli::{Cli, Commands};
 
-use crate::{edges::edge_evaluation, runner::run_fink_fat};
+use crate::runner::run_fink_fat;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -32,15 +33,18 @@ fn main() -> Result<()> {
                 },
             )?
         }
-        Commands::EdgeEval(args) => run_fink_fat(
-            args.common,
-            &[
-                PipelineStage::IngestNights,
-                PipelineStage::BuildSeeds,
-                PipelineStage::BuildEdges,
-            ],
-            edge_evaluation,
-        )?,
+        Commands::EdgeEval(args) => {
+            let plot_dir = args.plot_dir.clone();
+            run_fink_fat(
+                args.common,
+                &[
+                    PipelineStage::IngestNights,
+                    PipelineStage::BuildSeeds,
+                    PipelineStage::BuildEdges,
+                ],
+                move |ctx, truth| edges::edge_evaluation(ctx, truth, plot_dir.as_deref()),
+            )?
+        }
     };
 
     Ok(())

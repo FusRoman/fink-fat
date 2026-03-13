@@ -114,6 +114,12 @@ pub enum PredictorParamError {
     /// Noise coefficients must be finite and non-negative.
     #[error("invalid noise coefficient `{name}` = {value:?} (expect finite and >= 0)")]
     InvalidNoiseCoeff { name: &'static str, value: f64 },
+    /// max_cone_radius must be finite and strictly positive when set.
+    #[error("invalid max_cone_radius = {0:?} (expect finite and > 0)")]
+    InvalidMaxConeRadius(f64),
+    /// max_norm_offset must be finite and strictly positive when set.
+    #[error("invalid max_norm_offset = {0:?} (expect finite and > 0)")]
+    InvalidMaxNormOffset(f64),
 }
 
 #[derive(Debug, Error)]

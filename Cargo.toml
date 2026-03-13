@@ -32,9 +32,10 @@ tracing-appender = "0.2"
 clap = { version = "4.5.60", features = ["cargo", "derive"] }
 chrono = "0.4"
 fink-fat-engine = { path = "crates/fink-fat-engine" }
+indicatif = "0.18.0"
 
 [dependencies]
-indicatif = "0.18.0"
+indicatif = { workspace = true }
 camino = { workspace = true }
 chrono = { workspace = true }
 tracing = { workspace = true }

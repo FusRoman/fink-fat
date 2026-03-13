@@ -211,28 +211,33 @@ impl TruthSSO {
             })
     }
 
-    /// Get an iterator over trajectory IDs that are recoverable as edges.
+    /// Iterate over all detectable edges for the given seeding parameters.
     ///
-    /// A trajectory is recoverable if it has at least two "seeded" nights
-    /// whose gap is ≤ `max_gap`.  A night is seeded when it contains at least
-    /// `night_count` alerts for that trajectory.
+    /// An edge connects two consecutive seeded nights of the same trajectory.
+    /// A night is *seeded* when it contains at least `night_count` alerts for
+    /// that trajectory.  Two seeded nights form an edge when their gap is
+    /// ≤ `max_gap` nights.  Each edge is uniquely identified by
+    /// `(traj_id, night_from, night_to)`.
     ///
     /// Arguments
     /// ---------
     /// * `night_count` – Minimum number of alerts on a single night to form a seed.
-    /// * `max_gap`     – Maximum allowed gap (in nights) between two seeds for an edge to be built.
+    /// * `max_gap`     – Maximum allowed gap (in nights) between two consecutive
+    ///                   seeds for an edge to exist.
     ///
-    /// Returns
-    /// -------
-    /// An iterator yielding trajectory IDs that satisfy both conditions.
+    /// Return
+    /// ------
+    /// An iterator yielding one `(traj_id, night_from, night_to)` tuple per
+    /// detectable edge, where `night_from < night_to` and
+    /// `night_to - night_from ≤ max_gap`.
     pub fn recoverable_edges(
         &self,
         night_count: usize,
         max_gap: u8,
-    ) -> impl Iterator<Item = TrajId> + '_ {
+    ) -> impl Iterator<Item = (TrajId, NightId, NightId)> + '_ {
         self.traj_count
             .iter()
-            .filter_map(move |(&traj_id, night_counts)| {
+            .flat_map(move |(&traj_id, night_counts)| {
                 // Collect nights that have enough alerts to form a seed, sorted ascending.
                 let mut seeded_nights: Vec<NightId> = night_counts
                     .iter()
@@ -242,12 +247,12 @@ impl TruthSSO {
 
                 seeded_nights.sort();
 
-                // An edge exists when two consecutive seeded nights are within max_gap.
-                let has_edge = seeded_nights
+                // Emit one edge per consecutive pair within max_gap.
+                seeded_nights
                     .windows(2)
-                    .any(|w| (w[1].0 - w[0].0) <= max_gap as u32);
-
-                has_edge.then_some(traj_id)
+                    .filter(|w| (w[1].0 - w[0].0) <= max_gap as u32)
+                    .map(|w| (traj_id, w[0], w[1]))
+                    .collect::<Vec<_>>()
             })
     }
 }

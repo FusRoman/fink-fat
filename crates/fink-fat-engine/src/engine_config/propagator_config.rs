@@ -162,6 +162,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::engine_config::units::de_angle_rad_opt;
 use crate::error::PredictorParamError;
 
 /* -------------------------------------------------------------------------- */
@@ -294,6 +295,56 @@ pub struct PredictorParams {
     pub time_bin_dt: f64,
     /// Velocity slack (rad/day) added to cone radius to account for velocity uncertainty.
     pub v_slack: f64,
+    /// Hard upper bound on the cone radius (radians).
+    ///
+    /// When set, any cone radius that would exceed this value is **clamped** to it
+    /// before the spatial index is queried.  Seeds whose predicted uncertainty is
+    /// very large (e.g. pair seeds over a long inter-night gap) produce huge cones
+    /// and therefore many false-positive candidates; capping the radius removes the
+    /// worst offenders with no allocation cost.
+    ///
+    /// `None` (the default) means no cap: the full `k_sigma · √λ_max(Σ_p)` radius
+    /// is used.
+    ///
+    /// In YAML, specify any supported angle unit:
+    /// ```yaml
+    /// max_cone_radius: "100 arcmin"
+    /// max_cone_radius: "1.5 deg"
+    /// ```
+    /// Omitting the field is equivalent to `null` / no cap.
+    ///
+    /// Units: **radians** (converted at deserialisation time via `de_angle_rad_opt`).
+    #[serde(
+        default,
+        deserialize_with = "de_angle_rad_opt",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_cone_radius: Option<f64>,
+
+    /// Hard upper bound on the normalised angular offset `δ / cone_radius_base`.
+    ///
+    /// After a spatial query returns candidates, each candidate's actual angular
+    /// separation `δ = ang_sep(predicted_center, candidate)` is divided by
+    /// `cone_radius_base = k_sigma · √λ_max(Σ_p(t))` (the uncapped, unpadded
+    /// predicted radius).  Candidates whose ratio exceeds this threshold are
+    /// **discarded before edge materialisation**.
+    ///
+    /// This is complementary to [`max_cone_radius`]: `max_cone_radius` caps the
+    /// *physical* query cone (useful when uncertainty is huge), while
+    /// `max_norm_offset` caps the *normalised* ratio post-retrieval (useful when
+    /// the distribution of FPs beyond a certain sigma multiple has zero TP overlap).
+    ///
+    /// `None` (the default) means no normalised cut is applied.
+    ///
+    /// In YAML, specify a plain  dimensionless number:
+    /// ```yaml
+    /// max_norm_offset: 25.0
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_norm_offset: Option<f64>,
+
+    /// If true, pad the cone radius to ensure coverage of the entire time bin.
+    pub pad_time_bin_radius: bool,
 }
 
 impl PredictorParams {
@@ -328,6 +379,18 @@ impl PredictorParams {
             }
         }
 
+        if let Some(r) = self.max_cone_radius {
+            if !r.is_finite() || r <= 0.0 {
+                return Err(PredictorParamError::InvalidMaxConeRadius(r));
+            }
+        }
+
+        if let Some(n) = self.max_norm_offset {
+            if !n.is_finite() || n <= 0.0 {
+                return Err(PredictorParamError::InvalidMaxNormOffset(n));
+            }
+        }
+
         Ok(())
     }
 }
@@ -347,8 +410,11 @@ impl Default for PredictorParams {
             k_sigma: 3.0,
             noise: ModelNoise::default(),
             pad_cell_radius: true,
+            pad_time_bin_radius: true,
             time_bin_dt: 0.021, // 30.24 minutes in days
             v_slack: 0.0,
+            max_cone_radius: None,
+            max_norm_offset: None,
         }
     }
 }
@@ -486,8 +552,11 @@ pub struct PredictorParamsBuilder {
     k_sigma: f64,
     noise: ModelNoise,
     pad_cell_radius: bool,
+    pad_time_bin_radius: bool,
     time_bin_dt: f64,
     v_slack: f64,
+    max_cone_radius: Option<f64>,
+    max_norm_offset: Option<f64>,
 }
 
 impl Default for PredictorParamsBuilder {
@@ -496,8 +565,11 @@ impl Default for PredictorParamsBuilder {
             k_sigma: 3.0,
             noise: ModelNoise::default(),
             pad_cell_radius: true,
+            pad_time_bin_radius: true,
             time_bin_dt: 0.021, // 30.24 minutes in days
             v_slack: 0.0,
+            max_cone_radius: None,
+            max_norm_offset: None,
         }
     }
 }
@@ -582,6 +654,34 @@ impl PredictorParamsBuilder {
         self
     }
 
+    /// Enable/disable padding by the time bin radius.
+    pub fn pad_time_bin_radius(mut self, yes: bool) -> Self {
+        self.pad_time_bin_radius = yes;
+        self
+    }
+
+    /// Set a hard cap on the cone radius (radians).
+    ///
+    /// Any computed cone radius that exceeds this value is clamped to it before
+    /// the spatial index is queried.  Pass `None` to disable the cap (default).
+    ///
+    /// Use [`crate::astro_math::arcmin_to_rad`] or similar to convert from
+    /// human-friendly units when constructing programmatically.
+    pub fn max_cone_radius(mut self, r: Option<f64>) -> Self {
+        self.max_cone_radius = r;
+        self
+    }
+
+    /// Set a hard cap on the normalised offset `δ / cone_radius_base`.
+    ///
+    /// After the spatial query, each candidate whose actual angular separation
+    /// divided by the kσ-inflated predicted radius exceeds this threshold is
+    /// discarded.  Pass `None` to disable (default).
+    pub fn max_norm_offset(mut self, n: Option<f64>) -> Self {
+        self.max_norm_offset = n;
+        self
+    }
+
     /// Validate and build the final [`PredictorParams`].
     ///
     /// Return
@@ -594,12 +694,27 @@ impl PredictorParamsBuilder {
         }
         let noise = ModelNoiseBuilder { inner: self.noise }.build()?;
 
+        if let Some(r) = self.max_cone_radius {
+            if !r.is_finite() || r <= 0.0 {
+                return Err(PredictorParamError::InvalidMaxConeRadius(r));
+            }
+        }
+
+        if let Some(n) = self.max_norm_offset {
+            if !n.is_finite() || n <= 0.0 {
+                return Err(PredictorParamError::InvalidMaxNormOffset(n));
+            }
+        }
+
         Ok(PredictorParams {
             k_sigma: self.k_sigma,
             noise,
             pad_cell_radius: self.pad_cell_radius,
+            pad_time_bin_radius: self.pad_time_bin_radius,
             time_bin_dt: self.time_bin_dt,
             v_slack: self.v_slack,
+            max_cone_radius: self.max_cone_radius,
+            max_norm_offset: self.max_norm_offset,
         })
     }
 
@@ -612,6 +727,7 @@ impl PredictorParamsBuilder {
         nb.preset_pairs_conservative();
         self.noise = nb.inner;
         self.pad_cell_radius = true;
+        self.pad_time_bin_radius = true;
         self
     }
 
@@ -622,6 +738,7 @@ impl PredictorParamsBuilder {
         nb.preset_triplets_tight();
         self.noise = nb.inner;
         self.pad_cell_radius = true;
+        self.pad_time_bin_radius = true;
         self
     }
 }
@@ -646,12 +763,20 @@ impl fmt::Display for PredictorParams {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "PredictorParams {{ k_sigma:{:.3}, noise: {{ variance_floor:{:.3e}, drift_per_day:{:.3e}, curvature_per_day2:{:.3e} }}, pad_cell_radius:{} }}",
+            "PredictorParams {{ k_sigma:{:.3}, noise: {{ variance_floor:{:.3e}, drift_per_day:{:.3e}, curvature_per_day2:{:.3e} }}, pad_cell_radius:{}, max_cone_radius:{}, max_norm_offset:{} }}",
             self.k_sigma,
             self.noise.variance_floor,
             self.noise.drift_per_day,
             self.noise.curvature_per_day2,
-            self.pad_cell_radius
+            self.pad_cell_radius,
+            match self.max_cone_radius {
+                Some(r) => format!("{:.2} arcmin", r * 180.0 * 60.0 / std::f64::consts::PI),
+                None => "∞".to_string(),
+            },
+            match self.max_norm_offset {
+                Some(n) => format!("{:.1}", n),
+                None => "∞".to_string(),
+            }
         )
     }
 }

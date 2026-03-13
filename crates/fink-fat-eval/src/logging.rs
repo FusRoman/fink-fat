@@ -10,10 +10,12 @@
 //! The log level is derived from [`fink_fat_engine::engine_config::log_level::LogLevel`]
 //! in the loaded engine configuration.
 
-use std::io;
+use std::io::{self, Write};
+use std::sync::Arc;
 
 use camino::Utf8Path;
 use chrono::Local;
+use indicatif::MultiProgress;
 use tracing::{Event, Level, Subscriber};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
@@ -185,15 +187,60 @@ where
     }
 }
 
-// ── Stderr writer ─────────────────────────────────────────────────────────────
+// ── Terminal writer (MultiProgress-aware) ────────────────────────────────────
 
-struct StderrWriter;
+/// Buffers a single log line and flushes it through [`MultiProgress::println`]
+/// when available, falling back to raw stderr.
+struct TerminalWriterGuard {
+    mp: Option<Arc<MultiProgress>>,
+    buf: Vec<u8>,
+}
 
-impl<'a> fmt::MakeWriter<'a> for StderrWriter {
-    type Writer = io::Stderr;
+impl io::Write for TerminalWriterGuard {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.buf.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if self.buf.is_empty() {
+            return Ok(());
+        }
+        match &self.mp {
+            Some(mp) => {
+                let s = String::from_utf8_lossy(&self.buf);
+                let line = s.trim_end_matches('\n');
+                if !line.is_empty() {
+                    let _ = mp.println(line);
+                }
+            }
+            None => {
+                io::stderr().write_all(&self.buf)?;
+            }
+        }
+        self.buf.clear();
+        Ok(())
+    }
+}
+
+impl Drop for TerminalWriterGuard {
+    fn drop(&mut self) {
+        let _ = self.flush();
+    }
+}
+
+struct TerminalMakeWriter {
+    mp: Option<Arc<MultiProgress>>,
+}
+
+impl<'a> fmt::MakeWriter<'a> for TerminalMakeWriter {
+    type Writer = TerminalWriterGuard;
 
     fn make_writer(&'a self) -> Self::Writer {
-        io::stderr()
+        TerminalWriterGuard {
+            mp: self.mp.clone(),
+            buf: Vec::new(),
+        }
     }
 }
 
@@ -228,6 +275,7 @@ pub struct LoggingGuard {
 pub fn init_logging(
     level: Level,
     log_path: &Utf8Path,
+    multi_progress: Option<Arc<MultiProgress>>,
 ) -> Result<LoggingGuard, Box<dyn std::error::Error>> {
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -243,7 +291,7 @@ pub fn init_logging(
 
     let stderr_layer = fmt::Layer::new()
         .event_format(FinkFatEvalFormat { ansi: true })
-        .with_writer(StderrWriter)
+        .with_writer(TerminalMakeWriter { mp: multi_progress })
         .with_ansi(true);
 
     let file_layer = fmt::Layer::new()

@@ -69,7 +69,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Alert, AlertKey, AlertStore, MJDTT, Radian,
-    astro_math::{fit_quad_1d, radec_to_tangent, spherical_midpoint, tangent_to_radec},
+    astro_math::{ang_sep, fit_quad_1d, radec_to_tangent, spherical_midpoint, tangent_to_radec},
     display_format::indent_block,
     engine_config::{edge_config::EdgeConfig, propagator_config::PredictorParams},
     night_id::NightId,
@@ -443,13 +443,42 @@ impl SeedNode {
             let bin_end = right_seed_index.time_binner.bin_end(bin.0);
             let bin_center = 0.5 * (bin_start + bin_end);
 
-            let (ra_center, dec_center, mut cone_radius) =
-                self.predict_cone(bin_center, right_seed_index.spatial_binner, &pred_cfg);
+            // Compute base radius (k_sigma-inflated, no cell padding or v_slack)
+            // separately from the full query radius, so we can apply max_norm_offset.
+            let (ra_center, dec_center, base_r) =
+                self.plane
+                    .predict_cone_base(bin_center, &pred_cfg.noise, pred_cfg.k_sigma);
+
+            let mut cone_radius = base_r;
+            if pred_cfg.pad_cell_radius {
+                cone_radius += right_seed_index.spatial_binner.cell_radius();
+            }
 
             // Conservative padding: ensure the cone covers any epoch within the bin.
-            cone_radius += effective_speed * half_bin_width_days;
+            if pred_cfg.pad_time_bin_radius {
+                cone_radius += effective_speed * half_bin_width_days;
+            }
 
-            right_seed_index.cone_query(ra_center, dec_center, cone_radius, bin_center)
+            // Hard cap: clamp to max_cone_radius when set.
+            // Seeds whose predicted uncertainty is very large (e.g. pairs over a long
+            // gap) would otherwise generate enormous cones with many FP candidates.
+            if let Some(max_r) = pred_cfg.max_cone_radius {
+                cone_radius = cone_radius.min(max_r);
+            }
+
+            let max_norm = pred_cfg.max_norm_offset;
+
+            right_seed_index
+                .cone_query(ra_center, dec_center, cone_radius, bin_center)
+                .filter(move |to| {
+                    // Normalised-offset cut: reject candidates whose actual angular
+                    // separation from the predicted center exceeds max_norm * base_r.
+                    // This is a pure FP zone visible in the predictor diagnostics.
+                    max_norm.map_or(true, |mn| {
+                        ang_sep(ra_center, dec_center, to.plane.ra_mid, to.plane.dec_mid) / base_r
+                            <= mn
+                    })
+                })
         })
     }
 
@@ -774,8 +803,11 @@ mod seed_node_tests {
             },
             k_sigma: 3.0,
             pad_cell_radius: true,
+            pad_time_bin_radius: true,
             time_bin_dt: 1.0,
             v_slack: 0.0,
+            max_cone_radius: None,
+            max_norm_offset: None,
         }
     }
 
