@@ -433,6 +433,76 @@ impl Edge {
         );
         Ok(edges)
     }
+
+    /// Build directed edges between two seed slices using a pre-built right-hand index.
+    ///
+    /// Equivalent to [`Edge::build_edges`] but accepts a [`SeedSpatialIndex`] that
+    /// was already constructed by the caller.  This avoids rebuilding the index for
+    /// every left night when multiple left nights share the same right night, which
+    /// is the common case when `max_gap > 1`.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `left`        – Slice of left-hand seeds (earlier epoch).
+    /// * `right_index` – Pre-built spatio-temporal index over the right-hand seeds.
+    /// * `edge_config` – Edge configuration (same semantics as [`Edge::build_edges`]).
+    /// * `model_pool`  – Optional ML model pool (required when `use_ml_ranking == true`).
+    /// * `progress_sink` – Progress reporter updated per processed chunk.
+    ///
+    /// Return
+    /// ------
+    /// * `Ok(Vec<Edge>)` – Constructed edges.
+    /// * `Err(EdgeBuilderError)` – Same error conditions as [`Edge::build_edges`].
+    pub fn build_edges_with_index<'seed_lf, 'binner_lf>(
+        left: &[SeedNode],
+        right_index: &SeedSpatialIndex<'seed_lf, 'binner_lf>,
+        edge_config: &EdgeConfig,
+        model_pool: Option<&EdgeRankingModelPool>,
+        progress_sink: &dyn StageProgress,
+    ) -> Result<Vec<Self>, EdgeBuilderError> {
+        let chunk_size = edge_config.parallel_left_batch_size.max(1);
+        let top_k = edge_config.top_k_per_left;
+
+        tracing::debug!(
+            n_left = left.len(),
+            chunk_size,
+            top_k = ?top_k,
+            parallel = edge_config.parallel_left_batches,
+            use_ml_ranking = edge_config.use_ml_ranking,
+            "build_edges_with_index starting",
+        );
+
+        let edges = match edge_config.parallel_left_batches {
+            true => build_edges_parallel(
+                left,
+                chunk_size,
+                right_index,
+                edge_config,
+                top_k,
+                model_pool,
+                progress_sink,
+            ),
+            false => build_edges_sequential(
+                left,
+                chunk_size,
+                right_index,
+                edge_config,
+                top_k,
+                model_pool,
+                progress_sink,
+            ),
+        }?;
+
+        let (cost_min, cost_max, cost_mean) = edge_cost_stats(&edges);
+        tracing::debug!(
+            n_edges = edges.len(),
+            cost_min,
+            cost_max,
+            cost_mean,
+            "build_edges_with_index complete"
+        );
+        Ok(edges)
+    }
 }
 
 /// Compute min, max, and mean cost from a slice of edges.
@@ -477,7 +547,8 @@ fn process_chunk_emit_all<'seed_lf>(
     right_index: &SeedSpatialIndex<'seed_lf, '_>,
     edge_config: &EdgeConfig,
 ) -> Result<Vec<Edge>, EdgeBuilderError> {
-    let mut local_edges: Vec<Edge> = Vec::new();
+    // Conservative lower-bound capacity: at least one edge per left seed.
+    let mut local_edges: Vec<Edge> = Vec::with_capacity(chunk.len());
 
     for src in chunk.iter() {
         for to in src.seed_edge_candidates(right_index, edge_config) {
@@ -543,7 +614,8 @@ fn process_chunk_ml_topk(
     top_k: usize,
     model_pool: &EdgeRankingModelPool,
 ) -> Result<Vec<Edge>, EdgeBuilderError> {
-    let mut local_edges: Vec<Edge> = Vec::new();
+    // top_k edges at most per left seed — exact upper bound.
+    let mut local_edges: Vec<Edge> = Vec::with_capacity(chunk.len() * top_k);
 
     // Temporary per-left output: avoids heap allocation for small top_k.
     let mut tmp: smallvec::SmallVec<[(&SeedNode, f64); 32]> = smallvec::SmallVec::new();
@@ -609,7 +681,8 @@ fn process_chunk_cost_topk(
     edge_config: &EdgeConfig,
     top_k: usize,
 ) -> Result<Vec<Edge>, EdgeBuilderError> {
-    let mut local_edges: Vec<Edge> = Vec::new();
+    // top_k edges at most per left seed — exact upper bound.
+    let mut local_edges: Vec<Edge> = Vec::with_capacity(chunk.len() * top_k);
     let mut tmp: smallvec::SmallVec<[(&SeedNode, f64); 32]> = smallvec::SmallVec::new();
 
     for src in chunk.iter() {

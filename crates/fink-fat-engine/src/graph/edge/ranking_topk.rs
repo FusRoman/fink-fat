@@ -84,6 +84,7 @@ use crate::engine_config::edge_config::{CostConfig, EdgeConfig};
 use crate::graph::edge::edge_features::EdgeFeatures;
 use crate::graph::edge::edge_prediction::EdgeRankingModel;
 use crate::graph::edge::error::EdgeModelError;
+use crate::graph::edge::feature_core::FeatureCore;
 use crate::seeding::SeedNode;
 use crate::seeding::seed_spatial_index::SeedSpatialIndex;
 
@@ -336,13 +337,10 @@ impl<'seed_lf> TopK<'seed_lf> {
     ///   not descending; an explicit `sort_by` with `total_cmp` is therefore
     ///   applied after draining.
     /// - Complexity: $O(K \log K)$ for the sort.
-    fn into_sorted_desc(mut self) -> Vec<TopKItem<'seed_lf>> {
-        let mut out = Vec::with_capacity(self.heap.len());
-        while let Some(it) = self.heap.pop() {
-            out.push(it);
-        }
-
-        // Because we pop from a min-heap, `out` is not necessarily ordered.
+    fn into_sorted_desc(self) -> Vec<TopKItem<'seed_lf>> {
+        // `BinaryHeap::into_vec` is O(1): it returns the internal storage
+        // without any allocation or element-by-element drain.
+        let mut out = self.heap.into_vec();
         out.sort_by(|a, b| b.proba.total_cmp(&a.proba));
         out
     }
@@ -397,6 +395,7 @@ impl<'seed_lf> TopK<'seed_lf> {
 ///   screening.
 /// - Calling with empty `batch_features` is a no-op and returns `Ok(())` immediately.
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn flush_batch<'seed_lf>(
     src: &SeedNode,
     cost_config: &CostConfig,
@@ -405,26 +404,30 @@ fn flush_batch<'seed_lf>(
     top: &mut TopK<'seed_lf>,
     batch_features: &mut Vec<EdgeFeatures>,
     batch_to: &mut Vec<&'seed_lf SeedNode>,
+    batch_cores: &mut Vec<FeatureCore>,
 ) -> Result<(), EdgeModelError> {
     if batch_features.is_empty() {
-        // Nothing to do (and ensures batch_to is also empty in normal usage).
+        // Nothing to do (and ensures batch_to and batch_cores are also empty).
         return Ok(());
     }
 
     // One ONNX call for the whole batch: returns p(class=1) for each row.
     let probas = model.predict_positive_proba(batch_features.as_slice())?;
 
-    // Iterate aligned streams:
-    // - candidate seed node (drained),
-    // - probability for that candidate,
-    // - feature reference (to compute edge_cost if needed).
-    for (right_candidate, proba) in batch_to.drain(..).zip(probas.into_iter()) {
+    // Drain aligned streams: (seed, core) + probability.
+    // The FeatureCore was already built during feature extraction — reusing it
+    // avoids a second propagation + projection + covariance computation for
+    // every candidate that passes the probability threshold.
+    for ((right_candidate, core), proba) in
+        batch_to.drain(..).zip(batch_cores.drain(..)).zip(probas)
+    {
         // Cheap early reject if this candidate can't enter the current Top-K set.
         if proba <= top.threshold() {
             continue;
         }
 
-        let cost = EdgeFeatures::compute_cost(src, right_candidate, cost_config);
+        // Reuse the already-built FeatureCore: avoids a second from_nodes call.
+        let cost = EdgeFeatures::compute_cost_from_core(&core, src, right_candidate, cost_config);
 
         // Hard cost cut: discard candidates whose cost exceeds the threshold.
         if max_cost_cut.is_some_and(|max| cost > max) {
@@ -508,15 +511,20 @@ pub fn rank_topk_edges_for_left<'seed_lf>(
     // Fixed-capacity Top-K structure (stores only the best candidates).
     let mut top: TopK<'seed_lf> = TopK::new(topk);
 
-    // Batch buffers reused across flushes.
+    // Batch buffers reused across flushes (all three are kept aligned by index).
     let mut batch_features: Vec<EdgeFeatures> = Vec::with_capacity(batch_size);
     let mut batch_to: Vec<&'seed_lf SeedNode> = Vec::with_capacity(batch_size);
+    // FeatureCore is built once per candidate and stored alongside features so
+    // that flush_batch can compute the edge cost without rebuilding the core.
+    let mut batch_cores: Vec<FeatureCore> = Vec::with_capacity(batch_size);
+
     // Generate candidate right nodes and batch them for ONNX inference.
     for to in src.seed_edge_candidates(right_index, edge_config) {
-        // Compute structured features (expensive-ish but pure).
-        batch_features.push(EdgeFeatures::compute_features(src, to));
-
-        // Keep pointer to the matching right node (must stay aligned with features).
+        // Build the shared intermediates once; derive both features and the
+        // cached core in one pass (avoids a second from_nodes in flush_batch).
+        let core = FeatureCore::from_nodes(src, to);
+        batch_features.push(EdgeFeatures::from_core(src, to, &core));
+        batch_cores.push(core);
         batch_to.push(to);
 
         // Flush when batch is full.
@@ -529,6 +537,7 @@ pub fn rank_topk_edges_for_left<'seed_lf>(
                 &mut top,
                 &mut batch_features,
                 &mut batch_to,
+                &mut batch_cores,
             )?;
         }
     }
@@ -542,6 +551,7 @@ pub fn rank_topk_edges_for_left<'seed_lf>(
         &mut top,
         &mut batch_features,
         &mut batch_to,
+        &mut batch_cores,
     )?;
 
     // Emit winners into output buffer (best probability first).

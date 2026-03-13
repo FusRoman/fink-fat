@@ -105,6 +105,7 @@ use crate::{
 /// * `chi2_vel` – Velocity-space Mahalanobis distance:
 ///   $\chi^2\_{\mathrm{vel}} = \delta\mathbf{v}^\top \mathbf{S}\_{\mathrm{vel}}^{-1} \delta\mathbf{v}$.
 /// * `log_chi2_vel` – $\ln(\chi^2\_{\mathrm{vel}} + \varepsilon)$.
+#[derive(Clone, Copy)]
 pub(crate) struct FeatureCore {
     // ----------------------------- Position features -----------------------------
     /// Mahalanobis innovation distance:
