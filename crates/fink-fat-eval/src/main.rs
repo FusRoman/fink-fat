@@ -9,18 +9,19 @@ pub mod logging;
 pub mod progress;
 pub mod runner;
 pub mod seeding;
+pub mod solver;
 pub mod truth_sso;
 
 use cli::{Cli, Commands};
 
-use crate::runner::run_fink_fat;
+use crate::{runner::run_fink_fat, solver::solver_evaluation};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
         Commands::SeedingEval(args) => {
-            let plot_dir = args.plot_dir.clone();
+            let plot_dir = args.common.plot_dir.clone();
             run_fink_fat(
                 args.common,
                 &[PipelineStage::IngestNights, PipelineStage::BuildSeeds],
@@ -34,7 +35,7 @@ fn main() -> Result<()> {
             )?
         }
         Commands::EdgeEval(args) => {
-            let plot_dir = args.plot_dir.clone();
+            let plot_dir = args.common.plot_dir.clone();
             run_fink_fat(
                 args.common,
                 &[
@@ -43,6 +44,22 @@ fn main() -> Result<()> {
                     PipelineStage::BuildEdges,
                 ],
                 move |ctx, truth| edges::edge_evaluation(ctx, truth, plot_dir.as_deref()),
+            )?
+        }
+        Commands::SolverEval(args) => {
+            let plot_dir = args.common.plot_dir.clone();
+            run_fink_fat(
+                args.common,
+                &[
+                    PipelineStage::IngestNights,
+                    PipelineStage::BuildSeeds,
+                    PipelineStage::BuildEdges,
+                    PipelineStage::Solve,
+                ],
+                move |ctx, truth| {
+                    solver_evaluation(ctx, truth, plot_dir.as_deref())?;
+                    Ok(())
+                },
             )?
         }
     };

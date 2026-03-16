@@ -16,6 +16,8 @@ pub enum Commands {
     SeedingEval(SeedingArgs),
     /// Run fink-fat in edge evaluation mode over a set of alerts
     EdgeEval(EdgeArgs),
+    /// Run fink-fat in solver evaluation mode over a set of alerts
+    SolverEval(SolverArgs),
 }
 
 /// Arguments for the `seeding-eval` subcommand
@@ -28,13 +30,6 @@ pub struct CommonArgs {
     /// Path to the fink-fat configuration file
     #[arg(short, long, value_name = "CONFIG_FILE")]
     pub config: Utf8PathBuf,
-}
-
-/// Arguments for the `seeding-eval` subcommand
-#[derive(Debug, Args)]
-pub struct SeedingArgs {
-    #[command(flatten)]
-    pub common: CommonArgs,
 
     /// Output directory for evaluation plots (PNG files).
     ///
@@ -45,18 +40,25 @@ pub struct SeedingArgs {
     pub plot_dir: Option<Utf8PathBuf>,
 }
 
+/// Arguments for the `seeding-eval` subcommand
+#[derive(Debug, Args)]
+pub struct SeedingArgs {
+    #[command(flatten)]
+    pub common: CommonArgs,
+}
+
 /// Arguments for the `edge-eval` subcommand
 #[derive(Debug, Args)]
 pub struct EdgeArgs {
     #[command(flatten)]
     pub common: CommonArgs,
+}
 
-    /// Output directory for edge evaluation plots (PNG files).
-    ///
-    /// When set, feature distribution charts (TP vs FP) are written here.
-    /// The directory is created automatically if it does not exist.
-    #[arg(long, value_name = "PLOT_DIR")]
-    pub plot_dir: Option<Utf8PathBuf>,
+/// Arguments for the `solver-eval` subcommand
+#[derive(Debug, Args)]
+pub struct SolverArgs {
+    #[command(flatten)]
+    pub common: CommonArgs,
 }
 
 pub fn cli_builder() -> Cli {

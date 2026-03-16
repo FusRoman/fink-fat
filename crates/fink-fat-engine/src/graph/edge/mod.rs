@@ -868,3 +868,304 @@ fn build_edges_sequential(
     tracing::debug!(n_edges = edges.len(), "build_edges_sequential complete");
     Ok(edges)
 }
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod edge_mod_tests {
+    use std::sync::Arc;
+
+    use camino::Utf8PathBuf;
+
+    use crate::{
+        Alert, AlertKey,
+        engine_config::edge_config::EdgeConfig,
+        graph::edge::edge_prediction::{EdgeRankingModel, EdgeRankingModelPool},
+        night_id::NightId,
+        pipeline::hooks::NoopProgress,
+        seeding::{SeedNode, seed_spatial_index::SeedSpatialIndex, store::SeedStore},
+        spacetime_bucket::{healpix_binner::HealpixBinner, uniform_time_binner::UniformTimeBinner},
+    };
+
+    use super::Edge;
+
+    // -------------------------------------------------------------------------
+    // Fixtures
+    // -------------------------------------------------------------------------
+
+    fn model_path() -> Utf8PathBuf {
+        let manifest_dir = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        manifest_dir.join("tests/ml_model/edge_classifier.onnx")
+    }
+
+    /// Minimal alert at `(ra, dec)` on `night` at epoch `mjd`, with 1-arcsec
+    /// positional errors and band `1` (g).
+    fn make_alert(id: u64, night: u32, mjd: f64, ra: f64, dec: f64) -> Alert {
+        const ARCSEC: f64 = std::f64::consts::PI / (180.0 * 3600.0);
+        Alert {
+            key: AlertKey {
+                night_id: NightId::new(night),
+                dia_source_id: id,
+            },
+            ra,
+            ra_err: ARCSEC,
+            dec,
+            dec_err: ARCSEC,
+            mjd_tt: mjd,
+            flux: 1000.0,
+            flux_err: 50.0,
+            band: 1,
+            observer_mpc_code: Arc::new("500".into()),
+        }
+    }
+
+    /// Build a `SeedNode` from two alerts 30 min apart on `night`, starting at
+    /// `(ra, dec)` with angular velocity `vx` rad/day in RA.
+    fn make_seed(
+        store: &mut SeedStore,
+        night: u32,
+        id_a: u64,
+        id_b: u64,
+        mjd: f64,
+        ra: f64,
+        dec: f64,
+        vx: f64,
+    ) -> SeedNode {
+        let dt = 0.5 / 24.0; // 30 min in days
+        let a = make_alert(id_a, night, mjd, ra, dec);
+        let b = make_alert(id_b, night, mjd + dt, ra + vx * dt, dec);
+        SeedNode::from_pair(store, NightId::new(night), &a, &b, None)
+            .expect("test seeds should form a valid pair")
+    }
+
+    /// Build `n` left seeds (night 1, MJD 60000) and `n` right seeds (night 2,
+    /// MJD 60001) with kinematically consistent inter-night motion of
+    /// `vx = 3e-3 rad/day`.  Seeds are slightly separated in RA so each
+    /// left seed has a unique nearest right seed.
+    fn build_left_right(n: u32) -> (Vec<SeedNode>, Vec<SeedNode>) {
+        let mut store = SeedStore::new();
+        let ra0 = 1.0_f64;
+        let dec = 0.1_f64;
+        let vx = 3e-3_f64; // ~0.17 °/day
+
+        let left: Vec<SeedNode> = (0..n)
+            .map(|i| {
+                let ra = ra0 + i as f64 * 5e-4;
+                make_seed(
+                    &mut store,
+                    1,
+                    i as u64 * 2,
+                    i as u64 * 2 + 1,
+                    60000.0,
+                    ra,
+                    dec,
+                    vx,
+                )
+            })
+            .collect();
+
+        let right: Vec<SeedNode> = (0..n)
+            .map(|i| {
+                let ra = ra0 + i as f64 * 5e-4 + vx * 1.0;
+                make_seed(
+                    &mut store,
+                    2,
+                    1000 + i as u64 * 2,
+                    1001 + i as u64 * 2,
+                    60001.0,
+                    ra,
+                    dec,
+                    vx,
+                )
+            })
+            .collect();
+
+        (left, right)
+    }
+
+    // -------------------------------------------------------------------------
+    // Tests
+    // -------------------------------------------------------------------------
+
+    /// ML model is loaded via the pool and `build_edges_with_index` returns
+    /// edges with strictly positive costs and dt_days.
+    #[test]
+    fn ml_build_edges_returns_valid_edges() {
+        let path = model_path();
+        assert!(
+            path.exists(),
+            "ONNX model not found at {path}; ensure tests/ml_model/edge_classifier.onnx exists"
+        );
+
+        let (left, right) = build_left_right(5);
+        let spatial_binner = HealpixBinner::new(8);
+        let time_binner = UniformTimeBinner::new(60001.0, 1.0);
+        let right_index = SeedSpatialIndex::build(&right, &spatial_binner, &time_binner);
+
+        let pool = EdgeRankingModelPool::new(&path);
+        let cfg = EdgeConfig {
+            use_ml_ranking: true,
+            top_k_per_left: Some(5),
+            ..EdgeConfig::default()
+        };
+
+        let edges =
+            Edge::build_edges_with_index(&left, &right_index, &cfg, Some(&pool), &NoopProgress)
+                .expect("build_edges_with_index should succeed");
+
+        assert!(
+            !edges.is_empty(),
+            "Expected at least one edge between left and right seeds"
+        );
+        for e in &edges {
+            assert!(
+                e.cost > 0.0 && e.cost.is_finite(),
+                "cost must be finite and strictly positive, got {}",
+                e.cost
+            );
+            assert!(
+                e.dt_days > 0.0 && e.dt_days.is_finite(),
+                "dt_days must be finite and strictly positive, got {}",
+                e.dt_days
+            );
+        }
+    }
+
+    /// ML top-k filter limits the number of edges to at most `top_k` per left seed.
+    #[test]
+    fn ml_topk_fan_out_bounded_by_top_k() {
+        let path = model_path();
+        assert!(path.exists(), "ONNX model not found at {path}");
+
+        let top_k = 2usize;
+        let (left, right) = build_left_right(5);
+        let spatial_binner = HealpixBinner::new(8);
+        let time_binner = UniformTimeBinner::new(60001.0, 1.0);
+        let right_index = SeedSpatialIndex::build(&right, &spatial_binner, &time_binner);
+
+        let pool = EdgeRankingModelPool::new(&path);
+        let cfg = EdgeConfig {
+            use_ml_ranking: true,
+            top_k_per_left: Some(top_k),
+            ..EdgeConfig::default()
+        };
+
+        let edges =
+            Edge::build_edges_with_index(&left, &right_index, &cfg, Some(&pool), &NoopProgress)
+                .expect("build_edges_with_index should succeed");
+
+        assert!(
+            edges.len() <= left.len() * top_k,
+            "Expected at most {} edges (top_k={top_k} × n_left={}), got {}",
+            left.len() * top_k,
+            left.len(),
+            edges.len()
+        );
+    }
+
+    /// Both ML-based and cost-based top-k produce edges for the same input.
+    /// This confirms the model is invoked without error and that the two
+    /// strategies are interchangeable at the API level.
+    #[test]
+    fn ml_and_cost_topk_both_produce_edges() {
+        let path = model_path();
+        assert!(path.exists(), "ONNX model not found at {path}");
+
+        let (left, right) = build_left_right(5);
+        let spatial_binner = HealpixBinner::new(8);
+        let time_binner = UniformTimeBinner::new(60001.0, 1.0);
+        let right_index = SeedSpatialIndex::build(&right, &spatial_binner, &time_binner);
+
+        // Run cost-based top-k (no ONNX model required).
+        let cfg_cost = EdgeConfig {
+            use_ml_ranking: false,
+            top_k_per_left: Some(5),
+            ..EdgeConfig::default()
+        };
+        let cost_edges =
+            Edge::build_edges_with_index(&left, &right_index, &cfg_cost, None, &NoopProgress)
+                .expect("cost-based build should succeed");
+
+        // Run ML-based top-k.
+        let pool = EdgeRankingModelPool::new(&path);
+        let cfg_ml = EdgeConfig {
+            use_ml_ranking: true,
+            top_k_per_left: Some(5),
+            ..EdgeConfig::default()
+        };
+        let ml_edges =
+            Edge::build_edges_with_index(&left, &right_index, &cfg_ml, Some(&pool), &NoopProgress)
+                .expect("ML-based build should succeed");
+
+        assert!(
+            !cost_edges.is_empty(),
+            "Cost-based ranking should find edges"
+        );
+        assert!(!ml_edges.is_empty(), "ML ranking should find edges");
+    }
+
+    /// `EdgeRankingModel::predict_positive_proba` returns values in [0, 1] for
+    /// a batch of real edge features derived from synthetic seeds.
+    #[test]
+    fn ml_model_probabilities_are_in_unit_interval() {
+        use crate::graph::edge::edge_features::EdgeFeatures;
+
+        let path = model_path();
+        assert!(path.exists(), "ONNX model not found at {path}");
+
+        let mut model =
+            EdgeRankingModel::load_edge_ranking_model(&path).expect("EdgeRankingModel should load");
+
+        let (left, right) = build_left_right(3);
+        let features: Vec<EdgeFeatures> = left
+            .iter()
+            .flat_map(|l| {
+                right
+                    .iter()
+                    .map(move |r| EdgeFeatures::compute_features(l, r))
+            })
+            .collect();
+
+        assert!(!features.is_empty());
+
+        let proba = model
+            .predict_positive_proba(&features)
+            .expect("predict_positive_proba should succeed");
+
+        assert_eq!(
+            proba.len(),
+            features.len(),
+            "One probability per feature row"
+        );
+        for (i, p) in proba.iter().enumerate() {
+            assert!((0.0..=1.0).contains(p), "p[{i}] = {p} is outside [0, 1]");
+        }
+    }
+
+    /// A pool pointing to a non-existent model path returns an error when
+    /// `build_edges_with_index` is called with `use_ml_ranking = true`.
+    #[test]
+    fn ml_pool_with_missing_model_returns_error() {
+        let missing = Utf8PathBuf::from("/nonexistent/path/model.onnx");
+        let (left, right) = build_left_right(2);
+        let spatial_binner = HealpixBinner::new(8);
+        let time_binner = UniformTimeBinner::new(60001.0, 1.0);
+        let right_index = SeedSpatialIndex::build(&right, &spatial_binner, &time_binner);
+
+        let pool = EdgeRankingModelPool::new(&missing);
+        let cfg = EdgeConfig {
+            use_ml_ranking: true,
+            top_k_per_left: Some(1),
+            ..EdgeConfig::default()
+        };
+
+        let result =
+            Edge::build_edges_with_index(&left, &right_index, &cfg, Some(&pool), &NoopProgress);
+        assert!(
+            result.is_err(),
+            "Expected error for missing model path, got Ok"
+        );
+    }
+}

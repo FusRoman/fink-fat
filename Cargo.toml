@@ -47,21 +47,24 @@ clap = { workspace = true }
 [dev-dependencies]
 husky-rs = "0.1.5"
 
-[profile.dev]
-codegen-units = 128
-opt-level = 3
-
-[profile.dev.package."*"]
-opt-level = 3
-
 [profile.release]
-opt-level = 3
-strip = "none"
 lto = "thin"
 codegen-units = 1
 
 [profile.bench]
-opt-level = 3
-lto = "thin"
 codegen-units = 1
 debug = true
+
+[profile.evaluation]
+inherits = "release"
+lto = false
+codegen-units = 128
+overflow-checks = true
+debug-assertions = true
+incremental = true
+
+[profile.evaluation.package."*"]
+codegen-units = 32
+overflow-checks = true
+debug-assertions = true
+incremental = false
