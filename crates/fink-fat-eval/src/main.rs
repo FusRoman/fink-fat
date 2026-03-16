@@ -36,6 +36,7 @@ fn main() -> Result<()> {
         }
         Commands::EdgeEval(args) => {
             let plot_dir = args.common.plot_dir.clone();
+            let export_features = args.export_features.clone();
             run_fink_fat(
                 args.common,
                 &[
@@ -43,7 +44,14 @@ fn main() -> Result<()> {
                     PipelineStage::BuildSeeds,
                     PipelineStage::BuildEdges,
                 ],
-                move |ctx, truth| edges::edge_evaluation(ctx, truth, plot_dir.as_deref()),
+                move |ctx, truth| {
+                    edges::edge_evaluation(
+                        ctx,
+                        truth,
+                        plot_dir.as_deref(),
+                        export_features.as_deref(),
+                    )
+                },
             )?
         }
         Commands::SolverEval(args) => {

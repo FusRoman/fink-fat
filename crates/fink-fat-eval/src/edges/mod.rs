@@ -1,3 +1,4 @@
+pub mod export;
 pub mod plots;
 
 use std::fmt;
@@ -237,11 +238,14 @@ pub fn compute_edge_stats(ctx: &PipelineContext, truth: &TruthSSO) -> Result<Edg
 ///
 /// Calls [`compute_edge_stats`] internally.  When `plot_dir` is provided,
 /// feature distribution charts (TP vs FP) are also written via
-/// [`plots::edge_plots`].
+/// [`plots::edge_plots`].  When `export_features_path` is provided, a Parquet
+/// file with all edge features and truth labels is written via
+/// [`export::export_edge_features_parquet`].
 pub fn edge_evaluation(
     ctx: &PipelineContext,
     truth: &TruthSSO,
     plot_dir: Option<&Utf8Path>,
+    export_features_path: Option<&Utf8Path>,
 ) -> Result<()> {
     let stats = compute_edge_stats(ctx, truth)?;
 
@@ -251,6 +255,10 @@ pub fn edge_evaluation(
 
     if let Some(dir) = plot_dir {
         plots::edge_plots(ctx, truth, dir)?;
+    }
+
+    if let Some(path) = export_features_path {
+        export::export_edge_features_parquet(ctx, truth, path)?;
     }
 
     Ok(())

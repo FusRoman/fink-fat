@@ -52,6 +52,16 @@ pub struct SeedingArgs {
 pub struct EdgeArgs {
     #[command(flatten)]
     pub common: CommonArgs,
+
+    /// Output path for the edge feature Parquet file (ML training dataset).
+    ///
+    /// When set, a Parquet file containing all 17 edge features
+    /// (`position.*`, `velocity.*`, `uncertainty.*`, `photometry.*`),
+    /// the truth label (`is_true_edge`), the group column (`from_seed_id`),
+    /// and the debug columns (`left_nid`, `right_nid`, `gap_nights`) is
+    /// written to this path.  Parent directories are created automatically.
+    #[arg(long, value_name = "PARQUET_PATH")]
+    pub export_features: Option<Utf8PathBuf>,
 }
 
 /// Arguments for the `solver-eval` subcommand

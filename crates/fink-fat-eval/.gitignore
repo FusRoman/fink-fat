@@ -13,7 +13,9 @@ optuna
 seed_store/
 edge_features_dataset/
 evaluate_edges_output/
-eval_config.yml
 sso_fink_ztf_lc.parquet
 seeding_plots/
 edge_plots/
+
+eval_config.yml
+eval_config_best.yml
