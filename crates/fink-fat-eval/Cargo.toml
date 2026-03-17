@@ -20,6 +20,9 @@ tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
 ahash = { workspace = true }
 plotters = "0.3.7"
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+ndarray = { workspace = true }
 
 [dev-dependencies]
 approx = "0.5.1"

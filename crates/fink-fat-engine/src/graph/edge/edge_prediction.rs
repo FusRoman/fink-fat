@@ -339,6 +339,37 @@ impl EdgeRankingModel {
         Ok(proba.rows().into_iter().map(|r| r[1]).collect())
     }
 
+    /// Predict positive-class probabilities `p(class=1)` from a pre-built
+    /// dense feature matrix.
+    ///
+    /// Use this method when features are already available as an `[N, D]`
+    /// float matrix (e.g., loaded from a Parquet file) and constructing
+    /// [`EdgeFeatures`] structs would be wasteful.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `input` – Dense feature matrix of shape `[N, D]` in row-major order,
+    ///   where `D` must match the model's expected input dimension.
+    ///
+    /// Return
+    /// ------
+    /// * `Ok(Vec<f32>)` – Vector of length `N` with `p(class=1)` for each row.
+    /// * `Err(EdgeModelError)` – If tensor creation, ORT execution, or output
+    ///   extraction fails.
+    pub fn predict_positive_proba_from_array(
+        &mut self,
+        input: Array2<f32>,
+    ) -> Result<Vec<f32>, EdgeModelError> {
+        let tensor = Tensor::from_array(input)?;
+        let outputs = self.session.run(ort::inputs![tensor])?;
+        let v = outputs.index(self.outputs.probabilities);
+        let (shape, data) = v.try_extract_tensor::<f32>()?;
+        let (n, k) = expect_2d_usize(shape)?;
+        let proba = array2_from_flat((n, k), data)?;
+        debug_assert_eq!(proba.ncols(), 2);
+        Ok(proba.rows().into_iter().map(|r| r[1]).collect())
+    }
+
     /// Predict class labels for a batch of edges, if the model exports them.
     ///
     /// Many `sklearn-onnx` exports include a `label` output (dtype `i64`,

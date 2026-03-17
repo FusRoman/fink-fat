@@ -43,7 +43,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use camino::Utf8Path;
 use fink_fat_engine::{
-    astro_math::ang_sep, engine_config::propagator_config::PredictorParams,
+    astro_math::angular_separation_vincenty, engine_config::propagator_config::PredictorParams,
     pipeline::PipelineContext,
 };
 use plotters::prelude::*;
@@ -138,7 +138,7 @@ pub fn collect_predictor_data(
                 .predict_cone_base(t_target, &pred_params.noise, pred_params.k_sigma);
 
         // ── Angular offset from predicted to actual to-seed position ──────────
-        let offset_rad = ang_sep(
+        let offset_rad = angular_separation_vincenty(
             ra_pred,
             dec_pred,
             to_seed.plane.ra_mid,

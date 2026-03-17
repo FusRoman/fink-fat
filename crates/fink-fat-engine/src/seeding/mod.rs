@@ -69,7 +69,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Alert, AlertKey, AlertStore, MJDTT, Radian,
-    astro_math::{ang_sep, fit_quad_1d, radec_to_tangent, spherical_midpoint, tangent_to_radec},
+    astro_math::{
+        angular_separation_vincenty, fit_quad_1d, radec_to_tangent, spherical_midpoint,
+        tangent_to_radec,
+    },
     display_format::indent_block,
     engine_config::{edge_config::EdgeConfig, propagator_config::PredictorParams},
     night_id::NightId,
@@ -475,7 +478,12 @@ impl SeedNode {
                     // separation from the predicted center exceeds max_norm * base_r.
                     // This is a pure FP zone visible in the predictor diagnostics.
                     max_norm.is_none_or(|mn| {
-                        ang_sep(ra_center, dec_center, to.plane.ra_mid, to.plane.dec_mid) / base_r
+                        angular_separation_vincenty(
+                            ra_center,
+                            dec_center,
+                            to.plane.ra_mid,
+                            to.plane.dec_mid,
+                        ) / base_r
                             <= mn
                     })
                 })
@@ -767,7 +775,7 @@ mod seed_node_tests {
 
     use crate::{
         AlertKey,
-        astro_math::{ang_sep, arcsec_to_rad},
+        astro_math::{angular_separation_vincenty, arcsec_to_rad},
         engine_config::propagator_config::{ModelNoise, PredictorParams},
         spacetime_bucket::{healpix_binner::HealpixBinner, uniform_time_binner::UniformTimeBinner},
     };
@@ -933,7 +941,7 @@ mod seed_node_tests {
         let (ra_cone, dec_cone, radius) =
             sn.predict_cone(tb, &HealpixBinner::new(8), &predict_params);
 
-        let d = ang_sep(ra_pred, dec_pred, ra_cone, dec_cone);
+        let d = angular_separation_vincenty(ra_pred, dec_pred, ra_cone, dec_cone);
         assert!(d <= radius + 1e-12);
     }
 
@@ -1118,7 +1126,7 @@ mod seed_node_tests {
             let (rp, dp) = sn.predict_radec(t);
             let (rc, dc, rad) = sn.predict_cone(t, &HealpixBinner::new(8), &params);
 
-            let d = ang_sep(rp, dp, rc, dc);
+            let d = angular_separation_vincenty(rp, dp, rc, dc);
             prop_assert!(d <= rad + 1e-12);
         }
     }

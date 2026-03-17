@@ -6,6 +6,7 @@ use fink_fat_engine::pipeline::stages::PipelineStage;
 pub mod cli;
 pub mod edges;
 pub mod logging;
+pub mod model_eval;
 pub mod progress;
 pub mod runner;
 pub mod seeding;
@@ -69,6 +70,13 @@ fn main() -> Result<()> {
                     Ok(())
                 },
             )?
+        }
+        Commands::ModelEval(args) => {
+            model_eval::model_evaluation(
+                &args.features_parquet,
+                &args.xgb_params,
+                args.plot_dir.as_deref(),
+            )?;
         }
     };
 

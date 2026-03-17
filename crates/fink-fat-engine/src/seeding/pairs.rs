@@ -15,7 +15,7 @@
 //! - **Time ordering:** `t_b > t_a`
 //! - **Maximum time separation:** `t_b - t_a ≤ max_dt`
 //! - **Flux similarity:** `|flux_a - flux_b| ≤ max_flux_difference`
-//! - **Angular-speed constraint:** `ang_sep(a, b) / (t_b - t_a) ≤ max_angular_speed`
+//! - **Angular-speed constraint:** `angular_separation_vincenty(a, b) / (t_b - t_a) ≤ max_angular_speed`
 //!
 //! The angular-speed constraint is implemented via a dot-product threshold
 //! (no `acos`):
@@ -461,7 +461,7 @@ mod pair_gen_tests {
     use std::f64::consts::PI;
 
     use crate::AlertKey;
-    use crate::astro_math::{ang_sep, arcsec_to_rad};
+    use crate::astro_math::{angular_separation_vincenty, arcsec_to_rad};
     use crate::engine_config::pair_config::PairConfig;
     use crate::spacetime_bucket::bucket::{BucketKey, build_alert_bucket_index};
     use crate::spacetime_bucket::healpix_binner::HealpixBinner;
@@ -661,7 +661,7 @@ mod pair_gen_tests {
             );
 
             let dt = b.mjd_tt - a.mjd_tt;
-            let d = ang_sep(a.ra, a.dec, b.ra, b.dec);
+            let d = angular_separation_vincenty(a.ra, a.dec, b.ra, b.dec);
 
             assert!(
                 d <= config.max_angular_speed * dt + 1e-12,
@@ -773,7 +773,7 @@ mod pair_gen_tests {
 
         for p in &pairs {
             let dt = p.b.mjd_tt - p.a.mjd_tt;
-            let d = ang_sep(p.a.ra, p.a.dec, p.b.ra, p.b.dec);
+            let d = angular_separation_vincenty(p.a.ra, p.a.dec, p.b.ra, p.b.dec);
             assert!(d <= config.max_angular_speed * dt + 1e-12);
         }
     }
@@ -845,7 +845,7 @@ mod pair_gen_tests {
                     prop_assert!((b.mjd_tt - a.mjd_tt) <= config.max_dt + 1e-15);
 
                     let dt = b.mjd_tt - a.mjd_tt;
-                    let d = ang_sep(a.ra, a.dec, b.ra, b.dec);
+                    let d = angular_separation_vincenty(a.ra, a.dec, b.ra, b.dec);
                     prop_assert!(d <= config.max_angular_speed * dt + 1e-12);
                     prop_assert!(d <= sep_cap + 1e-12);
 

@@ -42,8 +42,8 @@
 
 use crate::{
     astro_math::{
-        ang_sep, cholesky_lower_sym_2x2, clamp_unit, dot2, invert_sym_2x2, l2_norm, mat_vec2,
-        safe_ln, tangent_to_radec,
+        angular_separation_vincenty, cholesky_lower_sym_2x2, clamp_unit, dot2, invert_sym_2x2,
+        l2_norm, mat_vec2, safe_ln, tangent_to_radec,
     },
     seeding::SeedNode,
 };
@@ -298,7 +298,8 @@ impl FeatureCore {
             from.plane.center.ra0,
             from.plane.center.dec0,
         );
-        let r_sph = ang_sep(ra_pred, dec_pred, to.plane.ra_mid, to.plane.dec_mid);
+        let r_sph =
+            angular_separation_vincenty(ra_pred, dec_pred, to.plane.ra_mid, to.plane.dec_mid);
 
         // ---------------------------------------------------------------------
         // 3) Project `to` onto `from` tangent plane

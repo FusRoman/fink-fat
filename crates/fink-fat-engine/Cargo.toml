@@ -22,7 +22,7 @@ config = "0.15.19"
 datafusion = { version = "52.1.0" }
 object_store = { version = "=0.12.5", features = ["http"] }
 hdfs-native-object-store = "0.15.0"
-ndarray = "0.17.2"
+ndarray = { workspace = true }
 once_cell = "1.21.3"
 ort = { version = "2.0.0-rc.11", features = ["ndarray"] }
 outfit = { version = "2.1.0", features = ["parallel", "jpl-download"] }
@@ -40,7 +40,7 @@ tokio = { version = "=1.49.0", features = ["rt-multi-thread"] }
 approx = "0.5.1"
 criterion = "0.8.1"
 proptest = "1.9.0"
-serde_yaml = "0.9.34"
+serde_yaml = { workspace = true }
 tempfile = { workspace = true }
 
 [[bench]]

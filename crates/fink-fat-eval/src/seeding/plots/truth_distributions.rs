@@ -16,7 +16,7 @@ use anyhow::Result;
 use camino::Utf8Path;
 use fink_fat_engine::{
     Alert, AlertStore,
-    astro_math::{ang_sep, planar_offset_fast},
+    astro_math::{angular_separation_vincenty, planar_offset_fast},
     engine_config::{pair_config::PairConfig, triplet_config::TripletConfig},
     night_id::NightId,
 };
@@ -93,7 +93,7 @@ fn accumulate_pair_metrics(alerts: &[&Alert], data: &mut TruthPairData) {
             if dt_days <= 0.0 {
                 continue;
             }
-            let sep = ang_sep(a.ra, a.dec, b.ra, b.dec);
+            let sep = angular_separation_vincenty(a.ra, a.dec, b.ra, b.dec);
             data.dt_hours.push(dt_days * 24.0);
             data.angular_speed_arcmin_per_day
                 .push(sep / dt_days * RAD_TO_ARCMIN);
@@ -123,8 +123,8 @@ fn accumulate_triplet_metrics(alerts: &[&Alert], data: &mut TruthTripletData) {
                     continue;
                 }
 
-                let sep_ab = ang_sep(a.ra, a.dec, b.ra, b.dec);
-                let sep_bc = ang_sep(b.ra, b.dec, c.ra, c.dec);
+                let sep_ab = angular_separation_vincenty(a.ra, a.dec, b.ra, b.dec);
+                let sep_bc = angular_separation_vincenty(b.ra, b.dec, c.ra, c.dec);
 
                 // Linear prediction: velocity from (a,b), predict c from a.
                 let cos_dec_a = a.dec.cos();
