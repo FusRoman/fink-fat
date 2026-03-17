@@ -37,6 +37,10 @@ jobs:
         with:
           components: clippy
 
+      - name: Install system dependencies
+        # Note: Needed for plotters in the fink-fat-eval crate
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
+
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
         with:
@@ -55,6 +59,10 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install system dependencies
+        # Note: Needed for plotters in the fink-fat-eval crate
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
+
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
         with:
@@ -72,6 +80,10 @@ jobs:
 
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies
+        # Note: Needed for plotters in the fink-fat-eval crate
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
@@ -93,6 +105,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
+
+      - name: Install system dependencies
+        # Note: Needed for plotters in the fink-fat-eval crate
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2

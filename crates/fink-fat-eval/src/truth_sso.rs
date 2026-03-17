@@ -1,6 +1,6 @@
 //! Ground-truth SSO (Solar System Object) identity map.
 //!
-//! This module provides the [`TruthSSOMap`] type and the [`load_truth_sso_map`]
+//! This module provides the [`TruthSSOMap`] type and the [`TruthSSO`]
 //! loader used by all evaluation sub-commands to ground-truth alert identities.
 //!
 //! ## Data model
@@ -12,8 +12,8 @@
 //! | `dia_source_id`   | `uint64` | Unique detection identifier (matches [`DiaSourceId`]) |
 //! | `trajectory_id`   | `int32`  | Ground-truth trajectory / object identifier           |
 //!
-//! [`load_truth_sso_map`] reads only these two columns and builds an
-//! [`AHashMap`](ahash::AHashMap) for O(1) lookups during post-processing.
+//! [`TruthSSO::load`] reads only these two columns and builds an
+//! [`AHashMap`] for O(1) lookups during post-processing.
 
 use ahash::AHashMap;
 use anyhow::{Context, Result};

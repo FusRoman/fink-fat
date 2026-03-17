@@ -109,7 +109,7 @@ impl fmt::Display for SolverStats {
 /// each element is `(night_label, SolverStats)`.
 ///
 /// This is the shared core used by both [`solver_evaluation`] (for logging)
-/// and [`plots::solver_plots`] (for plotting).
+/// and the plot functions (for plotting).
 pub fn compute_solver_stats(ctx: &PipelineContext, truth: &TruthSSO) -> Result<SolverStats> {
     let seed_store = &ctx.runtime_state.seed_store;
     let alert_store = &ctx.runtime_state.alert_store;
@@ -168,7 +168,7 @@ pub fn compute_solver_stats(ctx: &PipelineContext, truth: &TruthSSO) -> Result<S
 ///
 /// Calls [`compute_edge_stats`] internally.  When `plot_dir` is provided,
 /// feature distribution charts (TP vs FP) are also written via
-/// [`plots::edge_plots`].
+/// [`crate::edges::plots::edge_plots`].
 pub fn solver_evaluation(
     ctx: &PipelineContext,
     truth: &TruthSSO,

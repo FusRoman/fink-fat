@@ -1,7 +1,7 @@
 //! Predictor-config diagnostic plots (TP vs FP).
 //!
 //! **Goal**: help the user decide how to tune [`PredictorParams`] — in
-//! particular `k_sigma` and the [`ModelNoise`] schedule — to improve edge
+//! particular `k_sigma` and the [`ModelNoise`](fink_fat_engine::engine_config::propagator_config::ModelNoise) schedule — to improve edge
 //! purity without hurting recall.
 //!
 //! For each edge `from → to` (classified as TP or FP) the module computes:
@@ -9,7 +9,7 @@
 //! | Quantity                 | Symbol                        | Unit    |
 //! |--------------------------|-------------------------------|---------|
 //! | Angular prediction error | δ = ang_sep(predicted, actual)| arcmin  |
-//! | Base cone radius         | r = k_σ · √λ_max(Σ_p)        | arcmin  |
+//! | Base cone radius         | r = k_σ · √λ_max(Σ_p)         | arcmin  |
 //! | Normalised offset        | δ / r                         | –       |
 //!
 //! and writes three three-panel overlay charts (histogram / CDF / percentile)
