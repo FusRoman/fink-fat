@@ -36,7 +36,8 @@ use crate::{
         hooks::{PipelineHooks, StageMeta, StageReport},
         stages::{PipelineStage, run_stage},
     },
-    spacetime_bucket::healpix_binner::HealpixBinner,
+    seeding::seed_spatial_index::SeedSpatialIndex,
+    spacetime_bucket::{healpix_binner::HealpixBinner, uniform_time_binner::UniformTimeBinner},
 };
 
 /// BuildEdges stage: construct inter-night edges from seeds.
@@ -109,6 +110,10 @@ pub fn run(
             // Build the list of valid (left, right) pairs grouped by right night.
             // For each right_night in new_nights, collect all left_nights such that:
             //   left_night < right_night  AND  right_night - left_night <= max_gap
+            //
+            // Accumulate total_left_seeds inline during construction to
+            // avoid a second pass over `night_groups`.
+            let mut total_left_seeds: u64 = 0;
             let night_groups: Vec<(NightId, Vec<NightId>)> = new_nights_sorted
                 .iter()
                 .filter_map(|&right| {
@@ -132,6 +137,11 @@ pub fn run(
                     if left_nights.is_empty() {
                         None
                     } else {
+                        total_left_seeds += left_nights
+                            .iter()
+                            .filter_map(|n| ctx.runtime_state.seed_store.get(n))
+                            .map(|v| v.len() as u64)
+                            .sum::<u64>();
                         Some((right, left_nights))
                     }
                 })
@@ -142,21 +152,11 @@ pub fn run(
                 return Ok(vec![("pairs_processed", 0), ("edges_added", 0)]);
             }
 
-            // -----------------------------------------------------------------
-            // 3) Compute total left seeds across all valid pairs for progress.
-            // -----------------------------------------------------------------
-            let total_left_seeds: u64 = night_groups
-                .iter()
-                .flat_map(|(_, left_nights)| left_nights.iter())
-                .filter_map(|n| ctx.runtime_state.seed_store.get(n))
-                .map(|v| v.len() as u64)
-                .sum();
-
             tracing::debug!(
                 n_right_nights = night_groups.len(),
                 total_left_seeds,
                 max_gap,
-                use_ml_ranking = ctx.engine_config.edges.use_ml_ranking,
+                ml_post_filter = ctx.engine_config.edges.ml_post_filter,
                 parallel = ctx.engine_config.edges.parallel_left_batches,
                 "BuildEdges starting",
             );
@@ -188,6 +188,14 @@ pub fn run(
                     }
                 };
 
+                // Build the SeedSpatialIndex once per right night
+                // instead of rebuilding it inside add_inter_night_edges for
+                // every (left, right) pair sharing the same right night.
+                let right_seed_t0 = right_nodes[0].plane.epoch_mid;
+                let time_binner = UniformTimeBinner::new(right_seed_t0, time_binner_width);
+                let right_index =
+                    SeedSpatialIndex::build(right_nodes, &spatial_binner, &time_binner);
+
                 for left_night in left_nights {
                     tracing::trace!(%left_night, %right_night, "processing night pair");
 
@@ -201,12 +209,10 @@ pub fn run(
 
                     ctx.runtime_state
                         .graph
-                        .add_inter_night_edges(
+                        .add_inter_night_edges_with_index(
                             left_vec,
-                            right_nodes,
+                            &right_index,
                             edge_config,
-                            &spatial_binner,
-                            time_binner_width,
                             ctx.edge_models.as_ref(),
                             stage_sink,
                         )
@@ -220,6 +226,10 @@ pub fn run(
                     pairs_processed += 1;
                 }
             }
+
+            // Flush all unsorted edges appended above into the sorted prefix.
+            // This is O(n + m log m) vs O((n+m) log(n+m)) for a full re-sort per pair.
+            ctx.runtime_state.graph.commit_edges_sort();
 
             let edges_added =
                 (ctx.runtime_state.graph.edges.len() as u64).saturating_sub(edges_before);

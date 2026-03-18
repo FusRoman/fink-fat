@@ -420,7 +420,7 @@ mod triplet_gen_tests {
 
     use crate::{
         AlertKey, MJDTT, Radian,
-        astro_math::{ang_sep, arcsec_to_rad, planar_offset_fast},
+        astro_math::{angular_separation_vincenty, arcsec_to_rad, planar_offset_fast},
         engine_config::triplet_config::TripletConfig,
         spacetime_bucket::{
             bucket::build_alert_bucket_index,
@@ -728,7 +728,7 @@ mod triplet_gen_tests {
                     if dt <= 0.0 || dt > cfg.max_dt_between {
                         continue;
                     }
-                    let d = ang_sep(a.ra, a.dec, b.ra, b.dec);
+                    let d = angular_separation_vincenty(a.ra, a.dec, b.ra, b.dec);
                     if d > cfg.max_pair_sep {
                         continue;
                     }
@@ -761,7 +761,7 @@ mod triplet_gen_tests {
                 prop_assert!(dt_bc <= cfg.max_dt_between + 1e-12);
 
                 // Angular constraints on (b,c).
-                let dbc = ang_sep(b.ra, b.dec, c.ra, c.dec);
+                let dbc = angular_separation_vincenty(b.ra, b.dec, c.ra, c.dec);
                 prop_assert!(dbc <= cfg.max_pair_sep + 1e-12);
 
                 // Flux constraint.

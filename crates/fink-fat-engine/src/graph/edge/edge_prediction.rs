@@ -145,6 +145,10 @@ impl EdgeRankingModelPool {
     ///
     /// Arguments
     /// ---------
+    /// * `onnx_intra_threads` – Intra-op thread count forwarded to ORT at session
+    ///   creation. Applied only during **lazy initialization** (the first call on
+    ///   a given thread); subsequent calls reuse the already-live session and this
+    ///   value is ignored.
     /// * `f` – Closure executed with a mutable reference to the thread-local model.
     ///
     /// Return
@@ -158,13 +162,15 @@ impl EdgeRankingModelPool {
     /// typically negligible compared to inference cost.
     pub fn with_mut<R>(
         &self,
+        onnx_intra_threads: Option<usize>,
         f: impl FnOnce(&mut EdgeRankingModel) -> Result<R, EdgeModelError>,
     ) -> Result<R, EdgeModelError> {
         let cell = self.models.get_or(|| RefCell::new(None));
 
         // Lazy per-thread init (fallible).
         if cell.borrow().is_none() {
-            let model = EdgeRankingModel::load_edge_ranking_model(&self.model_path)?;
+            let model =
+                EdgeRankingModel::load_edge_ranking_model(&self.model_path, onnx_intra_threads)?;
             *cell.borrow_mut() = Some(model);
         }
 
@@ -217,6 +223,9 @@ impl EdgeRankingModel {
     /// Arguments
     /// ---------
     /// * `model_path` – Path to the `.onnx` model file (UTF-8).
+    /// * `onnx_intra_threads` – Optional intra-op thread count for the ORT session.
+    ///   `None` lets ORT choose automatically; `Some(n)` pins the session to `n`
+    ///   intra-op threads.
     ///
     /// Return
     /// ------
@@ -236,8 +245,9 @@ impl EdgeRankingModel {
     /// `EdgeModelOutputs::resolve_output_indices`.
     pub fn load_edge_ranking_model(
         model_path: impl AsRef<Utf8Path>,
+        onnx_intra_threads: Option<usize>,
     ) -> Result<Self, EdgeModelError> {
-        let session = load_edge_model_session(model_path)?;
+        let session = load_edge_model_session(model_path, onnx_intra_threads)?;
         let outputs = EdgeModelOutputs::resolve_output_indices(&session)?;
         Ok(Self { session, outputs })
     }
@@ -334,7 +344,52 @@ impl EdgeRankingModel {
         &mut self,
         batch: &[EdgeFeatures],
     ) -> Result<Vec<f32>, EdgeModelError> {
-        let proba = self.predict_proba(batch)?;
+        if batch.is_empty() {
+            return Ok(Vec::new());
+        }
+        let input = build_input_tensor(batch)?;
+        let outputs = self.session.run(ort::inputs![input])?;
+        let v = outputs.index(self.outputs.probabilities);
+        let (shape, data) = v.try_extract_tensor::<f32>()?;
+        let (n, k) = expect_2d_usize(shape)?;
+        debug_assert_eq!(k, 2, "binary classifier must have 2 output columns");
+        // Extract p(class=1) directly from the flat row-major buffer,
+        // without building an intermediate Array2.  Column 1 is at index
+        // 2*i+1 for row i.
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            out.push(data[i * k + 1]);
+        }
+        Ok(out)
+    }
+
+    /// Predict positive-class probabilities `p(class=1)` from a pre-built
+    /// dense feature matrix.
+    ///
+    /// Use this method when features are already available as an `[N, D]`
+    /// float matrix (e.g., loaded from a Parquet file) and constructing
+    /// [`EdgeFeatures`] structs would be wasteful.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `input` – Dense feature matrix of shape `[N, D]` in row-major order,
+    ///   where `D` must match the model's expected input dimension.
+    ///
+    /// Return
+    /// ------
+    /// * `Ok(Vec<f32>)` – Vector of length `N` with `p(class=1)` for each row.
+    /// * `Err(EdgeModelError)` – If tensor creation, ORT execution, or output
+    ///   extraction fails.
+    pub fn predict_positive_proba_from_array(
+        &mut self,
+        input: Array2<f32>,
+    ) -> Result<Vec<f32>, EdgeModelError> {
+        let tensor = Tensor::from_array(input)?;
+        let outputs = self.session.run(ort::inputs![tensor])?;
+        let v = outputs.index(self.outputs.probabilities);
+        let (shape, data) = v.try_extract_tensor::<f32>()?;
+        let (n, k) = expect_2d_usize(shape)?;
+        let proba = array2_from_flat((n, k), data)?;
         debug_assert_eq!(proba.ncols(), 2);
         Ok(proba.rows().into_iter().map(|r| r[1]).collect())
     }
@@ -459,6 +514,10 @@ impl EdgeModelOutputs {
 /// Arguments
 /// ---------
 /// * `model_path` – Path to the `.onnx` model file (UTF-8).
+/// * `onnx_intra_threads` – Optional intra-op thread count:
+///   - `None`: ORT selects automatically (typically equals logical CPU count).
+///   - `Some(n)`: pins the session to `n` intra-op threads via
+///     `SessionBuilder::with_intra_threads`.
 ///
 /// Return
 /// ------
@@ -471,7 +530,10 @@ impl EdgeModelOutputs {
 /// -----
 /// * The optimization level is currently set to `Level3`, which usually yields
 ///   best throughput for repeated inference, at the cost of longer session build.
-fn load_edge_model_session(model_path: impl AsRef<Utf8Path>) -> Result<Session, EdgeModelError> {
+fn load_edge_model_session(
+    model_path: impl AsRef<Utf8Path>,
+    onnx_intra_threads: Option<usize>,
+) -> Result<Session, EdgeModelError> {
     // Ensure ORT global init has happened.
     init_ort_once();
 
@@ -483,9 +545,17 @@ fn load_edge_model_session(model_path: impl AsRef<Utf8Path>) -> Result<Session, 
     }
 
     // Build session with aggressive graph optimizations (good for throughput).
-    let session = Session::builder()?
-        .with_optimization_level(GraphOptimizationLevel::Level3)?
-        .commit_from_file(path.as_std_path())?;
+    let session_builder =
+        Session::builder()?.with_optimization_level(GraphOptimizationLevel::Level3)?;
+
+    // Optionally set the number of intra-op threads for parallelism within ORT.
+    let session_builder = if let Some(threads) = onnx_intra_threads {
+        session_builder.with_intra_threads(threads)?
+    } else {
+        session_builder
+    };
+
+    let session = session_builder.commit_from_file(path.as_std_path())?;
     Ok(session)
 }
 
@@ -509,20 +579,21 @@ fn load_edge_model_session(model_path: impl AsRef<Utf8Path>) -> Result<Session, 
 /// * Values are cast from `f64` to `f32` to match the model input dtype.
 /// * This allocates an `Array2` and fills it row-by-row; batch sizes should be
 ///   tuned for throughput and memory usage.
+#[cfg(test)]
 fn features_to_array2_f32(batch: &[EdgeFeatures]) -> Array2<f32> {
     let n = batch.len();
     let d = EdgeFeatures::len_flat();
 
-    // Allocate a dense contiguous buffer.
-    let mut x = Array2::<f32>::zeros((n, d));
-
-    // Fill row-by-row in canonical feature order.
-    for (i, feat) in batch.iter().enumerate() {
-        for (j, v) in feat.iter_flat().enumerate() {
-            x[(i, j)] = v as f32;
-        }
+    // Allocate a single flat buffer and fill it in row-major order.
+    // This avoids the 2D indexing overhead of `x[(i, j)] = ...` inside a
+    // double loop and produces a single contiguous allocation.
+    let mut flat: Vec<f32> = Vec::with_capacity(n * d);
+    for feat in batch.iter() {
+        flat.extend(feat.iter_flat().map(|v| v as f32));
     }
-    x
+
+    // Safety: we just filled exactly n * d elements in row-major order.
+    Array2::from_shape_vec((n, d), flat).expect("shape matches capacity")
 }
 
 /// Build an ONNX input tensor from a batch of [`EdgeFeatures`].
@@ -538,9 +609,30 @@ fn features_to_array2_f32(batch: &[EdgeFeatures]) -> Array2<f32> {
 /// ------
 /// * `Ok(Tensor<f32>)` – Input tensor of shape `[N, D]`.
 /// * `Err(EdgeModelError)` – If tensor creation fails in ORT.
+///   Build an ONNX input tensor from a batch of [`EdgeFeatures`].
+///
+/// Converts feature vectors directly into a `[N, D]` tensor using a flat
+/// `Vec<f32>`, bypassing any intermediate `Array2` allocation for the ORT path.
+///
+/// Arguments
+/// ---------
+/// * `batch` – Slice of features to feed into the model.
+///
+/// Return
+/// ------
+/// * `Ok(Tensor<f32>)` – Input tensor of shape `[N, D]`.
+/// * `Err(EdgeModelError)` – If tensor creation fails in ORT.
 fn build_input_tensor(batch: &[EdgeFeatures]) -> Result<Tensor<f32>, EdgeModelError> {
-    let x = features_to_array2_f32(batch);
-    Ok(Tensor::from_array(x)?)
+    let n = batch.len();
+    let d = EdgeFeatures::len_flat();
+    // Fill a flat Vec<f32> in row-major order — one allocation, no 2D indexing.
+    let mut flat: Vec<f32> = Vec::with_capacity(n * d);
+    for feat in batch.iter() {
+        flat.extend(feat.iter_flat().map(|v| v as f32));
+    }
+    // Tensor::from_array accepts (shape, Vec<T>) and takes ownership of the
+    // buffer without any further copy.
+    Ok(Tensor::from_array(([n, d], flat))?)
 }
 
 /// Validate a 2D ONNX tensor shape and convert to `(usize, usize)`.
@@ -693,7 +785,8 @@ mod edge_prediction_test {
             path
         );
 
-        let session = load_edge_model_session(&path).expect("Failed to load ONNX model session");
+        let session =
+            load_edge_model_session(&path, None).expect("Failed to load ONNX model session");
 
         assert!(
             !session.inputs().is_empty(),
@@ -709,8 +802,8 @@ mod edge_prediction_test {
     fn loading_nonexistent_model_fails_cleanly() {
         let bad_path = Utf8PathBuf::from("this/path/does/not/exist.onnx");
 
-        let err =
-            load_edge_model_session(&bad_path).expect_err("Expected failure for missing ONNX file");
+        let err = load_edge_model_session(&bad_path, None)
+            .expect_err("Expected failure for missing ONNX file");
 
         match err {
             EdgeModelError::ModelNotFound(_) => {}
@@ -820,7 +913,7 @@ mod edge_prediction_test {
     fn edge_ranking_model_loads_and_resolves_outputs() {
         let path = model_path();
 
-        let model = EdgeRankingModel::load_edge_ranking_model(&path)
+        let model = EdgeRankingModel::load_edge_ranking_model(&path, None)
             .expect("Failed to load EdgeRankingModel");
 
         // Sanity: the model must have inputs/outputs
@@ -842,7 +935,7 @@ mod edge_prediction_test {
         let path = model_path();
 
         let mut model =
-            EdgeRankingModel::load_edge_ranking_model(&path).expect("Failed to load model");
+            EdgeRankingModel::load_edge_ranking_model(&path, None).expect("Failed to load model");
 
         let batch = vec![dummy_edge_features(0.0), dummy_edge_features(10.0)];
         let proba = model.predict_proba(&batch).expect("predict_proba failed");
@@ -861,7 +954,7 @@ mod edge_prediction_test {
         let path = model_path();
 
         let mut model =
-            EdgeRankingModel::load_edge_ranking_model(&path).expect("Failed to load model");
+            EdgeRankingModel::load_edge_ranking_model(&path, None).expect("Failed to load model");
 
         let batch = vec![dummy_edge_features(0.0), dummy_edge_features(10.0)];
         let p1 = model
@@ -879,7 +972,7 @@ mod edge_prediction_test {
         let path = model_path();
 
         let mut model =
-            EdgeRankingModel::load_edge_ranking_model(&path).expect("Failed to load model");
+            EdgeRankingModel::load_edge_ranking_model(&path, None).expect("Failed to load model");
 
         let batch = vec![dummy_edge_features(0.0), dummy_edge_features(10.0)];
         let labels = model.predict_label(&batch).expect("predict_label failed");

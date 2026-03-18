@@ -225,6 +225,23 @@ where
     }
 }
 
+/// Deserialize an optional angle quantity into `Option<f64>` in **radians**.
+///
+/// - If the field is absent from YAML (handled by `#[serde(default)]`), returns `None`.
+/// - If present, delegates to [`de_angle_rad`] and wraps the result in `Some`.
+///
+/// Typical usage:
+/// ```yaml
+/// max_cone_radius: "100 arcmin"   # Some(100 arcmin in rad)
+/// # max_cone_radius:              # None (field absent)
+/// ```
+pub fn de_angle_rad_opt<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    de_angle_rad(deserializer).map(Some)
+}
+
 /// Deserialize an angular speed into **radians/day** (`f64`).
 ///
 /// Accepted inputs

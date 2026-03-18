@@ -196,6 +196,14 @@ pub enum EdgeConfigError {
     #[error("edges.max_cost_cut must be > 0 when set (got {0})")]
     MaxCostCutNotPositive(f64),
 
+    /// `edges.ml_post_filter_threshold` must be in `(0.0, 1.0]`.
+    ///
+    /// A threshold of `0.0` would keep every candidate (no filtering), and
+    /// negative values are meaningless. Enforcing `(0.0, 1.0]` keeps the
+    /// configuration unambiguous.
+    #[error("edges.ml_post_filter_threshold must be in (0.0, 1.0] (got {0})")]
+    MlPostFilterThresholdInvalid(f32),
+
     /// `edges.predictor_config` is invalid.
     ///
     /// This error wraps any validation failure from the predictor configuration,

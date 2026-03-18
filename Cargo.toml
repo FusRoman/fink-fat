@@ -16,39 +16,57 @@ categories.workspace = true
 license-file.workspace = true
 
 [workspace]
-members = ["crates/fink-fat-engine"]
+members = ["crates/fink-fat-engine", "crates/fink-fat-eval"]
 resolver = "2"
 
 [workspace.dependencies]
 rand = "0.9.2"
 serde = { version = "1.0.228", features = ["derive"] }
+ahash = { version = "0.8.12", features = ["serde"] }
 thiserror = "2.0.17"
 camino = "1.2.1"
 tempfile = "3.23.0"
 tracing = "0.1"
-fink-fat-engine = { path = "crates/fink-fat-engine" }
-
-[dependencies]
-clap = { version = "4.5.60", features = ["cargo", "derive"] }
-indicatif = "0.18.0"
-camino = { workspace = true }
-chrono = "0.4"
-tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-appender = "0.2"
+clap = { version = "4.5.60", features = ["cargo", "derive"] }
+chrono = "0.4"
+fink-fat-engine = { path = "crates/fink-fat-engine" }
+indicatif = "0.18.0"
+serde_yaml = "0.9.34"
+ndarray = "0.17.2"
+
+[dependencies]
+indicatif = { workspace = true }
+camino = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
 fink-fat-engine = { workspace = true }
+clap = { workspace = true }
 
 [dev-dependencies]
 husky-rs = "0.1.5"
 
 [profile.release]
-opt-level = 3
-strip = "none"
 lto = "thin"
 codegen-units = 1
 
 [profile.bench]
-opt-level = 3
-lto = "thin"
 codegen-units = 1
 debug = true
+
+[profile.evaluation]
+inherits = "release"
+lto = false
+codegen-units = 128
+overflow-checks = true
+debug-assertions = true
+incremental = true
+
+[profile.evaluation.package."*"]
+codegen-units = 32
+overflow-checks = true
+debug-assertions = true
+incremental = false

@@ -128,6 +128,33 @@ impl SeedStore {
         }
     }
 
+    /// Reserve `n` consecutive globally-unique seed IDs and return the base ID.
+    ///
+    /// The caller receives the exclusive range `[base, base + n)`.
+    /// Unlike [`SeedStore::next_key`], this method always uses the monotonic
+    /// counter and bypasses the free list to guarantee contiguous allocation.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `n` – Number of IDs to reserve.
+    ///
+    /// Return
+    /// ------
+    /// The first ID in the reserved range. If `n == 0`, the current counter
+    /// value is returned without modification.
+    ///
+    /// Notes
+    /// -----
+    /// - Intended for use when seeds are produced in a parallel worker and
+    ///   keys are assigned in a subsequent sequential merge phase.
+    /// - The free list is bypassed intentionally: recycled IDs cannot be
+    ///   guaranteed to form a contiguous range with the counter.
+    pub fn alloc_ids_batch(&mut self, n: usize) -> SeedId {
+        let base = self.next_global_id;
+        self.next_global_id += n as SeedId;
+        base
+    }
+
     /// Add a seed to the store, automatically assigning a unique key.
     ///
     /// Arguments

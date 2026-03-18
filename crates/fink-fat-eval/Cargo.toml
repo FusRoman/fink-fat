@@ -1,67 +1,32 @@
 [package]
 name = "fink-fat-eval"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+categories.workspace = true
+license-file.workspace = true
+readme = "README.md"
 
 [dependencies]
-anyhow = "1.0.100"
-camino = "1.2.2"
-polars = { version = "=0.52.0", default-features = false, features = [
-    "lazy",
-    "parquet",
-    "fmt",
-    "is_in",
-    "dtype-u8",
-] }
-fink-fat-engine = { path = "../fink-fat-engine" }
-comfy-table = "7.2.1"
+indicatif = { workspace = true }
+clap = { workspace = true }
+fink-fat-engine = { workspace = true }
+anyhow = "1.0.102"
+polars = { version = "0.46", features = ["lazy", "parquet"] }
+camino = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+ahash = { workspace = true }
 plotters = "0.3.7"
-clap = { version = "4.5.53", features = ["derive"] }
-rand = "0.9.2"
-serde = "1.0.228"
-serde_yaml = "0.9.34"
-rayon = "1.11.0"
-num_cpus = "1.17.0"
-bitcode = { version = "0.6.9", features = ["serde"] }
-ahash = { version = "0.8.12", features = ["serde"] }
-indicatif = "0.18.3"
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+ndarray = { workspace = true }
 
 [dev-dependencies]
 approx = "0.5.1"
 prop-test = "0.1.1"
 
-[[bin]]
-name = "pairs_posthoc_sweep"
-path = "src/bin/seeding/pairs_posthoc_sweep.rs"
-
-[[bin]]
-name = "pairs-multinight"
-path = "src/bin/seeding/pairs_multinight.rs"
-
-[[bin]]
-name = "score-distribution"
-path = "src/bin/scoring/score_distribution.rs"
-
-[[bin]]
-name = "inspect-scoring-components"
-path = "src/bin/scoring/inspect_scoring_components.rs"
-
-[[bin]]
-name = "generate-seed-store"
-path = "src/bin/scoring/generate_seed_store.rs"
-
-[[bin]]
-name = "evaluate-scoring"
-path = "src/bin/scoring/evaluate_scoring.rs"
-
-[[bin]]
-name = "evaluate-edges"
-path = "src/bin/scoring/evaluate_edges.rs"
-
-[[bin]]
-name = "evaluate-edge-features"
-path = "src/bin/scoring/evaluate_edge_features.rs"
-
-[[bin]]
-name = "generate-features"
-path = "src/bin/scoring/generate_features.rs"
+[package.metadata.llvm-cov]
+skip = true

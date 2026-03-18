@@ -1,6 +1,6 @@
 //! -----------------------------------------------------------------------------
 //! Edge module: inter-night edge construction, feature computation,
-//! and optional ML Top-K ranking
+//! and optional ML post-filtering
 //! -----------------------------------------------------------------------------
 //!
 //! Overview
@@ -14,7 +14,7 @@
 //! - `Edge<'seed_lf, 'alert_lf>`: a directed edge storing references to
 //!   `SeedNode`s (no ID resolution step needed).
 //! - Structured, cadence-robust feature computation (`EdgeFeatures`).
-//! - Optional ONNX-based ML Top-K ranking.
+//! - Optional ONNX-based ML post-filtering applied to the retained edge set.
 //! - Sequential and Rayon-parallel edge building strategies.
 //!
 //! The main entrypoint is:
@@ -45,31 +45,32 @@
 //!
 //! Two operational modes (when Top-K is active)
 //! ----------------------------------------------
-//! Controlled by `EdgeConfig.use_ml_ranking` (only relevant when
-//! `top_k_per_left = Some(k)`):
+//! Controlled by `top_k_per_left`:
 //!
-//! 1) use_ml_ranking = false (default)
+//! 1) `top_k_per_left = None`
+//!    ----------------------------------
+//!    - Emit all candidate edges regardless of cost (debug / dataset mode).
+//!    - Useful for generating exhaustive training datasets or controlled experiments.
+//!    - No pruning; edge set can be very large.
+//!
+//! 2) `top_k_per_left = Some(k)`
 //!    ----------------------------------
 //!    - For each left seed, generate candidates and compute cost via
 //!      `EdgeFeatures::compute_cost`.
 //!    - Retain only the K lowest-cost candidates (cost-based Top-K).
-//!    - No ONNX model is required.
+//!    - No ONNX model is required at this stage.
 //!    - Cost is derived from `EdgeFeatures::compute_cost` using the variant
 //!      configured in `edge_config.cost` (default: `gaussian_chi2`).
 //!
-//! 2) use_ml_ranking = true
-//!    ----------------------------------
-//!    - ML Top-K ranking is enabled.
-//!    - For each left seed:
-//!      • candidates are generated,
-//!      • features are computed,
-//!      • ONNX inference produces p(class=1),
-//!      • only the Top-K highest-probability candidates are retained.
-//!    - The solver-facing edge cost is still derived from features.
-//!    - Requires `model_pool` to be provided.
+//! **ML post-filter** (when `ml_post_filter = true`):
 //!
-//! When `top_k_per_left = None`, all candidates are emitted regardless of
-//! `use_ml_ranking`.
+//! Applied one time, after all left seeds have been processed, regardless
+//! of which Top-K mode was used above:
+//!
+//! - Score the **entire retained edge set** with the ONNX classifier (batched).
+//! - Discard edges whose `p(class=1) < ml_post_filter_threshold`.
+//! - Requires `model_pool` and `edge_ranking_model_path`.
+//! - Much cheaper than per-seed ranking: inference runs on the already-pruned set.
 //!
 //!
 //!
@@ -84,8 +85,6 @@
 //!
 //! - Left seeds are split into chunks.
 //! - Each chunk is processed independently using Rayon.
-//! - Each worker thread retrieves its own model instance from
-//!   `EdgeRankingModelPool` (no shared mutable session).
 //!
 //! If disabled:
 //!
@@ -142,6 +141,7 @@ pub mod ranking_topk;
 
 use std::fmt;
 
+use ahash::AHashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -152,7 +152,7 @@ use crate::{
         edge_features::EdgeFeatures,
         edge_prediction::EdgeRankingModelPool,
         error::{EdgeBuilderError, EdgeModelError},
-        ranking_topk::{rank_topk_edges_for_left, rank_topk_edges_for_left_by_cost},
+        ranking_topk::rank_topk_edges_for_left_by_cost,
     },
     pipeline::hooks::StageProgress,
     seeding::{SeedKey, SeedNode, seed_spatial_index::SeedSpatialIndex},
@@ -200,7 +200,7 @@ pub struct EdgeKey {
 /// Notes
 /// -----
 /// - `active` is not part of feature computation; it is a graph-level control flag.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct Edge {
     /// Solver-facing cost (dimensionless, strictly positive).
     pub cost: f64,
@@ -303,20 +303,19 @@ impl Edge {
     ///
     /// Behavior
     /// --------
-    /// Controlled by `edge_config.top_k_per_left` and `edge_config.use_ml_ranking`:
+    /// Controlled by `edge_config.top_k_per_left`:
     ///
     /// - `top_k_per_left = None`:
     ///   - emits all candidate edges returned by `SeedNode::seed_edge_candidates`,
     ///   - computes `EdgeFeatures` and derives solver cost.
     ///
-    /// - `top_k_per_left = Some(k)`, `use_ml_ranking = false` (default):
+    /// - `top_k_per_left = Some(k)`:
     ///   - ranks candidates per-left seed by physics-based cost,
     ///   - keeps only the `k` lowest-cost candidates.
     ///
-    /// - `top_k_per_left = Some(k)`, `use_ml_ranking = true`:
-    ///   - ranks candidates per-left seed using ONNX ML (`rank_topk_edges_for_left`),
-    ///   - keeps only the `k` highest-probability candidates.
-    ///   - requires `model_pool` to be `Some(...)`.
+    /// If `edge_config.ml_post_filter` is `true`, an ONNX classifier is applied
+    /// once on the retained set: edges with `p(class=1) < ml_post_filter_threshold`
+    /// are discarded.
     ///
     /// Parallelism
     /// -----------
@@ -337,14 +336,14 @@ impl Edge {
     /// * `right` – Slice of target seeds (later epoch).
     /// * `edge_config` – Configuration controlling:
     ///   - candidate search constraints,
-    ///   - ranking strategy (`use_ml_ranking`),
     ///   - Top-K limit (`top_k_per_left`),
+    ///   - ML post-filter toggle and threshold,
     ///   - ONNX batching,
     ///   - parallelism.
     /// * `spatial_binner` – Spatial partitioner used to index `right`.
     /// * `time_binner_width` – Time bin width (days) for the uniform time index.
     /// * `model_pool` – Optional ML model pool:
-    ///   - required if `use_ml_ranking == true`,
+    ///   - required if `edge_config.ml_post_filter == true`,
     ///   - ignored otherwise.
     /// * `progress_sink` – Progress reporter updated per processed chunk.
     ///
@@ -353,7 +352,7 @@ impl Edge {
     /// * `Ok(Vec<Edge>)` – Constructed edges referencing `left` and `right`.
     /// * `Err(EdgeBuilderError)` – If:
     ///   - input slices are invalid,
-    ///   - ML mode is enabled but no model pool is provided,
+    ///   - ML post-filter is enabled but no model pool is provided,
     ///   - ONNX inference fails.
     ///
     /// Notes
@@ -392,7 +391,7 @@ impl Edge {
             chunk_size,
             top_k = ?top_k,
             parallel = edge_config.parallel_left_batches,
-            use_ml_ranking = edge_config.use_ml_ranking,
+            ml_post_filter = edge_config.ml_post_filter,
             "build_edges starting",
         );
         tracing::trace!(
@@ -409,7 +408,6 @@ impl Edge {
                 &right_index,
                 edge_config,
                 top_k,
-                model_pool,
                 progress_sink,
             ),
             false => build_edges_sequential(
@@ -418,10 +416,34 @@ impl Edge {
                 &right_index,
                 edge_config,
                 top_k,
-                model_pool,
                 progress_sink,
             ),
         }?;
+
+        // ML post-filter: score all retained edges and discard those below threshold.
+        let edges = if edge_config.ml_post_filter {
+            let pool =
+                model_pool.ok_or(EdgeBuilderError::ModelError(EdgeModelError::MissingModel))?;
+            let n_before = edges.len();
+            let edges = apply_ml_post_filter(
+                edges,
+                left.iter(),
+                right.iter(),
+                edge_config.ml_post_filter_threshold,
+                edge_config.onnx_batch_size,
+                pool,
+                edge_config.onnx_intra_threads,
+            )?;
+            tracing::debug!(
+                n_before,
+                n_after = edges.len(),
+                threshold = edge_config.ml_post_filter_threshold,
+                "ML post-filter applied",
+            );
+            edges
+        } else {
+            edges
+        };
 
         let (cost_min, cost_max, cost_mean) = edge_cost_stats(&edges);
         tracing::debug!(
@@ -430,6 +452,99 @@ impl Edge {
             cost_max,
             cost_mean,
             "build_edges complete"
+        );
+        Ok(edges)
+    }
+
+    /// Build directed edges between two seed slices using a pre-built right-hand index.
+    ///
+    /// Equivalent to [`Edge::build_edges`] but accepts a [`SeedSpatialIndex`] that
+    /// was already constructed by the caller.  This avoids rebuilding the index for
+    /// every left night when multiple left nights share the same right night, which
+    /// is the common case when `max_gap > 1`.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `left`        – Slice of left-hand seeds (earlier epoch).
+    /// * `right_index` – Pre-built spatio-temporal index over the right-hand seeds.
+    /// * `edge_config` – Edge configuration (same semantics as [`Edge::build_edges`]).
+    /// * `model_pool`  – Optional ML model pool (required when `ml_post_filter == true`).
+    /// * `progress_sink` – Progress reporter updated per processed chunk.
+    ///
+    /// Return
+    /// ------
+    /// * `Ok(Vec<Edge>)` – Constructed edges.
+    /// * `Err(EdgeBuilderError)` – Same error conditions as [`Edge::build_edges`].
+    pub fn build_edges_with_index<'seed_lf, 'binner_lf>(
+        left: &[SeedNode],
+        right_index: &SeedSpatialIndex<'seed_lf, 'binner_lf>,
+        edge_config: &EdgeConfig,
+        model_pool: Option<&EdgeRankingModelPool>,
+        progress_sink: &dyn StageProgress,
+    ) -> Result<Vec<Self>, EdgeBuilderError> {
+        let chunk_size = edge_config.parallel_left_batch_size.max(1);
+        let top_k = edge_config.top_k_per_left;
+
+        tracing::debug!(
+            n_left = left.len(),
+            chunk_size,
+            top_k = ?top_k,
+            parallel = edge_config.parallel_left_batches,
+            ml_post_filter = edge_config.ml_post_filter,
+            "build_edges_with_index starting",
+        );
+
+        let edges = match edge_config.parallel_left_batches {
+            true => build_edges_parallel(
+                left,
+                chunk_size,
+                right_index,
+                edge_config,
+                top_k,
+                progress_sink,
+            ),
+            false => build_edges_sequential(
+                left,
+                chunk_size,
+                right_index,
+                edge_config,
+                top_k,
+                progress_sink,
+            ),
+        }?;
+
+        // ML post-filter: score all retained edges and discard those below threshold.
+        let edges = if edge_config.ml_post_filter {
+            let pool =
+                model_pool.ok_or(EdgeBuilderError::ModelError(EdgeModelError::MissingModel))?;
+            let n_before = edges.len();
+            let edges = apply_ml_post_filter(
+                edges,
+                left.iter(),
+                right_index.iter_seeds(),
+                edge_config.ml_post_filter_threshold,
+                edge_config.onnx_batch_size,
+                pool,
+                edge_config.onnx_intra_threads,
+            )?;
+            tracing::debug!(
+                n_before,
+                n_after = edges.len(),
+                threshold = edge_config.ml_post_filter_threshold,
+                "ML post-filter applied",
+            );
+            edges
+        } else {
+            edges
+        };
+
+        let (cost_min, cost_max, cost_mean) = edge_cost_stats(&edges);
+        tracing::debug!(
+            n_edges = edges.len(),
+            cost_min,
+            cost_max,
+            cost_mean,
+            "build_edges_with_index complete"
         );
         Ok(edges)
     }
@@ -477,7 +592,8 @@ fn process_chunk_emit_all<'seed_lf>(
     right_index: &SeedSpatialIndex<'seed_lf, '_>,
     edge_config: &EdgeConfig,
 ) -> Result<Vec<Edge>, EdgeBuilderError> {
-    let mut local_edges: Vec<Edge> = Vec::new();
+    // Conservative lower-bound capacity: at least one edge per left seed.
+    let mut local_edges: Vec<Edge> = Vec::with_capacity(chunk.len());
 
     for src in chunk.iter() {
         for to in src.seed_edge_candidates(right_index, edge_config) {
@@ -509,82 +625,6 @@ fn process_chunk_emit_all<'seed_lf>(
     Ok(local_edges)
 }
 
-/// Process a chunk of left seeds using ML Top-K pruning per-left seed.
-///
-/// For each source seed:
-/// - generate candidates,
-/// - compute features in batches,
-/// - run ONNX to obtain `p(class=1)`,
-/// - keep only the Top-K candidates,
-/// - emit edges with solver cost derived from features.
-///
-/// Arguments
-/// ---------
-/// * `chunk` – Slice of left-hand seeds processed together.
-/// * `right_index` – Spatial index over right-hand seeds.
-/// * `edge_config` – Candidate-generation and ONNX batching configuration.
-/// * `top_k` – Number of candidates kept per left seed.
-/// * `model_pool` – Per-thread model pool used to run ONNX inference.
-///
-/// Return
-/// ------
-/// * `Ok(Vec<Edge>)` – ML-pruned edges for this chunk.
-/// * `Err(EdgeBuilderError::ModelError)` – If ONNX inference fails.
-///
-/// Notes
-/// -----
-/// - `tmp` is reused to avoid allocations. It stores `(to, edge_cost)` for one `src`.
-/// - We run `model_pool.with_mut(...)` per `src` so the model used is the current
-///   thread’s instance (no locks).
-fn process_chunk_ml_topk(
-    chunk: &[SeedNode],
-    right_index: &SeedSpatialIndex<'_, '_>,
-    edge_config: &EdgeConfig,
-    top_k: usize,
-    model_pool: &EdgeRankingModelPool,
-) -> Result<Vec<Edge>, EdgeBuilderError> {
-    let mut local_edges: Vec<Edge> = Vec::new();
-
-    // Temporary per-left output: avoids heap allocation for small top_k.
-    let mut tmp: smallvec::SmallVec<[(&SeedNode, f64); 32]> = smallvec::SmallVec::new();
-
-    for src in chunk.iter() {
-        // Run ranking using the current thread’s model instance.
-        model_pool.with_mut(|model| {
-            rank_topk_edges_for_left(
-                src,
-                right_index,
-                edge_config,
-                model,
-                top_k,
-                edge_config.onnx_batch_size,
-                &mut tmp,
-            )
-        })?;
-
-        // Materialize edges for the winners.
-        for (right_candidate, edge_cost) in tmp.iter() {
-            let dt_days = src.delta_days(right_candidate);
-            local_edges.push(Edge::new(src, right_candidate, *edge_cost, dt_days)?);
-        }
-    }
-
-    if tracing::enabled!(tracing::Level::TRACE) {
-        let (cost_min, cost_max, cost_mean) = edge_cost_stats(&local_edges);
-        tracing::trace!(
-            chunk_size = chunk.len(),
-            top_k,
-            edges_in_chunk = local_edges.len(),
-            cost_min,
-            cost_max,
-            cost_mean,
-            "process_chunk_ml_topk",
-        );
-    }
-
-    Ok(local_edges)
-}
-
 /// Process one chunk of left seeds using cost-based Top-K pruning per-left seed.
 ///
 /// For each source seed:
@@ -609,7 +649,8 @@ fn process_chunk_cost_topk(
     edge_config: &EdgeConfig,
     top_k: usize,
 ) -> Result<Vec<Edge>, EdgeBuilderError> {
-    let mut local_edges: Vec<Edge> = Vec::new();
+    // top_k edges at most per left seed — exact upper bound.
+    let mut local_edges: Vec<Edge> = Vec::with_capacity(chunk.len() * top_k);
     let mut tmp: smallvec::SmallVec<[(&SeedNode, f64); 32]> = smallvec::SmallVec::new();
 
     for src in chunk.iter() {
@@ -639,12 +680,10 @@ fn process_chunk_cost_topk(
 
 /// Process one chunk of left seeds according to the configured ranking strategy.
 ///
-/// Dispatches to one of three implementations based on `top_k` and
-/// `edge_config.use_ml_ranking`:
+/// Dispatches to one of two implementations based on `top_k`:
 ///
 /// - `top_k = None` → emit all candidate edges (no filtering).
-/// - `top_k = Some(k)` and `use_ml_ranking = true` → ML Top-K via ONNX.
-/// - `top_k = Some(k)` and `use_ml_ranking = false` → cost-based Top-K.
+/// - `top_k = Some(k)` → cost-based Top-K.
 ///
 /// Arguments
 /// ---------
@@ -652,28 +691,19 @@ fn process_chunk_cost_topk(
 /// * `right_index` – Spatial index over right-hand seeds.
 /// * `edge_config` – Edge configuration controlling the mode.
 /// * `top_k` – Top-K per-left: `None` means emit all.
-/// * `model_pool` – Required when `use_ml_ranking = true`, ignored otherwise.
 ///
 /// Return
 /// ------
 /// * `Ok(Vec<Edge>)` – Edges produced for this chunk.
-/// * `Err(EdgeBuilderError::ModelError(EdgeModelError::MissingModel))` if ML mode
-///   is requested without a pool.
-/// * `Err(EdgeBuilderError::ModelError)` if ONNX inference fails.
+/// * `Err(EdgeBuilderError)` – If edge construction fails.
 fn process_chunk(
     chunk: &[SeedNode],
     right_index: &SeedSpatialIndex<'_, '_>,
     edge_config: &EdgeConfig,
     top_k: Option<usize>,
-    model_pool: Option<&EdgeRankingModelPool>,
 ) -> Result<Vec<Edge>, EdgeBuilderError> {
     match top_k {
         None => process_chunk_emit_all(chunk, right_index, edge_config),
-        Some(k) if edge_config.use_ml_ranking => {
-            let pool =
-                model_pool.ok_or(EdgeBuilderError::ModelError(EdgeModelError::MissingModel))?;
-            process_chunk_ml_topk(chunk, right_index, edge_config, k, pool)
-        }
         Some(k) => process_chunk_cost_topk(chunk, right_index, edge_config, k),
     }
 }
@@ -686,8 +716,7 @@ fn process_chunk(
 /// * `chunk_size` – Number of left seeds per Rayon task.
 /// * `right_index` – Spatial index over right-hand seeds.
 /// * `edge_config` – Edge configuration controlling mode and batching.
-/// * `top_k` – Top-K per-left used in ML mode.
-/// * `model_pool` – Optional model pool, required in ML mode.
+/// * `top_k` – Top-K per-left (`None` = emit all, `Some(k)` = cost-based Top-K).
 /// * `progress_sink` – Progress reporter to update after processing each chunk.
 ///
 /// Return
@@ -705,7 +734,6 @@ fn build_edges_parallel(
     right_index: &SeedSpatialIndex<'_, '_>,
     edge_config: &EdgeConfig,
     top_k: Option<usize>,
-    model_pool: Option<&EdgeRankingModelPool>,
     progress_sink: &dyn StageProgress,
 ) -> Result<Vec<Edge>, EdgeBuilderError> {
     use rayon::prelude::*;
@@ -721,11 +749,8 @@ fn build_edges_parallel(
     let edges = left
         .par_chunks(chunk_size)
         .map(|chunk| -> Result<Vec<Edge>, EdgeBuilderError> {
-            let out = process_chunk(chunk, right_index, edge_config, top_k, model_pool)?;
-
-            // Update: once per chunk to avoid too many calls
+            let out = process_chunk(chunk, right_index, edge_config, top_k)?;
             progress_sink.inc(chunk.len() as u64);
-
             Ok(out)
         })
         .try_reduce(Vec::<Edge>::new, |mut a, mut b| {
@@ -745,8 +770,7 @@ fn build_edges_parallel(
 /// * `chunk_size` – Number of left seeds per chunk.
 /// * `right_index` – Spatial index over right-hand seeds.
 /// * `edge_config` – Edge configuration controlling mode and batching.
-/// * `top_k` – Top-K per-left used in ML mode.
-/// * `model_pool` – Optional model pool, required in ML mode.
+/// * `top_k` – Top-K per-left (`None` = emit all, `Some(k)` = cost-based Top-K).
 /// * `progress_sink` – Progress reporter to update after processing each chunk.
 ///
 /// Return
@@ -766,7 +790,6 @@ fn build_edges_sequential(
     right_index: &SeedSpatialIndex<'_, '_>,
     edge_config: &EdgeConfig,
     top_k: Option<usize>,
-    model_pool: Option<&EdgeRankingModelPool>,
     progress_sink: &dyn StageProgress,
 ) -> Result<Vec<Edge>, EdgeBuilderError> {
     let n_chunks = left.chunks(chunk_size).count();
@@ -780,13 +803,7 @@ fn build_edges_sequential(
     let mut edges: Vec<Edge> = Vec::new();
 
     for chunk in left.chunks(chunk_size) {
-        edges.extend(process_chunk(
-            chunk,
-            right_index,
-            edge_config,
-            top_k,
-            model_pool,
-        )?);
+        edges.extend(process_chunk(chunk, right_index, edge_config, top_k)?);
 
         // Update: mark this chunk's seeds as processed
         progress_sink.inc(chunk.len() as u64);
@@ -794,4 +811,452 @@ fn build_edges_sequential(
 
     tracing::debug!(n_edges = edges.len(), "build_edges_sequential complete");
     Ok(edges)
+}
+
+// =============================================================================
+// ML post-filter
+// =============================================================================
+
+/// Flush one batch of edge features through the ONNX model and retain only
+/// edges whose `p(class=1)` meets or exceeds `threshold`.
+///
+/// Drains and clears both `batch_features` and `batch_edges` on every call.
+///
+/// Arguments
+/// ---------
+/// * `batch_features` – Feature rows for the current batch; cleared on return.
+/// * `batch_edges` – Edges aligned one-to-one with `batch_features`; drained on return.
+/// * `kept` – Accumulator for edges that pass the threshold.
+/// * `threshold` – Minimum `p(class=1)` required to keep an edge.
+/// * `model_pool` – ONNX model pool used for inference.
+/// * `onnx_intra_threads` – Optional intra-op thread count for the ORT session.
+///   Applied at lazy session creation; ignored if the session is already live.
+///
+/// Return
+/// ------
+/// * `Ok(())` – Batch processed; `kept` updated, both input buffers cleared.
+/// * `Err(EdgeBuilderError::ModelError)` – If ONNX inference fails.
+#[inline]
+fn flush_post_filter_batch(
+    batch_features: &mut Vec<EdgeFeatures>,
+    batch_edges: &mut Vec<Edge>,
+    kept: &mut Vec<Edge>,
+    threshold: f32,
+    model_pool: &EdgeRankingModelPool,
+    onnx_intra_threads: Option<usize>,
+) -> Result<(), EdgeBuilderError> {
+    let probas = model_pool
+        .with_mut(onnx_intra_threads, |model| {
+            model.predict_positive_proba(batch_features)
+        })
+        .map_err(EdgeBuilderError::ModelError)?;
+    for (edge, proba) in batch_edges.drain(..).zip(probas) {
+        if proba >= threshold {
+            kept.push(edge);
+        }
+    }
+    batch_features.clear();
+    Ok(())
+}
+
+/// Apply ML post-filtering to a set of edges.
+///
+/// Looks up left and right [`SeedNode`]s by [`SeedKey`], computes
+/// [`EdgeFeatures`], and scores each edge through the ONNX model in batches.
+/// Only edges with `p(class=1) >= threshold` are kept.
+///
+/// Arguments
+/// ---------
+/// * `edges` – Full retained edge set to filter.
+/// * `left_seeds` – Iterator over the left-hand [`SeedNode`]s; used to build
+///   the `SeedKey → &SeedNode` lookup.
+/// * `right_seeds` – Iterator over the right-hand [`SeedNode`]s; used to build
+///   the `SeedKey → &SeedNode` lookup.
+/// * `threshold` – Minimum `p(class=1)` to retain an edge.
+/// * `batch_size` – Number of edges per ONNX inference call.
+/// * `model_pool` – ONNX model pool; a session is borrowed per batch.
+/// * `onnx_intra_threads` – Optional intra-op thread count for the ORT session.
+///   Applied at lazy session creation; ignored if the session is already live.
+///
+/// Return
+/// ------
+/// * `Ok(Vec<Edge>)` – Edges that passed the threshold.
+/// * `Err(EdgeBuilderError::ModelError)` – If ONNX inference fails.
+///
+/// Notes
+/// -----
+/// - If a seed lookup fails for an edge (e.g. seed not present in either
+///   iterator), the edge is kept conservatively and a `WARN` is emitted.
+/// - Returns `Ok(edges)` immediately if `edges` is empty.
+fn apply_ml_post_filter<'a>(
+    edges: Vec<Edge>,
+    left_seeds: impl Iterator<Item = &'a SeedNode>,
+    right_seeds: impl Iterator<Item = &'a SeedNode>,
+    threshold: f32,
+    batch_size: usize,
+    model_pool: &EdgeRankingModelPool,
+    onnx_intra_threads: Option<usize>,
+) -> Result<Vec<Edge>, EdgeBuilderError> {
+    if edges.is_empty() {
+        return Ok(edges);
+    }
+
+    let batch_size = batch_size.max(1);
+
+    let left_by_key: AHashMap<SeedKey, &SeedNode> = left_seeds.map(|s| (s.key(), s)).collect();
+    let right_by_key: AHashMap<SeedKey, &SeedNode> = right_seeds.map(|s| (s.key(), s)).collect();
+
+    let mut kept: Vec<Edge> = Vec::with_capacity(edges.len());
+    let mut batch_features: Vec<EdgeFeatures> = Vec::with_capacity(batch_size);
+    let mut batch_edges: Vec<Edge> = Vec::with_capacity(batch_size);
+
+    for edge in edges {
+        let from_node = left_by_key
+            .get(&edge.from)
+            .or_else(|| right_by_key.get(&edge.from));
+        let to_node = right_by_key
+            .get(&edge.to)
+            .or_else(|| left_by_key.get(&edge.to));
+
+        match (from_node, to_node) {
+            (Some(&from), Some(&to)) => {
+                batch_features.push(EdgeFeatures::compute_features(from, to));
+                batch_edges.push(edge);
+                if batch_features.len() >= batch_size {
+                    flush_post_filter_batch(
+                        &mut batch_features,
+                        &mut batch_edges,
+                        &mut kept,
+                        threshold,
+                        model_pool,
+                        onnx_intra_threads,
+                    )?;
+                }
+            }
+            _ => {
+                // Seed lookup failed — keep the edge conservatively.
+                tracing::warn!(
+                    from = ?edge.from,
+                    to = ?edge.to,
+                    "ML post-filter: seed lookup failed, keeping edge"
+                );
+                kept.push(edge);
+            }
+        }
+    }
+
+    // Flush remaining partial batch.
+    if !batch_features.is_empty() {
+        flush_post_filter_batch(
+            &mut batch_features,
+            &mut batch_edges,
+            &mut kept,
+            threshold,
+            model_pool,
+            onnx_intra_threads,
+        )?;
+    }
+
+    Ok(kept)
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod edge_mod_tests {
+    use std::sync::Arc;
+
+    use camino::Utf8PathBuf;
+
+    use crate::{
+        Alert, AlertKey,
+        engine_config::edge_config::EdgeConfig,
+        graph::edge::edge_prediction::{EdgeRankingModel, EdgeRankingModelPool},
+        night_id::NightId,
+        pipeline::hooks::NoopProgress,
+        seeding::{SeedNode, seed_spatial_index::SeedSpatialIndex, store::SeedStore},
+        spacetime_bucket::{healpix_binner::HealpixBinner, uniform_time_binner::UniformTimeBinner},
+    };
+
+    use super::Edge;
+
+    // -------------------------------------------------------------------------
+    // Fixtures
+    // -------------------------------------------------------------------------
+
+    fn model_path() -> Utf8PathBuf {
+        let manifest_dir = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        manifest_dir.join("tests/ml_model/edge_classifier.onnx")
+    }
+
+    /// Minimal alert at `(ra, dec)` on `night` at epoch `mjd`, with 1-arcsec
+    /// positional errors and band `1` (g).
+    fn make_alert(id: u64, night: u32, mjd: f64, ra: f64, dec: f64) -> Alert {
+        const ARCSEC: f64 = std::f64::consts::PI / (180.0 * 3600.0);
+        Alert {
+            key: AlertKey {
+                night_id: NightId::new(night),
+                dia_source_id: id,
+            },
+            ra,
+            ra_err: ARCSEC,
+            dec,
+            dec_err: ARCSEC,
+            mjd_tt: mjd,
+            flux: 1000.0,
+            flux_err: 50.0,
+            band: 1,
+            observer_mpc_code: Arc::new("500".into()),
+        }
+    }
+
+    /// Build a `SeedNode` from two alerts 30 min apart on `night`, starting at
+    /// `(ra, dec)` with angular velocity `vx` rad/day in RA.
+    fn make_seed(
+        store: &mut SeedStore,
+        night: u32,
+        id_a: u64,
+        id_b: u64,
+        mjd: f64,
+        ra: f64,
+        dec: f64,
+        vx: f64,
+    ) -> SeedNode {
+        let dt = 0.5 / 24.0; // 30 min in days
+        let a = make_alert(id_a, night, mjd, ra, dec);
+        let b = make_alert(id_b, night, mjd + dt, ra + vx * dt, dec);
+        SeedNode::from_pair(store, NightId::new(night), &a, &b, None)
+            .expect("test seeds should form a valid pair")
+    }
+
+    /// Build `n` left seeds (night 1, MJD 60000) and `n` right seeds (night 2,
+    /// MJD 60001) with kinematically consistent inter-night motion of
+    /// `vx = 3e-3 rad/day`.  Seeds are slightly separated in RA so each
+    /// left seed has a unique nearest right seed.
+    fn build_left_right(n: u32) -> (Vec<SeedNode>, Vec<SeedNode>) {
+        let mut store = SeedStore::new();
+        let ra0 = 1.0_f64;
+        let dec = 0.1_f64;
+        let vx = 3e-3_f64; // ~0.17 °/day
+
+        let left: Vec<SeedNode> = (0..n)
+            .map(|i| {
+                let ra = ra0 + i as f64 * 5e-4;
+                make_seed(
+                    &mut store,
+                    1,
+                    i as u64 * 2,
+                    i as u64 * 2 + 1,
+                    60000.0,
+                    ra,
+                    dec,
+                    vx,
+                )
+            })
+            .collect();
+
+        let right: Vec<SeedNode> = (0..n)
+            .map(|i| {
+                let ra = ra0 + i as f64 * 5e-4 + vx * 1.0;
+                make_seed(
+                    &mut store,
+                    2,
+                    1000 + i as u64 * 2,
+                    1001 + i as u64 * 2,
+                    60001.0,
+                    ra,
+                    dec,
+                    vx,
+                )
+            })
+            .collect();
+
+        (left, right)
+    }
+
+    // -------------------------------------------------------------------------
+    // Tests
+    // -------------------------------------------------------------------------
+
+    /// ML model is loaded via the pool and `build_edges_with_index` returns
+    /// edges with strictly positive costs and dt_days.
+    #[test]
+    fn ml_build_edges_returns_valid_edges() {
+        let path = model_path();
+        assert!(
+            path.exists(),
+            "ONNX model not found at {path}; ensure tests/ml_model/edge_classifier.onnx exists"
+        );
+
+        let (left, right) = build_left_right(5);
+        let spatial_binner = HealpixBinner::new(8);
+        let time_binner = UniformTimeBinner::new(60001.0, 1.0);
+        let right_index = SeedSpatialIndex::build(&right, &spatial_binner, &time_binner);
+
+        let pool = EdgeRankingModelPool::new(&path);
+        let cfg = EdgeConfig {
+            ml_post_filter: true,
+            top_k_per_left: Some(5),
+            ..EdgeConfig::default()
+        };
+
+        let edges =
+            Edge::build_edges_with_index(&left, &right_index, &cfg, Some(&pool), &NoopProgress)
+                .expect("build_edges_with_index should succeed");
+
+        assert!(
+            !edges.is_empty(),
+            "Expected at least one edge between left and right seeds"
+        );
+        for e in &edges {
+            assert!(
+                e.cost > 0.0 && e.cost.is_finite(),
+                "cost must be finite and strictly positive, got {}",
+                e.cost
+            );
+            assert!(
+                e.dt_days > 0.0 && e.dt_days.is_finite(),
+                "dt_days must be finite and strictly positive, got {}",
+                e.dt_days
+            );
+        }
+    }
+
+    /// ML top-k filter limits the number of edges to at most `top_k` per left seed.
+    #[test]
+    fn ml_topk_fan_out_bounded_by_top_k() {
+        let path = model_path();
+        assert!(path.exists(), "ONNX model not found at {path}");
+
+        let top_k = 2usize;
+        let (left, right) = build_left_right(5);
+        let spatial_binner = HealpixBinner::new(8);
+        let time_binner = UniformTimeBinner::new(60001.0, 1.0);
+        let right_index = SeedSpatialIndex::build(&right, &spatial_binner, &time_binner);
+
+        let pool = EdgeRankingModelPool::new(&path);
+        let cfg = EdgeConfig {
+            ml_post_filter: true,
+            top_k_per_left: Some(top_k),
+            ..EdgeConfig::default()
+        };
+
+        let edges =
+            Edge::build_edges_with_index(&left, &right_index, &cfg, Some(&pool), &NoopProgress)
+                .expect("build_edges_with_index should succeed");
+
+        assert!(
+            edges.len() <= left.len() * top_k,
+            "Expected at most {} edges (top_k={top_k} × n_left={}), got {}",
+            left.len() * top_k,
+            left.len(),
+            edges.len()
+        );
+    }
+
+    /// Both ML-based and cost-based top-k produce edges for the same input.
+    /// This confirms the model is invoked without error and that the two
+    /// strategies are interchangeable at the API level.
+    #[test]
+    fn ml_and_cost_topk_both_produce_edges() {
+        let path = model_path();
+        assert!(path.exists(), "ONNX model not found at {path}");
+
+        let (left, right) = build_left_right(5);
+        let spatial_binner = HealpixBinner::new(8);
+        let time_binner = UniformTimeBinner::new(60001.0, 1.0);
+        let right_index = SeedSpatialIndex::build(&right, &spatial_binner, &time_binner);
+
+        // Run cost-based top-k (no ONNX model required).
+        let cfg_cost = EdgeConfig {
+            ml_post_filter: false,
+            top_k_per_left: Some(5),
+            ..EdgeConfig::default()
+        };
+        let cost_edges =
+            Edge::build_edges_with_index(&left, &right_index, &cfg_cost, None, &NoopProgress)
+                .expect("cost-based build should succeed");
+
+        // Run ML-based top-k.
+        let pool = EdgeRankingModelPool::new(&path);
+        let cfg_ml = EdgeConfig {
+            ml_post_filter: true,
+            top_k_per_left: Some(5),
+            ..EdgeConfig::default()
+        };
+        let ml_edges =
+            Edge::build_edges_with_index(&left, &right_index, &cfg_ml, Some(&pool), &NoopProgress)
+                .expect("ML-based build should succeed");
+
+        assert!(
+            !cost_edges.is_empty(),
+            "Cost-based ranking should find edges"
+        );
+        assert!(!ml_edges.is_empty(), "ML ranking should find edges");
+    }
+
+    /// `EdgeRankingModel::predict_positive_proba` returns values in [0, 1] for
+    /// a batch of real edge features derived from synthetic seeds.
+    #[test]
+    fn ml_model_probabilities_are_in_unit_interval() {
+        use crate::graph::edge::edge_features::EdgeFeatures;
+
+        let path = model_path();
+        assert!(path.exists(), "ONNX model not found at {path}");
+
+        let mut model = EdgeRankingModel::load_edge_ranking_model(&path, None)
+            .expect("EdgeRankingModel should load");
+
+        let (left, right) = build_left_right(3);
+        let features: Vec<EdgeFeatures> = left
+            .iter()
+            .flat_map(|l| {
+                right
+                    .iter()
+                    .map(move |r| EdgeFeatures::compute_features(l, r))
+            })
+            .collect();
+
+        assert!(!features.is_empty());
+
+        let proba = model
+            .predict_positive_proba(&features)
+            .expect("predict_positive_proba should succeed");
+
+        assert_eq!(
+            proba.len(),
+            features.len(),
+            "One probability per feature row"
+        );
+        for (i, p) in proba.iter().enumerate() {
+            assert!((0.0..=1.0).contains(p), "p[{i}] = {p} is outside [0, 1]");
+        }
+    }
+
+    /// A pool pointing to a non-existent model path returns an error when
+    /// `build_edges_with_index` is called with `use_ml_ranking = true`.
+    #[test]
+    fn ml_pool_with_missing_model_returns_error() {
+        let missing = Utf8PathBuf::from("/nonexistent/path/model.onnx");
+        let (left, right) = build_left_right(2);
+        let spatial_binner = HealpixBinner::new(8);
+        let time_binner = UniformTimeBinner::new(60001.0, 1.0);
+        let right_index = SeedSpatialIndex::build(&right, &spatial_binner, &time_binner);
+
+        let pool = EdgeRankingModelPool::new(&missing);
+        let cfg = EdgeConfig {
+            ml_post_filter: true,
+            top_k_per_left: Some(1),
+            ..EdgeConfig::default()
+        };
+
+        let result =
+            Edge::build_edges_with_index(&left, &right_index, &cfg, Some(&pool), &NoopProgress);
+        assert!(
+            result.is_err(),
+            "Expected error for missing model path, got Ok"
+        );
+    }
 }

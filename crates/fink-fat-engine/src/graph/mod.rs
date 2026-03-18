@@ -8,21 +8,26 @@ use crate::{
     graph::edge::{Edge, EdgeKey, edge_prediction::EdgeRankingModelPool, error::EdgeBuilderError},
     persistence::edge_journal::edge_op::EdgeOp,
     pipeline::hooks::StageProgress,
-    seeding::{SeedKey, SeedNode},
+    seeding::{SeedKey, SeedNode, seed_spatial_index::SeedSpatialIndex},
     spacetime_bucket::spatial_binner::SpatialBinner,
 };
 
 #[derive(Debug)]
 pub struct AlertLinkageDAG {
-    pub in_deg: AHashMap<SeedKey, usize>,
     pub out_deg: AHashMap<SeedKey, usize>,
-    /// All edges, kept **sorted by `EdgeKey`** at all times.
+    /// All edges, sorted by [`EdgeKey`] up to index `sorted_len`.
     ///
-    /// Lookups and deactivations use `binary_search_by_key` (O(log n)),
-    /// which is sufficient given that deactivations are rare (~tens per run).
-    /// Maintaining sort order avoids the ~3.8 GB `AHashMap<EdgeKey, usize>`
-    /// reverse index that was previously held alongside the edge vector.
+    /// Edges in `edges[..sorted_len]` are guaranteed to be sorted.
+    /// Edges in `edges[sorted_len..]` have been appended but not yet merged
+    /// into the sorted prefix.  Call [`AlertLinkageDAG::commit_edges_sort`]
+    /// to flush the unsorted tail and restore the full invariant before
+    /// using any binary-search operation.
     pub edges: Vec<Edge>,
+    /// Length of the sorted prefix of `edges`.
+    ///
+    /// `binary_search_by_key` operations ([`Self::edge_by_key`],
+    /// [`Self::deactivate_edges`]) require `sorted_len == edges.len()`.
+    sorted_len: usize,
     /// Pending edge operations accumulated since the last persistence flush.
     ///
     /// Every mutation method (`add_inter_night_edges`, `deactivate_edges`, …)
@@ -40,9 +45,9 @@ impl Default for AlertLinkageDAG {
 impl AlertLinkageDAG {
     pub fn new() -> Self {
         Self {
-            in_deg: AHashMap::new(),
             out_deg: AHashMap::new(),
             edges: Vec::new(),
+            sorted_len: 0,
             pending_ops: Vec::new(),
         }
     }
@@ -55,20 +60,19 @@ impl AlertLinkageDAG {
     /// The edge vector is sorted by [`EdgeKey`] so that subsequent lookups
     /// via [`Self::edge_by_key`] can use binary search.
     pub fn from_edges(mut edges: Vec<Edge>) -> Self {
-        let mut in_deg = AHashMap::new();
         let mut out_deg = AHashMap::new();
 
         for edge in edges.iter() {
             *out_deg.entry(edge.from).or_insert(0) += 1;
-            *in_deg.entry(edge.to).or_insert(0) += 1;
         }
 
         edges.sort_unstable_by_key(|e| e.key());
+        let n = edges.len();
 
         Self {
-            in_deg,
             out_deg,
             edges,
+            sorted_len: n,
             pending_ops: Vec::new(),
         }
     }
@@ -91,6 +95,47 @@ impl AlertLinkageDAG {
         self.pending_ops.len()
     }
 
+    /// Build directed edges between one left night and one right night and
+    /// append them to the DAG.
+    ///
+    /// This is the standard entry point used when no pre-built spatial index is
+    /// available.  Internally it delegates to [`Edge::build_edges`], which
+    /// constructs a [`crate::seeding::seed_spatial_index::SeedSpatialIndex`]
+    /// over `right_nodes` before searching for candidates.
+    ///
+    /// If the same right night is paired with multiple left nights, prefer
+    /// [`Self::add_inter_night_edges_with_index`] to avoid rebuilding the index
+    /// on every call.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `left_nodes` – Seeds from the earlier (left) night.
+    ///   All nodes must belong to the same night.
+    /// * `right_nodes` – Seeds from the later (right) night.
+    ///   All nodes must belong to the same night and must be **sorted** by
+    ///   [`SeedNode`] order (primary key `plane.epoch_mid`).
+    /// * `edge_config` – Edge construction parameters:
+    ///   candidate search radius, ML toggle, Top-K pruning, parallelism.
+    /// * `spatial_binner` – Spatial partitioner used to index `right_nodes`.
+    /// * `time_binner_width` – Bin width (days) for the uniform time index
+    ///   built over `right_nodes`.
+    /// * `model_pool` – Optional ML model pool.
+    ///   Required when `edge_config.ml_post_filter` is `true`.
+    /// * `progress_sink` – Progress reporter updated per processed chunk.
+    ///
+    /// Return
+    /// ------
+    /// * `Ok(())` – Edges appended; `out_deg` and `pending_ops` updated.
+    /// * `Err(EdgeBuilderError)` – Propagated from [`Edge::build_edges`]
+    ///   (invalid seed slices, missing model pool, ONNX inference failure).
+    ///
+    /// Notes
+    /// -----
+    /// - Newly appended edges are **not** immediately sorted.  Call
+    ///   [`Self::commit_edges_sort`] once after all pairs for a given stage
+    ///   run to restore the sorted invariant required by binary-search methods.
+    /// - Each produced edge is recorded as an [`EdgeOp::Upsert`] in
+    ///   `pending_ops` for subsequent journal persistence.
     #[allow(clippy::too_many_arguments)]
     pub fn add_inter_night_edges<B: SpatialBinner>(
         &mut self,
@@ -152,19 +197,109 @@ impl AlertLinkageDAG {
 
         for edge in new_edges {
             *self.out_deg.entry(edge.from).or_insert(0) += 1;
-            *self.in_deg.entry(edge.to).or_insert(0) += 1;
 
-            // Track the operation for the journal delta.
-            self.pending_ops.push(EdgeOp::Upsert { edge: edge.clone() });
-
+            // Edge is Copy, so both pushes below are cheap bitwise copies
+            // — no heap allocation, no .clone() call.
+            self.pending_ops.push(EdgeOp::Upsert { edge });
             self.edges.push(edge);
         }
-        // Re-sort to maintain the sorted-by-EdgeKey invariant required by
-        // binary_search_by_key. Timsort on a mostly-sorted slice (existing
-        // edges + one appended batch) is nearly O(n).
-        self.edges.sort_unstable_by_key(|e| e.key());
+        // Sorting is deferred: call commit_edges_sort() once after all pairs
+        // have been processed to maintain the sorted-by-EdgeKey invariant.
 
         Ok(())
+    }
+
+    /// Add inter-night edges using a pre-built right-hand [`SeedSpatialIndex`].
+    ///
+    /// Like [`Self::add_inter_night_edges`] but skips rebuilding the spatial
+    /// index for `right_nodes`. The caller is responsible for building the
+    /// index once per right night (before iterating over left nights).
+    ///
+    /// Arguments
+    /// ---------
+    /// * `left_nodes`  – Left-hand seeds (older epoch).
+    /// * `right_index` – Pre-built spatio-temporal index over right-hand seeds.
+    /// * `edge_config` – Edge configuration.
+    /// * `model_pool`  – Optional ML model pool.
+    /// * `progress_sink` – Progress reporter.
+    ///
+    /// Return
+    /// ------
+    /// Same as [`Self::add_inter_night_edges`].
+    ///
+    /// Notes
+    /// -----
+    /// This method does **not** sort `edges` after insertion.
+    /// Call [`Self::commit_edges_sort`] once after all pairs are processed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_inter_night_edges_with_index<'seed_lf, 'binner_lf>(
+        &mut self,
+        left_nodes: &[SeedNode],
+        right_index: &SeedSpatialIndex<'seed_lf, 'binner_lf>,
+        edge_config: &EdgeConfig,
+        model_pool: Option<&EdgeRankingModelPool>,
+        progress_sink: &dyn StageProgress,
+    ) -> Result<(), EdgeBuilderError> {
+        assert!(!left_nodes.is_empty(), "left_nodes must not be empty");
+
+        debug_assert!(
+            left_nodes
+                .iter()
+                .all(|s| s.night_id() == left_nodes[0].night_id()),
+            "left_nodes must all belong to the same night"
+        );
+
+        let left_night = left_nodes[0].night_id();
+        tracing::debug!(
+            %left_night,
+            n_left = left_nodes.len(),
+            "add_inter_night_edges_with_index",
+        );
+
+        let new_edges = Edge::build_edges_with_index(
+            left_nodes,
+            right_index,
+            edge_config,
+            model_pool,
+            progress_sink,
+        )?;
+
+        let n_new_edges = new_edges.len();
+        tracing::debug!(%left_night, n_new_edges, "edges built (with_index)");
+
+        for edge in new_edges {
+            *self.out_deg.entry(edge.from).or_insert(0) += 1;
+            self.pending_ops.push(EdgeOp::Upsert { edge });
+            self.edges.push(edge);
+        }
+        // Sorting is deferred: call commit_edges_sort() once after all pairs.
+
+        Ok(())
+    }
+
+    /// Flush all unsorted edges into the sorted prefix.
+    ///
+    /// After a batch of [`Self::add_inter_night_edges`] or
+    /// [`Self::add_inter_night_edges_with_index`] calls, the newly appended
+    /// edges are stored unsorted in `edges[sorted_len..]`.  This method:
+    ///
+    /// 1. Sorts only the new batch — $O(m \log m)$.
+    /// 2. Runs a stable sort on the full vector.  Timsort detects the two
+    ///    sorted runs (old prefix + new suffix) and merges them in $O(n + m)$.
+    ///
+    /// Total cost per call: $O(n + m \log m)$ where $n$ is the pre-existing
+    /// edge count and $m$ is the number of newly appended edges.
+    ///
+    /// After the call, `sorted_len == edges.len()` and binary-search
+    /// operations are safe again.
+    pub fn commit_edges_sort(&mut self) {
+        let old_len = self.sorted_len;
+        if old_len == self.edges.len() {
+            return; // already fully sorted
+        }
+        self.edges[old_len..].sort_unstable_by_key(|e| e.key());
+        self.edges.sort_by_key(|e| e.key());
+        self.sorted_len = self.edges.len();
     }
 
     /// Return a reference to the edge identified by `key`, or `None` if absent.
@@ -180,6 +315,11 @@ impl AlertLinkageDAG {
     /// `Some(&Edge)` if found, `None` otherwise.
     #[inline]
     pub fn edge_by_key(&self, key: &EdgeKey) -> Option<&Edge> {
+        debug_assert_eq!(
+            self.sorted_len,
+            self.edges.len(),
+            "call commit_edges_sort() before binary-search operations"
+        );
         match self.edges.binary_search_by_key(key, |e| e.key()) {
             Ok(idx) => Some(&self.edges[idx]),
             Err(_) => None,
@@ -199,6 +339,11 @@ impl AlertLinkageDAG {
     /// `Some(&mut Edge)` if found, `None` otherwise.
     #[inline]
     pub fn edge_by_key_mut(&mut self, key: &EdgeKey) -> Option<&mut Edge> {
+        debug_assert_eq!(
+            self.sorted_len,
+            self.edges.len(),
+            "call commit_edges_sort() before binary-search operations"
+        );
         match self.edges.binary_search_by_key(key, |e| e.key()) {
             Ok(idx) => Some(&mut self.edges[idx]),
             Err(_) => None,
@@ -227,6 +372,11 @@ impl AlertLinkageDAG {
     /// Number of edges that were actually deactivated (transitions from active
     /// to inactive). Already-inactive or missing edges are not counted.
     pub fn deactivate_edges(&mut self, keys: &[EdgeKey]) -> u64 {
+        debug_assert_eq!(
+            self.sorted_len,
+            self.edges.len(),
+            "call commit_edges_sort() before binary-search operations"
+        );
         let mut n_deactivated: u64 = 0;
 
         for key in keys {
@@ -239,7 +389,7 @@ impl AlertLinkageDAG {
 
             self.edges[idx].active = false;
             self.pending_ops.push(EdgeOp::Upsert {
-                edge: self.edges[idx].clone(),
+                edge: self.edges[idx],
             });
             n_deactivated += 1;
         }
@@ -253,7 +403,7 @@ impl AlertLinkageDAG {
 // =============================================================================
 
 #[cfg(test)]
-mod tests {
+mod graph_tests {
     use super::*;
     use crate::{
         graph::edge::{Edge, EdgeKey},

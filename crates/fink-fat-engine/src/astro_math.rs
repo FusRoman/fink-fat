@@ -1,17 +1,46 @@
-//! Small astronomical math helpers.
+//! Lightweight geometric and numerical utilities for sky-coordinate arithmetic.
 //!
-//! This module provides lightweight geometric utilities on the celestial
-//! sphere, tailored for seeding and orbit-linking:
-//! - conversion from (RA, Dec) to 3D unit vectors,
-//! - fast dot-products in ℝ³,
-//! - angle wrapping into (−π, π],
-//! - local tangent-plane projections,
-//! - angular conversions (arcsec → rad),
-//! - great-circle angular separations.
+//! This module provides the low-level building blocks for seed construction,
+//! kinematic propagation, and feature computation in the fink-fat pipeline.
+//! All functions operate on plain Rust primitives (`f64`, fixed-size arrays)
+//! to keep hot paths allocation-free.
+//!
+//! ## Function groups
+//!
+//! ### Spherical geometry
+//! - [`unit_vec`] — equatorial `(ra, dec)` to 3D unit vector.
+//! - [`ang_sep`] — great-circle distance via the spherical law of cosines.
+//! - [`angular_separation_vincenty`] — numerically stable Vincenty formula.
+//! - [`spherical_midpoint`] — robust angular mean of two sky directions.
+//!
+//! ### Tangent-plane projection
+//! - [`planar_offset_fast`] — small-angle Cartesian offsets around a center.
+//! - [`radec_to_tangent`] — full gnomonic projection onto a local tangent plane.
+//! - [`tangent_to_radec`] — inverse gnomonic: tangent-plane back to sky coordinates.
+//!
+//! ### 2D linear algebra
+//! - [`dot2`], [`dot3`] — fixed-size dot products.
+//! - [`mat_vec2`] — 2×2 matrix–vector product.
+//! - [`mat_mul2`] — 2×2 matrix–matrix product.
+//! - [`trace_2x2`] — matrix trace.
+//! - [`det_sym_2x2`] — determinant of a symmetric 2×2 matrix.
+//! - [`invert_sym_2x2`] — robust inversion of a symmetric 2×2 matrix.
+//! - [`cholesky_lower_sym_2x2`] — Cholesky factorization of a symmetric 2×2 matrix.
+//! - [`lambda_max_2x2`] — largest eigenvalue of a symmetric 2×2 matrix.
+//! - [`l2_norm`] — Euclidean norm of a 2D vector.
+//!
+//! ### Kinematics
+//! - [`fit_quad_1d`] — analytic quadratic-motion fit through three time samples.
+//!
+//! ### Numerical guards and unit conversion
+//! - [`clamp_unit`] — clamp to $[-1, 1]$ with NaN protection.
+//! - [`safe_ln`] — natural logarithm with zero fallback for non-positive inputs.
+//! - [`wrap_pm_pi`] — fold an angle into $(-\pi, \pi]$.
+//! - [`arcsec_to_rad`] — arcseconds to radians.
 
 use std::f64::consts::{PI, TAU};
 
-use crate::{Radian, units::Arcsec};
+use crate::{Arcsec, Radian};
 
 /// Convert equatorial coordinates `(ra, dec)` to a 3D unit vector on the
 /// celestial sphere.
@@ -58,14 +87,7 @@ pub fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
 
 /// Compute the dot product of two 2D vectors.
 ///
-/// This is a minimal, branch-free helper intended for hot paths where
-/// small fixed-size vectors (`[f64; 2]`) are preferred over heap-allocated
-/// linear algebra types.
-///
-/// The dot product is defined as:
-/// ```text
-/// a · b = a₀ b₀ + a₁ b₁
-/// ```
+/// The dot product is $a \cdot b = a\_0 b\_0 + a\_1 b\_1$.
 ///
 /// Arguments
 /// ---------
@@ -74,13 +96,7 @@ pub fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
 ///
 /// Return
 /// ------
-/// Scalar dot product `a · b`.
-///
-/// Notes
-/// -----
-/// - No normalization or safety checks are performed.
-/// - This function is intentionally trivial and inlined to avoid
-///   pulling a full linear algebra dependency for 2D operations.
+/// Scalar dot product $a \cdot b$.
 #[inline]
 pub fn dot2(a: [f64; 2], b: [f64; 2]) -> f64 {
     a[0] * b[0] + a[1] * b[1]
@@ -243,10 +259,7 @@ pub fn invert_sym_2x2(m: [[f64; 2]; 2], floor: f64) -> [[f64; 2]; 2] {
 
 /// Compute the trace of a 2×2 matrix.
 ///
-/// The trace is defined as the sum of diagonal elements:
-/// ```text
-/// tr(M) = M₀₀ + M₁₁
-/// ```
+/// The trace is the sum of diagonal elements: $\mathrm{tr}(M) = M\_{00} + M\_{11}$.
 ///
 /// Arguments
 /// ---------
@@ -258,10 +271,8 @@ pub fn invert_sym_2x2(m: [[f64; 2]; 2], floor: f64) -> [[f64; 2]; 2] {
 ///
 /// Notes
 /// -----
-/// - For covariance matrices, the trace represents the **total variance**
-///   and is often used as a scalar uncertainty proxy.
-/// - This helper avoids repeated indexing boilerplate and improves
-///   readability at call sites.
+/// For covariance matrices, the trace equals the total variance and is commonly
+/// used as a scalar uncertainty proxy.
 #[inline]
 pub fn trace_2x2(m: [[f64; 2]; 2]) -> f64 {
     m[0][0] + m[1][1]
@@ -269,20 +280,8 @@ pub fn trace_2x2(m: [[f64; 2]; 2]) -> f64 {
 
 /// Multiply two 2×2 matrices.
 ///
-/// This routine evaluates the standard matrix product:
-/// ```text
-/// C = A · B
-/// ```
-/// where:
-/// ```text
-/// Cᵢⱼ = Σₖ Aᵢₖ Bₖⱼ
-/// ```
-///
-/// The matrices are stored in **row-major** order:
-/// ```text
-/// [ m00 m01 ]
-/// [ m10 m11 ]
-/// ```
+/// Evaluates $C = A \cdot B$ where $C\_{ij} = \sum\_k A\_{ik} B\_{kj}$.
+/// Matrices are stored in row-major order.
 ///
 /// Arguments
 /// ---------
@@ -291,17 +290,12 @@ pub fn trace_2x2(m: [[f64; 2]; 2]) -> f64 {
 ///
 /// Return
 /// ------
-/// Product matrix `a · b` as a 2×2 matrix.
+/// Product matrix $A \cdot B$ as a row-major 2×2 array.
 ///
 /// Notes
 /// -----
-/// - This helper is intentionally minimal and allocation-free.
-/// - Designed for small fixed-size matrices where introducing a full
-///   linear algebra library would be unnecessary overhead.
-/// - Common use cases include:
-///   - verifying numerical inverses (`inv · m ≈ I`),
-///   - propagating 2D covariance matrices,
-///   - composing local linear transformations.
+/// Allocation-free; suitable for propagating 2D covariance matrices and
+/// verifying numerical inverses.
 ///
 /// See also
 /// --------
@@ -323,23 +317,9 @@ pub fn mat_mul2(a: [[f64; 2]; 2], b: [[f64; 2]; 2]) -> [[f64; 2]; 2] {
 
 /// Compute the determinant of a symmetric 2×2 matrix.
 ///
-/// This function evaluates the determinant of a matrix assumed to be
-/// **symmetric**, of the form:
-/// ```text
-/// [ a  b ]
-/// [ b  d ]
-/// ```
-///
-/// The determinant is given by:
-/// ```text
-/// det = a·d − b²
-/// ```
-///
-/// To improve numerical robustness, the off-diagonal term `b` is obtained
-/// by symmetrizing the input:
-/// ```text
-/// b = 0.5 · (m₀₁ + m₁₀)
-/// ```
+/// For a symmetric matrix with diagonal entries $a$, $d$ and symmetrized
+/// off-diagonal $b = \tfrac{1}{2}(m\_{01} + m\_{10})$, the determinant is:
+/// $$\det(M) = ad - b^2$$
 ///
 /// Arguments
 /// ---------
@@ -351,14 +331,9 @@ pub fn mat_mul2(a: [[f64; 2]; 2], b: [[f64; 2]; 2]) -> [[f64; 2]; 2] {
 ///
 /// Notes
 /// -----
-/// - This helper is intended primarily for covariance and information
-///   matrices, which are symmetric by construction.
-/// - The determinant is commonly used to:
-///   - test positive-definiteness (`det > 0`),
-///   - detect near-singular matrices,
-///   - choose between exact inversion and a fallback strategy.
-/// - No explicit checks for symmetry or finiteness are performed; callers
-///   are expected to handle pathological inputs if needed.
+/// - A positive determinant is a necessary condition for positive definiteness.
+/// - No finiteness checks are performed; callers are responsible for
+///   handling pathological inputs.
 ///
 /// See also
 /// --------
@@ -471,13 +446,9 @@ pub fn cholesky_lower_sym_2x2(m: [[f64; 2]; 2], floor: f64) -> Option<[[f64; 2];
     Some([[l00, 0.0], [l10, l11]])
 }
 
-/// Wrap an angle into the interval (−π, π].
+/// Wrap an angle into the interval $(-\pi, \pi]$.
 ///
-/// This is useful when working with longitudes or right ascensions where
-/// differences should be taken modulo `2π`.
-///
-/// The returned value `y` satisfies:
-/// - `-π < y <= π`
+/// Useful when computing RA differences that should be taken modulo $2\pi$.
 ///
 /// Arguments
 /// ---------
@@ -485,7 +456,7 @@ pub fn cholesky_lower_sym_2x2(m: [[f64; 2]; 2], floor: f64) -> Option<[[f64; 2];
 ///
 /// Return
 /// ------
-/// Angle in radians wrapped to the principal interval (−π, π].
+/// Angle in radians, $y \in (-\pi, \pi]$.
 #[inline]
 pub fn wrap_pm_pi(x: Radian) -> Radian {
     let two_pi = 2.0 * PI;
@@ -532,8 +503,7 @@ pub fn planar_offset_fast(
 
 /// Convert an angle from arcseconds to radians.
 ///
-/// This is a thin helper encoding:
-/// `1 arcsec = π / (180 × 3600)` radians.
+/// Applies $1\text{ arcsec} = \pi / 648000$ radians.
 ///
 /// Arguments
 /// ---------
@@ -549,23 +519,21 @@ pub fn arcsec_to_rad(x: Arcsec) -> Radian {
 
 /// Compute the great-circle angular separation between two sky positions.
 ///
-/// This routine evaluates the spherical law of cosines:
-/// `cos(d) = sin(dec1)·sin(dec2) + cos(dec1)·cos(dec2)·cos(Δra)`,
-/// where `Δra = wrap_pm_pi(ra2 − ra1)`.  
-/// The separation `d` is then obtained as `acos(clamp(cos(d), −1, 1))`.
-///
-/// The result is always in `[0, π]` and symmetric in its arguments.
+/// Evaluates the spherical law of cosines:
+/// $$\cos d = \sin\delta\_1\sin\delta\_2 + \cos\delta\_1\cos\delta\_2\cos(\Delta\alpha)$$
+/// where $\Delta\alpha = \alpha\_2 - \alpha\_1$ (wrapped to $(-\pi, \pi]$).
+/// The result $d \in [0, \pi]$ is symmetric in its arguments.
 ///
 /// Arguments
 /// ---------
-/// * `ra1` – First point right ascension (radians).
+/// * `ra1`  – First point right ascension (radians).
 /// * `dec1` – First point declination (radians).
-/// * `ra2` – Second point right ascension (radians).
+/// * `ra2`  – Second point right ascension (radians).
 /// * `dec2` – Second point declination (radians).
 ///
 /// Return
 /// ------
-/// Great-circle angular distance `d` in **radians**.
+/// Great-circle angular distance $d$ in radians.
 #[inline]
 pub fn ang_sep(ra1: f64, dec1: f64, ra2: f64, dec2: f64) -> f64 {
     let s1 = dec1.sin();
@@ -598,14 +566,12 @@ pub fn ang_sep(ra1: f64, dec1: f64, ra2: f64, dec2: f64) -> f64 {
 ///
 /// Notes
 /// -----
-/// This uses the Vincenty formula:
-/// `d = atan2( sqrt( num1² + num2² ), denom )` where:
-/// - `dlon = lon2 − lon1`
-/// - `num1 =  cos(lat2)·sin(dlon)`
-/// - `num2 =  cos(lat1)·sin(lat2) − sin(lat1)·cos(lat2)·cos(dlon)`
-/// - `denom = sin(lat1)·sin(lat2) + cos(lat1)·cos(lat2)·cos(dlon)`
-///
-/// This formula is stable at all angular distances.
+/// Uses the Vincenty formula:
+/// $$d = \mathrm{atan2}\left(\sqrt{n\_1^2 + n\_2^2}, D\right)$$
+/// where $\Delta\lambda = \mathrm{lon}\_2 - \mathrm{lon}\_1$,
+/// $n\_1 = \cos(\mathrm{lat}\_2)\sin(\Delta\lambda)$,
+/// $n\_2 = \cos(\mathrm{lat}\_1)\sin(\mathrm{lat}\_2) - \sin(\mathrm{lat}\_1)\cos(\mathrm{lat}\_2)\cos(\Delta\lambda)$, and
+/// $D = \sin(\mathrm{lat}\_1)\sin(\mathrm{lat}\_2) + \cos(\mathrm{lat}\_1)\cos(\mathrm{lat}\_2)\cos(\Delta\lambda)$.
 ///
 /// See also
 /// --------
@@ -703,10 +669,28 @@ const INV_COSC_MIN: f64 = 1e-12;
 /// This constant is purely a **numerical robustness guard**.
 const NORM_MIN: f64 = 1e-16;
 
-/// Compute a robust spherical midpoint between two directions (ra, dec).
+/// Compute a robust spherical midpoint between two sky directions.
 ///
-/// Returns the angular mean using vector averaging. Not the exact geodesic
-/// midpoint, but stable and very good to define a tangent-plane center.
+/// Returns the angular mean via vector averaging: the two unit vectors are
+/// summed and the result is renormalized to the unit sphere.  This is not
+/// the exact geodesic midpoint, but is stable and accurate enough for
+/// defining a tangent-plane center.
+///
+/// Arguments
+/// ---------
+/// * `ra1`  – Right ascension of the first point (radians).
+/// * `dec1` – Declination of the first point (radians).
+/// * `ra2`  – Right ascension of the second point (radians).
+/// * `dec2` – Declination of the second point (radians).
+///
+/// Return
+/// ------
+/// `(ra, dec)` of the midpoint in radians, with $\mathrm{ra} \in [0, 2\pi)$.
+///
+/// Notes
+/// -----
+/// When the two directions are nearly antipodal the sum vector approaches
+/// zero; a numerical floor is applied before normalization to avoid NaN.
 #[inline]
 pub fn spherical_midpoint(
     ra1: Radian,
@@ -721,9 +705,31 @@ pub fn spherical_midpoint(
     cart_to_sph(x / r, y / r, z / r)
 }
 
-/// Gnomonic projection of a sky position onto a tangent plane centered at (ra0, dec0).
+/// Gnomonic (zenithal perspective) projection of a sky position onto the
+/// tangent plane centred at `(ra0, dec0)`.
 ///
-/// Angles in radians. `(x, y)` are in radians on the tangent plane.
+/// The projection formulas are:
+/// $$\begin{align} x &= \frac{\cos\delta\sin(\alpha - \alpha\_0)}{c} \\ y &= \frac{\cos\delta\_0\sin\delta - \sin\delta\_0\cos\delta\cos(\alpha - \alpha\_0)}{c} \end{align}$$
+/// where $c = \sin\delta\_0\sin\delta + \cos\delta\_0\cos\delta\cos(\alpha - \alpha\_0)$
+/// is the cosine of the angular distance to the tangent point.
+///
+/// Arguments
+/// ---------
+/// * `ra`   – Target right ascension (radians).
+/// * `dec`  – Target declination (radians).
+/// * `ra0`  – Tangent-point right ascension (radians).
+/// * `dec0` – Tangent-point declination (radians).
+///
+/// Return
+/// ------
+/// Tangent-plane coordinates `[x, y]` in radians.
+///
+/// Notes
+/// -----
+/// The denominator $c$ is floored before inversion to protect against
+/// division by zero when the target is near 90° from the tangent point.
+/// All fink-fat seeds remain well within the valid operating range of a
+/// few degrees from the tangent point.
 #[inline]
 pub fn radec_to_tangent(ra: Radian, dec: Radian, ra0: Radian, dec0: Radian) -> [f64; 2] {
     let (sdec, cdec) = dec.sin_cos();
@@ -740,9 +746,24 @@ pub fn radec_to_tangent(ra: Radian, dec: Radian, ra0: Radian, dec0: Radian) -> [
     [x, y]
 }
 
-/// Inverse gnomonic projection: map plane coordinates `(x, y)` back to `(ra, dec)`.
+/// Inverse gnomonic projection: map tangent-plane coordinates `(x, y)` back
+/// to equatorial `(ra, dec)`.
 ///
-/// All angles in radians. `ra` is normalized to `[0, 2π)`.
+/// Arguments
+/// ---------
+/// * `x`    – Tangent-plane east offset in radians.
+/// * `y`    – Tangent-plane north offset in radians.
+/// * `ra0`  – Tangent-point right ascension (radians).
+/// * `dec0` – Tangent-point declination (radians).
+///
+/// Return
+/// ------
+/// `(ra, dec)` in radians with $\mathrm{ra} \in [0, 2\pi)$.
+///
+/// Notes
+/// -----
+/// When `(x, y)` is within numerical zero of the tangent point the function
+/// returns `(ra0, dec0)` directly to avoid a degenerate `atan2(0, 0)` call.
 #[inline]
 pub fn tangent_to_radec(x: f64, y: f64, ra0: Radian, dec0: Radian) -> (Radian, Radian) {
     let rho2 = x * x + y * y;
@@ -762,55 +783,49 @@ pub fn tangent_to_radec(x: f64, y: f64, ra0: Radian, dec0: Radian) -> (Radian, R
 
 /// Fit a 1D quadratic motion model through three time samples.
 ///
-/// This function fits the kinematic model:
+/// Fits the kinematic model $x(t) = p\_0 + v\, t + \tfrac{1}{2} a\, t^2$
+/// through **exactly three samples** $(t\_i, x\_i)$ using an analytic solution.
+/// Returns the position $p\_0$, velocity $v$, and acceleration $a$ evaluated
+/// at $t = 0$.
 ///
-/// ```text
-/// x(t) = p0 + v · t + 0.5 · a · t²
-/// ```
+/// The three time samples must be **distinct** and expressed relative to the
+/// same origin.  The motion is assumed to be well approximated by constant
+/// acceleration over each interval.
 ///
-/// through **exactly three samples** `(tᵢ, xᵢ)` using an analytic solution.
-/// It returns the position `p0`, velocity `v`, and acceleration `a` evaluated
-/// at `t = 0`.
-///
-/// # Assumptions
-/// - The three time samples are **distinct** (`t0 ≠ t1 ≠ t2`).
-/// - Times are given **relative to a chosen origin**, typically:
-///   `t = epoch - t_mid`.
-/// - The motion between the samples is well approximated by **constant
-///   acceleration** (quadratic trajectory).
-///
-/// # Why this formulation?
+/// Why this formulation?
+/// ---------------------
 /// Instead of solving a full linear system, this implementation:
 /// - first estimates local velocities using finite differences,
 /// - then derives the acceleration from the *change in velocity*,
-/// - and finally recovers `(p0, v)` consistently.
+/// - and finally recovers $(p\_0, v)$ consistently.
 ///
-/// This is:
-/// - numerically stable for small time spans,
-/// - fast (no matrix inversion),
-/// - well suited for short-arc astrometric fitting (pairs/triplets).
+/// This is numerically stable for small time spans, fast (no matrix
+/// inversion), and well suited for short-arc astrometric fitting.
 ///
-/// # Arguments
+/// Arguments
+/// ---------
 /// * `dt` – Array of three time offsets `[t0, t1, t2]` (in days),
 ///   expressed **relative to the same origin**.
 /// * `x`  – Array of three scalar positions `[x0, x1, x2]` corresponding
 ///   to the times in `dt`.
 ///
-/// # Returns
+/// Return
+/// ------
 /// `(p0, v, a)` where:
-/// - `p0` – position at `t = 0`,
-/// - `v`  – velocity at `t = 0`,
-/// - `a`  – constant acceleration.
+/// * `p0` – position at $t = 0$,
+/// * `v`  – velocity at $t = 0$,
+/// * `a`  – constant acceleration.
 ///
-/// # Notes
-/// - The reference time `t = 0` does **not** need to coincide with any of
+/// Notes
+/// -----
+/// - The reference time $t = 0$ does **not** need to coincide with any of
 ///   the sample times.
-/// - In practice, choosing `t = 0` near the middle sample (`t1`) reduces
-///   numerical correlations between `p0`, `v`, and `a`.
+/// - Choosing $t = 0$ near the middle sample reduces numerical correlations
+///   between $p\_0$, $v$, and $a$.
 ///
-/// # Panics
-/// This function will panic if two time samples are equal
-/// (division by zero).
+/// Panics
+/// ------
+/// Panics if any two time samples are equal (division by zero).
 #[inline]
 pub fn fit_quad_1d(dt: [f64; 3], x: [f64; 3]) -> (f64, f64, f64) {
     // Unpack time samples
@@ -849,9 +864,23 @@ pub fn fit_quad_1d(dt: [f64; 3], x: [f64; 3]) -> (f64, f64, f64) {
     (p0, v, a)
 }
 
-/// Return the largest eigenvalue λ_max of a symmetric 2×2 matrix.
+/// Compute the largest eigenvalue $\lambda\_{\max}$ of a symmetric 2×2 matrix.
 ///
-/// Useful to turn a covariance into a scalar radius for cone searches.
+/// $$\lambda\_{\max} = \frac{1}{2}\Bigl(\mathrm{tr}(A) + \sqrt{(a\_{11} - a\_{22})^2 + 4a\_{12}^2}\Bigr)$$
+/// where $a\_{12} = \tfrac{1}{2}(a\_{01} + a\_{10})$ (symmetrized off-diagonal).
+///
+/// Arguments
+/// ---------
+/// * `a` – Symmetric 2×2 matrix.
+///
+/// Return
+/// ------
+/// Largest eigenvalue $\lambda\_{\max}$.
+///
+/// Notes
+/// -----
+/// Primarily used to convert a 2D positional covariance into a scalar search
+/// radius for spatial cone queries.
 #[inline]
 pub fn lambda_max_2x2(a: [[f64; 2]; 2]) -> f64 {
     let a11 = a[0][0];
@@ -863,10 +892,18 @@ pub fn lambda_max_2x2(a: [[f64; 2]; 2]) -> f64 {
     0.5 * (tr + rad)
 }
 
-/// Euclidean L2 norm of a 2D vector.
+/// Compute the Euclidean L2 norm of a 2D vector.
 ///
-/// Uses `f64::hypot(x, y)` for better numerical stability than
-/// `sqrt(x*x + y*y)`.
+/// Returns $\sqrt{x^2 + y^2}$ using `f64::hypot` for numerical stability.
+///
+/// Arguments
+/// ---------
+/// * `x` – First component.
+/// * `y` – Second component.
+///
+/// Return
+/// ------
+/// Euclidean norm $\|(x, y)\|\_2$.
 #[inline]
 pub fn l2_norm(x: f64, y: f64) -> f64 {
     x.hypot(y)
