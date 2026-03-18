@@ -169,6 +169,19 @@ impl<'seed_lf, 'binner_lf> SeedSpatialIndex<'seed_lf, 'binner_lf> {
         &self.inner
     }
 
+    /// Iterate over every seed stored in this index.
+    ///
+    /// Seeds are yielded in bucket-insertion order (not sorted). Use this
+    /// when you need to inspect all right-hand seeds without a cone query
+    /// — for example to build a key-to-reference lookup map.
+    #[inline]
+    pub fn iter_seeds(&self) -> impl Iterator<Item = &SeedNode> + '_ {
+        self.inner
+            .buckets
+            .values()
+            .flat_map(|b| b.members.iter().copied())
+    }
+
     /// Perform an approximate cone query at a given epoch.
     ///
     /// The query proceeds as:

@@ -120,7 +120,7 @@ impl AlertLinkageDAG {
     /// * `time_binner_width` – Bin width (days) for the uniform time index
     ///   built over `right_nodes`.
     /// * `model_pool` – Optional ML model pool.
-    ///   Required when `edge_config.use_ml_ranking` is `true`.
+    ///   Required when `edge_config.ml_post_filter` is `true`.
     /// * `progress_sink` – Progress reporter updated per processed chunk.
     ///
     /// Return

@@ -145,6 +145,10 @@ impl EdgeRankingModelPool {
     ///
     /// Arguments
     /// ---------
+    /// * `onnx_intra_threads` – Intra-op thread count forwarded to ORT at session
+    ///   creation. Applied only during **lazy initialization** (the first call on
+    ///   a given thread); subsequent calls reuse the already-live session and this
+    ///   value is ignored.
     /// * `f` – Closure executed with a mutable reference to the thread-local model.
     ///
     /// Return
@@ -158,13 +162,15 @@ impl EdgeRankingModelPool {
     /// typically negligible compared to inference cost.
     pub fn with_mut<R>(
         &self,
+        onnx_intra_threads: Option<usize>,
         f: impl FnOnce(&mut EdgeRankingModel) -> Result<R, EdgeModelError>,
     ) -> Result<R, EdgeModelError> {
         let cell = self.models.get_or(|| RefCell::new(None));
 
         // Lazy per-thread init (fallible).
         if cell.borrow().is_none() {
-            let model = EdgeRankingModel::load_edge_ranking_model(&self.model_path)?;
+            let model =
+                EdgeRankingModel::load_edge_ranking_model(&self.model_path, onnx_intra_threads)?;
             *cell.borrow_mut() = Some(model);
         }
 
@@ -217,6 +223,9 @@ impl EdgeRankingModel {
     /// Arguments
     /// ---------
     /// * `model_path` – Path to the `.onnx` model file (UTF-8).
+    /// * `onnx_intra_threads` – Optional intra-op thread count for the ORT session.
+    ///   `None` lets ORT choose automatically; `Some(n)` pins the session to `n`
+    ///   intra-op threads.
     ///
     /// Return
     /// ------
@@ -236,8 +245,9 @@ impl EdgeRankingModel {
     /// `EdgeModelOutputs::resolve_output_indices`.
     pub fn load_edge_ranking_model(
         model_path: impl AsRef<Utf8Path>,
+        onnx_intra_threads: Option<usize>,
     ) -> Result<Self, EdgeModelError> {
-        let session = load_edge_model_session(model_path)?;
+        let session = load_edge_model_session(model_path, onnx_intra_threads)?;
         let outputs = EdgeModelOutputs::resolve_output_indices(&session)?;
         Ok(Self { session, outputs })
     }
@@ -504,6 +514,10 @@ impl EdgeModelOutputs {
 /// Arguments
 /// ---------
 /// * `model_path` – Path to the `.onnx` model file (UTF-8).
+/// * `onnx_intra_threads` – Optional intra-op thread count:
+///   - `None`: ORT selects automatically (typically equals logical CPU count).
+///   - `Some(n)`: pins the session to `n` intra-op threads via
+///     `SessionBuilder::with_intra_threads`.
 ///
 /// Return
 /// ------
@@ -516,7 +530,10 @@ impl EdgeModelOutputs {
 /// -----
 /// * The optimization level is currently set to `Level3`, which usually yields
 ///   best throughput for repeated inference, at the cost of longer session build.
-fn load_edge_model_session(model_path: impl AsRef<Utf8Path>) -> Result<Session, EdgeModelError> {
+fn load_edge_model_session(
+    model_path: impl AsRef<Utf8Path>,
+    onnx_intra_threads: Option<usize>,
+) -> Result<Session, EdgeModelError> {
     // Ensure ORT global init has happened.
     init_ort_once();
 
@@ -528,13 +545,17 @@ fn load_edge_model_session(model_path: impl AsRef<Utf8Path>) -> Result<Session, 
     }
 
     // Build session with aggressive graph optimizations (good for throughput).
-    // Pin to 1 intra-op thread: Rayon already provides outer parallelism
-    // (one session per worker), so letting ORT spawn its own thread pool would
-    // cause contention and cache thrashing.
-    let session = Session::builder()?
-        .with_optimization_level(GraphOptimizationLevel::Level3)?
-        .with_intra_threads(1)?
-        .commit_from_file(path.as_std_path())?;
+    let session_builder =
+        Session::builder()?.with_optimization_level(GraphOptimizationLevel::Level3)?;
+
+    // Optionally set the number of intra-op threads for parallelism within ORT.
+    let session_builder = if let Some(threads) = onnx_intra_threads {
+        session_builder.with_intra_threads(threads)?
+    } else {
+        session_builder
+    };
+
+    let session = session_builder.commit_from_file(path.as_std_path())?;
     Ok(session)
 }
 
@@ -764,7 +785,8 @@ mod edge_prediction_test {
             path
         );
 
-        let session = load_edge_model_session(&path).expect("Failed to load ONNX model session");
+        let session =
+            load_edge_model_session(&path, None).expect("Failed to load ONNX model session");
 
         assert!(
             !session.inputs().is_empty(),
@@ -780,8 +802,8 @@ mod edge_prediction_test {
     fn loading_nonexistent_model_fails_cleanly() {
         let bad_path = Utf8PathBuf::from("this/path/does/not/exist.onnx");
 
-        let err =
-            load_edge_model_session(&bad_path).expect_err("Expected failure for missing ONNX file");
+        let err = load_edge_model_session(&bad_path, None)
+            .expect_err("Expected failure for missing ONNX file");
 
         match err {
             EdgeModelError::ModelNotFound(_) => {}
@@ -891,7 +913,7 @@ mod edge_prediction_test {
     fn edge_ranking_model_loads_and_resolves_outputs() {
         let path = model_path();
 
-        let model = EdgeRankingModel::load_edge_ranking_model(&path)
+        let model = EdgeRankingModel::load_edge_ranking_model(&path, None)
             .expect("Failed to load EdgeRankingModel");
 
         // Sanity: the model must have inputs/outputs
@@ -913,7 +935,7 @@ mod edge_prediction_test {
         let path = model_path();
 
         let mut model =
-            EdgeRankingModel::load_edge_ranking_model(&path).expect("Failed to load model");
+            EdgeRankingModel::load_edge_ranking_model(&path, None).expect("Failed to load model");
 
         let batch = vec![dummy_edge_features(0.0), dummy_edge_features(10.0)];
         let proba = model.predict_proba(&batch).expect("predict_proba failed");
@@ -932,7 +954,7 @@ mod edge_prediction_test {
         let path = model_path();
 
         let mut model =
-            EdgeRankingModel::load_edge_ranking_model(&path).expect("Failed to load model");
+            EdgeRankingModel::load_edge_ranking_model(&path, None).expect("Failed to load model");
 
         let batch = vec![dummy_edge_features(0.0), dummy_edge_features(10.0)];
         let p1 = model
@@ -950,7 +972,7 @@ mod edge_prediction_test {
         let path = model_path();
 
         let mut model =
-            EdgeRankingModel::load_edge_ranking_model(&path).expect("Failed to load model");
+            EdgeRankingModel::load_edge_ranking_model(&path, None).expect("Failed to load model");
 
         let batch = vec![dummy_edge_features(0.0), dummy_edge_features(10.0)];
         let labels = model.predict_label(&batch).expect("predict_label failed");

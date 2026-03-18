@@ -11,48 +11,30 @@
 //! most promising candidates and return a compact list with pre-computed
 //! `edge_cost` values suitable for downstream graph solvers.
 //!
-//! Two ranking strategies are provided:
-//!
-//! - **ML ranking** ([`rank_topk_edges_for_left`]): candidates are scored by an
-//!   ONNX classifier and ranked by $p(\text{true\_edge})$.
-//! - **Cost-based ranking** ([`rank_topk_edges_for_left_by_cost`]): candidates
-//!   are ranked directly by the physics-based
-//!   [`crate::graph::edge::edge_features::EdgeFeatures::compute_cost`] score
-//!   (lowest cost = best candidate). No ONNX model is required.
+//! The ranking strategy is **cost-based**: candidates are ranked directly by
+//! the physics-derived
+//! [`crate::graph::edge::edge_features::EdgeFeatures::compute_cost`] score
+//! (lowest cost = best candidate). No ONNX model is required at this stage;
+//! optional ML post-filtering of the retained edge set is handled separately in
+//! [`crate::graph::edge`] after all left seeds are processed.
 //!
 //! ## Performance constraints
 //!
-//! - ONNX inference is relatively expensive per call; batching is critical
-//!   (ML path only).
 //! - Top-K maintenance must be $O(\log K)$ per accepted candidate, with $O(1)$
 //!   fast rejection once the heap is full.
-//! - The full candidate list is never materialized: features are accumulated
-//!   in fixed-size batches and discarded after each flush (ML path).
+//! - The cost is computed inline for each candidate; no intermediate buffer is
+//!   materialised.
 //! - When [`crate::engine_config::edge_config::EdgeConfig::max_cost_cut`] is set,
 //!   candidates above the cost threshold are discarded immediately without entering
-//!   the heap, reducing unnecessary work across all modes.
+//!   the heap, reducing unnecessary work.
 //!
-//! ## Implementation strategy (ML path)
+//! ## Implementation strategy
 //!
 //! 1. Iterate candidates from
 //!    [`crate::seeding::SeedNode::seed_edge_candidates`].
-//! 2. Accumulate [`crate::graph::edge::edge_features::EdgeFeatures`] rows into
-//!    batches of size `batch_size`.
-//! 3. Run one ONNX inference call per batch via
-//!    [`crate::graph::edge::edge_prediction::EdgeRankingModel::predict_positive_proba`].
-//! 4. Maintain a fixed-capacity `TopK` container (min-heap) so only the best
-//!    candidates are retained.
-//! 5. Inside the batch-flush step, after computing the cost for each survivor of the
-//!    probability threshold check, apply `max_cost_cut` if set: discard the
-//!    candidate if its cost exceeds the threshold.
-//! 6. At the end, emit winners sorted by descending probability.
-//!
-//! ## Implementation strategy (cost-based path)
-//!
-//! 1. Iterate candidates; compute cost inline for each.
 //! 2. Apply `max_cost_cut` if set: skip the candidate if its cost exceeds the
 //!    threshold before score mapping or heap insertion.
-//! 3. Map cost to a score $s = \frac{1}{1+c}$ for use with the same `TopK`
+//! 3. Map cost to a score $s = \frac{1}{1+c}$ for use with the `TopK`
 //!    min-heap (higher score = lower cost = better candidate).
 //! 4. Emit winners sorted by ascending cost.
 //!
@@ -64,13 +46,10 @@
 //!
 //! ## Public entry points
 //!
-//! - [`rank_topk_edges_for_left`] — ML-based Top-K: rank by ONNX probability.
 //! - [`rank_topk_edges_for_left_by_cost`] — Cost-based Top-K: rank by lowest cost.
 //!
 //! ## Notes
 //!
-//! - [`crate::graph::edge::edge_prediction::EdgeRankingModel::predict_positive_proba`]
-//!   is assumed to return one score per input row in the same order.
 //! - [`crate::graph::edge::edge_features::EdgeFeatures::compute_features`] is
 //!   expected to be deterministic and free of NaNs/Infs thanks to
 //!   `FeatureCore::finite_or_zero` guards upstream.
@@ -80,11 +59,8 @@ use std::collections::BinaryHeap;
 
 use smallvec::SmallVec;
 
-use crate::engine_config::edge_config::{CostConfig, EdgeConfig};
+use crate::engine_config::edge_config::EdgeConfig;
 use crate::graph::edge::edge_features::EdgeFeatures;
-use crate::graph::edge::edge_prediction::EdgeRankingModel;
-use crate::graph::edge::error::EdgeModelError;
-use crate::graph::edge::feature_core::FeatureCore;
 use crate::seeding::SeedNode;
 use crate::seeding::seed_spatial_index::SeedSpatialIndex;
 
@@ -100,9 +76,8 @@ use crate::seeding::seed_spatial_index::SeedSpatialIndex;
 ///
 /// Attributes
 /// ----------
-/// * `proba` – Model score $p(\text{class}=1)$ for this candidate edge,
-///   as returned by
-///   [`crate::graph::edge::edge_prediction::EdgeRankingModel::predict_positive_proba`].
+/// * `proba` – Score for this candidate edge (mapped from edge cost via
+///   $s = \frac{1}{1+c}$, so higher = better).
 /// * `to` – Borrowed reference to the right-hand [`crate::seeding::SeedNode`]
 ///   (edge head). Stored by reference to avoid duplicating seed data.
 /// * `edge_cost` – Additive solver cost derived from
@@ -113,7 +88,7 @@ use crate::seeding::seed_spatial_index::SeedSpatialIndex;
 /// Notes
 /// -----
 /// - The lifetime `'seed_lf` ties `to` to the slice of right seeds passed to
-///   [`rank_topk_edges_for_left`]; items must not outlive that slice.
+///   [`rank_topk_edges_for_left_by_cost`]; items must not outlive that slice.
 #[derive(Debug)]
 struct TopKItem<'seed_lf> {
     proba: f32,
@@ -346,235 +321,19 @@ impl<'seed_lf> TopK<'seed_lf> {
     }
 }
 
-/// Score one full batch of candidate edges and update the [`TopK`] container.
-///
-/// This is the key batching primitive called from [`rank_topk_edges_for_left`]:
-/// - runs a single ONNX inference call for the accumulated `batch_features`,
-/// - pairs returned probabilities with their corresponding right-seed candidates,
-/// - applies [`TopK::threshold`]-based early rejection before computing cost,
-/// - applies the `max_cost_cut` threshold if set (discards high-cost candidates),
-/// - inserts survivors into `top`,
-/// - drains `batch_to` and clears `batch_features` for reuse.
-///
-/// Arguments
-/// ---------
-/// * `src` – Left-hand [`crate::seeding::SeedNode`] (edge tail), required by
-///   [`crate::graph::edge::edge_features::EdgeFeatures::compute_cost`].
-/// * `cost_config` – Cost function parameters forwarded verbatim to
-///   `EdgeFeatures::compute_cost`.
-/// * `model` – ONNX edge-ranking model; mutable because the ORT session
-///   mutates internal state during inference.
-/// * `max_cost_cut` – Optional hard upper bound on edge cost. Candidates whose
-///   computed cost exceeds this value are discarded before heap insertion.
-///   `None` disables the cut.
-/// * `top` – [`TopK`] container to update with surviving candidates.
-/// * `batch_features` – Accumulated feature rows (one per candidate).
-///   Cleared by this function after inference.
-/// * `batch_to` – Right-seed references aligned one-to-one with `batch_features`.
-///   Drained by this function after inference.
-///
-/// Return
-/// ------
-/// * `Ok(())` — batch processed; `top`, `batch_features`, and `batch_to`
-///   updated in place.
-/// * `Err(`[`crate::graph::edge::error::EdgeModelError`]`)` — ONNX inference
-///   failed; `top` may be partially updated.
-///
-/// Invariants
-/// ----------
-/// - `batch_features.len()` must equal `batch_to.len()` on entry.
-/// - Both vectors are left empty on return (regardless of success or failure
-///   path), allowing the caller to push new candidates without reallocating.
-///
-/// Notes
-/// -----
-/// - `edge_cost` is computed **only** for candidates that pass the probability
-///   threshold, avoiding unnecessary work when the Top-K set is already tight.
-/// - The `max_cost_cut` check is applied **after** cost computation and **before**
-///   heap insertion, so it runs only for candidates that survived probability
-///   screening.
-/// - Calling with empty `batch_features` is a no-op and returns `Ok(())` immediately.
-#[inline]
-#[allow(clippy::too_many_arguments)]
-fn flush_batch<'seed_lf>(
-    src: &SeedNode,
-    cost_config: &CostConfig,
-    max_cost_cut: Option<f64>,
-    model: &mut EdgeRankingModel,
-    top: &mut TopK<'seed_lf>,
-    batch_features: &mut Vec<EdgeFeatures>,
-    batch_to: &mut Vec<&'seed_lf SeedNode>,
-    batch_cores: &mut Vec<FeatureCore>,
-) -> Result<(), EdgeModelError> {
-    if batch_features.is_empty() {
-        // Nothing to do (and ensures batch_to and batch_cores are also empty).
-        return Ok(());
-    }
-
-    // One ONNX call for the whole batch: returns p(class=1) for each row.
-    let probas = model.predict_positive_proba(batch_features.as_slice())?;
-
-    // Drain aligned streams: (seed, core) + probability.
-    // The FeatureCore was already built during feature extraction — reusing it
-    // avoids a second propagation + projection + covariance computation for
-    // every candidate that passes the probability threshold.
-    for ((right_candidate, core), proba) in
-        batch_to.drain(..).zip(batch_cores.drain(..)).zip(probas)
-    {
-        // Cheap early reject if this candidate can't enter the current Top-K set.
-        if proba <= top.threshold() {
-            continue;
-        }
-
-        // Reuse the already-built FeatureCore: avoids a second from_nodes call.
-        let cost = EdgeFeatures::compute_cost_from_core(&core, src, right_candidate, cost_config);
-
-        // Hard cost cut: discard candidates whose cost exceeds the threshold.
-        if max_cost_cut.is_some_and(|max| cost > max) {
-            continue;
-        }
-
-        top.push(TopKItem {
-            proba,
-            to: right_candidate,
-            edge_cost: cost,
-        });
-    }
-
-    // Important: clear features so we don't re-score them on the next flush.
-    batch_features.clear();
-    Ok(())
-}
-
-/// Rank all candidate right seeds for one left seed and return the Top-K by ML
-/// probability.
-///
-/// This is the main public entry point for per-left ML-based edge ranking.
-/// Given a single source [`crate::seeding::SeedNode`], it enumerates all
-/// spatially compatible right seeds, scores them with an ONNX classifier in
-/// batches, and writes the best `topk` candidates (with their solver costs)
-/// into a caller-provided output buffer.
-///
-/// Arguments
-/// ---------
-/// * `src` – Left-hand [`crate::seeding::SeedNode`] (edge tail).
-/// * `right_index` – Spatial/time index over the right-hand seed collection;
-///   used by [`crate::seeding::SeedNode::seed_edge_candidates`] to enumerate
-///   spatially compatible candidates.
-/// * `edge_config` – Edge configuration controlling candidate search constraints,
-///   cost function parameters, and batch sizing.
-/// * `model` – ONNX edge-ranking model (mutable because the ORT session
-///   mutates internal state during inference).
-/// * `topk` – Maximum number of right-seed candidates to return. Pass `0`
-///   to skip ML ranking entirely (output will be empty).
-/// * `batch_size` – Number of candidates submitted to the model per ONNX call.
-///   Larger values increase throughput but consume more memory. Clamped to a
-///   minimum of 1.
-/// * `out` – Caller-provided output buffer (cleared on entry). Filled with
-///   `(right_seed, edge_cost)` pairs sorted by descending ML probability.
-///
-/// Return
-/// ------
-/// * `Ok(())` — `out` contains up to `topk` entries sorted best-first by
-///   $p(\text{class}=1)$.
-/// * `Err(`[`crate::graph::edge::error::EdgeModelError`]`)` — ONNX inference
-///   failed; `out` may be partially filled.
-///
-/// Notes
-/// -----
-/// - Output is written into the caller-provided [`smallvec::SmallVec`] to
-///   avoid heap allocation in the common case where `topk ≤ 32`.
-/// - [`crate::graph::edge::edge_features::EdgeFeatures`] are computed for
-///   **every** candidate, but `edge_cost` (via
-///   [`crate::graph::edge::edge_features::EdgeFeatures::compute_cost`]) is
-///   evaluated only for candidates that pass the current Top-K threshold,
-///   avoiding unnecessary work.
-/// - [`crate::seeding::SeedNode::seed_edge_candidates`] yields candidates in
-///   arbitrary order; result correctness does not depend on input order.
-/// - [`crate::graph::edge::edge_prediction::EdgeRankingModel::predict_positive_proba`]
-///   is assumed to preserve the input row order.
-pub fn rank_topk_edges_for_left<'seed_lf>(
-    src: &'seed_lf SeedNode,
-    right_index: &SeedSpatialIndex<'seed_lf, '_>,
-    edge_config: &EdgeConfig,
-    model: &mut EdgeRankingModel,
-    topk: usize,
-    batch_size: usize,
-    out: &mut SmallVec<[(&'seed_lf SeedNode, f64); 32]>,
-) -> Result<(), EdgeModelError> {
-    // Output is provided by caller to avoid allocations in hot paths.
-    out.clear();
-
-    // Avoid degenerate batch sizes.
-    let batch_size = batch_size.max(1);
-
-    // Fixed-capacity Top-K structure (stores only the best candidates).
-    let mut top: TopK<'seed_lf> = TopK::new(topk);
-
-    // Batch buffers reused across flushes (all three are kept aligned by index).
-    let mut batch_features: Vec<EdgeFeatures> = Vec::with_capacity(batch_size);
-    let mut batch_to: Vec<&'seed_lf SeedNode> = Vec::with_capacity(batch_size);
-    // FeatureCore is built once per candidate and stored alongside features so
-    // that flush_batch can compute the edge cost without rebuilding the core.
-    let mut batch_cores: Vec<FeatureCore> = Vec::with_capacity(batch_size);
-
-    // Generate candidate right nodes and batch them for ONNX inference.
-    for to in src.seed_edge_candidates(right_index, edge_config) {
-        // Build the shared intermediates once; derive both features and the
-        // cached core in one pass (avoids a second from_nodes in flush_batch).
-        let core = FeatureCore::from_nodes(src, to);
-        batch_features.push(EdgeFeatures::from_core(src, to, &core));
-        batch_cores.push(core);
-        batch_to.push(to);
-
-        // Flush when batch is full.
-        if batch_features.len() >= batch_size {
-            flush_batch(
-                src,
-                &edge_config.cost_config,
-                edge_config.max_cost_cut,
-                model,
-                &mut top,
-                &mut batch_features,
-                &mut batch_to,
-                &mut batch_cores,
-            )?;
-        }
-    }
-
-    // Final flush for any remaining candidates.
-    flush_batch(
-        src,
-        &edge_config.cost_config,
-        edge_config.max_cost_cut,
-        model,
-        &mut top,
-        &mut batch_features,
-        &mut batch_to,
-        &mut batch_cores,
-    )?;
-
-    // Emit winners into output buffer (best probability first).
-    out.extend(
-        top.into_sorted_desc()
-            .into_iter()
-            .map(|it| (it.to, it.edge_cost)),
-    );
-
-    Ok(())
-}
-
 /// Rank all candidate right seeds for one left seed and return the Top-K by
 /// physics-based edge cost (lowest cost first).
 ///
-/// This is the cost-based counterpart to [`rank_topk_edges_for_left`]. It does
-/// not require an ONNX model: candidates are ranked directly by the scalar cost
-/// derived from [`crate::graph::edge::edge_features::EdgeFeatures::compute_cost`].
+/// Candidates are ranked directly by the scalar cost derived from
+/// [`crate::graph::edge::edge_features::EdgeFeatures::compute_cost`]. No ONNX
+/// model is required; ML post-filtering of the retained edge set is handled
+/// separately in [`crate::graph::edge`] after all left seeds are processed.
+///
 /// The `topk` candidates with the **lowest** cost are retained.
 ///
 /// Implementation note
 /// -------------------
-/// Internally, each candidate's cost is mapped to a "score" via
+/// Internally, each candidate's cost is mapped to a score via
 /// $s = \frac{1}{1 + c}$, which is monotonically decreasing in cost.
 /// The existing `TopK` min-heap (designed for "highest score wins") can then be
 /// reused without modification: keeping the top-$K$ scores is equivalent to
@@ -604,8 +363,7 @@ pub fn rank_topk_edges_for_left<'seed_lf>(
 /// - When [`crate::engine_config::edge_config::EdgeConfig::max_cost_cut`] is set,
 ///   any candidate whose cost exceeds the threshold is discarded before score
 ///   mapping and heap insertion.
-/// - Unlike [`rank_topk_edges_for_left`], this function never returns an error
-///   because no ONNX inference is involved.
+/// - This function is infallible: no ONNX inference is involved.
 /// - [`crate::seeding::SeedNode::seed_edge_candidates`] yields candidates in
 ///   arbitrary order; result correctness does not depend on input order.
 pub fn rank_topk_edges_for_left_by_cost<'seed_lf>(

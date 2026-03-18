@@ -59,7 +59,7 @@ fn bench_build_edges_real(c: &mut Criterion) {
     let engine_config = load_engine_config_validated(camino::Utf8Path::new(&config_path))
         .unwrap_or_else(|e| panic!("failed to load engine config from {config_path}: {e}"));
 
-    // ── 3. Build model pool (None when use_ml_ranking is false) ───────────────
+    // ── 3. Build model pool (None when ml_post_filter is false) ───────────────
     let model_pool: Option<EdgeRankingModelPool> = engine_config
         .edges
         .edge_ranking_model_path

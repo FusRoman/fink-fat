@@ -76,6 +76,7 @@ fn main() -> Result<()> {
                 &args.features_parquet,
                 &args.xgb_params,
                 args.plot_dir.as_deref(),
+                args.onnx_intra_threads,
             )?;
         }
     };

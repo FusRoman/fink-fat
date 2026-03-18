@@ -393,10 +393,31 @@ fn average_precision(pr: &[(f64, f64)]) -> f64 {
 /// 3. Run inference with [`EdgeRankingModelPool`].
 /// 4. Compute ROC-AUC and PR-AUC.
 /// 5. Optionally write evaluation plots to `plot_dir`.
+///
+/// Arguments
+/// ---------
+/// * `features_parquet` – Path to the edge-features Parquet file produced by
+///   `edge-eval --export-features`.
+/// * `xgb_params_path` – Path to the XGBoost training config (`xgb_params.yml`).
+///   The `training.onnx_output` field is read to locate the ONNX model; the
+///   path is resolved relative to the config file's directory.
+/// * `plot_dir` – Optional output directory for evaluation plots (`roc_curve.png`,
+///   `pr_curve.png`, `score_distribution.png`). No plots are written when `None`.
+/// * `onnx_intra_threads` – Optional intra-op thread count for the ORT session.
+///   `None` lets ORT choose automatically (typically = logical CPU count).
+///   `Some(n)` pins the session to `n` intra-op threads; set to `1` for
+///   single-threaded inference on shared machines.
+///
+/// Return
+/// ------
+/// * `Ok(())` – Evaluation complete; results emitted via `tracing`.
+/// * `Err(_)` – If features cannot be loaded, the ONNX model is missing,
+///   inference fails, or plot writing fails.
 pub fn model_evaluation(
     features_parquet: &Utf8Path,
     xgb_params_path: &Utf8Path,
     plot_dir: Option<&Utf8Path>,
+    onnx_intra_threads: Option<usize>,
 ) -> Result<()> {
     // ── Locate ONNX model ──────────────────────────────────────────────────
     let onnx_path = resolve_onnx_path(xgb_params_path)?;
@@ -417,8 +438,9 @@ pub fn model_evaluation(
 
     // ── Run inference ──────────────────────────────────────────────────────
     let pool = EdgeRankingModelPool::new(&onnx_path);
-    let scores =
-        pool.with_mut(|model| model.predict_positive_proba_from_array(data.features.clone()))?;
+    let scores = pool.with_mut(onnx_intra_threads, |model| {
+        model.predict_positive_proba_from_array(data.features.clone())
+    })?;
 
     // ── Compute metrics ────────────────────────────────────────────────────
     let metrics = compute_metrics(scores, data.labels, data.seed_ids);

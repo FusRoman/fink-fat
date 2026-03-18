@@ -156,7 +156,7 @@ pub fn run(
                 n_right_nights = night_groups.len(),
                 total_left_seeds,
                 max_gap,
-                use_ml_ranking = ctx.engine_config.edges.use_ml_ranking,
+                ml_post_filter = ctx.engine_config.edges.ml_post_filter,
                 parallel = ctx.engine_config.edges.parallel_left_batches,
                 "BuildEdges starting",
             );

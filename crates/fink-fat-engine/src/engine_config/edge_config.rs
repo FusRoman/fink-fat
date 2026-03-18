@@ -10,8 +10,10 @@
 //!    from a spatial/time index (cone query around the propagated prediction).
 //! 2) **Feature computation**: compute `EdgeFeatures` for each candidate edge.
 //! 3) **Cost assignment**: derive a solver-facing `cost` from features.
-//! 4) **Optional Top-K pruning**: keep only the most promising candidates per left seed,
-//!    ranked either by an ONNX classifier or by the physics-based cost function.
+//! 4) **Optional Top-K pruning**: keep only the `top_k_per_left` lowest-cost candidates
+//!    per left seed (physics-based ranking, no ONNX required).
+//! 5) **Optional ML post-filter**: score the retained edges with an ONNX classifier and
+//!    discard those below a probability threshold (`ml_post_filter`).
 //!
 //! -----------------------------------------------------------------------------
 //! Operational modes
@@ -19,10 +21,12 @@
 //!
 //! The two orthogonal configuration axes are:
 //!
-//! - **`top_k_per_left`** — controls *whether* Top-K filtering is applied.
-//! - **`use_ml_ranking`** — controls *how* candidates are ranked when filtering is active.
+//! - **`top_k_per_left`** — controls *whether* and *how many* candidates survive
+//!   the physics-based cost filter per left seed.
+//! - **`ml_post_filter`** — controls whether the surviving edges are further filtered
+//!   by an ONNX classifier applied once on the entire retained set.
 //!
-//! ## 1) No filtering (`top_k_per_left = None`)
+//! ## 1) No filtering (`top_k_per_left = None`, `ml_post_filter = false`)
 //!
 //! Intended use-cases:
 //! - debugging candidate retrieval,
@@ -32,14 +36,14 @@
 //! Behavior:
 //! - for each left seed, iterate all candidates returned by the candidate generator,
 //! - compute `EdgeFeatures` and edge cost for each candidate,
-//! - emit all edges without any Top-K pruning.
+//! - emit all edges without any pruning.
 //!
 //! Consequences:
 //! - the edge set can become very large (fan-out grows quickly with cone size),
 //! - connected components become denser and solvers cost more,
 //! - deterministic and simple — no ranking required.
 //!
-//! ## 2) Cost-based Top-K (`top_k_per_left = Some(k)`, `use_ml_ranking = false`)
+//! ## 2) Cost-based Top-K (`top_k_per_left = Some(k)`, `ml_post_filter = false`)
 //!
 //! Intended use-cases:
 //! - production-scale runs without an ONNX model,
@@ -57,21 +61,22 @@
 //! - Top-K selection is implemented with a fixed-capacity min-heap so memory stays
 //!   bounded by $O(K)$ per left seed (see `ranking_topk`).
 //!
-//! ## 3) ML Top-K (`top_k_per_left = Some(k)`, `use_ml_ranking = true`)
+//! ## 3) Cost-based Top-K + ML post-filter
+//!    (`top_k_per_left = Some(k)`, `ml_post_filter = true`)
 //!
 //! Intended use-cases:
 //! - production-scale runs with a trained ONNX edge classifier,
-//! - highest-purity candidate selection before connected components / solvers.
+//! - highest-purity edge selection before connected components / solvers.
 //!
-//! Behavior (per-left seed):
-//! - retrieve candidates,
-//! - compute `EdgeFeatures`,
-//! - batch candidates into ONNX inference calls (`onnx_batch_size`),
-//! - extract `p(class=1)` from model output,
-//! - retain only the `k` candidates with the **highest probability**,
-//! - emit edges for those winners only.
+//! Behavior:
+//! 1. For each left seed, apply cost-based Top-K as in mode 2 above.
+//! 2. After all left seeds are processed, score the **entire retained edge set**
+//!    with the ONNX classifier in batches of `onnx_batch_size`.
+//! 3. Discard any edge whose `p(class=1)` is below `ml_post_filter_threshold`.
 //!
 //! Notes:
+//! - ONNX inference runs **once**, on the already-pruned set — much cheaper than
+//!   scoring every raw candidate.
 //! - ML inference is performed by `EdgeRankingModel` / `EdgeRankingModelPool`
 //!   (see `edge_prediction`).
 //! - Requires `edge_ranking_model_path` and a live `EdgeRankingModelPool`.
@@ -138,7 +143,6 @@
 //!
 //! ```yaml
 //! edges:
-//!   use_ml_ranking: false   # default; cost-based ranking
 //!   top_k_per_left: 32
 //!   parallel_left_batches: true
 //!   parallel_left_batch_size: 512
@@ -153,11 +157,12 @@
 //!     sigma_q: 1.0e-3
 //! ```
 //!
-//! ML Top-K (production with ONNX model):
+//! Cost-based Top-K + ML post-filter (production with ONNX model):
 //!
 //! ```yaml
 //! edges:
-//!   use_ml_ranking: true
+//!   ml_post_filter: true
+//!   ml_post_filter_threshold: 0.5
 //!   edge_ranking_model_path: "edge_ranker.onnx"
 //!   top_k_per_left: 32
 //!   onnx_batch_size: 128
@@ -176,7 +181,7 @@
 //!
 //! Unknown keys are rejected (`deny_unknown_fields`) to catch typos early.
 //!
-//! Add `max_cost_cut` to any of the three modes to apply a hard upper bound:
+//! Add `max_cost_cut` to any mode to apply a hard cost upper bound:
 //!
 //! ```yaml
 //! edges:
@@ -202,16 +207,14 @@
 //!   edge, even though no Top-K filtering is otherwise active.
 //! - **Cost-based Top-K**: the cut is applied after computing cost and before the
 //!   score mapping; it reduces the number of candidates competing for the K slots.
-//! - **ML Top-K**: in the batch-flush routine of
-//!   [`crate::graph::edge::ranking_topk`], cost
-//!   is computed once a candidate has passed the probability threshold; if the
-//!   cost then exceeds `max_cost_cut`, the candidate is still discarded.
 //!
 //! Notes:
 //! - `None` disables the cut; all candidates are processed regardless of cost.
 //! - `Some(v)` with `v <= 0.0` is rejected by [`EdgeConfig::validate`] because
 //!   costs are strictly positive and such a value would silently discard every
 //!   candidate.
+//! - `max_cost_cut` does not interact with the ML post-filter: it is applied
+//!   during Top-K candidate selection, before ONNX inference.
 //!
 //! -----------------------------------------------------------------------------
 //! Validation
@@ -221,6 +224,7 @@
 //! - `top_k_per_left != Some(0)` — a zero limit would silently discard all edges.
 //! - `max_cost_cut` must satisfy `v > 0.0` when `Some(v)` — a non-positive cut
 //!   would silently discard every candidate.
+//! - `ml_post_filter_threshold` must be in `(0.0, 1.0]` when `ml_post_filter = true`.
 //!
 //! Additional checks (often useful in production) can be added if desired:
 //! - `onnx_batch_size > 0`,
@@ -233,7 +237,7 @@
 //!
 //! - `crate::graph::edge` (edge construction entrypoint and the operational modes).
 //! - `crate::graph::edge::edge_prediction` (ONNX model loading + inference).
-//! - `crate::graph::edge::ranking_topk` (batched per-left Top-K ranking).
+//! - `crate::graph::edge::ranking_topk` (cost-based per-left Top-K ranking).
 //! - [`PredictorParams`] (cone prediction controlling candidate retrieval).
 use serde::{Deserialize, Serialize};
 
@@ -241,6 +245,10 @@ use crate::engine_config::{error::EdgeConfigError, propagator_config::PredictorP
 
 fn default_false() -> bool {
     false
+}
+
+fn default_ml_post_filter_threshold() -> f32 {
+    0.5
 }
 
 // =============================================================================
@@ -365,16 +373,16 @@ impl Default for CostConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct EdgeConfig {
-    /// Path to the ONNX model used for ML edge ranking.
+    /// Path to the ONNX model used for ML post-filtering.
     ///
-    /// Used when `use_ml_ranking = true`:
+    /// Used when `ml_post_filter = true`:
     /// - passed to `EdgeRankingModel::load_edge_ranking_model(...)` (or a model pool),
     /// - the model is expected to output a `probabilities` tensor of shape `[N, 2]`
     ///   where column 1 is `p(class=1)` (true edge probability).
     ///
     /// Notes
     /// -----
-    /// - When `use_ml_ranking = false`, this path is unused.
+    /// - When `ml_post_filter = false`, this path is unused.
     /// - The file is not validated here; failures usually surface during model loading.
     pub edge_ranking_model_path: Option<String>,
 
@@ -399,41 +407,62 @@ pub struct EdgeConfig {
     /// discard all edges.
     pub top_k_per_left: Option<usize>,
 
-    /// Batch size used for ONNX inference when scoring candidates.
+    /// Batch size used for ONNX inference in ML post-filtering.
     ///
-    /// Context
-    /// -------
-    /// In `ranking_topk`, candidates are accumulated into batches and scored
-    /// with one ONNX call per batch. Larger batches improve throughput (amortize
-    /// overhead) but increase temporary memory usage.
+    /// After cost-based Top-K selection, the retained edges are scored in batches
+    /// of this size. Larger batches improve throughput (amortise per-call overhead)
+    /// but increase temporary memory usage.
     ///
     /// Notes
     /// -----
-    /// - This value is only relevant when `use_ml_ranking = true`.
-    /// - If set too small, throughput can degrade significantly due to per-call overhead.
+    /// - This value is only relevant when `ml_post_filter = true`.
+    /// - If set too small, throughput can degrade due to per-call overhead.
     pub onnx_batch_size: usize,
 
-    /// Select the ranking strategy for Top-K candidate pruning.
+    /// Optional number of intra-op threads for each ONNX Runtime session.
+    ///
+    /// *Intra-op* threads control parallelism **within** a single kernel
+    /// operation (e.g., a matrix multiply inside the ONNX graph). This is
+    /// orthogonal to the Rayon-level parallelism controlled by
+    /// `parallel_left_batches`: Rayon divides work across seeds (inter-op),
+    /// while intra-op threads subdivide individual tensor operations.
     ///
     /// Behavior
     /// --------
-    /// - If `true`:
-    ///   - rank candidates using the ONNX ML classifier score `p(class=1)`,
-    ///   - requires `edge_ranking_model_path` to point to a valid ONNX model,
-    ///   - requires `model_pool` to be provided at the call site.
-    /// - If `false` (default):
-    ///   - rank candidates using the physics-based cost function
-    ///     (`EdgeFeatures::compute_cost` configured via `cost`),
-    ///   - lower cost = better candidate,
-    ///   - no ONNX model required.
+    /// - `None` (default): ORT selects the thread count automatically,
+    ///   typically equal to the number of logical CPUs. Best throughput on a
+    ///   dedicated machine but can saturate all cores.
+    /// - `Some(n)`: ORT uses exactly `n` intra-op threads per session.
+    ///   Set to `1` for fully single-threaded ONNX execution. Useful on
+    ///   shared machines to limit CPU contention, or when Rayon parallelism
+    ///   already saturates available cores.
     ///
     /// Notes
     /// -----
-    /// - This switch is only meaningful when `top_k_per_left` is `Some(k)`.
-    ///   When `top_k_per_left = None`, all candidates are emitted regardless of
-    ///   this setting.
+    /// - Only relevant when `ml_post_filter = true`; ignored otherwise.
+    /// - In the [`crate::graph::edge::edge_prediction::EdgeRankingModelPool`]
+    ///   design, each Rayon thread holds its own lazily-initialized session.
+    ///   The thread count is applied **once** at session creation (the first
+    ///   `with_mut` call on each thread); subsequent calls reuse the live session.
+    pub onnx_intra_threads: Option<usize>,
+
+    /// Enable ML post-filtering of cost-selected edges.
+    ///
+    /// When `true`, all edges retained by the cost-based Top-K step are scored
+    /// by the ONNX classifier. Any edge whose `p(class=1)` is below
+    /// `ml_post_filter_threshold` is discarded.
+    ///
+    /// Requires `edge_ranking_model_path` to point to a valid ONNX model and
+    /// a live `EdgeRankingModelPool` to be provided at the call site.
     #[serde(default = "default_false")]
-    pub use_ml_ranking: bool,
+    pub ml_post_filter: bool,
+
+    /// Minimum `p(class=1)` probability to retain an edge in ML post-filtering.
+    ///
+    /// Ignored when `ml_post_filter = false`.
+    /// Must be in `(0.0, 1.0]`.
+    #[serde(default = "default_ml_post_filter_threshold")]
+    pub ml_post_filter_threshold: f32,
     /// Enable parallel processing of left seeds with Rayon.
     ///
     /// Behavior
@@ -480,9 +509,9 @@ pub struct EdgeConfig {
     /// and the loss function (Gaussian, Cauchy, Student-t).
     /// The photometry penalty terms are unaffected by this choice.
     ///
-    /// In cost-based Top-K mode (`use_ml_ranking = false`, `top_k_per_left = Some(k)`),
-    /// this is also the ranking criterion: the K candidates with the lowest cost are
-    /// retained per left seed.
+    /// In cost-based Top-K mode (`top_k_per_left = Some(k)`), this is also the
+    /// ranking criterion: the K candidates with the lowest cost are retained per
+    /// left seed.
     #[serde(rename = "cost")]
     pub cost_config: CostConfig,
 
@@ -497,15 +526,12 @@ pub struct EdgeConfig {
     ///   result exceeds `max` is discarded immediately — before Top-K scoring
     ///   and before entering the emitted edge list.
     ///
-    /// This cut takes effect across all three edge-building modes:
+    /// This cut takes effect in all edge-building modes:
     ///
     /// - **Emit-all** (`top_k_per_left = None`): applied after cost computation,
     ///   before materialising the edge.
     /// - **Cost-based Top-K**: applied after cost computation, before the score
     ///   mapping and heap insertion.
-    /// - **ML Top-K**: applied inside the batch-flush routine of
-    ///   [`crate::graph::edge::ranking_topk`], after ONNX probability
-    ///   scoring and after cost computation, before heap insertion.
     ///
     /// Notes
     /// -----
@@ -519,7 +545,9 @@ impl Default for EdgeConfig {
             edge_ranking_model_path: None,
             top_k_per_left: Some(32),
             onnx_batch_size: 128,
-            use_ml_ranking: false,
+            onnx_intra_threads: None,
+            ml_post_filter: false,
+            ml_post_filter_threshold: 0.5,
             parallel_left_batches: false,
             parallel_left_batch_size: 512,
             predictor_config: PredictorParams::default(),
@@ -535,6 +563,8 @@ impl EdgeConfig {
     /// Checks performed
     /// ----------------
     /// - `top_k_per_left != Some(0)`: a zero limit would silently discard all edges.
+    /// - `max_cost_cut > 0.0` when `Some(v)`: a non-positive cut discards every candidate.
+    /// - `ml_post_filter_threshold` must be in `(0.0, 1.0]` when `ml_post_filter = true`.
     ///
     /// Return
     /// ------
@@ -557,6 +587,14 @@ impl EdgeConfig {
             && max <= 0.0
         {
             return Err(EdgeConfigError::MaxCostCutNotPositive(max));
+        }
+
+        if self.ml_post_filter
+            && (self.ml_post_filter_threshold <= 0.0 || self.ml_post_filter_threshold > 1.0)
+        {
+            return Err(EdgeConfigError::MlPostFilterThresholdInvalid(
+                self.ml_post_filter_threshold,
+            ));
         }
 
         Ok(())

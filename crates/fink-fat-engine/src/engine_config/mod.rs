@@ -112,7 +112,7 @@
 //!   max_flux_difference: 5.0
 //!
 //! edges:
-//!   use_ml_ranking: false
+//!   ml_post_filter: false
 //!   edge_ranking_model_path: "edge_ranker.onnx"
 //!   top_k_per_left: 32
 //!   onnx_batch_size: 128

@@ -146,62 +146,6 @@ impl EdgeFeatures {
         }
     }
 
-    /// Build edge features from an already-built [`FeatureCore`].
-    ///
-    /// Avoids the `FeatureCore::from_nodes` call (propagation + projection +
-    /// covariance computation) when the core was already computed for another
-    /// purpose (e.g. cost pre-screening or batched ML ranking).
-    ///
-    /// Arguments
-    /// ---------
-    /// * `from` – Source seed node.
-    /// * `to`   – Target seed node.
-    /// * `core` – Pre-built shared intermediates.
-    ///
-    /// Return
-    /// ------
-    /// A fully populated [`EdgeFeatures`] struct identical to what
-    /// [`EdgeFeatures::compute_features`] would return for the same inputs.
-    #[inline]
-    pub(crate) fn from_core(from: &SeedNode, to: &SeedNode, core: &FeatureCore) -> Self {
-        EdgeFeatures {
-            position: EdgePositionFeatures::position_features(core),
-            velocity: EdgeVelocityFeatures::velocity_features(core),
-            uncertainty: EdgeUncertaintyFeatures::uncertainty_features(from, to),
-            photometry: EdgePhotometryFeatures::photometry_features(from, to),
-        }
-    }
-
-    /// Compute the scalar edge cost from an already-built [`FeatureCore`].
-    ///
-    /// Identical to [`EdgeFeatures::compute_cost`] but skips the
-    /// `FeatureCore::from_nodes` call, saving one full propagation +
-    /// projection + covariance build when the core was already computed
-    /// for feature extraction (ML ranking path).
-    ///
-    /// Arguments
-    /// ---------
-    /// * `core` – Pre-built shared intermediates.
-    /// * `from` – Source seed node (needed for CWNA covariance path and photometry).
-    /// * `to`   – Target seed node (needed for CWNA covariance path and photometry).
-    /// * `cfg`  – Cost-function configuration.
-    ///
-    /// Return
-    /// ------
-    /// Finite, strictly-positive cost (clamped to `f64::EPSILON`).
-    #[inline]
-    pub(crate) fn compute_cost_from_core(
-        core: &FeatureCore,
-        from: &SeedNode,
-        to: &SeedNode,
-        cfg: &CostConfig,
-    ) -> f64 {
-        let (chi2_pos, chi2_vel) = Self::chi2_with_cwna(core, from, to, cfg);
-        let kin_cost = Self::kinematic_loss(chi2_pos, chi2_vel, cfg);
-        let phot_cost = Self::photometry_cost(from, to);
-        FeatureCore::finite_or_zero(kin_cost + phot_cost).max(f64::EPSILON)
-    }
-
     /// Compute a scalar edge cost from raw seed nodes using a configurable cost function.
     ///
     /// The total cost is $c = c_{\mathrm{kin}} + c_{\mathrm{phot}}$ where:

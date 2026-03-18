@@ -75,6 +75,15 @@ pub struct SolverArgs {
 /// Arguments for the `model-eval` subcommand
 #[derive(Debug, Args)]
 pub struct ModelEvalArgs {
+    /// Number of threads to use for ONNX inference (optional).
+    ///
+    /// If not set, the default number of threads determined by the ONNX runtime is used.
+    /// Setting this can be useful for controlling CPU resource usage during evaluation,
+    /// especially when running on shared machines or when the default behavior leads to excessive parallelism.
+    /// The value must be a positive integer. If set to `1`, inference will run in single-threaded mode.
+    #[arg(short = 't', long, value_name = "THREADS")]
+    pub onnx_intra_threads: Option<usize>,
+
     /// Path to the edge features Parquet file produced by `edge-eval --export-features`.
     ///
     /// This file must contain the 17 canonical feature columns

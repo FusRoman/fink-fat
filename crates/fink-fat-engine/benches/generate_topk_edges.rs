@@ -6,8 +6,8 @@ use camino::Utf8Path;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use fink_fat_engine::AlertKey;
 use fink_fat_engine::graph::edge::edge_features::EdgeFeatures;
-use fink_fat_engine::graph::edge::edge_prediction::{EdgeRankingModel, EdgeRankingModelPool};
-use fink_fat_engine::graph::edge::ranking_topk::rank_topk_edges_for_left;
+use fink_fat_engine::graph::edge::edge_prediction::EdgeRankingModelPool;
+use fink_fat_engine::graph::edge::ranking_topk::rank_topk_edges_for_left_by_cost;
 use fink_fat_engine::pipeline::hooks::NoopProgress;
 use fink_fat_engine::seeding::SeedNode;
 use fink_fat_engine::seeding::seed_spatial_index::SeedSpatialIndex;
@@ -441,25 +441,20 @@ fn bench_generate_topk_edges_components(c: &mut Criterion) {
         })
     });
 
-    group.bench_function("rank_topk_edges_for_left/per_left_1", |b| {
+    group.bench_function("rank_topk_edges_for_left_by_cost/per_left_1", |b| {
         let left_seed = &left_seeds[0];
-        let mut model = EdgeRankingModel::load_edge_ranking_model(model_path)
-            .expect("Failed to load ONNX edge ranking model");
 
         // Reusable output buffer
         let mut out: SmallVec<[(&SeedNode, f64); 32]> = SmallVec::new();
 
         b.iter(|| {
-            rank_topk_edges_for_left(
+            rank_topk_edges_for_left_by_cost(
                 black_box(left_seed),
                 black_box(&right_index),
                 black_box(&edge_config),
-                black_box(&mut model),
                 black_box(top_k_per_left),
-                black_box(100), // batch_size
                 black_box(&mut out),
-            )
-            .expect("rank_topk_edges_for_left failed");
+            );
 
             black_box(out.len())
         })
