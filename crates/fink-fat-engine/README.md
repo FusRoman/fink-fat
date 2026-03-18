@@ -250,10 +250,6 @@ This keeps $\chi^2 \sim O(1)$ for all inter-night gaps when $\sigma\_q$ is
 well-calibrated (~$10^{-3}$ rad·day$^{-3/2}$), removing the $\Delta t^2$
 growth that plagues the pure Gaussian model.
 
-> Singer, R. A. (1970). *Estimating Optimal Tracking Filter Performance for
-> Manned Maneuvering Targets.* IEEE Transactions on Aerospace and Electronic
-> Systems, **6**(4), 473–483. doi:[10.1109/TAES.1970.310128](https://doi.org/10.1109/TAES.1970.310128)
-
 #### Step 3 — kinematic loss variant
 
 | Variant | $c\_{\mathrm{kin}}$ | CWNA | Notes |
@@ -263,18 +259,6 @@ growth that plagues the pure Gaussian model.
 | `singer_cwna` | $\frac{1}{2}(\chi^2\_\mathrm{pos} + \chi^2\_\mathrm{vel})$ | **yes** | Same Gaussian NLL on CWNA-inflated covariances (**recommended**) |
 | `robust_cauchy` | $\ln\!\bigl(1 + \chi^2\_\mathrm{pos}/\sigma\bigr) + \ln\!\bigl(1 + \chi^2\_\mathrm{vel}/\sigma\bigr)$ | optional | Saturates logarithmically; $\sigma$ = `cauchy_scale` |
 | `robust_student_t` | $\frac{\nu+1}{2}\Bigl[\ln\!\bigl(1+\chi^2\_\mathrm{pos}/\nu\bigr) + \ln\!\bigl(1+\chi^2\_\mathrm{vel}/\nu\bigr)\Bigr]$ | optional | $\nu=1$: Cauchy; $\nu\!\to\!\infty$: Gaussian; $\nu$ = `student_nu` |
-
-The robust loss functions follow the M-estimator framework
-(Huber 1964; Black & Rangarajan 1996):
-
-> Huber, P. J. (1964). *Robust Estimation of a Location Parameter.*
-> The Annals of Mathematical Statistics, **35**(1), 73–101.
-> doi:[10.1214/aoms/1177703732](https://doi.org/10.1214/aoms/1177703732)
-
-> Black, M. J., & Rangarajan, A. (1996). *On the Unification of Line Processes,
-> Outlier Rejection, and Robust Statistics with Applications in Early Vision.*
-> International Journal of Computer Vision, **19**(1), 57–91.
-> doi:[10.1007/BF00131148](https://doi.org/10.1007/BF00131148)
 
 #### Step 4 — photometry penalty
 
@@ -338,7 +322,6 @@ fink-fat-engine/src/
 │   └── solver_manager.rs SolverManager (routing + dispatch)
 ├── spacetime_bucket/   HEALPix spatial binner + time binner (bucket indexing)
 ├── trajectory/         TrackHypothesis, TrackId, orbit-fitting I/O
-└── units.rs            MJDTT, Radian, Arcsec type aliases
 ```
 
 ---
