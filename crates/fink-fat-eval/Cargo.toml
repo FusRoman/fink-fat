@@ -28,3 +28,5 @@ ndarray = { workspace = true }
 approx = "0.5.1"
 prop-test = "0.1.1"
 
+[package.metadata.llvm-cov]
+skip = true
