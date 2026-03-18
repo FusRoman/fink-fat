@@ -59,6 +59,9 @@ pub struct FeatureData {
     pub features: Array2<f32>,
     /// Ground-truth labels: `true` = true positive edge.
     pub labels: Vec<bool>,
+    /// Left-seed identifier (`from_seed_id`), used to group edges by source seed
+    /// for per-seed ranking evaluation.
+    pub seed_ids: Vec<u64>,
 }
 
 /// Load the feature matrix and truth labels from a Parquet file.
@@ -72,6 +75,7 @@ pub fn load_features(path: &Utf8Path) -> Result<FeatureData> {
     // Select only the columns we need.
     let mut select_cols: Vec<Expr> = feature_names.iter().map(|n| col(*n)).collect();
     select_cols.push(col("is_true_edge"));
+    select_cols.push(col("from_seed_id"));
 
     let df = LazyFrame::scan_parquet(path.as_str(), ScanArgsParquet::default())
         .with_context(|| format!("failed to open parquet: {path}"))?
@@ -129,6 +133,17 @@ pub fn load_features(path: &Utf8Path) -> Result<FeatureData> {
         other => bail!("'is_true_edge' has unexpected dtype {other}"),
     };
 
+    // Load left-seed identifiers.
+    let seed_col = df
+        .column("from_seed_id")
+        .context("missing column 'from_seed_id'")?;
+    let seed_ids: Vec<u64> = seed_col
+        .u64()
+        .context("'from_seed_id' is not u64")?
+        .iter()
+        .map(|v| v.unwrap_or(0))
+        .collect();
+
     tracing::info!(
         n_samples = n,
         n_positive = labels.iter().filter(|&&b| b).count(),
@@ -136,7 +151,11 @@ pub fn load_features(path: &Utf8Path) -> Result<FeatureData> {
         "features loaded",
     );
 
-    Ok(FeatureData { features, labels })
+    Ok(FeatureData {
+        features,
+        labels,
+        seed_ids,
+    })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -157,10 +176,119 @@ pub struct ModelMetrics {
     /// Raw scores per sample, together with labels (for distribution plot).
     pub scores: Vec<f32>,
     pub labels: Vec<bool>,
+    /// Left-seed identifier per sample (`from_seed_id`), used for ranking evaluation.
+    pub seed_ids: Vec<u64>,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Ranking metrics (top-k per left seed)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Maximum k evaluated in the ranking curves.
+pub const RANKING_K_MAX: usize = 50;
+
+/// Per-seed top-k ranking evaluation metrics.
+///
+/// All `*_at_k` vectors have length [`RANKING_K_MAX`]: index `i` corresponds to
+/// `k = i + 1`. Averages are computed over seeds that contain at least one
+/// true-positive edge (`n_seeds_with_tp`).
+#[derive(Debug, Clone)]
+pub struct RankingMetrics {
+    /// Mean Recall@k across seeds-with-TP: fraction of TPs recovered in the top-k.
+    pub recall_at_k: Vec<f64>,
+    /// Mean Precision@k across seeds-with-TP: fraction of top-k slots that are TP.
+    pub precision_at_k: Vec<f64>,
+    /// Hit-Rate@k: fraction of seeds-with-TP that have ≥1 TP in their top-k.
+    pub hit_rate_at_k: Vec<f64>,
+    /// `k_max` used for the curves (= [`RANKING_K_MAX`]).
+    pub k_max: usize,
+    /// Rank of the first TP per left seed (1-indexed).
+    /// `None` means no TP exists in the seed group (or none found within top-k_max).
+    pub first_tp_rank: Vec<Option<usize>>,
+    /// Total number of distinct left seeds.
+    pub n_seeds: usize,
+    /// Number of left seeds that contain at least one TP edge.
+    pub n_seeds_with_tp: usize,
+}
+
+/// Compute per-seed top-k ranking metrics from `ModelMetrics`.
+///
+/// For each distinct `from_seed_id`, edges are sorted by descending model score.
+/// Recall, Precision and Hit-Rate are accumulated for every k in 1..=`RANKING_K_MAX`
+/// and then averaged over seeds that contain at least one TP.
+pub fn compute_ranking_metrics(metrics: &ModelMetrics) -> RankingMetrics {
+    use std::collections::HashMap;
+
+    // ── Group sample indices by left seed ───────────────────────────────────
+    let mut groups: HashMap<u64, Vec<usize>> = HashMap::new();
+    for (i, &sid) in metrics.seed_ids.iter().enumerate() {
+        groups.entry(sid).or_default().push(i);
+    }
+    let n_seeds = groups.len();
+
+    let mut recall_sums = vec![0.0f64; RANKING_K_MAX];
+    let mut precision_sums = vec![0.0f64; RANKING_K_MAX];
+    let mut hit_counts = vec![0usize; RANKING_K_MAX];
+    let mut first_tp_ranks: Vec<Option<usize>> = Vec::with_capacity(n_seeds);
+    let mut n_seeds_with_tp = 0usize;
+
+    for (_sid, mut indices) in groups {
+        // Sort by descending model score.
+        indices.sort_unstable_by(|&a, &b| metrics.scores[b].total_cmp(&metrics.scores[a]));
+
+        let n_tp = indices.iter().filter(|&&i| metrics.labels[i]).count();
+        let k_eff = RANKING_K_MAX.min(indices.len());
+
+        // Rank of first TP within top-K_MAX (1-indexed), None if absent.
+        first_tp_ranks.push(
+            indices[..k_eff]
+                .iter()
+                .position(|&i| metrics.labels[i])
+                .map(|p| p + 1),
+        );
+
+        if n_tp == 0 {
+            continue;
+        }
+        n_seeds_with_tp += 1;
+
+        // Accumulate per-k metrics up to k_eff.
+        let mut tp_in_topk = 0usize;
+        for k in 1..=k_eff {
+            if metrics.labels[indices[k - 1]] {
+                tp_in_topk += 1;
+            }
+            recall_sums[k - 1] += tp_in_topk as f64 / n_tp as f64;
+            precision_sums[k - 1] += tp_in_topk as f64 / k as f64;
+            if tp_in_topk > 0 {
+                hit_counts[k - 1] += 1;
+            }
+        }
+        // Extend beyond k_eff: recall is saturated, precision continues to decay.
+        let tp_final = tp_in_topk;
+        for k in (k_eff + 1)..=RANKING_K_MAX {
+            recall_sums[k - 1] += tp_final as f64 / n_tp as f64;
+            precision_sums[k - 1] += tp_final as f64 / k as f64;
+            if tp_final > 0 {
+                hit_counts[k - 1] += 1;
+            }
+        }
+    }
+
+    let denom = n_seeds_with_tp.max(1) as f64;
+    RankingMetrics {
+        recall_at_k: recall_sums.iter().map(|&s| s / denom).collect(),
+        precision_at_k: precision_sums.iter().map(|&s| s / denom).collect(),
+        hit_rate_at_k: hit_counts.iter().map(|&c| c as f64 / denom).collect(),
+        k_max: RANKING_K_MAX,
+        first_tp_rank: first_tp_ranks,
+        n_seeds,
+        n_seeds_with_tp,
+    }
 }
 
 /// Compute ROC-AUC, PR-AUC and the corresponding curves.
-pub fn compute_metrics(scores: Vec<f32>, labels: Vec<bool>) -> ModelMetrics {
+pub fn compute_metrics(scores: Vec<f32>, labels: Vec<bool>, seed_ids: Vec<u64>) -> ModelMetrics {
     let n = scores.len();
     let n_positive = labels.iter().filter(|&&b| b).count();
     let n_negative = n - n_positive;
@@ -221,6 +349,7 @@ pub fn compute_metrics(scores: Vec<f32>, labels: Vec<bool>) -> ModelMetrics {
         pr_curve: pr_points,
         scores,
         labels,
+        seed_ids,
     }
 }
 
@@ -292,7 +421,8 @@ pub fn model_evaluation(
         pool.with_mut(|model| model.predict_positive_proba_from_array(data.features.clone()))?;
 
     // ── Compute metrics ────────────────────────────────────────────────────
-    let metrics = compute_metrics(scores, data.labels);
+    let metrics = compute_metrics(scores, data.labels, data.seed_ids);
+    let ranking = compute_ranking_metrics(&metrics);
 
     tracing::info!("Model evaluation results:");
     tracing::info!("{:-<48}", "");
@@ -304,6 +434,16 @@ pub fn model_evaluation(
     );
     tracing::info!("  ROC-AUC   : {:.4}", metrics.roc_auc);
     tracing::info!("  PR-AUC    : {:.4}", metrics.pr_auc);
+    tracing::info!(
+        "  Seeds     : {} total, {} with TP",
+        ranking.n_seeds,
+        ranking.n_seeds_with_tp
+    );
+    tracing::info!("  Hit-Rate@1 : {:.4}", ranking.hit_rate_at_k[0]);
+    tracing::info!("  Hit-Rate@5 : {:.4}", ranking.hit_rate_at_k[4]);
+    tracing::info!("  Recall@5   : {:.4}", ranking.recall_at_k[4]);
+    tracing::info!("  Recall@10  : {:.4}", ranking.recall_at_k[9]);
+    tracing::info!("  Recall@32  : {:.4}", ranking.recall_at_k[31]);
 
     println!();
     println!("=== ONNX model evaluation ===");
@@ -315,11 +455,21 @@ pub fn model_evaluation(
     );
     println!("  ROC-AUC   : {:.4}", metrics.roc_auc);
     println!("  PR-AUC    : {:.4}", metrics.pr_auc);
+    println!(
+        "  Seeds     : {} total, {} with TP",
+        ranking.n_seeds, ranking.n_seeds_with_tp
+    );
+    println!("  Hit-Rate@1 : {:.4}", ranking.hit_rate_at_k[0]);
+    println!("  Hit-Rate@5 : {:.4}", ranking.hit_rate_at_k[4]);
+    println!("  Recall@5   : {:.4}", ranking.recall_at_k[4]);
+    println!("  Recall@10  : {:.4}", ranking.recall_at_k[9]);
+    println!("  Recall@32  : {:.4}", ranking.recall_at_k[31]);
 
     // ── Plots ──────────────────────────────────────────────────────────────
     if let Some(dir) = plot_dir {
         tracing::info!(dir = %dir, "writing evaluation plots");
         plots::write_eval_plots(&metrics, dir)?;
+        plots::write_ranking_plots(&ranking, dir)?;
         println!("  Plots written to: {dir}");
     }
 
