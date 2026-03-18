@@ -15,7 +15,9 @@ use fink_fat_engine::{
 };
 use indicatif::MultiProgress;
 
-use crate::{init_cli::NightRunArgs, load_config, logging::init_logging, progress::IndicatifHooks};
+use crate::{
+    init_cli::FinkFatCliArgs, load_config, logging::init_logging, progress::IndicatifHooks,
+};
 
 /// Full persistence one night round-trip:
 /// `LoadPersistedData → Ingest → Seeds → Edges → Solve → FitOrbit → Save`.
@@ -29,7 +31,7 @@ const FULL_WITH_PERSISTENCE: &[PipelineStage] = &[
     PipelineStage::SavePersistedData,
 ];
 
-pub fn run_single_night(cli_args: NightRunArgs) -> Result<(), EngineError> {
+pub fn fink_fat_runner(cli_args: FinkFatCliArgs) -> Result<(), EngineError> {
     let engine_config = load_config(&cli_args.config)?;
     let persistence = PersistenceManager::open_or_create(engine_config.clone().storage_path_buf())?;
     let model_pool = engine_config
