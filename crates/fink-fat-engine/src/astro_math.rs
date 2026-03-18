@@ -40,7 +40,7 @@
 
 use std::f64::consts::{PI, TAU};
 
-use crate::{Radian, units::Arcsec};
+use crate::{Arcsec, Radian};
 
 /// Convert equatorial coordinates `(ra, dec)` to a 3D unit vector on the
 /// celestial sphere.
