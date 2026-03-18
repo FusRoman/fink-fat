@@ -13,6 +13,8 @@ dependencies = [
     "pyyaml>=6.0.3",
     "skl2onnx>=1.17.0",
     "onnxmltools>=1.16.0",
+    "optuna>=4.8.0",
+    "optuna-dashboard>=0.20.0",
 ]
 requires-python = "==3.12.*"
 readme = "README.md"

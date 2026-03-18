@@ -1,33 +1,24 @@
-# XGBoost hyperparameters for edge TP/FP classification.
-# Loaded at training time by src/train.py.
-
 model:
-  n_estimators: 500
-  max_depth: 6
-  learning_rate: 0.05
-  subsample: 0.8
-  colsample_bytree: 0.8
-  min_child_weight: 10
-  gamma: 0.0
-  reg_alpha: 0.0
-  reg_lambda: 1.0
-  # Set to null to compute automatically as n_negative / n_positive.
-  scale_pos_weight: null
   tree_method: hist
   device: cpu
   random_state: 42
   n_jobs: -1
-  eval_metric: logloss
-
+  eval_metric:
+  - logloss
+  - aucpr
+  n_estimators: 574
+  max_depth: 10
+  learning_rate: 0.06504856968981275
+  subsample: 0.7993292420985183
+  colsample_bytree: 0.5780093202212182
+  min_child_weight: 8
+  gamma: 0.2904180608409973
+  reg_alpha: 2.1423021757741068
+  reg_lambda: 0.10129197956845731
+  scale_pos_weight: null
 training:
   test_size: 0.15
   early_stopping_rounds: 20
-  # Path (relative to project root) where the trained model is saved.
   model_output: models/edge_classifier.ubj
-  # Path (relative to project root) where the ONNX model is exported.
-  # XGBoost detects the .onnx extension and invokes its built-in exporter.
-  # ONNX outputs: "label" (int64 [N]) and "probabilities" (float32 [N, 2])
-  # In Rust, read probabilities[:, 1] to get P(true_edge).
   onnx_output: models/edge_classifier.onnx
-  # Path (relative to project root) where evaluation plots are saved.
   eval_plots_dir: eval_plots
