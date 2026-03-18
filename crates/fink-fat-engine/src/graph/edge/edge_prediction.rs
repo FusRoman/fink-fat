@@ -334,9 +334,23 @@ impl EdgeRankingModel {
         &mut self,
         batch: &[EdgeFeatures],
     ) -> Result<Vec<f32>, EdgeModelError> {
-        let proba = self.predict_proba(batch)?;
-        debug_assert_eq!(proba.ncols(), 2);
-        Ok(proba.rows().into_iter().map(|r| r[1]).collect())
+        if batch.is_empty() {
+            return Ok(Vec::new());
+        }
+        let input = build_input_tensor(batch)?;
+        let outputs = self.session.run(ort::inputs![input])?;
+        let v = outputs.index(self.outputs.probabilities);
+        let (shape, data) = v.try_extract_tensor::<f32>()?;
+        let (n, k) = expect_2d_usize(shape)?;
+        debug_assert_eq!(k, 2, "binary classifier must have 2 output columns");
+        // Extract p(class=1) directly from the flat row-major buffer,
+        // without building an intermediate Array2.  Column 1 is at index
+        // 2*i+1 for row i.
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            out.push(data[i * k + 1]);
+        }
+        Ok(out)
     }
 
     /// Predict positive-class probabilities `p(class=1)` from a pre-built
@@ -514,8 +528,12 @@ fn load_edge_model_session(model_path: impl AsRef<Utf8Path>) -> Result<Session, 
     }
 
     // Build session with aggressive graph optimizations (good for throughput).
+    // Pin to 1 intra-op thread: Rayon already provides outer parallelism
+    // (one session per worker), so letting ORT spawn its own thread pool would
+    // cause contention and cache thrashing.
     let session = Session::builder()?
         .with_optimization_level(GraphOptimizationLevel::Level3)?
+        .with_intra_threads(1)?
         .commit_from_file(path.as_std_path())?;
     Ok(session)
 }
@@ -540,20 +558,21 @@ fn load_edge_model_session(model_path: impl AsRef<Utf8Path>) -> Result<Session, 
 /// * Values are cast from `f64` to `f32` to match the model input dtype.
 /// * This allocates an `Array2` and fills it row-by-row; batch sizes should be
 ///   tuned for throughput and memory usage.
+#[cfg(test)]
 fn features_to_array2_f32(batch: &[EdgeFeatures]) -> Array2<f32> {
     let n = batch.len();
     let d = EdgeFeatures::len_flat();
 
-    // Allocate a dense contiguous buffer.
-    let mut x = Array2::<f32>::zeros((n, d));
-
-    // Fill row-by-row in canonical feature order.
-    for (i, feat) in batch.iter().enumerate() {
-        for (j, v) in feat.iter_flat().enumerate() {
-            x[(i, j)] = v as f32;
-        }
+    // Allocate a single flat buffer and fill it in row-major order.
+    // This avoids the 2D indexing overhead of `x[(i, j)] = ...` inside a
+    // double loop and produces a single contiguous allocation.
+    let mut flat: Vec<f32> = Vec::with_capacity(n * d);
+    for feat in batch.iter() {
+        flat.extend(feat.iter_flat().map(|v| v as f32));
     }
-    x
+
+    // Safety: we just filled exactly n * d elements in row-major order.
+    Array2::from_shape_vec((n, d), flat).expect("shape matches capacity")
 }
 
 /// Build an ONNX input tensor from a batch of [`EdgeFeatures`].
@@ -569,9 +588,30 @@ fn features_to_array2_f32(batch: &[EdgeFeatures]) -> Array2<f32> {
 /// ------
 /// * `Ok(Tensor<f32>)` – Input tensor of shape `[N, D]`.
 /// * `Err(EdgeModelError)` – If tensor creation fails in ORT.
+///   Build an ONNX input tensor from a batch of [`EdgeFeatures`].
+///
+/// Converts feature vectors directly into a `[N, D]` tensor using a flat
+/// `Vec<f32>`, bypassing any intermediate `Array2` allocation for the ORT path.
+///
+/// Arguments
+/// ---------
+/// * `batch` – Slice of features to feed into the model.
+///
+/// Return
+/// ------
+/// * `Ok(Tensor<f32>)` – Input tensor of shape `[N, D]`.
+/// * `Err(EdgeModelError)` – If tensor creation fails in ORT.
 fn build_input_tensor(batch: &[EdgeFeatures]) -> Result<Tensor<f32>, EdgeModelError> {
-    let x = features_to_array2_f32(batch);
-    Ok(Tensor::from_array(x)?)
+    let n = batch.len();
+    let d = EdgeFeatures::len_flat();
+    // Fill a flat Vec<f32> in row-major order — one allocation, no 2D indexing.
+    let mut flat: Vec<f32> = Vec::with_capacity(n * d);
+    for feat in batch.iter() {
+        flat.extend(feat.iter_flat().map(|v| v as f32));
+    }
+    // Tensor::from_array accepts (shape, Vec<T>) and takes ownership of the
+    // buffer without any further copy.
+    Ok(Tensor::from_array(([n, d], flat))?)
 }
 
 /// Validate a 2D ONNX tensor shape and convert to `(usize, usize)`.

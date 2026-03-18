@@ -46,3 +46,7 @@ tempfile = { workspace = true }
 [[bench]]
 name = "generate_topk_edges"
 harness = false
+
+[[bench]]
+name = "edge_build_real"
+harness = false
