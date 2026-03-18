@@ -167,6 +167,27 @@ The reference file is `crates/fink-fat-eval/eval_config.yml`.
 
 ---
 
+## Build profile
+
+All evaluation commands should be compiled with the `--profile evaluation`
+flag.  This profile is defined in the workspace `Cargo.toml` and is optimised
+specifically for evaluation workloads:
+
+- inherits `release` optimisations (fast runtime)
+- `lto = false` and `codegen-units = 128` for significantly faster
+  incremental recompilation between runs
+- `overflow-checks` and `debug-assertions` enabled for easier debugging
+
+```bash
+cargo run --profile evaluation -p fink-fat-eval -- <subcommand> ...
+```
+
+Using `--release` instead will produce a slightly faster binary but with much
+longer incremental build times.  Using the debug profile (no flag) will result
+in a runtime that is orders of magnitude slower.
+
+---
+
 ## ML training pipeline
 
 The full machine-learning workflow for the edge classifier lives in
