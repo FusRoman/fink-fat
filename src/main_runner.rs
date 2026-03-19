@@ -1,3 +1,23 @@
+//! Runtime orchestration and program entry for the `fink-fat` binary.
+//!
+//! This module is responsible for:
+//!
+//! - loading and validating the `EngineConfig`,
+//! - opening or creating the persistence layout (`PersistenceManager`),
+//! - initialising optional logging and progress hooks, and
+//! - assembling and executing a `PipelineRunner` with a `PipelinePlan`.
+//!
+//! The high-level runner defined here wires together CLI argument parsing
+//! (`init_cli::FinkFatCliArgs`), logging (`logging::init_logging`), the
+//! persistence layer and the `fink_fat_engine` core library. It is intended as
+//! the canonical binary entrypoint for production runs.
+//!
+//! # Notes
+//!
+//! - The logging guard returned by `logging::init_logging` must be retained for
+//!   the lifetime of the process; dropping it signals the background log writer
+//!   to flush and stop.
+//!
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -31,6 +51,29 @@ const FULL_WITH_PERSISTENCE: &[PipelineStage] = &[
     PipelineStage::SavePersistedData,
 ];
 
+/// Run the full Fink-FAT pipeline according to CLI arguments.
+///
+/// This function implements the canonical behaviour of the `fink-fat` binary:
+///
+/// 1. Load and validate the engine configuration using `load_config`.
+/// 2. Open or create the persistence layout (`PersistenceManager`).
+/// 3. Optionally create an ONNX edge ranking model pool (if configured).
+/// 4. Initialise progress hooks (indicatif) and logging according to CLI
+///    flags.
+/// 5. Construct a `PipelinePlan` (full persistence plan by default) and run the
+///    `PipelineRunner` with a prepared `PipelineContext`.
+///
+/// Arguments
+/// ---------
+/// * `cli_args` — parsed command-line arguments (`FinkFatCliArgs`) containing
+///   the alerts URI, path to the configuration file, and runtime toggles.
+///
+/// Return
+/// ------
+/// * `Ok(())` — pipeline finished successfully.
+/// * `Err(EngineError)` — failure occurred while loading config, opening
+///   persistence, initialising logging, or during any pipeline stage. The
+///   returned `EngineError` encodes the failing stage and a diagnostic message.
 pub fn fink_fat_runner(cli_args: FinkFatCliArgs) -> Result<(), EngineError> {
     let engine_config = load_config(&cli_args.config)?;
     let persistence = PersistenceManager::open_or_create(engine_config.clone().storage_path_buf())?;
@@ -40,7 +83,7 @@ pub fn fink_fat_runner(cli_args: FinkFatCliArgs) -> Result<(), EngineError> {
         .clone()
         .map(|path_model| EdgeRankingModelPool::new(&path_model));
 
-    // ── Progress hooks ────────────────────────────────────────────────────────
+    // ── Progress hooks ───────────────────────────────────────────────────────
     // When both `--progress` and `--logs` are active we share one MultiProgress
     // so the logging layer can route lines through `mp.println()` instead of
     // writing directly to stderr (which would smear the progress bars).
@@ -53,7 +96,7 @@ pub fn fink_fat_runner(cli_args: FinkFatCliArgs) -> Result<(), EngineError> {
             (Box::new(NoopHooks), None)
         };
 
-    // ── Logging setup ─────────────────────────────────────────────────────────
+    // ── Logging setup ───────────────────────────────────────────────────────
     // The `_logging_guard` must stay alive until the process exits: dropping it
     // signals the background file-writer thread to flush and terminate.
     let _logging_guard = if cli_args.logs {
@@ -80,7 +123,7 @@ pub fn fink_fat_runner(cli_args: FinkFatCliArgs) -> Result<(), EngineError> {
         None
     };
 
-    // ── Pipeline plan ─────────────────────────────────────────────────────────
+    // ── Pipeline plan ───────────────────────────────────────────────────────
     let plan = PipelinePlan {
         stages: FULL_WITH_PERSISTENCE.to_vec(),
         persist: engine_config.pipeline_policy,
@@ -111,8 +154,18 @@ pub fn fink_fat_runner(cli_args: FinkFatCliArgs) -> Result<(), EngineError> {
     Ok(())
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────────────────
 
+/// Convert the crate-level `LogLevel` to a `tracing::Level` for the
+/// `tracing_subscriber` initialisation.
+///
+/// Arguments
+/// ---------
+/// * `level` — engine configuration log level.
+///
+/// Return
+/// ------
+/// * `tracing::Level` corresponding to the provided `LogLevel`.
 fn log_level_to_tracing(level: LogLevel) -> tracing::Level {
     match level {
         LogLevel::Trace => tracing::Level::TRACE,

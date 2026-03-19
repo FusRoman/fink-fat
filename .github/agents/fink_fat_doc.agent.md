@@ -1,7 +1,7 @@
 ---
 name: fink_fat_doc
 description: Documentation writer for the Fink-FAT asteroid detection pipeline
-model: "GPT-5 mini (copilot)"
+model: "GPT-5.4 mini (copilot)"
 argument-hint: Specify the module or component to document
 ---
 

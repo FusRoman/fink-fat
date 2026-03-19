@@ -1,7 +1,23 @@
 //! indicatif-backed implementation of [`PipelineHooks`] and [`StageProgress`].
 //!
-//! Enable it at the CLI level with `--progress`.  When the flag is absent the
-//! pipeline falls back to [`fink_fat_engine::pipeline::hooks::NoopHooks`] with zero overhead.
+//! This module provides a compact, terminal-friendly progress reporting
+//! implementation for the pipeline stages using `indicatif::MultiProgress` and
+//! `ProgressBar` primitives. It is intended to be enabled at runtime with the
+//! `--progress` CLI flag; when disabled the pipeline uses
+//! [`fink_fat_engine::pipeline::hooks::NoopHooks`] with zero overhead.
+//!
+//! Key behaviours
+//! - Renders per-stage progress bars with consistent styling.
+//! - Supports nested child progress scopes (via `StageProgress::child`).
+//! - Exposes a `multi_progress()` handle that can be shared with the logging
+//!   layer so log lines are printed above active bars using
+//!   `MultiProgress::println` (avoids display corruption).
+//!
+//! Usage
+//! ```no_run
+//! let hooks = fink_fat::progress::IndicatifHooks::new();
+//! runner.run(&mut ctx, &hooks)?; // runner: PipelineRunner
+//! ```
 
 use std::sync::Arc;
 
@@ -14,6 +30,10 @@ use fink_fat_engine::pipeline::{
 
 // ── Style helpers ─────────────────────────────────────────────────────────────
 
+/// Progress bar visual style used for determinate stages.
+///
+/// Returns an `indicatif::ProgressStyle` configured with a narrow message
+/// column and a 40-character progress gauge.
 fn bar_style() -> ProgressStyle {
     ProgressStyle::with_template(
         "{spinner:.green} {msg:<30} [{bar:40.cyan/blue}] {pos}/{len} ({elapsed})",
@@ -22,6 +42,10 @@ fn bar_style() -> ProgressStyle {
     .progress_chars("##-")
 }
 
+/// Progress spinner style used for indeterminate stages.
+///
+/// Returns an `indicatif::ProgressStyle` configured with a compact
+/// spinner and a short message column.
 fn spinner_style() -> ProgressStyle {
     ProgressStyle::with_template("{spinner:.green} {msg:<30} {elapsed}")
         .unwrap()
@@ -40,6 +64,12 @@ pub struct IndicatifProgress {
 }
 
 impl IndicatifProgress {
+    /// Create a new `IndicatifProgress` scope.
+    ///
+    /// Parameters
+    /// * `mp`: shared `MultiProgress` used to host the bar.
+    /// * `meta`: stage metadata (label and optional total) used to select a
+    ///   determinate bar or an indeterminate spinner.
     fn new(mp: Arc<MultiProgress>, meta: &StageMeta) -> Self {
         let pb = match meta.total {
             Some(n) => {

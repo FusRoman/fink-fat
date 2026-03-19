@@ -1,26 +1,26 @@
-//! Tracing subscriber initialisation for the fink-fat CLI.
+//! Tracing subscriber initialisation for the `fink-fat` CLI.
 //!
-//! Provides [`init_logging`] which wires up two output channels:
+//! This module configures the process-wide `tracing` subscriber used by the
+//! binary. It writes events to two destinations:
 //!
-//! 1. **Terminal** – either via [`indicatif::MultiProgress::println`] (so log
-//!    lines never smear an active progress bar) or plain stderr when progress bars
-//!    are disabled.
-//! 2. **Log file** – a per-run file under `<storage_root>/logs/run-<session_id>.log`
-//!    written through a non-blocking background thread.
+//! - the terminal, either through [`indicatif::MultiProgress::println`] when
+//!   progress bars are active or directly to stderr otherwise;
+//! - a per-run log file under `<storage_root>/logs/run-<session_id>.log`.
 //!
-//! Both channels share a single [`tracing_subscriber::filter::LevelFilter`]
-//! derived from [`fink_fat_engine::engine_config::log_level::LogLevel`].
+//! The terminal and file layers share the same log-level filter derived from
+//! [`fink_fat_engine::engine_config::log_level::LogLevel`].
 //!
-//! # Indicatif integration
-//! [`indicatif`]'s [`MultiProgress`] draws progress bars by temporarily taking
-//! over the terminal cursor. Printing to stdout/stderr directly while bars are
-//! active corrupts the display. The fix is to use [`MultiProgress::println`],
-//! which queues the line to be printed above the active bars.
+//! ## Indicatif integration
 //!
-//! A single [`TerminalMakeWriter`] handles both cases at runtime: when a
-//! `MultiProgress` handle is provided it routes through `println`; otherwise it
-//! writes directly to stderr. This keeps the subscriber type monomorphic, which
-//! avoids tracing-subscriber's complex `Layered<…>` type constraints.
+//! [`indicatif::MultiProgress`] temporarily takes control of the terminal while
+//! progress bars are rendered. Direct writes to stdout or stderr can therefore
+//! corrupt the display. This module avoids that problem by routing terminal log
+//! lines through [`MultiProgress::println`] whenever a progress handle is
+//! available.
+//!
+//! The [`TerminalMakeWriter`] wrapper provides a single monomorphic writer type
+//! for both runtime modes. That keeps the subscriber composition simple and
+//! avoids complex conditional layer types.
 
 use std::{
     io::{self, Write},
@@ -45,6 +45,10 @@ use tracing_subscriber::{
 // ── Runtime-dispatching terminal writer ───────────────────────────────────────
 
 /// Per-event byte buffer that flushes to the appropriate backend on drop.
+///
+/// The formatter writes one event at a time into this buffer and flushes the
+/// bytes either to stderr or to [`MultiProgress::println`] when the writer is
+/// dropped.
 struct TerminalWriterGuard {
     /// When `Some`, lines go through `MultiProgress::println`; when `None`,
     /// the bytes are forwarded directly to stderr.
@@ -91,6 +95,9 @@ impl Drop for TerminalWriterGuard {
 
 /// A [`fmt::MakeWriter`] that produces one [`TerminalWriterGuard`] per event.
 ///
+/// This is the runtime switch between the plain-stderr path and the
+/// `MultiProgress`-aware path.
+///
 /// Constructed once; cheaply cloned via `Arc` internally per writer call.
 struct TerminalMakeWriter {
     /// `Some(mp)` → indicatif path, `None` → stderr path.
@@ -112,6 +119,10 @@ impl<'a> fmt::MakeWriter<'a> for TerminalMakeWriter {
 
 /// Visitor that splits event fields into the `message` pseudo-field and the
 /// remaining structured key-value pairs.
+///
+/// `tracing` treats `message` specially. This visitor preserves the message
+/// text separately from structured fields so the formatter can render compact
+/// log lines without losing key-value context.
 struct EventFields {
     message: String,
     extras: String,
@@ -177,6 +188,9 @@ impl tracing::field::Visit for EventFields {
 
 /// Shorten a fully-qualified module path to its last two `::` components.
 ///
+/// This keeps log targets readable while preserving enough context to locate
+/// the emitting module.
+///
 /// ```text
 /// fink_fat_engine::pipeline::stages::alert_inputs::alert_loader
 ///   → alert_inputs::alert_loader
@@ -204,6 +218,9 @@ fn shorten_target(target: &str) -> &str {
 }
 
 /// ANSI colour and bold codes for log levels.
+///
+/// Returns empty strings when ANSI is disabled so the same formatter can render
+/// coloured and plain output without branching at the call site.
 fn level_style(level: Level, ansi: bool) -> (&'static str, &'static str) {
     if !ansi {
         return ("", "");
@@ -217,9 +234,15 @@ fn level_style(level: Level, ansi: bool) -> (&'static str, &'static str) {
     }
 }
 
-/// Custom [`FormatEvent`] for fink-fat logs.
+/// Custom [`FormatEvent`] for `fink-fat` logs.
 ///
-/// Produces compact, readable log lines:
+/// The formatter produces compact single-line entries with:
+///
+/// - a local timestamp,
+/// - a fixed-width log level,
+/// - a shortened target path, and
+/// - any structured fields appended as `key=value` pairs.
+///
 /// ```text
 /// 16:21:35.073 INFO  pipeline::stages: stage starting stage="Build seeds"
 /// ```
@@ -298,15 +321,27 @@ pub struct LoggingGuard {
     _guard: WorkerGuard,
 }
 
-/// Initialise the global tracing subscriber with file + terminal output.
+/// Initialise the global tracing subscriber with file and terminal output.
 ///
-/// Parameters
-/// ----------
-/// - `level`: minimum event level to record (from `EngineConfig::log_level`).
-/// - `log_path`: absolute path for the per-run log file (created if absent).
-/// - `multi_progress`: when `Some`, log lines are routed through
-///   [`MultiProgress::println`] so they appear above the active progress bars.
-///   When `None`, logs go to stderr.
+/// The subscriber installs two `fmt` layers that share the same level filter:
+/// one for the terminal and one for the persistent run log file.
+///
+/// Arguments
+/// ---------
+/// * `level` — minimum event level to record, usually derived from
+///   `EngineConfig::log_level`.
+/// * `log_path` — absolute path to the per-run log file. The parent directory
+///   is created if needed.
+/// * `multi_progress` — when `Some`, terminal log lines are routed through
+///   [`MultiProgress::println`] so they appear above active progress bars.
+///   When `None`, logs are written directly to stderr.
+///
+/// Return
+/// ------
+/// * `Ok(LoggingGuard)` — logging was initialised successfully and the guard
+///   must be retained until shutdown so the background writer can flush.
+/// * `Err(Box<dyn std::error::Error>)` — log directory creation, file opening,
+///   or global subscriber installation failed.
 ///
 /// Notes
 /// -----
@@ -314,11 +349,6 @@ pub struct LoggingGuard {
 /// - The terminal layer writes with ANSI colours when a TTY is detected.
 /// - The file appender runs on a dedicated background thread; its guard is
 ///   returned so the caller can control the flush at shutdown.
-///
-/// Errors
-/// ------
-/// Returns an error if the log directory cannot be created, the file cannot be
-/// opened, or a global subscriber has already been installed.
 pub fn init_logging(
     level: Level,
     log_path: &Utf8Path,
