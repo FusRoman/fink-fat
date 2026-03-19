@@ -12,7 +12,7 @@ __pycache__/
 .Python
 .venv/
 env/
-bin/
+# bin/
 build/
 develop-eggs/
 dist/
@@ -81,3 +81,11 @@ linked_trajectories.parquet
 linking_metric.py
 linking_inter.py
 Fink-FAT/
+min_cost_flow.py
+test_config.toml
+test_exp/
+
+crates/fink-fat-engine/.github/agents/
+docs/
+edge_plots/
+model_eval_plots/
