@@ -2,6 +2,7 @@
 
 ![Rust](https://img.shields.io/badge/Rust-000000?style=flat&logo=rust&logoColor=white)
 ![Version](https://img.shields.io/github/v/release/FusRoman/fink-fat)
+![Licence](https://img.shields.io/github/license/FusRoman/fink-fat)
 
 Fink-FAT is a Rust workspace for asteroid detection and trajectory reconstruction in alert streams. It ingests photometric alerts from surveys such as ZTF and Vera Rubin, builds intra-night seeds, links them across nights, solves candidate trajectories, and can optionally fit preliminary orbits.
 
