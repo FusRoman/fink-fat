@@ -63,7 +63,7 @@
 //! evaluation run can build seeds and edges without solving or saving.
 //! Stages must appear in **strictly increasing canonical order**.
 //!
-//! ```no_run
+//! ```rust, ignore
 //! use fink_fat_engine::pipeline::{
 //!     PipelineRunner, PipelinePlan, PipelineInputs, PipelineContext,
 //!     hooks::NoopPipelineHooks,

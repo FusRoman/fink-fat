@@ -56,6 +56,9 @@ clap = { workspace = true }
 
 [dev-dependencies]
 husky-rs = "0.1.5"
+assert_cmd = "2.0.16"
+tempfile = { workspace = true }
+datafusion = "52.1.0"
 
 [profile.release]
 lto = "thin"
