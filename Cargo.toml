@@ -3,6 +3,10 @@ edition = "2024"
 version = "1.0.0"
 authors = ["Roman Le Montagner <roman.le-montagner@ijclab.in2p3.fr>"]
 categories = ["science"]
+keywords = ["astronomy", "asteroids", "tracking", "alerts"]
+repository = "https://github.com/FusRoman/fink-fat"
+homepage = "https://github.com/FusRoman/fink-fat"
+documentation = "https://docs.rs/fink-fat"
 license-file = "LICENSE"
 
 [package]
@@ -13,6 +17,10 @@ edition.workspace = true
 version.workspace = true
 authors.workspace = true
 categories.workspace = true
+keywords.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 license-file.workspace = true
 
 [workspace]

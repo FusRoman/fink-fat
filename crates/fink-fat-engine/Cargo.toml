@@ -4,8 +4,13 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 categories.workspace = true
+keywords.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 license-file.workspace = true
 readme = "README.md"
+description = "Core engine for the Fink-FAT asteroid detection pipeline."
 
 [dependencies]
 rand = { workspace = true }
