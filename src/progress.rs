@@ -1,241 +1,178 @@
-//! Progress reporting utilities based on [`indicatif`].
+//! indicatif-backed implementation of [`PipelineHooks`] and [`StageProgress`].
 //!
-//! This module provides ergonomic helpers around [`MultiProgress`] and
-//! [`ProgressBar`] for long-running computations, with special care for:
+//! This module provides a compact, terminal-friendly progress reporting
+//! implementation for the pipeline stages using `indicatif::MultiProgress` and
+//! `ProgressBar` primitives. It is intended to be enabled at runtime with the
+//! `--progress` CLI flag; when disabled the pipeline uses
+//! [`fink_fat_engine::pipeline::hooks::NoopHooks`] with zero overhead.
 //!
-//! - **pytest compatibility**: bars are rendered on `stderr` with a capped
-//!   refresh rate to avoid overwhelming test logs.
-//! - **throttling**: update frequency can be limited to reduce rendering
-//!   overhead when tracking millions of iterations.
-//! - **optional progress**: `maybe_*` helpers allow enabling/disabling
-//!   progress reporting without cluttering the call sites.
+//! Key behaviours
+//! - Renders per-stage progress bars with consistent styling.
+//! - Supports nested child progress scopes (via `StageProgress::child`).
+//! - Exposes a `multi_progress()` handle that can be shared with the logging
+//!   layer so log lines are printed above active bars using
+//!   `MultiProgress::println` (avoids display corruption).
+//!
+//! Usage
+//! ```no_run
+//! let hooks = fink_fat::progress::IndicatifHooks::new();
+//! runner.run(&mut ctx, &hooks)?; // runner: PipelineRunner
+//! ```
 
-use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
+use std::sync::Arc;
 
-/* --------------------------- Progress context --------------------------- */
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
-/// Progress reporting context (no-op when `pb` is `None`).
+use fink_fat_engine::pipeline::{
+    hooks::{PipelineHooks, StageMeta, StageProgress, StageReport},
+    stages::PipelineStage,
+};
+
+// ── Style helpers ─────────────────────────────────────────────────────────────
+
+/// Progress bar visual style used for determinate stages.
 ///
-/// This wrapper centralizes everything related to a progress bar:
-/// - the underlying `ProgressBar` (or `None` for silent mode),
-/// - the **processed** counter,
-/// - the **throttling** state (`last_drawn`) and **tick** policy.
-///
-/// It also exposes convenience methods (`inc_long`, `inc_short`, `set_length`,
-/// `set_message`, `finish_with_message`, etc.) that degrade gracefully to no-ops
-/// when there is no progress bar.
-///
-/// Design notes
-/// ------------
-/// - We keep two tick values:
-///   - `tick_long` for long linear passes (precount / populate),
-///   - `tick_short` for the quick per-bucket sort loop.
-/// - `processed` is maintained here to keep signatures tight and clippy happy.
-/// - Using this struct removes 4 parameters from each internal function.
-///
-/// Lifetimes
-/// ---------
-/// The context holds a **borrow** to an external `ProgressBar` (`'a` lifetime).
-pub struct ProgressCtx<'a> {
-    pb: Option<&'a ProgressBar>,
-    processed: u64,
-    last_drawn: u64,
-    tick_long: u64,
-    tick_short: u64,
+/// Returns an `indicatif::ProgressStyle` configured with a narrow message
+/// column and a 40-character progress gauge.
+fn bar_style() -> ProgressStyle {
+    ProgressStyle::with_template(
+        "{spinner:.green} {msg:<30} [{bar:40.cyan/blue}] {pos}/{len} ({elapsed})",
+    )
+    .unwrap()
+    .progress_chars("##-")
 }
 
-impl<'a> ProgressCtx<'a> {
-    /// Build a **silent** context (no progress bar, still counts processed items).
-    pub fn silent(tick_long: u64, tick_short: u64) -> Self {
-        Self {
-            pb: None,
-            processed: 0,
-            last_drawn: 0,
-            tick_long,
-            tick_short,
-        }
-    }
-
-    /// Build a **reporting** context around a `ProgressBar`.
-    pub fn with_bar(pb: &'a ProgressBar, tick_long: u64, tick_short: u64) -> Self {
-        Self {
-            pb: Some(pb),
-            processed: 0,
-            last_drawn: 0,
-            tick_long,
-            tick_short,
-        }
-    }
-
-    /// Set the bar length (no-op if silent).
-    #[inline]
-    pub fn set_length(&self, len: u64) {
-        if let Some(pb) = self.pb {
-            pb.set_length(len);
-        }
-    }
-
-    /// Set the bar message (no-op if silent).
-    #[inline]
-    pub fn set_message(&self, msg: &str) {
-        if let Some(pb) = self.pb {
-            pb.set_message(msg.to_string());
-        }
-    }
-
-    /// Set the bar position (no-op if silent).
-    #[inline]
-    pub fn set_position(&self, pos: u64) {
-        if let Some(pb) = self.pb {
-            pb.set_position(pos);
-        }
-    }
-
-    /// Finish with a message (no-op if silent).
-    #[inline]
-    pub fn finish_with_message(&self, msg: &str) {
-        if let Some(pb) = self.pb {
-            pb.finish_with_message(msg.to_string());
-        }
-    }
-
-    /// Increment processed with **long-pass** throttling (precount/populate).
-    #[inline]
-    pub fn inc_long(&mut self, by: u64) {
-        self.processed = self.processed.saturating_add(by);
-        if let Some(pb) = self.pb {
-            throttled_inc(pb, self.processed, &mut self.last_drawn, self.tick_long);
-        }
-    }
-
-    /// Increment processed with **short-pass** throttling (per-bucket sort).
-    #[inline]
-    pub fn inc_short(&mut self, by: u64) {
-        self.processed = self.processed.saturating_add(by);
-        if let Some(pb) = self.pb {
-            throttled_inc(pb, self.processed, &mut self.last_drawn, self.tick_short);
-        }
-    }
-
-    /// Return total processed so far (useful for diagnostics).
-    #[allow(dead_code)]
-    #[inline]
-    pub fn processed(&self) -> u64 {
-        self.processed
-    }
-}
-
-/// Create a [`MultiProgress`] suitable for unit tests or batch jobs.
+/// Progress spinner style used for indeterminate stages.
 ///
-/// This uses [`ProgressDrawTarget::stderr_with_hz`] with a low refresh rate
-/// (10 Hz) to keep logs readable under `pytest` or CI environments.
-///
-/// Returns
-/// -------
-/// A [`MultiProgress`] instance ready to spawn child bars.
-pub fn make_multi_progress() -> MultiProgress {
-    MultiProgress::with_draw_target(ProgressDrawTarget::stderr_with_hz(10))
-}
-
-/// Create and register a child progress bar with custom style.
-///
-/// Parameters
-/// ----------
-/// * `mp` – Parent [`MultiProgress`] handle.
-/// * `len` – Expected length (number of items).
-/// * `msg` – Label shown to the left of the bar.
-///
-/// Style
-/// -----
-/// - Spinner + left-aligned message (width 24).
-/// - Elapsed time, cyan/blue bar (40 chars), right-aligned counters.
-/// - Unicode block characters for smooth animation.
-///
-/// Returns
-/// -------
-/// A configured [`ProgressBar`] registered in the given `mp`.
-pub fn make_bar(mp: &MultiProgress, len: u64, msg: &str) -> ProgressBar {
-    let pb = mp.add(ProgressBar::new(len));
-    pb.set_style(
-        ProgressStyle::with_template(
-            "{spinner:.green} {msg:24} [{elapsed_precise}] \
-             [{bar:40.cyan/blue}] {pos:>9}/{len:<9} ({percent:>3}%)",
-        )
+/// Returns an `indicatif::ProgressStyle` configured with a compact
+/// spinner and a short message column.
+fn spinner_style() -> ProgressStyle {
+    ProgressStyle::with_template("{spinner:.green} {msg:<30} {elapsed}")
         .unwrap()
-        .progress_chars("█▉▊▋▌▍▎▏  "),
-    );
-    pb.set_message(msg.to_string());
-    pb
+        .tick_strings(&["⠋", "⠙", "⠸", "⠴", "⠦", "⠇", "✔"])
 }
 
-/// Increment the bar with throttling to reduce overhead.
+// ── IndicatifProgress ─────────────────────────────────────────────────────────
+
+/// A [`StageProgress`] scope backed by an indicatif [`ProgressBar`].
 ///
-/// Parameters
-/// ----------
-/// * `pb` – Progress bar to update.
-/// * `processed` – Current number of processed items.
-/// * `last_drawn` – Mutable counter tracking last drawn position.
-/// * `chunk` – Minimum increment step before updating the bar.
-///
-/// Notes
-/// -----
-/// For very large `N`, calling `ProgressBar::inc` at each iteration is
-/// expensive. This helper ensures updates happen only every `chunk`
-/// increments.
-pub fn throttled_inc(pb: &ProgressBar, processed: u64, last_drawn: &mut u64, chunk: u64) {
-    if processed.saturating_sub(*last_drawn) >= chunk {
-        pb.set_position(processed);
-        *last_drawn = processed;
+/// Holds a reference to the shared [`MultiProgress`] so it can spawn nested
+/// child bars via [`StageProgress::child`].
+pub struct IndicatifProgress {
+    pb: ProgressBar,
+    mp: Arc<MultiProgress>,
+}
+
+impl IndicatifProgress {
+    /// Create a new `IndicatifProgress` scope.
+    ///
+    /// Parameters
+    /// * `mp`: shared `MultiProgress` used to host the bar.
+    /// * `meta`: stage metadata (label and optional total) used to select a
+    ///   determinate bar or an indeterminate spinner.
+    fn new(mp: Arc<MultiProgress>, meta: &StageMeta) -> Self {
+        let pb = match meta.total {
+            Some(n) => {
+                let pb = mp.add(ProgressBar::new(n));
+                pb.set_style(bar_style());
+                pb
+            }
+            None => {
+                let pb = mp.add(ProgressBar::new_spinner());
+                pb.set_style(spinner_style());
+                pb
+            }
+        };
+        pb.set_message(meta.label.clone());
+        Self { pb, mp }
     }
 }
 
-/// Conditionally initialize a progress bar (no-op if `None`).
-///
-/// This allows ergonomically disabling progress tracking by passing `None`.
-#[inline]
-pub fn maybe_progress_start(pb: Option<&ProgressBar>, len: u64, msg: &str) {
-    if let Some(pb) = pb {
-        pb.set_message(msg.to_string());
-        pb.set_length(len);
-        pb.set_position(0);
+impl StageProgress for IndicatifProgress {
+    fn set_total(&self, total: u64) {
+        self.pb.set_length(total);
+        // Switch to bar style when we learn the total.
+        self.pb.set_style(bar_style());
+    }
+
+    fn inc(&self, delta: u64) {
+        self.pb.inc(delta);
+    }
+
+    fn finish(&self) {
+        self.pb
+            .finish_with_message(format!("{} ✔", self.pb.message()));
+    }
+
+    fn child(&self, meta: StageMeta) -> Arc<dyn StageProgress> {
+        Arc::new(IndicatifProgress::new(self.mp.clone(), &meta))
     }
 }
 
-/// Conditionally finish a progress bar (no-op if `None`).
+// ── IndicatifHooks ────────────────────────────────────────────────────────────
+
+/// A [`PipelineHooks`] implementation that renders stage progress using
+/// indicatif's [`MultiProgress`].
 ///
-/// Ensures the bar is marked complete and replaced with a final message.
-#[inline]
-pub fn maybe_progress_finish(pb: Option<&ProgressBar>, len: u64, msg: &str) {
-    if let Some(pb) = pb {
-        pb.set_position(len);
-        pb.finish_with_message(msg.to_string());
-    }
+/// # Usage
+/// ```ignore
+/// let hooks = IndicatifHooks::new();
+/// runner.run(&mut ctx, &hooks)?;
+/// ```
+pub struct IndicatifHooks {
+    mp: Arc<MultiProgress>,
 }
 
-/// Conditionally update a progress bar with throttling (no-op if `None`).
-///
-/// Parameters
-/// ----------
-/// * `pb` – Optional progress bar.
-/// * `current` – Current count.
-/// * `last` – Last drawn count (updated in place).
-/// * `step` – Update only when at least `step` increments have passed.
-///
-/// Notes
-/// -----
-/// This is a safe variant of [`throttled_inc`] that works even when the
-/// caller has disabled progress reporting.
-#[inline]
-pub fn maybe_progress_throttled_set(
-    pb: Option<&ProgressBar>,
-    current: u64,
-    last: &mut u64,
-    step: u64,
-) {
-    if let Some(pb) = pb {
-        if current.wrapping_sub(*last) >= step {
-            pb.set_position(current);
-            *last = current;
+impl IndicatifHooks {
+    pub fn new() -> Self {
+        Self {
+            mp: Arc::new(MultiProgress::new()),
         }
+    }
+
+    /// Build an [`IndicatifHooks`] that uses an externally owned [`MultiProgress`].
+    ///
+    /// Use this when you need to share the same `MultiProgress` with the
+    /// logging layer so that log lines are printed above the active bars.
+    pub fn with_mp(mp: Arc<MultiProgress>) -> Self {
+        Self { mp }
+    }
+
+    /// Return a clone of the shared [`MultiProgress`] handle.
+    ///
+    /// Pass this to [`crate::logging::init_logging`] so that log lines are
+    /// routed through [`MultiProgress::println`] instead of raw stderr.
+    pub fn multi_progress(&self) -> Arc<MultiProgress> {
+        self.mp.clone()
+    }
+}
+
+impl Default for IndicatifHooks {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PipelineHooks for IndicatifHooks {
+    fn on_stage_start(&self, _stage: PipelineStage, meta: StageMeta) -> Arc<dyn StageProgress> {
+        Arc::new(IndicatifProgress::new(self.mp.clone(), &meta))
+    }
+
+    fn on_stage_end(&self, _stage: PipelineStage, report: StageReport) {
+        // Print a compact summary line below the finished bar.
+        let counters: Vec<String> = report
+            .counters
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect();
+        let summary = if counters.is_empty() {
+            format!("{}ms", report.elapsed_ms)
+        } else {
+            format!("{}ms  {}", report.elapsed_ms, counters.join("  "))
+        };
+        // `println_*` prints above the active bars to avoid flickering.
+        let _ = self
+            .mp
+            .println(format!(" (Stage {}) → {summary}", _stage.label()));
     }
 }
