@@ -5,8 +5,8 @@ description: >
   Uses Context7 to retrieve up-to-date library documentation before writing or
   debugging code. Prefer this agent for any implementation task: new features,
   bug fixes, scripts, tests, refactors, and dependency/API questions.
+model: "GPT-5.3-Codex (copilot)"
 argument-hint: Describe the programming task or problem to solve
-tools: [vscode/getProjectSetupInfo, vscode/memory, vscode/extensions, vscode/askQuestions, execute/runNotebookCell, execute/testFailure, execute/getTerminalOutput, execute/awaitTerminal, execute/killTerminal, execute/createAndRunTask, execute/runInTerminal, execute/runTests, read/getNotebookSummary, read/problems, read/readFile, read/readNotebookCellOutput, read/terminalSelection, read/terminalLastCommand, agent/runSubagent, edit/createDirectory, edit/createFile, edit/createJupyterNotebook, edit/editFiles, edit/editNotebook, edit/rename, search/changes, search/codebase, search/fileSearch, search/listDirectory, search/searchResults, search/textSearch, search/searchSubagent, search/usages, web/fetch, web/githubRepo, browser/openBrowserPage, io.github.upstash/context7/get-library-docs, io.github.upstash/context7/resolve-library-id, ms-python.python/getPythonEnvironmentInfo, ms-python.python/getPythonExecutableCommand, todo]
 ---
 
 # Code Generation Agent
