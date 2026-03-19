@@ -1,0 +1,349 @@
+//! Alert data model and storage for the Fink-FAT engine.
+//!
+//! This module defines the core detection record ([`Alert`]) and its supporting
+//! types ([`AlertKey`], [`DiaSourceId`]) used throughout the engine pipeline:
+//! ingestion, pairing, seeding, graph construction, ML ranking, and trajectory
+//! reconstruction.
+//!
+//! Main types
+//! ----------
+//! - [`Alert`] – a single photometric detection on the sky.
+//! - [`AlertKey`] – composite identifier `(NightId, DiaSourceId)` uniquely
+//!   addressing an alert within the store.
+//! - [`AlertSlice`] – extension trait on `&[Alert]` providing persistence
+//!   and time-origin helpers.
+//!
+//! Sub-modules
+//! -----------
+//! - [`store`] – [`AlertStore`](crate::alerts::store::AlertStore): per-night
+//!   indexed collection with uniqueness constraints.
+//! - [`error`] – [`InsertError`](crate::alerts::error::InsertError): errors
+//!   raised when an insertion violates store invariants.
+//!
+//! Units & conventions
+//! -------------------
+//! | Field            | Unit / convention                              |
+//! |------------------|------------------------------------------------|
+//! | `ra`, `dec`      | **radians**, ICRS / J2000                       |
+//! | `ra_err`, `dec_err` | **radians**, 1σ positional uncertainty       |
+//! | `mjd_tt`         | **MJD TT** (days), Terrestrial Time              |
+//! | `flux`           | PSF difference flux (upstream-dependent, e.g. nJy) |
+//! | `flux_err`       | 1σ flux uncertainty (same units as `flux`)       |
+//! | `band`           | `u8` photometric band code (LSST: u=0 … y=5)    |
+//!
+//! Ordering, hashing, and determinism
+//! ----------------------------------
+//! Many downstream stages rely on deterministic iteration order:
+//! - bucket members are sorted by time,
+//! - candidate enumeration is reproducible,
+//! - benchmarks and tests do not depend on hash-map iteration order.
+//!
+//! To support this, [`Alert`] implements:
+//! - [`Ord`] / [`PartialOrd`] – total ordering with `mjd_tt` as primary key
+//!   and `dia_source_id`, `band`, `ra`, `dec`, … as tie-breakers.
+//! - [`Hash`], [`Eq`], [`PartialEq`] – using bitwise `to_bits()` representations
+//!   for all floating-point fields.
+//!
+//! Float equality & hashing
+//! ------------------------
+//! Floating-point fields are compared and hashed using their raw bit patterns
+//! (`f64::to_bits()`), **not** epsilon-based approximate equality. This:
+//! - makes `Eq` / `Hash` **sound** and deterministic,
+//! - allows using alerts as keys in hash sets / maps,
+//! - avoids surprising behavior from floating-point rounding tolerance.
+//!
+//! Consequences:
+//! - Values that are numerically “close” but not bit-identical are **not equal**.
+//! - Distinct NaN payloads are treated as **different** values.
+//!
+//! See also
+//! --------
+//! - [`crate::spacetime_bucket::bucket`] – bucket index relies on [`Ord`]
+//!   to sort alert members by time.
+//! - [`crate::seeding::pairs`] – deduplicates pairs by alert pointer identity.
+//! - [`crate::seeding::SeedNode`] – seeds reference alerts via
+//!   [`AlertKey`] members.
+pub mod error;
+pub mod store;
+
+use std::{
+    cmp::Ordering,
+    fmt::{Display, Formatter, Result as FmtResult},
+    hash::{Hash, Hasher},
+    sync::Arc,
+};
+
+use camino::Utf8PathBuf;
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    MJDTT, Radian,
+    night_id::NightId,
+    persistence::{
+        ALERT_STORE_SCHEMA_VERSION, compression::Compression, envelope::DiskEnvelope,
+        error::PersistenceIoError, layout::PersistenceLayout, manifest::Manifest,
+    },
+};
+
+/// Unique identifier for a single detection in the alert stream.
+///
+/// Corresponds to the LSST `diaSourceId`: a stable 64-bit integer assigned
+/// by the upstream alert production system. This value is expected to be
+/// **globally unique** across all nights and all surveys processed by the
+/// engine.
+pub type DiaSourceId = u64;
+
+/// Composite key uniquely identifying an [`Alert`] within the
+/// [`AlertStore`](crate::alerts::store::AlertStore).
+///
+/// The key pairs a [`NightId`] with a [`DiaSourceId`], enabling O(1)
+/// lookups by night and efficient per-night iteration.
+#[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct AlertKey {
+    /// Night this alert belongs to.
+    pub night_id: NightId,
+    /// Globally unique detection identifier (LSST `diaSourceId`).
+    pub dia_source_id: DiaSourceId,
+}
+
+/// Single photometric detection in the alert stream.
+///
+/// This record is intentionally compact and `Clone`-able so it can be moved
+/// across threads and used as a building block for every pipeline stage:
+/// ingestion, pairing, seeding, graph construction, and trajectory
+/// reconstruction.
+///
+/// Identification
+/// --------------
+/// Each alert is addressed by its [`AlertKey`] (`key` field), which pairs
+/// the observation night ([`NightId`]) with a globally unique
+/// [`DiaSourceId`]. The key is assigned during ingestion and must remain
+/// stable for the lifetime of the alert in the store.
+///
+/// Notes
+/// -----
+/// - The struct does not encode provenance metadata (visit, detector,
+///   exposure, etc.) by design. Those may exist in the upstream alert
+///   packet but are not required for the core linking logic.
+/// - The engine frequently borrows `&Alert` references in bucket indices
+///   and seeds rather than copying field values repeatedly.
+/// - [`Ord`] is implemented with `mjd_tt` as primary key so that sorting
+///   a slice of alerts yields chronological order (see module-level doc).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Alert {
+    /// Composite key `(NightId, DiaSourceId)` uniquely identifying this
+    /// alert in the [`AlertStore`](crate::alerts::store::AlertStore).
+    pub key: AlertKey,
+    /// Right ascension (radians).
+    pub ra: Radian,
+    /// 1σ uncertainty on RA (radians).
+    pub ra_err: Radian,
+    /// Declination (radians).
+    pub dec: Radian,
+    /// 1σ uncertainty on Dec (radians).
+    pub dec_err: Radian,
+    /// Detection epoch (MJD TT, days).
+    pub mjd_tt: MJDTT,
+    /// PSF difference flux (units depend on upstream, e.g. nJy).
+    pub flux: f64,
+    /// 1σ uncertainty on flux (same units as `flux`).
+    pub flux_err: f64,
+    /// Photometric band code.
+    pub band: u8,
+    /// Observer reference
+    pub observer_mpc_code: Arc<String>,
+}
+
+/* ------------------------ Equality / Ordering ------------------------- */
+
+/// Bitwise equality over all fields.
+///
+/// Floating-point fields are compared via `to_bits()` so that the
+/// implementation is consistent with [`Hash`] and [`Ord`], and `Eq` is
+/// sound (no epsilon tolerance).
+impl PartialEq for Alert {
+    fn eq(&self, other: &Self) -> bool {
+        self.key.dia_source_id == other.key.dia_source_id
+            && self.band == other.band
+            && self.mjd_tt.to_bits() == other.mjd_tt.to_bits()
+            && self.ra.to_bits() == other.ra.to_bits()
+            && self.dec.to_bits() == other.dec.to_bits()
+            && self.ra_err.to_bits() == other.ra_err.to_bits()
+            && self.dec_err.to_bits() == other.dec_err.to_bits()
+            && self.flux.to_bits() == other.flux.to_bits()
+            && self.flux_err.to_bits() == other.flux_err.to_bits()
+    }
+}
+
+impl Eq for Alert {}
+
+impl PartialOrd for Alert {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Total ordering for [`Alert`].
+///
+/// Sorting order
+/// -------------
+/// 1. `mjd_tt` (observation time) – primary key.
+/// 2. `dia_source_id` – first tie-breaker.
+/// 3. `band`, `ra`, `dec`, `ra_err`, `dec_err`, `flux`, `flux_err` –
+///    subsequent tie-breakers ensuring a unique position for every
+///    distinct alert.
+///
+/// All floating-point comparisons use [`f64::total_cmp`] to guarantee
+/// a consistent total order (including NaN positioning).
+impl Ord for Alert {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.mjd_tt
+            .total_cmp(&other.mjd_tt)
+            // Deterministic tie-breakers.
+            .then_with(|| self.key.dia_source_id.cmp(&other.key.dia_source_id))
+            .then_with(|| self.band.cmp(&other.band))
+            .then_with(|| self.ra.total_cmp(&other.ra))
+            .then_with(|| self.dec.total_cmp(&other.dec))
+            .then_with(|| self.ra_err.total_cmp(&other.ra_err))
+            .then_with(|| self.dec_err.total_cmp(&other.dec_err))
+            .then_with(|| self.flux.total_cmp(&other.flux))
+            .then_with(|| self.flux_err.total_cmp(&other.flux_err))
+    }
+}
+
+/* ----------------------------- Hash ---------------------------------- */
+
+/// Bitwise hash over all fields.
+///
+/// Float fields are hashed via `to_bits()` to stay consistent with the
+/// bitwise [`PartialEq`] implementation. The field order matches `Eq`.
+impl Hash for Alert {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.key.dia_source_id.hash(state);
+        self.band.hash(state);
+        self.mjd_tt.to_bits().hash(state);
+        self.ra.to_bits().hash(state);
+        self.dec.to_bits().hash(state);
+        self.ra_err.to_bits().hash(state);
+        self.dec_err.to_bits().hash(state);
+
+        self.flux.to_bits().hash(state);
+        self.flux_err.to_bits().hash(state);
+    }
+}
+
+/* ------------------------ Display ------------------------------------ */
+
+impl Display for Alert {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        // Compact single-line rendering for logs and debugging output.
+        write!(
+            f,
+            "Alert(dia_source_id={}, ra={:.6} rad, dec={:.6} rad, mjd_tt={:.5}, \
+             flux={:.3}±{:.3}, band={})",
+            self.key.dia_source_id,
+            self.ra,
+            self.dec,
+            self.mjd_tt,
+            self.flux,
+            self.flux_err,
+            self.band
+        )
+    }
+}
+
+/* ------------------------ Alert Slice trait ------------------------------------ */
+
+/// Extension trait on `&[Alert]` providing persistence and time-origin helpers.
+///
+/// This trait is implemented for `&[Alert]` so that any borrowed slice of
+/// alerts (typically obtained from the
+/// [`AlertStore`](crate::alerts::store::AlertStore)) can be saved to disk
+/// or queried for its earliest epoch without owning the data.
+pub trait AlertSlice {
+    /// Persist the alerts of a single night to disk.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `layout` – Persistence directory layout.
+    /// * `manifest` – Current run manifest (used for timestamps).
+    /// * `night_id` – Night identifier for the target file path.
+    /// * `compression` – Binary compression algorithm to apply.
+    ///
+    /// Return
+    /// ------
+    /// * `Ok(Utf8PathBuf)` – Absolute path of the written file.
+    /// * `Err(PersistenceIoError)` – On I/O or envelope serialization failure.
+    fn save_alerts_night(
+        &self,
+        layout: &PersistenceLayout,
+        manifest: &Manifest,
+        night_id: NightId,
+        compression: Compression,
+    ) -> Result<Utf8PathBuf, PersistenceIoError>;
+
+    /// Return the epoch of the first alert in the slice.
+    ///
+    /// This is used as `t0` for per-night time binning in the
+    /// [`BuildSeeds`](crate::pipeline::stages::seed_builder) stage.
+    ///
+    /// Return
+    /// ------
+    /// * `Some(mjd_tt)` – Epoch of the first alert.
+    /// * `None` – If the slice is empty.
+    fn get_t0(&self) -> Option<MJDTT>;
+}
+
+impl AlertSlice for &[Alert] {
+    /// Write the alerts of a single night to disk inside a
+    /// [`DiskEnvelope`].
+    ///
+    /// The file is written to the path determined by
+    /// [`PersistenceLayout::alerts_night_path`](crate::persistence::layout::PersistenceLayout::alerts_night_path).
+    ///
+    /// Arguments
+    /// ---------
+    /// * `layout` – Directory layout for persistence artifacts.
+    /// * `manifest` – Current manifest (provides `created_unix_s` for the envelope).
+    /// * `night_id` – Night whose alerts are being persisted.
+    ///
+    /// Return
+    /// ------
+    /// * `Ok(Utf8PathBuf)` – Absolute path of the written file.
+    /// * `Err(PersistenceIoError)` – On I/O or serialization failure.
+    fn save_alerts_night(
+        &self,
+        layout: &PersistenceLayout,
+        manifest: &Manifest,
+        night_id: NightId,
+        compression: Compression,
+    ) -> Result<Utf8PathBuf, PersistenceIoError> {
+        let abs_path = layout.alerts_night_path(night_id);
+
+        // Write payload (enveloped).
+        let env = DiskEnvelope::new(
+            self.to_vec(),
+            ALERT_STORE_SCHEMA_VERSION,
+            manifest.created_unix_s,
+            compression,
+        );
+        env.save_enveloped(&abs_path)?;
+        Ok(abs_path)
+    }
+
+    /// Return the `mjd_tt` of the first alert in the slice.
+    ///
+    /// This assumes that alerts within a night are **sorted by time**
+    /// (guaranteed after
+    /// [`AlertStore::sort_each_night_and_rekey`](crate::alerts::store::AlertStore::sort_each_night_and_rekey)),
+    /// so the first element is the earliest observation.
+    ///
+    /// Return
+    /// ------
+    /// * `Some(mjd_tt)` – Epoch of the first alert.
+    /// * `None` – The slice is empty.
+    fn get_t0(&self) -> Option<MJDTT> {
+        self.first().map(|alert| alert.mjd_tt)
+    }
+}

@@ -1,0 +1,37 @@
+[package]
+name = "fink-fat-eval"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+categories.workspace = true
+keywords.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+license-file.workspace = true
+readme = "README.md"
+description = "Evaluation and diagnostic tooling for the Fink-FAT asteroid detection pipeline."
+
+[dependencies]
+indicatif = { workspace = true }
+clap = { workspace = true }
+fink-fat-engine = { workspace = true }
+anyhow = "1.0.102"
+polars = { version = "0.46", features = ["lazy", "parquet"] }
+camino = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+ahash = { workspace = true }
+plotters = "0.3.7"
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+ndarray = { workspace = true }
+
+[dev-dependencies]
+approx = "0.5.1"
+prop-test = "0.1.1"
+
+[package.metadata.llvm-cov]
+skip = true
