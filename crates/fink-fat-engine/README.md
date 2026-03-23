@@ -77,6 +77,37 @@ SavePersistedData   ← flush alerts, seeds, edge journal, state
 Progress is reported through the `PipelineHooks` trait, which can be backed
 by any progress-bar or logging implementation.
 
+### `IngestNights` input format
+
+The `IngestNights` stage expects a Parquet dataset containing one row per
+photometric detection. The loader reads the file through DataFusion and
+projects only the columns required to build an `AlertStore`.
+
+The default schema expected by the engine is:
+
+| Column | Type | Description |
+|---|---|---|
+| `night_id` | `u32` | Integer night identifier used to group alerts into nightly batches. |
+| `dia_source_id` | `u64` | Upstream unique detection identifier. |
+| `ra` | `f64` | Right ascension in radians. |
+| `ra_err` | `f64` | Right ascension uncertainty in radians. |
+| `dec` | `f64` | Declination in radians. |
+| `dec_err` | `f64` | Declination uncertainty in radians. |
+| `mjd_tt` | `f64` | Observation epoch in MJD TT days. |
+| `mag` | `f64` | PSF difference magnitude. |
+| `mag_err` | `f64` | Uncertainty on `mag`. |
+| `band` | `u8` | Photometric band code. |
+| `observer_mpc_code` | string | MPC observatory code associated with the detection. |
+
+All of these columns are required. The loader rejects rows with null values in
+any required field. If a dataset uses different column names, the loader can be
+configured programmatically through `AlertParquetColumns`, but the default
+Parquet layout used by the engine is the table above.
+
+The file may contain multiple nights in a single Parquet dataset. `night_id` is
+used to partition rows into per-night alert stores before the downstream stages
+run.
+
 ---
 
 ## Data model
