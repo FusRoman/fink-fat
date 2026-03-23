@@ -1575,7 +1575,6 @@ mod connected_components_tests {
             max_night_span_for_mcf: 10,
             mcf_budget_s: 1000.0, // generous budget
             k_mcf_s_per_edge_logn: 1e-8,
-            ..Default::default()
         };
 
         let cid = cc.component_id_of_seed(&store, k0).unwrap();
@@ -1702,10 +1701,12 @@ mod connected_components_tests {
     // Property-based tests (proptest)
     // =========================================================================
 
+    type NightSpec = Vec<(u32, usize)>;
+    type EdgeDesc = Vec<(usize, usize, usize, usize, bool)>;
+
     /// Strategy: generate a graph with `n_nights` nights, `seeds_per_night` seeds each,
     /// and random edges between consecutive nights.
-    fn arb_graph_spec()
-    -> impl Strategy<Value = (Vec<(u32, usize)>, Vec<(usize, usize, usize, usize, bool)>)> {
+    fn arb_graph_spec() -> impl Strategy<Value = (NightSpec, EdgeDesc)> {
         // 2..6 nights, 1..5 seeds each.
         let nights = prop::collection::vec((1u32..50, 1usize..5), 2..6);
 

@@ -1014,6 +1014,7 @@ mod edge_mod_tests {
 
     /// Build a `SeedNode` from two alerts 30 min apart on `night`, starting at
     /// `(ra, dec)` with angular velocity `vx` rad/day in RA.
+    #[allow(clippy::too_many_arguments)]
     fn make_seed(
         store: &mut SeedStore,
         night: u32,

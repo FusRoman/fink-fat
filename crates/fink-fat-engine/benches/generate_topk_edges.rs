@@ -45,7 +45,7 @@ fn make_alert(
     Alert {
         key: AlertKey {
             night_id: NightId(0),
-            dia_source_id: dia_source_id,
+            dia_source_id,
         },
         ra: ra_rad,
         ra_err: 1.0e-6, // ~0.2 arcsec in radians
@@ -99,13 +99,7 @@ fn make_seeds_pair_model(
     rng: &mut StdRng,
     night_id: NightId,
     num_seeds: usize,
-    start_mjd_tt: f64,
-    seed_time_step_days: f64,
-    start_ra_rad: f64,
-    start_dec_rad: f64,
-    ra_drift_rad_per_seed: f64,
-    dec_drift_rad_per_seed: f64,
-    max_speed_rad_per_day: Option<f64>,
+    spec: SeedSeriesSpec,
 ) -> Vec<SeedNode> {
     let mut seed_store: SeedStore = SeedStore::new();
 
@@ -114,17 +108,18 @@ fn make_seeds_pair_model(
     // This avoids lifetime issues because SeedNode::from_pair stores references.
     // Criterion benchmarks build inputs once, so this is a pragmatic solution.
     for seed_index in 0..num_seeds {
-        let time_alert_a = start_mjd_tt + (seed_index as f64) * seed_time_step_days;
-        let time_alert_b = time_alert_a + (seed_time_step_days * 0.5).max(1e-6);
+        let time_alert_a = spec.start_mjd_tt + (seed_index as f64) * spec.seed_time_step_days;
+        let time_alert_b = time_alert_a + (spec.seed_time_step_days * 0.5).max(1e-6);
 
         let ra_jitter = (rng.random::<f64>() - 0.5) * 1e-4;
         let dec_jitter = (rng.random::<f64>() - 0.5) * 1e-4;
 
-        let ra_a = start_ra_rad + (seed_index as f64) * ra_drift_rad_per_seed + ra_jitter;
-        let dec_a = start_dec_rad + (seed_index as f64) * dec_drift_rad_per_seed + dec_jitter;
+        let ra_a = spec.start_ra_rad + (seed_index as f64) * spec.ra_drift_rad_per_seed + ra_jitter;
+        let dec_a =
+            spec.start_dec_rad + (seed_index as f64) * spec.dec_drift_rad_per_seed + dec_jitter;
 
-        let ra_b = ra_a + ra_drift_rad_per_seed * 0.5;
-        let dec_b = dec_a + dec_drift_rad_per_seed * 0.5;
+        let ra_b = ra_a + spec.ra_drift_rad_per_seed * 0.5;
+        let dec_b = dec_a + spec.dec_drift_rad_per_seed * 0.5;
 
         let band_a = (seed_index % 2) as u8;
         let band_b = ((seed_index + 1) % 2) as u8;
@@ -156,7 +151,7 @@ fn make_seeds_pair_model(
             night_id,
             alert_a,
             alert_b,
-            max_speed_rad_per_day,
+            spec.max_speed_rad_per_day,
         )
         .expect("SeedNode::from_pair failed (speed filter too strict?)");
 
@@ -165,6 +160,17 @@ fn make_seeds_pair_model(
 
     seed_store.sort_night(night_id);
     seed_store.get(&night_id).unwrap_or_default().to_vec()
+}
+
+#[derive(Clone, Copy)]
+struct SeedSeriesSpec {
+    start_mjd_tt: f64,
+    seed_time_step_days: f64,
+    start_ra_rad: f64,
+    start_dec_rad: f64,
+    ra_drift_rad_per_seed: f64,
+    dec_drift_rad_per_seed: f64,
+    max_speed_rad_per_day: Option<f64>,
 }
 
 /// Construct the spatial + time binners used by `SeedNode::score_edge_candidates`.
@@ -231,26 +237,30 @@ fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
             &mut rng,
             left_night,
             num_left_seeds,
-            60000.0,
-            2.0 / 1440.0, // 2-minute spacing
-            1.0,
-            0.5,
-            5e-5,
-            2e-5,
-            None,
+            SeedSeriesSpec {
+                start_mjd_tt: 60000.0,
+                seed_time_step_days: 2.0 / 1440.0, // 2-minute spacing
+                start_ra_rad: 1.0,
+                start_dec_rad: 0.5,
+                ra_drift_rad_per_seed: 5e-5,
+                dec_drift_rad_per_seed: 2e-5,
+                max_speed_rad_per_day: None,
+            },
         );
 
         let right_seeds = make_seeds_pair_model(
             &mut rng2,
             right_night,
             num_right_seeds,
-            60001.0,
-            2.0 / 1440.0,
-            1.01,
-            0.51,
-            5e-5,
-            2e-5,
-            None,
+            SeedSeriesSpec {
+                start_mjd_tt: 60001.0,
+                seed_time_step_days: 2.0 / 1440.0,
+                start_ra_rad: 1.01,
+                start_dec_rad: 0.51,
+                ra_drift_rad_per_seed: 5e-5,
+                dec_drift_rad_per_seed: 2e-5,
+                max_speed_rad_per_day: None,
+            },
         );
 
         // Use the minimum right epoch as time origin so bin indices stay small.
@@ -262,8 +272,10 @@ fn bench_generate_topk_edges_end_to_end(c: &mut Criterion) {
         let (spatial_binner, _) = make_binners(time_origin);
 
         // Base configuration for the tested function.
-        let mut edge_config = EdgeConfig::default();
-        edge_config.top_k_per_left = Some(top_k_per_left);
+        let edge_config = EdgeConfig {
+            top_k_per_left: Some(top_k_per_left),
+            ..EdgeConfig::default()
+        };
 
         group.throughput(Throughput::Elements(
             (num_left_seeds * top_k_per_left) as u64,
@@ -372,26 +384,30 @@ fn bench_generate_topk_edges_components(c: &mut Criterion) {
         &mut rng1,
         left_night,
         num_left_seeds,
-        61000.0,
-        2.0 / 1440.0,
-        2.0,
-        0.3,
-        6e-5,
-        3e-5,
-        None,
+        SeedSeriesSpec {
+            start_mjd_tt: 61000.0,
+            seed_time_step_days: 2.0 / 1440.0,
+            start_ra_rad: 2.0,
+            start_dec_rad: 0.3,
+            ra_drift_rad_per_seed: 6e-5,
+            dec_drift_rad_per_seed: 3e-5,
+            max_speed_rad_per_day: None,
+        },
     );
 
     let right_seeds = make_seeds_pair_model(
         &mut rng,
         right_night,
         num_right_seeds,
-        61001.0,
-        2.0 / 1440.0,
-        2.01,
-        0.31,
-        6e-5,
-        3e-5,
-        None,
+        SeedSeriesSpec {
+            start_mjd_tt: 61001.0,
+            seed_time_step_days: 2.0 / 1440.0,
+            start_ra_rad: 2.01,
+            start_dec_rad: 0.31,
+            ra_drift_rad_per_seed: 6e-5,
+            dec_drift_rad_per_seed: 3e-5,
+            max_speed_rad_per_day: None,
+        },
     );
 
     // Use the minimum right epoch as time origin so time-bin indices stay small.
@@ -403,8 +419,10 @@ fn bench_generate_topk_edges_components(c: &mut Criterion) {
     let (spatial_binner, time_binner) = make_binners(time_origin);
     let right_index = SeedSpatialIndex::build(&right_seeds, &spatial_binner, &time_binner);
 
-    let mut edge_config = EdgeConfig::default();
-    edge_config.top_k_per_left = Some(top_k_per_left);
+    let edge_config = EdgeConfig {
+        top_k_per_left: Some(top_k_per_left),
+        ..EdgeConfig::default()
+    };
 
     // -----------------------------------------------------------------------------
     // 1) Candidate generation + scoring per single left seed.
@@ -567,7 +585,7 @@ fn bench_generate_topk_edges_components(c: &mut Criterion) {
 /// - sample count,
 /// - warmup time,
 /// - measurement time,
-/// and slightly increase tolerated noise to get actionable numbers quickly.
+/// - and slightly increase tolerated noise to get actionable numbers quickly.
 fn criterion_config() -> Criterion {
     Criterion::default()
         .with_plots()

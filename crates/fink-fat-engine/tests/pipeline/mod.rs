@@ -475,7 +475,7 @@ pub(crate) fn run_pipeline_with(
 
         let plan = PipelinePlan {
             stages: stages.to_vec(),
-            persist: persist.clone(),
+            persist,
             inputs: PipelineInputs { alerts_uri },
         };
 
@@ -494,7 +494,7 @@ pub(crate) fn run_pipeline_with(
         let output = runner
             .run(&mut ctx, &hooks)
             .unwrap_or_else(|e| panic!("pipeline run for night {nid} failed: {e}"));
-        drop(ctx);
+        let _ = ctx;
 
         let is_last = run_idx + 1 == n_total;
         if is_last {
@@ -570,7 +570,7 @@ pub(crate) fn run_pipeline_minimal(
         let output = runner
             .run(&mut ctx, &hooks)
             .unwrap_or_else(|e| panic!("pipeline run for night {nid} failed: {e}"));
-        drop(ctx);
+        let _ = ctx;
 
         let is_last = run_idx + 1 == n_total;
         if is_last {

@@ -308,7 +308,13 @@ fn overlay_metric(
         let panels = root.split_evenly((3, 1));
 
         draw_overlay_histogram(
-            &panels[0], title, x_label, &tp_plot, &fp_plot, 60, vline_plot, log_x,
+            &panels[0],
+            (title, x_label),
+            &tp_plot,
+            &fp_plot,
+            60,
+            vline_plot,
+            log_x,
         )
         .context("histogram panel")?;
         draw_overlay_cdf(&panels[1], x_label, &tp_plot, &fp_plot, vline_plot, log_x)
@@ -348,8 +354,7 @@ fn combined_range(a: &[f64], b: &[f64]) -> (f64, f64) {
 
 fn draw_overlay_histogram<DB>(
     area: &DrawingArea<DB, plotters::coord::Shift>,
-    title: &str,
-    x_label: &str,
+    labels: (&str, &str),
     tp: &[f64],
     fp: &[f64],
     n_bins: usize,
@@ -360,6 +365,7 @@ where
     DB: DrawingBackend,
     DB::ErrorType: std::error::Error + Send + Sync + 'static,
 {
+    let (title, x_label) = labels;
     if tp.is_empty() && fp.is_empty() {
         return Ok(());
     }

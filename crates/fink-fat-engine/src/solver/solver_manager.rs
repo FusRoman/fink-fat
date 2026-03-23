@@ -557,7 +557,7 @@ mod diag_stats_tests {
             sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
             let result = sorted_percentile(&sorted, p);
             prop_assert!(
-                sorted.iter().any(|&v| v == result),
+                sorted.contains(&result),
                 "result {result} not found in sorted input {sorted:?}"
             );
         }

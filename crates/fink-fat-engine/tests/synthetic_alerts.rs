@@ -508,18 +508,21 @@ impl SyntheticDatasetBuilder {
 
         for req in &self.populations {
             for _ in 0..req.count {
+                let gen_params = TrajectoryGenParams {
+                    population: req.population,
+                    n_nights: self.n_nights,
+                    obs_per_night: self.obs_per_night,
+                    start_night_id: self.start_night_id,
+                    start_mjd: self.start_mjd,
+                    night_gap_days: self.night_gap_days,
+                    intra_night_gap_days: self.intra_night_gap_days,
+                    observer_mpc_code: &observer_arc,
+                };
                 let (alerts, truth) = generate_trajectory(
                     &mut rng,
                     trajectory_id,
-                    req.population,
-                    self.n_nights,
-                    self.obs_per_night,
-                    self.start_night_id,
-                    self.start_mjd,
-                    self.night_gap_days,
-                    self.intra_night_gap_days,
                     &mut next_dia_source_id,
-                    &observer_arc,
+                    &gen_params,
                 );
                 all_alerts.extend(alerts);
                 ground_truth.push(truth);
@@ -581,10 +584,7 @@ pub fn single_population_dataset(
 // Internal: trajectory generation
 // ---------------------------------------------------------------------------
 
-/// Generate one coherent trajectory with alerts on every night.
-fn generate_trajectory(
-    rng: &mut StdRng,
-    trajectory_id: usize,
+struct TrajectoryGenParams<'a> {
     population: AsteroidPopulation,
     n_nights: usize,
     obs_per_night: usize,
@@ -592,9 +592,17 @@ fn generate_trajectory(
     start_mjd: f64,
     night_gap_days: f64,
     intra_night_gap_days: f64,
+    observer_mpc_code: &'a Arc<String>,
+}
+
+/// Generate one coherent trajectory with alerts on every night.
+fn generate_trajectory(
+    rng: &mut StdRng,
+    trajectory_id: usize,
     next_id: &mut u64,
-    observer_mpc_code: &Arc<String>,
+    params: &TrajectoryGenParams<'_>,
 ) -> (Vec<Alert>, TrajectoryTruth) {
+    let population = params.population;
     let (speed_lo, speed_hi) = population.speed_range_rad_per_day();
     let (mag_lo, mag_hi) = population.magnitude_range();
     let (err_lo, err_hi) = population.position_error_rad();
@@ -624,26 +632,26 @@ fn generate_trajectory(
     let pos_err = rng.random_range(err_lo..err_hi);
 
     // -- Generate observations --
-    let capacity = n_nights * obs_per_night;
+    let capacity = params.n_nights * params.obs_per_night;
     let mut alerts = Vec::with_capacity(capacity);
     let mut dia_source_ids = Vec::with_capacity(capacity);
-    let mut night_ids_set = Vec::with_capacity(n_nights);
+    let mut night_ids_set = Vec::with_capacity(params.n_nights);
 
-    for night_idx in 0..n_nights {
-        let night_id = start_night_id + night_idx as u32;
+    for night_idx in 0..params.n_nights {
+        let night_id = params.start_night_id + night_idx as u32;
         night_ids_set.push(night_id);
 
         // Base MJD for this night.
-        let night_base_mjd = start_mjd + (night_idx as f64) * night_gap_days;
+        let night_base_mjd = params.start_mjd + (night_idx as f64) * params.night_gap_days;
 
-        for obs_idx in 0..obs_per_night {
+        for obs_idx in 0..params.obs_per_night {
             // Intra-night time offset with small jitter (±2 min).
             let jitter: f64 = rng.random_range(-0.0014..0.0014); // ±2 min in days
-            let dt_intra = (obs_idx as f64) * intra_night_gap_days + jitter;
+            let dt_intra = (obs_idx as f64) * params.intra_night_gap_days + jitter;
             let mjd_tt = night_base_mjd + dt_intra.max(0.0);
 
             // True position at this epoch (linear motion from origin).
-            let dt_from_start = mjd_tt - start_mjd;
+            let dt_from_start = mjd_tt - params.start_mjd;
             let true_ra = ra0 + vra * dt_from_start;
             let true_dec = dec0 + vdec * dt_from_start;
 
@@ -679,7 +687,7 @@ fn generate_trajectory(
                 flux,
                 flux_err,
                 band,
-                observer_mpc_code: Arc::clone(observer_mpc_code),
+                observer_mpc_code: Arc::clone(params.observer_mpc_code),
             });
         }
     }
@@ -694,7 +702,7 @@ fn generate_trajectory(
         vra,
         vdec,
         magnitude,
-        observer_mpc_code: (**observer_mpc_code).clone(),
+        observer_mpc_code: (**params.observer_mpc_code).clone(),
     };
 
     (alerts, truth)

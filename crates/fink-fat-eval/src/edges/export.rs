@@ -41,7 +41,7 @@ use crate::truth_sso::{TruthClass, TruthSSO};
 /// * `ctx`      – Pipeline context owning the graph and seed/alert stores.
 /// * `truth`    – Ground-truth oracle used to label each edge.
 /// * `out_path` – Destination Parquet path.  Parent directories are created
-///                automatically if they do not exist.
+///   automatically if they do not exist.
 ///
 /// Return
 /// ------
@@ -128,11 +128,11 @@ pub fn export_edge_features_parquet(
     let mut df = DataFrame::new(columns).context("building edge features DataFrame")?;
 
     // ── Write Parquet ───────────────────────────────────────────────────────
-    if let Some(parent) = out_path.parent() {
-        if !parent.as_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating parent directory '{parent}'"))?;
-        }
+    if let Some(parent) = out_path.parent()
+        && !parent.as_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating parent directory '{parent}'"))?;
     }
 
     let mut file = File::create(out_path.as_std_path())

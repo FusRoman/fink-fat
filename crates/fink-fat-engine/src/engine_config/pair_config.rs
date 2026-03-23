@@ -246,6 +246,25 @@ pub struct PairConfig {
     #[serde(deserialize_with = "de_ang_speed_rad_per_day")]
     pub max_angular_speed: f64,
 
+    /// Minimum required on-sky apparent motion.
+    ///
+    /// Units
+    /// -----
+    /// - Canonical: **radians per day**.
+    ///
+    /// Acceptance test
+    /// ---------------
+    /// A candidate pair `(a, b)` must satisfy:
+    ///
+    /// ```text
+    /// ang_sep(a, b) / (t_b - t_a) ≥ min_motion
+    /// ```
+    ///
+    /// This is primarily useful to reject quasi-stationary links in very
+    /// dense high-cadence nights.
+    #[serde(deserialize_with = "de_ang_speed_rad_per_day")]
+    pub min_motion: f64,
+
     /// Maximum allowed photometric difference between the two alerts.
     ///
     /// Important
@@ -276,12 +295,14 @@ impl Default for PairConfig {
     /// --------
     /// - `max_dt = 0.06` days (~86.4 minutes)
     /// - `max_angular_speed = 5.0e-2` rad/day (order-of-magnitude)
+    /// - `min_motion = 0.0` rad/day
     /// - `max_flux_difference = 5.0`
     /// - `allow_same_timebin = true`
     fn default() -> Self {
         Self {
             max_dt: 0.06,
             max_angular_speed: 5.0e-2,
+            min_motion: 0.0,
             max_flux_difference: 5.0,
             allow_same_timebin: true,
         }
@@ -298,6 +319,14 @@ impl PairConfig {
             // Reuse the "angle" error kind for this angular-rate parameter.
             return Err(SeedError::NonFiniteOrNegativeAngle(
                 "pairs.max_angular_speed",
+            ));
+        }
+        if !self.min_motion.is_finite() || self.min_motion < 0.0 {
+            return Err(SeedError::NonFiniteOrNegativeAngle("pairs.min_motion"));
+        }
+        if self.min_motion > self.max_angular_speed {
+            return Err(SeedError::Inconsistent(
+                "pairs.min_motion > pairs.max_angular_speed",
             ));
         }
         if !self.max_flux_difference.is_finite() || self.max_flux_difference < 0.0 {
@@ -344,6 +373,12 @@ impl PairConfigBuilder {
         self
     }
 
+    /// Set minimum required apparent motion (radians per day).
+    pub fn min_motion(mut self, v: f64) -> Self {
+        self.params.min_motion = v;
+        self
+    }
+
     /// Set maximum allowed photometric difference (dimensionless).
     pub fn max_flux_difference(mut self, v: f64) -> Self {
         self.params.max_flux_difference = v;
@@ -361,6 +396,7 @@ impl PairConfigBuilder {
         let p = PairConfig {
             max_dt: self.params.max_dt,
             max_angular_speed: self.params.max_angular_speed,
+            min_motion: self.params.min_motion,
             max_flux_difference: self.params.max_flux_difference,
             allow_same_timebin: self.params.allow_same_timebin,
         };

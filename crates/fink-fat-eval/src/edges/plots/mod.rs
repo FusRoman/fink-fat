@@ -50,7 +50,7 @@ pub fn edge_plots(ctx: &PipelineContext<'_>, truth: &TruthSSO, out_dir: &Utf8Pat
 
     tracing::info!("computing predictor-config diagnostics…");
     let pred_data = collect_predictor_data(ctx, truth)?;
-    let pred_params = ctx.engine_config.edges.predictor_config.clone();
+    let pred_params = ctx.engine_config.edges.predictor_config;
     plot_predictor_diagnostics(pred_data, &pred_params, out_dir)?;
 
     tracing::info!("edge plots written to {out_dir}");

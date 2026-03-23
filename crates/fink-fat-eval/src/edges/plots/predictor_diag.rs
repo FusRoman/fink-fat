@@ -273,8 +273,7 @@ fn overlay_metric(
 
     draw_overlay_histogram(
         &panels[0],
-        title,
-        x_label,
+        (title, x_label),
         &sort_finite(tp_plot.clone()),
         &sort_finite(fp_plot.clone()),
         50,
@@ -350,8 +349,7 @@ fn bin_into(edges: &[f64], values: &[f64]) -> Vec<u32> {
 
 fn draw_overlay_histogram<DB>(
     area: &DrawingArea<DB, plotters::coord::Shift>,
-    title: &str,
-    x_label: &str,
+    labels: (&str, &str),
     tp: &[f64],
     fp: &[f64],
     n_bins: usize,
@@ -362,6 +360,7 @@ where
     DB: DrawingBackend,
     DB::ErrorType: std::error::Error + Send + Sync + 'static,
 {
+    let (title, x_label) = labels;
     if tp.is_empty() && fp.is_empty() {
         return Ok(());
     }
@@ -570,7 +569,7 @@ where
     } else {
         PERCENTILE_PS
             .iter()
-            .map(|&p| (p as f64, percentile_sorted(tp, p)))
+            .map(|&p| (p, percentile_sorted(tp, p)))
             .collect()
     };
     let pvals_fp: Vec<(f64, f64)> = if fp.is_empty() {
@@ -578,7 +577,7 @@ where
     } else {
         PERCENTILE_PS
             .iter()
-            .map(|&p| (p as f64, percentile_sorted(fp, p)))
+            .map(|&p| (p, percentile_sorted(fp, p)))
             .collect()
     };
 

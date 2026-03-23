@@ -21,11 +21,12 @@
 //!    - [`HealpixBinner`] for sky partitioning,
 //!    - [`UniformTimeBinner`] for time partitioning,
 //!    - [`build_alert_bucket_index`] to build the index.
-//! 2. Generates pairs using [`pairs::generate_pairs`].
-//! 3. Generates triplets from those pairs using
-//!    [`triplets::generate_triplets_from_pairs`].
-//! 4. Extracts seed features into [`SeedNode`]s using a thread-local
-//!    [`crate::seeding::store::SeedStore`] for provisional key allocation.
+//! 2. Streams valid pairs using [`pairs::stream_pairs`].
+//! 3. Extends each accepted pair into triplets immediately using
+//!    [`triplets::stream_triplets_from_pair`].
+//! 4. Converts accepted pairs and triplets into [`SeedNode`]s using a
+//!    thread-local [`crate::seeding::store::SeedStore`] for provisional key
+//!    allocation.
 //! 5. Sorts seeds by `epoch_mid` (required by the edge builder's dichotomic search).
 //!
 //! **Sequential merge phase** — runs after all parallel tasks have completed.
@@ -69,9 +70,9 @@
 //!
 //! 1. Compute `t0` and initialize time binning.
 //! 2. Build the (space, time) bucket index.
-//! 3. Generate pairs.
-//! 4. Generate triplets and extract borrowed seed features.
-//! 5. Convert to owned seeds and insert into `seed_store`.
+//! 3. Stream pairs and extend them to triplets.
+//! 4. Convert accepted pairs and triplets into seeds.
+//! 5. Sort the seeds and insert them into `seed_store`.
 //!
 //! This design provides meaningful UI feedback without tying progress to potentially huge
 //! intermediate cardinalities (pairs/triplets) that can vary widely across nights.
@@ -158,7 +159,16 @@ struct NightSeedResult {
     n_triplets: u64,
 }
 
-/// Process one observation night: bucketize, generate pairs and triplets, extract seed features.
+struct ProcessOneNightParams<'a> {
+    spatial_binner: &'a HealpixBinner,
+    pair_cfg: &'a PairConfig,
+    triplet_cfg: &'a TripletConfig,
+    triplet_only: bool,
+    time_binner_width: f64,
+    night_sink: &'a dyn StageProgress,
+}
+
+/// Process one observation night: bucketize, stream pairs and triplets, and extract seed features.
 ///
 /// Uses a thread-local [`SeedStore`] for provisional key allocation. Resulting
 /// seeds carry placeholder keys that must be replaced with real globally-unique
@@ -171,8 +181,9 @@ struct NightSeedResult {
 /// * `spatial_binner` – Spatial partitioner for (space, time) bucket assignment.
 /// * `pair_cfg` – Pair generation configuration.
 /// * `triplet_cfg` – Triplet generation configuration.
+/// * `triplet_only` – If `true`, emit only triplet-derived seeds.
 /// * `time_binner_width` – Time bin width in days.
-/// * `night_sink` – Progress sink for the per-night sub-scope (five milestones).
+/// * `night_sink` – Progress sink for the per-night sub-scope.
 ///
 /// Return
 /// ------
@@ -183,11 +194,7 @@ struct NightSeedResult {
 fn process_one_night(
     night_id: NightId,
     alerts: &[Alert],
-    spatial_binner: &HealpixBinner,
-    pair_cfg: &PairConfig,
-    triplet_cfg: &TripletConfig,
-    time_binner_width: f64,
-    night_sink: &dyn StageProgress,
+    params: &ProcessOneNightParams<'_>,
 ) -> Result<NightSeedResult, EngineError> {
     let n_alerts = alerts.len() as u64;
 
@@ -198,50 +205,94 @@ fn process_one_night(
             "night {night_id} contains no alerts, cannot determine t0 for time binning"
         ),
     })?;
-    let time_binner = UniformTimeBinner::new(t0, time_binner_width);
-    tracing::trace!(%night_id, t0, time_binner_width, "t0 and time binner initialised");
-    night_sink.inc(1);
+    let time_binner = UniformTimeBinner::new(t0, params.time_binner_width);
+    tracing::trace!(
+        %night_id,
+        t0,
+        time_binner_width = params.time_binner_width,
+        "t0 and time binner initialised"
+    );
+    params.night_sink.inc(1);
 
     // Milestone 2: build the (space, time) bucket index.
-    let bucket_index = build_alert_bucket_index(alerts, spatial_binner, &time_binner);
+    let bucket_index = build_alert_bucket_index(alerts, params.spatial_binner, &time_binner);
     tracing::trace!(%night_id, n_buckets = bucket_index.buckets.len(), "bucket index built");
-    night_sink.inc(1);
+    params.night_sink.inc(1);
 
-    // Milestone 3: generate candidate pairs and extract pair-seed features.
-    // A thread-local SeedStore is used so that key allocation requires no
-    // shared mutable state. Keys are overwritten in finalize_night_seeds.
-    let ps = pairs::generate_pairs(&bucket_index, spatial_binner, &time_binner, pair_cfg);
-    let n_pairs = ps.len() as u64;
-    tracing::debug!(%night_id, n_pairs, "pairs generated");
+    // Milestone 3 + 4: stream pairs directly into triplet generation.
+    // This avoids materializing all pairs for dense nights.
     let mut local_store = SeedStore::new();
-    let pair_seeds = pairs::extract_pair_features(&ps, &mut local_store, night_id, None);
-    tracing::trace!(%night_id, n_pair_seeds = pair_seeds.len(), "pair features extracted");
-    night_sink.inc(1);
+    let mut all_seeds: Vec<SeedNode> = Vec::new();
 
-    // Milestone 4: generate candidate triplets and extract triplet-seed features.
-    let ts = triplets::generate_triplets_from_pairs(
+    let mut triplet_stream_state = triplets::TripletPairStreamState::default();
+
+    let mut n_triplets: u64 = 0;
+    let mut n_pair_seeds_emitted: u64 = 0;
+    let mut n_triplet_seeds_emitted: u64 = 0;
+    let mut n_pairs_with_triplet_support: u64 = 0;
+
+    let pair_stats = pairs::stream_pairs(
         &bucket_index,
-        spatial_binner,
+        params.spatial_binner,
         &time_binner,
-        triplet_cfg,
-        &ps,
+        params.pair_cfg,
+        |pair| {
+            let mut emitted_triplet_from_pair = false;
+            let trip_stats = triplets::stream_triplets_from_pair(
+                &bucket_index,
+                params.spatial_binner,
+                &time_binner,
+                params.triplet_cfg,
+                &mut triplet_stream_state,
+                pair,
+                |triplet| {
+                    emitted_triplet_from_pair = true;
+                    all_seeds.push(SeedNode::from_triplet(
+                        &mut local_store,
+                        night_id,
+                        triplet.a,
+                        triplet.b,
+                        triplet.c,
+                    ));
+                    n_triplet_seeds_emitted += 1;
+                },
+            );
+
+            n_triplets += trip_stats.n_triplets;
+
+            if emitted_triplet_from_pair {
+                n_pairs_with_triplet_support += 1;
+            } else if !params.triplet_only
+                && let Some(seed) =
+                    SeedNode::from_pair(&mut local_store, night_id, pair.a, pair.b, None)
+            {
+                all_seeds.push(seed);
+                n_pair_seeds_emitted += 1;
+            }
+        },
     );
-    let n_triplets = ts.len() as u64;
-    tracing::debug!(%night_id, n_triplets, "triplets generated");
-    let triplet_seeds = triplets::extract_triplet_features(&ts, &mut local_store, night_id);
-    tracing::trace!(%night_id, n_triplet_seeds = triplet_seeds.len(), "triplet features extracted");
-    night_sink.inc(1);
+    params.night_sink.inc(1);
+    params.night_sink.inc(1);
+
+    let n_pairs = pair_stats.n_pairs;
+
+    tracing::debug!(
+        %night_id,
+        n_pairs,
+        n_triplets,
+        n_pairs_with_triplet_support,
+        n_pair_seeds_emitted,
+        n_triplet_seeds_emitted,
+        "streamed pair->triplet generation complete"
+    );
 
     // Milestone 5: combine and sort.
     // Sorting by epoch_mid is required by the edge builder, which performs a
     // dichotomic search over right-hand nodes.
-    let mut all_seeds = Vec::with_capacity(pair_seeds.len() + triplet_seeds.len());
-    all_seeds.extend(pair_seeds);
-    all_seeds.extend(triplet_seeds);
     all_seeds.sort();
     tracing::debug!(%night_id, n_night_seeds = all_seeds.len(), "seeds combined and sorted");
-    night_sink.inc(1);
-    night_sink.finish();
+    params.night_sink.inc(1);
+    params.night_sink.finish();
 
     Ok(NightSeedResult {
         night_id,
@@ -362,6 +413,7 @@ pub fn run(
         |stage_sink| {
             let pair_cfg = &ctx.engine_config.pairs;
             let triplet_cfg = &ctx.engine_config.triplets;
+            let triplet_only = ctx.engine_config.seeding.triplet_only;
             let spatial_binner = HealpixBinner::new(ctx.engine_config.healpix_depth);
             let time_binner_width = ctx.engine_config.time_binner_width;
 
@@ -381,6 +433,7 @@ pub fn run(
             tracing::debug!(
                 n_nights = nights_to_process.len(),
                 healpix_depth = ctx.engine_config.healpix_depth,
+                triplet_only,
                 time_binner_width,
                 "BuildSeeds starting",
             );
@@ -412,15 +465,15 @@ pub fn run(
                         total: Some(5),
                     });
                     tracing::debug!(%night_id, n_alerts = alerts.len(), "processing night");
-                    process_one_night(
-                        night_id,
-                        alerts,
-                        &spatial_binner,
+                    let params = ProcessOneNightParams {
+                        spatial_binner: &spatial_binner,
                         pair_cfg,
                         triplet_cfg,
+                        triplet_only,
                         time_binner_width,
-                        &*night_sink,
-                    )
+                        night_sink: &*night_sink,
+                    };
+                    process_one_night(night_id, alerts, &params)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 

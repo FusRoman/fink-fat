@@ -428,27 +428,18 @@ mod track_id_tests {
     /// The seed-building code (`SeedNode::from_pair`) requires plausible values
     /// for position/time; we keep everything simple and deterministic.
     fn make_alert(key: AlertKey, mjd_tt: f64, ra_rad: f64, dec_rad: f64, band: u8) -> Alert {
-        let mut a = Alert::default();
-
-        // Epoch (your Alert uses `mjd_tt: MJDTT`; in your current code it behaves like f64).
-        a.mjd_tt = mjd_tt;
-
-        // Angles: use `.into()` to support both `type Radian = f64` and `struct Radian(f64)`.
-        a.ra = ra_rad.into();
-        a.dec = dec_rad.into();
-
-        // Uncertainties (only required to satisfy invariants if used by modeling)
-        a.ra_err = 1.0.into();
-        a.dec_err = 1.0.into();
-
-        // Photometry (not used by track_id but seed construction might carry it)
-        a.flux = 1000.0;
-        a.flux_err = 10.0;
-        a.band = band;
-
-        // dia_source_id / key can stay default for these tests
-        a.key = key;
-        a
+        Alert {
+            mjd_tt,
+            ra: ra_rad,
+            dec: dec_rad,
+            ra_err: 1.0,
+            dec_err: 1.0,
+            flux: 1000.0,
+            flux_err: 10.0,
+            band,
+            key,
+            ..Alert::default()
+        }
     }
 
     /// Build one seed from a pair of alerts using the production constructor.
@@ -711,7 +702,7 @@ mod track_id_tests {
         assert!(id.starts_with("TRK2026"));
         let suffix = &id["TRK2026".len()..];
         assert_eq!(suffix.len(), 12);
-        assert!(suffix.chars().all(|c| ('a'..='z').contains(&c)));
+        assert!(suffix.chars().all(|c: char| c.is_ascii_lowercase()));
     }
 
     #[test]

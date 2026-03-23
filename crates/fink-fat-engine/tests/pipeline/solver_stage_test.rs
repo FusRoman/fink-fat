@@ -209,7 +209,7 @@ fn solver_recovers_main_belt_trajectories() {
     // Match ground truth to hypotheses.
     let matches = match_truth_to_hypotheses(
         &ground_truth,
-        &hypotheses,
+        hypotheses,
         &runtime_state.alert_store,
         &runtime_state.seed_store,
     );
@@ -305,7 +305,7 @@ fn solver_handles_diverse_populations() {
     // ---- 4) Check ground-truth recovery per population ----
     let matches = match_truth_to_hypotheses(
         &ground_truth,
-        &hypotheses,
+        hypotheses,
         &runtime_state.alert_store,
         &runtime_state.seed_store,
     );
@@ -582,7 +582,7 @@ fn solver_all_five_populations() {
     // ---- 3) Compute recovery statistics ----
     let matches = match_truth_to_hypotheses(
         &ground_truth,
-        &hypotheses,
+        hypotheses,
         &runtime_state.alert_store,
         &runtime_state.seed_store,
     );
@@ -873,7 +873,7 @@ fn incremental_recovers_mba_trajectories() {
 
     let matches = match_truth_to_hypotheses(
         &ground_truth,
-        &hypotheses,
+        hypotheses,
         &runtime_state.alert_store,
         &runtime_state.seed_store,
     );
@@ -963,7 +963,7 @@ fn incremental_diverse_populations() {
 
     let matches = match_truth_to_hypotheses(
         &ground_truth,
-        &hypotheses,
+        hypotheses,
         &runtime_state.alert_store,
         &runtime_state.seed_store,
     );
@@ -1165,7 +1165,7 @@ fn incremental_all_five_populations() {
     // Recovery statistics.
     let matches = match_truth_to_hypotheses(
         &ground_truth,
-        &hypotheses,
+        hypotheses,
         &runtime_state.alert_store,
         &runtime_state.seed_store,
     );

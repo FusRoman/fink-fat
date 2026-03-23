@@ -889,6 +889,7 @@ mod edge_feature_tests {
     }
 
     /// Build a SeedNode from two alerts using the public `from_pair` constructor.
+    #[allow(clippy::too_many_arguments)]
     fn make_seed_from_pair(
         store: &mut SeedStore,
         night: u32,

@@ -584,7 +584,8 @@ mod tangent_plane_tests {
         let epoch_mid = 60000.0;
         let pos = [0.1, -0.1];
         let vel = [4e-3, 3e-3];
-        let acc = Some([1e-3, -5e-4]); // large to be measurable in test
+        let acc_xy = [1e-3, -5e-4]; // large to be measurable in test
+        let acc = Some(acc_xy);
         let cov_pos = [[1e-6, 0.0], [0.0, 2e-6]];
         let cov_vel = [[1e-8, 0.0], [0.0, 3e-8]];
         let m = TangentPlaneModel::new(
@@ -600,8 +601,8 @@ mod tangent_plane_tests {
         let dt = 0.5;
         let (p, cov) = m.predict_on_plane(epoch_mid + dt, &noise);
 
-        let px_expected = pos[0] + vel[0] * dt + 0.5 * acc.unwrap()[0] * dt * dt;
-        let py_expected = pos[1] + vel[1] * dt + 0.5 * acc.unwrap()[1] * dt * dt;
+        let px_expected = pos[0] + vel[0] * dt + 0.5 * acc_xy[0] * dt * dt;
+        let py_expected = pos[1] + vel[1] * dt + 0.5 * acc_xy[1] * dt * dt;
         assert!(abs_diff_eq!(p[0], px_expected, epsilon = 1e-15));
         assert!(abs_diff_eq!(p[1], py_expected, epsilon = 1e-15));
 

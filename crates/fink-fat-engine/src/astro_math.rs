@@ -1002,7 +1002,7 @@ mod astro_math_tests {
         for x in test_values {
             let y = wrap_pm_pi(x);
             assert!(
-                y >= -PI - 1e-12 && y < PI + 1e-12,
+                (-PI - 1e-12..PI + 1e-12).contains(&y),
                 "wrap_pm_pi({x}) = {y} is not in [-π, π)"
             );
         }
@@ -1262,7 +1262,7 @@ mod astro_math_tests {
             for &(lon1, lat1, lon2, lat2) in cases {
                 let d = angular_separation_vincenty(lon1, lat1, lon2, lat2);
                 assert!(
-                    d >= 0.0 - 1e-15 && d <= PI + 1e-15,
+                    (0.0 - 1e-15..=PI + 1e-15).contains(&d),
                     "separation must be in [0, π], got {d}"
                 );
             }
@@ -1857,7 +1857,7 @@ mod astro_math_tests {
             fn prop_clamp_unit_bounds(x in any::<f64>()) {
                 let y = clamp_unit(x);
                 prop_assert!(y.is_finite());
-                prop_assert!(y >= -1.0 && y <= 1.0);
+                prop_assert!((-1.0..=1.0).contains(&y));
             }
 
             #[test]

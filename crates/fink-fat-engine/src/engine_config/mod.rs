@@ -173,6 +173,7 @@ pub mod log_level;
 pub mod pair_config;
 pub mod pipeline_policy;
 pub mod propagator_config;
+pub mod seeding_config;
 pub mod solver_config;
 pub mod triplet_config;
 pub mod units;
@@ -185,8 +186,8 @@ use crate::{
     MJDTT,
     engine_config::{
         edge_config::EdgeConfig, error::ConfigError, log_level::LogLevel, pair_config::PairConfig,
-        pipeline_policy::PersistPolicy, solver_config::SolverConfig, triplet_config::TripletConfig,
-        units::de_time_days,
+        pipeline_policy::PersistPolicy, seeding_config::SeedingConfig, solver_config::SolverConfig,
+        triplet_config::TripletConfig, units::de_time_days,
     },
     persistence::compression::Compression,
 };
@@ -229,6 +230,9 @@ pub struct EngineConfig {
 
     /// Intra-night triplet generation configuration.
     pub triplets: TripletConfig,
+
+    /// Seeding emission policy.
+    pub seeding: SeedingConfig,
 
     /// Inter-night edge construction configuration.
     pub edges: EdgeConfig,
@@ -364,6 +368,7 @@ impl Default for EngineConfig {
             version: 1,
             pairs: PairConfig::default(),
             triplets: TripletConfig::default(),
+            seeding: SeedingConfig::default(),
             edges: EdgeConfig::default(),
             solver_config: SolverConfig::default(),
             max_gap_nights: 3,
@@ -825,7 +830,7 @@ edges:
 
         assert_relative_eq!(cfg.pairs.max_dt, 0.05, epsilon = 1e-15);
         assert_eq!(cfg.edges.top_k_per_left, Some(42));
-        assert_eq!(cfg.pairs.allow_same_timebin, false);
+        assert!(!cfg.pairs.allow_same_timebin);
     }
 
     #[test]
@@ -958,7 +963,7 @@ pairs:
         #![proptest_config(ProptestConfig { cases: 64, .. ProptestConfig::default() })]
 
         #[test]
-        fn prop_units_minutes_to_days_pairs_max_dt(minutes in 0u32..(10_000u32)) {
+        fn prop_units_minutes_to_days_pairs_max_dt(minutes in 0u32..10_000u32) {
             let minutes_f = minutes as f64;
 
             let yaml = format!(r#"
@@ -975,7 +980,7 @@ pairs:
         }
 
         #[test]
-        fn prop_units_arcsec_per_hour_to_rad_per_day_pairs_max_angular_speed(arcsec_per_hour in 0u32..(50_000u32)) {
+        fn prop_units_arcsec_per_hour_to_rad_per_day_pairs_max_angular_speed(arcsec_per_hour in 0u32..50_000u32) {
             let x = arcsec_per_hour as f64;
 
             let yaml = format!(r#"
@@ -991,12 +996,12 @@ pairs:
         }
 
         #[test]
-        fn prop_units_arcmin_to_rad_triplets_max_pair_sep(arcmin in 0u32..(60_000u32)) {
+        fn prop_units_arcmin_to_rad_triplets_max_pair_sep(arcmin in 0u32..60_000u32) {
             let arcmin_f = arcmin as f64;
 
             // Ensure config remains valid by also setting residual <= pair_sep.
             // We use half the sep (integer division ok).
-            let residual_arcmin = (arcmin / 2) as u32;
+            let residual_arcmin = arcmin / 2;
 
             let yaml = format!(r#"
 version: 1

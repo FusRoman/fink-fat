@@ -9,6 +9,12 @@
 //! cadence-aware constraints before any heavier downstream processing
 //! (triplet building, seed fitting, graph edges, ML, etc.).
 //!
+//! Motion gating
+//! -------------
+//! In addition to the upper bound on angular speed, pair generation can apply
+//! a lower bound on apparent motion via `PairConfig::min_motion`. This rejects
+//! quasi-stationary links while preserving genuinely moving candidates.
+//!
 //! Key constraints
 //! ---------------
 //! For each candidate pair `(a, b)`:
@@ -16,6 +22,7 @@
 //! - **Maximum time separation:** `t_b - t_a ≤ max_dt`
 //! - **Flux similarity:** `|flux_a - flux_b| ≤ max_flux_difference`
 //! - **Angular-speed constraint:** `angular_separation_vincenty(a, b) / (t_b - t_a) ≤ max_angular_speed`
+//! - **Minimum apparent motion:** `angular_separation_vincenty(a, b) / (t_b - t_a) ≥ min_motion`
 //!
 //! The angular-speed constraint is implemented via a dot-product threshold
 //! (no `acos`):
@@ -91,6 +98,16 @@ pub struct Pair<'alert_lf> {
 
 /// Convenience alias: a flat list of time-ordered detection pairs.
 pub type Pairs<'alert_lf> = Vec<Pair<'alert_lf>>;
+
+/// Runtime counters for pair generation.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PairGenerationStats {
+    pub n_pairs: u64,
+    pub n_rejected_flux: u64,
+    pub n_rejected_speed: u64,
+    pub n_rejected_min_motion: u64,
+    pub n_dedup_skipped: u64,
+}
 
 /// Cached spatial neighbors for a given `SpatialKey`.
 ///
@@ -211,8 +228,6 @@ fn lower_bound_gt_time(members: &[&Alert], t0: f64) -> usize {
 
 /// Generate all valid `(a, b)` pairs according to [`PairConfig`].
 ///
-/// Overview
-/// --------
 /// The algorithm is designed to be simple and fast:
 /// - iterate anchor buckets and anchor alerts `a`,
 /// - enumerate nearby buckets using cached spatial neighbors + cached time targets,
@@ -222,26 +237,24 @@ fn lower_bound_gt_time(members: &[&Alert], t0: f64) -> usize {
 ///   - apply flux and angular-speed constraints,
 ///   - deduplicate by `(ptr(a), ptr(b))`.
 ///
-/// Parameters
-/// ----------
-/// bucket_index : &BucketIndex<&Alert>
-///     Spatio-temporal bucket index holding alerts.
-///     Each bucket’s `members` must be sorted by time (`mjd_tt`).
-/// spatial_binner : &impl SpatialBinner
-///     Spatial discretization backend used to build neighbor sets.
-/// time_binner : &impl TimeBinner
-///     Time discretization backend used to map `max_dt` to candidate time bins.
-/// config : &PairConfig
-///     Pair-generation parameters:
-///     - `max_dt` (days)
-///     - `max_angular_speed` (rad/day)
-///     - `max_flux_difference` (flux units)
-///     - `allow_same_timebin` (bool)
+/// Arguments
+/// ---------
+/// * `bucket_index` – Spatio-temporal bucket index holding alerts. Each
+///   bucket’s `members` must be sorted by time (`mjd_tt`).
+/// * `spatial_binner` – Spatial discretization backend used to build neighbor
+///   sets.
+/// * `time_binner` – Time discretization backend used to map `max_dt` to
+///   candidate time bins.
+/// * `config` – Pair-generation parameters:
+///   - `max_dt` (days),
+///   - `max_angular_speed` (rad/day),
+///   - `min_motion` (rad/day),
+///   - `max_flux_difference` (flux units),
+///   - `allow_same_timebin` (bool).
 ///
-/// Returns
-/// -------
-/// Pairs
-///     A deterministic, time-ordered list of unique pairs `(a, b)`.
+/// Return
+/// ------
+/// `Pairs` – A deterministic, time-ordered list of unique pairs `(a, b)`.
 ///
 /// Implementation details
 /// ---------------------
@@ -290,6 +303,46 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
     time_binner: &Bt,
     config: &PairConfig,
 ) -> Pairs<'alert_lf> {
+    let mut out: Pairs<'alert_lf> = Vec::new();
+    let _stats = stream_pairs(bucket_index, spatial_binner, time_binner, config, |pair| {
+        out.push(pair);
+    });
+
+    // Deterministic ordering (handy for tests / reproducibility)
+    out.sort_unstable_by(|p1, p2| p1.a.cmp(p2.a).then_with(|| p1.b.cmp(p2.b)));
+
+    out
+}
+
+/// Stream valid `(a, b)` pairs according to [`PairConfig`].
+///
+/// This avoids materializing the full pair vector and is intended for
+/// downstream consumers that can process pairs online.
+///
+/// Arguments
+/// ---------
+/// * `bucket_index` – Spatio-temporal bucket index holding alerts.
+/// * `spatial_binner` – Spatial discretization backend used to build neighbor
+///   sets.
+/// * `time_binner` – Time discretization backend used to map `max_dt` to
+///   candidate time bins.
+/// * `config` – Pair-generation parameters controlling the candidate search.
+/// * `on_pair` – Callback invoked once for each accepted pair.
+///
+/// Return
+/// ------
+/// `PairGenerationStats` – Counters describing accepted pairs and rejection
+/// reasons.
+pub fn stream_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner, F>(
+    bucket_index: &BucketIndex<&'alert_lf Alert>,
+    spatial_binner: &Bs,
+    time_binner: &Bt,
+    config: &PairConfig,
+    mut on_pair: F,
+) -> PairGenerationStats
+where
+    F: FnMut(Pair<'alert_lf>),
+{
     // Spatial search radius: cap + cell radius.
     let sep_cap = (config.max_angular_speed * config.max_dt).max(0.0);
     let spatial_search_radius = sep_cap + spatial_binner.cell_radius();
@@ -298,6 +351,7 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
         n_buckets = bucket_index.buckets.len(),
         max_dt = config.max_dt,
         max_angular_speed = config.max_angular_speed,
+        min_motion = config.min_motion,
         max_flux_difference = config.max_flux_difference,
         allow_same_timebin = config.allow_same_timebin,
         sep_cap,
@@ -311,15 +365,17 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
     // Deduplicate pairs created through overlapping neighbor scans.
     // Key is (ptr(a), ptr(b)).
     let mut seen: AHashSet<(usize, usize)> = AHashSet::new();
-
-    let mut out: Pairs<'alert_lf> = Vec::new();
-
-    // Rejection counters (reported at DEBUG level at the end).
-    let mut n_rejected_flux: u64 = 0;
-    let mut n_rejected_speed: u64 = 0;
-    let mut n_dedup_skipped: u64 = 0;
+    let mut stats = PairGenerationStats::default();
 
     for (bucket_key, bucket) in &bucket_index.buckets {
+        tracing::trace!(
+            space_key = ?bucket_key.space_key,
+            time_bin = ?bucket_key.time_bin,
+            n_members = bucket.members.len(),
+            n_seen = seen.len(),
+            "processing anchor bucket",
+        );
+
         let spatial_neighbors = cached_spatial_neighbors(
             &mut spatial_neighbor_cache,
             spatial_binner,
@@ -371,27 +427,38 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
 
                         // Flux similarity
                         if (flux_a - b.flux).abs() > config.max_flux_difference {
-                            n_rejected_flux += 1;
+                            stats.n_rejected_flux += 1;
                             continue;
                         }
 
-                        // Angular-speed constraint via dot product
+                        // Angular-speed constraints via dot product
                         let dt = t_b - t_a; // dt > 0
-                        let max_sep_dt = (config.max_angular_speed * dt).min(core::f64::consts::PI);
-                        let cos_thresh = max_sep_dt.cos();
-
                         let u_b = unit_vec(b.ra, b.dec);
-                        if dot3(u_a, u_b) < cos_thresh {
-                            n_rejected_speed += 1;
+                        let cos_sep = dot3(u_a, u_b);
+
+                        let max_sep_dt = (config.max_angular_speed * dt).min(core::f64::consts::PI);
+                        let cos_max_thresh = max_sep_dt.cos();
+                        if cos_sep < cos_max_thresh {
+                            stats.n_rejected_speed += 1;
                             continue;
                         }
 
-                        // Dedup + push
+                        if config.min_motion > 0.0 {
+                            let min_sep_dt = (config.min_motion * dt).min(core::f64::consts::PI);
+                            let cos_min_thresh = min_sep_dt.cos();
+                            if cos_sep > cos_min_thresh {
+                                stats.n_rejected_min_motion += 1;
+                                continue;
+                            }
+                        }
+
+                        // Dedup + emit
                         let key = (a as *const Alert as usize, b as *const Alert as usize);
                         if seen.insert(key) {
-                            out.push(Pair { a, b });
+                            stats.n_pairs += 1;
+                            on_pair(Pair { a, b });
                         } else {
-                            n_dedup_skipped += 1;
+                            stats.n_dedup_skipped += 1;
                         }
                     }
                 }
@@ -399,18 +466,16 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
         }
     }
 
-    // Deterministic ordering (handy for tests / reproducibility)
-    out.sort_unstable_by(|p1, p2| p1.a.cmp(p2.a).then_with(|| p1.b.cmp(p2.b)));
-
     tracing::debug!(
-        n_pairs = out.len(),
-        n_rejected_flux,
-        n_rejected_speed,
-        n_dedup_skipped,
+        n_pairs = stats.n_pairs,
+        n_rejected_flux = stats.n_rejected_flux,
+        n_rejected_speed = stats.n_rejected_speed,
+        n_rejected_min_motion = stats.n_rejected_min_motion,
+        n_dedup_skipped = stats.n_dedup_skipped,
         "generate_pairs complete",
     );
 
-    out
+    stats
 }
 
 /// Convert a list of valid detection pairs into intra-night [`SeedNode`] objects.
@@ -531,6 +596,7 @@ mod pair_gen_tests {
         let config = PairConfig {
             max_dt,
             max_angular_speed: omega,
+            min_motion: 0.0,
             allow_same_timebin: false,
             max_flux_difference: 10.0,
         };
@@ -578,6 +644,7 @@ mod pair_gen_tests {
         let config_no_same = PairConfig {
             max_dt,
             max_angular_speed: omega,
+            min_motion: 0.0,
             allow_same_timebin: false,
             max_flux_difference: 10.0,
         };
@@ -593,6 +660,7 @@ mod pair_gen_tests {
         let config_same = PairConfig {
             max_dt,
             max_angular_speed: omega,
+            min_motion: 0.0,
             allow_same_timebin: true,
             max_flux_difference: 10.0,
         };
@@ -647,6 +715,7 @@ mod pair_gen_tests {
         let config = PairConfig {
             max_dt: 15.0 / 1440.0,
             max_angular_speed: omega,
+            min_motion: 0.0,
             allow_same_timebin: true,
             max_flux_difference: 1e6,
         };
@@ -671,6 +740,49 @@ mod pair_gen_tests {
                 config.max_angular_speed
             );
         }
+    }
+
+    /// Pairs below the configured minimum apparent motion must be rejected.
+    #[test]
+    fn pairs_min_motion_rejects_quasi_stationary() {
+        let spatial_binner = HealpixBinner::new(8);
+        let time_binner = UniformTimeBinner::new(60000.0, 10.0 / 1440.0);
+
+        let t0 = 60000.0;
+        let dec0 = 0.2;
+
+        // Slow motion: ~1 arcsec over 10 minutes.
+        let a0 = mk_alert(0, 1.0, dec0, t0, 1, 1000.0);
+        let a1 = mk_alert(
+            1,
+            1.0 + arcsec_to_rad(1.0) / dec0.cos(),
+            dec0,
+            t0 + 10.0 / 1440.0,
+            1,
+            1000.0,
+        );
+
+        let alerts = vec![a0, a1];
+        let bucket_index = build_alert_bucket_index(&alerts, &spatial_binner, &time_binner);
+
+        let max_dt = 15.0 / 1440.0;
+        let max_sep = arcsec_to_rad(20.0);
+        let omega_max = max_sep / max_dt;
+        let min_motion = arcsec_to_rad(30.0) / max_dt;
+
+        let config = PairConfig {
+            max_dt,
+            max_angular_speed: omega_max,
+            min_motion,
+            allow_same_timebin: true,
+            max_flux_difference: 10.0,
+        };
+
+        let pairs = generate_pairs(&bucket_index, &spatial_binner, &time_binner, &config);
+        assert!(
+            pairs.is_empty(),
+            "slow quasi-stationary pair should be rejected"
+        );
     }
 
     /// Check that duplicates are removed when the same pair can be discovered
@@ -711,6 +823,7 @@ mod pair_gen_tests {
         let config = PairConfig {
             max_dt,
             max_angular_speed: omega,
+            min_motion: 0.0,
             allow_same_timebin: true,
             max_flux_difference: 10.0,
         };
@@ -753,6 +866,7 @@ mod pair_gen_tests {
         let config = PairConfig {
             max_dt,
             max_angular_speed: omega,
+            min_motion: 0.0,
             allow_same_timebin: true,
             max_flux_difference: 100.0,
         };
@@ -818,6 +932,7 @@ mod pair_gen_tests {
                 let config = PairConfig {
                     max_dt,
                     max_angular_speed: omega,
+                    min_motion: 0.0,
                     allow_same_timebin: false,
                     max_flux_difference: 1e6,
                 };
@@ -897,7 +1012,7 @@ mod pair_gen_tests {
             1002.0,
         );
 
-        let alerts = vec![a, b, c];
+        let alerts = [a, b, c];
 
         // Build pairs explicitly (refs).
         let pairs = vec![

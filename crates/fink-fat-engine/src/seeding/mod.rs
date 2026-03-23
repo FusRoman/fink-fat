@@ -828,7 +828,7 @@ mod seed_node_tests {
         let dr = arcsec_to_rad(6.0) / dec.cos();
 
         // IMPORTANT: store alerts in a vec so their references live long enough.
-        let alerts = vec![
+        let alerts = [
             mk_alert(0, 1.0, dec, t0, 1, 1000.0),
             mk_alert(1, 1.0 + dr, dec, t0 + 10.0 / 1440.0, 1, 1002.0),
         ];
@@ -866,7 +866,7 @@ mod seed_node_tests {
         let slow_sep = arcsec_to_rad(5.0) / dec.cos();
         let fast_sep = arcsec_to_rad(200.0) / dec.cos();
 
-        let alerts = vec![
+        let alerts = [
             mk_alert(0, 2.0, dec, t0, 1, 1000.0),
             mk_alert(1, 2.0 + slow_sep, dec, t0 + 5.0 / 1440.0, 1, 1000.0),
             mk_alert(2, 2.0 + fast_sep, dec, t0 + 5.0 / 1440.0, 1, 1000.0),
@@ -898,7 +898,7 @@ mod seed_node_tests {
         let dec: f64 = 0.3;
         let dr = arcsec_to_rad(6.0) / dec.cos();
 
-        let alerts = vec![
+        let alerts = [
             mk_alert(0, 1.0, dec, t0, 1, 1000.0),
             mk_alert(1, 1.0 + dr, dec, t0 + 10.0 / 1440.0, 1, 1001.0),
             mk_alert(2, 1.0 + 2.0 * dr, dec, t0 + 20.0 / 1440.0, 1, 1002.0),
@@ -926,7 +926,7 @@ mod seed_node_tests {
         let dec: f64 = 0.25;
         let dr = arcsec_to_rad(8.0) / dec.cos();
 
-        let alerts = vec![
+        let alerts = [
             mk_alert(0, 2.0, dec, t0, 1, 1000.0),
             mk_alert(1, 2.0 + dr, dec, t0 + 10.0 / 1440.0, 1, 1000.0),
         ];
@@ -962,7 +962,7 @@ mod seed_node_tests {
         let dr = arcsec_to_rad(6.0) / dec.cos();
 
         // alerts live in this vec
-        let alerts = vec![
+        let alerts = [
             mk_alert(0, 1.0, dec, t0, 1, 1000.0),
             mk_alert(1, 1.0 + dr, dec, t0 + 5.0 / 1440.0, 1, 1001.0),
             mk_alert(2, 1.0 + 2.0 * dr, dec, t0 + 10.0 / 1440.0, 1, 1002.0),

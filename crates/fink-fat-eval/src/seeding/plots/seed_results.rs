@@ -283,7 +283,7 @@ fn configure_night_mesh(chart: &mut NightChart<'_, '_>, rows: &[NightResultRow])
         .y_desc("count")
         .x_label_formatter(&|x| {
             let i = x.round() as usize;
-            if i < rows.len() && i % label_step == 0 {
+            if i < rows.len() && i.is_multiple_of(label_step) {
                 rows[i].label.clone()
             } else {
                 String::new()

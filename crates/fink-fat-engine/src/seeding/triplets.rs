@@ -83,6 +83,23 @@ pub struct Triplet<'alert_lf> {
 /// Convenience alias: a flat list of triplets.
 pub type Triplets<'alert_lf> = Vec<Triplet<'alert_lf>>;
 
+/// Runtime counters for triplet generation from streamed pairs.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TripletGenerationStats {
+    pub n_triplets: u64,
+    pub n_skipped_time_order: u64,
+    pub n_rejected_flux: u64,
+    pub n_rejected_angular: u64,
+    pub n_rejected_residual: u64,
+    pub n_dedup_skipped: u64,
+}
+
+#[derive(Default)]
+pub struct TripletPairStreamState {
+    spatial_neighbor_cache: AHashMap<SpatialKey, Vec<SpatialKey>>,
+    timebin_target_cache: AHashMap<TimeBin, Vec<TimeBin>>,
+}
+
 /* ------------------------- neighbor caches ------------------------- */
 
 /// Cached spatial neighbor cells around a given `SpatialKey`.
@@ -162,45 +179,34 @@ fn lower_bound_gt_time(members: &[&Alert], t0: f64) -> usize {
 /// Generate triplets `(a, b, c)` from precomputed pairs `(a, b)` using a fast
 /// short-baseline linear motion consistency test.
 ///
-/// This is a candidate-generation stage (prefilter). It trades exactness for
-/// speed and recall, and is expected to output some false positives that will
-/// be rejected later by seed fitting / scoring.
+/// This is a candidate-generation stage. It trades exactness for speed and
+/// recall, and it may emit false positives that are rejected later by seed
+/// fitting or scoring.
 ///
-/// Algorithm (per pair)
-/// --------------------
 /// For each input pair `(a, b)`:
-/// 1. Ensure time validity (`dt_ab > 0`) and optional strict ordering.
-/// 2. Fit a **linear tangent-plane motion model** from `(a, b)` around `a`.
+/// 1. Enforce time ordering when requested.
+/// 2. Fit a linear tangent-plane motion model from `(a, b)` around `a`.
 /// 3. Search candidate detections `c` in neighboring spatio-temporal buckets
-///    around `b` (spatial cover + time bins strictly after `b`).
-/// 4. Apply cheap gates:
-///    - flux similarity between `b` and `c`,
-///    - angular separation constraint on `(b, c)` using dot-product threshold.
-/// 5. Apply a linear prediction residual test:
-///    - predict `(ra, dec)` at `t_c` from the `(a, b)` model,
-///    - compare predicted vs actual `c` in a tangent-plane offset around `a`,
-///    - keep if `resid <= max_predicted_residual`.
+///    around `b`.
+/// 4. Apply flux and angular consistency gates on `(b, c)`.
+/// 5. Apply a linear prediction residual test around `a`.
 /// 6. Deduplicate `(a, b, c)` by pointer identity and push to output.
 ///
-/// Parameters
-/// ----------
-/// index : &BucketIndex<&Alert>
-///     Spatio-temporal bucket index over alerts. Bucket members must be sorted
-///     by time (as built by `build_alert_bucket_index`).
-/// sb : &impl SpatialBinner
-///     Spatial binner used to compute neighbor cells around `b`.
-/// tb : &impl TimeBinner
-///     Time binner used to select time bins strictly after `b`.
-/// cfg : &TripletConfig
-///     Triplet-generation parameters (time window, spatial radius, flux gate,
-///     pair angular gate, prediction residual threshold, etc.).
-/// pairs : &[Pair]
-///     Precomputed valid pairs `(a, b)` from which triplets are extended.
+/// Arguments
+/// ---------
+/// * `index` – Spatio-temporal bucket index over alerts. Bucket members must
+///   be sorted by time.
+/// * `sb` – Spatial binner used to compute neighbor cells around `b`.
+/// * `tb` – Time binner used to select time bins strictly after `b`.
+/// * `cfg` – Triplet-generation parameters controlling time window, spatial
+///   radius, flux gate, angular gate, and prediction residual threshold.
+/// * `pairs` – Precomputed valid pairs `(a, b)` from which triplets are
+///   extended.
 ///
-/// Returns
-/// -------
-/// Triplets
-///     Deduplicated, deterministically sorted list of `(a, b, c)` triplets.
+/// Return
+/// ------
+/// `Triplets` – Deduplicated, deterministically sorted list of `(a, b, c)`
+/// triplets.
 ///
 /// Notes
 /// -----
@@ -220,9 +226,6 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
     // Search radius around `b` buckets: max allowed (b,c) separation + one cell radius padding.
     let search_radius = cfg.max_pair_sep + sb.cell_radius();
 
-    // Dot-product threshold for ang_sep(b,c) <= max_pair_sep.
-    let cos_pair_threshold = cfg.max_pair_sep.cos();
-
     tracing::debug!(
         n_input_pairs = pairs.len(),
         max_dt_between = cfg.max_dt_between,
@@ -234,134 +237,29 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
         "generate_triplets_from_pairs starting",
     );
 
-    let mut spatial_neighbor_cache: AHashMap<SpatialKey, Vec<SpatialKey>> = AHashMap::new();
-    let mut timebin_target_cache: AHashMap<TimeBin, Vec<TimeBin>> = AHashMap::new();
+    let mut stream_state = TripletPairStreamState::default();
 
     let mut out: Triplets<'alert_lf> = Vec::with_capacity(pairs.len() / 2);
 
-    // Dedup because a triplet may be discovered through different (space,time) neighbor paths.
-    let mut seen: AHashSet<(usize, usize, usize)> = AHashSet::new();
-
-    // Rejection counters.
-    let mut n_skipped_time_order: u64 = 0;
-    let mut n_rejected_flux: u64 = 0;
-    let mut n_rejected_angular: u64 = 0;
-    let mut n_rejected_residual: u64 = 0;
-    let mut n_dedup_skipped: u64 = 0;
+    let mut stats = TripletGenerationStats::default();
 
     for &Pair { a, b } in pairs {
-        // Optional enforcement: require strict ordering on the input pairs.
-        if cfg.enforce_time_order && a.mjd_tt >= b.mjd_tt {
-            n_skipped_time_order += 1;
-            continue;
-        }
+        let pair_stats = stream_triplets_from_pair(
+            index,
+            sb,
+            tb,
+            cfg,
+            &mut stream_state,
+            Pair { a, b },
+            |triplet| out.push(triplet),
+        );
 
-        // We predict from (a,b), so dt_ab must be strictly positive.
-        let dt_ab = b.mjd_tt - a.mjd_tt;
-        if dt_ab <= 0.0 {
-            continue;
-        }
-
-        // Linear motion estimate from (a,b) on a tangent plane around `a`.
-        let cos_dec_a = a.dec.cos();
-        let (dx_ab, dy_ab) = planar_offset_fast(a.ra, a.dec, cos_dec_a, b.ra, b.dec);
-        let vx = dx_ab / dt_ab; // rad/day on tangent plane (x)
-        let vy = dy_ab / dt_ab; // rad/day on tangent plane (y)
-
-        // Precompute values reused across candidate `c`.
-        let u_b = unit_vec(b.ra, b.dec);
-        let flux_b = b.flux;
-
-        // Neighbor bucket keys around `b`.
-        let b_space_key = sb.key_for(b.ra, b.dec);
-        let b_time_bin = tb.bin_for(b.mjd_tt);
-
-        let spatial_neighbors =
-            cached_spatial_neighbors(&mut spatial_neighbor_cache, sb, b_space_key, search_radius);
-
-        let time_bins =
-            cached_time_targets_strictly_after(&mut timebin_target_cache, tb, b_time_bin, cfg);
-
-        let t_b = b.mjd_tt;
-        let t_upper = t_b + cfg.max_dt_between;
-
-        // Scan candidate buckets (time bins strictly after b).
-        for &time_bin in time_bins {
-            for &space_key in spatial_neighbors {
-                let Some(bucket) = index.buckets.get(&BucketKey {
-                    space_key,
-                    time_bin,
-                }) else {
-                    continue;
-                };
-
-                let members = bucket.members.as_slice(); // sorted by time
-                let mut idx = lower_bound_gt_time(members, t_b);
-
-                while idx < members.len() {
-                    let c = members[idx];
-                    idx += 1;
-
-                    let t_c = c.mjd_tt;
-                    if t_c > t_upper {
-                        break;
-                    }
-
-                    // Ensure distinct detections by reference identity.
-                    if core::ptr::eq(c, a) || core::ptr::eq(c, b) {
-                        continue;
-                    }
-
-                    // Flux similarity between b and c.
-                    if (flux_b - c.flux).abs() > cfg.max_flux_difference {
-                        n_rejected_flux += 1;
-                        continue;
-                    }
-
-                    // Pairwise angular consistency: ang_sep(b,c) <= max_pair_sep
-                    let u_c = unit_vec(c.ra, c.dec);
-                    if dot3(u_b, u_c) < cos_pair_threshold {
-                        n_rejected_angular += 1;
-                        continue;
-                    }
-
-                    // Predict from (a,b) to epoch t_c.
-                    let dt_ac = t_c - a.mjd_tt;
-                    if dt_ac <= 0.0 {
-                        continue;
-                    }
-
-                    // Predicted RA/Dec at t_c (small-angle approximation around `a`):
-                    // - vx is tangent-plane x where dx ~ cos(dec_a) * dRA,
-                    // - so dRA_pred ~ vx * dt / cos(dec_a).
-                    let ra_pred = a.ra + vx * dt_ac / cos_dec_a.max(1e-12);
-                    let dec_pred = a.dec + vy * dt_ac;
-
-                    // Compare predicted vs actual c on the tangent plane around `a`.
-                    let (dx_act, dy_act) = planar_offset_fast(a.ra, a.dec, cos_dec_a, c.ra, c.dec);
-                    let (dx_pred, dy_pred) =
-                        planar_offset_fast(a.ra, a.dec, cos_dec_a, ra_pred, dec_pred);
-
-                    let resid = ((dx_act - dx_pred).powi(2) + (dy_act - dy_pred).powi(2)).sqrt();
-                    if resid > cfg.max_predicted_residual {
-                        n_rejected_residual += 1;
-                        continue;
-                    }
-
-                    // Dedup + push.
-                    let key = (
-                        a as *const Alert as usize,
-                        b as *const Alert as usize,
-                        c as *const Alert as usize,
-                    );
-                    if seen.insert(key) {
-                        out.push(Triplet { a, b, c });
-                    } else {
-                        n_dedup_skipped += 1;
-                    }
-                }
-            }
-        }
+        stats.n_triplets += pair_stats.n_triplets;
+        stats.n_skipped_time_order += pair_stats.n_skipped_time_order;
+        stats.n_rejected_flux += pair_stats.n_rejected_flux;
+        stats.n_rejected_angular += pair_stats.n_rejected_angular;
+        stats.n_rejected_residual += pair_stats.n_rejected_residual;
+        stats.n_dedup_skipped += pair_stats.n_dedup_skipped;
     }
 
     // Deterministic order for tests/reproducibility.
@@ -372,16 +270,178 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
     });
 
     tracing::debug!(
-        n_triplets = out.len(),
-        n_skipped_time_order,
-        n_rejected_flux,
-        n_rejected_angular,
-        n_rejected_residual,
-        n_dedup_skipped,
+        n_triplets = stats.n_triplets,
+        n_skipped_time_order = stats.n_skipped_time_order,
+        n_rejected_flux = stats.n_rejected_flux,
+        n_rejected_angular = stats.n_rejected_angular,
+        n_rejected_residual = stats.n_rejected_residual,
+        n_dedup_skipped = stats.n_dedup_skipped,
         "generate_triplets_from_pairs complete",
     );
 
     out
+}
+
+/// Stream valid triplets `(a, b, c)` for one input pair `(a, b)`.
+///
+/// This function is intended to be called repeatedly with shared caches.
+///
+/// Arguments
+/// ---------
+/// * `index` – Spatio-temporal bucket index over alerts.
+/// * `sb` – Spatial binner used to compute neighbor cells around `b`.
+/// * `tb` – Time binner used to select time bins strictly after `b`.
+/// * `cfg` – Triplet-generation parameters.
+/// * `search_radius` – Spatial search radius used for bucket expansion.
+/// * `cos_pair_threshold` – Dot-product threshold corresponding to
+///   `cfg.max_pair_sep`.
+/// * `spatial_neighbor_cache` – Cache of spatial neighbor keys.
+/// * `timebin_target_cache` – Cache of time-bin targets.
+/// * `pair` – Input pair `(a, b)` to extend.
+/// * `on_triplet` – Callback invoked once for each accepted triplet.
+///
+/// Return
+/// ------
+/// `TripletGenerationStats` – Counters describing accepted triplets and
+/// rejection reasons.
+pub fn stream_triplets_from_pair<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner, F>(
+    index: &BucketIndex<&'alert_lf Alert>,
+    sb: &Bs,
+    tb: &Bt,
+    cfg: &TripletConfig,
+    stream_state: &mut TripletPairStreamState,
+    pair: Pair<'alert_lf>,
+    mut on_triplet: F,
+) -> TripletGenerationStats
+where
+    F: FnMut(Triplet<'alert_lf>),
+{
+    let Pair { a, b } = pair;
+    let mut stats = TripletGenerationStats::default();
+    let search_radius = cfg.max_pair_sep + sb.cell_radius();
+    let cos_pair_threshold = cfg.max_pair_sep.cos();
+
+    // Optional enforcement: require strict ordering on the input pairs.
+    if cfg.enforce_time_order && a.mjd_tt >= b.mjd_tt {
+        stats.n_skipped_time_order += 1;
+        return stats;
+    }
+
+    // We predict from (a,b), so dt_ab must be strictly positive.
+    let dt_ab = b.mjd_tt - a.mjd_tt;
+    if dt_ab <= 0.0 {
+        return stats;
+    }
+
+    // Linear motion estimate from (a,b) on a tangent plane around `a`.
+    let cos_dec_a = a.dec.cos();
+    let (dx_ab, dy_ab) = planar_offset_fast(a.ra, a.dec, cos_dec_a, b.ra, b.dec);
+    let vx = dx_ab / dt_ab; // rad/day on tangent plane (x)
+    let vy = dy_ab / dt_ab; // rad/day on tangent plane (y)
+
+    // Precompute values reused across candidate `c`.
+    let u_b = unit_vec(b.ra, b.dec);
+    let flux_b = b.flux;
+
+    // Neighbor bucket keys around `b`.
+    let b_space_key = sb.key_for(b.ra, b.dec);
+    let b_time_bin = tb.bin_for(b.mjd_tt);
+
+    let spatial_neighbors = cached_spatial_neighbors(
+        &mut stream_state.spatial_neighbor_cache,
+        sb,
+        b_space_key,
+        search_radius,
+    );
+
+    let time_bins = cached_time_targets_strictly_after(
+        &mut stream_state.timebin_target_cache,
+        tb,
+        b_time_bin,
+        cfg,
+    );
+
+    let t_b = b.mjd_tt;
+    let t_upper = t_b + cfg.max_dt_between;
+
+    // Dedup candidate `c` because the same alert can be found via overlapping bucket scans.
+    let mut seen_c: AHashSet<usize> = AHashSet::new();
+
+    // Scan candidate buckets (time bins strictly after b).
+    for &time_bin in time_bins {
+        for &space_key in spatial_neighbors {
+            let Some(bucket) = index.buckets.get(&BucketKey {
+                space_key,
+                time_bin,
+            }) else {
+                continue;
+            };
+
+            let members = bucket.members.as_slice(); // sorted by time
+            let mut idx = lower_bound_gt_time(members, t_b);
+
+            while idx < members.len() {
+                let c = members[idx];
+                idx += 1;
+
+                let t_c = c.mjd_tt;
+                if t_c > t_upper {
+                    break;
+                }
+
+                // Ensure distinct detections by reference identity.
+                if core::ptr::eq(c, a) || core::ptr::eq(c, b) {
+                    continue;
+                }
+
+                if !seen_c.insert(c as *const Alert as usize) {
+                    stats.n_dedup_skipped += 1;
+                    continue;
+                }
+
+                // Flux similarity between b and c.
+                if (flux_b - c.flux).abs() > cfg.max_flux_difference {
+                    stats.n_rejected_flux += 1;
+                    continue;
+                }
+
+                // Pairwise angular consistency: ang_sep(b,c) <= max_pair_sep
+                let u_c = unit_vec(c.ra, c.dec);
+                if dot3(u_b, u_c) < cos_pair_threshold {
+                    stats.n_rejected_angular += 1;
+                    continue;
+                }
+
+                // Predict from (a,b) to epoch t_c.
+                let dt_ac = t_c - a.mjd_tt;
+                if dt_ac <= 0.0 {
+                    continue;
+                }
+
+                // Predicted RA/Dec at t_c (small-angle approximation around `a`):
+                // - vx is tangent-plane x where dx ~ cos(dec_a) * dRA,
+                // - so dRA_pred ~ vx * dt / cos(dec_a).
+                let ra_pred = a.ra + vx * dt_ac / cos_dec_a.max(1e-12);
+                let dec_pred = a.dec + vy * dt_ac;
+
+                // Compare predicted vs actual c on the tangent plane around `a`.
+                let (dx_act, dy_act) = planar_offset_fast(a.ra, a.dec, cos_dec_a, c.ra, c.dec);
+                let (dx_pred, dy_pred) =
+                    planar_offset_fast(a.ra, a.dec, cos_dec_a, ra_pred, dec_pred);
+
+                let resid = ((dx_act - dx_pred).powi(2) + (dy_act - dy_pred).powi(2)).sqrt();
+                if resid > cfg.max_predicted_residual {
+                    stats.n_rejected_residual += 1;
+                    continue;
+                }
+
+                on_triplet(Triplet { a, b, c });
+                stats.n_triplets += 1;
+            }
+        }
+    }
+
+    stats
 }
 
 /// Convert triplets into quadratic [`SeedNode`] objects for a given night.
@@ -525,7 +585,6 @@ mod triplet_gen_tests {
             max_predicted_residual: arcsec_to_rad(max_residual_arcsec),
             enforce_time_order: true,
             max_flux_difference: 5.0,
-            ..TripletConfig::default()
         }
     }
 
@@ -557,7 +616,7 @@ mod triplet_gen_tests {
         let b = mk_alert(1, 1.0 + dr, dec0, t0 + 10.0 / 1440.0, 1, 1000.0);
         let c = mk_alert(2, 1.0 + 2.0 * dr, dec0, t0 + 20.0 / 1440.0, 1, 1000.0);
 
-        let alerts = vec![a, b, c];
+        let alerts = [a, b, c];
         let index = build_alert_bucket_index(&alerts, &sb, &tb);
 
         let cfg = mk_triplet_config(
@@ -611,7 +670,7 @@ mod triplet_gen_tests {
             1000.0,
         );
 
-        let alerts = vec![a, b, c];
+        let alerts = [a, b, c];
         let index = build_alert_bucket_index(&alerts, &sb, &tb);
 
         let cfg = mk_triplet_config(
@@ -804,7 +863,7 @@ mod triplet_gen_tests {
         let b = mk_alert(1, 1.0 + dr, dec0, t0 + 10.0 / 1440.0, 1, 1005.0);
         let c = mk_alert(2, 1.0 + 2.0 * dr, dec0, t0 + 20.0 / 1440.0, 1, 1002.0);
 
-        let alerts = vec![a, b, c];
+        let alerts = [a, b, c];
 
         let trips = vec![
             Triplet {

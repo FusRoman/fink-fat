@@ -506,8 +506,10 @@ mod seed_store_tests {
                 night_id,
                 unique_id,
             };
-            let mut seed = SeedNode::default();
-            seed.key = key;
+            let mut seed = SeedNode {
+                key,
+                ..SeedNode::default()
+            };
             seed.plane.epoch_mid = epoch_mid_mjd;
             seed
         }

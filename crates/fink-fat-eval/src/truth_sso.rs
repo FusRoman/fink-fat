@@ -69,9 +69,7 @@ impl TruthSSO {
         {
             if let (Some(id), Some(traj), Some(night_id)) = (alert_id, traj, night_id) {
                 map.insert(id, traj as TrajId);
-                let traj_entry = traj_alert_count
-                    .entry(traj as TrajId)
-                    .or_insert_with(AHashMap::new);
+                let traj_entry = traj_alert_count.entry(traj as TrajId).or_default();
                 *traj_entry.entry(night_id.into()).or_insert(0) += 1;
             }
         }
@@ -193,7 +191,7 @@ impl TruthSSO {
     /// ---------
     /// * `traj_id`   – The ground-truth trajectory ID.
     /// * `n_covered` – The number of alerts from `traj_id` present in the track
-    ///                 (equal to the track length when the track is a true positive).
+    ///   (equal to the track length when the track is a true positive).
     ///
     /// Returns
     /// -------
@@ -274,7 +272,7 @@ impl TruthSSO {
     /// ---------
     /// * `night_count` – Minimum number of alerts on a single night to form a seed.
     /// * `max_gap`     – Maximum allowed gap (in nights) between two consecutive
-    ///                   seeds for an edge to exist.
+    ///   seeds for an edge to exist.
     ///
     /// Return
     /// ------

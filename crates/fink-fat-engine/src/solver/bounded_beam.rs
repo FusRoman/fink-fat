@@ -1635,9 +1635,11 @@ mod bounded_beam_tests {
     // Property-based tests
     // =========================================================================
 
+    type NightSpec = Vec<(u32, usize)>;
+    type EdgeDesc = Vec<(usize, usize, usize, f64, bool)>;
+
     /// Strategy: generate a graph with n_nights and random edges.
-    fn arb_graph_spec()
-    -> impl Strategy<Value = (Vec<(u32, usize)>, Vec<(usize, usize, usize, f64, bool)>)> {
+    fn arb_graph_spec() -> impl Strategy<Value = (NightSpec, EdgeDesc)> {
         let nights = prop::collection::vec((1u32..50, 1usize..4), 2..6);
 
         nights.prop_flat_map(|night_spec| {

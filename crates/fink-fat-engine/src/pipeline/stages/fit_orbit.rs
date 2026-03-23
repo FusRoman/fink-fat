@@ -52,6 +52,9 @@ pub fn run(
 
             // No observations could be resolved (all hypotheses reference
             // missing alerts/seeds). Return empty results rather than failing.
+            let mut obs_batches_by_obs: Vec<_> = obs_batches_by_obs.into_iter().collect();
+            obs_batches_by_obs.sort_by(|(lhs_code, _), (rhs_code, _)| lhs_code.cmp(rhs_code));
+
             let mut iter_obs_batch = obs_batches_by_obs.iter();
             let Some((mpc_code_first, obs_batch_first)) = iter_obs_batch.next() else {
                 stage_sink.inc(2);

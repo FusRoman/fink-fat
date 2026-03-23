@@ -358,7 +358,7 @@ fn load_restores_alerts_seeds_and_edges_after_save() {
         .run(&mut ctx, &hooks)
         .expect("LoadPersistedData pipeline should succeed");
 
-    drop(ctx);
+    let _ = ctx;
 
     // Verify the load stage report.
     assert_eq!(load_output.reports.len(), 1);
@@ -533,7 +533,7 @@ fn incremental_pipeline_with_persistence_accumulates_state() {
             .run(&mut ctx, &hooks)
             .unwrap_or_else(|e| panic!("pipeline run {run_idx} (night {nid}) failed: {e}"));
 
-        drop(ctx);
+        let _ = ctx;
 
         // After each run, alert count should match cumulated expectations.
         assert_eq!(
@@ -663,11 +663,8 @@ fn reload_after_incremental_persistence_is_consistent() {
     night_ids.dedup();
 
     // --- Phase 1: Incremental ingestion with Save ---
-    let mut last_state_snapshot: Option<(
-        HashSet<u64>,
-        HashSet<SeedKey>,
-        HashSet<(SeedKey, SeedKey)>,
-    )> = None;
+    type StateSnapshot = (HashSet<u64>, HashSet<SeedKey>, HashSet<(SeedKey, SeedKey)>);
+    let mut last_state_snapshot: Option<StateSnapshot> = None;
 
     for (run_idx, &nid) in night_ids.iter().enumerate() {
         let night_alerts: Vec<&fink_fat_engine::Alert> = dataset
@@ -714,7 +711,7 @@ fn reload_after_incremental_persistence_is_consistent() {
             .run(&mut ctx, &hooks)
             .unwrap_or_else(|e| panic!("incremental run {run_idx} failed: {e}"));
 
-        drop(ctx);
+        let _ = ctx;
 
         // Snapshot the last iteration's state.
         let is_last = run_idx + 1 == night_ids.len();
@@ -759,7 +756,7 @@ fn reload_after_incremental_persistence_is_consistent() {
         .run(&mut ctx, &hooks)
         .expect("LoadPersistedData after incremental should succeed");
 
-    drop(ctx);
+    let _ = ctx;
 
     // --- Phase 3: Verify consistency ---
     let reloaded_dia_ids = collect_dia_source_ids(&reloaded_state);
@@ -927,7 +924,7 @@ fn load_stage_reports_meaningful_counters() {
         .run(&mut ctx, &hooks)
         .expect("LoadPersistedData should succeed");
 
-    drop(ctx);
+    let _ = ctx;
 
     let load_report = &load_output.reports[0];
     assert_eq!(load_report.0, PipelineStage::LoadPersistedData);
@@ -1034,7 +1031,7 @@ fn manifest_tracks_all_nights_after_multiple_saves() {
             .run(&mut ctx, &hooks)
             .unwrap_or_else(|e| panic!("manifest test run {run_idx} failed: {e}"));
 
-        drop(ctx);
+        let _ = ctx;
     }
 
     // Now load the manifest directly and check it.
@@ -1127,7 +1124,7 @@ fn load_on_empty_storage_yields_empty_state() {
         .run(&mut ctx, &hooks)
         .expect("LoadPersistedData on empty storage should succeed");
 
-    drop(ctx);
+    let _ = ctx;
 
     assert_eq!(output.reports.len(), 1);
     assert_eq!(output.reports[0].0, PipelineStage::LoadPersistedData);
@@ -1218,7 +1215,7 @@ fn save_load_roundtrip_diverse_populations() {
     };
 
     runner.run(&mut ctx, &hooks).expect("load should succeed");
-    drop(ctx);
+    let _ = ctx;
 
     // Verify key consistency.
     assert_eq!(
@@ -1348,7 +1345,7 @@ fn edge_journal_deltas_and_compaction() {
         let output = runner
             .run(&mut ctx, &hooks)
             .unwrap_or_else(|e| panic!("pipeline run #{run_idx} (nid={nid}) failed: {e}"));
-        drop(ctx);
+        let _ = ctx;
 
         // -----------------------------------------------------------------
         // Inspect manifest to count deltas.
@@ -1482,7 +1479,7 @@ fn edge_journal_deltas_and_compaction() {
     runner
         .run(&mut ctx, &hooks)
         .expect("reload after compaction should succeed");
-    drop(ctx);
+    let _ = ctx;
 
     // Verify that the reloaded state has all nights.
     let reloaded_nights = collect_night_ids(&reloaded);
@@ -1610,7 +1607,7 @@ fn compaction_night_edges_are_not_lost() {
         let output = runner
             .run(&mut ctx, &hooks)
             .unwrap_or_else(|e| panic!("pipeline run #{run_idx} (nid={nid}) failed: {e}"));
-        drop(ctx);
+        let _ = ctx;
 
         // Detect the compaction night.
         let save_report = output
@@ -1653,7 +1650,7 @@ fn compaction_night_edges_are_not_lost() {
         solver_manager: &solver_manager,
     };
     runner.run(&mut ctx, &hooks).expect("final reload");
-    drop(ctx);
+    let _ = ctx;
 
     // The critical assertion: edges whose `to.night_id` equals the compaction
     // night must still be present.  Before the fix, they were all dropped from

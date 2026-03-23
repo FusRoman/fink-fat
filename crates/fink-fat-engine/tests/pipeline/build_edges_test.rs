@@ -357,7 +357,7 @@ fn edges_connect_distinct_nights_from_diverse_populations() {
     let left_nights: std::collections::HashSet<NightId> =
         graph.edges.iter().map(|e| e.from.night_id).collect();
     assert!(
-        left_nights.len() >= 1,
+        !left_nights.is_empty(),
         "edges should originate from at least one left night"
     );
 }

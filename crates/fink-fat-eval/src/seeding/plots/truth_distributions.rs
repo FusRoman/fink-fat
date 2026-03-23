@@ -69,7 +69,7 @@ fn group_night_by_traj<'a>(
 ) -> AHashMap<TrajId, Vec<&'a Alert>> {
     let mut map: AHashMap<TrajId, Vec<&'a Alert>> = AHashMap::new();
     for alert in night_alerts {
-        if let Some(traj_id) = truth.get_truth_traj_id(&alert) {
+        if let Some(traj_id) = truth.get_truth_traj_id(alert) {
             map.entry(traj_id).or_default().push(alert);
         }
     }
