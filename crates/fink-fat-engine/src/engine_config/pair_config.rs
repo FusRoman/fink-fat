@@ -25,11 +25,11 @@
 //!   - The candidate must satisfy:
 //!     `Δθ / Δt ≤ max_angular_speed`.
 //! - Photometric constraint:
-//!   - The candidate must satisfy a configurable brightness / flux similarity
-//!     test controlled by `max_flux_difference`.
+//!   - The candidate must satisfy a configurable brightness / mag similarity
+//!     test controlled by `max_mag_difference`.
 //!
-//! The exact photometry metric depends on the pairing implementation (flux space,
-//! magnitude space, normalized flux difference, etc.). This configuration
+//! The exact photometry metric depends on the pairing implementation (mag space,
+//! magnitude space, normalized mag difference, etc.). This configuration
 //! parameter is intentionally **unit-agnostic** at the config level: it must
 //! match what the pairing kernel expects.
 //!
@@ -108,7 +108,7 @@
 //!
 //! - `max_dt = 0.06 d` (~86.4 min)
 //! - `max_angular_speed = 0.05 rad/d`
-//! - `max_flux_difference = 5.0`
+//! - `max_mag_difference = 5.0`
 //! - `allow_same_timebin = true`
 //!
 //! Tuning suggestions:
@@ -116,13 +116,13 @@
 //! - If too many pairs are produced (high contamination):
 //!   - decrease `max_dt`,
 //!   - decrease `max_angular_speed`,
-//!   - tighten `max_flux_difference`,
+//!   - tighten `max_mag_difference`,
 //!   - or set `allow_same_timebin = false` (if your time-binning is coarse and
 //!     produces many same-bin candidates).
 //! - If too few pairs are produced (low recall):
 //!   - increase `max_dt` slightly,
 //!   - increase `max_angular_speed` if you target fast movers,
-//!   - loosen `max_flux_difference` if photometry is noisy.
+//!   - loosen `max_mag_difference` if photometry is noisy.
 //!
 //! -----------------------------------------------------------------------------
 //! Configuration examples (YAML)
@@ -134,7 +134,7 @@
 //! pairs:
 //!   max_dt: 0.06                 # days (TT)
 //!   max_angular_speed: 5.0e-2    # rad/day
-//!   max_flux_difference: 5.0     # must match pairing kernel's photometry metric
+//!   max_mag_difference: 5.0     # must match pairing kernel's photometry metric
 //!   allow_same_timebin: true
 //! ```
 //!
@@ -144,7 +144,7 @@
 //! pairs:
 //!   max_dt: "86.4 min"
 //!   max_angular_speed: "35 arcmin/day"
-//!   max_flux_difference: 5.0
+//!   max_mag_difference: 5.0
 //!   allow_same_timebin: true
 //! ```
 //!
@@ -161,7 +161,7 @@
 //! Validation can fail with:
 //! - [`SeedError::NonFiniteOrNegativeTime`] for `pairs.max_dt`,
 //! - [`SeedError::NonFiniteOrNegativeAngle`] for `pairs.max_angular_speed`,
-//! - [`SeedError::NonFiniteOrNegativePhotometry`] for `pairs.max_flux_difference`.
+//! - [`SeedError::NonFiniteOrNegativePhotometry`] for `pairs.max_mag_difference`.
 //!
 //! Unit parsing failures (string quantities) are surfaced by serde as
 //! deserialization errors with an explicit message from `engine_config::units`
@@ -193,7 +193,7 @@ use crate::{MJDTT, error::SeedError};
 /// - Temporal gating: `t_b > t_a` and `Δt ≤ max_dt`.
 /// - Kinematic gating: `ang_sep(a, b) / Δt ≤ max_angular_speed`.
 /// - Photometric gating: the implementation-specific brightness similarity
-///   test using `max_flux_difference`.
+///   test using `max_mag_difference`.
 ///
 /// Notes
 /// -----
@@ -271,11 +271,11 @@ pub struct PairConfig {
     /// ---------
     /// This value is **dimensionless at the configuration layer**. Its meaning
     /// depends on the pair generation kernel:
-    /// - raw flux difference threshold,
+    /// - raw mag difference threshold,
     /// - magnitude difference threshold,
     /// - normalized residual threshold,
     /// - or any other scalar similarity metric.
-    pub max_flux_difference: f64,
+    pub max_mag_difference: f64,
 
     /// Whether to allow pairs formed from alerts inside the same **time bin**.
     ///
@@ -296,14 +296,14 @@ impl Default for PairConfig {
     /// - `max_dt = 0.06` days (~86.4 minutes)
     /// - `max_angular_speed = 5.0e-2` rad/day (order-of-magnitude)
     /// - `min_motion = 0.0` rad/day
-    /// - `max_flux_difference = 5.0`
+    /// - `max_mag_difference = 5.0`
     /// - `allow_same_timebin = true`
     fn default() -> Self {
         Self {
             max_dt: 0.06,
             max_angular_speed: 5.0e-2,
             min_motion: 0.0,
-            max_flux_difference: 5.0,
+            max_mag_difference: 5.0,
             allow_same_timebin: true,
         }
     }
@@ -329,9 +329,9 @@ impl PairConfig {
                 "pairs.min_motion > pairs.max_angular_speed",
             ));
         }
-        if !self.max_flux_difference.is_finite() || self.max_flux_difference < 0.0 {
+        if !self.max_mag_difference.is_finite() || self.max_mag_difference < 0.0 {
             return Err(SeedError::NonFiniteOrNegativePhotometry(
-                "pairs.max_flux_difference",
+                "pairs.max_mag_difference",
             ));
         }
         Ok(())
@@ -380,8 +380,8 @@ impl PairConfigBuilder {
     }
 
     /// Set maximum allowed photometric difference (dimensionless).
-    pub fn max_flux_difference(mut self, v: f64) -> Self {
-        self.params.max_flux_difference = v;
+    pub fn max_mag_difference(mut self, v: f64) -> Self {
+        self.params.max_mag_difference = v;
         self
     }
 
@@ -397,7 +397,7 @@ impl PairConfigBuilder {
             max_dt: self.params.max_dt,
             max_angular_speed: self.params.max_angular_speed,
             min_motion: self.params.min_motion,
-            max_flux_difference: self.params.max_flux_difference,
+            max_mag_difference: self.params.max_mag_difference,
             allow_same_timebin: self.params.allow_same_timebin,
         };
         p.validate()?;

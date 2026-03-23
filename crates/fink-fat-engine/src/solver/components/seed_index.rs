@@ -135,8 +135,8 @@ mod seed_global_index_tests {
             dec: 0.1,
             dec_err: arcsec_to_rad(0.5),
             mjd_tt,
-            flux: 1000.0,
-            flux_err: 10.0,
+            mag: 1000.0,
+            mag_err: 10.0,
             band: 1,
             ..Default::default()
         }

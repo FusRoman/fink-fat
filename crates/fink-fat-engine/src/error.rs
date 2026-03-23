@@ -35,9 +35,9 @@ pub enum SeedError {
     #[error("invalid residual parameter: {0}")]
     NonFiniteOrNegativeResidual(&'static str),
 
-    /// A flux or magnitude threshold must be finite and non-negative.
+    /// A mag or magnitude threshold must be finite and non-negative.
     ///
-    /// Raised for photometric cutoffs such as `pair.max_flux_difference`.
+    /// Raised for photometric cutoffs such as `pair.max_mag_difference`.
     #[error("invalid photometry parameter: {0}")]
     NonFiniteOrNegativePhotometry(&'static str),
 

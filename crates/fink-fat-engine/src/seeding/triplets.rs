@@ -16,7 +16,7 @@
 //! - `t_c > t_b` and `t_c - t_b <= max_dt_between`,
 //! - `c` lies in nearby spatio-temporal buckets around `b`,
 //! - `(b, c)` passes a short-baseline angular constraint,
-//! - `(b, c)` passes a flux similarity constraint,
+//! - `(b, c)` passes a magnitude similarity constraint,
 //! - and `c` is consistent with the linear motion model fitted from `(a, b)`
 //!   (a fast predicted-residual test).
 //!
@@ -88,7 +88,7 @@ pub type Triplets<'alert_lf> = Vec<Triplet<'alert_lf>>;
 pub struct TripletGenerationStats {
     pub n_triplets: u64,
     pub n_skipped_time_order: u64,
-    pub n_rejected_flux: u64,
+    pub n_rejected_mag: u64,
     pub n_rejected_angular: u64,
     pub n_rejected_residual: u64,
     pub n_dedup_skipped: u64,
@@ -188,7 +188,7 @@ fn lower_bound_gt_time(members: &[&Alert], t0: f64) -> usize {
 /// 2. Fit a linear tangent-plane motion model from `(a, b)` around `a`.
 /// 3. Search candidate detections `c` in neighboring spatio-temporal buckets
 ///    around `b`.
-/// 4. Apply flux and angular consistency gates on `(b, c)`.
+/// 4. Apply magnitude and angular consistency gates on `(b, c)`.
 /// 5. Apply a linear prediction residual test around `a`.
 /// 6. Deduplicate `(a, b, c)` by pointer identity and push to output.
 ///
@@ -199,7 +199,7 @@ fn lower_bound_gt_time(members: &[&Alert], t0: f64) -> usize {
 /// * `sb` – Spatial binner used to compute neighbor cells around `b`.
 /// * `tb` – Time binner used to select time bins strictly after `b`.
 /// * `cfg` – Triplet-generation parameters controlling time window, spatial
-///   radius, flux gate, angular gate, and prediction residual threshold.
+///   radius, magnitude gate, angular gate, and prediction residual threshold.
 /// * `pairs` – Precomputed valid pairs `(a, b)` from which triplets are
 ///   extended.
 ///
@@ -231,7 +231,7 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
         max_dt_between = cfg.max_dt_between,
         max_pair_sep = cfg.max_pair_sep,
         max_predicted_residual = cfg.max_predicted_residual,
-        max_flux_difference = cfg.max_flux_difference,
+        max_mag_difference = cfg.max_mag_difference,
         enforce_time_order = cfg.enforce_time_order,
         search_radius,
         "generate_triplets_from_pairs starting",
@@ -256,7 +256,7 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
 
         stats.n_triplets += pair_stats.n_triplets;
         stats.n_skipped_time_order += pair_stats.n_skipped_time_order;
-        stats.n_rejected_flux += pair_stats.n_rejected_flux;
+        stats.n_rejected_mag += pair_stats.n_rejected_mag;
         stats.n_rejected_angular += pair_stats.n_rejected_angular;
         stats.n_rejected_residual += pair_stats.n_rejected_residual;
         stats.n_dedup_skipped += pair_stats.n_dedup_skipped;
@@ -272,7 +272,7 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
     tracing::debug!(
         n_triplets = stats.n_triplets,
         n_skipped_time_order = stats.n_skipped_time_order,
-        n_rejected_flux = stats.n_rejected_flux,
+        n_rejected_mag = stats.n_rejected_mag,
         n_rejected_angular = stats.n_rejected_angular,
         n_rejected_residual = stats.n_rejected_residual,
         n_dedup_skipped = stats.n_dedup_skipped,
@@ -341,7 +341,7 @@ where
 
     // Precompute values reused across candidate `c`.
     let u_b = unit_vec(b.ra, b.dec);
-    let flux_b = b.flux;
+    let mag_b = b.mag;
 
     // Neighbor bucket keys around `b`.
     let b_space_key = sb.key_for(b.ra, b.dec);
@@ -399,9 +399,9 @@ where
                     continue;
                 }
 
-                // Flux similarity between b and c.
-                if (flux_b - c.flux).abs() > cfg.max_flux_difference {
-                    stats.n_rejected_flux += 1;
+                // Magnitude similarity between b and c.
+                if (mag_b - c.mag).abs() > cfg.max_mag_difference {
+                    stats.n_rejected_mag += 1;
                     continue;
                 }
 
@@ -555,7 +555,7 @@ mod triplet_gen_tests {
 
     /* ------------------------- helpers ------------------------- */
 
-    fn mk_alert(i: usize, ra: f64, dec: f64, mjd_tt: f64, band: u8, flux: f64) -> Alert {
+    fn mk_alert(i: usize, ra: f64, dec: f64, mjd_tt: f64, band: u8, mag: f64) -> Alert {
         let pos_err = arcsec_to_rad(0.5);
         Alert {
             key: AlertKey {
@@ -567,8 +567,8 @@ mod triplet_gen_tests {
             dec,
             dec_err: pos_err,
             mjd_tt,
-            flux,
-            flux_err: 0.0,
+            mag,
+            mag_err: 0.0,
             band,
             ..Default::default()
         }
@@ -584,7 +584,7 @@ mod triplet_gen_tests {
             max_pair_sep: arcsec_to_rad(max_pair_sep_arcsec),
             max_predicted_residual: arcsec_to_rad(max_residual_arcsec),
             enforce_time_order: true,
-            max_flux_difference: 5.0,
+            max_mag_difference: 5.0,
         }
     }
 
@@ -770,7 +770,7 @@ mod triplet_gen_tests {
                 10.0,          // 10"
             );
 
-            // Same flux to simplify, still keep flux check.
+            // Same magnitude to simplify, still keep magnitude check.
             let alerts: Vec<Alert> = samples.iter().enumerate()
                 .map(|(i, (ra, dec, t))| mk_alert(i, *ra, *dec, *t, 1, 1000.0))
                 .collect();
@@ -823,9 +823,9 @@ mod triplet_gen_tests {
                 let dbc = angular_separation_vincenty(b.ra, b.dec, c.ra, c.dec);
                 prop_assert!(dbc <= cfg.max_pair_sep + 1e-12);
 
-                // Flux constraint.
-                let flux_diff = (b.flux - c.flux).abs();
-                prop_assert!(flux_diff <= cfg.max_flux_difference + 1e-6);
+                // Magnitude constraint.
+                let mag_diff = (b.mag - c.mag).abs();
+                prop_assert!(mag_diff <= cfg.max_mag_difference + 1e-6);
 
                 // Residual recompute (same as implementation).
                 let cos_dec_a = a.dec.cos();

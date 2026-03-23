@@ -4,6 +4,7 @@
 //! used by all pipeline integration tests, plus the test submodules themselves.
 
 mod build_edges_test;
+mod build_seeds_hough_test;
 mod build_seeds_test;
 mod deactivation_test;
 mod fit_orbit_test;
@@ -135,8 +136,8 @@ fn parquet_alert_schema() -> Arc<Schema> {
         Field::new("dec", DataType::Float64, false),
         Field::new("dec_err", DataType::Float64, false),
         Field::new("mjd_tt", DataType::Float64, false),
-        Field::new("flux", DataType::Float64, false),
-        Field::new("flux_err", DataType::Float64, false),
+        Field::new("mag", DataType::Float64, false),
+        Field::new("mag_err", DataType::Float64, false),
         Field::new("band", DataType::UInt8, false),
         Field::new("observer_mpc_code", DataType::Utf8, false),
     ]))
@@ -158,8 +159,8 @@ pub(crate) fn write_alerts_parquet(alerts: &[&Alert], path: &Path) -> InputUri {
     let mut decs = Vec::with_capacity(n);
     let mut dec_errs = Vec::with_capacity(n);
     let mut mjd_tts = Vec::with_capacity(n);
-    let mut fluxes = Vec::with_capacity(n);
-    let mut flux_errs = Vec::with_capacity(n);
+    let mut mags = Vec::with_capacity(n);
+    let mut mag_errs = Vec::with_capacity(n);
     let mut bands = Vec::with_capacity(n);
     let mut observer_codes: Vec<String> = Vec::with_capacity(n);
 
@@ -171,8 +172,8 @@ pub(crate) fn write_alerts_parquet(alerts: &[&Alert], path: &Path) -> InputUri {
         decs.push(alert.dec);
         dec_errs.push(alert.dec_err);
         mjd_tts.push(alert.mjd_tt);
-        fluxes.push(alert.flux);
-        flux_errs.push(alert.flux_err);
+        mags.push(alert.mag);
+        mag_errs.push(alert.mag_err);
         bands.push(alert.band);
         observer_codes.push((*alert.observer_mpc_code).clone());
     }
@@ -187,8 +188,8 @@ pub(crate) fn write_alerts_parquet(alerts: &[&Alert], path: &Path) -> InputUri {
             Arc::new(Float64Array::from(decs)) as ArrayRef,
             Arc::new(Float64Array::from(dec_errs)) as ArrayRef,
             Arc::new(Float64Array::from(mjd_tts)) as ArrayRef,
-            Arc::new(Float64Array::from(fluxes)) as ArrayRef,
-            Arc::new(Float64Array::from(flux_errs)) as ArrayRef,
+            Arc::new(Float64Array::from(mags)) as ArrayRef,
+            Arc::new(Float64Array::from(mag_errs)) as ArrayRef,
             Arc::new(UInt8Array::from(bands)) as ArrayRef,
             Arc::new(StringArray::from(observer_codes)) as ArrayRef,
         ],

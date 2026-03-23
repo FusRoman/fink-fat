@@ -43,8 +43,8 @@ pub struct AlertParquetColumns {
     pub dec: &'static str,
     pub dec_err: &'static str,
     pub mjd_tt: &'static str,
-    pub flux: &'static str,
-    pub flux_err: &'static str,
+    pub mag: &'static str,
+    pub mag_err: &'static str,
     pub band: &'static str,
     pub observer_mpc_code: &'static str,
 }
@@ -59,8 +59,8 @@ impl Default for AlertParquetColumns {
             dec: "dec",
             dec_err: "dec_err",
             mjd_tt: "mjd_tt",
-            flux: "flux",
-            flux_err: "flux_err",
+            mag: "mag",
+            mag_err: "mag_err",
             band: "band",
             observer_mpc_code: "observer_mpc_code",
         }
@@ -165,7 +165,7 @@ pub async fn load_alerts_from_parquet_uri(
         columns = ?[
             columns.night_id, columns.dia_source_id,
             columns.ra, columns.ra_err, columns.dec, columns.dec_err,
-            columns.mjd_tt, columns.flux, columns.flux_err,
+            columns.mjd_tt, columns.mag, columns.mag_err,
             columns.band, columns.observer_mpc_code,
         ],
         "applying column projection",
@@ -178,8 +178,8 @@ pub async fn load_alerts_from_parquet_uri(
         col(columns.dec),
         col(columns.dec_err),
         col(columns.mjd_tt),
-        col(columns.flux),
-        col(columns.flux_err),
+        col(columns.mag),
+        col(columns.mag_err),
         col(columns.band),
         col(columns.observer_mpc_code),
     ])?;
@@ -264,8 +264,8 @@ fn build_alerts_from_batches(
         let dec = col_f64(batch, c.dec)?;
         let dec_err = col_f64(batch, c.dec_err)?;
         let mjd_tt = col_f64(batch, c.mjd_tt)?;
-        let flux = col_f64(batch, c.flux)?;
-        let flux_err = col_f64(batch, c.flux_err)?;
+        let mag = col_f64(batch, c.mag)?;
+        let mag_err = col_f64(batch, c.mag_err)?;
         let band = col_u8(batch, c.band)?;
         let observer_mpc_code = col_string(batch, c.observer_mpc_code)?;
 
@@ -279,8 +279,8 @@ fn build_alerts_from_batches(
                 || dec.is_null(i)
                 || dec_err.is_null(i)
                 || mjd_tt.is_null(i)
-                || flux.is_null(i)
-                || flux_err.is_null(i)
+                || mag.is_null(i)
+                || mag_err.is_null(i)
                 || band.is_null(i)
                 || observer_mpc_code.is_null(i)
             {
@@ -316,8 +316,8 @@ fn build_alerts_from_batches(
                 dec: dec.value(i),
                 dec_err: dec_err.value(i),
                 mjd_tt: mjd,
-                flux: flux.value(i),
-                flux_err: flux_err.value(i),
+                mag: mag.value(i),
+                mag_err: mag_err.value(i),
                 band: band.value(i),
                 observer_mpc_code: observer_arc,
             };
@@ -443,8 +443,8 @@ mod alert_loader_tests {
     }
 
     fn make_schema(c: &AlertParquetColumns) -> Arc<Schema> {
-        // IMPORTANT: doit contenir toutes les colonnes requises par build_alerts_from_batches()
-        // et avec les dtypes attendus (notamment flux/flux_err en Float64).
+        // IMPORTANT: must contain all required columns for build_alerts_from_batches()
+        // with the expected dtypes (notably mag/mag_err as Float64).
         Arc::new(Schema::new(vec![
             Field::new(c.night_id, DataType::UInt32, true),
             Field::new(c.dia_source_id, DataType::UInt64, true),
@@ -453,8 +453,8 @@ mod alert_loader_tests {
             Field::new(c.dec, DataType::Float64, true),
             Field::new(c.dec_err, DataType::Float64, true),
             Field::new(c.mjd_tt, DataType::Float64, true),
-            Field::new(c.flux, DataType::Float64, true),
-            Field::new(c.flux_err, DataType::Float64, true),
+            Field::new(c.mag, DataType::Float64, true),
+            Field::new(c.mag_err, DataType::Float64, true),
             Field::new(c.band, DataType::UInt8, true),
             Field::new(c.observer_mpc_code, DataType::Utf8, true),
         ]))
@@ -470,15 +470,15 @@ mod alert_loader_tests {
         let dec: ArrayRef = Arc::new(Float64Array::from(vec![3.0_f64, 4.0_f64]));
         let dec_err: ArrayRef = Arc::new(Float64Array::from(vec![0.3_f64, 0.4_f64]));
         let mjd: ArrayRef = Arc::new(Float64Array::from(vec![60000.0_f64, 60001.0_f64]));
-        let flux: ArrayRef = Arc::new(Float64Array::from(vec![12.0_f64, 13.0_f64]));
-        let flux_err: ArrayRef = Arc::new(Float64Array::from(vec![1.2_f64, 1.3_f64]));
+        let mag: ArrayRef = Arc::new(Float64Array::from(vec![12.0_f64, 13.0_f64]));
+        let mag_err: ArrayRef = Arc::new(Float64Array::from(vec![1.2_f64, 1.3_f64]));
         let band: ArrayRef = Arc::new(UInt8Array::from(vec![1_u8, 2_u8]));
         let obs_code: ArrayRef = Arc::new(StringArray::from(vec!["I41", "I41"]));
 
         RecordBatch::try_new(
             schema,
             vec![
-                night_id, dia, ra, ra_err, dec, dec_err, mjd, flux, flux_err, band, obs_code,
+                night_id, dia, ra, ra_err, dec, dec_err, mjd, mag, mag_err, band, obs_code,
             ],
         )
         .unwrap()
@@ -494,15 +494,15 @@ mod alert_loader_tests {
         let dec: ArrayRef = Arc::new(Float64Array::from(vec![3.0_f64]));
         let dec_err: ArrayRef = Arc::new(Float64Array::from(vec![0.3_f64]));
         let mjd: ArrayRef = Arc::new(Float64Array::from(vec![60000.0_f64]));
-        let flux: ArrayRef = Arc::new(Float64Array::from(vec![12.0_f64]));
-        let flux_err: ArrayRef = Arc::new(Float64Array::from(vec![1.2_f64]));
+        let mag: ArrayRef = Arc::new(Float64Array::from(vec![12.0_f64]));
+        let mag_err: ArrayRef = Arc::new(Float64Array::from(vec![1.2_f64]));
         let band: ArrayRef = Arc::new(UInt8Array::from(vec![1_u8]));
         let obs_code: ArrayRef = Arc::new(StringArray::from(vec!["I41"]));
 
         RecordBatch::try_new(
             schema,
             vec![
-                night_id, dia, ra, ra_err, dec, dec_err, mjd, flux, flux_err, band, obs_code,
+                night_id, dia, ra, ra_err, dec, dec_err, mjd, mag, mag_err, band, obs_code,
             ],
         )
         .unwrap()
@@ -520,7 +520,7 @@ mod alert_loader_tests {
         let night_vec = store.get(&NightId(42)).expect("night 42 present");
         assert_eq!(night_vec.len(), 2);
 
-        // Ordre et contenu
+        // Order and content
         assert_eq!(night_vec[0].key.dia_source_id, 10);
         assert_eq!(night_vec[1].key.dia_source_id, 11);
 
@@ -541,7 +541,7 @@ mod alert_loader_tests {
     fn build_alerts_missing_column_is_error() {
         let c = default_cols();
 
-        // Schema avec toutes les colonnes requises sauf `band`
+        // Schema with all required columns except `band`
         let schema = Arc::new(Schema::new(vec![
             Field::new(c.night_id, DataType::UInt32, true),
             Field::new(c.dia_source_id, DataType::UInt64, true),
@@ -550,9 +550,9 @@ mod alert_loader_tests {
             Field::new(c.dec, DataType::Float64, true),
             Field::new(c.dec_err, DataType::Float64, true),
             Field::new(c.mjd_tt, DataType::Float64, true),
-            Field::new(c.flux, DataType::Float64, true),
-            Field::new(c.flux_err, DataType::Float64, true),
-            // Field::new(c.band, DataType::UInt8, true), // manquante
+            Field::new(c.mag, DataType::Float64, true),
+            Field::new(c.mag_err, DataType::Float64, true),
+            // Field::new(c.band, DataType::UInt8, true), // missing on purpose
         ]));
 
         let night_id: ArrayRef = Arc::new(UInt32Array::from(vec![1_u32]));
@@ -562,13 +562,13 @@ mod alert_loader_tests {
         let dec: ArrayRef = Arc::new(Float64Array::from(vec![3.0_f64]));
         let dec_err: ArrayRef = Arc::new(Float64Array::from(vec![0.3_f64]));
         let mjd: ArrayRef = Arc::new(Float64Array::from(vec![60000.0_f64]));
-        let flux: ArrayRef = Arc::new(Float64Array::from(vec![12.0_f64]));
-        let flux_err: ArrayRef = Arc::new(Float64Array::from(vec![1.2_f64]));
-        // band manquante
+        let mag: ArrayRef = Arc::new(Float64Array::from(vec![12.0_f64]));
+        let mag_err: ArrayRef = Arc::new(Float64Array::from(vec![1.2_f64]));
+        // missing band column
 
         let batch = RecordBatch::try_new(
             schema,
-            vec![night_id, dia, ra, ra_err, dec, dec_err, mjd, flux, flux_err],
+            vec![night_id, dia, ra, ra_err, dec, dec_err, mjd, mag, mag_err],
         )
         .unwrap();
 
@@ -587,7 +587,7 @@ mod alert_loader_tests {
     fn build_alerts_wrong_dtype_is_error() {
         let c = default_cols();
 
-        // ra_err attendu Float64, on met UInt64
+        // `ra_err` is expected as Float64, here set as UInt64 on purpose.
         let schema = Arc::new(Schema::new(vec![
             Field::new(c.night_id, DataType::UInt32, true),
             Field::new(c.dia_source_id, DataType::UInt64, true),
@@ -596,8 +596,8 @@ mod alert_loader_tests {
             Field::new(c.dec, DataType::Float64, true),
             Field::new(c.dec_err, DataType::Float64, true),
             Field::new(c.mjd_tt, DataType::Float64, true),
-            Field::new(c.flux, DataType::Float64, true),
-            Field::new(c.flux_err, DataType::Float64, true),
+            Field::new(c.mag, DataType::Float64, true),
+            Field::new(c.mag_err, DataType::Float64, true),
             Field::new(c.band, DataType::UInt8, true),
         ]));
 
@@ -608,8 +608,8 @@ mod alert_loader_tests {
         let dec: ArrayRef = Arc::new(Float64Array::from(vec![3.0_f64]));
         let dec_err: ArrayRef = Arc::new(Float64Array::from(vec![0.3_f64]));
         let mjd: ArrayRef = Arc::new(Float64Array::from(vec![60000.0_f64]));
-        let flux: ArrayRef = Arc::new(Float64Array::from(vec![12.0_f64]));
-        let flux_err: ArrayRef = Arc::new(Float64Array::from(vec![1.2_f64]));
+        let mag: ArrayRef = Arc::new(Float64Array::from(vec![12.0_f64]));
+        let mag_err: ArrayRef = Arc::new(Float64Array::from(vec![1.2_f64]));
         let band: ArrayRef = Arc::new(UInt8Array::from(vec![1_u8]));
 
         let batch = RecordBatch::try_new(
@@ -622,8 +622,8 @@ mod alert_loader_tests {
                 dec,
                 dec_err,
                 mjd,
-                flux,
-                flux_err,
+                mag,
+                mag_err,
                 band,
             ],
         )
@@ -645,7 +645,7 @@ mod alert_loader_tests {
         let c = default_cols();
         let schema = make_schema(&c);
 
-        // NULL dans dia_source_id à la ligne 1
+        // NULL in dia_source_id at row 1.
         let night_id: ArrayRef = Arc::new(UInt32Array::from(vec![1_u32, 1_u32]));
         let dia: ArrayRef = Arc::new(UInt64Array::from(vec![Some(10_u64), None]));
         let ra: ArrayRef = Arc::new(Float64Array::from(vec![1.0_f64, 2.0_f64]));
@@ -653,15 +653,15 @@ mod alert_loader_tests {
         let dec: ArrayRef = Arc::new(Float64Array::from(vec![3.0_f64, 4.0_f64]));
         let dec_err: ArrayRef = Arc::new(Float64Array::from(vec![0.3_f64, 0.4_f64]));
         let mjd: ArrayRef = Arc::new(Float64Array::from(vec![60000.0_f64, 60001.0_f64]));
-        let flux: ArrayRef = Arc::new(Float64Array::from(vec![12.0_f64, 13.0_f64]));
-        let flux_err: ArrayRef = Arc::new(Float64Array::from(vec![1.2_f64, 1.3_f64]));
+        let mag: ArrayRef = Arc::new(Float64Array::from(vec![12.0_f64, 13.0_f64]));
+        let mag_err: ArrayRef = Arc::new(Float64Array::from(vec![1.2_f64, 1.3_f64]));
         let band: ArrayRef = Arc::new(UInt8Array::from(vec![1_u8, 2_u8]));
         let obs_code: ArrayRef = Arc::new(StringArray::from(vec!["I41", "I41"]));
 
         let batch = RecordBatch::try_new(
             schema,
             vec![
-                night_id, dia, ra, ra_err, dec, dec_err, mjd, flux, flux_err, band, obs_code,
+                night_id, dia, ra, ra_err, dec, dec_err, mjd, mag, mag_err, band, obs_code,
             ],
         )
         .unwrap();
@@ -682,7 +682,7 @@ mod alert_loader_tests {
         let c = default_cols();
 
         let b1 = batch_two_rows_all_valid_same_night(&c, 1);
-        let b2 = batch_one_row_null_dia(&c, 1); // 3e ligne globale => index 2
+        let b2 = batch_one_row_null_dia(&c, 1); // Third global row => index 2
 
         let err = build_alerts_from_batches(&[b1, b2], &c).unwrap_err();
 

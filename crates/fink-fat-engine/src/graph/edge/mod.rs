@@ -1005,8 +1005,8 @@ mod edge_mod_tests {
             dec,
             dec_err: ARCSEC,
             mjd_tt: mjd,
-            flux: 1000.0,
-            flux_err: 50.0,
+            mag: 1000.0,
+            mag_err: 50.0,
             band: 1,
             observer_mpc_code: Arc::new("500".into()),
         }

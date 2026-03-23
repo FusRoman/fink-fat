@@ -763,8 +763,8 @@ mod edge_prediction_test {
             },
             uncertainty: EdgeUncertaintyFeatures(base + 15.0),
             photometry: EdgePhotometryFeatures {
-                z_flux: base + 16.0,
-                flux_std_ratio: base + 17.0,
+                z_mag: base + 16.0,
+                mag_std_ratio: base + 17.0,
                 band_shared: base + 18.0,
             },
         }

@@ -42,8 +42,8 @@
 //!    - `SingerCwna` — same Gaussian loss on CWNA-inflated covariances.
 //!    - `RobustCauchy` — logarithmic saturation $\ln(1 + \chi^2/\sigma)$.
 //!    - `RobustStudentT` — Student-t $\frac{\nu+1}{2}\ln(1 + \chi^2/\nu)$.
-//! 3. **Photometry penalty** — variant-independent; a flux z-score term, a
-//!    flux-scatter log-ratio term, and a band-sharing penalty.
+//! 3. **Photometry penalty** — variant-independent; a mag z-score term, a
+//!    mag-scatter log-ratio term, and a band-sharing penalty.
 //!
 //! ML features stored in [`EdgeFeatures`] are **not** affected by the cost variant;
 //! ONNX ranking always uses baseline covariances for stable feature representations.
@@ -85,7 +85,7 @@ use crate::{
 /// * `position` – Innovation geometry on tangent plane (Mahalanobis, whitening, directional z-scores).
 /// * `velocity` – Kinematic compatibility (direction, speed ratios, velocity-space χ²).
 /// * `uncertainty` – Uncertainty/quality scalars (e.g., covariance trace ratios).
-/// * `photometry` – Photometric consistency (flux z-score, band overlap, etc.).
+/// * `photometry` – Photometric consistency (mag z-score, band overlap, etc.).
 ///
 /// Notes
 /// -----
@@ -99,7 +99,7 @@ pub struct EdgeFeatures {
     pub velocity: EdgeVelocityFeatures,
     /// Uncertainty/quality ratios (covariance trace ratios, anisotropy proxies).
     pub uncertainty: EdgeUncertaintyFeatures,
-    /// Photometry consistency (normalized flux differences, band sharing).
+    /// Photometry consistency (normalized mag differences, band sharing).
     pub photometry: EdgePhotometryFeatures,
 }
 
@@ -154,7 +154,7 @@ impl EdgeFeatures {
     ///   [`CostVariant`]
     ///   (Gaussian ½χ², Cauchy, or Student-t) and optionally on CWNA (Continuous White Noise Acceleration)
     ///   covariance inflation (`sigma_q`).
-    /// - $c_{\mathrm{phot}}$ is variant-independent (flux z-score, flux-scatter
+    /// - $c_{\mathrm{phot}}$ is variant-independent (mag z-score, mag-scatter
     ///   log-ratio, band-sharing penalty).
     ///
     /// The computation proceeds in three steps:
@@ -338,7 +338,7 @@ impl EdgeFeatures {
     ///
     /// The penalty is:
     ///
-    /// $$\begin{align} c_{\mathrm{phot}} &= \frac{1}{2} z_{\mathrm{flux}}^{2} + \frac{1}{2}\bigl[\ln(|r_{\sigma}| + \varepsilon)\bigr]^{2} + b_{\mathrm{band}} \end{align}$$
+    /// $$\begin{align} c_{\mathrm{phot}} &= \frac{1}{2} z_{\mathrm{mag}}^{2} + \frac{1}{2}\bigl[\ln(|r_{\sigma}| + \varepsilon)\bigr]^{2} + b_{\mathrm{band}} \end{align}$$
     ///
     /// where $b_{\mathrm{band}} = 0$ when the two seeds share a photometric band,
     /// and $b_{\mathrm{band}} = -\ln(\varepsilon_{\mathrm{band}}) \approx 6.9$ otherwise.
@@ -363,13 +363,13 @@ impl EdgeFeatures {
         let eps = 1e-12_f64;
         let eps_band = 1e-3_f64;
         let phot = EdgePhotometryFeatures::photometry_features(from, to);
-        let ln_ratio = safe_ln(phot.flux_std_ratio.abs() + eps);
+        let ln_ratio = safe_ln(phot.mag_std_ratio.abs() + eps);
         let band_term = if phot.band_shared.clamp(0.0, 1.0) > 0.5 {
             0.0
         } else {
             -safe_ln(eps_band)
         };
-        0.5 * phot.z_flux * phot.z_flux + 0.5 * ln_ratio * ln_ratio + band_term
+        0.5 * phot.z_mag * phot.z_mag + 0.5 * ln_ratio * ln_ratio + band_term
     }
 
     /// Return the total number of scalar leaf features.
@@ -438,8 +438,8 @@ impl EdgeFeatures {
             EdgeFeatureKey::UncertaintyCovVelRatio => self.uncertainty.cov_vel_ratio(),
 
             // Photometry
-            EdgeFeatureKey::PhotometryZFlux => self.photometry.z_flux,
-            EdgeFeatureKey::PhotometryFluxStdRatio => self.photometry.flux_std_ratio,
+            EdgeFeatureKey::PhotometryZMag => self.photometry.z_mag,
+            EdgeFeatureKey::PhotometryMagStdRatio => self.photometry.mag_std_ratio,
             EdgeFeatureKey::PhotometryBandShared => self.photometry.band_shared,
         }
     }
@@ -622,10 +622,10 @@ pub enum EdgeFeatureKey {
     // ---------------------------------------------------------------------
     // Photometry-related features
     // ---------------------------------------------------------------------
-    /// Flux difference expressed as a Z-score.
-    PhotometryZFlux,
-    /// Ratio of flux standard deviations.
-    PhotometryFluxStdRatio,
+    /// Mag difference expressed as a Z-score.
+    PhotometryZMag,
+    /// Ratio of mag standard deviations.
+    PhotometryMagStdRatio,
     /// Indicator of shared photometric band.
     PhotometryBandShared,
 }
@@ -670,8 +670,8 @@ impl EdgeFeatureKey {
             Self::UncertaintyCovVelRatio => 13,
 
             // Photometry (14..17)
-            Self::PhotometryZFlux => 14,
-            Self::PhotometryFluxStdRatio => 15,
+            Self::PhotometryZMag => 14,
+            Self::PhotometryMagStdRatio => 15,
             Self::PhotometryBandShared => 16,
         }
     }
@@ -714,8 +714,8 @@ impl EdgeFeatureKey {
             Self::UncertaintyCovVelRatio => "uncertainty.cov_vel_ratio",
 
             // Photometry
-            Self::PhotometryZFlux => "photometry.z_flux",
-            Self::PhotometryFluxStdRatio => "photometry.flux_std_ratio",
+            Self::PhotometryZMag => "photometry.z_mag",
+            Self::PhotometryMagStdRatio => "photometry.mag_std_ratio",
             Self::PhotometryBandShared => "photometry.band_shared",
         }
     }
@@ -749,8 +749,8 @@ pub const EDGE_FEATURE_KEYS: [EdgeFeatureKey; 17] = [
     // Uncertainty
     EdgeFeatureKey::UncertaintyCovVelRatio,
     // Photometry
-    EdgeFeatureKey::PhotometryZFlux,
-    EdgeFeatureKey::PhotometryFluxStdRatio,
+    EdgeFeatureKey::PhotometryZMag,
+    EdgeFeatureKey::PhotometryMagStdRatio,
     EdgeFeatureKey::PhotometryBandShared,
 ];
 
@@ -869,7 +869,7 @@ mod edge_feature_tests {
     // -------------------------------------------------------------------------
 
     /// Minimal alert factory.
-    fn make_alert(id: u64, night: u32, mjd: f64, ra: f64, dec: f64, band: u8, flux: f64) -> Alert {
+    fn make_alert(id: u64, night: u32, mjd: f64, ra: f64, dec: f64, band: u8, mag: f64) -> Alert {
         let arcsec = std::f64::consts::PI / (180.0 * 3600.0);
         Alert {
             key: AlertKey {
@@ -881,8 +881,8 @@ mod edge_feature_tests {
             dec,
             dec_err: arcsec,
             mjd_tt: mjd,
-            flux,
-            flux_err: flux * 0.05,
+            mag,
+            mag_err: mag * 0.05,
             band,
             observer_mpc_code: Arc::new("500".into()),
         }
@@ -900,13 +900,13 @@ mod edge_feature_tests {
         dec: f64,
         vx_rad_day: f64, // approx angular speed in RA
         band: u8,
-        flux: f64,
+        mag: f64,
     ) -> SeedNode {
         // dt = 0.5 h intra-night
         let dt = 0.5 / 24.0;
         let ra_b = ra + vx_rad_day * dt;
-        let a = make_alert(id_a, night, mjd_a, ra, dec, band, flux);
-        let b = make_alert(id_b, night, mjd_a + dt, ra_b, dec, band, flux);
+        let a = make_alert(id_a, night, mjd_a, ra, dec, band, mag);
+        let b = make_alert(id_b, night, mjd_a + dt, ra_b, dec, band, mag);
         SeedNode::from_pair(store, NightId::new(night), &a, &b, None)
             .expect("from_pair should succeed for simple test alerts")
     }
@@ -1216,17 +1216,17 @@ mod edge_feature_tests {
         fn prop_cost_always_finite_positive(
             epoch_offset   in 0.1f64..10.0,
             vx             in -1e-2f64..1e-2,
-            flux_mean      in 100.0f64..5000.0,
-            flux_delta_pct in -0.3f64..0.3,
+            mag_mean      in 100.0f64..5000.0,
+            mag_delta_pct in -0.3f64..0.3,
         ) {
             let mut store = SeedStore::new();
             let (ra, dec) = (0.5, 0.1);
-            let flux_to = (flux_mean * (1.0 + flux_delta_pct)).max(1.0);
+            let mag_to = (mag_mean * (1.0 + mag_delta_pct)).max(1.0);
             let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0,
-                                           ra, dec, vx, 1, flux_mean);
+                                           ra, dec, vx, 1, mag_mean);
             let to   = make_seed_from_pair(&mut store, 2, 2, 3,
                                            60000.0 + epoch_offset,
-                                           ra + vx * epoch_offset, dec, vx, 1, flux_to);
+                                           ra + vx * epoch_offset, dec, vx, 1, mag_to);
             let cost = EdgeFeatures::compute_cost(&from, &to, &kll_cfg());
             prop_assert!(cost.is_finite(), "cost not finite: {cost}");
             prop_assert!(cost > 0.0,       "cost not > 0: {cost}");
@@ -1237,20 +1237,20 @@ mod edge_feature_tests {
         fn prop_band_shared_never_raises_cost(
             epoch_offset in 0.1f64..10.0,
             vx           in -1e-2f64..1e-2,
-            flux_mean    in 100.0f64..5000.0,
+            mag_mean    in 100.0f64..5000.0,
         ) {
             let mut store = SeedStore::new();
             let (ra, dec) = (0.5, 0.1);
             let from_s = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0,
-                                             ra, dec, vx, 1, flux_mean);
+                                             ra, dec, vx, 1, mag_mean);
             let to_s   = make_seed_from_pair(&mut store, 2, 2, 3,
                                              60000.0 + epoch_offset,
-                                             ra + vx * epoch_offset, dec, vx, 1, flux_mean);
+                                             ra + vx * epoch_offset, dec, vx, 1, mag_mean);
             let from_d = make_seed_from_pair(&mut store, 1, 4, 5, 60000.0,
-                                             ra, dec, vx, 1, flux_mean);
+                                             ra, dec, vx, 1, mag_mean);
             let to_d   = make_seed_from_pair(&mut store, 2, 6, 7,
                                              60000.0 + epoch_offset,
-                                             ra + vx * epoch_offset, dec, vx, 2, flux_mean);
+                                             ra + vx * epoch_offset, dec, vx, 2, mag_mean);
             let cost_s = EdgeFeatures::compute_cost(&from_s, &to_s, &kll_cfg());
             let cost_d = EdgeFeatures::compute_cost(&from_d, &to_d, &kll_cfg());
             prop_assert!(cost_s <= cost_d, "shared {cost_s} > not-shared {cost_d}");
@@ -1290,16 +1290,16 @@ mod edge_feature_tests {
         fn prop_get_consistent_with_iter(
             epoch_offset   in 0.1f64..10.0,
             vx             in -1e-2f64..1e-2,
-            flux_mean      in 100.0f64..5000.0,
-            flux_delta_pct in -0.3f64..0.3,    // flux variation between nights
+            mag_mean      in 100.0f64..5000.0,
+            mag_delta_pct in -0.3f64..0.3,    // mag variation between nights
         ) {
             let mut store = SeedStore::new();
             let ra  = 0.5_f64;
             let dec = 0.1_f64;
-            let flux_to = flux_mean * (1.0 + flux_delta_pct);
-            let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, flux_mean);
+            let mag_to = mag_mean * (1.0 + mag_delta_pct);
+            let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, mag_mean);
             let to   = make_seed_from_pair(&mut store, 2, 2, 3, 60000.0 + epoch_offset,
-                                           ra + vx * epoch_offset, dec, vx, 1, flux_to.max(1.0));
+                                           ra + vx * epoch_offset, dec, vx, 1, mag_to.max(1.0));
             let f = EdgeFeatures::compute_features(&from, &to);
             let vals: Vec<f64> = f.iter_flat().collect();
             for &key in &EDGE_FEATURE_KEYS {
@@ -1313,14 +1313,14 @@ mod edge_feature_tests {
         fn prop_compute_features_all_finite(
             epoch_offset in 0.1f64..10.0,
             vx           in -1e-2f64..1e-2,
-            flux_mean    in 100.0f64..5000.0,
+            mag_mean    in 100.0f64..5000.0,
         ) {
             let mut store = SeedStore::new();
             let ra  = 0.5_f64;
             let dec = 0.1_f64;
-            let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, flux_mean);
+            let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, mag_mean);
             let to   = make_seed_from_pair(&mut store, 2, 2, 3, 60000.0 + epoch_offset,
-                                           ra + vx * epoch_offset, dec, vx, 1, flux_mean);
+                                           ra + vx * epoch_offset, dec, vx, 1, mag_mean);
             let f = EdgeFeatures::compute_features(&from, &to);
             for (name, val) in f.iter_flat_with_name() {
                 prop_assert!(val.is_finite(), "feature '{name}' not finite: {val}");
@@ -1563,16 +1563,16 @@ mod edge_feature_tests {
         fn prop_all_variants_positive_finite(
             epoch_offset in 0.1f64..10.0,
             vx           in -1e-2f64..1e-2,
-            flux_mean    in 100.0f64..5000.0,
+            mag_mean    in 100.0f64..5000.0,
             sigma_q      in 0.0f64..1e-2,
         ) {
             use crate::engine_config::edge_config::CostVariant;
             let mut store = SeedStore::new();
             let ra  = 0.5_f64;
             let dec = 0.1_f64;
-            let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, flux_mean);
+            let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, mag_mean);
             let to   = make_seed_from_pair(&mut store, 2, 2, 3, 60000.0 + epoch_offset,
-                                           ra + vx * epoch_offset, dec, vx, 1, flux_mean);
+                                           ra + vx * epoch_offset, dec, vx, 1, mag_mean);
             let cfgs = [
                 make_cfg(CostVariant::KinematicLogLikelihood, 0.0),
                 make_cfg(CostVariant::GaussianChi2, 0.0),
@@ -1596,15 +1596,15 @@ mod edge_feature_tests {
         fn prop_kll_matches_gaussian_chi2(
             epoch_offset in 0.1f64..10.0,
             vx           in -1e-2f64..1e-2,
-            flux_mean    in 100.0f64..5000.0,
+            mag_mean    in 100.0f64..5000.0,
         ) {
             use crate::engine_config::edge_config::CostVariant;
             let mut store = SeedStore::new();
             let ra  = 0.5_f64;
             let dec = 0.1_f64;
-            let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, flux_mean);
+            let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, mag_mean);
             let to   = make_seed_from_pair(&mut store, 2, 2, 3, 60000.0 + epoch_offset,
-                                           ra + vx * epoch_offset, dec, vx, 1, flux_mean);
+                                           ra + vx * epoch_offset, dec, vx, 1, mag_mean);
             let kll  = EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::KinematicLogLikelihood, 0.0));
             let gchi = EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::GaussianChi2, 0.0));
             prop_assert!(
@@ -1619,15 +1619,15 @@ mod edge_feature_tests {
         fn prop_singer_sigma_q_zero_equals_gaussian(
             epoch_offset in 0.1f64..10.0,
             vx           in -1e-2f64..1e-2,
-            flux_mean    in 100.0f64..5000.0,
+            mag_mean    in 100.0f64..5000.0,
         ) {
             use crate::engine_config::edge_config::CostVariant;
             let mut store = SeedStore::new();
             let ra  = 0.5_f64;
             let dec = 0.1_f64;
-            let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, flux_mean);
+            let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, mag_mean);
             let to   = make_seed_from_pair(&mut store, 2, 2, 3, 60000.0 + epoch_offset,
-                                           ra + vx * epoch_offset, dec, vx, 1, flux_mean);
+                                           ra + vx * epoch_offset, dec, vx, 1, mag_mean);
             let singer = EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::SingerCwna, 0.0));
             let gauss  = EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::GaussianChi2, 0.0));
             prop_assert!(
@@ -1643,16 +1643,16 @@ mod edge_feature_tests {
         fn prop_singer_cwna_le_gaussian_chi2(
             epoch_offset in 0.1f64..10.0,
             vx           in -1e-2f64..1e-2,
-            flux_mean    in 100.0f64..5000.0,
+            mag_mean    in 100.0f64..5000.0,
             sigma_q      in 1e-6f64..1e-2,
         ) {
             use crate::engine_config::edge_config::CostVariant;
             let mut store = SeedStore::new();
             let ra  = 0.5_f64;
             let dec = 0.1_f64;
-            let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, flux_mean);
+            let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, mag_mean);
             let to   = make_seed_from_pair(&mut store, 2, 2, 3, 60000.0 + epoch_offset,
-                                           ra + vx * epoch_offset, dec, vx, 1, flux_mean);
+                                           ra + vx * epoch_offset, dec, vx, 1, mag_mean);
             let singer = EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::SingerCwna, sigma_q));
             let gauss  = EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::GaussianChi2, 0.0));
             // Allow a tiny floating-point tolerance.
@@ -1669,7 +1669,7 @@ mod edge_feature_tests {
         fn prop_singer_larger_sigma_q_lower_cost(
             epoch_offset in 0.1f64..10.0,
             vx           in -1e-2f64..1e-2,
-            flux_mean    in 100.0f64..5000.0,
+            mag_mean    in 100.0f64..5000.0,
             sigma_small  in 1e-6f64..1e-3,
         ) {
             use crate::engine_config::edge_config::CostVariant;
@@ -1677,9 +1677,9 @@ mod edge_feature_tests {
             let ra  = 0.5_f64;
             let dec = 0.1_f64;
             let sigma_large = sigma_small * 10.0;
-            let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, flux_mean);
+            let from = make_seed_from_pair(&mut store, 1, 0, 1, 60000.0, ra, dec, vx, 1, mag_mean);
             let to   = make_seed_from_pair(&mut store, 2, 2, 3, 60000.0 + epoch_offset,
-                                           ra + vx * epoch_offset, dec, vx, 1, flux_mean);
+                                           ra + vx * epoch_offset, dec, vx, 1, mag_mean);
             let cost_small = EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::SingerCwna, sigma_small));
             let cost_large = EdgeFeatures::compute_cost(&from, &to, &make_cfg(CostVariant::SingerCwna, sigma_large));
             prop_assert!(

@@ -13,7 +13,7 @@
 //! # Overview
 //!
 //! The input observation record is an [`Alert`] — a single photometric detection
-//! carrying sky position (RA/Dec in radians), epoch (MJD TT), flux, and
+//! carrying sky position (RA/Dec in radians), epoch (MJD TT), mag, and
 //! band. Alerts are grouped by night in an [`AlertStore`].
 //!
 //! From alerts, the engine builds:
@@ -27,7 +27,7 @@
 //!    hypotheses linking a seed from one night to a seed from another. Each
 //!    edge carries a set of
 //!    [`EdgeFeatures`](crate::graph::edge::edge_features::EdgeFeatures)
-//!    (position residuals, velocity residuals, flux ratio, …) and a scalar
+//!    (position residuals, velocity residuals, mag ratio, …) and a scalar
 //!    cost derived from a configurable cost function.
 //!
 //! 3. **Trajectories** ([`crate::trajectory::TrackHypothesis`]) — ordered
@@ -92,7 +92,7 @@
 //!
 //! | Type | Module | Role |
 //! |------|--------|------|
-//! | [`Alert`] | [`alerts`] | Single photometric detection (position, epoch, flux, band). |
+//! | [`Alert`] | [`alerts`] | Single photometric detection (position, epoch, mag, band). |
 //! | [`AlertKey`] | [`alerts`] | Composite identifier `(NightId, DiaSourceId)`. |
 //! | [`AlertStore`] | [`alerts::store`] | Per-night indexed alert collection. |
 //! | [`SeedNode`](crate::seeding::SeedNode) | [`seeding`] | Intra-night kinematic vector (pair or triplet of alerts). |
@@ -118,7 +118,7 @@
 //! | `KinematicLogLikelihood` | Alias for `GaussianChi2` with `sigma_q = 0` (backward compatibility). |
 //!
 //! All variants include an optional photometric penalty term based on the
-//! flux standard deviation ratio between the two seeds.
+//! mag standard deviation ratio between the two seeds.
 //!
 //! See [`EdgeFeatures::compute_cost`](crate::graph::edge::edge_features::EdgeFeatures::compute_cost)
 //! for the full formula.

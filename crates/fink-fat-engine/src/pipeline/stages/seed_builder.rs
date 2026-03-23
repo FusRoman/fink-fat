@@ -121,7 +121,11 @@ use rayon::prelude::*;
 use crate::{
     Alert,
     alerts::AlertSlice,
-    engine_config::{pair_config::PairConfig, triplet_config::TripletConfig},
+    engine_config::{
+        pair_config::PairConfig,
+        seeding_config::{HoughSeedingConfig, SeedingMethod},
+        triplet_config::TripletConfig,
+    },
     error::EngineError,
     night_id::NightId,
     pipeline::{
@@ -130,7 +134,9 @@ use crate::{
         stages::{PipelineStage, run_stage},
     },
     seeding::{
-        SeedKey, SeedNode, pairs,
+        SeedKey, SeedNode,
+        hough::{self, HoughSeedStats},
+        pairs,
         store::{SeedId, SeedStore},
         triplets,
     },
@@ -163,35 +169,43 @@ struct ProcessOneNightParams<'a> {
     spatial_binner: &'a HealpixBinner,
     pair_cfg: &'a PairConfig,
     triplet_cfg: &'a TripletConfig,
+    hough_cfg: &'a HoughSeedingConfig,
+    seeding_method: SeedingMethod,
     triplet_only: bool,
     time_binner_width: f64,
     night_sink: &'a dyn StageProgress,
 }
 
-/// Process one observation night: bucketize, stream pairs and triplets, and extract seed features.
-///
-/// Uses a thread-local [`SeedStore`] for provisional key allocation. Resulting
-/// seeds carry placeholder keys that must be replaced with real globally-unique
-/// keys by [`finalize_night_seeds`] before insertion into the pipeline seed store.
-///
-/// Arguments
-/// ---------
-/// * `night_id` – Identifier of the night being processed.
-/// * `alerts` – Alert slice for this night.
-/// * `spatial_binner` – Spatial partitioner for (space, time) bucket assignment.
-/// * `pair_cfg` – Pair generation configuration.
-/// * `triplet_cfg` – Triplet generation configuration.
-/// * `triplet_only` – If `true`, emit only triplet-derived seeds.
-/// * `time_binner_width` – Time bin width in days.
-/// * `night_sink` – Progress sink for the per-night sub-scope.
-///
-/// Return
-/// ------
-/// * `Ok(NightSeedResult)` – Alert, pair and triplet counts plus sorted seeds
-///   with provisional keys.
-/// * `Err(EngineError::StageFailed)` – If the alert slice is empty
-///   (cannot determine `t0` for time binning).
-fn process_one_night(
+fn process_one_night_hough(
+    night_id: NightId,
+    alerts: &[Alert],
+    params: &ProcessOneNightParams<'_>,
+) -> NightSeedResult {
+    let (all_seeds, stats): (Vec<SeedNode>, HoughSeedStats) =
+        hough::build_hough_seeds_for_night(alerts, night_id, params.hough_cfg, params.triplet_only);
+
+    tracing::debug!(
+        %night_id,
+        n_velocity_hypotheses = stats.n_velocity_hypotheses,
+        n_accumulator_bins = stats.n_accumulator_bins,
+        n_peaks = stats.n_peaks,
+        n_peaks_after_photometric_filter = stats.n_peaks_after_photometric_filter,
+        n_pair_seeds = stats.n_pair_seeds,
+        n_triplet_seeds = stats.n_triplet_seeds,
+        n_night_seeds = all_seeds.len(),
+        "hough seeding complete"
+    );
+
+    NightSeedResult {
+        night_id,
+        seeds: all_seeds,
+        n_alerts: alerts.len() as u64,
+        n_pairs: stats.n_pair_seeds,
+        n_triplets: stats.n_triplet_seeds,
+    }
+}
+
+fn process_one_night_pair_triplet(
     night_id: NightId,
     alerts: &[Alert],
     params: &ProcessOneNightParams<'_>,
@@ -220,7 +234,6 @@ fn process_one_night(
     params.night_sink.inc(1);
 
     // Milestone 3 + 4: stream pairs directly into triplet generation.
-    // This avoids materializing all pairs for dense nights.
     let mut local_store = SeedStore::new();
     let mut all_seeds: Vec<SeedNode> = Vec::new();
 
@@ -287,12 +300,9 @@ fn process_one_night(
     );
 
     // Milestone 5: combine and sort.
-    // Sorting by epoch_mid is required by the edge builder, which performs a
-    // dichotomic search over right-hand nodes.
     all_seeds.sort();
     tracing::debug!(%night_id, n_night_seeds = all_seeds.len(), "seeds combined and sorted");
     params.night_sink.inc(1);
-    params.night_sink.finish();
 
     Ok(NightSeedResult {
         night_id,
@@ -301,6 +311,54 @@ fn process_one_night(
         n_pairs,
         n_triplets,
     })
+}
+
+/// Process one observation night: bucketize, stream pairs and triplets, and extract seed features.
+///
+/// Uses a thread-local [`SeedStore`] for provisional key allocation. Resulting
+/// seeds carry placeholder keys that must be replaced with real globally-unique
+/// keys by [`finalize_night_seeds`] before insertion into the pipeline seed store.
+///
+/// Arguments
+/// ---------
+/// * `night_id` – Identifier of the night being processed.
+/// * `alerts` – Alert slice for this night.
+/// * `spatial_binner` – Spatial partitioner for (space, time) bucket assignment.
+/// * `pair_cfg` – Pair generation configuration.
+/// * `triplet_cfg` – Triplet generation configuration.
+/// * `triplet_only` – If `true`, emit only triplet-derived seeds.
+/// * `time_binner_width` – Time bin width in days.
+/// * `night_sink` – Progress sink for the per-night sub-scope.
+///
+/// Return
+/// ------
+/// * `Ok(NightSeedResult)` – Alert, pair and triplet counts plus sorted seeds
+///   with provisional keys.
+/// * `Err(EngineError::StageFailed)` – If the alert slice is empty
+///   (cannot determine `t0` for time binning).
+fn process_one_night(
+    night_id: NightId,
+    alerts: &[Alert],
+    params: &ProcessOneNightParams<'_>,
+) -> Result<NightSeedResult, EngineError> {
+    if alerts.is_empty() {
+        return Err(EngineError::StageFailed {
+            stage: PipelineStage::BuildSeeds,
+            message: format!(
+                "night {night_id} contains no alerts, cannot determine t0 for time binning"
+            ),
+        });
+    }
+
+    let result = match params.seeding_method {
+        SeedingMethod::PairTriplet => process_one_night_pair_triplet(night_id, alerts, params)?,
+        SeedingMethod::Hough => {
+            params.night_sink.inc(5);
+            process_one_night_hough(night_id, alerts, params)
+        }
+    };
+    params.night_sink.finish();
+    Ok(result)
 }
 
 /// Assign real globally-unique keys to seeds and insert them into the pipeline seed store.
@@ -413,6 +471,8 @@ pub fn run(
         |stage_sink| {
             let pair_cfg = &ctx.engine_config.pairs;
             let triplet_cfg = &ctx.engine_config.triplets;
+            let hough_cfg = &ctx.engine_config.seeding.hough;
+            let seeding_method = ctx.engine_config.seeding.method;
             let triplet_only = ctx.engine_config.seeding.triplet_only;
             let spatial_binner = HealpixBinner::new(ctx.engine_config.healpix_depth);
             let time_binner_width = ctx.engine_config.time_binner_width;
@@ -433,6 +493,7 @@ pub fn run(
             tracing::debug!(
                 n_nights = nights_to_process.len(),
                 healpix_depth = ctx.engine_config.healpix_depth,
+                seeding_method = ?seeding_method,
                 triplet_only,
                 time_binner_width,
                 "BuildSeeds starting",
@@ -469,6 +530,8 @@ pub fn run(
                         spatial_binner: &spatial_binner,
                         pair_cfg,
                         triplet_cfg,
+                        hough_cfg,
+                        seeding_method,
                         triplet_only,
                         time_binner_width,
                         night_sink: &*night_sink,

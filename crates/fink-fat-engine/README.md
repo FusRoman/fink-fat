@@ -90,7 +90,7 @@ An `Alert` represents a single photometric detection:
 | `ra`, `dec` | `f64` | radians, ICRS J2000 |
 | `ra_err`, `dec_err` | `f64` | radians, 1σ |
 | `mjd_tt` | `f64` | MJD TT (days) |
-| `flux`, `flux_err` | `f64` | PSF difference flux (upstream-dependent) |
+| `mag`, `mag_err` | `f64` | PSF difference magnitude (upstream-dependent) |
 | `band` | `u8` | photometric band code (LSST: u=0 … y=5) |
 | `dia_source_id` | `u64` | upstream unique detection identifier |
 
@@ -149,6 +149,11 @@ export FINK_FAT__EDGES__TOP_K_PER_LEFT=64
 
 ### Top-level structure
 
+Alert photometry is ingested and propagated as `mag` / `mag_err`.
+The configuration key is `max_mag_difference`.
+Edge feature names still use historical `mag` wording
+(`z_mag`, `mag_std_ratio`) to preserve the public feature schema.
+
 ```yaml
 version: 1
 max_gap_nights: 2          # maximum inter-night gap considered for linking
@@ -157,13 +162,13 @@ storage_path: "storage/"   # root for on-disk persistence
 pairs:
   max_dt: "86.4 min"
   max_angular_speed: "35 arcmin/day"
-  max_flux_difference: 2.5
+  max_mag_difference: 2.5
 
 triplets:
   max_dt_between: "30 min"
   max_pair_sep: "10 arcmin"
   max_predicted_residual: "5 arcmin"
-  max_flux_difference: 2.5
+  max_mag_difference: 2.5
 
 edges:
   top_k_per_left: 32
@@ -264,12 +269,15 @@ growth that plagues the pure Gaussian model.
 
 Added unconditionally regardless of the kinematic variant:
 
-$$c\_{\mathrm{phot}} = \frac{1}{2} z\_{\mathrm{flux}}^{2} + \frac{1}{2}\bigl[\ln(|r\_{\sigma}| + \varepsilon)\bigr]^{2} + b\_{\mathrm{band}}$$
+$$c\_{\mathrm{phot}} = \frac{1}{2} z\_{\mathrm{mag}}^{2} + \frac{1}{2}\bigl[\ln(|r\_{\sigma}| + \varepsilon)\bigr]^{2} + b\_{\mathrm{band}}$$
 
-where $z\_{\mathrm{flux}}$ is the flux z-score between the two seeds,
-$r\_{\sigma}$ is the ratio of their flux standard deviations, and
+where $z\_{\mathrm{mag}}$ is the magnitude z-score between the two seeds,
+$r\_{\sigma}$ is the ratio of their magnitude standard deviations, and
 $b\_{\mathrm{band}} = 0$ when both seeds share a photometric band,
 $b\_{\mathrm{band}} \approx 6.9$ otherwise.
+
+The underlying Rust feature fields still use the historical names
+`z_mag` and `mag_std_ratio` to preserve the public feature ordering.
 
 For full implementation details see
 [`edge_features`](https://docs.rs/fink-fat-engine/latest/fink_fat_engine/graph/edge/edge_features/index.html)

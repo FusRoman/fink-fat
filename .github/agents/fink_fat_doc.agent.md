@@ -103,9 +103,9 @@ mathematical identifiers.
 #### Reference working example
 
 ```rust
-/// $$\begin{align} c &= \frac{1}{2}\chi^2\_{\text{pos}} \\ &+ \frac{1}{2}\chi^2\_{\text{vel}} \\ &+ \frac{1}{2}z\_{\text{flux}}^{2} \\ &+ \frac{1}{2}\bigl[\ln(|r\_{\sigma}| + \varepsilon)\bigr]^2 \\ &+ \ln(\varepsilon\_{\text{band}} + b\_{\text{shared}}) \end{align}$$
+/// $$\begin{align} c &= \frac{1}{2}\chi^2\_{\text{pos}} \\ &+ \frac{1}{2}\chi^2\_{\text{vel}} \\ &+ \frac{1}{2}z\_{\text{mag}}^{2} \\ &+ \frac{1}{2}\bigl[\ln(|r\_{\sigma}| + \varepsilon)\bigr]^2 \\ &+ \ln(\varepsilon\_{\text{band}} + b\_{\text{shared}}) \end{align}$$
 ///
-/// where $r\_{\sigma}$ is `flux_std_ratio` and $b\_{\text{shared}} \in \{0, 1\}$.
+/// where $r\_{\sigma}$ is `mag_std_ratio` and $b\_{\text{shared}} \in \{0, 1\}$.
 ```
 
 #### Summary of LaTeX rules

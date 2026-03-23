@@ -11,8 +11,8 @@ use std::fmt::{self, Display, Formatter};
 ///   with `n_bands` indicating how many entries are valid.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct Photometry {
-    pub flux_mean: f32,
-    pub flux_std: f32,
+    pub mag_mean: f32,
+    pub mag_std: f32,
 
     /// Number of valid bands stored in `bands` (2 for pairs, 3 for triplets).
     pub n_bands: u8,
@@ -30,8 +30,8 @@ impl Display for Photometry {
         };
         write!(
             f,
-            "Photometry {{ flux_mean: {:.6e}, flux_std: {:.6e}, bands: {} }}",
-            self.flux_mean, self.flux_std, bands
+            "Photometry {{ mag_mean: {:.6e}, mag_std: {:.6e}, bands: {} }}",
+            self.mag_mean, self.mag_std, bands
         )
     }
 }
@@ -39,10 +39,10 @@ impl Display for Photometry {
 impl Photometry {
     /// Build photometry for a pair seed.
     #[inline]
-    pub fn from_pair(flux_mean: f32, flux_std: f32, band_a: u8, band_b: u8) -> Self {
+    pub fn from_pair(mag_mean: f32, mag_std: f32, band_a: u8, band_b: u8) -> Self {
         Self {
-            flux_mean,
-            flux_std,
+            mag_mean,
+            mag_std,
             n_bands: 2,
             bands: [band_a, band_b, 0],
         }
@@ -50,10 +50,10 @@ impl Photometry {
 
     /// Build photometry for a triplet seed.
     #[inline]
-    pub fn from_triplet(flux_mean: f32, flux_std: f32, band_a: u8, band_b: u8, band_c: u8) -> Self {
+    pub fn from_triplet(mag_mean: f32, mag_std: f32, band_a: u8, band_b: u8, band_c: u8) -> Self {
         Self {
-            flux_mean,
-            flux_std,
+            mag_mean,
+            mag_std,
             n_bands: 3,
             bands: [band_a, band_b, band_c],
         }

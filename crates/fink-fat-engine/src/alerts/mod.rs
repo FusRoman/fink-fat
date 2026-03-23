@@ -27,8 +27,8 @@
 //! | `ra`, `dec`      | **radians**, ICRS / J2000                       |
 //! | `ra_err`, `dec_err` | **radians**, 1σ positional uncertainty       |
 //! | `mjd_tt`         | **MJD TT** (days), Terrestrial Time              |
-//! | `flux`           | PSF difference flux (upstream-dependent, e.g. nJy) |
-//! | `flux_err`       | 1σ flux uncertainty (same units as `flux`)       |
+//! | `mag`           | PSF difference mag (upstream-dependent, e.g. nJy) |
+//! | `mag_err`       | 1σ mag uncertainty (same units as `mag`)       |
 //! | `band`           | `u8` photometric band code (LSST: u=0 … y=5)    |
 //!
 //! Ordering, hashing, and determinism
@@ -144,10 +144,10 @@ pub struct Alert {
     pub dec_err: Radian,
     /// Detection epoch (MJD TT, days).
     pub mjd_tt: MJDTT,
-    /// PSF difference flux (units depend on upstream, e.g. nJy).
-    pub flux: f64,
-    /// 1σ uncertainty on flux (same units as `flux`).
-    pub flux_err: f64,
+    /// PSF difference magnitude (units depend on upstream).
+    pub mag: f64,
+    /// 1σ uncertainty on magnitude (same units as `mag`).
+    pub mag_err: f64,
     /// Photometric band code.
     pub band: u8,
     /// Observer reference
@@ -170,8 +170,8 @@ impl PartialEq for Alert {
             && self.dec.to_bits() == other.dec.to_bits()
             && self.ra_err.to_bits() == other.ra_err.to_bits()
             && self.dec_err.to_bits() == other.dec_err.to_bits()
-            && self.flux.to_bits() == other.flux.to_bits()
-            && self.flux_err.to_bits() == other.flux_err.to_bits()
+            && self.mag.to_bits() == other.mag.to_bits()
+            && self.mag_err.to_bits() == other.mag_err.to_bits()
     }
 }
 
@@ -190,7 +190,7 @@ impl PartialOrd for Alert {
 /// -------------
 /// 1. `mjd_tt` (observation time) – primary key.
 /// 2. `dia_source_id` – first tie-breaker.
-/// 3. `band`, `ra`, `dec`, `ra_err`, `dec_err`, `flux`, `flux_err` –
+/// 3. `band`, `ra`, `dec`, `ra_err`, `dec_err`, `mag`, `mag_err` –
 ///    subsequent tie-breakers ensuring a unique position for every
 ///    distinct alert.
 ///
@@ -207,8 +207,8 @@ impl Ord for Alert {
             .then_with(|| self.dec.total_cmp(&other.dec))
             .then_with(|| self.ra_err.total_cmp(&other.ra_err))
             .then_with(|| self.dec_err.total_cmp(&other.dec_err))
-            .then_with(|| self.flux.total_cmp(&other.flux))
-            .then_with(|| self.flux_err.total_cmp(&other.flux_err))
+            .then_with(|| self.mag.total_cmp(&other.mag))
+            .then_with(|| self.mag_err.total_cmp(&other.mag_err))
     }
 }
 
@@ -228,8 +228,8 @@ impl Hash for Alert {
         self.ra_err.to_bits().hash(state);
         self.dec_err.to_bits().hash(state);
 
-        self.flux.to_bits().hash(state);
-        self.flux_err.to_bits().hash(state);
+        self.mag.to_bits().hash(state);
+        self.mag_err.to_bits().hash(state);
     }
 }
 
@@ -241,13 +241,13 @@ impl Display for Alert {
         write!(
             f,
             "Alert(dia_source_id={}, ra={:.6} rad, dec={:.6} rad, mjd_tt={:.5}, \
-             flux={:.3}±{:.3}, band={})",
+             mag={:.3}±{:.3}, band={})",
             self.key.dia_source_id,
             self.ra,
             self.dec,
             self.mjd_tt,
-            self.flux,
-            self.flux_err,
+            self.mag,
+            self.mag_err,
             self.band
         )
     }

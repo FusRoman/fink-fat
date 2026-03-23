@@ -39,9 +39,9 @@ use truth_distributions::{
 /// # Plots produced
 ///
 /// **Truth parameter distributions** (calibration guides for `eval_config.yml`):
-/// - `pairs_dt.png`, `pairs_angular_speed.png`, `pairs_flux_diff.png`
+/// - `pairs_dt.png`, `pairs_angular_speed.png`, `pairs_mag_diff.png`
 /// - `triplets_max_dt.png`, `triplets_pair_sep.png`, `triplets_residual.png`,
-///   `triplets_flux_diff.png`
+///   `triplets_mag_diff.png`
 ///
 /// **Per-night seeding results**:
 /// - `seed_counts.png`   – TP / FP / unknown stacked bar chart

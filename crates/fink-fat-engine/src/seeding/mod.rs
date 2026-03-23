@@ -52,6 +52,7 @@
 //! - [`EdgeFeatures::compute_features`](crate::graph::edge::edge_features::EdgeFeatures::compute_features) – exact feature extraction for edges.
 
 pub mod error;
+pub mod hough;
 pub mod pairs;
 pub mod photometry;
 pub mod seed_spatial_index;
@@ -168,10 +169,8 @@ impl Ord for SeedNode {
                 (Some(a), Some(b)) => a[0].total_cmp(&b[0]).then_with(|| a[1].total_cmp(&b[1])),
             })
             // photom
-            .then_with(|| {
-                (self.photom.flux_mean as f64).total_cmp(&(other.photom.flux_mean as f64))
-            })
-            .then_with(|| (self.photom.flux_std as f64).total_cmp(&(other.photom.flux_std as f64)))
+            .then_with(|| (self.photom.mag_mean as f64).total_cmp(&(other.photom.mag_mean as f64)))
+            .then_with(|| (self.photom.mag_std as f64).total_cmp(&(other.photom.mag_std as f64)))
             .then_with(|| self.photom.n_bands.cmp(&other.photom.n_bands))
             .then_with(|| self.photom.bands.cmp(&other.photom.bands))
     }
@@ -536,7 +535,7 @@ impl SeedNode {
     /// - projects both detections onto the tangent plane,
     /// - fits a linear motion model (position at mid-epoch + velocity),
     /// - builds simple isotropic covariance estimates for position and velocity,
-    /// - aggregates minimal photometry from the two fluxes.
+    /// - aggregates minimal photometry from the two magnitudes.
     ///
     /// Arguments
     /// ---------
@@ -606,14 +605,10 @@ impl SeedNode {
         let vel_var = 2.0 * s2 * inv_dt2;
         let cov_vel = [[vel_var, 0.0], [0.0, vel_var]];
 
-        let flux_mean = (alert_a.flux + alert_b.flux) * 0.5;
-        let flux_std = ((alert_a.flux - flux_mean).abs() + (alert_b.flux - flux_mean).abs()) * 0.5;
-        let photom = Photometry::from_pair(
-            flux_mean as f32,
-            flux_std as f32,
-            alert_a.band,
-            alert_b.band,
-        );
+        let mag_mean = (alert_a.mag + alert_b.mag) * 0.5;
+        let mag_std = ((alert_a.mag - mag_mean).abs() + (alert_b.mag - mag_mean).abs()) * 0.5;
+        let photom =
+            Photometry::from_pair(mag_mean as f32, mag_std as f32, alert_a.band, alert_b.band);
 
         let plane = TangentPlaneModel::new(
             center,
@@ -700,15 +695,15 @@ impl SeedNode {
         let vel_var = s2 * inv_dt2;
         let cov_vel = [[vel_var, 0.0], [0.0, vel_var]];
 
-        let flux_mean = (alert_a.flux + alert_b.flux + alert_c.flux) / 3.0;
-        let flux_std = ((alert_a.flux - flux_mean).abs()
-            + (alert_b.flux - flux_mean).abs()
-            + (alert_c.flux - flux_mean).abs())
+        let mag_mean = (alert_a.mag + alert_b.mag + alert_c.mag) / 3.0;
+        let mag_std = ((alert_a.mag - mag_mean).abs()
+            + (alert_b.mag - mag_mean).abs()
+            + (alert_c.mag - mag_mean).abs())
             / 3.0;
 
         let photom = Photometry::from_triplet(
-            flux_mean as f32,
-            flux_std as f32,
+            mag_mean as f32,
+            mag_std as f32,
             alert_a.band,
             alert_b.band,
             alert_c.band,
@@ -784,7 +779,7 @@ mod seed_node_tests {
 
     /* ------------------------- helpers ------------------------- */
 
-    fn mk_alert(source_id: u64, ra: f64, dec: f64, mjd_tt: f64, band: u8, flux: f64) -> Alert {
+    fn mk_alert(source_id: u64, ra: f64, dec: f64, mjd_tt: f64, band: u8, mag: f64) -> Alert {
         Alert {
             key: AlertKey {
                 night_id: NightId::new(0),
@@ -795,8 +790,8 @@ mod seed_node_tests {
             dec,
             dec_err: arcsec_to_rad(0.5),
             mjd_tt,
-            flux,
-            flux_err: 0.0,
+            mag,
+            mag_err: 0.0,
             band,
             ..Default::default()
         }

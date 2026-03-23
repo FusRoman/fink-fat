@@ -13,7 +13,7 @@
 //! `edge_cos_dtheta_v.png`       | cos Δθᵥ (direction alignment)               |
 //! `edge_rel_speed_diff.png`     | Relative speed difference                   |
 //! `edge_innov_speed_ratio.png`  | Innovation-speed ratio                      |
-//! `edge_z_flux.png`             | Photometry flux z-score                     |
+//! `edge_z_mag.png`             | Photometry mag z-score                     |
 
 use std::path::Path;
 
@@ -50,7 +50,7 @@ pub struct EdgeDistribData {
     pub cos_dtheta_tp: Vec<f64>,
     pub rel_speed_tp: Vec<f64>,
     pub innov_speed_tp: Vec<f64>,
-    pub z_flux_tp: Vec<f64>,
+    pub z_mag_tp: Vec<f64>,
 
     // FP series
     pub cost_fp: Vec<f64>,
@@ -60,7 +60,7 @@ pub struct EdgeDistribData {
     pub cos_dtheta_fp: Vec<f64>,
     pub rel_speed_fp: Vec<f64>,
     pub innov_speed_fp: Vec<f64>,
-    pub z_flux_fp: Vec<f64>,
+    pub z_mag_fp: Vec<f64>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -134,7 +134,7 @@ pub fn collect_edge_distrib_data(
             innov_speed_fp,
             features.velocity.innov_speed_ratio
         );
-        push!(z_flux_tp, z_flux_fp, features.photometry.z_flux);
+        push!(z_mag_tp, z_mag_fp, features.photometry.z_mag);
     }
 
     Ok(data)
@@ -174,8 +174,8 @@ pub fn plot_edge_distributions(data: EdgeDistribData, out_dir: &Utf8Path) -> Res
         rel_speed_fp,
         innov_speed_tp,
         innov_speed_fp,
-        z_flux_tp,
-        z_flux_fp,
+        z_mag_tp,
+        z_mag_fp,
     } = data;
 
     overlay_metric(
@@ -249,13 +249,13 @@ pub fn plot_edge_distributions(data: EdgeDistribData, out_dir: &Utf8Path) -> Res
     )?;
 
     overlay_metric(
-        sort_finite(z_flux_tp),
-        sort_finite(z_flux_fp),
-        "Flux z-score (TP vs FP)",
-        "z_flux",
+        sort_finite(z_mag_tp),
+        sort_finite(z_mag_fp),
+        "Mag z-score (TP vs FP)",
+        "z_mag",
         false,
         None,
-        &d.join("edge_z_flux.png"),
+        &d.join("edge_z_mag.png"),
     )?;
 
     Ok(())

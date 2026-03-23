@@ -2,7 +2,7 @@
 //! triplets.
 //!
 //! For each ground-truth trajectory that has ≥ 2 alerts on a single night the
-//! module computes the seeding-relevant metrics (Δt, angular speed, flux
+//! module computes the seeding-relevant metrics (Δt, angular speed, mag
 //! difference, predicted residual, …) and writes one three-panel chart
 //! (histogram / CDF / percentiles) per metric to `out_dir`.
 //!
@@ -38,8 +38,8 @@ pub struct TruthPairData {
     pub dt_hours: Vec<f64>,
     /// Angular speed (arcmin / day).
     pub angular_speed_arcmin_per_day: Vec<f64>,
-    /// |flux_a − flux_b| (upstream flux units).
-    pub flux_difference: Vec<f64>,
+    /// |mag_a − mag_b| (upstream mag units).
+    pub mag_difference: Vec<f64>,
 }
 
 /// Metrics measured on ground-truth triplets (same night, same trajectory).
@@ -51,8 +51,8 @@ pub struct TruthTripletData {
     pub pair_sep_arcmin: Vec<f64>,
     /// Predicted residual at c using the linear (a→b) model, in arcmin.
     pub predicted_residual_arcmin: Vec<f64>,
-    /// Range of flux values within the triplet (max − min).
-    pub flux_difference: Vec<f64>,
+    /// Range of mag values within the triplet (max − min).
+    pub mag_difference: Vec<f64>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -97,7 +97,7 @@ fn accumulate_pair_metrics(alerts: &[&Alert], data: &mut TruthPairData) {
             data.dt_hours.push(dt_days * 24.0);
             data.angular_speed_arcmin_per_day
                 .push(sep / dt_days * RAD_TO_ARCMIN);
-            data.flux_difference.push((a.flux - b.flux).abs());
+            data.mag_difference.push((a.mag - b.mag).abs());
         }
     }
 }
@@ -136,16 +136,16 @@ fn accumulate_triplet_metrics(alerts: &[&Alert], data: &mut TruthTripletData) {
                 let pred_y = vy * dt_ac;
                 let residual = ((dx_ac - pred_x).powi(2) + (dy_ac - pred_y).powi(2)).sqrt();
 
-                let fluxes = [a.flux, b.flux, c.flux];
-                let f_max = fluxes.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-                let f_min = fluxes.iter().copied().fold(f64::INFINITY, f64::min);
+                let mages = [a.mag, b.mag, c.mag];
+                let f_max = mages.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                let f_min = mages.iter().copied().fold(f64::INFINITY, f64::min);
 
                 data.max_dt_between_hours.push(dt_ab.max(dt_bc) * 24.0);
                 data.pair_sep_arcmin.push(sep_ab * RAD_TO_ARCMIN);
                 data.pair_sep_arcmin.push(sep_bc * RAD_TO_ARCMIN);
                 data.predicted_residual_arcmin
                     .push(residual * RAD_TO_ARCMIN);
-                data.flux_difference.push(f_max - f_min);
+                data.mag_difference.push(f_max - f_min);
             }
         }
     }
@@ -195,7 +195,7 @@ fn sort_finite(mut v: Vec<f64>) -> Vec<f64> {
 /// Files produced:
 /// - `pairs_dt.png`             – time separation distribution
 /// - `pairs_angular_speed.png`  – angular speed distribution
-/// - `pairs_flux_diff.png`      – flux difference distribution
+/// - `pairs_mag_diff.png`      – mag difference distribution
 pub fn plot_pair_distributions(
     data: TruthPairData,
     pair_cfg: &PairConfig,
@@ -206,7 +206,7 @@ pub fn plot_pair_distributions(
     let TruthPairData {
         dt_hours,
         angular_speed_arcmin_per_day,
-        flux_difference,
+        mag_difference,
     } = data;
 
     plot_metric(
@@ -228,12 +228,12 @@ pub fn plot_pair_distributions(
     )?;
 
     plot_metric(
-        &sort_finite(flux_difference),
-        "True pairs: flux difference",
-        "|flux_a - flux_b|",
-        Some(pair_cfg.max_flux_difference),
+        &sort_finite(mag_difference),
+        "True pairs: mag difference",
+        "|mag_a - mag_b|",
+        Some(pair_cfg.max_mag_difference),
         false,
-        &out_dir.as_std_path().join("pairs_flux_diff.png"),
+        &out_dir.as_std_path().join("pairs_mag_diff.png"),
     )?;
 
     Ok(())
@@ -245,7 +245,7 @@ pub fn plot_pair_distributions(
 /// - `triplets_max_dt.png`       – max Δt between consecutive detections
 /// - `triplets_pair_sep.png`     – consecutive-pair angular separation
 /// - `triplets_residual.png`     – linear-model predicted residual at c
-/// - `triplets_flux_diff.png`    – flux range within the triplet
+/// - `triplets_mag_diff.png`    – mag range within the triplet
 pub fn plot_triplet_distributions(
     data: TruthTripletData,
     triplet_cfg: &TripletConfig,
@@ -257,7 +257,7 @@ pub fn plot_triplet_distributions(
         max_dt_between_hours,
         pair_sep_arcmin,
         predicted_residual_arcmin,
-        flux_difference,
+        mag_difference,
     } = data;
 
     plot_metric(
@@ -288,12 +288,12 @@ pub fn plot_triplet_distributions(
     )?;
 
     plot_metric(
-        &sort_finite(flux_difference),
-        "True triplets: flux range",
-        "flux range (max-min)",
-        Some(triplet_cfg.max_flux_difference),
+        &sort_finite(mag_difference),
+        "True triplets: mag range",
+        "mag range (max-min)",
+        Some(triplet_cfg.max_mag_difference),
         false,
-        &out_dir.as_std_path().join("triplets_flux_diff.png"),
+        &out_dir.as_std_path().join("triplets_mag_diff.png"),
     )?;
 
     Ok(())

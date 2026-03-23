@@ -23,8 +23,8 @@ FEATURE_COLUMNS = [
     "velocity.rel_speed_diff",
     "velocity.innov_speed_ratio",
     "uncertainty.cov_vel_ratio",
-    "photometry.z_flux",
-    "photometry.flux_std_ratio",
+    "photometry.z_mag",
+    "photometry.mag_std_ratio",
     "photometry.band_shared",
 ]
 

@@ -20,7 +20,7 @@
 //! For each candidate pair `(a, b)`:
 //! - **Time ordering:** `t_b > t_a`
 //! - **Maximum time separation:** `t_b - t_a ≤ max_dt`
-//! - **Flux similarity:** `|flux_a - flux_b| ≤ max_flux_difference`
+//! - **Magnitude similarity:** `|mag_a - mag_b| ≤ max_mag_difference`
 //! - **Angular-speed constraint:** `angular_separation_vincenty(a, b) / (t_b - t_a) ≤ max_angular_speed`
 //! - **Minimum apparent motion:** `angular_separation_vincenty(a, b) / (t_b - t_a) ≥ min_motion`
 //!
@@ -58,7 +58,7 @@
 //!
 //! See also
 //! --------
-//! - [`PairConfig`] – configuration of time/flux/speed constraints.
+//! - [`PairConfig`] – configuration of time/photometry/speed constraints.
 //! - [`BucketIndex`] – bucketed storage used for accelerated neighbor scans.
 //! - [`SeedNode::from_pair`] – builds a compact intra-night seed from a valid pair.
 
@@ -103,7 +103,7 @@ pub type Pairs<'alert_lf> = Vec<Pair<'alert_lf>>;
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PairGenerationStats {
     pub n_pairs: u64,
-    pub n_rejected_flux: u64,
+    pub n_rejected_mag: u64,
     pub n_rejected_speed: u64,
     pub n_rejected_min_motion: u64,
     pub n_dedup_skipped: u64,
@@ -234,7 +234,7 @@ fn lower_bound_gt_time(members: &[&Alert], t0: f64) -> usize {
 /// - within each candidate bucket:
 ///   - binary-search to skip `t_b ≤ t_a`,
 ///   - scan forward until `t_b > t_a + max_dt`,
-///   - apply flux and angular-speed constraints,
+///   - apply magnitude and angular-speed constraints,
 ///   - deduplicate by `(ptr(a), ptr(b))`.
 ///
 /// Arguments
@@ -249,7 +249,7 @@ fn lower_bound_gt_time(members: &[&Alert], t0: f64) -> usize {
 ///   - `max_dt` (days),
 ///   - `max_angular_speed` (rad/day),
 ///   - `min_motion` (rad/day),
-///   - `max_flux_difference` (flux units),
+///   - `max_mag_difference` (magnitude units),
 ///   - `allow_same_timebin` (bool).
 ///
 /// Return
@@ -352,7 +352,7 @@ where
         max_dt = config.max_dt,
         max_angular_speed = config.max_angular_speed,
         min_motion = config.min_motion,
-        max_flux_difference = config.max_flux_difference,
+        max_mag_difference = config.max_mag_difference,
         allow_same_timebin = config.allow_same_timebin,
         sep_cap,
         spatial_search_radius,
@@ -394,7 +394,7 @@ where
         for &a in bucket.members.iter() {
             let t_a = a.mjd_tt;
             let t_upper = t_a + config.max_dt;
-            let flux_a = a.flux;
+            let mag_a = a.mag;
 
             // Precompute direction vector of `a` to amortize dot products.
             let u_a = unit_vec(a.ra, a.dec);
@@ -425,9 +425,9 @@ where
                             continue;
                         }
 
-                        // Flux similarity
-                        if (flux_a - b.flux).abs() > config.max_flux_difference {
-                            stats.n_rejected_flux += 1;
+                        // Magnitude similarity
+                        if (mag_a - b.mag).abs() > config.max_mag_difference {
+                            stats.n_rejected_mag += 1;
                             continue;
                         }
 
@@ -468,7 +468,7 @@ where
 
     tracing::debug!(
         n_pairs = stats.n_pairs,
-        n_rejected_flux = stats.n_rejected_flux,
+        n_rejected_mag = stats.n_rejected_mag,
         n_rejected_speed = stats.n_rejected_speed,
         n_rejected_min_motion = stats.n_rejected_min_motion,
         n_dedup_skipped = stats.n_dedup_skipped,
@@ -535,7 +535,7 @@ mod pair_gen_tests {
     /* ------------------------- helpers ------------------------- */
 
     /// Construct a minimal `Alert` for testing.
-    fn mk_alert(i: usize, ra: f64, dec: f64, mjd_tt: f64, band: u8, flux: f64) -> Alert {
+    fn mk_alert(i: usize, ra: f64, dec: f64, mjd_tt: f64, band: u8, mag: f64) -> Alert {
         Alert {
             key: AlertKey {
                 night_id: NightId(0),
@@ -546,8 +546,8 @@ mod pair_gen_tests {
             dec,
             dec_err: 0.5 * PI / (180.0 * 3600.0), // ~0.5 arcsec in radians
             mjd_tt,
-            flux,
-            flux_err: 0.0,
+            mag,
+            mag_err: 0.0,
             band,
             ..Default::default()
         }
@@ -598,7 +598,7 @@ mod pair_gen_tests {
             max_angular_speed: omega,
             min_motion: 0.0,
             allow_same_timebin: false,
-            max_flux_difference: 10.0,
+            max_mag_difference: 10.0,
         };
 
         let pairs = generate_pairs(&bucket_index, &spatial_binner, &time_binner, &config);
@@ -646,7 +646,7 @@ mod pair_gen_tests {
             max_angular_speed: omega,
             min_motion: 0.0,
             allow_same_timebin: false,
-            max_flux_difference: 10.0,
+            max_mag_difference: 10.0,
         };
 
         let pairs_no_same = generate_pairs(
@@ -662,7 +662,7 @@ mod pair_gen_tests {
             max_angular_speed: omega,
             min_motion: 0.0,
             allow_same_timebin: true,
-            max_flux_difference: 10.0,
+            max_mag_difference: 10.0,
         };
 
         let pairs_same = generate_pairs(&bucket_index, &spatial_binner, &time_binner, &config_same);
@@ -717,7 +717,7 @@ mod pair_gen_tests {
             max_angular_speed: omega,
             min_motion: 0.0,
             allow_same_timebin: true,
-            max_flux_difference: 1e6,
+            max_mag_difference: 1e6,
         };
 
         let pairs = generate_pairs(&bucket_index, &spatial_binner, &time_binner, &config);
@@ -775,7 +775,7 @@ mod pair_gen_tests {
             max_angular_speed: omega_max,
             min_motion,
             allow_same_timebin: true,
-            max_flux_difference: 10.0,
+            max_mag_difference: 10.0,
         };
 
         let pairs = generate_pairs(&bucket_index, &spatial_binner, &time_binner, &config);
@@ -825,7 +825,7 @@ mod pair_gen_tests {
             max_angular_speed: omega,
             min_motion: 0.0,
             allow_same_timebin: true,
-            max_flux_difference: 10.0,
+            max_mag_difference: 10.0,
         };
 
         let pairs = generate_pairs(&bucket_index, &spatial_binner, &time_binner, &config);
@@ -868,7 +868,7 @@ mod pair_gen_tests {
             max_angular_speed: omega,
             min_motion: 0.0,
             allow_same_timebin: true,
-            max_flux_difference: 100.0,
+            max_mag_difference: 100.0,
         };
 
         let pairs = generate_pairs(&bucket_index, &spatial_binner, &time_binner, &config);
@@ -934,7 +934,7 @@ mod pair_gen_tests {
                     max_angular_speed: omega,
                     min_motion: 0.0,
                     allow_same_timebin: false,
-                    max_flux_difference: 1e6,
+                    max_mag_difference: 1e6,
                 };
 
                 let sep_cap = config.max_angular_speed * config.max_dt;

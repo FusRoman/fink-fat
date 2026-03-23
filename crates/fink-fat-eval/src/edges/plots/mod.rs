@@ -37,7 +37,7 @@ use predictor_diag::{collect_predictor_data, plot_predictor_diagnostics};
 /// - `edge_cos_dtheta_v.png`      – direction alignment cos Δθᵥ
 /// - `edge_rel_speed_diff.png`    – relative speed difference
 /// - `edge_innov_speed_ratio.png` – innovation-speed ratio (log scale)
-/// - `edge_z_flux.png`            – photometry flux z-score
+/// - `edge_z_mag.png`            – photometry mag z-score
 ///
 /// **Predictor-config diagnostics (TP vs FP)**:
 /// - `predictor_angular_offset.png` – predicted-to-actual angular error (arcmin, log)

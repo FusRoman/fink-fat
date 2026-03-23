@@ -8,12 +8,12 @@
 //! - Keep features *mostly cadence-invariant*: avoid explicit dependence on `dt`
 //!   or geometric propagation, so they generalize better across survey strategies.
 //! - Use robust scalar summaries already aggregated inside each `SeedNode`
-//!   (mean flux, flux scatter, observed bands).
+//!   (mean mag, mag scatter, observed bands).
 //! - Ensure numerical stability: avoid NaNs/Infs in exported ML datasets.
 //!
-//! Notes on fluxes
+//! Notes on magnitudes
 //! --------------
-//! We assume `SeedNode.photom` stores *comparable* flux measurements across seeds.
+//! We assume `SeedNode.photom` stores *comparable* mag measurements across seeds.
 //! In practice, transferability depends on consistent photometric calibration
 //! and bandpass definitions (e.g., same instrument/filter set or well-calibrated
 //! cross-instrument mapping).
@@ -29,21 +29,21 @@ use crate::{graph::edge::feature_core::FeatureCore, seeding::SeedNode};
 
 /// Photometry features for an edge (mostly cadence-invariant).
 ///
-/// These features depend mainly on flux statistics aggregated within each seed.
+/// These features depend mainly on mag statistics aggregated within each seed.
 /// They tend to be more transferable across cadences than raw geometric features,
 /// provided photometric calibration is comparable.
 ///
 /// Attributes
 /// ----------
-/// * `z_flux` – Normalized absolute flux difference:
+/// * `z_mag` – Normalized absolute mag difference:
 ///   $z\_f = \frac{|\bar{f}\_{\mathrm{to}} - \bar{f}\_{\mathrm{from}}|}{\sqrt{\sigma\_{\mathrm{from}}^2 + \sigma\_{\mathrm{to}}^2 + \sigma\_{\mathrm{floor}}^2}}$.
-/// * `flux_std_ratio` – Ratio of flux standard deviations:
+/// * `mag_std_ratio` – Ratio of mag standard deviations:
 ///   $r\_{\sigma} = \sigma\_{\mathrm{to}} / \sigma\_{\mathrm{from}}$.
 /// * `band_shared` – Indicator whether seeds share at least one photometric
 ///   band ($0$ or $1$).
 #[derive(Clone, Debug)]
 pub struct EdgePhotometryFeatures {
-    /// Normalized flux difference (z-score):
+    /// Normalized mag difference (z-score):
     ///
     /// $$z\_f = \frac{|\bar{f}\_{\mathrm{to}} - \bar{f}\_{\mathrm{from}}|}{\sqrt{\sigma\_{\mathrm{from}}^2 + \sigma\_{\mathrm{to}}^2 + \sigma\_{\mathrm{floor}}^2}}$$
     ///
@@ -57,9 +57,9 @@ pub struct EdgePhotometryFeatures {
     /// A variance floor $\sigma\_{\mathrm{floor}}^2$ is included to prevent exploding
     /// z-scores when $\sigma\_{\mathrm{from}}$ and/or $\sigma\_{\mathrm{to}}$ are
     /// extremely small or underestimated.
-    pub z_flux: f64,
+    pub z_mag: f64,
 
-    /// Flux uncertainty ratio:
+    /// Mag uncertainty ratio:
     /// $r\_{\sigma} = \sigma\_{\mathrm{to}} \,/\, \sigma\_{\mathrm{from}}$
     /// ($0$ if undefined).
     ///
@@ -72,7 +72,7 @@ pub struct EdgePhotometryFeatures {
     /// -----
     /// This ratio is only meaningful if both $\sigma\_{\mathrm{from}}$ and
     /// $\sigma\_{\mathrm{to}}$ are computed consistently across seeds.
-    pub flux_std_ratio: f64,
+    pub mag_std_ratio: f64,
 
     /// Band-sharing indicator:
     /// $b\_{\mathrm{shared}} = 1$ if both seeds share at least one photometric band,
@@ -80,9 +80,9 @@ pub struct EdgePhotometryFeatures {
     ///
     /// Why this matters
     /// ----------------
-    /// Comparing fluxes across different filters can introduce strong systematic
+    /// Comparing magnitudes across different filters can introduce strong systematic
     /// offsets (e.g., color effects). This feature allows an ML model to learn
-    /// that a flux mismatch is less informative when bands do not overlap.
+    /// that a mag mismatch is less informative when bands do not overlap.
     pub band_shared: f64,
 }
 
@@ -91,8 +91,8 @@ impl EdgePhotometryFeatures {
     ///
     /// Overview
     /// --------
-    /// 1. Extract per-seed aggregated flux statistics ($\bar{f}$, $\sigma$).
-    /// 2. Compute an absolute flux difference $|\bar{f}\_{\mathrm{to}} - \bar{f}\_{\mathrm{from}}|$.
+    /// 1. Extract per-seed aggregated mag statistics ($\bar{f}$, $\sigma$).
+    /// 2. Compute an absolute mag difference $|\bar{f}\_{\mathrm{to}} - \bar{f}\_{\mathrm{from}}|$.
     /// 3. Normalize by a pooled uncertainty:
     ///    $\sqrt{\sigma\_{\mathrm{from}}^2 + \sigma\_{\mathrm{to}}^2 + \sigma\_{\mathrm{floor}}^2}$.
     /// 4. Compute the uncertainty ratio $r\_{\sigma} = \sigma\_{\mathrm{to}} / \sigma\_{\mathrm{from}}$.
@@ -118,25 +118,25 @@ impl EdgePhotometryFeatures {
         // ---------------------------------------------------------------------
         // 1) Extract aggregated photometry statistics
         // ---------------------------------------------------------------------
-        // Mean flux for each seed (cast to f64 for stable numeric operations).
-        let flux_i = from.photom.flux_mean as f64;
-        let flux_j = to.photom.flux_mean as f64;
+        // Mean mag for each seed (cast to f64 for stable numeric operations).
+        let mag_i = from.photom.mag_mean as f64;
+        let mag_j = to.photom.mag_mean as f64;
 
-        // Absolute difference in mean flux between the two seeds.
-        let flux_abs_diff = (flux_j - flux_i).abs();
+        // Absolute difference in mean mag between the two seeds.
+        let mag_abs_diff = (mag_j - mag_i).abs();
 
-        // Per-seed flux standard deviation (uncertainty proxy).
-        let sigma_i = from.photom.flux_std as f64;
-        let sigma_j = to.photom.flux_std as f64;
+        // Per-seed mag standard deviation (uncertainty proxy).
+        let sigma_i = from.photom.mag_std as f64;
+        let sigma_j = to.photom.mag_std as f64;
 
         // ---------------------------------------------------------------------
-        // 2) z_flux: pooled-uncertainty normalized flux difference
+        // 2) z_mag: pooled-uncertainty normalized mag difference
         // ---------------------------------------------------------------------
-        // Variance floor is intentionally "large-ish" (in flux units) to avoid
+        // Variance floor is intentionally "large-ish" (in mag units) to avoid
         // exploding z-scores for tiny reported uncertainties.
         //
         // Practical intuition:
-        // - if sigma_i and sigma_j are unrealistically small, z_flux would become huge
+        // - if sigma_i and sigma_j are unrealistically small, z_mag would become huge
         //   and dominate ML decisions in a brittle way.
         // - the floor limits that effect and makes the feature more robust.
         let sigma_floor = 1.0_f64;
@@ -145,17 +145,17 @@ impl EdgePhotometryFeatures {
         let pooled_var = sigma_i * sigma_i + sigma_j * sigma_j + sigma_floor * sigma_floor;
 
         // Convert pooled variance to pooled stddev and build the z-like score.
-        let z_flux = if pooled_var.is_finite() && pooled_var > 0.0 {
-            flux_abs_diff / pooled_var.sqrt()
+        let z_mag = if pooled_var.is_finite() && pooled_var > 0.0 {
+            mag_abs_diff / pooled_var.sqrt()
         } else {
             0.0
         };
 
         // ---------------------------------------------------------------------
-        // 3) flux_std_ratio: relative uncertainty proxy
+        // 3) mag_std_ratio: relative uncertainty proxy
         // ---------------------------------------------------------------------
         // Guard sigma_i to avoid division by zero and invalid ratios.
-        let flux_std_ratio = if sigma_i.is_finite() && sigma_i > 0.0 {
+        let mag_std_ratio = if sigma_i.is_finite() && sigma_i > 0.0 {
             sigma_j / sigma_i
         } else {
             0.0
@@ -177,8 +177,8 @@ impl EdgePhotometryFeatures {
         // ---------------------------------------------------------------------
         // Keep ML features stable: map NaN/Inf -> 0.0.
         Self {
-            z_flux: FeatureCore::finite_or_zero(z_flux),
-            flux_std_ratio: FeatureCore::finite_or_zero(flux_std_ratio),
+            z_mag: FeatureCore::finite_or_zero(z_mag),
+            mag_std_ratio: FeatureCore::finite_or_zero(mag_std_ratio),
             band_shared,
         }
     }

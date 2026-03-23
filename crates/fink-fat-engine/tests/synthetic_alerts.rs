@@ -23,7 +23,7 @@
 //!   the population's characteristic speed range.
 //! - On each night, `obs_per_night` (≥ 2) observations are emitted with
 //!   small intra-night time offsets and Gaussian positional noise.
-//! - Each observation gets a random LSST band, realistic flux/flux_err,
+//! - Each observation gets a random LSST band, realistic mag/mag_err,
 //!   and a unique `dia_source_id`.
 //!
 //! The generator is deterministic (seeded RNG) so tests are reproducible.
@@ -34,7 +34,7 @@
 //!
 //! - `ra`, `dec`, `ra_err`, `dec_err` → **radians**
 //! - `mjd_tt` → **MJD TT** (days)
-//! - `flux`, `flux_err` → arbitrary positive units (consistent within a trajectory)
+//! - `mag`, `mag_err` → apparent magnitude and 1σ uncertainty
 //! - `band` → `u8` LSST band code (u=0, g=1, r=2, i=3, z=4, y=5)
 //!
 //! # Usage
@@ -304,8 +304,8 @@ impl SyntheticDataset {
         let mut decs = Vec::with_capacity(n);
         let mut dec_errs = Vec::with_capacity(n);
         let mut mjd_tts = Vec::with_capacity(n);
-        let mut fluxes = Vec::with_capacity(n);
-        let mut flux_errs = Vec::with_capacity(n);
+        let mut mags = Vec::with_capacity(n);
+        let mut mag_errs = Vec::with_capacity(n);
         let mut bands = Vec::with_capacity(n);
         let mut observer_codes: Vec<String> = Vec::with_capacity(n);
 
@@ -317,8 +317,8 @@ impl SyntheticDataset {
             decs.push(alert.dec);
             dec_errs.push(alert.dec_err);
             mjd_tts.push(alert.mjd_tt);
-            fluxes.push(alert.flux);
-            flux_errs.push(alert.flux_err);
+            mags.push(alert.mag);
+            mag_errs.push(alert.mag_err);
             bands.push(alert.band);
             observer_codes.push((*alert.observer_mpc_code).clone());
         }
@@ -333,8 +333,8 @@ impl SyntheticDataset {
                 Arc::new(Float64Array::from(decs)) as ArrayRef,
                 Arc::new(Float64Array::from(dec_errs)) as ArrayRef,
                 Arc::new(Float64Array::from(mjd_tts)) as ArrayRef,
-                Arc::new(Float64Array::from(fluxes)) as ArrayRef,
-                Arc::new(Float64Array::from(flux_errs)) as ArrayRef,
+                Arc::new(Float64Array::from(mags)) as ArrayRef,
+                Arc::new(Float64Array::from(mag_errs)) as ArrayRef,
                 Arc::new(UInt8Array::from(bands)) as ArrayRef,
                 Arc::new(StringArray::from(observer_codes)) as ArrayRef,
             ],
@@ -353,8 +353,8 @@ fn parquet_alert_schema() -> Arc<Schema> {
         Field::new("dec", DataType::Float64, false),
         Field::new("dec_err", DataType::Float64, false),
         Field::new("mjd_tt", DataType::Float64, false),
-        Field::new("flux", DataType::Float64, false),
-        Field::new("flux_err", DataType::Float64, false),
+        Field::new("mag", DataType::Float64, false),
+        Field::new("mag_err", DataType::Float64, false),
         Field::new("band", DataType::UInt8, false),
         Field::new("observer_mpc_code", DataType::Utf8, false),
     ]))
@@ -625,8 +625,8 @@ fn generate_trajectory(
 
     // -- Photometry --
     let magnitude = rng.random_range(mag_lo..mag_hi);
-    let base_flux = mag_to_flux(magnitude);
-    let flux_err_frac: f64 = rng.random_range(0.05..0.15);
+    let base_mag = magnitude;
+    let base_mag_err: f64 = rng.random_range(0.05..0.15);
 
     // -- Position noise --
     let pos_err = rng.random_range(err_lo..err_hi);
@@ -660,10 +660,10 @@ fn generate_trajectory(
             let observed_ra = wrap_ra(true_ra + noise_ra);
             let observed_dec = clamp_dec(true_dec + noise_dec);
 
-            // Flux with per-observation scatter.
-            let flux_scatter: f64 = rng.random_range(-1.0..1.0) * base_flux * flux_err_frac;
-            let flux = base_flux + flux_scatter;
-            let flux_err = base_flux * flux_err_frac;
+            // Magnitude with per-observation scatter.
+            let mag_err = base_mag_err;
+            let mag_scatter: f64 = rng.random_range(-1.0..1.0) * mag_err;
+            let mag = base_mag + mag_scatter;
 
             // Random LSST band.
             let band_idx: usize = rng.random_range(0..lsst_bands::ALL.len());
@@ -684,8 +684,8 @@ fn generate_trajectory(
                 dec: observed_dec,
                 dec_err: pos_err,
                 mjd_tt,
-                flux,
-                flux_err,
+                mag,
+                mag_err,
                 band,
                 observer_mpc_code: Arc::clone(params.observer_mpc_code),
             });
@@ -711,13 +711,6 @@ fn generate_trajectory(
 // ---------------------------------------------------------------------------
 // Math helpers
 // ---------------------------------------------------------------------------
-
-/// Convert apparent magnitude to a rough positive flux value (arbitrary units).
-///
-/// Uses `flux = 10^((25 - mag) / 2.5)` so brighter objects have higher flux.
-fn mag_to_flux(mag: f64) -> f64 {
-    10.0_f64.powf((25.0 - mag) / 2.5)
-}
 
 /// Generate a pair of independent Gaussian-distributed noise values (Box-Muller).
 fn gaussian_noise_pair(rng: &mut StdRng, sigma: f64) -> (f64, f64) {
@@ -775,7 +768,7 @@ mod synthetic_alerts_tests {
             assert!(alert.dec <= PI / 2.0, "Dec must be <= π/2: {}", alert.dec);
             assert!(alert.ra_err > 0.0, "ra_err must be positive");
             assert!(alert.dec_err > 0.0, "dec_err must be positive");
-            assert!(alert.flux_err > 0.0, "flux_err must be positive");
+            assert!(alert.mag_err > 0.0, "mag_err must be positive");
         }
     }
 

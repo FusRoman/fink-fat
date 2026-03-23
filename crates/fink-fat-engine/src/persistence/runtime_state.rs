@@ -370,8 +370,8 @@ mod runtime_state_tests {
             dec: 0.2,
             dec_err: 1e-6,
             mjd_tt: mjd,
-            flux: 100.0,
-            flux_err: 1.0,
+            mag: 100.0,
+            mag_err: 1.0,
             band: 1,
             observer_mpc_code: Arc::new("W84".to_string()),
         }

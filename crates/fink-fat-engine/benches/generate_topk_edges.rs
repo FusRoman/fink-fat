@@ -33,14 +33,14 @@ use smallvec::SmallVec;
 /// - This is **not** intended to be physically accurate: the goal is to generate
 ///   stable, deterministic inputs that exercise the linking code paths.
 /// - RA/Dec errors are fixed to a small constant to keep the seed model stable.
-/// - Flux errors are a simple proportional rule-of-thumb (never below 1).
+/// - Mag errors are a simple proportional rule-of-thumb (never below 1).
 fn make_alert(
     dia_source_id: u64,
     ra_rad: f64,
     dec_rad: f64,
     mjd_tt: f64,
     band: u8,
-    flux: f64,
+    mag: f64,
 ) -> Alert {
     Alert {
         key: AlertKey {
@@ -52,8 +52,8 @@ fn make_alert(
         dec: dec_rad,
         dec_err: 1.0e-6,
         mjd_tt,
-        flux,
-        flux_err: (0.1 * flux.abs()).max(1.0),
+        mag,
+        mag_err: (0.1 * mag.abs()).max(1.0),
         band,
         observer_mpc_code: Arc::new("I41".to_string()),
     }
@@ -124,8 +124,8 @@ fn make_seeds_pair_model(
         let band_a = (seed_index % 2) as u8;
         let band_b = ((seed_index + 1) % 2) as u8;
 
-        let flux_a = 1000.0 + (rng.random::<f64>() - 0.5) * 50.0;
-        let flux_b = flux_a + (rng.random::<f64>() - 0.5) * 20.0;
+        let mag_a = 1000.0 + (rng.random::<f64>() - 0.5) * 50.0;
+        let mag_b = mag_a + (rng.random::<f64>() - 0.5) * 20.0;
 
         let dia_source_id = 1_000_000 + seed_index as u64;
 
@@ -135,7 +135,7 @@ fn make_seeds_pair_model(
             dec_a,
             time_alert_a,
             band_a,
-            flux_a,
+            mag_a,
         )));
         let alert_b: &'static Alert = Box::leak(Box::new(make_alert(
             dia_source_id,
@@ -143,7 +143,7 @@ fn make_seeds_pair_model(
             dec_b,
             time_alert_b,
             band_b,
-            flux_b,
+            mag_b,
         )));
 
         let seed_node = SeedNode::from_pair(

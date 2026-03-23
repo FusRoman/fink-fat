@@ -101,7 +101,7 @@
 //! pairs:
 //!   max_dt: "86.4 min"
 //!   max_angular_speed: "35 arcmin/day"
-//!   max_flux_difference: 5.0
+//!   max_mag_difference: 5.0
 //!   allow_same_timebin: true
 //!
 //! triplets:
@@ -109,7 +109,7 @@
 //!   max_pair_sep: "8.6 arcmin"
 //!   max_predicted_residual: "2.75 arcmin"
 //!   enforce_time_order: true
-//!   max_flux_difference: 5.0
+//!   max_mag_difference: 5.0
 //!
 //! edges:
 //!   ml_post_filter: false
@@ -454,6 +454,7 @@ impl EngineConfig {
         // SeedError -> ConfigError via #[from]
         self.pairs.validate()?;
         self.triplets.validate()?;
+        self.seeding.validate()?;
 
         // EdgeConfigError -> ConfigError via #[from]
         self.edges.validate()?;

@@ -25,8 +25,8 @@ fn alert_schema() -> Arc<Schema> {
         Field::new("dec", DataType::Float64, false),
         Field::new("dec_err", DataType::Float64, false),
         Field::new("mjd_tt", DataType::Float64, false),
-        Field::new("flux", DataType::Float64, false),
-        Field::new("flux_err", DataType::Float64, false),
+        Field::new("mag", DataType::Float64, false),
+        Field::new("mag_err", DataType::Float64, false),
         Field::new("band", DataType::UInt8, false),
         Field::new("observer_mpc_code", DataType::Utf8, false),
     ]))

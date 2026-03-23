@@ -724,8 +724,8 @@ mod alert_store_tests {
             ra_err: 0.001,
             dec_err: 0.001,
             mjd_tt: mjd,
-            flux: 100.0,
-            flux_err: 10.0,
+            mag: 100.0,
+            mag_err: 10.0,
             band: 0,
             ..Default::default()
         }

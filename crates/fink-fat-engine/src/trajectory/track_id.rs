@@ -434,8 +434,8 @@ mod track_id_tests {
             dec: dec_rad,
             ra_err: 1.0,
             dec_err: 1.0,
-            flux: 1000.0,
-            flux_err: 10.0,
+            mag: 1000.0,
+            mag_err: 10.0,
             band,
             key,
             ..Alert::default()
