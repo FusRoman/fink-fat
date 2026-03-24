@@ -18,13 +18,11 @@
 
 pub mod chart_utils;
 pub mod draw_helpers;
-pub mod hough_performance;
 pub mod seed_results;
 pub mod truth_distributions;
 
 use anyhow::Result;
 use camino::Utf8Path;
-use fink_fat_engine::engine_config::seeding_config::SeedingMethod;
 use fink_fat_engine::pipeline::PipelineContext;
 
 use crate::truth_sso::TruthSSO;
@@ -78,11 +76,6 @@ pub fn seeding_plots(
         .collect();
 
     plot_seed_results(&rows, out_dir)?;
-
-    if ctx.engine_config.seeding.method == SeedingMethod::Hough {
-        tracing::info!("computing hough-transform seeding performance plots and stats…");
-        hough_performance::hough_performance_plots(ctx, truth, out_dir)?;
-    }
 
     tracing::info!("seeding plots written to {out_dir}");
     Ok(())

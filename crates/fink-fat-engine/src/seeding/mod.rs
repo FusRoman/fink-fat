@@ -1,7 +1,8 @@
 //! Compact intra-night seed representation.
 //!
 //! A [`SeedNode`] stores the minimal information required to:
-//! - persist intra-night “seeds” (pairs or triplets of detections),
+//! - persist intra-night seeds (pairs, triplets, or triplet-derived seeds with
+//!   additional supporting members),
 //! - index them in spatio-temporal buckets (`SeedSpatialIndex`),
 //! - and perform fast inter-night candidate retrieval for graph construction.
 //!
@@ -17,13 +18,16 @@
 //! -------------------
 //! A seed is built from either:
 //! - a **pair** of alerts (linear motion on a tangent plane), or
-//! - a **triplet** of alerts (quadratic motion, i.e. includes acceleration).
+//! - a **triplet** of alerts (quadratic motion, i.e. includes acceleration),
+//!   optionally accompanied by additional alerts that were part of the same
+//!   Hough peak.
 //!
 //! The seed stores:
 //! - its [`NightId`] (seeds do not mix nights),
 //! - a local tangent-plane kinematic model ([`TangentPlaneModel`]),
 //! - minimal photometric aggregates ([`Photometry`]),
-//! - the ordered list of member detections (`members`), as `&Alert` references.
+//! - the ordered list of member detections (`members`), stored as alert keys in
+//!   the final owned seed representation.
 //!
 //! Typical workflow
 //! ----------------
@@ -105,10 +109,10 @@ impl Display for SeedKey {
     }
 }
 
-/// Seed node with borrowed alert references.
-/// This is the main struct used for seeding and graph construction.
+/// Seed node used for seeding and graph construction.
 ///
-/// The `core` field contains the cloneable seed data, while `members` holds references to the original alerts.
+/// The node stores a compact tangent-plane model, aggregated photometry, and
+/// the ordered member alert keys that define the seed membership.
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct SeedNode {
     /// Seed identifier: night ID + unique global ID. This is used for persistence and indexing.
@@ -120,7 +124,10 @@ pub struct SeedNode {
     /// Aggregated photometry for scoring / filtering.
     pub photom: Photometry,
 
-    /// Number of detections used to form the seed (2 = pair, 3 = triplet).
+    /// Number of detections attached to this seed.
+    ///
+    /// For pair seeds this is 2. For triplet-derived seeds this is at least 3 and
+    /// may be larger (e.g. Hough seeds that keep all supporting peak members).
     pub n_obs: u16,
 
     /// Member detections forming the seed, sorted by observation time.
@@ -667,6 +674,34 @@ impl SeedNode {
         alert_b: &Alert,
         alert_c: &Alert,
     ) -> Self {
+        Self::from_triplet_with_members(
+            seed_store,
+            night_id,
+            alert_a,
+            alert_b,
+            alert_c,
+            &[alert_a, alert_b, alert_c],
+        )
+    }
+
+    /// Build a triplet-derived [`SeedNode`] using three anchor alerts for the fit,
+    /// while attaching an arbitrary member list to the seed.
+    ///
+    /// The anchors determine the tangent-plane fit and kinematic model exactly
+    /// as in [`SeedNode::from_triplet`]. The full `members` slice is preserved in
+    /// time order and drives `n_obs` plus photometric aggregation.
+    ///
+    /// The tangent-plane model and kinematic parameters are fitted from
+    /// `(alert_a, alert_b, alert_c)` exactly as in [`SeedNode::from_triplet`].
+    /// `members` controls the stored membership and aggregated photometry.
+    pub fn from_triplet_with_members(
+        seed_store: &mut SeedStore,
+        night_id: NightId,
+        alert_a: &Alert,
+        alert_b: &Alert,
+        alert_c: &Alert,
+        members: &[&Alert],
+    ) -> Self {
         // --- implementation unchanged ---
         let (ta, tb, tc) = (alert_a.mjd_tt, alert_b.mjd_tt, alert_c.mjd_tt);
         let tm = (ta + tb + tc) / 3.0;
@@ -695,19 +730,7 @@ impl SeedNode {
         let vel_var = s2 * inv_dt2;
         let cov_vel = [[vel_var, 0.0], [0.0, vel_var]];
 
-        let mag_mean = (alert_a.mag + alert_b.mag + alert_c.mag) / 3.0;
-        let mag_std = ((alert_a.mag - mag_mean).abs()
-            + (alert_b.mag - mag_mean).abs()
-            + (alert_c.mag - mag_mean).abs())
-            / 3.0;
-
-        let photom = Photometry::from_triplet(
-            mag_mean as f32,
-            mag_std as f32,
-            alert_a.band,
-            alert_b.band,
-            alert_c.band,
-        );
+        let photom = Photometry::from_alerts(members);
 
         let plane = TangentPlaneModel::new(
             center,
@@ -721,12 +744,18 @@ impl SeedNode {
             dec_mid,
         );
 
+        let member_keys: Vec<AlertKey> = members.iter().map(|a| a.key).collect();
+        assert!(
+            member_keys.len() <= (u16::MAX as usize),
+            "seed members length exceeds u16::MAX"
+        );
+
         SeedNode {
             key: seed_store.next_key(night_id),
             plane,
             photom,
-            n_obs: 3,
-            members: vec![alert_a.key, alert_b.key, alert_c.key],
+            n_obs: member_keys.len() as u16,
+            members: member_keys,
         }
     }
 }
@@ -913,6 +942,38 @@ mod seed_node_tests {
         // Midpoint time close to average.
         let tm = (a.mjd_tt + b.mjd_tt + c.mjd_tt) / 3.0;
         assert!((sn.plane.epoch_mid - tm).abs() < 1e-12);
+    }
+
+    #[test]
+    fn from_triplet_with_members_keeps_full_membership() {
+        let t0 = 60000.0;
+        let dt = 6.0 / 1440.0;
+        let dec: f64 = 0.3;
+        let dr = arcsec_to_rad(5.0) / dec.cos();
+
+        let alerts = [
+            mk_alert(0, 1.0, dec, t0, 1, 1000.0),
+            mk_alert(1, 1.0 + dr, dec, t0 + dt, 1, 1001.0),
+            mk_alert(2, 1.0 + 2.0 * dr, dec, t0 + 2.0 * dt, 2, 1002.0),
+            mk_alert(3, 1.0 + 3.0 * dr, dec, t0 + 3.0 * dt, 3, 1003.0),
+            mk_alert(4, 1.0 + 4.0 * dr, dec, t0 + 4.0 * dt, 4, 1004.0),
+        ];
+
+        let members = [&alerts[0], &alerts[1], &alerts[2], &alerts[3], &alerts[4]];
+        let sn = SeedNode::from_triplet_with_members(
+            &mut SeedStore::new(),
+            NightId::new(7),
+            &alerts[0],
+            &alerts[2],
+            &alerts[4],
+            &members,
+        );
+
+        assert_eq!(sn.n_obs, 5);
+        assert_eq!(sn.members.len(), 5);
+        assert_eq!(sn.members[0].dia_source_id, 0);
+        assert_eq!(sn.members[4].dia_source_id, 4);
+        assert!(sn.photom.mag_mean > 1001.0 && sn.photom.mag_mean < 1003.0);
     }
 
     #[test]

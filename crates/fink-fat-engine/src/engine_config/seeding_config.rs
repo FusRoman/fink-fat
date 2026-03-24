@@ -59,6 +59,11 @@ pub struct HoughSeedingConfig {
 
     /// Weight each vote by photometric uncertainty when possible.
     pub weight_by_photometric_error: bool,
+
+    /// Maximum number of retained Hough seeds one alert can belong to.
+    ///
+    /// A value of `0` disables this cap.
+    pub max_seeds_per_alert: usize,
 }
 
 impl Default for HoughSeedingConfig {
@@ -74,6 +79,7 @@ impl Default for HoughSeedingConfig {
             photometric_max_mag_diff: 0.5,
             photometric_sigma_multiplier: 3.0,
             weight_by_photometric_error: true,
+            max_seeds_per_alert: 0,
         }
     }
 }
@@ -186,20 +192,22 @@ mod seeding_config_tests {
 method: hough
 triplet_only: true
 hough:
-  min_angular_speed: "0 arcsec/hour"
-  max_angular_speed: "3600 arcsec/hour"
-  velocity_grid_steps: 11
-  spatial_bin_size: "2 arcsec"
-  min_alerts_per_peak: 3
-  max_peaks_per_night: 128
-  photometric_filter: true
-  photometric_max_mag_diff: 0.7
-  photometric_sigma_multiplier: 3.0
-  weight_by_photometric_error: true
+    min_angular_speed: "0 arcsec/hour"
+    max_angular_speed: "3600 arcsec/hour"
+    velocity_grid_steps: 11
+    spatial_bin_size: "2 arcsec"
+    min_alerts_per_peak: 3
+    max_peaks_per_night: 128
+    photometric_filter: true
+    photometric_max_mag_diff: 0.7
+    photometric_sigma_multiplier: 3.0
+    weight_by_photometric_error: true
+    max_seeds_per_alert: 3
 "#;
         let cfg: SeedingConfig = serde_yaml::from_str(yaml).expect("parse seeding config");
         assert_eq!(cfg.method, SeedingMethod::Hough);
         assert!(cfg.triplet_only);
+        assert_eq!(cfg.hough.max_seeds_per_alert, 3);
         cfg.validate().expect("config must validate");
     }
 }

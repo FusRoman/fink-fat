@@ -18,13 +18,17 @@ use crate::truth_sso::TruthSSO;
 /// Output schema:
 /// - `seed_id` (u64): unique identifier of the seed.
 /// - `seed_night_id` (u32): night ID of the seed.
-/// - `seed_n_obs` (u32): number of members in the seed (2 for pair, 3 for triplet).
+/// - `seed_n_obs` (u32): number of members in the seed, copied from
+///   `SeedNode::n_obs` (>=2; may exceed 3 for Hough seeds that retain full peak
+///   membership).
 /// - `member_rank` (u32): position of the alert in the seed member list.
 /// - `alert_dia_source_id` (u64): source alert identifier.
 /// - `alert_night_id` (u32): alert night ID.
 /// - `truth_trajectory_id` (u32): truth trajectory ID, `0` when unknown.
 ///
 /// Notes:
+/// - One row is written per seed member, so a seed with `n_obs = N` produces
+///   exactly `N` rows.
 /// - A single alert can appear in multiple seeds, therefore multiple rows can
 ///   share the same `alert_dia_source_id`.
 /// - Parent directories are created automatically.

@@ -196,6 +196,8 @@ fn process_one_night_hough(
         n_accumulator_bins = stats.n_accumulator_bins,
         n_peaks = stats.n_peaks,
         n_peaks_after_photometric_filter = stats.n_peaks_after_photometric_filter,
+        n_peaks_after_nms = stats.n_peaks_after_nms,
+        n_peaks_after_alert_cap = stats.n_peaks_after_alert_cap,
         n_pair_seeds = stats.n_pair_seeds,
         n_triplet_seeds = stats.n_triplet_seeds,
         n_night_seeds = all_seeds.len(),

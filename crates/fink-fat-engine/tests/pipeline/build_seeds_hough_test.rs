@@ -37,6 +37,7 @@ seeding:
     photometric_max_mag_diff: 0.7
     photometric_sigma_multiplier: 3.0
     weight_by_photometric_error: true
+    max_seeds_per_alert: 0
 "#,
     );
     serde_yaml::from_str(&yaml).expect("deserialize hough engine config")
