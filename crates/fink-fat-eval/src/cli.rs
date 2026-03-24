@@ -46,6 +46,23 @@ pub struct CommonArgs {
 pub struct SeedingArgs {
     #[command(flatten)]
     pub common: CommonArgs,
+
+    /// Whether to produce the pair/triplet parameter distribution plots.
+    ///
+    /// These plots are used to guide the choice of seeding parameters in `eval_config.yml`.  
+    /// They are not needed for the evaluation itself,
+    /// so they are optional and can be skipped when only the per-night TP/FP/purity/recall charts are desired.
+    #[arg(long, value_name = "BOOL", default_value_t = false)]
+    pub plot_pair_triplet_distributions: bool,
+
+    /// Output path for a seeding-membership Parquet file.
+    ///
+    /// When set, one row per alert membership in a seed is exported. The file
+    /// includes the `seed_id` column used to group alerts by seed, plus
+    /// `seed_night_id`, `seed_n_obs`, `member_rank`, `alert_dia_source_id`,
+    /// `alert_night_id`, and `truth_trajectory_id`.
+    #[arg(long, value_name = "PARQUET_PATH")]
+    pub export_seeding_members: Option<Utf8PathBuf>,
 }
 
 /// Arguments for the `edge-eval` subcommand

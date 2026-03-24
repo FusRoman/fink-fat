@@ -18,11 +18,13 @@
 
 pub mod chart_utils;
 pub mod draw_helpers;
+pub mod hough_performance;
 pub mod seed_results;
 pub mod truth_distributions;
 
 use anyhow::Result;
 use camino::Utf8Path;
+use fink_fat_engine::engine_config::seeding_config::SeedingMethod;
 use fink_fat_engine::pipeline::PipelineContext;
 
 use crate::truth_sso::TruthSSO;
@@ -48,6 +50,7 @@ use truth_distributions::{
 /// - `seed_quality.png`  – purity and recall over nights
 /// - `seed_recovery.png` – number of recovered vs recoverable trajectories
 pub fn seeding_plots(
+    plot_pair_triplet_distributions: bool,
     ctx: &PipelineContext<'_>,
     truth: &TruthSSO,
     out_dir: &Utf8Path,
@@ -57,11 +60,13 @@ pub fn seeding_plots(
     let triplet_cfg = &ctx.engine_config.triplets;
 
     // ── Truth parameter distributions ─────────────────────────────────────────
-    tracing::info!("computing truth pair/triplet parameter distributions…");
-    let (pair_data, triplet_data) = collect_truth_data(alert_store, truth);
+    if plot_pair_triplet_distributions {
+        tracing::info!("computing truth pair/triplet parameter distributions…");
+        let (pair_data, triplet_data) = collect_truth_data(alert_store, truth);
 
-    plot_pair_distributions(pair_data, pair_cfg, out_dir)?;
-    plot_triplet_distributions(triplet_data, triplet_cfg, out_dir)?;
+        plot_pair_distributions(pair_data, pair_cfg, out_dir)?;
+        plot_triplet_distributions(triplet_data, triplet_cfg, out_dir)?;
+    }
 
     // ── Per-night seeding results ──────────────────────────────────────────────
     tracing::info!("computing per-night seeding stats for plots…");
@@ -73,6 +78,11 @@ pub fn seeding_plots(
         .collect();
 
     plot_seed_results(&rows, out_dir)?;
+
+    if ctx.engine_config.seeding.method == SeedingMethod::Hough {
+        tracing::info!("computing hough-transform seeding performance plots and stats…");
+        hough_performance::hough_performance_plots(ctx, truth, out_dir)?;
+    }
 
     tracing::info!("seeding plots written to {out_dir}");
     Ok(())

@@ -181,6 +181,12 @@ fn process_one_night_hough(
     alerts: &[Alert],
     params: &ProcessOneNightParams<'_>,
 ) -> NightSeedResult {
+    tracing::trace!(
+        %night_id,
+        n_alerts = alerts.len(),
+        "processing night with Hough seeding method"
+    );
+
     let (all_seeds, stats): (Vec<SeedNode>, HoughSeedStats) =
         hough::build_hough_seeds_for_night(alerts, night_id, params.hough_cfg, params.triplet_only);
 

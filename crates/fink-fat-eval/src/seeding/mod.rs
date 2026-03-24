@@ -1,3 +1,4 @@
+pub mod export;
 pub mod plots;
 
 use std::fmt;
@@ -125,7 +126,13 @@ pub fn compute_seeding_stats(
 
         for seed in seeds {
             night_stats.n_seeds += 1;
-            let resolved = seed.resolve_members(alert_store).unwrap_or_default();
+            let resolved = match seed.resolve_members(alert_store) {
+                Ok(resolved) => resolved,
+                Err(_) => {
+                    night_stats.n_unknown += 1;
+                    continue;
+                }
+            };
             let class = truth.classify(&resolved);
             match class {
                 TruthClass::TruePositive => {

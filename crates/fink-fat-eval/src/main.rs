@@ -23,13 +23,18 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::SeedingEval(args) => {
             let plot_dir = args.common.plot_dir.clone();
+            let export_seeding_members = args.export_seeding_members.clone();
             run_fink_fat(
                 args.common,
                 &[PipelineStage::IngestNights, PipelineStage::BuildSeeds],
                 move |ctx, truth| {
                     seeding::seeding_evaluation(ctx, truth)?;
+                    if let Some(ref path) = export_seeding_members {
+                        seeding::export::export_seeding_members_parquet(ctx, truth, path)?;
+                    }
                     if let Some(ref dir) = plot_dir {
-                        seeding::plots::seeding_plots(ctx, truth, dir)?;
+                        let do_plot_pair_triplet = args.plot_pair_triplet_distributions;
+                        seeding::plots::seeding_plots(do_plot_pair_triplet, ctx, truth, dir)?;
                     }
                     Ok(())
                 },

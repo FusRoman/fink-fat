@@ -202,10 +202,24 @@ pub fn build_hough_seeds_for_night(
         return (Vec::new(), stats);
     }
 
+    tracing::trace!(
+        %night_id,
+        n_alerts = alerts.len(),
+        t_ref,
+        "building Hough seeds for night"
+    );
+
     let vel_grid = velocity_grid(cfg);
     stats.n_velocity_hypotheses = vel_grid.len() as u64;
 
     let mut acc: AHashMap<AccKey, AccumulatorCell> = AHashMap::new();
+
+    tracing::trace!(
+        %night_id,
+        n_velocity_hypotheses = stats.n_velocity_hypotheses,
+        "accumulating votes in Hough space"
+    );
+
     for &(ix, iy, vx, vy) in &vel_grid {
         for (alert_idx, alert) in alerts.iter().enumerate() {
             // Project the alert back to the reference epoch under one velocity model.
@@ -238,6 +252,12 @@ pub fn build_hough_seeds_for_night(
 
     stats.n_accumulator_bins = acc.len() as u64;
 
+    tracing::trace!(
+        %night_id,
+        n_accumulator_bins = stats.n_accumulator_bins,
+        "filtering and ranking accumulator bins"
+    );
+
     // Keep only the bins that are sufficiently populated and rank them by score.
     let mut peaks: Vec<PeakCandidate> = acc
         .into_values()
@@ -256,6 +276,12 @@ pub fn build_hough_seeds_for_night(
         peaks.truncate(cfg.max_peaks_per_night);
     }
     stats.n_peaks = peaks.len() as u64;
+
+    tracing::trace!(
+        %night_id,
+        n_peaks = stats.n_peaks,
+        "building seeds from Hough peaks"
+    );
 
     let mut out: Vec<SeedNode> = Vec::with_capacity(peaks.len());
     let mut local_store = SeedStore::new();
@@ -292,6 +318,13 @@ pub fn build_hough_seeds_for_night(
             }
         }
     }
+
+    tracing::trace!(
+        %night_id,
+        n_pair_seeds = stats.n_pair_seeds,
+        n_triplet_seeds = stats.n_triplet_seeds,
+        "finished building Hough seeds for night"
+    );
 
     out.sort();
     (out, stats)

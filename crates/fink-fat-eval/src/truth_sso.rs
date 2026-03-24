@@ -10,12 +10,12 @@
 //! | Column            | Type     | Description                                           |
 //! |-------------------|----------|-------------------------------------------------------|
 //! | `dia_source_id`   | `uint64` | Unique detection identifier (matches [`DiaSourceId`]) |
-//! | `trajectory_id`   | `int32`  | Ground-truth trajectory / object identifier           |
+//! | `trajectory_id`   | `int32`  | Ground-truth trajectory / object identifier; `0` means unknown |
 //!
 //! [`TruthSSO::load`] reads only these two columns and builds an
 //! [`AHashMap`] for O(1) lookups during post-processing.
 
-use ahash::AHashMap;
+use ahash::{AHashMap, AHashSet};
 use anyhow::{Context, Result};
 use camino::Utf8Path;
 use fink_fat_engine::{Alert, alerts::DiaSourceId, night_id::NightId};
@@ -33,10 +33,16 @@ pub type TruthSSOMap = AHashMap<DiaSourceId, TrajId>;
 /// For each trajectory ID, count the number of alerts per night.
 pub type TrajCountMap = AHashMap<TrajId, AHashMap<NightId, usize>>;
 
+fn truth_traj_id(traj: i32) -> Option<TrajId> {
+    u32::try_from(traj).ok().filter(|&traj_id| traj_id != 0)
+}
+
 /// In-memory representation of the truth SSO map and related pre-computed data.
 pub struct TruthSSO {
     /// Map from `dia_source_id` to `trajectory_id`.
     map: TruthSSOMap,
+    /// Alert IDs explicitly marked as unknown in the truth table (`trajectory_id = 0`).
+    unknown_alert_ids: AHashSet<DiaSourceId>,
     /// Pre-computed count of alerts per trajectory per night, used for computing recoverable trajectories.
     traj_count: TrajCountMap,
 }
@@ -62,20 +68,35 @@ impl TruthSSO {
             .n_unique()
             .context("failed to compute number of unique trajectories")?;
 
+        let mut unknown_alert_ids: AHashSet<DiaSourceId> = AHashSet::with_capacity(alert_ids.len());
+        for (alert_id, traj) in alert_ids.iter().zip(trajs.iter()) {
+            if let (Some(id), Some(traj)) = (alert_id, traj) {
+                if truth_traj_id(traj).is_none() {
+                    unknown_alert_ids.insert(id);
+                }
+            }
+        }
+
         let mut map = TruthSSOMap::with_capacity(alert_ids.len());
         let mut traj_alert_count: TrajCountMap = AHashMap::with_capacity(nb_uniq_trajs);
 
         for ((alert_id, traj), night_id) in alert_ids.iter().zip(trajs.iter()).zip(night_ids.iter())
         {
             if let (Some(id), Some(traj), Some(night_id)) = (alert_id, traj, night_id) {
-                map.insert(id, traj as TrajId);
-                let traj_entry = traj_alert_count.entry(traj as TrajId).or_default();
-                *traj_entry.entry(night_id.into()).or_insert(0) += 1;
+                if unknown_alert_ids.contains(&id) {
+                    continue;
+                }
+                if let Some(traj_id) = truth_traj_id(traj) {
+                    map.insert(id, traj_id);
+                    let traj_entry = traj_alert_count.entry(traj_id).or_default();
+                    *traj_entry.entry(night_id.into()).or_insert(0) += 1;
+                }
             }
         }
 
         Ok(Self {
             map,
+            unknown_alert_ids,
             traj_count: traj_alert_count,
         })
     }
@@ -91,7 +112,13 @@ impl TruthSSO {
     /// * `Some(traj_id)` – If the alert's `dia_source_id` is present in the truth map, returns the corresponding trajectory ID.
     /// * `None` – If the alert's `dia_source_id` is not present in the truth map.
     pub fn get_truth_traj_id(&self, alert: &Alert) -> Option<TrajId> {
-        self.map.get(&alert.key.dia_source_id).copied()
+        if self.unknown_alert_ids.contains(&alert.key.dia_source_id) {
+            return None;
+        }
+        self.map
+            .get(&alert.key.dia_source_id)
+            .copied()
+            .filter(|&traj_id| traj_id != 0)
     }
 
     /// Classify a resolved seed slice against the ground-truth map.
@@ -107,7 +134,7 @@ impl TruthSSO {
     pub fn classify(&self, alerts: &[&Alert]) -> TruthClass {
         let mut first_id: Option<TrajId> = None;
         for alert in alerts {
-            match self.map.get(&alert.key.dia_source_id).copied() {
+            match self.get_truth_traj_id(alert) {
                 None => return TruthClass::Unknown,
                 Some(traj_id) => match first_id {
                     None => first_id = Some(traj_id),
@@ -142,11 +169,14 @@ impl TruthSSO {
     /// -------
     /// An iterator yielding `(traj_id, night_id, count)` tuples for each trajectory and night where the trajectory has at least one alert.
     pub fn traj_count_iter(&self) -> impl Iterator<Item = (TrajId, NightId, usize)> {
-        self.traj_count.iter().flat_map(|(&traj_id, night_counts)| {
-            night_counts
-                .iter()
-                .map(move |(&night_id, &count)| (traj_id, night_id, count))
-        })
+        self.traj_count
+            .iter()
+            .filter(|&(traj_id, _)| *traj_id != 0)
+            .flat_map(|(&traj_id, night_counts)| {
+                night_counts
+                    .iter()
+                    .map(move |(&night_id, &count)| (traj_id, night_id, count))
+            })
     }
 
     /// Get the count of alerts for a given trajectory ID and night ID.
@@ -161,6 +191,9 @@ impl TruthSSO {
     /// The number of alerts associated with the given trajectory ID on the given night ID,
     /// or 0 if the trajectory or night is not present in the map.
     pub fn traj_count_for_night(&self, traj_id: TrajId, night_id: NightId) -> usize {
+        if traj_id == 0 {
+            return 0;
+        }
         self.traj_count
             .get(&traj_id)
             .and_then(|night_counts| night_counts.get(&night_id))
@@ -179,6 +212,9 @@ impl TruthSSO {
     /// The total number of alerts associated with the given trajectory ID across all nights,
     /// or 0 if the trajectory is not present in the map.
     pub fn traj_count_for_traj(&self, traj_id: TrajId) -> usize {
+        if traj_id == 0 {
+            return 0;
+        }
         self.traj_count
             .get(&traj_id)
             .map(|night_counts| night_counts.values().sum())
@@ -254,6 +290,7 @@ impl TruthSSO {
     ) -> impl Iterator<Item = TrajId> {
         self.traj_count
             .iter()
+            .filter(|&(traj_id, _)| *traj_id != 0)
             .filter_map(move |(&traj_id, night_counts)| {
                 (night_counts.get(&night_id).copied().unwrap_or(0) >= night_count)
                     .then_some(traj_id)
@@ -286,6 +323,9 @@ impl TruthSSO {
     ) -> impl Iterator<Item = (TrajId, NightId, NightId)> {
         let mut edges: Vec<(TrajId, NightId, NightId)> = Vec::new();
         for (&traj_id, night_counts) in &self.traj_count {
+            if traj_id == 0 {
+                continue;
+            }
             let nights = Self::seeded_nights(night_counts, night_count);
             edges.extend(
                 nights
@@ -308,6 +348,7 @@ impl TruthSSO {
     ) -> impl Iterator<Item = TrajId> + '_ {
         self.traj_count
             .iter()
+            .filter(|&(traj_id, _)| *traj_id != 0)
             .filter_map(move |(&traj_id, night_counts)| {
                 let nights = Self::seeded_nights(night_counts, night_count);
                 (Self::qualifying_edge_count(&nights, max_gap) >= min_nodes).then_some(traj_id)
@@ -318,6 +359,7 @@ impl TruthSSO {
 /// Load a DataFrame from a Parquet file.
 ///
 /// The required columns are `dia_source_id` (uint64), `trajectory_id` (int32), and `night_id` (uint32).
+/// A `trajectory_id` of `0` is treated as unknown and skipped during loading.
 /// Only these three columns are read; all other columns in the Parquet file are ignored.
 ///
 /// Arguments
@@ -420,8 +462,44 @@ mod truth_sso_tests {
         );
         TruthSSO {
             map: TruthSSOMap::new(),
+            unknown_alert_ids: AHashSet::new(),
             traj_count,
         }
+    }
+
+    #[test]
+    fn test_zero_traj_id_is_unknown() {
+        let mut map = TruthSSOMap::new();
+        map.insert(7, 0);
+
+        let mut traj_count: TrajCountMap = AHashMap::new();
+        traj_count.insert(0, [(10.into(), 3)].into());
+
+        let truth_sso = TruthSSO {
+            map,
+            unknown_alert_ids: [(0u64), (7u64)].into(),
+            traj_count,
+        };
+        let alert = Alert::default();
+
+        assert_eq!(truth_sso.get_truth_traj_id(&alert), None);
+        assert_eq!(truth_sso.traj_count_for_traj(0), 0);
+        assert_eq!(truth_sso.traj_count_for_night(0, 10.into()), 0);
+        assert!(
+            truth_sso
+                .traj_count_iter()
+                .all(|(traj_id, _, _)| traj_id != 0)
+        );
+        assert!(truth_sso.recoverable_seeds(10.into(), 1).next().is_none());
+        assert!(truth_sso.recoverable_edges(1, 1).next().is_none());
+        assert!(truth_sso.recoverable_traj(1, 1, 1).next().is_none());
+
+        let mut alert_known_in_map_but_marked_unknown = Alert::default();
+        alert_known_in_map_but_marked_unknown.key.dia_source_id = 7;
+        assert_eq!(
+            truth_sso.get_truth_traj_id(&alert_known_in_map_but_marked_unknown),
+            None
+        );
     }
 
     // ── recoverable_edges: non-consecutive night pairs ──────────────────────
@@ -453,6 +531,7 @@ mod truth_sso_tests {
         traj_count.insert(1, [(10.into(), 3), (11.into(), 3), (13.into(), 3)].into());
         let truth_sso = TruthSSO {
             map: TruthSSOMap::new(),
+            unknown_alert_ids: AHashSet::new(),
             traj_count,
         };
 
@@ -581,6 +660,7 @@ mod truth_sso_tests {
             let night_id = NightId(night_id_raw);
             let truth_sso = TruthSSO {
                 map: TruthSSOMap::new(),
+                unknown_alert_ids: AHashSet::new(),
                 traj_count,
             };
             let mut result: Vec<TrajId> =
@@ -612,6 +692,7 @@ mod truth_sso_tests {
         )| {
             let truth_sso = TruthSSO {
                 map: TruthSSOMap::new(),
+                unknown_alert_ids: AHashSet::new(),
                 traj_count,
             };
             let edges: Vec<(TrajId, NightId, NightId)> =
@@ -644,6 +725,7 @@ mod truth_sso_tests {
             |(traj_count, night_count, max_gap, min_nodes)| {
                 let truth_sso = TruthSSO {
                     map: TruthSSOMap::new(),
+                    unknown_alert_ids: AHashSet::new(),
                     traj_count,
                 };
                 let recoverable: Vec<TrajId> = truth_sso
@@ -677,6 +759,7 @@ mod truth_sso_tests {
             |(traj_count, night_count, max_gap, min_nodes)| {
                 let truth_sso = TruthSSO {
                     map: TruthSSOMap::new(),
+                    unknown_alert_ids: AHashSet::new(),
                     traj_count,
                 };
                 let mut r_lower: Vec<TrajId> = truth_sso
@@ -731,6 +814,7 @@ mod truth_sso_tests {
         )| {
             let truth_sso = TruthSSO {
                 map: TruthSSOMap::new(),
+                unknown_alert_ids: AHashSet::new(),
                 traj_count,
             };
             let total = truth_sso.traj_count_for_traj(traj_id);
@@ -759,6 +843,7 @@ mod truth_sso_tests {
             |(traj_count, traj_id, a, b)| {
                 let truth_sso = TruthSSO {
                     map: TruthSSOMap::new(),
+                    unknown_alert_ids: AHashSet::new(),
                     traj_count,
                 };
                 let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
