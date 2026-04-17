@@ -1,0 +1,225 @@
+{
+  "$schema": "https://opencode.ai/theme.json",
+  "defs": {
+    "regolith":    "#1a1512",
+    "crater":      "#231d17",
+    "crust":       "#2e251c",
+    "dust":        "#3d3028",
+    "pebble":      "#5a4835",
+    "gravel":      "#7a6450",
+    "soil":        "#9e8468",
+    "sand":        "#c4a882",
+    "chalk":       "#e8d5b8",
+    "rust":        "#c4622d",
+    "iron":        "#a04820",
+    "ember":       "#e8873a",
+    "ochre":       "#d4a843",
+    "olivine":     "#8fa65a",
+    "pyroxene":    "#5a8a6e",
+    "ice":         "#7ab8c4",
+    "feldspar":    "#c47a55",
+    "basalt":      "#4a3828"
+  },
+  "theme": {
+    "primary": {
+      "dark": "ember",
+      "light": "iron"
+    },
+    "secondary": {
+      "dark": "feldspar",
+      "light": "rust"
+    },
+    "accent": {
+      "dark": "ochre",
+      "light": "ochre"
+    },
+    "error": {
+      "dark": "rust",
+      "light": "iron"
+    },
+    "warning": {
+      "dark": "ochre",
+      "light": "feldspar"
+    },
+    "success": {
+      "dark": "olivine",
+      "light": "pyroxene"
+    },
+    "info": {
+      "dark": "ice",
+      "light": "pyroxene"
+    },
+    "text": {
+      "dark": "chalk",
+      "light": "crust"
+    },
+    "textMuted": {
+      "dark": "gravel",
+      "light": "pebble"
+    },
+    "background": {
+      "dark": "regolith",
+      "light": "chalk"
+    },
+    "backgroundPanel": {
+      "dark": "crater",
+      "light": "sand"
+    },
+    "backgroundElement": {
+      "dark": "crust",
+      "light": "sand"
+    },
+    "border": {
+      "dark": "dust",
+      "light": "gravel"
+    },
+    "borderActive": {
+      "dark": "pebble",
+      "light": "soil"
+    },
+    "borderSubtle": {
+      "dark": "crater",
+      "light": "sand"
+    },
+    "diffAdded": {
+      "dark": "olivine",
+      "light": "pyroxene"
+    },
+    "diffRemoved": {
+      "dark": "rust",
+      "light": "iron"
+    },
+    "diffContext": {
+      "dark": "gravel",
+      "light": "pebble"
+    },
+    "diffHunkHeader": {
+      "dark": "pebble",
+      "light": "gravel"
+    },
+    "diffHighlightAdded": {
+      "dark": "olivine",
+      "light": "pyroxene"
+    },
+    "diffHighlightRemoved": {
+      "dark": "rust",
+      "light": "iron"
+    },
+    "diffAddedBg": {
+      "dark": "#1e2a1a",
+      "light": "#e8f0e0"
+    },
+    "diffRemovedBg": {
+      "dark": "#2a1a14",
+      "light": "#f0e0d8"
+    },
+    "diffContextBg": {
+      "dark": "crater",
+      "light": "sand"
+    },
+    "diffLineNumber": {
+      "dark": "dust",
+      "light": "gravel"
+    },
+    "diffAddedLineNumberBg": {
+      "dark": "#1e2a1a",
+      "light": "#e8f0e0"
+    },
+    "diffRemovedLineNumberBg": {
+      "dark": "#2a1a14",
+      "light": "#f0e0d8"
+    },
+    "markdownText": {
+      "dark": "chalk",
+      "light": "crust"
+    },
+    "markdownHeading": {
+      "dark": "ember",
+      "light": "iron"
+    },
+    "markdownLink": {
+      "dark": "ice",
+      "light": "pyroxene"
+    },
+    "markdownLinkText": {
+      "dark": "feldspar",
+      "light": "rust"
+    },
+    "markdownCode": {
+      "dark": "ochre",
+      "light": "iron"
+    },
+    "markdownBlockQuote": {
+      "dark": "gravel",
+      "light": "pebble"
+    },
+    "markdownEmph": {
+      "dark": "feldspar",
+      "light": "rust"
+    },
+    "markdownStrong": {
+      "dark": "ember",
+      "light": "iron"
+    },
+    "markdownHorizontalRule": {
+      "dark": "dust",
+      "light": "gravel"
+    },
+    "markdownListItem": {
+      "dark": "ember",
+      "light": "iron"
+    },
+    "markdownListEnumeration": {
+      "dark": "ochre",
+      "light": "feldspar"
+    },
+    "markdownImage": {
+      "dark": "ice",
+      "light": "pyroxene"
+    },
+    "markdownImageText": {
+      "dark": "feldspar",
+      "light": "rust"
+    },
+    "markdownCodeBlock": {
+      "dark": "chalk",
+      "light": "crust"
+    },
+    "syntaxComment": {
+      "dark": "gravel",
+      "light": "pebble"
+    },
+    "syntaxKeyword": {
+      "dark": "ember",
+      "light": "iron"
+    },
+    "syntaxFunction": {
+      "dark": "ochre",
+      "light": "feldspar"
+    },
+    "syntaxVariable": {
+      "dark": "sand",
+      "light": "soil"
+    },
+    "syntaxString": {
+      "dark": "olivine",
+      "light": "pyroxene"
+    },
+    "syntaxNumber": {
+      "dark": "ice",
+      "light": "pyroxene"
+    },
+    "syntaxType": {
+      "dark": "feldspar",
+      "light": "rust"
+    },
+    "syntaxOperator": {
+      "dark": "ember",
+      "light": "iron"
+    },
+    "syntaxPunctuation": {
+      "dark": "soil",
+      "light": "gravel"
+    }
+  }
+}
