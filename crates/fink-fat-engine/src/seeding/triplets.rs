@@ -56,11 +56,11 @@ use crate::{
     astro_math::planar_offset_fast,
     engine_config::triplet_config::TripletConfig,
     night_id::NightId,
-    seeding::{pairs::Pair, store::SeedStore, SeedNode},
+    seeding::{SeedNode, pairs::Pair, store::SeedStore},
     spacetime_bucket::{
         bucket::{BucketIndex, BucketKey},
         spatial_binner::{SpatialBinner, SpatialKey},
-        time_binner::{time_targets, TimeBin, TimeBinner},
+        time_binner::{TimeBin, TimeBinner, time_targets},
     },
 };
 
@@ -438,10 +438,10 @@ mod triplet_gen_tests {
     use std::f64::consts::PI;
 
     use photom::{
+        MJDTT,
         coordinates::equatorial::EquCoord,
         observation_dataset::observation::Observation,
         photometry::{Filter, Photometry as PhotomPhotometry},
-        MJDTT,
     };
 
     use crate::{

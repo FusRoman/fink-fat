@@ -52,7 +52,7 @@
 //! - [`BucketIndex`] – generic bucket storage underlying this wrapper.
 
 use ahash::{AHashMap, AHashSet};
-use photom::{coordinates::equatorial::EquCoord, Radians, MJDTT};
+use photom::{MJDTT, Radians, coordinates::equatorial::EquCoord};
 
 use crate::{
     seeding::SeedNode,
@@ -253,9 +253,9 @@ mod seed_spatial_index_tests {
         astro_math::arcsec_to_rad,
         night_id::NightId,
         seeding::{
+            SeedKey, SeedNode,
             photometry::Photometry,
             tangent_plane::{PosWithCov, TangentPlaneModel, VelWithCov},
-            SeedKey, SeedNode,
         },
         spacetime_bucket::{
             healpix_binner::HealpixBinner, time_binner::TimeBin,

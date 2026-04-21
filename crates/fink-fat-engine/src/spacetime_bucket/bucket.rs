@@ -33,7 +33,7 @@
 
 use ahash::AHashMap;
 use photom::{
-    coordinates::equatorial::EquCoord, observation_dataset::observation::Observation, MJDTT,
+    MJDTT, coordinates::equatorial::EquCoord, observation_dataset::observation::Observation,
 };
 
 use crate::spacetime_bucket::{

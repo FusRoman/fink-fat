@@ -34,12 +34,12 @@
 //! 4. Use the cone for spatial indexing or candidate search.
 
 use photom::{
+    MJDTT,
     coordinates::{
         cov2::Cov2,
         equatorial::EquCoord,
         gnomonic_projection::{TangentPoint, TangentVec},
     },
-    MJDTT,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display, Formatter};

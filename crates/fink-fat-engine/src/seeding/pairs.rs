@@ -63,11 +63,11 @@ use photom::{
 use crate::{
     engine_config::pair_config::PairConfig,
     night_id::NightId,
-    seeding::{store::SeedStore, SeedNode},
+    seeding::{SeedNode, store::SeedStore},
     spacetime_bucket::{
         bucket::{BucketIndex, BucketKey},
         spatial_binner::{SpatialBinner, SpatialKey},
-        time_binner::{time_targets, TimeBin, TimeBinner},
+        time_binner::{TimeBin, TimeBinner, time_targets},
     },
 };
 
@@ -474,7 +474,7 @@ mod pair_gen_tests {
 
     use crate::astro_math::arcsec_to_rad;
     use crate::engine_config::pair_config::PairConfig;
-    use crate::spacetime_bucket::bucket::{build_alert_bucket_index, BucketKey};
+    use crate::spacetime_bucket::bucket::{BucketKey, build_alert_bucket_index};
     use crate::spacetime_bucket::healpix_binner::HealpixBinner;
     use crate::spacetime_bucket::uniform_time_binner::UniformTimeBinner;
 
