@@ -68,13 +68,13 @@ use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 
 use photom::{
+    MJDTT,
     coordinates::{
         cov2::Cov2,
         equatorial::EquCoord,
         gnomonic_projection::{TangentPlane, TangentPoint, TangentVec},
     },
-    observation_dataset::{observation::Observation, ObsDataset, ObsId},
-    MJDTT,
+    observation_dataset::{ObsDataset, ObsId, observation::Observation},
 };
 
 use crate::{
@@ -83,8 +83,8 @@ use crate::{
     engine_config::{edge_config::EdgeConfig, propagator_config::PredictorParams},
     night_id::NightId,
     persistence::{
-        compression::Compression, envelope::DiskEnvelope, error::PersistenceIoError,
-        layout::PersistenceLayout, manifest::Manifest, SEED_STORE_SCHEMA_VERSION,
+        SEED_STORE_SCHEMA_VERSION, compression::Compression, envelope::DiskEnvelope,
+        error::PersistenceIoError, layout::PersistenceLayout, manifest::Manifest,
     },
     seeding::{
         error::SeedingError,

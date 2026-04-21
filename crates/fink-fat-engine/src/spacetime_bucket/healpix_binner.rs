@@ -235,7 +235,12 @@ mod healpix_binner_tests {
     #[test]
     fn test_key_for_is_stable() {
         let b = HealpixBinner::new(7);
-        let coord = EquCoord { ra: 1.2345_f64, ra_error: 0.0_f64, dec: 0.1234_f64, dec_error: 0.0_f64 };
+        let coord = EquCoord {
+            ra: 1.2345_f64,
+            ra_error: 0.0_f64,
+            dec: 0.1234_f64,
+            dec_error: 0.0_f64,
+        };
         let k1 = b.key_for(&coord);
         let k2 = b.key_for(&coord);
         assert_eq!(
@@ -248,7 +253,12 @@ mod healpix_binner_tests {
     fn test_neighbors_small_radius_local_mode() {
         let b = HealpixBinner::new(6);
         let (ra, dec) = (1.0_f64, 0.3_f64);
-        let coord = EquCoord { ra, ra_error: 0.0_f64, dec, dec_error: 0.0_f64 };
+        let coord = EquCoord {
+            ra,
+            ra_error: 0.0_f64,
+            dec,
+            dec_error: 0.0_f64,
+        };
         let key = b.key_for(&coord);
 
         let r = b.cell_radius();
@@ -291,7 +301,12 @@ mod healpix_binner_tests {
     #[test]
     fn test_neighbors_large_radius_cone_mode() {
         let b = HealpixBinner::new(7);
-        let coord = EquCoord { ra: 2.2_f64, ra_error: 0.0_f64, dec: 0.1_f64, dec_error: 0.0_f64 };
+        let coord = EquCoord {
+            ra: 2.2_f64,
+            ra_error: 0.0_f64,
+            dec: 0.1_f64,
+            dec_error: 0.0_f64,
+        };
         let key = b.key_for(&coord);
 
         let r_cell = b.cell_radius();
@@ -321,11 +336,21 @@ mod healpix_binner_tests {
     #[test]
     fn test_center_roundtrip() {
         let b = HealpixBinner::new(9);
-        let coord = EquCoord { ra: 0.7_f64, ra_error: 0.0_f64, dec: -0.3_f64, dec_error: 0.0_f64 };
+        let coord = EquCoord {
+            ra: 0.7_f64,
+            ra_error: 0.0_f64,
+            dec: -0.3_f64,
+            dec_error: 0.0_f64,
+        };
         let key = b.key_for(&coord);
 
         let (lon_c, lat_c) = b.layer.center(key.0);
-        let coord_c = EquCoord { ra: lon_c, ra_error: 0.0_f64, dec: lat_c, dec_error: 0.0_f64 };
+        let coord_c = EquCoord {
+            ra: lon_c,
+            ra_error: 0.0_f64,
+            dec: lat_c,
+            dec_error: 0.0_f64,
+        };
         let key_center = b.key_for(&coord_c);
         assert_eq!(
             key, key_center,
@@ -336,7 +361,12 @@ mod healpix_binner_tests {
     #[test]
     fn test_mode_switch_around_threshold() {
         let b = HealpixBinner::new(5);
-        let coord = EquCoord { ra: 1.4_f64, ra_error: 0.0_f64, dec: 0.2_f64, dec_error: 0.0_f64 };
+        let coord = EquCoord {
+            ra: 1.4_f64,
+            ra_error: 0.0_f64,
+            dec: 0.2_f64,
+            dec_error: 0.0_f64,
+        };
         let key = b.key_for(&coord);
         let rc = b.cell_radius();
 
@@ -470,7 +500,12 @@ mod healpix_binner_tests {
         #[test]
         fn test_neighbors_into_clears_and_includes_center_local_mode() {
             let b = HealpixBinner::new(6);
-            let coord = EquCoord { ra: 1.0_f64, ra_error: 0.0_f64, dec: 0.3_f64, dec_error: 0.0_f64 };
+            let coord = EquCoord {
+                ra: 1.0_f64,
+                ra_error: 0.0_f64,
+                dec: 0.3_f64,
+                dec_error: 0.0_f64,
+            };
             let key = b.key_for(&coord);
 
             let r = b.cell_radius();
@@ -495,7 +530,12 @@ mod healpix_binner_tests {
         #[test]
         fn test_neighbors_into_matches_neighbors_local_mode_as_set() {
             let b = HealpixBinner::new(7);
-            let coord = EquCoord { ra: 0.9_f64, ra_error: 0.0_f64, dec: -0.2_f64, dec_error: 0.0_f64 };
+            let coord = EquCoord {
+                ra: 0.9_f64,
+                ra_error: 0.0_f64,
+                dec: -0.2_f64,
+                dec_error: 0.0_f64,
+            };
             let key = b.key_for(&coord);
 
             let r = b.cell_radius();
@@ -517,7 +557,12 @@ mod healpix_binner_tests {
         #[test]
         fn test_neighbors_into_matches_neighbors_cone_mode_as_set() {
             let b = HealpixBinner::new(7);
-            let coord = EquCoord { ra: 2.2_f64, ra_error: 0.0_f64, dec: 0.1_f64, dec_error: 0.0_f64 };
+            let coord = EquCoord {
+                ra: 2.2_f64,
+                ra_error: 0.0_f64,
+                dec: 0.1_f64,
+                dec_error: 0.0_f64,
+            };
             let key = b.key_for(&coord);
 
             let big_r = 3.0 * b.cell_radius();
@@ -539,7 +584,12 @@ mod healpix_binner_tests {
         #[test]
         fn test_neighbors_into_does_not_shrink_preallocated_buffer() {
             let b = HealpixBinner::new(6);
-            let coord = EquCoord { ra: 1.7_f64, ra_error: 0.0_f64, dec: 0.25_f64, dec_error: 0.0_f64 };
+            let coord = EquCoord {
+                ra: 1.7_f64,
+                ra_error: 0.0_f64,
+                dec: 0.25_f64,
+                dec_error: 0.0_f64,
+            };
             let key = b.key_for(&coord);
 
             let mut out = Vec::<SpatialKey>::with_capacity(256);
