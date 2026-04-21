@@ -38,9 +38,9 @@
 //! - [`wrap_pm_pi`] — fold an angle into $(-\pi, \pi]$.
 //! - [`arcsec_to_rad`] — arcseconds to radians.
 
-use std::f64::consts::{PI, TAU};
+use std::f64::consts::PI;
 
-use crate::{Arcsec, Radian};
+use photom::{Arcseconds, Radians};
 
 /// Convert equatorial coordinates `(ra, dec)` to a 3D unit vector on the
 /// celestial sphere.
@@ -63,7 +63,7 @@ use crate::{Arcsec, Radian};
 /// ------
 /// 3D unit vector `[x, y, z]` on the unit sphere.
 #[inline]
-pub fn unit_vec(ra: Radian, dec: Radian) -> [f64; 3] {
+pub fn unit_vec(ra: Radians, dec: Radians) -> [f64; 3] {
     let cos_dec = dec.cos();
     [cos_dec * ra.cos(), cos_dec * ra.sin(), dec.sin()]
 }
@@ -458,7 +458,7 @@ pub fn cholesky_lower_sym_2x2(m: [[f64; 2]; 2], floor: f64) -> Option<[[f64; 2];
 /// ------
 /// Angle in radians, $y \in (-\pi, \pi]$.
 #[inline]
-pub fn wrap_pm_pi(x: Radian) -> Radian {
+pub fn wrap_pm_pi(x: Radians) -> Radians {
     let two_pi = 2.0 * PI;
     let mut y = (x + PI) % two_pi;
     if y < 0.0 {
@@ -490,12 +490,12 @@ pub fn wrap_pm_pi(x: Radian) -> Radian {
 /// `(dx, dy)` tangent-plane offsets in **radians**.
 #[inline]
 pub fn planar_offset_fast(
-    ra0: Radian,
-    dec0: Radian,
+    ra0: Radians,
+    dec0: Radians,
     cos_dec0: f64,
-    ra: Radian,
-    dec: Radian,
-) -> (Radian, Radian) {
+    ra: Radians,
+    dec: Radians,
+) -> (Radians, Radians) {
     let dx = wrap_pm_pi(ra - ra0) * cos_dec0;
     let dy = dec - dec0;
     (dx, dy)
@@ -513,7 +513,7 @@ pub fn planar_offset_fast(
 /// ------
 /// Angle in radians.
 #[inline]
-pub fn arcsec_to_rad(x: Arcsec) -> Radian {
+pub fn arcsec_to_rad(x: Arcseconds) -> Radians {
     x * PI / (180.0 * 3600.0)
 }
 
@@ -544,56 +544,6 @@ pub fn ang_sep(ra1: f64, dec1: f64, ra2: f64, dec2: f64) -> f64 {
 
     let cos_d = s1 * s2 + c1 * c2 * dlon.cos();
     cos_d.clamp(-1.0, 1.0).acos()
-}
-
-/// Compute the great-circle angular separation between two sky positions
-/// using the **Vincenty formula**.
-///
-/// This formulation is numerically stable for all separations, including
-/// near the poles and antipodal points. It corresponds to the implementation
-/// used in Astropy's ``angular_separation``.
-///
-/// Arguments
-/// ---------
-/// * `lon1` – Longitude of the first point (radians).
-/// * `lat1` – Latitude of the first point (radians).
-/// * `lon2` – Longitude of the second point (radians).
-/// * `lat2` – Latitude of the second point (radians).
-///
-/// Return
-/// ------
-/// Angular separation in **radians**, guaranteed to lie in `[0, π]`.
-///
-/// Notes
-/// -----
-/// Uses the Vincenty formula:
-/// $$d = \mathrm{atan2}\left(\sqrt{n\_1^2 + n\_2^2}, D\right)$$
-/// where $\Delta\lambda = \mathrm{lon}\_2 - \mathrm{lon}\_1$,
-/// $n\_1 = \cos(\mathrm{lat}\_2)\sin(\Delta\lambda)$,
-/// $n\_2 = \cos(\mathrm{lat}\_1)\sin(\mathrm{lat}\_2) - \sin(\mathrm{lat}\_1)\cos(\mathrm{lat}\_2)\cos(\Delta\lambda)$, and
-/// $D = \sin(\mathrm{lat}\_1)\sin(\mathrm{lat}\_2) + \cos(\mathrm{lat}\_1)\cos(\mathrm{lat}\_2)\cos(\Delta\lambda)$.
-///
-/// See also
-/// --------
-/// * <https://en.wikipedia.org/wiki/Great-circle_distance>
-#[inline]
-pub fn angular_separation_vincenty(
-    lon1: Radian,
-    lat1: Radian,
-    lon2: Radian,
-    lat2: Radian,
-) -> Radian {
-    let dlon = lon2 - lon1;
-
-    let (slon, clon) = dlon.sin_cos();
-    let (slat1, clat1) = lat1.sin_cos();
-    let (slat2, clat2) = lat2.sin_cos();
-
-    let num1 = clat2 * slon;
-    let num2 = clat1 * slat2 - slat1 * clat2 * clon;
-    let denom = slat1 * slat2 + clat1 * clat2 * clon;
-
-    num1.hypot(num2).atan2(denom)
 }
 
 // -----------------------------------------------------------------------------
@@ -635,151 +585,6 @@ pub fn angular_separation_vincenty(
 ///
 /// This value is not physically meaningful; it's a **numerical safety floor**.
 const INV_COSC_MIN: f64 = 1e-12;
-
-/// Lower bound used to avoid division by a nearly-zero vector norm when
-/// averaging or normalizing spherical vectors.
-///
-/// Context
-/// -------
-/// - Used in `spherical_midpoint()`: we add two unit vectors and normalize them.
-/// - When the directions are **nearly opposite**, the sum vector can approach
-///   the zero vector, making its length extremely small.
-///
-/// Consequences without guard
-/// --------------------------
-/// A norm `r ≈ 0` produces catastrophic amplification of noise when
-/// normalizing `(x/r, y/r, z/r)` → `NaN`, `Inf`, or huge garbage values.
-///
-/// Why this constant?
-/// ------------------
-/// We clamp:
-/// ```text
-/// r = max(r, NORM_MIN)
-/// ```
-/// before normalizing.
-///
-/// Choice of value
-/// ---------------
-/// - `1e-16` is slightly above the smallest meaningful double-precision values
-///   for normalized vectors (~1e-308 is too small, causes underflow well before).
-/// - It preserves stability without biasing typical use.
-/// - It only activates in extreme geometries (nearly antipodal sources) that we
-///   *never* use for seed construction anyway.
-///
-/// This constant is purely a **numerical robustness guard**.
-const NORM_MIN: f64 = 1e-16;
-
-/// Compute a robust spherical midpoint between two sky directions.
-///
-/// Returns the angular mean via vector averaging: the two unit vectors are
-/// summed and the result is renormalized to the unit sphere.  This is not
-/// the exact geodesic midpoint, but is stable and accurate enough for
-/// defining a tangent-plane center.
-///
-/// Arguments
-/// ---------
-/// * `ra1`  – Right ascension of the first point (radians).
-/// * `dec1` – Declination of the first point (radians).
-/// * `ra2`  – Right ascension of the second point (radians).
-/// * `dec2` – Declination of the second point (radians).
-///
-/// Return
-/// ------
-/// `(ra, dec)` of the midpoint in radians, with $\mathrm{ra} \in [0, 2\pi)$.
-///
-/// Notes
-/// -----
-/// When the two directions are nearly antipodal the sum vector approaches
-/// zero; a numerical floor is applied before normalization to avoid NaN.
-#[inline]
-pub fn spherical_midpoint(
-    ra1: Radian,
-    dec1: Radian,
-    ra2: Radian,
-    dec2: Radian,
-) -> (Radian, Radian) {
-    let (x1, y1, z1) = sph_to_cart(ra1, dec1);
-    let (x2, y2, z2) = sph_to_cart(ra2, dec2);
-    let (x, y, z) = (x1 + x2, y1 + y2, z1 + z2);
-    let r = (x * x + y * y + z * z).sqrt().max(NORM_MIN);
-    cart_to_sph(x / r, y / r, z / r)
-}
-
-/// Gnomonic (zenithal perspective) projection of a sky position onto the
-/// tangent plane centred at `(ra0, dec0)`.
-///
-/// The projection formulas are:
-/// $$\begin{align} x &= \frac{\cos\delta\sin(\alpha - \alpha\_0)}{c} \\ y &= \frac{\cos\delta\_0\sin\delta - \sin\delta\_0\cos\delta\cos(\alpha - \alpha\_0)}{c} \end{align}$$
-/// where $c = \sin\delta\_0\sin\delta + \cos\delta\_0\cos\delta\cos(\alpha - \alpha\_0)$
-/// is the cosine of the angular distance to the tangent point.
-///
-/// Arguments
-/// ---------
-/// * `ra`   – Target right ascension (radians).
-/// * `dec`  – Target declination (radians).
-/// * `ra0`  – Tangent-point right ascension (radians).
-/// * `dec0` – Tangent-point declination (radians).
-///
-/// Return
-/// ------
-/// Tangent-plane coordinates `[x, y]` in radians.
-///
-/// Notes
-/// -----
-/// The denominator $c$ is floored before inversion to protect against
-/// division by zero when the target is near 90° from the tangent point.
-/// All fink-fat seeds remain well within the valid operating range of a
-/// few degrees from the tangent point.
-#[inline]
-pub fn radec_to_tangent(ra: Radian, dec: Radian, ra0: Radian, dec0: Radian) -> [f64; 2] {
-    let (sdec, cdec) = dec.sin_cos();
-    let (sdec0, cdec0) = dec0.sin_cos();
-    let dra = ra - ra0;
-    let (sdra, cdra) = dra.sin_cos();
-
-    // cosc = sin(dec0) sin(dec) + cos(dec0) cos(dec) cos(dra)
-    let cosc = cdec0 * cdec * cdra + sdec0 * sdec;
-    let inv = 1.0 / cosc.max(INV_COSC_MIN);
-
-    let x = cdec * sdra * inv;
-    let y = (cdec0 * sdec - sdec0 * cdec * cdra) * inv;
-    [x, y]
-}
-
-/// Inverse gnomonic projection: map tangent-plane coordinates `(x, y)` back
-/// to equatorial `(ra, dec)`.
-///
-/// Arguments
-/// ---------
-/// * `x`    – Tangent-plane east offset in radians.
-/// * `y`    – Tangent-plane north offset in radians.
-/// * `ra0`  – Tangent-point right ascension (radians).
-/// * `dec0` – Tangent-point declination (radians).
-///
-/// Return
-/// ------
-/// `(ra, dec)` in radians with $\mathrm{ra} \in [0, 2\pi)$.
-///
-/// Notes
-/// -----
-/// When `(x, y)` is within numerical zero of the tangent point the function
-/// returns `(ra0, dec0)` directly to avoid a degenerate `atan2(0, 0)` call.
-#[inline]
-pub fn tangent_to_radec(x: f64, y: f64, ra0: Radian, dec0: Radian) -> (Radian, Radian) {
-    let rho2 = x * x + y * y;
-    if rho2 < 1e-24 {
-        return (ra0.rem_euclid(TAU), dec0);
-    }
-    let rho = rho2.sqrt();
-    let c = rho.atan();
-    let (sc, cc) = c.sin_cos();
-    let (s0, c0) = dec0.sin_cos();
-
-    let dec = (cc * s0 + (y * sc * c0) / rho).asin();
-    let denom = rho * c0 * cc - y * s0 * sc;
-    let ra = ra0 + (x * sc).atan2(denom);
-    (ra.rem_euclid(TAU), dec)
-}
 
 /// Fit a 1D quadratic motion model through three time samples.
 ///
@@ -907,31 +712,6 @@ pub fn lambda_max_2x2(a: [[f64; 2]; 2]) -> f64 {
 #[inline]
 pub fn l2_norm(x: f64, y: f64) -> f64 {
     x.hypot(y)
-}
-
-/* --------------------------- Private helpers --------------------------- */
-
-/// Spherical → cartesian unit vector.
-#[inline]
-fn sph_to_cart(ra: Radian, dec: Radian) -> (f64, f64, f64) {
-    let (sdec, cdec) = dec.sin_cos();
-    let (sra, cra) = ra.sin_cos();
-    (cdec * cra, cdec * sra, sdec)
-}
-
-/// Cartesian → spherical (ra in [0, 2π)).
-#[inline]
-fn cart_to_sph(x: f64, y: f64, z: f64) -> (Radian, Radian) {
-    // hypot(x,y) is stable for tiny x,y (near poles)
-    let rho = x.hypot(y);
-
-    // declination robust near poles
-    let dec = z.atan2(rho);
-
-    // RA: still fine, but ill-defined when rho ~ 0 (exact pole)
-    let ra = y.atan2(x).rem_euclid(TAU);
-
-    (ra, dec)
 }
 
 #[cfg(test)]
@@ -1180,368 +960,6 @@ mod astro_math_tests {
             let dot = dot3(v1, v2);
 
             prop_assert!(abs_diff_eq!(cos_d, dot, epsilon = 1e-12));
-        }
-    }
-
-    #[cfg(test)]
-    mod vincenty_tests {
-        use super::*;
-        use approx::abs_diff_eq;
-        use std::f64::consts::PI;
-
-        const EPS: f64 = 1e-12;
-        const SMALL_EPS: f64 = 1e-9;
-
-        /* ------------------------------ unit tests ------------------------------ */
-
-        #[test]
-        fn vincenty_zero_separation_same_point() {
-            let d = angular_separation_vincenty(1.234, 0.5, 1.234, 0.5);
-            assert!(
-                abs_diff_eq!(d, 0.0, epsilon = EPS),
-                "separation of identical points must be ~0, got {d}"
-            );
-        }
-
-        #[test]
-        fn vincenty_equator_quarter_circle() {
-            // (0, 0) to (π/2, 0) → quarter great circle → π/2
-            let d = angular_separation_vincenty(0.0, 0.0, PI / 2.0, 0.0);
-            assert!(
-                abs_diff_eq!(d, PI / 2.0, epsilon = 1e-12),
-                "expected π/2, got {d}"
-            );
-        }
-
-        #[test]
-        fn vincenty_pole_quarter_circle() {
-            // (0, 0) to (0, π/2) → quarter great circle → π/2
-            let d = angular_separation_vincenty(0.0, 0.0, 0.0, PI / 2.0);
-            assert!(
-                abs_diff_eq!(d, PI / 2.0, epsilon = 1e-12),
-                "expected π/2, got {d}"
-            );
-        }
-
-        #[test]
-        fn vincenty_antipodal_points() {
-            // (0, 0) and (π, 0) are antipodal → separation = π
-            let d = angular_separation_vincenty(0.0, 0.0, PI, 0.0);
-            assert!(
-                abs_diff_eq!(d, PI, epsilon = 1e-12),
-                "antipodal points must be ~π, got {d}"
-            );
-        }
-
-        #[test]
-        fn vincenty_symmetry() {
-            let lon1 = 0.7;
-            let lat1 = -0.3;
-            let lon2 = 2.1;
-            let lat2 = 0.4;
-
-            let d12 = angular_separation_vincenty(lon1, lat1, lon2, lat2);
-            let d21 = angular_separation_vincenty(lon2, lat2, lon1, lat1);
-
-            assert!(
-                abs_diff_eq!(d12, d21, epsilon = EPS),
-                "separation must be symmetric, d12={d12}, d21={d21}"
-            );
-        }
-
-        #[test]
-        fn vincenty_in_range_0_to_pi() {
-            let cases = &[
-                (0.1, -0.2, 1.5, 0.7),
-                (2.3, 0.4, 0.5, -0.1),
-                (5.8, -1.0, 1.1, 1.0),
-                (0.0, 0.0, PI, 0.0),       // antipodal
-                (0.0, 0.0, 0.0, PI / 2.0), // pole
-            ];
-
-            for &(lon1, lat1, lon2, lat2) in cases {
-                let d = angular_separation_vincenty(lon1, lat1, lon2, lat2);
-                assert!(
-                    d >= 0.0 - 1e-15 && d <= PI + 1e-15,
-                    "separation must be in [0, π], got {d}"
-                );
-            }
-        }
-
-        /* --------------------------- property-based tests --------------------------- */
-
-        fn lon_strategy() -> impl Strategy<Value = f64> {
-            0.0f64..(2.0 * PI)
-        }
-
-        fn lat_strategy() -> impl Strategy<Value = f64> {
-            // Avoid exactement ±π/2 pour réduire les pathologies numériques aux pôles.
-            let eps = 1e-9;
-            (-(PI / 2.0 - eps))..(PI / 2.0 - eps)
-        }
-
-        proptest! {
-            #![proptest_config(ProptestConfig {
-                cases: 64,
-                .. ProptestConfig::default()
-            })]
-
-            /// Separation is always non-negative, ≤ π, and symmetric.
-            #[test]
-            fn prop_vincenty_basic_properties(
-                lon1 in lon_strategy(),
-                lat1 in lat_strategy(),
-                lon2 in lon_strategy(),
-                lat2 in lat_strategy(),
-            ) {
-                let d12 = angular_separation_vincenty(lon1, lat1, lon2, lat2);
-                let d21 = angular_separation_vincenty(lon2, lat2, lon1, lat1);
-
-                prop_assert!(d12 >= 0.0);
-                prop_assert!(d12 <= PI + SMALL_EPS);
-                prop_assert!(abs_diff_eq!(d12, d21, epsilon = 1e-12));
-            }
-
-            /// Vincenty separation of identical points is ~0.
-            #[test]
-            fn prop_vincenty_zero_for_identical_points(
-                lon in lon_strategy(),
-                lat in lat_strategy(),
-            ) {
-                let d = angular_separation_vincenty(lon, lat, lon, lat);
-                prop_assert!(abs_diff_eq!(d, 0.0, epsilon = 1e-12));
-            }
-
-            /// For generic points, Vincenty and cosine-law separation should agree
-            /// within a small tolerance (except for very small or very large angles).
-            #[test]
-            fn prop_vincenty_matches_cosine_law_most_of_the_time(
-                lon1 in lon_strategy(),
-                lat1 in lat_strategy(),
-                lon2 in lon_strategy(),
-                lat2 in lat_strategy(),
-            ) {
-                let d_vinc = angular_separation_vincenty(lon1, lat1, lon2, lat2);
-                let d_cos  = ang_sep(lon1, lat1, lon2, lat2); // loi des cosinus
-
-                let diff = (d_vinc - d_cos).abs();
-                prop_assert!(diff < 1e-9, "Vincenty and cosine-law disagree: diff={diff}, d_vinc={d_vinc}, d_cos={d_cos}");
-            }
-        }
-    }
-
-    // =========================================================================
-    // Unit tests — sph_to_cart / cart_to_sph
-    // =========================================================================
-
-    #[test]
-    fn sph_to_cart_produces_unit_vectors() {
-        let samples = &[
-            (0.0, 0.0),
-            (PI / 3.0, 0.1),
-            (PI, 0.5),
-            (1.7 * PI, -0.4),
-            (0.0, PI / 2.0 - 1e-6),
-            (0.0, -PI / 2.0 + 1e-6),
-        ];
-
-        for &(ra, dec) in samples {
-            let (x, y, z) = sph_to_cart(ra, dec);
-            let r2 = x * x + y * y + z * z;
-            assert!(
-                abs_diff_eq!(r2, 1.0, epsilon = 1e-12),
-                "r2 = {r2} not close to 1.0"
-            );
-        }
-    }
-
-    #[test]
-    fn sph_cart_roundtrip_for_fixed_points() {
-        let samples = &[(0.0, 0.0), (PI / 3.0, 0.2), (2.3, -0.7), (5.0, 0.8)];
-
-        for &(ra, dec) in samples {
-            let (x, y, z) = sph_to_cart(ra, dec);
-            let (ra2, dec2) = cart_to_sph(x, y, z);
-            assert!(abs_diff_eq!(ra2, ra.rem_euclid(TAU), epsilon = 1e-12));
-            assert!(abs_diff_eq!(dec2, dec, epsilon = 1e-12));
-        }
-    }
-
-    // =========================================================================
-    // Property tests — sph_to_cart / cart_to_sph
-    // =========================================================================
-
-    fn any_ra() -> impl Strategy<Value = f64> {
-        0.0f64..TAU
-    }
-
-    fn any_dec() -> impl Strategy<Value = f64> {
-        (-PI / 2.0 + 1e-6)..(PI / 2.0 - 1e-6)
-    }
-
-    proptest! {
-        #[test]
-        fn prop_sph_cart_is_roundtrip(ra in any_ra(), dec in any_dec()) {
-            let (x, y, z) = sph_to_cart(ra, dec);
-            let norm = (x*x + y*y + z*z).sqrt();
-            prop_assert!(abs_diff_eq!(norm, 1.0, epsilon = 1e-12));
-
-            let (ra2, dec2) = cart_to_sph(x, y, z);
-
-            // Check vector roundtrip (always well-defined)
-            let (x2, y2, z2) = sph_to_cart(ra2, dec2);
-            prop_assert!(abs_diff_eq!(x2, x, epsilon = 1e-12));
-            prop_assert!(abs_diff_eq!(y2, y, epsilon = 1e-12));
-            prop_assert!(abs_diff_eq!(z2, z, epsilon = 1e-12));
-
-            // Optional: check angles when RA is well-conditioned
-            let rho = x.hypot(y);
-            if rho > 1e-10 {
-                prop_assert!(abs_diff_eq!(ra2, ra.rem_euclid(TAU), epsilon = 1e-12));
-            }
-            prop_assert!(abs_diff_eq!(dec2, dec, epsilon = 1e-12));
-        }
-    }
-
-    // =========================================================================
-    // Unit tests — spherical_midpoint
-    // =========================================================================
-
-    #[test]
-    fn spherical_midpoint_of_identical_directions_is_itself() {
-        let samples = &[(0.5, 0.2), (2.1, -0.3), (5.9, 0.7)];
-
-        for &(ra, dec) in samples {
-            let (ram, decm) = spherical_midpoint(ra, dec, ra, dec);
-            assert!(abs_diff_eq!(ram, ra.rem_euclid(TAU), epsilon = 1e-12));
-            assert!(abs_diff_eq!(decm, dec, epsilon = 1e-12));
-        }
-    }
-
-    #[test]
-    fn spherical_midpoint_is_symmetric_in_arguments() {
-        let a = (0.3, 0.1);
-        let b = (1.7, -0.2);
-
-        let (ra_ab, dec_ab) = spherical_midpoint(a.0, a.1, b.0, b.1);
-        let (ra_ba, dec_ba) = spherical_midpoint(b.0, b.1, a.0, a.1);
-
-        assert!(abs_diff_eq!(ra_ab, ra_ba, epsilon = 1e-12));
-        assert!(abs_diff_eq!(dec_ab, dec_ba, epsilon = 1e-12));
-    }
-
-    #[test]
-    fn spherical_midpoint_handles_nearly_antipodal_without_nan() {
-        let ra1 = 0.0;
-        let dec1 = 0.0;
-        let ra2 = PI;
-        let dec2 = 0.0;
-
-        let (ram, decm) = spherical_midpoint(ra1, dec1, ra2, dec2);
-        assert!(ram.is_finite());
-        assert!(decm.is_finite());
-
-        let (x, y, z) = sph_to_cart(ram, decm);
-        let r2 = x * x + y * y + z * z;
-        assert!(abs_diff_eq!(r2, 1.0, epsilon = 1e-12));
-    }
-
-    proptest! {
-        #[test]
-        fn prop_spherical_midpoint_on_unit_sphere(
-            ra1 in any_ra(),
-            dec1 in any_dec(),
-            ra2 in any_ra(),
-            dec2 in any_dec(),
-        ) {
-            let (ram, decm) = spherical_midpoint(ra1, dec1, ra2, dec2);
-
-            prop_assert!(ram.is_finite());
-            prop_assert!(decm.is_finite());
-
-            let (x, y, z) = sph_to_cart(ram, decm);
-            let r2 = x*x + y*y + z*z;
-            prop_assert!(abs_diff_eq!(r2, 1.0, epsilon = 1e-12));
-        }
-    }
-
-    // =========================================================================
-    // Unit tests — gnomonic projection / inverse
-    // =========================================================================
-
-    #[test]
-    fn gnomonic_projection_of_center_is_zero() {
-        let ra0 = 1.2;
-        let dec0 = 0.3;
-
-        let [x, y] = radec_to_tangent(ra0, dec0, ra0, dec0);
-        assert!(abs_diff_eq!(x, 0.0, epsilon = 1e-15));
-        assert!(abs_diff_eq!(y, 0.0, epsilon = 1e-15));
-
-        let (ra2, dec2) = tangent_to_radec(0.0, 0.0, ra0, dec0);
-        assert!(abs_diff_eq!(ra2, ra0.rem_euclid(TAU), epsilon = 1e-15));
-        assert!(abs_diff_eq!(dec2, dec0, epsilon = 1e-15));
-    }
-
-    #[test]
-    fn radec_tangent_handles_cosc_zero_without_nan() {
-        let ra0 = 0.0;
-        let dec0 = 0.0;
-
-        let ra = PI / 2.0;
-        let dec = 0.0;
-
-        let [x, y] = radec_to_tangent(ra, dec, ra0, dec0);
-        assert!(x.is_finite());
-        assert!(y.is_finite());
-    }
-
-    #[test]
-    fn tangent_to_radec_handles_rho_zero_gracefully() {
-        let ra0 = 2.0;
-        let dec0 = -0.4;
-
-        let (ra2, dec2) = tangent_to_radec(0.0, 0.0, ra0, dec0);
-        assert!(abs_diff_eq!(ra2, ra0.rem_euclid(TAU), epsilon = 1e-15));
-        assert!(abs_diff_eq!(dec2, dec0, epsilon = 1e-15));
-    }
-
-    fn small_plane() -> impl Strategy<Value = f64> {
-        -5e-3f64..5e-3
-    }
-
-    proptest! {
-        #[test]
-        fn prop_gnomonic_roundtrip_small_offsets(
-            ra0 in any_ra(),
-            dec0 in -0.8f64..0.8,
-            dx in small_plane(),
-            dy in small_plane(),
-        ) {
-            let (ra, dec) = tangent_to_radec(dx, dy, ra0, dec0);
-            let [x2, y2] = radec_to_tangent(ra, dec, ra0, dec0);
-
-            prop_assert!(x2.is_finite() && y2.is_finite());
-            prop_assert!(abs_diff_eq!(x2, dx, epsilon = 5e-12));
-            prop_assert!(abs_diff_eq!(y2, dy, epsilon = 5e-12));
-        }
-
-        #[test]
-        fn prop_gnomonic_inverse_is_locally_stable(
-            ra in any_ra(),
-            dec in -0.8f64..0.8,
-            d_ra in -5e-3f64..5e-3,
-            d_dec in -5e-3f64..5e-3,
-        ) {
-            let ra0 = (ra + d_ra).rem_euclid(TAU);
-            let dec0 = (dec + d_dec).clamp(-0.8, 0.8);
-
-            let [x, y] = radec_to_tangent(ra, dec, ra0, dec0);
-            let (ra2, dec2) = tangent_to_radec(x, y, ra0, dec0);
-
-            prop_assert!(ra2.is_finite() && dec2.is_finite());
-            prop_assert!(abs_diff_eq!(ra2, ra.rem_euclid(TAU), epsilon = 5e-12));
-            prop_assert!(abs_diff_eq!(dec2, dec, epsilon = 5e-12));
         }
     }
 

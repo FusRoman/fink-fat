@@ -32,13 +32,13 @@
 //! - `seeding::seed_spatial_index` – wraps `BucketIndex<&SeedNode>`.
 
 use ahash::AHashMap;
+use photom::{
+    coordinates::equatorial::EquCoord, observation_dataset::observation::Observation, MJDTT,
+};
 
-use crate::{
-    Alert, MJDTT, Radian,
-    spacetime_bucket::{
-        spatial_binner::{SpatialBinner, SpatialKey},
-        time_binner::{TimeBin, TimeBinner},
-    },
+use crate::spacetime_bucket::{
+    spatial_binner::{SpatialBinner, SpatialKey},
+    time_binner::{TimeBin, TimeBinner},
 };
 
 /// Joint spatio-temporal bucket key.
@@ -135,14 +135,13 @@ pub struct BucketIndex<Object> {
 ///     Combined spatial + temporal bucket key.
 #[inline]
 fn bucket_key_for<Bs: SpatialBinner, Bt: TimeBinner>(
-    ra: Radian,
-    dec: Radian,
+    eq_coord: &EquCoord,
     mjd_tt: MJDTT,
     sb: &Bs,
     tb: &Bt,
 ) -> BucketKey {
     BucketKey {
-        space_key: sb.key_for(ra, dec),
+        space_key: sb.key_for(eq_coord),
         time_bin: tb.bin_for(mjd_tt),
     }
 }
@@ -182,19 +181,19 @@ fn bucket_key_for<Bs: SpatialBinner, Bt: TimeBinner>(
 /// - Every alert appears in exactly one bucket.
 /// - Every bucket’s `members` slice is sorted by increasing time.
 pub fn build_alert_bucket_index<'alert_lf, Bs, Bt>(
-    alerts: &'alert_lf [Alert],
+    alerts: &'alert_lf [Observation],
     space_binner: &Bs,
     time_binner: &Bt,
-) -> BucketIndex<&'alert_lf Alert>
+) -> BucketIndex<&'alert_lf Observation>
 where
     Bs: SpatialBinner,
     Bt: TimeBinner,
 {
-    let mut buckets: AHashMap<BucketKey, Bucket<&'alert_lf Alert>> = AHashMap::new();
+    let mut buckets: AHashMap<BucketKey, Bucket<&'alert_lf Observation>> = AHashMap::new();
 
     // 1) Group alerts into spatio-temporal buckets.
     for alert in alerts {
-        let key = bucket_key_for(alert.ra, alert.dec, alert.mjd_tt, space_binner, time_binner);
+        let key = bucket_key_for(alert.equ_coord(), alert.mjd_tt(), space_binner, time_binner);
 
         buckets
             .entry(key)
@@ -217,7 +216,11 @@ where
 
 #[cfg(test)]
 mod bucket_tests {
-    use crate::{AlertKey, night_id::NightId};
+    use photom::{
+        coordinates::equatorial::EquCoord,
+        observation_dataset::observation::Observation,
+        photometry::{Filter, Photometry},
+    };
 
     use super::*;
 
@@ -227,28 +230,15 @@ mod bucket_tests {
     struct DummySpatialBinner;
 
     impl SpatialBinner for DummySpatialBinner {
-        fn key_for(&self, _ra: Radian, _dec: Radian) -> SpatialKey {
+        fn key_for(&self, _e: &EquCoord) -> SpatialKey {
             SpatialKey(0)
         }
 
-        fn neighbors(&self, key: SpatialKey, _ang_radius: Radian) -> Vec<SpatialKey> {
-            // Trivial implementation: only the cell itself.
-            vec![key]
-        }
-
-        fn cell_radius(&self) -> Radian {
-            // Arbitrary positive value; not used in these tests.
+        fn cell_radius(&self) -> f64 {
             1.0
         }
 
-        fn neighbors_into(
-            &self,
-            _key: SpatialKey,
-            _ang_radius: Radian,
-            _out: &mut Vec<SpatialKey>,
-        ) {
-            todo!()
-        }
+        fn neighbors_into(&self, _key: SpatialKey, _ang_radius: f64, _out: &mut Vec<SpatialKey>) {}
     }
 
     /// Dummy time binner: bins by floor(MJD).
@@ -260,7 +250,6 @@ mod bucket_tests {
         }
 
         fn bins_in_range(&self, t0: MJDTT, t1: MJDTT) -> Vec<TimeBin> {
-            // Inclusive range of integer days between min(t0, t1) and max(t0, t1).
             let (t_min, t_max) = if t0 <= t1 { (t0, t1) } else { (t1, t0) };
             let start = t_min.floor() as i64;
             let end = t_max.floor() as i64;
@@ -268,7 +257,6 @@ mod bucket_tests {
         }
 
         fn bin_width(&self) -> MJDTT {
-            // 1 day bins.
             1.0
         }
 
@@ -277,18 +265,15 @@ mod bucket_tests {
         }
     }
 
-    /// Helper to build a minimal `Alert` for tests.
-    fn mk_alert(dia_source_id: u64, ra: Radian, dec: Radian, mjd_tt: MJDTT) -> Alert {
-        Alert {
-            key: AlertKey {
-                night_id: NightId(42), // dummy value
-                dia_source_id,
-            },
-            ra,
-            dec,
-            mjd_tt,
-            ..Default::default()
-        }
+    /// Helper to build a minimal `Observation` for tests.
+    fn mk_obs(id: u64, ra: f64, dec: f64, mjd_tt: MJDTT) -> Observation {
+        let equ = EquCoord::new(ra, 0.0, dec, 0.0);
+        let phot = Photometry {
+            magnitude: 20.0,
+            error: 0.1,
+            filter: Filter::String("r".to_string()),
+        };
+        Observation::new(id, equ, phot, mjd_tt, None)
     }
 
     #[test]
@@ -296,7 +281,7 @@ mod bucket_tests {
         let sb = DummySpatialBinner;
         let tb = DummyTimeBinner;
 
-        let alerts: Vec<Alert> = Vec::new();
+        let alerts: Vec<Observation> = Vec::new();
         let index = build_alert_bucket_index(&alerts, &sb, &tb);
 
         assert!(index.buckets.is_empty());
@@ -307,16 +292,16 @@ mod bucket_tests {
         let sb = DummySpatialBinner;
         let tb = DummyTimeBinner;
 
-        let a0 = mk_alert(0, 1.0, 0.1, 59000.25);
-        let a0_id = a0.key.dia_source_id;
+        let a0 = mk_obs(0, 1.0, 0.1, 59000.25);
+        let a0_id = *a0.id();
         let alerts = vec![a0];
 
         let index = build_alert_bucket_index(&alerts, &sb, &tb);
         assert_eq!(index.buckets.len(), 1);
 
         let key = BucketKey {
-            space_key: sb.key_for(alerts[0].ra, alerts[0].dec),
-            time_bin: tb.bin_for(alerts[0].mjd_tt),
+            space_key: sb.key_for(alerts[0].equ_coord()),
+            time_bin: tb.bin_for(alerts[0].mjd_tt()),
         };
 
         let bucket = index
@@ -324,18 +309,17 @@ mod bucket_tests {
             .get(&key)
             .expect("missing bucket for single alert");
         assert_eq!(bucket.members.len(), 1);
-        assert_eq!(bucket.members[0].key.dia_source_id, a0_id);
+        assert_eq!(*bucket.members[0].id(), a0_id);
     }
 
     #[test]
     fn alerts_in_same_cell_and_bin_end_up_in_same_bucket() {
         let sb = DummySpatialBinner;
-        // 1-day bins => both in same bin
         let tb = DummyTimeBinner;
 
         let t0 = 59000.1;
-        let a0 = mk_alert(0, 1.0, 0.1, t0);
-        let a1 = mk_alert(1, 1.000_001, 0.100_001, t0 + 0.3); // same floor(MJD)
+        let a0 = mk_obs(0, 1.0, 0.1, t0);
+        let a1 = mk_obs(1, 1.000_001, 0.100_001, t0 + 0.3); // same floor(MJD)
 
         let alerts = vec![a0, a1];
         let index = build_alert_bucket_index(&alerts, &sb, &tb);
@@ -343,19 +327,15 @@ mod bucket_tests {
         assert_eq!(index.buckets.len(), 1);
 
         let key = BucketKey {
-            space_key: sb.key_for(alerts[0].ra, alerts[0].dec),
-            time_bin: tb.bin_for(alerts[0].mjd_tt),
+            space_key: sb.key_for(alerts[0].equ_coord()),
+            time_bin: tb.bin_for(alerts[0].mjd_tt()),
         };
 
         let bucket = index.buckets.get(&key).unwrap();
         assert_eq!(bucket.members.len(), 2);
-        // Members should be sorted by time, but here t0 < t1 and ids are 0,1
+        // Members should be sorted by time: id 0 (t0) before id 1 (t0+0.3).
         assert_eq!(
-            bucket
-                .members
-                .iter()
-                .map(|a| a.key.dia_source_id)
-                .collect::<Vec<_>>(),
+            bucket.members.iter().map(|a| *a.id()).collect::<Vec<_>>(),
             vec![0, 1]
         );
     }
@@ -365,9 +345,9 @@ mod bucket_tests {
         let sb = DummySpatialBinner;
         let tb = DummyTimeBinner;
 
-        let a0 = mk_alert(0, 1.0, 0.0, 59000.4); // bin 59000
-        let a1 = mk_alert(1, 1.0, 0.0, 59001.2); // bin 59001
-        let a2 = mk_alert(2, 1.0, 0.0, 59002.9); // bin 59002
+        let a0 = mk_obs(0, 1.0, 0.0, 59000.4); // bin 59000
+        let a1 = mk_obs(1, 1.0, 0.0, 59001.2); // bin 59001
+        let a2 = mk_obs(2, 1.0, 0.0, 59002.9); // bin 59002
 
         let alerts = vec![a0, a1, a2];
         let index = build_alert_bucket_index(&alerts, &sb, &tb);
@@ -377,45 +357,38 @@ mod bucket_tests {
 
         for alert in &alerts {
             let key = BucketKey {
-                space_key: sb.key_for(alert.ra, alert.dec),
-                time_bin: tb.bin_for(alert.mjd_tt),
+                space_key: sb.key_for(alert.equ_coord()),
+                time_bin: tb.bin_for(alert.mjd_tt()),
             };
             let bucket = index.buckets.get(&key).expect("missing bucket");
             assert_eq!(bucket.members.len(), 1);
-            assert_eq!(bucket.members[0].key.dia_source_id, alert.key.dia_source_id);
+            assert_eq!(*bucket.members[0].id(), *alert.id());
         }
     }
 
     #[test]
     fn alerts_split_into_different_spatial_cells() {
-        // Spatial binner that splits by RA at π
+        // Spatial binner that splits by RA at π.
         struct SplitSpatialBinner;
         impl SpatialBinner for SplitSpatialBinner {
-            fn key_for(&self, ra: Radian, _dec: Radian) -> SpatialKey {
-                if ra < PI {
+            fn key_for(&self, e: &EquCoord) -> SpatialKey {
+                if e.ra < PI {
                     SpatialKey(0)
                 } else {
                     SpatialKey(1)
                 }
             }
 
-            fn neighbors(&self, key: SpatialKey, _ang_radius: Radian) -> Vec<SpatialKey> {
-                // Minimal implementation for tests: just return the cell itself.
-                vec![key]
-            }
-
-            fn cell_radius(&self) -> Radian {
-                // Arbitrary positive radius.
+            fn cell_radius(&self) -> f64 {
                 1.0
             }
 
             fn neighbors_into(
                 &self,
                 _key: SpatialKey,
-                _ang_radius: Radian,
+                _ang_radius: f64,
                 _out: &mut Vec<SpatialKey>,
             ) {
-                todo!()
             }
         }
 
@@ -423,19 +396,18 @@ mod bucket_tests {
         let tb = DummyTimeBinner;
 
         let t = 59000.5;
-        let a0 = mk_alert(0, 1.0, 0.0, t); // RA < π -> cell 0
-        let a1 = mk_alert(1, 3.5, 0.0, t); // RA > π -> cell 1
+        let a0 = mk_obs(0, 1.0, 0.0, t); // RA < π -> cell 0
+        let a1 = mk_obs(1, 3.5, 0.0, t); // RA > π -> cell 1
 
-        // Capture ids and keys before moving alerts into the vector.
-        let a0_id = a0.key.dia_source_id;
-        let a1_id = a1.key.dia_source_id;
+        let a0_id = *a0.id();
+        let a1_id = *a1.id();
         let key0 = BucketKey {
-            space_key: sb.key_for(a0.ra, a0.dec),
-            time_bin: tb.bin_for(a0.mjd_tt),
+            space_key: sb.key_for(a0.equ_coord()),
+            time_bin: tb.bin_for(a0.mjd_tt()),
         };
         let key1 = BucketKey {
-            space_key: sb.key_for(a1.ra, a1.dec),
-            time_bin: tb.bin_for(a1.mjd_tt),
+            space_key: sb.key_for(a1.equ_coord()),
+            time_bin: tb.bin_for(a1.mjd_tt()),
         };
 
         let alerts = vec![a0, a1];
@@ -447,17 +419,11 @@ mod bucket_tests {
         let b1 = index.buckets.get(&key1).unwrap();
 
         assert_eq!(
-            b0.members
-                .iter()
-                .map(|a| a.key.dia_source_id)
-                .collect::<Vec<_>>(),
+            b0.members.iter().map(|a| *a.id()).collect::<Vec<_>>(),
             vec![a0_id]
         );
         assert_eq!(
-            b1.members
-                .iter()
-                .map(|a| a.key.dia_source_id)
-                .collect::<Vec<_>>(),
+            b1.members.iter().map(|a| *a.id()).collect::<Vec<_>>(),
             vec![a1_id]
         );
     }
@@ -467,33 +433,25 @@ mod bucket_tests {
         let sb = DummySpatialBinner;
         let tb = DummyTimeBinner;
 
-        // All alerts in same spatial cell & same time bin (floor 59000)
+        // All alerts in same spatial cell & same time bin (floor 59000).
         let t_base = 59000.2;
-        // We will deliberately give them out-of-order ids / times
-        let a0 = mk_alert(0, 1.0, 0.0, t_base + 0.3);
-        let a1 = mk_alert(1, 1.0, 0.0, t_base); // earliest
-        let a2 = mk_alert(2, 1.0, 0.0, t_base + 0.3); // same time as a0, higher id
+        let a0 = mk_obs(0, 1.0, 0.0, t_base + 0.3);
+        let a1 = mk_obs(1, 1.0, 0.0, t_base); // earliest
+        let a2 = mk_obs(2, 1.0, 0.0, t_base + 0.3); // same time as a0, higher id
 
-        // Note: order in the slice is [a0, a1, a2]
         let alerts = vec![a0, a1, a2];
         let index = build_alert_bucket_index(&alerts, &sb, &tb);
 
         assert_eq!(index.buckets.len(), 1);
         let key = BucketKey {
-            space_key: sb.key_for(alerts[0].ra, alerts[0].dec),
-            time_bin: tb.bin_for(alerts[0].mjd_tt),
+            space_key: sb.key_for(alerts[0].equ_coord()),
+            time_bin: tb.bin_for(alerts[0].mjd_tt()),
         };
         let bucket = index.buckets.get(&key).unwrap();
 
-        // Check sorted by (time, id):
-        //  - a1 first (earliest time),
-        //  - then a0 and a2 (same time), sorted by id → 0 then 2.
+        // Sorted by (mjd_tt, id): a1 (t_base,1) first, then a0 (t_base+0.3,0), then a2 (t_base+0.3,2).
         assert_eq!(
-            bucket
-                .members
-                .iter()
-                .map(|a| a.key.dia_source_id)
-                .collect::<Vec<_>>(),
+            bucket.members.iter().map(|a| *a.id()).collect::<Vec<_>>(),
             vec![1, 0, 2]
         );
     }
@@ -502,35 +460,27 @@ mod bucket_tests {
     fn bucket_key_for_uses_both_spatial_and_time_binners() {
         struct TestSpatialBinner;
         impl SpatialBinner for TestSpatialBinner {
-            fn key_for(&self, ra: Radian, _dec: Radian) -> SpatialKey {
-                // encode ra bucket roughly as integer
-                SpatialKey((ra / 0.5).floor() as u64)
+            fn key_for(&self, e: &EquCoord) -> SpatialKey {
+                SpatialKey((e.ra / 0.5).floor() as u64)
             }
 
-            fn neighbors(&self, key: SpatialKey, _ang_radius: Radian) -> Vec<SpatialKey> {
-                // Minimal impl: only the given key.
-                vec![key]
-            }
-
-            fn cell_radius(&self) -> Radian {
-                // Cell size consistent with the 0.5 rad "bucket" we used.
+            fn cell_radius(&self) -> f64 {
                 0.5
             }
 
             fn neighbors_into(
                 &self,
                 _key: SpatialKey,
-                _ang_radius: Radian,
+                _ang_radius: f64,
                 _out: &mut Vec<SpatialKey>,
             ) {
-                todo!()
             }
         }
 
         struct TestTimeBinner;
         impl TimeBinner for TestTimeBinner {
             fn bin_for(&self, mjd_tt: MJDTT) -> TimeBin {
-                TimeBin((mjd_tt * 10.0).floor() as i64) // 0.1 day bins
+                TimeBin((mjd_tt * 10.0).floor() as i64)
             }
 
             fn bins_in_range(&self, t0: MJDTT, t1: MJDTT) -> Vec<TimeBin> {
@@ -541,7 +491,6 @@ mod bucket_tests {
             }
 
             fn bin_width(&self) -> MJDTT {
-                // 0.1 day bins.
                 0.1
             }
 
@@ -553,11 +502,12 @@ mod bucket_tests {
         let sb = TestSpatialBinner;
         let tb = TestTimeBinner;
 
-        let ra = 1.2; // 1.2 / 0.5 = 2.4 -> 2
+        let ra = 1.2; // 1.2 / 0.5 = 2.4 -> floor = 2
         let dec = 0.0;
-        let t = 59000.34; // *10 = 590003.4 -> 590003
+        let t = 59000.34; // *10 = 590003.4 -> floor = 590003
 
-        let key = bucket_key_for(ra, dec, t, &sb, &tb);
+        let equ = EquCoord::new(ra, 0.0, dec, 0.0);
+        let key = bucket_key_for(&equ, t, &sb, &tb);
         assert_eq!(key.space_key, SpatialKey(2));
         assert_eq!(key.time_bin, TimeBin(590_003));
     }
