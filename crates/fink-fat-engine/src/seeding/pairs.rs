@@ -63,11 +63,11 @@ use photom::{
 use crate::{
     engine_config::pair_config::PairConfig,
     night_id::NightId,
-    seeding::{SeedNode, store::SeedStore},
+    seeding::{store::SeedStore, SeedNode},
     spacetime_bucket::{
         bucket::{BucketIndex, BucketKey},
         spatial_binner::{SpatialBinner, SpatialKey},
-        time_binner::{TimeBin, TimeBinner, time_targets},
+        time_binner::{time_targets, TimeBin, TimeBinner},
     },
 };
 
@@ -78,8 +78,8 @@ use crate::{
 /// - `a` is the anchor detection,
 /// - `b` is a candidate detection at a later epoch within `max_dt`.
 ///
-/// Notes
-/// -----
+/// # Notes
+///
 /// The ordering is semantically meaningful (directed in time) and is used
 /// downstream when fitting a linear seed model.
 #[derive(Copy, Clone, Debug)]
@@ -99,29 +99,22 @@ pub type Pairs<'alert_lf> = Vec<Pair<'alert_lf>>;
 /// neighbor expansion, etc.). For pair generation we call it many times with the
 /// same bucket keys, so we cache the results.
 ///
-/// Parameters
-/// ----------
-/// cache : &mut AHashMap<SpatialKey, Vec<SpatialKey>>
-///     Cache map keyed by the target cell.
-/// spatial_binner : &impl SpatialBinner
-///     Spatial discretization backend (e.g. HEALPix).
-/// target_space_key : SpatialKey
-///     Space cell key of the anchor bucket.
-/// search_radius : f64
-///     Cone radius (radians) used to include neighboring cells.
+/// # Arguments
 ///
-/// Returns
-/// -------
-/// &Vec<SpatialKey>
-///     Sorted, deduplicated list of neighboring cell keys including
-///     `target_space_key` itself if returned by the binner.
+/// - `cache` — cache map keyed by the target cell.
+/// - `spatial_binner` — spatial discretization backend (e.g. HEALPix).
+/// - `target_space_key` — space cell key of the anchor bucket.
+/// - `search_radius` — cone radius (radians) used to include neighboring cells.
 ///
-/// Notes
-/// -----
-/// The vector is:
-/// - sorted (`sort_unstable`) and
-/// - deduplicated (`dedup`)
-///   to ensure deterministic behavior and to avoid redundant scans.
+/// # Returns
+///
+/// Sorted, deduplicated list of neighboring cell keys including
+/// `target_space_key` itself if returned by the binner.
+///
+/// # Notes
+///
+/// The vector is sorted (`sort_unstable`) and deduplicated (`dedup`)
+/// to ensure deterministic behavior and to avoid redundant scans.
 #[inline]
 fn cached_spatial_neighbors<'cache, Bs: SpatialBinner>(
     cache: &'cache mut AHashMap<SpatialKey, Vec<SpatialKey>>,
@@ -145,21 +138,16 @@ fn cached_spatial_neighbors<'cache, Bs: SpatialBinner>(
 /// - `config.max_dt`,
 /// - `config.allow_same_timebin`.
 ///
-/// Parameters
-/// ----------
-/// cache : &mut AHashMap<TimeBin, Vec<TimeBin>>
-///     Cache map keyed by the base time bin.
-/// time_binner : &impl TimeBinner
-///     Time discretization backend.
-/// base_bin : TimeBin
-///     Time bin of the anchor bucket.
-/// config : &PairConfig
-///     Pair generation configuration.
+/// # Arguments
 ///
-/// Returns
-/// -------
-/// &Vec<TimeBin>
-///     List of time bins to consider as candidate buckets.
+/// - `cache` — cache map keyed by the base time bin.
+/// - `time_binner` — time discretization backend.
+/// - `base_bin` — time bin of the anchor bucket.
+/// - `config` — pair generation configuration.
+///
+/// # Returns
+///
+/// List of time bins to consider as candidate buckets.
 #[inline]
 fn cached_time_targets<'cache, Bt: TimeBinner>(
     cache: &'cache mut AHashMap<TimeBin, Vec<TimeBin>>,
@@ -184,17 +172,14 @@ fn cached_time_targets<'cache, Bt: TimeBinner>(
 /// It is used to skip all candidate alerts `b` with `t_b ≤ t_a` inside a bucket,
 /// assuming `members` is sorted by increasing `mjd_tt`.
 ///
-/// Parameters
-/// ----------
-/// members : &[&Observation]
-///     Bucket members, sorted by `mjd_tt` ascending.
-/// t0 : f64
-///     Threshold epoch (MJD TT).
+/// # Arguments
 ///
-/// Returns
-/// -------
-/// usize
-///     Index of the first element with `mjd_tt > t0` (may be `members.len()`).
+/// - `members` — bucket members, sorted by `mjd_tt` ascending.
+/// - `t0` — threshold epoch (MJD TT).
+///
+/// # Returns
+///
+/// Index of the first element with `mjd_tt > t0` (may be `members.len()`).
 #[inline]
 fn lower_bound_gt_time(members: &[&Observation], t0: f64) -> usize {
     let mut lo = 0usize;
@@ -212,79 +197,44 @@ fn lower_bound_gt_time(members: &[&Observation], t0: f64) -> usize {
 
 /// Generate all valid `(a, b)` pairs according to [`PairConfig`].
 ///
-/// Overview
-/// --------
-/// The algorithm is designed to be simple and fast:
-/// - iterate anchor buckets and anchor alerts `a`,
-/// - enumerate nearby buckets using cached spatial neighbors + cached time targets,
-/// - within each candidate bucket:
-///   - binary-search to skip `t_b ≤ t_a`,
-///   - scan forward until `t_b > t_a + max_dt`,
-///   - apply flux and angular-speed constraints,
-///   - deduplicate by `(ptr(a), ptr(b))`.
+/// The algorithm iterates anchor buckets and anchor alerts `a`, enumerates nearby
+/// buckets using cached spatial neighbors and cached time targets, and within each
+/// candidate bucket binary-searches to skip `t_b ≤ t_a`, scans forward until
+/// `t_b > t_a + max_dt`, applies flux and angular-speed constraints, and deduplicates
+/// by `(ptr(a), ptr(b))`.
 ///
-/// Parameters
-/// ----------
-/// bucket_index : &BucketIndex<&Observation>
-///     Spatio-temporal bucket index holding observations.
-///     Each bucket’s `members` must be sorted by time (`mjd_tt`).
-/// spatial_binner : &impl SpatialBinner
-///     Spatial discretization backend used to build neighbor sets.
-/// time_binner : &impl TimeBinner
-///     Time discretization backend used to map `max_dt` to candidate time bins.
-/// config : &PairConfig
-///     Pair-generation parameters:
-///     - `max_dt` (days)
-///     - `max_angular_speed` (rad/day)
-///     - `max_flux_difference` (flux units)
-///     - `allow_same_timebin` (bool)
+/// # Arguments
 ///
-/// Returns
-/// -------
-/// Pairs
-///     A deterministic, time-ordered list of unique pairs `(a, b)`.
+/// - `bucket_index` — spatio-temporal bucket index holding observations; each bucket's
+///   `members` must be sorted by time (`mjd_tt`).
+/// - `spatial_binner` — spatial discretization backend used to build neighbor sets.
+/// - `time_binner` — time discretization backend used to map `max_dt` to candidate time bins.
+/// - `config` — pair-generation parameters: `max_dt` (days), `max_angular_speed` (rad/day),
+///   `max_flux_difference` (flux units), `allow_same_timebin` (bool).
 ///
-/// Implementation details
-/// ---------------------
-/// ### Spatial search radius
-/// We use a conservative search radius:
-/// `search_radius = max_sep + cell_radius`,
-/// where `max_sep = max_angular_speed * max_dt`.
+/// # Returns
 ///
-/// This ensures we scan all potentially intersecting spatial cells, even when
-/// a bucket boundary cuts through the geometric cone.
+/// A deterministic, time-ordered list of unique pairs `(a, b)`.
 ///
-/// ### Angular-speed test without trigonometric inversion
-/// We avoid `acos` by comparing dot products:
-/// - compute `u_a = unit_vec(ra_a, dec_a)`
-/// - compute `u_b = unit_vec(ra_b, dec_b)`
-/// - accept iff `dot3(u_a, u_b) >= cos(max_angular_speed * Δt)`
+/// # Notes
 ///
-/// ### Deduplication key
-/// Pairs are deduplicated using pointer identity `(ptr(a), ptr(b))`.
-/// This assumes the same `Alert` object is not duplicated in memory.
+/// **Spatial search radius:** `search_radius = max_sep + cell_radius`, where
+/// `max_sep = max_angular_speed * max_dt`. This ensures all potentially intersecting
+/// cells are scanned even when a bucket boundary cuts through the geometric cone.
 ///
-/// Complexity
-/// ----------
-/// Let:
-/// - `B` be the number of buckets,
-/// - `n` be total alerts,
-/// - `k_s` average number of spatial neighbor cells,
-/// - `k_t` average number of target time bins,
-/// - `m` average bucket size.
+/// **Angular-speed test:** `acos` is avoided by comparing dot products —
+/// accept iff `dot3(unit_vec(a), unit_vec(b)) >= cos(max_angular_speed * Δt)`.
 ///
-/// The dominant cost is the nested scan over `(k_t * k_s)` candidate buckets
-/// per anchor bucket, with early exits based on time and dot-product checks.
+/// **Deduplication:** pairs are keyed by pointer identity `(ptr(a), ptr(b))`; this
+/// assumes the same `Alert` object is not duplicated in memory.
 ///
-/// Notes
-/// -----
-/// - Output is sorted at the end using `(a, b)` ordering for reproducibility.
-/// - This stage is intentionally permissive: it is a pre-filter before seed
-///   fitting and later graph construction.
+/// Output is sorted at the end using `(a, b)` ordering for reproducibility.
+/// This stage is intentionally permissive — it is a pre-filter before seed
+/// fitting and later graph construction.
 ///
-/// See also
-/// --------
-/// - [`extract_pair_features`] – convert valid pairs into [`SeedNode`] objects.
+/// # See also
+///
+/// - [`extract_pair_features`] — converts valid pairs into [`SeedNode`] objects.
 pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
     bucket_index: &BucketIndex<&'alert_lf Observation>,
     spatial_binner: &Bs,
@@ -425,26 +375,22 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
 /// `max_speed_rad_per_day` allows applying an additional physical sanity check
 /// at seed-construction time (independent from the pair-generation constraint).
 ///
-/// Parameters
-/// ----------
-/// pairs : &Pairs
-///     Time-ordered detection pairs produced by [`generate_pairs`].
-/// night_id : NightId
-///     Night identifier assigned to all resulting seeds.
-/// max_speed_rad_per_day : `Option<f64>`
-///     Optional speed filter forwarded to [`SeedNode::from_pair`].
+/// # Arguments
 ///
-/// Returns
-/// -------
-/// `Vec<SeedNode>`
-///     Seeds successfully constructed from the input pairs.
+/// - `pairs` — time-ordered detection pairs produced by [`generate_pairs`].
+/// - `seed_store` — seed store used to allocate unique keys for new seeds.
+/// - `night_id` — night identifier assigned to all resulting seeds.
+/// - `max_speed_rad_per_day` — optional speed filter forwarded to [`SeedNode::from_pair`].
 ///
-/// Notes
-/// -----
-/// - `SeedNode::from_pair` can still reject a pair (returns `None`) if the
-///   speed filter is set and the fitted speed exceeds the threshold.
-/// - The output order follows the input `pairs` order (which is deterministic
-///   if produced by [`generate_pairs`]).
+/// # Returns
+///
+/// Seeds successfully constructed from the input pairs.
+///
+/// # Notes
+///
+/// [`SeedNode::from_pair`] can still reject a pair (returns `None`) if the speed filter
+/// is set and the fitted speed exceeds the threshold. The output order follows the input
+/// `pairs` order, which is deterministic if produced by [`generate_pairs`].
 pub fn extract_pair_features<'alert_lf>(
     pairs: &Pairs<'alert_lf>,
     seed_store: &mut SeedStore,
@@ -474,7 +420,7 @@ mod pair_gen_tests {
 
     use crate::astro_math::arcsec_to_rad;
     use crate::engine_config::pair_config::PairConfig;
-    use crate::spacetime_bucket::bucket::{BucketKey, build_alert_bucket_index};
+    use crate::spacetime_bucket::bucket::{build_alert_bucket_index, BucketKey};
     use crate::spacetime_bucket::healpix_binner::HealpixBinner;
     use crate::spacetime_bucket::uniform_time_binner::UniformTimeBinner;
 

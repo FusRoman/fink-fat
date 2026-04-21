@@ -24,8 +24,8 @@
 //! - sufficient for fast intra-night prediction and cone generation
 //!   (not a full orbit determination).
 //!
-//! Typical workflow
-//! ----------------
+//! ## Typical workflow
+//!
 //! 1. Build a [`TangentPlaneModel`] from 2 or 3 alerts (see `SeedNode` helpers).
 //! 2. Predict position and uncertainty on the tangent plane via
 //!    [`TangentPlaneModel::predict_on_plane`].
@@ -34,30 +34,33 @@
 //! 4. Use the cone for spatial indexing or candidate search.
 
 use photom::{
-    MJDTT,
     coordinates::{
         cov2::Cov2,
         equatorial::EquCoord,
         gnomonic_projection::{TangentPoint, TangentVec},
     },
+    MJDTT,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display, Formatter};
 
 use crate::engine_config::propagator_config::ModelNoise;
 
+/// Position on the tangent plane paired with a 2×2 position covariance (rad²).
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 pub struct PosWithCov {
     pub tangent_point: TangentPoint,
     pub cov: Cov2,
 }
 
+/// Velocity on the tangent plane paired with a 2×2 velocity covariance (rad²/day²).
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 pub struct VelWithCov {
     pub v: TangentVec, // rad/day
     pub cov: Cov2,     // rad²/day²
 }
 
+/// Acceleration on the tangent plane (rad/day²).
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Acceleration(pub TangentVec); // rad/day²
 
@@ -71,9 +74,9 @@ pub struct Acceleration(pub TangentVec); // rad/day²
 /// ```
 ///
 /// where:
-/// - `pos` at `epoch_mid`,
-/// - `vel` is `vel`,
-/// - `acc` is optional `acc`.
+/// - `x₀, y₀` is the position stored in [`TangentPlaneModel::pos`] at `epoch_mid`,
+/// - `vₓ, v_y` is the velocity stored in [`TangentPlaneModel::vel`],
+/// - `aₓ, a_y` is the optional acceleration stored in [`TangentPlaneModel::acc`].
 ///
 /// Two covariance matrices are stored:
 ///
@@ -95,11 +98,11 @@ pub struct TangentPlaneModel {
     pub pos: PosWithCov,
 
     /// Velocity on the tangent plane (radians/day), expressed in
-    /// `pos.plane`.
+    /// `pos.tangent_point.plane`.
     pub vel: VelWithCov,
 
     /// Optional acceleration on the tangent plane (radians/day²),
-    /// expressed in `pos.plane`.
+    /// expressed in `pos.tangent_point.plane`.
     pub acc: Option<Acceleration>,
 }
 
@@ -138,25 +141,25 @@ impl TangentPlaneModel {
     /// - the noise term `q(Δt)` is added diagonally to both coordinates,
     /// - off-diagonal covariance terms are ignored in the propagated result.
     ///
-    /// Arguments
-    /// ---------
-    /// * `t_target` – Epoch at which to predict the state (MJD TT).
-    /// * `noise` – Model noise parameters:
-    ///   - `variance_floor` – minimum additional variance (rad²),
-    ///   - `drift_per_day` – linear growth term vs. |Δt|,
-    ///   - `curvature_per_day2` – quadratic growth term vs. Δt².
+    /// # Arguments
     ///
-    /// Return
-    /// ------
-    /// * `(pos, cov)` where:
-    ///   - `pos` is the predicted [`TangentPoint`] on the tangent plane,
-    ///   - `cov` is a 2×2 covariance matrix for position (rad²).
+    /// - `t_target` — Epoch at which to predict the state (MJD TT).
+    /// - `noise` — Model noise parameters:
+    ///   - `variance_floor` — minimum additional variance (rad²),
+    ///   - `drift_per_day` — linear growth term vs. |Δt|,
+    ///   - `curvature_per_day2` — quadratic growth term vs. Δt².
     ///
-    /// Notes
-    /// -----
-    /// * Acceleration is applied only if [`TangentPlaneModel::acc`] is
+    /// # Returns
+    ///
+    /// `(pos, cov)` where:
+    /// - `pos` is the predicted [`TangentPoint`] on the tangent plane,
+    /// - `cov` is a 2×2 covariance matrix for position (rad²).
+    ///
+    /// # Notes
+    ///
+    /// - Acceleration is applied only if [`TangentPlaneModel::acc`] is
     ///   `Some`; otherwise the model is purely linear.
-    /// * The covariance propagation is intentionally simplified and assumes
+    /// - The covariance propagation is intentionally simplified and assumes
     ///   independence between x and y in the added noise term.
     #[inline]
     pub fn predict_on_plane(&self, t_target: MJDTT, noise: &ModelNoise) -> (TangentPoint, Cov2) {
@@ -178,13 +181,13 @@ impl TangentPlaneModel {
 
     /// Predict position on the tangent plane after dt days.
     ///
-    /// Arguments
-    /// ---------
-    /// * `dt` – Time difference from `epoch_mid` (days).
+    /// # Arguments
     ///
-    /// Return
-    /// ------
-    /// * Predicted [`TangentPoint`] on the tangent plane.
+    /// - `dt` — Time difference from `epoch_mid` (days).
+    ///
+    /// # Returns
+    ///
+    /// Predicted [`TangentPoint`] on the tangent plane.
     #[inline]
     pub fn predict_position(&self, dt: f64) -> TangentPoint {
         let mut p = self.pos.tangent_point + self.vel.v * dt;
@@ -196,14 +199,13 @@ impl TangentPlaneModel {
 
     /// Predict velocity on the tangent plane after dt days.
     ///
-    /// Arguments
-    /// ---------
-    /// * `dt` – Time difference from `epoch_mid` (days).
+    /// # Arguments
     ///
-    /// Return
-    /// ------
-    /// * Predicted [`TangentVec`] (velocity on the tangent plane, rad/day).
-    /// Predict velocity on the tangent plane after `dt` days.
+    /// - `dt` — Time difference from `epoch_mid` (days).
+    ///
+    /// # Returns
+    ///
+    /// Predicted [`TangentVec`] (velocity on the tangent plane, rad/day).
     #[inline]
     pub fn predict_velocity(&self, dt: f64) -> TangentVec {
         match self.acc {
@@ -219,24 +221,23 @@ impl TangentPlaneModel {
     /// 1. Kinematic propagation on the tangent plane using position, velocity
     ///    and optional acceleration.
     /// 2. Conversion back to sky coordinates via the inverse gnomonic
-    ///    projection [`tangent_to_radec`].
+    ///    projection.
     ///
-    /// Arguments
-    /// ---------
-    /// * `t_target` – Epoch at which to predict the sky position (MJD TT).
+    /// # Arguments
     ///
-    /// Return
-    /// ------
-    /// * [`EquCoord`] – Predicted sky position (RA and Dec in radians).
+    /// - `t_target` — Epoch at which to predict the sky position (MJD TT).
     ///
-    /// Notes
-    /// -----
-    /// * Uncertainty is **not** returned here; for cone-based searches use
+    /// # Returns
+    ///
+    /// [`EquCoord`] — Predicted sky position (RA and Dec in radians).
+    ///
+    /// # Notes
+    ///
+    /// - Uncertainty is **not** returned here; for cone-based searches use
     ///   [`TangentPlaneModel::predict_cone_base`] instead.
-    /// * As with all tangent-plane models, accuracy degrades as the object
+    /// - As with all tangent-plane models, accuracy degrades as the object
     ///   drifts far from the reference centre or outside the validity time
     ///   range of the fit.
-    /// Predict sky coordinates as an [`EquCoord`] at a target epoch.
     #[inline]
     pub fn predict_radec(&self, t_target: MJDTT) -> EquCoord {
         let dt = t_target - self.epoch_mid;
@@ -250,34 +251,33 @@ impl TangentPlaneModel {
     /// 1. Predict position and covariance on the tangent plane via
     ///    [`TangentPlaneModel::predict_on_plane`].
     /// 2. Convert the predicted position to `(RA, Dec)` using
-    ///    [`tangent_to_radec`].
-    /// 3. Extract the maximum eigenvalue of the 2×2 covariance matrix via
-    ///    [`lambda_max_2x2`] and convert it to a 1σ angular radius.
+    ///    the inverse gnomonic projection.
+    /// 3. Extract the maximum eigenvalue of the 2×2 covariance matrix
+    ///    and convert it to a 1σ angular radius.
     /// 4. Multiply by `k_sigma` to obtain a conservative cone radius.
     ///
-    /// Arguments
-    /// ---------
-    /// * `t_target` – Epoch at which to predict the cone (MJD TT).
-    /// * `noise` – Model noise parameters used in the plane prediction.
-    /// * `k_sigma` – Multiplicative factor applied to the 1σ radius derived
+    /// # Arguments
+    ///
+    /// - `t_target` — Epoch at which to predict the cone (MJD TT).
+    /// - `noise` — Model noise parameters used in the plane prediction.
+    /// - `k_sigma` — Multiplicative factor applied to the 1σ radius derived
     ///   from the largest eigenvalue of the covariance.
     ///
-    /// Return
-    /// ------
-    /// * `(center, radius)` where:
-    ///   - `center` – cone centre as an [`EquCoord`] on the sky,
-    ///   - `radius` – angular radius of the cone (radians).
+    /// # Returns
     ///
-    /// Notes
-    /// -----
-    /// * The covariance used here is the result of
+    /// `(center, radius)` where:
+    /// - `center` — cone centre as an [`EquCoord`] on the sky,
+    /// - `radius` — angular radius of the cone (radians).
+    ///
+    /// # Notes
+    ///
+    /// - The covariance used here is the result of
     ///   [`TangentPlaneModel::predict_on_plane`]; only its largest eigenvalue
     ///   is considered, making the cone circular even if the underlying
     ///   uncertainty is anisotropic.
-    /// * Any additional padding related to spatial indexing cells (e.g. adding
+    /// - Any additional padding related to spatial indexing cells (e.g. adding
     ///   a HEALPix cell radius) should be applied *outside* this method; see
     ///   `SeedNode::predict_cone` for an example.
-    /// Predict a cone `(EquCoord, radius)` on the sky without padding.
     #[inline]
     pub fn predict_cone_base(
         &self,
