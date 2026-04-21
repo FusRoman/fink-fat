@@ -346,8 +346,23 @@ impl SeedStore {
 
 #[cfg(test)]
 mod seed_store_tests {
+    use photom::{
+        coordinates::{
+            cov2::Cov2,
+            equatorial::EquCoord,
+            gnomonic_projection::{TangentPlane, TangentPoint, TangentVec},
+        },
+        observation_dataset::ObsId,
+    };
+
     use super::*;
-    use crate::{alerts::AlertKey, night_id::NightId};
+    use crate::{
+        night_id::NightId,
+        seeding::{
+            photometry::Photometry,
+            tangent_plane::{PosWithCov, TangentPlaneModel, VelWithCov},
+        },
+    };
 
     // -------------------------------------------------------------------------
     // Test helpers
@@ -357,15 +372,34 @@ mod seed_store_tests {
         NightId(v)
     }
 
-    /// Create a minimal `SeedNodeOwned` for testing.
-    fn make_seed_owned(night_id: NightId, uniq_id: u64, alert_keys: Vec<AlertKey>) -> SeedNode {
+    /// Build a minimal zero-position [`TangentPlaneModel`] at the given epoch.
+    fn mk_plane_model(epoch_mid: f64) -> TangentPlaneModel {
+        let plane = TangentPlane::new(EquCoord::new(0.0, 0.0, 0.0, 0.0));
+        TangentPlaneModel {
+            epoch_mid,
+            pos: PosWithCov {
+                tangent_point: TangentPoint::new(plane, 0.0, 0.0),
+                cov: Cov2::zero(),
+            },
+            vel: VelWithCov {
+                v: TangentVec { dx: 0.0, dy: 0.0 },
+                cov: Cov2::zero(),
+            },
+            acc: None,
+        }
+    }
+
+    /// Create a minimal [`SeedNode`] for testing.
+    fn make_seed_owned(night_id: NightId, uniq_id: u64, alert_keys: Vec<ObsId>) -> SeedNode {
         SeedNode {
             key: SeedKey {
                 night_id,
                 unique_id: uniq_id,
             },
+            plane_model: mk_plane_model(0.0),
+            photom: Photometry::default(),
+            n_obs: alert_keys.len() as u16,
             members: alert_keys,
-            ..Default::default()
         }
     }
 
@@ -385,34 +419,8 @@ mod seed_store_tests {
         let night_id = nid(100);
 
         let seeds = vec![
-            make_seed_owned(
-                night_id,
-                0,
-                vec![
-                    AlertKey {
-                        night_id,
-                        dia_source_id: 0,
-                    },
-                    AlertKey {
-                        night_id,
-                        dia_source_id: 1,
-                    },
-                ],
-            ),
-            make_seed_owned(
-                night_id,
-                1,
-                vec![
-                    AlertKey {
-                        night_id,
-                        dia_source_id: 2,
-                    },
-                    AlertKey {
-                        night_id,
-                        dia_source_id: 3,
-                    },
-                ],
-            ),
+            make_seed_owned(night_id, 0, vec![0, 1]),
+            make_seed_owned(night_id, 1, vec![2, 3]),
         ];
 
         store.insert_vec_seed(night_id, seeds);
@@ -427,34 +435,13 @@ mod seed_store_tests {
         let mut store = SeedStore::new();
         let night_id = nid(100);
 
-        let seed1 = make_seed_owned(
-            night_id,
-            0,
-            vec![AlertKey {
-                night_id,
-                dia_source_id: 0,
-            }],
-        );
+        let seed1 = make_seed_owned(night_id, 0, vec![0]);
         store.insert_vec_seed(night_id, vec![seed1]);
         assert_eq!(store.len_night(&night_id), Some(1));
 
         let seeds2 = vec![
-            make_seed_owned(
-                night_id,
-                1,
-                vec![AlertKey {
-                    night_id,
-                    dia_source_id: 0,
-                }],
-            ),
-            make_seed_owned(
-                night_id,
-                2,
-                vec![AlertKey {
-                    night_id,
-                    dia_source_id: 1,
-                }],
-            ),
+            make_seed_owned(night_id, 1, vec![0]),
+            make_seed_owned(night_id, 2, vec![1]),
         ];
         store.insert_vec_seed(night_id, seeds2);
         assert_eq!(store.len_night(&night_id), Some(3));
@@ -466,14 +453,7 @@ mod seed_store_tests {
 
         for night_val in [100, 101, 102] {
             let night_id = nid(night_val);
-            let seed = make_seed_owned(
-                night_id,
-                0,
-                vec![AlertKey {
-                    night_id,
-                    dia_source_id: 0,
-                }],
-            );
+            let seed = make_seed_owned(night_id, 0, vec![0]);
             store.insert_vec_seed(night_id, vec![seed]);
         }
 
@@ -499,17 +479,20 @@ mod seed_store_tests {
 
         /// Build a minimal `SeedNode` for ordering and reverse-index tests.
         ///
-        /// Only `key` and `plane.epoch_mid` (MJD TT) are meaningful here;
-        /// all other fields are left at their `Default` values.
+        /// Only `key` and `plane_model.epoch_mid` (MJD TT) are meaningful here;
+        /// all other fields are set to zero/empty.
         fn make_seed(night_id: NightId, unique_id: SeedId, epoch_mid_mjd: f64) -> SeedNode {
             let key = SeedKey {
                 night_id,
                 unique_id,
             };
-            let mut seed = SeedNode::default();
-            seed.key = key;
-            seed.plane.epoch_mid = epoch_mid_mjd;
-            seed
+            SeedNode {
+                key,
+                plane_model: mk_plane_model(epoch_mid_mjd),
+                photom: Photometry::default(),
+                n_obs: 0,
+                members: vec![],
+            }
         }
 
         fn night(n: u32) -> NightId {
@@ -546,10 +529,10 @@ mod seed_store_tests {
             let seeds = store.get(&nid).expect("night must exist");
             for w in seeds.windows(2) {
                 assert!(
-                    w[0].plane.epoch_mid <= w[1].plane.epoch_mid,
+                    w[0].plane_model.epoch_mid <= w[1].plane_model.epoch_mid,
                     "seeds out of epoch_mid order after sort_night: {} > {}",
-                    w[0].plane.epoch_mid,
-                    w[1].plane.epoch_mid,
+                    w[0].plane_model.epoch_mid,
+                    w[1].plane_model.epoch_mid,
                 );
             }
 
@@ -657,10 +640,10 @@ mod seed_store_tests {
                 // 1. Sorted order.
                 for w in seeds.windows(2) {
                     prop_assert!(
-                        w[0].plane.epoch_mid <= w[1].plane.epoch_mid,
+                        w[0].plane_model.epoch_mid <= w[1].plane_model.epoch_mid,
                         "epoch_mid out of order: {} > {}",
-                        w[0].plane.epoch_mid,
-                        w[1].plane.epoch_mid,
+                        w[0].plane_model.epoch_mid,
+                        w[1].plane_model.epoch_mid,
                     );
                 }
 

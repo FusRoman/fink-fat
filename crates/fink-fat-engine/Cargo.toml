@@ -19,6 +19,8 @@ thiserror = { workspace = true }
 camino = { workspace = true }
 tracing = { workspace = true }
 ahash = { workspace = true }
+photom = { workspace = true, features = ["serde"] }
+
 arrow-array = "57.3.0"
 bitcode = { version = "0.6.9", features = ["serde"] }
 cdshealpix = "0.7.3"

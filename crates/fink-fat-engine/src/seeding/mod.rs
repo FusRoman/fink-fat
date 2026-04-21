@@ -67,25 +67,31 @@ use std::{
 use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    Alert, AlertKey, AlertStore, MJDTT, Radian,
-    astro_math::{
-        angular_separation_vincenty, fit_quad_1d, radec_to_tangent, spherical_midpoint,
-        tangent_to_radec,
+use photom::{
+    coordinates::{
+        cov2::Cov2,
+        equatorial::EquCoord,
+        gnomonic_projection::{TangentPlane, TangentPoint, TangentVec},
     },
+    observation_dataset::{observation::Observation, ObsDataset, ObsId},
+    MJDTT,
+};
+
+use crate::{
+    astro_math::fit_quad_1d,
     display_format::indent_block,
     engine_config::{edge_config::EdgeConfig, propagator_config::PredictorParams},
     night_id::NightId,
     persistence::{
-        SEED_STORE_SCHEMA_VERSION, compression::Compression, envelope::DiskEnvelope,
-        error::PersistenceIoError, layout::PersistenceLayout, manifest::Manifest,
+        compression::Compression, envelope::DiskEnvelope, error::PersistenceIoError,
+        layout::PersistenceLayout, manifest::Manifest, SEED_STORE_SCHEMA_VERSION,
     },
     seeding::{
         error::SeedingError,
         photometry::Photometry,
         seed_spatial_index::SeedSpatialIndex,
         store::{SeedId, SeedStore},
-        tangent_plane::{TangentCenter, TangentPlaneModel},
+        tangent_plane::{Acceleration, PosWithCov, TangentPlaneModel, VelWithCov},
     },
     spacetime_bucket::spatial_binner::SpatialBinner,
 };
@@ -108,13 +114,13 @@ impl Display for SeedKey {
 /// This is the main struct used for seeding and graph construction.
 ///
 /// The `core` field contains the cloneable seed data, while `members` holds references to the original alerts.
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SeedNode {
     /// Seed identifier: night ID + unique global ID. This is used for persistence and indexing.
     key: SeedKey,
 
     /// Local tangent-plane kinematic model (position/velocity/(optional) acceleration).
-    pub plane: TangentPlaneModel,
+    pub plane_model: TangentPlaneModel,
 
     /// Aggregated photometry for scoring / filtering.
     pub photom: Photometry,
@@ -126,13 +132,13 @@ pub struct SeedNode {
     ///
     /// The ordering is meaningful: constructors keep members in time order and
     /// upstream logic may assume it for display/debugging.
-    pub members: Vec<AlertKey>,
+    pub members: Vec<ObsId>,
 }
 
 impl PartialEq for SeedNode {
     fn eq(&self, other: &Self) -> bool {
         self.key == other.key
-            && self.plane == other.plane
+            && self.plane_model == other.plane_model
             && self.photom == other.photom
             && self.n_obs == other.n_obs
             && self.members == other.members
@@ -147,33 +153,19 @@ impl PartialOrd for SeedNode {
 }
 
 impl Ord for SeedNode {
+    /// Order seeds primarily by epoch, with the seed key as a stable tie-breaker.
+    ///
+    /// Rationale
+    /// ---------
+    /// - Primary key: `plane_model.epoch_mid` — seeds are almost always consumed
+    ///   in chronological order (edge building, time binning, etc.).
+    /// - Tie-breaker: `key` (night_id, unique_id) — guarantees a **total**
+    ///   order consistent with `Eq`, since `SeedKey` is unique by construction.
     fn cmp(&self, other: &Self) -> Ordering {
-        // main key : epoch_mid
-        self.plane
+        self.plane_model
             .epoch_mid
-            .total_cmp(&other.plane.epoch_mid)
-            // tie-breakers déterministes
-            .then_with(|| self.key.night_id.cmp(&other.key.night_id))
-            .then_with(|| self.key.unique_id.cmp(&other.key.unique_id))
-            .then_with(|| self.n_obs.cmp(&other.n_obs))
-            // optionnel : position/vitesse pour rendre total + stable
-            .then_with(|| self.plane.pos_xy[0].total_cmp(&other.plane.pos_xy[0]))
-            .then_with(|| self.plane.pos_xy[1].total_cmp(&other.plane.pos_xy[1]))
-            .then_with(|| self.plane.vel_xy[0].total_cmp(&other.plane.vel_xy[0]))
-            .then_with(|| self.plane.vel_xy[1].total_cmp(&other.plane.vel_xy[1]))
-            .then_with(|| match (self.plane.acc_xy, other.plane.acc_xy) {
-                (None, None) => Ordering::Equal,
-                (None, Some(_)) => Ordering::Less, // règle arbitraire mais stable
-                (Some(_), None) => Ordering::Greater,
-                (Some(a), Some(b)) => a[0].total_cmp(&b[0]).then_with(|| a[1].total_cmp(&b[1])),
-            })
-            // photom
-            .then_with(|| {
-                (self.photom.flux_mean as f64).total_cmp(&(other.photom.flux_mean as f64))
-            })
-            .then_with(|| (self.photom.flux_std as f64).total_cmp(&(other.photom.flux_std as f64)))
-            .then_with(|| self.photom.n_bands.cmp(&other.photom.n_bands))
-            .then_with(|| self.photom.bands.cmp(&other.photom.bands))
+            .total_cmp(&other.plane_model.epoch_mid)
+            .then_with(|| self.key.cmp(&other.key))
     }
 }
 
@@ -188,7 +180,7 @@ impl Display for SeedNode {
         writeln!(
             f,
             "  plane     : {}",
-            indent_block(&self.plane.to_string(), 14)
+            indent_block(&self.plane_model.to_string(), 14)
         )?;
         writeln!(f)?;
         writeln!(
@@ -238,16 +230,16 @@ impl SeedNode {
         self.key = key;
     }
 
-    pub fn resolve_members<'store>(
+    pub fn resolve_members<'obs>(
         &self,
-        alert_store: &'store AlertStore,
-    ) -> Result<Vec<&'store Alert>, SeedingError> {
+        obs_dataset: &'obs ObsDataset,
+    ) -> Result<Vec<&'obs Observation>, SeedingError> {
         self.members
             .iter()
-            .map(|&alert_key| {
-                alert_store
-                    .get_by_key(alert_key)
-                    .ok_or(SeedingError::AlertKeyNotFound(alert_key))
+            .map(|obs_idx| {
+                obs_dataset
+                    .get_observation(*obs_idx)
+                    .ok_or_else(|| SeedingError::ObservationIndexNotFound(*obs_idx))
             })
             .collect()
     }
@@ -275,10 +267,10 @@ impl SeedNode {
     ///
     /// Returns
     /// -------
-    /// ([f64; 2], [f64; 2], f64)
+    /// (TangentPoint, TangentVec, f64)
     ///     `(p_pred, v_pred, has_acc)` where:
-    ///     - `p_pred` is the predicted tangent-plane position `[x, y]` (radians),
-    ///     - `v_pred` is the predicted tangent-plane velocity `[vx, vy]` (rad/day),
+    ///     - `p_pred` is the predicted tangent-plane position (radians),
+    ///     - `v_pred` is the predicted tangent-plane velocity (rad/day),
     ///     - `has_acc` is `1.0` if acceleration is present, else `0.0`.
     ///
     /// Notes
@@ -286,15 +278,15 @@ impl SeedNode {
     /// This assumes the seed tangent plane remains a valid local linearization
     /// over the time gap considered (typical for inter-night asteroid linking).
     #[inline]
-    pub(crate) fn propagate_from(&self, dt: f64, dt_sq: f64) -> ([f64; 2], [f64; 2], f64) {
-        let (px, py) = self.plane.predict_position(dt, dt_sq);
-        let (vx, vy) = self.plane.predict_velocity(dt);
-        let has_acc = if self.plane.acc_xy.is_some() {
+    pub(crate) fn propagate_from(&self, dt: f64) -> (TangentPoint, TangentVec, f64) {
+        let p = self.plane_model.predict_position(dt);
+        let v = self.plane_model.predict_velocity(dt);
+        let has_acc = if self.plane_model.acc.is_some() {
             1.0
         } else {
             0.0
         };
-        ([px, py], [vx, vy], has_acc)
+        (p, v, has_acc)
     }
 
     /// Predict the sky position `(ra, dec)` at `t_target` from the fitted model.
@@ -309,15 +301,15 @@ impl SeedNode {
     ///
     /// Returns
     /// -------
-    /// (Radian, Radian)
-    ///     `(ra, dec)` in radians (same frame as alerts stored in the seed).
+    /// EquCoord
+    ///     Predicted sky position `(ra, dec)` in radians (same frame as alerts stored in the seed).
     ///
     /// See also
     /// --------
     /// - [`SeedNode::predict_cone`] – uncertainty-aware cone for candidate search.
     #[inline]
-    pub fn predict_radec(&self, t_target: MJDTT) -> (Radian, Radian) {
-        self.plane.predict_radec(t_target)
+    pub fn predict_radec(&self, t_target: MJDTT) -> EquCoord {
+        self.plane_model.predict_radec(t_target)
     }
 
     /// Predict a conservative sky cone `(ra, dec, radius)` for candidate search.
@@ -340,8 +332,9 @@ impl SeedNode {
     ///
     /// Returns
     /// -------
-    /// (Radian, Radian, f64)
-    ///     `(ra_center, dec_center, radius)` in radians.
+    /// (EquCoord, f64)
+    ///     `(center, radius)` where `center` is the predicted sky position in radians
+    ///     and `radius` is the search cone radius in radians.
     ///
     /// Notes
     /// -----
@@ -354,8 +347,8 @@ impl SeedNode {
         t_target: MJDTT,
         binner: &Bs,
         predictor_params: &PredictorParams,
-    ) -> (Radian, Radian, f64) {
-        let (ra, dec, mut radius) = self.plane.predict_cone_base(
+    ) -> (EquCoord, f64) {
+        let (center, mut radius) = self.plane_model.predict_cone_base(
             t_target,
             &predictor_params.noise,
             predictor_params.k_sigma,
@@ -364,7 +357,7 @@ impl SeedNode {
         if predictor_params.pad_cell_radius {
             radius += binner.cell_radius();
         }
-        (ra, dec, radius)
+        (center, radius)
     }
 
     /// Absolute time separation (days) between this seed and another seed.
@@ -380,9 +373,15 @@ impl SeedNode {
     ///     `|other.epoch_mid - self.epoch_mid|` in days.
     #[inline]
     pub fn delta_days(&self, other: &SeedNode) -> f64 {
-        let t_self = self.plane.epoch_mid;
-        let t_other = other.plane.epoch_mid;
+        let t_self = self.plane_model.epoch_mid;
+        let t_other = other.plane_model.epoch_mid;
         (t_other - t_self).abs()
+    }
+
+    /// Sky position of the seed at its reference epoch (`epoch_mid`).
+    #[inline]
+    pub fn predicted_center_equ(&self) -> EquCoord {
+        self.plane_model.pos.tangent_point.unproject()
     }
 
     /// Enumerate candidate right-hand seeds for inter-night linking.
@@ -433,9 +432,8 @@ impl SeedNode {
     ) -> impl Iterator<Item = &'seed_lf SeedNode> + 'iter {
         let pred_cfg = edge_config.predictor_config;
 
-        // Left seed speed on tangent plane (rad/day), with optional slack.
-        let v_xy = self.plane.vel_xy;
-        let speed = (v_xy[0].mul_add(v_xy[0], v_xy[1] * v_xy[1])).sqrt();
+        // Left seed speed on the tangent plane (rad/day), with optional slack.
+        let speed = self.plane_model.vel.v.norm();
         let effective_speed = (speed + pred_cfg.v_slack).max(0.0);
 
         // Half-bin width used for conservative time padding.
@@ -446,10 +444,9 @@ impl SeedNode {
             let bin_end = right_seed_index.time_binner.bin_end(bin.0);
             let bin_center = 0.5 * (bin_start + bin_end);
 
-            // Compute base radius (k_sigma-inflated, no cell padding or v_slack)
-            // separately from the full query radius, so we can apply max_norm_offset.
-            let (ra_center, dec_center, base_r) =
-                self.plane
+            // Base (k_sigma-inflated, no cell / time padding) and full query radius.
+            let (center, base_r) =
+                self.plane_model
                     .predict_cone_base(bin_center, &pred_cfg.noise, pred_cfg.k_sigma);
 
             let mut cone_radius = base_r;
@@ -471,22 +468,23 @@ impl SeedNode {
 
             let max_norm = pred_cfg.max_norm_offset;
 
-            right_seed_index
-                .cone_query(ra_center, dec_center, cone_radius, bin_center)
-                .filter(move |to| {
-                    // Normalised-offset cut: reject candidates whose actual angular
-                    // separation from the predicted center exceeds max_norm * base_r.
-                    // This is a pure FP zone visible in the predictor diagnostics.
+            // Collect per-bin so that `center` (a local) is not borrowed by
+            // the returned iterator — required under Rust 2024 lifetime capture
+            // rules.  The collected Vec holds &SeedNode references whose
+            // lifetime ('seed_lf) is independent of `center`.
+            let candidates: Vec<&'seed_lf SeedNode> = right_seed_index
+                .cone_query(&center, cone_radius, bin_center)
+                .filter(|to| {
+                    // Normalised-offset cut: reject candidates whose angular
+                    // separation from the predicted centre exceeds max_norm · base_r.
                     max_norm.is_none_or(|mn| {
-                        angular_separation_vincenty(
-                            ra_center,
-                            dec_center,
-                            to.plane.ra_mid,
-                            to.plane.dec_mid,
-                        ) / base_r
-                            <= mn
+                        let to_center = to.predicted_center_equ();
+                        let sep = center.angular_separation(&to_center);
+                        sep / base_r <= mn
                     })
                 })
+                .collect();
+            candidates.into_iter()
         })
     }
 
@@ -525,8 +523,8 @@ impl SeedNode {
         binner: &Bs,
         params: &PredictorParams,
     ) -> Vec<&'seed_lf SeedNode> {
-        let (ra, dec, radius) = self.predict_cone(t_target, binner, params);
-        index.cone_query(ra, dec, radius, t_target).collect()
+        let (center, radius) = self.predict_cone(t_target, binner, params);
+        index.cone_query(&center, radius, t_target).collect()
     }
 
     /// Build a [`SeedNode`] from a **pair** of alerts (linear tangent-plane model).
@@ -567,72 +565,78 @@ impl SeedNode {
     pub fn from_pair(
         seed_store: &mut SeedStore,
         night_id: NightId,
-        alert_a: &Alert,
-        alert_b: &Alert,
+        alert_a: &Observation,
+        alert_b: &Observation,
         max_speed_rad_per_day: Option<f64>,
     ) -> Option<Self> {
-        // --- implementation unchanged ---
-        let ta = alert_a.mjd_tt;
-        let tb = alert_b.mjd_tt;
-        let tm = 0.5 * (ta + tb);
+        let ta = alert_a.mjd_tt();
+        let tb = alert_b.mjd_tt();
+        let epoch_mid = 0.5 * (ta + tb);
         let dt = tb - ta;
         let inv_dt = 1.0 / dt;
         let inv_dt2 = inv_dt * inv_dt;
 
-        let (ra0, dec0) = spherical_midpoint(alert_a.ra, alert_a.dec, alert_b.ra, alert_b.dec);
-        let center = TangentCenter::new(ra0, dec0);
+        let mid = alert_a.equ_coord().spherical_midpoint(alert_b.equ_coord());
+        let plane = TangentPlane::new(mid);
 
-        let pa = radec_to_tangent(alert_a.ra, alert_a.dec, ra0, dec0);
-        let pb = radec_to_tangent(alert_b.ra, alert_b.dec, ra0, dec0);
+        // Project both alerts onto the tangent plane.
+        let tp_a = plane.project(alert_a.equ_coord());
+        let tp_b = plane.project(alert_b.equ_coord());
 
-        let pm = [(pa[0] + pb[0]) * 0.5, (pa[1] + pb[1]) * 0.5];
+        // Midpoint on the plane.
+        let tp_mid = TangentPoint::midpoint(tp_a, tp_b);
 
-        let (ra_mid, dec_mid) = tangent_to_radec(pm[0], pm[1], ra0, dec0);
-
-        let vx = (pb[0] - pa[0]) * inv_dt;
-        let vy = (pb[1] - pa[1]) * inv_dt;
+        // Velocity vector on the plane (rad / day).
+        let v = (tp_b - tp_a) * inv_dt;
 
         if let Some(vmax) = max_speed_rad_per_day {
-            let speed2 = vx.mul_add(vx, vy * vy);
-            if speed2 > vmax * vmax {
+            if v.norm_sq() > vmax * vmax {
                 return None;
             }
         }
 
-        let sa = alert_a.ra_err.max(alert_a.dec_err);
-        let sb = alert_b.ra_err.max(alert_b.dec_err);
-        let s2 = 0.5 * (sa * sa + sb * sb);
-        let cov_pos = [[s2, 0.0], [0.0, s2]];
-        let vel_var = 2.0 * s2 * inv_dt2;
-        let cov_vel = [[vel_var, 0.0], [0.0, vel_var]];
+        // Per-alert covariances on the sky (RA/Dec).
+        // NB: we use them directly in the tangent plane here, under the
+        // small-angle assumption that the gnomonic Jacobian is ≈ identity
+        // near the projection centre. For a rigorous treatment, propagate
+        // through the projection Jacobian J: Σ_xy = J Σ_αδ Jᵀ.
+        let sigma_a = Cov2::from_equ(&alert_a.equ_coord());
+        let sigma_b = Cov2::from_equ(&alert_b.equ_coord());
+        let sum_ab = sigma_a + sigma_b;
 
-        let flux_mean = (alert_a.flux + alert_b.flux) * 0.5;
-        let flux_std = ((alert_a.flux - flux_mean).abs() + (alert_b.flux - flux_mean).abs()) * 0.5;
+        // Two-point least-squares fit at the midpoint epoch:
+        //   Var(p̄) = (Σa + Σb) / 4
+        //   Var(v̂) = (Σa + Σb) / Δt²
+        let cov_pos = sum_ab * 0.25;
+        let cov_vel = sum_ab * inv_dt2;
+
+        let model = TangentPlaneModel {
+            epoch_mid,
+            pos: PosWithCov {
+                tangent_point: tp_mid,
+                cov: cov_pos,
+            },
+            vel: VelWithCov { v, cov: cov_vel },
+            acc: None,
+        };
+
+        let mag_mean = (alert_a.photometry().magnitude + alert_b.photometry().magnitude) * 0.5;
+        let flux_std = ((alert_a.photometry().magnitude - mag_mean).abs()
+            + (alert_b.photometry().magnitude - mag_mean).abs())
+            * 0.5;
         let photom = Photometry::from_pair(
-            flux_mean as f32,
+            mag_mean as f32,
             flux_std as f32,
-            alert_a.band,
-            alert_b.band,
-        );
-
-        let plane = TangentPlaneModel::new(
-            center,
-            tm,
-            pm,
-            [vx, vy],
-            None,
-            cov_pos,
-            cov_vel,
-            ra_mid,
-            dec_mid,
+            &alert_a.photometry().filter,
+            &alert_b.photometry().filter,
         );
 
         Some(SeedNode {
             key: seed_store.next_key(night_id),
-            plane,
+            plane_model: model,
             photom,
             n_obs: 2,
-            members: vec![alert_a.key, alert_b.key],
+            members: vec![alert_a.id().clone(), alert_b.id().clone()],
         })
     }
 
@@ -657,7 +661,7 @@ impl SeedNode {
     /// Returns
     /// -------
     /// * SeedNode
-    ///   A seed with `n_obs == 3` and `plane.acc_xy.is_some() == true`.
+    ///   A seed with `n_obs == 3` and `plane_model.acc.is_some() == true`.
     ///
     /// Notes
     /// -----
@@ -668,72 +672,106 @@ impl SeedNode {
     pub fn from_triplet(
         seed_store: &mut SeedStore,
         night_id: NightId,
-        alert_a: &Alert,
-        alert_b: &Alert,
-        alert_c: &Alert,
+        alert_a: &Observation,
+        alert_b: &Observation,
+        alert_c: &Observation,
     ) -> Self {
-        // --- implementation unchanged ---
-        let (ta, tb, tc) = (alert_a.mjd_tt, alert_b.mjd_tt, alert_c.mjd_tt);
-        let tm = (ta + tb + tc) / 3.0;
-
-        let (ra0, dec0) = spherical_midpoint(alert_a.ra, alert_a.dec, alert_c.ra, alert_c.dec);
-        let center = TangentCenter::new(ra0, dec0);
-
-        let pa = radec_to_tangent(alert_a.ra, alert_a.dec, ra0, dec0);
-        let pb = radec_to_tangent(alert_b.ra, alert_b.dec, ra0, dec0);
-        let pc = radec_to_tangent(alert_c.ra, alert_c.dec, ra0, dec0);
-
-        let (p0x, vx, ax) = fit_quad_1d([ta - tm, tb - tm, tc - tm], [pa[0], pb[0], pc[0]]);
-        let (p0y, vy, ay) = fit_quad_1d([ta - tm, tb - tm, tc - tm], [pa[1], pb[1], pc[1]]);
-
-        let (ra_mid, dec_mid) = tangent_to_radec(p0x, p0y, ra0, dec0);
-
-        let sa = alert_a.ra_err.max(alert_a.dec_err);
-        let sb = alert_b.ra_err.max(alert_b.dec_err);
-        let sc = alert_c.ra_err.max(alert_c.dec_err);
-        let s2 = (sa * sa + sb * sb + sc * sc) / 3.0;
-
+        let (ta, tb, tc) = (alert_a.mjd_tt(), alert_b.mjd_tt(), alert_c.mjd_tt());
         let dt_char = (tc - ta).max(1e-6);
         let inv_dt2 = 1.0 / (dt_char * dt_char);
+        let epoch_mid = (ta + tb + tc) / 3.0;
 
-        let cov_pos = [[s2 / 3.0, 0.0], [0.0, s2 / 3.0]];
-        let vel_var = s2 * inv_dt2;
-        let cov_vel = [[vel_var, 0.0], [0.0, vel_var]];
+        // Tangent plane centred on the spherical midpoint of the extremes.
+        let mid = alert_a.equ_coord().spherical_midpoint(alert_c.equ_coord());
+        let plane = TangentPlane::new(mid);
 
-        let flux_mean = (alert_a.flux + alert_b.flux + alert_c.flux) / 3.0;
-        let flux_std = ((alert_a.flux - flux_mean).abs()
-            + (alert_b.flux - flux_mean).abs()
-            + (alert_c.flux - flux_mean).abs())
+        // Project the three alerts onto the plane.
+        let tp_a = plane.project(alert_a.equ_coord());
+        let tp_b = plane.project(alert_b.equ_coord());
+        let tp_c = plane.project(alert_c.equ_coord());
+
+        let dts = [ta - epoch_mid, tb - epoch_mid, tc - epoch_mid];
+        let (tp_fit, v, a) = fit_quad_tangent(dts, [tp_a, tp_b, tp_c]);
+
+        // Per-alert anisotropic variances (RA, Dec independent).
+        let var_of = |o: &Observation| {
+            let e = o.equ_coord();
+            (e.ra_error * e.ra_error, e.dec_error * e.dec_error)
+        };
+        let (vxa, vya) = var_of(alert_a);
+        let (vxb, vyb) = var_of(alert_b);
+        let (vxc, vyc) = var_of(alert_c);
+
+        // Mean variance per tangent-plane axis.
+        let var_x = (vxa + vxb + vxc) / 3.0;
+        let var_y = (vya + vyb + vyc) / 3.0;
+
+        // Propagated covariances: position averages over 3 samples,
+        // velocity scales as σ² / Δt².
+        let cov_pos = Cov2::diag(var_x / 3.0, var_y / 3.0);
+        let cov_vel = Cov2::diag(var_x * inv_dt2, var_y * inv_dt2);
+
+        let model = TangentPlaneModel {
+            epoch_mid,
+            pos: PosWithCov {
+                tangent_point: tp_fit,
+                cov: cov_pos,
+            },
+            vel: VelWithCov { v, cov: cov_vel },
+            acc: Some(Acceleration(a)),
+        };
+
+        let flux_mean = (alert_a.photometry().magnitude
+            + alert_b.photometry().magnitude
+            + alert_c.photometry().magnitude)
+            / 3.0;
+        let flux_std = ((alert_a.photometry().magnitude - flux_mean).abs()
+            + (alert_b.photometry().magnitude - flux_mean).abs()
+            + (alert_c.photometry().magnitude - flux_mean).abs())
             / 3.0;
 
         let photom = Photometry::from_triplet(
             flux_mean as f32,
             flux_std as f32,
-            alert_a.band,
-            alert_b.band,
-            alert_c.band,
-        );
-
-        let plane = TangentPlaneModel::new(
-            center,
-            tm,
-            [p0x, p0y],
-            [vx, vy],
-            Some([ax, ay]),
-            cov_pos,
-            cov_vel,
-            ra_mid,
-            dec_mid,
+            &alert_a.photometry().filter,
+            &alert_b.photometry().filter,
+            &alert_c.photometry().filter,
         );
 
         SeedNode {
             key: seed_store.next_key(night_id),
-            plane,
+            plane_model: model,
             photom,
             n_obs: 3,
-            members: vec![alert_a.key, alert_b.key, alert_c.key],
+            members: vec![
+                alert_a.id().clone(),
+                alert_b.id().clone(),
+                alert_c.id().clone(),
+            ],
         }
     }
+}
+
+/// Fit a quadratic motion in a tangent plane through three projected points.
+///
+/// Returns `(p0, v, a)` where:
+/// - `p0` is a [`TangentPoint`] on the same plane as the inputs,
+/// - `v`, `a` are [`TangentVec`] displacements per unit time / time².
+fn fit_quad_tangent(
+    dt: [f64; 3],
+    pts: [TangentPoint; 3],
+) -> (TangentPoint, TangentVec, TangentVec) {
+    debug_assert_eq!(pts[0].plane, pts[1].plane);
+    debug_assert_eq!(pts[1].plane, pts[2].plane);
+
+    let (p0x, vx, ax) = fit_quad_1d(dt, [pts[0].x, pts[1].x, pts[2].x]);
+    let (p0y, vy, ay) = fit_quad_1d(dt, [pts[0].y, pts[1].y, pts[2].y]);
+
+    (
+        TangentPoint::new(pts[0].plane, p0x, p0y),
+        TangentVec { dx: vx, dy: vy },
+        TangentVec { dx: ax, dy: ay },
+    )
 }
 
 pub trait SeedNodeSlice {
@@ -774,32 +812,37 @@ mod seed_node_tests {
     use proptest::prelude::*;
 
     use crate::{
-        AlertKey,
-        astro_math::{angular_separation_vincenty, arcsec_to_rad},
+        astro_math::arcsec_to_rad,
         engine_config::propagator_config::{ModelNoise, PredictorParams},
         spacetime_bucket::{healpix_binner::HealpixBinner, uniform_time_binner::UniformTimeBinner},
+    };
+
+    use photom::{
+        coordinates::equatorial::EquCoord,
+        observation_dataset::observation::Observation,
+        photometry::{Filter, Photometry as PhotomPhotometry},
     };
 
     const LAT_EPS: f64 = 1e-6;
 
     /* ------------------------- helpers ------------------------- */
 
-    fn mk_alert(source_id: u64, ra: f64, dec: f64, mjd_tt: f64, band: u8, flux: f64) -> Alert {
-        Alert {
-            key: AlertKey {
-                night_id: NightId::new(0),
-                dia_source_id: source_id,
-            },
-            ra,
-            ra_err: arcsec_to_rad(0.5),
-            dec,
-            dec_err: arcsec_to_rad(0.5),
-            mjd_tt,
-            flux,
-            flux_err: 0.0,
-            band,
-            ..Default::default()
-        }
+    fn mk_alert(
+        source_id: u64,
+        ra: f64,
+        dec: f64,
+        mjd_tt: f64,
+        band: u8,
+        flux: f64,
+    ) -> Observation {
+        let pos_err = arcsec_to_rad(0.5);
+        let equ_coord = EquCoord::new(ra, pos_err, dec, pos_err);
+        let photometry = PhotomPhotometry {
+            magnitude: flux,
+            error: 0.0,
+            filter: Filter::Int(band as u32),
+        };
+        Observation::new(source_id, equ_coord, photometry, mjd_tt, None)
     }
 
     fn default_predictor_params() -> PredictorParams {
@@ -842,21 +885,22 @@ mod seed_node_tests {
         assert_eq!(sn.night_id(), NightId::new(42));
         assert_eq!(sn.n_obs, 2);
 
-        // members are references now
+        // members are stored as ObsId (u64)
         assert_eq!(sn.members.len(), 2);
-        assert_eq!(sn.members[0].dia_source_id, a.key.dia_source_id);
-        assert_eq!(sn.members[1].dia_source_id, b.key.dia_source_id);
+        assert_eq!(sn.members[0], *a.id());
+        assert_eq!(sn.members[1], *b.id());
 
         // Velocity is roughly dr / dt on the tangent plane.
-        let dt = (b.mjd_tt - a.mjd_tt).max(1e-12);
-        let (ra0, dec0) = spherical_midpoint(a.ra, a.dec, b.ra, b.dec);
-        let pa = radec_to_tangent(a.ra, a.dec, ra0, dec0);
-        let pb = radec_to_tangent(b.ra, b.dec, ra0, dec0);
-        let vx = (pb[0] - pa[0]) / dt;
-        let vy = (pb[1] - pa[1]) / dt;
+        let dt = (b.mjd_tt() - a.mjd_tt()).max(1e-12);
+        let mid = a.equ_coord().spherical_midpoint(b.equ_coord());
+        let plane = TangentPlane::new(mid);
+        let pa = plane.project(a.equ_coord());
+        let pb = plane.project(b.equ_coord());
+        let vx = (pb.x - pa.x) / dt;
+        let vy = (pb.y - pa.y) / dt;
 
-        assert!((sn.plane.vel_xy[0] - vx).abs() < 1e-9);
-        assert!((sn.plane.vel_xy[1] - vy).abs() < 1e-9);
+        assert!((sn.plane_model.vel.v.dx - vx).abs() < 1e-9);
+        assert!((sn.plane_model.vel.v.dy - vy).abs() < 1e-9);
     }
 
     #[test]
@@ -911,13 +955,13 @@ mod seed_node_tests {
         assert_eq!(sn.n_obs, 3);
 
         assert_eq!(sn.members.len(), 3);
-        assert_eq!(sn.members[0].dia_source_id, a.key.dia_source_id);
-        assert_eq!(sn.members[1].dia_source_id, b.key.dia_source_id);
-        assert_eq!(sn.members[2].dia_source_id, c.key.dia_source_id);
+        assert_eq!(sn.members[0], *a.id());
+        assert_eq!(sn.members[1], *b.id());
+        assert_eq!(sn.members[2], *c.id());
 
         // Midpoint time close to average.
-        let tm = (a.mjd_tt + b.mjd_tt + c.mjd_tt) / 3.0;
-        assert!((sn.plane.epoch_mid - tm).abs() < 1e-12);
+        let tm = (a.mjd_tt() + b.mjd_tt() + c.mjd_tt()) / 3.0;
+        assert!((sn.plane_model.epoch_mid - tm).abs() < 1e-12);
     }
 
     #[test]
@@ -935,13 +979,12 @@ mod seed_node_tests {
         let sn = SeedNode::from_pair(&mut SeedStore::new(), NightId::new(1), a, b, None).unwrap();
 
         let predict_params = default_predictor_params();
-        let tb = b.mjd_tt;
+        let tb = b.mjd_tt();
 
-        let (ra_pred, dec_pred) = sn.predict_radec(tb);
-        let (ra_cone, dec_cone, radius) =
-            sn.predict_cone(tb, &HealpixBinner::new(8), &predict_params);
+        let pred = sn.predict_radec(tb);
+        let (center, radius) = sn.predict_cone(tb, &HealpixBinner::new(8), &predict_params);
 
-        let d = angular_separation_vincenty(ra_pred, dec_pred, ra_cone, dec_cone);
+        let d = pred.angular_separation(&center);
         assert!(d <= radius + 1e-12);
     }
 
@@ -1020,17 +1063,17 @@ mod seed_node_tests {
         fn prop_from_pair_basic_invariants(
             samples in proptest::collection::vec((ra_strategy(), dec_strategy(), t_strategy()), 2..60)
         ) {
-            let mut alerts: Vec<Alert> = samples.iter().enumerate().map(|(i, (ra, dec, t))| {
+            let mut alerts: Vec<Observation> = samples.iter().enumerate().map(|(i, (ra, dec, t))| {
                 mk_alert(i as u64, *ra, *dec, *t, 1, 1000.0)
             }).collect();
 
-            alerts.sort_by(|a,b| a.mjd_tt.partial_cmp(&b.mjd_tt).unwrap());
+            alerts.sort_by(|a,b| a.mjd_tt().partial_cmp(&b.mjd_tt()).unwrap());
 
             let mut count = 0usize;
             for i in 0..alerts.len().saturating_sub(1) {
                 let a = &alerts[i];
                 let b = &alerts[i+1];
-                if b.mjd_tt <= a.mjd_tt { continue; }
+                if b.mjd_tt() <= a.mjd_tt() { continue; }
 
                 if let Some(sn) = SeedNode::from_pair(
                     &mut SeedStore::new(),
@@ -1042,13 +1085,13 @@ mod seed_node_tests {
                     count += 1;
                     prop_assert_eq!(sn.n_obs, 2);
                     prop_assert_eq!(sn.members.len(), 2);
-                    prop_assert_eq!(sn.members[0].dia_source_id, a.key.dia_source_id);
-                    prop_assert_eq!(sn.members[1].dia_source_id, b.key.dia_source_id);
+                    prop_assert_eq!(sn.members[0], *a.id());
+                    prop_assert_eq!(sn.members[1], *b.id());
 
-                    let tm = 0.5 * (a.mjd_tt + b.mjd_tt);
-                    prop_assert!((sn.plane.epoch_mid - tm).abs() < 1e-9);
+                    let tm = 0.5 * (a.mjd_tt() + b.mjd_tt());
+                    prop_assert!((sn.plane_model.epoch_mid - tm).abs() < 1e-9);
 
-                    prop_assert!(sn.plane.vel_xy[0].is_finite() && sn.plane.vel_xy[1].is_finite());
+                    prop_assert!(sn.plane_model.vel.v.dx.is_finite() && sn.plane_model.vel.v.dy.is_finite());
                 }
             }
             prop_assert!(count > 0);
@@ -1058,16 +1101,16 @@ mod seed_node_tests {
         fn prop_from_triplet_basic_invariants(
             samples in proptest::collection::vec((ra_strategy(), dec_strategy(), t_strategy()), 3..60)
         ) {
-            let mut alerts: Vec<Alert> = samples.iter().enumerate().map(|(i, (ra, dec, t))| {
+            let mut alerts: Vec<Observation> = samples.iter().enumerate().map(|(i, (ra, dec, t))| {
                 mk_alert(i as u64, *ra, *dec, *t, 1, 1000.0)
             }).collect();
 
-            alerts.sort_by(|a,b| a.mjd_tt.partial_cmp(&b.mjd_tt).unwrap());
+            alerts.sort_by(|a,b| a.mjd_tt().partial_cmp(&b.mjd_tt()).unwrap());
 
             let mut built = 0usize;
             for i in 0..alerts.len().saturating_sub(2) {
                 let (a, b, c) = (&alerts[i], &alerts[i+1], &alerts[i+2]);
-                if !(a.mjd_tt < b.mjd_tt && b.mjd_tt < c.mjd_tt) { continue; }
+                if !(a.mjd_tt() < b.mjd_tt() && b.mjd_tt() < c.mjd_tt()) { continue; }
 
                 let sn = SeedNode::from_triplet(
                     &mut SeedStore::new(),
@@ -1080,17 +1123,17 @@ mod seed_node_tests {
 
                 prop_assert_eq!(sn.n_obs, 3);
                 prop_assert_eq!(sn.members.len(), 3);
-                prop_assert_eq!(sn.members[0].dia_source_id, a.key.dia_source_id);
-                prop_assert_eq!(sn.members[1].dia_source_id, b.key.dia_source_id);
-                prop_assert_eq!(sn.members[2].dia_source_id, c.key.dia_source_id);
+                prop_assert_eq!(sn.members[0], *a.id());
+                prop_assert_eq!(sn.members[1], *b.id());
+                prop_assert_eq!(sn.members[2], *c.id());
 
-                let tmin = a.mjd_tt.min(b.mjd_tt).min(c.mjd_tt);
-                let tmax = a.mjd_tt.max(b.mjd_tt).max(c.mjd_tt);
-                prop_assert!(sn.plane.epoch_mid >= tmin && sn.plane.epoch_mid <= tmax);
+                let tmin = a.mjd_tt().min(b.mjd_tt()).min(c.mjd_tt());
+                let tmax = a.mjd_tt().max(b.mjd_tt()).max(c.mjd_tt());
+                prop_assert!(sn.plane_model.epoch_mid >= tmin && sn.plane_model.epoch_mid <= tmax);
 
-                prop_assert!(sn.plane.vel_xy[0].is_finite() && sn.plane.vel_xy[1].is_finite());
-                let acc = sn.plane.acc_xy.expect("triplet fits a quadratic");
-                prop_assert!(acc[0].is_finite() && acc[1].is_finite());
+                prop_assert!(sn.plane_model.vel.v.dx.is_finite() && sn.plane_model.vel.v.dy.is_finite());
+                let acc = sn.plane_model.acc.expect("triplet fits a quadratic");
+                prop_assert!(acc.0.dx.is_finite() && acc.0.dy.is_finite());
             }
             prop_assert!(built > 0);
         }
@@ -1099,7 +1142,7 @@ mod seed_node_tests {
         fn prop_predict_cone_covers_predict_radec(
             samples in proptest::collection::vec((ra_strategy(), dec_strategy(), t_strategy()), 2..40)
         ) {
-            let alerts: Vec<Alert> = samples.iter().enumerate().map(|(i, (ra, dec, t))| {
+            let alerts: Vec<Observation> = samples.iter().enumerate().map(|(i, (ra, dec, t))| {
                 mk_alert(i as u64, *ra, *dec, *t, 1, 1000.0)
             }).collect();
 
@@ -1107,7 +1150,7 @@ mod seed_node_tests {
 
             let a = &alerts[0];
             let b = &alerts[1];
-            if b.mjd_tt <= a.mjd_tt { return Ok(()); }
+            if b.mjd_tt() <= a.mjd_tt() { return Ok(()); }
 
             let sn = match SeedNode::from_pair(
                 &mut SeedStore::new(),
@@ -1121,12 +1164,12 @@ mod seed_node_tests {
             };
 
             let params = default_predictor_params();
-            let t = b.mjd_tt;
+            let t = b.mjd_tt();
 
-            let (rp, dp) = sn.predict_radec(t);
-            let (rc, dc, rad) = sn.predict_cone(t, &HealpixBinner::new(8), &params);
+            let pred = sn.predict_radec(t);
+            let (center, rad) = sn.predict_cone(t, &HealpixBinner::new(8), &params);
 
-            let d = angular_separation_vincenty(rp, dp, rc, dc);
+            let d = pred.angular_separation(&center);
             prop_assert!(d <= rad + 1e-12);
         }
     }

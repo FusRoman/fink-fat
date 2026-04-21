@@ -1,4 +1,4 @@
-use crate::MJDTT;
+use photom::MJDTT;
 
 /// Compact time bin identifier.
 ///

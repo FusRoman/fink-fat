@@ -56,17 +56,18 @@
 //! - [`SeedNode::from_pair`] – builds a compact intra-night seed from a valid pair.
 
 use ahash::{AHashMap, AHashSet};
+use photom::{
+    coordinates::cartesian::CartesianCoord, observation_dataset::observation::Observation,
+};
 
 use crate::{
-    Alert,
-    astro_math::{dot3, unit_vec},
     engine_config::pair_config::PairConfig,
     night_id::NightId,
-    seeding::{SeedNode, store::SeedStore},
+    seeding::{store::SeedStore, SeedNode},
     spacetime_bucket::{
         bucket::{BucketIndex, BucketKey},
         spatial_binner::{SpatialBinner, SpatialKey},
-        time_binner::{TimeBin, TimeBinner, time_targets},
+        time_binner::{time_targets, TimeBin, TimeBinner},
     },
 };
 
@@ -84,9 +85,9 @@ use crate::{
 #[derive(Copy, Clone, Debug)]
 pub struct Pair<'alert_lf> {
     /// Anchor detection (earlier epoch).
-    pub a: &'alert_lf Alert,
+    pub a: &'alert_lf Observation,
     /// Candidate detection (later epoch).
-    pub b: &'alert_lf Alert,
+    pub b: &'alert_lf Observation,
 }
 
 /// Convenience alias: a flat list of time-ordered detection pairs.
@@ -185,7 +186,7 @@ fn cached_time_targets<'cache, Bt: TimeBinner>(
 ///
 /// Parameters
 /// ----------
-/// members : &[&Alert]
+/// members : &[&Observation]
 ///     Bucket members, sorted by `mjd_tt` ascending.
 /// t0 : f64
 ///     Threshold epoch (MJD TT).
@@ -195,12 +196,12 @@ fn cached_time_targets<'cache, Bt: TimeBinner>(
 /// usize
 ///     Index of the first element with `mjd_tt > t0` (may be `members.len()`).
 #[inline]
-fn lower_bound_gt_time(members: &[&Alert], t0: f64) -> usize {
+fn lower_bound_gt_time(members: &[&Observation], t0: f64) -> usize {
     let mut lo = 0usize;
     let mut hi = members.len();
     while lo < hi {
         let mid = (lo + hi) / 2;
-        if members[mid].mjd_tt <= t0 {
+        if members[mid].mjd_tt() <= t0 {
             lo = mid + 1;
         } else {
             hi = mid;
@@ -224,8 +225,8 @@ fn lower_bound_gt_time(members: &[&Alert], t0: f64) -> usize {
 ///
 /// Parameters
 /// ----------
-/// bucket_index : &BucketIndex<&Alert>
-///     Spatio-temporal bucket index holding alerts.
+/// bucket_index : &BucketIndex<&Observation>
+///     Spatio-temporal bucket index holding observations.
 ///     Each bucket’s `members` must be sorted by time (`mjd_tt`).
 /// spatial_binner : &impl SpatialBinner
 ///     Spatial discretization backend used to build neighbor sets.
@@ -285,7 +286,7 @@ fn lower_bound_gt_time(members: &[&Alert], t0: f64) -> usize {
 /// --------
 /// - [`extract_pair_features`] – convert valid pairs into [`SeedNode`] objects.
 pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
-    bucket_index: &BucketIndex<&'alert_lf Alert>,
+    bucket_index: &BucketIndex<&'alert_lf Observation>,
     spatial_binner: &Bs,
     time_binner: &Bt,
     config: &PairConfig,
@@ -336,12 +337,12 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
 
         // Anchors `a` from this bucket
         for &a in bucket.members.iter() {
-            let t_a = a.mjd_tt;
+            let t_a = a.mjd_tt();
             let t_upper = t_a + config.max_dt;
-            let flux_a = a.flux;
+            let magnitude_a = a.photometry().magnitude;
 
             // Precompute direction vector of `a` to amortize dot products.
-            let u_a = unit_vec(a.ra, a.dec);
+            let u_a: CartesianCoord = a.equ_coord().into();
 
             for &time_bin in time_targets {
                 for &space_key in spatial_neighbors {
@@ -359,7 +360,7 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
                         let b = members[idx];
                         idx += 1;
 
-                        let t_b = b.mjd_tt;
+                        let t_b = b.mjd_tt();
                         if t_b > t_upper {
                             break;
                         }
@@ -370,7 +371,9 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
                         }
 
                         // Flux similarity
-                        if (flux_a - b.flux).abs() > config.max_flux_difference {
+                        if (magnitude_a - b.photometry().magnitude).abs()
+                            > config.max_flux_difference
+                        {
                             n_rejected_flux += 1;
                             continue;
                         }
@@ -380,14 +383,17 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
                         let max_sep_dt = (config.max_angular_speed * dt).min(core::f64::consts::PI);
                         let cos_thresh = max_sep_dt.cos();
 
-                        let u_b = unit_vec(b.ra, b.dec);
-                        if dot3(u_a, u_b) < cos_thresh {
+                        let u_b: CartesianCoord = b.equ_coord().into();
+                        if u_a.dot(&u_b) < cos_thresh {
                             n_rejected_speed += 1;
                             continue;
                         }
 
                         // Dedup + push
-                        let key = (a as *const Alert as usize, b as *const Alert as usize);
+                        let key = (
+                            a as *const Observation as usize,
+                            b as *const Observation as usize,
+                        );
                         if seen.insert(key) {
                             out.push(Pair { a, b });
                         } else {
@@ -460,39 +466,37 @@ mod pair_gen_tests {
     use std::collections::HashSet;
     use std::f64::consts::PI;
 
-    use crate::AlertKey;
-    use crate::astro_math::{angular_separation_vincenty, arcsec_to_rad};
+    use photom::{
+        coordinates::equatorial::EquCoord,
+        observation_dataset::observation::Observation,
+        photometry::{Filter, Photometry as PhotomPhotometry},
+    };
+
+    use crate::astro_math::arcsec_to_rad;
     use crate::engine_config::pair_config::PairConfig;
-    use crate::spacetime_bucket::bucket::{BucketKey, build_alert_bucket_index};
+    use crate::spacetime_bucket::bucket::{build_alert_bucket_index, BucketKey};
     use crate::spacetime_bucket::healpix_binner::HealpixBinner;
     use crate::spacetime_bucket::uniform_time_binner::UniformTimeBinner;
 
     /* ------------------------- helpers ------------------------- */
 
-    /// Construct a minimal `Alert` for testing.
-    fn mk_alert(i: usize, ra: f64, dec: f64, mjd_tt: f64, band: u8, flux: f64) -> Alert {
-        Alert {
-            key: AlertKey {
-                night_id: NightId(0),
-                dia_source_id: i as u64,
-            },
-            ra,
-            ra_err: 0.5 * PI / (180.0 * 3600.0), // ~0.5 arcsec in radians
-            dec,
-            dec_err: 0.5 * PI / (180.0 * 3600.0), // ~0.5 arcsec in radians
-            mjd_tt,
-            flux,
-            flux_err: 0.0,
-            band,
-            ..Default::default()
-        }
+    /// Construct a minimal `Observation` for testing.
+    fn mk_observation(id: u64, ra: f64, dec: f64, mjd_tt: f64, band: u8, flux: f64) -> Observation {
+        let pos_err = arcsec_to_rad(0.5);
+        let equ_coord = EquCoord::new(ra, pos_err, dec, pos_err);
+        let photometry = PhotomPhotometry {
+            magnitude: flux,
+            error: 0.0,
+            filter: Filter::Int(band as u32),
+        };
+        Observation::new(id, equ_coord, photometry, mjd_tt, None)
     }
 
-    fn idx_of(alerts: &[Alert], a: &Alert) -> usize {
+    fn idx_of(alerts: &[Observation], a: &Observation) -> usize {
         alerts
             .iter()
             .position(|x| core::ptr::eq(x, a))
-            .expect("alert ref not found in slice")
+            .expect("observation ref not found in slice")
     }
 
     /* ------------------------- unit tests ------------------------- */
@@ -506,9 +510,9 @@ mod pair_gen_tests {
         let t0 = 60000.10;
         let dec0 = 0.2;
 
-        // Two alerts ~5" apart and 8 min apart.
-        let a1 = mk_alert(0, 1.0, dec0, t0, 1, 1000.0);
-        let a2 = mk_alert(
+        // Two observations ~5" apart and 8 min apart.
+        let a1 = mk_observation(0, 1.0, dec0, t0, 1, 1000.0);
+        let a2 = mk_observation(
             1,
             1.0 + arcsec_to_rad(5.0) / dec0.cos(),
             dec0,
@@ -518,7 +522,7 @@ mod pair_gen_tests {
         );
 
         // A distant outlier (must not match).
-        let a3 = mk_alert(2, 2.0, -0.3, t0 + 5.0 / 1440.0, 1, 900.0);
+        let a3 = mk_observation(2, 2.0, -0.3, t0 + 5.0 / 1440.0, 1, 900.0);
 
         let alerts = vec![a1, a2, a3];
         let bucket_index = build_alert_bucket_index(&alerts, &spatial_binner, &time_binner);
@@ -545,7 +549,7 @@ mod pair_gen_tests {
 
         assert_eq!(ia, 0);
         assert_eq!(ib, 1);
-        assert!(p.b.mjd_tt > p.a.mjd_tt);
+        assert!(p.b.mjd_tt() > p.a.mjd_tt());
     }
 
     /// Check behavior of `allow_same_timebin`.
@@ -557,9 +561,9 @@ mod pair_gen_tests {
         let t0 = 60000.25;
         let dec0 = 0.1;
 
-        // Two alerts in the same time bin (Δt = 5 min < 20 min).
-        let a1 = mk_alert(0, 1.5, dec0, t0, 1, 1000.0);
-        let a2 = mk_alert(
+        // Two observations in the same time bin (Δt = 5 min < 20 min).
+        let a1 = mk_observation(0, 1.5, dec0, t0, 1, 1000.0);
+        let a2 = mk_observation(
             1,
             1.5 + arcsec_to_rad(4.0) / dec0.cos(),
             dec0,
@@ -615,8 +619,8 @@ mod pair_gen_tests {
         let t0 = 60000.0;
         let dec0 = 0.3;
 
-        let a0 = mk_alert(0, 1.0, dec0, t0, 1, 1000.0);
-        let a1 = mk_alert(
+        let a0 = mk_observation(0, 1.0, dec0, t0, 1, 1000.0);
+        let a1 = mk_observation(
             1,
             1.0 + arcsec_to_rad(5.0) / dec0.cos(),
             dec0,
@@ -624,7 +628,7 @@ mod pair_gen_tests {
             1,
             1000.0,
         );
-        let a2 = mk_alert(
+        let a2 = mk_observation(
             2,
             1.0 + arcsec_to_rad(9.0) / dec0.cos(),
             dec0,
@@ -654,14 +658,14 @@ mod pair_gen_tests {
         let pairs = generate_pairs(&bucket_index, &spatial_binner, &time_binner, &config);
 
         for Pair { a, b } in &pairs {
-            assert!(b.mjd_tt > a.mjd_tt, "t_b must be > t_a");
+            assert!(b.mjd_tt() > a.mjd_tt(), "t_b must be > t_a");
             assert!(
-                (b.mjd_tt - a.mjd_tt) <= config.max_dt + 1e-15,
+                (b.mjd_tt() - a.mjd_tt()) <= config.max_dt + 1e-15,
                 "Δt must be <= max_dt"
             );
 
-            let dt = b.mjd_tt - a.mjd_tt;
-            let d = angular_separation_vincenty(a.ra, a.dec, b.ra, b.dec);
+            let dt = b.mjd_tt() - a.mjd_tt();
+            let d = a.equ_coord().angular_separation(&b.equ_coord());
 
             assert!(
                 d <= config.max_angular_speed * dt + 1e-12,
@@ -683,8 +687,8 @@ mod pair_gen_tests {
         let t0 = 60000.0;
         let dec0 = 0.4;
 
-        let a0 = mk_alert(0, 0.5, dec0, t0, 1, 1000.0);
-        let a1 = mk_alert(
+        let a0 = mk_observation(0, 0.5, dec0, t0, 1, 1000.0);
+        let a1 = mk_observation(
             1,
             0.5 + arcsec_to_rad(4.0) / dec0.cos(),
             dec0,
@@ -692,7 +696,7 @@ mod pair_gen_tests {
             1,
             1005.0,
         );
-        let a2 = mk_alert(
+        let a2 = mk_observation(
             2,
             0.5 + arcsec_to_rad(7.0) / dec0.cos(),
             dec0,
@@ -720,7 +724,10 @@ mod pair_gen_tests {
         // Uniqueness by pointer identity
         let mut set: HashSet<(usize, usize)> = HashSet::new();
         for p in &pairs {
-            let k = (p.a as *const Alert as usize, p.b as *const Alert as usize);
+            let k = (
+                p.a as *const Observation as usize,
+                p.b as *const Observation as usize,
+            );
             assert!(set.insert(k), "duplicate pair produced");
         }
     }
@@ -736,12 +743,12 @@ mod pair_gen_tests {
         let dec0: f64 = 0.25;
         let dr = arcsec_to_rad(6.0) / dec0.cos();
 
-        let a = mk_alert(0, 2.0, dec0, t0, 1, 1000.0);
-        let b = mk_alert(1, 2.0 + dr, dec0, t0 + 5.0 / 1440.0, 1, 1002.0);
-        let c = mk_alert(2, 2.0 + 2.0 * dr, dec0, t0 + 10.0 / 1440.0, 1, 1004.0);
+        let a = mk_observation(0, 2.0, dec0, t0, 1, 1000.0);
+        let b = mk_observation(1, 2.0 + dr, dec0, t0 + 5.0 / 1440.0, 1, 1002.0);
+        let c = mk_observation(2, 2.0 + 2.0 * dr, dec0, t0 + 10.0 / 1440.0, 1, 1004.0);
 
-        let n1 = mk_alert(3, 3.0, -0.1, t0 + 3.0 / 1440.0, 1, 500.0);
-        let n2 = mk_alert(4, 1.0, 0.8, t0 + 6.0 / 1440.0, 1, 800.0);
+        let n1 = mk_observation(3, 3.0, -0.1, t0 + 3.0 / 1440.0, 1, 500.0);
+        let n2 = mk_observation(4, 1.0, 0.8, t0 + 6.0 / 1440.0, 1, 800.0);
 
         let alerts = vec![a, b, c, n1, n2];
         let bucket_index = build_alert_bucket_index(&alerts, &spatial_binner, &time_binner);
@@ -772,8 +779,8 @@ mod pair_gen_tests {
         assert!(pair_set.contains(&(0, 2)));
 
         for p in &pairs {
-            let dt = p.b.mjd_tt - p.a.mjd_tt;
-            let d = angular_separation_vincenty(p.a.ra, p.a.dec, p.b.ra, p.b.dec);
+            let dt = p.b.mjd_tt() - p.a.mjd_tt();
+            let d = p.a.equ_coord().angular_separation(&p.b.equ_coord());
             assert!(d <= config.max_angular_speed * dt + 1e-12);
         }
     }
@@ -825,8 +832,8 @@ mod pair_gen_tests {
                 let sep_cap = config.max_angular_speed * config.max_dt;
                 let search_radius = sep_cap + spatial_binner.cell_radius();
 
-                let alerts: Vec<Alert> = triples.iter().enumerate()
-                    .map(|(i, (ra, dec, t))| mk_alert(i, *ra, *dec, *t, 1, 1000.0))
+                let alerts: Vec<Observation> = triples.iter().enumerate()
+                    .map(|(i, (ra, dec, t))| mk_observation(i as u64, *ra, *dec, *t, 1, 1000.0))
                     .collect();
 
                 let bucket_index = build_alert_bucket_index(&alerts, &spatial_binner, &time_binner);
@@ -836,27 +843,30 @@ mod pair_gen_tests {
                 // Pairs must be unique (pointer identity).
                 let mut set: HashSet<(usize, usize)> = HashSet::new();
                 for p in &pairs {
-                    let k = (p.a as *const Alert as usize, p.b as *const Alert as usize);
+                    let k = (
+                        p.a as *const Observation as usize,
+                        p.b as *const Observation as usize,
+                    );
                     prop_assert!(set.insert(k));
                 }
 
                 for Pair { a, b } in pairs {
-                    prop_assert!(b.mjd_tt > a.mjd_tt);
-                    prop_assert!((b.mjd_tt - a.mjd_tt) <= config.max_dt + 1e-15);
+                    prop_assert!(b.mjd_tt() > a.mjd_tt());
+                    prop_assert!((b.mjd_tt() - a.mjd_tt()) <= config.max_dt + 1e-15);
 
-                    let dt = b.mjd_tt - a.mjd_tt;
-                    let d = angular_separation_vincenty(a.ra, a.dec, b.ra, b.dec);
+                    let dt = b.mjd_tt() - a.mjd_tt();
+                    let d = a.equ_coord().angular_separation(&b.equ_coord());
                     prop_assert!(d <= config.max_angular_speed * dt + 1e-12);
                     prop_assert!(d <= sep_cap + 1e-12);
 
                     // Bucket compatibility (same logic as before).
                     let key_a = BucketKey {
-                        space_key: spatial_binner.key_for(a.ra, a.dec),
-                        time_bin: time_binner.bin_for(a.mjd_tt),
+                        space_key: spatial_binner.key_for(a.equ_coord()),
+                        time_bin: time_binner.bin_for(a.mjd_tt()),
                     };
                     let key_b = BucketKey {
-                        space_key: spatial_binner.key_for(b.ra, b.dec),
-                        time_bin: time_binner.bin_for(b.mjd_tt),
+                        space_key: spatial_binner.key_for(b.equ_coord()),
+                        time_bin: time_binner.bin_for(b.mjd_tt()),
                     };
 
                     let spatial_neighbors = spatial_binner.neighbors(key_a.space_key, search_radius);
@@ -886,9 +896,9 @@ mod pair_gen_tests {
         let slow_sep = arcsec_to_rad(5.0) / dec0.cos();
         let fast_sep = arcsec_to_rad(100.0) / dec0.cos();
 
-        let a = mk_alert(0, 1.0, dec0, t0, 1, 1000.0);
-        let b = mk_alert(1, 1.0 + slow_sep, dec0, t0 + 5.0 / 1440.0, 1, 1001.0);
-        let c = mk_alert(
+        let a = mk_observation(0, 1.0, dec0, t0, 1, 1000.0);
+        let b = mk_observation(1, 1.0 + slow_sep, dec0, t0 + 5.0 / 1440.0, 1, 1001.0);
+        let c = mk_observation(
             2,
             1.0 + slow_sep + fast_sep,
             dec0,
@@ -929,11 +939,7 @@ mod pair_gen_tests {
         assert_eq!(seeds_filtered.len(), 1);
 
         // The kept seed must correspond to (alerts[0], alerts[1]).
-        // We check by pointer identity (doesn't require ids).
         let kept = &seeds_filtered[0];
-        // Assuming SeedNode stores refs or can be introspected; if it stores values/ids,
-        // this assertion may need adaptation to your new SeedNode representation.
-        // At minimum, we can check it's the first pair by construction:
         let _ = kept;
     }
 
@@ -963,13 +969,13 @@ mod pair_gen_tests {
             fn prop_extract_pair_features_1to1_mapping(
                 triples in proptest::collection::vec((ra_strategy(), dec_strategy(), time_strategy()), 2..40)
             ) {
-                let alerts: Vec<Alert> = triples.iter().enumerate().map(|(i, (ra, dec, t))| mk_alert(i, *ra, *dec, *t, 1, 1000.0)).collect();
+                let alerts: Vec<Observation> = triples.iter().enumerate().map(|(i, (ra, dec, t))| mk_observation(i as u64, *ra, *dec, *t, 1, 1000.0)).collect();
 
                 // Build an ordered pair list from refs, enforcing t_b > t_a.
                 let mut pairs: Vec<Pair> = Vec::new();
                 for i in 0..alerts.len() {
                     for j in (i+1)..alerts.len() {
-                        if alerts[j].mjd_tt > alerts[i].mjd_tt {
+                        if alerts[j].mjd_tt() > alerts[i].mjd_tt() {
                             pairs.push(Pair { a: &alerts[i], b: &alerts[j] });
                         }
                     }

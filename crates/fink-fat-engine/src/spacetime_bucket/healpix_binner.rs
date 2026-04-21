@@ -39,8 +39,8 @@ use std::cell::RefCell;
 use cdshealpix as chpx;
 use chpx::nested;
 use chpx::nested::Layer;
+use photom::{Radians, coordinates::equatorial::EquCoord};
 
-use crate::Radian;
 use crate::spacetime_bucket::spatial_binner::{SpatialBinner, SpatialKey};
 
 /// Spatial binner backed by **HEALPix** (NESTED scheme).
@@ -59,7 +59,7 @@ pub struct HealpixBinner {
     layer: &'static Layer,
     /// Characteristic cell radius (radians).  
     /// Defined as the maximum center→vertex distance at the equator.
-    cell_radius: Radian,
+    cell_radius: Radians,
 }
 
 thread_local! {
@@ -113,13 +113,13 @@ impl SpatialBinner for HealpixBinner {
     /// -------
     /// [`SpatialKey`] wrapping the NESTED HEALPix hash.
     #[inline]
-    fn key_for(&self, ra: Radian, dec: Radian) -> SpatialKey {
+    fn key_for(&self, eq_coord: &EquCoord) -> SpatialKey {
         // cdshealpix expects (lon, lat) in radians
-        let h = self.layer.hash(ra, dec);
+        let h = self.layer.hash(eq_coord.ra, eq_coord.dec);
         SpatialKey(h)
     }
 
-    fn neighbors_into(&self, key: SpatialKey, ang_radius: Radian, out: &mut Vec<SpatialKey>) {
+    fn neighbors_into(&self, key: SpatialKey, ang_radius: Radians, out: &mut Vec<SpatialKey>) {
         out.clear();
 
         let SpatialKey(pixel_hash) = key;
@@ -171,7 +171,7 @@ impl SpatialBinner for HealpixBinner {
     /// Returns
     /// -------
     /// Vector of [`SpatialKey`] covering the neighborhood.
-    fn neighbors(&self, key: SpatialKey, ang_radius: Radian) -> Vec<SpatialKey> {
+    fn neighbors(&self, key: SpatialKey, ang_radius: Radians) -> Vec<SpatialKey> {
         let SpatialKey(h) = key;
 
         // Local characteristic radius at this pixel center
@@ -204,7 +204,7 @@ impl SpatialBinner for HealpixBinner {
     ///   but this value is used as a **simple threshold** for switching
     ///   between local-neighbor vs cone-based search.
     #[inline]
-    fn cell_radius(&self) -> Radian {
+    fn cell_radius(&self) -> Radians {
         self.cell_radius
     }
 }
@@ -235,9 +235,9 @@ mod healpix_binner_tests {
     #[test]
     fn test_key_for_is_stable() {
         let b = HealpixBinner::new(7);
-        let (ra, dec) = (1.2345_f64, 0.1234_f64);
-        let k1 = b.key_for(ra, dec);
-        let k2 = b.key_for(ra, dec);
+        let coord = EquCoord { ra: 1.2345_f64, ra_error: 0.0_f64, dec: 0.1234_f64, dec_error: 0.0_f64 };
+        let k1 = b.key_for(&coord);
+        let k2 = b.key_for(&coord);
         assert_eq!(
             k1, k2,
             "key_for should be deterministic for identical inputs"
@@ -248,7 +248,8 @@ mod healpix_binner_tests {
     fn test_neighbors_small_radius_local_mode() {
         let b = HealpixBinner::new(6);
         let (ra, dec) = (1.0_f64, 0.3_f64);
-        let key = b.key_for(ra, dec);
+        let coord = EquCoord { ra, ra_error: 0.0_f64, dec, dec_error: 0.0_f64 };
+        let key = b.key_for(&coord);
 
         let r = b.cell_radius();
         let neighs = b.neighbors(key, r);
@@ -290,8 +291,8 @@ mod healpix_binner_tests {
     #[test]
     fn test_neighbors_large_radius_cone_mode() {
         let b = HealpixBinner::new(7);
-        let (ra, dec) = (2.2_f64, 0.1_f64);
-        let key = b.key_for(ra, dec);
+        let coord = EquCoord { ra: 2.2_f64, ra_error: 0.0_f64, dec: 0.1_f64, dec_error: 0.0_f64 };
+        let key = b.key_for(&coord);
 
         let r_cell = b.cell_radius();
         let local = b.neighbors(key, r_cell);
@@ -320,12 +321,12 @@ mod healpix_binner_tests {
     #[test]
     fn test_center_roundtrip() {
         let b = HealpixBinner::new(9);
-        let (ra, dec) = (0.7_f64, -0.3_f64);
-        let key = b.key_for(ra, dec);
+        let coord = EquCoord { ra: 0.7_f64, ra_error: 0.0_f64, dec: -0.3_f64, dec_error: 0.0_f64 };
+        let key = b.key_for(&coord);
 
-        // Récupère le centre du pixel et re-hash : doit donner la même clé
         let (lon_c, lat_c) = b.layer.center(key.0);
-        let key_center = b.key_for(lon_c, lat_c);
+        let coord_c = EquCoord { ra: lon_c, ra_error: 0.0_f64, dec: lat_c, dec_error: 0.0_f64 };
+        let key_center = b.key_for(&coord_c);
         assert_eq!(
             key, key_center,
             "hash(center_of_pixel) should return the same key"
@@ -335,8 +336,8 @@ mod healpix_binner_tests {
     #[test]
     fn test_mode_switch_around_threshold() {
         let b = HealpixBinner::new(5);
-        let (ra, dec) = (1.4_f64, 0.2_f64);
-        let key = b.key_for(ra, dec);
+        let coord = EquCoord { ra: 1.4_f64, ra_error: 0.0_f64, dec: 0.2_f64, dec_error: 0.0_f64 };
+        let key = b.key_for(&coord);
         let rc = b.cell_radius();
 
         let v_local = b.neighbors(key, rc);
@@ -386,19 +387,22 @@ mod healpix_binner_tests {
             #[test]
             fn prop_key_determinism_and_center_roundtrip(depth in depth_strategy(), ra in ra_strategy(), dec in dec_strategy()) {
                 let b = HealpixBinner::new(depth);
-                let k1 = b.key_for(ra, dec);
-                let k2 = b.key_for(ra, dec);
+                let coord = EquCoord { ra, ra_error: 0.0_f64, dec, dec_error: 0.0_f64 };
+                let k1 = b.key_for(&coord);
+                let k2 = b.key_for(&coord);
                 prop_assert_eq!(k1, k2, "key_for must be deterministic");
 
                 let (lon_c, lat_c) = b.layer.center(k1.0);
-                let kc = b.key_for(lon_c, lat_c);
+                let coord_c = EquCoord { ra: lon_c, ra_error: 0.0_f64, dec: lat_c, dec_error: 0.0_f64 };
+                let kc = b.key_for(&coord_c);
                 prop_assert_eq!(kc, k1, "hash(center_of_pixel) must return the same key");
             }
 
             #[test]
             fn prop_neighbors_local_mode(depth in depth_strategy(), ra in ra_strategy(), dec in dec_strategy()) {
                 let b = HealpixBinner::new(depth);
-                let key = b.key_for(ra, dec);
+                let coord = EquCoord { ra, ra_error: 0.0_f64, dec, dec_error: 0.0_f64 };
+                let key = b.key_for(&coord);
                 let r = b.cell_radius();
 
                 let neighs = b.neighbors(key, r);
@@ -411,7 +415,8 @@ mod healpix_binner_tests {
             #[test]
             fn prop_neighbors_cone_mode(depth in depth_strategy(), ra in ra_strategy(), dec in dec_strategy()) {
                 let b = HealpixBinner::new(depth);
-                let key = b.key_for(ra, dec);
+                let coord = EquCoord { ra, ra_error: 0.0_f64, dec, dec_error: 0.0_f64 };
+                let key = b.key_for(&coord);
 
                 let r_cell = b.cell_radius();
                 let local = b.neighbors(key, r_cell);
@@ -429,7 +434,8 @@ mod healpix_binner_tests {
                 depth in depth_strategy(), ra in ra_strategy(), dec in dec_strategy()
             ) {
                 let b = HealpixBinner::new(depth);
-                let key = b.key_for(ra, dec);
+                let coord = EquCoord { ra, ra_error: 0.0_f64, dec, dec_error: 0.0_f64 };
+                let key = b.key_for(&coord);
 
                 let (lon_c, lat_c) = b.layer.center(key.0);
                 let local_rc = chpx::largest_center_to_vertex_distance(depth, lon_c, lat_c);
@@ -464,8 +470,8 @@ mod healpix_binner_tests {
         #[test]
         fn test_neighbors_into_clears_and_includes_center_local_mode() {
             let b = HealpixBinner::new(6);
-            let (ra, dec) = (1.0_f64, 0.3_f64);
-            let key = b.key_for(ra, dec);
+            let coord = EquCoord { ra: 1.0_f64, ra_error: 0.0_f64, dec: 0.3_f64, dec_error: 0.0_f64 };
+            let key = b.key_for(&coord);
 
             let r = b.cell_radius();
 
@@ -489,8 +495,8 @@ mod healpix_binner_tests {
         #[test]
         fn test_neighbors_into_matches_neighbors_local_mode_as_set() {
             let b = HealpixBinner::new(7);
-            let (ra, dec) = (0.9_f64, -0.2_f64);
-            let key = b.key_for(ra, dec);
+            let coord = EquCoord { ra: 0.9_f64, ra_error: 0.0_f64, dec: -0.2_f64, dec_error: 0.0_f64 };
+            let key = b.key_for(&coord);
 
             let r = b.cell_radius();
 
@@ -511,8 +517,8 @@ mod healpix_binner_tests {
         #[test]
         fn test_neighbors_into_matches_neighbors_cone_mode_as_set() {
             let b = HealpixBinner::new(7);
-            let (ra, dec) = (2.2_f64, 0.1_f64);
-            let key = b.key_for(ra, dec);
+            let coord = EquCoord { ra: 2.2_f64, ra_error: 0.0_f64, dec: 0.1_f64, dec_error: 0.0_f64 };
+            let key = b.key_for(&coord);
 
             let big_r = 3.0 * b.cell_radius();
 
@@ -533,8 +539,8 @@ mod healpix_binner_tests {
         #[test]
         fn test_neighbors_into_does_not_shrink_preallocated_buffer() {
             let b = HealpixBinner::new(6);
-            let (ra, dec) = (1.7_f64, 0.25_f64);
-            let key = b.key_for(ra, dec);
+            let coord = EquCoord { ra: 1.7_f64, ra_error: 0.0_f64, dec: 0.25_f64, dec_error: 0.0_f64 };
+            let key = b.key_for(&coord);
 
             let mut out = Vec::<SpatialKey>::with_capacity(256);
             out.extend([SpatialKey(1), SpatialKey(2), SpatialKey(3)]);

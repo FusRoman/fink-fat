@@ -29,8 +29,9 @@
 //! let index = SeedSpatialIndex::build(&right_seeds, &spatial_binner, &time_binner);
 //!
 //! // Query many times: returns borrowed seeds.
+//! let center = EquCoord::new(ra, 0.0, dec, 0.0);
 //! let candidates: Vec<&SeedNode> = index
-//!     .cone_query(ra, dec, radius, t_target)
+//!     .cone_query(&center, radius, t_target)
 //!     .collect();
 //! ```
 //!
@@ -51,9 +52,9 @@
 //! - [`BucketIndex`] – generic bucket storage underlying this wrapper.
 
 use ahash::{AHashMap, AHashSet};
+use photom::{coordinates::equatorial::EquCoord, Radians, MJDTT};
 
 use crate::{
-    MJDTT, Radian,
     seeding::SeedNode,
     spacetime_bucket::{
         bucket::{Bucket, BucketIndex, BucketKey},
@@ -65,8 +66,8 @@ use crate::{
 /// Spatio-temporal bucket index storing references to [`SeedNode`] values.
 ///
 /// Internally, this wraps a [`BucketIndex<&SeedNode>`] keyed by:
-/// - `SpatialKey` from [`SpatialBinner::key_for`], using `(seed.plane.ra_mid, seed.plane.dec_mid)`,
-/// - `TimeBin` from [`TimeBinner::bin_for`], using `seed.plane.epoch_mid`.
+/// - `SpatialKey` from [`SpatialBinner::key_for`], using [`SeedNode::predicted_center_equ`],
+/// - `TimeBin` from [`TimeBinner::bin_for`], using `seed.plane_model.epoch_mid`.
 ///
 /// The index is typically built for all seeds of a “right-hand” night, but can
 /// also be used for any pre-filtered slice of seeds as long as the caller
@@ -102,8 +103,8 @@ impl<'seed_lf, 'binner_lf> SeedSpatialIndex<'seed_lf, 'binner_lf> {
     /// Build a spatio-temporal seed index from a slice of [`SeedNode`].
     ///
     /// Each seed is inserted into exactly one bucket:
-    /// - `space_key = spatial_binner.key_for(seed.plane.ra_mid, seed.plane.dec_mid)`
-    /// - `time_bin  = time_binner.bin_for(seed.plane.epoch_mid)`
+    /// - `space_key = spatial_binner.key_for(&seed.predicted_center_equ())`
+    /// - `time_bin  = time_binner.bin_for(seed.plane_model.epoch_mid)`
     ///
     /// Parameters
     /// ----------
@@ -134,8 +135,8 @@ impl<'seed_lf, 'binner_lf> SeedSpatialIndex<'seed_lf, 'binner_lf> {
         let mut time_bins: AHashSet<TimeBin> = AHashSet::new();
 
         for s in seeds {
-            let space_key = spatial_binner.key_for(s.plane.ra_mid, s.plane.dec_mid);
-            let time_key = time_binner.bin_for(s.plane.epoch_mid);
+            let space_key = spatial_binner.key_for(&s.predicted_center_equ());
+            let time_key = time_binner.bin_for(s.plane_model.epoch_mid);
             time_bins.insert(time_key);
 
             let key = BucketKey {
@@ -185,7 +186,7 @@ impl<'seed_lf, 'binner_lf> SeedSpatialIndex<'seed_lf, 'binner_lf> {
     /// Perform an approximate cone query at a given epoch.
     ///
     /// The query proceeds as:
-    /// 1. Convert `(ra, dec)` to a central spatial cell key.
+    /// 1. Convert `e` to a central spatial cell key via [`SpatialBinner::key_for`].
     /// 2. Ask the spatial binner for a set of neighboring spatial keys whose
     ///    cells cover (approximately) the cone of radius `radius`.
     /// 3. Convert `time` to `time_bin = time_binner.bin_for(time)`.
@@ -194,11 +195,9 @@ impl<'seed_lf, 'binner_lf> SeedSpatialIndex<'seed_lf, 'binner_lf> {
     ///
     /// Parameters
     /// ----------
-    /// ra : Radian
-    ///     Right ascension of the cone center (radians).
-    /// dec : Radian
-    ///     Declination of the cone center (radians).
-    /// radius : Radian
+    /// e : &EquCoord
+    ///     Equatorial coordinates of the cone center.
+    /// radius : Radians
     ///     Angular cone radius (radians).
     /// time : MJDTT
     ///     Target epoch (MJD TT). Determines which `TimeBin` is queried.
@@ -217,12 +216,11 @@ impl<'seed_lf, 'binner_lf> SeedSpatialIndex<'seed_lf, 'binner_lf> {
     ///   the iterator will be empty.
     pub fn cone_query(
         &self,
-        ra: Radian,
-        dec: Radian,
-        radius: Radian,
+        e: &EquCoord,
+        radius: Radians,
         time: MJDTT,
     ) -> impl Iterator<Item = &'seed_lf SeedNode> + '_ {
-        let center_key: SpatialKey = self.spatial_binner.key_for(ra, dec);
+        let center_key: SpatialKey = self.spatial_binner.key_for(e);
         let time_key = self.time_binner.bin_for(time);
 
         // Cell cover for the requested radius.
@@ -246,6 +244,7 @@ impl<'seed_lf, 'binner_lf> SeedSpatialIndex<'seed_lf, 'binner_lf> {
 #[cfg(test)]
 mod seed_spatial_index_tests {
     use super::*;
+    use photom::photometry::Filter;
     use proptest::prelude::*;
 
     use std::ptr;
@@ -254,40 +253,48 @@ mod seed_spatial_index_tests {
         astro_math::arcsec_to_rad,
         night_id::NightId,
         seeding::{
+            photometry::Photometry,
+            tangent_plane::{PosWithCov, TangentPlaneModel, VelWithCov},
             SeedKey, SeedNode,
-            tangent_plane::{TangentCenter, TangentPlaneModel},
         },
         spacetime_bucket::{
             healpix_binner::HealpixBinner, time_binner::TimeBin,
             uniform_time_binner::UniformTimeBinner,
         },
     };
+    use photom::coordinates::{
+        cov2::Cov2,
+        gnomonic_projection::{TangentPlane, TangentPoint, TangentVec},
+    };
 
     /* ------------------------- helpers ------------------------- */
 
-    // Build a minimal SeedNode with given (ra_mid, dec_mid). Plane fields are simple constants.
-    fn mk_seed(uniq_id: u64, ra_mid: f64, dec_mid: f64) -> SeedNode {
-        let center = TangentCenter::new(ra_mid, dec_mid);
-        let plane = TangentPlaneModel::new(
-            center,
-            60000.0,                  // epoch_mid
-            [0.0, 0.0],               // pos_xy
-            [0.0, 0.0],               // vel_xy
-            None,                     // acc_xy
-            [[0.0, 0.0], [0.0, 0.0]], // cov_pos
-            [[0.0, 0.0], [0.0, 0.0]], // cov_vel
-            ra_mid,
-            dec_mid,
-        );
+    // Build a minimal SeedNode positioned at the given sky coordinates.
+    fn mk_seed(uniq_id: u64, ra: f64, dec: f64) -> SeedNode {
+        let equ = EquCoord::new(ra, 0.0, dec, 0.0);
+        let plane = TangentPlane::new(equ);
+        let tangent_point = TangentPoint::new(plane, 0.0, 0.0);
+        let cov_zero = Cov2::zero();
+        let plane_model = TangentPlaneModel {
+            epoch_mid: 60000.0,
+            pos: PosWithCov {
+                tangent_point,
+                cov: cov_zero,
+            },
+            vel: VelWithCov {
+                v: TangentVec { dx: 0.0, dy: 0.0 },
+                cov: cov_zero,
+            },
+            acc: None,
+        };
         SeedNode {
             key: SeedKey {
                 night_id: NightId::new(1),
                 unique_id: uniq_id,
             },
-            plane,
-            photom: crate::seeding::photometry::Photometry::from_pair(1.0, 0.1, 1, 2),
+            plane_model,
+            photom: Photometry::from_pair(1.0, 0.1, &Filter::Int(1), &Filter::Int(2)),
             n_obs: 2,
-
             members: vec![],
         }
     }
@@ -322,15 +329,15 @@ mod seed_spatial_index_tests {
 
         // Compute bucket keys (all must use TimeBin(0)).
         let key1 = BucketKey {
-            space_key: spatial_binner.key_for(seeds[0].plane.ra_mid, seeds[0].plane.dec_mid),
+            space_key: spatial_binner.key_for(&seeds[0].predicted_center_equ()),
             time_bin: TimeBin(0),
         };
         let key2 = BucketKey {
-            space_key: spatial_binner.key_for(seeds[1].plane.ra_mid, seeds[1].plane.dec_mid),
+            space_key: spatial_binner.key_for(&seeds[1].predicted_center_equ()),
             time_bin: TimeBin(0),
         };
         let key3 = BucketKey {
-            space_key: spatial_binner.key_for(seeds[2].plane.ra_mid, seeds[2].plane.dec_mid),
+            space_key: spatial_binner.key_for(&seeds[2].predicted_center_equ()),
             time_bin: TimeBin(0),
         };
 
@@ -362,14 +369,15 @@ mod seed_spatial_index_tests {
 
         let s_primary = mk_seed(1, ra, dec);
         let s_neighbor = mk_seed(2, ra + arcsec_to_rad(30.0) / dec.cos(), dec);
-        let t_target = s_primary.plane.epoch_mid;
+        let t_target = s_primary.plane_model.epoch_mid;
 
         let seeds = vec![s_primary, s_neighbor];
         let index = SeedSpatialIndex::build(&seeds, &spatial_binner, &time_binner);
 
         // Query with radius including at least cell_radius to ensure coverage of the containing cell.
         let radius = spatial_binner.cell_radius().max(arcsec_to_rad(45.0)); // 45" cone
-        let found: Vec<&SeedNode> = index.cone_query(ra, dec, radius, t_target).collect();
+        let center = EquCoord::new(ra, 0.0, dec, 0.0);
+        let found: Vec<&SeedNode> = index.cone_query(&center, radius, t_target).collect();
         // At least the primary seed must be found (by reference identity).
         assert!(contains_ref(&found, &seeds[0]));
 
@@ -377,7 +385,7 @@ mod seed_spatial_index_tests {
         // If not, increase radius and check again.
         if !contains_ref(&found, &seeds[1]) {
             let radius2 = radius * 2.0;
-            let found2: Vec<&SeedNode> = index.cone_query(ra, dec, radius2, t_target).collect();
+            let found2: Vec<&SeedNode> = index.cone_query(&center, radius2, t_target).collect();
             assert!(contains_ref(&found2, &seeds[1]));
         }
     }
@@ -396,7 +404,7 @@ mod seed_spatial_index_tests {
         // Compute keys and verify buckets exist with matching members (by reference identity).
         for s in [&seeds[0], &seeds[1]] {
             let key = BucketKey {
-                space_key: spatial_binner.key_for(s.plane.ra_mid, s.plane.dec_mid),
+                space_key: spatial_binner.key_for(&s.predicted_center_equ()),
                 time_bin: TimeBin(0),
             };
             let bucket = inner.buckets.get(&key).expect("bucket must exist");
@@ -438,7 +446,8 @@ mod seed_spatial_index_tests {
             // For each seed, query cone at its mid-position and ensure it is included.
             for s in &seeds {
                 let radius = spatial_binner.cell_radius().max(arcsec_to_rad(1.0));
-                let found: Vec<&SeedNode> = index.cone_query(s.plane.ra_mid, s.plane.dec_mid, radius, s.plane.epoch_mid).collect();
+                let center = s.predicted_center_equ();
+                let found: Vec<&SeedNode> = index.cone_query(&center, radius, s.plane_model.epoch_mid).collect();
                 prop_assert!(contains_ref(&found, s));
             }
         }
