@@ -56,11 +56,11 @@ use crate::{
     astro_math::planar_offset_fast,
     engine_config::triplet_config::TripletConfig,
     night_id::NightId,
-    seeding::{SeedNode, pairs::Pair, store::SeedStore},
+    seeding::{pairs::Pair, store::SeedStore, SeedNode},
     spacetime_bucket::{
         bucket::{BucketIndex, BucketKey},
         spatial_binner::{SpatialBinner, SpatialKey},
-        time_binner::{TimeBin, TimeBinner, time_targets},
+        time_binner::{time_targets, TimeBin, TimeBinner},
     },
 };
 
@@ -93,8 +93,8 @@ pub type Triplets<'alert_lf> = Vec<Triplet<'alert_lf>>;
 /// expensive (HEALPix cone coverage). We cache `neighbors(center, radius)`
 /// keyed by the center spatial cell.
 ///
-/// Notes
-/// -----
+/// # Notes
+///
 /// The resulting list is sorted and deduplicated to guarantee deterministic
 /// iteration and avoid redundant bucket scans even if a binner implementation
 /// returns duplicates.
@@ -118,13 +118,11 @@ fn cached_spatial_neighbors<'cache, Bs: SpatialBinner>(
 /// For triplets we require `t_c > t_b`. We therefore generate **strictly later**
 /// time bins relative to `b` by calling `time_targets(..., allow_same_bin=false)`.
 ///
-/// Parameters
-/// ----------
-/// base_time_bin : TimeBin
-///     The time bin of detection `b`.
-/// cfg : &TripletConfig
-///     Triplet configuration, notably `max_dt_between` which defines how far in
-///     time we are willing to search for `c`.
+/// # Arguments
+///
+/// - `base_time_bin` — the time bin of detection `b`.
+/// - `cfg` — triplet configuration, notably `max_dt_between` which defines how far in
+///   time we are willing to search for `c`.
 #[inline]
 fn cached_time_targets_strictly_after<'cache, Bt: TimeBinner>(
     cache: &'cache mut AHashMap<TimeBin, Vec<TimeBin>>,
@@ -184,34 +182,27 @@ fn lower_bound_gt_time(members: &[&Observation], t0: f64) -> usize {
 ///    - keep if `resid <= max_predicted_residual`.
 /// 6. Deduplicate `(a, b, c)` by pointer identity and push to output.
 ///
-/// Parameters
-/// ----------
-/// index : &BucketIndex<&Alert>
-///     Spatio-temporal bucket index over alerts. Bucket members must be sorted
-///     by time (as built by `build_alert_bucket_index`).
-/// sb : &impl SpatialBinner
-///     Spatial binner used to compute neighbor cells around `b`.
-/// tb : &impl TimeBinner
-///     Time binner used to select time bins strictly after `b`.
-/// cfg : &TripletConfig
-///     Triplet-generation parameters (time window, spatial radius, flux gate,
-///     pair angular gate, prediction residual threshold, etc.).
-/// pairs : &[Pair]
-///     Precomputed valid pairs `(a, b)` from which triplets are extended.
+/// # Arguments
 ///
-/// Returns
-/// -------
-/// Triplets
-///     Deduplicated, deterministically sorted list of `(a, b, c)` triplets.
+/// - `index` — spatio-temporal bucket index over alerts; bucket members must be sorted
+///   by time (as built by `build_alert_bucket_index`).
+/// - `sb` — spatial binner used to compute neighbor cells around `b`.
+/// - `tb` — time binner used to select time bins strictly after `b`.
+/// - `cfg` — triplet-generation parameters (time window, spatial radius, flux gate,
+///   pair angular gate, prediction residual threshold, etc.).
+/// - `pairs` — precomputed valid pairs `(a, b)` from which triplets are extended.
 ///
-/// Notes
-/// -----
-/// - The spatial search radius is `cfg.max_pair_sep + sb.cell_radius()` to ensure
-///   we cover cell boundary effects during bucket-based searches.
-/// - The angular gate `ang_sep(b, c) <= cfg.max_pair_sep` is implemented via a
-///   dot-product threshold (`cos_pair_threshold`) to avoid `acos`.
-/// - The linear prediction uses a small-angle approximation around `a`. It is
-///   intended only as a fast prefilter.
+/// # Returns
+///
+/// Deduplicated, deterministically sorted list of `(a, b, c)` triplets.
+///
+/// # Notes
+///
+/// The spatial search radius is `cfg.max_pair_sep + sb.cell_radius()` to ensure
+/// coverage of cell boundary effects during bucket-based searches. The angular gate
+/// `ang_sep(b, c) <= cfg.max_pair_sep` is implemented via a dot-product threshold
+/// to avoid `acos`. The linear prediction uses a small-angle approximation around
+/// `a` and is intended only as a fast prefilter.
 pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
     index: &BucketIndex<&'alert_lf Observation>,
     sb: &Bs,
@@ -438,10 +429,10 @@ mod triplet_gen_tests {
     use std::f64::consts::PI;
 
     use photom::{
-        MJDTT,
         coordinates::equatorial::EquCoord,
         observation_dataset::observation::Observation,
         photometry::{Filter, Photometry as PhotomPhotometry},
+        MJDTT,
     };
 
     use crate::{
