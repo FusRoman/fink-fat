@@ -416,18 +416,43 @@ pub fn rank_topk_edges_for_left_by_cost<'seed_lf>(
 mod ranking_topk_tests {
     use super::*;
 
+    use photom::{
+        coordinates::equatorial::EquCoord,
+        observation_dataset::observation::Observation,
+        photometry::{Filter, Photometry as PhotomPhotometry},
+    };
     use proptest::prelude::*;
+
+    use crate::{astro_math::arcsec_to_rad, night_id::NightId, seeding::store::SeedStore};
 
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
+
+    /// Build a minimal `Observation` for test purposes.
+    fn make_obs(id: u64, mjd: f64, ra: f64, dec: f64) -> Observation {
+        let pos_err = arcsec_to_rad(1.0);
+        let equ_coord = EquCoord::new(ra, pos_err, dec, pos_err);
+        let photometry = PhotomPhotometry {
+            magnitude: 20.0,
+            error: 1.0,
+            filter: Filter::Int(1),
+        };
+        Observation::new(id, equ_coord, photometry, mjd, None)
+    }
 
     /// Build a `TopKItem` with a dummy `SeedNode` reference. Because tests
     /// only exercise the heap logic (not the seed data), we use a static
     /// sentinel to satisfy the lifetime.
     fn dummy_item(proba: f32) -> TopKItem<'static> {
         static DUMMY: std::sync::OnceLock<SeedNode> = std::sync::OnceLock::new();
-        let node = DUMMY.get_or_init(SeedNode::default);
+        let node = DUMMY.get_or_init(|| {
+            let mut store = SeedStore::new();
+            let a = make_obs(0, 60000.0, 0.1, 0.1);
+            let b = make_obs(1, 60000.02, 0.1001, 0.1);
+            SeedNode::from_pair(&mut store, NightId::new(1), &a, &b, None)
+                .expect("dummy SeedNode for ranking_topk tests")
+        });
         TopKItem {
             proba,
             to: node,

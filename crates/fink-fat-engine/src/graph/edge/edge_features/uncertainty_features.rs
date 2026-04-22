@@ -30,7 +30,7 @@
 //!
 //! -----------------------------------------------------------------------------
 
-use crate::{astro_math::trace_2x2, graph::edge::feature_core::FeatureCore, seeding::SeedNode};
+use crate::{graph::edge::edge_features::feature_core::FeatureCore, seeding::SeedNode};
 
 /// Uncertainty/quality ratios (dimensionless).
 ///
@@ -110,13 +110,13 @@ impl EdgeUncertaintyFeatures {
         let eps = FeatureCore::EPS;
 
         // Extract velocity covariance matrices (2×2, tangent-plane frame).
-        let cvel_from = from.plane.cov_vel;
-        let cvel_to = to.plane.cov_vel;
+        let cvel_from = from.plane_model.vel.cov;
+        let cvel_to = to.plane_model.vel.cov;
 
         // Reduce each covariance to a scalar "total variance" proxy.
         // `.max(0.0)` prevents negative traces from numerical noise.
-        let tr_vel_from = trace_2x2(cvel_from).max(0.0);
-        let tr_vel_to = trace_2x2(cvel_to).max(0.0);
+        let tr_vel_from = cvel_from.trace().max(0.0);
+        let tr_vel_to = cvel_to.trace().max(0.0);
 
         // Stabilized ratio: tr_to / (tr_from + eps)
         let cov_vel_ratio = FeatureCore::safe_div(tr_vel_to, tr_vel_from + eps);

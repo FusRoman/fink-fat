@@ -722,7 +722,7 @@ fn array2_from_flat(shape: (usize, usize), data: &[f32]) -> Result<Array2<f32>, 
 #[cfg(test)]
 mod edge_prediction_test {
 
-    use crate::graph::edge::{
+    use crate::graph::edge::edge_features::{
         photometry_features::EdgePhotometryFeatures, position_features::EdgePositionFeatures,
         uncertainty_features::EdgeUncertaintyFeatures, velocity_features::EdgeVelocityFeatures,
     };
@@ -765,7 +765,7 @@ mod edge_prediction_test {
             photometry: EdgePhotometryFeatures {
                 z_flux: base + 16.0,
                 flux_std_ratio: base + 17.0,
-                band_shared: base + 18.0,
+                band_shared: (base as u8 + 18) != 0,
             },
         }
     }

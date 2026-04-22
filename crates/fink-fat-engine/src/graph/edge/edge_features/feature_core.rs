@@ -40,13 +40,9 @@
 //!
 //! -----------------------------------------------------------------------------
 
-use crate::{
-    astro_math::{
-        angular_separation_vincenty, cholesky_lower_sym_2x2, clamp_unit, dot2, invert_sym_2x2,
-        l2_norm, mat_vec2, safe_ln, tangent_to_radec,
-    },
-    seeding::SeedNode,
-};
+use photom::coordinates::{cov2::Cov2, gnomonic_projection::TangentVec};
+
+use crate::{astro_math::safe_ln, seeding::SeedNode};
 
 /// Shared intermediate computations reused across feature sub-sets.
 ///
@@ -114,29 +110,25 @@ pub(crate) struct FeatureCore {
     /// Log-compressed position $\chi^2$:
     /// $\ln(\chi^2\_{\mathrm{pos}} + \varepsilon)$.
     pub(crate) log_chi2_pos: f64,
-    /// Diagonal z-score for $x$ residual:
+
+    /// Diagonal z-score for $x$ and $y$ residuals:
     /// $z\_{\Delta x} = r\_x / \sqrt{S\_{xx}}$.
-    pub(crate) z_dx: f64,
-    /// Diagonal z-score for $y$ residual:
     /// $z\_{\Delta y} = r\_y / \sqrt{S\_{yy}}$.
-    pub(crate) z_dy: f64,
+    pub(crate) z_score: TangentVec,
     /// Norm of diagonal z-scores:
     /// $\sqrt{z\_{\Delta x}^2 + z\_{\Delta y}^2}$.
     pub(crate) z_resid_norm: f64,
-    /// Along-track z-score:
+
+    /// Along-Cross-track z-score:
     /// $z\_\parallel = (\mathbf{r} \cdot \hat{\mathbf{u}}) / \sqrt{\hat{\mathbf{u}}^\top \mathbf{S} \hat{\mathbf{u}}}$.
-    pub(crate) z_along: f64,
-    /// Cross-track z-score:
     /// $z\_\perp = (\mathbf{r} \cdot \hat{\mathbf{n}}) / \sqrt{\hat{\mathbf{n}}^\top \mathbf{S} \hat{\mathbf{n}}}$.
-    pub(crate) z_cross: f64,
+    pub(crate) z_along_cross: TangentVec,
 
     // ----------------------- Whitening (Cholesky) features -----------------------
     /// First whitened residual component $z\_1 = r\_x / L\_{00}$,
     /// from solving $\mathbf{L}\,\mathbf{z} = \mathbf{r}$.
-    pub(crate) chol_z1: f64,
-    /// Second whitened residual component
     /// $z\_2 = (r\_y - L\_{10}\,z\_1) / L\_{11}$.
-    pub(crate) chol_z2: f64,
+    pub(crate) chol_z: TangentVec,
     /// Euclidean norm of the whitened residuals:
     /// $\|\mathbf{z}\| = \sqrt{z\_1^2 + z\_2^2} \approx \sqrt{\chi^2\_{\mathrm{pos}}}$.
     pub(crate) chol_z_norm: f64,
@@ -173,10 +165,10 @@ pub(crate) struct FeatureCore {
     /// residual [`r_sph`](Self::r_sph) instead.  Retained for potential debug use
     /// and to keep the struct self-describing.
     #[allow(dead_code)]
-    pub(crate) r_pos: [f64; 2],
+    pub(crate) r_pos: TangentVec,
     /// Velocity innovation $\delta\mathbf{v} = \mathbf{v}\_{{\mathrm{to}}} - \mathbf{v}\_{{\mathrm{pred}}}$
     /// (rad/day).
-    pub(crate) dv: [f64; 2],
+    pub(crate) dv: TangentVec,
     /// Great-circle angular distance between the sky-back-projected predicted position
     /// and `to.plane.ra_mid` / `to.plane.dec_mid` (radians, in $[0, \pi]$).
     ///
@@ -215,7 +207,6 @@ impl FeatureCore {
     /// This constant is applied to:
     /// - stabilize covariance diagonals (avoid singular matrices),
     /// - guard denominators in normalized quantities (`sqrt(S_xx)`),
-    /// - make 2×2 inversions robust via [`invert_sym_2x2`],
     /// - prevent whitening from failing due to tiny/negative eigenvalues.
     ///
     /// Design choice
@@ -286,105 +277,71 @@ impl FeatureCore {
         // - `p_pred`: predicted position (x,y) on tangent plane at `to` epoch
         // - `v_pred`: predicted velocity (vx,vy) on same plane/epoch
         // - `_`: optional extra outputs (ignored here)
-        let (p_pred, v_pred, _) = from.propagate_from(dt, dt_sq);
+        let (p_pred, v_pred, _) = from.propagate_from(dt);
 
         // Back-project the predicted tangent-plane position to sky coordinates,
         // then measure the great-circle separation to the target position.
         // This is stable for any angular separation between seed centres;
         // it avoids the gnomonic denominator blow-up that affects `r` below.
-        let (ra_pred, dec_pred) = tangent_to_radec(
-            p_pred[0],
-            p_pred[1],
-            from.plane.center.ra0,
-            from.plane.center.dec0,
-        );
-        let r_sph =
-            angular_separation_vincenty(ra_pred, dec_pred, to.plane.ra_mid, to.plane.dec_mid);
+        let p_pred_equ = p_pred.unproject();
+        let r_sph = p_pred_equ.angular_separation(&to.tangent_seed_center());
 
         // ---------------------------------------------------------------------
         // 3) Project `to` onto `from` tangent plane
         // ---------------------------------------------------------------------
         // Project the target seed position onto the tangent plane of `from`.
-        let p_to = Self::project_to_on_from(from, to);
+        let p_to = to.project_onto(from);
 
         // ---------------------------------------------------------------------
         // 4) Innovation vector r = observed - predicted
         // ---------------------------------------------------------------------
         // Innovation / residual on the tangent plane: r = observed - predicted.
-        let r = [p_to[0] - p_pred[0], p_to[1] - p_pred[1]];
+        let r_innovation_vector = p_to - p_pred;
 
         // ---------------------------------------------------------------------
         // 5) Innovation covariance S
         // ---------------------------------------------------------------------
         // Innovation covariance S: accounts for prediction uncertainty and target uncertainty.
-        let s = Self::innovation_cov(from, to, dt_sq);
+        let s = from.innovation_cov_pos(to, dt_sq);
 
         // Scalar baseline positional variance for the cost path:
         // S_scalar = tr(S) / 2 — isotropic proxy used with the spherical residual r_sph.
-        let s_pos_scalar = (s[0][0] + s[1][1]).max(Self::FLOOR) / 2.0;
-
-        // Robust inverse of S (with flooring and fallback).
-        // We assume `invert_sym_2x2` returns a usable matrix even if S is near-singular.
-        let s_inv = invert_sym_2x2(s, Self::FLOOR);
+        let s_pos_scalar = s.trace().max(Self::FLOOR) / 2.0;
 
         // ---------------------------------------------------------------------
         // 6) Position-space metrics (Mahalanobis, z-scores, whitening)
         // ---------------------------------------------------------------------
-        // Mahalanobis distance: chi2_pos = rᵀ S⁻¹ r.
-        // `max(0.0)` avoids negative values caused by floating-point noise.
-        let chi2_pos = Self::finite_or_zero(dot2(r, mat_vec2(s_inv, r)).max(0.0));
 
+        // Diagonal z-scores: cheap, robust proxies that ignore correlation.
+        let (z_score_vector, z_resid_norm) = Self::z_diag(r_innovation_vector, s);
+
+        // Along/cross decomposition using predicted velocity direction.
+        let (z_along_cross, v_norm) = Self::z_along_cross(r_innovation_vector, s, v_pred);
+
+        // Full whitening via Cholesky: S = L Lᵀ, z = L⁻¹ r.
+        // Yields χ² = ‖z‖² consistent with the whitened components.
+        let (chol_z, chi2_pos_raw) = s
+            .whiten_cholesky(r_innovation_vector, Self::FLOOR)
+            .unwrap_or((TangentVec { dx: 0.0, dy: 0.0 }, 0.0));
+        let chol_z_norm = Self::finite_or_zero(chi2_pos_raw.sqrt());
+
+        // chi2_pos = ‖L⁻¹ r‖² already computed above via `whiten_cholesky`.
+        // Log-transform improves dynamic range and ML behavior; the +1e-16
+        // offset avoids ln(0) when the innovation is exactly zero.
+        let chi2_pos = Self::finite_or_zero(chi2_pos_raw);
         // Log-transform (improves dynamic range and ML behavior).
         // We add a tiny constant to avoid ln(0).
         let log_chi2_pos = safe_ln(chi2_pos + 1e-16);
-
-        // Diagonal z-scores: cheap, robust proxies that ignore correlation.
-        let (z_dx, z_dy, z_resid_norm) = Self::z_diag(r, s);
-
-        // Along/cross decomposition using predicted velocity direction.
-        let (z_along, z_cross, v_norm) = Self::z_along_cross(r, s, v_pred);
-
-        // Whitened innovation via Cholesky decomposition:
-        // - factorize S into L·Lᵀ,
-        // - solve L·z = r for z.
-        //
-        // If S is not SPD (or factorization fails), whitened features fall back to 0.
-        let (chol_z1, chol_z2, chol_z_norm) = match cholesky_lower_sym_2x2(s, Self::FLOOR) {
-            Some(l) => {
-                // Extract lower triangular elements.
-                let l00 = l[0][0];
-                let l10 = l[1][0];
-                let l11 = l[1][1];
-
-                // Guard against invalid / degenerate factors (should be > 0 for SPD).
-                if l00.is_finite() && l00 > 0.0 && l11.is_finite() && l11 > 0.0 {
-                    // Forward substitution for 2×2 lower-triangular system:
-                    // z1 = r0 / l00
-                    // z2 = (r1 - l10*z1) / l11
-                    let z1 = r[0] / l00;
-                    let z2 = (r[1] - l10 * z1) / l11;
-                    let norm = l2_norm(z1, z2);
-                    (
-                        Self::finite_or_zero(z1),
-                        Self::finite_or_zero(z2),
-                        Self::finite_or_zero(norm),
-                    )
-                } else {
-                    (0.0, 0.0, 0.0)
-                }
-            }
-            None => (0.0, 0.0, 0.0),
-        };
 
         // ---------------------------------------------------------------------
         // 7) Velocity consistency metrics
         // ---------------------------------------------------------------------
         // Velocity estimated at `to` (already in the same tangent-plane frame).
-        let v_to = [to.plane.vel_xy[0], to.plane.vel_xy[1]];
-        let v_to_norm = l2_norm(v_to[0], v_to[1]);
+        let v_to = to.plane_model.vel.v;
+        let v_to_norm = v_to.norm();
 
         // Directional agreement between predicted and target velocities.
-        let cos_dtheta_v = Self::cos_between(v_pred, v_norm, v_to, v_to_norm);
+        let cos_dtheta_v = v_pred.dot(v_to) / ((v_norm * v_to_norm).max(Self::EPS));
 
         // Relative speed mismatch (scale-free).
         let rel_speed_diff = Self::rel_speed_diff(v_norm, v_to_norm);
@@ -395,9 +352,9 @@ impl FeatureCore {
         // - |r|/dt is the speed "suggested" by the observed discrepancy,
         // - dividing by |v_pred| measures how large that discrepancy is relative
         //   to predicted motion.
-        let r_norm = l2_norm(r[0], r[1]);
+        let r_innov_norm = r_innovation_vector.norm();
         let innov_speed_ratio = if dt_ok && v_norm.is_finite() && v_norm > 0.0 {
-            (r_norm / dt) / (v_norm + Self::EPS)
+            (r_innov_norm / dt) / (v_norm + Self::EPS)
         } else {
             0.0
         };
@@ -407,15 +364,23 @@ impl FeatureCore {
         // ---------------------------------------------------------------------
         // Velocity innovation: dv = v_to - v_pred (same epoch as `to`).
         // Note: this assumes both velocities are expressed in (approximately) the same tangent frame.
-        let dv = [v_to[0] - v_pred[0], v_to[1] - v_pred[1]];
+        let dv = v_to - v_pred;
 
         // Innovation covariance in velocity space.
-        let s_vel = Self::innovation_cov_vel(from, to);
-        let s_vel_inv = invert_sym_2x2(s_vel, Self::FLOOR);
+        let v_to_cov = to.plane_model.vel.cov;
+        let v_from_cov = from.plane_model.vel.cov;
+        let s_vel = (v_from_cov + v_to_cov).inflate_isotropic(Self::FLOOR);
 
-        // Mahalanobis distance in velocity space.
-        let chi2_vel = Self::finite_or_zero(dot2(dv, mat_vec2(s_vel_inv, dv)).max(0.0));
-        let log_chi2_vel = safe_ln(chi2_vel + 1e-16);
+        // Mahalanobis distance in velocity space via Cholesky whitening:
+        //   S_vel = L Lᵀ,  z = L⁻¹ dv,  χ²_vel = ‖z‖².
+        // On SPD failure (near-singular or non-finite covariance), fall back to 0
+        // (neutral for downstream ML/cost).
+        let chi2_vel = s_vel
+            .whiten_cholesky(dv, Self::FLOOR)
+            .map(|(_, chi2)| Self::finite_or_zero(chi2))
+            .unwrap_or(0.0);
+
+        let log_chi2_vel = Self::finite_or_zero(safe_ln(chi2_vel + 1e-16));
 
         // ---------------------------------------------------------------------
         // Pack outputs (sanitizing where appropriate)
@@ -424,14 +389,11 @@ impl FeatureCore {
             chi2_pos,
             log_chi2_pos: Self::finite_or_zero(log_chi2_pos),
 
-            z_dx,
-            z_dy,
+            z_score: z_score_vector,
             z_resid_norm,
-            z_along,
-            z_cross,
+            z_along_cross,
 
-            chol_z1,
-            chol_z2,
+            chol_z,
             chol_z_norm,
 
             cos_dtheta_v,
@@ -444,7 +406,7 @@ impl FeatureCore {
             // Cached for reuse in compute_cost (avoids re-propagation/re-projection).
             dt,
             dt_sq,
-            r_pos: r,
+            r_pos: r_innovation_vector,
             dv,
             r_sph,
             s_pos_scalar,
@@ -455,248 +417,37 @@ impl FeatureCore {
     // Small inline building blocks
     // -------------------------------------------------------------------------
 
-    /// Project the target seed position onto the source tangent plane.
-    ///
-    /// This uses the optimized precomputed tangent-plane transform stored in
-    /// the `from` seed (`radec_to_tangent_precomp`), which avoids rebuilding
-    /// rotation/projection matrices for every candidate edge.
-    ///
-    /// Arguments
-    /// ---------
-    /// * `from` – Source seed providing the tangent plane definition.
-    /// * `to` – Target seed providing the sky position (RA, Dec).
-    ///
-    /// Return
-    /// ------
-    /// Target position `[x, y]` on the tangent plane of `from` (radians).
-    ///
-    /// Notes
-    /// -----
-    /// This is a purely geometric operation; no uncertainties are used here.
-    #[inline]
-    pub(crate) fn project_to_on_from(from: &SeedNode, to: &SeedNode) -> [f64; 2] {
-        // Project target RA/Dec onto the precomputed tangent plane of `from`.
-        from.plane
-            .radec_to_tangent_precomp(to.plane.ra_mid, to.plane.dec_mid)
-    }
-
-    /// Build the innovation covariance matrix $\mathbf{S}$ in position space.
-    ///
-    /// Definition
-    /// ----------
-    /// We use a simple constant-velocity propagation of uncertainty:
-    ///
-    /// $$\mathbf{C}\_{\mathrm{pred}} = \mathbf{C}^{\mathrm{pos}}\_{\mathrm{from}} + \Delta t^{2} \mathbf{C}^{\mathrm{vel}}\_{\mathrm{from}}$$
-    ///
-    /// $$\mathbf{S} = \mathbf{C}\_{\mathrm{pred}} + \mathbf{C}^{\mathrm{pos}}\_{\mathrm{to}} + \varepsilon\_f \mathbf{I}$$
-    ///
-    /// where $\varepsilon\_f$ is a small diagonal floor.
-    ///
-    /// Interpretation
-    /// --------------
-    /// - $\mathbf{C}^{\mathrm{pos}}\_{\mathrm{from}}$: position uncertainty at the `from` epoch.
-    /// - $\mathbf{C}^{\mathrm{vel}}\_{\mathrm{from}}$: velocity uncertainty at the `from` epoch.
-    /// - Multiplying by $\Delta t^{2}$ approximates how velocity uncertainty
-    ///   grows into position uncertainty over the time gap $\Delta t$.
-    /// - Adding $\mathbf{C}^{\mathrm{pos}}\_{\mathrm{to}}$ accounts for measurement
-    ///   uncertainty at the `to` epoch.
-    ///
-    /// Arguments
-    /// ---------
-    /// * `from` – Source seed node providing position/velocity covariances.
-    /// * `to` – Target seed node providing position covariance at its epoch.
-    /// * `dt_sq` – Precomputed $\Delta t^{2}$ (days²).
-    ///
-    /// Return
-    /// ------
-    /// Innovation covariance matrix $\mathbf{S}$ ($2 \times 2$).
-    ///
-    /// Notes
-    /// -----
-    /// A small diagonal floor $\varepsilon\_f \mathbf{I}$ is added to prevent:
-    /// - singular matrices,
-    /// - $\sqrt{0}$ in z-score computations,
-    /// - unstable inversion in Mahalanobis distance,
-    /// - Cholesky failures due to borderline numerical PSD-ness.
-    #[inline]
-    pub(crate) fn innovation_cov(from: &SeedNode, to: &SeedNode, dt_sq: f64) -> [[f64; 2]; 2] {
-        // Extract covariances in tangent-plane coordinates (x,y).
-        let cpos_from = from.plane.cov_pos;
-        let cvel_from = from.plane.cov_vel;
-        let cpos_to = to.plane.cov_pos;
-
-        // Prediction covariance: position uncertainty + (dt^2)*velocity uncertainty.
-        //
-        // This is the usual "constant-velocity" uncertainty growth model on a plane.
-        let cov_pred = [
-            [
-                cpos_from[0][0] + dt_sq * cvel_from[0][0],
-                cpos_from[0][1] + dt_sq * cvel_from[0][1],
-            ],
-            [
-                cpos_from[1][0] + dt_sq * cvel_from[1][0],
-                cpos_from[1][1] + dt_sq * cvel_from[1][1],
-            ],
-        ];
-
-        // Innovation covariance: predicted covariance + target position covariance + floor*I.
-        [
-            [
-                cov_pred[0][0] + cpos_to[0][0] + Self::FLOOR,
-                cov_pred[0][1] + cpos_to[0][1],
-            ],
-            [
-                cov_pred[1][0] + cpos_to[1][0],
-                cov_pred[1][1] + cpos_to[1][1] + Self::FLOOR,
-            ],
-        ]
-    }
-
-    /// Build the innovation covariance matrix $\mathbf{S}\_{\mathrm{vel}}$ in velocity space.
-    ///
-    /// Definition
-    /// ----------
-    /// $$\mathbf{S}\_{\mathrm{vel}} = \mathbf{C}^{\mathrm{vel}}\_{\mathrm{from}} + \mathbf{C}^{\mathrm{vel}}\_{\mathrm{to}} + \varepsilon\_f \mathbf{I}$$
-    ///
-    /// Arguments
-    /// ---------
-    /// * `from` – Source seed providing velocity covariance.
-    /// * `to` – Target seed providing velocity covariance.
-    ///
-    /// Return
-    /// ------
-    /// Innovation covariance matrix in velocity space $\mathbf{S}\_{\mathrm{vel}}$
-    /// ($2 \times 2$).
-    ///
-    /// Notes
-    /// -----
-    /// This is symmetric up to floating error and is floored on the diagonal
-    /// for stability.
-    #[inline]
-    fn innovation_cov_vel(from: &SeedNode, to: &SeedNode) -> [[f64; 2]; 2] {
-        let c1 = from.plane.cov_vel;
-        let c2 = to.plane.cov_vel;
-
-        [
-            [c1[0][0] + c2[0][0] + Self::FLOOR, c1[0][1] + c2[0][1]],
-            [c1[1][0] + c2[1][0], c1[1][1] + c2[1][1] + Self::FLOOR],
-        ]
-    }
-
-    /// Build the positional innovation covariance with optional CWNA (Continuous White Noise Acceleration) process noise.
-    ///
-    /// Extends [`innovation_cov`] by adding the Singer/CWNA diagonal term:
-    ///
-    /// $$\mathbf{S}\_\text{pos} \mathrel{+}= \sigma_q^2 \cdot \frac{\Delta t^3}{3} \cdot \mathbf{I}$$
-    ///
-    /// When `sigma_q == 0.0` the result is identical to [`innovation_cov`].
-    ///
-    /// Arguments
-    /// ---------
-    /// * `from` – Source seed.
-    /// * `to` – Target seed.
-    /// * `dt` – Time gap $\Delta t$ (days).
-    /// * `dt_sq` – Precomputed $\Delta t^2$ (days²).
-    /// * `sigma_q` – CWNA spectral density (rad · day^(−3/2)), set `0.0` to disable.
-    ///
-    /// Return
-    /// ------
-    /// Positional innovation covariance $\mathbf{S}$ ($2 \times 2$).
-    #[inline]
-    pub(crate) fn innovation_cov_cwna(
-        from: &SeedNode,
-        to: &SeedNode,
-        dt: f64,
-        dt_sq: f64,
-        sigma_q: f64,
-    ) -> [[f64; 2]; 2] {
-        let mut s = Self::innovation_cov(from, to, dt_sq);
-        if sigma_q != 0.0 {
-            // Q_pos = σ_q² · dt³/3  (scalar, same for x and y)
-            let q = sigma_q * sigma_q * dt * dt_sq / 3.0;
-            s[0][0] += q;
-            s[1][1] += q;
-        }
-        s
-    }
-
-    /// Build the velocity innovation covariance with optional CWNA process noise.
-    ///
-    /// Extends [`innovation_cov_vel`] by adding the Singer/CWNA diagonal term:
-    ///
-    /// $$\mathbf{S}\_\text{vel} \mathrel{+}= \sigma_q^2 \cdot \Delta t \cdot \mathbf{I}$$
-    ///
-    /// When `sigma_q == 0.0` the result is identical to [`innovation_cov_vel`].
-    ///
-    /// Arguments
-    /// ---------
-    /// * `from` – Source seed.
-    /// * `to` – Target seed.
-    /// * `dt` – Time gap $\Delta t$ (days).
-    /// * `sigma_q` – CWNA spectral density (rad · day^(−3/2)), set `0.0` to disable.
-    ///
-    /// Return
-    /// ------
-    /// Velocity innovation covariance $\mathbf{S}\_{\mathrm{vel}}$ ($2 \times 2$).
-    #[inline]
-    pub(crate) fn innovation_cov_vel_cwna(
-        from: &SeedNode,
-        to: &SeedNode,
-        dt: f64,
-        sigma_q: f64,
-    ) -> [[f64; 2]; 2] {
-        let mut s = Self::innovation_cov_vel(from, to);
-        if sigma_q != 0.0 {
-            // Q_vel = σ_q² · dt  (scalar, same for vx and vy)
-            let q = sigma_q * sigma_q * dt;
-            s[0][0] += q;
-            s[1][1] += q;
-        }
-        s
-    }
-
     /// Compute cheap diagonal-based z-scores for the innovation $\mathbf{r}$.
     ///
     /// Definition
     /// ----------
-    /// We use only the diagonal terms of $\mathbf{S}$:
+    /// Only the diagonal terms of $\mathbf{S}$ are used:
     ///
-    /// $$z\_{\Delta x} = \frac{r\_x}{\sqrt{S\_{xx}}} ,\quad z\_{\Delta y} = \frac{r\_y}{\sqrt{S\_{yy}}} ,\quad z\_{\mathrm{norm}} = \sqrt{z\_{\Delta x}^2 + z\_{\Delta y}^2}$$
+    /// $$z_{\Delta x} = \frac{r_x}{\sqrt{S_{xx}}} ,\quad z_{\Delta y} = \frac{r_y}{\sqrt{S_{yy}}} ,\quad z_{\mathrm{norm}} = \sqrt{z_{\Delta x}^2 + z_{\Delta y}^2}$$
     ///
-    /// Arguments
-    /// ---------
-    /// * `r` – Innovation vector $[r\_x,\, r\_y]$ (tangent-plane radians).
-    /// * `s` – Innovation covariance matrix $\mathbf{S}$ ($2 \times 2$).
+    /// # Arguments
     ///
-    /// Return
-    /// ------
-    /// $(z\_{\Delta x},\; z\_{\Delta y},\; z\_{\mathrm{norm}})$ – diagonal z-scores
-    /// and their Euclidean norm.
+    /// - `r` — Innovation vector $\mathbf{r} = (r_x, r_y)$ on the tangent plane
+    ///   (radians).
+    /// - `s` — Innovation covariance $\mathbf{S}$ ($2 \times 2$, symmetric).
     ///
-    /// Notes
-    /// -----
+    /// # Returns
+    ///
+    /// `(f64, f64, f64)` — Tuple $(z_{\Delta x},\, z_{\Delta y},\, z_{\mathrm{norm}})$
+    /// containing the per-axis diagonal z-scores and their Euclidean norm.
+    ///
+    /// # Notes
+    ///
     /// This approximation:
-    /// - ignores correlation between $x$ and $y$,
-    /// - is robust and cheap,
-    /// - is useful as an ML feature even when whitening fails.
+    /// - ignores the off-diagonal correlation $S_{xy}$,
+    /// - is robust and cheap to evaluate,
+    /// - remains useful as an ML feature even when full whitening (Cholesky of
+    ///   $\mathbf{S}$) fails due to near-singularity.
     #[inline]
-    pub(crate) fn z_diag(r: [f64; 2], s: [[f64; 2]; 2]) -> (f64, f64, f64) {
-        // Guard diagonal terms to avoid sqrt(0) or sqrt(negative).
-        let s_xx = s[0][0].max(Self::FLOOR);
-        let s_yy = s[1][1].max(Self::FLOOR);
-
-        // Normalize each axis independently.
-        let z_dx = r[0] / s_xx.sqrt();
-        let z_dy = r[1] / s_yy.sqrt();
-
-        // Scalar proxy for innovation magnitude in sigma units.
-        let z_norm = l2_norm(z_dx, z_dy);
-
-        (
-            Self::finite_or_zero(z_dx),
-            Self::finite_or_zero(z_dy),
-            Self::finite_or_zero(z_norm),
-        )
+    pub(crate) fn z_diag(r: TangentVec, s: Cov2) -> (TangentVec, f64) {
+        let z = s.whiten_diag(r, Self::FLOOR);
+        let z_norm = Self::finite_or_zero(z.norm());
+        (z, z_norm)
     }
 
     /// Compute along-track and cross-track z-scores based on the predicted
@@ -705,97 +456,69 @@ impl FeatureCore {
     /// Definitions
     /// -----------
     /// Let $\hat{\mathbf{u}}$ be the unit vector along predicted velocity
-    /// $\mathbf{v}\_{\mathrm{pred}}$:
+    /// $\mathbf{v}_{\mathrm{pred}}$:
     ///
-    /// $$\hat{\mathbf{u}} = \frac{\mathbf{v}\_{\mathrm{pred}}}{\|\mathbf{v}\_{\mathrm{pred}}\|}$$
+    /// $$\hat{\mathbf{u}} = \frac{\mathbf{v}_{\mathrm{pred}}}{\|\mathbf{v}_{\mathrm{pred}}\|}$$
     ///
     /// Let $\hat{\mathbf{n}}$ be its perpendicular:
-    /// $\hat{\mathbf{n}} = (-\hat{u}\_y,\; \hat{u}\_x)$.
+    /// $\hat{\mathbf{n}} = (-\hat{u}_y,\; \hat{u}_x)$.
     ///
     /// Then:
     ///
-    /// $$z\_\parallel = \frac{\mathbf{r} \cdot \hat{\mathbf{u}}}{\sqrt{\hat{\mathbf{u}}^\top \mathbf{S} \hat{\mathbf{u}}}} ,\qquad z\_\perp = \frac{\mathbf{r} \cdot \hat{\mathbf{n}}}{\sqrt{\hat{\mathbf{n}}^\top \mathbf{S} \hat{\mathbf{n}}}}$$
+    /// $$z_\parallel = \frac{\mathbf{r} \cdot \hat{\mathbf{u}}}{\sqrt{\hat{\mathbf{u}}^\top \mathbf{S} \hat{\mathbf{u}}}}, \qquad z_\perp = \frac{\mathbf{r} \cdot \hat{\mathbf{n}}}{\sqrt{\hat{\mathbf{n}}^\top \mathbf{S} \hat{\mathbf{n}}}}$$
     ///
     /// Arguments
     /// ---------
-    /// * `r` – Innovation vector $[r\_x,\, r\_y]$.
-    /// * `s` – Innovation covariance matrix $\mathbf{S}$ ($2 \times 2$).
-    /// * `v_pred` – Predicted velocity vector at the target epoch.
+    /// * `r` – Innovation vector on the tangent plane.
+    /// * `s` – Innovation covariance $\mathbf{S}$ in the same tangent frame.
+    /// * `v_pred` – Predicted velocity vector at the target epoch, in the same frame.
     ///
     /// Return
     /// ------
-    /// $(z\_\parallel,\; z\_\perp,\; \|\mathbf{v}\_{\mathrm{pred}}\|)$.
+    /// * `TangentVec` – Whitened innovation in the along/cross basis:
+    ///   `dx = z_parallel`, `dy = z_perp`.
+    /// * `f64` – Speed $\|\mathbf{v}_{\mathrm{pred}}\|$ (reused by callers for
+    ///   other kinematic features).
     ///
     /// Notes
     /// -----
-    /// If $\|\mathbf{v}\_{\mathrm{pred}}\|$ is invalid or zero, we fall back to a
-    /// fixed orthonormal basis: $\hat{\mathbf{u}} = (1,0)$,
-    /// $\hat{\mathbf{n}} = (0,1)$.
-    ///
-    /// This makes the feature well-defined even for seeds with poorly constrained
-    /// motion (e.g., too few detections, or numerical artifacts).
+    /// - When $\|\mathbf{v}_{\mathrm{pred}}\|$ is not finite or is zero, a fallback
+    ///   orthonormal basis $\hat{\mathbf{u}} = (1,0)$, $\hat{\mathbf{n}} = (0,1)$ is
+    ///   used. This keeps the feature well-defined for seeds with poorly
+    ///   constrained motion (too few detections, numerical artifacts).
+    /// - Denominators are floored at [`Self::FLOOR`] before taking the square root
+    ///   to guard against near-singular covariances.
     #[inline]
-    pub(crate) fn z_along_cross(
-        r: [f64; 2],
-        s: [[f64; 2]; 2],
-        v_pred: [f64; 2],
-    ) -> (f64, f64, f64) {
-        // Speed of predicted motion.
-        let v_norm = l2_norm(v_pred[0], v_pred[1]);
+    pub(crate) fn z_along_cross(r: TangentVec, s: Cov2, v_pred: TangentVec) -> (TangentVec, f64) {
+        let v_norm = v_pred.norm();
 
-        // Build an orthonormal basis (u along-track, n cross-track).
         let (u, n) = if v_norm.is_finite() && v_norm > 0.0 {
-            let u = [v_pred[0] / v_norm, v_pred[1] / v_norm];
-            let n = [-u[1], u[0]];
+            let inv = 1.0 / v_norm;
+            let u = TangentVec {
+                dx: v_pred.dx * inv,
+                dy: v_pred.dy * inv,
+            };
+            let n = TangentVec {
+                dx: -u.dy,
+                dy: u.dx,
+            };
             (u, n)
         } else {
-            // Fallback basis if velocity is degenerate.
-            ([1.0, 0.0], [0.0, 1.0])
+            (
+                TangentVec { dx: 1.0, dy: 0.0 },
+                TangentVec { dx: 0.0, dy: 1.0 },
+            )
         };
 
-        // Denominator is the standard deviation along direction u: sqrt(uᵀ S u).
-        let su = dot2(u, mat_vec2(s, u)).max(Self::FLOOR);
-        let z_along = dot2(r, u) / su.sqrt();
+        let su = s.quad_form(u).max(Self::FLOOR);
+        let sn = s.quad_form(n).max(Self::FLOOR);
 
-        // Denominator is the standard deviation along direction n: sqrt(nᵀ S n).
-        let sn = dot2(n, mat_vec2(s, n)).max(Self::FLOOR);
-        let z_cross = dot2(r, n) / sn.sqrt();
+        let z = TangentVec {
+            dx: Self::finite_or_zero(r.dot(u) / su.sqrt()),
+            dy: Self::finite_or_zero(r.dot(n) / sn.sqrt()),
+        };
 
-        (
-            Self::finite_or_zero(z_along),
-            Self::finite_or_zero(z_cross),
-            v_norm,
-        )
-    }
-
-    /// Compute $\cos(\theta)$ between two vectors given their norms.
-    ///
-    /// $$\cos \theta = \operatorname{clamp}\_{[-1, 1]}\!\left(\frac{\mathbf{a} \cdot \mathbf{b}}{\|\mathbf{a}\|\;\|\mathbf{b}\|}\right)$$
-    ///
-    /// Arguments
-    /// ---------
-    /// * `a` – First vector.
-    /// * `a_norm` – Precomputed $\|\mathbf{a}\|$.
-    /// * `b` – Second vector.
-    /// * `b_norm` – Precomputed $\|\mathbf{b}\|$.
-    ///
-    /// Return
-    /// ------
-    /// Cosine of the angle in $[-1, 1]$ (clamped and finite), or $0$ if invalid.
-    ///
-    /// Notes
-    /// -----
-    /// - Using precomputed norms avoids recomputing square roots in hot paths.
-    /// - Clamping avoids tiny numerical drift outside $[-1, 1]$ that could occur
-    ///   due to floating-point rounding.
-    #[inline]
-    pub(crate) fn cos_between(a: [f64; 2], a_norm: f64, b: [f64; 2], b_norm: f64) -> f64 {
-        if a_norm.is_finite() && b_norm.is_finite() && a_norm > 0.0 && b_norm > 0.0 {
-            // dot(a,b) / (|a||b|), clamped to [-1,1] to avoid numeric drift.
-            clamp_unit(dot2(a, b) / (a_norm * b_norm))
-        } else {
-            0.0
-        }
+        (z, v_norm)
     }
 
     /// Relative speed difference:

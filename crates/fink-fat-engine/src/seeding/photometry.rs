@@ -11,36 +11,33 @@ use std::fmt::{self, Display, Formatter};
 /// - triplets: `[b0, b1, b2]`
 ///   with `n_bands` indicating how many entries are valid.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
-pub struct Photometry {
+pub struct SeedPhotometry {
     pub mag_mean: f32,
     pub mag_std: f32,
 
-    /// Number of valid bands stored in `bands` (2 for pairs, 3 for triplets).
     pub n_bands: u8,
-
-    /// Is the seed observed in multiple bands? True if every detection is in the same band, false otherwise.
-    pub share_bands: bool,
+    bands: [Option<Filter>; 3],
 }
 
-impl Display for Photometry {
+impl Display for SeedPhotometry {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Photometry {{ mag_mean: {:.6e}, mag_std: {:.6e}, share_bands: {} }}",
-            self.mag_mean, self.mag_std, self.share_bands
+            "Photometry {{ mag_mean: {:.6e}, mag_std: {:.6e}, bands: {:?} }}",
+            self.mag_mean, self.mag_std, self.bands
         )
     }
 }
 
-impl Photometry {
+impl SeedPhotometry {
     /// Build photometry for a pair seed.
     #[inline]
-    pub fn from_pair(mag_mean: f32, mag_std: f32, band_a: &Filter, band_b: &Filter) -> Self {
+    pub fn from_pair(mag_mean: f32, mag_std: f32, band_a: Filter, band_b: Filter) -> Self {
         Self {
             mag_mean,
             mag_std,
             n_bands: 2,
-            share_bands: band_a == band_b,
+            bands: [Some(band_a), Some(band_b), None],
         }
     }
 
@@ -49,15 +46,28 @@ impl Photometry {
     pub fn from_triplet(
         mag_mean: f32,
         mag_std: f32,
-        band_a: &Filter,
-        band_b: &Filter,
-        band_c: &Filter,
+        band_a: Filter,
+        band_b: Filter,
+        band_c: Filter,
     ) -> Self {
         Self {
             mag_mean,
             mag_std,
             n_bands: 3,
-            share_bands: band_a == band_b && band_b == band_c,
+            bands: [Some(band_a), Some(band_b), Some(band_c)],
         }
+    }
+
+    /// Check if this photometry shares any band with another.
+    /// Returns `true` if at least one band overlaps, otherwise `false`.
+    #[inline]
+    pub fn shares_any_band(&self, other: &Self) -> bool {
+        let na = (self.n_bands as usize).min(3);
+        let nb = (other.n_bands as usize).min(3);
+
+        self.bands[..na]
+            .iter()
+            .flatten()
+            .any(|a| other.bands[..nb].iter().flatten().any(|b| a == b))
     }
 }

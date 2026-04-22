@@ -50,10 +50,17 @@
 //!
 //! -----------------------------------------------------------------------------
 
+pub mod feature_core;
+pub mod photometry_features;
+pub mod position_features;
+pub mod seed_features;
+pub mod uncertainty_features;
+pub mod velocity_features;
+
 use crate::{
-    astro_math::{dot2, invert_sym_2x2, mat_vec2, safe_ln},
+    astro_math::safe_ln,
     engine_config::edge_config::{CostConfig, CostVariant},
-    graph::edge::{
+    graph::edge::edge_features::{
         feature_core::FeatureCore, photometry_features::EdgePhotometryFeatures,
         position_features::EdgePositionFeatures, uncertainty_features::EdgeUncertaintyFeatures,
         velocity_features::EdgeVelocityFeatures,
@@ -193,55 +200,73 @@ impl EdgeFeatures {
         // they are only paid once regardless of the chosen variant).
         let core = FeatureCore::from_nodes(from, to);
 
-        let (chi2_pos, chi2_vel) = Self::chi2_with_cwna(&core, from, to, cfg);
+        let (chi2_pos, chi2_vel) = from.chi2_with_cwna(&core, to, cfg);
         let kin_cost = Self::kinematic_loss(chi2_pos, chi2_vel, cfg);
         let phot_cost = Self::photometry_cost(from, to);
 
         FeatureCore::finite_or_zero(kin_cost + phot_cost).max(f64::EPSILON)
     }
 
-    /// Extract positional and velocity χ² values, optionally inflated with CWNA (Continuous White Noise Acceleration)
-    /// process noise.
+    /// Extract positional and velocity $\chi^2$ values, optionally inflated with
+    /// CWNA (Continuous White Noise Acceleration) process noise.
     ///
-    /// Positional \u03c7\u00b2
+    /// Positional $\chi^2$
+    /// -------------------
+    /// The positional term uses a **spherical residual** $d$ (see
+    /// [`FeatureCore::r_sph`]) instead of the 2-D gnomonic Mahalanobis:
+    ///
+    /// $$\chi^{2}_{\mathrm{pos}} = \frac{d^{2}}{S_{\mathrm{scalar}}}$$
+    ///
+    /// where $S_{\mathrm{scalar}} = \operatorname{tr}(\mathbf{S}_{\mathrm{pos}}) / 2$.
+    ///
+    /// Motivation: the gnomonic residual $\|\mathbf{r}\|$ diverges when the
+    /// tangent-plane denominator $\cos c \to 0$ (seed centres separated by
+    /// $\gtrsim 45^\circ$), leading to $\chi^{2}_{\mathrm{pos}} \sim 10^{20}$
+    /// for otherwise valid edges. The great-circle distance
+    /// $d \in [0, \pi]$ is bounded and well-defined for any separation.
+    ///
+    /// Velocity $\chi^2$
     /// -----------------
-    /// The positional term uses a **spherical residual** $d$ = [`FeatureCore::r_sph`] instead of
-    /// the 2-D gnomonic Mahalanobis:
+    /// The velocity term uses the full 2-D Mahalanobis distance on the
+    /// tangent-plane velocity innovation $\delta \mathbf{v}$:
     ///
-    /// $$\chi^2\_{\mathrm{pos}} = \frac{d^{2}}{S\_{\mathrm{scalar}}}$$
+    /// $$\chi^{2}_{\mathrm{vel}} = \delta \mathbf{v}^{\top}\, \mathbf{S}_{\mathrm{vel}}^{-1}\, \delta \mathbf{v}$$
     ///
-    /// where $S\_{\mathrm{scalar}} = \operatorname{tr}(\mathbf{S}\_{\mathrm{pos}}) / 2$.
+    /// Velocity residuals do not suffer from the gnomonic blow-up, so the
+    /// standard 2-D form is kept.
     ///
-    /// Motivation: the gnomonic residual $\|\mathbf{r}\|$ diverges when the tangent-plane
-    /// denominator $\cos c \to 0$ (seed centres separated by $\gtrsim 45\deg$), leading to
-    /// $\chi^2\_{\mathrm{pos}} \sim 10^{20}$ for otherwise valid edges.  The great-circle
-    /// distance $d \in [0, \pi]$ is bounded and well-defined for any separation.
+    /// Behavior (two modes)
+    /// --------------------
+    /// Controlled by `cfg.variant` and `cfg.sigma_q`:
     ///
-    /// Velocity \u03c7\u00b2
-    /// ----------------
-    /// The velocity term still uses the full 2-D Mahalanobis on the tangent-plane velocity
-    /// innovation $\delta\mathbf{v}$ (velocity residuals do not blow up).
+    /// - If `sigma_q == 0.0` (or `variant == KinematicLogLikelihood`):
+    ///   - returns the cached spherical positional $\chi^2$ from `core`,
+    ///   - returns the cached velocity $\chi^2$ from `core`,
+    ///   - no extra linear algebra is performed.
     ///
-    /// Behavior
-    /// --------
-    /// - When `sigma_q == 0` (or variant is `KinematicLogLikelihood`): returns the
-    ///   cached spherical positional $\chi^2$ and the cached velocity $\chi^2$ from `core`
-    ///   directly — no extra linear-algebra work.
-    /// - When `sigma_q > 0`: recomputes only the two 2\u00d72 innovation covariances
-    ///   with the CWNA diagonal term, then applies the spherical formula for position
-    ///   and the 2-D Mahalanobis for velocity.
-    ///   Propagation and tangent-plane projection are **not** repeated.
+    /// - If `sigma_q > 0.0`:
+    ///   - recomputes the two $2 \times 2$ innovation covariances with the CWNA
+    ///     diagonal term,
+    ///   - applies the spherical formula for position,
+    ///   - applies the 2-D Mahalanobis form for velocity.
+    ///
+    /// Propagation and tangent-plane projection are **not** repeated in either
+    /// mode — only the covariance inflation and the final $\chi^2$ reduction.
     ///
     /// Arguments
     /// ---------
-    /// * `core` – Shared edge intermediates (cached `r_sph`, `s_pos_scalar`, `dv`).
-    /// * `from` – Source seed node (needed for measurement covariance in CWNA path).
-    /// * `to`   – Target seed node (needed for measurement covariance in CWNA path).
+    /// * `core` – Shared edge intermediates (cached `r_sph`, `s_pos_scalar`,
+    ///   `dv`, `chi2_vel`, `dt`, `dt_sq`).
+    /// * `from` – Source seed node (provides the measurement covariance in the
+    ///   CWNA path).
+    /// * `to`   – Target seed node (provides the measurement covariance in the
+    ///   CWNA path).
     /// * `cfg`  – Cost configuration; `variant` and `sigma_q` are read here.
     ///
     /// Return
     /// ------
-    /// `(chi2_pos, chi2_vel)` — positional and velocity \u03c7\u00b2 values.
+    /// `(chi2_pos, chi2_vel)` — positional and velocity $\chi^2$ values,
+    /// guaranteed finite and non-negative.
     #[inline]
     fn chi2_with_cwna(
         core: &FeatureCore,
@@ -256,30 +281,25 @@ impl EdgeFeatures {
         };
 
         if sigma_q == 0.0 {
-            // Fast path: use the pre-computed spherical positional chi2 from FeatureCore.
+            // Fast path: reuse pre-computed spherical chi2_pos and cached chi2_vel.
             // chi2_pos_sph = r_sph² / s_pos_scalar   (great-circle, no blow-up)
             let chi2_p =
                 FeatureCore::finite_or_zero((core.r_sph * core.r_sph / core.s_pos_scalar).max(0.0));
             return (chi2_p, core.chi2_vel);
         }
 
-        // CWNA path: inflate covariances with Singer process noise and recompute chi2.
+        // CWNA path: inflate covariances with Singer process noise and recompute.
         //
-        // Positional chi2 uses spherical residual r_sph with a scalar S
-        // (isotropic approximation: S_scalar = tr(S_cwna) / 2).
-        let s_pos = FeatureCore::innovation_cov_cwna(from, to, core.dt, core.dt_sq, sigma_q);
-        let s_pos_scalar = ((s_pos[0][0] + s_pos[1][1]).max(FeatureCore::FLOOR)) / 2.0;
+        // Positional chi2 uses the spherical residual r_sph with an isotropic
+        // scalar S (S_scalar = tr(S_cwna) / 2).
+        let s_pos = from.innovation_cov_pos_cwna(to, core.dt, core.dt_sq, sigma_q);
+        let s_pos_scalar = ((s_pos.xx + s_pos.yy).max(FeatureCore::FLOOR)) / 2.0;
         let chi2_p = FeatureCore::finite_or_zero((core.r_sph * core.r_sph / s_pos_scalar).max(0.0));
 
-        // Velocity chi2 still uses the full 2×2 Mahalanobis (no blow-up for velocity residuals).
-        let s_vel = FeatureCore::innovation_cov_vel_cwna(from, to, core.dt, sigma_q);
-        let chi2_v = FeatureCore::finite_or_zero(
-            dot2(
-                core.dv,
-                mat_vec2(invert_sym_2x2(s_vel, FeatureCore::FLOOR), core.dv),
-            )
-            .max(0.0),
-        );
+        // Velocity chi2: full 2-D Mahalanobis on the velocity innovation.
+        let s_vel = from.innovation_cov_vel_cwna(to, core.dt, sigma_q);
+        let chi2_v =
+            FeatureCore::finite_or_zero(s_vel.mahalanobis_sq(core.dv).unwrap_or(0.0).max(0.0));
 
         (chi2_p, chi2_v)
     }
@@ -364,7 +384,7 @@ impl EdgeFeatures {
         let eps_band = 1e-3_f64;
         let phot = EdgePhotometryFeatures::photometry_features(from, to);
         let ln_ratio = safe_ln(phot.flux_std_ratio.abs() + eps);
-        let band_term = if phot.band_shared.clamp(0.0, 1.0) > 0.5 {
+        let band_term = if phot.band_shared {
             0.0
         } else {
             -safe_ln(eps_band)
@@ -440,7 +460,13 @@ impl EdgeFeatures {
             // Photometry
             EdgeFeatureKey::PhotometryZFlux => self.photometry.z_flux,
             EdgeFeatureKey::PhotometryFluxStdRatio => self.photometry.flux_std_ratio,
-            EdgeFeatureKey::PhotometryBandShared => self.photometry.band_shared,
+            EdgeFeatureKey::PhotometryBandShared => {
+                if self.photometry.band_shared {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
         }
     }
 
@@ -858,37 +884,34 @@ impl<'a> ExactSizeIterator for EdgeFeaturesIter<'a> {}
 mod edge_feature_tests {
     use super::*;
     use crate::{
-        Alert, AlertKey,
+        astro_math::arcsec_to_rad,
         night_id::NightId,
         seeding::{SeedNode, store::SeedStore},
     };
+    use photom::{
+        coordinates::equatorial::EquCoord,
+        observation_dataset::observation::Observation,
+        photometry::{Filter, Photometry as PhotomPhotometry},
+    };
     use proptest::prelude::*;
-    use std::sync::Arc;
+
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
 
-    /// Minimal alert factory.
-    fn make_alert(id: u64, night: u32, mjd: f64, ra: f64, dec: f64, band: u8, flux: f64) -> Alert {
-        let arcsec = std::f64::consts::PI / (180.0 * 3600.0);
-        Alert {
-            key: AlertKey {
-                night_id: NightId::new(night),
-                dia_source_id: id,
-            },
-            ra,
-            ra_err: arcsec,
-            dec,
-            dec_err: arcsec,
-            mjd_tt: mjd,
-            flux,
-            flux_err: flux * 0.05,
-            band,
-            observer_mpc_code: Arc::new("500".into()),
-        }
+    /// Minimal observation factory.
+    fn make_obs(id: u64, mjd: f64, ra: f64, dec: f64, band: u8, flux: f64) -> Observation {
+        let pos_err = arcsec_to_rad(1.0);
+        let equ_coord = EquCoord::new(ra, pos_err, dec, pos_err);
+        let photometry = PhotomPhotometry {
+            magnitude: flux,
+            error: flux * 0.05,
+            filter: Filter::Int(band as u32),
+        };
+        Observation::new(id, equ_coord, photometry, mjd, None)
     }
 
-    /// Build a SeedNode from two alerts using the public `from_pair` constructor.
+    /// Build a SeedNode from two observations using the public `from_pair` constructor.
     fn make_seed_from_pair(
         store: &mut SeedStore,
         night: u32,
@@ -904,10 +927,10 @@ mod edge_feature_tests {
         // dt = 0.5 h intra-night
         let dt = 0.5 / 24.0;
         let ra_b = ra + vx_rad_day * dt;
-        let a = make_alert(id_a, night, mjd_a, ra, dec, band, flux);
-        let b = make_alert(id_b, night, mjd_a + dt, ra_b, dec, band, flux);
+        let a = make_obs(id_a, mjd_a, ra, dec, band, flux);
+        let b = make_obs(id_b, mjd_a + dt, ra_b, dec, band, flux);
         SeedNode::from_pair(store, NightId::new(night), &a, &b, None)
-            .expect("from_pair should succeed for simple test alerts")
+            .expect("from_pair should succeed for simple test observations")
     }
 
     /// Two seeds separated by ~1 day with consistent kinematics.

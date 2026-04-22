@@ -57,13 +57,23 @@
 
 use ahash::{AHashMap, AHashSet};
 use photom::{
-    coordinates::cartesian::CartesianCoord, observation_dataset::observation::Observation,
+    coordinates::{
+        cartesian::CartesianCoord,
+        cov2::Cov2,
+        gnomonic_projection::{TangentPlane, TangentPoint},
+    },
+    observation_dataset::observation::Observation,
 };
 
 use crate::{
     engine_config::pair_config::PairConfig,
     night_id::NightId,
-    seeding::{SeedNode, store::SeedStore},
+    seeding::{
+        SeedNode,
+        photometry::SeedPhotometry,
+        store::SeedStore,
+        tangent_plane::{PosWithCov, TangentPlaneModel, VelWithCov},
+    },
     spacetime_bucket::{
         bucket::{BucketIndex, BucketKey},
         spatial_binner::{SpatialBinner, SpatialKey},
@@ -369,41 +379,156 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
     out
 }
 
-/// Convert a list of valid detection pairs into intra-night [`SeedNode`] objects.
-///
-/// Each pair `(a, b)` is passed to [`SeedNode::from_pair`]. The optional
-/// `max_speed_rad_per_day` allows applying an additional physical sanity check
-/// at seed-construction time (independent from the pair-generation constraint).
-///
-/// # Arguments
-///
-/// - `pairs` — time-ordered detection pairs produced by [`generate_pairs`].
-/// - `seed_store` — seed store used to allocate unique keys for new seeds.
-/// - `night_id` — night identifier assigned to all resulting seeds.
-/// - `max_speed_rad_per_day` — optional speed filter forwarded to [`SeedNode::from_pair`].
-///
-/// # Returns
-///
-/// Seeds successfully constructed from the input pairs.
-///
-/// # Notes
-///
-/// [`SeedNode::from_pair`] can still reject a pair (returns `None`) if the speed filter
-/// is set and the fitted speed exceeds the threshold. The output order follows the input
-/// `pairs` order, which is deterministic if produced by [`generate_pairs`].
-pub fn extract_pair_features<'alert_lf>(
-    pairs: &Pairs<'alert_lf>,
-    seed_store: &mut SeedStore,
-    night_id: NightId,
-    max_speed_rad_per_day: Option<f64>,
-) -> Vec<SeedNode> {
-    let mut out = Vec::with_capacity(pairs.len());
-    for &Pair { a, b } in pairs.iter() {
-        if let Some(seed) = SeedNode::from_pair(seed_store, night_id, a, b, max_speed_rad_per_day) {
-            out.push(seed);
+impl SeedNode {
+    /// Build a [`SeedNode`] from a **pair** of alerts (linear tangent-plane model).
+    ///
+    /// This constructor:
+    /// - defines a tangent-plane centre as the spherical midpoint of the two detections,
+    /// - projects both detections onto the tangent plane,
+    /// - fits a linear motion model (position at mid-epoch + velocity),
+    /// - builds simple isotropic covariance estimates for position and velocity,
+    /// - aggregates minimal photometry from the two fluxes.
+    ///
+    /// Arguments
+    /// ---------
+    /// * seed_store : &mut SeedStore
+    ///   Seed store used to generate a unique seed key for this night.
+    /// * night_id : NightId
+    ///   Night identifier shared by the two alerts (seeds do not mix nights).
+    /// * alert_a : &Alert
+    ///   First detection.
+    /// * alert_b : &Alert
+    ///   Second detection.
+    /// * max_speed_rad_per_day : `Option<f64>`
+    ///   Optional physical sanity check on the fitted speed (rad/day).
+    ///   If set and `||v|| > vmax`, the seed is rejected.
+    ///
+    /// Returns
+    /// -------
+    /// * `Option<SeedNode>`
+    ///   `Some(seed)` if the model is built and passes the optional speed filter,
+    ///   `None` if rejected by the speed filter.
+    ///
+    /// Notes
+    /// -----
+    /// - Members are stored in time order: `[alert_a, alert_b]` as passed here.
+    ///   (Callers should pass them in chronological order if that matters.)
+    /// - Covariances are approximated as isotropic using `max(ra_err, dec_err)`.
+    /// - The model is meant as a cheap, robust intra-night approximation.
+    pub fn from_pair(
+        seed_store: &mut SeedStore,
+        night_id: NightId,
+        alert_a: &Observation,
+        alert_b: &Observation,
+        max_speed_rad_per_day: Option<f64>,
+    ) -> Option<Self> {
+        let ta = alert_a.mjd_tt();
+        let tb = alert_b.mjd_tt();
+        let epoch_mid = 0.5 * (ta + tb);
+        let dt = tb - ta;
+        let inv_dt = 1.0 / dt;
+        let inv_dt2 = inv_dt * inv_dt;
+
+        let mid = alert_a.equ_coord().spherical_midpoint(alert_b.equ_coord());
+        let plane = TangentPlane::new(mid);
+
+        // Project both alerts onto the tangent plane.
+        let tp_a = plane.project(alert_a.equ_coord());
+        let tp_b = plane.project(alert_b.equ_coord());
+
+        // Midpoint on the plane.
+        let tp_mid = TangentPoint::midpoint(tp_a, tp_b);
+
+        // Velocity vector on the plane (rad / day).
+        let v = (tp_b - tp_a) * inv_dt;
+
+        if let Some(vmax) = max_speed_rad_per_day {
+            if v.norm_sq() > vmax * vmax {
+                return None;
+            }
         }
+
+        // Per-alert covariances on the sky (RA/Dec).
+        // NB: we use them directly in the tangent plane here, under the
+        // small-angle assumption that the gnomonic Jacobian is ≈ identity
+        // near the projection centre. For a rigorous treatment, propagate
+        // through the projection Jacobian J: Σ_xy = J Σ_αδ Jᵀ.
+        let sigma_a = Cov2::from_equ(&alert_a.equ_coord());
+        let sigma_b = Cov2::from_equ(&alert_b.equ_coord());
+        let sum_ab = sigma_a + sigma_b;
+
+        // Two-point least-squares fit at the midpoint epoch:
+        //   Var(p̄) = (Σa + Σb) / 4
+        //   Var(v̂) = (Σa + Σb) / Δt²
+        let cov_pos = sum_ab * 0.25;
+        let cov_vel = sum_ab * inv_dt2;
+
+        let model = TangentPlaneModel {
+            epoch_mid,
+            pos: PosWithCov {
+                tangent_point: tp_mid,
+                cov: cov_pos,
+            },
+            vel: VelWithCov { v, cov: cov_vel },
+            acc: None,
+        };
+
+        let mag_mean = (alert_a.photometry().magnitude + alert_b.photometry().magnitude) * 0.5;
+        let flux_std = ((alert_a.photometry().magnitude - mag_mean).abs()
+            + (alert_b.photometry().magnitude - mag_mean).abs())
+            * 0.5;
+        let photom = SeedPhotometry::from_pair(
+            mag_mean as f32,
+            flux_std as f32,
+            alert_a.photometry().filter.clone(),
+            alert_b.photometry().filter.clone(),
+        );
+
+        Some(Self {
+            key: seed_store.next_key(night_id),
+            plane_model: model,
+            photom,
+            n_obs: 2,
+            members: vec![alert_a.id().clone(), alert_b.id().clone()],
+        })
     }
-    out
+
+    /// Convert a list of valid detection pairs into intra-night [`SeedNode`] objects.
+    ///
+    /// Each pair `(a, b)` is passed to [`SeedNode::from_pair`]. The optional
+    /// `max_speed_rad_per_day` allows applying an additional physical sanity check
+    /// at seed-construction time (independent from the pair-generation constraint).
+    ///
+    /// # Arguments
+    ///
+    /// - `pairs` — time-ordered detection pairs produced by [`generate_pairs`].
+    /// - `seed_store` — seed store used to allocate unique keys for new seeds.
+    /// - `night_id` — night identifier assigned to all resulting seeds.
+    /// - `max_speed_rad_per_day` — optional speed filter forwarded to [`SeedNode::from_pair`].
+    ///
+    /// # Returns
+    ///
+    /// Seeds successfully constructed from the input pairs.
+    ///
+    /// # Notes
+    ///
+    /// [`SeedNode::from_pair`] can still reject a pair (returns `None`) if the speed filter
+    /// is set and the fitted speed exceeds the threshold. The output order follows the input
+    /// `pairs` order, which is deterministic if produced by [`generate_pairs`].
+    pub fn extract_pair_features<'alert_lf>(
+        pairs: &Pairs<'alert_lf>,
+        seed_store: &mut SeedStore,
+        night_id: NightId,
+        max_speed_rad_per_day: Option<f64>,
+    ) -> Vec<Self> {
+        let mut out = Vec::with_capacity(pairs.len());
+        for &Pair { a, b } in pairs.iter() {
+            if let Some(seed) = Self::from_pair(seed_store, night_id, a, b, max_speed_rad_per_day) {
+                out.push(seed);
+            }
+        }
+        out
+    }
 }
 
 #[cfg(test)]
@@ -869,7 +994,8 @@ mod pair_gen_tests {
 
         let mut seed_store = SeedStore::new();
 
-        let seeds_all = extract_pair_features(&pairs, &mut seed_store, NightId::new(42), None);
+        let seeds_all =
+            SeedNode::extract_pair_features(&pairs, &mut seed_store, NightId::new(42), None);
         assert_eq!(seeds_all.len(), 2);
 
         // Speed threshold between slow and fast.
@@ -880,7 +1006,7 @@ mod pair_gen_tests {
 
         let vmax = (speed_slow + speed_fast) * 0.5;
         let seeds_filtered =
-            extract_pair_features(&pairs, &mut seed_store, NightId::new(42), Some(vmax));
+            SeedNode::extract_pair_features(&pairs, &mut seed_store, NightId::new(42), Some(vmax));
 
         assert_eq!(seeds_filtered.len(), 1);
 
@@ -928,7 +1054,7 @@ mod pair_gen_tests {
                 }
 
                 let mut seed_store = SeedStore::new();
-                let seeds = extract_pair_features(&pairs, &mut seed_store, NightId::new(7), Some(f64::INFINITY));
+                let seeds = SeedNode::extract_pair_features(&pairs, &mut seed_store, NightId::new(7), Some(f64::INFINITY));
 
                 prop_assert_eq!(seeds.len(), pairs.len());
 

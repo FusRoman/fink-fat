@@ -359,7 +359,7 @@ mod seed_store_tests {
     use crate::{
         night_id::NightId,
         seeding::{
-            photometry::Photometry,
+            photometry::SeedPhotometry,
             tangent_plane::{PosWithCov, TangentPlaneModel, VelWithCov},
         },
     };
@@ -397,7 +397,7 @@ mod seed_store_tests {
                 unique_id: uniq_id,
             },
             plane_model: mk_plane_model(0.0),
-            photom: Photometry::default(),
+            photom: SeedPhotometry::default(),
             n_obs: alert_keys.len() as u16,
             members: alert_keys,
         }
@@ -489,7 +489,7 @@ mod seed_store_tests {
             SeedNode {
                 key,
                 plane_model: mk_plane_model(epoch_mid_mjd),
-                photom: Photometry::default(),
+                photom: SeedPhotometry::default(),
                 n_obs: 0,
                 members: vec![],
             }

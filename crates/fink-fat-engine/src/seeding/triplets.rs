@@ -49,14 +49,21 @@
 
 use ahash::{AHashMap, AHashSet};
 use photom::{
-    coordinates::cartesian::CartesianCoord, observation_dataset::observation::Observation,
+    coordinates::{cartesian::CartesianCoord, cov2::Cov2, gnomonic_projection::TangentPlane},
+    observation_dataset::observation::Observation,
 };
 
 use crate::{
-    astro_math::planar_offset_fast,
+    astro_math::{fit_quad_tangent, planar_offset_fast},
     engine_config::triplet_config::TripletConfig,
     night_id::NightId,
-    seeding::{SeedNode, pairs::Pair, store::SeedStore},
+    seeding::{
+        SeedNode,
+        pairs::Pair,
+        photometry::SeedPhotometry,
+        store::SeedStore,
+        tangent_plane::{Acceleration, PosWithCov, TangentPlaneModel, VelWithCov},
+    },
     spacetime_bucket::{
         bucket::{BucketIndex, BucketKey},
         spatial_binner::{SpatialBinner, SpatialKey},
@@ -394,31 +401,144 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
     out
 }
 
-/// Convert triplets into quadratic [`SeedNode`] objects for a given night.
-///
-/// This is a thin wrapper around [`SeedNode::from_triplet`].
-///
-/// Parameters
-/// ----------
-/// trips : &Triplets
-///     Triplets produced by [`generate_triplets_from_pairs`].
-/// night_id : NightId
-///     Night identifier assigned to all output seeds.
-///
-/// Returns
-/// -------
-/// `Vec<SeedNode>`
-///     One seed per triplet, preserving input order.
-pub fn extract_triplet_features<'alert_lf>(
-    trips: &Triplets<'alert_lf>,
-    seed_store: &mut SeedStore,
-    night_id: NightId,
-) -> Vec<SeedNode> {
-    let mut out = Vec::with_capacity(trips.len());
-    for &Triplet { a, b, c } in trips.iter() {
-        out.push(SeedNode::from_triplet(seed_store, night_id, a, b, c));
+impl SeedNode {
+    /// Build a [`SeedNode`] from a **triplet** of alerts (quadratic tangent-plane model).
+    ///
+    /// This constructor fits a quadratic model independently in tangent `x` and `y`:
+    /// it yields position at mean epoch, velocity, and acceleration.
+    ///
+    /// Arguments
+    /// ---------
+    /// * seed_store : &mut SeedStore
+    ///   Seed store used to generate a unique seed key for this night.
+    /// * night_id : NightId
+    ///   Night identifier shared by the three alerts (seeds do not mix nights).
+    /// * alert_a : &Alert
+    ///   First detection.
+    /// * alert_b : &Alert
+    ///   Second detection.
+    /// * alert_c : &Alert
+    ///   Third detection.
+    ///
+    /// Returns
+    /// -------
+    /// * SeedNode
+    ///   A seed with `n_obs == 3` and `plane_model.acc.is_some() == true`.
+    ///
+    /// Notes
+    /// -----
+    /// - The tangent-plane centre is chosen as the spherical midpoint of endpoints
+    ///   `(a, c)` to stabilize projection.
+    /// - Uncertainty estimates are coarse and isotropic (similar philosophy as pairs).
+    /// - This is still an approximation of true orbital motion.
+    pub fn from_triplet(
+        seed_store: &mut SeedStore,
+        night_id: NightId,
+        alert_a: &Observation,
+        alert_b: &Observation,
+        alert_c: &Observation,
+    ) -> Self {
+        let (ta, tb, tc) = (alert_a.mjd_tt(), alert_b.mjd_tt(), alert_c.mjd_tt());
+        let dt_char = (tc - ta).max(1e-6);
+        let inv_dt2 = 1.0 / (dt_char * dt_char);
+        let epoch_mid = (ta + tb + tc) / 3.0;
+
+        // Tangent plane centred on the spherical midpoint of the extremes.
+        let mid = alert_a.equ_coord().spherical_midpoint(alert_c.equ_coord());
+        let plane = TangentPlane::new(mid);
+
+        // Project the three alerts onto the plane.
+        let tp_a = plane.project(alert_a.equ_coord());
+        let tp_b = plane.project(alert_b.equ_coord());
+        let tp_c = plane.project(alert_c.equ_coord());
+
+        let dts = [ta - epoch_mid, tb - epoch_mid, tc - epoch_mid];
+        let (tp_fit, v, a) = fit_quad_tangent(dts, [tp_a, tp_b, tp_c]);
+
+        // Per-alert anisotropic variances (RA, Dec independent).
+        let var_of = |o: &Observation| {
+            let e = o.equ_coord();
+            (e.ra_error * e.ra_error, e.dec_error * e.dec_error)
+        };
+        let (vxa, vya) = var_of(alert_a);
+        let (vxb, vyb) = var_of(alert_b);
+        let (vxc, vyc) = var_of(alert_c);
+
+        // Mean variance per tangent-plane axis.
+        let var_x = (vxa + vxb + vxc) / 3.0;
+        let var_y = (vya + vyb + vyc) / 3.0;
+
+        // Propagated covariances: position averages over 3 samples,
+        // velocity scales as σ² / Δt².
+        let cov_pos = Cov2::diag(var_x / 3.0, var_y / 3.0);
+        let cov_vel = Cov2::diag(var_x * inv_dt2, var_y * inv_dt2);
+
+        let model = TangentPlaneModel {
+            epoch_mid,
+            pos: PosWithCov {
+                tangent_point: tp_fit,
+                cov: cov_pos,
+            },
+            vel: VelWithCov { v, cov: cov_vel },
+            acc: Some(Acceleration(a)),
+        };
+
+        let flux_mean = (alert_a.photometry().magnitude
+            + alert_b.photometry().magnitude
+            + alert_c.photometry().magnitude)
+            / 3.0;
+        let flux_std = ((alert_a.photometry().magnitude - flux_mean).abs()
+            + (alert_b.photometry().magnitude - flux_mean).abs()
+            + (alert_c.photometry().magnitude - flux_mean).abs())
+            / 3.0;
+
+        let photom = SeedPhotometry::from_triplet(
+            flux_mean as f32,
+            flux_std as f32,
+            alert_a.photometry().filter.clone(),
+            alert_b.photometry().filter.clone(),
+            alert_c.photometry().filter.clone(),
+        );
+
+        Self {
+            key: seed_store.next_key(night_id),
+            plane_model: model,
+            photom,
+            n_obs: 3,
+            members: vec![
+                alert_a.id().clone(),
+                alert_b.id().clone(),
+                alert_c.id().clone(),
+            ],
+        }
     }
-    out
+
+    /// Convert triplets into quadratic [`SeedNode`] objects for a given night.
+    ///
+    /// This is a thin wrapper around [`SeedNode::from_triplet`].
+    ///
+    /// Parameters
+    /// ----------
+    /// trips : &Triplets
+    ///     Triplets produced by [`generate_triplets_from_pairs`].
+    /// night_id : NightId
+    ///     Night identifier assigned to all output seeds.
+    ///
+    /// Returns
+    /// -------
+    /// `Vec<SeedNode>`
+    ///     One seed per triplet, preserving input order.
+    pub fn extract_triplet_features<'alert_lf>(
+        trips: &Triplets<'alert_lf>,
+        seed_store: &mut SeedStore,
+        night_id: NightId,
+    ) -> Vec<Self> {
+        let mut out = Vec::with_capacity(trips.len());
+        for &Triplet { a, b, c } in trips.iter() {
+            out.push(SeedNode::from_triplet(seed_store, night_id, a, b, c));
+        }
+        out
+    }
 }
 
 #[cfg(test)]
@@ -836,7 +956,7 @@ mod triplet_gen_tests {
 
         let seed_store = &mut SeedStore::new();
 
-        let seeds = extract_triplet_features(&trips, seed_store, night_id);
+        let seeds = SeedNode::extract_triplet_features(&trips, seed_store, night_id);
 
         assert_eq!(seeds.len(), 2);
         assert_eq!(seeds[0].night_id(), night_id);
@@ -889,7 +1009,7 @@ mod triplet_gen_tests {
 
                 let night_id = NightId::new(7);
                 let seed_store = &mut SeedStore::new();
-                let seeds = extract_triplet_features(&trips, seed_store, night_id);
+                let seeds = SeedNode::extract_triplet_features(&trips, seed_store, night_id);
 
                 prop_assert_eq!(seeds.len(), trips.len());
                 for seed in seeds.iter() {

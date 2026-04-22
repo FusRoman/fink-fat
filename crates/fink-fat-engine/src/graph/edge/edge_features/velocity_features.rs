@@ -26,7 +26,7 @@
 //! Dependencies:
 //! - `FeatureCore`: precomputed, sanitized scalar intermediates.
 
-use crate::graph::edge::feature_core::FeatureCore;
+use crate::graph::edge::edge_features::feature_core::FeatureCore;
 
 /// Velocity/kinematic consistency features (dimensionless).
 ///

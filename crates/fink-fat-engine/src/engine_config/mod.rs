@@ -179,10 +179,10 @@ pub mod units;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use config::{Config, Environment, File};
+use photom::MJDTT;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    MJDTT,
     engine_config::{
         edge_config::EdgeConfig, error::ConfigError, log_level::LogLevel, pair_config::PairConfig,
         pipeline_policy::PersistPolicy, solver_config::SolverConfig, triplet_config::TripletConfig,
