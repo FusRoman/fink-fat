@@ -129,24 +129,17 @@
 //! -----------------------------------------------------------------------------
 
 pub mod edge_features;
-pub mod error;
-pub mod feature_core;
-pub mod photometry_features;
-pub mod position_features;
-pub mod uncertainty_features;
-pub mod velocity_features;
-
 pub mod edge_prediction;
+pub mod error;
 pub mod ranking_topk;
 
 use std::fmt;
 
 use ahash::AHashMap;
+use photom::{MJDTT, observation_dataset::ObsId};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    MJDTT,
-    alerts::DiaSourceId,
     engine_config::edge_config::EdgeConfig,
     graph::edge::{
         edge_features::EdgeFeatures,
@@ -256,19 +249,19 @@ impl Edge {
         dt_days: f64,
     ) -> Result<Self, EdgeBuilderError> {
         if !cost.is_finite() || cost <= 0.0 {
-            let from_ids: Vec<DiaSourceId> = from.members.iter().map(|k| k.dia_source_id).collect();
-            let to_ids: Vec<DiaSourceId> = to.members.iter().map(|k| k.dia_source_id).collect();
+            let from_ids: Vec<&ObsId> = from.members.iter().collect();
+            let to_ids: Vec<&ObsId> = to.members.iter().collect();
             return Err(EdgeBuilderError::ConstructionError(format!(
                 "Edge cost must be finite and > 0, got {cost} \
-                 (from dia_source_ids={from_ids:?}, to dia_source_ids={to_ids:?})",
+                 (from obs_ids={from_ids:?}, to obs_ids={to_ids:?})",
             )));
         }
         if !dt_days.is_finite() || dt_days <= 0.0 {
-            let from_ids: Vec<DiaSourceId> = from.members.iter().map(|k| k.dia_source_id).collect();
-            let to_ids: Vec<DiaSourceId> = to.members.iter().map(|k| k.dia_source_id).collect();
+            let from_ids: Vec<&ObsId> = from.members.iter().collect();
+            let to_ids: Vec<&ObsId> = to.members.iter().collect();
             return Err(EdgeBuilderError::ConstructionError(format!(
                 "dt_days must be finite and > 0, got {dt_days} \
-                 (from dia_source_ids={from_ids:?}, to dia_source_ids={to_ids:?})",
+                 (from obs_ids={from_ids:?}, to obs_ids={to_ids:?})",
             )));
         }
         Ok(Self {
@@ -370,11 +363,14 @@ impl Edge {
         progress_sink: &dyn StageProgress,
     ) -> Result<Vec<Self>, EdgeBuilderError> {
         // right seed are sorted by epoch_mid, so the first one has the minimum epoch.
-        let right_seed_t0 = right.first().map(|s| s.plane.epoch_mid).ok_or_else(|| {
-            EdgeBuilderError::InvalidSeeds(
-                "no seed in the right seeds slice to get t0 in the edge builder".to_string(),
-            )
-        })?;
+        let right_seed_t0 = right
+            .first()
+            .map(|s| s.plane_model.epoch_mid)
+            .ok_or_else(|| {
+                EdgeBuilderError::InvalidSeeds(
+                    "no seed in the right seeds slice to get t0 in the edge builder".to_string(),
+                )
+            })?;
 
         let time_binner = UniformTimeBinner::new(right_seed_t0, time_binner_width);
 
@@ -966,12 +962,15 @@ fn apply_ml_post_filter<'a>(
 
 #[cfg(test)]
 mod edge_mod_tests {
-    use std::sync::Arc;
-
     use camino::Utf8PathBuf;
+    use photom::{
+        coordinates::equatorial::EquCoord,
+        observation_dataset::observation::Observation,
+        photometry::{Filter, Photometry as PhotomPhotometry},
+    };
 
     use crate::{
-        Alert, AlertKey,
+        astro_math::arcsec_to_rad,
         engine_config::edge_config::EdgeConfig,
         graph::edge::edge_prediction::{EdgeRankingModel, EdgeRankingModelPool},
         night_id::NightId,
@@ -991,28 +990,20 @@ mod edge_mod_tests {
         manifest_dir.join("tests/ml_model/edge_classifier.onnx")
     }
 
-    /// Minimal alert at `(ra, dec)` on `night` at epoch `mjd`, with 1-arcsec
+    /// Minimal observation at `(ra, dec)` at epoch `mjd`, with 1-arcsec
     /// positional errors and band `1` (g).
-    fn make_alert(id: u64, night: u32, mjd: f64, ra: f64, dec: f64) -> Alert {
-        const ARCSEC: f64 = std::f64::consts::PI / (180.0 * 3600.0);
-        Alert {
-            key: AlertKey {
-                night_id: NightId::new(night),
-                dia_source_id: id,
-            },
-            ra,
-            ra_err: ARCSEC,
-            dec,
-            dec_err: ARCSEC,
-            mjd_tt: mjd,
-            flux: 1000.0,
-            flux_err: 50.0,
-            band: 1,
-            observer_mpc_code: Arc::new("500".into()),
-        }
+    fn make_obs(id: u64, mjd: f64, ra: f64, dec: f64) -> Observation {
+        let pos_err = arcsec_to_rad(1.0);
+        let equ_coord = EquCoord::new(ra, pos_err, dec, pos_err);
+        let photometry = PhotomPhotometry {
+            magnitude: 1000.0,
+            error: 50.0,
+            filter: Filter::Int(1),
+        };
+        Observation::new(id, equ_coord, photometry, mjd, None)
     }
 
-    /// Build a `SeedNode` from two alerts 30 min apart on `night`, starting at
+    /// Build a `SeedNode` from two observations 30 min apart on `night`, starting at
     /// `(ra, dec)` with angular velocity `vx` rad/day in RA.
     fn make_seed(
         store: &mut SeedStore,
@@ -1025,8 +1016,8 @@ mod edge_mod_tests {
         vx: f64,
     ) -> SeedNode {
         let dt = 0.5 / 24.0; // 30 min in days
-        let a = make_alert(id_a, night, mjd, ra, dec);
-        let b = make_alert(id_b, night, mjd + dt, ra + vx * dt, dec);
+        let a = make_obs(id_a, mjd, ra, dec);
+        let b = make_obs(id_b, mjd + dt, ra + vx * dt, dec);
         SeedNode::from_pair(store, NightId::new(night), &a, &b, None)
             .expect("test seeds should form a valid pair")
     }

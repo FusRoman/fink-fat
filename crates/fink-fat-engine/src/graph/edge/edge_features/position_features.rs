@@ -31,7 +31,7 @@
 //! - `FeatureCore`: precomputed, sanitized scalar intermediates.
 //!
 
-use crate::graph::edge::feature_core::FeatureCore;
+use crate::graph::edge::edge_features::feature_core::FeatureCore;
 
 /// Position/innovation consistency features (dimensionless).
 ///
@@ -208,13 +208,13 @@ impl EdgePositionFeatures {
         Self {
             chi2_pos: core.chi2_pos,
             log_chi2_pos: core.log_chi2_pos,
-            z_dx: core.z_dx,
-            z_dy: core.z_dy,
+            z_dx: core.z_score.dx,
+            z_dy: core.z_score.dy,
             z_resid_norm: core.z_resid_norm,
-            z_along: core.z_along,
-            z_cross: core.z_cross,
-            chol_z1: core.chol_z1,
-            chol_z2: core.chol_z2,
+            z_along: core.z_along_cross.dx,
+            z_cross: core.z_along_cross.dy,
+            chol_z1: core.chol_z.dx,
+            chol_z2: core.chol_z.dy,
             chol_z_norm: core.chol_z_norm,
         }
     }

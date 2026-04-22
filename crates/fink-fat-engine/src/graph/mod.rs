@@ -1,9 +1,9 @@
 pub mod edge;
 
 use ahash::AHashMap;
+use photom::MJDTT;
 
 use crate::{
-    MJDTT,
     engine_config::edge_config::EdgeConfig,
     graph::edge::{Edge, EdgeKey, edge_prediction::EdgeRankingModelPool, error::EdgeBuilderError},
     persistence::edge_journal::edge_op::EdgeOp,

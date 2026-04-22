@@ -25,7 +25,7 @@
 //!   ensure stable feature export (Parquet / ONNX).
 //!
 
-use crate::{graph::edge::feature_core::FeatureCore, seeding::SeedNode};
+use crate::{graph::edge::edge_features::feature_core::FeatureCore, seeding::SeedNode};
 
 /// Photometry features for an edge (mostly cadence-invariant).
 ///
@@ -83,7 +83,7 @@ pub struct EdgePhotometryFeatures {
     /// Comparing fluxes across different filters can introduce strong systematic
     /// offsets (e.g., color effects). This feature allows an ML model to learn
     /// that a flux mismatch is less informative when bands do not overlap.
-    pub band_shared: f64,
+    pub band_shared: bool,
 }
 
 impl EdgePhotometryFeatures {
@@ -119,15 +119,15 @@ impl EdgePhotometryFeatures {
         // 1) Extract aggregated photometry statistics
         // ---------------------------------------------------------------------
         // Mean flux for each seed (cast to f64 for stable numeric operations).
-        let flux_i = from.photom.flux_mean as f64;
-        let flux_j = to.photom.flux_mean as f64;
+        let flux_i = from.photom.mag_mean as f64;
+        let flux_j = to.photom.mag_mean as f64;
 
         // Absolute difference in mean flux between the two seeds.
         let flux_abs_diff = (flux_j - flux_i).abs();
 
         // Per-seed flux standard deviation (uncertainty proxy).
-        let sigma_i = from.photom.flux_std as f64;
-        let sigma_j = to.photom.flux_std as f64;
+        let sigma_i = from.photom.mag_std as f64;
+        let sigma_j = to.photom.mag_std as f64;
 
         // ---------------------------------------------------------------------
         // 2) z_flux: pooled-uncertainty normalized flux difference
@@ -166,11 +166,7 @@ impl EdgePhotometryFeatures {
         // ---------------------------------------------------------------------
         // If seeds share at least one band, direct photometric comparisons are
         // more meaningful (less color-systematic).
-        let band_shared = if from.photom.shares_any_band(&to.photom) {
-            1.0
-        } else {
-            0.0
-        };
+        let band_shared = from.photom.shares_any_band(&to.photom);
 
         // ---------------------------------------------------------------------
         // 5) Sanitize outputs

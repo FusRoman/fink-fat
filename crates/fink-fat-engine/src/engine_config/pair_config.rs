@@ -175,10 +175,11 @@
 //!   trade-off of neighborhood search.
 //! - `TripletConfig` extends validated pairs into higher-quality seeds.
 
+use photom::MJDTT;
 use serde::{Deserialize, Serialize};
 
 use crate::engine_config::units::{de_ang_speed_rad_per_day, de_time_days};
-use crate::{MJDTT, error::SeedError};
+use crate::error::SeedError;
 
 /// Parameters controlling **pair generation** between alerts `(a, b)`.
 ///
