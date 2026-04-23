@@ -1,8 +1,9 @@
 use ahash::AHashMap;
+use photom::NightId;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    night_id::{NightId, PairingMode},
+    night_id::PairingMode,
     persistence::{
         compression::Compression, error::PersistenceIoError, layout::PersistenceLayout,
         manifest::Manifest,
@@ -356,12 +357,9 @@ mod seed_store_tests {
     };
 
     use super::*;
-    use crate::{
-        night_id::NightId,
-        seeding::{
-            photometry::SeedPhotometry,
-            tangent_plane::{PosWithCov, TangentPlaneModel, VelWithCov},
-        },
+    use crate::seeding::{
+        photometry::SeedPhotometry,
+        tangent_plane::{PosWithCov, TangentPlaneModel, VelWithCov},
     };
 
     // -------------------------------------------------------------------------

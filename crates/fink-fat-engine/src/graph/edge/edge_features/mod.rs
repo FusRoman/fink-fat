@@ -885,10 +885,10 @@ mod edge_feature_tests {
     use super::*;
     use crate::{
         astro_math::arcsec_to_rad,
-        night_id::NightId,
         seeding::{SeedNode, store::SeedStore},
     };
     use photom::{
+        NightId,
         coordinates::equatorial::EquCoord,
         observation_dataset::observation::Observation,
         photometry::{Filter, Photometry as PhotomPhotometry},

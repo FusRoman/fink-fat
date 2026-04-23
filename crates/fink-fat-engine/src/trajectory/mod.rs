@@ -1,8 +1,9 @@
 pub mod error;
 pub mod track_id;
 
+use photom::observation_dataset::{ObsDataset, observation::Observation};
+
 use crate::{
-    Alert, AlertStore,
     graph::edge::EdgeKey,
     seeding::{SeedKey, error::SeedingError, store::SeedStore},
     trajectory::{
@@ -44,7 +45,7 @@ impl TrackHypothesis {
 
     pub fn track_id(
         &self,
-        alert_store: &AlertStore,
+        obs_dataset: &ObsDataset,
         seed_store: &SeedStore,
     ) -> Result<TrackId, TrackError> {
         let seeds = self
@@ -59,7 +60,7 @@ impl TrackHypothesis {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        track_id_from_nodes(alert_store, &seeds)
+        track_id_from_nodes(obs_dataset, &seeds)
     }
 
     /// Get owned copies of all alerts in this track.
@@ -72,11 +73,11 @@ impl TrackHypothesis {
     /// ------
     /// * `Ok(Vec<Alert>)` – Cloned alerts in observation time order.
     /// * `Err(TrackError::AlertKeyNotFound)` – If any alert key is missing from store.
-    pub fn get_alerts(
+    pub fn get_alerts<'obs>(
         &self,
-        alert_store: &AlertStore,
+        obs_dataset: &'obs ObsDataset,
         seed_store: &SeedStore,
-    ) -> Result<Vec<Alert>, TrackError> {
+    ) -> Result<Vec<&'obs Observation>, TrackError> {
         self.nodes
             .iter()
             .map(|&seed_key| {
@@ -84,11 +85,7 @@ impl TrackHypothesis {
                     .try_get_seed(seed_key)
                     .ok_or(SeedingError::SeedKeyNotFound(seed_key))?;
 
-                Ok(seed
-                    .resolve_members(alert_store)?
-                    .into_iter()
-                    .cloned()
-                    .collect::<Vec<_>>())
+                Ok(seed.resolve_members(obs_dataset)?)
             })
             .collect::<Result<Vec<_>, _>>()
             .map(|nested| nested.into_iter().flatten().collect())

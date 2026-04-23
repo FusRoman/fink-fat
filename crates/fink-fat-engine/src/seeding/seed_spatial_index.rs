@@ -244,14 +244,13 @@ impl<'seed_lf, 'binner_lf> SeedSpatialIndex<'seed_lf, 'binner_lf> {
 #[cfg(test)]
 mod seed_spatial_index_tests {
     use super::*;
-    use photom::photometry::Filter;
+    use photom::{NightId, photometry::Filter};
     use proptest::prelude::*;
 
     use std::ptr;
 
     use crate::{
         astro_math::arcsec_to_rad,
-        night_id::NightId,
         seeding::{
             SeedKey, SeedNode,
             photometry::SeedPhotometry,

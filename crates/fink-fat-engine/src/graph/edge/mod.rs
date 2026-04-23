@@ -964,6 +964,7 @@ fn apply_ml_post_filter<'a>(
 mod edge_mod_tests {
     use camino::Utf8PathBuf;
     use photom::{
+        NightId,
         coordinates::equatorial::EquCoord,
         observation_dataset::observation::Observation,
         photometry::{Filter, Photometry as PhotomPhotometry},
@@ -973,7 +974,6 @@ mod edge_mod_tests {
         astro_math::arcsec_to_rad,
         engine_config::edge_config::EdgeConfig,
         graph::edge::edge_prediction::{EdgeRankingModel, EdgeRankingModelPool},
-        night_id::NightId,
         pipeline::hooks::NoopProgress,
         seeding::{SeedNode, seed_spatial_index::SeedSpatialIndex, store::SeedStore},
         spacetime_bucket::{healpix_binner::HealpixBinner, uniform_time_binner::UniformTimeBinner},

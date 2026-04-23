@@ -28,9 +28,10 @@
 //!
 //! - [`run`] — executes the full stage, invoked by the pipeline runner.
 
+use photom::NightId;
+
 use crate::{
-    error::EngineError,
-    night_id::NightId,
+    error::{EngineError, OptionExt},
     pipeline::{
         PipelineContext,
         hooks::{PipelineHooks, StageMeta, StageReport},
@@ -78,10 +79,9 @@ pub fn run(
             let new_nights: Vec<NightId> = ctx
                 .runtime_state
                 .get_new_night_ids()
-                .ok_or_else(|| EngineError::StageFailed {
-                    stage: PipelineStage::BuildEdges,
-                    message: "runtime state does not contain new night IDs\nThe stage IngestNight must be run before BuildEdges".to_string(),
-                })?
+                .stage_err(PipelineStage::BuildEdges,
+                    "runtime state does not contain new night IDs\nThe stage IngestNight must be run before BuildEdges".to_string()
+                )?
                 .clone();
 
             let edge_config = &ctx.engine_config.edges;
@@ -191,7 +191,7 @@ pub fn run(
                 // Build the SeedSpatialIndex once per right night
                 // instead of rebuilding it inside add_inter_night_edges for
                 // every (left, right) pair sharing the same right night.
-                let right_seed_t0 = right_nodes[0].plane.epoch_mid;
+                let right_seed_t0 = right_nodes[0].plane_model.epoch_mid;
                 let time_binner = UniformTimeBinner::new(right_seed_t0, time_binner_width);
                 let right_index =
                     SeedSpatialIndex::build(right_nodes, &spatial_binner, &time_binner);
@@ -207,21 +207,13 @@ pub fn run(
                         continue;
                     };
 
-                    ctx.runtime_state
-                        .graph
-                        .add_inter_night_edges_with_index(
-                            left_vec,
-                            &right_index,
-                            edge_config,
-                            ctx.edge_models.as_ref(),
-                            stage_sink,
-                        )
-                        .map_err(|e| EngineError::StageFailed {
-                            stage: PipelineStage::BuildEdges,
-                            message: format!(
-                                "add_inter_night_edges failed for ({left_night},{right_night}): {e:?}"
-                            ),
-                        })?;
+                    ctx.runtime_state.graph.add_inter_night_edges_with_index(
+                        left_vec,
+                        &right_index,
+                        edge_config,
+                        ctx.edge_models.as_ref(),
+                        stage_sink,
+                    )?;
 
                     pairs_processed += 1;
                 }

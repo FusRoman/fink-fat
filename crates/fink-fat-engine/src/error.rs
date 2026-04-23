@@ -4,7 +4,6 @@ use outfit::OutfitError;
 use thiserror::Error;
 
 use crate::{
-    alerts::error::AlertStoreError,
     engine_config::error::ConfigError,
     graph::edge::error::EdgeBuilderError,
     persistence::error::{PersistenceError, PersistenceIoError},
@@ -179,14 +178,23 @@ pub enum EngineError {
     /// Config validation error
     #[error(transparent)]
     Config(#[from] ConfigError),
-
-    /// Alert store error
-    #[error(transparent)]
-    AlertStore(#[from] AlertStoreError),
 }
 
 impl From<PersistenceIoError> for EngineError {
     fn from(err: PersistenceIoError) -> Self {
         EngineError::Persistence(PersistenceError::Io(err))
+    }
+}
+
+pub trait OptionExt<T> {
+    fn stage_err(self, stage: PipelineStage, message: impl Into<String>) -> Result<T, EngineError>;
+}
+
+impl<T> OptionExt<T> for Option<T> {
+    fn stage_err(self, stage: PipelineStage, message: impl Into<String>) -> Result<T, EngineError> {
+        self.ok_or_else(|| EngineError::StageFailed {
+            stage,
+            message: message.into(),
+        })
     }
 }

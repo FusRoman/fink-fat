@@ -115,14 +115,15 @@
 //!   nested scopes under the per-night sink using `StageProgress::child()`.
 //! - If you need per-night instrumentation, insert timers around the bucketization/pairs/triplets steps.
 
+use photom::{
+    MJDTT, NightId,
+    observation_dataset::{iter::MemLayoutObservations, observation::Observation},
+};
 use rayon::prelude::*;
 
 use crate::{
-    Alert,
-    alerts::AlertSlice,
     engine_config::{pair_config::PairConfig, triplet_config::TripletConfig},
-    error::EngineError,
-    night_id::NightId,
+    error::{EngineError, OptionExt},
     pipeline::{
         PipelineContext,
         hooks::{PipelineHooks, StageMeta, StageProgress, StageReport},
@@ -182,7 +183,7 @@ struct NightSeedResult {
 ///   (cannot determine `t0` for time binning).
 fn process_one_night(
     night_id: NightId,
-    alerts: &[Alert],
+    alerts: &[Observation],
     spatial_binner: &HealpixBinner,
     pair_cfg: &PairConfig,
     triplet_cfg: &TripletConfig,
@@ -192,12 +193,15 @@ fn process_one_night(
     let n_alerts = alerts.len() as u64;
 
     // Milestone 1: determine per-night t0 and initialise time binning.
-    let t0 = alerts.get_t0().ok_or_else(|| EngineError::StageFailed {
-        stage: PipelineStage::BuildSeeds,
-        message: format!(
-            "night {night_id} contains no alerts, cannot determine t0 for time binning"
-        ),
-    })?;
+    let t0: MJDTT = alerts
+        .iter()
+        .min()
+        .stage_err(
+            PipelineStage::BuildSeeds,
+            "cannot determine t0 for time binning: night contains zero alerts",
+        )?
+        .mjd_tt();
+
     let time_binner = UniformTimeBinner::new(t0, time_binner_width);
     tracing::trace!(%night_id, t0, time_binner_width, "t0 and time binner initialised");
     night_sink.inc(1);
@@ -214,7 +218,7 @@ fn process_one_night(
     let n_pairs = ps.len() as u64;
     tracing::debug!(%night_id, n_pairs, "pairs generated");
     let mut local_store = SeedStore::new();
-    let pair_seeds = pairs::extract_pair_features(&ps, &mut local_store, night_id, None);
+    let pair_seeds = SeedNode::extract_pair_features(&ps, &mut local_store, night_id, None);
     tracing::trace!(%night_id, n_pair_seeds = pair_seeds.len(), "pair features extracted");
     night_sink.inc(1);
 
@@ -228,7 +232,7 @@ fn process_one_night(
     );
     let n_triplets = ts.len() as u64;
     tracing::debug!(%night_id, n_triplets, "triplets generated");
-    let triplet_seeds = triplets::extract_triplet_features(&ts, &mut local_store, night_id);
+    let triplet_seeds = SeedNode::extract_triplet_features(&ts, &mut local_store, night_id);
     tracing::trace!(%night_id, n_triplet_seeds = triplet_seeds.len(), "triplet features extracted");
     night_sink.inc(1);
 
@@ -371,15 +375,16 @@ pub fn run(
             let nights_to_process: Vec<NightId> =
                 ctx.runtime_state
                     .get_new_night_ids()
-                    .ok_or_else(|| EngineError::StageFailed {
-                        stage: PipelineStage::BuildSeeds,
-                        message: "runtime state does not contain new night IDs\nThe stage IngestNight must be run before BuildSeeds".to_string(),
-                    })?
+                    .stage_err(
+                        PipelineStage::BuildSeeds,
+                        "runtime state does not contain new night IDs\nThe stage IngestNight must be run before BuildSeeds"
+                    )?
                     .clone();
-            stage_sink.set_total(nights_to_process.len() as u64);
+            let total_nights = nights_to_process.len();
+            stage_sink.set_total(total_nights as u64);
 
             tracing::debug!(
-                n_nights = nights_to_process.len(),
+                n_nights = total_nights,
                 healpix_depth = ctx.engine_config.healpix_depth,
                 time_binner_width,
                 "BuildSeeds starting",
@@ -390,12 +395,33 @@ pub fn run(
             // them across threads without holding a mutable borrow on ctx.
             // All night IDs are validated here; missing ones fail immediately.
             // -----------------------------------------------------------------
-            let nights_with_alerts: Vec<(NightId, &[Alert])> = {
-                let night_iter = ctx
-                    .runtime_state
-                    .alert_store
-                    .night_iter(&nights_to_process)?;
-                nights_to_process.iter().copied().zip(night_iter).collect()
+            let nights_with_alerts: Vec<(NightId, &[Observation])> = {
+                let mut vec_to_return = Vec::with_capacity(total_nights);
+                for night_id in nights_to_process {
+                    let obs_night = ctx
+                        .runtime_state
+                        .obs_dataset
+                        .materialize_night(&night_id)
+                        .stage_err(
+                            PipelineStage::BuildSeeds,
+                            format!("failed to materialize night {night_id} from obs dataset")
+                                .as_str(),
+                        )?;
+                    match obs_night {
+                        MemLayoutObservations::Split(_) => {
+                            return Err(EngineError::StageFailed {
+                                stage: PipelineStage::BuildSeeds,
+                                message: format!(
+                                    "night {night_id} is in split layout, expected contiguous layout; cannot borrow &[Observation] slice"
+                                ),
+                            });
+                        }
+                        MemLayoutObservations::Contiguous(observations) => {
+                            vec_to_return.push((night_id, observations))
+                        }
+                    }
+                }
+                vec_to_return
             };
 
             // -----------------------------------------------------------------
@@ -447,7 +473,7 @@ pub fn run(
             }
 
             tracing::debug!(
-                total_nights = nights_to_process.len(),
+                total_nights = total_nights,
                 total_alerts,
                 total_pairs,
                 total_triplets,
@@ -456,7 +482,7 @@ pub fn run(
             );
 
             Ok(vec![
-                ("nights", nights_to_process.len() as u64),
+                ("nights", total_nights as u64),
                 ("alerts", total_alerts),
                 ("pairs", total_pairs),
                 ("triplets", total_triplets),

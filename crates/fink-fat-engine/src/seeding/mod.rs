@@ -69,13 +69,13 @@ use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 
 use photom::{
+    NightId,
     coordinates::equatorial::EquCoord,
     observation_dataset::{ObsDataset, ObsId, observation::Observation},
 };
 
 use crate::{
     display_format::indent_block,
-    night_id::NightId,
     persistence::{
         SEED_STORE_SCHEMA_VERSION, compression::Compression, envelope::DiskEnvelope,
         error::PersistenceIoError, layout::PersistenceLayout, manifest::Manifest,

@@ -1,6 +1,7 @@
+use photom::NightId;
 use thiserror::Error;
 
-use crate::{night_id::NightId, seeding::SeedKey};
+use crate::seeding::SeedKey;
 
 #[derive(Debug)]
 pub enum SeedOrigin {

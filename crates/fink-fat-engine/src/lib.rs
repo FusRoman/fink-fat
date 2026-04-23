@@ -188,7 +188,6 @@
 //! The following unit type aliases are defined at the crate root:
 //! [`MJDTT`], [`Radian`], [`Arcsec`].
 
-pub mod alerts;
 pub mod astro_math;
 pub mod display_format;
 pub mod engine_config;
