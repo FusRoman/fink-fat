@@ -1,6 +1,7 @@
+use photom::observation_dataset::ObsId;
 use thiserror::Error;
 
-use crate::{AlertKey, seeding::SeedKey};
+use crate::seeding::SeedKey;
 
 /// Errors raised when validating a [`DiskEnvelope`](crate::persistence::envelope::DiskEnvelope).
 ///
@@ -35,9 +36,9 @@ pub enum PersistenceIoError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
-    /// Bitcode encode/decode error.
-    #[error("bitcode error: {0}")]
-    Bitcode(String),
+    /// Postcard encode/decode error.
+    #[error("postcard error: {0}")]
+    Postcard(String),
 
     /// Arrow / Parquet error (schema construction, record batch build, writer).
     #[error("arrow/parquet error: {0}")]
@@ -114,8 +115,8 @@ pub enum BorrowError {
     #[error("missing seed for key {0:?}")]
     MissingSeed(SeedKey),
 
-    #[error("missing alert for key {0:?}")]
-    MissingAlert(AlertKey),
+    #[error("missing observation for id {0}")]
+    MissingObservation(ObsId),
 }
 
 #[derive(Debug, Error)]

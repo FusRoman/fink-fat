@@ -1,6 +1,8 @@
 pub mod hooks;
 pub mod stages;
 
+use photom::observation_dataset::ObsDataset;
+
 use crate::{
     engine_config::{EngineConfig, pipeline_policy::PersistPolicy},
     error::EngineError,
@@ -8,18 +10,18 @@ use crate::{
     persistence::{PersistenceManager, runtime_state::RuntimeState},
     pipeline::{
         hooks::{PipelineHooks, StageReport},
-        stages::{PipelineStage, alert_inputs::input_uri::InputUri},
+        stages::PipelineStage,
     },
     solver::solver_manager::SolverManager,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct PipelineInputs {
     /// Input alert batch (typically a Parquet file).
-    pub alerts_uri: InputUri,
+    pub new_observation_dataset: ObsDataset,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct PipelinePlan {
     pub stages: Vec<PipelineStage>,
     pub persist: PersistPolicy,
@@ -28,7 +30,7 @@ pub struct PipelinePlan {
 
 #[derive(Debug)]
 pub struct PipelineContext<'rt> {
-    pub plan: &'rt PipelinePlan,
+    pub plan: &'rt mut PipelinePlan,
     pub persistence: &'rt PersistenceManager,
     pub runtime_state: &'rt mut RuntimeState,
     pub engine_config: &'rt EngineConfig,

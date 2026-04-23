@@ -3,49 +3,7 @@ use std::fmt;
 
 use crate::error::FinkFatError;
 
-/// Logical identifier for a night of observation.
-///
-/// Notes
-/// -----
-/// - By default wraps an `u32`.
-/// - Typically represents an MJD day number (e.g., 60312).
-/// - Must be stable across runs because it is used as a directory name.
-#[derive(
-    Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash, Default,
-)]
-pub struct NightId(pub u32);
-
-impl NightId {
-    /// Create a new `NightId` from an integer.
-    pub fn new(id: u32) -> Self {
-        Self(id)
-    }
-
-    /// Return the underlying integer.
-    pub fn value(self) -> u32 {
-        self.0
-    }
-}
-
-impl fmt::Display for NightId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl From<u32> for NightId {
-    #[inline]
-    fn from(v: u32) -> Self {
-        NightId(v)
-    }
-}
-
-impl From<NightId> for u32 {
-    #[inline]
-    fn from(n: NightId) -> Self {
-        n.0
-    }
-}
+pub use photom::NightId;
 
 /// Pairing mode for night-to-night trajectory linking.
 ///

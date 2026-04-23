@@ -294,7 +294,7 @@ impl SeedNode {
     /// - The scalar $S_{\mathrm{scalar}}$ is floored by [`FeatureCore::FLOOR`]
     ///   to prevent division by zero.
     #[inline]
-    pub fn chi2_with_cwna(
+    pub(crate) fn chi2_with_cwna(
         &self,
         core: &FeatureCore,
         to: &SeedNode,

@@ -30,8 +30,8 @@ pub fn run(
                 .persistence
                 .load_runtime_state(ctx.engine_config, stage_sink)?;
 
-            let n_nights = state.alert_store.n_nights() as u64;
-            let n_alerts = state.alert_store.n_alerts() as u64;
+            let n_nights = state.obs_dataset.nb_night().unwrap_or(0) as u64;
+            let n_alerts = state.obs_dataset.observation_count() as u64;
             let n_seeds = state
                 .seed_store
                 .iter()
@@ -49,7 +49,7 @@ pub fn run(
 
             // Populate the runtime state with loaded data.
             ctx.runtime_state.manifest = state.manifest;
-            ctx.runtime_state.alert_store = state.alert_store;
+            ctx.runtime_state.obs_dataset = state.obs_dataset;
             ctx.runtime_state.seed_store = state.seed_store;
             ctx.runtime_state.graph = state.graph;
 

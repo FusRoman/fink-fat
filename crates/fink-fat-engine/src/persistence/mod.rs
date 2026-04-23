@@ -9,10 +9,9 @@ pub mod runtime_state;
 use std::fs;
 
 use camino::Utf8PathBuf;
+use photom::observation_dataset::ObsDataset;
 
 use crate::{
-    Alert,
-    alerts::{AlertSlice, store::AlertStore},
     engine_config::EngineConfig,
     error::{EngineError, FinkFatError},
     graph::{AlertLinkageDAG, edge::Edge},
@@ -44,6 +43,9 @@ pub const GRAPH_SCHEMA_VERSION: u32 = 1;
 
 /// Optional: top-level state/manifest schema version (if you persist one).
 pub const STATE_SCHEMA_VERSION: u32 = 1;
+
+/// ObsDataset schema version.
+pub const OBS_DATASET_SCHEMA_VERSION: u32 = 1;
 
 /// High-level persistence orchestrator.
 #[derive(Clone, Debug)]
@@ -112,46 +114,33 @@ impl PersistenceManager {
     // Low-level per-night I/O (alerts/seeds)
     // -------------------------------------------------------------------------
 
-    /// Save alerts for one night and update manifest night entry.
+    /// Save seeds for one night and update manifest night entry.
     pub fn save_night_manifest(
         &self,
         manifest: &mut Manifest,
         night_id: NightId,
         created_unix_s: i64,
-        alerts: &[Alert],
         seeds: &[SeedNode],
         compression: Compression,
     ) -> Result<(), PersistenceIoError> {
-        let abs_alert_path =
-            alerts.save_alerts_night(&self.layout, manifest, night_id, compression)?;
         let abs_seed_path =
             seeds.save_seeds_night(&self.layout, manifest, night_id, compression)?;
 
         let entry = NightManifestEntry::new(
             night_id,
-            self.layout
-                .to_relative(&abs_alert_path)
-                .unwrap_or_else(|| abs_alert_path.clone()),
+            // No per-night alert file in the ObsDataset-based persistence model;
+            // use an empty relative path as a placeholder.
+            Utf8PathBuf::new(),
             self.layout
                 .to_relative(&abs_seed_path)
                 .unwrap_or_else(|| abs_seed_path.clone()),
-            Some(alerts.len() as u64),
+            None,
             Some(seeds.len() as u64),
         );
         manifest.upsert_night(entry);
         manifest.created_unix_s = created_unix_s;
 
         Ok(())
-    }
-
-    /// Load alerts payload for one night.
-    pub fn load_alerts_for_night(
-        &self,
-        relpath: &Utf8PathBuf,
-    ) -> Result<Vec<Alert>, PersistenceIoError> {
-        let path = self.layout.resolve_relative(relpath);
-        DiskEnvelope::<Vec<Alert>>::load_enveloped(&path, ALERT_STORE_SCHEMA_VERSION)
-            .map_err(|e| e.with_path(&path))
     }
 
     /// Load seeds payload for one night.
@@ -162,6 +151,52 @@ impl PersistenceManager {
         let path = self.layout.resolve_relative(relpath);
         DiskEnvelope::<Vec<SeedNode>>::load_enveloped(&path, SEED_STORE_SCHEMA_VERSION)
             .map_err(|e| e.with_path(&path))
+    }
+
+    /// Save the observation dataset to disk.
+    ///
+    /// Arguments
+    /// ---------
+    /// * `dataset` - The [`ObsDataset`] to persist.
+    /// * `compression` - Compression algorithm to apply to the payload.
+    ///
+    /// Return
+    /// ------
+    /// `Ok(())` on success, or a [`PersistenceIoError`] on I/O or serialization failure.
+    pub fn save_obs_dataset(
+        &self,
+        dataset: &ObsDataset,
+        compression: Compression,
+    ) -> Result<(), PersistenceIoError> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let created_unix_s = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let path = self.layout.obs_dataset_path();
+        envelope::save_borrowed_enveloped(
+            dataset,
+            OBS_DATASET_SCHEMA_VERSION,
+            created_unix_s,
+            compression,
+            &path,
+        )
+        .map_err(|e| e.with_path(&path))
+    }
+
+    /// Load the observation dataset from disk.
+    ///
+    /// Return
+    /// ------
+    /// The persisted [`ObsDataset`], or an empty one if no file exists yet (first run).
+    /// Any other I/O or deserialization error is propagated.
+    pub fn load_obs_dataset(&self) -> Result<ObsDataset, PersistenceIoError> {
+        let path = self.layout.obs_dataset_path();
+        match DiskEnvelope::<ObsDataset>::load_enveloped(&path, OBS_DATASET_SCHEMA_VERSION) {
+            Ok(dataset) => Ok(dataset),
+            Err(e) if e.is_not_found() => Ok(ObsDataset::empty()),
+            Err(e) => Err(e.with_path(&path)),
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -237,18 +272,16 @@ impl PersistenceManager {
         let (night_data, edges) = rt.block_on(async move {
             use tokio::task::JoinSet;
 
-            type NightLoadResult = Result<(NightId, Vec<Alert>, Vec<SeedNode>), PersistenceIoError>;
+            type NightLoadResult = Result<(NightId, Vec<SeedNode>), PersistenceIoError>;
 
-            // --- Spawn one task per night (alerts + seeds together) ----------
+            // --- Spawn one task per night (seeds only) -------------------
             let mut night_handles: JoinSet<NightLoadResult> = JoinSet::new();
 
             for entry in nights_clone {
                 let pm = pm.clone();
                 night_handles.spawn_blocking(move || {
-                    let alerts =
-                        pm.load_alerts_for_night(&entry.alerts_rel_path().to_path_buf())?;
                     let seeds = pm.load_seeds_for_night(&entry.seeds_rel_path().to_path_buf())?;
-                    Ok((entry.night_id, alerts, seeds))
+                    Ok((entry.night_id, seeds))
                 });
             }
 
@@ -261,7 +294,7 @@ impl PersistenceManager {
             });
 
             // --- Collect per-night results -----------------------------------
-            let mut night_data: Vec<(NightId, Vec<Alert>, Vec<SeedNode>)> = Vec::new();
+            let mut night_data: Vec<(NightId, Vec<SeedNode>)> = Vec::new();
             while let Some(res) = night_handles.join_next().await {
                 let item = res
                     .map_err(|e| {
@@ -287,28 +320,32 @@ impl PersistenceManager {
         })?;
 
         // All I/O is done — report progress as a batch.
-        stage_sink.inc(3); // alerts + seeds + edges
+        stage_sink.inc(3); // seeds + edges (alerts not persisted separately)
 
         // ---------------------------------------------------------------
         // 6. Populate stores sequentially (CPU, fast).
         // ---------------------------------------------------------------
-        let mut alert_store = AlertStore::new();
         let mut seed_store: SeedStore = SeedStore::new();
 
-        for (night_id, alerts, seeds) in night_data {
-            alert_store.insert(night_id, alerts);
+        for (night_id, seeds) in night_data {
             seed_store.insert_vec_seed(night_id, seeds);
         }
 
         // ---------------------------------------------------------------
-        // 7. Build inter-night graph from the loaded edge set (CPU).
+        // 7. Load the global ObsDataset from disk (single file).
+        //    Falls back to empty on first run when no file exists yet.
+        // ---------------------------------------------------------------
+        let obs_dataset = self.load_obs_dataset()?;
+
+        // ---------------------------------------------------------------
+        // 8. Build inter-night graph from the loaded edge set (CPU).
         // ---------------------------------------------------------------
         let graph = AlertLinkageDAG::from_edges(edges);
         stage_sink.inc(1);
 
         Ok(RuntimeState::from_disk(
             manifest,
-            alert_store,
+            obs_dataset,
             seed_store,
             graph,
         ))

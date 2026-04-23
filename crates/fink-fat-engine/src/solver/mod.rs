@@ -73,10 +73,10 @@
 //! - `min_cost_flow` – (optional) global optimization solver for larger components.
 
 use ahash::AHashMap;
-use outfit::{MJD, trajectories::batch_reader::ObservationBatch};
+use outfit::{MJD, constants::Radian, trajectories::batch_reader::ObservationBatch};
+use photom::observation_dataset::{ObsDataset, observation::Observation};
 
 use crate::{
-    Alert, AlertStore, Radian,
     graph::AlertLinkageDAG,
     seeding::store::SeedStore,
     solver::{
@@ -238,7 +238,7 @@ pub struct SolverOutput {
 }
 
 use std::borrow::Cow;
-use std::cmp::Ordering;
+
 use std::sync::Arc;
 
 impl SolverOutput {
@@ -382,7 +382,7 @@ impl SolverOutput {
 ///   upstream already has contiguous slices (not the case here).
 pub fn to_observation_batch<'a>(
     hypothesis_set: &HypothesisSet,
-    alert_store: &AlertStore,
+    obs_dataset: &'a ObsDataset,
     seed_store: &SeedStore,
 ) -> Result<AHashMap<Arc<String>, ObservationBatch<'a>>, SolverError> {
     // --- 0) Stable track order (deterministic)
@@ -405,31 +405,40 @@ pub fn to_observation_batch<'a>(
     for tid in track_ids {
         let trk = &hypothesis_set[&tid];
 
-        let mut alerts: Vec<Alert> = trk
-            .get_alerts(alert_store, seed_store)
+        let mut alerts: Vec<&Observation> = trk
+            .get_alerts(obs_dataset, seed_store)
             .map_err(|e| SolverError::OrbitFitConversionError(e.to_string()))?;
 
         // Ensure time order inside this track
-        alerts.sort_by(|a, b| a.mjd_tt.partial_cmp(&b.mjd_tt).unwrap_or(Ordering::Equal));
+        alerts.sort_by(|a, b| a.mjd_tt().total_cmp(&b.mjd_tt()));
 
         for a in alerts {
-            let acc = per_obs
-                .entry(Arc::clone(&a.observer_mpc_code))
-                .or_insert_with(|| Acc {
-                    trajectory_id: Vec::new(),
-                    ra: Vec::new(),
-                    dec: Vec::new(),
-                    time: Vec::new(),
-                    max_ra_err: 0.0,
-                    max_dec_err: 0.0,
-                });
+            // Derive a string key for the observatory from the ObserverId.
+            // MpcCode bytes are ASCII; IntId is formatted as a decimal string.
+            let mpc_key: Arc<String> = match a.observer_id() {
+                Some(photom::observer::dataset::ObserverId::MpcCode(code)) => {
+                    Arc::new(String::from_utf8_lossy(code).into_owned())
+                }
+                Some(photom::observer::dataset::ObserverId::IntId(idx)) => {
+                    Arc::new(format!("custom_{idx}"))
+                }
+                None => Arc::new("UNKNOWN".to_string()),
+            };
+            let acc = per_obs.entry(mpc_key).or_insert_with(|| Acc {
+                trajectory_id: Vec::new(),
+                ra: Vec::new(),
+                dec: Vec::new(),
+                time: Vec::new(),
+                max_ra_err: 0.0,
+                max_dec_err: 0.0,
+            });
 
             acc.trajectory_id.push(tid);
-            acc.ra.push(a.ra);
-            acc.dec.push(a.dec);
-            acc.time.push(a.mjd_tt);
-            acc.max_ra_err = acc.max_ra_err.max(a.ra_err);
-            acc.max_dec_err = acc.max_dec_err.max(a.dec_err);
+            acc.ra.push(a.equ_coord().ra);
+            acc.dec.push(a.equ_coord().dec);
+            acc.time.push(a.mjd_tt());
+            acc.max_ra_err = acc.max_ra_err.max(a.equ_coord().ra_error);
+            acc.max_dec_err = acc.max_dec_err.max(a.equ_coord().dec_error);
         }
     }
 

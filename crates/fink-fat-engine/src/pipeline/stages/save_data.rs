@@ -1,14 +1,12 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use camino::Utf8PathBuf;
+use photom::NightId;
 
 use crate::{
-    Alert,
-    alerts::AlertSlice,
     engine_config::{EngineConfig, pipeline_policy::PersistPolicy},
     error::EngineError,
     graph::edge::Edge,
-    night_id::NightId,
     persistence::{
         PersistenceManager,
         compression::Compression,
@@ -36,20 +34,19 @@ fn now_unix_s() -> i64 {
 /// Data for one night that needs to be written to disk.
 struct NightSaveTask {
     nid: NightId,
-    alerts: Vec<Alert>,
     seeds: Vec<SeedNode>,
 }
 
 /// Result of saving one night's files.
-type NightSaveOutcome = Result<(NightId, Utf8PathBuf, Utf8PathBuf, u64, u64), PersistenceIoError>;
+type NightSaveOutcome = Result<(NightId, Utf8PathBuf, u64), PersistenceIoError>;
 
 /// Collected outcomes from all per-night parallel writes.
 type NightSaveOutcomes = Vec<NightSaveOutcome>;
 
-/// Per-night file metadata after successful saves (night id, alert path, seed path, counts).
-type NightEntries = Vec<(NightId, Utf8PathBuf, Utf8PathBuf, u64, u64)>;
+/// Per-night file metadata after successful saves (night id, seed path, count).
+type NightEntries = Vec<(NightId, Utf8PathBuf, u64)>;
 
-/// Save alerts + seeds for a single night, returning the absolute paths.
+/// Save seeds for a single night, returning the absolute path.
 ///
 /// This free function is designed to be called from a scoped thread: it
 /// accepts owned data (no borrows into shared state) and returns owned paths.
@@ -59,21 +56,11 @@ fn save_night_files(
     manifest_snap: &Manifest,
     compression: Compression,
 ) -> NightSaveOutcome {
-    let alert_path =
-        task.alerts
-            .as_slice()
-            .save_alerts_night(layout, manifest_snap, task.nid, compression)?;
     let seed_path =
         task.seeds
             .as_slice()
             .save_seeds_night(layout, manifest_snap, task.nid, compression)?;
-    Ok((
-        task.nid,
-        alert_path,
-        seed_path,
-        task.alerts.len() as u64,
-        task.seeds.len() as u64,
-    ))
+    Ok((task.nid, seed_path, task.seeds.len() as u64))
 }
 
 /// Convert a thread-panic payload into a well-formed [`EngineError::StageFailed`].
@@ -218,7 +205,7 @@ fn to_mib(bytes: u64) -> f64 {
 }
 
 /// Upsert per-night file paths into `manifest.nights` and return the total
-/// number of alert records that were saved.
+/// number of seed records that were saved.
 ///
 /// Paths stored in the manifest are relative to the persistence root so that
 /// the store remains portable; absolute paths are converted via `layout`.
@@ -227,24 +214,22 @@ fn apply_night_entries(
     entries: &NightEntries,
     layout: &PersistenceLayout,
 ) -> u64 {
-    let mut alerts_saved: u64 = 0;
-    for (nid, alert_abs, seed_abs, n_alerts, n_seeds) in entries {
-        let rel_alert = layout
-            .to_relative(alert_abs)
-            .unwrap_or_else(|| alert_abs.clone());
+    let mut seeds_saved: u64 = 0;
+    for (nid, seed_abs, n_seeds) in entries {
         let rel_seed = layout
             .to_relative(seed_abs)
             .unwrap_or_else(|| seed_abs.clone());
         manifest.upsert_night(NightManifestEntry::new(
             *nid,
-            rel_alert,
+            // No per-night alert file in the ObsDataset-based model.
+            camino::Utf8PathBuf::new(),
             rel_seed,
-            Some(*n_alerts),
+            None,
             Some(*n_seeds),
         ));
-        alerts_saved += n_alerts;
+        seeds_saved += n_seeds;
     }
-    alerts_saved
+    seeds_saved
 }
 
 pub fn run(
@@ -262,16 +247,21 @@ pub fn run(
             let created_unix_s = now_unix_s();
             let persist_policy = ctx.plan.persist;
 
-            let current_night = match ctx.runtime_state.alert_store.last_night() {
+            let current_night = match ctx
+                .runtime_state
+                .obs_dataset
+                .iter_night_id()
+                .and_then(|it| it.copied().max())
+            {
                 Some(n) => n,
                 None => {
-                    tracing::debug!("SavePersistedData: no alerts in store, skipping");
+                    tracing::debug!("SavePersistedData: no observations in store, skipping");
                     stage_sink.inc(3); // Increment all remaining steps since there's no data to save.
                     return Ok(vec![("skipped", 1)]);
                 }
             };
 
-            let n_nights = ctx.runtime_state.alert_store.n_nights();
+            let n_nights = ctx.runtime_state.obs_dataset.nb_night().unwrap_or(0);
             let n_edges = ctx.runtime_state.graph.edges.len();
             tracing::debug!(
                 current_night = current_night.0,
@@ -324,13 +314,21 @@ pub fn run(
                 "edge journal write plan",
             );
 
-            let nights_sorted = ctx.runtime_state.alert_store.nights_sorted();
+            let nights_sorted: Vec<NightId> = {
+                let mut v: Vec<NightId> = ctx
+                    .runtime_state
+                    .seed_store
+                    .iter()
+                    .map(|(nid, _)| *nid)
+                    .collect();
+                v.sort_unstable();
+                v
+            };
             let night_tasks: Vec<NightSaveTask> = nights_sorted
                 .iter()
                 .filter_map(|&nid| {
-                    let alerts = ctx.runtime_state.alert_store.get(&nid)?.to_vec();
                     let seeds = ctx.runtime_state.seed_store.get(&nid)?.to_vec();
-                    Some(NightSaveTask { nid, alerts, seeds })
+                    Some(NightSaveTask { nid, seeds })
                 })
                 .collect();
 
@@ -439,17 +437,14 @@ pub fn run(
                     .map(|e| path_size_bytes(&e.delta_abs_path(layout)))
                     .unwrap_or(0)
             };
-            let alerts_bytes: u64 = night_entries
-                .iter()
-                .map(|(_, alert_path, _, _, _)| path_size_bytes(alert_path))
-                .sum();
+            let alerts_bytes: u64 = 0; // No per-night alert files in the ObsDataset-based model.
             let seeds_bytes: u64 = night_entries
                 .iter()
-                .map(|(_, _, seed_path, _, _)| path_size_bytes(seed_path))
+                .map(|(_, seed_path, _)| path_size_bytes(seed_path))
                 .sum();
 
             let mut manifest = manifest;
-            let alerts_saved = apply_night_entries(&mut manifest, &night_entries, layout);
+            let seeds_saved = apply_night_entries(&mut manifest, &night_entries, layout);
             manifest.edge_journal = manifest_after_edges.edge_journal;
             manifest.created_unix_s = created_unix_s;
 
@@ -470,6 +465,18 @@ pub fn run(
                     path_size_bytes(&layout.orbital_params_night_path(current_night));
                 tracing::trace!(orbits_exported, "orbit Parquet export complete");
             }
+
+            // ----------------------------------------------------------------
+            // Save the global ObsDataset (single file at persistence root).
+            // ----------------------------------------------------------------
+            ctx.persistence
+                .save_obs_dataset(&ctx.runtime_state.obs_dataset, compression)?;
+            let obs_dataset_bytes = path_size_bytes(&layout.obs_dataset_path());
+            tracing::trace!(
+                obs_dataset_mib = to_mib(obs_dataset_bytes),
+                "ObsDataset written to disk",
+            );
+
             stage_sink.inc(1);
 
             // ----------------------------------------------------------------
@@ -485,11 +492,18 @@ pub fn run(
                 alerts_mib = to_mib(alerts_bytes),
                 seeds_mib = to_mib(seeds_bytes),
                 edge_journal_mib = to_mib(edge_bytes),
+                obs_dataset_mib = to_mib(obs_dataset_bytes),
                 track_members_mib = to_mib(track_members_bytes),
                 orbital_params_mib = to_mib(orbital_params_bytes),
                 manifest_mib = to_mib(manifest_bytes),
-                total_mib =
-                    to_mib(alerts_bytes + seeds_bytes + edge_bytes + orbits_bytes + manifest_bytes),
+                total_mib = to_mib(
+                    alerts_bytes
+                        + seeds_bytes
+                        + edge_bytes
+                        + obs_dataset_bytes
+                        + orbits_bytes
+                        + manifest_bytes
+                ),
                 "SavePersistedData: written to disk",
             );
             ctx.runtime_state.manifest = manifest;
@@ -498,7 +512,7 @@ pub fn run(
             tracing::debug!(
                 current_night = current_night.0,
                 nights_saved = nights_sorted.len(),
-                alerts_saved,
+                seeds_saved,
                 n_edge_ops,
                 edge_compacted = compacted,
                 orbits_exported,
@@ -508,7 +522,7 @@ pub fn run(
             Ok(vec![
                 ("current_night", current_night.0 as u64),
                 ("nights_saved", nights_sorted.len() as u64),
-                ("alerts_saved", alerts_saved),
+                ("seeds_saved", seeds_saved),
                 ("edge_ops_written", n_edge_ops),
                 ("edge_compacted", compacted as u64),
                 ("orbits_exported", orbits_exported),

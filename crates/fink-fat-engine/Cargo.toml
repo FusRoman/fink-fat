@@ -22,7 +22,7 @@ ahash = { workspace = true }
 photom = { workspace = true, features = ["serde"] }
 
 arrow-array = "57.3.0"
-bitcode = { version = "0.6.9", features = ["serde"] }
+postcard = { version = "1", features = ["alloc"] }
 cdshealpix = "0.7.3"
 chrono = "0.4.42"
 config = "0.15.19"
