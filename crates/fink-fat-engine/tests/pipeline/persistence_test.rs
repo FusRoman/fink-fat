@@ -28,19 +28,19 @@ use fink_fat_engine::{
         PersistenceManager, envelope::load_parquet, layout::PersistenceLayout,
         runtime_state::RuntimeState,
     },
-    pipeline::{
-        PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner, stages::PipelineStage,
-    },
+    pipeline::{PipelineContext, stages::PipelineStage},
     seeding::SeedKey,
 };
 
 use super::{
     FULL_WITH_PERSISTENCE, NoopHooks, PipelineTestResult, collect_dia_source_ids,
-    collect_edge_endpoints, collect_night_ids, collect_seed_keys, dummy_input_uri,
-    engine_config_with_compaction, engine_config_with_edges, run_pipeline_with, test_edge_models,
-    test_solver_manager, write_alerts_parquet,
+    collect_edge_endpoints, collect_night_ids, collect_seed_keys, engine_config_with_compaction,
+    engine_config_with_edges, make_plan_and_runner, obs_contains_id, run_pipeline_with,
+    test_edge_models, test_solver_manager,
 };
-use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
+use crate::synthetic_alerts::{
+    AsteroidPopulation, SyntheticDatasetBuilder, write_and_load_parquet,
+};
 
 // ===========================================================================
 // Integration tests
@@ -140,14 +140,14 @@ fn save_creates_expected_disk_artifacts() {
         "manifest file should exist: {manifest_path}"
     );
 
-    // 2b. Per-night alert + seed files
-    let saved_nights = state.alert_store.nights_sorted();
+    // 2b. Observation dataset file (all nights saved as one file) + per-night seed files
+    let obs_path = layout.obs_dataset_path();
+    assert!(
+        obs_path.as_std_path().exists(),
+        "obs_dataset file should exist: {obs_path}"
+    );
+    let saved_nights = collect_night_ids(&state);
     for &nid in &saved_nights {
-        let ap = layout.alerts_night_path(nid);
-        assert!(
-            ap.as_std_path().exists(),
-            "alert file must exist for night {nid}: {ap}"
-        );
         let sp = layout.seeds_night_path(nid);
         assert!(
             sp.as_std_path().exists(),
@@ -165,7 +165,7 @@ fn save_creates_expected_disk_artifacts() {
 
     // 2d. Orbit Parquet files (PersistPolicy::Full exports them).
     //     The orbit export uses the last night as the partition key.
-    let current_night = state.alert_store.last_night().unwrap();
+    let current_night = collect_night_ids(&state).into_iter().last().unwrap();
     let track_members_path = layout.track_members_night_path(current_night);
     let orbital_params_path = layout.orbital_params_night_path(current_night);
 
@@ -224,7 +224,7 @@ fn orbit_parquet_files_have_valid_content() {
     let layout = fink_fat_engine::persistence::layout::PersistenceLayout::new(
         engine_config.storage_path_buf(),
     );
-    let current_night = state.alert_store.last_night().unwrap();
+    let current_night = collect_night_ids(&state).into_iter().last().unwrap();
 
     // --- track_members Parquet ---
     let tm_path = layout.track_members_night_path(current_night);
@@ -323,7 +323,7 @@ fn load_restores_alerts_seeds_and_edges_after_save() {
     let saved_dia_ids = collect_dia_source_ids(&state_after_save);
     let saved_seed_keys = collect_seed_keys(&state_after_save);
     let saved_edge_eps = collect_edge_endpoints(&state_after_save);
-    let saved_n_alerts = state_after_save.alert_store.n_alerts();
+    let saved_n_alerts = state_after_save.obs_dataset.observation_count();
     let saved_n_edges = state_after_save.graph.edges.len();
 
     // --- Phase 2: Open a new pipeline with just LoadPersistedData ---
@@ -332,21 +332,17 @@ fn load_restores_alerts_seeds_and_edges_after_save() {
     let edge_models = test_edge_models();
     let solver_manager = test_solver_manager();
 
-    // We use a dummy URI because IngestNights is not in the plan.
-    let plan = PipelinePlan {
-        stages: vec![PipelineStage::LoadPersistedData],
-        persist: PersistPolicy::None,
-        inputs: PipelineInputs {
-            alerts_uri: dummy_input_uri(),
-        },
-    };
-
+    // No new observations needed — LoadPersistedData doesn't use IngestNights.
     let mut loaded_state = RuntimeState::new();
-    let runner = PipelineRunner { plan: plan.clone() };
+    let (mut load_plan, load_runner) = make_plan_and_runner(
+        &[PipelineStage::LoadPersistedData],
+        PersistPolicy::None,
+        photom::observation_dataset::ObsDataset::empty(),
+    );
     let hooks = NoopHooks;
 
     let mut ctx = PipelineContext {
-        plan: &plan,
+        plan: &mut load_plan,
         persistence: &persistence,
         runtime_state: &mut loaded_state,
         engine_config: &engine_config,
@@ -354,7 +350,7 @@ fn load_restores_alerts_seeds_and_edges_after_save() {
         solver_manager: &solver_manager,
     };
 
-    let load_output = runner
+    let load_output = load_runner
         .run(&mut ctx, &hooks)
         .expect("LoadPersistedData pipeline should succeed");
 
@@ -374,7 +370,7 @@ fn load_restores_alerts_seeds_and_edges_after_save() {
     );
 
     // 3b. Alert count and dia_source_ids
-    let loaded_n_alerts = loaded_state.alert_store.n_alerts();
+    let loaded_n_alerts = loaded_state.obs_dataset.observation_count();
     assert_eq!(
         saved_n_alerts, loaded_n_alerts,
         "loaded alert count should match saved alert count"
@@ -420,14 +416,13 @@ fn load_restores_alerts_seeds_and_edges_after_save() {
         );
     }
 
-    // 3f. Verify that all alert keys referenced by seeds exist in the alert store.
+    // 3f. Verify that all dia_source_ids referenced by seeds exist in the obs_dataset.
     for (_nid, seeds) in loaded_state.seed_store.iter() {
         for seed in seeds {
-            for &alert_key in &seed.members {
+            for &obs_id in &seed.members {
                 assert!(
-                    loaded_state.alert_store.get_by_key(alert_key).is_some(),
-                    "seed member alert_key {:?} must be resolvable in the loaded alert store",
-                    alert_key
+                    obs_contains_id(&loaded_state, obs_id),
+                    "seed member obs_id {obs_id} must be resolvable in the loaded obs_dataset",
                 );
             }
         }
@@ -466,7 +461,7 @@ fn incremental_pipeline_with_persistence_accumulates_state() {
     let solver_manager = test_solver_manager();
 
     // Collect unique sorted night IDs.
-    let mut night_ids: Vec<u32> = dataset.alerts().iter().map(|a| a.key.night_id.0).collect();
+    let mut night_ids: Vec<u32> = dataset.alerts().iter().map(|a| a.night_id.0).collect();
     night_ids.sort_unstable();
     night_ids.dedup();
     assert_eq!(night_ids.len(), n_nights);
@@ -475,10 +470,10 @@ fn incremental_pipeline_with_persistence_accumulates_state() {
     let mut final_state: Option<RuntimeState> = None;
 
     for (run_idx, &nid) in night_ids.iter().enumerate() {
-        let night_alerts: Vec<&fink_fat_engine::Alert> = dataset
+        let night_alerts: Vec<&crate::synthetic_alerts::SyntheticAlert> = dataset
             .alerts()
             .iter()
-            .filter(|a| a.key.night_id.0 == nid)
+            .filter(|a| a.night_id.0 == nid)
             .collect();
 
         cumulative_alerts += night_alerts.len();
@@ -486,7 +481,7 @@ fn incremental_pipeline_with_persistence_accumulates_state() {
         let parquet_path = data_dir
             .path()
             .join(format!("night_{nid}_run{run_idx}.parquet"));
-        let alerts_uri = write_alerts_parquet(&night_alerts, &parquet_path);
+        let night_obs = write_and_load_parquet(&night_alerts, &parquet_path);
 
         let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
             .expect("open persistence");
@@ -506,22 +501,18 @@ fn incremental_pipeline_with_persistence_accumulates_state() {
         }
         stages.push(PipelineStage::SavePersistedData);
 
-        let plan = PipelinePlan {
-            stages,
-            persist: if is_last {
-                PersistPolicy::Full
-            } else {
-                PersistPolicy::Minimal
-            },
-            inputs: PipelineInputs { alerts_uri },
+        let persist = if is_last {
+            PersistPolicy::Full
+        } else {
+            PersistPolicy::Minimal
         };
+        let (mut plan, runner) = make_plan_and_runner(&stages, persist, night_obs);
 
         let mut runtime_state = RuntimeState::new();
-        let runner = PipelineRunner { plan: plan.clone() };
         let hooks = NoopHooks;
 
         let mut ctx = PipelineContext {
-            plan: &plan,
+            plan: &mut plan,
             persistence: &persistence,
             runtime_state: &mut runtime_state,
             engine_config: &engine_config,
@@ -537,14 +528,14 @@ fn incremental_pipeline_with_persistence_accumulates_state() {
 
         // After each run, alert count should match cumulated expectations.
         assert_eq!(
-            runtime_state.alert_store.n_alerts(),
+            runtime_state.obs_dataset.observation_count(),
             cumulative_alerts,
             "after run {run_idx}, alert count should be {cumulative_alerts}"
         );
 
         // Night count should increase.
         assert_eq!(
-            runtime_state.alert_store.n_nights(),
+            runtime_state.obs_dataset.nb_night().unwrap_or(0),
             run_idx + 1,
             "after run {run_idx}, should have {} nights",
             run_idx + 1
@@ -587,16 +578,14 @@ fn incremental_pipeline_with_persistence_accumulates_state() {
 
         for &ak in &from_seed.members {
             assert!(
-                final_state.alert_store.get_by_key(ak).is_some(),
-                "from_seed member {:?} should exist in alert store",
-                ak
+                obs_contains_id(&final_state, ak),
+                "from_seed member obs_id {ak} should exist in obs_dataset",
             );
         }
         for &ak in &to_seed.members {
             assert!(
-                final_state.alert_store.get_by_key(ak).is_some(),
-                "to_seed member {:?} should exist in alert store",
-                ak
+                obs_contains_id(&final_state, ak),
+                "to_seed member obs_id {ak} should exist in obs_dataset",
             );
         }
     }
@@ -618,8 +607,8 @@ fn incremental_pipeline_with_persistence_accumulates_state() {
 
     eprintln!(
         "Incremental pipeline final: {} nights, {} alerts, {} seeds, {} edges, {} hypotheses",
-        final_state.alert_store.n_nights(),
-        final_state.alert_store.n_alerts(),
+        final_state.obs_dataset.nb_night().unwrap_or(0),
+        final_state.obs_dataset.observation_count(),
         final_state
             .seed_store
             .iter()
@@ -658,7 +647,7 @@ fn reload_after_incremental_persistence_is_consistent() {
     let solver_manager = test_solver_manager();
 
     // Collect unique sorted night IDs.
-    let mut night_ids: Vec<u32> = dataset.alerts().iter().map(|a| a.key.night_id.0).collect();
+    let mut night_ids: Vec<u32> = dataset.alerts().iter().map(|a| a.night_id.0).collect();
     night_ids.sort_unstable();
     night_ids.dedup();
 
@@ -670,14 +659,14 @@ fn reload_after_incremental_persistence_is_consistent() {
     )> = None;
 
     for (run_idx, &nid) in night_ids.iter().enumerate() {
-        let night_alerts: Vec<&fink_fat_engine::Alert> = dataset
+        let night_alerts: Vec<&crate::synthetic_alerts::SyntheticAlert> = dataset
             .alerts()
             .iter()
-            .filter(|a| a.key.night_id.0 == nid)
+            .filter(|a| a.night_id.0 == nid)
             .collect();
 
         let parquet_path = data_dir.path().join(format!("incr_night_{nid}.parquet"));
-        let alerts_uri = write_alerts_parquet(&night_alerts, &parquet_path);
+        let night_obs = write_and_load_parquet(&night_alerts, &parquet_path);
 
         let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
             .expect("open persistence");
@@ -691,18 +680,13 @@ fn reload_after_incremental_persistence_is_consistent() {
             PipelineStage::SavePersistedData,
         ];
 
-        let plan = PipelinePlan {
-            stages,
-            persist: PersistPolicy::Minimal,
-            inputs: PipelineInputs { alerts_uri },
-        };
+        let (mut plan, runner) = make_plan_and_runner(&stages, PersistPolicy::Minimal, night_obs);
 
         let mut runtime_state = RuntimeState::new();
-        let runner = PipelineRunner { plan: plan.clone() };
         let hooks = NoopHooks;
 
         let mut ctx = PipelineContext {
-            plan: &plan,
+            plan: &mut plan,
             persistence: &persistence,
             runtime_state: &mut runtime_state,
             engine_config: &engine_config,
@@ -734,20 +718,16 @@ fn reload_after_incremental_persistence_is_consistent() {
     let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
         .expect("reopen persistence");
 
-    let plan = PipelinePlan {
-        stages: vec![PipelineStage::LoadPersistedData],
-        persist: PersistPolicy::None,
-        inputs: PipelineInputs {
-            alerts_uri: dummy_input_uri(),
-        },
-    };
-
     let mut reloaded_state = RuntimeState::new();
-    let runner = PipelineRunner { plan: plan.clone() };
+    let (mut load_plan, load_runner) = make_plan_and_runner(
+        &[PipelineStage::LoadPersistedData],
+        PersistPolicy::None,
+        photom::observation_dataset::ObsDataset::empty(),
+    );
     let hooks = NoopHooks;
 
     let mut ctx = PipelineContext {
-        plan: &plan,
+        plan: &mut load_plan,
         persistence: &persistence,
         runtime_state: &mut reloaded_state,
         engine_config: &engine_config,
@@ -755,7 +735,7 @@ fn reload_after_incremental_persistence_is_consistent() {
         solver_manager: &solver_manager,
     };
 
-    runner
+    load_runner
         .run(&mut ctx, &hooks)
         .expect("LoadPersistedData after incremental should succeed");
 
@@ -795,9 +775,8 @@ fn reload_after_incremental_persistence_is_consistent() {
         for seed in seeds {
             for &ak in &seed.members {
                 assert!(
-                    reloaded_state.alert_store.get_by_key(ak).is_some(),
-                    "seed member alert {:?} not found after reload",
-                    ak
+                    obs_contains_id(&reloaded_state, ak),
+                    "seed member obs_id {ak} not found after reload",
                 );
             }
         }
@@ -902,20 +881,16 @@ fn load_stage_reports_meaningful_counters() {
     let edge_models = test_edge_models();
     let solver_manager = test_solver_manager();
 
-    let plan = PipelinePlan {
-        stages: vec![PipelineStage::LoadPersistedData],
-        persist: PersistPolicy::None,
-        inputs: PipelineInputs {
-            alerts_uri: dummy_input_uri(),
-        },
-    };
-
     let mut loaded_state = RuntimeState::new();
-    let runner = PipelineRunner { plan: plan.clone() };
+    let (mut load_plan, load_runner) = make_plan_and_runner(
+        &[PipelineStage::LoadPersistedData],
+        PersistPolicy::None,
+        photom::observation_dataset::ObsDataset::empty(),
+    );
     let hooks = NoopHooks;
 
     let mut ctx = PipelineContext {
-        plan: &plan,
+        plan: &mut load_plan,
         persistence: &persistence,
         runtime_state: &mut loaded_state,
         engine_config: &engine_config,
@@ -923,7 +898,7 @@ fn load_stage_reports_meaningful_counters() {
         solver_manager: &solver_manager,
     };
 
-    let load_output = runner
+    let load_output = load_runner
         .run(&mut ctx, &hooks)
         .expect("LoadPersistedData should succeed");
 
@@ -941,12 +916,12 @@ fn load_stage_reports_meaningful_counters() {
 
     assert_eq!(
         nights_loaded,
-        state1.alert_store.n_nights() as u64,
+        state1.obs_dataset.nb_night().unwrap_or(0) as u64,
         "loaded night count should match saved night count"
     );
     assert_eq!(
         alerts_loaded,
-        state1.alert_store.n_alerts() as u64,
+        state1.obs_dataset.observation_count() as u64,
         "loaded alert count should match saved alert count"
     );
     assert_eq!(
@@ -984,45 +959,41 @@ fn manifest_tracks_all_nights_after_multiple_saves() {
     let edge_models = test_edge_models();
     let solver_manager = test_solver_manager();
 
-    let mut night_ids: Vec<u32> = dataset.alerts().iter().map(|a| a.key.night_id.0).collect();
+    let mut night_ids: Vec<u32> = dataset.alerts().iter().map(|a| a.night_id.0).collect();
     night_ids.sort_unstable();
     night_ids.dedup();
 
     // Ingest all nights one by one with Save each time.
     for (run_idx, &nid) in night_ids.iter().enumerate() {
-        let night_alerts: Vec<&fink_fat_engine::Alert> = dataset
+        let night_alerts: Vec<&crate::synthetic_alerts::SyntheticAlert> = dataset
             .alerts()
             .iter()
-            .filter(|a| a.key.night_id.0 == nid)
+            .filter(|a| a.night_id.0 == nid)
             .collect();
 
         let parquet_path = data_dir
             .path()
             .join(format!("manifest_test_night_{nid}.parquet"));
-        let alerts_uri = write_alerts_parquet(&night_alerts, &parquet_path);
+        let night_obs = write_and_load_parquet(&night_alerts, &parquet_path);
 
         let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
             .expect("open persistence");
 
-        let plan = PipelinePlan {
-            stages: vec![
-                PipelineStage::LoadPersistedData,
-                PipelineStage::IngestNights,
-                PipelineStage::BuildSeeds,
-                PipelineStage::BuildEdges,
-                PipelineStage::Solve,
-                PipelineStage::SavePersistedData,
-            ],
-            persist: PersistPolicy::Minimal,
-            inputs: PipelineInputs { alerts_uri },
-        };
+        let stages = vec![
+            PipelineStage::LoadPersistedData,
+            PipelineStage::IngestNights,
+            PipelineStage::BuildSeeds,
+            PipelineStage::BuildEdges,
+            PipelineStage::Solve,
+            PipelineStage::SavePersistedData,
+        ];
+        let (mut plan, runner) = make_plan_and_runner(&stages, PersistPolicy::Minimal, night_obs);
 
         let mut runtime_state = RuntimeState::new();
-        let runner = PipelineRunner { plan: plan.clone() };
         let hooks = NoopHooks;
 
         let mut ctx = PipelineContext {
-            plan: &plan,
+            plan: &mut plan,
             persistence: &persistence,
             runtime_state: &mut runtime_state,
             engine_config: &engine_config,
@@ -1102,20 +1073,16 @@ fn load_on_empty_storage_yields_empty_state() {
     let edge_models = test_edge_models();
     let solver_manager = test_solver_manager();
 
-    let plan = PipelinePlan {
-        stages: vec![PipelineStage::LoadPersistedData],
-        persist: PersistPolicy::None,
-        inputs: PipelineInputs {
-            alerts_uri: dummy_input_uri(),
-        },
-    };
-
     let mut runtime_state = RuntimeState::new();
-    let runner = PipelineRunner { plan: plan.clone() };
+    let (mut load_plan, load_runner) = make_plan_and_runner(
+        &[PipelineStage::LoadPersistedData],
+        PersistPolicy::None,
+        photom::observation_dataset::ObsDataset::empty(),
+    );
     let hooks = NoopHooks;
 
     let mut ctx = PipelineContext {
-        plan: &plan,
+        plan: &mut load_plan,
         persistence: &persistence,
         runtime_state: &mut runtime_state,
         engine_config: &engine_config,
@@ -1123,7 +1090,7 @@ fn load_on_empty_storage_yields_empty_state() {
         solver_manager: &solver_manager,
     };
 
-    let output = runner
+    let output = load_runner
         .run(&mut ctx, &hooks)
         .expect("LoadPersistedData on empty storage should succeed");
 
@@ -1133,8 +1100,8 @@ fn load_on_empty_storage_yields_empty_state() {
     assert_eq!(output.reports[0].0, PipelineStage::LoadPersistedData);
 
     assert!(
-        runtime_state.alert_store.is_empty(),
-        "alert store should be empty after load on empty storage"
+        runtime_state.obs_dataset.observation_count() == 0,
+        "obs_dataset should be empty after load on empty storage"
     );
     assert!(
         runtime_state.seed_store.is_empty(),
@@ -1196,20 +1163,16 @@ fn save_load_roundtrip_diverse_populations() {
     let edge_models = test_edge_models();
     let solver_manager = test_solver_manager();
 
-    let plan = PipelinePlan {
-        stages: vec![PipelineStage::LoadPersistedData],
-        persist: PersistPolicy::None,
-        inputs: PipelineInputs {
-            alerts_uri: dummy_input_uri(),
-        },
-    };
-
     let mut reloaded = RuntimeState::new();
-    let runner = PipelineRunner { plan: plan.clone() };
+    let (mut load_plan, load_runner) = make_plan_and_runner(
+        &[PipelineStage::LoadPersistedData],
+        PersistPolicy::None,
+        photom::observation_dataset::ObsDataset::empty(),
+    );
     let hooks = NoopHooks;
 
     let mut ctx = PipelineContext {
-        plan: &plan,
+        plan: &mut load_plan,
         persistence: &persistence,
         runtime_state: &mut reloaded,
         engine_config: &engine_config,
@@ -1217,7 +1180,9 @@ fn save_load_roundtrip_diverse_populations() {
         solver_manager: &solver_manager,
     };
 
-    runner.run(&mut ctx, &hooks).expect("load should succeed");
+    load_runner
+        .run(&mut ctx, &hooks)
+        .expect("load should succeed");
     drop(ctx);
 
     // Verify key consistency.
@@ -1289,7 +1254,7 @@ fn edge_journal_deltas_and_compaction() {
     let layout = PersistenceLayout::new(engine_config.storage_path_buf());
 
     // Collect sorted unique night IDs.
-    let mut night_ids: Vec<u32> = dataset.alerts().iter().map(|a| a.key.night_id.0).collect();
+    let mut night_ids: Vec<u32> = dataset.alerts().iter().map(|a| a.night_id.0).collect();
     night_ids.sort_unstable();
     night_ids.dedup();
     assert_eq!(night_ids.len(), n_nights);
@@ -1300,16 +1265,16 @@ fn edge_journal_deltas_and_compaction() {
 
     for (run_idx, &nid) in night_ids.iter().enumerate() {
         // Write one night of alerts.
-        let night_alerts: Vec<&fink_fat_engine::Alert> = dataset
+        let night_alerts: Vec<&crate::synthetic_alerts::SyntheticAlert> = dataset
             .alerts()
             .iter()
-            .filter(|a| a.key.night_id.0 == nid)
+            .filter(|a| a.night_id.0 == nid)
             .collect();
 
         let parquet_path = data_dir
             .path()
             .join(format!("night_{nid}_run{run_idx}.parquet"));
-        let alerts_uri = write_alerts_parquet(&night_alerts, &parquet_path);
+        let night_obs = write_and_load_parquet(&night_alerts, &parquet_path);
 
         // Open persistence for this iteration (simulates restart between runs).
         let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
@@ -1326,18 +1291,13 @@ fn edge_journal_deltas_and_compaction() {
             PipelineStage::SavePersistedData,
         ];
 
-        let plan = PipelinePlan {
-            stages,
-            persist: PersistPolicy::Minimal,
-            inputs: PipelineInputs { alerts_uri },
-        };
+        let (mut plan, runner) = make_plan_and_runner(&stages, PersistPolicy::Minimal, night_obs);
 
         let mut runtime_state = RuntimeState::new();
-        let runner = PipelineRunner { plan: plan.clone() };
         let hooks = NoopHooks;
 
         let mut ctx = PipelineContext {
-            plan: &plan,
+            plan: &mut plan,
             persistence: &persistence,
             runtime_state: &mut runtime_state,
             engine_config: &engine_config,
@@ -1458,20 +1418,16 @@ fn edge_journal_deltas_and_compaction() {
     let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
         .expect("open persistence for final reload");
 
-    let plan = PipelinePlan {
-        stages: vec![PipelineStage::LoadPersistedData],
-        persist: PersistPolicy::None,
-        inputs: PipelineInputs {
-            alerts_uri: dummy_input_uri(),
-        },
-    };
-
     let mut reloaded = RuntimeState::new();
-    let runner = PipelineRunner { plan: plan.clone() };
+    let (mut load_plan, load_runner) = make_plan_and_runner(
+        &[PipelineStage::LoadPersistedData],
+        PersistPolicy::None,
+        photom::observation_dataset::ObsDataset::empty(),
+    );
     let hooks = NoopHooks;
 
     let mut ctx = PipelineContext {
-        plan: &plan,
+        plan: &mut load_plan,
         persistence: &persistence,
         runtime_state: &mut reloaded,
         engine_config: &engine_config,
@@ -1479,7 +1435,7 @@ fn edge_journal_deltas_and_compaction() {
         solver_manager: &solver_manager,
     };
 
-    runner
+    load_runner
         .run(&mut ctx, &hooks)
         .expect("reload after compaction should succeed");
     drop(ctx);
@@ -1557,7 +1513,7 @@ fn compaction_night_edges_are_not_lost() {
     let edge_models = test_edge_models();
     let solver_manager = test_solver_manager();
 
-    let mut night_ids: Vec<u32> = dataset.alerts().iter().map(|a| a.key.night_id.0).collect();
+    let mut night_ids: Vec<u32> = dataset.alerts().iter().map(|a| a.night_id.0).collect();
     night_ids.sort_unstable();
     night_ids.dedup();
     assert_eq!(night_ids.len(), n_nights);
@@ -1566,14 +1522,14 @@ fn compaction_night_edges_are_not_lost() {
     let mut compaction_night_id: Option<u32> = None;
 
     for (run_idx, &nid) in night_ids.iter().enumerate() {
-        let night_alerts: Vec<&fink_fat_engine::Alert> = dataset
+        let night_alerts: Vec<&crate::synthetic_alerts::SyntheticAlert> = dataset
             .alerts()
             .iter()
-            .filter(|a| a.key.night_id.0 == nid)
+            .filter(|a| a.night_id.0 == nid)
             .collect();
 
         let parquet_path = data_dir.path().join(format!("night_{nid}.parquet"));
-        let alerts_uri = write_alerts_parquet(&night_alerts, &parquet_path);
+        let night_obs = write_and_load_parquet(&night_alerts, &parquet_path);
 
         let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
             .expect("open persistence");
@@ -1588,18 +1544,13 @@ fn compaction_night_edges_are_not_lost() {
             PipelineStage::SavePersistedData,
         ];
 
-        let plan = PipelinePlan {
-            stages,
-            persist: PersistPolicy::Minimal,
-            inputs: PipelineInputs { alerts_uri },
-        };
+        let (mut plan, runner) = make_plan_and_runner(&stages, PersistPolicy::Minimal, night_obs);
 
         let mut runtime_state = RuntimeState::new();
-        let runner = PipelineRunner { plan: plan.clone() };
         let hooks = NoopHooks;
 
         let mut ctx = PipelineContext {
-            plan: &plan,
+            plan: &mut plan,
             persistence: &persistence,
             runtime_state: &mut runtime_state,
             engine_config: &engine_config,
@@ -1633,19 +1584,16 @@ fn compaction_night_edges_are_not_lost() {
     let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
         .expect("reopen persistence for final check");
 
-    let plan = PipelinePlan {
-        stages: vec![PipelineStage::LoadPersistedData],
-        persist: PersistPolicy::None,
-        inputs: PipelineInputs {
-            alerts_uri: dummy_input_uri(),
-        },
-    };
+    let (mut plan, runner) = make_plan_and_runner(
+        &[PipelineStage::LoadPersistedData],
+        PersistPolicy::None,
+        photom::observation_dataset::ObsDataset::empty(),
+    );
 
     let mut reloaded = RuntimeState::new();
-    let runner = PipelineRunner { plan: plan.clone() };
     let hooks = NoopHooks;
     let mut ctx = PipelineContext {
-        plan: &plan,
+        plan: &mut plan,
         persistence: &persistence,
         runtime_state: &mut reloaded,
         engine_config: &engine_config,
@@ -1653,7 +1601,6 @@ fn compaction_night_edges_are_not_lost() {
         solver_manager: &solver_manager,
     };
     runner.run(&mut ctx, &hooks).expect("final reload");
-    drop(ctx);
 
     // The critical assertion: edges whose `to.night_id` equals the compaction
     // night must still be present.  Before the fix, they were all dropped from

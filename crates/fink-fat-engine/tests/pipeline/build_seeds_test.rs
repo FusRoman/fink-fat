@@ -11,15 +11,13 @@ use fink_fat_engine::{
     engine_config::pipeline_policy::PersistPolicy,
     night_id::NightId,
     persistence::{PersistenceManager, runtime_state::RuntimeState},
-    pipeline::{
-        PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner, stages::PipelineStage,
-    },
+    pipeline::stages::PipelineStage,
     solver::solver_manager::SolverManager,
 };
 
 use super::{
-    NoopHooks, PipelineTestResult, THROUGH_SEEDS, engine_config_minimal, run_pipeline_minimal,
-    test_edge_models,
+    NoopHooks, PipelineTestResult, THROUGH_SEEDS, count_observations, engine_config_minimal,
+    make_plan_and_runner, obs_contains_id, run_pipeline_minimal, test_edge_models,
 };
 use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
 
@@ -68,12 +66,16 @@ fn ingest_then_build_seeds_produces_seeds_for_each_night() {
     // ---- 9) Verify IngestNights counters (from the last night's run) ----
     let ingest_counters: std::collections::HashMap<&str, u64> =
         report_0.counters.iter().copied().collect();
-    // The pipeline runs night-by-night; the last run ingested exactly one night.
+    // IngestNights reports the cumulative total in runtime_state.obs_dataset
+    // after the last incremental run (all nights have been accumulated).
     assert_eq!(
         ingest_counters.get("n_alerts").copied(),
-        Some((n_trajectories * obs_per_night) as u64),
+        Some((n_trajectories * n_nights * obs_per_night) as u64),
     );
-    assert_eq!(ingest_counters.get("n_nights").copied(), Some(1_u64),);
+    assert_eq!(
+        ingest_counters.get("n_nights").copied(),
+        Some(n_nights as u64),
+    );
 
     // ---- 10) Verify BuildSeeds counters (from the last night's run) ----
     let seed_counters: std::collections::HashMap<&str, u64> =
@@ -130,11 +132,6 @@ fn ingest_then_build_seeds_produces_seeds_for_each_night() {
         total_seeds_in_store += night_seeds.len();
 
         // ---- 12) Verify seed members reference valid alerts (cumulative state) ----
-        let alert_store = &state.alert_store;
-        let night_alerts = alert_store
-            .get(&nid)
-            .expect("alert store should have this night");
-
         for seed in night_seeds {
             assert_eq!(
                 seed.night_id(),
@@ -146,19 +143,11 @@ fn ingest_then_build_seeds_produces_seeds_for_each_night() {
                 seed.members.len() >= 2,
                 "seed should have at least 2 members (pair or triplet)"
             );
-            for member_key in &seed.members {
-                assert_eq!(
-                    member_key.night_id, nid,
-                    "seed member alert must belong to the same night"
-                );
-                // Verify the dia_source_id exists in the night's alerts.
-                let found = night_alerts
-                    .iter()
-                    .any(|a| a.key.dia_source_id == member_key.dia_source_id);
+            for &member_id in &seed.members {
+                // member_id IS the dia_source_id (ObsId = u64)
                 assert!(
-                    found,
-                    "seed member dia_source_id {} should exist in the alert store for night {nid:?}",
-                    member_key.dia_source_id
+                    obs_contains_id(&state, member_id),
+                    "seed member dia_source_id {member_id} should exist in the obs_dataset"
                 );
             }
         }
@@ -218,7 +207,7 @@ fn build_seeds_with_mixed_populations() {
     assert_eq!(output.reports[1].0, PipelineStage::BuildSeeds);
 
     // Alert store should have all alerts.
-    assert_eq!(state.alert_store.n_alerts(), expected_total_alerts);
+    assert_eq!(count_observations(&state), expected_total_alerts);
 
     // Seed store should be populated for all nights.
     let seed_store = &state.seed_store;
@@ -276,12 +265,14 @@ fn build_seeds_multi_night_parquet_populates_seed_store_for_all_nights() {
     let expected_total_alerts = n_trajectories * n_nights * obs_per_night;
     assert_eq!(dataset.n_alerts(), expected_total_alerts);
 
-    // ---- 2) Write ALL nights into a single Parquet file ----
-    let data_dir = TempDir::new().expect("create data temp dir");
+    // ---- 2) Write all nights to Parquet and load as a night-indexed ObsDataset ----
     let storage_dir = TempDir::new().expect("create storage temp dir");
+    let data_dir = TempDir::new().expect("create data temp dir");
 
     let parquet_path = data_dir.path().join("all_nights.parquet");
-    let alerts_uri = dataset.write_parquet(&parquet_path);
+    let all_alerts: Vec<&crate::synthetic_alerts::SyntheticAlert> =
+        dataset.alerts().iter().collect();
+    let obs_dataset = crate::synthetic_alerts::write_and_load_parquet(&all_alerts, &parquet_path);
 
     // ---- 3) Run IngestNights + BuildSeeds once (all nights in one shot) ----
     let engine_config = engine_config_minimal(&storage_dir);
@@ -290,17 +281,12 @@ fn build_seeds_multi_night_parquet_populates_seed_store_for_all_nights() {
     let edge_models = test_edge_models();
     let solver_manager = SolverManager::default();
 
-    let plan = PipelinePlan {
-        stages: THROUGH_SEEDS.to_vec(),
-        persist: PersistPolicy::None,
-        inputs: PipelineInputs { alerts_uri },
-    };
+    let (mut plan, runner) = make_plan_and_runner(THROUGH_SEEDS, PersistPolicy::None, obs_dataset);
 
     let mut runtime_state = RuntimeState::new();
-    let runner = PipelineRunner { plan: plan.clone() };
 
-    let mut ctx = PipelineContext {
-        plan: &plan,
+    let mut ctx = fink_fat_engine::pipeline::PipelineContext {
+        plan: &mut plan,
         persistence: &persistence,
         runtime_state: &mut runtime_state,
         engine_config: &engine_config,
@@ -321,7 +307,6 @@ fn build_seeds_multi_night_parquet_populates_seed_store_for_all_nights() {
     );
 
     // ---- 5) Each night must have at least one seed with valid keys ----
-    let alert_store = &runtime_state.alert_store;
     for night_offset in 0..n_nights {
         let nid = NightId(start_night_id + night_offset as u32);
 
@@ -348,28 +333,16 @@ fn build_seeds_multi_night_parquet_populates_seed_store_for_all_nights() {
             );
         }
 
-        // Each seed member must reference a real alert from the same night.
-        let night_alerts = alert_store
-            .get(&nid)
-            .expect("alert store should have this night");
-
+        // Each seed member must reference a real alert in the obs_dataset.
         for seed in night_seeds {
             assert!(
                 seed.members.len() >= 2,
                 "seed should have at least 2 members (pair or triplet)"
             );
-            for member_key in &seed.members {
-                assert_eq!(
-                    member_key.night_id, nid,
-                    "seed member must belong to the same night as the seed"
-                );
-                let found = night_alerts
-                    .iter()
-                    .any(|a| a.key.dia_source_id == member_key.dia_source_id);
+            for &member_id in &seed.members {
                 assert!(
-                    found,
-                    "seed member dia_source_id {} not found in alert store for night {nid:?}",
-                    member_key.dia_source_id
+                    obs_contains_id(&runtime_state, member_id),
+                    "seed member dia_source_id {member_id} not found in obs_dataset"
                 );
             }
         }
