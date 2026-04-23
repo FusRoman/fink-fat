@@ -23,7 +23,7 @@
 //!   the population's characteristic speed range.
 //! - On each night, `obs_per_night` (≥ 2) observations are emitted with
 //!   small intra-night time offsets and Gaussian positional noise.
-//! - Each observation gets a random LSST band, realistic flux/flux_err,
+//! - Each observation gets a random LSST band, realistic magnitude/mag_err,
 //!   and a unique `dia_source_id`.
 //!
 //! The generator is deterministic (seeded RNG) so tests are reproducible.
@@ -34,8 +34,8 @@
 //!
 //! - `ra`, `dec`, `ra_err`, `dec_err` → **radians**
 //! - `mjd_tt` → **MJD TT** (days)
-//! - `flux`, `flux_err` → arbitrary positive units (consistent within a trajectory)
-//! - `band` → `u8` LSST band code (u=0, g=1, r=2, i=3, z=4, y=5)
+//! - `magnitude`, `mag_err` → AB magnitudes
+//! - `filter` → LSST band label string (e.g. `"g"`, `"r"`)
 //!
 //! # Usage
 //!
@@ -48,7 +48,7 @@
 //!     .seed(42)
 //!     .build();
 //!
-//! let store = dataset.into_alert_store();
+//! let obs_dataset = dataset.into_obs_dataset();
 //! let truth = dataset.ground_truth();
 //! ```
 //!
@@ -67,18 +67,19 @@ use std::f64::consts::PI;
 use std::path::Path;
 use std::sync::Arc;
 
-use arrow_array::{
-    ArrayRef, Float64Array, RecordBatch, StringArray, UInt8Array, UInt32Array, UInt64Array,
-};
+use arrow_array::{ArrayRef, Float64Array, RecordBatch, StringArray, UInt32Array, UInt64Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::parquet::arrow::ArrowWriter;
-use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
-
-use fink_fat_engine::{
-    Alert, AlertKey, AlertStore, night_id::NightId,
-    pipeline::stages::alert_inputs::input_uri::InputUri,
+use photom::{
+    NightId,
+    coordinates::equatorial::EquCoord,
+    io::datafusion::InputUri,
+    observation_dataset::{ObsDataset, observation::Observation},
+    photometry::{Filter, Photometry},
 };
+use rand::Rng;
+use rand::SeedableRng;
+use rand::rngs::StdRng;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -88,18 +89,18 @@ const DEG_TO_RAD: f64 = PI / 180.0;
 const ARCMIN_TO_RAD: f64 = DEG_TO_RAD / 60.0;
 const ARCSEC_TO_RAD: f64 = ARCMIN_TO_RAD / 60.0;
 
-/// LSST photometric band codes.
+/// LSST photometric band labels.
 ///
-/// Convention: `u=0, g=1, r=2, i=3, z=4, y=5`.
+/// Convention: LSST filter names as strings.
 pub mod lsst_bands {
-    pub const U: u8 = 0;
-    pub const G: u8 = 1;
-    pub const R: u8 = 2;
-    pub const I: u8 = 3;
-    pub const Z: u8 = 4;
-    pub const Y: u8 = 5;
+    pub const U: &str = "u";
+    pub const G: &str = "g";
+    pub const R: &str = "r";
+    pub const I: &str = "i";
+    pub const Z: &str = "z";
+    pub const Y: &str = "y";
 
-    pub const ALL: [u8; 6] = [U, G, R, I, Z, Y];
+    pub const ALL: [&str; 6] = [U, G, R, I, Z, Y];
 }
 
 // ---------------------------------------------------------------------------
@@ -212,18 +213,69 @@ pub struct TrajectoryTruth {
 }
 
 // ---------------------------------------------------------------------------
+// Synthetic alert record
+// ---------------------------------------------------------------------------
+
+/// A single synthetic alert record with all fields needed for testing and Parquet export.
+#[derive(Clone, Debug)]
+pub struct SyntheticAlert {
+    /// Night of observation.
+    pub night_id: NightId,
+    /// Unique identifier for this detection.
+    pub dia_source_id: u64,
+    /// Right ascension in radians.
+    pub ra: f64,
+    /// 1-σ RA uncertainty in radians.
+    pub ra_err: f64,
+    /// Declination in radians.
+    pub dec: f64,
+    /// 1-σ Dec uncertainty in radians.
+    pub dec_err: f64,
+    /// Epoch (MJD, Terrestrial Time).
+    pub mjd_tt: f64,
+    /// Apparent magnitude (AB).
+    pub magnitude: f64,
+    /// 1-σ magnitude uncertainty.
+    pub mag_err: f64,
+    /// Photometric filter label (e.g. `"g"`, `"r"`).
+    pub filter: String,
+    /// MPC observatory code.
+    pub observer_mpc_code: Arc<String>,
+}
+
+impl SyntheticAlert {
+    /// Convert this record into a photom [`Observation`].
+    ///
+    /// The resulting `Observation` carries no observer (observer is not embedded in the
+    /// `Observation` struct directly; MPC code is written to Parquet separately).
+    pub fn to_observation(&self) -> Observation {
+        Observation::new(
+            self.dia_source_id,
+            EquCoord::new(self.ra, self.ra_err, self.dec, self.dec_err),
+            Photometry {
+                magnitude: self.magnitude,
+                error: self.mag_err,
+                filter: Filter::String(self.filter.clone()),
+            },
+            self.mjd_tt,
+            None,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Synthetic dataset
 // ---------------------------------------------------------------------------
 
 /// A synthetic dataset of alerts with ground truth trajectory associations.
 pub struct SyntheticDataset {
-    alerts: Vec<Alert>,
+    alerts: Vec<SyntheticAlert>,
     ground_truth: Vec<TrajectoryTruth>,
 }
 
 impl SyntheticDataset {
     /// All generated alerts (sorted by night, then by time).
-    pub fn alerts(&self) -> &[Alert] {
+    pub fn alerts(&self) -> &[SyntheticAlert] {
         &self.alerts
     }
 
@@ -239,7 +291,7 @@ impl SyntheticDataset {
 
     /// Number of distinct nights in the dataset.
     pub fn n_nights(&self) -> usize {
-        let mut nights: Vec<u32> = self.alerts.iter().map(|a| a.key.night_id.0).collect();
+        let mut nights: Vec<u32> = self.alerts.iter().map(|a| a.night_id.0).collect();
         nights.sort_unstable();
         nights.dedup();
         nights.len()
@@ -250,37 +302,27 @@ impl SyntheticDataset {
         self.ground_truth.len()
     }
 
-    /// Consume self and return all alerts as a `Vec<Alert>`.
-    pub fn into_alerts(self) -> Vec<Alert> {
+    /// Consume self and return all alerts as a `Vec<SyntheticAlert>`.
+    pub fn into_alerts(self) -> Vec<SyntheticAlert> {
         self.alerts
     }
 
-    /// Convert into an `AlertStore` grouped by night.
-    pub fn into_alert_store(self) -> AlertStore {
-        let mut store = AlertStore::new();
-        for alert in self.alerts {
-            store
-                .insert_alert(alert)
-                .expect("no duplicate dia_source_id in synthetic data");
-        }
-        store
-    }
-
-    /// Build an `AlertStore` from a reference (clones alerts).
-    pub fn to_alert_store(&self) -> AlertStore {
-        let mut store = AlertStore::new();
-        for alert in &self.alerts {
-            store
-                .insert_alert(alert.clone())
-                .expect("no duplicate dia_source_id in synthetic data");
-        }
-        store
-    }
-
-    /// Write the dataset to a Parquet file compatible with the engine's
-    /// `AlertParquetColumns::default()` schema.
+    /// Convert into an [`ObsDataset`] with a night index.
     ///
-    /// Returns a `file://` URI suitable for `InputUri`.
+    /// Alerts are sorted by night (they already are after [`SyntheticDatasetBuilder::build`]).
+    /// A contiguous night index is built so that `nb_night()` works on the result.
+    pub fn into_obs_dataset(self) -> ObsDataset {
+        build_obs_dataset(self.alerts)
+    }
+
+    /// Build an [`ObsDataset`] from a reference (clones alerts).
+    pub fn to_obs_dataset(&self) -> ObsDataset {
+        build_obs_dataset(self.alerts.clone())
+    }
+
+    /// Write the dataset to a Parquet file compatible with the photom loader schema.
+    ///
+    /// Returns a `file://` URI suitable for [`photom::io::datafusion::loader::load_obs_sync`].
     pub fn write_parquet(&self, path: &Path) -> InputUri {
         let schema = parquet_alert_schema();
         let file = std::fs::File::create(path).expect("create parquet file");
@@ -293,49 +335,49 @@ impl SyntheticDataset {
         InputUri(format!("file://{}", path.to_str().unwrap()))
     }
 
-    /// Convert alerts into an Arrow `RecordBatch`.
+    /// Convert alerts into an Arrow `RecordBatch` using the photom Parquet schema.
     fn to_record_batch(&self, schema: &Arc<Schema>) -> RecordBatch {
         let n = self.alerts.len();
 
+        let mut ids = Vec::with_capacity(n);
         let mut night_ids = Vec::with_capacity(n);
-        let mut dia_source_ids = Vec::with_capacity(n);
         let mut ras = Vec::with_capacity(n);
         let mut ra_errs = Vec::with_capacity(n);
         let mut decs = Vec::with_capacity(n);
         let mut dec_errs = Vec::with_capacity(n);
         let mut mjd_tts = Vec::with_capacity(n);
-        let mut fluxes = Vec::with_capacity(n);
-        let mut flux_errs = Vec::with_capacity(n);
-        let mut bands = Vec::with_capacity(n);
+        let mut magnitudes = Vec::with_capacity(n);
+        let mut mag_errs = Vec::with_capacity(n);
+        let mut filters: Vec<String> = Vec::with_capacity(n);
         let mut observer_codes: Vec<String> = Vec::with_capacity(n);
 
         for alert in &self.alerts {
-            night_ids.push(alert.key.night_id.0);
-            dia_source_ids.push(alert.key.dia_source_id);
+            ids.push(alert.dia_source_id);
+            night_ids.push(alert.night_id.0);
             ras.push(alert.ra);
             ra_errs.push(alert.ra_err);
             decs.push(alert.dec);
             dec_errs.push(alert.dec_err);
             mjd_tts.push(alert.mjd_tt);
-            fluxes.push(alert.flux);
-            flux_errs.push(alert.flux_err);
-            bands.push(alert.band);
+            magnitudes.push(alert.magnitude);
+            mag_errs.push(alert.mag_err);
+            filters.push(alert.filter.clone());
             observer_codes.push((*alert.observer_mpc_code).clone());
         }
 
         RecordBatch::try_new(
             schema.clone(),
             vec![
+                Arc::new(UInt64Array::from(ids)) as ArrayRef,
                 Arc::new(UInt32Array::from(night_ids)) as ArrayRef,
-                Arc::new(UInt64Array::from(dia_source_ids)) as ArrayRef,
                 Arc::new(Float64Array::from(ras)) as ArrayRef,
                 Arc::new(Float64Array::from(ra_errs)) as ArrayRef,
                 Arc::new(Float64Array::from(decs)) as ArrayRef,
                 Arc::new(Float64Array::from(dec_errs)) as ArrayRef,
+                Arc::new(Float64Array::from(magnitudes)) as ArrayRef,
+                Arc::new(Float64Array::from(mag_errs)) as ArrayRef,
+                Arc::new(StringArray::from(filters)) as ArrayRef,
                 Arc::new(Float64Array::from(mjd_tts)) as ArrayRef,
-                Arc::new(Float64Array::from(fluxes)) as ArrayRef,
-                Arc::new(Float64Array::from(flux_errs)) as ArrayRef,
-                Arc::new(UInt8Array::from(bands)) as ArrayRef,
                 Arc::new(StringArray::from(observer_codes)) as ArrayRef,
             ],
         )
@@ -343,20 +385,34 @@ impl SyntheticDataset {
     }
 }
 
-/// Arrow schema compatible with `AlertParquetColumns::default()`.
+/// Build an [`ObsDataset`] from a list of [`SyntheticAlert`]s.
+///
+/// Uses the public `ObsDataset::empty()` + `push_observation()` path.
+/// The resulting dataset has no night index (use `write_parquet` + `load_obs_sync`
+/// when a night-indexed dataset is required).
+fn build_obs_dataset(alerts: Vec<SyntheticAlert>) -> ObsDataset {
+    let observations: Vec<Observation> = alerts.iter().map(|a| a.to_observation()).collect();
+    let mut dataset = ObsDataset::empty();
+    dataset
+        .push_observation(observations)
+        .expect("no duplicate dia_source_ids in synthetic data");
+    dataset
+}
+
+/// Arrow schema compatible with the photom Parquet loader's mandatory + night_id columns.
 fn parquet_alert_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
+        Field::new("id", DataType::UInt64, false),
         Field::new("night_id", DataType::UInt32, false),
-        Field::new("dia_source_id", DataType::UInt64, false),
         Field::new("ra", DataType::Float64, false),
         Field::new("ra_err", DataType::Float64, false),
         Field::new("dec", DataType::Float64, false),
         Field::new("dec_err", DataType::Float64, false),
+        Field::new("magnitude", DataType::Float64, false),
+        Field::new("mag_err", DataType::Float64, false),
+        Field::new("filter", DataType::Utf8, false),
         Field::new("mjd_tt", DataType::Float64, false),
-        Field::new("flux", DataType::Float64, false),
-        Field::new("flux_err", DataType::Float64, false),
-        Field::new("band", DataType::UInt8, false),
-        Field::new("observer_mpc_code", DataType::Utf8, false),
+        Field::new("mpc_code_obs", DataType::Utf8, true),
     ]))
 }
 
@@ -500,7 +556,7 @@ impl SyntheticDatasetBuilder {
         );
 
         let mut rng = StdRng::seed_from_u64(self.rng_seed);
-        let mut all_alerts: Vec<Alert> = Vec::new();
+        let mut all_alerts: Vec<SyntheticAlert> = Vec::new();
         let mut ground_truth: Vec<TrajectoryTruth> = Vec::new();
         let mut next_dia_source_id: u64 = 1;
         let mut trajectory_id: usize = 0;
@@ -529,9 +585,8 @@ impl SyntheticDatasetBuilder {
 
         // Sort alerts by (night_id, mjd_tt) for deterministic ordering.
         all_alerts.sort_by(|a, b| {
-            a.key
-                .night_id
-                .cmp(&b.key.night_id)
+            a.night_id
+                .cmp(&b.night_id)
                 .then(a.mjd_tt.total_cmp(&b.mjd_tt))
         });
 
@@ -594,7 +649,7 @@ fn generate_trajectory(
     intra_night_gap_days: f64,
     next_id: &mut u64,
     observer_mpc_code: &Arc<String>,
-) -> (Vec<Alert>, TrajectoryTruth) {
+) -> (Vec<SyntheticAlert>, TrajectoryTruth) {
     let (speed_lo, speed_hi) = population.speed_range_rad_per_day();
     let (mag_lo, mag_hi) = population.magnitude_range();
     let (err_lo, err_hi) = population.position_error_rad();
@@ -617,8 +672,7 @@ fn generate_trajectory(
 
     // -- Photometry --
     let magnitude = rng.random_range(mag_lo..mag_hi);
-    let base_flux = mag_to_flux(magnitude);
-    let flux_err_frac: f64 = rng.random_range(0.05..0.15);
+    let mag_err_frac: f64 = rng.random_range(0.05..0.15);
 
     // -- Position noise --
     let pos_err = rng.random_range(err_lo..err_hi);
@@ -652,33 +706,31 @@ fn generate_trajectory(
             let observed_ra = wrap_ra(true_ra + noise_ra);
             let observed_dec = clamp_dec(true_dec + noise_dec);
 
-            // Flux with per-observation scatter.
-            let flux_scatter: f64 = rng.random_range(-1.0..1.0) * base_flux * flux_err_frac;
-            let flux = base_flux + flux_scatter;
-            let flux_err = base_flux * flux_err_frac;
+            // Magnitude with per-observation scatter.
+            let mag_scatter: f64 = rng.random_range(-1.0..1.0) * magnitude * mag_err_frac * 0.01;
+            let obs_magnitude = magnitude + mag_scatter;
+            let obs_mag_err = magnitude * mag_err_frac * 0.01;
 
             // Random LSST band.
             let band_idx: usize = rng.random_range(0..lsst_bands::ALL.len());
-            let band = lsst_bands::ALL[band_idx];
+            let filter = lsst_bands::ALL[band_idx].to_string();
 
             // Unique alert identifier.
             let dia_source_id = *next_id;
             *next_id += 1;
             dia_source_ids.push(dia_source_id);
 
-            alerts.push(Alert {
-                key: AlertKey {
-                    night_id: NightId(night_id),
-                    dia_source_id,
-                },
+            alerts.push(SyntheticAlert {
+                night_id: NightId(night_id),
+                dia_source_id,
                 ra: observed_ra,
                 ra_err: pos_err,
                 dec: observed_dec,
                 dec_err: pos_err,
                 mjd_tt,
-                flux,
-                flux_err,
-                band,
+                magnitude: obs_magnitude,
+                mag_err: obs_mag_err,
+                filter,
                 observer_mpc_code: Arc::clone(observer_mpc_code),
             });
         }
@@ -703,13 +755,6 @@ fn generate_trajectory(
 // ---------------------------------------------------------------------------
 // Math helpers
 // ---------------------------------------------------------------------------
-
-/// Convert apparent magnitude to a rough positive flux value (arbitrary units).
-///
-/// Uses `flux = 10^((25 - mag) / 2.5)` so brighter objects have higher flux.
-fn mag_to_flux(mag: f64) -> f64 {
-    10.0_f64.powf((25.0 - mag) / 2.5)
-}
 
 /// Generate a pair of independent Gaussian-distributed noise values (Box-Muller).
 fn gaussian_noise_pair(rng: &mut StdRng, sigma: f64) -> (f64, f64) {
@@ -767,14 +812,14 @@ mod synthetic_alerts_tests {
             assert!(alert.dec <= PI / 2.0, "Dec must be <= π/2: {}", alert.dec);
             assert!(alert.ra_err > 0.0, "ra_err must be positive");
             assert!(alert.dec_err > 0.0, "dec_err must be positive");
-            assert!(alert.flux_err > 0.0, "flux_err must be positive");
+            assert!(alert.mag_err > 0.0, "mag_err must be positive");
         }
     }
 
     #[test]
     fn dia_source_ids_are_unique() {
         let ds = quick_mixed_dataset(5, 5);
-        let mut ids: Vec<u64> = ds.alerts().iter().map(|a| a.key.dia_source_id).collect();
+        let mut ids: Vec<u64> = ds.alerts().iter().map(|a| a.dia_source_id).collect();
         let n = ids.len();
         ids.sort_unstable();
         ids.dedup();
@@ -801,7 +846,7 @@ mod synthetic_alerts_tests {
                     .filter(|&&did| {
                         ds.alerts()
                             .iter()
-                            .any(|a| a.key.dia_source_id == did && a.key.night_id.0 == nid)
+                            .any(|a| a.dia_source_id == did && a.night_id.0 == nid)
                     })
                     .count();
                 assert!(
@@ -816,17 +861,16 @@ mod synthetic_alerts_tests {
     }
 
     #[test]
-    fn into_alert_store_groups_by_night() {
+    fn into_obs_dataset_groups_by_night() {
         let ds = SyntheticDatasetBuilder::new()
             .population(AsteroidPopulation::NearEarth, 2)
             .n_nights(3)
             .obs_per_night(2)
             .build();
 
-        let store = ds.into_alert_store();
-        assert_eq!(store.n_nights(), 3);
-        // 2 trajectories × 2 obs = 4 alerts per night
-        assert_eq!(store.n_alerts(), 12);
+        let obs_dataset = ds.into_obs_dataset();
+        // 2 trajectories × 2 obs × 3 nights = 12 total
+        assert_eq!(obs_dataset.observation_count(), 12);
     }
 
     #[test]
@@ -845,7 +889,7 @@ mod synthetic_alerts_tests {
 
         assert_eq!(ds1.n_alerts(), ds2.n_alerts());
         for (a, b) in ds1.alerts().iter().zip(ds2.alerts().iter()) {
-            assert_eq!(a.key.dia_source_id, b.key.dia_source_id);
+            assert_eq!(a.dia_source_id, b.dia_source_id);
             assert_eq!(a.ra.to_bits(), b.ra.to_bits());
             assert_eq!(a.dec.to_bits(), b.dec.to_bits());
             assert_eq!(a.mjd_tt.to_bits(), b.mjd_tt.to_bits());
@@ -873,15 +917,17 @@ mod synthetic_alerts_tests {
         let ds = quick_mixed_dataset(3, 3);
         for alert in ds.alerts() {
             assert!(
-                lsst_bands::ALL.contains(&alert.band),
-                "band {} is not a valid LSST band",
-                alert.band
+                lsst_bands::ALL.contains(&alert.filter.as_str()),
+                "filter '{}' is not a valid LSST band",
+                alert.filter
             );
         }
     }
 
     #[test]
     fn write_parquet_roundtrip() {
+        use photom::io::datafusion::loader::{LoadObsArgs, load_obs_sync};
+
         let ds = SyntheticDatasetBuilder::new()
             .population(AsteroidPopulation::MainBelt, 2)
             .n_nights(2)
@@ -894,14 +940,11 @@ mod synthetic_alerts_tests {
         assert!(parquet_path.exists());
         assert!(uri.0.starts_with("file://"));
 
-        // Verify we can load it back through the engine's loader.
-        use fink_fat_engine::pipeline::stages::alert_inputs::alert_loader::{
-            AlertParquetColumns, load_alerts_sync,
-        };
-        let store =
-            load_alerts_sync(&uri, AlertParquetColumns::default()).expect("load back from parquet");
-        assert_eq!(store.n_alerts(), ds.n_alerts());
-        assert_eq!(store.n_nights(), 2);
+        // Verify we can load it back through the photom loader.
+        let obs_dataset =
+            load_obs_sync(&uri, LoadObsArgs::default()).expect("load back from parquet");
+        assert_eq!(obs_dataset.observation_count(), ds.n_alerts());
+        assert_eq!(obs_dataset.nb_night(), Some(2));
     }
 
     #[test]
