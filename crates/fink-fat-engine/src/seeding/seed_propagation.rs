@@ -310,6 +310,7 @@ mod seed_node_propagation_tests {
     use proptest::prelude::*;
 
     use photom::{
+        NightId,
         coordinates::equatorial::EquCoord,
         observation_dataset::observation::Observation,
         photometry::{Filter, Photometry},
@@ -319,7 +320,6 @@ mod seed_node_propagation_tests {
     use crate::{
         astro_math::arcsec_to_rad,
         engine_config::propagator_config::{ModelNoise, PredictorParams},
-        night_id::NightId,
         seeding::{SeedNode, store::SeedStore},
         spacetime_bucket::{healpix_binner::HealpixBinner, uniform_time_binner::UniformTimeBinner},
     };

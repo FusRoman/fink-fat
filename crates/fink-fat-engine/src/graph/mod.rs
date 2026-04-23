@@ -404,10 +404,11 @@ impl AlertLinkageDAG {
 
 #[cfg(test)]
 mod graph_tests {
+    use photom::NightId;
+
     use super::*;
     use crate::{
         graph::edge::{Edge, EdgeKey},
-        night_id::NightId,
         persistence::edge_journal::edge_op::EdgeOp,
         seeding::SeedKey,
     };

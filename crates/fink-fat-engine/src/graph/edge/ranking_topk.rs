@@ -417,13 +417,14 @@ mod ranking_topk_tests {
     use super::*;
 
     use photom::{
+        NightId,
         coordinates::equatorial::EquCoord,
         observation_dataset::observation::Observation,
         photometry::{Filter, Photometry as PhotomPhotometry},
     };
     use proptest::prelude::*;
 
-    use crate::{astro_math::arcsec_to_rad, night_id::NightId, seeding::store::SeedStore};
+    use crate::{astro_math::arcsec_to_rad, seeding::store::SeedStore};
 
     // -----------------------------------------------------------------------
     // Helpers

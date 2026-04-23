@@ -43,6 +43,7 @@ fink-fat-engine = { path = "crates/fink-fat-engine", version = "1.0.0" }
 indicatif = "0.18.0"
 serde_yaml = "0.9.34"
 ndarray = "0.17.2"
+
 photom = { path = "../photom", version = "0.1.0" }
 
 [dependencies]

@@ -100,11 +100,11 @@ pub mod seed_index;
 pub mod union_find;
 
 use ahash::AHashMap;
+use photom::NightId;
 
 use crate::{
     engine_config::solver_config::solver_policy::{SolverChoice, SolverPolicy, SolverRoutingMode},
     graph::{AlertLinkageDAG, edge::Edge},
-    night_id::NightId,
     seeding::{SeedKey, SeedNode, store::SeedStore},
     solver::components::{
         error::{ComponentError, SeedOrigin},
@@ -1075,17 +1075,21 @@ impl<'edge_lf, 'seed_lf> ConnectedComponents<'edge_lf, 'seed_lf> {
 mod connected_components_tests {
     use super::*;
     use crate::{
-        Alert, AlertKey,
         astro_math::arcsec_to_rad,
         engine_config::solver_config::solver_policy::{
             SolverChoice, SolverPolicy, SolverRoutingMode,
         },
         graph::AlertLinkageDAG,
         graph::edge::Edge,
-        night_id::NightId,
         seeding::{SeedKey, SeedNode, store::SeedStore},
     };
     use ahash::AHashSet;
+    use photom::{
+        NightId,
+        coordinates::equatorial::EquCoord,
+        observation_dataset::observation::Observation,
+        photometry::{Filter, Photometry},
+    };
     use proptest::prelude::*;
 
     // =========================================================================
@@ -1093,29 +1097,22 @@ mod connected_components_tests {
     // =========================================================================
 
     fn nid(v: u32) -> NightId {
-        NightId::from(v)
+        NightId::new(v)
     }
 
-    /// Build a minimal `Alert` with given parameters.
-    fn mk_alert(source_id: u64, night_id: NightId, mjd_tt: f64) -> Alert {
-        Alert {
-            key: AlertKey {
-                night_id,
-                dia_source_id: source_id,
-            },
-            ra: 1.0,
-            ra_err: arcsec_to_rad(0.5),
-            dec: 0.1,
-            dec_err: arcsec_to_rad(0.5),
-            mjd_tt,
-            flux: 1000.0,
-            flux_err: 10.0,
-            band: 1,
-            ..Default::default()
-        }
+    /// Build a minimal `Observation` with given parameters.
+    fn mk_obs(source_id: u64, mjd_tt: f64) -> Observation {
+        let pos_err = arcsec_to_rad(0.5);
+        let equ_coord = EquCoord::new(1.0, pos_err, 0.1, pos_err);
+        let photometry = Photometry {
+            magnitude: 20.0,
+            error: 0.1,
+            filter: Filter::Int(1),
+        };
+        Observation::new(source_id, equ_coord, photometry, mjd_tt, None)
     }
 
-    /// Insert `count` seeds into `store` for `night_id`, built from alert pairs.
+    /// Insert `count` seeds into `store` for `night_id`, built from observation pairs.
     /// Returns the `SeedKey`s in insertion order.
     fn insert_seeds(
         store: &mut SeedStore,
@@ -1130,10 +1127,10 @@ mod connected_components_tests {
             let sid_a = source_id_offset + (2 * i) as u64;
             let sid_b = source_id_offset + (2 * i + 1) as u64;
             let dt = 30.0 / 1440.0; // 30 min
-            let alert_a = mk_alert(sid_a, night_id, t0 + i as f64 * 0.01);
-            let alert_b = mk_alert(sid_b, night_id, t0 + i as f64 * 0.01 + dt);
+            let obs_a = mk_obs(sid_a, t0 + i as f64 * 0.01);
+            let obs_b = mk_obs(sid_b, t0 + i as f64 * 0.01 + dt);
 
-            if let Some(seed) = SeedNode::from_pair(store, night_id, &alert_a, &alert_b, None) {
+            if let Some(seed) = SeedNode::from_pair(store, night_id, &obs_a, &obs_b, None) {
                 keys.push(seed.key());
                 store.insert_vec_seed(night_id, vec![seed]);
             }

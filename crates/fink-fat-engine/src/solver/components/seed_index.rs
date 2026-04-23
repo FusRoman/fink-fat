@@ -1,7 +1,7 @@
 use ahash::AHashMap;
+use photom::NightId;
 
 use crate::{
-    night_id::NightId,
     seeding::{SeedKey, store::SeedStore},
     solver::components::error::{ComponentError, SeedOrigin},
 };
@@ -107,11 +107,15 @@ mod seed_global_index_tests {
     use proptest::prelude::*;
 
     use crate::{
-        Alert, AlertKey,
         astro_math::arcsec_to_rad,
-        night_id::NightId,
         seeding::{SeedKey, SeedNode, store::SeedStore},
         solver::components::error::ComponentError,
+    };
+    use photom::{
+        NightId,
+        coordinates::equatorial::EquCoord,
+        observation_dataset::observation::Observation,
+        photometry::{Filter, Photometry},
     };
 
     // -------------------------------------------------------------------------
@@ -119,33 +123,26 @@ mod seed_global_index_tests {
     // -------------------------------------------------------------------------
 
     fn nid(v: u32) -> NightId {
-        NightId::from(v)
+        NightId::new(v)
     }
 
-    /// Build a minimal `Alert` with a unique `dia_source_id`.
+    /// Build a minimal `Observation` with a unique id.
     /// Position is fixed at (ra=1.0, dec=0.1) rad; only timing varies.
-    fn mk_alert(source_id: u64, night_id: NightId, mjd_tt: f64) -> Alert {
-        Alert {
-            key: AlertKey {
-                night_id,
-                dia_source_id: source_id,
-            },
-            ra: 1.0,
-            ra_err: arcsec_to_rad(0.5),
-            dec: 0.1,
-            dec_err: arcsec_to_rad(0.5),
-            mjd_tt,
-            flux: 1000.0,
-            flux_err: 10.0,
-            band: 1,
-            ..Default::default()
-        }
+    fn mk_obs(source_id: u64, mjd_tt: f64) -> Observation {
+        let pos_err = arcsec_to_rad(0.5);
+        let equ_coord = EquCoord::new(1.0, pos_err, 0.1, pos_err);
+        let photometry = Photometry {
+            magnitude: 20.0,
+            error: 0.1,
+            filter: Filter::Int(1),
+        };
+        Observation::new(source_id, equ_coord, photometry, mjd_tt, None)
     }
 
-    /// Insert `count` seeds built from pairs of consecutive alerts into `store`
+    /// Insert `count` seeds built from pairs of consecutive observations into `store`
     /// for `night_id`. Returns the `SeedKey`s in insertion order.
     ///
-    /// Each pair is built from alerts separated by 30 minutes (~0.02 days),
+    /// Each pair is built from observations separated by 30 minutes (~0.02 days),
     /// which is well within typical intra-night constraints.
     fn insert_seeds(
         store: &mut SeedStore,
@@ -160,12 +157,12 @@ mod seed_global_index_tests {
             let sid_a = source_id_offset + (2 * i) as u64;
             let sid_b = source_id_offset + (2 * i + 1) as u64;
 
-            // 30-minute separation between the two alerts of each pair.
+            // 30-minute separation between the two observations of each pair.
             let dt = 30.0 / 1440.0;
-            let alert_a = mk_alert(sid_a, night_id, t0 + i as f64);
-            let alert_b = mk_alert(sid_b, night_id, t0 + i as f64 + dt);
+            let obs_a = mk_obs(sid_a, t0 + i as f64);
+            let obs_b = mk_obs(sid_b, t0 + i as f64 + dt);
 
-            if let Some(seed) = SeedNode::from_pair(store, night_id, &alert_a, &alert_b, None) {
+            if let Some(seed) = SeedNode::from_pair(store, night_id, &obs_a, &obs_b, None) {
                 keys.push(seed.key());
                 store.insert_vec_seed(night_id, vec![seed]);
             }

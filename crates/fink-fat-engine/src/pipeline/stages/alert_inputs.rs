@@ -98,20 +98,14 @@
 //! - Finer-grained progress reporting (e.g. per-night ingestion) can be implemented
 //!   by introducing nested `StageProgress::child()` scopes.
 
-pub mod alert_loader;
-pub mod input_uri;
-pub mod storage;
+use std::mem;
 
 use crate::{
-    error::EngineError,
+    error::{EngineError, OptionExt},
     pipeline::{
         PipelineContext,
         hooks::{PipelineHooks, StageMeta, StageReport},
-        stages::{
-            PipelineStage,
-            alert_inputs::alert_loader::{AlertParquetColumns, LoadAlertsError, load_alerts_sync},
-            run_stage,
-        },
+        stages::{PipelineStage, run_stage},
     },
 };
 
@@ -207,104 +201,65 @@ pub fn run(
         },
         |stage_sink| {
             // -----------------------------------------------------------------
-            // 1) Retrieve the input URI from the pipeline plan.
+            // 1) Retrieve the input ObsDataset from the pipeline plan.
             // -----------------------------------------------------------------
-            //
-            // The plan defines where alert data is sourced from (local file, HTTP(S), HDFS...).
-            // The loader will resolve this URI into an object_store backend and read Parquet
-            // via DataFusion.
-            let uri = &ctx.plan.inputs.alerts_uri;
-
-            tracing::debug!(uri = %uri.0, "loading alerts");
+            let new_obs_dataset = mem::take(&mut ctx.plan.inputs.new_observation_dataset);
 
             // -----------------------------------------------------------------
-            // 2) Load alerts into a fresh AlertStore.
+            // 2) Update the runtime new night IDs.
             // -----------------------------------------------------------------
-            //
-            // `AlertParquetColumns::default()` defines the projected schema: only the columns
-            // required by the engine are read, which reduces I/O and memory.
-            //
-            // `load_alerts_sync` wraps the async execution (object_store + DataFusion)
-            // behind a sync API so the pipeline runner stays sync.
-            let mut new_alert_store = load_alerts_sync(uri, AlertParquetColumns::default())
-                .map_err(|e| match e {
-                    LoadAlertsError::NotFound(_) => EngineError::StageFailed {
-                        stage: PipelineStage::IngestNights,
-                        message: format!("file not found: {}", uri.0),
-                    },
-                    _ => EngineError::StageFailed {
-                        stage: PipelineStage::IngestNights,
-                        message: format!("failed to load alerts from {}: {e:?}", uri.0),
-                    },
-                })?;
+            let mut new_night_ids: Vec<_> = new_obs_dataset
+                .iter_night_id()
+                .stage_err(
+                    PipelineStage::IngestNights,
+                    "failed to iterate night IDs from the new observation dataset",
+                )?
+                .copied()
+                .collect();
+            new_night_ids.sort();
 
+            ctx.runtime_state.set_new_night_ids(new_night_ids.clone());
+
+            stage_sink.inc(1);
+
+            tracing::info!("loading the new observation dataset containing the alerts");
             tracing::debug!(
-                n_alerts = new_alert_store.n_alerts(),
-                n_nights = new_alert_store.n_nights(),
-                "alerts loaded (pre-normalization)",
+                "Number of new observations in the dataset: {}",
+                new_obs_dataset.observation_count()
             );
-
-            stage_sink.inc(1);
-
-            // -----------------------------------------------------------------
-            // 3) Normalize per-night ordering and refresh alert keys.
-            // -----------------------------------------------------------------
-            //
-            // Downstream stages frequently rely on stable ordering (determinism) and on keys
-            // for indexing and persistence. This step ensures the store is in a canonical form.
-            new_alert_store.sort_each_night_and_rekey();
-            stage_sink.inc(1);
-
-            // Collect counters *after* normalization, since normalization may drop/transform
-            // some internal representation depending on implementation details.
-            let n_new_alerts = new_alert_store.n_alerts();
-            let n_new_nights = new_alert_store.n_nights();
-
             tracing::debug!(
-                n_alerts = n_new_alerts,
-                n_nights = n_new_nights,
-                "alerts normalised (post sort-and-rekey)",
+                "Number of nights in the dataset: {:#?}",
+                new_obs_dataset.nb_night().stage_err(
+                    PipelineStage::IngestNights,
+                    "failed to count nights in the new observation dataset",
+                )?
             );
 
             // TRACE: one line per night with its alert count — too verbose for DEBUG
             // but invaluable when diagnosing per-night ingestion issues.
             if tracing::enabled!(tracing::Level::TRACE) {
-                let nights = new_alert_store.nights_sorted();
-                for nid in &nights {
-                    let count = new_alert_store.get(nid).map(|v| v.len()).unwrap_or(0);
-                    tracing::trace!(night_id = %nid, n_alerts = count, "night detail");
+                for nid in new_night_ids {
+                    let nid_alert_count = new_obs_dataset.len_night(&nid).stage_err(
+                        PipelineStage::IngestNights,
+                        "failed to count alerts for night {nid} in the new observation dataset",
+                    )?;
+                    tracing::trace!("night {nid} contains {nid_alert_count} alerts");
                 }
             }
 
             // -----------------------------------------------------------------
-            // 4) Update the runtime new night IDs.
+            // 2) Merge the new observation dataset into the current runtime state observation dataset.
             // -----------------------------------------------------------------
-            ctx.runtime_state
-                .set_new_night_ids(new_alert_store.nights_sorted());
+            ctx.runtime_state.obs_dataset.merge_from(new_obs_dataset);
 
+            tracing::info!("Merged the new observation dataset into the runtime state");
             stage_sink.inc(1);
 
-            // -----------------------------------------------------------------
-            // 5) Merge the newly loaded AlertStore into the runtime state.
-            // -----------------------------------------------------------------
-            //
-            // The chosen semantics here are "merge in place", typically meaning:
-            // - replace existing nights with newly loaded data,
-            // - or union nights depending on your AlertStore implementation.
-            //
-            // The key property is that after this call, runtime state contains the alerts
-            // needed for subsequent stages.
-            ctx.runtime_state
-                .alert_store
-                .merge_in_place(new_alert_store);
-
-            tracing::debug!(
-                total_alerts = ctx.runtime_state.alert_store.n_alerts(),
-                total_nights = ctx.runtime_state.alert_store.n_nights(),
-                "alert store merged into runtime state",
-            );
-
-            stage_sink.inc(1);
+            let n_new_alerts = ctx.runtime_state.obs_dataset.observation_count();
+            let n_new_nights = ctx.runtime_state.obs_dataset.nb_night().stage_err(
+                PipelineStage::IngestNights,
+                "failed to count nights in the runtime state observation dataset after merging",
+            )?;
 
             // -----------------------------------------------------------------
             // 6) Emit stage counters.

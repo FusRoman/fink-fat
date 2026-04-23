@@ -57,6 +57,7 @@
 
 use ahash::{AHashMap, AHashSet};
 use photom::{
+    NightId,
     coordinates::{
         cartesian::CartesianCoord,
         cov2::Cov2,
@@ -67,7 +68,6 @@ use photom::{
 
 use crate::{
     engine_config::pair_config::PairConfig,
-    night_id::NightId,
     seeding::{
         SeedNode,
         photometry::SeedPhotometry,

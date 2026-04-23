@@ -120,8 +120,8 @@ use std::hash::BuildHasher;
 use std::hash::{Hash, Hasher};
 
 use ahash::RandomState;
+use photom::observation_dataset::ObsDataset;
 
-use crate::AlertStore;
 use crate::seeding::SeedKey;
 use crate::seeding::SeedNode;
 use crate::trajectory::error::TrackError;
@@ -259,11 +259,11 @@ pub fn track_id_from_seed_keys_with_year(keys: &[SeedKey], year: u32) -> TrackId
 /// ------
 /// Panics if `nodes` is empty, or if nodes contain no alerts (members list empty).
 pub fn track_id_from_nodes(
-    alert_store: &AlertStore,
+    obs_dataset: &ObsDataset,
     nodes: &[&SeedNode],
 ) -> Result<TrackId, TrackError> {
     // 1) Year prefix from earliest alert epoch
-    let mjd_min = earliest_alert_mjd_tt(alert_store, nodes)?;
+    let mjd_min = earliest_alert_mjd_tt(obs_dataset, nodes)?;
     let year = mjd_to_year(mjd_min);
 
     // 2) Suffix from ordered seed keys
@@ -286,7 +286,7 @@ pub fn track_id_from_nodes(
 ///
 /// Arguments
 /// ---------
-/// * `alert_store` – Store to resolve alert keys into alert metadata (for epoch extraction).
+/// * `obs_dataset` – Dataset to resolve alert keys into alert metadata (for epoch extraction).
 /// * `nodes` – Track nodes whose alerts are scanned.
 ///
 /// Return
@@ -296,20 +296,16 @@ pub fn track_id_from_nodes(
 /// Panics
 /// ------
 /// Panics if no alert member is present at all (track nodes without alerts).
-fn earliest_alert_mjd_tt(alert_store: &AlertStore, nodes: &[&SeedNode]) -> Result<f64, TrackError> {
-    let mut best: Option<f64> = None;
-
-    for node in nodes {
-        for &alert in &node.resolve_members(alert_store)? {
-            let mjd = alert.mjd_tt;
-            best = match best {
-                None => Some(mjd),
-                Some(cur) => Some(cur.min(mjd)),
-            };
-        }
-    }
-
-    best.ok_or(TrackError::TrackNodesEmpty)
+fn earliest_alert_mjd_tt(obs_dataset: &ObsDataset, nodes: &[&SeedNode]) -> Result<f64, TrackError> {
+    nodes
+        .iter()
+        .map(|node| node.resolve_members(obs_dataset))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .map(|alert| alert.mjd_tt())
+        .reduce(f64::min)
+        .ok_or(TrackError::TrackNodesEmpty)
 }
 
 /// Convert MJD (TT) to Gregorian year.
@@ -402,10 +398,14 @@ fn encode_base26_u64(mut value: u64, width: usize) -> String {
 #[cfg(test)]
 mod track_id_tests {
     use super::*;
-    use crate::{
-        Alert, AlertKey, alerts::DiaSourceId, night_id::NightId, seeding::store::SeedStore,
-    };
+    use crate::seeding::store::SeedStore;
     use approx::assert_abs_diff_eq;
+    use photom::{
+        NightId,
+        coordinates::equatorial::EquCoord,
+        observation_dataset::{ObsDataset, ObsId, observation::Observation},
+        photometry::{Filter, Photometry},
+    };
     use proptest::prelude::*;
 
     // -------------------------------------------------------------------------
@@ -413,50 +413,37 @@ mod track_id_tests {
     // -------------------------------------------------------------------------
 
     /// Build a SeedKey with deterministic content.
-    ///
-    /// Adapt field names if your SeedKey differs.
     fn make_seed_key(night_id: u32, uniq: u64) -> SeedKey {
-        // Assumes: SeedKey { night_id: NightId, idx_in_night: u32 } or similar.
         SeedKey {
-            night_id: crate::night_id::NightId(night_id),
+            night_id: NightId(night_id),
             unique_id: uniq,
         }
     }
 
-    /// Build a minimal but valid fake alert for seeding.
-    ///
-    /// The seed-building code (`SeedNode::from_pair`) requires plausible values
-    /// for position/time; we keep everything simple and deterministic.
-    fn make_alert(key: AlertKey, mjd_tt: f64, ra_rad: f64, dec_rad: f64, band: u8) -> Alert {
-        let mut a = Alert::default();
-
-        // Epoch (your Alert uses `mjd_tt: MJDTT`; in your current code it behaves like f64).
-        a.mjd_tt = mjd_tt;
-
-        // Angles: use `.into()` to support both `type Radian = f64` and `struct Radian(f64)`.
-        a.ra = ra_rad.into();
-        a.dec = dec_rad.into();
-
-        // Uncertainties (only required to satisfy invariants if used by modeling)
-        a.ra_err = 1.0.into();
-        a.dec_err = 1.0.into();
-
-        // Photometry (not used by track_id but seed construction might carry it)
-        a.flux = 1000.0;
-        a.flux_err = 10.0;
-        a.band = band;
-
-        // dia_source_id / key can stay default for these tests
-        a.key = key;
-        a
+    /// Build a minimal but valid `Observation` for seeding.
+    fn make_observation(id: ObsId, mjd_tt: f64, ra_rad: f64, dec_rad: f64) -> Observation {
+        let equ_coord = EquCoord::new(ra_rad, 1e-5, dec_rad, 1e-5);
+        let photometry = Photometry {
+            magnitude: 20.0,
+            error: 0.1,
+            filter: Filter::Int(1),
+        };
+        Observation::new(id, equ_coord, photometry, mjd_tt, None)
     }
 
-    /// Build one seed from a pair of alerts using the production constructor.
-    ///
-    /// This avoids having to manually construct `TangentPlaneModel` and `Photometry`.
-    fn make_seed_from_pair(night_id: u32, a: &Alert, b: &Alert) -> SeedNode {
+    /// Push a list of observations into an `ObsDataset` and return it.
+    fn make_dataset(observations: Vec<Observation>) -> ObsDataset {
+        let mut dataset = ObsDataset::empty();
+        for obs in observations {
+            dataset.push_observation(obs);
+        }
+        dataset
+    }
+
+    /// Build one seed from a pair of observations using the production constructor.
+    fn make_seed_from_pair(night_id: u32, a: &Observation, b: &Observation) -> SeedNode {
         SeedNode::from_pair(&mut SeedStore::new(), NightId(night_id), a, b, None)
-            .expect("Test alert pair should always generate a valid SeedNode")
+            .expect("Test observation pair should always generate a valid SeedNode")
     }
 
     // -------------------------------------------------------------------------
@@ -633,62 +620,19 @@ mod track_id_tests {
 
     #[test]
     fn earliest_alert_mjd_tt_picks_min_even_if_unsorted() {
-        let night_id = NightId(1);
+        let a1 = make_observation(0, 60000.5, 0.10, 0.10);
+        let a2 = make_observation(1, 59000.0, 0.11, 0.10);
+        let a3 = make_observation(2, 61000.0, 0.12, 0.10);
+        let a4 = make_observation(3, 60500.0, 0.13, 0.10);
 
-        // Owned alerts
-        let a1 = make_alert(
-            AlertKey {
-                night_id,
-                dia_source_id: 0,
-            },
-            60000.5,
-            0.10,
-            0.10,
-            1,
-        );
-        let a2 = make_alert(
-            AlertKey {
-                night_id,
-                dia_source_id: 1,
-            },
-            59000.0,
-            0.11,
-            0.10,
-            1,
-        );
-        let a3 = make_alert(
-            AlertKey {
-                night_id,
-                dia_source_id: 2,
-            },
-            61000.0,
-            0.12,
-            0.10,
-            1,
-        );
-        let a4 = make_alert(
-            AlertKey {
-                night_id,
-                dia_source_id: 3,
-            },
-            60500.0,
-            0.13,
-            0.10,
-            1,
-        );
-
-        let mut store = AlertStore::new();
-        store.insert(
-            night_id,
-            vec![a1.clone(), a2.clone(), a3.clone(), a4.clone()],
-        );
+        let dataset = make_dataset(vec![a1.clone(), a2.clone(), a3.clone(), a4.clone()]);
 
         // Build seeds via from_pair (members will be [a,b] internally)
-        let s1 = make_seed_from_pair(night_id.0, &a1, &a3);
-        let s2 = make_seed_from_pair(night_id.0, &a2, &a4);
+        let s1 = make_seed_from_pair(1, &a1, &a3);
+        let s2 = make_seed_from_pair(1, &a2, &a4);
 
         let nodes: Vec<&SeedNode> = vec![&s1, &s2];
-        let mjd_min = earliest_alert_mjd_tt(&store, &nodes).unwrap();
+        let mjd_min = earliest_alert_mjd_tt(&dataset, &nodes).unwrap();
 
         assert_abs_diff_eq!(mjd_min, 59000.0, epsilon = 0.0);
     }
@@ -801,65 +745,24 @@ mod track_id_tests {
 
     #[test]
     fn track_id_from_nodes_year_is_from_earliest_alert() {
-        let night_id = NightId(1);
-        let a_early = make_alert(
-            AlertKey {
-                night_id,
-                dia_source_id: 0,
-            },
-            61000.0,
-            0.10,
-            0.10,
-            1,
-        );
-        let a_late = make_alert(
-            AlertKey {
-                night_id,
-                dia_source_id: 1,
-            },
-            62000.0,
-            0.11,
-            0.10,
-            1,
-        );
-        let a_mid = make_alert(
-            AlertKey {
-                night_id,
-                dia_source_id: 2,
-            },
-            61500.0,
-            0.12,
-            0.10,
-            1,
-        );
-        let a_mid2 = make_alert(
-            AlertKey {
-                night_id,
-                dia_source_id: 3,
-            },
-            61600.0,
-            0.13,
-            0.10,
-            1,
-        );
+        let a_early = make_observation(0, 61000.0, 0.10, 0.10);
+        let a_late = make_observation(1, 62000.0, 0.11, 0.10);
+        let a_mid = make_observation(2, 61500.0, 0.12, 0.10);
+        let a_mid2 = make_observation(3, 61600.0, 0.13, 0.10);
 
-        let mut store = AlertStore::new();
-        store.insert(
-            night_id,
-            vec![
-                a_early.clone(),
-                a_mid.clone(),
-                a_mid2.clone(),
-                a_late.clone(),
-            ],
-        );
+        let dataset = make_dataset(vec![
+            a_early.clone(),
+            a_mid.clone(),
+            a_mid2.clone(),
+            a_late.clone(),
+        ]);
 
-        let s1 = make_seed_from_pair(night_id.0, &a_late, &a_mid2);
-        let s2 = make_seed_from_pair(night_id.0, &a_early, &a_mid);
+        let s1 = make_seed_from_pair(1, &a_late, &a_mid2);
+        let s2 = make_seed_from_pair(1, &a_early, &a_mid);
 
         let nodes: Vec<&SeedNode> = vec![&s1, &s2];
 
-        let id = track_id_from_nodes(&store, &nodes);
+        let id = track_id_from_nodes(&dataset, &nodes);
 
         let year_expected = mjd_to_year(61000.0);
 
@@ -872,78 +775,36 @@ mod track_id_tests {
 
     #[test]
     fn track_id_from_nodes_is_insensitive_to_where_the_earliest_alert_is() {
-        // Four alerts with distinct epochs; the earliest is a2.
-        let night_id = NightId(1);
-        let a1 = make_alert(
-            AlertKey {
-                night_id,
-                dia_source_id: 0,
-            },
-            60000.0,
-            0.10,
-            0.10,
-            1,
-        );
-        let a2 = make_alert(
-            AlertKey {
-                night_id,
-                dia_source_id: 1,
-            },
-            59000.0,
-            0.11,
-            0.10,
-            1,
-        ); // earliest
-        let a3 = make_alert(
-            AlertKey {
-                night_id,
-                dia_source_id: 2,
-            },
-            61000.0,
-            0.12,
-            0.10,
-            1,
-        );
-        let a4 = make_alert(
-            AlertKey {
-                night_id,
-                dia_source_id: 3,
-            },
-            60500.0,
-            0.13,
-            0.10,
-            1,
-        );
+        // Four observations with distinct epochs; the earliest is a2.
+        let a1 = make_observation(0, 60000.0, 0.10, 0.10);
+        let a2 = make_observation(1, 59000.0, 0.11, 0.10); // earliest
+        let a3 = make_observation(2, 61000.0, 0.12, 0.10);
+        let a4 = make_observation(3, 60500.0, 0.13, 0.10);
 
-        let night_id = NightId(1);
-        let mut store = AlertStore::new();
-        store.insert(
-            night_id,
-            vec![a1.clone(), a2.clone(), a3.clone(), a4.clone()],
-        );
+        let dataset = make_dataset(vec![a1.clone(), a2.clone(), a3.clone(), a4.clone()]);
 
         // Build two tracks with the SAME SeedKeys in the SAME node order,
-        // but place the earliest alert (a2) in a different seed.
+        // but place the earliest observation (a2) in a different seed.
         //
         // Track A:
         // - seed0: (a2, a1)  contains earliest
         // - seed1: (a4, a3)
-        let s0_a = make_seed_from_pair(night_id.0, &a2, &a1);
-        let s1_a = make_seed_from_pair(night_id.0, &a4, &a3);
+        let s0_a = make_seed_from_pair(1, &a2, &a1);
+        let s1_a = make_seed_from_pair(1, &a4, &a3);
         let nodes_a: Vec<&SeedNode> = vec![&s0_a, &s1_a];
 
         // Track B:
         // - seed0: (a1, a3)
         // - seed1: (a2, a4) contains earliest (moved)
-        let s0_b = make_seed_from_pair(night_id.0, &a1, &a3);
-        let s1_b = make_seed_from_pair(night_id.0, &a2, &a4);
+        let s0_b = make_seed_from_pair(1, &a1, &a3);
+        let s1_b = make_seed_from_pair(1, &a2, &a4);
         let nodes_b: Vec<&SeedNode> = vec![&s0_b, &s1_b];
 
         // Year prefix must be derived from the *minimum mjd_tt* across all members,
-        // so it should be identical for both tracks (same alert set => same min).
-        // Suffix must also match because keys and their order are identical (night_id=1, idx=0 then idx=1).
-        let id_a = track_id_from_nodes(&store, &nodes_a).unwrap();
-        let id_b = track_id_from_nodes(&store, &nodes_b).unwrap();
+        // so it should be identical for both tracks (same observation set => same min).
+        // Suffix must also match because keys and their order are identical.
+        let id_a = track_id_from_nodes(&dataset, &nodes_a).unwrap();
+        let id_b = track_id_from_nodes(&dataset, &nodes_b).unwrap();
 
         assert_eq!(id_a, id_b);
     }
@@ -953,29 +814,17 @@ mod track_id_tests {
         fn prop_track_id_from_nodes_year_matches_min_mjd_year(
             obs in prop::collection::vec((45000f64..70000f64, 0f64..6.0, -1.4f64..1.4), 2..10),
         ) {
-            // Owned alerts
-            let mut alerts: Vec<Alert> = Vec::with_capacity(obs.len());
+            let mut observations: Vec<Observation> = Vec::with_capacity(obs.len());
             for (i, (mjd, ra, dec)) in obs.iter().enumerate() {
-                alerts.push(make_alert(
-                    AlertKey {
-                        night_id: NightId(1),
-                        dia_source_id: i as DiaSourceId
-                    },
-                    *mjd,
-                    *ra,
-                    *dec,
-                    1
-                ));
+                observations.push(make_observation(i as ObsId, *mjd, *ra, *dec));
             }
 
-            let night_id = NightId(1);
-            let mut store = AlertStore::new();
-            store.insert(night_id, alerts.clone());
+            let dataset = make_dataset(observations.clone());
 
             // Build seeds: chain pairs (0,1), (1,2), ...
-            let mut seeds: Vec<SeedNode> = Vec::with_capacity(alerts.len() - 1);
-            for i in 0..alerts.len()-1 {
-                let s = make_seed_from_pair(night_id.0, &alerts[i], &alerts[i+1]);
+            let mut seeds: Vec<SeedNode> = Vec::with_capacity(observations.len() - 1);
+            for i in 0..observations.len() - 1 {
+                let s = make_seed_from_pair(1, &observations[i], &observations[i + 1]);
                 seeds.push(s);
             }
 
@@ -984,7 +833,7 @@ mod track_id_tests {
             let min_mjd = obs.iter().map(|(m, _, _)| *m).fold(f64::INFINITY, f64::min);
             let year_expected = mjd_to_year(min_mjd);
 
-            let id = track_id_from_nodes(&store, &node_refs);
+            let id = track_id_from_nodes(&dataset, &node_refs);
             let expected_prefix = format!("TRK{}", year_expected);
             prop_assert!(id.unwrap().as_str().starts_with(&expected_prefix));
         }

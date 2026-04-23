@@ -49,6 +49,7 @@
 
 use ahash::{AHashMap, AHashSet};
 use photom::{
+    NightId,
     coordinates::{cartesian::CartesianCoord, cov2::Cov2, gnomonic_projection::TangentPlane},
     observation_dataset::observation::Observation,
 };
@@ -56,7 +57,6 @@ use photom::{
 use crate::{
     astro_math::{fit_quad_tangent, planar_offset_fast},
     engine_config::triplet_config::TripletConfig,
-    night_id::NightId,
     seeding::{
         SeedNode,
         pairs::Pair,
