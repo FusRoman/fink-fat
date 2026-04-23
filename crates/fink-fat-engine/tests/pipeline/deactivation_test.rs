@@ -32,14 +32,12 @@ use fink_fat_engine::{
     engine_config::pipeline_policy::PersistPolicy,
     graph::edge::EdgeKey,
     persistence::{PersistenceManager, runtime_state::RuntimeState},
-    pipeline::{
-        PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner, stages::PipelineStage,
-    },
+    pipeline::{PipelineContext, stages::PipelineStage},
 };
 
 use super::{
-    NoopHooks, PipelineTestResult, THROUGH_ORBIT, dummy_input_uri, run_pipeline, test_edge_models,
-    test_solver_manager,
+    NoopHooks, PipelineTestResult, THROUGH_ORBIT, make_plan_and_runner, run_pipeline,
+    test_edge_models, test_solver_manager,
 };
 use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
 
@@ -308,22 +306,16 @@ fn subsequent_solve_excludes_deactivated_edges() {
     let edge_models = test_edge_models();
     let solver_manager = test_solver_manager();
 
-    let solve_plan = PipelinePlan {
-        stages: vec![PipelineStage::Solve],
-        persist: PersistPolicy::None,
-        inputs: PipelineInputs {
-            alerts_uri: dummy_input_uri(),
-        },
-    };
-
-    let runner = PipelineRunner {
-        plan: solve_plan.clone(),
-    };
+    let (mut solve_plan, runner) = make_plan_and_runner(
+        &[PipelineStage::Solve],
+        PersistPolicy::None,
+        photom::observation_dataset::ObsDataset::empty(),
+    );
     let hooks = NoopHooks;
 
     {
         let mut ctx = PipelineContext {
-            plan: &solve_plan,
+            plan: &mut solve_plan,
             persistence: &persistence,
             runtime_state: &mut state,
             engine_config: &engine_config,

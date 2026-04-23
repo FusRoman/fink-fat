@@ -15,17 +15,17 @@ use fink_fat_engine::{
     engine_config::pipeline_policy::PersistPolicy,
     night_id::NightId,
     persistence::{PersistenceManager, runtime_state::RuntimeState},
-    pipeline::{
-        PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner, stages::PipelineStage,
-    },
+    pipeline::{PipelineContext, stages::PipelineStage},
     solver::solver_manager::SolverManager,
 };
 
 use super::{
-    NoopHooks, PipelineTestResult, THROUGH_EDGES, engine_config_with_edges, run_pipeline,
-    test_edge_models, write_alerts_parquet,
+    NoopHooks, PipelineTestResult, THROUGH_EDGES, engine_config_with_edges, make_plan_and_runner,
+    run_pipeline, test_edge_models,
 };
-use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
+use crate::synthetic_alerts::{
+    AsteroidPopulation, SyntheticDatasetBuilder, write_and_load_parquet,
+};
 
 // ---------------------------------------------------------------------------
 // Integration tests
@@ -392,7 +392,8 @@ fn batch_ingest_builds_seeds_and_edges_for_all_new_nights() {
     let storage_dir = TempDir::new().unwrap();
 
     let parquet_path = data_dir.path().join("all_nights.parquet");
-    let alerts_uri = dataset.write_parquet(&parquet_path);
+    let all_alerts: Vec<_> = dataset.alerts().iter().collect();
+    let all_obs = write_and_load_parquet(&all_alerts, &parquet_path);
 
     let engine_config = engine_config_with_edges(&storage_dir, max_gap);
     let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
@@ -400,15 +401,11 @@ fn batch_ingest_builds_seeds_and_edges_for_all_new_nights() {
     let edge_models = test_edge_models();
     let solver_manager = SolverManager::default();
 
-    let plan = PipelinePlan {
-        stages: THROUGH_EDGES.to_vec(),
-        persist: PersistPolicy::None,
-        inputs: PipelineInputs { alerts_uri },
-    };
+    let (mut plan, runner) = make_plan_and_runner(THROUGH_EDGES, PersistPolicy::None, all_obs);
 
     let mut runtime_state = RuntimeState::new();
     let mut ctx = PipelineContext {
-        plan: &plan,
+        plan: &mut plan,
         persistence: &persistence,
         runtime_state: &mut runtime_state,
         engine_config: &engine_config,
@@ -416,7 +413,7 @@ fn batch_ingest_builds_seeds_and_edges_for_all_new_nights() {
         solver_manager: &solver_manager,
     };
 
-    PipelineRunner { plan: plan.clone() }
+    runner
         .run(&mut ctx, &NoopHooks)
         .expect("batch pipeline run should succeed");
 
@@ -525,39 +522,34 @@ fn edges_connect_new_nights_to_previously_ingested_nights() {
     let night1 = NightId(start_night_id + 1);
     let night2 = NightId(start_night_id + 2);
 
-    let alerts_n0n1: Vec<&fink_fat_engine::Alert> = dataset
+    let alerts_n0n1: Vec<&crate::synthetic_alerts::SyntheticAlert> = dataset
         .alerts()
         .iter()
-        .filter(|a| a.key.night_id == night0 || a.key.night_id == night1)
+        .filter(|a| a.night_id == night0 || a.night_id == night1)
         .collect();
-    let alerts_n2: Vec<&fink_fat_engine::Alert> = dataset
+    let alerts_n2: Vec<&crate::synthetic_alerts::SyntheticAlert> = dataset
         .alerts()
         .iter()
-        .filter(|a| a.key.night_id == night2)
+        .filter(|a| a.night_id == night2)
         .collect();
 
     // ---- Run 1: ingest nights N0 + N1 ----
     let parquet_1 = data_dir.path().join("nights_0_1.parquet");
-    let uri_1 = write_alerts_parquet(&alerts_n0n1, &parquet_1);
+    let obs_1 = write_and_load_parquet(&alerts_n0n1, &parquet_1);
 
-    let plan_1 = PipelinePlan {
-        stages: THROUGH_EDGES.to_vec(),
-        persist: PersistPolicy::None,
-        inputs: PipelineInputs { alerts_uri: uri_1 },
-    };
+    let (mut plan_1, runner_1) = make_plan_and_runner(THROUGH_EDGES, PersistPolicy::None, obs_1);
     let mut ctx_1 = PipelineContext {
-        plan: &plan_1,
+        plan: &mut plan_1,
         persistence: &persistence,
         runtime_state: &mut runtime_state,
         engine_config: &engine_config,
         edge_models: &edge_models,
         solver_manager: &solver_manager,
     };
-    PipelineRunner {
-        plan: plan_1.clone(),
-    }
-    .run(&mut ctx_1, &NoopHooks)
-    .expect("run 1 should succeed");
+    runner_1
+        .run(&mut ctx_1, &NoopHooks)
+        .expect("run 1 should succeed");
+    drop(ctx_1);
 
     let edges_after_run1 = runtime_state.graph.edges.len();
     assert!(
@@ -576,26 +568,21 @@ fn edges_connect_new_nights_to_previously_ingested_nights() {
 
     // ---- Run 2: ingest night N2 only ----
     let parquet_2 = data_dir.path().join("night_2.parquet");
-    let uri_2 = write_alerts_parquet(&alerts_n2, &parquet_2);
+    let obs_2 = write_and_load_parquet(&alerts_n2, &parquet_2);
 
-    let plan_2 = PipelinePlan {
-        stages: THROUGH_EDGES.to_vec(),
-        persist: PersistPolicy::None,
-        inputs: PipelineInputs { alerts_uri: uri_2 },
-    };
+    let (mut plan_2, runner_2) = make_plan_and_runner(THROUGH_EDGES, PersistPolicy::None, obs_2);
     let mut ctx_2 = PipelineContext {
-        plan: &plan_2,
+        plan: &mut plan_2,
         persistence: &persistence,
         runtime_state: &mut runtime_state,
         engine_config: &engine_config,
         edge_models: &edge_models,
         solver_manager: &solver_manager,
     };
-    PipelineRunner {
-        plan: plan_2.clone(),
-    }
-    .run(&mut ctx_2, &NoopHooks)
-    .expect("run 2 should succeed");
+    runner_2
+        .run(&mut ctx_2, &NoopHooks)
+        .expect("run 2 should succeed");
+    drop(ctx_2);
 
     let edges_after_run2 = runtime_state.graph.edges.len();
     assert!(
@@ -668,7 +655,9 @@ fn max_gap_prevents_edges_between_distant_nights() {
     let storage_dir = TempDir::new().unwrap();
 
     let parquet_path = data_dir.path().join("all_nights.parquet");
-    let alerts_uri = dataset.write_parquet(&parquet_path);
+    let all_alerts: Vec<&crate::synthetic_alerts::SyntheticAlert> =
+        dataset.alerts().iter().collect();
+    let all_obs = write_and_load_parquet(&all_alerts, &parquet_path);
 
     let engine_config = engine_config_with_edges(&storage_dir, max_gap);
     let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
@@ -676,15 +665,10 @@ fn max_gap_prevents_edges_between_distant_nights() {
     let edge_models = test_edge_models();
     let solver_manager = SolverManager::default();
 
-    let plan = PipelinePlan {
-        stages: THROUGH_EDGES.to_vec(),
-        persist: PersistPolicy::None,
-        inputs: PipelineInputs { alerts_uri },
-    };
-
+    let (mut plan, runner) = make_plan_and_runner(THROUGH_EDGES, PersistPolicy::None, all_obs);
     let mut runtime_state = RuntimeState::new();
     let mut ctx = PipelineContext {
-        plan: &plan,
+        plan: &mut plan,
         persistence: &persistence,
         runtime_state: &mut runtime_state,
         engine_config: &engine_config,
@@ -692,9 +676,10 @@ fn max_gap_prevents_edges_between_distant_nights() {
         solver_manager: &solver_manager,
     };
 
-    PipelineRunner { plan: plan.clone() }
+    runner
         .run(&mut ctx, &NoopHooks)
         .expect("pipeline should succeed");
+    drop(ctx);
 
     // ---- Edges must exist (sanity check) ----
     assert!(

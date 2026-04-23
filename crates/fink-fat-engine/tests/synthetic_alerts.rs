@@ -73,7 +73,10 @@ use datafusion::parquet::arrow::ArrowWriter;
 use photom::{
     NightId,
     coordinates::equatorial::EquCoord,
-    io::datafusion::InputUri,
+    io::datafusion::{
+        InputUri,
+        loader::{LoadObsArgs, load_obs_sync},
+    },
     observation_dataset::{ObsDataset, observation::Observation},
     photometry::{Filter, Photometry},
 };
@@ -383,6 +386,70 @@ impl SyntheticDataset {
         )
         .expect("build record batch")
     }
+}
+
+/// Write a slice of [`SyntheticAlert`] references to a Parquet file and load
+/// the result as an [`ObsDataset`] with a night index.
+///
+/// This is the preferred way to create per-night input datasets for
+/// integration tests that run one night at a time.
+pub fn write_and_load_parquet(alerts: &[&SyntheticAlert], path: &Path) -> ObsDataset {
+    let schema = parquet_alert_schema();
+    let n = alerts.len();
+
+    let mut ids = Vec::with_capacity(n);
+    let mut night_ids = Vec::with_capacity(n);
+    let mut ras = Vec::with_capacity(n);
+    let mut ra_errs = Vec::with_capacity(n);
+    let mut decs = Vec::with_capacity(n);
+    let mut dec_errs = Vec::with_capacity(n);
+    let mut magnitudes = Vec::with_capacity(n);
+    let mut mag_errs = Vec::with_capacity(n);
+    let mut filters: Vec<String> = Vec::with_capacity(n);
+    let mut mjd_tts = Vec::with_capacity(n);
+    let mut observer_codes: Vec<Option<String>> = Vec::with_capacity(n);
+
+    for alert in alerts {
+        ids.push(alert.dia_source_id);
+        night_ids.push(alert.night_id.0);
+        ras.push(alert.ra);
+        ra_errs.push(alert.ra_err);
+        decs.push(alert.dec);
+        dec_errs.push(alert.dec_err);
+        magnitudes.push(alert.magnitude);
+        mag_errs.push(alert.mag_err);
+        filters.push(alert.filter.clone());
+        mjd_tts.push(alert.mjd_tt);
+        observer_codes.push(Some((*alert.observer_mpc_code).clone()));
+    }
+
+    use arrow_array::{ArrayRef, Float64Array, RecordBatch, StringArray, UInt32Array, UInt64Array};
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(UInt64Array::from(ids)) as ArrayRef,
+            Arc::new(UInt32Array::from(night_ids)) as ArrayRef,
+            Arc::new(Float64Array::from(ras)) as ArrayRef,
+            Arc::new(Float64Array::from(ra_errs)) as ArrayRef,
+            Arc::new(Float64Array::from(decs)) as ArrayRef,
+            Arc::new(Float64Array::from(dec_errs)) as ArrayRef,
+            Arc::new(Float64Array::from(magnitudes)) as ArrayRef,
+            Arc::new(Float64Array::from(mag_errs)) as ArrayRef,
+            Arc::new(StringArray::from(filters)) as ArrayRef,
+            Arc::new(Float64Array::from(mjd_tts)) as ArrayRef,
+            Arc::new(StringArray::from(observer_codes)) as ArrayRef,
+        ],
+    )
+    .expect("build record batch");
+
+    let file = std::fs::File::create(path).expect("create parquet file");
+    let mut writer = datafusion::parquet::arrow::ArrowWriter::try_new(file, schema, None)
+        .expect("create ArrowWriter");
+    writer.write(&batch).expect("write batch");
+    writer.close().expect("close parquet writer");
+
+    let uri = InputUri(format!("file://{}", path.to_str().unwrap()));
+    load_obs_sync(&uri, LoadObsArgs::default()).expect("load parquet subset")
 }
 
 /// Build an [`ObsDataset`] from a list of [`SyntheticAlert`]s.

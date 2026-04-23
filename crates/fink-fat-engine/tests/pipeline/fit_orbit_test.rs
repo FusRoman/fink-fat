@@ -19,16 +19,14 @@ use tempfile::TempDir;
 use fink_fat_engine::{
     engine_config::pipeline_policy::PersistPolicy,
     persistence::{PersistenceManager, runtime_state::RuntimeState},
-    pipeline::{
-        PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner, stages::PipelineStage,
-    },
+    pipeline::{PipelineContext, stages::PipelineStage},
     solver::HypothesisSet,
 };
 
 use super::{
     NoopHooks, PipelineTestResult, THROUGH_ORBIT, THROUGH_SOLVE, engine_config_with_edges,
-    match_truth_to_hypotheses, run_incremental_pipeline, run_pipeline, test_edge_models,
-    test_solver_manager, test_solver_manager_with_min_nodes,
+    make_plan_and_runner, match_truth_to_hypotheses, run_incremental_pipeline, run_pipeline,
+    test_edge_models, test_solver_manager, test_solver_manager_with_min_nodes,
 };
 use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
 
@@ -314,12 +312,7 @@ fn fit_orbit_diverse_populations() {
     }
 
     // ---- 6) Report per-population recovery for diagnostics ----
-    let matches = match_truth_to_hypotheses(
-        &ground_truth,
-        hypotheses,
-        &runtime_state.alert_store,
-        &runtime_state.seed_store,
-    );
+    let matches = match_truth_to_hypotheses(&ground_truth, hypotheses, &runtime_state.seed_store);
 
     for pop in [
         AsteroidPopulation::NearEarth,
@@ -721,12 +714,8 @@ fn incremental_diverse_populations_with_orbit_fit() {
 
     // Diagnostics: report per-population ground-truth matching.
     if !hypotheses.is_empty() {
-        let matches = match_truth_to_hypotheses(
-            &ground_truth,
-            hypotheses,
-            &runtime_state.alert_store,
-            &runtime_state.seed_store,
-        );
+        let matches =
+            match_truth_to_hypotheses(&ground_truth, hypotheses, &runtime_state.seed_store);
 
         for pop in [
             AsteroidPopulation::NearEarth,
@@ -859,13 +848,12 @@ fn fit_orbit_does_not_crash_on_empty_hypotheses() {
         .seed(42)
         .build();
 
-    let data_dir = TempDir::new().unwrap();
+    let _data_dir = TempDir::new().unwrap();
     let storage_dir = TempDir::new().unwrap();
 
     // Run a four-stage pipeline (without FitOrbit) first to populate state,
     // then clear hypotheses and run FitOrbit alone.
-    let parquet_path = data_dir.path().join("test_alerts.parquet");
-    let alerts_uri = dataset.write_parquet(&parquet_path);
+    let obs_dataset = dataset.to_obs_dataset();
 
     let engine_config = engine_config_with_edges(&storage_dir, max_gap_nights);
     let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
@@ -876,26 +864,20 @@ fn fit_orbit_does_not_crash_on_empty_hypotheses() {
     let mut runtime_state = RuntimeState::new();
 
     // --- Stage 1-4: build up the state (ingest, seeds, edges, solve) ---
-    let plan_four = PipelinePlan {
-        stages: vec![
-            PipelineStage::IngestNights,
-            PipelineStage::BuildSeeds,
-            PipelineStage::BuildEdges,
-            PipelineStage::Solve,
-        ],
-        persist: PersistPolicy::None,
-        inputs: PipelineInputs {
-            alerts_uri: alerts_uri.clone(),
-        },
-    };
-
     {
-        let runner = PipelineRunner {
-            plan: plan_four.clone(),
-        };
+        let (mut plan_four, runner) = make_plan_and_runner(
+            &[
+                PipelineStage::IngestNights,
+                PipelineStage::BuildSeeds,
+                PipelineStage::BuildEdges,
+                PipelineStage::Solve,
+            ],
+            PersistPolicy::None,
+            obs_dataset,
+        );
         let hooks = NoopHooks;
         let mut ctx = PipelineContext {
-            plan: &plan_four,
+            plan: &mut plan_four,
             persistence: &persistence,
             runtime_state: &mut runtime_state,
             engine_config: &engine_config,
@@ -911,19 +893,16 @@ fn fit_orbit_does_not_crash_on_empty_hypotheses() {
     runtime_state.track_hypotheses = HypothesisSet::new();
 
     // --- Stage 5: run FitOrbit alone with empty hypotheses ---
-    let plan_fit = PipelinePlan {
-        stages: vec![PipelineStage::FitOrbit],
-        persist: PersistPolicy::None,
-        inputs: PipelineInputs { alerts_uri },
-    };
-
     {
-        let runner = PipelineRunner {
-            plan: plan_fit.clone(),
-        };
+        use photom::observation_dataset::ObsDataset;
+        let (mut plan_fit, runner) = make_plan_and_runner(
+            &[PipelineStage::FitOrbit],
+            PersistPolicy::None,
+            ObsDataset::empty(),
+        );
         let hooks = NoopHooks;
         let mut ctx = PipelineContext {
-            plan: &plan_fit,
+            plan: &mut plan_fit,
             persistence: &persistence,
             runtime_state: &mut runtime_state,
             engine_config: &engine_config,

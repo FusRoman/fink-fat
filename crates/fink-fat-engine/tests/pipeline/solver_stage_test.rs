@@ -17,22 +17,21 @@ use std::collections::{HashMap, HashSet};
 use tempfile::TempDir;
 
 use fink_fat_engine::{
-    Alert,
     engine_config::pipeline_policy::PersistPolicy,
     night_id::NightId,
     persistence::{PersistenceManager, runtime_state::RuntimeState},
-    pipeline::{
-        PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner, stages::PipelineStage,
-    },
+    pipeline::{PipelineContext, stages::PipelineStage},
     trajectory::TrackHypothesis,
 };
 
 use super::{
-    NoopHooks, PipelineTestResult, THROUGH_SOLVE, engine_config_with_edges,
+    NoopHooks, PipelineTestResult, THROUGH_SOLVE, engine_config_with_edges, make_plan_and_runner,
     match_truth_to_hypotheses, run_incremental_pipeline, run_pipeline, test_edge_models,
-    test_solver_manager, test_solver_manager_with_min_nodes, write_alerts_parquet,
+    test_solver_manager, test_solver_manager_with_min_nodes,
 };
-use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
+use crate::synthetic_alerts::{
+    AsteroidPopulation, SyntheticDatasetBuilder, write_and_load_parquet,
+};
 
 // ---------------------------------------------------------------------------
 // Integration tests
@@ -207,12 +206,7 @@ fn solver_recovers_main_belt_trajectories() {
     );
 
     // Match ground truth to hypotheses.
-    let matches = match_truth_to_hypotheses(
-        &ground_truth,
-        &hypotheses,
-        &runtime_state.alert_store,
-        &runtime_state.seed_store,
-    );
+    let matches = match_truth_to_hypotheses(&ground_truth, &hypotheses, &runtime_state.seed_store);
 
     // Count how many ground-truth trajectories have a hypothesis with Jaccard ≥ 0.3.
     // In a single-run scenario, the edge builder only creates edges to the last
@@ -303,12 +297,7 @@ fn solver_handles_diverse_populations() {
     }
 
     // ---- 4) Check ground-truth recovery per population ----
-    let matches = match_truth_to_hypotheses(
-        &ground_truth,
-        &hypotheses,
-        &runtime_state.alert_store,
-        &runtime_state.seed_store,
-    );
+    let matches = match_truth_to_hypotheses(&ground_truth, &hypotheses, &runtime_state.seed_store);
 
     // At least some trajectories should be recovered (Jaccard > 0).
     let any_recovered = matches.iter().any(|(_, _, score)| *score > 0.0);
@@ -580,12 +569,7 @@ fn solver_all_five_populations() {
     }
 
     // ---- 3) Compute recovery statistics ----
-    let matches = match_truth_to_hypotheses(
-        &ground_truth,
-        &hypotheses,
-        &runtime_state.alert_store,
-        &runtime_state.seed_store,
-    );
+    let matches = match_truth_to_hypotheses(&ground_truth, &hypotheses, &runtime_state.seed_store);
 
     // At least one trajectory should have non-trivial overlap.
     let any_matched = matches.iter().any(|(_, _, score)| *score > 0.0);
@@ -871,12 +855,7 @@ fn incremental_recovers_mba_trajectories() {
         "incremental pipeline must produce hypotheses"
     );
 
-    let matches = match_truth_to_hypotheses(
-        &ground_truth,
-        &hypotheses,
-        &runtime_state.alert_store,
-        &runtime_state.seed_store,
-    );
+    let matches = match_truth_to_hypotheses(&ground_truth, &hypotheses, &runtime_state.seed_store);
 
     // With incremental runs and min_nodes=4, tracks span 4+ nights.
     // We expect better recovery than the single-run tests.
@@ -961,12 +940,7 @@ fn incremental_diverse_populations() {
         }
     }
 
-    let matches = match_truth_to_hypotheses(
-        &ground_truth,
-        &hypotheses,
-        &runtime_state.alert_store,
-        &runtime_state.seed_store,
-    );
+    let matches = match_truth_to_hypotheses(&ground_truth, &hypotheses, &runtime_state.seed_store);
 
     // At least some trajectories across all populations should be recovered.
     let any_recovered = matches.iter().any(|(_, _, score)| *score > 0.0);
@@ -1023,7 +997,7 @@ fn incremental_graph_grows_over_nights() {
 
     let mut runtime_state = RuntimeState::new();
 
-    let mut night_ids: Vec<u32> = dataset.alerts().iter().map(|a| a.key.night_id.0).collect();
+    let mut night_ids: Vec<u32> = dataset.alerts().iter().map(|a| a.night_id.0).collect();
     night_ids.sort_unstable();
     night_ids.dedup();
 
@@ -1032,33 +1006,28 @@ fn incremental_graph_grows_over_nights() {
     let mut prev_n_edges = 0_usize;
 
     for (run_idx, &nid) in night_ids.iter().enumerate() {
-        let night_alerts: Vec<&Alert> = dataset
+        let night_alerts: Vec<&crate::synthetic_alerts::SyntheticAlert> = dataset
             .alerts()
             .iter()
-            .filter(|a| a.key.night_id.0 == nid)
+            .filter(|a| a.night_id.0 == nid)
             .collect();
 
         let parquet_path = data_dir
             .path()
             .join(format!("night_{nid}_grow{run_idx}.parquet"));
-        let alerts_uri = write_alerts_parquet(&night_alerts, &parquet_path);
+        let night_obs = write_and_load_parquet(&night_alerts, &parquet_path);
 
-        let plan = PipelinePlan {
-            stages: vec![
-                PipelineStage::IngestNights,
-                PipelineStage::BuildSeeds,
-                PipelineStage::BuildEdges,
-                PipelineStage::Solve,
-            ],
-            persist: PersistPolicy::None,
-            inputs: PipelineInputs { alerts_uri },
-        };
-
-        let runner = PipelineRunner { plan: plan.clone() };
+        let stages = vec![
+            PipelineStage::IngestNights,
+            PipelineStage::BuildSeeds,
+            PipelineStage::BuildEdges,
+            PipelineStage::Solve,
+        ];
+        let (mut plan, runner) = make_plan_and_runner(&stages, PersistPolicy::None, night_obs);
         let hooks = NoopHooks;
 
         let mut ctx = PipelineContext {
-            plan: &plan,
+            plan: &mut plan,
             persistence: &persistence,
             runtime_state: &mut runtime_state,
             engine_config: &engine_config,
@@ -1069,6 +1038,7 @@ fn incremental_graph_grows_over_nights() {
         runner
             .run(&mut ctx, &hooks)
             .unwrap_or_else(|e| panic!("pipeline run {run_idx} night {nid} failed: {e}"));
+        drop(ctx);
 
         let cur_n_seeds: usize = runtime_state
             .seed_store
@@ -1163,12 +1133,7 @@ fn incremental_all_five_populations() {
     }
 
     // Recovery statistics.
-    let matches = match_truth_to_hypotheses(
-        &ground_truth,
-        &hypotheses,
-        &runtime_state.alert_store,
-        &runtime_state.seed_store,
-    );
+    let matches = match_truth_to_hypotheses(&ground_truth, &hypotheses, &runtime_state.seed_store);
 
     let any_matched = matches.iter().any(|(_, _, score)| *score > 0.0);
     assert!(
@@ -1632,7 +1597,9 @@ fn batch_ingest_solver_produces_multi_node_tracks() {
     let storage_dir = TempDir::new().unwrap();
 
     let parquet_path = data_dir.path().join("all_nights.parquet");
-    let alerts_uri = dataset.write_parquet(&parquet_path);
+    let all_alerts: Vec<&crate::synthetic_alerts::SyntheticAlert> =
+        dataset.alerts().iter().collect();
+    let all_obs = write_and_load_parquet(&all_alerts, &parquet_path);
 
     // ---- Single pipeline run (not incremental) ----
     let engine_config = engine_config_with_edges(&storage_dir, max_gap);
@@ -1641,15 +1608,11 @@ fn batch_ingest_solver_produces_multi_node_tracks() {
     let edge_models = test_edge_models();
     let solver_manager = test_solver_manager_with_min_nodes(min_nodes);
 
-    let plan = PipelinePlan {
-        stages: THROUGH_SOLVE.to_vec(),
-        persist: PersistPolicy::None,
-        inputs: PipelineInputs { alerts_uri },
-    };
+    let (mut plan, runner) = make_plan_and_runner(THROUGH_SOLVE, PersistPolicy::None, all_obs);
 
     let mut runtime_state = RuntimeState::new();
     let mut ctx = PipelineContext {
-        plan: &plan,
+        plan: &mut plan,
         persistence: &persistence,
         runtime_state: &mut runtime_state,
         engine_config: &engine_config,
@@ -1657,9 +1620,10 @@ fn batch_ingest_solver_produces_multi_node_tracks() {
         solver_manager: &solver_manager,
     };
 
-    PipelineRunner { plan: plan.clone() }
+    runner
         .run(&mut ctx, &NoopHooks)
         .expect("batch pipeline run should succeed");
+    drop(ctx);
 
     let hypotheses = &runtime_state.track_hypotheses;
 

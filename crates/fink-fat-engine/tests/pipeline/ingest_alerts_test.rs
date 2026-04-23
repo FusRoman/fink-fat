@@ -11,17 +11,18 @@ use fink_fat_engine::{
     error::EngineError,
     night_id::NightId,
     persistence::{PersistenceManager, runtime_state::RuntimeState},
-    pipeline::{
-        PipelineContext, PipelineInputs, PipelinePlan, PipelineRunner,
-        stages::{PipelineStage, alert_inputs::input_uri::InputUri},
-    },
+    pipeline::{PipelineContext, stages::PipelineStage},
 };
+use photom::observation_dataset::ObsDataset;
 
 use super::{
-    INGEST_ONLY, NoopHooks, PipelineTestResult, engine_config_minimal, run_pipeline_minimal,
-    test_edge_models,
+    INGEST_ONLY, NoopHooks, PipelineTestResult, count_nights, count_observations,
+    engine_config_minimal, get_night_observations_sorted, make_plan_and_runner,
+    run_pipeline_minimal, test_edge_models,
 };
-use crate::synthetic_alerts::{AsteroidPopulation, SyntheticDatasetBuilder};
+use crate::synthetic_alerts::{
+    AsteroidPopulation, SyntheticDatasetBuilder, write_and_load_parquet,
+};
 
 // ---------------------------------------------------------------------------
 // Integration tests
@@ -59,64 +60,53 @@ fn ingest_nights_stage_loads_alerts_and_populates_runtime_state() {
     assert_eq!(*stage, PipelineStage::IngestNights);
 
     let counters: std::collections::HashMap<&str, u64> = report.counters.iter().copied().collect();
-    // The pipeline runs incrementally (one night at a time); the last run
-    // ingested one night worth of alerts.
-    let expected_last_night_alerts = (n_trajectories * obs_per_night) as u64;
+    // IngestNights reports cumulative totals from runtime_state.obs_dataset after each run.
+    // After the last incremental run, all nights have been accumulated.
     assert_eq!(
         counters.get("n_alerts").copied(),
-        Some(expected_last_night_alerts),
-        "expected {expected_last_night_alerts} alerts in the last incremental run"
+        Some(expected_total_alerts as u64),
+        "n_alerts should equal cumulative total after all incremental runs"
     );
     assert_eq!(
         counters.get("n_nights").copied(),
-        Some(1_u64),
-        "expected 1 night per incremental run"
+        Some(n_nights as u64),
+        "n_nights should equal total nights accumulated"
     );
 
-    // ---- 4) Verify runtime state: alert store ----
-    let store = &state.alert_store;
+    // ---- 4) Verify runtime state: observation dataset ----
     assert_eq!(
-        store.n_alerts(),
+        count_observations(&state),
         expected_total_alerts,
-        "alert store should hold all alerts"
+        "obs_dataset should hold all alerts"
     );
     assert_eq!(
-        store.n_nights(),
+        count_nights(&state),
         n_nights,
-        "alert store should hold the correct number of nights"
+        "obs_dataset should hold the correct number of nights"
     );
 
     // Each night should have (n_trajectories × obs_per_night) alerts.
     let expected_per_night = n_trajectories * obs_per_night;
     for night_offset in 0..n_nights {
         let nid = NightId(start_night_id + night_offset as u32);
-        let night_alerts = store
-            .get(&nid)
-            .unwrap_or_else(|| panic!("night {:?} should be present", nid));
+        let night_obs = get_night_observations_sorted(&state, &nid);
         assert_eq!(
-            night_alerts.len(),
+            night_obs.len(),
             expected_per_night,
             "night {nid:?} should have {expected_per_night} alerts"
         );
 
         // ---- 5) Verify alerts are time-ordered within each night ----
-        for w in night_alerts.windows(2) {
+        let obs_vec: Vec<_> = night_obs.iter().collect();
+        for w in obs_vec.windows(2) {
             assert!(
-                w[0].mjd_tt <= w[1].mjd_tt,
+                w[0].mjd_tt() <= w[1].mjd_tt(),
                 "alerts should be time-ordered within night {nid:?}"
-            );
-        }
-
-        // ---- 6) Verify alert keys are consistent ----
-        for alert in night_alerts {
-            assert_eq!(
-                alert.key.night_id, nid,
-                "alert key night_id must match the night"
             );
         }
     }
 
-    // ---- 7) Verify new_night_ids was set ----
+    // ---- 6) Verify new_night_ids was set ----
     let new_night_ids = state
         .get_new_night_ids()
         .expect("new_night_ids should be set after IngestNights");
@@ -134,10 +124,11 @@ fn ingest_nights_stage_loads_alerts_and_populates_runtime_state() {
         "new night should be the last ingested night"
     );
 
-    // ---- 8) Verify all dia_source_ids are unique ----
-    let all_dia_ids: Vec<u64> = store
-        .nights()
-        .flat_map(|nid| store.get(nid).unwrap().iter().map(|a| a.key.dia_source_id))
+    // ---- 7) Verify all dia_source_ids are unique ----
+    let all_dia_ids: Vec<u64> = state
+        .obs_dataset
+        .iter_observations()
+        .map(|o| *o.id())
         .collect();
     assert_eq!(all_dia_ids.len(), expected_total_alerts);
 
@@ -173,9 +164,10 @@ fn ingest_nights_stage_multi_night_parquet_creates_one_store_entry_per_night() {
     let data_dir = TempDir::new().expect("create data temp dir");
     let storage_dir = TempDir::new().expect("create storage temp dir");
 
-    // ---- 2) Write ALL nights into a single Parquet file ----
+    // ---- 2) Write ALL nights into a single Parquet file and load ----
     let parquet_path = data_dir.path().join("all_nights.parquet");
-    let alerts_uri = dataset.write_parquet(&parquet_path);
+    let all_alerts: Vec<_> = dataset.alerts().iter().collect();
+    let all_obs = write_and_load_parquet(&all_alerts, &parquet_path);
 
     // ---- 3) Run IngestNights once (all nights in one shot) ----
     let engine_config = engine_config_minimal(&storage_dir);
@@ -184,17 +176,13 @@ fn ingest_nights_stage_multi_night_parquet_creates_one_store_entry_per_night() {
     let edge_models = test_edge_models();
     let solver_manager = fink_fat_engine::solver::solver_manager::SolverManager::default();
 
-    let plan = PipelinePlan {
-        stages: vec![PipelineStage::IngestNights],
-        persist: PersistPolicy::None,
-        inputs: PipelineInputs { alerts_uri },
-    };
+    let (mut plan, runner) =
+        make_plan_and_runner(&[PipelineStage::IngestNights], PersistPolicy::None, all_obs);
 
     let mut runtime_state = RuntimeState::new();
-    let runner = PipelineRunner { plan: plan.clone() };
 
     let mut ctx = PipelineContext {
-        plan: &plan,
+        plan: &mut plan,
         persistence: &persistence,
         runtime_state: &mut runtime_state,
         engine_config: &engine_config,
@@ -206,46 +194,38 @@ fn ingest_nights_stage_multi_night_parquet_creates_one_store_entry_per_night() {
         .run(&mut ctx, &NoopHooks)
         .expect("IngestNights should succeed");
 
-    // ---- 4) AlertStore must have one entry per night ----
-    let store = &runtime_state.alert_store;
+    drop(ctx);
+
+    // ---- 4) ObsDataset must have one entry per night ----
     assert_eq!(
-        store.n_nights(),
+        count_nights(&runtime_state),
         n_nights,
-        "alert store should contain exactly {n_nights} nights"
+        "obs_dataset should contain exactly {n_nights} nights"
     );
     assert_eq!(
-        store.n_alerts(),
+        count_observations(&runtime_state),
         expected_total_alerts,
-        "alert store should hold all {expected_total_alerts} alerts"
+        "obs_dataset should hold all {expected_total_alerts} alerts"
     );
 
-    // ---- 5) Each night must have the right alert count and consistent keys ----
+    // ---- 5) Each night must have the right alert count ----
     let expected_per_night = n_trajectories * obs_per_night;
     for night_offset in 0..n_nights {
         let nid = NightId(start_night_id + night_offset as u32);
-        let night_alerts = store
-            .get(&nid)
-            .unwrap_or_else(|| panic!("night {nid:?} should be present in alert store"));
+        let night_obs = get_night_observations_sorted(&runtime_state, &nid);
 
         assert_eq!(
-            night_alerts.len(),
+            night_obs.len(),
             expected_per_night,
             "night {nid:?} should have {expected_per_night} alerts, got {}",
-            night_alerts.len()
+            night_obs.len()
         );
 
-        // Alert keys must reference the correct night.
-        for alert in night_alerts {
-            assert_eq!(
-                alert.key.night_id, nid,
-                "alert key.night_id must match the containing night bucket"
-            );
-        }
-
         // Alerts must be time-ordered within each night.
-        for w in night_alerts.windows(2) {
+        let obs_vec: Vec<_> = night_obs.iter().collect();
+        for w in obs_vec.windows(2) {
             assert!(
-                w[0].mjd_tt <= w[1].mjd_tt,
+                w[0].mjd_tt() <= w[1].mjd_tt(),
                 "alerts should be time-ordered within night {nid:?}"
             );
         }
@@ -271,9 +251,10 @@ fn ingest_nights_stage_multi_night_parquet_creates_one_store_entry_per_night() {
     );
 
     // ---- 7) All dia_source_ids must be globally unique ----
-    let all_ids: Vec<u64> = store
-        .nights()
-        .flat_map(|nid| store.get(nid).unwrap().iter().map(|a| a.key.dia_source_id))
+    let all_ids: Vec<u64> = runtime_state
+        .obs_dataset
+        .iter_observations()
+        .map(|o| *o.id())
         .collect();
     let mut sorted = all_ids.clone();
     sorted.sort_unstable();
@@ -286,7 +267,11 @@ fn ingest_nights_stage_multi_night_parquet_creates_one_store_entry_per_night() {
 }
 
 #[test]
-fn ingest_nights_stage_fails_on_missing_parquet_file() {
+fn ingest_nights_stage_fails_when_dataset_has_no_night_index() {
+    // Since `PipelineInputs` now carries an `ObsDataset` directly (no URI),
+    // `IngestNights` fails when the dataset has no night index — i.e. when
+    // `iter_night_id()` returns `None`.  This happens with a plain
+    // `ObsDataset::empty()` that was not loaded from a night-indexed Parquet.
     let storage_dir = TempDir::new().expect("create storage temp dir");
     let engine_config = engine_config_minimal(&storage_dir);
     let persistence = PersistenceManager::open_or_create(engine_config.storage_path_buf())
@@ -295,21 +280,18 @@ fn ingest_nights_stage_fails_on_missing_parquet_file() {
     let edge_models = test_edge_models();
     let solver_manager = fink_fat_engine::solver::solver_manager::SolverManager::default();
 
-    let plan = PipelinePlan {
-        stages: vec![PipelineStage::IngestNights],
-        persist: PersistPolicy::None,
-        inputs: PipelineInputs {
-            alerts_uri: InputUri("file:///nonexistent/path/alerts.parquet".to_string()),
-        },
-    };
+    // ObsDataset::empty() has no night index → iter_night_id() returns None.
+    let (mut plan, runner) = make_plan_and_runner(
+        &[PipelineStage::IngestNights],
+        PersistPolicy::None,
+        ObsDataset::empty(),
+    );
 
     let mut runtime_state = RuntimeState::new();
-
-    let runner = PipelineRunner { plan: plan.clone() };
     let hooks = NoopHooks;
 
     let mut ctx = PipelineContext {
-        plan: &plan,
+        plan: &mut plan,
         persistence: &persistence,
         runtime_state: &mut runtime_state,
         engine_config: &engine_config,
@@ -319,7 +301,10 @@ fn ingest_nights_stage_fails_on_missing_parquet_file() {
 
     let result = runner.run(&mut ctx, &hooks);
 
-    assert!(result.is_err(), "pipeline should fail for missing file");
+    assert!(
+        result.is_err(),
+        "pipeline should fail when dataset has no night index"
+    );
     match result.err().unwrap() {
         EngineError::StageFailed { stage, message } => {
             assert_eq!(stage, PipelineStage::IngestNights);
