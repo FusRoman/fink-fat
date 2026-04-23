@@ -296,11 +296,7 @@ mod seed_node_tests {
     use super::*;
     use proptest::prelude::*;
 
-    use crate::{
-        astro_math::arcsec_to_rad,
-        engine_config::propagator_config::{ModelNoise, PredictorParams},
-        seeding::store::SeedStore,
-    };
+    use crate::{astro_math::arcsec_to_rad, seeding::store::SeedStore};
 
     use photom::{
         coordinates::{equatorial::EquCoord, gnomonic_projection::TangentPlane},
@@ -328,23 +324,6 @@ mod seed_node_tests {
             filter: Filter::Int(band as u32),
         };
         Observation::new(source_id, equ_coord, photometry, mjd_tt, None)
-    }
-
-    fn default_predictor_params() -> PredictorParams {
-        PredictorParams {
-            noise: ModelNoise {
-                variance_floor: 0.0,
-                drift_per_day: 0.0,
-                curvature_per_day2: 0.0,
-            },
-            k_sigma: 3.0,
-            pad_cell_radius: true,
-            pad_time_bin_radius: true,
-            time_bin_dt: 1.0,
-            v_slack: 0.0,
-            max_cone_radius: None,
-            max_norm_offset: None,
-        }
     }
 
     /* ------------------------- unit tests ------------------------- */

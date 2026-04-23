@@ -3,11 +3,10 @@ use std::sync::Arc;
 use arrow_array::{ArrayRef, Float64Array, RecordBatch, StringArray, UInt64Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use outfit::{FullOrbitResult, ObjectNumber};
+use photom::{NightId, observation_dataset::ObsDataset};
 
 use crate::{
-    alerts::store::AlertStore,
     graph::AlertLinkageDAG,
-    night_id::NightId,
     persistence::{
         envelope::save_parquet, error::PersistenceIoError, layout::PersistenceLayout,
         manifest::Manifest,
@@ -38,7 +37,7 @@ use crate::{
 pub struct RuntimeState {
     pub manifest: Manifest,
     new_night_id: Option<Vec<NightId>>,
-    pub alert_store: AlertStore,
+    pub obs_dataset: ObsDataset,
     pub seed_store: SeedStore,
     pub graph: AlertLinkageDAG,
     pub track_hypotheses: HypothesisSet,
@@ -107,7 +106,7 @@ impl RuntimeState {
         RuntimeState {
             manifest: Manifest::new(),
             new_night_id: None,
-            alert_store: AlertStore::new(),
+            obs_dataset: ObsDataset::empty(),
             seed_store: SeedStore::new(),
             graph: AlertLinkageDAG::new(),
             track_hypotheses: HypothesisSet::new(),
@@ -120,7 +119,7 @@ impl RuntimeState {
     /// Arguments
     /// ---------
     /// * `manifest`    – Persistence manifest loaded from disk.
-    /// * `alert_store` – Alert store restored from disk.
+    /// * `obs_dataset` – Observation dataset restored from disk.
     /// * `seed_store`  – Seed store restored from disk.
     /// * `graph`       – Inter-night edge graph restored from disk.
     ///
@@ -130,14 +129,14 @@ impl RuntimeState {
     /// and empty `orbit_results`.
     pub fn from_disk(
         manifest: Manifest,
-        alert_store: AlertStore,
+        obs_dataset: ObsDataset,
         seed_store: SeedStore,
         graph: AlertLinkageDAG,
     ) -> Self {
         RuntimeState {
             manifest,
             new_night_id: None,
-            alert_store,
+            obs_dataset,
             seed_store,
             graph,
             track_hypotheses: HypothesisSet::new(),
@@ -215,20 +214,20 @@ impl RuntimeState {
             let trk = &self.track_hypotheses[&hyp_id];
 
             // Compute the deterministic track identifier.
-            let track_id = match trk.track_id(&self.alert_store, &self.seed_store) {
+            let track_id = match trk.track_id(&self.obs_dataset, &self.seed_store) {
                 Ok(tid) => tid,
                 Err(_) => continue, // skip hypothesis if track_id cannot be computed
             };
 
             // Resolve all alerts for this hypothesis.
-            let alerts = match trk.get_alerts(&self.alert_store, &self.seed_store) {
+            let alerts = match trk.get_alerts(&self.obs_dataset, &self.seed_store) {
                 Ok(a) => a,
                 Err(_) => continue,
             };
 
             for alert in &alerts {
                 tm_track_ids.push(track_id.as_str().to_owned());
-                tm_dia_source_ids.push(alert.key.dia_source_id);
+                tm_dia_source_ids.push(*alert.id());
             }
 
             hyp_to_track.push((hyp_id, track_id));
@@ -326,8 +325,6 @@ impl RuntimeState {
 
 #[cfg(test)]
 mod runtime_state_tests {
-    use std::sync::Arc;
-
     use ahash::AHashMap;
     use arrow_array::{Array, Float64Array, StringArray, UInt64Array};
     use camino::Utf8PathBuf;
@@ -335,12 +332,16 @@ mod runtime_state_tests {
         GaussResult, ObjectNumber, OrbitalElements,
         orbit_type::keplerian_element::KeplerianElements,
     };
+    use photom::{
+        NightId,
+        coordinates::equatorial::EquCoord,
+        observation_dataset::{ObsDataset, observation::Observation},
+        photometry::{Filter, Photometry},
+    };
     use tempfile::tempdir;
 
     use crate::{
-        Alert, AlertKey, AlertStore,
         graph::{AlertLinkageDAG, edge::EdgeKey},
-        night_id::NightId,
         persistence::{
             envelope::load_parquet, layout::PersistenceLayout, manifest::Manifest,
             runtime_state::RuntimeState,
@@ -358,36 +359,38 @@ mod runtime_state_tests {
         Utf8PathBuf::from_path_buf(p).expect("temp paths should be valid UTF-8")
     }
 
-    /// Build a minimal alert with the given night, id, and epoch.
-    fn make_alert(night: u32, dia: u64, mjd: f64) -> Alert {
-        Alert {
-            key: AlertKey {
-                night_id: NightId(night),
-                dia_source_id: dia,
+    /// Build a minimal observation with the given id and epoch.
+    fn make_obs(id: u64, mjd: f64) -> Observation {
+        Observation::new(
+            id,
+            EquCoord::new(0.1, 1e-6, 0.2, 1e-6),
+            Photometry {
+                magnitude: 18.0,
+                error: 0.1,
+                filter: Filter::Int(1),
             },
-            ra: 0.1,
-            ra_err: 1e-6,
-            dec: 0.2,
-            dec_err: 1e-6,
-            mjd_tt: mjd,
-            flux: 100.0,
-            flux_err: 1.0,
-            band: 1,
-            observer_mpc_code: Arc::new("W84".to_string()),
-        }
+            mjd,
+            None,
+        )
     }
 
-    /// Build a minimal seed pointing at the given alert keys.
-    fn make_seed(members: Vec<AlertKey>) -> SeedNode {
-        let mut s = SeedNode::default();
-        s.n_obs = 2;
-        s.members = members;
-        s
+    /// Build a minimal seed from two observations via the real `from_pair` constructor.
+    ///
+    /// Returns `None` if the pair fails the speed filter (should not happen with
+    /// the default test coordinates).
+    fn make_seed_from_pair(
+        seed_store: &mut SeedStore,
+        night_id: NightId,
+        obs_a: &Observation,
+        obs_b: &Observation,
+    ) -> SeedNode {
+        SeedNode::from_pair(seed_store, night_id, obs_a, obs_b, None)
+            .expect("test pair should always produce a valid seed")
     }
 
     /// Build a `RuntimeState` with two hypotheses:
-    ///   - hyp 0: night 1 seed → night 2 seed  (alerts 10,11 → 20,21)
-    ///   - hyp 1: night 1 seed → night 2 seed  (alerts 12,13 → 22,23)
+    ///   - hyp 0: night 1 seed → night 2 seed  (obs ids 10,11 → 20,21)
+    ///   - hyp 1: night 1 seed → night 2 seed  (obs ids 12,13 → 22,23)
     ///
     /// Also populates `orbit_results` for both hypotheses with
     /// simple Keplerian elements.
@@ -395,54 +398,42 @@ mod runtime_state_tests {
         let nid1 = NightId(1);
         let nid2 = NightId(2);
 
-        // -- Alerts -------------------------------------------------------
-        let a10 = make_alert(1, 10, 60000.0);
-        let a11 = make_alert(1, 11, 60000.1);
-        let a12 = make_alert(1, 12, 60000.2);
-        let a13 = make_alert(1, 13, 60000.3);
-        let a20 = make_alert(2, 20, 60001.0);
-        let a21 = make_alert(2, 21, 60001.1);
-        let a22 = make_alert(2, 22, 60001.2);
-        let a23 = make_alert(2, 23, 60001.3);
-
-        let mut alert_store = AlertStore::new();
-        alert_store.insert(
-            nid1,
-            vec![a10.clone(), a11.clone(), a12.clone(), a13.clone()],
-        );
-        alert_store.insert(nid2, vec![a20, a21, a22, a23]);
+        // -- Observations -------------------------------------------------
+        let obs_list = [
+            (10u64, 60000.0f64),
+            (11, 60000.1),
+            (12, 60000.2),
+            (13, 60000.3),
+            (20, 60001.0),
+            (21, 60001.1),
+            (22, 60001.2),
+            (23, 60001.3),
+        ];
+        let mut obs_dataset = ObsDataset::empty();
+        for &(id, mjd) in &obs_list {
+            obs_dataset
+                .push_observation(vec![make_obs(id, mjd)])
+                .unwrap();
+        }
 
         // -- Seeds --------------------------------------------------------
+        // Build observations we can reference by value.
+        let obs: Vec<Observation> = obs_list
+            .iter()
+            .map(|&(id, mjd)| make_obs(id, mjd))
+            .collect();
+        // obs[0..4] are night 1 (ids 10,11,12,13); obs[4..8] are night 2 (ids 20,21,22,23).
+
         let mut seed_store = SeedStore::new();
 
-        let sk_a = seed_store.insert_seed(nid1, make_seed(vec![a10.key, a11.key]));
-        let sk_b = seed_store.insert_seed(
-            nid2,
-            make_seed(vec![
-                AlertKey {
-                    night_id: nid2,
-                    dia_source_id: 20,
-                },
-                AlertKey {
-                    night_id: nid2,
-                    dia_source_id: 21,
-                },
-            ]),
-        );
-        let sk_c = seed_store.insert_seed(nid1, make_seed(vec![a12.key, a13.key]));
-        let sk_d = seed_store.insert_seed(
-            nid2,
-            make_seed(vec![
-                AlertKey {
-                    night_id: nid2,
-                    dia_source_id: 22,
-                },
-                AlertKey {
-                    night_id: nid2,
-                    dia_source_id: 23,
-                },
-            ]),
-        );
+        let seed_a = make_seed_from_pair(&mut seed_store, nid1, &obs[0], &obs[1]);
+        let sk_a = seed_store.insert_seed(nid1, seed_a);
+        let seed_b = make_seed_from_pair(&mut seed_store, nid2, &obs[4], &obs[5]);
+        let sk_b = seed_store.insert_seed(nid2, seed_b);
+        let seed_c = make_seed_from_pair(&mut seed_store, nid1, &obs[2], &obs[3]);
+        let sk_c = seed_store.insert_seed(nid1, seed_c);
+        let seed_d = make_seed_from_pair(&mut seed_store, nid2, &obs[6], &obs[7]);
+        let sk_d = seed_store.insert_seed(nid2, seed_d);
 
         // -- Track hypotheses ---------------------------------------------
         let mut hypotheses: HypothesisSet = AHashMap::new();
@@ -510,7 +501,7 @@ mod runtime_state_tests {
         RuntimeState {
             manifest: Manifest::new(),
             new_night_id: None,
-            alert_store,
+            obs_dataset,
             seed_store,
             graph: AlertLinkageDAG::new(),
             track_hypotheses: hypotheses,
@@ -530,7 +521,7 @@ mod runtime_state_tests {
         let state = RuntimeState {
             manifest: Manifest::new(),
             new_night_id: None,
-            alert_store: AlertStore::new(),
+            obs_dataset: ObsDataset::empty(),
             seed_store: SeedStore::new(),
             graph: AlertLinkageDAG::new(),
             track_hypotheses: HypothesisSet::new(),

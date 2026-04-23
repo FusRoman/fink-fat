@@ -40,7 +40,7 @@ pub fn run(
 
             let obs_batches_by_obs = to_observation_batch(
                 track_hypothesis,
-                &ctx.runtime_state.alert_store,
+                &ctx.runtime_state.obs_dataset,
                 &ctx.runtime_state.seed_store,
             )?;
 

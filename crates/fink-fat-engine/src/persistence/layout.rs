@@ -52,6 +52,19 @@ impl PersistenceLayout {
         self.root.join("manifest.json")
     }
 
+    /// Path to the global observation dataset file.
+    ///
+    /// This file contains all observations across the current sliding window,
+    /// serialized as a single [`photom::observation_dataset::ObsDataset`] payload
+    /// wrapped in a [`crate::persistence::envelope::DiskEnvelope`].
+    ///
+    /// Example
+    /// -------
+    /// `obs_dataset.bin`
+    pub fn obs_dataset_path(&self) -> Utf8PathBuf {
+        self.root.join("obs_dataset.bin")
+    }
+
     /// Directory containing per-night alerts.
     pub fn alerts_dir(&self) -> Utf8PathBuf {
         self.root.join("alerts")

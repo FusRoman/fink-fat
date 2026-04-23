@@ -5,8 +5,8 @@
 //! This module defines a small, stable container [`DiskEnvelope<T>`] and a set of
 //! I/O helpers to persist Fink-FAT artifacts on disk in two complementary formats:
 //!
-//! - **Binary** (`bitcode`): compact, used for high-volume artifacts such as alerts,
-//!   seeds, and edge journals.
+//! - **Binary** (`postcard`): compact, used for high-volume artifacts such as
+//!   seeds and edge journals.
 //! - **JSON** (pretty-printed): human-readable, used for index files such as the
 //!   [`crate::persistence::manifest::Manifest`].
 //!
@@ -305,7 +305,7 @@ impl<T: DeserializeOwned + Serialize> DiskEnvelope<T> {
     /// ------
     /// - [`PersistenceIoError::Io`] (via `?`)
     ///   If directory creation, file creation, write, fsync, or rename fails.
-    /// - [`PersistenceIoError::Bitcode`]
+    /// - [`PersistenceIoError::Postcard`]
     ///   If serialization fails.
     ///
     /// Performance notes
@@ -370,7 +370,7 @@ impl<T: DeserializeOwned + Serialize> DiskEnvelope<T> {
     /// ------
     /// - [`PersistenceIoError::Io`] (via `?`)
     ///   If the file cannot be opened/read.
-    /// - [`PersistenceIoError::Bitcode`]
+    /// - [`PersistenceIoError::Postcard`]
     ///   If decoding fails (corruption or incompatible encoding).
     /// - [`PersistenceIoError::Envelope`]
     ///   If `magic` or `schema_version` are invalid.
@@ -495,6 +495,63 @@ impl<T: DeserializeOwned + Serialize> DiskEnvelope<T> {
     }
 }
 
+/// Write a borrowed payload as a versioned binary envelope to disk.
+///
+/// This is the reference-friendly counterpart of [`DiskEnvelope::save_enveloped`]
+/// for types that implement [`Serialize`] but not [`Clone`] (e.g.
+/// [`photom::observation_dataset::ObsDataset`]).
+///
+/// The on-disk format is identical to [`DiskEnvelope::save_enveloped`]: the
+/// payload is wrapped in the [`DiskEnvelope`] framing (magic + schema version +
+/// timestamp + compression), serialized with `postcard`, then optionally
+/// compressed and written atomically.
+///
+/// Arguments
+/// ---------
+/// * `payload` - Reference to the value to persist.
+/// * `schema_version` - Schema version for the payload type.
+/// * `created_unix_s` - Unix timestamp (seconds) stored for provenance.
+/// * `compression` - Compression algorithm to apply.
+/// * `path` - Destination file path; parent directories are created if needed.
+///
+/// Return
+/// ------
+/// `Ok(())` on success, or a [`PersistenceIoError`] on failure.
+///
+/// Errors
+/// ------
+/// - [`PersistenceIoError::Postcard`] — If serialization fails.
+/// - [`PersistenceIoError::Compression`] — If compression fails.
+/// - [`PersistenceIoError::Io`] — If any filesystem operation fails.
+pub fn save_borrowed_enveloped<T: Serialize>(
+    payload: &T,
+    schema_version: u32,
+    created_unix_s: i64,
+    compression: Compression,
+    path: &Utf8Path,
+) -> Result<(), PersistenceIoError> {
+    #[derive(serde::Serialize)]
+    struct DiskEnvelopeRef<'a, T> {
+        magic: [u8; 8],
+        schema_version: u32,
+        created_unix_s: i64,
+        compression: Compression,
+        payload: &'a T,
+    }
+
+    let env = DiskEnvelopeRef {
+        magic: DISK_MAGIC,
+        schema_version,
+        created_unix_s,
+        compression,
+        payload,
+    };
+
+    let raw = encode_bytes(&env)?;
+    let framed = compression.compress(&raw)?;
+    atomic_write_utf8(path, &framed)
+}
+
 /// Human-readable magic string written into JSON envelopes.
 ///
 /// Used instead of the binary [`DISK_MAGIC`] constant to keep JSON files
@@ -507,9 +564,9 @@ impl<T: DeserializeOwned + Serialize> DiskEnvelope<T> {
 /// [`EnvelopeError::InvalidMagic`] on mismatch.
 pub const JSON_MAGIC: &str = "FINKFAT";
 
-/// Encode a value into bytes using `bitcode`.
+/// Encode a value into bytes using `postcard`.
 ///
-/// This helper centralizes the `bitcode` error mapping into [`PersistenceIoError`].
+/// This helper centralizes the `postcard` error mapping into [`PersistenceIoError`].
 ///
 /// Arguments
 /// ---------
@@ -521,7 +578,7 @@ pub const JSON_MAGIC: &str = "FINKFAT";
 ///
 /// Errors
 /// ------
-/// - [`PersistenceIoError::Bitcode`]
+/// - [`PersistenceIoError::Postcard`]
 ///   If encoding fails.
 ///
 /// Notes
@@ -529,10 +586,10 @@ pub const JSON_MAGIC: &str = "FINKFAT";
 /// This function does not perform any I/O.
 #[inline]
 fn encode_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, PersistenceIoError> {
-    bitcode::serialize(value).map_err(|e| PersistenceIoError::Bitcode(e.to_string()))
+    postcard::to_allocvec(value).map_err(|e| PersistenceIoError::Postcard(e.to_string()))
 }
 
-/// Decode a value from bytes using `bitcode`.
+/// Decode a value from bytes using `postcard`.
 ///
 /// Arguments
 /// ---------
@@ -544,7 +601,7 @@ fn encode_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, PersistenceIoError> 
 ///
 /// Errors
 /// ------
-/// - [`PersistenceIoError::Bitcode`]
+/// - [`PersistenceIoError::Postcard`]
 ///   If decoding fails.
 ///
 /// Notes
@@ -552,7 +609,7 @@ fn encode_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, PersistenceIoError> 
 /// This function does not perform any I/O.
 #[inline]
 fn decode_bytes<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, PersistenceIoError> {
-    bitcode::deserialize(bytes).map_err(|e| PersistenceIoError::Bitcode(e.to_string()))
+    postcard::from_bytes(bytes).map_err(|e| PersistenceIoError::Postcard(e.to_string()))
 }
 
 /// Write bytes to disk atomically using a temporary file + rename.
@@ -927,8 +984,8 @@ mod envelope_tests {
 
         let err = DiskEnvelope::<DummyPayload>::load_enveloped(&path, 1).unwrap_err();
         assert!(
-            matches!(err, PersistenceIoError::Bitcode(_)),
-            "expected Bitcode error, got: {err:?}"
+            matches!(err, PersistenceIoError::Postcard(_)),
+            "expected Postcard error, got: {err:?}"
         );
     }
 

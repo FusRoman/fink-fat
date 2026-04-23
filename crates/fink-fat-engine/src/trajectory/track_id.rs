@@ -435,7 +435,7 @@ mod track_id_tests {
     fn make_dataset(observations: Vec<Observation>) -> ObsDataset {
         let mut dataset = ObsDataset::empty();
         for obs in observations {
-            dataset.push_observation(obs);
+            dataset.push_observation(vec![obs]).unwrap();
         }
         dataset
     }

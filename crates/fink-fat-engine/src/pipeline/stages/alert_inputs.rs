@@ -18,8 +18,7 @@
 //! The ingestion pipeline performs the following logical steps:
 //!
 //! 1. Read the input URI (`ctx.plan.inputs.alerts_uri`).
-//! 2. Load alerts synchronously via [`load_alerts_sync`],
-//!    which internally relies on DataFusion and the `object_store` abstraction.
+//! 2. Load alerts synchronously via [`load_alerts_sync`]
 //! 3. Normalize the resulting store (sort alerts per night, compute/refresh keys) via
 //!    `AlertStore::sort_each_night_and_rekey()`.
 //! 4. Derive the runtime `NightWindow` from the ingested alerts.
@@ -56,7 +55,6 @@
 //! ------------
 //! The actual I/O and decoding is delegated to the `alert_loader` module, which uses:
 //!
-//! - **DataFusion** as the query/execution engine for Parquet.
 //! - **object_store** backends for storage access (local filesystem, HTTP(S), HDFS, ...).
 //! - A projection schema (`AlertParquetColumns`) to read only the columns required by the engine.
 //!
@@ -93,8 +91,6 @@
 //! ----------------
 //! - If multiple input URIs are supported in the future, this stage may iterate
 //!   over several stores and merge them sequentially.
-//! - If partial loading based on `NightWindow` becomes necessary, filtering
-//!   may be performed either via DataFusion predicate pushdown or post-load filtering.
 //! - Finer-grained progress reporting (e.g. per-night ingestion) can be implemented
 //!   by introducing nested `StageProgress::child()` scopes.
 
@@ -128,7 +124,7 @@ use crate::{
 /// --------------------
 /// The pipeline runner is synchronous at this level. Although the underlying
 /// loading implementation (`load_alerts_sync`) may internally rely on asynchronous
-/// runtimes (DataFusion + `object_store`), this complexity is encapsulated and
+/// runtimes, this complexity is encapsulated and
 /// does not leak outside the stage boundary.
 ///
 /// Progress Reporting Contract
@@ -250,7 +246,7 @@ pub fn run(
             // -----------------------------------------------------------------
             // 2) Merge the new observation dataset into the current runtime state observation dataset.
             // -----------------------------------------------------------------
-            ctx.runtime_state.obs_dataset.merge_from(new_obs_dataset);
+            ctx.runtime_state.obs_dataset.merge_from(new_obs_dataset)?;
 
             tracing::info!("Merged the new observation dataset into the runtime state");
             stage_sink.inc(1);

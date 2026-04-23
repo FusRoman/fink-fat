@@ -1,6 +1,7 @@
 use std::io;
 
 use outfit::OutfitError;
+use photom::observation_dataset::ObsDatasetError;
 use thiserror::Error;
 
 use crate::{
@@ -178,6 +179,10 @@ pub enum EngineError {
     /// Config validation error
     #[error(transparent)]
     Config(#[from] ConfigError),
+
+    /// ObsDataset error comming from the `photom` crate.
+    #[error(transparent)]
+    ObsDataset(#[from] ObsDatasetError),
 }
 
 impl From<PersistenceIoError> for EngineError {
