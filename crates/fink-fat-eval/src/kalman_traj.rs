@@ -244,8 +244,8 @@ fn search_region_diag(region: &SearchRegion, equ_obs: &EquCoord) -> SearchRegion
     let best_s = region
         .components
         .iter()
-        .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
-        .map(|(_, _, _, s)| *s);
+        .max_by(|a, b| a.weight.partial_cmp(&b.weight).unwrap())
+        .map(|c| c.s);
 
     let (semi_major, semi_minor, pa_deg) =
         best_s
@@ -255,9 +255,9 @@ fn search_region_diag(region: &SearchRegion, equ_obs: &EquCoord) -> SearchRegion
 
     let sep = separation_from_search_center(region, equ_obs);
 
-    println!(
-        "separation from region center: {} arcsec",
-        sep.to_degrees() * 3600.
+    tracing::trace!(
+        separation_arcsec = sep.to_degrees() * 3600.0,
+        "Separation from region center"
     );
 
     SearchRegionDiag {

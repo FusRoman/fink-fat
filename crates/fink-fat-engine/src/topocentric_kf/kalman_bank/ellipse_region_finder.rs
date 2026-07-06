@@ -42,6 +42,65 @@ impl Default for TopK {
     }
 }
 
+impl TopK {
+    /// Select and renormalize hypotheses in-place according to `self`.
+    fn apply(self, predicted: &mut Vec<(f64, KFState)>) {
+        match self {
+            TopK::All => {}
+            TopK::Map => Self::keep_map(predicted),
+            TopK::Best(k) => Self::keep_best(predicted, k),
+            TopK::WeightThreshold(theta) => Self::keep_threshold(predicted, theta),
+        }
+    }
+
+    /// Keep only the highest-weight hypothesis, weight forced to 1.0.
+    fn keep_map(predicted: &mut Vec<(f64, KFState)>) {
+        let best_idx = predicted
+            .iter()
+            .enumerate()
+            .max_by(|(_, (wa, _)), (_, (wb, _))| wa.total_cmp(wb))
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        predicted.swap(0, best_idx);
+        predicted.truncate(1);
+        predicted[0].0 = 1.0;
+    }
+
+    /// Keep the `k` highest-weight hypotheses, renormalized.
+    fn keep_best(predicted: &mut Vec<(f64, KFState)>, k: usize) {
+        let k = k.max(1).min(predicted.len());
+        predicted.select_nth_unstable_by(k - 1, |(wa, _), (wb, _)| wb.total_cmp(wa));
+        predicted.truncate(k);
+        renormalize(predicted);
+    }
+
+    /// Keep the minimal prefix (by descending weight) reaching cumulative
+    /// weight `theta`, renormalized.
+    fn keep_threshold(predicted: &mut Vec<(f64, KFState)>, theta: f64) {
+        let theta = theta.clamp(0.0, 1.0);
+        predicted.sort_unstable_by(|(wa, _), (wb, _)| wb.total_cmp(wa));
+        let mut cumul = 0.0;
+        let mut keep = 0;
+        for (w, _) in predicted.iter() {
+            cumul += w;
+            keep += 1;
+            if cumul >= theta {
+                break;
+            }
+        }
+        predicted.truncate(keep);
+        renormalize(predicted);
+    }
+}
+
+/// Renormalize weights in-place so they sum to 1.
+fn renormalize(predicted: &mut [(f64, KFState)]) {
+    let total: f64 = predicted.iter().map(|(w, _)| w).sum();
+    if total > 0.0 {
+        predicted.iter_mut().for_each(|(w, _)| *w /= total);
+    }
+}
+
 /// Inner strategy choice for [`RadiusStrategy::Clamped`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MixOrMax {
@@ -89,6 +148,152 @@ impl Default for RadiusStrategy {
     }
 }
 
+impl RadiusStrategy {
+    /// Dispatch radius computation over `components` according to `self`.
+    fn radius(self, components: &[SearchComponent], center_ra: f64, center_dec: f64) -> f64 {
+        match self {
+            RadiusStrategy::MaxEllipse => {
+                Self::max_ellipse_radius(components, center_ra, center_dec)
+            }
+            RadiusStrategy::MixtureCovariance => {
+                Self::mixture_covariance_radius(components, center_ra, center_dec)
+            }
+            RadiusStrategy::Clamped { inner, max_arcsec } => {
+                let inner_strategy = match inner {
+                    MixOrMax::MaxEllipse => RadiusStrategy::MaxEllipse,
+                    MixOrMax::MixtureCovariance => RadiusStrategy::MixtureCovariance,
+                };
+                let r = inner_strategy.radius(components, center_ra, center_dec);
+                r.min((max_arcsec / 3600.0_f64).to_radians())
+            }
+        }
+    }
+
+    /// $$r = \max_i \left( \sqrt{\chi^2 \cdot \lambda_{max}(S_i)} + \|\mu_i - \bar\mu\| \right)$$
+    fn max_ellipse_radius(components: &[SearchComponent], center_ra: f64, center_dec: f64) -> f64 {
+        components
+            .iter()
+            .map(|c| c.per_hypothesis_radius(center_ra, center_dec))
+            .fold(0.0_f64, f64::max)
+    }
+
+    /// Compute the bounding radius from the full mixture covariance.
+    ///
+    /// $$S_{mix} = \sum_i w_i \bigl(S_i + (\mu_i - \bar\mu)(\mu_i - \bar\mu)^\top\bigr)$$
+    /// $$r = \sqrt{\chi^2 \cdot \lambda_{max}(S_{mix})}$$
+    ///
+    /// Both the within-component uncertainty ($S_i$) and the between-component
+    /// spatial spread contribute to $S_{mix}$, so the radius is a valid
+    /// conservative bound on the mixture support.
+    fn mixture_covariance_radius(
+        components: &[SearchComponent],
+        center_ra: f64,
+        center_dec: f64,
+    ) -> f64 {
+        let mut s_mix = Matrix2::zeros();
+        let mut gate_chi2 = 0.0;
+        for c in components {
+            let delta = c.offset_from(center_ra, center_dec);
+            s_mix += c.weight * (c.s + delta * delta.transpose());
+            gate_chi2 = c.gate_chi2;
+        }
+        gate_chi2.sqrt() * largest_eigenvalue_2x2(&s_mix).sqrt()
+    }
+}
+
+/// A single Gaussian component of the search-region mixture, corresponding to
+/// one selected Kalman-filter hypothesis propagated to the target epoch.
+///
+/// The inverse covariance and normalization constant are precomputed once at
+/// construction time, since they are reused for every candidate observation
+/// tested against this component (`mixture_likelihood`, `mahalanobis2`).
+#[derive(Debug, Clone)]
+pub struct SearchComponent {
+    /// Renormalized mixture weight $w_i$.
+    pub weight: f64,
+    /// Predicted right ascension $\mu_{ra}$ (rad).
+    pub center_ra: f64,
+    /// Predicted declination $\mu_{dec}$ (rad).
+    pub center_dec: f64,
+    /// Innovation covariance $S_i = H P_i H^\top + R$.
+    pub s: Matrix2<f64>,
+    /// Cached $S_i^{-1}$.
+    s_inv: Matrix2<f64>,
+    /// Cached normalization constant $1 / (2\pi\sqrt{|S_i|})$.
+    norm_const: f64,
+    /// $\chi^2$ threshold this component was built with (for gating).
+    gate_chi2: f64,
+}
+
+impl SearchComponent {
+    /// Build a component from a propagated hypothesis, caching $S_i^{-1}$ and
+    /// the Gaussian normalization constant.
+    ///
+    /// Returns `None` if `s` is singular or not positive-definite.
+    fn new(
+        weight: f64,
+        center_ra: f64,
+        center_dec: f64,
+        s: Matrix2<f64>,
+        gate_chi2: f64,
+    ) -> Option<Self> {
+        let det = s.determinant();
+        if det <= 0.0 {
+            return None;
+        }
+        let s_inv = s.try_inverse()?;
+        let norm_const = 1.0 / (std::f64::consts::TAU * det.sqrt());
+        Some(Self {
+            weight,
+            center_ra,
+            center_dec,
+            s,
+            s_inv,
+            norm_const,
+            gate_chi2,
+        })
+    }
+
+    /// Angle-aware offset $(z - \mu_i)$ from an arbitrary sky position.
+    fn offset(&self, ra: f64, dec: f64) -> Vector2<f64> {
+        Vector2::new(wrap_angle(ra - self.center_ra), dec - self.center_dec)
+    }
+
+    /// Angle-aware offset of this component's center from an arbitrary point
+    /// (typically the mixture centroid).
+    fn offset_from(&self, ra: f64, dec: f64) -> Vector2<f64> {
+        Vector2::new(wrap_angle(self.center_ra - ra), self.center_dec - dec)
+    }
+
+    /// Squared Mahalanobis distance $(z-\mu_i)^\top S_i^{-1} (z-\mu_i)$.
+    ///
+    /// Cheap gating primitive: reuses the cached inverse, no exponential.
+    pub fn mahalanobis2(&self, ra: f64, dec: f64) -> f64 {
+        let nu = self.offset(ra, dec);
+        (nu.transpose() * self.s_inv * nu)[(0, 0)]
+    }
+
+    /// Whether `(ra, dec)` falls within this component's `n_sigma2` gate
+    /// (in squared Mahalanobis distance, i.e. a $\chi^2$ threshold).
+    pub fn contains(&self, ra: f64, dec: f64, chi2_gate: f64) -> bool {
+        self.mahalanobis2(ra, dec) <= chi2_gate
+    }
+
+    /// Weighted Gaussian density $w_i \, \mathcal{N}(z; \mu_i, S_i)$ at `(ra, dec)`.
+    pub fn weighted_density(&self, ra: f64, dec: f64) -> f64 {
+        let exponent = -0.5 * self.mahalanobis2(ra, dec);
+        self.weight * self.norm_const * exponent.exp()
+    }
+
+    /// Per-hypothesis bounding radius contribution used by
+    /// [`RadiusStrategy::MaxEllipse`]:
+    /// $$r_i = \sqrt{\chi^2 \cdot \lambda_{max}(S_i)} + \|\mu_i - \bar\mu\|$$
+    fn per_hypothesis_radius(&self, center_ra: f64, center_dec: f64) -> f64 {
+        let offset = self.offset_from(center_ra, center_dec).norm();
+        self.gate_chi2.sqrt() * largest_eigenvalue_2x2(&self.s).sqrt() + offset
+    }
+}
+
 /// A conservative bounding region on the sky enclosing the selected hypotheses
 /// at a predicted epoch.
 ///
@@ -105,42 +310,32 @@ pub struct SearchRegion {
     pub center_dec: f64,
     /// Conservative bounding radius (rad).
     pub radius_rad: f64,
-    /// Per-hypothesis sky ellipses with their (renormalized) weights, for
-    /// fine-grained mixture likelihood scoring after the coarse cone search.
-    ///
-    /// Each entry is `(weight, center_ra, center_dec, S)` where `S` is the
-    /// $2 \times 2$ innovation covariance.
-    pub components: Vec<(f64, f64, f64, Matrix2<f64>)>,
+    /// Per-hypothesis sky ellipses, for fine-grained mixture likelihood
+    /// scoring after the coarse cone search.
+    pub components: Vec<SearchComponent>,
 }
 
 impl SearchRegion {
     /// Evaluate the mixture predictive likelihood at a sky position.
     ///
     /// $$\ell(z) = \sum_i w_i \, \mathcal{N}(z;\, \mu_i,\, S_i)$$
-    ///
-    /// Arguments
-    /// ---------
-    /// * `ra`  – Right ascension of the candidate (rad).
-    /// * `dec` – Declination of the candidate (rad).
-    ///
-    /// Return
-    /// ------
-    /// Mixture likelihood (linear scale, not log).
     pub fn mixture_likelihood(&self, ra: f64, dec: f64) -> f64 {
         self.components
             .iter()
-            .filter_map(|(w, mu_ra, mu_dec, s)| {
-                let nu = Vector2::new(wrap_angle(ra - mu_ra), dec - mu_dec);
-                let s_inv = s.try_inverse()?;
-                let det = s.determinant();
-                if det <= 0.0 {
-                    return None;
-                }
-                let exponent = -0.5 * (nu.transpose() * s_inv * nu)[(0, 0)];
-                let norm = 1.0 / (std::f64::consts::TAU * det.sqrt());
-                Some(w * norm * exponent.exp())
-            })
+            .map(|c| c.weighted_density(ra, dec))
             .sum()
+    }
+
+    /// Whether `(ra, dec)` falls inside at least one component's `chi2_gate`
+    /// (squared Mahalanobis distance).
+    ///
+    /// This is a cheap pre-filter to apply to candidates already selected by
+    /// the coarse cone search (`center_ra`, `center_dec`, `radius_rad`),
+    /// before paying for a full [`Self::mixture_likelihood`] evaluation.
+    pub fn any_component_contains(&self, ra: f64, dec: f64, chi2_gate: f64) -> bool {
+        self.components
+            .iter()
+            .any(|c| c.contains(ra, dec, chi2_gate))
     }
 }
 
@@ -207,8 +402,64 @@ impl<'state_lf> KFBank<'state_lf> {
         );
         let _enter = span.enter();
 
-        // Propagate every live hypothesis read-only; skip failures.
-        let mut predicted: Vec<(f64, KFState)> = self
+        let mut predicted = self.propagate_hypotheses(t_prop, r_obs_new, v_obs_new)?;
+        top_k.apply(&mut predicted);
+        if predicted.is_empty() {
+            return Err(PropagateError::SingularJacobian);
+        }
+        tracing::trace!(n_selected = predicted.len(), "Hypothesis selection applied");
+
+        let (center_ra, center_dec) = weighted_sky_centroid(&predicted);
+        let r_noise = Matrix2::from_diagonal(&obs_noise);
+
+        // NOTE: we use `search_region_chi2` here, NOT `gate_chi2`.
+        // These two parameters serve different purposes:
+        //
+        //   gate_chi2          — tight chi-square threshold for discarding
+        //                        implausible hypotheses during the update step
+        //                        (e.g. 23.0 ≈ 99.999 %).
+        //
+        //   search_region_chi2 — determines how large the predicted sky region
+        //                        is.  It should be generous enough to reliably
+        //                        contain the next observation even when the
+        //                        filter is slightly overconfident.  Typical
+        //                        values: 100–500 (10–22σ).
+        //
+        // Coupling them caused the search radius to shrink whenever gate_chi2
+        // was reduced to a physically meaningful value, making `in_r` coverage
+        // drop to ~25 % even when the filter was tracking correctly.
+        let chi2 = self.config.search_region_chi2;
+        let components = build_components(&predicted, r_noise, chi2);
+        let radius_rad = radius_strategy.radius(&components, center_ra, center_dec);
+
+        tracing::trace!(
+            center_ra_deg = center_ra.to_degrees(),
+            center_dec_deg = center_dec.to_degrees(),
+            radius_arcsec = radius_rad.to_degrees() * 3600.0,
+            n_components = components.len(),
+            "Search region computed"
+        );
+
+        Ok(SearchRegion {
+            center_ra,
+            center_dec,
+            radius_rad,
+            components,
+        })
+    }
+
+    /// Propagate every live hypothesis read-only to `t_prop`, skipping and
+    /// logging failures.
+    ///
+    /// Returns `Err(PropagateError::SingularJacobian)` if no hypothesis
+    /// propagates successfully.
+    fn propagate_hypotheses(
+        &'_ self,
+        t_prop: f64,
+        r_obs_new: nalgebra::Vector3<f64>,
+        v_obs_new: nalgebra::Vector3<f64>,
+    ) -> Result<Vec<(f64, KFState<'_>)>, PropagateError> {
+        let predicted: Vec<(f64, KFState)> = self
             .hypotheses
             .iter()
             .filter_map(|h| match h.kf.predict(t_prop, r_obs_new, v_obs_new) {
@@ -228,132 +479,16 @@ impl<'state_lf> KFBank<'state_lf> {
             tracing::trace!("All hypotheses failed to predict; search region unavailable");
             return Err(PropagateError::SingularJacobian);
         }
-
         tracing::trace!(
             n_predicted = predicted.len(),
             n_live = self.hypotheses.len(),
             "Predicted live hypotheses for search-region construction"
         );
-
-        // Apply top-k / weight-threshold selection.
-        select_top_k(&mut predicted, top_k);
-
-        if predicted.is_empty() {
-            return Err(PropagateError::SingularJacobian);
-        }
-
-        tracing::trace!(n_selected = predicted.len(), "Hypothesis selection applied");
-
-        // Weighted centroid on the sky.
-        let (center_ra, center_dec) = weighted_sky_centroid(&predicted);
-
-        // Per-hypothesis innovation covariances + bounding radius.
-        //
-        // NOTE: we use `search_region_chi2` here, NOT `gate_chi2`.
-        // These two parameters serve different purposes:
-        //
-        //   gate_chi2          — tight chi-square threshold for discarding
-        //                        implausible hypotheses during the update step
-        //                        (e.g. 23.0 ≈ 99.999 %).
-        //
-        //   search_region_chi2 — determines how large the predicted sky region
-        //                        is.  It should be generous enough to reliably
-        //                        contain the next observation even when the
-        //                        filter is slightly overconfident.  Typical
-        //                        values: 100–500 (10–22σ).
-        //
-        // Coupling them caused the search radius to shrink whenever gate_chi2
-        // was reduced to a physically meaningful value, making `in_r` coverage
-        // drop to ~25 % even when the filter was tracking correctly.
-        let r_noise = Matrix2::from_diagonal(&obs_noise);
-        let (components, radius_rad) = hypothesis_components(
-            &predicted,
-            center_ra,
-            center_dec,
-            r_noise,
-            self.config.search_region_chi2,
-            radius_strategy,
-        );
-
-        tracing::trace!(
-            center_ra_deg = center_ra.to_degrees(),
-            center_dec_deg = center_dec.to_degrees(),
-            radius_arcsec = radius_rad.to_degrees() * 3600.0,
-            n_components = components.len(),
-            "Search region computed"
-        );
-
-        Ok(SearchRegion {
-            center_ra,
-            center_dec,
-            radius_rad,
-            components,
-        })
+        Ok(predicted)
     }
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
-
-/// Select and renormalize hypotheses according to the [`TopK`] policy.
-///
-/// The vector is modified in-place:
-///
-/// - [`TopK::All`] – no-op.
-/// - [`TopK::Map`] – swaps the best hypothesis to index 0, truncates to
-///   length 1, sets weight to 1.0.
-/// - [`TopK::Best(k)`] – partially sorts by descending weight, truncates to
-///   `k`, renormalizes.
-/// - [`TopK::WeightThreshold(theta)`] – sorts by descending weight, retains
-///   the minimal prefix whose cumulative weight reaches `theta`, renormalizes.
-fn select_top_k(predicted: &mut Vec<(f64, KFState)>, top_k: TopK) {
-    match top_k {
-        TopK::All => {}
-
-        TopK::Map => {
-            let best_idx = predicted
-                .iter()
-                .enumerate()
-                .max_by(|(_, (wa, _)), (_, (wb, _))| wa.partial_cmp(wb).unwrap())
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            predicted.swap(0, best_idx);
-            predicted.truncate(1);
-            predicted[0].0 = 1.0;
-        }
-
-        TopK::Best(k) => {
-            let k = k.max(1).min(predicted.len());
-            predicted.select_nth_unstable_by(k - 1, |(wa, _), (wb, _)| wb.partial_cmp(wa).unwrap());
-            predicted.truncate(k);
-            renormalize(predicted);
-        }
-
-        TopK::WeightThreshold(theta) => {
-            let theta = theta.clamp(0.0, 1.0);
-            // Full sort so we can walk the cumulative weight prefix.
-            predicted.sort_unstable_by(|(wa, _), (wb, _)| wb.partial_cmp(wa).unwrap());
-            let mut cumul = 0.0;
-            let mut keep = 0;
-            for (w, _) in predicted.iter() {
-                cumul += w;
-                keep += 1;
-                if cumul >= theta {
-                    break;
-                }
-            }
-            predicted.truncate(keep);
-            renormalize(predicted);
-        }
-    }
-}
-
-/// Renormalize weights in-place so they sum to 1.
-fn renormalize(predicted: &mut Vec<(f64, KFState)>) {
-    let total: f64 = predicted.iter().map(|(w, _)| w).sum();
-    if total > 0.0 {
-        predicted.iter_mut().for_each(|(w, _)| *w /= total);
-    }
-}
 
 /// Compute the weighted-mean sky position.
 ///
@@ -364,17 +499,14 @@ fn weighted_sky_centroid(predicted: &[(f64, KFState)]) -> (f64, f64) {
     })
 }
 
-fn hypothesis_components(
+/// Build one [`SearchComponent`] per predicted hypothesis, skipping those
+/// whose sky covariance is unavailable or degenerate.
+fn build_components(
     predicted: &[(f64, KFState)],
-    center_ra: f64,
-    center_dec: f64,
     r_noise: Matrix2<f64>,
     gate_chi2: f64,
-    radius_strategy: RadiusStrategy,
-) -> (Vec<(f64, f64, f64, Matrix2<f64>)>, f64) {
-    let nsigma = gate_chi2.sqrt();
-
-    let components_raw: Vec<(f64, f64, f64, Matrix2<f64>, f64)> = predicted
+) -> Vec<SearchComponent> {
+    predicted
         .iter()
         .filter_map(|(w, kf)| {
             let s = match kf.sky_covariance() {
@@ -384,87 +516,9 @@ fn hypothesis_components(
                     return None;
                 }
             };
-            let mu_ra = kf.state[0];
-            let mu_dec = kf.state[1];
-            let d_ra = wrap_angle(mu_ra - center_ra);
-            let d_dec = mu_dec - center_dec;
-            let offset = (d_ra * d_ra + d_dec * d_dec).sqrt();
-            let lambda_max = largest_eigenvalue_2x2(&s);
-            let per_hyp_radius = nsigma * lambda_max.sqrt() + offset;
-            Some((*w, mu_ra, mu_dec, s, per_hyp_radius))
+            SearchComponent::new(*w, kf.state[0], kf.state[1], s, gate_chi2)
         })
-        .collect();
-
-    let radius_rad = compute_radius(
-        &components_raw,
-        center_ra,
-        center_dec,
-        gate_chi2,
-        radius_strategy,
-    );
-
-    let components = components_raw
-        .into_iter()
-        .map(|(w, ra, dec, s, _)| (w, ra, dec, s))
-        .collect();
-
-    (components, radius_rad)
-}
-
-/// Dispatch radius computation to the chosen [`RadiusStrategy`].
-fn compute_radius(
-    components: &[(f64, f64, f64, Matrix2<f64>, f64)],
-    center_ra: f64,
-    center_dec: f64,
-    gate_chi2: f64,
-    strategy: RadiusStrategy,
-) -> f64 {
-    match strategy {
-        RadiusStrategy::MaxEllipse => components
-            .iter()
-            .map(|(_, _, _, _, r)| *r)
-            .fold(0.0_f64, f64::max),
-
-        RadiusStrategy::MixtureCovariance => {
-            mixture_covariance_radius(components, center_ra, center_dec, gate_chi2)
-        }
-
-        RadiusStrategy::Clamped { inner, max_arcsec } => {
-            let inner_strategy = match inner {
-                MixOrMax::MaxEllipse => RadiusStrategy::MaxEllipse,
-                MixOrMax::MixtureCovariance => RadiusStrategy::MixtureCovariance,
-            };
-            let r = compute_radius(components, center_ra, center_dec, gate_chi2, inner_strategy);
-            let max_rad = (max_arcsec / 3600.0_f64).to_radians();
-            r.min(max_rad)
-        }
-    }
-}
-
-/// Compute the bounding radius from the full mixture covariance.
-///
-/// $$S_{mix} = \sum_i w_i \bigl(S_i + (\mu_i - \bar\mu)(\mu_i - \bar\mu)^\top\bigr)$$
-///
-/// $$r = \sqrt{\chi^2_{gate} \cdot \lambda_{max}(S_{mix})}$$
-///
-/// Both the within-component uncertainty ($S_i$) and the between-component
-/// spatial spread contribute to $S_{mix}$, so the radius is a valid
-/// conservative bound on the mixture support.
-fn mixture_covariance_radius(
-    components: &[(f64, f64, f64, Matrix2<f64>, f64)],
-    center_ra: f64,
-    center_dec: f64,
-    gate_chi2: f64,
-) -> f64 {
-    let mut s_mix = Matrix2::zeros();
-    for (w, mu_ra, mu_dec, s_i, _) in components {
-        let d_ra = wrap_angle(mu_ra - center_ra);
-        let d_dec = mu_dec - center_dec;
-        let delta = Vector2::new(d_ra, d_dec);
-        s_mix += *w * (s_i + delta * delta.transpose());
-    }
-    let lambda_max = largest_eigenvalue_2x2(&s_mix);
-    gate_chi2.sqrt() * lambda_max.sqrt()
+        .collect()
 }
 
 /// Largest eigenvalue of a symmetric $2 \times 2$ matrix via the analytic
