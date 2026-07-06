@@ -6,8 +6,8 @@ use photom::MJDTT;
 use crate::{
     engine_config::edge_config::EdgeConfig,
     graph::edge::{Edge, EdgeKey, edge_prediction::EdgeRankingModelPool, error::EdgeBuilderError},
-    persistence::edge_journal::edge_op::EdgeOp,
-    pipeline::hooks::StageProgress,
+    // persistence::edge_journal::edge_op::EdgeOp,
+    // pipeline::hooks::StageProgress,
     seeding::{SeedKey, SeedNode, seed_spatial_index::SeedSpatialIndex},
     spacetime_bucket::spatial_binner::SpatialBinner,
 };
@@ -233,13 +233,13 @@ impl AlertLinkageDAG {
     /// Call [`Self::commit_edges_sort`] once after all pairs are processed.
     #[allow(clippy::too_many_arguments)]
     pub fn add_inter_night_edges_with_index<'seed_lf, 'binner_lf>(
-        &mut self,
+        mut self,
         left_nodes: &[SeedNode],
         right_index: &SeedSpatialIndex<'seed_lf, 'binner_lf>,
         edge_config: &EdgeConfig,
         model_pool: Option<&EdgeRankingModelPool>,
         progress_sink: &dyn StageProgress,
-    ) -> Result<(), EdgeBuilderError> {
+    ) -> Result<Self, EdgeBuilderError> {
         assert!(!left_nodes.is_empty(), "left_nodes must not be empty");
 
         debug_assert!(
@@ -274,7 +274,7 @@ impl AlertLinkageDAG {
         }
         // Sorting is deferred: call commit_edges_sort() once after all pairs.
 
-        Ok(())
+        Ok(self)
     }
 
     /// Flush all unsorted edges into the sorted prefix.
@@ -292,14 +292,15 @@ impl AlertLinkageDAG {
     ///
     /// After the call, `sorted_len == edges.len()` and binary-search
     /// operations are safe again.
-    pub fn commit_edges_sort(&mut self) {
+    pub fn commit_edges_sort(mut self) -> Self {
         let old_len = self.sorted_len;
         if old_len == self.edges.len() {
-            return; // already fully sorted
+            return self; // already fully sorted
         }
         self.edges[old_len..].sort_unstable_by_key(|e| e.key());
         self.edges.sort_by_key(|e| e.key());
         self.sorted_len = self.edges.len();
+        self
     }
 
     /// Return a reference to the edge identified by `key`, or `None` if absent.

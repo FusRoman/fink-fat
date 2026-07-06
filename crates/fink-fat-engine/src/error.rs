@@ -1,15 +1,18 @@
 use std::io;
 
+use hifitime::HifitimeError;
 use outfit::OutfitError;
-use photom::observation_dataset::ObsDatasetError;
+use photom::observation_dataset::{ObsDatasetError, ObsId};
 use thiserror::Error;
 
 use crate::{
     engine_config::error::ConfigError,
-    graph::edge::error::EdgeBuilderError,
-    persistence::error::{PersistenceError, PersistenceIoError},
-    pipeline::stages::PipelineStage,
-    solver::{components::error::ComponentError, error::SolverError},
+    pipeline::PipelineStage,
+    seeding::error::SeedingError,
+    tracklet::track_storage::TrackId, // graph::edge::error::EdgeBuilderError,
+                                      // persistence::error::{PersistenceError, PersistenceIoError},
+                                      // pipeline::stages::PipelineStage,
+                                      // solver::{components::error::ComponentError, error::SolverError},
 };
 
 #[derive(Debug, Error)]
@@ -149,24 +152,24 @@ pub enum EngineError {
     Seed(#[from] SeedError),
 
     /// Edge building / ML inference error.
-    #[error(transparent)]
-    Edge(#[from] EdgeBuilderError),
+    // #[error(transparent)]
+    // Edge(#[from] EdgeBuilderError),
 
-    /// Persistence I/O (manifest, stores, journals, etc).
-    #[error(transparent)]
-    Persistence(#[from] PersistenceError),
+    // /// Persistence I/O (manifest, stores, journals, etc).
+    // #[error(transparent)]
+    // Persistence(#[from] PersistenceError),
 
     /// Generic engine error (if you already use `FinkFatError` as a top-level error).
     #[error(transparent)]
     FinkFat(#[from] FinkFatError),
 
     /// Component error
-    #[error(transparent)]
-    Component(#[from] ComponentError),
+    // #[error(transparent)]
+    // Component(#[from] ComponentError),
 
-    /// Solver error
-    #[error(transparent)]
-    Solver(#[from] SolverError),
+    // /// Solver error
+    // #[error(transparent)]
+    // Solver(#[from] SolverError),
 
     /// Outfit error
     #[error(transparent)]
@@ -183,12 +186,73 @@ pub enum EngineError {
     /// ObsDataset error comming from the `photom` crate.
     #[error(transparent)]
     ObsDataset(#[from] ObsDatasetError),
+
+    /// Time scale error from the `hifitime` crate (e.g. UT1 provider issues).
+    #[error(transparent)]
+    Ut1(#[from] HifitimeError),
+
+    #[error("obs dataset id not found : {0}")]
+    ObsDatasetIdNotFound(ObsId),
+
+    #[error("Attempt to get TrackletData on Orbit variant tracklet : {0:?}")]
+    NotTrackletVariant(TrackId),
+
+    #[error("{0:?}")]
+    TrackIdNotFound(TrackId),
+
+    #[error(transparent)]
+    Sedding(#[from] SeedingError),
+
+    #[error(transparent)]
+    TopoError(#[from] TopocentricRangeError),
 }
 
-impl From<PersistenceIoError> for EngineError {
-    fn from(err: PersistenceIoError) -> Self {
-        EngineError::Persistence(PersistenceError::Io(err))
-    }
+#[derive(Debug, Error)]
+pub enum ObservationJacobianError {
+    #[error("topocentric distance ρ = {rho:.2e} is below numerical threshold")]
+    TopocentricDistanceTooSmall { rho: f64 },
+
+    #[error("polar singularity: Dec = {dec:.6} rad, cos(Dec) is near zero")]
+    PolarSingularity { dec: f64 },
+}
+
+/// Errors that can occur during a [`KFState::update`] step.
+#[derive(Debug, thiserror::Error)]
+pub enum KFUpdateError {
+    /// The topocentric distance $\rho$ is below the numerical threshold.
+    #[error("topocentric distance too small: rho = {rho:.3e} AU")]
+    TopocentricDistanceTooSmall { rho: f64 },
+
+    /// The observation Jacobian could not be evaluated.
+    #[error("observation Jacobian error: {0}")]
+    Jacobian(#[from] ObservationJacobianError),
+
+    /// The innovation covariance matrix $S$ is singular and cannot be inverted.
+    #[error("innovation covariance matrix S is singular")]
+    SingularInnovationCovariance,
+}
+
+#[derive(Debug, Error)]
+pub enum TopocentricRangeError {
+    #[error(
+        "Negative discriminant (Δ = {discriminant:.6e}): the heliocentric distance prior \
+         r = {r:.6} AU is geometrically inconsistent with the observer position \
+         |r_obs| = {r_obs_norm:.6} AU at solar elongation φ = {phi_deg:.3}°. \
+         No real topocentric range exists."
+    )]
+    NegativeDiscriminant {
+        discriminant: f64,
+        r: f64,
+        r_obs_norm: f64,
+        phi_deg: f64,
+    },
+
+    #[error(
+        "No positive root found (rho1 = {rho1:.6e} AU, rho2 = {rho2:.6e} AU): \
+         both solutions to the Al-Kashi quadratic are negative or zero. \
+         The observer may be beyond the asteroid for the given prior r = {r:.6} AU."
+    )]
+    NoPositiveRoot { rho1: f64, rho2: f64, r: f64 },
 }
 
 pub trait OptionExt<T> {

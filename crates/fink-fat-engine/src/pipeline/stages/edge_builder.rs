@@ -207,7 +207,7 @@ pub fn run(
                         continue;
                     };
 
-                    ctx.runtime_state.graph.add_inter_night_edges_with_index(
+                    ctx.runtime_state.graph = ctx.runtime_state.graph.add_inter_night_edges_with_index(
                         left_vec,
                         &right_index,
                         edge_config,
@@ -221,7 +221,7 @@ pub fn run(
 
             // Flush all unsorted edges appended above into the sorted prefix.
             // This is O(n + m log m) vs O((n+m) log(n+m)) for a full re-sort per pair.
-            ctx.runtime_state.graph.commit_edges_sort();
+            ctx.runtime_state.graph = ctx.runtime_state.graph.commit_edges_sort();
 
             let edges_added =
                 (ctx.runtime_state.graph.edges.len() as u64).saturating_sub(edges_before);

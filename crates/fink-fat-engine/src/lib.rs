@@ -192,11 +192,27 @@ pub mod astro_math;
 pub mod display_format;
 pub mod engine_config;
 pub mod error;
-pub mod graph;
+
+// pub mod graph;
+
 pub mod night_id;
-pub mod persistence;
-pub mod pipeline;
+
+// pub mod persistence;
+
+// pub mod pipeline;
+
 pub mod seeding;
-pub mod solver;
+
+// pub mod solver;
+
 pub mod spacetime_bucket;
-pub mod trajectory;
+
+// pub mod trajectory;
+
+pub mod ecliptic_state;
+pub mod pipeline;
+pub mod propagator;
+pub mod seeding_step;
+pub mod tracklet;
+
+pub mod topocentric_kf;

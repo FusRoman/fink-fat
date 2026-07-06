@@ -213,7 +213,7 @@
 use photom::{MJDTT, Radians};
 use serde::{Deserialize, Serialize};
 
-use crate::engine_config::units::{de_angle_rad, de_time_days};
+use crate::engine_config::units::{de_ang_speed_rad_per_day, de_angle_rad, de_time_days};
 use crate::error::SeedError;
 
 /// Parameters controlling **triplet generation** `(a, b, c)`.
@@ -320,7 +320,32 @@ pub struct TripletConfig {
     /// This value is **dimensionless at the configuration layer**. Its meaning
     /// depends on the photometry check used by the triplet generator
     /// (flux space, magnitude space, normalized residual, etc.).
-    pub max_flux_difference: f64,
+    pub max_mag_difference: f64,
+
+    /// Maximum allowed on-sky angular speed.
+    ///
+    /// Units
+    /// -----
+    /// - Canonical: **radians per day**.
+    ///
+    /// YAML forms
+    /// ---------
+    /// - numeric (already in rad/day): `5.0e-2`
+    /// - string with explicit rate: `"35 arcmin/day"`, `"2 arcsec / hour"`, `"0.05 rad/day"`
+    ///
+    /// Acceptance test
+    /// ---------------
+    /// A candidate pair `(a, b)` must satisfy:
+    ///
+    /// ```text
+    /// ang_sep(a, b) / (t_b - t_a) ≤ max_angular_speed
+    /// ```
+    ///
+    /// Serialization
+    /// -------------
+    /// Parsed with [`de_ang_speed_rad_per_day`].
+    #[serde(deserialize_with = "de_ang_speed_rad_per_day")]
+    pub max_angular_speed: f64,
 }
 
 impl Default for TripletConfig {
@@ -331,7 +356,8 @@ impl Default for TripletConfig {
             max_pair_sep: 2.5e-3,
             max_predicted_residual: 8.0e-4,
             enforce_time_order: true,
-            max_flux_difference: 5.0,
+            max_mag_difference: 5.0,
+            max_angular_speed: 5.0e-2,
         }
     }
 }
@@ -352,9 +378,9 @@ impl TripletConfig {
                 "triplets.max_predicted_residual",
             ));
         }
-        if !self.max_flux_difference.is_finite() || self.max_flux_difference < 0.0 {
+        if !self.max_mag_difference.is_finite() || self.max_mag_difference < 0.0 {
             return Err(SeedError::NonFiniteOrNegativePhotometry(
-                "triplets.max_flux_difference",
+                "triplets.max_mag_difference",
             ));
         }
         if self.max_predicted_residual > self.max_pair_sep {
@@ -403,8 +429,14 @@ impl TripletConfigBuilder {
     }
 
     /// Set maximum allowed photometric difference.
-    pub fn max_flux_difference(mut self, v: f64) -> Self {
-        self.params.max_flux_difference = v;
+    pub fn max_mag_difference(mut self, v: f64) -> Self {
+        self.params.max_mag_difference = v;
+        self
+    }
+
+    /// Set maximum allowed on-sky angular speed.
+    pub fn max_angular_speed(mut self, v: f64) -> Self {
+        self.params.max_angular_speed = v;
         self
     }
 
@@ -415,7 +447,8 @@ impl TripletConfigBuilder {
             max_pair_sep: self.params.max_pair_sep,
             max_predicted_residual: self.params.max_predicted_residual,
             enforce_time_order: self.params.enforce_time_order,
-            max_flux_difference: self.params.max_flux_difference,
+            max_mag_difference: self.params.max_mag_difference,
+            max_angular_speed: self.params.max_angular_speed,
         };
         p.validate()?;
         Ok(p)

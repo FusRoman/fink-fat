@@ -73,16 +73,10 @@
 //! - `min_cost_flow` – (optional) global optimization solver for larger components.
 
 use ahash::AHashMap;
-use outfit::{MJD, constants::Radian, trajectories::batch_reader::ObservationBatch};
-use photom::observation_dataset::{ObsDataset, observation::Observation};
 
 use crate::{
     graph::AlertLinkageDAG,
-    seeding::store::SeedStore,
-    solver::{
-        components::{ComponentId, ConnectedComponents},
-        error::SolverError,
-    },
+    solver::components::{ComponentId, ConnectedComponents},
     trajectory::TrackHypothesis,
 };
 
@@ -237,10 +231,6 @@ pub struct SolverOutput {
     pub diag: SolverDiagnostics,
 }
 
-use std::borrow::Cow;
-
-use std::sync::Arc;
-
 impl SolverOutput {
     pub fn merge_solver_output(all_solver_output: &[Self]) -> HypothesisSet {
         let mut merged: HypothesisSet = AHashMap::new();
@@ -255,210 +245,6 @@ impl SolverOutput {
 
         merged
     }
-}
-
-/// Flatten all solver tracks into per-observatory [`ObservationBatch`] maps.
-///
-/// This helper converts the solver output (a set of independent
-/// [`TrackHypothesis`] values) into *tabular*, solver-agnostic representations
-/// expected by downstream routines (orbit fitting, IOD, batch scoring, etc.),
-/// **grouped by MPC observatory code**.
-///
-/// The orbit fitter requires that all observations within a single batch
-/// originate from the same observatory. This function therefore returns one
-/// [`ObservationBatch`] per observatory, keyed by `Arc<String>` MPC code.
-///
-/// Output layout
-/// -------------
-/// The returned map associates each MPC code with a flat concatenation of
-/// observations from all tracks that belong to that observatory:
-///
-/// - `trajectory_id[i]` identifies which track the *i-th* observation belongs to.
-/// - `ra[i]`, `dec[i]`, and `time[i]` store the angular position and epoch.
-///
-/// Within each batch, arrays have identical length.
-///
-/// Determinism
-/// -----------
-/// [`AHashMap`] iteration order is not stable. To ensure deterministic output
-/// (useful for tests, reproducible pipelines, and stable diagnostics), tracks
-/// are processed in ascending key order:
-///
-/// 1. Collect all track keys (`temp_id`).
-/// 2. Sort them with `sort_unstable()`.
-/// 3. Flatten tracks in that sorted order.
-///
-/// This guarantees a stable global concatenation order *given the same input tracks*.
-///
-/// Per-track ordering
-/// ------------------
-/// Observations inside each track are explicitly normalized to time order:
-///
-/// - Alerts collected from the track’s seed nodes are sorted by `mjd_tt` ascending.
-///
-/// Even if the solver builds tracks from time-ordered seeds, this normalization
-/// is helpful because:
-/// - seed membership may overlap across consecutive seeds,
-/// - the concatenation of multiple seeds is not guaranteed to be strictly sorted
-///   without an explicit global sort step.
-///
-/// Deduplication strategy
-/// ----------------------
-/// Within each track, alerts are deduplicated **after sorting**, using the pointer
-/// identity of the borrowed alert reference:
-///
-/// ```rust,ignore
-/// alerts.dedup_by_key(|a| *a as *const Alert);
-/// ```
-///
-/// This removes duplicates produced when multiple seeds in a track share member
-/// alerts (common in overlapping triplets / pairs).
-///
-/// Notes:
-/// - Pointer-based dedup assumes that identical logical alerts are represented
-///   by the same in-memory `Alert` instance (typical when alerts come from a
-///   central store and seeds hold references).
-/// - If alerts have a known stable identifier (e.g. `candid`, `(night_id, idx)`,
-///   etc.), prefer dedup by that identifier to be robust to alternative memory
-///   layouts.
-///
-/// Uncertainty aggregation
-/// -----------------------
-/// [`ObservationBatch`] models angular uncertainties as a **single uniform**
-/// 1-σ value for RA and for DEC, applied to the entire batch.
-///
-/// This implementation sets:
-///
-/// - `error_ra = max(alert.ra_err)` across all flattened observations
-/// - `error_dec = max(alert.dec_err)` across all flattened observations
-///
-/// This is a conservative choice that avoids under-weighting any point.
-///
-/// If you need a different policy (e.g. median, mean, per-track values, or
-/// per-observation uncertainties), implement it at the call site or change
-/// the `ObservationBatch` model.
-///
-/// Allocation and lifetime behavior
-/// -------------------------------
-/// This method constructs **owned** buffers (`Vec<T>`) and returns them as
-/// `Cow::Owned(...)`.
-///
-/// - The returned batch does **not** borrow from `self` despite taking `&self`.
-/// - The lifetime parameter of the returned [`ObservationBatch`] is therefore
-///   irrelevant to safety in the current implementation (it contains no borrowed
-///   slices).
-///
-/// Capacity planning
-/// -----------------
-/// To reduce reallocations, the method first estimates an upper bound for the
-/// number of produced observations by summing `seed.members.len()` across all
-/// seeds of all tracks. This is a *safe upper bound* because deduplication may
-/// remove some elements, but it remains a good heuristic for reserving memory.
-///
-/// Complexity
-/// ----------
-/// Let:
-/// - `T` be the number of tracks,
-/// - `M_t` be the number of collected alert references for track `t`
-///   (before deduplication).
-///
-/// Then:
-/// - Sorting track ids: `O(T log T)`
-/// - For each track: sorting alerts: `O(M_t log M_t)`
-/// - Dedup + flatten: `O(sum_t M_t)`
-///
-/// Total: `O(T log T + sum_t (M_t log M_t))`
-///
-/// Panics
-/// ------
-/// This method does not intentionally panic. If `mjd_tt` contains NaNs, the
-/// `partial_cmp` used for sorting falls back to `Ordering::Equal`, which keeps
-/// the sort total but may result in a less meaningful ordering for those entries.
-///
-/// See also
-/// --------
-/// - [`TrackHypothesis`]: single-trajectory solver output.
-/// - [`ObservationBatch::from_radians_borrowed`]: zero-copy construction when
-///   upstream already has contiguous slices (not the case here).
-pub fn to_observation_batch<'a>(
-    hypothesis_set: &HypothesisSet,
-    obs_dataset: &'a ObsDataset,
-    seed_store: &SeedStore,
-) -> Result<AHashMap<Arc<String>, ObservationBatch<'a>>, SolverError> {
-    // --- 0) Stable track order (deterministic)
-    let mut track_ids: Vec<u32> = hypothesis_set.keys().copied().collect();
-    track_ids.sort_unstable();
-
-    // --- 1) Per-observatory accumulators (single-pass dispatch)
-    struct Acc {
-        trajectory_id: Vec<u32>,
-        ra: Vec<Radian>,
-        dec: Vec<Radian>,
-        time: Vec<MJD>,
-        max_ra_err: Radian,
-        max_dec_err: Radian,
-    }
-
-    let mut per_obs: AHashMap<Arc<String>, Acc> = AHashMap::new();
-
-    // --- 2) Flatten per track, dispatch per observatory
-    for tid in track_ids {
-        let trk = &hypothesis_set[&tid];
-
-        let mut alerts: Vec<&Observation> = trk
-            .get_alerts(obs_dataset, seed_store)
-            .map_err(|e| SolverError::OrbitFitConversionError(e.to_string()))?;
-
-        // Ensure time order inside this track
-        alerts.sort_by(|a, b| a.mjd_tt().total_cmp(&b.mjd_tt()));
-
-        for a in alerts {
-            // Derive a string key for the observatory from the ObserverId.
-            // MpcCode bytes are ASCII; IntId is formatted as a decimal string.
-            let mpc_key: Arc<String> = match a.observer_id() {
-                Some(photom::observer::dataset::ObserverId::MpcCode(code)) => {
-                    Arc::new(String::from_utf8_lossy(code).into_owned())
-                }
-                Some(photom::observer::dataset::ObserverId::IntId(idx)) => {
-                    Arc::new(format!("custom_{idx}"))
-                }
-                None => Arc::new("UNKNOWN".to_string()),
-            };
-            let acc = per_obs.entry(mpc_key).or_insert_with(|| Acc {
-                trajectory_id: Vec::new(),
-                ra: Vec::new(),
-                dec: Vec::new(),
-                time: Vec::new(),
-                max_ra_err: 0.0,
-                max_dec_err: 0.0,
-            });
-
-            acc.trajectory_id.push(tid);
-            acc.ra.push(a.equ_coord().ra);
-            acc.dec.push(a.equ_coord().dec);
-            acc.time.push(a.mjd_tt());
-            acc.max_ra_err = acc.max_ra_err.max(a.equ_coord().ra_error);
-            acc.max_dec_err = acc.max_dec_err.max(a.equ_coord().dec_error);
-        }
-    }
-
-    // --- 3) Convert accumulators to ObservationBatch
-    let result = per_obs
-        .into_iter()
-        .map(|(mpc_code, acc)| {
-            let batch = ObservationBatch {
-                trajectory_id: Cow::Owned(acc.trajectory_id),
-                ra: Cow::Owned(acc.ra),
-                dec: Cow::Owned(acc.dec),
-                time: Cow::Owned(acc.time),
-                error_ra: acc.max_ra_err,
-                error_dec: acc.max_dec_err,
-            };
-            (mpc_code, batch)
-        })
-        .collect();
-
-    Ok(result)
 }
 
 /// A solver that extracts trajectory hypotheses from a connected component.

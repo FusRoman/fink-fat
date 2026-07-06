@@ -545,12 +545,16 @@ fn load_edge_model_session(
     }
 
     // Build session with aggressive graph optimizations (good for throughput).
-    let session_builder =
-        Session::builder()?.with_optimization_level(GraphOptimizationLevel::Level3)?;
+    let session_builder = Session::builder()
+        .map_err(|e| EdgeModelError::OrtBuilder(e.to_string()))?
+        .with_optimization_level(GraphOptimizationLevel::Level3)
+        .map_err(|e| EdgeModelError::OrtBuilder(e.to_string()))?;
 
     // Optionally set the number of intra-op threads for parallelism within ORT.
-    let session_builder = if let Some(threads) = onnx_intra_threads {
-        session_builder.with_intra_threads(threads)?
+    let mut session_builder = if let Some(threads) = onnx_intra_threads {
+        session_builder
+            .with_intra_threads(threads)
+            .map_err(|e| EdgeModelError::OrtBuilder(e.to_string()))?
     } else {
         session_builder
     };

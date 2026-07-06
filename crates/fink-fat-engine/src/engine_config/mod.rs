@@ -183,12 +183,12 @@ use photom::MJDTT;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    ecliptic_state::SingerParams,
     engine_config::{
         edge_config::EdgeConfig, error::ConfigError, log_level::LogLevel, pair_config::PairConfig,
         pipeline_policy::PersistPolicy, solver_config::SolverConfig, triplet_config::TripletConfig,
         units::de_time_days,
-    },
-    persistence::compression::Compression,
+    }, // persistence::compression::Compression,
 };
 
 /// Root configuration for the engine (serde-friendly).
@@ -251,7 +251,7 @@ pub struct EngineConfig {
     /// recommended.
     ///
     /// YAML values: `"None"`, `"Lz4"`, `"Zstd"`, `"Gzip"`.
-    pub binary_compression: Compression,
+    // pub binary_compression: Compression,
 
     /// Maximum number of nights that can be skipped when linking (`gap` constraint).
     ///
@@ -348,6 +348,45 @@ pub struct EngineConfig {
     /// Defaults to `"info"`. This value is only read by the CLI; the engine
     /// itself only emits tracing events and does not install any subscriber.
     pub log_level: LogLevel,
+
+    /// Half of the exposure duration in days, used to define the time window around predictions for tracklet associations.
+    pub half_exposure_days: MJDTT,
+
+    /// Chi-squared threshold for Mahalanobis distance used in tracklet associations.
+    /// This threshold determines how close an observation must be to a tracklet's predicted position
+    /// (in terms of the tracklet's covariance) to be considered a potential match.
+    pub chi2_threshold: f64,
+
+    /// Sigma multiplier `k` used to inflate the bounding box around predictions during spatial pre-filtering in tracklet associations.
+    /// This parameter controls the size of the bounding box in equatorial coordinates, which is derived from the prediction covariance in ecliptic coordinates.
+    pub association_sigma: f64,
+
+    /// Acceleration spectral density used as process noise during state propagation
+    /// (rad²·day⁻³).
+    ///
+    /// This parameter controls how much uncertainty is injected into the state
+    /// covariance per unit time to account for unmodelled dynamical forces
+    /// (gravitational perturbations, non-gravitational forces, etc.).
+    ///
+    /// During propagation over a time step $\Delta t$, the process noise
+    /// contribution to the position variance scales as:
+    ///
+    /// $$\sigma^2_\text{pos} \sim \frac{q\,\Delta t^3}{3}$$
+    ///
+    /// Typical values
+    /// --------------
+    /// | Population        | `q` (rad²·day⁻³) |
+    /// |-------------------|-------------------|
+    /// | Main-belt         | `1e-12`           |
+    /// | Near-Earth (NEO)  | `1e-10`           |
+    /// | Comet             | `1e-8`            |
+    ///
+    /// Set to `0.0` to disable process noise entirely (pure kinematic propagation).
+    pub process_noise_q: f64,
+
+    pub singer_params: Option<SingerParams>,
+
+    pub max_magnitude_diff: f64,
 }
 
 impl Default for EngineConfig {
@@ -372,8 +411,14 @@ impl Default for EngineConfig {
             storage_path: "./storage".to_string(),
             compact_graph_every_delta: 20,
             pipeline_policy: PersistPolicy::Full,
-            binary_compression: Compression::None,
+            // binary_compression: Compression::None,
             log_level: LogLevel::default(),
+            half_exposure_days: 1.0 / (24.0 * 60.0), // ~1 minutes in days (twice an LSST exposure (30 seconds))
+            chi2_threshold: 9.21, // default chi-squared threshold for Mahalanobis distance (99% confidence for 2 degrees of freedom)
+            association_sigma: 3.0, // default sigma multiplier for bounding box inflation in tracklet associations (3-sigma is a common choice for a good balance between recall and pruning)
+            process_noise_q: 1e-12, // main-belt default: ~1 arcsec position uncertainty over 30 days
+            singer_params: None,
+            max_magnitude_diff: 1.0,
         }
     }
 }

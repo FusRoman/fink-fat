@@ -1,7 +1,6 @@
-use outfit::{
-    ErrorModel, FullOrbitResult, IODParams, ObjectNumber, Outfit, TrajectoryFile, TrajectoryFit,
-    TrajectorySet,
-};
+use hifitime::ut1::Ut1Provider;
+use outfit::{DifferentialCorrectionConfig, FitLSQ, FullOrbitResult, IODParams, JPLEphem};
+use photom::{TrajId, observer::error_model::ObsErrorModel};
 use rand::{SeedableRng, rngs::StdRng};
 
 use crate::{
@@ -11,7 +10,6 @@ use crate::{
         hooks::{PipelineHooks, StageMeta, StageReport},
         stages::{PipelineStage, run_stage},
     },
-    solver::to_observation_batch,
 };
 
 pub fn run(
@@ -38,56 +36,25 @@ pub fn run(
                 return Ok(vec![]);
             }
 
-            let obs_batches_by_obs = to_observation_batch(
-                track_hypothesis,
-                &ctx.runtime_state.obs_dataset,
-                &ctx.runtime_state.seed_store,
-            )?;
-
-            tracing::trace!(
-                n_obs_groups = obs_batches_by_obs.len(),
-                "observation batches resolved from hypotheses",
-            );
             stage_sink.inc(1);
 
-            // No observations could be resolved (all hypotheses reference
-            // missing alerts/seeds). Return empty results rather than failing.
-            let mut iter_obs_batch = obs_batches_by_obs.iter();
-            let Some((mpc_code_first, obs_batch_first)) = iter_obs_batch.next() else {
-                stage_sink.inc(2);
-                return Err(EngineError::OrbitFitting(
-                    "no resolved observations for any hypothesis".to_string(),
-                ));
-            };
-
             tracing::trace!("initialising Outfit environment (DE440 + FCCT14)");
-            let mut env_state = Outfit::new("horizon:DE440", ErrorModel::FCCT14)?;
 
-            let first_obs = env_state.get_observer_from_mpc_code(mpc_code_first);
-            let mut traj_set =
-                TrajectorySet::new_from_vec(&mut env_state, obs_batch_first, first_obs)?;
-
-            let mut n_obs_groups_loaded: usize = 1;
-            for (mpc_code, obs_batch) in iter_obs_batch {
-                let observer = env_state.get_observer_from_mpc_code(mpc_code);
-                traj_set.add_from_vec(&mut env_state, obs_batch, observer)?;
-                n_obs_groups_loaded += 1;
-            }
-
-            tracing::debug!(
-                n_obs_groups_loaded,
-                "TrajectorySet built from observation batches",
-            );
             stage_sink.inc(1);
 
             let mut rng = StdRng::seed_from_u64(42_u64);
 
-            let default = IODParams::builder()
+            let ut1_provider = Ut1Provider::download_from_jpl("latest_eop2.long")?;
+            let jpl_ephem: JPLEphem = "horizon:DE440".try_into()?;
+
+            let iod_params = IODParams::builder()
                 .n_noise_realizations(20)
                 .noise_scale(1.1)
                 .max_obs_for_triplets(20)
                 .max_triplets(30)
                 .build()?;
+
+            let default_diff_cor_config = DifferentialCorrectionConfig::default();
 
             tracing::debug!(
                 n_noise_realizations = 20,
@@ -97,8 +64,19 @@ pub fn run(
                 "running orbit estimation (parallel batches)",
             );
 
-            let orbit_results =
-                traj_set.estimate_all_orbits_in_batches_parallel(&env_state, &mut rng, &default);
+            let orbit_results = ctx
+                .runtime_state
+                .obs_dataset
+                .fit_lsq(
+                    &jpl_ephem,
+                    &ut1_provider,
+                    ObsErrorModel::FCCT14,
+                    &iod_params,
+                    &default_diff_cor_config,
+                    None,
+                    &mut rng,
+                )
+                .unwrap();
             let nb_orbit = orbit_results.len() as u64;
 
             ctx.runtime_state.orbit_results = orbit_results;
@@ -125,7 +103,7 @@ pub fn run(
                     .iter()
                     .filter(|(_, r)| r.is_ok())
                     .filter_map(|(obj, _)| match obj {
-                        ObjectNumber::Int(hyp_id) => track_hypotheses.get(hyp_id),
+                        TrajId::Int(hyp_id) => track_hypotheses.get(hyp_id),
                         _ => None,
                     })
                     .flat_map(|track| track.edges.iter().copied())

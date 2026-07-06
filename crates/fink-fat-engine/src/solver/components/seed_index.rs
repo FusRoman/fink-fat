@@ -107,14 +107,15 @@ mod seed_global_index_tests {
     use proptest::prelude::*;
 
     use crate::{
-        astro_math::arcsec_to_rad,
-        seeding::{SeedKey, SeedNode, store::SeedStore},
-        solver::components::error::ComponentError,
+        astro_math::arcsec_to_rad, seeding::{SeedKey, SeedNode, store::SeedStore}, solver::components::error::ComponentError
     };
     use photom::{
         NightId,
         coordinates::equatorial::EquCoord,
-        observation_dataset::observation::Observation,
+        observation_dataset::{
+            ObsDataset,
+            observation::{Observation, ObservationInput},
+        },
         photometry::{Filter, Photometry},
     };
 
@@ -129,6 +130,8 @@ mod seed_global_index_tests {
     /// Build a minimal `Observation` with a unique id.
     /// Position is fixed at (ra=1.0, dec=0.1) rad; only timing varies.
     fn mk_obs(source_id: u64, mjd_tt: f64) -> Observation {
+        let obs_dataset = ObsDataset::empty();
+
         let pos_err = arcsec_to_rad(0.5);
         let equ_coord = EquCoord::new(1.0, pos_err, 0.1, pos_err);
         let photometry = Photometry {
@@ -136,7 +139,13 @@ mod seed_global_index_tests {
             error: 0.1,
             filter: Filter::Int(1),
         };
-        Observation::new(source_id, equ_coord, photometry, mjd_tt, None)
+        let input = ObservationInput::new(source_id, equ_coord, photometry, mjd_tt, None);
+        let (obs_dataset, obs_id) = obs_dataset.push_observation(vec![input]).unwrap();
+        let observation = obs_dataset
+            .get_obs_by_index(*obs_id.get(0).unwrap())
+            .unwrap()
+            .clone();
+        observation
     }
 
     /// Insert `count` seeds built from pairs of consecutive observations into `store`

@@ -1087,7 +1087,10 @@ mod connected_components_tests {
     use photom::{
         NightId,
         coordinates::equatorial::EquCoord,
-        observation_dataset::observation::Observation,
+        observation_dataset::{
+            ObsDataset,
+            observation::{Observation, ObservationInput},
+        },
         photometry::{Filter, Photometry},
     };
     use proptest::prelude::*;
@@ -1102,6 +1105,8 @@ mod connected_components_tests {
 
     /// Build a minimal `Observation` with given parameters.
     fn mk_obs(source_id: u64, mjd_tt: f64) -> Observation {
+        let obs_dataset = ObsDataset::empty();
+
         let pos_err = arcsec_to_rad(0.5);
         let equ_coord = EquCoord::new(1.0, pos_err, 0.1, pos_err);
         let photometry = Photometry {
@@ -1109,7 +1114,13 @@ mod connected_components_tests {
             error: 0.1,
             filter: Filter::Int(1),
         };
-        Observation::new(source_id, equ_coord, photometry, mjd_tt, None)
+        let input = ObservationInput::new(source_id, equ_coord, photometry, mjd_tt, None);
+        let (obs_dataset, obs_id) = obs_dataset.push_observation(vec![input]).unwrap();
+        let observation = obs_dataset
+            .get_obs_by_index(*obs_id.get(0).unwrap())
+            .unwrap()
+            .clone();
+        observation
     }
 
     /// Insert `count` seeds into `store` for `night_id`, built from observation pairs.
