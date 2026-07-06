@@ -14,5 +14,6 @@
 
 pub mod error;
 pub mod kf_bank_builder;
+pub mod night_candidate_search;
 pub mod pairs;
 pub mod triplets;
