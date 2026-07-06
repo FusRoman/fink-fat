@@ -419,7 +419,7 @@ mod ranking_topk_tests {
     use photom::{
         NightId,
         coordinates::equatorial::EquCoord,
-        observation_dataset::observation::Observation,
+        observation_dataset::{ObsDataset, observation::{Observation, ObservationInput}},
         photometry::{Filter, Photometry as PhotomPhotometry},
     };
     use proptest::prelude::*;
@@ -430,16 +430,34 @@ mod ranking_topk_tests {
     // Helpers
     // -----------------------------------------------------------------------
 
+    fn new_obs_dataset() -> ObsDataset {
+        ObsDataset::empty()
+    }
+
     /// Build a minimal `Observation` for test purposes.
-    fn make_obs(id: u64, mjd: f64, ra: f64, dec: f64) -> Observation {
+    fn make_obs(
+        obs_dataset: ObsDataset,
+        id: u64,
+        mjd: f64,
+        ra: f64,
+        dec: f64,
+        band: u8,
+        flux: f64,
+    ) -> (ObsDataset, Observation) {
         let pos_err = arcsec_to_rad(1.0);
         let equ_coord = EquCoord::new(ra, pos_err, dec, pos_err);
         let photometry = PhotomPhotometry {
-            magnitude: 20.0,
-            error: 1.0,
-            filter: Filter::Int(1),
+            magnitude: flux,
+            error: flux * 0.05,
+            filter: Filter::Int(band as u32),
         };
-        Observation::new(id, equ_coord, photometry, mjd, None)
+        let obs_input = ObservationInput::new(id, equ_coord, photometry, mjd, None);
+        let (new_obs_dataset, obs_id) = obs_dataset.push_observation(vec![obs_input]).unwrap();
+        let observation = new_obs_dataset
+            .get_obs_by_index(*obs_id.get(0).unwrap())
+            .unwrap()
+            .clone();
+        (new_obs_dataset, observation)
     }
 
     /// Build a `TopKItem` with a dummy `SeedNode` reference. Because tests
@@ -449,8 +467,9 @@ mod ranking_topk_tests {
         static DUMMY: std::sync::OnceLock<SeedNode> = std::sync::OnceLock::new();
         let node = DUMMY.get_or_init(|| {
             let mut store = SeedStore::new();
-            let a = make_obs(0, 60000.0, 0.1, 0.1);
-            let b = make_obs(1, 60000.02, 0.1001, 0.1);
+            let obs_dataset = new_obs_dataset();
+            let (obs_dataset, a) = make_obs(obs_dataset, 0, 60000.0, 0.1, 0.1, 1, 1000.0);
+            let (_, b) = make_obs(obs_dataset, 1, 60000.02, 0.1001, 0.1, 1, 1000.0);
             SeedNode::from_pair(&mut store, NightId::new(1), &a, &b, None)
                 .expect("dummy SeedNode for ranking_topk tests")
         });

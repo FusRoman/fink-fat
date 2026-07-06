@@ -145,7 +145,7 @@ use crate::{
 // ─────────────────────────────────────────────────────────────────
 
 /// Per-night seed compilation result produced by [`process_one_night`].
-struct NightSeedResult {
+pub struct NightSeedResult {
     night_id: NightId,
     /// Candidate seeds sorted by `epoch_mid`, carrying provisional keys from
     /// a thread-local [`SeedStore`]. Keys are reassigned in

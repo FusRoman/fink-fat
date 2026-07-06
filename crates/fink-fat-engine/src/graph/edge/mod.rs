@@ -966,7 +966,10 @@ mod edge_mod_tests {
     use photom::{
         NightId,
         coordinates::equatorial::EquCoord,
-        observation_dataset::observation::Observation,
+        observation_dataset::{
+            ObsDataset,
+            observation::{Observation, ObservationInput},
+        },
         photometry::{Filter, Photometry as PhotomPhotometry},
     };
 
@@ -990,17 +993,35 @@ mod edge_mod_tests {
         manifest_dir.join("tests/ml_model/edge_classifier.onnx")
     }
 
+    fn new_obs_dataset() -> ObsDataset {
+        ObsDataset::empty()
+    }
+
     /// Minimal observation at `(ra, dec)` at epoch `mjd`, with 1-arcsec
     /// positional errors and band `1` (g).
-    fn make_obs(id: u64, mjd: f64, ra: f64, dec: f64) -> Observation {
+    fn make_obs(
+        obs_dataset: ObsDataset,
+        id: u64,
+        mjd: f64,
+        ra: f64,
+        dec: f64,
+        band: u8,
+        flux: f64,
+    ) -> (ObsDataset, Observation) {
         let pos_err = arcsec_to_rad(1.0);
         let equ_coord = EquCoord::new(ra, pos_err, dec, pos_err);
         let photometry = PhotomPhotometry {
-            magnitude: 1000.0,
-            error: 50.0,
-            filter: Filter::Int(1),
+            magnitude: flux,
+            error: flux * 0.05,
+            filter: Filter::Int(band as u32),
         };
-        Observation::new(id, equ_coord, photometry, mjd, None)
+        let obs_input = ObservationInput::new(id, equ_coord, photometry, mjd, None);
+        let (new_obs_dataset, obs_id) = obs_dataset.push_observation(vec![obs_input]).unwrap();
+        let observation = new_obs_dataset
+            .get_obs_by_index(*obs_id.get(0).unwrap())
+            .unwrap()
+            .clone();
+        (new_obs_dataset, observation)
     }
 
     /// Build a `SeedNode` from two observations 30 min apart on `night`, starting at
@@ -1016,8 +1037,9 @@ mod edge_mod_tests {
         vx: f64,
     ) -> SeedNode {
         let dt = 0.5 / 24.0; // 30 min in days
-        let a = make_obs(id_a, mjd, ra, dec);
-        let b = make_obs(id_b, mjd + dt, ra + vx * dt, dec);
+        let obs_dataset = new_obs_dataset();
+        let (obs_dataset, a) = make_obs(obs_dataset, id_a, mjd, ra, dec, 1, 1000.0);
+        let (_, b) = make_obs(obs_dataset, id_b, mjd + dt, ra + vx * dt, dec, 1, 1000.0);
         SeedNode::from_pair(store, NightId::new(night), &a, &b, None)
             .expect("test seeds should form a valid pair")
     }

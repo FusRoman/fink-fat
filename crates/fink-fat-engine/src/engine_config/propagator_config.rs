@@ -160,7 +160,7 @@
 
 use std::fmt;
 
-use outfit::constants::Radian;
+use photom::Radians;
 use serde::{Deserialize, Serialize};
 
 use crate::engine_config::units::de_angle_rad_opt;
@@ -668,7 +668,7 @@ impl PredictorParamsBuilder {
     ///
     /// Use [`crate::astro_math::arcsec_to_rad`] or similar to convert from
     /// human-friendly units when constructing programmatically.
-    pub fn max_cone_radius(mut self, r: Option<Radian>) -> Self {
+    pub fn max_cone_radius(mut self, r: Option<Radians>) -> Self {
         self.max_cone_radius = r;
         self
     }

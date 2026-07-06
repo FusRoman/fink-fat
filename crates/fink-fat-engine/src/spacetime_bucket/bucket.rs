@@ -29,7 +29,6 @@
 //! - [`SpatialBinner`] – mapping from sky coordinates to spatial cells.
 //! - [`TimeBinner`] – mapping from epochs to discrete time bins.
 //! - `seeding::pairs` – uses `BucketIndex<&Alert>` for pair generation.
-//! - `seeding::seed_spatial_index` – wraps `BucketIndex<&SeedNode>`.
 
 use ahash::AHashMap;
 use photom::{
@@ -146,7 +145,7 @@ fn bucket_key_for<Bs: SpatialBinner, Bt: TimeBinner>(
     }
 }
 
-/// Build a [`BucketIndex`] from a slice of alerts, storing **borrowed references**.
+/// Build a [`BucketIndex`] from an iterable of alerts, storing **borrowed references**.
 ///
 /// This is the canonical constructor used in the early stages of the pipeline
 /// (pair generation, seeding).
@@ -157,8 +156,10 @@ fn bucket_key_for<Bs: SpatialBinner, Bt: TimeBinner>(
 ///
 /// Parameters
 /// ----------
-/// alerts : &[Alert]
-///     Input alerts to index. They must outlive the returned index.
+/// alerts : impl IntoIterator<Item = &Alert>
+///     Input alerts to index. They must outlive the returned index. Accepts
+///     both `&[Alert]` and any iterator of `&Alert` (e.g. a `Vec<&Observation>`
+///     collected from a non-contiguous `ObsDataset` night slice).
 /// space_binner : &impl SpatialBinner
 ///     Spatial discretization backend.
 /// time_binner : &impl TimeBinner
@@ -181,7 +182,7 @@ fn bucket_key_for<Bs: SpatialBinner, Bt: TimeBinner>(
 /// - Every alert appears in exactly one bucket.
 /// - Every bucket’s `members` slice is sorted by increasing time.
 pub fn build_alert_bucket_index<'alert_lf, Bs, Bt>(
-    alerts: &'alert_lf [Observation],
+    alerts: impl IntoIterator<Item = &'alert_lf Observation>,
     space_binner: &Bs,
     time_binner: &Bt,
 ) -> BucketIndex<&'alert_lf Observation>
@@ -218,7 +219,10 @@ where
 mod bucket_tests {
     use photom::{
         coordinates::equatorial::EquCoord,
-        observation_dataset::observation::Observation,
+        observation_dataset::{
+            ObsDataset,
+            observation::{Observation, ObservationInput},
+        },
         photometry::{Filter, Photometry},
     };
 
@@ -267,13 +271,21 @@ mod bucket_tests {
 
     /// Helper to build a minimal `Observation` for tests.
     fn mk_obs(id: u64, ra: f64, dec: f64, mjd_tt: MJDTT) -> Observation {
+        let obs_dataset = ObsDataset::empty();
+
         let equ = EquCoord::new(ra, 0.0, dec, 0.0);
         let phot = Photometry {
             magnitude: 20.0,
             error: 0.1,
             filter: Filter::String("r".to_string()),
         };
-        Observation::new(id, equ, phot, mjd_tt, None)
+        let input = ObservationInput::new(id, equ, phot, mjd_tt, None);
+        let (obs_dataset, obs_id) = obs_dataset.push_observation(vec![input]).unwrap();
+        let observation = obs_dataset
+            .get_obs_by_index(*obs_id.get(0).unwrap())
+            .unwrap()
+            .clone();
+        observation
     }
 
     #[test]

@@ -257,7 +257,7 @@ pub struct PairConfig {
     /// - magnitude difference threshold,
     /// - normalized residual threshold,
     /// - or any other scalar similarity metric.
-    pub max_flux_difference: f64,
+    pub max_mag_difference: f64,
 
     /// Whether to allow pairs formed from alerts inside the same **time bin**.
     ///
@@ -268,6 +268,12 @@ pub struct PairConfig {
     /// - increase recall,
     /// - increase contamination.
     pub allow_same_timebin: bool,
+
+    /// Prior variance on the pairwise acceleration (rad/day²).
+    /// For pairs, acceleration is not directly observable
+    /// This parameter allow to modelize the acceleration uncertainty in the pair seeds
+    /// allowing a better kalman filter propagation.
+    pub acc_prior_var: f64,
 }
 
 impl Default for PairConfig {
@@ -277,14 +283,15 @@ impl Default for PairConfig {
     /// --------
     /// - `max_dt = 0.06` days (~86.4 minutes)
     /// - `max_angular_speed = 5.0e-2` rad/day (order-of-magnitude)
-    /// - `max_flux_difference = 5.0`
+    /// - `max_mag_difference = 5.0`
     /// - `allow_same_timebin = true`
     fn default() -> Self {
         Self {
             max_dt: 0.06,
             max_angular_speed: 5.0e-2,
-            max_flux_difference: 5.0,
+            max_mag_difference: 5.0,
             allow_same_timebin: true,
+            acc_prior_var: 1.0e-4, // should also englobe NEOs
         }
     }
 }
@@ -301,9 +308,9 @@ impl PairConfig {
                 "pairs.max_angular_speed",
             ));
         }
-        if !self.max_flux_difference.is_finite() || self.max_flux_difference < 0.0 {
+        if !self.max_mag_difference.is_finite() || self.max_mag_difference < 0.0 {
             return Err(SeedError::NonFiniteOrNegativePhotometry(
-                "pairs.max_flux_difference",
+                "pairs.max_mag_difference",
             ));
         }
         Ok(())
@@ -346,8 +353,8 @@ impl PairConfigBuilder {
     }
 
     /// Set maximum allowed photometric difference (dimensionless).
-    pub fn max_flux_difference(mut self, v: f64) -> Self {
-        self.params.max_flux_difference = v;
+    pub fn max_mag_difference(mut self, v: f64) -> Self {
+        self.params.max_mag_difference = v;
         self
     }
 
@@ -357,13 +364,20 @@ impl PairConfigBuilder {
         self
     }
 
+    /// Set prior variance on the pairwise acceleration (rad/day²).
+    pub fn acc_prior_var(mut self, v: f64) -> Self {
+        self.params.acc_prior_var = v;
+        self
+    }
+
     /// Finalize builder and validate constraints.
     pub fn build(self) -> Result<PairConfig, SeedError> {
         let p = PairConfig {
             max_dt: self.params.max_dt,
             max_angular_speed: self.params.max_angular_speed,
-            max_flux_difference: self.params.max_flux_difference,
+            max_mag_difference: self.params.max_mag_difference,
             allow_same_timebin: self.params.allow_same_timebin,
+            acc_prior_var: self.params.acc_prior_var,
         };
         p.validate()?;
         Ok(p)

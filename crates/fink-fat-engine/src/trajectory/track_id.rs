@@ -403,7 +403,10 @@ mod track_id_tests {
     use photom::{
         NightId,
         coordinates::equatorial::EquCoord,
-        observation_dataset::{ObsDataset, ObsId, observation::Observation},
+        observation_dataset::{
+            ObsDataset, ObsId,
+            observation::{Observation, ObservationInput},
+        },
         photometry::{Filter, Photometry},
     };
     use proptest::prelude::*;
@@ -421,23 +424,21 @@ mod track_id_tests {
     }
 
     /// Build a minimal but valid `Observation` for seeding.
-    fn make_observation(id: ObsId, mjd_tt: f64, ra_rad: f64, dec_rad: f64) -> Observation {
+    fn make_observation(id: ObsId, mjd_tt: f64, ra_rad: f64, dec_rad: f64) -> ObservationInput {
         let equ_coord = EquCoord::new(ra_rad, 1e-5, dec_rad, 1e-5);
         let photometry = Photometry {
             magnitude: 20.0,
             error: 0.1,
             filter: Filter::Int(1),
         };
-        Observation::new(id, equ_coord, photometry, mjd_tt, None)
+        ObservationInput::new(id, equ_coord, photometry, mjd_tt, None)
     }
 
     /// Push a list of observations into an `ObsDataset` and return it.
-    fn make_dataset(observations: Vec<Observation>) -> ObsDataset {
-        let mut dataset = ObsDataset::empty();
-        for obs in observations {
-            dataset.push_observation(vec![obs]).unwrap();
-        }
-        dataset
+    fn make_dataset(observations: Vec<ObservationInput>) -> ObsDataset {
+        let dataset = ObsDataset::empty();
+        let (new_dataset, _) = dataset.push_observation(observations).unwrap();
+        new_dataset
     }
 
     /// Build one seed from a pair of observations using the production constructor.
@@ -628,8 +629,16 @@ mod track_id_tests {
         let dataset = make_dataset(vec![a1.clone(), a2.clone(), a3.clone(), a4.clone()]);
 
         // Build seeds via from_pair (members will be [a,b] internally)
-        let s1 = make_seed_from_pair(1, &a1, &a3);
-        let s2 = make_seed_from_pair(1, &a2, &a4);
+        let s1 = make_seed_from_pair(
+            1,
+            dataset.get_observation(0).unwrap(),
+            dataset.get_observation(2).unwrap(),
+        );
+        let s2 = make_seed_from_pair(
+            1,
+            dataset.get_observation(1).unwrap(),
+            dataset.get_observation(3).unwrap(),
+        );
 
         let nodes: Vec<&SeedNode> = vec![&s1, &s2];
         let mjd_min = earliest_alert_mjd_tt(&dataset, &nodes).unwrap();
@@ -757,8 +766,16 @@ mod track_id_tests {
             a_late.clone(),
         ]);
 
-        let s1 = make_seed_from_pair(1, &a_late, &a_mid2);
-        let s2 = make_seed_from_pair(1, &a_early, &a_mid);
+        let s1 = make_seed_from_pair(
+            1,
+            dataset.get_observation(1).unwrap(),
+            dataset.get_observation(3).unwrap(),
+        );
+        let s2 = make_seed_from_pair(
+            1,
+            dataset.get_observation(0).unwrap(),
+            dataset.get_observation(2).unwrap(),
+        );
 
         let nodes: Vec<&SeedNode> = vec![&s1, &s2];
 
@@ -789,15 +806,31 @@ mod track_id_tests {
         // Track A:
         // - seed0: (a2, a1)  contains earliest
         // - seed1: (a4, a3)
-        let s0_a = make_seed_from_pair(1, &a2, &a1);
-        let s1_a = make_seed_from_pair(1, &a4, &a3);
+        let s0_a = make_seed_from_pair(
+            1,
+            dataset.get_observation(1).unwrap(),
+            dataset.get_observation(0).unwrap(),
+        );
+        let s1_a = make_seed_from_pair(
+            1,
+            dataset.get_observation(3).unwrap(),
+            dataset.get_observation(2).unwrap(),
+        );
         let nodes_a: Vec<&SeedNode> = vec![&s0_a, &s1_a];
 
         // Track B:
         // - seed0: (a1, a3)
         // - seed1: (a2, a4) contains earliest (moved)
-        let s0_b = make_seed_from_pair(1, &a1, &a3);
-        let s1_b = make_seed_from_pair(1, &a2, &a4);
+        let s0_b = make_seed_from_pair(
+            1,
+            dataset.get_observation(0).unwrap(),
+            dataset.get_observation(2).unwrap(),
+        );
+        let s1_b = make_seed_from_pair(
+            1,
+            dataset.get_observation(1).unwrap(),
+            dataset.get_observation(3).unwrap(),
+        );
         let nodes_b: Vec<&SeedNode> = vec![&s0_b, &s1_b];
 
         // Year prefix must be derived from the *minimum mjd_tt* across all members,
@@ -814,7 +847,7 @@ mod track_id_tests {
         fn prop_track_id_from_nodes_year_matches_min_mjd_year(
             obs in prop::collection::vec((45000f64..70000f64, 0f64..6.0, -1.4f64..1.4), 2..10),
         ) {
-            let mut observations: Vec<Observation> = Vec::with_capacity(obs.len());
+            let mut observations: Vec<ObservationInput> = Vec::with_capacity(obs.len());
             for (i, (mjd, ra, dec)) in obs.iter().enumerate() {
                 observations.push(make_observation(i as ObsId, *mjd, *ra, *dec));
             }
@@ -824,7 +857,11 @@ mod track_id_tests {
             // Build seeds: chain pairs (0,1), (1,2), ...
             let mut seeds: Vec<SeedNode> = Vec::with_capacity(observations.len() - 1);
             for i in 0..observations.len() - 1 {
-                let s = make_seed_from_pair(1, &observations[i], &observations[i + 1]);
+                let s = make_seed_from_pair(
+                    1,
+                    dataset.get_observation(i as u64).unwrap(),
+                    dataset.get_observation((i+1) as u64).unwrap()
+                );
                 seeds.push(s);
             }
 

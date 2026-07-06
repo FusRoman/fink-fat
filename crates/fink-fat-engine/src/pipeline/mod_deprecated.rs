@@ -1,5 +1,8 @@
 pub mod hooks;
 pub mod stages;
+pub mod seeding_step;
+pub mod graph_building_step;
+pub mod solving_step;
 
 use photom::observation_dataset::ObsDataset;
 

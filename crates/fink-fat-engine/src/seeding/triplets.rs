@@ -44,26 +44,17 @@
 //! See also
 //! --------
 //! - `seeding::pairs` – produces `(a, b)` candidates.
-//! - [`SeedNode::from_triplet`] – constructs a quadratic tangent-plane seed.
 //! - `spacetime_bucket::bucket` – bucket index and per-bucket time ordering.
 
 use ahash::{AHashMap, AHashSet};
 use photom::{
-    NightId,
-    coordinates::{cartesian::CartesianCoord, cov2::Cov2, gnomonic_projection::TangentPlane},
-    observation_dataset::observation::Observation,
+    coordinates::cartesian::CartesianCoord, observation_dataset::observation::Observation,
 };
 
 use crate::{
-    astro_math::{fit_quad_tangent, planar_offset_fast},
+    astro_math::planar_offset_fast,
     engine_config::triplet_config::TripletConfig,
-    seeding::{
-        SeedNode,
-        pairs::Pair,
-        photometry::SeedPhotometry,
-        store::SeedStore,
-        tangent_plane::{Acceleration, PosWithCov, TangentPlaneModel, VelWithCov},
-    },
+    seeding::pairs::Pair,
     spacetime_bucket::{
         bucket::{BucketIndex, BucketKey},
         spatial_binner::{SpatialBinner, SpatialKey},
@@ -228,7 +219,7 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
         max_dt_between = cfg.max_dt_between,
         max_pair_sep = cfg.max_pair_sep,
         max_predicted_residual = cfg.max_predicted_residual,
-        max_flux_difference = cfg.max_flux_difference,
+        max_mag_difference = cfg.max_mag_difference,
         enforce_time_order = cfg.enforce_time_order,
         search_radius,
         "generate_triplets_from_pairs starting",
@@ -319,7 +310,7 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
                     }
 
                     // Flux similarity between b and c.
-                    if (magnitude_b - c.photometry().magnitude).abs() > cfg.max_flux_difference {
+                    if (magnitude_b - c.photometry().magnitude).abs() > cfg.max_mag_difference {
                         n_rejected_flux += 1;
                         continue;
                     }
@@ -401,146 +392,6 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
     out
 }
 
-impl SeedNode {
-    /// Build a [`SeedNode`] from a **triplet** of alerts (quadratic tangent-plane model).
-    ///
-    /// This constructor fits a quadratic model independently in tangent `x` and `y`:
-    /// it yields position at mean epoch, velocity, and acceleration.
-    ///
-    /// Arguments
-    /// ---------
-    /// * seed_store : &mut SeedStore
-    ///   Seed store used to generate a unique seed key for this night.
-    /// * night_id : NightId
-    ///   Night identifier shared by the three alerts (seeds do not mix nights).
-    /// * alert_a : &Alert
-    ///   First detection.
-    /// * alert_b : &Alert
-    ///   Second detection.
-    /// * alert_c : &Alert
-    ///   Third detection.
-    ///
-    /// Returns
-    /// -------
-    /// * SeedNode
-    ///   A seed with `n_obs == 3` and `plane_model.acc.is_some() == true`.
-    ///
-    /// Notes
-    /// -----
-    /// - The tangent-plane centre is chosen as the spherical midpoint of endpoints
-    ///   `(a, c)` to stabilize projection.
-    /// - Uncertainty estimates are coarse and isotropic (similar philosophy as pairs).
-    /// - This is still an approximation of true orbital motion.
-    pub fn from_triplet(
-        seed_store: &mut SeedStore,
-        night_id: NightId,
-        alert_a: &Observation,
-        alert_b: &Observation,
-        alert_c: &Observation,
-    ) -> Self {
-        let (ta, tb, tc) = (alert_a.mjd_tt(), alert_b.mjd_tt(), alert_c.mjd_tt());
-        let dt_char = (tc - ta).max(1e-6);
-        let inv_dt2 = 1.0 / (dt_char * dt_char);
-        let epoch_mid = (ta + tb + tc) / 3.0;
-
-        // Tangent plane centred on the spherical midpoint of the extremes.
-        let mid = alert_a.equ_coord().spherical_midpoint(alert_c.equ_coord());
-        let plane = TangentPlane::new(mid);
-
-        // Project the three alerts onto the plane.
-        let tp_a = plane.project(alert_a.equ_coord());
-        let tp_b = plane.project(alert_b.equ_coord());
-        let tp_c = plane.project(alert_c.equ_coord());
-
-        let dts = [ta - epoch_mid, tb - epoch_mid, tc - epoch_mid];
-        let (tp_fit, v, a) = fit_quad_tangent(dts, [tp_a, tp_b, tp_c]);
-
-        // Per-alert anisotropic variances (RA, Dec independent).
-        let var_of = |o: &Observation| {
-            let e = o.equ_coord();
-            (e.ra_error * e.ra_error, e.dec_error * e.dec_error)
-        };
-        let (vxa, vya) = var_of(alert_a);
-        let (vxb, vyb) = var_of(alert_b);
-        let (vxc, vyc) = var_of(alert_c);
-
-        // Mean variance per tangent-plane axis.
-        let var_x = (vxa + vxb + vxc) / 3.0;
-        let var_y = (vya + vyb + vyc) / 3.0;
-
-        // Propagated covariances: position averages over 3 samples,
-        // velocity scales as σ² / Δt².
-        let cov_pos = Cov2::diag(var_x / 3.0, var_y / 3.0);
-        let cov_vel = Cov2::diag(var_x * inv_dt2, var_y * inv_dt2);
-
-        let model = TangentPlaneModel {
-            epoch_mid,
-            pos: PosWithCov {
-                tangent_point: tp_fit,
-                cov: cov_pos,
-            },
-            vel: VelWithCov { v, cov: cov_vel },
-            acc: Some(Acceleration(a)),
-        };
-
-        let flux_mean = (alert_a.photometry().magnitude
-            + alert_b.photometry().magnitude
-            + alert_c.photometry().magnitude)
-            / 3.0;
-        let flux_std = ((alert_a.photometry().magnitude - flux_mean).abs()
-            + (alert_b.photometry().magnitude - flux_mean).abs()
-            + (alert_c.photometry().magnitude - flux_mean).abs())
-            / 3.0;
-
-        let photom = SeedPhotometry::from_triplet(
-            flux_mean as f32,
-            flux_std as f32,
-            alert_a.photometry().filter.clone(),
-            alert_b.photometry().filter.clone(),
-            alert_c.photometry().filter.clone(),
-        );
-
-        Self {
-            key: seed_store.next_key(night_id),
-            plane_model: model,
-            photom,
-            n_obs: 3,
-            members: vec![
-                alert_a.id().clone(),
-                alert_b.id().clone(),
-                alert_c.id().clone(),
-            ],
-        }
-    }
-
-    /// Convert triplets into quadratic [`SeedNode`] objects for a given night.
-    ///
-    /// This is a thin wrapper around [`SeedNode::from_triplet`].
-    ///
-    /// Parameters
-    /// ----------
-    /// trips : &Triplets
-    ///     Triplets produced by [`generate_triplets_from_pairs`].
-    /// night_id : NightId
-    ///     Night identifier assigned to all output seeds.
-    ///
-    /// Returns
-    /// -------
-    /// `Vec<SeedNode>`
-    ///     One seed per triplet, preserving input order.
-    pub fn extract_triplet_features<'alert_lf>(
-        trips: &Triplets<'alert_lf>,
-        seed_store: &mut SeedStore,
-        night_id: NightId,
-    ) -> Vec<Self> {
-        let mut out = Vec::with_capacity(trips.len());
-        for &Triplet { a, b, c } in trips.iter() {
-            out.push(SeedNode::from_triplet(seed_store, night_id, a, b, c));
-        }
-        out
-    }
-}
-
 #[cfg(test)]
 mod triplet_gen_tests {
     use super::*;
@@ -551,7 +402,10 @@ mod triplet_gen_tests {
     use photom::{
         MJDTT,
         coordinates::equatorial::EquCoord,
-        observation_dataset::observation::Observation,
+        observation_dataset::{
+            ObsDataset,
+            observation::{Observation, ObservationInput},
+        },
         photometry::{Filter, Photometry as PhotomPhotometry},
     };
 
@@ -634,6 +488,7 @@ mod triplet_gen_tests {
         band: u8,
         flux: f64,
     ) -> Observation {
+        let obs_dataset = ObsDataset::empty();
         let pos_err = arcsec_to_rad(0.5);
         let equ_coord = EquCoord::new(ra, pos_err, dec, pos_err);
         let photometry = PhotomPhotometry {
@@ -641,7 +496,14 @@ mod triplet_gen_tests {
             error: 0.0,
             filter: Filter::Int(band as u32),
         };
-        Observation::new(i as u64, equ_coord, photometry, mjd_tt, None)
+
+        let input = ObservationInput::new(i as u64, equ_coord, photometry, mjd_tt, None);
+        let (obs_dataset, obs_id) = obs_dataset.push_observation(vec![input]).unwrap();
+        let observation = obs_dataset
+            .get_obs_by_index(*obs_id.get(0).unwrap())
+            .unwrap()
+            .clone();
+        observation
     }
 
     fn mk_triplet_config(
@@ -654,7 +516,7 @@ mod triplet_gen_tests {
             max_pair_sep: arcsec_to_rad(max_pair_sep_arcsec),
             max_predicted_residual: arcsec_to_rad(max_residual_arcsec),
             enforce_time_order: true,
-            max_flux_difference: 5.0,
+            max_mag_difference: 5.0,
             ..TripletConfig::default()
         }
     }
@@ -897,9 +759,9 @@ mod triplet_gen_tests {
                 let dbc = b.equ_coord().angular_separation(&c.equ_coord());
                 prop_assert!(dbc <= cfg.max_pair_sep + 1e-12);
 
-                // Flux constraint.
-                let flux_diff = (b.photometry().magnitude - c.photometry().magnitude).abs();
-                prop_assert!(flux_diff <= cfg.max_flux_difference + 1e-6);
+                // Magnitude constraint.
+                let mag_diff = (b.photometry().magnitude - c.photometry().magnitude).abs();
+                prop_assert!(mag_diff <= cfg.max_mag_difference + 1e-6);
 
                 // Residual recompute (same as implementation).
                 let cos_dec_a = a.equ_coord().dec.cos();
@@ -920,102 +782,6 @@ mod triplet_gen_tests {
 
                 // Also ensure (b,c) passes the pair sep (already checked above, but keep explicit)
                 prop_assert!(dbc <= cfg.max_pair_sep + 1e-12);
-            }
-        }
-    }
-
-    /* ---------------------- extract_triplet_features tests ---------------------- */
-
-    #[test]
-    fn extract_triplet_features_order_and_members() {
-        let t0 = 60000.0;
-        let dec0: f64 = 0.3;
-
-        let dr = arcsec_to_rad(6.0) / dec0.cos();
-
-        let a = mk_observation(0, 1.0, dec0, t0, 1, 1000.0);
-        let b = mk_observation(1, 1.0 + dr, dec0, t0 + 10.0 / 1440.0, 1, 1005.0);
-        let c = mk_observation(2, 1.0 + 2.0 * dr, dec0, t0 + 20.0 / 1440.0, 1, 1002.0);
-
-        let alerts = vec![a, b, c];
-
-        let trips = vec![
-            Triplet {
-                a: &alerts[0],
-                b: &alerts[1],
-                c: &alerts[2],
-            },
-            Triplet {
-                a: &alerts[0],
-                b: &alerts[2],
-                c: &alerts[1],
-            }, // intentionally "weird"
-        ];
-
-        let night_id = NightId::new(99);
-
-        let seed_store = &mut SeedStore::new();
-
-        let seeds = SeedNode::extract_triplet_features(&trips, seed_store, night_id);
-
-        assert_eq!(seeds.len(), 2);
-        assert_eq!(seeds[0].night_id(), night_id);
-        assert_eq!(seeds[1].night_id(), night_id);
-
-        assert_eq!(seeds[0].n_obs, 3);
-        assert_eq!(seeds[1].n_obs, 3);
-
-        // We can't assert `members == [id..]` anymore. If SeedNode stores refs,
-        // you can add pointer-based assertions here once you show its structure.
-    }
-
-    mod prop_extract_triplet_features {
-        use super::*;
-
-        fn ra_strategy() -> impl Strategy<Value = f64> {
-            0.0f64..(2.0 * std::f64::consts::PI)
-        }
-        fn dec_strategy() -> impl Strategy<Value = f64> {
-            (-(std::f64::consts::PI / 2.0 - LAT_EPS))..(std::f64::consts::PI / 2.0 - LAT_EPS)
-        }
-        fn time_strategy() -> impl Strategy<Value = f64> {
-            60000.0f64..60000.1667f64
-        }
-
-        proptest! {
-            #![proptest_config(ProptestConfig {
-                cases: 32,
-                .. ProptestConfig::default()
-            })]
-
-            #[test]
-            fn prop_extract_triplet_features_1to1_mapping(
-                samples in proptest::collection::vec((ra_strategy(), dec_strategy(), time_strategy()), 3..60)
-            ) {
-                let alerts: Vec<Observation> = samples.iter().enumerate()
-                    .map(|(i, (ra, dec, t))| mk_observation(i, *ra, *dec, *t, 1, 1000.0))
-                    .collect();
-
-                // Build triplets (consecutive) with increasing time.
-                let mut trips: Triplets = Vec::new();
-                for i in 0..alerts.len().saturating_sub(2) {
-                    let a = &alerts[i];
-                    let b = &alerts[i+1];
-                    let c = &alerts[i+2];
-                    if a.mjd_tt() < b.mjd_tt() && b.mjd_tt() < c.mjd_tt() {
-                        trips.push(Triplet { a, b, c });
-                    }
-                }
-
-                let night_id = NightId::new(7);
-                let seed_store = &mut SeedStore::new();
-                let seeds = SeedNode::extract_triplet_features(&trips, seed_store, night_id);
-
-                prop_assert_eq!(seeds.len(), trips.len());
-                for seed in seeds.iter() {
-                    prop_assert_eq!(seed.n_obs, 3);
-                    prop_assert_eq!(seed.night_id(), night_id);
-                }
             }
         }
     }

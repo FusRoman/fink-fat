@@ -7,6 +7,13 @@ pub enum EdgeModelError {
     #[error("ONNX Runtime error: {0}")]
     Ort(#[from] ort::Error),
 
+    /// ONNX Runtime session builder error.
+    ///
+    /// Separate from [`EdgeModelError::Ort`] because `ort::Error<SessionBuilder>`
+    /// does not coerce to `ort::Error<()>` automatically.
+    #[error("ONNX Runtime session builder error: {0}")]
+    OrtBuilder(String),
+
     /// The provided model path does not exist.
     ///
     /// This is returned early to provide a clear user-facing message instead of
