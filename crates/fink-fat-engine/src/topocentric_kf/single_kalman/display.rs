@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::topocentric_kf::KFState;
+use crate::topocentric_kf::single_kalman::KFState;
 
 impl<'state_lf> fmt::Debug for KFState<'state_lf> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -83,12 +83,12 @@ use nalgebra::Vector6;
 use crate::{
     error::EngineError,
     topocentric_kf::{
-        KalmanContext,
         kalman_bank::{
             config::KFBankConfig,
             hypothesis::{Hypothesis, HypothesisStepResult},
             seed_grid::{GridConfig, admissible_region_grid},
         },
+        single_kalman::context::KalmanContext,
     },
 };
 

@@ -6,7 +6,10 @@ use clap::Parser;
 use fink_fat_engine::{
     error::EngineError,
     pipeline::PipelineStage,
-    topocentric_kf::{KFState, KalmanContext, config::KalmanConfig},
+    topocentric_kf::{
+        config::KalmanConfig,
+        single_kalman::{KFState, context::KalmanContext},
+    },
 };
 use fink_fat_eval::cli::{Cli, load_data};
 use hifitime::ut1::Ut1Provider;

@@ -22,8 +22,8 @@ use crate::{
         uniform_time_binner::UniformTimeBinner,
     },
     topocentric_kf::{
-        KalmanContext,
         kalman_bank::{KFBank, config::KFBankConfig, seed_grid::GridConfig},
+        single_kalman::context::KalmanContext,
     },
 };
 

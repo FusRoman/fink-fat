@@ -1,4 +1,4 @@
-use crate::topocentric_kf::KFState;
+use crate::topocentric_kf::single_kalman::KFState;
 
 /// Controls which hypotheses from the bank are used to build a [`SearchRegion`].
 ///

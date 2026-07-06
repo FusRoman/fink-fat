@@ -17,11 +17,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use fink_fat_engine::topocentric_kf::kalman_bank::KFBank;
+use fink_fat_engine::topocentric_kf::single_kalman::context::KalmanContext;
 use nalgebra::Vector6;
 use outfit::OrbitalElements;
 use rayon::prelude::*;
 
-use fink_fat_engine::{error::EngineError, pipeline::PipelineStage, topocentric_kf::KalmanContext};
+use fink_fat_engine::{error::EngineError, pipeline::PipelineStage};
 use photom::{
     TrajId,
     observation_dataset::{ObsDataset, iter::MemLayoutObservations, observation::Observation},
