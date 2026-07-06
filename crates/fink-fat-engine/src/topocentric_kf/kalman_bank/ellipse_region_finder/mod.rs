@@ -1,205 +1,20 @@
+pub mod radius_strategy;
+pub mod top_k;
+
 use nalgebra::{Matrix2, Vector2};
 
 use crate::topocentric_kf::{
-    KFState, kalman_bank::KFBank, propagate::PropagateError, update::wrap_angle,
-};
-
-/// Controls which hypotheses from the bank are used to build a [`SearchRegion`].
-///
-/// When the bank holds many low-weight hypotheses, restricting the region to
-/// the most probable ones yields a tighter, more actionable search area while
-/// preserving the probabilistic guarantees that matter.
-///
-/// Variants
-/// --------
-/// - [`TopK::All`] – conservative fallback: every live hypothesis contributes.
-/// - [`TopK::Map`] – only the single highest-weight hypothesis (Maximum A
-///   Posteriori). Equivalent to `TopK::Best(1)`.
-/// - [`TopK::Best(k)`] – the `k` hypotheses with the highest weights,
-///   renormalized to sum to 1.
-/// - [`TopK::WeightThreshold(theta)`] – retains the minimal set of hypotheses
-///   (sorted by descending weight) whose cumulative weight reaches `theta`.
-///   For example, `WeightThreshold(0.99)` discards all hypotheses beyond the
-///   99 % credible set, eliminating low-weight spatial outliers that would
-///   otherwise inflate the search region.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum TopK {
-    /// Use all live hypotheses (original conservative behaviour).
-    All,
-    /// Use only the single best hypothesis (MAP estimate).
-    Map,
-    /// Use the `k` best hypotheses by descending weight, renormalized.
-    Best(usize),
-    /// Keep the minimal prefix of hypotheses (sorted by descending weight)
-    /// whose cumulative weight reaches `theta ∈ (0, 1]`, then renormalize.
-    WeightThreshold(f64),
-}
-
-impl Default for TopK {
-    /// Defaults to [`TopK::All`] to preserve backward-compatible behaviour.
-    fn default() -> Self {
-        TopK::All
-    }
-}
-
-impl TopK {
-    /// Select and renormalize hypotheses in-place according to `self`.
-    fn apply(self, predicted: &mut Vec<(f64, KFState)>) {
-        match self {
-            TopK::All => {}
-            TopK::Map => Self::keep_map(predicted),
-            TopK::Best(k) => Self::keep_best(predicted, k),
-            TopK::WeightThreshold(theta) => Self::keep_threshold(predicted, theta),
-        }
-    }
-
-    /// Keep only the highest-weight hypothesis, weight forced to 1.0.
-    fn keep_map(predicted: &mut Vec<(f64, KFState)>) {
-        let best_idx = predicted
-            .iter()
-            .enumerate()
-            .max_by(|(_, (wa, _)), (_, (wb, _))| wa.total_cmp(wb))
-            .map(|(i, _)| i)
-            .unwrap_or(0);
-        predicted.swap(0, best_idx);
-        predicted.truncate(1);
-        predicted[0].0 = 1.0;
-    }
-
-    /// Keep the `k` highest-weight hypotheses, renormalized.
-    fn keep_best(predicted: &mut Vec<(f64, KFState)>, k: usize) {
-        let k = k.max(1).min(predicted.len());
-        predicted.select_nth_unstable_by(k - 1, |(wa, _), (wb, _)| wb.total_cmp(wa));
-        predicted.truncate(k);
-        renormalize(predicted);
-    }
-
-    /// Keep the minimal prefix (by descending weight) reaching cumulative
-    /// weight `theta`, renormalized.
-    fn keep_threshold(predicted: &mut Vec<(f64, KFState)>, theta: f64) {
-        let theta = theta.clamp(0.0, 1.0);
-        predicted.sort_unstable_by(|(wa, _), (wb, _)| wb.total_cmp(wa));
-        let mut cumul = 0.0;
-        let mut keep = 0;
-        for (w, _) in predicted.iter() {
-            cumul += w;
-            keep += 1;
-            if cumul >= theta {
-                break;
-            }
-        }
-        predicted.truncate(keep);
-        renormalize(predicted);
-    }
-}
-
-/// Renormalize weights in-place so they sum to 1.
-fn renormalize(predicted: &mut [(f64, KFState)]) {
-    let total: f64 = predicted.iter().map(|(w, _)| w).sum();
-    if total > 0.0 {
-        predicted.iter_mut().for_each(|(w, _)| *w /= total);
-    }
-}
-
-/// Inner strategy choice for [`RadiusStrategy::Clamped`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MixOrMax {
-    MaxEllipse,
-    MixtureCovariance,
-}
-
-/// Controls how the bounding radius of a [`SearchRegion`] is computed.
-///
-/// Variants
-/// --------
-/// - [`RadiusStrategy::MaxEllipse`] – conservative: radius is the maximum
-///   over selected hypotheses of
-///   $$r_i = \sqrt{\chi^2_{gate} \cdot \lambda_{max}(S_i)} + \|\mu_i - \bar\mu\|$$
-///   Correct but can be very large when hypotheses are spatially dispersed.
-/// - [`RadiusStrategy::MixtureCovariance`] – computes the full mixture
-///   covariance
-///   $$S_{mix} = \sum_i w_i \bigl(S_i + (\mu_i - \bar\mu)(\mu_i -
-///   \bar\mu)^\top\bigr)$$
-///   and sets $r = \sqrt{\chi^2_{gate} \cdot \lambda_{max}(S_{mix})}$.
-///   Tighter in practice; still conservative because both the within-component
-///   spread ($S_i$) and the between-component spread are included.
-/// - [`RadiusStrategy::Clamped`] – applies an inner strategy then clamps the
-///   result to a hard maximum expressed in arcseconds.  Used as a safety net
-///   when the bank has not yet converged and the mixture covariance can still
-///   be large.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum RadiusStrategy {
-    /// Original conservative behaviour.
-    MaxEllipse,
-    /// Tighter mixture-covariance bound.
-    MixtureCovariance,
-    /// Hard clamp applied on top of another strategy.
-    Clamped {
-        /// Strategy to apply before clamping.
-        inner: MixOrMax,
-        /// Maximum allowed radius (arcseconds).
-        max_arcsec: f64,
+    KFState,
+    kalman_bank::{
+        KFBank,
+        ellipse_region_finder::{
+            radius_strategy::{RadiusStrategy, largest_eigenvalue_2x2},
+            top_k::TopK,
+        },
     },
-}
-
-impl Default for RadiusStrategy {
-    fn default() -> Self {
-        RadiusStrategy::MixtureCovariance
-    }
-}
-
-impl RadiusStrategy {
-    /// Dispatch radius computation over `components` according to `self`.
-    fn radius(self, components: &[SearchComponent], center_ra: f64, center_dec: f64) -> f64 {
-        match self {
-            RadiusStrategy::MaxEllipse => {
-                Self::max_ellipse_radius(components, center_ra, center_dec)
-            }
-            RadiusStrategy::MixtureCovariance => {
-                Self::mixture_covariance_radius(components, center_ra, center_dec)
-            }
-            RadiusStrategy::Clamped { inner, max_arcsec } => {
-                let inner_strategy = match inner {
-                    MixOrMax::MaxEllipse => RadiusStrategy::MaxEllipse,
-                    MixOrMax::MixtureCovariance => RadiusStrategy::MixtureCovariance,
-                };
-                let r = inner_strategy.radius(components, center_ra, center_dec);
-                r.min((max_arcsec / 3600.0_f64).to_radians())
-            }
-        }
-    }
-
-    /// $$r = \max_i \left( \sqrt{\chi^2 \cdot \lambda_{max}(S_i)} + \|\mu_i - \bar\mu\| \right)$$
-    fn max_ellipse_radius(components: &[SearchComponent], center_ra: f64, center_dec: f64) -> f64 {
-        components
-            .iter()
-            .map(|c| c.per_hypothesis_radius(center_ra, center_dec))
-            .fold(0.0_f64, f64::max)
-    }
-
-    /// Compute the bounding radius from the full mixture covariance.
-    ///
-    /// $$S_{mix} = \sum_i w_i \bigl(S_i + (\mu_i - \bar\mu)(\mu_i - \bar\mu)^\top\bigr)$$
-    /// $$r = \sqrt{\chi^2 \cdot \lambda_{max}(S_{mix})}$$
-    ///
-    /// Both the within-component uncertainty ($S_i$) and the between-component
-    /// spatial spread contribute to $S_{mix}$, so the radius is a valid
-    /// conservative bound on the mixture support.
-    fn mixture_covariance_radius(
-        components: &[SearchComponent],
-        center_ra: f64,
-        center_dec: f64,
-    ) -> f64 {
-        let mut s_mix = Matrix2::zeros();
-        let mut gate_chi2 = 0.0;
-        for c in components {
-            let delta = c.offset_from(center_ra, center_dec);
-            s_mix += c.weight * (c.s + delta * delta.transpose());
-            gate_chi2 = c.gate_chi2;
-        }
-        gate_chi2.sqrt() * largest_eigenvalue_2x2(&s_mix).sqrt()
-    }
-}
+    propagate::PropagateError,
+    update::wrap_angle,
+};
 
 /// A single Gaussian component of the search-region mixture, corresponding to
 /// one selected Kalman-filter hypothesis propagated to the target epoch.
@@ -519,19 +334,4 @@ fn build_components(
             SearchComponent::new(*w, kf.state[0], kf.state[1], s, gate_chi2)
         })
         .collect()
-}
-
-/// Largest eigenvalue of a symmetric $2 \times 2$ matrix via the analytic
-/// formula.
-///
-/// For $S = \begin{pmatrix} a & b \\ b & d \end{pmatrix}$:
-///
-/// $$\lambda_{max} = \frac{a+d}{2} + \sqrt{\left(\frac{a-d}{2}\right)^2 + b^2}$$
-fn largest_eigenvalue_2x2(s: &Matrix2<f64>) -> f64 {
-    let a = s[(0, 0)];
-    let d = s[(1, 1)];
-    let b = s[(0, 1)];
-    let mid = (a + d) / 2.0;
-    let half_diff = (a - d) / 2.0;
-    mid + (half_diff * half_diff + b * b).sqrt()
 }
