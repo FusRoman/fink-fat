@@ -15,7 +15,9 @@
 use anyhow::Result;
 use clap::Parser;
 
-use fink_fat_engine::topocentric_kf::{config::KalmanConfig, single_kalman::context::KalmanContext};
+use fink_fat_engine::topocentric_kf::{
+    config::KalmanConfig, single_kalman::context::KalmanContext,
+};
 use fink_fat_eval::{
     cli::{Cli, load_data},
     reporting::{

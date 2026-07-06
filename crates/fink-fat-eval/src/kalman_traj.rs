@@ -9,7 +9,8 @@ use fink_fat_engine::topocentric_kf::{
         },
         hypothesis_cap::HypothesisCapSchedule,
         seed_grid::GridConfig,
-    }, single_kalman::{KFState, context::KalmanContext, update::wrap_angle},
+    },
+    single_kalman::{KFState, context::KalmanContext, update::wrap_angle},
 };
 use nalgebra::{Matrix2, Vector2};
 use photom::{
