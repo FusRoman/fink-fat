@@ -45,7 +45,11 @@ impl SearchComponent {
     /// the Gaussian normalization constant.
     ///
     /// Returns `None` if `s` is singular or not positive-definite.
-    fn new(
+    ///
+    /// `pub(crate)` so tests elsewhere in the crate (e.g.
+    /// `seeding::night_candidate_search`) can build a [`SearchRegion`] by hand
+    /// without going through a full `KFBank` propagation.
+    pub(crate) fn new(
         weight: f64,
         center_ra: f64,
         center_dec: f64,
