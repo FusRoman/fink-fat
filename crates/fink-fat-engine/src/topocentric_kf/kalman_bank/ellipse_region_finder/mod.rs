@@ -4,7 +4,6 @@ pub mod top_k;
 use nalgebra::{Matrix2, Vector2};
 
 use crate::topocentric_kf::{
-    KFState,
     kalman_bank::{
         KFBank,
         ellipse_region_finder::{
@@ -12,8 +11,7 @@ use crate::topocentric_kf::{
             top_k::TopK,
         },
     },
-    propagate::PropagateError,
-    update::wrap_angle,
+    single_kalman::{KFState, propagate::PropagateError, update::wrap_angle},
 };
 
 /// A single Gaussian component of the search-region mixture, corresponding to

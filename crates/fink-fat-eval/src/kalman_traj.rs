@@ -1,13 +1,15 @@
 use fink_fat_engine::topocentric_kf::{
-    KFState, KalmanContext,
     kalman_bank::{
         BankStep, KFBank,
         config::KFBankConfig,
-        ellipse_region_finder::{MixOrMax, RadiusStrategy, SearchRegion, TopK},
+        ellipse_region_finder::{
+            SearchRegion,
+            radius_strategy::{MixOrMax, RadiusStrategy},
+            top_k::TopK,
+        },
         hypothesis_cap::HypothesisCapSchedule,
         seed_grid::GridConfig,
-    },
-    update::wrap_angle,
+    }, single_kalman::{KFState, context::KalmanContext, update::wrap_angle},
 };
 use nalgebra::{Matrix2, Vector2};
 use photom::{

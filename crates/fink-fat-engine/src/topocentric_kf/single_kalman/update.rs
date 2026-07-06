@@ -5,7 +5,7 @@ use photom::observation_dataset::observation::Observation;
 
 use crate::{
     error::{KFUpdateError, ObservationJacobianError},
-    topocentric_kf::KFState,
+    topocentric_kf::single_kalman::KFState,
 };
 
 /// Smoothing factor for the exponential moving average (EMA) of the NIS.
@@ -142,7 +142,7 @@ fn observation_noise(ra_error: f64, dec_error: f64) -> Matrix2<f64> {
 /// * `Ok(KFState)` – Updated state and covariance at the same epoch as `kf`.
 /// * `Err(KFUpdateError::SingularInnovationCovariance)` – If $S$ cannot be
 ///   inverted.
-pub(crate) fn update<'state_lf>(
+pub(crate) fn update_kf<'state_lf>(
     kf: KFState<'state_lf>,
     new_obs: &Observation,
 ) -> Result<KFState<'state_lf>, KFUpdateError> {

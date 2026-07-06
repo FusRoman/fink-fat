@@ -1,7 +1,7 @@
 use nalgebra::{Matrix6, Vector3, Vector6};
 use outfit::constants::ROT_ECLMJ2000_TO_EQUMJ2000;
 
-use crate::topocentric_kf::init::{unit_los, unit_los_dot};
+use crate::topocentric_kf::single_kalman::init::{unit_los, unit_los_dot};
 
 /// Heliocentric Cartesian state vector in the ecliptic J2000 frame.
 ///

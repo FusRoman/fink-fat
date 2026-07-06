@@ -11,7 +11,10 @@ use tracing::trace;
 
 use crate::{
     error::ObservationJacobianError,
-    topocentric_kf::{KFState, kalman_bank::config::KFBankConfig, update::wrap_angle},
+    topocentric_kf::{
+        kalman_bank::config::KFBankConfig,
+        single_kalman::{KFState, update::wrap_angle},
+    },
 };
 
 /// A single weighted hypothesis in the bank.
