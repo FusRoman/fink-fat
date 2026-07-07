@@ -9,61 +9,22 @@
 //! across nights.
 
 use photom::{
-    MJDTT, NightId,
+    NightId,
     observation_dataset::{ObsDataset, observation::Observation},
 };
 
 use crate::{
-    engine_config::pair_config::PairConfig,
+    engine_config::{EngineConfig, kalman_context::KalmanContext},
     error::EngineError,
     seeding::pairs::generate_pairs,
     spacetime_bucket::{
         bucket::build_alert_bucket_index, healpix_binner::HealpixBinner,
         uniform_time_binner::UniformTimeBinner,
     },
-    topocentric_kf::{
-        kalman_bank::{KFBank, config::KFBankConfig, seed_grid::GridConfig},
-        single_kalman::context::KalmanContext,
-    },
+    topocentric_kf::kalman_bank::KFBank,
 };
 
-/// Flat container of all [`KFBank`]s built from an [`ObsDataset`].
-#[derive(Default)]
-pub struct KFBankCollection<'state_lf> {
-    pub banks: Vec<KFBank<'state_lf>>,
-}
-
-/// Tuning parameters for pairing a set of observations and building a
-/// [`KFBank`] per surviving pair: spatial binning, intra-night pairing
-/// gates, seed-grid construction, and bank configuration.
-///
-/// Grouped into one struct so [`build_kf_bank_collection`] and
-/// [`build_kf_bank_collection_from_observations`] stay under clippy's
-/// argument-count threshold, and so callers building banks from more than
-/// one observation subset (e.g. the per-night "discovery" step in
-/// `topocentric_kf::branching::discovery`) can reuse the same parameter set
-/// without repeating five individual arguments at every call site.
-pub struct BankBuildParams<'a> {
-    pub spatial_binner: &'a HealpixBinner,
-    pub time_binner_width: MJDTT,
-    pub pair_config: &'a PairConfig,
-    pub grid_config: &'a GridConfig,
-    pub bank_config: &'a KFBankConfig,
-}
-
-impl<'state_lf> KFBankCollection<'state_lf> {
-    pub fn len(&self) -> usize {
-        self.banks.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.banks.is_empty()
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &KFBank<'state_lf>> {
-        self.banks.iter()
-    }
-}
+pub type KFBankCollection<'state_lf> = Vec<KFBank<'state_lf>>;
 
 /// Build one [`KFBank`] per admissible intra-night observation pair across
 /// every night in `obs_dataset`.
@@ -76,14 +37,22 @@ pub fn build_kf_bank_collection<'state_lf>(
     obs_dataset: &ObsDataset,
     night_id: &NightId,
     kalman_context: &'state_lf KalmanContext,
-    params: &BankBuildParams,
+    params: &EngineConfig,
 ) -> Result<KFBankCollection<'state_lf>, EngineError> {
     let Some(obs_iter) = obs_dataset.iter_night_observations(night_id) else {
         return Ok(KFBankCollection::default());
     };
     let night_obs: Vec<&Observation> = obs_iter.collect();
 
-    build_kf_bank_collection_from_observations(obs_dataset, &night_obs, kalman_context, params)
+    let spatial_binner = HealpixBinner::new(params.healpix_depth);
+
+    build_kf_bank_collection_from_observations(
+        obs_dataset,
+        &night_obs,
+        kalman_context,
+        params,
+        &spatial_binner,
+    )
 }
 
 /// Build one [`KFBank`] per admissible intra-night pair found in an
@@ -109,7 +78,8 @@ pub fn build_kf_bank_collection_from_observations<'state_lf>(
     obs_dataset: &ObsDataset,
     night_obs: &[&Observation],
     kalman_context: &'state_lf KalmanContext,
-    params: &BankBuildParams,
+    params: &EngineConfig,
+    spatial_binner: &HealpixBinner,
 ) -> Result<KFBankCollection<'state_lf>, EngineError> {
     if night_obs.is_empty() {
         return Ok(KFBankCollection::default());
@@ -121,18 +91,10 @@ pub fn build_kf_bank_collection_from_observations<'state_lf>(
         .fold(f64::INFINITY, f64::min);
     let time_binner = UniformTimeBinner::new(t0, params.time_binner_width);
 
-    let bucket_index = build_alert_bucket_index(
-        night_obs.iter().copied(),
-        params.spatial_binner,
-        &time_binner,
-    );
+    let bucket_index =
+        build_alert_bucket_index(night_obs.iter().copied(), spatial_binner, &time_binner);
 
-    let pairs = generate_pairs(
-        &bucket_index,
-        params.spatial_binner,
-        &time_binner,
-        params.pair_config,
-    );
+    let pairs = generate_pairs(&bucket_index, spatial_binner, &time_binner, &params.pairs);
 
     tracing::debug!(
         n_obs = night_obs.len(),
@@ -147,8 +109,8 @@ pub fn build_kf_bank_collection_from_observations<'state_lf>(
             pair.a,
             pair.b,
             kalman_context,
-            params.grid_config,
-            params.bank_config.clone(),
+            &params.seeding_grid_config,
+            params.kfbank_config.clone(),
         ) {
             Ok(bank) => banks.push(bank),
             Err(err) => {
@@ -162,5 +124,5 @@ pub fn build_kf_bank_collection_from_observations<'state_lf>(
         }
     }
 
-    Ok(KFBankCollection { banks })
+    Ok(banks)
 }

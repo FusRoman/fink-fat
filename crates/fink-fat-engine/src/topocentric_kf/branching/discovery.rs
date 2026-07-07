@@ -14,11 +14,11 @@ use std::collections::HashSet;
 use photom::observation_dataset::{ObsDataset, ObsId, observation::Observation};
 
 use crate::{
+    engine_config::{EngineConfig, kalman_context::KalmanContext},
     error::EngineError,
+    spacetime_bucket::healpix_binner::HealpixBinner,
     topocentric_kf::{
-        bank_collection::{BankBuildParams, build_kf_bank_collection_from_observations},
-        branching::Branch,
-        single_kalman::context::KalmanContext,
+        branching::Branch, kalman_bank::from_seeds::build_kf_bank_collection_from_observations,
     },
 };
 
@@ -43,7 +43,8 @@ pub fn seed_new_lineages_from_leftovers<'state_lf>(
     consumed_observation_ids: &HashSet<ObsId>,
     obs_dataset: &ObsDataset,
     kalman_context: &'state_lf KalmanContext,
-    bank_build_params: &BankBuildParams,
+    engine_config: &EngineConfig,
+    spatial_binner: &HealpixBinner,
     next_lineage_id: &mut u64,
 ) -> Result<Vec<Branch<'state_lf>>, EngineError> {
     let leftover_obs: Vec<&Observation> = night_obs
@@ -56,11 +57,11 @@ pub fn seed_new_lineages_from_leftovers<'state_lf>(
         obs_dataset,
         &leftover_obs,
         kalman_context,
-        bank_build_params,
+        engine_config,
+        &spatial_binner,
     )?;
 
     Ok(new_banks
-        .banks
         .into_iter()
         .map(|bank| {
             let id = *next_lineage_id;

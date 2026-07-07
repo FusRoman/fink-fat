@@ -67,10 +67,9 @@
 //! every hypothesis borrows the same ephemeris context that was used to build its
 //! seed.
 
-pub mod config;
 pub mod ellipse_region_finder;
+pub mod from_seeds;
 pub mod hypothesis;
-pub mod hypothesis_cap;
 pub mod seed_grid;
 
 use std::collections::VecDeque;
@@ -81,18 +80,19 @@ use tracing::{trace, trace_span};
 use nalgebra::{Matrix2, Vector2, Vector3, Vector6};
 
 use crate::{
+    engine_config::{
+        grid_population::GridConfig, kalman_context::KalmanContext, kf_bank_config::KFBankConfig,
+    },
     error::EngineError,
     topocentric_kf::{
         branching::detection_probability::{
             implied_absolute_magnitude, update_running_magnitude_estimate,
         },
         kalman_bank::{
-            config::KFBankConfig,
             ellipse_region_finder::SearchComponent,
             hypothesis::{Hypothesis, HypothesisStepResult},
-            seed_grid::{GridConfig, admissible_region_grid},
+            seed_grid::admissible_region_grid,
         },
-        single_kalman::context::KalmanContext,
     },
 };
 
@@ -132,6 +132,7 @@ pub struct BankStep {
 pub struct KFBank<'state_lf> {
     pub(crate) hypotheses: Vec<Hypothesis<'state_lf>>,
     pub(crate) config: KFBankConfig,
+
     /// Number of `step()` calls completed so far.
     ///
     /// Drives the [`HypothesisCapSchedule`] decay: cap = schedule.cap(n_steps).

@@ -9,11 +9,12 @@ use photom::{
 };
 
 use crate::{
+    engine_config::kalman_context::KalmanContext,
     error::{EngineError, TopocentricRangeError},
     topocentric_kf::{
         observer_state::{EphemState, HelioObsState, get_observer},
         pairs_state::{MidSpeed, mid_speed, midpoint, omega_and_sigma},
-        single_kalman::{KFState, context::KalmanContext},
+        single_kalman::KFState,
     },
 };
 

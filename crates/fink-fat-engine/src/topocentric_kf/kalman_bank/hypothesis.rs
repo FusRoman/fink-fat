@@ -10,11 +10,9 @@ use photom::{
 use tracing::trace;
 
 use crate::{
+    engine_config::kf_bank_config::KFBankConfig,
     error::ObservationJacobianError,
-    topocentric_kf::{
-        kalman_bank::config::KFBankConfig,
-        single_kalman::{KFState, update::wrap_angle},
-    },
+    topocentric_kf::single_kalman::{KFState, update::wrap_angle},
 };
 
 /// A single weighted hypothesis in the bank.

@@ -87,10 +87,7 @@ use thiserror::Error;
 
 use config::ConfigError as ConfigRsError;
 
-use crate::{
-    error::{PredictorParamError, SeedError},
-    // graph::edge::error::EdgeModelError,
-};
+use crate::error::SeedError;
 
 /// Top-level configuration error returned by config loading and validation.
 ///
@@ -150,67 +147,4 @@ pub enum ConfigError {
     /// seeding-related validation routines.
     #[error("pairs/triplets config error: {0}")]
     Seed(#[from] SeedError),
-
-    /// Propagation predictor configuration error.
-    ///
-    /// Produced by `PredictorParams::validate()` and related builder checks.
-    #[error("predictor config error: {0}")]
-    Predictor(#[from] PredictorParamError),
-
-    /// Inter-night edge configuration error.
-    ///
-    /// Produced by `EdgeConfig::validate()` and other edge-related invariants.
-    #[error("edges config error: {0}")]
-    Edges(#[from] EdgeConfigError),
-}
-
-/// Edge configuration validation errors.
-///
-/// This error enum groups semantic constraints specific to the inter-night edge
-/// construction subsystem.
-#[derive(Debug, Error)]
-pub enum EdgeConfigError {
-    /// `edges.top_k_per_left` must be strictly positive.
-    ///
-    /// In ML Top-K mode, a value of `0` would result in emitting zero edges,
-    /// silently disabling linking. Enforcing `> 0` keeps the configuration
-    /// unambiguous.
-    #[error("edges.top_k_per_left must be > 0")]
-    TopKPerLeftZero,
-
-    /// `edges.max_total_edges` must be strictly positive.
-    ///
-    /// This constraint is relevant if the edge subsystem supports a global
-    /// cap on the total number of emitted edges (not shown in the `EdgeConfig`
-    /// snippet). The validator emits this error when that cap is configured
-    /// but set to `0`.
-    #[error("edges.max_total_edges must be > 0")]
-    MaxTotalEdgesZero,
-
-    /// `edges.max_cost_cut` must be strictly positive when set.
-    ///
-    /// Since edge costs are strictly positive by construction, a cut value of
-    /// `0.0` or less would discard every candidate, silently disabling all
-    /// inter-night linking. Enforcing `> 0` keeps the configuration
-    /// unambiguous and prevents accidental runs with an empty graph.
-    #[error("edges.max_cost_cut must be > 0 when set (got {0})")]
-    MaxCostCutNotPositive(f64),
-
-    /// `edges.ml_post_filter_threshold` must be in `(0.0, 1.0]`.
-    ///
-    /// A threshold of `0.0` would keep every candidate (no filtering), and
-    /// negative values are meaningless. Enforcing `(0.0, 1.0]` keeps the
-    /// configuration unambiguous.
-    #[error("edges.ml_post_filter_threshold must be in (0.0, 1.0] (got {0})")]
-    MlPostFilterThresholdInvalid(f32),
-
-    /// `edges.predictor_config` is invalid.
-    ///
-    /// This error wraps any validation failure from the predictor configuration,
-    /// such as invalid `k_sigma` or noise parameters.
-    #[error("edges.predictor_config error: {0}")]
-    PredictorConfig(#[from] PredictorParamError),
-    // Edge Model Error
-    // #[error(transparent)]
-    // EdgeModel(#[from] EdgeModelError),
 }

@@ -1,5 +1,7 @@
 use outfit::kepler::SolverType;
+use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct KalmanConfig {
     /// Baseline acceleration noise PSD (AU² day⁻³).
     pub q0: f64,

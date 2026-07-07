@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 /// Decay schedule controlling how many live hypotheses the bank may hold as a
 /// function of the number of observations processed.
 ///
@@ -10,7 +12,7 @@
 /// Every variant has a `start` (cap at observation 0) and an `end` (asymptotic
 /// minimum cap).  The effective cap is always additionally lower-bounded by
 /// [`KFBankConfig::min_hypotheses`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum HypothesisCapSchedule {
     /// Fixed cap: the maximum number of live hypotheses never changes.
     ///
