@@ -562,14 +562,18 @@ impl<'state_lf> KFBank<'state_lf> {
     ///
     /// Mandatory at LSST cadence: without it, any field not revisited (or an
     /// object dipping below the limiting magnitude) would force a false
-    /// association or kill the bank outright. State, weights and `track_ids`
-    /// are left unchanged — no information was gained or lost; only
-    /// `n_steps` advances so the hypothesis-cap schedule stays in step with
-    /// observation branches spawned the same night.
+    /// association or kill the bank outright. State, weights, `track_ids`
+    /// and `n_steps` are all left unchanged — no observation was processed,
+    /// so nothing about the bank's posterior or its hypothesis-cap-schedule
+    /// pacing should move. `n_steps` deliberately does **not** advance here
+    /// (unlike earlier revisions of this method): at LSST cadence a single
+    /// quiet night can call `branch_null` hundreds of times (once per visit
+    /// with no candidate), and `HypothesisCapSchedule` is documented as "a
+    /// function of the number of observations processed" — counting null
+    /// branches would collapse the hypothesis population almost
+    /// immediately, defeating the schedule's purpose.
     pub fn branch_null(&self) -> Self {
-        let mut branch = self.clone();
-        branch.n_steps += 1;
-        branch
+        self.clone()
     }
 
     /// Mixture predictive likelihood $\ell(z) = \sum_i w_i\,\mathcal{N}(z;\,

@@ -25,8 +25,13 @@
 //! Implemented here: candidate search (§ [`candidate_search`]), detection
 //! probability from a running absolute-magnitude estimate (§
 //! [`detection_probability`]), LLR scoring (§ [`llr_score`]), the [`Branch`]
-//! bookkeeping type, cross-bank pruning (§ [`pruning`]), and a per-night
-//! orchestrator (§ [`orchestrate`]).
+//! bookkeeping type, cross-bank pruning (§ [`pruning`]), grouping a night's
+//! observations into distinct exposure epochs (§ [`visit`] — LSST cadence
+//! means a night is hundreds of epochs, not one), the per-visit branch/
+//! score/prune step for *existing* lineages (§ [`orchestrate`]), seeding
+//! *brand-new* lineages from unclaimed observations (§ [`discovery`]), and
+//! [`BranchCollection`] (§ [`collection`]), the single entry point that ties
+//! both into fink-fat's night-after-night loop.
 //!
 //! Deliberately **not** implemented here (see `kalman_update_instruction.md`
 //! for the rationale): inter-bank deduplication ("promotion"), orbital-fit
@@ -45,9 +50,13 @@
 
 pub mod branch;
 pub mod candidate_search;
+pub mod collection;
 pub mod detection_probability;
+pub mod discovery;
 pub mod llr_score;
 pub mod orchestrate;
 pub mod pruning;
+pub mod visit;
 
 pub use branch::Branch;
+pub use collection::BranchCollection;
