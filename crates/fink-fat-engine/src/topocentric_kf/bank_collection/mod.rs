@@ -10,7 +10,7 @@
 
 use photom::{
     MJDTT, NightId,
-    observation_dataset::{ObsDataset, ObsId, observation::Observation},
+    observation_dataset::{ObsDataset, observation::Observation},
 };
 
 use crate::{
@@ -27,19 +27,10 @@ use crate::{
     },
 };
 
-/// One [`KFBank`] built from a single intra-night observation pair, plus the
-/// pair's identity for traceability.
-pub struct KFPairBank<'state_lf> {
-    pub night_id: NightId,
-    pub first_obs_id: ObsId,
-    pub second_obs_id: ObsId,
-    pub bank: KFBank<'state_lf>,
-}
-
 /// Flat container of all [`KFBank`]s built from an [`ObsDataset`].
 #[derive(Default)]
 pub struct KFBankCollection<'state_lf> {
-    pub banks: Vec<KFPairBank<'state_lf>>,
+    pub banks: Vec<KFBank<'state_lf>>,
 }
 
 impl<'state_lf> KFBankCollection<'state_lf> {
@@ -51,7 +42,7 @@ impl<'state_lf> KFBankCollection<'state_lf> {
         self.banks.is_empty()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &KFPairBank<'state_lf>> {
+    pub fn iter(&self) -> impl Iterator<Item = &KFBank<'state_lf>> {
         self.banks.iter()
     }
 }
@@ -74,6 +65,7 @@ impl<'state_lf> KFBankCollection<'state_lf> {
 /// returning `None`) are silently skipped.
 pub fn build_kf_bank_collection<'state_lf>(
     obs_dataset: &ObsDataset,
+    night_id: &NightId,
     kalman_context: &'state_lf KalmanContext,
     spatial_binner: &HealpixBinner,
     time_binner_width: MJDTT,
@@ -81,60 +73,47 @@ pub fn build_kf_bank_collection<'state_lf>(
     grid_config: &GridConfig,
     bank_config: &KFBankConfig,
 ) -> Result<KFBankCollection<'state_lf>, EngineError> {
-    let Some(night_ids_iter) = obs_dataset.iter_night_id() else {
-        return Ok(KFBankCollection::default());
-    };
-    let mut night_ids: Vec<NightId> = night_ids_iter.copied().collect();
-    night_ids.sort_unstable();
-
     let mut banks = Vec::new();
 
-    for night_id in night_ids {
-        let Some(obs_iter) = obs_dataset.iter_night_observations(&night_id) else {
-            continue;
-        };
-        let night_obs: Vec<&Observation> = obs_iter.collect();
-        if night_obs.is_empty() {
-            continue;
-        }
+    let Some(obs_iter) = obs_dataset.iter_night_observations(&night_id) else {
+        return Ok(KFBankCollection::default());
+    };
+    let night_obs: Vec<&Observation> = obs_iter.collect();
+    if night_obs.is_empty() {
+        return Ok(KFBankCollection::default());
+    }
 
-        let t0 = night_obs
-            .iter()
-            .map(|o| o.mjd_tt())
-            .fold(f64::INFINITY, f64::min);
-        let time_binner = UniformTimeBinner::new(t0, time_binner_width);
+    let t0 = night_obs
+        .iter()
+        .map(|o| o.mjd_tt())
+        .fold(f64::INFINITY, f64::min);
+    let time_binner = UniformTimeBinner::new(t0, time_binner_width);
 
-        let bucket_index =
-            build_alert_bucket_index(night_obs.iter().copied(), spatial_binner, &time_binner);
+    let bucket_index =
+        build_alert_bucket_index(night_obs.iter().copied(), spatial_binner, &time_binner);
 
-        let pairs = generate_pairs(&bucket_index, spatial_binner, &time_binner, pair_config);
+    let pairs = generate_pairs(&bucket_index, spatial_binner, &time_binner, pair_config);
 
-        tracing::debug!(night = %night_id, n_pairs = pairs.len(), "night pairs generated");
+    tracing::debug!(night = %night_id, n_pairs = pairs.len(), "night pairs generated");
 
-        for pair in &pairs {
-            match KFBank::from_grid(
-                obs_dataset,
-                pair.a,
-                pair.b,
-                kalman_context,
-                grid_config,
-                bank_config.clone(),
-            ) {
-                Ok(bank) => banks.push(KFPairBank {
-                    night_id,
-                    first_obs_id: *pair.a.id(),
-                    second_obs_id: *pair.b.id(),
-                    bank,
-                }),
-                Err(err) => {
-                    tracing::debug!(
-                        night = %night_id,
-                        first = *pair.a.id(),
-                        second = *pair.b.id(),
-                        %err,
-                        "KFBank::from_grid failed for pair, skipping"
-                    );
-                }
+    for pair in &pairs {
+        match KFBank::from_grid(
+            obs_dataset,
+            pair.a,
+            pair.b,
+            kalman_context,
+            grid_config,
+            bank_config.clone(),
+        ) {
+            Ok(bank) => banks.push(bank),
+            Err(err) => {
+                tracing::debug!(
+                    night = %night_id,
+                    first = *pair.a.id(),
+                    second = *pair.b.id(),
+                    %err,
+                    "KFBank::from_grid failed for pair, skipping"
+                );
             }
         }
     }

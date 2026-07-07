@@ -18,6 +18,18 @@ use crate::{
 };
 
 /// A single weighted hypothesis in the bank.
+///
+/// # Association history lives on the bank, not here
+///
+/// `Hypothesis` deliberately carries no `track_ids` field. Every hypothesis
+/// in a [`KFBank`](crate::topocentric_kf::kalman_bank::KFBank) is propagated,
+/// gated and updated against the *same* observation on every step — either
+/// it survives and shares the bank's new association id, or it is gated out
+/// entirely. That invariant makes a per-hypothesis history redundant: it is
+/// tracked once, on the bank, in `KFBank::track_ids`. Consequently
+/// [`Self::moment_match_merge`] needs no `track_ids` equality guard between
+/// the merged hypotheses — both already belong to the same bank and share
+/// the same history by construction.
 #[derive(Clone)]
 pub struct Hypothesis<'state_lf> {
     /// Filter state for this hypothesis, in attributable coordinates.
@@ -65,7 +77,17 @@ impl<'state_lf> Hypothesis<'state_lf> {
     }
 
     /// Propagate a hypothesis to the observation epoch.
-    fn propagate(&self, obs_dataset: &ObsDataset, obs: &Observation) -> Result<Self, ()> {
+    ///
+    /// `pub(crate)` so [`KFBank`](crate::topocentric_kf::kalman_bank::KFBank)
+    /// can drive propagation and scoring as two separate phases — needed by
+    /// the branch primitives (`predict_to`/`branch_with`), which propagate a
+    /// bank once and then apply several candidate updates to the same
+    /// propagated state without repeating the (expensive) two-body step.
+    pub(crate) fn propagate(
+        &self,
+        obs_dataset: &ObsDataset,
+        obs: &Observation,
+    ) -> Result<Self, ()> {
         match self.kf.propagate(obs_dataset, obs) {
             Ok(kf) => {
                 trace!(hyp_id = self.id, "Propagation OK");
@@ -132,7 +154,7 @@ impl<'state_lf> Hypothesis<'state_lf> {
     ///
     /// `is_protected` — if `true`, the gate is applied in advisory mode only:
     /// the hypothesis is never discarded regardless of d².
-    fn score_and_update(
+    pub(crate) fn score_and_update(
         self,
         config: &KFBankConfig,
         obs: &Observation,
@@ -178,19 +200,37 @@ impl<'state_lf> Hypothesis<'state_lf> {
         obs: &Observation,
         is_protected: bool,
     ) -> HypothesisStepResult<'state_lf> {
-        let predicted = match self.propagate(obs_dataset, obs) {
-            Ok(h) => h,
-            Err(_) => return HypothesisStepResult::Failed,
-        };
+        match self.propagate(obs_dataset, obs) {
+            Ok(predicted) => predicted.finalize_score_and_update(config, obs, is_protected),
+            Err(_) => HypothesisStepResult::Failed,
+        }
+    }
 
-        let id = predicted.id;
-        let prior_log_weight = predicted.log_weight;
+    /// Gate, score and update an **already-propagated** hypothesis.
+    ///
+    /// This is the second half of [`Self::process`], extracted so
+    /// [`KFBank::branch_with`](crate::topocentric_kf::kalman_bank::KFBank::branch_with)
+    /// can reuse it directly on hypotheses that were propagated once (via
+    /// [`KFBank::predict_to`](crate::topocentric_kf::kalman_bank::KFBank::predict_to))
+    /// and then scored against several candidate observations, without
+    /// repeating the two-body propagation for each candidate.
+    ///
+    /// `is_protected` — if `true`, the gate is applied in advisory mode only:
+    /// the hypothesis is never discarded regardless of d².
+    pub(crate) fn finalize_score_and_update(
+        self,
+        config: &KFBankConfig,
+        obs: &Observation,
+        is_protected: bool,
+    ) -> HypothesisStepResult<'state_lf> {
+        let id = self.id;
+        let prior_log_weight = self.log_weight;
 
-        // Clone the window from the predicted state; we push the new
+        // Clone the window from the propagated state; we push the new
         // log-likelihood after scoring so it reflects the current observation.
-        let mut recent_log_liks = predicted.recent_log_liks.clone();
+        let mut recent_log_liks = self.recent_log_liks.clone();
 
-        let (log_lik, updated_kf) = match predicted.score_and_update(config, obs, is_protected) {
+        let (log_lik, updated_kf) = match self.score_and_update(config, obs, is_protected) {
             Ok(result) => result,
             Err(outcome) => return outcome,
         };

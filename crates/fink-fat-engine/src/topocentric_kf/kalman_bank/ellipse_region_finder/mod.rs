@@ -268,6 +268,11 @@ impl<'state_lf> KFBank<'state_lf> {
     /// Propagate every live hypothesis read-only to `t_prop`, skipping and
     /// logging failures.
     ///
+    /// Thin wrapper around [`Self::predict_hypotheses`] (shared with
+    /// [`Self::predict_to`]) that projects each predicted hypothesis down to
+    /// the bare `(weight, KFState)` pair this module's mixture bookkeeping
+    /// needs.
+    ///
     /// Returns `Err(PropagateError::SingularJacobian)` if no hypothesis
     /// propagates successfully.
     fn propagate_hypotheses(
@@ -277,19 +282,9 @@ impl<'state_lf> KFBank<'state_lf> {
         v_obs_new: nalgebra::Vector3<f64>,
     ) -> Result<Vec<(f64, KFState<'_>)>, PropagateError> {
         let predicted: Vec<(f64, KFState)> = self
-            .hypotheses
-            .iter()
-            .filter_map(|h| match h.kf.predict(t_prop, r_obs_new, v_obs_new) {
-                Ok(kf) => Some((h.weight(), kf)),
-                Err(e) => {
-                    tracing::trace!(
-                        hyp_id = h.id,
-                        error = ?e,
-                        "Hypothesis prediction failed, excluding from search region"
-                    );
-                    None
-                }
-            })
+            .predict_hypotheses(t_prop, r_obs_new, v_obs_new)
+            .into_iter()
+            .map(|hyp| (hyp.weight(), hyp.kf))
             .collect();
 
         if predicted.is_empty() {

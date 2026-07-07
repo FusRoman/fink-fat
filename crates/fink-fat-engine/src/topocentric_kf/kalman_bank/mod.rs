@@ -75,16 +75,20 @@ pub mod seed_grid;
 
 use std::collections::VecDeque;
 
-use photom::observation_dataset::{ObsDataset, observation::Observation};
+use photom::observation_dataset::{ObsDataset, ObsId, observation::Observation};
 use tracing::{trace, trace_span};
 
-use nalgebra::Vector6;
+use nalgebra::{Matrix2, Vector2, Vector3, Vector6};
 
 use crate::{
     error::EngineError,
     topocentric_kf::{
+        branching::detection_probability::{
+            implied_absolute_magnitude, update_running_magnitude_estimate,
+        },
         kalman_bank::{
             config::KFBankConfig,
+            ellipse_region_finder::SearchComponent,
             hypothesis::{Hypothesis, HypothesisStepResult},
             seed_grid::{GridConfig, admissible_region_grid},
         },
@@ -132,6 +136,20 @@ pub struct KFBank<'state_lf> {
     ///
     /// Drives the [`HypothesisCapSchedule`] decay: cap = schedule.cap(n_steps).
     n_steps: usize,
+    /// Ids of every observation associated to this bank so far, in order.
+    ///
+    /// Lives on the bank rather than on [`Hypothesis`]: every hypothesis in a
+    /// bank survives (or is gated out) together, so all of them share exactly
+    /// the same association history by construction — see the branch-level
+    /// invariant documented in `kalman_update_instruction.md`.
+    track_ids: Vec<ObsId>,
+    /// Running mean of the absolute magnitude `H` implied by every
+    /// observation associated so far (see
+    /// [`branching::detection_probability`](crate::topocentric_kf::branching::detection_probability)).
+    /// `None` until the first successful [`Self::branch_with`] call.
+    absolute_magnitude_estimate: Option<f64>,
+    /// Number of samples folded into `absolute_magnitude_estimate`.
+    absolute_magnitude_sample_count: u32,
 }
 
 impl<'state_lf> KFBank<'state_lf> {
@@ -167,6 +185,9 @@ impl<'state_lf> KFBank<'state_lf> {
             hypotheses,
             config: bank_config,
             n_steps: 0,
+            track_ids: vec![*first_obs.id(), *second_obs.id()],
+            absolute_magnitude_estimate: None,
+            absolute_magnitude_sample_count: 0,
         };
         bank.normalize_weights();
         Ok(bank)
@@ -177,6 +198,22 @@ impl<'state_lf> KFBank<'state_lf> {
     /// Number of live hypotheses.
     pub fn len(&self) -> usize {
         self.hypotheses.len()
+    }
+
+    /// Ids of every observation associated to this bank so far, in
+    /// chronological order (the two seed-pair observations, then one id per
+    /// successful [`Self::branch_with`] call).
+    pub fn track_ids(&self) -> &[ObsId] {
+        &self.track_ids
+    }
+
+    /// Running absolute-magnitude (`H`) estimate built from every observation
+    /// associated so far, or `None` before the first successful
+    /// [`Self::branch_with`] call. Feeds the null-branch detection
+    /// probability (see
+    /// [`branching::detection_probability`](crate::topocentric_kf::branching::detection_probability)).
+    pub fn absolute_magnitude_estimate(&self) -> Option<f64> {
+        self.absolute_magnitude_estimate
     }
 
     /// `true` if at least one hypothesis is alive.
@@ -300,9 +337,54 @@ impl<'state_lf> KFBank<'state_lf> {
     /// honour the same floor.
     ///
     /// Returns `(survivors, n_gated, n_failed)`.
+    ///
+    /// Composed of [`Self::propagate_in_place`] followed by
+    /// [`Self::score_and_update_hypotheses`] — split into two phases so that
+    /// [`Self::branch_with`] can reuse only the second phase on a bank that
+    /// was already propagated once via [`Self::predict_to`].
     fn process_hypotheses(
         &mut self,
         obs_dataset: &ObsDataset,
+        obs: &Observation,
+    ) -> (Vec<Hypothesis<'state_lf>>, usize, usize) {
+        let n_propagate_failed = self.propagate_in_place(obs_dataset, obs);
+        let (survivors, n_gated, n_score_failed) = self.score_and_update_hypotheses(obs);
+        (survivors, n_gated, n_score_failed + n_propagate_failed)
+    }
+
+    /// Propagate every live hypothesis to `obs`'s epoch, in place.
+    ///
+    /// Hypotheses that fail to propagate (Kepler solver or Jacobian failure)
+    /// are dropped silently here; the caller is responsible for counting them
+    /// as failures (see [`Self::process_hypotheses`]).
+    ///
+    /// # Returns
+    /// The number of hypotheses dropped due to a propagation failure.
+    fn propagate_in_place(&mut self, obs_dataset: &ObsDataset, obs: &Observation) -> usize {
+        let n_before = self.hypotheses.len();
+        self.hypotheses = std::mem::take(&mut self.hypotheses)
+            .into_iter()
+            .filter_map(|hyp| hyp.propagate(obs_dataset, obs).ok())
+            .collect();
+        n_before - self.hypotheses.len()
+    }
+
+    /// Gate, score and update every live hypothesis against `obs`, assuming
+    /// they are **already propagated** to `obs`'s epoch.
+    ///
+    /// Identifies the top `min_hypotheses` hypotheses **before** the step so
+    /// they are marked as exempt from the chi-square gate.
+    ///
+    /// Protecting only the MAP (single best) was insufficient: if the MAP
+    /// survived but the next 4 best hypotheses were gated out on the same
+    /// step, the bank collapsed to 1 even though `min_hypotheses = 5`.  The
+    /// weight-floor pruning already respects `min_hypotheses`; the gate must
+    /// honour the same floor.
+    ///
+    /// # Returns
+    /// `(survivors, n_gated, n_failed)`.
+    fn score_and_update_hypotheses(
+        &mut self,
         obs: &Observation,
     ) -> (Vec<Hypothesis<'state_lf>>, usize, usize) {
         // Compute the protected set *before* weights change.
@@ -314,7 +396,7 @@ impl<'state_lf> KFBank<'state_lf> {
             .into_iter()
             .map(|hyp| {
                 let is_protected = protected_ids.contains(&hyp.id);
-                hyp.process(&self.config, obs_dataset, obs, is_protected)
+                hyp.finalize_score_and_update(&self.config, obs, is_protected)
             })
             .collect();
 
@@ -335,6 +417,189 @@ impl<'state_lf> KFBank<'state_lf> {
             .collect();
 
         (survivors, n_gated, n_failed)
+    }
+
+    // ── Branching primitives ─────────────────────────────────────────────
+    //
+    // NOTE ON TEST COVERAGE: every `KFState` borrows a live `KalmanContext`
+    // (JPL ephemeris + UT1 provider, loaded over the network), so no
+    // `KFBank`/`Hypothesis` value — and therefore none of `predict_to`,
+    // `branch_with` or `branch_null` — can be constructed in a fast, offline
+    // unit test. This is a pre-existing limitation of the crate (`step()`
+    // itself has never had unit tests for the same reason); it is not
+    // introduced by this branching work. These primitives are exercised by
+    // `cargo build`/`cargo clippy` plus manual review here; correctness is
+    // instead covered indirectly through the pure-function tests in
+    // `topocentric_kf::branching` (LLR scoring, clutter density, detection
+    // probability, candidate search), which do not require a `KFState`.
+
+    /// Propagate every hypothesis to `t_prop`, read-only, without consuming
+    /// an observation.
+    ///
+    /// This is the shared "predict" half of a branching step: propagation is
+    /// the expensive two-body operation, so it is paid **once** per bank and
+    /// reused by every branch spawned from the result (via
+    /// [`Self::branch_with`] / [`Self::branch_null`]), instead of being
+    /// repeated per candidate observation.
+    ///
+    /// # Arguments
+    /// * `t_prop` – Target epoch (MJD TT).
+    /// * `r_obs_new`, `v_obs_new` – Observer heliocentric state at `t_prop`.
+    ///
+    /// # Returns
+    /// A new bank whose hypotheses are predicted to `t_prop`. Hypotheses that
+    /// fail to propagate are dropped (logged at `trace`). `n_steps` and
+    /// `track_ids` are left unchanged — no observation has been consumed yet.
+    pub fn predict_to(
+        &self,
+        t_prop: f64,
+        r_obs_new: Vector3<f64>,
+        v_obs_new: Vector3<f64>,
+    ) -> Self {
+        Self {
+            hypotheses: self.predict_hypotheses(t_prop, r_obs_new, v_obs_new),
+            ..self.clone()
+        }
+    }
+
+    /// Predict every hypothesis to `t_prop`, keeping each hypothesis's
+    /// weight, id and likelihood window unchanged — only `kf` moves.
+    ///
+    /// Shared by [`Self::predict_to`] and by
+    /// [`predict_search_region`](super::ellipse_region_finder::KFBank::predict_search_region),
+    /// which further projects the result down to bare `(weight, KFState)`
+    /// pairs for its own mixture-region bookkeeping.
+    fn predict_hypotheses(
+        &self,
+        t_prop: f64,
+        r_obs_new: Vector3<f64>,
+        v_obs_new: Vector3<f64>,
+    ) -> Vec<Hypothesis<'state_lf>> {
+        self.hypotheses
+            .iter()
+            .filter_map(|hyp| match hyp.kf.predict(t_prop, r_obs_new, v_obs_new) {
+                Ok(kf) => Some(Hypothesis { kf, ..hyp.clone() }),
+                Err(error) => {
+                    trace!(
+                        hyp_id = hyp.id,
+                        ?error,
+                        "Hypothesis prediction failed, dropping"
+                    );
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Branch this (already [`Self::predict_to`]'d) bank by applying a
+    /// Kalman update with `obs` — the "observation branch" primitive of the
+    /// track-oriented MHT scheme.
+    ///
+    /// `self` must already be at `obs`'s epoch: this method does **not**
+    /// re-propagate, it only gates/scores/updates (see
+    /// [`Self::score_and_update_hypotheses`]) and runs the usual intra-bank
+    /// cleanup (prune → cap → merge, see [`Self::post_step_cleanup`]).
+    ///
+    /// # Arguments
+    /// * `obs` – Candidate observation to associate with this branch.
+    ///
+    /// # Returns
+    /// * `Some((branch, mixture_likelihood_z))` – The branched bank, with
+    ///   `track_ids` extended by `obs.id()`, and the **pre-update** mixture
+    ///   predictive likelihood of `obs` under `self` — the `L(z)` term
+    ///   consumed by the branch's log-likelihood-ratio score.
+    /// * `None` – Every hypothesis was gated or failed; this branch is not
+    ///   viable.
+    pub fn branch_with(&self, obs: &Observation) -> Option<(Self, f64)> {
+        let mixture_likelihood_z = self.mixture_predictive_likelihood(obs);
+
+        let mut branch = self.clone();
+        let (survivors, _n_gated, _n_failed) = branch.score_and_update_hypotheses(obs);
+        branch.hypotheses = survivors;
+        if branch.hypotheses.is_empty() {
+            return None;
+        }
+
+        branch.post_step_cleanup();
+        branch.n_steps += 1;
+        branch.track_ids.push(*obs.id());
+        branch.update_absolute_magnitude_estimate(obs);
+
+        Some((branch, mixture_likelihood_z))
+    }
+
+    /// Fold the apparent magnitude of a just-associated observation into the
+    /// bank's running absolute-magnitude estimate, using the MAP
+    /// hypothesis's geometry at the observation's epoch.
+    ///
+    /// Silently a no-op if the bank collapsed to no hypotheses (already
+    /// guarded against by [`Self::branch_with`]'s early return) — kept
+    /// defensive here since [`Self::best`] is a plain `Option`.
+    fn update_absolute_magnitude_estimate(&mut self, obs: &Observation) {
+        let Some(best) = self.best() else {
+            return;
+        };
+
+        let r_helio_au = best.kf.to_cartesian().pos.norm();
+        let delta_topocentric_au = best.kf.state[4];
+        let implied_h = implied_absolute_magnitude(
+            obs.photometry().magnitude,
+            r_helio_au,
+            delta_topocentric_au,
+        );
+
+        let (mean, count) = update_running_magnitude_estimate(
+            self.absolute_magnitude_estimate,
+            self.absolute_magnitude_sample_count,
+            implied_h,
+        );
+        self.absolute_magnitude_estimate = Some(mean);
+        self.absolute_magnitude_sample_count = count;
+    }
+
+    /// Branch this (already [`Self::predict_to`]'d) bank as the "null"
+    /// (missed-detection) hypothesis: no observation is associated.
+    ///
+    /// Mandatory at LSST cadence: without it, any field not revisited (or an
+    /// object dipping below the limiting magnitude) would force a false
+    /// association or kill the bank outright. State, weights and `track_ids`
+    /// are left unchanged — no information was gained or lost; only
+    /// `n_steps` advances so the hypothesis-cap schedule stays in step with
+    /// observation branches spawned the same night.
+    pub fn branch_null(&self) -> Self {
+        let mut branch = self.clone();
+        branch.n_steps += 1;
+        branch
+    }
+
+    /// Mixture predictive likelihood $\ell(z) = \sum_i w_i\,\mathcal{N}(z;\,
+    /// \mu_i,\, S_i)$ of `obs` under this (already-propagated) bank's
+    /// hypotheses, evaluated *before* any update is applied.
+    ///
+    /// Reuses [`SearchComponent`] purely for its Gaussian-density evaluation;
+    /// the gate threshold it carries is irrelevant here (no gating is
+    /// performed) and is set to `0.0`.
+    fn mixture_predictive_likelihood(&self, obs: &Observation) -> f64 {
+        let coord = obs.equ_coord();
+        let observation_noise = Matrix2::from_diagonal(&Vector2::new(
+            coord.ra_error * coord.ra_error,
+            coord.dec_error * coord.dec_error,
+        ));
+
+        self.hypotheses
+            .iter()
+            .filter_map(|hyp| {
+                let sky_covariance = hyp.kf.sky_covariance().ok()? + observation_noise;
+                SearchComponent::new(
+                    hyp.weight(),
+                    hyp.kf.state[0],
+                    hyp.kf.state[1],
+                    sky_covariance,
+                    0.0,
+                )
+            })
+            .map(|component| component.weighted_density(coord.ra, coord.dec))
+            .sum()
     }
 
     // ── Post-step cleanup pipeline ────────────────────────────────────────
