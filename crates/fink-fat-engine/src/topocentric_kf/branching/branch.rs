@@ -11,6 +11,7 @@ use crate::topocentric_kf::kalman_bank::KFBank;
 /// A `Branch` is produced once per candidate observation (or the null
 /// hypothesis) each time a bank's search region contains ambiguous matches.
 /// See the module-level design note in `kalman_update_instruction.md`.
+#[derive(Clone)]
 pub struct Branch<'state_lf> {
     /// Bank state for this branch (post `branch_with`/`branch_null` + the
     /// usual intra-bank `moment_match_merge` cleanup).

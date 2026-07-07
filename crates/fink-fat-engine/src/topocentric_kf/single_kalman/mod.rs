@@ -257,10 +257,6 @@ impl<'state_lf> KFState<'state_lf> {
 
     /// Compute the $2\times2$ sky-plane covariance matrix $\Sigma_{sky} = HPH^\top$.
     ///
-    /// Arguments
-    /// ---------
-    /// * `r_obs` – Heliocentric observer position (AU, ecliptic J2000).
-    ///
     /// Return
     /// ------
     /// * `Ok(Matrix2)` – Sky covariance in radians².

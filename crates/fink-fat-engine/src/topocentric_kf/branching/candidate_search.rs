@@ -81,7 +81,12 @@ impl TimeBinner for SingleBinTimeBinner {
     }
 }
 
-const SINGLE_TIME_BIN: TimeBin = TimeBin(0);
+/// The single collapsed time bin used by [`SingleBinTimeBinner`].
+///
+/// `pub(crate)` so callers building a [`BucketKey`] directly against a
+/// [`SingleBinTimeBinner`]-indexed `BucketIndex` (e.g. `orchestrate`'s
+/// cheap pre-filter) don't have to guess the bin value.
+pub(crate) const SINGLE_TIME_BIN: TimeBin = TimeBin(0);
 
 /// Cone-query the spatial index around `region`'s center and radius.
 ///
