@@ -43,7 +43,7 @@
 //!   - require `residual ≤ max_predicted_residual`.
 //! - Photometric consistency:
 //!   - apply the implementation-specific brightness similarity check using
-//!     `max_flux_difference`.
+//!     `max_mag_difference`.
 //!
 //! -----------------------------------------------------------------------------
 //! Predictive residual: what is being bounded?
@@ -103,7 +103,7 @@
 //!   - Numeric form: `8.0e-4` means `0.0008 rad`.
 //!   - String form: `"2.75 arcmin"`, `"165 arcsec"`, `"8e-4rad"`.
 //!
-//! As for pairs, `max_flux_difference` is intentionally unit-agnostic at the
+//! As for pairs, `max_mag_difference` is intentionally unit-agnostic at the
 //! configuration layer: its meaning must match the triplet photometry kernel.
 //!
 //! ## Supported units (as implemented in `units.rs`)
@@ -135,7 +135,7 @@
 //! - `max_pair_sep = 2.5e-3 rad` (~8.6 arcmin)
 //! - `max_predicted_residual = 8.0e-4 rad` (~2.75 arcmin)
 //! - `enforce_time_order = true`
-//! - `max_flux_difference = 5.0`
+//! - `max_mag_difference = 5.0`
 //!
 //! Tuning suggestions:
 //!
@@ -143,7 +143,7 @@
 //!   - decrease `max_dt_between`,
 //!   - decrease `max_pair_sep`,
 //!   - decrease `max_predicted_residual` (often the most selective constraint),
-//!   - tighten `max_flux_difference`.
+//!   - tighten `max_mag_difference`.
 //!
 //! - If recall is too low:
 //!   - increase `max_dt_between` slightly,
@@ -167,7 +167,7 @@
 //!   max_pair_sep: 2.5e-3            # rad
 //!   max_predicted_residual: 8.0e-4  # rad
 //!   enforce_time_order: true
-//!   max_flux_difference: 5.0        # must match triplet photometry metric
+//!   max_mag_difference: 5.0        # must match triplet photometry metric
 //! ```
 //!
 //! Human-friendly string form:
@@ -178,7 +178,7 @@
 //!   max_pair_sep: "8.6 arcmin"
 //!   max_predicted_residual: "2.75 arcmin"
 //!   enforce_time_order: true
-//!   max_flux_difference: 5.0
+//!   max_mag_difference: 5.0
 //! ```
 //!
 //! -----------------------------------------------------------------------------
@@ -194,7 +194,7 @@
 //! - [`SeedError::NonFiniteOrNegativeTime`] for `triplets.max_dt_between`,
 //! - [`SeedError::NonFiniteOrNegativeAngle`] for `triplets.max_pair_sep`,
 //! - [`SeedError::NonFiniteOrNegativeResidual`] for `triplets.max_predicted_residual`,
-//! - [`SeedError::NonFiniteOrNegativePhotometry`] for `triplets.max_flux_difference`,
+//! - [`SeedError::NonFiniteOrNegativePhotometry`] for `triplets.max_mag_difference`,
 //! - [`SeedError::Inconsistent`] if `max_predicted_residual > max_pair_sep`.
 //!
 //! Unit parsing failures (string quantities) are surfaced by serde as
@@ -229,15 +229,17 @@ use crate::error::SeedError;
 /// - `ang_sep(a, b) ≤ max_pair_sep` and `ang_sep(b, c) ≤ max_pair_sep`,
 /// - the linear prediction residual at `c` from `a→b` is
 ///   `≤ max_predicted_residual`,
-/// - the photometry similarity constraints pass using `max_flux_difference`,
+/// - the photometry similarity constraints pass using `max_mag_difference`,
 /// - and optionally, strict time ordering is enforced (`enforce_time_order`).
 ///
 /// Notes
 /// -----
-/// This struct is `serde`-deserializable to support robust configuration loading.
-/// If you want strict YAML typo checking (recommended), apply:
-/// `#[serde(default, deny_unknown_fields)]` as done on other config structs.
+/// - This struct is `serde`-deserializable to support robust configuration loading
+///   (YAML + environment overrides) via the `config` crate.
+/// - Unknown keys are rejected (`deny_unknown_fields`) to catch YAML typos early.
+/// - Missing fields are filled from [`Default`] (`serde(default)`).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct TripletConfig {
     /// Maximum allowed time separation between consecutive neighbors.
     ///

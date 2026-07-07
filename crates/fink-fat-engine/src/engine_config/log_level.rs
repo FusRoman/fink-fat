@@ -3,7 +3,10 @@
 //! A thin serde-friendly enum that maps to [`tracing::Level`] in the CLI layer.
 //! The engine only stores this value; the subscriber is installed by the caller.
 //!
-//! YAML values (case-insensitive): `"trace"`, `"debug"`, `"info"`, `"warn"`, `"error"`.
+//! YAML values must be written in **lowercase**: `"trace"`, `"debug"`,
+//! `"info"`, `"warn"`, `"error"` (enforced by `#[serde(rename_all =
+//! "lowercase")]`; mixed/upper case, e.g. `"Info"` or `"INFO"`, is rejected
+//! as an unknown variant, not silently matched case-insensitively).
 
 use serde::{Deserialize, Serialize};
 
@@ -16,11 +19,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
+    /// Most verbose level; every traced event, including hot-path internals.
     Trace,
+    /// Verbose diagnostic events useful during development.
     Debug,
+    /// Default level: coarse progress/status events.
     #[default]
     Info,
+    /// Recoverable but noteworthy issues.
     Warn,
+    /// Unrecoverable or user-facing failures.
     Error,
 }
 

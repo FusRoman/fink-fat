@@ -1,15 +1,66 @@
+//! # Admissible-region seeding grid configuration (`GridConfig`, `Population`)
+//!
+//! This module defines the configuration for the **`(ρ, ρ̇)` admissible-region
+//! grid** built by [`admissible_region_grid`], the topocentric-range/range-rate
+//! sampling used to seed Kalman hypotheses for a new tracklet before any
+//! heliocentric orbit is known.
+//!
+//! Two pieces make up this configuration:
+//! - [`Population`]: a Gaussian dynamical-population prior over semi-major
+//!   axis, used to weight grid nodes by dynamical plausibility (see
+//!   [`default_populations`] for the built-in Solar System population set).
+//! - [`GridConfig`]: the grid's sampling bounds/resolution plus numerical
+//!   floors that keep degenerate cells from dominating or vanishing.
+//!
+//! This configuration is `serde`-deserializable (YAML) and uses the
+//! project-level unit parsers from [`crate::engine_config::units`] so that
+//! distance/speed fields accept either canonical AU / AU-per-day numbers or
+//! human-friendly unit strings (e.g. `"0.02 au"`, `"1 au/day"`).
+
 use serde::{Deserialize, Serialize};
+
+use crate::engine_config::units::{de_length_au, de_speed_au_per_day};
 
 /// A small-body population, modeled as a Gaussian prior over semi-major axis.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Population {
     /// Human-readable label (NEO, MBA, …).
     pub name: String,
-    /// Peak semi-major axis of the population (AU).
+
+    /// Peak semi-major axis of the population.
+    ///
+    /// Units
+    /// -----
+    /// - Canonical: **AU**.
+    ///
+    /// YAML forms
+    /// ---------
+    /// - numeric (already in AU): `1.5`
+    /// - string with units: `"1.5 au"`, `"224 400 000 km"`
+    ///
+    /// Serialization
+    /// -------------
+    /// Parsed with [`de_length_au`].
+    #[serde(deserialize_with = "de_length_au")]
     pub a_center: f64,
-    /// Spread of the population in semi-major axis (AU).
+
+    /// Spread (standard deviation) of the population in semi-major axis.
+    ///
+    /// Units
+    /// -----
+    /// - Canonical: **AU**.
+    ///
+    /// Must be strictly positive for the Gaussian prior to be well-defined.
+    ///
+    /// Serialization
+    /// -------------
+    /// Parsed with [`de_length_au`], same accepted YAML forms as `a_center`.
+    #[serde(deserialize_with = "de_length_au")]
     pub a_sigma: f64,
-    /// Relative abundance (un-normalized; only ratios matter).
+
+    /// Relative abundance (un-normalized; only ratios between populations'
+    /// weights matter — the sampler normalizes internally). Dimensionless,
+    /// must be non-negative.
     pub weight: f64,
 }
 
@@ -149,21 +200,88 @@ pub fn default_populations() -> Vec<Population> {
 /// Configuration for [`admissible_region_grid`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GridConfig {
-    /// Minimum topocentric range (AU). Excludes near-Earth/geocentric objects.
+    /// Minimum topocentric range sampled by the grid.
+    ///
+    /// Units
+    /// -----
+    /// - Canonical: **AU**.
+    ///
+    /// Context
+    /// -------
+    /// Excludes near-Earth/geocentric objects too close to be handled by the
+    /// admissible-region formalism. Must be strictly positive and `< rho_max`.
+    ///
+    /// Serialization
+    /// -------------
+    /// Parsed with [`de_length_au`].
+    #[serde(deserialize_with = "de_length_au")]
     pub rho_min: f64,
-    /// Maximum topocentric range (AU).
+
+    /// Maximum topocentric range sampled by the grid.
+    ///
+    /// Units
+    /// -----
+    /// - Canonical: **AU**.
+    ///
+    /// Typical values reach out to the outer Solar System (SDO/detached
+    /// TNOs); see [`default_populations`] for the population set this bound
+    /// should comfortably cover.
+    ///
+    /// Serialization
+    /// -------------
+    /// Parsed with [`de_length_au`].
+    #[serde(deserialize_with = "de_length_au")]
     pub rho_max: f64,
-    /// Number of range nodes (log-spaced between `rho_min` and `rho_max`).
+
+    /// Number of range nodes, log-spaced between `rho_min` and `rho_max`.
+    ///
+    /// Dimensionless count. Must be `≥ 1`; in practice a handful of dozens
+    /// (e.g. 20-30) balances coverage against the number of hypotheses seeded
+    /// per tracklet.
     pub n_rho: usize,
-    /// Number of range-rate nodes per range (linear, inside the bound interval).
+
+    /// Number of range-rate nodes per range node, linearly spaced inside the
+    /// admissible-region's bound interval for that range.
+    ///
+    /// Dimensionless count. Must be `≥ 1`.
     pub n_rho_dot: usize,
-    /// Population priors used to weight each node.
+
+    /// Population priors used to weight each `(ρ, ρ̇)` node by dynamical
+    /// plausibility. See [`Population`] and [`default_populations`].
     pub populations: Vec<Population>,
-    /// Floor on the range σ (AU), in case a cell is tiny.
-    pub sigma_pos_rad_floor: f64,
-    /// Floor on the range-rate σ (AU/day).
+
+    /// Floor on the range σ, applied when a grid cell's half-width would
+    /// otherwise be smaller than this (e.g. near the grid boundary).
+    ///
+    /// Units
+    /// -----
+    /// - Canonical: **AU**.
+    ///
+    /// Must be strictly positive; too small a floor can produce
+    /// overconfident (numerically unstable) initial covariances.
+    ///
+    /// Serialization
+    /// -------------
+    /// Parsed with [`de_length_au`].
+    #[serde(deserialize_with = "de_length_au")]
+    pub sigma_pos_au_floor: f64,
+
+    /// Floor on the range-rate σ, applied under the same circumstances as
+    /// `sigma_pos_au_floor`.
+    ///
+    /// Units
+    /// -----
+    /// - Canonical: **AU/day**.
+    ///
+    /// Serialization
+    /// -------------
+    /// Parsed with [`de_speed_au_per_day`].
+    #[serde(deserialize_with = "de_speed_au_per_day")]
     pub sigma_rho_dot_floor: f64,
-    /// Nodes whose population weight falls below this are dropped.
+
+    /// Nodes whose (normalized) population weight falls below this threshold
+    /// are dropped from the grid. Dimensionless ratio, expected in `[0, 1)`;
+    /// `0.0` disables pruning.
     pub weight_floor: f64,
 }
 
@@ -175,7 +293,7 @@ impl Default for GridConfig {
             n_rho: 28,
             n_rho_dot: 11,
             populations: default_populations(),
-            sigma_pos_rad_floor: 1e-3,
+            sigma_pos_au_floor: 1e-3,
             sigma_rho_dot_floor: 1e-4,
             weight_floor: 1e-6,
         }
