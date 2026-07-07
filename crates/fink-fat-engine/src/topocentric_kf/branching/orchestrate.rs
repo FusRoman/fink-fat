@@ -41,7 +41,7 @@
 
 use std::collections::HashSet;
 
-use nalgebra::{Vector2, Vector3};
+use nalgebra::Vector3;
 use outfit::OutfitError;
 use photom::{
     coordinates::equatorial::EquCoord,
@@ -49,6 +49,7 @@ use photom::{
 };
 
 use crate::{
+    engine_config::{kalman_context::KalmanContext, night_advance_params::NightAdvanceParams},
     spacetime_bucket::{
         bucket::{BucketIndex, BucketKey, build_alert_bucket_index},
         clutter_density::local_clutter_density,
@@ -64,147 +65,11 @@ use crate::{
             pruning::{apply_n_scan_pruning, cap_top_b_per_lineage},
             visit::{Visit, group_observations_into_visits},
         },
-        kalman_bank::{
-            KFBank,
-            ellipse_region_finder::{radius_strategy::RadiusStrategy, top_k::TopK},
-        },
+        kalman_bank::KFBank,
         observer_state::get_observer,
-        single_kalman::{context::KalmanContext, update::wrap_angle},
+        single_kalman::update::wrap_angle,
     },
 };
-
-/// Tuning parameters shared by every lineage advanced in one call to
-/// [`advance_bank_collection_one_night`] — everything except the branches
-/// being advanced and the current step index, which are the function's
-/// primary inputs rather than tuning knobs.
-///
-/// Grouped in the order they're consumed by the pipeline: visit grouping →
-/// the cheap pre-filter → candidate search → cross-bank pruning →
-/// null-branch detection probability.
-pub struct NightAdvanceParams<'a> {
-    /// HEALPix spatial index shared by every step of the night: building
-    /// each visit's `BucketIndex`, the cheap pre-filter's neighbor lookup
-    /// (see the module-level "Performance" note), candidate search
-    /// ([`find_candidates_for_bank`]) and clutter-density estimation
-    /// ([`local_clutter_density`]). One instance, reused everywhere — its
-    /// `depth` sets the spatial resolution for all of them at once.
-    pub spatial_binner: &'a HealpixBinner,
-
-    /// Maximum epoch spread, **in days**, for two observations to be folded
-    /// into the same [`Visit`] (see [`group_observations_into_visits`]).
-    /// Should be small — a fraction of the exposure/readout time, e.g.
-    /// a few seconds expressed as a fraction of a day (`1.0 / 86_400.0` ≈
-    /// 1 second) — since its only job is to absorb per-alert timestamp
-    /// jitter *within* one exposure, not to merge distinct visits. Too
-    /// large would incorrectly treat two different exposures (and thus two
-    /// different observer/geometry states) as one epoch.
-    pub visit_epoch_tolerance_days: f64,
-
-    /// Angular radius, **in radians**, for the cheap linear-extrapolation
-    /// pre-filter (see the module-level "Performance" note). For every
-    /// lineage, at every visit, this is the
-    /// search radius used to test — via a HEALPix neighbor lookup, no
-    /// Kepler solve — whether *any* alert in the visit falls near the
-    /// lineage's linearly-extrapolated sky position; a lineage that fails
-    /// this test never pays for the real (expensive) propagation this
-    /// visit. Must be **generous**: it has to cover both the linear
-    /// extrapolation's own error (curvature/eccentricity effects it
-    /// ignores) and realistic positional uncertainty growth over the
-    /// elapsed time since the lineage's last update. Too small silently
-    /// drops real associations (a lineage never gets the chance to match);
-    /// too large only costs an occasional wasted full propagation — when
-    /// in doubt, err large.
-    pub quick_reject_radius_rad: f64,
-
-    /// **A priori** diagonal astrometric noise `[σ_RA², σ_Dec²]`, **in
-    /// rad²**, added to each hypothesis's predicted sky covariance solely to
-    /// size the search region in [`KFBank::predict_search_region`].
-    ///
-    /// # Why this is added on top of the sky covariance, not redundant with it
-    ///
-    /// `kf.sky_covariance()` ($HPH^\top$) is *our* uncertainty about where
-    /// the object actually is, accumulated by the filter (process noise,
-    /// propagation, prior measurements) — it says nothing about the noise
-    /// of a *new* measurement we haven't taken yet. This field is that
-    /// second term ($R$): even a perfectly-known position would still show
-    /// up scattered by this much in a real observation, due to
-    /// instrumental/astrometric noise. The combined innovation covariance
-    /// $S = HPH^\top + R$ is the standard Kalman formula — the exact same
-    /// additive pattern `Hypothesis::score_and_update` uses downstream for
-    /// the real update. Dropping this term would make the search ellipse
-    /// too small and miss valid associations.
-    ///
-    /// # Why "a priori" instead of the real per-alert error
-    ///
-    /// At search-region time no candidate has been found yet, so there is
-    /// no real per-alert error to use — a generic estimate of the survey's
-    /// typical astrometric precision stands in instead (e.g. `σ ≈ 0.1"` →
-    /// `σ_rad ≈ 4.85e-7`, so `σ² ≈ 2.35e-13`). Once candidates are actually
-    /// found, every real scoring/update step downstream —
-    /// [`KFBank::branch_with`]'s mixture-likelihood scoring and the Kalman
-    /// update itself — ignores this field entirely and instead uses the
-    /// candidate observation's *own* `ra_error`/`dec_error` (via
-    /// `Observation::equ_coord`), which is always the more accurate value
-    /// once it's available.
-    pub obs_noise: Vector2<f64>,
-
-    /// Which of a bank's live hypotheses contribute to its predicted
-    /// search region this visit — see [`TopK`] for the available policies
-    /// (`All`, `Map`, `Best(k)`, `WeightThreshold`). Passed straight
-    /// through to [`KFBank::predict_search_region`].
-    pub top_k: TopK,
-
-    /// How the search region's bounding radius is computed from the
-    /// selected hypotheses' covariances — see [`RadiusStrategy`]
-    /// (`MixtureCovariance` vs. `MaxEllipse`). Passed straight through to
-    /// [`KFBank::predict_search_region`].
-    pub radius_strategy: RadiusStrategy,
-
-    /// Minimum mixture predictive likelihood (unitless, a Gaussian density
-    /// value — see
-    /// [`SearchRegion::mixture_likelihood`](crate::topocentric_kf::kalman_bank::ellipse_region_finder::SearchRegion::mixture_likelihood))
-    /// a candidate observation must reach, *after* passing the coarse
-    /// per-component Mahalanobis gate, to be kept by
-    /// [`find_candidates_for_bank`]. A second-stage cut on top of the gate:
-    /// the gate says "geometrically plausible," this says "and not
-    /// negligibly unlikely." `0.0` disables this stage (keep everything the
-    /// gate accepts).
-    pub likelihood_threshold: f64,
-
-    /// Top-B cap: maximum number of branches kept **per lineage**, applied
-    /// via [`cap_top_b_per_lineage`] after *every visit* — not just once
-    /// per night, since branch counts multiply at every branching event
-    /// (M candidates + 1 null branch) and would explode across a night's
-    /// worth of visits otherwise. The design doc recommends `B ≈ 3–5`: wide
-    /// enough to carry real ambiguity a visit or two, narrow enough to
-    /// bound cost.
-    pub branch_cap: usize,
-
-    /// N-scan pruning window, **in nights** (not visits — see
-    /// [`apply_n_scan_pruning`]), applied exactly once per call to
-    /// [`advance_bank_collection_one_night`], after every visit that night
-    /// has been folded in. For every branch-tree node this many nights old,
-    /// only the single best-scoring descendant survives; siblings are
-    /// discarded. `1` is the design doc's recommendation (association
-    /// ambiguity usually resolves by the very next night); `2` is
-    /// mentioned as an occasional alternative for slower-resolving cases.
-    pub n_scan: usize,
-
-    /// Survey/field limiting magnitude (mag) for this night, used as the
-    /// midpoint of the null branch's detection-probability curve — see
-    /// [`detection_probability`]. A lineage predicted brighter than this is
-    /// very likely to have been detected (so a non-detection weighs heavily
-    /// against the null branch); predicted fainter, the opposite.
-    pub limiting_magnitude: f64,
-
-    /// Completeness roll-off width (mag) of the survey's detection curve
-    /// around `limiting_magnitude` — see [`detection_probability`]. Real
-    /// surveys don't have a hard cutoff magnitude; detection probability
-    /// decays smoothly over roughly this many magnitudes on either side of
-    /// `limiting_magnitude`. Typical values ≈ 0.3–0.5 mag; must be strictly
-    /// positive.
-    pub completeness_width_mag: f64,
-}
 
 /// Result of advancing a set of lineages by one night.
 pub struct NightAdvanceOutcome<'state_lf> {
@@ -242,6 +107,7 @@ pub fn advance_bank_collection_one_night<'state_lf>(
     obs_dataset: &ObsDataset,
     kalman_context: &KalmanContext,
     params: &NightAdvanceParams,
+    spatial_binner: &HealpixBinner,
     current_step: usize,
 ) -> NightAdvanceOutcome<'state_lf> {
     let visits = group_observations_into_visits(night_obs, params.visit_epoch_tolerance_days);
@@ -272,13 +138,19 @@ pub fn advance_bank_collection_one_night<'state_lf>(
         // candidate search and clutter-density lookup this visit.
         let visit_bucket_index = build_alert_bucket_index(
             visit.observations.iter().copied(),
-            params.spatial_binner,
+            spatial_binner,
             &SingleBinTimeBinner,
         );
 
         let mut visit_branches = Vec::new();
         for lineage in &branches {
-            if !lineage_might_be_in_visit(lineage, visit, &visit_bucket_index, params) {
+            if !lineage_might_be_in_visit(
+                lineage,
+                visit,
+                &visit_bucket_index,
+                params,
+                spatial_binner,
+            ) {
                 // No alert anywhere near this lineage's extrapolated
                 // position — skip the two Kepler solves entirely. The
                 // lineage carries over unchanged, picked up again whenever
@@ -294,6 +166,7 @@ pub fn advance_bank_collection_one_night<'state_lf>(
                 r_obs,
                 v_obs,
                 params,
+                spatial_binner,
                 &mut next_branch_id,
                 &mut consumed_observation_ids,
             );
@@ -354,6 +227,7 @@ fn lineage_might_be_in_visit(
     visit: &Visit,
     visit_bucket_index: &BucketIndex<&Observation>,
     params: &NightAdvanceParams,
+    spatial_binner: &HealpixBinner,
 ) -> bool {
     let Some(best) = lineage.bank.best() else {
         return false;
@@ -364,9 +238,9 @@ fn lineage_might_be_in_visit(
     let predicted_dec = best.kf.state[1] + best.kf.state[3] * dt;
     let predicted_coord = EquCoord::new(predicted_ra, 0.0, predicted_dec, 0.0);
 
-    let predicted_key = params.spatial_binner.key_for(&predicted_coord);
-    params
-        .spatial_binner
+    let predicted_key = spatial_binner.key_for(&predicted_coord);
+
+    spatial_binner
         .neighbors(predicted_key, params.quick_reject_radius_rad)
         .into_iter()
         .any(|space_key| {
@@ -392,6 +266,7 @@ fn spawn_branches_for_lineage<'state_lf>(
     r_obs: Vector3<f64>,
     v_obs: Vector3<f64>,
     params: &NightAdvanceParams,
+    spatial_binner: &HealpixBinner,
     next_branch_id: &mut u64,
     consumed_observation_ids: &mut HashSet<ObsId>,
 ) -> Vec<Branch<'state_lf>> {
@@ -401,7 +276,7 @@ fn spawn_branches_for_lineage<'state_lf>(
         epoch,
         r_obs,
         v_obs,
-        params.obs_noise,
+        params.obs_noise.into(),
         params.top_k,
         params.radius_strategy,
     ) else {
@@ -416,7 +291,7 @@ fn spawn_branches_for_lineage<'state_lf>(
         &search_region,
         lineage.bank.track_ids().to_vec(),
         visit_bucket_index,
-        params.spatial_binner,
+        spatial_binner,
         lineage.bank.config.gate_chi2,
         params.likelihood_threshold,
     );
@@ -427,7 +302,7 @@ fn spawn_branches_for_lineage<'state_lf>(
 
         let clutter_density = local_clutter_density(
             visit_bucket_index,
-            params.spatial_binner,
+            spatial_binner,
             candidate.observation.equ_coord(),
         );
         let llr_delta = observation_llr_delta(candidate.likelihood, clutter_density);

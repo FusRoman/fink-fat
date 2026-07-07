@@ -1,4 +1,3 @@
-pub mod context;
 pub mod display;
 pub mod init;
 pub mod propagate;
@@ -12,12 +11,12 @@ use photom::{
 };
 
 use crate::{
+    engine_config::kalman_context::KalmanContext,
     error::{EngineError, KFUpdateError, ObservationJacobianError},
     topocentric_kf::{
         conversion::{CartesianState, attributable_to_cartesian},
         observer_state::get_observer,
         single_kalman::{
-            context::KalmanContext,
             init::init_kf_state,
             propagate::{PropagateError, propagate_kf},
             update::{observation_jacobian, update_kf},

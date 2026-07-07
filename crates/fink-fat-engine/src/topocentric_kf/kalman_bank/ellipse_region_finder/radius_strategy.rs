@@ -1,9 +1,10 @@
 use nalgebra::Matrix2;
+use serde::{Deserialize, Serialize};
 
 use crate::topocentric_kf::kalman_bank::ellipse_region_finder::SearchComponent;
 
 /// Inner strategy choice for [`RadiusStrategy::Clamped`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MixOrMax {
     MaxEllipse,
     MixtureCovariance,
@@ -28,7 +29,7 @@ pub enum MixOrMax {
 ///   result to a hard maximum expressed in arcseconds.  Used as a safety net
 ///   when the bank has not yet converged and the mixture covariance can still
 ///   be large.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum RadiusStrategy {
     /// Original conservative behaviour.
     MaxEllipse,

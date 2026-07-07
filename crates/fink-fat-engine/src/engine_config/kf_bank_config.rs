@@ -1,9 +1,11 @@
 // ── Configuration ─────────────────────────────────────────────────────────────
 
-use crate::topocentric_kf::kalman_bank::hypothesis_cap::HypothesisCapSchedule;
+use serde::{Deserialize, Serialize};
+
+use crate::engine_config::hypothesis_cap::HypothesisCapSchedule;
 
 /// Tuning parameters for the hypothesis bank.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KFBankConfig {
     /// Chi-square gate on the predictive innovation (2 d.o.f.).
     ///

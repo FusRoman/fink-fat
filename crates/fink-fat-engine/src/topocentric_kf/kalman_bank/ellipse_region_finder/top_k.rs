@@ -1,4 +1,5 @@
 use crate::topocentric_kf::single_kalman::KFState;
+use serde::{Deserialize, Serialize};
 
 /// Controls which hypotheses from the bank are used to build a [`SearchRegion`].
 ///
@@ -18,7 +19,7 @@ use crate::topocentric_kf::single_kalman::KFState;
 ///   For example, `WeightThreshold(0.99)` discards all hypotheses beyond the
 ///   99 % credible set, eliminating low-weight spatial outliers that would
 ///   otherwise inflate the search region.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum TopK {
     /// Use all live hypotheses (original conservative behaviour).
     All,

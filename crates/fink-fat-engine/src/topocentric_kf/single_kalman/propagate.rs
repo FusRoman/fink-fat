@@ -195,11 +195,6 @@ pub(crate) fn propagate_to_epoch<'state_lf>(
 ) -> Result<KFState<'state_lf>, PropagateError> {
     let dt = t_prop - kf.epoch;
 
-    println!("___ Perform Kalman propagation ___");
-    println!("dt = {dt}");
-    println!("previous universal anomaly: {:?}", kf.universal_anomaly);
-    println!(" ______ \n");
-
     let span = tracing::trace_span!(
         "propagate_to_epoch",
         epoch_from = kf.epoch,

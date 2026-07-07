@@ -23,15 +23,12 @@ use std::collections::HashSet;
 use photom::observation_dataset::{ObsDataset, observation::Observation};
 
 use crate::{
+    engine_config::{EngineConfig, kalman_context::KalmanContext},
     error::EngineError,
-    topocentric_kf::{
-        bank_collection::BankBuildParams,
-        branching::{
-            Branch,
-            discovery::seed_new_lineages_from_leftovers,
-            orchestrate::{NightAdvanceParams, advance_bank_collection_one_night},
-        },
-        single_kalman::context::KalmanContext,
+    spacetime_bucket::healpix_binner::HealpixBinner,
+    topocentric_kf::branching::{
+        Branch, discovery::seed_new_lineages_from_leftovers,
+        orchestrate::advance_bank_collection_one_night,
     },
 };
 
@@ -44,6 +41,12 @@ pub struct BranchCollection<'state_lf> {
 }
 
 impl<'state_lf> BranchCollection<'state_lf> {
+    pub fn empty() -> Self {
+        BranchCollection {
+            branches: Vec::new(),
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.branches.len()
     }
@@ -81,11 +84,12 @@ impl<'state_lf> BranchCollection<'state_lf> {
         &self,
         night_obs: &[&Observation],
         obs_dataset: &ObsDataset,
+        engine_config: &EngineConfig,
         kalman_context: &'state_lf KalmanContext,
-        advance_params: &NightAdvanceParams,
-        discovery_params: &BankBuildParams,
         current_step: usize,
     ) -> Result<Self, EngineError> {
+        let spatial_binner = HealpixBinner::new(engine_config.healpix_depth);
+
         // `advance_bank_collection_one_night` groups `night_obs` into
         // visits internally and builds one bucket index per visit (see its
         // module doc for why a single per-night index would be wrong at
@@ -98,7 +102,8 @@ impl<'state_lf> BranchCollection<'state_lf> {
                 night_obs,
                 obs_dataset,
                 kalman_context,
-                advance_params,
+                &engine_config.advance_params,
+                &spatial_binner,
                 current_step,
             );
             (outcome.branches, outcome.consumed_observation_ids)
@@ -123,7 +128,8 @@ impl<'state_lf> BranchCollection<'state_lf> {
             &consumed_observation_ids,
             obs_dataset,
             kalman_context,
-            discovery_params,
+            engine_config,
+            &spatial_binner,
             &mut next_lineage_id,
         )?;
         branches.extend(new_lineages);

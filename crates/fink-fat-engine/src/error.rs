@@ -5,15 +5,7 @@ use outfit::OutfitError;
 use photom::observation_dataset::{ObsDatasetError, ObsId};
 use thiserror::Error;
 
-use crate::{
-    engine_config::error::ConfigError,
-    pipeline::PipelineStage,
-    seeding::error::SeedingError,
-    tracklet::track_storage::TrackId, // graph::edge::error::EdgeBuilderError,
-                                      // persistence::error::{PersistenceError, PersistenceIoError},
-                                      // pipeline::stages::PipelineStage,
-                                      // solver::{components::error::ComponentError, error::SolverError},
-};
+use crate::{engine_config::error::ConfigError, seeding::error::SeedingError};
 
 #[derive(Debug, Error)]
 pub enum SeedError {
@@ -104,41 +96,11 @@ impl From<&str> for FinkFatError {
     }
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Predictor Errors                                                          */
-/* -------------------------------------------------------------------------- */
-
-/// Parameter validation errors for the predictor builder.
-#[derive(Debug, Error, Clone, PartialEq)]
-pub enum PredictorParamError {
-    /// k_sigma must be finite and strictly positive.
-    #[error("invalid k_sigma = {0:?} (expect finite and > 0)")]
-    InvalidKSigma(f64),
-    /// Noise coefficients must be finite and non-negative.
-    #[error("invalid noise coefficient `{name}` = {value:?} (expect finite and >= 0)")]
-    InvalidNoiseCoeff { name: &'static str, value: f64 },
-    /// max_cone_radius must be finite and strictly positive when set.
-    #[error("invalid max_cone_radius = {0:?} (expect finite and > 0)")]
-    InvalidMaxConeRadius(f64),
-    /// max_norm_offset must be finite and strictly positive when set.
-    #[error("invalid max_norm_offset = {0:?} (expect finite and > 0)")]
-    InvalidMaxNormOffset(f64),
-}
-
 #[derive(Debug, Error)]
 pub enum EngineError {
     /// The pipeline plan is invalid (stages, window, invariants, etc).
     #[error("invalid pipeline plan: {0}")]
     InvalidPlan(&'static str),
-
-    /// A pipeline stage failed with a message that is specific but not (yet) typed.
-    ///
-    /// This is useful as a temporary catch-all while the project evolves.
-    #[error("stage {stage:?} failed: {message}")]
-    StageFailed {
-        stage: PipelineStage,
-        message: String,
-    },
 
     /// Pipeline was cancelled by the caller (hooks).
     #[error("pipeline cancelled")]
@@ -194,12 +156,6 @@ pub enum EngineError {
     #[error("obs dataset id not found : {0}")]
     ObsDatasetIdNotFound(ObsId),
 
-    #[error("Attempt to get TrackletData on Orbit variant tracklet : {0:?}")]
-    NotTrackletVariant(TrackId),
-
-    #[error("{0:?}")]
-    TrackIdNotFound(TrackId),
-
     #[error(transparent)]
     Sedding(#[from] SeedingError),
 
@@ -253,17 +209,4 @@ pub enum TopocentricRangeError {
          The observer may be beyond the asteroid for the given prior r = {r:.6} AU."
     )]
     NoPositiveRoot { rho1: f64, rho2: f64, r: f64 },
-}
-
-pub trait OptionExt<T> {
-    fn stage_err(self, stage: PipelineStage, message: impl Into<String>) -> Result<T, EngineError>;
-}
-
-impl<T> OptionExt<T> for Option<T> {
-    fn stage_err(self, stage: PipelineStage, message: impl Into<String>) -> Result<T, EngineError> {
-        self.ok_or_else(|| EngineError::StageFailed {
-            stage,
-            message: message.into(),
-        })
-    }
 }

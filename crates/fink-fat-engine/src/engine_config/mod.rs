@@ -167,13 +167,15 @@
 //! - [`crate::engine_config::error::ConfigError`]: unified error type returned by the loader.
 //! - [`PairConfig`], [`TripletConfig`], [`EdgeConfig`], [`SolverConfig`] for detailed section docs.
 
-pub mod edge_config;
 pub mod error;
+pub mod grid_population;
+pub mod hypothesis_cap;
+pub mod kalman_context;
+pub mod kf_bank_config;
 pub mod log_level;
+pub mod night_advance_params;
 pub mod pair_config;
-pub mod pipeline_policy;
-pub mod propagator_config;
-pub mod solver_config;
+pub mod single_kalman_config;
 pub mod triplet_config;
 pub mod units;
 
@@ -182,13 +184,16 @@ use config::{Config, Environment, File};
 use photom::MJDTT;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    ecliptic_state::SingerParams,
-    engine_config::{
-        edge_config::EdgeConfig, error::ConfigError, log_level::LogLevel, pair_config::PairConfig,
-        pipeline_policy::PersistPolicy, solver_config::SolverConfig, triplet_config::TripletConfig,
-        units::de_time_days,
-    }, // persistence::compression::Compression,
+use crate::engine_config::{
+    error::ConfigError,
+    grid_population::GridConfig,
+    kalman_context::{KalmanContext, KalmanContextConfig},
+    kf_bank_config::KFBankConfig,
+    log_level::LogLevel,
+    night_advance_params::NightAdvanceParams,
+    pair_config::PairConfig,
+    triplet_config::TripletConfig,
+    units::de_time_days,
 };
 
 /// Root configuration for the engine (serde-friendly).
@@ -230,42 +235,13 @@ pub struct EngineConfig {
     /// Intra-night triplet generation configuration.
     pub triplets: TripletConfig,
 
-    /// Inter-night edge construction configuration.
-    pub edges: EdgeConfig,
+    pub kalman_shared_context: KalmanContextConfig,
 
-    /// Solver selection and solver-specific configuration.
-    pub solver_config: SolverConfig,
+    pub kfbank_config: KFBankConfig,
 
-    /// pipeline policy configuration
-    pub pipeline_policy: PersistPolicy,
+    pub seeding_grid_config: GridConfig,
 
-    /// Compression algorithm used when writing binary persistence blobs
-    /// (alerts, seeds, edge journal deltas and snapshots).
-    ///
-    /// The choice is stored inside every [`crate::persistence::envelope::DiskEnvelope`]
-    /// and embedded in the binary frame, so readers never need to know the
-    /// algorithm in advance.
-    ///
-    /// Defaults to [`Compression::None`] (no compression). For production
-    /// deployments where disk I/O is a bottleneck, [`Compression::Zstd`] is
-    /// recommended.
-    ///
-    /// YAML values: `"None"`, `"Lz4"`, `"Zstd"`, `"Gzip"`.
-    // pub binary_compression: Compression,
-
-    /// Maximum number of nights that can be skipped when linking (`gap` constraint).
-    ///
-    /// Interpretation
-    /// --------------
-    /// This parameter limits how far the engine is allowed to link forward in time.
-    /// For example, if `max_gap_nights = 3`, edges may connect seeds separated by
-    /// up to 3 night boundaries (implementation-dependent: inclusive/exclusive
-    /// gap semantics are defined by the edge builder).
-    ///
-    /// Notes
-    /// -----
-    /// Keeping this small reduces candidate fan-out and runtime.
-    max_gap_nights: u8,
+    pub advance_params: NightAdvanceParams,
 
     /// Healpix depth used for spatial binning (nested representation).
     ///
@@ -335,58 +311,12 @@ pub struct EngineConfig {
     /// - [`EngineConfig::storage_path_buf`] (`Utf8PathBuf`)
     storage_path: String,
 
-    /// Number of delta steps after which the graph is compacted.
-    /// This is a safeguard to keep load times bounded by preventing an unbounded number of deltas.
-    ///
-    /// When the number of delta files in the journal exceeds this threshold,
-    /// the stage triggers a full compaction (snapshot rebuild + delta pruning).
-    pub compact_graph_every_delta: usize,
-
     /// Minimum log level that the CLI subscriber will record.
     ///
     /// Accepted YAML values: `"trace"`, `"debug"`, `"info"`, `"warn"`, `"error"`.
     /// Defaults to `"info"`. This value is only read by the CLI; the engine
     /// itself only emits tracing events and does not install any subscriber.
     pub log_level: LogLevel,
-
-    /// Half of the exposure duration in days, used to define the time window around predictions for tracklet associations.
-    pub half_exposure_days: MJDTT,
-
-    /// Chi-squared threshold for Mahalanobis distance used in tracklet associations.
-    /// This threshold determines how close an observation must be to a tracklet's predicted position
-    /// (in terms of the tracklet's covariance) to be considered a potential match.
-    pub chi2_threshold: f64,
-
-    /// Sigma multiplier `k` used to inflate the bounding box around predictions during spatial pre-filtering in tracklet associations.
-    /// This parameter controls the size of the bounding box in equatorial coordinates, which is derived from the prediction covariance in ecliptic coordinates.
-    pub association_sigma: f64,
-
-    /// Acceleration spectral density used as process noise during state propagation
-    /// (rad²·day⁻³).
-    ///
-    /// This parameter controls how much uncertainty is injected into the state
-    /// covariance per unit time to account for unmodelled dynamical forces
-    /// (gravitational perturbations, non-gravitational forces, etc.).
-    ///
-    /// During propagation over a time step $\Delta t$, the process noise
-    /// contribution to the position variance scales as:
-    ///
-    /// $$\sigma^2_\text{pos} \sim \frac{q\,\Delta t^3}{3}$$
-    ///
-    /// Typical values
-    /// --------------
-    /// | Population        | `q` (rad²·day⁻³) |
-    /// |-------------------|-------------------|
-    /// | Main-belt         | `1e-12`           |
-    /// | Near-Earth (NEO)  | `1e-10`           |
-    /// | Comet             | `1e-8`            |
-    ///
-    /// Set to `0.0` to disable process noise entirely (pure kinematic propagation).
-    pub process_noise_q: f64,
-
-    pub singer_params: Option<SingerParams>,
-
-    pub max_magnitude_diff: f64,
 }
 
 impl Default for EngineConfig {
@@ -403,27 +333,24 @@ impl Default for EngineConfig {
             version: 1,
             pairs: PairConfig::default(),
             triplets: TripletConfig::default(),
-            edges: EdgeConfig::default(),
-            solver_config: SolverConfig::default(),
-            max_gap_nights: 3,
-            healpix_depth: 8,
+            kalman_shared_context: KalmanContextConfig::default(),
+            kfbank_config: KFBankConfig::default(),
+            seeding_grid_config: GridConfig::default(),
+            advance_params: NightAdvanceParams::default(),
             time_binner_width: 0.021, // ~30 min in days
+            healpix_depth: 8,
             storage_path: "./storage".to_string(),
-            compact_graph_every_delta: 20,
-            pipeline_policy: PersistPolicy::Full,
             // binary_compression: Compression::None,
             log_level: LogLevel::default(),
-            half_exposure_days: 1.0 / (24.0 * 60.0), // ~1 minutes in days (twice an LSST exposure (30 seconds))
-            chi2_threshold: 9.21, // default chi-squared threshold for Mahalanobis distance (99% confidence for 2 degrees of freedom)
-            association_sigma: 3.0, // default sigma multiplier for bounding box inflation in tracklet associations (3-sigma is a common choice for a good balance between recall and pruning)
-            process_noise_q: 1e-12, // main-belt default: ~1 arcsec position uncertainty over 30 days
-            singer_params: None,
-            max_magnitude_diff: 1.0,
         }
     }
 }
 
 impl EngineConfig {
+    pub fn build_context(&self) -> KalmanContext {
+        self.kalman_shared_context.build()
+    }
+
     /// Validate numeric ranges and cross-field consistency.
     ///
     /// Validation performed
@@ -482,21 +409,9 @@ impl EngineConfig {
             });
         }
 
-        if self.time_binner_width <= 0.0 {
-            return Err(ConfigError::Invalid {
-                msg: format!(
-                    "time_binner_width must be positive, got {}",
-                    self.time_binner_width
-                ),
-            });
-        }
-
         // SeedError -> ConfigError via #[from]
         self.pairs.validate()?;
         self.triplets.validate()?;
-
-        // EdgeConfigError -> ConfigError via #[from]
-        self.edges.validate()?;
 
         Ok(())
     }
@@ -513,11 +428,6 @@ impl EngineConfig {
     /// This is useful when the caller needs to join paths or store the result.
     pub fn storage_path_buf(&self) -> Utf8PathBuf {
         Utf8PathBuf::from(&self.storage_path)
-    }
-
-    /// Return the configured maximum inter-night gap (in nights).
-    pub fn max_gap_nights(&self) -> u8 {
-        self.max_gap_nights
     }
 }
 
@@ -576,7 +486,6 @@ pub fn load_engine_config_validated(path: &Utf8Path) -> Result<EngineConfig, Con
 
 #[cfg(test)]
 mod engine_config_tests {
-    use crate::{engine_config::error::EdgeConfigError, error::PredictorParamError};
 
     use super::*;
 
@@ -706,18 +615,9 @@ version: 1
         assert_eq!(cfg.version, 1);
 
         // A few stable default checks:
-        assert_eq!(cfg.max_gap_nights(), 3);
         assert_eq!(cfg.storage_path(), Utf8Path::new("./storage"));
 
         assert_ulps_eq!(cfg.pairs.max_dt, 0.06, max_ulps = 0);
-        assert_eq!(cfg.edges.top_k_per_left, Some(32));
-
-        // Predictor defaults are expected valid.
-        assert!(cfg.edges.predictor_config.k_sigma > 0.0);
-        cfg.edges
-            .predictor_config
-            .validate()
-            .expect("default predictor_config must validate");
     }
 
     #[test]
@@ -806,45 +706,6 @@ triplets:
     }
 
     #[test]
-    fn validate_rejects_invalid_edge_config() {
-        // top_k_per_left == 0 is rejected by EdgeConfig::validate()
-        let err = load_from_yaml_str(
-            r#"
-version: 1
-edges:
-  top_k_per_left: 0
-"#,
-        )
-        .unwrap_err();
-
-        match err {
-            ConfigError::Edges(_) => {}
-            _ => panic!("expected ConfigError::Edges, got {err:?}"),
-        }
-    }
-
-    #[test]
-    fn validate_rejects_invalid_predictor_config() {
-        // requires EngineConfig::validate() to call predictor_config.validate()
-        let err = load_from_yaml_str(
-            r#"
-version: 1
-edges:
-  predictor_config:
-    k_sigma: 0.0
-"#,
-        )
-        .unwrap_err();
-
-        match err {
-            ConfigError::Edges(EdgeConfigError::PredictorConfig(
-                PredictorParamError::InvalidKSigma(0.0),
-            )) => {}
-            _ => panic!("expected ConfigError::Predictor, got {err:?}"),
-        }
-    }
-
-    #[test]
     fn env_overrides_yaml_and_defaults() {
         let _guard = env_lock().lock().unwrap();
         let _clear = EnvGuard::clear("FINK_FAT__");
@@ -869,7 +730,6 @@ edges:
             load_engine_config_validated(&path).expect("config should load with env overrides");
 
         assert_relative_eq!(cfg.pairs.max_dt, 0.05, epsilon = 1e-15);
-        assert_eq!(cfg.edges.top_k_per_left, Some(42));
         assert_eq!(cfg.pairs.allow_same_timebin, false);
     }
 
@@ -1054,27 +914,6 @@ triplets:
             let expected = rad_from_arcmin(arcmin_f);
 
             assert_relative_eq!(cfg.triplets.max_pair_sep, expected, max_relative = 1e-13);
-        }
-
-        #[test]
-        fn prop_env_overrides_yaml_top_k_per_left(top_k_yaml in 1usize..512usize, top_k_env in 1usize..512usize) {
-            let _guard = env_lock().lock().unwrap();
-            let _clear = EnvGuard::clear("FINK_FAT__");
-
-            let yaml = format!(r#"
-version: 1
-edges:
-  top_k_per_left: {}
-"#, top_k_yaml);
-
-            let path = write_tmp_yaml(&yaml);
-
-            let _env = EnvGuard::set(&[
-                ("FINK_FAT__EDGES__TOP_K_PER_LEFT", &top_k_env.to_string()),
-            ]);
-
-            let cfg = load_engine_config_validated(&path).expect("config should load");
-            prop_assert_eq!(cfg.edges.top_k_per_left, Some(top_k_env));
         }
     }
 }
