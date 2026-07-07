@@ -1,171 +1,36 @@
-//! # Engine configuration (`EngineConfig`) and loading
+//! # Engine configuration (`engine_config`)
 //!
-//! This module defines the **root configuration** for the engine and the
-//! **validated loading** routine used by CLI / applications.
+//! This module is the engine's serde-based YAML configuration schema, rooted
+//! at [`EngineConfig`]. Loading and validating a configuration file is a
+//! three-stage pipeline:
 //!
-//! The engine configuration is designed around three constraints:
-//! - **Schema stability**: a `version` field enables forward compatibility.
-//! - **Strictness**: unknown keys are rejected (`deny_unknown_fields`) to catch
-//!   YAML typos early.
-//! - **Ergonomics**: missing fields fall back to Rust defaults
-//!   (`serde(default)` + `Default` impls).
+//! 1. **Load / merge** — [`load_engine_config_validated`] builds a
+//!    `config::Config` from [`EngineConfig::default`], overlays the YAML
+//!    file at the given path, then overlays `FINK_FAT__`-prefixed
+//!    environment variables (nested separator `__`), and deserializes the
+//!    result into [`EngineConfig`].
+//! 2. **Deserialize** — most nested sections use `#[serde(default,
+//!    deny_unknown_fields)]` so missing keys fall back to Rust defaults and
+//!    unknown keys are rejected as YAML typos rather than silently ignored.
+//! 3. **Validate** — [`EngineConfig::validate`] checks numeric ranges and
+//!    cross-field invariants not expressible through types alone; see
+//!    [`error::ConfigError`] for the resulting error taxonomy.
 //!
-//! In the runtime pipeline, the main sections map to major engine stages:
-//!
-//! - [`PairConfig`]:
-//!   intra-night pair generation pre-filter.
-//! - [`TripletConfig`]:
-//!   intra-night triplet generation, producing higher-quality seeds.
-//! - [`EdgeConfig`]:
-//!   inter-night edge construction (candidate retrieval + features + optional ML Top-K).
-//! - [`SolverConfig`]:
-//!   solver selection and solver-specific policies.
-//!
-//! Additional global knobs:
-//! - `max_gap_nights`: maximum inter-night gap considered for linking.
-//! - `storage_path`: root directory for on-disk persistence / artifacts.
-//!
-//! -----------------------------------------------------------------------------
-//! Configuration sources and precedence
-//! -----------------------------------------------------------------------------
-//!
-//! The loader [`load_engine_config_validated`] merges multiple sources using
-//! the `config` crate, with the following order (later sources override earlier):
-//!
-//! 1) **Rust defaults** (`EngineConfig::default()`).
-//! 2) **YAML file** at the provided path (required).
-//! 3) **Environment overrides** (optional), using prefix `FINK_FAT` and separator `__`.
-//!
-//! This produces a single `EngineConfig` instance which is then validated by
-//! [`EngineConfig::validate`].
-//!
-//! -----------------------------------------------------------------------------
-//! Environment override naming convention
-//! -----------------------------------------------------------------------------
-//!
-//! The environment loader is configured as:
-//! - prefix: `FINK_FAT`
-//! - separator: `__`
-//! - parsing: `try_parsing(true)`
-//!
-//! This implies that nested keys are addressed with double underscores.
-//! Example overrides (shell):
-//!
-//! ```bash
-//! # Override an integer field
-//! export FINK_FAT__MAX_GAP_NIGHTS=4
-//!
-//! # Override a nested field (if it is a plain numeric type)
-//! export FINK_FAT__EDGES__TOP_K_PER_LEFT=64
-//! ```
-//!
-//! Notes
-//! -----
-//! - Some fields use custom deserializers (e.g. unit parsing in pairs/triplets).
-//!   For those, providing a string value in the env may work, but the actual
-//!   behavior depends on the serde implementation of the corresponding field.
-//! - Because `deny_unknown_fields` is enabled, typos in env keys will fail
-//!   during deserialization.
-//!
-//! -----------------------------------------------------------------------------
-//! Validation strategy
-//! -----------------------------------------------------------------------------
-//!
-//! Validation is intentionally split into:
-//! - **schema version check** (`version`),
-//! - **local section validation** (pairs, triplets, edges, predictor),
-//! - **cross-field consistency** (global invariants).
-//!
-//! The current implementation performs:
-//! - `version == 1` (else [`ConfigError::UnsupportedVersion`]),
-//! - `pairs.validate()` and `triplets.validate()` (propagated as [`ConfigError::Seed`]),
-//! - `edges.validate()` (propagated as [`ConfigError::Edges`]).
-//!
-//! Extending validation is expected as new fields are added, e.g.:
-//! - validate the predictor configuration (`edges.predictor_config.validate()`),
-//! - validate global limits (e.g. `max_gap_nights > 0`),
-//! - validate storage path constraints.
-//!
-//! -----------------------------------------------------------------------------
-//! YAML example (minimal, with solver configuration filled)
-//! -----------------------------------------------------------------------------
-//!
-//! ```yaml
-//! version: 1
-//!
-//! storage_path: "./storage"
-//! max_gap_nights: 3
-//! compact_graph_every_delta: 20
-//! binary_compression: "None"
-//!
-//! pairs:
-//!   max_dt: "86.4 min"
-//!   max_angular_speed: "35 arcmin/day"
-//!   max_flux_difference: 5.0
-//!   allow_same_timebin: true
-//!
-//! triplets:
-//!   max_dt_between: "57.6 min"
-//!   max_pair_sep: "8.6 arcmin"
-//!   max_predicted_residual: "2.75 arcmin"
-//!   enforce_time_order: true
-//!   max_flux_difference: 5.0
-//!
-//! edges:
-//!   ml_post_filter: false
-//!   edge_ranking_model_path: "edge_ranker.onnx"
-//!   top_k_per_left: 32
-//!   onnx_batch_size: 128
-//!   parallel_left_batches: true
-//!   parallel_left_batch_size: 512
-//!   predictor_config:
-//!     k_sigma: 3.0
-//!     noise:
-//!       variance_floor: 0.0
-//!       drift_per_day: 0.0
-//!       curvature_per_day2: 0.0
-//!     pad_cell_radius: true
-//!     time_bin_dt: 0.021
-//!     v_slack: 0.0
-//!
-//! solver_config:
-//!   policy:
-//!     routing: Heuristics
-//!     trivial_max_nodes: 8
-//!     trivial_max_active_edges: 16
-//!     mcf_budget_s: 0.05
-//!     k_mcf_s_per_edge_logn: 1.0e-8
-//!     max_night_span_for_mcf: 4
-//!   bounded_beam:
-//!     max_tracks: 16
-//!     min_nodes: 3
-//!     beam_width: 64
-//!     max_out_per_node: 8
-//!     max_tracks_per_source: 8
-//!     max_expansions: 50000
-//!
-//! pipeline_policy:
-//!   PersistPolicy: Full
-//! ```
-//!
-//! Notes
-//! -----
-//! - The `policy.routing` field is serialized using Serde’s default enum encoding:
-//!   - `Heuristics` is written as the plain variant name,
-//!   - `Force(choice)` is written as a map like `{ Force: BoundedBeam }`.
-//! - The `bounded_beam` block corresponds to [`BoundedBeamConfig`](crate::engine_config::solver_config::bounded_beam_config::BoundedBeamConfig) and provides
-//!   hard guardrails on exploration and output size.
-//! - If additional solver families are added later, `solver_config` may grow
-//!   with extra sub-sections; keep the routing policy independent from solver
-//!   internal knobs.
-//!
-//! -----------------------------------------------------------------------------
-//! See also
-//! -----------------------------------------------------------------------------
-//!
-//! - [`crate::engine_config::units`]: human-friendly unit parsing for YAML fields.
-//! - [`crate::engine_config::error::ConfigError`]: unified error type returned by the loader.
-//! - [`PairConfig`], [`TripletConfig`], [`EdgeConfig`], [`SolverConfig`] for detailed section docs.
+//! Submodules
+//! ----------
+//! - [`pair_config`] / [`triplet_config`]: intra-night pair/triplet seeding.
+//! - [`kalman_context`] / [`single_kalman_config`]: shared ephemeris state
+//!   and per-hypothesis Kalman filter tuning.
+//! - [`kf_bank_config`] / [`hypothesis_cap`]: hypothesis-bank pruning/merging
+//!   and the live-hypothesis-count decay schedule.
+//! - [`grid_population`]: the `(ρ, ρ̇)` admissible-region seeding grid and
+//!   its dynamical population priors.
+//! - [`night_advance_params`]: tuning for advancing all banks by one night.
+//! - [`log_level`]: the engine's tracing verbosity setting.
+//! - [`error`]: the error types returned by the load/validate pipeline.
+//! - [`units`]: human-friendly YAML unit parsing shared by the fields above
+//!   (e.g. `"35 arcmin/day"`, `"86.4 min"`, `"0.02 au"`) — see that module's
+//!   doc for the full list of supported quantities and unit tokens.
 
 pub mod error;
 pub mod grid_population;
@@ -210,17 +75,25 @@ use crate::engine_config::{
 /// ------
 /// - `version`: schema version. Must match the expected version in
 ///   [`EngineConfig::validate`].
-/// - `pairs`: configuration for intra-night pair generation.
-/// - `triplets`: configuration for intra-night triplet generation.
-/// - `edges`: configuration for inter-night edge construction.
-/// - `solver_config`: solver policy and solver-specific knobs.
-/// - `max_gap_nights`: maximum inter-night gap considered when linking nights.
+/// - `pairs`: configuration for intra-night pair generation ([`PairConfig`]).
+/// - `triplets`: configuration for intra-night triplet generation
+///   ([`TripletConfig`]).
+/// - `kalman_shared_context`: shared ephemeris/UT1 state and per-hypothesis
+///   Kalman tuning ([`KalmanContextConfig`]).
+/// - `kfbank_config`: hypothesis-bank pruning/merging tuning ([`KFBankConfig`]).
+/// - `seeding_grid_config`: `(ρ, ρ̇)` admissible-region seeding grid
+///   ([`GridConfig`]).
+/// - `advance_params`: tuning for advancing all banks by one night
+///   ([`NightAdvanceParams`]).
+/// - `healpix_depth`: HEALPix tessellation depth for spatial binning.
+/// - `time_binner_width`: time bin width for temporal binning.
 /// - `storage_path`: root directory for on-disk artifacts produced by the pipeline.
+/// - `log_level`: minimum tracing/log level for the CLI subscriber.
 ///
 /// Notes
 /// -----
-/// - `max_gap_nights` and `storage_path` are stored as private fields and exposed
-///   through accessors to keep the public API stable.
+/// - `storage_path` is stored as a private field and exposed through
+///   accessors to keep the public API stable.
 /// - The storage path is stored as a UTF-8 string and exposed as `Utf8Path`
 ///   for ergonomics and OS-independent handling.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -235,12 +108,21 @@ pub struct EngineConfig {
     /// Intra-night triplet generation configuration.
     pub triplets: TripletConfig,
 
+    /// Shared ephemeris/UT1 state and per-hypothesis Kalman filter tuning,
+    /// built once at startup via [`EngineConfig::build_context`]. See
+    /// [`KalmanContextConfig`].
     pub kalman_shared_context: KalmanContextConfig,
 
+    /// Hypothesis-bank pruning, merging and search-region tuning. See
+    /// [`KFBankConfig`].
     pub kfbank_config: KFBankConfig,
 
+    /// `(ρ, ρ̇)` admissible-region seeding grid and dynamical population
+    /// priors used to initialize new tracklet hypotheses. See [`GridConfig`].
     pub seeding_grid_config: GridConfig,
 
+    /// Tuning parameters for advancing all hypothesis banks by one night.
+    /// See [`NightAdvanceParams`].
     pub advance_params: NightAdvanceParams,
 
     /// Healpix depth used for spatial binning (nested representation).
@@ -325,8 +207,8 @@ impl Default for EngineConfig {
     /// Defaults are chosen to be safe and conservative for typical pipelines:
     /// - version 1 schema,
     /// - LSST/ZTF-like seeding defaults for pairs/triplets,
-    /// - ML Top-K edge construction defaults,
-    /// - a small `max_gap_nights` for bounded fan-out,
+    /// - defaults for the Kalman context, hypothesis-bank and seeding-grid
+    ///   sections as documented on their respective types,
     /// - `./storage` as the persistence root.
     fn default() -> Self {
         Self {
@@ -340,7 +222,6 @@ impl Default for EngineConfig {
             time_binner_width: 0.021, // ~30 min in days
             healpix_depth: 8,
             storage_path: "./storage".to_string(),
-            // binary_compression: Compression::None,
             log_level: LogLevel::default(),
         }
     }
@@ -357,11 +238,13 @@ impl EngineConfig {
     /// --------------------
     /// - Schema version:
     ///   - `version` must be `1`.
+    /// - `storage_path`:
+    ///   - must be non-empty and must not already exist as a file.
+    /// - `healpix_depth`:
+    ///   - must be `≤ 29`.
     /// - Seeding section:
     ///   - [`PairConfig::validate`],
     ///   - [`TripletConfig::validate`].
-    /// - Edge section:
-    ///   - [`EdgeConfig::validate`].
     ///
     /// Return
     /// ------
@@ -371,14 +254,16 @@ impl EngineConfig {
     /// Errors
     /// ------
     /// - [`ConfigError::UnsupportedVersion`] if `version != 1`.
+    /// - [`ConfigError::Invalid`] for the `storage_path`/`healpix_depth` checks above.
     /// - [`ConfigError::Seed`] for pairs/triplets validation errors.
-    /// - [`ConfigError::Edges`] for edge validation errors.
     ///
     /// Notes
     /// -----
-    /// This function currently does not validate `max_gap_nights` nor the
-    /// predictor configuration embedded in `edges`. If those are operationally
-    /// required invariants, add checks here to centralize validation.
+    /// This function does not validate `kalman_shared_context`,
+    /// `kfbank_config`, `seeding_grid_config`, `advance_params`, or
+    /// `time_binner_width` — those types currently have no `validate()`
+    /// method of their own (see each type's own doc for the numeric-range
+    /// expectations that are documented but not enforced at load time).
     pub fn validate(&self) -> Result<(), ConfigError> {
         if self.version != 1 {
             return Err(ConfigError::UnsupportedVersion(self.version));
@@ -714,15 +599,12 @@ triplets:
 version: 1
 pairs:
   max_dt: 0.06
-edges:
-  top_k_per_left: 10
 "#;
         let path = write_tmp_yaml(yaml);
 
         // env > yaml > defaults
         let _env = EnvGuard::set(&[
             ("FINK_FAT__PAIRS__MAX_DT", "0.05"),
-            ("FINK_FAT__EDGES__TOP_K_PER_LEFT", "42"),
             ("FINK_FAT__PAIRS__ALLOW_SAME_TIMEBIN", "false"),
         ]);
 

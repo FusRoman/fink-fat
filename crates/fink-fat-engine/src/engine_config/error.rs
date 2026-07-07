@@ -1,16 +1,18 @@
-//! # Engine configuration error types (`ConfigError`, `EdgeConfigError`)
+//! # Engine configuration error types (`ConfigError`)
 //!
-//! This module defines the error types used by the **engine configuration layer**.
+//! This module defines the error type used by the **engine configuration layer**.
 //!
-//! The configuration system typically has three stages:
+//! The configuration system has three stages:
 //!
-//! 1) **Loading / merging** configuration sources (files, environment overrides, defaults)
-//!    using the `config` crate.
+//! 1) **Loading / merging** configuration sources (YAML file, environment
+//!    overrides, Rust defaults) using the `config` crate — see
+//!    [`crate::engine_config::load_engine_config_validated`].
 //! 2) **Deserialization** into strongly-typed Rust structs (e.g. `PairConfig`,
-//!    `TripletConfig`, `PredictorParams`, `EdgeConfig`).
-//! 3) **Validation** of numeric ranges and cross-field invariants.
+//!    `TripletConfig`, `KFBankConfig`).
+//! 3) **Validation** of numeric ranges and cross-field invariants — see
+//!    [`crate::engine_config::EngineConfig::validate`].
 //!
-//! The errors in this module are designed to preserve enough context so the
+//! The error in this module is designed to preserve enough context so the
 //! caller can decide whether the failure is:
 //! - an I/O / parsing problem (cannot load the config),
 //! - a schema mismatch (unsupported version),
@@ -21,40 +23,33 @@
 //! Error taxonomy
 //! -----------------------------------------------------------------------------
 //!
-//! ## [`ConfigError`]
-//!
-//! High-level error enum returned by the configuration loader / validator.
-//! It groups failures by their origin:
+//! [`ConfigError`] is the high-level error enum returned by the configuration
+//! loader / validator. It groups failures by their origin:
 //!
 //! - Loader failures from the `config` crate (`ConfigRs`): missing file, invalid YAML,
-//!   environment override parsing errors, etc.
+//!   environment override parsing errors, type mismatches during
+//!   deserialization (this is also where `deny_unknown_fields` violations and
+//!   `engine_config::units` unit-parsing failures surface, since both happen
+//!   during deserialization).
 //! - Versioning errors (`UnsupportedVersion`): the config file declares a schema
 //!   version the engine does not understand.
-//! - Static “invalid config” markers (`Invalid`): used when a particular invariant
-//!   is violated but does not fit a more specialized error type.
-//! - Parameter-level validation failures for:
-//!   - seeding (`Seed`): pairs/triplets parameter validation,
-//!   - propagation predictor (`Predictor`): predictor parameters / noise schedule,
-//!   - edge construction (`Edges`): edge configuration constraints.
+//! - Static “invalid config” markers (`Invalid`): used for invariants checked
+//!   directly in [`EngineConfig::validate`] (e.g. `storage_path`,
+//!   `healpix_depth`) that don't warrant a dedicated error type.
+//! - Parameter-level validation failures for seeding (`Seed`): pairs/triplets
+//!   parameter validation, propagated from [`SeedError`].
 //!
 //! This structure enables the top-level CLI / application to provide clear
 //! user-facing messages such as:
 //! - “YAML parsing error”
 //! - “unsupported config version”
 //! - “pairs.max_dt must be non-negative”
-//! - “edges.top_k_per_left must be > 0”
-//!
-//! ## [`EdgeConfigError`]
-//!
-//! Specialized error enum for edge configuration validation.
-//! This is separated so the edge subsystem can evolve its own invariants without
-//! making `ConfigError` too large or too coupled to edge internals.
 //!
 //! -----------------------------------------------------------------------------
 //! Propagation and `#[from]` conversions
 //! -----------------------------------------------------------------------------
 //!
-//! Both error enums use `thiserror` and rely heavily on `#[from]` to support
+//! `ConfigError` uses `thiserror` and relies on `#[from]` to support
 //! ergonomic propagation with `?`.
 //!
 //! Typical usage:
@@ -64,8 +59,6 @@
 //!     let cfg: EngineConfig = loader.load()?;      // may produce ConfigRsError
 //!     cfg.pairs.validate()?;                        // may produce SeedError
 //!     cfg.triplets.validate()?;                     // may produce SeedError
-//!     cfg.edges.validate()?;                        // may produce EdgeConfigError
-//!     cfg.edges.predictor_config.validate()?;       // may produce PredictorParamError
 //!     Ok(cfg)
 //! }
 //! ```
@@ -75,13 +68,13 @@
 //! -----------------------------------------------------------------------------
 //!
 //! - Deserialization failures caused by `deny_unknown_fields` on config structs
-//!   are usually surfaced as `ConfigRsError` during the load/deserialize step.
+//!   are surfaced as `ConfigError::ConfigRs` during the load/deserialize step.
 //! - Unit parsing failures (e.g. `"35 foounit/day"`) from `engine_config::units`
-//!   also surface as deserialization errors and are therefore typically wrapped
-//!   by `ConfigRsError`.
+//!   also surface as deserialization errors and are therefore wrapped by
+//!   `ConfigError::ConfigRs`.
 //! - Post-deserialization semantic checks (finite / non-negative / cross-field
-//!   constraints) should use the dedicated `validate()` routines and produce
-//!   `SeedError`, `PredictorParamError`, or `EdgeConfigError` for precise messages.
+//!   constraints) use the dedicated `validate()` routines on `PairConfig` and
+//!   `TripletConfig` and produce `ConfigError::Seed` for precise messages.
 
 use thiserror::Error;
 
@@ -106,10 +99,6 @@ use crate::error::SeedError;
 ///   a coarse invalid-config marker for invariants that do not have a dedicated error.
 /// - [`ConfigError::Seed`]:
 ///   seeding parameter validation failure (pairs/triplets).
-/// - [`ConfigError::Predictor`]:
-///   predictor parameter validation failure (kσ, noise coefficients, etc.).
-/// - [`ConfigError::Edges`]:
-///   edge construction configuration validation failure.
 #[derive(Debug, Error)]
 pub enum ConfigError {
     /// Error produced by the `config` crate while loading configuration sources.

@@ -215,7 +215,7 @@ pub fn admissible_region_grid<'state_lf>(
         // Per-node range/range-rate covariance: half the local grid-cell
         // width (range axis) and half the local bound-orbit interval per
         // sampled node (range-rate axis) — see the module-level doc comment.
-        let sigma_rho = rho_cell_halfwidth(rho, config).max(config.sigma_pos_rad_floor);
+        let sigma_rho = rho_cell_halfwidth(rho, config).max(config.sigma_pos_au_floor);
         let sigma_rho_dot =
             (0.5 * rho_dot_interval / config.n_rho_dot as f64).max(config.sigma_rho_dot_floor);
         let var_rho = sigma_rho * sigma_rho;

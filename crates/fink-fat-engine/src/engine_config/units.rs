@@ -20,8 +20,13 @@
 //! - **Angles**: radians
 //! - **Time**: days
 //! - **Angular speed**: radians per day
+//! - **Length**: astronomical units (AU)
+//! - **Speed**: astronomical units per day (AU/day)
+//! - **Angular variance**: radians squared (rad²)
+//! - **Angular acceleration**: radians per day squared (rad/day²)
 //!
-//! The public entry points (`de_*`) always return `f64` in canonical units.
+//! The public entry points (`de_*`) always return `f64` (or `[f64; 2]` for
+//! [`de_angle_var_rad2_pair`]) in canonical units.
 //!
 //! -----------------------------------------------------------------------------
 //! Accepted YAML syntaxes
@@ -106,7 +111,28 @@
 //! - `"min"`, `"minute"`, `"minutes"`
 //! - `"sec"`, `"second"`, `"seconds"`, `"s"`, `"seconde"`, `"secondes"`
 //!
-//! For angular speeds, the denominator supports the same time units.
+//! For angular speeds and angular accelerations, the denominator supports the
+//! same time units (angular accelerations additionally require a trailing
+//! `"^2"` or `"2"` on the denominator, e.g. `"day^2"` / `"day2"`).
+//!
+//! Length units
+//! ------------
+//! Accepted length units (case-insensitive), canonical unit **AU**:
+//! - `"au"`, `"ua"` (French alias)
+//! - `"km"`, `"kilometer"`, `"kilometers"`, `"kilometre"`, `"kilometres"`
+//!   (converted using 1 AU = 149 597 870.7 km)
+//! - `"m"`, `"meter"`, `"meters"`, `"metre"`, `"metres"`
+//!
+//! For speeds, the denominator supports the same time units as above.
+//!
+//! Angular variance
+//! ----------------
+//! [`de_angle_var_rad2`] and [`de_angle_var_rad2_pair`] follow a
+//! **"sigma-in, variance-out"** convention: a numeric YAML scalar is assumed
+//! to already be a variance in rad², but a *string* is interpreted as a
+//! **1-sigma angle** (e.g. `"0.1 arcsec"`) using the angle units above, then
+//! squared to produce the variance. This asymmetry exists because users
+//! naturally think in terms of an angular precision (sigma), not its square.
 //!
 //! -----------------------------------------------------------------------------
 //! Error handling and validation philosophy
@@ -154,7 +180,14 @@
 //! Each function converts the YAML value into canonical units:
 //! - [`de_time_days`]: time → days
 //! - [`de_angle_rad`]: angle → radians
+//! - [`de_angle_rad_opt`]: optional angle → radians (currently unused in-tree;
+//!   kept as ready-to-use public API for a future optional-angle field)
 //! - [`de_ang_speed_rad_per_day`]: angular speed → radians/day
+//! - [`de_length_au`]: length → AU
+//! - [`de_speed_au_per_day`]: speed → AU/day
+//! - [`de_angle_var_rad2`]: angle variance (or 1-sigma angle) → rad²
+//! - [`de_angle_var_rad2_pair`]: pair of angle variances (or 1-sigma angles) → `[rad²; 2]`
+//! - [`de_ang_accel_rad_per_day2`]: angular acceleration → rad/day²
 
 use serde::Deserialize;
 use serde::de;
@@ -235,6 +268,10 @@ where
 /// max_cone_radius: "100 arcmin"   # Some(100 arcmin in rad)
 /// # max_cone_radius:              # None (field absent)
 /// ```
+///
+/// Note: no field in this crate currently uses this deserializer. It is kept
+/// as ready-to-use public API for a future `Option<f64>` angle field rather
+/// than being dead code to prune.
 pub fn de_angle_rad_opt<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -274,9 +311,154 @@ where
     }
 }
 
+/// Deserialize a length quantity into **astronomical units (AU)** (`f64`).
+///
+/// Accepted inputs
+/// ---------------
+/// - Numeric YAML scalar (assumed **AU**):
+///   - `0.02`
+/// - String with explicit length unit:
+///   - `"0.02 au"`, `"0.02 ua"`, `"2992.0 km"`, `"1 m"`.
+///
+/// Errors
+/// ------
+/// Returns a serde error if:
+/// - the string cannot be parsed as `<value> <unit>` (or `<value><unit>`),
+/// - or the unit is not a supported length unit.
+pub fn de_length_au<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match NumOrStr::deserialize(deserializer)? {
+        NumOrStr::Num(x) => Ok(x),
+        NumOrStr::Str(s) => parse_length_au(&s).map_err(de::Error::custom),
+    }
+}
+
+/// Deserialize a speed quantity into **AU/day** (`f64`).
+///
+/// Accepted inputs
+/// ---------------
+/// - Numeric YAML scalar (assumed **AU/day**):
+///   - `1.0e-4`
+/// - String of the form `<length>/<time>`, with optional spaces:
+///   - `"0.02 au/day"`
+///   - `"149597.8707 km / hour"`
+///
+/// Errors
+/// ------
+/// Returns a serde error if:
+/// - the string is missing `'/'`, has more than one `'/'`,
+/// - the numerator cannot be parsed as a length quantity,
+/// - or the denominator unit is not a supported time unit.
+pub fn de_speed_au_per_day<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match NumOrStr::deserialize(deserializer)? {
+        NumOrStr::Num(x) => Ok(x),
+        NumOrStr::Str(s) => parse_speed_au_per_day(&s).map_err(de::Error::custom),
+    }
+}
+
+/// Deserialize an angular variance into **rad²** (`f64`).
+///
+/// Follows a **"sigma-in, variance-out"** convention:
+/// - Numeric YAML scalar: assumed already a variance, **rad²**:
+///   - `2.35e-13`
+/// - String with an explicit angle unit: interpreted as a **1-sigma angle**
+///   and squared, e.g. `"0.1 arcsec"` → `(0.1 arcsec in rad)²`.
+///
+/// Errors
+/// ------
+/// Returns a serde error if the string cannot be parsed as an angle quantity
+/// (see [`de_angle_rad`] for the accepted angle units).
+pub fn de_angle_var_rad2<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match NumOrStr::deserialize(deserializer)? {
+        NumOrStr::Num(x) => Ok(x),
+        NumOrStr::Str(s) => parse_angle_sigma_to_var_rad2(&s).map_err(de::Error::custom),
+    }
+}
+
+/// Deserialize a pair of angular variances into **`[rad²; 2]`**.
+///
+/// Each element of the 2-element YAML sequence independently follows the
+/// same "sigma-in, variance-out" convention as [`de_angle_var_rad2`]:
+///
+/// ```yaml
+/// obs_noise: [2.35e-13, "0.1 arcsec"]
+/// ```
+///
+/// Errors
+/// ------
+/// Returns a serde error if the sequence does not have exactly 2 elements, or
+/// if either element cannot be parsed as an angle quantity.
+pub fn de_angle_var_rad2_pair<'de, D>(deserializer: D) -> Result<[f64; 2], D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let pair = <[NumOrStr; 2]>::deserialize(deserializer)?;
+    let mut out = [0.0_f64; 2];
+    for (slot, item) in out.iter_mut().zip(pair) {
+        *slot = match item {
+            NumOrStr::Num(x) => x,
+            NumOrStr::Str(s) => parse_angle_sigma_to_var_rad2(&s).map_err(de::Error::custom)?,
+        };
+    }
+    Ok(out)
+}
+
+/// Deserialize an angular acceleration into **rad/day²** (`f64`).
+///
+/// Accepted inputs
+/// ---------------
+/// - Numeric YAML scalar (assumed **rad/day²**):
+///   - `1.0e-4`
+/// - String of the form `<angle>/<time>^2` (or `<angle>/<time>2`):
+///   - `"1 arcsec/day^2"`
+///   - `"0.5 arcmin/hour2"`
+///
+/// Errors
+/// ------
+/// Returns a serde error if:
+/// - the string is missing `'/'`, has more than one `'/'`,
+/// - the numerator cannot be parsed as an angle quantity,
+/// - the denominator is missing the `^2`/`2` time-squared suffix,
+/// - or the denominator's time unit is not supported.
+pub fn de_ang_accel_rad_per_day2<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match NumOrStr::deserialize(deserializer)? {
+        NumOrStr::Num(x) => Ok(x),
+        NumOrStr::Str(s) => parse_ang_accel_rad_per_day2(&s).map_err(de::Error::custom),
+    }
+}
+
 /* -------------------------------------------------------------------------- */
 /*  Parsers                                                                    */
 /* -------------------------------------------------------------------------- */
+
+/// Return the number of days represented by one unit of `unit` (already
+/// normalized via [`normalize_unit`]).
+///
+/// Shared by [`parse_time_days`], [`parse_ang_speed_rad_per_day`],
+/// [`parse_speed_au_per_day`] and [`parse_ang_accel_rad_per_day2`] so the
+/// time-unit table is defined in exactly one place.
+fn time_unit_to_days(unit: &str) -> Result<f64, String> {
+    match unit {
+        "d" | "day" | "days" | "jour" | "jours" => Ok(1.0),
+        "h" | "hour" | "hours" | "heure" | "heures" => Ok(1.0 / 24.0),
+        "min" | "minute" | "minutes" => Ok(1.0 / (24.0 * 60.0)),
+        "s" | "sec" | "second" | "seconds" | "seconde" | "secondes" => Ok(1.0 / (24.0 * 3600.0)),
+        _ => Err(format!(
+            "Unsupported time unit '{unit}'. Expected one of: day, hour, min, sec (and French aliases)."
+        )),
+    }
+}
 
 /// Parse a time quantity and return the value expressed in **days**.
 ///
@@ -288,20 +470,8 @@ where
 fn parse_time_days(input: &str) -> Result<f64, String> {
     let (value, unit) = split_value_unit(input)?;
     let u = normalize_unit(&unit);
-
-    let days = match u.as_str() {
-        "d" | "day" | "days" | "jour" | "jours" => value,
-        "h" | "hour" | "hours" | "heure" | "heures" => value / 24.0,
-        "min" | "minute" | "minutes" => value / (24.0 * 60.0),
-        "s" | "sec" | "second" | "seconds" | "seconde" | "secondes" => value / (24.0 * 3600.0),
-        _ => {
-            return Err(format!(
-                "Unsupported time unit '{unit}'. Expected one of: day, hour, min, sec (and French aliases)."
-            ));
-        }
-    };
-
-    Ok(days)
+    let days_per_unit = time_unit_to_days(&u)?;
+    Ok(value * days_per_unit)
 }
 
 /// Parse an angle quantity and return the value expressed in **radians**.
@@ -372,19 +542,150 @@ fn parse_ang_speed_rad_per_day(input: &str) -> Result<f64, String> {
 
     // Right side is "<time_unit>" (optionally with a leading "per", but not required)
     let time_unit = normalize_unit(right.trim_start_matches("per").trim());
-    let days = match time_unit.as_str() {
-        "d" | "day" | "days" | "jour" | "jours" => 1.0,
-        "h" | "hour" | "hours" | "heure" | "heures" => 1.0 / 24.0,
-        "min" | "minute" | "minutes" => 1.0 / (24.0 * 60.0),
-        "s" | "sec" | "second" | "seconds" | "seconde" | "secondes" => 1.0 / (24.0 * 3600.0),
+    let days = time_unit_to_days(&time_unit).map_err(|_| {
+        format!(
+            "Unsupported time unit '{right}' in angular speed denominator. Expected day/hour/min/sec (and French aliases)."
+        )
+    })?;
+
+    Ok(angle_rad / days)
+}
+
+/// Parse a length quantity and return the value expressed in **AU**.
+///
+/// Expected syntax:
+/// - `"<value> <unit>"` (preferred)
+/// - `"<value><unit>"` (best-effort)
+///
+/// Supported units are documented at the module level.
+fn parse_length_au(input: &str) -> Result<f64, String> {
+    let (value, unit) = split_value_unit(input)?;
+    let u = normalize_unit(&unit);
+
+    /// IAU-defined astronomical unit, in kilometers.
+    const KM_PER_AU: f64 = 149_597_870.7;
+
+    let au = match u.as_str() {
+        "au" | "ua" => value,
+        "km" | "kilometer" | "kilometers" | "kilometre" | "kilometres" => value / KM_PER_AU,
+        "m" | "meter" | "meters" | "metre" | "metres" => value / (KM_PER_AU * 1000.0),
         _ => {
             return Err(format!(
-                "Unsupported time unit '{right}' in angular speed denominator. Expected day/hour/min/sec (and French aliases)."
+                "Unsupported length unit '{unit}'. Expected one of: au, km, m (and French alias 'ua')."
             ));
         }
     };
 
-    Ok(angle_rad / days)
+    Ok(au)
+}
+
+/// Parse a 1-sigma angle quantity and return the corresponding **variance,
+/// in rad²** (i.e. the parsed angle in radians, squared).
+///
+/// See the module-level "Angular variance" section for the sigma-in,
+/// variance-out convention.
+fn parse_angle_sigma_to_var_rad2(input: &str) -> Result<f64, String> {
+    let sigma_rad = parse_angle_rad(input)?;
+    Ok(sigma_rad * sigma_rad)
+}
+
+/// Parse a speed and return the value expressed in **AU/day**.
+///
+/// Expected syntax:
+/// ```text
+/// <length> / <time>
+/// ```
+///
+/// Examples:
+/// - `"0.02 au/day"`
+/// - `"149597.8707 km / hour"`
+///
+/// Numerator parsing:
+/// - must be a valid length quantity accepted by [`parse_length_au`].
+///
+/// Denominator parsing:
+/// - must be a supported time unit (optionally prefixed by `"per"`).
+fn parse_speed_au_per_day(input: &str) -> Result<f64, String> {
+    let s = input.trim();
+
+    let mut parts = s.split('/').map(str::trim);
+    let left = parts
+        .next()
+        .ok_or_else(|| "Invalid speed: missing numerator".to_string())?;
+    let right = parts
+        .next()
+        .ok_or_else(|| "Invalid speed: missing denominator (e.g. '/day')".to_string())?;
+
+    if parts.next().is_some() {
+        return Err("Invalid speed: too many '/' separators".to_string());
+    }
+
+    let length_au = parse_length_au(left)?;
+
+    let time_unit = normalize_unit(right.trim_start_matches("per").trim());
+    let days = time_unit_to_days(&time_unit).map_err(|_| {
+        format!(
+            "Unsupported time unit '{right}' in speed denominator. Expected day/hour/min/sec (and French aliases)."
+        )
+    })?;
+
+    Ok(length_au / days)
+}
+
+/// Parse an angular acceleration and return the value expressed in
+/// **rad/day²**.
+///
+/// Expected syntax:
+/// ```text
+/// <angle> / <time>^2
+/// ```
+/// (the `^` is optional: `<time>2` is also accepted, e.g. `"day2"`).
+///
+/// Examples:
+/// - `"1 arcsec/day^2"`
+/// - `"0.5 arcmin/hour2"`
+///
+/// Numerator parsing:
+/// - must be a valid angle quantity accepted by [`parse_angle_rad`].
+///
+/// Denominator parsing:
+/// - must be a supported time unit followed by a `^2`/`2` suffix (optionally
+///   prefixed by `"per"`).
+fn parse_ang_accel_rad_per_day2(input: &str) -> Result<f64, String> {
+    let s = input.trim();
+
+    let mut parts = s.split('/').map(str::trim);
+    let left = parts
+        .next()
+        .ok_or_else(|| "Invalid angular acceleration: missing numerator".to_string())?;
+    let right = parts.next().ok_or_else(|| {
+        "Invalid angular acceleration: missing denominator (e.g. '/day^2')".to_string()
+    })?;
+
+    if parts.next().is_some() {
+        return Err("Invalid angular acceleration: too many '/' separators".to_string());
+    }
+
+    let angle_rad = parse_angle_rad(left)?;
+
+    let right_trimmed = right.trim_start_matches("per").trim();
+    let time_token = right_trimmed
+        .strip_suffix("^2")
+        .or_else(|| right_trimmed.strip_suffix('2'))
+        .ok_or_else(|| {
+            format!(
+                "Invalid angular acceleration denominator '{right}': expected a time unit squared, e.g. 'day^2' or 'day2'."
+            )
+        })?;
+
+    let time_unit = normalize_unit(time_token.trim());
+    let days = time_unit_to_days(&time_unit).map_err(|_| {
+        format!(
+            "Unsupported time unit '{time_token}' in angular acceleration denominator. Expected day/hour/min/sec (and French aliases)."
+        )
+    })?;
+
+    Ok(angle_rad / (days * days))
 }
 
 /* -------------------------------------------------------------------------- */
@@ -543,6 +844,55 @@ mod config_units_tests {
     }
 
     #[test]
+    fn length_parsing_smoke() {
+        let a = parse_length_au("1 au").unwrap();
+        assert_relative_eq!(a, 1.0, epsilon = 1e-14);
+
+        let a = parse_length_au("1 ua").unwrap();
+        assert_relative_eq!(a, 1.0, epsilon = 1e-14);
+
+        let a = parse_length_au("149597870.7 km").unwrap();
+        assert_relative_eq!(a, 1.0, epsilon = 1e-9);
+
+        let a = parse_length_au("149597870700 m").unwrap();
+        assert_relative_eq!(a, 1.0, epsilon = 1e-9);
+
+        let a = parse_length_au("0.02au").unwrap();
+        assert_relative_eq!(a, 0.02, epsilon = 1e-14);
+    }
+
+    #[test]
+    fn speed_au_per_day_parsing_smoke() {
+        let s = parse_speed_au_per_day("1 au/day").unwrap();
+        assert_relative_eq!(s, 1.0, epsilon = 1e-14);
+
+        let s = parse_speed_au_per_day("1 au/hour").unwrap();
+        assert_relative_eq!(s, 24.0, epsilon = 1e-13);
+    }
+
+    #[test]
+    fn angle_var_parsing_smoke() {
+        let v = parse_angle_sigma_to_var_rad2("1 rad").unwrap();
+        assert_relative_eq!(v, 1.0, epsilon = 1e-14);
+
+        let v = parse_angle_sigma_to_var_rad2("0.1 arcsec").unwrap();
+        let sigma = (0.1_f64 / 3600.0).to_radians();
+        assert_relative_eq!(v, sigma * sigma, epsilon = 1e-30);
+    }
+
+    #[test]
+    fn ang_accel_parsing_smoke() {
+        let a = parse_ang_accel_rad_per_day2("1 rad/day^2").unwrap();
+        assert_relative_eq!(a, 1.0, epsilon = 1e-14);
+
+        let a = parse_ang_accel_rad_per_day2("1 rad/day2").unwrap();
+        assert_relative_eq!(a, 1.0, epsilon = 1e-14);
+
+        let a = parse_ang_accel_rad_per_day2("1 rad/hour^2").unwrap();
+        assert_relative_eq!(a, 24.0 * 24.0, epsilon = 1e-11);
+    }
+
+    #[test]
     fn invalid_inputs() {
         assert!(parse_angle_rad("").is_err());
         assert!(parse_time_days("10").is_err()); // missing unit
@@ -550,6 +900,10 @@ mod config_units_tests {
         assert!(parse_time_days("10 fortnight").is_err());
         assert!(parse_ang_speed_rad_per_day("10 arcmin").is_err()); // missing denominator
         assert!(parse_ang_speed_rad_per_day("10 arcmin/day/hour").is_err()); // too many '/'
+        assert!(parse_length_au("10 parsec").is_err());
+        assert!(parse_speed_au_per_day("10 au").is_err()); // missing denominator
+        assert!(parse_ang_accel_rad_per_day2("1 rad/day").is_err()); // missing ^2/2 suffix
+        assert!(parse_ang_accel_rad_per_day2("1 rad/day^2/hour").is_err()); // too many '/'
     }
 
     /* ---------------------------------------------------------------------- */
@@ -574,6 +928,36 @@ mod config_units_tests {
         w: f64,
     }
 
+    #[derive(Debug, Deserialize)]
+    struct WrapLength {
+        #[serde(deserialize_with = "de_length_au")]
+        l: f64,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct WrapSpeed {
+        #[serde(deserialize_with = "de_speed_au_per_day")]
+        v: f64,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct WrapAngleVar {
+        #[serde(deserialize_with = "de_angle_var_rad2")]
+        v: f64,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct WrapAngleVarPair {
+        #[serde(deserialize_with = "de_angle_var_rad2_pair")]
+        obs_noise: [f64; 2],
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct WrapAngAccel {
+        #[serde(deserialize_with = "de_ang_accel_rad_per_day2")]
+        a: f64,
+    }
+
     #[test]
     fn serde_accepts_number_or_string() {
         // Numeric stays unchanged (already in canonical internal units).
@@ -589,6 +973,34 @@ mod config_units_tests {
 
         let w: WrapRate = serde_yaml::from_str("w: \"60 arcmin/day\"").unwrap();
         assert_relative_eq!(w.w, 1f64.to_radians(), epsilon = 1e-14);
+    }
+
+    #[test]
+    fn serde_accepts_new_unit_families() {
+        let l: WrapLength = serde_yaml::from_str("l: 0.02").unwrap();
+        assert_relative_eq!(l.l, 0.02, epsilon = 0.0);
+
+        let l: WrapLength = serde_yaml::from_str("l: \"149597870.7 km\"").unwrap();
+        assert_relative_eq!(l.l, 1.0, epsilon = 1e-9);
+
+        let v: WrapSpeed = serde_yaml::from_str("v: \"1 au/hour\"").unwrap();
+        assert_relative_eq!(v.v, 24.0, epsilon = 1e-13);
+
+        let av: WrapAngleVar = serde_yaml::from_str("v: 2.35e-13").unwrap();
+        assert_relative_eq!(av.v, 2.35e-13, epsilon = 0.0);
+
+        let av: WrapAngleVar = serde_yaml::from_str("v: \"0.1 arcsec\"").unwrap();
+        let sigma = (0.1_f64 / 3600.0).to_radians();
+        assert_relative_eq!(av.v, sigma * sigma, epsilon = 1e-30);
+
+        let pair: WrapAngleVarPair =
+            serde_yaml::from_str("obs_noise: [2.35e-13, \"0.1 arcsec\"]").unwrap();
+        assert_relative_eq!(pair.obs_noise[0], 2.35e-13, epsilon = 0.0);
+        assert_relative_eq!(pair.obs_noise[1], sigma * sigma, epsilon = 1e-30);
+
+        let acc: WrapAngAccel = serde_yaml::from_str("a: \"1 arcsec/day^2\"").unwrap();
+        let expected = (1.0_f64 / 3600.0).to_radians();
+        assert_relative_eq!(acc.a, expected, epsilon = 1e-18);
     }
 
     /* ---------------------------------------------------------------------- */

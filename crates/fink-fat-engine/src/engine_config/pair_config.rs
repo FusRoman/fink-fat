@@ -26,7 +26,7 @@
 //!     `Δθ / Δt ≤ max_angular_speed`.
 //! - Photometric constraint:
 //!   - The candidate must satisfy a configurable brightness / flux similarity
-//!     test controlled by `max_flux_difference`.
+//!     test controlled by `max_mag_difference`.
 //!
 //! The exact photometry metric depends on the pairing implementation (flux space,
 //! magnitude space, normalized flux difference, etc.). This configuration
@@ -108,7 +108,7 @@
 //!
 //! - `max_dt = 0.06 d` (~86.4 min)
 //! - `max_angular_speed = 0.05 rad/d`
-//! - `max_flux_difference = 5.0`
+//! - `max_mag_difference = 5.0`
 //! - `allow_same_timebin = true`
 //!
 //! Tuning suggestions:
@@ -116,13 +116,13 @@
 //! - If too many pairs are produced (high contamination):
 //!   - decrease `max_dt`,
 //!   - decrease `max_angular_speed`,
-//!   - tighten `max_flux_difference`,
+//!   - tighten `max_mag_difference`,
 //!   - or set `allow_same_timebin = false` (if your time-binning is coarse and
 //!     produces many same-bin candidates).
 //! - If too few pairs are produced (low recall):
 //!   - increase `max_dt` slightly,
 //!   - increase `max_angular_speed` if you target fast movers,
-//!   - loosen `max_flux_difference` if photometry is noisy.
+//!   - loosen `max_mag_difference` if photometry is noisy.
 //!
 //! -----------------------------------------------------------------------------
 //! Configuration examples (YAML)
@@ -134,7 +134,7 @@
 //! pairs:
 //!   max_dt: 0.06                 # days (TT)
 //!   max_angular_speed: 5.0e-2    # rad/day
-//!   max_flux_difference: 5.0     # must match pairing kernel's photometry metric
+//!   max_mag_difference: 5.0      # must match pairing kernel's photometry metric
 //!   allow_same_timebin: true
 //! ```
 //!
@@ -144,8 +144,9 @@
 //! pairs:
 //!   max_dt: "86.4 min"
 //!   max_angular_speed: "35 arcmin/day"
-//!   max_flux_difference: 5.0
+//!   max_mag_difference: 5.0
 //!   allow_same_timebin: true
+//!   acc_prior_var: "1 arcsec/day^2"
 //! ```
 //!
 //! Unknown keys are rejected (`deny_unknown_fields`) to catch YAML typos early.
@@ -161,7 +162,7 @@
 //! Validation can fail with:
 //! - [`SeedError::NonFiniteOrNegativeTime`] for `pairs.max_dt`,
 //! - [`SeedError::NonFiniteOrNegativeAngle`] for `pairs.max_angular_speed`,
-//! - [`SeedError::NonFiniteOrNegativePhotometry`] for `pairs.max_flux_difference`.
+//! - [`SeedError::NonFiniteOrNegativePhotometry`] for `pairs.max_mag_difference`.
 //!
 //! Unit parsing failures (string quantities) are surfaced by serde as
 //! deserialization errors with an explicit message from `engine_config::units`
@@ -178,7 +179,9 @@
 use photom::MJDTT;
 use serde::{Deserialize, Serialize};
 
-use crate::engine_config::units::{de_ang_speed_rad_per_day, de_time_days};
+use crate::engine_config::units::{
+    de_ang_accel_rad_per_day2, de_ang_speed_rad_per_day, de_time_days,
+};
 use crate::error::SeedError;
 
 /// Parameters controlling **pair generation** between alerts `(a, b)`.
@@ -194,7 +197,7 @@ use crate::error::SeedError;
 /// - Temporal gating: `t_b > t_a` and `Δt ≤ max_dt`.
 /// - Kinematic gating: `ang_sep(a, b) / Δt ≤ max_angular_speed`.
 /// - Photometric gating: the implementation-specific brightness similarity
-///   test using `max_flux_difference`.
+///   test using `max_mag_difference`.
 ///
 /// Notes
 /// -----
@@ -269,10 +272,28 @@ pub struct PairConfig {
     /// - increase contamination.
     pub allow_same_timebin: bool,
 
-    /// Prior variance on the pairwise acceleration (rad/day²).
-    /// For pairs, acceleration is not directly observable
-    /// This parameter allow to modelize the acceleration uncertainty in the pair seeds
-    /// allowing a better kalman filter propagation.
+    /// Prior variance on the pairwise acceleration.
+    ///
+    /// Units
+    /// -----
+    /// - Canonical: **rad/day²**.
+    ///
+    /// YAML forms
+    /// ---------
+    /// - numeric (already in rad/day²): `1.0e-4`
+    /// - string with explicit rate: `"1 arcsec/day^2"`, `"0.5 arcmin/hour2"`
+    ///
+    /// Context
+    /// -------
+    /// For pairs, acceleration is not directly observable (two points define
+    /// a velocity, not a curvature). This parameter models the acceleration
+    /// uncertainty in the pair seeds, allowing a better Kalman filter
+    /// propagation.
+    ///
+    /// Serialization
+    /// -------------
+    /// Parsed with [`de_ang_accel_rad_per_day2`].
+    #[serde(deserialize_with = "de_ang_accel_rad_per_day2")]
     pub acc_prior_var: f64,
 }
 
@@ -364,7 +385,11 @@ impl PairConfigBuilder {
         self
     }
 
-    /// Set prior variance on the pairwise acceleration (rad/day²).
+    /// Set prior variance on the pairwise acceleration.
+    ///
+    /// Units: canonical rad/day² (see [`PairConfig::acc_prior_var`] for
+    /// accepted YAML string forms when loading from a config file — this
+    /// builder setter expects the value already in canonical units).
     pub fn acc_prior_var(mut self, v: f64) -> Self {
         self.params.acc_prior_var = v;
         self

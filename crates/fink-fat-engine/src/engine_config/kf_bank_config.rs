@@ -1,16 +1,42 @@
+//! # Hypothesis-bank tuning configuration (`KFBankConfig`)
+//!
+//! This module defines [`KFBankConfig`], the pruning/merging/search-region
+//! knobs for a per-tracklet bank of Kalman-filter hypotheses (one hypothesis
+//! per plausible `(ρ, ρ̇)` mode surviving from the seeding grid, see
+//! [`crate::engine_config::grid_population`]).
+//!
+//! The bank's lifecycle, in the order these fields act on it:
+//! 1. Each update gates candidate observations against `gate_chi2`
+//!    (except the MAP hypothesis, always exempt).
+//! 2. `search_region_chi2` independently sizes the *prediction* search region
+//!    used to find candidate observations in the first place (decoupled from
+//!    the update gate so the search can stay generous while the gate stays tight).
+//! 3. After scoring, hypotheses are pruned by weight (`weight_floor`,
+//!    optionally smoothed over `likelihood_window` steps), down to
+//!    `cap_schedule`'s cap for the current observation count, but never below
+//!    `min_hypotheses`.
+//! 4. Surviving hypotheses whose heliocentric modes have converged are
+//!    deduplicated using `merge_position_au`.
+
 // ── Configuration ─────────────────────────────────────────────────────────────
 
 use serde::{Deserialize, Serialize};
 
 use crate::engine_config::hypothesis_cap::HypothesisCapSchedule;
+use crate::engine_config::units::de_length_au;
 
 /// Tuning parameters for the hypothesis bank.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KFBankConfig {
     /// Chi-square gate on the predictive innovation (2 d.o.f.).
     ///
+    /// Units
+    /// -----
+    /// Dimensionless (chi-square statistic).
+    ///
     /// A hypothesis whose Mahalanobis distance² exceeds this threshold is
-    /// discarded.  Typical values: `13.8 ≈ 99.9 %`, `23.0 ≈ 99.999 %`.
+    /// discarded.  Typical values: `13.8 ≈ 99.9 %`, `23.0 ≈ 99.999 %`. Must
+    /// be strictly positive.
     ///
     /// **The MAP (highest-weight) hypothesis is always exempt from this gate.**
     /// When only one hypothesis remains, the gate has no role to play and
@@ -20,6 +46,10 @@ pub struct KFBankConfig {
     pub gate_chi2: f64,
 
     /// Relative weight floor for the **smoothed-score pruning** strategy.
+    ///
+    /// Units
+    /// -----
+    /// Dimensionless ratio, expected in `(0, 1)`.
     ///
     /// When `likelihood_window > 0` (smoothed mode), a hypothesis is pruned
     /// if its mean per-step log-likelihood satisfies
@@ -37,6 +67,10 @@ pub struct KFBankConfig {
     /// Minimum number of hypotheses to always keep alive, regardless of
     /// weight or gate outcome.
     ///
+    /// Units
+    /// -----
+    /// Dimensionless count, must be `≥ 1`.
+    ///
     /// Combined with the MAP protection, this prevents premature collapse
     /// before the `(ρ, ρ̇)` ambiguity is truly resolved.  A value of 5–10
     /// is recommended for arcs shorter than ≈15 nights.
@@ -52,6 +86,10 @@ pub struct KFBankConfig {
 
     /// Sliding-window size for the smoothed pruning strategy.
     ///
+    /// Units
+    /// -----
+    /// Dimensionless count of observations, `≥ 0`.
+    ///
     /// Each hypothesis accumulates its last `likelihood_window` per-step
     /// log-likelihoods.  Pruning decisions are based on the **mean** of this
     /// window rather than the raw cumulative weight, making the bank robust
@@ -63,6 +101,10 @@ pub struct KFBankConfig {
 
     /// Chi-square factor used **only** for the search-region radius, decoupled
     /// from the update gate.
+    ///
+    /// Units
+    /// -----
+    /// Dimensionless (chi-square statistic). Must be strictly positive.
     ///
     /// The bounding radius of the predicted [`SearchRegion`] is
     ///
@@ -86,12 +128,28 @@ pub struct KFBankConfig {
     pub search_region_chi2: f64,
 
     /// Merge two modes whose mean heliocentric positions are within this
-    /// distance (AU).
+    /// distance.
     ///
+    /// Units
+    /// -----
+    /// - Canonical: **AU**.
+    ///
+    /// YAML forms
+    /// ---------
+    /// - numeric (already in AU): `0.02`
+    /// - string with units: `"0.02 au"`, `"2992 km"`
+    ///
+    /// Context
+    /// -------
     /// Deliberately an *absolute* threshold, not a Mahalanobis one: using
     /// covariance would collapse adjacent range nodes prematurely (their σ is
     /// large at initialisation).  Merging only deduplicates modes that have
     /// physically converged onto the same heliocentric point.
+    ///
+    /// Serialization
+    /// -------------
+    /// Parsed with [`de_length_au`].
+    #[serde(deserialize_with = "de_length_au")]
     pub merge_position_au: f64,
 }
 

@@ -1,3 +1,15 @@
+//! # Shared Kalman runtime context configuration (`KalmanContextConfig`)
+//!
+//! This module bundles the ephemeris/UT1 state shared by every Kalman
+//! hypothesis in the engine (loaded once and reference-counted) together
+//! with the per-hypothesis tuning knobs from
+//! [`crate::engine_config::single_kalman_config::KalmanConfig`], producing a
+//! ready-to-use [`KalmanContext`] via [`KalmanContextConfig::build`].
+//!
+//! Loading the ephemeris (`EphemState::new`) is comparatively expensive, so
+//! this configuration is built once at engine startup and shared (via
+//! `Arc`) across all banks/hypotheses rather than per-hypothesis.
+
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -6,10 +18,27 @@ use crate::{
     engine_config::single_kalman_config::KalmanConfig, topocentric_kf::observer_state::EphemState,
 };
 
+/// Configuration used to build the shared [`KalmanContext`] at engine startup.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KalmanContextConfig {
+    /// Ephemeris source identifier passed to `EphemState::new`.
+    ///
+    /// Format
+    /// ------
+    /// A backend-specific string, e.g. `"horizon:DE440"` selects the JPL
+    /// Horizons DE440 planetary ephemeris. No `units.rs` parser applies —
+    /// this is an opaque identifier, not a physical quantity.
     pub ephem_file_name: String,
+
+    /// Optional UT1 (Earth-orientation) file version to load alongside the
+    /// ephemeris.
+    ///
+    /// `None` lets `EphemState::new` fall back to its own default UT1
+    /// source; `Some(version)` pins a specific version string.
     pub ut1_file_version: Option<String>,
+
+    /// Per-hypothesis Kalman filter tuning shared by every hypothesis built
+    /// from this context. See [`KalmanConfig`].
     pub config: KalmanConfig,
 }
 
