@@ -1,42 +1,37 @@
-//! Match next-night observations against the predicted error ellipses of a
-//! [`KFBankCollection`].
+//! Match next-night observations against a bank's predicted search ellipse.
 //!
-//! Strategy
-//! --------
+//! Salvaged from a stale draft (`bank_collection/night_candidate_search.rs`,
+//! which referenced a `KFPairBank` type that never existed in the crate and
+//! was never wired into the build) and retyped against the real
+//! [`KFBank`](crate::topocentric_kf::kalman_bank::KFBank)/[`SearchRegion`].
+//! The core two-stage gate (cone query + Mahalanobis/likelihood filter) is
+//! unchanged.
+//!
+//! # Strategy
 //! 1. Build a spatial index over the next night's observations once
-//!    ([`build_alert_bucket_index`] + [`HealpixBinner`]) — O(N log N).
-//! 2. For each [`KFPairBank`], predict a [`SearchRegion`] at the target epoch
-//!    ([`KFBank::predict_search_region`]), then:
-//!    a. cone-query the spatial index around `(center_ra, center_dec, radius_rad)`
-//!       ([`query_region_candidates`]);
-//!    b. for each candidate, apply a cheap per-component Mahalanobis gate
-//!       ([`SearchRegion::any_component_contains`]) before paying for the full
-//!       mixture likelihood ([`SearchRegion::mixture_likelihood`])
-//!       ([`filter_candidates`]).
-//!
-//! The observer state (`t_prop`, `r_obs_new`, `v_obs_new`) is supplied by the
-//! caller, exactly as required by [`KFBank::predict_search_region`] itself —
-//! this module does not depend on ephemeris lookups, which keeps it testable
-//! with hand-built [`SearchRegion`] values.
+//!    ([`build_alert_bucket_index`](crate::spacetime_bucket::bucket::build_alert_bucket_index)
+//!    + [`HealpixBinner`]) — O(N log N).
+//! 2. For a bank's predicted [`SearchRegion`], cone-query the spatial index
+//!    around `(center_ra, center_dec, radius_rad)`, then for each candidate
+//!    apply a cheap per-component Mahalanobis gate
+//!    ([`SearchRegion::any_component_contains`]) before paying for the full
+//!    mixture likelihood ([`SearchRegion::mixture_likelihood`]).
 
-use nalgebra::{Vector2, Vector3};
+use nalgebra::Vector2;
 use photom::{
-    MJDTT, NightId,
+    MJDTT,
     coordinates::equatorial::EquCoord,
     observation_dataset::{ObsId, observation::Observation},
 };
 
 use crate::{
-    seeding::kf_bank_builder::KFBankCollection,
     spacetime_bucket::{
-        bucket::{BucketIndex, BucketKey, build_alert_bucket_index},
+        bucket::{BucketIndex, BucketKey},
         healpix_binner::HealpixBinner,
         spatial_binner::SpatialBinner,
         time_binner::{TimeBin, TimeBinner},
     },
-    topocentric_kf::kalman_bank::ellipse_region_finder::{
-        SearchRegion, radius_strategy::RadiusStrategy, top_k::TopK,
-    },
+    topocentric_kf::kalman_bank::ellipse_region_finder::SearchRegion,
 };
 
 /// A next-night observation accepted inside at least one Kalman hypothesis'
@@ -47,13 +42,14 @@ pub struct CandidateMatch<'obs> {
     pub likelihood: f64,
 }
 
-/// Matches found for a single [`KFPairBank`](crate::seeding::kf_bank_builder::KFPairBank).
+/// Candidate matches found for a single bank.
 #[derive(Debug, Clone)]
 pub struct BankCandidates<'obs> {
-    pub night_id: NightId,
-    pub first_obs_id: ObsId,
-    pub second_obs_id: ObsId,
-    /// Predicted search region this bank's matches were evaluated against.
+    /// Association history of the bank these candidates were matched
+    /// against, i.e. [`KFBank::track_ids`](crate::topocentric_kf::kalman_bank::KFBank::track_ids) —
+    /// identifies the bank without needing a fictional pair-id type.
+    pub track_ids: Vec<ObsId>,
+    /// Predicted search region the candidates were evaluated against.
     pub search_region: SearchRegion,
     pub matches: Vec<CandidateMatch<'obs>>,
 }
@@ -62,9 +58,10 @@ pub struct BankCandidates<'obs> {
 ///
 /// [`BucketIndex`] is keyed by `(SpatialKey, TimeBin)`, but a next-night cone
 /// search at a single target epoch has no temporal dimension to discretize.
-/// This binner lets us reuse [`build_alert_bucket_index`] unchanged instead of
-/// introducing a parallel spatial-only index type.
-struct SingleBinTimeBinner;
+/// This binner lets us reuse
+/// [`build_alert_bucket_index`](crate::spacetime_bucket::bucket::build_alert_bucket_index)
+/// unchanged instead of introducing a parallel spatial-only index type.
+pub struct SingleBinTimeBinner;
 
 impl TimeBinner for SingleBinTimeBinner {
     fn bin_for(&self, _mjd_tt: MJDTT) -> TimeBin {
@@ -140,78 +137,54 @@ fn filter_candidates<'obs>(
         .collect()
 }
 
-/// For every [`KFPairBank`](crate::seeding::kf_bank_builder::KFPairBank) in
-/// `bank_collection`, predict its error ellipse at `t_prop` and return the
-/// next-night observations that fall inside it.
+/// Find the next-night observations falling inside one bank's predicted
+/// search ellipse.
 ///
-/// Banks whose hypotheses all fail to propagate to `t_prop` are skipped
-/// (logged at `debug` level), consistent with how
-/// [`build_kf_bank_collection`](crate::seeding::kf_bank_builder::build_kf_bank_collection)
-/// already tolerates per-pair failures.
-#[allow(clippy::too_many_arguments)]
-pub fn find_next_night_candidates<'state_lf, 'obs>(
-    bank_collection: &KFBankCollection<'state_lf>,
-    next_night_obs: &[&'obs Observation],
+/// # Arguments
+/// * `search_region` – Bank's predicted region, e.g. from
+///   [`KFBank::predict_search_region`](crate::topocentric_kf::kalman_bank::KFBank::predict_search_region).
+/// * `track_ids` – Association history of the bank, used to identify it in
+///   the returned [`BankCandidates`] (see
+///   [`KFBank::track_ids`](crate::topocentric_kf::kalman_bank::KFBank::track_ids)).
+/// * `bucket_index` – Spatial index of the next night's observations (built
+///   once per night, shared across every bank — see [`SingleBinTimeBinner`]).
+/// * `spatial_binner` – Same binner used to build `bucket_index`.
+/// * `gate_chi2`, `likelihood_threshold` – Two-stage gate parameters (cheap
+///   Mahalanobis pre-filter, then mixture-likelihood threshold).
+///
+/// # Returns
+/// The bank's [`BankCandidates`] — possibly with an empty `matches` list,
+/// which is the common case at LSST cadence and simply means the following
+/// branching step will spawn only the null branch.
+pub fn find_candidates_for_bank<'obs>(
+    search_region: &SearchRegion,
+    track_ids: Vec<ObsId>,
+    bucket_index: &BucketIndex<&'obs Observation>,
     spatial_binner: &HealpixBinner,
-    t_prop: MJDTT,
-    r_obs_new: Vector3<f64>,
-    v_obs_new: Vector3<f64>,
-    obs_noise: Vector2<f64>,
-    top_k: TopK,
-    radius_strategy: RadiusStrategy,
+    gate_chi2: f64,
     likelihood_threshold: f64,
-) -> Vec<BankCandidates<'obs>> {
-    let bucket_index = build_alert_bucket_index(
-        next_night_obs.iter().copied(),
-        spatial_binner,
-        &SingleBinTimeBinner,
-    );
+) -> BankCandidates<'obs> {
+    let candidates = query_region_candidates(bucket_index, spatial_binner, search_region);
+    let matches = filter_candidates(search_region, candidates, gate_chi2, likelihood_threshold);
 
-    bank_collection
-        .iter()
-        .filter_map(|pair_bank| {
-            let region = match pair_bank.bank.predict_search_region(
-                t_prop,
-                r_obs_new,
-                v_obs_new,
-                obs_noise,
-                top_k,
-                radius_strategy,
-            ) {
-                Ok(region) => region,
-                Err(err) => {
-                    tracing::debug!(
-                        night = %pair_bank.night_id,
-                        first = pair_bank.first_obs_id,
-                        second = pair_bank.second_obs_id,
-                        %err,
-                        "predict_search_region failed, skipping bank"
-                    );
-                    return None;
-                }
-            };
+    BankCandidates {
+        track_ids,
+        search_region: search_region.clone(),
+        matches,
+    }
+}
 
-            let candidates = query_region_candidates(&bucket_index, spatial_binner, &region);
-            let matches = filter_candidates(
-                &region,
-                candidates,
-                pair_bank.bank.config.gate_chi2,
-                likelihood_threshold,
-            );
-
-            Some(BankCandidates {
-                night_id: pair_bank.night_id,
-                first_obs_id: pair_bank.first_obs_id,
-                second_obs_id: pair_bank.second_obs_id,
-                search_region: region,
-                matches,
-            })
-        })
-        .collect()
+/// Diagonal observation-noise matrix `[σ_RA², σ_Dec²]`, as consumed by
+/// [`KFBank::predict_search_region`](crate::topocentric_kf::kalman_bank::KFBank::predict_search_region).
+///
+/// Small helper kept here (rather than duplicated at every call site) since
+/// candidate search is the first place in the per-night flow that needs it.
+pub fn observation_noise_diagonal(ra_error: f64, dec_error: f64) -> Vector2<f64> {
+    Vector2::new(ra_error * ra_error, dec_error * dec_error)
 }
 
 #[cfg(test)]
-mod night_candidate_search_tests {
+mod candidate_search_tests {
     use super::*;
     use nalgebra::Matrix2;
     use photom::{
@@ -219,11 +192,14 @@ mod night_candidate_search_tests {
         photometry::{Filter, Photometry},
     };
 
-    use crate::topocentric_kf::kalman_bank::ellipse_region_finder::SearchComponent;
+    use crate::{
+        astro_math::arcsec_to_rad, spacetime_bucket::bucket::build_alert_bucket_index,
+        topocentric_kf::kalman_bank::ellipse_region_finder::SearchComponent,
+    };
 
     fn mk_observation(id: u64, ra: f64, dec: f64, mjd_tt: f64) -> Observation {
         let obs_dataset = ObsDataset::empty();
-        let pos_err = crate::astro_math::arcsec_to_rad(0.5);
+        let pos_err = arcsec_to_rad(0.5);
         let equ = EquCoord::new(ra, pos_err, dec, pos_err);
         let photometry = Photometry {
             magnitude: 20.0,
@@ -255,8 +231,6 @@ mod night_candidate_search_tests {
 
     #[test]
     fn query_region_candidates_only_returns_neighbor_cells() {
-        use crate::astro_math::arcsec_to_rad;
-
         let spatial_binner = HealpixBinner::new(10);
 
         let center_ra = 1.0;
@@ -291,8 +265,6 @@ mod night_candidate_search_tests {
 
     #[test]
     fn filter_candidates_applies_gate_then_likelihood_threshold() {
-        use crate::astro_math::arcsec_to_rad;
-
         let center_ra = 1.0;
         let center_dec = 0.2;
         let sigma = arcsec_to_rad(5.0);
@@ -331,5 +303,38 @@ mod night_candidate_search_tests {
             .collect();
         lenient_ids.sort_unstable();
         assert_eq!(lenient_ids, vec![0, 1]);
+    }
+
+    #[test]
+    fn find_candidates_for_bank_wires_track_ids_through_to_the_result() {
+        let center_ra = 1.0;
+        let center_dec = 0.2;
+        let sigma = arcsec_to_rad(5.0);
+        let gate_chi2 = 23.0;
+
+        let region = mk_region(center_ra, center_dec, sigma, gate_chi2);
+        let center_obs = mk_observation(0, center_ra, center_dec, 60000.0);
+        let obs = vec![center_obs];
+        let obs_refs: Vec<&Observation> = obs.iter().collect();
+
+        let spatial_binner = HealpixBinner::new(10);
+        let bucket_index = build_alert_bucket_index(
+            obs_refs.iter().copied(),
+            &spatial_binner,
+            &SingleBinTimeBinner,
+        );
+
+        let track_ids = vec![10u64, 11u64];
+        let result = find_candidates_for_bank(
+            &region,
+            track_ids.clone(),
+            &bucket_index,
+            &spatial_binner,
+            gate_chi2,
+            0.0,
+        );
+
+        assert_eq!(result.track_ids, track_ids);
+        assert_eq!(result.matches.len(), 1);
     }
 }
