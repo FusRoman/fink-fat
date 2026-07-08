@@ -4,12 +4,9 @@ use anyhow::Result;
 use clap::Parser;
 
 use fink_fat_engine::{
-    error::EngineError,
-    pipeline::PipelineStage,
-    topocentric_kf::{
-        config::KalmanConfig,
-        single_kalman::{KFState, context::KalmanContext},
-    },
+    engine_config::{kalman_context::KalmanContext, single_kalman_config::KalmanConfig},
+    error::{EngineError, FinkFatError},
+    topocentric_kf::single_kalman::KFState,
 };
 use fink_fat_eval::cli::{Cli, load_data};
 use hifitime::ut1::Ut1Provider;
@@ -48,12 +45,12 @@ pub fn materialize_contiguous_traj<'o>(
     obs_dataset: &'o ObsDataset,
     traj: &TrajId,
 ) -> Result<Cow<'o, [Observation]>, EngineError> {
-    match obs_dataset
-        .materialize_trajectory(traj)
-        .ok_or_else(|| EngineError::StageFailed {
-            stage: PipelineStage::BuildSeeds,
-            message: format!("traj {traj} not found in observation dataset"),
-        })? {
+    match obs_dataset.materialize_trajectory(traj).ok_or_else(|| {
+        EngineError::FinkFat(FinkFatError::Message(format!(
+            "failed to metariaze trajectory with id: {}",
+            traj
+        )))
+    })? {
         MemLayoutObservations::Contiguous(slice) => Ok(Cow::Borrowed(slice)),
         MemLayoutObservations::Split(vec_obs) => {
             Ok(Cow::Owned(vec_obs.iter().map(|o| (*o).clone()).collect()))

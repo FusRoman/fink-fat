@@ -156,7 +156,7 @@ impl SearchRegion {
     }
 }
 
-impl<'state_lf> KFBank<'state_lf> {
+impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
     /// Predict a sky search region at a future epoch.
     ///
     /// Each hypothesis selected by `top_k` is propagated read-only to

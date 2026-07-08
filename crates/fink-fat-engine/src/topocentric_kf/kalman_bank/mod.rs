@@ -129,9 +129,9 @@ pub struct BankStep {
 /// A bank of weighted [`KFState`] hypotheses tracking a single object under
 /// range / range-rate ambiguity.
 #[derive(Clone)]
-pub struct KFBank<'state_lf> {
+pub struct KFBank<'state_lf, 'bank_config> {
     pub(crate) hypotheses: Vec<Hypothesis<'state_lf>>,
-    pub(crate) config: KFBankConfig,
+    pub(crate) config: &'bank_config KFBankConfig,
 
     /// Number of `step()` calls completed so far.
     ///
@@ -153,7 +153,7 @@ pub struct KFBank<'state_lf> {
     absolute_magnitude_sample_count: u32,
 }
 
-impl<'state_lf> KFBank<'state_lf> {
+impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
     // ── Construction ──────────────────────────────────────────────────────
 
     /// Build a bank from pre-constructed `(state, weight)` seeds.
@@ -166,7 +166,7 @@ impl<'state_lf> KFBank<'state_lf> {
         second_obs: &Observation,
         state: &'state_lf KalmanContext,
         grid_config: &GridConfig,
-        bank_config: KFBankConfig,
+        bank_config: &'bank_config KFBankConfig,
     ) -> Result<Self, EngineError> {
         let seeds = admissible_region_grid(obs_dataset, first_obs, second_obs, state, grid_config)?;
 

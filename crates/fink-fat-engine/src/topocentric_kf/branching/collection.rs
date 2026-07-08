@@ -36,11 +36,11 @@ use crate::{
 /// surviving candidate association history, possibly several per original
 /// bank once ambiguity has forced branching.
 #[derive(Default)]
-pub struct BranchCollection<'state_lf> {
-    pub branches: Vec<Branch<'state_lf>>,
+pub struct BranchCollection<'state_lf, 'bank_config> {
+    pub branches: Vec<Branch<'state_lf, 'bank_config>>,
 }
 
-impl<'state_lf> BranchCollection<'state_lf> {
+impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
     pub fn empty() -> Self {
         BranchCollection {
             branches: Vec::new(),
@@ -84,7 +84,7 @@ impl<'state_lf> BranchCollection<'state_lf> {
         &self,
         night_obs: &[&Observation],
         obs_dataset: &ObsDataset,
-        engine_config: &EngineConfig,
+        engine_config: &'bank_config EngineConfig,
         kalman_context: &'state_lf KalmanContext,
         current_step: usize,
     ) -> Result<Self, EngineError> {

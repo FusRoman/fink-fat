@@ -1,7 +1,6 @@
 use fink_fat_engine::{
     engine_config::{
-        grid_population::GridConfig, hypothesis_cap::HypothesisCapSchedule,
-        kalman_context::KalmanContext, kf_bank_config::KFBankConfig,
+        grid_population::GridConfig, kalman_context::KalmanContext, kf_bank_config::KFBankConfig,
     },
     topocentric_kf::{
         kalman_bank::{
@@ -26,36 +25,13 @@ const ARCSEC_TO_RAD: f64 = 1.0 / RAD_TO_ARCSEC;
 
 // ── Grid / bank initialisation ────────────────────────────────────────────────
 
-fn default_grid_config() -> GridConfig {
-    GridConfig {
-        rho_max: 100.,
-        n_rho: 50,
-        n_rho_dot: 15,
-        ..GridConfig::default()
-    }
-}
-
-fn default_bank_config() -> KFBankConfig {
-    KFBankConfig {
-        gate_chi2: 23.0,
-        search_region_chi2: 20.0,
-        weight_floor: 1e-5,
-        min_hypotheses: 5,
-        likelihood_window: 3,
-        cap_schedule: HypothesisCapSchedule::Logarithmic {
-            start: 500,
-            end: 5,
-            n_obs_full: 15,
-        },
-        merge_position_au: 0.02,
-    }
-}
-
-pub fn init_bank_from_first_pair<'ctx>(
+pub fn init_bank_from_first_pair<'ctx, 'bank_config>(
     traj: &[Observation],
     obs_dataset: &ObsDataset,
     context: &'ctx KalmanContext,
-) -> Option<(usize, KFBank<'ctx>)> {
+    bank_config: &'bank_config KFBankConfig,
+    grid_config: &GridConfig,
+) -> Option<(usize, KFBank<'ctx, 'bank_config>)> {
     tracing::debug!(
         n_obs = traj.len(),
         "Scanning observations for first intra-night pair (dt < 1 day)"
@@ -66,22 +42,20 @@ pub fn init_bank_from_first_pair<'ctx>(
         .enumerate()
         .find(|(_, w)| w[1].mjd_tt() - w[0].mjd_tt() < 0.5)?;
 
-    let grid_config = default_grid_config();
-
     let bank = KFBank::from_grid(
         obs_dataset,
         &pair[0],
         &pair[1],
         context,
         &grid_config,
-        default_bank_config(),
+        bank_config,
     )
     .ok()?;
     log_bank_init(&bank);
     Some((idx, bank))
 }
 
-fn log_bank_init(bank: &KFBank<'_>) {
+fn log_bank_init(bank: &KFBank<'_, '_>) {
     let epoch = bank
         .hypotheses()
         .first()
@@ -206,7 +180,7 @@ impl SearchRegionDiag {
 }
 
 fn compute_search_region(
-    bank: &KFBank<'_>,
+    bank: &KFBank<'_, '_>,
     obs_dataset: &ObsDataset,
     obs: &Observation,
     context: &KalmanContext,
@@ -476,27 +450,30 @@ pub struct KFStudyResult {
 
 // ── Main entry point ──────────────────────────────────────────────────────────
 
-pub fn study_kalman_asteroid<'a>(
+pub fn study_kalman_asteroid<'a, 'bank_config>(
     traj: &[Observation],
     obs_dataset: &ObsDataset,
     context: &'a KalmanContext,
-) -> (Option<KFBank<'a>>, Vec<KFStudyResult>) {
+    bank_config: &'bank_config KFBankConfig,
+    grid_config: &GridConfig,
+) -> (Option<KFBank<'a, 'bank_config>>, Vec<KFStudyResult>) {
     tracing::debug!(n_obs = traj.len(), "Starting Kalman filter bank study");
 
-    let (idx_first_obs, mut bank) = match init_bank_from_first_pair(traj, obs_dataset, context) {
-        Some(pair) => {
-            tracing::debug!(
-                bootstrap_idx = pair.0,
-                n_hypotheses = pair.1.len(),
-                "Bootstrap successful"
-            );
-            pair
-        }
-        None => {
-            tracing::debug!("Bootstrap failed, returning empty results");
-            return (None, Vec::new());
-        }
-    };
+    let (idx_first_obs, mut bank) =
+        match init_bank_from_first_pair(traj, obs_dataset, context, bank_config, grid_config) {
+            Some(pair) => {
+                tracing::debug!(
+                    bootstrap_idx = pair.0,
+                    n_hypotheses = pair.1.len(),
+                    "Bootstrap successful"
+                );
+                pair
+            }
+            None => {
+                tracing::debug!("Bootstrap failed, returning empty results");
+                return (None, Vec::new());
+            }
+        };
 
     let observations_to_process = &traj[idx_first_obs + 2..];
     let n_obs = observations_to_process.len();

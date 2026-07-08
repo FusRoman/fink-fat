@@ -21,7 +21,7 @@ use crate::{
     topocentric_kf::kalman_bank::KFBank,
 };
 
-pub type KFBankCollection<'state_lf> = Vec<KFBank<'state_lf>>;
+pub type KFBankCollection<'state_lf, 'bank_config> = Vec<KFBank<'state_lf, 'bank_config>>;
 
 /// Build one [`KFBank`] per admissible intra-night observation pair across
 /// every night in `obs_dataset`.
@@ -30,12 +30,12 @@ pub type KFBankCollection<'state_lf> = Vec<KFBank<'state_lf>>;
 /// resolves `night_id` to its observations, then delegates. Nights without a
 /// night index (`iter_night_observations` returning `None`) are silently
 /// skipped.
-pub fn build_kf_bank_collection<'state_lf>(
+pub fn build_kf_bank_collection<'state_lf, 'bank_config>(
     obs_dataset: &ObsDataset,
     night_id: &NightId,
     kalman_context: &'state_lf KalmanContext,
-    params: &EngineConfig,
-) -> Result<KFBankCollection<'state_lf>, EngineError> {
+    params: &'bank_config EngineConfig,
+) -> Result<KFBankCollection<'state_lf, 'bank_config>, EngineError> {
     let Some(obs_iter) = obs_dataset.iter_night_observations(night_id) else {
         return Ok(KFBankCollection::default());
     };
@@ -73,13 +73,13 @@ pub fn build_kf_bank_collection<'state_lf>(
 /// admissible (ρ, ρ̇) region) is logged and the pair is skipped — it does not
 /// abort the whole run, consistent with `generate_pairs` being a permissive
 /// pre-filter (see `pairs` module docs).
-pub fn build_kf_bank_collection_from_observations<'state_lf>(
+pub fn build_kf_bank_collection_from_observations<'state_lf, 'bank_config>(
     obs_dataset: &ObsDataset,
     night_obs: &[&Observation],
     kalman_context: &'state_lf KalmanContext,
-    params: &EngineConfig,
+    params: &'bank_config EngineConfig,
     spatial_binner: &HealpixBinner,
-) -> Result<KFBankCollection<'state_lf>, EngineError> {
+) -> Result<KFBankCollection<'state_lf, 'bank_config>, EngineError> {
     if night_obs.is_empty() {
         return Ok(KFBankCollection::default());
     }
@@ -100,7 +100,7 @@ pub fn build_kf_bank_collection_from_observations<'state_lf>(
             pair.b,
             kalman_context,
             &params.seeding_grid_config,
-            params.kfbank_config.clone(),
+            &params.kfbank_config,
         ) {
             Ok(bank) => banks.push(bank),
             Err(err) => {

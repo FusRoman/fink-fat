@@ -72,9 +72,9 @@ use crate::{
 };
 
 /// Result of advancing a set of lineages by one night.
-pub struct NightAdvanceOutcome<'state_lf> {
+pub struct NightAdvanceOutcome<'state_lf, 'bank_config> {
     /// Surviving branches after this night's cap + N-scan pruning.
-    pub branches: Vec<Branch<'state_lf>>,
+    pub branches: Vec<Branch<'state_lf, 'bank_config>>,
     /// Ids of every observation that passed the two-stage gate for at least
     /// one lineage's search region this night — regardless of whether the
     /// branch carrying it survived pruning. Consumed by the discovery step
@@ -101,15 +101,15 @@ pub struct NightAdvanceOutcome<'state_lf> {
 /// # Returns
 /// The surviving branches after pruning, plus the set of observation ids
 /// they consumed (see [`NightAdvanceOutcome`]).
-pub fn advance_bank_collection_one_night<'state_lf>(
-    lineages: &[Branch<'state_lf>],
+pub fn advance_bank_collection_one_night<'state_lf, 'bank_config>(
+    lineages: &[Branch<'state_lf, 'bank_config>],
     night_obs: &[&Observation],
     obs_dataset: &ObsDataset,
     kalman_context: &KalmanContext,
     params: &NightAdvanceParams,
     spatial_binner: &HealpixBinner,
     current_step: usize,
-) -> NightAdvanceOutcome<'state_lf> {
+) -> NightAdvanceOutcome<'state_lf, 'bank_config> {
     let span = tracing::info_span!("Advance bank collection");
     let _enter = span.enter();
 
@@ -117,7 +117,7 @@ pub fn advance_bank_collection_one_night<'state_lf>(
 
     tracing::debug!("Number of visit: {}", visits.len());
 
-    let mut branches: Vec<Branch<'state_lf>> = lineages.to_vec();
+    let mut branches: Vec<Branch<'state_lf, 'bank_config>> = lineages.to_vec();
     let mut consumed_observation_ids = HashSet::new();
     let mut next_branch_id = lineages
         .iter()
@@ -264,8 +264,8 @@ fn lineage_might_be_in_visit(
 /// The branches spawned for this lineage. Empty if the bank fails to
 /// propagate at all (dropped, logged at `debug`).
 #[allow(clippy::too_many_arguments)]
-fn spawn_branches_for_lineage<'state_lf>(
-    lineage: &Branch<'state_lf>,
+fn spawn_branches_for_lineage<'state_lf, 'bank_config>(
+    lineage: &Branch<'state_lf, 'bank_config>,
     visit_bucket_index: &BucketIndex<&Observation>,
     epoch: f64,
     r_obs: Vector3<f64>,
@@ -274,7 +274,7 @@ fn spawn_branches_for_lineage<'state_lf>(
     spatial_binner: &HealpixBinner,
     next_branch_id: &mut u64,
     consumed_observation_ids: &mut HashSet<ObsId>,
-) -> Vec<Branch<'state_lf>> {
+) -> Vec<Branch<'state_lf, 'bank_config>> {
     let predicted_bank = lineage.bank.predict_to(epoch, r_obs, v_obs);
 
     let Ok(search_region) = lineage.bank.predict_search_region(
@@ -346,8 +346,8 @@ fn spawn_branches_for_lineage<'state_lf>(
 /// Falls back to `0.5` (neutral: neither favors nor penalizes the null
 /// branch) when the bank has no magnitude history yet — this only happens
 /// before the bank's first successful [`KFBank::branch_with`] call.
-fn null_branch_detection_probability<'state_lf>(
-    predicted_bank: &KFBank<'state_lf>,
+fn null_branch_detection_probability<'state_lf, 'bank_config>(
+    predicted_bank: &KFBank<'state_lf, 'bank_config>,
     limiting_magnitude: f64,
     completeness_width_mag: f64,
 ) -> f64 {
