@@ -185,17 +185,12 @@
 //! Errors and validation
 //! -----------------------------------------------------------------------------
 //!
-//! [`TripletConfig::validate`] enforces basic numeric validity:
-//! - finite values,
-//! - non-negative thresholds,
-//! - and consistency (`max_predicted_residual ≤ max_pair_sep`).
-//!
-//! Validation can fail with:
-//! - [`SeedError::NonFiniteOrNegativeTime`] for `triplets.max_dt_between`,
-//! - [`SeedError::NonFiniteOrNegativeAngle`] for `triplets.max_pair_sep`,
-//! - [`SeedError::NonFiniteOrNegativeResidual`] for `triplets.max_predicted_residual`,
-//! - [`SeedError::NonFiniteOrNegativePhotometry`] for `triplets.max_mag_difference`,
-//! - [`SeedError::Inconsistent`] if `max_predicted_residual > max_pair_sep`.
+//! [`TripletConfig`]'s [`Validate`](crate::engine_config::Validate)
+//! implementation enforces basic numeric validity — finite values,
+//! non-negative thresholds — for all five numeric fields, plus the
+//! cross-field consistency check `max_predicted_residual ≤ max_pair_sep`,
+//! accumulating every failing field into a `Vec<FieldError>` instead of
+//! stopping at the first one.
 //!
 //! Unit parsing failures (string quantities) are surfaced by serde as
 //! deserialization errors with an explicit message from `engine_config::units`
@@ -213,8 +208,12 @@
 use photom::{MJDTT, Radians};
 use serde::{Deserialize, Serialize};
 
-use crate::engine_config::units::{de_ang_speed_rad_per_day, de_angle_rad, de_time_days};
-use crate::error::SeedError;
+use crate::engine_config::{
+    Validate,
+    error::FieldError,
+    units::{de_ang_speed_rad_per_day, de_angle_rad, de_time_days},
+    validate_helpers::{check_finite_nonneg, check_le},
+};
 
 /// Parameters controlling **triplet generation** `(a, b, c)`.
 ///
@@ -364,35 +363,67 @@ impl Default for TripletConfig {
     }
 }
 
-impl TripletConfig {
-    /// Validate internal consistency and numeric ranges.
-    pub fn validate(&self) -> Result<(), SeedError> {
-        if !self.max_dt_between.is_finite() || self.max_dt_between < 0.0 {
-            return Err(SeedError::NonFiniteOrNegativeTime(
-                "triplets.max_dt_between",
-            ));
-        }
-        if !self.max_pair_sep.is_finite() || self.max_pair_sep < 0.0 {
-            return Err(SeedError::NonFiniteOrNegativeAngle("triplets.max_pair_sep"));
-        }
-        if !self.max_predicted_residual.is_finite() || self.max_predicted_residual < 0.0 {
-            return Err(SeedError::NonFiniteOrNegativeResidual(
-                "triplets.max_predicted_residual",
-            ));
-        }
-        if !self.max_mag_difference.is_finite() || self.max_mag_difference < 0.0 {
-            return Err(SeedError::NonFiniteOrNegativePhotometry(
-                "triplets.max_mag_difference",
-            ));
-        }
-        if self.max_predicted_residual > self.max_pair_sep {
-            return Err(SeedError::Inconsistent(
-                "triplets.max_predicted_residual > triplets.max_pair_sep",
-            ));
-        }
-        Ok(())
-    }
+impl Validate for TripletConfig {
+    /// Validate internal consistency and numeric ranges, accumulating every
+    /// failure found instead of stopping at the first one.
+    fn validate(&self) -> Result<(), Vec<FieldError>> {
+        let mut errors = Vec::new();
 
+        if let Some(e) = check_finite_nonneg(
+            "max_dt_between",
+            self.max_dt_between,
+            "set triplets.max_dt_between to a non-negative duration, e.g. \"57.6 min\" or 0.04 (days)",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_nonneg(
+            "max_pair_sep",
+            self.max_pair_sep,
+            "set triplets.max_pair_sep to a non-negative angle, e.g. \"8.6 arcmin\" or 2.5e-3 (rad)",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_nonneg(
+            "max_predicted_residual",
+            self.max_predicted_residual,
+            "set triplets.max_predicted_residual to a non-negative angle, e.g. \"2.75 arcmin\" or 8.0e-4 (rad)",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_nonneg(
+            "max_mag_difference",
+            self.max_mag_difference,
+            "set triplets.max_mag_difference to a non-negative threshold, e.g. 5.0",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_nonneg(
+            "max_angular_speed",
+            self.max_angular_speed,
+            "set triplets.max_angular_speed to a non-negative rate, e.g. \"35 arcmin/day\" or 5.0e-2 (rad/day)",
+        ) {
+            errors.push(e);
+        }
+
+        if let Some(e) = check_le(
+            "max_predicted_residual",
+            self.max_predicted_residual,
+            "max_pair_sep",
+            self.max_pair_sep,
+            "lower triplets.max_predicted_residual, or raise triplets.max_pair_sep, so the prediction residual never exceeds the neighbor-scale separation",
+        ) {
+            errors.push(e);
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl TripletConfig {
     /// Start building a [`TripletConfig`] with chainable setters.
     pub fn builder() -> TripletConfigBuilder {
         TripletConfigBuilder::default()
@@ -443,7 +474,7 @@ impl TripletConfigBuilder {
     }
 
     /// Finalize builder and validate constraints.
-    pub fn build(self) -> Result<TripletConfig, SeedError> {
+    pub fn build(self) -> Result<TripletConfig, Vec<FieldError>> {
         let p = TripletConfig {
             max_dt_between: self.params.max_dt_between,
             max_pair_sep: self.params.max_pair_sep,

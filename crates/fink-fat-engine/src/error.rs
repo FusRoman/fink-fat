@@ -7,46 +7,6 @@ use thiserror::Error;
 
 use crate::{engine_config::error::ConfigError, seeding::error::SeedingError};
 
-#[derive(Debug, Error)]
-pub enum SeedError {
-    /// A time interval must be finite and non-negative.
-    ///
-    /// Triggered when parameters like `pair.max_dt` or `triplet.max_dt_between`
-    /// are NaN, infinite, or strictly negative.
-    #[error("invalid time parameter: {0}")]
-    NonFiniteOrNegativeTime(&'static str),
-
-    /// An angular separation must be finite and non-negative.
-    ///
-    /// Raised for invalid angle-like parameters such as `pair.max_sep` or
-    /// `triplet.max_pair_sep`.
-    #[error("invalid angle parameter: {0}")]
-    NonFiniteOrNegativeAngle(&'static str),
-
-    /// A residual must be finite and non-negative.
-    ///
-    /// Used when trajectory-fitting residual thresholds are NaN, infinite, or
-    /// below zero.
-    #[error("invalid residual parameter: {0}")]
-    NonFiniteOrNegativeResidual(&'static str),
-
-    /// A flux or magnitude threshold must be finite and non-negative.
-    ///
-    /// Raised for photometric cutoffs such as `pair.max_flux_difference`.
-    #[error("invalid photometry parameter: {0}")]
-    NonFiniteOrNegativePhotometry(&'static str),
-
-    /// Parameters are mutually inconsistent.
-    ///
-    /// Returned when individual parameters are valid in isolation, but conflict
-    /// with each other when combined. For example:
-    /// - `triplet.max_dt_between` < `pair.max_dt`,
-    /// - required HEALPix depth outside allowed range,
-    /// - conflicting filter rules.
-    #[error("inconsistent parameter set: {0}")]
-    Inconsistent(&'static str),
-}
-
 /// Unified error type for the fink-fat engine.
 ///
 /// Notes
@@ -109,10 +69,6 @@ pub enum EngineError {
     // -------------------------------------------------------------------------
     // Wrappers for lower-level subsystems (add as you wire real calls)
     // -------------------------------------------------------------------------
-    /// Seeding subsystem error.
-    #[error(transparent)]
-    Seed(#[from] SeedError),
-
     /// Edge building / ML inference error.
     // #[error(transparent)]
     // Edge(#[from] EdgeBuilderError),

@@ -19,7 +19,15 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::engine_config::units::{de_length_au, de_speed_au_per_day};
+use crate::engine_config::{
+    Validate,
+    error::{FieldError, prefix_errors},
+    units::{de_length_au, de_speed_au_per_day},
+    validate_helpers::{
+        check_finite_in_range, check_finite_nonneg, check_finite_positive, check_lt,
+        check_min_usize,
+    },
+};
 
 /// A small-body population, modeled as a Gaussian prior over semi-major axis.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,6 +70,42 @@ pub struct Population {
     /// weights matter — the sampler normalizes internally). Dimensionless,
     /// must be non-negative.
     pub weight: f64,
+}
+
+impl Validate for Population {
+    /// Validate internal consistency and numeric ranges, accumulating every
+    /// failure found instead of stopping at the first one.
+    fn validate(&self) -> Result<(), Vec<FieldError>> {
+        let mut errors = Vec::new();
+
+        if let Some(e) = check_finite_positive(
+            "a_center",
+            self.a_center,
+            "set a_center to a strictly positive semi-major axis, e.g. \"1.5 au\" or 1.5 (AU)",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_positive(
+            "a_sigma",
+            self.a_sigma,
+            "set a_sigma to a strictly positive spread, e.g. \"0.6 au\" or 0.6 (AU)",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_nonneg(
+            "weight",
+            self.weight,
+            "set weight to a non-negative relative abundance, e.g. 0.02",
+        ) {
+            errors.push(e);
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
 }
 
 /// Rough default population priors covering the main dynamical families
@@ -296,6 +340,96 @@ impl Default for GridConfig {
             sigma_pos_au_floor: 1e-3,
             sigma_rho_dot_floor: 1e-4,
             weight_floor: 1e-6,
+        }
+    }
+}
+
+impl Validate for GridConfig {
+    /// Validate internal consistency and numeric ranges, accumulating every
+    /// failure found instead of stopping at the first one.
+    fn validate(&self) -> Result<(), Vec<FieldError>> {
+        let mut errors = Vec::new();
+
+        if let Some(e) = check_finite_positive(
+            "rho_min",
+            self.rho_min,
+            "set rho_min to a strictly positive topocentric range, e.g. \"0.1 au\" or 0.1 (AU)",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_positive(
+            "rho_max",
+            self.rho_max,
+            "set rho_max to a strictly positive topocentric range, e.g. \"60 au\" or 60.0 (AU)",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_lt(
+            "rho_min",
+            self.rho_min,
+            "rho_max",
+            self.rho_max,
+            "raise rho_max above rho_min (or lower rho_min) so the grid samples a non-empty range",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_min_usize(
+            "n_rho",
+            self.n_rho,
+            1,
+            "set n_rho to at least 1 range node, e.g. 28",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_min_usize(
+            "n_rho_dot",
+            self.n_rho_dot,
+            1,
+            "set n_rho_dot to at least 1 range-rate node per range node, e.g. 11",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_positive(
+            "sigma_pos_au_floor",
+            self.sigma_pos_au_floor,
+            "set sigma_pos_au_floor to a strictly positive distance floor, e.g. 1e-3 (AU)",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_positive(
+            "sigma_rho_dot_floor",
+            self.sigma_rho_dot_floor,
+            "set sigma_rho_dot_floor to a strictly positive speed floor, e.g. 1e-4 (AU/day)",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_in_range(
+            "weight_floor",
+            self.weight_floor,
+            0.0,
+            1.0 - f64::EPSILON,
+            "set weight_floor to a value in [0, 1), e.g. 1e-6 (0.0 disables pruning)",
+        ) {
+            errors.push(e);
+        }
+
+        if self.populations.is_empty() {
+            errors.push(
+                FieldError::new("populations", "must not be empty").with_hint(
+                    "provide at least one Population prior, or use default_populations()",
+                ),
+            );
+        }
+        for (i, population) in self.populations.iter().enumerate() {
+            if let Err(e) = population.validate() {
+                errors.extend(prefix_errors(e, &format!("populations[{i}]")));
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
         }
     }
 }

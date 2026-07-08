@@ -10,6 +10,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::engine_config::{Validate, error::FieldError};
+
 /// Minimum tracing/log level that should be recorded.
 ///
 /// This value is read from the `log_level` key in the YAML configuration file.
@@ -30,6 +32,16 @@ pub enum LogLevel {
     Warn,
     /// Unrecoverable or user-facing failures.
     Error,
+}
+
+impl Validate for LogLevel {
+    /// Always valid: serde already rejects any YAML value that isn't one of
+    /// the five known variants, so there is no invalid post-deserialization
+    /// state to check here. Implemented for uniformity with every other
+    /// [`crate::engine_config::EngineConfig`] field.
+    fn validate(&self) -> Result<(), Vec<FieldError>> {
+        Ok(())
+    }
 }
 
 impl std::fmt::Display for LogLevel {

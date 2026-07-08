@@ -22,8 +22,13 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::engine_config::Validate;
+use crate::engine_config::error::{FieldError, prefix_errors};
 use crate::engine_config::hypothesis_cap::HypothesisCapSchedule;
 use crate::engine_config::units::de_length_au;
+use crate::engine_config::validate_helpers::{
+    check_finite_in_range, check_finite_nonneg, check_finite_positive, check_le, check_min_usize,
+};
 
 /// Tuning parameters for the hypothesis bank.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -163,6 +168,73 @@ impl Default for KFBankConfig {
             likelihood_window: 3,
             search_region_chi2: 400.0,
             merge_position_au: 0.02,
+        }
+    }
+}
+
+impl Validate for KFBankConfig {
+    /// Validate internal consistency and numeric ranges, accumulating every
+    /// failure found instead of stopping at the first one.
+    fn validate(&self) -> Result<(), Vec<FieldError>> {
+        let mut errors = Vec::new();
+
+        if let Some(e) = check_finite_positive(
+            "gate_chi2",
+            self.gate_chi2,
+            "set gate_chi2 to a strictly positive chi-square threshold, e.g. 23.0 (~99.999%)",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_in_range(
+            "weight_floor",
+            self.weight_floor,
+            f64::EPSILON,
+            1.0 - f64::EPSILON,
+            "set weight_floor to a value strictly between 0 and 1, e.g. 1e-4",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_min_usize(
+            "min_hypotheses",
+            self.min_hypotheses,
+            1,
+            "set min_hypotheses to at least 1 so the MAP hypothesis always survives pruning",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_positive(
+            "search_region_chi2",
+            self.search_region_chi2,
+            "set search_region_chi2 to a strictly positive chi-square threshold, e.g. 400.0 (20 sigma)",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_nonneg(
+            "merge_position_au",
+            self.merge_position_au,
+            "set merge_position_au to a non-negative distance, e.g. \"0.02 au\" or 0.02 (AU)",
+        ) {
+            errors.push(e);
+        }
+
+        if let Some(e) = check_le(
+            "gate_chi2",
+            self.gate_chi2,
+            "search_region_chi2",
+            self.search_region_chi2,
+            "raise search_region_chi2 above gate_chi2 (or lower gate_chi2) so the predicted search region stays generous enough to contain the next observation even when the update gate is tight",
+        ) {
+            errors.push(e);
+        }
+
+        if let Err(e) = self.cap_schedule.validate() {
+            errors.extend(prefix_errors(e, "cap_schedule"));
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
         }
     }
 }

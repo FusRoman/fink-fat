@@ -8,12 +8,17 @@
 //! (`tau`, in units of observations) — none use `units.rs` parsers, since
 //! "number of observations" has no alternate unit representation.
 //!
-//! None of the invariants documented per-variant below (e.g. `start ≥ end`)
-//! are enforced by any `validate()` method; malformed schedules currently
-//! only misbehave at runtime (e.g. a cap that grows instead of shrinks),
-//! they do not fail to load.
+//! The invariants documented per-variant below (e.g. `start ≥ end`) are
+//! enforced by this type's [`Validate`](crate::engine_config::Validate)
+//! implementation.
 
 use serde::{Deserialize, Serialize};
+
+use crate::engine_config::{
+    Validate,
+    error::FieldError,
+    validate_helpers::{check_finite_positive, check_min_usize},
+};
 
 /// Decay schedule controlling how many live hypotheses the bank may hold as a
 /// function of the number of observations processed.
@@ -145,5 +150,89 @@ impl Default for HypothesisCapSchedule {
     /// Defaults to a fixed cap of 1 000, identical to the legacy `max_hypotheses`.
     fn default() -> Self {
         Self::Fixed(1000)
+    }
+}
+
+impl Validate for HypothesisCapSchedule {
+    /// Validate the per-variant invariants documented above (`start >= end`,
+    /// `end >= 1`, positive decay constants, ...), accumulating every
+    /// failure found instead of stopping at the first one.
+    fn validate(&self) -> Result<(), Vec<FieldError>> {
+        let mut errors = Vec::new();
+
+        match self {
+            Self::Fixed(cap) => {
+                if let Some(e) = check_min_usize(
+                    "Fixed",
+                    *cap,
+                    1,
+                    "set the fixed cap to at least 1 live hypothesis",
+                ) {
+                    errors.push(e);
+                }
+            }
+            Self::Linear {
+                start,
+                end,
+                n_obs_full,
+            }
+            | Self::Logarithmic {
+                start,
+                end,
+                n_obs_full,
+            } => {
+                if let Some(e) =
+                    check_min_usize("end", *end, 1, "set `end` to at least 1 live hypothesis")
+                {
+                    errors.push(e);
+                }
+                if start < end {
+                    errors.push(
+                        FieldError::new(
+                            "start",
+                            format!("must be >= `end` ({end}) for a genuine decay, got {start}"),
+                        )
+                        .with_hint("set `start` to a value >= `end`, e.g. swap them if they were entered in the wrong order"),
+                    );
+                }
+                if let Some(e) = check_min_usize(
+                    "n_obs_full",
+                    *n_obs_full,
+                    1,
+                    "set n_obs_full to at least 1 observation",
+                ) {
+                    errors.push(e);
+                }
+            }
+            Self::Exponential { start, end, tau } => {
+                if let Some(e) =
+                    check_min_usize("end", *end, 1, "set `end` to at least 1 live hypothesis")
+                {
+                    errors.push(e);
+                }
+                if start < end {
+                    errors.push(
+                        FieldError::new(
+                            "start",
+                            format!("must be >= `end` ({end}) for a genuine decay, got {start}"),
+                        )
+                        .with_hint("set `start` to a value >= `end`, e.g. swap them if they were entered in the wrong order"),
+                    );
+                }
+                if let Some(e) = check_finite_positive(
+                    "tau",
+                    *tau,
+                    "set tau to a strictly positive decay time constant, e.g. n_obs_full / 3",
+                ) {
+                    errors.push(e);
+                }
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
     }
 }
