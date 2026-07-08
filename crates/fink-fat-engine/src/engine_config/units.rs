@@ -258,6 +258,38 @@ where
     }
 }
 
+/// Deserialize an angle quantity into **arcseconds** (`f64`).
+///
+/// Accepted inputs
+/// ---------------
+/// - Numeric YAML scalar (assumed **arcseconds**):
+///   - `1800.0`
+/// - String with explicit angle unit, converted to arcseconds:
+///   - `"30 arcmin"`, `"0.5 deg"`, `"1800 arcsec"`.
+///
+/// Unlike every other angle field in this module, [`RadiusStrategy::Clamped`]'s
+/// `max_arcsec` field is deliberately expressed in **arcseconds**, not
+/// radians (see that type's own doc) — this deserializer exists solely for
+/// that one field, so YAML can still use friendly unit strings without
+/// silently producing a value in the wrong unit for `RadiusStrategy::radius`'s
+/// clamp formula.
+///
+/// Errors
+/// ------
+/// Same as [`de_angle_rad`]: a serde error if the string doesn't parse as
+/// `<value> <unit>` or the unit isn't a supported angle unit.
+pub fn de_angle_arcsec<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match NumOrStr::deserialize(deserializer)? {
+        NumOrStr::Num(x) => Ok(x),
+        NumOrStr::Str(s) => parse_angle_rad(&s)
+            .map(|rad| rad.to_degrees() * 3600.0)
+            .map_err(de::Error::custom),
+    }
+}
+
 /// Deserialize an optional angle quantity into `Option<f64>` in **radians**.
 ///
 /// - If the field is absent from YAML (handled by `#[serde(default)]`), returns `None`.
@@ -923,6 +955,12 @@ mod config_units_tests {
     }
 
     #[derive(Debug, Deserialize)]
+    struct WrapAngleArcsec {
+        #[serde(deserialize_with = "de_angle_arcsec")]
+        a: f64,
+    }
+
+    #[derive(Debug, Deserialize)]
     struct WrapRate {
         #[serde(deserialize_with = "de_ang_speed_rad_per_day")]
         w: f64,
@@ -1127,5 +1165,40 @@ mod config_units_tests {
             let w: WrapTime = serde_yaml::from_str(&yaml).unwrap();
             assert_ulps_eq!(w.dt, v, max_ulps = 0);
         }
+
+        /// `de_angle_arcsec` must produce **arcseconds**, not radians —
+        /// regression test for the `RadiusStrategy::Clamped` bug where
+        /// `max_arcsec` was deserialized into radians via `de_angle_rad`
+        /// and then treated as raw arcseconds by `RadiusStrategy::radius`,
+        /// silently shrinking the clamp bound by a factor of ~206265.
+        #[test]
+        fn prop_de_angle_arcsec_string_matches_analytic(v in angle_value(), u in angle_unit()) {
+            let yaml = format!("a: \"{v} {u}\"");
+            let w: WrapAngleArcsec = serde_yaml::from_str(&yaml).unwrap();
+
+            let expected_rad = v * angle_scale_to_rad(u);
+            let expected_arcsec = expected_rad.to_degrees() * 3600.0;
+            assert_relative_eq!(w.a, expected_arcsec, max_relative = 1e-12, epsilon = 1e-15);
+        }
+    }
+
+    /// `de_angle_arcsec` must pass raw numeric YAML scalars through
+    /// unchanged (assumed already arcseconds), matching every other
+    /// `NumOrStr`-based deserializer's numeric-passthrough convention.
+    #[test]
+    fn de_angle_arcsec_numeric_passthrough() {
+        let w: WrapAngleArcsec = serde_yaml::from_str("a: 1800.0").unwrap();
+        assert_ulps_eq!(w.a, 1800.0, max_ulps = 0);
+    }
+
+    /// `de_angle_arcsec` on known values: "30 arcmin" and "0.5 deg" are both
+    /// 1800 arcsec.
+    #[test]
+    fn de_angle_arcsec_known_values() {
+        let w: WrapAngleArcsec = serde_yaml::from_str("a: \"30 arcmin\"").unwrap();
+        assert_relative_eq!(w.a, 1800.0, max_relative = 1e-9);
+
+        let w: WrapAngleArcsec = serde_yaml::from_str("a: \"0.5 deg\"").unwrap();
+        assert_relative_eq!(w.a, 1800.0, max_relative = 1e-9);
     }
 }

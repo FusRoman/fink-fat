@@ -1,4 +1,4 @@
-use crate::engine_config::units::de_angle_rad;
+use crate::engine_config::units::de_angle_arcsec;
 use nalgebra::Matrix2;
 use serde::{Deserialize, Serialize};
 
@@ -41,7 +41,7 @@ pub enum RadiusStrategy {
         /// Strategy to apply before clamping.
         inner: MixOrMax,
         /// Maximum allowed radius (arcseconds).
-        #[serde(deserialize_with = "de_angle_rad")]
+        #[serde(deserialize_with = "de_angle_arcsec")]
         max_arcsec: f64,
     },
 }

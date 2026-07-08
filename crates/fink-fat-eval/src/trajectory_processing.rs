@@ -65,12 +65,48 @@ pub fn materialize_contiguous_traj<'o>(
 /// per-step [`KFStudyResult`]s into one [`TrajSummary`], and to collapse the
 /// whole dataset's [`TrajSummary`]s into one global report (see
 /// [`crate::reporting::print_global_aggregate_stats`]).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct MetricStats {
+    #[serde(with = "finite_f64")]
     pub mean: f64,
+    #[serde(with = "finite_f64")]
     pub median: f64,
+    #[serde(with = "finite_f64")]
     pub min: f64,
+    #[serde(with = "finite_f64")]
     pub max: f64,
+}
+
+/// Serde helper (de)serializing `f64`, tolerating `NaN`/`±Infinity`.
+///
+/// Plain JSON has no representation for these; `serde_json`'s default `f64`
+/// impl silently emits `null` for them, which then fails to parse back
+/// (`null` isn't a valid `f64`). [`MetricStats`] legitimately produces `NaN`
+/// for empty samples (see [`compute_stats`]), so its fields round-trip
+/// through this instead of a bare `f64`.
+pub(crate) mod finite_f64 {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
+        if value.is_finite() {
+            serializer.serialize_f64(*value)
+        } else {
+            serializer.serialize_str(&value.to_string())
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum NumOrStr {
+            Num(f64),
+            Str(String),
+        }
+        match NumOrStr::deserialize(deserializer)? {
+            NumOrStr::Num(v) => Ok(v),
+            NumOrStr::Str(s) => s.parse().map_err(serde::de::Error::custom),
+        }
+    }
 }
 
 /// Compute [`MetricStats`] over a slice of raw values.
