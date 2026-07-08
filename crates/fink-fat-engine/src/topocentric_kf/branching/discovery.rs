@@ -61,7 +61,20 @@ pub fn seed_new_lineages_from_leftovers<'state_lf, 'bank_config>(
         &spatial_binner,
     )?;
 
-    Ok(new_banks
+    let n_before_filter = new_banks.len();
+    let live_banks: Vec<_> = new_banks
+        .into_iter()
+        .filter(|bank| bank.is_alive())
+        .collect();
+    let n_dead = n_before_filter - live_banks.len();
+    if n_dead > 0 {
+        tracing::debug!(
+            n_dead,
+            "dropping banks with no live hypothesis (all grid seeds gated/zero-weight)"
+        );
+    }
+
+    Ok(live_banks
         .into_iter()
         .map(|bank| {
             let id = *next_lineage_id;
