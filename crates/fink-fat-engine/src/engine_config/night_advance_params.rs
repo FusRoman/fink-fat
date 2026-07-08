@@ -22,14 +22,18 @@
 //! project-level unit parsers from [`crate::engine_config::units`] for its
 //! time/angle/angular-variance fields.
 //!
-//! Note: unlike `PairConfig`/`TripletConfig`, this struct has no
-//! `validate()` method — the numeric-range expectations documented on each
-//! field (e.g. `completeness_width_mag > 0`, `branch_cap ≥ 1`) are not
-//! currently enforced at load time.
+//! The numeric-range expectations documented on each field (e.g.
+//! `completeness_width_mag > 0`, `branch_cap ≥ 1`) are enforced by this
+//! type's [`Validate`](crate::engine_config::Validate) implementation.
 
 use serde::{Deserialize, Serialize};
 
+use crate::engine_config::Validate;
+use crate::engine_config::error::FieldError;
 use crate::engine_config::units::{de_angle_rad, de_angle_var_rad2_pair, de_time_days};
+use crate::engine_config::validate_helpers::{
+    check_finite, check_finite_nonneg, check_finite_positive, check_min_usize,
+};
 use crate::topocentric_kf::kalman_bank::ellipse_region_finder::{
     radius_strategy::{MixOrMax, RadiusStrategy},
     top_k::TopK,
@@ -253,6 +257,84 @@ impl Default for NightAdvanceParams {
             n_scan: 1,
             limiting_magnitude: 21.0,
             completeness_width_mag: 0.4,
+        }
+    }
+}
+
+impl Validate for NightAdvanceParams {
+    /// Validate internal consistency and numeric ranges, accumulating every
+    /// failure found instead of stopping at the first one.
+    ///
+    /// `top_k` and `radius_strategy` are external enums (defined in
+    /// `topocentric_kf`, outside `engine_config`) and are not validated here.
+    fn validate(&self) -> Result<(), Vec<FieldError>> {
+        let mut errors = Vec::new();
+
+        if let Some(e) = check_finite_nonneg(
+            "visit_epoch_tolerance_days",
+            self.visit_epoch_tolerance_days,
+            "set visit_epoch_tolerance_days to a small non-negative duration, e.g. 1.0/86_400.0 (~1 second)",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_positive(
+            "quick_reject_radius_rad",
+            self.quick_reject_radius_rad,
+            "set quick_reject_radius_rad to a strictly positive angle, e.g. \"3.4 arcmin\" or 1e-3 (rad)",
+        ) {
+            errors.push(e);
+        }
+        for (i, component) in self.obs_noise.iter().enumerate() {
+            if let Some(e) = check_finite_nonneg(
+                &format!("obs_noise[{i}]"),
+                *component,
+                "set obs_noise components to non-negative variances, e.g. \"0.1 arcsec\" (squared) or 2.35e-13 (rad^2)",
+            ) {
+                errors.push(e);
+            }
+        }
+        if let Some(e) = check_finite_nonneg(
+            "likelihood_threshold",
+            self.likelihood_threshold,
+            "set likelihood_threshold to a non-negative density, e.g. 0.0 to disable this stage",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_min_usize(
+            "branch_cap",
+            self.branch_cap,
+            1,
+            "set branch_cap to at least 1 branch per lineage, e.g. 4",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_min_usize(
+            "n_scan",
+            self.n_scan,
+            1,
+            "set n_scan to at least 1 night, e.g. 1",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite(
+            "limiting_magnitude",
+            self.limiting_magnitude,
+            "set limiting_magnitude to a finite survey magnitude, e.g. 21.0",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_positive(
+            "completeness_width_mag",
+            self.completeness_width_mag,
+            "set completeness_width_mag to a strictly positive magnitude width, e.g. 0.4",
+        ) {
+            errors.push(e);
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
         }
     }
 }

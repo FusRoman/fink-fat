@@ -155,14 +155,11 @@
 //! Errors and validation
 //! -----------------------------------------------------------------------------
 //!
-//! [`PairConfig::validate`] enforces basic numeric validity:
-//! - finite values,
-//! - non-negative constraints.
-//!
-//! Validation can fail with:
-//! - [`SeedError::NonFiniteOrNegativeTime`] for `pairs.max_dt`,
-//! - [`SeedError::NonFiniteOrNegativeAngle`] for `pairs.max_angular_speed`,
-//! - [`SeedError::NonFiniteOrNegativePhotometry`] for `pairs.max_mag_difference`.
+//! [`PairConfig`]'s [`Validate`](crate::engine_config::Validate) implementation
+//! enforces basic numeric validity — finite values, non-negative constraints
+//! — for `max_dt`, `max_angular_speed`, `max_mag_difference` and
+//! `acc_prior_var`, accumulating every failing field into a
+//! `Vec<FieldError>` instead of stopping at the first one.
 //!
 //! Unit parsing failures (string quantities) are surfaced by serde as
 //! deserialization errors with an explicit message from `engine_config::units`
@@ -179,10 +176,12 @@
 use photom::MJDTT;
 use serde::{Deserialize, Serialize};
 
-use crate::engine_config::units::{
-    de_ang_accel_rad_per_day2, de_ang_speed_rad_per_day, de_time_days,
+use crate::engine_config::{
+    Validate,
+    error::FieldError,
+    units::{de_ang_accel_rad_per_day2, de_ang_speed_rad_per_day, de_time_days},
+    validate_helpers::check_finite_nonneg,
 };
-use crate::error::SeedError;
 
 /// Parameters controlling **pair generation** between alerts `(a, b)`.
 ///
@@ -317,26 +316,50 @@ impl Default for PairConfig {
     }
 }
 
-impl PairConfig {
-    /// Validate internal consistency and numeric ranges.
-    pub fn validate(&self) -> Result<(), SeedError> {
-        if !self.max_dt.is_finite() || self.max_dt < 0.0 {
-            return Err(SeedError::NonFiniteOrNegativeTime("pairs.max_dt"));
-        }
-        if !self.max_angular_speed.is_finite() || self.max_angular_speed < 0.0 {
-            // Reuse the "angle" error kind for this angular-rate parameter.
-            return Err(SeedError::NonFiniteOrNegativeAngle(
-                "pairs.max_angular_speed",
-            ));
-        }
-        if !self.max_mag_difference.is_finite() || self.max_mag_difference < 0.0 {
-            return Err(SeedError::NonFiniteOrNegativePhotometry(
-                "pairs.max_mag_difference",
-            ));
-        }
-        Ok(())
-    }
+impl Validate for PairConfig {
+    /// Validate internal consistency and numeric ranges, accumulating every
+    /// failure found instead of stopping at the first one.
+    fn validate(&self) -> Result<(), Vec<FieldError>> {
+        let mut errors = Vec::new();
 
+        if let Some(e) = check_finite_nonneg(
+            "max_dt",
+            self.max_dt,
+            "set pairs.max_dt to a non-negative duration, e.g. \"86.4 min\" or 0.06 (days)",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_nonneg(
+            "max_angular_speed",
+            self.max_angular_speed,
+            "set pairs.max_angular_speed to a non-negative rate, e.g. \"35 arcmin/day\" or 5.0e-2 (rad/day)",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_nonneg(
+            "max_mag_difference",
+            self.max_mag_difference,
+            "set pairs.max_mag_difference to a non-negative threshold, e.g. 5.0",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_nonneg(
+            "acc_prior_var",
+            self.acc_prior_var,
+            "set pairs.acc_prior_var to a non-negative acceleration variance, e.g. \"1 arcsec/day^2\" or 1.0e-4 (rad/day^2)",
+        ) {
+            errors.push(e);
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl PairConfig {
     /// Conservative maximum separation (radians) used for **spatial neighborhood**
     /// traversal in the bucket index:
     ///
@@ -396,7 +419,7 @@ impl PairConfigBuilder {
     }
 
     /// Finalize builder and validate constraints.
-    pub fn build(self) -> Result<PairConfig, SeedError> {
+    pub fn build(self) -> Result<PairConfig, Vec<FieldError>> {
         let p = PairConfig {
             max_dt: self.params.max_dt,
             max_angular_speed: self.params.max_angular_speed,

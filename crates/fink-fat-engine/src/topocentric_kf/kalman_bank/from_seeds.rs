@@ -14,7 +14,7 @@ use photom::{
 };
 
 use crate::{
-    engine_config::{EngineConfig, kalman_context::KalmanContext},
+    engine_config::{kalman_context::KalmanContext, main_config::EngineConfig},
     error::EngineError,
     seeding::pairs::generate_pairs,
     spacetime_bucket::{

@@ -10,7 +10,12 @@
 use outfit::kepler::SolverType;
 use serde::{Deserialize, Serialize};
 
-use crate::engine_config::units::de_time_days;
+use crate::engine_config::{
+    Validate,
+    error::FieldError,
+    units::de_time_days,
+    validate_helpers::{check_finite_nonneg, check_finite_positive},
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct KalmanConfig {
@@ -65,6 +70,35 @@ impl Default for KalmanConfig {
             q0: 1e-16,
             dt_ref: 1.,
             solver_type: SolverType::default(),
+        }
+    }
+}
+
+impl Validate for KalmanConfig {
+    /// Validate internal consistency and numeric ranges, accumulating every
+    /// failure found instead of stopping at the first one.
+    fn validate(&self) -> Result<(), Vec<FieldError>> {
+        let mut errors = Vec::new();
+
+        if let Some(e) = check_finite_nonneg(
+            "q0",
+            self.q0,
+            "set q0 to a non-negative acceleration process-noise PSD, e.g. 1e-16 (AU^2/day^3)",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_positive(
+            "dt_ref",
+            self.dt_ref,
+            "set dt_ref to a strictly positive duration, e.g. 1.0 or \"24 hour\" (days)",
+        ) {
+            errors.push(e);
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
         }
     }
 }

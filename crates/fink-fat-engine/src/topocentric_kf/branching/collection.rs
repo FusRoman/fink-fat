@@ -23,7 +23,7 @@ use std::collections::HashSet;
 use photom::observation_dataset::{ObsDataset, observation::Observation};
 
 use crate::{
-    engine_config::{EngineConfig, kalman_context::KalmanContext},
+    engine_config::{kalman_context::KalmanContext, main_config::EngineConfig},
     error::EngineError,
     spacetime_bucket::healpix_binner::HealpixBinner,
     topocentric_kf::branching::{
