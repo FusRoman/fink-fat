@@ -46,13 +46,14 @@
 //! - `seeding::pairs` – produces `(a, b)` candidates.
 //! - `spacetime_bucket::bucket` – bucket index and per-bucket time ordering.
 
+use std::f64::consts::PI;
+
 use ahash::{AHashMap, AHashSet};
 use photom::{
-    coordinates::cartesian::CartesianCoord, observation_dataset::observation::Observation,
+    Radians, coordinates::cartesian::CartesianCoord, observation_dataset::observation::Observation,
 };
 
 use crate::{
-    astro_math::planar_offset_fast,
     engine_config::triplet_config::TripletConfig,
     seeding::pairs::Pair,
     spacetime_bucket::{
@@ -61,6 +62,61 @@ use crate::{
         time_binner::{TimeBin, TimeBinner, time_targets},
     },
 };
+
+/// Wrap an angle into the interval $(-\pi, \pi]$.
+///
+/// Useful when computing RA differences that should be taken modulo $2\pi$.
+///
+/// # Arguments
+///
+/// - `x` – Input angle in radians (unbounded).
+///
+/// # Returns
+///
+/// Angle in radians, $y \in (-\pi, \pi]$.
+#[inline]
+pub fn wrap_pm_pi(x: Radians) -> Radians {
+    let two_pi = 2.0 * PI;
+    let mut y = (x + PI) % two_pi;
+    if y < 0.0 {
+        y += two_pi;
+    }
+    y - PI
+}
+
+/// Compute tangent-plane offsets around `(ra0, dec0)` using a precomputed `cos(dec0)`.
+///
+/// This routine projects a target position `(ra, dec)` onto the local tangent
+/// plane centered at `(ra0, dec0)`. It is intended for **small angular
+/// separations**, where a Cartesian approximation is sufficient.
+///
+/// The offsets are:
+/// - `dx = wrap_pm_pi(ra − ra0) * cos(dec0)`
+/// - `dy = dec − dec0`
+///
+/// # Arguments
+///
+/// - `ra0` – Center right ascension (radians).
+/// - `dec0` – Center declination (radians).
+/// - `cos_dec0` – Precomputed cosine of `dec0`, i.e. `dec0.cos()`.
+/// - `ra` – Target right ascension (radians).
+/// - `dec` – Target declination (radians).
+///
+/// # Returns
+///
+/// `(dx, dy)` tangent-plane offsets in **radians**.
+#[inline]
+pub fn planar_offset_fast(
+    ra0: Radians,
+    dec0: Radians,
+    cos_dec0: f64,
+    ra: Radians,
+    dec: Radians,
+) -> (Radians, Radians) {
+    let dx = wrap_pm_pi(ra - ra0) * cos_dec0;
+    let dy = dec - dec0;
+    (dx, dy)
+}
 
 /// A seed made of three detections with strictly increasing observation times.
 ///
@@ -400,7 +456,7 @@ mod triplet_gen_tests {
     use std::f64::consts::PI;
 
     use photom::{
-        MJDTT,
+        Arcseconds, MJDTT, Radians,
         coordinates::equatorial::EquCoord,
         observation_dataset::{
             ObsDataset,
@@ -410,7 +466,6 @@ mod triplet_gen_tests {
     };
 
     use crate::{
-        astro_math::{arcsec_to_rad, planar_offset_fast},
         engine_config::triplet_config::TripletConfig,
         spacetime_bucket::{
             bucket::build_alert_bucket_index,
@@ -420,6 +475,11 @@ mod triplet_gen_tests {
     };
 
     const LAT_EPS: f64 = 1e-6;
+
+    #[inline]
+    pub fn arcsec_to_rad(x: Arcseconds) -> Radians {
+        x * PI / (180.0 * 3600.0)
+    }
 
     /* ------------------------- dummy binners ------------------------- */
 

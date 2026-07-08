@@ -190,17 +190,25 @@ pub fn observation_noise_diagonal(ra_error: f64, dec_error: f64) -> Vector2<f64>
 
 #[cfg(test)]
 mod candidate_search_tests {
+    use std::f64::consts::PI;
+
     use super::*;
     use nalgebra::Matrix2;
     use photom::{
+        Arcseconds, Radians,
         observation_dataset::{ObsDataset, observation::ObservationInput},
         photometry::{Filter, Photometry},
     };
 
     use crate::{
-        astro_math::arcsec_to_rad, spacetime_bucket::bucket::build_alert_bucket_index,
+        spacetime_bucket::bucket::build_alert_bucket_index,
         topocentric_kf::kalman_bank::ellipse_region_finder::SearchComponent,
     };
+
+    #[inline]
+    pub fn arcsec_to_rad(x: Arcseconds) -> Radians {
+        x * PI / (180.0 * 3600.0)
+    }
 
     fn mk_observation(id: u64, ra: f64, dec: f64, mjd_tt: f64) -> Observation {
         let obs_dataset = ObsDataset::empty();
