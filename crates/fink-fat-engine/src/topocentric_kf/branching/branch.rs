@@ -13,10 +13,10 @@ use crate::topocentric_kf::kalman_bank::KFBank;
 /// hypothesis) each time a bank's search region contains ambiguous matches.
 /// See the module-level design note in `kalman_update_instruction.md`.
 #[derive(Clone)]
-pub struct Branch<'state_lf> {
+pub struct Branch<'state_lf, 'bank_config> {
     /// Bank state for this branch (post `branch_with`/`branch_null` + the
     /// usual intra-bank `moment_match_merge` cleanup).
-    pub bank: KFBank<'state_lf>,
+    pub bank: KFBank<'state_lf, 'bank_config>,
     /// Cumulative log-LR since this branch's root (night-0) bank.
     pub cumulative_llr: f64,
     /// Identity of the original (night-0) bank this branch ultimately
@@ -47,7 +47,7 @@ pub struct Branch<'state_lf> {
     pub lineage_designation: BranchId,
 }
 
-impl<'state_lf> Branch<'state_lf> {
+impl<'state_lf, 'bank_config> Branch<'state_lf, 'bank_config> {
     /// Create the initial branch for a freshly built (night-0) bank: its own
     /// lineage root, zero cumulative LLR, anchoring its own N-scan horizon.
     ///
@@ -56,7 +56,7 @@ impl<'state_lf> Branch<'state_lf> {
     ///   [`build_kf_bank_collection`](crate::topocentric_kf::bank_collection::build_kf_bank_collection).
     /// * `lineage_id`, `branch_id` – Identity assigned by the caller (see the
     ///   per-night orchestrator's monotonic id counters).
-    pub fn seed(bank: KFBank<'state_lf>, lineage_id: u64, branch_id: u64) -> Self {
+    pub fn seed(bank: KFBank<'state_lf, 'bank_config>, lineage_id: u64, branch_id: u64) -> Self {
         let epoch = bank
             .best()
             .expect("a freshly built bank has at least one live hypothesis")
@@ -93,8 +93,8 @@ impl<'state_lf> Branch<'state_lf> {
     /// against `obs` (see [`KFBank::branch_with`]) — this candidate history
     /// is not viable.
     pub fn from_observation(
-        predicted_bank: &KFBank<'state_lf>,
-        parent: &Branch<'state_lf>,
+        predicted_bank: &KFBank<'state_lf, 'bank_config>,
+        parent: &Branch<'state_lf, 'bank_config>,
         obs: &Observation,
         llr_delta: f64,
         branch_id: u64,
@@ -123,8 +123,8 @@ impl<'state_lf> Branch<'state_lf> {
     ///   [`null_branch_llr_delta`](super::llr_score::null_branch_llr_delta).
     /// * `branch_id` – Id assigned to the new branch.
     pub fn from_null(
-        predicted_bank: &KFBank<'state_lf>,
-        parent: &Branch<'state_lf>,
+        predicted_bank: &KFBank<'state_lf, 'bank_config>,
+        parent: &Branch<'state_lf, 'bank_config>,
         llr_delta: f64,
         branch_id: u64,
     ) -> Self {

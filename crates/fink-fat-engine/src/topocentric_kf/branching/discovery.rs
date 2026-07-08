@@ -38,15 +38,15 @@ use crate::{
 ///
 /// # Returns
 /// One [`Branch::seed`] per new bank built from the leftover observations.
-pub fn seed_new_lineages_from_leftovers<'state_lf>(
+pub fn seed_new_lineages_from_leftovers<'state_lf, 'bank_config>(
     night_obs: &[&Observation],
     consumed_observation_ids: &HashSet<ObsId>,
     obs_dataset: &ObsDataset,
     kalman_context: &'state_lf KalmanContext,
-    engine_config: &EngineConfig,
+    engine_config: &'bank_config EngineConfig,
     spatial_binner: &HealpixBinner,
     next_lineage_id: &mut u64,
-) -> Result<Vec<Branch<'state_lf>>, EngineError> {
+) -> Result<Vec<Branch<'state_lf, 'bank_config>>, EngineError> {
     let leftover_obs: Vec<&Observation> = night_obs
         .iter()
         .copied()

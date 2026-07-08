@@ -16,7 +16,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use fink_fat_engine::engine_config::grid_population::GridConfig;
 use fink_fat_engine::engine_config::kalman_context::KalmanContext;
+use fink_fat_engine::engine_config::kf_bank_config::KFBankConfig;
 use fink_fat_engine::topocentric_kf::kalman_bank::KFBank;
 use nalgebra::Vector6;
 use outfit::OrbitalElements;
@@ -259,6 +261,8 @@ fn process_one_trajectory(
     traj_id: &TrajId,
     obs_dataset: &ObsDataset,
     context: &KalmanContext,
+    bank_config: &KFBankConfig,
+    grid_config: &GridConfig,
     completed: &AtomicUsize,
     nb_traj: usize,
     global_start: &Instant,
@@ -304,7 +308,8 @@ fn process_one_trajectory(
 
     // --- kalman filter bank ---
     let t1 = Instant::now();
-    let (bank_opt, results) = study_kalman_asteroid(&traj, obs_dataset, context);
+    let (bank_opt, results) =
+        study_kalman_asteroid(&traj, obs_dataset, context, bank_config, grid_config);
     let kalman_ms = t1.elapsed().as_secs_f64() * 1e3;
 
     // --- summarize ---
@@ -377,6 +382,8 @@ fn maybe_print_parallel_progress(done: usize, total: usize, global_start: &Insta
 pub fn process_all_trajectories(
     obs_dataset: &ObsDataset,
     context: &KalmanContext,
+    bank_config: &KFBankConfig,
+    grid_config: &GridConfig,
 ) -> (Vec<TrajSummary>, RunCounters) {
     let nb_traj = obs_dataset.iter_traj_id().map(|iter| iter.count()).unwrap();
 
@@ -396,6 +403,8 @@ pub fn process_all_trajectories(
                 traj_id,
                 obs_dataset,
                 context,
+                bank_config,
+                grid_config,
                 &completed,
                 nb_traj,
                 &global_start,

@@ -8,7 +8,10 @@
 //! detailed reports), and never mutates any run state.
 
 use fink_fat_engine::{
-    engine_config::kalman_context::KalmanContext, topocentric_kf::kalman_bank::KFBank,
+    engine_config::{
+        grid_population::GridConfig, kalman_context::KalmanContext, kf_bank_config::KFBankConfig,
+    },
+    topocentric_kf::kalman_bank::KFBank,
 };
 use photom::{TrajId, observation_dataset::ObsDataset};
 
@@ -146,6 +149,8 @@ pub fn print_detailed_reports(
     traj_ids: &[TrajId],
     obs_dataset: &ObsDataset,
     context: &KalmanContext,
+    bank_config: &KFBankConfig,
+    grid_config: &GridConfig,
 ) {
     for traj_id in traj_ids {
         match materialize_contiguous_traj(obs_dataset, traj_id) {
@@ -161,7 +166,8 @@ pub fn print_detailed_reports(
                 }
                 println!("\n\n =============");
 
-                let (bank, results) = study_kalman_asteroid(&traj, obs_dataset, context);
+                let (bank, results) =
+                    study_kalman_asteroid(&traj, obs_dataset, context, bank_config, grid_config);
                 print_single_trajectory_report(bank.as_ref(), &results, len_traj);
             }
             Err(e) => println!("  (failed to re-materialize trajectory: {e})"),

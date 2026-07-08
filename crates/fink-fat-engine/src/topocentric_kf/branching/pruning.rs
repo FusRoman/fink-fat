@@ -23,11 +23,11 @@ use crate::topocentric_kf::branching::branch::Branch;
 ///
 /// # Returns
 /// The surviving branches.
-pub fn cap_top_b_per_lineage<'state_lf>(
-    branches: Vec<Branch<'state_lf>>,
+pub fn cap_top_b_per_lineage<'state_lf, 'bank_config>(
+    branches: Vec<Branch<'state_lf, 'bank_config>>,
     cap: usize,
-) -> Vec<Branch<'state_lf>> {
-    let mut by_lineage: HashMap<u64, Vec<Branch<'state_lf>>> = HashMap::new();
+) -> Vec<Branch<'state_lf, 'bank_config>> {
+    let mut by_lineage: HashMap<u64, Vec<Branch<'state_lf, 'bank_config>>> = HashMap::new();
     for branch in branches {
         by_lineage
             .entry(branch.lineage_id)
@@ -68,12 +68,13 @@ pub fn cap_top_b_per_lineage<'state_lf>(
 /// Surviving branches: one per `(lineage_id, ancestor_at_scan_horizon)`
 /// group, with the horizon rolled forward for groups that reached the
 /// window.
-pub fn apply_n_scan_pruning<'state_lf>(
-    branches: Vec<Branch<'state_lf>>,
+pub fn apply_n_scan_pruning<'state_lf, 'bank_config>(
+    branches: Vec<Branch<'state_lf, 'bank_config>>,
     n_scan: usize,
     current_step: usize,
-) -> Vec<Branch<'state_lf>> {
-    let mut by_horizon_node: HashMap<(u64, u64), Vec<Branch<'state_lf>>> = HashMap::new();
+) -> Vec<Branch<'state_lf, 'bank_config>> {
+    let mut by_horizon_node: HashMap<(u64, u64), Vec<Branch<'state_lf, 'bank_config>>> =
+        HashMap::new();
     for branch in branches {
         by_horizon_node
             .entry((branch.lineage_id, branch.ancestor_at_scan_horizon))
@@ -95,7 +96,9 @@ pub fn apply_n_scan_pruning<'state_lf>(
 }
 
 /// Pick the branch with the highest `cumulative_llr` from a non-empty group.
-fn best_by_cumulative_llr<'state_lf>(branches: Vec<Branch<'state_lf>>) -> Branch<'state_lf> {
+fn best_by_cumulative_llr<'state_lf, 'bank_config>(
+    branches: Vec<Branch<'state_lf, 'bank_config>>,
+) -> Branch<'state_lf, 'bank_config> {
     branches
         .into_iter()
         .reduce(|best, candidate| {

@@ -15,9 +15,7 @@
 use anyhow::Result;
 use clap::Parser;
 
-use fink_fat_engine::topocentric_kf::{
-    config::KalmanConfig, single_kalman::context::KalmanContext,
-};
+use fink_fat_engine::engine_config::EngineConfig;
 use fink_fat_eval::{
     cli::{Cli, load_data},
     reporting::{
@@ -47,32 +45,22 @@ fn init_tracing() {
         .init();
 }
 
-/// Build the [`KalmanContext`] shared by every trajectory processed in this
-/// run.
-///
-/// Uses a slightly tightened process-noise (`q0`) compared to the default
-/// configuration, and the DE440 JPL Horizons ephemeris for topocentric
-/// corrections.
-fn build_kalman_context() -> KalmanContext {
-    KalmanContext::new(
-        KalmanConfig {
-            q0: 1e-13,
-            ..KalmanConfig::default()
-        },
-        "horizon:DE440",
-        None,
-    )
-}
-
 fn main() -> Result<()> {
     init_tracing();
 
     let cli = Cli::parse();
     let (_, obs_dataset) = load_data(&cli.alerts);
-    let kalman_ctx = build_kalman_context();
+
+    let engine_config = EngineConfig::load_engine_config_validated(cli.config)?;
+    let kalman_ctx = engine_config.build_context();
 
     println!("Scanning the dataset and running the Kalman filter bank on every trajectory…");
-    let (summaries, counters) = process_all_trajectories(&obs_dataset, &kalman_ctx);
+    let (summaries, counters) = process_all_trajectories(
+        &obs_dataset,
+        &kalman_ctx,
+        &engine_config.kfbank_config,
+        &engine_config.seeding_grid_config,
+    );
 
     print_run_counters(&counters, summaries.len());
 
@@ -90,8 +78,22 @@ fn main() -> Result<()> {
     let best_ids: Vec<TrajId> = best.iter().map(|s| s.traj_id.clone()).collect();
     let worst_ids: Vec<TrajId> = worst.iter().map(|s| s.traj_id.clone()).collect();
 
-    print_detailed_reports("BEST", &best_ids, &obs_dataset, &kalman_ctx);
-    print_detailed_reports("WORST", &worst_ids, &obs_dataset, &kalman_ctx);
+    print_detailed_reports(
+        "BEST",
+        &best_ids,
+        &obs_dataset,
+        &kalman_ctx,
+        &engine_config.kfbank_config,
+        &engine_config.seeding_grid_config,
+    );
+    print_detailed_reports(
+        "WORST",
+        &worst_ids,
+        &obs_dataset,
+        &kalman_ctx,
+        &engine_config.kfbank_config,
+        &engine_config.seeding_grid_config,
+    );
 
     Ok(())
 }
