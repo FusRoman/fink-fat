@@ -7,7 +7,9 @@
 //! [`KFStudyResult`] data (re-running the Kalman filter on demand for
 //! detailed reports), and never mutates any run state.
 
-use fink_fat_engine::topocentric_kf::{kalman_bank::KFBank, single_kalman::context::KalmanContext};
+use fink_fat_engine::{
+    engine_config::kalman_context::KalmanContext, topocentric_kf::kalman_bank::KFBank,
+};
 use photom::{TrajId, observation_dataset::ObsDataset};
 
 use crate::{

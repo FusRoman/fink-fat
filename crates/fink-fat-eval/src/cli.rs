@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use clap::Parser;
-use fink_fat_engine::engine_config::{EngineConfig, load_engine_config_validated};
+use fink_fat_engine::engine_config::main_config::EngineConfig;
 use photom::{
     io::polars::{ContiguousChoice, FromPolarsArgs},
     observation_dataset::ObsDataset,
@@ -44,8 +44,12 @@ pub struct Cli {
     /// Path to the fink-fat configuration file
     #[arg(short, long, value_name = "CONFIG_FILE")]
     pub config: Utf8PathBuf,
+
+    /// Path to the fink-fat configuration file
+    #[arg(short, long, value_name = "OUTPUT_DIR")]
+    pub output_result: Option<Utf8PathBuf>,
 }
 
-pub fn load_config(config_path: &Utf8Path) -> Result<EngineConfig> {
-    load_engine_config_validated(config_path).context("failed to load engine config")
+pub fn load_config(config_path: impl AsRef<Utf8Path>) -> Result<EngineConfig> {
+    EngineConfig::load_engine_config_validated(config_path).context("failed to load engine config")
 }
