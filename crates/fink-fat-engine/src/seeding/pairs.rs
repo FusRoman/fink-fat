@@ -455,6 +455,7 @@ mod pair_gen_tests {
             allow_same_timebin: false,
             max_mag_difference: 10.0,
             acc_prior_var: 1e-5,
+            ..Default::default()
         };
 
         let pairs = generate_pairs(&bucket_index, &spatial_binner, &time_binner, &config);
@@ -503,6 +504,7 @@ mod pair_gen_tests {
             allow_same_timebin: false,
             max_mag_difference: 10.0,
             acc_prior_var: 1e-5,
+            ..Default::default()
         };
 
         let pairs_no_same = generate_pairs(
@@ -519,6 +521,7 @@ mod pair_gen_tests {
             allow_same_timebin: true,
             max_mag_difference: 10.0,
             acc_prior_var: 1e-5,
+            ..Default::default()
         };
 
         let pairs_same = generate_pairs(&bucket_index, &spatial_binner, &time_binner, &config_same);
@@ -574,6 +577,7 @@ mod pair_gen_tests {
             allow_same_timebin: true,
             max_mag_difference: 1e6,
             acc_prior_var: 1e-5,
+            ..Default::default()
         };
 
         let pairs = generate_pairs(&bucket_index, &spatial_binner, &time_binner, &config);
@@ -639,6 +643,7 @@ mod pair_gen_tests {
             allow_same_timebin: true,
             max_mag_difference: 10.0,
             acc_prior_var: 1e-5,
+            ..Default::default()
         };
 
         let pairs = generate_pairs(&bucket_index, &spatial_binner, &time_binner, &config);
@@ -685,6 +690,7 @@ mod pair_gen_tests {
             allow_same_timebin: true,
             max_mag_difference: 100.0,
             acc_prior_var: 1e-5,
+            ..Default::default()
         };
 
         let pairs = generate_pairs(&bucket_index, &spatial_binner, &time_binner, &config);
@@ -751,6 +757,7 @@ mod pair_gen_tests {
                     allow_same_timebin: false,
                     max_mag_difference: 1e6,
                     acc_prior_var: 1e-5,
+                    ..Default::default()
                 };
 
                 let sep_cap = config.max_angular_speed * config.max_dt;
