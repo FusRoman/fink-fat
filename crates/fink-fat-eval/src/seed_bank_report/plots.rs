@@ -6,16 +6,20 @@ use plotters::prelude::*;
 
 use crate::seed_bank_report::report::SeedingReport;
 
-const CHART_WIDTH: u32 = 1200;
-const CHART_HEIGHT: u32 = 700;
-const MARGIN: u32 = 20;
-const LABEL_AREA: u32 = 60;
+pub(crate) const CHART_WIDTH: u32 = 1200;
+pub(crate) const CHART_HEIGHT: u32 = 700;
+pub(crate) const MARGIN: u32 = 20;
+pub(crate) const LABEL_AREA: u32 = 60;
 
 /// One named, colored series of `(x, y)` points for [`draw_line_chart`].
-struct Series {
-    label: &'static str,
-    color: RGBColor,
-    points: Vec<(f64, f64)>,
+///
+/// `pub(crate)` so other report modules (e.g. `tracking_report::plots`) can
+/// reuse this generic chart primitive instead of duplicating the `plotters`
+/// boilerplate.
+pub(crate) struct Series {
+    pub(crate) label: &'static str,
+    pub(crate) color: RGBColor,
+    pub(crate) points: Vec<(f64, f64)>,
 }
 
 /// Draw one or more line+point series sharing the same axes to `output_path`.
@@ -23,7 +27,7 @@ struct Series {
 /// The x/y ranges are derived from the data (padded by 5%) rather than
 /// hardcoded, so this works unchanged whether it's plotting a branch count
 /// in the thousands or a percentage in `[0, 100]`.
-fn draw_line_chart(
+pub(crate) fn draw_line_chart(
     output_path: &Utf8Path,
     title: &str,
     x_label: &str,
@@ -79,7 +83,7 @@ fn draw_line_chart(
 /// Data-derived axis ranges, padded by 5% on each side so points don't sit
 /// flush against the chart border. Falls back to `[0, 1]` for an empty
 /// series (nothing to plot, but the chart must still build).
-fn padded_ranges<'a>(
+pub(crate) fn padded_ranges<'a>(
     points: impl Iterator<Item = &'a (f64, f64)>,
 ) -> (std::ops::Range<f64>, std::ops::Range<f64>) {
     let (mut x_min, mut x_max, mut y_min, mut y_max) = (
@@ -207,7 +211,7 @@ pub fn plot_hypotheses_histogram(report: &SeedingReport, output_path: &Utf8Path)
 /// `(edges, counts)` where `edges` has `n_bins + 1` entries and `counts`
 /// has `n_bins` entries; values fall into `[edges[i], edges[i+1])`, with
 /// the last bin closed on both ends.
-fn histogram_bins(sorted: &[f64], n_bins: usize) -> (Vec<f64>, Vec<u32>) {
+pub(crate) fn histogram_bins(sorted: &[f64], n_bins: usize) -> (Vec<f64>, Vec<u32>) {
     let n_bins = n_bins.max(1);
     if sorted.is_empty() {
         return (vec![0.0, 1.0], vec![0]);

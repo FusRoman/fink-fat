@@ -45,7 +45,7 @@ pub struct Cli {
     #[arg(short, long, value_name = "CONFIG_FILE")]
     pub config: Utf8PathBuf,
 
-    /// Path to the fink-fat configuration file
+    /// Path of the output directory if any results should be save on disk
     #[arg(short, long, value_name = "OUTPUT_DIR")]
     pub output_result: Option<Utf8PathBuf>,
 }
