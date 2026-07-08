@@ -1,12 +1,12 @@
 //! Top-level intra-night pair → [`KFBank`] construction pipeline.
 //!
 //! Entry point: [`build_kf_bank_collection`]. For each night present in an
-//! [`ObsDataset`] (via `iter_night_id`/`iter_night_observations`), generates
-//! intra-night observation pairs with [`generate_pairs`] (reusing the
-//! existing gating: max_dt, angular-speed dot-product test, magnitude gate,
-//! `BucketIndex`/`SpatialBinner`/`TimeBinner`), then converts each surviving
-//! pair into a [`KFBank`] via `KFBank::from_grid`. Pairs are never formed
-//! across nights.
+//! [`ObsDataset`] (via `iter_night_id`/`iter_night_observations`), links
+//! intra-night observations into tracklets with [`link_tracklets`] (one
+//! maximal-baseline pair per multi-detection object — see that module's
+//! docs for why this replaces a plain all-pairs enumeration), then converts
+//! each surviving pair into a [`KFBank`] via `KFBank::from_grid`. Pairs are
+//! never formed across nights.
 
 use photom::{
     NightId,
@@ -16,11 +16,8 @@ use photom::{
 use crate::{
     engine_config::{kalman_context::KalmanContext, main_config::EngineConfig},
     error::EngineError,
-    seeding::pairs::generate_pairs,
-    spacetime_bucket::{
-        bucket::build_alert_bucket_index, healpix_binner::HealpixBinner,
-        uniform_time_binner::UniformTimeBinner,
-    },
+    seeding::tracklet_linker::link_tracklets,
+    spacetime_bucket::healpix_binner::HealpixBinner,
     topocentric_kf::kalman_bank::KFBank,
 };
 
@@ -66,8 +63,10 @@ pub fn build_kf_bank_collection<'state_lf>(
 /// only in which observations they pass in.
 ///
 /// Pipeline:
-/// 1. `build_alert_bucket_index` + `generate_pairs(..., pair_config)` — reused
-///    gating logic (max_dt / angular speed / magnitude / bucket dedup+sort).
+/// 1. [`link_tracklets`] — links intra-night observations into per-object
+///    tracklets (time/angular-speed/magnitude gated, reusing the same
+///    spatial bucketing as `generate_pairs`) and emits one pair per
+///    multi-detection object.
 /// 2. `KFBank::from_grid` per surviving pair.
 ///
 /// A `KFBank::from_grid` failure for one pair (e.g. unresolvable observer, no
@@ -85,16 +84,7 @@ pub fn build_kf_bank_collection_from_observations<'state_lf>(
         return Ok(KFBankCollection::default());
     }
 
-    let t0 = night_obs
-        .iter()
-        .map(|o| o.mjd_tt())
-        .fold(f64::INFINITY, f64::min);
-    let time_binner = UniformTimeBinner::new(t0, params.time_binner_width);
-
-    let bucket_index =
-        build_alert_bucket_index(night_obs.iter().copied(), spatial_binner, &time_binner);
-
-    let pairs = generate_pairs(&bucket_index, spatial_binner, &time_binner, &params.pairs);
+    let pairs = link_tracklets(night_obs, spatial_binner, &params.pairs);
 
     tracing::debug!(
         n_obs = night_obs.len(),

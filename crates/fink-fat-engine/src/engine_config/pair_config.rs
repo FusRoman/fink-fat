@@ -294,6 +294,39 @@ pub struct PairConfig {
     /// Parsed with [`de_ang_accel_rad_per_day2`].
     #[serde(deserialize_with = "de_ang_accel_rad_per_day2")]
     pub acc_prior_var: f64,
+
+    /// Sigma multiplier for the extrapolation-residual gate used by the
+    /// incremental tracklet linker (`seeding::tracklet_linker`) once a
+    /// track has accumulated ≥2 observations and fit a linear motion model.
+    ///
+    /// Units
+    /// -----
+    /// Dimensionless (multiple of the combined predicted-position standard
+    /// deviation).
+    ///
+    /// Context
+    /// -------
+    /// A candidate observation is linked onto an existing track only if its
+    /// angular distance from the track's linear-motion extrapolation is
+    /// within `tracklet_residual_sigma` standard deviations, where the
+    /// standard deviation is derived from the observations' own
+    /// `ra_error`/`dec_error` and the fit's extrapolation (leverage)
+    /// uncertainty — not a fixed angular constant, so the gate adapts to
+    /// whatever astrometric precision a given survey provides. This only
+    /// applies once a track has a fit (≥2 points); a track with a single
+    /// observation still falls back to the plain pairwise
+    /// `max_angular_speed` gate above, exactly as `generate_pairs` does
+    /// today.
+    ///
+    /// Tuning suggestions
+    /// -------------------
+    /// - Smaller values (e.g. `3.0`) link more conservatively: fewer false
+    ///   cross-object merges, but a real track is more likely to be split
+    ///   into several tracks if a single observation is noisier than usual.
+    /// - Larger values (e.g. `7.0`) tolerate more per-observation noise
+    ///   before splitting a track, at the cost of a slightly higher chance
+    ///   of bridging two different nearby objects into one track.
+    pub tracklet_residual_sigma: f64,
 }
 
 impl Default for PairConfig {
@@ -312,6 +345,7 @@ impl Default for PairConfig {
             max_mag_difference: 5.0,
             allow_same_timebin: true,
             acc_prior_var: 1.0e-4, // should also englobe NEOs
+            tracklet_residual_sigma: 5.0,
         }
     }
 }
@@ -347,6 +381,13 @@ impl Validate for PairConfig {
             "acc_prior_var",
             self.acc_prior_var,
             "set pairs.acc_prior_var to a non-negative acceleration variance, e.g. \"1 arcsec/day^2\" or 1.0e-4 (rad/day^2)",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_nonneg(
+            "tracklet_residual_sigma",
+            self.tracklet_residual_sigma,
+            "set pairs.tracklet_residual_sigma to a non-negative sigma multiplier, e.g. 5.0",
         ) {
             errors.push(e);
         }
@@ -418,6 +459,13 @@ impl PairConfigBuilder {
         self
     }
 
+    /// Set the sigma multiplier for the tracklet linker's extrapolation-residual
+    /// gate (see [`PairConfig::tracklet_residual_sigma`]).
+    pub fn tracklet_residual_sigma(mut self, v: f64) -> Self {
+        self.params.tracklet_residual_sigma = v;
+        self
+    }
+
     /// Finalize builder and validate constraints.
     pub fn build(self) -> Result<PairConfig, Vec<FieldError>> {
         let p = PairConfig {
@@ -426,6 +474,7 @@ impl PairConfigBuilder {
             max_mag_difference: self.params.max_mag_difference,
             allow_same_timebin: self.params.allow_same_timebin,
             acc_prior_var: self.params.acc_prior_var,
+            tracklet_residual_sigma: self.params.tracklet_residual_sigma,
         };
         p.validate()?;
         Ok(p)
