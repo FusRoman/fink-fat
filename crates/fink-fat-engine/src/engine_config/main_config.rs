@@ -4,7 +4,7 @@ use photom::MJDTT;
 use serde::{Deserialize, Serialize};
 
 use crate::engine_config::{
-    Validate,
+    CONFIGURATION_VERSION, Validate,
     error::{ConfigError, FieldError, ValidationErrors, prefix_errors},
     grid_population::GridConfig,
     kalman_context::{KalmanContext, KalmanContextConfig},
@@ -168,7 +168,7 @@ impl Default for EngineConfig {
     /// - `./storage` as the persistence root.
     fn default() -> Self {
         Self {
-            version: 1,
+            version: CONFIGURATION_VERSION,
             pairs: PairConfig::default(),
             triplets: TripletConfig::default(),
             kalman_shared_context: KalmanContextConfig::default(),
@@ -201,6 +201,74 @@ impl EngineConfig {
     pub fn storage_path_buf(&self) -> Utf8PathBuf {
         Utf8PathBuf::from(&self.storage_path)
     }
+
+    /// Load and validate an [`EngineConfig`] from a YAML file plus optional environment overrides.
+    ///
+    /// Behavior
+    /// --------
+    /// This function builds a `config::Config` by merging the following sources:
+    ///
+    /// 1) A YAML file at `path` (required).
+    /// 2) Environment overrides with prefix `FINK_FAT`, nested separator `__`.
+    ///
+    /// The merged config is deserialized into [`EngineConfig`], then validated with
+    /// [`EngineConfig::validate`].
+    ///
+    /// Missing sections/fields fall back to their Rust [`Default`] purely
+    /// through each type's `#[serde(default)]` attribute — there is
+    /// deliberately **no** separate "defaults" source merged in ahead of the
+    /// YAML file (unlike an earlier version of this function). Layering a
+    /// `Config::try_from(&EngineConfig::default())` source ahead of the YAML
+    /// file made every externally-tagged enum field (e.g.
+    /// `kfbank_config.cap_schedule`, `advance_params.top_k`,
+    /// `advance_params.radius_strategy`) impossible to override to a
+    /// different variant: `config` merges nested tables key-by-key rather
+    /// than replacing them wholesale, so the default's single-key table
+    /// (e.g. `{"Fixed": 1000}`) and the YAML override's single-key table
+    /// (e.g. `{"Logarithmic": {...}}`) would merge into a two-key table,
+    /// which `config`'s enum deserializer rejects (it requires a table with
+    /// exactly one key, or a bare string for unit variants).
+    ///
+    /// Arguments
+    /// ---------
+    /// - `path`: path to a required YAML file.
+    ///
+    /// Return
+    /// ------
+    /// - `Ok(EngineConfig)` if loading + deserialization + validation succeed.
+    /// - `Err(ConfigError)` otherwise.
+    ///
+    /// Errors
+    /// ------
+    /// - [`ConfigError::ConfigRs`] for load/parse/deserialization failures.
+    /// - [`ConfigError::Validation`] for any semantic invariant violated
+    ///   anywhere in the configuration tree (schema version, numeric ranges,
+    ///   cross-field consistency, ...) — see [`ValidationErrors`] for every
+    ///   field that failed, not just the first one.
+    ///
+    /// Notes
+    /// -----
+    /// - Unknown keys in YAML (or env) are rejected because `EngineConfig` and
+    ///   every nested struct use `deny_unknown_fields`.
+    /// - This function is intended to be the single entry point for config loading
+    ///   in binaries to ensure consistent validation behavior.
+    pub fn load_engine_config_validated(path: impl AsRef<Utf8Path>) -> Result<Self, ConfigError> {
+        let cfg: EngineConfig = Config::builder()
+            // YAML file
+            .add_source(File::from(path.as_ref().as_std_path()).required(true))
+            // optional env overrides
+            .add_source(
+                Environment::with_prefix("FINK_FAT")
+                    .separator("__")
+                    .try_parsing(true),
+            )
+            .build()?
+            .try_deserialize()?;
+
+        cfg.validate()
+            .map_err(|errs| ConfigError::Validation(ValidationErrors(errs)))?;
+        Ok(cfg)
+    }
 }
 
 impl Validate for EngineConfig {
@@ -226,7 +294,7 @@ impl Validate for EngineConfig {
     fn validate(&self) -> Result<(), Vec<FieldError>> {
         let mut errors = Vec::new();
 
-        if self.version != 1 {
+        if self.version != CONFIGURATION_VERSION {
             errors.push(
                 FieldError::new(
                     "version",
@@ -298,62 +366,6 @@ impl Validate for EngineConfig {
     }
 }
 
-/// Load and validate an [`EngineConfig`] from a YAML file plus optional environment overrides.
-///
-/// Behavior
-/// --------
-/// This function builds a `config::Config` by merging the following sources:
-///
-/// 1) Rust defaults from [`EngineConfig::default`].
-/// 2) A YAML file at `path` (required).
-/// 3) Environment overrides with prefix `FINK_FAT`, nested separator `__`.
-///
-/// The merged config is deserialized into [`EngineConfig`], then validated with
-/// [`EngineConfig::validate`].
-///
-/// Arguments
-/// ---------
-/// - `path`: path to a required YAML file.
-///
-/// Return
-/// ------
-/// - `Ok(EngineConfig)` if loading + deserialization + validation succeed.
-/// - `Err(ConfigError)` otherwise.
-///
-/// Errors
-/// ------
-/// - [`ConfigError::ConfigRs`] for load/parse/deserialization failures.
-/// - [`ConfigError::Validation`] for any semantic invariant violated
-///   anywhere in the configuration tree (schema version, numeric ranges,
-///   cross-field consistency, ...) — see [`ValidationErrors`] for every
-///   field that failed, not just the first one.
-///
-/// Notes
-/// -----
-/// - Unknown keys in YAML (or env) are rejected because `EngineConfig` and most
-///   nested structs use `deny_unknown_fields`.
-/// - This function is intended to be the single entry point for config loading
-///   in binaries to ensure consistent validation behavior.
-pub fn load_engine_config_validated(path: &Utf8Path) -> Result<EngineConfig, ConfigError> {
-    let cfg: EngineConfig = Config::builder()
-        // defaults from Rust
-        .add_source(Config::try_from(&EngineConfig::default())?)
-        // YAML file
-        .add_source(File::from(path.as_std_path()).required(true))
-        // optional env overrides
-        .add_source(
-            Environment::with_prefix("FINK_FAT")
-                .separator("__")
-                .try_parsing(true),
-        )
-        .build()?
-        .try_deserialize()?;
-
-    cfg.validate()
-        .map_err(|errs| ConfigError::Validation(ValidationErrors(errs)))?;
-    Ok(cfg)
-}
-
 #[cfg(test)]
 mod engine_config_tests {
 
@@ -368,6 +380,9 @@ mod engine_config_tests {
     use approx::{assert_relative_eq, assert_ulps_eq};
     use camino::Utf8PathBuf;
     use proptest::prelude::*;
+
+    use crate::engine_config::hypothesis_cap::HypothesisCapSchedule;
+    use crate::topocentric_kf::kalman_bank::ellipse_region_finder::top_k::TopK;
 
     /* --------------------------------------------------------------------- */
     /*  Global env lock (env vars are process-global; tests must not race)    */
@@ -442,7 +457,7 @@ mod engine_config_tests {
         let _guard = env_lock().lock().unwrap();
         let _clear = EnvGuard::clear("FINK_FAT__");
         let path = write_tmp_yaml(yaml);
-        load_engine_config_validated(&path)
+        EngineConfig::load_engine_config_validated(&path)
     }
 
     /* --------------------------------------------------------------------- */
@@ -482,7 +497,7 @@ version: 1
         )
         .expect("config should load");
 
-        assert_eq!(cfg.version, 1);
+        assert_eq!(cfg.version, CONFIGURATION_VERSION);
 
         // A few stable default checks:
         assert_eq!(cfg.storage_path(), Utf8Path::new("./storage"));
@@ -586,6 +601,57 @@ triplets:
     }
 
     #[test]
+    fn yaml_can_override_enum_fields_to_a_non_default_variant() {
+        // Regression test: overriding an externally-tagged enum field to a
+        // variant *other* than its Rust default used to fail with "value of
+        // enum ... should be represented by either string or table with
+        // exactly one key", because `load_engine_config_validated` used to
+        // merge a `Config::try_from(&EngineConfig::default())` source ahead
+        // of the YAML file. `config` merges nested tables key-by-key rather
+        // than replacing them, so the default's single-key table (e.g.
+        // `{"Fixed": 1000}`) and the override's single-key table (e.g.
+        // `{"Logarithmic": {...}}`) merged into an invalid two-key table.
+        let cfg = load_from_yaml_str(
+            r#"
+version: 1
+kfbank_config:
+  cap_schedule:
+    Logarithmic:
+      start: 500
+      end: 5
+      n_obs_full: 15
+advance_params:
+  top_k:
+    Best: 3
+"#,
+        )
+        .expect("overriding cap_schedule/top_k to a non-default variant should load");
+
+        match cfg.kfbank_config.cap_schedule {
+            HypothesisCapSchedule::Logarithmic {
+                start,
+                end,
+                n_obs_full,
+            } => {
+                assert_eq!(start, 500);
+                assert_eq!(end, 5);
+                assert_eq!(n_obs_full, 15);
+            }
+            other => panic!("expected Logarithmic, got {other:?}"),
+        }
+
+        match cfg.advance_params.top_k {
+            TopK::Best(3) => {}
+            other => panic!("expected Best(3), got {other:?}"),
+        }
+
+        // Fields not present in the YAML section must still fall back to
+        // their Rust defaults (purely via serde(default), with no merged
+        // "defaults" source involved anymore).
+        assert_relative_eq!(cfg.kfbank_config.gate_chi2, 23.0, epsilon = 1e-15);
+    }
+
+    #[test]
     fn validate_accumulates_every_error_across_the_whole_tree() {
         // Three independently-invalid fields at once: schema version, a
         // pairs.* field, and a kfbank_config.* field. All three must show up
@@ -633,8 +699,8 @@ pairs:
             ("FINK_FAT__PAIRS__ALLOW_SAME_TIMEBIN", "false"),
         ]);
 
-        let cfg =
-            load_engine_config_validated(&path).expect("config should load with env overrides");
+        let cfg = EngineConfig::load_engine_config_validated(&path)
+            .expect("config should load with env overrides");
 
         assert_relative_eq!(cfg.pairs.max_dt, 0.05, epsilon = 1e-15);
         assert_eq!(cfg.pairs.allow_same_timebin, false);
@@ -652,7 +718,7 @@ version: 1
 
         let _env = EnvGuard::set(&[("FINK_FAT__PAIRS__MAX_DT", "not-a-number")]);
 
-        let err = load_engine_config_validated(&path).unwrap_err();
+        let err = EngineConfig::load_engine_config_validated(&path).unwrap_err();
         match err {
             ConfigError::ConfigRs(_) => {}
             _ => panic!("expected ConfigError::ConfigRs, got {err:?}"),

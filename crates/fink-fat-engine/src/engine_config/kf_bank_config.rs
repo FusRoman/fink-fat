@@ -32,6 +32,7 @@ use crate::engine_config::validate_helpers::{
 
 /// Tuning parameters for the hypothesis bank.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct KFBankConfig {
     /// Chi-square gate on the predictive innovation (2 d.o.f.).
     ///

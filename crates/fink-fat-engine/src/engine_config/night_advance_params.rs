@@ -48,6 +48,7 @@ use crate::topocentric_kf::kalman_bank::ellipse_region_finder::{
 /// the cheap pre-filter → candidate search → cross-bank pruning →
 /// null-branch detection probability.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct NightAdvanceParams {
     /// Maximum epoch spread for two observations to be folded into the same
     /// [`Visit`] (see [`group_observations_into_visits`]).

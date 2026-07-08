@@ -5,13 +5,19 @@
 //! three-stage pipeline:
 //!
 //! 1. **Load / merge** — [`load_engine_config_validated`] builds a
-//!    `config::Config` from [`EngineConfig::default`], overlays the YAML
-//!    file at the given path, then overlays `FINK_FAT__`-prefixed
-//!    environment variables (nested separator `__`), and deserializes the
-//!    result into [`EngineConfig`].
-//! 2. **Deserialize** — most nested sections use `#[serde(default,
-//!    deny_unknown_fields)]` so missing keys fall back to Rust defaults and
-//!    unknown keys are rejected as YAML typos rather than silently ignored.
+//!    `config::Config` from the YAML file at the given path, overlaid by
+//!    `FINK_FAT__`-prefixed environment variables (nested separator `__`),
+//!    and deserializes the result into [`EngineConfig`]. There is
+//!    deliberately no separate "Rust defaults" source merged in ahead of the
+//!    YAML file — see that function's doc for why (short version: `config`
+//!    merges nested tables key-by-key, which breaks overriding
+//!    externally-tagged enum fields like `kfbank_config.cap_schedule` to a
+//!    different variant than the default).
+//! 2. **Deserialize** — every nested section uses `#[serde(default,
+//!    deny_unknown_fields)]` so missing keys fall back to Rust defaults
+//!    (purely at the serde level, independent of `config`'s own source
+//!    merging) and unknown keys are rejected as YAML typos rather than
+//!    silently ignored.
 //! 3. **Validate** — [`EngineConfig::validate`] (via the [`Validate`] trait,
 //!    implemented by every nested config struct/enum) checks numeric ranges
 //!    and cross-field invariants not expressible through types alone,
@@ -51,6 +57,8 @@ pub(crate) mod validate_helpers;
 pub use main_config::EngineConfig;
 
 use crate::engine_config::error::FieldError;
+
+pub const CONFIGURATION_VERSION: u32 = 1;
 
 /// Implemented by every nested config struct/enum reachable from
 /// [`EngineConfig`] so that the whole configuration tree can be validated
