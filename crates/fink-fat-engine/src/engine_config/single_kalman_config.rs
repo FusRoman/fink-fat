@@ -18,6 +18,7 @@ use crate::engine_config::{
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct KalmanConfig {
     /// Baseline acceleration process-noise power spectral density.
     ///

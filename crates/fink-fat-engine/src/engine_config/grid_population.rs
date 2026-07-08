@@ -31,6 +31,7 @@ use crate::engine_config::{
 
 /// A small-body population, modeled as a Gaussian prior over semi-major axis.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Population {
     /// Human-readable label (NEO, MBA, …).
     pub name: String,
@@ -243,6 +244,7 @@ pub fn default_populations() -> Vec<Population> {
 
 /// Configuration for [`admissible_region_grid`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct GridConfig {
     /// Minimum topocentric range sampled by the grid.
     ///

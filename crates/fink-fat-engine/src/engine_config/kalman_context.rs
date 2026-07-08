@@ -26,6 +26,7 @@ use crate::{
 
 /// Configuration used to build the shared [`KalmanContext`] at engine startup.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct KalmanContextConfig {
     /// Ephemeris source identifier passed to `EphemState::new`.
     ///
