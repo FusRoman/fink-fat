@@ -1,16 +1,19 @@
-use fink_fat_engine::topocentric_kf::{
-    kalman_bank::{
-        BankStep, KFBank,
-        config::KFBankConfig,
-        ellipse_region_finder::{
-            SearchRegion,
-            radius_strategy::{MixOrMax, RadiusStrategy},
-            top_k::TopK,
-        },
-        hypothesis_cap::HypothesisCapSchedule,
-        seed_grid::GridConfig,
+use fink_fat_engine::{
+    engine_config::{
+        grid_population::GridConfig, hypothesis_cap::HypothesisCapSchedule,
+        kalman_context::KalmanContext, kf_bank_config::KFBankConfig,
     },
-    single_kalman::{KFState, context::KalmanContext, update::wrap_angle},
+    topocentric_kf::{
+        kalman_bank::{
+            BankStep, KFBank,
+            ellipse_region_finder::{
+                SearchRegion,
+                radius_strategy::{MixOrMax, RadiusStrategy},
+                top_k::TopK,
+            },
+        },
+        single_kalman::{KFState, update::wrap_angle},
+    },
 };
 use nalgebra::{Matrix2, Vector2};
 use photom::{
@@ -62,11 +65,6 @@ pub fn init_bank_from_first_pair<'ctx>(
         .windows(2)
         .enumerate()
         .find(|(_, w)| w[1].mjd_tt() - w[0].mjd_tt() < 0.5)?;
-
-    println!(
-        "Observation pairs used to init the kalman : \n firs obs: \n{}\n\n second obs: \n{}\n\n",
-        pair[0], pair[1]
-    );
 
     let grid_config = default_grid_config();
 
@@ -137,8 +135,6 @@ fn compute_step_diag(
 ) -> Option<StepDiag> {
     let equ_pred = best_kf.to_equ_coord().ok()?;
 
-    println!("best kf equ_coord : {}", equ_pred);
-
     let equ_obs = obs.equ_coord();
     let sigma_sky = best_kf.sky_covariance().ok()?;
 
@@ -152,8 +148,6 @@ fn compute_step_diag(
         Some(center) => center.angular_separation(&equ_obs).to_degrees() * 3600.,
         None => return None,
     };
-
-    println!("separation from best kf: {} arcsecond", separation_arcsec);
 
     let mahalanobis_distance =
         mahalanobis_distance(residual_ra_arcsec, residual_dec_arcsec, &sigma_sky);
@@ -515,15 +509,9 @@ pub fn study_kalman_asteroid<'a>(
     let mut t_prev = traj[idx_first_obs + 1].mjd_tt();
     let mut kf_results: Vec<KFStudyResult> = Vec::with_capacity(n_obs);
 
-    println!("=== KALMAN iteration ===\n");
-
     for (step, obs) in observations_to_process.iter().enumerate() {
-        println!("Processing observation: \n{obs}\n----");
-
         let epoch = obs.mjd_tt();
         let dt = epoch - t_prev;
-
-        println!("dt = {dt}");
 
         tracing::trace!(
             step = step + 1,
@@ -533,15 +521,7 @@ pub fn study_kalman_asteroid<'a>(
             "Step header"
         );
 
-        println!(
-            "\n step header: step: {}, epoch: {}, dt: {}",
-            step, epoch, dt
-        );
-        println!("nb hypot in bank: {}", bank.len());
-
         let region = compute_search_region(&bank, obs_dataset, obs, context);
-
-        println!("\n Predicted region : {:?}\n\n", region);
 
         tracing::trace!(
             n_hypotheses = bank.len(),
@@ -555,7 +535,6 @@ pub fn study_kalman_asteroid<'a>(
         log_bank_report(&report);
 
         if report.collapsed {
-            println!("Bank collapsed, no more KF in the bank");
             tracing::trace!(step = step + 1, "Bank collapsed, stopping");
             bank = snapshot;
             break;
@@ -581,10 +560,6 @@ pub fn study_kalman_asteroid<'a>(
                 break;
             }
         };
-        println!(
-            " === New attributable KF state: \n\n{}\n ==== \n\n",
-            best.kf
-        );
         log_step_diag(&diag, best.id, step);
 
         let sr = match &region {
@@ -677,6 +652,5 @@ fn compute_nis(
 
 fn separation_from_search_center(region: &SearchRegion, equ_obs: &EquCoord) -> f64 {
     let equ_center = EquCoord::new(region.center_ra, 0., region.center_dec, 0.);
-    println!("region center coord: {}", equ_center);
     equ_center.angular_separation(equ_obs)
 }

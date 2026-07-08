@@ -16,13 +16,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use fink_fat_engine::engine_config::kalman_context::KalmanContext;
 use fink_fat_engine::topocentric_kf::kalman_bank::KFBank;
-use fink_fat_engine::topocentric_kf::single_kalman::context::KalmanContext;
 use nalgebra::Vector6;
 use outfit::OrbitalElements;
 use rayon::prelude::*;
 
-use fink_fat_engine::{error::EngineError, pipeline::PipelineStage};
+use fink_fat_engine::error::{EngineError, FinkFatError};
 use photom::{
     TrajId,
     observation_dataset::{ObsDataset, iter::MemLayoutObservations, observation::Observation},
@@ -43,12 +43,12 @@ pub fn materialize_contiguous_traj<'o>(
     obs_dataset: &'o ObsDataset,
     traj: &TrajId,
 ) -> Result<Cow<'o, [Observation]>, EngineError> {
-    match obs_dataset
-        .materialize_trajectory(traj)
-        .ok_or_else(|| EngineError::StageFailed {
-            stage: PipelineStage::BuildSeeds,
-            message: format!("traj {traj} not found in observation dataset"),
-        })? {
+    match obs_dataset.materialize_trajectory(traj).ok_or_else(|| {
+        EngineError::FinkFat(FinkFatError::Message(format!(
+            "failed to metariaze trajectory with id: {}",
+            traj
+        )))
+    })? {
         MemLayoutObservations::Contiguous(slice) => Ok(Cow::Borrowed(slice)),
         MemLayoutObservations::Split(vec_obs) => {
             Ok(Cow::Owned(vec_obs.iter().map(|o| (*o).clone()).collect()))
