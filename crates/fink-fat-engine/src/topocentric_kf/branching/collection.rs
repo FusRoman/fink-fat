@@ -88,6 +88,17 @@ impl<'state_lf> BranchCollection<'state_lf> {
         kalman_context: &'state_lf KalmanContext,
         current_step: usize,
     ) -> Result<Self, EngineError> {
+        let span = tracing::info_span!("Advance one night");
+        let _enter = span.enter();
+
+        tracing::info!(
+            target = "branch_collection_advance_one_night",
+            "Start of the advance one night pipeline"
+        );
+
+        tracing::debug!("number of input observation : {}", night_obs.len());
+        tracing::debug!("advance step : {}", current_step);
+
         let spatial_binner = HealpixBinner::new(engine_config.healpix_depth);
 
         // `advance_bank_collection_one_night` groups `night_obs` into
@@ -95,8 +106,16 @@ impl<'state_lf> BranchCollection<'state_lf> {
         // module doc for why a single per-night index would be wrong at
         // LSST cadence) — nothing to build here.
         let (mut branches, consumed_observation_ids) = if self.branches.is_empty() {
+            tracing::info!(
+                target = "branch_collection_advance_one_night",
+                "Branches is empty, skip the kalman propagation"
+            );
             (Vec::new(), HashSet::new())
         } else {
+            tracing::info!(
+                target = "branch_collection_advance_one_night",
+                "Find previous branches, perform kalman one night advance"
+            );
             let outcome = advance_bank_collection_one_night(
                 &self.branches,
                 night_obs,
@@ -120,6 +139,11 @@ impl<'state_lf> BranchCollection<'state_lf> {
             .max()
             .map_or(0, |id| id + 1);
 
+        tracing::info!(
+            target = "branch_collection_advance_one_night",
+            "Start new seeds generation"
+        );
+
         // Separate, differently-binned index — built once inside
         // `build_kf_bank_collection_from_observations` (see `discovery`
         // module docs).
@@ -133,6 +157,11 @@ impl<'state_lf> BranchCollection<'state_lf> {
             &mut next_lineage_id,
         )?;
         branches.extend(new_lineages);
+
+        tracing::info!(
+            target = "branch_collection_advance_one_night",
+            "End of the advance one night pipeline"
+        );
 
         Ok(Self { branches })
     }

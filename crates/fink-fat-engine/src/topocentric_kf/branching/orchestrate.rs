@@ -110,7 +110,12 @@ pub fn advance_bank_collection_one_night<'state_lf>(
     spatial_binner: &HealpixBinner,
     current_step: usize,
 ) -> NightAdvanceOutcome<'state_lf> {
+    let span = tracing::info_span!("Advance bank collection");
+    let _enter = span.enter();
+
     let visits = group_observations_into_visits(night_obs, params.visit_epoch_tolerance_days);
+
+    tracing::debug!("Number of visit: {}", visits.len());
 
     let mut branches: Vec<Branch<'state_lf>> = lineages.to_vec();
     let mut consumed_observation_ids = HashSet::new();
