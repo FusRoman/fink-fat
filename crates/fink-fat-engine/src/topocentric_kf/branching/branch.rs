@@ -2,6 +2,7 @@
 
 use photom::observation_dataset::{ObsId, observation::Observation};
 
+use crate::topocentric_kf::branching::branch_id::{self, BranchId};
 use crate::topocentric_kf::kalman_bank::KFBank;
 
 /// One candidate history for a single object: a bank state plus the
@@ -36,6 +37,14 @@ pub struct Branch<'state_lf> {
     /// *when* the N-scan window has elapsed and the horizon should roll
     /// forward, without retaining the full branch tree.
     pub ancestor_creation_step: usize,
+    /// Human-readable, deterministic id shared by every branch in this
+    /// lineage (`FF{YYYY}{suffix}` — see
+    /// [`branch_id::lineage_designation`]). Unlike `lineage_id`/`branch_id`,
+    /// this is stable across process runs: recomputing the same input data
+    /// reproduces the same id. Groups sibling candidates for the same
+    /// tracked object; use [`Self::designation`] for a per-branch unique id
+    /// suitable as a `trajectory_id` when persisting to disk.
+    pub lineage_designation: BranchId,
 }
 
 impl<'state_lf> Branch<'state_lf> {
@@ -48,6 +57,12 @@ impl<'state_lf> Branch<'state_lf> {
     /// * `lineage_id`, `branch_id` – Identity assigned by the caller (see the
     ///   per-night orchestrator's monotonic id counters).
     pub fn seed(bank: KFBank<'state_lf>, lineage_id: u64, branch_id: u64) -> Self {
+        let epoch = bank
+            .best()
+            .expect("a freshly built bank has at least one live hypothesis")
+            .kf
+            .epoch;
+        let lineage_designation = branch_id::lineage_designation(bank.track_ids(), epoch);
         Self {
             bank,
             cumulative_llr: 0.0,
@@ -56,6 +71,7 @@ impl<'state_lf> Branch<'state_lf> {
             branch_id,
             ancestor_at_scan_horizon: branch_id,
             ancestor_creation_step: 0,
+            lineage_designation,
         }
     }
 
@@ -92,6 +108,7 @@ impl<'state_lf> Branch<'state_lf> {
             branch_id,
             ancestor_at_scan_horizon: parent.ancestor_at_scan_horizon,
             ancestor_creation_step: parent.ancestor_creation_step,
+            lineage_designation: parent.lineage_designation.clone(),
         })
     }
 
@@ -119,11 +136,26 @@ impl<'state_lf> Branch<'state_lf> {
             branch_id,
             ancestor_at_scan_horizon: parent.ancestor_at_scan_horizon,
             ancestor_creation_step: parent.ancestor_creation_step,
+            lineage_designation: parent.lineage_designation.clone(),
         }
     }
 
     /// Association history of this branch's bank, in chronological order.
     pub fn track_ids(&self) -> &[ObsId] {
         self.bank.track_ids()
+    }
+
+    /// Human-readable id unique to this branch's exact association history
+    /// (`{lineage_designation}-{suffix}`), suitable as a `trajectory_id` when
+    /// persisting `(trajectory_id, observation_id)` rows to disk: two
+    /// branches that have consumed different observations always get
+    /// different ids. A "null" branch shares its parent's id, since it
+    /// covers exactly the same observation set.
+    ///
+    /// Computed on demand rather than stored, since it depends only on
+    /// `lineage_designation` (fixed after `seed`) and this branch's own
+    /// (also fixed) `track_ids`.
+    pub fn designation(&self) -> BranchId {
+        branch_id::branch_designation(&self.lineage_designation, self.track_ids())
     }
 }
