@@ -373,6 +373,7 @@ mod pair_gen_tests {
     use std::f64::consts::PI;
 
     use photom::{
+        Arcseconds, Radians,
         coordinates::equatorial::EquCoord,
         observation_dataset::{
             ObsDataset,
@@ -381,13 +382,17 @@ mod pair_gen_tests {
         photometry::{Filter, Photometry as PhotomPhotometry},
     };
 
-    use crate::astro_math::arcsec_to_rad;
     use crate::engine_config::pair_config::PairConfig;
     use crate::spacetime_bucket::bucket::{BucketKey, build_alert_bucket_index};
     use crate::spacetime_bucket::healpix_binner::HealpixBinner;
     use crate::spacetime_bucket::uniform_time_binner::UniformTimeBinner;
 
     /* ------------------------- helpers ------------------------- */
+
+    #[inline]
+    pub fn arcsec_to_rad(x: Arcseconds) -> Radians {
+        x * PI / (180.0 * 3600.0)
+    }
 
     /// Construct a minimal `Observation` for testing.
     fn mk_observation(id: u64, ra: f64, dec: f64, mjd_tt: f64, band: u8, flux: f64) -> Observation {
