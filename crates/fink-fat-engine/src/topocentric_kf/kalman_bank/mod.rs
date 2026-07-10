@@ -72,9 +72,9 @@ pub mod from_seeds;
 pub mod hypothesis;
 pub mod seed_grid;
 
-use std::cell::Cell;
 use std::collections::VecDeque;
-use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use photom::observation_dataset::{ObsDataset, ObsId, observation::Observation};
 use tracing::{trace, trace_span};
@@ -130,30 +130,40 @@ pub struct BankStep {
 
 /// A bank of weighted [`KFState`] hypotheses tracking a single object under
 /// range / range-rate ambiguity.
-#[derive(Clone)]
+///
+/// `Clone` is implemented manually (see below) rather than derived, because
+/// `AtomicUsize` (used for `best_index_cache`) does not implement `Clone` —
+/// cloning it means creating a fresh atomic seeded with the current cached
+/// value, not bitwise-copying the atomic itself.
 pub struct KFBank<'state_lf, 'bank_config> {
-    /// `Rc`-wrapped so that cloning a bank whose hypotheses end up
+    /// `Arc`-wrapped so that cloning a bank whose hypotheses end up
     /// unmodified (e.g. [`Self::branch_null`], or a lineage carried over
     /// unchanged across a visit with no nearby candidate) is an O(1)
     /// refcount bump instead of a deep clone of up to a few hundred
     /// [`Hypothesis`] structs. Any in-place mutation goes through
-    /// `Rc::make_mut`, which clones-on-write only when the `Rc` is actually
-    /// shared.
+    /// `Arc::make_mut`, which clones-on-write only when the `Arc` is
+    /// actually shared. `Arc` (not `Rc`) so that `KFBank`/`Branch` stay
+    /// `Send + Sync` — required to parallelize the per-lineage work in
+    /// `advance_bank_collection_one_night` with rayon.
     ///
     /// Private: the only ways to change this field are [`Self::with_hypotheses`]
     /// (construction) and the [`Self::set_hypotheses`]/[`Self::hypotheses_mut`]
     /// helpers (mutation) — both keep `best_index_cache` in sync, which would
     /// otherwise be easy to forget at one of the many pruning/merging call
     /// sites.
-    hypotheses: Rc<Vec<Hypothesis<'state_lf>>>,
+    hypotheses: Arc<Vec<Hypothesis<'state_lf>>>,
     /// Cached index (into `hypotheses`) of the highest-`log_weight`
-    /// hypothesis, as last computed by [`Self::best`]. `None` means "not
-    /// computed yet for the current `hypotheses`" — reset to `None` by
-    /// every path that can change `hypotheses`'s contents. Cheap to keep
-    /// correct alongside `hypotheses` since it's `Cell`-backed (`Copy`
-    /// payload), so `#[derive(Clone)]` carries a valid cache over for free
+    /// hypothesis, as last computed by [`Self::best`]. `usize::MAX` means
+    /// "not computed yet for the current `hypotheses`" — reset by every
+    /// path that can change `hypotheses`'s contents. `AtomicUsize` (not
+    /// `Cell`) so `KFBank` stays `Sync`; each bank is only ever touched by
+    /// one rayon worker thread at a time, so `Ordering::Relaxed` is enough
+    /// — this is a memoization cache, not a cross-thread synchronization
+    /// point. `AtomicUsize` has no `Clone` impl of its own, so `KFBank`'s
+    /// manual `Clone` impl (below) seeds the clone's atomic from a relaxed
+    /// load of `self`'s — cheap, and carries a valid cache over for free
     /// whenever a bank is cloned unchanged.
-    best_index_cache: Cell<Option<usize>>,
+    best_index_cache: AtomicUsize,
     pub(crate) config: &'bank_config KFBankConfig,
 
     /// Number of `step()` calls completed so far.
@@ -174,6 +184,20 @@ pub struct KFBank<'state_lf, 'bank_config> {
     absolute_magnitude_estimate: Option<f64>,
     /// Number of samples folded into `absolute_magnitude_estimate`.
     absolute_magnitude_sample_count: u32,
+}
+
+impl<'state_lf, 'bank_config> Clone for KFBank<'state_lf, 'bank_config> {
+    fn clone(&self) -> Self {
+        Self {
+            hypotheses: Arc::clone(&self.hypotheses),
+            best_index_cache: AtomicUsize::new(self.best_index_cache.load(Ordering::Relaxed)),
+            config: self.config,
+            n_steps: self.n_steps,
+            track_ids: self.track_ids.clone(),
+            absolute_magnitude_estimate: self.absolute_magnitude_estimate,
+            absolute_magnitude_sample_count: self.absolute_magnitude_sample_count,
+        }
+    }
 }
 
 impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
@@ -231,8 +255,8 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
         absolute_magnitude_sample_count: u32,
     ) -> Self {
         Self {
-            hypotheses: Rc::new(hypotheses),
-            best_index_cache: Cell::new(None),
+            hypotheses: Arc::new(hypotheses),
+            best_index_cache: AtomicUsize::new(usize::MAX),
             config,
             n_steps,
             track_ids,
@@ -246,8 +270,8 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
     /// way this should happen is through this method or
     /// [`Self::hypotheses_mut`].
     fn set_hypotheses(&mut self, new: Vec<Hypothesis<'state_lf>>) {
-        self.best_index_cache.set(None);
-        self.hypotheses = Rc::new(new);
+        self.best_index_cache.store(usize::MAX, Ordering::Relaxed);
+        self.hypotheses = Arc::new(new);
     }
 
     /// Mutable access to `hypotheses` for in-place pruning/merging
@@ -255,8 +279,8 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
     /// Invalidates `best_index_cache` unconditionally — cheap, and correct
     /// even for mutations that turn out not to move the MAP hypothesis.
     fn hypotheses_mut(&mut self) -> &mut Vec<Hypothesis<'state_lf>> {
-        self.best_index_cache.set(None);
-        Rc::make_mut(&mut self.hypotheses)
+        self.best_index_cache.store(usize::MAX, Ordering::Relaxed);
+        Arc::make_mut(&mut self.hypotheses)
     }
 
     // ── Accessors ─────────────────────────────────────────────────────────
@@ -299,10 +323,9 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
     /// are O(1) instead of rescanning all hypotheses every time. See
     /// `best_index_cache`.
     pub fn best(&self) -> Option<&Hypothesis<'state_lf>> {
-        if let Some(idx) = self.best_index_cache.get() {
-            if idx < self.hypotheses.len() {
-                return self.hypotheses.get(idx);
-            }
+        let cached = self.best_index_cache.load(Ordering::Relaxed);
+        if cached != usize::MAX && cached < self.hypotheses.len() {
+            return self.hypotheses.get(cached);
         }
 
         let idx = self
@@ -311,7 +334,7 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
             .enumerate()
             .max_by(|(_, a), (_, b)| a.log_weight.partial_cmp(&b.log_weight).unwrap())
             .map(|(idx, _)| idx)?;
-        self.best_index_cache.set(Some(idx));
+        self.best_index_cache.store(idx, Ordering::Relaxed);
         self.hypotheses.get(idx)
     }
 

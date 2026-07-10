@@ -40,6 +40,7 @@
 //! night (once per visit with no candidate) instead of once per night.
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use nalgebra::Vector3;
 use outfit::OutfitError;
@@ -47,6 +48,7 @@ use photom::{
     coordinates::equatorial::EquCoord,
     observation_dataset::{ObsDataset, ObsId, observation::Observation},
 };
+use rayon::prelude::*;
 
 use crate::{
     engine_config::{kalman_context::KalmanContext, night_advance_params::NightAdvanceParams},
@@ -119,11 +121,13 @@ pub fn advance_bank_collection_one_night<'state_lf, 'bank_config>(
 
     let mut branches: Vec<Branch<'state_lf, 'bank_config>> = lineages.to_vec();
     let mut consumed_observation_ids = HashSet::new();
-    let mut next_branch_id = lineages
-        .iter()
-        .map(|branch| branch.branch_id)
-        .max()
-        .map_or(0, |id| id + 1);
+    let next_branch_id = AtomicU64::new(
+        lineages
+            .iter()
+            .map(|branch| branch.branch_id)
+            .max()
+            .map_or(0, |id| id + 1),
+    );
 
     for visit in &visits {
         let Ok((r_obs, v_obs)) = resolve_observer_state(
@@ -147,35 +151,55 @@ pub fn advance_bank_collection_one_night<'state_lf, 'bank_config>(
             &SingleBinTimeBinner,
         );
 
-        let mut visit_branches = Vec::new();
-        for lineage in &branches {
-            if !lineage_might_be_in_visit(
-                lineage,
-                visit,
-                &visit_bucket_index,
-                params,
-                spatial_binner,
-            ) {
-                // No alert anywhere near this lineage's extrapolated
-                // position — skip the two Kepler solves entirely. The
-                // lineage carries over unchanged, picked up again whenever
-                // a later visit's alerts land nearby.
-                visit_branches.push(lineage.clone());
-                continue;
-            }
+        // Per-lineage work is independent within a visit (each lineage only
+        // ever reads its own bank) and dominated by the two-body Kepler
+        // propagation in `spawn_branches_for_lineage` — parallelize across
+        // lineages via rayon. `next_branch_id` is a shared atomic counter
+        // (branch ids are opaque unique keys, never relied on for ordering
+        // — see `branch_id.rs`); `consumed_observation_ids` can't be
+        // mutated from parallel closures, so each lineage returns its own
+        // consumed ids and they're merged sequentially below (cheap: a
+        // `HashSet::extend`, not a bottleneck).
+        let outcomes: Vec<LineageOutcome<'state_lf, 'bank_config>> = branches
+            .par_iter()
+            .map(|lineage| {
+                if !lineage_might_be_in_visit(
+                    lineage,
+                    visit,
+                    &visit_bucket_index,
+                    params,
+                    spatial_binner,
+                ) {
+                    // No alert anywhere near this lineage's extrapolated
+                    // position — skip the two Kepler solves entirely. The
+                    // lineage carries over unchanged, picked up again
+                    // whenever a later visit's alerts land nearby.
+                    return LineageOutcome::Unchanged(lineage.clone());
+                }
 
-            let spawned = spawn_branches_for_lineage(
-                lineage,
-                &visit_bucket_index,
-                visit.epoch,
-                r_obs,
-                v_obs,
-                params,
-                spatial_binner,
-                &mut next_branch_id,
-                &mut consumed_observation_ids,
-            );
-            visit_branches.extend(spawned);
+                let (spawned, consumed) = spawn_branches_for_lineage(
+                    lineage,
+                    &visit_bucket_index,
+                    visit.epoch,
+                    r_obs,
+                    v_obs,
+                    params,
+                    spatial_binner,
+                    &next_branch_id,
+                );
+                LineageOutcome::Spawned(spawned, consumed)
+            })
+            .collect();
+
+        let mut visit_branches = Vec::new();
+        for outcome in outcomes {
+            match outcome {
+                LineageOutcome::Unchanged(branch) => visit_branches.push(branch),
+                LineageOutcome::Spawned(spawned, consumed) => {
+                    visit_branches.extend(spawned);
+                    consumed_observation_ids.extend(consumed);
+                }
+            }
         }
 
         // Top-B pruning after every visit — branch counts multiply at every
@@ -256,13 +280,25 @@ fn lineage_might_be_in_visit(
         })
 }
 
+/// Outcome of checking one lineage against one visit — either it carries
+/// over unchanged (no candidate nearby), or it spawned branches plus the
+/// observation ids they consumed. Kept separate from mutating shared state
+/// directly so the per-lineage work in
+/// [`advance_bank_collection_one_night`] can run in parallel via rayon.
+enum LineageOutcome<'state_lf, 'bank_config> {
+    Unchanged(Branch<'state_lf, 'bank_config>),
+    Spawned(Vec<Branch<'state_lf, 'bank_config>>, Vec<ObsId>),
+}
+
 /// Propagate one lineage's bank once (to this visit's epoch), search its
 /// candidates, and spawn one observation branch per match plus the
 /// mandatory null branch.
 ///
 /// # Returns
-/// The branches spawned for this lineage. Empty if the bank fails to
-/// propagate at all (dropped, logged at `debug`).
+/// The branches spawned for this lineage, plus the ids of every candidate
+/// observation consumed (the caller merges these into the night's
+/// `consumed_observation_ids`). Empty if the bank fails to propagate at all
+/// (dropped, logged at `debug`).
 #[allow(clippy::too_many_arguments)]
 fn spawn_branches_for_lineage<'state_lf, 'bank_config>(
     lineage: &Branch<'state_lf, 'bank_config>,
@@ -272,9 +308,8 @@ fn spawn_branches_for_lineage<'state_lf, 'bank_config>(
     v_obs: Vector3<f64>,
     params: &NightAdvanceParams,
     spatial_binner: &HealpixBinner,
-    next_branch_id: &mut u64,
-    consumed_observation_ids: &mut HashSet<ObsId>,
-) -> Vec<Branch<'state_lf, 'bank_config>> {
+    next_branch_id: &AtomicU64,
+) -> (Vec<Branch<'state_lf, 'bank_config>>, Vec<ObsId>) {
     let predicted_bank = lineage.bank.predict_to(epoch, r_obs, v_obs);
 
     let Ok(search_region) = predicted_bank.search_region(
@@ -286,7 +321,7 @@ fn spawn_branches_for_lineage<'state_lf, 'bank_config>(
             lineage_id = lineage.lineage_id,
             "Bank failed to propagate for search-region construction, dropping lineage"
         );
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
 
     let candidates = find_candidates_for_bank(
@@ -299,8 +334,9 @@ fn spawn_branches_for_lineage<'state_lf, 'bank_config>(
     );
 
     let mut branches = Vec::with_capacity(candidates.matches.len() + 1);
+    let mut consumed_observation_ids = Vec::with_capacity(candidates.matches.len());
     for candidate in &candidates.matches {
-        consumed_observation_ids.insert(*candidate.observation.id());
+        consumed_observation_ids.push(*candidate.observation.id());
 
         let clutter_density = local_clutter_density(
             visit_bucket_index,
@@ -314,9 +350,8 @@ fn spawn_branches_for_lineage<'state_lf, 'bank_config>(
             lineage,
             candidate.observation,
             llr_delta,
-            *next_branch_id,
+            next_branch_id.fetch_add(1, Ordering::Relaxed),
         ) {
-            *next_branch_id += 1;
             branches.push(branch);
         }
     }
@@ -330,11 +365,10 @@ fn spawn_branches_for_lineage<'state_lf, 'bank_config>(
         &predicted_bank,
         lineage,
         null_branch_llr_delta(p_detection),
-        *next_branch_id,
+        next_branch_id.fetch_add(1, Ordering::Relaxed),
     ));
-    *next_branch_id += 1;
 
-    branches
+    (branches, consumed_observation_ids)
 }
 
 /// Detection probability for the null branch, from the bank's running
