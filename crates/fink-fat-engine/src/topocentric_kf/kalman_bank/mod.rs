@@ -72,6 +72,7 @@ pub mod from_seeds;
 pub mod hypothesis;
 pub mod seed_grid;
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
@@ -138,7 +139,21 @@ pub struct KFBank<'state_lf, 'bank_config> {
     /// [`Hypothesis`] structs. Any in-place mutation goes through
     /// `Rc::make_mut`, which clones-on-write only when the `Rc` is actually
     /// shared.
-    pub(crate) hypotheses: Rc<Vec<Hypothesis<'state_lf>>>,
+    ///
+    /// Private: the only ways to change this field are [`Self::with_hypotheses`]
+    /// (construction) and the [`Self::set_hypotheses`]/[`Self::hypotheses_mut`]
+    /// helpers (mutation) — both keep `best_index_cache` in sync, which would
+    /// otherwise be easy to forget at one of the many pruning/merging call
+    /// sites.
+    hypotheses: Rc<Vec<Hypothesis<'state_lf>>>,
+    /// Cached index (into `hypotheses`) of the highest-`log_weight`
+    /// hypothesis, as last computed by [`Self::best`]. `None` means "not
+    /// computed yet for the current `hypotheses`" — reset to `None` by
+    /// every path that can change `hypotheses`'s contents. Cheap to keep
+    /// correct alongside `hypotheses` since it's `Cell`-backed (`Copy`
+    /// payload), so `#[derive(Clone)]` carries a valid cache over for free
+    /// whenever a bank is cloned unchanged.
+    best_index_cache: Cell<Option<usize>>,
     pub(crate) config: &'bank_config KFBankConfig,
 
     /// Number of `step()` calls completed so far.
@@ -190,16 +205,58 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
             })
             .collect();
 
-        let mut bank = Self {
-            hypotheses: Rc::new(hypotheses),
-            config: bank_config,
-            n_steps: 0,
-            track_ids: vec![*first_obs.id(), *second_obs.id()],
-            absolute_magnitude_estimate: None,
-            absolute_magnitude_sample_count: 0,
-        };
+        let mut bank = Self::with_hypotheses(
+            hypotheses,
+            bank_config,
+            0,
+            vec![*first_obs.id(), *second_obs.id()],
+            None,
+            0,
+        );
         bank.normalize_weights();
         Ok(bank)
+    }
+
+    /// Sole constructor: builds a `KFBank` from a fresh `hypotheses` vector
+    /// plus the rest of the bank's state. Always starts with an empty
+    /// `best_index_cache` — correct by construction, since a freshly built
+    /// `hypotheses` vector has never been scanned for its MAP hypothesis.
+    #[allow(clippy::too_many_arguments)]
+    fn with_hypotheses(
+        hypotheses: Vec<Hypothesis<'state_lf>>,
+        config: &'bank_config KFBankConfig,
+        n_steps: usize,
+        track_ids: Vec<ObsId>,
+        absolute_magnitude_estimate: Option<f64>,
+        absolute_magnitude_sample_count: u32,
+    ) -> Self {
+        Self {
+            hypotheses: Rc::new(hypotheses),
+            best_index_cache: Cell::new(None),
+            config,
+            n_steps,
+            track_ids,
+            absolute_magnitude_estimate,
+            absolute_magnitude_sample_count,
+        }
+    }
+
+    /// Replace `hypotheses` wholesale (e.g. after gating/scoring produced a
+    /// brand-new survivor list). Invalidates `best_index_cache` — the only
+    /// way this should happen is through this method or
+    /// [`Self::hypotheses_mut`].
+    fn set_hypotheses(&mut self, new: Vec<Hypothesis<'state_lf>>) {
+        self.best_index_cache.set(None);
+        self.hypotheses = Rc::new(new);
+    }
+
+    /// Mutable access to `hypotheses` for in-place pruning/merging
+    /// (`retain`, `sort_by`, `truncate`, `iter_mut`, `mem::take`).
+    /// Invalidates `best_index_cache` unconditionally — cheap, and correct
+    /// even for mutations that turn out not to move the MAP hypothesis.
+    fn hypotheses_mut(&mut self) -> &mut Vec<Hypothesis<'state_lf>> {
+        self.best_index_cache.set(None);
+        Rc::make_mut(&mut self.hypotheses)
     }
 
     // ── Accessors ─────────────────────────────────────────────────────────
@@ -236,10 +293,26 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
     }
 
     /// The maximum-a-posteriori (highest log-weight) hypothesis, if any.
+    ///
+    /// Cached: repeated calls on an unchanged bank (the common case — e.g.
+    /// a lineage re-checked against many visits without a nearby candidate)
+    /// are O(1) instead of rescanning all hypotheses every time. See
+    /// `best_index_cache`.
     pub fn best(&self) -> Option<&Hypothesis<'state_lf>> {
-        self.hypotheses
+        if let Some(idx) = self.best_index_cache.get() {
+            if idx < self.hypotheses.len() {
+                return self.hypotheses.get(idx);
+            }
+        }
+
+        let idx = self
+            .hypotheses
             .iter()
-            .max_by(|a, b| a.log_weight.partial_cmp(&b.log_weight).unwrap())
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.log_weight.partial_cmp(&b.log_weight).unwrap())
+            .map(|(idx, _)| idx)?;
+        self.best_index_cache.set(Some(idx));
+        self.hypotheses.get(idx)
     }
 
     /// Effective sample size `1 / Σ wᵢ²` (weights assumed normalized).
@@ -304,7 +377,7 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
             n_gated, n_failed, "Predict/score cycle complete — starting cleanup"
         );
 
-        self.hypotheses = Rc::new(survivors);
+        self.set_hypotheses(survivors);
 
         // Compute the scheduled cap *before* cleanup so we can report it.
         let scheduled_cap = self
@@ -371,11 +444,11 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
     /// The number of hypotheses dropped due to a propagation failure.
     fn propagate_in_place(&mut self, obs_dataset: &ObsDataset, obs: &Observation) -> usize {
         let n_before = self.hypotheses.len();
-        let survivors = std::mem::take(Rc::make_mut(&mut self.hypotheses))
+        let survivors = std::mem::take(self.hypotheses_mut())
             .into_iter()
             .filter_map(|hyp| hyp.propagate(obs_dataset, obs).ok())
             .collect();
-        self.hypotheses = Rc::new(survivors);
+        self.set_hypotheses(survivors);
         n_before - self.hypotheses.len()
     }
 
@@ -402,14 +475,13 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
         // is immune to the chi-square gate for this step.
         let protected_ids = top_k_ids(&self.hypotheses, self.config.min_hypotheses.max(1));
 
-        let results: Vec<HypothesisStepResult<'state_lf>> =
-            std::mem::take(Rc::make_mut(&mut self.hypotheses))
-                .into_iter()
-                .map(|hyp| {
-                    let is_protected = protected_ids.contains(&hyp.id);
-                    hyp.finalize_score_and_update(&self.config, obs, is_protected)
-                })
-                .collect();
+        let results: Vec<HypothesisStepResult<'state_lf>> = std::mem::take(self.hypotheses_mut())
+            .into_iter()
+            .map(|hyp| {
+                let is_protected = protected_ids.contains(&hyp.id);
+                hyp.finalize_score_and_update(&self.config, obs, is_protected)
+            })
+            .collect();
 
         let n_gated = results
             .iter()
@@ -467,19 +539,24 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
         r_obs_new: Vector3<f64>,
         v_obs_new: Vector3<f64>,
     ) -> Self {
-        Self {
-            hypotheses: Rc::new(self.predict_hypotheses(t_prop, r_obs_new, v_obs_new)),
-            ..self.clone()
-        }
+        Self::with_hypotheses(
+            self.predict_hypotheses(t_prop, r_obs_new, v_obs_new),
+            self.config,
+            self.n_steps,
+            self.track_ids.clone(),
+            self.absolute_magnitude_estimate,
+            self.absolute_magnitude_sample_count,
+        )
     }
 
     /// Predict every hypothesis to `t_prop`, keeping each hypothesis's
     /// weight, id and likelihood window unchanged — only `kf` moves.
     ///
-    /// Shared by [`Self::predict_to`] and by
-    /// [`predict_search_region`](super::ellipse_region_finder::KFBank::predict_search_region),
-    /// which further projects the result down to bare `(weight, KFState)`
-    /// pairs for its own mixture-region bookkeeping.
+    /// Used by [`Self::predict_to`], the sole propagation entry point —
+    /// [`predict_search_region`](super::ellipse_region_finder::KFBank::predict_search_region)
+    /// now goes through `predict_to` too (via
+    /// [`search_region`](super::ellipse_region_finder::KFBank::search_region)),
+    /// rather than propagating a second time.
     fn predict_hypotheses(
         &self,
         t_prop: f64,
@@ -526,7 +603,7 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
 
         let mut branch = self.clone();
         let (survivors, _n_gated, _n_failed) = branch.score_and_update_hypotheses(obs);
-        branch.hypotheses = Rc::new(survivors);
+        branch.set_hypotheses(survivors);
         if branch.hypotheses.is_empty() {
             return None;
         }
@@ -713,7 +790,7 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
         // Retain a hypothesis if EITHER:
         //   (a) its smoothed score is above the weight-floor threshold, OR
         //   (b) it is among the top `min_keep` (score >= protection_floor).
-        Rc::make_mut(&mut self.hypotheses).retain(|h| {
+        self.hypotheses_mut().retain(|h| {
             let s = h.smoothed_log_lik();
             s >= log_threshold || s >= protection_floor
         });
@@ -749,7 +826,7 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
         // threshold is just floor_log.
         let n_before = self.hypotheses.len();
 
-        Rc::make_mut(&mut self.hypotheses)
+        self.hypotheses_mut()
             .retain(|h| h.log_weight >= floor_log || h.log_weight >= protection_floor);
 
         let n_removed = n_before - self.hypotheses.len();
@@ -776,7 +853,7 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
         }
 
         // Sort descending by cumulative weight to keep the most plausible ones.
-        let hypotheses = Rc::make_mut(&mut self.hypotheses);
+        let hypotheses = self.hypotheses_mut();
         hypotheses.sort_by(|a, b| b.log_weight.partial_cmp(&a.log_weight).unwrap());
 
         let n_truncated = hypotheses.len() - effective_cap;
@@ -797,7 +874,7 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
         let thresh = self.config.merge_position_au;
         let mut merged: Vec<Hypothesis<'state_lf>> = Vec::with_capacity(self.hypotheses.len());
 
-        for hyp in std::mem::take(Rc::make_mut(&mut self.hypotheses)) {
+        for hyp in std::mem::take(self.hypotheses_mut()) {
             match merged
                 .iter_mut()
                 .find(|m| m.kf.position_distance_au(&hyp.kf) < thresh)
@@ -815,7 +892,7 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
             }
         }
 
-        self.hypotheses = Rc::new(merged);
+        self.set_hypotheses(merged);
     }
 
     /// Normalize log-weights so that `Σ exp(log_weight) = 1`, using the
@@ -835,7 +912,7 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
             // All weights underflowed — fall back to uniform to avoid losing
             // the bank entirely rather than declaring the filter lost.
             let uniform = -(self.hypotheses.len() as f64).ln();
-            Rc::make_mut(&mut self.hypotheses)
+            self.hypotheses_mut()
                 .iter_mut()
                 .for_each(|h| h.log_weight = uniform);
             return;
@@ -849,7 +926,7 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
                 .sum::<f64>()
                 .ln();
 
-        Rc::make_mut(&mut self.hypotheses)
+        self.hypotheses_mut()
             .iter_mut()
             .for_each(|h| h.log_weight -= log_norm);
     }
