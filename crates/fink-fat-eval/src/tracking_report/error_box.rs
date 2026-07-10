@@ -97,6 +97,9 @@ pub fn bank_predictive_error_box(
         .ok()?;
 
     let radius_arcsec = region.radius_rad.to_degrees() * 3600.0;
+    if !radius_arcsec.is_finite() {
+        return None;
+    }
 
     let candidates = find_candidates_for_bank(
         &region,
@@ -120,6 +123,7 @@ pub fn hypothesis_error_box_radii_arcsec(bank: &KFBank) -> Vec<f64> {
     bank.hypotheses()
         .iter()
         .filter_map(|h| h.kf.sky_covariance().ok())
-        .map(|cov| largest_eigenvalue_2x2(&cov).sqrt().to_degrees() * 3600.0)
+        .filter(|cov| cov.iter().all(|x| x.is_finite()))
+        .map(|cov| largest_eigenvalue_2x2(&cov).max(0.0).sqrt().to_degrees() * 3600.0)
         .collect()
 }

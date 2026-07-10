@@ -127,7 +127,7 @@ fn compute_stats(values: &[f64]) -> MetricStats {
     let mean = values.iter().sum::<f64>() / values.len() as f64;
 
     let mut sorted = values.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(f64::total_cmp);
     let median = median_of_sorted(&sorted);
 
     MetricStats {
