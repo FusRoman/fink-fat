@@ -35,6 +35,7 @@
 //! local-neighbor vs. cone-coverage strategies.
 
 use std::cell::RefCell;
+use std::f64::consts::FRAC_PI_2;
 
 use cdshealpix as chpx;
 use chpx::nested;
@@ -114,8 +115,12 @@ impl SpatialBinner for HealpixBinner {
     /// [`SpatialKey`] wrapping the NESTED HEALPix hash.
     #[inline]
     fn key_for(&self, eq_coord: &EquCoord) -> SpatialKey {
-        // cdshealpix expects (lon, lat) in radians
-        let h = self.layer.hash(eq_coord.ra, eq_coord.dec);
+        // cdshealpix expects (lon, lat) in radians; lat must lie in
+        // [-π/2, π/2] — clamp defensively since callers may hand in a
+        // computed/extrapolated declination (e.g. a coarse linear
+        // pre-filter), not just an observed one.
+        let dec = eq_coord.dec.clamp(-FRAC_PI_2, FRAC_PI_2);
+        let h = self.layer.hash(eq_coord.ra, dec);
         SpatialKey(h)
     }
 
@@ -230,6 +235,45 @@ mod healpix_binner_tests {
             "cell_radius must be finite and > 0"
         );
         assert!(r < 0.1, "cell_radius unexpectedly large at depth=8: {r}");
+    }
+
+    #[test]
+    fn test_key_for_clamps_out_of_range_declination() {
+        use std::f64::consts::FRAC_PI_2;
+
+        let b = HealpixBinner::new(7);
+
+        let coord_north = EquCoord {
+            ra: 1.0_f64,
+            ra_error: 0.0_f64,
+            dec: FRAC_PI_2 + 0.1,
+            dec_error: 0.0_f64,
+        };
+        let coord_south = EquCoord {
+            ra: 1.0_f64,
+            ra_error: 0.0_f64,
+            dec: -FRAC_PI_2 - 0.1,
+            dec_error: 0.0_f64,
+        };
+
+        // Must not panic, and must land in the corresponding polar cap.
+        let key_north = b.key_for(&coord_north);
+        let key_south = b.key_for(&coord_south);
+
+        let coord_pole_north = EquCoord {
+            ra: 1.0_f64,
+            ra_error: 0.0_f64,
+            dec: FRAC_PI_2,
+            dec_error: 0.0_f64,
+        };
+        let coord_pole_south = EquCoord {
+            ra: 1.0_f64,
+            ra_error: 0.0_f64,
+            dec: -FRAC_PI_2,
+            dec_error: 0.0_f64,
+        };
+        assert_eq!(key_north, b.key_for(&coord_pole_north));
+        assert_eq!(key_south, b.key_for(&coord_pole_south));
     }
 
     #[test]
