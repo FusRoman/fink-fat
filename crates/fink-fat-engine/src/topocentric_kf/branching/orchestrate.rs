@@ -277,10 +277,7 @@ fn spawn_branches_for_lineage<'state_lf, 'bank_config>(
 ) -> Vec<Branch<'state_lf, 'bank_config>> {
     let predicted_bank = lineage.bank.predict_to(epoch, r_obs, v_obs);
 
-    let Ok(search_region) = lineage.bank.predict_search_region(
-        epoch,
-        r_obs,
-        v_obs,
+    let Ok(search_region) = predicted_bank.search_region(
         params.obs_noise.into(),
         params.top_k,
         params.radius_strategy,

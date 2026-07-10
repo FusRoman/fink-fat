@@ -214,12 +214,38 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
         let span = tracing::trace_span!(
             "predict_search_region",
             t_prop = t_prop,
-            n_hypotheses = self.hypotheses.len(),
+            n_hypotheses = self.len(),
             top_k = ?top_k,
         );
         let _enter = span.enter();
 
-        let mut predicted = self.propagate_hypotheses(t_prop, r_obs_new, v_obs_new)?;
+        self.predict_to(t_prop, r_obs_new, v_obs_new).search_region(
+            obs_noise,
+            top_k,
+            radius_strategy,
+        )
+    }
+
+    /// Like [`Self::predict_search_region`], but assumes `self` is already
+    /// propagated to the target epoch (e.g. via [`Self::predict_to`]).
+    ///
+    /// Extracted so that callers who already need a [`Self::predict_to`]'d
+    /// bank for other purposes (branching: `Branch::from_observation`,
+    /// `Branch::from_null`) don't pay for the two-body Kepler propagation
+    /// twice — `predict_search_region` used to re-propagate internally,
+    /// duplicating work already done by a sibling `predict_to` call at the
+    /// orchestration layer.
+    pub fn search_region(
+        &self,
+        obs_noise: Vector2<f64>,
+        top_k: TopK,
+        radius_strategy: RadiusStrategy,
+    ) -> Result<SearchRegion, PropagateError> {
+        let mut predicted: Vec<(f64, KFState)> = self
+            .hypotheses()
+            .iter()
+            .map(|hyp| (hyp.weight(), hyp.kf.clone()))
+            .collect();
         top_k.apply(&mut predicted);
         if predicted.is_empty() {
             return Err(PropagateError::SingularJacobian);
@@ -263,40 +289,6 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
             radius_rad,
             components,
         })
-    }
-
-    /// Propagate every live hypothesis read-only to `t_prop`, skipping and
-    /// logging failures.
-    ///
-    /// Thin wrapper around [`Self::predict_hypotheses`] (shared with
-    /// [`Self::predict_to`]) that projects each predicted hypothesis down to
-    /// the bare `(weight, KFState)` pair this module's mixture bookkeeping
-    /// needs.
-    ///
-    /// Returns `Err(PropagateError::SingularJacobian)` if no hypothesis
-    /// propagates successfully.
-    fn propagate_hypotheses(
-        &'_ self,
-        t_prop: f64,
-        r_obs_new: nalgebra::Vector3<f64>,
-        v_obs_new: nalgebra::Vector3<f64>,
-    ) -> Result<Vec<(f64, KFState<'_>)>, PropagateError> {
-        let predicted: Vec<(f64, KFState)> = self
-            .predict_hypotheses(t_prop, r_obs_new, v_obs_new)
-            .into_iter()
-            .map(|hyp| (hyp.weight(), hyp.kf))
-            .collect();
-
-        if predicted.is_empty() {
-            tracing::trace!("All hypotheses failed to predict; search region unavailable");
-            return Err(PropagateError::SingularJacobian);
-        }
-        tracing::trace!(
-            n_predicted = predicted.len(),
-            n_live = self.hypotheses.len(),
-            "Predicted live hypotheses for search-region construction"
-        );
-        Ok(predicted)
     }
 }
 
