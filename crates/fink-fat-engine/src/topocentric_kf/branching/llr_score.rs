@@ -10,6 +10,12 @@
 /// `+inf` scores in emptied-out fields with no nearby alerts at all.
 const MIN_CLUTTER_DENSITY: f64 = 1e-12;
 
+/// Ceiling applied to a mixture likelihood before taking its logarithm, to
+/// avoid a `+inf` delta (which can cancel a `-inf` null-branch delta
+/// elsewhere in `cumulative_llr` into `NaN`) if a hypothesis's innovation
+/// covariance becomes numerically near-singular.
+const MAX_MIXTURE_LIKELIHOOD: f64 = 1e300;
+
 /// LLR contribution of associating a candidate observation to a bank:
 ///
 /// $$\log L(z) - \log \lambda_{clutter}$$
@@ -26,7 +32,8 @@ const MIN_CLUTTER_DENSITY: f64 = 1e-12;
 /// The signed LLR delta: positive means the association is more plausible
 /// than clutter, negative means clutter is the better explanation.
 pub fn observation_llr_delta(mixture_likelihood_z: f64, clutter_density: f64) -> f64 {
-    mixture_likelihood_z.ln() - clutter_density.max(MIN_CLUTTER_DENSITY).ln()
+    mixture_likelihood_z.min(MAX_MIXTURE_LIKELIHOOD).ln()
+        - clutter_density.max(MIN_CLUTTER_DENSITY).ln()
 }
 
 /// LLR contribution of the null (missed-detection) branch: `log(1 − P_D)`.
@@ -72,6 +79,14 @@ mod ll_score_tests {
     #[test]
     fn observation_llr_delta_floors_clutter_density_to_avoid_infinity() {
         let delta = observation_llr_delta(1.0, 0.0);
+        assert!(delta.is_finite());
+    }
+
+    #[test]
+    fn observation_llr_delta_caps_mixture_likelihood_to_avoid_infinity() {
+        let delta = observation_llr_delta(f64::INFINITY, 1.0);
+        assert!(delta.is_finite());
+        let delta = observation_llr_delta(1e308, 1.0);
         assert!(delta.is_finite());
     }
 
