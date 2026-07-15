@@ -32,8 +32,8 @@ use fink_fat_eval::{
             plot_aggregated_histograms, plot_best_pure_coverage_histogram,
             plot_branches_and_lineages_per_night, plot_error_box_radius_per_night,
             plot_llr_and_ess_per_night, plot_object_outcome_breakdown,
-            plot_observations_in_box_per_night, plot_recall_purity_completeness_per_night,
-            plot_timing_per_night,
+            plot_object_outcome_per_night, plot_observations_in_box_per_night,
+            plot_recall_purity_completeness_per_night, plot_timing_per_night,
         },
         report::TrackingReport,
         seeding_gate_diagnosis::{count_by_failure, diagnose_never_touched_gating},
@@ -125,12 +125,13 @@ fn main() -> Result<()> {
             .copied()
             .collect();
         night_ids.sort_unstable();
-        for night_id in night_ids {
+        for night_id in &night_ids {
             println!(
                 "{night_id}\t{}",
                 obs_dataset.len_night(&night_id).unwrap_or(0)
             );
         }
+        println!("Number of nights : {}", night_ids.len());
         return Ok(());
     }
 
@@ -190,7 +191,7 @@ fn main() -> Result<()> {
         )?;
         let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
-        let stats = compute_night_tracking_stats(
+        let mut stats = compute_night_tracking_stats(
             step,
             night_id,
             &night_obs,
@@ -220,6 +221,21 @@ fn main() -> Result<()> {
                 .copied(),
         );
         last_step = step;
+
+        // Per-night snapshot of the ObjectOutcome breakdown, for the
+        // per-night plot — same classification as the final console
+        // summary, just re-run at every step instead of once at the end.
+        let outcomes_tonight = object_outcome_tracker.classify_all(
+            &gold_tracker,
+            step,
+            cli.completeness_coverage_threshold,
+        );
+        for (i, outcome) in ObjectOutcome::all().into_iter().enumerate() {
+            stats.object_outcome_counts[i] = outcomes_tonight
+                .iter()
+                .filter(|(_, o, _)| *o == outcome)
+                .count();
+        }
 
         report.push(stats);
         progress.inc(1);
@@ -381,6 +397,7 @@ fn write_all_plots(report: &TrackingReport, output_dir: &Utf8Path) -> Result<()>
 
     let branches_plot = output_dir.join("branches_and_lineages_per_night.png");
     let recall_plot = output_dir.join("recall_purity_completeness_per_night.png");
+    let object_outcome_plot = output_dir.join("object_outcome_per_night.png");
     let llr_plot = output_dir.join("llr_per_night.png");
     let error_box_plot = output_dir.join("error_box_radius_per_night.png");
     let in_box_plot = output_dir.join("observations_in_box_per_night.png");
@@ -388,6 +405,7 @@ fn write_all_plots(report: &TrackingReport, output_dir: &Utf8Path) -> Result<()>
 
     plot_branches_and_lineages_per_night(report, &branches_plot)?;
     plot_recall_purity_completeness_per_night(report, &recall_plot)?;
+    plot_object_outcome_per_night(report, &object_outcome_plot)?;
     plot_llr_and_ess_per_night(report, &llr_plot)?;
     plot_error_box_radius_per_night(report, &error_box_plot)?;
     plot_observations_in_box_per_night(report, &in_box_plot)?;
@@ -399,6 +417,7 @@ fn write_all_plots(report: &TrackingReport, output_dir: &Utf8Path) -> Result<()>
     for p in [
         branches_plot,
         recall_plot,
+        object_outcome_plot,
         llr_plot,
         error_box_plot,
         in_box_plot,

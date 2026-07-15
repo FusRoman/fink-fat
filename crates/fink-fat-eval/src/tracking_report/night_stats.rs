@@ -81,6 +81,14 @@ pub struct NightTrackingStats {
     #[serde(with = "crate::trajectory_processing::finite_f64")]
     pub completeness_relaxed_pct_so_far: f64,
 
+    /// Per-category breakdown of trackable objects'
+    /// [`ObjectOutcome`](crate::tracking_report::object_outcome::ObjectOutcome),
+    /// as of this night (i.e. `ObjectOutcomeTracker::classify_all` called
+    /// with `last_step = step`) — same fixed order as
+    /// `ObjectOutcome::all()`. Denominator for percentages is
+    /// `n_trackable_objects_so_far` above.
+    pub object_outcome_counts: [usize; 7],
+
     pub cumulative_llr: MetricStats,
     pub effective_sample_size: MetricStats,
     pub hypotheses_per_branch: MetricStats,
@@ -265,6 +273,11 @@ pub fn compute_night_tracking_stats(
             n_objects_complete_relaxed_so_far,
             n_trackable_objects_so_far,
         ),
+        // Filled in by the caller (`tracking_analysis.rs`), which owns the
+        // `ObjectOutcomeTracker` and computes this from
+        // `ObjectOutcomeTracker::classify_all` at `last_step = step` — kept
+        // out of this function so its signature doesn't grow further.
+        object_outcome_counts: [0; 7],
         cumulative_llr,
         effective_sample_size,
         hypotheses_per_branch,
