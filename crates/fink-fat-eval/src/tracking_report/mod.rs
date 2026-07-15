@@ -14,5 +14,7 @@ pub mod error_box;
 pub mod gold_trajectory;
 pub mod lineage_lifecycle;
 pub mod night_stats;
+pub mod object_outcome;
 pub mod plots;
 pub mod report;
+pub mod seeding_gate_diagnosis;

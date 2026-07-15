@@ -59,14 +59,27 @@ pub struct NightTrackingStats {
     #[serde(with = "crate::trajectory_processing::finite_f64")]
     pub purity_pct: f64,
 
-    /// Cumulative completeness: of every gold trajectory with >= 2
-    /// observations seen up to and including tonight, how many have a pure
-    /// branch whose association history exactly matches every observation
-    /// seen so far (none missing, none extra).
-    pub n_multi_detection_objects_so_far: usize,
+    /// Cumulative completeness: of every gold trajectory that is
+    /// [`GoldTrajectoryTracker::is_trackable`] (>= 2 observations within a
+    /// single night at some point so far — the seeding requirement; see
+    /// that method's doc), how many have a pure branch whose association
+    /// history exactly matches every observation seen so far (none missing,
+    /// none extra).
+    pub n_trackable_objects_so_far: usize,
     pub n_objects_complete_so_far: usize,
     #[serde(with = "crate::trajectory_processing::finite_f64")]
     pub completeness_pct_so_far: f64,
+
+    /// Relaxed cumulative completeness: same purity requirement as
+    /// [`Self::completeness_pct_so_far`], but a currently-live pure branch
+    /// only needs to cover a `>= completeness_coverage_threshold` fraction
+    /// of the observations seen so far for its trajectory, rather than an
+    /// exact match. Tolerates a live branch that has dropped a few points
+    /// along the way as long as it hasn't been contaminated by another
+    /// object.
+    pub n_objects_complete_relaxed_so_far: usize,
+    #[serde(with = "crate::trajectory_processing::finite_f64")]
+    pub completeness_relaxed_pct_so_far: f64,
 
     pub cumulative_llr: MetricStats,
     pub effective_sample_size: MetricStats,
@@ -120,6 +133,7 @@ pub fn compute_night_tracking_stats(
     engine_config: &EngineConfig,
     spatial_binner: &HealpixBinner,
     elapsed_ms: f64,
+    completeness_coverage_threshold: f64,
 ) -> NightTrackingStats {
     let branches = &collection.branches;
 
@@ -160,17 +174,31 @@ pub fn compute_night_tracking_stats(
 
     // ── Cumulative gold-trajectory completeness ─────────────────────────
     let mut n_objects_complete_so_far = 0;
+    let mut n_objects_complete_relaxed_so_far = 0;
     for branch in branches {
         if let SeedPurity::Pure(traj_id) = ground_truth.classify(branch.track_ids()) {
             let Some(n_seen) = gold_tracker.n_obs_so_far(&traj_id) else {
                 continue;
             };
-            if n_seen >= 2 && branch.track_ids().len() == n_seen {
+            if n_seen < 2 {
+                continue;
+            }
+            let n_covered = branch.track_ids().len();
+            if n_covered == n_seen {
                 n_objects_complete_so_far += 1;
+            }
+            if n_covered as f64 / n_seen as f64 >= completeness_coverage_threshold {
+                n_objects_complete_relaxed_so_far += 1;
             }
         }
     }
-    let n_multi_detection_objects_so_far = gold_tracker.n_multi_detection_so_far();
+    // Denominator: only objects that ever had >= 2 observations *within a
+    // single night* — seeding is strictly intra-night (see
+    // `GoldTrajectoryTracker::is_trackable`), so an object whose detections
+    // never co-occur on the same night can never be picked up regardless of
+    // tracker quality, and including it here would understate completeness
+    // for a reason the tracker cannot fix.
+    let n_trackable_objects_so_far = gold_tracker.n_trackable_so_far();
 
     // ── Confidence / mixture health ──────────────────────────────────────
     let cumulative_llr = metric_stats(branches, |b| b.cumulative_llr);
@@ -229,11 +257,13 @@ pub fn compute_night_tracking_stats(
         recall_pct_tonight: tonight.recall_pct(),
         loose_recall_pct_tonight: tonight.loose_recall_pct(),
         purity_pct: tonight.purity_pct(),
-        n_multi_detection_objects_so_far,
+        n_trackable_objects_so_far,
         n_objects_complete_so_far,
-        completeness_pct_so_far: percentage(
-            n_objects_complete_so_far,
-            n_multi_detection_objects_so_far,
+        completeness_pct_so_far: percentage(n_objects_complete_so_far, n_trackable_objects_so_far),
+        n_objects_complete_relaxed_so_far,
+        completeness_relaxed_pct_so_far: percentage(
+            n_objects_complete_relaxed_so_far,
+            n_trackable_objects_so_far,
         ),
         cumulative_llr,
         effective_sample_size,

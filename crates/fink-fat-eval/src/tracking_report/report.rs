@@ -45,6 +45,8 @@ pub struct AggregatedTrackingStats {
     pub overall_purity_pct: f64,
     #[serde(with = "crate::trajectory_processing::finite_f64")]
     pub final_completeness_pct: f64,
+    #[serde(with = "crate::trajectory_processing::finite_f64")]
+    pub final_completeness_relaxed_pct: f64,
     pub branches_per_lineage: MetricStats,
     pub hypotheses_per_branch: MetricStats,
     pub cumulative_llr: MetricStats,
@@ -87,6 +89,11 @@ impl TrackingReport {
             .last()
             .map(|n| n.completeness_pct_so_far)
             .unwrap_or(f64::NAN);
+        let final_completeness_relaxed_pct = self
+            .per_night
+            .last()
+            .map(|n| n.completeness_relaxed_pct_so_far)
+            .unwrap_or(f64::NAN);
 
         let all_hypothesis_radii: Vec<f64> = self
             .per_night
@@ -117,6 +124,25 @@ impl TrackingReport {
             .per_night
             .iter()
             .map(|n| n.branches_per_lineage.mean)
+            .filter(|v| v.is_finite())
+            .collect();
+        let all_hypotheses_per_branch: Vec<f64> = self
+            .per_night
+            .iter()
+            .map(|n| n.hypotheses_per_branch.mean)
+            .filter(|v| v.is_finite())
+            .collect();
+        let all_cumulative_llr: Vec<f64> = self
+            .per_night
+            .iter()
+            .map(|n| n.cumulative_llr.mean)
+            .filter(|v| v.is_finite())
+            .collect();
+        let all_effective_sample_size: Vec<f64> = self
+            .per_night
+            .iter()
+            .map(|n| n.effective_sample_size.mean)
+            .filter(|v| v.is_finite())
             .collect();
 
         AggregatedTrackingStats {
@@ -133,10 +159,11 @@ impl TrackingReport {
             ),
             overall_purity_pct: percentage(sum_by(|n| n.n_branches_pure), sum_by(|n| n.n_branches)),
             final_completeness_pct,
-            branches_per_lineage: metric_stats(&self.per_night, |n| n.branches_per_lineage.mean),
-            hypotheses_per_branch: metric_stats(&self.per_night, |n| n.hypotheses_per_branch.mean),
-            cumulative_llr: metric_stats(&self.per_night, |n| n.cumulative_llr.mean),
-            effective_sample_size: metric_stats(&self.per_night, |n| n.effective_sample_size.mean),
+            final_completeness_relaxed_pct,
+            branches_per_lineage: metric_stats(&all_branches_per_lineage, |&r| r),
+            hypotheses_per_branch: metric_stats(&all_hypotheses_per_branch, |&r| r),
+            cumulative_llr: metric_stats(&all_cumulative_llr, |&r| r),
+            effective_sample_size: metric_stats(&all_effective_sample_size, |&r| r),
             hypothesis_error_box_radius_arcsec: metric_stats(&all_hypothesis_radii, |&r| r),
             bank_error_box_radius_arcsec: metric_stats(&all_bank_radii, |&r| r),
             n_observations_in_box_next_night: metric_stats(&all_in_box, |&r| r),
@@ -194,8 +221,12 @@ impl AggregatedTrackingStats {
             self.overall_purity_pct
         );
         println!(
-            "  Completeness (final, cumulative)            : {:.2}%",
+            "  Completeness (final, cumulative, strict)    : {:.2}%",
             self.final_completeness_pct
+        );
+        println!(
+            "  Completeness (final, cumulative, relaxed)   : {:.2}%",
+            self.final_completeness_relaxed_pct
         );
         println!(
             "  Branches per lineage                        : {}",

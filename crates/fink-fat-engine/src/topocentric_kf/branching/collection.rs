@@ -20,7 +20,7 @@
 
 use std::collections::HashSet;
 
-use photom::observation_dataset::{ObsDataset, observation::Observation};
+use photom::observation_dataset::{ObsDataset, ObsId, observation::Observation};
 
 use crate::{
     engine_config::{kalman_context::KalmanContext, main_config::EngineConfig},
@@ -38,12 +38,25 @@ use crate::{
 #[derive(Default)]
 pub struct BranchCollection<'state_lf, 'bank_config> {
     pub branches: Vec<Branch<'state_lf, 'bank_config>>,
+    /// Exposed for observability, not just diagnostics: observations
+    /// consumed by a candidate extension of an existing lineage during the
+    /// night just advanced, where that candidate branch was itself pruned
+    /// before surviving to `branches` — see
+    /// [`NightAdvanceOutcome::consumed_then_pruned_ids`](super::orchestrate::NightAdvanceOutcome::consumed_then_pruned_ids).
+    /// These were already given back to `advance_one_night`'s own discovery
+    /// step this same night (see that method's doc), so a caller does not
+    /// need to do anything with this field to benefit from that — it's
+    /// informational only at this point (e.g. for reporting/telemetry).
+    /// Empty before the first `advance_one_night` call and on nights where
+    /// `self` started empty (nothing to advance/prune).
+    pub last_night_consumed_then_pruned_ids: HashSet<ObsId>,
 }
 
 impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
     pub fn empty() -> Self {
         BranchCollection {
             branches: Vec::new(),
+            last_night_consumed_then_pruned_ids: HashSet::new(),
         }
     }
 
@@ -105,28 +118,33 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
         // visits internally and builds one bucket index per visit (see its
         // module doc for why a single per-night index would be wrong at
         // LSST cadence) — nothing to build here.
-        let (mut branches, consumed_observation_ids) = if self.branches.is_empty() {
-            tracing::info!(
-                target = "branch_collection_advance_one_night",
-                "Branches is empty, skip the kalman propagation"
-            );
-            (Vec::new(), HashSet::new())
-        } else {
-            tracing::info!(
-                target = "branch_collection_advance_one_night",
-                "Find previous branches, perform kalman one night advance"
-            );
-            let outcome = advance_bank_collection_one_night(
-                &self.branches,
-                night_obs,
-                obs_dataset,
-                kalman_context,
-                &engine_config.advance_params,
-                &spatial_binner,
-                current_step,
-            );
-            (outcome.branches, outcome.consumed_observation_ids)
-        };
+        let (mut branches, consumed_observation_ids, consumed_then_pruned_ids) =
+            if self.branches.is_empty() {
+                tracing::info!(
+                    target = "branch_collection_advance_one_night",
+                    "Branches is empty, skip the kalman propagation"
+                );
+                (Vec::new(), HashSet::new(), HashSet::new())
+            } else {
+                tracing::info!(
+                    target = "branch_collection_advance_one_night",
+                    "Find previous branches, perform kalman one night advance"
+                );
+                let outcome = advance_bank_collection_one_night(
+                    &self.branches,
+                    night_obs,
+                    obs_dataset,
+                    kalman_context,
+                    &engine_config.advance_params,
+                    &spatial_binner,
+                    current_step,
+                );
+                (
+                    outcome.branches,
+                    outcome.consumed_observation_ids,
+                    outcome.consumed_then_pruned_ids,
+                )
+            };
 
         // Must not reuse an id already held by a branch that got fully
         // pruned this night, so the max is taken over the pre-update set
@@ -144,12 +162,27 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
             "Start new seeds generation"
         );
 
+        // Observations an existing lineage's candidate extension merely
+        // *tried* this night, but that didn't survive this same night's
+        // pruning (`cap_top_b_per_lineage`/`apply_n_scan_pruning`), are not
+        // truly claimed by anything: give them back to the leftover pool so
+        // a real object doesn't lose its only same-night seeding chance to
+        // an unrelated candidate that ultimately went nowhere. See
+        // `NightAdvanceOutcome::consumed_then_pruned_ids`'s doc — this is
+        // always resolvable within this same night (an observation only
+        // ever appears in one night's `night_obs`, so there is no later
+        // night where it could be revisited).
+        let truly_claimed_ids: HashSet<ObsId> = consumed_observation_ids
+            .difference(&consumed_then_pruned_ids)
+            .copied()
+            .collect();
+
         // Separate, differently-binned index — built once inside
         // `build_kf_bank_collection_from_observations` (see `discovery`
         // module docs).
         let new_lineages = seed_new_lineages_from_leftovers(
             night_obs,
-            &consumed_observation_ids,
+            &truly_claimed_ids,
             obs_dataset,
             kalman_context,
             engine_config,
@@ -163,6 +196,9 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
             "End of the advance one night pipeline"
         );
 
-        Ok(Self { branches })
+        Ok(Self {
+            branches,
+            last_night_consumed_then_pruned_ids: consumed_then_pruned_ids,
+        })
     }
 }

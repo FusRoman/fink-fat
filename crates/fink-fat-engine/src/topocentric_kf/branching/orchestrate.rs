@@ -79,10 +79,25 @@ pub struct NightAdvanceOutcome<'state_lf, 'bank_config> {
     pub branches: Vec<Branch<'state_lf, 'bank_config>>,
     /// Ids of every observation that passed the two-stage gate for at least
     /// one lineage's search region this night — regardless of whether the
-    /// branch carrying it survived pruning. Consumed by the discovery step
-    /// (`seed_new_lineages_from_leftovers`) so an observation plausibly
-    /// belonging to a known track doesn't also seed a brand-new one.
+    /// branch carrying it survived pruning. The caller
+    /// ([`BranchCollection::advance_one_night`](super::collection::BranchCollection::advance_one_night))
+    /// excludes `consumed_observation_ids.difference(&consumed_then_pruned_ids)`
+    /// (i.e. observations truly held by a *surviving* branch) from the
+    /// discovery step's (`seed_new_lineages_from_leftovers`) candidate pool,
+    /// so an observation plausibly belonging to a known track doesn't also
+    /// seed a brand-new one.
     pub consumed_observation_ids: HashSet<ObsId>,
+    /// The subset of `consumed_observation_ids` that ended up in none of the
+    /// surviving `branches`' track histories — i.e. observations claimed by
+    /// a candidate extension of an existing lineage that was itself pruned
+    /// (by `cap_top_b_per_lineage` or `apply_n_scan_pruning`) before the end
+    /// of this night. The caller gives these back to the leftover pool for
+    /// discovery (see `consumed_observation_ids`'s doc) instead of
+    /// permanently losing them: a candidate extension that didn't survive
+    /// pruning was never a real claim, and an observation only ever appears
+    /// in one night's `night_obs` — there is no later night where it could
+    /// be revisited if not resolved now.
+    pub consumed_then_pruned_ids: HashSet<ObsId>,
 }
 
 /// Advance every lineage by one night, one visit (exposure epoch) at a
@@ -212,9 +227,19 @@ pub fn advance_bank_collection_one_night<'state_lf, 'bank_config>(
     // night has been folded in.
     let branches = apply_n_scan_pruning(branches, params.n_scan, current_step);
 
+    let surviving_ids: HashSet<ObsId> = branches
+        .iter()
+        .flat_map(|b| b.track_ids().iter().copied())
+        .collect();
+    let consumed_then_pruned_ids = consumed_observation_ids
+        .difference(&surviving_ids)
+        .copied()
+        .collect();
+
     NightAdvanceOutcome {
         branches,
         consumed_observation_ids,
+        consumed_then_pruned_ids,
     }
 }
 
