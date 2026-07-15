@@ -12,6 +12,7 @@ use plotters::prelude::*;
 use crate::seed_bank_report::plots::{
     CHART_HEIGHT, CHART_WIDTH, LABEL_AREA, MARGIN, Series, draw_line_chart, histogram_bins,
 };
+use crate::tracking_report::object_outcome::ObjectOutcome;
 use crate::tracking_report::report::{AggregatedTrackingStats, TrackingReport};
 
 /// Number of live branches and active lineages per night.
@@ -81,11 +82,72 @@ pub fn plot_recall_purity_completeness_per_night(
                 points: series_from(|n| n.purity_pct),
             },
             Series {
-                label: "Completeness (cumulative)",
+                label: "Recall (touched, tonight)",
+                color: CYAN,
+                points: series_from(|n| n.loose_recall_pct_tonight),
+            },
+            Series {
+                label: "Completeness (strict, cumulative)",
                 color: GREEN,
                 points: series_from(|n| n.completeness_pct_so_far),
             },
+            Series {
+                label: "Completeness (relaxed, cumulative)",
+                color: MAGENTA,
+                points: series_from(|n| n.completeness_relaxed_pct_so_far),
+            },
         ],
+    )
+}
+
+/// Evolution, per night, of the percentage of trackable objects in each
+/// [`ObjectOutcome`] category — one line per category, denominator
+/// `n_trackable_objects_so_far` that night (see
+/// [`crate::tracking_report::night_stats::NightTrackingStats::object_outcome_counts`]'s
+/// doc). Shows how the population moves between categories over the run,
+/// unlike the single end-of-run breakdown bar chart
+/// ([`plot_object_outcome_breakdown`]).
+pub fn plot_object_outcome_per_night(
+    report: &TrackingReport,
+    output_path: &Utf8Path,
+) -> Result<()> {
+    let colors = [
+        BLUE,
+        RED,
+        RGBColor(255, 165, 0), // orange
+        MAGENTA,
+        CYAN,
+        BLACK,
+        GREEN,
+    ];
+
+    let series: Vec<Series> = ObjectOutcome::all()
+        .into_iter()
+        .enumerate()
+        .map(|(i, outcome)| Series {
+            label: outcome.label(),
+            color: colors[i],
+            points: report
+                .per_night
+                .iter()
+                .filter(|n| n.n_trackable_objects_so_far > 0)
+                .map(|n| {
+                    (
+                        n.step as f64,
+                        100.0 * n.object_outcome_counts[i] as f64
+                            / n.n_trackable_objects_so_far as f64,
+                    )
+                })
+                .collect(),
+        })
+        .collect();
+
+    draw_line_chart(
+        output_path,
+        "Object outcome breakdown per night",
+        "Night (step)",
+        "Percent of trackable objects",
+        &series,
     )
 }
 
