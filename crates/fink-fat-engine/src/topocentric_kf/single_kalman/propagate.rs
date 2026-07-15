@@ -6,7 +6,7 @@ use outfit::{
 use photom::observation_dataset::{ObsDataset, observation::Observation};
 
 use crate::topocentric_kf::{
-    constants::{C_AU_PER_DAY, CHI2_2DOF_95, MAX_INFLATION},
+    constants::{C_AU_PER_DAY, CHI2_2DOF_95, MAX_INFLATION, MAX_RHO_AU, MIN_RHO_AU},
     conversion::{CartesianState, cartesian_to_attributable, jacobian_attr_to_cart},
     observer_state::{HelioObsState, get_observer},
     single_kalman::KFState,
@@ -37,6 +37,21 @@ pub enum PropagateError {
     /// The Jacobian $J_{new}$ at the propagated state is singular.
     #[error("Jacobian inversion failed: degenerate attributable geometry")]
     SingularJacobian,
+    /// The propagated range estimate ρ left the sane range where
+    /// `jacobian_attr_to_cart` stays well-conditioned. Four of its six
+    /// columns scale linearly with ρ, so as ρ drifts toward 0 (or diverges),
+    /// `try_inverse()` still succeeds (the matrix isn't *exactly* singular)
+    /// but returns hugely amplified entries — applied on both sides of the
+    /// propagated covariance, this squares the amplification and can
+    /// silently inflate a hypothesis's sky-plane covariance by 10+ orders
+    /// of magnitude while staying "finite" in the `f64` sense. Rejecting
+    /// propagation here lets this hypothesis be dropped through the normal
+    /// "failed to propagate" path instead of drifting further, undetected,
+    /// on every subsequent night.
+    #[error(
+        "Range estimate ρ={rho_au} AU outside sane bounds — ill-conditioned attributable↔cartesian Jacobian"
+    )]
+    IllConditionedRange { rho_au: f64 },
 }
 
 /// Build the $6 \times 6$ Keplerian state transition matrix from Lagrange
@@ -400,6 +415,19 @@ fn propagate_covariance(
         inflation_active = lambda > 1.0,
         "Adaptive covariance inflation factor (fading-memory)"
     );
+
+    // `jacobian_attr_to_cart` has 4 of its 6 columns scaling linearly with ρ
+    // (state[4]): as ρ drifts toward 0 or diverges, the Jacobian becomes
+    // ill-conditioned without ever being *exactly* singular, so
+    // `try_inverse()` below would still succeed but return a hugely
+    // amplified inverse — applied on both sides of the propagated
+    // covariance, silently inflating it by many orders of magnitude while
+    // staying `f64`-finite. Reject propagation before that happens rather
+    // than detecting it after the fact.
+    let rho_au = attr_new[4];
+    if !(MIN_RHO_AU..=MAX_RHO_AU).contains(&rho_au) {
+        return Err(PropagateError::IllConditionedRange { rho_au });
+    }
 
     let j_new = jacobian_attr_to_cart(attr_new);
     tracing::trace!(

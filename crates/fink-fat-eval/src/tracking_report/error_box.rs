@@ -116,14 +116,43 @@ pub fn bank_predictive_error_box(
     })
 }
 
+/// Same ceiling as the engine's own `RadiusStrategy::Clamped` safety net
+/// (`NightAdvanceParams`'s default, 30 arcmin) — a per-hypothesis radius
+/// beyond this is not a real physical uncertainty, it's the numerically
+/// ill-conditioned covariance a long-surviving lineage's drifting range
+/// estimate can produce (see `propagate_covariance`'s doc in
+/// `fink_fat_engine::topocentric_kf::single_kalman::propagate`). Filtered
+/// out entirely rather than clamped to this value: a 1e14 arcsec reading
+/// is not "30 arcmin degraded", it's an invalid measurement that would
+/// still corrupt mean/median if merely clamped.
+pub const MAX_HYPOTHESIS_RADIUS_ARCSEC: f64 = 1800.0;
+
 /// Per-hypothesis 1σ sky-plane bounding radius (arcsec), for every live
 /// hypothesis in `bank`. Hypotheses whose sky covariance is unavailable
-/// (degenerate Jacobian) are skipped.
-pub fn hypothesis_error_box_radii_arcsec(bank: &KFBank) -> Vec<f64> {
-    bank.hypotheses()
+/// (degenerate Jacobian) are skipped, as are hypotheses whose radius
+/// exceeds [`MAX_HYPOTHESIS_RADIUS_ARCSEC`] (numerically ill-conditioned,
+/// not a real uncertainty).
+///
+/// Returns the valid radii plus how many hypotheses were excluded for
+/// exceeding the ceiling — the latter is a transparency signal: it should
+/// be 0 once the engine-side root cause (drifting range estimate on a
+/// long-surviving lineage) is fixed, so a nonzero count here is worth
+/// investigating rather than silently dropping.
+pub fn hypothesis_error_box_radii_arcsec(bank: &KFBank) -> (Vec<f64>, usize) {
+    let mut n_excessive = 0;
+    let radii = bank
+        .hypotheses()
         .iter()
         .filter_map(|h| h.kf.sky_covariance().ok())
         .filter(|cov| cov.iter().all(|x| x.is_finite()))
         .map(|cov| largest_eigenvalue_2x2(&cov).max(0.0).sqrt().to_degrees() * 3600.0)
-        .collect()
+        .filter(|&r| {
+            let ok = r <= MAX_HYPOTHESIS_RADIUS_ARCSEC;
+            if !ok {
+                n_excessive += 1;
+            }
+            ok
+        })
+        .collect();
+    (radii, n_excessive)
 }

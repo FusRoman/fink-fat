@@ -12,7 +12,10 @@ use tracing::trace;
 use crate::{
     engine_config::kf_bank_config::KFBankConfig,
     error::ObservationJacobianError,
-    topocentric_kf::single_kalman::{KFState, update::wrap_angle},
+    topocentric_kf::{
+        constants::MAX_INNOVATION_DET,
+        single_kalman::{KFState, update::wrap_angle},
+    },
 };
 
 /// A single weighted hypothesis in the bank.
@@ -358,7 +361,7 @@ fn compute_log_likelihood(s: &Matrix2<f64>, d2: f64) -> Option<f64> {
     if det <= 0.0 {
         return None;
     }
-    Some(-0.5 * (det.ln() + d2))
+    Some(-0.5 * (det.min(MAX_INNOVATION_DET).ln() + d2))
 }
 
 /// Push a log-likelihood value into a bounded sliding window.

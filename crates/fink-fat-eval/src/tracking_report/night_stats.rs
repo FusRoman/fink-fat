@@ -94,6 +94,14 @@ pub struct NightTrackingStats {
     pub hypotheses_per_branch: MetricStats,
 
     pub hypothesis_error_box_radius_arcsec: MetricStats,
+    /// Number of live hypotheses this night whose per-hypothesis error-box
+    /// radius exceeded the sanity ceiling and were excluded from
+    /// [`Self::hypothesis_error_box_radius_arcsec`] — see
+    /// `error_box::hypothesis_error_box_radii_arcsec`'s doc. Should be 0;
+    /// nonzero indicates a numerically ill-conditioned hypothesis (e.g. a
+    /// long-surviving lineage whose range estimate drifted) still occurred
+    /// in the engine this night.
+    pub n_hypotheses_excessive_radius: usize,
     pub bank_error_box_radius_arcsec: Option<MetricStats>,
     pub n_observations_in_box_next_night: Option<MetricStats>,
 }
@@ -214,10 +222,13 @@ pub fn compute_night_tracking_stats(
     let hypotheses_per_branch = metric_stats(branches, |b| b.bank.len() as f64);
 
     // ── Kalman error boxes ────────────────────────────────────────────────
-    let hypothesis_radii: Vec<f64> = branches
-        .iter()
-        .flat_map(|b| hypothesis_error_box_radii_arcsec(&b.bank))
-        .collect();
+    let mut hypothesis_radii: Vec<f64> = Vec::new();
+    let mut n_hypotheses_excessive_radius = 0;
+    for b in branches {
+        let (radii, n_excessive) = hypothesis_error_box_radii_arcsec(&b.bank);
+        hypothesis_radii.extend(radii);
+        n_hypotheses_excessive_radius += n_excessive;
+    }
     let hypothesis_error_box_radius_arcsec = metric_stats(&hypothesis_radii, |&r| r);
 
     let (bank_error_box_radius_arcsec, n_observations_in_box_next_night) = match next_night_obs {
@@ -282,6 +293,7 @@ pub fn compute_night_tracking_stats(
         effective_sample_size,
         hypotheses_per_branch,
         hypothesis_error_box_radius_arcsec,
+        n_hypotheses_excessive_radius,
         bank_error_box_radius_arcsec,
         n_observations_in_box_next_night,
     }

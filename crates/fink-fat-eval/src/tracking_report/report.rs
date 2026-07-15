@@ -52,6 +52,10 @@ pub struct AggregatedTrackingStats {
     pub cumulative_llr: MetricStats,
     pub effective_sample_size: MetricStats,
     pub hypothesis_error_box_radius_arcsec: MetricStats,
+    /// Sum, over every night, of
+    /// [`NightTrackingStats::n_hypotheses_excessive_radius`] — should be 0;
+    /// see that field's doc.
+    pub total_hypotheses_excessive_radius: usize,
     pub bank_error_box_radius_arcsec: MetricStats,
     pub n_observations_in_box_next_night: MetricStats,
     pub lineage_survival_nights: MetricStats,
@@ -165,6 +169,7 @@ impl TrackingReport {
             cumulative_llr: metric_stats(&all_cumulative_llr, |&r| r),
             effective_sample_size: metric_stats(&all_effective_sample_size, |&r| r),
             hypothesis_error_box_radius_arcsec: metric_stats(&all_hypothesis_radii, |&r| r),
+            total_hypotheses_excessive_radius: sum_by(|n| n.n_hypotheses_excessive_radius),
             bank_error_box_radius_arcsec: metric_stats(&all_bank_radii, |&r| r),
             n_observations_in_box_next_night: metric_stats(&all_in_box, |&r| r),
             lineage_survival_nights: metric_stats(&all_survival, |&r| r),
@@ -248,6 +253,13 @@ impl AggregatedTrackingStats {
             "  Error box radius, per hypothesis (arcsec)   : {}",
             fmt_stats(&self.hypothesis_error_box_radius_arcsec)
         );
+        if self.total_hypotheses_excessive_radius > 0 {
+            println!(
+                "  Hypotheses excluded (radius > {:.0} arcsec)   : {}",
+                crate::tracking_report::error_box::MAX_HYPOTHESIS_RADIUS_ARCSEC,
+                self.total_hypotheses_excessive_radius
+            );
+        }
         println!(
             "  Error box radius, per bank (arcsec)         : {}",
             fmt_stats(&self.bank_error_box_radius_arcsec)
