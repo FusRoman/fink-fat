@@ -10,6 +10,7 @@
 
 use std::time::Instant;
 
+use ahash::AHashSet;
 use anyhow::{Result, bail};
 use camino::{Utf8Path, Utf8PathBuf};
 use clap::Parser;
@@ -26,16 +27,19 @@ use fink_fat_eval::{
         gold_trajectory::GoldTrajectoryTracker,
         lineage_lifecycle::LineageTracker,
         night_stats::compute_night_tracking_stats,
+        object_outcome::{ObjectOutcome, ObjectOutcomeTracker},
         plots::{
-            plot_aggregated_histograms, plot_branches_and_lineages_per_night,
-            plot_error_box_radius_per_night, plot_llr_and_ess_per_night,
+            plot_aggregated_histograms, plot_best_pure_coverage_histogram,
+            plot_branches_and_lineages_per_night, plot_error_box_radius_per_night,
+            plot_llr_and_ess_per_night, plot_object_outcome_breakdown,
             plot_observations_in_box_per_night, plot_recall_purity_completeness_per_night,
             plot_timing_per_night,
         },
         report::TrackingReport,
+        seeding_gate_diagnosis::{count_by_failure, diagnose_never_touched_gating},
     },
 };
-use photom::{NightId, observation_dataset::observation::Observation};
+use photom::{NightId, observation_dataset::ObsId, observation_dataset::observation::Observation};
 
 /// Directory the JSON report and plots are written to, relative to the
 /// current working directory (matching how this binary is normally
@@ -78,6 +82,14 @@ struct TrackingAnalysisCli {
     /// Conflicts with --end-night; requires --start-night.
     #[arg(long, conflicts_with = "end_night")]
     n_nights: Option<usize>,
+
+    /// Minimum fraction (0.0-1.0) of a gold trajectory's cumulative
+    /// observations that a currently-live pure branch must cover to count
+    /// toward the *relaxed* completeness metric — unlike the strict metric,
+    /// this tolerates a branch that dropped a few points along the way as
+    /// long as it was never contaminated by another object.
+    #[arg(long, default_value_t = 0.8)]
+    completeness_coverage_threshold: f64,
 }
 
 fn main() -> Result<()> {
@@ -149,6 +161,9 @@ fn main() -> Result<()> {
     let mut collection = BranchCollection::empty();
     let mut gold_tracker = GoldTrajectoryTracker::new();
     let mut lineage_tracker = LineageTracker::new();
+    let mut object_outcome_tracker = ObjectOutcomeTracker::new();
+    let mut consumed_then_pruned_ids: AHashSet<ObsId> = AHashSet::default();
+    let mut last_step = 0;
 
     for (step, &night_id) in night_ids.iter().enumerate() {
         let Some(night_iter) = obs_dataset.iter_night_observations(&night_id) else {
@@ -162,7 +177,7 @@ fn main() -> Result<()> {
             .and_then(|next_id| obs_dataset.iter_night_observations(next_id))
             .map(|it| it.collect());
 
-        gold_tracker.observe_night(&night_obs, &ground_truth);
+        gold_tracker.observe_night(step, &night_obs, &ground_truth);
 
         let t0 = Instant::now();
         let prev_collection = collection;
@@ -190,12 +205,22 @@ fn main() -> Result<()> {
             &engine_config,
             &spatial_binner,
             elapsed_ms,
+            cli.completeness_coverage_threshold,
         );
 
         progress.set_message(format!(
             "night {night_id}: {} branches, recall {:.0}%, completeness {:.0}%",
             stats.n_branches, stats.recall_pct_tonight, stats.completeness_pct_so_far
         ));
+        object_outcome_tracker.observe_night(step, &new_collection.branches, &ground_truth);
+        consumed_then_pruned_ids.extend(
+            new_collection
+                .last_night_consumed_then_pruned_ids
+                .iter()
+                .copied(),
+        );
+        last_step = step;
+
         report.push(stats);
         progress.inc(1);
 
@@ -206,6 +231,30 @@ fn main() -> Result<()> {
     let aggregated = report.finalize();
     aggregated.print_summary();
 
+    let outcomes = object_outcome_tracker.classify_all(
+        &gold_tracker,
+        last_step,
+        cli.completeness_coverage_threshold,
+    );
+    print_object_outcome_summary(&outcomes, &gold_tracker);
+
+    let never_touched_ids: Vec<photom::TrajId> = outcomes
+        .iter()
+        .filter(|(_, o, _)| *o == ObjectOutcome::NeverTouched)
+        .map(|(traj_id, _, _)| traj_id.clone())
+        .collect();
+    let gate_records = diagnose_never_touched_gating(
+        &never_touched_ids,
+        &obs_dataset,
+        &ground_truth,
+        &gold_tracker,
+        &night_ids,
+        &engine_config.pairs,
+        &consumed_then_pruned_ids,
+        &spatial_binner,
+    );
+    print_gate_diagnosis_summary(&gate_records, never_touched_ids.len());
+
     let output_dir = resolve_output_dir(&cli.common);
     std::fs::create_dir_all(&output_dir)?;
 
@@ -214,7 +263,87 @@ fn main() -> Result<()> {
     println!("Report written to {json_path}");
 
     write_all_plots(&report, &output_dir)?;
+    write_object_outcome_plots(&outcomes, &output_dir)?;
 
+    Ok(())
+}
+
+/// Print how many trackable ground-truth objects (see
+/// [`GoldTrajectoryTracker::is_trackable`]) fall into each [`ObjectOutcome`]
+/// category, giving a breakdown of *why* completeness is low instead of a
+/// single opaque percentage — see `fink_fat_eval::tracking_report::object_outcome`
+/// for what each category means. Also reports how many multi-detection
+/// objects were excluded as structurally unreachable by this pipeline's
+/// intra-night-only seeding, so the denominator change isn't silent.
+fn print_object_outcome_summary(
+    outcomes: &[(photom::TrajId, ObjectOutcome, Option<f64>)],
+    gold_tracker: &GoldTrajectoryTracker,
+) {
+    let total = outcomes.len();
+    let n_multi_detection = gold_tracker.n_multi_detection_so_far();
+    let n_excluded = n_multi_detection.saturating_sub(total);
+    println!(
+        "Object outcome breakdown ({total} trackable objects; {n_excluded} of \
+         {n_multi_detection} multi-detection objects excluded as structurally \
+         unreachable — never had >= 2 observations within a single night):"
+    );
+    for outcome in ObjectOutcome::all() {
+        let count = outcomes.iter().filter(|(_, o, _)| *o == outcome).count();
+        let pct = if total == 0 {
+            0.0
+        } else {
+            100.0 * count as f64 / total as f64
+        };
+        println!("  {:<28} : {count:>6} ({pct:>5.1}%)", outcome.label());
+    }
+    println!();
+}
+
+/// Print why the `NeverTouched` trackable objects' same-night pairwise gate
+/// rejected every candidate pair — see
+/// `fink_fat_eval::tracking_report::seeding_gate_diagnosis` for what each
+/// cause means and its limitations (only the object's first two same-night
+/// observations are checked, matching the real linker's "no fit yet" path).
+fn print_gate_diagnosis_summary(
+    records: &[fink_fat_eval::tracking_report::seeding_gate_diagnosis::GateDiagnosisRecord],
+    n_never_touched: usize,
+) {
+    println!(
+        "Never-touched seeding gate diagnosis ({}/{n_never_touched} objects analyzed; \
+         counts are not mutually exclusive):",
+        records.len()
+    );
+    for (label, count) in count_by_failure(records) {
+        println!("  {label:<38} : {count:>6}");
+    }
+    println!();
+}
+
+/// Write the object-outcome breakdown bar chart and the best-pure-coverage
+/// histogram alongside the other tracking plots.
+fn write_object_outcome_plots(
+    outcomes: &[(photom::TrajId, ObjectOutcome, Option<f64>)],
+    output_dir: &Utf8Path,
+) -> Result<()> {
+    let counts: Vec<(&str, usize)> = ObjectOutcome::all()
+        .into_iter()
+        .map(|outcome| {
+            let count = outcomes.iter().filter(|(_, o, _)| *o == outcome).count();
+            (outcome.label(), count)
+        })
+        .collect();
+    let breakdown_path = output_dir.join("object_outcome_breakdown.png");
+    plot_object_outcome_breakdown(&counts, &breakdown_path)?;
+
+    let coverage_samples: Vec<f64> = outcomes
+        .iter()
+        .map(|(_, _, coverage)| coverage.unwrap_or(0.0))
+        .collect();
+    let coverage_path = output_dir.join("best_pure_coverage_ratio_histogram.png");
+    plot_best_pure_coverage_histogram(&coverage_samples, &coverage_path)?;
+
+    println!("  {breakdown_path}");
+    println!("  {coverage_path}");
     Ok(())
 }
 

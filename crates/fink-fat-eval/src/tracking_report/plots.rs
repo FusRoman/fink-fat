@@ -250,6 +250,88 @@ fn plot_histogram(
     Ok(())
 }
 
+/// Bar chart of a small number of named integer counts (e.g. the per-object
+/// outcome category breakdown).
+fn plot_bar_chart(
+    counts: &[(&str, usize)],
+    title: &str,
+    y_label: &str,
+    output_path: &Utf8Path,
+) -> Result<()> {
+    let root =
+        BitMapBackend::new(output_path.as_str(), (CHART_WIDTH, CHART_HEIGHT)).into_drawing_area();
+    root.fill(&WHITE)?;
+
+    let y_max = counts
+        .iter()
+        .map(|&(_, c)| c as u32)
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let n = counts.len() as i32;
+    let labels: Vec<&str> = counts.iter().map(|&(label, _)| label).collect();
+
+    let mut chart = ChartBuilder::on(&root)
+        .caption(title, ("sans-serif", 28))
+        .margin(MARGIN)
+        .x_label_area_size(LABEL_AREA * 2)
+        .y_label_area_size(LABEL_AREA)
+        .build_cartesian_2d(0..n, 0u32..(y_max + y_max / 10 + 1))
+        .with_context(|| format!("failed to build chart area for {output_path}"))?;
+
+    chart
+        .configure_mesh()
+        .y_desc(y_label)
+        .x_desc("Outcome")
+        .x_labels(labels.len())
+        .x_label_formatter(&|x| {
+            labels
+                .get(*x as usize)
+                .map(|s| s.to_string())
+                .unwrap_or_default()
+        })
+        .disable_x_mesh()
+        .draw()?;
+
+    chart.draw_series(counts.iter().enumerate().map(|(i, &(_, count))| {
+        Rectangle::new([(i as i32, 0), (i as i32 + 1, count as u32)], BLUE.filled())
+    }))?;
+
+    root.present()
+        .with_context(|| format!("failed to write chart to {output_path}"))?;
+    Ok(())
+}
+
+/// Bar chart of how many multi-detection ground-truth objects fall into
+/// each [`crate::tracking_report::object_outcome::ObjectOutcome`] category —
+/// see that module's doc for what each category means and how to act on it.
+pub fn plot_object_outcome_breakdown(
+    outcome_counts: &[(&str, usize)],
+    output_path: &Utf8Path,
+) -> Result<()> {
+    plot_bar_chart(
+        outcome_counts,
+        "Ground-truth object outcome breakdown",
+        "Objects",
+        output_path,
+    )
+}
+
+/// Histogram of the best pure-branch coverage ratio ever reached for every
+/// multi-detection object (`best_pure_coverage / n_obs_so_far`, 0 for
+/// objects never captured purely). Distinguishes "the tracker never had a
+/// good branch for this object" (mass near 0) from "the tracker had a good
+/// branch at some point, but the end-of-run snapshot doesn't show it" (mass
+/// near 1 despite a low final completeness).
+pub fn plot_best_pure_coverage_histogram(samples: &[f64], output_path: &Utf8Path) -> Result<()> {
+    plot_histogram(
+        samples,
+        "Best-ever pure-branch coverage ratio per object",
+        "Coverage ratio (best pure branch / total observations seen)",
+        output_path,
+    )
+}
+
 /// Aggregated histograms over the whole run: error-box radii (bank +
 /// hypothesis level, one sample per night-mean — see
 /// [`AggregatedTrackingStats`]'s doc), branches-per-lineage, and lineage
