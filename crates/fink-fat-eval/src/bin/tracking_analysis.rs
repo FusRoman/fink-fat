@@ -23,6 +23,19 @@ use fink_fat_engine::{
 use fink_fat_eval::{
     cli::{Cli, load_data},
     seed_bank_report::ground_truth::ObsTrajLookup,
+    snapshot_report::{
+        efficacy::{
+            ReconstructionEfficacy, build_gold_tracker_for_processed_nights,
+            compute_reconstruction_efficacy, determine_last_processed_night,
+        },
+        plots::{
+            plot_hypotheses_per_branch_histogram,
+            plot_observations_per_night as plot_snapshot_observations_per_night,
+            plot_reconstruction_coverage_histogram, plot_reconstruction_outcome_breakdown,
+            plot_track_length_histogram,
+        },
+        stats::{SnapshotStats, build_obs_to_night_map, compute_snapshot_stats},
+    },
     tracking_report::{
         gold_trajectory::GoldTrajectoryTracker,
         lineage_lifecycle::LineageTracker,
@@ -56,6 +69,15 @@ struct TrackingAnalysisCli {
     /// skipping the engine run entirely.
     #[arg(long, value_name = "JSON_FILE")]
     from_json: Option<Utf8PathBuf>,
+
+    /// Load a previously-written BranchCollection `.rkyv` snapshot (as
+    /// written by the real `fink-fat` engine binary under its
+    /// `storage_path`) and report statistics/plots about that single
+    /// point-in-time state, instead of re-running the night-by-night
+    /// simulation. The path is resolved automatically from `--config`'s
+    /// `storage_path` — pass this flag with no value to use it.
+    #[arg(long, conflicts_with = "from_json")]
+    from_snapshot: bool,
 
     /// List every night id and its observation count, then exit. Only
     /// needs --alerts (--config is still required by --alerts's shared CLI
@@ -114,6 +136,10 @@ fn main() -> Result<()> {
         std::fs::create_dir_all(&output_dir)?;
         write_all_plots(&report, &output_dir)?;
         return Ok(());
+    }
+
+    if cli.from_snapshot {
+        return run_snapshot_analysis(&cli);
     }
 
     let (_, obs_dataset) = load_data(&cli.common.alerts);
@@ -360,6 +386,106 @@ fn write_object_outcome_plots(
 
     println!("  {breakdown_path}");
     println!("  {coverage_path}");
+    Ok(())
+}
+
+/// `--from-snapshot` entry point: load the `.rkyv` `BranchCollection`
+/// snapshot the real `fink-fat` engine binary wrote under `--config`'s
+/// `storage_path`, and report structural stats plus (if the alerts file
+/// carries ground truth) a reconstruction-efficacy breakdown — a
+/// point-in-time audit of a real run, without re-running the simulation.
+fn run_snapshot_analysis(cli: &TrackingAnalysisCli) -> Result<()> {
+    let (_, obs_dataset) = load_data(&cli.common.alerts);
+    let engine_config = EngineConfig::load_engine_config_validated(&cli.common.config)?;
+    let kalman_ctx = engine_config.build_context();
+
+    let snapshot_path = engine_config.snapshot_path();
+    let collection =
+        BranchCollection::load_snapshot_from_disk(&snapshot_path, &kalman_ctx, &engine_config)?;
+    println!("Loaded snapshot from {snapshot_path}");
+
+    let ground_truth = ObsTrajLookup::build(&obs_dataset);
+    let obs_to_night = build_obs_to_night_map(&obs_dataset);
+
+    let stats = compute_snapshot_stats(&collection, &obs_to_night);
+    stats.print_summary();
+
+    let efficacy = if ground_truth.has_ground_truth() {
+        match determine_last_processed_night(&collection, &obs_to_night) {
+            Some(last_processed_night) => {
+                let gold_tracker = build_gold_tracker_for_processed_nights(
+                    &obs_dataset,
+                    &ground_truth,
+                    last_processed_night,
+                );
+                let efficacy = compute_reconstruction_efficacy(
+                    &collection,
+                    &ground_truth,
+                    &gold_tracker,
+                    Some(last_processed_night),
+                );
+                efficacy.print_summary();
+                Some(efficacy)
+            }
+            None => {
+                println!(
+                    "Ground truth present, but the snapshot has no branches referencing any \
+                     observation — skipping reconstruction efficacy."
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let output_dir = resolve_output_dir(&cli.common).join("snapshot_report");
+    std::fs::create_dir_all(&output_dir)?;
+
+    let stats_json_path = output_dir.join("snapshot_stats.json");
+    stats.write_json(&stats_json_path)?;
+    println!("Report written to {stats_json_path}");
+
+    if let Some(efficacy) = &efficacy {
+        let efficacy_json_path = output_dir.join("reconstruction_efficacy.json");
+        efficacy.write_json(&efficacy_json_path)?;
+        println!("Report written to {efficacy_json_path}");
+    }
+
+    write_snapshot_plots(&stats, efficacy.as_ref(), &output_dir)?;
+
+    Ok(())
+}
+
+/// Write the snapshot-mode plots (structural histograms always, plus the
+/// reconstruction-efficacy breakdown/coverage histogram when ground truth
+/// was available).
+fn write_snapshot_plots(
+    stats: &SnapshotStats,
+    efficacy: Option<&ReconstructionEfficacy>,
+    output_dir: &Utf8Path,
+) -> Result<()> {
+    let hyp_path = output_dir.join("hypotheses_per_branch_histogram.png");
+    let len_path = output_dir.join("track_length_per_branch_histogram.png");
+    let night_path = output_dir.join("observations_per_night.png");
+    plot_hypotheses_per_branch_histogram(stats, &hyp_path)?;
+    plot_track_length_histogram(stats, &len_path)?;
+    plot_snapshot_observations_per_night(stats, &night_path)?;
+
+    println!("Plots written to:");
+    for p in [&hyp_path, &len_path, &night_path] {
+        println!("  {p}");
+    }
+
+    if let Some(efficacy) = efficacy {
+        let breakdown_path = output_dir.join("reconstruction_outcome_breakdown.png");
+        let coverage_path = output_dir.join("coverage_histogram.png");
+        plot_reconstruction_outcome_breakdown(efficacy, &breakdown_path)?;
+        plot_reconstruction_coverage_histogram(efficacy, &coverage_path)?;
+        println!("  {breakdown_path}");
+        println!("  {coverage_path}");
+    }
+
     Ok(())
 }
 

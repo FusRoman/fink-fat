@@ -20,17 +20,24 @@
 
 use std::collections::HashSet;
 
+use camino::Utf8Path;
 use photom::observation_dataset::{ObsDataset, ObsId, observation::Observation};
 
 use crate::{
     engine_config::{kalman_context::KalmanContext, main_config::EngineConfig},
-    error::EngineError,
+    error::{EngineError, FinkFatError},
     spacetime_bucket::healpix_binner::HealpixBinner,
     topocentric_kf::branching::{
         Branch, BranchSnapshot, discovery::seed_new_lineages_from_leftovers,
         orchestrate::advance_bank_collection_one_night,
     },
 };
+
+/// Filename the [`BranchCollectionSnapshot`] is written to under
+/// [`EngineConfig::storage_path_buf`] — shared by `fink-fat` (the real
+/// engine binary, which writes it after every night) and `fink-fat-eval`
+/// (which only reads it, for `tracking_analysis --from-snapshot`).
+pub const SNAPSHOT_FILENAME: &str = "branch_collection.rkyv";
 
 /// The full set of live branches tracked across nights — one entry per
 /// surviving candidate association history, possibly several per original
@@ -66,6 +73,64 @@ pub struct BranchCollectionSnapshot {
     pub last_night_consumed_then_pruned_ids: HashSet<ObsId>,
 }
 
+use crate::logging::LogTarget;
+
+/// Structured log events for the per-night `BranchCollection` pipeline
+/// entry point. See [`crate::logging`] for the `.emit()` pattern.
+pub enum CollectionEvent {
+    Start,
+    InputSummary {
+        n_observations: usize,
+        current_step: usize,
+    },
+    SkipPropagation,
+    Advancing,
+    SeedingNewLineages,
+    End {
+        n_branches: usize,
+    },
+}
+
+crate::impl_log_target!(
+    CollectionEvent,
+    "collection",
+    "Per-night BranchCollection pipeline entry point (advance_one_night)",
+    [tracing::Level::INFO, tracing::Level::DEBUG]
+);
+
+impl CollectionEvent {
+    pub fn emit(&self) {
+        use CollectionEvent::*;
+        match self {
+            Start => {
+                tracing::info!(target: CollectionEvent::TARGET, "Start of the advance one night pipeline")
+            }
+            InputSummary {
+                n_observations,
+                current_step,
+            } => tracing::debug!(
+                target: CollectionEvent::TARGET, n_observations, current_step, "Advance one night: input summary"
+            ),
+            SkipPropagation => tracing::info!(
+                target: CollectionEvent::TARGET, "Branches is empty, skip the kalman propagation"
+            ),
+            Advancing => tracing::info!(
+                target: CollectionEvent::TARGET, "Find previous branches, perform kalman one night advance"
+            ),
+            SeedingNewLineages => {
+                tracing::info!(target: CollectionEvent::TARGET, "Start new seeds generation")
+            }
+            End { n_branches } => tracing::info!(
+                target: CollectionEvent::TARGET, n_branches, "End of the advance one night pipeline"
+            ),
+        }
+    }
+
+    pub fn span() -> tracing::Span {
+        tracing::info_span!(target: CollectionEvent::TARGET, "Advance one night")
+    }
+}
+
 impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
     /// Convert to an owned, borrow-free snapshot suitable for on-disk
     /// persistence (see [`BranchCollectionSnapshot`]). The engine does not
@@ -95,6 +160,21 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
                 .collect(),
             last_night_consumed_then_pruned_ids: snapshot.last_night_consumed_then_pruned_ids,
         }
+    }
+
+    /// Read+deserialize+reconstruct a [`BranchCollection`] from the
+    /// `.rkyv` file at `path` (see [`Self::to_snapshot`]/
+    /// [`Self::from_snapshot`]). Returns `Err` if the file is missing,
+    /// unreadable, or fails to deserialize as a [`BranchCollectionSnapshot`].
+    pub fn load_snapshot_from_disk(
+        path: &Utf8Path,
+        kalman_context: &'state_lf KalmanContext,
+        engine_config: &'bank_config EngineConfig,
+    ) -> Result<Self, EngineError> {
+        let bytes = std::fs::read(path).map_err(FinkFatError::Io)?;
+        let snapshot = rkyv::from_bytes::<BranchCollectionSnapshot, rkyv::rancor::Error>(&bytes)
+            .map_err(|e| FinkFatError::Message(e.to_string()))?;
+        Ok(Self::from_snapshot(snapshot, kalman_context, engine_config))
     }
 
     pub fn empty() -> Self {
@@ -145,16 +225,14 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
         kalman_context: &'state_lf KalmanContext,
         current_step: usize,
     ) -> Result<Self, EngineError> {
-        let span = tracing::info_span!("Advance one night");
-        let _enter = span.enter();
+        let _enter = CollectionEvent::span().entered();
 
-        tracing::info!(
-            target = "branch_collection_advance_one_night",
-            "Start of the advance one night pipeline"
-        );
-
-        tracing::debug!("number of input observation : {}", night_obs.len());
-        tracing::debug!("advance step : {}", current_step);
+        CollectionEvent::Start.emit();
+        CollectionEvent::InputSummary {
+            n_observations: night_obs.len(),
+            current_step,
+        }
+        .emit();
 
         let spatial_binner = HealpixBinner::new(engine_config.healpix_depth);
 
@@ -164,16 +242,10 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
         // LSST cadence) — nothing to build here.
         let (mut branches, consumed_observation_ids, consumed_then_pruned_ids) =
             if self.branches.is_empty() {
-                tracing::info!(
-                    target = "branch_collection_advance_one_night",
-                    "Branches is empty, skip the kalman propagation"
-                );
+                CollectionEvent::SkipPropagation.emit();
                 (Vec::new(), HashSet::new(), HashSet::new())
             } else {
-                tracing::info!(
-                    target = "branch_collection_advance_one_night",
-                    "Find previous branches, perform kalman one night advance"
-                );
+                CollectionEvent::Advancing.emit();
                 let outcome = advance_bank_collection_one_night(
                     &self.branches,
                     night_obs,
@@ -201,10 +273,7 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
             .max()
             .map_or(0, |id| id + 1);
 
-        tracing::info!(
-            target = "branch_collection_advance_one_night",
-            "Start new seeds generation"
-        );
+        CollectionEvent::SeedingNewLineages.emit();
 
         // Observations an existing lineage's candidate extension merely
         // *tried* this night, but that didn't survive this same night's
@@ -235,10 +304,10 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
         )?;
         branches.extend(new_lineages);
 
-        tracing::info!(
-            target = "branch_collection_advance_one_night",
-            "End of the advance one night pipeline"
-        );
+        CollectionEvent::End {
+            n_branches: branches.len(),
+        }
+        .emit();
 
         Ok(Self {
             branches,

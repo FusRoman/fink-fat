@@ -61,4 +61,4 @@ pub mod visit;
 
 pub use branch::{Branch, BranchSnapshot};
 pub use branch_id::BranchId;
-pub use collection::{BranchCollection, BranchCollectionSnapshot};
+pub use collection::{BranchCollection, BranchCollectionSnapshot, SNAPSHOT_FILENAME};

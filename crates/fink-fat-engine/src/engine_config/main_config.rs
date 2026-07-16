@@ -155,6 +155,27 @@ pub struct EngineConfig {
     /// Defaults to `"info"`. This value is only read by the CLI; the engine
     /// itself only emits tracing events and does not install any subscriber.
     pub log_level: LogLevel,
+
+    /// Per-target log level overrides (tracing target name → level). Empty by
+    /// default — every target then falls back to `log_level`. See
+    /// [`crate::logging::registry::all_targets`] for the list of valid target
+    /// names, and [`crate::logging::registry::build_env_filter_directive`] for
+    /// how this combines with `log_level` into an `EnvFilter` directive.
+    #[serde(default)]
+    pub log_targets: std::collections::BTreeMap<String, LogLevel>,
+
+    /// Number of daily log files to keep on disk when `--logs` is enabled —
+    /// the oldest files beyond this count are deleted automatically on
+    /// rotation. Log rotation is daily, so this is equivalently "how many
+    /// days of logs to retain". `0` disables deletion (unlimited retention).
+    /// Defaults to 5. Only read by the CLI; the engine itself never installs
+    /// a subscriber or touches the filesystem for logging.
+    #[serde(default = "default_log_retention_days")]
+    pub log_retention_days: usize,
+}
+
+fn default_log_retention_days() -> usize {
+    5
 }
 
 impl Default for EngineConfig {
@@ -179,6 +200,8 @@ impl Default for EngineConfig {
             healpix_depth: 8,
             storage_path: "./storage".to_string(),
             log_level: LogLevel::default(),
+            log_targets: std::collections::BTreeMap::new(),
+            log_retention_days: default_log_retention_days(),
         }
     }
 }
@@ -200,6 +223,13 @@ impl EngineConfig {
     /// This is useful when the caller needs to join paths or store the result.
     pub fn storage_path_buf(&self) -> Utf8PathBuf {
         Utf8PathBuf::from(&self.storage_path)
+    }
+
+    /// Path the `BranchCollection` snapshot is (or would be) written to —
+    /// `storage_path_buf().join(SNAPSHOT_FILENAME)`.
+    pub fn snapshot_path(&self) -> Utf8PathBuf {
+        self.storage_path_buf()
+            .join(crate::topocentric_kf::branching::SNAPSHOT_FILENAME)
     }
 
     /// Load and validate an [`EngineConfig`] from a YAML file plus optional environment overrides.

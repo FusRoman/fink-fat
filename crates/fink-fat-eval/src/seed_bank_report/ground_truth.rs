@@ -48,6 +48,26 @@ impl ObsTrajLookup {
         self.traj_of_obs.get(&obs_id)
     }
 
+    /// Whether any observation in the dataset has ground-truth trajectory
+    /// data — `false` means the source Parquet had no `traj_id` column, and
+    /// any reconstruction-efficacy computation built on top of this lookup
+    /// should be skipped.
+    pub fn has_ground_truth(&self) -> bool {
+        !self.traj_of_obs.is_empty()
+    }
+
+    /// Total known-ground-truth observation count per trajectory — the
+    /// denominator for reconstruction-coverage ratios (see
+    /// `crate::snapshot_report::efficacy`). Built by inverting
+    /// `traj_of_obs`.
+    pub fn obs_counts_by_traj(&self) -> AHashMap<TrajId, usize> {
+        let mut counts = AHashMap::default();
+        for traj_id in self.traj_of_obs.values() {
+            *counts.entry(traj_id.clone()).or_insert(0) += 1;
+        }
+        counts
+    }
+
     /// Classify a seed's member observation ids against ground truth.
     ///
     /// An empty slice classifies as [`SeedPurity::Unknown`] (nothing to

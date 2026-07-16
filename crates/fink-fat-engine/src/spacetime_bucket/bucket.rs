@@ -40,6 +40,48 @@ use crate::spacetime_bucket::{
     time_binner::{TimeBin, TimeBinner},
 };
 
+use crate::logging::LogTarget;
+
+/// Structured log events for spatio-temporal bucket indexing and clutter
+/// density estimation. See [`crate::logging`] for the `.emit()` pattern.
+pub enum SpacetimeBucketEvent {
+    IndexBuilt {
+        n_buckets: usize,
+        n_members: usize,
+    },
+    ClutterDensityEstimate {
+        alerts_in_cell: usize,
+        density_per_sr: f64,
+    },
+}
+
+crate::impl_log_target!(
+    SpacetimeBucketEvent,
+    "spacetime_bucket",
+    "Spatio-temporal bucket indexing and local clutter-density estimation",
+    [tracing::Level::DEBUG, tracing::Level::TRACE]
+);
+
+impl SpacetimeBucketEvent {
+    pub fn emit(&self) {
+        use SpacetimeBucketEvent::*;
+        match self {
+            IndexBuilt {
+                n_buckets,
+                n_members,
+            } => tracing::debug!(
+                target: SpacetimeBucketEvent::TARGET, n_buckets, n_members, "Spatio-temporal bucket index built"
+            ),
+            ClutterDensityEstimate {
+                alerts_in_cell,
+                density_per_sr,
+            } => tracing::trace!(
+                target: SpacetimeBucketEvent::TARGET, alerts_in_cell, density_per_sr, "Local clutter density estimate"
+            ),
+        }
+    }
+}
+
 /// Joint spatio-temporal bucket key.
 ///
 /// A `BucketKey` uniquely identifies one bucket in the index by combining:
@@ -211,6 +253,12 @@ where
     for bucket in buckets.values_mut() {
         bucket.members.sort_unstable();
     }
+
+    SpacetimeBucketEvent::IndexBuilt {
+        n_buckets: buckets.len(),
+        n_members: buckets.values().map(|b| b.members.len()).sum(),
+    }
+    .emit();
 
     BucketIndex { buckets }
 }

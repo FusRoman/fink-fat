@@ -15,7 +15,6 @@
 use camino::Utf8PathBuf;
 
 use clap::Parser;
-use fink_fat_engine::pipeline::stages::alert_inputs::input_uri::InputUri;
 
 /// Command-line arguments for the `fink-fat` binary.
 ///
@@ -25,33 +24,66 @@ use fink_fat_engine::pipeline::stages::alert_inputs::input_uri::InputUri;
 ///
 /// Arguments
 /// ---------
-/// * `alerts` — Input alert URI. Accepts the same `InputUri` variants used by
-///   the engine (`file://`, `s3://`, …). Contains the per-night Parquet
-///   alert batch to process.
+/// * `alerts` — Path to the per-night Parquet alert batch to process.
+///   Required unless `--list-log-targets` is given.
 /// * `config` — Path to the `EngineConfig` YAML file used to configure the
 ///   pipeline stages, thresholds, solver policy, and persistence layout.
+///   Required unless `--list-log-targets` is given.
 /// * `progress` — When `true`, render `indicatif` progress bars during the
 ///   run and enable related hooks that provide fine-grained stage progress.
 /// * `logs` — When `true`, initialise file + terminal logging according to
-///   the log level present in the configuration file.
+///   the log level (and per-target overrides) from the configuration file
+///   and `--log-target`.
+/// * `log_targets` — Per-target log level overrides (`TARGET=LEVEL`,
+///   repeatable), merged over the configuration file's `log_targets` (this
+///   flag wins on conflict). See `--list-log-targets` for valid target names.
+/// * `list_log_targets` — Print every available tracing target (name,
+///   description, levels) and exit, without loading `--alerts`/`--config`.
 #[derive(Debug, Parser)]
 #[command(author, version, about, long_about = None)]
 pub struct FinkFatCliArgs {
-    /// Path to the file containing the night's alerts
-    #[arg(short, long, value_name = "ALERTS_FILE")]
-    pub alerts: InputUri,
+    /// Path to the file containing the night's alerts (Parquet)
+    #[arg(
+        short,
+        long,
+        value_name = "ALERTS_FILE",
+        required_unless_present = "list_log_targets"
+    )]
+    pub alerts: Option<Utf8PathBuf>,
 
     /// Path to the fink-fat configuration file
-    #[arg(short, long, value_name = "CONFIG_FILE")]
-    pub config: Utf8PathBuf,
+    #[arg(
+        short,
+        long,
+        value_name = "CONFIG_FILE",
+        required_unless_present = "list_log_targets"
+    )]
+    pub config: Option<Utf8PathBuf>,
 
     /// Display indicatif progress bars during the pipeline run
     #[arg(long, default_value_t = false)]
     pub progress: bool,
 
-    /// Enable logging to file and terminal (log level is read from the config file)
+    /// Enable logging to file and terminal. Log files (`fink_fat.<date>.log`)
+    /// are written to the config's `storage_path`, alongside the
+    /// `BranchCollection` snapshot, rotated daily, and pruned beyond
+    /// `log_retention_days` (see `--log-retention-days`).
     #[arg(long, default_value_t = false)]
     pub logs: bool,
+
+    /// Override or add a per-target log level, e.g. `--log-target propagation=trace`
+    /// (repeatable). See `--list-log-targets` for valid target names.
+    #[arg(long = "log-target", value_name = "TARGET=LEVEL")]
+    pub log_targets: Vec<String>,
+
+    /// Print every available tracing target with its description and levels, then exit.
+    #[arg(long)]
+    pub list_log_targets: bool,
+
+    /// Override the number of daily log files to retain (see the config
+    /// file's `log_retention_days`). Only meaningful with `--logs`.
+    #[arg(long, value_name = "N")]
+    pub log_retention_days: Option<usize>,
 }
 
 /// Parse command-line arguments and return a fully-populated

@@ -20,6 +20,42 @@
 //!
 //! [`llr_score`]: super::llr_score
 
+use crate::logging::LogTarget;
+
+/// Structured log events for the absolute-magnitude-based detection
+/// probability estimate. See [`crate::logging`] for the `.emit()` pattern.
+/// Deliberately `trace`-only: called once per null-branch candidate,
+/// potentially thousands of times a night.
+pub enum DetectionProbabilityEvent {
+    Estimate {
+        predicted_magnitude: f64,
+        limiting_magnitude: f64,
+        p_detection: f64,
+    },
+}
+
+crate::impl_log_target!(
+    DetectionProbabilityEvent,
+    "detection_probability",
+    "Absolute-magnitude-based detection probability (P_D) for the null branch",
+    [tracing::Level::TRACE]
+);
+
+impl DetectionProbabilityEvent {
+    pub fn emit(&self) {
+        match self {
+            DetectionProbabilityEvent::Estimate {
+                predicted_magnitude,
+                limiting_magnitude,
+                p_detection,
+            } => tracing::trace!(
+                target: DetectionProbabilityEvent::TARGET, predicted_magnitude, limiting_magnitude, p_detection,
+                "Detection probability estimate"
+            ),
+        }
+    }
+}
+
 /// Absolute magnitude `H` implied by one apparent-magnitude observation.
 ///
 /// $$H = m - 5 \log_{10}(r \cdot \Delta)$$
@@ -117,7 +153,15 @@ pub fn detection_probability(
         completeness_width_mag > 0.0,
         "completeness_width_mag must be strictly positive"
     );
-    1.0 / (1.0 + ((predicted_magnitude - limiting_magnitude) / completeness_width_mag).exp())
+    let p_detection =
+        1.0 / (1.0 + ((predicted_magnitude - limiting_magnitude) / completeness_width_mag).exp());
+    DetectionProbabilityEvent::Estimate {
+        predicted_magnitude,
+        limiting_magnitude,
+        p_detection,
+    }
+    .emit();
+    p_detection
 }
 
 #[cfg(test)]

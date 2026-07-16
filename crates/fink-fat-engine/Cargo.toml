@@ -13,56 +13,31 @@ readme = "README.md"
 description = "Core engine for the Fink-FAT asteroid detection pipeline."
 
 [dependencies]
-rand = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 camino = { workspace = true }
 tracing = { workspace = true }
 ahash = { workspace = true }
 photom = { workspace = true, features = ["serde"] }
+outfit = { workspace = true, features = ["serde"]}
+rkyv = { workspace = true, features = ["pointer_width_64"] }
 
 nalgebra = { version = "0.34.2" }
 hifitime = { version = "4.2.0", default-features = false, features = [
     "ut1",
     "std",
 ] }
-outfit = { path="../../../Outfit", features = ["serde"]}
 
-
-polars = { version = "0.53.0", default-features = false, features = [
-    "lazy",
-    "dtype-u8",
-    "dtype-u16",
-    "parquet",
-] }
-
-# arrow-array = "57.3.0"
-# postcard = { version = "1", features = ["alloc"] }
 cdshealpix = "0.7.3"
 config = "0.15.19"
-# datafusion = { version = "52.1.0" }
-# ndarray = { workspace = true }
-# once_cell = "1.21.3"
-# ort = { version = "2.0.0-rc.11", features = ["ndarray"] }
-
-# rayon = "1.11.0"
 serde_json = "1.0.145"
-kiddo = "5.3.2"
-itertools = "0.14.0"
 rayon = "1.12.0"
-# zstd = { version = "0.13", default-features = false }
-# lz4_flex = { version = "0.11", default-features = false, features = ["frame"] }
-# flate2 = { version = "1.0", default-features = false, features = [
-#     "rust_backend",
-# ] }
-# smallvec = "1.15.1"
-# thread_local = "1.1.9"
-# tokio = { version = "=1.49.0", features = ["rt-multi-thread"] }
 
 [dev-dependencies]
 approx = "0.5.1"
 # criterion = "0.8.1"
 proptest = "1.9.0"
 serde_yaml = { workspace = true }
+tracing-subscriber = { workspace = true }
 # tempfile = { workspace = true }
 # photom = { workspace = true, features = ["serde", "datafusion"] }

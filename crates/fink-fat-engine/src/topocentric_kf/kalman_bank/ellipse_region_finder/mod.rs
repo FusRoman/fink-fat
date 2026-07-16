@@ -14,6 +14,66 @@ use crate::topocentric_kf::{
     single_kalman::{KFState, propagate::PropagateError, update::wrap_angle},
 };
 
+use crate::logging::LogTarget;
+
+/// Structured log events for search-region construction (hypothesis
+/// selection, radius strategy). See [`crate::logging`] for the `.emit()`
+/// pattern.
+pub enum EllipseRegionEvent {
+    HypothesisSelectionApplied {
+        n_selected: usize,
+    },
+    SkyCovarianceUnavailable {
+        error: String,
+    },
+    SearchRegionComputed {
+        center_ra_deg: f64,
+        center_dec_deg: f64,
+        radius_arcsec: f64,
+        n_components: usize,
+    },
+}
+
+crate::impl_log_target!(
+    EllipseRegionEvent,
+    "ellipse_region",
+    "Search-region construction from bank hypotheses (radius strategy, top-K selection)",
+    [tracing::Level::TRACE]
+);
+
+impl EllipseRegionEvent {
+    pub fn emit(&self) {
+        use EllipseRegionEvent::*;
+        match self {
+            HypothesisSelectionApplied { n_selected } => tracing::trace!(
+                target: EllipseRegionEvent::TARGET, n_selected, "Hypothesis selection applied"
+            ),
+            SkyCovarianceUnavailable { error } => tracing::trace!(
+                target: EllipseRegionEvent::TARGET, error, "Sky covariance unavailable, skipping"
+            ),
+            SearchRegionComputed {
+                center_ra_deg,
+                center_dec_deg,
+                radius_arcsec,
+                n_components,
+            } => tracing::trace!(
+                target: EllipseRegionEvent::TARGET, center_ra_deg, center_dec_deg, radius_arcsec, n_components,
+                "Search region computed"
+            ),
+        }
+    }
+
+    pub fn span(t_prop: f64, n_hypotheses: usize, top_k: &TopK) -> tracing::Span {
+        tracing::trace_span!(
+            target: EllipseRegionEvent::TARGET,
+            "predict_search_region",
+            t_prop,
+            n_hypotheses,
+            top_k = ?top_k,
+        )
+    }
+}
+
 /// A single Gaussian component of the search-region mixture, corresponding to
 /// one selected Kalman-filter hypothesis propagated to the target epoch.
 ///
@@ -211,13 +271,7 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
         top_k: TopK,
         radius_strategy: RadiusStrategy,
     ) -> Result<SearchRegion, PropagateError> {
-        let span = tracing::trace_span!(
-            "predict_search_region",
-            t_prop = t_prop,
-            n_hypotheses = self.len(),
-            top_k = ?top_k,
-        );
-        let _enter = span.enter();
+        let _enter = EllipseRegionEvent::span(t_prop, self.len(), &top_k).entered();
 
         self.predict_to(t_prop, r_obs_new, v_obs_new).search_region(
             obs_noise,
@@ -250,7 +304,10 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
         if predicted.is_empty() {
             return Err(PropagateError::SingularJacobian);
         }
-        tracing::trace!(n_selected = predicted.len(), "Hypothesis selection applied");
+        EllipseRegionEvent::HypothesisSelectionApplied {
+            n_selected: predicted.len(),
+        }
+        .emit();
 
         let (center_ra, center_dec) = weighted_sky_centroid(&predicted);
         let r_noise = Matrix2::from_diagonal(&obs_noise);
@@ -275,13 +332,13 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
         let components = build_components(&predicted, r_noise, chi2);
         let radius_rad = radius_strategy.radius(&components, center_ra, center_dec);
 
-        tracing::trace!(
-            center_ra_deg = center_ra.to_degrees(),
-            center_dec_deg = center_dec.to_degrees(),
-            radius_arcsec = radius_rad.to_degrees() * 3600.0,
-            n_components = components.len(),
-            "Search region computed"
-        );
+        EllipseRegionEvent::SearchRegionComputed {
+            center_ra_deg: center_ra.to_degrees(),
+            center_dec_deg: center_dec.to_degrees(),
+            radius_arcsec: radius_rad.to_degrees() * 3600.0,
+            n_components: components.len(),
+        }
+        .emit();
 
         Ok(SearchRegion {
             center_ra,
@@ -316,7 +373,10 @@ fn build_components(
             let s = match kf.sky_covariance() {
                 Ok(cov) => cov + r_noise,
                 Err(e) => {
-                    tracing::trace!(error = ?e, "Sky covariance unavailable, skipping");
+                    EllipseRegionEvent::SkyCovarianceUnavailable {
+                        error: format!("{e:?}"),
+                    }
+                    .emit();
                     return None;
                 }
             };

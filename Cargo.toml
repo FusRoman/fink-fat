@@ -28,7 +28,6 @@ members = ["crates/fink-fat-engine", "crates/fink-fat-eval"]
 resolver = "2"
 
 [workspace.dependencies]
-rand = "0.9.2"
 serde = { version = "1.0.228", features = ["derive"] }
 ahash = { version = "0.8.12", features = ["serde"] }
 thiserror = "2.0.17"
@@ -43,8 +42,18 @@ fink-fat-engine = { path = "crates/fink-fat-engine", version = "1.0.0" }
 indicatif = "0.18.0"
 serde_yaml = "0.9.34"
 ndarray = "0.17.2"
+photom = { version = "0.4.1" }
+outfit = { version = "4.0.0", features = ["serde"] }
+polars = { version = "0.53.0", default-features = false, features = [
+    "lazy",
+    "dtype-u8",
+    "dtype-u16",
+    "parquet",
+    "strings",
+    "temporal",
+] }
+rkyv = "0.8.17"
 
-photom = { path = "../photom", version = "0.1.0" }
 
 [dependencies]
 indicatif = { workspace = true }
@@ -55,16 +64,18 @@ tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
 fink-fat-engine = { workspace = true }
 clap = { workspace = true }
-
-[dev-dependencies]
-husky-rs = "0.1.5"
-assert_cmd = "2.0.16"
-tempfile = { workspace = true }
-datafusion = "52.1.0"
+photom = { workspace = true, features = ["polars"] }
+polars = { workspace = true }
+rkyv = { workspace = true, features = ["pointer_width_64"] }
 
 [profile.release]
 lto = "thin"
 codegen-units = 1
+debug = true
+
+# disable debug symbols for all packages except this one
+[profile.release.package."*"]
+debug = false
 
 [profile.bench]
 codegen-units = 1

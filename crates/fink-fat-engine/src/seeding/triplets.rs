@@ -55,7 +55,7 @@ use photom::{
 
 use crate::{
     engine_config::triplet_config::TripletConfig,
-    seeding::pairs::Pair,
+    seeding::pairs::{Pair, SeedingEvent},
     spacetime_bucket::{
         bucket::{BucketIndex, BucketKey},
         spatial_binner::{SpatialBinner, SpatialKey},
@@ -270,16 +270,16 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
     // Dot-product threshold for ang_sep(b,c) <= max_pair_sep.
     let cos_pair_threshold = cfg.max_pair_sep.cos();
 
-    tracing::debug!(
-        n_input_pairs = pairs.len(),
-        max_dt_between = cfg.max_dt_between,
-        max_pair_sep = cfg.max_pair_sep,
-        max_predicted_residual = cfg.max_predicted_residual,
-        max_mag_difference = cfg.max_mag_difference,
-        enforce_time_order = cfg.enforce_time_order,
+    SeedingEvent::TripletsStart {
+        n_input_pairs: pairs.len(),
+        max_dt_between: cfg.max_dt_between,
+        max_pair_sep: cfg.max_pair_sep,
+        max_predicted_residual: cfg.max_predicted_residual,
+        max_mag_difference: cfg.max_mag_difference,
+        enforce_time_order: cfg.enforce_time_order,
         search_radius,
-        "generate_triplets_from_pairs starting",
-    );
+    }
+    .emit();
 
     let mut spatial_neighbor_cache: AHashMap<SpatialKey, Vec<SpatialKey>> = AHashMap::new();
     let mut timebin_target_cache: AHashMap<TimeBin, Vec<TimeBin>> = AHashMap::new();
@@ -435,15 +435,15 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
             .then_with(|| t1.c.cmp(t2.c))
     });
 
-    tracing::debug!(
-        n_triplets = out.len(),
+    SeedingEvent::TripletsComplete {
+        n_triplets: out.len(),
         n_skipped_time_order,
         n_rejected_flux,
         n_rejected_angular,
         n_rejected_residual,
         n_dedup_skipped,
-        "generate_triplets_from_pairs complete",
-    );
+    }
+    .emit();
 
     out
 }
