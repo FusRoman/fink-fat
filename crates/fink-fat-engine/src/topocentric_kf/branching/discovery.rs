@@ -22,6 +22,43 @@ use crate::{
     },
 };
 
+use crate::logging::LogTarget;
+
+/// Structured log events for new-lineage discovery from unclaimed
+/// observations. See [`crate::logging`] for the `.emit()` pattern.
+pub enum DiscoveryEvent {
+    Summary {
+        n_leftover_observations: usize,
+        n_banks_built: usize,
+        n_dead_banks: usize,
+        n_new_lineages: usize,
+    },
+}
+
+crate::impl_log_target!(
+    DiscoveryEvent,
+    "discovery",
+    "Seeding brand-new lineages from observations no existing lineage claimed",
+    [tracing::Level::DEBUG]
+);
+
+impl DiscoveryEvent {
+    pub fn emit(&self) {
+        use DiscoveryEvent::*;
+        match self {
+            Summary {
+                n_leftover_observations,
+                n_banks_built,
+                n_dead_banks,
+                n_new_lineages,
+            } => tracing::debug!(
+                target: DiscoveryEvent::TARGET, n_leftover_observations, n_banks_built, n_dead_banks, n_new_lineages,
+                "Discovery: new-lineage seeding summary"
+            ),
+        }
+    }
+}
+
 /// Build brand-new lineages from the observations this night's existing
 /// lineages did not claim.
 ///
@@ -67,19 +104,23 @@ pub fn seed_new_lineages_from_leftovers<'state_lf, 'bank_config>(
         .filter(|bank| bank.is_alive())
         .collect();
     let n_dead = n_before_filter - live_banks.len();
-    if n_dead > 0 {
-        tracing::debug!(
-            n_dead,
-            "dropping banks with no live hypothesis (all grid seeds gated/zero-weight)"
-        );
-    }
 
-    Ok(live_banks
+    let new_lineages: Vec<_> = live_banks
         .into_iter()
         .map(|bank| {
             let id = *next_lineage_id;
             *next_lineage_id += 1;
             Branch::seed(bank, id, id)
         })
-        .collect())
+        .collect();
+
+    DiscoveryEvent::Summary {
+        n_leftover_observations: leftover_obs.len(),
+        n_banks_built: n_before_filter,
+        n_dead_banks: n_dead,
+        n_new_lineages: new_lineages.len(),
+    }
+    .emit();
+
+    Ok(new_lineages)
 }

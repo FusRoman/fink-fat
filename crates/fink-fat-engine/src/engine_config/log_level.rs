@@ -56,3 +56,55 @@ impl std::fmt::Display for LogLevel {
         f.write_str(s)
     }
 }
+
+/// Error returned by [`LogLevel::from_str`] for an unrecognized level string.
+#[derive(Debug, thiserror::Error)]
+#[error("unknown log level {0:?} (expected one of: trace, debug, info, warn, error)")]
+pub struct ParseLogLevelError(String);
+
+impl std::str::FromStr for LogLevel {
+    type Err = ParseLogLevelError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "trace" => Ok(LogLevel::Trace),
+            "debug" => Ok(LogLevel::Debug),
+            "info" => Ok(LogLevel::Info),
+            "warn" => Ok(LogLevel::Warn),
+            "error" => Ok(LogLevel::Error),
+            other => Err(ParseLogLevelError(other.to_string())),
+        }
+    }
+}
+
+impl From<LogLevel> for tracing::Level {
+    fn from(level: LogLevel) -> Self {
+        match level {
+            LogLevel::Trace => tracing::Level::TRACE,
+            LogLevel::Debug => tracing::Level::DEBUG,
+            LogLevel::Info => tracing::Level::INFO,
+            LogLevel::Warn => tracing::Level::WARN,
+            LogLevel::Error => tracing::Level::ERROR,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_str_parses_every_variant() {
+        assert_eq!("trace".parse::<LogLevel>().unwrap(), LogLevel::Trace);
+        assert_eq!("debug".parse::<LogLevel>().unwrap(), LogLevel::Debug);
+        assert_eq!("info".parse::<LogLevel>().unwrap(), LogLevel::Info);
+        assert_eq!("warn".parse::<LogLevel>().unwrap(), LogLevel::Warn);
+        assert_eq!("error".parse::<LogLevel>().unwrap(), LogLevel::Error);
+    }
+
+    #[test]
+    fn from_str_rejects_unknown_string() {
+        assert!("verbose".parse::<LogLevel>().is_err());
+        assert!("INFO".parse::<LogLevel>().is_err());
+    }
+}

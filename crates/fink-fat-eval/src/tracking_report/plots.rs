@@ -270,7 +270,7 @@ pub fn plot_timing_per_night(report: &TrackingReport, output_path: &Utf8Path) ->
 /// Generic equispaced histogram over a pre-computed sample vector, sharing
 /// the exact bin/draw logic `seed_bank_report::plots` uses for the
 /// hypotheses-per-bank histogram.
-fn plot_histogram(
+pub(crate) fn plot_histogram(
     samples: &[f64],
     title: &str,
     x_label: &str,
@@ -314,7 +314,7 @@ fn plot_histogram(
 
 /// Bar chart of a small number of named integer counts (e.g. the per-object
 /// outcome category breakdown).
-fn plot_bar_chart(
+pub(crate) fn plot_bar_chart(
     counts: &[(&str, usize)],
     title: &str,
     y_label: &str,

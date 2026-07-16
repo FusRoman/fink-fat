@@ -73,6 +73,75 @@ use crate::{
     },
 };
 
+use crate::logging::LogTarget;
+
+/// Structured log events for the per-night lineage orchestration
+/// (propagate → search → branch → score → prune). See [`crate::logging`]
+/// for the `.emit()` pattern.
+pub enum OrchestrateEvent {
+    VisitSummary {
+        n_visits: usize,
+    },
+    /// Coarse per-night progress through the visit loop — gated modulo at
+    /// the call site so a night with hundreds/thousands of visits never
+    /// emits more than ~100 lines.
+    VisitProgress {
+        visit_index: usize,
+        n_visits: usize,
+    },
+    ObserverResolutionFailed {
+        epoch: f64,
+    },
+    LineagePropagationFailed {
+        lineage_id: u64,
+    },
+    NightPruningSummary {
+        n_branches_before_n_scan: usize,
+        n_branches_after: usize,
+    },
+}
+
+crate::impl_log_target!(
+    OrchestrateEvent,
+    "orchestrate",
+    "Per-night orchestration of existing lineages: propagate, search, branch, score, prune",
+    [tracing::Level::INFO, tracing::Level::DEBUG]
+);
+
+impl OrchestrateEvent {
+    pub fn emit(&self) {
+        use OrchestrateEvent::*;
+        match self {
+            VisitSummary { n_visits } => tracing::debug!(
+                target: OrchestrateEvent::TARGET, n_visits, "Night split into visits"
+            ),
+            VisitProgress {
+                visit_index,
+                n_visits,
+            } => tracing::info!(
+                target: OrchestrateEvent::TARGET, visit_index, n_visits, "Processing visit"
+            ),
+            ObserverResolutionFailed { epoch } => tracing::debug!(
+                target: OrchestrateEvent::TARGET, epoch, "Failed to resolve observer state for visit, skipping"
+            ),
+            LineagePropagationFailed { lineage_id } => tracing::debug!(
+                target: OrchestrateEvent::TARGET, lineage_id,
+                "Bank failed to propagate for search-region construction, dropping lineage"
+            ),
+            NightPruningSummary {
+                n_branches_before_n_scan,
+                n_branches_after,
+            } => tracing::debug!(
+                target: OrchestrateEvent::TARGET, n_branches_before_n_scan, n_branches_after, "N-scan pruning summary"
+            ),
+        }
+    }
+
+    pub fn span() -> tracing::Span {
+        tracing::info_span!(target: OrchestrateEvent::TARGET, "Advance bank collection")
+    }
+}
+
 /// Result of advancing a set of lineages by one night.
 pub struct NightAdvanceOutcome<'state_lf, 'bank_config> {
     /// Surviving branches after this night's cap + N-scan pruning.
@@ -127,12 +196,15 @@ pub fn advance_bank_collection_one_night<'state_lf, 'bank_config>(
     spatial_binner: &HealpixBinner,
     current_step: usize,
 ) -> NightAdvanceOutcome<'state_lf, 'bank_config> {
-    let span = tracing::info_span!("Advance bank collection");
-    let _enter = span.enter();
+    let _enter = OrchestrateEvent::span().entered();
 
     let visits = group_observations_into_visits(night_obs, params.visit_epoch_tolerance_days);
 
-    tracing::debug!("Number of visit: {}", visits.len());
+    OrchestrateEvent::VisitSummary {
+        n_visits: visits.len(),
+    }
+    .emit();
+    let visit_progress_modulo = (visits.len() / 100).max(1);
 
     let mut branches: Vec<Branch<'state_lf, 'bank_config>> = lineages.to_vec();
     let mut consumed_observation_ids = HashSet::new();
@@ -144,17 +216,22 @@ pub fn advance_bank_collection_one_night<'state_lf, 'bank_config>(
             .map_or(0, |id| id + 1),
     );
 
-    for visit in &visits {
+    for (visit_index, visit) in visits.iter().enumerate() {
+        if visit_index % visit_progress_modulo == 0 {
+            OrchestrateEvent::VisitProgress {
+                visit_index,
+                n_visits: visits.len(),
+            }
+            .emit();
+        }
+
         let Ok((r_obs, v_obs)) = resolve_observer_state(
             obs_dataset,
             kalman_context,
             visit.representative_obs,
             visit.epoch,
         ) else {
-            tracing::debug!(
-                epoch = visit.epoch,
-                "Failed to resolve observer state for visit, skipping"
-            );
+            OrchestrateEvent::ObserverResolutionFailed { epoch: visit.epoch }.emit();
             continue;
         };
 
@@ -225,7 +302,13 @@ pub fn advance_bank_collection_one_night<'state_lf, 'bank_config>(
 
     // N-scan stays at night granularity: one call, after every visit this
     // night has been folded in.
+    let n_branches_before_n_scan = branches.len();
     let branches = apply_n_scan_pruning(branches, params.n_scan, current_step);
+    OrchestrateEvent::NightPruningSummary {
+        n_branches_before_n_scan,
+        n_branches_after: branches.len(),
+    }
+    .emit();
 
     let surviving_ids: HashSet<ObsId> = branches
         .iter()
@@ -342,10 +425,10 @@ fn spawn_branches_for_lineage<'state_lf, 'bank_config>(
         params.top_k,
         params.radius_strategy,
     ) else {
-        tracing::debug!(
-            lineage_id = lineage.lineage_id,
-            "Bank failed to propagate for search-region construction, dropping lineage"
-        );
+        OrchestrateEvent::LineagePropagationFailed {
+            lineage_id: lineage.lineage_id,
+        }
+        .emit();
         return (Vec::new(), Vec::new());
     };
 

@@ -12,6 +12,37 @@
 
 use photom::observation_dataset::observation::Observation;
 
+use crate::logging::LogTarget;
+
+/// Structured log events for grouping a night's observations into visits.
+/// See [`crate::logging`] for the `.emit()` pattern.
+pub enum VisitEvent {
+    Summary {
+        n_observations: usize,
+        n_visits: usize,
+    },
+}
+
+crate::impl_log_target!(
+    VisitEvent,
+    "visit",
+    "Grouping a night's observations into visits (shared-epoch propagation units)",
+    [tracing::Level::DEBUG]
+);
+
+impl VisitEvent {
+    pub fn emit(&self) {
+        match self {
+            VisitEvent::Summary {
+                n_observations,
+                n_visits,
+            } => tracing::debug!(
+                target: VisitEvent::TARGET, n_observations, n_visits, "Grouped night observations into visits"
+            ),
+        }
+    }
+}
+
 /// One group of observations sharing (approximately) the same epoch.
 #[derive(Debug)]
 pub struct Visit<'obs> {
@@ -61,6 +92,13 @@ pub fn group_observations_into_visits<'obs>(
             }),
         }
     }
+
+    VisitEvent::Summary {
+        n_observations: night_obs.len(),
+        n_visits: visits.len(),
+    }
+    .emit();
+
     visits
 }
 

@@ -54,8 +54,6 @@ use nalgebra::Vector6;
 use outfit::constants::GAUSS_GRAV_SQUARED;
 use photom::observation_dataset::{ObsDataset, observation::Observation};
 
-use tracing::{trace, trace_span};
-
 use crate::{
     engine_config::{
         grid_population::{GridConfig, Population},
@@ -74,6 +72,156 @@ use crate::{
         },
     },
 };
+
+use crate::logging::LogTarget;
+
+/// Structured log events for admissible-region (ρ, ρ̇) grid generation. See
+/// [`crate::logging`] for the `.emit()` pattern.
+pub enum SeedGridEvent {
+    Start {
+        obs1_epoch: f64,
+        obs2_epoch: f64,
+    },
+    RangeSkippedNoOrbit {
+        i_rho: usize,
+        rho_au: f64,
+        r_helio_au: f64,
+        discriminant: f64,
+    },
+    RangeValid {
+        i_rho: usize,
+        rho_au: f64,
+        r_helio_au: f64,
+        rho_dot_min_au_per_day: f64,
+        rho_dot_max_au_per_day: f64,
+        interval_au_per_day: f64,
+    },
+    NodeSkippedEnergy {
+        i_rho: usize,
+        j_rho_dot: usize,
+        rho_au: f64,
+        rho_dot_au_per_day: f64,
+        energy: f64,
+    },
+    NodeSkippedWeightFloor {
+        i_rho: usize,
+        j_rho_dot: usize,
+        rho_au: f64,
+        rho_dot_au_per_day: f64,
+        a_au: f64,
+        weight: f64,
+        weight_floor: f64,
+    },
+    NodeAccepted {
+        i_rho: usize,
+        j_rho_dot: usize,
+        rho_au: f64,
+        rho_dot_au_per_day: f64,
+        a_au: f64,
+        weight: f64,
+    },
+    Complete {
+        n_seeds: usize,
+        n_rho_samples: usize,
+        n_rho_dot_samples: usize,
+        max_possible: usize,
+    },
+}
+
+crate::impl_log_target!(
+    SeedGridEvent,
+    "seed_grid",
+    "Admissible-region (ρ, ρ̇) grid generation for seeding new hypothesis banks",
+    [tracing::Level::TRACE]
+);
+
+impl SeedGridEvent {
+    pub fn emit(&self) {
+        use SeedGridEvent::*;
+        match self {
+            Start {
+                obs1_epoch,
+                obs2_epoch,
+            } => tracing::trace!(
+                target: SeedGridEvent::TARGET, obs1_epoch, obs2_epoch, "Starting grid generation from tracklet pair"
+            ),
+            RangeSkippedNoOrbit {
+                i_rho,
+                rho_au,
+                r_helio_au,
+                discriminant,
+            } => tracing::trace!(
+                target: SeedGridEvent::TARGET, i_rho, rho_au, r_helio_au, discriminant,
+                "Skipping range: no bound orbit (discriminant <= 0)"
+            ),
+            RangeValid {
+                i_rho,
+                rho_au,
+                r_helio_au,
+                rho_dot_min_au_per_day,
+                rho_dot_max_au_per_day,
+                interval_au_per_day,
+            } => tracing::trace!(
+                target: SeedGridEvent::TARGET, i_rho, rho_au, r_helio_au, rho_dot_min_au_per_day, rho_dot_max_au_per_day, interval_au_per_day,
+                "Valid range: bound-orbit rho_dot interval found"
+            ),
+            NodeSkippedEnergy {
+                i_rho,
+                j_rho_dot,
+                rho_au,
+                rho_dot_au_per_day,
+                energy,
+            } => tracing::trace!(
+                target: SeedGridEvent::TARGET, i_rho, j_rho_dot, rho_au, rho_dot_au_per_day, energy,
+                "Skipping node: energy >= 0 (near boundary, numerical safety)"
+            ),
+            NodeSkippedWeightFloor {
+                i_rho,
+                j_rho_dot,
+                rho_au,
+                rho_dot_au_per_day,
+                a_au,
+                weight,
+                weight_floor,
+            } => tracing::trace!(
+                target: SeedGridEvent::TARGET, i_rho, j_rho_dot, rho_au, rho_dot_au_per_day, a_au, weight, weight_floor,
+                "Skipping node: weight below floor (not in populations)"
+            ),
+            NodeAccepted {
+                i_rho,
+                j_rho_dot,
+                rho_au,
+                rho_dot_au_per_day,
+                a_au,
+                weight,
+            } => tracing::trace!(
+                target: SeedGridEvent::TARGET, i_rho, j_rho_dot, rho_au, rho_dot_au_per_day, a_au, weight,
+                "Node accepted: bound Sun-bound orbit"
+            ),
+            Complete {
+                n_seeds,
+                n_rho_samples,
+                n_rho_dot_samples,
+                max_possible,
+            } => tracing::trace!(
+                target: SeedGridEvent::TARGET, n_seeds, n_rho_samples, n_rho_dot_samples, max_possible,
+                "Grid generation complete"
+            ),
+        }
+    }
+
+    pub fn span(t_mid: f64, config: &GridConfig) -> tracing::Span {
+        tracing::trace_span!(
+            target: SeedGridEvent::TARGET,
+            "admissible_region_grid",
+            t_mid,
+            n_rho = config.n_rho,
+            n_rho_dot = config.n_rho_dot,
+            rho_min = config.rho_min,
+            rho_max = config.rho_max,
+        )
+    }
+}
 
 /// Gaussian-mixture prior density over semi-major axis.
 fn population_weight(a: f64, populations: &[Population]) -> f64 {
@@ -123,21 +271,13 @@ pub fn admissible_region_grid<'state_lf>(
 ) -> Result<Vec<(KFState<'state_lf>, f64)>, EngineError> {
     let t_mid = pair_midpoint_epoch(first_obs, second_obs);
 
-    let span = trace_span!(
-        "admissible_region_grid",
-        t_mid = t_mid,
-        n_rho = config.n_rho,
-        n_rho_dot = config.n_rho_dot,
-        rho_min = config.rho_min,
-        rho_max = config.rho_max,
-    );
-    let _enter = span.enter();
+    let _enter = SeedGridEvent::span(t_mid, config).entered();
 
-    trace!(
-        obs1_epoch = first_obs.mjd_tt(),
-        obs2_epoch = second_obs.mjd_tt(),
-        "Starting grid generation from tracklet pair"
-    );
+    SeedGridEvent::Start {
+        obs1_epoch: first_obs.mjd_tt(),
+        obs2_epoch: second_obs.mjd_tt(),
+    }
+    .emit();
 
     // Observer heliocentric position/velocity at the pair's midpoint epoch —
     // the same helper used by `init_kf_state`'s single-guess strategy.
@@ -188,13 +328,13 @@ pub fn admissible_region_grid<'state_lf>(
         let discriminant = v_transverse_dot_u * v_transverse_dot_u
             - (v_transverse.norm_squared() - 2.0 * k2 / r_helio);
         if discriminant <= 0.0 {
-            trace!(
-                i_rho = i,
-                rho_au = rho,
-                r_helio_au = r_helio,
+            SeedGridEvent::RangeSkippedNoOrbit {
+                i_rho: i,
+                rho_au: rho,
+                r_helio_au: r_helio,
                 discriminant,
-                "Skipping range: no bound orbit (discriminant <= 0)"
-            );
+            }
+            .emit();
             continue; // No Sun-bound orbit is possible at this range.
         }
         let sqrt_discriminant = discriminant.sqrt();
@@ -202,15 +342,15 @@ pub fn admissible_region_grid<'state_lf>(
         let rho_dot_hi = -v_transverse_dot_u + sqrt_discriminant;
         let rho_dot_interval = rho_dot_hi - rho_dot_lo;
 
-        trace!(
-            i_rho = i,
-            rho_au = rho,
-            r_helio_au = r_helio,
-            rho_dot_min_au_per_day = rho_dot_lo,
-            rho_dot_max_au_per_day = rho_dot_hi,
-            interval_au_per_day = rho_dot_interval,
-            "Valid range: bound-orbit rho_dot interval found"
-        );
+        SeedGridEvent::RangeValid {
+            i_rho: i,
+            rho_au: rho,
+            r_helio_au: r_helio,
+            rho_dot_min_au_per_day: rho_dot_lo,
+            rho_dot_max_au_per_day: rho_dot_hi,
+            interval_au_per_day: rho_dot_interval,
+        }
+        .emit();
 
         // Per-node range/range-rate covariance: half the local grid-cell
         // width (range axis) and half the local bound-orbit interval per
@@ -235,42 +375,42 @@ pub fn admissible_region_grid<'state_lf>(
             let velocity = v_transverse + rho_dot * los;
             let energy = 0.5 * velocity.norm_squared() - k2 / r_helio;
             if energy >= 0.0 {
-                trace!(
-                    i_rho = i,
-                    j_rho_dot = j,
-                    rho_au = rho,
-                    rho_dot_au_per_day = rho_dot,
+                SeedGridEvent::NodeSkippedEnergy {
+                    i_rho: i,
+                    j_rho_dot: j,
+                    rho_au: rho,
+                    rho_dot_au_per_day: rho_dot,
                     energy,
-                    "Skipping node: energy >= 0 (near boundary, numerical safety)"
-                );
+                }
+                .emit();
                 continue; // Numerical safety margin near the bound-orbit boundary.
             }
             let semi_major_axis = -k2 / (2.0 * energy);
 
             let weight = population_weight(semi_major_axis, &config.populations);
             if weight < config.weight_floor {
-                trace!(
-                    i_rho = i,
-                    j_rho_dot = j,
-                    rho_au = rho,
-                    rho_dot_au_per_day = rho_dot,
-                    a_au = semi_major_axis,
+                SeedGridEvent::NodeSkippedWeightFloor {
+                    i_rho: i,
+                    j_rho_dot: j,
+                    rho_au: rho,
+                    rho_dot_au_per_day: rho_dot,
+                    a_au: semi_major_axis,
                     weight,
-                    weight_floor = config.weight_floor,
-                    "Skipping node: weight below floor (not in populations)"
-                );
+                    weight_floor: config.weight_floor,
+                }
+                .emit();
                 continue;
             }
 
-            trace!(
-                i_rho = i,
-                j_rho_dot = j,
-                rho_au = rho,
-                rho_dot_au_per_day = rho_dot,
-                a_au = semi_major_axis,
+            SeedGridEvent::NodeAccepted {
+                i_rho: i,
+                j_rho_dot: j,
+                rho_au: rho,
+                rho_dot_au_per_day: rho_dot,
+                a_au: semi_major_axis,
                 weight,
-                "Node accepted: bound Sun-bound orbit"
-            );
+            }
+            .emit();
 
             // Attributable state vector for this node: the angular position
             // and angular rate are shared with every other node (they come
@@ -313,13 +453,13 @@ pub fn admissible_region_grid<'state_lf>(
         }
     }
 
-    trace!(
-        n_seeds = seeds.len(),
-        n_rho_samples = config.n_rho,
-        n_rho_dot_samples = config.n_rho_dot,
-        max_possible = config.n_rho * config.n_rho_dot,
-        "Grid generation complete"
-    );
+    SeedGridEvent::Complete {
+        n_seeds: seeds.len(),
+        n_rho_samples: config.n_rho,
+        n_rho_dot_samples: config.n_rho_dot,
+        max_possible: config.n_rho * config.n_rho_dot,
+    }
+    .emit();
 
     Ok(seeds)
 }

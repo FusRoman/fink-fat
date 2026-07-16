@@ -10,7 +10,9 @@
 use photom::coordinates::equatorial::EquCoord;
 
 use crate::spacetime_bucket::{
-    bucket::BucketIndex, healpix_binner::HealpixBinner, spatial_binner::SpatialBinner,
+    bucket::{BucketIndex, SpacetimeBucketEvent},
+    healpix_binner::HealpixBinner,
+    spatial_binner::SpatialBinner,
     spatial_binner::SpatialKey,
 };
 
@@ -35,10 +37,17 @@ pub fn local_clutter_density<Object>(
 ) -> f64 {
     let center_key = spatial_binner.key_for(center);
     let alerts_in_cell = count_alerts_in_cell(bucket_index, center_key);
-    if alerts_in_cell == 0 {
-        return 0.0;
+    let density = if alerts_in_cell == 0 {
+        0.0
+    } else {
+        alerts_in_cell as f64 / healpix_pixel_area_sr(spatial_binner.depth())
+    };
+    SpacetimeBucketEvent::ClutterDensityEstimate {
+        alerts_in_cell,
+        density_per_sr: density,
     }
-    alerts_in_cell as f64 / healpix_pixel_area_sr(spatial_binner.depth())
+    .emit();
+    density
 }
 
 /// Total number of alerts across every time bin of a single HEALPix cell.

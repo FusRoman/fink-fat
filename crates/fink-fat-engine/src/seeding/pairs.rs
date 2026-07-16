@@ -68,6 +68,106 @@ use crate::{
     },
 };
 
+use crate::logging::LogTarget;
+
+/// Structured log events for intra-night pairing/tracklet linking (shared by
+/// [`pairs`](self), [`triplets`](super::triplets) and
+/// [`tracklet_linker`](super::tracklet_linker)). See [`crate::logging`] for
+/// the `.emit()` pattern.
+pub enum SeedingEvent {
+    PairsStart {
+        n_buckets: usize,
+        max_dt: f64,
+        max_angular_speed: f64,
+        max_mag_difference: f64,
+        allow_same_timebin: bool,
+        sep_cap: f64,
+        spatial_search_radius: f64,
+    },
+    PairsComplete {
+        n_pairs: usize,
+        n_rejected_flux: u64,
+        n_rejected_speed: u64,
+        n_dedup_skipped: u64,
+    },
+    TripletsStart {
+        n_input_pairs: usize,
+        max_dt_between: f64,
+        max_pair_sep: f64,
+        max_predicted_residual: f64,
+        max_mag_difference: f64,
+        enforce_time_order: bool,
+        search_radius: f64,
+    },
+    TripletsComplete {
+        n_triplets: usize,
+        n_skipped_time_order: u64,
+        n_rejected_flux: u64,
+        n_rejected_angular: u64,
+        n_rejected_residual: u64,
+        n_dedup_skipped: u64,
+    },
+}
+
+crate::impl_log_target!(
+    SeedingEvent,
+    "seeding",
+    "Intra-night observation pairing and tracklet linking (pairs/triplets)",
+    [tracing::Level::DEBUG]
+);
+
+impl SeedingEvent {
+    pub fn emit(&self) {
+        use SeedingEvent::*;
+        match self {
+            PairsStart {
+                n_buckets,
+                max_dt,
+                max_angular_speed,
+                max_mag_difference,
+                allow_same_timebin,
+                sep_cap,
+                spatial_search_radius,
+            } => tracing::debug!(
+                target: SeedingEvent::TARGET, n_buckets, max_dt, max_angular_speed, max_mag_difference, allow_same_timebin, sep_cap, spatial_search_radius,
+                "generate_pairs starting"
+            ),
+            PairsComplete {
+                n_pairs,
+                n_rejected_flux,
+                n_rejected_speed,
+                n_dedup_skipped,
+            } => tracing::debug!(
+                target: SeedingEvent::TARGET, n_pairs, n_rejected_flux, n_rejected_speed, n_dedup_skipped,
+                "generate_pairs complete"
+            ),
+            TripletsStart {
+                n_input_pairs,
+                max_dt_between,
+                max_pair_sep,
+                max_predicted_residual,
+                max_mag_difference,
+                enforce_time_order,
+                search_radius,
+            } => tracing::debug!(
+                target: SeedingEvent::TARGET, n_input_pairs, max_dt_between, max_pair_sep, max_predicted_residual, max_mag_difference, enforce_time_order, search_radius,
+                "generate_triplets_from_pairs starting"
+            ),
+            TripletsComplete {
+                n_triplets,
+                n_skipped_time_order,
+                n_rejected_flux,
+                n_rejected_angular,
+                n_rejected_residual,
+                n_dedup_skipped,
+            } => tracing::debug!(
+                target: SeedingEvent::TARGET, n_triplets, n_skipped_time_order, n_rejected_flux, n_rejected_angular, n_rejected_residual, n_dedup_skipped,
+                "generate_triplets_from_pairs complete"
+            ),
+        }
+    }
+}
+
 /// A time-ordered detection pair `(a, b)` with `t_b > t_a`.
 ///
 /// The pair stores references to alerts (no copying).
@@ -242,16 +342,16 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
     let sep_cap = (config.max_angular_speed * config.max_dt).max(0.0);
     let spatial_search_radius = sep_cap + spatial_binner.cell_radius();
 
-    tracing::debug!(
-        n_buckets = bucket_index.buckets.len(),
-        max_dt = config.max_dt,
-        max_angular_speed = config.max_angular_speed,
-        max_mag_difference = config.max_mag_difference,
-        allow_same_timebin = config.allow_same_timebin,
+    SeedingEvent::PairsStart {
+        n_buckets: bucket_index.buckets.len(),
+        max_dt: config.max_dt,
+        max_angular_speed: config.max_angular_speed,
+        max_mag_difference: config.max_mag_difference,
+        allow_same_timebin: config.allow_same_timebin,
         sep_cap,
         spatial_search_radius,
-        "generate_pairs starting",
-    );
+    }
+    .emit();
 
     let mut spatial_neighbor_cache = AHashMap::<SpatialKey, Vec<SpatialKey>>::new();
     let mut timebin_target_cache = AHashMap::<TimeBin, Vec<TimeBin>>::new();
@@ -355,13 +455,13 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
     // Deterministic ordering (handy for tests / reproducibility)
     out.sort_unstable_by(|p1, p2| p1.a.cmp(p2.a).then_with(|| p1.b.cmp(p2.b)));
 
-    tracing::debug!(
-        n_pairs = out.len(),
+    SeedingEvent::PairsComplete {
+        n_pairs: out.len(),
         n_rejected_flux,
         n_rejected_speed,
         n_dedup_skipped,
-        "generate_pairs complete",
-    );
+    }
+    .emit();
 
     out
 }

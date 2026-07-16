@@ -430,6 +430,209 @@ pub fn estimate_rho_dot_circular(
     Some(result)
 }
 
+use crate::logging::LogTarget;
+
+/// Structured log events for initial-orbit-determination bootstrap
+/// (tracklet geometry → gamma/rho/rho_dot → initial covariance). See
+/// [`crate::logging`] for the `.emit()` pattern.
+pub enum InitEvent {
+    TrackletGeometry {
+        mid_ra_deg: f64,
+        mid_dec_deg: f64,
+        mid_speed_ra: f64,
+        mid_speed_dec: f64,
+        sigma_ra_rad: f64,
+        sigma_dec_rad: f64,
+    },
+    ObserverState {
+        r_obs: [f64; 3],
+        v_obs: [f64; 3],
+    },
+    LineOfSight {
+        los: [f64; 3],
+        los_dot: [f64; 3],
+        n_sigma: f64,
+    },
+    GammaEstimate {
+        gamma: f64,
+        r_helio_au: f64,
+    },
+    TopocentricRange {
+        rho_au: f64,
+    },
+    DistanceBounds {
+        r_min_au: f64,
+        r_max_au: f64,
+    },
+    GammaUncertainty {
+        sigma_gamma: f64,
+        sigma_gamma_rel_pct: f64,
+    },
+    InitSigmas {
+        sigma_trans_au: f64,
+        sigma_rad_au: f64,
+    },
+    RhoDotFallback {
+        rho_au: f64,
+        r_helio_au: f64,
+    },
+    RhoDot {
+        rho_dot_au_per_day: f64,
+    },
+    AngularVariances {
+        sigma_ra_rad: f64,
+        sigma_dec_rad: f64,
+        var_ra: f64,
+        var_dec: f64,
+    },
+    AngularRateVariances {
+        sigma_ra_dot: f64,
+        sigma_dec_dot: f64,
+        var_ra_dot: f64,
+        var_dec_dot: f64,
+    },
+    RangeVariance {
+        r_obs_norm_au: f64,
+        cos_phi: f64,
+        d_rho_d_gamma: f64,
+        sigma_rho_au: f64,
+        var_rho_au2: f64,
+    },
+    RangeRateVariance {
+        sigma_rho_dot_au_per_day: f64,
+        var_rho_dot: f64,
+    },
+    InitialCovarianceAssembled {
+        trace_p0: f64,
+    },
+    CombinedUncertainty {
+        sigma_ang_rad: f64,
+    },
+    FinalCovarianceTraces {
+        cov_pos_trace_au2: f64,
+        cov_vel_trace: f64,
+    },
+    Complete,
+}
+
+crate::impl_log_target!(
+    InitEvent,
+    "init",
+    "Initial orbit determination bootstrap from a tracklet (Gauss/topocentric-range)",
+    [tracing::Level::TRACE, tracing::Level::WARN]
+);
+
+impl InitEvent {
+    pub fn emit(&self) {
+        use InitEvent::*;
+        match self {
+            TrackletGeometry {
+                mid_ra_deg,
+                mid_dec_deg,
+                mid_speed_ra,
+                mid_speed_dec,
+                sigma_ra_rad,
+                sigma_dec_rad,
+            } => tracing::trace!(
+                target: InitEvent::TARGET, mid_ra_deg, mid_dec_deg, mid_speed_ra, mid_speed_dec, sigma_ra_rad, sigma_dec_rad,
+                "Tracklet midpoint geometry"
+            ),
+            ObserverState { r_obs, v_obs } => tracing::trace!(
+                target: InitEvent::TARGET, ?r_obs, ?v_obs,
+                "Observer heliocentric state, ecliptic J2000 (AU, AU/day)"
+            ),
+            LineOfSight {
+                los,
+                los_dot,
+                n_sigma,
+            } => tracing::trace!(
+                target: InitEvent::TARGET, ?los, ?los_dot, n_sigma,
+                "Unit line-of-sight and its time derivative, range bound n_sigma"
+            ),
+            GammaEstimate { gamma, r_helio_au } => tracing::trace!(
+                target: InitEvent::TARGET, gamma, r_helio_au, "Estimated gamma and heliocentric distance"
+            ),
+            TopocentricRange { rho_au } => tracing::trace!(
+                target: InitEvent::TARGET, rho_au, "Topocentric range"
+            ),
+            DistanceBounds { r_min_au, r_max_au } => tracing::trace!(
+                target: InitEvent::TARGET, r_min_au, r_max_au, "Heliocentric distance bounds"
+            ),
+            GammaUncertainty {
+                sigma_gamma,
+                sigma_gamma_rel_pct,
+            } => tracing::trace!(
+                target: InitEvent::TARGET, sigma_gamma, sigma_gamma_rel_pct, "Gamma uncertainty"
+            ),
+            InitSigmas {
+                sigma_trans_au,
+                sigma_rad_au,
+            } => tracing::trace!(
+                target: InitEvent::TARGET, sigma_trans_au, sigma_rad_au, "Initial uncertainty decomposition (AU)"
+            ),
+            RhoDotFallback { rho_au, r_helio_au } => tracing::warn!(
+                target: InitEvent::TARGET, rho_au, r_helio_au,
+                "rho_dot estimation failed: circular-orbit geometry inconsistent. Falling back to rho_dot = 0."
+            ),
+            RhoDot { rho_dot_au_per_day } => tracing::trace!(
+                target: InitEvent::TARGET, rho_dot_au_per_day, "Range rate rho_dot"
+            ),
+            AngularVariances {
+                sigma_ra_rad,
+                sigma_dec_rad,
+                var_ra,
+                var_dec,
+            } => tracing::trace!(
+                target: InitEvent::TARGET, sigma_ra_rad, sigma_dec_rad, var_ra, var_dec, "Angular position variances"
+            ),
+            AngularRateVariances {
+                sigma_ra_dot,
+                sigma_dec_dot,
+                var_ra_dot,
+                var_dec_dot,
+            } => tracing::trace!(
+                target: InitEvent::TARGET, sigma_ra_dot, sigma_dec_dot, var_ra_dot, var_dec_dot, "Angular rate variances"
+            ),
+            RangeVariance {
+                r_obs_norm_au,
+                cos_phi,
+                d_rho_d_gamma,
+                sigma_rho_au,
+                var_rho_au2,
+            } => tracing::trace!(
+                target: InitEvent::TARGET, r_obs_norm_au, cos_phi, d_rho_d_gamma, sigma_rho_au, var_rho_au2,
+                "Range variance (propagated from sigma_gamma via Al-Kashi)"
+            ),
+            RangeRateVariance {
+                sigma_rho_dot_au_per_day,
+                var_rho_dot,
+            } => tracing::trace!(
+                target: InitEvent::TARGET, sigma_rho_dot_au_per_day, var_rho_dot,
+                "Range-rate variance (Keplerian circular velocity bound)"
+            ),
+            InitialCovarianceAssembled { trace_p0 } => tracing::trace!(
+                target: InitEvent::TARGET, trace_p0, "Initial covariance P_0 assembled (diagonal)"
+            ),
+            CombinedUncertainty { sigma_ang_rad } => tracing::trace!(
+                target: InitEvent::TARGET, sigma_ang_rad, "Combined astrometric uncertainty"
+            ),
+            FinalCovarianceTraces {
+                cov_pos_trace_au2,
+                cov_vel_trace,
+            } => tracing::trace!(
+                target: InitEvent::TARGET, cov_pos_trace_au2, cov_vel_trace, "Initial covariance traces"
+            ),
+            Complete => {
+                tracing::trace!(target: InitEvent::TARGET, "KFState initialised successfully.")
+            }
+        }
+    }
+
+    pub fn span(epoch: f64) -> tracing::Span {
+        tracing::trace_span!(target: InitEvent::TARGET, "init_kf_state", epoch)
+    }
+}
+
 /// Diagonal variances of the angular **position** block $(\alpha, \delta)$.
 ///
 /// These follow directly from the midpoint astrometric errors and do not
@@ -445,13 +648,13 @@ pub(crate) fn angular_position_variances(mid_point: &EquCoord) -> (f64, f64) {
     let var_ra = mid_point.ra_error.powi(2);
     let var_dec = mid_point.dec_error.powi(2);
 
-    tracing::trace!(
-        sigma_ra_rad = mid_point.ra_error,
-        sigma_dec_rad = mid_point.dec_error,
+    InitEvent::AngularVariances {
+        sigma_ra_rad: mid_point.ra_error,
+        sigma_dec_rad: mid_point.dec_error,
         var_ra,
         var_dec,
-        "Angular position variances"
-    );
+    }
+    .emit();
 
     (var_ra, var_dec)
 }
@@ -469,13 +672,13 @@ pub(crate) fn angular_rate_variances(mid_speed: &MidSpeed) -> (f64, f64) {
     let var_ra_dot = mid_speed.0.ra_error.powi(2);
     let var_dec_dot = mid_speed.0.dec_error.powi(2);
 
-    tracing::trace!(
-        sigma_ra_dot = mid_speed.0.ra_error,
-        sigma_dec_dot = mid_speed.0.dec_error,
+    InitEvent::AngularRateVariances {
+        sigma_ra_dot: mid_speed.0.ra_error,
+        sigma_dec_dot: mid_speed.0.dec_error,
         var_ra_dot,
         var_dec_dot,
-        "Angular rate variances"
-    );
+    }
+    .emit();
 
     (var_ra_dot, var_dec_dot)
 }
@@ -513,14 +716,14 @@ pub(crate) fn range_variance_from_gamma_uncertainty(
     let sigma_rho = d_rho_d_gamma.abs() * sigma_gamma;
     let var_rho = sigma_rho.powi(2);
 
-    tracing::trace!(
-        r_obs_norm_au = r_obs_norm,
+    InitEvent::RangeVariance {
+        r_obs_norm_au: r_obs_norm,
         cos_phi,
         d_rho_d_gamma,
-        sigma_rho_au = sigma_rho,
-        var_rho_au2 = var_rho,
-        "Range variance (propagated from sigma_gamma via Al-Kashi)"
-    );
+        sigma_rho_au: sigma_rho,
+        var_rho_au2: var_rho,
+    }
+    .emit();
 
     var_rho
 }
@@ -539,11 +742,11 @@ pub(crate) fn range_variance_from_gamma_uncertainty(
 pub(crate) fn range_rate_variance_keplerian_bound(gamma: f64) -> f64 {
     let var_rho_dot = GAUSS_GRAV_SQUARED * gamma;
 
-    tracing::trace!(
-        sigma_rho_dot_au_per_day = var_rho_dot.sqrt(),
+    InitEvent::RangeRateVariance {
+        sigma_rho_dot_au_per_day: var_rho_dot.sqrt(),
         var_rho_dot,
-        "Range-rate variance (Keplerian circular velocity bound)"
-    );
+    }
+    .emit();
 
     var_rho_dot
 }
@@ -574,10 +777,10 @@ pub(crate) fn assemble_diagonal_covariance(
     covariance[(4, 4)] = var_rho;
     covariance[(5, 5)] = var_rho_dot;
 
-    tracing::trace!(
-        trace_p0 = covariance.trace(),
-        "Initial covariance P_0 assembled (diagonal)"
-    );
+    InitEvent::InitialCovarianceAssembled {
+        trace_p0: covariance.trace(),
+    }
+    .emit();
 
     covariance
 }
@@ -688,8 +891,7 @@ pub(crate) fn init_kf_state<'state_lf>(
 ) -> Result<KFState<'state_lf>, EngineError> {
     let t_mid = pair_midpoint_epoch(first_obs, second_obs);
 
-    let span = tracing::trace_span!("init_kf_state", epoch = t_mid);
-    let _enter = span.enter();
+    let _enter = InitEvent::span(t_mid).entered();
 
     let HelioObsState {
         helio_cart_pos: r_obs,
@@ -705,101 +907,85 @@ pub(crate) fn init_kf_state<'state_lf>(
         los_dot,
     } = tracklet_geometry(first_obs, second_obs);
 
-    tracing::trace!(
-        ra_rad = mid_point.ra,
-        ra_deg = mid_point.ra.to_degrees(),
-        dec_rad = mid_point.dec,
-        dec_deg = mid_point.dec.to_degrees(),
-        "Input mid_point"
-    );
-    tracing::trace!(
-        d_ra = mid_speed.0.ra,
-        d_dec = mid_speed.0.dec,
-        "Input mid_speed (rad/day)"
-    );
-    tracing::trace!(
-        sigma_ra = mid_point.ra_error,
-        sigma_dec = mid_point.dec_error,
-        "Astrometric errors (rad)"
-    );
-    tracing::trace!(
-        r_obs_x = r_obs[0],
-        r_obs_y = r_obs[1],
-        r_obs_z = r_obs[2],
-        "Observer heliocentric position, ecliptic J2000 (AU)"
-    );
-    tracing::trace!(
-        v_obs_x = v_obs[0],
-        v_obs_y = v_obs[1],
-        v_obs_z = v_obs[2],
-        "Observer heliocentric velocity, ecliptic J2000 (AU/day)"
-    );
-    tracing::trace!(n_sigma, "Range bound n_sigma");
-    tracing::trace!(
-        los_x = los[0],
-        los_y = los[1],
-        los_z = los[2],
-        "Unit line-of-sight (LOS)"
-    );
-    tracing::trace!(
-        los_dot_x = los_dot[0],
-        los_dot_y = los_dot[1],
-        los_dot_z = los_dot[2],
-        "LOS time derivative (rad/day)"
-    );
+    InitEvent::TrackletGeometry {
+        mid_ra_deg: mid_point.ra.to_degrees(),
+        mid_dec_deg: mid_point.dec.to_degrees(),
+        mid_speed_ra: mid_speed.0.ra,
+        mid_speed_dec: mid_speed.0.dec,
+        sigma_ra_rad: mid_point.ra_error,
+        sigma_dec_rad: mid_point.dec_error,
+    }
+    .emit();
+    InitEvent::ObserverState {
+        r_obs: [r_obs[0], r_obs[1], r_obs[2]],
+        v_obs: [v_obs[0], v_obs[1], v_obs[2]],
+    }
+    .emit();
+    InitEvent::LineOfSight {
+        los: [los[0], los[1], los[2]],
+        los_dot: [los_dot[0], los_dot[1], los_dot[2]],
+        n_sigma,
+    }
+    .emit();
 
     // ── Gamma (inverse heliocentric distance) ─────────────────────────────
     let gamma = estimate_gamma(&mid_point, &mid_speed);
     let r_helio = 1.0 / gamma;
 
-    tracing::trace!(
+    InitEvent::GammaEstimate {
         gamma,
-        r_helio_au = r_helio,
-        "Estimated gamma and heliocentric distance"
-    );
+        r_helio_au: r_helio,
+    }
+    .emit();
 
     // ── Topocentric range ─────────────────────────────────────────────────
     let rho = topocentric_range(&los, &r_obs, gamma)?;
 
-    tracing::trace!(rho_au = rho, "Topocentric range");
+    InitEvent::TopocentricRange { rho_au: rho }.emit();
 
     // ── Heliocentric distance bounds ──────────────────────────────────────
     let (r_min, r_max) = estimate_r_bounds(&mid_point, &mid_speed, n_sigma);
 
-    tracing::trace!(
-        r_min_au = r_min,
-        r_max_au = r_max,
-        "Heliocentric distance bounds"
-    );
+    InitEvent::DistanceBounds {
+        r_min_au: r_min,
+        r_max_au: r_max,
+    }
+    .emit();
 
     // ── Gamma uncertainty ─────────────────────────────────────────────────
     let sigma_gamma = estimate_sigma_gamma(gamma, &mid_point, &mid_speed, r_min, r_max);
     let sigma_gamma_rel_pct = (sigma_gamma / gamma).abs() * 100.0;
 
-    tracing::trace!(sigma_gamma, sigma_gamma_rel_pct, "Gamma uncertainty");
+    InitEvent::GammaUncertainty {
+        sigma_gamma,
+        sigma_gamma_rel_pct,
+    }
+    .emit();
 
     // ── Initial position/velocity sigmas ──────────────────────────────────
     let (sigma_trans, sigma_rad) = estimate_init_sigmas(rho, gamma, &mid_speed, &mid_point);
 
-    tracing::trace!(
-        sigma_trans_au = sigma_trans,
-        sigma_rad_au = sigma_rad,
-        "Initial uncertainty decomposition (AU)"
-    );
+    InitEvent::InitSigmas {
+        sigma_trans_au: sigma_trans,
+        sigma_rad_au: sigma_rad,
+    }
+    .emit();
 
     // ── rho_dot and heliocentric velocity ─────────────────────────────────
     let rho_dot =
         estimate_rho_dot_circular(&los, &los_dot, &v_obs, rho, r_helio).unwrap_or_else(|| {
-            tracing::warn!(
-                rho_au = rho,
-                r_helio_au = r_helio,
-                "rho_dot estimation failed: circular-orbit geometry inconsistent. \
-             Falling back to rho_dot = 0."
-            );
+            InitEvent::RhoDotFallback {
+                rho_au: rho,
+                r_helio_au: r_helio,
+            }
+            .emit();
             0.0
         });
 
-    tracing::trace!(rho_dot_au_per_day = rho_dot, "Range rate rho_dot");
+    InitEvent::RhoDot {
+        rho_dot_au_per_day: rho_dot,
+    }
+    .emit();
 
     // let rho = 2.1;
     // let rho_dot = 0.000005;
@@ -817,10 +1003,10 @@ pub(crate) fn init_kf_state<'state_lf>(
     // ── Initial covariance ────────────────────────────────────────────────
     let sigma_ang = mid_point.ra_error.hypot(mid_point.dec_error) / 2_f64.sqrt();
 
-    tracing::trace!(
-        sigma_ang_rad = sigma_ang,
-        "Combined astrometric uncertainty"
-    );
+    InitEvent::CombinedUncertainty {
+        sigma_ang_rad: sigma_ang,
+    }
+    .emit();
 
     let p = initial_covariance(
         &mid_point,
@@ -832,13 +1018,13 @@ pub(crate) fn init_kf_state<'state_lf>(
         sigma_gamma,
     );
 
-    tracing::trace!(
-        cov_pos_trace_au2 = p.fixed_view::<3, 3>(0, 0).trace(),
-        cov_vel_trace = p.fixed_view::<3, 3>(3, 3).trace(),
-        "Initial covariance traces"
-    );
+    InitEvent::FinalCovarianceTraces {
+        cov_pos_trace_au2: p.fixed_view::<3, 3>(0, 0).trace(),
+        cov_vel_trace: p.fixed_view::<3, 3>(3, 3).trace(),
+    }
+    .emit();
 
-    tracing::trace!("KFState initialised successfully.");
+    InitEvent::Complete.emit();
 
     Ok(KFState {
         state: x,

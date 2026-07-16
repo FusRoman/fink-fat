@@ -6,6 +6,49 @@
 //! likely than clutter?") rather than an arbitrary one. See
 //! `kalman_update_instruction.md` for the full rationale.
 
+use crate::logging::LogTarget;
+
+/// Structured log events for LLR scoring against the clutter background.
+/// See [`crate::logging`] for the `.emit()` pattern. Deliberately
+/// `trace`-only: called once per candidate/branch, potentially thousands of
+/// times a night.
+pub enum LlrScoreEvent {
+    ObservationDelta {
+        mixture_likelihood_z: f64,
+        clutter_density: f64,
+        delta: f64,
+    },
+    NullDelta {
+        p_detection: f64,
+        delta: f64,
+    },
+}
+
+crate::impl_log_target!(
+    LlrScoreEvent,
+    "llr_score",
+    "Log-likelihood-ratio scoring of branch candidates against a clutter background",
+    [tracing::Level::TRACE]
+);
+
+impl LlrScoreEvent {
+    pub fn emit(&self) {
+        use LlrScoreEvent::*;
+        match self {
+            ObservationDelta {
+                mixture_likelihood_z,
+                clutter_density,
+                delta,
+            } => tracing::trace!(
+                target: LlrScoreEvent::TARGET, mixture_likelihood_z, clutter_density, delta, "Observation LLR delta"
+            ),
+            NullDelta { p_detection, delta } => tracing::trace!(
+                target: LlrScoreEvent::TARGET, p_detection, delta, "Null-branch LLR delta"
+            ),
+        }
+    }
+}
+
 /// Floor applied to a clutter density before taking its logarithm, to avoid
 /// `+inf` scores in emptied-out fields with no nearby alerts at all.
 const MIN_CLUTTER_DENSITY: f64 = 1e-12;
@@ -32,8 +75,15 @@ const MAX_MIXTURE_LIKELIHOOD: f64 = 1e300;
 /// The signed LLR delta: positive means the association is more plausible
 /// than clutter, negative means clutter is the better explanation.
 pub fn observation_llr_delta(mixture_likelihood_z: f64, clutter_density: f64) -> f64 {
-    mixture_likelihood_z.min(MAX_MIXTURE_LIKELIHOOD).ln()
-        - clutter_density.max(MIN_CLUTTER_DENSITY).ln()
+    let delta = mixture_likelihood_z.min(MAX_MIXTURE_LIKELIHOOD).ln()
+        - clutter_density.max(MIN_CLUTTER_DENSITY).ln();
+    LlrScoreEvent::ObservationDelta {
+        mixture_likelihood_z,
+        clutter_density,
+        delta,
+    }
+    .emit();
+    delta
 }
 
 /// LLR contribution of the null (missed-detection) branch: `log(1 − P_D)`.
@@ -48,10 +98,13 @@ pub fn observation_llr_delta(mixture_likelihood_z: f64, clutter_density: f64) ->
 /// behavior: an object that was surely seen cannot also have gone
 /// undetected).
 pub fn null_branch_llr_delta(p_detection: f64) -> f64 {
-    if p_detection >= 1.0 {
-        return f64::NEG_INFINITY;
-    }
-    (1.0 - p_detection).ln()
+    let delta = if p_detection >= 1.0 {
+        f64::NEG_INFINITY
+    } else {
+        (1.0 - p_detection).ln()
+    };
+    LlrScoreEvent::NullDelta { p_detection, delta }.emit();
+    delta
 }
 
 #[cfg(test)]

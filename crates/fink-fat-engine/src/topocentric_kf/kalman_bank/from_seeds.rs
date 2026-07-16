@@ -23,6 +23,47 @@ use crate::{
 
 pub type KFBankCollection<'state_lf, 'bank_config> = Vec<KFBank<'state_lf, 'bank_config>>;
 
+use crate::logging::LogTarget;
+
+/// Structured log events for intra-night pair → `KFBank` construction. See
+/// [`crate::logging`] for the `.emit()` pattern.
+pub enum BankBuildEvent {
+    PairsGenerated {
+        n_obs: usize,
+        n_pairs: usize,
+    },
+    BankBuildFailed {
+        first: photom::observation_dataset::ObsId,
+        second: photom::observation_dataset::ObsId,
+        error: String,
+    },
+}
+
+crate::impl_log_target!(
+    BankBuildEvent,
+    "bank_build",
+    "Intra-night observation-pair to KFBank construction (night-0 seeding and per-night discovery)",
+    [tracing::Level::DEBUG]
+);
+
+impl BankBuildEvent {
+    pub fn emit(&self) {
+        use BankBuildEvent::*;
+        match self {
+            PairsGenerated { n_obs, n_pairs } => tracing::debug!(
+                target: BankBuildEvent::TARGET, n_obs, n_pairs, "Pairs generated from observation slice"
+            ),
+            BankBuildFailed {
+                first,
+                second,
+                error,
+            } => tracing::debug!(
+                target: BankBuildEvent::TARGET, first, second, error, "KFBank::from_grid failed for pair, skipping"
+            ),
+        }
+    }
+}
+
 /// Build one [`KFBank`] per admissible intra-night observation pair across
 /// every night in `obs_dataset`.
 ///
@@ -86,11 +127,11 @@ pub fn build_kf_bank_collection_from_observations<'state_lf, 'bank_config>(
 
     let pairs = link_tracklets(night_obs, spatial_binner, &params.pairs);
 
-    tracing::debug!(
-        n_obs = night_obs.len(),
-        n_pairs = pairs.len(),
-        "pairs generated from observation slice"
-    );
+    BankBuildEvent::PairsGenerated {
+        n_obs: night_obs.len(),
+        n_pairs: pairs.len(),
+    }
+    .emit();
 
     let mut banks = Vec::new();
     for pair in &pairs {
@@ -104,12 +145,12 @@ pub fn build_kf_bank_collection_from_observations<'state_lf, 'bank_config>(
         ) {
             Ok(bank) => banks.push(bank),
             Err(err) => {
-                tracing::debug!(
-                    first = *pair.a.id(),
-                    second = *pair.b.id(),
-                    %err,
-                    "KFBank::from_grid failed for pair, skipping"
-                );
+                BankBuildEvent::BankBuildFailed {
+                    first: *pair.a.id(),
+                    second: *pair.b.id(),
+                    error: err.to_string(),
+                }
+                .emit();
             }
         }
     }

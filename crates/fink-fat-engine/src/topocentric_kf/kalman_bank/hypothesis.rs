@@ -7,13 +7,13 @@ use photom::{
     coordinates::equatorial::EquCoord,
     observation_dataset::{ObsDataset, observation::Observation},
 };
-use tracing::trace;
 
 use crate::{
     engine_config::{kalman_context::KalmanContext, kf_bank_config::KFBankConfig},
     error::ObservationJacobianError,
     topocentric_kf::{
         constants::MAX_INNOVATION_DET,
+        kalman_bank::BankEvent,
         single_kalman::{KFState, KFStateSnapshot, update::wrap_angle},
     },
 };
@@ -128,11 +128,15 @@ impl<'state_lf> Hypothesis<'state_lf> {
     ) -> Result<Self, ()> {
         match self.kf.propagate(obs_dataset, obs) {
             Ok(kf) => {
-                trace!(hyp_id = self.id, "Propagation OK");
+                BankEvent::HypothesisPropagated { hyp_id: self.id }.emit();
                 Ok(Hypothesis { kf, ..self.clone() })
             }
             Err(e) => {
-                trace!(hyp_id = self.id, error = ?e, "Propagation FAILED");
+                BankEvent::HypothesisPropagationFailed {
+                    hyp_id: self.id,
+                    error: format!("{e:?}"),
+                }
+                .emit();
                 Err(())
             }
         }
@@ -154,33 +158,36 @@ impl<'state_lf> Hypothesis<'state_lf> {
         is_protected: bool,
     ) -> Result<(), HypothesisStepResult<'state_lf>> {
         if !d2.is_finite() {
-            trace!(self.id, "Gate REJECTED: non-finite Mahalanobis²");
+            BankEvent::GateRejectedNonFinite { hyp_id: self.id }.emit();
             return Err(HypothesisStepResult::Gated);
         }
 
         if d2 > config.gate_chi2 {
             if is_protected {
                 // Protected hypothesis — log the inconsistency and continue.
-                trace!(
-                    self.id,
+                BankEvent::GateExemptProtected {
+                    hyp_id: self.id,
                     d2,
-                    gate_chi2 = config.gate_chi2,
-                    "Protected hypothesis EXEMPT from chi² gate — \
-                     high Mahalanobis² recorded but hypothesis preserved"
-                );
+                    gate_chi2: config.gate_chi2,
+                }
+                .emit();
                 return Ok(());
             }
 
-            trace!(
-                self.id,
+            BankEvent::GateRejected {
+                hyp_id: self.id,
                 d2,
-                gate_chi2 = config.gate_chi2,
-                "Gate REJECTED: Mahalanobis² exceeds threshold"
-            );
+                gate_chi2: config.gate_chi2,
+            }
+            .emit();
             return Err(HypothesisStepResult::Gated);
         }
 
-        trace!(self.id, d2, "Gate OK");
+        BankEvent::GateOk {
+            hyp_id: self.id,
+            d2,
+        }
+        .emit();
         Ok(())
     }
 
@@ -199,12 +206,16 @@ impl<'state_lf> Hypothesis<'state_lf> {
         is_protected: bool,
     ) -> Result<(f64, KFState<'state_lf>), HypothesisStepResult<'state_lf>> {
         let (nu, s) = measurement_innovation(&self.kf, obs).map_err(|e| {
-            trace!(self.id, error = ?e, "Innovation FAILED");
+            BankEvent::InnovationFailed {
+                hyp_id: self.id,
+                error: format!("{e:?}"),
+            }
+            .emit();
             HypothesisStepResult::Failed
         })?;
 
         let s_inv = s.try_inverse().ok_or_else(|| {
-            trace!(self.id, "Innovation covariance not invertible");
+            BankEvent::InnovationCovarianceNotInvertible { hyp_id: self.id }.emit();
             HypothesisStepResult::Failed
         })?;
 
@@ -212,18 +223,26 @@ impl<'state_lf> Hypothesis<'state_lf> {
         self.apply_gate(config, d2, is_protected)?;
 
         let log_lik = compute_log_likelihood(&s, d2).ok_or_else(|| {
-            trace!(self.id, "Innovation covariance singular (det ≤ 0)");
+            BankEvent::LikelihoodSingular { hyp_id: self.id }.emit();
             HypothesisStepResult::Failed
         })?;
 
-        trace!(self.id, log_lik, "Likelihood scored");
+        BankEvent::LikelihoodScored {
+            hyp_id: self.id,
+            log_lik,
+        }
+        .emit();
 
         let updated_kf = self.kf.update(obs).map_err(|e| {
-            trace!(self.id, error = ?e, "Measurement update FAILED");
+            BankEvent::MeasurementUpdateFailed {
+                hyp_id: self.id,
+                error: format!("{e:?}"),
+            }
+            .emit();
             HypothesisStepResult::Failed
         })?;
 
-        trace!(self.id, "Measurement update OK");
+        BankEvent::MeasurementUpdateOk { hyp_id: self.id }.emit();
         Ok((log_lik, updated_kf))
     }
 

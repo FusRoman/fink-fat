@@ -1,7 +1,7 @@
 use nalgebra::{Matrix6, Vector3, Vector6};
 use outfit::{
     OutfitError,
-    kepler::{SolverParams, SolverType, UniversalPropagResult, propagate_universal},
+    kepler::{SolverParams, SolverType, propagate_universal},
 };
 use photom::observation_dataset::{ObsDataset, observation::Observation};
 
@@ -25,6 +25,168 @@ fn solver_with_guess(kf: &KFState, psi_guess: Option<f64>) -> SolverType {
             ..kf.shared_ctx.config.solver_type.params
         },
         ..kf.shared_ctx.config.solver_type
+    }
+}
+
+use crate::logging::LogTarget;
+
+/// Structured log events for the propagation pipeline (light-time correction,
+/// Kepler solve, covariance transport). See [`crate::logging`] for the
+/// `.emit()` pattern.
+pub enum PropagationEvent {
+    InitialCartesian {
+        pos_norm_au: f64,
+        vel_norm_au_per_day: f64,
+    },
+    LightTimeCorrection {
+        tau_prev_days: f64,
+        tau_new_days: f64,
+        object_arc_days: f64,
+        recept_dt_days: f64,
+    },
+    KeplerResult {
+        f_lag: f64,
+        g_lag: f64,
+        f_dot: f64,
+        g_dot: f64,
+        r1_norm_au: f64,
+        v1_norm_au_per_day: f64,
+    },
+    PropagatedAttributable {
+        ra_deg: f64,
+        dec_deg: f64,
+        rho_au: f64,
+    },
+    JacobianAtEpoch {
+        label: &'static str,
+        det: f64,
+    },
+    InflationFactor {
+        nis_ema: f64,
+        lambda: f64,
+        inflation_active: bool,
+    },
+    ProcessNoise {
+        q_snc_effective: f64,
+        q_attr_trace: f64,
+        dt_days: f64,
+    },
+    CovarianceTraces {
+        pos_trace_before: f64,
+        pos_trace_after: f64,
+    },
+    Complete,
+}
+
+crate::impl_log_target!(
+    PropagationEvent,
+    "propagation",
+    "Light-time-corrected Keplerian propagation with adaptive covariance inflation",
+    [tracing::Level::TRACE]
+);
+
+impl PropagationEvent {
+    pub fn emit(&self) {
+        use PropagationEvent::*;
+        match self {
+            InitialCartesian {
+                pos_norm_au,
+                vel_norm_au_per_day,
+            } => tracing::trace!(
+                target: PropagationEvent::TARGET,
+                pos_norm_au,
+                vel_norm_au_per_day,
+                "Initial heliocentric state (AU, AU/day)"
+            ),
+            LightTimeCorrection {
+                tau_prev_days,
+                tau_new_days,
+                object_arc_days,
+                recept_dt_days,
+            } => tracing::trace!(
+                target: PropagationEvent::TARGET,
+                tau_prev_days,
+                tau_new_days,
+                object_arc_days,
+                recept_dt_days,
+                "Light-time correction (emission-to-emission object arc)"
+            ),
+            KeplerResult {
+                f_lag,
+                g_lag,
+                f_dot,
+                g_dot,
+                r1_norm_au,
+                v1_norm_au_per_day,
+            } => tracing::trace!(
+                target: PropagationEvent::TARGET,
+                f_lag,
+                g_lag,
+                f_dot,
+                g_dot,
+                r1_norm_au,
+                v1_norm_au_per_day,
+                "Kepler propagation result"
+            ),
+            PropagatedAttributable {
+                ra_deg,
+                dec_deg,
+                rho_au,
+            } => tracing::trace!(
+                target: PropagationEvent::TARGET,
+                ra_deg,
+                dec_deg,
+                rho_au,
+                "Propagated attributable state"
+            ),
+            JacobianAtEpoch { label, det } => tracing::trace!(
+                target: PropagationEvent::TARGET,
+                det,
+                "Jacobian attr→cart at {label} epoch"
+            ),
+            InflationFactor {
+                nis_ema,
+                lambda,
+                inflation_active,
+            } => tracing::trace!(
+                target: PropagationEvent::TARGET,
+                nis_ema,
+                lambda,
+                inflation_active,
+                "Adaptive covariance inflation factor (fading-memory)"
+            ),
+            ProcessNoise {
+                q_snc_effective,
+                q_attr_trace,
+                dt_days,
+            } => tracing::trace!(
+                target: PropagationEvent::TARGET,
+                q_snc_effective,
+                q_attr_trace,
+                dt_days,
+                "SNC process noise (adaptive)"
+            ),
+            CovarianceTraces {
+                pos_trace_before,
+                pos_trace_after,
+            } => tracing::trace!(
+                target: PropagationEvent::TARGET,
+                pos_trace_before,
+                pos_trace_after,
+                "Covariance traces before/after propagation"
+            ),
+            Complete => tracing::trace!(target: PropagationEvent::TARGET, "Propagation complete."),
+        }
+    }
+
+    pub fn span(epoch_from: f64, epoch_to: f64, dt_days: f64) -> tracing::Span {
+        tracing::trace_span!(
+            target: PropagationEvent::TARGET,
+            "propagate_to_epoch",
+            epoch_from,
+            epoch_to,
+            dt_days
+        )
     }
 }
 
@@ -210,17 +372,15 @@ pub(crate) fn propagate_to_epoch<'state_lf>(
 ) -> Result<KFState<'state_lf>, PropagateError> {
     let dt = t_prop - kf.epoch;
 
-    let span = tracing::trace_span!(
-        "propagate_to_epoch",
-        epoch_from = kf.epoch,
-        epoch_to = t_prop,
-        dt_days = dt
-    );
-    let _enter = span.enter();
+    let _enter = PropagationEvent::span(kf.epoch, t_prop, dt).entered();
 
     let cart = kf.to_cartesian();
 
-    log_initial_cartesian(&cart);
+    PropagationEvent::InitialCartesian {
+        pos_norm_au: cart.pos.norm(),
+        vel_norm_au_per_day: cart.vel.norm(),
+    }
+    .emit();
 
     // ── Light-time correction (planetary aberration) ──────────────────────
     // The stored attributable state holds *apparent* angles: (α, δ) point to
@@ -275,16 +435,23 @@ pub(crate) fn propagate_to_epoch<'state_lf>(
         .map_err(PropagateError::Kepler)?;
     }
 
-    tracing::trace!(
-        target: "propagation",
-        tau_prev_days = tau_prev,
-        tau_new_days = tau,
-        object_arc_days = (t_prop - tau) - t0_emit,
-        recept_dt_days = t_prop - kf.epoch,
-        "Light-time correction (emission-to-emission object arc)"
-    );
+    PropagationEvent::LightTimeCorrection {
+        tau_prev_days: tau_prev,
+        tau_new_days: tau,
+        object_arc_days: (t_prop - tau) - t0_emit,
+        recept_dt_days: t_prop - kf.epoch,
+    }
+    .emit();
 
-    log_kepler_result(&result);
+    PropagationEvent::KeplerResult {
+        f_lag: result.f_lag,
+        g_lag: result.g_lag,
+        f_dot: result.f_dot,
+        g_dot: result.g_dot,
+        r1_norm_au: result.r1.norm(),
+        v1_norm_au_per_day: result.v1.norm(),
+    }
+    .emit();
 
     let stm = build_keplerian_stm(result.f_lag, result.g_lag, result.f_dot, result.g_dot);
 
@@ -296,16 +463,22 @@ pub(crate) fn propagate_to_epoch<'state_lf>(
     };
     let attr_new = cartesian_to_attributable(&cart_new, &r_obs_new, &v_obs_new);
 
-    log_propagated_attributable(&attr_new);
+    PropagationEvent::PropagatedAttributable {
+        ra_deg: attr_new[0].to_degrees(),
+        dec_deg: attr_new[1].to_degrees(),
+        rho_au: attr_new[4],
+    }
+    .emit();
 
     let p_new = propagate_covariance(kf, &stm, &attr_new, dt, q0, dt_ref)?;
 
-    log_covariance_traces(kf, &p_new);
+    PropagationEvent::CovarianceTraces {
+        pos_trace_before: kf.covariance.fixed_view::<3, 3>(0, 0).trace(),
+        pos_trace_after: p_new.fixed_view::<3, 3>(0, 0).trace(),
+    }
+    .emit();
 
-    tracing::trace!(
-        target: "propagation",
-        "Propagation complete."
-    );
+    PropagationEvent::Complete.emit();
 
     Ok(KFState {
         epoch: t_prop,
@@ -379,11 +552,11 @@ fn propagate_covariance(
     dt_ref: f64,
 ) -> Result<Matrix6<f64>, PropagateError> {
     let j = jacobian_attr_to_cart(&kf.state);
-    tracing::trace!(
-        target: "propagation",
-        j_det = j.determinant(),
-        "Jacobian attr→cart at current epoch"
-    );
+    PropagationEvent::JacobianAtEpoch {
+        label: "current",
+        det: j.determinant(),
+    }
+    .emit();
 
     let p_cart = j * kf.covariance * j.transpose();
 
@@ -408,13 +581,12 @@ fn propagate_covariance(
 
     let p_cart_new = lambda * (stm * p_cart * stm.transpose());
 
-    tracing::trace!(
-        target: "propagation",
-        nis_ema = kf.nis_ema.unwrap_or(f64::NAN),
+    PropagationEvent::InflationFactor {
+        nis_ema: kf.nis_ema.unwrap_or(f64::NAN),
         lambda,
-        inflation_active = lambda > 1.0,
-        "Adaptive covariance inflation factor (fading-memory)"
-    );
+        inflation_active: lambda > 1.0,
+    }
+    .emit();
 
     // `jacobian_attr_to_cart` has 4 of its 6 columns scaling linearly with ρ
     // (state[4]): as ρ drifts toward 0 or diverges, the Jacobian becomes
@@ -430,11 +602,11 @@ fn propagate_covariance(
     }
 
     let j_new = jacobian_attr_to_cart(attr_new);
-    tracing::trace!(
-        target: "propagation",
-        j_new_det = j_new.determinant(),
-        "Jacobian attr→cart at propagated epoch"
-    );
+    PropagationEvent::JacobianAtEpoch {
+        label: "propagated",
+        det: j_new.determinant(),
+    }
+    .emit();
 
     let j_new_inv = j_new
         .try_inverse()
@@ -443,54 +615,12 @@ fn propagate_covariance(
     let q_cart = build_snc_process_noise(dt, q0, dt_ref);
     let q_attr = j_new_inv * q_cart * j_new_inv.transpose();
 
-    tracing::trace!(
-        target: "propagation",
-        q_snc_effective = q0 * (1.0 + (dt / 1.0_f64).powi(2)),
-        q_attr_trace = q_attr.trace(),
-        dt_days = dt,
-        "SNC process noise (adaptive)"
-    );
+    PropagationEvent::ProcessNoise {
+        q_snc_effective: q0 * (1.0 + (dt / 1.0_f64).powi(2)),
+        q_attr_trace: q_attr.trace(),
+        dt_days: dt,
+    }
+    .emit();
 
     Ok(j_new_inv * p_cart_new * j_new_inv.transpose() + q_attr)
-}
-
-fn log_initial_cartesian(cart: &CartesianState) {
-    tracing::trace!(
-        target: "propagation",
-        pos_norm_au = cart.pos.norm(),
-        vel_norm_au_per_day = cart.vel.norm(),
-        "Initial heliocentric state (AU, AU/day)"
-    );
-}
-
-fn log_kepler_result(result: &UniversalPropagResult) {
-    tracing::trace!(
-        target: "propagation",
-        f_lag = result.f_lag,
-        g_lag = result.g_lag,
-        f_dot = result.f_dot,
-        g_dot = result.g_dot,
-        r1_norm_au = result.r1.norm(),
-        v1_norm_au_per_day = result.v1.norm(),
-        "Kepler propagation result"
-    );
-}
-
-fn log_propagated_attributable(attr: &Vector6<f64>) {
-    tracing::trace!(
-        target: "propagation",
-        ra_deg = attr[0].to_degrees(),
-        dec_deg = attr[1].to_degrees(),
-        rho_au = attr[4],
-        "Propagated attributable state"
-    );
-}
-
-fn log_covariance_traces(kf: &KFState, p_new: &Matrix6<f64>) {
-    tracing::trace!(
-        target: "propagation",
-        cov_pos_trace_before = kf.covariance.fixed_view::<3, 3>(0, 0).trace(),
-        cov_pos_trace_after = p_new.fixed_view::<3, 3>(0, 0).trace(),
-        "Covariance traces before/after propagation"
-    );
 }

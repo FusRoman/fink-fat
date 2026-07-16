@@ -34,6 +34,39 @@ use crate::{
     topocentric_kf::kalman_bank::ellipse_region_finder::SearchRegion,
 };
 
+use crate::logging::LogTarget;
+
+/// Structured log events for matching next-night observations against a
+/// bank's predicted search ellipse. See [`crate::logging`] for the
+/// `.emit()` pattern. Deliberately `trace`-only: called once per lineage per
+/// visit, i.e. potentially thousands of times a night.
+pub enum CandidateSearchEvent {
+    BankSearchResult {
+        n_region_candidates: usize,
+        n_matches: usize,
+    },
+}
+
+crate::impl_log_target!(
+    CandidateSearchEvent,
+    "candidate_search",
+    "Matching next-night observations against a bank's predicted search ellipse",
+    [tracing::Level::TRACE]
+);
+
+impl CandidateSearchEvent {
+    pub fn emit(&self) {
+        match self {
+            CandidateSearchEvent::BankSearchResult {
+                n_region_candidates,
+                n_matches,
+            } => tracing::trace!(
+                target: CandidateSearchEvent::TARGET, n_region_candidates, n_matches, "Bank candidate search result"
+            ),
+        }
+    }
+}
+
 /// A next-night observation accepted inside at least one Kalman hypothesis'
 /// error ellipse, with its full mixture-likelihood score.
 #[derive(Debug, Clone, Copy)]
@@ -170,7 +203,14 @@ pub fn find_candidates_for_bank<'obs>(
     likelihood_threshold: f64,
 ) -> BankCandidates<'obs> {
     let candidates = query_region_candidates(bucket_index, spatial_binner, search_region);
+    let n_region_candidates = candidates.len();
     let matches = filter_candidates(search_region, candidates, gate_chi2, likelihood_threshold);
+
+    CandidateSearchEvent::BankSearchResult {
+        n_region_candidates,
+        n_matches: matches.len(),
+    }
+    .emit();
 
     BankCandidates {
         track_ids,

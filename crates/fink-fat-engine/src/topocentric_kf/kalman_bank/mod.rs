@@ -77,7 +77,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use photom::observation_dataset::{ObsDataset, ObsId, observation::Observation};
-use tracing::{trace, trace_span};
 
 use nalgebra::{Matrix2, Vector2, Vector3, Vector6};
 
@@ -97,6 +96,221 @@ use crate::{
         },
     },
 };
+
+use crate::logging::LogTarget;
+
+/// Structured log events for the hypothesis-bank predict/score/update/
+/// prune/merge cycle (both bank-level, `kalman_bank/mod.rs`, and
+/// hypothesis-level, `hypothesis.rs`). See [`crate::logging`] for the
+/// `.emit()` pattern.
+pub enum BankEvent {
+    StepStart {
+        n_hypotheses: usize,
+    },
+    PredictUpdateComplete {
+        n_survivors: usize,
+        n_gated: usize,
+        n_failed: usize,
+    },
+    HypothesisPropagated {
+        hyp_id: u64,
+    },
+    HypothesisPropagationFailed {
+        hyp_id: u64,
+        error: String,
+    },
+    GateRejectedNonFinite {
+        hyp_id: u64,
+    },
+    GateExemptProtected {
+        hyp_id: u64,
+        d2: f64,
+        gate_chi2: f64,
+    },
+    GateRejected {
+        hyp_id: u64,
+        d2: f64,
+        gate_chi2: f64,
+    },
+    GateOk {
+        hyp_id: u64,
+        d2: f64,
+    },
+    InnovationFailed {
+        hyp_id: u64,
+        error: String,
+    },
+    InnovationCovarianceNotInvertible {
+        hyp_id: u64,
+    },
+    LikelihoodSingular {
+        hyp_id: u64,
+    },
+    LikelihoodScored {
+        hyp_id: u64,
+        log_lik: f64,
+    },
+    MeasurementUpdateFailed {
+        hyp_id: u64,
+        error: String,
+    },
+    MeasurementUpdateOk {
+        hyp_id: u64,
+    },
+    PredictionFailed {
+        hyp_id: u64,
+        error: String,
+    },
+    PruningPhase {
+        phase: &'static str,
+        n_before: usize,
+        n_after: usize,
+    },
+    SmoothedPruningSkipped,
+    SmoothedPruning {
+        n_removed: usize,
+        log_threshold: f64,
+        best_smoothed: f64,
+        window: usize,
+        min_kept: usize,
+    },
+    WeightFloorPruning {
+        n_removed: usize,
+        weight_floor: f64,
+        min_kept: usize,
+    },
+    ScheduledCapTruncation {
+        n_truncated: usize,
+        effective_cap: usize,
+        raw_cap: usize,
+        n_steps: usize,
+    },
+    ModesMerged {
+        hyp_id_kept: u64,
+        hyp_id_merged: u64,
+        threshold_au: f64,
+    },
+}
+
+crate::impl_log_target!(
+    BankEvent,
+    "bank",
+    "Hypothesis-bank predict/score/update/prune/merge cycle for a single tracklet",
+    [tracing::Level::TRACE]
+);
+
+impl BankEvent {
+    pub fn emit(&self) {
+        use BankEvent::*;
+        match self {
+            StepStart { n_hypotheses } => tracing::trace!(
+                target: BankEvent::TARGET, n_hypotheses, "Starting predict/update/score cycle"
+            ),
+            PredictUpdateComplete {
+                n_survivors,
+                n_gated,
+                n_failed,
+            } => tracing::trace!(
+                target: BankEvent::TARGET, n_survivors, n_gated, n_failed,
+                "Predict/score cycle complete — starting cleanup"
+            ),
+            HypothesisPropagated { hyp_id } => tracing::trace!(
+                target: BankEvent::TARGET, hyp_id, "Propagation OK"
+            ),
+            HypothesisPropagationFailed { hyp_id, error } => tracing::trace!(
+                target: BankEvent::TARGET, hyp_id, error, "Propagation FAILED"
+            ),
+            GateRejectedNonFinite { hyp_id } => tracing::trace!(
+                target: BankEvent::TARGET, hyp_id, "Gate REJECTED: non-finite Mahalanobis²"
+            ),
+            GateExemptProtected {
+                hyp_id,
+                d2,
+                gate_chi2,
+            } => tracing::trace!(
+                target: BankEvent::TARGET, hyp_id, d2, gate_chi2,
+                "Protected hypothesis EXEMPT from chi² gate — high Mahalanobis² recorded but hypothesis preserved"
+            ),
+            GateRejected {
+                hyp_id,
+                d2,
+                gate_chi2,
+            } => tracing::trace!(
+                target: BankEvent::TARGET, hyp_id, d2, gate_chi2, "Gate REJECTED: Mahalanobis² exceeds threshold"
+            ),
+            GateOk { hyp_id, d2 } => {
+                tracing::trace!(target: BankEvent::TARGET, hyp_id, d2, "Gate OK")
+            }
+            InnovationFailed { hyp_id, error } => tracing::trace!(
+                target: BankEvent::TARGET, hyp_id, error, "Innovation FAILED"
+            ),
+            InnovationCovarianceNotInvertible { hyp_id } => tracing::trace!(
+                target: BankEvent::TARGET, hyp_id, "Innovation covariance not invertible"
+            ),
+            LikelihoodSingular { hyp_id } => tracing::trace!(
+                target: BankEvent::TARGET, hyp_id, "Innovation covariance singular (det ≤ 0)"
+            ),
+            LikelihoodScored { hyp_id, log_lik } => tracing::trace!(
+                target: BankEvent::TARGET, hyp_id, log_lik, "Likelihood scored"
+            ),
+            MeasurementUpdateFailed { hyp_id, error } => tracing::trace!(
+                target: BankEvent::TARGET, hyp_id, error, "Measurement update FAILED"
+            ),
+            MeasurementUpdateOk { hyp_id } => tracing::trace!(
+                target: BankEvent::TARGET, hyp_id, "Measurement update OK"
+            ),
+            PredictionFailed { hyp_id, error } => tracing::trace!(
+                target: BankEvent::TARGET, hyp_id, error, "Hypothesis prediction failed, dropping"
+            ),
+            PruningPhase {
+                phase,
+                n_before,
+                n_after,
+            } => tracing::trace!(
+                target: BankEvent::TARGET, phase, n_before, n_after, "Post-step cleanup phase"
+            ),
+            SmoothedPruningSkipped => tracing::trace!(
+                target: BankEvent::TARGET, "Smoothed pruning skipped: window not yet populated"
+            ),
+            SmoothedPruning {
+                n_removed,
+                log_threshold,
+                best_smoothed,
+                window,
+                min_kept,
+            } => tracing::trace!(
+                target: BankEvent::TARGET, n_removed, log_threshold, best_smoothed, window, min_kept,
+                "Smoothed-score pruning"
+            ),
+            WeightFloorPruning {
+                n_removed,
+                weight_floor,
+                min_kept,
+            } => tracing::trace!(
+                target: BankEvent::TARGET, n_removed, weight_floor, min_kept, "Weight-floor pruning"
+            ),
+            ScheduledCapTruncation {
+                n_truncated,
+                effective_cap,
+                raw_cap,
+                n_steps,
+            } => tracing::trace!(
+                target: BankEvent::TARGET, n_truncated, effective_cap, raw_cap, n_steps, "Scheduled cap truncation"
+            ),
+            ModesMerged {
+                hyp_id_kept,
+                hyp_id_merged,
+                threshold_au,
+            } => tracing::trace!(
+                target: BankEvent::TARGET, hyp_id_kept, hyp_id_merged, threshold_au, "Merging spatially coincident modes"
+            ),
+        }
+    }
+
+    pub fn span(epoch: f64, n_hypotheses: usize) -> tracing::Span {
+        tracing::trace_span!(target: BankEvent::TARGET, "kf_bank_step", epoch, n_hypotheses)
+    }
+}
 
 // ── Per-step diagnostics ──────────────────────────────────────────────────────
 
@@ -447,20 +661,21 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
         let epoch = obs.mjd_tt();
         let n_before = self.hypotheses.len();
 
-        let span = trace_span!("kf_bank_step", epoch, n_hypotheses = n_before);
-        let _enter = span.enter();
+        let _enter = BankEvent::span(epoch, n_before).entered();
 
-        trace!(
-            n_hypotheses = n_before,
-            "Starting predict/update/score cycle"
-        );
+        BankEvent::StepStart {
+            n_hypotheses: n_before,
+        }
+        .emit();
 
         let (survivors, n_gated, n_failed) = self.process_hypotheses(obs_dataset, obs);
 
-        trace!(
-            n_survivors = survivors.len(),
-            n_gated, n_failed, "Predict/score cycle complete — starting cleanup"
-        );
+        BankEvent::PredictUpdateComplete {
+            n_survivors: survivors.len(),
+            n_gated,
+            n_failed,
+        }
+        .emit();
 
         self.set_hypotheses(survivors);
 
@@ -653,11 +868,11 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
             .filter_map(|hyp| match hyp.kf.predict(t_prop, r_obs_new, v_obs_new) {
                 Ok(kf) => Some(Hypothesis { kf, ..hyp.clone() }),
                 Err(error) => {
-                    trace!(
-                        hyp_id = hyp.id,
-                        ?error,
-                        "Hypothesis prediction failed, dropping"
-                    );
+                    BankEvent::PredictionFailed {
+                        hyp_id: hyp.id,
+                        error: format!("{error:?}"),
+                    }
+                    .emit();
                     None
                 }
             })
@@ -789,26 +1004,36 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
         self.prune_by_smoothed_score();
         let n1 = self.hypotheses.len();
         if n0 != n1 {
-            trace!(n_before = n0, n_after = n1, "Pruning phase");
+            BankEvent::PruningPhase {
+                phase: "smoothed_prune",
+                n_before: n0,
+                n_after: n1,
+            }
+            .emit();
         }
 
         let n2 = n1;
         self.cap_to_scheduled_max();
         let n3 = self.hypotheses.len();
         if n2 != n3 {
-            trace!(n_before = n2, n_after = n3, "Scheduled-cap phase");
+            BankEvent::PruningPhase {
+                phase: "scheduled_cap",
+                n_before: n2,
+                n_after: n3,
+            }
+            .emit();
         }
 
         let n4 = n3;
         self.merge_coincident_modes();
         let n5 = self.hypotheses.len();
         if n4 != n5 {
-            trace!(
-                n_before = n4,
-                n_after = n5,
-                n_merged = n4 - n5,
-                "Merging phase"
-            );
+            BankEvent::PruningPhase {
+                phase: "merge",
+                n_before: n4,
+                n_after: n5,
+            }
+            .emit();
         }
 
         self.normalize_weights();
@@ -859,7 +1084,7 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
 
         if !best_smoothed.is_finite() {
             // No hypothesis has accumulated any window data yet — skip.
-            trace!("Smoothed pruning skipped: window not yet populated");
+            BankEvent::SmoothedPruningSkipped.emit();
             return;
         }
 
@@ -882,14 +1107,14 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
 
         let n_removed = n_before - self.hypotheses.len();
         if n_removed > 0 {
-            trace!(
+            BankEvent::SmoothedPruning {
                 n_removed,
                 log_threshold,
                 best_smoothed,
                 window,
-                min_kept = min_keep,
-                "Smoothed-score pruning"
-            );
+                min_kept: min_keep,
+            }
+            .emit();
         }
     }
 
@@ -916,12 +1141,12 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
 
         let n_removed = n_before - self.hypotheses.len();
         if n_removed > 0 {
-            trace!(
+            BankEvent::WeightFloorPruning {
                 n_removed,
-                weight_floor = self.config.weight_floor,
-                min_kept = min_keep,
-                "Weight-floor pruning"
-            );
+                weight_floor: self.config.weight_floor,
+                min_kept: min_keep,
+            }
+            .emit();
         }
     }
 
@@ -944,13 +1169,13 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
         let n_truncated = hypotheses.len() - effective_cap;
         hypotheses.truncate(effective_cap);
 
-        trace!(
+        BankEvent::ScheduledCapTruncation {
             n_truncated,
             effective_cap,
             raw_cap,
-            n_steps = self.n_steps,
-            "Scheduled cap truncation"
-        );
+            n_steps: self.n_steps,
+        }
+        .emit();
     }
 
     /// Greedily merge modes whose mean heliocentric positions are within
@@ -965,12 +1190,12 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
                 .find(|m| m.kf.position_distance_au(&hyp.kf) < thresh)
             {
                 Some(existing) => {
-                    trace!(
-                        hyp_id_kept = existing.id,
-                        hyp_id_merged = hyp.id,
-                        threshold_au = thresh,
-                        "Merging spatially coincident modes"
-                    );
+                    BankEvent::ModesMerged {
+                        hyp_id_kept: existing.id,
+                        hyp_id_merged: hyp.id,
+                        threshold_au: thresh,
+                    }
+                    .emit();
                     *existing = existing.moment_match_merge(&hyp);
                 }
                 None => merged.push(hyp),
