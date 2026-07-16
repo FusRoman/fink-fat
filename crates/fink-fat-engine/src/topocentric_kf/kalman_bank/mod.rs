@@ -92,7 +92,7 @@ use crate::{
         },
         kalman_bank::{
             ellipse_region_finder::SearchComponent,
-            hypothesis::{Hypothesis, HypothesisStepResult},
+            hypothesis::{Hypothesis, HypothesisSnapshot, HypothesisStepResult},
             seed_grid::admissible_region_grid,
         },
     },
@@ -184,6 +184,68 @@ pub struct KFBank<'state_lf, 'bank_config> {
     absolute_magnitude_estimate: Option<f64>,
     /// Number of samples folded into `absolute_magnitude_estimate`.
     absolute_magnitude_sample_count: u32,
+}
+
+/// Owned, borrow-free snapshot of a [`KFBank`], for persisting a
+/// [`BranchCollection`](crate::topocentric_kf::branching::BranchCollection)
+/// to disk across nights (see [`KFBank::to_snapshot`]).
+///
+/// `best_index_cache` is deliberately absent: it is a memoization cache
+/// (`usize::MAX` = "not computed"), always reset to that sentinel by
+/// [`KFBank::with_hypotheses`] — the same constructor
+/// [`KFBank::from_snapshot`] goes through — so it comes back correct by
+/// construction. `config` is likewise absent: it borrows the (not
+/// serializable, caller-owned) [`KFBankConfig`], re-supplied by the caller
+/// via [`KFBank::from_snapshot`].
+#[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct KFBankSnapshot {
+    pub hypotheses: Vec<HypothesisSnapshot>,
+    pub n_steps: usize,
+    pub track_ids: Vec<ObsId>,
+    pub absolute_magnitude_estimate: Option<f64>,
+    pub absolute_magnitude_sample_count: u32,
+}
+
+impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
+    /// Convert to an owned, borrow-free snapshot suitable for on-disk
+    /// persistence (see [`KFBankSnapshot`]).
+    pub fn to_snapshot(&self) -> KFBankSnapshot {
+        KFBankSnapshot {
+            hypotheses: self
+                .hypotheses
+                .iter()
+                .map(Hypothesis::to_snapshot)
+                .collect(),
+            n_steps: self.n_steps,
+            track_ids: self.track_ids.clone(),
+            absolute_magnitude_estimate: self.absolute_magnitude_estimate,
+            absolute_magnitude_sample_count: self.absolute_magnitude_sample_count,
+        }
+    }
+
+    /// Reattach `shared_ctx`/`config` (supplied by the caller, who already
+    /// holds the live [`KalmanContext`]/[`KFBankConfig`]) to rebuild a full
+    /// [`KFBank`]. Goes through [`Self::with_hypotheses`], so
+    /// `best_index_cache` comes back correctly reset.
+    pub fn from_snapshot(
+        snapshot: KFBankSnapshot,
+        shared_ctx: &'state_lf KalmanContext,
+        config: &'bank_config KFBankConfig,
+    ) -> Self {
+        let hypotheses = snapshot
+            .hypotheses
+            .into_iter()
+            .map(|h| h.into_hypothesis(shared_ctx))
+            .collect();
+        Self::with_hypotheses(
+            hypotheses,
+            config,
+            snapshot.n_steps,
+            snapshot.track_ids,
+            snapshot.absolute_magnitude_estimate,
+            snapshot.absolute_magnitude_sample_count,
+        )
+    }
 }
 
 impl<'state_lf, 'bank_config> Clone for KFBank<'state_lf, 'bank_config> {

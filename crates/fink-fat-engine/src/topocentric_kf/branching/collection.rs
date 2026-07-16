@@ -27,7 +27,7 @@ use crate::{
     error::EngineError,
     spacetime_bucket::healpix_binner::HealpixBinner,
     topocentric_kf::branching::{
-        Branch, discovery::seed_new_lineages_from_leftovers,
+        Branch, BranchSnapshot, discovery::seed_new_lineages_from_leftovers,
         orchestrate::advance_bank_collection_one_night,
     },
 };
@@ -52,7 +52,51 @@ pub struct BranchCollection<'state_lf, 'bank_config> {
     pub last_night_consumed_then_pruned_ids: HashSet<ObsId>,
 }
 
+/// Owned, borrow-free snapshot of a [`BranchCollection`], for persisting the
+/// pipeline's state to disk at the end of a night and reloading it at the
+/// start of the next one (see [`BranchCollection::to_snapshot`]).
+///
+/// Neither the live [`KalmanContext`](crate::engine_config::kalman_context::KalmanContext)
+/// nor the [`EngineConfig`] are part of the snapshot: both are cheap for the
+/// caller to hold onto (or rebuild) across a process restart, and are
+/// re-supplied to [`BranchCollection::from_snapshot`].
+#[derive(Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct BranchCollectionSnapshot {
+    pub branches: Vec<BranchSnapshot>,
+    pub last_night_consumed_then_pruned_ids: HashSet<ObsId>,
+}
+
 impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
+    /// Convert to an owned, borrow-free snapshot suitable for on-disk
+    /// persistence (see [`BranchCollectionSnapshot`]). The engine does not
+    /// perform the actual file I/O — the caller is responsible for encoding
+    /// and writing (e.g. with `rkyv::to_bytes`) the returned snapshot.
+    pub fn to_snapshot(&self) -> BranchCollectionSnapshot {
+        BranchCollectionSnapshot {
+            branches: self.branches.iter().map(Branch::to_snapshot).collect(),
+            last_night_consumed_then_pruned_ids: self.last_night_consumed_then_pruned_ids.clone(),
+        }
+    }
+
+    /// Rebuild a full [`BranchCollection`] from a snapshot previously
+    /// produced by [`Self::to_snapshot`], reattaching the live
+    /// `kalman_context`/`engine_config` the caller already holds (the same
+    /// arguments it would pass to [`Self::advance_one_night`]).
+    pub fn from_snapshot(
+        snapshot: BranchCollectionSnapshot,
+        kalman_context: &'state_lf KalmanContext,
+        engine_config: &'bank_config EngineConfig,
+    ) -> Self {
+        Self {
+            branches: snapshot
+                .branches
+                .into_iter()
+                .map(|b| Branch::from_snapshot(b, kalman_context, &engine_config.kfbank_config))
+                .collect(),
+            last_night_consumed_then_pruned_ids: snapshot.last_night_consumed_then_pruned_ids,
+        }
+    }
+
     pub fn empty() -> Self {
         BranchCollection {
             branches: Vec::new(),

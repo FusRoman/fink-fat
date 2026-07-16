@@ -36,7 +36,7 @@ use photom::observation_dataset::ObsId;
 ///
 /// Newtype wrapper around a `String` — see the module docs for the two
 /// formats this can hold ([`lineage_designation`] vs [`branch_designation`]).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct BranchId(pub String);
 
 impl BranchId {

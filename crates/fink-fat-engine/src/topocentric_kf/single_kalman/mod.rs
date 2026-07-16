@@ -171,6 +171,64 @@ pub struct KFState<'state_lf> {
     pub shared_ctx: &'state_lf KalmanContext,
 }
 
+/// Owned, borrow-free snapshot of a [`KFState`], for persisting a
+/// [`BranchCollection`](crate::topocentric_kf::branching::BranchCollection)
+/// to disk across nights (see [`KFState::to_snapshot`]).
+///
+/// `shared_ctx` is deliberately absent: it borrows the (expensive, not
+/// serializable) [`KalmanContext`], which the caller already holds and
+/// re-supplies via [`KFStateSnapshot::into_kf_state`].
+///
+/// nalgebra vector/matrix types have no `rkyv` support, so they are stored as
+/// plain `f64` arrays (column-major for matrices, matching nalgebra's own
+/// in-memory layout).
+#[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct KFStateSnapshot {
+    pub state: [f64; 6],
+    pub covariance: [f64; 36],
+    pub epoch: f64,
+    pub r_obs: [f64; 3],
+    pub v_obs: [f64; 3],
+    pub universal_anomaly: Option<f64>,
+    pub kalman_gain: Option<[f64; 12]>,
+    pub nis_ema: Option<f64>,
+}
+
+impl<'state_lf> KFState<'state_lf> {
+    /// Convert to an owned, borrow-free snapshot suitable for on-disk
+    /// persistence (see [`KFStateSnapshot`]).
+    pub fn to_snapshot(&self) -> KFStateSnapshot {
+        KFStateSnapshot {
+            state: self.state.as_slice().try_into().unwrap(),
+            covariance: self.covariance.as_slice().try_into().unwrap(),
+            epoch: self.epoch,
+            r_obs: self.r_obs.as_slice().try_into().unwrap(),
+            v_obs: self.v_obs.as_slice().try_into().unwrap(),
+            universal_anomaly: self.universal_anomaly,
+            kalman_gain: self.kalman_gain.map(|k| k.as_slice().try_into().unwrap()),
+            nis_ema: self.nis_ema,
+        }
+    }
+}
+
+impl KFStateSnapshot {
+    /// Reattach `shared_ctx` (supplied by the caller, who already holds the
+    /// live [`KalmanContext`]) to rebuild a full [`KFState`].
+    pub fn into_kf_state(self, shared_ctx: &KalmanContext) -> KFState<'_> {
+        KFState {
+            state: Vector6::from_column_slice(&self.state),
+            covariance: Matrix6::from_column_slice(&self.covariance),
+            epoch: self.epoch,
+            r_obs: Vector3::from_column_slice(&self.r_obs),
+            v_obs: Vector3::from_column_slice(&self.v_obs),
+            universal_anomaly: self.universal_anomaly,
+            kalman_gain: self.kalman_gain.map(|k| Matrix6x2::from_column_slice(&k)),
+            nis_ema: self.nis_ema,
+            shared_ctx,
+        }
+    }
+}
+
 impl<'state_lf> KFState<'state_lf> {
     pub fn update_epoch(
         self,

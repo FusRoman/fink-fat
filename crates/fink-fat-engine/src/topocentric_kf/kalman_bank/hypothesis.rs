@@ -10,11 +10,11 @@ use photom::{
 use tracing::trace;
 
 use crate::{
-    engine_config::kf_bank_config::KFBankConfig,
+    engine_config::{kalman_context::KalmanContext, kf_bank_config::KFBankConfig},
     error::ObservationJacobianError,
     topocentric_kf::{
         constants::MAX_INNOVATION_DET,
-        single_kalman::{KFState, update::wrap_angle},
+        single_kalman::{KFState, KFStateSnapshot, update::wrap_angle},
     },
 };
 
@@ -53,6 +53,43 @@ pub struct Hypothesis<'state_lf> {
     /// processed.  Used exclusively by the smoothed pruning strategy; has no
     /// effect on `log_weight` or `weight()`.
     pub(crate) recent_log_liks: VecDeque<f64>,
+}
+
+/// Owned, borrow-free snapshot of a [`Hypothesis`], for persisting a
+/// [`BranchCollection`](crate::topocentric_kf::branching::BranchCollection)
+/// to disk across nights (see [`Hypothesis::to_snapshot`]).
+#[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct HypothesisSnapshot {
+    pub kf: KFStateSnapshot,
+    pub log_weight: f64,
+    pub id: u64,
+    pub recent_log_liks: Vec<f64>,
+}
+
+impl<'state_lf> Hypothesis<'state_lf> {
+    /// Convert to an owned, borrow-free snapshot suitable for on-disk
+    /// persistence (see [`HypothesisSnapshot`]).
+    pub fn to_snapshot(&self) -> HypothesisSnapshot {
+        HypothesisSnapshot {
+            kf: self.kf.to_snapshot(),
+            log_weight: self.log_weight,
+            id: self.id,
+            recent_log_liks: self.recent_log_liks.iter().copied().collect(),
+        }
+    }
+}
+
+impl HypothesisSnapshot {
+    /// Reattach `shared_ctx` (supplied by the caller) to rebuild a full
+    /// [`Hypothesis`].
+    pub fn into_hypothesis(self, shared_ctx: &KalmanContext) -> Hypothesis<'_> {
+        Hypothesis {
+            kf: self.kf.into_kf_state(shared_ctx),
+            log_weight: self.log_weight,
+            id: self.id,
+            recent_log_liks: self.recent_log_liks.into_iter().collect(),
+        }
+    }
 }
 
 impl<'state_lf> Hypothesis<'state_lf> {
