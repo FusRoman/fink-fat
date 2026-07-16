@@ -2,8 +2,10 @@
 
 use photom::observation_dataset::{ObsId, observation::Observation};
 
+use crate::engine_config::kalman_context::KalmanContext;
+use crate::engine_config::kf_bank_config::KFBankConfig;
 use crate::topocentric_kf::branching::branch_id::{self, BranchId};
-use crate::topocentric_kf::kalman_bank::KFBank;
+use crate::topocentric_kf::kalman_bank::{KFBank, KFBankSnapshot};
 
 /// One candidate history for a single object: a bank state plus the
 /// cumulative log-likelihood-ratio (LLR) that justifies it against the
@@ -45,6 +47,57 @@ pub struct Branch<'state_lf, 'bank_config> {
     /// tracked object; use [`Self::designation`] for a per-branch unique id
     /// suitable as a `trajectory_id` when persisting to disk.
     pub lineage_designation: BranchId,
+}
+
+/// Owned, borrow-free snapshot of a [`Branch`], for persisting a
+/// [`BranchCollection`](super::BranchCollection) to disk across nights (see
+/// [`Branch::to_snapshot`]).
+#[derive(Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct BranchSnapshot {
+    pub bank: KFBankSnapshot,
+    pub cumulative_llr: f64,
+    pub lineage_id: u64,
+    pub parent_branch_id: u64,
+    pub branch_id: u64,
+    pub ancestor_at_scan_horizon: u64,
+    pub ancestor_creation_step: usize,
+    pub lineage_designation: BranchId,
+}
+
+impl<'state_lf, 'bank_config> Branch<'state_lf, 'bank_config> {
+    /// Convert to an owned, borrow-free snapshot suitable for on-disk
+    /// persistence (see [`BranchSnapshot`]).
+    pub fn to_snapshot(&self) -> BranchSnapshot {
+        BranchSnapshot {
+            bank: self.bank.to_snapshot(),
+            cumulative_llr: self.cumulative_llr,
+            lineage_id: self.lineage_id,
+            parent_branch_id: self.parent_branch_id,
+            branch_id: self.branch_id,
+            ancestor_at_scan_horizon: self.ancestor_at_scan_horizon,
+            ancestor_creation_step: self.ancestor_creation_step,
+            lineage_designation: self.lineage_designation.clone(),
+        }
+    }
+
+    /// Reattach `shared_ctx`/`config` (supplied by the caller) to rebuild a
+    /// full [`Branch`].
+    pub fn from_snapshot(
+        snapshot: BranchSnapshot,
+        shared_ctx: &'state_lf KalmanContext,
+        config: &'bank_config KFBankConfig,
+    ) -> Self {
+        Self {
+            bank: KFBank::from_snapshot(snapshot.bank, shared_ctx, config),
+            cumulative_llr: snapshot.cumulative_llr,
+            lineage_id: snapshot.lineage_id,
+            parent_branch_id: snapshot.parent_branch_id,
+            branch_id: snapshot.branch_id,
+            ancestor_at_scan_horizon: snapshot.ancestor_at_scan_horizon,
+            ancestor_creation_step: snapshot.ancestor_creation_step,
+            lineage_designation: snapshot.lineage_designation,
+        }
+    }
 }
 
 impl<'state_lf, 'bank_config> Branch<'state_lf, 'bank_config> {

@@ -59,6 +59,6 @@ pub mod orchestrate;
 pub mod pruning;
 pub mod visit;
 
-pub use branch::Branch;
+pub use branch::{Branch, BranchSnapshot};
 pub use branch_id::BranchId;
-pub use collection::BranchCollection;
+pub use collection::{BranchCollection, BranchCollectionSnapshot};
