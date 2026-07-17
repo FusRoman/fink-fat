@@ -242,8 +242,8 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
     /// --------------------------------
     /// - [`TopK::All`]                  – all live hypotheses.
     /// - [`TopK::Map`]                  – single highest-weight hypothesis.
-    /// - [`TopK::Best(k)`]              – top-`k` by descending weight, renormalized.
-    /// - [`TopK::WeightThreshold(t)`]   – minimal set covering cumulative weight `t`.
+    /// - [`TopK::Best`]`(k)`              – top-`k` by descending weight, renormalized.
+    /// - [`TopK::WeightThreshold`]`(t)`   – minimal set covering cumulative weight `t`.
     ///
     /// In all cases the selected weights are renormalized to sum to 1 before
     /// computing the centroid and mixture components.

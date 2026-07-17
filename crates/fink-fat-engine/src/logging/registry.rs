@@ -43,8 +43,8 @@ pub fn all_targets() -> Vec<TargetInfo> {
                 visit::VisitEvent,
             },
             kalman_bank::{
-                BankEvent, ellipse_region_finder::EllipseRegionEvent, from_seeds::BankBuildEvent,
-                seed_grid::SeedGridEvent,
+                ellipse_region_finder::EllipseRegionEvent, from_seeds::BankBuildEvent,
+                logging::BankEvent, seed_grid::SeedGridEvent,
             },
             single_kalman::{init::InitEvent, propagate::PropagationEvent, update::UpdateEvent},
         },
@@ -151,7 +151,7 @@ mod tests {
         use tracing_subscriber::layer::SubscriberExt;
 
         use crate::topocentric_kf::{
-            kalman_bank::BankEvent, single_kalman::propagate::PropagationEvent,
+            kalman_bank::logging::BankEvent, single_kalman::propagate::PropagationEvent,
         };
 
         struct CapturingLayer {

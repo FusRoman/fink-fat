@@ -326,7 +326,7 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
         let magnitude_b = b.photometry().magnitude;
 
         // Neighbor bucket keys around `b`.
-        let b_space_key = sb.key_for(&b.equ_coord());
+        let b_space_key = sb.key_for(b.equ_coord());
         let b_time_bin = tb.bin_for(b.mjd_tt());
 
         let spatial_neighbors =

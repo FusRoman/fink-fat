@@ -3,7 +3,7 @@
 //! [`orchestrate`](super::orchestrate) only ever *advances* lineages that
 //! already exist — it has no way to notice a previously untracked object.
 //! This module closes that gap: night-0 seeding
-//! ([`build_kf_bank_collection`](crate::topocentric_kf::bank_collection::build_kf_bank_collection))
+//! ([`build_kf_bank_collection`](crate::topocentric_kf::kalman_bank::from_seeds::build_kf_bank_collection))
 //! and this "discovery" step are the same intra-night pairing algorithm
 //! ([`build_kf_bank_collection_from_observations`]), applied to a different
 //! observation subset — all of `night_obs` at night 0, only the leftover
@@ -95,7 +95,7 @@ pub fn seed_new_lineages_from_leftovers<'state_lf, 'bank_config>(
         &leftover_obs,
         kalman_context,
         engine_config,
-        &spatial_binner,
+        spatial_binner,
     )?;
 
     let n_before_filter = new_banks.len();

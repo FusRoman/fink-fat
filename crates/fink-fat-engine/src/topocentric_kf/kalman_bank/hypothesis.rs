@@ -41,7 +41,7 @@ pub struct Hypothesis<'state_lf> {
     /// Stored in log-space to avoid underflow over many observations.
     /// This is the full cumulative Bayesian posterior: it is used for `best()`
     /// and for weight-based computations, but **not** for the smoothed pruning
-    /// decision (see [`Hypothesis::smoothed_log_lik`]).
+    /// decision (see `Hypothesis::smoothed_log_lik`).
     pub log_weight: f64,
     /// Stable identifier, useful for tracking a mode across steps.
     pub id: u64,
@@ -295,12 +295,12 @@ impl<'state_lf> Hypothesis<'state_lf> {
         // Append the new log-likelihood into the bounded sliding window.
         push_log_lik_to_window(&mut recent_log_liks, log_lik, config.likelihood_window);
 
-        HypothesisStepResult::Survived(Hypothesis {
+        HypothesisStepResult::Survived(Box::new(Hypothesis {
             log_weight: prior_log_weight + log_lik,
             kf: updated_kf,
             id,
             recent_log_liks,
-        })
+        }))
     }
 
     /// Merge two weighted Gaussians by moment matching.
@@ -365,7 +365,7 @@ impl<'state_lf> Hypothesis<'state_lf> {
 pub enum HypothesisStepResult<'state_lf> {
     /// The hypothesis survived the full cycle with an updated state and new
     /// log-weight.
-    Survived(Hypothesis<'state_lf>),
+    Survived(Box<Hypothesis<'state_lf>>),
     /// The hypothesis was rejected by the Mahalanobis² gate.
     Gated,
     /// A numerical failure occurred (propagation, innovation, covariance
@@ -392,7 +392,7 @@ fn measurement_innovation(
     let mut nu = z - predicted;
     nu[0] = wrap_angle(nu[0]); // Wrap RA difference into (−π, π].
 
-    let s = kf.sky_covariance()? + observation_noise_matrix(&coord);
+    let s = kf.sky_covariance()? + observation_noise_matrix(coord);
 
     Ok((nu, s))
 }

@@ -112,7 +112,7 @@ pub struct KFBankConfig {
     /// -----
     /// Dimensionless (chi-square statistic). Must be strictly positive.
     ///
-    /// The bounding radius of the predicted [`SearchRegion`] is
+    /// The bounding radius of the predicted [`SearchRegion`](crate::topocentric_kf::kalman_bank::ellipse_region_finder::SearchRegion) is
     ///
     /// ```text
     /// r = sqrt(search_region_chi2) × sqrt(λ_max(S_mix))

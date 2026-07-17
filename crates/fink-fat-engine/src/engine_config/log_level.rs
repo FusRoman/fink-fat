@@ -57,7 +57,7 @@ impl std::fmt::Display for LogLevel {
     }
 }
 
-/// Error returned by [`LogLevel::from_str`] for an unrecognized level string.
+/// Error returned by `LogLevel`'s [`FromStr`](std::str::FromStr) impl for an unrecognized level string.
 #[derive(Debug, thiserror::Error)]
 #[error("unknown log level {0:?} (expected one of: trace, debug, info, warn, error)")]
 pub struct ParseLogLevelError(String);

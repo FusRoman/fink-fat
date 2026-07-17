@@ -1,7 +1,7 @@
 use crate::topocentric_kf::single_kalman::KFState;
 use serde::{Deserialize, Serialize};
 
-/// Controls which hypotheses from the bank are used to build a [`SearchRegion`].
+/// Controls which hypotheses from the bank are used to build a [`SearchRegion`](super::SearchRegion).
 ///
 /// When the bank holds many low-weight hypotheses, restricting the region to
 /// the most probable ones yields a tighter, more actionable search area while
@@ -12,9 +12,9 @@ use serde::{Deserialize, Serialize};
 /// - [`TopK::All`] – conservative fallback: every live hypothesis contributes.
 /// - [`TopK::Map`] – only the single highest-weight hypothesis (Maximum A
 ///   Posteriori). Equivalent to `TopK::Best(1)`.
-/// - [`TopK::Best(k)`] – the `k` hypotheses with the highest weights,
+/// - [`TopK::Best`]`(k)` – the `k` hypotheses with the highest weights,
 ///   renormalized to sum to 1.
-/// - [`TopK::WeightThreshold(theta)`] – retains the minimal set of hypotheses
+/// - [`TopK::WeightThreshold`]`(theta)` – retains the minimal set of hypotheses
 ///   (sorted by descending weight) whose cumulative weight reaches `theta`.
 ///   For example, `WeightThreshold(0.99)` discards all hypotheses beyond the
 ///   99 % credible set, eliminating low-weight spatial outliers that would

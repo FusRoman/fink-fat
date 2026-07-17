@@ -106,7 +106,7 @@ impl<'state_lf, 'bank_config> Branch<'state_lf, 'bank_config> {
     ///
     /// # Arguments
     /// * `bank` – Bank built by
-    ///   [`build_kf_bank_collection`](crate::topocentric_kf::bank_collection::build_kf_bank_collection).
+    ///   [`build_kf_bank_collection`](crate::topocentric_kf::kalman_bank::from_seeds::build_kf_bank_collection).
     /// * `lineage_id`, `branch_id` – Identity assigned by the caller (see the
     ///   per-night orchestrator's monotonic id counters).
     pub fn seed(bank: KFBank<'state_lf, 'bank_config>, lineage_id: u64, branch_id: u64) -> Self {

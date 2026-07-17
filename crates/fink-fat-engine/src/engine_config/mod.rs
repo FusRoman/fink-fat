@@ -4,7 +4,7 @@
 //! at [`EngineConfig`]. Loading and validating a configuration file is a
 //! three-stage pipeline:
 //!
-//! 1. **Load / merge** — [`load_engine_config_validated`] builds a
+//! 1. **Load / merge** — [`EngineConfig::load_engine_config_validated`] builds a
 //!    `config::Config` from the YAML file at the given path, overlaid by
 //!    `FINK_FAT__`-prefixed environment variables (nested separator `__`),
 //!    and deserializes the result into [`EngineConfig`]. There is
