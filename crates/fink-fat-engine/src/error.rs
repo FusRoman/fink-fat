@@ -128,7 +128,7 @@ pub enum ObservationJacobianError {
     PolarSingularity { dec: f64 },
 }
 
-/// Errors that can occur during a [`KFState::update`] step.
+/// Errors that can occur during a [`crate::topocentric_kf::single_kalman::KFState::update`] step.
 #[derive(Debug, thiserror::Error)]
 pub enum KFUpdateError {
     /// The topocentric distance $\rho$ is below the numerical threshold.

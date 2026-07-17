@@ -7,22 +7,22 @@
 //! with a grid of [`KFState`] seeds, each weighted by a prior over known
 //! small-body populations.
 //!
-//! Relationship to [`crate::topocentric_kf::init::init_kf_state`]
+//! Relationship to [`crate::topocentric_kf::single_kalman::KFState::init_kf_state`]
 //! ----------------------------------------------------------------
-//! [`init_kf_state`] commits to a *single* range guess, resolved from a
+//! [`KFState::init_kf_state`](crate::topocentric_kf::single_kalman::KFState::init_kf_state) commits to a *single* range guess, resolved from a
 //! Keplerian circular-orbit prior. [`admissible_region_grid`] instead tiles
 //! the *whole* admissible region with many [`KFState`] hypotheses, so that a
-//! [`crate::topocentric_kf::bank::KFBank`] can let the data — rather than a
+//! [`crate::topocentric_kf::kalman_bank::KFBank`] can let the data — rather than a
 //! prior assumption — decide which range is correct.
 //!
 //! Every resulting [`KFState`] is expressed in the same **attributable
 //! coordinates** $(\alpha, \delta, \dot\alpha, \dot\delta, \rho, \dot\rho)$
 //! used everywhere else in `topocentric_kf` (see the module-level
-//! documentation of [`crate::topocentric_kf::KFState`]). The two angular
+//! documentation of [`KFState`]). The two angular
 //! components and their rates come straight from the tracklet and are
 //! identical for every node; only `(ρ, ρ̇)` — and their associated
 //! variances — vary from node to node. This module therefore reuses
-//! [`init`]'s elementary building blocks (tracklet geometry, observer state,
+//! `init_kf_state`'s elementary building blocks (tracklet geometry, observer state,
 //! angular covariance blocks) instead of recomputing them, and only adds the
 //! grid-specific pieces: range tiling, the bound-orbit `ρ̇` interval, and
 //! population weighting.
@@ -247,21 +247,21 @@ fn rho_cell_halfwidth(rho: f64, config: &GridConfig) -> f64 {
 
 /// Build the admissible-region seed grid for one observation pair.
 ///
-/// Arguments mirror [`crate::topocentric_kf::init::init_kf_state`]: the
+/// Arguments mirror [`KFState::init_kf_state`](crate::topocentric_kf::single_kalman::KFState::init_kf_state): the
 /// observation dataset, the pair of observations, and the ephemeris `state`
 /// used to resolve the observer's heliocentric position/velocity. Every
 /// resulting [`KFState`] carries the same `state` reference, so each
 /// hypothesis can later be propagated and updated exactly like a
 /// single-guess [`KFState`].
 ///
-/// Returns `(state, weight)` seeds ready for `KFBank::from_seeds`. Every seed
+/// Returns `(state, weight)` seeds ready for `KFBank::from_grid`. Every seed
 /// is a Sun-bound orbit; hyperbolic `(ρ, ρ̇)` combinations are excluded by
 /// construction.
 ///
 /// # Errors
 ///
 /// Propagates any failure to resolve the observer's heliocentric state (e.g.
-/// an unknown observatory code), exactly like [`init_kf_state`].
+/// an unknown observatory code), exactly like `init_kf_state`.
 pub fn admissible_region_grid<'state_lf>(
     obs_dataset: &ObsDataset,
     first_obs: &Observation,

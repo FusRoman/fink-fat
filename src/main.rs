@@ -58,8 +58,6 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::init_cli::cli_builder;
 
-const STEP_FILENAME: &str = "branch_collection.step";
-
 /// Parse one `--log-target TARGET=LEVEL` argument into `(target, level)`.
 fn parse_log_target_override(arg: &str) -> Result<(String, LogLevel), String> {
     let (target, level) = arg
@@ -154,19 +152,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let kalman_context = engine_config.build_context();
 
     let snapshot_path = engine_config.snapshot_path();
-    let step_path = engine_config.storage_path_buf().join(STEP_FILENAME);
 
-    let (collection, current_step) = if snapshot_path.exists() {
-        let collection = BranchCollection::load_snapshot_from_disk(
-            &snapshot_path,
-            &kalman_context,
-            &engine_config,
-        )?;
-        let step: usize = std::fs::read_to_string(&step_path)?.trim().parse()?;
-        (collection, step)
+    let collection = if snapshot_path.exists() {
+        BranchCollection::load_snapshot_from_disk(&snapshot_path, &kalman_context, &engine_config)?
     } else {
-        (BranchCollection::empty(), 0)
+        BranchCollection::empty()
     };
+    let current_step = collection.current_step;
 
     let night_obs: Vec<&_> = obs_dataset.iter_observations().collect();
 
@@ -180,7 +172,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&new_collection.to_snapshot())?;
     std::fs::write(&snapshot_path, &bytes)?;
-    std::fs::write(&step_path, (current_step + 1).to_string())?;
 
     Ok(())
 }

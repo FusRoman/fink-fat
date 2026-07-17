@@ -118,7 +118,7 @@ pub struct BucketKey {
 /// `members` are sorted by **increasing observation time (`mjd_tt`)**.
 ///
 /// When `Object = &Alert`, this ordering relies on the total ordering
-/// implemented for [`Alert`] (primary key: `mjd_tt`, then deterministic
+/// implemented for [`Observation`] (primary key: `mjd_tt`, then deterministic
 /// tie-breakers).
 #[derive(Clone, Debug)]
 pub struct Bucket<Object> {
@@ -215,7 +215,7 @@ fn bucket_key_for<Bs: SpatialBinner, Bt: TimeBinner>(
 /// Notes
 /// -----
 /// - The index stores `&Alert` references: no alert data is copied.
-/// - Buckets are sorted using the total ordering implemented for [`Alert`].
+/// - Buckets are sorted using the total ordering implemented for [`Observation`].
 /// - If multiple alerts fall into the same `(SpatialKey, TimeBin)`, their
 ///   relative ordering is deterministic.
 ///

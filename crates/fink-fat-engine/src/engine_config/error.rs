@@ -6,11 +6,11 @@
 //!
 //! 1) **Loading / merging** configuration sources (YAML file, environment
 //!    overrides, Rust defaults) using the `config` crate — see
-//!    [`crate::engine_config::load_engine_config_validated`].
+//!    [`crate::engine_config::EngineConfig::load_engine_config_validated`].
 //! 2) **Deserialization** into strongly-typed Rust structs (e.g. `PairConfig`,
 //!    `TripletConfig`, `KFBankConfig`).
 //! 3) **Validation** of numeric ranges and cross-field invariants — see
-//!    [`crate::engine_config::EngineConfig::validate`].
+//!    [`crate::engine_config::Validate::validate`].
 //!
 //! The error in this module is designed to preserve enough context so the
 //! caller can decide whether the failure is:
@@ -188,7 +188,7 @@ pub enum ConfigError {
 
     /// One or more semantic invariants failed post-deserialization.
     ///
-    /// Produced by [`crate::engine_config::EngineConfig::validate`], which
+    /// Produced by [`crate::engine_config::Validate::validate`], which
     /// accumulates every [`FieldError`] found across the whole configuration
     /// tree (schema version, numeric ranges, cross-field consistency, ...)
     /// instead of stopping at the first failure.

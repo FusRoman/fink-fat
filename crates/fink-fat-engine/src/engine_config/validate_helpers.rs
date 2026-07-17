@@ -98,7 +98,7 @@ pub(crate) fn check_lt(
     b: f64,
     hint: &str,
 ) -> Option<FieldError> {
-    if !(a < b) {
+    if !matches!(a.partial_cmp(&b), Some(std::cmp::Ordering::Less)) {
         Some(
             FieldError::new(
                 field_a,

@@ -30,7 +30,7 @@ use crate::{
 ///
 /// $$\hat{\rho}_{ecl} = R_{eq \to ecl}\,\hat{\rho}_{eq}$$
 ///
-/// where $R_{eq \to ecl}$ is [`outfit::ROT_EQUMJ2000_TO_ECLMJ2000`].
+/// where $R_{eq \to ecl}$ is [`outfit::constants::ROT_EQUMJ2000_TO_ECLMJ2000`].
 pub fn unit_los(ra: f64, dec: f64) -> Vector3<f64> {
     let cos_dec = dec.cos();
     let rho_eq = Vector3::new(cos_dec * ra.cos(), cos_dec * ra.sin(), dec.sin());
@@ -52,7 +52,7 @@ pub fn unit_los(ra: f64, dec: f64) -> Vector3<f64> {
 ///
 /// $$\dot{\hat{\rho}}_{ecl} = R_{eq \to ecl}\,\dot{\hat{\rho}}_{eq}$$
 ///
-/// where $R_{eq \to ecl}$ is [`outfit::ROT_EQUMJ2000_TO_ECLMJ2000`].
+/// where $R_{eq \to ecl}$ is [`outfit::constants::ROT_EQUMJ2000_TO_ECLMJ2000`].
 pub fn unit_los_dot(ra: f64, dec: f64, ra_dot: f64, dec_dot: f64) -> Vector3<f64> {
     let cos_dec = dec.cos();
     let sin_dec = dec.sin();

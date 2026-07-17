@@ -59,7 +59,7 @@ impl fmt::Display for BranchId {
 /// * `track_ids` – The seed bank's `track_ids()` (chronological `ObsId`s),
 ///   used to derive the suffix.
 /// * `epoch_mjd_tt` – Epoch (MJD TT) anchoring the seed, used to derive the
-///   `YYYY` prefix (see [`mjd_to_year`]).
+///   `YYYY` prefix (see `mjd_to_year`).
 ///
 /// # Panics
 /// Panics if `track_ids` is empty — a seed bank always has at least the two

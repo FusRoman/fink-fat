@@ -329,9 +329,6 @@ fn lower_bound_gt_time(members: &[&Observation], t0: f64) -> usize {
 /// This stage is intentionally permissive — it is a pre-filter before seed
 /// fitting and later graph construction.
 ///
-/// # See also
-///
-/// - [`extract_pair_features`] — converts valid pairs into [`SeedNode`] objects.
 pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
     bucket_index: &BucketIndex<&'alert_lf Observation>,
     spatial_binner: &Bs,

@@ -9,7 +9,7 @@
 //! "number of observations" has no alternate unit representation.
 //!
 //! The invariants documented per-variant below (e.g. `start ≥ end`) are
-//! enforced by this type's [`Validate`](crate::engine_config::Validate)
+//! enforced by this type's [`Validate`]
 //! implementation.
 
 use serde::{Deserialize, Serialize};
@@ -31,7 +31,7 @@ use crate::engine_config::{
 ///
 /// Every variant has a `start` (cap at observation 0) and an `end` (asymptotic
 /// minimum cap).  The effective cap is always additionally lower-bounded by
-/// [`KFBankConfig::min_hypotheses`].
+/// [`crate::engine_config::kf_bank_config::KFBankConfig::min_hypotheses`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum HypothesisCapSchedule {
     /// Fixed cap: the maximum number of live hypotheses never changes.

@@ -2,14 +2,14 @@
 //!
 //! Business code never calls `tracing::trace!`/`debug!`/`info!` directly.
 //! Instead, each pipeline module defines its own log-event enum — one variant
-//! per distinct message — implementing [`LogTarget`] (via [`impl_log_target`])
+//! per distinct message — implementing [`LogTarget`] (via [`impl_log_target`](crate::impl_log_target))
 //! for the module's tracing `target` name, description and levels, and an
 //! inherent `emit(&self)` method that performs the actual `tracing::` call.
 //!
 //! This keeps the `target`/description/level metadata attached to the type
 //! that defines the event (no risk of a stray, undocumented `target: "..."`
 //! string), and lets [`registry::all_targets`] build the `--list-log-targets`
-//! listing and the [`EnvFilter`](tracing_subscriber::EnvFilter) directive from
+//! listing and the `EnvFilter` (`tracing_subscriber::EnvFilter`) directive from
 //! a single, statically-checked source.
 //!
 //! # Example

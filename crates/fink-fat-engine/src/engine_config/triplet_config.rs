@@ -185,7 +185,7 @@
 //! Errors and validation
 //! -----------------------------------------------------------------------------
 //!
-//! [`TripletConfig`]'s [`Validate`](crate::engine_config::Validate)
+//! [`TripletConfig`]'s [`Validate`]
 //! implementation enforces basic numeric validity — finite values,
 //! non-negative thresholds — for all five numeric fields, plus the
 //! cross-field consistency check `max_predicted_residual ≤ max_pair_sep`,

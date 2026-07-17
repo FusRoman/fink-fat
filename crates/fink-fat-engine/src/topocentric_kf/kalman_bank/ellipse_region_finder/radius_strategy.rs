@@ -11,7 +11,7 @@ pub enum MixOrMax {
     MixtureCovariance,
 }
 
-/// Controls how the bounding radius of a [`SearchRegion`] is computed.
+/// Controls how the bounding radius of a [`SearchRegion`](super::SearchRegion) is computed.
 ///
 /// Variants
 /// --------
@@ -30,11 +30,12 @@ pub enum MixOrMax {
 ///   result to a hard maximum expressed in arcseconds.  Used as a safety net
 ///   when the bank has not yet converged and the mixture covariance can still
 ///   be large.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub enum RadiusStrategy {
     /// Original conservative behaviour.
     MaxEllipse,
     /// Tighter mixture-covariance bound.
+    #[default]
     MixtureCovariance,
     /// Hard clamp applied on top of another strategy.
     Clamped {
@@ -44,12 +45,6 @@ pub enum RadiusStrategy {
         #[serde(deserialize_with = "de_angle_arcsec")]
         max_arcsec: f64,
     },
-}
-
-impl Default for RadiusStrategy {
-    fn default() -> Self {
-        RadiusStrategy::MixtureCovariance
-    }
 }
 
 impl RadiusStrategy {

@@ -267,7 +267,7 @@ where
 /// - String with explicit angle unit, converted to arcseconds:
 ///   - `"30 arcmin"`, `"0.5 deg"`, `"1800 arcsec"`.
 ///
-/// Unlike every other angle field in this module, [`RadiusStrategy::Clamped`]'s
+/// Unlike every other angle field in this module, [`RadiusStrategy::Clamped`](crate::topocentric_kf::kalman_bank::ellipse_region_finder::radius_strategy::RadiusStrategy::Clamped)'s
 /// `max_arcsec` field is deliberately expressed in **arcseconds**, not
 /// radians (see that type's own doc) — this deserializer exists solely for
 /// that one field, so YAML can still use friendly unit strings without

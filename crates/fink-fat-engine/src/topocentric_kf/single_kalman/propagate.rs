@@ -266,7 +266,7 @@ fn build_keplerian_stm(f: f64, g: f64, f_dot: f64, g_dot: f64) -> Matrix6<f64> {
 /// * `dt`       – Propagation interval (days).
 /// * `q0`       – Baseline acceleration noise PSD (AU² day⁻³).
 /// * `dt_ref`   – Reference interval beyond which perturbation scaling
-///               activates (days). Typically 1 day.
+///   activates (days). Typically 1 day.
 ///
 /// Return
 /// ------
@@ -313,7 +313,7 @@ fn build_snc_process_noise(dt: f64, q0: f64, dt_ref: f64) -> Matrix6<f64> {
 /// at `t_prop`.
 ///
 /// The Kalman state stores *apparent* angles `(α, δ)` (the initializer reads
-/// raw ZTF angles verbatim; see [`crate::topocentric_kf::init::init_kf_state`]),
+/// raw ZTF angles verbatim; see [`crate::topocentric_kf::single_kalman::KFState::init_kf_state`]),
 /// so the predicted measurement must also be apparent. To achieve this we:
 ///
 /// 1. propagate the **object** two-body dynamics only up to the emission epoch
@@ -354,7 +354,7 @@ fn build_snc_process_noise(dt: f64, q0: f64, dt_ref: f64) -> Matrix6<f64> {
 /// * `v_obs_new` – Observer heliocentric velocity at `t_prop` (AU/day, ecliptic J2000).
 /// * `q0`        – Baseline acceleration noise PSD (AU² day⁻³).
 /// * `dt_ref`    – Reference interval beyond which perturbation scaling
-///                 activates (days). Typically 1 day.
+///   activates (days). Typically 1 day.
 ///
 /// Return
 /// ------
@@ -506,7 +506,7 @@ pub(crate) fn propagate_to_epoch<'state_lf>(
 /// * `obs`         – Observation whose epoch drives the propagation.
 /// * `q0`       – Baseline acceleration noise PSD (AU² day⁻³).
 /// * `dt_ref`   – Reference interval beyond which perturbation scaling
-///               activates (days). Typically 1 day.
+///   activates (days). Typically 1 day.
 ///
 /// Return
 /// ------

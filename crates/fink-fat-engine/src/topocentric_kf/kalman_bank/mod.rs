@@ -4,7 +4,7 @@
 //! degrees of freedom: the two sky angles and the two angular rates. The
 //! topocentric range `ρ` and range-rate `ρ̇` are **unobservable** and must be
 //! hypothesized. Rather than committing to one (poor) guess, the bank carries
-//! a population of [`KFState`] hypotheses — one per `(ρ, ρ̇)` seed drawn from
+//! a population of [`KFState`](crate::topocentric_kf::single_kalman::KFState) hypotheses — one per `(ρ, ρ̇)` seed drawn from
 //! the admissible region — each with a Bayesian weight.
 //!
 //! As new observations arrive, every hypothesis is propagated and updated;
@@ -27,7 +27,7 @@
 //!
 //! Early in the arc many hypotheses are needed to cover the `(ρ, ρ̇)` ambiguity.
 //! As more observations constrain the orbit, the bank can be pruned more
-//! aggressively. [`HypothesisCapSchedule`] makes this decay explicit and tunable
+//! aggressively. [`HypothesisCapSchedule`](crate::engine_config::hypothesis_cap::HypothesisCapSchedule) makes this decay explicit and tunable
 //! via linear, logarithmic, or exponential schedules, rather than relying on the
 //! implicit weight-collapse dynamics alone.
 //!
@@ -48,12 +48,12 @@
 //!
 //! # Integration point
 //!
-//! [`KFBank::from_seeds`] takes pre-built `(KFState, weight)` pairs produced by
+//! [`KFBank::from_grid`] takes pre-built `(KFState, weight)` pairs produced by
 //! the admissible-region grid generator:
 //!
 //! ```ignore
 //! let seeds = admissible_region_grid(obs_dataset, obs1, obs2, &ctx, &grid_cfg)?;
-//! let mut bank = KFBank::from_seeds(seeds, KFBankConfig::default());
+//! let mut bank = KFBank::from_grid(seeds, KFBankConfig::default());
 //! for obs in observations {
 //!     let report = bank.step(obs_dataset, obs);
 //!     if report.collapsed { break; }
@@ -63,13 +63,14 @@
 //!
 //! # Lifetime
 //!
-//! [`KFBank`] and [`Hypothesis`] share the `'state_lf` lifetime of [`KFState`]:
+//! [`KFBank`] and [`Hypothesis`] share the `'state_lf` lifetime of [`KFState`](crate::topocentric_kf::single_kalman::KFState):
 //! every hypothesis borrows the same ephemeris context that was used to build its
 //! seed.
 
 pub mod ellipse_region_finder;
 pub mod from_seeds;
 pub mod hypothesis;
+pub mod logging;
 pub mod seed_grid;
 
 use std::collections::VecDeque;
@@ -80,6 +81,7 @@ use photom::observation_dataset::{ObsDataset, ObsId, observation::Observation};
 
 use nalgebra::{Matrix2, Vector2, Vector3, Vector6};
 
+use crate::topocentric_kf::kalman_bank::logging::BankEvent;
 use crate::{
     engine_config::{
         grid_population::GridConfig, kalman_context::KalmanContext, kf_bank_config::KFBankConfig,
@@ -96,221 +98,6 @@ use crate::{
         },
     },
 };
-
-use crate::logging::LogTarget;
-
-/// Structured log events for the hypothesis-bank predict/score/update/
-/// prune/merge cycle (both bank-level, `kalman_bank/mod.rs`, and
-/// hypothesis-level, `hypothesis.rs`). See [`crate::logging`] for the
-/// `.emit()` pattern.
-pub enum BankEvent {
-    StepStart {
-        n_hypotheses: usize,
-    },
-    PredictUpdateComplete {
-        n_survivors: usize,
-        n_gated: usize,
-        n_failed: usize,
-    },
-    HypothesisPropagated {
-        hyp_id: u64,
-    },
-    HypothesisPropagationFailed {
-        hyp_id: u64,
-        error: String,
-    },
-    GateRejectedNonFinite {
-        hyp_id: u64,
-    },
-    GateExemptProtected {
-        hyp_id: u64,
-        d2: f64,
-        gate_chi2: f64,
-    },
-    GateRejected {
-        hyp_id: u64,
-        d2: f64,
-        gate_chi2: f64,
-    },
-    GateOk {
-        hyp_id: u64,
-        d2: f64,
-    },
-    InnovationFailed {
-        hyp_id: u64,
-        error: String,
-    },
-    InnovationCovarianceNotInvertible {
-        hyp_id: u64,
-    },
-    LikelihoodSingular {
-        hyp_id: u64,
-    },
-    LikelihoodScored {
-        hyp_id: u64,
-        log_lik: f64,
-    },
-    MeasurementUpdateFailed {
-        hyp_id: u64,
-        error: String,
-    },
-    MeasurementUpdateOk {
-        hyp_id: u64,
-    },
-    PredictionFailed {
-        hyp_id: u64,
-        error: String,
-    },
-    PruningPhase {
-        phase: &'static str,
-        n_before: usize,
-        n_after: usize,
-    },
-    SmoothedPruningSkipped,
-    SmoothedPruning {
-        n_removed: usize,
-        log_threshold: f64,
-        best_smoothed: f64,
-        window: usize,
-        min_kept: usize,
-    },
-    WeightFloorPruning {
-        n_removed: usize,
-        weight_floor: f64,
-        min_kept: usize,
-    },
-    ScheduledCapTruncation {
-        n_truncated: usize,
-        effective_cap: usize,
-        raw_cap: usize,
-        n_steps: usize,
-    },
-    ModesMerged {
-        hyp_id_kept: u64,
-        hyp_id_merged: u64,
-        threshold_au: f64,
-    },
-}
-
-crate::impl_log_target!(
-    BankEvent,
-    "bank",
-    "Hypothesis-bank predict/score/update/prune/merge cycle for a single tracklet",
-    [tracing::Level::TRACE]
-);
-
-impl BankEvent {
-    pub fn emit(&self) {
-        use BankEvent::*;
-        match self {
-            StepStart { n_hypotheses } => tracing::trace!(
-                target: BankEvent::TARGET, n_hypotheses, "Starting predict/update/score cycle"
-            ),
-            PredictUpdateComplete {
-                n_survivors,
-                n_gated,
-                n_failed,
-            } => tracing::trace!(
-                target: BankEvent::TARGET, n_survivors, n_gated, n_failed,
-                "Predict/score cycle complete — starting cleanup"
-            ),
-            HypothesisPropagated { hyp_id } => tracing::trace!(
-                target: BankEvent::TARGET, hyp_id, "Propagation OK"
-            ),
-            HypothesisPropagationFailed { hyp_id, error } => tracing::trace!(
-                target: BankEvent::TARGET, hyp_id, error, "Propagation FAILED"
-            ),
-            GateRejectedNonFinite { hyp_id } => tracing::trace!(
-                target: BankEvent::TARGET, hyp_id, "Gate REJECTED: non-finite Mahalanobis²"
-            ),
-            GateExemptProtected {
-                hyp_id,
-                d2,
-                gate_chi2,
-            } => tracing::trace!(
-                target: BankEvent::TARGET, hyp_id, d2, gate_chi2,
-                "Protected hypothesis EXEMPT from chi² gate — high Mahalanobis² recorded but hypothesis preserved"
-            ),
-            GateRejected {
-                hyp_id,
-                d2,
-                gate_chi2,
-            } => tracing::trace!(
-                target: BankEvent::TARGET, hyp_id, d2, gate_chi2, "Gate REJECTED: Mahalanobis² exceeds threshold"
-            ),
-            GateOk { hyp_id, d2 } => {
-                tracing::trace!(target: BankEvent::TARGET, hyp_id, d2, "Gate OK")
-            }
-            InnovationFailed { hyp_id, error } => tracing::trace!(
-                target: BankEvent::TARGET, hyp_id, error, "Innovation FAILED"
-            ),
-            InnovationCovarianceNotInvertible { hyp_id } => tracing::trace!(
-                target: BankEvent::TARGET, hyp_id, "Innovation covariance not invertible"
-            ),
-            LikelihoodSingular { hyp_id } => tracing::trace!(
-                target: BankEvent::TARGET, hyp_id, "Innovation covariance singular (det ≤ 0)"
-            ),
-            LikelihoodScored { hyp_id, log_lik } => tracing::trace!(
-                target: BankEvent::TARGET, hyp_id, log_lik, "Likelihood scored"
-            ),
-            MeasurementUpdateFailed { hyp_id, error } => tracing::trace!(
-                target: BankEvent::TARGET, hyp_id, error, "Measurement update FAILED"
-            ),
-            MeasurementUpdateOk { hyp_id } => tracing::trace!(
-                target: BankEvent::TARGET, hyp_id, "Measurement update OK"
-            ),
-            PredictionFailed { hyp_id, error } => tracing::trace!(
-                target: BankEvent::TARGET, hyp_id, error, "Hypothesis prediction failed, dropping"
-            ),
-            PruningPhase {
-                phase,
-                n_before,
-                n_after,
-            } => tracing::trace!(
-                target: BankEvent::TARGET, phase, n_before, n_after, "Post-step cleanup phase"
-            ),
-            SmoothedPruningSkipped => tracing::trace!(
-                target: BankEvent::TARGET, "Smoothed pruning skipped: window not yet populated"
-            ),
-            SmoothedPruning {
-                n_removed,
-                log_threshold,
-                best_smoothed,
-                window,
-                min_kept,
-            } => tracing::trace!(
-                target: BankEvent::TARGET, n_removed, log_threshold, best_smoothed, window, min_kept,
-                "Smoothed-score pruning"
-            ),
-            WeightFloorPruning {
-                n_removed,
-                weight_floor,
-                min_kept,
-            } => tracing::trace!(
-                target: BankEvent::TARGET, n_removed, weight_floor, min_kept, "Weight-floor pruning"
-            ),
-            ScheduledCapTruncation {
-                n_truncated,
-                effective_cap,
-                raw_cap,
-                n_steps,
-            } => tracing::trace!(
-                target: BankEvent::TARGET, n_truncated, effective_cap, raw_cap, n_steps, "Scheduled cap truncation"
-            ),
-            ModesMerged {
-                hyp_id_kept,
-                hyp_id_merged,
-                threshold_au,
-            } => tracing::trace!(
-                target: BankEvent::TARGET, hyp_id_kept, hyp_id_merged, threshold_au, "Merging spatially coincident modes"
-            ),
-        }
-    }
-
-    pub fn span(epoch: f64, n_hypotheses: usize) -> tracing::Span {
-        tracing::trace_span!(target: BankEvent::TARGET, "kf_bank_step", epoch, n_hypotheses)
-    }
-}
 
 // ── Per-step diagnostics ──────────────────────────────────────────────────────
 
@@ -342,7 +129,7 @@ pub struct BankStep {
 
 // ── Bank ──────────────────────────────────────────────────────────────────────
 
-/// A bank of weighted [`KFState`] hypotheses tracking a single object under
+/// A bank of weighted [`KFState`](crate::topocentric_kf::single_kalman::KFState) hypotheses tracking a single object under
 /// range / range-rate ambiguity.
 ///
 /// `Clone` is implemented manually (see below) rather than derived, because
@@ -382,7 +169,7 @@ pub struct KFBank<'state_lf, 'bank_config> {
 
     /// Number of `step()` calls completed so far.
     ///
-    /// Drives the [`HypothesisCapSchedule`] decay: cap = schedule.cap(n_steps).
+    /// Drives the [`HypothesisCapSchedule`](crate::engine_config::hypothesis_cap::HypothesisCapSchedule) decay: cap = schedule.cap(n_steps).
     n_steps: usize,
     /// Ids of every observation associated to this bank so far, in order.
     ///
@@ -406,7 +193,7 @@ pub struct KFBank<'state_lf, 'bank_config> {
 ///
 /// `best_index_cache` is deliberately absent: it is a memoization cache
 /// (`usize::MAX` = "not computed"), always reset to that sentinel by
-/// [`KFBank::with_hypotheses`] — the same constructor
+/// `KFBank::with_hypotheses` — the same constructor
 /// [`KFBank::from_snapshot`] goes through — so it comes back correct by
 /// construction. `config` is likewise absent: it borrows the (not
 /// serializable, caller-owned) [`KFBankConfig`], re-supplied by the caller
@@ -439,7 +226,7 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
 
     /// Reattach `shared_ctx`/`config` (supplied by the caller, who already
     /// holds the live [`KalmanContext`]/[`KFBankConfig`]) to rebuild a full
-    /// [`KFBank`]. Goes through [`Self::with_hypotheses`], so
+    /// [`KFBank`]. Goes through `Self::with_hypotheses`, so
     /// `best_index_cache` comes back correctly reset.
     pub fn from_snapshot(
         snapshot: KFBankSnapshot,
@@ -564,6 +351,11 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
     /// Number of live hypotheses.
     pub fn len(&self) -> usize {
         self.hypotheses.len()
+    }
+
+    /// Whether this bank holds no live hypotheses.
+    pub fn is_empty(&self) -> bool {
+        self.hypotheses.is_empty()
     }
 
     /// Ids of every observation associated to this bank so far, in
@@ -779,7 +571,7 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
             .into_iter()
             .map(|hyp| {
                 let is_protected = protected_ids.contains(&hyp.id);
-                hyp.finalize_score_and_update(&self.config, obs, is_protected)
+                hyp.finalize_score_and_update(self.config, obs, is_protected)
             })
             .collect();
 
@@ -794,7 +586,7 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
         let survivors = results
             .into_iter()
             .filter_map(|r| match r {
-                HypothesisStepResult::Survived(h) => Some(h),
+                HypothesisStepResult::Survived(h) => Some(*h),
                 _ => None,
             })
             .collect();
@@ -885,8 +677,8 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
     ///
     /// `self` must already be at `obs`'s epoch: this method does **not**
     /// re-propagate, it only gates/scores/updates (see
-    /// [`Self::score_and_update_hypotheses`]) and runs the usual intra-bank
-    /// cleanup (prune → cap → merge, see [`Self::post_step_cleanup`]).
+    /// `Self::score_and_update_hypotheses`) and runs the usual intra-bank
+    /// cleanup (prune → cap → merge, see `Self::post_step_cleanup`).
     ///
     /// # Arguments
     /// * `obs` – Candidate observation to associate with this branch.

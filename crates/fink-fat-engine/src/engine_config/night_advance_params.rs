@@ -1,12 +1,14 @@
 //! # Night-advance tuning configuration (`NightAdvanceParams`)
 //!
 //! This module defines [`NightAdvanceParams`], the tuning knobs consumed by
-//! [`advance_bank_collection_one_night`] every time a night's worth of new
-//! visits is folded into a collection of tracklet hypothesis banks.
+//! [`crate::topocentric_kf::branching::orchestrate::advance_bank_collection_one_night`]
+//! every time a night's worth of new visits is folded into a collection of
+//! tracklet hypothesis banks.
 //!
 //! The fields are grouped, and documented below, in the order the pipeline
 //! consumes them for a single night:
-//! 1. Group raw alerts into [`Visit`]s (`visit_epoch_tolerance_days`).
+//! 1. Group raw alerts into [`crate::topocentric_kf::branching::visit::Visit`]s
+//!    (`visit_epoch_tolerance_days`).
 //! 2. Cheaply pre-filter which lineages are even worth propagating this
 //!    visit (`quick_reject_radius_rad`).
 //! 3. Build a search region for surviving lineages and look up candidate
@@ -24,7 +26,7 @@
 //!
 //! The numeric-range expectations documented on each field (e.g.
 //! `completeness_width_mag > 0`, `branch_cap ≥ 1`) are enforced by this
-//! type's [`Validate`](crate::engine_config::Validate) implementation.
+//! type's [`Validate`] implementation.
 
 use serde::{Deserialize, Serialize};
 
@@ -40,7 +42,7 @@ use crate::topocentric_kf::kalman_bank::ellipse_region_finder::{
 };
 
 /// Tuning parameters shared by every lineage advanced in one call to
-/// [`advance_bank_collection_one_night`] — everything except the branches
+/// [`crate::topocentric_kf::branching::orchestrate::advance_bank_collection_one_night`] — everything except the branches
 /// being advanced and the current step index, which are the function's
 /// primary inputs rather than tuning knobs.
 ///
@@ -51,7 +53,8 @@ use crate::topocentric_kf::kalman_bank::ellipse_region_finder::{
 #[serde(default, deny_unknown_fields)]
 pub struct NightAdvanceParams {
     /// Maximum epoch spread for two observations to be folded into the same
-    /// [`Visit`] (see [`group_observations_into_visits`]).
+    /// [`crate::topocentric_kf::branching::visit::Visit`] (see
+    /// [`crate::topocentric_kf::branching::visit::group_observations_into_visits`]).
     ///
     /// Units
     /// -----
@@ -113,7 +116,7 @@ pub struct NightAdvanceParams {
 
     /// **A priori** diagonal astrometric noise `[σ_RA², σ_Dec²]`, added to
     /// each hypothesis's predicted sky covariance solely to size the search
-    /// region in [`KFBank::predict_search_region`].
+    /// region in [`crate::topocentric_kf::kalman_bank::KFBank::predict_search_region`].
     ///
     /// Units
     /// -----
@@ -149,7 +152,7 @@ pub struct NightAdvanceParams {
     /// typical astrometric precision stands in instead (e.g. `σ ≈ 0.1"` →
     /// `σ_rad ≈ 4.85e-7`, so `σ² ≈ 2.35e-13`). Once candidates are actually
     /// found, every real scoring/update step downstream —
-    /// [`KFBank::branch_with`]'s mixture-likelihood scoring and the Kalman
+    /// [`crate::topocentric_kf::kalman_bank::KFBank::branch_with`]'s mixture-likelihood scoring and the Kalman
     /// update itself — ignores this field entirely and instead uses the
     /// candidate observation's *own* `ra_error`/`dec_error` (via
     /// `Observation::equ_coord`), which is always the more accurate value
@@ -164,7 +167,7 @@ pub struct NightAdvanceParams {
     /// Which of a bank's live hypotheses contribute to its predicted
     /// search region this visit — see [`TopK`] for the available policies
     /// (`All`, `Map`, `Best(k)`, `WeightThreshold`). Passed straight
-    /// through to [`KFBank::predict_search_region`].
+    /// through to [`crate::topocentric_kf::kalman_bank::KFBank::predict_search_region`].
     ///
     /// No dedicated `units.rs` parser applies here: `TopK` is a plain enum
     /// defined outside `engine_config` (in `topocentric_kf`), deserialized
@@ -174,7 +177,7 @@ pub struct NightAdvanceParams {
     /// How the search region's bounding radius is computed from the
     /// selected hypotheses' covariances — see [`RadiusStrategy`]
     /// (`MixtureCovariance` vs. `MaxEllipse`). Passed straight through to
-    /// [`KFBank::predict_search_region`].
+    /// [`crate::topocentric_kf::kalman_bank::KFBank::predict_search_region`].
     ///
     /// No dedicated `units.rs` parser applies here either, for the same
     /// reason as `top_k`; note that `RadiusStrategy::Clamped`'s own
@@ -187,14 +190,14 @@ pub struct NightAdvanceParams {
     /// [`SearchRegion::mixture_likelihood`](crate::topocentric_kf::kalman_bank::ellipse_region_finder::SearchRegion::mixture_likelihood))
     /// a candidate observation must reach, *after* passing the coarse
     /// per-component Mahalanobis gate, to be kept by
-    /// [`find_candidates_for_bank`]. A second-stage cut on top of the gate:
+    /// [`crate::topocentric_kf::branching::candidate_search::find_candidates_for_bank`]. A second-stage cut on top of the gate:
     /// the gate says "geometrically plausible," this says "and not
     /// negligibly unlikely." Must be `≥ 0.0`; `0.0` disables this stage
     /// (keep everything the gate accepts).
     pub likelihood_threshold: f64,
 
     /// Top-B cap: maximum number of branches kept **per lineage**, applied
-    /// via [`cap_top_b_per_lineage`] after *every visit* — not just once
+    /// via [`crate::topocentric_kf::branching::pruning::cap_top_b_per_lineage`] after *every visit* — not just once
     /// per night, since branch counts multiply at every branching event
     /// (M candidates + 1 null branch) and would explode across a night's
     /// worth of visits otherwise.
@@ -205,8 +208,8 @@ pub struct NightAdvanceParams {
     pub branch_cap: usize,
 
     /// N-scan pruning window, in **nights** (not visits — see
-    /// [`apply_n_scan_pruning`]), applied exactly once per call to
-    /// [`advance_bank_collection_one_night`], after every visit that night
+    /// [`crate::topocentric_kf::branching::pruning::apply_n_scan_pruning`]), applied exactly once per call to
+    /// [`crate::topocentric_kf::branching::orchestrate::advance_bank_collection_one_night`], after every visit that night
     /// has been folded in. For every branch-tree node this many nights old,
     /// only the single best-scoring descendant survives; siblings are
     /// discarded.
@@ -221,7 +224,7 @@ pub struct NightAdvanceParams {
 
     /// Survey/field limiting magnitude for this night, used as the midpoint
     /// of the null branch's detection-probability curve — see
-    /// [`detection_probability`].
+    /// [`crate::topocentric_kf::branching::detection_probability::detection_probability`].
     ///
     /// Units: magnitudes (no `units.rs` parser — a single, unambiguous
     /// photometric scale, unlike angles/time which have many common units).
@@ -231,7 +234,7 @@ pub struct NightAdvanceParams {
     pub limiting_magnitude: f64,
 
     /// Completeness roll-off width of the survey's detection curve around
-    /// `limiting_magnitude` — see [`detection_probability`]. Real surveys
+    /// `limiting_magnitude` — see [`crate::topocentric_kf::branching::detection_probability::detection_probability`]. Real surveys
     /// don't have a hard cutoff magnitude; detection probability decays
     /// smoothly over roughly this many magnitudes on either side of
     /// `limiting_magnitude`.

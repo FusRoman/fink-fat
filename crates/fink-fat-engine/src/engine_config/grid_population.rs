@@ -1,7 +1,7 @@
 //! # Admissible-region seeding grid configuration (`GridConfig`, `Population`)
 //!
 //! This module defines the configuration for the **`(ρ, ρ̇)` admissible-region
-//! grid** built by [`admissible_region_grid`], the topocentric-range/range-rate
+//! grid** built by [`admissible_region_grid`](crate::topocentric_kf::kalman_bank::seed_grid::admissible_region_grid), the topocentric-range/range-rate
 //! sampling used to seed Kalman hypotheses for a new tracklet before any
 //! heliocentric orbit is known.
 //!
@@ -242,7 +242,7 @@ pub fn default_populations() -> Vec<Population> {
     ]
 }
 
-/// Configuration for [`admissible_region_grid`].
+/// Configuration for [`admissible_region_grid`](crate::topocentric_kf::kalman_bank::seed_grid::admissible_region_grid).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GridConfig {

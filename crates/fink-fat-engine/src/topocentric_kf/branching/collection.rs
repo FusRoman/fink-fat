@@ -57,13 +57,17 @@ pub struct BranchCollection<'state_lf, 'bank_config> {
     /// Empty before the first `advance_one_night` call and on nights where
     /// `self` started empty (nothing to advance/prune).
     pub last_night_consumed_then_pruned_ids: HashSet<ObsId>,
+    /// Night index this collection was last advanced to — the `current_step`
+    /// a caller should pass into the next [`Self::advance_one_night`] call.
+    /// `0` for a fresh/empty collection.
+    pub current_step: usize,
 }
 
 /// Owned, borrow-free snapshot of a [`BranchCollection`], for persisting the
 /// pipeline's state to disk at the end of a night and reloading it at the
 /// start of the next one (see [`BranchCollection::to_snapshot`]).
 ///
-/// Neither the live [`KalmanContext`](crate::engine_config::kalman_context::KalmanContext)
+/// Neither the live [`KalmanContext`]
 /// nor the [`EngineConfig`] are part of the snapshot: both are cheap for the
 /// caller to hold onto (or rebuild) across a process restart, and are
 /// re-supplied to [`BranchCollection::from_snapshot`].
@@ -71,6 +75,7 @@ pub struct BranchCollection<'state_lf, 'bank_config> {
 pub struct BranchCollectionSnapshot {
     pub branches: Vec<BranchSnapshot>,
     pub last_night_consumed_then_pruned_ids: HashSet<ObsId>,
+    pub current_step: usize,
 }
 
 use crate::logging::LogTarget;
@@ -140,6 +145,7 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
         BranchCollectionSnapshot {
             branches: self.branches.iter().map(Branch::to_snapshot).collect(),
             last_night_consumed_then_pruned_ids: self.last_night_consumed_then_pruned_ids.clone(),
+            current_step: self.current_step,
         }
     }
 
@@ -159,6 +165,7 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
                 .map(|b| Branch::from_snapshot(b, kalman_context, &engine_config.kfbank_config))
                 .collect(),
             last_night_consumed_then_pruned_ids: snapshot.last_night_consumed_then_pruned_ids,
+            current_step: snapshot.current_step,
         }
     }
 
@@ -181,6 +188,7 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
         BranchCollection {
             branches: Vec::new(),
             last_night_consumed_then_pruned_ids: HashSet::new(),
+            current_step: 0,
         }
     }
 
@@ -208,15 +216,15 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
     /// * `obs_dataset`, `kalman_context` – Shared ephemeris/observation
     ///   context, threaded through to both phases.
     /// * `advance_params` – MHT branching/pruning tuning for the update
-    ///   phase (see [`NightAdvanceParams`]).
+    ///   phase (see [`crate::engine_config::night_advance_params::NightAdvanceParams`]).
     /// * `discovery_params` – Pairing/seeding tuning for the discovery phase
-    ///   (see [`BankBuildParams`]).
+    ///   (see `BankBuildParams`).
     /// * `current_step` – Current night index, for N-scan bookkeeping.
     ///
     /// # Returns
     /// The next `BranchCollection`, or `Err` if the discovery phase's
     /// underlying bank-building fails (see
-    /// [`build_kf_bank_collection_from_observations`](crate::topocentric_kf::bank_collection::build_kf_bank_collection_from_observations)).
+    /// [`build_kf_bank_collection_from_observations`](crate::topocentric_kf::kalman_bank::from_seeds::build_kf_bank_collection_from_observations)).
     pub fn advance_one_night(
         &self,
         night_obs: &[&Observation],
@@ -312,6 +320,7 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
         Ok(Self {
             branches,
             last_night_consumed_then_pruned_ids: consumed_then_pruned_ids,
+            current_step: current_step + 1,
         })
     }
 }

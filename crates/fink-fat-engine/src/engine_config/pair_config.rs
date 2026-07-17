@@ -155,7 +155,7 @@
 //! Errors and validation
 //! -----------------------------------------------------------------------------
 //!
-//! [`PairConfig`]'s [`Validate`](crate::engine_config::Validate) implementation
+//! [`PairConfig`]'s [`Validate`] implementation
 //! enforces basic numeric validity — finite values, non-negative constraints
 //! — for `max_dt`, `max_angular_speed`, `max_mag_difference` and
 //! `acc_prior_var`, accumulating every failing field into a

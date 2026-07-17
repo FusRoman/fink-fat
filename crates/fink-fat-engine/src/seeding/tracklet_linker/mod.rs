@@ -16,11 +16,11 @@
 //!
 //! Observations are processed in time order. A pool of active tracks is
 //! maintained, each holding an incremental linear `(ra, dec)` vs. time fit
-//! ([`track_fit::TrackFit`]). For every new observation, the best-matching
-//! nearby active track is found ([`evaluate_candidate`]) and extended; if
+//! (`track_fit::TrackFit`). For every new observation, the best-matching
+//! nearby active track is found (`evaluate_candidate`) and extended; if
 //! none matches, a new single-observation track is started. Candidate
 //! lookup is restricted to tracks in the observation's own sky neighborhood
-//! ([`active_tracks::ActiveTracks`]), keeping each step close to `O(1)`
+//! (`active_tracks::ActiveTracks`), keeping each step close to `O(1)`
 //! amortized rather than scanning every active track.
 //!
 //! Two different gates apply depending on how much history a candidate
@@ -32,7 +32,7 @@
 //! - **Fit established (≥2 observations)**: gates on the angular distance
 //!   between the observation and the track's own linear extrapolation,
 //!   normalized by a statistically-derived tolerance (see
-//!   [`track_fit::TrackFit::prediction_variance`]) rather than the generic
+//!   `track_fit::TrackFit::prediction_variance`) rather than the generic
 //!   population-wide speed cone — this is what lets a dense-revisit object
 //!   collapse to one track instead of many redundant pairs, without also
 //!   bridging together two different nearby objects.

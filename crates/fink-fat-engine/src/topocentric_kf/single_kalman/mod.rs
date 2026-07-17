@@ -158,7 +158,7 @@ pub struct KFState<'state_lf> {
     /// past update steps.
     ///
     /// Drives the adaptive covariance inflation applied during propagation
-    /// (see [`crate::topocentric_kf::propagate`]). Under a consistent filter
+    /// (see [`crate::topocentric_kf::single_kalman::propagate`]). Under a consistent filter
     /// the per-step NIS follows a $\chi^2(2)$ law (expected value 2); a
     /// persistently large smoothed value signals an over-confident covariance
     /// that pure two-body process noise fails to keep open, and triggers
@@ -255,7 +255,7 @@ impl<'state_lf> KFState<'state_lf> {
     ///
     /// Implements the HelioLinC-inspired initialization strategy: the unknown
     /// topocentric range $\rho$ is resolved from a prior on the heliocentric
-    /// distance $r = 1/\gamma$ via [`topocentric_range`], and the radial velocity
+    /// distance $r = 1/\gamma$ via [`crate::topocentric_kf::single_kalman::init::topocentric_range`], and the radial velocity
     /// $\dot{\rho}$ is set to zero (no radial motion prior).
     ///
     /// The state is expressed in the **heliocentric ecliptic mean J2000** frame.
@@ -266,15 +266,15 @@ impl<'state_lf> KFState<'state_lf> {
     ///    `mid_point` and `mid_speed`.
     /// 2. Resolve $\rho$ from the Al-Kashi equation given $\gamma$.
     /// 3. Estimate $\sigma_\gamma$ from angular rate errors and the distance
-    ///    range $[r_{min}, r_{max}]$ via [`estimate_sigma_gamma`].
-    /// 4. Derive covariance scale factors via [`estimate_init_sigmas`].
+    ///    range $[r_{min}, r_{max}]$ via [`crate::topocentric_kf::single_kalman::init::estimate_sigma_gamma`].
+    /// 4. Derive covariance scale factors via [`crate::topocentric_kf::single_kalman::init::estimate_init_sigmas`].
     /// 5. Assemble heliocentric state:
     ///
     /// $$\mathbf{r} = \mathbf{r}_{obs} + \rho\,\hat{\rho}$$
     ///
     /// $$\mathbf{v} = \mathbf{v}_{obs} + \rho\,\dot{\hat{\rho}}$$
     ///
-    /// 6. Build $P_0$ via [`initial_covariance`].
+    /// 6. Build $P_0$ via [`crate::topocentric_kf::single_kalman::init::initial_covariance`].
     ///
     /// Arguments
     /// ---------
@@ -284,7 +284,7 @@ impl<'state_lf> KFState<'state_lf> {
     /// * `v_obs` – Heliocentric velocity of the observer at $t_{mid}$ (AU/day).
     /// * `t_mid` – Reference epoch (MJD TT).
     /// * `n_sigma` – Number of $\sigma_\omega$ used to derive the distance bounds
-    ///   $[r_{min}, r_{max}]$ via [`estimate_r_bounds`]. A value of `3.0` is
+    ///   $[r_{min}, r_{max}]$ via [`crate::topocentric_kf::single_kalman::init::estimate_r_bounds`]. A value of `3.0` is
     ///   recommended for conservative initialization.
     ///
     /// Return
@@ -347,7 +347,7 @@ impl<'state_lf> KFState<'state_lf> {
     /// two-body formulation.
     ///
     /// The position and velocity are extracted from the state vector `x`,
-    /// propagated via [`propagate_universal`], and repacked into a new [`KFState`].
+    /// propagated via the universal-variable two-body propagator, and repacked into a new [`KFState`].
     /// The covariance matrix is propagated using the analytic State Transition
     /// Matrix (STM) derived from the Lagrange coefficients.
     ///
@@ -393,10 +393,10 @@ impl<'state_lf> KFState<'state_lf> {
     /// observation.
     ///
     /// This is the read-only prediction primitive, intended for generating a
-    /// [`SearchRegion`](crate::topocentric_kf::bank::SearchRegion) at a future
+    /// [`SearchRegion`](crate::topocentric_kf::kalman_bank::ellipse_region_finder::SearchRegion) at a future
     /// epoch before any observation is available. The observer heliocentric
     /// state at `t_prop` must be supplied by the caller (typically resolved
-    /// from [`EphemState::helio_observer_state`]).
+    /// from [`crate::topocentric_kf::observer_state::EphemState::helio_observer_state`]).
     ///
     /// Unlike [`KFState::propagate`], this method does **not** require an
     /// [`Observation`] and does **not** modify the bank — it returns a new
@@ -434,7 +434,7 @@ impl<'state_lf> KFState<'state_lf> {
     ///
     /// In attributable coordinates the observation function $h(\mathbf{x}) =
     /// (\alpha, \delta)$ is **linear and exact** — it is simply a selection of
-    /// the first two state components (see [`observation_jacobian`]). The
+    /// the first two state components (see `observation_jacobian`). The
     /// update therefore reduces to the standard (non-extended) Kalman filter
     /// equations:
     ///
@@ -479,7 +479,7 @@ impl<'state_lf> KFState<'state_lf> {
     ///
     /// * `new_obs`  – The new astrometric observation.
     /// * `r_obs`    – Unused by the attributable observation model; kept only
-    ///   for interface compatibility with [`observation_jacobian`].
+    ///   for interface compatibility with `observation_jacobian`.
     ///
     /// # Returns
     ///
@@ -504,7 +504,7 @@ impl<'state_lf> KFState<'state_lf> {
     ///
     /// $$\Sigma_{sky} = H P H^\top, \qquad H = \begin{pmatrix} 1 & 0 & 0 & 0 & 0 & 0 \\ 0 & 1 & 0 & 0 & 0 & 0 \end{pmatrix}$$
     ///
-    /// (see [`observation_jacobian`]), which reduces to simply reading off the
+    /// (see `observation_jacobian`), which reduces to simply reading off the
     /// $(\alpha, \alpha)$ and $(\delta, \delta)$ entries of $P$.
     ///
     /// The resulting 1-σ errors are:
@@ -515,12 +515,12 @@ impl<'state_lf> KFState<'state_lf> {
     /// Arguments
     /// ---------
     /// * `r_obs` – Unused by the attributable observation model; kept only for
-    ///   interface compatibility with [`observation_jacobian`].
+    ///   interface compatibility with `observation_jacobian`.
     ///
     /// Returns
     /// -------
     /// * `Ok(EquCoord)` – Sky position with propagated 1-σ uncertainties, in radians.
-    /// * `Err(ObservationJacobianError)` – Propagated from [`observation_jacobian`];
+    /// * `Err(ObservationJacobianError)` – Propagated from `observation_jacobian`;
     ///   in practice always `Ok` for the current (constant) Jacobian.
     pub fn to_equ_coord(&self) -> Result<EquCoord, ObservationJacobianError> {
         // RA/Dec are directly the first two attributable state components.
