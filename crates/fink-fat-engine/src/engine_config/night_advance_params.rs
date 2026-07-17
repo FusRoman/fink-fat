@@ -18,7 +18,9 @@
 //!    night (`branch_cap`, `n_scan`).
 //! 5. Score the null-detection hypothesis for lineages predicted bright
 //!    enough to have been seen (`limiting_magnitude`,
-//!    `completeness_width_mag`).
+//!    `completeness_width_mag`), and score each real candidate's
+//!    photometric plausibility against the bank's magnitude history
+//!    (`photometric_sigma_mag`).
 //!
 //! This configuration is `serde`-deserializable (YAML) and uses the
 //! project-level unit parsers from [`crate::engine_config::units`] for its
@@ -243,6 +245,23 @@ pub struct NightAdvanceParams {
     /// by any `validate()` method on this struct — see the module-level
     /// note). Typical values ≈ 0.3–0.5 mag.
     pub completeness_width_mag: f64,
+
+    /// Assumed 1-sigma spread (magnitudes) of a candidate observation's
+    /// apparent-magnitude residual against a bank's photometric prediction
+    /// — see
+    /// [`crate::topocentric_kf::branching::llr_score::photometric_llr_delta`].
+    /// An *additional* LLR term alongside the astrometric one, used to help
+    /// discriminate two lineages whose predicted sky positions/rates are
+    /// nearly indistinguishable but whose objects have different absolute
+    /// magnitudes.
+    ///
+    /// Units: magnitudes. Must be strictly positive. Typical values ≈
+    /// 0.3–0.5 mag — wide enough to absorb the H-without-phase-term
+    /// simplification (see
+    /// [`crate::topocentric_kf::branching::detection_probability::implied_absolute_magnitude`])
+    /// plus ordinary photometric noise, narrow enough to still discriminate
+    /// objects that differ by more than a few tenths of a magnitude.
+    pub photometric_sigma_mag: f64,
 }
 
 impl Default for NightAdvanceParams {
@@ -261,6 +280,7 @@ impl Default for NightAdvanceParams {
             n_scan: 1,
             limiting_magnitude: 21.0,
             completeness_width_mag: 0.4,
+            photometric_sigma_mag: 0.35,
         }
     }
 }
@@ -331,6 +351,13 @@ impl Validate for NightAdvanceParams {
             "completeness_width_mag",
             self.completeness_width_mag,
             "set completeness_width_mag to a strictly positive magnitude width, e.g. 0.4",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_positive(
+            "photometric_sigma_mag",
+            self.photometric_sigma_mag,
+            "set photometric_sigma_mag to a strictly positive magnitude width, e.g. 0.35",
         ) {
             errors.push(e);
         }

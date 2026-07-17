@@ -137,13 +137,23 @@ pub fn apply_n_scan_pruning<'state_lf, 'bank_config>(
 
     let survivors: Vec<_> = by_horizon_node
         .into_values()
-        .map(|node_branches| best_by_cumulative_llr(node_branches))
-        .map(|mut survivor| {
-            if current_step.saturating_sub(survivor.ancestor_creation_step) >= n_scan {
+        .flat_map(|node_branches| {
+            // All members of a group share the same `ancestor_creation_step`
+            // by construction (`Branch::from_observation`/`from_null` copy
+            // the parent's fields unchanged) — read it off any member.
+            let anchor_age = node_branches
+                .first()
+                .map(|b| current_step.saturating_sub(b.ancestor_creation_step))
+                .unwrap_or(0);
+
+            if anchor_age >= n_scan {
+                let mut survivor = best_by_cumulative_llr(node_branches);
                 survivor.ancestor_at_scan_horizon = survivor.branch_id;
                 survivor.ancestor_creation_step = current_step;
+                vec![survivor]
+            } else {
+                node_branches
             }
-            survivor
         })
         .collect();
 

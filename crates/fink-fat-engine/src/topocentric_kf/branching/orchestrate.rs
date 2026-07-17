@@ -63,7 +63,7 @@ use crate::{
             Branch,
             candidate_search::{SINGLE_TIME_BIN, SingleBinTimeBinner, find_candidates_for_bank},
             detection_probability::{detection_probability, predicted_apparent_magnitude},
-            llr_score::{null_branch_llr_delta, observation_llr_delta},
+            llr_score::{null_branch_llr_delta, observation_llr_delta, photometric_llr_delta},
             pruning::{apply_n_scan_pruning, cap_top_b_per_lineage},
             visit::{Visit, group_observations_into_visits},
         },
@@ -441,6 +441,8 @@ fn spawn_branches_for_lineage<'state_lf, 'bank_config>(
         params.likelihood_threshold,
     );
 
+    let predicted_magnitude = predicted_apparent_magnitude_for_bank(&predicted_bank);
+
     let mut branches = Vec::with_capacity(candidates.matches.len() + 1);
     let mut consumed_observation_ids = Vec::with_capacity(candidates.matches.len());
     for candidate in &candidates.matches {
@@ -451,7 +453,12 @@ fn spawn_branches_for_lineage<'state_lf, 'bank_config>(
             spatial_binner,
             candidate.observation.equ_coord(),
         );
-        let llr_delta = observation_llr_delta(candidate.likelihood, clutter_density);
+        let llr_delta = observation_llr_delta(candidate.likelihood, clutter_density)
+            + photometric_llr_delta(
+                predicted_magnitude,
+                candidate.observation.photometry().magnitude,
+                params.photometric_sigma_mag,
+            );
 
         if let Some(branch) = Branch::from_observation(
             &predicted_bank,
@@ -465,7 +472,7 @@ fn spawn_branches_for_lineage<'state_lf, 'bank_config>(
     }
 
     let p_detection = null_branch_detection_probability(
-        &predicted_bank,
+        predicted_magnitude,
         params.limiting_magnitude,
         params.completeness_width_mag,
     );
@@ -479,33 +486,51 @@ fn spawn_branches_for_lineage<'state_lf, 'bank_config>(
     (branches, consumed_observation_ids)
 }
 
-/// Detection probability for the null branch, from the bank's running
-/// absolute-magnitude estimate and its MAP hypothesis's predicted geometry.
+/// Predicted apparent magnitude of a bank's MAP hypothesis, from its running
+/// absolute-magnitude (`H`) estimate and that hypothesis's predicted
+/// geometry — `None` before the bank's first successful
+/// [`KFBank::branch_with`] call, when there is no magnitude history yet to
+/// predict from.
+///
+/// Shared by [`null_branch_detection_probability`] (predicted magnitude vs.
+/// survey depth) and the per-candidate photometric LLR term in
+/// [`spawn_branches_for_lineage`] (predicted magnitude vs. a candidate's
+/// observed magnitude) — both need the same geometry extraction, just fed
+/// into different downstream comparisons.
+fn predicted_apparent_magnitude_for_bank<'state_lf, 'bank_config>(
+    bank: &KFBank<'state_lf, 'bank_config>,
+) -> Option<f64> {
+    let (Some(absolute_magnitude_estimate), Some(best)) =
+        (bank.absolute_magnitude_estimate(), bank.best())
+    else {
+        return None;
+    };
+
+    let r_helio_au = best.kf.to_cartesian().pos.norm();
+    let delta_topocentric_au = best.kf.state[4];
+    Some(predicted_apparent_magnitude(
+        absolute_magnitude_estimate,
+        r_helio_au,
+        delta_topocentric_au,
+    ))
+}
+
+/// Detection probability for the null branch, from the bank's predicted
+/// apparent magnitude (see [`predicted_apparent_magnitude_for_bank`]).
 ///
 /// Falls back to `0.5` (neutral: neither favors nor penalizes the null
-/// branch) when the bank has no magnitude history yet — this only happens
-/// before the bank's first successful [`KFBank::branch_with`] call.
-fn null_branch_detection_probability<'state_lf, 'bank_config>(
-    predicted_bank: &KFBank<'state_lf, 'bank_config>,
+/// branch) when the bank has no magnitude history yet (`predicted_magnitude
+/// == None`).
+fn null_branch_detection_probability(
+    predicted_magnitude: Option<f64>,
     limiting_magnitude: f64,
     completeness_width_mag: f64,
 ) -> f64 {
     const NO_HISTORY_FALLBACK_P_DETECTION: f64 = 0.5;
 
-    let (Some(absolute_magnitude_estimate), Some(best)) = (
-        predicted_bank.absolute_magnitude_estimate(),
-        predicted_bank.best(),
-    ) else {
+    let Some(predicted_magnitude) = predicted_magnitude else {
         return NO_HISTORY_FALLBACK_P_DETECTION;
     };
-
-    let r_helio_au = best.kf.to_cartesian().pos.norm();
-    let delta_topocentric_au = best.kf.state[4];
-    let predicted_magnitude = predicted_apparent_magnitude(
-        absolute_magnitude_estimate,
-        r_helio_au,
-        delta_topocentric_au,
-    );
 
     detection_probability(
         predicted_magnitude,

@@ -211,6 +211,13 @@ fn alternating_single_and_batch_modes_reconstruct_known_trajectories() {
         (21, (210, 136)),
     ]);
 
+    // Collected rather than asserted inline, so the full table always prints
+    // before the test fails on any regression — panicking mid-loop (the
+    // previous behavior) hid every trajectory after the first mismatch,
+    // which is exactly the information needed to judge whether a change
+    // helped, hurt, or was neutral across the whole fixture.
+    let mut failures: Vec<String> = Vec::new();
+
     println!(
         "\n{:<10} {:>8} {:>10} {:>10}  orbit (a [AU], e, i [deg])",
         "traj_id", "n_obs", "recall", "precision"
@@ -223,49 +230,53 @@ fn alternating_single_and_batch_modes_reconstruct_known_trajectories() {
         let &(expected_n_obs, expected_overlap) = baseline
             .get(traj_num)
             .unwrap_or_else(|| panic!("no non-regression baseline recorded for traj {traj}"));
-        assert_eq!(
-            n_obs, expected_n_obs,
-            "traj {traj}: fixture observation count changed (was {expected_n_obs}, now {n_obs}) \
-             — update the baseline if tests/data was intentionally regenerated"
-        );
+        if n_obs != expected_n_obs {
+            failures.push(format!(
+                "traj {traj}: fixture observation count changed (was {expected_n_obs}, now {n_obs}) \
+                 — update the baseline if tests/data was intentionally regenerated"
+            ));
+        }
 
         match best_overlap.get(traj) {
             Some(&(overlap, branch_idx)) => {
-                assert_eq!(
-                    overlap, expected_overlap,
-                    "traj {traj}: reconstruction regressed — best-branch overlap was \
-                     {expected_overlap}/{n_obs}, now {overlap}/{n_obs}"
-                );
+                if overlap != expected_overlap {
+                    failures.push(format!(
+                        "traj {traj}: reconstruction regressed — best-branch overlap was \
+                         {expected_overlap}/{n_obs}, now {overlap}/{n_obs}"
+                    ));
+                }
 
                 let branch = &collection.branches[branch_idx];
                 let recall = overlap as f64 / n_obs as f64;
                 let precision = overlap as f64 / branch.track_ids().len() as f64;
-                assert_eq!(
-                    precision,
-                    1.0,
-                    "traj {traj}: best-matching branch is no longer pure ({:.1}% precision) \
-                     — a cross-object contamination regression",
-                    precision * 100.0
-                );
+                if precision != 1.0 {
+                    failures.push(format!(
+                        "traj {traj}: best-matching branch is no longer pure ({:.1}% precision) \
+                         — a cross-object contamination regression",
+                        precision * 100.0
+                    ));
+                }
 
                 let orbit_str = if recall >= 0.8 {
                     match branch.bank.best().map(|h| h.kf.to_orbit()) {
                         Some(OrbitalElements::Keplerian { elements, .. }) => {
-                            assert!(
-                                (0.0..1.0).contains(&elements.eccentricity),
-                                "traj {traj}: eccentricity {} is not a bound orbit",
-                                elements.eccentricity
-                            );
-                            assert!(
-                                elements.semi_major_axis.is_finite()
-                                    && elements.semi_major_axis > 0.0,
-                                "traj {traj}: implausible semi-major axis {}",
-                                elements.semi_major_axis
-                            );
-                            assert!(
-                                elements.inclination.is_finite(),
-                                "traj {traj}: non-finite inclination"
-                            );
+                            if !(0.0..1.0).contains(&elements.eccentricity) {
+                                failures.push(format!(
+                                    "traj {traj}: eccentricity {} is not a bound orbit",
+                                    elements.eccentricity
+                                ));
+                            }
+                            if !(elements.semi_major_axis.is_finite()
+                                && elements.semi_major_axis > 0.0)
+                            {
+                                failures.push(format!(
+                                    "traj {traj}: implausible semi-major axis {}",
+                                    elements.semi_major_axis
+                                ));
+                            }
+                            if !elements.inclination.is_finite() {
+                                failures.push(format!("traj {traj}: non-finite inclination"));
+                            }
                             format!(
                                 "a={:.3} e={:.3} i={:.2}",
                                 elements.semi_major_axis,
@@ -291,11 +302,12 @@ fn alternating_single_and_batch_modes_reconstruct_known_trajectories() {
                 );
             }
             None => {
-                assert_eq!(
-                    expected_overlap, 0,
-                    "traj {traj}: reconstruction regressed — completely missed \
-                     (baseline expected overlap {expected_overlap}/{n_obs})"
-                );
+                if expected_overlap != 0 {
+                    failures.push(format!(
+                        "traj {traj}: reconstruction regressed — completely missed \
+                         (baseline expected overlap {expected_overlap}/{n_obs})"
+                    ));
+                }
                 println!(
                     "{:<10} {:>8} {:>10} {:>10}  -",
                     traj.to_string(),
@@ -307,4 +319,11 @@ fn alternating_single_and_batch_modes_reconstruct_known_trajectories() {
         }
     }
     println!();
+
+    assert!(
+        failures.is_empty(),
+        "{} non-regression check(s) failed:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
