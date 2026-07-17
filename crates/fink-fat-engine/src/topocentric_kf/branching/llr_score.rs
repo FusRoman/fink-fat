@@ -22,6 +22,11 @@ pub enum LlrScoreEvent {
         p_detection: f64,
         delta: f64,
     },
+    PhotometricDelta {
+        predicted_magnitude: Option<f64>,
+        observed_magnitude: f64,
+        delta: f64,
+    },
 }
 
 crate::impl_log_target!(
@@ -44,6 +49,13 @@ impl LlrScoreEvent {
             ),
             NullDelta { p_detection, delta } => tracing::trace!(
                 target: LlrScoreEvent::TARGET, p_detection, delta, "Null-branch LLR delta"
+            ),
+            PhotometricDelta {
+                predicted_magnitude,
+                observed_magnitude,
+                delta,
+            } => tracing::trace!(
+                target: LlrScoreEvent::TARGET, predicted_magnitude, observed_magnitude, delta, "Photometric LLR delta"
             ),
         }
     }
@@ -80,6 +92,53 @@ pub fn observation_llr_delta(mixture_likelihood_z: f64, clutter_density: f64) ->
     LlrScoreEvent::ObservationDelta {
         mixture_likelihood_z,
         clutter_density,
+        delta,
+    }
+    .emit();
+    delta
+}
+
+/// LLR contribution of comparing a candidate's apparent magnitude to the
+/// bank's magnitude-implied prediction — an *additional* term alongside
+/// [`observation_llr_delta`]'s astrometric one, not a replacement for it.
+///
+/// A Gaussian residual penalty, `-0.5 * ((m_obs - m_pred) / sigma_mag)^2`.
+/// The Gaussian normalization constant (`-ln(sigma_mag) - 0.5 ln(2π)`) is
+/// deliberately omitted: `sigma_mag` is the same for every candidate in a
+/// visit, so the constant cancels in every branch comparison that actually
+/// matters (`apply_n_scan_pruning`, `cap_top_b_per_lineage`) — the same
+/// pragmatic convention [`observation_llr_delta`] already uses by not
+/// normalizing its own clutter term.
+///
+/// # Arguments
+/// * `predicted_magnitude` – The bank's predicted apparent magnitude for
+///   this candidate's epoch (see
+///   [`predicted_apparent_magnitude`](super::detection_probability::predicted_apparent_magnitude)),
+///   or `None` if the bank has no magnitude history yet.
+/// * `observed_magnitude` – The candidate observation's apparent magnitude.
+/// * `sigma_mag` – Assumed 1-sigma spread (mag) of the residual, e.g.
+///   `NightAdvanceParams::photometric_sigma_mag`.
+///
+/// # Returns
+/// `0.0` (neutral — no penalty, no bonus) when `predicted_magnitude` is
+/// `None`: a lineage with a single observation so far has no photometric
+/// prediction to be penalized against, mirroring
+/// `null_branch_detection_probability`'s own no-history fallback.
+pub fn photometric_llr_delta(
+    predicted_magnitude: Option<f64>,
+    observed_magnitude: f64,
+    sigma_mag: f64,
+) -> f64 {
+    let delta = match predicted_magnitude {
+        Some(predicted_magnitude) => {
+            let residual = observed_magnitude - predicted_magnitude;
+            -0.5 * (residual / sigma_mag).powi(2)
+        }
+        None => 0.0,
+    };
+    LlrScoreEvent::PhotometricDelta {
+        predicted_magnitude,
+        observed_magnitude,
         delta,
     }
     .emit();
@@ -141,6 +200,25 @@ mod ll_score_tests {
         assert!(delta.is_finite());
         let delta = observation_llr_delta(1e308, 1.0);
         assert!(delta.is_finite());
+    }
+
+    #[test]
+    fn photometric_llr_delta_is_zero_without_history() {
+        assert_eq!(photometric_llr_delta(None, 18.5, 0.35), 0.0);
+    }
+
+    #[test]
+    fn photometric_llr_delta_is_zero_at_exact_match() {
+        let delta = photometric_llr_delta(Some(18.5), 18.5, 0.35);
+        assert!(delta.abs() < 1e-12);
+    }
+
+    #[test]
+    fn photometric_llr_delta_is_negative_and_grows_with_residual() {
+        let small_residual = photometric_llr_delta(Some(18.5), 18.6, 0.35);
+        let large_residual = photometric_llr_delta(Some(18.5), 19.5, 0.35);
+        assert!(small_residual < 0.0);
+        assert!(large_residual < small_residual);
     }
 
     #[test]

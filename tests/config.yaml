@@ -30,10 +30,11 @@ advance_params:
   completeness_width_mag: 0.4
   likelihood_threshold: 0.0
   limiting_magnitude: 21.0
-  n_scan: 1
+  n_scan: 5
   obs_noise:
     - 2.35e-13
     - 2.35e-13
+  photometric_sigma_mag: 0.35
   quick_reject_radius_rad: "3.5 arcmin"
   radius_strategy:
     Clamped:
