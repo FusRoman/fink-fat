@@ -16,6 +16,13 @@ evaluate_edges_output/
 sso_fink_ztf_lc.parquet
 seeding_plots/
 edge_plots/
+seed_to_bank_report/
 
 eval_config.yml
 eval_config_best.yml
+*.png
+*.parquet
+*.json
+*.svg
+stats_pipeline_metrics.py
+engine_config.*.yaml

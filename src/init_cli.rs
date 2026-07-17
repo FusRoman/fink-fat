@@ -39,6 +39,10 @@ use clap::Parser;
 ///   flag wins on conflict). See `--list-log-targets` for valid target names.
 /// * `list_log_targets` — Print every available tracing target (name,
 ///   description, levels) and exit, without loading `--alerts`/`--config`.
+/// * `snapshot_every` — In batch mode (multi-night input), write the
+///   snapshot every N nights processed, in addition to always after the
+///   last night. Omit to write only once, at the end. Ignored in
+///   single-night mode.
 #[derive(Debug, Parser)]
 #[command(author, version, about, long_about = None)]
 pub struct FinkFatCliArgs {
@@ -84,6 +88,13 @@ pub struct FinkFatCliArgs {
     /// file's `log_retention_days`). Only meaningful with `--logs`.
     #[arg(long, value_name = "N")]
     pub log_retention_days: Option<usize>,
+
+    /// In batch mode (multi-night input), write the snapshot to disk every
+    /// N nights processed (plus always after the last night). Omit to
+    /// write only once, after the final night. Ignored in single-night
+    /// mode (the snapshot is always written once, as today).
+    #[arg(long, value_name = "N")]
+    pub snapshot_every: Option<usize>,
 }
 
 /// Parse command-line arguments and return a fully-populated
