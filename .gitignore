@@ -89,3 +89,5 @@ crates/fink-fat-engine/.github/agents/
 docs/
 edge_plots/
 model_eval_plots/
+engine_config.*.yaml
+run_all_nights.sh

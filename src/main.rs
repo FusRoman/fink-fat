@@ -17,8 +17,8 @@
 //!
 //! ## Typical usage
 //!
-//! Run the binary with a night's alerts file and a validated configuration
-//! file:
+//! Run the binary with an alerts file (one night, or several nights tagged
+//! with distinct `night_id`s) and a validated configuration file:
 //!
 //! ```bash
 //! fink-fat --alerts /path/to/alerts.parquet --config /path/to/config.yml
@@ -26,58 +26,41 @@
 //!
 //! ## Runtime flow
 //!
-//! One invocation processes one night:
+//! One invocation processes every night present in `--alerts`, in
+//! chronological order:
 //!
 //! 1. Parse CLI arguments in [`crate::init_cli`].
-//! 2. Load the night's alerts (Parquet) into an `ObsDataset`.
+//! 2. Load the alerts (Parquet) into an `ObsDataset`.
 //! 3. Load the validated engine configuration and build the `KalmanContext`.
 //! 4. Load the `BranchCollection` snapshot from `storage_path` if one exists,
 //!    otherwise start from an empty collection.
-//! 5. Advance the collection by one night.
-//! 6. Overwrite the on-disk snapshot with the result, ready for the next
-//!    night's invocation.
+//! 5. Split the dataset into per-night observation batches — a single batch
+//!    (the whole dataset) if it carries no `night_id` index or only one
+//!    night, otherwise one batch per `night_id`, sorted chronologically —
+//!    and advance the collection through each batch in turn.
+//! 6. Overwrite the on-disk snapshot with the result: always after the last
+//!    night, and additionally every `--snapshot-every N` nights if that
+//!    flag is set (useful to bound work lost to a crash mid-batch).
 //!
 //! For algorithmic details and configuration schemas, refer to
 //! `fink-fat-engine`.
 //!
 
 pub mod init_cli;
+pub mod logging;
 
-use fink_fat_engine::{
-    engine_config::{EngineConfig, log_level::LogLevel},
-    logging::registry::{all_targets, build_env_filter_directive},
-    topocentric_kf::branching::BranchCollection,
-};
+use fink_fat_engine::{engine_config::EngineConfig, topocentric_kf::branching::BranchCollection};
 use photom::{
     io::polars::{ContiguousChoice, FromPolarsArgs},
-    observation_dataset::ObsDataset,
+    observation_dataset::{ObsDataset, observation::Observation},
     observer::error_model::ObsErrorModel,
 };
 use polars::lazy::frame::{LazyFrame, ScanArgsParquet};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::init_cli::cli_builder;
-
-/// Parse one `--log-target TARGET=LEVEL` argument into `(target, level)`.
-fn parse_log_target_override(arg: &str) -> Result<(String, LogLevel), String> {
-    let (target, level) = arg
-        .split_once('=')
-        .ok_or_else(|| format!("invalid --log-target {arg:?}, expected TARGET=LEVEL"))?;
-    let level: LogLevel = level
-        .parse()
-        .map_err(|e| format!("invalid --log-target {arg:?}: {e}"))?;
-    Ok((target.to_string(), level))
-}
-
-/// Print every tracing target's name, description and levels.
-fn print_log_targets() {
-    for target in all_targets() {
-        println!(
-            "{:<24} {:?}  {}",
-            target.name, target.levels, target.description
-        );
-    }
-}
+use crate::{
+    init_cli::cli_builder,
+    logging::{initialize_logs, print_log_targets},
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = cli_builder();
@@ -87,10 +70,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let alerts = cli.alerts.expect("required unless --list-log-targets");
-    let config = cli.config.expect("required unless --list-log-targets");
+    let alerts = cli
+        .alerts
+        .clone()
+        .expect("required unless --list-log-targets");
+    let config = cli
+        .config
+        .clone()
+        .expect("required unless --list-log-targets");
 
-    let engine_config = EngineConfig::load_engine_config_validated(&config)?;
+    let engine_config = EngineConfig::load_engine_config_validated(config)?;
 
     std::fs::create_dir_all(engine_config.storage_path())?;
 
@@ -99,45 +88,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut _file_log_guard: Option<tracing_appender::non_blocking::WorkerGuard> = None;
 
     if cli.logs {
-        let mut log_targets = engine_config.log_targets.clone();
-        for arg in &cli.log_targets {
-            let (target, level) = parse_log_target_override(arg)?;
-            log_targets.insert(target, level);
-        }
-        let directive = build_env_filter_directive(engine_config.log_level, &log_targets);
-        let filter = tracing_subscriber::EnvFilter::try_new(&directive)?;
-
-        // Same directory as the BranchCollection snapshot (`storage_path`),
-        // so logs and pipeline state travel together. Daily rotation, oldest
-        // files beyond `log_retention_days` deleted automatically — since
-        // rotation is daily, N files kept == N days retained.
-        let retention_days = cli
-            .log_retention_days
-            .unwrap_or(engine_config.log_retention_days);
-        let file_appender = tracing_appender::rolling::RollingFileAppender::builder()
-            .rotation(tracing_appender::rolling::Rotation::DAILY)
-            .filename_prefix("fink_fat")
-            .filename_suffix("log")
-            .max_log_files(retention_days)
-            .build(engine_config.storage_path())?;
-        let (non_blocking_file, guard) = tracing_appender::non_blocking(file_appender);
-        _file_log_guard = Some(guard);
-
-        // Two separate layers rather than one writer combining both
-        // destinations: the file must never carry ANSI color escapes (they
-        // show up as garbage in a plain-text log viewer), while the
-        // terminal should keep them.
-        let stdout_layer = tracing_subscriber::fmt::layer().with_target(true);
-        let file_layer = tracing_subscriber::fmt::layer()
-            .with_target(true)
-            .with_ansi(false)
-            .with_writer(non_blocking_file);
-
-        tracing_subscriber::registry()
-            .with(filter)
-            .with(stdout_layer)
-            .with(file_layer)
-            .init();
+        initialize_logs(&cli, &engine_config, &mut _file_log_guard)?;
     }
 
     let lf = LazyFrame::scan_parquet(alerts.as_str().into(), ScanArgsParquet::default())?;
@@ -153,35 +104,74 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let snapshot_path = engine_config.snapshot_path();
 
-    let collection = if snapshot_path.exists() {
+    let mut collection = if snapshot_path.exists() {
         BranchCollection::load_snapshot_from_disk(&snapshot_path, &kalman_context, &engine_config)?
     } else {
         BranchCollection::empty()
     };
-    let current_step = collection.current_step;
 
-    let night_obs: Vec<&_> = obs_dataset.iter_observations().collect();
+    // A dataset tagged with more than one `night_id` is processed one night
+    // at a time, in chronological order; anything else (no night index, or
+    // a single night) is treated as one logical night, exactly as before.
+    let night_batches: Vec<Vec<&Observation>> = match obs_dataset.nb_night() {
+        Some(n) if n > 1 => {
+            let mut night_ids: Vec<_> = obs_dataset
+                .iter_night_id()
+                .expect("nb_night() > 1 implies a night index exists")
+                .copied()
+                .collect();
+            night_ids.sort_unstable();
+            night_ids
+                .iter()
+                .map(|night_id| {
+                    obs_dataset
+                        .iter_night_observations(night_id)
+                        .expect("night_id came from iter_night_id()")
+                        .collect()
+                })
+                .collect()
+        }
+        _ => vec![obs_dataset.iter_observations().collect()],
+    };
 
-    let new_collection = collection.advance_one_night(
-        &night_obs,
-        &obs_dataset,
-        &engine_config,
-        &kalman_context,
-        current_step,
-    )?;
+    let n_batches = night_batches.len();
+    for (i, night_obs) in night_batches.iter().enumerate() {
+        let current_step = collection.current_step;
+        collection = collection.advance_one_night(
+            night_obs,
+            &obs_dataset,
+            &engine_config,
+            &kalman_context,
+            current_step,
+        )?;
 
-    let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&new_collection.to_snapshot())?;
-    std::fs::write(&snapshot_path, &bytes)?;
+        if should_write_snapshot(i + 1, n_batches, cli.snapshot_every) {
+            let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&collection.to_snapshot())?;
+            std::fs::write(&snapshot_path, &bytes)?;
+        }
+    }
 
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use clap::Parser;
+/// Whether the snapshot should be written to disk after processing the
+/// `nights_done`-th night (1-based) out of `total` in this run.
+///
+/// Always `true` on the last night, regardless of `snapshot_every`, so a
+/// run never finishes without persisting its final state. Otherwise `true`
+/// every `snapshot_every` nights, if set.
+fn should_write_snapshot(nights_done: usize, total: usize, snapshot_every: Option<usize>) -> bool {
+    nights_done == total || snapshot_every.is_some_and(|n| n > 0 && nights_done.is_multiple_of(0))
+}
 
-    use super::*;
-    use crate::init_cli::FinkFatCliArgs;
+#[cfg(test)]
+mod main_fink_fat_tests {
+    use clap::Parser;
+    use fink_fat_engine::engine_config::log_level::LogLevel;
+
+    use crate::{
+        init_cli::FinkFatCliArgs, logging::parse_log_target_override, should_write_snapshot,
+    };
 
     #[test]
     fn parse_log_target_override_accepts_target_equals_level() {
@@ -233,5 +223,53 @@ mod tests {
     fn cli_requires_alerts_and_config_without_list_log_targets() {
         let err = FinkFatCliArgs::try_parse_from(["fink-fat"]).unwrap_err();
         assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn cli_snapshot_every_defaults_to_none() {
+        let cli = FinkFatCliArgs::try_parse_from([
+            "fink-fat",
+            "--alerts",
+            "alerts.parquet",
+            "--config",
+            "config.yml",
+        ])
+        .unwrap();
+        assert_eq!(cli.snapshot_every, None);
+    }
+
+    #[test]
+    fn cli_snapshot_every_parses_value() {
+        let cli = FinkFatCliArgs::try_parse_from([
+            "fink-fat",
+            "--alerts",
+            "alerts.parquet",
+            "--config",
+            "config.yml",
+            "--snapshot-every",
+            "10",
+        ])
+        .unwrap();
+        assert_eq!(cli.snapshot_every, Some(10));
+    }
+
+    #[test]
+    fn should_write_snapshot_always_true_on_last_night() {
+        assert!(should_write_snapshot(1, 1, None));
+        assert!(should_write_snapshot(5, 5, None));
+        assert!(should_write_snapshot(5, 5, Some(1000)));
+    }
+
+    #[test]
+    fn should_write_snapshot_false_between_intervals_without_flag() {
+        assert!(!should_write_snapshot(1, 5, None));
+        assert!(!should_write_snapshot(4, 5, None));
+    }
+
+    #[test]
+    fn should_write_snapshot_true_every_n_nights() {
+        assert!(should_write_snapshot(3, 10, Some(3)));
+        assert!(!should_write_snapshot(4, 10, Some(3)));
+        assert!(should_write_snapshot(6, 10, Some(3)));
     }
 }
