@@ -68,6 +68,12 @@ photom = { workspace = true, features = ["polars"] }
 polars = { workspace = true }
 rkyv = { workspace = true, features = ["pointer_width_64"] }
 
+[dev-dependencies]
+assert_cmd = "2.0.16"
+tempfile = { workspace = true }
+fink-fat-eval = { path = "crates/fink-fat-eval" }
+outfit = { workspace = true }
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

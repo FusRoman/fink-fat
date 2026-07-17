@@ -1,0 +1,129 @@
+version: 1
+
+log_level: info
+storage_path: ./storage
+time_binner_width: 0.021
+
+pairs:
+  acc_prior_var: 0.0001
+  allow_same_timebin: true
+  max_angular_speed: "40 arcmin/day"
+  max_dt: "5 hours"
+  max_mag_difference: 1.6
+
+kalman_shared_context:
+  config:
+    dt_ref: 1.0
+    q0: 1e-12
+    solver_type:
+      kind: Auto
+      params:
+        convergency: 2.220446049250313e-14
+        max_iter_prelim_kepuni: 20
+        parabolic_solving_method: Cardano
+        psi_guess: null
+  ephem_file_name: horizon:DE440
+  ut1_file_version: null
+
+advance_params:
+  branch_cap: 10
+  completeness_width_mag: 0.4
+  likelihood_threshold: 0.0
+  limiting_magnitude: 21.0
+  n_scan: 1
+  obs_noise:
+    - 2.35e-13
+    - 2.35e-13
+  quick_reject_radius_rad: "3.5 arcmin"
+  radius_strategy:
+    Clamped:
+      inner: MixtureCovariance
+      max_arcsec: "30 arcmin"
+  top_k:
+    WeightThreshold: 0.99
+  visit_epoch_tolerance_days: 0.000011574074074074073
+healpix_depth: 8
+
+kfbank_config:
+  cap_schedule:
+    Logarithmic:
+      start: 500
+      end: 5
+      n_obs_full: 15
+  gate_chi2: 23.0
+  likelihood_window: 3
+  merge_position_au: 0.02
+  min_hypotheses: 5
+  search_region_chi2: 23.0
+  weight_floor: 0.0001
+
+seeding_grid_config:
+  n_rho: 50
+  n_rho_dot: 15
+  populations:
+    - a_center: 1.5
+      a_sigma: 0.6
+      name: NEO
+      weight: 0.02
+    - a_center: 2.2
+      a_sigma: 0.15
+      name: MBA Inner
+      weight: 0.6
+    - a_center: 2.7
+      a_sigma: 0.15
+      name: MBA Middle
+      weight: 1.0
+    - a_center: 3.1
+      a_sigma: 0.15
+      name: MBA Outer
+      weight: 0.7
+    - a_center: 3.42
+      a_sigma: 0.1
+      name: Cybele
+      weight: 0.04
+    - a_center: 3.95
+      a_sigma: 0.15
+      name: Hilda
+      weight: 0.05
+    - a_center: 5.2
+      a_sigma: 0.3
+      name: Trojan
+      weight: 0.1
+    - a_center: 15.0
+      a_sigma: 5.0
+      name: Centaur
+      weight: 0.03
+    - a_center: 44.0
+      a_sigma: 2.0
+      name: KBO Cold
+      weight: 0.04
+    - a_center: 45.0
+      a_sigma: 8.0
+      name: KBO Hot
+      weight: 0.03
+    - a_center: 39.4
+      a_sigma: 1.0
+      name: KBO Resonant
+      weight: 0.02
+    - a_center: 70.0
+      a_sigma: 20.0
+      name: SDO
+      weight: 0.02
+    - a_center: 90.0
+      a_sigma: 10.0
+      name: Detached
+      weight: 0.01
+  rho_max: 100.0
+  rho_min: 0.1
+  sigma_pos_au_floor: 0.001
+  sigma_rho_dot_floor: 0.0001
+  weight_floor: 1e-6
+
+# not used in the current pipeline
+triplets:
+  enforce_time_order: true
+  max_angular_speed: 0.05
+  max_dt_between: 0.04
+  max_mag_difference: 5.0
+  max_pair_sep: 0.0025
+  max_predicted_residual: 0.0008
