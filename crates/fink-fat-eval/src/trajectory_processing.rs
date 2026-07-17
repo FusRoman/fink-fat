@@ -282,7 +282,7 @@ struct TrajOutcome {
 enum TrajOutcomeKind {
     MaterializeFailed,
     NoResult,
-    Summary(TrajSummary),
+    Summary(Box<TrajSummary>),
     NotEnoughPoint,
 }
 
@@ -293,6 +293,7 @@ enum TrajOutcomeKind {
 /// [`TrajOutcomeKind::MaterializeFailed`] / [`TrajOutcomeKind::NoResult`]
 /// rather than propagated, so a single bad trajectory never aborts the
 /// whole parallel scan.
+#[allow(clippy::too_many_arguments)]
 fn process_one_trajectory(
     traj_id: &TrajId,
     obs_dataset: &ObsDataset,
@@ -356,7 +357,7 @@ fn process_one_trajectory(
             TrajOutcomeKind::NoResult
         }
         Some(bank) => match summarize_trajectory(traj_id.clone(), len_traj, &results, &bank) {
-            Some(summary) => TrajOutcomeKind::Summary(summary),
+            Some(summary) => TrajOutcomeKind::Summary(Box::new(summary)),
             None => {
                 tracing::debug!(traj = %traj_id, "No usable step produced, skipping");
                 TrajOutcomeKind::NoResult
@@ -391,7 +392,7 @@ fn record_completion(completed: &AtomicUsize, nb_traj: usize, global_start: &Ins
 /// may slip by one under heavy contention, but this is acceptable for a
 /// progress indicator.
 fn maybe_print_parallel_progress(done: usize, total: usize, global_start: &Instant) {
-    if done % PROGRESS_EVERY != 0 {
+    if !done.is_multiple_of(PROGRESS_EVERY) {
         return;
     }
     let elapsed = global_start.elapsed().as_secs_f64();
@@ -512,7 +513,7 @@ fn aggregate_outcomes(
             TrajOutcomeKind::MaterializeFailed => counters.n_materialize_failed += 1,
             TrajOutcomeKind::NoResult => counters.n_no_result += 1,
             TrajOutcomeKind::NotEnoughPoint => counters.n_not_enough_point += 1,
-            TrajOutcomeKind::Summary(s) => summaries.push(s),
+            TrajOutcomeKind::Summary(s) => summaries.push(*s),
         }
 
         if counters.n_total % PROGRESS_EVERY == 0 {

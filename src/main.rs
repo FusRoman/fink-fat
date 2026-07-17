@@ -161,7 +161,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// run never finishes without persisting its final state. Otherwise `true`
 /// every `snapshot_every` nights, if set.
 fn should_write_snapshot(nights_done: usize, total: usize, snapshot_every: Option<usize>) -> bool {
-    nights_done == total || snapshot_every.is_some_and(|n| n > 0 && nights_done.is_multiple_of(0))
+    nights_done == total || snapshot_every.is_some_and(|n| n > 0 && nights_done.is_multiple_of(n))
 }
 
 #[cfg(test)]

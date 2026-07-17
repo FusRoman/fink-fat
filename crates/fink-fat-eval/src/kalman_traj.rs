@@ -47,7 +47,7 @@ pub fn init_bank_from_first_pair<'ctx, 'bank_config>(
         &pair[0],
         &pair[1],
         context,
-        &grid_config,
+        grid_config,
         bank_config,
     )
     .ok()?;
@@ -113,13 +113,13 @@ fn compute_step_diag(
     let sigma_sky = best_kf.sky_covariance().ok()?;
 
     let (residual_ra_arcsec, residual_dec_arcsec, residual_ra_raw_rad) =
-        sky_residuals_arcsec(&equ_pred, &equ_obs);
+        sky_residuals_arcsec(&equ_pred, equ_obs);
 
     let sigma_ra_arcsec = equ_pred.ra_error * RAD_TO_ARCSEC;
     let sigma_dec_arcsec = equ_pred.dec_error * RAD_TO_ARCSEC;
-    let separation_arcsec = equ_pred.angular_separation(&equ_obs).to_degrees() * 3600.;
+    let separation_arcsec = equ_pred.angular_separation(equ_obs).to_degrees() * 3600.;
     let sep_arcsec_region_center = match region_center {
-        Some(center) => center.angular_separation(&equ_obs).to_degrees() * 3600.,
+        Some(center) => center.angular_separation(equ_obs).to_degrees() * 3600.,
         None => return None,
     };
 
