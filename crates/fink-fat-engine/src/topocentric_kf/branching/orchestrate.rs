@@ -126,7 +126,7 @@ impl OrchestrateEvent {
             ),
             LineagePropagationFailed { lineage_id } => tracing::debug!(
                 target: OrchestrateEvent::TARGET, lineage_id,
-                "Bank failed to propagate for search-region construction, dropping lineage"
+                "Bank failed to propagate for search-region construction, carrying lineage over unchanged this visit"
             ),
             NightPruningSummary {
                 n_branches_before_n_scan,
@@ -269,7 +269,7 @@ pub fn advance_bank_collection_one_night<'state_lf, 'bank_config>(
                     return LineageOutcome::Unchanged(lineage.clone());
                 }
 
-                let (spawned, consumed) = spawn_branches_for_lineage(
+                match spawn_branches_for_lineage(
                     lineage,
                     &visit_bucket_index,
                     visit.epoch,
@@ -278,8 +278,15 @@ pub fn advance_bank_collection_one_night<'state_lf, 'bank_config>(
                     params,
                     spatial_binner,
                     &next_branch_id,
-                );
-                LineageOutcome::Spawned(spawned, consumed)
+                ) {
+                    Some((spawned, consumed)) => LineageOutcome::Spawned(spawned, consumed),
+                    // Every hypothesis in the bank failed to propagate this
+                    // visit (rare, but not impossible — see
+                    // `outfit_propagate_universal_failures.md`). Treat it
+                    // like "no candidate nearby": carry the lineage over
+                    // unchanged rather than losing its whole track history.
+                    None => LineageOutcome::Unchanged(lineage.clone()),
+                }
             })
             .collect();
 
@@ -405,8 +412,9 @@ enum LineageOutcome<'state_lf, 'bank_config> {
 /// # Returns
 /// The branches spawned for this lineage, plus the ids of every candidate
 /// observation consumed (the caller merges these into the night's
-/// `consumed_observation_ids`). Empty if the bank fails to propagate at all
-/// (dropped, logged at `debug`).
+/// `consumed_observation_ids`). `None` if the bank fails to propagate at all
+/// this visit (logged at `debug`) — the caller carries the lineage over
+/// unchanged instead, the same as when no candidate is nearby.
 #[allow(clippy::too_many_arguments)]
 fn spawn_branches_for_lineage<'state_lf, 'bank_config>(
     lineage: &Branch<'state_lf, 'bank_config>,
@@ -417,7 +425,7 @@ fn spawn_branches_for_lineage<'state_lf, 'bank_config>(
     params: &NightAdvanceParams,
     spatial_binner: &HealpixBinner,
     next_branch_id: &AtomicU64,
-) -> (Vec<Branch<'state_lf, 'bank_config>>, Vec<ObsId>) {
+) -> Option<(Vec<Branch<'state_lf, 'bank_config>>, Vec<ObsId>)> {
     let predicted_bank = lineage.bank.predict_to(epoch, r_obs, v_obs);
 
     let Ok(search_region) = predicted_bank.search_region(
@@ -429,7 +437,7 @@ fn spawn_branches_for_lineage<'state_lf, 'bank_config>(
             lineage_id: lineage.lineage_id,
         }
         .emit();
-        return (Vec::new(), Vec::new());
+        return None;
     };
 
     let candidates = find_candidates_for_bank(
@@ -483,7 +491,7 @@ fn spawn_branches_for_lineage<'state_lf, 'bank_config>(
         next_branch_id.fetch_add(1, Ordering::Relaxed),
     ));
 
-    (branches, consumed_observation_ids)
+    Some((branches, consumed_observation_ids))
 }
 
 /// Predicted apparent magnitude of a bank's MAP hypothesis, from its running
