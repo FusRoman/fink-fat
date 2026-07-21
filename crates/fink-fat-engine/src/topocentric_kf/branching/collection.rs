@@ -173,13 +173,22 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
     /// `.rkyv` file at `path` (see [`Self::to_snapshot`]/
     /// [`Self::from_snapshot`]). Returns `Err` if the file is missing,
     /// unreadable, or fails to deserialize as a [`BranchCollectionSnapshot`].
+    ///
+    /// The file is memory-mapped rather than read into a heap-allocated
+    /// `Vec<u8>`: at the scale this snapshot can reach, that would be an
+    /// extra full-size copy of the file sitting in memory for the duration
+    /// of the (already memory-heavy) deserialization step.
     pub fn load_snapshot_from_disk(
         path: &Utf8Path,
         kalman_context: &'state_lf KalmanContext,
         engine_config: &'bank_config EngineConfig,
     ) -> Result<Self, EngineError> {
-        let bytes = std::fs::read(path).map_err(FinkFatError::Io)?;
-        let snapshot = rkyv::from_bytes::<BranchCollectionSnapshot, rkyv::rancor::Error>(&bytes)
+        let file = std::fs::File::open(path).map_err(FinkFatError::Io)?;
+        // SAFETY: `path` is fink-fat's own snapshot file, not modified by any
+        // other process while a run holds it open, so the mapped bytes stay
+        // valid and stable for the lifetime of this read-only mapping.
+        let mmap = unsafe { memmap2::Mmap::map(&file) }.map_err(FinkFatError::Io)?;
+        let snapshot = rkyv::from_bytes::<BranchCollectionSnapshot, rkyv::rancor::Error>(&mmap)
             .map_err(|e| FinkFatError::Message(e.to_string()))?;
         Ok(Self::from_snapshot(snapshot, kalman_context, engine_config))
     }

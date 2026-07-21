@@ -10,15 +10,20 @@
 use fink_fat_engine::{
     engine_config::{
         grid_population::GridConfig, kalman_context::KalmanContext, kf_bank_config::KFBankConfig,
+        night_advance_params::NightAdvanceParams,
     },
     topocentric_kf::kalman_bank::KFBank,
 };
 use photom::{TrajId, observation_dataset::ObsDataset};
 
 use crate::{
-    kalman_traj::{KFStudyResult, study_kalman_asteroid},
+    kalman_traj::{
+        KFStudyResult, NIS_CHI2_2DOF_MEDIAN, ObserverGeometryCache, TrajStopReason,
+        study_kalman_asteroid,
+    },
     trajectory_processing::{
-        MetricStats, RunCounters, TrajSummary, fmt_stats, materialize_contiguous_traj, metric_stats,
+        MetricStats, NIS_STEP_BUCKET_DEPTH, RunCounters, StepBucketStats, TrajSummary, fmt_stats,
+        materialize_contiguous_traj, metric_stats,
     },
 };
 
@@ -40,6 +45,111 @@ pub fn print_run_counters(counters: &RunCounters, n_summarized: usize) {
     );
     println!("  Not enough points   : {}", counters.n_not_enough_point);
     println!("  Successfully summarised           : {n_summarized}");
+}
+
+/// Print a full accounting of *why* every trajectory's predict/update loop
+/// stopped where it did — see [`TrajStopReason`]. Complements
+/// [`print_run_counters`]: that one only distinguishes materialize/bootstrap/
+/// summarize-level failures, this one breaks the KF loop's own stop points
+/// down (reached the end vs. collapsed by gating vs. collapsed by a
+/// propagation failure vs. a degenerate per-step result), so "trajectories
+/// that stopped early" stops being one opaque number.
+pub fn print_stop_reason_histogram(counters: &RunCounters) {
+    let total: usize = counters.stop_reason_counts.values().sum();
+    println!("\n=== Trajectory stop reasons ===");
+    if total == 0 {
+        println!("  (none reached the Kalman filter loop)");
+        return;
+    }
+    for reason in TrajStopReason::all() {
+        let count = counters
+            .stop_reason_counts
+            .get(&reason)
+            .copied()
+            .unwrap_or(0);
+        println!(
+            "  {:<42} {:>8}  ({:>5.1}%)",
+            reason.label(),
+            count,
+            100.0 * count as f64 / total as f64
+        );
+    }
+}
+
+/// Print dataset-wide NIS-calibration diagnostics — see
+/// [`TrajSummary::nis_calibration_ratio`]/[`TrajSummary::pct_nis_in_chi2_band`].
+/// A `nis_calibration_ratio` median far from 1.0 is a calibration-direction
+/// signal, not a bug: `≪ 1` means the filter's predicted covariance is
+/// systematically too large relative to the actual residuals (over-covariant
+/// — e.g. search regions wider than they need to be), `≫ 1` means the
+/// opposite (over-confident).
+pub fn print_nis_calibration_summary(summaries: &[TrajSummary]) {
+    let sep = "=".repeat(90);
+    println!("\n{sep}");
+    println!("[Global] NIS calibration");
+    println!("{sep}");
+    print_metric_row("NIS median", &metric_stats(summaries, |s| s.nis_median));
+    print_metric_row(
+        "NIS calibration ratio (target ≈ 1.0)",
+        &metric_stats(summaries, |s| s.nis_calibration_ratio),
+    );
+    print_metric_row(
+        "% steps in χ²(2) 95% band (target ≈ 95%)",
+        &metric_stats(summaries, |s| s.pct_nis_in_chi2_band),
+    );
+    let ratio_median = metric_stats(summaries, |s| s.nis_calibration_ratio).median;
+    println!("{sep}");
+    if ratio_median.is_finite() {
+        if ratio_median < 0.5 {
+            println!(
+                "  ⚠ Dataset-wide ratio median {ratio_median:.4} ≪ 1: the filter looks \
+                 over-covariant — predicted uncertainty is systematically larger than the \
+                 real residuals."
+            );
+        } else if ratio_median > 2.0 {
+            println!(
+                "  ⚠ Dataset-wide ratio median {ratio_median:.4} ≫ 1: the filter looks \
+                 over-confident — predicted uncertainty is systematically smaller than the \
+                 real residuals."
+            );
+        } else {
+            println!("  Dataset-wide ratio median {ratio_median:.4} — roughly well-calibrated.");
+        }
+    }
+}
+
+/// Print dataset-wide NIS median/mean per steps-since-bootstrap bucket (see
+/// [`StepBucketStats`]) — the diagnostic for whether over-covariance is a
+/// transient bootstrap effect (NIS should climb toward
+/// [`NIS_CHI2_2DOF_MEDIAN`] within the first handful of buckets as updates
+/// refine the initial finite-difference angular-rate estimate) or persists
+/// across the whole arc (pointing at the propagation/update mechanics
+/// instead of the bootstrap's initial covariance).
+pub fn print_nis_by_step_since_bootstrap(buckets: &[StepBucketStats]) {
+    let sep = "=".repeat(90);
+    println!("\n{sep}");
+    println!("[Global] NIS by steps-since-bootstrap (χ²(2) median = {NIS_CHI2_2DOF_MEDIAN:.4})");
+    println!("{sep}");
+    if buckets.is_empty() {
+        println!("  (no per-step data)");
+        return;
+    }
+    println!(
+        "  {:>10}  {:>10}  {:>12}  {:>12}",
+        "step", "n_samples", "NIS median", "NIS mean"
+    );
+    for b in buckets {
+        let label = if b.step_index > NIS_STEP_BUCKET_DEPTH {
+            format!("{NIS_STEP_BUCKET_DEPTH}+")
+        } else {
+            b.step_index.to_string()
+        };
+        println!(
+            "  {:>10}  {:>10}  {:>12.4}  {:>12.4}",
+            label, b.n_samples, b.nis.median, b.nis.mean
+        );
+    }
+    println!("{sep}");
 }
 
 /// Print one aligned `name: stats` row, used by [`print_global_aggregate_stats`].
@@ -96,13 +206,14 @@ pub fn print_global_aggregate_stats(summaries: &[TrajSummary]) {
         &metric_stats(summaries, |s| s.mean_effective_sample_size),
     );
 
-    let n_incomplete = summaries
+    let n_reached_end = summaries
         .iter()
-        .filter(|s| s.completion_fraction < 1.0)
+        .filter(|s| s.stop_reason == TrajStopReason::ReachedEnd)
         .count();
     println!("{sep}");
     println!(
-        "  Trajectories that stopped early (collapse/failure): {n_incomplete} / {}",
+        "  Trajectories that reached the end of their arc: {n_reached_end} / {}\n\
+         \t(see the \"Trajectory stop reasons\" section below for why the rest stopped early)",
         summaries.len()
     );
 }
@@ -117,20 +228,31 @@ pub fn print_extremes_table(title: &str, items: &[&TrajSummary]) {
         return;
     }
     println!(
-        "{:>12}  {:>6}  {:>7}  {:>6}  {:>9}  {:>9}  {:>9}  {:>8}",
-        "traj_id", "n_obs", "n_step", "cmpl%", "3σ_cov%", "rad_cov%", "sep(\")", "NIS"
+        "{:>12}  {:>6}  {:>6}  {:>7}  {:>6}  {:>9}  {:>9}  {:>9}  {:>8}  {:<28}",
+        "traj_id",
+        "n_obs",
+        "n_proc",
+        "n_step",
+        "cmpl%",
+        "3σ_cov%",
+        "rad_cov%",
+        "sep(\")",
+        "NIS",
+        "stop_reason"
     );
     for s in items {
         println!(
-            "{:>12}  {:>6}  {:>7}  {:>6.1}  {:>9.1}  {:>9.1}  {:>9.3}  {:>8.3}",
+            "{:>12}  {:>6}  {:>6}  {:>7}  {:>6.1}  {:>9.1}  {:>9.1}  {:>9.3}  {:>8.3}  {:<28}",
             s.traj_id,
             s.n_obs_total,
+            s.n_processable,
             s.n_steps,
             s.completion_fraction * 100.0,
             s.pct_within_3sigma,
             s.pct_within_search_radius,
             s.mean_separation_arcsec,
             s.mean_nis,
+            s.stop_reason.label(),
         );
     }
 }
@@ -144,6 +266,7 @@ pub fn print_extremes_table(title: &str, items: &[&TrajSummary]) {
 
 /// Re-materialize and re-run the Kalman filter bank for each trajectory in
 /// `traj_ids`, printing a full per-step report for each.
+#[allow(clippy::too_many_arguments)]
 pub fn print_detailed_reports(
     label: &str,
     traj_ids: &[TrajId],
@@ -151,7 +274,10 @@ pub fn print_detailed_reports(
     context: &KalmanContext,
     bank_config: &KFBankConfig,
     grid_config: &GridConfig,
+    advance_params: &NightAdvanceParams,
 ) {
+    let geometry_cache = ObserverGeometryCache::build(obs_dataset, context, traj_ids);
+
     for traj_id in traj_ids {
         match materialize_contiguous_traj(obs_dataset, traj_id) {
             Ok(traj) => {
@@ -166,9 +292,27 @@ pub fn print_detailed_reports(
                 }
                 println!("\n\n =============");
 
-                let (bank, results) =
-                    study_kalman_asteroid(&traj, obs_dataset, context, bank_config, grid_config);
-                print_single_trajectory_report(bank.as_ref(), &results, len_traj);
+                let study_outcome = study_kalman_asteroid(
+                    &traj,
+                    obs_dataset,
+                    context,
+                    bank_config,
+                    grid_config,
+                    advance_params,
+                    &geometry_cache,
+                    None,
+                );
+                println!(
+                    "\nStop reason: {} (n_processable={}, n_obs_deduplicated={})",
+                    study_outcome.stop_reason.label(),
+                    study_outcome.n_processable,
+                    study_outcome.n_obs_deduplicated,
+                );
+                print_single_trajectory_report(
+                    study_outcome.bank.as_ref(),
+                    &study_outcome.results,
+                    len_traj,
+                );
             }
             Err(e) => println!("  (failed to re-materialize trajectory: {e})"),
         }

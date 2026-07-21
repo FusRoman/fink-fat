@@ -20,7 +20,8 @@ use fink_fat_eval::{
     cli::{Cli, load_data},
     reporting::{
         print_detailed_reports, print_extremes_table, print_global_aggregate_stats,
-        print_run_counters,
+        print_nis_by_step_since_bootstrap, print_nis_calibration_summary, print_run_counters,
+        print_stop_reason_histogram,
     },
     trajectory_processing::{process_all_trajectories, select_extremes},
 };
@@ -55,14 +56,17 @@ fn main() -> Result<()> {
     let kalman_ctx = engine_config.build_context();
 
     println!("Scanning the dataset and running the Kalman filter bank on every trajectory…");
-    let (summaries, counters) = process_all_trajectories(
+    let (summaries, counters, nis_step_buckets) = process_all_trajectories(
         &obs_dataset,
         &kalman_ctx,
         &engine_config.kfbank_config,
         &engine_config.seeding_grid_config,
+        &engine_config.advance_params,
     );
 
     print_run_counters(&counters, summaries.len());
+    print_stop_reason_histogram(&counters);
+    print_nis_by_step_since_bootstrap(&nis_step_buckets);
 
     if summaries.is_empty() {
         println!("\nNo trajectory produced a usable Kalman-filter result.");
@@ -70,6 +74,7 @@ fn main() -> Result<()> {
     }
 
     print_global_aggregate_stats(&summaries);
+    print_nis_calibration_summary(&summaries);
 
     let (best, worst) = select_extremes(&summaries, N_EXTREMES);
     print_extremes_table("🏆 Best trajectories (highest 3σ coverage)", &best);
@@ -85,6 +90,7 @@ fn main() -> Result<()> {
         &kalman_ctx,
         &engine_config.kfbank_config,
         &engine_config.seeding_grid_config,
+        &engine_config.advance_params,
     );
     print_detailed_reports(
         "WORST",
@@ -93,6 +99,7 @@ fn main() -> Result<()> {
         &kalman_ctx,
         &engine_config.kfbank_config,
         &engine_config.seeding_grid_config,
+        &engine_config.advance_params,
     );
 
     Ok(())

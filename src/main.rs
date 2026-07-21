@@ -49,6 +49,7 @@
 pub mod init_cli;
 pub mod logging;
 
+use camino::Utf8Path;
 use fink_fat_engine::{engine_config::EngineConfig, topocentric_kf::branching::BranchCollection};
 use photom::{
     io::polars::{ContiguousChoice, FromPolarsArgs},
@@ -56,6 +57,7 @@ use photom::{
     observer::error_model::ObsErrorModel,
 };
 use polars::lazy::frame::{LazyFrame, ScanArgsParquet};
+use std::io::Write;
 
 use crate::{
     init_cli::cli_builder,
@@ -146,8 +148,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
 
         if should_write_snapshot(i + 1, n_batches, cli.snapshot_every) {
-            let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&collection.to_snapshot())?;
-            std::fs::write(&snapshot_path, &bytes)?;
+            write_snapshot(&collection, &snapshot_path)?;
         }
     }
 
@@ -162,6 +163,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// every `snapshot_every` nights, if set.
 fn should_write_snapshot(nights_done: usize, total: usize, snapshot_every: Option<usize>) -> bool {
     nights_done == total || snapshot_every.is_some_and(|n| n > 0 && nights_done.is_multiple_of(n))
+}
+
+/// Serialize `collection`'s snapshot straight to `snapshot_path`, streaming
+/// into the file instead of first materializing the whole serialized byte
+/// buffer on the heap: at the scale this snapshot can reach (many thousands
+/// of branches), that intermediate buffer was itself a multi-GB allocation,
+/// on top of the collection and its borrow-free snapshot copy already held
+/// live in memory.
+///
+/// Written to a `.tmp` sibling and renamed into place, so a run that dies
+/// mid-write (including an OOM kill) never leaves a truncated snapshot in
+/// place of the last good one.
+fn write_snapshot(
+    collection: &BranchCollection,
+    snapshot_path: &Utf8Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tmp_path = format!("{snapshot_path}.tmp");
+    let file = std::fs::File::create(&tmp_path)?;
+    let writer = rkyv::ser::writer::IoWriter::new(std::io::BufWriter::new(file));
+    let writer =
+        rkyv::api::high::to_bytes_in::<_, rkyv::rancor::Error>(&collection.to_snapshot(), writer)?;
+    writer.into_inner().flush()?;
+    std::fs::rename(&tmp_path, snapshot_path)?;
+    Ok(())
 }
 
 #[cfg(test)]
