@@ -6,20 +6,20 @@
 //! aggregating/ranking those summaries across the whole dataset.
 //!
 //! Printing of *results* is intentionally kept out of this module (see
-//! [`crate::reporting`]). The only output produced here is lightweight
-//! progress/throughput logging on stderr, which is tightly coupled to the
-//! timing data computed during processing and would be awkward to extract
-//! without duplicating that data.
+//! [`crate::reporting`]). The only output produced here is a live progress
+//! bar (see [`process_all_trajectories`]) plus one final per-stage timing
+//! summary — no periodic/repeated log lines.
 
 use std::borrow::Cow;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use ahash::AHashMap;
 use anyhow::Result;
 use fink_fat_engine::engine_config::grid_population::GridConfig;
 use fink_fat_engine::engine_config::kalman_context::KalmanContext;
 use fink_fat_engine::engine_config::kf_bank_config::KFBankConfig;
-use fink_fat_engine::topocentric_kf::kalman_bank::KFBank;
+use fink_fat_engine::engine_config::night_advance_params::NightAdvanceParams;
+use indicatif::{ProgressBar, ProgressStyle};
 use nalgebra::Vector6;
 use outfit::OrbitalElements;
 use rayon::prelude::*;
@@ -30,11 +30,10 @@ use photom::{
     observation_dataset::{ObsDataset, iter::MemLayoutObservations, observation::Observation},
 };
 
-use crate::kalman_traj::{KFStudyResult, study_kalman_asteroid};
-
-/// Print a progress notice on stderr every this many trajectories scanned,
-/// so a full-dataset run doesn't look stuck.
-const PROGRESS_EVERY: usize = 100;
+use crate::kalman_traj::{
+    NIS_CHI2_2DOF_HIGH, NIS_CHI2_2DOF_LOW, NIS_CHI2_2DOF_MEDIAN, ObserverGeometryCache,
+    StudyOutcome, TrajStopReason, study_kalman_asteroid,
+};
 
 // ── Trajectory materialization ──────────────────────────────────────────
 
@@ -151,7 +150,7 @@ fn median_of_sorted(sorted: &[f64]) -> f64 {
 
 /// Mean and (population) standard deviation of a slice of values.
 ///
-/// Used only for lightweight timing diagnostics in [`log_batch_progress`];
+/// Used only for the final per-stage timing summary in [`log_run_completion`];
 /// unlike [`MetricStats`] it doesn't need sorting or median/min/max.
 fn mean_std(values: &[f64]) -> (f64, f64) {
     let n = values.len() as f64;
@@ -196,46 +195,90 @@ pub struct TrajSummary {
     pub n_obs_total: usize,
     /// Number of predict/update steps that actually produced a result.
     pub n_steps: usize,
-    /// `n_steps` over the number of steps expected if the bank never
-    /// collapsed (1.0 means the whole arc was processed).
+    /// `n_steps` over [`StudyOutcome::n_processable`] (1.0 means every
+    /// observation actually available to the loop — after the bootstrap
+    /// pair and any deduplicated epochs — was processed).
+    ///
+    /// Deliberately *not* `n_obs_total - 2`: a trajectory whose first
+    /// same-night pair only appears after some inter-night singletons has
+    /// those singletons skipped by [`crate::kalman_traj::init_bank_from_first_pair`]
+    /// before the loop even starts — dividing by `n_obs_total - 2` would
+    /// then bias `completion_fraction` below 1.0 even on a perfect run.
     pub completion_fraction: f64,
+    /// Why the predict/update loop stopped — see
+    /// [`crate::kalman_traj::TrajStopReason`].
+    pub stop_reason: TrajStopReason,
+    /// Observations skipped before the bootstrap pair (inter-night
+    /// singletons the first-same-night-pair scan had to pass over) — `0`
+    /// unless the trajectory needed more than 2 observations to find a
+    /// bootstrap pair.
+    pub n_obs_before_bootstrap: usize,
+    /// Observations dropped by epoch deduplication (near-identical epoch to
+    /// another observation) before bootstrapping — see
+    /// [`crate::kalman_traj::TrajStopReason`]'s module doc.
+    pub n_obs_deduplicated: usize,
+    /// Observations available to the predict/update loop after the
+    /// bootstrap pair — the denominator of `completion_fraction`.
+    pub n_processable: usize,
     pub pct_within_3sigma: f64,
     pub pct_within_search_radius: f64,
     pub mean_separation_arcsec: f64,
     pub median_separation_arcsec: f64,
     pub mean_nis: f64,
+    /// Median NIS over this trajectory's steps — more robust than the mean
+    /// to the occasional huge-innovation outlier (see
+    /// [`Self::nis_calibration_ratio`]).
+    pub nis_median: f64,
+    /// Percentage of steps whose NIS falls within the χ²(2) 95% interval
+    /// `[NIS_CHI2_2DOF_LOW, NIS_CHI2_2DOF_HIGH]` — the fraction a
+    /// well-calibrated filter would put there by construction (95%).
+    pub pct_nis_in_chi2_band: f64,
+    /// `nis_median / NIS_CHI2_2DOF_MEDIAN` — ≈1.0 for a well-calibrated
+    /// filter, `≪ 1` means the filter's predicted covariance is
+    /// systematically too large (over-covariant: real residuals are small
+    /// compared to what the filter expects), `≫ 1` means it's
+    /// over-confident (covariance too small).
+    pub nis_calibration_ratio: f64,
     pub mean_mahalanobis: f64,
     pub mean_search_radius_arcsec: f64,
     pub mean_n_hypotheses_after: f64,
     pub mean_effective_sample_size: f64,
 }
 
-/// Reduce one trajectory's per-step results into a [`TrajSummary`].
+/// Reduce one trajectory's [`StudyOutcome`] into a [`TrajSummary`].
 ///
-/// Returns `None` if `results` is empty (bootstrap failed, or the
-/// trajectory had too few observations to seed the filter bank).
-fn summarize_trajectory(
+/// Returns `None` if `outcome.results` is empty (bootstrap failed, the
+/// bootstrap pair consumed the whole trajectory, or the very first step
+/// already produced a degenerate result) — nothing to summarize numerically,
+/// though `outcome.stop_reason` still explains why for the caller's
+/// stop-reason histogram (see `RunCounters::stop_reason_counts`).
+///
+/// `pub`: reused as-is by `kf_calibration::objective`, which runs the same
+/// materialize → Kalman filter bank → summarize pipeline as
+/// [`process_one_trajectory`] but against explicit, caller-chosen
+/// `EngineConfig`/`KalmanContext` variants instead of one fixed config.
+pub fn summarize_trajectory(
     traj_id: TrajId,
     n_obs_total: usize,
-    results: &[KFStudyResult],
-    final_bank: &KFBank,
+    outcome: &StudyOutcome,
 ) -> Option<TrajSummary> {
+    let results = &outcome.results;
     if results.is_empty() {
         return None;
     }
+    let final_bank = outcome.bank.as_ref()?;
 
     let separation = metric_stats(results, |r| r.separation_arcsec_from_region);
 
-    // The first two observations of every trajectory are consumed by the
-    // bootstrap pair, so that's the maximum number of predict/update steps
-    // that could ever be produced.
     let n_steps = results.len();
-    let max_possible_steps = n_obs_total.saturating_sub(2).max(1);
-    let completion_fraction = n_steps as f64 / max_possible_steps as f64;
+    let completion_fraction = n_steps as f64 / outcome.n_processable.max(1) as f64;
 
     let best_final_kf = &final_bank.best().unwrap().kf;
     let final_kf_state = best_final_kf.state;
     let estimated_orbit = best_final_kf.to_orbit();
+
+    let nis_stats = metric_stats(results, |r| r.nis);
+    let nis_median = nis_stats.median;
 
     Some(TrajSummary {
         traj_id,
@@ -244,11 +287,20 @@ fn summarize_trajectory(
         n_obs_total,
         n_steps,
         completion_fraction,
+        stop_reason: outcome.stop_reason,
+        n_obs_before_bootstrap: outcome.bootstrap_idx.unwrap_or(0),
+        n_obs_deduplicated: outcome.n_obs_deduplicated,
+        n_processable: outcome.n_processable,
         pct_within_3sigma: pct_true(results, |r| r.obs_within_3sigma_region),
         pct_within_search_radius: pct_true(results, |r| r.obs_within_search_radius),
         mean_separation_arcsec: separation.mean,
         median_separation_arcsec: separation.median,
-        mean_nis: metric_stats(results, |r| r.nis).mean,
+        mean_nis: nis_stats.mean,
+        nis_median,
+        pct_nis_in_chi2_band: pct_true(results, |r| {
+            r.nis >= NIS_CHI2_2DOF_LOW && r.nis <= NIS_CHI2_2DOF_HIGH
+        }),
+        nis_calibration_ratio: nis_median / NIS_CHI2_2DOF_MEDIAN,
         mean_mahalanobis: metric_stats(results, |r| r.mahalanobis_distance).mean,
         mean_search_radius_arcsec: metric_stats(results, |r| r.search_region_radius_arcsec).mean,
         mean_n_hypotheses_after: metric_stats(results, |r| r.n_hypotheses_after as f64).mean,
@@ -266,6 +318,12 @@ pub struct RunCounters {
     pub n_materialize_failed: usize,
     pub n_no_result: usize,
     pub n_not_enough_point: usize,
+    /// Histogram of [`TrajStopReason`] over every trajectory that reached
+    /// [`study_kalman_asteroid`] (i.e. everything except
+    /// `n_materialize_failed`, which never gets one — see
+    /// [`TrajOutcome::stop_reason`]). Iterate [`TrajStopReason::all`] for a
+    /// stable, complete-coverage report order; a missing key means `0`.
+    pub stop_reason_counts: AHashMap<TrajStopReason, usize>,
 }
 
 /// Intermediate result produced by one parallel worker for one trajectory,
@@ -273,6 +331,18 @@ pub struct RunCounters {
 /// diagnostics.
 struct TrajOutcome {
     outcome: TrajOutcomeKind,
+    /// `None` only for [`TrajOutcomeKind::MaterializeFailed`] — every other
+    /// outcome kind reaches at least the "not enough points"/bootstrap
+    /// stage and gets a real [`TrajStopReason`].
+    stop_reason: Option<TrajStopReason>,
+    /// This trajectory's NIS values, in step order (`nis_by_step[0]` is the
+    /// first predict/update step after the bootstrap pair, etc.) — empty
+    /// unless the loop produced at least one step. Fed into
+    /// [`nis_by_step_since_bootstrap`]'s dataset-wide bucketing, to check
+    /// whether NIS trends toward its χ²(2) expectation as more updates
+    /// accumulate (see [`crate::kalman_traj::TrajStopReason`]'s module doc
+    /// on the initial angular-rate covariance) or stays low throughout.
+    nis_by_step: Vec<f64>,
     materialize_ms: f64,
     kalman_ms: f64,
     summarize_ms: f64,
@@ -300,9 +370,9 @@ fn process_one_trajectory(
     context: &KalmanContext,
     bank_config: &KFBankConfig,
     grid_config: &GridConfig,
-    completed: &AtomicUsize,
-    nb_traj: usize,
-    global_start: &Instant,
+    advance_params: &NightAdvanceParams,
+    geometry_cache: &ObserverGeometryCache,
+    progress: &ProgressBar,
 ) -> TrajOutcome {
     let traj_start = Instant::now();
 
@@ -318,9 +388,11 @@ fn process_one_trajectory(
             );
             let materialize_ms = t0.elapsed().as_secs_f64() * 1e3;
             let total_ms = traj_start.elapsed().as_secs_f64() * 1e3;
-            record_completion(completed, nb_traj, global_start);
+            progress.inc(1);
             return TrajOutcome {
                 outcome: TrajOutcomeKind::MaterializeFailed,
+                stop_reason: None,
+                nis_by_step: Vec::new(),
                 materialize_ms,
                 kalman_ms: 0.0,
                 summarize_ms: 0.0,
@@ -334,8 +406,11 @@ fn process_one_trajectory(
     let len_traj = traj.len();
     if len_traj < 3 {
         let total_ms = traj_start.elapsed().as_secs_f64() * 1e3;
+        progress.inc(1);
         return TrajOutcome {
             outcome: TrajOutcomeKind::NotEnoughPoint,
+            stop_reason: Some(TrajStopReason::NotEnoughPoints),
+            nis_by_step: Vec::new(),
             materialize_ms,
             kalman_ms: 0.0,
             summarize_ms: 0.0,
@@ -345,32 +420,47 @@ fn process_one_trajectory(
 
     // --- kalman filter bank ---
     let t1 = Instant::now();
-    let (bank_opt, results) =
-        study_kalman_asteroid(&traj, obs_dataset, context, bank_config, grid_config);
+    let study_outcome = study_kalman_asteroid(
+        &traj,
+        obs_dataset,
+        context,
+        bank_config,
+        grid_config,
+        advance_params,
+        geometry_cache,
+        None,
+    );
     let kalman_ms = t1.elapsed().as_secs_f64() * 1e3;
+    let stop_reason = Some(study_outcome.stop_reason);
+    let nis_by_step: Vec<f64> = study_outcome
+        .results
+        .iter()
+        .map(|r| r.nis)
+        .filter(|v| v.is_finite())
+        .collect();
 
     // --- summarize ---
     let t2 = Instant::now();
-    let outcome = match bank_opt {
+    let outcome = match summarize_trajectory(traj_id.clone(), len_traj, &study_outcome) {
+        Some(summary) => TrajOutcomeKind::Summary(Box::new(summary)),
         None => {
-            tracing::debug!(traj = %traj_id, "Bootstrap produced no bank, skipping");
+            tracing::debug!(
+                traj = %traj_id,
+                stop_reason = study_outcome.stop_reason.label(),
+                "No usable step produced, skipping"
+            );
             TrajOutcomeKind::NoResult
         }
-        Some(bank) => match summarize_trajectory(traj_id.clone(), len_traj, &results, &bank) {
-            Some(summary) => TrajOutcomeKind::Summary(Box::new(summary)),
-            None => {
-                tracing::debug!(traj = %traj_id, "No usable step produced, skipping");
-                TrajOutcomeKind::NoResult
-            }
-        },
     };
     let summarize_ms = t2.elapsed().as_secs_f64() * 1e3;
     let total_ms = traj_start.elapsed().as_secs_f64() * 1e3;
 
-    record_completion(completed, nb_traj, global_start);
+    progress.inc(1);
 
     TrajOutcome {
         outcome,
+        stop_reason,
+        nis_by_step,
         materialize_ms,
         kalman_ms,
         summarize_ms,
@@ -378,34 +468,70 @@ fn process_one_trajectory(
     }
 }
 
-/// Bump the shared completion counter and emit a progress line if this
-/// completion lands on a [`PROGRESS_EVERY`] boundary.
-fn record_completion(completed: &AtomicUsize, nb_traj: usize, global_start: &Instant) {
-    let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
-    maybe_print_parallel_progress(done, nb_traj, global_start);
+/// Build the live progress bar shown while [`process_all_trajectories`]
+/// scans the dataset — one line, updated in place (no repeated/scrolling
+/// log output), with a running ETA computed by `indicatif` itself.
+fn build_progress_bar(nb_traj: usize) -> ProgressBar {
+    let progress = ProgressBar::new(nb_traj as u64);
+    progress.set_style(
+        ProgressStyle::with_template(
+            "{bar:40.cyan/blue} {pos}/{len} trajectories ({percent}%)  elapsed {elapsed_precise}  eta {eta_precise}",
+        )
+        .unwrap_or_else(|_| ProgressStyle::default_bar()),
+    );
+    progress
 }
 
-/// Print a lightweight progress line every [`PROGRESS_EVERY`] completions
-/// during the parallel phase.
+/// Number of leading steps-since-bootstrap tracked individually by
+/// [`nis_by_step_since_bootstrap`] before folding the rest into one "overflow"
+/// bucket — deep enough to see whether NIS trends toward its χ²(2)
+/// expectation over the first few updates, without letting a handful of very
+/// long arcs blow up the number of (mostly near-empty) buckets.
+pub const NIS_STEP_BUCKET_DEPTH: usize = 30;
+
+/// Dataset-wide NIS distribution for one "steps since the bootstrap pair"
+/// bucket — see [`nis_by_step_since_bootstrap`].
+#[derive(Debug, Clone)]
+pub struct StepBucketStats {
+    /// 1-based step index, e.g. `1` = the first predict/update step right
+    /// after the bootstrap pair. [`NIS_STEP_BUCKET_DEPTH`] + 1 means "this
+    /// step or later" (the overflow bucket).
+    pub step_index: usize,
+    /// Number of (trajectory, step) samples folded into this bucket.
+    pub n_samples: usize,
+    pub nis: MetricStats,
+}
+
+/// Reduce every trajectory's per-step NIS series into dataset-wide
+/// [`StepBucketStats`], one per steps-since-bootstrap value (see
+/// [`NIS_STEP_BUCKET_DEPTH`]).
 ///
-/// Uses `fetch_add` with `Relaxed` ordering — the exact firing boundary
-/// may slip by one under heavy contention, but this is acceptable for a
-/// progress indicator.
-fn maybe_print_parallel_progress(done: usize, total: usize, global_start: &Instant) {
-    if !done.is_multiple_of(PROGRESS_EVERY) {
-        return;
+/// This is the diagnostic for whether the filter's early-arc over-covariance
+/// (see `crate::kalman_traj::TrajStopReason`'s module doc on the
+/// finite-difference angular-rate variance) is transient — NIS should climb
+/// toward [`crate::kalman_traj::NIS_CHI2_2DOF_MEDIAN`] within the first few
+/// buckets as Kalman updates refine the initial velocity estimate — or
+/// persistent, which would point at a propagation/update issue instead of
+/// the bootstrap's initial covariance.
+fn nis_by_step_since_bootstrap(nis_by_step_all: &[Vec<f64>]) -> Vec<StepBucketStats> {
+    let mut buckets: Vec<Vec<f64>> = vec![Vec::new(); NIS_STEP_BUCKET_DEPTH + 1];
+
+    for nis_by_step in nis_by_step_all {
+        for (i, nis) in nis_by_step.iter().enumerate() {
+            buckets[i.min(NIS_STEP_BUCKET_DEPTH)].push(*nis);
+        }
     }
-    let elapsed = global_start.elapsed().as_secs_f64();
-    let mean_secs = elapsed / done as f64;
-    let eta = (mean_secs * total as f64 - elapsed).max(0.0);
-    eprintln!(
-        "  [parallel]    … {}/{} done  |  elapsed: {:.1} s  ETA: {:.1} s  ({:.1} ms/traj)",
-        done,
-        total,
-        elapsed,
-        eta,
-        mean_secs * 1e3,
-    );
+
+    buckets
+        .into_iter()
+        .enumerate()
+        .filter(|(_, values)| !values.is_empty())
+        .map(|(i, values)| StepBucketStats {
+            step_index: i + 1,
+            n_samples: values.len(),
+            nis: compute_stats(&values),
+        })
+        .collect()
 }
 
 /// Run the Kalman-filter bank study on every trajectory in `obs_dataset` and
@@ -416,21 +542,28 @@ fn maybe_print_parallel_progress(done: usize, total: usize, global_start: &Insta
 /// scales to datasets with many thousands of trajectories. The detailed
 /// per-step results for individual trajectories of interest (best/worst) are
 /// recomputed on demand by [`crate::reporting::print_detailed_reports`].
+///
+/// Also returns dataset-wide NIS-by-step-since-bootstrap buckets — see
+/// [`StepBucketStats`].
 pub fn process_all_trajectories(
     obs_dataset: &ObsDataset,
     context: &KalmanContext,
     bank_config: &KFBankConfig,
     grid_config: &GridConfig,
-) -> (Vec<TrajSummary>, RunCounters) {
+    advance_params: &NightAdvanceParams,
+) -> (Vec<TrajSummary>, RunCounters, Vec<StepBucketStats>) {
     let nb_traj = obs_dataset.iter_traj_id().map(|iter| iter.count()).unwrap();
 
-    let traj_ids: Vec<_> = obs_dataset
+    let traj_ids: Vec<TrajId> = obs_dataset
         .iter_traj_id()
         .expect("dataset must expose at least one trajectory")
+        .cloned()
         .collect();
 
+    let geometry_cache = ObserverGeometryCache::build(obs_dataset, context, &traj_ids);
+
     let global_start = Instant::now();
-    let completed = AtomicUsize::new(0);
+    let progress = build_progress_bar(nb_traj);
 
     // ── Parallel phase ────────────────────────────────────────────────
     let outcomes: Vec<TrajOutcome> = traj_ids
@@ -442,28 +575,31 @@ pub fn process_all_trajectories(
                 context,
                 bank_config,
                 grid_config,
-                &completed,
-                nb_traj,
-                &global_start,
+                advance_params,
+                &geometry_cache,
+                &progress,
             )
         })
         .collect();
 
-    // ── Sequential aggregation + progress reporting ────────────────────
-    aggregate_outcomes(outcomes, nb_traj, &global_start)
+    progress.finish_and_clear();
+
+    // ── Sequential aggregation ──────────────────────────────────────────
+    aggregate_outcomes(outcomes, global_start.elapsed())
 }
 
-/// Per-batch timing samples collected during the sequential aggregation
-/// pass. Used only to print periodic throughput diagnostics, then cleared.
+/// Whole-run timing samples, one push per completed [`TrajOutcome`] — used
+/// only for the single per-stage summary [`log_run_completion`] prints at
+/// the end, not for any periodic output.
 #[derive(Default)]
-struct TimingBatch {
+struct TimingStats {
     total_ms: Vec<f64>,
     materialize_ms: Vec<f64>,
     kalman_ms: Vec<f64>,
     summarize_ms: Vec<f64>,
 }
 
-impl TimingBatch {
+impl TimingStats {
     fn with_capacity(cap: usize) -> Self {
         Self {
             total_ms: Vec::with_capacity(cap),
@@ -479,35 +615,34 @@ impl TimingBatch {
         self.kalman_ms.push(outcome.kalman_ms);
         self.summarize_ms.push(outcome.summarize_ms);
     }
-
-    fn clear(&mut self) {
-        self.total_ms.clear();
-        self.materialize_ms.clear();
-        self.kalman_ms.clear();
-        self.summarize_ms.clear();
-    }
 }
 
 /// Fold the per-trajectory [`TrajOutcome`]s coming out of the parallel phase
-/// into the final [`RunCounters`] and the list of [`TrajSummary`]s, while
-/// periodically logging batch-level throughput to stderr.
+/// into the final [`RunCounters`] and the list of [`TrajSummary`]s, then
+/// print one final timing summary (see [`log_run_completion`]).
 fn aggregate_outcomes(
     outcomes: Vec<TrajOutcome>,
-    nb_traj: usize,
-    global_start: &Instant,
-) -> (Vec<TrajSummary>, RunCounters) {
-    let mut summaries = Vec::with_capacity(nb_traj);
+    global_elapsed: Duration,
+) -> (Vec<TrajSummary>, RunCounters, Vec<StepBucketStats>) {
+    let mut summaries = Vec::with_capacity(outcomes.len());
     let mut counters = RunCounters::default();
-
-    let mut batch = TimingBatch::with_capacity(PROGRESS_EVERY);
-    let mut batch_start = Instant::now();
+    let mut timings = TimingStats::with_capacity(outcomes.len());
+    let mut nis_by_step_all: Vec<Vec<f64>> = Vec::with_capacity(outcomes.len());
 
     for outcome in outcomes {
         counters.n_total += 1;
 
         // Record timings first: this only borrows `outcome`, so the
         // subsequent move of `outcome.outcome` below remains legal.
-        batch.push(&outcome);
+        timings.push(&outcome);
+
+        if let Some(reason) = outcome.stop_reason {
+            *counters.stop_reason_counts.entry(reason).or_insert(0) += 1;
+        }
+
+        if !outcome.nis_by_step.is_empty() {
+            nis_by_step_all.push(outcome.nis_by_step);
+        }
 
         match outcome.outcome {
             TrajOutcomeKind::MaterializeFailed => counters.n_materialize_failed += 1,
@@ -515,57 +650,33 @@ fn aggregate_outcomes(
             TrajOutcomeKind::NotEnoughPoint => counters.n_not_enough_point += 1,
             TrajOutcomeKind::Summary(s) => summaries.push(*s),
         }
-
-        if counters.n_total % PROGRESS_EVERY == 0 {
-            log_batch_progress(
-                &batch,
-                &counters,
-                nb_traj,
-                batch_start.elapsed(),
-                global_start.elapsed(),
-            );
-            batch.clear();
-            batch_start = Instant::now();
-        }
     }
 
-    log_run_completion(&counters, global_start.elapsed());
+    log_run_completion(&counters, &timings, global_elapsed);
 
-    (summaries, counters)
+    let step_buckets = nis_by_step_since_bootstrap(&nis_by_step_all);
+
+    (summaries, counters, step_buckets)
 }
 
-/// Print a periodic throughput report (every [`PROGRESS_EVERY`]
-/// trajectories) to stderr: batch/global elapsed time, ETA, and a per-stage
-/// timing breakdown (materialize / kalman / summarize).
-fn log_batch_progress(
-    batch: &TimingBatch,
-    counters: &RunCounters,
-    nb_traj: usize,
-    batch_elapsed: Duration,
-    global_elapsed: Duration,
-) {
-    let (total_mean, total_std) = mean_std(&batch.total_ms);
-    let (mat_mean, mat_std) = mean_std(&batch.materialize_ms);
-    let (kal_mean, kal_std) = mean_std(&batch.kalman_ms);
-    let (sum_mean, sum_std) = mean_std(&batch.summarize_ms);
-
-    let mean_secs_per_traj = global_elapsed.as_secs_f64() / counters.n_total as f64;
-    let estimated_total_secs = mean_secs_per_traj * nb_traj as f64;
-    let eta_secs = (estimated_total_secs - global_elapsed.as_secs_f64()).max(0.0);
+/// Print the single, once-per-run throughput summary to stderr: total
+/// elapsed time and a per-stage timing breakdown (materialize / kalman /
+/// summarize).
+fn log_run_completion(counters: &RunCounters, timings: &TimingStats, global_elapsed: Duration) {
+    let (total_mean, total_std) = mean_std(&timings.total_ms);
+    let (mat_mean, mat_std) = mean_std(&timings.materialize_ms);
+    let (kal_mean, kal_std) = mean_std(&timings.kalman_ms);
+    let (sum_mean, sum_std) = mean_std(&timings.summarize_ms);
 
     eprintln!(
-        "  [aggregation] … {}/{} trajectories\n\
-         \t| batch: {:.2} s  elapsed: {:.2} s  est. total: {:.2} s  ETA: {:.2} s\n\
+        "  ✓ All {} trajectories processed in {:.2} s ({:.3} ms/traj on average)\n\
          \t| per traj:    {:.2} ± {:.2} ms\n\
          \t| materialize: {:.2} ± {:.2} ms\n\
          \t| kalman:      {:.2} ± {:.2} ms\n\
          \t| summarize:   {:.2} ± {:.2} ms",
         counters.n_total,
-        nb_traj,
-        batch_elapsed.as_secs_f64(),
         global_elapsed.as_secs_f64(),
-        estimated_total_secs,
-        eta_secs,
+        global_elapsed.as_secs_f64() / counters.n_total.max(1) as f64 * 1e3,
         total_mean,
         total_std,
         mat_mean,
@@ -574,16 +685,6 @@ fn log_batch_progress(
         kal_std,
         sum_mean,
         sum_std,
-    );
-}
-
-/// Print the final once-per-run throughput summary to stderr.
-fn log_run_completion(counters: &RunCounters, global_elapsed: Duration) {
-    eprintln!(
-        "  ✓ All {} trajectories processed in {:.2} s ({:.3} ms/traj on average)",
-        counters.n_total,
-        global_elapsed.as_secs_f64(),
-        global_elapsed.as_secs_f64() / counters.n_total.max(1) as f64 * 1e3,
     );
 }
 

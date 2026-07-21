@@ -301,6 +301,9 @@ pub fn admissible_region_grid<'state_lf>(
     let (var_ra, var_dec) = angular_position_variances(&mid_point);
     let (var_ra_dot, var_dec_dot) = angular_rate_variances(&mid_speed);
 
+    dbg!(var_ra_dot);
+    dbg!(var_dec_dot);
+
     let k2 = GAUSS_GRAV_SQUARED;
     let r_obs_norm2 = r_obs.norm_squared();
     let r_obs_dot_u = r_obs.dot(&los);
@@ -432,6 +435,8 @@ pub fn admissible_region_grid<'state_lf>(
                 var_rho,
                 var_rho_dot,
             );
+
+            dbg!(covariance);
 
             seeds.push((
                 KFState {

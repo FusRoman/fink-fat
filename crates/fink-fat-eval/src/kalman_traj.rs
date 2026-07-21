@@ -1,27 +1,213 @@
+use ahash::AHashMap;
 use fink_fat_engine::{
     engine_config::{
         grid_population::GridConfig, kalman_context::KalmanContext, kf_bank_config::KFBankConfig,
+        night_advance_params::NightAdvanceParams,
     },
     topocentric_kf::{
         kalman_bank::{
             BankStep, KFBank,
-            ellipse_region_finder::{
-                SearchRegion,
-                radius_strategy::{MixOrMax, RadiusStrategy},
-                top_k::TopK,
-            },
+            ellipse_region_finder::{SearchRegion, search_region_from_mixture},
         },
         single_kalman::{KFState, update::wrap_angle},
     },
 };
-use nalgebra::{Matrix2, Vector2};
+use nalgebra::{Matrix2, Vector2, Vector3};
 use photom::{
+    TrajId,
     coordinates::equatorial::EquCoord,
-    observation_dataset::{ObsDataset, observation::Observation},
+    observation_dataset::{ObsDataset, ObsId, observation::Observation},
 };
+use rayon::prelude::*;
 
 const RAD_TO_ARCSEC: f64 = 3600.0 * 180.0 / std::f64::consts::PI;
 const ARCSEC_TO_RAD: f64 = 1.0 / RAD_TO_ARCSEC;
+
+/// χ²(2) quantiles/median, used to judge NIS calibration dataset-wide (see
+/// `crate::trajectory_processing::TrajSummary::nis_calibration_ratio`). A
+/// well-calibrated filter's NIS follows χ²(2); a median far below
+/// [`NIS_CHI2_2DOF_MEDIAN`] means the filter's predicted covariance is
+/// systematically too large (over-covariant — the actual residuals are
+/// small compared to what the filter expects), far above means it's
+/// over-confident (too small a covariance).
+///
+/// Closed form for k=2 degrees of freedom (χ²(2) is `Exponential(rate =
+/// 1/2)`): `P(X ≤ x) = 1 - exp(-x/2)`, so `x_p = -2·ln(1-p)`.
+pub const NIS_CHI2_2DOF_LOW: f64 = 0.050_636_616_366_209; // 2.5th percentile
+pub const NIS_CHI2_2DOF_MEDIAN: f64 = 1.386_294_361_12; // 50th percentile (-2 ln 0.5)
+pub const NIS_CHI2_2DOF_HIGH: f64 = 7.377_758_908_23; // 97.5th percentile
+
+/// Why a trajectory's predict/update loop ([`study_kalman_asteroid`])
+/// stopped where it did.
+///
+/// The first three variants are never produced by `study_kalman_asteroid`
+/// itself — they describe a trajectory that never reached (or never
+/// finished setting up) its loop, assigned by the caller
+/// (`crate::trajectory_processing::process_one_trajectory`). The rest are
+/// assigned from inside the loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TrajStopReason {
+    /// Fewer than 3 observations (before deduplication) — too short to be
+    /// worth bootstrapping at all. Assigned by the caller, before
+    /// `study_kalman_asteroid` is even called.
+    NotEnoughPoints,
+    /// No same-night (`dt < 0.5 d`) pair found anywhere in the
+    /// (deduplicated) trajectory — [`init_bank_from_first_pair`] had
+    /// nothing to seed a bank from.
+    BootstrapFailed,
+    /// The bootstrap pair consumed the whole (deduplicated) trajectory —
+    /// nothing left to predict/update against.
+    NoProcessableObs,
+    /// Every observation after the bootstrap pair was processed — the loop
+    /// ran to completion.
+    ReachedEnd,
+    /// The bank collapsed because at least one live hypothesis was rejected
+    /// by the chi-square gate (`BankStep.n_gated > 0` — see
+    /// `KFBankConfig::gate_chi2`). Takes priority over
+    /// [`Self::CollapsedByPropagation`] when a step produces both gated and
+    /// failed hypotheses, since gating is the deliberate/expected mechanism.
+    CollapsedByGating,
+    /// The bank collapsed with zero gated hypotheses — every live
+    /// hypothesis failed to propagate (Kepler solver/Jacobian failure,
+    /// e.g. a `dt` too small or too extreme for the two-body solver).
+    CollapsedByPropagation,
+    /// The bank survived the step but produced a degenerate result
+    /// afterward: `KFBank::best()` returned `None`, or the per-step
+    /// diagnostics couldn't be computed (singular sky covariance, etc.).
+    DegenerateState,
+}
+
+impl TrajStopReason {
+    /// Stable, human-readable label for console output.
+    pub fn label(self) -> &'static str {
+        match self {
+            TrajStopReason::NotEnoughPoints => "not enough points",
+            TrajStopReason::BootstrapFailed => "bootstrap failed (no intra-night pair)",
+            TrajStopReason::NoProcessableObs => "no processable obs after bootstrap",
+            TrajStopReason::ReachedEnd => "reached end",
+            TrajStopReason::CollapsedByGating => "collapsed (gating)",
+            TrajStopReason::CollapsedByPropagation => "collapsed (propagation failure)",
+            TrajStopReason::DegenerateState => "degenerate state",
+        }
+    }
+
+    /// All variants, in the fixed order used for reporting.
+    pub fn all() -> [TrajStopReason; 7] {
+        [
+            TrajStopReason::NotEnoughPoints,
+            TrajStopReason::BootstrapFailed,
+            TrajStopReason::NoProcessableObs,
+            TrajStopReason::ReachedEnd,
+            TrajStopReason::CollapsedByGating,
+            TrajStopReason::CollapsedByPropagation,
+            TrajStopReason::DegenerateState,
+        ]
+    }
+}
+
+// ── Observer geometry cache ─────────────────────────────────────────────────
+
+/// Precomputed `ObsId -> (r_obs, v_obs)` observer heliocentric geometry,
+/// resolved once for every observation of a given trajectory population and
+/// reused across every subsequent [`study_kalman_asteroid`] call.
+///
+/// This geometry depends only on `(obs_dataset, obs, kalman_ctx)` — never on
+/// [`KFBankConfig`]/[`NightAdvanceParams`]/`KalmanConfig`'s `q0`/`dt_ref`, or
+/// on any other tunable parameter — so it is valid for the lifetime of a
+/// whole calibration run (see `fink_fat_eval::kf_calibration`), not just one
+/// candidate. Building it once up front turns what would otherwise be a
+/// repeated, non-trivial ephemeris lookup (observer cache construction +
+/// JPL interpolation + light-time correction — see
+/// [`fink_fat_engine::topocentric_kf::observer_state::EphemState::helio_observer_state`])
+/// into a single O(1) map lookup per step.
+pub struct ObserverGeometryCache(AHashMap<ObsId, (Vector3<f64>, Vector3<f64>)>);
+
+impl ObserverGeometryCache {
+    /// Resolve the geometry of every observation belonging to `traj_ids`,
+    /// once, in parallel (read-only work, safe to run concurrently —
+    /// same pattern as
+    /// [`crate::trajectory_processing::process_all_trajectories`]).
+    /// Observations whose observer/ephemeris lookup fails are simply
+    /// omitted — [`Self::get`] falls back to a direct (uncached)
+    /// resolution for those, so nothing is lost, only slower for that one
+    /// observation.
+    pub fn build(obs_dataset: &ObsDataset, context: &KalmanContext, traj_ids: &[TrajId]) -> Self {
+        let entries: Vec<(ObsId, (Vector3<f64>, Vector3<f64>))> = traj_ids
+            .par_iter()
+            .filter_map(|traj_id| {
+                crate::trajectory_processing::materialize_contiguous_traj(obs_dataset, traj_id).ok()
+            })
+            .flat_map_iter(|traj| {
+                traj.iter()
+                    .filter_map(|obs| {
+                        resolve_geometry(obs_dataset, context, obs).map(|g| (*obs.id(), g))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        Self(entries.into_iter().collect())
+    }
+
+    /// Cached geometry for `obs`, falling back to a direct (uncached)
+    /// resolution on a miss.
+    pub fn get(
+        &self,
+        obs_dataset: &ObsDataset,
+        context: &KalmanContext,
+        obs: &Observation,
+    ) -> Option<(Vector3<f64>, Vector3<f64>)> {
+        self.0
+            .get(obs.id())
+            .copied()
+            .or_else(|| resolve_geometry(obs_dataset, context, obs))
+    }
+}
+
+/// Resolve one observation's observer heliocentric geometry directly
+/// (uncached) — the primitive [`ObserverGeometryCache`] wraps.
+fn resolve_geometry(
+    obs_dataset: &ObsDataset,
+    context: &KalmanContext,
+    obs: &Observation,
+) -> Option<(Vector3<f64>, Vector3<f64>)> {
+    let observer = obs_dataset.get_observer(*obs.id())?;
+    let helio_state = context
+        .get_ephem()
+        .helio_observer_state(observer, obs.mjd_tt())
+        .ok()?;
+    Some((helio_state.helio_cart_pos, helio_state.helio_cart_vel))
+}
+
+// ── Epoch deduplication ─────────────────────────────────────────────────────
+
+/// Drop observations whose epoch falls within `tolerance_days` of the
+/// previous *kept* observation's epoch (`traj` assumed already sorted by
+/// epoch; the first of each duplicate cluster is kept).
+///
+/// Two detections at (near-)identical epochs are a structural case the
+/// Kalman filter can't handle: [`KFState::predict`]/`propagate_to_epoch`
+/// light-time-corrects and integrates over `dt`, and `dt ≈ 0` against a
+/// spatially-distinct second detection produces a spuriously huge
+/// innovation (and NIS) rather than a real filter inconsistency — polluting
+/// both completion and NIS calibration statistics for a reason that has
+/// nothing to do with how well the filter tracks the object.
+///
+/// Returns the deduplicated trajectory and the number of observations
+/// dropped.
+fn dedupe_by_epoch(traj: &[Observation], tolerance_days: f64) -> (Vec<Observation>, usize) {
+    let mut kept: Vec<Observation> = Vec::with_capacity(traj.len());
+    let mut n_removed = 0;
+    for obs in traj {
+        match kept.last() {
+            Some(prev) if obs.mjd_tt() - prev.mjd_tt() < tolerance_days => {
+                n_removed += 1;
+            }
+            _ => kept.push(obs.clone()),
+        }
+    }
+    (kept, n_removed)
+}
 
 // ── Grid / bank initialisation ────────────────────────────────────────────────
 
@@ -179,34 +365,69 @@ impl SearchRegionDiag {
     }
 }
 
+/// Reduce an already-propagated `(weight, state)` mixture (see
+/// [`KFBank::predicted_mixture`]) into a [`SearchRegion`], applying `top_k`
+/// first (the mixture is captured pre-`top_k` so it stays reusable for any
+/// `top_k`/`search_region_chi2`/`radius_strategy` combination — see
+/// [`recompute_search_region_metrics`]).
 fn compute_search_region(
-    bank: &KFBank<'_, '_>,
-    obs_dataset: &ObsDataset,
-    obs: &Observation,
-    context: &KalmanContext,
+    predicted: &[(f64, KFState)],
+    advance_params: &NightAdvanceParams,
+    search_region_chi2: f64,
 ) -> Option<SearchRegion> {
-    let observer = obs_dataset.get_observer(*obs.id())?;
-    let helio_state = context
-        .get_ephem()
-        .helio_observer_state(observer, obs.mjd_tt())
-        .ok()?;
-    let coord = obs.equ_coord();
-    let obs_noise = Vector2::new(
-        coord.ra_error * coord.ra_error,
-        coord.dec_error * coord.dec_error,
-    );
-    bank.predict_search_region(
-        obs.mjd_tt(),
-        helio_state.helio_cart_pos,
-        helio_state.helio_cart_vel,
+    let mut predicted = predicted.to_vec();
+    advance_params.top_k.apply(&mut predicted);
+    let obs_noise = Vector2::from(advance_params.obs_noise);
+    search_region_from_mixture(
+        &predicted,
         obs_noise,
-        TopK::WeightThreshold(0.99),
-        RadiusStrategy::Clamped {
-            inner: MixOrMax::MixtureCovariance,
-            max_arcsec: 30. * 60., // 30 arcminutes
-        },
+        advance_params.radius_strategy,
+        search_region_chi2,
     )
     .ok()
+}
+
+/// Cheaply recompute `(pct_within_search_radius, mean_search_radius_arcsec)`
+/// for a candidate `(advance_params, search_region_chi2)` pair against a
+/// trajectory's already-recorded per-step mixtures — see
+/// [`study_kalman_asteroid`]'s `mixture_recorder` parameter. No ephemeris
+/// lookup, no Kepler solve, no gating: purely the geometric/statistical
+/// reduction [`compute_search_region`] performs.
+///
+/// One `(mixture, observation)` pair per predict/update step actually
+/// processed — see [`study_kalman_asteroid`]'s `mixture_recorder` parameter.
+pub fn recompute_search_region_metrics(
+    steps: &[(Vec<(f64, KFState)>, Observation)],
+    advance_params: &NightAdvanceParams,
+    search_region_chi2: f64,
+) -> (f64, f64) {
+    let n = steps.len();
+    if n == 0 {
+        return (f64::NAN, f64::NAN);
+    }
+
+    let mut n_within = 0usize;
+    let mut radii_arcsec: Vec<f64> = Vec::with_capacity(n);
+
+    for (predicted, obs) in steps {
+        let Some(region) = compute_search_region(predicted, advance_params, search_region_chi2)
+        else {
+            continue;
+        };
+        let sep = separation_from_search_center(&region, obs.equ_coord());
+        if sep <= region.radius_rad {
+            n_within += 1;
+        }
+        radii_arcsec.push(region.radius_rad * RAD_TO_ARCSEC);
+    }
+
+    let pct_within_search_radius = 100.0 * n_within as f64 / n as f64;
+    let mean_search_radius_arcsec = if radii_arcsec.is_empty() {
+        f64::NAN
+    } else {
+        radii_arcsec.iter().sum::<f64>() / radii_arcsec.len() as f64
+    };
+    (pct_within_search_radius, mean_search_radius_arcsec)
 }
 
 fn search_region_diag(region: &SearchRegion, equ_obs: &EquCoord) -> SearchRegionDiag {
@@ -450,14 +671,53 @@ pub struct KFStudyResult {
 
 // ── Main entry point ──────────────────────────────────────────────────────────
 
+/// Everything [`study_kalman_asteroid`] learned about a trajectory: not
+/// just the final bank/per-step results, but *why* the loop stopped where
+/// it did and how many observations were actually available to it — needed
+/// to compute an unbiased `completion_fraction`
+/// (`crate::trajectory_processing::TrajSummary`) and to build a
+/// dataset-wide stop-reason histogram
+/// (`crate::trajectory_processing::RunCounters`).
+pub struct StudyOutcome<'a, 'bank_config> {
+    pub bank: Option<KFBank<'a, 'bank_config>>,
+    pub results: Vec<KFStudyResult>,
+    pub stop_reason: TrajStopReason,
+    /// Index (into the deduplicated trajectory) of the bootstrap pair's
+    /// first observation — `None` only for [`TrajStopReason::BootstrapFailed`].
+    pub bootstrap_idx: Option<usize>,
+    /// Observations available to the predict/update loop after the
+    /// bootstrap pair (`deduplicated_len - (bootstrap_idx + 2)`) — the
+    /// unbiased denominator for `completion_fraction`, unlike
+    /// `n_obs_total - 2` which ignores any observations the bootstrap scan
+    /// had to skip before finding a same-night pair.
+    pub n_processable: usize,
+    /// Observations dropped by [`dedupe_by_epoch`] (near-identical epoch to
+    /// the previous kept observation) before bootstrapping.
+    pub n_obs_deduplicated: usize,
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn study_kalman_asteroid<'a, 'bank_config>(
     traj: &[Observation],
     obs_dataset: &ObsDataset,
     context: &'a KalmanContext,
     bank_config: &'bank_config KFBankConfig,
     grid_config: &GridConfig,
-) -> (Option<KFBank<'a, 'bank_config>>, Vec<KFStudyResult>) {
+    advance_params: &NightAdvanceParams,
+    geometry_cache: &ObserverGeometryCache,
+    mut mixture_recorder: Option<&mut Vec<(Vec<(f64, KFState<'a>)>, Observation)>>,
+) -> StudyOutcome<'a, 'bank_config> {
     tracing::debug!(n_obs = traj.len(), "Starting Kalman filter bank study");
+
+    let (traj, n_obs_deduplicated) =
+        dedupe_by_epoch(traj, advance_params.visit_epoch_tolerance_days);
+    let traj = traj.as_slice();
+    if n_obs_deduplicated > 0 {
+        tracing::debug!(
+            n_obs_deduplicated,
+            "Dropped near-duplicate-epoch observations"
+        );
+    }
 
     let (idx_first_obs, mut bank) =
         match init_bank_from_first_pair(traj, obs_dataset, context, bank_config, grid_config) {
@@ -471,7 +731,14 @@ pub fn study_kalman_asteroid<'a, 'bank_config>(
             }
             None => {
                 tracing::debug!("Bootstrap failed, returning empty results");
-                return (None, Vec::new());
+                return StudyOutcome {
+                    bank: None,
+                    results: Vec::new(),
+                    stop_reason: TrajStopReason::BootstrapFailed,
+                    bootstrap_idx: None,
+                    n_processable: 0,
+                    n_obs_deduplicated,
+                };
             }
         };
 
@@ -483,8 +750,20 @@ pub fn study_kalman_asteroid<'a, 'bank_config>(
         "Starting predict/update loop"
     );
 
+    if n_obs == 0 {
+        return StudyOutcome {
+            bank: Some(bank),
+            results: Vec::new(),
+            stop_reason: TrajStopReason::NoProcessableObs,
+            bootstrap_idx: Some(idx_first_obs),
+            n_processable: 0,
+            n_obs_deduplicated,
+        };
+    }
+
     let mut t_prev = traj[idx_first_obs + 1].mjd_tt();
     let mut kf_results: Vec<KFStudyResult> = Vec::with_capacity(n_obs);
+    let mut stop_reason = TrajStopReason::ReachedEnd;
 
     for (step, obs) in observations_to_process.iter().enumerate() {
         let epoch = obs.mjd_tt();
@@ -498,7 +777,18 @@ pub fn study_kalman_asteroid<'a, 'bank_config>(
             "Step header"
         );
 
-        let region = compute_search_region(&bank, obs_dataset, obs, context);
+        let geometry = geometry_cache.get(obs_dataset, context, obs);
+        // One `predicted_mixture` call here (which does the same two-body
+        // propagation `predict_search_region` used to do internally) instead
+        // of asking the bank for a `SearchRegion` directly — this is the
+        // exact raw `(weight, state)` mixture `mixture_recorder` needs, so
+        // recording costs nothing beyond the propagation this step already
+        // pays for either way.
+        let predicted_mixture =
+            geometry.map(|(r_obs, v_obs)| bank.predicted_mixture(epoch, r_obs, v_obs));
+        let region = predicted_mixture.as_ref().and_then(|predicted| {
+            compute_search_region(predicted, advance_params, bank_config.search_region_chi2)
+        });
 
         tracing::trace!(
             n_hypotheses = bank.len(),
@@ -508,11 +798,25 @@ pub fn study_kalman_asteroid<'a, 'bank_config>(
 
         // Snapshot before step in case it collapses.
         let snapshot = bank.clone();
-        let report = bank.step(obs_dataset, obs);
+        // `step_with_geometry` when geometry is already known (the common
+        // case, thanks to `geometry_cache`) skips a redundant per-hypothesis
+        // ephemeris lookup `step` would otherwise perform internally — see
+        // `KFBank::step_with_geometry`'s doc. Falls back to `step` (which
+        // resolves geometry itself) on the rare cache-miss-and-direct-lookup-
+        // also-failed case, for identical failure semantics either way.
+        let report = match geometry {
+            Some((r_obs, v_obs)) => bank.step_with_geometry(r_obs, v_obs, obs),
+            None => bank.step(obs_dataset, obs),
+        };
         log_bank_report(&report);
 
         if report.collapsed {
-            tracing::trace!(step = step + 1, "Bank collapsed, stopping");
+            stop_reason = match (report.n_gated, report.n_failed) {
+                (0, f) if f > 0 => TrajStopReason::CollapsedByPropagation,
+                (g, _) if g > 0 => TrajStopReason::CollapsedByGating,
+                _ => TrajStopReason::DegenerateState,
+            };
+            tracing::trace!(step = step + 1, ?stop_reason, "Bank collapsed, stopping");
             bank = snapshot;
             break;
         }
@@ -521,6 +825,7 @@ pub fn study_kalman_asteroid<'a, 'bank_config>(
             Some(b) => b,
             None => {
                 tracing::warn!(step = step + 1, "Bank non-empty but best() returned None");
+                stop_reason = TrajStopReason::DegenerateState;
                 bank = snapshot;
                 break;
             }
@@ -533,6 +838,7 @@ pub fn study_kalman_asteroid<'a, 'bank_config>(
             Some(d) => d,
             None => {
                 tracing::warn!(step = step + 1, "compute_step_diag returned None, stopping");
+                stop_reason = TrajStopReason::DegenerateState;
                 bank = snapshot;
                 break;
             }
@@ -553,11 +859,26 @@ pub fn study_kalman_asteroid<'a, 'bank_config>(
 
         tracing::trace!(orbit = %best.kf.to_orbit(), "Best KF orbit");
 
+        // Recorded only once this step is confirmed to produce a
+        // `KFStudyResult` (past every early-`break` above), so
+        // `mixture_recorder`'s entries stay 1:1 aligned with `kf_results` —
+        // required by `recompute_search_region_metrics`.
+        if let (Some(recorder), Some(predicted)) = (&mut mixture_recorder, predicted_mixture) {
+            recorder.push((predicted, obs.clone()));
+        }
+
         t_prev = epoch;
         kf_results.push(assemble_result(epoch, dt, &diag, &report, &sr));
     }
 
-    (Some(bank), kf_results)
+    StudyOutcome {
+        bank: Some(bank),
+        results: kf_results,
+        stop_reason,
+        bootstrap_idx: Some(idx_first_obs),
+        n_processable: n_obs,
+        n_obs_deduplicated,
+    }
 }
 
 // ── Pure helper functions (unchanged) ─────────────────────────────────────────

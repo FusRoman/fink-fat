@@ -21,6 +21,7 @@ ahash = { workspace = true }
 photom = { workspace = true, features = ["serde"] }
 outfit = { workspace = true, features = ["serde"]}
 rkyv = { workspace = true, features = ["pointer_width_64"] }
+memmap2 = { workspace = true }
 
 nalgebra = { version = "0.34.2" }
 hifitime = { version = "4.2.0", default-features = false, features = [

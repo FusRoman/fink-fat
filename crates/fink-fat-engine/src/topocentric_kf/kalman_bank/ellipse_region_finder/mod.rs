@@ -1,7 +1,7 @@
 pub mod radius_strategy;
 pub mod top_k;
 
-use nalgebra::{Matrix2, Vector2};
+use nalgebra::{Matrix2, Vector2, Vector3};
 
 use crate::topocentric_kf::{
     kalman_bank::{
@@ -301,52 +301,112 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
             .map(|hyp| (hyp.weight(), hyp.kf.clone()))
             .collect();
         top_k.apply(&mut predicted);
-        if predicted.is_empty() {
-            return Err(PropagateError::SingularJacobian);
-        }
-        EllipseRegionEvent::HypothesisSelectionApplied {
-            n_selected: predicted.len(),
-        }
-        .emit();
 
-        let (center_ra, center_dec) = weighted_sky_centroid(&predicted);
-        let r_noise = Matrix2::from_diagonal(&obs_noise);
-
-        // NOTE: we use `search_region_chi2` here, NOT `gate_chi2`.
-        // These two parameters serve different purposes:
-        //
-        //   gate_chi2          — tight chi-square threshold for discarding
-        //                        implausible hypotheses during the update step
-        //                        (e.g. 23.0 ≈ 99.999 %).
-        //
-        //   search_region_chi2 — determines how large the predicted sky region
-        //                        is.  It should be generous enough to reliably
-        //                        contain the next observation even when the
-        //                        filter is slightly overconfident.  Typical
-        //                        values: 100–500 (10–22σ).
-        //
-        // Coupling them caused the search radius to shrink whenever gate_chi2
-        // was reduced to a physically meaningful value, making `in_r` coverage
-        // drop to ~25 % even when the filter was tracking correctly.
-        let chi2 = self.config.search_region_chi2;
-        let components = build_components(&predicted, r_noise, chi2);
-        let radius_rad = radius_strategy.radius(&components, center_ra, center_dec);
-
-        EllipseRegionEvent::SearchRegionComputed {
-            center_ra_deg: center_ra.to_degrees(),
-            center_dec_deg: center_dec.to_degrees(),
-            radius_arcsec: radius_rad.to_degrees() * 3600.0,
-            n_components: components.len(),
-        }
-        .emit();
-
-        Ok(SearchRegion {
-            center_ra,
-            center_dec,
-            radius_rad,
-            components,
-        })
+        // NOTE: `search_region_chi2`, NOT `gate_chi2` — see
+        // `search_region_from_mixture`'s doc for why these are deliberately
+        // decoupled.
+        search_region_from_mixture(
+            &predicted,
+            obs_noise,
+            radius_strategy,
+            self.config.search_region_chi2,
+        )
     }
+
+    /// Every live hypothesis's predicted `(weight, state)` at `t_prop`,
+    /// **before** any [`TopK`] selection — the raw input
+    /// [`search_region_from_mixture`] (via [`Self::search_region`]) filters
+    /// down.
+    ///
+    /// Exposed so a caller that needs to try several [`TopK`]/
+    /// `search_region_chi2`/[`RadiusStrategy`] combinations against the
+    /// *same* propagated epoch — e.g. re-deriving a [`SearchRegion`] for
+    /// several calibration candidates without re-running the two-body
+    /// propagation each time — can propagate once here and call
+    /// [`search_region_from_mixture`] directly per combination, instead of
+    /// paying for [`Self::predict_to`]'s Kepler solve again through
+    /// [`Self::search_region`]/[`Self::predict_search_region`] each time.
+    pub fn predicted_mixture(
+        &self,
+        t_prop: f64,
+        r_obs_new: Vector3<f64>,
+        v_obs_new: Vector3<f64>,
+    ) -> Vec<(f64, KFState<'state_lf>)> {
+        self.predict_to(t_prop, r_obs_new, v_obs_new)
+            .hypotheses()
+            .iter()
+            .map(|hyp| (hyp.weight(), hyp.kf.clone()))
+            .collect()
+    }
+}
+
+/// Reduce an already-propagated mixture of `(weight, state)` hypotheses
+/// (see [`KFBank::predicted_mixture`]) into a [`SearchRegion`] — the part of
+/// [`KFBank::search_region`] that doesn't need the bank itself, only the
+/// propagated hypotheses and the four inputs that shape the region
+/// (`obs_noise`, `radius_strategy`, and `search_region_chi2` below).
+///
+/// Pulled out as a free function (rather than kept as a private step inside
+/// [`KFBank::search_region`]) so a caller that already has a propagated
+/// mixture — from [`KFBank::predicted_mixture`], recorded once — can
+/// recompute a [`SearchRegion`] for as many `(obs_noise, radius_strategy,
+/// search_region_chi2)` combinations as needed, without repeating the
+/// two-body Kepler propagation each time. `top_k` selection is expected to
+/// already have been applied to `predicted` by the caller (see
+/// [`TopK::apply`]) — kept out of this function so it stays purely
+/// geometric/statistical, no [`TopK`] dependency.
+///
+/// # `search_region_chi2` vs. `gate_chi2`
+///
+/// These two parameters serve different purposes:
+///
+///   `gate_chi2`          — tight chi-square threshold for discarding
+///                          implausible hypotheses during the update step
+///                          (e.g. 23.0 ≈ 99.999 %).
+///
+///   `search_region_chi2` — determines how large the predicted sky region
+///                          is.  It should be generous enough to reliably
+///                          contain the next observation even when the
+///                          filter is slightly overconfident.  Typical
+///                          values: 100–500 (10–22σ).
+///
+/// Coupling them caused the search radius to shrink whenever `gate_chi2`
+/// was reduced to a physically meaningful value, making `in_r` coverage
+/// drop to ~25 % even when the filter was tracking correctly.
+pub fn search_region_from_mixture(
+    predicted: &[(f64, KFState)],
+    obs_noise: Vector2<f64>,
+    radius_strategy: RadiusStrategy,
+    search_region_chi2: f64,
+) -> Result<SearchRegion, PropagateError> {
+    if predicted.is_empty() {
+        return Err(PropagateError::SingularJacobian);
+    }
+    EllipseRegionEvent::HypothesisSelectionApplied {
+        n_selected: predicted.len(),
+    }
+    .emit();
+
+    let (center_ra, center_dec) = weighted_sky_centroid(predicted);
+    let r_noise = Matrix2::from_diagonal(&obs_noise);
+
+    let components = build_components(predicted, r_noise, search_region_chi2);
+    let radius_rad = radius_strategy.radius(&components, center_ra, center_dec);
+
+    EllipseRegionEvent::SearchRegionComputed {
+        center_ra_deg: center_ra.to_degrees(),
+        center_dec_deg: center_dec.to_degrees(),
+        radius_arcsec: radius_rad.to_degrees() * 3600.0,
+        n_components: components.len(),
+    }
+    .emit();
+
+    Ok(SearchRegion {
+        center_ra,
+        center_dec,
+        radius_rad,
+        components,
+    })
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────

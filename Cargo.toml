@@ -53,6 +53,7 @@ polars = { version = "0.53.0", default-features = false, features = [
     "temporal",
 ] }
 rkyv = "0.8.17"
+memmap2 = "0.9.10"
 
 
 [dependencies]
@@ -94,6 +95,7 @@ codegen-units = 128
 overflow-checks = true
 debug-assertions = true
 incremental = true
+debug=true
 
 [profile.evaluation.package."*"]
 codegen-units = 32

@@ -96,6 +96,7 @@ use crate::{
             hypothesis::{Hypothesis, HypothesisSnapshot, HypothesisStepResult},
             seed_grid::admissible_region_grid,
         },
+        observer_state::get_observer,
     },
 };
 
@@ -450,6 +451,83 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
     /// - Merge spatially coincident modes.
     /// - Re-normalize.
     pub fn step(&mut self, obs_dataset: &ObsDataset, obs: &Observation) -> BankStep {
+        let geometry = self.resolve_step_geometry(obs_dataset, obs);
+        self.step_impl(geometry, obs)
+    }
+
+    /// Same as [`Self::step`], but with the observer heliocentric geometry
+    /// at `obs`'s epoch supplied by the caller instead of resolved
+    /// internally.
+    ///
+    /// For a caller that already knows `(r_obs, v_obs)` for this epoch —
+    /// e.g. from a precomputed per-observation cache, or from its own
+    /// `predict_search_region` call moments earlier — this skips the ephemeris lookup that [`Self::step`]
+    /// would otherwise perform. See [`Self::resolve_step_geometry`]'s doc
+    /// for why that lookup is worth avoiding when it's already available.
+    pub fn step_with_geometry(
+        &mut self,
+        r_obs: Vector3<f64>,
+        v_obs: Vector3<f64>,
+        obs: &Observation,
+    ) -> BankStep {
+        self.step_impl(Some((r_obs, v_obs)), obs)
+    }
+
+    /// Resolve the observer heliocentric geometry needed to propagate every
+    /// hypothesis to `obs`'s epoch — **once**, not once per hypothesis.
+    ///
+    /// This geometry depends only on `(obs_dataset, obs)`, never on which
+    /// hypothesis is asking for it: every live hypothesis in a bank shares
+    /// the exact same `shared_ctx` by construction (see the module-level
+    /// "Lifetime" doc). Reading it off `self.hypotheses.first()` and
+    /// resolving it once is therefore exactly equivalent to — but far
+    /// cheaper than — resolving it independently inside each hypothesis's
+    /// own propagate call (the ephemeris lookup itself, not the per-hypothesis
+    /// Kepler solve that follows it, is the expensive part).
+    ///
+    /// `None` if the bank has no hypotheses to read a context from, or if
+    /// the observer/ephemeris lookup itself fails — a failure every
+    /// hypothesis would have hit identically, for the same reason.
+    fn resolve_step_geometry(
+        &self,
+        obs_dataset: &ObsDataset,
+        obs: &Observation,
+    ) -> Option<(Vector3<f64>, Vector3<f64>)> {
+        let context = self.hypotheses.first()?.kf.shared_ctx;
+        let observer = get_observer(obs_dataset, obs).ok()?;
+        let helio_state = context
+            .get_ephem()
+            .helio_observer_state(observer, obs.mjd_tt())
+            .ok()?;
+        Some((helio_state.helio_cart_pos, helio_state.helio_cart_vel))
+    }
+
+    /// Shared body of [`Self::step`]/[`Self::step_with_geometry`]: propagate
+    /// → score → update → prune → merge.
+    ///
+    /// The pipeline for each hypothesis is:
+    /// 1. **Propagate** to the observation epoch (Kepler + covariance transport).
+    /// 2. **Gate** on the Mahalanobis² distance (the MAP hypothesis is exempt).
+    /// 3. **Score** with the predictive log-likelihood.
+    /// 4. **Update** the Kalman state.
+    /// 5. **Push** the log-likelihood into the sliding window.
+    ///
+    /// After all hypotheses are processed, the bank runs:
+    /// - Normalize weights.
+    /// - Prune: smoothed-score floor (or classic weight floor if window = 0).
+    /// - Apply scheduled cap (decay curve).
+    /// - Merge spatially coincident modes.
+    /// - Re-normalize.
+    ///
+    /// `geometry: None` (only reachable from [`Self::step`] when
+    /// [`Self::resolve_step_geometry`] itself fails) treats every
+    /// hypothesis as a propagation failure, matching what would happen if
+    /// each one independently hit the same ephemeris-lookup error.
+    fn step_impl(
+        &mut self,
+        geometry: Option<(Vector3<f64>, Vector3<f64>)>,
+        obs: &Observation,
+    ) -> BankStep {
         let epoch = obs.mjd_tt();
         let n_before = self.hypotheses.len();
 
@@ -460,7 +538,7 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
         }
         .emit();
 
-        let (survivors, n_gated, n_failed) = self.process_hypotheses(obs_dataset, obs);
+        let (survivors, n_gated, n_failed) = self.process_hypotheses(geometry, epoch, obs);
 
         BankEvent::PredictUpdateComplete {
             n_survivors: survivors.len(),
@@ -518,28 +596,37 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
     /// was already propagated once via [`Self::predict_to`].
     fn process_hypotheses(
         &mut self,
-        obs_dataset: &ObsDataset,
+        geometry: Option<(Vector3<f64>, Vector3<f64>)>,
+        epoch: f64,
         obs: &Observation,
     ) -> (Vec<Hypothesis<'state_lf>>, usize, usize) {
-        let n_propagate_failed = self.propagate_in_place(obs_dataset, obs);
+        let n_propagate_failed = self.propagate_in_place(geometry, epoch);
         let (survivors, n_gated, n_score_failed) = self.score_and_update_hypotheses(obs);
         (survivors, n_gated, n_score_failed + n_propagate_failed)
     }
 
-    /// Propagate every live hypothesis to `obs`'s epoch, in place.
+    /// Propagate every live hypothesis to `epoch`, in place, using the
+    /// already-resolved `geometry` (see [`Self::resolve_step_geometry`]) —
+    /// reuses [`Self::predict_hypotheses`], the same per-hypothesis
+    /// Kepler-propagation primitive [`Self::predict_to`] uses, so a
+    /// hypothesis that fails here (Kepler solver or Jacobian failure) fails
+    /// for exactly the same reasons it would have under the old
+    /// per-hypothesis-lookup code path.
     ///
-    /// Hypotheses that fail to propagate (Kepler solver or Jacobian failure)
-    /// are dropped silently here; the caller is responsible for counting them
-    /// as failures (see [`Self::process_hypotheses`]).
+    /// `geometry: None` drops every hypothesis (see [`Self::step_impl`]'s doc).
     ///
     /// # Returns
     /// The number of hypotheses dropped due to a propagation failure.
-    fn propagate_in_place(&mut self, obs_dataset: &ObsDataset, obs: &Observation) -> usize {
+    fn propagate_in_place(
+        &mut self,
+        geometry: Option<(Vector3<f64>, Vector3<f64>)>,
+        epoch: f64,
+    ) -> usize {
         let n_before = self.hypotheses.len();
-        let survivors = std::mem::take(self.hypotheses_mut())
-            .into_iter()
-            .filter_map(|hyp| hyp.propagate(obs_dataset, obs).ok())
-            .collect();
+        let survivors = match geometry {
+            Some((r_obs, v_obs)) => self.predict_hypotheses(epoch, r_obs, v_obs),
+            None => Vec::new(),
+        };
         self.set_hypotheses(survivors);
         n_before - self.hypotheses.len()
     }

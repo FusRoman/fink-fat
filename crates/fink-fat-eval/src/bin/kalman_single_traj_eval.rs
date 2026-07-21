@@ -27,11 +27,12 @@ fn main() -> Result<()> {
     let kalman_ctx = engine_config.build_context();
 
     let vec_traj_id = vec![
-        // TrajId::Int(35038), // 8467, benoitcarry asteroid
-        // TrajId::Int(22),
-        // TrajId::Int(92450),
-        // TrajId::Int(54013),
-        TrajId::Int(255848),
+        TrajId::Int(35038), // 8467, benoitcarry asteroid
+                            // TrajId::Int(22),
+                            // TrajId::Int(92450),
+                            // TrajId::Int(54013),
+                            // TrajId::Int(255848),
+                            // TrajId::Int(146240), // this one is impossible to reconstruct with the kalman.
     ];
 
     print_detailed_reports(
@@ -41,6 +42,7 @@ fn main() -> Result<()> {
         &kalman_ctx,
         &engine_config.kfbank_config,
         &engine_config.seeding_grid_config,
+        &engine_config.advance_params,
     );
 
     Ok(())
