@@ -30,7 +30,9 @@ use photom::{
     observation_dataset::{ObsDataset, iter::MemLayoutObservations, observation::Observation},
 };
 
+use crate::ground_truth_state::TruthLookup;
 use crate::kalman_traj::{
+    NEES_CHI2_2DOF_HIGH, NEES_CHI2_2DOF_LOW, NEES_CHI2_6DOF_HIGH, NEES_CHI2_6DOF_LOW,
     NIS_CHI2_2DOF_HIGH, NIS_CHI2_2DOF_LOW, NIS_CHI2_2DOF_MEDIAN, ObserverGeometryCache,
     StudyOutcome, TrajStopReason, study_kalman_asteroid,
 };
@@ -165,12 +167,53 @@ pub fn metric_stats<T>(items: &[T], f: impl Fn(&T) -> f64) -> MetricStats {
     compute_stats(&values)
 }
 
+/// Like [`metric_stats`], but for ground-truth-derived metrics that are only
+/// present for a subset of steps (`None` where no ground truth was
+/// available) — those steps are simply excluded rather than counted as NaN.
+pub fn metric_stats_opt<T>(items: &[T], f: impl Fn(&T) -> Option<f64>) -> MetricStats {
+    let values: Vec<f64> = items
+        .iter()
+        .filter_map(&f)
+        .filter(|v| v.is_finite())
+        .collect();
+    compute_stats(&values)
+}
+
+/// Root-mean-square of a ground-truth-derived error metric, skipping steps
+/// with no ground truth (`None`) or non-finite values.
+pub fn rmse_opt<T>(items: &[T], f: impl Fn(&T) -> Option<f64>) -> f64 {
+    let values: Vec<f64> = items
+        .iter()
+        .filter_map(&f)
+        .filter(|v| v.is_finite())
+        .collect();
+    if values.is_empty() {
+        return f64::NAN;
+    }
+    (values.iter().map(|v| v * v).sum::<f64>() / values.len() as f64).sqrt()
+}
+
 /// Percentage of items for which `pred` holds.
 fn pct_true<T>(items: &[T], pred: impl Fn(&T) -> bool) -> f64 {
     if items.is_empty() {
         return f64::NAN;
     }
     100.0 * items.iter().filter(|x| pred(x)).count() as f64 / items.len() as f64
+}
+
+/// Like [`pct_true`], but for a ground-truth-derived predicate that's only
+/// defined for a subset of steps — the denominator is the count of steps
+/// with a known ground truth, not the whole trajectory.
+fn pct_true_opt<T>(items: &[T], pred: impl Fn(&T) -> Option<bool>) -> f64 {
+    let (n_true, n_total) = items
+        .iter()
+        .filter_map(&pred)
+        .fold((0usize, 0usize), |(t, n), b| (t + b as usize, n + 1));
+    if n_total == 0 {
+        f64::NAN
+    } else {
+        100.0 * n_true as f64 / n_total as f64
+    }
 }
 
 /// Format [`MetricStats`] as `mean (med median) [min, max]`, right-aligned
@@ -243,6 +286,20 @@ pub struct TrajSummary {
     pub mean_search_radius_arcsec: f64,
     pub mean_n_hypotheses_after: f64,
     pub mean_effective_sample_size: f64,
+
+    // ── Ground-truth-based metrics (NaN if no ground truth was supplied) ───
+    /// Number of steps for which ground truth was available — `0` means the
+    /// fields below are all `NaN` (no `--ground-truth` file, or none of this
+    /// trajectory's observations matched).
+    pub n_steps_with_truth: usize,
+    pub rmse_pos_arcsec: f64,
+    pub rmse_range_au: f64,
+    pub rmse_cart_pos_au: f64,
+    pub rmse_cart_vel_au_day: f64,
+    pub mean_nees_sky: f64,
+    pub pct_nees_sky_in_chi2_band: f64,
+    pub mean_nees_cart: f64,
+    pub pct_nees_cart_in_chi2_band: f64,
 }
 
 /// Reduce one trajectory's [`StudyOutcome`] into a [`TrajSummary`].
@@ -280,6 +337,8 @@ pub fn summarize_trajectory(
     let nis_stats = metric_stats(results, |r| r.nis);
     let nis_median = nis_stats.median;
 
+    let n_steps_with_truth = results.iter().filter(|r| r.nees_sky.is_some()).count();
+
     Some(TrajSummary {
         traj_id,
         final_kf_state,
@@ -305,6 +364,22 @@ pub fn summarize_trajectory(
         mean_search_radius_arcsec: metric_stats(results, |r| r.search_region_radius_arcsec).mean,
         mean_n_hypotheses_after: metric_stats(results, |r| r.n_hypotheses_after as f64).mean,
         mean_effective_sample_size: metric_stats(results, |r| r.n_effective).mean,
+
+        n_steps_with_truth,
+        rmse_pos_arcsec: rmse_opt(results, |r| r.pos_error_arcsec),
+        rmse_range_au: rmse_opt(results, |r| r.range_error_au),
+        rmse_cart_pos_au: rmse_opt(results, |r| r.cart_pos_error_au),
+        rmse_cart_vel_au_day: rmse_opt(results, |r| r.cart_vel_error_au_day),
+        mean_nees_sky: metric_stats_opt(results, |r| r.nees_sky).mean,
+        pct_nees_sky_in_chi2_band: pct_true_opt(results, |r| {
+            r.nees_sky
+                .map(|v| v >= NEES_CHI2_2DOF_LOW && v <= NEES_CHI2_2DOF_HIGH)
+        }),
+        mean_nees_cart: metric_stats_opt(results, |r| r.nees_cart).mean,
+        pct_nees_cart_in_chi2_band: pct_true_opt(results, |r| {
+            r.nees_cart
+                .map(|v| v >= NEES_CHI2_6DOF_LOW && v <= NEES_CHI2_6DOF_HIGH)
+        }),
     })
 }
 
@@ -373,6 +448,7 @@ fn process_one_trajectory(
     advance_params: &NightAdvanceParams,
     geometry_cache: &ObserverGeometryCache,
     progress: &ProgressBar,
+    truth_lookup: Option<&TruthLookup>,
 ) -> TrajOutcome {
     let traj_start = Instant::now();
 
@@ -429,6 +505,7 @@ fn process_one_trajectory(
         advance_params,
         geometry_cache,
         None,
+        truth_lookup,
     );
     let kalman_ms = t1.elapsed().as_secs_f64() * 1e3;
     let stop_reason = Some(study_outcome.stop_reason);
@@ -551,6 +628,7 @@ pub fn process_all_trajectories(
     bank_config: &KFBankConfig,
     grid_config: &GridConfig,
     advance_params: &NightAdvanceParams,
+    truth_lookup: Option<&TruthLookup>,
 ) -> (Vec<TrajSummary>, RunCounters, Vec<StepBucketStats>) {
     let nb_traj = obs_dataset.iter_traj_id().map(|iter| iter.count()).unwrap();
 
@@ -578,6 +656,7 @@ pub fn process_all_trajectories(
                 advance_params,
                 &geometry_cache,
                 &progress,
+                truth_lookup,
             )
         })
         .collect();

@@ -7,6 +7,7 @@
 //! [`KFStudyResult`] data (re-running the Kalman filter on demand for
 //! detailed reports), and never mutates any run state.
 
+use camino::Utf8Path;
 use fink_fat_engine::{
     engine_config::{
         grid_population::GridConfig, kalman_context::KalmanContext, kf_bank_config::KFBankConfig,
@@ -17,13 +18,15 @@ use fink_fat_engine::{
 use photom::{TrajId, observation_dataset::ObsDataset};
 
 use crate::{
+    ground_truth_state::TruthLookup,
     kalman_traj::{
-        KFStudyResult, NIS_CHI2_2DOF_MEDIAN, ObserverGeometryCache, TrajStopReason,
-        study_kalman_asteroid,
+        KFStudyResult, NEES_CHI2_6DOF_MEDIAN, NIS_CHI2_2DOF_MEDIAN, ObserverGeometryCache,
+        TrajStopReason, study_kalman_asteroid,
     },
+    kalman_traj_plots::{plot_nees_cart_chart, plot_nees_sky_chart, plot_nis_chart},
     trajectory_processing::{
         MetricStats, NIS_STEP_BUCKET_DEPTH, RunCounters, StepBucketStats, TrajSummary, fmt_stats,
-        materialize_contiguous_traj, metric_stats,
+        materialize_contiguous_traj, metric_stats, metric_stats_opt, rmse_opt,
     },
 };
 
@@ -116,6 +119,80 @@ pub fn print_nis_calibration_summary(summaries: &[TrajSummary]) {
             println!("  Dataset-wide ratio median {ratio_median:.4} — roughly well-calibrated.");
         }
     }
+}
+
+/// Print dataset-wide NEES/RMSE calibration, mirroring
+/// [`print_nis_calibration_summary`] but comparing the estimate to *ground
+/// truth* rather than to the noisy observation. Prints a "no ground truth"
+/// notice instead of numbers if no trajectory had any (i.e. no
+/// `--ground-truth` file was supplied, or none of it matched).
+pub fn print_nees_rmse_dataset_summary(summaries: &[TrajSummary]) {
+    let sep = "=".repeat(90);
+    println!("\n{sep}");
+    println!("[Global] NEES / RMSE against ground truth");
+    println!("{sep}");
+
+    let n_with_truth: usize = summaries.iter().map(|s| s.n_steps_with_truth).sum();
+    if n_with_truth == 0 {
+        println!("  (no ground truth available — pass --ground-truth to enable)");
+        return;
+    }
+
+    // Trajectories with `n_steps_with_truth == 0` (no ground truth matched —
+    // most of the dataset, since `ground_truth_topocentric.parquet` only
+    // covers objects present in the light-curve fit file) have NaN in every
+    // field below (see `summarize_trajectory`/`rmse_opt`'s empty-slice
+    // fallback). `metric_stats` does not filter NaN, so aggregating over
+    // every summary — most lacking ground truth — poisons the mean and, via
+    // `f64::total_cmp`'s NaN-at-the-end ordering, corrupts min/max too.
+    // `metric_stats_opt` (already used per-step elsewhere) excludes them.
+    let has_truth = |s: &&TrajSummary| s.n_steps_with_truth > 0;
+
+    print_metric_row(
+        "RMSE sky position (\")",
+        &metric_stats_opt(summaries, |s| has_truth(&s).then_some(s.rmse_pos_arcsec)),
+    );
+    print_metric_row(
+        "RMSE range (AU)",
+        &metric_stats_opt(summaries, |s| has_truth(&s).then_some(s.rmse_range_au)),
+    );
+    print_metric_row(
+        "RMSE cartesian position (AU)",
+        &metric_stats_opt(summaries, |s| has_truth(&s).then_some(s.rmse_cart_pos_au)),
+    );
+    print_metric_row(
+        "RMSE cartesian velocity (AU/day)",
+        &metric_stats_opt(summaries, |s| {
+            has_truth(&s).then_some(s.rmse_cart_vel_au_day)
+        }),
+    );
+    print_metric_row(
+        "Mean NEES sky (χ²(2), exp. 2.0)",
+        &metric_stats_opt(summaries, |s| has_truth(&s).then_some(s.mean_nees_sky)),
+    );
+    print_metric_row(
+        "% steps in χ²(2) 95% band",
+        &metric_stats_opt(summaries, |s| {
+            has_truth(&s).then_some(s.pct_nees_sky_in_chi2_band)
+        }),
+    );
+    print_metric_row(
+        &format!("Mean NEES cartesian (χ²(6), exp. {NEES_CHI2_6DOF_MEDIAN:.2})"),
+        &metric_stats_opt(summaries, |s| has_truth(&s).then_some(s.mean_nees_cart)),
+    );
+    print_metric_row(
+        "% steps in χ²(6) 95% band",
+        &metric_stats_opt(summaries, |s| {
+            has_truth(&s).then_some(s.pct_nees_cart_in_chi2_band)
+        }),
+    );
+    println!(
+        "  Steps with ground truth: {n_with_truth} (across {} trajectories)",
+        summaries
+            .iter()
+            .filter(|s| s.n_steps_with_truth > 0)
+            .count()
+    );
 }
 
 /// Print dataset-wide NIS median/mean per steps-since-bootstrap bucket (see
@@ -266,6 +343,10 @@ pub fn print_extremes_table(title: &str, items: &[&TrajSummary]) {
 
 /// Re-materialize and re-run the Kalman filter bank for each trajectory in
 /// `traj_ids`, printing a full per-step report for each.
+///
+/// Returns the per-step results actually produced, paired with their
+/// `TrajId`, so callers can additionally export them (see
+/// `crate::parquet_export`) without re-running the filter a third time.
 #[allow(clippy::too_many_arguments)]
 pub fn print_detailed_reports(
     label: &str,
@@ -275,8 +356,17 @@ pub fn print_detailed_reports(
     bank_config: &KFBankConfig,
     grid_config: &GridConfig,
     advance_params: &NightAdvanceParams,
-) {
+    truth_lookup: Option<&TruthLookup>,
+    output_dir: Option<&Utf8Path>,
+) -> Vec<(TrajId, Vec<KFStudyResult>)> {
+    if let Some(dir) = output_dir {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            println!("  (failed to create output directory {dir}: {e})");
+        }
+    }
+
     let geometry_cache = ObserverGeometryCache::build(obs_dataset, context, traj_ids);
+    let mut collected = Vec::with_capacity(traj_ids.len());
 
     for traj_id in traj_ids {
         match materialize_contiguous_traj(obs_dataset, traj_id) {
@@ -301,6 +391,7 @@ pub fn print_detailed_reports(
                     advance_params,
                     &geometry_cache,
                     None,
+                    truth_lookup,
                 );
                 println!(
                     "\nStop reason: {} (n_processable={}, n_obs_deduplicated={})",
@@ -313,10 +404,30 @@ pub fn print_detailed_reports(
                     &study_outcome.results,
                     len_traj,
                 );
+
+                if let Some(dir) = output_dir {
+                    for (name, plot) in [
+                        (
+                            "nis",
+                            plot_nis_chart as fn(&[KFStudyResult], &Utf8Path) -> anyhow::Result<()>,
+                        ),
+                        ("nees_sky", plot_nees_sky_chart),
+                        ("nees_cart", plot_nees_cart_chart),
+                    ] {
+                        let path = dir.join(format!("{traj_id}_{name}.png"));
+                        if let Err(e) = plot(&study_outcome.results, &path) {
+                            println!("  (failed to write {name} plot for {traj_id}: {e})");
+                        }
+                    }
+                }
+
+                collected.push((traj_id.clone(), study_outcome.results));
             }
             Err(e) => println!("  (failed to re-materialize trajectory: {e})"),
         }
     }
+
+    collected
 }
 
 /// Print every section of a single trajectory's deep-dive report: the
@@ -343,6 +454,7 @@ fn print_single_trajectory_report(
     print_per_step_table(results, len_traj);
     print_search_region_coverage_summary(results);
     print_residuals_and_consistency_summary(results);
+    print_nees_rmse_summary(results);
     print_bank_health_summary(results);
 }
 
@@ -506,6 +618,43 @@ fn print_residuals_and_consistency_summary(results: &[KFStudyResult]) {
     println!(
         "  σ_Dec (\")             : {}",
         fmt_stats(&metric_stats(results, |r| r.sigma_dec_arcsec))
+    );
+}
+
+/// Print NEES/RMSE against ground truth for the trajectory, or a "no ground
+/// truth" notice if none of its steps had one (see
+/// [`crate::ground_truth_state::TruthLookup`]).
+fn print_nees_rmse_summary(results: &[KFStudyResult]) {
+    println!("\n[Summary] ── Ground truth: NEES & RMSE ──────────────────────────────────────────");
+    let n_with_truth = results.iter().filter(|r| r.nees_sky.is_some()).count();
+    if n_with_truth == 0 {
+        println!("  (no ground truth available for this trajectory)");
+        return;
+    }
+    println!(
+        "  RMSE sky position (\")         : {:.4} ({} steps with ground truth)",
+        rmse_opt(results, |r| r.pos_error_arcsec),
+        n_with_truth
+    );
+    println!(
+        "  RMSE range (AU)               : {:.6}",
+        rmse_opt(results, |r| r.range_error_au)
+    );
+    println!(
+        "  RMSE cartesian position (AU)  : {:.6}",
+        rmse_opt(results, |r| r.cart_pos_error_au)
+    );
+    println!(
+        "  RMSE cartesian velocity (AU/day): {:.6}",
+        rmse_opt(results, |r| r.cart_vel_error_au_day)
+    );
+    println!(
+        "  NEES sky (χ²(2), exp. 2.0)    : {}",
+        fmt_stats(&metric_stats_opt(results, |r| r.nees_sky))
+    );
+    println!(
+        "  NEES cartesian (χ²(6), exp. {NEES_CHI2_6DOF_MEDIAN:.2}) : {}",
+        fmt_stats(&metric_stats_opt(results, |r| r.nees_cart))
     );
 }
 

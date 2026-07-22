@@ -18,17 +18,19 @@ use clap::Parser;
 use fink_fat_engine::engine_config::EngineConfig;
 use fink_fat_eval::{
     cli::{Cli, load_data},
+    ground_truth_state::TruthLookup,
+    parquet_export::{export_steps_parquet, export_summary_parquet},
     reporting::{
         print_detailed_reports, print_extremes_table, print_global_aggregate_stats,
-        print_nis_by_step_since_bootstrap, print_nis_calibration_summary, print_run_counters,
-        print_stop_reason_histogram,
+        print_nees_rmse_dataset_summary, print_nis_by_step_since_bootstrap,
+        print_nis_calibration_summary, print_run_counters, print_stop_reason_histogram,
     },
     trajectory_processing::{process_all_trajectories, select_extremes},
 };
 use photom::TrajId;
 
 /// Number of best/worst trajectories to report in detail.
-const N_EXTREMES: usize = 5;
+const N_EXTREMES: usize = 0;
 
 /// Configure the global tracing subscriber.
 ///
@@ -50,10 +52,16 @@ fn main() -> Result<()> {
     init_tracing();
 
     let cli = Cli::parse();
-    let (_, obs_dataset) = load_data(&cli.alerts);
+    let (_, obs_dataset) = load_data(&cli.alerts, cli.override_obs_error_arcsec);
 
     let engine_config = EngineConfig::load_engine_config_validated(cli.config)?;
     let kalman_ctx = engine_config.build_context();
+
+    let truth_lookup = cli
+        .ground_truth
+        .as_ref()
+        .map(TruthLookup::load)
+        .transpose()?;
 
     println!("Scanning the dataset and running the Kalman filter bank on every trajectory…");
     let (summaries, counters, nis_step_buckets) = process_all_trajectories(
@@ -62,6 +70,7 @@ fn main() -> Result<()> {
         &engine_config.kfbank_config,
         &engine_config.seeding_grid_config,
         &engine_config.advance_params,
+        truth_lookup.as_ref(),
     );
 
     print_run_counters(&counters, summaries.len());
@@ -75,6 +84,11 @@ fn main() -> Result<()> {
 
     print_global_aggregate_stats(&summaries);
     print_nis_calibration_summary(&summaries);
+    print_nees_rmse_dataset_summary(&summaries);
+
+    if let Some(out_path) = &cli.summary_parquet_out {
+        export_summary_parquet(&summaries, out_path)?;
+    }
 
     let (best, worst) = select_extremes(&summaries, N_EXTREMES);
     print_extremes_table("🏆 Best trajectories (highest 3σ coverage)", &best);
@@ -83,7 +97,7 @@ fn main() -> Result<()> {
     let best_ids: Vec<TrajId> = best.iter().map(|s| s.traj_id.clone()).collect();
     let worst_ids: Vec<TrajId> = worst.iter().map(|s| s.traj_id.clone()).collect();
 
-    print_detailed_reports(
+    let mut steps = print_detailed_reports(
         "BEST",
         &best_ids,
         &obs_dataset,
@@ -91,8 +105,10 @@ fn main() -> Result<()> {
         &engine_config.kfbank_config,
         &engine_config.seeding_grid_config,
         &engine_config.advance_params,
+        truth_lookup.as_ref(),
+        cli.output_result.as_deref(),
     );
-    print_detailed_reports(
+    steps.extend(print_detailed_reports(
         "WORST",
         &worst_ids,
         &obs_dataset,
@@ -100,7 +116,13 @@ fn main() -> Result<()> {
         &engine_config.kfbank_config,
         &engine_config.seeding_grid_config,
         &engine_config.advance_params,
-    );
+        truth_lookup.as_ref(),
+        cli.output_result.as_deref(),
+    ));
+
+    if let Some(out_path) = &cli.steps_parquet_out {
+        export_steps_parquet(&steps, out_path)?;
+    }
 
     Ok(())
 }

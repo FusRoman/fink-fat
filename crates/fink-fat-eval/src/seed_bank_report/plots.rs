@@ -22,31 +22,48 @@ pub(crate) struct Series {
     pub(crate) points: Vec<(f64, f64)>,
 }
 
-/// Draw one or more line+point series sharing the same axes to `output_path`.
+/// Draw one or more line+point series sharing the same axes to `output_path`,
+/// optionally overlaid with horizontal reference lines (e.g. χ² confidence
+/// bounds for a NIS/NEES chart, reproducing the style at
+/// <https://kalman-filter.com/normalized-estimation-error-squared/>).
 ///
 /// The x/y ranges are derived from the data (padded by 5%) rather than
 /// hardcoded, so this works unchanged whether it's plotting a branch count
-/// in the thousands or a percentage in `[0, 100]`.
+/// in the thousands or a percentage in `[0, 100]`. `hlines` values are folded
+/// into the y-range so a bound outside the data's own span is never clipped.
 pub(crate) fn draw_line_chart(
     output_path: &Utf8Path,
     title: &str,
     x_label: &str,
     y_label: &str,
     series: &[Series],
+    hlines: &[(f64, RGBColor, &str)],
 ) -> Result<()> {
     let root =
         BitMapBackend::new(output_path.as_str(), (CHART_WIDTH, CHART_HEIGHT)).into_drawing_area();
     root.fill(&WHITE)?;
 
-    let all_points = series.iter().flat_map(|s| s.points.iter());
-    let (x_range, y_range) = padded_ranges(all_points);
+    let all_points: Vec<(f64, f64)> = series
+        .iter()
+        .flat_map(|s| s.points.iter().copied())
+        .collect();
+    let (x_range, mut y_range) = padded_ranges(all_points.iter());
+    let hline_min = hlines
+        .iter()
+        .map(|(y, _, _)| *y)
+        .fold(f64::INFINITY, f64::min);
+    let hline_max = hlines
+        .iter()
+        .map(|(y, _, _)| *y)
+        .fold(f64::NEG_INFINITY, f64::max);
+    y_range = y_range.start.min(hline_min)..y_range.end.max(hline_max);
 
     let mut chart = ChartBuilder::on(&root)
         .caption(title, ("sans-serif", 28))
         .margin(MARGIN)
         .x_label_area_size(LABEL_AREA)
         .y_label_area_size(LABEL_AREA)
-        .build_cartesian_2d(x_range, y_range)
+        .build_cartesian_2d(x_range.clone(), y_range)
         .with_context(|| format!("failed to build chart area for {output_path}"))?;
 
     chart
@@ -67,7 +84,17 @@ pub(crate) fn draw_line_chart(
         )?;
     }
 
-    if series.len() > 1 {
+    for &(y, color, label) in hlines {
+        chart
+            .draw_series(std::iter::once(PathElement::new(
+                [(x_range.start, y), (x_range.end, y)],
+                color.stroke_width(2),
+            )))?
+            .label(label)
+            .legend(move |(x, y)| PathElement::new([(x, y), (x + 20, y)], color));
+    }
+
+    if series.len() > 1 || !hlines.is_empty() {
         chart
             .configure_series_labels()
             .background_style(WHITE.mix(0.8))
@@ -127,6 +154,7 @@ pub fn plot_branches_per_night(report: &SeedingReport, output_path: &Utf8Path) -
             color: BLUE,
             points,
         }],
+        &[],
     )
 }
 
@@ -162,6 +190,7 @@ pub fn plot_recall_purity_per_night(report: &SeedingReport, output_path: &Utf8Pa
                 points: purity_points,
             },
         ],
+        &[],
     )
 }
 

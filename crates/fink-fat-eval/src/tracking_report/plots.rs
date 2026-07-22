@@ -48,6 +48,7 @@ pub fn plot_branches_and_lineages_per_night(
                 points: lineages,
             },
         ],
+        &[],
     )
 }
 
@@ -97,6 +98,7 @@ pub fn plot_recall_purity_completeness_per_night(
                 points: series_from(|n| n.completeness_relaxed_pct_so_far),
             },
         ],
+        &[],
     )
 }
 
@@ -148,6 +150,7 @@ pub fn plot_object_outcome_per_night(
         "Night (step)",
         "Percent of trackable objects",
         &series,
+        &[],
     )
 }
 
@@ -170,6 +173,7 @@ pub fn plot_llr_and_ess_per_night(report: &TrackingReport, output_path: &Utf8Pat
             color: BLUE,
             points: llr,
         }],
+        &[],
     )
 }
 
@@ -213,6 +217,7 @@ pub fn plot_error_box_radius_per_night(
                 points: bank,
             },
         ],
+        &[],
     )
 }
 
@@ -243,6 +248,7 @@ pub fn plot_observations_in_box_per_night(
             color: BLUE,
             points,
         }],
+        &[],
     )
 }
 
@@ -264,6 +270,7 @@ pub fn plot_timing_per_night(report: &TrackingReport, output_path: &Utf8Path) ->
             color: BLUE,
             points,
         }],
+        &[],
     )
 }
 

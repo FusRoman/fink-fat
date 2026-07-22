@@ -12,13 +12,16 @@ use fink_fat_engine::{
         single_kalman::{KFState, update::wrap_angle},
     },
 };
-use nalgebra::{Matrix2, Vector2, Vector3};
+use nalgebra::{Matrix2, Vector2, Vector3, Vector6};
+use outfit::constants::ROT_EQUMJ2000_TO_ECLMJ2000;
 use photom::{
     TrajId,
     coordinates::equatorial::EquCoord,
     observation_dataset::{ObsDataset, ObsId, observation::Observation},
 };
 use rayon::prelude::*;
+
+use crate::ground_truth_state::{TruthLookup, TruthState};
 
 const RAD_TO_ARCSEC: f64 = 3600.0 * 180.0 / std::f64::consts::PI;
 const ARCSEC_TO_RAD: f64 = 1.0 / RAD_TO_ARCSEC;
@@ -36,6 +39,21 @@ const ARCSEC_TO_RAD: f64 = 1.0 / RAD_TO_ARCSEC;
 pub const NIS_CHI2_2DOF_LOW: f64 = 0.050_636_616_366_209; // 2.5th percentile
 pub const NIS_CHI2_2DOF_MEDIAN: f64 = 1.386_294_361_12; // 50th percentile (-2 ln 0.5)
 pub const NIS_CHI2_2DOF_HIGH: f64 = 7.377_758_908_23; // 97.5th percentile
+
+/// χ²(2) quantiles for the sky-plane NEES (same distribution as
+/// [`NIS_CHI2_2DOF_LOW`]/[`NIS_CHI2_2DOF_HIGH`] — both are quadratic forms of
+/// a 2-D Gaussian error against its own covariance — kept as separate
+/// constants so NEES calibration reporting doesn't read as reusing NIS
+/// thresholds by accident).
+pub const NEES_CHI2_2DOF_LOW: f64 = NIS_CHI2_2DOF_LOW;
+pub const NEES_CHI2_2DOF_MEDIAN: f64 = NIS_CHI2_2DOF_MEDIAN;
+pub const NEES_CHI2_2DOF_HIGH: f64 = NIS_CHI2_2DOF_HIGH;
+
+/// χ²(6) quantiles, used to judge the full 6-DOF cartesian NEES
+/// (position + velocity error against [`KFState::cartesian_covariance`]).
+pub const NEES_CHI2_6DOF_LOW: f64 = 1.237_344; // 2.5th percentile
+pub const NEES_CHI2_6DOF_MEDIAN: f64 = 5.348_121; // 50th percentile
+pub const NEES_CHI2_6DOF_HIGH: f64 = 14.449_375; // 97.5th percentile
 
 /// Why a trajectory's predict/update loop ([`study_kalman_asteroid`])
 /// stopped where it did.
@@ -286,12 +304,20 @@ struct StepDiag {
     predicted_range_au: f64,
     gain_frobenius_norm: f64,
     nis: f64,
+    // ── Ground-truth-based metrics (only if a `TruthLookup` was supplied) ──
+    pos_error_arcsec: Option<f64>,
+    range_error_au: Option<f64>,
+    cart_pos_error_au: Option<f64>,
+    cart_vel_error_au_day: Option<f64>,
+    nees_sky: Option<f64>,
+    nees_cart: Option<f64>,
 }
 
 fn compute_step_diag(
     best_kf: &KFState,
     obs: &Observation,
     region_center: Option<&EquCoord>,
+    truth_lookup: Option<&TruthLookup>,
 ) -> Option<StepDiag> {
     let equ_pred = best_kf.to_equ_coord().ok()?;
 
@@ -324,6 +350,21 @@ fn compute_step_diag(
         obs,
     );
 
+    let truth = truth_lookup.and_then(|lookup| lookup.get(*obs.id()));
+    let (
+        pos_error_arcsec,
+        range_error_au,
+        cart_pos_error_au,
+        cart_vel_error_au_day,
+        nees_sky,
+        nees_cart,
+    ) = match truth {
+        Some(truth) => {
+            compute_truth_metrics(best_kf, &equ_pred, &sigma_sky, predicted_range_au, truth)
+        }
+        None => (None, None, None, None, None, None),
+    };
+
     Some(StepDiag {
         equ_pred,
         equ_obs: *equ_obs,
@@ -340,6 +381,12 @@ fn compute_step_diag(
         predicted_range_au,
         gain_frobenius_norm: best_kf.last_gain_frobenius_norm(),
         nis,
+        pos_error_arcsec,
+        range_error_au,
+        cart_pos_error_au,
+        cart_vel_error_au_day,
+        nees_sky,
+        nees_cart,
     })
 }
 
@@ -560,6 +607,12 @@ fn assemble_result(
         obs_within_search_radius: sr.obs_within_radius,
         obs_within_3sigma_region: diag.nis <= 9.0,
         nis: diag.nis,
+        pos_error_arcsec: diag.pos_error_arcsec,
+        range_error_au: diag.range_error_au,
+        cart_pos_error_au: diag.cart_pos_error_au,
+        cart_vel_error_au_day: diag.cart_vel_error_au_day,
+        nees_sky: diag.nees_sky,
+        nees_cart: diag.nees_cart,
     }
 }
 
@@ -667,6 +720,28 @@ pub struct KFStudyResult {
     /// well-calibrated filter, NIS follows a $\chi^2(2)$ distribution,
     /// so the expected value is 2.0.
     pub nis: f64,
+
+    // ── Ground-truth comparison (only if a ground-truth file was supplied) ─
+    /// Angular separation between the predicted sky position and the *true*
+    /// sky position, in arcseconds. `None` if no ground truth is available
+    /// for this observation.
+    pub pos_error_arcsec: Option<f64>,
+    /// Predicted topocentric range minus the *true* topocentric range, in AU.
+    pub range_error_au: Option<f64>,
+    /// Norm of the topocentric position error vector (estimate − truth), in AU.
+    pub cart_pos_error_au: Option<f64>,
+    /// Norm of the topocentric velocity error vector (estimate − truth), in AU/day.
+    pub cart_vel_error_au_day: Option<f64>,
+    /// NEES in the 2-D sky plane: $e^\top \Sigma_{sky}^{-1} e$ where
+    /// $e$ = predicted sky position − true sky position. Under a
+    /// well-calibrated filter this follows $\chi^2(2)$ (see
+    /// [`NEES_CHI2_2DOF_MEDIAN`]).
+    pub nees_sky: Option<f64>,
+    /// Full 6-DOF NEES in topocentric Cartesian space (position + velocity),
+    /// via [`fink_fat_engine::topocentric_kf::single_kalman::KFState::cartesian_covariance`].
+    /// Under a well-calibrated filter this follows $\chi^2(6)$ (see
+    /// [`NEES_CHI2_6DOF_MEDIAN`]). `None` if the covariance was singular.
+    pub nees_cart: Option<f64>,
 }
 
 // ── Main entry point ──────────────────────────────────────────────────────────
@@ -706,6 +781,7 @@ pub fn study_kalman_asteroid<'a, 'bank_config>(
     advance_params: &NightAdvanceParams,
     geometry_cache: &ObserverGeometryCache,
     mut mixture_recorder: Option<&mut Vec<(Vec<(f64, KFState<'a>)>, Observation)>>,
+    truth_lookup: Option<&TruthLookup>,
 ) -> StudyOutcome<'a, 'bank_config> {
     tracing::debug!(n_obs = traj.len(), "Starting Kalman filter bank study");
 
@@ -834,7 +910,7 @@ pub fn study_kalman_asteroid<'a, 'bank_config>(
         let equ_reg_center = region
             .clone()
             .map(|region| EquCoord::new(region.center_ra, 0., region.center_dec, 0.));
-        let diag = match compute_step_diag(&best.kf, obs, equ_reg_center.as_ref()) {
+        let diag = match compute_step_diag(&best.kf, obs, equ_reg_center.as_ref(), truth_lookup) {
             Some(d) => d,
             None => {
                 tracing::warn!(step = step + 1, "compute_step_diag returned None, stopping");
@@ -946,6 +1022,122 @@ fn compute_nis(
     s.try_inverse()
         .map(|s_inv| (nu.transpose() * s_inv * nu)[(0, 0)])
         .unwrap_or(f64::NAN)
+}
+
+/// NEES in the 2-D sky plane: the same quadratic-form shape as [`compute_nis`],
+/// but the error is (predicted sky position − *true* sky position) instead of
+/// the innovation (predicted vs. *observed*), and normalised only by
+/// $\Sigma_{sky}$ (the estimator's own covariance), not $\Sigma_{sky} + R$ —
+/// this is the classical NEES definition $e^\top P^{-1} e$.
+fn compute_nees_sky(residual_ra_rad: f64, residual_dec_rad: f64, sigma_sky: &Matrix2<f64>) -> f64 {
+    let e = Vector2::new(residual_ra_rad, residual_dec_rad);
+    sigma_sky
+        .try_inverse()
+        .map(|s_inv| (e.transpose() * s_inv * e)[(0, 0)])
+        .unwrap_or(f64::NAN)
+}
+
+/// Rotate a ground-truth (position, velocity) pair from equatorial J2000 —
+/// the frame [`TruthState`]'s Cartesian fields are provided in, matching the
+/// equatorial (RA, Dec) convention of their source ephemeris — into the
+/// ecliptic J2000 frame `KFState::to_cartesian`/`r_obs`/`v_obs` are expressed
+/// in (see [`fink_fat_engine::topocentric_kf::conversion::attributable_to_cartesian`]'s
+/// doc: `unit_los` rotates equatorial (α, δ) into ecliptic via
+/// `ROT_EQUMJ2000_TO_ECLMJ2000`). Comparing without this rotation produces
+/// spurious multi-AU "errors" purely from the ~23.4° axis mismatch between
+/// the two frames.
+fn truth_pos_vel_ecliptic(truth: &TruthState) -> (Vector3<f64>, Vector3<f64>) {
+    (
+        ROT_EQUMJ2000_TO_ECLMJ2000 * truth.pos_au,
+        ROT_EQUMJ2000_TO_ECLMJ2000 * truth.vel_au_day,
+    )
+}
+
+/// Full 6-DOF NEES in topocentric Cartesian space (position + velocity),
+/// using [`KFState::cartesian_covariance`]. See that method's doc for why
+/// comparing the *topocentric offset* (`to_cartesian() - (r_obs, v_obs)`)
+/// against ground truth is valid even though `to_cartesian()` itself returns
+/// a heliocentric state: subtracting the deterministic observer state
+/// changes neither the error nor the covariance.
+fn compute_nees_cart(best_kf: &KFState, truth: &TruthState) -> Option<f64> {
+    let cart = best_kf.to_cartesian();
+    let pos_topo = cart.pos - best_kf.r_obs;
+    let vel_topo = cart.vel - best_kf.v_obs;
+    let (truth_pos, truth_vel) = truth_pos_vel_ecliptic(truth);
+
+    let e = Vector6::new(
+        pos_topo.x - truth_pos.x,
+        pos_topo.y - truth_pos.y,
+        pos_topo.z - truth_pos.z,
+        vel_topo.x - truth_vel.x,
+        vel_topo.y - truth_vel.y,
+        vel_topo.z - truth_vel.z,
+    );
+
+    let cov = best_kf.cartesian_covariance();
+    let nees = cov
+        .try_inverse()
+        .map(|c_inv| (e.transpose() * c_inv * e)[(0, 0)])?;
+
+    // A true quadratic form e^T C^-1 e is never negative for a valid
+    // (positive-definite) covariance. A negative or absurdly large result
+    // means `cov` was too ill-conditioned for `try_inverse` (plain Gaussian
+    // elimination, no regularization) to invert reliably — e.g. a bank that
+    // has converged to a near-singular covariance after many observations.
+    // Reporting that as a literal NEES value would silently poison
+    // dataset-wide aggregates with nonsensical outliers, so treat it as
+    // "not computable" instead.
+    (nees.is_finite() && nees >= 0.0).then_some(nees)
+}
+
+/// RMSE-oriented ground-truth comparison metrics for one step: sky-plane and
+/// range position error (no covariance needed), plus the 2-D and 6-DOF NEES.
+#[allow(clippy::too_many_arguments)]
+fn compute_truth_metrics(
+    best_kf: &KFState,
+    equ_pred: &EquCoord,
+    sigma_sky: &Matrix2<f64>,
+    predicted_range_au: f64,
+    truth: &TruthState,
+) -> (
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+) {
+    let equ_truth = EquCoord::new(
+        truth.ra_deg.to_radians(),
+        0.0,
+        truth.dec_deg.to_radians(),
+        0.0,
+    );
+
+    let pos_error_arcsec = equ_pred.angular_separation(&equ_truth).to_degrees() * 3600.;
+    let range_error_au = predicted_range_au - truth.range_au;
+
+    let cart = best_kf.to_cartesian();
+    let pos_topo = cart.pos - best_kf.r_obs;
+    let vel_topo = cart.vel - best_kf.v_obs;
+    let (truth_pos, truth_vel) = truth_pos_vel_ecliptic(truth);
+    let cart_pos_error_au = (pos_topo - truth_pos).norm();
+    let cart_vel_error_au_day = (vel_topo - truth_vel).norm();
+
+    let (_, _, residual_ra_raw_rad) = sky_residuals_arcsec(equ_pred, &equ_truth);
+    let residual_dec_raw_rad = truth.dec_deg.to_radians() - equ_pred.dec;
+    let nees_sky = compute_nees_sky(residual_ra_raw_rad, residual_dec_raw_rad, sigma_sky);
+
+    let nees_cart = compute_nees_cart(best_kf, truth);
+
+    (
+        Some(pos_error_arcsec),
+        Some(range_error_au),
+        Some(cart_pos_error_au),
+        Some(cart_vel_error_au_day),
+        Some(nees_sky),
+        nees_cart,
+    )
 }
 
 fn separation_from_search_center(region: &SearchRegion, equ_obs: &EquCoord) -> f64 {

@@ -44,7 +44,7 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    let (_, obs_dataset) = load_data(&cli.alerts);
+    let (_, obs_dataset) = load_data(&cli.alerts, None);
 
     let engine_config = EngineConfig::load_engine_config_validated(cli.config)?;
     let kalman_ctx = engine_config.build_context();
