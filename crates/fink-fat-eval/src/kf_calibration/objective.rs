@@ -96,6 +96,7 @@ pub fn evaluate(
                 &config.advance_params,
                 geometry_cache,
                 None,
+                None,
             );
             summarize_trajectory(traj_id.clone(), traj.len(), &study_outcome)
         })
@@ -201,6 +202,7 @@ pub fn build_reference_runs<'a>(
                 &dynamics_config.advance_params,
                 geometry_cache,
                 Some(&mut steps),
+                None,
             );
             let summary = summarize_trajectory(traj_id.clone(), traj.len(), &study_outcome)?;
             Some(ReferenceRun {

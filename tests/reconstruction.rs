@@ -150,7 +150,7 @@ fn alternating_single_and_batch_modes_reconstruct_known_trajectories() {
     let all_files: Vec<PathBuf> = nights.iter().map(|nf| nf.path.clone()).collect();
     let combined_gt_path = batch_dir.path().join("combined_ground_truth.parquet");
     write_combined_parquet(&all_files, &combined_gt_path);
-    let (_df, obs_dataset) = load_data(combined_gt_path.to_str().expect("utf8 path"));
+    let (_df, obs_dataset) = load_data(combined_gt_path.to_str().expect("utf8 path"), None);
     let ground_truth = ObsTrajLookup::build(&obs_dataset);
     assert!(
         ground_truth.has_ground_truth(),

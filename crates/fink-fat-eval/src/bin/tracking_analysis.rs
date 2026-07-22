@@ -142,7 +142,7 @@ fn main() -> Result<()> {
         return run_snapshot_analysis(&cli);
     }
 
-    let (_, obs_dataset) = load_data(&cli.common.alerts);
+    let (_, obs_dataset) = load_data(&cli.common.alerts, None);
 
     if cli.list_nights {
         let mut night_ids: Vec<NightId> = obs_dataset
@@ -395,7 +395,7 @@ fn write_object_outcome_plots(
 /// carries ground truth) a reconstruction-efficacy breakdown — a
 /// point-in-time audit of a real run, without re-running the simulation.
 fn run_snapshot_analysis(cli: &TrackingAnalysisCli) -> Result<()> {
-    let (_, obs_dataset) = load_data(&cli.common.alerts);
+    let (_, obs_dataset) = load_data(&cli.common.alerts, None);
     let engine_config = EngineConfig::load_engine_config_validated(&cli.common.config)?;
     let kalman_ctx = engine_config.build_context();
 

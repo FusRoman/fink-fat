@@ -14,7 +14,7 @@ use crate::{
     engine_config::kalman_context::KalmanContext,
     error::{EngineError, KFUpdateError, ObservationJacobianError},
     topocentric_kf::{
-        conversion::{CartesianState, attributable_to_cartesian},
+        conversion::{CartesianState, attributable_to_cartesian, jacobian_attr_to_cart},
         observer_state::get_observer,
         single_kalman::{
             init::init_kf_state,
@@ -321,6 +321,20 @@ impl<'state_lf> KFState<'state_lf> {
     pub fn sky_covariance(&self) -> Result<Matrix2<f64>, ObservationJacobianError> {
         let h = observation_jacobian()?;
         Ok(h * self.covariance * h.transpose())
+    }
+
+    /// Compute the $6\times6$ Cartesian covariance $J P J^\top$, where $J$ is the
+    /// Jacobian of the attributable-to-Cartesian conversion at the current state.
+    ///
+    /// Because [`Self::to_cartesian`] adds the deterministic observer state
+    /// (`r_obs`, `v_obs`) to the propagated line-of-sight term, this covariance
+    /// is valid both for the heliocentric position/velocity returned by
+    /// [`Self::to_cartesian`] and for the topocentric offset
+    /// (`to_cartesian().pos - r_obs`, `to_cartesian().vel - v_obs`): subtracting
+    /// a deterministic constant does not change the covariance.
+    pub fn cartesian_covariance(&self) -> Matrix6<f64> {
+        let j = jacobian_attr_to_cart(&self.state);
+        j * self.covariance * j.transpose()
     }
 
     pub fn last_gain_frobenius_norm(&self) -> f64 {
