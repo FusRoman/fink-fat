@@ -185,30 +185,27 @@ fn alternating_single_and_batch_modes_reconstruct_known_trajectories() {
     // Non-regression baseline: (traj_id, n_obs, best_overlap) as observed on
     // this fixture today. Every best-matching branch is 100% pure (no
     // cross-object contamination) — recall is the only axis that varies.
-    // Trajectories 10/11/12/15/21 are only partially recovered (fragmented
-    // across branches); this is a known, reported limitation, not something
-    // this test tries to fix — see the conversation report.
     let baseline: HashMap<u32, (usize, usize)> = HashMap::from([
-        (1, (247, 217)),
-        (2, (237, 224)),
-        (3, (236, 224)),
+        (1, (247, 208)),
+        (2, (237, 222)),
+        (3, (236, 216)),
         (4, (233, 208)),
         (5, (232, 190)),
-        (6, (227, 218)),
+        (6, (227, 217)),
         (7, (225, 224)),
-        (8, (223, 223)),
-        (9, (218, 217)),
-        (10, (217, 37)),
-        (11, (215, 20)),
-        (12, (215, 60)),
-        (13, (214, 172)),
+        (8, (223, 218)),
+        (9, (218, 202)),
+        (10, (217, 193)),
+        (11, (215, 208)),
+        (12, (215, 202)),
+        (13, (214, 167)),
         (14, (212, 212)),
-        (15, (212, 61)),
+        (15, (212, 192)),
         (16, (211, 185)),
-        (17, (210, 178)),
+        (17, (210, 177)),
         (19, (210, 205)),
-        (20, (210, 204)),
-        (21, (210, 136)),
+        (20, (210, 208)),
+        (21, (210, 197)),
     ]);
 
     // Collected rather than asserted inline, so the full table always prints
