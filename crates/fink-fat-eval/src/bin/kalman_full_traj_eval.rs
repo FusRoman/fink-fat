@@ -22,8 +22,9 @@ use fink_fat_eval::{
     parquet_export::{export_steps_parquet, export_summary_parquet},
     reporting::{
         print_detailed_reports, print_extremes_table, print_global_aggregate_stats,
-        print_nees_rmse_dataset_summary, print_nis_by_step_since_bootstrap,
-        print_nis_calibration_summary, print_run_counters, print_stop_reason_histogram,
+        print_inflation_diagnostics, print_nees_rmse_dataset_summary,
+        print_nis_by_step_since_bootstrap, print_nis_calibration_summary, print_run_counters,
+        print_stop_reason_histogram,
     },
     trajectory_processing::{process_all_trajectories, select_extremes},
 };
@@ -85,6 +86,7 @@ fn main() -> Result<()> {
     print_global_aggregate_stats(&summaries);
     print_nis_calibration_summary(&summaries);
     print_nees_rmse_dataset_summary(&summaries);
+    print_inflation_diagnostics(&summaries);
 
     if let Some(out_path) = &cli.summary_parquet_out {
         export_summary_parquet(&summaries, out_path)?;

@@ -8,18 +8,14 @@
 //! coordinate descent compares candidates on.
 
 use ahash::AHashSet;
-use fink_fat_engine::{
-    engine_config::{kalman_context::KalmanContext, main_config::EngineConfig},
-    topocentric_kf::single_kalman::KFState,
-};
-use photom::{
-    TrajId,
-    observation_dataset::{ObsDataset, observation::Observation},
-};
+use fink_fat_engine::engine_config::{kalman_context::KalmanContext, main_config::EngineConfig};
+use photom::{TrajId, observation_dataset::ObsDataset};
 use rayon::prelude::*;
 
 use crate::{
-    kalman_traj::{ObserverGeometryCache, recompute_search_region_metrics, study_kalman_asteroid},
+    kalman_traj::{
+        MixtureStep, ObserverGeometryCache, recompute_search_region_metrics, study_kalman_asteroid,
+    },
     kf_calibration::params::CalibrationParams,
     trajectory_processing::{TrajSummary, materialize_contiguous_traj, summarize_trajectory},
 };
@@ -161,7 +157,7 @@ pub fn evaluate(
 pub struct ReferenceRun<'a> {
     pub traj_id: TrajId,
     pub completion_fraction: f64,
-    pub steps: Vec<(Vec<(f64, KFState<'a>)>, Observation)>,
+    pub steps: Vec<MixtureStep<'a>>,
 }
 
 /// Run the full Kalman filter loop once per trajectory in `round_ids`,

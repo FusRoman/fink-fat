@@ -125,6 +125,19 @@ impl TrajStopReason {
 
 // ── Observer geometry cache ─────────────────────────────────────────────────
 
+/// Observer heliocentric `(position, velocity)` at some epoch, in AU / AU per day.
+type HelioGeometry = (Vector3<f64>, Vector3<f64>);
+
+/// One hypothesis's Bayesian weight paired with its propagated Kalman state —
+/// the raw `(weight, state)` mixture a bank predicts at some epoch, before
+/// any [`crate::kalman_traj::compute_search_region`] reduction.
+pub type WeightedHypothesisState<'a> = (f64, KFState<'a>);
+
+/// One predict/update step's recorded `(mixture, observation)` pair — see
+/// [`study_kalman_asteroid`]'s `mixture_recorder` parameter and
+/// [`recompute_search_region_metrics`].
+pub type MixtureStep<'a> = (Vec<WeightedHypothesisState<'a>>, Observation);
+
 /// Precomputed `ObsId -> (r_obs, v_obs)` observer heliocentric geometry,
 /// resolved once for every observation of a given trajectory population and
 /// reused across every subsequent [`study_kalman_asteroid`] call.
@@ -138,7 +151,7 @@ impl TrajStopReason {
 /// JPL interpolation + light-time correction — see
 /// [`fink_fat_engine::topocentric_kf::observer_state::EphemState::helio_observer_state`])
 /// into a single O(1) map lookup per step.
-pub struct ObserverGeometryCache(AHashMap<ObsId, (Vector3<f64>, Vector3<f64>)>);
+pub struct ObserverGeometryCache(AHashMap<ObsId, HelioGeometry>);
 
 impl ObserverGeometryCache {
     /// Resolve the geometry of every observation belonging to `traj_ids`,
@@ -150,7 +163,7 @@ impl ObserverGeometryCache {
     /// resolution for those, so nothing is lost, only slower for that one
     /// observation.
     pub fn build(obs_dataset: &ObsDataset, context: &KalmanContext, traj_ids: &[TrajId]) -> Self {
-        let entries: Vec<(ObsId, (Vector3<f64>, Vector3<f64>))> = traj_ids
+        let entries: Vec<(ObsId, HelioGeometry)> = traj_ids
             .par_iter()
             .filter_map(|traj_id| {
                 crate::trajectory_processing::materialize_contiguous_traj(obs_dataset, traj_id).ok()
@@ -351,18 +364,18 @@ fn compute_step_diag(
     );
 
     let truth = truth_lookup.and_then(|lookup| lookup.get(*obs.id()));
-    let (
+    let TruthMetrics {
         pos_error_arcsec,
         range_error_au,
         cart_pos_error_au,
         cart_vel_error_au_day,
         nees_sky,
         nees_cart,
-    ) = match truth {
+    } = match truth {
         Some(truth) => {
             compute_truth_metrics(best_kf, &equ_pred, &sigma_sky, predicted_range_au, truth)
         }
-        None => (None, None, None, None, None, None),
+        None => TruthMetrics::default(),
     };
 
     Some(StepDiag {
@@ -444,7 +457,7 @@ fn compute_search_region(
 /// One `(mixture, observation)` pair per predict/update step actually
 /// processed — see [`study_kalman_asteroid`]'s `mixture_recorder` parameter.
 pub fn recompute_search_region_metrics(
-    steps: &[(Vec<(f64, KFState)>, Observation)],
+    steps: &[MixtureStep],
     advance_params: &NightAdvanceParams,
     search_region_chi2: f64,
 ) -> (f64, f64) {
@@ -573,12 +586,14 @@ fn log_search_region(sr: &SearchRegionDiag, region: &SearchRegion, equ_obs: &Equ
 
 // ── Result assembly ───────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn assemble_result(
     epoch: f64,
     dt: f64,
     diag: &StepDiag,
     report: &BankStep,
     sr: &SearchRegionDiag,
+    inflation_lambda: f64,
 ) -> KFStudyResult {
     KFStudyResult {
         epoch,
@@ -613,6 +628,7 @@ fn assemble_result(
         cart_vel_error_au_day: diag.cart_vel_error_au_day,
         nees_sky: diag.nees_sky,
         nees_cart: diag.nees_cart,
+        inflation_lambda,
     }
 }
 
@@ -742,6 +758,16 @@ pub struct KFStudyResult {
     /// Under a well-calibrated filter this follows $\chi^2(6)$ (see
     /// [`NEES_CHI2_6DOF_MEDIAN`]). `None` if the covariance was singular.
     pub nees_cart: Option<f64>,
+
+    /// Fading-memory covariance-inflation factor $\lambda$ that was applied
+    /// to *this* step's propagation, recomputed from the pre-step MAP
+    /// hypothesis's `nis_ema`
+    /// (see [`fink_fat_engine::topocentric_kf::single_kalman::propagate`]'s
+    /// module doc). `1.0` means no inflation (the consistency dead-zone);
+    /// values above `1.0` (up to the configured `max_inflation`) mean the
+    /// filter's own recent NIS history was judged inconsistent and its
+    /// covariance was re-opened before this step's update.
+    pub inflation_lambda: f64,
 }
 
 // ── Main entry point ──────────────────────────────────────────────────────────
@@ -780,7 +806,7 @@ pub fn study_kalman_asteroid<'a, 'bank_config>(
     grid_config: &GridConfig,
     advance_params: &NightAdvanceParams,
     geometry_cache: &ObserverGeometryCache,
-    mut mixture_recorder: Option<&mut Vec<(Vec<(f64, KFState<'a>)>, Observation)>>,
+    mut mixture_recorder: Option<&mut Vec<MixtureStep<'a>>>,
     truth_lookup: Option<&TruthLookup>,
 ) -> StudyOutcome<'a, 'bank_config> {
     tracing::debug!(n_obs = traj.len(), "Starting Kalman filter bank study");
@@ -872,6 +898,16 @@ pub fn study_kalman_asteroid<'a, 'bank_config>(
             "Stepping bank"
         );
 
+        // Fading-memory inflation factor λ that `propagate_covariance` will
+        // apply *this* step, recomputed here from the pre-step MAP
+        // hypothesis's `nis_ema` (a public field) — mirrors the exact
+        // formula in `fink_fat_engine::topocentric_kf::single_kalman::propagate`,
+        // reading the same (now configurable) thresholds from `context`
+        // rather than duplicating hardcoded constants.
+        let inflation_lambda = bank.best().and_then(|h| h.kf.nis_ema).map_or(1.0, |ema| {
+            (ema / context.get_inflation_chi2_threshold()).clamp(1.0, context.get_max_inflation())
+        });
+
         // Snapshot before step in case it collapses.
         let snapshot = bank.clone();
         // `step_with_geometry` when geometry is already known (the common
@@ -944,7 +980,14 @@ pub fn study_kalman_asteroid<'a, 'bank_config>(
         }
 
         t_prev = epoch;
-        kf_results.push(assemble_result(epoch, dt, &diag, &report, &sr));
+        kf_results.push(assemble_result(
+            epoch,
+            dt,
+            &diag,
+            &report,
+            &sr,
+            inflation_lambda,
+        ));
     }
 
     StudyOutcome {
@@ -1090,23 +1133,29 @@ fn compute_nees_cart(best_kf: &KFState, truth: &TruthState) -> Option<f64> {
     (nees.is_finite() && nees >= 0.0).then_some(nees)
 }
 
+/// Ground-truth comparison metrics for one step: sky-plane and range
+/// position error (RMSE inputs, no covariance needed), plus the 2-D and
+/// 6-DOF NEES. All `None` (via [`Default`]) when no ground truth is
+/// available for this step.
+#[derive(Default)]
+struct TruthMetrics {
+    pos_error_arcsec: Option<f64>,
+    range_error_au: Option<f64>,
+    cart_pos_error_au: Option<f64>,
+    cart_vel_error_au_day: Option<f64>,
+    nees_sky: Option<f64>,
+    nees_cart: Option<f64>,
+}
+
 /// RMSE-oriented ground-truth comparison metrics for one step: sky-plane and
 /// range position error (no covariance needed), plus the 2-D and 6-DOF NEES.
-#[allow(clippy::too_many_arguments)]
 fn compute_truth_metrics(
     best_kf: &KFState,
     equ_pred: &EquCoord,
     sigma_sky: &Matrix2<f64>,
     predicted_range_au: f64,
     truth: &TruthState,
-) -> (
-    Option<f64>,
-    Option<f64>,
-    Option<f64>,
-    Option<f64>,
-    Option<f64>,
-    Option<f64>,
-) {
+) -> TruthMetrics {
     let equ_truth = EquCoord::new(
         truth.ra_deg.to_radians(),
         0.0,
@@ -1130,14 +1179,14 @@ fn compute_truth_metrics(
 
     let nees_cart = compute_nees_cart(best_kf, truth);
 
-    (
-        Some(pos_error_arcsec),
-        Some(range_error_au),
-        Some(cart_pos_error_au),
-        Some(cart_vel_error_au_day),
-        Some(nees_sky),
+    TruthMetrics {
+        pos_error_arcsec: Some(pos_error_arcsec),
+        range_error_au: Some(range_error_au),
+        cart_pos_error_au: Some(cart_pos_error_au),
+        cart_vel_error_au_day: Some(cart_vel_error_au_day),
+        nees_sky: Some(nees_sky),
         nees_cart,
-    )
+    }
 }
 
 fn separation_from_search_center(region: &SearchRegion, equ_obs: &EquCoord) -> f64 {

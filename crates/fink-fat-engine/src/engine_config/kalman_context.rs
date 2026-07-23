@@ -126,4 +126,12 @@ impl KalmanContext {
     pub fn get_dt_ref(&self) -> f64 {
         self.config.dt_ref
     }
+
+    pub fn get_inflation_chi2_threshold(&self) -> f64 {
+        self.config.inflation_chi2_threshold
+    }
+
+    pub fn get_max_inflation(&self) -> f64 {
+        self.config.max_inflation
+    }
 }

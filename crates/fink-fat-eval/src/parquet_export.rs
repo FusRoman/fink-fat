@@ -52,6 +52,7 @@ pub fn export_steps_parquet(
     let mut cart_vel_error_au_day: Vec<Option<f64>> = Vec::with_capacity(n);
     let mut nees_sky: Vec<Option<f64>> = Vec::with_capacity(n);
     let mut nees_cart: Vec<Option<f64>> = Vec::with_capacity(n);
+    let mut inflation_lambda = Vec::with_capacity(n);
 
     for (id, results) in rows {
         for r in results {
@@ -88,6 +89,7 @@ pub fn export_steps_parquet(
             cart_vel_error_au_day.push(r.cart_vel_error_au_day);
             nees_sky.push(r.nees_sky);
             nees_cart.push(r.nees_cart);
+            inflation_lambda.push(r.inflation_lambda);
         }
     }
 
@@ -143,6 +145,7 @@ pub fn export_steps_parquet(
         Column::new("cart_vel_error_au_day".into(), cart_vel_error_au_day),
         Column::new("nees_sky".into(), nees_sky),
         Column::new("nees_cart".into(), nees_cart),
+        Column::new("inflation_lambda".into(), inflation_lambda),
     ])
     .context("failed to build per-step metrics DataFrame")?;
 
@@ -192,6 +195,8 @@ pub fn export_summary_parquet(
     let mut pct_nees_sky_in_chi2_band = Vec::with_capacity(n);
     let mut mean_nees_cart = Vec::with_capacity(n);
     let mut pct_nees_cart_in_chi2_band = Vec::with_capacity(n);
+    let mut mean_inflation_lambda = Vec::with_capacity(n);
+    let mut pct_steps_inflation_active = Vec::with_capacity(n);
 
     for s in summaries {
         traj_id.push(s.traj_id.to_string());
@@ -223,6 +228,8 @@ pub fn export_summary_parquet(
         pct_nees_sky_in_chi2_band.push(s.pct_nees_sky_in_chi2_band);
         mean_nees_cart.push(s.mean_nees_cart);
         pct_nees_cart_in_chi2_band.push(s.pct_nees_cart_in_chi2_band);
+        mean_inflation_lambda.push(s.mean_inflation_lambda);
+        pct_steps_inflation_active.push(s.pct_steps_inflation_active);
     }
 
     let mut df = DataFrame::new_infer_height(vec![
@@ -266,6 +273,11 @@ pub fn export_summary_parquet(
         Column::new(
             "pct_nees_cart_in_chi2_band".into(),
             pct_nees_cart_in_chi2_band,
+        ),
+        Column::new("mean_inflation_lambda".into(), mean_inflation_lambda),
+        Column::new(
+            "pct_steps_inflation_active".into(),
+            pct_steps_inflation_active,
         ),
     ])
     .context("failed to build trajectory-summary DataFrame")?;

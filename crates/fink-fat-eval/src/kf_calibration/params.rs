@@ -160,6 +160,11 @@ impl CalibrationParams {
     }
 }
 
+/// Reads one [`CalibrationParams`] field.
+type ParamGetter = Box<dyn Fn(&CalibrationParams) -> f64 + Sync>;
+/// Writes one [`CalibrationParams`] field.
+type ParamSetter = Box<dyn Fn(&mut CalibrationParams, f64) + Sync>;
+
 /// One tunable field of [`CalibrationParams`], described generically enough
 /// that [`crate::kf_calibration::search`]'s coordinate descent can iterate
 /// over [`default_param_specs`] without a per-field match arm.
@@ -167,8 +172,8 @@ pub struct ParamSpec {
     /// Human-readable name, used in [`crate::kf_calibration::report`] and
     /// `--params` CLI filtering.
     pub name: &'static str,
-    pub get: Box<dyn Fn(&CalibrationParams) -> f64 + Sync>,
-    pub set: Box<dyn Fn(&mut CalibrationParams, f64) + Sync>,
+    pub get: ParamGetter,
+    pub set: ParamSetter,
     pub min: f64,
     pub max: f64,
     /// Whether this field is read anywhere by `KFBank::step_with_geometry`

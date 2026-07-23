@@ -300,6 +300,14 @@ pub struct TrajSummary {
     pub pct_nees_sky_in_chi2_band: f64,
     pub mean_nees_cart: f64,
     pub pct_nees_cart_in_chi2_band: f64,
+
+    // ── Fading-memory covariance-inflation diagnostics ─────────────────────
+    /// Mean fading-memory inflation factor $\lambda$ over this trajectory's
+    /// steps (see [`crate::kalman_traj::KFStudyResult::inflation_lambda`]).
+    /// `1.0` if inflation never engaged.
+    pub mean_inflation_lambda: f64,
+    /// Percentage of steps where $\lambda>1$ (inflation actually active).
+    pub pct_steps_inflation_active: f64,
 }
 
 /// Reduce one trajectory's [`StudyOutcome`] into a [`TrajSummary`].
@@ -373,13 +381,16 @@ pub fn summarize_trajectory(
         mean_nees_sky: metric_stats_opt(results, |r| r.nees_sky).mean,
         pct_nees_sky_in_chi2_band: pct_true_opt(results, |r| {
             r.nees_sky
-                .map(|v| v >= NEES_CHI2_2DOF_LOW && v <= NEES_CHI2_2DOF_HIGH)
+                .map(|v| (NEES_CHI2_2DOF_LOW..=NEES_CHI2_2DOF_HIGH).contains(&v))
         }),
         mean_nees_cart: metric_stats_opt(results, |r| r.nees_cart).mean,
         pct_nees_cart_in_chi2_band: pct_true_opt(results, |r| {
             r.nees_cart
-                .map(|v| v >= NEES_CHI2_6DOF_LOW && v <= NEES_CHI2_6DOF_HIGH)
+                .map(|v| (NEES_CHI2_6DOF_LOW..=NEES_CHI2_6DOF_HIGH).contains(&v))
         }),
+
+        mean_inflation_lambda: metric_stats(results, |r| r.inflation_lambda).mean,
+        pct_steps_inflation_active: pct_true(results, |r| r.inflation_lambda > 1.0),
     })
 }
 

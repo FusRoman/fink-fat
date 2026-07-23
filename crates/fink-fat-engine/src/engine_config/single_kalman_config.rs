@@ -14,7 +14,7 @@ use crate::engine_config::{
     Validate,
     error::FieldError,
     units::de_time_days,
-    validate_helpers::{check_finite_nonneg, check_finite_positive},
+    validate_helpers::{check_finite_in_range, check_finite_nonneg, check_finite_positive},
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -63,6 +63,44 @@ pub struct KalmanConfig {
     ///
     /// See [`outfit::kepler::SolverType`] for the accepted YAML variants.
     pub solver_type: SolverType,
+
+    /// χ²(2) dead-zone threshold for the fading-memory covariance inflation.
+    ///
+    /// Units
+    /// -----
+    /// Dimensionless (chi-square statistic).
+    ///
+    /// Context
+    /// -------
+    /// As long as the smoothed NIS (`nis_ema`) stays below this value the
+    /// filter is deemed statistically consistent and its covariance is
+    /// transported unchanged (inflation factor `λ = 1`). Inflation only
+    /// engages once `nis_ema` exceeds this threshold, so a well-behaved
+    /// filter is never perturbed. `5.991` is the χ²(2) upper 95% quantile.
+    ///
+    /// Serialization
+    /// -------------
+    /// No `units.rs` parser is applied: a bare dimensionless statistic.
+    pub inflation_chi2_threshold: f64,
+
+    /// Maximum per-step covariance inflation factor `λ`.
+    ///
+    /// Units
+    /// -----
+    /// Dimensionless multiplier, must be `>= 1.0`.
+    ///
+    /// Context
+    /// -------
+    /// Caps how aggressively a single propagation may re-open the
+    /// covariance. A catastrophic NIS would otherwise inflate `P` by a huge
+    /// factor in one step (an outlier over-reaction); clamping spreads the
+    /// recovery over a few predictions, keeping the transport smooth while
+    /// still converging quickly back into the consistency dead-zone.
+    ///
+    /// Serialization
+    /// -------------
+    /// No `units.rs` parser is applied: a bare dimensionless multiplier.
+    pub max_inflation: f64,
 }
 
 impl Default for KalmanConfig {
@@ -71,6 +109,8 @@ impl Default for KalmanConfig {
             q0: 1e-16,
             dt_ref: 1.,
             solver_type: SolverType::default(),
+            inflation_chi2_threshold: 5.991,
+            max_inflation: 5.0,
         }
     }
 }
@@ -92,6 +132,22 @@ impl Validate for KalmanConfig {
             "dt_ref",
             self.dt_ref,
             "set dt_ref to a strictly positive duration, e.g. 1.0 or \"24 hour\" (days)",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_positive(
+            "inflation_chi2_threshold",
+            self.inflation_chi2_threshold,
+            "set inflation_chi2_threshold to a strictly positive chi-square statistic, e.g. 5.991 (chi2(2) 95%)",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_in_range(
+            "max_inflation",
+            self.max_inflation,
+            1.0,
+            f64::INFINITY,
+            "set max_inflation to a value >= 1.0, e.g. 5.0",
         ) {
             errors.push(e);
         }
