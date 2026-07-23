@@ -488,7 +488,7 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
     /// `None` if the bank has no hypotheses to read a context from, or if
     /// the observer/ephemeris lookup itself fails — a failure every
     /// hypothesis would have hit identically, for the same reason.
-    fn resolve_step_geometry(
+    pub fn resolve_step_geometry(
         &self,
         obs_dataset: &ObsDataset,
         obs: &Observation,

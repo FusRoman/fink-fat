@@ -6,7 +6,7 @@ use outfit::{
 use photom::observation_dataset::{ObsDataset, observation::Observation};
 
 use crate::topocentric_kf::{
-    constants::{C_AU_PER_DAY, CHI2_2DOF_95, MAX_INFLATION, MAX_RHO_AU, MIN_RHO_AU},
+    constants::{C_AU_PER_DAY, MAX_RHO_AU, MIN_RHO_AU},
     conversion::{CartesianState, cartesian_to_attributable, jacobian_attr_to_cart},
     observer_state::{HelioObsState, get_observer},
     single_kalman::KFState,
@@ -575,9 +575,11 @@ fn propagate_covariance(
     // Using the smoothed NIS (rather than the last raw value) keeps λ robust to
     // isolated outliers; the dead-zone (λ = 1 below χ²₉₅) leaves a consistent
     // filter untouched; the cap bounds the per-step reaction.
-    let lambda = kf
-        .nis_ema
-        .map_or(1.0, |ema| (ema / CHI2_2DOF_95).clamp(1.0, MAX_INFLATION));
+    let inflation_chi2_threshold = kf.shared_ctx.config.inflation_chi2_threshold;
+    let max_inflation = kf.shared_ctx.config.max_inflation;
+    let lambda = kf.nis_ema.map_or(1.0, |ema| {
+        (ema / inflation_chi2_threshold).clamp(1.0, max_inflation)
+    });
 
     let p_cart_new = lambda * (stm * p_cart * stm.transpose());
 

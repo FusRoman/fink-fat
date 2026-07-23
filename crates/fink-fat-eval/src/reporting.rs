@@ -195,6 +195,42 @@ pub fn print_nees_rmse_dataset_summary(summaries: &[TrajSummary]) {
     );
 }
 
+/// Print dataset-wide fading-memory covariance-inflation diagnostics: how
+/// often $\lambda>1$ actually engages, and by how much. Answers "is the
+/// persistent over-covariance seen in NIS/NEES driven by this mechanism, or
+/// is it rare enough to rule out?" — see
+/// `crate::kalman_traj::KFStudyResult::inflation_lambda`.
+pub fn print_inflation_diagnostics(summaries: &[TrajSummary]) {
+    let sep = "=".repeat(90);
+    println!("\n{sep}");
+    println!("[Global] Fading-memory covariance inflation (λ)");
+    println!("{sep}");
+    print_metric_row(
+        "Mean inflation factor λ (1.0 = inactive)",
+        &metric_stats(summaries, |s| s.mean_inflation_lambda),
+    );
+    print_metric_row(
+        "% steps with λ > 1 (inflation active)",
+        &metric_stats(summaries, |s| s.pct_steps_inflation_active),
+    );
+    println!("{sep}");
+    let pct_active_median = metric_stats(summaries, |s| s.pct_steps_inflation_active).median;
+    if pct_active_median.is_finite() {
+        if pct_active_median > 20.0 {
+            println!(
+                "  ⚠ Inflation active on {pct_active_median:.1}% of steps (median trajectory) — \
+                 this is a frequent, not occasional, mechanism: a strong candidate for the \
+                 persistent NIS/NEES over-covariance seen dataset-wide."
+            );
+        } else {
+            println!(
+                "  Inflation active on {pct_active_median:.1}% of steps (median trajectory) — \
+                 fairly rare; likely not the main driver of the persistent over-covariance."
+            );
+        }
+    }
+}
+
 /// Print dataset-wide NIS median/mean per steps-since-bootstrap bucket (see
 /// [`StepBucketStats`]) — the diagnostic for whether over-covariance is a
 /// transient bootstrap effect (NIS should climb toward
@@ -359,10 +395,10 @@ pub fn print_detailed_reports(
     truth_lookup: Option<&TruthLookup>,
     output_dir: Option<&Utf8Path>,
 ) -> Vec<(TrajId, Vec<KFStudyResult>)> {
-    if let Some(dir) = output_dir {
-        if let Err(e) = std::fs::create_dir_all(dir) {
-            println!("  (failed to create output directory {dir}: {e})");
-        }
+    if let Some(dir) = output_dir
+        && let Err(e) = std::fs::create_dir_all(dir)
+    {
+        println!("  (failed to create output directory {dir}: {e})");
     }
 
     let geometry_cache = ObserverGeometryCache::build(obs_dataset, context, traj_ids);
