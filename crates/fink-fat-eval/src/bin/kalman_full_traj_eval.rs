@@ -65,6 +65,16 @@ fn main() -> Result<()> {
         .transpose()?;
 
     println!("Scanning the dataset and running the Kalman filter bank on every trajectory…");
+
+    println!(
+        "\n-- Test with q0 = {} --",
+        engine_config.kalman_shared_context.config.q0
+    );
+    println!(
+        "-- Test with search_region_chi2 = {} --\n",
+        engine_config.kfbank_config.search_region_chi2
+    );
+
     let (summaries, counters, nis_step_buckets) = process_all_trajectories(
         &obs_dataset,
         &kalman_ctx,

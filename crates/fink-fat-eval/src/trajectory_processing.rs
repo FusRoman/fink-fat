@@ -421,14 +421,15 @@ struct TrajOutcome {
     /// outcome kind reaches at least the "not enough points"/bootstrap
     /// stage and gets a real [`TrajStopReason`].
     stop_reason: Option<TrajStopReason>,
-    /// This trajectory's NIS values, in step order (`nis_by_step[0]` is the
+    /// This trajectory's per-step samples, in step order (`by_step[0]` is the
     /// first predict/update step after the bootstrap pair, etc.) — empty
     /// unless the loop produced at least one step. Fed into
-    /// [`nis_by_step_since_bootstrap`]'s dataset-wide bucketing, to check
+    /// [`step_stats_by_bootstrap`]'s dataset-wide bucketing, to check
     /// whether NIS trends toward its χ²(2) expectation as more updates
     /// accumulate (see [`crate::kalman_traj::TrajStopReason`]'s module doc
-    /// on the initial angular-rate covariance) or stays low throughout.
-    nis_by_step: Vec<f64>,
+    /// on the initial angular-rate covariance) or stays low throughout, and
+    /// how the search-radius decomposition evolves along the arc.
+    by_step: Vec<StepSample>,
     materialize_ms: f64,
     kalman_ms: f64,
     summarize_ms: f64,
@@ -479,7 +480,7 @@ fn process_one_trajectory(
             return TrajOutcome {
                 outcome: TrajOutcomeKind::MaterializeFailed,
                 stop_reason: None,
-                nis_by_step: Vec::new(),
+                by_step: Vec::new(),
                 materialize_ms,
                 kalman_ms: 0.0,
                 summarize_ms: 0.0,
@@ -497,7 +498,7 @@ fn process_one_trajectory(
         return TrajOutcome {
             outcome: TrajOutcomeKind::NotEnoughPoint,
             stop_reason: Some(TrajStopReason::NotEnoughPoints),
-            nis_by_step: Vec::new(),
+            by_step: Vec::new(),
             materialize_ms,
             kalman_ms: 0.0,
             summarize_ms: 0.0,
@@ -520,11 +521,19 @@ fn process_one_trajectory(
     );
     let kalman_ms = t1.elapsed().as_secs_f64() * 1e3;
     let stop_reason = Some(study_outcome.stop_reason);
-    let nis_by_step: Vec<f64> = study_outcome
+    // Keep the same "finite NIS" step filter as before (so NIS-by-step is
+    // unchanged); the radius decomposition rides along on the surviving steps.
+    let by_step: Vec<StepSample> = study_outcome
         .results
         .iter()
-        .map(|r| r.nis)
-        .filter(|v| v.is_finite())
+        .filter(|r| r.nis.is_finite())
+        .map(|r| StepSample {
+            nis: r.nis,
+            radius_spread_arcsec: r.radius_spread_arcsec,
+            radius_component_arcsec: r.radius_component_arcsec,
+            map_rho_sigma_au: r.map_rho_sigma_au,
+            map_rhodot_sigma: r.map_rhodot_sigma,
+        })
         .collect();
 
     // --- summarize ---
@@ -548,7 +557,7 @@ fn process_one_trajectory(
     TrajOutcome {
         outcome,
         stop_reason,
-        nis_by_step,
+        by_step,
         materialize_ms,
         kalman_ms,
         summarize_ms,
@@ -571,14 +580,27 @@ fn build_progress_bar(nb_traj: usize) -> ProgressBar {
 }
 
 /// Number of leading steps-since-bootstrap tracked individually by
-/// [`nis_by_step_since_bootstrap`] before folding the rest into one "overflow"
+/// [`step_stats_by_bootstrap`] before folding the rest into one "overflow"
 /// bucket — deep enough to see whether NIS trends toward its χ²(2)
 /// expectation over the first few updates, without letting a handful of very
 /// long arcs blow up the number of (mostly near-empty) buckets.
 pub const NIS_STEP_BUCKET_DEPTH: usize = 30;
 
-/// Dataset-wide NIS distribution for one "steps since the bootstrap pair"
-/// bucket — see [`nis_by_step_since_bootstrap`].
+/// One trajectory's per-step diagnostic sample, in step order. Carries the
+/// predictive NIS plus the search-radius decomposition (between-mode spread
+/// vs within-mode covariance, arcsec) so [`step_stats_by_bootstrap`] can
+/// bucket all three by steps-since-bootstrap.
+#[derive(Debug, Clone, Copy)]
+pub struct StepSample {
+    pub nis: f64,
+    pub radius_spread_arcsec: f64,
+    pub radius_component_arcsec: f64,
+    pub map_rho_sigma_au: f64,
+    pub map_rhodot_sigma: f64,
+}
+
+/// Dataset-wide distribution for one "steps since the bootstrap pair"
+/// bucket — see [`step_stats_by_bootstrap`].
 #[derive(Debug, Clone)]
 pub struct StepBucketStats {
     /// 1-based step index, e.g. `1` = the first predict/update step right
@@ -588,6 +610,14 @@ pub struct StepBucketStats {
     /// Number of (trajectory, step) samples folded into this bucket.
     pub n_samples: usize,
     pub nis: MetricStats,
+    /// Between-mode spread contribution to the search radius (arcsec).
+    pub radius_spread: MetricStats,
+    /// Within-mode covariance contribution to the search radius (arcsec).
+    pub radius_component: MetricStats,
+    /// MAP hypothesis range 1-σ (AU) — range-observability signal.
+    pub map_rho_sigma: MetricStats,
+    /// MAP hypothesis range-rate 1-σ (AU/day).
+    pub map_rhodot_sigma: MetricStats,
 }
 
 /// Reduce every trajectory's per-step NIS series into dataset-wide
@@ -601,23 +631,59 @@ pub struct StepBucketStats {
 /// buckets as Kalman updates refine the initial velocity estimate — or
 /// persistent, which would point at a propagation/update issue instead of
 /// the bootstrap's initial covariance.
-fn nis_by_step_since_bootstrap(nis_by_step_all: &[Vec<f64>]) -> Vec<StepBucketStats> {
-    let mut buckets: Vec<Vec<f64>> = vec![Vec::new(); NIS_STEP_BUCKET_DEPTH + 1];
+fn step_stats_by_bootstrap(by_step_all: &[Vec<StepSample>]) -> Vec<StepBucketStats> {
+    let mut buckets: Vec<Vec<StepSample>> = vec![Vec::new(); NIS_STEP_BUCKET_DEPTH + 1];
 
-    for nis_by_step in nis_by_step_all {
-        for (i, nis) in nis_by_step.iter().enumerate() {
-            buckets[i.min(NIS_STEP_BUCKET_DEPTH)].push(*nis);
+    for by_step in by_step_all {
+        for (i, sample) in by_step.iter().enumerate() {
+            buckets[i.min(NIS_STEP_BUCKET_DEPTH)].push(*sample);
         }
     }
+
+    // Per-metric finite filter so a NaN in one field (e.g. a degenerate
+    // mixture's radius decomposition) can't poison the others' stats.
+    let finite =
+        |xs: &[f64]| -> Vec<f64> { xs.iter().copied().filter(|v| v.is_finite()).collect() };
 
     buckets
         .into_iter()
         .enumerate()
-        .filter(|(_, values)| !values.is_empty())
-        .map(|(i, values)| StepBucketStats {
-            step_index: i + 1,
-            n_samples: values.len(),
-            nis: compute_stats(&values),
+        .filter(|(_, samples)| !samples.is_empty())
+        .map(|(i, samples)| {
+            let nis: Vec<f64> = samples.iter().map(|s| s.nis).collect();
+            let spread = finite(
+                &samples
+                    .iter()
+                    .map(|s| s.radius_spread_arcsec)
+                    .collect::<Vec<_>>(),
+            );
+            let component = finite(
+                &samples
+                    .iter()
+                    .map(|s| s.radius_component_arcsec)
+                    .collect::<Vec<_>>(),
+            );
+            let rho_sigma = finite(
+                &samples
+                    .iter()
+                    .map(|s| s.map_rho_sigma_au)
+                    .collect::<Vec<_>>(),
+            );
+            let rhodot_sigma = finite(
+                &samples
+                    .iter()
+                    .map(|s| s.map_rhodot_sigma)
+                    .collect::<Vec<_>>(),
+            );
+            StepBucketStats {
+                step_index: i + 1,
+                n_samples: samples.len(),
+                nis: compute_stats(&nis),
+                radius_spread: compute_stats(&spread),
+                radius_component: compute_stats(&component),
+                map_rho_sigma: compute_stats(&rho_sigma),
+                map_rhodot_sigma: compute_stats(&rhodot_sigma),
+            }
         })
         .collect()
 }
@@ -717,7 +783,7 @@ fn aggregate_outcomes(
     let mut summaries = Vec::with_capacity(outcomes.len());
     let mut counters = RunCounters::default();
     let mut timings = TimingStats::with_capacity(outcomes.len());
-    let mut nis_by_step_all: Vec<Vec<f64>> = Vec::with_capacity(outcomes.len());
+    let mut by_step_all: Vec<Vec<StepSample>> = Vec::with_capacity(outcomes.len());
 
     for outcome in outcomes {
         counters.n_total += 1;
@@ -730,8 +796,8 @@ fn aggregate_outcomes(
             *counters.stop_reason_counts.entry(reason).or_insert(0) += 1;
         }
 
-        if !outcome.nis_by_step.is_empty() {
-            nis_by_step_all.push(outcome.nis_by_step);
+        if !outcome.by_step.is_empty() {
+            by_step_all.push(outcome.by_step);
         }
 
         match outcome.outcome {
@@ -744,7 +810,7 @@ fn aggregate_outcomes(
 
     log_run_completion(&counters, &timings, global_elapsed);
 
-    let step_buckets = nis_by_step_since_bootstrap(&nis_by_step_all);
+    let step_buckets = step_stats_by_bootstrap(&by_step_all);
 
     (summaries, counters, step_buckets)
 }

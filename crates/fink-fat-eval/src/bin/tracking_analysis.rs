@@ -29,7 +29,7 @@ use fink_fat_eval::{
             compute_reconstruction_efficacy, determine_last_processed_night,
         },
         plots::{
-            plot_hypotheses_per_branch_histogram,
+            plot_cumulative_llr_per_lineage_histogram, plot_hypotheses_per_branch_histogram,
             plot_observations_per_night as plot_snapshot_observations_per_night,
             plot_reconstruction_coverage_histogram, plot_reconstruction_outcome_breakdown,
             plot_track_length_histogram,
@@ -171,6 +171,13 @@ fn main() -> Result<()> {
 
     let ground_truth = ObsTrajLookup::build(&obs_dataset);
 
+    // Orbital-class population per trajectory, for the gate-selectivity
+    // breakdown (empty if no ground-truth path / old parquet ⇒ all Unknown).
+    let traj_population = match &cli.common.ground_truth {
+        Some(gt_path) => fink_fat_eval::population::load_traj_populations(gt_path)?,
+        None => ahash::AHashMap::default(),
+    };
+
     let mut night_ids: Vec<NightId> = obs_dataset
         .iter_night_id()
         .expect("dataset must have a night index")
@@ -189,6 +196,8 @@ fn main() -> Result<()> {
     let mut gold_tracker = GoldTrajectoryTracker::new();
     let mut lineage_tracker = LineageTracker::new();
     let mut object_outcome_tracker = ObjectOutcomeTracker::new();
+    let mut gate_selectivity =
+        fink_fat_eval::tracking_report::gate_selectivity::GateSelectivity::new();
     let mut consumed_then_pruned_ids: AHashSet<ObsId> = AHashSet::default();
     let mut last_step = 0;
 
@@ -240,6 +249,12 @@ fn main() -> Result<()> {
             stats.n_branches, stats.recall_pct_tonight, stats.completeness_pct_so_far
         ));
         object_outcome_tracker.observe_night(step, &new_collection.branches, &ground_truth);
+        gate_selectivity.observe_night(
+            &new_collection.last_night_gate_records,
+            &new_collection.branches,
+            &ground_truth,
+            &traj_population,
+        );
         consumed_then_pruned_ids.extend(
             new_collection
                 .last_night_consumed_then_pruned_ids
@@ -279,6 +294,27 @@ fn main() -> Result<()> {
         cli.completeness_coverage_threshold,
     );
     print_object_outcome_summary(&outcomes, &gold_tracker);
+    gate_selectivity.print_summary();
+    fink_fat_eval::tracking_report::gate_selectivity::print_coasting_llr_by_class(
+        &collection.branches,
+        &ground_truth,
+        &traj_population,
+        collection.current_step,
+    );
+
+    // Reconstruction efficacy (incl. per-population breakdown) on the final
+    // live collection — the same report `--from-snapshot` prints, so Part A is
+    // available without a separate snapshot run.
+    if ground_truth.has_ground_truth() {
+        let efficacy = compute_reconstruction_efficacy(
+            &collection,
+            &ground_truth,
+            &gold_tracker,
+            &traj_population,
+            night_ids.last().copied(),
+        );
+        efficacy.print_summary();
+    }
 
     let never_touched_ids: Vec<photom::TrajId> = outcomes
         .iter()
@@ -407,6 +443,14 @@ fn run_snapshot_analysis(cli: &TrackingAnalysisCli) -> Result<()> {
     let ground_truth = ObsTrajLookup::build(&obs_dataset);
     let obs_to_night = build_obs_to_night_map(&obs_dataset);
 
+    // Orbital-class population per trajectory (from the ground-truth parquet's
+    // true_a_au/true_q_au). Empty if no ground-truth path or old parquet — then
+    // every trajectory classifies as Unknown.
+    let traj_population = match &cli.common.ground_truth {
+        Some(gt_path) => fink_fat_eval::population::load_traj_populations(gt_path)?,
+        None => ahash::AHashMap::default(),
+    };
+
     let stats = compute_snapshot_stats(&collection, &obs_to_night);
     stats.print_summary();
 
@@ -422,6 +466,7 @@ fn run_snapshot_analysis(cli: &TrackingAnalysisCli) -> Result<()> {
                     &collection,
                     &ground_truth,
                     &gold_tracker,
+                    &traj_population,
                     Some(last_processed_night),
                 );
                 efficacy.print_summary();
@@ -467,13 +512,15 @@ fn write_snapshot_plots(
 ) -> Result<()> {
     let hyp_path = output_dir.join("hypotheses_per_branch_histogram.png");
     let len_path = output_dir.join("track_length_per_branch_histogram.png");
+    let llr_path = output_dir.join("cumulative_llr_per_lineage_histogram.png");
     let night_path = output_dir.join("observations_per_night.png");
     plot_hypotheses_per_branch_histogram(stats, &hyp_path)?;
     plot_track_length_histogram(stats, &len_path)?;
+    plot_cumulative_llr_per_lineage_histogram(stats, &llr_path)?;
     plot_snapshot_observations_per_night(stats, &night_path)?;
 
     println!("Plots written to:");
-    for p in [&hyp_path, &len_path, &night_path] {
+    for p in [&hyp_path, &len_path, &llr_path, &night_path] {
         println!("  {p}");
     }
 

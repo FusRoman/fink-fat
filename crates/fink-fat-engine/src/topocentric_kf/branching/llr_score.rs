@@ -232,4 +232,53 @@ mod ll_score_tests {
     fn null_branch_llr_delta_is_negative_infinity_at_certain_detection() {
         assert_eq!(null_branch_llr_delta(1.0), f64::NEG_INFINITY);
     }
+
+    // ── Property-based: LLR robustness (feeds gating, pruning, zombie-culling) ──
+    use proptest::prelude::*;
+
+    proptest! {
+        /// A missed detection never *increases* evidence, and stays finite
+        /// below certain detection (`p < 1`) — the coasting-decay building block.
+        #[test]
+        fn null_delta_is_nonpositive_and_finite(p in 0.0f64..1.0) {
+            let d = null_branch_llr_delta(p);
+            prop_assert!(d <= 0.0);
+            prop_assert!(d.is_finite());
+        }
+
+        /// With a positive mixture likelihood, the astrometric delta is always
+        /// finite — the `MIN_CLUTTER_DENSITY`/`MAX_MIXTURE_LIKELIHOOD` caps rule
+        /// out both `+inf` and `NaN`, even for extreme inputs (`+inf` likelihood,
+        /// zero clutter). (A likelihood of exactly 0 legitimately yields `-inf`:
+        /// the observation is impossible under the bank.)
+        #[test]
+        fn observation_delta_is_finite_for_positive_likelihood(
+            likelihood in 1e-300f64..=f64::MAX,
+            clutter in 0.0f64..=f64::MAX,
+        ) {
+            prop_assert!(observation_llr_delta(likelihood, clutter).is_finite());
+        }
+        #[test]
+        fn observation_delta_finite_even_at_infinite_likelihood(clutter in 0.0f64..=f64::MAX) {
+            prop_assert!(observation_llr_delta(f64::INFINITY, clutter).is_finite());
+        }
+
+        /// A lineage coasting on successive null branches — the exact
+        /// `cumulative_llr = parent + Σ null_branch_llr_delta(pᵢ)` accumulation
+        /// `Branch::from_null` performs — never blows up to NaN/±inf on the null
+        /// path and is monotonically non-increasing (evidence only decays).
+        #[test]
+        fn coasting_on_null_branches_decays_and_stays_finite(
+            parent in -1e6f64..1e6,
+            ps in proptest::collection::vec(0.0f64..1.0, 0..64),
+        ) {
+            let mut llr = parent;
+            for p in ps {
+                let prev = llr;
+                llr += null_branch_llr_delta(p);
+                prop_assert!(llr.is_finite());
+                prop_assert!(llr <= prev);
+            }
+        }
+    }
 }

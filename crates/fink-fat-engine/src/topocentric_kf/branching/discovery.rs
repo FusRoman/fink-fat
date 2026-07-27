@@ -72,9 +72,13 @@ impl DiscoveryEvent {
 ///   created. Caller seeds it above the highest `lineage_id` already in use
 ///   (including lineages that got fully pruned this night, so ids are never
 ///   reused).
+/// * `current_step` – Current night index; recorded as each new lineage's
+///   `last_real_update_step` (birth counts as a real update, so a freshly
+///   seeded lineage starts at staleness age zero).
 ///
 /// # Returns
 /// One [`Branch::seed`] per new bank built from the leftover observations.
+#[allow(clippy::too_many_arguments)]
 pub fn seed_new_lineages_from_leftovers<'state_lf, 'bank_config>(
     night_obs: &[&Observation],
     consumed_observation_ids: &HashSet<ObsId>,
@@ -83,6 +87,7 @@ pub fn seed_new_lineages_from_leftovers<'state_lf, 'bank_config>(
     engine_config: &'bank_config EngineConfig,
     spatial_binner: &HealpixBinner,
     next_lineage_id: &mut u64,
+    current_step: usize,
 ) -> Result<Vec<Branch<'state_lf, 'bank_config>>, EngineError> {
     let leftover_obs: Vec<&Observation> = night_obs
         .iter()
@@ -110,7 +115,7 @@ pub fn seed_new_lineages_from_leftovers<'state_lf, 'bank_config>(
         .map(|bank| {
             let id = *next_lineage_id;
             *next_lineage_id += 1;
-            Branch::seed(bank, id, id)
+            Branch::seed(bank, id, id, current_step)
         })
         .collect();
 

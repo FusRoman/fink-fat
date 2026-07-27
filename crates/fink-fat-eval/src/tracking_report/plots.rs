@@ -319,6 +319,56 @@ pub(crate) fn plot_histogram(
     Ok(())
 }
 
+/// Like [`plot_histogram`], but for distributions that can be negative
+/// (e.g. `cumulative_llr`, a log-likelihood-ratio sum that's negative for
+/// anything less plausible than clutter) — the x-axis spans the data's own
+/// `[min, max]` instead of assuming a `0.0` lower bound, and non-finite
+/// samples (e.g. `f64::NEG_INFINITY` from a certain-detection null branch,
+/// see `null_branch_llr_delta`) are dropped before binning rather than
+/// corrupting the range.
+pub(crate) fn plot_signed_histogram(
+    samples: &[f64],
+    title: &str,
+    x_label: &str,
+    output_path: &Utf8Path,
+) -> Result<()> {
+    const N_BINS: usize = 40;
+
+    let mut sorted: Vec<f64> = samples.iter().copied().filter(|v| v.is_finite()).collect();
+    sorted.sort_by(f64::total_cmp);
+    let (edges, bin_counts) = histogram_bins(&sorted, N_BINS);
+
+    let root =
+        BitMapBackend::new(output_path.as_str(), (CHART_WIDTH, CHART_HEIGHT)).into_drawing_area();
+    root.fill(&WHITE)?;
+
+    let x_min = edges.first().copied().unwrap_or(0.0);
+    let x_max = edges.last().copied().unwrap_or(1.0).max(x_min + 1.0);
+    let y_max = bin_counts.iter().copied().max().unwrap_or(1).max(1);
+
+    let mut chart = ChartBuilder::on(&root)
+        .caption(title, ("sans-serif", 28))
+        .margin(MARGIN)
+        .x_label_area_size(LABEL_AREA)
+        .y_label_area_size(LABEL_AREA)
+        .build_cartesian_2d(x_min..x_max, 0u32..(y_max + y_max / 10 + 1))
+        .with_context(|| format!("failed to build chart area for {output_path}"))?;
+
+    chart
+        .configure_mesh()
+        .x_desc(x_label)
+        .y_desc("Count")
+        .draw()?;
+
+    chart.draw_series(bin_counts.iter().enumerate().map(|(i, &count)| {
+        Rectangle::new([(edges[i], 0), (edges[i + 1], count)], BLUE.filled())
+    }))?;
+
+    root.present()
+        .with_context(|| format!("failed to write chart to {output_path}"))?;
+    Ok(())
+}
+
 /// Bar chart of a small number of named integer counts (e.g. the per-object
 /// outcome category breakdown).
 pub(crate) fn plot_bar_chart(

@@ -39,6 +39,24 @@ pub struct Branch<'state_lf, 'bank_config> {
     /// *when* the N-scan window has elapsed and the horizon should roll
     /// forward, without retaining the full branch tree.
     pub ancestor_creation_step: usize,
+    /// Night index at which this lineage's bank last consumed a real
+    /// (non-null) observation — as opposed to `ancestor_creation_step`, which
+    /// tracks the N-scan window anchor. Left unchanged by `from_null` (a
+    /// "blank observation night" never counts as a real update), so
+    /// `current_step - last_real_update_step` is exactly the lineage's
+    /// staleness age, consumed by
+    /// [`purge_stale_lineages`](super::pruning::purge_stale_lineages).
+    pub last_real_update_step: usize,
+    /// Count of real (non-null) observations this lineage has consumed since
+    /// [`Self::seed`] (which starts it at 1, for the bootstrap pair) —
+    /// incremented by [`Self::from_observation`], left unchanged by
+    /// [`Self::from_null`]. Lets a diagnostic normalize `cumulative_llr` by
+    /// evidence volume (`cumulative_llr / n_real_updates`) instead of reading
+    /// the raw sum, which conflates a lineage's *coasting duration* (more
+    /// null-branch penalties) with the *quality* of its evidence — see
+    /// `stale_llr_floor` calibration in `fink-fat-eval`'s
+    /// `print_coasting_llr_by_class`.
+    pub n_real_updates: usize,
     /// Human-readable, deterministic id shared by every branch in this
     /// lineage (`FF{YYYY}{suffix}` — see
     /// [`branch_id::lineage_designation`]). Unlike `lineage_id`/`branch_id`,
@@ -61,6 +79,8 @@ pub struct BranchSnapshot {
     pub branch_id: u64,
     pub ancestor_at_scan_horizon: u64,
     pub ancestor_creation_step: usize,
+    pub last_real_update_step: usize,
+    pub n_real_updates: usize,
     pub lineage_designation: BranchId,
 }
 
@@ -76,6 +96,8 @@ impl<'state_lf, 'bank_config> Branch<'state_lf, 'bank_config> {
             branch_id: self.branch_id,
             ancestor_at_scan_horizon: self.ancestor_at_scan_horizon,
             ancestor_creation_step: self.ancestor_creation_step,
+            last_real_update_step: self.last_real_update_step,
+            n_real_updates: self.n_real_updates,
             lineage_designation: self.lineage_designation.clone(),
         }
     }
@@ -95,6 +117,8 @@ impl<'state_lf, 'bank_config> Branch<'state_lf, 'bank_config> {
             branch_id: snapshot.branch_id,
             ancestor_at_scan_horizon: snapshot.ancestor_at_scan_horizon,
             ancestor_creation_step: snapshot.ancestor_creation_step,
+            last_real_update_step: snapshot.last_real_update_step,
+            n_real_updates: snapshot.n_real_updates,
             lineage_designation: snapshot.lineage_designation,
         }
     }
@@ -109,7 +133,15 @@ impl<'state_lf, 'bank_config> Branch<'state_lf, 'bank_config> {
     ///   [`build_kf_bank_collection`](crate::topocentric_kf::kalman_bank::from_seeds::build_kf_bank_collection).
     /// * `lineage_id`, `branch_id` – Identity assigned by the caller (see the
     ///   per-night orchestrator's monotonic id counters).
-    pub fn seed(bank: KFBank<'state_lf, 'bank_config>, lineage_id: u64, branch_id: u64) -> Self {
+    /// * `current_step` – Night index this lineage is born on; seeds
+    ///   `last_real_update_step` so a freshly discovered lineage starts at
+    ///   age zero, not "already stale".
+    pub fn seed(
+        bank: KFBank<'state_lf, 'bank_config>,
+        lineage_id: u64,
+        branch_id: u64,
+        current_step: usize,
+    ) -> Self {
         let epoch = bank
             .best()
             .expect("a freshly built bank has at least one live hypothesis")
@@ -124,6 +156,9 @@ impl<'state_lf, 'bank_config> Branch<'state_lf, 'bank_config> {
             branch_id,
             ancestor_at_scan_horizon: branch_id,
             ancestor_creation_step: 0,
+            last_real_update_step: current_step,
+            // The bootstrap pair is this lineage's first real evidence.
+            n_real_updates: 1,
             lineage_designation,
         }
     }
@@ -140,6 +175,9 @@ impl<'state_lf, 'bank_config> Branch<'state_lf, 'bank_config> {
     /// * `llr_delta` – This candidate's LLR contribution, from
     ///   [`observation_llr_delta`](super::llr_score::observation_llr_delta).
     /// * `branch_id` – Id assigned to the new branch.
+    /// * `current_step` – Current night index; recorded as
+    ///   `last_real_update_step` since this branch just consumed a real
+    ///   observation.
     ///
     /// # Returns
     /// `None` if every hypothesis in `predicted_bank` was gated or failed
@@ -151,6 +189,7 @@ impl<'state_lf, 'bank_config> Branch<'state_lf, 'bank_config> {
         obs: &Observation,
         llr_delta: f64,
         branch_id: u64,
+        current_step: usize,
     ) -> Option<Self> {
         let (branched_bank, _mixture_likelihood_z) = predicted_bank.branch_with(obs)?;
         Some(Self {
@@ -161,6 +200,8 @@ impl<'state_lf, 'bank_config> Branch<'state_lf, 'bank_config> {
             branch_id,
             ancestor_at_scan_horizon: parent.ancestor_at_scan_horizon,
             ancestor_creation_step: parent.ancestor_creation_step,
+            last_real_update_step: current_step,
+            n_real_updates: parent.n_real_updates + 1,
             lineage_designation: parent.lineage_designation.clone(),
         })
     }
@@ -189,6 +230,12 @@ impl<'state_lf, 'bank_config> Branch<'state_lf, 'bank_config> {
             branch_id,
             ancestor_at_scan_horizon: parent.ancestor_at_scan_horizon,
             ancestor_creation_step: parent.ancestor_creation_step,
+            // A blank observation night never counts as a real update — kept
+            // unchanged so `current_step - last_real_update_step` measures
+            // this lineage's true staleness age (see `purge_stale_lineages`).
+            last_real_update_step: parent.last_real_update_step,
+            // Unchanged, same reasoning as `last_real_update_step` above.
+            n_real_updates: parent.n_real_updates,
             lineage_designation: parent.lineage_designation.clone(),
         }
     }

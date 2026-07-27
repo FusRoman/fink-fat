@@ -18,21 +18,23 @@ use serde::{Deserialize, Serialize};
 use fink_fat_engine::topocentric_kf::branching::BranchCollection;
 
 use crate::{
+    population::Population,
     seed_bank_report::ground_truth::{ObsTrajLookup, SeedPurity},
     tracking_report::gold_trajectory::GoldTrajectoryTracker,
+    trajectory_processing::{MetricStats, fmt_stats, metric_stats},
 };
 
 /// Final classification of one ground-truth trajectory against the
 /// snapshot's branches. Checked in this order (most-actionable first):
 /// `Fragmented` > `Contaminated` > `Partial` > `Perfect` > `NotReconstructed`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReconstructionOutcome {
     /// No branch's `track_ids()` contains any observation of this
     /// trajectory.
     NotReconstructed,
     /// This trajectory's observations are split across >= 2 distinct
     /// branches.
-    Fragmented,
+    Fragmented(Box<ReconstructionOutcome>),
     /// Touched by exactly one branch, and that branch is impure (mixes in
     /// another trajectory's observations).
     Contaminated,
@@ -45,25 +47,43 @@ pub enum ReconstructionOutcome {
 }
 
 impl ReconstructionOutcome {
-    pub fn label(self) -> &'static str {
+    pub fn label(&self) -> String {
         match self {
-            Self::NotReconstructed => "not reconstructed",
-            Self::Fragmented => "fragmented",
-            Self::Contaminated => "contaminated",
-            Self::Partial => "partial",
-            Self::Perfect => "perfect",
+            Self::NotReconstructed => "not reconstructed".to_string(),
+            Self::Fragmented(sub) => format!("fragmented({})", sub.label()),
+            Self::Contaminated => "contaminated".to_string(),
+            Self::Partial => "partial".to_string(),
+            Self::Perfect => "perfect".to_string(),
         }
     }
 
-    pub fn all() -> [ReconstructionOutcome; 5] {
+    pub fn all() -> [ReconstructionOutcome; 6] {
         [
             Self::NotReconstructed,
-            Self::Fragmented,
+            Self::Fragmented(Box::new(Self::Perfect)),
+            Self::Fragmented(Box::new(Self::Contaminated)),
             Self::Contaminated,
             Self::Partial,
             Self::Perfect,
         ]
     }
+}
+
+/// Reconstruction efficacy restricted to one orbital-class population — the
+/// per-population breakdown of the global `counts`, so exotic (non-MBA)
+/// completeness/contamination is read directly instead of drowned in the MBA
+/// majority.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PopulationEfficacy {
+    /// Human-readable population name (see [`Population::label`]).
+    pub label: String,
+    /// Per-outcome counts, same 6-slot layout as [`ReconstructionOutcome::all`].
+    pub counts: [usize; 6],
+    /// Sum of distinct touching branches over *touched* trajectories of this
+    /// population (mean over-generation = `branches_touching_sum / n_touched`).
+    pub branches_touching_sum: usize,
+    /// Number of touched trajectories of this population (over-gen denominator).
+    pub n_touched: usize,
 }
 
 /// Dataset-wide reconstruction-efficacy report for one snapshot.
@@ -75,7 +95,7 @@ pub struct ReconstructionEfficacy {
     /// isn't enabled here), but it implements `Display`, so the id is
     /// stored as its string form.
     pub per_trajectory: Vec<(String, String, Option<f64>)>,
-    pub counts: [usize; 5],
+    pub counts: [usize; 6],
     /// Multi-detection trajectories excluded from `counts` because they
     /// never had >= 2 observations within a single night — structurally
     /// unreachable by this pipeline's intra-night-only seeding, not a
@@ -85,6 +105,18 @@ pub struct ReconstructionEfficacy {
     pub n_pure_branches: usize,
     pub n_mixed_branches: usize,
     pub n_unknown_branches: usize,
+    /// Distinct branches touching each trajectory that was touched by at
+    /// least one branch (`NotReconstructed` trajectories are excluded, not
+    /// zero-filled) — the basis for the per-trajectory over-generation
+    /// stat, distinct from the global `n_branches / n_trackable` ratio
+    /// which also folds in branches that never touch any trackable
+    /// trajectory at all.
+    pub branches_per_trajectory_samples: Vec<usize>,
+    pub branches_per_trajectory: MetricStats,
+    /// Per-orbital-class breakdown of `counts`, in [`Population::all`] order.
+    /// Empty populations are still listed (all-zero) so the table shape is
+    /// stable across runs.
+    pub per_population: Vec<PopulationEfficacy>,
     pub last_processed_night: Option<u32>,
 }
 
@@ -145,6 +177,7 @@ pub fn compute_reconstruction_efficacy(
     collection: &BranchCollection<'_, '_>,
     ground_truth: &ObsTrajLookup,
     gold_tracker: &GoldTrajectoryTracker,
+    traj_population: &AHashMap<TrajId, Population>,
     last_processed_night: Option<NightId>,
 ) -> ReconstructionEfficacy {
     // Branch purity + which branches touch which trajectory.
@@ -187,8 +220,13 @@ pub fn compute_reconstruction_efficacy(
         .count();
 
     let mut per_trajectory = Vec::new();
-    let mut counts = [0usize; 5];
+    let mut counts = [0usize; 6];
     let mut coverage_samples = Vec::new();
+    let mut branches_per_trajectory_samples = Vec::new();
+    // Per-population accumulators (counts + over-generation sums).
+    let mut pop_counts: AHashMap<Population, [usize; 6]> = AHashMap::default();
+    let mut pop_branches_sum: AHashMap<Population, usize> = AHashMap::default();
+    let mut pop_n_touched: AHashMap<Population, usize> = AHashMap::default();
 
     for traj_id in &trackable_ids {
         let Some(total) = gold_tracker.n_obs_so_far(traj_id) else {
@@ -196,28 +234,38 @@ pub fn compute_reconstruction_efficacy(
         };
         let branches_touching = touching_branches.get(traj_id);
         let n_distinct = branches_touching.map(|s| s.len()).unwrap_or(0);
+        if n_distinct >= 1 {
+            branches_per_trajectory_samples.push(n_distinct);
+        }
 
         let outcome = if n_distinct == 0 {
             ReconstructionOutcome::NotReconstructed
-        } else if n_distinct >= 2 {
-            ReconstructionOutcome::Fragmented
         } else {
             let branch_idx = *branches_touching.unwrap().iter().next().unwrap();
             let is_pure = matches!(
                 ground_truth.classify(collection.branches[branch_idx].track_ids()),
                 SeedPurity::Pure(ref t) if t == traj_id
             );
-            if !is_pure {
-                ReconstructionOutcome::Contaminated
-            } else {
-                let covered = covered_obs_by_traj
-                    .get(traj_id)
-                    .map(|s| s.len())
-                    .unwrap_or(0);
-                if covered >= total {
-                    ReconstructionOutcome::Perfect
+
+            if is_pure {
+                if n_distinct >= 2 {
+                    ReconstructionOutcome::Fragmented(Box::new(ReconstructionOutcome::Perfect))
                 } else {
-                    ReconstructionOutcome::Partial
+                    let covered = covered_obs_by_traj
+                        .get(traj_id)
+                        .map(|s| s.len())
+                        .unwrap_or(0);
+                    if covered >= total {
+                        ReconstructionOutcome::Perfect
+                    } else {
+                        ReconstructionOutcome::Partial
+                    }
+                }
+            } else {
+                if n_distinct >= 2 {
+                    ReconstructionOutcome::Fragmented(Box::new(ReconstructionOutcome::Contaminated))
+                } else {
+                    ReconstructionOutcome::Contaminated
                 }
             }
         };
@@ -243,8 +291,32 @@ pub fn compute_reconstruction_efficacy(
             .position(|o| *o == outcome)
             .unwrap();
         counts[idx] += 1;
+
+        // Per-population accumulation.
+        let pop = traj_population
+            .get(traj_id)
+            .copied()
+            .unwrap_or(Population::Unknown);
+        pop_counts.entry(pop).or_insert([0; 6])[idx] += 1;
+        if n_distinct >= 1 {
+            *pop_branches_sum.entry(pop).or_insert(0) += n_distinct;
+            *pop_n_touched.entry(pop).or_insert(0) += 1;
+        }
+
         per_trajectory.push((traj_id.to_string(), outcome.label().to_string(), coverage));
     }
+
+    let per_population = Population::all()
+        .into_iter()
+        .map(|pop| PopulationEfficacy {
+            label: pop.label().to_string(),
+            counts: pop_counts.get(&pop).copied().unwrap_or([0; 6]),
+            branches_touching_sum: pop_branches_sum.get(&pop).copied().unwrap_or(0),
+            n_touched: pop_n_touched.get(&pop).copied().unwrap_or(0),
+        })
+        .collect();
+
+    let branches_per_trajectory = metric_stats(&branches_per_trajectory_samples, |&v| v as f64);
 
     ReconstructionEfficacy {
         per_trajectory,
@@ -254,6 +326,9 @@ pub fn compute_reconstruction_efficacy(
         n_pure_branches: n_pure,
         n_mixed_branches: n_mixed,
         n_unknown_branches: n_unknown,
+        branches_per_trajectory_samples,
+        branches_per_trajectory,
+        per_population,
         last_processed_night: last_processed_night.map(|n| n.0),
     }
 }
@@ -290,6 +365,94 @@ impl ReconstructionEfficacy {
             "  branch purity: {} pure / {} mixed / {} unknown ({pure_pct:.1}% pure)",
             self.n_pure_branches, self.n_mixed_branches, self.n_unknown_branches
         );
+
+        let n_complete: usize = [
+            ReconstructionOutcome::Perfect,
+            ReconstructionOutcome::Partial,
+            ReconstructionOutcome::Fragmented(Box::new(ReconstructionOutcome::Perfect)),
+        ]
+        .iter()
+        .map(|o| {
+            let idx = ReconstructionOutcome::all()
+                .iter()
+                .position(|x| x == o)
+                .unwrap();
+            self.counts[idx]
+        })
+        .sum();
+        let completeness_pct = if total == 0 {
+            0.0
+        } else {
+            100.0 * n_complete as f64 / total as f64
+        };
+        println!(
+            "  completeness (pure-only outcomes): {n_complete} / {total} ({completeness_pct:.1}%)"
+        );
+
+        let overgen_global = if total == 0 {
+            0.0
+        } else {
+            n_branches as f64 / total as f64
+        };
+        println!(
+            "  branch over-generation, global: {n_branches} branches / {total} trackable trajectories ({overgen_global:.2}x)"
+        );
+        println!(
+            "  branch over-generation, per touched trajectory: {}",
+            fmt_stats(&self.branches_per_trajectory)
+        );
+
+        // Per-population breakdown — the exotic-vs-MBA readout the whole
+        // evaluation is really about. completeness = pure-only outcomes
+        // (Perfect + Partial + Fragmented(Perfect)); contaminated = any
+        // mixed-branch outcome (Contaminated + Fragmented(Contaminated)).
+        let idx_of = |o: &ReconstructionOutcome| {
+            ReconstructionOutcome::all()
+                .iter()
+                .position(|x| x == o)
+                .unwrap()
+        };
+        let complete_idx = [
+            idx_of(&ReconstructionOutcome::Perfect),
+            idx_of(&ReconstructionOutcome::Partial),
+            idx_of(&ReconstructionOutcome::Fragmented(Box::new(
+                ReconstructionOutcome::Perfect,
+            ))),
+        ];
+        let contam_idx = [
+            idx_of(&ReconstructionOutcome::Contaminated),
+            idx_of(&ReconstructionOutcome::Fragmented(Box::new(
+                ReconstructionOutcome::Contaminated,
+            ))),
+        ];
+        println!("  per-population breakdown:");
+        println!(
+            "    {:<20} {:>9} {:>16} {:>16} {:>9}",
+            "population", "trackable", "completeness", "contaminated", "over-gen"
+        );
+        for pe in &self.per_population {
+            let pt: usize = pe.counts.iter().sum();
+            if pt == 0 {
+                continue;
+            }
+            let comp: usize = complete_idx.iter().map(|&i| pe.counts[i]).sum();
+            let contam: usize = contam_idx.iter().map(|&i| pe.counts[i]).sum();
+            let overgen = if pe.n_touched == 0 {
+                0.0
+            } else {
+                pe.branches_touching_sum as f64 / pe.n_touched as f64
+            };
+            println!(
+                "    {:<20} {:>9} {:>7} ({:>5.1}%) {:>7} ({:>5.1}%) {:>7.2}x",
+                pe.label,
+                pt,
+                comp,
+                100.0 * comp as f64 / pt as f64,
+                contam,
+                100.0 * contam as f64 / pt as f64,
+                overgen,
+            );
+        }
         println!("{sep}\n");
     }
 

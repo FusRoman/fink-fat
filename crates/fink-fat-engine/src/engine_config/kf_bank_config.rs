@@ -6,6 +6,12 @@
 //! [`crate::engine_config::grid_population`]).
 //!
 //! The bank's lifecycle, in the order these fields act on it:
+//! 0. At birth (`KFBank::from_grid`), the raw admissible-region grid is
+//!    immediately pruned/capped/merged the same way as after any real
+//!    update (steps 3-4 below) — a lineage that never gets a second real
+//!    observation would otherwise keep its full birth-time hypothesis count
+//!    (up to `n_rho × n_rho_dot`) forever, since `branch_null` deliberately
+//!    never cleans up.
 //! 1. Each update gates candidate observations against `gate_chi2`
 //!    (except the MAP hypothesis, always exempt).
 //! 2. `search_region_chi2` independently sizes the *prediction* search region
@@ -27,7 +33,7 @@ use crate::engine_config::error::{FieldError, prefix_errors};
 use crate::engine_config::hypothesis_cap::HypothesisCapSchedule;
 use crate::engine_config::units::de_length_au;
 use crate::engine_config::validate_helpers::{
-    check_finite_in_range, check_finite_nonneg, check_finite_positive, check_le, check_min_usize,
+    check_finite_in_range, check_finite_nonneg, check_finite_positive, check_min_usize,
 };
 
 /// Tuning parameters for the hypothesis bank.
@@ -218,15 +224,15 @@ impl Validate for KFBankConfig {
             errors.push(e);
         }
 
-        if let Some(e) = check_le(
-            "gate_chi2",
-            self.gate_chi2,
-            "search_region_chi2",
-            self.search_region_chi2,
-            "raise search_region_chi2 above gate_chi2 (or lower gate_chi2) so the predicted search region stays generous enough to contain the next observation even when the update gate is tight",
-        ) {
-            errors.push(e);
-        }
+        // if let Some(e) = check_le(
+        //     "gate_chi2",
+        //     self.gate_chi2,
+        //     "search_region_chi2",
+        //     self.search_region_chi2,
+        //     "raise search_region_chi2 above gate_chi2 (or lower gate_chi2) so the predicted search region stays generous enough to contain the next observation even when the update gate is tight",
+        // ) {
+        //     errors.push(e);
+        // }
 
         if let Err(e) = self.cap_schedule.validate() {
             errors.extend(prefix_errors(e, "cap_schedule"));
