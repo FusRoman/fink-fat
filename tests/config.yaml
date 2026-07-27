@@ -28,6 +28,8 @@ kalman_shared_context:
   ut1_file_version: null
 
 advance_params:
+  max_lineage_lifetime_nights: 10
+  stale_llr_floor: 0.0
   branch_cap: 10
   completeness_width_mag: 0.4
   likelihood_threshold: 0.0
@@ -50,13 +52,13 @@ healpix_depth: 8
 kfbank_config:
   cap_schedule:
     Logarithmic:
-      start: 500
-      end: 5
-      n_obs_full: 15
+      start: 100
+      end: 1
+      n_obs_full: 5
   gate_chi2: 23.0
   likelihood_window: 3
   merge_position_au: 0.02
-  min_hypotheses: 5
+  min_hypotheses: 1
   search_region_chi2: 23.0
   weight_floor: 0.0001
 

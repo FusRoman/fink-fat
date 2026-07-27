@@ -28,8 +28,9 @@ use crate::{
     error::{EngineError, FinkFatError},
     spacetime_bucket::healpix_binner::HealpixBinner,
     topocentric_kf::branching::{
-        Branch, BranchSnapshot, discovery::seed_new_lineages_from_leftovers,
-        orchestrate::advance_bank_collection_one_night,
+        Branch, BranchSnapshot,
+        discovery::seed_new_lineages_from_leftovers,
+        orchestrate::{GateRecord, advance_bank_collection_one_night},
     },
 };
 
@@ -57,6 +58,12 @@ pub struct BranchCollection<'state_lf, 'bank_config> {
     /// Empty before the first `advance_one_night` call and on nights where
     /// `self` started empty (nothing to advance/prune).
     pub last_night_consumed_then_pruned_ids: HashSet<ObsId>,
+    /// Per-lineage gate records from the night just advanced — passive
+    /// diagnostics for gate-selectivity analysis (see
+    /// [`GateRecord`]). Not persisted in the
+    /// snapshot (ephemeral, one night's worth); empty before the first
+    /// `advance_one_night` and on nights that started empty.
+    pub last_night_gate_records: Vec<GateRecord>,
     /// Night index this collection was last advanced to — the `current_step`
     /// a caller should pass into the next [`Self::advance_one_night`] call.
     /// `0` for a fresh/empty collection.
@@ -165,6 +172,7 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
                 .map(|b| Branch::from_snapshot(b, kalman_context, &engine_config.kfbank_config))
                 .collect(),
             last_night_consumed_then_pruned_ids: snapshot.last_night_consumed_then_pruned_ids,
+            last_night_gate_records: Vec::new(),
             current_step: snapshot.current_step,
         }
     }
@@ -197,6 +205,7 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
         BranchCollection {
             branches: Vec::new(),
             last_night_consumed_then_pruned_ids: HashSet::new(),
+            last_night_gate_records: Vec::new(),
             current_step: 0,
         }
     }
@@ -257,10 +266,10 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
         // visits internally and builds one bucket index per visit (see its
         // module doc for why a single per-night index would be wrong at
         // LSST cadence) — nothing to build here.
-        let (mut branches, consumed_observation_ids, consumed_then_pruned_ids) =
+        let (mut branches, consumed_observation_ids, consumed_then_pruned_ids, gate_records) =
             if self.branches.is_empty() {
                 CollectionEvent::SkipPropagation.emit();
-                (Vec::new(), HashSet::new(), HashSet::new())
+                (Vec::new(), HashSet::new(), HashSet::new(), Vec::new())
             } else {
                 CollectionEvent::Advancing.emit();
                 let outcome = advance_bank_collection_one_night(
@@ -276,6 +285,7 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
                     outcome.branches,
                     outcome.consumed_observation_ids,
                     outcome.consumed_then_pruned_ids,
+                    outcome.gate_records,
                 )
             };
 
@@ -318,6 +328,7 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
             engine_config,
             &spatial_binner,
             &mut next_lineage_id,
+            current_step,
         )?;
         branches.extend(new_lineages);
 
@@ -329,6 +340,7 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
         Ok(Self {
             branches,
             last_night_consumed_then_pruned_ids: consumed_then_pruned_ids,
+            last_night_gate_records: gate_records,
             current_step: current_step + 1,
         })
     }

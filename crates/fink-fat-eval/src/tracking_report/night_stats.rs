@@ -8,6 +8,7 @@ use photom::{
     NightId,
     observation_dataset::{ObsDataset, ObsId, observation::Observation},
 };
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use fink_fat_engine::{
@@ -222,10 +223,16 @@ pub fn compute_night_tracking_stats(
     let hypotheses_per_branch = metric_stats(branches, |b| b.bank.len() as f64);
 
     // ── Kalman error boxes ────────────────────────────────────────────────
+    // Per-bank error-box sizing is independent per branch and dominated by the
+    // same per-hypothesis geometry work `advance_one_night` parallelizes —
+    // compute it across branches with rayon, merge the (cheap) results serially.
+    let per_branch_radii: Vec<(Vec<f64>, usize)> = branches
+        .par_iter()
+        .map(|b| hypothesis_error_box_radii_arcsec(&b.bank))
+        .collect();
     let mut hypothesis_radii: Vec<f64> = Vec::new();
     let mut n_hypotheses_excessive_radius = 0;
-    for b in branches {
-        let (radii, n_excessive) = hypothesis_error_box_radii_arcsec(&b.bank);
+    for (radii, n_excessive) in per_branch_radii {
         hypothesis_radii.extend(radii);
         n_hypotheses_excessive_radius += n_excessive;
     }
@@ -235,8 +242,12 @@ pub fn compute_night_tracking_stats(
         Some(next_obs) => {
             match build_next_night_context(obs_dataset, kalman_context, next_obs, spatial_binner) {
                 Some(next_night) => {
+                    // The dominant cost of this whole function: each bank is
+                    // propagated to the next night (Kepler solves) to size its
+                    // predictive box — the same embarrassingly-parallel per-bank
+                    // work as `advance_one_night`, so run it with rayon too.
                     let boxes: Vec<_> = branches
-                        .iter()
+                        .par_iter()
                         .filter_map(|b| {
                             bank_predictive_error_box(
                                 &b.bank,

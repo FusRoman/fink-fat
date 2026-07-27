@@ -64,7 +64,7 @@ use crate::{
             candidate_search::{SINGLE_TIME_BIN, SingleBinTimeBinner, find_candidates_for_bank},
             detection_probability::{detection_probability, predicted_apparent_magnitude},
             llr_score::{null_branch_llr_delta, observation_llr_delta, photometric_llr_delta},
-            pruning::{apply_n_scan_pruning, cap_top_b_per_lineage},
+            pruning::{apply_n_scan_pruning, cap_top_b_per_lineage, purge_stale_lineages},
             visit::{Visit, group_observations_into_visits},
         },
         kalman_bank::KFBank,
@@ -142,10 +142,28 @@ impl OrchestrateEvent {
     }
 }
 
+/// One existing lineage's cross-night gate outcome for a single visit —
+/// passive diagnostics only (the engine's tracking logic ignores it). Lets an
+/// evaluator measure gate *selectivity*: how many observations passed a
+/// lineage's gate and, against ground truth, how many belonged to a different
+/// object (contamination). `nights_since_seed` is `current_step −
+/// last_real_update_step`, so `== 1` marks the first cross-night association
+/// after seeding — the contamination hotspot.
+#[derive(Debug, Clone)]
+pub struct GateRecord {
+    pub lineage_id: u64,
+    pub nights_since_seed: usize,
+    pub gated_obs_ids: Vec<ObsId>,
+}
+
 /// Result of advancing a set of lineages by one night.
 pub struct NightAdvanceOutcome<'state_lf, 'bank_config> {
     /// Surviving branches after this night's cap + N-scan pruning.
     pub branches: Vec<Branch<'state_lf, 'bank_config>>,
+    /// One [`GateRecord`] per (existing lineage, visit) that gated at least
+    /// one candidate this night — passive diagnostics for gate-selectivity
+    /// analysis, ignored by the engine itself.
+    pub gate_records: Vec<GateRecord>,
     /// Ids of every observation that passed the two-stage gate for at least
     /// one lineage's search region this night — regardless of whether the
     /// branch carrying it survived pruning. The caller
@@ -208,6 +226,7 @@ pub fn advance_bank_collection_one_night<'state_lf, 'bank_config>(
 
     let mut branches: Vec<Branch<'state_lf, 'bank_config>> = lineages.to_vec();
     let mut consumed_observation_ids = HashSet::new();
+    let mut gate_records: Vec<GateRecord> = Vec::new();
     let next_branch_id = AtomicU64::new(
         lineages
             .iter()
@@ -278,8 +297,17 @@ pub fn advance_bank_collection_one_night<'state_lf, 'bank_config>(
                     params,
                     spatial_binner,
                     &next_branch_id,
+                    current_step,
                 ) {
-                    Some((spawned, consumed)) => LineageOutcome::Spawned(spawned, consumed),
+                    Some((spawned, consumed)) => LineageOutcome::Spawned(
+                        spawned,
+                        GateRecord {
+                            lineage_id: lineage.lineage_id,
+                            nights_since_seed: current_step
+                                .saturating_sub(lineage.last_real_update_step),
+                            gated_obs_ids: consumed,
+                        },
+                    ),
                     // Every hypothesis in the bank failed to propagate this
                     // visit (rare, but not impossible — see
                     // `outfit_propagate_universal_failures.md`). Treat it
@@ -294,9 +322,10 @@ pub fn advance_bank_collection_one_night<'state_lf, 'bank_config>(
         for outcome in outcomes {
             match outcome {
                 LineageOutcome::Unchanged(branch) => visit_branches.push(branch),
-                LineageOutcome::Spawned(spawned, consumed) => {
+                LineageOutcome::Spawned(spawned, record) => {
                     visit_branches.extend(spawned);
-                    consumed_observation_ids.extend(consumed);
+                    consumed_observation_ids.extend(record.gated_obs_ids.iter().copied());
+                    gate_records.push(record);
                 }
             }
         }
@@ -311,6 +340,12 @@ pub fn advance_bank_collection_one_night<'state_lf, 'bank_config>(
     // night has been folded in.
     let n_branches_before_n_scan = branches.len();
     let branches = apply_n_scan_pruning(branches, params.n_scan, current_step);
+    let branches = purge_stale_lineages(
+        branches,
+        params.max_lineage_lifetime_nights,
+        params.stale_llr_floor,
+        current_step,
+    );
     OrchestrateEvent::NightPruningSummary {
         n_branches_before_n_scan,
         n_branches_after: branches.len(),
@@ -328,6 +363,7 @@ pub fn advance_bank_collection_one_night<'state_lf, 'bank_config>(
 
     NightAdvanceOutcome {
         branches,
+        gate_records,
         consumed_observation_ids,
         consumed_then_pruned_ids,
     }
@@ -402,7 +438,7 @@ fn lineage_might_be_in_visit(
 /// [`advance_bank_collection_one_night`] can run in parallel via rayon.
 enum LineageOutcome<'state_lf, 'bank_config> {
     Unchanged(Branch<'state_lf, 'bank_config>),
-    Spawned(Vec<Branch<'state_lf, 'bank_config>>, Vec<ObsId>),
+    Spawned(Vec<Branch<'state_lf, 'bank_config>>, GateRecord),
 }
 
 /// Propagate one lineage's bank once (to this visit's epoch), search its
@@ -425,6 +461,7 @@ fn spawn_branches_for_lineage<'state_lf, 'bank_config>(
     params: &NightAdvanceParams,
     spatial_binner: &HealpixBinner,
     next_branch_id: &AtomicU64,
+    current_step: usize,
 ) -> Option<(Vec<Branch<'state_lf, 'bank_config>>, Vec<ObsId>)> {
     let predicted_bank = lineage.bank.predict_to(epoch, r_obs, v_obs);
 
@@ -474,6 +511,7 @@ fn spawn_branches_for_lineage<'state_lf, 'bank_config>(
             candidate.observation,
             llr_delta,
             next_branch_id.fetch_add(1, Ordering::Relaxed),
+            current_step,
         ) {
             branches.push(branch);
         }

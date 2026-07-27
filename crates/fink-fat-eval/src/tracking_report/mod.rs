@@ -11,6 +11,7 @@
 //! functions. See `bin/tracking_analysis.rs` for the orchestrating loop.
 
 pub mod error_box;
+pub mod gate_selectivity;
 pub mod gold_trajectory;
 pub mod lineage_lifecycle;
 pub mod night_stats;

@@ -331,13 +331,14 @@ fn compute_step_diag(
     obs: &Observation,
     region_center: Option<&EquCoord>,
     truth_lookup: Option<&TruthLookup>,
+    nis: f64,
 ) -> Option<StepDiag> {
     let equ_pred = best_kf.to_equ_coord().ok()?;
 
     let equ_obs = obs.equ_coord();
     let sigma_sky = best_kf.sky_covariance().ok()?;
 
-    let (residual_ra_arcsec, residual_dec_arcsec, residual_ra_raw_rad) =
+    let (residual_ra_arcsec, residual_dec_arcsec, _residual_ra_raw_rad) =
         sky_residuals_arcsec(&equ_pred, equ_obs);
 
     let sigma_ra_arcsec = equ_pred.ra_error * RAD_TO_ARCSEC;
@@ -355,13 +356,6 @@ fn compute_step_diag(
 
     let (pos_cov_trace_au2, vel_cov_trace_au2_day2, predicted_range_au) =
         filter_health_metrics(best_kf);
-
-    let nis = compute_nis(
-        residual_ra_raw_rad,
-        residual_dec_arcsec * ARCSEC_TO_RAD,
-        &sigma_sky,
-        obs,
-    );
 
     let truth = truth_lookup.and_then(|lookup| lookup.get(*obs.id()));
     let TruthMetrics {
@@ -594,6 +588,10 @@ fn assemble_result(
     report: &BankStep,
     sr: &SearchRegionDiag,
     inflation_lambda: f64,
+    radius_spread_arcsec: f64,
+    radius_component_arcsec: f64,
+    map_rho_sigma_au: f64,
+    map_rhodot_sigma: f64,
 ) -> KFStudyResult {
     KFStudyResult {
         epoch,
@@ -619,6 +617,10 @@ fn assemble_result(
         region_semi_major_3sigma_arcsec: sr.semi_major_3sigma_arcsec,
         region_semi_minor_3sigma_arcsec: sr.semi_minor_3sigma_arcsec,
         region_position_angle_deg: sr.position_angle_deg,
+        radius_spread_arcsec,
+        radius_component_arcsec,
+        map_rho_sigma_au,
+        map_rhodot_sigma,
         obs_within_search_radius: sr.obs_within_radius,
         obs_within_3sigma_region: diag.nis <= 9.0,
         nis: diag.nis,
@@ -719,6 +721,20 @@ pub struct KFStudyResult {
     /// Position angle of the uncertainty ellipse major axis, in degrees
     /// east of north.
     pub region_position_angle_deg: f64,
+    /// Search-radius contribution from the **between-mode spread**
+    /// `Σ wᵢ Δμᵢ Δμᵢᵀ` (multimodal ρ,ρ̇ disagreement), in arcseconds —
+    /// see `compute_radius_decomposition`. From the pre-update mixture.
+    pub radius_spread_arcsec: f64,
+    /// Search-radius contribution from the **within-mode covariance**
+    /// `Σ wᵢ Sᵢ` (each hypothesis's own sky covariance), in arcseconds —
+    /// see `compute_radius_decomposition`. From the pre-update mixture.
+    pub radius_component_arcsec: f64,
+    /// MAP (max-weight) pre-update hypothesis's range 1-σ (`√P[4,4]`), in AU —
+    /// the range-observability signal. From the pre-update mixture.
+    pub map_rho_sigma_au: f64,
+    /// MAP (max-weight) pre-update hypothesis's range-rate 1-σ (`√P[5,5]`),
+    /// in AU/day. From the pre-update mixture.
+    pub map_rhodot_sigma: f64,
     /// Whether the true observation falls within the conservative bounding
     /// radius of the [`SearchRegion`].
     pub obs_within_search_radius: bool,
@@ -892,6 +908,28 @@ pub fn study_kalman_asteroid<'a, 'bank_config>(
             compute_search_region(predicted, advance_params, bank_config.search_region_chi2)
         });
 
+        // Proper predictive NIS: innovation of `obs` against the *pre-update*
+        // predicted mixture (computed here, before `bank.step` absorbs `obs`).
+        // Must be taken now — after the step the state has already fitted the
+        // observation, which is exactly the post-fit-residual bug this replaces.
+        let predictive_nis = predicted_mixture
+            .as_ref()
+            .and_then(|m| compute_predictive_nis(m, obs))
+            .unwrap_or(f64::NAN);
+
+        // Split the (pre-update) search radius into its between-mode spread
+        // and within-mode covariance parts, plus the MAP hypothesis's
+        // range/range-rate σ — the diagnostic for whether the gate is wide
+        // because of a multimodal ρ,ρ̇ mixture or a single hypothesis's
+        // range-driven covariance.
+        let decomp = predicted_mixture
+            .as_ref()
+            .and_then(|m| compute_radius_decomposition(m, bank_config.search_region_chi2));
+        let radius_spread_arcsec = decomp.as_ref().map_or(f64::NAN, |d| d.spread_arcsec);
+        let radius_component_arcsec = decomp.as_ref().map_or(f64::NAN, |d| d.component_arcsec);
+        let map_rho_sigma_au = decomp.as_ref().map_or(f64::NAN, |d| d.map_rho_sigma_au);
+        let map_rhodot_sigma = decomp.as_ref().map_or(f64::NAN, |d| d.map_rhodot_sigma);
+
         tracing::trace!(
             n_hypotheses = bank.len(),
             epoch_mjd = epoch,
@@ -946,7 +984,13 @@ pub fn study_kalman_asteroid<'a, 'bank_config>(
         let equ_reg_center = region
             .clone()
             .map(|region| EquCoord::new(region.center_ra, 0., region.center_dec, 0.));
-        let diag = match compute_step_diag(&best.kf, obs, equ_reg_center.as_ref(), truth_lookup) {
+        let diag = match compute_step_diag(
+            &best.kf,
+            obs,
+            equ_reg_center.as_ref(),
+            truth_lookup,
+            predictive_nis,
+        ) {
             Some(d) => d,
             None => {
                 tracing::warn!(step = step + 1, "compute_step_diag returned None, stopping");
@@ -987,6 +1031,10 @@ pub fn study_kalman_asteroid<'a, 'bank_config>(
             &report,
             &sr,
             inflation_lambda,
+            radius_spread_arcsec,
+            radius_component_arcsec,
+            map_rho_sigma_au,
+            map_rhodot_sigma,
         ));
     }
 
@@ -1049,27 +1097,157 @@ fn sky_ellipse_params(s: &Matrix2<f64>) -> (f64, f64, f64) {
     (semi_major, semi_minor, pa_deg)
 }
 
-fn compute_nis(
-    residual_ra_rad: f64,
-    residual_dec_rad: f64,
-    sigma_sky: &Matrix2<f64>,
-    obs: &Observation,
-) -> f64 {
+/// Proper **predictive** NIS: the innovation of the observation against the
+/// *pre-update* predicted mixture, normalized by the prior innovation
+/// covariance `S = S_mix + R`.
+///
+/// This is the honest filter-consistency diagnostic. The earlier `compute_nis`
+/// used the *post-update* best hypothesis (`equ_pred = best_kf.to_equ_coord()`
+/// after `bank.step`), so its "innovation" was actually a post-fit residual —
+/// tiny by construction (the update pulls the attributable state α,δ straight
+/// toward the measurement) and moving the *wrong* way when `R` shrinks. That
+/// made the NIS structurally ≪ 1 regardless of any filter parameter. Here we
+/// instead consume the raw `(weight, KFState)` mixture propagated to the
+/// observation epoch **before** the update (the same `predicted_mixture` used
+/// to build the search region).
+///
+/// The Gaussian-mixture innovation covariance is
+/// `S_mix = Σ wᵢ (Sᵢ + Δμᵢ Δμᵢᵀ)` (within-component sky covariance plus the
+/// spread of the component means), computed in RAW α/δ — matching the filter's
+/// own convention (`H = [I₂|0]`, `sky_covariance()` is raw-α), so no cos(δ)
+/// factor is applied. Returns `None` if the mixture is empty / degenerate.
+fn compute_predictive_nis(mixture: &[(f64, KFState<'_>)], obs: &Observation) -> Option<f64> {
+    let wsum: f64 = mixture.iter().map(|(w, _)| *w).sum();
+    if wsum <= 0.0 {
+        return None;
+    }
+
+    // Per-hypothesis (weight, ra, dec, sky covariance), weights renormalized.
+    let mut comps: Vec<(f64, f64, f64, Matrix2<f64>)> = Vec::with_capacity(mixture.len());
+    for (w, kf) in mixture {
+        let c = kf.to_equ_coord().ok()?;
+        let s = kf.sky_covariance().ok()?;
+        comps.push((w / wsum, c.ra, c.dec, s));
+    }
+    let (_, ra0, _, _) = *comps.first()?;
+
+    // Weighted mixture mean; RA accumulated as a wrapped offset from ra0 to
+    // stay valid across the 0/2π seam.
+    let mut mean_ra_off = 0.0;
+    let mut mean_dec = 0.0;
+    for (w, ra, dec, _) in &comps {
+        mean_ra_off += w * wrap_angle(ra - ra0);
+        mean_dec += w * dec;
+    }
+    let mean_ra = ra0 + mean_ra_off;
+
+    // Mixture covariance S_mix = Σ wᵢ (Sᵢ + Δμᵢ Δμᵢᵀ).
+    let mut s_mix = Matrix2::zeros();
+    for (w, ra, dec, s_i) in &comps {
+        let d = Vector2::new(wrap_angle(ra - mean_ra), dec - mean_dec);
+        s_mix += *w * (s_i + d * d.transpose());
+    }
+
     let coord = obs.equ_coord();
     let r_mat = Matrix2::from_diagonal(&Vector2::new(
         coord.ra_error * coord.ra_error,
         coord.dec_error * coord.dec_error,
     ));
-    let s = sigma_sky + r_mat;
-    let nu = Vector2::new(residual_ra_rad, residual_dec_rad);
+    let s = s_mix + r_mat;
+    let nu = Vector2::new(wrap_angle(coord.ra - mean_ra), coord.dec - mean_dec);
     s.try_inverse()
         .map(|s_inv| (nu.transpose() * s_inv * nu)[(0, 0)])
-        .unwrap_or(f64::NAN)
 }
 
-/// NEES in the 2-D sky plane: the same quadratic-form shape as [`compute_nis`],
-/// but the error is (predicted sky position − *true* sky position) instead of
-/// the innovation (predicted vs. *observed*), and normalised only by
+/// Per-step decomposition of the predicted search region, from the pre-update
+/// mixture. See [`compute_radius_decomposition`].
+struct RadiusDecomp {
+    /// Between-mode spread contribution to the radius (arcsec).
+    spread_arcsec: f64,
+    /// Within-mode covariance contribution to the radius (arcsec).
+    component_arcsec: f64,
+    /// MAP (max-weight) hypothesis's range 1-σ, `√P[4,4]`, in AU.
+    map_rho_sigma_au: f64,
+    /// MAP (max-weight) hypothesis's range-rate 1-σ, `√P[5,5]`, in AU/day.
+    map_rhodot_sigma: f64,
+}
+
+/// Decompose the search-region radius into its two additive covariance
+/// sources. `radius_strategy::MixtureCovariance` sizes the region from
+/// `S_mix = Σ wᵢ (Sᵢ + Δμᵢ Δμᵢᵀ)`, i.e. the sum of a **between-mode spread**
+/// `Σ wᵢ Δμᵢ Δμᵢᵀ` (distinct ρ,ρ̇ hypotheses predicting different sky
+/// positions) and a **within-mode covariance** `Σ wᵢ Sᵢ` (each hypothesis's
+/// own `H Pᵢ Hᵀ`). Each contribution is returned on its own as an arcsec
+/// radius `√(search_region_chi2)·√(λmax)`, so their relative size reveals
+/// whether the wide gate is driven by a multimodal mixture (early steps,
+/// before the cap schedule collapses the bank to one hypothesis) or by a
+/// single hypothesis's covariance (later steps).
+///
+/// Also returns the MAP (max-weight) hypothesis's range/range-rate 1-σ
+/// (`√P[4,4]`, `√P[5,5]`) — the **range-driven** signal: a strict
+/// sky-projected range fraction would need the propagation STM sub-blocks
+/// (not stored on `KFState`), so we instead surface the raw range covariance.
+/// Read with `component_arcsec`: a flat/large range σ while the within-mode
+/// radius stays wide is the range-observability-limited regime.
+///
+/// Computed from the same pre-update `predicted_mixture` as
+/// [`compute_predictive_nis`].
+fn compute_radius_decomposition(
+    mixture: &[(f64, KFState<'_>)],
+    search_region_chi2: f64,
+) -> Option<RadiusDecomp> {
+    let wsum: f64 = mixture.iter().map(|(w, _)| *w).sum();
+    if wsum <= 0.0 {
+        return None;
+    }
+    let mut comps: Vec<(f64, f64, f64, Matrix2<f64>)> = Vec::with_capacity(mixture.len());
+    let mut map_weight = f64::NEG_INFINITY;
+    let mut map_rho_var = f64::NAN;
+    let mut map_rhodot_var = f64::NAN;
+    for (w, kf) in mixture {
+        let c = kf.to_equ_coord().ok()?;
+        let s = kf.sky_covariance().ok()?;
+        comps.push((w / wsum, c.ra, c.dec, s));
+        if *w > map_weight {
+            map_weight = *w;
+            map_rho_var = kf.covariance[(4, 4)];
+            map_rhodot_var = kf.covariance[(5, 5)];
+        }
+    }
+    let (_, ra0, _, _) = *comps.first()?;
+    let mut mean_ra_off = 0.0;
+    let mut mean_dec = 0.0;
+    for (w, ra, dec, _) in &comps {
+        mean_ra_off += w * wrap_angle(ra - ra0);
+        mean_dec += w * dec;
+    }
+    let mean_ra = ra0 + mean_ra_off;
+
+    let mut s_comp = Matrix2::zeros();
+    let mut s_spread = Matrix2::zeros();
+    for (w, ra, dec, s_i) in &comps {
+        s_comp += *w * s_i;
+        let d = Vector2::new(wrap_angle(ra - mean_ra), dec - mean_dec);
+        s_spread += *w * (d * d.transpose());
+    }
+
+    // `sky_ellipse_params(_).0` is the semi-major axis √(λmax) already in
+    // arcsec; scaling by √(search_region_chi2) matches the radius formula.
+    let k = search_region_chi2.max(0.0).sqrt();
+    let spread_arcsec = k * sky_ellipse_params(&s_spread).0;
+    let component_arcsec = k * sky_ellipse_params(&s_comp).0;
+    Some(RadiusDecomp {
+        spread_arcsec,
+        component_arcsec,
+        map_rho_sigma_au: map_rho_var.max(0.0).sqrt(),
+        map_rhodot_sigma: map_rhodot_var.max(0.0).sqrt(),
+    })
+}
+
+/// NEES in the 2-D sky plane: the same quadratic-form shape as
+/// [`compute_predictive_nis`], but the error is (predicted sky position −
+/// *true* sky position) instead of the innovation (predicted vs. *observed*),
+/// and normalised only by
 /// $\Sigma_{sky}$ (the estimator's own covariance), not $\Sigma_{sky} + R$ —
 /// this is the classical NEES definition $e^\top P^{-1} e$.
 fn compute_nees_sky(residual_ra_rad: f64, residual_dec_rad: f64, sigma_sky: &Matrix2<f64>) -> f64 {

@@ -248,8 +248,19 @@ pub fn print_nis_by_step_since_bootstrap(buckets: &[StepBucketStats]) {
         return;
     }
     println!(
-        "  {:>10}  {:>10}  {:>12}  {:>12}",
-        "step", "n_samples", "NIS median", "NIS mean"
+        "  {:>6}  {:>10}  {:>11}  {:>11}  {:>10}  {:>10}  {:>11}  {:>12}",
+        "step",
+        "n_samples",
+        "NIS median",
+        "NIS mean",
+        "r_spread\"",
+        "r_comp\"",
+        "rho_σ(AU)",
+        "rhodot_σ"
+    );
+    println!(
+        "  {:>6}  {:>10}  {:>11}  {:>11}  {:>10}  {:>10}  {:>11}  {:>12}",
+        "", "", "", "", "(betw-mode)", "(in-mode)", "(MAP)", "(MAP,AU/d)"
     );
     for b in buckets {
         let label = if b.step_index > NIS_STEP_BUCKET_DEPTH {
@@ -258,10 +269,21 @@ pub fn print_nis_by_step_since_bootstrap(buckets: &[StepBucketStats]) {
             b.step_index.to_string()
         };
         println!(
-            "  {:>10}  {:>10}  {:>12.4}  {:>12.4}",
-            label, b.n_samples, b.nis.median, b.nis.mean
+            "  {:>6}  {:>10}  {:>11.4}  {:>11.4}  {:>10.2}  {:>10.2}  {:>11.5}  {:>12.6}",
+            label,
+            b.n_samples,
+            b.nis.median,
+            b.nis.mean,
+            b.radius_spread.median,
+            b.radius_component.median,
+            b.map_rho_sigma.median,
+            b.map_rhodot_sigma.median
         );
     }
+    println!(
+        "  (r_spread = between-mode Δμ spread; r_comp = within-mode HPHᵀ, arcsec; \
+         rho_σ/rhodot_σ = MAP range/range-rate 1-σ, AU & AU/day — range-driven signal)"
+    );
     println!("{sep}");
 }
 

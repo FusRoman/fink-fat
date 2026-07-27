@@ -32,6 +32,14 @@ pub struct SnapshotStats {
     pub hypotheses_per_branch_samples: Vec<f64>,
     pub track_length_per_branch: MetricStats,
     pub track_length_per_branch_samples: Vec<f64>,
+    /// Best (max) `cumulative_llr` per distinct `lineage_id` — the same
+    /// per-lineage aggregate
+    /// [`purge_stale_lineages`](fink_fat_engine::topocentric_kf::branching::pruning::purge_stale_lineages)
+    /// gates on, exposed here to help calibrate
+    /// `NightAdvanceParams::stale_llr_floor` against a real snapshot instead
+    /// of guessing a value.
+    pub cumulative_llr_per_lineage: MetricStats,
+    pub cumulative_llr_per_lineage_samples: Vec<f64>,
     pub n_unique_observations_referenced: usize,
     pub n_distinct_nights_spanned: usize,
     pub min_night: Option<u32>,
@@ -57,6 +65,15 @@ pub fn compute_snapshot_stats(
         .map(|b| b.track_ids().len() as f64)
         .collect();
 
+    let mut best_llr_per_lineage: AHashMap<u64, f64> = AHashMap::default();
+    for branch in &collection.branches {
+        best_llr_per_lineage
+            .entry(branch.lineage_id)
+            .and_modify(|best| *best = best.max(branch.cumulative_llr))
+            .or_insert(branch.cumulative_llr);
+    }
+    let llr_samples: Vec<f64> = best_llr_per_lineage.into_values().collect();
+
     let mut unique_obs: AHashSet<ObsId> = AHashSet::default();
     let mut per_night_counts: AHashMap<NightId, usize> = AHashMap::default();
     for branch in &collection.branches {
@@ -80,6 +97,8 @@ pub fn compute_snapshot_stats(
         hypotheses_per_branch_samples: hyp_samples,
         track_length_per_branch: metric_stats(&len_samples, |&v| v),
         track_length_per_branch_samples: len_samples,
+        cumulative_llr_per_lineage: metric_stats(&llr_samples, |&v| v),
+        cumulative_llr_per_lineage_samples: llr_samples,
         n_unique_observations_referenced: unique_obs.len(),
         n_distinct_nights_spanned: observations_per_night.len(),
         min_night: observations_per_night.first().map(|&(n, _)| n),
@@ -114,6 +133,10 @@ impl SnapshotStats {
         println!(
             "  Observations per branch                     : {}",
             fmt_stats(&self.track_length_per_branch)
+        );
+        println!(
+            "  Best cumulative_llr per lineage              : {}",
+            fmt_stats(&self.cumulative_llr_per_lineage)
         );
         println!(
             "  Unique observations referenced               : {}",

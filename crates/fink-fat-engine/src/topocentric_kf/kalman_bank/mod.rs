@@ -271,6 +271,16 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
     ///
     /// Weights need not be normalized; they are converted to normalized
     /// log-weights internally.  Non-positive weights are silently ignored.
+    ///
+    /// The raw admissible-region grid can carry hundreds of nodes (up to
+    /// `n_rho × n_rho_dot`) before any weight-based pruning — `post_step_cleanup`
+    /// is applied once here, immediately, so a freshly seeded bank is capped
+    /// the same way any subsequent real update would cap it. Without this, a
+    /// lineage that never gets a second real observation (common: noise
+    /// pairs, objects not revisited soon) would keep its full birth-time
+    /// hypothesis count forever — `branch_null` deliberately never cleans up
+    /// (see its doc), and `cap_schedule`/`min_hypotheses`/`weight_floor`
+    /// would never even be consulted for such a bank.
     pub fn from_grid(
         obs_dataset: &ObsDataset,
         first_obs: &Observation,
@@ -301,7 +311,7 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
             None,
             0,
         );
-        bank.normalize_weights();
+        bank.post_step_cleanup();
         Ok(bank)
     }
 

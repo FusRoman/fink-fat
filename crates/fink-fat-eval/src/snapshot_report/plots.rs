@@ -6,8 +6,9 @@
 use anyhow::Result;
 use camino::Utf8Path;
 
+use crate::snapshot_report::efficacy::ReconstructionOutcome;
 use crate::snapshot_report::{efficacy::ReconstructionEfficacy, stats::SnapshotStats};
-use crate::tracking_report::plots::{plot_bar_chart, plot_histogram};
+use crate::tracking_report::plots::{plot_bar_chart, plot_histogram, plot_signed_histogram};
 
 /// Histogram of hypotheses-per-branch across the snapshot.
 pub fn plot_hypotheses_per_branch_histogram(
@@ -28,6 +29,23 @@ pub fn plot_track_length_histogram(stats: &SnapshotStats, output_path: &Utf8Path
         &stats.track_length_per_branch_samples,
         "Observations per branch (snapshot)",
         "Observations in branch's track_ids",
+        output_path,
+    )
+}
+
+/// Histogram of each lineage's best `cumulative_llr` across the snapshot —
+/// the same per-lineage aggregate
+/// `purge_stale_lineages`/`stale_llr_floor` gate on, so this is the
+/// distribution to look at when calibrating that config value against a
+/// real run.
+pub fn plot_cumulative_llr_per_lineage_histogram(
+    stats: &SnapshotStats,
+    output_path: &Utf8Path,
+) -> Result<()> {
+    plot_signed_histogram(
+        &stats.cumulative_llr_per_lineage_samples,
+        "Best cumulative_llr per lineage (snapshot)",
+        "cumulative_llr",
         output_path,
     )
 }
@@ -60,10 +78,14 @@ pub fn plot_reconstruction_outcome_breakdown(
     efficacy: &ReconstructionEfficacy,
     output_path: &Utf8Path,
 ) -> Result<()> {
-    let counts: Vec<(&str, usize)> = crate::snapshot_report::efficacy::ReconstructionOutcome::all()
-        .into_iter()
+    let labels: Vec<String> = ReconstructionOutcome::all()
+        .iter()
+        .map(|o| o.label())
+        .collect();
+    let counts: Vec<(&str, usize)> = labels
+        .iter()
         .enumerate()
-        .map(|(i, o)| (o.label(), efficacy.counts[i]))
+        .map(|(i, l)| (l.as_str(), efficacy.counts[i]))
         .collect();
     plot_bar_chart(
         &counts,

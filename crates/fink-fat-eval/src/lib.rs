@@ -4,6 +4,7 @@ pub mod kalman_traj;
 pub mod kalman_traj_plots;
 pub mod kf_calibration;
 pub mod parquet_export;
+pub mod population;
 
 pub mod reporting;
 pub mod seed_bank_report;

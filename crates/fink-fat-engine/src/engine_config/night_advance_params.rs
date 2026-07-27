@@ -15,7 +15,7 @@
 //!    observations in it (`obs_noise`, `top_k`, `radius_strategy`,
 //!    `likelihood_threshold`).
 //! 4. Prune the resulting branch tree, per-lineage and across the whole
-//!    night (`branch_cap`, `n_scan`).
+//!    night (`branch_cap`, `n_scan`, `max_lineage_lifetime_nights`).
 //! 5. Score the null-detection hypothesis for lineages predicted bright
 //!    enough to have been seen (`limiting_magnitude`,
 //!    `completeness_width_mag`), and score each real candidate's
@@ -224,6 +224,53 @@ pub struct NightAdvanceParams {
     /// not a continuous duration).
     pub n_scan: usize,
 
+    /// Maximum age, in **nights**, since a lineage's last real (non-null)
+    /// observation before the whole lineage is purged from
+    /// `BranchCollection` — see
+    /// [`crate::topocentric_kf::branching::pruning::purge_stale_lineages`],
+    /// applied once per night, right after `n_scan` pruning.
+    ///
+    /// Without this, the number of live lineages is monotone increasing for
+    /// the whole run (noise lineages and never-recovered fragments keep
+    /// producing a "null" branch forever) — see
+    /// `branch_lifetime_and_footprint.md` in the eval reports. Purging a
+    /// lineage this way loses no already-reconstructed trajectory: by
+    /// definition it hasn't consumed a real observation in that many
+    /// nights, and a real object that reappears later is simply
+    /// re-discovered as a new lineage via `seed_new_lineages_from_leftovers`.
+    ///
+    /// Dimensionless count of nights. `0` **disables this pass entirely**
+    /// (no lineage is ever purged for staleness) — the default, and the
+    /// historical behavior before this field existed. When enabling it,
+    /// validate against `tests/reconstruction.rs`'s reference trajectories
+    /// first: a legitimately faint/intermittent object with many
+    /// consecutive non-detections could otherwise be purged before it's
+    /// fully reconstructed — see `stale_llr_floor`, which guards against
+    /// exactly that.
+    pub max_lineage_lifetime_nights: usize,
+
+    /// LLR floor gating `max_lineage_lifetime_nights`: a stale lineage is
+    /// only purged if its *best* surviving branch's `cumulative_llr` is at
+    /// or below this value — see
+    /// [`crate::topocentric_kf::branching::pruning::purge_stale_lineages`].
+    ///
+    /// Protects a lineage that is merely quiet (out of survey footprint, or
+    /// predicted too faint to expect a detection — see
+    /// [`crate::topocentric_kf::branching::llr_score::null_branch_llr_delta`]/
+    /// [`crate::topocentric_kf::branching::detection_probability::detection_probability`],
+    /// whose LLR penalty is near-zero or not applied at all in exactly
+    /// those cases) from being purged just because it hasn't produced a
+    /// real detection in a while: only a lineage whose own LLR judges it
+    /// *less plausible than the clutter background* is dropped, regardless
+    /// of how long it's been stale.
+    ///
+    /// Unitless — same scale as `cumulative_llr`, a sum of log-likelihood-
+    /// ratio terms against a clutter background (see
+    /// [`crate::topocentric_kf::branching::llr_score`]). `0.0` is the
+    /// natural default: "at best, no better than pure clutter." Has no
+    /// effect while `max_lineage_lifetime_nights == 0` (pass disabled).
+    pub stale_llr_floor: f64,
+
     /// Survey/field limiting magnitude for this night, used as the midpoint
     /// of the null branch's detection-probability curve — see
     /// [`crate::topocentric_kf::branching::detection_probability::detection_probability`].
@@ -278,6 +325,8 @@ impl Default for NightAdvanceParams {
             likelihood_threshold: 0.0,
             branch_cap: 4,
             n_scan: 1,
+            max_lineage_lifetime_nights: 0,
+            stale_llr_floor: 0.0,
             limiting_magnitude: 21.0,
             completeness_width_mag: 0.4,
             photometric_sigma_mag: 0.35,
@@ -337,6 +386,13 @@ impl Validate for NightAdvanceParams {
             self.n_scan,
             1,
             "set n_scan to at least 1 night, e.g. 1",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite(
+            "stale_llr_floor",
+            self.stale_llr_floor,
+            "set stale_llr_floor to a finite cumulative_llr ceiling, e.g. 0.0",
         ) {
             errors.push(e);
         }
