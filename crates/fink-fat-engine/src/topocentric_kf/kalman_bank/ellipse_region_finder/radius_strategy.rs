@@ -45,6 +45,25 @@ pub enum RadiusStrategy {
         #[serde(deserialize_with = "de_angle_arcsec")]
         max_arcsec: f64,
     },
+    /// Bascule entre deux stratégies selon la taille du mélange sélectionné
+    /// — `MaxEllipse` (insensible aux poids, donc robuste à l'ambiguïté
+    /// ρ/ρ̇ post-bootstrap où les poids ne sont pas encore informatifs) tant
+    /// que la banque est grande, `MixtureCovariance` clampé une fois
+    /// qu'elle a convergé vers un petit nombre d'hypothèses. Voir
+    /// l'investigation `not_matched%` aux steps 1/2 dans `mot_analysis`.
+    AdaptiveConvergence {
+        /// Si `components.len()` dépasse ce seuil, la banque est considérée
+        /// non convergée : `MaxEllipse`, clampé à
+        /// `unconverged_clamp_arcsec` (généreux — c'est justement le clamp
+        /// serré actuel qui coupe les modes corrects mais éloignés).
+        max_hypotheses_for_mixture: usize,
+        #[serde(deserialize_with = "de_angle_arcsec")]
+        unconverged_clamp_arcsec: f64,
+        /// Sinon (banque élaguée, poids informatifs) : comportement
+        /// actuel, `MixtureCovariance` clampé à `converged_clamp_arcsec`.
+        #[serde(deserialize_with = "de_angle_arcsec")]
+        converged_clamp_arcsec: f64,
+    },
 }
 
 impl RadiusStrategy {
@@ -65,7 +84,58 @@ impl RadiusStrategy {
                 let r = inner_strategy.radius(components, center_ra, center_dec);
                 r.min((max_arcsec / 3600.0_f64).to_radians())
             }
+            RadiusStrategy::AdaptiveConvergence {
+                max_hypotheses_for_mixture,
+                unconverged_clamp_arcsec,
+                converged_clamp_arcsec,
+            } => {
+                let (strategy, clamp_arcsec) = if components.len() > max_hypotheses_for_mixture {
+                    (RadiusStrategy::MaxEllipse, unconverged_clamp_arcsec)
+                } else {
+                    (RadiusStrategy::MixtureCovariance, converged_clamp_arcsec)
+                };
+                let r = strategy.radius(components, center_ra, center_dec);
+                r.min((clamp_arcsec / 3600.0_f64).to_radians())
+            }
         }
+    }
+
+    /// Hard cap this strategy applies to any radius it returns, in radians,
+    /// for a mixture of `n_components` hypotheses.
+    ///
+    /// `None` for the unclamped variants — those return whatever radius they
+    /// compute, so they can never truncate the mixture.
+    ///
+    /// Used for two things, both needing the clamp that *actually applies*:
+    /// [`SearchRegion::radius_pinned_at_clamp`](super::SearchRegion::radius_pinned_at_clamp)
+    /// tests whether the radius came back pinned at it (the signal that the
+    /// coarse cone may be hiding modes), and
+    /// [`sky_cover_regions`](super::sky_cover_regions) uses it as the tiling
+    /// granularity — a single cone can never usefully exceed this radius, so
+    /// cones of exactly this half-size are the coarsest tiling that loses
+    /// nothing to the clamp.
+    ///
+    /// `n_components` matters because [`RadiusStrategy::AdaptiveConvergence`]
+    /// switches between its converged and unconverged clamps on exactly that
+    /// count; reporting the wrong one would compare the radius against a clamp
+    /// that was never applied.
+    pub fn clamp_rad(self, n_components: usize) -> Option<f64> {
+        let arcsec = match self {
+            RadiusStrategy::MaxEllipse | RadiusStrategy::MixtureCovariance => return None,
+            RadiusStrategy::Clamped { max_arcsec, .. } => max_arcsec,
+            RadiusStrategy::AdaptiveConvergence {
+                max_hypotheses_for_mixture,
+                unconverged_clamp_arcsec,
+                converged_clamp_arcsec,
+            } => {
+                if n_components > max_hypotheses_for_mixture {
+                    unconverged_clamp_arcsec
+                } else {
+                    converged_clamp_arcsec
+                }
+            }
+        };
+        Some((arcsec / 3600.0_f64).to_radians())
     }
 
     /// $$r = \max_i \left( \sqrt{\chi^2 \cdot \lambda_{max}(S_i)} + \|\mu_i - \bar\mu\| \right)$$

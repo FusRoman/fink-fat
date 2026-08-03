@@ -235,6 +235,63 @@ fn build_keplerian_stm(f: f64, g: f64, f_dot: f64, g_dot: f64) -> Matrix6<f64> {
     stm
 }
 
+/// Maximum number of fixed-point refinements for the light-time delay `τ`
+/// (see [`refine_light_time_tau`]). `ρ` is usually well constrained enough
+/// that one refinement suffices (the original behaviour, preserved as
+/// `max_iters = 2`), but this bounds a real convergence loop instead of
+/// assuming it, so poorly-constrained hypotheses (fresh off the seeding
+/// grid, or fast NEO-like `ρ̇`) get the extra iterations they need.
+const LIGHT_TIME_MAX_ITERS: usize = 5;
+
+/// Convergence tolerance on `τ` (days) for [`refine_light_time_tau`]. Loose
+/// relative to `τ`'s own magnitude (minutes, i.e. ~1e-3 day for a typical
+/// MBA) but tight enough that the residual along-track bias it leaves
+/// behind (`tol_days × angular_rate`) is negligible at any realistic rate.
+const LIGHT_TIME_TAU_TOL_DAYS: f64 = 1e-9;
+
+/// Fixed-point refinement of the light-time delay `τ = ρ/c`: propagate the
+/// object to the candidate emission epoch `t_prop - τ` via `propagate_at`,
+/// measure the resulting range against the (reception-epoch) observer
+/// position `r_obs_new`, and update `τ` accordingly — repeating until `τ`
+/// stops moving (by more than `tol_days`) or `max_iters` is reached.
+///
+/// Generic over `propagate_at`/`extract_pos` so it can be driven by the
+/// real two-body Kepler solver in production and by closed-form synthetic
+/// motion models in tests — decoupling "is the light-time iteration itself
+/// correct" from "is the Kepler solver correct".
+///
+/// Returns `(τ, last propagation result)`, with the invariant that `result`
+/// is always `propagate_at(t_prop - τ)` for the returned `τ` — i.e. the
+/// pair is always mutually consistent, never a stale `result` paired with
+/// an unpropagated `τ` update.
+fn refine_light_time_tau<R, E>(
+    mut propagate_at: impl FnMut(f64) -> Result<R, E>,
+    extract_pos: impl Fn(&R) -> Vector3<f64>,
+    r_obs_new: Vector3<f64>,
+    t_prop: f64,
+    tau_init: f64,
+    max_iters: usize,
+    tol_days: f64,
+) -> Result<(f64, R), E> {
+    let mut tau = tau_init;
+    let mut result = propagate_at(t_prop - tau)?;
+
+    for _ in 1..max_iters {
+        let rho_emit = (extract_pos(&result) - r_obs_new).norm();
+        let tau_new = (rho_emit / C_AU_PER_DAY).max(0.0);
+        if (tau_new - tau).abs() < tol_days {
+            // `result` (propagated at the current `tau`) is already
+            // self-consistent with the range it predicts — stop without a
+            // wasted extra propagation.
+            break;
+        }
+        tau = tau_new;
+        result = propagate_at(t_prop - tau)?;
+    }
+
+    Ok((tau, result))
+}
+
 /// Build the SNC process noise matrix in Cartesian coordinates with
 /// adaptive scaling.
 ///
@@ -405,35 +462,33 @@ pub(crate) fn propagate_to_epoch<'state_lf>(
     let tau_prev = (kf.state[4] / C_AU_PER_DAY).max(0.0); // ρ_stored / c
     let t0_emit = kf.epoch - tau_prev;
 
-    // First light-time guess for the target uses the current range; one
-    // refinement with the propagated range is sufficient (ρ is well
-    // constrained, so τ converges immediately).
-    let mut tau = tau_prev;
-    let mut result = propagate_universal(
-        &cart.pos,
-        &cart.vel,
-        t0_emit,
-        t_prop - tau,
-        solver_with_guess(kf, kf.universal_anomaly),
-    )
-    .map_err(PropagateError::Kepler)?;
-
-    {
-        // Observer stays at the RECEPTION epoch t_prop; only the object recedes
-        // to its emission epoch. Δ = r_obj(t_prop − τ) − r_obs(t_prop) is then
-        // exactly the apparent line of sight the survey measured.
-        let rho_emit = (result.r1 - r_obs_new).norm();
-        tau = (rho_emit / C_AU_PER_DAY).max(0.0);
-
-        result = propagate_universal(
-            &cart.pos,
-            &cart.vel,
-            t0_emit,
-            t_prop - tau,
-            solver_with_guess(kf, Some(result.psy)),
-        )
-        .map_err(PropagateError::Kepler)?;
-    }
+    // Refine τ by fixed-point iteration until it stops moving (bounded —
+    // see `refine_light_time_tau`) rather than assuming one refinement
+    // always suffices. Observer stays at the RECEPTION epoch t_prop; only
+    // the object recedes to its emission epoch. Δ = r_obj(t_prop − τ) −
+    // r_obs(t_prop) is then exactly the apparent line of sight the survey
+    // measured.
+    let mut psi_guess = kf.universal_anomaly;
+    let (tau, result) = refine_light_time_tau(
+        |t_emit_target| -> Result<outfit::kepler::UniversalPropagResult, PropagateError> {
+            let r = propagate_universal(
+                &cart.pos,
+                &cart.vel,
+                t0_emit,
+                t_emit_target,
+                solver_with_guess(kf, psi_guess),
+            )
+            .map_err(PropagateError::Kepler)?;
+            psi_guess = Some(r.psy);
+            Ok(r)
+        },
+        |r: &outfit::kepler::UniversalPropagResult| r.r1,
+        r_obs_new,
+        t_prop,
+        tau_prev,
+        LIGHT_TIME_MAX_ITERS,
+        LIGHT_TIME_TAU_TOL_DAYS,
+    )?;
 
     PropagationEvent::LightTimeCorrection {
         tau_prev_days: tau_prev,
@@ -625,4 +680,339 @@ fn propagate_covariance(
     .emit();
 
     Ok(j_new_inv * p_cart_new * j_new_inv.transpose() + q_attr)
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod propagate_tests {
+    use std::convert::Infallible;
+
+    use proptest::prelude::*;
+
+    use super::*;
+
+    /// Independent oracle for the light-time equation `‖A − v·τ‖ = c·τ`
+    /// (with `A = r0 − r_obs`, for an object moving at constant heliocentric
+    /// velocity `v` and evaluated at the reception epoch `t_prop`, i.e.
+    /// `obj_pos(t) = r0 + v·(t − t_prop)`). Solved by bisection — a
+    /// different numerical method from `refine_light_time_tau`'s fixed-point
+    /// iteration, so a match between the two isn't just both converging to
+    /// the same wrong answer via the same recursion.
+    ///
+    /// Bracket: `f(0) = |A| > 0`; `f(τ_hi) ≤ 0` at `τ_hi = |A| / (c − |v|)`
+    /// by the triangle inequality (`‖A − vτ‖ ≤ |A| + |v|τ`), valid whenever
+    /// `|v| < c` (always true for any physical heliocentric velocity).
+    fn closed_form_tau(r0: Vector3<f64>, v: Vector3<f64>, r_obs: Vector3<f64>) -> f64 {
+        let a = r0 - r_obs;
+        let v_norm = v.norm();
+        assert!(v_norm < C_AU_PER_DAY, "v must be sub-luminal");
+
+        let f = |tau: f64| (a - v * tau).norm() - C_AU_PER_DAY * tau;
+
+        let mut lo = 0.0;
+        let mut hi = a.norm() / (C_AU_PER_DAY - v_norm);
+        assert!(f(lo) >= 0.0 && f(hi) <= 0.0, "bisection bracket invalid");
+
+        for _ in 0..200 {
+            let mid = 0.5 * (lo + hi);
+            if f(mid) >= 0.0 {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        0.5 * (lo + hi)
+    }
+
+    /// `propagate_at` stand-in for a fictional object moving at constant
+    /// heliocentric velocity `v`, anchored so that `obj_pos(t_prop) = r0`
+    /// (see [`closed_form_tau`]'s doc for the exact convention).
+    fn constant_velocity_propagator(
+        r0: Vector3<f64>,
+        v: Vector3<f64>,
+        t_prop: f64,
+    ) -> impl FnMut(f64) -> Result<Vector3<f64>, Infallible> {
+        move |t_target: f64| Ok(r0 + v * (t_target - t_prop))
+    }
+
+    #[test]
+    fn static_object_needs_no_refinement() {
+        let r_obs = Vector3::new(1.0, 0.0, 0.0);
+        let r0 = Vector3::new(2.5, 0.3, 0.0); // rho ~ 1.53 AU from r_obs
+        let t_prop = 60_000.0;
+
+        let (tau, pos) = refine_light_time_tau(
+            constant_velocity_propagator(r0, Vector3::zeros(), t_prop),
+            |p: &Vector3<f64>| *p,
+            r_obs,
+            t_prop,
+            0.0,
+            LIGHT_TIME_MAX_ITERS,
+            LIGHT_TIME_TAU_TOL_DAYS,
+        )
+        .unwrap();
+
+        let expected_tau = (r0 - r_obs).norm() / C_AU_PER_DAY;
+        assert!((tau - expected_tau).abs() < 1e-12);
+        assert_eq!(pos, r0); // static object: emission-epoch position == r0 always
+    }
+
+    #[test]
+    fn matches_closed_form_oracle_mba_regime() {
+        // rho ~ 2 AU, slow apparent motion typical of a well-observed MBA.
+        let r_obs = Vector3::new(1.0, 0.0, 0.0);
+        let r0 = Vector3::new(3.0, 0.2, 0.05);
+        let v = Vector3::new(-0.002, 0.01, 0.0005); // AU/day
+        let t_prop = 60_000.0;
+
+        let expected = closed_form_tau(r0, v, r_obs);
+        let (tau, _) = refine_light_time_tau(
+            constant_velocity_propagator(r0, v, t_prop),
+            |p: &Vector3<f64>| *p,
+            r_obs,
+            t_prop,
+            0.0, // deliberately bad initial guess (as if tau_prev were unknown)
+            LIGHT_TIME_MAX_ITERS,
+            LIGHT_TIME_TAU_TOL_DAYS,
+        )
+        .unwrap();
+
+        assert!(
+            (tau - expected).abs() < 1e-8,
+            "tau={tau}, expected={expected}"
+        );
+    }
+
+    #[test]
+    fn matches_closed_form_oracle_neo_regime() {
+        // rho ~ 0.2 AU, fast apparent motion typical of a close-approach NEO.
+        let r_obs = Vector3::new(1.0, 0.0, 0.0);
+        let r0 = Vector3::new(1.15, 0.12, 0.02);
+        let v = Vector3::new(-0.15, 0.4, 0.02); // AU/day — much faster than the MBA case
+        let t_prop = 60_000.0;
+
+        let expected = closed_form_tau(r0, v, r_obs);
+        let (tau, _) = refine_light_time_tau(
+            constant_velocity_propagator(r0, v, t_prop),
+            |p: &Vector3<f64>| *p,
+            r_obs,
+            t_prop,
+            0.0,
+            LIGHT_TIME_MAX_ITERS,
+            LIGHT_TIME_TAU_TOL_DAYS,
+        )
+        .unwrap();
+
+        assert!(
+            (tau - expected).abs() < 1e-8,
+            "tau={tau}, expected={expected}"
+        );
+    }
+
+    /// Demonstrates why a single unconditional refinement (the pre-fix
+    /// behaviour, `max_iters = 2`) can leave a real residual for a fast NEO
+    /// starting from a poor `τ` guess (e.g. a freshly seeded hypothesis
+    /// whose stored ρ hasn't converged yet) — while the bounded
+    /// convergence loop (`max_iters = 5`, `LIGHT_TIME_MAX_ITERS`) closes it.
+    /// The gap is reified in arcsec-equivalent along-track bias
+    /// (`Δτ × angular rate`) to connect it to the along-track signature
+    /// observed in `mot_analysis`.
+    #[test]
+    fn single_refinement_can_leave_a_residual_for_fast_neo() {
+        let r_obs = Vector3::new(1.0, 0.0, 0.0);
+        let r0 = Vector3::new(1.05, 0.25, 0.03); // rho ~ 0.27 AU
+        let v = Vector3::new(-0.3, 0.8, 0.05); // AU/day — extreme close-approach NEO
+        let t_prop = 60_000.0;
+        let tau_init = 0.0; // worst-case bootstrap guess
+
+        let expected = closed_form_tau(r0, v, r_obs);
+
+        let (tau_old, _) = refine_light_time_tau(
+            constant_velocity_propagator(r0, v, t_prop),
+            |p: &Vector3<f64>| *p,
+            r_obs,
+            t_prop,
+            tau_init,
+            2,   // pre-fix behaviour: exactly one refinement, no convergence check
+            0.0, // tol=0 disables early-exit, forcing exactly `max_iters` calls
+        )
+        .unwrap();
+
+        let (tau_new, _) = refine_light_time_tau(
+            constant_velocity_propagator(r0, v, t_prop),
+            |p: &Vector3<f64>| *p,
+            r_obs,
+            t_prop,
+            tau_init,
+            LIGHT_TIME_MAX_ITERS,
+            LIGHT_TIME_TAU_TOL_DAYS,
+        )
+        .unwrap();
+
+        let angular_rate = v.norm() / (r0 - r_obs).norm(); // rad/day, order-of-magnitude
+        let rad_to_arcsec = 206_264.80624709636;
+        let old_bias_arcsec = (tau_old - expected).abs() * angular_rate * rad_to_arcsec;
+        let new_bias_arcsec = (tau_new - expected).abs() * angular_rate * rad_to_arcsec;
+
+        assert!(
+            old_bias_arcsec > 1.0,
+            "expected the pre-fix single refinement to leave a >1\" residual for this NEO regime, got {old_bias_arcsec}\""
+        );
+        assert!(
+            new_bias_arcsec < 1e-2,
+            "the bounded convergence loop should close the residual to <10 mas, got {new_bias_arcsec}\""
+        );
+    }
+
+    proptest! {
+        /// Across the whole MBA→NEO physical range, the production-configured
+        /// helper (`LIGHT_TIME_MAX_ITERS`, `LIGHT_TIME_TAU_TOL_DAYS`) always
+        /// converges to the independent bisection oracle, regardless of how
+        /// bad the initial `τ` guess is (0 to a wildly wrong value) — the
+        /// property a fresh seeding-grid hypothesis needs.
+        #[test]
+        fn converges_to_oracle_across_physical_range(
+            rho in 0.05f64..3.5,
+            angular_rate_arcsec_per_day in 1.0f64..50_000.0f64, // slow MBA to fast NEO
+            radial_frac in -0.3f64..0.3, // rho_dot as a fraction of rho, loosely
+            tau_init_frac in 0.0f64..3.0, // 0 = no guess, up to 3x the true tau
+        ) {
+            let r_obs = Vector3::new(1.0, 0.0, 0.0);
+            let r0 = Vector3::new(1.0 + rho, 0.0, 0.0);
+            let angular_rate = angular_rate_arcsec_per_day / 206_264.80624709636; // rad/day
+            let v_tangential = rho * angular_rate;
+            let v = Vector3::new(radial_frac * rho, v_tangential, 0.0);
+            let t_prop = 60_000.0;
+
+            prop_assume!(v.norm() < 0.5 * C_AU_PER_DAY); // stay sub-luminal with margin
+
+            let expected = closed_form_tau(r0, v, r_obs);
+            let tau_init = (tau_init_frac * expected).max(0.0);
+
+            let (tau, _) = refine_light_time_tau(
+                constant_velocity_propagator(r0, v, t_prop),
+                |p: &Vector3<f64>| *p,
+                r_obs,
+                t_prop,
+                tau_init,
+                LIGHT_TIME_MAX_ITERS,
+                LIGHT_TIME_TAU_TOL_DAYS,
+            )
+            .unwrap();
+
+            prop_assert!(
+                (tau - expected).abs() < 1e-7,
+                "tau={tau}, expected={expected}, rho={rho}, angular_rate={angular_rate_arcsec_per_day}\"/day"
+            );
+        }
+    }
+}
+
+/// Cross-checks `propagate_universal` (the two-body Kepler solver
+/// `propagate_to_epoch` relies on) against an independently-derived
+/// analytic Keplerian orbit — distinct from `propagate_tests`, which
+/// covers the light-time correction *on top of* whatever `propagate_universal`
+/// returns. A bug in the solver itself and unmodeled planetary
+/// perturbations produce the same along-track-only signature against real
+/// astrometry (see the plan doc), so this test exists to rule the solver
+/// in or out on its own, before attributing any residual to missing
+/// physics.
+#[cfg(test)]
+mod kepler_solver_tests {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    const MU_SUN: f64 = outfit::GAUSS_GRAV * outfit::GAUSS_GRAV; // AU^3/day^2, heliocentric
+
+    /// Solve Kepler's equation `M = E - e·sin(E)` for the eccentric anomaly
+    /// `E` via Newton-Raphson — independent of outfit's own solver, which
+    /// uses the universal-variable formulation, not this classical
+    /// elliptical one.
+    fn solve_eccentric_anomaly(mean_anomaly: f64, e: f64) -> f64 {
+        let m = mean_anomaly.rem_euclid(std::f64::consts::TAU);
+        let mut ecc = if e < 0.8 { m } else { std::f64::consts::PI };
+        for _ in 0..100 {
+            let f = ecc - e * ecc.sin() - m;
+            let f_prime = 1.0 - e * ecc.cos();
+            let delta = f / f_prime;
+            ecc -= delta;
+            if delta.abs() < 1e-14 {
+                break;
+            }
+        }
+        ecc
+    }
+
+    /// Position and velocity (AU, AU/day) of a pure two-body Keplerian
+    /// orbit at eccentric anomaly `E`, confined to the `z = 0` plane
+    /// (`i = 0`, periapsis along `+x`) so no 3D rotation is needed — the
+    /// solver being tested operates on Cartesian state regardless of
+    /// orientation, so this loses no generality for a numerical-agreement
+    /// check.
+    fn kepler_state_at_eccentric_anomaly(
+        a: f64,
+        e: f64,
+        n: f64,
+        ecc: f64,
+    ) -> (Vector3<f64>, Vector3<f64>) {
+        let (sin_e, cos_e) = ecc.sin_cos();
+        let x = a * (cos_e - e);
+        let y = a * (1.0 - e * e).sqrt() * sin_e;
+        let x_dot = -a * n * sin_e / (1.0 - e * cos_e);
+        let y_dot = a * n * (1.0 - e * e).sqrt() * cos_e / (1.0 - e * cos_e);
+        (Vector3::new(x, y, 0.0), Vector3::new(x_dot, y_dot, 0.0))
+    }
+
+    /// Independently-derived two-body Keplerian position at `t1`, given the
+    /// orbit's elements and mean anomaly `m0` at `t0` — never calls
+    /// `propagate_universal` or any outfit solver.
+    fn analytic_kepler_position(a: f64, e: f64, m0: f64, n: f64, t0: f64, t1: f64) -> Vector3<f64> {
+        let m1 = m0 + n * (t1 - t0);
+        let ecc1 = solve_eccentric_anomaly(m1, e);
+        kepler_state_at_eccentric_anomaly(a, e, n, ecc1).0
+    }
+
+    proptest! {
+        /// `propagate_universal` must reproduce a pure two-body orbit to
+        /// numerical precision (not just "close"), over arc lengths
+        /// spanning the ones seen in `mot_analysis`'s `not_matched`
+        /// bucket (up to several months). The tolerance (1e-3″-equivalent,
+        /// where "arcsec" here is the position error converted via the
+        /// orbit's own heliocentric distance — a precision metric, not a
+        /// claim about apparent geocentric separation) is three orders of
+        /// magnitude tighter than the ~28″ along-track bias observed
+        /// against real ZTF astrometry: if this test passes comfortably,
+        /// the solver itself cannot be the source of that bias, and it
+        /// must come from missing physics (perturbations) or a biased
+        /// orbit fit instead.
+        #[test]
+        fn matches_analytic_two_body_orbit(
+            a in 0.3f64..4.0,       // AU: NEO-ish to outer MBA
+            e in 0.0f64..0.85,
+            m0 in 0.0f64..std::f64::consts::TAU,
+            arc_days in prop_oneof![Just(7.0), Just(30.0), Just(90.0), Just(180.0)],
+        ) {
+            let n = (MU_SUN / a.powi(3)).sqrt();
+            let ecc0 = solve_eccentric_anomaly(m0, e);
+            let (pos0, vel0) = kepler_state_at_eccentric_anomaly(a, e, n, ecc0);
+
+            let t0 = 60_000.0;
+            let t1 = t0 + arc_days;
+
+            let result = propagate_universal(&pos0, &vel0, t0, t1, SolverType::default())
+                .expect("propagate_universal should converge for a well-posed elliptical orbit");
+
+            let expected = analytic_kepler_position(a, e, m0, n, t0, t1);
+            let error_au = (result.r1 - expected).norm();
+            let error_arcsec = (error_au / result.r1.norm()).to_degrees() * 3600.0;
+
+            prop_assert!(
+                error_arcsec < 1e-3,
+                "solver diverges from the analytic two-body orbit by {error_arcsec}\" \
+                 (a={a}, e={e}, m0={m0}, arc_days={arc_days})"
+            );
+        }
+    }
 }

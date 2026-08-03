@@ -101,6 +101,32 @@ pub struct KalmanConfig {
     /// -------------
     /// No `units.rs` parser is applied: a bare dimensionless multiplier.
     pub max_inflation: f64,
+
+    /// Floor on the angular-position variance `P[0,0]`/`P[1,1]` after a
+    /// measurement update, expressed as a fraction of that observation's
+    /// own measurement-noise variance `R[0,0]`/`R[1,1]`.
+    ///
+    /// Units
+    /// -----
+    /// Dimensionless ratio, `[0, 1)`.
+    ///
+    /// Context
+    /// -------
+    /// Nothing else in the update pipeline stops `Var(α)`/`Var(δ)` from
+    /// shrinking arbitrarily far below the real astrometric precision of
+    /// the data (a run of closely-spaced real updates, e.g. several
+    /// exposures in the same visit, can do this in a handful of steps).
+    /// Once that happens, the innovation covariance `S = P[0:2,0:2] + R`
+    /// approaches its floor `R`, `S⁻¹` grows very large, and even a modest
+    /// ρ↔angle covariance in `P` gets amplified into a destabilizing
+    /// correction on ρ — this floor keeps the filter from ever becoming
+    /// more confident about the angles than the astrometry itself
+    /// justifies. `0.0` disables the floor.
+    ///
+    /// Serialization
+    /// -------------
+    /// No `units.rs` parser is applied: a bare dimensionless ratio.
+    pub min_angular_variance_ratio: f64,
 }
 
 impl Default for KalmanConfig {
@@ -111,6 +137,7 @@ impl Default for KalmanConfig {
             solver_type: SolverType::default(),
             inflation_chi2_threshold: 5.991,
             max_inflation: 5.0,
+            min_angular_variance_ratio: 1e-4,
         }
     }
 }
@@ -148,6 +175,15 @@ impl Validate for KalmanConfig {
             1.0,
             f64::INFINITY,
             "set max_inflation to a value >= 1.0, e.g. 5.0",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_in_range(
+            "min_angular_variance_ratio",
+            self.min_angular_variance_ratio,
+            0.0,
+            1.0,
+            "set min_angular_variance_ratio to a value in [0, 1), e.g. 1e-4 (0.0 disables the floor)",
         ) {
             errors.push(e);
         }

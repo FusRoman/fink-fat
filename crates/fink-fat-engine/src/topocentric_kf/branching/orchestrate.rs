@@ -61,13 +61,16 @@ use crate::{
     topocentric_kf::{
         branching::{
             Branch,
-            candidate_search::{SINGLE_TIME_BIN, SingleBinTimeBinner, find_candidates_for_bank},
+            candidate_search::{
+                SINGLE_TIME_BIN, SingleBinTimeBinner, find_candidates_for_bank,
+                find_candidates_for_bank_multi_region,
+            },
             detection_probability::{detection_probability, predicted_apparent_magnitude},
             llr_score::{null_branch_llr_delta, observation_llr_delta, photometric_llr_delta},
             pruning::{apply_n_scan_pruning, cap_top_b_per_lineage, purge_stale_lineages},
             visit::{Visit, group_observations_into_visits},
         },
-        kalman_bank::KFBank,
+        kalman_bank::{KFBank, ellipse_region_finder::cover_if_clamped},
         observer_state::get_observer,
         single_kalman::update::wrap_angle,
     },
@@ -399,10 +402,10 @@ fn resolve_observer_state(
 /// reused here, not rebuilt).
 ///
 /// `false` means "definitely nothing nearby, skip the real propagation
-/// this visit"; `true` still requires
-/// [`spawn_branches_for_lineage`]'s real (Mahalanobis-gated) check — this
-/// is a coarse, deliberately generous filter, not a replacement for it.
-fn lineage_might_be_in_visit(
+/// this visit"; `true` still requires `spawn_branches_for_lineage`'s real
+/// (Mahalanobis-gated) check — this is a coarse, deliberately generous
+/// filter, not a replacement for it.
+pub fn lineage_might_be_in_visit(
     lineage: &Branch,
     visit: &Visit,
     visit_bucket_index: &BucketIndex<&Observation>,
@@ -477,14 +480,38 @@ fn spawn_branches_for_lineage<'state_lf, 'bank_config>(
         return None;
     };
 
-    let candidates = find_candidates_for_bank(
+    // If the radius came back pinned at `radius_strategy`'s clamp, the single
+    // MAP-centered cone is a truncated view of a mixture that is genuinely
+    // wider — routinely the case at steps 1–2, where the bank still holds
+    // hundreds of (ρ, ρ̇) grid nodes spread over degrees and the MAP node
+    // carries ~1 % of the weight. Tile the footprint with cones and search
+    // their union instead. Otherwise (the common case) this is one float
+    // comparison and we take the single-cone fast path unchanged.
+    let candidates = if let Some(cover) = cover_if_clamped(
         &search_region,
-        lineage.bank.track_ids().to_vec(),
-        visit_bucket_index,
-        spatial_binner,
-        lineage.bank.config.gate_chi2,
-        params.likelihood_threshold,
-    );
+        params.radius_strategy,
+        params.cone_half_rad(search_region.components.len()),
+        params.max_search_cones,
+    ) {
+        find_candidates_for_bank_multi_region(
+            &cover,
+            &search_region,
+            lineage.bank.track_ids().to_vec(),
+            visit_bucket_index,
+            spatial_binner,
+            lineage.bank.config.gate_chi2,
+            params.likelihood_threshold,
+        )
+    } else {
+        find_candidates_for_bank(
+            &search_region,
+            lineage.bank.track_ids().to_vec(),
+            visit_bucket_index,
+            spatial_binner,
+            lineage.bank.config.gate_chi2,
+            params.likelihood_threshold,
+        )
+    };
 
     let predicted_magnitude = predicted_apparent_magnitude_for_bank(&predicted_bank);
 

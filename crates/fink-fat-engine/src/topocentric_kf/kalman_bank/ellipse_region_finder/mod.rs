@@ -32,6 +32,13 @@ pub enum EllipseRegionEvent {
         radius_arcsec: f64,
         n_components: usize,
     },
+    SkyCoverComputed {
+        n_cones: usize,
+        n_components: usize,
+        /// Hypotheses left outside every cone because `max_search_cones` was
+        /// reached — non-zero means the cap is binding and recall may suffer.
+        n_uncovered: usize,
+    },
 }
 
 crate::impl_log_target!(
@@ -59,6 +66,14 @@ impl EllipseRegionEvent {
             } => tracing::trace!(
                 target: EllipseRegionEvent::TARGET, center_ra_deg, center_dec_deg, radius_arcsec, n_components,
                 "Search region computed"
+            ),
+            SkyCoverComputed {
+                n_cones,
+                n_components,
+                n_uncovered,
+            } => tracing::trace!(
+                target: EllipseRegionEvent::TARGET, n_cones, n_components, n_uncovered,
+                "Sky cover computed"
             ),
         }
     }
@@ -214,6 +229,29 @@ impl SearchRegion {
             .iter()
             .any(|c| c.contains(ra, dec, chi2_gate))
     }
+
+    /// Whether `radius_strategy`'s hard clamp truncated this region's radius.
+    ///
+    /// The clamp is the *only* thing that can silently shrink a region below
+    /// what the configured strategy asked for: every other path returns the
+    /// radius the strategy computed, which covers the mixture by construction.
+    /// So a pinned radius is exactly the signal that the coarse cone may be
+    /// hiding modes, and hence the trigger for [`sky_cover_regions`] — see its
+    /// doc for why this happens routinely at steps 1–2.
+    ///
+    /// Cheap by design: one scalar comparison against a value already in hand.
+    /// The earlier geometric test ("does one cone enclose every component's
+    /// ellipse?") fired on 55/60 of the dumped cases versus 32/60 for this one
+    /// **at identical recall** — it was flagging banks whose region was never
+    /// truncated in the first place, and each false trigger cost a full cover
+    /// plus a multi-cone catalogue query.
+    ///
+    /// Returns `false` for an unclamped strategy, which can never be truncated.
+    pub fn radius_pinned_at_clamp(&self, radius_strategy: RadiusStrategy) -> bool {
+        radius_strategy
+            .clamp_rad(self.components.len())
+            .is_some_and(|clamp| self.radius_rad >= clamp * (1.0 - 1e-9))
+    }
 }
 
 impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
@@ -295,12 +333,7 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
         top_k: TopK,
         radius_strategy: RadiusStrategy,
     ) -> Result<SearchRegion, PropagateError> {
-        let mut predicted: Vec<(f64, KFState)> = self
-            .hypotheses()
-            .iter()
-            .map(|hyp| (hyp.weight(), hyp.kf.clone()))
-            .collect();
-        top_k.apply(&mut predicted);
+        let predicted = self.selected_mixture(top_k);
 
         // NOTE: `search_region_chi2`, NOT `gate_chi2` — see
         // `search_region_from_mixture`'s doc for why these are deliberately
@@ -311,6 +344,22 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
             radius_strategy,
             self.config.search_region_chi2,
         )
+    }
+
+    /// `self`'s live hypotheses as `(weight, state)` pairs, after applying
+    /// `top_k` — the exact input [`Self::search_region`] feeds to
+    /// [`search_region_from_mixture`]. Exposed so a caller that already has
+    /// an already-propagated bank (e.g. via [`Self::predict_to`]) can also
+    /// build a [`sky_cover_regions`] call from the *same* selected mixture,
+    /// without re-propagating or duplicating the selection logic.
+    pub fn selected_mixture(&self, top_k: TopK) -> Vec<(f64, KFState<'state_lf>)> {
+        let mut predicted: Vec<(f64, KFState)> = self
+            .hypotheses()
+            .iter()
+            .map(|hyp| (hyp.weight(), hyp.kf.clone()))
+            .collect();
+        top_k.apply(&mut predicted);
+        predicted
     }
 
     /// Every live hypothesis's predicted `(weight, state)` at `t_prop`,
@@ -387,7 +436,7 @@ pub fn search_region_from_mixture(
     }
     .emit();
 
-    let (center_ra, center_dec) = weighted_sky_centroid(predicted);
+    let (center_ra, center_dec) = map_center(predicted);
     let r_noise = Matrix2::from_diagonal(&obs_noise);
 
     let components = build_components(predicted, r_noise, search_region_chi2);
@@ -409,15 +458,190 @@ pub fn search_region_from_mixture(
     })
 }
 
+/// Tile the predicted mixture's sky footprint with a small set of cones, so
+/// the coarse catalogue query sees *every* plausible mode instead of only the
+/// one the MAP hypothesis happens to sit on.
+///
+/// Returns `(center_ra, center_dec, radius_rad)` triples for
+/// [`find_candidates_for_bank_multi_region`](crate::topocentric_kf::branching::candidate_search::find_candidates_for_bank_multi_region).
+/// The fine per-hypothesis gate still runs against the full-mixture
+/// [`SearchRegion`], so this changes coarse *recall* only — matching precision
+/// is untouched.
+///
+/// # Why this exists
+///
+/// A single [`SearchRegion`] is one cone centered on the MAP hypothesis whose
+/// radius is clamped (`RadiusStrategy::Clamped`, 30′ in practice). Right after
+/// a 2-point bootstrap the bank holds several hundred (ρ, ρ̇) grid nodes whose
+/// predicted sky positions span **degrees** along-track — median 0.6°, up to
+/// 178° in the `mot_analysis` dumps — while the MAP node carries ~1 % of the
+/// weight and is therefore statistically arbitrary. The clamp binds in
+/// essentially every such case, so the coarse pool degenerates to a 30′ disc
+/// around a random node of a degrees-wide mixture and the true observation is
+/// never even offered to the gate.
+///
+/// Measured on the 60 `SearchedButNotMatched` step-1/2 cases dumped by
+/// `mot_analysis`, the truth entered the coarse pool for 42/60 with the single
+/// cone, 54/60 with 8 ρ-clusters, and **58/60** with this cover — 58 being the
+/// ceiling, the other 2 being genuine χ² outliers. ρ-clustering saturates
+/// because ρ̇ also drives along-track spread, so a ρ-chunk is not angularly
+/// compact; clustering on the predicted sky position is exact by construction.
+///
+/// # Algorithm
+///
+/// Greedy set cover in descending weight order: the heaviest not-yet-covered
+/// hypothesis seeds a cone, every uncovered hypothesis within `cone_half_rad`
+/// of that seed joins it, and the cone's radius grows to
+/// `max_j (sep(seed, μ_j) + r_j)` with `r_j = sqrt(chi2 · λmax(S_j))` so each
+/// member's own error ellipse is enclosed. Repeat until every hypothesis is
+/// covered or `max_cones` cones have been emitted.
+///
+/// Seeding in weight order is what makes the `max_cones` truncation safe: the
+/// cones that survive are the ones covering the most probable hypotheses, so
+/// exceeding the cap degrades recall gracefully from the tail inward rather
+/// than dropping an arbitrary mode. In the dumps the median cover is 2 cones
+/// (fewer than the 8 ρ-clusters it replaces), so the cap rarely binds at all.
+///
+/// Takes an already-built `components` slice — in practice
+/// [`SearchRegion::components`], the `top_k`-selected set the single-cone
+/// region already paid to build. Covering that subset rather than the full
+/// bank was measured to give **identical** recall (58/60 either way): at
+/// step 1 the weights are near-uniform, so a `WeightThreshold(0.99)` cut keeps
+/// essentially the whole bank anyway. Reusing it makes the cover's marginal
+/// component-construction cost exactly zero.
+///
+/// # Complexity
+///
+/// `max_cones` bounds the work: the greedy loop stops as soon as it has
+/// emitted that many cones, so the pairwise scan runs at most
+/// `max_cones × n` times, and only over hypotheses still uncovered (the
+/// candidate list is compacted with `swap_remove` as they are absorbed). At
+/// the measured operating point — `max_cones = 4`, n ≈ 450 — that is ~900
+/// iterations, versus ~147 000 for a full O(n²) pass. Spatial indexing here
+/// is counterproductive at these n: a previous revision bucketed through
+/// `HealpixBinner` and was markedly *slower*, since a hash map plus a
+/// per-bucket `Vec` allocation and a cone query per seed cost far more than a
+/// few hundred dot products.
+pub fn sky_cover_regions(
+    components: &[SearchComponent],
+    cone_half_rad: f64,
+    max_cones: usize,
+) -> Vec<(f64, f64, f64)> {
+    if components.is_empty() || max_cones == 0 {
+        return Vec::new();
+    }
+
+    // Precompute unit vectors and per-hypothesis ellipse radii. Membership is
+    // tested as `u_seed · u_j >= cos(cone_half_rad)`, which avoids an `acos`
+    // per pair; the actual angle is only needed once per hypothesis, when it
+    // joins a cone.
+    let unit: Vec<Vector3<f64>> = components
+        .iter()
+        .map(|c| {
+            let (sin_dec, cos_dec) = c.center_dec.sin_cos();
+            let (sin_ra, cos_ra) = c.center_ra.sin_cos();
+            Vector3::new(cos_dec * cos_ra, cos_dec * sin_ra, sin_dec)
+        })
+        .collect();
+    let ellipse_rad: Vec<f64> = components
+        .iter()
+        .map(|c| (c.gate_chi2 * largest_eigenvalue_2x2(&c.s)).sqrt())
+        .collect();
+
+    let mut order: Vec<usize> = (0..components.len()).collect();
+    order.sort_unstable_by(|&a, &b| components[b].weight.total_cmp(&components[a].weight));
+
+    // Still-uncovered hypotheses, compacted as they are absorbed so later
+    // seeds never re-scan what earlier cones already took. `covered` mirrors
+    // it only to make the seed-skip test O(1).
+    let mut uncovered: Vec<usize> = order.clone();
+    let mut covered = vec![false; components.len()];
+    let cos_cone = cone_half_rad.cos();
+    let mut cones = Vec::with_capacity(max_cones.min(components.len()));
+
+    for &seed in &order {
+        if covered[seed] {
+            continue;
+        }
+        if cones.len() == max_cones {
+            break;
+        }
+
+        // The seed absorbs itself on the first hit (dot == 1, so the term is
+        // just its own ellipse radius) — no need to special-case it.
+        let mut radius = 0.0_f64;
+        let mut j = 0;
+        while j < uncovered.len() {
+            let cand = uncovered[j];
+            let dot = unit[seed].dot(&unit[cand]);
+            if dot < cos_cone {
+                j += 1;
+                continue;
+            }
+            covered[cand] = true;
+            radius = radius.max(dot.clamp(-1.0, 1.0).acos() + ellipse_rad[cand]);
+            uncovered.swap_remove(j);
+        }
+
+        cones.push((
+            components[seed].center_ra,
+            components[seed].center_dec,
+            radius,
+        ));
+    }
+
+    EllipseRegionEvent::SkyCoverComputed {
+        n_cones: cones.len(),
+        n_components: components.len(),
+        n_uncovered: uncovered.len(),
+    }
+    .emit();
+
+    cones
+}
+
+/// The coarse-search decision in one place: return a multi-cone cover for
+/// `region` if its radius was truncated by `radius_strategy`'s clamp,
+/// otherwise `None` (meaning "the single cone is fine, use the fast path").
+///
+/// Both the engine (`orchestrate::spawn_branches_for_lineage`) and the
+/// `mot_analysis` evaluator must make this decision identically — if they
+/// drift, `not_matched%` stops measuring the engine — so the trigger and the
+/// cover call live here together rather than being spelled out at each site.
+///
+/// Returning `None` is the common case and costs a single float comparison:
+/// see [`SearchRegion::radius_pinned_at_clamp`].
+pub fn cover_if_clamped(
+    region: &SearchRegion,
+    radius_strategy: RadiusStrategy,
+    cone_half_rad: f64,
+    max_cones: usize,
+) -> Option<Vec<(f64, f64, f64)>> {
+    if max_cones == 0 || !region.radius_pinned_at_clamp(radius_strategy) {
+        return None;
+    }
+    let cover = sky_cover_regions(&region.components, cone_half_rad, max_cones);
+    (!cover.is_empty()).then_some(cover)
+}
+
 // ── Private helpers ───────────────────────────────────────────────────────────
 
-/// Compute the weighted-mean sky position.
+/// Sky position of the MAP (highest-weight) hypothesis.
 ///
-/// Assumes weights are already normalized (sum to 1).
-fn weighted_sky_centroid(predicted: &[(f64, KFState)]) -> (f64, f64) {
-    predicted.iter().fold((0.0, 0.0), |(ra, dec), (w, kf)| {
-        (ra + w * kf.state[0], dec + w * kf.state[1])
-    })
+/// Used instead of a weighted mean because after a 2-point bootstrap the
+/// (ρ, ρ̇) grid still contains hypotheses with wildly implausible implied
+/// angular rates that no data has yet penalized (a 2-point fit has zero
+/// residual for every grid node) — a *weighted* mean gets dragged by these
+/// outliers toward a sky position that can be 100+ degrees from every
+/// plausible mode, including the correct one. The MAP hypothesis, being a
+/// single mode rather than a blend, isn't subject to this — see the
+/// `mot_analysis` step-1/step-2 `not_matched%` investigation.
+fn map_center(predicted: &[(f64, KFState)]) -> (f64, f64) {
+    predicted
+        .iter()
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, kf)| (kf.state[0], kf.state[1]))
+        .unwrap_or((0.0, 0.0))
 }
 
 /// Build one [`SearchComponent`] per predicted hypothesis, skipping those

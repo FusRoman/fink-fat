@@ -194,6 +194,61 @@ fn filter_candidates<'obs>(
 /// The bank's [`BankCandidates`] — possibly with an empty `matches` list,
 /// which is the common case at LSST cadence and simply means the following
 /// branching step will spawn only the null branch.
+/// Like [`find_candidates_for_bank`], but fetches the coarse candidate pool
+/// from the union of several `(center_ra, center_dec, radius_rad)` regions
+/// (see
+/// [`sky_cover_regions`](crate::topocentric_kf::kalman_bank::ellipse_region_finder::sky_cover_regions))
+/// instead of one. The fine per-hypothesis gate still runs against
+/// `full_region` (built normally, over every hypothesis of the bank) — only
+/// the coarse recall changes, matching precision is unaffected.
+///
+/// Used whenever the bank's predicted sky footprint is wider than
+/// `full_region`'s (clamped) radius — typically steps 1–2, while the
+/// post-bootstrap (ρ, ρ̇) grid still spans degrees along-track. There
+/// `full_region`'s single MAP-centered cone covers only a fraction of the
+/// mixture and drops every mode further out, including the correct one. See
+/// [`SearchRegion::radius_pinned_at_clamp`](crate::topocentric_kf::kalman_bank::ellipse_region_finder::SearchRegion::radius_pinned_at_clamp)
+/// for the trigger and `sky_cover_regions`'s doc for the measurements.
+pub fn find_candidates_for_bank_multi_region<'obs>(
+    cluster_regions: &[(f64, f64, f64)],
+    full_region: &SearchRegion,
+    track_ids: Vec<ObsId>,
+    bucket_index: &BucketIndex<&'obs Observation>,
+    spatial_binner: &HealpixBinner,
+    gate_chi2: f64,
+    likelihood_threshold: f64,
+) -> BankCandidates<'obs> {
+    let mut seen = ahash::AHashSet::new();
+    let candidates: Vec<&'obs Observation> = cluster_regions
+        .iter()
+        .flat_map(|&(center_ra, center_dec, radius_rad)| {
+            let region = SearchRegion {
+                center_ra,
+                center_dec,
+                radius_rad,
+                components: Vec::new(),
+            };
+            query_region_candidates(bucket_index, spatial_binner, &region)
+        })
+        .filter(|obs| seen.insert(*obs.id()))
+        .collect();
+
+    let n_region_candidates = candidates.len();
+    let matches = filter_candidates(full_region, candidates, gate_chi2, likelihood_threshold);
+
+    CandidateSearchEvent::BankSearchResult {
+        n_region_candidates,
+        n_matches: matches.len(),
+    }
+    .emit();
+
+    BankCandidates {
+        track_ids,
+        search_region: full_region.clone(),
+        matches,
+    }
+}
+
 pub fn find_candidates_for_bank<'obs>(
     search_region: &SearchRegion,
     track_ids: Vec<ObsId>,
