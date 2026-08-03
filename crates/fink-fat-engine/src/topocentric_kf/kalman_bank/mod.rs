@@ -166,7 +166,7 @@ pub struct KFBank<'state_lf, 'bank_config> {
     /// load of `self`'s — cheap, and carries a valid cache over for free
     /// whenever a bank is cloned unchanged.
     best_index_cache: AtomicUsize,
-    pub(crate) config: &'bank_config KFBankConfig,
+    pub config: &'bank_config KFBankConfig,
 
     /// Number of `step()` calls completed so far.
     ///
@@ -303,7 +303,7 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
             })
             .collect();
 
-        let mut bank = Self::with_hypotheses(
+        let bank = Self::with_hypotheses(
             hypotheses,
             bank_config,
             0,
@@ -311,7 +311,7 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
             None,
             0,
         );
-        bank.post_step_cleanup();
+        // bank.post_step_cleanup();
         Ok(bank)
     }
 
@@ -788,13 +788,26 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
     /// * `None` – Every hypothesis was gated or failed; this branch is not
     ///   viable.
     pub fn branch_with(&self, obs: &Observation) -> Option<(Self, f64)> {
+        self.branch_with_diag(obs).0
+    }
+
+    /// Like [`Self::branch_with`], but also reports how many hypotheses
+    /// were rejected by the chi-square gate vs. failed numerically
+    /// (propagation/innovation/update failure) — the same breakdown
+    /// [`Self::step`] already exposes via `BankStep`'s `n_gated`/`n_failed`,
+    /// for this single-observation branching path. Used by diagnostic
+    /// tooling (`mot_analysis`) to classify *why* a lineage's real-
+    /// observation update collapsed, not just *that* it did.
+    ///
+    /// Returns `(branch_with_result, n_gated, n_failed)`.
+    pub fn branch_with_diag(&self, obs: &Observation) -> (Option<(Self, f64)>, usize, usize) {
         let mixture_likelihood_z = self.mixture_predictive_likelihood(obs);
 
         let mut branch = self.clone();
-        let (survivors, _n_gated, _n_failed) = branch.score_and_update_hypotheses(obs);
+        let (survivors, n_gated, n_failed) = branch.score_and_update_hypotheses(obs);
         branch.set_hypotheses(survivors);
         if branch.hypotheses.is_empty() {
-            return None;
+            return (None, n_gated, n_failed);
         }
 
         branch.post_step_cleanup();
@@ -802,7 +815,7 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
         branch.track_ids.push(*obs.id());
         branch.update_absolute_magnitude_estimate(obs);
 
-        Some((branch, mixture_likelihood_z))
+        (Some((branch, mixture_likelihood_z)), n_gated, n_failed)
     }
 
     /// Fold the apparent magnitude of a just-associated observation into the

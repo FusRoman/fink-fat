@@ -191,8 +191,34 @@ impl<'state_lf, 'bank_config> Branch<'state_lf, 'bank_config> {
         branch_id: u64,
         current_step: usize,
     ) -> Option<Self> {
-        let (branched_bank, _mixture_likelihood_z) = predicted_bank.branch_with(obs)?;
-        Some(Self {
+        Self::from_observation_diag(
+            predicted_bank,
+            parent,
+            obs,
+            llr_delta,
+            branch_id,
+            current_step,
+        )
+        .0
+    }
+
+    /// Like [`Self::from_observation`], but also reports how many of
+    /// `predicted_bank`'s hypotheses were rejected by the chi-square gate
+    /// vs. failed numerically (see [`KFBank::branch_with_diag`]) — lets
+    /// diagnostic tooling (`mot_analysis`) classify *why* a real-observation
+    /// update collapsed, not just *that* it did.
+    ///
+    /// Returns `(from_observation_result, n_gated, n_failed)`.
+    pub fn from_observation_diag(
+        predicted_bank: &KFBank<'state_lf, 'bank_config>,
+        parent: &Branch<'state_lf, 'bank_config>,
+        obs: &Observation,
+        llr_delta: f64,
+        branch_id: u64,
+        current_step: usize,
+    ) -> (Option<Self>, usize, usize) {
+        let (result, n_gated, n_failed) = predicted_bank.branch_with_diag(obs);
+        let branch = result.map(|(branched_bank, _mixture_likelihood_z)| Self {
             bank: branched_bank,
             cumulative_llr: parent.cumulative_llr + llr_delta,
             lineage_id: parent.lineage_id,
@@ -203,7 +229,8 @@ impl<'state_lf, 'bank_config> Branch<'state_lf, 'bank_config> {
             last_real_update_step: current_step,
             n_real_updates: parent.n_real_updates + 1,
             lineage_designation: parent.lineage_designation.clone(),
-        })
+        });
+        (branch, n_gated, n_failed)
     }
 
     /// Spawn the "null" (missed-detection) branch: `predicted_bank` left

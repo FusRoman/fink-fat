@@ -34,7 +34,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::engine_config::Validate;
 use crate::engine_config::error::FieldError;
-use crate::engine_config::units::{de_angle_rad, de_angle_var_rad2_pair, de_time_days};
+use crate::engine_config::units::{
+    de_angle_arcsec, de_angle_rad, de_angle_var_rad2_pair, de_time_days,
+};
 use crate::engine_config::validate_helpers::{
     check_finite, check_finite_nonneg, check_finite_positive, check_min_usize,
 };
@@ -187,6 +189,56 @@ pub struct NightAdvanceParams {
     /// independent of this module's angle unit conventions.
     pub radius_strategy: RadiusStrategy,
 
+    /// Maximum number of cones
+    /// [`sky_cover_regions`](crate::topocentric_kf::kalman_bank::ellipse_region_finder::sky_cover_regions)
+    /// may emit when tiling a lineage's predicted sky footprint for the
+    /// coarse candidate search.
+    ///
+    /// The cover only runs when the single region's radius came back pinned
+    /// at `radius_strategy`'s clamp — see
+    /// [`SearchRegion::radius_pinned_at_clamp`](crate::topocentric_kf::kalman_bank::ellipse_region_finder::SearchRegion::radius_pinned_at_clamp).
+    ///
+    /// This cap bounds *both* the number of HEALPix cone queries the coarse
+    /// search issues and the greedy cover's own scan (which stops as soon as
+    /// it has emitted this many cones). Cones are seeded in descending weight
+    /// order, so hitting the cap drops the least likely hypotheses first.
+    ///
+    /// Dimensionless count. **`0` disables the cover entirely** and is the
+    /// current default.
+    ///
+    /// # Why the default is off
+    ///
+    /// This cover was built to widen the step-1/2 coarse search after
+    /// `mot_analysis` showed 26.3% / 11.3% `not_matched%`. Measured on the
+    /// full dataset it did essentially nothing for recall (`found%` 93.6% →
+    /// 93.7%) while inflating candidates 6.5M → 27.0M and the bad-candidate
+    /// rate 25.1% → 82.1%.
+    ///
+    /// The reason is that the failure had a different cause entirely:
+    /// `TopK::WeightThreshold` was thresholding unnormalized bank weights and
+    /// collapsing the mixture to a single hypothesis (see its doc). The cover
+    /// was therefore tiling *one* hypothesis — nothing to cover. With that
+    /// fixed, re-measure before enabling this: it may have no remaining job.
+    ///
+    /// Replaces the earlier `n_step1_clusters` (ρ-chunked, step-1 only),
+    /// which saturated well short of full recall because ρ̇ also drives
+    /// along-track spread, leaving ρ-chunks angularly non-compact.
+    pub max_search_cones: usize,
+
+    /// Half-angle of the cones laid down by
+    /// [`sky_cover_regions`](crate::topocentric_kf::kalman_bank::ellipse_region_finder::sky_cover_regions),
+    /// in **arcseconds**, used only when [`Self::radius_strategy`] is an
+    /// unclamped variant and therefore reports no natural tiling scale of its
+    /// own (see [`RadiusStrategy::clamp_rad`]). With the clamped strategies
+    /// used in practice this value is ignored.
+    ///
+    /// Serialization
+    /// -------------
+    /// Parsed with [`de_angle_arcsec`], so `1800.0`, `"30 arcmin"` and
+    /// `"0.5 deg"` are all accepted.
+    #[serde(deserialize_with = "de_angle_arcsec")]
+    pub cone_half_arcsec: f64,
+
     /// Minimum mixture predictive likelihood (unitless, a Gaussian density
     /// value — see
     /// [`SearchRegion::mixture_likelihood`](crate::topocentric_kf::kalman_bank::ellipse_region_finder::SearchRegion::mixture_likelihood))
@@ -311,6 +363,25 @@ pub struct NightAdvanceParams {
     pub photometric_sigma_mag: f64,
 }
 
+impl NightAdvanceParams {
+    /// Cone half-angle (radians) for
+    /// [`sky_cover_regions`](crate::topocentric_kf::kalman_bank::ellipse_region_finder::sky_cover_regions).
+    ///
+    /// Prefers the clamp [`Self::radius_strategy`] already imposes, so the
+    /// cover tiles at exactly the granularity a single cone is allowed to
+    /// reach — a larger cone would just be clamped away, a smaller one would
+    /// multiply queries for nothing. Falls back to [`Self::cone_half_arcsec`]
+    /// for the unclamped strategies, which advertise no scale of their own.
+    ///
+    /// `n_components` selects the clamp that actually applies — see
+    /// [`RadiusStrategy::clamp_rad`].
+    pub fn cone_half_rad(&self, n_components: usize) -> f64 {
+        self.radius_strategy
+            .clamp_rad(n_components)
+            .unwrap_or((self.cone_half_arcsec / 3600.0_f64).to_radians())
+    }
+}
+
 impl Default for NightAdvanceParams {
     fn default() -> Self {
         Self {
@@ -322,6 +393,8 @@ impl Default for NightAdvanceParams {
                 inner: MixOrMax::MixtureCovariance,
                 max_arcsec: 30. * 60., // 30 arcminutes
             },
+            max_search_cones: 0,
+            cone_half_arcsec: 30. * 60., // 30 arcminutes
             likelihood_threshold: 0.0,
             branch_cap: 4,
             n_scan: 1,
@@ -378,6 +451,14 @@ impl Validate for NightAdvanceParams {
             self.branch_cap,
             1,
             "set branch_cap to at least 1 branch per lineage, e.g. 4",
+        ) {
+            errors.push(e);
+        }
+        // No lower-bound check: 0 is meaningful here (disables the sky cover).
+        if let Some(e) = check_finite_positive(
+            "cone_half_arcsec",
+            self.cone_half_arcsec,
+            "set cone_half_arcsec to a positive angle, e.g. 1800.0 or \"30 arcmin\"",
         ) {
             errors.push(e);
         }

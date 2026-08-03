@@ -14,7 +14,10 @@ use crate::{
     topocentric_kf::{
         constants::MAX_INNOVATION_DET,
         kalman_bank::BankEvent,
-        single_kalman::{KFState, KFStateSnapshot, update::wrap_angle},
+        single_kalman::{
+            KFState, KFStateSnapshot,
+            update::{regularize_covariance_2x2, try_invert_2x2, wrap_angle},
+        },
     },
 };
 
@@ -214,7 +217,11 @@ impl<'state_lf> Hypothesis<'state_lf> {
             HypothesisStepResult::Failed
         })?;
 
-        let s_inv = s.try_inverse().ok_or_else(|| {
+        // Closed-form inverse rather than `nalgebra`'s generic `try_inverse()`
+        // — see `try_invert_2x2`'s doc: it rejects some already-regularized
+        // (via `measurement_innovation`'s `regularize_covariance_2x2` call)
+        // matrices whose determinant is, in fact, comfortably positive.
+        let s_inv = try_invert_2x2(&s).ok_or_else(|| {
             BankEvent::InnovationCovarianceNotInvertible { hyp_id: self.id }.emit();
             HypothesisStepResult::Failed
         })?;
@@ -392,7 +399,12 @@ fn measurement_innovation(
     let mut nu = z - predicted;
     nu[0] = wrap_angle(nu[0]); // Wrap RA difference into (−π, π].
 
-    let s = kf.sky_covariance()? + observation_noise_matrix(coord);
+    // Regularized (symmetrized + eigenvalue-floored) — see
+    // `regularize_covariance_2x2`'s doc: after enough real updates, pure
+    // f64 round-off can leave this non-symmetric/non-PSD, which would
+    // otherwise collapse this hypothesis (and possibly the whole lineage)
+    // over numerical noise rather than a real statistical inconsistency.
+    let s = regularize_covariance_2x2(kf.sky_covariance()? + observation_noise_matrix(coord));
 
     Ok((nu, s))
 }
