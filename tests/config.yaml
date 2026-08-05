@@ -39,7 +39,7 @@ advance_params:
     - 2.35e-13
     - 2.35e-13
   photometric_sigma_mag: 0.35
-  quick_reject_radius_rad: "3.5 arcmin"
+  quick_reject_radius_rad: "30 arcmin"
   radius_strategy:
     Clamped:
       inner: MixtureCovariance
@@ -55,11 +55,11 @@ kfbank_config:
       start: 100
       end: 1
       n_obs_full: 5
-  gate_chi2: 23.0
+  gate_chi2: 100.0
   likelihood_window: 3
   merge_position_au: 0.02
   min_hypotheses: 1
-  search_region_chi2: 23.0
+  search_region_chi2: 100.0
   weight_floor: 0.0001
 
 seeding_grid_config:

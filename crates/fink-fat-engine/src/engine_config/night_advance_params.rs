@@ -13,9 +13,15 @@
 //!    visit (`quick_reject_radius_rad`).
 //! 3. Build a search region for surviving lineages and look up candidate
 //!    observations in it (`obs_noise`, `top_k`, `radius_strategy`,
-//!    `likelihood_threshold`).
+//!    `likelihood_threshold`), then refine the surviving candidates with an
+//!    optional post-gate filter cascade (`candidate_photometric_max_delta_mag`,
+//!    `candidate_cross_track_k_sigma`, `candidate_cross_track_floor_arcsec`,
+//!    `candidate_rel_likelihood_alpha`, `max_candidates_per_visit`) before any
+//!    branch is spawned.
 //! 4. Prune the resulting branch tree, per-lineage and across the whole
-//!    night (`branch_cap`, `n_scan`, `max_lineage_lifetime_nights`).
+//!    night (`branch_cap`, `n_scan`, `max_lineage_lifetime_nights`), keeping
+//!    the reconstruction of every credible lineage that leaves the live set
+//!    (`archive_min_real_updates`).
 //! 5. Score the null-detection hypothesis for lineages predicted bright
 //!    enough to have been seen (`limiting_magnitude`,
 //!    `completeness_width_mag`), and score each real candidate's
@@ -250,6 +256,75 @@ pub struct NightAdvanceParams {
     /// (keep everything the gate accepts).
     pub likelihood_threshold: f64,
 
+    /// Max `|observed_magnitude - predicted_magnitude|` a candidate may have
+    /// to survive the post-gate filter cascade — see
+    /// [`crate::topocentric_kf::branching::candidate_filters::apply_candidate_filters`].
+    /// A no-op whenever the lineage has no photometric history yet
+    /// (`predicted_magnitude` is `None`), same convention as
+    /// [`Self::photometric_sigma_mag`]'s LLR term.
+    ///
+    /// Units: magnitudes. `0.0` **disables this stage** and is the current
+    /// default. Validated (eval, full ZTF-cadence dataset): `2.0` removes
+    /// ~9% of remaining bad candidates for 0.56% recall loss, negligible
+    /// cost to NEO recall.
+    pub candidate_photometric_max_delta_mag: f64,
+
+    /// Cross-track gate: rejects a candidate whose offset perpendicular to
+    /// the bank's predicted apparent-motion direction exceeds
+    /// `candidate_cross_track_k_sigma · σ_cross` (floored at
+    /// [`Self::candidate_cross_track_floor_arcsec`]), where `σ_cross` is the
+    /// predicted mixture's cross-track spread — see
+    /// [`crate::topocentric_kf::branching::candidate_filters::apply_candidate_filters`].
+    /// Motivated by prediction error being along-track dominated (rate/
+    /// timing uncertainty) while astrometric clutter lands isotropically in
+    /// the search region.
+    ///
+    /// Units: dimensionless (multiple of σ_cross). `0.0` **disables this
+    /// stage** and is the current default. Validated: `5.0` removes ~5% of
+    /// remaining bad candidates for a 0.001% recall loss, zero NEO cost.
+    pub candidate_cross_track_k_sigma: f64,
+
+    /// Floor (arcsec) applied to σ_cross before scaling by
+    /// [`Self::candidate_cross_track_k_sigma`], avoiding an overly tight
+    /// gate when the mixture's cross-track spread is numerically tiny (e.g.
+    /// a well-converged bank with very few surviving hypotheses). Only used
+    /// while the gate above is enabled.
+    ///
+    /// Units: arcseconds. Validated value: `2.0`.
+    pub candidate_cross_track_floor_arcsec: f64,
+
+    /// Relative-likelihood gate ("ambiguity check" — Cao et al., PKF):
+    /// within one visit's candidate list, keep only candidates whose
+    /// [`CandidateMatch::likelihood`](crate::topocentric_kf::branching::candidate_search::CandidateMatch::likelihood)
+    /// is at least this fraction of the visit's best candidate — see
+    /// [`crate::topocentric_kf::branching::candidate_filters::apply_candidate_filters`].
+    ///
+    /// Units: dimensionless fraction in `[0, 1]`. `0.0` **disables this
+    /// stage** and is the current default. Validated: `0.01` removes ~41%
+    /// of remaining bad candidates for a 0.02% recall loss, zero NEO cost —
+    /// the single best-performing gate of the cascade.
+    pub candidate_rel_likelihood_alpha: f64,
+
+    /// Hard cap on candidates kept per visit, ranked by the same combined
+    /// astrometric+photometric log-likelihood-ratio used downstream to rank
+    /// branches (see
+    /// [`crate::topocentric_kf::branching::llr_score::observation_llr_delta`]/
+    /// [`photometric_llr_delta`](crate::topocentric_kf::branching::llr_score::photometric_llr_delta)),
+    /// applied one stage earlier — before any branch exists — via
+    /// [`crate::topocentric_kf::branching::candidate_filters::apply_candidate_filters`].
+    /// Unlike the gates above, this bounds a visit's surviving candidate
+    /// count (and therefore branching cost) *by construction*, regardless
+    /// of how many candidates pass the other stages.
+    ///
+    /// Not to be confused with [`Self::top_k`] (which selects hypotheses
+    /// *within* a bank's own mixture) — this field caps *candidates*, a
+    /// different stage of the pipeline.
+    ///
+    /// Dimensionless count. `0` **disables this stage** and is the current
+    /// default. Validated: `5` removes ~30% of remaining bad candidates for
+    /// a 0.04% recall loss, zero NEO cost.
+    pub max_candidates_per_visit: usize,
+
     /// Top-B cap: maximum number of branches kept **per lineage**, applied
     /// via [`crate::topocentric_kf::branching::pruning::cap_top_b_per_lineage`] after *every visit* — not just once
     /// per night, since branch counts multiply at every branching event
@@ -285,11 +360,25 @@ pub struct NightAdvanceParams {
     /// Without this, the number of live lineages is monotone increasing for
     /// the whole run (noise lineages and never-recovered fragments keep
     /// producing a "null" branch forever) — see
-    /// `branch_lifetime_and_footprint.md` in the eval reports. Purging a
-    /// lineage this way loses no already-reconstructed trajectory: by
-    /// definition it hasn't consumed a real observation in that many
-    /// nights, and a real object that reappears later is simply
-    /// re-discovered as a new lineage via `seed_new_lineages_from_leftovers`.
+    /// `branch_lifetime_and_footprint.md` in the eval reports.
+    ///
+    /// # What purging does and does not cost
+    ///
+    /// A purged lineage stops being propagated, which is the entire point:
+    /// no more widening error box, no more mis-associations, no more
+    /// per-visit `KFBank` propagation. Its already-accumulated reconstruction
+    /// is **not** necessarily lost — see
+    /// [`Self::archive_min_real_updates`], which decides whether the arc
+    /// leaves as an
+    /// [`ArchivedTrajectory`](crate::topocentric_kf::branching::ArchivedTrajectory)
+    /// or is discarded outright.
+    ///
+    /// (Earlier revisions of this doc claimed purging "loses no
+    /// already-reconstructed trajectory" because a reappearing object gets
+    /// re-discovered. That was wrong: re-discovery recovers *future*
+    /// detections, never the arc already built. Measured on a 200-night run,
+    /// enabling this pass without archiving moved 37 561 trajectories to
+    /// "not reconstructed at all".)
     ///
     /// Dimensionless count of nights. `0` **disables this pass entirely**
     /// (no lineage is ever purged for staleness) — the default, and the
@@ -322,6 +411,32 @@ pub struct NightAdvanceParams {
     /// natural default: "at best, no better than pure clutter." Has no
     /// effect while `max_lineage_lifetime_nights == 0` (pass disabled).
     pub stale_llr_floor: f64,
+
+    /// Minimum number of **real** (non-null) observations a lineage purged by
+    /// `max_lineage_lifetime_nights` must have consumed for its reconstruction
+    /// to be retained as an
+    /// [`ArchivedTrajectory`](crate::topocentric_kf::branching::ArchivedTrajectory)
+    /// instead of discarded — see
+    /// [`crate::topocentric_kf::branching::pruning::purge_stale_lineages`].
+    ///
+    /// Archiving decouples "stop propagating this lineage" (cheap, and the
+    /// reason the purge exists) from "throw away what it reconstructed"
+    /// (pure loss). This threshold decides which purged arcs are worth
+    /// reporting.
+    ///
+    /// The test is on the real-update count rather than `cumulative_llr`
+    /// because [`Branch::from_null`](crate::topocentric_kf::branching::Branch::from_null)
+    /// leaves that counter untouched: a lineage still sitting at `1` was
+    /// seeded from a pair and never confirmed by any later night — the
+    /// two-point noise tracklet that should not reach the output. An arc
+    /// corroborated across several nights is worth keeping whatever coasting
+    /// penalty it accumulated on the way out.
+    ///
+    /// Dimensionless count. `0` archives **every** purged lineage (maximum
+    /// recovery, and the value to measure first); raise it (2, 3, …) if the
+    /// archive turns out to re-import contaminated arcs. Has no effect while
+    /// `max_lineage_lifetime_nights == 0` (pass disabled).
+    pub archive_min_real_updates: usize,
 
     /// Survey/field limiting magnitude for this night, used as the midpoint
     /// of the null branch's detection-probability curve — see
@@ -396,10 +511,16 @@ impl Default for NightAdvanceParams {
             max_search_cones: 0,
             cone_half_arcsec: 30. * 60., // 30 arcminutes
             likelihood_threshold: 0.0,
+            candidate_photometric_max_delta_mag: 0.0,
+            candidate_cross_track_k_sigma: 0.0,
+            candidate_cross_track_floor_arcsec: 2.0,
+            candidate_rel_likelihood_alpha: 0.0,
+            max_candidates_per_visit: 0,
             branch_cap: 4,
             n_scan: 1,
             max_lineage_lifetime_nights: 0,
             stale_llr_floor: 0.0,
+            archive_min_real_updates: 0,
             limiting_magnitude: 21.0,
             completeness_width_mag: 0.4,
             photometric_sigma_mag: 0.35,
@@ -443,6 +564,34 @@ impl Validate for NightAdvanceParams {
             "likelihood_threshold",
             self.likelihood_threshold,
             "set likelihood_threshold to a non-negative density, e.g. 0.0 to disable this stage",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_nonneg(
+            "candidate_photometric_max_delta_mag",
+            self.candidate_photometric_max_delta_mag,
+            "set candidate_photometric_max_delta_mag to a non-negative magnitude, e.g. 0.0 to disable this stage or 2.0",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_nonneg(
+            "candidate_cross_track_k_sigma",
+            self.candidate_cross_track_k_sigma,
+            "set candidate_cross_track_k_sigma to a non-negative multiple of sigma, e.g. 0.0 to disable this stage or 5.0",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_nonneg(
+            "candidate_cross_track_floor_arcsec",
+            self.candidate_cross_track_floor_arcsec,
+            "set candidate_cross_track_floor_arcsec to a non-negative angle, e.g. 2.0",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_nonneg(
+            "candidate_rel_likelihood_alpha",
+            self.candidate_rel_likelihood_alpha,
+            "set candidate_rel_likelihood_alpha to a non-negative fraction, e.g. 0.0 to disable this stage or 0.01",
         ) {
             errors.push(e);
         }

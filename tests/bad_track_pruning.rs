@@ -164,7 +164,7 @@ fn stale_pruning_preserves_real_objects_and_removes_lineages() {
     let tmp = TempDir::new().expect("tempdir");
     let combined = tmp.path().join("combined.parquet");
     write_combined_parquet(&paths, &combined);
-    let (_df, obs_dataset) = load_data(combined.to_str().expect("utf8"), None);
+    let obs_dataset = load_data(combined.to_str().expect("utf8"), None);
     let ground_truth = ObsTrajLookup::build(&obs_dataset);
     assert!(
         ground_truth.has_ground_truth(),

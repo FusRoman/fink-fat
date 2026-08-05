@@ -48,8 +48,10 @@
 //! `KFState`-free functions: LLR scoring, clutter density, detection
 //! probability, and candidate search over hand-built `SearchRegion` values.
 
+pub mod archive;
 pub mod branch;
 pub mod branch_id;
+pub mod candidate_filters;
 pub mod candidate_search;
 pub mod collection;
 pub mod detection_probability;
@@ -59,6 +61,7 @@ pub mod orchestrate;
 pub mod pruning;
 pub mod visit;
 
+pub use archive::ArchivedTrajectory;
 pub use branch::{Branch, BranchSnapshot};
 pub use branch_id::BranchId;
 pub use collection::{BranchCollection, BranchCollectionSnapshot, SNAPSHOT_FILENAME};
