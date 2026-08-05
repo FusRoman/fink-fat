@@ -106,17 +106,42 @@ pub struct NightAdvanceParams {
     /// Context
     /// -------
     /// For every lineage, at every visit, this is the
-    /// search radius used to test — via a HEALPix neighbor lookup, no
-    /// Kepler solve — whether *any* alert in the visit falls near the
-    /// lineage's linearly-extrapolated sky position; a lineage that fails
-    /// this test never pays for the real (expensive) propagation this
-    /// visit. Must be **generous**: it has to cover both the linear
-    /// extrapolation's own error (curvature/eccentricity effects it
-    /// ignores) and realistic positional uncertainty growth over the
-    /// elapsed time since the lineage's last update. Too small silently
-    /// drops real associations (a lineage never gets the chance to match);
-    /// too large only costs an occasional wasted full propagation — when
-    /// in doubt, err large.
+    /// search radius used to test — no Kepler solve — whether *any* alert in
+    /// the visit falls near the lineage's extrapolated sky position; a
+    /// lineage that fails this test never pays for the real (expensive)
+    /// propagation this visit. Too small silently drops real associations (a
+    /// lineage never gets the chance to match); too large costs a wasted
+    /// full propagation (`n_hypotheses` Kepler solves) per lineage per visit,
+    /// which is the dominant cost of a night.
+    ///
+    /// # This value is quantized to whole HEALPix cells
+    ///
+    /// The candidate cells come from
+    /// [`HealpixBinner::neighbors`](crate::spacetime_bucket::healpix_binner::HealpixBinner),
+    /// which returns **whole cells** and, below one cell radius, ignores the
+    /// requested radius entirely: it hands back a fixed 3×3 block. At
+    /// `healpix_depth: 8` a cell radius is ≈ 13.7 arcmin, so **anything set
+    /// below that has no effect at all** — `1 arcmin`, `3.5 arcmin` and
+    /// `13 arcmin` select exactly the same cells, an effective radius of
+    /// ~20 arcmin. Tightening this value is not a way to save time.
+    ///
+    /// Crossing *above* the cell radius switches to a cone coverage whose
+    /// cell count grows as `(radius / cell)²`, and — far more costly — many
+    /// more lineages pass and pay for a full propagation. Widening is
+    /// therefore expensive: measured on a full dataset, 3.5 → 30 arcmin took
+    /// `mot_analysis` from ~6 minutes to over 30 for no measurable recall
+    /// gain. To change the granularity, change `healpix_depth`, not this.
+    ///
+    /// # This is no longer the knob that fixes missed associations
+    ///
+    /// Historically the extrapolation started from the branch's own bank
+    /// epoch, which could be weeks stale, so its `dt²` error dwarfed any
+    /// sane radius and widening this value was the only (bad) remedy. The
+    /// origin is now re-anchored once per night
+    /// ([`PrefilterAnchor`](crate::topocentric_kf::branching::orchestrate::PrefilterAnchor)),
+    /// keeping `dt` under one night. Set this to cover the residual
+    /// intra-night extrapolation error plus astrometric scatter, not
+    /// multi-week drift.
     ///
     /// Serialization
     /// -------------
