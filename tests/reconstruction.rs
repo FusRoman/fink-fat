@@ -150,7 +150,7 @@ fn alternating_single_and_batch_modes_reconstruct_known_trajectories() {
     let all_files: Vec<PathBuf> = nights.iter().map(|nf| nf.path.clone()).collect();
     let combined_gt_path = batch_dir.path().join("combined_ground_truth.parquet");
     write_combined_parquet(&all_files, &combined_gt_path);
-    let (_df, obs_dataset) = load_data(combined_gt_path.to_str().expect("utf8 path"), None);
+    let obs_dataset = load_data(combined_gt_path.to_str().expect("utf8 path"), None);
     let ground_truth = ObsTrajLookup::build(&obs_dataset);
     assert!(
         ground_truth.has_ground_truth(),
@@ -186,26 +186,26 @@ fn alternating_single_and_batch_modes_reconstruct_known_trajectories() {
     // this fixture today. Every best-matching branch is 100% pure (no
     // cross-object contamination) — recall is the only axis that varies.
     let baseline: HashMap<u32, (usize, usize)> = HashMap::from([
-        (1, (247, 218)),
+        (1, (247, 245)),
         (2, (237, 224)),
-        (3, (236, 222)),
+        (3, (236, 231)),
         (4, (233, 208)),
         (5, (232, 190)),
-        (6, (227, 219)),
+        (6, (227, 227)),
         (7, (225, 224)),
         (8, (223, 223)),
         (9, (218, 217)),
         (10, (217, 193)),
         (11, (215, 210)),
-        (12, (215, 204)),
-        (13, (214, 173)),
+        (12, (215, 215)),
+        (13, (214, 181)),
         (14, (212, 212)),
-        (15, (212, 192)),
-        (16, (211, 182)),
-        (17, (210, 185)),
-        (19, (210, 207)),
+        (15, (212, 196)),
+        (16, (211, 209)),
+        (17, (210, 200)),
+        (19, (210, 210)),
         (20, (210, 208)),
-        (21, (210, 197)),
+        (21, (210, 195)),
     ]);
 
     // Collected rather than asserted inline, so the full table always prints

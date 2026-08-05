@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 
+use crate::topocentric_kf::branching::archive::ArchivedTrajectory;
 use crate::topocentric_kf::branching::branch::Branch;
 
 use crate::logging::LogTarget;
@@ -29,6 +30,10 @@ pub enum PruningEvent {
         n_before: usize,
         n_after: usize,
         n_lineages_purged: usize,
+        /// How many of `n_lineages_purged` had their reconstruction retained
+        /// as an [`ArchivedTrajectory`] rather than discarded — see
+        /// [`purge_stale_lineages`].
+        n_lineages_archived: usize,
     },
 }
 
@@ -57,8 +62,9 @@ impl PruningEvent {
                 n_before,
                 n_after,
                 n_lineages_purged,
+                n_lineages_archived,
             } => tracing::debug!(
-                target: PruningEvent::TARGET, n_before, n_after, n_lineages_purged, "Stale lineage purge"
+                target: PruningEvent::TARGET, n_before, n_after, n_lineages_purged, n_lineages_archived, "Stale lineage purge"
             ),
         }
     }
@@ -178,36 +184,6 @@ pub fn apply_n_scan_pruning<'state_lf, 'bank_config>(
     survivors
 }
 
-/// Purge every lineage whose freshest branch hasn't consumed a real
-/// observation in at least `max_lifetime_nights` nights **and** whose best
-/// branch's `cumulative_llr` has fallen to or below `stale_llr_floor` — the
-/// whole `lineage_id` is dropped, not just its weakest branches.
-///
-/// Unlike [`cap_top_b_per_lineage`]/[`apply_n_scan_pruning`], which trim the
-/// width of a lineage's branch tree, this can remove an entire lineage.
-/// Age alone is not a safe trigger: [`null_branch_llr_delta`](super::llr_score::null_branch_llr_delta)
-/// barely penalizes (or, when the lineage falls outside a visit's footprint
-/// entirely, doesn't touch at all) a lineage predicted too faint or
-/// currently unobservable to expect a detection — exactly the case of a
-/// real object going quiet for a long, legitimate stretch (weather, lunar
-/// phase, orbital geometry). Requiring the LLR floor too means only a
-/// lineage whose own scoring judges it *less plausible than the clutter
-/// background* is dropped, regardless of how long it's been stale.
-///
-/// # Arguments
-/// * `branches` – Live branches, already capped by [`cap_top_b_per_lineage`]
-///   and [`apply_n_scan_pruning`].
-/// * `max_lifetime_nights` – Staleness threshold, in nights. `0` disables
-///   this pass entirely (every branch is kept, whatever its age) — the
-///   historical behavior, and the default.
-/// * `stale_llr_floor` – `cumulative_llr` ceiling a lineage's best branch
-///   must be at or below to be purged, once stale. Has no effect while
-///   `max_lifetime_nights == 0`.
-/// * `current_step` – Current night index.
-///
-/// # Returns
-/// The surviving branches: every branch belonging to a lineage still within
-/// its lifetime budget or still LLR-plausible, unchanged.
 /// Pure decision predicate for [`purge_stale_lineages`]: is this lineage a
 /// stale zombie that should be dropped?
 ///
@@ -236,14 +212,67 @@ pub(crate) fn lineage_is_stale(
         && best_llr.partial_cmp(&stale_llr_floor) != Some(std::cmp::Ordering::Greater)
 }
 
+/// Stop propagating every lineage whose freshest branch hasn't consumed a
+/// real observation in at least `max_lifetime_nights` nights **and** whose
+/// best branch's `cumulative_llr` has fallen to or below `stale_llr_floor` —
+/// the whole `lineage_id` leaves the live set, not just its weakest branches.
+///
+/// Unlike [`cap_top_b_per_lineage`]/[`apply_n_scan_pruning`], which trim the
+/// width of a lineage's branch tree, this removes an entire lineage.
+/// Age alone is not a safe trigger: [`null_branch_llr_delta`](super::llr_score::null_branch_llr_delta)
+/// barely penalizes (or, when the lineage falls outside a visit's footprint
+/// entirely, doesn't touch at all) a lineage predicted too faint or
+/// currently unobservable to expect a detection — exactly the case of a
+/// real object going quiet for a long, legitimate stretch (weather, lunar
+/// phase, orbital geometry). Requiring the LLR floor too means only a
+/// lineage whose own scoring judges it *less plausible than the clutter
+/// background* is dropped, regardless of how long it's been stale.
+///
+/// # Leaving the live set is not the same as being discarded
+///
+/// Removing a lineage from the live set is about **cost and contamination**:
+/// a coasting zombie keeps widening its error box, keeps mis-associating, and
+/// keeps paying a full [`KFBank`](crate::topocentric_kf::kalman_bank::KFBank)
+/// propagation every visit. None of that requires throwing away what it
+/// already reconstructed. So a lineage credible enough to be worth reporting
+/// (at least `archive_min_real_updates` real observations) leaves as an
+/// [`ArchivedTrajectory`] — its association history preserved, its Kalman
+/// state dropped — while the rest is discarded outright.
+///
+/// This split matters: measured on a 200-night run, purging without archiving
+/// removed ~52 000 contaminated reconstructions (the goal) but also erased
+/// 37 561 valid ones (pure collateral).
+///
+/// # Arguments
+/// * `branches` – Live branches, already capped by [`cap_top_b_per_lineage`]
+///   and [`apply_n_scan_pruning`].
+/// * `max_lifetime_nights` – Staleness threshold, in nights. `0` disables
+///   this pass entirely (every branch is kept, whatever its age) — the
+///   historical behavior, and the default.
+/// * `stale_llr_floor` – `cumulative_llr` ceiling a lineage's best branch
+///   must be at or below to be purged, once stale. Has no effect while
+///   `max_lifetime_nights == 0`.
+/// * `archive_min_real_updates` – Minimum real (non-null) observations a
+///   purged lineage must have consumed for its reconstruction to be archived
+///   rather than discarded. `0` archives every purged lineage.
+/// * `current_step` – Current night index.
+///
+/// # Returns
+/// `(survivors, archived)` — the branches still being propagated (every
+/// branch of a lineage within its lifetime budget or still LLR-plausible,
+/// unchanged), and the reconstructions of the lineages that just left.
 pub fn purge_stale_lineages<'state_lf, 'bank_config>(
     branches: Vec<Branch<'state_lf, 'bank_config>>,
     max_lifetime_nights: usize,
     stale_llr_floor: f64,
+    archive_min_real_updates: usize,
     current_step: usize,
-) -> Vec<Branch<'state_lf, 'bank_config>> {
+) -> (
+    Vec<Branch<'state_lf, 'bank_config>>,
+    Vec<ArchivedTrajectory>,
+) {
     if max_lifetime_nights == 0 {
-        return branches;
+        return (branches, Vec::new());
     }
 
     let n_before = branches.len();
@@ -256,38 +285,79 @@ pub fn purge_stale_lineages<'state_lf, 'bank_config>(
     }
 
     let mut n_lineages_purged = 0;
-    let survivors: Vec<_> = by_lineage
-        .into_values()
-        .flat_map(|lineage_branches| {
-            let freshest_update = lineage_branches
-                .iter()
-                .map(|b| b.last_real_update_step)
-                .max()
-                .unwrap_or(0);
-            let age = current_step.saturating_sub(freshest_update);
+    let mut archived: Vec<ArchivedTrajectory> = Vec::new();
+    let mut survivors: Vec<Branch<'state_lf, 'bank_config>> = Vec::new();
 
-            let best_llr = lineage_branches
-                .iter()
-                .map(|b| b.cumulative_llr)
-                .fold(f64::NEG_INFINITY, f64::max);
+    for lineage_branches in by_lineage.into_values() {
+        let freshest_update = lineage_branches
+            .iter()
+            .map(|b| b.last_real_update_step)
+            .max()
+            .unwrap_or(0);
+        let age = current_step.saturating_sub(freshest_update);
 
-            if lineage_is_stale(age, best_llr, max_lifetime_nights, stale_llr_floor) {
-                n_lineages_purged += 1;
-                Vec::new()
-            } else {
-                lineage_branches
-            }
-        })
-        .collect();
+        let best_llr = lineage_branches
+            .iter()
+            .map(|b| b.cumulative_llr)
+            .fold(f64::NEG_INFINITY, f64::max);
+
+        if !lineage_is_stale(age, best_llr, max_lifetime_nights, stale_llr_floor) {
+            survivors.extend(lineage_branches);
+            continue;
+        }
+
+        n_lineages_purged += 1;
+        // Archive the same branch the staleness decision was taken on (the
+        // lineage's best by `cumulative_llr`), so what gets reported is the
+        // arc the engine itself judged most plausible.
+        let best = best_by_cumulative_llr(lineage_branches);
+        if let Some(entry) = archive_entry(&best, archive_min_real_updates, current_step) {
+            archived.push(entry);
+        }
+    }
 
     PruningEvent::StaleLineagePurgeSummary {
         n_before,
         n_after: survivors.len(),
         n_lineages_purged,
+        n_lineages_archived: archived.len(),
     }
     .emit();
 
-    survivors
+    (survivors, archived)
+}
+
+/// Turn a branch about to leave the live set into an [`ArchivedTrajectory`],
+/// or `None` if its arc is too thin to be worth reporting.
+///
+/// The credibility test is on `n_real_updates` rather than `cumulative_llr`
+/// because [`Branch::from_null`](super::Branch::from_null) leaves that counter
+/// untouched: a lineage still sitting at `1` was seeded from a pair and never
+/// confirmed by a later night, which is precisely the two-point noise tracklet
+/// that should not reach the output. A long arc, by contrast, has been
+/// corroborated across nights whatever its accumulated coasting penalty.
+///
+/// Also refuses an empty `track_ids` defensively — `designation()` panics on
+/// one, and while a live branch always carries at least its founding pair,
+/// this is the boundary where that history leaves the engine.
+fn archive_entry(
+    branch: &Branch<'_, '_>,
+    archive_min_real_updates: usize,
+    current_step: usize,
+) -> Option<ArchivedTrajectory> {
+    if branch.n_real_updates < archive_min_real_updates || branch.track_ids().is_empty() {
+        return None;
+    }
+
+    Some(ArchivedTrajectory {
+        designation: branch.designation(),
+        lineage_id: branch.lineage_id,
+        track_ids: branch.track_ids().to_vec(),
+        cumulative_llr: branch.cumulative_llr,
+        n_real_updates: branch.n_real_updates,
+        last_real_update_step: branch.last_real_update_step,
+        archived_at_step: current_step,
+    })
 }
 
 /// Pick the branch with the highest `cumulative_llr` from a non-empty group.

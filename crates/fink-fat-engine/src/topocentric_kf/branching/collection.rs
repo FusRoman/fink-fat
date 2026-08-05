@@ -28,7 +28,7 @@ use crate::{
     error::{EngineError, FinkFatError},
     spacetime_bucket::healpix_binner::HealpixBinner,
     topocentric_kf::branching::{
-        Branch, BranchSnapshot,
+        ArchivedTrajectory, Branch, BranchSnapshot,
         discovery::seed_new_lineages_from_leftovers,
         orchestrate::{GateRecord, advance_bank_collection_one_night},
     },
@@ -68,6 +68,21 @@ pub struct BranchCollection<'state_lf, 'bank_config> {
     /// a caller should pass into the next [`Self::advance_one_night`] call.
     /// `0` for a fresh/empty collection.
     pub current_step: usize,
+    /// **Cumulative** reconstructions of every lineage that stopped being
+    /// propagated, across all nights advanced so far — see
+    /// [`ArchivedTrajectory`] and
+    /// [`purge_stale_lineages`](super::pruning::purge_stale_lineages).
+    ///
+    /// Unlike `last_night_*`, this never resets: an archived arc is a
+    /// *result* of the run, not state about the night just processed. The
+    /// full output of a run is therefore `branches` (still growing) **plus**
+    /// `archived` (closed) — consumers that read only `branches` will report
+    /// every purged lineage as though it had never been reconstructed.
+    ///
+    /// Entries carry no Kalman bank and are never propagated again, so this
+    /// costs a `Vec<ObsId>` plus a few scalars each (megabytes over a full
+    /// survey run, not gigabytes).
+    pub archived: Vec<ArchivedTrajectory>,
 }
 
 /// Owned, borrow-free snapshot of a [`BranchCollection`], for persisting the
@@ -83,6 +98,10 @@ pub struct BranchCollectionSnapshot {
     pub branches: Vec<BranchSnapshot>,
     pub last_night_consumed_then_pruned_ids: HashSet<ObsId>,
     pub current_step: usize,
+    /// See [`BranchCollection::archived`]. Persisted (unlike
+    /// `last_night_gate_records`) because these are results the run would
+    /// otherwise lose across a restart.
+    pub archived: Vec<ArchivedTrajectory>,
 }
 
 use crate::logging::LogTarget;
@@ -153,6 +172,7 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
             branches: self.branches.iter().map(Branch::to_snapshot).collect(),
             last_night_consumed_then_pruned_ids: self.last_night_consumed_then_pruned_ids.clone(),
             current_step: self.current_step,
+            archived: self.archived.clone(),
         }
     }
 
@@ -174,6 +194,7 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
             last_night_consumed_then_pruned_ids: snapshot.last_night_consumed_then_pruned_ids,
             last_night_gate_records: Vec::new(),
             current_step: snapshot.current_step,
+            archived: snapshot.archived,
         }
     }
 
@@ -207,6 +228,7 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
             last_night_consumed_then_pruned_ids: HashSet::new(),
             last_night_gate_records: Vec::new(),
             current_step: 0,
+            archived: Vec::new(),
         }
     }
 
@@ -266,28 +288,40 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
         // visits internally and builds one bucket index per visit (see its
         // module doc for why a single per-night index would be wrong at
         // LSST cadence) — nothing to build here.
-        let (mut branches, consumed_observation_ids, consumed_then_pruned_ids, gate_records) =
-            if self.branches.is_empty() {
-                CollectionEvent::SkipPropagation.emit();
-                (Vec::new(), HashSet::new(), HashSet::new(), Vec::new())
-            } else {
-                CollectionEvent::Advancing.emit();
-                let outcome = advance_bank_collection_one_night(
-                    &self.branches,
-                    night_obs,
-                    obs_dataset,
-                    kalman_context,
-                    &engine_config.advance_params,
-                    &spatial_binner,
-                    current_step,
-                );
-                (
-                    outcome.branches,
-                    outcome.consumed_observation_ids,
-                    outcome.consumed_then_pruned_ids,
-                    outcome.gate_records,
-                )
-            };
+        let (
+            mut branches,
+            consumed_observation_ids,
+            consumed_then_pruned_ids,
+            gate_records,
+            archived_tonight,
+        ) = if self.branches.is_empty() {
+            CollectionEvent::SkipPropagation.emit();
+            (
+                Vec::new(),
+                HashSet::new(),
+                HashSet::new(),
+                Vec::new(),
+                Vec::new(),
+            )
+        } else {
+            CollectionEvent::Advancing.emit();
+            let outcome = advance_bank_collection_one_night(
+                &self.branches,
+                night_obs,
+                obs_dataset,
+                kalman_context,
+                &engine_config.advance_params,
+                &spatial_binner,
+                current_step,
+            );
+            (
+                outcome.branches,
+                outcome.consumed_observation_ids,
+                outcome.consumed_then_pruned_ids,
+                outcome.gate_records,
+                outcome.archived,
+            )
+        };
 
         // Must not reuse an id already held by a branch that got fully
         // pruned this night, so the max is taken over the pre-update set
@@ -337,11 +371,18 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
         }
         .emit();
 
+        // Carried over explicitly: this method returns a fresh `Self` rather
+        // than mutating, so the accumulated archive would silently reset
+        // otherwise — the exact failure this whole mechanism exists to avoid.
+        let mut archived = self.archived.clone();
+        archived.extend(archived_tonight);
+
         Ok(Self {
             branches,
             last_night_consumed_then_pruned_ids: consumed_then_pruned_ids,
             last_night_gate_records: gate_records,
             current_step: current_step + 1,
+            archived,
         })
     }
 }

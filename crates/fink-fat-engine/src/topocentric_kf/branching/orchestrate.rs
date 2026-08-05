@@ -60,7 +60,8 @@ use crate::{
     },
     topocentric_kf::{
         branching::{
-            Branch,
+            ArchivedTrajectory, Branch,
+            candidate_filters::apply_candidate_filters,
             candidate_search::{
                 SINGLE_TIME_BIN, SingleBinTimeBinner, find_candidates_for_bank,
                 find_candidates_for_bank_multi_region,
@@ -188,6 +189,15 @@ pub struct NightAdvanceOutcome<'state_lf, 'bank_config> {
     /// in one night's `night_obs` — there is no later night where it could
     /// be revisited if not resolved now.
     pub consumed_then_pruned_ids: HashSet<ObsId>,
+    /// Reconstructions of the lineages that stopped being propagated this
+    /// night — see
+    /// [`purge_stale_lineages`]. These are *results*, not state: they carry an
+    /// association history but no Kalman bank, and never re-enter `branches`.
+    /// The caller accumulates them (see
+    /// [`BranchCollection::archived`](super::collection::BranchCollection::archived)),
+    /// since a purged lineage's arc is as much an output of the run as a live
+    /// branch's.
+    pub archived: Vec<ArchivedTrajectory>,
 }
 
 /// Advance every lineage by one night, one visit (exposure epoch) at a
@@ -343,10 +353,11 @@ pub fn advance_bank_collection_one_night<'state_lf, 'bank_config>(
     // night has been folded in.
     let n_branches_before_n_scan = branches.len();
     let branches = apply_n_scan_pruning(branches, params.n_scan, current_step);
-    let branches = purge_stale_lineages(
+    let (branches, archived) = purge_stale_lineages(
         branches,
         params.max_lineage_lifetime_nights,
         params.stale_llr_floor,
+        params.archive_min_real_updates,
         current_step,
     );
     OrchestrateEvent::NightPruningSummary {
@@ -355,6 +366,11 @@ pub fn advance_bank_collection_one_night<'state_lf, 'bank_config>(
     }
     .emit();
 
+    // Deliberately live branches only, not the archived arcs: this set exists
+    // to decide which of *this night's* observations go back to the discovery
+    // pool, and a lineage purged for staleness consumed none of them (that is
+    // what made it stale). Archived observations were claimed on earlier
+    // nights, which are long past recycling.
     let surviving_ids: HashSet<ObsId> = branches
         .iter()
         .flat_map(|b| b.track_ids().iter().copied())
@@ -369,6 +385,7 @@ pub fn advance_bank_collection_one_night<'state_lf, 'bank_config>(
         gate_records,
         consumed_observation_ids,
         consumed_then_pruned_ids,
+        archived,
     }
 }
 
@@ -455,7 +472,7 @@ enum LineageOutcome<'state_lf, 'bank_config> {
 /// this visit (logged at `debug`) — the caller carries the lineage over
 /// unchanged instead, the same as when no candidate is nearby.
 #[allow(clippy::too_many_arguments)]
-fn spawn_branches_for_lineage<'state_lf, 'bank_config>(
+pub fn spawn_branches_for_lineage<'state_lf, 'bank_config>(
     lineage: &Branch<'state_lf, 'bank_config>,
     visit_bucket_index: &BucketIndex<&Observation>,
     epoch: f64,
@@ -515,9 +532,27 @@ fn spawn_branches_for_lineage<'state_lf, 'bank_config>(
 
     let predicted_magnitude = predicted_apparent_magnitude_for_bank(&predicted_bank);
 
-    let mut branches = Vec::with_capacity(candidates.matches.len() + 1);
-    let mut consumed_observation_ids = Vec::with_capacity(candidates.matches.len());
-    for candidate in &candidates.matches {
+    // Single per-visit clutter estimate at the region center, used only to
+    // rank candidates in the top-K stage below — cheaper than, and
+    // deliberately distinct from, the per-candidate density computed inside
+    // the loop for each surviving candidate's own branch LLR.
+    let region_clutter_density = local_clutter_density(
+        visit_bucket_index,
+        spatial_binner,
+        &EquCoord::new(search_region.center_ra, 0.0, search_region.center_dec, 0.0),
+    );
+    let filtered_matches = apply_candidate_filters(
+        &search_region,
+        &predicted_bank,
+        predicted_magnitude,
+        region_clutter_density,
+        candidates.matches,
+        params,
+    );
+
+    let mut branches = Vec::with_capacity(filtered_matches.len() + 1);
+    let mut consumed_observation_ids = Vec::with_capacity(filtered_matches.len());
+    for candidate in &filtered_matches {
         consumed_observation_ids.push(*candidate.observation.id());
 
         let clutter_density = local_clutter_density(
@@ -570,7 +605,7 @@ fn spawn_branches_for_lineage<'state_lf, 'bank_config>(
 /// [`spawn_branches_for_lineage`] (predicted magnitude vs. a candidate's
 /// observed magnitude) — both need the same geometry extraction, just fed
 /// into different downstream comparisons.
-fn predicted_apparent_magnitude_for_bank<'state_lf, 'bank_config>(
+pub fn predicted_apparent_magnitude_for_bank<'state_lf, 'bank_config>(
     bank: &KFBank<'state_lf, 'bank_config>,
 ) -> Option<f64> {
     let (Some(absolute_magnitude_estimate), Some(best)) =
@@ -594,7 +629,7 @@ fn predicted_apparent_magnitude_for_bank<'state_lf, 'bank_config>(
 /// Falls back to `0.5` (neutral: neither favors nor penalizes the null
 /// branch) when the bank has no magnitude history yet (`predicted_magnitude
 /// == None`).
-fn null_branch_detection_probability(
+pub fn null_branch_detection_probability(
     predicted_magnitude: Option<f64>,
     limiting_magnitude: f64,
     completeness_width_mag: f64,
