@@ -39,7 +39,7 @@
 //! that matters once null branches can be spawned hundreds of times a
 //! night (once per visit with no candidate) instead of once per night.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use nalgebra::Vector3;
@@ -160,6 +160,134 @@ pub struct GateRecord {
     pub gated_obs_ids: Vec<ObsId>,
 }
 
+/// A branch's angular position/rate, freshly propagated to this night's
+/// reference epoch, used as the origin of the coarse pre-filter's linear
+/// extrapolation.
+///
+/// # Why this exists
+///
+/// [`lineage_might_be_in_visit`] extrapolates in a straight line, while the
+/// real dynamics is a two-body solve: its error grows as `½·α̈·dt²` against
+/// an acceptance radius that does **not** grow with `dt`. A branch that
+/// fails the pre-filter is carried over without propagation, so its bank
+/// epoch does not advance and `dt` keeps growing on every consecutive miss —
+/// a positive feedback loop.
+///
+/// Measured on a full ZTF-cadence run, the observations lost to the
+/// pre-filter sat a median of **45 arcsec** from where a correct two-body
+/// propagation put them (0.034 of the search-region radius) — comfortably
+/// inside any sane radius — after a median of **22.8 days** without a real
+/// update. The prediction was not the problem; extrapolating it linearly
+/// over three weeks was. Widening the radius is the wrong lever: it cannot
+/// catch a `dt²` error without becoming so large that every lineage passes,
+/// which is what makes the pre-filter's cost explode.
+///
+/// So instead of widening the radius, keep the origin fresh: propagate the
+/// MAP hypothesis **once per night per branch** and extrapolate from there.
+/// Within a night `dt < ~0.35 day`, where the linear model is excellent.
+///
+/// Cost: one Kepler solve per branch per night, against
+/// [`KFBank::predict_to`]'s `n_hypotheses` solves (≈87 on that same run) per
+/// branch per *passing visit*. The anchor pays for itself as soon as it
+/// avoids roughly one false positive in a hundred.
+#[derive(Debug, Clone, Copy)]
+pub struct PrefilterAnchor {
+    /// Epoch this anchor was propagated to (MJD TT).
+    pub epoch: f64,
+    /// Right ascension at `epoch` (rad).
+    pub ra: f64,
+    /// Declination at `epoch` (rad).
+    pub dec: f64,
+    /// dRA/dt (rad/day, **not** `cos(dec)`-reduced — see `KFState`'s
+    /// state-vector doc).
+    pub ra_dot: f64,
+    /// dDec/dt (rad/day).
+    pub dec_dot: f64,
+}
+
+impl PrefilterAnchor {
+    /// Age (days) below which a branch's stored angular state is considered
+    /// a good enough origin, so no anchor is built.
+    ///
+    /// A night spans ~8h, so anything updated during the previous night is
+    /// already inside this window. The linear model's error over a day is
+    /// orders of magnitude below the ~13.7 arcmin HEALPix cell the pre-filter
+    /// resolves at; it only becomes a problem over the multi-week gaps
+    /// documented on this type.
+    pub const FRESH_ENOUGH_DAYS: f64 = 1.0;
+
+    /// Propagate `branch`'s MAP hypothesis to `epoch` — one Kepler solve.
+    ///
+    /// `None` if the branch has no live hypothesis or that hypothesis fails
+    /// to propagate; callers then fall back to the branch's stored state.
+    ///
+    /// Also `None` — **without** paying the Kepler solve — when the branch's
+    /// bank is already within [`Self::FRESH_ENOUGH_DAYS`] of `epoch`: over
+    /// such a short span the stored angular rates extrapolate the position to
+    /// far better than one HEALPix cell, so re-anchoring would buy nothing.
+    /// In production most branches were updated the previous night and take
+    /// this path, which is what keeps the anchor essentially free; the ones
+    /// that pay for it are exactly the stale branches it exists to rescue.
+    ///
+    /// Shared by the engine and by `fink-fat-eval`'s `mot_analysis`, which
+    /// must reproduce the production pre-filter exactly for its
+    /// `no_prefilt%` column to keep measuring the engine.
+    pub fn for_branch(
+        branch: &Branch<'_, '_>,
+        epoch: f64,
+        r_obs: Vector3<f64>,
+        v_obs: Vector3<f64>,
+    ) -> Option<Self> {
+        let best = branch.bank.best()?;
+        if (epoch - best.kf.epoch).abs() <= Self::FRESH_ENOUGH_DAYS {
+            return None;
+        }
+        let kf = best.kf.predict(epoch, r_obs, v_obs).ok()?;
+        Some(Self {
+            epoch: kf.epoch,
+            ra: kf.state[0],
+            dec: kf.state[1],
+            ra_dot: kf.state[2],
+            dec_dot: kf.state[3],
+        })
+    }
+}
+
+/// Propagate every branch's MAP hypothesis to `epoch`, keyed by `branch_id`,
+/// for [`lineage_might_be_in_visit`] to extrapolate from — see
+/// [`PrefilterAnchor`].
+///
+/// Only the incoming (previous-night) branches need this: anything spawned
+/// during the night already carries a bank propagated to the visit epoch it
+/// was born at, so its own state is fresh by construction.
+///
+/// A branch whose MAP hypothesis fails to propagate is simply absent from
+/// the map; the pre-filter then falls back to that branch's stored state,
+/// i.e. exactly the previous behavior.
+fn compute_prefilter_anchors(
+    lineages: &[Branch<'_, '_>],
+    epoch: f64,
+    r_obs: Vector3<f64>,
+    v_obs: Vector3<f64>,
+) -> HashMap<u64, PrefilterAnchor> {
+    // Collected into a `Vec` first so the map can be built at exactly the
+    // right capacity: rayon's `collect()` into a `HashMap` cannot be given
+    // one, and rehashing a map this hot is pure waste. Only the stale
+    // branches land here (see [`PrefilterAnchor::for_branch`]), so this is
+    // typically far smaller than `lineages`.
+    let anchors: Vec<(u64, PrefilterAnchor)> = lineages
+        .par_iter()
+        .filter_map(|branch| {
+            PrefilterAnchor::for_branch(branch, epoch, r_obs, v_obs)
+                .map(|anchor| (branch.branch_id, anchor))
+        })
+        .collect();
+
+    let mut by_branch = HashMap::with_capacity(anchors.len());
+    by_branch.extend(anchors);
+    by_branch
+}
+
 /// Result of advancing a set of lineages by one night.
 pub struct NightAdvanceOutcome<'state_lf, 'bank_config> {
     /// Surviving branches after this night's cap + N-scan pruning.
@@ -237,6 +365,35 @@ pub fn advance_bank_collection_one_night<'state_lf, 'bank_config>(
     .emit();
     let visit_progress_modulo = (visits.len() / 100).max(1);
 
+    // Fresh origin for this night's coarse pre-filter — one Kepler solve per
+    // incoming branch, against `predict_to`'s `n_hypotheses` solves per
+    // branch per passing visit. See `PrefilterAnchor` for why extrapolating
+    // from a weeks-old epoch was silently starving the association.
+    //
+    // Anchored at the first visit whose observer state resolves, so `dt`
+    // inside `lineage_might_be_in_visit` stays within one night (~8h).
+    // Branches spawned later tonight need no anchor: their bank is already
+    // at the visit epoch they were born at.
+    //
+    // The `find_map` short-circuits on the *observer state*, never on an
+    // anchor result: `for_branch` legitimately returns `None` for a branch
+    // that is already fresh, and letting that drive the search would retry
+    // every visit of the night for nothing.
+    let prefilter_anchors: HashMap<u64, PrefilterAnchor> = visits
+        .iter()
+        .find_map(|visit| {
+            resolve_observer_state(
+                obs_dataset,
+                kalman_context,
+                visit.representative_obs,
+                visit.epoch,
+            )
+            .ok()
+            .map(|(r_obs, v_obs)| (visit.epoch, r_obs, v_obs))
+        })
+        .map(|(epoch, r_obs, v_obs)| compute_prefilter_anchors(lineages, epoch, r_obs, v_obs))
+        .unwrap_or_default();
+
     let mut branches: Vec<Branch<'state_lf, 'bank_config>> = lineages.to_vec();
     let mut consumed_observation_ids = HashSet::new();
     let mut gate_records: Vec<GateRecord> = Vec::new();
@@ -289,6 +446,7 @@ pub fn advance_bank_collection_one_night<'state_lf, 'bank_config>(
             .map(|lineage| {
                 if !lineage_might_be_in_visit(
                     lineage,
+                    prefilter_anchors.get(&lineage.branch_id),
                     visit,
                     &visit_bucket_index,
                     params,
@@ -410,32 +568,82 @@ fn resolve_observer_state(
 /// Cheap rejection test: does a linear extrapolation of `lineage`'s last
 /// known sky position land near any alert in `visit`?
 ///
-/// No two-body solve — just arithmetic on the bank's already-stored angular
-/// position/rate (`state[0..=3]`, identical across every hypothesis in the
-/// bank: only `ρ`/`ρ̇` differ between them, that's the whole point of the
-/// bank — so this extrapolation is exact for the angular part, not an
-/// approximation of "which hypothesis to trust") plus a HEALPix neighbor
-/// lookup against `visit_bucket_index` (already built for this visit,
-/// reused here, not rebuilt).
+/// No two-body solve — just arithmetic on an angular position/rate, plus a
+/// HEALPix neighbor lookup against `visit_bucket_index` (already built for
+/// this visit, reused here, not rebuilt).
 ///
 /// `false` means "definitely nothing nearby, skip the real propagation
 /// this visit"; `true` still requires `spawn_branches_for_lineage`'s real
-/// (Mahalanobis-gated) check — this is a coarse, deliberately generous
-/// filter, not a replacement for it.
+/// (Mahalanobis-gated) check — this is a coarse filter, not a replacement
+/// for it.
+///
+/// # Where the extrapolation starts from
+///
+/// `anchor` is this branch's MAP hypothesis propagated to the night's
+/// reference epoch (see [`PrefilterAnchor`] for why that matters — in short,
+/// the linear model's error grows as `dt²` and used to be extrapolated over
+/// weeks). When it is `None` — a branch spawned during this night, whose own
+/// bank is already at a visit epoch of this night, or one whose MAP
+/// hypothesis failed to propagate — the branch's own stored state is used
+/// instead, which is the historical behavior.
+///
+/// # The radius is quantized to whole cells — and must stay that way
+///
+/// [`HealpixBinner::neighbors`](crate::spacetime_bucket::healpix_binner::HealpixBinner)
+/// returns whole cells and **ignores the radius entirely** when it is smaller
+/// than one cell (at `healpix_depth: 8` that is ~13.7 arcmin): it hands back a
+/// fixed 3×3 block, an effective radius of ~20 arcmin, whatever
+/// `quick_reject_radius_rad` says. Configuring anything below the cell radius
+/// therefore has no effect here.
+///
+/// **Do not "fix" this by measuring the real angular separation to the alerts
+/// in those cells.** That was tried and reverted: it turns an `O(1)`
+/// short-circuiting hash lookup into a scan of every alert in nine cells, each
+/// costing a Vincenty
+/// [`angular_separation`](photom::coordinates::equatorial::EquCoord::angular_separation)
+/// (three `sin_cos`, a `hypot`, an `atan2`). Worse, with a radius tighter than
+/// the cell block the test almost always fails, so `any` never short-circuits
+/// and the full scan runs every time — in the hottest loop of the engine (once
+/// per branch per visit; once per *trajectory* per night per visit in
+/// `mot_analysis`). Measured: `mot_analysis` went from ~6 minutes to over 36.
+///
+/// The radius was never the binding constraint anyway — the observations this
+/// filter used to lose sat a median of 45 arcsec from a correct propagation.
+/// Staleness of the extrapolation origin was the real defect, and that is what
+/// [`PrefilterAnchor`] fixes. If sub-cell selectivity is ever genuinely
+/// wanted, a flat-sky squared distance (`dx = Δra·cos δ`, `dy = Δδ`) is ~4
+/// flops instead of eight transcendentals — but it is still `O(alerts)` where
+/// this is `O(1)`, so it needs a measurement first.
 pub fn lineage_might_be_in_visit(
     lineage: &Branch,
+    anchor: Option<&PrefilterAnchor>,
     visit: &Visit,
     visit_bucket_index: &BucketIndex<&Observation>,
     params: &NightAdvanceParams,
     spatial_binner: &HealpixBinner,
 ) -> bool {
-    let Some(best) = lineage.bank.best() else {
-        return false;
+    // Prefer the freshly propagated anchor; fall back to the branch's own
+    // stored angular state (`state[0..=3]`, shared across the bank's
+    // hypotheses — only ρ/ρ̇ differ between them).
+    let (epoch, ra, dec, ra_dot, dec_dot) = match anchor {
+        Some(a) => (a.epoch, a.ra, a.dec, a.ra_dot, a.dec_dot),
+        None => {
+            let Some(best) = lineage.bank.best() else {
+                return false;
+            };
+            (
+                best.kf.epoch,
+                best.kf.state[0],
+                best.kf.state[1],
+                best.kf.state[2],
+                best.kf.state[3],
+            )
+        }
     };
 
-    let dt = visit.epoch - best.kf.epoch;
-    let predicted_ra = wrap_angle(best.kf.state[0] + best.kf.state[2] * dt);
-    let predicted_dec = best.kf.state[1] + best.kf.state[3] * dt;
+    let dt = visit.epoch - epoch;
+    let predicted_ra = wrap_angle(ra + ra_dot * dt);
+    let predicted_dec = dec + dec_dot * dt;
     let predicted_coord = EquCoord::new(predicted_ra, 0.0, predicted_dec, 0.0);
 
     let predicted_key = spatial_binner.key_for(&predicted_coord);
