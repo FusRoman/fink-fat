@@ -89,15 +89,20 @@ const TIME_SLICE_DAYS: f64 = 1.0;
 ///
 /// This is a hard ceiling on recall — a true pair separated by more than this
 /// is never proposed — so the report counts the true pairs it excludes rather
-/// than leaving the cap silent.
-const MAX_GAP_DAYS: f64 = 30.0;
+/// than leaving the cap silent. At 30 days it cost 3391 true pairs, 21 % of the
+/// total; the budget freed by the tighter rate gate below is spent here.
+const MAX_GAP_DAYS: f64 = 60.0;
 
-/// Rate agreement required to survive the index, radians/day (30 arcmin/day).
+/// Rate agreement required to survive the index, radians/day (3 arcmin/day).
 ///
-/// Deliberately loose: this is a prefilter whose job is to keep the pair count
-/// tractable, not to judge. The cascade sweeps tighter values afterwards, where
-/// the cost of each choice is measured against ground truth.
-const INDEX_MAX_RATE_DIFF_RAD_PER_DAY: f64 = 8.726_646_259_971_648e-3;
+/// Sized on measurement, not caution. At 30 arcmin/day this gate pruned nothing
+/// (6.48 M candidate pairs against 6.42 M) and the pool reached 6.98 M — 6.4×
+/// the previous index, which multiplies false merges by the same factor at
+/// equal specificity. The cascade sweep showed `rate <= 3` keeping **6503 of
+/// 7041 correct pairs (92 %) while dividing the pool by four**: proper motion
+/// is nearly independent of the position residual, which makes it the cheapest
+/// specificity available.
+const INDEX_MAX_RATE_DIFF_RAD_PER_DAY: f64 = 8.726_646_259_971_648e-4;
 
 /// How many observations of the tested arc are walked through.
 ///
@@ -133,7 +138,27 @@ const RESIDUAL_THRESHOLDS: [f64; 4] = [f64::INFINITY, 60.0, 300.0, 900.0];
 /// Nearly independent of the position residual: two unrelated arcs can share a
 /// sky cell by coincidence, but sharing a cell *and* a proper motion is a much
 /// stronger statement.
-const RATE_THRESHOLDS_ARCMIN_PER_DAY: [f64; 4] = [f64::INFINITY, 30.0, 10.0, 3.0];
+///
+/// These sit **below** [`INDEX_MAX_RATE_DIFF_RAD_PER_DAY`] on purpose. The index
+/// already refuses anything looser, so sweeping values above its floor would
+/// measure nothing — every such row would be identical to `rate:off`.
+const RATE_THRESHOLDS_ARCMIN_PER_DAY: [f64; 4] = [f64::INFINITY, 3.0, 1.0, 0.3];
+
+/// Minimum overall precision the retained operating point must reach, percent.
+///
+/// The exotic-population constraint cannot carry this on its own: NEO, Centaur,
+/// KBO and SDO together account for 255 of 169 862 trackable objects (0.15 %),
+/// so "zero exotic contamination" is satisfied by chance at almost any
+/// threshold — a selection rule resting on it alone degenerates to the most
+/// permissive row in the sweep, which is exactly what happened.
+const MIN_PRECISION_PCT: f64 = 99.0;
+
+/// Gap bands the retained operating point is broken down over, days.
+///
+/// Widening [`MAX_GAP_DAYS`] lengthens every propagation, which loosens the
+/// prediction and may cost precision. That is a risk to measure, not to assume:
+/// if the widest band degrades, the window comes back down on evidence.
+const GAP_BANDS_DAYS: [f64; 2] = [10.0, 30.0];
 
 /// `|dt|` bands the round-trip error is reported over, days.
 ///
@@ -173,6 +198,9 @@ struct PairMeasurement {
     same_object: Option<bool>,
     traj: Option<TrajId>,
     temporal_ok: bool,
+    /// Days between the two arcs' spans, for the gap breakdown of the retained
+    /// operating point. `NaN` propagates as "unclassifiable" and is skipped.
+    gap_days: Option<f64>,
     delta_h: Option<f64>,
     /// Absolute prediction-to-observation miss (arcsec), one per sampled
     /// point. The raw `d²` values are deliberately not kept: only the reduced
@@ -1244,6 +1272,7 @@ pub fn print_merge_shadow_study(
                 // do not overlap, whichever arc predicts.
                 temporal_ok: temporally_disjoint(predictor.span, tested.span, 0.0)
                     || temporally_disjoint(tested.span, predictor.span, 0.0),
+                gap_days: Some(gap_days(predictor.span, tested.span)).filter(|g| g.is_finite()),
                 delta_h,
                 separation_arcsec,
                 rate_diff_arcmin_per_day,
@@ -1422,37 +1451,50 @@ fn sweep(
         .collect()
 }
 
-/// The retained operating point: the combination recovering the most true
-/// pairs among those making **zero** wrong merge on NEO / Centaur / KBO / SDO.
+/// Whether a combination is admissible as an operating point.
+///
+/// Two independent constraints, because neither covers the other: the exotic
+/// rule protects the objects the science case exists for, and the precision
+/// floor protects the aggregate. Resting on the exotic rule alone made the
+/// selection degenerate to the most permissive row in the sweep — 61.6 %
+/// precision and 3900 fabricated trajectories — since exotic objects are too
+/// rare to constrain anything.
+fn is_admissible(row: &SweepRow) -> bool {
+    row.exotic_wrong() == 0 && row.counters.precision_pct() >= MIN_PRECISION_PCT
+}
+
+/// The retained operating point: the admissible combination recovering the most
+/// true pairs.
 ///
 /// Chosen by rule rather than by eye so the report cannot drift into quoting a
 /// row that happens to look good. Ties break on fewer total wrong merges.
 fn best_operating_point(rows: &[SweepRow]) -> Option<&SweepRow> {
     rows.iter()
-        .filter(|r| r.exotic_wrong() == 0)
+        .filter(|r| is_admissible(r))
         .max_by_key(|r| (r.counters.correct, std::cmp::Reverse(r.counters.wrong)))
 }
 
-/// The sweep table, plus the retained operating point and its contamination
-/// broken down by population.
+/// Precision bands the frontier is reported over, percent.
+const PRECISION_BANDS_PCT: [f64; 6] = [99.9, 99.5, 99.0, 98.0, 95.0, 90.0];
+
+/// The sweep's precision/recall frontier, the retained operating point, and
+/// that point's contamination broken down by population and by gap length.
+///
+/// # Why a frontier and not a sorted list
+///
+/// The previous version sorted by recall and printed the top 40 of 512
+/// combinations. Precise combinations have mechanically less recall, so *every*
+/// one of them fell past the cut — the table could not show a single row above
+/// 65 % precision even though rows above 99 % existed. A frontier reports the
+/// best recall reachable at each precision level, so the decision-relevant rows
+/// are present by construction whatever the sweep's width.
 fn print_sweep(rows: &[SweepRow], measurements: &[PairMeasurement], n_truth_pairs: usize) {
     let tested = measurements.len() as u64;
     let recall_of = |correct: u64| 100.0 * correct as f64 / n_truth_pairs.max(1) as f64;
 
-    println!(
-        "\n  {:<34} {:>9} {:>8} {:>10} {:>8} {:>11} {:>9}",
-        "Criterion", "tested", "linked", "correct", "WRONG", "precision%", "recall%"
-    );
-
-    // Reference row: what the index alone proposes, i.e. the base rate every
-    // gate below has to fight against.
-    let mut baseline = StageCounters::default();
-    for m in measurements {
-        baseline.record(m.temporal_ok, m.same_object);
-    }
     let print_row = |label: String, c: &StageCounters| {
         println!(
-            "  {:<34} {:>9} {:>8} {:>10} {:>8} {:>11.2} {:>9.2}",
+            "  {:<38} {:>9} {:>8} {:>10} {:>8} {:>11.2} {:>9.2}",
             label,
             tested,
             c.linked,
@@ -1462,29 +1504,73 @@ fn print_sweep(rows: &[SweepRow], measurements: &[PairMeasurement], n_truth_pair
             recall_of(c.correct),
         );
     };
+
+    println!("\n  Precision/recall frontier — best recall reachable at each precision level");
+    println!(
+        "  {:<38} {:>9} {:>8} {:>10} {:>8} {:>11} {:>9}",
+        "Criterion", "tested", "linked", "correct", "WRONG", "precision%", "recall%"
+    );
+
+    // Reference row: what the index alone proposes, i.e. the base rate every
+    // gate below has to fight against.
+    let mut baseline = StageCounters::default();
+    for m in measurements {
+        baseline.record(m.temporal_ok, m.same_object);
+    }
     print_row("index baseline (no gate)".to_string(), &baseline);
 
-    // Only rows that link something are worth ink; a sweep this wide otherwise
-    // buries the useful ones under hundreds of empty combinations.
-    let mut shown: Vec<&SweepRow> = rows.iter().filter(|r| r.counters.linked > 0).collect();
-    shown.sort_by_key(|r| (std::cmp::Reverse(r.counters.correct), r.counters.wrong));
-    for row in shown.iter().take(40) {
-        print_row(row.thresholds.label(), &row.counters);
-    }
-    if shown.len() > 40 {
-        println!("  ... {} further non-empty combinations", shown.len() - 40);
+    for floor in PRECISION_BANDS_PCT {
+        let best = rows
+            .iter()
+            .filter(|r| r.counters.linked > 0 && r.counters.precision_pct() >= floor)
+            .max_by_key(|r| (r.counters.correct, std::cmp::Reverse(r.counters.wrong)));
+        match best {
+            Some(row) => print_row(
+                format!("[>={floor:>5.1}%] {}", row.thresholds.label()),
+                &row.counters,
+            ),
+            None => println!("  [>={floor:>5.1}%] none"),
+        }
     }
 
+    // The unconstrained best, to show what precision is being traded away.
+    if let Some(row) = rows
+        .iter()
+        .filter(|r| r.counters.linked > 0)
+        .max_by_key(|r| (r.counters.correct, std::cmp::Reverse(r.counters.wrong)))
+    {
+        print_row(
+            format!("[max recall] {}", row.thresholds.label()),
+            &row.counters,
+        );
+    }
+
+    println!(
+        "\n  Selection rule: precision >= {MIN_PRECISION_PCT:.1}% AND zero wrong merge on NEO/Centaur/KBO/SDO"
+    );
     let Some(best) = best_operating_point(rows) else {
-        println!("\n  No combination reaches zero wrong merges on NEO/Centaur/KBO/SDO.");
+        println!("  No combination satisfies both constraints.");
+        // Show what is blocking, rather than falling silently back to nothing.
+        if let Some(row) = rows
+            .iter()
+            .filter(|r| r.counters.linked > 0 && r.exotic_wrong() == 0)
+            .max_by(|a, b| {
+                a.counters
+                    .precision_pct()
+                    .total_cmp(&b.counters.precision_pct())
+            })
+        {
+            print_row(
+                format!("  closest (exotic-clean): {}", row.thresholds.label()),
+                &row.counters,
+            );
+        }
         return;
     };
 
-    println!(
-        "\n  Retained operating point (most recall at zero exotic contamination): {}",
-        best.thresholds.label()
-    );
+    println!("  Retained: {}", best.thresholds.label());
     print_row("  ->".to_string(), &best.counters);
+
     println!(
         "\n  WRONG merges by population at that point — total {}",
         best.counters.wrong
@@ -1498,6 +1584,54 @@ fn print_sweep(rows: &[SweepRow], measurements: &[PairMeasurement], n_truth_pair
                 println!("    {:<24} {n}", population.label());
             }
         }
+    }
+
+    print_gap_breakdown(best, measurements);
+}
+
+/// Correct/wrong merges of the retained point, split by how far apart the two
+/// arcs are.
+///
+/// Widening the search window lengthens every propagation, which loosens the
+/// prediction and can cost precision. This is where that shows: if the widest
+/// band is markedly dirtier than the others, [`MAX_GAP_DAYS`] is too generous
+/// and comes back down on evidence rather than on a hunch.
+fn print_gap_breakdown(best: &SweepRow, measurements: &[PairMeasurement]) {
+    let mut bands: Vec<(f64, f64)> = Vec::with_capacity(GAP_BANDS_DAYS.len() + 1);
+    let mut lo = 0.0;
+    for &hi in &GAP_BANDS_DAYS {
+        bands.push((lo, hi));
+        lo = hi;
+    }
+    bands.push((lo, MAX_GAP_DAYS));
+
+    println!("\n  Retained point by gap between the two arcs");
+    println!(
+        "  {:<20} {:>10} {:>10} {:>12}",
+        "gap band (days)", "correct", "WRONG", "precision%"
+    );
+    for (lo, hi) in bands {
+        let (mut correct, mut wrong) = (0u64, 0u64);
+        for m in measurements {
+            let Some(gap) = m.gap_days else { continue };
+            if !(gap >= lo && gap < hi && best.thresholds.links(m)) {
+                continue;
+            }
+            match m.same_object {
+                Some(true) => correct += 1,
+                Some(false) => wrong += 1,
+                None => {}
+            }
+        }
+        let judged = correct + wrong;
+        if judged == 0 {
+            continue;
+        }
+        println!(
+            "  {:<20} {correct:>10} {wrong:>10} {:>12.2}",
+            format!("{lo:.0}-{hi:.0}"),
+            100.0 * correct as f64 / judged as f64
+        );
     }
 }
 

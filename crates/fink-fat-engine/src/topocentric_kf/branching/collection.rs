@@ -334,6 +334,26 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
             .max()
             .map_or(0, |id| id + 1);
 
+        // Deliberately a *separate* counter from `next_lineage_id` (see
+        // `seed_new_lineages_from_leftovers`'s doc): `branch_id`s handed out
+        // during this night's advance step (`advance_bank_collection_one_night`,
+        // above) come from their own counter, bounded by the highest
+        // `branch_id` among the branches it was given — not by `lineage_id`.
+        // Reusing `next_lineage_id`'s (much slower-growing) value here would
+        // let a freshly seeded lineage's `branch_id` collide with one
+        // `advance_bank_collection_one_night` already assigned this same
+        // night. Bounding over `branches` (the survivors of that step, which
+        // carry every `branch_id` handed out and still live) is enough —
+        // a `branch_id` that got pruned away this night is no longer live
+        // anywhere, so reusing it is safe.
+        let mut next_branch_id = self
+            .branches
+            .iter()
+            .chain(branches.iter())
+            .map(|branch| branch.branch_id)
+            .max()
+            .map_or(0, |id| id + 1);
+
         CollectionEvent::SeedingNewLineages.emit();
 
         // Observations an existing lineage's candidate extension merely
@@ -362,6 +382,7 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
             engine_config,
             &spatial_binner,
             &mut next_lineage_id,
+            &mut next_branch_id,
             current_step,
         )?;
         branches.extend(new_lineages);

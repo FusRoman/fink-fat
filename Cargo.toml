@@ -54,6 +54,7 @@ polars = { version = "0.53.0", default-features = false, features = [
 ] }
 rkyv = "0.8.17"
 memmap2 = "0.9.10"
+postgres = "0.19.10"
 
 
 [dependencies]
@@ -69,6 +70,7 @@ photom = { workspace = true, features = ["polars"] }
 polars = { workspace = true }
 rkyv = { workspace = true, features = ["pointer_width_64"] }
 thiserror = { workspace = true }
+postgres = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = "2.0.16"

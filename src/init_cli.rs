@@ -41,6 +41,10 @@ pub enum FinkFatCommands {
         config: Utf8PathBuf,
         #[arg(short, long, value_name = "FORMAT")]
         format: ConvertFormat,
+        /// Postgres connection string, e.g. `postgres://user:pass@host/db`.
+        /// Required when `--format sql`, ignored otherwise.
+        #[arg(long, value_name = "DATABASE_URL")]
+        database_url: Option<String>,
     },
 }
 

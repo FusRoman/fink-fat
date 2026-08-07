@@ -66,7 +66,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Track(fink_fat_cli_args) => tracking(fink_fat_cli_args),
-        Convert { config, format } => convert(config, format),
+        Convert {
+            config,
+            format,
+            database_url,
+        } => convert(config, format, database_url),
     }
 }
 

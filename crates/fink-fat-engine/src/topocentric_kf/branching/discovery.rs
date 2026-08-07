@@ -72,6 +72,17 @@ impl DiscoveryEvent {
 ///   created. Caller seeds it above the highest `lineage_id` already in use
 ///   (including lineages that got fully pruned this night, so ids are never
 ///   reused).
+/// * `next_branch_id` – Monotonic counter for the `branch_id` of each new
+///   lineage's root branch. **Deliberately separate from `next_lineage_id`**:
+///   [`advance_bank_collection_one_night`](super::orchestrate::advance_bank_collection_one_night)
+///   allocates `branch_id`s from its own counter (bounded by the highest
+///   `branch_id` among the branches it advanced), which grows independently
+///   of — and much faster than — `next_lineage_id` (one new value per
+///   branching event vs. one per newly discovered object). Reusing
+///   `next_lineage_id`'s value as a `branch_id` here would let a freshly
+///   seeded lineage collide with a `branch_id` orchestration already handed
+///   out this same night. Caller seeds it above the highest `branch_id`
+///   among the branches surviving this night's advance step.
 /// * `current_step` – Current night index; recorded as each new lineage's
 ///   `last_real_update_step` (birth counts as a real update, so a freshly
 ///   seeded lineage starts at staleness age zero).
@@ -87,6 +98,7 @@ pub fn seed_new_lineages_from_leftovers<'state_lf, 'bank_config>(
     engine_config: &'bank_config EngineConfig,
     spatial_binner: &HealpixBinner,
     next_lineage_id: &mut u64,
+    next_branch_id: &mut u64,
     current_step: usize,
 ) -> Result<Vec<Branch<'state_lf, 'bank_config>>, EngineError> {
     let leftover_obs: Vec<&Observation> = night_obs
@@ -113,9 +125,11 @@ pub fn seed_new_lineages_from_leftovers<'state_lf, 'bank_config>(
     let new_lineages: Vec<_> = live_banks
         .into_iter()
         .map(|bank| {
-            let id = *next_lineage_id;
+            let lineage_id = *next_lineage_id;
             *next_lineage_id += 1;
-            Branch::seed(bank, id, id, current_step)
+            let branch_id = *next_branch_id;
+            *next_branch_id += 1;
+            Branch::seed(bank, lineage_id, branch_id, current_step)
         })
         .collect();
 

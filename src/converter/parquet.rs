@@ -1,13 +1,9 @@
 use std::fs::File;
 
-use camino::Utf8PathBuf;
-use fink_fat_engine::{
-    engine_config::EngineConfig,
-    topocentric_kf::{branching::BranchCollection, single_kalman::KFStateSnapshot},
+use fink_fat_engine::topocentric_kf::{
+    branching::BranchCollection, single_kalman::KFStateSnapshot,
 };
 use polars::prelude::*;
-
-use crate::{error::FinkFatError, init_cli::ConvertFormat};
 
 /// Convert one fixed-size (or ragged) value per row into a Polars `List`
 /// column: [`Column::new`] only accepts a flat `Vec<T>` directly, so a
@@ -50,7 +46,7 @@ pub struct BranchCollectionDataFrames {
 /// hypothesis's `kf.to_snapshot()` and an archived trajectory's already-
 /// snapshotted `map_state`, so the two tables encode a `KFState` identically.
 #[derive(Default)]
-struct KfStateColumns {
+pub(crate) struct KfStateColumns {
     ra: Vec<f64>,
     dec: Vec<f64>,
     ra_dot: Vec<f64>,
@@ -339,7 +335,7 @@ pub fn to_dataframes(
 }
 
 /// Write every table in `dataframes` to `<output_dir>/<table_name>.parquet`.
-fn write_parquet_tables(
+pub fn write_parquet_tables(
     dataframes: BranchCollectionDataFrames,
     output_dir: &camino::Utf8Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -358,38 +354,6 @@ fn write_parquet_tables(
         let out_path = output_dir.join(format!("{name}.parquet"));
         let file = File::create(&out_path)?;
         ParquetWriter::new(file).finish(&mut df)?;
-    }
-
-    Ok(())
-}
-
-pub fn convert(
-    config_path: Utf8PathBuf,
-    requested_format: ConvertFormat,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let engine_config = EngineConfig::load_engine_config_validated(config_path)?;
-    let snapshot_path = engine_config.snapshot_path();
-
-    let kalman_context = engine_config.build_context();
-
-    let collection = if snapshot_path.exists() {
-        BranchCollection::load_snapshot_from_disk(&snapshot_path, &kalman_context, &engine_config)?
-    } else {
-        return Err(FinkFatError::NoSnapshot)?;
-    };
-
-    println!("Number of branch: {}", collection.branches.len());
-
-    match requested_format {
-        ConvertFormat::Parquet => {
-            let dataframes = to_dataframes(&collection)?;
-            write_parquet_tables(dataframes, &engine_config.storage_path_buf())?;
-        }
-        ConvertFormat::SQL => {
-            Err(FinkFatError::Message(
-                "SQL export is not implemented yet".to_string(),
-            ))?;
-        }
     }
 
     Ok(())
