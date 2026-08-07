@@ -94,6 +94,10 @@ impl CalibrationParams {
     ) -> Self {
         let max_arcsec = match advance_params.radius_strategy {
             RadiusStrategy::Clamped { max_arcsec, .. } => max_arcsec,
+            RadiusStrategy::AdaptiveConvergence {
+                converged_clamp_arcsec,
+                ..
+            } => converged_clamp_arcsec,
             RadiusStrategy::MaxEllipse | RadiusStrategy::MixtureCovariance => 30.0 * 60.0,
         };
         let obs_noise_sigma_arcsec = (advance_params.obs_noise[0].max(0.0)).sqrt() * RAD_TO_ARCSEC;

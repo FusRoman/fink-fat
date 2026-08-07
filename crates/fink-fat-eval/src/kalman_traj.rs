@@ -197,7 +197,7 @@ impl ObserverGeometryCache {
 
 /// Resolve one observation's observer heliocentric geometry directly
 /// (uncached) — the primitive [`ObserverGeometryCache`] wraps.
-fn resolve_geometry(
+pub fn resolve_geometry(
     obs_dataset: &ObsDataset,
     context: &KalmanContext,
     obs: &Observation,
@@ -226,7 +226,7 @@ fn resolve_geometry(
 ///
 /// Returns the deduplicated trajectory and the number of observations
 /// dropped.
-fn dedupe_by_epoch(traj: &[Observation], tolerance_days: f64) -> (Vec<Observation>, usize) {
+pub fn dedupe_by_epoch(traj: &[Observation], tolerance_days: f64) -> (Vec<Observation>, usize) {
     let mut kept: Vec<Observation> = Vec::with_capacity(traj.len());
     let mut n_removed = 0;
     for obs in traj {
@@ -301,11 +301,11 @@ fn log_bank_init(bank: &KFBank<'_, '_>) {
 
 // ── Per-step diagnostics ──────────────────────────────────────────────────────
 
-struct StepDiag {
-    equ_pred: EquCoord,
-    equ_obs: EquCoord,
-    residual_ra_arcsec: f64,
-    residual_dec_arcsec: f64,
+pub struct StepDiag {
+    pub equ_pred: EquCoord,
+    pub equ_obs: EquCoord,
+    pub residual_ra_arcsec: f64,
+    pub residual_dec_arcsec: f64,
     sigma_ra_arcsec: f64,
     sigma_dec_arcsec: f64,
     separation_arcsec_from_best_kf: f64,
@@ -326,7 +326,7 @@ struct StepDiag {
     nees_cart: Option<f64>,
 }
 
-fn compute_step_diag(
+pub fn compute_step_diag(
     best_kf: &KFState,
     obs: &Observation,
     region_center: Option<&EquCoord>,
@@ -399,7 +399,7 @@ fn compute_step_diag(
 
 // ── Search region ─────────────────────────────────────────────────────────────
 
-struct SearchRegionDiag {
+pub struct SearchRegionDiag {
     radius_arcsec: f64,
     semi_major_3sigma_arcsec: f64,
     semi_minor_3sigma_arcsec: f64,
@@ -408,7 +408,7 @@ struct SearchRegionDiag {
 }
 
 impl SearchRegionDiag {
-    fn nan_fallback() -> Self {
+    pub fn nan_fallback() -> Self {
         Self {
             radius_arcsec: f64::NAN,
             semi_major_3sigma_arcsec: f64::NAN,
@@ -424,7 +424,7 @@ impl SearchRegionDiag {
 /// first (the mixture is captured pre-`top_k` so it stays reusable for any
 /// `top_k`/`search_region_chi2`/`radius_strategy` combination — see
 /// [`recompute_search_region_metrics`]).
-fn compute_search_region(
+pub fn compute_search_region(
     predicted: &[(f64, KFState)],
     advance_params: &NightAdvanceParams,
     search_region_chi2: f64,
@@ -484,7 +484,7 @@ pub fn recompute_search_region_metrics(
     (pct_within_search_radius, mean_search_radius_arcsec)
 }
 
-fn search_region_diag(region: &SearchRegion, equ_obs: &EquCoord) -> SearchRegionDiag {
+pub fn search_region_diag(region: &SearchRegion, equ_obs: &EquCoord) -> SearchRegionDiag {
     let radius_arcsec = region.radius_rad * RAD_TO_ARCSEC;
 
     let best_s = region
@@ -517,7 +517,7 @@ fn search_region_diag(region: &SearchRegion, equ_obs: &EquCoord) -> SearchRegion
 
 // ── Logging ───────────────────────────────────────────────────────────────────
 
-fn log_bank_report(report: &BankStep) {
+pub fn log_bank_report(report: &BankStep) {
     tracing::trace!(
         n_before = report.n_before,
         n_after = report.n_after,
@@ -529,7 +529,7 @@ fn log_bank_report(report: &BankStep) {
     );
 }
 
-fn log_step_diag(diag: &StepDiag, best_id: u64, step: usize) {
+pub fn log_step_diag(diag: &StepDiag, best_id: u64, step: usize) {
     tracing::trace!(
         best_id,
         pred_ra = diag.equ_pred.ra,
@@ -561,7 +561,7 @@ fn log_step_diag(diag: &StepDiag, best_id: u64, step: usize) {
     }
 }
 
-fn log_search_region(sr: &SearchRegionDiag, region: &SearchRegion, equ_obs: &EquCoord) {
+pub fn log_search_region(sr: &SearchRegionDiag, region: &SearchRegion, equ_obs: &EquCoord) {
     tracing::trace!(
         target: "search_region",
         center_ra = region.center_ra,
@@ -581,7 +581,7 @@ fn log_search_region(sr: &SearchRegionDiag, region: &SearchRegion, equ_obs: &Equ
 // ── Result assembly ───────────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
-fn assemble_result(
+pub fn assemble_result(
     epoch: f64,
     dt: f64,
     diag: &StepDiag,
@@ -1116,7 +1116,7 @@ fn sky_ellipse_params(s: &Matrix2<f64>) -> (f64, f64, f64) {
 /// spread of the component means), computed in RAW α/δ — matching the filter's
 /// own convention (`H = [I₂|0]`, `sky_covariance()` is raw-α), so no cos(δ)
 /// factor is applied. Returns `None` if the mixture is empty / degenerate.
-fn compute_predictive_nis(mixture: &[(f64, KFState<'_>)], obs: &Observation) -> Option<f64> {
+pub fn compute_predictive_nis(mixture: &[(f64, KFState<'_>)], obs: &Observation) -> Option<f64> {
     let wsum: f64 = mixture.iter().map(|(w, _)| *w).sum();
     if wsum <= 0.0 {
         return None;
@@ -1161,15 +1161,15 @@ fn compute_predictive_nis(mixture: &[(f64, KFState<'_>)], obs: &Observation) -> 
 
 /// Per-step decomposition of the predicted search region, from the pre-update
 /// mixture. See [`compute_radius_decomposition`].
-struct RadiusDecomp {
+pub struct RadiusDecomp {
     /// Between-mode spread contribution to the radius (arcsec).
-    spread_arcsec: f64,
+    pub spread_arcsec: f64,
     /// Within-mode covariance contribution to the radius (arcsec).
-    component_arcsec: f64,
+    pub component_arcsec: f64,
     /// MAP (max-weight) hypothesis's range 1-σ, `√P[4,4]`, in AU.
-    map_rho_sigma_au: f64,
+    pub map_rho_sigma_au: f64,
     /// MAP (max-weight) hypothesis's range-rate 1-σ, `√P[5,5]`, in AU/day.
-    map_rhodot_sigma: f64,
+    pub map_rhodot_sigma: f64,
 }
 
 /// Decompose the search-region radius into its two additive covariance
@@ -1192,7 +1192,7 @@ struct RadiusDecomp {
 ///
 /// Computed from the same pre-update `predicted_mixture` as
 /// [`compute_predictive_nis`].
-fn compute_radius_decomposition(
+pub fn compute_radius_decomposition(
     mixture: &[(f64, KFState<'_>)],
     search_region_chi2: f64,
 ) -> Option<RadiusDecomp> {

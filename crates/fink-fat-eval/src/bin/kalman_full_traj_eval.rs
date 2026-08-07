@@ -53,7 +53,7 @@ fn main() -> Result<()> {
     init_tracing();
 
     let cli = Cli::parse();
-    let (_, obs_dataset) = load_data(&cli.alerts, cli.override_obs_error_arcsec);
+    let obs_dataset = load_data(&cli.alerts, cli.override_obs_error_arcsec);
 
     let engine_config = EngineConfig::load_engine_config_validated(cli.config)?;
     let kalman_ctx = engine_config.build_context();

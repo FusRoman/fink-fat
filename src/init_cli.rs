@@ -14,7 +14,35 @@
 
 use camino::Utf8PathBuf;
 
-use clap::Parser;
+use clap::{Parser, Subcommand, ValueEnum};
+
+#[derive(Parser)]
+#[command(name = "fink-fat")]
+pub struct FinkFatCli {
+    #[command(subcommand)]
+    pub command: FinkFatCommands,
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum ConvertFormat {
+    Parquet,
+    SQL,
+}
+
+#[derive(Subcommand)]
+pub enum FinkFatCommands {
+    /// Track asteroids in an alert stream from photometric alerts
+    Track(FinkFatCliArgs),
+
+    /// Convert the binary output of fink-fat into the requested format
+    Convert {
+        /// Path to the fink-fat configuration file
+        #[arg(short, long, value_name = "CONFIG_FILE")]
+        config: Utf8PathBuf,
+        #[arg(short, long, value_name = "FORMAT")]
+        format: ConvertFormat,
+    },
+}
 
 /// Command-line arguments for the `fink-fat` binary.
 ///
@@ -108,6 +136,6 @@ pub struct FinkFatCliArgs {
 /// ------
 /// * `FinkFatCliArgs` — parsed argument structure ready to be passed to the
 ///   runner.
-pub fn cli_builder() -> FinkFatCliArgs {
-    FinkFatCliArgs::parse()
+pub fn cli_builder() -> FinkFatCli {
+    FinkFatCli::parse()
 }

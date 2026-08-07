@@ -318,9 +318,24 @@ fn refine_light_time_tau<R, E>(
 /// $\sim q_{eff} \cdot \Delta t^3 / 3$ growing as $\Delta t^5$, which
 /// better matches the actual prediction error budget.
 ///
+/// # Direction of time
+///
+/// Only the **elapsed** interval matters: process noise models unmodelled
+/// acceleration accumulating along the arc, and that grows however far the
+/// state is carried, forwards or backwards. `dt` is therefore taken in
+/// absolute value.
+///
+/// This is not cosmetic. With a raw negative `dt`, the `Δt³/3` and `Δt`
+/// diagonal blocks turn negative and `Q` *subtracts* uncertainty, yielding a
+/// non-positive-definite covariance — a silently corrupt state rather than an
+/// error. Forward propagation, the only case the engine exercises today, is
+/// unaffected (`dt.abs() == dt`); backward propagation is what fragment
+/// linkage needs, where a converged arc has to predict observations that
+/// precede it.
+///
 /// Arguments
 /// ---------
-/// * `dt`       – Propagation interval (days).
+/// * `dt`       – Propagation interval (days); sign ignored.
 /// * `q0`       – Baseline acceleration noise PSD (AU² day⁻³).
 /// * `dt_ref`   – Reference interval beyond which perturbation scaling
 ///   activates (days). Typically 1 day.
@@ -329,6 +344,7 @@ fn refine_light_time_tau<R, E>(
 /// ------
 /// $6 \times 6$ process noise matrix in the Cartesian state space.
 fn build_snc_process_noise(dt: f64, q0: f64, dt_ref: f64) -> Matrix6<f64> {
+    let dt = dt.abs();
     let dt2 = dt * dt;
     let dt3 = dt2 * dt;
     let i3 = nalgebra::Matrix3::identity();
@@ -1012,6 +1028,149 @@ mod kepler_solver_tests {
                 error_arcsec < 1e-3,
                 "solver diverges from the analytic two-body orbit by {error_arcsec}\" \
                  (a={a}, e={e}, m0={m0}, arc_days={arc_days})"
+            );
+        }
+    }
+
+    /// A [`SolverType`] seeded with an explicit universal anomaly, mirroring
+    /// what [`solver_with_guess`] builds from `KFState::universal_anomaly`.
+    fn solver_seeded_with(psi_guess: f64) -> SolverType {
+        let base = SolverType::default();
+        SolverType {
+            params: SolverParams {
+                psi_guess: Some(psi_guess),
+                ..base.params
+            },
+            ..base
+        }
+    }
+
+    proptest! {
+        /// Same agreement check as [`matches_analytic_two_body_orbit`], but
+        /// **backwards** in time.
+        ///
+        /// Nothing exercised this direction before, and fragment linkage
+        /// leans on it entirely: the predictor is the longer arc and has to
+        /// reach a tested arc that may sit either side of it in time.
+        #[test]
+        fn matches_analytic_two_body_orbit_backward(
+            a in 0.3f64..4.0,
+            e in 0.0f64..0.85,
+            m0 in 0.0f64..std::f64::consts::TAU,
+            arc_days in prop_oneof![Just(-7.0), Just(-30.0), Just(-90.0), Just(-180.0)],
+        ) {
+            let n = (MU_SUN / a.powi(3)).sqrt();
+            let ecc0 = solve_eccentric_anomaly(m0, e);
+            let (pos0, vel0) = kepler_state_at_eccentric_anomaly(a, e, n, ecc0);
+
+            let t0 = 60_000.0;
+            let t1 = t0 + arc_days;
+
+            let result = propagate_universal(&pos0, &vel0, t0, t1, SolverType::default())
+                .expect("propagate_universal should converge backwards too");
+
+            let expected = analytic_kepler_position(a, e, m0, n, t0, t1);
+            let error_au = (result.r1 - expected).norm();
+            let error_arcsec = (error_au / result.r1.norm()).to_degrees() * 3600.0;
+
+            prop_assert!(
+                error_arcsec < 1e-3,
+                "backward solve diverges from the analytic two-body orbit by \
+                 {error_arcsec}\" (a={a}, e={e}, m0={m0}, arc_days={arc_days})"
+            );
+        }
+
+        /// Propagating out and back must return the starting state.
+        ///
+        /// This is the invariant the fragment index depends on, and it holds
+        /// **however wrong the assumed range is**: a round trip carries the
+        /// same (possibly bad) Cartesian state out and back, so range error
+        /// cancels exactly. Any residual here is solver error and nothing
+        /// else — which is precisely what separates "the propagator is
+        /// broken" from "rho is poorly known" when a linkage diagnostic
+        /// shows two arcs of the same object landing degrees apart.
+        #[test]
+        fn round_trip_returns_to_the_starting_state(
+            a in 0.3f64..4.0,
+            e in 0.0f64..0.85,
+            m0 in 0.0f64..std::f64::consts::TAU,
+            arc_days in prop_oneof![
+                Just(-180.0), Just(-90.0), Just(-7.0),
+                Just(7.0), Just(90.0), Just(180.0),
+            ],
+        ) {
+            let n = (MU_SUN / a.powi(3)).sqrt();
+            let ecc0 = solve_eccentric_anomaly(m0, e);
+            let (pos0, vel0) = kepler_state_at_eccentric_anomaly(a, e, n, ecc0);
+
+            let t0 = 60_000.0;
+            let t1 = t0 + arc_days;
+
+            let out = propagate_universal(&pos0, &vel0, t0, t1, SolverType::default())
+                .expect("outbound leg should converge");
+            // The return leg is warm-started from the outbound anomaly, exactly
+            // as `propagate_to_epoch` does — so this also covers a guess whose
+            // sign is wrong for the direction being solved.
+            let back = propagate_universal(
+                &out.r1, &out.v1, t1, t0, solver_seeded_with(out.psy),
+            )
+            .expect("return leg should converge");
+
+            let error_au = (back.r1 - pos0).norm();
+            let error_arcsec = (error_au / pos0.norm()).to_degrees() * 3600.0;
+
+            prop_assert!(
+                error_arcsec < 1e-3,
+                "round trip lost {error_arcsec}\" (a={a}, e={e}, m0={m0}, \
+                 arc_days={arc_days})"
+            );
+        }
+
+        /// A warm start must not change the answer, only the iteration count.
+        ///
+        /// `propagate_to_epoch` seeds the solver with the anomaly left by the
+        /// previous step, which for a filter advancing night by night is
+        /// always a *forward* one. Asking it to then solve a long backward
+        /// arc hands it a guess on the wrong side of the root. If the solver
+        /// were to converge to a different branch from there, half of every
+        /// linkage propagation would be silently wrong — so pin the
+        /// cold-start and warm-start results to each other.
+        #[test]
+        fn warm_start_does_not_change_the_solution(
+            a in 0.3f64..4.0,
+            e in 0.0f64..0.85,
+            m0 in 0.0f64..std::f64::consts::TAU,
+            forward_days in 1.0f64..120.0,
+            backward_days in 1.0f64..120.0,
+        ) {
+            let n = (MU_SUN / a.powi(3)).sqrt();
+            let ecc0 = solve_eccentric_anomaly(m0, e);
+            let (pos0, vel0) = kepler_state_at_eccentric_anomaly(a, e, n, ecc0);
+            let t0 = 60_000.0;
+
+            // A forward step, to harvest a genuinely forward-signed anomaly.
+            let forward = propagate_universal(
+                &pos0, &vel0, t0, t0 + forward_days, SolverType::default(),
+            )
+            .expect("forward leg should converge");
+
+            let t_back = t0 - backward_days;
+            let cold = propagate_universal(&pos0, &vel0, t0, t_back, SolverType::default())
+                .expect("cold backward solve should converge");
+            let warm = propagate_universal(
+                &pos0, &vel0, t0, t_back, solver_seeded_with(forward.psy),
+            )
+            .expect("warm backward solve should converge");
+
+            let error_au = (warm.r1 - cold.r1).norm();
+            let error_arcsec = (error_au / cold.r1.norm()).to_degrees() * 3600.0;
+
+            prop_assert!(
+                error_arcsec < 1e-3,
+                "a forward psi guess ({}) moved the backward solution by \
+                 {error_arcsec}\" (a={a}, e={e}, m0={m0}, \
+                 forward_days={forward_days}, backward_days={backward_days})",
+                forward.psy
             );
         }
     }

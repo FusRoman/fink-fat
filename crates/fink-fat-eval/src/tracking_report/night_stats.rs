@@ -5,7 +5,7 @@
 
 use ahash::AHashSet;
 use photom::{
-    NightId,
+    NightId, TrajId,
     observation_dataset::{ObsDataset, ObsId, observation::Observation},
 };
 use rayon::prelude::*;
@@ -190,23 +190,45 @@ pub fn compute_night_tracking_stats(
     );
 
     // ── Cumulative gold-trajectory completeness ─────────────────────────
+    //
+    // Counts live branches **and** archived arcs: a lineage retired by the
+    // staleness purge keeps its reconstruction (see `ArchivedTrajectory`),
+    // and scoring only the live set reported every one of them as though the
+    // object had never been reconstructed — which is exactly the accounting
+    // error this metric was displaying before.
+    //
+    // Also keyed by trajectory rather than counted per branch, so an object
+    // covered by several reconstructions contributes once (its best
+    // coverage) instead of inflating the numerator — previously this could
+    // push the reported percentage above 100 %, and folding archives in
+    // would have made that worse.
+    let mut best_coverage: ahash::AHashMap<TrajId, usize> = ahash::AHashMap::default();
+    for track_ids in branches.iter().map(|branch| branch.track_ids()).chain(
+        collection
+            .archived
+            .iter()
+            .map(|archived| archived.track_ids.as_slice()),
+    ) {
+        if let SeedPurity::Pure(traj_id) = ground_truth.classify(track_ids) {
+            let best = best_coverage.entry(traj_id).or_insert(0);
+            *best = (*best).max(track_ids.len());
+        }
+    }
+
     let mut n_objects_complete_so_far = 0;
     let mut n_objects_complete_relaxed_so_far = 0;
-    for branch in branches {
-        if let SeedPurity::Pure(traj_id) = ground_truth.classify(branch.track_ids()) {
-            let Some(n_seen) = gold_tracker.n_obs_so_far(&traj_id) else {
-                continue;
-            };
-            if n_seen < 2 {
-                continue;
-            }
-            let n_covered = branch.track_ids().len();
-            if n_covered == n_seen {
-                n_objects_complete_so_far += 1;
-            }
-            if n_covered as f64 / n_seen as f64 >= completeness_coverage_threshold {
-                n_objects_complete_relaxed_so_far += 1;
-            }
+    for (traj_id, &n_covered) in &best_coverage {
+        let Some(n_seen) = gold_tracker.n_obs_so_far(traj_id) else {
+            continue;
+        };
+        if n_seen < 2 {
+            continue;
+        }
+        if n_covered == n_seen {
+            n_objects_complete_so_far += 1;
+        }
+        if n_covered as f64 / n_seen as f64 >= completeness_coverage_threshold {
+            n_objects_complete_relaxed_so_far += 1;
         }
     }
     // Denominator: only objects that ever had >= 2 observations *within a

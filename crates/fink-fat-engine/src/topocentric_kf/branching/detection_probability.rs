@@ -2,10 +2,9 @@
 //!
 //! The null branch's LLR contribution is `log(1 − P_D)` (see [`llr_score`]),
 //! where `P_D` is the probability the survey would have detected this object
-//! on this night. No photometric model (absolute magnitude `H`, phase-angle
-//! term, survey depth) exists anywhere in the crate today, so this module
-//! builds the minimal one needed to make `P_D` a function of real geometry
-//! and photometry rather than a bare constant:
+//! on this night. This module holds the crate's photometric model — absolute
+//! magnitude `H`, the H-G phase term, survey depth — which makes `P_D` a
+//! function of real geometry and photometry rather than a bare constant:
 //!
 //! 1. Every time an observation is associated to a track, its apparent
 //!    magnitude plus the geometry at that epoch (heliocentric distance `r`,
@@ -56,15 +55,103 @@ impl DetectionProbabilityEvent {
     }
 }
 
+/// Default IAU slope parameter `G` of the H-G photometric system.
+///
+/// `0.15` is the standard value assumed for an asteroid whose slope has not
+/// been measured — which is every object here, since `G` needs a densely
+/// sampled phase curve to fit.
+pub const DEFAULT_SLOPE_PARAMETER_G: f64 = 0.15;
+
+/// Solar phase angle α: the Sun–object–observer angle, in radians.
+///
+/// Everything needed is already carried by a
+/// [`KFState`](crate::topocentric_kf::single_kalman::KFState): the object's
+/// heliocentric position (via `to_cartesian()`) and the observer's
+/// (`r_obs`). The Sun sits at the origin of both, so from the object the
+/// direction to the Sun is `−r_helio` and the direction to the observer is
+/// `r_obs − r_helio`.
+///
+/// Returns `None` if either direction degenerates (object at the Sun, or
+/// observer coincident with the object).
+///
+/// # Arguments
+/// * `r_helio_au` – Object heliocentric position (AU).
+/// * `r_obs_au` – Observer heliocentric position (AU).
+pub fn solar_phase_angle(
+    r_helio_au: &nalgebra::Vector3<f64>,
+    r_obs_au: &nalgebra::Vector3<f64>,
+) -> Option<f64> {
+    let to_sun = -r_helio_au;
+    let to_observer = r_obs_au - r_helio_au;
+
+    // Positive-form guard so a NaN coordinate yields `None` rather than
+    // reaching the division below.
+    let (n_sun, n_obs) = (to_sun.norm(), to_observer.norm());
+    if !(n_sun.is_finite() && n_sun > 0.0 && n_obs.is_finite() && n_obs > 0.0) {
+        return None;
+    }
+
+    let cos_alpha = (to_sun.dot(&to_observer) / (n_sun * n_obs)).clamp(-1.0, 1.0);
+    let alpha = cos_alpha.acos();
+    alpha.is_finite().then_some(alpha)
+}
+
+/// Brightness lost to the phase angle under the IAU H-G law, in magnitudes.
+///
+/// $$-2.5 \log_{10}\!\left[(1-G)\,\Phi_1(\alpha) + G\,\Phi_2(\alpha)\right],
+///   \qquad \Phi_i(\alpha) = \exp\!\left(-A_i \tan^{B_i}(\alpha/2)\right)$$
+///
+/// with $A_1 = 3.33, B_1 = 0.63, A_2 = 1.87, B_2 = 1.22$.
+///
+/// Always `>= 0`: an object is brightest at opposition (α = 0, where this
+/// returns exactly 0) and fades as the phase angle opens. For main-belt
+/// asteroids observed between 0 and 25°, the term spans roughly 0 to 0.8 mag
+/// — which is precisely the systematic that, left unmodelled, forces a wide
+/// tolerance on any comparison of absolute magnitudes across two arcs
+/// observed at different geometries.
+///
+/// # Arguments
+/// * `phase_angle_rad` – Solar phase angle α (radians), from
+///   [`solar_phase_angle`].
+/// * `slope_parameter_g` – The `G` of the H-G system; see
+///   [`DEFAULT_SLOPE_PARAMETER_G`].
+pub fn hg_phase_correction(phase_angle_rad: f64, slope_parameter_g: f64) -> f64 {
+    const A1: f64 = 3.33;
+    const B1: f64 = 0.63;
+    const A2: f64 = 1.87;
+    const B2: f64 = 1.22;
+
+    // The law is defined on [0, π); tan(α/2) diverges as α → π, which no real
+    // observing geometry reaches.
+    let half_tan = (phase_angle_rad.clamp(0.0, std::f64::consts::PI - 1e-9) / 2.0).tan();
+    if !half_tan.is_finite() || half_tan < 0.0 {
+        return 0.0;
+    }
+
+    let phi1 = (-A1 * half_tan.powf(B1)).exp();
+    let phi2 = (-A2 * half_tan.powf(B2)).exp();
+    let g = slope_parameter_g.clamp(0.0, 1.0);
+    let phi = (1.0 - g) * phi1 + g * phi2;
+
+    if phi > 0.0 { -2.5 * phi.log10() } else { 0.0 }
+}
+
 /// Absolute magnitude `H` implied by one apparent-magnitude observation.
 ///
 /// $$H = m - 5 \log_{10}(r \cdot \Delta)$$
 ///
-/// The phase-angle (Sun–object–observer) term of the standard H-G
-/// photometric law is deliberately omitted: no phase-angle geometry is
-/// threaded through [`KFState`](crate::topocentric_kf::single_kalman::KFState)
-/// today. This is a known simplification — refine with a real G-law term
-/// once that geometry is available.
+/// The phase-angle term of the standard H-G photometric law is **not**
+/// applied here, so the `H` this returns carries a systematic offset of up to
+/// a few tenths of a magnitude that varies with observing geometry. That is
+/// harmless while every consumer compares magnitudes measured at similar
+/// geometry, and wrong as soon as one compares two arcs observed months
+/// apart — which is exactly what fragment linkage does.
+///
+/// [`solar_phase_angle`] and [`hg_phase_correction`] now provide that term;
+/// add it to the result (`H_corrected = H + correction`) wherever the
+/// geometry is available. It is kept out of this function's signature so the
+/// engine's existing running-`H` estimate keeps its current behaviour until
+/// the change is measured end to end.
 ///
 /// # Arguments
 /// * `apparent_magnitude` – Observed apparent magnitude `m`.
@@ -167,6 +254,72 @@ pub fn detection_probability(
 #[cfg(test)]
 mod detection_proba_tests {
     use super::*;
+
+    use nalgebra::Vector3;
+
+    #[test]
+    fn phase_correction_vanishes_at_opposition() {
+        assert!(hg_phase_correction(0.0, DEFAULT_SLOPE_PARAMETER_G).abs() < 1e-12);
+    }
+
+    #[test]
+    fn phase_correction_grows_with_phase_angle() {
+        let g = DEFAULT_SLOPE_PARAMETER_G;
+        let at = |deg: f64| hg_phase_correction(deg.to_radians(), g);
+        assert!(at(0.0) < at(5.0));
+        assert!(at(5.0) < at(15.0));
+        assert!(at(15.0) < at(25.0));
+    }
+
+    #[test]
+    fn phase_correction_is_a_dimming_of_plausible_size() {
+        // Main-belt geometries: a few tenths of a magnitude, never negative.
+        let g = DEFAULT_SLOPE_PARAMETER_G;
+        for deg in [0.0f64, 5.0, 10.0, 20.0, 25.0] {
+            let correction = hg_phase_correction(deg.to_radians(), g);
+            assert!(correction >= 0.0, "phase term must never brighten");
+            assert!(
+                correction < 1.5,
+                "{deg} deg gave an implausible {correction} mag"
+            );
+        }
+    }
+
+    #[test]
+    fn phase_angle_is_zero_at_exact_opposition() {
+        // Observer directly between Sun and object: Sun and observer lie in
+        // the same direction as seen from the object.
+        let object = Vector3::new(3.0, 0.0, 0.0);
+        let observer = Vector3::new(1.0, 0.0, 0.0);
+        let alpha = solar_phase_angle(&object, &observer).expect("well-posed geometry");
+        assert!(alpha.abs() < 1e-12);
+    }
+
+    #[test]
+    fn phase_angle_is_right_angle_for_quadrature() {
+        // Object on the x axis, observer offset perpendicular by the same
+        // distance as the object's heliocentric range: a 45 deg phase angle.
+        let object = Vector3::new(1.0, 0.0, 0.0);
+        let observer = Vector3::new(0.0, 0.0, 0.0);
+        // Observer at the Sun => direction to observer == direction to Sun.
+        assert!(solar_phase_angle(&object, &observer).expect("valid").abs() < 1e-12);
+
+        let observer = Vector3::new(1.0, 1.0, 0.0);
+        let alpha = solar_phase_angle(&object, &observer).expect("valid");
+        assert!(
+            (alpha - std::f64::consts::FRAC_PI_2).abs() < 1e-12,
+            "expected 90 deg, got {} deg",
+            alpha.to_degrees()
+        );
+    }
+
+    #[test]
+    fn phase_angle_rejects_degenerate_geometry() {
+        let origin = Vector3::zeros();
+        assert!(solar_phase_angle(&origin, &Vector3::new(1.0, 0.0, 0.0)).is_none());
+        let object = Vector3::new(2.0, 0.0, 0.0);
+        assert!(solar_phase_angle(&object, &object).is_none());
+    }
 
     #[test]
     fn implied_and_predicted_magnitude_round_trip() {

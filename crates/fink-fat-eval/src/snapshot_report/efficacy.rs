@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use fink_fat_engine::topocentric_kf::branching::BranchCollection;
 
 use crate::{
+    length_bin::LengthBin,
     population::Population,
     seed_bank_report::ground_truth::{ObsTrajLookup, SeedPurity},
     tracking_report::gold_trajectory::GoldTrajectoryTracker,
@@ -117,26 +118,63 @@ pub struct ReconstructionEfficacy {
     /// Empty populations are still listed (all-zero) so the table shape is
     /// stable across runs.
     pub per_population: Vec<PopulationEfficacy>,
+    /// Per-trajectory-length breakdown of `counts`, in [`LengthBin::all`]
+    /// order — same shape as `per_population`, binned on
+    /// `gold_tracker.n_obs_so_far(traj_id)` instead of orbital class. Empty
+    /// bins are still listed (all-zero) so the table shape is stable across
+    /// runs.
+    pub per_length_bin: Vec<PopulationEfficacy>,
     pub last_processed_night: Option<u32>,
 }
 
-/// Last night actually referenced by any live branch's `track_ids()` — the
-/// snapshot itself carries no night metadata, only opaque `ObsId`s, so this
-/// is the closest proxy for "which night was this snapshot produced after".
+/// Every reconstruction the run produced: the live branches' association
+/// histories, followed by the archived ones.
+///
+/// A lineage purged for staleness stops being propagated but keeps its arc
+/// (see
+/// [`ArchivedTrajectory`](fink_fat_engine::topocentric_kf::branching::ArchivedTrajectory)).
+/// Reading only `collection.branches` would therefore report every such
+/// lineage as though it had never been reconstructed — which, measured on a
+/// 200-night run, was 23 % of all trackable trajectories.
+///
+/// Returned as an indexable `Vec` because [`compute_reconstruction_efficacy`]
+/// stores positions into it and re-reads them later.
+///
+/// Public so every consumer indexes the *same* pool in the *same* order —
+/// the fragment-linkage shadow study reports positions in this list, and they
+/// would be meaningless if it built its own ordering.
+pub fn all_reconstructions<'c>(collection: &'c BranchCollection<'_, '_>) -> Vec<&'c [ObsId]> {
+    collection
+        .branches
+        .iter()
+        .map(|branch| branch.track_ids())
+        .chain(
+            collection
+                .archived
+                .iter()
+                .map(|archived| archived.track_ids.as_slice()),
+        )
+        .collect()
+}
+
+/// Last night actually referenced by any reconstruction's `track_ids` (live
+/// or archived) — the snapshot itself carries no night metadata, only opaque
+/// `ObsId`s, so this is the closest proxy for "which night was this snapshot
+/// produced after".
 ///
 /// Limitation: if the true last processed night had every one of its
-/// objects pruned away (no live branch references any of its observations
+/// objects pruned away (no reconstruction references any of its observations
 /// anymore), this underestimates it by one night or more — accepted as a
 /// known limitation since the information doesn't exist anywhere else in
-/// the `.rkyv` file.
+/// the `.rkyv` file. Counting archived arcs here narrows that gap: a night
+/// whose lineages have all since gone stale is still represented.
 pub fn determine_last_processed_night(
     collection: &BranchCollection<'_, '_>,
     obs_to_night: &AHashMap<ObsId, NightId>,
 ) -> Option<NightId> {
-    collection
-        .branches
-        .iter()
-        .flat_map(|b| b.track_ids())
+    all_reconstructions(collection)
+        .into_iter()
+        .flatten()
         .filter_map(|id| obs_to_night.get(id))
         .copied()
         .max()
@@ -185,8 +223,12 @@ pub fn compute_reconstruction_efficacy(
     let mut covered_obs_by_traj: AHashMap<TrajId, AHashSet<ObsId>> = AHashMap::default();
     let (mut n_pure, mut n_mixed, mut n_unknown) = (0usize, 0usize, 0usize);
 
-    for (branch_idx, branch) in collection.branches.iter().enumerate() {
-        match ground_truth.classify(branch.track_ids()) {
+    // Live branches *and* archived arcs: both are reconstructions this run
+    // produced, and `branch_idx` below indexes into this combined list.
+    let reconstructions = all_reconstructions(collection);
+
+    for (branch_idx, track_ids) in reconstructions.iter().enumerate() {
+        match ground_truth.classify(track_ids) {
             SeedPurity::Pure(traj_id) => {
                 n_pure += 1;
                 touching_branches
@@ -196,11 +238,11 @@ pub fn compute_reconstruction_efficacy(
                 covered_obs_by_traj
                     .entry(traj_id)
                     .or_default()
-                    .extend(branch.track_ids().iter().copied());
+                    .extend(track_ids.iter().copied());
             }
             SeedPurity::Mixed => {
                 n_mixed += 1;
-                for &obs_id in branch.track_ids() {
+                for &obs_id in track_ids.iter() {
                     if let Some(traj_id) = ground_truth.traj_of(obs_id) {
                         touching_branches
                             .entry(traj_id.clone())
@@ -227,6 +269,10 @@ pub fn compute_reconstruction_efficacy(
     let mut pop_counts: AHashMap<Population, [usize; 6]> = AHashMap::default();
     let mut pop_branches_sum: AHashMap<Population, usize> = AHashMap::default();
     let mut pop_n_touched: AHashMap<Population, usize> = AHashMap::default();
+    // Per-length-bin accumulators, same shape as the per-population ones.
+    let mut lb_counts: AHashMap<LengthBin, [usize; 6]> = AHashMap::default();
+    let mut lb_branches_sum: AHashMap<LengthBin, usize> = AHashMap::default();
+    let mut lb_n_touched: AHashMap<LengthBin, usize> = AHashMap::default();
 
     for traj_id in &trackable_ids {
         let Some(total) = gold_tracker.n_obs_so_far(traj_id) else {
@@ -241,9 +287,22 @@ pub fn compute_reconstruction_efficacy(
         let outcome = if n_distinct == 0 {
             ReconstructionOutcome::NotReconstructed
         } else {
-            let branch_idx = *branches_touching.unwrap().iter().next().unwrap();
+            // `.min()` rather than `.iter().next()`: the set's iteration
+            // order is not a meaningful choice, and when several
+            // reconstructions touch this trajectory the arm picked here
+            // decides Fragmented(Perfect) vs Fragmented(Contaminated). Left
+            // to hash order that verdict could differ between two runs of
+            // identical code — which would make the very A/B comparisons this
+            // report exists for unreliable. Archiving makes the multi-touch
+            // case more common, so pin the choice.
+            let branch_idx = branches_touching
+                .unwrap()
+                .iter()
+                .copied()
+                .min()
+                .expect("n_distinct >= 1, so the set is non-empty");
             let is_pure = matches!(
-                ground_truth.classify(collection.branches[branch_idx].track_ids()),
+                ground_truth.classify(reconstructions[branch_idx]),
                 SeedPurity::Pure(ref t) if t == traj_id
             );
 
@@ -303,6 +362,14 @@ pub fn compute_reconstruction_efficacy(
             *pop_n_touched.entry(pop).or_insert(0) += 1;
         }
 
+        // Per-length-bin accumulation.
+        let bin = LengthBin::classify(total);
+        lb_counts.entry(bin).or_insert([0; 6])[idx] += 1;
+        if n_distinct >= 1 {
+            *lb_branches_sum.entry(bin).or_insert(0) += n_distinct;
+            *lb_n_touched.entry(bin).or_insert(0) += 1;
+        }
+
         per_trajectory.push((traj_id.to_string(), outcome.label().to_string(), coverage));
     }
 
@@ -313,6 +380,16 @@ pub fn compute_reconstruction_efficacy(
             counts: pop_counts.get(&pop).copied().unwrap_or([0; 6]),
             branches_touching_sum: pop_branches_sum.get(&pop).copied().unwrap_or(0),
             n_touched: pop_n_touched.get(&pop).copied().unwrap_or(0),
+        })
+        .collect();
+
+    let per_length_bin = LengthBin::all()
+        .into_iter()
+        .map(|bin| PopulationEfficacy {
+            label: bin.label().to_string(),
+            counts: lb_counts.get(&bin).copied().unwrap_or([0; 6]),
+            branches_touching_sum: lb_branches_sum.get(&bin).copied().unwrap_or(0),
+            n_touched: lb_n_touched.get(&bin).copied().unwrap_or(0),
         })
         .collect();
 
@@ -329,6 +406,7 @@ pub fn compute_reconstruction_efficacy(
         branches_per_trajectory_samples,
         branches_per_trajectory,
         per_population,
+        per_length_bin,
         last_processed_night: last_processed_night.map(|n| n.0),
     }
 }
@@ -425,34 +503,26 @@ impl ReconstructionEfficacy {
                 ReconstructionOutcome::Contaminated,
             ))),
         ];
-        println!("  per-population breakdown:");
-        println!(
-            "    {:<20} {:>9} {:>16} {:>16} {:>9}",
-            "population", "trackable", "completeness", "contaminated", "over-gen"
+        print_breakdown_table(
+            "per-population breakdown",
+            "population",
+            &self.per_population,
+            &complete_idx,
+            &contam_idx,
         );
-        for pe in &self.per_population {
-            let pt: usize = pe.counts.iter().sum();
-            if pt == 0 {
-                continue;
-            }
-            let comp: usize = complete_idx.iter().map(|&i| pe.counts[i]).sum();
-            let contam: usize = contam_idx.iter().map(|&i| pe.counts[i]).sum();
-            let overgen = if pe.n_touched == 0 {
-                0.0
-            } else {
-                pe.branches_touching_sum as f64 / pe.n_touched as f64
-            };
-            println!(
-                "    {:<20} {:>9} {:>7} ({:>5.1}%) {:>7} ({:>5.1}%) {:>7.2}x",
-                pe.label,
-                pt,
-                comp,
-                100.0 * comp as f64 / pt as f64,
-                contam,
-                100.0 * contam as f64 / pt as f64,
-                overgen,
-            );
-        }
+
+        // Per-length-bin breakdown — purity/completeness as a function of how
+        // much evidence the trajectory itself offers, independent of orbital
+        // class. Expect poor performance on short (< ~4 point) trajectories
+        // and much better performance beyond that.
+        print_breakdown_table(
+            "per-trajectory-length breakdown",
+            "n_points",
+            &self.per_length_bin,
+            &complete_idx,
+            &contam_idx,
+        );
+
         println!("{sep}\n");
     }
 
@@ -461,5 +531,48 @@ impl ReconstructionEfficacy {
             std::fs::File::create(path).with_context(|| format!("failed to create {path}"))?;
         serde_json::to_writer_pretty(file, self)
             .with_context(|| format!("failed to write JSON to {path}"))
+    }
+}
+
+/// Print one breakdown table (rows already computed as [`PopulationEfficacy`],
+/// whatever axis they were grouped on — orbital class, trajectory length,
+/// ...): trackable count, completeness (pure-only outcomes), contamination
+/// (any mixed-branch outcome), and mean branch over-generation per touched
+/// row. `complete_idx`/`contam_idx` are [`ReconstructionOutcome::all`]
+/// indices, shared with the caller's global breakdown above this table.
+fn print_breakdown_table(
+    title: &str,
+    row_label: &str,
+    rows: &[PopulationEfficacy],
+    complete_idx: &[usize],
+    contam_idx: &[usize],
+) {
+    println!("  {title}:");
+    println!(
+        "    {row_label:<20} {:>9} {:>16} {:>16} {:>9}",
+        "trackable", "completeness", "contaminated", "over-gen"
+    );
+    for row in rows {
+        let pt: usize = row.counts.iter().sum();
+        if pt == 0 {
+            continue;
+        }
+        let comp: usize = complete_idx.iter().map(|&i| row.counts[i]).sum();
+        let contam: usize = contam_idx.iter().map(|&i| row.counts[i]).sum();
+        let overgen = if row.n_touched == 0 {
+            0.0
+        } else {
+            row.branches_touching_sum as f64 / row.n_touched as f64
+        };
+        println!(
+            "    {:<20} {:>9} {:>7} ({:>5.1}%) {:>7} ({:>5.1}%) {:>7.2}x",
+            row.label,
+            pt,
+            comp,
+            100.0 * comp as f64 / pt as f64,
+            contam,
+            100.0 * contam as f64 / pt as f64,
+            overgen,
+        );
     }
 }

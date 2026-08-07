@@ -349,6 +349,11 @@ fn archive_entry(
         return None;
     }
 
+    // The MAP hypothesis is what keeps the closed arc propagatable — see
+    // `ArchivedTrajectory::map_state`. No live hypothesis means nothing to
+    // link against later, so the arc is not worth archiving.
+    let best = branch.bank.best()?;
+
     Some(ArchivedTrajectory {
         designation: branch.designation(),
         lineage_id: branch.lineage_id,
@@ -357,6 +362,9 @@ fn archive_entry(
         n_real_updates: branch.n_real_updates,
         last_real_update_step: branch.last_real_update_step,
         archived_at_step: current_step,
+        map_state: best.kf.to_snapshot(),
+        absolute_magnitude_estimate: branch.bank.absolute_magnitude_estimate(),
+        absolute_magnitude_sample_count: branch.bank.absolute_magnitude_sample_count(),
     })
 }
 

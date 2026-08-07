@@ -125,7 +125,7 @@ fn main() -> Result<()> {
 
     let kalman_ctx = KalmanContext::new(kalman_config, "horizon:DE440", None);
 
-    let (_, obs_dataset) = load_data(&cli.alerts, None);
+    let obs_dataset = load_data(&cli.alerts, None);
 
     let traj = materialize_contiguous_traj(&obs_dataset, &TrajId::Int(54013))?;
 

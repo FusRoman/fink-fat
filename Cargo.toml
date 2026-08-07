@@ -68,6 +68,7 @@ clap = { workspace = true }
 photom = { workspace = true, features = ["polars"] }
 polars = { workspace = true }
 rkyv = { workspace = true, features = ["pointer_width_64"] }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = "2.0.16"
@@ -100,3 +101,22 @@ codegen-units = 32
 overflow-checks = true
 debug-assertions = true
 incremental = false
+
+# Same binaries as `evaluation`, but without the debug_assert!()/overflow
+# checks that profile turns on for catching numerical bugs (NaN/degenerate
+# states, invariant violations) during investigation. Use this once the
+# correctness of a run isn't in question and you just want a full-dataset
+# sweep (e.g. mot_analysis over the whole survey) to finish faster —
+# `lto = "thin"` + `codegen-units = 1` restore release-level cross-crate
+# inlining in the Kalman hot path that `evaluation`'s `codegen-units = 128`
+# gives up for faster incremental compiles.
+[profile.evaluation-fast]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+overflow-checks = false
+debug-assertions = false
+incremental = false
+
+[profile.evaluation-fast.package."*"]
+debug = false

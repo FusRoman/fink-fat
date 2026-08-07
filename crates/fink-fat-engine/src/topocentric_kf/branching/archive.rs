@@ -28,6 +28,7 @@
 use photom::observation_dataset::ObsId;
 
 use crate::topocentric_kf::branching::branch_id::BranchId;
+use crate::topocentric_kf::single_kalman::KFStateSnapshot;
 
 /// A lineage's final reconstruction, retained after the lineage itself
 /// stopped being propagated.
@@ -64,4 +65,33 @@ pub struct ArchivedTrajectory {
     /// Night index at which the lineage was archived — always
     /// `>= last_real_update_step` by at least the staleness budget.
     pub archived_at_step: usize,
+    /// The MAP hypothesis's Kalman state at the moment of archiving.
+    ///
+    /// Deliberately **one** state and not the bank: a bank averaged ~87
+    /// hypotheses on the reference run (~52 kB), which is the cost this type
+    /// exists to shed, while a single snapshot is ~530 B. That one state is
+    /// enough to make a closed arc *propagatable* —
+    /// [`KFStateSnapshot::into_kf_state`] reattaches the live
+    /// [`KalmanContext`](crate::engine_config::kalman_context::KalmanContext),
+    /// after which [`KFState::predict`](crate::topocentric_kf::single_kalman::KFState::predict)
+    /// and [`sky_covariance`](crate::topocentric_kf::single_kalman::KFState::sky_covariance)
+    /// answer "could this arc explain those observations?".
+    ///
+    /// Without it an archived arc is a bare list of `ObsId`s: it cannot be
+    /// propagated, and `last_real_update_step` is a *night index*, not even
+    /// an epoch. This field is what makes fragment linkage possible.
+    pub map_state: KFStateSnapshot,
+    /// Running absolute-magnitude (`H`) estimate carried over from the bank,
+    /// `None` if the lineage never consumed a real observation.
+    ///
+    /// `H` is the object's *intrinsic* brightness, unlike apparent magnitude
+    /// which varies with heliocentric distance and topocentric range, so it
+    /// is the invariant two arcs of the same object must agree on. Note it is
+    /// computed without the H-G phase term (see
+    /// [`implied_absolute_magnitude`](super::detection_probability::implied_absolute_magnitude)),
+    /// so comparisons across arcs observed at different phase angles carry a
+    /// systematic offset of a few tenths of a magnitude.
+    pub absolute_magnitude_estimate: Option<f64>,
+    /// How many observations were folded into `absolute_magnitude_estimate`.
+    pub absolute_magnitude_sample_count: u32,
 }

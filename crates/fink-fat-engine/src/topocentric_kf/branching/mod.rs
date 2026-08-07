@@ -57,6 +57,7 @@ pub mod collection;
 pub mod detection_probability;
 pub mod discovery;
 pub mod llr_score;
+pub mod merge;
 pub mod orchestrate;
 pub mod pruning;
 pub mod visit;

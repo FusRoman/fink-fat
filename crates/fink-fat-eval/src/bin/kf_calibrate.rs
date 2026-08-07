@@ -105,7 +105,7 @@ fn main() -> Result<()> {
 
     let cli = KfCalibrateCli::parse();
 
-    let (_, obs_dataset) = load_data(&cli.common.alerts, None);
+    let obs_dataset = load_data(&cli.common.alerts, None);
     let engine_config = load_config(&cli.common.config)?;
     let kalman_ctx = engine_config.build_context();
 

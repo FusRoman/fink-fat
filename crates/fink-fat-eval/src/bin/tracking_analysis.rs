@@ -25,7 +25,7 @@ use fink_fat_eval::{
     seed_bank_report::ground_truth::ObsTrajLookup,
     snapshot_report::{
         efficacy::{
-            ReconstructionEfficacy, build_gold_tracker_for_processed_nights,
+            ReconstructionEfficacy, all_reconstructions, build_gold_tracker_for_processed_nights,
             compute_reconstruction_efficacy, determine_last_processed_night,
         },
         plots::{
@@ -39,6 +39,7 @@ use fink_fat_eval::{
     tracking_report::{
         gold_trajectory::GoldTrajectoryTracker,
         lineage_lifecycle::LineageTracker,
+        merge_shadow::print_merge_shadow_study,
         night_stats::compute_night_tracking_stats,
         object_outcome::{ObjectOutcome, ObjectOutcomeTracker},
         plots::{
@@ -142,7 +143,7 @@ fn main() -> Result<()> {
         return run_snapshot_analysis(&cli);
     }
 
-    let (_, obs_dataset) = load_data(&cli.common.alerts, None);
+    let obs_dataset = load_data(&cli.common.alerts, None);
 
     if cli.list_nights {
         let mut night_ids: Vec<NightId> = obs_dataset
@@ -248,7 +249,12 @@ fn main() -> Result<()> {
             "night {night_id}: {} branches, recall {:.0}%, completeness {:.0}%",
             stats.n_branches, stats.recall_pct_tonight, stats.completeness_pct_so_far
         ));
-        object_outcome_tracker.observe_night(step, &new_collection.branches, &ground_truth);
+        // Live branches *and* archived arcs — a lineage purged for staleness
+        // stopped being propagated but kept its reconstruction, and counting
+        // only the live set would report it as lost. See
+        // `ObjectOutcomeTracker::observe_night`.
+        let reconstructions = all_reconstructions(&new_collection);
+        object_outcome_tracker.observe_night(step, &reconstructions, &ground_truth);
         gate_selectivity.observe_night(
             &new_collection.last_night_gate_records,
             &new_collection.branches,
@@ -314,6 +320,17 @@ fn main() -> Result<()> {
             night_ids.last().copied(),
         );
         efficacy.print_summary();
+
+        // Scores the (currently unwired) linkage criteria against ground
+        // truth — the gate that decides whether fragment merging can be
+        // enabled at all. Measurement only: nothing is merged here.
+        print_merge_shadow_study(
+            &collection,
+            &obs_dataset,
+            &kalman_ctx,
+            &ground_truth,
+            &traj_population,
+        );
     }
 
     let never_touched_ids: Vec<photom::TrajId> = outcomes
@@ -431,7 +448,7 @@ fn write_object_outcome_plots(
 /// carries ground truth) a reconstruction-efficacy breakdown — a
 /// point-in-time audit of a real run, without re-running the simulation.
 fn run_snapshot_analysis(cli: &TrackingAnalysisCli) -> Result<()> {
-    let (_, obs_dataset) = load_data(&cli.common.alerts, None);
+    let obs_dataset = load_data(&cli.common.alerts, None);
     let engine_config = EngineConfig::load_engine_config_validated(&cli.common.config)?;
     let kalman_ctx = engine_config.build_context();
 

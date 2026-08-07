@@ -385,6 +385,14 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
         self.absolute_magnitude_estimate
     }
 
+    /// How many observations were folded into
+    /// [`Self::absolute_magnitude_estimate`] — the evidence volume behind
+    /// that running mean, needed by anything comparing two banks'
+    /// photometry (e.g. fragment linkage).
+    pub fn absolute_magnitude_sample_count(&self) -> u32 {
+        self.absolute_magnitude_sample_count
+    }
+
     /// `true` if at least one hypothesis is alive.
     pub fn is_alive(&self) -> bool {
         !self.hypotheses.is_empty()

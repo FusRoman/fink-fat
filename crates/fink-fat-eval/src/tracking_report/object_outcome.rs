@@ -11,9 +11,7 @@
 //! captured then lost) instead of a single opaque percentage.
 
 use ahash::{AHashMap, AHashSet};
-use photom::TrajId;
-
-use fink_fat_engine::topocentric_kf::branching::Branch;
+use photom::{TrajId, observation_dataset::ObsId};
 
 use crate::{
     seed_bank_report::ground_truth::{ObsTrajLookup, SeedPurity},
@@ -94,22 +92,35 @@ impl ObjectOutcomeTracker {
         Self::default()
     }
 
-    /// Fold one night's live branches into the per-object bookkeeping. Call
-    /// once per night, with that night's live `branches` (i.e. the
-    /// `BranchCollection` *after* `advance_one_night`).
+    /// Fold one night's reconstructions into the per-object bookkeeping. Call
+    /// once per night, with every association history the collection holds
+    /// *after* `advance_one_night` — the live branches' `track_ids()` **and**
+    /// the archived arcs'.
+    ///
+    /// Archived arcs are included deliberately, and they change what
+    /// [`ObjectOutcome::PureThenLost`] means. That category is derived from
+    /// "no pure branch for this object on the final night", so before
+    /// archiving existed it conflated two very different fates: an object the
+    /// tracker genuinely lost, and one whose lineage merely stopped being
+    /// propagated while its reconstruction survived intact. Only the first is
+    /// a failure. An archived arc keeps refreshing `last_pure_night`, so such
+    /// objects now leave `PureThenLost` — and, since their coverage is frozen
+    /// while `n_obs_so_far` keeps growing, they land in
+    /// `PureAliveBelowCoverage` if the object keeps being detected, which is
+    /// the honest description.
     pub fn observe_night(
         &mut self,
         step: usize,
-        branches: &[Branch<'_, '_>],
+        reconstructions: &[&[ObsId]],
         ground_truth: &ObsTrajLookup,
     ) {
         let mut pure_branches_tonight: AHashMap<TrajId, usize> = AHashMap::default();
 
-        for branch in branches {
-            match ground_truth.classify(branch.track_ids()) {
+        for track_ids in reconstructions {
+            match ground_truth.classify(track_ids) {
                 SeedPurity::Pure(traj_id) => {
                     self.ever_touched.insert(traj_id.clone());
-                    let coverage = branch.track_ids().len();
+                    let coverage = track_ids.len();
                     self.best_pure_coverage
                         .entry(traj_id.clone())
                         .and_modify(|best| *best = (*best).max(coverage))
@@ -118,7 +129,7 @@ impl ObjectOutcomeTracker {
                     *pure_branches_tonight.entry(traj_id).or_insert(0) += 1;
                 }
                 SeedPurity::Mixed => {
-                    for &obs_id in branch.track_ids() {
+                    for &obs_id in track_ids.iter() {
                         if let Some(traj_id) = ground_truth.traj_of(obs_id) {
                             self.ever_touched.insert(traj_id.clone());
                         }

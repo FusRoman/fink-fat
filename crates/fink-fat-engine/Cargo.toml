@@ -40,5 +40,8 @@ approx = "0.5.1"
 proptest = "1.9.0"
 serde_yaml = { workspace = true }
 tracing-subscriber = { workspace = true }
-# tempfile = { workspace = true }
-# photom = { workspace = true, features = ["serde", "datafusion"] }
+tempfile = { workspace = true }
+# Test-only: enables `ObsDataset::from_mpc_80_col`, used by the UTC->TT
+# anchor test (`tests/utc_tt_anchor.rs`) to exercise the real parsing path
+# instead of constructing an `MJDTT` value directly.
+photom = { workspace = true, features = ["serde", "mpc_80_col"] }

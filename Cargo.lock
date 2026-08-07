@@ -1106,6 +1106,7 @@ dependencies = [
  "polars",
  "rkyv",
  "tempfile",
+ "thiserror 2.0.18",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -1131,6 +1132,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "tempfile",
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
@@ -1150,6 +1152,7 @@ dependencies = [
  "indicatif",
  "nalgebra",
  "ndarray",
+ "num-traits",
  "outfit",
  "photom",
  "plotters",
@@ -2677,7 +2680,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "30063e60155c085e4b19c7ee47a330f36b51882410afe36a3cdfa28de1cfef8d"
 dependencies = [
  "ahash",
+ "camino",
  "directories",
+ "hifitime",
  "itertools 0.14.0",
  "nom",
  "ordered-float",

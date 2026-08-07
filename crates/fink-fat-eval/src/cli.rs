@@ -7,12 +7,9 @@ use photom::{
     observation_dataset::ObsDataset,
     observer::error_model::ObsErrorModel,
 };
-use polars::{
-    frame::DataFrame,
-    lazy::{
-        dsl::lit,
-        frame::{LazyFrame, ScanArgsParquet},
-    },
+use polars::lazy::{
+    dsl::lit,
+    frame::{LazyFrame, ScanArgsParquet},
 };
 
 /// Load an alerts dataset, optionally overriding every observation's
@@ -20,10 +17,15 @@ use polars::{
 /// candidate astrometric-noise assumptions (see
 /// `test_exp/prep_alert.py`'s hardcoded 1″) against dataset-wide NIS/NEES
 /// calibration without regenerating the source Parquet for each candidate.
+///
+/// Only the lazy frame is materialized into `ObsDataset`'s row-oriented
+/// layout — no caller needs the Polars `DataFrame` form, and collecting one
+/// used to hold a second full copy of the dataset in memory for the whole
+/// run.
 pub fn load_data(
     parquet_path: impl AsRef<Utf8Path>,
     override_obs_error_arcsec: Option<f64>,
-) -> (DataFrame, ObsDataset) {
+) -> ObsDataset {
     let path = parquet_path.as_ref().as_str();
     let args = ScanArgsParquet {
         rechunk: true,
@@ -36,18 +38,15 @@ pub fn load_data(
         lf = lf.with_columns([lit(err_rad).alias("ra_err"), lit(err_rad).alias("dec_err")]);
     }
 
-    let obs_dataset = ObsDataset::from_lazy(
-        lf.clone(),
+    ObsDataset::from_lazy(
+        lf,
         FromPolarsArgs {
             do_rechunk: Some(false),
             error_model: Some(ObsErrorModel::FCCT14),
             contiguous_choice: Some(ContiguousChoice::ContiguousNight),
         },
     )
-    .expect("from_lazy must succeed for int file");
-
-    let df = lf.collect().expect("collect must succeed");
-    (df, obs_dataset)
+    .expect("from_lazy must succeed for int file")
 }
 
 /// FINK-FAT: Fink Asteroid Tracker
