@@ -89,7 +89,7 @@ use crate::{
     error::EngineError,
     topocentric_kf::{
         branching::detection_probability::{
-            implied_absolute_magnitude, update_running_magnitude_estimate,
+            implied_absolute_magnitude, phase_correction, update_running_magnitude_estimate,
         },
         kalman_bank::{
             ellipse_region_finder::SearchComponent,
@@ -838,12 +838,16 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
             return;
         };
 
-        let r_helio_au = best.kf.to_cartesian().pos.norm();
+        let helio = best.kf.to_cartesian().pos;
         let delta_topocentric_au = best.kf.state[4];
+        // Removing the phase term here is what makes the running estimate a
+        // property of the *object* rather than of the geometry it happened to
+        // be observed at — the whole point of averaging H across nights.
         let implied_h = implied_absolute_magnitude(
             obs.photometry().magnitude,
-            r_helio_au,
+            helio.norm(),
             delta_topocentric_au,
+            phase_correction(&helio, &best.kf.r_obs, self.config.slope_parameter_g),
         );
 
         let (mean, count) = update_running_magnitude_estimate(

@@ -66,7 +66,9 @@ use crate::{
                 SINGLE_TIME_BIN, SingleBinTimeBinner, find_candidates_for_bank,
                 find_candidates_for_bank_multi_region,
             },
-            detection_probability::{detection_probability, predicted_apparent_magnitude},
+            detection_probability::{
+                detection_probability, phase_correction, predicted_apparent_magnitude,
+            },
             llr_score::{null_branch_llr_delta, observation_llr_delta, photometric_llr_delta},
             pruning::{apply_n_scan_pruning, cap_top_b_per_lineage, purge_stale_lineages},
             visit::{Visit, group_observations_into_visits},
@@ -822,12 +824,16 @@ pub fn predicted_apparent_magnitude_for_bank<'state_lf, 'bank_config>(
         return None;
     };
 
-    let r_helio_au = best.kf.to_cartesian().pos.norm();
+    let helio = best.kf.to_cartesian().pos;
     let delta_topocentric_au = best.kf.state[4];
+    // Put back the phase term `update_absolute_magnitude_estimate` removed, at
+    // *this* geometry: the two transformations must stay inverses of each other
+    // or the running H and the magnitudes predicted from it drift apart.
     Some(predicted_apparent_magnitude(
         absolute_magnitude_estimate,
-        r_helio_au,
+        helio.norm(),
         delta_topocentric_au,
+        phase_correction(&helio, &best.kf.r_obs, bank.config.slope_parameter_g),
     ))
 }
 

@@ -15,7 +15,7 @@
 use fink_fat_engine::topocentric_kf::{
     branching::{
         candidate_search::CandidateMatch,
-        detection_probability::predicted_apparent_magnitude,
+        detection_probability::{phase_correction, predicted_apparent_magnitude},
         llr_score::{observation_llr_delta, photometric_llr_delta},
     },
     kalman_bank::{KFBank, ellipse_region_finder::SearchRegion},
@@ -128,9 +128,22 @@ impl<'a> FilterContext<'a> {
             .absolute_magnitude_estimate()
             .zip(predicted_bank.best())
             .map(|(h_estimate, best)| {
-                let r_helio_au = best.kf.to_cartesian().pos.norm();
+                let helio = best.kf.to_cartesian().pos;
                 let delta_topocentric_au = best.kf.state[4];
-                predicted_apparent_magnitude(h_estimate, r_helio_au, delta_topocentric_au)
+                // The running H has the phase term removed, so it has to be put
+                // back at this geometry — comparing a phase-corrected H against
+                // an uncorrected apparent magnitude would inject exactly the
+                // systematic the correction exists to remove.
+                predicted_apparent_magnitude(
+                    h_estimate,
+                    helio.norm(),
+                    delta_topocentric_au,
+                    phase_correction(
+                        &helio,
+                        &best.kf.r_obs,
+                        predicted_bank.config.slope_parameter_g,
+                    ),
+                )
             });
 
         let sigma_cross_arcsec = motion.and_then(|m| sigma_cross_of_region(region, &m));

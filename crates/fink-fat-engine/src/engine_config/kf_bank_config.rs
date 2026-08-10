@@ -35,6 +35,7 @@ use crate::engine_config::units::de_length_au;
 use crate::engine_config::validate_helpers::{
     check_finite_in_range, check_finite_nonneg, check_finite_positive, check_min_usize,
 };
+use crate::topocentric_kf::branching::detection_probability;
 
 /// Tuning parameters for the hypothesis bank.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +88,29 @@ pub struct KFBankConfig {
     /// before the `(ρ, ρ̇)` ambiguity is truly resolved.  A value of 5–10
     /// is recommended for arcs shorter than ≈15 nights.
     pub min_hypotheses: usize,
+
+    /// IAU slope parameter `G` used to correct absolute magnitudes for solar
+    /// phase angle. `None` disables the correction entirely.
+    ///
+    /// Units
+    /// -----
+    /// Dimensionless, expected in `[0, 1]`.
+    ///
+    /// The apparent magnitude of an asteroid depends on the Sun–object–observer
+    /// angle: an object fades as it moves away from opposition, by up to ~0.8
+    /// mag over the 0–25° range typical of main-belt observations. Without this
+    /// term the absolute magnitude inferred from a detection is not a property
+    /// of the object but of the geometry it happened to be seen at, and two arcs
+    /// observed months apart disagree systematically — which is why fragment
+    /// linkage could not use photometry at all.
+    ///
+    /// `0.15` is the standard assumption for an asteroid whose slope has not
+    /// been measured (fitting `G` needs a densely sampled phase curve, which no
+    /// object here has). `None` exists to isolate this term's effect when
+    /// reading a run, not as a normal operating mode.
+    ///
+    /// See [`DEFAULT_SLOPE_PARAMETER_G`](crate::topocentric_kf::branching::detection_probability::DEFAULT_SLOPE_PARAMETER_G).
+    pub slope_parameter_g: Option<f64>,
 
     /// Decay schedule for the maximum number of live hypotheses as a function
     /// of the number of observations processed.
@@ -170,6 +194,7 @@ impl Default for KFBankConfig {
         Self {
             gate_chi2: 23.0,
             weight_floor: 1e-4,
+            slope_parameter_g: Some(detection_probability::DEFAULT_SLOPE_PARAMETER_G),
             min_hypotheses: 5,
             cap_schedule: HypothesisCapSchedule::default(),
             likelihood_window: 3,
@@ -190,6 +215,19 @@ impl Validate for KFBankConfig {
             self.gate_chi2,
             "set gate_chi2 to a strictly positive chi-square threshold, e.g. 23.0 (~99.999%)",
         ) {
+            errors.push(e);
+        }
+        // `None` is a valid setting (correction disabled), so only a supplied
+        // value is range-checked.
+        if let Some(g) = self.slope_parameter_g
+            && let Some(e) = check_finite_in_range(
+                "slope_parameter_g",
+                g,
+                0.0,
+                1.0,
+                "set slope_parameter_g to a value in [0, 1] (0.15 is the IAU default), or null to disable the phase correction",
+            )
+        {
             errors.push(e);
         }
         if let Some(e) = check_finite_in_range(

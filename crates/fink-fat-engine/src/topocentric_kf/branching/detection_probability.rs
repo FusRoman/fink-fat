@@ -136,27 +136,57 @@ pub fn hg_phase_correction(phase_angle_rad: f64, slope_parameter_g: f64) -> f64 
     if phi > 0.0 { -2.5 * phi.log10() } else { 0.0 }
 }
 
+/// H-G phase term for a filter state, in magnitudes — `0.0` when the geometry
+/// degenerates or the correction is disabled.
+///
+/// One shared helper so the two transformations below cannot drift apart: the
+/// inward one ([`implied_absolute_magnitude`]) and the outward one
+/// ([`predicted_apparent_magnitude`]) must always see the same value for the
+/// round trip to hold.
+///
+/// # Arguments
+/// * `r_helio_au` – Object heliocentric position (AU), i.e. `kf.to_cartesian().pos`.
+/// * `r_obs_au` – Observer heliocentric position (AU), i.e. `kf.r_obs`.
+/// * `slope_parameter_g` – `None` disables the correction entirely; `Some(g)`
+///   applies the H-G law with that slope (see [`DEFAULT_SLOPE_PARAMETER_G`]).
+pub fn phase_correction(
+    r_helio_au: &nalgebra::Vector3<f64>,
+    r_obs_au: &nalgebra::Vector3<f64>,
+    slope_parameter_g: Option<f64>,
+) -> f64 {
+    let Some(g) = slope_parameter_g else {
+        return 0.0;
+    };
+    solar_phase_angle(r_helio_au, r_obs_au)
+        .map(|alpha| hg_phase_correction(alpha, g))
+        .unwrap_or(0.0)
+}
+
 /// Absolute magnitude `H` implied by one apparent-magnitude observation.
 ///
-/// $$H = m - 5 \log_{10}(r \cdot \Delta)$$
+/// $$H = m - 5 \log_{10}(r \cdot \Delta) - \Phi(\alpha)$$
 ///
-/// The phase-angle term of the standard H-G photometric law is **not**
-/// applied here, so the `H` this returns carries a systematic offset of up to
-/// a few tenths of a magnitude that varies with observing geometry. That is
-/// harmless while every consumer compares magnitudes measured at similar
-/// geometry, and wrong as soon as one compares two arcs observed months
-/// apart — which is exactly what fragment linkage does.
+/// # The sign of the phase term
 ///
-/// [`solar_phase_angle`] and [`hg_phase_correction`] now provide that term;
-/// add it to the result (`H_corrected = H + correction`) wherever the
-/// geometry is available. It is kept out of this function's signature so the
-/// engine's existing running-`H` estimate keeps its current behaviour until
-/// the change is measured end to end.
+/// The H-G law reads `V = H + 5·log10(r·Δ) + Φ(α)` with
+/// `Φ = hg_phase_correction(α, G) ≥ 0` — an object is *fainter* away from
+/// opposition. Inverting it therefore **subtracts** `Φ`. Adding it instead
+/// would double the systematic rather than remove it, and the result would
+/// look like "the phase model made things worse", so the direction is pinned
+/// by a round-trip test rather than left to the reader.
+///
+/// Without this term the returned `H` carries a systematic offset of up to a
+/// few tenths of a magnitude that varies with observing geometry — harmless
+/// while every consumer compares magnitudes measured at similar geometry, and
+/// wrong as soon as one compares two arcs observed months apart, which is
+/// exactly what fragment linkage does.
 ///
 /// # Arguments
 /// * `apparent_magnitude` – Observed apparent magnitude `m`.
 /// * `r_helio_au` – Heliocentric distance of the object (AU).
 /// * `delta_topocentric_au` – Topocentric range `Δ` (AU).
+/// * `phase_correction_mag` – `Φ(α)` from [`phase_correction`]; `0.0` restores
+///   the uncorrected behaviour exactly.
 ///
 /// # Returns
 /// The implied absolute magnitude `H`.
@@ -164,8 +194,9 @@ pub fn implied_absolute_magnitude(
     apparent_magnitude: f64,
     r_helio_au: f64,
     delta_topocentric_au: f64,
+    phase_correction_mag: f64,
 ) -> f64 {
-    apparent_magnitude - 5.0 * (r_helio_au * delta_topocentric_au).log10()
+    apparent_magnitude - 5.0 * (r_helio_au * delta_topocentric_au).log10() - phase_correction_mag
 }
 
 /// Fold one new implied-`H` sample into a running mean estimate.
@@ -197,11 +228,17 @@ pub fn update_running_magnitude_estimate(
 /// estimate and the predicted geometry — the inverse of
 /// [`implied_absolute_magnitude`].
 ///
+/// The phase term is **added** here, being subtracted on the way in — the two
+/// must always be fed the same `Φ` (see [`phase_correction`]), otherwise the
+/// running `H` and the magnitudes predicted from it drift apart.
+///
 /// # Arguments
 /// * `absolute_magnitude_estimate` – Running `H` estimate (see
 ///   [`update_running_magnitude_estimate`]).
 /// * `r_helio_au` – Predicted heliocentric distance (AU).
 /// * `delta_topocentric_au` – Predicted topocentric range `Δ` (AU).
+/// * `phase_correction_mag` – `Φ(α)` at the predicted geometry; `0.0` restores
+///   the uncorrected behaviour exactly.
 ///
 /// # Returns
 /// The predicted apparent magnitude at the target epoch.
@@ -209,8 +246,11 @@ pub fn predicted_apparent_magnitude(
     absolute_magnitude_estimate: f64,
     r_helio_au: f64,
     delta_topocentric_au: f64,
+    phase_correction_mag: f64,
 ) -> f64 {
-    absolute_magnitude_estimate + 5.0 * (r_helio_au * delta_topocentric_au).log10()
+    absolute_magnitude_estimate
+        + 5.0 * (r_helio_au * delta_topocentric_au).log10()
+        + phase_correction_mag
 }
 
 /// Survey completeness at a predicted apparent magnitude — the detection
@@ -256,6 +296,92 @@ mod detection_proba_tests {
     use super::*;
 
     use nalgebra::Vector3;
+
+    /// Apparent magnitude an object of absolute magnitude `h` would show at a
+    /// given geometry, straight from the H-G law — the forward direction, used
+    /// as the oracle for the inverse below.
+    fn apparent_from_hg(h: f64, r_helio_au: f64, delta_au: f64, phase_deg: f64) -> f64 {
+        h + 5.0 * (r_helio_au * delta_au).log10()
+            + hg_phase_correction(phase_deg.to_radians(), DEFAULT_SLOPE_PARAMETER_G)
+    }
+
+    /// The whole point of the phase term: the same object seen at different
+    /// phase angles must yield the **same** absolute magnitude.
+    ///
+    /// This pins the sign. `H = m − 5·log10(r·Δ) − Φ` is the correct
+    /// inversion; adding `Φ` instead would double the systematic rather than
+    /// cancel it, and the module documentation asserted exactly that until
+    /// this test was written. A geometry-dependent `H` is precisely what makes
+    /// photometry useless for comparing two arcs observed months apart.
+    #[test]
+    fn phase_corrected_absolute_magnitude_is_geometry_independent() {
+        let (h_true, r, delta) = (15.5, 2.7, 1.9);
+
+        let recovered = |phase_deg: f64| {
+            let m = apparent_from_hg(h_true, r, delta, phase_deg);
+            let phi = hg_phase_correction(phase_deg.to_radians(), DEFAULT_SLOPE_PARAMETER_G);
+            implied_absolute_magnitude(m, r, delta, phi)
+        };
+
+        for phase_deg in [0.0f64, 5.0, 12.0, 25.0] {
+            let h = recovered(phase_deg);
+            assert!(
+                (h - h_true).abs() < 1e-9,
+                "phase {phase_deg} deg recovered H={h}, expected {h_true}"
+            );
+        }
+    }
+
+    /// Without the correction, the recovered `H` drifts with geometry — the
+    /// systematic this round exists to remove. Quantified rather than
+    /// asserted, so the size of the bias is on record.
+    #[test]
+    fn uncorrected_absolute_magnitude_drifts_with_phase_angle() {
+        let (h_true, r, delta) = (15.5, 2.7, 1.9);
+        let at_opposition =
+            implied_absolute_magnitude(apparent_from_hg(h_true, r, delta, 0.0), r, delta, 0.0);
+        let at_25_deg =
+            implied_absolute_magnitude(apparent_from_hg(h_true, r, delta, 25.0), r, delta, 0.0);
+
+        let drift = at_25_deg - at_opposition;
+        assert!(
+            drift > 0.3,
+            "expected a several-tenths systematic across 0-25 deg, got {drift}"
+        );
+    }
+
+    /// The two transformations must invert each other exactly, whatever `Φ`
+    /// is. If they ever drift apart, the running `H` and the magnitudes
+    /// predicted from it stop being about the same object.
+    #[test]
+    fn implied_and_predicted_magnitudes_are_inverses() {
+        let (r, delta) = (3.1, 2.2);
+        for phi in [0.0f64, 0.2, 0.8] {
+            let m = 20.25;
+            let h = implied_absolute_magnitude(m, r, delta, phi);
+            let back = predicted_apparent_magnitude(h, r, delta, phi);
+            assert!((back - m).abs() < 1e-12, "phi={phi} broke the round trip");
+        }
+    }
+
+    #[test]
+    fn disabled_phase_correction_is_exactly_zero() {
+        let object = Vector3::new(3.0, 0.5, 0.1);
+        let observer = Vector3::new(1.0, 0.0, 0.0);
+        assert_eq!(phase_correction(&object, &observer, None), 0.0);
+        assert!(phase_correction(&object, &observer, Some(DEFAULT_SLOPE_PARAMETER_G)) > 0.0);
+    }
+
+    #[test]
+    fn degenerate_geometry_yields_no_correction() {
+        // Object at the Sun: the direction to the Sun is undefined.
+        let at_sun = Vector3::zeros();
+        let observer = Vector3::new(1.0, 0.0, 0.0);
+        assert_eq!(
+            phase_correction(&at_sun, &observer, Some(DEFAULT_SLOPE_PARAMETER_G)),
+            0.0
+        );
+    }
 
     #[test]
     fn phase_correction_vanishes_at_opposition() {
@@ -326,8 +452,8 @@ mod detection_proba_tests {
         let (r_helio_au, delta_au) = (2.3, 1.4);
         let apparent_magnitude = 19.5;
 
-        let h = implied_absolute_magnitude(apparent_magnitude, r_helio_au, delta_au);
-        let round_tripped = predicted_apparent_magnitude(h, r_helio_au, delta_au);
+        let h = implied_absolute_magnitude(apparent_magnitude, r_helio_au, delta_au, 0.0);
+        let round_tripped = predicted_apparent_magnitude(h, r_helio_au, delta_au, 0.0);
 
         assert!((round_tripped - apparent_magnitude).abs() < 1e-12);
     }

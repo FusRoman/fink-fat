@@ -121,10 +121,15 @@ const MIN_ARC_POINTS: usize = 6;
 
 /// Photometric thresholds swept in one pass (magnitudes). `INFINITY` = off.
 ///
+/// Sized for a *phase-corrected* `H`. Once the H-G term is removed, what is
+/// left between two arcs of one object is lightcurve amplitude plus photometric
+/// noise — a few tenths — so the wide thresholds that used to be needed to
+/// absorb the geometry systematic no longer discriminate anything.
+///
 /// The disabled setting is included deliberately, and now actually works: the
 /// previous `0.0` sentinel was read as `|ΔH| <= 0` and made that row the
 /// strictest test in the sweep rather than the loosest.
-const DELTA_H_THRESHOLDS: [f64; 4] = [f64::INFINITY, 0.6, 1.0, 1.5];
+const DELTA_H_THRESHOLDS: [f64; 4] = [f64::INFINITY, 0.6, 0.3, 0.15];
 /// Reduced chi-square gates swept in one pass. `INFINITY` = off.
 ///
 /// Swept on both the first predicted point and the whole absorbed walk, since
@@ -1287,6 +1292,7 @@ pub fn print_merge_shadow_study(
     print_missed_pairs(&fragments, &truth.pairs, &proposed);
     let rows = sweep(&measurements, traj_population);
     print_sweep(&rows, &measurements, truth.pairs.len());
+    print_delta_h_distributions(&measurements);
     print_reduced_chi2_distributions(&measurements);
     println!("{sep}");
 }
@@ -1635,18 +1641,54 @@ fn print_gap_breakdown(best: &SweepRow, measurements: &[PairMeasurement]) {
     }
 }
 
+/// Absolute-magnitude agreement between the two arcs, split by ground truth.
+///
+/// This is the direct verdict on the H-G phase correction, and it reads
+/// independently of whether the cascade ends up using photometry: with the
+/// geometry systematic removed, the **correct** pairs' distribution must
+/// tighten, since what remains is lightcurve amplitude plus photometric noise.
+/// If it widens instead, the phase term is being applied with the wrong sign
+/// somewhere and nothing else in the report is worth reading.
+///
+/// Without this, "photometry does not help" and "photometry is miswired" look
+/// identical from the sweep table alone.
+fn print_delta_h_distributions(measurements: &[PairMeasurement]) {
+    println!("\n  |dH| between the two arcs (magnitudes)");
+    println!(
+        "  {:<28} {:>8} {:>10} {:>10} {:>10} {:>10}",
+        "", "n", "p10", "p50", "p90", "p99"
+    );
+
+    for (kind, want) in [("correct pairs", Some(true)), ("WRONG pairs", Some(false))] {
+        let mut xs: Vec<f64> = measurements
+            .iter()
+            .filter(|m| m.same_object == want)
+            .filter_map(|m| m.delta_h)
+            .filter(|v| v.is_finite())
+            .collect();
+        if xs.is_empty() {
+            continue;
+        }
+        xs.sort_by(|a, b| a.total_cmp(b));
+        let q = |f: f64| xs[(((xs.len() - 1) as f64) * f).round() as usize];
+        println!(
+            "  {:<28} {:>8} {:>10.3} {:>10.3} {:>10.3} {:>10.3}",
+            kind,
+            xs.len(),
+            q(0.10),
+            q(0.50),
+            q(0.90),
+            q(0.99)
+        );
+    }
+}
+
 /// Reduced chi-square distributions, split by ground truth.
 ///
-/// This is the evidence behind any threshold choice: if the true and false
-/// populations separate on this statistic, a principled cut exists; if they
-/// overlap, no amount of tuning will make it discriminate and the signal has
-/// to come from elsewhere.
-///
-/// It also answers whether the theoretical "≈ 1 when calibrated" holds. The
-/// engine's filter is known to be over-confident — a chi-square gate of 23 was
-/// observed rejecting genuine observations near a stationary point — so a
-/// median well above 1 on *correct* pairs measures that over-confidence rather
-/// than any defect of the link.
+/// The evidence behind any threshold choice: if the true and false populations
+/// separate on this statistic a principled cut exists; if they overlap, no
+/// amount of tuning will make it discriminate and the signal has to come from
+/// elsewhere.
 fn print_reduced_chi2_distributions(measurements: &[PairMeasurement]) {
     println!("\n  Reduced chi-square (expected ~1 if the filter were calibrated)");
     println!(
