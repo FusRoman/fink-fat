@@ -43,93 +43,251 @@
 //! *plus* the object's lightcurve amplitude (≲ 0.5 mag is typical). Adding
 //! the phase term upstream is what would let this tighten.
 
+use ahash::AHashMap;
 use nalgebra::{Matrix2, Vector2, Vector3};
 use photom::{
     coordinates::equatorial::EquCoord,
     observation_dataset::{ObsId, observation::Observation},
 };
+use rayon::prelude::*;
 
 use crate::{
     spacetime_bucket::{
         healpix_binner::HealpixBinner,
         spatial_binner::{SpatialBinner, SpatialKey},
+        time_binner::{TimeBin, TimeBinner},
+        uniform_time_binner::UniformTimeBinner,
     },
     topocentric_kf::single_kalman::{KFState, update::wrap_angle},
 };
 
-/// Tuning for the linkage cascade. Each stage is disabled by its own
-/// sentinel, following the same convention as the rest of the engine's
-/// tuning knobs.
-#[derive(Debug, Clone, Copy)]
+/// Tuning for the linkage cascade and the index that feeds it.
+///
+/// Every optional stage is disabled by `None` rather than by a numeric
+/// sentinel: a `0.0`-means-off convention once inverted the photometric gate
+/// in the shadow study, turning the row labelled "off" into the strictest test
+/// in the sweep and producing two reports that concluded "zero contamination"
+/// from a broken row.
+///
+/// The defaults are the operating point the sweep retained against ground
+/// truth — most recall at ≥ 99 % precision with zero wrong merge on
+/// NEO/Centaur/KBO/SDO — not hand-chosen values.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct MergeParams {
-    /// Minimum number of observations an arc must carry to be linkable at
-    /// all — see [`arc_is_converged`]. `0` disables the gate.
+    /// Minimum number of observations an arc must carry to **predict** — see
+    /// [`arc_is_converged`]. `0` disables the gate.
     ///
-    /// This is the single most important knob of the cascade, because it acts
-    /// on the *base rate* rather than on any one criterion. A 2-to-5-point arc
-    /// has an unconstrained orbit: its `(a, e, i)` are noise, so it lands in an
-    /// arbitrary index bucket — flooding the candidate space *and* missing its
-    /// own true partner. Its covariance is enormous, so the Mahalanobis stage
-    /// waves it through. Its absolute magnitude rests on a handful of samples.
-    /// Such an arc is not linkable with any confidence, and proposing it costs
-    /// precision everywhere.
+    /// It acts on the base rate rather than on any one criterion, which is why
+    /// it matters more than any threshold. A 2-to-5-point arc has an
+    /// unconstrained `ρ`, so propagating it is meaningless; its covariance is
+    /// enormous, so the Mahalanobis stage waves it through.
     ///
-    /// Measured on the first shadow run, the candidate space held 39.7 M pairs
-    /// for 16 073 true ones — a 0.04 % prevalence at which even a 99.4 %
-    /// specific cascade still yields ~232 k false merges. Shrinking the pool is
-    /// the only lever that helps, and it is quadratic in the number of pairs.
+    /// Note this gates the *predictor* only. Short arcs are still indexed as
+    /// **candidates**, because `(α, δ, α̇, δ̇)` at an arc's own epoch is well
+    /// determined even from two points — applying the gate to both sides used
+    /// to lose 12 090 true pairs against 523 lost to cell sizing.
     pub min_arc_points: usize,
+
     /// Max `|H_A − H_B|` (magnitudes) for two arcs to be photometrically
-    /// compatible. `0.0` disables the stage. See the module docs for why
-    /// this is an absolute threshold and not a σ-scaled one.
-    pub max_delta_h: f64,
-    /// Maximum **reduced** chi-square of the first predicted point — the
-    /// primary discriminator. `0.0` disables the dynamical stage (which would
-    /// leave linkage resting on photometry alone — never do this outside a
-    /// diagnostic).
+    /// compatible. See the module docs for why this is an absolute threshold
+    /// and not a σ-scaled one.
+    ///
+    /// `None` by default because measurement says so: with the H-G phase term
+    /// wired, correct pairs sit at `|ΔH|` p50 = 0.35 against wrong pairs at
+    /// 1.11 — real separation, but overlapping enough (correct p90 = 1.51)
+    /// that any useful cut costs more recall than the precision it buys. The
+    /// residual error is dominated by `ρ`, not by phase: `H` carries
+    /// `5·log10(r·Δ)`, so a 30 % range error shifts it by 0.57 mag.
+    pub max_delta_h: Option<f64>,
+
+    /// Maximum **reduced** chi-square of the sequential fit.
     ///
     /// Reduced, not raw, because it has a physical reference: each point
-    /// contributes a `d² ~ χ²(2)`, so `d²/2` should sit near 1 when the filter
-    /// is calibrated. That turns the threshold into a statement about fit
-    /// quality rather than a tuned constant.
+    /// contributes `d² ~ χ²(2)`, so the statistic should sit near 1 when the
+    /// filter is calibrated — a statement about fit quality rather than a
+    /// tuned constant. A gate on the raw `d²` never bit at all: thresholds of
+    /// 9.21, 23 and 100 rejected exactly the same pairs.
     ///
-    /// Measured on a full run, the separation is total:
+    /// `None` by default: once the index proposes *dynamically confusable*
+    /// pairs (same sky cell, same proper motion) rather than accidental
+    /// coincidences, this statistic stops separating them — correct p99 = 53
+    /// against wrong p10 = 0.12. It regains value at lower precision targets.
+    pub max_reduced_chi2: Option<f64>,
+
+    /// Judge [`Self::max_reduced_chi2`] on the whole absorbed walk rather than
+    /// on the first predicted point.
     ///
-    /// | | p10 | p50 | p90 | p99 |
-    /// |---|---|---|---|---|
-    /// | correct pairs | 0.000 | 0.000 | 0.071 | **1.634** |
-    /// | wrong pairs | **79.4** | 1337 | 4.0e5 | 4.1e7 |
+    /// The first point is the only *pure* prediction test — [`sequential_fit`]
+    /// absorbs each observation as it goes, so later terms are partly
+    /// self-fulfilling. The whole walk nonetheless measured more discriminating
+    /// at equal residual (64.5 % precision against 49.4 %), the extra evidence
+    /// outweighing the optimism.
+    pub chi2_on_whole_walk: bool,
+
+    /// Absolute cap (arcsec) on the prediction-to-observation miss, applied to
+    /// every sampled point.
     ///
-    /// Any threshold in `[3, 79]` separates the two populations perfectly.
-    /// Note the correct pairs sit *well below* 1: over a long propagation the
-    /// process noise inflates the covariance far beyond the real error, so the
-    /// filter is under-confident here. That is exactly why a gate on the *raw*
-    /// `d²` never bit — thresholds of 9.21, 23 and 100 rejected identically —
-    /// and why an absolute residual had to do the work instead.
-    pub max_reduced_chi2: f64,
-    /// Absolute cap (arcsec) on the prediction-to-observation miss, applied
-    /// alongside `gate_chi2`. `0.0` disables it.
+    /// The statistical gate alone is not enough: after a long gap the predicted
+    /// box spans ~900 arcsec, so a 3σ test accepts anything within half a
+    /// degree. An absolute bound asks the physical question the covariance
+    /// cannot — *how far off was it, really?* This carries most of the
+    /// cascade's precision.
+    pub max_residual_arcsec: Option<f64>,
+
+    /// Max disagreement in proper motion between the predictor propagated to
+    /// the tested arc's epoch and that arc's own attributable (radians/day,
+    /// both components).
     ///
-    /// The statistical gate alone is not enough: after a long gap the
-    /// predicted box spans ~900 arcsec, so a 3σ test accepts anything within
-    /// half a degree. An absolute bound asks the physical question the
-    /// covariance cannot — *how far off was it, really?*
-    pub max_residual_arcsec: f64,
-    /// Refuse to link across a gap longer than this (days). `0.0` disables
-    /// the limit. Long gaps are where a two-body propagation drifts and
-    /// where two unrelated objects are most likely to look compatible.
-    pub max_gap_days: f64,
+    /// Nearly independent of the position residual — two unrelated arcs can
+    /// share a sky cell by coincidence, but sharing a cell *and* a proper
+    /// motion is a far stronger statement. This is the criterion that made
+    /// ≥ 99 % precision reachable at all.
+    pub max_rate_diff_rad_per_day: Option<f64>,
+
+    /// Refuse to link across a gap longer than this (days). `None` disables
+    /// the limit.
+    ///
+    /// Also bounds how far a predictor is carried when searching, so it caps
+    /// recall directly: at 30 days it excluded 3391 true pairs, at 60 days
+    /// 1032. Long gaps are where two-body propagation drifts and where two
+    /// unrelated objects are most likely to look compatible.
+    pub max_gap_days: Option<f64>,
+
+    /// Reject any connected component holding more arcs than this.
+    ///
+    /// Linkage is transitive: A–B and B–C produce {A, B, C}. **A single wrong
+    /// link therefore merges two entire components**, which is why pairwise
+    /// precision does not translate into component purity. A component of
+    /// thirty arcs is not an object fragmented thirty times, it is a chain of
+    /// errors — refusing it is cheaper than trying to find the bad link inside
+    /// it. `0` disables the cap.
+    pub max_component_size: usize,
+
+    /// HEALPix depth of the candidate index's sky cells.
+    ///
+    /// Depth 5 is ~1.8° across: coarse enough to absorb the propagation error
+    /// over a short hop, fine enough that a cell holds few unrelated arcs.
+    pub index_healpix_depth: u8,
+
+    /// Width of one index time slice (days).
+    ///
+    /// One night: arcs are nightly tracklets, and within a night an object
+    /// moves far less than a cell, so a finer slice would only multiply
+    /// propagations without separating anything.
+    pub time_slice_days: f64,
+
+    /// How many observations of the tested arc are walked through.
+    ///
+    /// Each costs a Kepler propagation plus a Kalman update. A spread sample is
+    /// nearly as decisive as the whole arc: the covariance collapses after the
+    /// first one or two absorbed points.
+    pub max_test_points: usize,
 }
 
 impl Default for MergeParams {
-    /// Everything off: linkage is opt-in.
+    /// The operating point retained by the ground-truth sweep: 4838 correct
+    /// merges against 43 wrong, 99.12 % precision, zero wrong merge on
+    /// NEO/Centaur/KBO/SDO.
     fn default() -> Self {
         Self {
-            min_arc_points: 0,
-            max_delta_h: 0.0,
-            max_reduced_chi2: 0.0,
-            max_residual_arcsec: 0.0,
-            max_gap_days: 0.0,
+            min_arc_points: 6,
+            max_delta_h: None,
+            max_reduced_chi2: None,
+            chi2_on_whole_walk: true,
+            max_residual_arcsec: Some(300.0),
+            // 0.3 arcmin/day.
+            max_rate_diff_rad_per_day: Some(8.726_646_259_971_648e-5),
+            max_gap_days: Some(60.0),
+            max_component_size: 8,
+            index_healpix_depth: 5,
+            time_slice_days: 1.0,
+            max_test_points: 5,
+        }
+    }
+}
+
+impl crate::engine_config::Validate for MergeParams {
+    /// Accumulates every failure rather than stopping at the first, matching
+    /// the rest of the configuration.
+    ///
+    /// Only supplied values are range-checked: `None` means "stage disabled"
+    /// and is always valid.
+    fn validate(&self) -> Result<(), Vec<crate::engine_config::error::FieldError>> {
+        use crate::engine_config::validate_helpers::{check_finite_positive, check_min_usize};
+
+        let mut errors = Vec::new();
+
+        for (name, value, hint) in [
+            (
+                "max_delta_h",
+                self.max_delta_h,
+                "set max_delta_h to a positive magnitude difference, e.g. 0.6, or null to disable",
+            ),
+            (
+                "max_reduced_chi2",
+                self.max_reduced_chi2,
+                "set max_reduced_chi2 to a positive reduced chi-square, e.g. 2.0, or null to disable",
+            ),
+            (
+                "max_residual_arcsec",
+                self.max_residual_arcsec,
+                "set max_residual_arcsec to a positive angle in arcsec, e.g. 300.0, or null to disable",
+            ),
+            (
+                "max_rate_diff_rad_per_day",
+                self.max_rate_diff_rad_per_day,
+                "set max_rate_diff_rad_per_day to a positive rate in rad/day, or null to disable",
+            ),
+            (
+                "max_gap_days",
+                self.max_gap_days,
+                "set max_gap_days to a positive number of days, e.g. 60.0, or null to disable",
+            ),
+        ] {
+            if let Some(v) = value
+                && let Some(e) = check_finite_positive(name, v, hint)
+            {
+                errors.push(e);
+            }
+        }
+
+        if let Some(e) = check_finite_positive(
+            "time_slice_days",
+            self.time_slice_days,
+            "set time_slice_days to a positive slice width, e.g. 1.0 (one night)",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_min_usize(
+            "max_test_points",
+            self.max_test_points,
+            1,
+            "set max_test_points to at least 1: a link must be demonstrated on some observation",
+        ) {
+            errors.push(e);
+        }
+        // Depth 0 is a 12-cell whole-sky tessellation, which would make the
+        // index useless rather than merely coarse.
+        if self.index_healpix_depth == 0 || self.index_healpix_depth > 29 {
+            errors.push(
+                crate::engine_config::error::FieldError::new(
+                    "index_healpix_depth",
+                    format!(
+                        "{} is outside the usable HEALPix range",
+                        self.index_healpix_depth
+                    ),
+                )
+                .with_hint(
+                    "set index_healpix_depth between 1 and 29; 5 (~1.8 deg cells) is the measured default",
+                ),
+            );
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
         }
     }
 }
@@ -268,32 +426,37 @@ impl SequentialFit {
         Some(self.d2.iter().sum::<f64>() / (2.0 * self.d2.len() as f64))
     }
 
-    /// Whether the fit clears both bounds.
+    /// Whether the fit clears the configured bounds.
     ///
-    /// The reduced chi-square is judged on the **first** point only — see
-    /// [`Self::reduced_chi2_first`] for why the later ones are compromised by
-    /// the sequential absorption. The absolute residual, which cannot be
-    /// gamed that way, is still required of every point.
+    /// `None` disables a test. An empty fit never passes: a link must be
+    /// demonstrated, not assumed.
     ///
-    /// `max_reduced_chi2 <= 0.0` disables the statistical test,
-    /// `max_residual_arcsec <= 0.0` the absolute one. An empty fit never
-    /// passes: a link must be demonstrated, not assumed.
-    pub fn passes(&self, max_reduced_chi2: f64, max_residual_arcsec: f64) -> bool {
+    /// Which chi-square is used is a real choice, not a detail — see
+    /// [`MergeParams::chi2_on_whole_walk`]. The absolute residual cannot be
+    /// gamed by the sequential absorption, so it is required of every point.
+    pub fn passes(
+        &self,
+        max_reduced_chi2: Option<f64>,
+        chi2_on_whole_walk: bool,
+        max_residual_arcsec: Option<f64>,
+    ) -> bool {
         if self.d2.is_empty() {
             return false;
         }
-        if max_reduced_chi2 > 0.0
-            && !self
-                .reduced_chi2_first()
-                .is_some_and(|chi2| chi2 <= max_reduced_chi2)
-        {
-            return false;
+        if let Some(limit) = max_reduced_chi2 {
+            let chi2 = if chi2_on_whole_walk {
+                self.reduced_chi2()
+            } else {
+                self.reduced_chi2_first()
+            };
+            if !chi2.is_some_and(|c| c <= limit) {
+                return false;
+            }
         }
-        max_residual_arcsec <= 0.0
-            || self
-                .separation_arcsec
-                .iter()
-                .all(|sep| *sep <= max_residual_arcsec)
+        match max_residual_arcsec {
+            Some(limit) => self.separation_arcsec.iter().all(|sep| *sep <= limit),
+            None => true,
+        }
     }
 }
 
@@ -416,17 +579,23 @@ pub fn evaluate_pair(
         return MergeVerdict::RejectedUnconverged;
     }
     // Order-independent: the two arcs must simply not overlap in time.
-    let disjoint = temporally_disjoint(predictor_span, tested_span, params.max_gap_days)
-        || temporally_disjoint(tested_span, predictor_span, params.max_gap_days);
+    let max_gap = params.max_gap_days.unwrap_or(0.0);
+    let disjoint = temporally_disjoint(predictor_span, tested_span, max_gap)
+        || temporally_disjoint(tested_span, predictor_span, max_gap);
     if !disjoint {
         return MergeVerdict::RejectedTemporal;
     }
-    if !photometric_compatible(predictor_h, tested_h, params.max_delta_h) {
+    if !photometric_compatible(predictor_h, tested_h, params.max_delta_h.unwrap_or(0.0)) {
         return MergeVerdict::RejectedPhotometric;
     }
-    if params.max_reduced_chi2 > 0.0 || params.max_residual_arcsec > 0.0 {
+    if params.max_reduced_chi2.is_some() || params.max_residual_arcsec.is_some() {
         match sequential_fit(predictor_state, tested_points) {
-            Some(fit) if fit.passes(params.max_reduced_chi2, params.max_residual_arcsec) => {}
+            Some(fit)
+                if fit.passes(
+                    params.max_reduced_chi2,
+                    params.chi2_on_whole_walk,
+                    params.max_residual_arcsec,
+                ) => {}
             _ => return MergeVerdict::RejectedDynamical,
         }
     }
@@ -603,6 +772,347 @@ pub fn merged_track_ids(
     ids
 }
 
+// ── Whole-run linkage ───────────────────────────────────────────────────────
+
+/// One arc, as the linkage pass sees it.
+///
+/// Test points are supplied by the caller rather than resolved here: the
+/// engine has no observation dataset, and precomputing them is cheaper anyway
+/// since every arc is a potential *tested* arc and a pair-by-pair resolution
+/// would repeat the same lookups millions of times.
+pub struct MergeFragment<'state_lf, 'obs> {
+    /// Observations this arc accounts for.
+    pub track_ids: &'obs [ObsId],
+    /// MAP state at the arc's own epoch.
+    pub state: KFState<'state_lf>,
+    /// Running absolute-magnitude estimate, if any.
+    pub h: Option<f64>,
+    /// `(first, last)` observation epoch, MJD TT.
+    pub span: (f64, f64),
+    /// Sampled observations used when this arc is the *tested* one, in
+    /// chronological order — see [`sequential_fit`].
+    pub test_points: Vec<LinkTestPoint<'obs>>,
+}
+
+/// What a linkage pass produced.
+pub struct MergeOutcome {
+    /// Connected components of the accepted links, as fragment indices. Every
+    /// fragment appears exactly once, so a component of length 1 is an arc
+    /// nothing linked to.
+    pub components: Vec<Vec<usize>>,
+    /// Ordered pairs the index proposed, before any gate.
+    pub n_pairs_tested: usize,
+    /// Pairs the cascade accepted.
+    pub n_links_accepted: usize,
+    /// Components refused for exceeding
+    /// [`MergeParams::max_component_size`], and the arcs they held. Reported
+    /// rather than silently dropped: a component that large is the signature
+    /// of a chain of wrong links, and knowing how often it happens is the only
+    /// way to tell a tuning problem from a rare accident.
+    pub n_components_rejected_oversize: usize,
+    pub n_arcs_in_rejected_components: usize,
+}
+
+/// Disjoint-set forest over fragment indices, with union by size and path
+/// halving.
+struct UnionFind {
+    parent: Vec<usize>,
+    size: Vec<usize>,
+}
+
+impl UnionFind {
+    fn new(n: usize) -> Self {
+        Self {
+            parent: (0..n).collect(),
+            size: vec![1; n],
+        }
+    }
+
+    fn find(&mut self, mut x: usize) -> usize {
+        while self.parent[x] != x {
+            self.parent[x] = self.parent[self.parent[x]];
+            x = self.parent[x];
+        }
+        x
+    }
+
+    fn union(&mut self, a: usize, b: usize) {
+        let (mut ra, mut rb) = (self.find(a), self.find(b));
+        if ra == rb {
+            return;
+        }
+        if self.size[ra] < self.size[rb] {
+            std::mem::swap(&mut ra, &mut rb);
+        }
+        self.parent[rb] = ra;
+        self.size[ra] += self.size[rb];
+    }
+}
+
+/// Canonical ordering of a candidate pair: `(predictor, tested)`.
+///
+/// The predictor is the **longer** arc, not the earlier one. Measurement
+/// showed 48 % of true pairs have the short arc first, so insisting the
+/// earlier arc predict would throw those away. `None` when the spans overlap:
+/// one object holds one position per epoch, so overlapping arcs are duplicates
+/// rather than continuations.
+fn order_pair(fragments: &[MergeFragment<'_, '_>], a: usize, b: usize) -> Option<(usize, usize)> {
+    let (a_span, b_span) = (fragments[a].span, fragments[b].span);
+    if !(a_span.1 <= b_span.0 || b_span.1 <= a_span.0) {
+        return None;
+    }
+    let (na, nb) = (fragments[a].track_ids.len(), fragments[b].track_ids.len());
+    Some(if (nb, b) > (na, a) { (b, a) } else { (a, b) })
+}
+
+/// One night's worth of indexed candidate arcs.
+struct TimeSlice {
+    epoch: f64,
+    r_obs: Vector3<f64>,
+    v_obs: Vector3<f64>,
+    /// Sky cell → fragment indices whose own epoch falls in this night.
+    cells: AHashMap<u64, Vec<usize>>,
+}
+
+/// Ordered candidate pairs proposed by a **time-sliced**, asymmetric index.
+///
+/// # Why the two sides are treated differently
+///
+/// Carrying every arc to one shared reference epoch forces a long propagation
+/// on both sides, and a propagation is only as good as `ρ` — the
+/// badly-determined half of a topocentric attributable. Such an index has to
+/// demand convergence of both arcs, and measurement showed the price: of
+/// 12 613 true pairs missed, **12 090 were missed because one arc was too
+/// short to index**, against 523 genuinely mis-binned.
+///
+/// So:
+/// * **candidates** are indexed at *their own epoch* with no propagation at
+///   all — `(α, δ, α̇, δ̇)` is what the observations directly measure, and a
+///   two-point tracklet already pins it down, so arc length stops mattering;
+/// * **predictors** must be converged, and are carried only to the nightly
+///   slices within [`MergeParams::max_gap_days`] of their own span.
+///
+/// Proper motion stays out of the key deliberately: quantising it would add a
+/// ±1 probe on two more axes (81 lookups per slice instead of 9) while still
+/// cutting arbitrarily at bin edges. Comparing rates exactly on the short list
+/// a cell lookup returns is cheaper and sharper.
+fn candidate_pairs(
+    fragments: &[MergeFragment<'_, '_>],
+    params: &MergeParams,
+) -> Vec<(usize, usize)> {
+    let binner = HealpixBinner::new(params.index_healpix_depth);
+    let max_gap = params.max_gap_days.unwrap_or(f64::INFINITY);
+
+    let attributables: Vec<Option<(f64, f64, f64, f64)>> = fragments
+        .iter()
+        .map(|f| attributable_at(&f.state))
+        .collect();
+
+    let t0 = fragments
+        .iter()
+        .map(|f| f.state.epoch)
+        .filter(|e| e.is_finite())
+        .fold(f64::INFINITY, f64::min);
+    if !t0.is_finite() {
+        return Vec::new();
+    }
+    let time_binner = UniformTimeBinner::new(t0, params.time_slice_days);
+
+    let mut slices: AHashMap<TimeBin, TimeSlice> = AHashMap::default();
+    for (slot, fragment) in fragments.iter().enumerate() {
+        let epoch = fragment.state.epoch;
+        if attributables[slot].is_none() || !epoch.is_finite() {
+            continue;
+        }
+        let Some(SpatialKey(cell)) = sky_cell_key(&fragment.state, &binner) else {
+            continue;
+        };
+        slices
+            .entry(time_binner.bin_for(epoch))
+            .or_insert_with(|| TimeSlice {
+                epoch,
+                r_obs: fragment.state.r_obs,
+                v_obs: fragment.state.v_obs,
+                cells: AHashMap::default(),
+            })
+            .cells
+            .entry(cell)
+            .or_default()
+            .push(slot);
+    }
+
+    // An arc near a cell edge lands either side depending on which arc you
+    // ask, so probing the exact cell alone would lose precisely the pairs of
+    // interest.
+    let probe_radius = binner.cell_radius() * 1.5;
+
+    let mut pairs: Vec<(usize, usize)> = fragments
+        .par_iter()
+        .enumerate()
+        .filter(|(_, f)| arc_is_converged(f.track_ids.len(), params.min_arc_points))
+        .flat_map_iter(|(a, predictor)| {
+            let mut local: Vec<(usize, usize)> = Vec::new();
+            let (span_start, span_end) = predictor.span;
+
+            // Only outside the predictor's own span: an arc overlapping it is a
+            // duplicate, not a continuation.
+            for (lo, hi) in [
+                (span_start - max_gap, span_start),
+                (span_end, span_end + max_gap),
+            ] {
+                for bin in time_binner.bins_in_range(lo, hi) {
+                    let Some(slice) = slices.get(&bin) else {
+                        continue;
+                    };
+                    let Ok(propagated) =
+                        predictor
+                            .state
+                            .predict(slice.epoch, slice.r_obs, slice.v_obs)
+                    else {
+                        continue;
+                    };
+                    let Some(attr_pred) = attributable_at(&propagated) else {
+                        continue;
+                    };
+                    let Some(cell) = sky_cell_key(&propagated, &binner) else {
+                        continue;
+                    };
+
+                    for SpatialKey(neighbour) in binner.neighbors(cell, probe_radius) {
+                        let Some(slots) = slice.cells.get(&neighbour) else {
+                            continue;
+                        };
+                        for &b in slots {
+                            if a == b {
+                                continue;
+                            }
+                            let Some(attr_b) = attributables[b] else {
+                                continue;
+                            };
+                            if let Some(tol) = params.max_rate_diff_rad_per_day
+                                && !rates_compatible(attr_pred, attr_b, tol)
+                            {
+                                continue;
+                            }
+                            let Some(pair) = order_pair(fragments, a, b) else {
+                                continue; // overlapping: never mergeable
+                            };
+                            local.push(pair);
+                        }
+                    }
+                }
+            }
+            local
+        })
+        .collect();
+
+    // The same pair reaches the list once per slice that proposed it.
+    pairs.sort_unstable();
+    pairs.dedup();
+    pairs
+}
+
+/// Link fragments of the same object across the whole run.
+///
+/// # Why components, and why they are capped
+///
+/// Linkage is transitive: accepting A–B and B–C yields `{A, B, C}`. That is
+/// the point — an object broken into three pieces should come back as one —
+/// but it also means **a single wrong link merges two entire components**.
+/// Pairwise precision therefore does not carry over to component purity, and
+/// [`MergeParams::max_component_size`] exists to bound the blast radius: past
+/// a certain size a component is a chain of errors rather than a heavily
+/// fragmented object, and refusing it wholesale is cheaper and safer than
+/// trying to find the bad link inside it.
+///
+/// Rejected components are split back into their individual arcs, so nothing
+/// is ever lost — the worst case is that linkage did nothing for them.
+///
+/// This does **not** touch any filter state: it consumes arcs and returns
+/// groupings, leaving banks, hypotheses and the snapshot schema untouched.
+pub fn merge_fragments(fragments: &[MergeFragment<'_, '_>], params: &MergeParams) -> MergeOutcome {
+    let pairs = candidate_pairs(fragments, params);
+
+    let accepted: Vec<(usize, usize)> = pairs
+        .par_iter()
+        .filter(|&&(predictor, tested)| {
+            let (p, t) = (&fragments[predictor], &fragments[tested]);
+            evaluate_pair(
+                p.span,
+                &p.state,
+                p.h,
+                p.track_ids.len(),
+                t.span,
+                t.h,
+                &t.test_points,
+                params,
+            ) == MergeVerdict::Link
+        })
+        .copied()
+        .collect();
+
+    let mut uf = UnionFind::new(fragments.len());
+    for &(a, b) in &accepted {
+        uf.union(a, b);
+    }
+
+    let mut by_root: AHashMap<usize, Vec<usize>> = AHashMap::default();
+    for slot in 0..fragments.len() {
+        by_root.entry(uf.find(slot)).or_default().push(slot);
+    }
+
+    let mut components = Vec::with_capacity(by_root.len());
+    let mut n_components_rejected_oversize = 0usize;
+    let mut n_arcs_in_rejected_components = 0usize;
+    for (_, members) in by_root {
+        if params.max_component_size > 0 && members.len() > params.max_component_size {
+            n_components_rejected_oversize += 1;
+            n_arcs_in_rejected_components += members.len();
+            // Dissolved back into singletons: refusing to merge must never
+            // mean losing the arcs.
+            components.extend(members.into_iter().map(|slot| vec![slot]));
+            continue;
+        }
+        components.push(members);
+    }
+    // Deterministic order regardless of hash iteration.
+    for component in &mut components {
+        component.sort_unstable();
+    }
+    components.sort_unstable();
+
+    MergeOutcome {
+        components,
+        n_pairs_tested: pairs.len(),
+        n_links_accepted: accepted.len(),
+        n_components_rejected_oversize,
+        n_arcs_in_rejected_components,
+    }
+}
+
+/// Observations of one component, chronologically ordered and duplicate-free.
+///
+/// `epoch_of` resolves an observation's epoch; ids it cannot resolve are kept
+/// but sort last, so an unresolvable id degrades ordering rather than losing
+/// the observation.
+pub fn component_track_ids(
+    fragments: &[MergeFragment<'_, '_>],
+    component: &[usize],
+    epoch_of: impl Fn(ObsId) -> Option<f64>,
+) -> Vec<ObsId> {
+    let mut ids: Vec<ObsId> = component
+        .iter()
+        .flat_map(|&slot| fragments[slot].track_ids.iter().copied())
+        .collect();
+    ids.sort_unstable_by(|a, b| {
+        let ka = epoch_of(*a).unwrap_or(f64::INFINITY);
+        let kb = epoch_of(*b).unwrap_or(f64::INFINITY);
+        ka.total_cmp(&kb).then_with(|| a.cmp(b))
+    });
+    ids.dedup();
+    ids
+}
+
 #[cfg(test)]
 mod merge_tests {
     use super::*;
@@ -725,6 +1235,29 @@ mod merge_tests {
             attr(0.0, 0.0),
             1e-3
         ));
+    }
+
+    #[test]
+    fn union_find_groups_transitively() {
+        let mut uf = UnionFind::new(5);
+        uf.union(0, 1);
+        uf.union(1, 2);
+        // 0-1 and 1-2 must place all three in one component: that transitivity
+        // is the point of linkage, and also how one wrong link contaminates a
+        // whole group.
+        assert_eq!(uf.find(0), uf.find(2));
+        assert_ne!(uf.find(0), uf.find(3));
+        assert_ne!(uf.find(3), uf.find(4));
+    }
+
+    #[test]
+    fn union_find_is_idempotent() {
+        let mut uf = UnionFind::new(3);
+        uf.union(0, 1);
+        uf.union(0, 1);
+        uf.union(1, 0);
+        assert_eq!(uf.find(0), uf.find(1));
+        assert_ne!(uf.find(0), uf.find(2));
     }
 
     #[test]

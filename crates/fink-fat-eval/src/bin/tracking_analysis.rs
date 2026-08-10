@@ -26,7 +26,8 @@ use fink_fat_eval::{
     snapshot_report::{
         efficacy::{
             ReconstructionEfficacy, all_reconstructions, build_gold_tracker_for_processed_nights,
-            compute_reconstruction_efficacy, determine_last_processed_night,
+            compute_reconstruction_efficacy, compute_reconstruction_efficacy_for,
+            determine_last_processed_night,
         },
         plots::{
             plot_cumulative_llr_per_lineage_histogram, plot_hypotheses_per_branch_histogram,
@@ -39,6 +40,7 @@ use fink_fat_eval::{
     tracking_report::{
         gold_trajectory::GoldTrajectoryTracker,
         lineage_lifecycle::LineageTracker,
+        merge_apply::{apply_merge, print_merge_application},
         merge_shadow::print_merge_shadow_study,
         night_stats::compute_night_tracking_stats,
         object_outcome::{ObjectOutcome, ObjectOutcomeTracker},
@@ -331,6 +333,33 @@ fn main() -> Result<()> {
             &ground_truth,
             &traj_population,
         );
+
+        // Then run the engine's own linkage with the retained parameters and
+        // score the result. Printing the efficacy report a second time, over
+        // merged reconstructions and through identical code, is the least
+        // ambiguous verification available: the delta reads line by line and
+        // nothing is hidden if merging turns out to hurt.
+        let application = apply_merge(
+            &collection,
+            &obs_dataset,
+            &kalman_ctx,
+            &engine_config.merge_params,
+        );
+        print_merge_application(
+            &application,
+            &ground_truth,
+            all_reconstructions(&collection).len(),
+        );
+
+        println!("\n--- Reconstruction efficacy AFTER fragment linkage ---");
+        compute_reconstruction_efficacy_for(
+            &application.as_slices(),
+            &ground_truth,
+            &gold_tracker,
+            &traj_population,
+            night_ids.last().copied(),
+        )
+        .print_summary();
     }
 
     let never_touched_ids: Vec<photom::TrajId> = outcomes

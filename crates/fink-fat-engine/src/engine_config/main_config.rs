@@ -3,6 +3,8 @@ use config::{Config, Environment, File};
 use photom::MJDTT;
 use serde::{Deserialize, Serialize};
 
+use crate::topocentric_kf::branching::merge::MergeParams;
+
 use crate::engine_config::{
     CONFIGURATION_VERSION, Validate,
     error::{ConfigError, FieldError, ValidationErrors, prefix_errors},
@@ -72,6 +74,15 @@ pub struct EngineConfig {
     /// Hypothesis-bank pruning, merging and search-region tuning. See
     /// [`KFBankConfig`].
     pub kfbank_config: KFBankConfig,
+
+    /// End-of-run fragment linkage: which arcs get stitched back together
+    /// into a single trajectory. See [`MergeParams`].
+    ///
+    /// Its own section rather than a corner of `kfbank_config` because it is
+    /// not bank tuning: it runs once over finished reconstructions and touches
+    /// no filter state.
+    #[serde(default)]
+    pub merge_params: MergeParams,
 
     /// `(ρ, ρ̇)` admissible-region seeding grid and dynamical population
     /// priors used to initialize new tracklet hypotheses. See [`GridConfig`].
@@ -194,6 +205,7 @@ impl Default for EngineConfig {
             triplets: TripletConfig::default(),
             kalman_shared_context: KalmanContextConfig::default(),
             kfbank_config: KFBankConfig::default(),
+            merge_params: MergeParams::default(),
             seeding_grid_config: GridConfig::default(),
             advance_params: NightAdvanceParams::default(),
             time_binner_width: 0.021, // ~30 min in days
@@ -377,6 +389,9 @@ impl Validate for EngineConfig {
         }
         if let Err(e) = self.kalman_shared_context.validate() {
             errors.extend(prefix_errors(e, "kalman_shared_context"));
+        }
+        if let Err(e) = self.merge_params.validate() {
+            errors.extend(prefix_errors(e, "merge_params"));
         }
         if let Err(e) = self.kfbank_config.validate() {
             errors.extend(prefix_errors(e, "kfbank_config"));

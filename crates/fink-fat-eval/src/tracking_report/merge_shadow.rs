@@ -407,17 +407,36 @@ fn sample_test_points<'obs>(
     obs_dataset: &'obs ObsDataset,
     kalman_context: &KalmanContext,
 ) -> Vec<LinkTestPoint<'obs>> {
-    let n = fragment.track_ids.len();
-    if n == 0 {
+    sample_test_points_for(
+        fragment.track_ids,
+        MAX_TEST_POINTS,
+        obs_dataset,
+        kalman_context,
+    )
+}
+
+/// Spread sample of an arc's observations, with the observer geometry at each
+/// epoch resolved.
+///
+/// Shared with the applied-merge path so both judge a pair on the same
+/// evidence; a validation that sampled differently from the sweep would not be
+/// validating the sweep's conclusion.
+pub fn sample_test_points_for<'obs>(
+    track_ids: &[ObsId],
+    max_points: usize,
+    obs_dataset: &'obs ObsDataset,
+    kalman_context: &KalmanContext,
+) -> Vec<LinkTestPoint<'obs>> {
+    let n = track_ids.len();
+    if n == 0 || max_points == 0 {
         return Vec::new();
     }
-    let stride = n.div_ceil(MAX_TEST_POINTS).max(1);
+    let stride = n.div_ceil(max_points).max(1);
 
-    let mut points: Vec<LinkTestPoint<'obs>> = fragment
-        .track_ids
+    let mut points: Vec<LinkTestPoint<'obs>> = track_ids
         .iter()
         .step_by(stride)
-        .take(MAX_TEST_POINTS)
+        .take(max_points)
         .filter_map(|id| {
             let observation = obs_dataset.get_observation(*id)?;
             let (r_obs, v_obs) =

@@ -218,14 +218,33 @@ pub fn compute_reconstruction_efficacy(
     traj_population: &AHashMap<TrajId, Population>,
     last_processed_night: Option<NightId>,
 ) -> ReconstructionEfficacy {
+    compute_reconstruction_efficacy_for(
+        &all_reconstructions(collection),
+        ground_truth,
+        gold_tracker,
+        traj_population,
+        last_processed_night,
+    )
+}
+
+/// Same report, scored over an arbitrary set of reconstructions rather than
+/// over a collection's own.
+///
+/// Exists so fragment linkage can be evaluated on exactly the same footing as
+/// the raw run: merging produces a *different set of reconstructions*, and the
+/// only trustworthy way to judge it is to score both through identical code
+/// and read the difference line by line.
+pub fn compute_reconstruction_efficacy_for(
+    reconstructions: &[&[ObsId]],
+    ground_truth: &ObsTrajLookup,
+    gold_tracker: &GoldTrajectoryTracker,
+    traj_population: &AHashMap<TrajId, Population>,
+    last_processed_night: Option<NightId>,
+) -> ReconstructionEfficacy {
     // Branch purity + which branches touch which trajectory.
     let mut touching_branches: AHashMap<TrajId, AHashSet<usize>> = AHashMap::default();
     let mut covered_obs_by_traj: AHashMap<TrajId, AHashSet<ObsId>> = AHashMap::default();
     let (mut n_pure, mut n_mixed, mut n_unknown) = (0usize, 0usize, 0usize);
-
-    // Live branches *and* archived arcs: both are reconstructions this run
-    // produced, and `branch_idx` below indexes into this combined list.
-    let reconstructions = all_reconstructions(collection);
 
     for (branch_idx, track_ids) in reconstructions.iter().enumerate() {
         match ground_truth.classify(track_ids) {

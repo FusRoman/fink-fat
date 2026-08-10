@@ -344,9 +344,9 @@ pub fn compute_step_diag(
     let sigma_ra_arcsec = equ_pred.ra_error * RAD_TO_ARCSEC;
     let sigma_dec_arcsec = equ_pred.dec_error * RAD_TO_ARCSEC;
     let separation_arcsec = equ_pred.angular_separation(equ_obs).to_degrees() * 3600.;
-    let sep_arcsec_region_center = match region_center {
-        Some(center) => center.angular_separation(equ_obs).to_degrees() * 3600.,
-        None => return None,
+    let sep_arcsec_region_center = {
+        let center = region_center?;
+        center.angular_separation(equ_obs).to_degrees() * 3600.
     };
 
     let mahalanobis_distance =
