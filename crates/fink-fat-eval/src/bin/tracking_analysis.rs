@@ -38,6 +38,7 @@ use fink_fat_eval::{
         stats::{SnapshotStats, build_obs_to_night_map, compute_snapshot_stats},
     },
     tracking_report::{
+        bank_population::BankPopulationStats,
         gold_trajectory::GoldTrajectoryTracker,
         lineage_lifecycle::LineageTracker,
         merge_apply::{apply_merge, print_merge_application},
@@ -198,6 +199,9 @@ fn main() -> Result<()> {
     let mut collection = BranchCollection::empty();
     let mut gold_tracker = GoldTrajectoryTracker::new();
     let mut lineage_tracker = LineageTracker::new();
+    // Sampled from the propagation `compute_night_tracking_stats` already does,
+    // so it costs nothing beyond the accumulator itself.
+    let mut bank_population = BankPopulationStats::default();
     let mut object_outcome_tracker = ObjectOutcomeTracker::new();
     let mut gate_selectivity =
         fink_fat_eval::tracking_report::gate_selectivity::GateSelectivity::new();
@@ -245,6 +249,7 @@ fn main() -> Result<()> {
             &spatial_binner,
             elapsed_ms,
             cli.completeness_coverage_threshold,
+            &mut bank_population,
         );
 
         progress.set_message(format!(
@@ -309,6 +314,10 @@ fn main() -> Result<()> {
         &traj_population,
         collection.current_step,
     );
+
+    // Settles whether hypothesis banks are over-retaining, and whether that is
+    // what keeps old lineages' gates wide enough to admit other objects.
+    bank_population.print_summary();
 
     // Reconstruction efficacy (incl. per-population breakdown) on the final
     // live collection — the same report `--from-snapshot` prints, so Part A is

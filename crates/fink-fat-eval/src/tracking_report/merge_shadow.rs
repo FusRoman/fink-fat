@@ -245,12 +245,25 @@ impl StageCounters {
         }
     }
 
+    /// Fraction of accepted links that provably join two arcs of the same
+    /// object — **unscorable links count against it**.
+    ///
+    /// They used to be excluded from both numerator and denominator, which
+    /// made this number badly optimistic: an "unscorable" link is one where a
+    /// fragment is already `Mixed`/`Unknown`, and 34 % of the pool's branches
+    /// are mixed. Merging a pure arc into an already-contaminated one destroys
+    /// a good reconstruction, so those links are exactly the harmful case the
+    /// old denominator hid.
+    ///
+    /// Measured cost of the omission: an operating point reported at 99.12 %
+    /// pairwise precision (4838 correct, 43 wrong, **1679 unscorable**)
+    /// produced components that were only 73.77 % pure, and applying it to the
+    /// pipeline lowered completeness from 62.6 % to 62.2 %.
     fn precision_pct(&self) -> f64 {
-        let scorable = self.correct + self.wrong;
-        if scorable == 0 {
+        if self.linked == 0 {
             f64::NAN
         } else {
-            100.0 * self.correct as f64 / scorable as f64
+            100.0 * self.correct as f64 / self.linked as f64
         }
     }
 }
@@ -1519,12 +1532,13 @@ fn print_sweep(rows: &[SweepRow], measurements: &[PairMeasurement], n_truth_pair
 
     let print_row = |label: String, c: &StageCounters| {
         println!(
-            "  {:<38} {:>9} {:>8} {:>10} {:>8} {:>11.2} {:>9.2}",
+            "  {:<38} {:>9} {:>8} {:>10} {:>8} {:>9} {:>11.2} {:>9.2}",
             label,
             tested,
             c.linked,
             c.correct,
             c.wrong,
+            c.unscorable,
             c.precision_pct(),
             recall_of(c.correct),
         );

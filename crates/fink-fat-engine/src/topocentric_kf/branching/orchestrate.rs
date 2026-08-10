@@ -160,6 +160,20 @@ pub struct GateRecord {
     pub lineage_id: u64,
     pub nights_since_seed: usize,
     pub gated_obs_ids: Vec<ObsId>,
+    /// Live hypotheses in the lineage's bank when the gate ran.
+    ///
+    /// Carried alongside the gated ids so contamination can be attributed to a
+    /// *cause* rather than to age: a bank holding dozens of `(ρ, ρ̇)`
+    /// hypotheses projects a search region that is the union of all of them,
+    /// and a wide region admits other objects. Correlating the wrong-fraction
+    /// with this — rather than with `nights_since_seed` — is what separates
+    /// "old lineages contaminate" from "wide lineages contaminate, and here is
+    /// why they are wide".
+    pub n_hypotheses: usize,
+    /// Observations the bank had consumed — the argument the hypothesis cap
+    /// schedule decays against, so the count above can be judged against the
+    /// cap that should have applied.
+    pub n_steps: usize,
 }
 
 /// A branch's angular position/rate, freshly propagated to this night's
@@ -479,6 +493,8 @@ pub fn advance_bank_collection_one_night<'state_lf, 'bank_config>(
                             nights_since_seed: current_step
                                 .saturating_sub(lineage.last_real_update_step),
                             gated_obs_ids: consumed,
+                            n_hypotheses: lineage.bank.len(),
+                            n_steps: lineage.bank.n_steps(),
                         },
                     ),
                     // Every hypothesis in the bank failed to propagate this

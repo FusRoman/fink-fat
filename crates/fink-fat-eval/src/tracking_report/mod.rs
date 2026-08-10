@@ -10,6 +10,7 @@
 //! [`report::AggregatedTrackingStats::print_summary`] and the [`plots`]
 //! functions. See `bin/tracking_analysis.rs` for the orchestrating loop.
 
+pub mod bank_population;
 pub mod error_box;
 pub mod gate_selectivity;
 pub mod gold_trajectory;

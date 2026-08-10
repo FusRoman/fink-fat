@@ -429,6 +429,30 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
     ///
     /// A value close to 1 means one hypothesis dominates; a value close to
     /// `len()` means the weights are approximately uniform.
+    /// Observations this bank has consumed — the argument the hypothesis cap
+    /// schedule decays against.
+    ///
+    /// Read-only, for diagnostics. Note it counts *associated observations*,
+    /// not nights: a lineage tracked for twenty nights that only associated on
+    /// six of them sits at `n_steps == 6`, which is what the cap sees.
+    pub fn n_steps(&self) -> usize {
+        self.n_steps
+    }
+
+    /// The hypothesis cap that currently applies, floor included — exactly what
+    /// [`Self::cap_to_scheduled_max`] enforces.
+    ///
+    /// Exposed so a report can put it next to the *actual* hypothesis count:
+    /// the two disagreeing is the difference between "the schedule is tuned
+    /// wrong" and "the schedule is not being applied", which no aggregate mean
+    /// can distinguish.
+    pub fn effective_cap(&self) -> usize {
+        self.config
+            .cap_schedule
+            .cap(self.n_steps)
+            .max(self.config.min_hypotheses.max(1))
+    }
+
     pub fn effective_sample_size(&self) -> f64 {
         let sum_sq: f64 = self.hypotheses.iter().map(|h| h.weight().powi(2)).sum();
         if sum_sq > 0.0 { 1.0 / sum_sq } else { 0.0 }
@@ -1068,7 +1092,7 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
     ///
     /// Keeps the `effective_cap` highest-weighted hypotheses (by `log_weight`),
     /// where `effective_cap = max(schedule.cap(n_steps), min_hypotheses)`.
-    fn cap_to_scheduled_max(&mut self) {
+    pub fn cap_to_scheduled_max(&mut self) {
         let raw_cap = self.config.cap_schedule.cap(self.n_steps);
         let effective_cap = raw_cap.max(self.config.min_hypotheses.max(1));
 

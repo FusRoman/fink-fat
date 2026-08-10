@@ -20,8 +20,10 @@ use fink_fat_engine::{
 use crate::{
     seed_bank_report::ground_truth::{ObsTrajLookup, SeedPurity},
     tracking_report::{
+        bank_population::{BankPopulationStats, BankSample},
         error_box::{
-            bank_predictive_error_box, build_next_night_context, hypothesis_error_box_radii_arcsec,
+            BankErrorBox, bank_predictive_error_box, build_next_night_context,
+            hypothesis_error_box_radii_arcsec,
         },
         gold_trajectory::GoldTrajectoryTracker,
         lineage_lifecycle::LineageTracker,
@@ -151,6 +153,7 @@ pub fn compute_night_tracking_stats(
     spatial_binner: &HealpixBinner,
     elapsed_ms: f64,
     completeness_coverage_threshold: f64,
+    bank_population: &mut BankPopulationStats,
 ) -> NightTrackingStats {
     let branches = &collection.branches;
 
@@ -268,17 +271,34 @@ pub fn compute_night_tracking_stats(
                     // propagated to the next night (Kepler solves) to size its
                     // predictive box — the same embarrassingly-parallel per-bank
                     // work as `advance_one_night`, so run it with rayon too.
-                    let boxes: Vec<_> = branches
+                    //
+                    // The bank-population sample rides along here rather than in
+                    // its own pass: it needs exactly this box radius, and the
+                    // propagation that produces it is the expensive part.
+                    let boxes: Vec<(Option<BankErrorBox>, BankSample)> = branches
                         .par_iter()
-                        .filter_map(|b| {
-                            bank_predictive_error_box(
+                        .map(|b| {
+                            let error_box = bank_predictive_error_box(
                                 &b.bank,
                                 &next_night,
                                 spatial_binner,
                                 engine_config,
-                            )
+                            );
+                            let sample = BankSample {
+                                n_steps: b.bank.n_steps(),
+                                n_hypotheses: b.bank.len(),
+                                effective_cap: b.bank.effective_cap(),
+                                effective_sample_size: b.bank.effective_sample_size(),
+                                radius_arcsec: error_box.as_ref().map(|bx| bx.radius_arcsec),
+                            };
+                            (error_box, sample)
                         })
                         .collect();
+
+                    let (boxes, samples): (Vec<_>, Vec<_>) = boxes.into_iter().unzip();
+                    bank_population.observe_night(samples);
+                    let boxes: Vec<BankErrorBox> = boxes.into_iter().flatten().collect();
+
                     let radii = metric_stats(&boxes, |bx| bx.radius_arcsec);
                     let in_box = metric_stats(&boxes, |bx| bx.n_observations_in_box as f64);
                     (Some(radii), Some(in_box))

@@ -209,6 +209,9 @@ struct Cell {
     n_lineages: usize,
     sum_gated: usize,
     sum_wrong: usize,
+    /// Only used by the bank-width breakdown, to show how mature the lineages
+    /// in each width band are.
+    sum_n_steps: usize,
     sum_right: usize,
 }
 
@@ -218,6 +221,8 @@ struct Cell {
 pub struct GateSelectivity {
     // (bucket_index 0-based capped at BUCKET_DEPTH, population) -> Cell
     cells: AHashMap<(usize, Population), Cell>,
+    /// The same gate records keyed by bank width instead of by age.
+    by_bank_width: AHashMap<usize, Cell>,
 }
 
 impl GateSelectivity {
@@ -268,6 +273,19 @@ impl GateSelectivity {
             cell.sum_gated += rec.gated_obs_ids.len();
             cell.sum_right += right;
             cell.sum_wrong += wrong;
+
+            // Same records, indexed by how many hypotheses the bank was
+            // carrying instead of by age — age is a proxy, bank width is the
+            // mechanism.
+            let by_width = self
+                .by_bank_width
+                .entry(bank_width_bucket(rec.n_hypotheses))
+                .or_default();
+            by_width.n_lineages += 1;
+            by_width.sum_gated += rec.gated_obs_ids.len();
+            by_width.sum_right += right;
+            by_width.sum_wrong += wrong;
+            by_width.sum_n_steps += rec.n_steps;
         }
     }
 
@@ -347,6 +365,64 @@ impl GateSelectivity {
                 100.0 * agg.sum_wrong as f64 / agg.sum_gated.max(1) as f64,
             );
         }
+
+        // (3) The same records keyed by bank width. A search region is the
+        // union of every live hypothesis's predicted position, so a wide bank
+        // projects a wide region and a wide region admits other objects. If the
+        // wrong-fraction tracks this more tightly than it tracks age, the lever
+        // is hypothesis retention — mechanical and fixable — rather than
+        // lineage lifetime.
+        println!("\n  By hypotheses in the bank at gate time (all populations):");
+        println!(
+            "    {:>10} {:>10} {:>10} {:>10} {:>12} {:>10}",
+            "hypotheses", "lineages", "gated/lin", "wrong/lin", "wrong-frac", "n_steps"
+        );
+        let mut widths: Vec<usize> = self.by_bank_width.keys().copied().collect();
+        widths.sort_unstable();
+        for w in widths {
+            let c = &self.by_bank_width[&w];
+            if c.n_lineages == 0 {
+                continue;
+            }
+            println!(
+                "    {:>10} {:>10} {:>10.2} {:>10.2} {:>11.1}% {:>10.1}",
+                label_width_bucket(w),
+                c.n_lineages,
+                c.sum_gated as f64 / c.n_lineages as f64,
+                c.sum_wrong as f64 / c.n_lineages as f64,
+                100.0 * c.sum_wrong as f64 / c.sum_gated.max(1) as f64,
+                c.sum_n_steps as f64 / c.n_lineages as f64,
+            );
+        }
         println!("{sep}");
+    }
+}
+
+/// Lower edge of the bank-width band a hypothesis count falls in.
+///
+/// Geometric rather than linear: the interesting contrast is between a bank
+/// that has collapsed to a handful of hypotheses and one still carrying
+/// dozens, not between 41 and 42.
+fn bank_width_bucket(n_hypotheses: usize) -> usize {
+    match n_hypotheses {
+        0..=1 => 1,
+        2..=4 => 2,
+        5..=9 => 5,
+        10..=24 => 10,
+        25..=49 => 25,
+        50..=99 => 50,
+        _ => 100,
+    }
+}
+
+fn label_width_bucket(lower: usize) -> String {
+    match lower {
+        1 => "1".to_string(),
+        2 => "2-4".to_string(),
+        5 => "5-9".to_string(),
+        10 => "10-24".to_string(),
+        25 => "25-49".to_string(),
+        50 => "50-99".to_string(),
+        _ => "100+".to_string(),
     }
 }
