@@ -31,6 +31,27 @@
 //!    the covariance tightens as it goes. The expensive, and by far the
 //!    strongest, test.
 //!
+//! # Measured outcome: not viable as it stands
+//!
+//! This cascade is **wired nowhere**, and the measurement says it should stay
+//! that way until the pipeline's baseline contamination drops.
+//!
+//! Scored against ground truth on a 200-night run, with an operating point
+//! chosen automatically under a >= 99 % precision floor:
+//!
+//! * once links joining an arc that ground truth cannot vouch for are counted
+//!   as failures — they are ~26 % of all accepted links, and 34 % of the pool's
+//!   branches are already mixed — **no threshold combination reaches even 90 %
+//!   precision**. The best exotic-clean point sits at 75.8 % for 16.8 % recall;
+//! * running it end to end confirms it independently: component purity 73.5 %,
+//!   `completeness` 62.6 % -> 62.3 %, `contaminated` 19.8 % -> 20.1 %.
+//!
+//! The mechanism is that merging a pure arc into an already-contaminated one
+//! **destroys a good reconstruction**. Linkage cannot help while a third of all
+//! branches are mixed; the contamination has to come down first. The code is
+//! kept because it is measured and costs nothing unused, and it becomes
+//! relevant again the day that baseline improves.
+//!
 //! # On the photometric threshold
 //!
 //! [`implied_absolute_magnitude`](super::detection_probability::implied_absolute_magnitude)

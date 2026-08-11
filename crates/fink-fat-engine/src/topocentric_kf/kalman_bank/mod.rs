@@ -439,18 +439,27 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
         self.n_steps
     }
 
-    /// The hypothesis cap that currently applies, floor included — exactly what
-    /// [`Self::cap_to_scheduled_max`] enforces.
+    /// The hypothesis cap that was **actually enforced** on this bank's last
+    /// step, or `None` if no step has run yet.
     ///
-    /// Exposed so a report can put it next to the *actual* hypothesis count:
-    /// the two disagreeing is the difference between "the schedule is tuned
-    /// wrong" and "the schedule is not being applied", which no aggregate mean
-    /// can distinguish.
-    pub fn effective_cap(&self) -> usize {
-        self.config
-            .cap_schedule
-            .cap(self.n_steps)
-            .max(self.config.min_hypotheses.max(1))
+    /// Not `cap(n_steps)`: the counter is incremented *after* the cleanup, so
+    /// the step that carried the bank to `n_steps == n` was capped with
+    /// `cap(n - 1)`. Comparing the live hypothesis count against `cap(n_steps)`
+    /// instead reports a fleet of phantom violations — measured on a full run,
+    /// 1.1 M spurious "over cap" branches between `n_steps` 1 and 5, which is
+    /// exactly the kind of artefact that sends an investigation after a
+    /// non-existent bug.
+    ///
+    /// `None` at `n_steps == 0` is meaningful rather than missing: a freshly
+    /// seeded bank has never been through a cleanup, so it legitimately carries
+    /// the full seeding grid (~400-750 hypotheses) whatever `cap(0)` says.
+    pub fn last_applied_cap(&self) -> Option<usize> {
+        self.n_steps.checked_sub(1).map(|previous| {
+            self.config
+                .cap_schedule
+                .cap(previous)
+                .max(self.config.min_hypotheses.max(1))
+        })
     }
 
     pub fn effective_sample_size(&self) -> f64 {

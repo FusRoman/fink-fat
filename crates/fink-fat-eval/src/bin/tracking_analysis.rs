@@ -39,6 +39,7 @@ use fink_fat_eval::{
     },
     tracking_report::{
         bank_population::BankPopulationStats,
+        contamination_origin::ContaminationOriginStats,
         gold_trajectory::GoldTrajectoryTracker,
         lineage_lifecycle::LineageTracker,
         merge_apply::{apply_merge, print_merge_application},
@@ -202,6 +203,7 @@ fn main() -> Result<()> {
     // Sampled from the propagation `compute_night_tracking_stats` already does,
     // so it costs nothing beyond the accumulator itself.
     let mut bank_population = BankPopulationStats::default();
+    let mut contamination_origin = ContaminationOriginStats::default();
     let mut object_outcome_tracker = ObjectOutcomeTracker::new();
     let mut gate_selectivity =
         fink_fat_eval::tracking_report::gate_selectivity::GateSelectivity::new();
@@ -250,6 +252,7 @@ fn main() -> Result<()> {
             elapsed_ms,
             cli.completeness_coverage_threshold,
             &mut bank_population,
+            &mut contamination_origin,
         );
 
         progress.set_message(format!(
@@ -318,6 +321,9 @@ fn main() -> Result<()> {
     // Settles whether hypothesis banks are over-retaining, and whether that is
     // what keeps old lineages' gates wide enough to admit other objects.
     bank_population.print_summary();
+    // Says whether the contamination chantier is seeding or association — the
+    // two point at unrelated subsystems.
+    contamination_origin.print_summary();
 
     // Reconstruction efficacy (incl. per-population breakdown) on the final
     // live collection — the same report `--from-snapshot` prints, so Part A is

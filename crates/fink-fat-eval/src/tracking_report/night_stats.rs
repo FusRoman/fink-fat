@@ -21,6 +21,7 @@ use crate::{
     seed_bank_report::ground_truth::{ObsTrajLookup, SeedPurity},
     tracking_report::{
         bank_population::{BankPopulationStats, BankSample},
+        contamination_origin::ContaminationOriginStats,
         error_box::{
             BankErrorBox, bank_predictive_error_box, build_next_night_context,
             hypothesis_error_box_radii_arcsec,
@@ -154,7 +155,17 @@ pub fn compute_night_tracking_stats(
     elapsed_ms: f64,
     completeness_coverage_threshold: f64,
     bank_population: &mut BankPopulationStats,
+    contamination_origin: &mut ContaminationOriginStats,
 ) -> NightTrackingStats {
+    // Attribution needs the lineage identities from *before* the advance, so it
+    // runs here rather than from the surviving collection alone.
+    contamination_origin.observe_night(
+        prev_collection,
+        collection,
+        &collection.last_night_gate_records,
+        ground_truth,
+    );
+
     let branches = &collection.branches;
 
     // ── Branching / lineage churn ───────────────────────────────────────
@@ -287,7 +298,7 @@ pub fn compute_night_tracking_stats(
                             let sample = BankSample {
                                 n_steps: b.bank.n_steps(),
                                 n_hypotheses: b.bank.len(),
-                                effective_cap: b.bank.effective_cap(),
+                                applied_cap: b.bank.last_applied_cap(),
                                 effective_sample_size: b.bank.effective_sample_size(),
                                 radius_arcsec: error_box.as_ref().map(|bx| bx.radius_arcsec),
                             };

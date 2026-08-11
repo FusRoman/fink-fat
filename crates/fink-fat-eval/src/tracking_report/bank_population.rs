@@ -33,8 +33,9 @@ use ahash::AHashMap;
 pub struct BankSample {
     pub n_steps: usize,
     pub n_hypotheses: usize,
-    /// The cap that applies at this `n_steps`, floor included.
-    pub effective_cap: usize,
+    /// The cap actually enforced on the last step — `None` for a bank that has
+    /// not been through one yet.
+    pub applied_cap: Option<usize>,
     pub effective_sample_size: f64,
     /// Predictive box radius for the next night, when it could be computed.
     pub radius_arcsec: Option<f64>,
@@ -47,9 +48,14 @@ struct Bucket {
     sum_hypotheses: usize,
     max_hypotheses: usize,
     sum_cap: usize,
-    /// Branches holding **more** hypotheses than their own cap allows. Should
-    /// be zero: a nonzero count means the cap is not being enforced where it is
-    /// measured, which is a defect rather than a tuning question.
+    n_with_cap: usize,
+    /// Branches holding **more** hypotheses than the cap that was actually
+    /// enforced on them. Should be zero: a nonzero count means the cap is not
+    /// being enforced, which is a defect rather than a tuning question.
+    ///
+    /// Banks that have never been through a cleanup are excluded — they carry
+    /// the full seeding grid by design, and counting them here was what made an
+    /// earlier version of this table claim 2.5 M violations that did not exist.
     n_over_cap: usize,
     sum_ess: f64,
     sum_radius: f64,
@@ -77,9 +83,12 @@ impl BankPopulationStats {
             bucket.n_branches += 1;
             bucket.sum_hypotheses += s.n_hypotheses;
             bucket.max_hypotheses = bucket.max_hypotheses.max(s.n_hypotheses);
-            bucket.sum_cap += s.effective_cap;
-            if s.n_hypotheses > s.effective_cap {
-                bucket.n_over_cap += 1;
+            if let Some(cap) = s.applied_cap {
+                bucket.sum_cap += cap;
+                bucket.n_with_cap += 1;
+                if s.n_hypotheses > cap {
+                    bucket.n_over_cap += 1;
+                }
             }
             bucket.sum_ess += s.effective_sample_size;
             if let Some(r) = s.radius_arcsec.filter(|r| r.is_finite()) {
@@ -105,12 +114,12 @@ impl BankPopulationStats {
         }
 
         println!(
-            "  {:<10} {:>12} {:>10} {:>8} {:>8} {:>10} {:>8} {:>12} {:>12}",
+            "  {:<10} {:>12} {:>10} {:>8} {:>11} {:>10} {:>8} {:>12} {:>12}",
             "n_steps",
             "branches",
             "hyp mean",
             "hyp max",
-            "cap",
+            "applied cap",
             "over cap",
             "ESS",
             "radius mean",
@@ -128,12 +137,16 @@ impl BankPopulationStats {
                 k.to_string()
             };
             println!(
-                "  {:<10} {:>12} {:>10.1} {:>8} {:>8.1} {:>10} {:>8.2} {:>12} {:>12}",
+                "  {:<10} {:>12} {:>10.1} {:>8} {:>11} {:>10} {:>8.2} {:>12} {:>12}",
                 label,
                 b.n_branches,
                 b.sum_hypotheses as f64 / n,
                 b.max_hypotheses,
-                b.sum_cap as f64 / n,
+                if b.n_with_cap > 0 {
+                    format!("{:.1}", b.sum_cap as f64 / b.n_with_cap as f64)
+                } else {
+                    "-".to_string()
+                },
                 b.n_over_cap,
                 b.sum_ess / n,
                 if b.n_radius > 0 {
@@ -170,7 +183,9 @@ impl BankPopulationStats {
                 mature_hyp as f64 / mature_branches as f64
             );
         }
-        println!("  Of those, holding more than the cap: {mature_over}");
+        println!(
+            "  Of those, over the cap enforced on them: {mature_over}   (0 means the schedule works)"
+        );
         println!("{sep}");
     }
 }

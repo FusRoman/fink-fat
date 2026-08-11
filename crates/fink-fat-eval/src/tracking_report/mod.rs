@@ -11,6 +11,7 @@
 //! functions. See `bin/tracking_analysis.rs` for the orchestrating loop.
 
 pub mod bank_population;
+pub mod contamination_origin;
 pub mod error_box;
 pub mod gate_selectivity;
 pub mod gold_trajectory;
