@@ -533,6 +533,7 @@ pub fn advance_bank_collection_one_night<'state_lf, 'bank_config>(
         branches,
         params.max_lineage_lifetime_nights,
         params.stale_llr_floor,
+        params.hard_stale_nights,
         params.archive_min_real_updates,
         current_step,
     );

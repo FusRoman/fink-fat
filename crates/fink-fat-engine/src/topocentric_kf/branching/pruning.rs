@@ -206,10 +206,20 @@ pub(crate) fn lineage_is_stale(
     best_llr: f64,
     max_lifetime_nights: usize,
     stale_llr_floor: f64,
+    hard_stale_nights: Option<usize>,
 ) -> bool {
-    max_lifetime_nights != 0
+    let scored = max_lifetime_nights != 0
         && age >= max_lifetime_nights
-        && best_llr.partial_cmp(&stale_llr_floor) != Some(std::cmp::Ordering::Greater)
+        && best_llr.partial_cmp(&stale_llr_floor) != Some(std::cmp::Ordering::Greater);
+
+    // The unconditional arm. It ignores `best_llr` entirely, which is the
+    // point: measured on a full run the LLR classes do not separate (exotic
+    // p25 = -0.69 against noise p25 = -1.39), so any floor strict enough to
+    // remove noise removes the same share of NEOs and Centaurs. Age is the one
+    // criterion that cannot be biased against a population.
+    let hard = hard_stale_nights.is_some_and(|limit| limit != 0 && age >= limit);
+
+    scored || hard
 }
 
 /// Stop propagating every lineage whose freshest branch hasn't consumed a
@@ -265,13 +275,15 @@ pub fn purge_stale_lineages<'state_lf, 'bank_config>(
     branches: Vec<Branch<'state_lf, 'bank_config>>,
     max_lifetime_nights: usize,
     stale_llr_floor: f64,
+    hard_stale_nights: Option<usize>,
     archive_min_real_updates: usize,
     current_step: usize,
 ) -> (
     Vec<Branch<'state_lf, 'bank_config>>,
     Vec<ArchivedTrajectory>,
 ) {
-    if max_lifetime_nights == 0 {
+    // Both arms disabled: nothing can ever be stale.
+    if max_lifetime_nights == 0 && hard_stale_nights.is_none_or(|n| n == 0) {
         return (branches, Vec::new());
     }
 
@@ -301,7 +313,13 @@ pub fn purge_stale_lineages<'state_lf, 'bank_config>(
             .map(|b| b.cumulative_llr)
             .fold(f64::NEG_INFINITY, f64::max);
 
-        if !lineage_is_stale(age, best_llr, max_lifetime_nights, stale_llr_floor) {
+        if !lineage_is_stale(
+            age,
+            best_llr,
+            max_lifetime_nights,
+            stale_llr_floor,
+            hard_stale_nights,
+        ) {
             survivors.extend(lineage_branches);
             continue;
         }
@@ -392,54 +410,85 @@ mod stale_lineage_tests {
     // ── Unit truth table ──────────────────────────────────────────────────
     #[test]
     fn old_low_llr_is_stale() {
-        assert!(lineage_is_stale(5, -1.0, 3, 0.0));
+        assert!(lineage_is_stale(5, -1.0, 3, 0.0, None));
     }
 
     #[test]
     fn age_equal_to_budget_is_stale() {
         // boundary: age == max_lifetime counts as stale.
-        assert!(lineage_is_stale(3, -1.0, 3, 0.0));
+        assert!(lineage_is_stale(3, -1.0, 3, 0.0, None));
     }
 
     #[test]
     fn young_lineage_is_kept_regardless_of_llr() {
-        assert!(!lineage_is_stale(2, -1e9, 3, 0.0));
+        assert!(!lineage_is_stale(2, -1e9, 3, 0.0, None));
     }
 
     #[test]
     fn high_llr_is_kept_even_when_old() {
-        assert!(!lineage_is_stale(50, 1.0, 3, 0.0));
+        assert!(!lineage_is_stale(50, 1.0, 3, 0.0, None));
     }
 
     #[test]
     fn llr_exactly_at_floor_is_stale() {
         // `!(floor > floor)` == true, so a lineage sitting exactly on the
         // floor is purged (the `<=` boundary).
-        assert!(lineage_is_stale(5, 0.0, 3, 0.0));
+        assert!(lineage_is_stale(5, 0.0, 3, 0.0, None));
     }
 
     #[test]
     fn nan_llr_is_pruned_when_old() {
         // The whole point of `!(best_llr > floor)`: a NaN score (near-singular
         // covariance) must NOT escape the purge the way `NaN <= floor` would.
-        assert!(lineage_is_stale(5, f64::NAN, 3, 0.0));
+        assert!(lineage_is_stale(5, f64::NAN, 3, 0.0, None));
     }
 
     #[test]
     fn neg_inf_llr_is_pruned_when_old() {
-        assert!(lineage_is_stale(5, f64::NEG_INFINITY, 3, 0.0));
+        assert!(lineage_is_stale(5, f64::NEG_INFINITY, 3, 0.0, None));
     }
 
     #[test]
     fn pos_inf_llr_is_kept_when_old() {
         // +inf is over-confident but finite-evidence — keep it.
-        assert!(!lineage_is_stale(5, f64::INFINITY, 3, 0.0));
+        assert!(!lineage_is_stale(5, f64::INFINITY, 3, 0.0, None));
     }
 
     #[test]
     fn disabled_budget_never_prunes() {
-        assert!(!lineage_is_stale(1_000, f64::NEG_INFINITY, 0, 0.0));
-        assert!(!lineage_is_stale(1_000, f64::NAN, 0, 0.0));
+        assert!(!lineage_is_stale(1_000, f64::NEG_INFINITY, 0, 0.0, None));
+        assert!(!lineage_is_stale(1_000, f64::NAN, 0, 0.0, None));
+    }
+
+    #[test]
+    fn hard_cap_purges_regardless_of_llr() {
+        // The scored arm would keep this lineage forever: its LLR is far above
+        // the floor. That is precisely the case the hard cap exists for — a
+        // confident-looking lineage that has not been confirmed in a long time
+        // is still the one sweeping up other objects.
+        assert!(!lineage_is_stale(50, 1_000.0, 3, 0.0, None));
+        assert!(lineage_is_stale(50, 1_000.0, 3, 0.0, Some(10)));
+    }
+
+    #[test]
+    fn hard_cap_respects_its_own_threshold() {
+        assert!(!lineage_is_stale(9, 1_000.0, 0, 0.0, Some(10)));
+        assert!(lineage_is_stale(10, 1_000.0, 0, 0.0, Some(10)));
+    }
+
+    #[test]
+    fn zero_hard_cap_is_disabled_not_instant() {
+        // `Some(0)` must not mean "purge everything the moment it exists":
+        // reading it as a threshold would kill every lineage at age 0.
+        assert!(!lineage_is_stale(0, 1_000.0, 0, 0.0, Some(0)));
+        assert!(!lineage_is_stale(100, 1_000.0, 0, 0.0, Some(0)));
+    }
+
+    #[test]
+    fn hard_cap_works_with_the_scored_arm_disabled() {
+        // `max_lifetime_nights == 0` disables the scored arm entirely; the hard
+        // cap must still apply on its own.
+        assert!(lineage_is_stale(20, f64::INFINITY, 0, 0.0, Some(5)));
     }
 
     // ── Property-based ────────────────────────────────────────────────────
@@ -452,7 +501,7 @@ mod stale_lineage_tests {
             floor in -1e6f64..1e6,
         ) {
             prop_assume!(age < max);
-            prop_assert!(!lineage_is_stale(age, llr, max, floor));
+            prop_assert!(!lineage_is_stale(age, llr, max, floor, None));
         }
 
         #[test]
@@ -461,7 +510,7 @@ mod stale_lineage_tests {
             llr in proptest::num::f64::ANY,
             floor in -1e6f64..1e6,
         ) {
-            prop_assert!(!lineage_is_stale(age, llr, 0, floor));
+            prop_assert!(!lineage_is_stale(age, llr, 0, floor, None));
         }
 
         #[test]
@@ -473,8 +522,8 @@ mod stale_lineage_tests {
             floor in -1e6f64..1e6,
         ) {
             // Once stale, staying stale as the coasting age only grows.
-            if lineage_is_stale(age, llr, max, floor) {
-                prop_assert!(lineage_is_stale(age.saturating_add(extra), llr, max, floor));
+            if lineage_is_stale(age, llr, max, floor, None) {
+                prop_assert!(lineage_is_stale(age.saturating_add(extra), llr, max, floor, None));
             }
         }
 
@@ -487,8 +536,8 @@ mod stale_lineage_tests {
             floor in -1e6f64..1e6,
         ) {
             // A better-supported lineage can only become *less* prunable.
-            if !lineage_is_stale(age, llr, max, floor) {
-                prop_assert!(!lineage_is_stale(age, llr + bump, max, floor));
+            if !lineage_is_stale(age, llr, max, floor, None) {
+                prop_assert!(!lineage_is_stale(age, llr + bump, max, floor, None));
             }
         }
 
@@ -499,9 +548,9 @@ mod stale_lineage_tests {
             extra in 0usize..1_000,
         ) {
             let age = max + extra; // definitely old
-            prop_assert!(lineage_is_stale(age, f64::NAN, max, floor));
-            prop_assert!(lineage_is_stale(age, f64::NEG_INFINITY, max, floor));
-            prop_assert!(!lineage_is_stale(age, f64::INFINITY, max, floor));
+            prop_assert!(lineage_is_stale(age, f64::NAN, max, floor, None));
+            prop_assert!(lineage_is_stale(age, f64::NEG_INFINITY, max, floor, None));
+            prop_assert!(!lineage_is_stale(age, f64::INFINITY, max, floor, None));
         }
     }
 }

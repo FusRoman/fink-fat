@@ -22,7 +22,13 @@ use crate::{
 
 /// Longest nights-since-seed tracked individually; deeper links fold into the
 /// overflow bucket.
-const BUCKET_DEPTH: usize = 6;
+///
+/// Deep enough to locate the knee rather than hide it. At depth 6 the overflow
+/// bucket held 1.56 M records at a 76 % wrong-fraction — which says the rot is
+/// somewhere past five nights, but not where, and "where" is exactly what sets
+/// a lifetime cap. Contaminating lineages measured a mean staleness of 11 to 24
+/// nights, so the interesting range runs well beyond six.
+const BUCKET_DEPTH: usize = 20;
 
 /// A lineage counts as "coasting" once it has gone this many nights without a
 /// real update — the population `purge_stale_lineages` would consider.
@@ -366,7 +372,57 @@ impl GateSelectivity {
             );
         }
 
-        // (3) The same records keyed by bank width. A search region is the
+        // (3) What a hard lifetime cap would buy and what it would cost.
+        //
+        // A cap at N removes every lineage that has gone N nights without a
+        // real update, so it forgoes *all* of their associations — the wrong
+        // ones and the right ones alike. Reading one column without the other
+        // is how a cap gets set too aggressively.
+        //
+        // The trade is favourable in a way the raw counts understate: a purged
+        // lineage is archived, so its arc survives and the object is re-seeded
+        // later. Contamination is traded for fragmentation, and a fragmented
+        // *pure* trajectory still counts toward `completeness (pure-only)`.
+        println!("\n  What a hard staleness cap would prevent (all populations):");
+        println!(
+            "    {:>6} {:>14} {:>14} {:>12} {:>16}",
+            "cap N", "wrong avoided", "right lost", "ratio", "% of all wrong"
+        );
+        let mut per_bucket: Vec<(usize, usize, usize)> = Vec::new();
+        for bucket in 1..=BUCKET_DEPTH {
+            let (mut right, mut wrong) = (0usize, 0usize);
+            for pop in Population::all() {
+                if let Some(c) = self.cells.get(&(bucket, pop)) {
+                    right += c.sum_right;
+                    wrong += c.sum_wrong;
+                }
+            }
+            per_bucket.push((bucket, right, wrong));
+        }
+        let total_wrong: usize = per_bucket.iter().map(|(_, _, w)| *w).sum();
+        for &(cap, _, _) in &per_bucket {
+            let (right_lost, wrong_avoided): (usize, usize) = per_bucket
+                .iter()
+                .filter(|(b, _, _)| *b >= cap)
+                .fold((0, 0), |(r, w), (_, br, bw)| (r + br, w + bw));
+            if wrong_avoided == 0 && right_lost == 0 {
+                continue;
+            }
+            println!(
+                "    {:>6} {:>14} {:>14} {:>12} {:>15.1}%",
+                Self::label_bucket(cap),
+                wrong_avoided,
+                right_lost,
+                if right_lost > 0 {
+                    format!("{:.2}", wrong_avoided as f64 / right_lost as f64)
+                } else {
+                    "inf".to_string()
+                },
+                100.0 * wrong_avoided as f64 / total_wrong.max(1) as f64,
+            );
+        }
+
+        // (4) The same records keyed by bank width. A search region is the
         // union of every live hypothesis's predicted position, so a wide bank
         // projects a wide region and a wide region admits other objects. If the
         // wrong-fraction tracks this more tightly than it tracks age, the lever

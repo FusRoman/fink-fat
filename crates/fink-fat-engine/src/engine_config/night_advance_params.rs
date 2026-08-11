@@ -437,6 +437,38 @@ pub struct NightAdvanceParams {
     /// effect while `max_lineage_lifetime_nights == 0` (pass disabled).
     pub stale_llr_floor: f64,
 
+    /// Unconditional lifetime cap: a lineage that has gone this many nights
+    /// without a real update is purged **whatever its LLR says**. `None`
+    /// disables it, leaving only the `max_lineage_lifetime_nights` +
+    /// `stale_llr_floor` pair.
+    ///
+    /// # Why the scored pair is not enough on its own
+    ///
+    /// The two conditions are `&&`-ed, so the LLR test can veto the lifetime
+    /// cap entirely — and measured on a full run it does: with a floor of
+    /// `-20.0`, even the *noise* class sits at p10 = -13.2, above the floor, so
+    /// almost nothing is ever purged. Lineages configured to die after 5 nights
+    /// survived a median of 18 and up to 198, and while coasting their search
+    /// region kept sweeping up other objects: 96.6 % of all contamination came
+    /// from associations made by lineages a mean 11 to 24 nights stale.
+    ///
+    /// Raising `stale_llr_floor` cannot fix that. The LLR classes do not
+    /// separate — exotic p25 = -0.69 against noise p25 = -1.39 — so any floor
+    /// strict enough to remove noise removes the same share of NEOs, Centaurs
+    /// and KBOs. Age is population-agnostic by construction, which is exactly
+    /// why it is the safe arm to add.
+    ///
+    /// # What it costs
+    ///
+    /// A purged lineage is *archived*, so its arc is kept and the object is
+    /// re-seeded when next detected. This trades contamination for
+    /// fragmentation — and a fragmented but pure trajectory still counts toward
+    /// pure-only completeness, so the trade is favourable well before it is
+    /// neutral. Set it from the report's staleness trade-off table rather than
+    /// by intuition.
+    #[serde(default)]
+    pub hard_stale_nights: Option<usize>,
+
     /// Minimum number of **real** (non-null) observations a lineage purged by
     /// `max_lineage_lifetime_nights` must have consumed for its reconstruction
     /// to be retained as an
@@ -545,6 +577,7 @@ impl Default for NightAdvanceParams {
             n_scan: 1,
             max_lineage_lifetime_nights: 0,
             stale_llr_floor: 0.0,
+            hard_stale_nights: None,
             archive_min_real_updates: 0,
             limiting_magnitude: 21.0,
             completeness_width_mag: 0.4,
@@ -643,6 +676,15 @@ impl Validate for NightAdvanceParams {
             "set n_scan to at least 1 night, e.g. 1",
         ) {
             errors.push(e);
+        }
+        // `Some(0)` is ambiguous — it could read as "purge immediately" — and
+        // the project has been bitten once already by a numeric value doubling
+        // as an off switch. `null` is the only way to disable it.
+        if self.hard_stale_nights == Some(0) {
+            errors.push(
+                FieldError::new("hard_stale_nights", "0 is not a valid staleness cap")
+                    .with_hint("use null to disable the unconditional cap, or a value >= 1"),
+            );
         }
         if let Some(e) = check_finite(
             "stale_llr_floor",
