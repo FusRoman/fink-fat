@@ -401,6 +401,9 @@ fn create_tables(transaction: &mut postgres::Transaction<'_>) -> Result<(), post
             kalman_gain DOUBLE PRECISION[],
             nis_ema DOUBLE PRECISION
         );
+
+        CREATE INDEX IF NOT EXISTS idx_hypotheses_branch_log_weight
+            ON hypotheses (branch_id, log_weight DESC);
         ",
     )
 }

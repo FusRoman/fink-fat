@@ -1,0 +1,48 @@
+[package]
+name = "fink-fat-explorer"
+version = "0.1.0"
+authors = ["Roman <roman.lemontagner@gmail.com>"]
+edition = "2021"
+
+[dependencies]
+dioxus = { version = "0.7.1", features = ["router", "fullstack"] }
+dotenvy = "0.15.7"
+plotly = "0.14.1"
+serde.workspace = true
+
+# Server-only dependencies — not compiled for wasm32.
+# fink-fat-engine pulls tokio (rt-multi-thread, fs) and getrandom without
+# the "js" feature, neither of which compile for wasm32-unknown-unknown.
+# nalgebra is only used in the server-side orbital conversion code.
+fink-fat-engine = { workspace = true, optional = true }
+nalgebra = { workspace = true, optional = true }
+outfit = { workspace = true, optional = true }
+rayon = { workspace = true, optional = true }
+
+sqlx = { version = "0.9.0", features = [
+    "postgres",
+    "runtime-tokio",
+    "macros",
+], optional = true }
+tokio = { version = "1.53.1", features = [
+    "rt-multi-thread",
+    "sync",
+    "macros",
+], optional = true }
+web-sys = "0.3.104"
+
+
+[features]
+default = ["web"]
+web = ["dioxus/web"]
+desktop = ["dioxus/desktop"]
+mobile = ["dioxus/mobile"]
+server = [
+    "dioxus/server",
+    "dep:sqlx",
+    "dep:tokio",
+    "dep:fink-fat-engine",
+    "dep:nalgebra",
+    "dep:outfit",
+    "dep:rayon"
+]

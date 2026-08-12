@@ -1,0 +1,21 @@
+[application]
+
+[web.app]
+
+# HTML title tag content
+title = "fink-fat-explorer"
+
+# include `assets` in web platform
+[web.resource]
+
+# Additional CSS style files
+style = []
+
+# Additional JavaScript files
+script = ["https://cdn.plot.ly/plotly-2.14.0.min.js"]
+
+[web.resource.dev]
+
+# Javascript code file
+# serve: [dev-server] only
+script = []
