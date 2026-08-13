@@ -9,7 +9,7 @@ use rayon::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use plotly::{
     common::{Marker, Mode, TickMode, Title},
-    layout::{Axis, AxisType, Layout},
+    layout::{Axis, AxisType, Layout, Margin},
     Plot, Scatter,
 };
 
@@ -202,7 +202,8 @@ pub fn DynamicPopPlot() -> Element {
                                 ])
                                 .tick_angle(-35.0), // ← incline pour éviter le chevauchement
                         )
-                        .y_axis(Axis::new().title(Title::from("Eccentricity")));
+                        .y_axis(Axis::new().title(Title::from("Eccentricity")))
+                        .margin(Margin::new().top(20).right(20));
 
                     plot.set_layout(layout);
                     plotly::bindings::new_plot("ae-plot-div", &plot).await;
@@ -214,9 +215,9 @@ pub fn DynamicPopPlot() -> Element {
     rsx! {
         div { class: "card bg-base-100 shadow-sm",
             div { class: "card-body",
-                div { class: "flex items-center justify-between mb-2",
-                    h2 { class: "card-title", "Dynamical families — (a, e)" }
-                    span { class: "text-sm opacity-60", "{status_text}" }
+                div { class: "text-center mb-1",
+                    h2 { class: "text-2xl font-bold tracking-tight", "The Solar System, Mapped" }
+                    p { class: "text-sm opacity-60", "{status_text}" }
                 }
                 div {
                     id: "ae-plot-div",
