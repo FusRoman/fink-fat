@@ -8,12 +8,14 @@ use rayon::prelude::*;
 
 #[cfg(target_arch = "wasm32")]
 use plotly::{
-    common::{Mode, TickMode, Title},
+    common::{Marker, Mode, TickMode, Title},
     layout::{Axis, AxisType, Layout},
     Plot, Scatter,
 };
 
 use serde::{Deserialize, Serialize};
+
+use crate::homepage::family::DynamicalFamily;
 
 #[cfg(feature = "server")]
 use nalgebra::{Vector3, Vector6};
@@ -54,65 +56,7 @@ pub struct OrbitalPoint {
     pub branch_id: i64,
     pub semi_major_axis: f64,
     pub eccentricity: f64,
-    pub family: String,
-}
-
-/// Classify an asteroid into its dynamical family based on the IMCCE SSP
-/// population table: https://ssp.imcce.fr/webservices/skybot/
-/// a = semi-major axis (AU), e = eccentricity.
-#[cfg(feature = "server")]
-fn classify_asteroid(a: f64, e: f64) -> &'static str {
-    let perihelion = a * (1.0 - e);
-    let aphelion = a * (1.0 + e);
-
-    // Threshold for KBO>SDO: a(1−e) ≤ 30.1 * 2^(2/3) * (1−0.24) ≈ 36.3 AU
-    const KBO_SDO_THRESHOLD: f64 = 30.1 * 1.587_401_05 * (1.0 - 0.24);
-
-    match a {
-        a if a < 0.08 => "Unknown",
-        a if a < 0.21 => "Vulcanoid",
-        a if a < 1.0 => {
-            if aphelion < 0.983 {
-                "NEA>Atira"
-            } else {
-                "NEA>Aten"
-            }
-        }
-        a if a < 2.0 => {
-            if perihelion < 1.017 {
-                "NEA>Apollo"
-            } else if perihelion < 1.3 {
-                "NEA>Amor"
-            } else if perihelion <= 1.58 {
-                "Mars-Crosser>Deep"
-            } else if perihelion <= 1.666 {
-                "Mars-Crosser>Shallow"
-            } else {
-                "Hungaria"
-            }
-        }
-        a if a < 2.5 => "MB>Inner",
-        a if a < 2.82 => "MB>Middle",
-        a if a < 3.27 => "MB>Outer",
-        a if a < 3.7 => "MB>Cybele",
-        a if a < 4.6 => "MB>Hilda",
-        a if a < 5.5 => "Trojan",
-        a if a < 30.1 => "Centaur",
-        a if a < 2000.0 => {
-            if perihelion <= KBO_SDO_THRESHOLD {
-                "KBO>SDO"
-            } else if e >= 0.24 {
-                "KBO>Detached"
-            } else if a < 39.4 {
-                "KBO>Classical>Inner"
-            } else if a < 47.8 {
-                "KBO>Classical>Main"
-            } else {
-                "KBO>Classical>Outer"
-            }
-        }
-        _ => "IOC",
-    }
+    pub family: DynamicalFamily,
 }
 
 #[server]
@@ -171,7 +115,7 @@ pub async fn query_orbital_elements() -> Result<Vec<OrbitalPoint>, ServerFnError
                 branch_id: row.branch_id,
                 semi_major_axis: orbit.semi_major_axis,
                 eccentricity: orbit.eccentricity,
-                family: classify_asteroid(orbit.semi_major_axis, orbit.eccentricity).to_string(),
+                family: DynamicalFamily::classify(orbit.semi_major_axis, orbit.eccentricity),
             })
         })
         .collect();
@@ -213,10 +157,12 @@ pub fn DynamicPopPlot() -> Element {
                     let a_vals: Vec<f32> = pts.iter().map(|p| p.semi_major_axis as f32).collect();
                     let e_vals: Vec<f32> = pts.iter().map(|p| p.eccentricity as f32).collect();
 
-                    let mut families: std::collections::BTreeMap<String, (Vec<f32>, Vec<f32>)> =
-                        std::collections::BTreeMap::new();
+                    let mut families: std::collections::BTreeMap<
+                        DynamicalFamily,
+                        (Vec<f32>, Vec<f32>),
+                    > = std::collections::BTreeMap::new();
                     for pt in &pts {
-                        let entry = families.entry(pt.family.clone()).or_default();
+                        let entry = families.entry(pt.family).or_default();
                         entry.0.push(pt.semi_major_axis as f32);
                         entry.1.push(pt.eccentricity as f32);
                     }
@@ -224,9 +170,10 @@ pub fn DynamicPopPlot() -> Element {
                     let mut plot = Plot::new();
                     for (family, (a_vals, e_vals)) in families {
                         let trace = Scatter::new(a_vals, e_vals)
-                            .name(&family)
+                            .name(family.label())
                             .mode(Mode::Markers)
-                            .web_gl_mode(true);
+                            .web_gl_mode(true)
+                            .marker(Marker::new().color(family.color()));
                         plot.add_trace(trace);
                     }
 

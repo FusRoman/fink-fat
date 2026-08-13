@@ -2,10 +2,58 @@ use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::homepage::family::DynamicalFamily;
 use crate::homepage::interaction::{Pagination, SortColumn, SortDirection, PAGE_SIZE};
 
-#[derive(Serialize, Deserialize, Clone, PartialEq)]
+/// Columns needed to fetch a page of branches (best + others) and classify
+/// their dynamical family in the same round-trip — `branches` joined
+/// directly to `kf_state` (via each branch's best hypothesis), instead of
+/// fetching `branches` alone and then re-joining separately just for the
+/// family.
 #[cfg_attr(feature = "server", derive(sqlx::FromRow))]
+struct BranchOrbitalRow {
+    branch_id: i64,
+    lineage_id: i64,
+    designation: String,
+    lineage_designation: String,
+    cumulative_llr: f64,
+    n_real_updates: i64,
+    ra: f64,
+    dec: f64,
+    ra_dot: f64,
+    dec_dot: f64,
+    rho: f64,
+    rho_dot: f64,
+    epoch: f64,
+    r_obs_x: f64,
+    r_obs_y: f64,
+    r_obs_z: f64,
+    v_obs_x: f64,
+    v_obs_y: f64,
+    v_obs_z: f64,
+}
+
+/// Columns needed to rank every lineage matching the search filter by
+/// dynamical family (used only when sorting by `SortColumn::Family`).
+#[cfg_attr(feature = "server", derive(sqlx::FromRow))]
+struct RankingOrbitalRow {
+    lineage_id: i64,
+    ra: f64,
+    dec: f64,
+    ra_dot: f64,
+    dec_dot: f64,
+    rho: f64,
+    rho_dot: f64,
+    epoch: f64,
+    r_obs_x: f64,
+    r_obs_y: f64,
+    r_obs_z: f64,
+    v_obs_x: f64,
+    v_obs_y: f64,
+    v_obs_z: f64,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
 struct Branch {
     branch_id: i64,
     lineage_id: i64,
@@ -13,6 +61,7 @@ struct Branch {
     lineage_designation: String,
     cumulative_llr: f64,
     n_real_updates: i64,
+    family: DynamicalFamily,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
@@ -45,8 +94,13 @@ async fn list_lineages(
 ) -> Result<(Vec<LineageGroup>, i64), ServerFnError> {
     use crate::{
         get_pool,
-        homepage::interaction::{SortColumn, PAGE_SIZE},
+        homepage::{
+            family::classify_from_attributable_state,
+            interaction::{SortColumn, PAGE_SIZE},
+        },
     };
+    use nalgebra::Vector3;
+    use rayon::prelude::*;
 
     let pool = get_pool().await;
 
@@ -74,62 +128,178 @@ async fn list_lineages(
 
     let offset = page * PAGE_SIZE;
 
-    let (order_col, dir) = match sort_column {
-        Some(SortColumn::CumulativeLlr) => ("cumulative_llr", sort_direction.sql()),
-        Some(SortColumn::Updates) => ("n_real_updates", sort_direction.sql()),
-        None => ("lineage_id", "ASC"),
+    // Sorting by dynamical family can't be expressed in SQL — the family is
+    // derived from kf_state (attributable state -> Cartesian -> Keplerian),
+    // not stored as a column. So this path scans every lineage matching the
+    // search filter, classifies its best branch, sorts in Rust, then
+    // paginates. Same conversion cost as the (a, e) plot's full-population
+    // query — cheap (closed-form arithmetic), just heavier than the other
+    // sort columns which stay 100% SQL.
+    let ordered_ids: Vec<i64> = if sort_column == Some(SortColumn::Family) {
+        let ranking_query = format!(
+            "WITH sanitized AS (
+                SELECT
+                    branch_id,
+                    lineage_id,
+                    {SANITIZED_LLR_EXPR} AS cumulative_llr
+                FROM branches
+                WHERE $1::text IS NULL OR lineage_designation ILIKE $1
+            ),
+            best_branches AS (
+                SELECT DISTINCT ON (lineage_id) lineage_id, branch_id
+                FROM sanitized
+                ORDER BY lineage_id, cumulative_llr DESC
+            )
+            SELECT bb.lineage_id,
+                    ks.ra, ks.dec, ks.ra_dot, ks.dec_dot, ks.rho, ks.rho_dot, ks.epoch,
+                    ks.r_obs_x, ks.r_obs_y, ks.r_obs_z, ks.v_obs_x, ks.v_obs_y, ks.v_obs_z
+            FROM best_branches bb
+            CROSS JOIN LATERAL (
+                SELECT hypothesis_id
+                FROM hypotheses h
+                WHERE h.branch_id = bb.branch_id
+                ORDER BY h.log_weight DESC
+                LIMIT 1
+            ) bh
+            JOIN kf_state ks ON ks.hypothesis_id = bh.hypothesis_id"
+        );
+
+        let rows: Vec<RankingOrbitalRow> = sqlx::query_as(sqlx::AssertSqlSafe(ranking_query))
+            .bind(&pattern)
+            .fetch_all(pool)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+        let mut ranked: Vec<(i64, DynamicalFamily)> = rows
+            .into_par_iter()
+            .map(|row| {
+                let family = classify_from_attributable_state(
+                    row.ra,
+                    row.dec,
+                    row.ra_dot,
+                    row.dec_dot,
+                    row.rho,
+                    row.rho_dot,
+                    row.epoch,
+                    Vector3::new(row.r_obs_x, row.r_obs_y, row.r_obs_z),
+                    Vector3::new(row.v_obs_x, row.v_obs_y, row.v_obs_z),
+                )
+                .unwrap_or(DynamicalFamily::Unknown);
+                (row.lineage_id, family)
+            })
+            .collect();
+
+        ranked.sort_by(|a, b| {
+            let ord = a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0));
+            match sort_direction {
+                SortDirection::Asc => ord,
+                SortDirection::Desc => ord.reverse(),
+            }
+        });
+
+        ranked
+            .into_iter()
+            .skip(offset as usize)
+            .take(PAGE_SIZE as usize)
+            .map(|(lineage_id, _)| lineage_id)
+            .collect()
+    } else {
+        let (order_col, dir) = match sort_column {
+            Some(SortColumn::CumulativeLlr) => ("cumulative_llr", sort_direction.sql()),
+            Some(SortColumn::Updates) => ("n_real_updates", sort_direction.sql()),
+            Some(SortColumn::Family) => unreachable!("handled above"),
+            None => ("lineage_id", "ASC"),
+        };
+
+        // SAFE: order_col/dir come from a closed match over SortColumn/SortDirection
+        // just above — never raw user input. `pattern` (real user input) stays a
+        // bound parameter ($3), never interpolated.
+        let lineage_query = format!(
+            "WITH sanitized AS (
+                SELECT
+                    lineage_id,
+                    lineage_designation,
+                    {SANITIZED_LLR_EXPR} AS cumulative_llr,
+                    n_real_updates
+                FROM branches
+                WHERE $3::text IS NULL OR lineage_designation ILIKE $3
+            ),
+            best_branches AS (
+                SELECT DISTINCT ON (lineage_id) lineage_id, cumulative_llr, n_real_updates
+                FROM sanitized
+                ORDER BY lineage_id, cumulative_llr DESC
+            )
+            SELECT lineage_id FROM best_branches
+            ORDER BY {order_col} {dir}
+            LIMIT $1 OFFSET $2"
+        );
+
+        let page_lineage_ids: Vec<(i64,)> = sqlx::query_as(sqlx::AssertSqlSafe(lineage_query))
+            .bind(PAGE_SIZE)
+            .bind(offset)
+            .bind(&pattern)
+            .fetch_all(pool)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+        page_lineage_ids.into_iter().map(|(id,)| id).collect()
     };
-
-    // SAFE: order_col/dir come from a closed match over SortColumn/SortDirection
-    // just above — never raw user input. `pattern` (real user input) stays a
-    // bound parameter ($3), never interpolated.
-    let lineage_query = format!(
-        "WITH sanitized AS (
-            SELECT
-                lineage_id,
-                lineage_designation,
-                {SANITIZED_LLR_EXPR} AS cumulative_llr,
-                n_real_updates
-            FROM branches
-            WHERE $3::text IS NULL OR lineage_designation ILIKE $3
-        ),
-        best_branches AS (
-            SELECT DISTINCT ON (lineage_id) lineage_id, cumulative_llr, n_real_updates
-            FROM sanitized
-            ORDER BY lineage_id, cumulative_llr DESC
-        )
-        SELECT lineage_id FROM best_branches
-        ORDER BY {order_col} {dir}
-        LIMIT $1 OFFSET $2"
-    );
-
-    let page_lineage_ids: Vec<(i64,)> = sqlx::query_as(sqlx::AssertSqlSafe(lineage_query))
-        .bind(PAGE_SIZE)
-        .bind(offset)
-        .bind(&pattern)
-        .fetch_all(pool)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-    let ordered_ids: Vec<i64> = page_lineage_ids.into_iter().map(|(id,)| id).collect();
 
     if ordered_ids.is_empty() {
         return Ok((Vec::new(), total_lineages.0));
     }
 
     let branches_query = format!(
-        "SELECT branch_id, lineage_id, designation, lineage_designation,
-                {SANITIZED_LLR_EXPR} AS cumulative_llr, n_real_updates
-         FROM branches
-         WHERE lineage_id = ANY($1)
-         ORDER BY lineage_id, cumulative_llr DESC"
+        "SELECT b.branch_id, b.lineage_id, b.designation, b.lineage_designation,
+                {SANITIZED_LLR_EXPR} AS cumulative_llr, b.n_real_updates,
+                ks.ra, ks.dec, ks.ra_dot, ks.dec_dot, ks.rho, ks.rho_dot, ks.epoch,
+                ks.r_obs_x, ks.r_obs_y, ks.r_obs_z, ks.v_obs_x, ks.v_obs_y, ks.v_obs_z
+         FROM branches b
+         CROSS JOIN LATERAL (
+             SELECT hypothesis_id
+             FROM hypotheses h
+             WHERE h.branch_id = b.branch_id
+             ORDER BY h.log_weight DESC
+             LIMIT 1
+         ) bh
+         JOIN kf_state ks ON ks.hypothesis_id = bh.hypothesis_id
+         WHERE b.lineage_id = ANY($1)
+         ORDER BY b.lineage_id, cumulative_llr DESC"
     );
 
-    let branches: Vec<Branch> = sqlx::query_as(sqlx::AssertSqlSafe(branches_query))
+    let branch_rows: Vec<BranchOrbitalRow> = sqlx::query_as(sqlx::AssertSqlSafe(branches_query))
         .bind(&ordered_ids)
         .fetch_all(pool)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let branches: Vec<Branch> = branch_rows
+        .into_par_iter()
+        .map(|row| {
+            let family = classify_from_attributable_state(
+                row.ra,
+                row.dec,
+                row.ra_dot,
+                row.dec_dot,
+                row.rho,
+                row.rho_dot,
+                row.epoch,
+                Vector3::new(row.r_obs_x, row.r_obs_y, row.r_obs_z),
+                Vector3::new(row.v_obs_x, row.v_obs_y, row.v_obs_z),
+            )
+            .unwrap_or(DynamicalFamily::Unknown);
+
+            Branch {
+                branch_id: row.branch_id,
+                lineage_id: row.lineage_id,
+                designation: row.designation,
+                lineage_designation: row.lineage_designation,
+                cumulative_llr: row.cumulative_llr,
+                n_real_updates: row.n_real_updates,
+                family,
+            }
+        })
+        .collect();
 
     let mut groups: Vec<LineageGroup> = Vec::new();
     for branch in branches {
@@ -185,10 +355,28 @@ fn TabHeader(
         ""
     };
 
+    let family_arrow: &'static str = match (sort_column, sort_direction) {
+        (Some(SortColumn::Family), SortDirection::Asc) => "▲",
+        (Some(SortColumn::Family), SortDirection::Desc) => "▼",
+        _ => "⇅",
+    };
+
+    let family_active_class = if sort_column == Some(SortColumn::Family) {
+        "text-primary"
+    } else {
+        ""
+    };
+
     rsx! {
-        div { class: "grid grid-cols-4 gap-4 px-4 py-2 text-sm font-semibold opacity-60",
+        div { class: "grid grid-cols-5 gap-4 px-4 py-2 text-sm font-semibold opacity-60",
             span { "Designation" }
             span { "Lineage" }
+            span {
+                class: "cursor-pointer select-none flex items-center gap-1 hover:text-primary transition-colors {family_active_class}",
+                onclick: move |_| on_sort.call(SortColumn::Family),
+                "Family"
+                span { class: "text-xs", "{family_arrow}" }
+            }
             span {
                 class: "cursor-pointer select-none flex items-center gap-1 hover:text-primary transition-colors {llr_active_class}",
                 onclick: move |_| on_sort.call(SortColumn::CumulativeLlr),
@@ -216,9 +404,16 @@ fn LineageTable(groups: Vec<LineageGroup>) -> Element {
                     class: "collapse collapse-arrow bg-base-100 border border-base-300",
 
                     div { class: "collapse-title",
-                        div { class: "grid grid-cols-4 gap-4 items-center",
+                        div { class: "grid grid-cols-5 gap-4 items-center",
                             span { class: "font-medium", "{group.best.designation}" }
                             span { "{group.best.lineage_designation}" }
+                            span {
+                                span {
+                                    class: "badge badge-sm text-white border-0",
+                                    style: "background-color: {group.best.family.color()};",
+                                    "{group.best.family}"
+                                }
+                            }
                             span { "{group.best.cumulative_llr:.2}" }
                             span { "{group.best.n_real_updates}" }
                         }
@@ -234,9 +429,16 @@ fn LineageTable(groups: Vec<LineageGroup>) -> Element {
                                 for branch in &group.others {
                                     div {
                                         key: "{branch.branch_id}",
-                                        class: "grid grid-cols-4 gap-4 items-center px-2 py-1 text-sm hover:bg-base-200 rounded",
+                                        class: "grid grid-cols-5 gap-4 items-center px-2 py-1 text-sm hover:bg-base-200 rounded",
                                         span { "{branch.designation}" }
                                         span { "{branch.lineage_designation}" }
+                                        span {
+                                            span {
+                                                class: "badge badge-sm text-white border-0",
+                                                style: "background-color: {branch.family.color()};",
+                                                "{branch.family}"
+                                            }
+                                        }
                                         span { "{branch.cumulative_llr:.2}" }
                                         span { "{branch.n_real_updates}" }
                                     }

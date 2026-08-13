@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum SortColumn {
     CumulativeLlr,
     Updates,
+    Family,
 }
 
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]

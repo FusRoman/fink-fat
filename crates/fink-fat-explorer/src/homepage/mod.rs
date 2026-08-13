@@ -1,5 +1,6 @@
 pub mod branch_tab;
 pub mod dynamic_pop_plot;
+pub mod family;
 pub mod interaction;
 pub mod stats_count;
 
