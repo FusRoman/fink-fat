@@ -1,11 +1,5 @@
 use dioxus::prelude::*;
 
-#[cfg(feature = "server")]
-use rayon::iter::ParallelIterator;
-
-#[cfg(feature = "server")]
-use rayon::prelude::*;
-
 #[cfg(target_arch = "wasm32")]
 use plotly::{
     common::{Marker, Mode, TickMode, Title},
@@ -17,36 +11,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::homepage::family::DynamicalFamily;
 
-#[cfg(feature = "server")]
-use nalgebra::{Vector3, Vector6};
-
-// The engine's attributable-to-Cartesian converter.
-// Adapt the import path to match your crate structure.
-#[cfg(feature = "server")]
-use fink_fat_engine::topocentric_kf::conversion::attributable_to_cartesian;
-
-/// Minimal row fetched from the DB — no covariance, no kalman gain, no nis_ema.
+/// Minimal row fetched from the DB — family and orbital elements are
+/// precomputed columns on `kf_state`, no need to reconstruct them here.
 #[cfg(feature = "server")]
 #[derive(sqlx::FromRow)]
 struct MinimalStateRow {
     hypothesis_id: i64,
     branch_id: i64,
-    // Attributable state vector components
-    ra: f64,
-    dec: f64,
-    ra_dot: f64,
-    dec_dot: f64,
-    rho: f64,
-    rho_dot: f64,
-    // reference epoch
-    epoch: f64,
-    // Observer heliocentric state
-    r_obs_x: f64,
-    r_obs_y: f64,
-    r_obs_z: f64,
-    v_obs_x: f64,
-    v_obs_y: f64,
-    v_obs_z: f64,
+    semi_major_axis: f64,
+    eccentricity: f64,
+    dynamic_family: String,
 }
 
 /// One point in the (a, e) distribution plot.
@@ -67,10 +41,7 @@ pub async fn query_orbital_elements() -> Result<Vec<OrbitalPoint>, ServerFnError
 
     let rows: Vec<MinimalStateRow> = sqlx::query_as(
         "SELECT bh.hypothesis_id, bh.branch_id,
-            ks.ra, ks.dec, ks.ra_dot, ks.dec_dot, ks.rho, ks.rho_dot,
-            ks.epoch,
-            ks.r_obs_x, ks.r_obs_y, ks.r_obs_z,
-            ks.v_obs_x, ks.v_obs_y, ks.v_obs_z
+            ks.semi_major_axis, ks.eccentricity, ks.dynamic_family
      FROM branches b
      CROSS JOIN LATERAL (
          SELECT hypothesis_id, branch_id
@@ -86,37 +57,13 @@ pub async fn query_orbital_elements() -> Result<Vec<OrbitalPoint>, ServerFnError
     .map_err(|e| ServerFnError::new(e.to_string()))?;
 
     let points = rows
-        .into_par_iter()
-        .filter_map(|row| {
-            use outfit::OrbitalElements;
-
-            let state = Vector6::new(
-                row.ra,
-                row.dec,
-                row.ra_dot,
-                row.dec_dot,
-                row.rho,
-                row.rho_dot,
-            );
-            let r_obs = Vector3::new(row.r_obs_x, row.r_obs_y, row.r_obs_z);
-            let v_obs = Vector3::new(row.v_obs_x, row.v_obs_y, row.v_obs_z);
-
-            // Convert attributable + observer → heliocentric Cartesian.
-            // attributable_to_cartesian returns CartesianState { r, v } — adapt
-            // the field names if your CartesianState uses different ones.
-            let cartesian = attributable_to_cartesian(&state, &r_obs, &v_obs);
-
-            let orbit =
-                OrbitalElements::from_orbital_state(&cartesian.pos, &cartesian.vel, row.epoch)
-                    .as_keplerian()?;
-
-            Some(OrbitalPoint {
-                hypothesis_id: row.hypothesis_id,
-                branch_id: row.branch_id,
-                semi_major_axis: orbit.semi_major_axis,
-                eccentricity: orbit.eccentricity,
-                family: DynamicalFamily::classify(orbit.semi_major_axis, orbit.eccentricity),
-            })
+        .into_iter()
+        .map(|row| OrbitalPoint {
+            hypothesis_id: row.hypothesis_id,
+            branch_id: row.branch_id,
+            semi_major_axis: row.semi_major_axis,
+            eccentricity: row.eccentricity,
+            family: DynamicalFamily::from_label(&row.dynamic_family),
         })
         .collect();
 

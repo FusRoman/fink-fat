@@ -5,11 +5,9 @@ use std::collections::HashMap;
 use crate::homepage::family::DynamicalFamily;
 use crate::homepage::interaction::{Pagination, SortColumn, SortDirection, PAGE_SIZE};
 
-/// Columns needed to fetch a page of branches (best + others) and classify
-/// their dynamical family in the same round-trip — `branches` joined
-/// directly to `kf_state` (via each branch's best hypothesis), instead of
-/// fetching `branches` alone and then re-joining separately just for the
-/// family.
+/// Columns needed to fetch a page of branches (best + others) — `branches`
+/// joined directly to `kf_state` (via each branch's best hypothesis) to pick
+/// up the precomputed `dynamic_family` column in the same round-trip.
 #[cfg_attr(feature = "server", derive(sqlx::FromRow))]
 struct BranchOrbitalRow {
     branch_id: i64,
@@ -18,39 +16,7 @@ struct BranchOrbitalRow {
     lineage_designation: String,
     cumulative_llr: f64,
     n_real_updates: i64,
-    ra: f64,
-    dec: f64,
-    ra_dot: f64,
-    dec_dot: f64,
-    rho: f64,
-    rho_dot: f64,
-    epoch: f64,
-    r_obs_x: f64,
-    r_obs_y: f64,
-    r_obs_z: f64,
-    v_obs_x: f64,
-    v_obs_y: f64,
-    v_obs_z: f64,
-}
-
-/// Columns needed to rank every lineage matching the search filter by
-/// dynamical family (used only when sorting by `SortColumn::Family`).
-#[cfg_attr(feature = "server", derive(sqlx::FromRow))]
-struct RankingOrbitalRow {
-    lineage_id: i64,
-    ra: f64,
-    dec: f64,
-    ra_dot: f64,
-    dec_dot: f64,
-    rho: f64,
-    rho_dot: f64,
-    epoch: f64,
-    r_obs_x: f64,
-    r_obs_y: f64,
-    r_obs_z: f64,
-    v_obs_x: f64,
-    v_obs_y: f64,
-    v_obs_z: f64,
+    dynamic_family: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
@@ -95,12 +61,10 @@ async fn list_lineages(
     use crate::{
         get_pool,
         homepage::{
-            family::classify_from_attributable_state,
+            family,
             interaction::{SortColumn, PAGE_SIZE},
         },
     };
-    use nalgebra::Vector3;
-    use rayon::prelude::*;
 
     let pool = get_pool().await;
 
@@ -128,122 +92,73 @@ async fn list_lineages(
 
     let offset = page * PAGE_SIZE;
 
-    // Sorting by dynamical family can't be expressed in SQL — the family is
-    // derived from kf_state (attributable state -> Cartesian -> Keplerian),
-    // not stored as a column. So this path scans every lineage matching the
-    // search filter, classifies its best branch, sorts in Rust, then
-    // paginates. Same conversion cost as the (a, e) plot's full-population
-    // query — cheap (closed-form arithmetic), just heavier than the other
-    // sort columns which stay 100% SQL.
-    let ordered_ids: Vec<i64> = if sort_column == Some(SortColumn::Family) {
-        let ranking_query = format!(
-            "WITH sanitized AS (
-                SELECT
-                    branch_id,
-                    lineage_id,
-                    {SANITIZED_LLR_EXPR} AS cumulative_llr
-                FROM branches
-                WHERE $1::text IS NULL OR lineage_designation ILIKE $1
-            ),
-            best_branches AS (
-                SELECT DISTINCT ON (lineage_id) lineage_id, branch_id
-                FROM sanitized
-                ORDER BY lineage_id, cumulative_llr DESC
-            )
-            SELECT bb.lineage_id,
-                    ks.ra, ks.dec, ks.ra_dot, ks.dec_dot, ks.rho, ks.rho_dot, ks.epoch,
-                    ks.r_obs_x, ks.r_obs_y, ks.r_obs_z, ks.v_obs_x, ks.v_obs_y, ks.v_obs_z
-            FROM best_branches bb
-            CROSS JOIN LATERAL (
+    // `dynamic_family` is a plain TEXT column now, but it lives on kf_state
+    // (reached via each lineage's best branch's best hypothesis), not on
+    // branches — so sorting by family needs an extra join and a CASE
+    // expression to rank labels in heliocentric-distance order rather than
+    // alphabetically. The other sort columns stay a plain best_branches
+    // column reference with no extra join.
+    let family_case_expr = {
+        let mut expr = String::from("CASE ks.dynamic_family");
+        for (i, label) in family::ORDERED_LABELS.iter().enumerate() {
+            expr.push_str(&format!(" WHEN '{label}' THEN {i}"));
+        }
+        expr.push_str(&format!(" ELSE {} END", family::ORDERED_LABELS.len()));
+        expr
+    };
+
+    let (order_expr, extra_join, dir): (&str, &str, &str) = match sort_column {
+        Some(SortColumn::CumulativeLlr) => ("bb.cumulative_llr", "", sort_direction.sql()),
+        Some(SortColumn::Updates) => ("bb.n_real_updates", "", sort_direction.sql()),
+        Some(SortColumn::Family) => (
+            &family_case_expr,
+            "CROSS JOIN LATERAL (
                 SELECT hypothesis_id
                 FROM hypotheses h
                 WHERE h.branch_id = bb.branch_id
                 ORDER BY h.log_weight DESC
                 LIMIT 1
             ) bh
-            JOIN kf_state ks ON ks.hypothesis_id = bh.hypothesis_id"
-        );
-
-        let rows: Vec<RankingOrbitalRow> = sqlx::query_as(sqlx::AssertSqlSafe(ranking_query))
-            .bind(&pattern)
-            .fetch_all(pool)
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-        let mut ranked: Vec<(i64, DynamicalFamily)> = rows
-            .into_par_iter()
-            .map(|row| {
-                let family = classify_from_attributable_state(
-                    row.ra,
-                    row.dec,
-                    row.ra_dot,
-                    row.dec_dot,
-                    row.rho,
-                    row.rho_dot,
-                    row.epoch,
-                    Vector3::new(row.r_obs_x, row.r_obs_y, row.r_obs_z),
-                    Vector3::new(row.v_obs_x, row.v_obs_y, row.v_obs_z),
-                )
-                .unwrap_or(DynamicalFamily::Unknown);
-                (row.lineage_id, family)
-            })
-            .collect();
-
-        ranked.sort_by(|a, b| {
-            let ord = a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0));
-            match sort_direction {
-                SortDirection::Asc => ord,
-                SortDirection::Desc => ord.reverse(),
-            }
-        });
-
-        ranked
-            .into_iter()
-            .skip(offset as usize)
-            .take(PAGE_SIZE as usize)
-            .map(|(lineage_id, _)| lineage_id)
-            .collect()
-    } else {
-        let (order_col, dir) = match sort_column {
-            Some(SortColumn::CumulativeLlr) => ("cumulative_llr", sort_direction.sql()),
-            Some(SortColumn::Updates) => ("n_real_updates", sort_direction.sql()),
-            Some(SortColumn::Family) => unreachable!("handled above"),
-            None => ("lineage_id", "ASC"),
-        };
-
-        // SAFE: order_col/dir come from a closed match over SortColumn/SortDirection
-        // just above — never raw user input. `pattern` (real user input) stays a
-        // bound parameter ($3), never interpolated.
-        let lineage_query = format!(
-            "WITH sanitized AS (
-                SELECT
-                    lineage_id,
-                    lineage_designation,
-                    {SANITIZED_LLR_EXPR} AS cumulative_llr,
-                    n_real_updates
-                FROM branches
-                WHERE $3::text IS NULL OR lineage_designation ILIKE $3
-            ),
-            best_branches AS (
-                SELECT DISTINCT ON (lineage_id) lineage_id, cumulative_llr, n_real_updates
-                FROM sanitized
-                ORDER BY lineage_id, cumulative_llr DESC
-            )
-            SELECT lineage_id FROM best_branches
-            ORDER BY {order_col} {dir}
-            LIMIT $1 OFFSET $2"
-        );
-
-        let page_lineage_ids: Vec<(i64,)> = sqlx::query_as(sqlx::AssertSqlSafe(lineage_query))
-            .bind(PAGE_SIZE)
-            .bind(offset)
-            .bind(&pattern)
-            .fetch_all(pool)
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-        page_lineage_ids.into_iter().map(|(id,)| id).collect()
+            JOIN kf_state ks ON ks.hypothesis_id = bh.hypothesis_id",
+            sort_direction.sql(),
+        ),
+        None => ("bb.lineage_id", "", "ASC"),
     };
+
+    // SAFE: order_expr/extra_join/dir come from a closed match over
+    // SortColumn/SortDirection just above — never raw user input. `pattern`
+    // (real user input) stays a bound parameter ($3), never interpolated.
+    let lineage_query = format!(
+        "WITH sanitized AS (
+            SELECT
+                branch_id,
+                lineage_id,
+                lineage_designation,
+                {SANITIZED_LLR_EXPR} AS cumulative_llr,
+                n_real_updates
+            FROM branches
+            WHERE $3::text IS NULL OR lineage_designation ILIKE $3
+        ),
+        best_branches AS (
+            SELECT DISTINCT ON (lineage_id) lineage_id, branch_id, cumulative_llr, n_real_updates
+            FROM sanitized
+            ORDER BY lineage_id, cumulative_llr DESC
+        )
+        SELECT bb.lineage_id FROM best_branches bb
+        {extra_join}
+        ORDER BY {order_expr} {dir}
+        LIMIT $1 OFFSET $2"
+    );
+
+    let page_lineage_ids: Vec<(i64,)> = sqlx::query_as(sqlx::AssertSqlSafe(lineage_query))
+        .bind(PAGE_SIZE)
+        .bind(offset)
+        .bind(&pattern)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let ordered_ids: Vec<i64> = page_lineage_ids.into_iter().map(|(id,)| id).collect();
 
     if ordered_ids.is_empty() {
         return Ok((Vec::new(), total_lineages.0));
@@ -252,8 +167,7 @@ async fn list_lineages(
     let branches_query = format!(
         "SELECT b.branch_id, b.lineage_id, b.designation, b.lineage_designation,
                 {SANITIZED_LLR_EXPR} AS cumulative_llr, b.n_real_updates,
-                ks.ra, ks.dec, ks.ra_dot, ks.dec_dot, ks.rho, ks.rho_dot, ks.epoch,
-                ks.r_obs_x, ks.r_obs_y, ks.r_obs_z, ks.v_obs_x, ks.v_obs_y, ks.v_obs_z
+                ks.dynamic_family
          FROM branches b
          CROSS JOIN LATERAL (
              SELECT hypothesis_id
@@ -274,30 +188,15 @@ async fn list_lineages(
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
     let branches: Vec<Branch> = branch_rows
-        .into_par_iter()
-        .map(|row| {
-            let family = classify_from_attributable_state(
-                row.ra,
-                row.dec,
-                row.ra_dot,
-                row.dec_dot,
-                row.rho,
-                row.rho_dot,
-                row.epoch,
-                Vector3::new(row.r_obs_x, row.r_obs_y, row.r_obs_z),
-                Vector3::new(row.v_obs_x, row.v_obs_y, row.v_obs_z),
-            )
-            .unwrap_or(DynamicalFamily::Unknown);
-
-            Branch {
-                branch_id: row.branch_id,
-                lineage_id: row.lineage_id,
-                designation: row.designation,
-                lineage_designation: row.lineage_designation,
-                cumulative_llr: row.cumulative_llr,
-                n_real_updates: row.n_real_updates,
-                family,
-            }
+        .into_iter()
+        .map(|row| Branch {
+            branch_id: row.branch_id,
+            lineage_id: row.lineage_id,
+            designation: row.designation,
+            lineage_designation: row.lineage_designation,
+            cumulative_llr: row.cumulative_llr,
+            n_real_updates: row.n_real_updates,
+            family: DynamicalFamily::from_label(&row.dynamic_family),
         })
         .collect();
 

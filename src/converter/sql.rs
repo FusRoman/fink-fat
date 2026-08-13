@@ -19,7 +19,10 @@ use fink_fat_engine::topocentric_kf::{
     branching::BranchCollection, single_kalman::KFStateSnapshot,
 };
 use indicatif::{ProgressBar, ProgressStyle};
+use nalgebra::Vector3;
 use postgres::{Client, NoTls, binary_copy::BinaryCopyInWriter, types::Type};
+
+use crate::converter::family::{DynamicalFamily, classify_from_attributable_state};
 
 /// Columns shared by the `kf_state` and `archived_trajectories` tables,
 /// mirroring [`crate::converter::parquet::KfStateColumns`] but as a
@@ -370,7 +373,8 @@ fn create_tables(transaction: &mut postgres::Transaction<'_>) -> Result<(), post
             v_obs_z DOUBLE PRECISION NOT NULL,
             universal_anomaly DOUBLE PRECISION,
             kalman_gain DOUBLE PRECISION[],
-            nis_ema DOUBLE PRECISION
+            nis_ema DOUBLE PRECISION,
+            dynamic_family TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS archived_trajectories (
@@ -399,11 +403,27 @@ fn create_tables(transaction: &mut postgres::Transaction<'_>) -> Result<(), post
             v_obs_z DOUBLE PRECISION NOT NULL,
             universal_anomaly DOUBLE PRECISION,
             kalman_gain DOUBLE PRECISION[],
-            nis_ema DOUBLE PRECISION
+            nis_ema DOUBLE PRECISION,
+            dynamic_family TEXT NOT NULL,
+            semi_major_axis DOUBLE PRECISION NOT NULL,
+            eccentricity DOUBLE PRECISION NOT NULL
         );
 
         CREATE INDEX IF NOT EXISTS idx_hypotheses_branch_log_weight
             ON hypotheses (branch_id, log_weight DESC);
+
+        -- Columns added after the initial rollout: CREATE TABLE IF NOT EXISTS
+        -- above is a no-op against a pre-existing table, so a DB created
+        -- before these columns existed needs them backfilled explicitly.
+        -- The DEFAULT satisfies NOT NULL on any existing rows; the table is
+        -- TRUNCATEd right after create_tables() runs, so the default values
+        -- never actually get read back out.
+        ALTER TABLE kf_state ADD COLUMN IF NOT EXISTS dynamic_family TEXT NOT NULL DEFAULT 'Unknown';
+        ALTER TABLE kf_state ADD COLUMN IF NOT EXISTS semi_major_axis DOUBLE PRECISION NOT NULL DEFAULT 0;
+        ALTER TABLE kf_state ADD COLUMN IF NOT EXISTS eccentricity DOUBLE PRECISION NOT NULL DEFAULT 0;
+        ALTER TABLE archived_trajectories ADD COLUMN IF NOT EXISTS dynamic_family TEXT NOT NULL DEFAULT 'Unknown';
+        ALTER TABLE archived_trajectories ADD COLUMN IF NOT EXISTS semi_major_axis DOUBLE PRECISION NOT NULL DEFAULT 0;
+        ALTER TABLE archived_trajectories ADD COLUMN IF NOT EXISTS eccentricity DOUBLE PRECISION NOT NULL DEFAULT 0;
         ",
     )
 }
@@ -539,13 +559,32 @@ fn copy_kf_state(
 ) -> Result<(), postgres::Error> {
     pb.println(format!("Copying {} rows into kf_state...", rows.len()));
     let sink = transaction.copy_in(&format!(
-        "COPY kf_state (hypothesis_id, {KF_STATE_COLUMN_NAMES}) FROM STDIN BINARY"
+        "COPY kf_state (hypothesis_id, {KF_STATE_COLUMN_NAMES}, dynamic_family, semi_major_axis, eccentricity) FROM STDIN BINARY"
     ))?;
+
     let mut types = vec![Type::INT8];
     types.extend_from_slice(KF_STATE_COLUMN_TYPES);
+    types.push(Type::TEXT);
+    types.push(Type::FLOAT8);
+    types.push(Type::FLOAT8);
+
     let mut writer = BinaryCopyInWriter::new(sink, &types);
     for row in rows {
         let f = &row.fields;
+
+        let (dyn_family, semi_major, eccentricity) = classify_from_attributable_state(
+            f.ra,
+            f.dec,
+            f.ra_dot,
+            f.dec_dot,
+            f.rho,
+            f.rho_dot,
+            f.epoch,
+            Vector3::new(f.r_obs_x, f.r_obs_y, f.r_obs_z),
+            Vector3::new(f.v_obs_x, f.v_obs_y, f.v_obs_z),
+        )
+        .unwrap_or((DynamicalFamily::Unknown, 0., 0.));
+
         writer.write(&[
             &row.hypothesis_id,
             &f.ra,
@@ -565,6 +604,9 @@ fn copy_kf_state(
             &f.universal_anomaly,
             &f.kalman_gain,
             &f.nis_ema,
+            &dyn_family.label(),
+            &semi_major,
+            &eccentricity,
         ])?;
         pb.inc(1);
     }
@@ -584,7 +626,8 @@ fn copy_archived_trajectories(
     let sink = transaction.copy_in(&format!(
         "COPY archived_trajectories (designation, lineage_id, track_ids, cumulative_llr, \
          n_real_updates, last_real_update_step, archived_at_step, absolute_magnitude_estimate, \
-         absolute_magnitude_sample_count, {KF_STATE_COLUMN_NAMES}) FROM STDIN BINARY"
+         absolute_magnitude_sample_count, {KF_STATE_COLUMN_NAMES}, dynamic_family, \
+         semi_major_axis, eccentricity) FROM STDIN BINARY"
     ))?;
     let mut types = vec![
         Type::TEXT,
@@ -598,9 +641,26 @@ fn copy_archived_trajectories(
         Type::INT4,
     ];
     types.extend_from_slice(KF_STATE_COLUMN_TYPES);
+    types.push(Type::TEXT);
+    types.push(Type::FLOAT8);
+    types.push(Type::FLOAT8);
     let mut writer = BinaryCopyInWriter::new(sink, &types);
     for row in rows {
         let f = &row.kf_state;
+
+        let (dyn_family, semi_major, eccentricity) = classify_from_attributable_state(
+            f.ra,
+            f.dec,
+            f.ra_dot,
+            f.dec_dot,
+            f.rho,
+            f.rho_dot,
+            f.epoch,
+            Vector3::new(f.r_obs_x, f.r_obs_y, f.r_obs_z),
+            Vector3::new(f.v_obs_x, f.v_obs_y, f.v_obs_z),
+        )
+        .unwrap_or((DynamicalFamily::Unknown, 0., 0.));
+
         writer.write(&[
             &row.designation,
             &row.lineage_id,
@@ -628,6 +688,9 @@ fn copy_archived_trajectories(
             &f.universal_anomaly,
             &f.kalman_gain,
             &f.nis_ema,
+            &dyn_family.label(),
+            &semi_major,
+            &eccentricity,
         ])?;
         pb.inc(1);
     }

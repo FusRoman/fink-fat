@@ -10,6 +10,7 @@ use crate::{
     init_cli::ConvertFormat,
 };
 
+pub mod family;
 pub mod parquet;
 pub mod sql;
 

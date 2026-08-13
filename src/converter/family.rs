@@ -1,69 +1,43 @@
-use serde::{Deserialize, Serialize};
-
-#[cfg(feature = "server")]
 use nalgebra::{Vector3, Vector6};
+use outfit::OrbitalElements;
 
-#[cfg(feature = "server")]
 use fink_fat_engine::topocentric_kf::conversion::attributable_to_cartesian;
 
 /// Dynamical family of an asteroid, classified from its (semi-major axis,
 /// eccentricity) based on the IMCCE SSP population table:
-/// https://ssp.imcce.fr/webservices/skybot/
+/// <https://ssp.imcce.fr/webservices/skybot/>
 ///
 /// Variant order is deterministic and roughly follows increasing heliocentric
 /// distance — it is what backs the `Ord` used to sort the lineages table by
 /// family.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DynamicalFamily {
-    #[serde(rename = "Unknown")]
     Unknown,
-    #[serde(rename = "Vulcanoid")]
     Vulcanoid,
-    #[serde(rename = "NEA>Atira")]
     NeaAtira,
-    #[serde(rename = "NEA>Aten")]
     NeaAten,
-    #[serde(rename = "NEA>Apollo")]
     NeaApollo,
-    #[serde(rename = "NEA>Amor")]
     NeaAmor,
-    #[serde(rename = "Mars-Crosser>Deep")]
     MarsCrosserDeep,
-    #[serde(rename = "Mars-Crosser>Shallow")]
     MarsCrosserShallow,
-    #[serde(rename = "Hungaria")]
     Hungaria,
-    #[serde(rename = "MB>Inner")]
     MbInner,
-    #[serde(rename = "MB>Middle")]
     MbMiddle,
-    #[serde(rename = "MB>Outer")]
     MbOuter,
-    #[serde(rename = "MB>Cybele")]
     MbCybele,
-    #[serde(rename = "MB>Hilda")]
     MbHilda,
-    #[serde(rename = "Trojan")]
     Trojan,
-    #[serde(rename = "Centaur")]
     Centaur,
-    #[serde(rename = "KBO>SDO")]
     KboSdo,
-    #[serde(rename = "KBO>Detached")]
     KboDetached,
-    #[serde(rename = "KBO>Classical>Inner")]
     KboClassicalInner,
-    #[serde(rename = "KBO>Classical>Main")]
     KboClassicalMain,
-    #[serde(rename = "KBO>Classical>Outer")]
     KboClassicalOuter,
-    #[serde(rename = "IOC")]
     Ioc,
 }
 
 impl DynamicalFamily {
     /// Classify from orbital elements: a = semi-major axis (AU), e = eccentricity.
-    #[cfg(feature = "server")]
     pub fn classify(a: f64, e: f64) -> Self {
         let perihelion = a * (1.0 - e);
         let aphelion = a * (1.0 + e);
@@ -118,35 +92,6 @@ impl DynamicalFamily {
         }
     }
 
-    /// Inverse of [`Self::label`] — parses the `dynamic_family` TEXT column
-    /// back into an enum variant. Unrecognized text falls back to `Unknown`.
-    pub fn from_label(s: &str) -> Self {
-        match s {
-            "Vulcanoid" => Self::Vulcanoid,
-            "NEA>Atira" => Self::NeaAtira,
-            "NEA>Aten" => Self::NeaAten,
-            "NEA>Apollo" => Self::NeaApollo,
-            "NEA>Amor" => Self::NeaAmor,
-            "Mars-Crosser>Deep" => Self::MarsCrosserDeep,
-            "Mars-Crosser>Shallow" => Self::MarsCrosserShallow,
-            "Hungaria" => Self::Hungaria,
-            "MB>Inner" => Self::MbInner,
-            "MB>Middle" => Self::MbMiddle,
-            "MB>Outer" => Self::MbOuter,
-            "MB>Cybele" => Self::MbCybele,
-            "MB>Hilda" => Self::MbHilda,
-            "Trojan" => Self::Trojan,
-            "Centaur" => Self::Centaur,
-            "KBO>SDO" => Self::KboSdo,
-            "KBO>Detached" => Self::KboDetached,
-            "KBO>Classical>Inner" => Self::KboClassicalInner,
-            "KBO>Classical>Main" => Self::KboClassicalMain,
-            "KBO>Classical>Outer" => Self::KboClassicalOuter,
-            "IOC" => Self::Ioc,
-            _ => Self::Unknown,
-        }
-    }
-
     pub fn label(self) -> &'static str {
         match self {
             Self::Unknown => "Unknown",
@@ -173,70 +118,7 @@ impl DynamicalFamily {
             Self::Ioc => "IOC",
         }
     }
-
-    /// Hex color shared by the (a, e) plot markers and the lineage table
-    /// badges. Hues are stepped by the golden angle (~137.5°) in variant
-    /// order rather than swept linearly around the color wheel — since
-    /// variants are ordered by increasing heliocentric distance, this
-    /// maximizes the color contrast between families that are physically
-    /// adjacent (and so most likely to appear side by side on the plot),
-    /// at the cost of occasionally reusing similar hues for families that
-    /// are far apart and rarely confused visually anyway.
-    pub fn color(self) -> &'static str {
-        match self {
-            Self::Unknown => "#d22d2d",
-            Self::Vulcanoid => "#2dd25d",
-            Self::NeaAtira => "#8d2dd2",
-            Self::NeaAten => "#d2be2d",
-            Self::NeaApollo => "#2db7d2",
-            Self::NeaAmor => "#d22d86",
-            Self::MarsCrosserDeep => "#56d22d",
-            Self::MarsCrosserShallow => "#342dd2",
-            Self::Hungaria => "#d2642d",
-            Self::MbInner => "#2dd294",
-            Self::MbMiddle => "#c52dd2",
-            Self::MbOuter => "#b0d22d",
-            Self::MbCybele => "#2d7fd2",
-            Self::MbHilda => "#d22d4f",
-            Self::Trojan => "#2dd23b",
-            Self::Centaur => "#6b2dd2",
-            Self::KboSdo => "#d29b2d",
-            Self::KboDetached => "#2dd2cc",
-            Self::KboClassicalInner => "#d22da8",
-            Self::KboClassicalMain => "#78d22d",
-            Self::KboClassicalOuter => "#2d48d2",
-            Self::Ioc => "#d2422d",
-        }
-    }
 }
-
-/// `label()` output for every variant, in enum declaration order
-/// (heliocentric-distance order). Used to build a SQL `CASE` expression so
-/// `ORDER BY dynamic_family` can rank by this order instead of alphabetically.
-pub const ORDERED_LABELS: [&str; 22] = [
-    "Unknown",
-    "Vulcanoid",
-    "NEA>Atira",
-    "NEA>Aten",
-    "NEA>Apollo",
-    "NEA>Amor",
-    "Mars-Crosser>Deep",
-    "Mars-Crosser>Shallow",
-    "Hungaria",
-    "MB>Inner",
-    "MB>Middle",
-    "MB>Outer",
-    "MB>Cybele",
-    "MB>Hilda",
-    "Trojan",
-    "Centaur",
-    "KBO>SDO",
-    "KBO>Detached",
-    "KBO>Classical>Inner",
-    "KBO>Classical>Main",
-    "KBO>Classical>Outer",
-    "IOC",
-];
 
 impl std::fmt::Display for DynamicalFamily {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -248,7 +130,6 @@ impl std::fmt::Display for DynamicalFamily {
 /// stored in `kf_state`/`archived_trajectories`), for callers that already
 /// fetched these columns as part of a larger query — avoids a second
 /// DB round-trip / duplicate join just to compute the family.
-#[cfg(feature = "server")]
 #[allow(clippy::too_many_arguments)]
 pub fn classify_from_attributable_state(
     ra: f64,
@@ -260,16 +141,15 @@ pub fn classify_from_attributable_state(
     epoch: f64,
     r_obs: Vector3<f64>,
     v_obs: Vector3<f64>,
-) -> Option<DynamicalFamily> {
-    use outfit::OrbitalElements;
-
+) -> Option<(DynamicalFamily, f64, f64)> {
     let state = Vector6::new(ra, dec, ra_dot, dec_dot, rho, rho_dot);
     let cartesian = attributable_to_cartesian(&state, &r_obs, &v_obs);
 
     let orbit = OrbitalElements::from_orbital_state(&cartesian.pos, &cartesian.vel, epoch)
         .as_keplerian()?;
 
-    Some(DynamicalFamily::classify(
+    Some((
+        DynamicalFamily::classify(orbit.semi_major_axis, orbit.eccentricity),
         orbit.semi_major_axis,
         orbit.eccentricity,
     ))
