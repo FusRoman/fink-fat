@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 use crate::homepage::family::DynamicalFamily;
 use crate::homepage::interaction::{Pagination, SortColumn, SortDirection, PAGE_SIZE};
@@ -57,6 +57,7 @@ async fn list_lineages(
     sort_column: Option<SortColumn>,
     sort_direction: SortDirection,
     search_query: String,
+    hidden_families: Vec<DynamicalFamily>,
 ) -> Result<(Vec<LineageGroup>, i64), ServerFnError> {
     use crate::{
         get_pool,
@@ -65,6 +66,7 @@ async fn list_lineages(
             interaction::{SortColumn, PAGE_SIZE},
         },
     };
+    use std::collections::HashMap;
 
     let pool = get_pool().await;
 
@@ -81,54 +83,62 @@ async fn list_lineages(
         }
     };
 
-    let total_lineages: (i64,) = sqlx::query_as(
-        "SELECT COUNT(DISTINCT lineage_id) FROM branches
-         WHERE $1::text IS NULL OR lineage_designation ILIKE $1",
-    )
-    .bind(&pattern)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| ServerFnError::new(e.to_string()))?;
+    // NULL (rather than an empty array) when nothing is hidden, so the
+    // predicate below short-circuits instead of testing every row.
+    let hidden_labels: Option<Vec<String>> = if hidden_families.is_empty() {
+        None
+    } else {
+        Some(
+            hidden_families
+                .iter()
+                .map(|f| f.label().to_string())
+                .collect(),
+        )
+    };
 
     let offset = page * PAGE_SIZE;
 
-    // `dynamic_family` is a plain TEXT column now, but it lives on kf_state
-    // (reached via each lineage's best branch's best hypothesis), not on
-    // branches — so sorting by family needs an extra join and a CASE
-    // expression to rank labels in heliocentric-distance order rather than
-    // alphabetically. The other sort columns stay a plain best_branches
-    // column reference with no extra join.
-    let family_case_expr = {
-        let mut expr = String::from("CASE ks.dynamic_family");
-        for (i, label) in family::ORDERED_LABELS.iter().enumerate() {
-            expr.push_str(&format!(" WHEN '{label}' THEN {i}"));
-        }
-        expr.push_str(&format!(" ELSE {} END", family::ORDERED_LABELS.len()));
-        expr
+    // `dynamic_family` lives on kf_state — reached via each lineage's best
+    // branch's best hypothesis — not on `branches`, so both filtering and
+    // sorting by family need an extra lateral join. It is only paid for when
+    // actually needed; the default listing stays a pure `branches` query.
+    let needs_family = hidden_labels.is_some() || sort_column == Some(SortColumn::Family);
+
+    let family_select = if needs_family {
+        ", ks.dynamic_family"
+    } else {
+        ""
     };
 
-    let (order_expr, extra_join, dir): (&str, &str, &str) = match sort_column {
-        Some(SortColumn::CumulativeLlr) => ("bb.cumulative_llr", "", sort_direction.sql()),
-        Some(SortColumn::Updates) => ("bb.n_real_updates", "", sort_direction.sql()),
-        Some(SortColumn::Family) => (
-            &family_case_expr,
-            "CROSS JOIN LATERAL (
-                SELECT hypothesis_id
-                FROM hypotheses h
-                WHERE h.branch_id = bb.branch_id
-                ORDER BY h.log_weight DESC
-                LIMIT 1
-            ) bh
-            JOIN kf_state ks ON ks.hypothesis_id = bh.hypothesis_id",
-            sort_direction.sql(),
-        ),
-        None => ("bb.lineage_id", "", "ASC"),
+    let family_join = if needs_family {
+        "CROSS JOIN LATERAL (
+            SELECT hypothesis_id
+            FROM hypotheses h
+            WHERE h.branch_id = bb.branch_id
+            ORDER BY h.log_weight DESC
+            LIMIT 1
+        ) bh
+        JOIN kf_state ks ON ks.hypothesis_id = bh.hypothesis_id"
+    } else {
+        ""
     };
 
-    // SAFE: order_expr/extra_join/dir come from a closed match over
-    // SortColumn/SortDirection just above — never raw user input. `pattern`
-    // (real user input) stays a bound parameter ($3), never interpolated.
-    let lineage_query = format!(
+    // Both shapes reference $2 so the parameter numbering is identical either
+    // way — when there is no join to filter against, the bound value is NULL
+    // and the predicate is trivially true.
+    let family_predicate = if needs_family {
+        "($2::text[] IS NULL OR ks.dynamic_family <> ALL($2))"
+    } else {
+        "$2::text[] IS NULL"
+    };
+
+    // The family filter applies to each lineage's *best* branch — the one
+    // whose badge the collapsed row shows — so it has to be applied after
+    // `DISTINCT ON` has picked that branch, not inside `sanitized`.
+    // SAFE: every interpolated fragment comes from a closed match over
+    // SortColumn/SortDirection or the booleans above — never raw user input.
+    // `pattern` and `hidden_labels` stay bound parameters ($1, $2).
+    let filtered_cte = format!(
         "WITH sanitized AS (
             SELECT
                 branch_id,
@@ -137,23 +147,61 @@ async fn list_lineages(
                 {SANITIZED_LLR_EXPR} AS cumulative_llr,
                 n_real_updates
             FROM branches
-            WHERE $3::text IS NULL OR lineage_designation ILIKE $3
+            WHERE $1::text IS NULL OR lineage_designation ILIKE $1
         ),
         best_branches AS (
             SELECT DISTINCT ON (lineage_id) lineage_id, branch_id, cumulative_llr, n_real_updates
             FROM sanitized
             ORDER BY lineage_id, cumulative_llr DESC
-        )
-        SELECT bb.lineage_id FROM best_branches bb
-        {extra_join}
+        ),
+        filtered AS (
+            SELECT bb.lineage_id, bb.cumulative_llr, bb.n_real_updates{family_select}
+            FROM best_branches bb
+            {family_join}
+            WHERE {family_predicate}
+        )"
+    );
+
+    // Counted off the same CTE as the page below: a count that ignored the
+    // family filter would desynchronize the pagination from its contents.
+    let count_query = format!("{filtered_cte} SELECT COUNT(*) FROM filtered");
+
+    let total_lineages: (i64,) = sqlx::query_as(sqlx::AssertSqlSafe(count_query))
+        .bind(&pattern)
+        .bind(&hidden_labels)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    // Ranks labels by heliocentric distance rather than alphabetically.
+    let family_case_expr = {
+        let mut expr = String::from("CASE dynamic_family");
+        for (i, label) in family::ORDERED_LABELS.iter().enumerate() {
+            expr.push_str(&format!(" WHEN '{label}' THEN {i}"));
+        }
+        expr.push_str(&format!(" ELSE {} END", family::ORDERED_LABELS.len()));
+        expr
+    };
+
+    let (order_expr, dir): (&str, &str) = match sort_column {
+        Some(SortColumn::CumulativeLlr) => ("cumulative_llr", sort_direction.sql()),
+        Some(SortColumn::Updates) => ("n_real_updates", sort_direction.sql()),
+        Some(SortColumn::Family) => (&family_case_expr, sort_direction.sql()),
+        None => ("lineage_id", "ASC"),
+    };
+
+    let lineage_query = format!(
+        "{filtered_cte}
+        SELECT lineage_id FROM filtered
         ORDER BY {order_expr} {dir}
-        LIMIT $1 OFFSET $2"
+        LIMIT $3 OFFSET $4"
     );
 
     let page_lineage_ids: Vec<(i64,)> = sqlx::query_as(sqlx::AssertSqlSafe(lineage_query))
+        .bind(&pattern)
+        .bind(&hidden_labels)
         .bind(PAGE_SIZE)
         .bind(offset)
-        .bind(&pattern)
         .fetch_all(pool)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
@@ -352,7 +400,10 @@ fn LineageTable(groups: Vec<LineageGroup>) -> Element {
 }
 
 #[component]
-pub fn BranchTab(search_query: String) -> Element {
+pub fn BranchTab(
+    search_query: String,
+    hidden_families: Signal<HashSet<DynamicalFamily>>,
+) -> Element {
     let mut current_page = use_signal(|| 0_i64);
     let mut sort_column = use_signal(|| None::<SortColumn>);
     let mut sort_direction = use_signal(|| SortDirection::Desc);
@@ -361,11 +412,19 @@ pub fn BranchTab(search_query: String) -> Element {
 
     let lineages_resource =
         use_resource(use_reactive!(|(search_query_for_resource,)| async move {
+            // Read inside the future so `use_resource` subscribes to it and
+            // refetches on a legend toggle — same as the signals below, and
+            // unlike `search_query`, which is a plain prop value and so needs
+            // the `use_reactive!` wrapper. Sorted for a stable request shape.
+            let mut hidden: Vec<DynamicalFamily> = hidden_families().into_iter().collect();
+            hidden.sort();
+
             list_lineages(
                 current_page(),
                 sort_column(),
                 sort_direction(),
                 search_query_for_resource,
+                hidden,
             )
             .await
         }));
@@ -375,6 +434,17 @@ pub fn BranchTab(search_query: String) -> Element {
         let _ = search_query;
         current_page.set(0);
     }));
+
+    // Same, for the family filter — fewer lineages match, so the current page
+    // may no longer exist. `peek` reads the page without subscribing to it:
+    // subscribing would make this effect re-run on every pagination and
+    // immediately bounce the user back to page 0.
+    use_effect(move || {
+        let _ = hidden_families();
+        if *current_page.peek() != 0 {
+            current_page.set(0);
+        }
+    });
 
     let mut toggle_sort = move |col: SortColumn| {
         if sort_column() == Some(col) {
