@@ -19,11 +19,12 @@ camino = { workspace = true }
 tracing = { workspace = true }
 ahash = { workspace = true }
 photom = { workspace = true, features = ["serde"] }
-outfit = { workspace = true, features = ["serde"]}
+outfit = { workspace = true, features = ["serde"] }
 rkyv = { workspace = true, features = ["pointer_width_64"] }
 memmap2 = { workspace = true }
+nalgebra = { workspace = true }
+rayon = { workspace = true }
 
-nalgebra = { version = "0.34.2" }
 hifitime = { version = "4.2.0", default-features = false, features = [
     "ut1",
     "std",
@@ -32,7 +33,6 @@ hifitime = { version = "4.2.0", default-features = false, features = [
 cdshealpix = "0.7.3"
 config = "0.15.19"
 serde_json = "1.0.145"
-rayon = "1.12.0"
 
 [dev-dependencies]
 approx = "0.5.1"

@@ -24,10 +24,11 @@ documentation.workspace = true
 license-file.workspace = true
 
 [workspace]
-members = ["crates/fink-fat-engine", "crates/fink-fat-eval"]
-resolver = "2"
+members = ["crates/fink-fat-engine", "crates/fink-fat-eval", "crates/fink-fat-explorer"]
+resolver = "3"
 
 [workspace.dependencies]
+nalgebra = { version = "0.34.2" }
 serde = { version = "1.0.228", features = ["derive"] }
 ahash = { version = "0.8.12", features = ["serde"] }
 thiserror = "2.0.17"
@@ -55,6 +56,7 @@ polars = { version = "0.53.0", default-features = false, features = [
 rkyv = "0.8.17"
 memmap2 = "0.9.10"
 postgres = "0.19.10"
+rayon = "1.12.0"
 
 
 [dependencies]
@@ -71,12 +73,13 @@ polars = { workspace = true }
 rkyv = { workspace = true, features = ["pointer_width_64"] }
 thiserror = { workspace = true }
 postgres = { workspace = true }
+nalgebra = { workspace = true }
+outfit = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = "2.0.16"
 tempfile = { workspace = true }
 fink-fat-eval = { path = "crates/fink-fat-eval" }
-outfit = { workspace = true }
 
 [profile.release]
 lto = "thin"
