@@ -45,7 +45,11 @@ pub fn read_observation_rows(
         LazyFrame::scan_parquet(path.as_str().into(), ScanArgsParquet::default())?.collect()?;
     df.rechunk_mut();
 
-    let id = df.column("id")?.as_materialized_series().u64()?.cont_slice()?;
+    let id = df
+        .column("id")?
+        .as_materialized_series()
+        .u64()?
+        .cont_slice()?;
     let night_id = df
         .column("night_id")?
         .as_materialized_series()
@@ -68,13 +72,21 @@ pub fn read_observation_rows(
         .u8()?
         .cont_slice()?;
     let mpc_code_obs = df.column("mpc_code_obs")?.as_materialized_series().str()?;
-    let ra = df.column("ra")?.as_materialized_series().f64()?.cont_slice()?;
+    let ra = df
+        .column("ra")?
+        .as_materialized_series()
+        .f64()?
+        .cont_slice()?;
     let ra_err = df
         .column("ra_err")?
         .as_materialized_series()
         .f64()?
         .cont_slice()?;
-    let dec = df.column("dec")?.as_materialized_series().f64()?.cont_slice()?;
+    let dec = df
+        .column("dec")?
+        .as_materialized_series()
+        .f64()?
+        .cont_slice()?;
     let dec_err = df
         .column("dec_err")?
         .as_materialized_series()

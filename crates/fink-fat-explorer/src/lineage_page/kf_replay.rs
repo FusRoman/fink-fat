@@ -110,7 +110,7 @@ pub async fn replay_kalman_branch(
     use nalgebra::Vector2;
     use photom::{
         coordinates::equatorial::EquCoord,
-        observation_dataset::{ObsDataset, observation::ObservationInput},
+        observation_dataset::{observation::ObservationInput, ObsDataset},
         observer::dataset::ObserverId,
         photometry::{Filter, Photometry},
     };
@@ -343,10 +343,9 @@ pub async fn replay_kalman_branch(
                 )
                 .map_err(|e| e.to_string())?;
 
-            let residual_ra =
-                fink_fat_engine::topocentric_kf::single_kalman::update::wrap_angle(
-                    obs_row.ra - equ_pred.ra,
-                );
+            let residual_ra = fink_fat_engine::topocentric_kf::single_kalman::update::wrap_angle(
+                obs_row.ra - equ_pred.ra,
+            );
             let residual_dec = obs_row.dec - equ_pred.dec;
             let innovation = Vector2::new(residual_ra, residual_dec);
 
@@ -355,8 +354,12 @@ pub async fn replay_kalman_branch(
             let s_inv = s.try_inverse().unwrap_or_else(nalgebra::Matrix2::zeros);
 
             let nis = (innovation.transpose() * s_inv * innovation)[(0, 0)];
-            let log_likelihood =
-                -0.5 * (nis + (2.0 * std::f64::consts::PI * s).determinant().max(1e-300).ln());
+            let log_likelihood = -0.5
+                * (nis
+                    + (2.0 * std::f64::consts::PI * s)
+                        .determinant()
+                        .max(1e-300)
+                        .ln());
 
             let separation_rad = (residual_ra * residual_dec.cos()).hypot(residual_dec).abs();
 

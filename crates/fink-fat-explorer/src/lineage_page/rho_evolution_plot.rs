@@ -51,7 +51,11 @@ fn RhoPlot(replay: Vec<KfStep>) -> Element {
                     .name("ρ (posterior)")
                     .mode(Mode::LinesMarkers)
                     .marker(Marker::new().color("#8d2dd2"))
-                    .error_y(ErrorData::new(ErrorType::Data).array(sigma_rho).symmetric(true)),
+                    .error_y(
+                        ErrorData::new(ErrorType::Data)
+                            .array(sigma_rho)
+                            .symmetric(true),
+                    ),
             );
 
             let layout = Layout::new()
@@ -95,8 +99,12 @@ fn RhoDotPlot(replay: Vec<KfStep>) -> Element {
             }
 
             let steps: Vec<f64> = replay.iter().map(|s| s.step as f64).collect();
-            let rho_dot: Vec<f64> = replay.iter().map(|s| s.posterior_rho_dot_au_per_day).collect();
-            let sigma_rho_dot: Vec<f64> = replay.iter().map(|s| s.sigma_rho_dot_au_per_day).collect();
+            let rho_dot: Vec<f64> = replay
+                .iter()
+                .map(|s| s.posterior_rho_dot_au_per_day)
+                .collect();
+            let sigma_rho_dot: Vec<f64> =
+                replay.iter().map(|s| s.sigma_rho_dot_au_per_day).collect();
 
             let mut plot = Plot::new();
             plot.add_trace(
@@ -104,7 +112,11 @@ fn RhoDotPlot(replay: Vec<KfStep>) -> Element {
                     .name("ρ̇ (posterior)")
                     .mode(Mode::LinesMarkers)
                     .marker(Marker::new().color("#d2642d"))
-                    .error_y(ErrorData::new(ErrorType::Data).array(sigma_rho_dot).symmetric(true)),
+                    .error_y(
+                        ErrorData::new(ErrorType::Data)
+                            .array(sigma_rho_dot)
+                            .symmetric(true),
+                    ),
             );
 
             let layout = Layout::new()
@@ -189,15 +201,11 @@ fn HypothesisRhoScatterPlot(hypotheses: Vec<HypothesisSnapshot>) -> Element {
             spawn(async move {
                 if *drawn.peek() {
                     plotly::bindings::react("lineage-hypothesis-rho-plot", &rho_plot).await;
-                    plotly::bindings::react("lineage-hypothesis-rho-dot-plot", &rho_dot_plot)
-                        .await;
+                    plotly::bindings::react("lineage-hypothesis-rho-dot-plot", &rho_dot_plot).await;
                 } else {
                     plotly::bindings::new_plot("lineage-hypothesis-rho-plot", &rho_plot).await;
-                    plotly::bindings::new_plot(
-                        "lineage-hypothesis-rho-dot-plot",
-                        &rho_dot_plot,
-                    )
-                    .await;
+                    plotly::bindings::new_plot("lineage-hypothesis-rho-dot-plot", &rho_dot_plot)
+                        .await;
                     drawn.set(true);
                 }
             });

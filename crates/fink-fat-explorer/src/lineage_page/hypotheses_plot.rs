@@ -115,9 +115,11 @@ fn SearchRegionPlot(replay: Vec<KfStep>) -> Element {
                 .height(200)
                 .margin(Margin::new().top(10).right(10).bottom(30))
                 .x_axis(Axis::new().title(Title::from("Real observation #")))
-                .y_axis(Axis::new().title(Title::from("Search region radius (arcsec)")).type_(
-                    plotly::layout::AxisType::Log,
-                ));
+                .y_axis(
+                    Axis::new()
+                        .title(Title::from("Search region radius (arcsec)"))
+                        .type_(plotly::layout::AxisType::Log),
+                );
             plot.set_layout(layout);
 
             spawn(async move {

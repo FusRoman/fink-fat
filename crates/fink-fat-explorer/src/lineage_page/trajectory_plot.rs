@@ -31,10 +31,7 @@ pub fn TrajectoryPlot(observations: Vec<ObservationRow>, replay: Vec<KfStep>) ->
 
             let obs_ra: Vec<f64> = observations.iter().map(|o| o.ra.to_degrees()).collect();
             let obs_dec: Vec<f64> = observations.iter().map(|o| o.dec.to_degrees()).collect();
-            let obs_ra_err: Vec<f64> = observations
-                .iter()
-                .map(|o| o.ra_err.to_degrees())
-                .collect();
+            let obs_ra_err: Vec<f64> = observations.iter().map(|o| o.ra_err.to_degrees()).collect();
             let obs_dec_err: Vec<f64> = observations
                 .iter()
                 .map(|o| o.dec_err.to_degrees())
@@ -58,8 +55,16 @@ pub fn TrajectoryPlot(observations: Vec<ObservationRow>, replay: Vec<KfStep>) ->
                     .name("Observations")
                     .mode(Mode::Markers)
                     .marker(Marker::new().color("#2d7fd2").size(7))
-                    .error_x(ErrorData::new(ErrorType::Data).array(obs_ra_err).symmetric(true))
-                    .error_y(ErrorData::new(ErrorType::Data).array(obs_dec_err).symmetric(true)),
+                    .error_x(
+                        ErrorData::new(ErrorType::Data)
+                            .array(obs_ra_err)
+                            .symmetric(true),
+                    )
+                    .error_y(
+                        ErrorData::new(ErrorType::Data)
+                            .array(obs_dec_err)
+                            .symmetric(true),
+                    ),
             );
 
             plot.add_trace(
@@ -67,8 +72,16 @@ pub fn TrajectoryPlot(observations: Vec<ObservationRow>, replay: Vec<KfStep>) ->
                     .name("Kalman prediction (pre-update)")
                     .mode(Mode::Markers)
                     .marker(Marker::new().color("#d2422d").size(6))
-                    .error_x(ErrorData::new(ErrorType::Data).array(pred_ra_err).symmetric(true))
-                    .error_y(ErrorData::new(ErrorType::Data).array(pred_dec_err).symmetric(true)),
+                    .error_x(
+                        ErrorData::new(ErrorType::Data)
+                            .array(pred_ra_err)
+                            .symmetric(true),
+                    )
+                    .error_y(
+                        ErrorData::new(ErrorType::Data)
+                            .array(pred_dec_err)
+                            .symmetric(true),
+                    ),
             );
 
             let layout = Layout::new()

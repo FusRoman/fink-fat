@@ -60,7 +60,11 @@ fn Chi2Plot(replay: Vec<KfStep>) -> Element {
                 Scatter::new(steps, threshold)
                     .name("95% gate (2 d.o.f.)")
                     .mode(Mode::Lines)
-                    .line(Line::new().dash(plotly::common::DashType::Dash).color("#888888")),
+                    .line(
+                        Line::new()
+                            .dash(plotly::common::DashType::Dash)
+                            .color("#888888"),
+                    ),
             );
 
             let layout = Layout::new()

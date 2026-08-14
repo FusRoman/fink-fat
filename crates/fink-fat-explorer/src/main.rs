@@ -74,8 +74,8 @@ static KALMAN_CONTEXT: OnceCell<fink_fat_engine::engine_config::kalman_context::
     OnceCell::const_new();
 
 #[cfg(feature = "server")]
-async fn get_kalman_context() -> &'static fink_fat_engine::engine_config::kalman_context::KalmanContext
-{
+async fn get_kalman_context(
+) -> &'static fink_fat_engine::engine_config::kalman_context::KalmanContext {
     KALMAN_CONTEXT
         .get_or_init(|| async {
             let engine_config = get_engine_config().await;
