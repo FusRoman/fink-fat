@@ -128,8 +128,9 @@ pub fn DynamicPopPlot(hidden_families: Signal<HashSet<DynamicalFamily>>) -> Elem
     let status_text = match &*orbital_data.read() {
         Some(Ok(pts)) => format!("{} objects plotted", pts.len()),
         Some(Err(e)) => format!("Error: {e}"),
-        None => "Loading...".to_string(),
+        None => String::new(),
     };
+    let is_loading = orbital_data.read().is_none();
 
     use_effect(move || {
         #[cfg(target_arch = "wasm32")]
@@ -229,12 +230,19 @@ pub fn DynamicPopPlot(hidden_families: Signal<HashSet<DynamicalFamily>>) -> Elem
                     h2 { class: "text-2xl font-bold tracking-tight", "The Solar System, Mapped" }
                     p { class: "text-sm opacity-60", "{status_text}" }
                 }
-                div {
-                    id: "ae-plot-div",
-                    style: "width: 100%;",
-                    onmounted: move |_| {
-                        is_mounted.set(true);
-                    },
+                div { class: "relative", style: if is_loading { "min-height: 60vh;" },
+                    div {
+                        id: "ae-plot-div",
+                        style: "width: 100%;",
+                        onmounted: move |_| {
+                            is_mounted.set(true);
+                        },
+                    }
+                    if is_loading {
+                        div { class: "absolute inset-0 flex items-center justify-center",
+                            span { class: "loading loading-dots loading-lg" }
+                        }
+                    }
                 }
                 FamilyLegend { entries: legend_entries(), hidden_families }
             }
