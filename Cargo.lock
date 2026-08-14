@@ -2828,6 +2828,7 @@ dependencies = [
  "clap",
  "fink-fat-engine",
  "fink-fat-eval",
+ "husky-rs",
  "indicatif",
  "nalgebra",
  "outfit",
@@ -2902,11 +2903,13 @@ dependencies = [
 name = "fink-fat-explorer"
 version = "0.1.0"
 dependencies = [
+ "camino",
  "dioxus",
  "dotenvy",
  "fink-fat-engine",
  "nalgebra",
  "outfit",
+ "photom",
  "plotly",
  "rayon",
  "serde",
@@ -3923,6 +3926,12 @@ name = "humantime"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "135b12329e5e3ce057a9f972339ea52bc954fe1e9358ef27f95e89716fbc5424"
+
+[[package]]
+name = "husky-rs"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8cf36212ff72cd6a4bb007339b99493d5ab296781673eba29f18b3375c85b9bc"
 
 [[package]]
 name = "hybrid-array"

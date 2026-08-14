@@ -80,6 +80,7 @@ outfit = { workspace = true }
 assert_cmd = "2.0.16"
 tempfile = { workspace = true }
 fink-fat-eval = { path = "crates/fink-fat-eval" }
+husky-rs = "0.4.0"
 
 [profile.release]
 lto = "thin"
