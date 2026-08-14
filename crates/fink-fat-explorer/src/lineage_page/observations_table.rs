@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ObservationRow {
     pub id: i64,
+    pub object_id: String,
     pub position: i32,
     pub mjd_tt: f64,
     pub ra: f64,
@@ -20,6 +21,7 @@ pub struct ObservationRow {
 #[cfg_attr(feature = "server", derive(sqlx::FromRow))]
 struct ObservationRowSql {
     id: i64,
+    object_id: String,
     position: i32,
     mjd_tt: f64,
     ra: f64,
@@ -36,6 +38,7 @@ impl From<ObservationRowSql> for ObservationRow {
     fn from(r: ObservationRowSql) -> Self {
         Self {
             id: r.id,
+            object_id: r.object_id,
             position: r.position,
             mjd_tt: r.mjd_tt,
             ra: r.ra,
@@ -75,7 +78,7 @@ pub async fn get_lineage_observations(
             ) DESC
             LIMIT 1
         )
-        SELECT o.id, bo.position, o.mjd_tt, o.ra, o.ra_err, o.dec, o.dec_err,
+        SELECT o.id, o.object_id, bo.position, o.mjd_tt, o.ra, o.ra_err, o.dec, o.dec_err,
                o.magnitude, o.mag_err, o.filter, o.mpc_code_obs
         FROM best_branch bb
         JOIN branch_observations bo ON bo.branch_id = bb.branch_id
@@ -104,6 +107,7 @@ pub fn ObservationsTable(observations: Vec<ObservationRow>) -> Element {
                         thead {
                             tr {
                                 th { "#" }
+                                th { "ObjectId" }
                                 th { "MJD (TT)" }
                                 th { "RA (deg)" }
                                 th { "Dec (deg)" }
@@ -114,9 +118,17 @@ pub fn ObservationsTable(observations: Vec<ObservationRow>) -> Element {
                         }
                         tbody {
                             for obs in &observations {
-                                tr {
-                                    key: "{obs.id}",
+                                tr { key: "{obs.id}",
                                     td { "{obs.position}" }
+                                    td {
+                                        a {
+                                            href: "https://ztf.fink-portal.org/{obs.object_id}",
+                                            target: "_blank",
+                                            rel: "noopener noreferrer",
+                                            class: "link link-secondary",
+                                            "{obs.object_id}"
+                                        }
+                                    }
                                     td { "{obs.mjd_tt:.6}" }
                                     td {
                                         "{obs.ra.to_degrees():.6} ± {(obs.ra_err.to_degrees() * 3600.0):.3}\""

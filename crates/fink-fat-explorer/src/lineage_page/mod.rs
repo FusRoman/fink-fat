@@ -57,7 +57,11 @@ pub fn LineagePage(lineage_id: String) -> Element {
     rsx! {
         div { class: "min-h-screen bg-base-200 flex flex-col gap-4 p-4",
             div { class: "navbar bg-base-100 shadow-sm px-6 rounded-box",
-                Link { to: crate::Route::Home {}, class: "link link-hover text-sm", "← Back to lineages" }
+                Link {
+                    to: crate::Route::Home {},
+                    class: "link link-hover text-sm",
+                    "← Back to lineages"
+                }
             }
 
             match &*summary_resource.read() {
@@ -66,10 +70,7 @@ pub fn LineagePage(lineage_id: String) -> Element {
                         div { class: "xl:w-96 flex-none",
                             IdentityCard { summary: summary.clone() }
                         }
-                        TrajectoryPlot {
-                            observations: observations.clone(),
-                            replay: replay.clone(),
-                        }
+                        TrajectoryPlot { observations: observations.clone(), replay: replay.clone() }
                     }
                 },
                 Some(Err(e)) => rsx! {

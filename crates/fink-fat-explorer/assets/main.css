@@ -5025,6 +5025,19 @@
     .link-primary {
       color: var(--color-primary);
     }
+    @media (hover: hover) {
+      .link-secondary:hover {
+        color: var(--color-secondary);
+      }
+      @supports (color: color-mix(in lab, red, red)) {
+        .link-secondary:hover {
+          color: color-mix(in oklab, var(--color-secondary) 80%, #000);
+        }
+      }
+    }
+    .link-secondary {
+      color: var(--color-secondary);
+    }
   }
   .text-primary {
     color: var(--color-primary);

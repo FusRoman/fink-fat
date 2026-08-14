@@ -131,6 +131,7 @@ pub async fn replay_kalman_branch(
     #[cfg_attr(feature = "server", derive(sqlx::FromRow))]
     struct ObservationRowSql {
         id: i64,
+        object_id: String,
         position: i32,
         mjd_tt: f64,
         ra: f64,
@@ -166,7 +167,7 @@ pub async fn replay_kalman_branch(
             ) DESC
             LIMIT 1
         )
-        SELECT o.id, bo.position, o.mjd_tt, o.ra, o.ra_err, o.dec, o.dec_err,
+        SELECT o.id, o.object_id, bo.position, o.mjd_tt, o.ra, o.ra_err, o.dec, o.dec_err,
                o.magnitude, o.mag_err, o.filter, o.mpc_code_obs
         FROM best_branch bb
         JOIN branch_observations bo ON bo.branch_id = bb.branch_id
@@ -182,6 +183,7 @@ pub async fn replay_kalman_branch(
         .into_iter()
         .map(|r| ObservationRow {
             id: r.id,
+            object_id: r.object_id,
             position: r.position,
             mjd_tt: r.mjd_tt,
             ra: r.ra,
