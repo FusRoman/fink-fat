@@ -2907,6 +2907,7 @@ dependencies = [
  "dioxus",
  "dotenvy",
  "fink-fat-engine",
+ "hifitime",
  "nalgebra",
  "outfit",
  "photom",

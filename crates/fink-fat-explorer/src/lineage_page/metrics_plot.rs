@@ -3,11 +3,14 @@ use dioxus::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use plotly::{
     common::{Line, Marker, Mode, Title},
-    layout::{Axis, Layout, Margin},
+    layout::{Axis, AxisType, Layout, Margin},
     Plot, Scatter,
 };
 
 use super::kf_replay::KfStep;
+use super::x_axis::XAxisUnit;
+#[cfg(target_arch = "wasm32")]
+use super::x_axis::{x_values_for_steps, XAxisValues};
 
 /// χ² (2 d.o.f.) gate threshold at 95% confidence — the same value used by
 /// the engine's default `inflation_chi2_threshold`
@@ -19,58 +22,81 @@ const CHI2_GATE_95: f64 = 5.991;
 /// pre-update prediction, and the single-hypothesis log-likelihood (a proxy
 /// for the production LLR — see [`KfStep::log_likelihood`]).
 #[component]
-pub fn MetricsPlot(replay: Vec<KfStep>) -> Element {
+pub fn MetricsPlot(replay: Vec<KfStep>, x_axis_unit: XAxisUnit) -> Element {
     rsx! {
         div { class: "card bg-base-100 shadow-sm flex-1",
             div { class: "card-body gap-4",
                 h2 { class: "card-title", "Filter consistency metrics" }
-                Chi2Plot { replay: replay.clone() }
-                SeparationPlot { replay: replay.clone() }
-                LogLikelihoodPlot { replay }
+                Chi2Plot { replay: replay.clone(), x_axis_unit }
+                SeparationPlot { replay: replay.clone(), x_axis_unit }
+                LogLikelihoodPlot { replay, x_axis_unit }
             }
         }
     }
 }
 
 #[component]
-fn Chi2Plot(replay: Vec<KfStep>) -> Element {
+fn Chi2Plot(replay: Vec<KfStep>, x_axis_unit: XAxisUnit) -> Element {
     let mut is_mounted = use_signal(|| false);
     #[cfg(target_arch = "wasm32")]
     let mut drawn = use_signal(|| false);
 
-    use_effect(use_reactive!(|(replay,)| {
+    use_effect(use_reactive!(|(replay, x_axis_unit)| {
         #[cfg(target_arch = "wasm32")]
         {
             if !is_mounted() {
                 return;
             }
 
-            let steps: Vec<f64> = replay.iter().map(|s| s.step as f64).collect();
             let nis: Vec<f64> = replay.iter().map(|s| s.nis).collect();
-            let threshold = vec![CHI2_GATE_95; steps.len()];
+            let threshold = vec![CHI2_GATE_95; nis.len()];
 
             let mut plot = Plot::new();
-            plot.add_trace(
-                Scatter::new(steps.clone(), nis)
-                    .name("χ² (NIS)")
-                    .mode(Mode::LinesMarkers)
-                    .marker(Marker::new().color("#d2422d")),
-            );
-            plot.add_trace(
-                Scatter::new(steps, threshold)
-                    .name("95% gate (2 d.o.f.)")
-                    .mode(Mode::Lines)
-                    .line(
-                        Line::new()
-                            .dash(plotly::common::DashType::Dash)
-                            .color("#888888"),
-                    ),
-            );
+            let mut x_axis = Axis::new().title(Title::from(x_axis_unit.axis_title()));
+            match x_values_for_steps(x_axis_unit, &replay) {
+                XAxisValues::Numeric(x) => {
+                    plot.add_trace(
+                        Scatter::new(x.clone(), nis)
+                            .name("χ² (NIS)")
+                            .mode(Mode::LinesMarkers)
+                            .marker(Marker::new().color("#d2422d")),
+                    );
+                    plot.add_trace(
+                        Scatter::new(x, threshold)
+                            .name("95% gate (2 d.o.f.)")
+                            .mode(Mode::Lines)
+                            .line(
+                                Line::new()
+                                    .dash(plotly::common::DashType::Dash)
+                                    .color("#888888"),
+                            ),
+                    );
+                }
+                XAxisValues::Date(x) => {
+                    x_axis = x_axis.type_(AxisType::Date);
+                    plot.add_trace(
+                        Scatter::new(x.clone(), nis)
+                            .name("χ² (NIS)")
+                            .mode(Mode::LinesMarkers)
+                            .marker(Marker::new().color("#d2422d")),
+                    );
+                    plot.add_trace(
+                        Scatter::new(x, threshold)
+                            .name("95% gate (2 d.o.f.)")
+                            .mode(Mode::Lines)
+                            .line(
+                                Line::new()
+                                    .dash(plotly::common::DashType::Dash)
+                                    .color("#888888"),
+                            ),
+                    );
+                }
+            }
 
             let layout = Layout::new()
                 .height(180)
                 .margin(Margin::new().top(10).right(10).bottom(30))
-                .x_axis(Axis::new().title(Title::from("Real observation #")))
+                .x_axis(x_axis)
                 .y_axis(Axis::new().title(Title::from("χ²")));
             plot.set_layout(layout);
 
@@ -95,33 +121,46 @@ fn Chi2Plot(replay: Vec<KfStep>) -> Element {
 }
 
 #[component]
-fn SeparationPlot(replay: Vec<KfStep>) -> Element {
+fn SeparationPlot(replay: Vec<KfStep>, x_axis_unit: XAxisUnit) -> Element {
     let mut is_mounted = use_signal(|| false);
     #[cfg(target_arch = "wasm32")]
     let mut drawn = use_signal(|| false);
 
-    use_effect(use_reactive!(|(replay,)| {
+    use_effect(use_reactive!(|(replay, x_axis_unit)| {
         #[cfg(target_arch = "wasm32")]
         {
             if !is_mounted() {
                 return;
             }
 
-            let steps: Vec<f64> = replay.iter().map(|s| s.step as f64).collect();
             let separation: Vec<f64> = replay.iter().map(|s| s.separation_arcsec).collect();
 
             let mut plot = Plot::new();
-            plot.add_trace(
-                Scatter::new(steps, separation)
-                    .name("Distance to prediction")
-                    .mode(Mode::LinesMarkers)
-                    .marker(Marker::new().color("#2d7fd2")),
-            );
+            let mut x_axis = Axis::new().title(Title::from(x_axis_unit.axis_title()));
+            match x_values_for_steps(x_axis_unit, &replay) {
+                XAxisValues::Numeric(x) => {
+                    plot.add_trace(
+                        Scatter::new(x, separation)
+                            .name("Distance to prediction")
+                            .mode(Mode::LinesMarkers)
+                            .marker(Marker::new().color("#2d7fd2")),
+                    );
+                }
+                XAxisValues::Date(x) => {
+                    x_axis = x_axis.type_(AxisType::Date);
+                    plot.add_trace(
+                        Scatter::new(x, separation)
+                            .name("Distance to prediction")
+                            .mode(Mode::LinesMarkers)
+                            .marker(Marker::new().color("#2d7fd2")),
+                    );
+                }
+            }
 
             let layout = Layout::new()
                 .height(180)
                 .margin(Margin::new().top(10).right(10).bottom(30))
-                .x_axis(Axis::new().title(Title::from("Real observation #")))
+                .x_axis(x_axis)
                 .y_axis(Axis::new().title(Title::from("Separation (arcsec)")));
             plot.set_layout(layout);
 
@@ -146,19 +185,18 @@ fn SeparationPlot(replay: Vec<KfStep>) -> Element {
 }
 
 #[component]
-fn LogLikelihoodPlot(replay: Vec<KfStep>) -> Element {
+fn LogLikelihoodPlot(replay: Vec<KfStep>, x_axis_unit: XAxisUnit) -> Element {
     let mut is_mounted = use_signal(|| false);
     #[cfg(target_arch = "wasm32")]
     let mut drawn = use_signal(|| false);
 
-    use_effect(use_reactive!(|(replay,)| {
+    use_effect(use_reactive!(|(replay, x_axis_unit)| {
         #[cfg(target_arch = "wasm32")]
         {
             if !is_mounted() {
                 return;
             }
 
-            let steps: Vec<f64> = replay.iter().map(|s| s.step as f64).collect();
             let mut cumulative = 0.0;
             let cumulative_log_lik: Vec<f64> = replay
                 .iter()
@@ -169,17 +207,31 @@ fn LogLikelihoodPlot(replay: Vec<KfStep>) -> Element {
                 .collect();
 
             let mut plot = Plot::new();
-            plot.add_trace(
-                Scatter::new(steps, cumulative_log_lik)
-                    .name("Cumulative log-likelihood")
-                    .mode(Mode::LinesMarkers)
-                    .marker(Marker::new().color("#2dd25d")),
-            );
+            let mut x_axis = Axis::new().title(Title::from(x_axis_unit.axis_title()));
+            match x_values_for_steps(x_axis_unit, &replay) {
+                XAxisValues::Numeric(x) => {
+                    plot.add_trace(
+                        Scatter::new(x, cumulative_log_lik)
+                            .name("Cumulative log-likelihood")
+                            .mode(Mode::LinesMarkers)
+                            .marker(Marker::new().color("#2dd25d")),
+                    );
+                }
+                XAxisValues::Date(x) => {
+                    x_axis = x_axis.type_(AxisType::Date);
+                    plot.add_trace(
+                        Scatter::new(x, cumulative_log_lik)
+                            .name("Cumulative log-likelihood")
+                            .mode(Mode::LinesMarkers)
+                            .marker(Marker::new().color("#2dd25d")),
+                    );
+                }
+            }
 
             let layout = Layout::new()
                 .height(180)
                 .margin(Margin::new().top(10).right(10).bottom(30))
-                .x_axis(Axis::new().title(Title::from("Real observation #")))
+                .x_axis(x_axis)
                 .y_axis(Axis::new().title(Title::from("log-likelihood (single hyp.)")));
             plot.set_layout(layout);
 

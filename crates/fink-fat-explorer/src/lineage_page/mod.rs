@@ -6,6 +6,7 @@ mod observations_table;
 mod plot_tabs;
 mod rho_evolution_plot;
 mod trajectory_plot;
+mod x_axis;
 
 use dioxus::prelude::*;
 
