@@ -94,3 +94,4 @@ run_all_nights.sh
 storage/
 tracking_report/
 crates/fink-fat-explorer/test_postgress_db.md
+crates/fink-fat-explorer/tailwindcss-extra

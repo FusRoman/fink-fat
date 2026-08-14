@@ -70,7 +70,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             config,
             format,
             database_url,
-        } => convert(config, format, database_url),
+            path_observation,
+        } => convert(config, format, database_url, path_observation),
     }
 }
 

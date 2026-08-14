@@ -45,6 +45,11 @@ pub enum FinkFatCommands {
         /// Required when `--format sql`, ignored otherwise.
         #[arg(long, value_name = "DATABASE_URL")]
         database_url: Option<String>,
+        /// Path to the raw observation parquet (e.g. `sso_dataset_eval.parquet`)
+        /// to load into the `observations` table. Required when `--format sql`,
+        /// ignored otherwise.
+        #[arg(long, value_name = "OBSERVATIONS_PARQUET")]
+        path_observation: Option<Utf8PathBuf>,
     },
 }
 

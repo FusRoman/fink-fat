@@ -204,6 +204,65 @@
   }
 }
 @layer utilities {
+  @layer daisyui.l1.l2 {
+    .diff {
+      position: relative;
+      display: grid;
+      width: 100%;
+      overflow: hidden;
+      webkit-user-select: none;
+      user-select: none;
+      align-items: normal;
+      grid-template-rows: 1fr 1.8rem 1fr;
+      direction: ltr;
+      container-type: inline-size;
+      grid-template-columns: auto 1fr;
+    }
+    .diff:focus-visible {
+      outline-style: var(--tw-outline-style);
+      outline-width: 2px;
+      outline-offset: 1px;
+      outline-color: var(--color-base-content);
+    }
+    .diff:has(.diff-item-1:focus-visible) {
+      outline-style: var(--tw-outline-style);
+      outline-width: 2px;
+      outline-offset: 1px;
+      outline-color: var(--color-base-content);
+    }
+    .diff:focus-visible {
+      outline-style: var(--tw-outline-style);
+      outline-width: 2px;
+      outline-offset: 1px;
+      outline-color: var(--color-base-content);
+    }
+    .diff:focus-visible .diff-resizer {
+      min-width: 95cqi;
+      max-width: 95cqi;
+    }
+    .diff:has(.diff-item-1:focus-visible) {
+      outline-style: var(--tw-outline-style);
+      outline-width: 2px;
+      outline-offset: 1px;
+    }
+    .diff:has(.diff-item-1:focus-visible) .diff-resizer {
+      min-width: 5cqi;
+      max-width: 5cqi;
+    }
+    .diff:hover .diff-item-2::after {
+      height: 2.4rem;
+    }
+    @supports (-webkit-overflow-scrolling: touch) and (overflow: -webkit-paged-x) {
+      .diff:focus .diff-resizer {
+        min-width: 5cqi;
+        max-width: 5cqi;
+      }
+      .diff:has(.diff-item-1:focus) .diff-resizer {
+        min-width: 95cqi;
+        max-width: 95cqi;
+      }
+    }
+  }
   @layer daisyui.l1.l2.l3 {
     .menu {
       display: flex;
@@ -1108,97 +1167,134 @@
     visibility: visible;
   }
   @layer daisyui.l1.l2.l3 {
-    .dropdown .dropdown-content {
+    .list {
+      display: flex;
+      flex-direction: column;
+      font-size: 0.875rem;
+    }
+    .list .list-row {
+      --list-grid-cols: minmax(0, auto) 1fr;
+      position: relative;
+      display: grid;
+      grid-auto-flow: column;
+      gap: calc(0.25rem * 4);
+      border-radius: var(--radius-box);
+      padding: calc(0.25rem * 4);
+      word-break: break-word;
+      grid-template-columns: var(--list-grid-cols);
+    }
+    :is(.list > :not(:last-child).list-row, .list > :not(:last-child) .list-row):after {
+      content: "";
+      border-bottom: var(--border) solid;
+      inset-inline: var(--radius-box);
       position: absolute;
+      bottom: 0px;
+      border-color: var(--color-base-content);
     }
-    .dropdown.dropdown-close .dropdown-content {
-      display: none;
-      transform-origin: top;
-      opacity: 0%;
-      scale: 95%;
-    }
-    .dropdown:not(details, .dropdown-open, .dropdown-hover:hover, :focus-within) .dropdown-content {
-      display: none;
-      transform-origin: top;
-      opacity: 0%;
-      scale: 95%;
-    }
-    .dropdown.dropdown-hover:not(:hover) [tabindex]:first-child:focus:not(:focus-visible) ~ .dropdown-content {
-      display: none;
-      transform-origin: top;
-      opacity: 0%;
-      scale: 95%;
-    }
-    .dropdown .dropdown-content {
-      z-index: 999;
-    }
-    @media (prefers-reduced-motion: no-preference) {
-      .dropdown .dropdown-content {
-        animation: dropdown 0.2s;
-        transition-property: opacity, scale, display, overlay;
-        transition-behavior: allow-discrete;
-        transition-duration: 0.2s;
-        transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    @supports (color: color-mix(in lab, red, red)) {
+      :is(.list > :not(:last-child).list-row, .list > :not(:last-child) .list-row):after {
+        border-color: color-mix(in oklab, var(--color-base-content) 5%, transparent);
       }
     }
-    @starting-style {
-      .dropdown .dropdown-content {
-        scale: 95%;
-        opacity: 0;
+    :is(.list > :not(:last-child).list-row, .list > :not(:last-child) .list-row):after {
+      content: "";
+      border-bottom: var(--border) solid;
+      inset-inline: var(--radius-box);
+      position: absolute;
+      bottom: 0px;
+      border-color: var(--color-base-content);
+    }
+    @supports (color: color-mix(in lab, red, red)) {
+      :is(.list > :not(:last-child).list-row, .list > :not(:last-child) .list-row):after {
+        border-color: color-mix(in oklab, var(--color-base-content) 5%, transparent);
       }
-    }
-    :is(.dropdown:not(.dropdown-close).dropdown-open, .dropdown:not(.dropdown-close):not(.dropdown-hover):focus, .dropdown:not(.dropdown-close):focus-within) .dropdown-content {
-      opacity: 100%;
-      scale: 100%;
-    }
-    .dropdown:not(.dropdown-close).dropdown-hover:hover .dropdown-content {
-      opacity: 100%;
-      scale: 100%;
     }
   }
   @layer daisyui.l1.l2 {
-    .dropdown-start :where(.dropdown-content) {
-      inset-inline-end: auto;
-      translate: 0 0;
+    .list .list-row:has(.list-col-grow:nth-child(1)) {
+      --list-grid-cols: 1fr;
     }
-    [dir="rtl"] :is(.dropdown-start :where(.dropdown-content)) {
-      translate: 0 0;
+    .list .list-row:has(.list-col-grow:nth-child(2)) {
+      --list-grid-cols: minmax(0, auto) 1fr;
     }
-    .dropdown-center :where(.dropdown-content) {
-      inset-inline-end: calc(1/2 * 100%);
-      translate: 50% 0;
+    .list .list-row:has(.list-col-grow:nth-child(3)) {
+      --list-grid-cols: minmax(0, auto) minmax(0, auto) 1fr;
     }
-    [dir="rtl"] :is(.dropdown-center :where(.dropdown-content)) {
-      translate: -50% 0;
+    .list .list-row:has(.list-col-grow:nth-child(4)) {
+      --list-grid-cols: minmax(0, auto) minmax(0, auto) minmax(0, auto) 1fr;
     }
-    .dropdown-end :where(.dropdown-content) {
-      inset-inline-end: calc(0.25rem * 0);
-      translate: 0 0;
+    .list .list-row:has(.list-col-grow:nth-child(5)) {
+      --list-grid-cols: minmax(0, auto) minmax(0, auto) minmax(0, auto) minmax(0, auto) 1fr;
     }
-    [dir="rtl"] :is(.dropdown-end :where(.dropdown-content)) {
-      translate: 0 0;
+    .list .list-row:has(.list-col-grow:nth-child(6)) {
+      --list-grid-cols: minmax(0, auto) minmax(0, auto) minmax(0, auto) minmax(0, auto)
+          minmax(0, auto) 1fr;
     }
-    .dropdown-left .dropdown-content {
-      inset-inline-end: 100%;
-      top: 0px;
-      bottom: auto;
-      transform-origin: 100%;
+    .list .list-row > * {
+      grid-row-start: 1;
     }
-    .dropdown-right .dropdown-content {
-      inset-inline-start: 100%;
-      top: 0px;
-      bottom: auto;
-      transform-origin: 0;
+  }
+  @layer daisyui.l1.l2.l3 {
+    .list .list-row {
+      --list-grid-cols: minmax(0, auto) 1fr;
+      position: relative;
+      display: grid;
+      grid-auto-flow: column;
+      gap: calc(0.25rem * 4);
+      border-radius: var(--radius-box);
+      padding: calc(0.25rem * 4);
+      word-break: break-word;
+      grid-template-columns: var(--list-grid-cols);
     }
-    .dropdown-bottom .dropdown-content {
-      top: 100%;
-      bottom: auto;
-      transform-origin: top;
+    :is(.list > :not(:last-child).list-row, .list > :not(:last-child) .list-row):after {
+      content: "";
+      border-bottom: var(--border) solid;
+      inset-inline: var(--radius-box);
+      position: absolute;
+      bottom: 0px;
+      border-color: var(--color-base-content);
     }
-    .dropdown-top .dropdown-content {
-      top: auto;
-      bottom: 100%;
-      transform-origin: bottom;
+    @supports (color: color-mix(in lab, red, red)) {
+      :is(.list > :not(:last-child).list-row, .list > :not(:last-child) .list-row):after {
+        border-color: color-mix(in oklab, var(--color-base-content) 5%, transparent);
+      }
+    }
+    :is(.list > :not(:last-child).list-row, .list > :not(:last-child) .list-row):after {
+      content: "";
+      border-bottom: var(--border) solid;
+      inset-inline: var(--radius-box);
+      position: absolute;
+      bottom: 0px;
+      border-color: var(--color-base-content);
+    }
+    @supports (color: color-mix(in lab, red, red)) {
+      :is(.list > :not(:last-child).list-row, .list > :not(:last-child) .list-row):after {
+        border-color: color-mix(in oklab, var(--color-base-content) 5%, transparent);
+      }
+    }
+  }
+  @layer daisyui.l1.l2 {
+    .list .list-row:has(.list-col-grow:nth-child(1)) {
+      --list-grid-cols: 1fr;
+    }
+    .list .list-row:has(.list-col-grow:nth-child(2)) {
+      --list-grid-cols: minmax(0, auto) 1fr;
+    }
+    .list .list-row:has(.list-col-grow:nth-child(3)) {
+      --list-grid-cols: minmax(0, auto) minmax(0, auto) 1fr;
+    }
+    .list .list-row:has(.list-col-grow:nth-child(4)) {
+      --list-grid-cols: minmax(0, auto) minmax(0, auto) minmax(0, auto) 1fr;
+    }
+    .list .list-row:has(.list-col-grow:nth-child(5)) {
+      --list-grid-cols: minmax(0, auto) minmax(0, auto) minmax(0, auto) minmax(0, auto) 1fr;
+    }
+    .list .list-row:has(.list-col-grow:nth-child(6)) {
+      --list-grid-cols: minmax(0, auto) minmax(0, auto) minmax(0, auto) minmax(0, auto)
+          minmax(0, auto) 1fr;
+    }
+    .list .list-row > * {
+      grid-row-start: 1;
     }
   }
   @layer daisyui.l1.l2.l3 {
@@ -1220,6 +1316,180 @@
       .toast > * {
         animation: toast 0.25s ease-out;
       }
+    }
+    .toggle {
+      border: var(--border) solid currentColor;
+      color: var(--input-color);
+      position: relative;
+      display: inline-grid;
+      flex-shrink: 0;
+      cursor: pointer;
+      appearance: none;
+      place-content: center;
+      vertical-align: middle;
+      webkit-user-select: none;
+      user-select: none;
+      grid-template-columns: 0fr 1fr 1fr;
+      --radius-selector-max: calc(
+      var(--radius-selector) + var(--radius-selector) + var(--radius-selector)
+    );
+      border-radius: calc( var(--radius-selector) + min(var(--toggle-p), var(--radius-selector-max)) + min(var(--border), var(--radius-selector-max)) );
+      padding: var(--toggle-p);
+      box-shadow: 0 1px currentColor inset;
+    }
+    @supports (color: color-mix(in lab, red, red)) {
+      .toggle {
+        box-shadow: 0 1px color-mix(in oklab, currentColor calc(var(--depth) * 10%), #0000) inset;
+      }
+    }
+    .toggle {
+      transition: color 0.3s, grid-template-columns 0.2s;
+      --input-color: var(--color-base-content);
+    }
+    @supports (color: color-mix(in lab, red, red)) {
+      .toggle {
+        --input-color: color-mix(in oklab, var(--color-base-content) 50%, #0000);
+      }
+    }
+    .toggle {
+      --toggle-p: calc(var(--size) * 0.125);
+      --size: calc(var(--size-selector, 0.25rem) * 6);
+      width: calc((var(--size) * 2) - (var(--border) + var(--toggle-p)) * 2);
+      height: var(--size);
+    }
+    .toggle > * {
+      z-index: 1;
+      grid-column: span 1 / span 1;
+      grid-column-start: 2;
+      grid-row-start: 1;
+      height: 100%;
+      cursor: pointer;
+      appearance: none;
+      background-color: transparent;
+      padding: calc(0.25rem * 0.5);
+      transition: opacity 0.2s, rotate 0.4s;
+      border: none;
+    }
+    .toggle > *:focus {
+      --tw-outline-style: none;
+      outline-style: none;
+      @media (forced-colors: active) {
+        outline: 2px solid transparent;
+        outline-offset: 2px;
+      }
+    }
+    .toggle > *:nth-child(2) {
+      color: var(--color-base-100);
+      rotate: 0deg;
+    }
+    .toggle > *:nth-child(3) {
+      color: var(--color-base-100);
+      opacity: 0%;
+      rotate: -15deg;
+    }
+    .toggle:has(:checked) > :nth-child(2) {
+      opacity: 0%;
+      rotate: 15deg;
+    }
+    .toggle:has(:checked) > :nth-child(3) {
+      opacity: 100%;
+      rotate: 0deg;
+    }
+    .toggle:before {
+      position: relative;
+      inset-inline-start: calc(0.25rem * 0);
+      grid-column-start: 2;
+      grid-row-start: 1;
+      aspect-ratio: 1 / 1;
+      height: 100%;
+      width: 100%;
+      border-radius: var(--radius-selector);
+      background-color: currentcolor;
+      translate: 0;
+      --tw-content: "";
+      content: var(--tw-content);
+      transition: background-color 0.1s, translate 0.2s, inset-inline-start 0.2s;
+      box-shadow: 0 -1px oklch(0% 0 0 / calc(var(--depth) * 0.1)) inset, 0 8px 0 -4px oklch(100% 0 0 / calc(var(--depth) * 0.1)) inset, 0 1px currentColor;
+    }
+    @supports (color: color-mix(in lab, red, red)) {
+      .toggle:before {
+        box-shadow: 0 -1px oklch(0% 0 0 / calc(var(--depth) * 0.1)) inset, 0 8px 0 -4px oklch(100% 0 0 / calc(var(--depth) * 0.1)) inset, 0 1px color-mix(in oklab, currentColor calc(var(--depth) * 10%), #0000);
+      }
+    }
+    .toggle:before {
+      background-size: auto, calc(var(--noise) * 100%);
+      background-image: none, var(--fx-noise);
+    }
+    @media (forced-colors: active) {
+      .toggle:before {
+        outline-style: var(--tw-outline-style);
+        outline-width: 1px;
+        outline-offset: calc(1px * -1);
+      }
+    }
+    @media print {
+      .toggle:before {
+        outline: 0.25rem solid;
+        outline-offset: -1rem;
+      }
+    }
+    .toggle:focus-visible {
+      outline: 2px solid currentColor;
+      outline-offset: 2px;
+    }
+    .toggle:has(:focus-visible) {
+      outline: 2px solid currentColor;
+      outline-offset: 2px;
+    }
+    .toggle:checked {
+      grid-template-columns: 1fr 1fr 0fr;
+      background-color: var(--color-base-100);
+      --input-color: var(--color-base-content);
+    }
+    .toggle:checked:before {
+      background-color: currentcolor;
+    }
+    @starting-style {
+      .toggle:checked:before {
+        opacity: 0;
+      }
+    }
+    .toggle[aria-checked="true"] {
+      grid-template-columns: 1fr 1fr 0fr;
+      background-color: var(--color-base-100);
+      --input-color: var(--color-base-content);
+    }
+    .toggle[aria-checked="true"]:before {
+      background-color: currentcolor;
+    }
+    @starting-style {
+      .toggle[aria-checked="true"]:before {
+        opacity: 0;
+      }
+    }
+    .toggle:has( > input:checked) {
+      grid-template-columns: 1fr 1fr 0fr;
+      background-color: var(--color-base-100);
+      --input-color: var(--color-base-content);
+    }
+    .toggle:has( > input:checked):before {
+      background-color: currentcolor;
+    }
+    @starting-style {
+      .toggle:has( > input:checked):before {
+        opacity: 0;
+      }
+    }
+    .toggle:indeterminate {
+      grid-template-columns: 0.5fr 1fr 0.5fr;
+    }
+    .toggle:disabled {
+      cursor: not-allowed;
+      opacity: 30%;
+    }
+    .toggle:disabled:before {
+      background-color: transparent;
+      border: var(--border) solid currentColor;
     }
     .input {
       position: relative;
@@ -1591,261 +1861,44 @@
       position: relative;
       z-index: 1;
     }
-    .steps .step {
-      display: grid;
-      grid-template-columns: repeat(1, minmax(0, 1fr));
-      grid-template-columns: auto;
-      grid-template-rows: repeat(2, minmax(0, 1fr));
-      grid-template-rows: 40px 1fr;
-      place-items: center;
-      text-align: center;
-      min-width: 4rem;
-      --step-bg: var(--color-base-300);
-      --step-fg: var(--color-base-content);
-    }
-    .steps .step:before {
-      top: 0px;
-      grid-column-start: 1;
-      grid-row-start: 1;
-      height: calc(0.25rem * 2);
-      width: 100%;
-      border: 1px solid;
-      color: var(--step-bg);
-      background-color: var(--step-bg);
-      content: "";
-      margin-inline-start: -100%;
-    }
-    .steps .step  > .step-icon, .steps .step:not(:has(.step-icon)):after {
-      --tw-content: counter(step);
-      content: var(--tw-content);
-      counter-increment: step;
-      z-index: 1;
-      color: var(--step-fg);
-      background-color: var(--step-bg);
-      border: 1px solid var(--step-bg);
-      position: relative;
-      grid-column-start: 1;
-      grid-row-start: 1;
-      display: grid;
-      height: calc(0.25rem * 8);
-      width: calc(0.25rem * 8);
-      place-items: center;
-      place-self: center;
-      border-radius: calc(infinity * 1px);
-    }
-    .steps .step:first-child:before {
-      --tw-content: none;
-      content: var(--tw-content);
-    }
-    .steps .step[data-content]:after {
-      --tw-content: attr(data-content);
-      content: var(--tw-content);
-    }
-  }
-  @layer daisyui.l1.l2 {
-    .steps-horizontal .step {
-      display: grid;
-      grid-template-columns: repeat(1, minmax(0, 1fr));
-      grid-template-columns: auto;
-      grid-template-rows: repeat(2, minmax(0, 1fr));
-      grid-template-rows: 40px 1fr;
-      place-items: center;
-      text-align: center;
-      min-width: 4rem;
-    }
-    .steps-horizontal .step:before {
-      height: calc(0.25rem * 2);
-      width: 100%;
-      translate: 0;
-      margin-inline-start: -100%;
-    }
-    [dir="rtl"] :is(.steps-horizontal .step):before {
-      translate: 0;
-    }
-    .steps-vertical .step {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      grid-template-columns: 40px 1fr;
-      grid-template-rows: repeat(1, minmax(0, 1fr));
-      grid-template-rows: auto;
-      gap: 0.5rem;
-      min-height: 4rem;
-      justify-items: start;
-    }
-    .steps-vertical .step:before {
-      height: 100%;
-      width: calc(0.25rem * 2);
-      translate: -50% -50%;
-      margin-inline-start: 50%;
-    }
-    [dir="rtl"] :is(.steps-vertical .step):before {
-      translate: 50% -50%;
-    }
-  }
-  @layer daisyui.l1.l2.l3 {
-    .steps {
-      display: inline-grid;
-      grid-auto-flow: column;
-      overflow: hidden;
-      overflow-x: auto;
-      counter-reset: step;
-      grid-auto-columns: 1fr;
-    }
-    .steps .step {
-      display: grid;
-      grid-template-columns: repeat(1, minmax(0, 1fr));
-      grid-template-columns: auto;
-      grid-template-rows: repeat(2, minmax(0, 1fr));
-      grid-template-rows: 40px 1fr;
-      place-items: center;
-      text-align: center;
-      min-width: 4rem;
-      --step-bg: var(--color-base-300);
-      --step-fg: var(--color-base-content);
-    }
-    .steps .step:before {
-      top: 0px;
-      grid-column-start: 1;
-      grid-row-start: 1;
-      height: calc(0.25rem * 2);
-      width: 100%;
-      border: 1px solid;
-      color: var(--step-bg);
-      background-color: var(--step-bg);
-      content: "";
-      margin-inline-start: -100%;
-    }
-    .steps .step  > .step-icon, .steps .step:not(:has(.step-icon)):after {
-      --tw-content: counter(step);
-      content: var(--tw-content);
-      counter-increment: step;
-      z-index: 1;
-      color: var(--step-fg);
-      background-color: var(--step-bg);
-      border: 1px solid var(--step-bg);
-      position: relative;
-      grid-column-start: 1;
-      grid-row-start: 1;
-      display: grid;
-      height: calc(0.25rem * 8);
-      width: calc(0.25rem * 8);
-      place-items: center;
-      place-self: center;
-      border-radius: calc(infinity * 1px);
-    }
-    .steps .step:first-child:before {
-      --tw-content: none;
-      content: var(--tw-content);
-    }
-    .steps .step[data-content]:after {
-      --tw-content: attr(data-content);
-      content: var(--tw-content);
-    }
-  }
-  @layer daisyui.l1.l2 {
-    .steps .step-neutral + .step-neutral:before {
-      --step-bg: var(--color-neutral);
-      --step-fg: var(--color-neutral-content);
-    }
-    .steps .step-neutral:after {
-      --step-bg: var(--color-neutral);
-      --step-fg: var(--color-neutral-content);
-    }
-    .steps .step-neutral > .step-icon {
-      --step-bg: var(--color-neutral);
-      --step-fg: var(--color-neutral-content);
-    }
-    .steps .step-primary + .step-primary:before {
-      --step-bg: var(--color-primary);
-      --step-fg: var(--color-primary-content);
-    }
-    .steps .step-primary:after {
-      --step-bg: var(--color-primary);
-      --step-fg: var(--color-primary-content);
-    }
-    .steps .step-primary > .step-icon {
-      --step-bg: var(--color-primary);
-      --step-fg: var(--color-primary-content);
-    }
-    .steps .step-secondary + .step-secondary:before {
-      --step-bg: var(--color-secondary);
-      --step-fg: var(--color-secondary-content);
-    }
-    .steps .step-secondary:after {
-      --step-bg: var(--color-secondary);
-      --step-fg: var(--color-secondary-content);
-    }
-    .steps .step-secondary > .step-icon {
-      --step-bg: var(--color-secondary);
-      --step-fg: var(--color-secondary-content);
-    }
-    .steps .step-accent + .step-accent:before {
-      --step-bg: var(--color-accent);
-      --step-fg: var(--color-accent-content);
-    }
-    .steps .step-accent:after {
-      --step-bg: var(--color-accent);
-      --step-fg: var(--color-accent-content);
-    }
-    .steps .step-accent > .step-icon {
-      --step-bg: var(--color-accent);
-      --step-fg: var(--color-accent-content);
-    }
-    .steps .step-info + .step-info:before {
-      --step-bg: var(--color-info);
-      --step-fg: var(--color-info-content);
-    }
-    .steps .step-info:after {
-      --step-bg: var(--color-info);
-      --step-fg: var(--color-info-content);
-    }
-    .steps .step-info > .step-icon {
-      --step-bg: var(--color-info);
-      --step-fg: var(--color-info-content);
-    }
-    .steps .step-success + .step-success:before {
-      --step-bg: var(--color-success);
-      --step-fg: var(--color-success-content);
-    }
-    .steps .step-success:after {
-      --step-bg: var(--color-success);
-      --step-fg: var(--color-success-content);
-    }
-    .steps .step-success > .step-icon {
-      --step-bg: var(--color-success);
-      --step-fg: var(--color-success-content);
-    }
-    .steps .step-warning + .step-warning:before {
-      --step-bg: var(--color-warning);
-      --step-fg: var(--color-warning-content);
-    }
-    .steps .step-warning:after {
-      --step-bg: var(--color-warning);
-      --step-fg: var(--color-warning-content);
-    }
-    .steps .step-warning > .step-icon {
-      --step-bg: var(--color-warning);
-      --step-fg: var(--color-warning-content);
-    }
-    .steps .step-error + .step-error:before {
-      --step-bg: var(--color-error);
-      --step-fg: var(--color-error-content);
-    }
-    .steps .step-error:after {
-      --step-bg: var(--color-error);
-      --step-fg: var(--color-error-content);
-    }
-    .steps .step-error > .step-icon {
-      --step-bg: var(--color-error);
-      --step-fg: var(--color-error-content);
-    }
-  }
-  @layer daisyui.l1.l2.l3 {
     .table :where(.table-pin-cols tr th) {
       position: sticky;
       right: 0px;
       left: 0px;
       background-color: var(--color-base-100);
+    }
+  }
+  @layer daisyui.l1.l2 {
+    @supports (-webkit-overflow-scrolling: touch) and (overflow: -webkit-paged-x) {
+      .diff:focus .diff-resizer {
+        min-width: 5cqi;
+        max-width: 5cqi;
+      }
+      .diff:has(.diff-item-1:focus) .diff-resizer {
+        min-width: 95cqi;
+        max-width: 95cqi;
+      }
+    }
+  }
+  @layer daisyui.l1.l2.l3 {
+    .diff-resizer {
+      position: relative;
+      isolation: isolate;
+      z-index: 2;
+      grid-column-start: 1;
+      grid-row-start: 2;
+      height: calc(0.25rem * 3);
+      width: 50cqi;
+      max-width: calc(100cqi - 1rem);
+      min-width: 1rem;
+      resize: horizontal;
+      overflow: hidden;
+      opacity: 0%;
+      transform: scaleY(5) translate(0.32rem, 50%);
+      cursor: ew-resize;
+      transform-origin: 100% 100%;
+      clip-path: inset(calc(100% - 0.75rem) 0 0 calc(100% - 0.75rem));
+      transition: min-width 0.3s ease-out, max-width 0.3s ease-out;
     }
   }
   @layer daisyui.l1.l2 {
@@ -2526,13 +2579,6 @@
     }
   }
   @layer daisyui.l1.l2.l3 {
-    .stats {
-      position: relative;
-      display: inline-grid;
-      grid-auto-flow: column;
-      overflow-x: auto;
-      border-radius: var(--radius-box);
-    }
     .progress {
       position: relative;
       height: calc(0.25rem * 2);
@@ -2596,179 +2642,14 @@
       }
     }
   }
+  .fixed {
+    position: fixed;
+  }
   .static {
     position: static;
   }
   .sticky {
     position: sticky;
-  }
-  @layer daisyui.l1.l2 {
-    .dropdown-start.dropdown-right {
-      --anchor-h: right;
-      --anchor-v: span-bottom;
-    }
-    .dropdown-start.dropdown-right .dropdown-content {
-      top: 0px;
-      bottom: auto;
-    }
-    .dropdown-center.dropdown-right {
-      --anchor-h: right;
-      --anchor-v: center;
-    }
-    .dropdown-center.dropdown-right .dropdown-content {
-      top: auto;
-      bottom: calc(1 / 2 * 100%);
-      translate: 0 50%;
-    }
-    .dropdown-end.dropdown-right {
-      --anchor-h: right;
-      --anchor-v: span-top;
-    }
-    .dropdown-end.dropdown-right .dropdown-content {
-      top: auto;
-      bottom: 0px;
-    }
-    .dropdown-right {
-      --anchor-h: right;
-      --anchor-v: span-bottom;
-    }
-    .dropdown-right .dropdown-content {
-      inset-inline-start: 100%;
-      top: 0px;
-      bottom: auto;
-      transform-origin: 0;
-    }
-    .dropdown-start.dropdown-left {
-      --anchor-h: left;
-      --anchor-v: span-bottom;
-    }
-    .dropdown-start.dropdown-left .dropdown-content {
-      top: 0px;
-      bottom: auto;
-    }
-    .dropdown-center.dropdown-left {
-      --anchor-h: left;
-      --anchor-v: center;
-    }
-    .dropdown-center.dropdown-left .dropdown-content {
-      top: auto;
-      bottom: calc(1 / 2 * 100%);
-      translate: 0 50%;
-    }
-    .dropdown-end.dropdown-left {
-      --anchor-h: left;
-      --anchor-v: span-top;
-    }
-    .dropdown-end.dropdown-left .dropdown-content {
-      top: auto;
-      bottom: 0px;
-    }
-    .dropdown-left {
-      --anchor-h: left;
-      --anchor-v: span-bottom;
-    }
-    .dropdown-left .dropdown-content {
-      inset-inline-end: 100%;
-      top: 0px;
-      bottom: auto;
-      transform-origin: 100%;
-    }
-    .dropdown-center {
-      --anchor-h: center;
-    }
-    .dropdown-center :where(.dropdown-content) {
-      inset-inline-end: calc(1/2 * 100%);
-      translate: 50% 0;
-    }
-    [dir="rtl"] :is(.dropdown-center :where(.dropdown-content)) {
-      translate: -50% 0;
-    }
-    .dropdown-center.dropdown-left {
-      --anchor-h: left;
-      --anchor-v: center;
-    }
-    .dropdown-center.dropdown-left .dropdown-content {
-      top: auto;
-      bottom: calc(1 / 2 * 100%);
-      translate: 0 50%;
-    }
-    .dropdown-center.dropdown-right {
-      --anchor-h: right;
-      --anchor-v: center;
-    }
-    .dropdown-center.dropdown-right .dropdown-content {
-      top: auto;
-      bottom: calc(1 / 2 * 100%);
-      translate: 0 50%;
-    }
-    .dropdown-end {
-      --anchor-h: span-left;
-    }
-    .dropdown-end :where(.dropdown-content) {
-      inset-inline-end: calc(0.25rem * 0);
-      translate: 0 0;
-    }
-    [dir="rtl"] :is(.dropdown-end :where(.dropdown-content)) {
-      translate: 0 0;
-    }
-    .dropdown-end.dropdown-left {
-      --anchor-h: left;
-      --anchor-v: span-top;
-    }
-    .dropdown-end.dropdown-left .dropdown-content {
-      top: auto;
-      bottom: 0px;
-    }
-    .dropdown-end.dropdown-right {
-      --anchor-h: right;
-      --anchor-v: span-top;
-    }
-    .dropdown-end.dropdown-right .dropdown-content {
-      top: auto;
-      bottom: 0px;
-    }
-    .dropdown-start {
-      --anchor-h: span-right;
-    }
-    .dropdown-start :where(.dropdown-content) {
-      inset-inline-end: auto;
-      translate: 0 0;
-    }
-    [dir="rtl"] :is(.dropdown-start :where(.dropdown-content)) {
-      translate: 0 0;
-    }
-    .dropdown-start.dropdown-left {
-      --anchor-h: left;
-      --anchor-v: span-bottom;
-    }
-    .dropdown-start.dropdown-left .dropdown-content {
-      top: 0px;
-      bottom: auto;
-    }
-    .dropdown-start.dropdown-right {
-      --anchor-h: right;
-      --anchor-v: span-bottom;
-    }
-    .dropdown-start.dropdown-right .dropdown-content {
-      top: 0px;
-      bottom: auto;
-    }
-    .dropdown-bottom {
-      --anchor-v: bottom;
-    }
-    .dropdown-bottom .dropdown-content {
-      top: 100%;
-      bottom: auto;
-      transform-origin: top;
-    }
-    .dropdown-top {
-      --anchor-v: top;
-    }
-    .dropdown-top .dropdown-content {
-      top: auto;
-      bottom: 100%;
-      transform-origin: bottom;
-    }
   }
   .top-0 {
     top: 0px;
@@ -2942,68 +2823,8 @@
   .z-20 {
     z-index: 20;
   }
-  @layer daisyui.l1.l2.l3 {
-    .hero {
-      display: grid;
-      width: 100%;
-      place-items: center;
-      background-size: cover;
-      background-position: center;
-    }
-    .hero > * {
-      grid-column-start: 1;
-      grid-row-start: 1;
-    }
-    .stat-value {
-      grid-column-start: 1;
-      white-space: nowrap;
-      font-size: 2rem;
-      font-weight: 800;
-    }
-    .stat-desc {
-      grid-column-start: 1;
-      white-space: nowrap;
-      color: var(--color-base-content);
-    }
-    @supports (color: color-mix(in lab, red, red)) {
-      .stat-desc {
-        color: color-mix(in oklab, var(--color-base-content) 60%, transparent);
-      }
-    }
-    .stat-desc {
-      font-size: 0.75rem;
-    }
-    .stat-title {
-      grid-column-start: 1;
-      white-space: nowrap;
-      color: var(--color-base-content);
-    }
-    @supports (color: color-mix(in lab, red, red)) {
-      .stat-title {
-        color: color-mix(in oklab, var(--color-base-content) 60%, transparent);
-      }
-    }
-    .stat-title {
-      font-size: 0.75rem;
-    }
-  }
-  .container {
-    width: 100%;
-    @media (width >= 40rem) {
-      max-width: 40rem;
-    }
-    @media (width >= 48rem) {
-      max-width: 48rem;
-    }
-    @media (width >= 64rem) {
-      max-width: 64rem;
-    }
-    @media (width >= 80rem) {
-      max-width: 80rem;
-    }
-    @media (width >= 96rem) {
-      max-width: 96rem;
-    }
+  .mx-1 {
+    margin-inline: var(--spacing);
   }
   @layer daisyui.l1.l2.l3 {
     .label:is(.input > *, .select > *) {
@@ -3080,68 +2901,8 @@
       border-block-end-width: calc(var(--border, 1px) * var(--join-h));
     }
   }
-  @layer daisyui.l1.l2 {
-    .steps-vertical {
-      grid-auto-rows: 1fr;
-      grid-auto-flow: row;
-    }
-    .steps-vertical .step {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      grid-template-columns: 40px 1fr;
-      grid-template-rows: repeat(1, minmax(0, 1fr));
-      grid-template-rows: auto;
-      gap: 0.5rem;
-      min-height: 4rem;
-      justify-items: start;
-    }
-    .steps-vertical .step:before {
-      height: 100%;
-      width: calc(0.25rem * 2);
-      translate: -50% -50%;
-      margin-inline-start: 50%;
-    }
-    [dir="rtl"] :is(.steps-vertical .step):before {
-      translate: 50% -50%;
-    }
-    .steps-horizontal {
-      grid-auto-columns: 1fr;
-      display: inline-grid;
-      grid-auto-flow: column;
-      overflow: hidden;
-      overflow-x: auto;
-    }
-    .steps-horizontal .step {
-      display: grid;
-      grid-template-columns: repeat(1, minmax(0, 1fr));
-      grid-template-columns: auto;
-      grid-template-rows: repeat(2, minmax(0, 1fr));
-      grid-template-rows: 40px 1fr;
-      place-items: center;
-      text-align: center;
-      min-width: 4rem;
-    }
-    .steps-horizontal .step:before {
-      height: calc(0.25rem * 2);
-      width: 100%;
-      translate: 0;
-      margin-inline-start: -100%;
-    }
-    [dir="rtl"] :is(.steps-horizontal .step):before {
-      translate: 0;
-    }
-  }
-  @layer daisyui.l1.l2.l3 {
-    .menu .dropdown-content {
-      margin-top: calc(0.25rem * 2);
-      padding: calc(0.25rem * 2);
-    }
-    .menu .dropdown-content:before {
-      display: none;
-    }
-  }
-  .mt-1 {
-    margin-top: var(--spacing);
+  .mt-2 {
+    margin-top: calc(var(--spacing) * 2);
   }
   .mt-4 {
     margin-top: calc(var(--spacing) * 4);
@@ -3152,8 +2913,8 @@
   .mb-2 {
     margin-bottom: calc(var(--spacing) * 2);
   }
-  .mb-4 {
-    margin-bottom: calc(var(--spacing) * 4);
+  .ml-2 {
+    margin-left: calc(var(--spacing) * 2);
   }
   @layer daisyui.l1.l2.l3 {
     .badge {
@@ -3175,55 +2936,6 @@
       --size: calc(var(--size-selector, 0.25rem) * 6);
       height: var(--size);
       padding-inline: calc(var(--size) / 2 - var(--border));
-    }
-    .stat {
-      display: inline-grid;
-      width: 100%;
-      column-gap: calc(0.25rem * 4);
-      padding-inline: calc(0.25rem * 6);
-      padding-block: calc(0.25rem * 4);
-      grid-template-columns: repeat(1, 1fr);
-    }
-    .stat:not(:last-child) {
-      border-inline-end: var(--border) dashed currentColor;
-    }
-    @supports (color: color-mix(in lab, red, red)) {
-      .stat:not(:last-child) {
-        border-inline-end: var(--border) dashed color-mix(in oklab, currentColor 10%, #0000);
-      }
-    }
-    .stat:not(:last-child) {
-      border-block-end: none;
-    }
-  }
-  @layer daisyui.l1.l2 {
-    .stats-horizontal .stat:not(:last-child) {
-      border-inline-end: var(--border) dashed currentColor;
-    }
-    @supports (color: color-mix(in lab, red, red)) {
-      .stats-horizontal .stat:not(:last-child) {
-        border-inline-end: var(--border) dashed color-mix(in oklab, currentColor 10%, #0000);
-      }
-    }
-    .stats-horizontal .stat:not(:last-child) {
-      border-block-end: none;
-    }
-    .stats-vertical .stat:not(:last-child) {
-      border-inline-end: none;
-      border-block-end: var(--border) dashed currentColor;
-    }
-    @supports (color: color-mix(in lab, red, red)) {
-      .stats-vertical .stat:not(:last-child) {
-        border-block-end: var(--border) dashed color-mix(in oklab, currentColor 10%, #0000);
-      }
-    }
-  }
-  @layer daisyui.l1.l2.l3 {
-    .dropdown.dropdown-close .dropdown-content {
-      display: none;
-      transform-origin: top;
-      opacity: 0%;
-      scale: 95%;
     }
     .card-title {
       display: flex;
@@ -3310,6 +3022,9 @@
   .grid {
     display: grid;
   }
+  .hidden {
+    display: none;
+  }
   .inline {
     display: inline;
   }
@@ -3325,12 +3040,6 @@
   .min-h-screen {
     min-height: 100vh;
   }
-  @layer daisyui.l1.l2.l3 {
-    .rating .rating-hidden {
-      width: calc(0.25rem * 2);
-      background-color: transparent;
-    }
-  }
   .w-20 {
     width: calc(var(--spacing) * 20);
   }
@@ -3339,9 +3048,6 @@
   }
   .w-64 {
     width: calc(var(--spacing) * 64);
-  }
-  .w-full {
-    width: 100%;
   }
   .min-w-0 {
     min-width: 0px;
@@ -3413,25 +3119,23 @@
     }
   }
   @layer daisyui.l1.l2.l3 {
-    .menu :where(li:not(.menu-title, .disabled) > :not(ul, menu, details, .menu-title), li:not(.menu-title, .disabled) > details > summary:not(.menu-title) ):not(.menu-active, :active, .btn).menu-focus {
+    .link {
       cursor: pointer;
-      background-color: var(--color-base-content);
+      text-decoration-line: underline;
     }
-    @supports (color: color-mix(in lab, red, red)) {
-      .menu :where(li:not(.menu-title, .disabled) > :not(ul, menu, details, .menu-title), li:not(.menu-title, .disabled) > details > summary:not(.menu-title) ):not(.menu-active, :active, .btn).menu-focus {
-        background-color: color-mix(in oklab, var(--color-base-content) 10%, transparent);
-      }
-    }
-    .menu :where(li:not(.menu-title, .disabled) > :not(ul, menu, details, .menu-title), li:not(.menu-title, .disabled) > details > summary:not(.menu-title) ):not(.menu-active, :active, .btn).menu-focus {
-      color: var(--color-base-content);
+    .link:focus {
       --tw-outline-style: none;
       outline-style: none;
     }
     @media (forced-colors: active) {
-      .menu :where(li:not(.menu-title, .disabled) > :not(ul, menu, details, .menu-title), li:not(.menu-title, .disabled) > details > summary:not(.menu-title) ):not(.menu-active, :active, .btn).menu-focus {
+      .link:focus {
         outline: 2px solid transparent;
         outline-offset: 2px;
       }
+    }
+    .link:focus-visible {
+      outline: 2px solid currentColor;
+      outline-offset: 2px;
     }
   }
   .cursor-pointer {
@@ -3440,41 +3144,8 @@
   .resize {
     resize: both;
   }
-  @layer daisyui.l1.l2 {
-    .stats-horizontal {
-      grid-auto-flow: column;
-      overflow-x: auto;
-    }
-    .stats-horizontal .stat:not(:last-child) {
-      border-inline-end: var(--border) dashed currentColor;
-    }
-    @supports (color: color-mix(in lab, red, red)) {
-      .stats-horizontal .stat:not(:last-child) {
-        border-inline-end: var(--border) dashed color-mix(in oklab, currentColor 10%, #0000);
-      }
-    }
-    .stats-horizontal .stat:not(:last-child) {
-      border-block-end: none;
-    }
-    .stats-vertical {
-      grid-auto-flow: row;
-      overflow-y: auto;
-    }
-    .stats-vertical .stat:not(:last-child) {
-      border-inline-end: none;
-      border-block-end: var(--border) dashed currentColor;
-    }
-    @supports (color: color-mix(in lab, red, red)) {
-      .stats-vertical .stat:not(:last-child) {
-        border-block-end: var(--border) dashed color-mix(in oklab, currentColor 10%, #0000);
-      }
-    }
-  }
   .grid-cols-1 {
     grid-template-columns: repeat(1, minmax(0, 1fr));
-  }
-  .grid-cols-4 {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
   .grid-cols-5 {
     grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -3494,6 +3165,9 @@
   .justify-between {
     justify-content: space-between;
   }
+  .justify-center {
+    justify-content: center;
+  }
   .gap-1 {
     gap: var(--spacing);
   }
@@ -3505,11 +3179,6 @@
   }
   .gap-6 {
     gap: calc(var(--spacing) * 6);
-  }
-  :where(.space-y-6 > :not(:last-child)) {
-    --tw-space-y-reverse: 0;
-    margin-block-start: calc(calc(var(--spacing) * 6) * var(--tw-space-y-reverse));
-    margin-block-end: calc(calc(var(--spacing) * 6) * calc(1 - var(--tw-space-y-reverse)));
   }
   .overflow-x-auto {
     overflow-x: auto;
@@ -3536,6 +3205,16 @@
   }
   .bg-base-200 {
     background-color: var(--color-base-200);
+  }
+  @layer daisyui.l1.l2.l3 {
+    .btn-ghost {
+      --btn-bg: #0000;
+      color: var(--btn-rest-fg, var(--btn-color, var(--color-base-content, currentColor)));
+      --btn-border: #0000;
+      background-image: none;
+      --btn-inset: 0 0 0 0 oklch(0% 0 0/0);
+      --btn-shadow: 0 0 0 0 oklch(0% 0 0/0);
+    }
   }
   .p-6 {
     padding: calc(var(--spacing) * 6);
@@ -3605,6 +3284,21 @@
   .whitespace-nowrap {
     white-space: nowrap;
   }
+  @layer daisyui.l1.l2 {
+    @media (hover: hover) {
+      .link-primary:hover {
+        color: var(--color-primary);
+      }
+      @supports (color: color-mix(in lab, red, red)) {
+        .link-primary:hover {
+          color: color-mix(in oklab, var(--color-primary) 80%, #000);
+        }
+      }
+    }
+    .link-primary {
+      color: var(--color-primary);
+    }
+  }
   .text-primary {
     color: var(--color-primary);
   }
@@ -3629,10 +3323,6 @@
   .opacity-70 {
     opacity: 70%;
   }
-  .shadow {
-    --tw-shadow: 0 1px 3px 0 var(--tw-shadow-color, rgb(0 0 0 / 0.1)), 0 1px 2px -1px var(--tw-shadow-color, rgb(0 0 0 / 0.1));
-    box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
-  }
   .shadow-sm {
     --tw-shadow: 0 1px 3px 0 var(--tw-shadow-color, rgb(0 0 0 / 0.1)), 0 1px 2px -1px var(--tw-shadow-color, rgb(0 0 0 / 0.1));
     box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
@@ -3654,143 +3344,16 @@
     transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
     transition-duration: var(--tw-duration, var(--default-transition-duration));
   }
-  .ease-in-out {
-    --tw-ease: var(--ease-in-out);
-    transition-timing-function: var(--ease-in-out);
+  .transition-opacity {
+    transition-property: opacity;
+    transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
+    transition-duration: var(--tw-duration, var(--default-transition-duration));
   }
   .ease-out {
     --tw-ease: var(--ease-out);
     transition-timing-function: var(--ease-out);
   }
   @layer daisyui.l1.l2 {
-    .steps .step-neutral > .step-icon {
-      --step-bg: var(--color-neutral);
-      --step-fg: var(--color-neutral-content);
-    }
-    .steps .step-primary > .step-icon {
-      --step-bg: var(--color-primary);
-      --step-fg: var(--color-primary-content);
-    }
-    .steps .step-secondary > .step-icon {
-      --step-bg: var(--color-secondary);
-      --step-fg: var(--color-secondary-content);
-    }
-    .steps .step-accent > .step-icon {
-      --step-bg: var(--color-accent);
-      --step-fg: var(--color-accent-content);
-    }
-    .steps .step-info > .step-icon {
-      --step-bg: var(--color-info);
-      --step-fg: var(--color-info-content);
-    }
-    .steps .step-success > .step-icon {
-      --step-bg: var(--color-success);
-      --step-fg: var(--color-success-content);
-    }
-    .steps .step-warning > .step-icon {
-      --step-bg: var(--color-warning);
-      --step-fg: var(--color-warning-content);
-    }
-    .steps .step-error > .step-icon {
-      --step-bg: var(--color-error);
-      --step-fg: var(--color-error-content);
-    }
-    .steps .step-accent + .step-accent:before {
-      --step-bg: var(--color-accent);
-      --step-fg: var(--color-accent-content);
-    }
-    .steps .step-accent:after {
-      --step-bg: var(--color-accent);
-      --step-fg: var(--color-accent-content);
-    }
-    .steps .step-accent > .step-icon {
-      --step-bg: var(--color-accent);
-      --step-fg: var(--color-accent-content);
-    }
-    .steps .step-error + .step-error:before {
-      --step-bg: var(--color-error);
-      --step-fg: var(--color-error-content);
-    }
-    .steps .step-error:after {
-      --step-bg: var(--color-error);
-      --step-fg: var(--color-error-content);
-    }
-    .steps .step-error > .step-icon {
-      --step-bg: var(--color-error);
-      --step-fg: var(--color-error-content);
-    }
-    .steps .step-info + .step-info:before {
-      --step-bg: var(--color-info);
-      --step-fg: var(--color-info-content);
-    }
-    .steps .step-info:after {
-      --step-bg: var(--color-info);
-      --step-fg: var(--color-info-content);
-    }
-    .steps .step-info > .step-icon {
-      --step-bg: var(--color-info);
-      --step-fg: var(--color-info-content);
-    }
-    .steps .step-neutral + .step-neutral:before {
-      --step-bg: var(--color-neutral);
-      --step-fg: var(--color-neutral-content);
-    }
-    .steps .step-neutral:after {
-      --step-bg: var(--color-neutral);
-      --step-fg: var(--color-neutral-content);
-    }
-    .steps .step-neutral > .step-icon {
-      --step-bg: var(--color-neutral);
-      --step-fg: var(--color-neutral-content);
-    }
-    .steps .step-primary + .step-primary:before {
-      --step-bg: var(--color-primary);
-      --step-fg: var(--color-primary-content);
-    }
-    .steps .step-primary:after {
-      --step-bg: var(--color-primary);
-      --step-fg: var(--color-primary-content);
-    }
-    .steps .step-primary > .step-icon {
-      --step-bg: var(--color-primary);
-      --step-fg: var(--color-primary-content);
-    }
-    .steps .step-secondary + .step-secondary:before {
-      --step-bg: var(--color-secondary);
-      --step-fg: var(--color-secondary-content);
-    }
-    .steps .step-secondary:after {
-      --step-bg: var(--color-secondary);
-      --step-fg: var(--color-secondary-content);
-    }
-    .steps .step-secondary > .step-icon {
-      --step-bg: var(--color-secondary);
-      --step-fg: var(--color-secondary-content);
-    }
-    .steps .step-success + .step-success:before {
-      --step-bg: var(--color-success);
-      --step-fg: var(--color-success-content);
-    }
-    .steps .step-success:after {
-      --step-bg: var(--color-success);
-      --step-fg: var(--color-success-content);
-    }
-    .steps .step-success > .step-icon {
-      --step-bg: var(--color-success);
-      --step-fg: var(--color-success-content);
-    }
-    .steps .step-warning + .step-warning:before {
-      --step-bg: var(--color-warning);
-      --step-fg: var(--color-warning-content);
-    }
-    .steps .step-warning:after {
-      --step-bg: var(--color-warning);
-      --step-fg: var(--color-warning-content);
-    }
-    .steps .step-warning > .step-icon {
-      --step-bg: var(--color-warning);
-      --step-fg: var(--color-warning-content);
-    }
     .input-sm {
       --in-size-mul: 8;
       --font-size-min: 0.75rem;
@@ -3813,6 +3376,11 @@
       --fontsize: 0.75rem;
       --btn-p: 0.75rem;
       --size: calc(var(--size-field, 0.25rem) * 8);
+    }
+    .btn-xs {
+      --fontsize: 0.6875rem;
+      --btn-p: 0.5rem;
+      --size: calc(var(--size-field, 0.25rem) * 6);
     }
     .card-lg .card-body {
       --card-p: 2rem;
@@ -3869,6 +3437,9 @@
     }
     .aura:has( > .btn,  > .input,  > .select) {
       --aura-radius: var(--radius-field);
+    }
+    .aura:has( > .checkbox,  > .toggle,  > .badge) {
+      --aura-radius: var(--radius-selector);
     }
   }
   @media (hover: hover) {
@@ -4166,11 +3737,6 @@
   syntax: "*";
   inherits: false;
 }
-@property --tw-space-y-reverse {
-  syntax: "*";
-  inherits: false;
-  initial-value: 0;
-}
 @property --tw-border-style {
   syntax: "*";
   inherits: false;
@@ -4319,7 +3885,6 @@
       --tw-rotate-z: initial;
       --tw-skew-x: initial;
       --tw-skew-y: initial;
-      --tw-space-y-reverse: 0;
       --tw-border-style: solid;
       --tw-font-weight: initial;
       --tw-tracking: initial;

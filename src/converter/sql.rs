@@ -15,6 +15,7 @@
 //! trusted Postgres instance. Add TLS support if this ever talks to a
 //! non-local database.
 
+use camino::Utf8Path;
 use fink_fat_engine::topocentric_kf::{
     branching::BranchCollection, single_kalman::KFStateSnapshot,
 };
@@ -22,7 +23,10 @@ use indicatif::{ProgressBar, ProgressStyle};
 use nalgebra::Vector3;
 use postgres::{Client, NoTls, binary_copy::BinaryCopyInWriter, types::Type};
 
-use crate::converter::family::{DynamicalFamily, classify_from_attributable_state};
+use crate::converter::{
+    family::{DynamicalFamily, classify_from_attributable_state},
+    observations::{copy_observations, read_observation_rows},
+};
 
 /// Columns shared by the `kf_state` and `archived_trajectories` tables,
 /// mirroring [`crate::converter::parquet::KfStateColumns`] but as a
@@ -159,19 +163,30 @@ fn build_progress_bar(total_rows: usize) -> ProgressBar {
     pb
 }
 
-/// Load `branch_collection` into the Postgres database at `database_url`:
-/// create the 6 tables if absent, `TRUNCATE` them, then bulk-load via
-/// `COPY ... FROM STDIN BINARY`. Runs in a single transaction — a failure
-/// partway through leaves the previous contents untouched.
+/// Load `branch_collection` and the raw observations at
+/// `observations_parquet_path` into the Postgres database at
+/// `database_url`: create the 7 tables if absent, `TRUNCATE` them, then
+/// bulk-load via `COPY ... FROM STDIN BINARY`. Runs in a single
+/// transaction — a failure partway through leaves the previous contents
+/// untouched.
+///
+/// Observations are read and copied before `branch_observations`, so that
+/// `branch_observations.obs_id`'s foreign key into `observations(id)` is
+/// always satisfied within the same transaction, regardless of invocation
+/// order relative to any previous run.
 pub fn write_sql_tables(
     branch_collection: &BranchCollection,
     database_url: &str,
+    observations_parquet_path: &Utf8Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let observation_rows = read_observation_rows(observations_parquet_path)?;
+
     let (branch_rows, kf_bank_rows, branch_observation_rows, hypothesis_rows, kf_state_rows) =
         build_branch_rows(branch_collection);
     let archived_rows = build_archived_rows(branch_collection);
 
-    let total_rows = branch_rows.len()
+    let total_rows = observation_rows.len()
+        + branch_rows.len()
         + kf_bank_rows.len()
         + branch_observation_rows.len()
         + hypothesis_rows.len()
@@ -191,9 +206,10 @@ pub fn write_sql_tables(
     pb.println("Truncating existing tables...");
     transaction.batch_execute(
         "TRUNCATE TABLE branches, kf_bank, branch_observations, hypotheses, kf_state, \
-         archived_trajectories CASCADE;",
+         archived_trajectories, observations CASCADE;",
     )?;
 
+    copy_observations(&mut transaction, &observation_rows, &pb)?;
     copy_branches(&mut transaction, &branch_rows, &pb)?;
     copy_kf_bank(&mut transaction, &kf_bank_rows, &pb)?;
     copy_branch_observations(&mut transaction, &branch_observation_rows, &pb)?;
@@ -320,6 +336,23 @@ fn build_archived_rows(branch_collection: &BranchCollection) -> Vec<ArchivedRow>
 fn create_tables(transaction: &mut postgres::Transaction<'_>) -> Result<(), postgres::Error> {
     transaction.batch_execute(
         "
+        CREATE TABLE IF NOT EXISTS observations (
+            id BIGINT PRIMARY KEY,
+            night_id BIGINT NOT NULL,
+            object_id TEXT NOT NULL,
+            magnitude DOUBLE PRECISION NOT NULL,
+            mag_err DOUBLE PRECISION NOT NULL,
+            filter SMALLINT NOT NULL,
+            mpc_code_obs TEXT NOT NULL,
+            ra DOUBLE PRECISION NOT NULL,
+            ra_err DOUBLE PRECISION NOT NULL,
+            dec DOUBLE PRECISION NOT NULL,
+            dec_err DOUBLE PRECISION NOT NULL,
+            mjd_tt DOUBLE PRECISION NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_observations_object_id ON observations (object_id);
+
         CREATE TABLE IF NOT EXISTS branches (
             branch_id BIGINT PRIMARY KEY,
             lineage_id BIGINT NOT NULL,
@@ -343,7 +376,7 @@ fn create_tables(transaction: &mut postgres::Transaction<'_>) -> Result<(), post
         CREATE TABLE IF NOT EXISTS branch_observations (
             branch_id BIGINT NOT NULL REFERENCES branches(branch_id),
             position INTEGER NOT NULL,
-            obs_id BIGINT NOT NULL,
+            obs_id BIGINT NOT NULL REFERENCES observations(id),
             PRIMARY KEY (branch_id, position)
         );
 
@@ -424,6 +457,21 @@ fn create_tables(transaction: &mut postgres::Transaction<'_>) -> Result<(), post
         ALTER TABLE archived_trajectories ADD COLUMN IF NOT EXISTS dynamic_family TEXT NOT NULL DEFAULT 'Unknown';
         ALTER TABLE archived_trajectories ADD COLUMN IF NOT EXISTS semi_major_axis DOUBLE PRECISION NOT NULL DEFAULT 0;
         ALTER TABLE archived_trajectories ADD COLUMN IF NOT EXISTS eccentricity DOUBLE PRECISION NOT NULL DEFAULT 0;
+
+        -- Same rationale as above: a DB created before `observations` and
+        -- the FK on branch_observations.obs_id existed needs the constraint
+        -- backfilled explicitly. Postgres has no `ADD CONSTRAINT IF NOT
+        -- EXISTS`, hence the manual pg_constraint check.
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint WHERE conname = 'branch_observations_obs_id_fkey'
+            ) THEN
+                ALTER TABLE branch_observations
+                    ADD CONSTRAINT branch_observations_obs_id_fkey
+                    FOREIGN KEY (obs_id) REFERENCES observations(id);
+            END IF;
+        END $$;
         ",
     )
 }

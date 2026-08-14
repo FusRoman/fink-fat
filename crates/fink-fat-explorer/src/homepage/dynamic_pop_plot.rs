@@ -186,7 +186,6 @@ pub fn DynamicPopPlot(hidden_families: Signal<HashSet<DynamicalFamily>>) -> Elem
                                 .type_(AxisType::Log)
                                 .title(Title::from("Semi-major axis (AU)"))
                                 .tick_mode(TickMode::Array)
-                                // Moins de ticks, espacés de façon lisible sur log
                                 .tick_values(vec![
                                     0.5, 1.0, 2.0, 3.0, 4.6, 5.5, 10.0, 30.0, 100.0, 1000.0,
                                 ])
@@ -202,7 +201,7 @@ pub fn DynamicPopPlot(hidden_families: Signal<HashSet<DynamicalFamily>>) -> Elem
                                     "100",
                                     "1000",
                                 ])
-                                .tick_angle(-35.0), // ← incline pour éviter le chevauchement
+                                .tick_angle(-35.0),
                         )
                         .y_axis(Axis::new().title(Title::from("Eccentricity")))
                         .margin(Margin::new().top(20).right(20));
@@ -212,8 +211,6 @@ pub fn DynamicPopPlot(hidden_families: Signal<HashSet<DynamicalFamily>>) -> Elem
                 };
 
                 spawn(async move {
-                    // `peek`, not `()`: writing `drawn` below must not make
-                    // this effect subscribe to it and re-run itself.
                     if *drawn.peek() {
                         plotly::bindings::react("ae-plot-div", &plot).await;
                     } else {

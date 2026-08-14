@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use crate::homepage::family::DynamicalFamily;
 use crate::homepage::interaction::{Pagination, SortColumn, SortDirection, PAGE_SIZE};
+use crate::Route;
 
 /// Columns needed to fetch a page of branches (best + others) — `branches`
 /// joined directly to `kf_state` (via each branch's best hypothesis) to pick
@@ -353,7 +354,15 @@ fn LineageTable(groups: Vec<LineageGroup>) -> Element {
                     div { class: "collapse-title",
                         div { class: "grid grid-cols-5 gap-4 items-center",
                             span { class: "font-medium", "{group.best.designation}" }
-                            span { "{group.best.lineage_designation}" }
+                            span {
+                                Link {
+                                    to: Route::LineagePage {
+                                        lineage_id: group.best.lineage_designation.clone(),
+                                    },
+                                    class: "link link-primary font-medium",
+                                    "{group.best.lineage_designation}"
+                                }
+                            }
                             span {
                                 span {
                                     class: "badge badge-sm text-white border-0",

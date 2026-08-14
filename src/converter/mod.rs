@@ -11,6 +11,7 @@ use crate::{
 };
 
 pub mod family;
+pub mod observations;
 pub mod parquet;
 pub mod sql;
 
@@ -18,6 +19,7 @@ pub fn convert(
     config_path: Utf8PathBuf,
     requested_format: ConvertFormat,
     database_url: Option<String>,
+    path_observation: Option<Utf8PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let engine_config = EngineConfig::load_engine_config_validated(config_path)?;
     let snapshot_path = engine_config.snapshot_path();
@@ -41,7 +43,12 @@ pub fn convert(
             let database_url = database_url.ok_or_else(|| {
                 FinkFatError::Message("--database-url is required when --format sql".to_string())
             })?;
-            write_sql_tables(&collection, &database_url)?;
+            let path_observation = path_observation.ok_or_else(|| {
+                FinkFatError::Message(
+                    "--path-observation is required when --format sql".to_string(),
+                )
+            })?;
+            write_sql_tables(&collection, &database_url, &path_observation)?;
         }
     }
 
