@@ -263,8 +263,8 @@ pub fn OrbitFitPage(lineage_id: String) -> Element {
                                 FitProgress { logs: view.logs.clone() }
                             },
                             JobStatus::Failed => rsx! {
-                                FitProgress { logs: view.logs.clone() }
                                 div { class: "alert alert-error", "Fit failed: {view.error.clone().unwrap_or_default()}" }
+                                FitProgress { logs: view.logs.clone(), failed: true, error: view.error.clone() }
                             },
                             JobStatus::Done if view.result.is_none() => rsx! {
                                 div { class: "alert alert-error", "Fit completed but returned no result." }
