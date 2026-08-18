@@ -2,7 +2,7 @@ mod hypotheses_plot;
 mod identity_card;
 mod kf_replay;
 mod metrics_plot;
-mod observations_table;
+pub mod observations_table;
 mod plot_tabs;
 mod rho_evolution_plot;
 mod trajectory_plot;
@@ -32,9 +32,10 @@ pub fn LineagePage(lineage_id: String) -> Element {
         get_lineage_observations(observations_lineage_id)
     }));
 
-    let replay_resource = use_resource(use_reactive!(|(lineage_id,)| replay_kalman_branch(
-        lineage_id
-    )));
+    let replay_lineage_id = lineage_id.clone();
+    let replay_resource = use_resource(use_reactive!(|(replay_lineage_id,)| {
+        replay_kalman_branch(replay_lineage_id)
+    }));
 
     // Plain owned snapshots, cheap to pass around as props without holding
     // onto the resources' `Ref` guards across the whole render.

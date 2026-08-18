@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::format_epoch::format_epoch;
 use crate::homepage::family::DynamicalFamily;
 
 /// Summary of a lineage's best branch (highest `cumulative_llr`), for the
@@ -148,7 +149,9 @@ pub fn IdentityCard(summary: Option<LineageSummary>) -> Element {
             div { class: "card-body gap-3",
                 div {
                     h1 { class: "text-3xl font-bold tracking-tight", "{summary.lineage_designation}" }
-                    p { class: "text-xs opacity-60", "branch {summary.branch_designation} · lineage_id {summary.lineage_id}" }
+                    p { class: "text-xs opacity-60",
+                        "branch {summary.branch_designation} · lineage_id {summary.lineage_id}"
+                    }
                 }
 
                 span {
@@ -160,19 +163,57 @@ pub fn IdentityCard(summary: Option<LineageSummary>) -> Element {
                 div { class: "divider my-0" }
 
                 div { class: "grid grid-cols-2 gap-x-4 gap-y-2 text-sm",
-                    IdentityStat { label: "Arc length", value: format!("{:.2} days", summary.arc_length_days) }
-                    IdentityStat { label: "Observations", value: format!("{}", summary.n_observations) }
-                    IdentityStat { label: "Real updates", value: format!("{}", summary.n_real_updates) }
-                    IdentityStat { label: "Cumulative LLR", value: format!("{:.2}", summary.cumulative_llr) }
-                    IdentityStat { label: "Semi-major axis", value: format!("{:.4} AU", summary.semi_major_axis) }
-                    IdentityStat { label: "Eccentricity", value: format!("{:.4}", summary.eccentricity) }
-                    IdentityStat { label: "Perihelion", value: format!("{:.4} AU", perihelion) }
-                    IdentityStat { label: "Aphelion", value: format!("{:.4} AU", aphelion) }
-                    IdentityStat { label: "ρ (range)", value: format!("{:.4} AU", summary.rho) }
-                    IdentityStat { label: "ρ̇ (range rate)", value: format!("{:.2e} AU/day", summary.rho_dot) }
+                    IdentityStat {
+                        label: "Arc length",
+                        value: format!("{:.2} days", summary.arc_length_days),
+                    }
+                    IdentityStat {
+                        label: "Observations",
+                        value: format!("{}", summary.n_observations),
+                    }
+                    IdentityStat {
+                        label: "Real updates",
+                        value: format!("{}", summary.n_real_updates),
+                    }
+                    IdentityStat {
+                        label: "Cumulative LLR",
+                        value: format!("{:.2}", summary.cumulative_llr),
+                    }
+                    IdentityStat {
+                        label: "Semi-major axis",
+                        value: format!("{:.4} AU", summary.semi_major_axis),
+                    }
+                    IdentityStat {
+                        label: "Eccentricity",
+                        value: format!("{:.4}", summary.eccentricity),
+                    }
+                    IdentityStat {
+                        label: "Perihelion",
+                        value: format!("{:.4} AU", perihelion),
+                    }
+                    IdentityStat {
+                        label: "Aphelion",
+                        value: format!("{:.4} AU", aphelion),
+                    }
+                    IdentityStat {
+                        label: "ρ (range)",
+                        value: format!("{:.4} AU", summary.rho),
+                    }
+                    IdentityStat {
+                        label: "ρ̇ (range rate)",
+                        value: format!("{:.2e} AU/day", summary.rho_dot),
+                    }
                 }
 
-                p { class: "text-xs opacity-50", "State epoch: MJD(TT) {summary.epoch:.5}" }
+                p { class: "text-xs opacity-50", "State epoch: {format_epoch(summary.epoch)}" }
+
+                Link {
+                    to: crate::Route::OrbitFitPage {
+                        lineage_id: summary.lineage_designation.clone(),
+                    },
+                    class: "btn btn-sm btn-primary",
+                    "Fit orbit (n-body)"
+                }
             }
         }
     }

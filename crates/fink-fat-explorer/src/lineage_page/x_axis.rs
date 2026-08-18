@@ -47,17 +47,8 @@ pub enum XAxisValues {
     Date(Vec<String>),
 }
 
-/// Convert a replayed MJD(TT) epoch to an ISO-8601 UTC string. Pure
-/// computation, no network access (unlike `fink-fat-engine`'s UT1 provider
-/// use of `hifitime`) — safe to run in the browser.
 #[cfg(target_arch = "wasm32")]
-fn epoch_to_iso_utc(mjd_tt: f64) -> String {
-    use hifitime::{Epoch, TimeScale};
-
-    Epoch::from_mjd_in_time_scale(mjd_tt, TimeScale::TT)
-        .to_time_scale(TimeScale::UTC)
-        .to_isoformat()
-}
+use crate::format_epoch::iso_utc as epoch_to_iso_utc;
 
 #[cfg(target_arch = "wasm32")]
 pub fn x_values_for_steps(unit: XAxisUnit, replay: &[KfStep]) -> XAxisValues {

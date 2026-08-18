@@ -10,12 +10,14 @@ dotenvy = "0.15.7"
 hifitime = { version = "4.3", default-features = false, features = ["std"] }
 plotly = "0.14.1"
 serde.workspace = true
+serde_json = "1.0"
 
 # Server-only dependencies — not compiled for wasm32.
 # fink-fat-engine pulls tokio (rt-multi-thread, fs) and getrandom without
 # the "js" feature, neither of which compile for wasm32-unknown-unknown.
 # nalgebra is only used in the server-side orbital conversion code.
 camino = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }
 fink-fat-engine = { workspace = true, optional = true }
 nalgebra = { workspace = true, optional = true }
 outfit = { workspace = true, optional = true }
@@ -26,14 +28,19 @@ sqlx = { version = "0.9.0", features = [
     "postgres",
     "runtime-tokio",
     "macros",
+    "json",
+    "chrono",
 ], optional = true }
 tokio = { version = "1.53.1", features = [
     "rt-multi-thread",
     "sync",
     "macros",
+    "time",
 ], optional = true }
 web-sys = "0.3.104"
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+gloo-timers = { version = "0.3", features = ["futures"] }
 
 [features]
 default = ["web"]
@@ -45,6 +52,7 @@ server = [
     "dep:sqlx",
     "dep:tokio",
     "dep:camino",
+    "dep:chrono",
     "dep:fink-fat-engine",
     "dep:nalgebra",
     "dep:outfit",

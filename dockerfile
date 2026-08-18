@@ -41,4 +41,4 @@ WORKDIR /app/crates/fink-fat-explorer
 EXPOSE 8080
 
 # Run the Tailwind watcher and the Dioxus server in parallel
-CMD ["sh", "-c", "tailwindcss-extra -i ./tailwind.css -o ./assets/main.css --watch & dx serve --addr 0.0.0.0"]
+CMD ["sh", "-c", "tailwindcss-extra -i ./tailwind.css -o ./assets/main.css --watch </dev/null > /tmp/tailwind.log 2>&1; echo \"tailwind exited with code $?\" >> /tmp/tailwind.log & dx serve --addr 0.0.0.0"]

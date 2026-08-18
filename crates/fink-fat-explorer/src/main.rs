@@ -1,5 +1,8 @@
+pub mod format_epoch;
 pub mod homepage;
 pub mod lineage_page;
+pub mod orbit_fit;
+pub mod orbit_fit_page;
 
 use dioxus::prelude::*;
 
@@ -8,10 +11,17 @@ use sqlx::postgres::PgPoolOptions;
 #[cfg(feature = "server")]
 use sqlx::PgPool;
 #[cfg(feature = "server")]
+use std::collections::HashMap;
+#[cfg(feature = "server")]
+use std::sync::atomic::AtomicU64;
+#[cfg(feature = "server")]
+use std::sync::Mutex;
+#[cfg(feature = "server")]
 use tokio::sync::OnceCell;
 
 use crate::homepage::Home;
 use crate::lineage_page::LineagePage;
+use crate::orbit_fit_page::OrbitFitPage;
 
 #[cfg(feature = "server")]
 static DB_POOL: OnceCell<PgPool> = OnceCell::const_new();
@@ -108,6 +118,25 @@ async fn get_observatories() -> &'static photom::observer::mpc::MpcCodeObs {
         .await
 }
 
+/// In-memory registry of in-flight/completed orbit fit jobs (see
+/// `orbit_fit::run::start_orbit_fit`). Job status/logs don't need to survive
+/// a server restart — only the final successful result is persisted, into
+/// the `orbit_fits` Postgres table — so a plain in-memory map is enough,
+/// unlike `DB_POOL`/`KALMAN_CONTEXT` which cache expensive-to-build state.
+#[cfg(feature = "server")]
+static ORBIT_FIT_JOBS: OnceCell<Mutex<HashMap<u64, crate::orbit_fit::OrbitFitJob>>> =
+    OnceCell::const_new();
+
+#[cfg(feature = "server")]
+static NEXT_ORBIT_FIT_JOB_ID: AtomicU64 = AtomicU64::new(1);
+
+#[cfg(feature = "server")]
+async fn get_orbit_fit_jobs() -> &'static Mutex<HashMap<u64, crate::orbit_fit::OrbitFitJob>> {
+    ORBIT_FIT_JOBS
+        .get_or_init(|| async { Mutex::new(HashMap::new()) })
+        .await
+}
+
 #[derive(Clone, Debug, PartialEq, Routable)]
 enum Route {
     #[route("/")]
@@ -115,6 +144,9 @@ enum Route {
 
     #[route("/lineage/:lineage_id")]
     LineagePage { lineage_id: String },
+
+    #[route("/lineage/:lineage_id/fit")]
+    OrbitFitPage { lineage_id: String },
 }
 
 fn main() {
