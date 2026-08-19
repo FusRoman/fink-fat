@@ -31,9 +31,15 @@ RUN curl -sLo /usr/local/bin/tailwindcss-extra \
 # WORKDIR points to the workspace root
 WORKDIR /app
 
-# Copy the whole workspace (required so cargo can find the root Cargo.toml
-# and resolve inherited workspace dependencies)
-COPY . .
+# Copy only what's needed to build the workspace (root Cargo.toml/Cargo.lock
+# are required so cargo can resolve inherited workspace dependencies). This
+# is deliberately explicit, not `COPY . .`, so unrelated large data files
+# added anywhere in the repo never end up in the image.
+COPY Cargo.toml Cargo.lock ./
+COPY .cargo ./.cargo
+COPY LICENSE README.md katex-header.html ./
+COPY src ./src
+COPY crates ./crates
 
 # Run commands from the actual crate directory
 WORKDIR /app/crates/fink-fat-explorer
