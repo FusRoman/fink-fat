@@ -244,6 +244,15 @@ impl EngineConfig {
             .join(crate::topocentric_kf::branching::SNAPSHOT_FILENAME)
     }
 
+    /// Path to the append-only log of archived trajectories — see
+    /// [`crate::topocentric_kf::branching::write_archived_batch`]/
+    /// [`crate::topocentric_kf::branching::read_archived_log`]. Sibling of
+    /// [`Self::snapshot_path`] under `storage_path`.
+    pub fn archive_log_path(&self) -> Utf8PathBuf {
+        self.storage_path_buf()
+            .join(crate::topocentric_kf::branching::ARCHIVE_LOG_FILENAME)
+    }
+
     /// Load and validate an [`EngineConfig`] from a YAML file plus optional environment overrides.
     ///
     /// Behavior

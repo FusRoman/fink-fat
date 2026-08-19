@@ -25,10 +25,19 @@
 //! off a finished trajectory is its observation list, so that — plus enough
 //! provenance to rank, group and audit it — is all this keeps.
 
+use std::io::{self, Read, Write};
+
+use camino::Utf8Path;
 use photom::observation_dataset::ObsId;
 
+use crate::error::{EngineError, FinkFatError};
 use crate::topocentric_kf::branching::branch_id::BranchId;
 use crate::topocentric_kf::single_kalman::KFStateSnapshot;
+
+/// Filename (sibling of [`super::SNAPSHOT_FILENAME`] under `storage_path`) of
+/// the append-only log of archived trajectories — see
+/// [`write_archived_batch`]/[`read_archived_log`].
+pub const ARCHIVE_LOG_FILENAME: &str = "archived_trajectories.rkyvlog";
 
 /// A lineage's final reconstruction, retained after the lineage itself
 /// stopped being propagated.
@@ -94,4 +103,86 @@ pub struct ArchivedTrajectory {
     pub absolute_magnitude_estimate: Option<f64>,
     /// How many observations were folded into `absolute_magnitude_estimate`.
     pub absolute_magnitude_sample_count: u32,
+}
+
+/// Append one night's freshly archived trajectories to an open writer, as a
+/// single length-prefixed `rkyv` record (`u64` little-endian byte length,
+/// then the serialized `batch`). A no-op if `batch` is empty, so a quiet
+/// night never grows the file.
+///
+/// One record per *night* rather than per trajectory: `rkyv` archives carry a
+/// small fixed overhead each, and a night's batch is typically a handful of
+/// trajectories, so batching amortizes that cost and keeps write syscalls
+/// down over a whole run.
+///
+/// The caller owns the writer's lifetime (see [`read_archived_log`]'s doc for
+/// why this crate does not open the file itself) — typically a `BufWriter`
+/// over a file opened with `.append(true)`, kept open for the whole run and
+/// flushed by the caller after each call so an archived batch survives a
+/// crash as soon as it's written, independently of the (much less frequent)
+/// `BranchCollection` snapshot cadence.
+pub fn write_archived_batch<W: Write>(
+    writer: &mut W,
+    batch: &[ArchivedTrajectory],
+) -> Result<(), EngineError> {
+    if batch.is_empty() {
+        return Ok(());
+    }
+    let bytes = rkyv::api::high::to_bytes::<rkyv::rancor::Error>(&batch.to_vec())
+        .map_err(|e| FinkFatError::Message(e.to_string()))?;
+    writer
+        .write_all(&(bytes.len() as u64).to_le_bytes())
+        .map_err(FinkFatError::Io)?;
+    writer.write_all(&bytes).map_err(FinkFatError::Io)?;
+    Ok(())
+}
+
+/// Read every batch previously written by [`write_archived_batch`] from the
+/// log file at `path`, in the order they were appended, and flatten them into
+/// one `Vec`.
+///
+/// Missing file is treated as "no trajectory archived yet" (`Ok(vec![])`),
+/// not an error — a run that hasn't archived anything yet (or hasn't reached
+/// its first archival) simply has no log file.
+///
+/// Tolerant of a truncated trailing record: if the file ends mid-length-prefix
+/// or mid-payload (the process was killed while `write_archived_batch` was
+/// writing, e.g. an OOM kill — precisely the failure mode this format exists
+/// to survive), everything read up to that point is returned rather than
+/// failing the whole read. A truncated record can only ever be the *last*
+/// one, since each write is a single `write_all` of the length prefix
+/// followed by a single `write_all` of the payload.
+///
+/// This is an offline/batch reader (used by `fink-fat convert` and
+/// `tracking_analysis`, not by the live `track` loop, which never reads this
+/// file back), so materializing the whole result in memory is fine.
+pub fn read_archived_log(path: &Utf8Path) -> Result<Vec<ArchivedTrajectory>, EngineError> {
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(FinkFatError::Io(e).into()),
+    };
+
+    let mut out = Vec::new();
+    let mut len_buf = [0u8; 8];
+    loop {
+        match file.read_exact(&mut len_buf) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(FinkFatError::Io(e).into()),
+        }
+        let len = u64::from_le_bytes(len_buf) as usize;
+
+        let mut payload = vec![0u8; len];
+        match file.read_exact(&mut payload) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(FinkFatError::Io(e).into()),
+        }
+
+        let batch = rkyv::from_bytes::<Vec<ArchivedTrajectory>, rkyv::rancor::Error>(&payload)
+            .map_err(|e| FinkFatError::Message(e.to_string()))?;
+        out.extend(batch);
+    }
+    Ok(out)
 }

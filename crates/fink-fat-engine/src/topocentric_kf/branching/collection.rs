@@ -68,20 +68,29 @@ pub struct BranchCollection<'state_lf, 'bank_config> {
     /// a caller should pass into the next [`Self::advance_one_night`] call.
     /// `0` for a fresh/empty collection.
     pub current_step: usize,
-    /// **Cumulative** reconstructions of every lineage that stopped being
-    /// propagated, across all nights advanced so far — see
-    /// [`ArchivedTrajectory`] and
+    /// Reconstructions of the lineages that stopped being propagated
+    /// **during the night just advanced** — see [`ArchivedTrajectory`] and
     /// [`purge_stale_lineages`](super::pruning::purge_stale_lineages).
     ///
-    /// Unlike `last_night_*`, this never resets: an archived arc is a
-    /// *result* of the run, not state about the night just processed. The
-    /// full output of a run is therefore `branches` (still growing) **plus**
-    /// `archived` (closed) — consumers that read only `branches` will report
-    /// every purged lineage as though it had never been reconstructed.
+    /// **Not cumulative** during live tracking: [`Self::advance_one_night`]
+    /// returns only this night's fresh batch here (like `last_night_*`), not
+    /// the run's full archive — the caller (`fink-fat track`'s loop) is
+    /// expected to append it to the on-disk log
+    /// ([`super::write_archived_batch`]) and drop it before the next call,
+    /// rather than let it accumulate in RAM for the whole run (that
+    /// accumulation, plus a full clone of it every night, is exactly what
+    /// this field's contract used to cost before archived trajectories
+    /// moved to a dedicated append-only log — see
+    /// [`super::read_archived_log`]).
     ///
-    /// Entries carry no Kalman bank and are never propagated again, so this
-    /// costs a `Vec<ObsId>` plus a few scalars each (megabytes over a full
-    /// survey run, not gigabytes).
+    /// Offline consumers (`fink-fat convert`, `tracking_analysis`) that need
+    /// the *full* run's archive should instead load it explicitly with
+    /// [`super::read_archived_log`] and assign it to this field themselves
+    /// after loading a snapshot — at that point it *is* the cumulative
+    /// history, since nothing else populates it. This dual meaning
+    /// (per-night delta during tracking vs. explicit cumulative load
+    /// offline) is a deliberate trade-off to avoid a signature change
+    /// rippling through every offline consumer of `.archived`.
     pub archived: Vec<ArchivedTrajectory>,
 }
 
@@ -98,10 +107,6 @@ pub struct BranchCollectionSnapshot {
     pub branches: Vec<BranchSnapshot>,
     pub last_night_consumed_then_pruned_ids: HashSet<ObsId>,
     pub current_step: usize,
-    /// See [`BranchCollection::archived`]. Persisted (unlike
-    /// `last_night_gate_records`) because these are results the run would
-    /// otherwise lose across a restart.
-    pub archived: Vec<ArchivedTrajectory>,
 }
 
 use crate::logging::LogTarget;
@@ -172,7 +177,6 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
             branches: self.branches.iter().map(Branch::to_snapshot).collect(),
             last_night_consumed_then_pruned_ids: self.last_night_consumed_then_pruned_ids.clone(),
             current_step: self.current_step,
-            archived: self.archived.clone(),
         }
     }
 
@@ -194,7 +198,12 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
             last_night_consumed_then_pruned_ids: snapshot.last_night_consumed_then_pruned_ids,
             last_night_gate_records: Vec::new(),
             current_step: snapshot.current_step,
-            archived: snapshot.archived,
+            // Archived trajectories no longer round-trip through the
+            // snapshot (see `BranchCollection::archived`'s doc) — a run
+            // resuming from this snapshot has no need for its prior
+            // archive, which lives entirely in the separate append-only log
+            // instead.
+            archived: Vec::new(),
         }
     }
 
@@ -392,18 +401,17 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
         }
         .emit();
 
-        // Carried over explicitly: this method returns a fresh `Self` rather
-        // than mutating, so the accumulated archive would silently reset
-        // otherwise — the exact failure this whole mechanism exists to avoid.
-        let mut archived = self.archived.clone();
-        archived.extend(archived_tonight);
-
+        // Deliberately *not* accumulated with `self.archived`: unlike before,
+        // this field now carries only this night's fresh batch (see
+        // `BranchCollection::archived`'s doc) — the caller is expected to
+        // append `archived_tonight` to the on-disk log and drop it rather
+        // than fold it into the next call's `self`.
         Ok(Self {
             branches,
             last_night_consumed_then_pruned_ids: consumed_then_pruned_ids,
             last_night_gate_records: gate_records,
             current_step: current_step + 1,
-            archived,
+            archived: archived_tonight,
         })
     }
 }

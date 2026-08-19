@@ -17,8 +17,9 @@ use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use fink_fat_engine::{
-    engine_config::EngineConfig, spacetime_bucket::healpix_binner::HealpixBinner,
-    topocentric_kf::branching::BranchCollection,
+    engine_config::EngineConfig,
+    spacetime_bucket::healpix_binner::HealpixBinner,
+    topocentric_kf::branching::{BranchCollection, read_archived_log},
 };
 use fink_fat_eval::{
     cli::{Cli, load_data},
@@ -497,9 +498,15 @@ fn run_snapshot_analysis(cli: &TrackingAnalysisCli) -> Result<()> {
     let kalman_ctx = engine_config.build_context();
 
     let snapshot_path = engine_config.snapshot_path();
-    let collection =
+    let mut collection =
         BranchCollection::load_snapshot_from_disk(&snapshot_path, &kalman_ctx, &engine_config)?;
     println!("Loaded snapshot from {snapshot_path}");
+
+    // Archived trajectories no longer live in the snapshot (see
+    // `BranchCollection::archived`'s doc) — load the full run's archive from
+    // its own append-only log instead.
+    collection.archived = read_archived_log(&engine_config.archive_log_path())?;
+    println!("Loaded {} archived trajectories", collection.archived.len());
 
     let ground_truth = ObsTrajLookup::build(&obs_dataset);
     let obs_to_night = build_obs_to_night_map(&obs_dataset);

@@ -62,7 +62,9 @@ pub mod orchestrate;
 pub mod pruning;
 pub mod visit;
 
-pub use archive::ArchivedTrajectory;
+pub use archive::{
+    ARCHIVE_LOG_FILENAME, ArchivedTrajectory, read_archived_log, write_archived_batch,
+};
 pub use branch::{Branch, BranchSnapshot};
 pub use branch_id::BranchId;
 pub use collection::{BranchCollection, BranchCollectionSnapshot, SNAPSHOT_FILENAME};

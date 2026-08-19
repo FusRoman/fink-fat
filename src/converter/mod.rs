@@ -1,5 +1,8 @@
 use camino::Utf8PathBuf;
-use fink_fat_engine::{engine_config::EngineConfig, topocentric_kf::branching::BranchCollection};
+use fink_fat_engine::{
+    engine_config::EngineConfig,
+    topocentric_kf::branching::{BranchCollection, read_archived_log},
+};
 
 use crate::{
     converter::{
@@ -26,13 +29,22 @@ pub fn convert(
 
     let kalman_context = engine_config.build_context();
 
-    let collection = if snapshot_path.exists() {
+    let mut collection = if snapshot_path.exists() {
         BranchCollection::load_snapshot_from_disk(&snapshot_path, &kalman_context, &engine_config)?
     } else {
         return Err(FinkFatError::NoSnapshot)?;
     };
 
+    // Archived trajectories no longer live in the snapshot (see
+    // `BranchCollection::archived`'s doc) — load the full run's archive from
+    // its own append-only log instead.
+    collection.archived = read_archived_log(&engine_config.archive_log_path())?;
+
     println!("Number of branch: {}", collection.branches.len());
+    println!(
+        "Number of archived trajectory: {}",
+        collection.archived.len()
+    );
 
     match requested_format {
         ConvertFormat::Parquet => {

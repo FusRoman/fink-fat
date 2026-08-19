@@ -1,7 +1,10 @@
-use std::io::Write;
+use std::io::{BufWriter, Write};
 
 use camino::Utf8Path;
-use fink_fat_engine::{engine_config::EngineConfig, topocentric_kf::branching::BranchCollection};
+use fink_fat_engine::{
+    engine_config::EngineConfig,
+    topocentric_kf::branching::{BranchCollection, write_archived_batch},
+};
 use photom::{
     io::polars::{ContiguousChoice, FromPolarsArgs},
     observation_dataset::{ObsDataset, observation::Observation},
@@ -60,6 +63,21 @@ pub fn tracking(cli_args: FinkFatCliArgs) -> Result<(), Box<dyn std::error::Erro
         BranchCollection::empty()
     };
 
+    // Kept open and appended to for the whole run, independently of
+    // `--snapshot-every`: archived trajectories are small (see
+    // `ArchivedTrajectory`'s doc) and this is a cheap append, not a full
+    // rewrite, so there's no reason to batch it with the (much more
+    // expensive) branch-collection snapshot cadence — this also means an
+    // archived trajectory survives a crash as soon as it's written, rather
+    // than only at the next snapshot as before.
+    let archive_log_path = engine_config.archive_log_path();
+    let mut archive_log_writer = BufWriter::new(
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&archive_log_path)?,
+    );
+
     // A dataset tagged with more than one `night_id` is processed one night
     // at a time, in chronological order; anything else (no night index, or
     // a single night) is treated as one logical night, exactly as before.
@@ -94,6 +112,13 @@ pub fn tracking(cli_args: FinkFatCliArgs) -> Result<(), Box<dyn std::error::Erro
             &kalman_context,
             current_step,
         )?;
+
+        // `collection.archived` is only this night's fresh batch (see
+        // `BranchCollection::archived`'s doc) — flush it to the on-disk log
+        // and drop it immediately rather than let it ride along in RAM.
+        write_archived_batch(&mut archive_log_writer, &collection.archived)?;
+        archive_log_writer.flush()?;
+        collection.archived.clear();
 
         if should_write_snapshot(i + 1, n_batches, cli_args.snapshot_every) {
             write_snapshot(&collection, &snapshot_path)?;
