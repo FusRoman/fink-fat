@@ -95,3 +95,4 @@ storage/
 tracking_report/
 crates/fink-fat-explorer/test_postgress_db.md
 crates/fink-fat-explorer/tailwindcss-extra
+engine_config_lsst.*.yaml

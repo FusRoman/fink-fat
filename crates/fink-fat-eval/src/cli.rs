@@ -41,7 +41,7 @@ pub fn load_data(
     ObsDataset::from_lazy(
         lf,
         FromPolarsArgs {
-            do_rechunk: Some(false),
+            do_rechunk: Some(true),
             error_model: Some(ObsErrorModel::FCCT14),
             contiguous_choice: Some(ContiguousChoice::ContiguousNight),
         },
