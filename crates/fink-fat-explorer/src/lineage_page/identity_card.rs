@@ -69,7 +69,7 @@ pub async fn get_lineage_summary(
     let query = format!(
         "WITH best_branch AS (
             SELECT branch_id, lineage_id, lineage_designation, designation,
-                   {SANITIZED_LLR_EXPR} AS cumulative_llr, n_real_updates
+                   {SANITIZED_LLR_EXPR} AS cumulative_llr, n_real_updates, arc_length_days
             FROM branches
             WHERE lineage_designation = $1
             ORDER BY {SANITIZED_LLR_EXPR} DESC
@@ -82,7 +82,7 @@ pub async fn get_lineage_summary(
             ks.dynamic_family, ks.semi_major_axis, ks.eccentricity,
             ks.ra, ks.dec, ks.rho, ks.rho_dot, ks.epoch,
             COALESCE(agg.n_observations, 0) AS n_observations,
-            COALESCE(agg.arc_length_days, 0) AS arc_length_days
+            bb.arc_length_days
         FROM best_branch bb
         CROSS JOIN LATERAL (
             SELECT hypothesis_id
@@ -93,10 +93,8 @@ pub async fn get_lineage_summary(
         ) bh
         JOIN kf_state ks ON ks.hypothesis_id = bh.hypothesis_id
         LEFT JOIN LATERAL (
-            SELECT COUNT(*) AS n_observations,
-                   (MAX(o.mjd_tt) - MIN(o.mjd_tt)) AS arc_length_days
+            SELECT COUNT(*) AS n_observations
             FROM branch_observations bo
-            JOIN observations o ON o.id = bo.obs_id
             WHERE bo.branch_id = bb.branch_id
         ) agg ON true"
     );

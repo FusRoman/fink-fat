@@ -15,6 +15,8 @@
 //! trusted Postgres instance. Add TLS support if this ever talks to a
 //! non-local database.
 
+use std::collections::HashMap;
+
 use camino::Utf8Path;
 use fink_fat_engine::topocentric_kf::{
     branching::BranchCollection, single_kalman::KFStateSnapshot,
@@ -111,6 +113,9 @@ struct BranchRow {
     cumulative_llr: f64,
     lineage_designation: String,
     designation: String,
+    arc_length_days: f64,
+    n_nights: i64,
+    median_inter_night_dt_days: Option<f64>,
 }
 
 struct KfBankRow {
@@ -182,8 +187,17 @@ pub fn write_sql_tables(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let observation_rows = read_observation_rows(observations_parquet_path)?;
 
+    // Keyed by `ObservationRow::id` (== `BranchObservationRow::obs_id`), so
+    // each branch's arc/night-count/inter-night-gap stats can be computed
+    // once here in Rust, up front, instead of re-derived by Postgres on
+    // every homepage sort — see `compute_obs_stats`.
+    let obs_index: HashMap<i64, (i64, f64)> = observation_rows
+        .iter()
+        .map(|r| (r.id, (r.night_id, r.mjd_tt)))
+        .collect();
+
     let (branch_rows, kf_bank_rows, branch_observation_rows, hypothesis_rows, kf_state_rows) =
-        build_branch_rows(branch_collection);
+        build_branch_rows(branch_collection, &obs_index);
     let archived_rows = build_archived_rows(branch_collection);
 
     let total_rows = observation_rows.len()
@@ -224,9 +238,62 @@ pub fn write_sql_tables(
     Ok(())
 }
 
+/// Arc length (max-min `mjd_tt`), unique night count, and the median gap
+/// between *consecutive nights* (not intra-night gaps) for one branch's
+/// observations. `obs_index` maps `ObservationRow::id` to `(night_id,
+/// mjd_tt)`, built once in [`write_sql_tables`]. A night's representative
+/// time is its earliest observation; the median is `None` when the branch
+/// has <=1 night (no inter-night gap to measure).
+fn compute_obs_stats(
+    track_ids: &[u64],
+    obs_index: &HashMap<i64, (i64, f64)>,
+) -> (f64, i64, Option<f64>) {
+    let mut night_start: HashMap<i64, f64> = HashMap::new();
+    let mut min_mjd = f64::INFINITY;
+    let mut max_mjd = f64::NEG_INFINITY;
+
+    for &obs_id in track_ids {
+        let Some(&(night_id, mjd_tt)) = obs_index.get(&(obs_id as i64)) else {
+            continue;
+        };
+        min_mjd = min_mjd.min(mjd_tt);
+        max_mjd = max_mjd.max(mjd_tt);
+        night_start
+            .entry(night_id)
+            .and_modify(|t| *t = t.min(mjd_tt))
+            .or_insert(mjd_tt);
+    }
+
+    if night_start.is_empty() {
+        return (0.0, 0, None);
+    }
+
+    let arc_length_days = max_mjd - min_mjd;
+    let n_nights = night_start.len() as i64;
+
+    let mut night_times: Vec<f64> = night_start.into_values().collect();
+    night_times.sort_by(|a, b| a.total_cmp(b));
+
+    let mut gaps: Vec<f64> = night_times.windows(2).map(|w| w[1] - w[0]).collect();
+    let median_inter_night_dt_days = if gaps.is_empty() {
+        None
+    } else {
+        gaps.sort_by(|a, b| a.total_cmp(b));
+        let mid = gaps.len() / 2;
+        Some(if gaps.len() % 2 == 0 {
+            (gaps[mid - 1] + gaps[mid]) / 2.0
+        } else {
+            gaps[mid]
+        })
+    };
+
+    (arc_length_days, n_nights, median_inter_night_dt_days)
+}
+
 #[allow(clippy::type_complexity)]
 fn build_branch_rows(
     branch_collection: &BranchCollection,
+    obs_index: &HashMap<i64, (i64, f64)>,
 ) -> (
     Vec<BranchRow>,
     Vec<KfBankRow>,
@@ -257,6 +324,9 @@ fn build_branch_rows(
     for branch in &branch_collection.branches {
         let branch_id = branch.branch_id as i64;
 
+        let (arc_length_days, n_nights, median_inter_night_dt_days) =
+            compute_obs_stats(branch.bank.track_ids(), obs_index);
+
         branch_rows.push(BranchRow {
             branch_id,
             lineage_id: branch.lineage_id as i64,
@@ -268,6 +338,9 @@ fn build_branch_rows(
             cumulative_llr: branch.cumulative_llr,
             lineage_designation: branch.lineage_designation.to_string(),
             designation: branch.designation().to_string(),
+            arc_length_days,
+            n_nights,
+            median_inter_night_dt_days,
         });
 
         let bank_snapshot = branch.bank.to_snapshot();
@@ -364,7 +437,10 @@ fn create_tables(transaction: &mut postgres::Transaction<'_>) -> Result<(), post
             n_real_updates BIGINT NOT NULL,
             cumulative_llr DOUBLE PRECISION NOT NULL,
             lineage_designation TEXT NOT NULL,
-            designation TEXT NOT NULL
+            designation TEXT NOT NULL,
+            arc_length_days DOUBLE PRECISION NOT NULL,
+            n_nights BIGINT NOT NULL,
+            median_inter_night_dt_days DOUBLE PRECISION
         );
 
         CREATE TABLE IF NOT EXISTS kf_bank (
@@ -458,6 +534,9 @@ fn create_tables(transaction: &mut postgres::Transaction<'_>) -> Result<(), post
         ALTER TABLE archived_trajectories ADD COLUMN IF NOT EXISTS dynamic_family TEXT NOT NULL DEFAULT 'Unknown';
         ALTER TABLE archived_trajectories ADD COLUMN IF NOT EXISTS semi_major_axis DOUBLE PRECISION NOT NULL DEFAULT 0;
         ALTER TABLE archived_trajectories ADD COLUMN IF NOT EXISTS eccentricity DOUBLE PRECISION NOT NULL DEFAULT 0;
+        ALTER TABLE branches ADD COLUMN IF NOT EXISTS arc_length_days DOUBLE PRECISION NOT NULL DEFAULT 0;
+        ALTER TABLE branches ADD COLUMN IF NOT EXISTS n_nights BIGINT NOT NULL DEFAULT 0;
+        ALTER TABLE branches ADD COLUMN IF NOT EXISTS median_inter_night_dt_days DOUBLE PRECISION;
 
         -- Same rationale as above: a DB created before `observations` and
         -- the FK on branch_observations.obs_id existed needs the constraint
@@ -520,7 +599,8 @@ fn copy_branches(
     let sink = transaction.copy_in(
         "COPY branches (branch_id, lineage_id, parent_branch_id, ancestor_at_scan_horizon, \
          ancestor_creation_step, last_real_update_step, n_real_updates, cumulative_llr, \
-         lineage_designation, designation) FROM STDIN BINARY",
+         lineage_designation, designation, arc_length_days, n_nights, \
+         median_inter_night_dt_days) FROM STDIN BINARY",
     )?;
     let mut writer = BinaryCopyInWriter::new(
         sink,
@@ -535,6 +615,9 @@ fn copy_branches(
             Type::FLOAT8,
             Type::TEXT,
             Type::TEXT,
+            Type::FLOAT8,
+            Type::INT8,
+            Type::FLOAT8,
         ],
     );
     for row in rows {
@@ -549,6 +632,9 @@ fn copy_branches(
             &row.cumulative_llr,
             &row.lineage_designation,
             &row.designation,
+            &row.arc_length_days,
+            &row.n_nights,
+            &row.median_inter_night_dt_days,
         ])?;
         pb.inc(1);
     }

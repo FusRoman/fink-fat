@@ -18,6 +18,9 @@ struct BranchOrbitalRow {
     cumulative_llr: f64,
     n_real_updates: i64,
     dynamic_family: String,
+    arc_length_days: f64,
+    n_nights: i64,
+    median_inter_night_dt_days: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
@@ -29,6 +32,9 @@ struct Branch {
     cumulative_llr: f64,
     n_real_updates: i64,
     family: DynamicalFamily,
+    arc_length_days: f64,
+    n_nights: i64,
+    median_inter_night_dt_days: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
@@ -146,17 +152,22 @@ async fn list_lineages(
                 lineage_id,
                 lineage_designation,
                 {SANITIZED_LLR_EXPR} AS cumulative_llr,
-                n_real_updates
+                n_real_updates,
+                arc_length_days,
+                n_nights,
+                median_inter_night_dt_days
             FROM branches
             WHERE $1::text IS NULL OR lineage_designation ILIKE $1
         ),
         best_branches AS (
-            SELECT DISTINCT ON (lineage_id) lineage_id, branch_id, cumulative_llr, n_real_updates
+            SELECT DISTINCT ON (lineage_id) lineage_id, branch_id, cumulative_llr, n_real_updates,
+                   arc_length_days, n_nights, median_inter_night_dt_days
             FROM sanitized
             ORDER BY lineage_id, cumulative_llr DESC
         ),
         filtered AS (
-            SELECT bb.lineage_id, bb.cumulative_llr, bb.n_real_updates{family_select}
+            SELECT bb.lineage_id, bb.cumulative_llr, bb.n_real_updates,
+                   bb.arc_length_days, bb.n_nights, bb.median_inter_night_dt_days{family_select}
             FROM best_branches bb
             {family_join}
             WHERE {family_predicate}
@@ -188,13 +199,27 @@ async fn list_lineages(
         Some(SortColumn::CumulativeLlr) => ("cumulative_llr", sort_direction.sql()),
         Some(SortColumn::Updates) => ("n_real_updates", sort_direction.sql()),
         Some(SortColumn::Family) => (&family_case_expr, sort_direction.sql()),
+        Some(SortColumn::ArcLength) => ("arc_length_days", sort_direction.sql()),
+        Some(SortColumn::Nights) => ("n_nights", sort_direction.sql()),
+        Some(SortColumn::MedianInterNightDt) => {
+            ("median_inter_night_dt_days", sort_direction.sql())
+        }
         None => ("lineage_id", "ASC"),
+    };
+
+    // Branches with <=1 night have no inter-night gap to sort by (NULL) —
+    // push them to the end regardless of sort direction rather than letting
+    // Postgres's direction-dependent NULL default put them first on DESC.
+    let nulls_suffix = if sort_column == Some(SortColumn::MedianInterNightDt) {
+        " NULLS LAST"
+    } else {
+        ""
     };
 
     let lineage_query = format!(
         "{filtered_cte}
         SELECT lineage_id FROM filtered
-        ORDER BY {order_expr} {dir}
+        ORDER BY {order_expr} {dir}{nulls_suffix}
         LIMIT $3 OFFSET $4"
     );
 
@@ -216,7 +241,8 @@ async fn list_lineages(
     let branches_query = format!(
         "SELECT b.branch_id, b.lineage_id, b.designation, b.lineage_designation,
                 {SANITIZED_LLR_EXPR} AS cumulative_llr, b.n_real_updates,
-                ks.dynamic_family
+                ks.dynamic_family,
+                b.arc_length_days, b.n_nights, b.median_inter_night_dt_days
          FROM branches b
          CROSS JOIN LATERAL (
              SELECT hypothesis_id
@@ -246,6 +272,9 @@ async fn list_lineages(
             cumulative_llr: row.cumulative_llr,
             n_real_updates: row.n_real_updates,
             family: DynamicalFamily::from_label(&row.dynamic_family),
+            arc_length_days: row.arc_length_days,
+            n_nights: row.n_nights,
+            median_inter_night_dt_days: row.median_inter_night_dt_days,
         })
         .collect();
 
@@ -315,8 +344,44 @@ fn TabHeader(
         ""
     };
 
+    let arc_arrow: &'static str = match (sort_column, sort_direction) {
+        (Some(SortColumn::ArcLength), SortDirection::Asc) => "▲",
+        (Some(SortColumn::ArcLength), SortDirection::Desc) => "▼",
+        _ => "⇅",
+    };
+
+    let arc_active_class = if sort_column == Some(SortColumn::ArcLength) {
+        "text-primary"
+    } else {
+        ""
+    };
+
+    let nights_arrow: &'static str = match (sort_column, sort_direction) {
+        (Some(SortColumn::Nights), SortDirection::Asc) => "▲",
+        (Some(SortColumn::Nights), SortDirection::Desc) => "▼",
+        _ => "⇅",
+    };
+
+    let nights_active_class = if sort_column == Some(SortColumn::Nights) {
+        "text-primary"
+    } else {
+        ""
+    };
+
+    let median_dt_arrow: &'static str = match (sort_column, sort_direction) {
+        (Some(SortColumn::MedianInterNightDt), SortDirection::Asc) => "▲",
+        (Some(SortColumn::MedianInterNightDt), SortDirection::Desc) => "▼",
+        _ => "⇅",
+    };
+
+    let median_dt_active_class = if sort_column == Some(SortColumn::MedianInterNightDt) {
+        "text-primary"
+    } else {
+        ""
+    };
+
     rsx! {
-        div { class: "grid grid-cols-5 gap-4 px-4 py-2 text-sm font-semibold opacity-60",
+        div { class: "grid grid-cols-8 gap-4 px-4 py-2 text-sm font-semibold opacity-60",
             span { "Designation" }
             span { "Lineage" }
             span {
@@ -337,7 +402,33 @@ fn TabHeader(
                 "Updates"
                 span { class: "text-xs", "{updates_arrow}" }
             }
+            span {
+                class: "cursor-pointer select-none flex items-center gap-1 hover:text-primary transition-colors {arc_active_class}",
+                onclick: move |_| on_sort.call(SortColumn::ArcLength),
+                "Arc (days)"
+                span { class: "text-xs", "{arc_arrow}" }
+            }
+            span {
+                class: "cursor-pointer select-none flex items-center gap-1 hover:text-primary transition-colors {nights_active_class}",
+                onclick: move |_| on_sort.call(SortColumn::Nights),
+                "Nights"
+                span { class: "text-xs", "{nights_arrow}" }
+            }
+            span {
+                class: "cursor-pointer select-none flex items-center gap-1 hover:text-primary transition-colors {median_dt_active_class}",
+                onclick: move |_| on_sort.call(SortColumn::MedianInterNightDt),
+                "Median Δt (days)"
+                span { class: "text-xs", "{median_dt_arrow}" }
+            }
         }
+    }
+}
+
+/// "—" for branches with <=1 night (no inter-night gap to measure).
+fn format_median_dt(days: Option<f64>) -> String {
+    match days {
+        Some(v) => format!("{v:.1}"),
+        None => "—".to_string(),
     }
 }
 
@@ -352,7 +443,7 @@ fn LineageTable(groups: Vec<LineageGroup>) -> Element {
                     class: "collapse collapse-arrow bg-base-100 border border-base-300",
 
                     div { class: "collapse-title",
-                        div { class: "grid grid-cols-5 gap-4 items-center",
+                        div { class: "grid grid-cols-8 gap-4 items-center",
                             span { class: "font-medium", "{group.best.designation}" }
                             span {
                                 Link {
@@ -372,6 +463,9 @@ fn LineageTable(groups: Vec<LineageGroup>) -> Element {
                             }
                             span { "{group.best.cumulative_llr:.2}" }
                             span { "{group.best.n_real_updates}" }
+                            span { "{group.best.arc_length_days:.1}" }
+                            span { "{group.best.n_nights}" }
+                            span { "{format_median_dt(group.best.median_inter_night_dt_days)}" }
                         }
                     }
 
@@ -385,7 +479,7 @@ fn LineageTable(groups: Vec<LineageGroup>) -> Element {
                                 for branch in &group.others {
                                     div {
                                         key: "{branch.branch_id}",
-                                        class: "grid grid-cols-5 gap-4 items-center px-2 py-1 text-sm hover:bg-base-200 rounded",
+                                        class: "grid grid-cols-8 gap-4 items-center px-2 py-1 text-sm hover:bg-base-200 rounded",
                                         span { "{branch.designation}" }
                                         span { "{branch.lineage_designation}" }
                                         span {
@@ -397,6 +491,9 @@ fn LineageTable(groups: Vec<LineageGroup>) -> Element {
                                         }
                                         span { "{branch.cumulative_llr:.2}" }
                                         span { "{branch.n_real_updates}" }
+                                        span { "{branch.arc_length_days:.1}" }
+                                        span { "{branch.n_nights}" }
+                                        span { "{format_median_dt(branch.median_inter_night_dt_days)}" }
                                     }
                                 }
                             }

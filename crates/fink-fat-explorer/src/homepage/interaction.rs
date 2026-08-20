@@ -6,6 +6,9 @@ pub enum SortColumn {
     CumulativeLlr,
     Updates,
     Family,
+    ArcLength,
+    Nights,
+    MedianInterNightDt,
 }
 
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
