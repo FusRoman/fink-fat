@@ -22,6 +22,7 @@ use fink_fat_engine::topocentric_kf::{
 use indicatif::{ProgressBar, ProgressStyle};
 use nalgebra::Vector3;
 use postgres::{Client, NoTls, binary_copy::BinaryCopyInWriter, types::Type};
+use rayon::prelude::*;
 
 use crate::converter::{
     family::{DynamicalFamily, classify_from_attributable_state},
@@ -634,6 +635,29 @@ fn copy_hypotheses(
     Ok(())
 }
 
+/// Classify every row's dynamical family in parallel with rayon, ahead of
+/// the (necessarily sequential) `writer.write()` loop over the single
+/// shared `Transaction` — see `copy_kf_state`/`copy_archived_trajectories`.
+fn classify_rows_in_parallel(fields: &[&KfStateFields]) -> Vec<(DynamicalFamily, f64, f64)> {
+    fields
+        .par_iter()
+        .map(|f| {
+            classify_from_attributable_state(
+                f.ra,
+                f.dec,
+                f.ra_dot,
+                f.dec_dot,
+                f.rho,
+                f.rho_dot,
+                f.epoch,
+                Vector3::new(f.r_obs_x, f.r_obs_y, f.r_obs_z),
+                Vector3::new(f.v_obs_x, f.v_obs_y, f.v_obs_z),
+            )
+            .unwrap_or((DynamicalFamily::Unknown, 0., 0.))
+        })
+        .collect()
+}
+
 fn copy_kf_state(
     transaction: &mut postgres::Transaction<'_>,
     rows: &[KfStateRow],
@@ -651,21 +675,10 @@ fn copy_kf_state(
     types.push(Type::FLOAT8);
 
     let mut writer = BinaryCopyInWriter::new(sink, &types);
-    for row in rows {
+    let field_refs: Vec<&KfStateFields> = rows.iter().map(|row| &row.fields).collect();
+    let classifications = classify_rows_in_parallel(&field_refs);
+    for (row, (dyn_family, semi_major, eccentricity)) in rows.iter().zip(classifications) {
         let f = &row.fields;
-
-        let (dyn_family, semi_major, eccentricity) = classify_from_attributable_state(
-            f.ra,
-            f.dec,
-            f.ra_dot,
-            f.dec_dot,
-            f.rho,
-            f.rho_dot,
-            f.epoch,
-            Vector3::new(f.r_obs_x, f.r_obs_y, f.r_obs_z),
-            Vector3::new(f.v_obs_x, f.v_obs_y, f.v_obs_z),
-        )
-        .unwrap_or((DynamicalFamily::Unknown, 0., 0.));
 
         writer.write(&[
             &row.hypothesis_id,
@@ -727,21 +740,10 @@ fn copy_archived_trajectories(
     types.push(Type::FLOAT8);
     types.push(Type::FLOAT8);
     let mut writer = BinaryCopyInWriter::new(sink, &types);
-    for row in rows {
+    let field_refs: Vec<&KfStateFields> = rows.iter().map(|row| &row.kf_state).collect();
+    let classifications = classify_rows_in_parallel(&field_refs);
+    for (row, (dyn_family, semi_major, eccentricity)) in rows.iter().zip(classifications) {
         let f = &row.kf_state;
-
-        let (dyn_family, semi_major, eccentricity) = classify_from_attributable_state(
-            f.ra,
-            f.dec,
-            f.ra_dot,
-            f.dec_dot,
-            f.rho,
-            f.rho_dot,
-            f.epoch,
-            Vector3::new(f.r_obs_x, f.r_obs_y, f.r_obs_z),
-            Vector3::new(f.v_obs_x, f.v_obs_y, f.v_obs_z),
-        )
-        .unwrap_or((DynamicalFamily::Unknown, 0., 0.));
 
         writer.write(&[
             &row.designation,

@@ -75,15 +75,13 @@ thiserror = { workspace = true }
 postgres = { workspace = true }
 nalgebra = { workspace = true }
 outfit = { workspace = true }
+rayon = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = "2.0.16"
 tempfile = { workspace = true }
 fink-fat-eval = { path = "crates/fink-fat-eval" }
 husky-rs = "0.4.0"
-
-[patch.crates-io]
-arrayref = { git = "https://github.com/droundy/arrayref", rev = "f8d0299" }
 
 [profile.release]
 lto = "thin"
