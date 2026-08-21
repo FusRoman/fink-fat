@@ -1,5 +1,42 @@
+use crate::format_epoch::iso_utc;
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
+
+pub enum Survey {
+    ZTF,
+    LSST,
+}
+
+impl Survey {
+    pub fn get_link(&self) -> &'static str {
+        match self {
+            Survey::ZTF => "https://ztf.fink-portal.org/",
+            Survey::LSST => "https://lsst.fink-portal.org/",
+        }
+    }
+
+    pub fn from_code_obs(code_obs: &str) -> Option<Self> {
+        match code_obs {
+            "X05" => Some(Survey::LSST),
+            "I41" => Some(Survey::ZTF),
+            _ => None,
+        }
+    }
+}
+
+enum ObsLink {
+    Valid(String),
+    Unknown(String),
+}
+
+impl ObservationRow {
+    fn link(&self) -> ObsLink {
+        match Survey::from_code_obs(&self.mpc_code_obs) {
+            Some(s) => ObsLink::Valid(format!("{}{}", s.get_link(), self.object_id)),
+            None => ObsLink::Unknown(self.mpc_code_obs.clone()),
+        }
+    }
+}
 
 /// One real observation belonging to a lineage's best branch, in track order.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -97,6 +134,8 @@ pub async fn get_lineage_observations(
 /// position, epoch, sky position with errors, and photometry.
 #[component]
 pub fn ObservationsTable(observations: Vec<ObservationRow>) -> Element {
+    let mut show_utc = use_signal(|| true);
+
     rsx! {
         div { class: "card bg-base-100 shadow-sm",
             div { class: "card-body",
@@ -108,7 +147,24 @@ pub fn ObservationsTable(observations: Vec<ObservationRow>) -> Element {
                             tr {
                                 th { "#" }
                                 th { "ObjectId" }
-                                th { "MJD (TT)" }
+                                th {
+                                    label { class: "flex items-center gap-2 cursor-pointer normal-case font-normal",
+                                        span {
+                                            class: if !show_utc() { "font-bold" } else { "text-base-content/50" },
+                                            "MJD (TT)"
+                                        }
+                                        input {
+                                            r#type: "checkbox",
+                                            class: "toggle toggle-sm",
+                                            checked: show_utc(),
+                                            onchange: move |evt| show_utc.set(evt.checked()),
+                                        }
+                                        span {
+                                            class: if show_utc() { "font-bold" } else { "text-base-content/50" },
+                                            "ISO (UTC)"
+                                        }
+                                    }
+                                }
                                 th { "RA (deg)" }
                                 th { "Dec (deg)" }
                                 th { "Magnitude" }
@@ -121,15 +177,30 @@ pub fn ObservationsTable(observations: Vec<ObservationRow>) -> Element {
                                 tr { key: "{obs.id}",
                                     td { "{obs.position}" }
                                     td {
-                                        a {
-                                            href: "https://ztf.fink-portal.org/{obs.object_id}",
-                                            target: "_blank",
-                                            rel: "noopener noreferrer",
-                                            class: "link link-secondary",
-                                            "{obs.object_id}"
+                                        match obs.link() {
+                                            ObsLink::Valid(href) => rsx! {
+                                                a {
+                                                    href: "{href}",
+                                                    target: "_blank",
+                                                    rel: "noopener noreferrer",
+                                                    class: "link link-secondary",
+                                                    "{obs.object_id}"
+                                                }
+                                            },
+                                            ObsLink::Unknown(code) => rsx! {
+                                                span { class: "text-error", title: "Unknown observatory code: {code}",
+                                                    "{obs.object_id} (unknown observatory)"
+                                                }
+                                            },
                                         }
                                     }
-                                    td { "{obs.mjd_tt:.6}" }
+                                    td {
+                                        if show_utc() {
+                                            "{iso_utc(obs.mjd_tt)}"
+                                        } else {
+                                            "{obs.mjd_tt:.5}"
+                                        }
+                                    }
                                     td {
                                         "{obs.ra.to_degrees():.6} ± {(obs.ra_err.to_degrees() * 3600.0):.3}\""
                                     }

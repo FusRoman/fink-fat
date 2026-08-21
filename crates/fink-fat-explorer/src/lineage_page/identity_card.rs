@@ -210,7 +210,7 @@ pub fn IdentityCard(summary: Option<LineageSummary>) -> Element {
                         lineage_id: summary.lineage_designation.clone(),
                     },
                     class: "btn btn-sm btn-primary",
-                    "Fit orbit (n-body)"
+                    "Fit orbit"
                 }
             }
         }

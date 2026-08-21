@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 
-use crate::format_epoch::format_epoch;
+use crate::format_epoch::{format_epoch, iso_utc};
 use crate::orbit_fit::{
     history::get_orbit_fit_history, KeplerianView, ObsSelectionView, OrbitDelta, OrbitFitResult,
 };
@@ -199,6 +199,8 @@ fn MetricsCard(result: OrbitFitResult) -> Element {
 
 #[component]
 fn ResidualsTable(residuals: Vec<crate::orbit_fit::ObsResidual>) -> Element {
+    let mut show_utc = use_signal(|| true);
+
     rsx! {
         div { class: "card bg-base-100 shadow-sm",
             div { class: "card-body",
@@ -207,7 +209,24 @@ fn ResidualsTable(residuals: Vec<crate::orbit_fit::ObsResidual>) -> Element {
                     table { class: "table table-zebra table-pin-rows table-sm",
                         thead {
                             tr {
-                                th { "MJD (TT)" }
+                                th {
+                                    label { class: "flex items-center gap-2 cursor-pointer normal-case font-normal",
+                                        span {
+                                            class: if !show_utc() { "font-bold" } else { "text-base-content/50" },
+                                            "MJD (TT)"
+                                        }
+                                        input {
+                                            r#type: "checkbox",
+                                            class: "toggle toggle-sm",
+                                            checked: show_utc(),
+                                            onchange: move |evt| show_utc.set(evt.checked()),
+                                        }
+                                        span {
+                                            class: if show_utc() { "font-bold" } else { "text-base-content/50" },
+                                            "ISO (UTC)"
+                                        }
+                                    }
+                                }
                                 th { "Δα cos δ (arcsec)" }
                                 th { "Δδ (arcsec)" }
                                 th { "χ" }
@@ -217,7 +236,13 @@ fn ResidualsTable(residuals: Vec<crate::orbit_fit::ObsResidual>) -> Element {
                         tbody {
                             for r in residuals {
                                 tr { key: "{r.obs_id}",
-                                    td { "{r.mjd_tt:.6}" }
+                                    td {
+                                        if show_utc() {
+                                            "{iso_utc(r.mjd_tt)}"
+                                        } else {
+                                            "{r.mjd_tt:.5}"
+                                        }
+                                    }
                                     td { "{r.residual_ra_arcsec:.4}" }
                                     td { "{r.residual_dec_arcsec:.4}" }
                                     td { "{r.chi:.3}" }

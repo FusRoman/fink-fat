@@ -4,6 +4,7 @@ mod fit_result;
 mod help_tooltip;
 mod residuals_plot;
 mod selectable_observations_table;
+mod x_axis;
 
 use std::collections::HashSet;
 
