@@ -1,3 +1,4 @@
+mod alert_cutouts;
 mod hypotheses_plot;
 mod identity_card;
 mod kf_replay;
@@ -10,6 +11,7 @@ mod x_axis;
 
 use dioxus::prelude::*;
 
+use alert_cutouts::AlertCarousel;
 use identity_card::{get_lineage_summary, IdentityCard};
 use kf_replay::{replay_kalman_branch, HypothesisSnapshot, KfStep};
 use observations_table::{get_lineage_observations, ObservationRow, ObservationsTable};
@@ -104,6 +106,7 @@ pub fn LineagePage(lineage_id: String) -> Element {
 
             match &*observations_resource.read() {
                 Some(Ok(_)) => rsx! {
+                    AlertCarousel { observations: observations.clone() }
                     ObservationsTable { observations }
                 },
                 Some(Err(e)) => rsx! {

@@ -1,40 +1,11 @@
 use crate::format_epoch::iso_utc;
+use crate::survey::{observation_link, ObsLink};
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-pub enum Survey {
-    ZTF,
-    LSST,
-}
-
-impl Survey {
-    pub fn get_link(&self) -> &'static str {
-        match self {
-            Survey::ZTF => "https://ztf.fink-portal.org/",
-            Survey::LSST => "https://lsst.fink-portal.org/",
-        }
-    }
-
-    pub fn from_code_obs(code_obs: &str) -> Option<Self> {
-        match code_obs {
-            "X05" => Some(Survey::LSST),
-            "I41" => Some(Survey::ZTF),
-            _ => None,
-        }
-    }
-}
-
-enum ObsLink {
-    Valid(String),
-    Unknown(String),
-}
-
 impl ObservationRow {
     fn link(&self) -> ObsLink {
-        match Survey::from_code_obs(&self.mpc_code_obs) {
-            Some(s) => ObsLink::Valid(format!("{}{}", s.get_link(), self.object_id)),
-            None => ObsLink::Unknown(self.mpc_code_obs.clone()),
-        }
+        observation_link(&self.object_id, &self.mpc_code_obs)
     }
 }
 

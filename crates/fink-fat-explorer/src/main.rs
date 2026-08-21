@@ -3,6 +3,7 @@ pub mod homepage;
 pub mod lineage_page;
 pub mod orbit_fit;
 pub mod orbit_fit_page;
+pub mod survey;
 
 use dioxus::prelude::*;
 
@@ -40,6 +41,19 @@ async fn get_pool() -> &'static PgPool {
                 .await
                 .expect("Failed to connect to Postgres")
         })
+        .await
+}
+
+/// Shared client for outbound calls to the Fink broker's REST API (alert
+/// cutouts, per-object source metadata) — reused across requests rather than
+/// building a new one per call, per `reqwest`'s own recommendation.
+#[cfg(feature = "server")]
+static HTTP_CLIENT: OnceCell<reqwest::Client> = OnceCell::const_new();
+
+#[cfg(feature = "server")]
+async fn get_http_client() -> &'static reqwest::Client {
+    HTTP_CLIENT
+        .get_or_init(|| async { reqwest::Client::new() })
         .await
 }
 
