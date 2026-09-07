@@ -26,21 +26,7 @@ use selectable_observations_table::SelectableObservationsTable;
 /// Milliseconds between polls of the running fit job's status.
 const POLL_INTERVAL_MS: u64 = 700;
 
-async fn sleep_ms(ms: u64) {
-    #[cfg(target_arch = "wasm32")]
-    {
-        gloo_timers::future::TimeoutFuture::new(ms as u32).await;
-    }
-    // `tokio` is only pulled in behind the `server` feature (it doesn't
-    // build for wasm32) — this branch only exists for native builds that
-    // also enable `server` (i.e. `dx serve` running the SSR/liveview
-    // server). A native build with neither `wasm32` nor `server" has no
-    // client to poll from, so there's nothing useful to sleep for.
-    #[cfg(all(not(target_arch = "wasm32"), feature = "server"))]
-    {
-        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
-    }
-}
+use crate::sleep_ms;
 
 /// Page for fitting a lineage's orbit with `outfit`'s n-body least-squares
 /// pipeline instead of the production Kalman filter: pick which

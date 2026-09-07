@@ -522,6 +522,21 @@ fn create_tables(transaction: &mut postgres::Transaction<'_>) -> Result<(), post
         CREATE INDEX IF NOT EXISTS idx_hypotheses_branch_log_weight
             ON hypotheses (branch_id, log_weight DESC);
 
+        -- The explorer's lineage page resolves a lineage by its designation
+        -- (`WHERE lineage_designation = $1`) from four different queries per
+        -- page load; without this each one is a full scan of `branches`.
+        CREATE INDEX IF NOT EXISTS idx_branches_lineage_designation
+            ON branches (lineage_designation);
+
+        CREATE INDEX IF NOT EXISTS idx_branches_lineage_id
+            ON branches (lineage_id);
+
+        -- Postgres does not index foreign-key columns on its own, and this one
+        -- backs both `JOIN observations o ON o.id = bo.obs_id` and the FK
+        -- checks that TRUNCATE ... CASCADE performs.
+        CREATE INDEX IF NOT EXISTS idx_branch_observations_obs_id
+            ON branch_observations (obs_id);
+
         -- Columns added after the initial rollout: CREATE TABLE IF NOT EXISTS
         -- above is a no-op against a pre-existing table, so a DB created
         -- before these columns existed needs them backfilled explicitly.

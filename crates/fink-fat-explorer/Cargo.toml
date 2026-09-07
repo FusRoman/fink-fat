@@ -39,6 +39,9 @@ tokio = { version = "1.53.1", features = [
     "macros",
     "time",
 ], optional = true }
+# The homepage snapshot rebuilds in a detached task, so a failed rebuild has
+# no request to report itself through — it needs a log line.
+tracing = { workspace = true, optional = true }
 web-sys = { version = "0.3.104", features = ["console"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -61,5 +64,6 @@ server = [
     "dep:outfit",
     "dep:photom",
     "dep:rayon",
-    "dep:reqwest"
+    "dep:reqwest",
+    "dep:tracing"
 ]

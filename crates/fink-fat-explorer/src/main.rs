@@ -24,6 +24,28 @@ use crate::homepage::Home;
 use crate::lineage_page::LineagePage;
 use crate::orbit_fit_page::OrbitFitPage;
 
+/// Platform-agnostic async sleep, for the app's polling loops (orbit fit job
+/// status, homepage snapshot warm-up, search debounce).
+pub async fn sleep_ms(ms: u64) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        gloo_timers::future::TimeoutFuture::new(ms as u32).await;
+    }
+    // `tokio` is only pulled in behind the `server` feature (it doesn't
+    // build for wasm32) — this branch only exists for native builds that
+    // also enable `server` (i.e. `dx serve` running the SSR/liveview
+    // server). A native build with neither `wasm32` nor `server` has no
+    // client to poll from, so there's nothing useful to sleep for.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "server"))]
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+    }
+    #[cfg(all(not(target_arch = "wasm32"), not(feature = "server")))]
+    {
+        let _ = ms;
+    }
+}
+
 #[cfg(feature = "server")]
 static DB_POOL: OnceCell<PgPool> = OnceCell::const_new();
 
@@ -35,8 +57,12 @@ async fn get_pool() -> &'static PgPool {
 
             let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
 
+            // The homepage snapshot rebuild can hold a connection for a long
+            // time on a large instance; five would let it starve the lineage
+            // page, which fires three concurrent queries per mount.
             PgPoolOptions::new()
-                .max_connections(5)
+                .max_connections(16)
+                .acquire_timeout(std::time::Duration::from_secs(30))
                 .connect(&database_url)
                 .await
                 .expect("Failed to connect to Postgres")

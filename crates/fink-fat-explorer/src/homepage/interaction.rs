@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SortColumn {
     CumulativeLlr,
     Updates,
@@ -11,7 +11,34 @@ pub enum SortColumn {
     MedianInterNightDt,
 }
 
-#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+impl SortColumn {
+    /// Every variant, in declaration order. The homepage snapshot builds one
+    /// pre-sorted permutation per entry of this array, indexed by
+    /// [`Self::index`], so the two must stay in sync — hence the explicit
+    /// listing here rather than a hand-written count somewhere else.
+    pub const ALL: [SortColumn; 6] = [
+        SortColumn::CumulativeLlr,
+        SortColumn::Updates,
+        SortColumn::Family,
+        SortColumn::ArcLength,
+        SortColumn::Nights,
+        SortColumn::MedianInterNightDt,
+    ];
+
+    /// Position of this column in [`Self::ALL`].
+    pub fn index(self) -> usize {
+        match self {
+            SortColumn::CumulativeLlr => 0,
+            SortColumn::Updates => 1,
+            SortColumn::Family => 2,
+            SortColumn::ArcLength => 3,
+            SortColumn::Nights => 4,
+            SortColumn::MedianInterNightDt => 5,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SortDirection {
     Asc,
     Desc,
@@ -22,13 +49,6 @@ impl SortDirection {
         match self {
             SortDirection::Asc => SortDirection::Desc,
             SortDirection::Desc => SortDirection::Asc,
-        }
-    }
-
-    pub fn sql(self) -> &'static str {
-        match self {
-            SortDirection::Asc => "ASC",
-            SortDirection::Desc => "DESC",
         }
     }
 }

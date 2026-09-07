@@ -6,23 +6,6 @@ use crate::homepage::family::DynamicalFamily;
 use crate::homepage::interaction::{Pagination, SortColumn, SortDirection, PAGE_SIZE};
 use crate::Route;
 
-/// Columns needed to fetch a page of branches (best + others) — `branches`
-/// joined directly to `kf_state` (via each branch's best hypothesis) to pick
-/// up the precomputed `dynamic_family` column in the same round-trip.
-#[cfg_attr(feature = "server", derive(sqlx::FromRow))]
-struct BranchOrbitalRow {
-    branch_id: i64,
-    lineage_id: i64,
-    designation: String,
-    lineage_designation: String,
-    cumulative_llr: f64,
-    n_real_updates: i64,
-    dynamic_family: String,
-    arc_length_days: f64,
-    n_nights: i64,
-    median_inter_night_dt_days: Option<f64>,
-}
-
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
 struct Branch {
     branch_id: i64,
@@ -44,20 +27,21 @@ struct LineageGroup {
     others: Vec<Branch>,
 }
 
-/// SQL fragment that neutralizes non-finite floats (NaN/±Infinity) to 0.0.
-/// Applied everywhere cumulative_llr is used for ordering — Postgres treats
-/// NaN as *larger* than any other float (including Infinity) when sorting,
-/// so leaving it unsanitized silently corrupts both "best per lineage"
-/// selection and column sorting.
-const SANITIZED_LLR_EXPR: &str = "
-    CASE
-        WHEN cumulative_llr = 'NaN'::double precision THEN 0
-        WHEN cumulative_llr = 'Infinity'::double precision THEN 0
-        WHEN cumulative_llr = '-Infinity'::double precision THEN 0
-        ELSE cumulative_llr
-    END
-";
+/// One page of the listing, plus the total number of lineages matching the
+/// current filters (which the pagination footer needs).
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
+struct LineagePage {
+    groups: Vec<LineageGroup>,
+    total_lineages: i64,
+}
 
+/// Served entirely from the in-RAM homepage snapshot — see
+/// [`crate::homepage::snapshot`]. Filtering by family used to force a
+/// `LATERAL` best-hypothesis lookup plus a `kf_state` primary-key probe for
+/// every branch in the database, twice per call (count, then page); it is now
+/// a scan over a few hundred thousand pre-parsed enum values.
+///
+/// `None` means the snapshot has not finished building yet; the caller polls.
 #[server]
 async fn list_lineages(
     page: i64,
@@ -65,241 +49,71 @@ async fn list_lineages(
     sort_direction: SortDirection,
     search_query: String,
     hidden_families: Vec<DynamicalFamily>,
-) -> Result<(Vec<LineageGroup>, i64), ServerFnError> {
-    use crate::{
-        get_pool,
-        homepage::{
-            family,
-            interaction::{SortColumn, PAGE_SIZE},
-        },
-    };
-    use std::collections::HashMap;
-
-    let pool = get_pool().await;
-
-    // Empty search -> match everything (NULL pattern), otherwise a
-    // case-insensitive substring match on lineage_designation. `%` is
-    // appended on both sides here in Rust rather than in SQL, so the
-    // user's raw text stays a plain bound value.
-    let pattern: Option<String> = {
-        let trimmed = search_query.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(format!("%{trimmed}%"))
-        }
+) -> Result<Option<LineagePage>, ServerFnError> {
+    use crate::homepage::{
+        interaction::PAGE_SIZE,
+        snapshot::{self, PageQuery},
     };
 
-    // NULL (rather than an empty array) when nothing is hidden, so the
-    // predicate below short-circuits instead of testing every row.
-    let hidden_labels: Option<Vec<String>> = if hidden_families.is_empty() {
-        None
-    } else {
-        Some(
-            hidden_families
-                .iter()
-                .map(|f| f.label().to_string())
-                .collect(),
-        )
+    let Some(snap) = snapshot::snapshot().await else {
+        return Ok(None);
     };
 
-    let offset = page * PAGE_SIZE;
+    // Lowercased once here rather than per candidate: the snapshot stores each
+    // lineage designation pre-lowercased, so this reproduces the old
+    // `ILIKE '%…%'` as a plain substring test.
+    let search = search_query.trim().to_lowercase();
 
-    // `dynamic_family` lives on kf_state — reached via each lineage's best
-    // branch's best hypothesis — not on `branches`, so both filtering and
-    // sorting by family need an extra lateral join. It is only paid for when
-    // actually needed; the default listing stays a pure `branches` query.
-    let needs_family = hidden_labels.is_some() || sort_column == Some(SortColumn::Family);
+    let (page_indices, total_lineages) = snap.page(&PageQuery {
+        search: &search,
+        hidden_families: &hidden_families,
+        sort_column,
+        descending: sort_direction == SortDirection::Desc,
+        offset: (page * PAGE_SIZE).max(0) as usize,
+        limit: PAGE_SIZE as usize,
+    });
 
-    let family_select = if needs_family {
-        ", ks.dynamic_family"
-    } else {
-        ""
+    let to_branch = |row: &snapshot::BranchRow| Branch {
+        branch_id: row.branch_id,
+        lineage_id: row.lineage_id,
+        designation: row.designation.to_string(),
+        lineage_designation: row.lineage_designation.to_string(),
+        cumulative_llr: row.cumulative_llr,
+        n_real_updates: row.n_real_updates,
+        family: row.family,
+        arc_length_days: row.arc_length_days,
+        n_nights: row.n_nights,
+        median_inter_night_dt_days: row.median_inter_night_dt_days,
     };
 
-    let family_join = if needs_family {
-        "CROSS JOIN LATERAL (
-            SELECT hypothesis_id
-            FROM hypotheses h
-            WHERE h.branch_id = bb.branch_id
-            ORDER BY h.log_weight DESC
-            LIMIT 1
-        ) bh
-        JOIN kf_state ks ON ks.hypothesis_id = bh.hypothesis_id"
-    } else {
-        ""
-    };
-
-    // Both shapes reference $2 so the parameter numbering is identical either
-    // way — when there is no join to filter against, the bound value is NULL
-    // and the predicate is trivially true.
-    let family_predicate = if needs_family {
-        "($2::text[] IS NULL OR ks.dynamic_family <> ALL($2))"
-    } else {
-        "$2::text[] IS NULL"
-    };
-
-    // The family filter applies to each lineage's *best* branch — the one
-    // whose badge the collapsed row shows — so it has to be applied after
-    // `DISTINCT ON` has picked that branch, not inside `sanitized`.
-    // SAFE: every interpolated fragment comes from a closed match over
-    // SortColumn/SortDirection or the booleans above — never raw user input.
-    // `pattern` and `hidden_labels` stay bound parameters ($1, $2).
-    let filtered_cte = format!(
-        "WITH sanitized AS (
-            SELECT
-                branch_id,
-                lineage_id,
-                lineage_designation,
-                {SANITIZED_LLR_EXPR} AS cumulative_llr,
-                n_real_updates,
-                arc_length_days,
-                n_nights,
-                median_inter_night_dt_days
-            FROM branches
-            WHERE $1::text IS NULL OR lineage_designation ILIKE $1
-        ),
-        best_branches AS (
-            SELECT DISTINCT ON (lineage_id) lineage_id, branch_id, cumulative_llr, n_real_updates,
-                   arc_length_days, n_nights, median_inter_night_dt_days
-            FROM sanitized
-            ORDER BY lineage_id, cumulative_llr DESC
-        ),
-        filtered AS (
-            SELECT bb.lineage_id, bb.cumulative_llr, bb.n_real_updates,
-                   bb.arc_length_days, bb.n_nights, bb.median_inter_night_dt_days{family_select}
-            FROM best_branches bb
-            {family_join}
-            WHERE {family_predicate}
-        )"
-    );
-
-    // Counted off the same CTE as the page below: a count that ignored the
-    // family filter would desynchronize the pagination from its contents.
-    let count_query = format!("{filtered_cte} SELECT COUNT(*) FROM filtered");
-
-    let total_lineages: (i64,) = sqlx::query_as(sqlx::AssertSqlSafe(count_query))
-        .bind(&pattern)
-        .bind(&hidden_labels)
-        .fetch_one(pool)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-    // Ranks labels by heliocentric distance rather than alphabetically.
-    let family_case_expr = {
-        let mut expr = String::from("CASE dynamic_family");
-        for (i, label) in family::ORDERED_LABELS.iter().enumerate() {
-            expr.push_str(&format!(" WHEN '{label}' THEN {i}"));
-        }
-        expr.push_str(&format!(" ELSE {} END", family::ORDERED_LABELS.len()));
-        expr
-    };
-
-    let (order_expr, dir): (&str, &str) = match sort_column {
-        Some(SortColumn::CumulativeLlr) => ("cumulative_llr", sort_direction.sql()),
-        Some(SortColumn::Updates) => ("n_real_updates", sort_direction.sql()),
-        Some(SortColumn::Family) => (&family_case_expr, sort_direction.sql()),
-        Some(SortColumn::ArcLength) => ("arc_length_days", sort_direction.sql()),
-        Some(SortColumn::Nights) => ("n_nights", sort_direction.sql()),
-        Some(SortColumn::MedianInterNightDt) => {
-            ("median_inter_night_dt_days", sort_direction.sql())
-        }
-        None => ("lineage_id", "ASC"),
-    };
-
-    // Branches with <=1 night have no inter-night gap to sort by (NULL) —
-    // push them to the end regardless of sort direction rather than letting
-    // Postgres's direction-dependent NULL default put them first on DESC.
-    let nulls_suffix = if sort_column == Some(SortColumn::MedianInterNightDt) {
-        " NULLS LAST"
-    } else {
-        ""
-    };
-
-    let lineage_query = format!(
-        "{filtered_cte}
-        SELECT lineage_id FROM filtered
-        ORDER BY {order_expr} {dir}{nulls_suffix}
-        LIMIT $3 OFFSET $4"
-    );
-
-    let page_lineage_ids: Vec<(i64,)> = sqlx::query_as(sqlx::AssertSqlSafe(lineage_query))
-        .bind(&pattern)
-        .bind(&hidden_labels)
-        .bind(PAGE_SIZE)
-        .bind(offset)
-        .fetch_all(pool)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-    let ordered_ids: Vec<i64> = page_lineage_ids.into_iter().map(|(id,)| id).collect();
-
-    if ordered_ids.is_empty() {
-        return Ok((Vec::new(), total_lineages.0));
-    }
-
-    let branches_query = format!(
-        "SELECT b.branch_id, b.lineage_id, b.designation, b.lineage_designation,
-                {SANITIZED_LLR_EXPR} AS cumulative_llr, b.n_real_updates,
-                ks.dynamic_family,
-                b.arc_length_days, b.n_nights, b.median_inter_night_dt_days
-         FROM branches b
-         CROSS JOIN LATERAL (
-             SELECT hypothesis_id
-             FROM hypotheses h
-             WHERE h.branch_id = b.branch_id
-             ORDER BY h.log_weight DESC
-             LIMIT 1
-         ) bh
-         JOIN kf_state ks ON ks.hypothesis_id = bh.hypothesis_id
-         WHERE b.lineage_id = ANY($1)
-         ORDER BY b.lineage_id, cumulative_llr DESC"
-    );
-
-    let branch_rows: Vec<BranchOrbitalRow> = sqlx::query_as(sqlx::AssertSqlSafe(branches_query))
-        .bind(&ordered_ids)
-        .fetch_all(pool)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-    let branches: Vec<Branch> = branch_rows
+    let groups: Vec<LineageGroup> = page_indices
         .into_iter()
-        .map(|row| Branch {
-            branch_id: row.branch_id,
-            lineage_id: row.lineage_id,
-            designation: row.designation,
-            lineage_designation: row.lineage_designation,
-            cumulative_llr: row.cumulative_llr,
-            n_real_updates: row.n_real_updates,
-            family: DynamicalFamily::from_label(&row.dynamic_family),
-            arc_length_days: row.arc_length_days,
-            n_nights: row.n_nights,
-            median_inter_night_dt_days: row.median_inter_night_dt_days,
+        .map(|idx| {
+            let entry = &snap.lineages[idx as usize];
+            LineageGroup {
+                lineage_id: entry.lineage_id,
+                best: to_branch(&snap.branches[entry.best as usize]),
+                others: snap.others_idx[entry.others.start as usize..entry.others.end as usize]
+                    .iter()
+                    .map(|&i| to_branch(&snap.branches[i as usize]))
+                    .collect(),
+            }
         })
         .collect();
 
-    let mut groups: Vec<LineageGroup> = Vec::new();
-    for branch in branches {
-        match groups.last_mut() {
-            Some(last) if last.lineage_id == branch.lineage_id => {
-                last.others.push(branch);
-            }
-            _ => groups.push(LineageGroup {
-                lineage_id: branch.lineage_id,
-                best: branch,
-                others: Vec::new(),
-            }),
-        }
-    }
+    Ok(Some(LineagePage {
+        groups,
+        total_lineages,
+    }))
+}
 
-    let position: HashMap<i64, usize> = ordered_ids
-        .iter()
-        .enumerate()
-        .map(|(i, id)| (*id, i))
-        .collect();
-    groups.sort_by_key(|g| position[&g.lineage_id]);
-
-    Ok((groups, total_lineages.0))
+/// Rebuilds the homepage snapshot in the background — what the navbar's
+/// refresh button calls after a `fink-fat convert`. Returns immediately; the
+/// previous snapshot keeps being served until the new one is ready.
+#[server]
+pub async fn refresh_snapshot() -> Result<(), ServerFnError> {
+    crate::homepage::snapshot::request_refresh();
+    Ok(())
 }
 
 #[component]
@@ -505,50 +319,95 @@ fn LineageTable(groups: Vec<LineageGroup>) -> Element {
     }
 }
 
+/// Idle time after the last keystroke before the search is actually issued.
+/// The query itself is now sub-millisecond, but a round-trip per character
+/// still floods the network tab and races its own responses.
+const SEARCH_DEBOUNCE_MS: u64 = 200;
+
+/// How often to re-check whether the homepage snapshot has finished building.
+const WARMUP_POLL_MS: u64 = 1000;
+
 #[component]
 pub fn BranchTab(
     search_query: String,
     hidden_families: Signal<HashSet<DynamicalFamily>>,
+    refresh_token: Signal<u64>,
 ) -> Element {
     let mut current_page = use_signal(|| 0_i64);
     let mut sort_column = use_signal(|| None::<SortColumn>);
     let mut sort_direction = use_signal(|| SortDirection::Desc);
 
-    let search_query_for_resource = search_query.clone();
+    // The search text the resource actually queries on, trailing the prop by
+    // `SEARCH_DEBOUNCE_MS`. `debounce_generation` lets a newer keystroke
+    // invalidate an in-flight timer: only the timer whose generation is still
+    // current is allowed to commit.
+    let mut debounced_search = use_signal(String::new);
+    let mut debounce_generation = use_signal(|| 0_u64);
 
-    let lineages_resource =
-        use_resource(use_reactive!(|(search_query_for_resource,)| async move {
-            // Read inside the future so `use_resource` subscribes to it and
-            // refetches on a legend toggle — same as the signals below, and
-            // unlike `search_query`, which is a plain prop value and so needs
-            // the `use_reactive!` wrapper. Sorted for a stable request shape.
-            let mut hidden: Vec<DynamicalFamily> = hidden_families().into_iter().collect();
-            hidden.sort();
-
-            list_lineages(
-                current_page(),
-                sort_column(),
-                sort_direction(),
-                search_query_for_resource,
-                hidden,
-            )
-            .await
-        }));
-
-    // Reset to page 0 whenever the search text changes.
     use_effect(use_reactive!(|(search_query,)| {
-        let _ = search_query;
-        current_page.set(0);
+        // `peek`, not a read: subscribing to the generation here would make
+        // this effect retrigger itself on every keystroke it handles.
+        let generation = *debounce_generation.peek() + 1;
+        debounce_generation.set(generation);
+
+        spawn(async move {
+            crate::sleep_ms(SEARCH_DEBOUNCE_MS).await;
+            if *debounce_generation.peek() == generation {
+                debounced_search.set(search_query);
+            }
+        });
     }));
 
+    // Every dependency is a signal read inside the future, so `use_resource`
+    // subscribes to all of them and refetches on a legend toggle, a sort, a
+    // page change, a debounced search or a snapshot refresh.
+    let mut lineages_resource = use_resource(move || async move {
+        // Sorted for a stable request shape.
+        let mut hidden: Vec<DynamicalFamily> = hidden_families().into_iter().collect();
+        hidden.sort();
+
+        let _ = refresh_token();
+
+        list_lineages(
+            current_page(),
+            sort_column(),
+            sort_direction(),
+            debounced_search(),
+            hidden,
+        )
+        .await
+    });
+
+    // Reset to page 0 whenever the (debounced) search text changes. `peek`
+    // reads the page without subscribing to it: subscribing would make this
+    // effect re-run on every pagination and immediately bounce the user back
+    // to page 0.
+    use_effect(move || {
+        let _ = debounced_search();
+        if *current_page.peek() != 0 {
+            current_page.set(0);
+        }
+    });
+
     // Same, for the family filter — fewer lineages match, so the current page
-    // may no longer exist. `peek` reads the page without subscribing to it:
-    // subscribing would make this effect re-run on every pagination and
-    // immediately bounce the user back to page 0.
+    // may no longer exist.
     use_effect(move || {
         let _ = hidden_families();
         if *current_page.peek() != 0 {
             current_page.set(0);
+        }
+    });
+
+    // `Ok(None)` means the in-RAM snapshot is still being built (first request
+    // after a server start, or a rebuild that has not landed yet). Poll rather
+    // than leaving the table empty.
+    use_effect(move || {
+        let warming = matches!(&*lineages_resource.read(), Some(Ok(None)));
+        if warming {
+            spawn(async move {
+                crate::sleep_ms(WARMUP_POLL_MS).await;
+                lineages_resource.restart();
+            });
         }
     });
 
@@ -565,7 +424,10 @@ pub fn BranchTab(
     let data = &*lineages_resource.read();
 
     match data {
-        Some(Ok((groups, total_lineages))) => {
+        Some(Ok(Some(LineagePage {
+            groups,
+            total_lineages,
+        }))) => {
             let total_pages = (*total_lineages + PAGE_SIZE - 1) / PAGE_SIZE;
             let page = current_page();
 
@@ -607,6 +469,15 @@ pub fn BranchTab(
                 }
             }
         }
+        // Snapshot still building — the `use_effect` above is polling.
+        Some(Ok(None)) => rsx! {
+            div { class: "card bg-base-100 shadow-sm",
+                div { class: "card-body items-center text-center gap-2",
+                    span { class: "loading loading-dots loading-lg" }
+                    p { class: "text-sm opacity-60", "Building the lineage index..." }
+                }
+            }
+        },
         Some(Err(e)) => rsx! {
             p { "Error: {e}" }
         },

@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 
 #[cfg(target_arch = "wasm32")]
 use plotly::{
@@ -12,78 +12,42 @@ use serde::{Deserialize, Serialize};
 
 use crate::homepage::family::DynamicalFamily;
 
-/// Minimal row fetched from the DB — family and orbital elements are
-/// precomputed columns on `kf_state`, no need to reconstruct them here.
-#[cfg(feature = "server")]
-#[derive(sqlx::FromRow)]
-struct MinimalStateRow {
-    hypothesis_id: i64,
-    branch_id: i64,
-    semi_major_axis: f64,
-    eccentricity: f64,
-    dynamic_family: String,
-}
-
-/// One point in the (a, e) distribution plot.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct OrbitalPoint {
-    pub hypothesis_id: i64,
-    pub branch_id: i64,
-    pub semi_major_axis: f64,
-    pub eccentricity: f64,
-    pub family: DynamicalFamily,
-}
-
 /// All the points of a single family, pre-split into the two coordinate
-/// vectors plotly wants. Built once per data load so that toggling a family
-/// only rebuilds the traces, never re-groups the whole population.
-#[derive(Clone, PartialEq)]
-struct FamilySeries {
-    family: DynamicalFamily,
-    a: Vec<f32>,
-    e: Vec<f32>,
+/// vectors plotly wants, so that toggling a family only rebuilds the traces
+/// and never re-groups the whole population.
+///
+/// This is also the wire format: the server groups the population once when it
+/// builds the homepage snapshot and ships these flat arrays, rather than one
+/// JSON object per point carrying a repeated family label — roughly a sixfold
+/// cut in payload at 214k branches.
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
+pub struct FamilySeries {
+    pub family: DynamicalFamily,
+    pub a: Vec<f32>,
+    pub e: Vec<f32>,
 }
 
+/// Served from the in-RAM homepage snapshot; `None` while it is still being
+/// built. See [`crate::homepage::snapshot`].
 #[server]
-pub async fn query_orbital_elements() -> Result<Vec<OrbitalPoint>, ServerFnError> {
-    use crate::get_pool;
-
-    let pool = get_pool().await;
-
-    let rows: Vec<MinimalStateRow> = sqlx::query_as(
-        "SELECT bh.hypothesis_id, bh.branch_id,
-            ks.semi_major_axis, ks.eccentricity, ks.dynamic_family
-     FROM branches b
-     CROSS JOIN LATERAL (
-         SELECT hypothesis_id, branch_id
-         FROM hypotheses h
-         WHERE h.branch_id = b.branch_id
-         ORDER BY h.log_weight DESC
-         LIMIT 1
-     ) bh
-     JOIN kf_state ks ON ks.hypothesis_id = bh.hypothesis_id",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-    let points = rows
-        .into_iter()
-        .map(|row| OrbitalPoint {
-            hypothesis_id: row.hypothesis_id,
-            branch_id: row.branch_id,
-            semi_major_axis: row.semi_major_axis,
-            eccentricity: row.eccentricity,
-            family: DynamicalFamily::from_label(&row.dynamic_family),
-        })
-        .collect();
-
-    Ok(points)
+pub async fn query_orbital_elements() -> Result<Option<Vec<FamilySeries>>, ServerFnError> {
+    Ok(crate::homepage::snapshot::snapshot()
+        .await
+        .map(|snap| snap.series.clone()))
 }
+
+/// How often to re-check whether the homepage snapshot has finished building.
+const WARMUP_POLL_MS: u64 = 1000;
 
 #[component]
-pub fn DynamicPopPlot(hidden_families: Signal<HashSet<DynamicalFamily>>) -> Element {
-    let orbital_data = use_resource(|| query_orbital_elements());
+pub fn DynamicPopPlot(
+    hidden_families: Signal<HashSet<DynamicalFamily>>,
+    refresh_token: Signal<u64>,
+) -> Element {
+    let mut orbital_data = use_resource(move || async move {
+        let _ = refresh_token();
+        query_orbital_elements().await
+    });
     let mut is_mounted = use_signal(|| false);
     // Whether plotly has drawn into the div at least once: the first draw
     // needs `new_plot`, every later one is a cheaper `react` diff. Only the
@@ -92,22 +56,21 @@ pub fn DynamicPopPlot(hidden_families: Signal<HashSet<DynamicalFamily>>) -> Elem
     #[cfg(target_arch = "wasm32")]
     let mut drawn = use_signal(|| false);
 
-    // Group the population by family once per data load. `BTreeMap` iterates
-    // in `DynamicalFamily`'s `Ord`, i.e. increasing heliocentric distance,
-    // which is exactly the order the legend should list them in.
-    let series = use_memo(move || match &*orbital_data.read() {
-        Some(Ok(pts)) => {
-            let mut grouped: BTreeMap<DynamicalFamily, (Vec<f32>, Vec<f32>)> = BTreeMap::new();
-            for pt in pts {
-                let entry = grouped.entry(pt.family).or_default();
-                entry.0.push(pt.semi_major_axis as f32);
-                entry.1.push(pt.eccentricity as f32);
-            }
-            grouped
-                .into_iter()
-                .map(|(family, (a, e))| FamilySeries { family, a, e })
-                .collect::<Vec<_>>()
+    // `Ok(None)` means the snapshot is still building — poll for it.
+    use_effect(move || {
+        let warming = matches!(&*orbital_data.read(), Some(Ok(None)));
+        if warming {
+            spawn(async move {
+                crate::sleep_ms(WARMUP_POLL_MS).await;
+                orbital_data.restart();
+            });
         }
+    });
+
+    // Already grouped by family, in `DynamicalFamily`'s `Ord` (increasing
+    // heliocentric distance) — which is the order the legend lists them in.
+    let series = use_memo(move || match &*orbital_data.read() {
+        Some(Ok(Some(series))) => series.clone(),
         _ => Vec::new(),
     });
 
@@ -126,11 +89,17 @@ pub fn DynamicPopPlot(hidden_families: Signal<HashSet<DynamicalFamily>>) -> Elem
     // of `FamilyLegend`'s own re-render. The filtered count lives in the
     // legend, which is the only thing that needs to change.
     let status_text = match &*orbital_data.read() {
-        Some(Ok(pts)) => format!("{} objects plotted", pts.len()),
+        Some(Ok(Some(series))) => {
+            format!(
+                "{} objects plotted",
+                series.iter().map(|s| s.a.len()).sum::<usize>()
+            )
+        }
+        Some(Ok(None)) => "Building the population index...".to_string(),
         Some(Err(e)) => format!("Error: {e}"),
         None => String::new(),
     };
-    let is_loading = orbital_data.read().is_none();
+    let is_loading = matches!(&*orbital_data.read(), None | Some(Ok(None)));
 
     use_effect(move || {
         #[cfg(target_arch = "wasm32")]
