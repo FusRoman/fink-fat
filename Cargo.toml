@@ -44,7 +44,7 @@ indicatif = "0.18.0"
 serde_yaml = "0.9.34"
 ndarray = "0.17.2"
 photom = { version = "1.0.0" }
-outfit = { version = "5.0.1", features = ["serde"] }
+outfit = { version = "5.0.1", default-features = false, features = ["serde", "ephem-anise", "parallel"] }
 polars = { version = "0.53.0", default-features = false, features = [
     "lazy",
     "dtype-u8",
@@ -90,6 +90,19 @@ codegen-units = 1
 # disable debug symbols for all packages except this one
 [profile.release.package."*"]
 debug = false
+
+# `dx serve` (fink-fat-explorer's dev container) always builds in the `dev`
+# profile, and unoptimized `outfit`/`photom`/`anise`/`nalgebra`/`polars` code
+# is where essentially all of an orbit fit's CPU time goes — debug builds of
+# that kind of numerical code routinely run 5-20x slower than release. This
+# raises every *dependency* to release-level codegen while leaving this
+# workspace's own crates (fink-fat, fink-fat-engine, fink-fat-eval,
+# fink-fat-explorer) at the default unoptimized `dev` profile, so editing and
+# hot-reloading the explorer's own code still recompiles fast — only
+# dependency code (rebuilt rarely, just when Cargo.lock changes) pays the
+# slower optimized-compile cost, once.
+[profile.dev.package."*"]
+opt-level = 3
 
 [profile.bench]
 codegen-units = 1

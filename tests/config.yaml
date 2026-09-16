@@ -24,7 +24,7 @@ kalman_shared_context:
         max_iter_prelim_kepuni: 20
         parabolic_solving_method: Cardano
         psi_guess: null
-  ephem_file_name: horizon:DE440
+  ephem_file_name: naif:DE440
   ut1_file_version: null
 
 advance_params:

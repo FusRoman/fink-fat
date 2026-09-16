@@ -1,5 +1,7 @@
 mod fit_params_form;
 mod fit_progress;
+pub use fit_params_form::FitParamsForm;
+
 mod fit_result;
 mod help_tooltip;
 mod residuals_plot;
@@ -18,7 +20,6 @@ use crate::orbit_fit::{
     JobStatus, OrbitFitJobView, OrbitFitParams, OrbitFitResult, MIN_BASELINE_DAYS, MIN_OBSERVATIONS,
 };
 
-use fit_params_form::FitParamsForm;
 use fit_progress::FitProgress;
 use fit_result::FitResult;
 use selectable_observations_table::SelectableObservationsTable;

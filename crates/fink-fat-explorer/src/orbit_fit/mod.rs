@@ -14,6 +14,7 @@ pub enum ObsErrorModelChoice {
     Fcct14,
     Cbm10,
     Vfcc17,
+    Lsst,
 }
 
 impl Default for ObsErrorModelChoice {
@@ -28,6 +29,7 @@ impl ObsErrorModelChoice {
             Self::Fcct14 => "FCCT14 (Farnocchia et al. 2014)",
             Self::Cbm10 => "CBM10 (Chesley, Baer & Monet 2010)",
             Self::Vfcc17 => "VFCC17 (Vereš et al. 2017)",
+            Self::Lsst => "LSST (empirical Rubin/X05, Fink diaSource-derived)",
         }
     }
 }
@@ -91,6 +93,71 @@ impl PerturberChoice {
     }
 }
 
+/// The 9 heaviest of the 300 main-belt asteroids in `outfit`'s ANISE
+/// supplementary kernel (`codes_300ast_20100725.bsp`), by descending GM —
+/// same ordering as `outfit::propagator::planet_gm::known_main_belt_asteroids_by_mass`.
+/// Only resolvable with the ANISE ephemeris backend (`JPLEphem::with_main_belt_asteroids`),
+/// which the whole app now uses. Kept as our own enum, mapping to a plain
+/// asteroid number rather than an `outfit` type, for the same reason as
+/// `ObsErrorModelChoice`/`PerturberChoice`: the wasm build of the form must
+/// stay free of the server-only `outfit`/`photom` dependencies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AsteroidPerturberChoice {
+    Ceres,
+    Pallas,
+    Juno,
+    Vesta,
+    Hygiea,
+    Eunomia,
+    Euphrosyne,
+    Davida,
+    Interamnia,
+}
+
+impl AsteroidPerturberChoice {
+    pub const ALL: [AsteroidPerturberChoice; 9] = [
+        Self::Ceres,
+        Self::Pallas,
+        Self::Juno,
+        Self::Vesta,
+        Self::Hygiea,
+        Self::Eunomia,
+        Self::Euphrosyne,
+        Self::Davida,
+        Self::Interamnia,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Ceres => "Ceres",
+            Self::Pallas => "Pallas",
+            Self::Juno => "Juno",
+            Self::Vesta => "Vesta",
+            Self::Hygiea => "Hygiea",
+            Self::Eunomia => "Eunomia",
+            Self::Euphrosyne => "Euphrosyne",
+            Self::Davida => "Davida",
+            Self::Interamnia => "Interamnia",
+        }
+    }
+
+    /// The minor-planet number `outfit::jpl_ephem::naif::naif_ids::main_belt::AsteroidNumber`
+    /// resolves through the main-belt supplementary kernel.
+    pub fn asteroid_number(self) -> u32 {
+        match self {
+            Self::Ceres => 1,
+            Self::Pallas => 2,
+            Self::Juno => 3,
+            Self::Vesta => 4,
+            Self::Hygiea => 10,
+            Self::Eunomia => 15,
+            Self::Euphrosyne => 31,
+            Self::Davida => 511,
+            Self::Interamnia => 704,
+        }
+    }
+}
+
 /// All tunable parameters of an Outfit orbit fit, flattened out of
 /// `outfit::IODParams` / `outfit::DifferentialCorrectionConfig` /
 /// `ObsErrorModel` / `PropagatorKind` into one plain, serializable struct the
@@ -139,6 +206,7 @@ pub struct OrbitFitParams {
     // --- Dynamical model ---
     pub propagator: PropagatorChoice,
     pub perturbers: Vec<PerturberChoice>,
+    pub asteroid_perturbers: Vec<AsteroidPerturberChoice>,
 }
 
 impl Default for OrbitFitParams {
@@ -180,6 +248,7 @@ impl Default for OrbitFitParams {
 
             propagator: PropagatorChoice::default(),
             perturbers: vec![PerturberChoice::Jupiter, PerturberChoice::Saturn],
+            asteroid_perturbers: Vec::new(),
         }
     }
 }

@@ -97,6 +97,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "anise"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb21db75d91484444303b5bd924ffaf7465dd0bcacfa3446910334c165828e4b"
+dependencies = [
+ "bytes",
+ "const_format",
+ "crc32fast",
+ "der",
+ "hifitime",
+ "indexmap 2.14.0",
+ "log",
+ "memmap2",
+ "nalgebra 0.35.0",
+ "serde",
+ "serde_derive",
+ "snafu",
+ "sofars",
+ "tabled",
+ "zerocopy",
+]
+
+[[package]]
 name = "anstream"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1712,6 +1735,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "der"
+version = "0.7.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7c1832837b905bbfb5101e07cc24c8deddf52f93225eee6ead5f4d63d53ddcb"
+dependencies = [
+ "der_derive",
+ "zeroize",
+]
+
+[[package]]
+name = "der_derive"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8034092389675178f570469e6c3b0465d3d30b4505c294a6550db47f3c17ad18"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "deranged"
 version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1763,7 +1807,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9d59c6f4160bf75916dd69b58f6323171dd22e2e4a68cf7e31b1b2bf54b7433a"
 dependencies = [
  "differential-equations-derive",
- "simba",
+ "simba 0.9.1",
 ]
 
 [[package]]
@@ -2834,7 +2878,7 @@ dependencies = [
  "fink-fat-eval",
  "husky-rs",
  "indicatif",
- "nalgebra",
+ "nalgebra 0.34.2",
  "outfit",
  "photom",
  "polars",
@@ -2859,7 +2903,7 @@ dependencies = [
  "config",
  "hifitime",
  "memmap2",
- "nalgebra",
+ "nalgebra 0.34.2",
  "outfit",
  "photom",
  "proptest",
@@ -2886,7 +2930,7 @@ dependencies = [
  "fink-fat-engine",
  "hifitime",
  "indicatif",
- "nalgebra",
+ "nalgebra 0.34.2",
  "ndarray",
  "num-traits",
  "outfit",
@@ -2916,10 +2960,12 @@ dependencies = [
  "fink-fat-engine",
  "gloo-timers",
  "hifitime",
- "nalgebra",
+ "nalgebra 0.34.2",
  "outfit",
  "photom",
  "plotly",
+ "polars",
+ "rand 0.9.5",
  "rayon",
  "reqwest",
  "serde",
@@ -3517,6 +3563,12 @@ name = "glam"
 version = "0.32.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f70749695b063ecbf6b62949ccccde2e733ec3ecbbd71d467dca4e5c6c97cca0"
+
+[[package]]
+name = "glam"
+version = "0.33.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e762b9b188634fc508d4ec54b62ea3d352c43fd431d18d05d46f559f217f4725"
 
 [[package]]
 name = "glib"
@@ -5116,7 +5168,27 @@ dependencies = [
  "num-complex",
  "num-rational",
  "num-traits",
- "simba",
+ "simba 0.9.1",
+ "typenum",
+]
+
+[[package]]
+name = "nalgebra"
+version = "0.35.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adc43a60c217b0c6ff46e47f26911015ad8d2e5a8be1af668c67e370d99a4346"
+dependencies = [
+ "approx",
+ "glam 0.30.10",
+ "glam 0.31.1",
+ "glam 0.32.1",
+ "glam 0.33.7",
+ "matrixmultiply",
+ "num-complex",
+ "num-rational",
+ "num-traits",
+ "serde",
+ "simba 0.10.2",
  "typenum",
 ]
 
@@ -5279,6 +5351,7 @@ checksum = "73f88a1307638156682bada9d7604135552957b7818057dcef22705b4d509495"
 dependencies = [
  "bytemuck",
  "num-traits",
+ "serde",
 ]
 
 [[package]]
@@ -5620,16 +5693,18 @@ checksum = "3460146598f3e34a6ecf831aff34d108e89278e68cc96fae25715c0e3cd39f47"
 dependencies = [
  "aberth",
  "ahash",
+ "anise",
  "camino",
  "differential-equations",
  "directories",
  "hifitime",
- "nalgebra",
+ "nalgebra 0.34.2",
  "nom",
  "ordered-float",
  "photom",
  "rand 0.9.5",
  "rand_distr",
+ "rayon",
  "reqwest",
  "roots",
  "serde",
@@ -5961,6 +6036,7 @@ dependencies = [
  "nom",
  "ordered-float",
  "polars",
+ "rayon",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -7775,6 +7851,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "safe_arch"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42c6efa15875e6ecb39ca61fb0b0c1a40b84fac5a5ffe71eef7d1000c8eb3f5f"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8173,7 +8258,19 @@ dependencies = [
  "num-complex",
  "num-traits",
  "paste",
- "wide",
+ "wide 0.7.33",
+]
+
+[[package]]
+name = "simba"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1a7200d82ff1c7b4235efd12f11e2537a402c91cf83a5cb97ce80eef787fde7"
+dependencies = [
+ "approx",
+ "num-complex",
+ "num-traits",
+ "wide 1.7.1",
 ]
 
 [[package]]
@@ -8309,6 +8406,12 @@ dependencies = [
  "libc",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "sofars"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5dd1c9b1b5d34e1e949deb0dac9ad612e20746c59eaa737e52fd29703c19ec5c"
 
 [[package]]
 name = "soup3"
@@ -9996,7 +10099,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ce5da8ecb62bcd8ec8b7ea19f69a51275e91299be594ea5cc6ef7819e16cd03"
 dependencies = [
  "bytemuck",
- "safe_arch",
+ "safe_arch 0.7.4",
+]
+
+[[package]]
+name = "wide"
+version = "1.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d920ac99c3c8edce110cb8d07dbb324d6d026011dce85b1e9355b70f0adacc4f"
+dependencies = [
+ "bytemuck",
+ "safe_arch 1.2.0",
 ]
 
 [[package]]

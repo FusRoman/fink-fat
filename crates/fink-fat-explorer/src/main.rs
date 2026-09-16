@@ -1,3 +1,5 @@
+pub mod bulk_orbit_fit;
+pub mod bulk_orbit_fit_page;
 pub mod format_epoch;
 pub mod homepage;
 pub mod lineage_page;
@@ -14,12 +16,13 @@ use sqlx::PgPool;
 #[cfg(feature = "server")]
 use std::collections::HashMap;
 #[cfg(feature = "server")]
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 #[cfg(feature = "server")]
 use std::sync::Mutex;
 #[cfg(feature = "server")]
 use tokio::sync::OnceCell;
 
+use crate::bulk_orbit_fit_page::BulkOrbitFitPage;
 use crate::homepage::Home;
 use crate::lineage_page::LineagePage;
 use crate::orbit_fit_page::OrbitFitPage;
@@ -177,6 +180,30 @@ async fn get_orbit_fit_jobs() -> &'static Mutex<HashMap<u64, crate::orbit_fit::O
         .await
 }
 
+/// In-memory registry of in-flight/completed bulk orbit fit jobs (see
+/// `bulk_orbit_fit::run::start_bulk_orbit_fit`) — same rationale as
+/// `ORBIT_FIT_JOBS` above, just for the bulk fit's own job/payload shape.
+#[cfg(feature = "server")]
+static BULK_ORBIT_FIT_JOBS: OnceCell<Mutex<HashMap<u64, crate::bulk_orbit_fit::BulkOrbitFitJob>>> =
+    OnceCell::const_new();
+
+#[cfg(feature = "server")]
+static NEXT_BULK_ORBIT_FIT_JOB_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Only one bulk fit runs at a time — it's a long, CPU-heavy job over every
+/// eligible branch, so a second concurrent run would just contend for the
+/// same cores/DB connections for no benefit.
+#[cfg(feature = "server")]
+static BULK_ORBIT_FIT_RUNNING: AtomicBool = AtomicBool::new(false);
+
+#[cfg(feature = "server")]
+async fn get_bulk_orbit_fit_jobs(
+) -> &'static Mutex<HashMap<u64, crate::bulk_orbit_fit::BulkOrbitFitJob>> {
+    BULK_ORBIT_FIT_JOBS
+        .get_or_init(|| async { Mutex::new(HashMap::new()) })
+        .await
+}
+
 #[derive(Clone, Debug, PartialEq, Routable)]
 enum Route {
     #[route("/")]
@@ -187,6 +214,9 @@ enum Route {
 
     #[route("/lineage/:lineage_id/fit")]
     OrbitFitPage { lineage_id: String },
+
+    #[route("/bulk-fit")]
+    BulkOrbitFitPage {},
 }
 
 fn main() {

@@ -32,8 +32,9 @@ pub struct KalmanContextConfig {
     ///
     /// Format
     /// ------
-    /// A backend-specific string, e.g. `"horizon:DE440"` selects the JPL
-    /// Horizons DE440 planetary ephemeris. No `units.rs` parser applies —
+    /// A backend-specific string, e.g. `"naif:DE440"` selects the DE440
+    /// planetary ephemeris via the ANISE-backed NAIF SPK reader. No
+    /// `units.rs` parser applies —
     /// this is an opaque identifier, not a physical quantity.
     pub ephem_file_name: String,
 
@@ -64,7 +65,7 @@ impl KalmanContextConfig {
 impl Default for KalmanContextConfig {
     fn default() -> Self {
         Self {
-            ephem_file_name: "horizon:DE440".to_string(),
+            ephem_file_name: "naif:DE440".to_string(),
             ut1_file_version: None,
             config: Default::default(),
         }
@@ -80,7 +81,7 @@ impl Validate for KalmanContextConfig {
         if let Some(e) = check_non_empty(
             "ephem_file_name",
             &self.ephem_file_name,
-            "set ephem_file_name to a valid ephemeris source identifier, e.g. \"horizon:DE440\"",
+            "set ephem_file_name to a valid ephemeris source identifier, e.g. \"naif:DE440\"",
         ) {
             errors.push(e);
         }

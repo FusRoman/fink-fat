@@ -577,10 +577,12 @@ fn create_tables(transaction: &mut postgres::Transaction<'_>) -> Result<(), post
         CREATE TABLE IF NOT EXISTS orbit_fits (
             id BIGSERIAL PRIMARY KEY,
             lineage_designation TEXT NOT NULL,
+            branch_id BIGINT,
             fitted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             observation_ids BIGINT[] NOT NULL,
             n_observations_used INTEGER NOT NULL,
             error_model TEXT NOT NULL,
+            fit_method TEXT NOT NULL DEFAULT 'differential_correction',
             fit_params JSONB NOT NULL,
             reference_epoch DOUBLE PRECISION NOT NULL,
             semi_major_axis DOUBLE PRECISION NOT NULL,
@@ -601,6 +603,24 @@ fn create_tables(transaction: &mut postgres::Transaction<'_>) -> Result<(), post
 
         CREATE INDEX IF NOT EXISTS idx_orbit_fits_lineage
             ON orbit_fits (lineage_designation, fitted_at DESC);
+
+        -- Added after the initial rollout, when the bulk fit started fitting
+        -- every eligible branch independently rather than just each
+        -- lineage's best branch: without this, rows from different branches
+        -- of the same lineage were indistinguishable.
+        ALTER TABLE orbit_fits ADD COLUMN IF NOT EXISTS branch_id BIGINT;
+
+        -- The bulk fit runs Gauss IOD with no seed and can fall back to the
+        -- bare IOD solution when the differential correction diverges
+        -- (`outfit::differential_orbit_correction::differential_correction`'s
+        -- own fallback) — this column distinguishes that case from a real
+        -- least-squares convergence. The single-lineage fit always seeds
+        -- from the Kalman orbit and only ever inserts a converged DC result,
+        -- hence the default.
+        ALTER TABLE orbit_fits ADD COLUMN IF NOT EXISTS fit_method TEXT NOT NULL DEFAULT 'differential_correction';
+
+        CREATE INDEX IF NOT EXISTS idx_orbit_fits_branch
+            ON orbit_fits (branch_id, fitted_at DESC);
         ",
     )
 }

@@ -22,7 +22,11 @@ chrono = { workspace = true, optional = true }
 fink-fat-engine = { workspace = true, optional = true }
 nalgebra = { workspace = true, optional = true }
 outfit = { workspace = true, optional = true }
-photom = { workspace = true, optional = true }
+photom = { workspace = true, optional = true, features = ["polars"] }
+polars = { workspace = true, optional = true }
+rand = { version = "0.9", default-features = false, features = [
+    "small_rng",
+], optional = true }
 rayon = { workspace = true, optional = true }
 reqwest = { version = "0.12", features = ["json"], optional = true }
 
@@ -63,6 +67,8 @@ server = [
     "dep:nalgebra",
     "dep:outfit",
     "dep:photom",
+    "dep:polars",
+    "dep:rand",
     "dep:rayon",
     "dep:reqwest",
     "dep:tracing"

@@ -96,6 +96,11 @@ pub fn Home() -> Element {
                         class: "input input-bordered input-sm w-64",
                         oninput: move |evt| search_input.set(evt.value()),
                     }
+                    Link {
+                        to: crate::Route::BulkOrbitFitPage {},
+                        class: "btn btn-sm btn-primary",
+                        "Fit all trajectories"
+                    }
                     button {
                         class: "btn btn-sm btn-ghost",
                         disabled: refreshing(),

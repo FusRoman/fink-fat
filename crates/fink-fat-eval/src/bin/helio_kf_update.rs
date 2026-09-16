@@ -123,7 +123,7 @@ fn main() -> Result<()> {
         ..Default::default()
     };
 
-    let kalman_ctx = KalmanContext::new(kalman_config, "horizon:DE440", None);
+    let kalman_ctx = KalmanContext::new(kalman_config, "naif:DE440", None);
 
     let obs_dataset = load_data(&cli.alerts, None);
 

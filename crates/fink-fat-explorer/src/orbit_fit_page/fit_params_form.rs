@@ -1,6 +1,8 @@
 use dioxus::prelude::*;
 
-use crate::orbit_fit::{ObsErrorModelChoice, OrbitFitParams, PerturberChoice, PropagatorChoice};
+use crate::orbit_fit::{
+    AsteroidPerturberChoice, ObsErrorModelChoice, OrbitFitParams, PerturberChoice, PropagatorChoice,
+};
 
 use super::help_tooltip::HelpTooltip;
 
@@ -73,17 +75,20 @@ fn ErrorModelSection(params: Signal<OrbitFitParams>) -> Element {
                     ObsErrorModelChoice::Fcct14 => "fcct14",
                     ObsErrorModelChoice::Cbm10 => "cbm10",
                     ObsErrorModelChoice::Vfcc17 => "vfcc17",
+                    ObsErrorModelChoice::Lsst => "lsst",
                 },
                 onchange: move |evt| {
                     params.write().error_model = match evt.value().as_str() {
                         "cbm10" => ObsErrorModelChoice::Cbm10,
                         "vfcc17" => ObsErrorModelChoice::Vfcc17,
+                        "lsst" => ObsErrorModelChoice::Lsst,
                         _ => ObsErrorModelChoice::Fcct14,
                     };
                 },
                 option { value: "fcct14", "{ObsErrorModelChoice::Fcct14.label()}" }
                 option { value: "cbm10", "{ObsErrorModelChoice::Cbm10.label()}" }
                 option { value: "vfcc17", "{ObsErrorModelChoice::Vfcc17.label()}" }
+                option { value: "lsst", "{ObsErrorModelChoice::Lsst.label()}" }
             }
         }
     }
@@ -149,6 +154,37 @@ fn DynamicalModelSection(params: Signal<OrbitFitParams>) -> Element {
                     }
                 }
                 p { class: "text-xs opacity-60", "The Sun is always included as a perturber." }
+
+                div { class: "flex items-center gap-1",
+                    span { class: "label-text text-xs opacity-70", "Main-belt asteroid perturbers (ANISE only)" }
+                    HelpTooltip {
+                        text: "The 9 most massive of the 300 main-belt asteroids in the ANISE supplementary kernel. Negligible for most fits — only relevant for objects that pass close to one of them.",
+                    }
+                }
+                div { class: "flex flex-wrap gap-3",
+                    for asteroid in AsteroidPerturberChoice::ALL {
+                        label {
+                            key: "{asteroid.label()}",
+                            class: "label cursor-pointer gap-2",
+                            input {
+                                r#type: "checkbox",
+                                class: "checkbox checkbox-sm",
+                                checked: params.read().asteroid_perturbers.contains(&asteroid),
+                                onchange: move |evt| {
+                                    let mut params = params.write();
+                                    if evt.checked() {
+                                        if !params.asteroid_perturbers.contains(&asteroid) {
+                                            params.asteroid_perturbers.push(asteroid);
+                                        }
+                                    } else {
+                                        params.asteroid_perturbers.retain(|a| *a != asteroid);
+                                    }
+                                },
+                            }
+                            span { class: "label-text", "{asteroid.label()}" }
+                        }
+                    }
+                }
             }
         }
     }

@@ -304,7 +304,7 @@ fn keplerian_delta(
 }
 
 #[cfg(feature = "server")]
-fn keplerian_view(
+pub(crate) fn keplerian_view(
     elements: &outfit::KeplerianElements,
     uncertainty: Option<&outfit::orbit_type::uncertainty::KeplerianUncertainty>,
 ) -> super::KeplerianView {
@@ -343,6 +343,108 @@ fn planetary_bary(
     }
 }
 
+/// Maps the form's error-model choice onto `photom`'s own enum. Shared by the
+/// single-lineage fit (this module) and the bulk fit (`crate::bulk_orbit_fit`).
+#[cfg(feature = "server")]
+pub(crate) fn to_error_model(
+    choice: super::ObsErrorModelChoice,
+) -> photom::observer::error_model::ObsErrorModel {
+    use photom::observer::error_model::ObsErrorModel;
+    match choice {
+        super::ObsErrorModelChoice::Fcct14 => ObsErrorModel::FCCT14,
+        super::ObsErrorModelChoice::Cbm10 => ObsErrorModel::CBM10,
+        super::ObsErrorModelChoice::Vfcc17 => ObsErrorModel::VFCC17,
+        super::ObsErrorModelChoice::Lsst => ObsErrorModel::LSST,
+    }
+}
+
+/// Builds the `outfit` differential-correction configuration (propagator,
+/// perturbers, Newton/outlier-rejection tuning) from the form's flattened
+/// `OrbitFitParams`. Shared by the single-lineage fit (this module) and the
+/// bulk fit (`crate::bulk_orbit_fit`).
+#[cfg(feature = "server")]
+pub(crate) fn build_dc_config(params: &OrbitFitParams) -> outfit::DifferentialCorrectionConfig {
+    use outfit::differential_orbit_correction::OutlierRejectionConfig;
+    use outfit::jpl_ephem::naif::naif_ids::main_belt::AsteroidNumber;
+    use outfit::jpl_ephem::naif::naif_ids::{solar_system_bary::SolarSystemBary, NaifIds};
+    use outfit::orbit_type::equinoctial_element::EquinoctialLimits;
+    use outfit::propagator::{NBodyConfig, PropagatorKind};
+
+    let mut perturbing_bodies = vec![NaifIds::SSB(SolarSystemBary::Sun)];
+    perturbing_bodies.extend(
+        params
+            .perturbers
+            .iter()
+            .map(|p| NaifIds::PB(planetary_bary(*p))),
+    );
+    perturbing_bodies.extend(
+        params
+            .asteroid_perturbers
+            .iter()
+            .map(|a| NaifIds::AST(AsteroidNumber(a.asteroid_number()))),
+    );
+    let propagator = match params.propagator {
+        super::PropagatorChoice::TwoBody => PropagatorKind::TwoBody,
+        super::PropagatorChoice::NBody => PropagatorKind::NBody(NBodyConfig {
+            perturbing_bodies,
+            ..Default::default()
+        }),
+    };
+
+    outfit::DifferentialCorrectionConfig {
+        max_newton_iterations: params.max_newton_iterations,
+        max_outlier_rejection_passes: params.max_outlier_rejection_passes,
+        convergence_threshold: params.convergence_threshold,
+        convergence_before_rejection_threshold: params.convergence_before_rejection_threshold,
+        rms_stagnation_ratio: params.rms_stagnation_ratio,
+        rms_divergence_ratio: params.rms_divergence_ratio,
+        max_stagnation_iterations: params.max_stagnation_iterations,
+        enable_outlier_rejection: params.enable_outlier_rejection,
+        outlier_rejection_config: OutlierRejectionConfig::default(),
+        orbital_limits: EquinoctialLimits::default(),
+        free_elements: [true; 6],
+        propagator,
+    }
+}
+
+/// Builds the `outfit` IOD (Gauss) parameters from the form's flattened
+/// `OrbitFitParams`. Only used by the bulk fit today — the single-lineage fit
+/// always seeds from the Kalman orbit and never runs Gauss IOD — but kept
+/// here next to `build_dc_config` since both are "form params -> outfit
+/// config" conversions.
+#[cfg(feature = "server")]
+pub(crate) fn build_iod_params(
+    params: &OrbitFitParams,
+) -> Result<outfit::initial_orbit_determination::IODParams, String> {
+    use outfit::initial_orbit_determination::IODParams;
+
+    IODParams::builder()
+        .n_noise_realizations(params.n_noise_realizations)
+        .noise_scale(params.noise_scale)
+        .extf(params.extf)
+        .dtmax(params.dtmax)
+        .dt_min(params.dt_min)
+        .dt_max_triplet(params.dt_max_triplet)
+        .optimal_interval_time(params.optimal_interval_time)
+        .max_obs_for_triplets(params.max_obs_for_triplets)
+        .max_triplets(params.max_triplets)
+        .gap_max(params.gap_max)
+        .max_ecc(params.max_ecc)
+        .max_perihelion_au(params.max_perihelion_au)
+        .min_rho2_au(params.min_rho2_au)
+        .aberth_max_iter(params.aberth_max_iter)
+        .aberth_eps(params.aberth_eps)
+        .kepler_eps(params.kepler_eps)
+        .max_tested_solutions(params.max_tested_solutions)
+        .r2_min_au(params.r2_min_au)
+        .r2_max_au(params.r2_max_au)
+        .newton_eps(params.newton_eps)
+        .newton_max_it(params.newton_max_it)
+        .root_imag_eps(params.root_imag_eps)
+        .build()
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(feature = "server")]
 async fn run_fit(
     job_id: u64,
@@ -350,17 +452,14 @@ async fn run_fit(
     observation_ids: &[i64],
     params: &OrbitFitParams,
 ) -> Result<super::OrbitFitResult, String> {
+    use outfit::cache::OutfitCache;
     use outfit::differential_orbit_correction::{
-        run_differential_correction, ObsFitData, ObsSelection, OutlierRejectionConfig,
+        run_differential_correction, ObsFitData, ObsSelection,
     };
-    use outfit::jpl_ephem::naif::naif_ids::{solar_system_bary::SolarSystemBary, NaifIds};
-    use outfit::orbit_type::equinoctial_element::EquinoctialLimits;
-    use outfit::propagator::{NBodyConfig, PropagatorKind};
-    use outfit::{cache::OutfitCache, DifferentialCorrectionConfig};
     use photom::observation_dataset::observation::Observation;
     use photom::observation_dataset::{observation::ObservationInput, ObsDataset};
     use photom::observer::dataset::ObserverId;
-    use photom::observer::error_model::{ModelCorrection, ObsErrorModel};
+    use photom::observer::error_model::ModelCorrection;
     use photom::{coordinates::equatorial::EquCoord, photometry::Filter, photometry::Photometry};
     use std::collections::{HashMap, HashSet};
 
@@ -427,11 +526,7 @@ async fn run_fit(
         .push_observation(inputs)
         .map_err(|e| e.to_string())?;
 
-    let error_model = match params.error_model {
-        super::ObsErrorModelChoice::Fcct14 => ObsErrorModel::FCCT14,
-        super::ObsErrorModelChoice::Cbm10 => ObsErrorModel::CBM10,
-        super::ObsErrorModelChoice::Vfcc17 => ObsErrorModel::VFCC17,
-    };
+    let error_model = to_error_model(params.error_model);
 
     push_log(job_id, "Applying the observation error model...").await;
     let dataset = dataset
@@ -477,35 +572,7 @@ async fn run_fit(
         .as_equinoctial()
         .ok_or_else(|| "failed to convert the Kalman orbit to equinoctial elements".to_string())?;
 
-    let mut perturbing_bodies = vec![NaifIds::SSB(SolarSystemBary::Sun)];
-    perturbing_bodies.extend(
-        params
-            .perturbers
-            .iter()
-            .map(|p| NaifIds::PB(planetary_bary(*p))),
-    );
-    let propagator = match params.propagator {
-        super::PropagatorChoice::TwoBody => PropagatorKind::TwoBody,
-        super::PropagatorChoice::NBody => PropagatorKind::NBody(NBodyConfig {
-            perturbing_bodies,
-            ..Default::default()
-        }),
-    };
-
-    let dc_config = DifferentialCorrectionConfig {
-        max_newton_iterations: params.max_newton_iterations,
-        max_outlier_rejection_passes: params.max_outlier_rejection_passes,
-        convergence_threshold: params.convergence_threshold,
-        convergence_before_rejection_threshold: params.convergence_before_rejection_threshold,
-        rms_stagnation_ratio: params.rms_stagnation_ratio,
-        rms_divergence_ratio: params.rms_divergence_ratio,
-        max_stagnation_iterations: params.max_stagnation_iterations,
-        enable_outlier_rejection: params.enable_outlier_rejection,
-        outlier_rejection_config: OutlierRejectionConfig::default(),
-        orbital_limits: EquinoctialLimits::default(),
-        free_elements: [true; 6],
-        propagator,
-    };
+    let dc_config = build_dc_config(params);
 
     push_log(
         job_id,

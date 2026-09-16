@@ -44,9 +44,11 @@ pub struct EphemState {
 
 impl EphemState {
     pub fn new(ephem_file_name: &str, ut1_file_version: Option<&str>) -> Self {
-        let jpl: JPLEphem = ephem_file_name
+        let mut jpl: JPLEphem = ephem_file_name
             .try_into()
             .expect("Failed to load JPL ephemeris");
+        jpl.with_main_belt_asteroids()
+            .expect("failed to load the main-belt asteroid supplementary kernel");
 
         let ut1_provider =
             Ut1Provider::download_from_jpl(ut1_file_version.unwrap_or("latest_eop2.long"))
