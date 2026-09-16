@@ -1,5 +1,7 @@
 #[cfg(target_arch = "wasm32")]
 use super::kf_replay::{HypothesisSnapshot, KfStep};
+#[cfg(target_arch = "wasm32")]
+use super::observations_table::ObservationRow;
 
 /// Which quantity the x-axis of the replay plots represents. Shared by every
 /// mini-plot in `metrics_plot.rs`/`rho_evolution_plot.rs`/`hypotheses_plot.rs`
@@ -99,5 +101,58 @@ pub fn x_values_for_hypotheses(
                 })
                 .collect(),
         ),
+    }
+}
+
+/// Same as [`x_values_for_steps`], but for [`ObservationRow`]s (`position`
+/// for the step index, `mjd_tt` for the epoch).
+#[cfg(target_arch = "wasm32")]
+pub fn x_values_for_observations(unit: XAxisUnit, observations: &[ObservationRow]) -> XAxisValues {
+    match unit {
+        XAxisUnit::ObservationIndex => {
+            XAxisValues::Numeric(observations.iter().map(|o| o.position as f64).collect())
+        }
+        XAxisUnit::DaysSinceFirst => {
+            let first_epoch = observations.first().map(|o| o.mjd_tt).unwrap_or(0.0);
+            XAxisValues::Numeric(
+                observations
+                    .iter()
+                    .map(|o| o.mjd_tt - first_epoch)
+                    .collect(),
+            )
+        }
+        XAxisUnit::IsoUtcDate => XAxisValues::Date(
+            observations
+                .iter()
+                .map(|o| epoch_to_iso_utc(o.mjd_tt))
+                .collect(),
+        ),
+    }
+}
+
+/// Human-readable label per point, matching the wording of the light
+/// curve's axis-native hover template (`x_hover_format` in
+/// `light_curve_plot.rs`), but as plain text — for plots like the
+/// trajectory view where time isn't the x/y axis and must be folded into a
+/// `customdata` string instead of a `%{x}` placeholder.
+///
+/// `iso_utc` truncates to `YYYY-MM-DDTHH:MM:SS.ffffff` with no trailing
+/// `Z`/offset, so `..19` trims to whole seconds before the `" UTC"` suffix
+/// makes the timezone explicit.
+#[cfg(target_arch = "wasm32")]
+pub fn format_time_labels(unit: XAxisUnit, values: &XAxisValues) -> Vec<String> {
+    match values {
+        XAxisValues::Numeric(v) => v
+            .iter()
+            .map(|x| match unit {
+                XAxisUnit::ObservationIndex => format!("Obs #{x:.0}"),
+                XAxisUnit::DaysSinceFirst => format!("{x:.2} d since first obs"),
+                XAxisUnit::IsoUtcDate => unreachable!(),
+            })
+            .collect(),
+        XAxisValues::Date(v) => v
+            .iter()
+            .map(|d| format!("{} UTC", d.get(..19).unwrap_or(d).replace('T', " ")))
+            .collect(),
     }
 }

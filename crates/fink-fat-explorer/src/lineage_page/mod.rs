@@ -2,6 +2,7 @@ mod alert_cutouts;
 mod hypotheses_plot;
 mod identity_card;
 mod kf_replay;
+mod light_curve_plot;
 mod metrics_plot;
 pub mod observations_table;
 mod plot_tabs;
@@ -14,9 +15,29 @@ use dioxus::prelude::*;
 use alert_cutouts::AlertCarousel;
 use identity_card::{get_lineage_summary, IdentityCard};
 use kf_replay::{replay_kalman_branch, HypothesisSnapshot, KfStep};
+use light_curve_plot::LightCurvePlot;
 use observations_table::{get_lineage_observations, ObservationRow, ObservationsTable};
 use plot_tabs::PlotTabs;
 use trajectory_plot::TrajectoryPlot;
+use x_axis::XAxisUnit;
+
+/// Which plot is shown next to the identity card.
+#[derive(Clone, Copy, PartialEq)]
+enum LineageView {
+    Trajectory,
+    LightCurve,
+}
+
+impl LineageView {
+    const ALL: [LineageView; 2] = [LineageView::Trajectory, LineageView::LightCurve];
+
+    fn label(self) -> &'static str {
+        match self {
+            LineageView::Trajectory => "Trajectory",
+            LineageView::LightCurve => "Light curve",
+        }
+    }
+}
 
 /// Detail page for a single lineage, reached by clicking its designation in
 /// the homepage's lineage table. `lineage_id` is actually the lineage's
@@ -38,6 +59,9 @@ pub fn LineagePage(lineage_id: String) -> Element {
     let replay_resource = use_resource(use_reactive!(|(replay_lineage_id,)| {
         replay_kalman_branch(replay_lineage_id)
     }));
+
+    let mut lineage_view = use_signal(|| LineageView::Trajectory);
+    let mut x_axis_unit = use_signal(|| XAxisUnit::ObservationIndex);
 
     // Plain owned snapshots, cheap to pass around as props without holding
     // onto the resources' `Ref` guards across the whole render.
@@ -74,7 +98,38 @@ pub fn LineagePage(lineage_id: String) -> Element {
                         div { class: "xl:w-96 flex-none",
                             IdentityCard { summary: summary.clone() }
                         }
-                        TrajectoryPlot { observations: observations.clone(), replay: replay.clone() }
+                        div { class: "flex-1 flex flex-col gap-2",
+                            div { class: "flex flex-wrap items-center justify-between gap-2",
+                                div { class: "join",
+                                    for view in LineageView::ALL {
+                                        button {
+                                            key: "{view.label()}",
+                                            class: if lineage_view() == view { "join-item btn btn-sm btn-active" } else { "join-item btn btn-sm" },
+                                            onclick: move |_| lineage_view.set(view),
+                                            "{view.label()}"
+                                        }
+                                    }
+                                }
+                                div { class: "join",
+                                    for unit in XAxisUnit::ALL {
+                                        button {
+                                            key: "{unit.label()}",
+                                            class: if x_axis_unit() == unit { "join-item btn btn-sm btn-active" } else { "join-item btn btn-sm" },
+                                            onclick: move |_| x_axis_unit.set(unit),
+                                            "{unit.label()}"
+                                        }
+                                    }
+                                }
+                            }
+                            match lineage_view() {
+                                LineageView::Trajectory => rsx! {
+                                    TrajectoryPlot { observations: observations.clone(), replay: replay.clone(), x_axis_unit: x_axis_unit() }
+                                },
+                                LineageView::LightCurve => rsx! {
+                                    LightCurvePlot { observations: observations.clone(), x_axis_unit: x_axis_unit() }
+                                },
+                            }
+                        }
                     }
                 },
                 Some(Err(e)) => rsx! {
