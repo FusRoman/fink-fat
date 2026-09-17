@@ -35,7 +35,7 @@ services:
       - "8080:8080"
     volumes:
       - .:/app                 # bind mount: local code changes are reflected instantly
-      - /app/target             # anonymous volume: keeps build artifacts isolated/persistent
+      - cargo-target:/app/target # named volume: persists across container recreation
     depends_on:
       - db
     environment:
@@ -44,3 +44,4 @@ services:
 volumes:
   db-data:
   pgadmin-data:
+  cargo-target:
