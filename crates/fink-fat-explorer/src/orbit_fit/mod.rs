@@ -1,3 +1,9 @@
+//! The single-lineage orbit fit: its job plumbing, and the result types the
+//! fit page renders.
+//!
+//! How a fit actually runs — parameters, dataset, solver, persistence — lives
+//! in [`crate::fit_pipeline`], shared with the bulk fit.
+
 pub mod history;
 pub mod latest;
 pub mod run;
@@ -5,290 +11,13 @@ pub mod status;
 
 use serde::{Deserialize, Serialize};
 
-/// Astrometric error model applied before the fit — mirrors
-/// `photom::observer::error_model::ObsErrorModel`, kept as our own type here
-/// so this module (and the wasm build of the form) doesn't need the
-/// server-only `photom`/`outfit` dependencies just to describe the choice.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ObsErrorModelChoice {
-    Fcct14,
-    Cbm10,
-    Vfcc17,
-    Lsst,
-}
-
-impl Default for ObsErrorModelChoice {
-    fn default() -> Self {
-        Self::Fcct14
-    }
-}
-
-impl ObsErrorModelChoice {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Fcct14 => "FCCT14 (Farnocchia et al. 2014)",
-            Self::Cbm10 => "CBM10 (Chesley, Baer & Monet 2010)",
-            Self::Vfcc17 => "VFCC17 (Vereš et al. 2017)",
-            Self::Lsst => "LSST (empirical Rubin/X05, Fink diaSource-derived)",
-        }
-    }
-}
-
-/// Dynamical model used to propagate the orbit during the fit. N-body is the
-/// point of this feature (a real perturbed dynamical model, rather than the
-/// two-body approximation the Kalman filter uses) so it's the default here,
-/// even though the `outfit` crate itself defaults to two-body.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PropagatorChoice {
-    TwoBody,
-    NBody,
-}
-
-impl Default for PropagatorChoice {
-    fn default() -> Self {
-        Self::NBody
-    }
-}
-
-/// Planets that can be added as N-body perturbers. The Sun is always
-/// included and isn't offered as a choice.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PerturberChoice {
-    Mercury,
-    Venus,
-    EarthMoon,
-    Mars,
-    Jupiter,
-    Saturn,
-    Uranus,
-    Neptune,
-    Pluto,
-}
-
-impl PerturberChoice {
-    pub const ALL: [PerturberChoice; 9] = [
-        Self::Mercury,
-        Self::Venus,
-        Self::EarthMoon,
-        Self::Mars,
-        Self::Jupiter,
-        Self::Saturn,
-        Self::Uranus,
-        Self::Neptune,
-        Self::Pluto,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Mercury => "Mercury",
-            Self::Venus => "Venus",
-            Self::EarthMoon => "Earth-Moon",
-            Self::Mars => "Mars",
-            Self::Jupiter => "Jupiter",
-            Self::Saturn => "Saturn",
-            Self::Uranus => "Uranus",
-            Self::Neptune => "Neptune",
-            Self::Pluto => "Pluto",
-        }
-    }
-}
-
-/// The 9 heaviest of the 300 main-belt asteroids in `outfit`'s ANISE
-/// supplementary kernel (`codes_300ast_20100725.bsp`), by descending GM —
-/// same ordering as `outfit::propagator::planet_gm::known_main_belt_asteroids_by_mass`.
-/// Only resolvable with the ANISE ephemeris backend (`JPLEphem::with_main_belt_asteroids`),
-/// which the whole app now uses. Kept as our own enum, mapping to a plain
-/// asteroid number rather than an `outfit` type, for the same reason as
-/// `ObsErrorModelChoice`/`PerturberChoice`: the wasm build of the form must
-/// stay free of the server-only `outfit`/`photom` dependencies.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AsteroidPerturberChoice {
-    Ceres,
-    Pallas,
-    Juno,
-    Vesta,
-    Hygiea,
-    Eunomia,
-    Euphrosyne,
-    Davida,
-    Interamnia,
-}
-
-impl AsteroidPerturberChoice {
-    pub const ALL: [AsteroidPerturberChoice; 9] = [
-        Self::Ceres,
-        Self::Pallas,
-        Self::Juno,
-        Self::Vesta,
-        Self::Hygiea,
-        Self::Eunomia,
-        Self::Euphrosyne,
-        Self::Davida,
-        Self::Interamnia,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Ceres => "Ceres",
-            Self::Pallas => "Pallas",
-            Self::Juno => "Juno",
-            Self::Vesta => "Vesta",
-            Self::Hygiea => "Hygiea",
-            Self::Eunomia => "Eunomia",
-            Self::Euphrosyne => "Euphrosyne",
-            Self::Davida => "Davida",
-            Self::Interamnia => "Interamnia",
-        }
-    }
-
-    /// The minor-planet number `outfit::jpl_ephem::naif::naif_ids::main_belt::AsteroidNumber`
-    /// resolves through the main-belt supplementary kernel.
-    pub fn asteroid_number(self) -> u32 {
-        match self {
-            Self::Ceres => 1,
-            Self::Pallas => 2,
-            Self::Juno => 3,
-            Self::Vesta => 4,
-            Self::Hygiea => 10,
-            Self::Eunomia => 15,
-            Self::Euphrosyne => 31,
-            Self::Davida => 511,
-            Self::Interamnia => 704,
-        }
-    }
-}
-
-/// All tunable parameters of an Outfit orbit fit, flattened out of
-/// `outfit::IODParams` / `outfit::DifferentialCorrectionConfig` /
-/// `ObsErrorModel` / `PropagatorKind` into one plain, serializable struct the
-/// form can bind to and the server can convert back into the crate's own
-/// types. The IOD/Gauss fields are kept (and shown in the form) for
-/// completeness even though the fit always seeds from the current Kalman
-/// orbit rather than running Gauss IOD — see `run::start_orbit_fit`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct OrbitFitParams {
-    pub error_model: ObsErrorModelChoice,
-
-    // --- IOD / Gauss (unused while seeding from the Kalman orbit) ---
-    pub n_noise_realizations: usize,
-    pub noise_scale: f64,
-    pub extf: f64,
-    pub dtmax: f64,
-    pub dt_min: f64,
-    pub dt_max_triplet: f64,
-    pub optimal_interval_time: f64,
-    pub max_obs_for_triplets: usize,
-    pub max_triplets: u32,
-    pub gap_max: f64,
-    pub max_ecc: f64,
-    pub max_perihelion_au: f64,
-    pub min_rho2_au: f64,
-    pub aberth_max_iter: u32,
-    pub aberth_eps: f64,
-    pub kepler_eps: f64,
-    pub max_tested_solutions: usize,
-    pub r2_min_au: f64,
-    pub r2_max_au: f64,
-    pub newton_eps: f64,
-    pub newton_max_it: usize,
-    pub root_imag_eps: f64,
-
-    // --- Differential correction ---
-    pub max_newton_iterations: usize,
-    pub max_outlier_rejection_passes: usize,
-    pub convergence_threshold: f64,
-    pub convergence_before_rejection_threshold: f64,
-    pub rms_stagnation_ratio: f64,
-    pub rms_divergence_ratio: f64,
-    pub max_stagnation_iterations: usize,
-    pub enable_outlier_rejection: bool,
-
-    // --- Dynamical model ---
-    pub propagator: PropagatorChoice,
-    pub perturbers: Vec<PerturberChoice>,
-    pub asteroid_perturbers: Vec<AsteroidPerturberChoice>,
-}
-
-impl Default for OrbitFitParams {
-    fn default() -> Self {
-        Self {
-            error_model: ObsErrorModelChoice::default(),
-
-            n_noise_realizations: 20,
-            noise_scale: 1.0,
-            extf: -1.0,
-            dtmax: 30.0,
-            dt_min: 0.03,
-            dt_max_triplet: 150.0,
-            optimal_interval_time: 20.0,
-            max_obs_for_triplets: 100,
-            max_triplets: 10,
-            gap_max: 8.0 / 24.0,
-            max_ecc: 5.0,
-            max_perihelion_au: 1.0e3,
-            min_rho2_au: 0.01,
-            aberth_max_iter: 50,
-            aberth_eps: 1.0e-6,
-            kepler_eps: 1e3 * f64::EPSILON,
-            max_tested_solutions: 3,
-            r2_min_au: 0.05,
-            r2_max_au: 200.0,
-            newton_eps: 1.0e-10,
-            newton_max_it: 50,
-            root_imag_eps: 1.0e-6,
-
-            max_newton_iterations: 30,
-            max_outlier_rejection_passes: 10,
-            convergence_threshold: 1e-4,
-            convergence_before_rejection_threshold: 2.0,
-            rms_stagnation_ratio: 0.98,
-            rms_divergence_ratio: 1.5,
-            max_stagnation_iterations: 3,
-            enable_outlier_rejection: true,
-
-            propagator: PropagatorChoice::default(),
-            perturbers: vec![PerturberChoice::Jupiter, PerturberChoice::Saturn],
-            asteroid_perturbers: Vec::new(),
-        }
-    }
-}
-
-/// Minimum number of selected observations to attempt a fit — a differential
-/// correction of 6 free elements needs at least 3 optical observations (6
-/// scalar measurements).
-pub const MIN_OBSERVATIONS: usize = 3;
-
-/// Minimum time baseline (days) across the selected observations. Below
-/// this, the arc is too short for the correction to reliably constrain all
-/// six elements — `outfit` would likely reject it anyway, but this lets the
-/// UI warn before the round trip.
-pub const MIN_BASELINE_DAYS: f64 = 0.25;
+use crate::fit_pipeline::fit::{FitMethod, KeplerianView, ObsResidual};
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum JobStatus {
     Running,
     Done,
     Failed,
-}
-
-/// One Keplerian orbital element with its 1-sigma uncertainty (`None` when
-/// the covariance wasn't propagated, e.g. the fit failed before producing
-/// one).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct KeplerianView {
-    pub semi_major_axis_au: f64,
-    pub eccentricity: f64,
-    pub inclination_deg: f64,
-    pub ascending_node_longitude_deg: f64,
-    pub periapsis_argument_deg: f64,
-    pub mean_anomaly_deg: f64,
-
-    pub sigma_semi_major_axis_au: Option<f64>,
-    pub sigma_eccentricity: Option<f64>,
-    pub sigma_inclination_deg: Option<f64>,
-    pub sigma_ascending_node_longitude_deg: Option<f64>,
-    pub sigma_periapsis_argument_deg: Option<f64>,
-    pub sigma_mean_anomaly_deg: Option<f64>,
 }
 
 /// Difference between two Keplerian orbits (new fit minus a reference
@@ -305,24 +34,17 @@ pub struct OrbitDelta {
     pub reference_epoch: f64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ObsSelectionView {
-    Kept,
-    Rejected,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ObsResidual {
-    pub obs_id: i64,
-    pub mjd_tt: f64,
-    pub residual_ra_arcsec: f64,
-    pub residual_dec_arcsec: f64,
-    pub chi: f64,
-    pub selection: ObsSelectionView,
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OrbitFitResult {
+    /// The branch this fit ran on. `None` only for rows written before this
+    /// column existed (the bulk fit has always populated it; the
+    /// single-lineage fit started populating it once it began resolving an
+    /// explicit branch — see `run::run_fit`).
+    pub branch_id: Option<i64>,
+    /// [`FitMethod::IodOnly`] means the differential correction diverged and
+    /// this is the preliminary Gauss orbit — the page warns about it rather
+    /// than presenting it as a least-squares solution.
+    pub fit_method: FitMethod,
     pub reference_epoch: f64,
     pub keplerian: KeplerianView,
 
@@ -386,6 +108,11 @@ impl OrbitFitJob {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OrbitFitSummary {
     pub id: i64,
+    /// See [`OrbitFitResult::branch_id`].
+    pub branch_id: Option<i64>,
+    /// See [`OrbitFitResult::fit_method`] — what makes an IOD-only row from a
+    /// bulk run readable as such in the history table.
+    pub fit_method: FitMethod,
     pub fitted_at: String,
     pub n_observations_used: i32,
     pub normalised_rms: f64,
@@ -397,4 +124,64 @@ pub struct OrbitFitSummary {
     pub tan_half_incl_cos_node: f64,
     pub mean_longitude: f64,
     pub covariance: Vec<f64>,
+}
+
+/// Warns when the branch about to be fit differs from the branch the
+/// lineage's most recent orbit fit (individual or bulk) actually used.
+///
+/// The single-lineage fit page resolves "the lineage's best branch" once,
+/// up front (`lineage_page::observations_table::get_lineage_observations`),
+/// but the bulk fit runs every branch of a lineage independently — so a past
+/// bulk-fit success can silently belong to a different `branch_id` than the
+/// one this page is currently set up to fit, producing a different
+/// observation set and a different Kalman seed for what looks like "the same
+/// lineage" to the user.
+///
+/// # Arguments
+///
+/// - `current_branch_id` — the branch this page is about to fit.
+/// - `last_fitted_branch_id` — the branch of the lineage's most recent
+///   `orbit_fits` row, if any (see [`OrbitFitResult::branch_id`]).
+///
+/// # Returns
+///
+/// `Some(message)` when the two are known and differ; `None` when they match
+/// or when no previous fit (or no `branch_id` on it) is available to compare
+/// against.
+pub fn branch_mismatch_warning(
+    current_branch_id: i64,
+    last_fitted_branch_id: Option<i64>,
+) -> Option<String> {
+    match last_fitted_branch_id {
+        Some(last) if last != current_branch_id => Some(format!(
+            "The most recent fit for this lineage ran on branch #{last}; this page is \
+             currently set up to fit branch #{current_branch_id} instead, so it may use \
+             different observations and produce a different result."
+        )),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn branch_mismatch_warning_is_none_when_branches_match() {
+        assert_eq!(branch_mismatch_warning(42, Some(42)), None);
+    }
+
+    #[test]
+    fn branch_mismatch_warning_is_none_without_a_previous_fit() {
+        assert_eq!(branch_mismatch_warning(42, None), None);
+    }
+
+    #[test]
+    fn branch_mismatch_warning_fires_when_branches_differ() {
+        let warning = branch_mismatch_warning(42, Some(7));
+        assert!(warning.is_some());
+        let message = warning.unwrap();
+        assert!(message.contains("#7"));
+        assert!(message.contains("#42"));
+    }
 }

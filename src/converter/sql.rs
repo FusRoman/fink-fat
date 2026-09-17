@@ -621,6 +621,23 @@ fn create_tables(transaction: &mut postgres::Transaction<'_>) -> Result<(), post
 
         CREATE INDEX IF NOT EXISTS idx_orbit_fits_branch
             ON orbit_fits (branch_id, fitted_at DESC);
+
+        -- One row per failed bulk-fit attempt (Gauss IOD found no valid
+        -- root). `orbit_fits` only ever holds successes, so without this a
+        -- branch that failed a fit is indistinguishable from one that was
+        -- simply never submitted to a bulk fit — the homepage's quality-tier
+        -- badge needs to tell those two apart. Same rationale as
+        -- `orbit_fits` for being append-only and FK-less: not TRUNCATEd by
+        -- `write_sql_tables`, and a FK into `branches` would wipe this
+        -- history on every `convert` re-run.
+        CREATE TABLE IF NOT EXISTS orbit_fit_failures (
+            id BIGSERIAL PRIMARY KEY,
+            branch_id BIGINT NOT NULL,
+            attempted_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_orbit_fit_failures_branch
+            ON orbit_fit_failures (branch_id, attempted_at DESC);
         ",
     )
 }

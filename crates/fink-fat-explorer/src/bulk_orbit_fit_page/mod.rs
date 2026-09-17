@@ -5,7 +5,7 @@ use dioxus::prelude::*;
 use crate::bulk_orbit_fit::run::start_bulk_orbit_fit;
 use crate::bulk_orbit_fit::status::get_bulk_orbit_fit_job_status;
 use crate::bulk_orbit_fit::{BulkOrbitFitJobView, JobStatus};
-use crate::orbit_fit::OrbitFitParams;
+use crate::fit_pipeline::params::OrbitFitParams;
 use crate::orbit_fit_page::FitParamsForm;
 use crate::sleep_ms;
 

@@ -1,19 +1,18 @@
 use dioxus::prelude::*;
 
-use crate::orbit_fit::OrbitFitParams;
+use crate::fit_pipeline::params::OrbitFitParams;
 
-/// Base seed for the deterministic per-branch RNGs — same role as
-/// `lsst_cross_fink_fat_analysis::RNG_SEED`, kept local since no other module
-/// needs it.
+/// How many rows one insert transaction carries, so a long insert can report
+/// progress between chunks.
 #[cfg(feature = "server")]
-const RNG_SEED: u64 = 42;
+const INSERT_CHUNK: usize = 2000;
 
 /// Kick off a bulk Outfit orbit fit over every eligible branch (>= 3
 /// observations, >= `MIN_BASELINE_DAYS` baseline) in the database, run fully
 /// independently per branch (Gauss IOD + differential correction, no Kalman
-/// seed) — unlike the single-lineage fit in `orbit_fit`. Returns immediately
-/// with a job id; poll `status::get_bulk_orbit_fit_job_status` for progress.
-/// Only one bulk fit can run at a time.
+/// seed). Returns immediately with a job id; poll
+/// `status::get_bulk_orbit_fit_job_status` for progress. Only one bulk fit can
+/// run at a time.
 #[server]
 pub async fn start_bulk_orbit_fit(params: OrbitFitParams) -> Result<u64, ServerFnError> {
     use crate::{get_bulk_orbit_fit_jobs, NEXT_BULK_ORBIT_FIT_JOB_ID};
@@ -75,138 +74,81 @@ struct EligibleBranchRow {
     lineage_designation: String,
 }
 
+/// What happened to one branch's fit attempt: either a row ready for
+/// `orbit_fits`, or just the `branch_id` to record in `orbit_fit_failures`.
+/// Kept as one `par_iter().map(...)` output (rather than `filter_map`ing the
+/// failures away) specifically so failures can still be persisted — that is
+/// the only thing telling a branch whose fit failed apart from one that was
+/// never submitted to a bulk fit.
 #[cfg(feature = "server")]
-#[derive(sqlx::FromRow)]
-struct BulkObsRow {
-    branch_id: i64,
-    id: i64,
-    ra: f64,
-    ra_err: f64,
-    dec: f64,
-    dec_err: f64,
-    magnitude: f64,
-    mag_err: f64,
-    filter: i16,
-    mjd_tt: f64,
-    mpc_code_obs: String,
+enum FitOutcome {
+    Success(crate::fit_pipeline::store::OrbitFitRow),
+    Failure(i64),
 }
 
-/// One fitted branch, ready to be inserted as a row of `orbit_fits`.
+/// Loads every eligible branch's observations in one query, as the pipeline's
+/// row shape.
 #[cfg(feature = "server")]
-struct BulkFitRow {
-    branch_id: i64,
-    lineage_designation: String,
-    observation_ids: Vec<i64>,
-    n_observations_used: i32,
-    fit_method: &'static str,
-    reference_epoch: f64,
-    semi_major_axis: f64,
-    eccentricity_sin_lon: f64,
-    eccentricity_cos_lon: f64,
-    tan_half_incl_sin_node: f64,
-    tan_half_incl_cos_node: f64,
-    mean_longitude: f64,
-    covariance: Vec<f64>,
-    normalised_rms: f64,
-    num_measurements: i32,
-    converged: bool,
-    keplerian_json: serde_json::Value,
-}
+async fn load_observations(
+    branch_ids: &[i64],
+) -> Result<Vec<crate::fit_pipeline::dataset::FitObservation>, String> {
+    use crate::fit_pipeline::dataset::FitObservation;
 
-/// Converts one branch's `outfit::FitOrbitResult` into a `BulkFitRow`.
-/// `Err` means the orbit couldn't be converted to either representation —
-/// treated the same as a fit failure (not inserted, counted as `failed`).
-///
-/// Unlike `orbit_fit::run::run_fit`'s `DifferentialCorrectionOutput`, the
-/// seedless `differential_correction` wrapper used here only returns the
-/// final orbital elements and a quality scalar — not the per-iteration
-/// Newton count or the final observation selection — so
-/// `total_newton_iterations` isn't tracked (stored as 0) and
-/// `n_observations_used`/`num_measurements` reflect every observation
-/// passed in, not the post-outlier-rejection subset.
-#[cfg(feature = "server")]
-fn build_row(
-    branch_id: i64,
-    lineage_designation: String,
-    observations: &[photom::observation_dataset::observation::Observation],
-    fit: &outfit::constants::FitOrbitResult,
-) -> Result<BulkFitRow, String> {
-    use outfit::constants::FitOrbitResult;
-    use outfit::OrbitalElements;
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        branch_id: i64,
+        id: i64,
+        ra: f64,
+        ra_err: f64,
+        dec: f64,
+        dec_err: f64,
+        magnitude: f64,
+        mag_err: f64,
+        filter: i16,
+        mjd_tt: f64,
+        mpc_code_obs: String,
+    }
 
-    let fit_method = match fit {
-        FitOrbitResult::DifferentialCorrection(_) => "differential_correction",
-        FitOrbitResult::IODGauss(_) => "iod_only",
-    };
-    let normalised_rms = fit.orbit_quality();
-    let elements = fit.orbital_elements();
+    let pool = crate::get_pool().await;
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT bo.branch_id, o.id, o.ra, o.ra_err, o.dec, o.dec_err, o.magnitude, o.mag_err, \
+         o.filter, o.mjd_tt, o.mpc_code_obs
+         FROM branch_observations bo
+         JOIN observations o ON o.id = bo.obs_id
+         WHERE bo.branch_id = ANY($1)",
+    )
+    .bind(branch_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
 
-    let (equinoctial, covariance) = match elements.to_equinoctial().map_err(|e| e.to_string())? {
-        OrbitalElements::Equinoctial {
-            elements,
-            covariance,
-            ..
-        } => (
-            elements,
-            covariance
-                .map(|c| c.matrix.iter().copied().collect::<Vec<f64>>())
-                .unwrap_or_default(),
-        ),
-        _ => return Err("expected equinoctial orbital elements after conversion".to_string()),
-    };
-
-    let keplerian = elements.to_keplerian().ok().and_then(|oe| match oe {
-        OrbitalElements::Keplerian {
-            elements,
-            uncertainty,
-            ..
-        } => Some(crate::orbit_fit::run::keplerian_view(
-            &elements,
-            uncertainty.as_ref(),
-        )),
-        _ => None,
-    });
-    let keplerian_json = keplerian
-        .and_then(|view| serde_json::to_value(view).ok())
-        .unwrap_or(serde_json::Value::Null);
-
-    let converged = fit_method == "differential_correction"
-        && normalised_rms.is_finite()
-        && normalised_rms < 10.0;
-
-    Ok(BulkFitRow {
-        branch_id,
-        lineage_designation,
-        observation_ids: observations.iter().map(|o| *o.id() as i64).collect(),
-        n_observations_used: observations.len() as i32,
-        fit_method,
-        reference_epoch: equinoctial.reference_epoch,
-        semi_major_axis: equinoctial.semi_major_axis,
-        eccentricity_sin_lon: equinoctial.eccentricity_sin_lon,
-        eccentricity_cos_lon: equinoctial.eccentricity_cos_lon,
-        tan_half_incl_sin_node: equinoctial.tan_half_incl_sin_node,
-        tan_half_incl_cos_node: equinoctial.tan_half_incl_cos_node,
-        mean_longitude: equinoctial.mean_longitude,
-        covariance,
-        normalised_rms,
-        num_measurements: (observations.len() * 2) as i32,
-        converged,
-        keplerian_json,
-    })
+    Ok(rows
+        .into_iter()
+        .map(|r| FitObservation {
+            id: r.id,
+            branch_id: r.branch_id,
+            ra: r.ra,
+            ra_err: r.ra_err,
+            dec: r.dec,
+            dec_err: r.dec_err,
+            magnitude: r.magnitude,
+            mag_err: r.mag_err,
+            filter: r.filter,
+            mjd_tt: r.mjd_tt,
+            mpc_code_obs: r.mpc_code_obs,
+        })
+        .collect())
 }
 
 #[cfg(feature = "server")]
 async fn run_bulk_fit(job_id: u64, params: &OrbitFitParams) -> Result<(), String> {
-    use crate::orbit_fit::run::{build_dc_config, build_iod_params, to_error_model};
-    use crate::orbit_fit::{MIN_BASELINE_DAYS, MIN_OBSERVATIONS};
-    use outfit::cache::OutfitCache;
-    use outfit::differential_orbit_correction::differential_correction;
-    use photom::io::polars::FromPolarsArgs;
-    use photom::observation_dataset::ObsDataset;
-    use photom::observer::error_model::ModelCorrection;
-    use photom::TrajId;
-    use polars::df;
-    use rand::{rngs::SmallRng, SeedableRng};
+    use crate::fit_pipeline::dataset;
+    use crate::fit_pipeline::fit::{fit_seedless, Diagnostics};
+    use crate::fit_pipeline::params::{
+        build_dc_config, build_iod_params, to_error_model, ELIGIBLE_BRANCH_QUERY,
+        MIN_BASELINE_DAYS, MIN_OBSERVATIONS,
+    };
+    use crate::fit_pipeline::store::{self, OrbitFitRow};
     use rayon::prelude::*;
     use std::collections::HashMap;
     use std::sync::atomic::Ordering;
@@ -221,19 +163,12 @@ async fn run_bulk_fit(job_id: u64, params: &OrbitFitParams) -> Result<(), String
     .await;
 
     let pool = crate::get_pool().await;
-    let eligible: Vec<EligibleBranchRow> = sqlx::query_as(
-        "SELECT bo.branch_id, b.lineage_designation
-         FROM branch_observations bo
-         JOIN branches b ON b.branch_id = bo.branch_id
-         JOIN observations o ON o.id = bo.obs_id
-         GROUP BY bo.branch_id, b.lineage_designation
-         HAVING count(*) >= $1 AND (max(o.mjd_tt) - min(o.mjd_tt)) >= $2",
-    )
-    .bind(MIN_OBSERVATIONS as i64)
-    .bind(MIN_BASELINE_DAYS)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    let eligible: Vec<EligibleBranchRow> = sqlx::query_as(ELIGIBLE_BRANCH_QUERY)
+        .bind(MIN_OBSERVATIONS as i64)
+        .bind(MIN_BASELINE_DAYS)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| e.to_string())?;
 
     if eligible.is_empty() {
         return Err("no eligible trajectories found".to_string());
@@ -256,70 +191,17 @@ async fn run_bulk_fit(job_id: u64, params: &OrbitFitParams) -> Result<(), String
     push_log(job_id, format!("{} eligible branches.", branch_ids.len())).await;
 
     push_log(job_id, "Fetching their observations...").await;
-    let rows: Vec<BulkObsRow> = sqlx::query_as(
-        "SELECT bo.branch_id, o.id, o.ra, o.ra_err, o.dec, o.dec_err, o.magnitude, o.mag_err, \
-         o.filter, o.mjd_tt, o.mpc_code_obs
-         FROM branch_observations bo
-         JOIN observations o ON o.id = bo.obs_id
-         WHERE bo.branch_id = ANY($1)",
-    )
-    .bind(&branch_ids)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    let observation_rows = load_observations(&branch_ids).await?;
 
     push_log(
         job_id,
         format!(
             "{} observations loaded; building the shared dataset...",
-            rows.len()
+            observation_rows.len()
         ),
     )
     .await;
 
-    let ids: Vec<u64> = rows.iter().map(|r| r.id as u64).collect();
-    let ras: Vec<f64> = rows.iter().map(|r| r.ra).collect();
-    let ra_errs: Vec<f64> = rows.iter().map(|r| r.ra_err).collect();
-    let decs: Vec<f64> = rows.iter().map(|r| r.dec).collect();
-    let dec_errs: Vec<f64> = rows.iter().map(|r| r.dec_err).collect();
-    let magnitudes: Vec<f64> = rows.iter().map(|r| r.magnitude).collect();
-    let mag_errs: Vec<f64> = rows.iter().map(|r| r.mag_err).collect();
-    let filters: Vec<u32> = rows.iter().map(|r| r.filter as u32).collect();
-    let mjd_tts: Vec<f64> = rows.iter().map(|r| r.mjd_tt).collect();
-    let mpc_codes: Vec<String> = rows.iter().map(|r| r.mpc_code_obs.clone()).collect();
-    let traj_ids: Vec<u32> = rows.iter().map(|r| r.branch_id as u32).collect();
-    drop(rows);
-
-    let mut stage_start = std::time::Instant::now();
-    let df = df!(
-        "id" => ids,
-        "ra" => ras,
-        "ra_err" => ra_errs,
-        "dec" => decs,
-        "dec_err" => dec_errs,
-        "magnitude" => magnitudes,
-        "mag_err" => mag_errs,
-        "filter" => filters,
-        "mjd_tt" => mjd_tts,
-        "mpc_code_obs" => mpc_codes,
-        "traj_id" => traj_ids,
-    )
-    .map_err(|e| e.to_string())?;
-    push_log(
-        job_id,
-        format!(
-            "DataFrame assembled ({} rows) in {:.1}s.",
-            df.height(),
-            stage_start.elapsed().as_secs_f64()
-        ),
-    )
-    .await;
-
-    push_log(
-        job_id,
-        "Resolving observers and building the ObsDataset (from_polars)...",
-    )
-    .await;
     let kalman_context = crate::get_kalman_context().await;
     let ephem = kalman_context.get_ephem();
     let jpl: &'static outfit::JPLEphem = &ephem.jpl;
@@ -327,24 +209,22 @@ async fn run_bulk_fit(job_id: u64, params: &OrbitFitParams) -> Result<(), String
     let error_model = to_error_model(params.error_model);
     let gap_max = params.gap_max;
 
-    stage_start = std::time::Instant::now();
-    let (dataset, cache, from_polars_secs, cache_build_secs) =
+    let mut stage_start = std::time::Instant::now();
+    let (dataset, cache, dataset_secs, cache_build_secs) =
         tokio::task::spawn_blocking(move || -> Result<_, String> {
             let sub_start = std::time::Instant::now();
-            let dataset = ObsDataset::from_polars(&df, FromPolarsArgs::default())
-                .map_err(|e| e.to_string())?;
-            let dataset = dataset
-                .with_error_model(error_model)
-                .apply_model_errors()
-                .apply_batch_rms_correction(gap_max);
-            let from_polars_secs = sub_start.elapsed().as_secs_f64();
+            let dataset = dataset::apply_error_model(
+                dataset::build_dataset(&observation_rows)?,
+                error_model,
+                gap_max,
+            );
+            let dataset_secs = sub_start.elapsed().as_secs_f64();
 
             let sub_start = std::time::Instant::now();
-            let cache =
-                OutfitCache::build(&dataset, jpl, ut1_provider, true).map_err(|e| e.to_string())?;
+            let cache = dataset::build_cache(&dataset, jpl, ut1_provider)?;
             let cache_build_secs = sub_start.elapsed().as_secs_f64();
 
-            Ok((dataset, cache, from_polars_secs, cache_build_secs))
+            Ok((dataset, cache, dataset_secs, cache_build_secs))
         })
         .await
         .map_err(|e| e.to_string())??;
@@ -353,7 +233,7 @@ async fn run_bulk_fit(job_id: u64, params: &OrbitFitParams) -> Result<(), String
         format!(
             "ObsDataset built ({} observations) in {:.1}s.",
             dataset.observation_count(),
-            from_polars_secs
+            dataset_secs
         ),
     )
     .await;
@@ -408,55 +288,66 @@ async fn run_bulk_fit(job_id: u64, params: &OrbitFitParams) -> Result<(), String
     .await;
     stage_start = std::time::Instant::now();
 
-    let fit_rows: Vec<BulkFitRow> = {
+    let outcomes: Vec<FitOutcome> = {
         let processed_counter = processed_counter.clone();
         let succeeded_counter = succeeded_counter.clone();
         let failed_counter = failed_counter.clone();
         tokio::task::spawn_blocking(move || {
             branch_lineages
                 .par_iter()
-                .filter_map(|(branch_id, lineage_designation)| {
-                    let traj_id = TrajId::from(*branch_id as u32);
-                    let mut rng = SmallRng::seed_from_u64(RNG_SEED ^ traj_id.stable_hash());
-
-                    let outcome = dataset.materialize_trajectory(traj_id.clone()).map(|m| {
-                        let mut observations: Vec<_> =
-                            m.collect_into_vec().into_iter().cloned().collect();
-                        observations.sort_by(|a, b| a.mjd_tt().total_cmp(&b.mjd_tt()));
-                        let result = differential_correction(
-                            &observations,
-                            &cache,
-                            jpl,
-                            &iod_params,
-                            &dc_config,
-                            None,
-                            &mut rng,
-                        );
-                        (observations, result)
-                    });
+                .map(|(branch_id, lineage_designation)| {
+                    let observations = dataset::observations_of(&dataset, *branch_id);
+                    // Diagnostics are skipped here: recovering per-observation
+                    // residuals costs a second correction pass per branch,
+                    // which is affordable for one on-demand fit but not across
+                    // every eligible branch.
+                    let product = (!observations.is_empty())
+                        .then(|| {
+                            fit_seedless(
+                                &observations,
+                                &cache,
+                                jpl,
+                                &iod_params,
+                                &dc_config,
+                                *branch_id,
+                                Diagnostics::Skip,
+                            )
+                            .ok()
+                        })
+                        .flatten();
 
                     processed_counter.fetch_add(1, Ordering::Relaxed);
 
-                    let row = match outcome {
-                        Some((observations, Ok(fit))) => {
-                            build_row(*branch_id, lineage_designation.clone(), &observations, &fit)
-                                .ok()
+                    match product {
+                        Some(product) => {
+                            succeeded_counter.fetch_add(1, Ordering::Relaxed);
+                            FitOutcome::Success(bulk_row(
+                                *branch_id,
+                                lineage_designation.clone(),
+                                &observations,
+                                product,
+                            ))
                         }
-                        _ => None,
-                    };
-
-                    if row.is_some() {
-                        succeeded_counter.fetch_add(1, Ordering::Relaxed);
-                    } else {
-                        failed_counter.fetch_add(1, Ordering::Relaxed);
+                        None => {
+                            failed_counter.fetch_add(1, Ordering::Relaxed);
+                            FitOutcome::Failure(*branch_id)
+                        }
                     }
-                    row
                 })
                 .collect()
         })
         .await
         .map_err(|e| e.to_string())?
     };
+
+    let mut fit_rows: Vec<OrbitFitRow> = Vec::new();
+    let mut failed_branch_ids: Vec<i64> = Vec::new();
+    for outcome in outcomes {
+        match outcome {
+            FitOutcome::Success(row) => fit_rows.push(row),
+            FitOutcome::Failure(branch_id) => failed_branch_ids.push(branch_id),
+        }
+    }
 
     push_log(
         job_id,
@@ -468,59 +359,22 @@ async fn run_bulk_fit(job_id: u64, params: &OrbitFitParams) -> Result<(), String
     )
     .await;
 
-    let error_model_str = format!("{:?}", params.error_model);
-    let fit_params_json = serde_json::to_value(params).map_err(|e| e.to_string())?;
-
     stage_start = std::time::Instant::now();
-    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-    for (i, row) in fit_rows.iter().enumerate() {
-        if i > 0 && i % 2000 == 0 {
+    for (chunk_index, chunk) in fit_rows.chunks(INSERT_CHUNK).enumerate() {
+        store::insert_orbit_fits(pool, params, chunk).await?;
+        let inserted = (chunk_index * INSERT_CHUNK + chunk.len()).min(fit_rows.len());
+        if inserted < fit_rows.len() {
             push_log(
                 job_id,
-                format!("Inserted {}/{} fit rows so far...", i, fit_rows.len()),
+                format!(
+                    "Inserted {}/{} fit rows so far...",
+                    inserted,
+                    fit_rows.len()
+                ),
             )
             .await;
         }
-        sqlx::query(
-            "INSERT INTO orbit_fits (
-                lineage_designation, branch_id, observation_ids, n_observations_used,
-                error_model, fit_method, fit_params, reference_epoch, semi_major_axis,
-                eccentricity_sin_lon, eccentricity_cos_lon, tan_half_incl_sin_node,
-                tan_half_incl_cos_node, mean_longitude, covariance, normalised_rms,
-                total_newton_iterations, num_measurements, converged, keplerian,
-                delta_vs_previous_fit, residuals
-            ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, \
-                $19, $20, $21, $22
-            )",
-        )
-        .bind(&row.lineage_designation)
-        .bind(row.branch_id)
-        .bind(&row.observation_ids)
-        .bind(row.n_observations_used)
-        .bind(&error_model_str)
-        .bind(row.fit_method)
-        .bind(&fit_params_json)
-        .bind(row.reference_epoch)
-        .bind(row.semi_major_axis)
-        .bind(row.eccentricity_sin_lon)
-        .bind(row.eccentricity_cos_lon)
-        .bind(row.tan_half_incl_sin_node)
-        .bind(row.tan_half_incl_cos_node)
-        .bind(row.mean_longitude)
-        .bind(&row.covariance)
-        .bind(row.normalised_rms)
-        .bind(0_i32)
-        .bind(row.num_measurements)
-        .bind(row.converged)
-        .bind(&row.keplerian_json)
-        .bind(Option::<serde_json::Value>::None)
-        .bind(serde_json::Value::Array(Vec::new()))
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| e.to_string())?;
     }
-    tx.commit().await.map_err(|e| e.to_string())?;
     push_log(
         job_id,
         format!(
@@ -530,6 +384,18 @@ async fn run_bulk_fit(job_id: u64, params: &OrbitFitParams) -> Result<(), String
         ),
     )
     .await;
+
+    if !failed_branch_ids.is_empty() {
+        store::record_fit_failures(pool, &failed_branch_ids).await?;
+        push_log(
+            job_id,
+            format!(
+                "{} failed attempts recorded in orbit_fit_failures.",
+                failed_branch_ids.len()
+            ),
+        )
+        .await;
+    }
 
     push_log(
         job_id,
@@ -543,4 +409,25 @@ async fn run_bulk_fit(job_id: u64, params: &OrbitFitParams) -> Result<(), String
     .await;
 
     Ok(())
+}
+
+/// Wraps one branch's fit product into a storable row.
+///
+/// The bulk job has no "previous fit" to compare against — that comparison is
+/// the single-lineage page's, where the user is looking at one lineage's
+/// history.
+#[cfg(feature = "server")]
+fn bulk_row(
+    branch_id: i64,
+    lineage_designation: String,
+    observations: &[photom::observation_dataset::observation::Observation],
+    product: crate::fit_pipeline::fit::FitProduct,
+) -> crate::fit_pipeline::store::OrbitFitRow {
+    crate::fit_pipeline::store::OrbitFitRow {
+        lineage_designation,
+        branch_id,
+        observation_ids: observations.iter().map(|o| *o.id() as i64).collect(),
+        delta_vs_previous_fit: None,
+        product,
+    }
 }

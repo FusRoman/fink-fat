@@ -12,13 +12,12 @@ use std::collections::HashSet;
 
 use dioxus::prelude::*;
 
+use crate::fit_pipeline::params::{OrbitFitParams, MIN_BASELINE_DAYS, MIN_OBSERVATIONS};
 use crate::lineage_page::observations_table::{get_lineage_observations, ObservationRow};
-use crate::orbit_fit::latest::get_latest_orbit_fit_result;
+use crate::orbit_fit::latest::{get_latest_fit_params, get_latest_orbit_fit_result};
 use crate::orbit_fit::run::start_orbit_fit;
 use crate::orbit_fit::status::get_orbit_fit_job_status;
-use crate::orbit_fit::{
-    JobStatus, OrbitFitJobView, OrbitFitParams, OrbitFitResult, MIN_BASELINE_DAYS, MIN_OBSERVATIONS,
-};
+use crate::orbit_fit::{branch_mismatch_warning, JobStatus, OrbitFitJobView, OrbitFitResult};
 
 use fit_progress::FitProgress;
 use fit_result::FitResult;
@@ -41,8 +40,15 @@ pub fn OrbitFitPage(lineage_id: String) -> Element {
     }));
 
     let observations: Vec<ObservationRow> = match &*observations_resource.read() {
-        Some(Ok(rows)) => rows.clone(),
+        Some(Ok(Some(data))) => data.observations.clone(),
         _ => Vec::new(),
+    };
+    // The branch these observations came from — threaded explicitly into
+    // `start_orbit_fit` below rather than re-resolved server-side, so the fit
+    // that runs is guaranteed to be the same branch this page is showing.
+    let branch_id: Option<i64> = match &*observations_resource.read() {
+        Some(Ok(Some(data))) => Some(data.branch_id),
+        _ => None,
     };
 
     let mut selected = use_signal(HashSet::<i64>::new);
@@ -52,7 +58,7 @@ pub fn OrbitFitPage(lineage_id: String) -> Element {
         initialized.set(true);
     }
 
-    let params = use_signal(OrbitFitParams::default);
+    let mut params = use_signal(OrbitFitParams::default);
 
     let mut job_id = use_signal(|| None::<u64>);
     let mut job_view = use_signal(|| None::<OrbitFitJobView>);
@@ -125,6 +131,31 @@ pub fn OrbitFitPage(lineage_id: String) -> Element {
             .and_then(|r| r.as_ref().ok().cloned().flatten())
     });
 
+    // Warns when the lineage's most recent fit ran on a different branch
+    // than the one this page is currently set up to fit — see
+    // `orbit_fit::branch_mismatch_warning`'s doc comment for why that can
+    // happen now that the bulk fit runs every branch of a lineage
+    // independently.
+    let branch_warning: Option<String> = branch_id
+        .and_then(|current| displayed_result.as_ref().map(|r| (current, r.branch_id)))
+        .and_then(|(current, last)| branch_mismatch_warning(current, last));
+
+    let mut load_params_error = use_signal(|| None::<String>);
+    let load_last_lineage_id = lineage_id.clone();
+    let load_last_params = move |_| {
+        let lineage_id = load_last_lineage_id.clone();
+        load_params_error.set(None);
+        spawn(async move {
+            match get_latest_fit_params(lineage_id).await {
+                Ok(Some((loaded, _branch_id))) => params.set(loaded),
+                Ok(None) => {
+                    load_params_error.set(Some("No previous fit to load params from.".to_string()))
+                }
+                Err(e) => load_params_error.set(Some(format!("Failed to load params: {e}"))),
+            }
+        });
+    };
+
     let selected_ids: Vec<i64> = selected.read().iter().copied().collect();
     let n_selected = selected_ids.len();
     let baseline_days = {
@@ -143,7 +174,9 @@ pub fn OrbitFitPage(lineage_id: String) -> Element {
         }
     };
 
-    let guard_rail_message = if n_selected < MIN_OBSERVATIONS {
+    let guard_rail_message = if branch_id.is_none() {
+        Some("No branch resolved for this lineage yet.".to_string())
+    } else if n_selected < MIN_OBSERVATIONS {
         Some(format!(
             "Select at least {MIN_OBSERVATIONS} observations (currently {n_selected})."
         ))
@@ -163,13 +196,19 @@ pub fn OrbitFitPage(lineage_id: String) -> Element {
 
     let launch_lineage_id = lineage_id.clone();
     let launch = move |_| {
+        let Some(branch_id) = branch_id else {
+            launch_error.set(Some(
+                "No branch resolved for this lineage yet; reload the page.".to_string(),
+            ));
+            return;
+        };
         let lineage_id = launch_lineage_id.clone();
         let observation_ids = selected_ids.clone();
         let fit_params = params.read().clone();
         launch_error.set(None);
         job_view.set(None);
         spawn(async move {
-            match start_orbit_fit(lineage_id, observation_ids, fit_params).await {
+            match start_orbit_fit(lineage_id, branch_id, observation_ids, fit_params).await {
                 Ok(id) => job_id.set(Some(id)),
                 Err(e) => launch_error.set(Some(format!("Failed to start the fit: {e}"))),
             }
@@ -186,12 +225,23 @@ pub fn OrbitFitPage(lineage_id: String) -> Element {
                     class: "link link-hover text-sm",
                     "← Back to lineage"
                 }
+                if let Some(id) = branch_id {
+                    span { class: "text-sm opacity-60 ml-auto",
+                        "Fitting branch #{id} (best branch of this lineage by cumulative LLR)"
+                    }
+                }
             }
 
+            if let Some(message) = &branch_warning {
+                div { class: "alert alert-warning", "{message}" }
+            }
             if let Some(message) = &guard_rail_message {
                 div { class: "alert alert-warning", "{message}" }
             }
             if let Some(message) = &*launch_error.read() {
+                div { class: "alert alert-error", "{message}" }
+            }
+            if let Some(message) = &*load_params_error.read() {
                 div { class: "alert alert-error", "{message}" }
             }
 
@@ -216,6 +266,16 @@ pub fn OrbitFitPage(lineage_id: String) -> Element {
             }
 
             if *show_form.read() {
+                div { class: "flex justify-end",
+                    button {
+                        class: "btn btn-xs btn-ghost",
+                        r#type: "button",
+                        title: "Populate the form below with the exact parameters the lineage's most recent fit (individual or bulk) used",
+                        onclick: load_last_params,
+                        "Load params from last fit"
+                    }
+                }
+
                 FitParamsForm {
                     params,
                     launch_disabled: guard_rail_message.is_some() || is_running,

@@ -1,20 +1,28 @@
 use dioxus::prelude::*;
 
-use super::OrbitFitParams;
 #[cfg(feature = "server")]
-use super::{MIN_BASELINE_DAYS, MIN_OBSERVATIONS};
+use crate::fit_pipeline::dataset::FitObservation;
+use crate::fit_pipeline::params::OrbitFitParams;
+#[cfg(feature = "server")]
+use crate::fit_pipeline::params::{SeedStrategy, MIN_BASELINE_DAYS, MIN_OBSERVATIONS};
 
 /// Kick off an Outfit orbit fit for `lineage_designation`, restricted to
 /// `observation_ids`. Returns immediately with a job id; poll
 /// `status::get_orbit_fit_job_status` for progress and the final result.
 ///
-/// The fit seeds from the lineage's *current Kalman-derived orbit* rather
-/// than running Gauss IOD (per product decision — the point is refining the
-/// production estimate with a proper least-squares n-body fit, not
-/// rediscovering the orbit from scratch).
+/// `branch_id` must be the branch `observation_ids` were drawn from (the
+/// caller resolves it once via
+/// `lineage_page::observations_table::get_lineage_observations` and threads
+/// it through, rather than this function re-resolving "the lineage's best
+/// branch" independently — see [`resolve_best_branch_id`]'s doc comment for
+/// why that used to be able to disagree with the caller's own resolution).
+/// It seeds the differential correction (when `params.seed_strategy` is
+/// [`SeedStrategy::KalmanOrbit`]) and is stored alongside the result
+/// for traceability, the same way the bulk fit already does.
 #[server]
 pub async fn start_orbit_fit(
     lineage_designation: String,
+    branch_id: i64,
     observation_ids: Vec<i64>,
     params: OrbitFitParams,
 ) -> Result<u64, ServerFnError> {
@@ -59,6 +67,7 @@ pub async fn start_orbit_fit(
     tokio::spawn(run_fit_job(
         job_id,
         lineage_designation,
+        branch_id,
         observation_ids,
         params,
     ));
@@ -80,10 +89,18 @@ async fn push_log(job_id: u64, message: impl Into<String>) {
 async fn run_fit_job(
     job_id: u64,
     lineage_designation: String,
+    branch_id: i64,
     observation_ids: Vec<i64>,
     params: OrbitFitParams,
 ) {
-    let outcome = run_fit(job_id, &lineage_designation, &observation_ids, &params).await;
+    let outcome = run_fit(
+        job_id,
+        &lineage_designation,
+        branch_id,
+        &observation_ids,
+        &params,
+    )
+    .await;
 
     let jobs = crate::get_orbit_fit_jobs().await;
     if let Ok(mut jobs) = jobs.lock() {
@@ -102,36 +119,55 @@ async fn run_fit_job(
     }
 }
 
+/// Resolves a lineage's best branch — highest `cumulative_llr`, `NaN`/
+/// `Infinity` treated as neutral (0) rather than as the largest possible
+/// value (same rationale as `homepage::snapshot::sanitize_llr` for the same
+/// column). The single point of resolution for "which branch does this
+/// lineage currently point at": shared by `fetch_kalman_orbit`'s "current
+/// Kalman orbit" comparison in `latest::get_latest_orbit_fit_result` and by
+/// `lineage_page::observations_table::get_lineage_observations`, which the
+/// fit page itself reads to pin its `branch_id` — keeping this query in one
+/// place is what makes those two agree.
+///
+/// # Returns
+///
+/// The lineage's best `branch_id`, or `None` if it has no branches.
 #[cfg(feature = "server")]
-fn mpc_code(code: &str) -> Result<[u8; 3], String> {
-    code.as_bytes()
-        .try_into()
-        .map_err(|_| format!("invalid MPC observatory code {code:?}"))
-}
-
-#[cfg(feature = "server")]
-#[derive(sqlx::FromRow)]
-struct SelectedObsRow {
-    id: i64,
-    ra: f64,
-    ra_err: f64,
-    dec: f64,
-    dec_err: f64,
-    magnitude: f64,
-    mag_err: f64,
-    filter: i16,
-    mjd_tt: f64,
-    mpc_code_obs: String,
-}
-
-/// The lineage's current best-hypothesis attributable state, converted to
-/// Keplerian orbital elements — used both as the fit's starting point and as
-/// the "vs Kalman" comparison baseline. Mirrors
-/// `src/converter/family.rs::classify_from_attributable_state`.
-#[cfg(feature = "server")]
-pub(crate) async fn fetch_kalman_orbit(
+pub(crate) async fn resolve_best_branch_id(
     lineage_designation: &str,
-) -> Result<outfit::OrbitalElements, String> {
+) -> Result<Option<i64>, String> {
+    let pool = crate::get_pool().await;
+    let row: Option<(i64,)> = sqlx::query_as(
+        "SELECT branch_id
+         FROM branches
+         WHERE lineage_designation = $1
+         ORDER BY (
+             CASE
+                 WHEN cumulative_llr = 'NaN'::double precision THEN 0
+                 WHEN cumulative_llr = 'Infinity'::double precision THEN 0
+                 WHEN cumulative_llr = '-Infinity'::double precision THEN 0
+                 ELSE cumulative_llr
+             END
+         ) DESC
+         LIMIT 1",
+    )
+    .bind(lineage_designation)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(row.map(|(branch_id,)| branch_id))
+}
+
+/// A branch's best-hypothesis attributable state, converted to Keplerian
+/// orbital elements — used both as the fit's starting point (when
+/// `SeedStrategy::KalmanOrbit`) and as the "vs Kalman" comparison baseline.
+/// Mirrors `src/converter/family.rs::classify_from_attributable_state`.
+///
+/// Takes an explicit `branch_id` rather than resolving one itself — see
+/// [`resolve_best_branch_id`] for callers that don't already have one.
+#[cfg(feature = "server")]
+pub(crate) async fn fetch_kalman_orbit(branch_id: i64) -> Result<outfit::OrbitalElements, String> {
     use fink_fat_engine::topocentric_kf::conversion::attributable_to_cartesian;
     use nalgebra::{Vector3, Vector6};
 
@@ -154,38 +190,20 @@ pub(crate) async fn fetch_kalman_orbit(
 
     let pool = crate::get_pool().await;
     let row: Option<Row> = sqlx::query_as(
-        "WITH best_branch AS (
-            SELECT branch_id
-            FROM branches
-            WHERE lineage_designation = $1
-            ORDER BY (
-                CASE
-                    WHEN cumulative_llr = 'NaN'::double precision THEN 0
-                    WHEN cumulative_llr = 'Infinity'::double precision THEN 0
-                    WHEN cumulative_llr = '-Infinity'::double precision THEN 0
-                    ELSE cumulative_llr
-                END
-            ) DESC
-            LIMIT 1
-        )
-        SELECT ks.ra, ks.dec, ks.ra_dot, ks.dec_dot, ks.rho, ks.rho_dot, ks.epoch,
-               ks.r_obs_x, ks.r_obs_y, ks.r_obs_z, ks.v_obs_x, ks.v_obs_y, ks.v_obs_z
-        FROM best_branch bb
-        CROSS JOIN LATERAL (
-            SELECT hypothesis_id
-            FROM hypotheses h
-            WHERE h.branch_id = bb.branch_id
-            ORDER BY h.log_weight DESC
-            LIMIT 1
-        ) bh
-        JOIN kf_state ks ON ks.hypothesis_id = bh.hypothesis_id",
+        "SELECT ks.ra, ks.dec, ks.ra_dot, ks.dec_dot, ks.rho, ks.rho_dot, ks.epoch,
+                ks.r_obs_x, ks.r_obs_y, ks.r_obs_z, ks.v_obs_x, ks.v_obs_y, ks.v_obs_z
+         FROM hypotheses h
+         JOIN kf_state ks ON ks.hypothesis_id = h.hypothesis_id
+         WHERE h.branch_id = $1
+         ORDER BY h.log_weight DESC
+         LIMIT 1",
     )
-    .bind(lineage_designation)
+    .bind(branch_id)
     .fetch_optional(pool)
     .await
     .map_err(|e| e.to_string())?;
 
-    let row = row.ok_or_else(|| format!("lineage {lineage_designation:?} not found"))?;
+    let row = row.ok_or_else(|| format!("branch {branch_id} has no hypotheses"))?;
 
     let state = Vector6::new(
         row.ra,
@@ -258,18 +276,13 @@ async fn fetch_previous_fit(lineage_designation: &str) -> Result<Option<Previous
         uncertainty: None,
         covariance: None,
     };
-    let keplerian = oe
-        .to_keplerian()
-        .map_err(|e| e.to_string())?
-        .as_keplerian()
-        .ok_or_else(|| "failed to convert the previous fit to Keplerian elements".to_string())?;
+    let keplerian = crate::fit_pipeline::fit::to_keplerian(oe)?;
 
     Ok(Some(PreviousFit {
         fitted_at: row.fitted_at,
         keplerian,
     }))
 }
-
 /// Wrap a difference of angles (degrees) into (-180, 180].
 #[cfg(feature = "server")]
 pub(crate) fn wrap_deg(x: f64) -> f64 {
@@ -303,170 +316,29 @@ fn keplerian_delta(
     }
 }
 
+/// Loads the observations a fit was asked to use, as the pipeline's own row
+/// shape, tagged with the branch they belong to.
 #[cfg(feature = "server")]
-pub(crate) fn keplerian_view(
-    elements: &outfit::KeplerianElements,
-    uncertainty: Option<&outfit::orbit_type::uncertainty::KeplerianUncertainty>,
-) -> super::KeplerianView {
-    super::KeplerianView {
-        semi_major_axis_au: elements.semi_major_axis,
-        eccentricity: elements.eccentricity,
-        inclination_deg: elements.inclination.to_degrees(),
-        ascending_node_longitude_deg: elements.ascending_node_longitude.to_degrees(),
-        periapsis_argument_deg: elements.periapsis_argument.to_degrees(),
-        mean_anomaly_deg: elements.mean_anomaly.to_degrees(),
-        sigma_semi_major_axis_au: uncertainty.map(|u| u.semi_major_axis),
-        sigma_eccentricity: uncertainty.map(|u| u.eccentricity),
-        sigma_inclination_deg: uncertainty.map(|u| u.inclination.to_degrees()),
-        sigma_ascending_node_longitude_deg: uncertainty
-            .map(|u| u.ascending_node_longitude.to_degrees()),
-        sigma_periapsis_argument_deg: uncertainty.map(|u| u.periapsis_argument.to_degrees()),
-        sigma_mean_anomaly_deg: uncertainty.map(|u| u.mean_anomaly.to_degrees()),
-    }
-}
-
-#[cfg(feature = "server")]
-fn planetary_bary(
-    choice: super::PerturberChoice,
-) -> outfit::jpl_ephem::naif::naif_ids::planet_bary::PlanetaryBary {
-    use outfit::jpl_ephem::naif::naif_ids::planet_bary::PlanetaryBary;
-    match choice {
-        super::PerturberChoice::Mercury => PlanetaryBary::Mercury,
-        super::PerturberChoice::Venus => PlanetaryBary::Venus,
-        super::PerturberChoice::EarthMoon => PlanetaryBary::EarthMoon,
-        super::PerturberChoice::Mars => PlanetaryBary::Mars,
-        super::PerturberChoice::Jupiter => PlanetaryBary::Jupiter,
-        super::PerturberChoice::Saturn => PlanetaryBary::Saturn,
-        super::PerturberChoice::Uranus => PlanetaryBary::Uranus,
-        super::PerturberChoice::Neptune => PlanetaryBary::Neptune,
-        super::PerturberChoice::Pluto => PlanetaryBary::Pluto,
-    }
-}
-
-/// Maps the form's error-model choice onto `photom`'s own enum. Shared by the
-/// single-lineage fit (this module) and the bulk fit (`crate::bulk_orbit_fit`).
-#[cfg(feature = "server")]
-pub(crate) fn to_error_model(
-    choice: super::ObsErrorModelChoice,
-) -> photom::observer::error_model::ObsErrorModel {
-    use photom::observer::error_model::ObsErrorModel;
-    match choice {
-        super::ObsErrorModelChoice::Fcct14 => ObsErrorModel::FCCT14,
-        super::ObsErrorModelChoice::Cbm10 => ObsErrorModel::CBM10,
-        super::ObsErrorModelChoice::Vfcc17 => ObsErrorModel::VFCC17,
-        super::ObsErrorModelChoice::Lsst => ObsErrorModel::LSST,
-    }
-}
-
-/// Builds the `outfit` differential-correction configuration (propagator,
-/// perturbers, Newton/outlier-rejection tuning) from the form's flattened
-/// `OrbitFitParams`. Shared by the single-lineage fit (this module) and the
-/// bulk fit (`crate::bulk_orbit_fit`).
-#[cfg(feature = "server")]
-pub(crate) fn build_dc_config(params: &OrbitFitParams) -> outfit::DifferentialCorrectionConfig {
-    use outfit::differential_orbit_correction::OutlierRejectionConfig;
-    use outfit::jpl_ephem::naif::naif_ids::main_belt::AsteroidNumber;
-    use outfit::jpl_ephem::naif::naif_ids::{solar_system_bary::SolarSystemBary, NaifIds};
-    use outfit::orbit_type::equinoctial_element::EquinoctialLimits;
-    use outfit::propagator::{NBodyConfig, PropagatorKind};
-
-    let mut perturbing_bodies = vec![NaifIds::SSB(SolarSystemBary::Sun)];
-    perturbing_bodies.extend(
-        params
-            .perturbers
-            .iter()
-            .map(|p| NaifIds::PB(planetary_bary(*p))),
-    );
-    perturbing_bodies.extend(
-        params
-            .asteroid_perturbers
-            .iter()
-            .map(|a| NaifIds::AST(AsteroidNumber(a.asteroid_number()))),
-    );
-    let propagator = match params.propagator {
-        super::PropagatorChoice::TwoBody => PropagatorKind::TwoBody,
-        super::PropagatorChoice::NBody => PropagatorKind::NBody(NBodyConfig {
-            perturbing_bodies,
-            ..Default::default()
-        }),
-    };
-
-    outfit::DifferentialCorrectionConfig {
-        max_newton_iterations: params.max_newton_iterations,
-        max_outlier_rejection_passes: params.max_outlier_rejection_passes,
-        convergence_threshold: params.convergence_threshold,
-        convergence_before_rejection_threshold: params.convergence_before_rejection_threshold,
-        rms_stagnation_ratio: params.rms_stagnation_ratio,
-        rms_divergence_ratio: params.rms_divergence_ratio,
-        max_stagnation_iterations: params.max_stagnation_iterations,
-        enable_outlier_rejection: params.enable_outlier_rejection,
-        outlier_rejection_config: OutlierRejectionConfig::default(),
-        orbital_limits: EquinoctialLimits::default(),
-        free_elements: [true; 6],
-        propagator,
-    }
-}
-
-/// Builds the `outfit` IOD (Gauss) parameters from the form's flattened
-/// `OrbitFitParams`. Only used by the bulk fit today — the single-lineage fit
-/// always seeds from the Kalman orbit and never runs Gauss IOD — but kept
-/// here next to `build_dc_config` since both are "form params -> outfit
-/// config" conversions.
-#[cfg(feature = "server")]
-pub(crate) fn build_iod_params(
-    params: &OrbitFitParams,
-) -> Result<outfit::initial_orbit_determination::IODParams, String> {
-    use outfit::initial_orbit_determination::IODParams;
-
-    IODParams::builder()
-        .n_noise_realizations(params.n_noise_realizations)
-        .noise_scale(params.noise_scale)
-        .extf(params.extf)
-        .dtmax(params.dtmax)
-        .dt_min(params.dt_min)
-        .dt_max_triplet(params.dt_max_triplet)
-        .optimal_interval_time(params.optimal_interval_time)
-        .max_obs_for_triplets(params.max_obs_for_triplets)
-        .max_triplets(params.max_triplets)
-        .gap_max(params.gap_max)
-        .max_ecc(params.max_ecc)
-        .max_perihelion_au(params.max_perihelion_au)
-        .min_rho2_au(params.min_rho2_au)
-        .aberth_max_iter(params.aberth_max_iter)
-        .aberth_eps(params.aberth_eps)
-        .kepler_eps(params.kepler_eps)
-        .max_tested_solutions(params.max_tested_solutions)
-        .r2_min_au(params.r2_min_au)
-        .r2_max_au(params.r2_max_au)
-        .newton_eps(params.newton_eps)
-        .newton_max_it(params.newton_max_it)
-        .root_imag_eps(params.root_imag_eps)
-        .build()
-        .map_err(|e| e.to_string())
-}
-
-#[cfg(feature = "server")]
-async fn run_fit(
-    job_id: u64,
-    lineage_designation: &str,
+async fn load_observations(
+    branch_id: i64,
     observation_ids: &[i64],
-    params: &OrbitFitParams,
-) -> Result<super::OrbitFitResult, String> {
-    use outfit::cache::OutfitCache;
-    use outfit::differential_orbit_correction::{
-        run_differential_correction, ObsFitData, ObsSelection,
-    };
-    use photom::observation_dataset::observation::Observation;
-    use photom::observation_dataset::{observation::ObservationInput, ObsDataset};
-    use photom::observer::dataset::ObserverId;
-    use photom::observer::error_model::ModelCorrection;
-    use photom::{coordinates::equatorial::EquCoord, photometry::Filter, photometry::Photometry};
-    use std::collections::{HashMap, HashSet};
-
-    push_log(job_id, "Fetching the selected observations...").await;
+) -> Result<Vec<FitObservation>, String> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        id: i64,
+        ra: f64,
+        ra_err: f64,
+        dec: f64,
+        dec_err: f64,
+        magnitude: f64,
+        mag_err: f64,
+        filter: i16,
+        mjd_tt: f64,
+        mpc_code_obs: String,
+    }
 
     let pool = crate::get_pool().await;
-    let mut rows: Vec<SelectedObsRow> = sqlx::query_as(
+    let rows: Vec<Row> = sqlx::query_as(
         "SELECT id, ra, ra_err, dec, dec_err, magnitude, mag_err, filter, mjd_tt, mpc_code_obs \
          FROM observations WHERE id = ANY($1)",
     )
@@ -474,148 +346,174 @@ async fn run_fit(
     .fetch_all(pool)
     .await
     .map_err(|e| e.to_string())?;
-    rows.sort_by(|a, b| a.mjd_tt.total_cmp(&b.mjd_tt));
 
-    if rows.len() < MIN_OBSERVATIONS {
+    Ok(rows
+        .into_iter()
+        .map(|r| FitObservation {
+            id: r.id,
+            branch_id,
+            ra: r.ra,
+            ra_err: r.ra_err,
+            dec: r.dec,
+            dec_err: r.dec_err,
+            magnitude: r.magnitude,
+            mag_err: r.mag_err,
+            filter: r.filter,
+            mjd_tt: r.mjd_tt,
+            mpc_code_obs: r.mpc_code_obs,
+        })
+        .collect())
+}
+
+/// Runs one branch's fit and stores it, reporting progress through the job's
+/// log as it goes.
+///
+/// Everything numerical is delegated to [`crate::fit_pipeline`], which the bulk
+/// fit runs through as well: that is what makes a fit launched here comparable
+/// to the bulk row for the same branch, rather than a second implementation
+/// that drifts.
+#[cfg(feature = "server")]
+async fn run_fit(
+    job_id: u64,
+    lineage_designation: &str,
+    branch_id: i64,
+    observation_ids: &[i64],
+    params: &OrbitFitParams,
+) -> Result<super::OrbitFitResult, String> {
+    use crate::fit_pipeline::dataset;
+    use crate::fit_pipeline::fit::{self, Diagnostics, FitMethod};
+    use crate::fit_pipeline::params::{build_dc_config, build_iod_params, to_error_model};
+    use crate::fit_pipeline::store::{self, OrbitFitRow};
+
+    push_log(job_id, "Fetching the selected observations...").await;
+    let observation_rows = load_observations(branch_id, observation_ids).await?;
+    if observation_rows.len() < MIN_OBSERVATIONS {
         return Err(format!(
             "only {} of the requested observations were found in the database",
-            rows.len()
+            observation_rows.len()
         ));
     }
-
-    push_log(
-        job_id,
-        format!("Resolving observatories for {} observations...", rows.len()),
-    )
-    .await;
-    let observatories = crate::get_observatories().await;
-    let mut dataset = ObsDataset::empty();
-    let mut observer_ids: HashMap<[u8; 3], ObserverId> = HashMap::new();
-    let codes: HashSet<[u8; 3]> = rows
-        .iter()
-        .map(|r| mpc_code(&r.mpc_code_obs))
-        .collect::<Result<_, _>>()?;
-    for code in codes {
-        let observer = observatories.get(&code).ok_or_else(|| {
-            format!(
-                "MPC observatory code {:?} not found in the observatory list",
-                std::str::from_utf8(&code).unwrap_or("?")
-            )
-        })?;
-        let (new_dataset, id) = dataset.push_observer(observer.clone());
-        dataset = new_dataset;
-        observer_ids.insert(code, id);
-    }
-
-    let mut inputs = Vec::with_capacity(rows.len());
-    for row in &rows {
-        let code = mpc_code(&row.mpc_code_obs)?;
-        inputs.push(ObservationInput::new(
-            row.id as u64,
-            EquCoord::new(row.ra, row.ra_err, row.dec, row.dec_err),
-            Photometry {
-                magnitude: row.magnitude,
-                error: row.mag_err,
-                filter: Filter::Int(row.filter as u32),
-            },
-            row.mjd_tt,
-            Some(observer_ids[&code]),
-        ));
-    }
-    let (dataset, _) = dataset
-        .push_observation(inputs)
-        .map_err(|e| e.to_string())?;
-
-    let error_model = to_error_model(params.error_model);
-
-    push_log(job_id, "Applying the observation error model...").await;
-    let dataset = dataset
-        .with_error_model(error_model)
-        .apply_model_errors()
-        .apply_batch_rms_correction(params.gap_max);
-
-    let n = dataset.observation_count();
-    let observations: Vec<Observation> = (0..n)
-        .map(|i| {
-            dataset
-                .get_obs_by_index(i)
-                .cloned()
-                .expect("index within observation_count() is always present")
-        })
-        .collect();
-    let obs_fit_data: Vec<ObsFitData> = observations
-        .iter()
-        .map(|obs| ObsFitData::new(obs.equ_coord().ra_error, obs.equ_coord().dec_error))
-        .collect();
-
-    push_log(job_id, "Building the observer geometry cache...").await;
-    let kalman_context = crate::get_kalman_context().await;
-    let ephem = kalman_context.get_ephem();
-    let cache = OutfitCache::build(&dataset, &ephem.jpl, &ephem.ut1_provider, true)
-        .map_err(|e| e.to_string())?;
-
-    push_log(
-        job_id,
-        "Reading the lineage's current Kalman-derived orbit as the fit's starting point...",
-    )
-    .await;
-    let kalman_orbit = fetch_kalman_orbit(lineage_designation).await?;
-    let kalman_keplerian = kalman_orbit
-        .clone()
-        .to_keplerian()
-        .map_err(|e| e.to_string())?
-        .as_keplerian()
-        .ok_or_else(|| "failed to convert the Kalman orbit to Keplerian elements".to_string())?;
-    let equinoctial_seed = kalman_orbit
-        .to_equinoctial()
-        .map_err(|e| e.to_string())?
-        .as_equinoctial()
-        .ok_or_else(|| "failed to convert the Kalman orbit to equinoctial elements".to_string())?;
-
-    let dc_config = build_dc_config(params);
-
-    push_log(
-        job_id,
-        "Running the differential correction (this can take a while with an N-body propagator)...",
-    )
-    .await;
-    let jpl: &'static outfit::JPLEphem = &ephem.jpl;
-    let dc_output = tokio::task::spawn_blocking(move || {
-        run_differential_correction(
-            &observations,
-            &obs_fit_data,
-            &equinoctial_seed,
-            &cache,
-            jpl,
-            &dc_config,
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())?
-    .map_err(|e| e.to_string())?;
 
     push_log(
         job_id,
         format!(
-            "Fit finished: normalised RMS = {:.4}, {} Newton iterations.",
-            dc_output.normalised_rms, dc_output.total_newton_iterations
+            "Building the observation dataset ({} observations) and applying the error model...",
+            observation_rows.len()
         ),
     )
     .await;
+    let error_model = to_error_model(params.error_model);
+    let corrected = dataset::apply_error_model(
+        dataset::build_dataset(&observation_rows)?,
+        error_model,
+        params.gap_max,
+    );
+    let observations = dataset::observations_of(&corrected, branch_id);
+    if observations.len() < MIN_OBSERVATIONS {
+        return Err(format!(
+            "the dataset built for branch {branch_id} holds only {} of its {} observations",
+            observations.len(),
+            observation_rows.len()
+        ));
+    }
 
-    let new_elements: outfit::OrbitalElements = dc_output.clone().into();
-    let new_keplerian_full = new_elements.to_keplerian().map_err(|e| e.to_string())?;
-    let (new_keplerian, new_uncertainty) = match &new_keplerian_full {
-        outfit::OrbitalElements::Keplerian {
-            elements,
-            uncertainty,
-            ..
-        } => (elements.clone(), uncertainty.clone()),
-        _ => return Err("expected Keplerian orbital elements after conversion".to_string()),
+    push_log(job_id, "Building the observer geometry cache...").await;
+    let kalman_context = crate::get_kalman_context().await;
+    let ephem = kalman_context.get_ephem();
+    let cache = dataset::build_cache(&corrected, &ephem.jpl, &ephem.ut1_provider)?;
+
+    push_log(
+        job_id,
+        "Reading the branch's current Kalman-derived orbit for comparison...",
+    )
+    .await;
+    // Kept as a `Result`: under `SeedlessGaussIod` this orbit only feeds the
+    // informational "vs Kalman" delta, so a branch without a Kalman hypothesis
+    // shouldn't fail the fit. Only the seed branch below, where it *is* the
+    // starting orbit, propagates the failure.
+    let kalman_orbit = fetch_kalman_orbit(branch_id).await;
+    let kalman_keplerian = kalman_orbit
+        .clone()
+        .ok()
+        .and_then(|orbit| fit::to_keplerian(orbit).ok());
+
+    let dc_config = build_dc_config(params);
+    let product = match params.seed_strategy {
+        SeedStrategy::KalmanOrbit => {
+            push_log(
+                job_id,
+                "Running the differential correction from the Kalman orbit (this can take a \
+                 while with an N-body propagator)...",
+            )
+            .await;
+            let seed = fit::to_equinoctial(kalman_orbit?)?;
+            let jpl: &'static outfit::JPLEphem = &ephem.jpl;
+            tokio::task::spawn_blocking(move || {
+                fit::fit_from_seed(&observations, &cache, jpl, &dc_config, &seed)
+            })
+            .await
+            .map_err(|e| e.to_string())??
+        }
+        SeedStrategy::SeedlessGaussIod => {
+            push_log(
+                job_id,
+                "Running the seedless fit — Gauss IOD then differential correction, the same \
+                 strategy and the same RNG stream as the bulk fit (this can take a while with \
+                 an N-body propagator)...",
+            )
+            .await;
+            let iod_params = build_iod_params(params)?;
+            let jpl: &'static outfit::JPLEphem = &ephem.jpl;
+            tokio::task::spawn_blocking(move || {
+                fit::fit_seedless(
+                    &observations,
+                    &cache,
+                    jpl,
+                    &iod_params,
+                    &dc_config,
+                    branch_id,
+                    Diagnostics::Full,
+                )
+            })
+            .await
+            .map_err(|e| e.to_string())??
+        }
     };
 
-    push_log(job_id, "Comparing against the current Kalman orbit...").await;
-    let delta_vs_kalman = Some(keplerian_delta(&new_keplerian, &kalman_keplerian));
+    match product.fit_method {
+        FitMethod::DifferentialCorrection => {
+            push_log(
+                job_id,
+                format!(
+                    "Fit finished: normalised RMS = {:.4}, {} observations kept, {} rejected \
+                     ({} Newton iterations in the pass that recomputed the residuals).",
+                    product.normalised_rms,
+                    product.n_observations_used,
+                    product.n_observations_rejected,
+                    product.total_newton_iterations
+                ),
+            )
+            .await;
+        }
+        FitMethod::IodOnly => {
+            push_log(
+                job_id,
+                format!(
+                    "The differential correction diverged from the Gauss IOD seed; keeping the \
+                     preliminary Gauss orbit alone (RMS = {:.4}), which is what the bulk fit \
+                     stores in this situation.",
+                    product.normalised_rms
+                ),
+            )
+            .await;
+        }
+    }
+
+    let keplerian = product.keplerian.clone();
+    let delta_vs_kalman = kalman_keplerian
+        .as_ref()
+        .zip(keplerian_of(&product).ok())
+        .map(|(old, new)| keplerian_delta(&new, old));
 
     push_log(
         job_id,
@@ -625,91 +523,57 @@ async fn run_fit(
     let previous_fit = fetch_previous_fit(lineage_designation).await?;
     let delta_vs_previous_fit = previous_fit
         .as_ref()
-        .map(|p| keplerian_delta(&new_keplerian, &p.keplerian));
-
-    let n_observations_used = dc_output
-        .final_obs_fit_data
-        .iter()
-        .filter(|o| o.selection == ObsSelection::Active)
-        .count();
-    let n_observations_rejected = dc_output.final_obs_fit_data.len() - n_observations_used;
-    let degrees_of_freedom = dc_output.num_measurements as i64 - 6;
-    let reduced_chi2 = dc_output.normalised_rms * dc_output.normalised_rms;
-
-    let residuals: Vec<super::ObsResidual> = rows
-        .iter()
-        .zip(dc_output.final_obs_fit_data.iter())
-        .map(|(row, fit_data)| super::ObsResidual {
-            obs_id: row.id,
-            mjd_tt: row.mjd_tt,
-            residual_ra_arcsec: fit_data.residual_ra.to_degrees() * 3600.0,
-            residual_dec_arcsec: fit_data.residual_dec.to_degrees() * 3600.0,
-            chi: fit_data.chi,
-            selection: if fit_data.selection == ObsSelection::Active {
-                super::ObsSelectionView::Kept
-            } else {
-                super::ObsSelectionView::Rejected
-            },
-        })
-        .collect();
-
-    push_log(job_id, "Saving the fit result to the database...").await;
-    let equinoctial = &dc_output.elements;
-    let covariance: Vec<f64> = dc_output.uncertainty.covariance.iter().copied().collect();
-    let fit_params_json = serde_json::to_value(params).map_err(|e| e.to_string())?;
-    let converged = dc_output.normalised_rms.is_finite() && dc_output.normalised_rms < 10.0;
-    let keplerian_view_result = keplerian_view(&new_keplerian, new_uncertainty.as_ref());
-    let keplerian_json = serde_json::to_value(&keplerian_view_result).map_err(|e| e.to_string())?;
+        .zip(keplerian_of(&product).ok())
+        .map(|(previous, new)| keplerian_delta(&new, &previous.keplerian));
     let delta_vs_previous_fit_json =
         serde_json::to_value(&delta_vs_previous_fit).map_err(|e| e.to_string())?;
-    let residuals_json = serde_json::to_value(&residuals).map_err(|e| e.to_string())?;
 
-    sqlx::query(
-        "INSERT INTO orbit_fits (
-            lineage_designation, observation_ids, n_observations_used, error_model, fit_params,
-            reference_epoch, semi_major_axis, eccentricity_sin_lon, eccentricity_cos_lon,
-            tan_half_incl_sin_node, tan_half_incl_cos_node, mean_longitude, covariance,
-            normalised_rms, total_newton_iterations, num_measurements, converged,
-            keplerian, delta_vs_previous_fit, residuals
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)",
-    )
-    .bind(lineage_designation)
-    .bind(observation_ids)
-    .bind(n_observations_used as i32)
-    .bind(format!("{:?}", params.error_model))
-    .bind(fit_params_json)
-    .bind(equinoctial.reference_epoch)
-    .bind(equinoctial.semi_major_axis)
-    .bind(equinoctial.eccentricity_sin_lon)
-    .bind(equinoctial.eccentricity_cos_lon)
-    .bind(equinoctial.tan_half_incl_sin_node)
-    .bind(equinoctial.tan_half_incl_cos_node)
-    .bind(equinoctial.mean_longitude)
-    .bind(&covariance)
-    .bind(dc_output.normalised_rms)
-    .bind(dc_output.total_newton_iterations as i32)
-    .bind(dc_output.num_measurements as i32)
-    .bind(converged)
-    .bind(keplerian_json)
-    .bind(delta_vs_previous_fit_json)
-    .bind(residuals_json)
-    .execute(pool)
-    .await
-    .map_err(|e| e.to_string())?;
-
-    Ok(super::OrbitFitResult {
-        reference_epoch: equinoctial.reference_epoch,
-        keplerian: keplerian_view_result,
+    push_log(job_id, "Saving the fit result to the database...").await;
+    let result = super::OrbitFitResult {
+        branch_id: Some(branch_id),
+        fit_method: product.fit_method,
+        reference_epoch: product.elements.reference_epoch,
+        keplerian,
         delta_vs_kalman,
         delta_vs_previous_fit,
-        normalised_rms: dc_output.normalised_rms,
-        reduced_chi2,
-        degrees_of_freedom,
-        total_newton_iterations: dc_output.total_newton_iterations,
-        num_measurements: dc_output.num_measurements,
-        n_observations_used,
-        n_observations_rejected,
-        converged,
-        residuals,
+        normalised_rms: product.normalised_rms,
+        reduced_chi2: product.normalised_rms * product.normalised_rms,
+        degrees_of_freedom: product.num_measurements as i64 - 6,
+        total_newton_iterations: product.total_newton_iterations,
+        num_measurements: product.num_measurements,
+        n_observations_used: product.n_observations_used,
+        n_observations_rejected: product.n_observations_rejected,
+        converged: product.converged(),
+        residuals: product.residuals.clone(),
+    };
+
+    let pool = crate::get_pool().await;
+    store::insert_orbit_fits(
+        pool,
+        params,
+        &[OrbitFitRow {
+            lineage_designation: lineage_designation.to_string(),
+            branch_id,
+            observation_ids: observation_ids.to_vec(),
+            delta_vs_previous_fit: Some(delta_vs_previous_fit_json),
+            product,
+        }],
+    )
+    .await?;
+
+    Ok(result)
+}
+
+/// The fitted orbit as `outfit`'s own Keplerian elements, for the "vs Kalman"
+/// and "vs previous fit" comparisons — which need radians and the raw type,
+/// not the display view the product already carries.
+#[cfg(feature = "server")]
+fn keplerian_of(
+    product: &crate::fit_pipeline::fit::FitProduct,
+) -> Result<outfit::KeplerianElements, String> {
+    crate::fit_pipeline::fit::to_keplerian(outfit::OrbitalElements::Equinoctial {
+        elements: product.elements.clone(),
+        uncertainty: None,
+        covariance: None,
     })
 }

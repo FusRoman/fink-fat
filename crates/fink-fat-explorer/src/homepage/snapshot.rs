@@ -18,18 +18,21 @@
 //! Server-only: `main.rs` gates the module on the `server` feature, so none of
 //! this reaches the wasm bundle.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
+use sqlx::PgPool;
 use tokio::sync::OnceCell;
 
+use crate::fit_pipeline::params;
 use crate::get_pool;
-use crate::homepage::dynamic_pop_plot::FamilySeries;
+use crate::homepage::dynamic_pop_plot::PlotSeries;
 use crate::homepage::family::DynamicalFamily;
 use crate::homepage::interaction::SortColumn;
+use crate::homepage::quality_tier::{assign_quality_tier, FitMethod, LatestFit, QualityTier};
 
 /// How long a snapshot is served before a rebuild is triggered in the
 /// background. The data only changes on a `fink-fat convert` re-run, so this
@@ -74,6 +77,154 @@ const SNAPSHOT_QUERY: &str = "
     JOIN kf_state ks ON ks.hypothesis_id = bh.hypothesis_id
 ";
 
+/// One row of `params::ELIGIBLE_BRANCH_QUERY` — only `branch_id` is used
+/// here, but that query also selects `lineage_designation` (needed by
+/// `bulk_orbit_fit::run`, its other caller), so the shape has to match both
+/// columns.
+#[derive(sqlx::FromRow)]
+struct EligibleBranchRow {
+    branch_id: i64,
+    #[allow(dead_code)]
+    lineage_designation: String,
+}
+
+/// A branch's latest `orbit_fits` row, just the columns
+/// [`assign_quality_tier`] needs. Mirrors what
+/// `orbit_fit::latest::get_latest_orbit_fit_result` reads for the
+/// single-lineage fit page, minus everything specific to rendering a fit
+/// result.
+const LATEST_ORBIT_FIT_QUERY: &str = "
+    SELECT DISTINCT ON (branch_id) branch_id, fit_method, num_measurements, fitted_at
+    FROM orbit_fits
+    WHERE branch_id IS NOT NULL
+    ORDER BY branch_id, fitted_at DESC
+";
+
+#[derive(sqlx::FromRow)]
+struct LatestFitRow {
+    branch_id: i64,
+    fit_method: String,
+    num_measurements: i32,
+    fitted_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// A branch's latest recorded failed bulk-fit attempt, if any — see
+/// `orbit_fit_failures` in `src/converter/sql.rs`.
+const LATEST_ORBIT_FIT_FAILURE_QUERY: &str = "
+    SELECT DISTINCT ON (branch_id) branch_id, attempted_at
+    FROM orbit_fit_failures
+    ORDER BY branch_id, attempted_at DESC
+";
+
+#[derive(sqlx::FromRow)]
+struct LatestFailureRow {
+    branch_id: i64,
+    attempted_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Number of distinct nights (`observations.night_id`) on which each branch
+/// has two or more observations — the geometric bar
+/// [`QualityTier::PrimeDiscovery`] adds on top of [`QualityTier::Discovery`].
+/// Reuses `night_id`, the same grouping key `compute_obs_stats` in
+/// `src/converter/sql.rs` already uses for `branches.n_nights`, rather than
+/// re-bucketing `mjd_tt` independently.
+const WELL_SAMPLED_NIGHTS_QUERY: &str = "
+    SELECT branch_id, COUNT(*) AS well_sampled_nights
+    FROM (
+        SELECT bo.branch_id, o.night_id, COUNT(*) AS n
+        FROM branch_observations bo
+        JOIN observations o ON o.id = bo.obs_id
+        GROUP BY bo.branch_id, o.night_id
+    ) per_night
+    WHERE n >= 2
+    GROUP BY branch_id
+";
+
+#[derive(sqlx::FromRow)]
+struct WellSampledNightsRow {
+    branch_id: i64,
+    well_sampled_nights: i64,
+}
+
+/// Everything [`assign_quality_tier`] needs about every branch, keyed by
+/// `branch_id`. Bundled into one struct — rather than threading four loose
+/// maps through [`build`] and [`assemble`] — so the snapshot's quality-tier
+/// inputs have one shape, fetched by [`build_quality_index`] and consumed
+/// once per branch in [`assemble`].
+struct QualityIndex {
+    eligible: HashSet<i64>,
+    latest_fit: HashMap<i64, LatestFit>,
+    latest_failure_at: HashMap<i64, chrono::DateTime<chrono::Utc>>,
+    well_sampled_nights: HashMap<i64, i64>,
+}
+
+impl QualityIndex {
+    fn tier_for(&self, branch_id: i64, n_nights: i64) -> QualityTier {
+        assign_quality_tier(
+            self.eligible.contains(&branch_id),
+            self.latest_fit.get(&branch_id),
+            self.latest_failure_at.get(&branch_id).copied(),
+            n_nights,
+            self.well_sampled_nights
+                .get(&branch_id)
+                .copied()
+                .unwrap_or(0),
+        )
+    }
+}
+
+/// Runs the four queries [`QualityIndex`] is built from. Separate from
+/// [`build`]'s main [`SNAPSHOT_QUERY`] fetch since none of these four share
+/// its `branches`/`kf_state` join.
+async fn build_quality_index(pool: &PgPool) -> Result<QualityIndex, sqlx::Error> {
+    let eligible_rows: Vec<EligibleBranchRow> = sqlx::query_as(params::ELIGIBLE_BRANCH_QUERY)
+        .bind(params::MIN_OBSERVATIONS as i64)
+        .bind(params::MIN_BASELINE_DAYS)
+        .fetch_all(pool)
+        .await?;
+    let eligible: HashSet<i64> = eligible_rows.into_iter().map(|r| r.branch_id).collect();
+
+    let fit_rows: Vec<LatestFitRow> = sqlx::query_as(LATEST_ORBIT_FIT_QUERY)
+        .fetch_all(pool)
+        .await?;
+    let latest_fit: HashMap<i64, LatestFit> = fit_rows
+        .into_iter()
+        .map(|r| {
+            (
+                r.branch_id,
+                LatestFit {
+                    fit_method: FitMethod::from_column(&r.fit_method),
+                    num_measurements: r.num_measurements,
+                    fitted_at: r.fitted_at,
+                },
+            )
+        })
+        .collect();
+
+    let failure_rows: Vec<LatestFailureRow> = sqlx::query_as(LATEST_ORBIT_FIT_FAILURE_QUERY)
+        .fetch_all(pool)
+        .await?;
+    let latest_failure_at = failure_rows
+        .into_iter()
+        .map(|r| (r.branch_id, r.attempted_at))
+        .collect();
+
+    let well_sampled_rows: Vec<WellSampledNightsRow> = sqlx::query_as(WELL_SAMPLED_NIGHTS_QUERY)
+        .fetch_all(pool)
+        .await?;
+    let well_sampled_nights = well_sampled_rows
+        .into_iter()
+        .map(|r| (r.branch_id, r.well_sampled_nights))
+        .collect();
+
+    Ok(QualityIndex {
+        eligible,
+        latest_fit,
+        latest_failure_at,
+        well_sampled_nights,
+    })
+}
+
 /// Postgres sorts NaN as *larger* than any other float, Infinity included, so
 /// an unsanitized `cumulative_llr` silently corrupted both "best branch per
 /// lineage" selection and column sorting. The SQL `CASE` that used to do this
@@ -105,6 +256,10 @@ pub struct BranchRow {
     pub family: DynamicalFamily,
     pub semi_major_axis: f32,
     pub eccentricity: f32,
+    /// Resolved once at snapshot build time by [`assign_quality_tier`] from
+    /// this branch's latest `orbit_fits`/`orbit_fit_failures` rows — see
+    /// [`crate::homepage::quality_tier`].
+    pub quality_tier: QualityTier,
 }
 
 /// One lineage: its best branch plus the others, held as indices into
@@ -136,12 +291,12 @@ pub struct Snapshot {
     /// only cost ~20 ms, but paying it once at build time keeps every
     /// interaction bounded by the page size instead of the population.
     sorted: [Vec<u32>; SortColumn::ALL.len()],
-    /// Ready-to-serialize plot series, grouped by family in
-    /// `DynamicalFamily`'s `Ord` (increasing heliocentric distance), which is
-    /// the order the legend lists them in. Grouping once here, rather than in
-    /// the browser on every data load, is also what lets the plot ship two
-    /// flat coordinate arrays per family instead of one JSON object per point.
-    pub series: Vec<FamilySeries>,
+    /// Ready-to-serialize plot series, one per (family, quality tier) pair
+    /// present in the data, ordered by family then tier — the order both
+    /// legends list their chips in. Grouping once here, rather than in the
+    /// browser on every data load, is also what lets the plot ship two flat
+    /// coordinate arrays per series instead of one JSON object per point.
+    pub series: Vec<PlotSeries>,
     pub n_branches: i64,
     pub n_hypotheses: i64,
     pub n_lineages: i64,
@@ -254,12 +409,19 @@ async fn build() -> Result<Snapshot, sqlx::Error> {
         .fetch_one(pool)
         .await?;
 
-    Ok(assemble(rows, n_hypotheses, n_archived))
+    let quality = build_quality_index(pool).await?;
+
+    Ok(assemble(rows, n_hypotheses, n_archived, &quality))
 }
 
 /// Turns raw rows into the indexed, pre-sorted structure the server functions
 /// read. Split out from [`build`] so it is exercisable without a database.
-fn assemble(rows: Vec<SnapshotRow>, n_hypotheses: i64, n_archived: i64) -> Snapshot {
+fn assemble(
+    rows: Vec<SnapshotRow>,
+    n_hypotheses: i64,
+    n_archived: i64,
+    quality: &QualityIndex,
+) -> Snapshot {
     let mut branches: Vec<BranchRow> = rows
         .into_iter()
         .map(|row| BranchRow {
@@ -275,6 +437,7 @@ fn assemble(rows: Vec<SnapshotRow>, n_hypotheses: i64, n_archived: i64) -> Snaps
             family: DynamicalFamily::from_label(&row.dynamic_family),
             semi_major_axis: row.semi_major_axis as f32,
             eccentricity: row.eccentricity as f32,
+            quality_tier: quality.tier_for(row.branch_id, row.n_nights),
         })
         .collect();
 
@@ -371,6 +534,14 @@ fn build_orders(
                         (None, None) => std::cmp::Ordering::Equal,
                     }
                 }
+                // Reversed: `QualityTier`'s `Ord` ranks `PrimeDiscovery`
+                // (the best tier) as the *smallest* value, but every other
+                // column here ranks "better" as larger — the default first
+                // click is always `SortDirection::Desc`
+                // (`branch_tab::toggle_sort`), which reverses this ascending
+                // permutation, so a plain `cmp` would show `Ineligible`
+                // first instead of `PrimeDiscovery`.
+                SortColumn::QualityTier => bb.quality_tier.cmp(&ba.quality_tier),
             };
 
             primary.then_with(|| la.lineage_id.cmp(&lb.lineage_id))
@@ -386,21 +557,28 @@ fn total_cmp_f64(a: f64, b: f64) -> std::cmp::Ordering {
     a.total_cmp(&b)
 }
 
-/// Groups every branch's (a, e) by family for the population plot.
-fn build_series(branches: &[BranchRow]) -> Vec<FamilySeries> {
-    let mut grouped: HashMap<DynamicalFamily, (Vec<f32>, Vec<f32>)> = HashMap::new();
+/// Groups every branch's (a, e) by (family, quality tier) for the population
+/// plot: family drives the marker color, tier drives its shape/opacity/
+/// border (`quality_tier::marker_for`), and plotly only offers one of each
+/// per trace — so a family alone is no longer a fine enough grouping once
+/// every branch also carries a tier.
+fn build_series(branches: &[BranchRow]) -> Vec<PlotSeries> {
+    let mut grouped: HashMap<(DynamicalFamily, QualityTier), (Vec<f32>, Vec<f32>)> = HashMap::new();
     for branch in branches {
-        let entry = grouped.entry(branch.family).or_default();
+        let entry = grouped
+            .entry((branch.family, branch.quality_tier))
+            .or_default();
         entry.0.push(branch.semi_major_axis);
         entry.1.push(branch.eccentricity);
     }
 
-    let mut series: Vec<FamilySeries> = grouped
+    let mut series: Vec<PlotSeries> = grouped
         .into_iter()
-        .map(|(family, (a, e))| FamilySeries { family, a, e })
+        .map(|((family, tier), (a, e))| PlotSeries { family, tier, a, e })
         .collect();
-    // Increasing heliocentric distance, the order the legend renders in.
-    series.sort_by_key(|s| s.family);
+    // Family (increasing heliocentric distance) then tier (best to worst) —
+    // the order both legends render their chips in.
+    series.sort_by_key(|s| (s.family, s.tier));
     series
 }
 
@@ -409,6 +587,7 @@ pub struct PageQuery<'a> {
     /// Already lowercased by the caller; empty means "match everything".
     pub search: &'a str,
     pub hidden_families: &'a [DynamicalFamily],
+    pub hidden_tiers: &'a [QualityTier],
     pub sort_column: Option<SortColumn>,
     pub descending: bool,
     pub offset: usize,
@@ -432,6 +611,12 @@ impl Snapshot {
             if !query.hidden_families.is_empty() {
                 let family = self.branches[entry.best as usize].family;
                 if query.hidden_families.contains(&family) {
+                    return false;
+                }
+            }
+            if !query.hidden_tiers.is_empty() {
+                let tier = self.branches[entry.best as usize].quality_tier;
+                if query.hidden_tiers.contains(&tier) {
                     return false;
                 }
             }
@@ -523,6 +708,7 @@ mod tests {
         PageQuery {
             search,
             hidden_families: hidden,
+            hidden_tiers: &[],
             sort_column,
             descending,
             offset: 0,
@@ -539,9 +725,31 @@ mod tests {
             .collect()
     }
 
+    /// Every branch marked eligible, with no recorded fit or failure — i.e.
+    /// every branch resolves to [`QualityTier::NotFitted`]. What every test
+    /// not specifically exercising the quality-tier cascade wants: the
+    /// family/sort/search/paging behaviour under test shouldn't have to
+    /// depend on the (unrelated) fit/failure/eligibility tables.
+    fn all_not_fitted(rows: &[SnapshotRow]) -> QualityIndex {
+        QualityIndex {
+            eligible: rows.iter().map(|r| r.branch_id).collect(),
+            latest_fit: HashMap::new(),
+            latest_failure_at: HashMap::new(),
+            well_sampled_nights: HashMap::new(),
+        }
+    }
+
+    /// [`assemble`] with every branch defaulted to [`QualityTier::NotFitted`]
+    /// (see [`all_not_fitted`]) — the call every pre-existing test (family
+    /// grouping, sorting, search, paging) uses.
+    fn assemble_default(rows: Vec<SnapshotRow>, n_hypotheses: i64, n_archived: i64) -> Snapshot {
+        let quality = all_not_fitted(&rows);
+        assemble(rows, n_hypotheses, n_archived, &quality)
+    }
+
     #[test]
     fn best_branch_per_lineage_is_the_highest_llr_one() {
-        let snap = assemble(
+        let snap = assemble_default(
             vec![
                 row(1, 10, 1.0, "MB>Inner", None),
                 row(2, 10, 5.0, "Trojan", None),
@@ -569,7 +777,7 @@ mod tests {
     fn non_finite_llr_is_neutralized_rather_than_sorting_first() {
         // Postgres ranks NaN above every float, so an unsanitized NaN branch
         // would win "best of lineage" and head a descending sort.
-        let snap = assemble(
+        let snap = assemble_default(
             vec![
                 row(1, 10, f64::NAN, "MB>Inner", None),
                 row(2, 10, 2.0, "MB>Inner", None),
@@ -598,7 +806,7 @@ mod tests {
 
     #[test]
     fn null_medians_sort_last_in_both_directions() {
-        let snap = assemble(
+        let snap = assemble_default(
             vec![
                 row(1, 10, 0.0, "MB>Inner", Some(5.0)),
                 row(2, 20, 0.0, "MB>Inner", None),
@@ -629,7 +837,7 @@ mod tests {
 
     #[test]
     fn family_sorts_by_heliocentric_distance_not_alphabetically() {
-        let snap = assemble(
+        let snap = assemble_default(
             vec![
                 row(1, 10, 0.0, "Trojan", None),
                 row(2, 20, 0.0, "NEA>Apollo", None),
@@ -648,7 +856,7 @@ mod tests {
     fn hidden_families_are_matched_against_the_best_branch_only() {
         // Lineage 10's best branch is the Trojan; its hidden MB>Inner sibling
         // must not drag the whole lineage out of the listing.
-        let snap = assemble(
+        let snap = assemble_default(
             vec![
                 row(1, 10, 5.0, "Trojan", None),
                 row(2, 10, 1.0, "MB>Inner", None),
@@ -672,7 +880,7 @@ mod tests {
         rows[0].lineage_designation = "FF25aBcD".to_string();
         rows.push(row(2, 20, 0.0, "MB>Inner", None));
 
-        let snap = assemble(rows, 0, 0);
+        let snap = assemble_default(rows, 0, 0);
 
         assert_eq!(ids(&snap, &query(None, false, &[], "abc")), vec![10]);
         assert_eq!(ids(&snap, &query(None, false, &[], "l20")), vec![20]);
@@ -683,7 +891,7 @@ mod tests {
 
     #[test]
     fn default_order_is_ascending_lineage_id_and_ignores_direction() {
-        let snap = assemble(
+        let snap = assemble_default(
             vec![
                 row(1, 30, 0.0, "MB>Inner", None),
                 row(2, 10, 0.0, "MB>Inner", None),
@@ -702,7 +910,7 @@ mod tests {
         let rows: Vec<SnapshotRow> = (0..10)
             .map(|i| row(i, i, i as f64, "MB>Inner", None))
             .collect();
-        let snap = assemble(rows, 0, 0);
+        let snap = assemble_default(rows, 0, 0);
 
         let mut q = query(Some(SortColumn::CumulativeLlr), true, &[], "");
         q.offset = 3;
@@ -720,7 +928,7 @@ mod tests {
 
     #[test]
     fn plot_series_are_grouped_by_family_in_legend_order() {
-        let snap = assemble(
+        let snap = assemble_default(
             vec![
                 row(1, 10, 0.0, "Trojan", None),
                 row(2, 20, 0.0, "NEA>Apollo", None),
@@ -737,5 +945,80 @@ mod tests {
         );
         assert_eq!(snap.series[0].a.len(), 2);
         assert_eq!(snap.series[1].a.len(), 1);
+    }
+
+    /// Mirrors `hidden_families_are_matched_against_the_best_branch_only`:
+    /// a hidden tier on a non-best branch must not drag its lineage out.
+    #[test]
+    fn hidden_tiers_are_matched_against_the_best_branch_only() {
+        let rows = vec![
+            row(1, 10, 5.0, "Trojan", None),   // best of lineage 10 — eligible
+            row(2, 10, 1.0, "MB>Inner", None), // sibling — left ineligible
+            row(3, 20, 5.0, "MB>Inner", None), // best of lineage 20 — left ineligible
+        ];
+        let quality = QualityIndex {
+            // Branches 2 and 3 are left out of the eligible set on purpose.
+            eligible: [1].into_iter().collect(),
+            latest_fit: HashMap::new(),
+            latest_failure_at: HashMap::new(),
+            well_sampled_nights: HashMap::new(),
+        };
+        let snap = assemble(rows, 0, 0, &quality);
+
+        assert_eq!(
+            snap.branches[snap.lineages[0].best as usize].quality_tier,
+            QualityTier::NotFitted
+        );
+        assert_eq!(
+            snap.branches[snap.others_idx[snap.lineages[0].others.start as usize] as usize]
+                .quality_tier,
+            QualityTier::Ineligible
+        );
+
+        let hidden = [QualityTier::Ineligible];
+        let visible = ids(
+            &snap,
+            &PageQuery {
+                search: "",
+                hidden_families: &[],
+                hidden_tiers: &hidden,
+                sort_column: None,
+                descending: false,
+                offset: 0,
+                limit: 100,
+            },
+        );
+        // Lineage 20's best branch is Ineligible (hidden), so it drops out;
+        // lineage 10's best branch is NotFitted (not hidden) even though its
+        // sibling is Ineligible — the sibling must not hide lineage 10.
+        assert_eq!(visible, vec![10]);
+    }
+
+    #[test]
+    fn quality_tier_sorts_best_first_when_descending() {
+        let rows = vec![
+            row(1, 10, 0.0, "MB>Inner", None),
+            row(2, 20, 0.0, "MB>Inner", None),
+            row(3, 30, 0.0, "MB>Inner", None),
+        ];
+        // Lineage 10 -> Ineligible, 20 -> NotFitted (default), 30 -> eligible
+        // but also NotFitted (no fit/failure recorded) — distinguished from
+        // 10 only by eligibility.
+        let quality = QualityIndex {
+            eligible: [2, 3].into_iter().collect(),
+            latest_fit: HashMap::new(),
+            latest_failure_at: HashMap::new(),
+            well_sampled_nights: HashMap::new(),
+        };
+        let snap = assemble(rows, 0, 0, &quality);
+
+        // Default click direction (`SortDirection::Desc`) must surface the
+        // best tier first, exactly like every other column's "larger first"
+        // convention — see the comment on `SortColumn::QualityTier` in
+        // `build_orders`. Lineages 20 and 30 tie on tier (both `NotFitted`);
+        // descending reverses their ascending (lineage_id-ascending) tiebreak
+        // too, same as every other column's ties, so 30 comes before 20.
+        let desc = ids(&snap, &query(Some(SortColumn::QualityTier), true, &[], ""));
+        assert_eq!(desc, vec![30, 20, 10]);
     }
 }

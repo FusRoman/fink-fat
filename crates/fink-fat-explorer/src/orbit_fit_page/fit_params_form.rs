@@ -1,24 +1,27 @@
 use dioxus::prelude::*;
 
-use crate::orbit_fit::{
-    AsteroidPerturberChoice, ObsErrorModelChoice, OrbitFitParams, PerturberChoice, PropagatorChoice,
+use crate::fit_pipeline::params::{
+    AsteroidPerturberChoice, ObsErrorModelChoice, OrbitFitParams, PerturberChoice,
+    PropagatorChoice, SeedStrategy,
 };
 
 use super::help_tooltip::HelpTooltip;
 
 /// Exhaustive form for every tunable parameter of an Outfit orbit fit,
 /// grouped into collapsible sections. Bound directly to a
-/// `Signal<OrbitFitParams>` owned by the page. The IOD/Gauss section is
-/// informational: the fit always seeds from the current Kalman orbit rather
-/// than running Gauss IOD, so those fields have no effect on the outcome —
-/// kept in the form for completeness and because a future "recompute without
-/// a Kalman seed" mode could use them.
+/// `Signal<OrbitFitParams>` owned by the page. The IOD/Gauss section only
+/// affects the fit when `seed_strategy` is [`SeedStrategy::SeedlessGaussIod`]
+/// — under [`SeedStrategy::KalmanOrbit`] (the default) those fields are
+/// inert, but shown collapsed rather than hidden so switching strategies
+/// doesn't reset values the user already tuned.
 #[component]
 pub fn FitParamsForm(
     params: Signal<OrbitFitParams>,
     launch_disabled: bool,
     on_launch: EventHandler<MouseEvent>,
 ) -> Element {
+    let seedless = matches!(params.read().seed_strategy, SeedStrategy::SeedlessGaussIod);
+
     rsx! {
         div { class: "card bg-base-100 shadow-sm",
             div { class: "card-body gap-3",
@@ -33,18 +36,23 @@ pub fn FitParamsForm(
                 }
 
                 ErrorModelSection { params }
+                SeedStrategySection { params }
                 DynamicalModelSection { params }
                 DifferentialCorrectionSection { params }
 
-                // div { class: "collapse collapse-arrow bg-base-200",
-                //     input { r#type: "checkbox" }
-                //     div { class: "collapse-title text-sm font-medium",
-                //         "IOD / Gauss (not used — the fit seeds from the current Kalman orbit)"
-                //     }
-                //     div { class: "collapse-content",
-                //         IodSection { params }
-                //     }
-                // }
+                div { class: "collapse collapse-arrow bg-base-200",
+                    input { r#type: "checkbox" }
+                    div { class: "collapse-title text-sm font-medium",
+                        if seedless {
+                            "IOD / Gauss (used to seed this fit)"
+                        } else {
+                            "IOD / Gauss (inert — seed strategy is \"Kalman orbit\")"
+                        }
+                    }
+                    div { class: "collapse-content",
+                        IodSection { params }
+                    }
+                }
                 div { class: "flex justify-center pt-2",
                     button {
                         class: "btn btn-outline btn-primary",
@@ -89,6 +97,35 @@ fn ErrorModelSection(params: Signal<OrbitFitParams>) -> Element {
                 option { value: "cbm10", "{ObsErrorModelChoice::Cbm10.label()}" }
                 option { value: "vfcc17", "{ObsErrorModelChoice::Vfcc17.label()}" }
                 option { value: "lsst", "{ObsErrorModelChoice::Lsst.label()}" }
+            }
+        }
+    }
+}
+
+#[component]
+fn SeedStrategySection(params: Signal<OrbitFitParams>) -> Element {
+    rsx! {
+        div { class: "form-control w-full max-w-xs gap-1",
+            label { class: "label",
+                span { class: "label-text", "Seed" }
+                HelpTooltip {
+                    text: "Where the differential correction starts from. \"Kalman orbit\" refines the branch's current production estimate — the historical default. \"Gauss IOD, seedless\" ignores it and determines a fresh starting orbit from the selected observations instead, the same strategy the bulk fit always uses; a fit that diverges from the Kalman seed sometimes converges from this one, since it's a different starting point for the same n-body correction.",
+                }
+            }
+            select {
+                class: "select select-bordered select-sm",
+                value: match params.read().seed_strategy {
+                    SeedStrategy::KalmanOrbit => "kalman",
+                    SeedStrategy::SeedlessGaussIod => "seedless",
+                },
+                onchange: move |evt| {
+                    params.write().seed_strategy = match evt.value().as_str() {
+                        "seedless" => SeedStrategy::SeedlessGaussIod,
+                        _ => SeedStrategy::KalmanOrbit,
+                    };
+                },
+                option { value: "kalman", "{SeedStrategy::KalmanOrbit.label()}" }
+                option { value: "seedless", "{SeedStrategy::SeedlessGaussIod.label()}" }
             }
         }
     }

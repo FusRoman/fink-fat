@@ -1,9 +1,8 @@
 use dioxus::prelude::*;
 
+use crate::fit_pipeline::fit::{FitMethod, KeplerianView, ObsResidual, ObsSelectionView};
 use crate::format_epoch::{format_epoch, iso_utc};
-use crate::orbit_fit::{
-    history::get_orbit_fit_history, KeplerianView, ObsSelectionView, OrbitDelta, OrbitFitResult,
-};
+use crate::orbit_fit::{history::get_orbit_fit_history, OrbitDelta, OrbitFitResult};
 
 use super::residuals_plot::ResidualsPlot;
 
@@ -11,6 +10,16 @@ use super::residuals_plot::ResidualsPlot;
 pub fn FitResult(lineage_id: String, result: OrbitFitResult) -> Element {
     rsx! {
         div { class: "flex flex-col gap-4",
+            if result.fit_method == FitMethod::IodOnly {
+                div { class: "alert alert-warning",
+                    span {
+                        "The differential correction diverged from the Gauss IOD seed, so this is "
+                        "the preliminary Gauss orbit alone — not a least-squares fit. It carries no "
+                        "per-observation residuals, and the bulk fit stores this same situation as "
+                        "an \"IOD only\" row."
+                    }
+                }
+            }
             div { class: "flex flex-col xl:flex-row gap-4 items-stretch",
                 KeplerianCard { keplerian: result.keplerian.clone() }
                 if let Some(delta) = result.delta_vs_kalman.clone() {
@@ -198,7 +207,7 @@ fn MetricsCard(result: OrbitFitResult) -> Element {
 }
 
 #[component]
-fn ResidualsTable(residuals: Vec<crate::orbit_fit::ObsResidual>) -> Element {
+fn ResidualsTable(residuals: Vec<ObsResidual>) -> Element {
     let mut show_utc = use_signal(|| true);
 
     rsx! {
@@ -284,6 +293,8 @@ fn HistorySection(lineage_id: String) -> Element {
                                 thead {
                                     tr {
                                         th { "Fitted at" }
+                                        th { "Branch" }
+                                        th { "Method" }
                                         th { "Observations" }
                                         th { "Normalised RMS" }
                                         th { "a (AU)" }
@@ -293,6 +304,21 @@ fn HistorySection(lineage_id: String) -> Element {
                                     for row in rows {
                                         tr { key: "{row.id}",
                                             td { "{row.fitted_at}" }
+                                            td {
+                                                match row.branch_id {
+                                                    Some(id) => rsx! { "#{id}" },
+                                                    None => rsx! { span { class: "opacity-40", "—" } },
+                                                }
+                                            }
+                                            td {
+                                                if row.fit_method == FitMethod::IodOnly {
+                                                    span { class: "badge badge-sm badge-warning",
+                                                        "{row.fit_method.label()}"
+                                                    }
+                                                } else {
+                                                    span { class: "opacity-70", "{row.fit_method.label()}" }
+                                                }
+                                            }
                                             td { "{row.n_observations_used}" }
                                             td { "{row.normalised_rms:.4}" }
                                             td { "{row.semi_major_axis_au:.6}" }

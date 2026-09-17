@@ -1,5 +1,5 @@
 #[cfg(target_arch = "wasm32")]
-use crate::orbit_fit::ObsResidual;
+use crate::fit_pipeline::fit::ObsResidual;
 
 /// Which quantity the residuals plots' shared x-axis represents. Mirrors
 /// `lineage_page::x_axis::XAxisUnit` for the Kalman-replay plots, but keyed

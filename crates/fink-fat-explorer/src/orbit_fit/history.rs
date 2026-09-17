@@ -1,6 +1,8 @@
 use dioxus::prelude::*;
 
 use super::OrbitFitSummary;
+#[cfg(feature = "server")]
+use crate::fit_pipeline::fit::FitMethod;
 
 /// Previous Outfit fits for a lineage, most recent first. Used both to
 /// render the "History" tab on the fit result page and, server-side, by
@@ -14,6 +16,8 @@ pub async fn get_orbit_fit_history(
     #[cfg_attr(feature = "server", derive(sqlx::FromRow))]
     struct Row {
         id: i64,
+        branch_id: Option<i64>,
+        fit_method: String,
         fitted_at: chrono::DateTime<chrono::Utc>,
         n_observations_used: i32,
         normalised_rms: f64,
@@ -29,7 +33,7 @@ pub async fn get_orbit_fit_history(
 
     let pool = get_pool().await;
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT id, fitted_at, n_observations_used, normalised_rms, reference_epoch, \
+        "SELECT id, branch_id, fit_method, fitted_at, n_observations_used, normalised_rms, reference_epoch, \
          semi_major_axis, eccentricity_sin_lon, eccentricity_cos_lon, \
          tan_half_incl_sin_node, tan_half_incl_cos_node, mean_longitude, covariance \
          FROM orbit_fits \
@@ -45,6 +49,8 @@ pub async fn get_orbit_fit_history(
         .into_iter()
         .map(|r| OrbitFitSummary {
             id: r.id,
+            branch_id: r.branch_id,
+            fit_method: FitMethod::from_column(&r.fit_method),
             fitted_at: r.fitted_at.to_rfc3339(),
             n_observations_used: r.n_observations_used,
             normalised_rms: r.normalised_rms,

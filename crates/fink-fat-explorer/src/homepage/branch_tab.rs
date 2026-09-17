@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use crate::homepage::family::DynamicalFamily;
 use crate::homepage::interaction::{Pagination, SortColumn, SortDirection, PAGE_SIZE};
+use crate::homepage::quality_tier::QualityTier;
 use crate::Route;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
@@ -18,6 +19,7 @@ struct Branch {
     arc_length_days: f64,
     n_nights: i64,
     median_inter_night_dt_days: Option<f64>,
+    quality_tier: QualityTier,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
@@ -49,6 +51,7 @@ async fn list_lineages(
     sort_direction: SortDirection,
     search_query: String,
     hidden_families: Vec<DynamicalFamily>,
+    hidden_tiers: Vec<QualityTier>,
 ) -> Result<Option<LineagePage>, ServerFnError> {
     use crate::homepage::{
         interaction::PAGE_SIZE,
@@ -67,6 +70,7 @@ async fn list_lineages(
     let (page_indices, total_lineages) = snap.page(&PageQuery {
         search: &search,
         hidden_families: &hidden_families,
+        hidden_tiers: &hidden_tiers,
         sort_column,
         descending: sort_direction == SortDirection::Desc,
         offset: (page * PAGE_SIZE).max(0) as usize,
@@ -84,6 +88,7 @@ async fn list_lineages(
         arc_length_days: row.arc_length_days,
         n_nights: row.n_nights,
         median_inter_night_dt_days: row.median_inter_night_dt_days,
+        quality_tier: row.quality_tier,
     };
 
     let groups: Vec<LineageGroup> = page_indices
@@ -194,8 +199,20 @@ fn TabHeader(
         ""
     };
 
+    let quality_arrow: &'static str = match (sort_column, sort_direction) {
+        (Some(SortColumn::QualityTier), SortDirection::Asc) => "▲",
+        (Some(SortColumn::QualityTier), SortDirection::Desc) => "▼",
+        _ => "⇅",
+    };
+
+    let quality_active_class = if sort_column == Some(SortColumn::QualityTier) {
+        "text-primary"
+    } else {
+        ""
+    };
+
     rsx! {
-        div { class: "grid grid-cols-8 gap-4 px-4 py-2 text-sm font-semibold opacity-60",
+        div { class: "grid grid-cols-9 gap-4 px-4 py-2 text-sm font-semibold opacity-60",
             span { "Designation" }
             span { "Lineage" }
             span {
@@ -234,6 +251,12 @@ fn TabHeader(
                 "Median Δt (days)"
                 span { class: "text-xs", "{median_dt_arrow}" }
             }
+            span {
+                class: "cursor-pointer select-none flex items-center gap-1 hover:text-primary transition-colors {quality_active_class}",
+                onclick: move |_| on_sort.call(SortColumn::QualityTier),
+                "Quality"
+                span { class: "text-xs", "{quality_arrow}" }
+            }
         }
     }
 }
@@ -243,6 +266,21 @@ fn format_median_dt(days: Option<f64>) -> String {
     match days {
         Some(v) => format!("{v:.1}"),
         None => "—".to_string(),
+    }
+}
+
+/// The "Quality" column's cell, shared between a lineage's best-branch row
+/// and its collapsed "others" rows so the badge markup exists once.
+#[component]
+fn QualityBadge(tier: QualityTier) -> Element {
+    rsx! {
+        span {
+            span {
+                class: "badge badge-sm {tier.badge_class()}",
+                title: "{tier.label()}",
+                "{tier.glyph()} {tier.label()}"
+            }
+        }
     }
 }
 
@@ -257,7 +295,7 @@ fn LineageTable(groups: Vec<LineageGroup>) -> Element {
                     class: "collapse collapse-arrow bg-base-100 border border-base-300",
 
                     div { class: "collapse-title",
-                        div { class: "grid grid-cols-8 gap-4 items-center",
+                        div { class: "grid grid-cols-9 gap-4 items-center",
                             span { class: "font-medium", "{group.best.designation}" }
                             span {
                                 Link {
@@ -280,6 +318,7 @@ fn LineageTable(groups: Vec<LineageGroup>) -> Element {
                             span { "{group.best.arc_length_days:.1}" }
                             span { "{group.best.n_nights}" }
                             span { "{format_median_dt(group.best.median_inter_night_dt_days)}" }
+                            QualityBadge { tier: group.best.quality_tier }
                         }
                     }
 
@@ -293,7 +332,7 @@ fn LineageTable(groups: Vec<LineageGroup>) -> Element {
                                 for branch in &group.others {
                                     div {
                                         key: "{branch.branch_id}",
-                                        class: "grid grid-cols-8 gap-4 items-center px-2 py-1 text-sm hover:bg-base-200 rounded",
+                                        class: "grid grid-cols-9 gap-4 items-center px-2 py-1 text-sm hover:bg-base-200 rounded",
                                         span { "{branch.designation}" }
                                         span { "{branch.lineage_designation}" }
                                         span {
@@ -308,6 +347,7 @@ fn LineageTable(groups: Vec<LineageGroup>) -> Element {
                                         span { "{branch.arc_length_days:.1}" }
                                         span { "{branch.n_nights}" }
                                         span { "{format_median_dt(branch.median_inter_night_dt_days)}" }
+                                        QualityBadge { tier: branch.quality_tier }
                                     }
                                 }
                             }
@@ -331,6 +371,7 @@ const WARMUP_POLL_MS: u64 = 1000;
 pub fn BranchTab(
     search_query: String,
     hidden_families: Signal<HashSet<DynamicalFamily>>,
+    hidden_tiers: Signal<HashSet<QualityTier>>,
     refresh_token: Signal<u64>,
 ) -> Element {
     let mut current_page = use_signal(|| 0_i64);
@@ -365,6 +406,8 @@ pub fn BranchTab(
         // Sorted for a stable request shape.
         let mut hidden: Vec<DynamicalFamily> = hidden_families().into_iter().collect();
         hidden.sort();
+        let mut hidden_t: Vec<QualityTier> = hidden_tiers().into_iter().collect();
+        hidden_t.sort();
 
         let _ = refresh_token();
 
@@ -374,6 +417,7 @@ pub fn BranchTab(
             sort_direction(),
             debounced_search(),
             hidden,
+            hidden_t,
         )
         .await
     });
@@ -393,6 +437,14 @@ pub fn BranchTab(
     // may no longer exist.
     use_effect(move || {
         let _ = hidden_families();
+        if *current_page.peek() != 0 {
+            current_page.set(0);
+        }
+    });
+
+    // Same, for the quality-tier filter.
+    use_effect(move || {
+        let _ = hidden_tiers();
         if *current_page.peek() != 0 {
             current_page.set(0);
         }

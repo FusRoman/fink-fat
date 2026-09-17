@@ -3,7 +3,7 @@ use std::collections::HashSet;
 
 #[cfg(target_arch = "wasm32")]
 use plotly::{
-    common::{Marker, Mode, TickMode, Title, Visible},
+    common::{Mode, TickMode, Title, Visible},
     layout::{Axis, AxisType, Layout, Margin},
     Plot, Scatter,
 };
@@ -11,18 +11,22 @@ use plotly::{
 use serde::{Deserialize, Serialize};
 
 use crate::homepage::family::DynamicalFamily;
+#[cfg(target_arch = "wasm32")]
+use crate::homepage::quality_tier::marker_for;
+use crate::homepage::quality_tier::QualityTier;
 
-/// All the points of a single family, pre-split into the two coordinate
-/// vectors plotly wants, so that toggling a family only rebuilds the traces
-/// and never re-groups the whole population.
+/// All the points of a single (family, quality tier) pair, pre-split into the
+/// two coordinate vectors plotly wants, so that toggling a family or a tier
+/// only rebuilds the traces and never re-groups the whole population.
 ///
 /// This is also the wire format: the server groups the population once when it
 /// builds the homepage snapshot and ships these flat arrays, rather than one
-/// JSON object per point carrying a repeated family label — roughly a sixfold
-/// cut in payload at 214k branches.
+/// JSON object per point carrying a repeated family/tier label — roughly a
+/// sixfold cut in payload at 214k branches.
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
-pub struct FamilySeries {
+pub struct PlotSeries {
     pub family: DynamicalFamily,
+    pub tier: QualityTier,
     pub a: Vec<f32>,
     pub e: Vec<f32>,
 }
@@ -30,7 +34,7 @@ pub struct FamilySeries {
 /// Served from the in-RAM homepage snapshot; `None` while it is still being
 /// built. See [`crate::homepage::snapshot`].
 #[server]
-pub async fn query_orbital_elements() -> Result<Option<Vec<FamilySeries>>, ServerFnError> {
+pub async fn query_orbital_elements() -> Result<Option<Vec<PlotSeries>>, ServerFnError> {
     Ok(crate::homepage::snapshot::snapshot()
         .await
         .map(|snap| snap.series.clone()))
@@ -42,6 +46,7 @@ const WARMUP_POLL_MS: u64 = 1000;
 #[component]
 pub fn DynamicPopPlot(
     hidden_families: Signal<HashSet<DynamicalFamily>>,
+    hidden_tiers: Signal<HashSet<QualityTier>>,
     refresh_token: Signal<u64>,
 ) -> Element {
     let mut orbital_data = use_resource(move || async move {
@@ -67,21 +72,37 @@ pub fn DynamicPopPlot(
         }
     });
 
-    // Already grouped by family, in `DynamicalFamily`'s `Ord` (increasing
-    // heliocentric distance) — which is the order the legend lists them in.
+    // Already grouped by (family, tier), in family then tier order — which is
+    // the order both legends list their chips in.
     let series = use_memo(move || match &*orbital_data.read() {
         Some(Ok(Some(series))) => series.clone(),
         _ => Vec::new(),
     });
 
-    // Just the (family, point count) pairs — cheap enough to hand to the
-    // legend as a prop, unlike the full coordinate vectors.
-    let legend_entries = use_memo(move || {
-        series
-            .read()
-            .iter()
-            .map(|s| (s.family, s.a.len()))
-            .collect::<Vec<_>>()
+    // (family, point count) pairs, summed across tiers — cheap enough to hand
+    // to the family legend as a prop, unlike the full coordinate vectors.
+    let family_legend_entries = use_memo(move || {
+        let mut counts: Vec<(DynamicalFamily, usize)> = Vec::new();
+        for s in series.read().iter() {
+            match counts.iter_mut().find(|(f, _)| *f == s.family) {
+                Some((_, count)) => *count += s.a.len(),
+                None => counts.push((s.family, s.a.len())),
+            }
+        }
+        counts
+    });
+
+    // Same idea, summed across families instead, for the tier legend.
+    let tier_legend_entries = use_memo(move || {
+        let mut counts: Vec<(QualityTier, usize)> = Vec::new();
+        for s in series.read().iter() {
+            match counts.iter_mut().find(|(t, _)| *t == s.tier) {
+                Some((_, count)) => *count += s.a.len(),
+                None => counts.push((s.tier, s.a.len())),
+            }
+        }
+        counts.sort_by_key(|(tier, _)| *tier);
+        counts
     });
 
     // Deliberately does *not* read `hidden_families`: doing so would re-render
@@ -107,6 +128,7 @@ pub fn DynamicPopPlot(
             // Read both inside the effect so it re-runs on a legend toggle as
             // well as on a data load.
             let hidden = hidden_families();
+            let hidden_t = hidden_tiers();
 
             if is_mounted() {
                 let height = web_sys::window()
@@ -125,22 +147,23 @@ pub fn DynamicPopPlot(
                     }
 
                     let mut plot = Plot::new();
-                    // Every family is always emitted as a trace; hidden ones
-                    // are merely flipped to `Visible::False`. That keeps
-                    // `react`'s diff down to one attribute instead of making
-                    // it reconcile a different set of traces each toggle.
+                    // Every (family, tier) pair is always emitted as a trace;
+                    // hidden ones are merely flipped to `Visible::False`.
+                    // That keeps `react`'s diff down to one attribute instead
+                    // of making it reconcile a different set of traces each
+                    // toggle.
                     for s in series.iter() {
-                        let visible = if hidden.contains(&s.family) {
+                        let visible = if hidden.contains(&s.family) || hidden_t.contains(&s.tier) {
                             Visible::False
                         } else {
                             Visible::True
                         };
                         let trace = Scatter::new(s.a.clone(), s.e.clone())
-                            .name(s.family.label())
+                            .name(format!("{} · {}", s.family.label(), s.tier.label()))
                             .mode(Mode::Markers)
                             .web_gl_mode(true)
                             .visible(visible)
-                            .marker(Marker::new().color(s.family.color()));
+                            .marker(marker_for(s.family, s.tier));
                         plot.add_trace(trace);
                     }
 
@@ -213,7 +236,8 @@ pub fn DynamicPopPlot(
                         }
                     }
                 }
-                FamilyLegend { entries: legend_entries(), hidden_families }
+                FamilyLegend { entries: family_legend_entries(), hidden_families }
+                TierLegend { entries: tier_legend_entries(), hidden_tiers }
             }
         }
     }
@@ -325,6 +349,102 @@ fn FamilyChip(
                 }
             },
             "{family} {count}"
+        }
+    }
+}
+
+/// Second legend row, same pattern as [`FamilyLegend`]/[`FamilyChip`] but for
+/// [`QualityTier`]: one clickable chip per tier present in the data, toggling
+/// membership in `hidden_tiers` — which both the plot's marker traces and the
+/// table's "Quality" column filter read.
+#[component]
+fn TierLegend(
+    entries: Vec<(QualityTier, usize)>,
+    mut hidden_tiers: Signal<HashSet<QualityTier>>,
+) -> Element {
+    let all_tiers: Vec<QualityTier> = entries.iter().map(|(t, _)| *t).collect();
+
+    let (shown, total) = {
+        let hidden = hidden_tiers.read();
+        entries
+            .iter()
+            .fold((0usize, 0usize), |(shown, total), (tier, count)| {
+                if hidden.contains(tier) {
+                    (shown, total + count)
+                } else {
+                    (shown + count, total + count)
+                }
+            })
+    };
+
+    let summary = if shown == total {
+        format!("{total} shown")
+    } else {
+        format!("{shown} / {total} shown")
+    };
+
+    rsx! {
+        div { class: "flex flex-wrap items-center justify-center gap-1 mt-1",
+            for (tier , count) in entries {
+                TierChip { tier, count, hidden_tiers }
+            }
+
+            span { class: "mx-1 opacity-30", "|" }
+
+            button {
+                class: "btn btn-xs btn-ghost",
+                onclick: move |_| hidden_tiers.write().clear(),
+                "All"
+            }
+            button {
+                class: "btn btn-xs btn-ghost",
+                onclick: move |_| {
+                    let mut set = hidden_tiers.write();
+                    set.clear();
+                    set.extend(all_tiers.iter().copied());
+                },
+                "None"
+            }
+
+            span { class: "text-xs opacity-60 ml-2", "{summary}" }
+        }
+    }
+}
+
+/// A single tier legend entry, showing the same glyph the plot marker uses
+/// for that tier so the legend visually teaches the marker mapping.
+#[component]
+fn TierChip(
+    tier: QualityTier,
+    count: usize,
+    mut hidden_tiers: Signal<HashSet<QualityTier>>,
+) -> Element {
+    let is_hidden = hidden_tiers.read().contains(&tier);
+
+    let class = if is_hidden {
+        format!("badge badge-sm {} opacity-30", tier.badge_class())
+    } else {
+        format!("badge badge-sm {}", tier.badge_class())
+    };
+
+    let title = if is_hidden {
+        "Click to show"
+    } else {
+        "Click to hide"
+    };
+
+    rsx! {
+        button {
+            r#type: "button",
+            class: "{class} cursor-pointer select-none transition-opacity",
+            title: "{title}",
+            onclick: move |_| {
+                let mut set = hidden_tiers.write();
+                if !set.remove(&tier) {
+                    set.insert(tier);
+                }
+            },
+            "{tier.glyph()} {tier} {count}"
         }
     }
 }

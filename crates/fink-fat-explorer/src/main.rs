@@ -1,5 +1,6 @@
 pub mod bulk_orbit_fit;
 pub mod bulk_orbit_fit_page;
+pub mod fit_pipeline;
 pub mod format_epoch;
 pub mod homepage;
 pub mod lineage_page;

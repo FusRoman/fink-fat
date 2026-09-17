@@ -66,7 +66,7 @@ pub fn LineagePage(lineage_id: String) -> Element {
     // Plain owned snapshots, cheap to pass around as props without holding
     // onto the resources' `Ref` guards across the whole render.
     let observations: Vec<ObservationRow> = match &*observations_resource.read() {
-        Some(Ok(rows)) => rows.clone(),
+        Some(Ok(Some(data))) => data.observations.clone(),
         _ => Vec::new(),
     };
     let replay: Vec<KfStep> = match &*replay_resource.read() {

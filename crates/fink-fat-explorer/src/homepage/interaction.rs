@@ -9,6 +9,7 @@ pub enum SortColumn {
     ArcLength,
     Nights,
     MedianInterNightDt,
+    QualityTier,
 }
 
 impl SortColumn {
@@ -16,13 +17,14 @@ impl SortColumn {
     /// pre-sorted permutation per entry of this array, indexed by
     /// [`Self::index`], so the two must stay in sync — hence the explicit
     /// listing here rather than a hand-written count somewhere else.
-    pub const ALL: [SortColumn; 6] = [
+    pub const ALL: [SortColumn; 7] = [
         SortColumn::CumulativeLlr,
         SortColumn::Updates,
         SortColumn::Family,
         SortColumn::ArcLength,
         SortColumn::Nights,
         SortColumn::MedianInterNightDt,
+        SortColumn::QualityTier,
     ];
 
     /// Position of this column in [`Self::ALL`].
@@ -34,6 +36,7 @@ impl SortColumn {
             SortColumn::ArcLength => 3,
             SortColumn::Nights => 4,
             SortColumn::MedianInterNightDt => 5,
+            SortColumn::QualityTier => 6,
         }
     }
 }

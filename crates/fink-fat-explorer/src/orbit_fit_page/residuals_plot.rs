@@ -7,7 +7,9 @@ use plotly::{
     Plot, Scatter,
 };
 
-use crate::orbit_fit::ObsResidual;
+use crate::fit_pipeline::fit::ObsResidual;
+#[cfg(target_arch = "wasm32")]
+use crate::fit_pipeline::fit::ObsSelectionView;
 
 use super::x_axis::XAxisUnit;
 #[cfg(target_arch = "wasm32")]
@@ -60,13 +62,13 @@ fn CombinedResidualsPlot(residuals: Vec<ObsResidual>, x_axis_unit: XAxisUnit) ->
             let (kept_chi, kept_idx): (Vec<f64>, Vec<usize>) = residuals
                 .iter()
                 .enumerate()
-                .filter(|(_, r)| r.selection == crate::orbit_fit::ObsSelectionView::Kept)
+                .filter(|(_, r)| r.selection == ObsSelectionView::Kept)
                 .map(|(i, r)| (r.chi, i))
                 .unzip();
             let (rejected_chi, rejected_idx): (Vec<f64>, Vec<usize>) = residuals
                 .iter()
                 .enumerate()
-                .filter(|(_, r)| r.selection == crate::orbit_fit::ObsSelectionView::Rejected)
+                .filter(|(_, r)| r.selection == ObsSelectionView::Rejected)
                 .map(|(i, r)| (r.chi, i))
                 .unzip();
 

@@ -61,44 +61,54 @@ impl From<ObservationRowSql> for ObservationRow {
     }
 }
 
-/// Every real observation of a lineage's best branch (highest
-/// `cumulative_llr`), ordered as they were absorbed by the filter.
+/// A lineage's best branch (highest `cumulative_llr`) and its observations —
+/// the single resolution point for "which branch does this lineage's page
+/// operate on". Callers that need to act on that branch specifically (e.g.
+/// `orbit_fit_page`, which must fit and later store results against the same
+/// `branch_id` it displayed observations for) get it from here rather than
+/// re-resolving "the lineage's best branch" independently, which previously
+/// risked the fit page silently picking a different branch than the one its
+/// observation list was built from.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub struct LineageObservations {
+    pub branch_id: i64,
+    pub observations: Vec<ObservationRow>,
+}
+
+/// Every real observation of a lineage's best branch, ordered as they were
+/// absorbed by the filter. `None` if the lineage has no branches at all.
 #[server]
 pub async fn get_lineage_observations(
     lineage_designation: String,
-) -> Result<Vec<ObservationRow>, ServerFnError> {
+) -> Result<Option<LineageObservations>, ServerFnError> {
     use crate::get_pool;
+    use crate::orbit_fit::run::resolve_best_branch_id;
+
+    let Some(branch_id) = resolve_best_branch_id(&lineage_designation)
+        .await
+        .map_err(ServerFnError::new)?
+    else {
+        return Ok(None);
+    };
 
     let pool = get_pool().await;
-
     let rows: Vec<ObservationRowSql> = sqlx::query_as(
-        "WITH best_branch AS (
-            SELECT branch_id
-            FROM branches
-            WHERE lineage_designation = $1
-            ORDER BY (
-                CASE
-                    WHEN cumulative_llr = 'NaN'::double precision THEN 0
-                    WHEN cumulative_llr = 'Infinity'::double precision THEN 0
-                    WHEN cumulative_llr = '-Infinity'::double precision THEN 0
-                    ELSE cumulative_llr
-                END
-            ) DESC
-            LIMIT 1
-        )
-        SELECT o.id, o.object_id, bo.position, o.mjd_tt, o.ra, o.ra_err, o.dec, o.dec_err,
-               o.magnitude, o.mag_err, o.filter, o.mpc_code_obs
-        FROM best_branch bb
-        JOIN branch_observations bo ON bo.branch_id = bb.branch_id
-        JOIN observations o ON o.id = bo.obs_id
-        ORDER BY bo.position",
+        "SELECT o.id, o.object_id, bo.position, o.mjd_tt, o.ra, o.ra_err, o.dec, o.dec_err,
+                o.magnitude, o.mag_err, o.filter, o.mpc_code_obs
+         FROM branch_observations bo
+         JOIN observations o ON o.id = bo.obs_id
+         WHERE bo.branch_id = $1
+         ORDER BY bo.position",
     )
-    .bind(&lineage_designation)
+    .bind(branch_id)
     .fetch_all(pool)
     .await
     .map_err(|e| ServerFnError::new(e.to_string()))?;
 
-    Ok(rows.into_iter().map(ObservationRow::from).collect())
+    Ok(Some(LineageObservations {
+        branch_id,
+        observations: rows.into_iter().map(ObservationRow::from).collect(),
+    }))
 }
 
 /// Scrollable table of every observation used by the lineage's best branch —

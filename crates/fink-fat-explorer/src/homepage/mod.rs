@@ -2,6 +2,7 @@ pub mod branch_tab;
 pub mod dynamic_pop_plot;
 pub mod family;
 pub mod interaction;
+pub mod quality_tier;
 #[cfg(feature = "server")]
 pub mod snapshot;
 pub mod stats_count;
@@ -13,6 +14,7 @@ use crate::homepage::{
     branch_tab::{refresh_snapshot, BranchTab},
     dynamic_pop_plot::DynamicPopPlot,
     family::DynamicalFamily,
+    quality_tier::QualityTier,
     stats_count::{get_snapshot_version, StatsBanner},
 };
 
@@ -34,6 +36,10 @@ pub fn Home() -> Element {
     // means the empty default naturally reads as "no filter", so neither
     // component has to know the full list of families up front.
     let hidden_families = use_signal(HashSet::<DynamicalFamily>::new);
+
+    // Same idea as `hidden_families`, one signal for the quality-tier legend
+    // chips (plot) and the "Quality" column filter (table).
+    let hidden_tiers = use_signal(HashSet::<QualityTier>::new);
 
     // Bumped once a requested snapshot rebuild has actually landed. All three
     // data components read it inside their resource futures, so bumping it
@@ -117,12 +123,13 @@ pub fn Home() -> Element {
             }
 
             div { class: "p-6 flex flex-col gap-6 flex-1 min-h-0",
-                DynamicPopPlot { hidden_families, refresh_token }
+                DynamicPopPlot { hidden_families, hidden_tiers, refresh_token }
 
                 div { class: "grid grid-cols-1",
                     BranchTab {
                         search_query: search_input(),
                         hidden_families,
+                        hidden_tiers,
                         refresh_token,
                     }
                 }
