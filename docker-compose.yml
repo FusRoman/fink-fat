@@ -12,6 +12,21 @@ services:
       # PostgreSQL 18+ expects a mount on /var/lib/postgresql (parent dir),
       # not directly on /var/lib/postgresql/data
       - db-data:/var/lib/postgresql
+    # Tuned for `fink-fat convert`'s bulk COPY load (millions of rows across
+    # 7 tables in one transaction), not for a small interactive workload —
+    # sized against a 128 GB host, leaving headroom for the `app`/`pgadmin`
+    # containers and the `convert` process itself (which loads the source
+    # parquet/rkyv into its own memory before it ever connects here).
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=8GB"
+      - "-c"
+      - "maintenance_work_mem=2GB"
+      - "-c"
+      - "max_wal_size=16GB"
+      - "-c"
+      - "checkpoint_timeout=30min"
 
   pgadmin:
     image: dpage/pgadmin4:latest

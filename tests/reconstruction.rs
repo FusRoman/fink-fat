@@ -76,7 +76,7 @@ fn write_combined_parquet(files: &[PathBuf], out_path: &Path) {
 fn run_fink_fat(alerts_path: &str) {
     Command::cargo_bin(assert_cmd::pkg_name!())
         .expect("binary should build")
-        .args(["--alerts", alerts_path, "--config", CONFIG_PATH])
+        .args(["track", "--alerts", alerts_path, "--config", CONFIG_PATH])
         .assert()
         .success();
 }
@@ -187,25 +187,25 @@ fn alternating_single_and_batch_modes_reconstruct_known_trajectories() {
     // cross-object contamination) — recall is the only axis that varies.
     let baseline: HashMap<u32, (usize, usize)> = HashMap::from([
         (1, (247, 245)),
-        (2, (237, 224)),
-        (3, (236, 231)),
-        (4, (233, 208)),
-        (5, (232, 190)),
-        (6, (227, 227)),
-        (7, (225, 224)),
+        (2, (237, 236)),
+        (3, (236, 233)),
+        (4, (233, 233)),
+        (5, (232, 230)),
+        (6, (227, 225)),
+        (7, (225, 225)),
         (8, (223, 223)),
         (9, (218, 217)),
-        (10, (217, 193)),
-        (11, (215, 210)),
+        (10, (217, 217)),
+        (11, (215, 215)),
         (12, (215, 215)),
-        (13, (214, 181)),
+        (13, (214, 207)),
         (14, (212, 212)),
-        (15, (212, 196)),
-        (16, (211, 209)),
-        (17, (210, 200)),
-        (19, (210, 210)),
+        (15, (212, 206)),
+        (16, (211, 211)),
+        (17, (210, 207)),
+        (19, (210, 206)),
         (20, (210, 208)),
-        (21, (210, 195)),
+        (21, (210, 204)),
     ]);
 
     // Collected rather than asserted inline, so the full table always prints

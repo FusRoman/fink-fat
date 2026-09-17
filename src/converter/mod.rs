@@ -14,7 +14,6 @@ use crate::{
 };
 
 pub mod family;
-pub mod observations;
 pub mod parquet;
 pub mod sql;
 
