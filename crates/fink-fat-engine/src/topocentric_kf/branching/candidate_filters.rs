@@ -18,6 +18,7 @@
 //! hasn't opted in.
 
 use nalgebra::{Matrix2, Vector2};
+use outfit::constants::RAD2ARC;
 
 use crate::engine_config::night_advance_params::NightAdvanceParams;
 use crate::topocentric_kf::branching::candidate_search::CandidateMatch;
@@ -70,8 +71,8 @@ pub fn apply_candidate_filters<'obs>(
         let cos_dec = region.center_dec.cos();
         candidates.retain(|c| {
             let coord = c.observation.equ_coord();
-            let dx = wrap_angle(coord.ra - region.center_ra) * cos_dec * RAD_TO_ARCSEC;
-            let dy = (coord.dec - region.center_dec) * RAD_TO_ARCSEC;
+            let dx = wrap_angle(coord.ra - region.center_ra) * cos_dec * RAD2ARC;
+            let dy = (coord.dec - region.center_dec) * RAD2ARC;
             let cross = -dx * uy + dy * ux;
             cross.abs() <= limit
         });
@@ -104,8 +105,6 @@ pub fn apply_candidate_filters<'obs>(
 
     candidates
 }
-
-const RAD_TO_ARCSEC: f64 = 206264.80624709636;
 
 /// Tangent-plane unit direction of the bank's weighted-mean apparent motion
 /// `(ux, uy)`, plus the predicted mixture's 1-sigma cross-track extent
@@ -168,6 +167,6 @@ fn cross_track_direction_and_sigma(
     {
         return None;
     }
-    let sigma_cross_arcsec = (var / comp_total_weight).sqrt() * RAD_TO_ARCSEC;
+    let sigma_cross_arcsec = (var / comp_total_weight).sqrt() * RAD2ARC;
     Some((ux, uy, sigma_cross_arcsec))
 }

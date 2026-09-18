@@ -2,6 +2,7 @@ pub mod branch_tab;
 pub mod dynamic_pop_plot;
 pub mod family;
 pub mod interaction;
+pub mod orbit3d_plot;
 pub mod quality_tier;
 #[cfg(feature = "server")]
 pub mod snapshot;
@@ -14,9 +15,28 @@ use crate::homepage::{
     branch_tab::{refresh_snapshot, BranchTab},
     dynamic_pop_plot::DynamicPopPlot,
     family::DynamicalFamily,
+    orbit3d_plot::Orbit3DPlot,
     quality_tier::QualityTier,
     stats_count::{get_snapshot_version, StatsBanner},
 };
+
+/// Which population-wide plot the homepage shows above the lineage table.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum HomepagePlotView {
+    PopulationAe,
+    Orbit3D,
+}
+
+impl HomepagePlotView {
+    const ALL: [HomepagePlotView; 2] = [HomepagePlotView::PopulationAe, HomepagePlotView::Orbit3D];
+
+    fn label(self) -> &'static str {
+        match self {
+            HomepagePlotView::PopulationAe => "a / e distribution",
+            HomepagePlotView::Orbit3D => "3D orbits",
+        }
+    }
+}
 
 /// How often the refresh button checks whether the rebuild it asked for has
 /// landed. The rebuild is a single large query, so this can be leisurely.
@@ -40,6 +60,8 @@ pub fn Home() -> Element {
     // Same idea as `hidden_families`, one signal for the quality-tier legend
     // chips (plot) and the "Quality" column filter (table).
     let hidden_tiers = use_signal(HashSet::<QualityTier>::new);
+
+    let mut plot_view = use_signal(|| HomepagePlotView::PopulationAe);
 
     // Bumped once a requested snapshot rebuild has actually landed. All three
     // data components read it inside their resource futures, so bumping it
@@ -123,7 +145,26 @@ pub fn Home() -> Element {
             }
 
             div { class: "p-6 flex flex-col gap-6 flex-1 min-h-0",
-                DynamicPopPlot { hidden_families, hidden_tiers, refresh_token }
+                div { class: "flex justify-center",
+                    div { class: "join",
+                        for view in HomepagePlotView::ALL {
+                            button {
+                                key: "{view.label()}",
+                                class: if plot_view() == view { "join-item btn btn-sm btn-active" } else { "join-item btn btn-sm" },
+                                onclick: move |_| plot_view.set(view),
+                                "{view.label()}"
+                            }
+                        }
+                    }
+                }
+                match plot_view() {
+                    HomepagePlotView::PopulationAe => rsx! {
+                        DynamicPopPlot { hidden_families, hidden_tiers, refresh_token }
+                    },
+                    HomepagePlotView::Orbit3D => rsx! {
+                        Orbit3DPlot {}
+                    },
+                }
 
                 div { class: "grid grid-cols-1",
                     BranchTab {

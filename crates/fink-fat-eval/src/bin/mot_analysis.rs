@@ -1943,8 +1943,8 @@ fn along_cross_track_arcsec(
 
     let along_rad = dx * ux + dy * uy;
     let cross_rad = -dx * uy + dy * ux;
-    const RAD_TO_ARCSEC: f64 = 206264.80624709636;
-    Some((along_rad * RAD_TO_ARCSEC, cross_rad * RAD_TO_ARCSEC))
+    use outfit::constants::RAD2ARC;
+    Some((along_rad * RAD2ARC, cross_rad * RAD2ARC))
 }
 
 fn geometry_diagnostic(

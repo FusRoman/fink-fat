@@ -66,6 +66,7 @@
 
 use ahash::AHashMap;
 use nalgebra::{Matrix2, Vector2, Vector3};
+use outfit::constants::RAD2ARC;
 use photom::{
     coordinates::equatorial::EquCoord,
     observation_dataset::{ObsId, observation::Observation},
@@ -481,9 +482,6 @@ impl SequentialFit {
     }
 }
 
-/// Radians to arcseconds.
-const RAD_TO_ARCSEC: f64 = 206_264.806_247_096_36;
-
 /// Walk `state` through `points`, scoring each observation against the
 /// prediction and then absorbing it — see [`SequentialFit`].
 ///
@@ -526,7 +524,7 @@ pub fn sequential_fit(state: &KFState<'_>, points: &[LinkTestPoint<'_>]) -> Opti
 
         // Absolute miss on the tangent plane, where cos(δ) *does* apply.
         let dx = innovation[0] * predicted.state[1].cos();
-        let separation = (dx * dx + innovation[1] * innovation[1]).sqrt() * RAD_TO_ARCSEC;
+        let separation = (dx * dx + innovation[1] * innovation[1]).sqrt() * RAD2ARC;
 
         fit.d2.push(d2);
         fit.separation_arcsec.push(separation);

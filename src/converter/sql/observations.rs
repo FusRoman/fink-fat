@@ -1,6 +1,7 @@
 //! Read the raw observation parquet (candid-keyed ZTF/LSST alerts, e.g.
-//! `sso_dataset_eval.parquet`, produced by `test_exp/prep_alert.py`) that
-//! feeds the `observations` table.
+//! `sso_dataset_eval.parquet`, produced by `test_exp/prep_alert.py`
+//! (ZTF)/`test_exp/prep_lsst_eval_data.py` (LSST)) that feeds the
+//! `observations` table.
 //!
 //! Kept separate from [`super::build`] because it has a distinct concern —
 //! reading an external Parquet file — rather than walking a
@@ -18,7 +19,15 @@ use super::rows::ObservationRow;
 /// * `path` — a parquet file shaped like `sso_dataset_eval.parquet`:
 ///   `night_id`, `id`, `objectId`, `magnitude`, `mag_err`, `filter`,
 ///   `mpc_code_obs`, `ra`, `ra_err`, `dec`, `dec_err`, `mjd_tt`, plus a
-///   `traj_id` column that is ignored (see [`ObservationRow`]'s doc comment).
+///   `traj_id` column that is ignored (see [`ObservationRow`]'s doc
+///   comment). Both surveys' prep scripts write `objectId` under this same
+///   name — ZTF's `prep_alert.py` carries the alert's own persistent
+///   `objectId` through unchanged, while LSST's `prep_lsst_eval_data.py` has
+///   no equivalent upstream field and instead synthesizes `objectId` from
+///   `id` (itself `diaSourceId`) — so there is deliberately no
+///   survey-conditional column name to resolve here; only `mpc_code_obs`'s
+///   *value* differs (`"I41"` vs `"X05"`, see
+///   `fink_fat_explorer::survey::Survey::from_code_obs`).
 ///
 /// # Returns
 ///

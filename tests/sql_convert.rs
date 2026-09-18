@@ -29,12 +29,23 @@ use tempfile::TempDir;
 
 const CONFIG_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/config.yaml");
 const DATA_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data");
+/// One ZTF fixture reshaped as an LSST one: `mpc_code_obs = "X05"` and
+/// `objectId` synthesized the way `test_exp/prep_lsst_eval_data.py` does
+/// (from `id`, since LSST has no per-object field to draw from upstream) —
+/// see that script's line 145. Kept in a separate directory from
+/// `DATA_DIR` so `tests/reconstruction.rs`'s `list_nights_sorted` (which
+/// globs every `night_id_<N>.parquet` under `tests/data` for its full
+/// 177-night non-regression run) never picks it up.
+const LSST_FIXTURE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/data_lsst/night_id_2937.parquet"
+);
 
 /// The single night fixture this test tracks and then converts. Any one
 /// `tests/data/night_id_<N>.parquet` file works as both the `track` input
 /// and the `convert --path-observation` input: it's already shaped like the
 /// candid-keyed alert parquet `read_observation_rows` expects (see
-/// `src/converter/sql/observations.rs`).
+/// `src/converter/sql/observations.rs`), `objectId` column included.
 fn first_night_path() -> PathBuf {
     let mut nights: Vec<PathBuf> = std::fs::read_dir(DATA_DIR)
         .expect("read tests/data dir")
@@ -123,24 +134,15 @@ fn constraint_exists(client: &mut Client, conname: &str) -> bool {
     count > 0
 }
 
-#[test]
-fn convert_sql_loads_unlogged_tables_with_constraints_restored() {
-    let night = first_night_path();
-    let night_str = night.to_str().expect("utf8 fixture path");
-
-    let storage_dir = TempDir::new().expect("create storage tempdir");
-    // SAFETY: this test is the only one in this binary and does not run
-    // concurrently with other tests mutating this env var.
-    unsafe {
-        std::env::set_var("FINK_FAT__STORAGE_PATH", storage_dir.path());
-    }
-
+/// Runs `track` then `convert --format sql` against `night_str`, then checks
+/// every table/constraint invariant `convert` is supposed to leave behind.
+/// Shared by both survey cases below — see
+/// [`convert_sql_loads_unlogged_tables_with_constraints_restored`].
+fn assert_conversion_succeeded(night_str: &str, database_url: &str) {
     run_track(night_str);
+    run_convert_sql(night_str, database_url);
 
-    let database_url = database_url();
-    run_convert_sql(night_str, &database_url);
-
-    let mut client = Client::connect(&database_url, NoTls).unwrap_or_else(|e| {
+    let mut client = Client::connect(database_url, NoTls).unwrap_or_else(|e| {
         panic!("connect to {database_url}: {e} (is `docker compose up -d db` running?)")
     });
 
@@ -154,10 +156,19 @@ fn convert_sql_loads_unlogged_tables_with_constraints_restored() {
         "archived_trajectories",
     ] {
         let status = table_status(&mut client, table);
-        assert!(
-            status.row_count > 0,
-            "{table} should hold at least one row after converting a real night fixture"
-        );
+        // `archived_trajectories` only gains rows once a lineage goes
+        // `max_lineage_lifetime_nights` (10, see tests/config.yaml) nights
+        // without a real update and gets purged as stale (see
+        // `crate::topocentric_kf::branching::pruning::purge_stale_lineages`)
+        // — structurally unreachable from the single night this test tracks,
+        // so it's exempted from the "at least one row" check and only has to
+        // exist as an UNLOGGED table.
+        if table != "archived_trajectories" {
+            assert!(
+                status.row_count > 0,
+                "{table} should hold at least one row after converting a real night fixture"
+            );
+        }
         assert!(
             status.is_unlogged,
             "{table} should be UNLOGGED after `convert` (see src/converter/sql/create_tables.sql)"
@@ -196,4 +207,34 @@ fn convert_sql_loads_unlogged_tables_with_constraints_restored() {
         n_rows, n_distinct,
         "branch_observations should have no duplicate (branch_id, position) pairs"
     );
+}
+
+/// Covers both surveys `read_observation_rows` has to parse — ZTF
+/// (`tests/data`, `mpc_code_obs = "I41"`) and LSST (`tests/data_lsst`,
+/// `mpc_code_obs = "X05"`) — sequentially, in a single `#[test]`.
+///
+/// Deliberately *not* two separate `#[test]` functions: both cases set the
+/// process-global `FINK_FAT__STORAGE_PATH` env var and `convert` always
+/// `TRUNCATE`s the same shared Postgres tables (see the module doc), so two
+/// tests in this binary running concurrently (`cargo test`'s default) would
+/// race each other. Running both cases inside one test keeps the existing
+/// "this test is the only one in this binary" safety invariant true instead
+/// of silently invalidating it by adding a sibling `#[test]`.
+#[test]
+fn convert_sql_loads_unlogged_tables_with_constraints_restored() {
+    let ztf_night = first_night_path();
+    let database_url = database_url();
+
+    for night_str in [ztf_night.to_str().expect("utf8 fixture path"), LSST_FIXTURE] {
+        let storage_dir = TempDir::new().expect("create storage tempdir");
+        // SAFETY: this test is the only one in this binary and does not run
+        // concurrently with other tests mutating this env var — see this
+        // function's doc comment for why both survey cases stay inside it
+        // rather than becoming separate `#[test]`s.
+        unsafe {
+            std::env::set_var("FINK_FAT__STORAGE_PATH", storage_dir.path());
+        }
+
+        assert_conversion_succeeded(night_str, &database_url);
+    }
 }

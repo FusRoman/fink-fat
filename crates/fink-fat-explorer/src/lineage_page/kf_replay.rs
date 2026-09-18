@@ -1,9 +1,15 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// Radians -> arcsec, used throughout this file to report angular
-/// quantities in a human-friendly unit.
-const RAD_TO_ARCSEC: f64 = 206_264.806_247_1;
+// Radians -> arcsec, used throughout this file (inside `replay_kalman_branch`
+// below) to report angular quantities in a human-friendly unit. Reuses the
+// one canonical definition in `outfit::constants::RAD2ARC` rather than a
+// local copy — `outfit` is a server-only optional dependency in this crate
+// (see Cargo.toml), so the import itself is feature-gated even though every
+// use site is already inside a `#[server]` fn body the macro only compiles
+// under that same feature.
+#[cfg(feature = "server")]
+use outfit::constants::RAD2ARC;
 
 /// One real observation replayed through the bank's MAP (highest-weight)
 /// hypothesis: the state it predicted just *before* absorbing the
@@ -389,17 +395,17 @@ pub async fn replay_kalman_branch(
 
                 predicted_ra_deg: equ_pred.ra.to_degrees(),
                 predicted_dec_deg: equ_pred.dec.to_degrees(),
-                sigma_pred_ra_arcsec: sigma_sky[(0, 0)].max(0.0).sqrt() * RAD_TO_ARCSEC,
-                sigma_pred_dec_arcsec: sigma_sky[(1, 1)].max(0.0).sqrt() * RAD_TO_ARCSEC,
+                sigma_pred_ra_arcsec: sigma_sky[(0, 0)].max(0.0).sqrt() * RAD2ARC,
+                sigma_pred_dec_arcsec: sigma_sky[(1, 1)].max(0.0).sqrt() * RAD2ARC,
 
                 observed_ra_deg: obs_row.ra.to_degrees(),
                 observed_dec_deg: obs_row.dec.to_degrees(),
-                sigma_obs_ra_arcsec: obs_row.ra_err * RAD_TO_ARCSEC,
-                sigma_obs_dec_arcsec: obs_row.dec_err * RAD_TO_ARCSEC,
+                sigma_obs_ra_arcsec: obs_row.ra_err * RAD2ARC,
+                sigma_obs_dec_arcsec: obs_row.dec_err * RAD2ARC,
 
-                residual_ra_arcsec: residual_ra * RAD_TO_ARCSEC,
-                residual_dec_arcsec: residual_dec * RAD_TO_ARCSEC,
-                separation_arcsec: separation_rad * RAD_TO_ARCSEC,
+                residual_ra_arcsec: residual_ra * RAD2ARC,
+                residual_dec_arcsec: residual_dec * RAD2ARC,
+                separation_arcsec: separation_rad * RAD2ARC,
                 nis,
                 log_likelihood,
 
@@ -410,7 +416,7 @@ pub async fn replay_kalman_branch(
 
                 n_hypotheses: bank_step.n_after as i32,
                 effective_sample_size: bank_step.n_effective,
-                search_region_radius_arcsec: region.radius_rad * RAD_TO_ARCSEC,
+                search_region_radius_arcsec: region.radius_rad * RAD2ARC,
             };
 
             Ok((step, hyp_snapshots))

@@ -13,7 +13,7 @@ use fink_fat_engine::{
     },
 };
 use nalgebra::{Matrix2, Vector2, Vector3, Vector6};
-use outfit::constants::ROT_EQUMJ2000_TO_ECLMJ2000;
+use outfit::constants::{RAD2ARC, RADSEC, ROT_EQUMJ2000_TO_ECLMJ2000};
 use photom::{
     TrajId,
     coordinates::equatorial::EquCoord,
@@ -22,9 +22,6 @@ use photom::{
 use rayon::prelude::*;
 
 use crate::ground_truth_state::{TruthLookup, TruthState};
-
-const RAD_TO_ARCSEC: f64 = 3600.0 * 180.0 / std::f64::consts::PI;
-const ARCSEC_TO_RAD: f64 = 1.0 / RAD_TO_ARCSEC;
 
 /// χ²(2) quantiles/median, used to judge NIS calibration dataset-wide (see
 /// `crate::trajectory_processing::TrajSummary::nis_calibration_ratio`). A
@@ -341,8 +338,8 @@ pub fn compute_step_diag(
     let (residual_ra_arcsec, residual_dec_arcsec, _residual_ra_raw_rad) =
         sky_residuals_arcsec(&equ_pred, equ_obs);
 
-    let sigma_ra_arcsec = equ_pred.ra_error * RAD_TO_ARCSEC;
-    let sigma_dec_arcsec = equ_pred.dec_error * RAD_TO_ARCSEC;
+    let sigma_ra_arcsec = equ_pred.ra_error * RAD2ARC;
+    let sigma_dec_arcsec = equ_pred.dec_error * RAD2ARC;
     let separation_arcsec = equ_pred.angular_separation(equ_obs).to_degrees() * 3600.;
     let sep_arcsec_region_center = {
         let center = region_center?;
@@ -472,7 +469,7 @@ pub fn recompute_search_region_metrics(
         if sep <= region.radius_rad {
             n_within += 1;
         }
-        radii_arcsec.push(region.radius_rad * RAD_TO_ARCSEC);
+        radii_arcsec.push(region.radius_rad * RAD2ARC);
     }
 
     let pct_within_search_radius = 100.0 * n_within as f64 / n as f64;
@@ -485,7 +482,7 @@ pub fn recompute_search_region_metrics(
 }
 
 pub fn search_region_diag(region: &SearchRegion, equ_obs: &EquCoord) -> SearchRegionDiag {
-    let radius_arcsec = region.radius_rad * RAD_TO_ARCSEC;
+    let radius_arcsec = region.radius_rad * RAD2ARC;
 
     let best_s = region
         .components
@@ -569,7 +566,7 @@ pub fn log_search_region(sr: &SearchRegionDiag, region: &SearchRegion, equ_obs: 
         radius_arcsec = sr.radius_arcsec,
         obs_ra = equ_obs.ra,
         obs_dec = equ_obs.dec,
-        separation_arcsec = separation_from_search_center(region, equ_obs) * RAD_TO_ARCSEC,
+        separation_arcsec = separation_from_search_center(region, equ_obs) * RAD2ARC,
         obs_within_radius = sr.obs_within_radius,
         semi_major_3sigma_arcsec = sr.semi_major_3sigma_arcsec,
         semi_minor_3sigma_arcsec = sr.semi_minor_3sigma_arcsec,
@@ -1053,13 +1050,13 @@ pub fn study_kalman_asteroid<'a, 'bank_config>(
 fn sky_residuals_arcsec(equ_pred: &EquCoord, equ_obs: &EquCoord) -> (f64, f64, f64) {
     let cos_dec = equ_pred.dec.cos();
     let d_ra_raw = wrap_angle(equ_obs.ra - equ_pred.ra);
-    let d_ra_gc = d_ra_raw * cos_dec * RAD_TO_ARCSEC;
-    let d_dec = (equ_obs.dec - equ_pred.dec) * RAD_TO_ARCSEC;
+    let d_ra_gc = d_ra_raw * cos_dec * RAD2ARC;
+    let d_dec = (equ_obs.dec - equ_pred.dec) * RAD2ARC;
     (d_ra_gc, d_dec, d_ra_raw)
 }
 
 fn mahalanobis_distance(d_ra_arcsec: f64, d_dec_arcsec: f64, sigma_sky: &Matrix2<f64>) -> f64 {
-    let residual = Vector2::new(d_ra_arcsec * ARCSEC_TO_RAD, d_dec_arcsec * ARCSEC_TO_RAD);
+    let residual = Vector2::new(d_ra_arcsec * RADSEC, d_dec_arcsec * RADSEC);
     sigma_sky
         .try_inverse()
         .map(|s_inv| {
@@ -1091,8 +1088,8 @@ fn sky_ellipse_params(s: &Matrix2<f64>) -> (f64, f64, f64) {
     let mid = (a + d) / 2.0;
     let half_diff = (a - d) / 2.0;
     let delta = (half_diff * half_diff + b * b).sqrt();
-    let semi_major = ((mid + delta).max(0.0)).sqrt() * RAD_TO_ARCSEC;
-    let semi_minor = ((mid - delta).max(0.0)).sqrt() * RAD_TO_ARCSEC;
+    let semi_major = ((mid + delta).max(0.0)).sqrt() * RAD2ARC;
+    let semi_minor = ((mid - delta).max(0.0)).sqrt() * RAD2ARC;
     let pa_deg = (0.5 * b.atan2(half_diff)).to_degrees();
     (semi_major, semi_minor, pa_deg)
 }

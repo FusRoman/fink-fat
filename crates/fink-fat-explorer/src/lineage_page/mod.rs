@@ -5,6 +5,7 @@ mod kf_replay;
 mod light_curve_plot;
 mod metrics_plot;
 pub mod observations_table;
+mod orbit3d_tab;
 mod plot_tabs;
 mod rho_evolution_plot;
 mod skybot_panel;
@@ -18,6 +19,7 @@ use identity_card::{get_lineage_summary, IdentityCard};
 use kf_replay::{replay_kalman_branch, HypothesisSnapshot, KfStep};
 use light_curve_plot::LightCurvePlot;
 use observations_table::{get_lineage_observations, ObservationRow, ObservationsTable};
+use orbit3d_tab::LineageOrbit3DTab;
 use plot_tabs::PlotTabs;
 use skybot_panel::SkybotPanel;
 use trajectory_plot::TrajectoryPlot;
@@ -37,15 +39,21 @@ const SKYBOT_POLL_INTERVAL_MS: u64 = 500;
 enum LineageView {
     Trajectory,
     LightCurve,
+    ThreeD,
 }
 
 impl LineageView {
-    const ALL: [LineageView; 2] = [LineageView::Trajectory, LineageView::LightCurve];
+    const ALL: [LineageView; 3] = [
+        LineageView::Trajectory,
+        LineageView::LightCurve,
+        LineageView::ThreeD,
+    ];
 
     fn label(self) -> &'static str {
         match self {
             LineageView::Trajectory => "Trajectory",
             LineageView::LightCurve => "Light curve",
+            LineageView::ThreeD => "3D",
         }
     }
 }
@@ -212,6 +220,9 @@ pub fn LineagePage(lineage_id: String) -> Element {
                                 },
                                 LineageView::LightCurve => rsx! {
                                     LightCurvePlot { observations: observations.clone(), x_axis_unit: x_axis_unit() }
+                                },
+                                LineageView::ThreeD => rsx! {
+                                    LineageOrbit3DTab { lineage_id: lineage_id.clone() }
                                 },
                             }
                         }

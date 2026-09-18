@@ -4,6 +4,10 @@ use outfit::{
     kepler::{SolverParams, SolverType, propagate_universal},
 };
 use photom::observation_dataset::{ObsDataset, observation::Observation};
+// Only used by this module's own tests below (`RAD2ARC`/`RADSEC` convert
+// between radians and arcseconds for the light-time-bias assertions).
+#[cfg(test)]
+use outfit::constants::{RAD2ARC, RADSEC};
 
 use crate::topocentric_kf::{
     constants::{C_AU_PER_DAY, MAX_RHO_AU, MIN_RHO_AU},
@@ -867,9 +871,8 @@ mod propagate_tests {
         .unwrap();
 
         let angular_rate = v.norm() / (r0 - r_obs).norm(); // rad/day, order-of-magnitude
-        let rad_to_arcsec = 206_264.80624709636;
-        let old_bias_arcsec = (tau_old - expected).abs() * angular_rate * rad_to_arcsec;
-        let new_bias_arcsec = (tau_new - expected).abs() * angular_rate * rad_to_arcsec;
+        let old_bias_arcsec = (tau_old - expected).abs() * angular_rate * RAD2ARC;
+        let new_bias_arcsec = (tau_new - expected).abs() * angular_rate * RAD2ARC;
 
         assert!(
             old_bias_arcsec > 1.0,
@@ -896,7 +899,7 @@ mod propagate_tests {
         ) {
             let r_obs = Vector3::new(1.0, 0.0, 0.0);
             let r0 = Vector3::new(1.0 + rho, 0.0, 0.0);
-            let angular_rate = angular_rate_arcsec_per_day / 206_264.80624709636; // rad/day
+            let angular_rate = angular_rate_arcsec_per_day * RADSEC; // rad/day
             let v_tangential = rho * angular_rate;
             let v = Vector3::new(radial_frac * rho, v_tangential, 0.0);
             let t_prop = 60_000.0;

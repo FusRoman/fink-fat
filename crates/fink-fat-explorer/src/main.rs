@@ -4,6 +4,7 @@ pub mod fit_pipeline;
 pub mod format_epoch;
 pub mod homepage;
 pub mod lineage_page;
+pub mod orbit3d;
 pub mod orbit_fit;
 pub mod orbit_fit_page;
 pub mod skybot_search;

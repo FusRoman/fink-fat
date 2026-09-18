@@ -55,6 +55,30 @@ struct SnapshotRow {
     dynamic_family: String,
     semi_major_axis: f64,
     eccentricity: f64,
+    // Raw Kalman attributable state — not used by the (a, e) plot or the
+    // lineage table, but carried through so the homepage's 3D view
+    // (`orbit3d::server_fns::get_homepage_orbit3d`) can derive full
+    // Keplerian elements (inclination, node, periapsis argument, mean
+    // anomaly) without a schema migration: `kf_state` only stores
+    // `semi_major_axis`/`eccentricity` as precomputed columns, but this
+    // attributable state already carries everything needed to recompute the
+    // *full* element set on demand, via the same
+    // `attributable_to_cartesian` + `OrbitalElements::from_orbital_state`
+    // path `homepage::family::classify_from_attributable_state` already
+    // uses for family classification.
+    ra: f64,
+    dec: f64,
+    ra_dot: f64,
+    dec_dot: f64,
+    rho: f64,
+    rho_dot: f64,
+    epoch: f64,
+    r_obs_x: f64,
+    r_obs_y: f64,
+    r_obs_z: f64,
+    v_obs_x: f64,
+    v_obs_y: f64,
+    v_obs_z: f64,
 }
 
 /// The one query the whole homepage is built from: every branch, joined to its
@@ -65,7 +89,9 @@ const SNAPSHOT_QUERY: &str = "
     SELECT b.branch_id, b.lineage_id, b.designation, b.lineage_designation,
            b.cumulative_llr, b.n_real_updates,
            b.arc_length_days, b.n_nights, b.median_inter_night_dt_days,
-           ks.dynamic_family, ks.semi_major_axis, ks.eccentricity
+           ks.dynamic_family, ks.semi_major_axis, ks.eccentricity,
+           ks.ra, ks.dec, ks.ra_dot, ks.dec_dot, ks.rho, ks.rho_dot, ks.epoch,
+           ks.r_obs_x, ks.r_obs_y, ks.r_obs_z, ks.v_obs_x, ks.v_obs_y, ks.v_obs_z
     FROM branches b
     CROSS JOIN LATERAL (
         SELECT hypothesis_id
@@ -260,6 +286,23 @@ pub struct BranchRow {
     /// this branch's latest `orbit_fits`/`orbit_fit_failures` rows — see
     /// [`crate::homepage::quality_tier`].
     pub quality_tier: QualityTier,
+    /// Raw Kalman attributable state, `f64` (unlike the `f32` orbital
+    /// elements above, which only ever feed the (a, e) plot) — see the field
+    /// comment on [`SnapshotRow`] for why this is carried at all. `epoch` is
+    /// Modified Julian Date, Terrestrial Time.
+    pub ra: f64,
+    pub dec: f64,
+    pub ra_dot: f64,
+    pub dec_dot: f64,
+    pub rho: f64,
+    pub rho_dot: f64,
+    pub epoch: f64,
+    pub r_obs_x: f64,
+    pub r_obs_y: f64,
+    pub r_obs_z: f64,
+    pub v_obs_x: f64,
+    pub v_obs_y: f64,
+    pub v_obs_z: f64,
 }
 
 /// One lineage: its best branch plus the others, held as indices into
@@ -438,6 +481,19 @@ fn assemble(
             semi_major_axis: row.semi_major_axis as f32,
             eccentricity: row.eccentricity as f32,
             quality_tier: quality.tier_for(row.branch_id, row.n_nights),
+            ra: row.ra,
+            dec: row.dec,
+            ra_dot: row.ra_dot,
+            dec_dot: row.dec_dot,
+            rho: row.rho,
+            rho_dot: row.rho_dot,
+            epoch: row.epoch,
+            r_obs_x: row.r_obs_x,
+            r_obs_y: row.r_obs_y,
+            r_obs_z: row.r_obs_z,
+            v_obs_x: row.v_obs_x,
+            v_obs_y: row.v_obs_y,
+            v_obs_z: row.v_obs_z,
         })
         .collect();
 
@@ -696,6 +752,23 @@ mod tests {
             dynamic_family: family.to_string(),
             semi_major_axis: 2.5,
             eccentricity: 0.1,
+            // Not exercised by any test in this module (those all go through
+            // the (a, e) plot / listing paths) — the attributable-state ->
+            // Keplerian conversion that reads these lives in, and is tested
+            // by, `orbit3d::server_fns`.
+            ra: 0.0,
+            dec: 0.0,
+            ra_dot: 0.0,
+            dec_dot: 0.0,
+            rho: 0.0,
+            rho_dot: 0.0,
+            epoch: 60_000.0,
+            r_obs_x: 0.0,
+            r_obs_y: 0.0,
+            r_obs_z: 0.0,
+            v_obs_x: 0.0,
+            v_obs_y: 0.0,
+            v_obs_z: 0.0,
         }
     }
 

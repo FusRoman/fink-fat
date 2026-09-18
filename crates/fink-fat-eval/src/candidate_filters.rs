@@ -22,8 +22,7 @@ use fink_fat_engine::topocentric_kf::{
     single_kalman::update::wrap_angle,
 };
 use nalgebra::{Matrix2, Vector2};
-
-pub const RAD_TO_ARCSEC: f64 = 206264.80624709636;
+use outfit::constants::RAD2ARC;
 
 // ── Per-visit shared context ─────────────────────────────────────────────
 
@@ -169,7 +168,7 @@ impl<'a> FilterContext<'a> {
     fn tangent_offset_arcsec(&self, ra: f64, dec: f64) -> (f64, f64) {
         let dx = wrap_angle(ra - self.region.center_ra) * self.region.center_dec.cos();
         let dy = dec - self.region.center_dec;
-        (dx * RAD_TO_ARCSEC, dy * RAD_TO_ARCSEC)
+        (dx * RAD2ARC, dy * RAD2ARC)
     }
 }
 
@@ -201,7 +200,7 @@ fn sigma_cross_of_region(region: &SearchRegion, motion: &Motion) -> Option<f64> 
     // Positive-form test so a NaN anywhere yields `None` (keep everything)
     // rather than a poisoned limit that would silently reject candidates.
     if total_weight > 0.0 && var > 0.0 {
-        Some((var / total_weight).sqrt() * RAD_TO_ARCSEC)
+        Some((var / total_weight).sqrt() * RAD2ARC)
     } else {
         None
     }
@@ -294,8 +293,8 @@ impl CandidateFilter for DirectionGate {
             .iter()
             .map(|c| {
                 let coord = c.observation.equ_coord();
-                let dx = wrap_angle(coord.ra - last.ra) * cos_dec * RAD_TO_ARCSEC;
-                let dy = (coord.dec - last.dec) * RAD_TO_ARCSEC;
+                let dx = wrap_angle(coord.ra - last.ra) * cos_dec * RAD2ARC;
+                let dy = (coord.dec - last.dec) * RAD2ARC;
                 let sep = (dx * dx + dy * dy).sqrt();
                 if sep <= self.tol_arcsec {
                     return true;
@@ -344,7 +343,7 @@ impl CandidateFilter for RateGate {
         if dt <= 0.0 || !dt.is_finite() {
             return vec![true; candidates.len()];
         }
-        let expected_arcsec = motion.speed_rad_day * dt * RAD_TO_ARCSEC;
+        let expected_arcsec = motion.speed_rad_day * dt * RAD2ARC;
         let lo = expected_arcsec / self.factor - self.tol_arcsec;
         let hi = expected_arcsec * self.factor + self.tol_arcsec;
         let cos_dec = last.dec.cos();
@@ -352,8 +351,8 @@ impl CandidateFilter for RateGate {
             .iter()
             .map(|c| {
                 let coord = c.observation.equ_coord();
-                let dx = wrap_angle(coord.ra - last.ra) * cos_dec * RAD_TO_ARCSEC;
-                let dy = (coord.dec - last.dec) * RAD_TO_ARCSEC;
+                let dx = wrap_angle(coord.ra - last.ra) * cos_dec * RAD2ARC;
+                let dy = (coord.dec - last.dec) * RAD2ARC;
                 let sep = (dx * dx + dy * dy).sqrt();
                 sep >= lo && sep <= hi
             })

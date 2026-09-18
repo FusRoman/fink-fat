@@ -11,9 +11,7 @@ use fink_fat_engine::topocentric_kf::kalman_bank::ellipse_region_finder::{
     radius_strategy::{MixOrMax, RadiusStrategy},
     top_k::TopK,
 };
-
-const RAD_TO_ARCSEC: f64 = 3600.0 * 180.0 / std::f64::consts::PI;
-const ARCSEC_TO_RAD: f64 = 1.0 / RAD_TO_ARCSEC;
+use outfit::constants::{RAD2ARC, RADSEC};
 
 /// The eight knobs [`crate::kf_calibration`] calibrates, spanning three
 /// underlying config types (see each field's doc for its source):
@@ -100,7 +98,7 @@ impl CalibrationParams {
             } => converged_clamp_arcsec,
             RadiusStrategy::MaxEllipse | RadiusStrategy::MixtureCovariance => 30.0 * 60.0,
         };
-        let obs_noise_sigma_arcsec = (advance_params.obs_noise[0].max(0.0)).sqrt() * RAD_TO_ARCSEC;
+        let obs_noise_sigma_arcsec = (advance_params.obs_noise[0].max(0.0)).sqrt() * RAD2ARC;
         let weight_threshold = match advance_params.top_k {
             TopK::WeightThreshold(theta) => theta,
             TopK::All | TopK::Map | TopK::Best(_) => 0.99,
@@ -131,7 +129,7 @@ impl CalibrationParams {
             inner: MixOrMax::MixtureCovariance,
             max_arcsec: self.max_arcsec,
         };
-        let sigma_rad = self.obs_noise_sigma_arcsec * ARCSEC_TO_RAD;
+        let sigma_rad = self.obs_noise_sigma_arcsec * RADSEC;
         config.advance_params.obs_noise = [sigma_rad * sigma_rad, sigma_rad * sigma_rad];
         config.advance_params.top_k = TopK::WeightThreshold(self.weight_threshold);
         config.kfbank_config.gate_chi2 = self.gate_chi2;
