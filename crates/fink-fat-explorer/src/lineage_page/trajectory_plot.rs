@@ -12,6 +12,7 @@ use super::observations_table::ObservationRow;
 use super::x_axis::XAxisUnit;
 #[cfg(target_arch = "wasm32")]
 use super::x_axis::{format_time_labels, x_values_for_observations, x_values_for_steps};
+use crate::skybot_search::{SkybotHit, MAX_RADIUS_ARCSEC, MIN_RADIUS_ARCSEC};
 
 const DEG_PER_ARCSEC: f64 = 1.0 / 3600.0;
 
@@ -24,6 +25,27 @@ fn format_hover_extra(time_label: &str, ra_err_arcsec: f64, dec_err_arcsec: f64)
 }
 
 const TRAJECTORY_HOVER_TEMPLATE: &str = "RA: %{x:.6f}°<br>Dec: %{y:.6f}°<br>%{customdata}";
+
+/// One Skybot hit's hover text: name, class, and whichever of magnitude/
+/// distance/positional-error Skybot actually returned for it (all optional
+/// in the response, per `skybot_search::parsing::RawSkybotRow`).
+#[cfg(target_arch = "wasm32")]
+fn format_skybot_hover(hit: &SkybotHit) -> String {
+    let mut lines = vec![format!("<b>{}</b>", hit.name), hit.class.clone()];
+    if let Some(vmag) = hit.vmag {
+        lines.push(format!("V mag {vmag:.2}"));
+    }
+    if let Some(err) = hit.err_arcsec {
+        lines.push(format!("pos. error ±{err:.2}″"));
+    }
+    if let Some(dg) = hit.geocentric_distance_au {
+        lines.push(format!("Δ (geocentric) {dg:.3} au"));
+    }
+    if let Some(dh) = hit.heliocentric_distance_au {
+        lines.push(format!("r (heliocentric) {dh:.3} au"));
+    }
+    lines.join("<br>")
+}
 
 /// Linearly interpolated marker sizes from `from` (first/oldest point) to
 /// `to` (last/newest point) — a cheap direction cue, since this `plotly`
@@ -50,12 +72,28 @@ pub fn TrajectoryPlot(
     observations: Vec<ObservationRow>,
     replay: Vec<KfStep>,
     x_axis_unit: XAxisUnit,
+    /// Skybot matches found so far (grows as the background search job
+    /// progresses) — see [`crate::skybot_search`].
+    skybot_hits: Vec<SkybotHit>,
+    skybot_running: bool,
+    skybot_processed: usize,
+    skybot_total: usize,
+    skybot_radius_arcsec: f64,
+    on_skybot_radius_change: EventHandler<f64>,
+    on_skybot_search: EventHandler<()>,
+    on_toggle_skybot_panel: EventHandler<()>,
 ) -> Element {
     let mut is_mounted = use_signal(|| false);
     #[cfg(target_arch = "wasm32")]
     let mut drawn = use_signal(|| false);
+    let has_skybot_hits = !skybot_hits.is_empty();
 
-    use_effect(use_reactive!(|(observations, replay, x_axis_unit)| {
+    use_effect(use_reactive!(|(
+        observations,
+        replay,
+        x_axis_unit,
+        skybot_hits,
+    )| {
         #[cfg(target_arch = "wasm32")]
         {
             if !is_mounted() {
@@ -166,6 +204,27 @@ pub fn TrajectoryPlot(
                     .hover_template(TRAJECTORY_HOVER_TEMPLATE),
             );
 
+            if !skybot_hits.is_empty() {
+                let skybot_ra: Vec<f64> = skybot_hits.iter().map(|h| h.ra_deg).collect();
+                let skybot_dec: Vec<f64> = skybot_hits.iter().map(|h| h.dec_deg).collect();
+                let skybot_hover: Vec<String> =
+                    skybot_hits.iter().map(format_skybot_hover).collect();
+
+                plot.add_trace(
+                    Scatter::new(skybot_ra, skybot_dec)
+                        .name("Skybot matches")
+                        .mode(Mode::Markers)
+                        .marker(
+                            Marker::new()
+                                .color("#2ba84a")
+                                .symbol(plotly::common::MarkerSymbol::Diamond)
+                                .size(9),
+                        )
+                        .custom_data(skybot_hover)
+                        .hover_template("%{customdata}"),
+                );
+            }
+
             let layout = Layout::new()
                 .height(420)
                 .margin(Margin::new().top(20).right(20))
@@ -187,7 +246,49 @@ pub fn TrajectoryPlot(
     rsx! {
         div { class: "card bg-base-100 shadow-sm flex-1",
             div { class: "card-body",
-                h2 { class: "card-title", "Trajectory & Kalman predictions" }
+                div { class: "flex flex-wrap items-center justify-between gap-3",
+                    h2 { class: "card-title", "Trajectory & Kalman predictions" }
+                    div { class: "flex flex-wrap items-center gap-3",
+                        label { class: "flex items-center gap-2 text-xs opacity-70",
+                            "Radius"
+                            input {
+                                r#type: "range",
+                                class: "range range-xs w-24",
+                                min: "{MIN_RADIUS_ARCSEC}",
+                                max: "{MAX_RADIUS_ARCSEC}",
+                                step: "1",
+                                disabled: skybot_running,
+                                value: "{skybot_radius_arcsec}",
+                                oninput: move |evt| {
+                                    if let Ok(v) = evt.value().parse::<f64>() {
+                                        on_skybot_radius_change.call(v);
+                                    }
+                                },
+                            }
+                            span { "{skybot_radius_arcsec:.0}\"" }
+                        }
+                        button {
+                            class: "btn btn-sm btn-outline",
+                            r#type: "button",
+                            disabled: skybot_running,
+                            onclick: move |_| on_skybot_search.call(()),
+                            if skybot_running {
+                                span { class: "loading loading-spinner loading-xs" }
+                                "Searching Skybot ({skybot_processed}/{skybot_total})"
+                            } else {
+                                "Search Skybot"
+                            }
+                        }
+                        button {
+                            class: "btn btn-sm btn-ghost btn-circle",
+                            r#type: "button",
+                            disabled: !has_skybot_hits,
+                            title: "Skybot matches found so far",
+                            onclick: move |_| on_toggle_skybot_panel.call(()),
+                            "☰"
+                        }
+                    }
+                }
                 p { class: "text-xs opacity-60",
                     "Error bars: astrometric 1σ for observations, propagated sky covariance (pre-update) for predictions."
                 }

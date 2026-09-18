@@ -6,6 +6,7 @@ pub mod homepage;
 pub mod lineage_page;
 pub mod orbit_fit;
 pub mod orbit_fit_page;
+pub mod skybot_search;
 pub mod survey;
 
 use dioxus::prelude::*;
@@ -201,6 +202,24 @@ static BULK_ORBIT_FIT_RUNNING: AtomicBool = AtomicBool::new(false);
 async fn get_bulk_orbit_fit_jobs(
 ) -> &'static Mutex<HashMap<u64, crate::bulk_orbit_fit::BulkOrbitFitJob>> {
     BULK_ORBIT_FIT_JOBS
+        .get_or_init(|| async { Mutex::new(HashMap::new()) })
+        .await
+}
+
+/// In-memory registry of in-flight/completed Skybot search jobs (see
+/// `skybot_search::run::start_skybot_search`) — same rationale as
+/// `ORBIT_FIT_JOBS` above; nothing here needs to survive a restart since a
+/// job's hits only matter to the lineage page currently displaying them.
+#[cfg(feature = "server")]
+static SKYBOT_JOBS: OnceCell<Mutex<HashMap<u64, crate::skybot_search::SkybotJob>>> =
+    OnceCell::const_new();
+
+#[cfg(feature = "server")]
+static NEXT_SKYBOT_JOB_ID: AtomicU64 = AtomicU64::new(1);
+
+#[cfg(feature = "server")]
+async fn get_skybot_jobs() -> &'static Mutex<HashMap<u64, crate::skybot_search::SkybotJob>> {
+    SKYBOT_JOBS
         .get_or_init(|| async { Mutex::new(HashMap::new()) })
         .await
 }

@@ -7,6 +7,7 @@ mod metrics_plot;
 pub mod observations_table;
 mod plot_tabs;
 mod rho_evolution_plot;
+mod skybot_panel;
 mod trajectory_plot;
 mod x_axis;
 
@@ -18,8 +19,18 @@ use kf_replay::{replay_kalman_branch, HypothesisSnapshot, KfStep};
 use light_curve_plot::LightCurvePlot;
 use observations_table::{get_lineage_observations, ObservationRow, ObservationsTable};
 use plot_tabs::PlotTabs;
+use skybot_panel::SkybotPanel;
 use trajectory_plot::TrajectoryPlot;
 use x_axis::XAxisUnit;
+
+use crate::skybot_search::run::start_skybot_search;
+use crate::skybot_search::status::get_skybot_job_status;
+use crate::skybot_search::{JobStatus, SkybotHit, SkybotQueryPoint};
+use crate::sleep_ms;
+
+/// Milliseconds between polls of a running Skybot search job — short enough
+/// that matches visibly trickle onto the plot as they arrive.
+const SKYBOT_POLL_INTERVAL_MS: u64 = 500;
 
 /// Which plot is shown next to the identity card.
 #[derive(Clone, Copy, PartialEq)]
@@ -82,6 +93,68 @@ pub fn LineagePage(lineage_id: String) -> Element {
         _ => None,
     };
 
+    let mut skybot_job_id = use_signal(|| None::<u64>);
+    let mut skybot_view = use_signal(|| None::<crate::skybot_search::SkybotJobView>);
+    let mut skybot_radius = use_signal(|| 10.0_f64);
+    let mut skybot_panel_open = use_signal(|| false);
+
+    // Poll a running Skybot search job until it's no longer `Running` — same
+    // idiom as `orbit_fit_page`'s fit-status poll, just on a shorter
+    // interval so matches visibly trickle onto the plot.
+    use_effect(move || {
+        let Some(id) = *skybot_job_id.read() else {
+            return;
+        };
+        spawn(async move {
+            loop {
+                match get_skybot_job_status(id).await {
+                    Ok(view) => {
+                        let running = matches!(view.status, JobStatus::Running);
+                        skybot_view.set(Some(view));
+                        if !running {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+                sleep_ms(SKYBOT_POLL_INTERVAL_MS).await;
+            }
+        });
+    });
+
+    let skybot_hits: Vec<SkybotHit> = skybot_view
+        .read()
+        .as_ref()
+        .map(|view| view.hits.clone())
+        .unwrap_or_default();
+    let skybot_running = matches!(
+        skybot_view.read().as_ref().map(|view| view.status),
+        Some(JobStatus::Running)
+    );
+    let skybot_processed = skybot_view.read().as_ref().map_or(0, |view| view.processed);
+    let skybot_total = skybot_view.read().as_ref().map_or(0, |view| view.total);
+
+    let launch_skybot_observations = observations.clone();
+    let launch_skybot = move |_: ()| {
+        let points: Vec<SkybotQueryPoint> = launch_skybot_observations
+            .iter()
+            .enumerate()
+            .map(|(source_index, obs)| SkybotQueryPoint {
+                source_index,
+                ra_deg: obs.ra.to_degrees(),
+                dec_deg: obs.dec.to_degrees(),
+                mjd_tt: obs.mjd_tt,
+            })
+            .collect();
+        let radius_arcsec = skybot_radius();
+        skybot_view.set(None);
+        spawn(async move {
+            if let Ok(id) = start_skybot_search(points, radius_arcsec).await {
+                skybot_job_id.set(Some(id));
+            }
+        });
+    };
+
     rsx! {
         div { class: "min-h-screen bg-base-200 flex flex-col gap-4 p-4",
             div { class: "navbar bg-base-100 shadow-sm px-6 rounded-box",
@@ -123,7 +196,19 @@ pub fn LineagePage(lineage_id: String) -> Element {
                             }
                             match lineage_view() {
                                 LineageView::Trajectory => rsx! {
-                                    TrajectoryPlot { observations: observations.clone(), replay: replay.clone(), x_axis_unit: x_axis_unit() }
+                                    TrajectoryPlot {
+                                        observations: observations.clone(),
+                                        replay: replay.clone(),
+                                        x_axis_unit: x_axis_unit(),
+                                        skybot_hits: skybot_hits.clone(),
+                                        skybot_running,
+                                        skybot_processed,
+                                        skybot_total,
+                                        skybot_radius_arcsec: skybot_radius(),
+                                        on_skybot_radius_change: move |v| skybot_radius.set(v),
+                                        on_skybot_search: launch_skybot,
+                                        on_toggle_skybot_panel: move |_| skybot_panel_open.set(!skybot_panel_open()),
+                                    }
                                 },
                                 LineageView::LightCurve => rsx! {
                                     LightCurvePlot { observations: observations.clone(), x_axis_unit: x_axis_unit() }
@@ -172,6 +257,12 @@ pub fn LineagePage(lineage_id: String) -> Element {
                         span { class: "loading loading-spinner" }
                     }
                 },
+            }
+
+            SkybotPanel {
+                hits: skybot_hits,
+                open: skybot_panel_open(),
+                on_close: move |_| skybot_panel_open.set(false),
             }
         }
     }
