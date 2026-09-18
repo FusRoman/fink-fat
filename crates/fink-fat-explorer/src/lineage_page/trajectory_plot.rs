@@ -26,12 +26,17 @@ fn format_hover_extra(time_label: &str, ra_err_arcsec: f64, dec_err_arcsec: f64)
 
 const TRAJECTORY_HOVER_TEMPLATE: &str = "RA: %{x:.6f}°<br>Dec: %{y:.6f}°<br>%{customdata}";
 
-/// One Skybot hit's hover text: name, class, and whichever of magnitude/
-/// distance/positional-error Skybot actually returned for it (all optional
-/// in the response, per `skybot_search::parsing::RawSkybotRow`).
+/// One Skybot hit's hover text: name, class, its separation from the real
+/// observation it was queried around, and whichever of magnitude/distance/
+/// positional-error Skybot actually returned for it (all optional in the
+/// response, per `skybot_search::parsing::RawSkybotRow`).
 #[cfg(target_arch = "wasm32")]
 fn format_skybot_hover(hit: &SkybotHit) -> String {
-    let mut lines = vec![format!("<b>{}</b>", hit.name), hit.class.clone()];
+    let mut lines = vec![
+        format!("<b>{}</b>", hit.name),
+        hit.class.clone(),
+        format!("{:.2}″ from the observation", hit.separation_arcsec),
+    ];
     if let Some(vmag) = hit.vmag {
         lines.push(format!("V mag {vmag:.2}"));
     }
@@ -45,6 +50,26 @@ fn format_skybot_hover(hit: &SkybotHit) -> String {
         lines.push(format!("r (heliocentric) {dh:.3} au"));
     }
     lines.join("<br>")
+}
+
+/// A small, high-contrast palette for telling different Skybot matches apart
+/// on the plot — deliberately disjoint from the Observations/Kalman traces'
+/// colors (`#2d7fd2` blue, `#d2422d` red-orange) used elsewhere on this plot.
+const SKYBOT_MARKER_COLORS: [&str; 8] = [
+    "#2ba84a", "#9b59b6", "#e67e22", "#16a085", "#e91e63", "#f1c40f", "#34495e", "#795548",
+];
+
+/// Picks a stable color for an object name out of [`SKYBOT_MARKER_COLORS`],
+/// by hashing the name — not by discovery order — so a point's color never
+/// shifts as more distinct objects stream in from the still-running search.
+fn skybot_marker_color(name: &str) -> &'static str {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    name.hash(&mut hasher);
+    let index = (hasher.finish() as usize) % SKYBOT_MARKER_COLORS.len();
+    SKYBOT_MARKER_COLORS[index]
 }
 
 /// Linearly interpolated marker sizes from `from` (first/oldest point) to
@@ -209,6 +234,10 @@ pub fn TrajectoryPlot(
                 let skybot_dec: Vec<f64> = skybot_hits.iter().map(|h| h.dec_deg).collect();
                 let skybot_hover: Vec<String> =
                     skybot_hits.iter().map(format_skybot_hover).collect();
+                let skybot_colors: Vec<&str> = skybot_hits
+                    .iter()
+                    .map(|h| skybot_marker_color(&h.name))
+                    .collect();
 
                 plot.add_trace(
                     Scatter::new(skybot_ra, skybot_dec)
@@ -216,7 +245,7 @@ pub fn TrajectoryPlot(
                         .mode(Mode::Markers)
                         .marker(
                             Marker::new()
-                                .color("#2ba84a")
+                                .color_array(skybot_colors)
                                 .symbol(plotly::common::MarkerSymbol::Diamond)
                                 .size(9),
                         )
@@ -298,6 +327,26 @@ pub fn TrajectoryPlot(
                     onmounted: move |_| is_mounted.set(true),
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skybot_marker_color_is_stable_for_the_same_name() {
+        assert_eq!(
+            skybot_marker_color("2015 DJ284"),
+            skybot_marker_color("2015 DJ284")
+        );
+    }
+
+    #[test]
+    fn skybot_marker_color_always_picks_from_the_palette() {
+        for name in ["2015 DJ284", "(4) Vesta", "1997 TU8", ""] {
+            assert!(SKYBOT_MARKER_COLORS.contains(&skybot_marker_color(name)));
         }
     }
 }

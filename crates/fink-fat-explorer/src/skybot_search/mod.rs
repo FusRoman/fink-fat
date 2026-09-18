@@ -11,6 +11,9 @@
 //! functions in [`parsing`] and [`sexagesimal`]; only [`run`] touches the
 //! network and the job registry.
 
+/// Server-only: computing [`SkybotHit::separation_arcsec`] pulls in `photom`,
+/// and sending the request pulls in `reqwest` — neither builds for `wasm32`.
+#[cfg(feature = "server")]
 pub mod parsing;
 pub mod run;
 pub mod sexagesimal;
@@ -57,6 +60,12 @@ pub struct SkybotHit {
     /// Link into SSODNet for this object, when Skybot's response included
     /// one (`ssocard`, falling back to `quaero`).
     pub ssodnet_url: Option<String>,
+    /// Great-circle distance (Vincenty formula, via `photom`) between this
+    /// hit's own reported position and the real observation at
+    /// [`SkybotQueryPoint::source_index`] that this point was queried
+    /// around — computed server-side (see
+    /// `parsing::raw_row_to_hit`) since `photom` isn't available client-side.
+    pub separation_arcsec: f64,
 }
 
 /// Snapshot of a running/finished Skybot search job, returned to the client
@@ -164,6 +173,7 @@ mod tests {
             geocentric_distance_au: None,
             heliocentric_distance_au: None,
             ssodnet_url: None,
+            separation_arcsec: 0.0,
         }
     }
 

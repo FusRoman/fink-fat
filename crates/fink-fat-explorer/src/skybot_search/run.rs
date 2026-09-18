@@ -3,15 +3,19 @@
 //! connections via a semaphore, accumulating hits into the job registry as
 //! they arrive and marking the job done once every point has been tried.
 //!
-//! Request URL construction and response parsing are pure functions in
-//! [`super::parsing`] — this module only adds the network I/O and job-state
-//! bookkeping around them.
+//! The actual network call — URL construction, sending the request, parsing
+//! the response — is [`super::parsing::fetch_conesearch_hits`]. It's kept
+//! there rather than here specifically so it has no dependency on this
+//! module's job registry/semaphore/dioxus plumbing, which lets it (and the
+//! pure URL/parsing functions it calls) be exercised directly in tests,
+//! including live ones against the real service — see the tests in
+//! `parsing.rs`.
 
 use dioxus::prelude::*;
 
-use super::SkybotQueryPoint;
 #[cfg(feature = "server")]
-use super::{clamp_radius_arcsec, SkybotHit};
+use super::clamp_radius_arcsec;
+use super::SkybotQueryPoint;
 
 /// Skybot is a shared public service — this caps how many conesearch
 /// requests fink-fat has in flight at once, regardless of how many
@@ -95,7 +99,13 @@ async fn run_skybot_job(job_id: u64, points: Vec<SkybotQueryPoint>, radius_arcse
                     .acquire_owned()
                     .await
                     .expect("skybot semaphore closed unexpectedly");
-                query_one_point(&client, point, radius_arcsec).await
+                super::parsing::fetch_conesearch_hits(
+                    &client,
+                    &point,
+                    radius_arcsec,
+                    REQUEST_TIMEOUT,
+                )
+                .await
             })
         })
         .collect();
@@ -137,30 +147,4 @@ async fn run_skybot_job(job_id: u64, points: Vec<SkybotQueryPoint>, radius_arcse
             job.status = super::JobStatus::Done;
         }
     }
-}
-
-/// Queries Skybot for the objects near one point and returns its hits (empty
-/// if none were found).
-#[cfg(feature = "server")]
-async fn query_one_point(
-    client: &reqwest::Client,
-    point: SkybotQueryPoint,
-    radius_arcsec: f64,
-) -> Result<Vec<SkybotHit>, String> {
-    let url = super::parsing::conesearch_url(&point, radius_arcsec);
-
-    let response = client
-        .get(&url)
-        .timeout(REQUEST_TIMEOUT)
-        .send()
-        .await
-        .and_then(|r| r.error_for_status())
-        .map_err(|e| format!("Skybot request failed: {e}"))?;
-
-    let body = response
-        .text()
-        .await
-        .map_err(|e| format!("failed to read Skybot response: {e}"))?;
-
-    super::parsing::parse_conesearch_response(&body, point.source_index)
 }
