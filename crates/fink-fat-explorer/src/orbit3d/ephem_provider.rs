@@ -183,6 +183,7 @@ async fn build_planets(epoch_mjd_tt: f64) -> Vec<Body3D> {
                     kind,
                     position: [position.x, position.y, position.z],
                     orbit: geometry::ellipse_points(&elems, ORBIT_CURVE_SAMPLES),
+                    elements: elems,
                 }),
                 None => tracing::warn!(
                     "orbit3d: {name}'s state at MJD-TT {epoch_mjd_tt} is not a closed ellipse, skipping"
@@ -217,6 +218,35 @@ fn keplerian_from_state(
     let elems =
         OrbitalElements::from_orbital_state(position, velocity, epoch_mjd_tt).as_keplerian()?;
     Some(keplerian_from_outfit_elements(&elems, epoch_mjd_tt))
+}
+
+/// Converts a Kalman attributable state (topocentric ra/dec/rho and their
+/// rates, plus the observer state it was measured against) into
+/// heliocentric osculating [`Keplerian`] elements — the same conversion
+/// `homepage::family::classify_from_attributable_state` does for the
+/// dynamic-family classification.
+///
+/// # Arguments
+///
+/// * `state` — `(ra, dec, ra_dot, dec_dot, rho, rho_dot)`.
+/// * `r_obs`, `v_obs` — the observer's heliocentric position (AU) and
+///   velocity (AU/day).
+/// * `epoch_mjd_tt` — the state's epoch, MJD-TT.
+///
+/// # Returns
+///
+/// `None` if the state does not resolve to a closed ellipse (`e >= 1`, or
+/// non-finite), not expected for a real tracked object but not assumed away.
+pub fn keplerian_from_attributable_state(
+    state: &nalgebra::Vector6<f64>,
+    r_obs: &Vector3<f64>,
+    v_obs: &Vector3<f64>,
+    epoch_mjd_tt: f64,
+) -> Option<Keplerian> {
+    use fink_fat_engine::topocentric_kf::conversion::attributable_to_cartesian;
+
+    let cartesian = attributable_to_cartesian(state, r_obs, v_obs);
+    keplerian_from_state(&cartesian.pos, &cartesian.vel, epoch_mjd_tt)
 }
 
 /// Converts an `outfit::KeplerianElements` (radians) into this module's

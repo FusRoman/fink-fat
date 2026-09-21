@@ -5,7 +5,7 @@ use dioxus::prelude::*;
 
 #[cfg(target_arch = "wasm32")]
 use plotly::{
-    common::{Marker, Mode, Title},
+    common::{HoverInfo, Line, Marker, MarkerSymbol, Mode, Title},
     layout::{AspectMode, Axis, Layout, LayoutScene, Margin},
     mesh3d::Lighting,
     Mesh3D, Plot, Scatter3D,
@@ -23,20 +23,83 @@ pub enum TraceStyle {
     Markers,
     /// A connected polyline with no markers — an orbital ellipse.
     Line,
+    /// Several separate dashed polylines in one trace (one legend entry,
+    /// one toggle): the trace's `points` are consumed in consecutive groups
+    /// of this many points, each group drawn as its own polyline with no
+    /// segment joining one group to the next — e.g. `3` for a series of
+    /// two-segment sight lines. The dashes are cut geometrically
+    /// ([`dash_polyline`]) rather than delegated to plotly's `line.dash`: in
+    /// `scatter3d` that pattern is scaled by the trace's *total* arc length,
+    /// so on a trace of many long lines each dash and gap spans several AU
+    /// and every line stops short of its end point.
+    DashedPolylines(usize),
+    /// Several separate *closed* solid polylines in one trace: like
+    /// [`Self::DashedPolylines`], `points` come in consecutive groups of
+    /// this many points, but each group is joined back to its own first
+    /// point (a full loop) and drawn as a thin solid line — e.g. a series of
+    /// sampled orbits.
+    ClosedPolylines(usize),
+    /// Several separate *open* solid polylines in one trace: the same
+    /// grouping as [`Self::ClosedPolylines`] but each group is drawn as
+    /// given, not looped back — e.g. an arc, or a pie-slice outline that
+    /// closes itself.
+    SolidPolylines(usize),
 }
 
-/// Which kind of body a [`Trace3D`] represents, driving its marker size in
-/// [`Scatter3dPlot`]: fink-fat's own tracked objects vastly outnumber the
-/// dozen planets/perturbers they share the scene with (thousands on the
-/// homepage view), so they get a tiny marker while planets are drawn as
-/// shaded spheres ([`sphere_mesh`]) that stay distinguishable rather than
-/// drowning in the cloud.
+/// Which kind of body a [`Trace3D`] represents, driving how its
+/// [`TraceStyle::Markers`] points are drawn in [`Scatter3dPlot`]: fink-fat's
+/// own tracked objects vastly outnumber the dozen planets/perturbers they
+/// share the homepage scene with (thousands of them), so they get a tiny dot
+/// while planets are drawn as shaded spheres ([`sphere_mesh`]) that stay
+/// distinguishable rather than drowning in the cloud.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TraceSource {
-    /// One of `orbit3d::ephem_provider::TRACKED_BODIES`.
+    /// One of `orbit3d::ephem_provider::TRACKED_BODIES` — a sphere.
     Planet,
-    /// A fink-fat tracked object — its current position, or its own orbit.
+    /// One of many fink-fat tracked objects — its current position (a tiny
+    /// dot), or its own orbit.
     TrackedObject,
+    /// The single object a page is about (the lineage page's 3D tab). Alone
+    /// in the scene, so it can afford to be drawn as a sphere like a planet.
+    FocusObject,
+    /// One real observation of the focus object — a cross.
+    Observation,
+    /// A characteristic point of the focus object's orbit — a marker whose
+    /// symbol depends on its [`LandmarkKind`].
+    Landmark(LandmarkKind),
+    /// A clone of the focus object's orbit drawn from its covariance — a
+    /// small translucent dot, or (with [`TraceStyle::ClosedPolylines`]) a
+    /// faint orbit.
+    Uncertainty,
+}
+
+/// Which characteristic point a [`TraceSource::Landmark`] trace holds; picks
+/// the marker symbol so the four kinds read apart at a glance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LandmarkKind {
+    /// The perihelion — a diamond.
+    Perihelion,
+    /// The aphelion — a square.
+    Aphelion,
+    /// An orbital node — a circle.
+    Node,
+    /// An end of a minimum-orbit-intersection-distance segment — an open
+    /// diamond.
+    Moid,
+    /// The ecliptic plane's concentric rings.
+    EclipticPlane,
+    /// The ecliptic plane's radial spokes; shares the rings' legend entry.
+    /// The plane is drawn as this light wireframe rather than a filled disc
+    /// because in plotly's 3D scenes a filled surface is "nearest object"
+    /// under the cursor everywhere and would swallow the hover of every
+    /// other trace.
+    EclipticSpokes,
+    /// The inclination pie-slice between the ecliptic and the orbital
+    /// plane.
+    Inclination,
+    /// An icon on the inclination pie-slice whose hover gives the
+    /// inclination value; kept out of the legend.
+    InclinationIcon,
 }
 
 /// One named, colored set of points to draw in a [`Scatter3dPlot`].
@@ -53,6 +116,23 @@ pub struct Trace3D {
     /// [`crate::orbit3d::geometry::point_at_true_anomaly`] for the exact
     /// frame).
     pub points: Vec<[f64; 3]>,
+    /// Custom hover text (plotly HTML: `<br>` breaks lines). Empty means
+    /// plotly's default hover for a line/marker trace (trace name +
+    /// coordinates) and no hover for the polyline styles.
+    ///
+    /// The entries follow the trace's unit: one per point for
+    /// [`TraceStyle::Markers`]; one per *group* for the polyline styles
+    /// ([`TraceStyle::DashedPolylines`], [`TraceStyle::ClosedPolylines`],
+    /// [`TraceStyle::SolidPolylines`]), shown wherever that group's line is
+    /// hovered; a sphere uses the first entry.
+    ///
+    /// Giving every guide line a meaningful hover matters: in plotly's 3D
+    /// scenes the hovered element is simply the *nearest* drawn object, so a
+    /// line without hover text (`hoverinfo: skip`) silences the hover of
+    /// whatever it passes near — its own text at least tells the user what
+    /// they are pointing at.
+    #[serde(default)]
+    pub hover_text: Vec<String>,
 }
 
 /// Radius, in AU, of the sphere drawn for each planet/perturber's
@@ -64,8 +144,62 @@ pub struct Trace3D {
 /// stays round and simply grows/shrinks with the camera zoom. Uniform for
 /// every body — planets are told apart by color, not by (unrealistic at this
 /// scale) relative size.
-#[cfg(target_arch = "wasm32")]
 const PLANET_SPHERE_RADIUS_AU: f64 = 0.15;
+/// Radius, in AU, of the sphere drawn for a page's single focus object
+/// ([`TraceSource::FocusObject`]) — clearly bigger than the tiny dot every
+/// tracked object otherwise gets, yet a bit smaller than a planet.
+const FOCUS_SPHERE_RADIUS_AU: f64 = 0.10;
+/// Stroke width of a dashed guide line ([`TraceStyle::DashedPolylines`]).
+#[cfg(target_arch = "wasm32")]
+const DASHED_LINE_WIDTH: f64 = 2.0;
+/// Nominal dash length, AU, of a [`TraceStyle::DashedPolylines`] line — see
+/// [`dash_segment`] for how it is adjusted per segment.
+const DASH_LENGTH_AU: f64 = 0.10;
+/// Gap between dashes, AU, of a [`TraceStyle::DashedPolylines`] line.
+const DASH_GAP_AU: f64 = 0.06;
+/// Marker size of an uncertainty-cloud clone ([`TraceSource::Uncertainty`]).
+#[cfg(target_arch = "wasm32")]
+const UNCERTAINTY_MARKER_SIZE: usize = 3;
+/// Stroke width of a faint clone orbit ([`TraceStyle::ClosedPolylines`]).
+#[cfg(target_arch = "wasm32")]
+const CLOSED_POLYLINE_WIDTH: f64 = 1.5;
+/// Stroke width of an open solid polyline ([`TraceStyle::SolidPolylines`]).
+#[cfg(target_arch = "wasm32")]
+const SOLID_POLYLINE_WIDTH: f64 = 3.0;
+/// Marker size of an orbit landmark ([`TraceSource::Landmark`]).
+#[cfg(target_arch = "wasm32")]
+const LANDMARK_MARKER_SIZE: usize = 6;
+/// Marker size of an observation cross ([`TraceSource::Observation`]).
+#[cfg(target_arch = "wasm32")]
+const OBSERVATION_MARKER_SIZE: usize = 5;
+/// Stroke width of an observation cross — plotly draws `scatter3d`'s
+/// `cross` symbol as lines, so this is what makes it legible.
+#[cfg(target_arch = "wasm32")]
+const OBSERVATION_MARKER_LINE_WIDTH: f64 = 2.0;
+
+/// The sphere radius a [`TraceSource`]'s markers are drawn with, if that
+/// source is drawn as spheres at all.
+///
+/// # Arguments
+///
+/// * `source` — which kind of body the trace represents.
+///
+/// # Returns
+///
+/// `Some(radius)` in AU for [`TraceSource::Planet`] and
+/// [`TraceSource::FocusObject`]; `None` for the sources drawn as plain
+/// `scatter3d` markers.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn sphere_radius_au(source: TraceSource) -> Option<f64> {
+    match source {
+        TraceSource::Planet => Some(PLANET_SPHERE_RADIUS_AU),
+        TraceSource::FocusObject => Some(FOCUS_SPHERE_RADIUS_AU),
+        TraceSource::TrackedObject
+        | TraceSource::Observation
+        | TraceSource::Landmark(_)
+        | TraceSource::Uncertainty => None,
+    }
+}
 /// Number of latitude bands of a planet sphere — see [`sphere_mesh`].
 #[cfg(target_arch = "wasm32")]
 const PLANET_SPHERE_LAT_BANDS: usize = 12;
@@ -169,10 +303,10 @@ pub fn body_color(name: &str) -> &'static str {
     }
 }
 
-/// A triangulated sphere in the vertex/index layout `mesh3d` expects.
+/// A triangle mesh in the vertex/index layout `mesh3d` expects.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 #[derive(Clone, Debug, PartialEq)]
-struct SphereMesh {
+struct TriangleMesh {
     x: Vec<f64>,
     y: Vec<f64>,
     z: Vec<f64>,
@@ -255,13 +389,18 @@ fn lit(mesh: Box<plotly::Mesh3D<f64, f64, f64>>) -> LitMesh {
 ///
 /// # Returns
 ///
-/// A [`SphereMesh`] with `2 + (lat_bands - 1) * lon_segments` vertices — every
+/// A [`TriangleMesh`] with `2 + (lat_bands - 1) * lon_segments` vertices — every
 /// one at exactly `radius` from `center`, the north pole (`+z`) first and the
 /// south pole last — and `2 * (lat_bands - 1) * lon_segments` non-degenerate
 /// triangles wound counter-clockwise seen from outside, all indices in
 /// bounds.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-fn sphere_mesh(center: [f64; 3], radius: f64, lat_bands: usize, lon_segments: usize) -> SphereMesh {
+fn sphere_mesh(
+    center: [f64; 3],
+    radius: f64,
+    lat_bands: usize,
+    lon_segments: usize,
+) -> TriangleMesh {
     let lat_bands = lat_bands.max(2);
     let lon_segments = lon_segments.max(3);
     let n_rings = lat_bands - 1;
@@ -315,7 +454,7 @@ fn sphere_mesh(center: [f64; 3], radius: f64, lat_bands: usize, lon_segments: us
     });
     let triangles: Vec<[usize; 3]> = north_fan.chain(bands).chain(south_fan).collect();
 
-    SphereMesh {
+    TriangleMesh {
         x: vertices.iter().map(|v| v[0]).collect(),
         y: vertices.iter().map(|v| v[1]).collect(),
         z: vertices.iter().map(|v| v[2]).collect(),
@@ -334,6 +473,8 @@ fn sphere_mesh(center: [f64; 3], radius: f64, lat_bands: usize, lon_segments: us
 /// * `center` — sphere center, AU.
 /// * `radius` — sphere radius, AU.
 /// * `lighting` — material properties (ambient/diffuse/specular).
+/// * `hover_text` — custom hover text (plotly HTML), or `None` for
+///   plotly's default.
 ///
 /// # Returns
 ///
@@ -346,6 +487,7 @@ fn sphere_trace(
     center: [f64; 3],
     radius: f64,
     lighting: Lighting,
+    hover_text: Option<&str>,
 ) -> Box<Mesh3D<f64, f64, f64>> {
     let sphere = sphere_mesh(
         center,
@@ -353,7 +495,7 @@ fn sphere_trace(
         PLANET_SPHERE_LAT_BANDS,
         PLANET_SPHERE_LON_SEGMENTS,
     );
-    Mesh3D::new(
+    let mesh = Mesh3D::new(
         sphere.x,
         sphere.y,
         sphere.z,
@@ -365,7 +507,191 @@ fn sphere_trace(
     .color(color.to_string())
     .flat_shading(false)
     .show_legend(true)
-    .lighting(lighting)
+    .lighting(lighting);
+    match hover_text {
+        Some(text) => mesh.hover_text(text).hover_info(HoverInfo::Text),
+        None => mesh,
+    }
+}
+
+/// The marker of an orbit landmark: a per-kind symbol with a dark outline,
+/// so it stays legible over the orbit lines and the planet spheres.
+///
+/// # Arguments
+///
+/// * `kind` — which characteristic point the marker stands for.
+/// * `color` — CSS fill color.
+///
+/// # Returns
+///
+/// The configured [`Marker`].
+#[cfg(target_arch = "wasm32")]
+fn landmark_marker(kind: LandmarkKind, color: &str) -> Marker {
+    let symbol = match kind {
+        LandmarkKind::Perihelion => MarkerSymbol::Diamond,
+        LandmarkKind::Aphelion => MarkerSymbol::Square,
+        LandmarkKind::Moid => MarkerSymbol::DiamondOpen,
+        LandmarkKind::InclinationIcon => MarkerSymbol::SquareOpen,
+        // Drawn as a disc and a line rather than as markers.
+        LandmarkKind::Node
+        | LandmarkKind::EclipticPlane
+        | LandmarkKind::EclipticSpokes
+        | LandmarkKind::Inclination => MarkerSymbol::Circle,
+    };
+    Marker::new()
+        .color(color.to_string())
+        .size(LANDMARK_MARKER_SIZE)
+        .symbol(symbol)
+        .line(Line::new().color("#1a1a1a").width(1.0))
+}
+
+/// Cuts the segment `a → b` into dashes.
+///
+/// The dash count is the one that best fits the nominal `dash`/`gap`
+/// lengths, then the dashes are stretched to fill the segment exactly: the
+/// first dash starts at `a` and the last one ends at `b`, so a dashed line
+/// always visibly reaches both of its end points. Gaps keep their nominal
+/// length.
+///
+/// # Arguments
+///
+/// * `a`, `b` — segment end points.
+/// * `dash` — nominal dash length (same units as the points).
+/// * `gap` — gap length.
+///
+/// # Returns
+///
+/// The dashes as `[start, end]` pairs, in order from `a` to `b`; a single
+/// dash covering the whole segment if it is shorter than `dash`, and none if
+/// `a == b`.
+fn dash_segment(a: [f64; 3], b: [f64; 3], dash: f64, gap: f64) -> Vec<[[f64; 3]; 2]> {
+    let length = crate::orbit3d::geometry::distance(a, b);
+    if length <= 0.0 || dash <= 0.0 {
+        return Vec::new();
+    }
+
+    let n = (((length + gap) / (dash + gap)).round() as usize).max(1);
+    let dash = ((length - (n - 1) as f64 * gap) / n as f64).max(0.0);
+    let at = |distance: f64| {
+        let t = distance / length;
+        [
+            a[0] + t * (b[0] - a[0]),
+            a[1] + t * (b[1] - a[1]),
+            a[2] + t * (b[2] - a[2]),
+        ]
+    };
+
+    (0..n)
+        .map(|i| {
+            let start = i as f64 * (dash + gap);
+            [at(start), at(start + dash)]
+        })
+        .collect()
+}
+
+/// Cuts a polyline into dashes, segment by segment, each restarting its own
+/// pattern (see [`dash_segment`]).
+///
+/// # Arguments
+///
+/// * `points` — the polyline's vertices.
+/// * `dash`, `gap` — nominal dash and gap lengths, as in [`dash_segment`].
+///
+/// # Returns
+///
+/// Every dash of every segment as `[start, end]` pairs, in polyline order.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn dash_polyline(points: &[[f64; 3]], dash: f64, gap: f64) -> Vec<[[f64; 3]; 2]> {
+    points
+        .windows(2)
+        .flat_map(|pair| dash_segment(pair[0], pair[1], dash, gap))
+        .collect()
+}
+
+/// One coordinate axis of `points`, with a gap (`None`, serialised as JSON
+/// `null`, which plotly leaves unconnected) after every `group_len` points
+/// except the last group, so a single `scatter3d` trace can draw several
+/// disjoint polylines.
+///
+/// # Arguments
+///
+/// * `points` — the points of every polyline, group after group.
+/// * `group_len` — number of points per polyline; clamped to at least 1.
+/// * `axis` — which coordinate to extract (`0` = x, `1` = y, `2` = z).
+///
+/// # Returns
+///
+/// `points.len()` coordinates plus one gap between each pair of
+/// consecutive groups.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn coordinate_with_gaps(points: &[[f64; 3]], group_len: usize, axis: usize) -> Vec<Option<f64>> {
+    let group_len = group_len.max(1);
+    let n_groups = points.len().div_ceil(group_len);
+    points
+        .chunks(group_len)
+        .enumerate()
+        .flat_map(|(i, group)| {
+            group
+                .iter()
+                .map(|p| Some(p[axis]))
+                .chain((i + 1 < n_groups).then_some(None))
+        })
+        .collect()
+}
+
+/// Gives a polyline trace its hover: the per-vertex `texts` when there are
+/// any, otherwise no hover at all.
+///
+/// # Arguments
+///
+/// * `trace` — the scatter trace.
+/// * `texts` — per-vertex hover text (see [`texts_with_gaps`]), possibly
+///   empty.
+///
+/// # Returns
+///
+/// The trace with `hoverinfo: text` and its texts, or `hoverinfo: skip`.
+#[cfg(target_arch = "wasm32")]
+fn with_hover<X, Y, Z>(
+    trace: Box<Scatter3D<X, Y, Z>>,
+    texts: Vec<String>,
+) -> Box<Scatter3D<X, Y, Z>>
+where
+    X: serde::Serialize + Clone,
+    Y: serde::Serialize + Clone,
+    Z: serde::Serialize + Clone,
+{
+    if texts.is_empty() {
+        trace.hover_info(HoverInfo::Skip)
+    } else {
+        trace.text_array(texts).hover_info(HoverInfo::Text)
+    }
+}
+
+/// Per-vertex hover text for a trace drawn as consecutive pieces of
+/// `piece_len` points separated by one gap vertex each — the layout
+/// `coordinate_with_gaps` gives.
+///
+/// # Arguments
+///
+/// * `piece_texts` — one text per piece.
+/// * `piece_len` — number of points per piece; clamped to at least 1.
+///
+/// # Returns
+///
+/// For each piece its text repeated `piece_len` times, followed by an empty
+/// string for the gap vertex (none after the last piece).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn texts_with_gaps(piece_texts: &[String], piece_len: usize) -> Vec<String> {
+    let piece_len = piece_len.max(1);
+    let last = piece_texts.len().saturating_sub(1);
+    piece_texts
+        .iter()
+        .enumerate()
+        .flat_map(|(i, text)| {
+            std::iter::repeat_n(text.clone(), piece_len).chain((i < last).then(String::new))
+        })
+        .collect()
 }
 
 /// Closes an open polyline by re-appending its first point, so the drawn
@@ -415,6 +741,7 @@ pub fn planet_traces(bodies: &[Body3D]) -> Vec<Trace3D> {
                     style: TraceStyle::Line,
                     source: TraceSource::Planet,
                     points: body.orbit.clone(),
+                    hover_text: Vec::new(),
                 },
                 Trace3D {
                     name: body.name.clone(),
@@ -422,6 +749,7 @@ pub fn planet_traces(bodies: &[Body3D]) -> Vec<Trace3D> {
                     style: TraceStyle::Markers,
                     source: TraceSource::Planet,
                     points: vec![body.position],
+                    hover_text: Vec::new(),
                 },
             ]
         })
@@ -478,29 +806,135 @@ pub fn Scatter3dPlot(plot_id: &'static str, traces: Vec<Trace3D>) -> Element {
                     [0.0, 0.0, 0.0],
                     SUN_SPHERE_RADIUS_AU,
                     Lighting::new().ambient(0.9).diffuse(0.3).specular(0.1),
+                    None,
                 ))));
 
                 for trace in traces.iter() {
+                    // Separate dashed polylines: gaps between groups keep them
+                    // disjoint within a single legend entry. Hover skipped —
+                    // they are guides, and would only shadow the crosses'.
+                    if let TraceStyle::DashedPolylines(group_len) = trace.style {
+                        let per_group: Vec<Vec<[[f64; 3]; 2]>> = trace
+                            .points
+                            .chunks(group_len.max(1))
+                            .map(|polyline| dash_polyline(polyline, DASH_LENGTH_AU, DASH_GAP_AU))
+                            .collect();
+                        let dashes: Vec<[f64; 3]> =
+                            per_group.iter().flatten().flatten().copied().collect();
+                        // Every dash carries its group's hover text, so a
+                        // guide line says what it is when it is the nearest
+                        // thing under the cursor.
+                        let dash_texts: Vec<String> = if trace.hover_text.is_empty() {
+                            Vec::new()
+                        } else {
+                            per_group
+                                .iter()
+                                .enumerate()
+                                .flat_map(|(k, group)| {
+                                    let text = trace
+                                        .hover_text
+                                        .get(k)
+                                        .unwrap_or(&trace.hover_text[0])
+                                        .clone();
+                                    std::iter::repeat_n(text, group.len())
+                                })
+                                .collect()
+                        };
+                        let coords = |axis| coordinate_with_gaps(&dashes, 2, axis);
+                        let t = Scatter3D::new(coords(0), coords(1), coords(2))
+                            .name(trace.name.clone())
+                            .mode(Mode::Lines)
+                            .line(
+                                Line::new()
+                                    .color(trace.color.clone())
+                                    .width(DASHED_LINE_WIDTH),
+                            );
+                        plot.add_trace(with_hover(t, texts_with_gaps(&dash_texts, 2)));
+                        continue;
+                    }
+
+                    // Separate solid polylines (e.g. clone orbits, or the
+                    // inclination pie-slice): closed ones are looped back to
+                    // their start; either way each group is separated from
+                    // the next by a gap.
+                    if let TraceStyle::ClosedPolylines(group_len)
+                    | TraceStyle::SolidPolylines(group_len) = trace.style
+                    {
+                        let closed = matches!(trace.style, TraceStyle::ClosedPolylines(_));
+                        let group_len = group_len.max(1);
+                        let (flat, stride, width) = if closed {
+                            let looped: Vec<[f64; 3]> = trace
+                                .points
+                                .chunks(group_len)
+                                .flat_map(closed_loop)
+                                .collect();
+                            (looped, group_len + 1, CLOSED_POLYLINE_WIDTH)
+                        } else {
+                            (trace.points.clone(), group_len, SOLID_POLYLINE_WIDTH)
+                        };
+                        let coords = |axis| coordinate_with_gaps(&flat, stride, axis);
+                        let t = Scatter3D::new(coords(0), coords(1), coords(2))
+                            .name(trace.name.clone())
+                            .mode(Mode::Lines)
+                            .line(Line::new().color(trace.color.clone()).width(width));
+                        // One hover text per group, wherever its line is
+                        // hovered; none at all if the trace has no text.
+                        let group_texts: Vec<String> = if trace.hover_text.is_empty() {
+                            Vec::new()
+                        } else {
+                            (0..trace.points.len().div_ceil(group_len))
+                                .map(|k| {
+                                    trace
+                                        .hover_text
+                                        .get(k)
+                                        .unwrap_or(&trace.hover_text[0])
+                                        .clone()
+                                })
+                                .collect()
+                        };
+                        // The ecliptic wireframe's rings and spokes toggle
+                        // together from a single legend entry.
+                        let t = match trace.source {
+                            TraceSource::Landmark(LandmarkKind::EclipticPlane) => {
+                                t.legend_group("ecliptic-plane")
+                            }
+                            TraceSource::Landmark(LandmarkKind::EclipticSpokes) => {
+                                t.legend_group("ecliptic-plane").show_legend(false)
+                            }
+                            _ => t,
+                        };
+                        plot.add_trace(with_hover(t, texts_with_gaps(&group_texts, stride)));
+                        continue;
+                    }
+
                     let points = match trace.style {
-                        TraceStyle::Line => closed_loop(&trace.points),
+                        // `DashedPolylines`/`ClosedPolylines` were drawn and
+                        // skipped above.
+                        TraceStyle::Line
+                        | TraceStyle::DashedPolylines(_)
+                        | TraceStyle::ClosedPolylines(_)
+                        | TraceStyle::SolidPolylines(_) => closed_loop(&trace.points),
                         TraceStyle::Markers => trace.points.clone(),
                     };
                     let xs: Vec<f64> = points.iter().map(|p| p[0]).collect();
                     let ys: Vec<f64> = points.iter().map(|p| p[1]).collect();
                     let zs: Vec<f64> = points.iter().map(|p| p[2]).collect();
 
-                    // Planets are shaded `mesh3d` spheres: plotly's `scatter3d`
-                    // has no sphere symbol, and a lit sphere keeps the dozen
-                    // planets distinct from the cloud of tracked-object dots.
-                    if let (TraceStyle::Markers, TraceSource::Planet) = (trace.style, trace.source)
+                    // Planets and the focus object are shaded `mesh3d`
+                    // spheres: plotly's `scatter3d` has no sphere symbol, and
+                    // a lit sphere keeps them distinct from tracked-object
+                    // dots.
+                    if let (TraceStyle::Markers, Some(radius)) =
+                        (trace.style, sphere_radius_au(trace.source))
                     {
                         if let Some(&center) = trace.points.first() {
                             plot.add_trace(Box::new(lit(sphere_trace(
                                 &trace.name,
                                 &trace.color,
                                 center,
-                                PLANET_SPHERE_RADIUS_AU,
+                                radius,
                                 Lighting::new().ambient(0.55).diffuse(0.8).specular(0.3),
+                                trace.hover_text.first().map(String::as_str),
                             ))));
                         }
                         continue;
@@ -509,12 +943,36 @@ pub fn Scatter3dPlot(plot_id: &'static str, traces: Vec<Trace3D>) -> Element {
                     let (mode, marker) = match trace.style {
                         TraceStyle::Markers => (
                             Mode::Markers,
-                            Marker::new()
-                                .color(trace.color.clone())
-                                .size(OBJECT_MARKER_SIZE)
-                                .opacity(population_opacity(trace.points.len())),
+                            match trace.source {
+                                TraceSource::Observation => Marker::new()
+                                    .color(trace.color.clone())
+                                    .size(OBSERVATION_MARKER_SIZE)
+                                    .symbol(MarkerSymbol::Cross)
+                                    .line(
+                                        Line::new()
+                                            .color(trace.color.clone())
+                                            .width(OBSERVATION_MARKER_LINE_WIDTH),
+                                    ),
+                                TraceSource::Landmark(kind) => landmark_marker(kind, &trace.color),
+                                TraceSource::Uncertainty => Marker::new()
+                                    .color(trace.color.clone())
+                                    .size(UNCERTAINTY_MARKER_SIZE),
+                                // Planets and the focus object were drawn as
+                                // spheres above; what is left is the tiny dot
+                                // of a tracked object.
+                                TraceSource::Planet
+                                | TraceSource::FocusObject
+                                | TraceSource::TrackedObject => Marker::new()
+                                    .color(trace.color.clone())
+                                    .size(OBJECT_MARKER_SIZE)
+                                    .opacity(population_opacity(trace.points.len())),
+                            },
                         ),
-                        TraceStyle::Line => (
+                        // The polyline styles were drawn and skipped above.
+                        TraceStyle::Line
+                        | TraceStyle::DashedPolylines(_)
+                        | TraceStyle::ClosedPolylines(_)
+                        | TraceStyle::SolidPolylines(_) => (
                             Mode::Lines,
                             Marker::new()
                                 .color(trace.color.clone())
@@ -526,6 +984,19 @@ pub fn Scatter3dPlot(plot_id: &'static str, traces: Vec<Trace3D>) -> Element {
                         .name(trace.name.clone())
                         .mode(mode)
                         .marker(marker);
+                    let t = if trace.hover_text.is_empty() {
+                        t
+                    } else {
+                        t.text_array(trace.hover_text.clone())
+                            .hover_info(HoverInfo::Text)
+                    };
+                    // The inclination icon rides on its slice's legend entry.
+                    let t = if trace.source == TraceSource::Landmark(LandmarkKind::InclinationIcon)
+                    {
+                        t.show_legend(false)
+                    } else {
+                        t
+                    };
                     plot.add_trace(t);
                 }
 
@@ -683,6 +1154,130 @@ mod tests {
         assert_eq!(json["lightposition"]["y"], LIGHT_POSITION[1]);
         assert_eq!(json["lightposition"]["z"], LIGHT_POSITION[2]);
         assert_eq!(json["x"].as_array().map(Vec::len), Some(3));
+    }
+
+    #[test]
+    fn only_planets_and_the_focus_object_are_drawn_as_spheres() {
+        assert_eq!(
+            sphere_radius_au(TraceSource::Planet),
+            Some(PLANET_SPHERE_RADIUS_AU)
+        );
+        assert_eq!(
+            sphere_radius_au(TraceSource::FocusObject),
+            Some(FOCUS_SPHERE_RADIUS_AU)
+        );
+        assert_eq!(sphere_radius_au(TraceSource::TrackedObject), None);
+        assert_eq!(sphere_radius_au(TraceSource::Observation), None);
+    }
+
+    fn length(dash: &[[f64; 3]; 2]) -> f64 {
+        crate::orbit3d::geometry::distance(dash[0], dash[1])
+    }
+
+    /// The whole point of cutting dashes ourselves: the line visibly starts
+    /// at its first point and ends at its last.
+    #[test]
+    fn dash_segment_starts_at_a_and_ends_at_b() {
+        let a = [1.0, -2.0, 0.5];
+        let b = [4.0, 2.0, 0.5];
+        let dashes = dash_segment(a, b, 0.1, 0.06);
+
+        assert!(dashes.len() > 1);
+        assert_eq!(dashes.first().unwrap()[0], a);
+        let last = dashes.last().unwrap()[1];
+        assert!(crate::orbit3d::geometry::distance(last, b) < 1e-9);
+    }
+
+    #[test]
+    fn dash_segment_dashes_are_equal_and_separated_by_the_gap() {
+        let a = [0.0; 3];
+        let b = [3.0, 0.0, 0.0];
+        let dashes = dash_segment(a, b, 0.1, 0.06);
+
+        let first = length(&dashes[0]);
+        for d in &dashes {
+            assert!((length(d) - first).abs() < 1e-9);
+        }
+        for pair in dashes.windows(2) {
+            let gap = crate::orbit3d::geometry::distance(pair[0][1], pair[1][0]);
+            assert!((gap - 0.06).abs() < 1e-9, "gap {gap}");
+        }
+        // Stretched to fit, but close to the nominal length.
+        assert!((first - 0.1).abs() < 0.02, "dash {first}");
+    }
+
+    #[test]
+    fn dash_segment_shorter_than_a_dash_is_one_full_dash() {
+        let dashes = dash_segment([0.0; 3], [0.04, 0.0, 0.0], 0.1, 0.06);
+        assert_eq!(dashes.len(), 1);
+        assert!((length(&dashes[0]) - 0.04).abs() < 1e-12);
+    }
+
+    #[test]
+    fn dash_segment_of_a_zero_length_segment_is_empty() {
+        assert!(dash_segment([1.0; 3], [1.0; 3], 0.1, 0.06).is_empty());
+    }
+
+    #[test]
+    fn dash_polyline_dashes_every_segment() {
+        let pts = [[0.0; 3], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0]];
+        let dashes = dash_polyline(&pts, 0.1, 0.06);
+        let first_segment = dash_segment(pts[0], pts[1], 0.1, 0.06).len();
+        let second_segment = dash_segment(pts[1], pts[2], 0.1, 0.06).len();
+        assert_eq!(dashes.len(), first_segment + second_segment);
+        assert_eq!(dashes[first_segment][0], pts[1]);
+    }
+
+    #[test]
+    fn coordinate_with_gaps_separates_groups_with_a_gap() {
+        let pts = [
+            [1.0, 10.0, 0.0],
+            [2.0, 20.0, 0.0],
+            [3.0, 30.0, 0.0],
+            [4.0, 40.0, 0.0],
+            [5.0, 50.0, 0.0],
+            [6.0, 60.0, 0.0],
+        ];
+        assert_eq!(
+            coordinate_with_gaps(&pts, 3, 0),
+            [
+                Some(1.0),
+                Some(2.0),
+                Some(3.0),
+                None,
+                Some(4.0),
+                Some(5.0),
+                Some(6.0)
+            ]
+        );
+        assert_eq!(coordinate_with_gaps(&pts, 3, 1)[4], Some(40.0));
+    }
+
+    #[test]
+    fn coordinate_with_gaps_has_no_trailing_gap_and_handles_empty_input() {
+        assert_eq!(
+            coordinate_with_gaps(&[[1.0, 0.0, 0.0], [2.0, 0.0, 0.0]], 2, 0),
+            [Some(1.0), Some(2.0)]
+        );
+        assert!(coordinate_with_gaps(&[], 3, 0).is_empty());
+    }
+
+    /// The texts line up with `coordinate_with_gaps`'s vertices: each
+    /// piece's text on all of its points, an empty one on the gap.
+    #[test]
+    fn texts_with_gaps_match_the_coordinate_layout() {
+        let pieces = ["a".to_string(), "b".to_string(), "c".to_string()];
+        let texts = texts_with_gaps(&pieces, 2);
+        assert_eq!(texts, ["a", "a", "", "b", "b", "", "c", "c"]);
+
+        let points: Vec<[f64; 3]> = (0..6).map(|i| [i as f64, 0.0, 0.0]).collect();
+        assert_eq!(coordinate_with_gaps(&points, 2, 0).len(), texts.len());
+    }
+
+    #[test]
+    fn texts_with_gaps_of_nothing_is_empty() {
+        assert!(texts_with_gaps(&[], 3).is_empty());
+        assert_eq!(texts_with_gaps(&["x".to_string()], 0), ["x"]);
     }
 
     #[test]

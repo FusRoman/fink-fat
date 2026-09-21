@@ -22,7 +22,10 @@
 pub mod geometry;
 pub mod plot3d;
 pub mod server_fns;
+pub mod summary;
 pub mod types;
 
 #[cfg(feature = "server")]
 pub mod ephem_provider;
+#[cfg(feature = "server")]
+pub mod uncertainty;

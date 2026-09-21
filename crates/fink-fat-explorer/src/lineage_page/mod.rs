@@ -5,6 +5,7 @@ mod kf_replay;
 mod light_curve_plot;
 mod metrics_plot;
 pub mod observations_table;
+mod orbit3d_glossary;
 mod orbit3d_tab;
 mod plot_tabs;
 mod rho_evolution_plot;

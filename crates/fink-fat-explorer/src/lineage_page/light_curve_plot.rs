@@ -14,7 +14,7 @@ use super::x_axis::{x_values_for_observations, XAxisValues};
 
 /// Inverse of prep_alert.py's `mapping_band = {"u": 0, "g": 1, "r": 2, "i":
 /// 3, "z": 4, "y": 5}` — LSST-only, no other survey stores photometry here.
-fn band_name(filter: i16) -> String {
+pub(super) fn band_name(filter: i16) -> String {
     match filter {
         0 => "u".to_string(),
         1 => "g".to_string(),

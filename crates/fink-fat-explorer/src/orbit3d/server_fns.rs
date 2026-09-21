@@ -11,7 +11,7 @@ use dioxus::prelude::*;
 use hifitime::Epoch;
 
 use crate::orbit3d::geometry;
-use crate::orbit3d::types::{Body3D, LineageOrbit3D, ObjectPoint3D};
+use crate::orbit3d::types::{Body3D, LineageOrbit3D, ObjectPoint3D, ObservationPoint3D};
 
 /// The current epoch, as Modified Julian Date in Terrestrial Time — the
 /// convention every stored epoch in this crate uses (see
@@ -110,9 +110,7 @@ pub async fn get_homepage_orbit3d() -> Result<Option<Vec<ObjectPoint3D>>, Server
 fn keplerian_from_branch(
     branch: &crate::homepage::snapshot::BranchRow,
 ) -> Option<geometry::Keplerian> {
-    use fink_fat_engine::topocentric_kf::conversion::attributable_to_cartesian;
     use nalgebra::{Vector3, Vector6};
-    use outfit::OrbitalElements;
 
     let state = Vector6::new(
         branch.ra,
@@ -124,11 +122,13 @@ fn keplerian_from_branch(
     );
     let r_obs = Vector3::new(branch.r_obs_x, branch.r_obs_y, branch.r_obs_z);
     let v_obs = Vector3::new(branch.v_obs_x, branch.v_obs_y, branch.v_obs_z);
-    let cartesian = attributable_to_cartesian(&state, &r_obs, &v_obs);
 
-    let elems = OrbitalElements::from_orbital_state(&cartesian.pos, &cartesian.vel, branch.epoch)
-        .as_keplerian()?;
-    Some(crate::orbit3d::ephem_provider::keplerian_from_outfit_elements(&elems, branch.epoch))
+    crate::orbit3d::ephem_provider::keplerian_from_attributable_state(
+        &state,
+        &r_obs,
+        &v_obs,
+        branch.epoch,
+    )
 }
 
 /// A single lineage's orbit and current position, plus the planets/
@@ -148,18 +148,32 @@ fn keplerian_from_branch(
 pub async fn get_lineage_orbit3d(
     lineage_designation: String,
 ) -> Result<Option<LineageOrbit3D>, ServerFnError> {
-    use crate::fit_pipeline::fit::KeplerianView;
+    use crate::fit_pipeline::fit::{FitMethod, KeplerianView};
     use crate::orbit3d::ephem_provider;
+    use crate::orbit3d::uncertainty::FitCovariance;
 
     #[derive(sqlx::FromRow)]
     struct Row {
         reference_epoch: f64,
         keplerian: sqlx::types::Json<KeplerianView>,
+        semi_major_axis: f64,
+        eccentricity_sin_lon: f64,
+        eccentricity_cos_lon: f64,
+        tan_half_incl_sin_node: f64,
+        tan_half_incl_cos_node: f64,
+        mean_longitude: f64,
+        covariance: Vec<f64>,
+        normalised_rms: f64,
+        converged: bool,
+        fit_method: String,
     }
 
     let pool = crate::get_pool().await;
     let row: Option<Row> = sqlx::query_as(
-        "SELECT reference_epoch, keplerian FROM orbit_fits \
+        "SELECT reference_epoch, keplerian, semi_major_axis, eccentricity_sin_lon, \
+                eccentricity_cos_lon, tan_half_incl_sin_node, tan_half_incl_cos_node, \
+                mean_longitude, covariance, normalised_rms, converged, fit_method \
+         FROM orbit_fits \
          WHERE lineage_designation = $1 \
          ORDER BY fitted_at DESC \
          LIMIT 1",
@@ -178,12 +192,212 @@ pub async fn get_lineage_orbit3d(
 
     let planets = (*ephem_provider::get_planets(now).await).clone();
 
+    // The crosses and the uncertainty cloud are bonuses on top of the
+    // orbit: failing to load the observations must not blank the whole view.
+    let observations = match crate::lineage_page::observations_table::get_lineage_observations(
+        lineage_designation.clone(),
+    )
+    .await
+    {
+        Ok(Some(data)) => data.observations,
+        Ok(None) => Vec::new(),
+        Err(e) => {
+            tracing::warn!("orbit3d: failed to load the lineage's observations: {e}");
+            Vec::new()
+        }
+    };
+
+    let last_observation_mjd = observations
+        .iter()
+        .map(|o| o.mjd_tt)
+        .fold(row.reference_epoch, f64::max);
+    let fit_covariance = FitCovariance {
+        elements: nalgebra::Vector6::new(
+            row.semi_major_axis,
+            row.eccentricity_sin_lon,
+            row.eccentricity_cos_lon,
+            row.tan_half_incl_sin_node,
+            row.tan_half_incl_cos_node,
+            row.mean_longitude,
+        ),
+        covariance: row.covariance,
+        reference_epoch: row.reference_epoch,
+        converged: row.converged,
+        differential_correction: FitMethod::from_column(&row.fit_method)
+            == FitMethod::DifferentialCorrection,
+        normalised_rms: row.normalised_rms,
+    };
+
+    let object_position = geometry::position_at_epoch(&elems, now);
+
+    let (uncertainty, uncertainty_unavailable_reason) = match lineage_uncertainty(
+        &lineage_designation,
+        &fit_covariance,
+        last_observation_mjd,
+        now,
+    ) {
+        Ok(cloud) => (Some(cloud), None),
+        Err(why) => (None, Some(why)),
+    };
+
     Ok(Some(LineageOrbit3D {
-        object_position: geometry::position_at_epoch(&elems, now),
+        summary: crate::orbit3d::summary::build_orbit_summary(&elems, object_position, &planets),
+        object_position,
         object_orbit: geometry::ellipse_points(&elems, LINEAGE_ORBIT_CURVE_SAMPLES),
+        observation_points: observation_points(&elems, &observations).await,
+        uncertainty,
+        uncertainty_unavailable_reason,
         planets,
     }))
 }
+
+/// The lineage's orbit uncertainty cloud, drawn from the N-body fit's
+/// covariance.
+///
+/// The cloud is a bonus on top of the orbit: when it cannot be built the
+/// reason is returned for the UI rather than failing the view.
+///
+/// # Arguments
+///
+/// * `lineage_designation` — seeds the clone sampling, so a lineage's cloud
+///   is stable across page loads.
+/// * `fit` — the latest stored fit.
+/// * `last_observation_mjd` — epoch of the last observation, MJD-TT.
+/// * `now_mjd` — the view's epoch, MJD-TT.
+///
+/// # Returns
+///
+/// The cloud.
+///
+/// # Errors
+///
+/// A sentence saying why there is no cloud (the fit did not converge, is an
+/// IOD-only solution, or has no usable covariance).
+///
+/// Explicitly `#[cfg(feature = "server")]`, like [`keplerian_from_branch`].
+#[cfg(feature = "server")]
+fn lineage_uncertainty(
+    lineage_designation: &str,
+    fit: &crate::orbit3d::uncertainty::FitCovariance,
+    last_observation_mjd: f64,
+    now_mjd: f64,
+) -> Result<crate::orbit3d::types::UncertaintyCloud3D, String> {
+    use crate::orbit3d::uncertainty;
+
+    let selected = uncertainty::select_covariance(fit)?;
+    uncertainty::build_uncertainty_cloud(
+        &selected,
+        uncertainty::seed_from_designation(lineage_designation),
+        last_observation_mjd,
+        now_mjd,
+    )
+}
+
+/// Each observation's heliocentric ecliptic position, for the lineage 3D
+/// view's crosses.
+///
+/// For every observation: the observer's heliocentric position at the
+/// observation epoch (real ephemeris, via
+/// `EphemState::helio_observer_state`, the same call the Kalman replay
+/// makes), plus the measured line of sight — the ra/dec unit vector rotated
+/// from equatorial to ecliptic J2000 — at the distance where it passes
+/// nearest to `elems`'s predicted position at that epoch
+/// ([`geometry::point_on_line_of_sight_nearest`]). Light-time and
+/// aberration are ignored: negligible at plot scale.
+///
+/// An observation whose MPC code is malformed or unknown, or whose observer
+/// state cannot be computed, is skipped with a warning so one bad row does
+/// not drop every cross.
+///
+/// # Arguments
+///
+/// * `elems` — the lineage's fitted orbit, used only to choose each
+///   observation's distance along its line of sight.
+/// * `observations` — the lineage's observations (ra/dec in radians,
+///   MJD-TT).
+///
+/// # Returns
+///
+/// One [`ObservationPoint3D`] per resolved observation, in input order: the
+/// position plus the observation epoch, the phase angle and the
+/// heliocentric/topocentric distances its hover shows.
+///
+/// Explicitly `#[cfg(feature = "server")]`, like [`keplerian_from_branch`].
+#[cfg(feature = "server")]
+async fn observation_points(
+    elems: &geometry::Keplerian,
+    observations: &[crate::lineage_page::observations_table::ObservationRow],
+) -> Vec<ObservationPoint3D> {
+    use nalgebra::Vector3;
+    use outfit::constants::ROT_EQUMJ2000_TO_ECLMJ2000;
+
+    if observations.is_empty() {
+        return Vec::new();
+    }
+
+    let observatories = crate::get_observatories().await;
+    let ephem = crate::get_kalman_context().await.get_ephem();
+
+    observations
+        .iter()
+        .filter_map(|obs| {
+            let code: [u8; 3] = obs.mpc_code_obs.as_bytes().try_into().ok().or_else(|| {
+                tracing::warn!("orbit3d: invalid MPC code {:?}, skipping", obs.mpc_code_obs);
+                None
+            })?;
+            let observer = observatories.get(&code).or_else(|| {
+                tracing::warn!("orbit3d: unknown MPC code {:?}, skipping", obs.mpc_code_obs);
+                None
+            })?;
+            let state = ephem
+                .helio_observer_state(observer, obs.mjd_tt)
+                .map_err(|e| {
+                    tracing::warn!("orbit3d: observer state failed for obs {}: {e}", obs.id)
+                })
+                .ok()?;
+
+            let [ex, ey, ez] = geometry::equatorial_unit_vector(obs.ra, obs.dec);
+            let direction = ROT_EQUMJ2000_TO_ECLMJ2000 * Vector3::new(ex, ey, ez);
+            let observer_pos = state.helio_cart_pos;
+
+            let observer_pos = [observer_pos.x, observer_pos.y, observer_pos.z];
+            let position = geometry::point_on_line_of_sight_nearest(
+                observer_pos,
+                [direction.x, direction.y, direction.z],
+                geometry::position_at_epoch(elems, obs.mjd_tt),
+            );
+
+            let phase_rad = geometry::phase_angle_rad(position, observer_pos);
+            let heliocentric_distance_au = geometry::distance(position, [0.0; 3]);
+            let topocentric_distance_au = geometry::distance(position, observer_pos);
+
+            Some(ObservationPoint3D {
+                position,
+                observer_position: observer_pos,
+                mjd_tt: obs.mjd_tt,
+                magnitude: obs.magnitude,
+                mag_err: obs.mag_err,
+                filter: obs.filter,
+                mpc_code: obs.mpc_code_obs.clone(),
+                elongation_deg: geometry::solar_elongation_rad(position, observer_pos).to_degrees(),
+                absolute_magnitude: geometry::absolute_magnitude_hg(
+                    obs.magnitude,
+                    heliocentric_distance_au,
+                    topocentric_distance_au,
+                    phase_rad,
+                    ABSOLUTE_MAGNITUDE_SLOPE_G,
+                ),
+                phase_angle_deg: phase_rad.to_degrees(),
+                heliocentric_distance_au,
+                topocentric_distance_au,
+            })
+        })
+        .collect()
+}
+
+/// The H,G slope parameter used for each observation's absolute-magnitude
+/// estimate — the customary default for an asteroid of unknown taxonomy.
+const ABSOLUTE_MAGNITUDE_SLOPE_G: f64 = 0.15;
 
 /// Number of points sampled for a single lineage's own orbit — denser than
 /// [`crate::orbit3d::ephem_provider::TRACKED_BODIES`]'s curves since it is

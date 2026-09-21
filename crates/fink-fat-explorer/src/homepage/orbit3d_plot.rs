@@ -48,6 +48,7 @@ fn family_traces(points: &[ObjectPoint3D]) -> Vec<Trace3D> {
             style: TraceStyle::Markers,
             source: TraceSource::TrackedObject,
             points: grouped.remove(&family).unwrap_or_default(),
+            hover_text: Vec::new(),
         })
         .collect()
 }
