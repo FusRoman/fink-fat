@@ -53,6 +53,30 @@ fn family_traces(points: &[ObjectPoint3D]) -> Vec<Trace3D> {
         .collect()
 }
 
+/// The subtitle under the plot's title: how many objects are drawn, and — when
+/// some lineages could not be — how many are missing and why.
+///
+/// # Arguments
+///
+/// * `n_plotted` — objects drawn.
+/// * `n_excluded` — lineages left out because their best solution is not a
+///   closed ellipse.
+///
+/// # Returns
+///
+/// `"16338 objects plotted"`, or, if any were excluded, `"16338 objects
+/// plotted (509 more not shown: no closed elliptical orbit)"` — the (a, e)
+/// plot counts those at `a = e = 0`, which is why its total is higher.
+fn objects_status_text(n_plotted: usize, n_excluded: usize) -> String {
+    if n_excluded == 0 {
+        format!("{n_plotted} objects plotted")
+    } else {
+        format!(
+            "{n_plotted} objects plotted ({n_excluded} more not shown: no closed elliptical orbit)"
+        )
+    }
+}
+
 #[component]
 pub fn Orbit3DPlot() -> Element {
     let mut objects = use_resource(move || async move { get_homepage_orbit3d().await });
@@ -79,7 +103,7 @@ pub fn Orbit3DPlot() -> Element {
             return Vec::new();
         }
         let mut traces = match &*objects.read() {
-            Some(Ok(Some(points))) => family_traces(points),
+            Some(Ok(Some(objects))) => family_traces(&objects.points),
             _ => Vec::new(),
         };
         if let Some(Ok(bodies)) = &*planets {
@@ -89,7 +113,7 @@ pub fn Orbit3DPlot() -> Element {
     });
 
     let status_text = match &*objects.read() {
-        Some(Ok(Some(points))) => format!("{} objects plotted", points.len()),
+        Some(Ok(Some(objects))) => objects_status_text(objects.points.len(), objects.n_excluded),
         Some(Ok(None)) => "Building the population index...".to_string(),
         Some(Err(e)) => format!("Error: {e}"),
         None => String::new(),
@@ -113,5 +137,23 @@ pub fn Orbit3DPlot() -> Element {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_status_text_is_plain_when_every_lineage_is_plotted() {
+        assert_eq!(objects_status_text(16_847, 0), "16847 objects plotted");
+    }
+
+    #[test]
+    fn the_status_text_reports_the_lineages_without_a_closed_orbit() {
+        let text = objects_status_text(16_338, 509);
+        assert!(text.starts_with("16338 objects plotted"), "{text}");
+        assert!(text.contains("509 more not shown"), "{text}");
+        assert!(text.contains("no closed elliptical orbit"), "{text}");
     }
 }

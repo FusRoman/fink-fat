@@ -57,6 +57,20 @@ pub struct ObjectPoint3D {
     pub position: [f64; 3],
 }
 
+/// The homepage 3D scatter's objects, as served by
+/// `orbit3d::server_fns::get_homepage_orbit3d`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HomepageObjects3D {
+    /// One point per lineage whose best solution is a closed ellipse.
+    pub points: Vec<ObjectPoint3D>,
+    /// How many lineages have no point: their best Kalman state is not a
+    /// closed ellipse (parabolic/hyperbolic or unresolved), so there is no
+    /// orbit to place them on. The (a, e) plot still counts them, at
+    /// `a = e = 0` in the "Unknown" family — this is the difference between
+    /// the two plots' totals.
+    pub n_excluded: usize,
+}
+
 /// A single lineage's 3D view: its own orbit plus the planets/perturbers for
 /// context — served by `orbit3d::server_fns::get_lineage_orbit3d`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

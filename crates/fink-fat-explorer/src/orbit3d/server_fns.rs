@@ -11,7 +11,9 @@ use dioxus::prelude::*;
 use hifitime::Epoch;
 
 use crate::orbit3d::geometry;
-use crate::orbit3d::types::{Body3D, LineageOrbit3D, ObjectPoint3D, ObservationPoint3D};
+use crate::orbit3d::types::{
+    Body3D, HomepageObjects3D, LineageOrbit3D, ObjectPoint3D, ObservationPoint3D,
+};
 
 /// The current epoch, as Modified Julian Date in Terrestrial Time — the
 /// convention every stored epoch in this crate uses (see
@@ -60,18 +62,23 @@ pub async fn get_planets_3d() -> Result<Vec<Body3D>, ServerFnError> {
 }
 
 /// One point per lineage — its best branch's current heliocentric position —
-/// for the homepage's 3D scatter. `None` while the homepage snapshot is
-/// still (re)building, mirroring `homepage::dynamic_pop_plot
-/// ::query_orbital_elements`'s own "warming up" contract so both plots poll
-/// the same way.
+/// for the homepage's 3D scatter, plus how many lineages could not be placed.
+/// `None` while the homepage snapshot is still (re)building, mirroring
+/// `homepage::dynamic_pop_plot::query_orbital_elements`'s own "warming up"
+/// contract so both plots poll the same way.
+///
+/// A lineage whose best state is not a closed ellipse has no orbit to
+/// position it on; it is left out and counted in
+/// [`HomepageObjects3D::n_excluded`], so the plot can say why its total is
+/// lower than the (a, e) plot's.
 #[server]
-pub async fn get_homepage_orbit3d() -> Result<Option<Vec<ObjectPoint3D>>, ServerFnError> {
+pub async fn get_homepage_orbit3d() -> Result<Option<HomepageObjects3D>, ServerFnError> {
     let Some(snapshot) = crate::homepage::snapshot::snapshot().await else {
         return Ok(None);
     };
 
     let now = now_mjd_tt();
-    let points = snapshot
+    let points: Vec<ObjectPoint3D> = snapshot
         .lineages
         .iter()
         .filter_map(|entry| {
@@ -86,7 +93,10 @@ pub async fn get_homepage_orbit3d() -> Result<Option<Vec<ObjectPoint3D>>, Server
         })
         .collect();
 
-    Ok(Some(points))
+    Ok(Some(HomepageObjects3D {
+        n_excluded: snapshot.lineages.len() - points.len(),
+        points,
+    }))
 }
 
 /// Converts a branch's raw Kalman attributable state (topocentric ra/dec/
