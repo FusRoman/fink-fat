@@ -13,6 +13,19 @@
 
 use dioxus::prelude::*;
 
+/// A short description of the plot, shown above the glossary.
+///
+/// The "now" it describes is `orbit3d::server_fns`'s `now_mjd_tt()`, taken
+/// when the page's data is loaded; the planets come from
+/// `orbit3d::ephem_provider::get_planets`, which is cached for
+/// `PLANETS_CACHE_TTL` (one hour) — hence "at most an hour".
+pub(super) const PLOT_DESCRIPTION: &str = "Heliocentric view of the selected object in the \
+    ecliptic frame, with the Sun at the centre. The pink ellipse is the object's fitted orbit and \
+    the coloured ellipses are the planets' orbits. The spheres — the planets, the Sun and the \
+    object — are drawn at their current position, i.e. at UTC now (the moment the page's data is \
+    loaded; the planets' positions are refreshed at most once an hour). The crosses are the \
+    object's observations, drawn at the date of each observation, not at now.";
+
 /// The glossary, in reading order: units and frames first, then the orbit's
 /// own quantities, then what the plot draws, then how to read the
 /// uncertainty.
@@ -20,6 +33,13 @@ use dioxus::prelude::*;
 /// Numbers quoted here (AU and LD in km) are kept in step with
 /// `orbit3d::geometry::KM_PER_AU` / `KM_PER_LUNAR_DISTANCE` by a test.
 pub(super) const GLOSSARY: &[(&str, &str)] = &[
+    (
+        "Current position (UTC now)",
+        "Where the planets and the object are at the time the page's data is loaded. The planets' \
+         positions come from the JPL ephemeris; the object's is its fitted orbit advanced to that \
+         time with two-body (Keplerian) motion. Observation crosses are the only elements drawn \
+         at another date.",
+    ),
     (
         "AU — astronomical unit",
         "Mean Earth–Sun distance, 149,597,870.7 km. Every axis of the plot is in AU.",
@@ -173,7 +193,7 @@ pub fn PlotGlossary() -> Element {
                                 border: 1px solid rgba(128, 128, 128, 0.35); \
                                 box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);",
                         div { class: "flex items-baseline justify-between mb-2",
-                            span { class: "font-semibold", "Glossary" }
+                            span { class: "font-semibold", "Help" }
                             span { class: "opacity-60",
                                 if pinned() {
                                     "click outside or press Esc to close"
@@ -182,6 +202,11 @@ pub fn PlotGlossary() -> Element {
                                 }
                             }
                         }
+                        div { class: "mb-3",
+                            div { class: "font-semibold mb-1", "About this plot" }
+                            p { class: "opacity-80", "{PLOT_DESCRIPTION}" }
+                        }
+                        div { class: "font-semibold mb-2", "Glossary" }
                         dl { style: "columns: 2 16rem; column-gap: 1.5rem;",
                             for (term , definition) in GLOSSARY {
                                 div { style: "break-inside: avoid; margin-bottom: 0.75rem;",
@@ -258,6 +283,26 @@ mod tests {
         // About 0.00257 AU is one lunar distance.
         let ld_au = geometry::KM_PER_LUNAR_DISTANCE / geometry::KM_PER_AU;
         assert!(definition_of("LD").contains(&format!("{ld_au:.5}")));
+    }
+
+    /// The description must say what "now" means for the positions — the
+    /// point of having it.
+    #[test]
+    fn the_description_says_the_positions_are_at_utc_now() {
+        assert!(PLOT_DESCRIPTION.contains("UTC now"));
+        assert!(PLOT_DESCRIPTION.contains("planets"));
+        assert!(PLOT_DESCRIPTION.contains("object"));
+        // The observations are the exception.
+        assert!(PLOT_DESCRIPTION.contains("not at now"));
+        // Short: a few sentences, not a manual.
+        assert!(PLOT_DESCRIPTION.len() < 700, "{}", PLOT_DESCRIPTION.len());
+    }
+
+    #[test]
+    fn the_glossary_defines_the_current_position() {
+        let definition = definition_of("Current position");
+        assert!(definition.contains("JPL ephemeris"));
+        assert!(definition.contains("Observation crosses"));
     }
 
     /// The popover must fit in the window: its size limits are relative to
