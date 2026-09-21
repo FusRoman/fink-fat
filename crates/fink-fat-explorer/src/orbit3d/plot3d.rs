@@ -766,8 +766,16 @@ pub fn planet_traces(bodies: &[Body3D]) -> Vec<Trace3D> {
 ///   the lineage page each use their own literal), since plotly's JS
 ///   bindings address the plot by this id.
 /// * `traces` — the orbits/positions to draw, in addition to the Sun.
+/// * `sphere_scale` — multiplies the radius of every drawn sphere (the Sun,
+///   the planets, the focus object); `1.0` by default. The lineage page
+///   shrinks them so a single object's orbit reads without huge balls in
+///   the way, while the homepage keeps the default.
 #[component]
-pub fn Scatter3dPlot(plot_id: &'static str, traces: Vec<Trace3D>) -> Element {
+pub fn Scatter3dPlot(
+    plot_id: &'static str,
+    traces: Vec<Trace3D>,
+    #[props(default = 1.0)] sphere_scale: f64,
+) -> Element {
     let mut is_mounted = use_signal(|| false);
     // Same rationale as `homepage::dynamic_pop_plot::DynamicPopPlot`: the
     // first draw needs `new_plot`, every later one is a cheaper `react`
@@ -784,7 +792,7 @@ pub fn Scatter3dPlot(plot_id: &'static str, traces: Vec<Trace3D>) -> Element {
     // often still empty while the data resource is loading) and then never
     // again, even as new data streamed in. Same pattern as
     // `lineage_page::trajectory_plot::TrajectoryPlot`.
-    use_effect(use_reactive!(|(plot_id, traces)| {
+    use_effect(use_reactive!(|(plot_id, traces, sphere_scale)| {
         #[cfg(target_arch = "wasm32")]
         {
             if !is_mounted() {
@@ -804,7 +812,7 @@ pub fn Scatter3dPlot(plot_id: &'static str, traces: Vec<Trace3D>) -> Element {
                     "Sun",
                     SUN_COLOR,
                     [0.0, 0.0, 0.0],
-                    SUN_SPHERE_RADIUS_AU,
+                    SUN_SPHERE_RADIUS_AU * sphere_scale,
                     Lighting::new().ambient(0.9).diffuse(0.3).specular(0.1),
                     None,
                 ))));
@@ -932,7 +940,7 @@ pub fn Scatter3dPlot(plot_id: &'static str, traces: Vec<Trace3D>) -> Element {
                                 &trace.name,
                                 &trace.color,
                                 center,
-                                radius,
+                                radius * sphere_scale,
                                 Lighting::new().ambient(0.55).diffuse(0.8).specular(0.3),
                                 trace.hover_text.first().map(String::as_str),
                             ))));

@@ -18,6 +18,12 @@ use crate::orbit3d::types::{
     UNCERTAINTY_ORBIT_SAMPLES,
 };
 
+/// Scale applied to every sphere of the lineage view (the Sun, the planets
+/// and the object), relative to the sizes the homepage uses. One object's
+/// orbit is what this view is about, so the balls are kept small enough not
+/// to hide it; the Sun stays larger than the planets, as they scale together.
+const SPHERE_SCALE: f64 = 0.2;
+
 /// Color for the tracked object's own orbit/position traces — distinct from
 /// every planet/perturber color in `orbit3d::plot3d::body_color`.
 const OBJECT_COLOR: &str = "#ff3b6f";
@@ -825,20 +831,14 @@ pub fn LineageOrbit3DTab(lineage_id: String) -> Element {
                                                 }
                                             },
                                             for factor in EXAGGERATION_CHOICES {
-                                                option {
-                                                    value: "{factor}",
-                                                    selected: factor == exaggeration(),
-                                                    "×{factor}"
-                                                }
+                                                option { value: "{factor}", selected: factor == exaggeration(), "×{factor}" }
                                             }
                                         }
                                     }
                                 }
                             }
                             if show_uncertainty() {
-                                p { class: "text-xs text-base-content/60",
-                                    "{uncertainty_caption(cloud, exaggeration())}"
-                                }
+                                p { class: "text-xs text-base-content/60", "{uncertainty_caption(cloud, exaggeration())}" }
                             }
                         },
                         None => rsx! {
@@ -849,7 +849,11 @@ pub fn LineageOrbit3DTab(lineage_id: String) -> Element {
                         },
                     }
                 }
-                Scatter3dPlot { plot_id: "lineage-orbit3d-plot-div", traces: traces() }
+                Scatter3dPlot {
+                    plot_id: "lineage-orbit3d-plot-div",
+                    traces: traces(),
+                    sphere_scale: SPHERE_SCALE,
+                }
             },
             Some(Ok(None)) => rsx! {
                 div { class: "alert alert-info",
