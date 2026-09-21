@@ -5,9 +5,10 @@ use dioxus::prelude::*;
 
 #[cfg(target_arch = "wasm32")]
 use plotly::{
-    common::{Line, Marker, MarkerSymbol, Mode, Title},
+    common::{Marker, Mode, Title},
     layout::{AspectMode, Axis, Layout, LayoutScene, Margin},
-    Plot, Scatter3D,
+    mesh3d::Lighting,
+    Mesh3D, Plot, Scatter3D,
 };
 
 use serde::{Deserialize, Serialize};
@@ -27,8 +28,9 @@ pub enum TraceStyle {
 /// Which kind of body a [`Trace3D`] represents, driving its marker size in
 /// [`Scatter3dPlot`]: fink-fat's own tracked objects vastly outnumber the
 /// dozen planets/perturbers they share the scene with (thousands on the
-/// homepage view), so they need a visibly smaller marker to stay
-/// distinguishable from the planets rather than drowning them out.
+/// homepage view), so they get a tiny marker while planets are drawn as
+/// shaded spheres ([`sphere_mesh`]) that stay distinguishable rather than
+/// drowning in the cloud.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TraceSource {
     /// One of `orbit3d::ephem_provider::TRACKED_BODIES`.
@@ -53,32 +55,26 @@ pub struct Trace3D {
     pub points: Vec<[f64; 3]>,
 }
 
-/// Marker size for a planet/perturber's [`TraceStyle::Markers`] trace —
-/// large and, per [`PLANET_MARKER_BORDER_COLOR`]/[`PLANET_MARKER_SYMBOL`],
-/// outlined and diamond-shaped, so the dozen planets stay identifiable at a
-/// glance against a cloud of thousands of small round tracked-object
-/// markers (see [`TraceSource`]'s doc) — size alone wasn't enough once the
-/// tracked-object count got into the tens of thousands.
+/// Radius, in AU, of the sphere drawn for each planet/perturber's
+/// [`TraceStyle::Markers`] trace (see [`sphere_mesh`]).
+///
+/// A data-space radius rather than a screen-space marker size: plotly's
+/// `scatter3d` has no sphere symbol, so a planet is a small shaded
+/// `mesh3d` sphere instead. The plot uses `AspectMode::Data`, so the sphere
+/// stays round and simply grows/shrinks with the camera zoom. Uniform for
+/// every body — planets are told apart by color, not by (unrealistic at this
+/// scale) relative size.
 #[cfg(target_arch = "wasm32")]
-const PLANET_MARKER_SIZE: usize = 9;
-/// Marker shape for planets/perturbers — a diamond reads as visually
-/// distinct from every tracked-object trace's plain circle even before
-/// color or size are taken into account.
+const PLANET_SPHERE_RADIUS_AU: f64 = 0.15;
+/// Number of latitude bands of a planet sphere — see [`sphere_mesh`].
 #[cfg(target_arch = "wasm32")]
-const PLANET_MARKER_SYMBOL: MarkerSymbol = MarkerSymbol::Diamond;
-/// Border color/width around a planet marker: several planet colors
-/// ([`body_color`]'s grays/tans, chosen for real-world accuracy) are close
-/// in value to the tracked-object palette, so a dark outline is what
-/// actually guarantees contrast regardless of which family colors happen to
-/// surround a given planet.
+const PLANET_SPHERE_LAT_BANDS: usize = 12;
+/// Number of longitude segments of a planet sphere — see [`sphere_mesh`].
 #[cfg(target_arch = "wasm32")]
-const PLANET_MARKER_BORDER_COLOR: &str = "#1a1a1a";
-#[cfg(target_arch = "wasm32")]
-const PLANET_MARKER_BORDER_WIDTH: f64 = 1.5;
+const PLANET_SPHERE_LON_SEGMENTS: usize = 20;
 /// Marker size for a fink-fat tracked object's [`TraceStyle::Markers`]
-/// trace — smaller than [`PLANET_MARKER_SIZE`] so a scene with thousands of
-/// tracked objects still reads the dozen planet markers clearly (see
-/// [`TraceSource`]'s doc).
+/// trace — tiny so a scene with thousands of tracked objects still reads the
+/// dozen planet spheres clearly (see [`TraceSource`]'s doc).
 #[cfg(target_arch = "wasm32")]
 const OBJECT_MARKER_SIZE: usize = 1;
 /// Marker size plotly still draws at each vertex of a [`TraceStyle::Line`]
@@ -133,12 +129,22 @@ fn population_opacity(n: usize) -> f64 {
     OBJECT_OPACITY_MAX + t * (OBJECT_OPACITY_MIN - OBJECT_OPACITY_MAX)
 }
 
-/// Marker size for the fixed Sun marker at the origin — larger than every
-/// other marker so it reads as the frame's center at a glance.
+/// Radius, in AU, of the Sun's sphere — deliberately a bit larger than
+/// [`PLANET_SPHERE_RADIUS_AU`] so the Sun reads as the frame's center (and the
+/// biggest body) when zoomed into the inner system.
 #[cfg(target_arch = "wasm32")]
-const SUN_MARKER_SIZE: usize = 10;
+const SUN_SPHERE_RADIUS_AU: f64 = 0.25;
 #[cfg(target_arch = "wasm32")]
 const SUN_COLOR: &str = "#ffcc33";
+/// Where the scene's single light sits, in the plot's data coordinates.
+///
+/// Plotly's default is `(1e5, 1e5, 0)` — a light in the ecliptic plane — which
+/// leaves every sphere's top (`+z`) cap unlit, seen from the usual
+/// above-the-ecliptic camera as a dark spot at each planet's north pole.
+/// Placing it well above the plane, on the same side as the default camera,
+/// lights the visible hemisphere evenly. Far enough away to act as a
+/// directional light at any zoom.
+const LIGHT_POSITION: [f64; 3] = [1e5, 1e5, 1e5];
 
 /// A fixed color for one of `orbit3d::ephem_provider::TRACKED_BODIES`, shared
 /// by every page that plots planets/perturbers so the same body always reads
@@ -161,6 +167,226 @@ pub fn body_color(name: &str) -> &'static str {
         "Vesta" => "#c9c2b0",
         _ => "#888888",
     }
+}
+
+/// A triangulated sphere in the vertex/index layout `mesh3d` expects.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+#[derive(Clone, Debug, PartialEq)]
+struct SphereMesh {
+    x: Vec<f64>,
+    y: Vec<f64>,
+    z: Vec<f64>,
+    /// First vertex index of each triangle.
+    i: Vec<usize>,
+    /// Second vertex index of each triangle.
+    j: Vec<usize>,
+    /// Third vertex index of each triangle.
+    k: Vec<usize>,
+}
+
+/// A `mesh3d` trace with an explicit scene light position.
+///
+/// `plotly::traces::mesh3d::LightPosition` serialises each coordinate as a
+/// one-element array, which plotly.js's numeric `lightposition.{x,y,z}`
+/// attributes reject (silently falling back to the default light), so the
+/// position is serialised here as plain numbers instead.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+#[derive(Clone, serde::Serialize)]
+struct LitMesh {
+    #[serde(flatten)]
+    mesh: plotly::Mesh3D<f64, f64, f64>,
+    #[serde(rename = "lightposition")]
+    light_position: LightPositionXyz,
+}
+
+/// A light position as plotly.js expects it: three plain numbers.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+#[derive(Clone, Copy, serde::Serialize)]
+struct LightPositionXyz {
+    x: f64,
+    y: f64,
+    z: f64,
+}
+
+impl plotly::Trace for LitMesh {
+    fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+}
+
+/// Wraps `mesh` with [`LIGHT_POSITION`] as its light.
+///
+/// # Arguments
+///
+/// * `mesh` — the mesh trace to light.
+///
+/// # Returns
+///
+/// A [`LitMesh`] ready to be added to a plot.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn lit(mesh: Box<plotly::Mesh3D<f64, f64, f64>>) -> LitMesh {
+    LitMesh {
+        mesh: *mesh,
+        light_position: LightPositionXyz {
+            x: LIGHT_POSITION[0],
+            y: LIGHT_POSITION[1],
+            z: LIGHT_POSITION[2],
+        },
+    }
+}
+
+/// Builds a UV sphere (latitude/longitude grid) as a triangle mesh.
+///
+/// Pure geometry, no plotting dependency, so it is unit-testable on the
+/// native target even though only the wasm build draws with it. Each pole is a
+/// single shared vertex (a triangle fan) rather than one duplicated vertex per
+/// longitude segment: plotly derives vertex normals for lighting from the
+/// adjacent faces, and the zero-area triangles a duplicated pole produces give
+/// it degenerate normals — a dark spot at the pole.
+///
+/// # Arguments
+///
+/// * `center` — sphere center, in the same units as `radius`.
+/// * `radius` — sphere radius.
+/// * `lat_bands` — number of latitude bands (pole to pole); clamped to at
+///   least 2.
+/// * `lon_segments` — number of longitude segments around the axis; clamped
+///   to at least 3.
+///
+/// # Returns
+///
+/// A [`SphereMesh`] with `2 + (lat_bands - 1) * lon_segments` vertices — every
+/// one at exactly `radius` from `center`, the north pole (`+z`) first and the
+/// south pole last — and `2 * (lat_bands - 1) * lon_segments` non-degenerate
+/// triangles wound counter-clockwise seen from outside, all indices in
+/// bounds.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn sphere_mesh(center: [f64; 3], radius: f64, lat_bands: usize, lon_segments: usize) -> SphereMesh {
+    let lat_bands = lat_bands.max(2);
+    let lon_segments = lon_segments.max(3);
+    let n_rings = lat_bands - 1;
+
+    let north = [center[0], center[1], center[2] + radius];
+    let south = [center[0], center[1], center[2] - radius];
+    let rings = (1..=n_rings).flat_map(|ring| {
+        let polar = std::f64::consts::PI * ring as f64 / lat_bands as f64;
+        (0..lon_segments).map(move |segment| {
+            let azimuth = std::f64::consts::TAU * segment as f64 / lon_segments as f64;
+            [
+                center[0] + radius * polar.sin() * azimuth.cos(),
+                center[1] + radius * polar.sin() * azimuth.sin(),
+                center[2] + radius * polar.cos(),
+            ]
+        })
+    });
+    let vertices: Vec<[f64; 3]> = std::iter::once(north)
+        .chain(rings)
+        .chain(std::iter::once(south))
+        .collect();
+
+    let south_index = vertices.len() - 1;
+    // Vertex `segment` (wrapping) of ring `ring`, `1 <= ring <= n_rings`.
+    let ring_vertex =
+        |ring: usize, segment: usize| 1 + (ring - 1) * lon_segments + segment % lon_segments;
+
+    let north_fan = (0..lon_segments).map(|s| [0, ring_vertex(1, s), ring_vertex(1, s + 1)]);
+    let south_fan = (0..lon_segments).map(|s| {
+        [
+            south_index,
+            ring_vertex(n_rings, s + 1),
+            ring_vertex(n_rings, s),
+        ]
+    });
+    let bands = (1..n_rings).flat_map(|ring| {
+        (0..lon_segments).flat_map(move |s| {
+            [
+                [
+                    ring_vertex(ring, s),
+                    ring_vertex(ring + 1, s),
+                    ring_vertex(ring + 1, s + 1),
+                ],
+                [
+                    ring_vertex(ring, s),
+                    ring_vertex(ring + 1, s + 1),
+                    ring_vertex(ring, s + 1),
+                ],
+            ]
+        })
+    });
+    let triangles: Vec<[usize; 3]> = north_fan.chain(bands).chain(south_fan).collect();
+
+    SphereMesh {
+        x: vertices.iter().map(|v| v[0]).collect(),
+        y: vertices.iter().map(|v| v[1]).collect(),
+        z: vertices.iter().map(|v| v[2]).collect(),
+        i: triangles.iter().map(|t| t[0]).collect(),
+        j: triangles.iter().map(|t| t[1]).collect(),
+        k: triangles.iter().map(|t| t[2]).collect(),
+    }
+}
+
+/// Builds a shaded sphere as a `mesh3d` trace.
+///
+/// # Arguments
+///
+/// * `name` — legend/hover name.
+/// * `color` — CSS color of the sphere.
+/// * `center` — sphere center, AU.
+/// * `radius` — sphere radius, AU.
+/// * `lighting` — material properties (ambient/diffuse/specular).
+///
+/// # Returns
+///
+/// The unlit-position mesh trace; pass it through [`lit`] to give it the
+/// scene light.
+#[cfg(target_arch = "wasm32")]
+fn sphere_trace(
+    name: &str,
+    color: &str,
+    center: [f64; 3],
+    radius: f64,
+    lighting: Lighting,
+) -> Box<Mesh3D<f64, f64, f64>> {
+    let sphere = sphere_mesh(
+        center,
+        radius,
+        PLANET_SPHERE_LAT_BANDS,
+        PLANET_SPHERE_LON_SEGMENTS,
+    );
+    Mesh3D::new(
+        sphere.x,
+        sphere.y,
+        sphere.z,
+        Some(sphere.i),
+        Some(sphere.j),
+        Some(sphere.k),
+    )
+    .name(name)
+    .color(color.to_string())
+    .flat_shading(false)
+    .show_legend(true)
+    .lighting(lighting)
+}
+
+/// Closes an open polyline by re-appending its first point, so the drawn
+/// curve is a full loop.
+///
+/// `orbit3d::geometry::ellipse_points` deliberately stops one step short of
+/// a full revolution and leaves closing to the caller; without this a
+/// large orbit shows a visible gap — about 1 AU per step for Neptune at 180
+/// samples — between its last and first sample.
+///
+/// # Arguments
+///
+/// * `points` — the polyline's vertices.
+///
+/// # Returns
+///
+/// `points` followed by a copy of its first point, or an empty vector for an
+/// empty input.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn closed_loop(points: &[[f64; 3]]) -> Vec<[f64; 3]> {
+    points.iter().chain(points.first()).copied().collect()
 }
 
 /// Builds two [`Trace3D`]s per body — its orbital ellipse and its current
@@ -244,39 +470,50 @@ pub fn Scatter3dPlot(plot_id: &'static str, traces: Vec<Trace3D>) -> Element {
 
                 let mut plot = Plot::new();
 
-                let sun = Scatter3D::new(vec![0.0], vec![0.0], vec![0.0])
-                    .name("Sun")
-                    .mode(Mode::Markers)
-                    .marker(Marker::new().color(SUN_COLOR).size(SUN_MARKER_SIZE));
-                plot.add_trace(sun);
+                // Self-luminous: almost all ambient, so it stays a bright
+                // yellow ball rather than being shaded like a planet.
+                plot.add_trace(Box::new(lit(sphere_trace(
+                    "Sun",
+                    SUN_COLOR,
+                    [0.0, 0.0, 0.0],
+                    SUN_SPHERE_RADIUS_AU,
+                    Lighting::new().ambient(0.9).diffuse(0.3).specular(0.1),
+                ))));
 
                 for trace in traces.iter() {
-                    let xs: Vec<f64> = trace.points.iter().map(|p| p[0]).collect();
-                    let ys: Vec<f64> = trace.points.iter().map(|p| p[1]).collect();
-                    let zs: Vec<f64> = trace.points.iter().map(|p| p[2]).collect();
+                    let points = match trace.style {
+                        TraceStyle::Line => closed_loop(&trace.points),
+                        TraceStyle::Markers => trace.points.clone(),
+                    };
+                    let xs: Vec<f64> = points.iter().map(|p| p[0]).collect();
+                    let ys: Vec<f64> = points.iter().map(|p| p[1]).collect();
+                    let zs: Vec<f64> = points.iter().map(|p| p[2]).collect();
+
+                    // Planets are shaded `mesh3d` spheres: plotly's `scatter3d`
+                    // has no sphere symbol, and a lit sphere keeps the dozen
+                    // planets distinct from the cloud of tracked-object dots.
+                    if let (TraceStyle::Markers, TraceSource::Planet) = (trace.style, trace.source)
+                    {
+                        if let Some(&center) = trace.points.first() {
+                            plot.add_trace(Box::new(lit(sphere_trace(
+                                &trace.name,
+                                &trace.color,
+                                center,
+                                PLANET_SPHERE_RADIUS_AU,
+                                Lighting::new().ambient(0.55).diffuse(0.8).specular(0.3),
+                            ))));
+                        }
+                        continue;
+                    }
 
                     let (mode, marker) = match trace.style {
-                        TraceStyle::Markers => {
-                            let base = Marker::new().color(trace.color.clone());
-                            let marker = match trace.source {
-                                // Diamond + dark outline: color alone isn't
-                                // reliable contrast against thousands of
-                                // tracked-object hues, see the constants'
-                                // doc comments.
-                                TraceSource::Planet => base
-                                    .size(PLANET_MARKER_SIZE)
-                                    .symbol(PLANET_MARKER_SYMBOL)
-                                    .line(
-                                        Line::new()
-                                            .color(PLANET_MARKER_BORDER_COLOR)
-                                            .width(PLANET_MARKER_BORDER_WIDTH),
-                                    ),
-                                TraceSource::TrackedObject => base
-                                    .size(OBJECT_MARKER_SIZE)
-                                    .opacity(population_opacity(trace.points.len())),
-                            };
-                            (Mode::Markers, marker)
-                        }
+                        TraceStyle::Markers => (
+                            Mode::Markers,
+                            Marker::new()
+                                .color(trace.color.clone())
+                                .size(OBJECT_MARKER_SIZE)
+                                .opacity(population_opacity(trace.points.len())),
+                        ),
                         TraceStyle::Line => (
                             Mode::Lines,
                             Marker::new()
@@ -335,6 +572,132 @@ pub fn Scatter3dPlot(plot_id: &'static str, traces: Vec<Trace3D>) -> Element {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sphere_mesh_has_expected_vertex_and_triangle_counts() {
+        let mesh = sphere_mesh([0.0; 3], 1.0, 8, 12);
+        assert_eq!(mesh.x.len(), 2 + 7 * 12);
+        assert_eq!(mesh.y.len(), mesh.x.len());
+        assert_eq!(mesh.z.len(), mesh.x.len());
+        assert_eq!(mesh.i.len(), 2 * 7 * 12);
+        assert_eq!(mesh.j.len(), mesh.i.len());
+        assert_eq!(mesh.k.len(), mesh.i.len());
+    }
+
+    #[test]
+    fn sphere_mesh_vertices_lie_on_the_sphere() {
+        let center = [1.5, -2.0, 0.25];
+        let radius = 0.4;
+        let mesh = sphere_mesh(center, radius, 10, 16);
+        for ((x, y), z) in mesh.x.iter().zip(&mesh.y).zip(&mesh.z) {
+            let d = ((x - center[0]).powi(2) + (y - center[1]).powi(2) + (z - center[2]).powi(2))
+                .sqrt();
+            assert!((d - radius).abs() < 1e-12, "vertex at distance {d}");
+        }
+    }
+
+    #[test]
+    fn sphere_mesh_triangle_indices_are_in_bounds() {
+        let mesh = sphere_mesh([0.0; 3], 1.0, 6, 9);
+        let n = mesh.x.len();
+        for idx in mesh.i.iter().chain(&mesh.j).chain(&mesh.k) {
+            assert!(*idx < n, "index {idx} out of bounds for {n} vertices");
+        }
+    }
+
+    #[test]
+    fn sphere_mesh_clamps_degenerate_resolution() {
+        let mesh = sphere_mesh([0.0; 3], 1.0, 0, 0);
+        assert_eq!(mesh.x.len(), 2 + 3);
+        assert_eq!(mesh.i.len(), 2 * 3);
+    }
+
+    /// Zero-area triangles are what gave plotly degenerate pole normals.
+    #[test]
+    fn sphere_mesh_has_no_degenerate_triangles() {
+        let mesh = sphere_mesh([0.0; 3], 1.0, 12, 20);
+        for ((&a, &b), &c) in mesh.i.iter().zip(&mesh.j).zip(&mesh.k) {
+            assert!(
+                a != b && b != c && a != c,
+                "degenerate triangle ({a}, {b}, {c})"
+            );
+            let ab = [
+                mesh.x[b] - mesh.x[a],
+                mesh.y[b] - mesh.y[a],
+                mesh.z[b] - mesh.z[a],
+            ];
+            let ac = [
+                mesh.x[c] - mesh.x[a],
+                mesh.y[c] - mesh.y[a],
+                mesh.z[c] - mesh.z[a],
+            ];
+            let cross = [
+                ab[1] * ac[2] - ab[2] * ac[1],
+                ab[2] * ac[0] - ab[0] * ac[2],
+                ab[0] * ac[1] - ab[1] * ac[0],
+            ];
+            let area2 = (cross[0].powi(2) + cross[1].powi(2) + cross[2].powi(2)).sqrt();
+            assert!(area2 > 1e-9, "zero-area triangle ({a}, {b}, {c})");
+        }
+    }
+
+    /// Outward winding: every triangle's normal points away from the center.
+    #[test]
+    fn sphere_mesh_triangles_are_wound_outward() {
+        let mesh = sphere_mesh([0.0; 3], 1.0, 12, 20);
+        for ((&a, &b), &c) in mesh.i.iter().zip(&mesh.j).zip(&mesh.k) {
+            let p = |i: usize| [mesh.x[i], mesh.y[i], mesh.z[i]];
+            let (pa, pb, pc) = (p(a), p(b), p(c));
+            let ab = [pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]];
+            let ac = [pc[0] - pa[0], pc[1] - pa[1], pc[2] - pa[2]];
+            let normal = [
+                ab[1] * ac[2] - ab[2] * ac[1],
+                ab[2] * ac[0] - ab[0] * ac[2],
+                ab[0] * ac[1] - ab[1] * ac[0],
+            ];
+            let centroid = [
+                (pa[0] + pb[0] + pc[0]) / 3.0,
+                (pa[1] + pb[1] + pc[1]) / 3.0,
+                (pa[2] + pb[2] + pc[2]) / 3.0,
+            ];
+            let dot = normal[0] * centroid[0] + normal[1] * centroid[1] + normal[2] * centroid[2];
+            assert!(dot > 0.0, "inward-facing triangle ({a}, {b}, {c})");
+        }
+    }
+
+    #[test]
+    fn lit_mesh_serialises_light_position_as_plain_numbers() {
+        let mesh = plotly::Mesh3D::new(
+            vec![0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 1.0],
+            vec![0.0, 0.0, 0.0],
+            Some(vec![0]),
+            Some(vec![1]),
+            Some(vec![2]),
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(&plotly::Trace::to_json(&lit(mesh))).unwrap();
+
+        assert_eq!(json["type"], "mesh3d");
+        assert_eq!(json["lightposition"]["x"], LIGHT_POSITION[0]);
+        assert_eq!(json["lightposition"]["y"], LIGHT_POSITION[1]);
+        assert_eq!(json["lightposition"]["z"], LIGHT_POSITION[2]);
+        assert_eq!(json["x"].as_array().map(Vec::len), Some(3));
+    }
+
+    #[test]
+    fn closed_loop_appends_the_first_point() {
+        let pts = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]];
+        let closed = closed_loop(&pts);
+        assert_eq!(closed.len(), 4);
+        assert_eq!(closed.first(), closed.last());
+        assert_eq!(&closed[..3], &pts);
+    }
+
+    #[test]
+    fn closed_loop_of_nothing_is_empty() {
+        assert!(closed_loop(&[]).is_empty());
+    }
 
     #[test]
     fn population_opacity_is_max_at_or_below_the_low_population_threshold() {

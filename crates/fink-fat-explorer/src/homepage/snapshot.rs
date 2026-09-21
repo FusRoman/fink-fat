@@ -391,7 +391,12 @@ pub async fn snapshot() -> Option<Arc<Snapshot>> {
         Some(snap) if snap.built_at.elapsed() >= SNAPSHOT_TTL => spawn_rebuild(),
         Some(_) => {}
         // First build: kick it off, and let the caller show a loading state.
-        None => spawn_rebuild(),
+        // The 3D view's ephemeris load is started alongside, so it is warm by
+        // the time the user opens that view.
+        None => {
+            spawn_rebuild();
+            crate::orbit3d::server_fns::warm_up_planets();
+        }
     }
 
     current

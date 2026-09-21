@@ -29,6 +29,26 @@ fn now_mjd_tt() -> f64 {
         .to_mjd_tt_days()
 }
 
+/// Starts loading the JPL ephemeris and filling the planets cache in the
+/// background, without waiting for it.
+///
+/// The first [`get_planets_3d`]/[`get_lineage_orbit3d`] call otherwise pays
+/// the whole lazy `crate::get_kalman_context` load (JPL/SPK kernels, UT1) at
+/// the moment the user first opens a 3D view, so the plot first draws without
+/// its planets and then redraws. Called from the first homepage request
+/// instead, so that cost is paid while the user is still on another view.
+/// Both `get_kalman_context`'s and `get_planets`'s caches deduplicate, so a
+/// request racing this task simply waits on the same initialisation.
+///
+/// Explicitly `#[cfg(feature = "server")]`, like [`keplerian_from_branch`]:
+/// it is a plain free function outside any `#[server]` macro.
+#[cfg(feature = "server")]
+pub(crate) fn warm_up_planets() {
+    tokio::spawn(async {
+        crate::orbit3d::ephem_provider::get_planets(now_mjd_tt()).await;
+    });
+}
+
 /// The planets and tracked perturbers, positioned at the current epoch — see
 /// `crate::orbit3d::ephem_provider`.
 #[server]

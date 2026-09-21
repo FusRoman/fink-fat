@@ -69,12 +69,19 @@ pub fn Orbit3DPlot() -> Element {
         }
     });
 
+    // Held back until the planets request has settled (success or failure),
+    // so the plot is drawn once with everything in it rather than first with
+    // the objects alone and then redrawn when the planets arrive.
     let traces = use_memo(move || {
+        let planets = planets.read();
+        if planets.is_none() {
+            return Vec::new();
+        }
         let mut traces = match &*objects.read() {
             Some(Ok(Some(points))) => family_traces(points),
             _ => Vec::new(),
         };
-        if let Some(Ok(bodies)) = &*planets.read() {
+        if let Some(Ok(bodies)) = &*planets {
             traces.extend(planet_traces(bodies));
         }
         traces
