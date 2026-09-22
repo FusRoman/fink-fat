@@ -16,3 +16,13 @@ pub fn iso_utc(mjd_tt: f64) -> String {
 pub fn format_epoch(mjd_tt: f64) -> String {
     format!("{} (MJD-TT {mjd_tt:.5})", iso_utc(mjd_tt))
 }
+
+/// Today's UTC calendar date as `YYYY-MM-DD`, for prefilling
+/// submission-time timestamps (e.g. the ADES export's default acknowledgment
+/// message). `None` only if the system/browser clock is unavailable, which
+/// doesn't happen in this app's actual environments (native server, browser
+/// wasm — `hifitime::Epoch::now` uses JS interop under `wasm32-unknown-unknown`).
+pub fn today_utc_date() -> Option<String> {
+    let (year, month, day, ..) = Epoch::now().ok()?.to_gregorian_utc();
+    Some(format!("{year:04}-{month:02}-{day:02}"))
+}

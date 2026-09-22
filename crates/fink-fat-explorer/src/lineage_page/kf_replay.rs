@@ -148,6 +148,7 @@ pub async fn replay_kalman_branch(
         mag_err: f64,
         filter: i16,
         mpc_code_obs: String,
+        night_id: i64,
     }
 
     // Queried directly here (duplicating the small query in
@@ -174,7 +175,7 @@ pub async fn replay_kalman_branch(
             LIMIT 1
         )
         SELECT o.id, o.object_id, bo.position, o.mjd_tt, o.ra, o.ra_err, o.dec, o.dec_err,
-               o.magnitude, o.mag_err, o.filter, o.mpc_code_obs
+               o.magnitude, o.mag_err, o.filter, o.mpc_code_obs, o.night_id
         FROM best_branch bb
         JOIN branch_observations bo ON bo.branch_id = bb.branch_id
         JOIN observations o ON o.id = bo.obs_id
@@ -200,6 +201,7 @@ pub async fn replay_kalman_branch(
             mag_err: r.mag_err,
             filter: r.filter,
             mpc_code_obs: r.mpc_code_obs,
+            night_id: r.night_id,
         })
         .collect();
     observations.sort_by(|a, b| a.mjd_tt.total_cmp(&b.mjd_tt));

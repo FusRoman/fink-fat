@@ -11,6 +11,7 @@ hifitime = { version = "4.3", default-features = false, features = ["std"] }
 plotly = "0.14.1"
 serde.workspace = true
 serde_json = "1.0"
+thiserror.workspace = true
 
 # Server-only dependencies — not compiled for wasm32.
 # fink-fat-engine pulls tokio (rt-multi-thread, fs) and getrandom without
@@ -24,6 +25,7 @@ nalgebra = { workspace = true, optional = true }
 outfit = { workspace = true, optional = true }
 photom = { workspace = true, optional = true, features = ["polars"] }
 polars = { workspace = true, optional = true }
+quick-xml = { version = "0.37", features = ["serialize"], optional = true }
 rand = { version = "0.9", default-features = false, features = [
     "small_rng",
 ], optional = true }
@@ -68,8 +70,12 @@ server = [
     "dep:outfit",
     "dep:photom",
     "dep:polars",
+    "dep:quick-xml",
     "dep:rand",
     "dep:rayon",
     "dep:reqwest",
     "dep:tracing"
 ]
+
+[dev-dependencies]
+approx = "0.5.1"

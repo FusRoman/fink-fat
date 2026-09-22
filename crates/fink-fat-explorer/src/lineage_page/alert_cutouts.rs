@@ -390,7 +390,7 @@ pub fn AlertCarousel(observations: Vec<ObservationRow>) -> Element {
                                             Some(Err(e)) => Some(Err(e.clone())),
                                             None => None,
                                         },
-                                        band: obs.filter,
+                                        band: super::light_curve_plot::band_name(obs.filter),
                                         epoch: epoch.clone(),
                                         magnitude: obs.magnitude,
                                         mag_err: obs.mag_err,
@@ -490,7 +490,7 @@ pub fn AlertCarousel(observations: Vec<ObservationRow>) -> Element {
 fn CutoutCard(
     kind_label: &'static str,
     cutout: Option<Result<String, String>>,
-    band: i16,
+    band: String,
     epoch: String,
     magnitude: f64,
     mag_err: f64,

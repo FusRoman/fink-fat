@@ -363,6 +363,14 @@ fn landmark_traces(summary: &OrbitSummary3D) -> Vec<Trace3D> {
 ///
 /// The scaled points, in order.
 fn exaggerate_about(points: &[[f64; 3]], center: [f64; 3], factor: f64) -> Vec<[f64; 3]> {
+    // A factor of 1 must leave positions bit-for-bit unchanged: routing it
+    // through `center + 1.0 * (p - center)` anyway would round-trip every
+    // coordinate through a subtraction and addition, introducing spurious
+    // floating-point noise into a plot that's supposed to show the
+    // un-exaggerated orbit exactly.
+    if factor == 1.0 {
+        return points.to_vec();
+    }
     points
         .iter()
         .map(|p| [0, 1, 2].map(|i| center[i] + factor * (p[i] - center[i])))
@@ -1144,9 +1152,16 @@ mod tests {
             "true scale needs no factor: {names:?}"
         );
 
+        // Both the uncertainty clone orbits and the ecliptic-plane rings
+        // (enabled here via `show_ecliptic: true`) use
+        // `TraceStyle::ClosedPolylines`, so style alone no longer picks out
+        // the clone orbits — match on `TraceSource::Uncertainty` too.
         let orbits = traces
             .iter()
-            .find(|t| matches!(t.style, TraceStyle::ClosedPolylines(_)))
+            .find(|t| {
+                matches!(t.style, TraceStyle::ClosedPolylines(_))
+                    && t.source == TraceSource::Uncertainty
+            })
             .unwrap();
         assert_eq!(orbits.points.len(), 20 * UNCERTAINTY_ORBIT_SAMPLES);
         assert_eq!(

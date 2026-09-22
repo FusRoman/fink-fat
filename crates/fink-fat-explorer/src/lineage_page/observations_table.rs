@@ -10,7 +10,7 @@ impl ObservationRow {
 }
 
 /// One real observation belonging to a lineage's best branch, in track order.
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ObservationRow {
     pub id: i64,
     pub object_id: String,
@@ -24,6 +24,11 @@ pub struct ObservationRow {
     pub mag_err: f64,
     pub filter: i16,
     pub mpc_code_obs: String,
+    /// Observatory-longitude-aware observation night bucket, pre-computed at
+    /// ingestion (`observations.night_id`) — used by the ADES export to
+    /// detect nights with a single observation ("singleton" nights, which
+    /// the MPC rejects an entire batch for containing).
+    pub night_id: i64,
 }
 
 #[cfg_attr(feature = "server", derive(sqlx::FromRow))]
@@ -40,6 +45,7 @@ struct ObservationRowSql {
     mag_err: f64,
     filter: i16,
     mpc_code_obs: String,
+    night_id: i64,
 }
 
 impl From<ObservationRowSql> for ObservationRow {
@@ -57,8 +63,35 @@ impl From<ObservationRowSql> for ObservationRow {
             mag_err: r.mag_err,
             filter: r.filter,
             mpc_code_obs: r.mpc_code_obs,
+            night_id: r.night_id,
         }
     }
+}
+
+/// Fetch a branch's observations in track order — the query shared by
+/// [`get_lineage_observations`] and the ADES export server fn
+/// (`crate::ades::server_fns::export_and_validate_ades`), so both read from
+/// the exact same rows rather than duplicating the SQL.
+#[cfg(feature = "server")]
+pub(crate) async fn fetch_branch_observations(
+    branch_id: i64,
+) -> Result<Vec<ObservationRow>, sqlx::Error> {
+    use crate::get_pool;
+
+    let pool = get_pool().await;
+    let rows: Vec<ObservationRowSql> = sqlx::query_as(
+        "SELECT o.id, o.object_id, bo.position, o.mjd_tt, o.ra, o.ra_err, o.dec, o.dec_err,
+                o.magnitude, o.mag_err, o.filter, o.mpc_code_obs, o.night_id
+         FROM branch_observations bo
+         JOIN observations o ON o.id = bo.obs_id
+         WHERE bo.branch_id = $1
+         ORDER BY bo.position",
+    )
+    .bind(branch_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(ObservationRow::from).collect())
 }
 
 /// A lineage's best branch (highest `cumulative_llr`) and its observations —
@@ -81,7 +114,6 @@ pub struct LineageObservations {
 pub async fn get_lineage_observations(
     lineage_designation: String,
 ) -> Result<Option<LineageObservations>, ServerFnError> {
-    use crate::get_pool;
     use crate::orbit_fit::run::resolve_best_branch_id;
 
     let Some(branch_id) = resolve_best_branch_id(&lineage_designation)
@@ -91,23 +123,13 @@ pub async fn get_lineage_observations(
         return Ok(None);
     };
 
-    let pool = get_pool().await;
-    let rows: Vec<ObservationRowSql> = sqlx::query_as(
-        "SELECT o.id, o.object_id, bo.position, o.mjd_tt, o.ra, o.ra_err, o.dec, o.dec_err,
-                o.magnitude, o.mag_err, o.filter, o.mpc_code_obs
-         FROM branch_observations bo
-         JOIN observations o ON o.id = bo.obs_id
-         WHERE bo.branch_id = $1
-         ORDER BY bo.position",
-    )
-    .bind(branch_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let observations = fetch_branch_observations(branch_id)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
 
     Ok(Some(LineageObservations {
         branch_id,
-        observations: rows.into_iter().map(ObservationRow::from).collect(),
+        observations,
     }))
 }
 

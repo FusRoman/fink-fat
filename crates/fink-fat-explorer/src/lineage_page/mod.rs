@@ -1,3 +1,4 @@
+mod ades_export_modal;
 mod alert_cutouts;
 mod hypotheses_plot;
 mod identity_card;
@@ -15,6 +16,7 @@ mod x_axis;
 
 use dioxus::prelude::*;
 
+use ades_export_modal::AdesExportModal;
 use alert_cutouts::AlertCarousel;
 use identity_card::{get_lineage_summary, IdentityCard};
 use kf_replay::{replay_kalman_branch, HypothesisSnapshot, KfStep};
@@ -89,6 +91,10 @@ pub fn LineagePage(lineage_id: String) -> Element {
         Some(Ok(Some(data))) => data.observations.clone(),
         _ => Vec::new(),
     };
+    let mpc_codes: Vec<String> = observations
+        .iter()
+        .map(|obs| obs.mpc_code_obs.clone())
+        .collect();
     let replay: Vec<KfStep> = match &*replay_resource.read() {
         Some(Ok(result)) => result.steps.clone(),
         _ => Vec::new(),
@@ -106,6 +112,7 @@ pub fn LineagePage(lineage_id: String) -> Element {
     let mut skybot_view = use_signal(|| None::<crate::skybot_search::SkybotJobView>);
     let mut skybot_radius = use_signal(|| 10.0_f64);
     let mut skybot_panel_open = use_signal(|| false);
+    let mut ades_modal_open = use_signal(|| false);
 
     // Poll a running Skybot search job until it's no longer `Running` — same
     // idiom as `orbit_fit_page`'s fit-status poll, just on a shorter
@@ -202,6 +209,12 @@ pub fn LineagePage(lineage_id: String) -> Element {
                                         }
                                     }
                                 }
+                                button {
+                                    class: "btn btn-sm btn-outline",
+                                    r#type: "button",
+                                    onclick: move |_| ades_modal_open.set(true),
+                                    "Export ADES"
+                                }
                             }
                             match lineage_view() {
                                 LineageView::Trajectory => rsx! {
@@ -275,6 +288,13 @@ pub fn LineagePage(lineage_id: String) -> Element {
                 hits: skybot_hits,
                 open: skybot_panel_open(),
                 on_close: move |_| skybot_panel_open.set(false),
+            }
+
+            AdesExportModal {
+                lineage_designation: lineage_id.clone(),
+                mpc_codes: mpc_codes.clone(),
+                open: ades_modal_open(),
+                on_close: move |_| ades_modal_open.set(false),
             }
         }
     }

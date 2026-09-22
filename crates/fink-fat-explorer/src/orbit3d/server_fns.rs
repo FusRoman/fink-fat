@@ -518,9 +518,16 @@ mod tests {
     /// slowly changing range, resolves to a bound (`e < 1`) outer main-belt
     /// -like orbit: `keplerian_from_branch` must return `Some` with sane
     /// values, not silently drop the branch.
+    ///
+    /// `rho = 0.5` AU (heliocentric distance ≈ 1.5 AU) is load-bearing, not
+    /// arbitrary: with the observer's Earth-like ~0.0172 AU/day added
+    /// straight onto the line-of-sight velocity, anything past
+    /// `rho` ≈ 1.0 AU pushes the total speed above the local escape
+    /// velocity and the orbit becomes hyperbolic (`keplerian_from_branch`
+    /// then correctly returns `None` — that isn't a bug to work around).
     #[test]
     fn keplerian_from_branch_resolves_a_bound_orbit() {
-        let branch = branch_with_attributable_state(0.0, 0.0, 0.0, 0.0, 1.5, 0.001);
+        let branch = branch_with_attributable_state(0.0, 0.0, 0.0, 0.0, 0.5, 0.001);
 
         let elems = keplerian_from_branch(&branch).expect("expected a closed-ellipse orbit");
 

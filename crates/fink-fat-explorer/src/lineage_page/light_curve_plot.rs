@@ -12,18 +12,13 @@ use super::x_axis::XAxisUnit;
 #[cfg(target_arch = "wasm32")]
 use super::x_axis::{x_values_for_observations, XAxisValues};
 
-/// Inverse of prep_alert.py's `mapping_band = {"u": 0, "g": 1, "r": 2, "i":
-/// 3, "z": 4, "y": 5}` — LSST-only, no other survey stores photometry here.
+/// Display-oriented band name, falling back to `"Filter {n}"` for an
+/// unrecognized index rather than erroring — see
+/// [`crate::lsst_band::band_index_to_letter`] for the shared mapping.
 pub(super) fn band_name(filter: i16) -> String {
-    match filter {
-        0 => "u".to_string(),
-        1 => "g".to_string(),
-        2 => "r".to_string(),
-        3 => "i".to_string(),
-        4 => "z".to_string(),
-        5 => "y".to_string(),
-        n => format!("Filter {n}"),
-    }
+    crate::lsst_band::band_index_to_letter(filter)
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("Filter {filter}"))
 }
 
 /// Standard LSST ugrizy plotting palette.
