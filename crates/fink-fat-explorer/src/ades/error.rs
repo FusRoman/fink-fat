@@ -1,5 +1,6 @@
-//! Typed errors for ADES document construction, local schema validation, and
-//! the informational submission to MPC's `submit_xml_test` endpoint.
+//! Typed errors for ADES document construction, local schema validation,
+//! submission to MPC's `submit_xml_test` endpoint, and polling its
+//! test-submission status page for the real ingest verdict.
 
 use thiserror::Error;
 
@@ -32,14 +33,27 @@ pub enum AdesError {
     #[error("failed to serialize ADES document to XML: {0}")]
     XmlSerialize(#[from] quick_xml::SeError),
 
-    /// The outbound POST to MPC's `submit_xml_test` endpoint itself failed
-    /// (network/timeout/non-2xx), as opposed to a parseable acknowledgement.
+    /// An outbound HTTP request to MPC itself failed (network/timeout/
+    /// non-2xx) — either the initial `submit_xml_test` POST or a later
+    /// status-page GET, as opposed to a request that succeeded but returned
+    /// an unparseable body.
     #[cfg(feature = "server")]
-    #[error("MPC submission request failed: {0}")]
-    McpSubmissionRequest(#[from] reqwest::Error),
+    #[error("MPC request failed: {0}")]
+    McpRequest(#[from] reqwest::Error),
 
     /// MPC's `submit_xml_test` response body didn't contain the expected
     /// `"Submission ID is ..."` acknowledgement pattern.
     #[error("could not parse MPC submission acknowledgement: {0}")]
     McpSubmissionResponseParse(String),
+
+    /// MPC's test-submission status page body matched none of the three
+    /// known shapes (pending/"no such submission ID", valid, invalid) — a
+    /// guard in case MPC changes that (undocumented) page's template.
+    #[error("could not parse MPC submission status page: {0}")]
+    McpStatusPageUnrecognized(String),
+
+    /// The submission's status never resolved to `valid`/`invalid` within
+    /// the polling budget — MPC may still be processing it.
+    #[error("MPC status check for submission '{submission_id}' timed out")]
+    McpStatusPollTimedOut { submission_id: String },
 }

@@ -1,13 +1,23 @@
 //! Modal collecting the ADES header fields not tracked by the pipeline, then
-//! driving local `submit.xsd` validation (the gate on the download button)
-//! and, once valid, an informational submission to MPC's `submit_xml_test`
-//! endpoint. See `crate::ades` for the full pipeline this drives.
+//! driving local `submit.xsd` validation (a fast pre-check) and MPC's real
+//! validation verdict (the actual gate on the download button — see
+//! `crate::ades::server_fns` for why that takes a submission plus a status
+//! poll rather than a single request).
 
 use dioxus::prelude::*;
 
 use crate::ades::model::AdesHeaderInput;
-use crate::ades::server_fns::{export_and_validate_ades, AdesExportResult};
+use crate::ades::mpc_submission::MPC_SUBMISSION_STATUS_URL;
+use crate::ades::server_fns::{
+    check_mpc_submission_status, export_and_validate_ades, AdesExportResult, McpVerdict,
+};
 use crate::survey::Survey;
+
+/// Link to MPC's test-submission status page for a given submission, so the
+/// user can double-check the verdict themselves.
+fn mpc_status_url(submission_id: &str) -> String {
+    format!("{MPC_SUBMISSION_STATUS_URL}?id={submission_id}")
+}
 
 /// Where the export flow currently stands, driving which controls are shown.
 #[derive(Clone, Copy, PartialEq)]
@@ -123,7 +133,7 @@ pub fn AdesExportModal(
             spawn(async move {
                 match export_and_validate_ades(lineage_designation, header_value).await {
                     Ok(export_result) => {
-                        state.set(if export_result.schema_valid {
+                        state.set(if export_result.download_allowed() {
                             ExportState::Valid
                         } else {
                             ExportState::Invalid
@@ -138,6 +148,32 @@ pub fn AdesExportModal(
                 }
             });
         }
+    };
+
+    // Re-polls MPC's status for an already-submitted lineage, without
+    // resubmitting the XML — used after a `PollTimedOut` verdict, since
+    // resubmitting identical content risks MPC flagging it as a duplicate.
+    let mut check_status_again = move |submission_id: String| {
+        state.set(ExportState::Checking);
+        spawn(async move {
+            match check_mpc_submission_status(submission_id).await {
+                Ok(mpc_verdict) => {
+                    if let Some(mut export_result) = result() {
+                        export_result.mpc_verdict = mpc_verdict;
+                        state.set(if export_result.download_allowed() {
+                            ExportState::Valid
+                        } else {
+                            ExportState::Invalid
+                        });
+                        result.set(Some(export_result));
+                    }
+                }
+                Err(err) => {
+                    state.set(ExportState::Invalid);
+                    request_error.set(Some(err.to_string()));
+                }
+            }
+        });
     };
 
     let download = move |_| {
@@ -351,7 +387,7 @@ pub fn AdesExportModal(
                         ExportState::Checking => rsx! {
                             div { class: "flex items-center gap-2",
                                 span { class: "loading loading-spinner loading-sm" }
-                                span { "Checking..." }
+                                span { "Checking with the MPC (this can take up to a minute)..." }
                             }
                         },
                         ExportState::Valid => rsx! {
@@ -366,18 +402,18 @@ pub fn AdesExportModal(
                                     }
                                 }
                                 if let Some(export_result) = result() {
-                                    match &export_result.mpc_submission {
-                                        Some(Ok(submission_id)) => rsx! {
-                                            div { class: "text-xs opacity-70",
-                                                "Submitted to the MPC for full validation (ID {submission_id}) — the detailed report will be emailed to {header().ac2_email}."
+                                    if let McpVerdict::Valid { submission_id } = &export_result.mpc_verdict {
+                                        div { class: "text-xs opacity-70",
+                                            "Confirmed valid by the MPC (submission "
+                                            a {
+                                                class: "link",
+                                                href: "{mpc_status_url(submission_id)}",
+                                                target: "_blank",
+                                                rel: "noopener noreferrer",
+                                                "{submission_id}"
                                             }
-                                        },
-                                        Some(Err(message)) => rsx! {
-                                            div { class: "text-xs text-warning",
-                                                "The file is locally valid, but submitting it to the MPC failed: {message}"
-                                            }
-                                        },
-                                        None => rsx! {},
+                                            ")."
+                                        }
                                     }
                                 }
                             }
@@ -389,10 +425,57 @@ pub fn AdesExportModal(
                                     div { class: "text-xs text-error", "{message}" }
                                 }
                                 if let Some(export_result) = result() {
-                                    ul { class: "text-xs text-error list-disc pl-4",
-                                        for violation in &export_result.schema_violations {
-                                            li { "{violation}" }
+                                    if !export_result.schema_valid {
+                                        ul { class: "text-xs text-error list-disc pl-4",
+                                            for violation in &export_result.schema_violations {
+                                                li { "{violation}" }
+                                            }
                                         }
+                                    }
+                                    match &export_result.mpc_verdict {
+                                        McpVerdict::Invalid { submission_id, comments } => rsx! {
+                                            div { class: "text-xs text-error",
+                                                "Rejected by the MPC (submission "
+                                                a {
+                                                    class: "link",
+                                                    href: "{mpc_status_url(submission_id)}",
+                                                    target: "_blank",
+                                                    rel: "noopener noreferrer",
+                                                    "{submission_id}"
+                                                }
+                                                "):"
+                                            }
+                                            for comment in comments {
+                                                pre { class: "text-xs text-error whitespace-pre-wrap", "{comment}" }
+                                            }
+                                        },
+                                        McpVerdict::PollTimedOut { submission_id } => rsx! {
+                                            div { class: "text-xs text-warning",
+                                                "The MPC hasn't finished processing submission "
+                                                a {
+                                                    class: "link",
+                                                    href: "{mpc_status_url(submission_id)}",
+                                                    target: "_blank",
+                                                    rel: "noopener noreferrer",
+                                                    "{submission_id}"
+                                                }
+                                                " yet."
+                                            }
+                                            button {
+                                                class: "btn btn-sm",
+                                                r#type: "button",
+                                                onclick: {
+                                                    let submission_id = submission_id.clone();
+                                                    move |_| check_status_again(submission_id.clone())
+                                                },
+                                                "Check status again"
+                                            }
+                                        },
+                                        McpVerdict::SubmissionFailed(message) => rsx! {
+                                            div { class: "text-xs text-error", "MPC submission failed: {message}" }
+                                        },
+                                        McpVerdict::NotSubmitted => rsx! {},
+                                        McpVerdict::Valid { .. } => rsx! {},
                                     }
                                 }
                                 button {

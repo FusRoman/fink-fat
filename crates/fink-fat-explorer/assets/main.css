@@ -2965,6 +2965,9 @@
   .whitespace-nowrap {
     white-space: nowrap;
   }
+  .whitespace-pre-wrap {
+    white-space: pre-wrap;
+  }
   .alert-error {
     @layer daisyui.modifier {
       color: var(--color-error-content);

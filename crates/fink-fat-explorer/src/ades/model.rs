@@ -96,6 +96,17 @@ pub fn band_index_to_ades_band(filter: i16) -> Result<&'static str, AdesError> {
 /// future ADES-specific formatting quirk can be special-cased here without
 /// touching the shared display helper.
 ///
+/// `iso_utc` (via `hifitime::Epoch::to_isoformat`, which truncates its
+/// formatted string to exactly 26 characters) never includes a trailing
+/// `Z`, but `submit.xsd`'s `TimeType` requires one
+/// (`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z`) — confirmed the hard
+/// way: a real MPC submission was rejected with "Element 'obsTime':
+/// '...254790' is not a valid value of the union type 'TimeType'" for
+/// exactly this reason. Appended here defensively (checking rather than
+/// assuming `iso_utc` never adds one) instead of changing `iso_utc` itself,
+/// which is shared with plain human-facing display where the missing `Z` is
+/// harmless.
+///
 /// # Errors
 /// Returns [`AdesError::ObsTimeConversion`] if `mjd_tt` is not finite.
 pub fn mjd_tt_to_ades_obs_time(mjd_tt: f64) -> Result<String, AdesError> {
@@ -105,7 +116,12 @@ pub fn mjd_tt_to_ades_obs_time(mjd_tt: f64) -> Result<String, AdesError> {
             reason: "MJD(TT) value is not finite".to_string(),
         });
     }
-    Ok(iso_utc(mjd_tt))
+    let formatted = iso_utc(mjd_tt);
+    Ok(if formatted.ends_with('Z') {
+        formatted
+    } else {
+        format!("{formatted}Z")
+    })
 }
 
 /// User-supplied ADES header fields not tracked by the fink-fat pipeline,
@@ -340,9 +356,11 @@ mod tests {
     }
 
     #[test]
-    fn mjd_tt_to_ades_obs_time_matches_iso_utc() {
+    fn mjd_tt_to_ades_obs_time_appends_z_missing_from_iso_utc() {
         let mjd_tt = 60310.5;
-        assert_eq!(mjd_tt_to_ades_obs_time(mjd_tt).unwrap(), iso_utc(mjd_tt));
+        let iso = iso_utc(mjd_tt);
+        assert!(!iso.ends_with('Z'), "test assumption broken: {iso}");
+        assert_eq!(mjd_tt_to_ades_obs_time(mjd_tt).unwrap(), format!("{iso}Z"));
     }
 
     #[test]
