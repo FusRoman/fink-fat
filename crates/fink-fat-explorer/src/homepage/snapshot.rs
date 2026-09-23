@@ -207,7 +207,7 @@ struct LatestFailureRow {
 
 /// Number of distinct nights (`observations.night_id`) on which each branch
 /// has two or more observations — the geometric bar
-/// [`QualityTier::PrimeDiscovery`] adds on top of [`QualityTier::Discovery`].
+/// [`QualityTier::WellSampledDiscovery`] adds on top of [`QualityTier::Discovery`].
 /// Reuses `night_id`, the same grouping key `compute_obs_stats` in
 /// `src/converter/sql.rs` already uses for `branches.n_nights`, rather than
 /// re-bucketing `mjd_tt` independently.
@@ -239,10 +239,13 @@ struct QualityIndex {
     latest_fit: HashMap<i64, LatestFit>,
     latest_failure_at: HashMap<i64, chrono::DateTime<chrono::Utc>>,
     well_sampled_nights: HashMap<i64, i64>,
+    /// Lineages with an active CND/Skybot cross-match hit — see
+    /// [`crate::cross_match_status::build_cross_match_index`].
+    cross_match: HashSet<Box<str>>,
 }
 
 impl QualityIndex {
-    fn tier_for(&self, branch_id: i64, n_nights: i64) -> QualityTier {
+    fn tier_for(&self, branch_id: i64, lineage_designation: &str, n_nights: i64) -> QualityTier {
         assign_quality_tier(
             self.eligible.contains(&branch_id),
             self.latest_fit.get(&branch_id),
@@ -252,12 +255,13 @@ impl QualityIndex {
                 .get(&branch_id)
                 .copied()
                 .unwrap_or(0),
+            self.cross_match.contains(lineage_designation),
         )
     }
 }
 
-/// Runs the four queries [`QualityIndex`] is built from. Separate from
-/// [`build`]'s main [`SNAPSHOT_QUERY`] fetch since none of these four share
+/// Runs the five queries [`QualityIndex`] is built from. Separate from
+/// [`build`]'s main [`SNAPSHOT_QUERY`] fetch since none of these five share
 /// its `branches`/`kf_state` join.
 async fn build_quality_index(pool: &PgPool) -> Result<QualityIndex, sqlx::Error> {
     let eligible_rows: Vec<EligibleBranchRow> = sqlx::query_as(params::ELIGIBLE_BRANCH_QUERY)
@@ -300,11 +304,14 @@ async fn build_quality_index(pool: &PgPool) -> Result<QualityIndex, sqlx::Error>
         .map(|r| (r.branch_id, r.well_sampled_nights))
         .collect();
 
+    let cross_match = crate::cross_match_status::build_cross_match_index(pool).await?;
+
     Ok(QualityIndex {
         eligible,
         latest_fit,
         latest_failure_at,
         well_sampled_nights,
+        cross_match,
     })
 }
 
@@ -562,6 +569,8 @@ fn assemble(
                 best_orbit.eccentricity as f32,
                 best_orbit.family,
             );
+            let quality_tier =
+                quality.tier_for(row.branch_id, &row.lineage_designation, row.n_nights);
 
             BranchRow {
                 branch_id: row.branch_id,
@@ -576,7 +585,7 @@ fn assemble(
                 family,
                 semi_major_axis,
                 eccentricity,
-                quality_tier: quality.tier_for(row.branch_id, row.n_nights),
+                quality_tier,
                 ra: row.ra,
                 dec: row.dec,
                 ra_dot: row.ra_dot,
@@ -687,13 +696,13 @@ fn build_orders(
                         (None, None) => std::cmp::Ordering::Equal,
                     }
                 }
-                // Reversed: `QualityTier`'s `Ord` ranks `PrimeDiscovery`
+                // Reversed: `QualityTier`'s `Ord` ranks `WellSampledDiscovery`
                 // (the best tier) as the *smallest* value, but every other
                 // column here ranks "better" as larger — the default first
                 // click is always `SortDirection::Desc`
                 // (`branch_tab::toggle_sort`), which reverses this ascending
                 // permutation, so a plain `cmp` would show `Ineligible`
-                // first instead of `PrimeDiscovery`.
+                // first instead of `WellSampledDiscovery`.
                 SortColumn::QualityTier => bb.quality_tier.cmp(&ba.quality_tier),
             };
 
@@ -923,6 +932,7 @@ mod tests {
             latest_fit: HashMap::new(),
             latest_failure_at: HashMap::new(),
             well_sampled_nights: HashMap::new(),
+            cross_match: HashSet::new(),
         }
     }
 
@@ -1149,6 +1159,7 @@ mod tests {
             latest_fit: HashMap::new(),
             latest_failure_at: HashMap::new(),
             well_sampled_nights: HashMap::new(),
+            cross_match: HashSet::new(),
         };
         let snap = assemble(rows, 0, 0, &quality, &HashMap::new());
 
@@ -1196,6 +1207,7 @@ mod tests {
             latest_fit: HashMap::new(),
             latest_failure_at: HashMap::new(),
             well_sampled_nights: HashMap::new(),
+            cross_match: HashSet::new(),
         };
         let snap = assemble(rows, 0, 0, &quality, &HashMap::new());
 

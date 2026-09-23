@@ -8,6 +8,7 @@ pub mod bulk_skybot;
 pub mod bulk_skybot_page;
 pub mod cnd_search;
 pub mod cross_match_dashboard;
+pub mod cross_match_status;
 pub mod fit_pipeline;
 pub mod format_epoch;
 pub mod homepage;

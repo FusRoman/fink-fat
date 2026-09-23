@@ -128,8 +128,10 @@ async fn best_orbit_fit(
 async fn compute_quality_tier(
     pool: &sqlx::PgPool,
     branch_id: i64,
+    lineage_designation: &str,
     n_nights: i64,
 ) -> Result<QualityTier, sqlx::Error> {
+    use crate::cross_match_status::lineage_has_cross_match;
     use crate::fit_pipeline::fit::FitMethod;
     use crate::fit_pipeline::params::{MIN_BASELINE_DAYS, MIN_OBSERVATIONS};
     use crate::homepage::quality_tier::{assign_quality_tier, LatestFit};
@@ -181,12 +183,15 @@ async fn compute_quality_tier(
     .fetch_one(pool)
     .await?;
 
+    let has_cross_match = lineage_has_cross_match(pool, lineage_designation).await?;
+
     Ok(assign_quality_tier(
         eligible,
         latest_fit.as_ref(),
         latest_failure_at,
         n_nights,
         well_sampled_nights,
+        has_cross_match,
     ))
 }
 
@@ -242,7 +247,7 @@ pub async fn get_lineage_summary(
         return Ok(None);
     };
 
-    let quality_tier = compute_quality_tier(pool, r.branch_id, r.n_nights)
+    let quality_tier = compute_quality_tier(pool, r.branch_id, &lineage_designation, r.n_nights)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 

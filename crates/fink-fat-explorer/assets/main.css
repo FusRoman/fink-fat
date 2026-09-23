@@ -3525,6 +3525,12 @@
       --size: calc(var(--size-field, 0.25rem) * 6);
     }
   }
+  .badge-accent {
+    @layer daisyui.modifier {
+      --badge-color: var(--color-accent);
+      --badge-fg: var(--color-accent-content);
+    }
+  }
   .badge-error {
     @layer daisyui.modifier {
       --badge-color: var(--color-error);
@@ -3535,6 +3541,12 @@
     @layer daisyui.modifier {
       --badge-color: var(--color-info);
       --badge-fg: var(--color-info-content);
+    }
+  }
+  .badge-secondary {
+    @layer daisyui.modifier {
+      --badge-color: var(--color-secondary);
+      --badge-fg: var(--color-secondary-content);
     }
   }
   .badge-success {

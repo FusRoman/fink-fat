@@ -1,7 +1,15 @@
 //! Per-branch orbit-fit quality tier, ported from the `quality_flags.py`
-//! cascade of the sibling `lsst_cross_fink_fat_analysis` project — minus the
-//! tiers that depended on its SBN cross-match (`completion`/`contaminated`),
-//! which has no equivalent in `fink-fat-explorer`.
+//! cascade of the sibling `lsst_cross_fink_fat_analysis` project.
+//! [`QualityTier::WellSampledIdentified`]/[`QualityTier::Identified`] play a
+//! similar role to that script's SBN-cross-match-dependent `completion`
+//! tier (a numerically good fit that turns out to match a known object, not
+//! a new find) but are driven by `fink-fat-explorer`'s own CND/Skybot
+//! cross-match results (see [`crate::cross_match_status`]) rather than a
+//! static SBN cache, and — unlike the Python `completion`, which merges
+//! both novelty levels into one tier — keep the well-sampled-nights
+//! distinction even once matched. The Python `contaminated` tier
+//! (matched to *more than one* distinct object) has no equivalent here:
+//! this cascade only distinguishes has-a-match from has-none.
 //!
 //! Two tiers have no counterpart in the Python version at all:
 //! [`QualityTier::NotFitted`] and [`QualityTier::Ineligible`]. The Python
@@ -52,7 +60,8 @@ impl LatestFit {
 /// section 3, in the sibling `lsst_cross_fink_fat_analysis` project).
 pub const MIN_NIGHTS_FOR_CONSTRAINT: i64 = 3;
 
-/// [`QualityTier::PrimeDiscovery`] additionally requires this many nights
+/// [`QualityTier::WellSampledDiscovery`]/[`QualityTier::WellSampledIdentified`]
+/// additionally require this many nights
 /// with at least two observations each: two same-night points pin down that
 /// night's angular rate directly, a stronger geometric signal than the arc
 /// across nights alone.
@@ -65,12 +74,20 @@ pub const MIN_WELL_SAMPLED_NIGHTS: i64 = 5;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum QualityTier {
     /// Converged differential correction, constrained (`dof > 0`, enough
-    /// nights), and at least [`MIN_WELL_SAMPLED_NIGHTS`] nights with two or
-    /// more observations each — the best-constrained candidates.
-    PrimeDiscovery,
-    /// Same fit/constraint conditions as `PrimeDiscovery`, but without the
-    /// extra well-sampled-nights bar.
+    /// nights), at least [`MIN_WELL_SAMPLED_NIGHTS`] nights with two or more
+    /// observations each, and no active cross-match hit (CND or Skybot) —
+    /// the best-constrained, genuinely novel candidates.
+    WellSampledDiscovery,
+    /// Same fit/constraint conditions as `WellSampledDiscovery`, but without
+    /// the extra well-sampled-nights bar.
     Discovery,
+    /// Same conditions as [`Self::WellSampledDiscovery`], but the lineage
+    /// has an active cross-match hit (CND or Skybot) — numerically as
+    /// well-constrained, but not a new find: it matches a known object.
+    WellSampledIdentified,
+    /// Same conditions as [`Self::Discovery`], but the lineage has an
+    /// active cross-match hit (CND or Skybot).
+    Identified,
     /// Converged differential correction, but not constrained: either an
     /// exact 3-observation interpolation (`dof <= 0`) or fewer than
     /// [`MIN_NIGHTS_FOR_CONSTRAINT`] nights.
@@ -92,15 +109,36 @@ pub enum QualityTier {
 }
 
 /// Placed on the quality-tier cascade: mirrors `quality_flags.py`'s
-/// `assign_quality_tier`, minus the SBN-linking-dependent tiers it also
-/// assigned (`completion`/`contaminated`), which have no equivalent input
-/// here.
+/// `assign_quality_tier`, plus a `has_cross_match` split at the top of the
+/// cascade (see the module doc) that script covered with its
+/// SBN-linking-dependent `completion` tier.
 ///
 /// `eligible` takes precedence over everything else — an ineligible branch
 /// cannot have a meaningful `latest_fit`/`latest_failure_at` in the first
 /// place. Between a fit and a failure, whichever is more recent wins, so a
 /// branch that failed once and later succeeded (or the reverse) reflects its
-/// current state rather than its history.
+/// current state rather than its history. `has_cross_match` only affects the
+/// outcome when the branch would otherwise land in
+/// [`QualityTier::WellSampledDiscovery`] or [`QualityTier::Discovery`] — it
+/// is ignored by every other branch of the cascade, so a lineage with an
+/// active cross-match hit but an unconverged/unconstrained/failed fit still
+/// gets the same tier it would without one.
+///
+/// # Arguments
+///
+/// * `eligible` — whether the branch meets the bulk fit's eligibility
+///   criteria at all.
+/// * `latest_fit` — the branch's most recent `orbit_fits` row, if any.
+/// * `latest_failure_at` — the branch's most recent recorded fit failure, if
+///   any.
+/// * `n_nights` — total distinct nights the branch has observations on.
+/// * `well_sampled_nights` — nights with two or more observations each.
+/// * `has_cross_match` — whether the lineage has an active CND or Skybot
+///   cross-match hit (see [`crate::cross_match_status`]).
+///
+/// # Return
+///
+/// The resolved [`QualityTier`].
 #[cfg(feature = "server")]
 pub fn assign_quality_tier(
     eligible: bool,
@@ -108,6 +146,7 @@ pub fn assign_quality_tier(
     latest_failure_at: Option<chrono::DateTime<chrono::Utc>>,
     n_nights: i64,
     well_sampled_nights: i64,
+    has_cross_match: bool,
 ) -> QualityTier {
     if !eligible {
         return QualityTier::Ineligible;
@@ -135,18 +174,22 @@ pub fn assign_quality_tier(
         return QualityTier::Unconstrained;
     }
 
-    if well_sampled_nights >= MIN_WELL_SAMPLED_NIGHTS {
-        QualityTier::PrimeDiscovery
-    } else {
-        QualityTier::Discovery
+    let well_sampled = well_sampled_nights >= MIN_WELL_SAMPLED_NIGHTS;
+    match (well_sampled, has_cross_match) {
+        (true, false) => QualityTier::WellSampledDiscovery,
+        (false, false) => QualityTier::Discovery,
+        (true, true) => QualityTier::WellSampledIdentified,
+        (false, true) => QualityTier::Identified,
     }
 }
 
 impl QualityTier {
     pub fn label(self) -> &'static str {
         match self {
-            Self::PrimeDiscovery => "Prime discovery",
+            Self::WellSampledDiscovery => "Well-sampled discovery",
             Self::Discovery => "Discovery",
+            Self::WellSampledIdentified => "Well-sampled identified",
+            Self::Identified => "Identified",
             Self::Unconstrained => "Unconstrained",
             Self::IodOnly => "IOD only",
             Self::Failed => "Failed",
@@ -160,8 +203,10 @@ impl QualityTier {
     /// linked. Not the actual SVG path plotly draws — just a readable hint.
     pub fn glyph(self) -> &'static str {
         match self {
-            Self::PrimeDiscovery => "★",
+            Self::WellSampledDiscovery => "★",
             Self::Discovery => "◆",
+            Self::WellSampledIdentified => "✦",
+            Self::Identified => "◈",
             Self::Unconstrained => "▲",
             Self::IodOnly => "■",
             Self::Failed => "✕",
@@ -173,8 +218,10 @@ impl QualityTier {
     /// daisyUI badge color class, roughly tracking severity.
     pub fn badge_class(self) -> &'static str {
         match self {
-            Self::PrimeDiscovery => "badge-success",
+            Self::WellSampledDiscovery => "badge-success",
             Self::Discovery => "badge-info",
+            Self::WellSampledIdentified => "badge-accent",
+            Self::Identified => "badge-secondary",
             Self::Unconstrained | Self::IodOnly => "badge-warning",
             Self::Failed => "badge-error",
             Self::NotFitted | Self::Ineligible => "badge-ghost",
@@ -184,9 +231,11 @@ impl QualityTier {
     /// Every variant, in the same best-to-worst order as the type's `Ord` —
     /// used to build the plot's tier legend and to enumerate `SortColumn`'s
     /// quality-tier permutation.
-    pub const ALL: [QualityTier; 7] = [
-        Self::PrimeDiscovery,
+    pub const ALL: [QualityTier; 9] = [
+        Self::WellSampledDiscovery,
         Self::Discovery,
+        Self::WellSampledIdentified,
+        Self::Identified,
         Self::Unconstrained,
         Self::IodOnly,
         Self::Failed,
@@ -216,8 +265,13 @@ pub fn marker_for(family: DynamicalFamily, tier: QualityTier) -> Marker {
         // black shape and hides the family color underneath it. The star
         // shape (vs. `Discovery`'s diamond) is already enough to set this
         // tier apart.
-        QualityTier::PrimeDiscovery => base.symbol(MarkerSymbol::Star).opacity(1.0),
+        QualityTier::WellSampledDiscovery => base.symbol(MarkerSymbol::Star).opacity(1.0),
         QualityTier::Discovery => base.symbol(MarkerSymbol::Diamond).opacity(1.0),
+        // Hollow variant of the matching unmatched tier's shape: a matched
+        // lineage visually pairs with its unmatched sibling (same shape)
+        // while staying distinguishable (open vs. filled).
+        QualityTier::WellSampledIdentified => base.symbol(MarkerSymbol::StarOpen).opacity(1.0),
+        QualityTier::Identified => base.symbol(MarkerSymbol::DiamondOpen).opacity(1.0),
         QualityTier::Unconstrained => base.symbol(MarkerSymbol::TriangleUp).opacity(1.0),
         QualityTier::IodOnly => base.symbol(MarkerSymbol::Square).opacity(1.0),
         // Unchanged from the plot's pre-quality-tier look: a plain circle at
@@ -258,7 +312,7 @@ mod tests {
     fn ineligible_overrides_everything() {
         let f = fit(FitMethod::DifferentialCorrection, 20, t(100));
         assert_eq!(
-            assign_quality_tier(false, Some(&f), None, 10, 10),
+            assign_quality_tier(false, Some(&f), None, 10, 10, true),
             QualityTier::Ineligible
         );
     }
@@ -266,7 +320,7 @@ mod tests {
     #[test]
     fn not_fitted_when_nothing_recorded() {
         assert_eq!(
-            assign_quality_tier(true, None, None, 0, 0),
+            assign_quality_tier(true, None, None, 0, 0, false),
             QualityTier::NotFitted
         );
     }
@@ -274,7 +328,7 @@ mod tests {
     #[test]
     fn failed_when_only_a_failure_is_recorded() {
         assert_eq!(
-            assign_quality_tier(true, None, Some(t(50)), 0, 0),
+            assign_quality_tier(true, None, Some(t(50)), 0, 0, false),
             QualityTier::Failed
         );
     }
@@ -283,7 +337,7 @@ mod tests {
     fn failed_when_failure_is_more_recent_than_a_stale_success() {
         let f = fit(FitMethod::DifferentialCorrection, 20, t(100));
         assert_eq!(
-            assign_quality_tier(true, Some(&f), Some(t(200)), 5, 5),
+            assign_quality_tier(true, Some(&f), Some(t(200)), 5, 5, false),
             QualityTier::Failed
         );
     }
@@ -292,8 +346,8 @@ mod tests {
     fn fit_wins_when_more_recent_than_a_stale_failure() {
         let f = fit(FitMethod::DifferentialCorrection, 20, t(200));
         assert_eq!(
-            assign_quality_tier(true, Some(&f), Some(t(100)), 5, 5),
-            QualityTier::PrimeDiscovery
+            assign_quality_tier(true, Some(&f), Some(t(100)), 5, 5, false),
+            QualityTier::WellSampledDiscovery
         );
     }
 
@@ -301,7 +355,7 @@ mod tests {
     fn iod_only_when_correction_never_converged() {
         let f = fit(FitMethod::IodOnly, 6, t(100));
         assert_eq!(
-            assign_quality_tier(true, Some(&f), None, 5, 5),
+            assign_quality_tier(true, Some(&f), None, 5, 5, false),
             QualityTier::IodOnly
         );
     }
@@ -311,7 +365,7 @@ mod tests {
         // 3 observations -> 6 measurements -> dof = 0.
         let f = fit(FitMethod::DifferentialCorrection, 6, t(100));
         assert_eq!(
-            assign_quality_tier(true, Some(&f), None, 5, 5),
+            assign_quality_tier(true, Some(&f), None, 5, 5, false),
             QualityTier::Unconstrained
         );
     }
@@ -320,7 +374,7 @@ mod tests {
     fn unconstrained_on_too_few_nights_despite_positive_dof() {
         let f = fit(FitMethod::DifferentialCorrection, 20, t(100));
         assert_eq!(
-            assign_quality_tier(true, Some(&f), None, 2, 2),
+            assign_quality_tier(true, Some(&f), None, 2, 2, false),
             QualityTier::Unconstrained
         );
     }
@@ -329,24 +383,75 @@ mod tests {
     fn discovery_below_the_well_sampled_nights_bar() {
         let f = fit(FitMethod::DifferentialCorrection, 20, t(100));
         assert_eq!(
-            assign_quality_tier(true, Some(&f), None, 6, 4),
+            assign_quality_tier(true, Some(&f), None, 6, 4, false),
             QualityTier::Discovery
         );
     }
 
     #[test]
-    fn prime_discovery_at_the_well_sampled_nights_bar() {
+    fn well_sampled_discovery_at_the_well_sampled_nights_bar() {
         let f = fit(FitMethod::DifferentialCorrection, 20, t(100));
         assert_eq!(
-            assign_quality_tier(true, Some(&f), None, 6, 5),
-            QualityTier::PrimeDiscovery
+            assign_quality_tier(true, Some(&f), None, 6, 5, false),
+            QualityTier::WellSampledDiscovery
+        );
+    }
+
+    #[test]
+    fn identified_when_discovery_conditions_have_a_cross_match() {
+        let f = fit(FitMethod::DifferentialCorrection, 20, t(100));
+        assert_eq!(
+            assign_quality_tier(true, Some(&f), None, 6, 4, true),
+            QualityTier::Identified
+        );
+    }
+
+    #[test]
+    fn well_sampled_identified_when_well_sampled_discovery_conditions_have_a_cross_match() {
+        let f = fit(FitMethod::DifferentialCorrection, 20, t(100));
+        assert_eq!(
+            assign_quality_tier(true, Some(&f), None, 6, 5, true),
+            QualityTier::WellSampledIdentified
+        );
+    }
+
+    #[test]
+    fn cross_match_is_ignored_below_the_top_four_tiers() {
+        // Unconstrained (zero dof), IOD-only, failed, not-fitted, and
+        // ineligible must all stay unaffected by `has_cross_match=true` —
+        // the split only matters once the fit is converged and constrained.
+        let unconstrained_fit = fit(FitMethod::DifferentialCorrection, 6, t(100));
+        assert_eq!(
+            assign_quality_tier(true, Some(&unconstrained_fit), None, 5, 5, true),
+            QualityTier::Unconstrained
+        );
+
+        let iod_fit = fit(FitMethod::IodOnly, 6, t(100));
+        assert_eq!(
+            assign_quality_tier(true, Some(&iod_fit), None, 5, 5, true),
+            QualityTier::IodOnly
+        );
+
+        assert_eq!(
+            assign_quality_tier(true, None, Some(t(50)), 0, 0, true),
+            QualityTier::Failed
+        );
+        assert_eq!(
+            assign_quality_tier(true, None, None, 0, 0, true),
+            QualityTier::NotFitted
+        );
+        assert_eq!(
+            assign_quality_tier(false, None, None, 0, 0, true),
+            QualityTier::Ineligible
         );
     }
 
     #[test]
     fn ordering_is_best_to_worst() {
-        assert!(QualityTier::PrimeDiscovery < QualityTier::Discovery);
-        assert!(QualityTier::Discovery < QualityTier::Unconstrained);
+        assert!(QualityTier::WellSampledDiscovery < QualityTier::Discovery);
+        assert!(QualityTier::Discovery < QualityTier::WellSampledIdentified);
+        assert!(QualityTier::WellSampledIdentified < QualityTier::Identified);
+        assert!(QualityTier::Identified < QualityTier::Unconstrained);
         assert!(QualityTier::Unconstrained < QualityTier::IodOnly);
         assert!(QualityTier::IodOnly < QualityTier::Failed);
         assert!(QualityTier::Failed < QualityTier::NotFitted);
