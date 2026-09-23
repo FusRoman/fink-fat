@@ -2338,6 +2338,25 @@
   .col-span-2 {
     grid-column: span 2 / span 2;
   }
+  .stat-value {
+    @layer daisyui.component {
+      grid-column-start: 1;
+      white-space: nowrap;
+      font-size: 2rem;
+      font-weight: 800;
+    }
+  }
+  .stat-title {
+    @layer daisyui.component {
+      grid-column-start: 1;
+      white-space: nowrap;
+      color: var(--color-base-content);
+      @supports (color: color-mix(in lab, red, red)) {
+        color: color-mix(in oklab, var(--color-base-content) 60%, transparent);
+      }
+      font-size: 0.75rem;
+    }
+  }
   .divider {
     @layer daisyui.component {
       display: flex;
@@ -2585,6 +2604,23 @@
         & > * {
           place-items: center;
         }
+      }
+    }
+  }
+  .stat {
+    @layer daisyui.component {
+      display: inline-grid;
+      width: 100%;
+      column-gap: calc(0.25rem * 4);
+      padding-inline: calc(0.25rem * 6);
+      padding-block: calc(0.25rem * 4);
+      grid-template-columns: repeat(1, 1fr);
+      &:not(:last-child) {
+        border-inline-end: var(--border) dashed currentColor;
+        @supports (color: color-mix(in lab, red, red)) {
+          border-inline-end: var(--border) dashed color-mix(in oklab, currentColor 10%, #0000);
+        }
+        border-block-end: none;
       }
     }
   }
@@ -3073,6 +3109,9 @@
       --size: calc(var(--size-selector, 0.25rem) * 5);
     }
   }
+  .p-0 {
+    padding: calc(var(--spacing) * 0);
+  }
   .p-2 {
     padding: calc(var(--spacing) * 2);
   }
@@ -3474,6 +3513,12 @@
     @layer daisyui.modifier {
       --badge-color: var(--color-warning);
       --badge-fg: var(--color-warning-content);
+    }
+  }
+  .btn-accent {
+    @layer daisyui.modifier {
+      --btn-color: var(--color-accent);
+      --btn-fg: var(--color-accent-content);
     }
   }
   .btn-primary {

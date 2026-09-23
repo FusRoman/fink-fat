@@ -1,9 +1,14 @@
 use dioxus::prelude::*;
 
 /// Single "Tools ▾" toggle button plus a small anchored panel grouping the
-/// homepage's maintenance actions (bulk orbit fit, bulk MPC/CND check,
+/// homepage's maintenance *actions* (bulk orbit fit, bulk MPC/CND check,
 /// refresh) — introduced because three separate always-visible buttons
-/// crowded the navbar. Same open/close/backdrop mechanics as
+/// crowded the navbar. The cross-match dashboard is deliberately **not**
+/// in here despite being a similarly secondary destination: it's a page to
+/// browse, not a tool to run, so it gets its own direct navbar link instead
+/// (see `homepage::mod::Home`) rather than being buried one click deeper
+/// alongside actions that mutate state. Same open/close/backdrop mechanics
+/// as
 /// `lineage_page::cross_match_controls::CrossMatchControls`, which grouped
 /// the per-lineage Skybot/CND controls for the same reason; kept as a
 /// distinct component rather than a shared one since the two menus group

@@ -126,6 +126,11 @@ pub fn Home() -> Element {
                         class: "input input-bordered input-sm w-64",
                         oninput: move |evt| search_input.set(evt.value()),
                     }
+                    Link {
+                        to: crate::Route::CrossMatchDashboardPage {},
+                        class: "btn btn-sm btn-outline btn-accent gap-1",
+                        "🔭 Cross-match"
+                    }
                     ToolsMenu { refreshing: refreshing(), on_refresh: request_refresh }
                 }
             }
