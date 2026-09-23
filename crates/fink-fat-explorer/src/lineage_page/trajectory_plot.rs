@@ -26,6 +26,53 @@ fn format_hover_extra(time_label: &str, ra_err_arcsec: f64, dec_err_arcsec: f64)
 
 const TRAJECTORY_HOVER_TEMPLATE: &str = "RA: %{x:.6f}°<br>Dec: %{y:.6f}°<br>%{customdata}";
 
+/// Trims an RFC 3339 timestamp (as returned by
+/// [`crate::skybot_search::history::SkybotQueryRecord::queried_at`], e.g.
+/// `"2026-09-23T08:04:32.940721+00:00"`) down to `"2026-09-23 08:04"` —
+/// plenty of precision for "was this checked recently", without the
+/// sub-second/offset noise a raw RFC 3339 string carries. Falls back to the
+/// input unchanged if it's shorter than expected, rather than panicking on a
+/// malformed string.
+fn format_queried_at_minute(queried_at: &str) -> String {
+    match queried_at.get(0..16) {
+        Some(prefix) => prefix.replacen('T', " ", 1),
+        None => queried_at.to_string(),
+    }
+}
+
+/// Renders the "last checked" line shown next to the Skybot controls, from
+/// the persisted search's timestamp and elapsed days
+/// (`skybot_last_queried_at`/`skybot_delta_days` on [`TrajectoryPlot`]).
+///
+/// # Arguments
+///
+/// * `queried_at` — RFC 3339 timestamp of the last search, or `None` if the
+///   lineage has never been searched.
+/// * `delta_days` — days elapsed since `queried_at`, or `None` alongside it.
+///
+/// # Return
+///
+/// A short user-facing label, always prefixed with "Skybot" so it reads
+/// standalone even for a first-time visitor: `"Skybot: never checked"`,
+/// `"Skybot: last checked <date> · today"` for a same-day search, or
+/// `"Skybot: last checked <date> · N.N day(s) ago"` otherwise (including an
+/// "in the future" phrasing for clock-skewed negative deltas, rather than a
+/// confusing negative number).
+fn format_last_checked(queried_at: Option<&str>, delta_days: Option<f64>) -> String {
+    let (Some(queried_at), Some(delta_days)) = (queried_at, delta_days) else {
+        return "Skybot: never checked".to_string();
+    };
+    let queried_at = format_queried_at_minute(queried_at);
+    if delta_days < 0.0 {
+        return format!("Skybot: last checked {queried_at} · in the future (clock skew?)");
+    }
+    if delta_days < 1.0 {
+        return format!("Skybot: last checked {queried_at} · today");
+    }
+    let unit = if delta_days < 2.0 { "day" } else { "days" };
+    format!("Skybot: last checked {queried_at} · {delta_days:.1} {unit} ago")
+}
+
 /// One Skybot hit's hover text: name, class, its separation from the real
 /// observation it was queried around, and whichever of magnitude/distance/
 /// positional-error Skybot actually returned for it (all optional in the
@@ -104,6 +151,12 @@ pub fn TrajectoryPlot(
     skybot_processed: usize,
     skybot_total: usize,
     skybot_radius_arcsec: f64,
+    /// When the lineage was last searched (RFC 3339), from the persisted
+    /// `skybot_queries` row — `None` if it has never been searched.
+    skybot_last_queried_at: Option<String>,
+    /// Days elapsed since `skybot_last_queried_at`, precomputed server-side
+    /// (see [`crate::skybot_search::history::get_last_skybot_query`]).
+    skybot_delta_days: Option<f64>,
     on_skybot_radius_change: EventHandler<f64>,
     on_skybot_search: EventHandler<()>,
     on_toggle_skybot_panel: EventHandler<()>,
@@ -277,44 +330,49 @@ pub fn TrajectoryPlot(
             div { class: "card-body",
                 div { class: "flex flex-wrap items-center justify-between gap-3",
                     h2 { class: "card-title", "Trajectory & Kalman predictions" }
-                    div { class: "flex flex-wrap items-center gap-3",
-                        label { class: "flex items-center gap-2 text-xs opacity-70",
-                            "Radius"
-                            input {
-                                r#type: "range",
-                                class: "range range-xs w-24",
-                                min: "{MIN_RADIUS_ARCSEC}",
-                                max: "{MAX_RADIUS_ARCSEC}",
-                                step: "1",
+                    div { class: "flex flex-col items-end gap-1",
+                        div { class: "flex flex-wrap items-center gap-3",
+                            label { class: "flex items-center gap-2 text-xs opacity-70",
+                                "Radius"
+                                input {
+                                    r#type: "range",
+                                    class: "range range-xs w-24",
+                                    min: "{MIN_RADIUS_ARCSEC}",
+                                    max: "{MAX_RADIUS_ARCSEC}",
+                                    step: "1",
+                                    disabled: skybot_running,
+                                    value: "{skybot_radius_arcsec}",
+                                    oninput: move |evt| {
+                                        if let Ok(v) = evt.value().parse::<f64>() {
+                                            on_skybot_radius_change.call(v);
+                                        }
+                                    },
+                                }
+                                span { "{skybot_radius_arcsec:.0}\"" }
+                            }
+                            button {
+                                class: "btn btn-sm btn-outline",
+                                r#type: "button",
                                 disabled: skybot_running,
-                                value: "{skybot_radius_arcsec}",
-                                oninput: move |evt| {
-                                    if let Ok(v) = evt.value().parse::<f64>() {
-                                        on_skybot_radius_change.call(v);
-                                    }
-                                },
+                                onclick: move |_| on_skybot_search.call(()),
+                                if skybot_running {
+                                    span { class: "loading loading-spinner loading-xs" }
+                                    "Searching Skybot ({skybot_processed}/{skybot_total})"
+                                } else {
+                                    "Search Skybot"
+                                }
                             }
-                            span { "{skybot_radius_arcsec:.0}\"" }
-                        }
-                        button {
-                            class: "btn btn-sm btn-outline",
-                            r#type: "button",
-                            disabled: skybot_running,
-                            onclick: move |_| on_skybot_search.call(()),
-                            if skybot_running {
-                                span { class: "loading loading-spinner loading-xs" }
-                                "Searching Skybot ({skybot_processed}/{skybot_total})"
-                            } else {
-                                "Search Skybot"
+                            button {
+                                class: "btn btn-sm btn-ghost btn-circle",
+                                r#type: "button",
+                                disabled: !has_skybot_hits,
+                                title: "Skybot matches found so far",
+                                onclick: move |_| on_toggle_skybot_panel.call(()),
+                                "☰"
                             }
                         }
-                        button {
-                            class: "btn btn-sm btn-ghost btn-circle",
-                            r#type: "button",
-                            disabled: !has_skybot_hits,
-                            title: "Skybot matches found so far",
-                            onclick: move |_| on_toggle_skybot_panel.call(()),
-                            "☰"
+                        p { class: "text-xs opacity-60",
+                            "{format_last_checked(skybot_last_queried_at.as_deref(), skybot_delta_days)}"
                         }
                     }
                 }
@@ -348,5 +406,51 @@ mod tests {
         for name in ["2015 DJ284", "(4) Vesta", "1997 TU8", ""] {
             assert!(SKYBOT_MARKER_COLORS.contains(&skybot_marker_color(name)));
         }
+    }
+
+    #[test]
+    fn format_queried_at_minute_trims_seconds_and_offset() {
+        assert_eq!(
+            format_queried_at_minute("2026-09-23T08:04:32.940721+00:00"),
+            "2026-09-23 08:04"
+        );
+    }
+
+    #[test]
+    fn format_queried_at_minute_falls_back_on_a_short_string() {
+        assert_eq!(format_queried_at_minute("bad-input"), "bad-input");
+    }
+
+    #[test]
+    fn format_last_checked_reports_never_checked_when_absent() {
+        assert_eq!(format_last_checked(None, None), "Skybot: never checked");
+    }
+
+    #[test]
+    fn format_last_checked_reports_today_for_a_same_day_search() {
+        assert_eq!(
+            format_last_checked(Some("2026-09-23T10:00:00+00:00"), Some(0.4)),
+            "Skybot: last checked 2026-09-23 10:00 · today"
+        );
+    }
+
+    #[test]
+    fn format_last_checked_pluralizes_and_rounds_the_day_count() {
+        assert_eq!(
+            format_last_checked(Some("2026-09-20T00:00:00+00:00"), Some(3.5)),
+            "Skybot: last checked 2026-09-20 00:00 · 3.5 days ago"
+        );
+        assert_eq!(
+            format_last_checked(Some("2026-09-22T00:00:00+00:00"), Some(1.2)),
+            "Skybot: last checked 2026-09-22 00:00 · 1.2 days ago"
+        );
+    }
+
+    #[test]
+    fn format_last_checked_flags_a_future_timestamp_as_clock_skew() {
+        assert_eq!(
+            format_last_checked(Some("2026-09-24T00:00:00+00:00"), Some(-1.0)),
+            "Skybot: last checked 2026-09-24 00:00 · in the future (clock skew?)"
+        );
     }
 }

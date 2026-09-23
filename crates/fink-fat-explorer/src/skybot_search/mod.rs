@@ -10,11 +10,20 @@
 //! Request URL construction and response parsing are pure, unit-tested
 //! functions in [`parsing`] and [`sexagesimal`]; only [`run`] touches the
 //! network and the job registry.
+//!
+//! Every finished attempt (including one that finds nothing) is also
+//! recorded in the `skybot_queries` table via [`persist::insert_skybot_query`]
+//! so the lineage page can show its last result without re-running the
+//! search on every visit; [`history::get_last_skybot_query`] reads that back.
 
+pub mod history;
 /// Server-only: computing [`SkybotHit::separation_arcsec`] pulls in `photom`,
 /// and sending the request pulls in `reqwest` — neither builds for `wasm32`.
 #[cfg(feature = "server")]
 pub mod parsing;
+/// Server-only: writing to `skybot_queries` pulls in `sqlx`.
+#[cfg(feature = "server")]
+pub mod persist;
 pub mod run;
 pub mod sexagesimal;
 pub mod status;

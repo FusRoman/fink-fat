@@ -32,10 +32,24 @@ const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 /// request each, at most 10 in flight at a time (see
 /// `MAX_CONCURRENT_REQUESTS`). Returns immediately with a job id; poll
 /// [`super::status::get_skybot_job_status`] for the growing hit list.
+///
+/// # Arguments
+///
+/// * `points` — one query per observation epoch of the lineage.
+/// * `radius_arcsec` — requested conesearch radius; clamped into
+///   [`super::MIN_RADIUS_ARCSEC`, `super::MAX_RADIUS_ARCSEC`].
+/// * `lineage_designation` — the lineage this search is for, carried through
+///   to [`run_skybot_job`] so the finished attempt can be recorded in
+///   `skybot_queries` against the right lineage.
+///
+/// # Return
+///
+/// The job id to poll, or an error if the job registry couldn't be updated.
 #[server]
 pub async fn start_skybot_search(
     points: Vec<SkybotQueryPoint>,
     radius_arcsec: f64,
+    lineage_designation: String,
 ) -> Result<u64, ServerFnError> {
     use crate::{get_skybot_jobs, NEXT_SKYBOT_JOB_ID};
     use std::sync::atomic::Ordering;
@@ -50,7 +64,12 @@ pub async fn start_skybot_search(
             .insert(job_id, super::SkybotJob::new(points.len()));
     }
 
-    tokio::spawn(run_skybot_job(job_id, points, radius_arcsec));
+    tokio::spawn(run_skybot_job(
+        job_id,
+        points,
+        radius_arcsec,
+        lineage_designation,
+    ));
 
     Ok(job_id)
 }
@@ -68,9 +87,24 @@ async fn push_log(job_id: u64, message: impl Into<String>) {
 /// Runs every query point of one job to completion. A single point failing
 /// (timeout, HTTP error, unparseable response) is logged and skipped rather
 /// than failing the whole job — the points that already succeeded stay
-/// visible to the client.
+/// visible to the client. Once every point has been tried, the accumulated
+/// hits (possibly none) are recorded in `skybot_queries` via
+/// [`super::persist::insert_skybot_query`] before the job is marked `Done`.
+///
+/// # Arguments
+///
+/// * `job_id` — the registry entry to update as points complete.
+/// * `points` — the query points to search, one HTTP request each.
+/// * `radius_arcsec` — the already-clamped conesearch radius.
+/// * `lineage_designation` — the lineage to record the persisted attempt
+///   against.
 #[cfg(feature = "server")]
-async fn run_skybot_job(job_id: u64, points: Vec<SkybotQueryPoint>, radius_arcsec: f64) {
+async fn run_skybot_job(
+    job_id: u64,
+    points: Vec<SkybotQueryPoint>,
+    radius_arcsec: f64,
+    lineage_designation: String,
+) {
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
     use tokio::sync::Semaphore;
@@ -140,6 +174,24 @@ async fn run_skybot_job(job_id: u64, points: Vec<SkybotQueryPoint>, radius_arcse
         format!("Done ({failed_points} point(s) failed and were skipped)."),
     )
     .await;
+
+    // Snapshot the hits while holding the lock, then release it before the
+    // `.await` on the DB write — matching this function's own convention
+    // elsewhere of never holding the mutex across an await point.
+    let hits = {
+        let jobs = crate::get_skybot_jobs().await;
+        jobs.lock()
+            .ok()
+            .and_then(|jobs| jobs.get(&job_id).map(|job| job.hits.clone()))
+            .unwrap_or_default()
+    };
+
+    let pool = crate::get_pool().await;
+    if let Err(message) =
+        super::persist::insert_skybot_query(pool, &lineage_designation, radius_arcsec, &hits).await
+    {
+        push_log(job_id, format!("Failed to save this attempt: {message}")).await;
+    }
 
     let jobs = crate::get_skybot_jobs().await;
     if let Ok(mut jobs) = jobs.lock() {

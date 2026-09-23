@@ -28,9 +28,10 @@ use skybot_panel::SkybotPanel;
 use trajectory_plot::TrajectoryPlot;
 use x_axis::XAxisUnit;
 
+use crate::skybot_search::history::get_last_skybot_query;
 use crate::skybot_search::run::start_skybot_search;
 use crate::skybot_search::status::get_skybot_job_status;
-use crate::skybot_search::{JobStatus, SkybotHit, SkybotQueryPoint};
+use crate::skybot_search::{JobStatus, SkybotHit, SkybotJobView, SkybotQueryPoint};
 use crate::sleep_ms;
 
 /// Milliseconds between polls of a running Skybot search job — short enough
@@ -109,10 +110,39 @@ pub fn LineagePage(lineage_id: String) -> Element {
     };
 
     let mut skybot_job_id = use_signal(|| None::<u64>);
-    let mut skybot_view = use_signal(|| None::<crate::skybot_search::SkybotJobView>);
+    let mut skybot_view = use_signal(|| None::<SkybotJobView>);
     let mut skybot_radius = use_signal(|| 10.0_f64);
     let mut skybot_panel_open = use_signal(|| false);
     let mut ades_modal_open = use_signal(|| false);
+
+    // Last persisted attempt for this lineage (see `skybot_search::history`),
+    // loaded alongside everything else on mount so a past search's matches
+    // show up without the user having to re-run it.
+    let skybot_history_lineage_id = lineage_id.clone();
+    let mut skybot_history_resource = use_resource(use_reactive!(|(skybot_history_lineage_id,)| {
+        get_last_skybot_query(skybot_history_lineage_id)
+    }));
+
+    // Seed `skybot_view` from the persisted record the first time it loads,
+    // so the plot/panel render it through the exact same signal a live
+    // search would use — but only if the user hasn't already started a live
+    // search this session, so a slow-resolving history fetch can never
+    // clobber it.
+    use_effect(move || {
+        if skybot_view.read().is_some() || skybot_job_id.read().is_some() {
+            return;
+        }
+        if let Some(Ok(Some(record))) = &*skybot_history_resource.read() {
+            skybot_view.set(Some(SkybotJobView {
+                status: JobStatus::Done,
+                total: record.hits.len(),
+                processed: record.hits.len(),
+                hits: record.hits.clone(),
+                logs: Vec::new(),
+                error: None,
+            }));
+        }
+    });
 
     // Poll a running Skybot search job until it's no longer `Running` — same
     // idiom as `orbit_fit_page`'s fit-status poll, just on a shorter
@@ -128,6 +158,11 @@ pub fn LineagePage(lineage_id: String) -> Element {
                         let running = matches!(view.status, JobStatus::Running);
                         skybot_view.set(Some(view));
                         if !running {
+                            // The job just persisted its own attempt; reload
+                            // the history so the last-checked date/delta
+                            // shown next to the button reflects it right
+                            // away instead of going stale until next visit.
+                            skybot_history_resource.restart();
                             break;
                         }
                     }
@@ -137,6 +172,15 @@ pub fn LineagePage(lineage_id: String) -> Element {
             }
         });
     });
+
+    let skybot_last_queried_at: Option<String> = match &*skybot_history_resource.read() {
+        Some(Ok(Some(record))) => Some(record.queried_at.clone()),
+        _ => None,
+    };
+    let skybot_delta_days: Option<f64> = match &*skybot_history_resource.read() {
+        Some(Ok(Some(record))) => Some(record.delta_days),
+        _ => None,
+    };
 
     let skybot_hits: Vec<SkybotHit> = skybot_view
         .read()
@@ -151,6 +195,7 @@ pub fn LineagePage(lineage_id: String) -> Element {
     let skybot_total = skybot_view.read().as_ref().map_or(0, |view| view.total);
 
     let launch_skybot_observations = observations.clone();
+    let launch_skybot_lineage_id = lineage_id.clone();
     let launch_skybot = move |_: ()| {
         let points: Vec<SkybotQueryPoint> = launch_skybot_observations
             .iter()
@@ -163,9 +208,10 @@ pub fn LineagePage(lineage_id: String) -> Element {
             })
             .collect();
         let radius_arcsec = skybot_radius();
+        let lineage_designation = launch_skybot_lineage_id.clone();
         skybot_view.set(None);
         spawn(async move {
-            if let Ok(id) = start_skybot_search(points, radius_arcsec).await {
+            if let Ok(id) = start_skybot_search(points, radius_arcsec, lineage_designation).await {
                 skybot_job_id.set(Some(id));
             }
         });
@@ -227,6 +273,8 @@ pub fn LineagePage(lineage_id: String) -> Element {
                                         skybot_processed,
                                         skybot_total,
                                         skybot_radius_arcsec: skybot_radius(),
+                                        skybot_last_queried_at: skybot_last_queried_at.clone(),
+                                        skybot_delta_days,
                                         on_skybot_radius_change: move |v| skybot_radius.set(v),
                                         on_skybot_search: launch_skybot,
                                         on_toggle_skybot_panel: move |_| skybot_panel_open.set(!skybot_panel_open()),
