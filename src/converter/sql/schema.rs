@@ -25,6 +25,7 @@ use postgres::Transaction;
 ///    bootstrapped here so a fresh database has every table set up after one
 ///    `convert` run.
 /// 4. `create_skybot_tables.sql` — `skybot_queries`, same rationale as step 3.
+/// 5. `create_cnd_tables.sql` — `cnd_queries`, same rationale as step 3.
 ///
 /// # Arguments
 ///
@@ -39,6 +40,7 @@ pub(super) fn create_tables(transaction: &mut Transaction<'_>) -> Result<(), pos
     transaction.batch_execute(include_str!("migrate_legacy_columns.sql"))?;
     transaction.batch_execute(include_str!("create_orbit_fits_tables.sql"))?;
     transaction.batch_execute(include_str!("create_skybot_tables.sql"))?;
+    transaction.batch_execute(include_str!("create_cnd_tables.sql"))?;
     Ok(())
 }
 

@@ -79,3 +79,9 @@ server = [
 
 [dev-dependencies]
 approx = "0.5.1"
+tempfile = { workspace = true }
+# Test-only: enables `ObsDataset::from_mpc_80_col`, used to round-trip
+# validate `cnd_search::obs80::build_obs80_line`'s output against photom's
+# own obs80 parser (see `cnd_search/obs80.rs`'s tests) — same pattern as
+# `fink-fat-engine/Cargo.toml`'s dev-dependency override for the same feature.
+photom = { workspace = true, features = ["mpc_80_col"] }

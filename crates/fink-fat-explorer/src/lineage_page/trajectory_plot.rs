@@ -7,12 +7,14 @@ use plotly::{
     Plot, Scatter,
 };
 
+use super::cross_match_controls::CrossMatchControls;
 use super::kf_replay::KfStep;
 use super::observations_table::ObservationRow;
 use super::x_axis::XAxisUnit;
 #[cfg(target_arch = "wasm32")]
 use super::x_axis::{format_time_labels, x_values_for_observations, x_values_for_steps};
-use crate::skybot_search::{SkybotHit, MAX_RADIUS_ARCSEC, MIN_RADIUS_ARCSEC};
+use crate::cnd_search::CndHit;
+use crate::skybot_search::SkybotHit;
 
 const DEG_PER_ARCSEC: f64 = 1.0 / 3600.0;
 
@@ -27,7 +29,8 @@ fn format_hover_extra(time_label: &str, ra_err_arcsec: f64, dec_err_arcsec: f64)
 const TRAJECTORY_HOVER_TEMPLATE: &str = "RA: %{x:.6f}°<br>Dec: %{y:.6f}°<br>%{customdata}";
 
 /// Trims an RFC 3339 timestamp (as returned by
-/// [`crate::skybot_search::history::SkybotQueryRecord::queried_at`], e.g.
+/// [`crate::skybot_search::history::SkybotQueryRecord::queried_at`] /
+/// [`crate::cnd_search::history::CndQueryRecord::queried_at`], e.g.
 /// `"2026-09-23T08:04:32.940721+00:00"`) down to `"2026-09-23 08:04"` —
 /// plenty of precision for "was this checked recently", without the
 /// sub-second/offset noise a raw RFC 3339 string carries. Falls back to the
@@ -40,37 +43,46 @@ fn format_queried_at_minute(queried_at: &str) -> String {
     }
 }
 
-/// Renders the "last checked" line shown next to the Skybot controls, from
-/// the persisted search's timestamp and elapsed days
-/// (`skybot_last_queried_at`/`skybot_delta_days` on [`TrajectoryPlot`]).
+/// Renders the "last checked" line shown for one cross-match service
+/// (Skybot or MPC/CND) in [`super::cross_match_controls::CrossMatchControls`],
+/// from that service's persisted-search timestamp and elapsed days.
 ///
 /// # Arguments
 ///
+/// * `service` — short label prefixed onto the line (`"Skybot"`, `"MPC"`),
+///   so each section reads standalone even for a first-time visitor.
 /// * `queried_at` — RFC 3339 timestamp of the last search, or `None` if the
-///   lineage has never been searched.
+///   lineage has never been searched with this service.
 /// * `delta_days` — days elapsed since `queried_at`, or `None` alongside it.
 ///
 /// # Return
 ///
-/// A short user-facing label, always prefixed with "Skybot" so it reads
-/// standalone even for a first-time visitor: `"Skybot: never checked"`,
-/// `"Skybot: last checked <date> · today"` for a same-day search, or
-/// `"Skybot: last checked <date> · N.N day(s) ago"` otherwise (including an
-/// "in the future" phrasing for clock-skewed negative deltas, rather than a
-/// confusing negative number).
-fn format_last_checked(queried_at: Option<&str>, delta_days: Option<f64>) -> String {
+/// A short user-facing label: `"<service>: never checked"`, `"<service>:
+/// last checked <date> · today"` for a same-day search, or `"<service>: last
+/// checked <date> · N.N day(s) ago"` otherwise (including an "in the future"
+/// phrasing for clock-skewed negative deltas, rather than a confusing
+/// negative number).
+pub(super) fn format_last_checked(
+    service: &str,
+    queried_at: Option<&str>,
+    delta_days: Option<f64>,
+) -> String {
     let (Some(queried_at), Some(delta_days)) = (queried_at, delta_days) else {
-        return "Skybot: never checked".to_string();
+        return format!("{service}: never checked");
     };
     let queried_at = format_queried_at_minute(queried_at);
     if delta_days < 0.0 {
-        return format!("Skybot: last checked {queried_at} · in the future (clock skew?)");
+        return format!("{service}: last checked {queried_at} · in the future (clock skew?)");
     }
     if delta_days < 1.0 {
-        return format!("Skybot: last checked {queried_at} · today");
+        return format!("{service}: last checked {queried_at} · today");
     }
-    let unit = if delta_days < 2.0 { "day" } else { "days" };
-    format!("Skybot: last checked {queried_at} · {delta_days:.1} {unit} ago")
+    // Pluralize off the *displayed* (1-decimal-rounded) value, not the raw
+    // one — comparing the raw `delta_days` to a `< 2.0` threshold wrongly
+    // singularized anything below 2 days (e.g. "1.2 day", not "1.2 days").
+    let displayed = (delta_days * 10.0).round() / 10.0;
+    let unit = if displayed == 1.0 { "day" } else { "days" };
+    format!("{service}: last checked {queried_at} · {delta_days:.1} {unit} ago")
 }
 
 /// One Skybot hit's hover text: name, class, its separation from the real
@@ -99,6 +111,27 @@ fn format_skybot_hover(hit: &SkybotHit) -> String {
     lines.join("<br>")
 }
 
+/// One CND hit's hover text: this is one of *our own* observations, so the
+/// text explains what CND found near it rather than describing a foreign
+/// object's ephemeris (contrast [`format_skybot_hover`]).
+#[cfg(target_arch = "wasm32")]
+fn format_cnd_hover(hit: &CndHit) -> String {
+    let mut lines = vec![
+        "<b>MPC near-duplicate</b>".to_string(),
+        format!("{} published observation(s) nearby", hit.n_matches),
+        format!(
+            "Δt ≥ {:.1}s, Δθ ≥ {:.2}″ (closest match)",
+            hit.min_time_separation_s, hit.min_angle_separation_arcsec
+        ),
+    ];
+    if let Some(obs80) = &hit.closest_match_obs80 {
+        lines.push(format!(
+            "<span style=\"font-family:monospace\">{obs80}</span>"
+        ));
+    }
+    lines.join("<br>")
+}
+
 /// A small, high-contrast palette for telling different Skybot matches apart
 /// on the plot — deliberately disjoint from the Observations/Kalman traces'
 /// colors (`#2d7fd2` blue, `#d2422d` red-orange) used elsewhere on this plot.
@@ -119,6 +152,13 @@ fn skybot_marker_color(name: &str) -> &'static str {
     SKYBOT_MARKER_COLORS[index]
 }
 
+/// Marker color for CND matches — a single fixed color (unlike Skybot's
+/// per-object palette, since every CND hit is the same kind of thing: one of
+/// our own observations with a published near-duplicate), chosen to be
+/// visually distinct from every Skybot palette entry and from the
+/// Observations/Kalman trace colors.
+const CND_MARKER_COLOR: &str = "#c0392b";
+
 /// Linearly interpolated marker sizes from `from` (first/oldest point) to
 /// `to` (last/newest point) — a cheap direction cue, since this `plotly`
 /// version has no auto-oriented arrow marker to show which way a track runs.
@@ -138,7 +178,8 @@ fn size_gradient(n: usize, from: usize, to: usize) -> Vec<usize> {
 /// Sky-plane trajectory: the observed track (with its own astrometric error
 /// bars) overlaid with the Kalman filter's pre-update prediction at each
 /// real observation — the "decision" the filter made, with its own error
-/// box, before absorbing that point.
+/// box, before absorbing that point — plus any Skybot / MPC (CND)
+/// cross-match hits.
 #[component]
 pub fn TrajectoryPlot(
     observations: Vec<ObservationRow>,
@@ -159,18 +200,37 @@ pub fn TrajectoryPlot(
     skybot_delta_days: Option<f64>,
     on_skybot_radius_change: EventHandler<f64>,
     on_skybot_search: EventHandler<()>,
-    on_toggle_skybot_panel: EventHandler<()>,
+    /// MPC near-duplicate hits found so far — see [`crate::cnd_search`].
+    cnd_hits: Vec<CndHit>,
+    cnd_running: bool,
+    cnd_processed: usize,
+    cnd_total: usize,
+    cnd_time_separation_s: f64,
+    cnd_angle_separation_arcsec: f64,
+    /// When the lineage was last checked against MPC (RFC 3339), from the
+    /// persisted `cnd_queries` row — `None` if it has never been checked.
+    cnd_last_queried_at: Option<String>,
+    /// Days elapsed since `cnd_last_queried_at`, precomputed server-side
+    /// (see [`crate::cnd_search::history::get_last_cnd_query`]).
+    cnd_delta_days: Option<f64>,
+    on_cnd_time_separation_change: EventHandler<f64>,
+    on_cnd_angle_separation_change: EventHandler<f64>,
+    on_cnd_search: EventHandler<()>,
+    /// Toggles the merged results panel listing both services' hits (see
+    /// [`super::cross_match_panel::CrossMatchPanel`]).
+    on_toggle_results_panel: EventHandler<()>,
 ) -> Element {
     let mut is_mounted = use_signal(|| false);
     #[cfg(target_arch = "wasm32")]
     let mut drawn = use_signal(|| false);
-    let has_skybot_hits = !skybot_hits.is_empty();
+    let has_hits = !skybot_hits.is_empty() || !cnd_hits.is_empty();
 
     use_effect(use_reactive!(|(
         observations,
         replay,
         x_axis_unit,
         skybot_hits,
+        cnd_hits,
     )| {
         #[cfg(target_arch = "wasm32")]
         {
@@ -307,6 +367,26 @@ pub fn TrajectoryPlot(
                 );
             }
 
+            if !cnd_hits.is_empty() {
+                let cnd_ra: Vec<f64> = cnd_hits.iter().map(|h| h.ra_deg).collect();
+                let cnd_dec: Vec<f64> = cnd_hits.iter().map(|h| h.dec_deg).collect();
+                let cnd_hover: Vec<String> = cnd_hits.iter().map(format_cnd_hover).collect();
+
+                plot.add_trace(
+                    Scatter::new(cnd_ra, cnd_dec)
+                        .name("MPC near-duplicates")
+                        .mode(Mode::Markers)
+                        .marker(
+                            Marker::new()
+                                .color(CND_MARKER_COLOR)
+                                .symbol(plotly::common::MarkerSymbol::CircleOpen)
+                                .size(13),
+                        )
+                        .custom_data(cnd_hover)
+                        .hover_template("%{customdata}"),
+                );
+            }
+
             let layout = Layout::new()
                 .height(420)
                 .margin(Margin::new().top(20).right(20))
@@ -330,49 +410,34 @@ pub fn TrajectoryPlot(
             div { class: "card-body",
                 div { class: "flex flex-wrap items-center justify-between gap-3",
                     h2 { class: "card-title", "Trajectory & Kalman predictions" }
-                    div { class: "flex flex-col items-end gap-1",
-                        div { class: "flex flex-wrap items-center gap-3",
-                            label { class: "flex items-center gap-2 text-xs opacity-70",
-                                "Radius"
-                                input {
-                                    r#type: "range",
-                                    class: "range range-xs w-24",
-                                    min: "{MIN_RADIUS_ARCSEC}",
-                                    max: "{MAX_RADIUS_ARCSEC}",
-                                    step: "1",
-                                    disabled: skybot_running,
-                                    value: "{skybot_radius_arcsec}",
-                                    oninput: move |evt| {
-                                        if let Ok(v) = evt.value().parse::<f64>() {
-                                            on_skybot_radius_change.call(v);
-                                        }
-                                    },
-                                }
-                                span { "{skybot_radius_arcsec:.0}\"" }
-                            }
-                            button {
-                                class: "btn btn-sm btn-outline",
-                                r#type: "button",
-                                disabled: skybot_running,
-                                onclick: move |_| on_skybot_search.call(()),
-                                if skybot_running {
-                                    span { class: "loading loading-spinner loading-xs" }
-                                    "Searching Skybot ({skybot_processed}/{skybot_total})"
-                                } else {
-                                    "Search Skybot"
-                                }
-                            }
-                            button {
-                                class: "btn btn-sm btn-ghost btn-circle",
-                                r#type: "button",
-                                disabled: !has_skybot_hits,
-                                title: "Skybot matches found so far",
-                                onclick: move |_| on_toggle_skybot_panel.call(()),
-                                "☰"
-                            }
+                    div { class: "flex items-center gap-2",
+                        CrossMatchControls {
+                            skybot_radius_arcsec,
+                            skybot_running,
+                            skybot_processed,
+                            skybot_total,
+                            skybot_last_queried_at,
+                            skybot_delta_days,
+                            on_skybot_radius_change,
+                            on_skybot_search,
+                            cnd_time_separation_s,
+                            cnd_angle_separation_arcsec,
+                            cnd_running,
+                            cnd_processed,
+                            cnd_total,
+                            cnd_last_queried_at,
+                            cnd_delta_days,
+                            on_cnd_time_separation_change,
+                            on_cnd_angle_separation_change,
+                            on_cnd_search,
                         }
-                        p { class: "text-xs opacity-60",
-                            "{format_last_checked(skybot_last_queried_at.as_deref(), skybot_delta_days)}"
+                        button {
+                            class: "btn btn-sm btn-ghost btn-circle",
+                            r#type: "button",
+                            disabled: !has_hits,
+                            title: "Cross-match results found so far",
+                            onclick: move |_| on_toggle_results_panel.call(()),
+                            "☰"
                         }
                     }
                 }
@@ -423,13 +488,21 @@ mod tests {
 
     #[test]
     fn format_last_checked_reports_never_checked_when_absent() {
-        assert_eq!(format_last_checked(None, None), "Skybot: never checked");
+        assert_eq!(
+            format_last_checked("Skybot", None, None),
+            "Skybot: never checked"
+        );
+    }
+
+    #[test]
+    fn format_last_checked_uses_the_given_service_label() {
+        assert_eq!(format_last_checked("MPC", None, None), "MPC: never checked");
     }
 
     #[test]
     fn format_last_checked_reports_today_for_a_same_day_search() {
         assert_eq!(
-            format_last_checked(Some("2026-09-23T10:00:00+00:00"), Some(0.4)),
+            format_last_checked("Skybot", Some("2026-09-23T10:00:00+00:00"), Some(0.4)),
             "Skybot: last checked 2026-09-23 10:00 · today"
         );
     }
@@ -437,11 +510,11 @@ mod tests {
     #[test]
     fn format_last_checked_pluralizes_and_rounds_the_day_count() {
         assert_eq!(
-            format_last_checked(Some("2026-09-20T00:00:00+00:00"), Some(3.5)),
+            format_last_checked("Skybot", Some("2026-09-20T00:00:00+00:00"), Some(3.5)),
             "Skybot: last checked 2026-09-20 00:00 · 3.5 days ago"
         );
         assert_eq!(
-            format_last_checked(Some("2026-09-22T00:00:00+00:00"), Some(1.2)),
+            format_last_checked("Skybot", Some("2026-09-22T00:00:00+00:00"), Some(1.2)),
             "Skybot: last checked 2026-09-22 00:00 · 1.2 days ago"
         );
     }
@@ -449,7 +522,7 @@ mod tests {
     #[test]
     fn format_last_checked_flags_a_future_timestamp_as_clock_skew() {
         assert_eq!(
-            format_last_checked(Some("2026-09-24T00:00:00+00:00"), Some(-1.0)),
+            format_last_checked("Skybot", Some("2026-09-24T00:00:00+00:00"), Some(-1.0)),
             "Skybot: last checked 2026-09-24 00:00 · in the future (clock skew?)"
         );
     }

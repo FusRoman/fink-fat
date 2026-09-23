@@ -7,6 +7,7 @@ pub mod quality_tier;
 #[cfg(feature = "server")]
 pub mod snapshot;
 pub mod stats_count;
+mod tools_menu;
 
 use dioxus::prelude::*;
 use std::collections::HashSet;
@@ -18,6 +19,7 @@ use crate::homepage::{
     orbit3d_plot::Orbit3DPlot,
     quality_tier::QualityTier,
     stats_count::{get_snapshot_version, StatsBanner},
+    tools_menu::ToolsMenu,
 };
 
 /// Which population-wide plot the homepage shows above the lineage table.
@@ -124,23 +126,7 @@ pub fn Home() -> Element {
                         class: "input input-bordered input-sm w-64",
                         oninput: move |evt| search_input.set(evt.value()),
                     }
-                    Link {
-                        to: crate::Route::BulkOrbitFitPage {},
-                        class: "btn btn-sm btn-primary",
-                        "Fit all trajectories"
-                    }
-                    button {
-                        class: "btn btn-sm btn-ghost",
-                        disabled: refreshing(),
-                        title: "Reload the in-memory index from the database (after a fink-fat convert)",
-                        onclick: request_refresh,
-                        if refreshing() {
-                            span { class: "loading loading-spinner loading-xs" }
-                            "Refreshing"
-                        } else {
-                            "Refresh"
-                        }
-                    }
+                    ToolsMenu { refreshing: refreshing(), on_refresh: request_refresh }
                 }
             }
 

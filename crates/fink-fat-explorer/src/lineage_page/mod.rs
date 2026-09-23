@@ -1,5 +1,7 @@
 mod ades_export_modal;
 mod alert_cutouts;
+mod cross_match_controls;
+mod cross_match_panel;
 mod hypotheses_plot;
 mod identity_card;
 mod kf_replay;
@@ -10,7 +12,6 @@ mod orbit3d_glossary;
 mod orbit3d_tab;
 mod plot_tabs;
 mod rho_evolution_plot;
-mod skybot_panel;
 mod trajectory_plot;
 mod x_axis;
 
@@ -18,25 +19,31 @@ use dioxus::prelude::*;
 
 use ades_export_modal::AdesExportModal;
 use alert_cutouts::AlertCarousel;
+use cross_match_panel::CrossMatchPanel;
 use identity_card::{get_lineage_summary, IdentityCard};
 use kf_replay::{replay_kalman_branch, HypothesisSnapshot, KfStep};
 use light_curve_plot::LightCurvePlot;
 use observations_table::{get_lineage_observations, ObservationRow, ObservationsTable};
 use orbit3d_tab::LineageOrbit3DTab;
 use plot_tabs::PlotTabs;
-use skybot_panel::SkybotPanel;
 use trajectory_plot::TrajectoryPlot;
 use x_axis::XAxisUnit;
 
+use crate::cnd_search::history::get_last_cnd_query;
+use crate::cnd_search::run::start_cnd_search;
+use crate::cnd_search::status::get_cnd_job_status;
+use crate::cnd_search::{
+    CndHit, CndJobView, CndQueryPoint, DEFAULT_ANGLE_SEPARATION_ARCSEC, DEFAULT_TIME_SEPARATION_S,
+};
 use crate::skybot_search::history::get_last_skybot_query;
 use crate::skybot_search::run::start_skybot_search;
 use crate::skybot_search::status::get_skybot_job_status;
 use crate::skybot_search::{JobStatus, SkybotHit, SkybotJobView, SkybotQueryPoint};
 use crate::sleep_ms;
 
-/// Milliseconds between polls of a running Skybot search job — short enough
-/// that matches visibly trickle onto the plot as they arrive.
-const SKYBOT_POLL_INTERVAL_MS: u64 = 500;
+/// Milliseconds between polls of a running Skybot search / CND check job —
+/// short enough that matches visibly trickle onto the plot as they arrive.
+const CROSS_MATCH_POLL_INTERVAL_MS: u64 = 500;
 
 /// Which plot is shown next to the identity card.
 #[derive(Clone, Copy, PartialEq)]
@@ -92,6 +99,12 @@ pub fn LineagePage(lineage_id: String) -> Element {
         Some(Ok(Some(data))) => data.observations.clone(),
         _ => Vec::new(),
     };
+    // Needed to pack a placeholder MPC designation into obs80 lines when
+    // submitting to CND — see `crate::cnd_search::obs80::pack_branch_id`.
+    let branch_id: Option<i64> = match &*observations_resource.read() {
+        Some(Ok(Some(data))) => Some(data.branch_id),
+        _ => None,
+    };
     let mpc_codes: Vec<String> = observations
         .iter()
         .map(|obs| obs.mpc_code_obs.clone())
@@ -112,21 +125,30 @@ pub fn LineagePage(lineage_id: String) -> Element {
     let mut skybot_job_id = use_signal(|| None::<u64>);
     let mut skybot_view = use_signal(|| None::<SkybotJobView>);
     let mut skybot_radius = use_signal(|| 10.0_f64);
-    let mut skybot_panel_open = use_signal(|| false);
+    let mut cnd_job_id = use_signal(|| None::<u64>);
+    let mut cnd_view = use_signal(|| None::<CndJobView>);
+    let mut cnd_time_separation_s = use_signal(|| DEFAULT_TIME_SEPARATION_S);
+    let mut cnd_angle_separation_arcsec = use_signal(|| DEFAULT_ANGLE_SEPARATION_ARCSEC);
+    let mut cross_match_panel_open = use_signal(|| false);
     let mut ades_modal_open = use_signal(|| false);
 
-    // Last persisted attempt for this lineage (see `skybot_search::history`),
-    // loaded alongside everything else on mount so a past search's matches
-    // show up without the user having to re-run it.
+    // Last persisted attempt for this lineage, per service (see
+    // `skybot_search::history`/`cnd_search::history`), loaded alongside
+    // everything else on mount so a past search's matches show up without
+    // the user having to re-run it.
     let skybot_history_lineage_id = lineage_id.clone();
     let mut skybot_history_resource = use_resource(use_reactive!(|(skybot_history_lineage_id,)| {
         get_last_skybot_query(skybot_history_lineage_id)
     }));
+    let cnd_history_lineage_id = lineage_id.clone();
+    let mut cnd_history_resource = use_resource(use_reactive!(|(cnd_history_lineage_id,)| {
+        get_last_cnd_query(cnd_history_lineage_id)
+    }));
 
-    // Seed `skybot_view` from the persisted record the first time it loads,
-    // so the plot/panel render it through the exact same signal a live
-    // search would use — but only if the user hasn't already started a live
-    // search this session, so a slow-resolving history fetch can never
+    // Seed `skybot_view`/`cnd_view` from the persisted record the first time
+    // it loads, so the plot/panel render it through the exact same signal a
+    // live search would use — but only if the user hasn't already started a
+    // live search this session, so a slow-resolving history fetch can never
     // clobber it.
     use_effect(move || {
         if skybot_view.read().is_some() || skybot_job_id.read().is_some() {
@@ -134,6 +156,21 @@ pub fn LineagePage(lineage_id: String) -> Element {
         }
         if let Some(Ok(Some(record))) = &*skybot_history_resource.read() {
             skybot_view.set(Some(SkybotJobView {
+                status: JobStatus::Done,
+                total: record.hits.len(),
+                processed: record.hits.len(),
+                hits: record.hits.clone(),
+                logs: Vec::new(),
+                error: None,
+            }));
+        }
+    });
+    use_effect(move || {
+        if cnd_view.read().is_some() || cnd_job_id.read().is_some() {
+            return;
+        }
+        if let Some(Ok(Some(record))) = &*cnd_history_resource.read() {
+            cnd_view.set(Some(CndJobView {
                 status: JobStatus::Done,
                 total: record.hits.len(),
                 processed: record.hits.len(),
@@ -168,7 +205,30 @@ pub fn LineagePage(lineage_id: String) -> Element {
                     }
                     Err(_) => break,
                 }
-                sleep_ms(SKYBOT_POLL_INTERVAL_MS).await;
+                sleep_ms(CROSS_MATCH_POLL_INTERVAL_MS).await;
+            }
+        });
+    });
+
+    // Same poll idiom for the CND check job.
+    use_effect(move || {
+        let Some(id) = *cnd_job_id.read() else {
+            return;
+        };
+        spawn(async move {
+            loop {
+                match get_cnd_job_status(id).await {
+                    Ok(view) => {
+                        let running = matches!(view.status, JobStatus::Running);
+                        cnd_view.set(Some(view));
+                        if !running {
+                            cnd_history_resource.restart();
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+                sleep_ms(CROSS_MATCH_POLL_INTERVAL_MS).await;
             }
         });
     });
@@ -178,6 +238,14 @@ pub fn LineagePage(lineage_id: String) -> Element {
         _ => None,
     };
     let skybot_delta_days: Option<f64> = match &*skybot_history_resource.read() {
+        Some(Ok(Some(record))) => Some(record.delta_days),
+        _ => None,
+    };
+    let cnd_last_queried_at: Option<String> = match &*cnd_history_resource.read() {
+        Some(Ok(Some(record))) => Some(record.queried_at.clone()),
+        _ => None,
+    };
+    let cnd_delta_days: Option<f64> = match &*cnd_history_resource.read() {
         Some(Ok(Some(record))) => Some(record.delta_days),
         _ => None,
     };
@@ -193,6 +261,18 @@ pub fn LineagePage(lineage_id: String) -> Element {
     );
     let skybot_processed = skybot_view.read().as_ref().map_or(0, |view| view.processed);
     let skybot_total = skybot_view.read().as_ref().map_or(0, |view| view.total);
+
+    let cnd_hits: Vec<CndHit> = cnd_view
+        .read()
+        .as_ref()
+        .map(|view| view.hits.clone())
+        .unwrap_or_default();
+    let cnd_running = matches!(
+        cnd_view.read().as_ref().map(|view| view.status),
+        Some(JobStatus::Running)
+    );
+    let cnd_processed = cnd_view.read().as_ref().map_or(0, |view| view.processed);
+    let cnd_total = cnd_view.read().as_ref().map_or(0, |view| view.total);
 
     let launch_skybot_observations = observations.clone();
     let launch_skybot_lineage_id = lineage_id.clone();
@@ -213,6 +293,45 @@ pub fn LineagePage(lineage_id: String) -> Element {
         spawn(async move {
             if let Ok(id) = start_skybot_search(points, radius_arcsec, lineage_designation).await {
                 skybot_job_id.set(Some(id));
+            }
+        });
+    };
+
+    let launch_cnd_observations = observations.clone();
+    let launch_cnd_lineage_id = lineage_id.clone();
+    let launch_cnd = move |_: ()| {
+        let Some(branch_id) = branch_id else {
+            return;
+        };
+        let points: Vec<CndQueryPoint> = launch_cnd_observations
+            .iter()
+            .enumerate()
+            .map(|(source_index, obs)| CndQueryPoint {
+                source_index,
+                obs_id: obs.id,
+                branch_id,
+                ra_deg: obs.ra.to_degrees(),
+                dec_deg: obs.dec.to_degrees(),
+                mjd_tt: obs.mjd_tt,
+                magnitude: obs.magnitude,
+                filter: obs.filter,
+                mpc_code_obs: obs.mpc_code_obs.clone(),
+            })
+            .collect();
+        let time_separation_s = cnd_time_separation_s();
+        let angle_separation_arcsec = cnd_angle_separation_arcsec();
+        let lineage_designation = launch_cnd_lineage_id.clone();
+        cnd_view.set(None);
+        spawn(async move {
+            if let Ok(id) = start_cnd_search(
+                points,
+                lineage_designation,
+                time_separation_s,
+                angle_separation_arcsec,
+            )
+            .await
+            {
+                cnd_job_id.set(Some(id));
             }
         });
     };
@@ -277,7 +396,18 @@ pub fn LineagePage(lineage_id: String) -> Element {
                                         skybot_delta_days,
                                         on_skybot_radius_change: move |v| skybot_radius.set(v),
                                         on_skybot_search: launch_skybot,
-                                        on_toggle_skybot_panel: move |_| skybot_panel_open.set(!skybot_panel_open()),
+                                        cnd_hits: cnd_hits.clone(),
+                                        cnd_running,
+                                        cnd_processed,
+                                        cnd_total,
+                                        cnd_time_separation_s: cnd_time_separation_s(),
+                                        cnd_angle_separation_arcsec: cnd_angle_separation_arcsec(),
+                                        cnd_last_queried_at: cnd_last_queried_at.clone(),
+                                        cnd_delta_days,
+                                        on_cnd_time_separation_change: move |v| cnd_time_separation_s.set(v),
+                                        on_cnd_angle_separation_change: move |v| cnd_angle_separation_arcsec.set(v),
+                                        on_cnd_search: launch_cnd,
+                                        on_toggle_results_panel: move |_| cross_match_panel_open.set(!cross_match_panel_open()),
                                     }
                                 },
                                 LineageView::LightCurve => rsx! {
@@ -332,10 +462,11 @@ pub fn LineagePage(lineage_id: String) -> Element {
                 },
             }
 
-            SkybotPanel {
-                hits: skybot_hits,
-                open: skybot_panel_open(),
-                on_close: move |_| skybot_panel_open.set(false),
+            CrossMatchPanel {
+                skybot_hits,
+                cnd_hits,
+                open: cross_match_panel_open(),
+                on_close: move |_| cross_match_panel_open.set(false),
             }
 
             AdesExportModal {

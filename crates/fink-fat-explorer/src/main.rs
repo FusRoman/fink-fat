@@ -1,6 +1,9 @@
 pub mod ades;
+pub mod bulk_cnd;
+pub mod bulk_cnd_page;
 pub mod bulk_orbit_fit;
 pub mod bulk_orbit_fit_page;
+pub mod cnd_search;
 pub mod fit_pipeline;
 pub mod format_epoch;
 pub mod homepage;
@@ -27,6 +30,7 @@ use std::sync::Mutex;
 #[cfg(feature = "server")]
 use tokio::sync::OnceCell;
 
+use crate::bulk_cnd_page::BulkCndPage;
 use crate::bulk_orbit_fit_page::BulkOrbitFitPage;
 use crate::homepage::Home;
 use crate::lineage_page::LineagePage;
@@ -227,6 +231,45 @@ async fn get_skybot_jobs() -> &'static Mutex<HashMap<u64, crate::skybot_search::
         .await
 }
 
+/// In-memory registry of in-flight/completed CND search jobs (see
+/// `cnd_search::run::start_cnd_search`) — same rationale as `SKYBOT_JOBS`
+/// above.
+#[cfg(feature = "server")]
+static CND_JOBS: OnceCell<Mutex<HashMap<u64, crate::cnd_search::CndJob>>> = OnceCell::const_new();
+
+#[cfg(feature = "server")]
+static NEXT_CND_JOB_ID: AtomicU64 = AtomicU64::new(1);
+
+#[cfg(feature = "server")]
+async fn get_cnd_jobs() -> &'static Mutex<HashMap<u64, crate::cnd_search::CndJob>> {
+    CND_JOBS
+        .get_or_init(|| async { Mutex::new(HashMap::new()) })
+        .await
+}
+
+/// In-memory registry of in-flight/completed bulk CND jobs (see
+/// `bulk_cnd::run::start_bulk_cnd_check`) — same rationale as
+/// `BULK_ORBIT_FIT_JOBS` above, including its own independent
+/// single-run guard (`BULK_CND_RUNNING`): a bulk CND check and a bulk orbit
+/// fit don't contend for the same resource, so they're allowed to run
+/// concurrently — only two *bulk CND* checks can't overlap.
+#[cfg(feature = "server")]
+static BULK_CND_JOBS: OnceCell<Mutex<HashMap<u64, crate::bulk_cnd::BulkCndJob>>> =
+    OnceCell::const_new();
+
+#[cfg(feature = "server")]
+static NEXT_BULK_CND_JOB_ID: AtomicU64 = AtomicU64::new(1);
+
+#[cfg(feature = "server")]
+static BULK_CND_RUNNING: AtomicBool = AtomicBool::new(false);
+
+#[cfg(feature = "server")]
+async fn get_bulk_cnd_jobs() -> &'static Mutex<HashMap<u64, crate::bulk_cnd::BulkCndJob>> {
+    BULK_CND_JOBS
+        .get_or_init(|| async { Mutex::new(HashMap::new()) })
+        .await
+}
+
 #[derive(Clone, Debug, PartialEq, Routable)]
 enum Route {
     #[route("/")]
@@ -240,6 +283,9 @@ enum Route {
 
     #[route("/bulk-fit")]
     BulkOrbitFitPage {},
+
+    #[route("/bulk-cnd")]
+    BulkCndPage {},
 }
 
 fn main() {
