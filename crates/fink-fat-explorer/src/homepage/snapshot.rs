@@ -52,7 +52,6 @@ struct SnapshotRow {
     arc_length_days: f64,
     n_nights: i64,
     median_inter_night_dt_days: Option<f64>,
-    dynamic_family: String,
     semi_major_axis: f64,
     eccentricity: f64,
     // Raw Kalman attributable state — not used by the (a, e) plot or the
@@ -89,7 +88,7 @@ const SNAPSHOT_QUERY: &str = "
     SELECT b.branch_id, b.lineage_id, b.designation, b.lineage_designation,
            b.cumulative_llr, b.n_real_updates,
            b.arc_length_days, b.n_nights, b.median_inter_night_dt_days,
-           ks.dynamic_family, ks.semi_major_axis, ks.eccentricity,
+           ks.semi_major_axis, ks.eccentricity,
            ks.ra, ks.dec, ks.ra_dot, ks.dec_dot, ks.rho, ks.rho_dot, ks.epoch,
            ks.r_obs_x, ks.r_obs_y, ks.r_obs_z, ks.v_obs_x, ks.v_obs_y, ks.v_obs_z
     FROM branches b
@@ -132,6 +131,64 @@ struct LatestFitRow {
     fit_method: String,
     num_measurements: i32,
     fitted_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Each branch's best available `orbit_fits` row — n-body
+/// differential-correction preferred over a Gauss-IOD-only fit whenever both
+/// exist, via [`crate::best_orbit::PREFER_NBODY_ORDER_BY`], the same
+/// priority `lineage_page::identity_card::best_orbit_fit` uses for the
+/// identity card's own semi-major-axis/eccentricity display.
+/// Distinct from [`LATEST_ORBIT_FIT_QUERY`] above, which deliberately stays
+/// latest-by-time (it feeds quality-tier assessment: "what did the most
+/// recent fit *attempt* do", not "what's the best orbit we have").
+fn best_orbit_fit_query() -> String {
+    format!(
+        "SELECT DISTINCT ON (branch_id) branch_id, fit_method, keplerian
+         FROM orbit_fits
+         WHERE branch_id IS NOT NULL
+         ORDER BY branch_id, {}",
+        crate::best_orbit::PREFER_NBODY_ORDER_BY
+    )
+}
+
+#[derive(sqlx::FromRow)]
+struct BestOrbitFitRow {
+    branch_id: i64,
+    fit_method: String,
+    keplerian: sqlx::types::Json<crate::fit_pipeline::fit::KeplerianView>,
+}
+
+/// Runs [`best_orbit_fit_query`] into a `branch_id -> OrbitCandidate` map. A
+/// branch with no `orbit_fits` row at all is simply absent — [`assemble`]
+/// falls back to the Kalman-bank state
+/// (`SnapshotRow::semi_major_axis`/`::eccentricity`) for those, same as the
+/// lineage page does when `best_orbit_fit` returns `None`.
+///
+/// # Errors
+///
+/// The query failing.
+async fn build_best_orbit_index(
+    pool: &PgPool,
+) -> Result<HashMap<i64, crate::best_orbit::OrbitCandidate>, sqlx::Error> {
+    use crate::best_orbit::OrbitCandidate;
+    use crate::fit_pipeline::fit::FitMethod;
+
+    let rows: Vec<BestOrbitFitRow> = sqlx::query_as(sqlx::AssertSqlSafe(best_orbit_fit_query()))
+        .fetch_all(pool)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            (
+                r.branch_id,
+                OrbitCandidate {
+                    fit_method: FitMethod::from_column(&r.fit_method),
+                    semi_major_axis_au: r.keplerian.0.semi_major_axis_au,
+                    eccentricity: r.keplerian.0.eccentricity,
+                },
+            )
+        })
+        .collect())
 }
 
 /// A branch's latest recorded failed bulk-fit attempt, if any — see
@@ -458,47 +515,82 @@ async fn build() -> Result<Snapshot, sqlx::Error> {
         .await?;
 
     let quality = build_quality_index(pool).await?;
+    let best_orbits = build_best_orbit_index(pool).await?;
 
-    Ok(assemble(rows, n_hypotheses, n_archived, &quality))
+    Ok(assemble(
+        rows,
+        n_hypotheses,
+        n_archived,
+        &quality,
+        &best_orbits,
+    ))
 }
 
 /// Turns raw rows into the indexed, pre-sorted structure the server functions
 /// read. Split out from [`build`] so it is exercisable without a database.
+///
+/// # Arguments
+///
+/// * `best_orbits` — see [`build_best_orbit_index`]; fed through
+///   [`crate::best_orbit::resolve_best_orbit`] to prefer a branch's best
+///   `orbit_fits` row over its Kalman-bank state for the (a, e) plot's
+///   position and the family badge, matching the identity card's own
+///   n-body-over-IOD-over-Kalman priority.
 fn assemble(
     rows: Vec<SnapshotRow>,
     n_hypotheses: i64,
     n_archived: i64,
     quality: &QualityIndex,
+    best_orbits: &HashMap<i64, crate::best_orbit::OrbitCandidate>,
 ) -> Snapshot {
     let mut branches: Vec<BranchRow> = rows
         .into_iter()
-        .map(|row| BranchRow {
-            branch_id: row.branch_id,
-            lineage_id: row.lineage_id,
-            designation: row.designation.into_boxed_str(),
-            lineage_designation: row.lineage_designation.into_boxed_str(),
-            cumulative_llr: sanitize_llr(row.cumulative_llr),
-            n_real_updates: row.n_real_updates,
-            arc_length_days: row.arc_length_days,
-            n_nights: row.n_nights,
-            median_inter_night_dt_days: row.median_inter_night_dt_days,
-            family: DynamicalFamily::from_label(&row.dynamic_family),
-            semi_major_axis: row.semi_major_axis as f32,
-            eccentricity: row.eccentricity as f32,
-            quality_tier: quality.tier_for(row.branch_id, row.n_nights),
-            ra: row.ra,
-            dec: row.dec,
-            ra_dot: row.ra_dot,
-            dec_dot: row.dec_dot,
-            rho: row.rho,
-            rho_dot: row.rho_dot,
-            epoch: row.epoch,
-            r_obs_x: row.r_obs_x,
-            r_obs_y: row.r_obs_y,
-            r_obs_z: row.r_obs_z,
-            v_obs_x: row.v_obs_x,
-            v_obs_y: row.v_obs_y,
-            v_obs_z: row.v_obs_z,
+        .map(|row| {
+            // Prefer this branch's best `orbit_fits` row (n-body over
+            // IOD-only) over the Kalman-bank state already joined into
+            // `row`, via the same shared cascade the identity card uses.
+            // Family is re-derived from whichever (a, e) wins rather than
+            // trusting `row.dynamic_family` (which is only ever
+            // Kalman-derived, baked in at `fink-fat convert` time) so the
+            // badge never disagrees with the plotted point.
+            let best_orbit = crate::best_orbit::resolve_best_orbit(
+                best_orbits.get(&row.branch_id).copied(),
+                (row.semi_major_axis, row.eccentricity),
+            );
+            let (semi_major_axis, eccentricity, family) = (
+                best_orbit.semi_major_axis_au as f32,
+                best_orbit.eccentricity as f32,
+                best_orbit.family,
+            );
+
+            BranchRow {
+                branch_id: row.branch_id,
+                lineage_id: row.lineage_id,
+                designation: row.designation.into_boxed_str(),
+                lineage_designation: row.lineage_designation.into_boxed_str(),
+                cumulative_llr: sanitize_llr(row.cumulative_llr),
+                n_real_updates: row.n_real_updates,
+                arc_length_days: row.arc_length_days,
+                n_nights: row.n_nights,
+                median_inter_night_dt_days: row.median_inter_night_dt_days,
+                family,
+                semi_major_axis,
+                eccentricity,
+                quality_tier: quality.tier_for(row.branch_id, row.n_nights),
+                ra: row.ra,
+                dec: row.dec,
+                ra_dot: row.ra_dot,
+                dec_dot: row.dec_dot,
+                rho: row.rho,
+                rho_dot: row.rho_dot,
+                epoch: row.epoch,
+                r_obs_x: row.r_obs_x,
+                r_obs_y: row.r_obs_y,
+                r_obs_z: row.r_obs_z,
+                v_obs_x: row.v_obs_x,
+                v_obs_y: row.v_obs_y,
+                v_obs_z: row.v_obs_z,
+            }
         })
         .collect();
 
@@ -735,6 +827,23 @@ impl Snapshot {
 mod tests {
     use super::*;
 
+    /// Representative `(semi_major_axis, eccentricity)` for a family label,
+    /// chosen so `DynamicalFamily::classify` maps it back to that exact
+    /// family — lets test call sites keep naming families by label (readable
+    /// intent) even though `family` is now always re-derived from (a, e) via
+    /// [`crate::best_orbit::resolve_best_orbit`] rather than trusted off a
+    /// stored column. Covers only the labels this test module actually uses.
+    fn elements_for_family(family: &str) -> (f64, f64) {
+        match family {
+            "MB>Inner" => (2.2, 0.1),
+            "Trojan" => (5.0, 0.05),
+            "Centaur" => (10.0, 0.1),
+            "NEA>Apollo" => (1.5, 0.5),
+            "KBO>SDO" => (50.0, 0.5),
+            other => panic!("elements_for_family: no fixture for {other:?}"),
+        }
+    }
+
     /// Builds a one-branch-per-lineage snapshot; `median` carries the only
     /// nullable column, which is where the ordering rules are subtle.
     fn row(
@@ -744,6 +853,7 @@ mod tests {
         family: &str,
         median: Option<f64>,
     ) -> SnapshotRow {
+        let (semi_major_axis, eccentricity) = elements_for_family(family);
         SnapshotRow {
             branch_id,
             lineage_id,
@@ -754,9 +864,8 @@ mod tests {
             arc_length_days: 0.0,
             n_nights: if median.is_some() { 3 } else { 1 },
             median_inter_night_dt_days: median,
-            dynamic_family: family.to_string(),
-            semi_major_axis: 2.5,
-            eccentricity: 0.1,
+            semi_major_axis,
+            eccentricity,
             // Not exercised by any test in this module (those all go through
             // the (a, e) plot / listing paths) — the attributable-state ->
             // Keplerian conversion that reads these lives in, and is tested
@@ -822,7 +931,7 @@ mod tests {
     /// grouping, sorting, search, paging) uses.
     fn assemble_default(rows: Vec<SnapshotRow>, n_hypotheses: i64, n_archived: i64) -> Snapshot {
         let quality = all_not_fitted(&rows);
-        assemble(rows, n_hypotheses, n_archived, &quality)
+        assemble(rows, n_hypotheses, n_archived, &quality, &HashMap::new())
     }
 
     #[test]
@@ -1041,7 +1150,7 @@ mod tests {
             latest_failure_at: HashMap::new(),
             well_sampled_nights: HashMap::new(),
         };
-        let snap = assemble(rows, 0, 0, &quality);
+        let snap = assemble(rows, 0, 0, &quality, &HashMap::new());
 
         assert_eq!(
             snap.branches[snap.lineages[0].best as usize].quality_tier,
@@ -1088,7 +1197,7 @@ mod tests {
             latest_failure_at: HashMap::new(),
             well_sampled_nights: HashMap::new(),
         };
-        let snap = assemble(rows, 0, 0, &quality);
+        let snap = assemble(rows, 0, 0, &quality, &HashMap::new());
 
         // Default click direction (`SortDirection::Desc`) must surface the
         // best tier first, exactly like every other column's "larger first"

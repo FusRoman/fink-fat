@@ -277,11 +277,16 @@ pub fn LineagePage(lineage_id: String) -> Element {
     let launch_skybot_observations = observations.clone();
     let launch_skybot_lineage_id = lineage_id.clone();
     let launch_skybot = move |_: ()| {
+        let Some(branch_id) = branch_id else {
+            return;
+        };
         let points: Vec<SkybotQueryPoint> = launch_skybot_observations
             .iter()
             .enumerate()
             .map(|(source_index, obs)| SkybotQueryPoint {
                 source_index,
+                obs_id: obs.id,
+                branch_id,
                 ra_deg: obs.ra.to_degrees(),
                 dec_deg: obs.dec.to_degrees(),
                 mjd_tt: obs.mjd_tt,

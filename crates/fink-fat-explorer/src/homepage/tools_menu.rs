@@ -2,7 +2,8 @@ use dioxus::prelude::*;
 
 /// Single "Tools ▾" toggle button plus a small anchored panel grouping the
 /// homepage's maintenance *actions* (bulk orbit fit, bulk MPC/CND check,
-/// refresh) — introduced because three separate always-visible buttons
+/// bulk Skybot check, refresh) — introduced because three separate
+/// always-visible buttons
 /// crowded the navbar. The cross-match dashboard is deliberately **not**
 /// in here despite being a similarly secondary destination: it's a page to
 /// browse, not a tool to run, so it gets its own direct navbar link instead
@@ -43,6 +44,12 @@ pub fn ToolsMenu(refreshing: bool, on_refresh: EventHandler<()>) -> Element {
                         class: "btn btn-sm btn-success justify-start",
                         onclick: move |_| open.set(false),
                         "Check MPC (CND)"
+                    }
+                    Link {
+                        to: crate::Route::BulkSkybotPage {},
+                        class: "btn btn-sm btn-info justify-start",
+                        onclick: move |_| open.set(false),
+                        "Search Skybot (bulk)"
                     }
                     button {
                         class: "btn btn-sm justify-start",

@@ -20,6 +20,24 @@ const CONVERGED_BRANCH_QUERY: &str = "
     ORDER BY branch_id, fitted_at DESC
 ";
 
+/// Runs [`CONVERGED_BRANCH_QUERY`]. Called from
+/// [`start_bulk_cnd_check`] itself (not from the spawned background job) so
+/// "no eligible branch" surfaces as a normal `Err` from the server function
+/// call — the same clean red alert `crate::bulk_skybot::run::start_bulk_skybot_search`
+/// already gives for the equivalent case — instead of only showing up
+/// inside a `Failed` job's log text, which is easy to miss.
+///
+/// # Errors
+///
+/// The query failing, as a display string.
+#[cfg(feature = "server")]
+async fn fetch_converged_branches(pool: &sqlx::PgPool) -> Result<Vec<ConvergedBranchRow>, String> {
+    sqlx::query_as(CONVERGED_BRANCH_QUERY)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Kicks off a CND check of every branch with a converged n-body fit.
 /// Returns immediately with a job id; poll
 /// [`super::status::get_bulk_cnd_job_status`] for progress. Only one bulk CND
@@ -56,6 +74,24 @@ pub async fn start_bulk_cnd_check(
         ));
     }
 
+    // From here on, every early return must release BULK_CND_RUNNING first —
+    // it's only otherwise released by `run_bulk_cnd_job` once the spawned
+    // job finishes, which never happens if we bail out before spawning it.
+    let pool = crate::get_pool().await;
+    let branches = match fetch_converged_branches(pool).await {
+        Ok(branches) if !branches.is_empty() => branches,
+        Ok(_) => {
+            crate::BULK_CND_RUNNING.store(false, Ordering::SeqCst);
+            return Err(ServerFnError::new(
+                "no branch with a converged n-body fit found",
+            ));
+        }
+        Err(message) => {
+            crate::BULK_CND_RUNNING.store(false, Ordering::SeqCst);
+            return Err(ServerFnError::new(message));
+        }
+    };
+
     let time_separation_s = clamp_time_separation_s(time_separation_s);
     let angle_separation_arcsec = clamp_angle_separation_arcsec(angle_separation_arcsec);
 
@@ -69,6 +105,7 @@ pub async fn start_bulk_cnd_check(
 
     tokio::spawn(run_bulk_cnd_job(
         job_id,
+        branches,
         time_separation_s,
         angle_separation_arcsec,
     ));
@@ -87,8 +124,13 @@ async fn push_log(job_id: u64, message: impl Into<String>) {
 }
 
 #[cfg(feature = "server")]
-async fn run_bulk_cnd_job(job_id: u64, time_separation_s: f64, angle_separation_arcsec: f64) {
-    let outcome = run_bulk_cnd(job_id, time_separation_s, angle_separation_arcsec).await;
+async fn run_bulk_cnd_job(
+    job_id: u64,
+    branches: Vec<ConvergedBranchRow>,
+    time_separation_s: f64,
+    angle_separation_arcsec: f64,
+) {
+    let outcome = run_bulk_cnd(job_id, branches, time_separation_s, angle_separation_arcsec).await;
 
     let jobs = crate::get_bulk_cnd_jobs().await;
     if let Ok(mut jobs) = jobs.lock() {
@@ -176,6 +218,7 @@ fn build_query_points(rows: &[ObsRow]) -> Vec<crate::cnd_search::CndQueryPoint> 
 #[cfg(feature = "server")]
 async fn run_bulk_cnd(
     job_id: u64,
+    branches: Vec<ConvergedBranchRow>,
     time_separation_s: f64,
     angle_separation_arcsec: f64,
 ) -> Result<(), String> {
@@ -186,17 +229,7 @@ async fn run_bulk_cnd(
     use crate::cnd_search::CndHit;
     use std::sync::atomic::Ordering;
 
-    push_log(job_id, "Finding branches with a converged n-body fit...").await;
-
     let pool = crate::get_pool().await;
-    let branches: Vec<ConvergedBranchRow> = sqlx::query_as(CONVERGED_BRANCH_QUERY)
-        .fetch_all(pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    if branches.is_empty() {
-        return Err("no branch with a converged n-body fit found".to_string());
-    }
 
     let lineage_by_branch: HashMap<i64, String> = branches
         .iter()

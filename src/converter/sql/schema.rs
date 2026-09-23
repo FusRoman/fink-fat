@@ -24,8 +24,12 @@ use postgres::Transaction;
 ///    owned by `fink-fat-explorer` rather than by this bulk load, but
 ///    bootstrapped here so a fresh database has every table set up after one
 ///    `convert` run.
-/// 4. `create_skybot_tables.sql` — `skybot_queries`, same rationale as step 3.
-/// 5. `create_cnd_tables.sql` — `cnd_queries`, same rationale as step 3.
+/// 4. `create_cnd_tables.sql` — `cnd_queries`, same rationale as step 3.
+/// 5. `create_skybot_bulk_tables.sql` — `skybot_bulk_jobs`/`skybot_obs_status`,
+///    same rationale as step 3. `skybot_obs_status` is the single source of
+///    truth for Skybot results, shared by the per-lineage search and the
+///    bulk sweep alike (see `fink-fat-explorer`'s `skybot_search` module doc
+///    comment) — there is deliberately no separate per-lineage table.
 ///
 /// # Arguments
 ///
@@ -39,8 +43,8 @@ pub(super) fn create_tables(transaction: &mut Transaction<'_>) -> Result<(), pos
     transaction.batch_execute(include_str!("create_tables.sql"))?;
     transaction.batch_execute(include_str!("migrate_legacy_columns.sql"))?;
     transaction.batch_execute(include_str!("create_orbit_fits_tables.sql"))?;
-    transaction.batch_execute(include_str!("create_skybot_tables.sql"))?;
     transaction.batch_execute(include_str!("create_cnd_tables.sql"))?;
+    transaction.batch_execute(include_str!("create_skybot_bulk_tables.sql"))?;
     Ok(())
 }
 

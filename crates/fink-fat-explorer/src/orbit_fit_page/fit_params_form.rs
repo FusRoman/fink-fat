@@ -24,23 +24,31 @@ pub fn FitParamsForm(
 
     rsx! {
         div { class: "card bg-base-100 shadow-sm",
-            div { class: "card-body gap-3",
+            div { class: "card-body gap-5",
                 div { class: "flex items-center justify-between",
                     h2 { class: "card-title", "Fit parameters" }
                     button {
                         class: "btn btn-sm btn-ghost",
                         r#type: "button",
                         onclick: move |_| params.set(OrbitFitParams::default()),
-                        "Reset to defaults"
+                        "↺ Reset to defaults"
                     }
                 }
 
-                ErrorModelSection { params }
-                SeedStrategySection { params }
-                DynamicalModelSection { params }
-                DifferentialCorrectionSection { params }
+                div { class: "grid grid-cols-1 sm:grid-cols-3 gap-4",
+                    ErrorModelSection { params }
+                    SeedStrategySection { params }
+                    PropagatorSection { params }
+                }
 
-                div { class: "collapse collapse-arrow bg-base-200",
+                DynamicalModelSection { params }
+
+                div { class: "flex flex-col gap-2",
+                    SectionHeader { label: "Differential correction" }
+                    DifferentialCorrectionSection { params }
+                }
+
+                div { class: "collapse collapse-arrow bg-base-200 rounded-box",
                     input { r#type: "checkbox" }
                     div { class: "collapse-title text-sm font-medium",
                         if seedless {
@@ -55,7 +63,7 @@ pub fn FitParamsForm(
                 }
                 div { class: "flex justify-center pt-2",
                     button {
-                        class: "btn btn-outline btn-primary",
+                        class: "btn btn-primary",
                         r#type: "button",
                         disabled: launch_disabled,
                         onclick: move |evt| on_launch.call(evt),
@@ -67,10 +75,21 @@ pub fn FitParamsForm(
     }
 }
 
+/// Small uppercase section label used to visually separate the form's
+/// groups (perturbers, differential correction, ...) — purely cosmetic, no
+/// daisyUI `divider` text so it stays compact next to a following control
+/// row rather than spanning the full width with a rule.
+#[component]
+fn SectionHeader(label: &'static str) -> Element {
+    rsx! {
+        span { class: "text-xs font-semibold uppercase tracking-wide opacity-60", "{label}" }
+    }
+}
+
 #[component]
 fn ErrorModelSection(params: Signal<OrbitFitParams>) -> Element {
     rsx! {
-        div { class: "form-control w-full max-w-xs gap-1",
+        div { class: "form-control gap-1",
             label { class: "label",
                 span { class: "label-text", "Observation error model" }
                 HelpTooltip {
@@ -105,7 +124,7 @@ fn ErrorModelSection(params: Signal<OrbitFitParams>) -> Element {
 #[component]
 fn SeedStrategySection(params: Signal<OrbitFitParams>) -> Element {
     rsx! {
-        div { class: "form-control w-full max-w-xs gap-1",
+        div { class: "form-control gap-1",
             label { class: "label",
                 span { class: "label-text", "Seed" }
                 HelpTooltip {
@@ -131,97 +150,179 @@ fn SeedStrategySection(params: Signal<OrbitFitParams>) -> Element {
     }
 }
 
+/// Just the "Two-body / N-body" dropdown — split out of what used to be
+/// `DynamicalModelSection` so it can sit in the same three-column row as
+/// `ErrorModelSection`/`SeedStrategySection` (all three are one dropdown
+/// each, no reason for the dynamical model to be the odd one out on its own
+/// full-width line). The perturber checkbox rows it used to also render
+/// stay in [`DynamicalModelSection`], which reads `propagator` itself to
+/// decide whether to show them.
 #[component]
-fn DynamicalModelSection(params: Signal<OrbitFitParams>) -> Element {
+fn PropagatorSection(params: Signal<OrbitFitParams>) -> Element {
     let is_nbody = matches!(params.read().propagator, PropagatorChoice::NBody);
 
     rsx! {
-        div { class: "flex flex-col gap-2",
-            div { class: "form-control w-full max-w-xs gap-1",
-                label { class: "label",
-                    span { class: "label-text", "Dynamical model" }
-                    HelpTooltip {
-                        text: "Two-body uses pure Keplerian motion (matches what the production Kalman filter assumes); N-body integrates gravitational perturbations from the selected planets for a more physically accurate fit. N-body is slower but is the point of this tool — keep it on unless debugging.",
-                    }
-                }
-                select {
-                    class: "select select-bordered select-sm",
-                    value: if is_nbody { "nbody" } else { "twobody" },
-                    onchange: move |evt| {
-                        params.write().propagator = if evt.value() == "nbody" {
-                            PropagatorChoice::NBody
-                        } else {
-                            PropagatorChoice::TwoBody
-                        };
-                    },
-                    option { value: "nbody", "N-body (perturbed)" }
-                    option { value: "twobody", "Two-body (Keplerian, matches the Kalman filter)" }
+        div { class: "form-control gap-1",
+            label { class: "label",
+                span { class: "label-text", "Dynamical model" }
+                HelpTooltip {
+                    text: "Two-body uses pure Keplerian motion (matches what the production Kalman filter assumes); N-body integrates gravitational perturbations from the selected planets for a more physically accurate fit. N-body is slower but is the point of this tool — keep it on unless debugging.",
                 }
             }
+            select {
+                class: "select select-bordered select-sm",
+                value: if is_nbody { "nbody" } else { "twobody" },
+                onchange: move |evt| {
+                    params.write().propagator = if evt.value() == "nbody" {
+                        PropagatorChoice::NBody
+                    } else {
+                        PropagatorChoice::TwoBody
+                    };
+                },
+                option { value: "nbody", "N-body (perturbed)" }
+                option { value: "twobody", "Two-body (Keplerian, matches the Kalman filter)" }
+            }
+        }
+    }
+}
 
-            if is_nbody {
-                div { class: "flex items-center gap-1",
-                    span { class: "label-text text-xs opacity-70", "Perturbers" }
-                    HelpTooltip {
-                        text: "Which planets are included as N-body perturbers (the Sun is always included). Jupiter and Saturn dominate for most asteroid orbits; add more only for objects that pass close to other planets or need extra precision.",
-                    }
-                }
-                div { class: "flex flex-wrap gap-3",
-                    for planet in PerturberChoice::ALL {
-                        label {
-                            key: "{planet.label()}",
-                            class: "label cursor-pointer gap-2",
-                            input {
-                                r#type: "checkbox",
-                                class: "checkbox checkbox-sm",
-                                checked: params.read().perturbers.contains(&planet),
-                                onchange: move |evt| {
-                                    let mut params = params.write();
-                                    if evt.checked() {
-                                        if !params.perturbers.contains(&planet) {
-                                            params.perturbers.push(planet);
-                                        }
-                                    } else {
-                                        params.perturbers.retain(|p| *p != planet);
-                                    }
-                                },
-                            }
-                            span { class: "label-text", "{planet.label()}" }
-                        }
-                    }
-                }
-                p { class: "text-xs opacity-60", "The Sun is always included as a perturber." }
+/// One selectable item in a [`PerturberGrid`] — a checkbox rendered as a
+/// small pill/chip rather than a bare `input` + label, so a long row of
+/// options reads as a set of toggles rather than a form list.
+#[component]
+fn PerturberChip(label: String, checked: bool, on_toggle: EventHandler<bool>) -> Element {
+    rsx! {
+        label {
+            class: if checked { "label cursor-pointer gap-2 rounded-btn bg-primary/10 px-2 py-1.5 border border-primary/30" } else { "label cursor-pointer gap-2 rounded-btn px-2 py-1.5 border border-transparent hover:bg-base-300/60" },
+            input {
+                r#type: "checkbox",
+                class: "checkbox checkbox-sm",
+                checked,
+                onchange: move |evt| on_toggle.call(evt.checked()),
+            }
+            span { class: "label-text", "{label}" }
+        }
+    }
+}
 
+/// A titled, bordered group of [`PerturberChip`]s with "All"/"None" shortcut
+/// buttons — the shape both the planetary and main-belt asteroid perturber
+/// rows share, factored out once rather than duplicated twice with only the
+/// item list and callbacks differing.
+#[component]
+fn PerturberGrid(
+    title: &'static str,
+    help: &'static str,
+    items: Vec<(String, bool)>,
+    on_toggle: EventHandler<(usize, bool)>,
+    on_select_all: EventHandler<()>,
+    on_select_none: EventHandler<()>,
+) -> Element {
+    rsx! {
+        div { class: "rounded-box bg-base-200 p-3 flex flex-col gap-2",
+            div { class: "flex flex-wrap items-center justify-between gap-2",
                 div { class: "flex items-center gap-1",
-                    span { class: "label-text text-xs opacity-70", "Main-belt asteroid perturbers (ANISE only)" }
-                    HelpTooltip {
-                        text: "The 9 most massive of the 300 main-belt asteroids in the ANISE supplementary kernel. Negligible for most fits — only relevant for objects that pass close to one of them.",
+                    span { class: "label-text text-xs font-medium", "{title}" }
+                    HelpTooltip { text: help }
+                }
+                div { class: "join",
+                    button {
+                        class: "join-item btn btn-xs btn-ghost",
+                        r#type: "button",
+                        onclick: move |_| on_select_all.call(()),
+                        "All"
+                    }
+                    button {
+                        class: "join-item btn btn-xs btn-ghost",
+                        r#type: "button",
+                        onclick: move |_| on_select_none.call(()),
+                        "None"
                     }
                 }
-                div { class: "flex flex-wrap gap-3",
-                    for asteroid in AsteroidPerturberChoice::ALL {
-                        label {
-                            key: "{asteroid.label()}",
-                            class: "label cursor-pointer gap-2",
-                            input {
-                                r#type: "checkbox",
-                                class: "checkbox checkbox-sm",
-                                checked: params.read().asteroid_perturbers.contains(&asteroid),
-                                onchange: move |evt| {
-                                    let mut params = params.write();
-                                    if evt.checked() {
-                                        if !params.asteroid_perturbers.contains(&asteroid) {
-                                            params.asteroid_perturbers.push(asteroid);
-                                        }
-                                    } else {
-                                        params.asteroid_perturbers.retain(|a| *a != asteroid);
-                                    }
-                                },
+            }
+            div { class: "grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-1",
+                for (index , (label , checked)) in items.into_iter().enumerate() {
+                    PerturberChip {
+                        key: "{label}",
+                        label,
+                        checked,
+                        on_toggle: move |checked| on_toggle.call((index, checked)),
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn DynamicalModelSection(params: Signal<OrbitFitParams>) -> Element {
+    let is_nbody = matches!(params.read().propagator, PropagatorChoice::NBody);
+    if !is_nbody {
+        return rsx! {};
+    }
+
+    let planet_items: Vec<(String, bool)> = PerturberChoice::ALL
+        .iter()
+        .map(|planet| {
+            (
+                planet.label().to_string(),
+                params.read().perturbers.contains(planet),
+            )
+        })
+        .collect();
+    let asteroid_items: Vec<(String, bool)> = AsteroidPerturberChoice::ALL
+        .iter()
+        .map(|asteroid| {
+            (
+                asteroid.label().to_string(),
+                params.read().asteroid_perturbers.contains(asteroid),
+            )
+        })
+        .collect();
+
+    rsx! {
+        div { class: "flex flex-col gap-3",
+            div { class: "flex flex-col gap-1",
+                PerturberGrid {
+                    title: "Perturbers",
+                    help: "Which planets are included as N-body perturbers (the Sun is always included). Jupiter and Saturn dominate for most asteroid orbits; add more only for objects that pass close to other planets or need extra precision.",
+                    items: planet_items,
+                    on_toggle: move |(index, checked): (usize, bool)| {
+                        let planet = PerturberChoice::ALL[index];
+                        let mut params = params.write();
+                        if checked {
+                            if !params.perturbers.contains(&planet) {
+                                params.perturbers.push(planet);
                             }
-                            span { class: "label-text", "{asteroid.label()}" }
+                        } else {
+                            params.perturbers.retain(|p| *p != planet);
                         }
-                    }
+                    },
+                    on_select_all: move |()| params.write().perturbers = PerturberChoice::ALL.to_vec(),
+                    on_select_none: move |()| params.write().perturbers.clear(),
                 }
+                p { class: "text-xs opacity-60 pl-1", "The Sun is always included as a perturber." }
+            }
+
+            PerturberGrid {
+                title: "Main-belt asteroid perturbers (ANISE only)",
+                help: "The 9 most massive of the 300 main-belt asteroids in the ANISE supplementary kernel. Negligible for most fits — only relevant for objects that pass close to one of them.",
+                items: asteroid_items,
+                on_toggle: move |(index, checked): (usize, bool)| {
+                    let asteroid = AsteroidPerturberChoice::ALL[index];
+                    let mut params = params.write();
+                    if checked {
+                        if !params.asteroid_perturbers.contains(&asteroid) {
+                            params.asteroid_perturbers.push(asteroid);
+                        }
+                    } else {
+                        params.asteroid_perturbers.retain(|a| *a != asteroid);
+                    }
+                },
+                on_select_all: move |()| {
+                    params.write().asteroid_perturbers = AsteroidPerturberChoice::ALL.to_vec()
+                },
+                on_select_none: move |()| params.write().asteroid_perturbers.clear(),
             }
         }
     }

@@ -22,7 +22,6 @@
     --color-black: #000;
     --color-white: #fff;
     --spacing: 0.25rem;
-    --container-xs: 20rem;
     --container-lg: 32rem;
     --container-2xl: 42rem;
     --container-7xl: 80rem;
@@ -47,6 +46,7 @@
     --font-weight-semibold: 600;
     --font-weight-bold: 700;
     --tracking-tight: -0.025em;
+    --tracking-wide: 0.025em;
     --leading-tight: 1.25;
     --radius-sm: 0.25rem;
     --radius-md: 0.375rem;
@@ -2781,6 +2781,9 @@
   .h-40 {
     height: calc(var(--spacing) * 40);
   }
+  .h-48 {
+    height: calc(var(--spacing) * 48);
+  }
   .h-64 {
     height: calc(var(--spacing) * 64);
   }
@@ -2858,9 +2861,6 @@
   }
   .max-w-lg {
     max-width: var(--container-lg);
-  }
-  .max-w-xs {
-    max-width: var(--container-xs);
   }
   .min-w-0 {
     min-width: calc(var(--spacing) * 0);
@@ -2967,6 +2967,9 @@
   .gap-4 {
     gap: calc(var(--spacing) * 4);
   }
+  .gap-5 {
+    gap: calc(var(--spacing) * 5);
+  }
   .gap-6 {
     gap: calc(var(--spacing) * 6);
   }
@@ -3034,6 +3037,15 @@
   .border-current {
     border-color: currentcolor;
   }
+  .border-primary\/30 {
+    border-color: var(--color-primary);
+    @supports (color: color-mix(in lab, red, red)) {
+      border-color: color-mix(in oklab, var(--color-primary) 30%, transparent);
+    }
+  }
+  .border-transparent {
+    border-color: transparent;
+  }
   .table-zebra {
     @layer daisyui.modifier {
       tbody {
@@ -3084,10 +3096,22 @@
       background-color: color-mix(in oklab, var(--color-error) 20%, transparent);
     }
   }
+  .bg-primary\/10 {
+    background-color: var(--color-primary);
+    @supports (color: color-mix(in lab, red, red)) {
+      background-color: color-mix(in oklab, var(--color-primary) 10%, transparent);
+    }
+  }
   .bg-success\/20 {
     background-color: var(--color-success);
     @supports (color: color-mix(in lab, red, red)) {
       background-color: color-mix(in oklab, var(--color-success) 20%, transparent);
+    }
+  }
+  .bg-warning\/20 {
+    background-color: var(--color-warning);
+    @supports (color: color-mix(in lab, red, red)) {
+      background-color: color-mix(in oklab, var(--color-warning) 20%, transparent);
     }
   }
   .loading-dots {
@@ -3184,6 +3208,9 @@
   .py-1 {
     padding-block: calc(var(--spacing) * 1);
   }
+  .py-1\.5 {
+    padding-block: calc(var(--spacing) * 1.5);
+  }
   .py-2 {
     padding-block: calc(var(--spacing) * 2);
   }
@@ -3204,6 +3231,9 @@
   }
   .pr-1 {
     padding-right: calc(var(--spacing) * 1);
+  }
+  .pl-1 {
+    padding-left: calc(var(--spacing) * 1);
   }
   .pl-4 {
     padding-left: calc(var(--spacing) * 4);
@@ -3264,6 +3294,10 @@
   .tracking-tight {
     --tw-tracking: var(--tracking-tight);
     letter-spacing: var(--tracking-tight);
+  }
+  .tracking-wide {
+    --tw-tracking: var(--tracking-wide);
+    letter-spacing: var(--tracking-wide);
   }
   .break-all {
     word-break: break-all;
@@ -3521,6 +3555,18 @@
       --btn-fg: var(--color-accent-content);
     }
   }
+  .btn-error {
+    @layer daisyui.modifier {
+      --btn-color: var(--color-error);
+      --btn-fg: var(--color-error-content);
+    }
+  }
+  .btn-info {
+    @layer daisyui.modifier {
+      --btn-color: var(--color-info);
+      --btn-fg: var(--color-info-content);
+    }
+  }
   .btn-primary {
     @layer daisyui.modifier {
       --btn-color: var(--color-primary);
@@ -3556,11 +3602,26 @@
       }
     }
   }
+  .hover\:bg-base-300\/60 {
+    &:hover {
+      @media (hover: hover) {
+        background-color: var(--color-base-300);
+        @supports (color: color-mix(in lab, red, red)) {
+          background-color: color-mix(in oklab, var(--color-base-300) 60%, transparent);
+        }
+      }
+    }
+  }
   .hover\:text-primary {
     &:hover {
       @media (hover: hover) {
         color: var(--color-primary);
       }
+    }
+  }
+  .sm\:grid-cols-3 {
+    @media (width >= 40rem) {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
   }
   .md\:col-span-3 {
@@ -3576,6 +3637,11 @@
   .md\:grid-cols-4 {
     @media (width >= 48rem) {
       grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+  }
+  .lg\:grid-cols-5 {
+    @media (width >= 64rem) {
+      grid-template-columns: repeat(5, minmax(0, 1fr));
     }
   }
   .xl\:w-96 {

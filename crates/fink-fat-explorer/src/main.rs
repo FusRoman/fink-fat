@@ -1,8 +1,11 @@
 pub mod ades;
+pub mod best_orbit;
 pub mod bulk_cnd;
 pub mod bulk_cnd_page;
 pub mod bulk_orbit_fit;
 pub mod bulk_orbit_fit_page;
+pub mod bulk_skybot;
+pub mod bulk_skybot_page;
 pub mod cnd_search;
 pub mod cross_match_dashboard;
 pub mod fit_pipeline;
@@ -33,6 +36,7 @@ use tokio::sync::OnceCell;
 
 use crate::bulk_cnd_page::BulkCndPage;
 use crate::bulk_orbit_fit_page::BulkOrbitFitPage;
+use crate::bulk_skybot_page::BulkSkybotPage;
 use crate::cross_match_dashboard::CrossMatchDashboardPage;
 use crate::homepage::Home;
 use crate::lineage_page::LineagePage;
@@ -288,6 +292,9 @@ enum Route {
 
     #[route("/bulk-cnd")]
     BulkCndPage {},
+
+    #[route("/bulk-skybot")]
+    BulkSkybotPage {},
 
     #[route("/cross-match")]
     CrossMatchDashboardPage {},

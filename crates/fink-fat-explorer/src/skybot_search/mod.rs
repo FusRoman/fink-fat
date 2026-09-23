@@ -11,17 +11,22 @@
 //! functions in [`parsing`] and [`sexagesimal`]; only [`run`] touches the
 //! network and the job registry.
 //!
-//! Every finished attempt (including one that finds nothing) is also
-//! recorded in the `skybot_queries` table via [`persist::insert_skybot_query`]
-//! so the lineage page can show its last result without re-running the
-//! search on every visit; [`history::get_last_skybot_query`] reads that back.
+//! Every checked observation (including one with no match) is also recorded
+//! in the `skybot_obs_status` table via
+//! [`persist::upsert_skybot_obs_status`] — the same table
+//! `crate::bulk_skybot` writes to, deliberately: a lineage's individual
+//! search and the population-wide bulk sweep are the same underlying fact
+//! ("was this observation checked, and what did Skybot say"), so they share
+//! one source of truth rather than each having their own table that the
+//! other doesn't see. [`history::get_last_skybot_query`] reads it back,
+//! aggregated per lineage.
 
 pub mod history;
 /// Server-only: computing [`SkybotHit::separation_arcsec`] pulls in `photom`,
 /// and sending the request pulls in `reqwest` — neither builds for `wasm32`.
 #[cfg(feature = "server")]
 pub mod parsing;
-/// Server-only: writing to `skybot_queries` pulls in `sqlx`.
+/// Server-only: writing to `skybot_obs_status` pulls in `sqlx`.
 #[cfg(feature = "server")]
 pub mod persist;
 pub mod run;
@@ -41,6 +46,12 @@ pub struct SkybotQueryPoint {
     /// to [`SkybotHit::source_index`] so a hit can be traced back to the
     /// trajectory point that produced it.
     pub source_index: usize,
+    /// The real `observations.id` this point comes from — the
+    /// `skybot_obs_status` primary key this point's result is upserted
+    /// under, unlike `source_index` (which is only meaningful within one
+    /// job's own point list).
+    pub obs_id: i64,
+    pub branch_id: i64,
     pub ra_deg: f64,
     pub dec_deg: f64,
     /// Modified Julian Date, TT scale — see

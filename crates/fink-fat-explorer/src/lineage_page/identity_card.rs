@@ -49,7 +49,6 @@ struct LineageSummaryRow {
     cumulative_llr: f64,
     n_real_updates: i64,
     n_nights: i64,
-    dynamic_family: String,
     semi_major_axis: f64,
     eccentricity: f64,
     ra: f64,
@@ -84,7 +83,10 @@ const SANITIZED_LLR_EXPR: &str = "
 async fn best_orbit_fit(
     pool: &sqlx::PgPool,
     lineage_designation: &str,
-) -> Result<Option<(String, f64, f64, f64)>, sqlx::Error> {
+) -> Result<Option<(crate::best_orbit::OrbitCandidate, f64)>, sqlx::Error> {
+    use crate::best_orbit::{OrbitCandidate, PREFER_NBODY_ORDER_BY};
+    use crate::fit_pipeline::fit::FitMethod;
+
     #[derive(sqlx::FromRow)]
     struct Row {
         fit_method: String,
@@ -92,22 +94,26 @@ async fn best_orbit_fit(
         reference_epoch: f64,
     }
 
-    let row: Option<Row> = sqlx::query_as(
+    let query = format!(
         "SELECT fit_method, keplerian, reference_epoch
          FROM orbit_fits
          WHERE lineage_designation = $1
-         ORDER BY (fit_method = 'differential_correction') DESC, fitted_at DESC
-         LIMIT 1",
-    )
-    .bind(lineage_designation)
-    .fetch_optional(pool)
-    .await?;
+         ORDER BY {PREFER_NBODY_ORDER_BY}
+         LIMIT 1"
+    );
+
+    let row: Option<Row> = sqlx::query_as(sqlx::AssertSqlSafe(query))
+        .bind(lineage_designation)
+        .fetch_optional(pool)
+        .await?;
 
     Ok(row.map(|r| {
         (
-            r.fit_method,
-            r.keplerian.0.semi_major_axis_au,
-            r.keplerian.0.eccentricity,
+            OrbitCandidate {
+                fit_method: FitMethod::from_column(&r.fit_method),
+                semi_major_axis_au: r.keplerian.0.semi_major_axis_au,
+                eccentricity: r.keplerian.0.eccentricity,
+            },
             r.reference_epoch,
         )
     }))
@@ -188,7 +194,7 @@ async fn compute_quality_tier(
 pub async fn get_lineage_summary(
     lineage_designation: String,
 ) -> Result<Option<LineageSummary>, ServerFnError> {
-    use crate::fit_pipeline::fit::FitMethod;
+    use crate::best_orbit::resolve_best_orbit;
     use crate::get_pool;
 
     let pool = get_pool().await;
@@ -206,7 +212,7 @@ pub async fn get_lineage_summary(
             bb.lineage_id, bb.lineage_designation,
             bb.branch_id, bb.designation AS branch_designation,
             bb.cumulative_llr, bb.n_real_updates, bb.n_nights,
-            ks.dynamic_family, ks.semi_major_axis, ks.eccentricity,
+            ks.semi_major_axis, ks.eccentricity,
             ks.ra, ks.dec, ks.rho, ks.rho_dot, ks.epoch,
             COALESCE(agg.n_observations, 0) AS n_observations,
             bb.arc_length_days
@@ -244,28 +250,26 @@ pub async fn get_lineage_summary(
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
-    let (semi_major_axis, eccentricity, epoch, orbit_source_label) = match best_fit {
-        Some((fit_method, semi_major_axis, eccentricity, reference_epoch)) => {
-            let label = match FitMethod::from_column(&fit_method) {
-                FitMethod::DifferentialCorrection => "N-body fit",
-                FitMethod::IodOnly => "IOD fit",
-            };
-            (semi_major_axis, eccentricity, reference_epoch, label)
-        }
-        None => (
-            r.semi_major_axis,
-            r.eccentricity,
-            r.epoch,
-            "Kalman estimate",
-        ),
-    };
+    let epoch = best_fit
+        .as_ref()
+        .map(|(_, reference_epoch)| *reference_epoch)
+        .unwrap_or(r.epoch);
+
+    let best_orbit = resolve_best_orbit(
+        best_fit.map(|(candidate, _)| candidate),
+        (r.semi_major_axis, r.eccentricity),
+    );
+    let semi_major_axis = best_orbit.semi_major_axis_au;
+    let eccentricity = best_orbit.eccentricity;
+    let family = best_orbit.family;
+    let orbit_source_label = best_orbit.source.label();
 
     Ok(Some(LineageSummary {
         lineage_id: r.lineage_id,
         lineage_designation: r.lineage_designation,
         branch_id: r.branch_id,
         branch_designation: r.branch_designation,
-        family: DynamicalFamily::from_label(&r.dynamic_family),
+        family,
         quality_tier,
         cumulative_llr: r.cumulative_llr,
         n_real_updates: r.n_real_updates,

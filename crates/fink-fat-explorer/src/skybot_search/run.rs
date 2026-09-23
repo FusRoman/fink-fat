@@ -19,14 +19,18 @@ use super::SkybotQueryPoint;
 
 /// Skybot is a shared public service — this caps how many conesearch
 /// requests fink-fat has in flight at once, regardless of how many
-/// observation points a lineage has.
+/// observation points a lineage has. `pub(crate)` so
+/// `crate::bulk_skybot::run` shares this one ceiling instead of a second
+/// copy of the same magic number — the bulk job is the exact same public
+/// service, just with many more points to get through.
 #[cfg(feature = "server")]
-const MAX_CONCURRENT_REQUESTS: usize = 10;
+pub(crate) const MAX_CONCURRENT_REQUESTS: usize = 10;
 
 /// Per-request timeout: long enough for a slow response, short enough that
 /// one stalled cone can't hold its semaphore permit indefinitely.
+/// `pub(crate)` for the same reason as [`MAX_CONCURRENT_REQUESTS`].
 #[cfg(feature = "server")]
-const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+pub(crate) const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Kicks off a Skybot conesearch for every point in `points`, one HTTP
 /// request each, at most 10 in flight at a time (see
@@ -39,8 +43,8 @@ const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 /// * `radius_arcsec` — requested conesearch radius; clamped into
 ///   [`super::MIN_RADIUS_ARCSEC`, `super::MAX_RADIUS_ARCSEC`].
 /// * `lineage_designation` — the lineage this search is for, carried through
-///   to [`run_skybot_job`] so the finished attempt can be recorded in
-///   `skybot_queries` against the right lineage.
+///   to [`run_skybot_job`] so each checked observation can be recorded in
+///   `skybot_obs_status` against the right lineage.
 ///
 /// # Return
 ///
@@ -87,17 +91,20 @@ async fn push_log(job_id: u64, message: impl Into<String>) {
 /// Runs every query point of one job to completion. A single point failing
 /// (timeout, HTTP error, unparseable response) is logged and skipped rather
 /// than failing the whole job — the points that already succeeded stay
-/// visible to the client. Once every point has been tried, the accumulated
-/// hits (possibly none) are recorded in `skybot_queries` via
-/// [`super::persist::insert_skybot_query`] before the job is marked `Done`.
+/// visible to the client. Each point's result is upserted into
+/// `skybot_obs_status` via [`super::persist::upsert_skybot_obs_status`] as
+/// soon as it completes (not batched into one final write): this is the
+/// same table `crate::bulk_skybot` writes to, one row per observation, so a
+/// lineage search and a bulk sweep can never disagree about "was this
+/// observation checked".
 ///
 /// # Arguments
 ///
 /// * `job_id` — the registry entry to update as points complete.
 /// * `points` — the query points to search, one HTTP request each.
 /// * `radius_arcsec` — the already-clamped conesearch radius.
-/// * `lineage_designation` — the lineage to record the persisted attempt
-///   against.
+/// * `lineage_designation` — the lineage each checked observation is
+///   recorded against.
 #[cfg(feature = "server")]
 async fn run_skybot_job(
     job_id: u64,
@@ -105,7 +112,6 @@ async fn run_skybot_job(
     radius_arcsec: f64,
     lineage_designation: String,
 ) {
-    use std::sync::atomic::Ordering;
     use std::sync::Arc;
     use tokio::sync::Semaphore;
 
@@ -133,38 +139,58 @@ async fn run_skybot_job(
                     .acquire_owned()
                     .await
                     .expect("skybot semaphore closed unexpectedly");
-                super::parsing::fetch_conesearch_hits(
+                let result = super::parsing::fetch_conesearch_hits(
                     &client,
                     &point,
                     radius_arcsec,
                     REQUEST_TIMEOUT,
                 )
-                .await
+                .await;
+                (point, result)
             })
         })
         .collect();
 
+    let pool = crate::get_pool().await;
     let mut failed_points = 0usize;
     for handle in handles {
-        let hits = match handle.await {
-            Ok(Ok(hits)) => hits,
-            Ok(Err(message)) => {
+        let (point, hits) = match handle.await {
+            Ok((point, Ok(hits))) => (point, hits),
+            Ok((point, Err(message))) => {
                 failed_points += 1;
                 push_log(job_id, format!("A query point failed: {message}")).await;
-                Vec::new()
+                (point, Vec::new())
             }
             Err(join_error) => {
                 failed_points += 1;
                 push_log(job_id, format!("A query point task panicked: {join_error}")).await;
-                Vec::new()
+                continue; // no `point` to record against without it
             }
         };
+
+        if let Err(message) = super::persist::upsert_skybot_obs_status(
+            pool,
+            point.obs_id,
+            &lineage_designation,
+            point.branch_id,
+            radius_arcsec,
+            &hits,
+        )
+        .await
+        {
+            push_log(
+                job_id,
+                format!("Failed to save observation {}: {message}", point.obs_id),
+            )
+            .await;
+        }
 
         let jobs = crate::get_skybot_jobs().await;
         if let Ok(mut jobs) = jobs.lock() {
             if let Some(job) = jobs.get_mut(&job_id) {
                 job.hits.extend(hits);
-                job.processed.fetch_add(1, Ordering::Relaxed);
+                job.processed
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
         }
     }
@@ -174,24 +200,6 @@ async fn run_skybot_job(
         format!("Done ({failed_points} point(s) failed and were skipped)."),
     )
     .await;
-
-    // Snapshot the hits while holding the lock, then release it before the
-    // `.await` on the DB write — matching this function's own convention
-    // elsewhere of never holding the mutex across an await point.
-    let hits = {
-        let jobs = crate::get_skybot_jobs().await;
-        jobs.lock()
-            .ok()
-            .and_then(|jobs| jobs.get(&job_id).map(|job| job.hits.clone()))
-            .unwrap_or_default()
-    };
-
-    let pool = crate::get_pool().await;
-    if let Err(message) =
-        super::persist::insert_skybot_query(pool, &lineage_designation, radius_arcsec, &hits).await
-    {
-        push_log(job_id, format!("Failed to save this attempt: {message}")).await;
-    }
 
     let jobs = crate::get_skybot_jobs().await;
     if let Ok(mut jobs) = jobs.lock() {
