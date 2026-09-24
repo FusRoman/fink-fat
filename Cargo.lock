@@ -2874,6 +2874,7 @@ dependencies = [
  "camino",
  "chrono",
  "clap",
+ "fink-fat-ades",
  "fink-fat-engine",
  "fink-fat-eval",
  "husky-rs",
@@ -2884,12 +2885,29 @@ dependencies = [
  "polars",
  "postgres",
  "rayon",
+ "reqwest",
  "rkyv",
+ "serde",
+ "serde_json",
+ "serde_yaml",
  "tempfile",
  "thiserror 2.0.20",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "fink-fat-ades"
+version = "1.0.0"
+dependencies = [
+ "chrono",
+ "hifitime",
+ "quick-xml 0.37.5",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -2958,6 +2976,7 @@ dependencies = [
  "chrono",
  "dioxus",
  "dotenvy",
+ "fink-fat-ades",
  "fink-fat-engine",
  "gloo-timers",
  "hifitime",
@@ -2966,7 +2985,6 @@ dependencies = [
  "photom",
  "plotly",
  "polars",
- "quick-xml 0.37.5",
  "rand 0.9.5",
  "rayon",
  "reqwest",
@@ -6805,8 +6823,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "851ca9db4932932d69f3ea811b1abe63087a0f740a47692619dd40d4899b68be"
 dependencies = [
  "bytes",
+ "chrono",
  "fallible-iterator",
  "postgres-protocol",
+ "serde_core",
+ "serde_json",
 ]
 
 [[package]]
@@ -7586,6 +7607,7 @@ dependencies = [
  "cookie",
  "cookie_store",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2",
@@ -9467,6 +9489,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-serde"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "704b1aeb7be0d0a84fc9828cae51dab5970fee5088f83d1dd7ee6f6246fc6ff1"
+dependencies = [
+ "serde",
+ "tracing-core",
+]
+
+[[package]]
 name = "tracing-subscriber"
 version = "0.3.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9476,12 +9508,15 @@ dependencies = [
  "nu-ansi-term",
  "once_cell",
  "regex-automata",
+ "serde",
+ "serde_json",
  "sharded-slab",
  "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",
  "tracing-log",
+ "tracing-serde",
 ]
 
 [[package]]

@@ -12,6 +12,12 @@ plotly = "0.14.1"
 serde.workspace = true
 serde_json = "1.0"
 thiserror.workspace = true
+# Pure ADES/MPC domain logic and the QualityTier cascade, shared with the
+# `fink-fat submit` CLI — see `crates/fink-fat-ades`'s crate docs. Always-on
+# (not server-gated): its plain serializable types (`AdesHeaderInput`,
+# `QualityTier`, ...) cross the `#[server]` fn boundary, so the wasm client
+# build needs them too, same as this crate's own `serde`/`serde_json`.
+fink-fat-ades = { workspace = true }
 
 # Server-only dependencies — not compiled for wasm32.
 # fink-fat-engine pulls tokio (rt-multi-thread, fs) and getrandom without
@@ -25,7 +31,6 @@ nalgebra = { workspace = true, optional = true }
 outfit = { workspace = true, optional = true }
 photom = { workspace = true, optional = true, features = ["polars"] }
 polars = { workspace = true, optional = true }
-quick-xml = { version = "0.37", features = ["serialize"], optional = true }
 rand = { version = "0.9", default-features = false, features = [
     "small_rng",
 ], optional = true }
@@ -70,7 +75,6 @@ server = [
     "dep:outfit",
     "dep:photom",
     "dep:polars",
-    "dep:quick-xml",
     "dep:rand",
     "dep:rayon",
     "dep:reqwest",

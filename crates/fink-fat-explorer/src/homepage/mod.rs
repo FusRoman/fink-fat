@@ -131,6 +131,11 @@ pub fn Home() -> Element {
                         class: "btn btn-sm btn-outline btn-accent gap-1",
                         "🔭 Cross-match"
                     }
+                    Link {
+                        to: crate::Route::SubmissionDashboardPage {},
+                        class: "btn btn-sm btn-outline btn-accent gap-1",
+                        "📡 Submission"
+                    }
                     ToolsMenu { refreshing: refreshing(), on_refresh: request_refresh }
                 }
             }

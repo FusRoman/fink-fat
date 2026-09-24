@@ -6,9 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ades::error::AdesError;
+use crate::error::AdesError;
 use crate::format_epoch::iso_utc;
-use crate::lineage_page::observations_table::ObservationRow;
 
 /// Maximum length of an ADES `trkSub` value (`submit.xsd`'s `BaseTrkSubType`).
 const TRK_SUB_MAX_LEN: usize = 8;
@@ -39,6 +38,12 @@ impl TrkSub {
 /// designed to give. Keeping the trailing 8 characters instead keeps 8 of
 /// the 12 hash characters (26⁸ ≈ 2×10¹¹ possible values), matching the
 /// designation's own collision resistance far more closely.
+///
+/// # Arguments
+/// * `designation` — the lineage designation to derive a `trkSub` from.
+///
+/// # Return
+/// The validated [`TrkSub`].
 ///
 /// # Errors
 /// Returns [`AdesError::InvalidTrkSub`] if `designation` is empty, or if
@@ -83,6 +88,12 @@ pub fn normalize_trk_sub(designation: &str) -> Result<TrkSub, AdesError> {
 /// function's callers in the lineage page UI (which fall back to a display
 /// string for an unrecognized index), ADES export needs a hard error.
 ///
+/// # Arguments
+/// * `filter` — fink-fat's internal photometric band index.
+///
+/// # Return
+/// The ADES band letter.
+///
 /// # Errors
 /// Returns [`AdesError::UnknownBand`] for any filter index outside `0..=5`.
 pub fn band_index_to_ades_band(filter: i16) -> Result<&'static str, AdesError> {
@@ -91,10 +102,10 @@ pub fn band_index_to_ades_band(filter: i16) -> Result<&'static str, AdesError> {
 
 /// Convert an MJD(TT) epoch to the ISO-8601 UTC string ADES expects for
 /// `obsTime`. Delegates to [`crate::format_epoch::iso_utc`] (the same TT→UTC
-/// conversion already used throughout the lineage page), kept as a
-/// separately-named wrapper so call sites read as "ADES obsTime" and so a
-/// future ADES-specific formatting quirk can be special-cased here without
-/// touching the shared display helper.
+/// conversion also used for human-facing display), kept as a separately-named
+/// wrapper so call sites read as "ADES obsTime" and so a future ADES-specific
+/// formatting quirk can be special-cased here without touching the shared
+/// display helper.
 ///
 /// `iso_utc` (via `hifitime::Epoch::to_isoformat`, which truncates its
 /// formatted string to exactly 26 characters) never includes a trailing
@@ -106,6 +117,12 @@ pub fn band_index_to_ades_band(filter: i16) -> Result<&'static str, AdesError> {
 /// assuming `iso_utc` never adds one) instead of changing `iso_utc` itself,
 /// which is shared with plain human-facing display where the missing `Z` is
 /// harmless.
+///
+/// # Arguments
+/// * `mjd_tt` — the observation epoch, Modified Julian Date, Terrestrial Time.
+///
+/// # Return
+/// The ADES `obsTime` string, always ending in `Z`.
 ///
 /// # Errors
 /// Returns [`AdesError::ObsTimeConversion`] if `mjd_tt` is not finite.
@@ -124,10 +141,10 @@ pub fn mjd_tt_to_ades_obs_time(mjd_tt: f64) -> Result<String, AdesError> {
     })
 }
 
-/// User-supplied ADES header fields not tracked by the fink-fat pipeline,
-/// collected via the export modal before every download. Crosses the
-/// `#[server]` boundary, so it needs `Serialize`/`Deserialize` even though it
-/// has nothing to do with XML directly.
+/// User-supplied ADES header fields not tracked by the fink-fat pipeline —
+/// submitter identity, telescope description, acknowledgement contact —
+/// collected once (via the export modal, or a `fink-fat submit`
+/// `--submitter-config` file) before every submission.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AdesHeaderInput {
     pub submitter_name: String,
@@ -142,13 +159,74 @@ pub struct AdesHeaderInput {
     pub ast_cat: String,
     pub mode: String,
     pub funding_source: Option<String>,
-    /// Required by MPC's `submit_xml_test` form ("Acknowledgment message
+    /// Required by MPC's submission form ("Acknowledgment message
     /// (required)").
     pub ack_message: String,
-    /// Required by MPC's `submit_xml_test` form ("Acknowledgment email
+    /// Required by MPC's submission form ("Acknowledgment email
     /// address (required)").
     pub ac2_email: String,
 }
+
+/// One real observation belonging to a lineage's best branch, in track order.
+/// Deliberately DB-client-agnostic (no `sqlx`/`postgres`-specific derives):
+/// `fink-fat-explorer` maps its `sqlx::FromRow` query rows into this type,
+/// and the `fink-fat submit` CLI maps its synchronous `postgres::Row`s into
+/// the same type, so every pure function downstream of a fetch (this
+/// module, `schema_validation`, `xml`) is written once and shared.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ObservationRow {
+    pub id: i64,
+    pub object_id: String,
+    pub position: i32,
+    pub mjd_tt: f64,
+    pub ra: f64,
+    pub ra_err: f64,
+    pub dec: f64,
+    pub dec_err: f64,
+    pub magnitude: f64,
+    pub mag_err: f64,
+    pub filter: i16,
+    pub mpc_code_obs: String,
+    /// Observatory-longitude-aware observation night bucket, pre-computed at
+    /// ingestion (`observations.night_id`) — used by the ADES export to
+    /// detect nights with a single observation ("singleton" nights, which
+    /// the MPC rejects an entire batch for containing).
+    pub night_id: i64,
+}
+
+/// Resolves a lineage's best branch (highest `cumulative_llr`, NaN/Infinity
+/// treated as the lowest possible value so a corrupted value can never win).
+/// Bind `$1 = lineage_designation`; returns at most one row, `branch_id`.
+/// Shared verbatim by `fink-fat-explorer::orbit_fit::run::resolve_best_branch_id`
+/// (async `sqlx`) and the `fink-fat submit` CLI (synchronous `postgres`), so
+/// both always agree on which branch a `lineage_designation` resolves to.
+pub const RESOLVE_BEST_BRANCH_QUERY: &str = "
+    SELECT branch_id
+    FROM branches
+    WHERE lineage_designation = $1
+    ORDER BY (
+        CASE
+            WHEN cumulative_llr = 'NaN'::double precision THEN 0
+            WHEN cumulative_llr = 'Infinity'::double precision THEN 0
+            WHEN cumulative_llr = '-Infinity'::double precision THEN 0
+            ELSE cumulative_llr
+        END
+    ) DESC
+    LIMIT 1
+";
+
+/// Fetches one branch's observations in track order, the exact column set
+/// needed to build an [`ObservationRow`]. Bind `$1 = branch_id`. Shared
+/// verbatim by `fink-fat-explorer::lineage_page::observations_table::fetch_branch_observations`
+/// (async `sqlx`) and the `fink-fat submit` CLI (synchronous `postgres`).
+pub const FETCH_BRANCH_OBSERVATIONS_QUERY: &str = "
+    SELECT o.id, o.object_id, bo.position, o.mjd_tt, o.ra, o.ra_err, o.dec, o.dec_err,
+           o.magnitude, o.mag_err, o.filter, o.mpc_code_obs, o.night_id
+    FROM branch_observations bo
+    JOIN observations o ON o.id = bo.obs_id
+    WHERE bo.branch_id = $1
+    ORDER BY bo.position
+";
 
 /// One observation together with the night bucket it belongs to, from the
 /// database's pre-computed, observatory-longitude-aware `night_id` column.
@@ -173,6 +251,13 @@ pub struct SingletonNightSummary {
 /// filter — the observations kept here are what `build_ades_document` (in
 /// `xml.rs`) must be built from, so a singleton observation never appears in
 /// the generated XML.
+///
+/// # Arguments
+/// * `observations` — every candidate observation for one lineage's export.
+///
+/// # Return
+/// `(kept, summary)`: the observations that survive, and a count of what was
+/// removed.
 pub fn remove_singleton_nights(
     observations: &[NightObservation],
 ) -> (Vec<NightObservation>, SingletonNightSummary) {
@@ -183,7 +268,7 @@ pub fn remove_singleton_nights(
 
     let singleton_nights: std::collections::HashSet<i64> = counts
         .iter()
-        .filter(|(_, &count)| count == 1)
+        .filter(|&(_, &count)| count == 1)
         .map(|(&night_id, _)| night_id)
         .collect();
 
@@ -219,11 +304,14 @@ pub struct SubmissionAdvisory {
 
 /// Evaluate the MPC guide to astrometry's non-blocking recommendations
 /// (distinct from `submit.xsd`'s strict format rules, checked separately in
-/// [`crate::ades::schema_validation::check_local_schema_violations`]) against the observations
-/// that remain after [`remove_singleton_nights`].
+/// [`crate::schema_validation::check_local_schema_violations`]) against the
+/// observations that remain after [`remove_singleton_nights`].
 ///
-/// Never returns an error: this is an advisory report, not a validation
-/// gate.
+/// # Arguments
+/// * `kept` — the observations surviving singleton-night removal.
+///
+/// # Return
+/// The advisory. Never an error: this is a report, not a validation gate.
 pub fn check_submission_recommendations(kept: &[NightObservation]) -> SubmissionAdvisory {
     let mut counts: std::collections::HashMap<i64, usize> = std::collections::HashMap::new();
     for obs in kept {

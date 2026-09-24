@@ -18,6 +18,8 @@ pub mod orbit3d;
 pub mod orbit_fit;
 pub mod orbit_fit_page;
 pub mod skybot_search;
+pub mod submission_dashboard;
+pub mod submitter_config_form;
 pub mod survey;
 
 use dioxus::prelude::*;
@@ -42,6 +44,7 @@ use crate::cross_match_dashboard::CrossMatchDashboardPage;
 use crate::homepage::Home;
 use crate::lineage_page::LineagePage;
 use crate::orbit_fit_page::OrbitFitPage;
+use crate::submission_dashboard::SubmissionDashboardPage;
 
 /// Platform-agnostic async sleep, for the app's polling loops (orbit fit job
 /// status, homepage snapshot warm-up, search debounce).
@@ -299,6 +302,9 @@ enum Route {
 
     #[route("/cross-match")]
     CrossMatchDashboardPage {},
+
+    #[route("/submission")]
+    SubmissionDashboardPage {},
 }
 
 fn main() {

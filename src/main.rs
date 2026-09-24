@@ -50,14 +50,16 @@ pub mod converter;
 pub mod error;
 pub mod init_cli;
 pub mod logging;
+pub mod submit;
 pub mod track;
 
 use crate::{
     converter::convert,
     init_cli::{
-        FinkFatCommands::{Convert, Track},
+        FinkFatCommands::{Convert, Submit, Track},
         cli_builder,
     },
+    submit::{SubmitArgs, submit},
     track::tracking,
 };
 
@@ -72,6 +74,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             database_url,
             path_observation,
         } => convert(config, format, database_url, path_observation),
+        Submit {
+            lineages,
+            csv,
+            database_url,
+            submitter_config,
+            endpoint,
+            dry_run,
+            force,
+            logs,
+            log_file,
+            log_level,
+        } => submit(SubmitArgs {
+            lineages,
+            csv,
+            database_url,
+            submitter_config,
+            endpoint: endpoint.into(),
+            dry_run,
+            force,
+            logs,
+            log_file,
+            log_level,
+        }),
     }
 }
 

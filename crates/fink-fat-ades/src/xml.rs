@@ -1,15 +1,13 @@
 //! `quick-xml`/`serde` struct hierarchy mirroring MPC's `submit.xsd` (ADES
 //! 2022), and the pure `AdesDocument` builder from a lineage's observations
-//! and its user-confirmed header form. Server-only: XML serialization is
-//! never needed on the wasm client, which only receives the finished XML
-//! text from the `#[server]` fn in `server_fns.rs`.
+//! and its user-confirmed header form.
 
 use serde::Serialize;
 
-use crate::ades::error::AdesError;
-use crate::ades::model::{
-    band_index_to_ades_band, mjd_tt_to_ades_obs_time, normalize_trk_sub, AdesHeaderInput,
-    NightObservation,
+use crate::error::AdesError;
+use crate::model::{
+    AdesHeaderInput, NightObservation, band_index_to_ades_band, mjd_tt_to_ades_obs_time,
+    normalize_trk_sub,
 };
 
 /// Root `<ades version="2022">` element (`submit.xsd`'s `ADESType`). A
@@ -122,9 +120,18 @@ fn format_dec_deg(dec_deg: f64) -> String {
 
 /// Build an `AdesDocument` (one `obsBlock`, one lineage per call) from a
 /// lineage's surviving observations (after singleton-night removal — see
-/// `crate::ades::model::remove_singleton_nights`) and the user-confirmed
-/// header form. Pure: no I/O, no XML text produced yet — see
+/// [`crate::model::remove_singleton_nights`]) and the user-confirmed header
+/// form. Pure: no I/O, no XML text produced yet — see
 /// [`ades_document_to_xml`].
+///
+/// # Arguments
+/// * `lineage_designation` — the lineage this document is for.
+/// * `observations` — the observations to include (post singleton-night
+///   removal).
+/// * `header` — the submitter/telescope header fields.
+///
+/// # Return
+/// The built [`AdesDocument`].
 ///
 /// # Errors
 /// Returns [`AdesError::NoObservations`] if `observations` is empty, and any
@@ -209,6 +216,12 @@ pub fn build_ades_document(
 
 /// Serialize an `AdesDocument` to a UTF-8 XML string (with XML declaration).
 ///
+/// # Arguments
+/// * `doc` — the document to serialize.
+///
+/// # Return
+/// The XML text, including the `<?xml ...?>` declaration.
+///
 /// # Errors
 /// Returns [`AdesError::XmlSerialize`] if `quick_xml` itself fails (should
 /// not happen for a well-formed `AdesDocument` produced by
@@ -223,7 +236,7 @@ pub fn ades_document_to_xml(doc: &AdesDocument) -> Result<String, AdesError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lineage_page::observations_table::ObservationRow;
+    use crate::model::ObservationRow;
 
     fn header() -> AdesHeaderInput {
         AdesHeaderInput {

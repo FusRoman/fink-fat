@@ -1,8 +1,10 @@
-//! Pure request-shaping and response-parsing for MPC's `submit_xml_test`
-//! endpoint and its (undocumented) test-submission status page. The actual
-//! `reqwest` calls live in `server_fns.rs`; this module only builds inputs
-//! and interprets outputs, so both are unit testable without a live network
-//! call.
+//! Pure request-shaping and response-parsing for MPC's ADES submission
+//! endpoints (`submit_xml`/`submit_xml_test`) and their status pages. The
+//! actual HTTP calls are left to each caller
+//! (`fink-fat-explorer::ades::server_fns` via async `reqwest`, the
+//! `fink-fat submit` CLI via `reqwest::blocking`); this module only builds
+//! inputs and interprets outputs, so both are unit testable without a live
+//! network call.
 //!
 //! A live probe of `submit_xml_test` (valid ADES, an ADES with `dec` out of
 //! range, plain garbage text, and a non-ADES XML document) showed it is
@@ -12,21 +14,64 @@
 //! reliably email a report either. The real verdict comes from a second,
 //! separate, undocumented endpoint discovered by further live probing:
 //! `submit-test.minorplanetcenter.net/submission_status/query/?id=<id>`
-//! (distinct from MPC's officially documented, JSON, *production*
-//! Submission Status API at `data.minorplanetcenter.net/api/submission-status`,
-//! which doesn't recognize `submit_xml_test` ids — confirmed by testing it
-//! directly). This status page takes a few seconds to become queryable after
-//! submission (bare `"no such submission ID '<id>'"` text body until then),
-//! so [`crate::ades::server_fns`] polls it rather than fetching it once.
+//! (test-submissions only). Production submissions instead use the
+//! documented [`crate::submission_status_api`] (coarse ingest acceptance)
+//! and [`crate::wamo`] (fine per-observation detail) — see those modules'
+//! docs.
 
-use crate::ades::error::AdesError;
+use crate::error::AdesError;
 
-/// MPC's `submit_xml_test` endpoint URL.
+/// MPC's production ADES XML submission endpoint. **Submitting here is a
+/// real, irreversible action** — see [`SubmitEndpoint::Production`].
+pub const MPC_SUBMIT_XML_URL: &str = "https://minorplanetcenter.net/submit_xml";
+
+/// MPC's production ADES PSV (pipe-separated values) submission endpoint —
+/// documented alongside `submit_xml` as an alternative payload format.
+/// fink-fat only ever builds XML documents (see [`crate::xml`]), so this
+/// constant exists for completeness/documentation but has no `fink-fat`
+/// caller today.
+pub const MPC_SUBMIT_PSV_URL: &str = "https://minorplanetcenter.net/submit_psv";
+
+/// MPC's `submit_xml_test` endpoint URL — a non-production tier for
+/// integration-testing a submission pipeline end to end without submitting
+/// real astrometry.
 pub const MPC_SUBMIT_XML_TEST_URL: &str = "https://www.minorplanetcenter.net/submit_xml_test";
 
+/// Which MPC submission tier a request targets. `Test` is always the safe
+/// default in every consumer of this crate (the CLI's `--endpoint` flag
+/// defaults to it) — only `Production` sends a real, MPC-visible submission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SubmitEndpoint {
+    /// `submit_xml_test` / `submit-test.minorplanetcenter.net` — MPC's
+    /// integration-testing tier. Safe to submit to repeatedly; never treated
+    /// by MPC as a real astrometric submission.
+    Test,
+    /// `submit_xml` / the documented, production Submission Status API and
+    /// WAMO. A real submission, visible to MPC and (once processed)
+    /// irreversible.
+    Production,
+}
+
+impl SubmitEndpoint {
+    /// The ADES XML submission URL for this tier.
+    pub fn submit_url(self) -> &'static str {
+        match self {
+            Self::Test => MPC_SUBMIT_XML_TEST_URL,
+            Self::Production => MPC_SUBMIT_XML_URL,
+        }
+    }
+
+    /// Whether this tier is MPC's real, production submission pipeline —
+    /// `false` for [`Self::Test`].
+    pub fn is_production(self) -> bool {
+        matches!(self, Self::Production)
+    }
+}
+
 /// Everything needed to build the `multipart/form-data` body for
-/// `submit_xml_test`, decoupled from `reqwest::multipart::Form` so it can be
-/// constructed and inspected in a unit test without pulling in `reqwest`.
+/// `submit_xml`/`submit_xml_test`, decoupled from `reqwest::multipart::Form`
+/// so it can be constructed and inspected in a unit test without pulling in
+/// an HTTP client.
 #[derive(Debug, Clone, PartialEq)]
 pub struct McpSubmissionRequest {
     pub xml: String,
@@ -57,8 +102,15 @@ impl McpSubmissionRequest {
 /// the live endpoint: `"[ack]. Submission ID is <id>"`.
 const SUBMISSION_ID_MARKER: &str = "Submission ID is ";
 
-/// Parse MPC's raw `submit_xml_test` response body into the submission ID it
-/// carries. This is **not** a validity verdict — see the module docs.
+/// Parse MPC's raw `submit_xml`/`submit_xml_test` response body into the
+/// submission ID it carries. This is **not** a validity verdict — see the
+/// module docs.
+///
+/// # Arguments
+/// * `body` — the raw response body text.
+///
+/// # Return
+/// The submission ID.
 ///
 /// # Errors
 /// Returns [`AdesError::McpSubmissionResponseParse`] if the body doesn't
@@ -75,7 +127,8 @@ pub fn parse_mpc_submission_response(body: &str) -> Result<String, AdesError> {
 }
 
 /// MPC's test-submission status page base URL — query it with `?id=<submission_id>`
-/// (`reqwest`'s `.query(&[("id", id)])` handles percent-encoding).
+/// (`reqwest`'s `.query(&[("id", id)])` handles percent-encoding). Test-tier
+/// only; see [`crate::submission_status_api`] for the production equivalent.
 pub const MPC_SUBMISSION_STATUS_URL: &str =
     "https://submit-test.minorplanetcenter.net/submission_status/query/";
 
@@ -106,6 +159,12 @@ pub enum SubmissionStatusOutcome {
 }
 
 /// Parse one response body from MPC's test-submission status page.
+///
+/// # Arguments
+/// * `body` — the raw response body text.
+///
+/// # Return
+/// The parsed [`SubmissionStatusOutcome`].
 ///
 /// # Errors
 /// Returns [`AdesError::McpStatusPageUnrecognized`] if the body matches
@@ -185,6 +244,18 @@ mod tests {
             ac2_email: "user@example.com".to_string(),
         };
         assert_eq!(request.source_field_value(), request.xml);
+    }
+
+    #[test]
+    fn submit_endpoint_test_never_hits_production_url() {
+        assert_eq!(SubmitEndpoint::Test.submit_url(), MPC_SUBMIT_XML_TEST_URL);
+        assert!(!SubmitEndpoint::Test.is_production());
+    }
+
+    #[test]
+    fn submit_endpoint_production_targets_the_real_url() {
+        assert_eq!(SubmitEndpoint::Production.submit_url(), MPC_SUBMIT_XML_URL);
+        assert!(SubmitEndpoint::Production.is_production());
     }
 
     #[test]

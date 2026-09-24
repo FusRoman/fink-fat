@@ -1393,23 +1393,6 @@
       }
     }
   }
-  .indicator {
-    @layer daisyui.component {
-      position: relative;
-      display: inline-flex;
-      width: max-content;
-      :where(.indicator-item) {
-        z-index: 1;
-        position: absolute;
-        white-space: nowrap;
-        top: var(--indicator-t, 0);
-        bottom: var(--indicator-b, auto);
-        left: var(--indicator-s, auto);
-        right: var(--indicator-e, 0);
-        translate: var(--indicator-x, 50%) var(--indicator-y, -50%);
-      }
-    }
-  }
   .table {
     @layer daisyui.component {
       font-size: 0.875rem;
@@ -1896,6 +1879,45 @@
       padding-inline-end: 3rem;
       min-height: 1lh;
       transition: background-color 0.2s ease-out;
+    }
+  }
+  .mockup-code {
+    @layer daisyui.component {
+      position: relative;
+      overflow: hidden;
+      overflow-x: auto;
+      border-radius: var(--radius-box);
+      background-color: var(--color-neutral);
+      padding-block: calc(0.25rem * 5);
+      color: var(--color-neutral-content);
+      font-size: 0.875rem;
+      direction: ltr;
+      &:before {
+        content: "";
+        margin-bottom: calc(0.25rem * 4);
+        display: block;
+        height: calc(0.25rem * 3);
+        width: calc(0.25rem * 3);
+        border-radius: calc(infinity * 1px);
+        opacity: 30%;
+        box-shadow: 1.4em 0, 2.8em 0, 4.2em 0;
+      }
+      pre {
+        padding-right: calc(0.25rem * 5);
+        &:before {
+          content: "";
+          margin-right: 2ch;
+        }
+        &[data-prefix] {
+          &:before {
+            content: attr(data-prefix);
+            display: inline-block;
+            width: calc(0.25rem * 8);
+            text-align: right;
+            opacity: 50%;
+          }
+        }
+      }
     }
   }
   .checkbox {
@@ -2813,6 +2835,11 @@
       width: calc(var(--size-selector, 0.25rem) * 7);
     }
   }
+  .loading-md {
+    @layer daisyui.modifier {
+      width: calc(var(--size-selector, 0.25rem) * 6);
+    }
+  }
   .loading-sm {
     @layer daisyui.modifier {
       width: calc(var(--size-selector, 0.25rem) * 5);
@@ -2984,6 +3011,9 @@
   }
   .gap-y-2 {
     row-gap: calc(var(--spacing) * 2);
+  }
+  .self-start {
+    align-self: flex-start;
   }
   .truncate {
     overflow: hidden;
@@ -3232,6 +3262,9 @@
   .pr-1 {
     padding-right: calc(var(--spacing) * 1);
   }
+  .pb-0 {
+    padding-bottom: calc(var(--spacing) * 0);
+  }
   .pl-1 {
     padding-left: calc(var(--spacing) * 1);
   }
@@ -3304,6 +3337,9 @@
   }
   .whitespace-nowrap {
     white-space: nowrap;
+  }
+  .whitespace-pre {
+    white-space: pre;
   }
   .whitespace-pre-wrap {
     white-space: pre-wrap;
@@ -3525,12 +3561,6 @@
       --size: calc(var(--size-field, 0.25rem) * 6);
     }
   }
-  .badge-accent {
-    @layer daisyui.modifier {
-      --badge-color: var(--color-accent);
-      --badge-fg: var(--color-accent-content);
-    }
-  }
   .badge-error {
     @layer daisyui.modifier {
       --badge-color: var(--color-error);
@@ -3541,12 +3571,6 @@
     @layer daisyui.modifier {
       --badge-color: var(--color-info);
       --badge-fg: var(--color-info-content);
-    }
-  }
-  .badge-secondary {
-    @layer daisyui.modifier {
-      --badge-color: var(--color-secondary);
-      --badge-fg: var(--color-secondary-content);
     }
   }
   .badge-success {

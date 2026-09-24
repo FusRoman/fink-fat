@@ -10,25 +10,17 @@
 //! the sole gate on the download button) → if locally valid, submit it to
 //! MPC's `submit_xml_test` endpoint for an informational acknowledgement
 //! (`mpc_submission` — **not** a validity verdict; that endpoint is
-//! asynchronous and emails its real report).
+//! asynchronous).
 //!
-//! Module layout: `model.rs`, `schema_validation.rs`, and `mpc_submission.rs`
-//! are pure and always compiled (no XML or network dependency — even
-//! `mpc_submission.rs`, which only shapes a request and parses a response,
-//! with the actual HTTP call left to `server_fns.rs`). `xml.rs` is
-//! server-only, since it depends on the `quick-xml` crate, itself only
-//! pulled in under the `server` feature. `server_fns.rs` (the `#[server]`
-//! orchestration, the only module that performs I/O) is always compiled too
-//! — like every other `#[server]` fn in this crate, its macro-generated
-//! client stub must exist in wasm builds; only its function *body*
-//! (server-only imports scoped locally inside it, per this crate's existing
-//! convention — see `lineage_page/alert_cutouts.rs`) is conditionally real.
+//! `model`, `schema_validation`, `xml`, `mpc_submission`, and `error` are
+//! pure and live in the shared [`fink_fat_ades`] crate (also depended on by
+//! the `fink-fat submit` CLI — see that crate's docs) — re-exported here
+//! under their original module paths so every existing `crate::ades::model`,
+//! `crate::ades::error`, etc. call site in this crate needed no changes.
+//! [`server_fns`] (the `#[server]` orchestration, the only module that
+//! performs I/O) is the one part of this feature that stays here, since it's
+//! specific to this app's Postgres schema and Dioxus fullstack wiring.
 
-pub mod error;
-pub mod model;
-pub mod mpc_submission;
-pub mod schema_validation;
+pub use fink_fat_ades::{error, model, mpc_submission, schema_validation, xml};
+
 pub mod server_fns;
-
-#[cfg(feature = "server")]
-pub mod xml;

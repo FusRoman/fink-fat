@@ -25,47 +25,12 @@ use rand::{rngs::SmallRng, SeedableRng};
 #[cfg(feature = "server")]
 use super::params::FIT_RNG_SEED;
 
-/// How a stored fit was actually obtained — the `orbit_fits.fit_method` column.
-///
-/// `outfit`'s `differential_correction` never reports a diverged correction as
-/// an error: it falls back to the preliminary Gauss orbit and returns it as a
-/// success. That fallback is what [`Self::IodOnly`] records, and it is the
-/// difference between "this orbit was least-squares fitted" and "this orbit is
-/// a preliminary estimate the correction could not improve on".
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum FitMethod {
-    DifferentialCorrection,
-    IodOnly,
-}
-
-impl FitMethod {
-    /// Parses the stored `orbit_fits.fit_method` value. Anything unrecognised
-    /// reads as [`Self::IodOnly`]: the column is free-form `TEXT` written by
-    /// this crate, so a defensive fallback beats failing a whole query over a
-    /// value that can only be one of two strings.
-    pub fn from_column(s: &str) -> Self {
-        match s {
-            "differential_correction" => Self::DifferentialCorrection,
-            _ => Self::IodOnly,
-        }
-    }
-
-    /// The value written to `orbit_fits.fit_method` — the single definition of
-    /// those two strings, which used to be spelled out at each insert site.
-    pub fn as_column(self) -> &'static str {
-        match self {
-            Self::DifferentialCorrection => "differential_correction",
-            Self::IodOnly => "iod_only",
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::DifferentialCorrection => "Differential correction",
-            Self::IodOnly => "Gauss IOD only",
-        }
-    }
-}
+/// How a stored fit was actually obtained — the `orbit_fits.fit_method`
+/// column. Moved to the shared [`fink_fat_ades::quality_tier`] crate (the
+/// `fink-fat submit` CLI's eligibility check needs it too, to reproduce
+/// [`crate::homepage::quality_tier::assign_quality_tier`]'s cascade without
+/// depending on this crate) and re-exported here under its original path.
+pub use fink_fat_ades::quality_tier::FitMethod;
 
 /// Above this normalised RMS a numerically-finished fit is not considered
 /// converged — a least-squares solution whose residuals are ten times their

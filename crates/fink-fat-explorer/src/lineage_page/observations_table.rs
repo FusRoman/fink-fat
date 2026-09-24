@@ -3,32 +3,25 @@ use crate::survey::{observation_link, ObsLink};
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-impl ObservationRow {
+/// One real observation belonging to a lineage's best branch, in track
+/// order. Now defined in the shared [`fink_fat_ades::model`] crate (the
+/// `fink-fat submit` CLI needs the exact same shape to build an ADES
+/// document from its own, synchronous-`postgres`-backed query) and
+/// re-exported here under this module's original path.
+pub use fink_fat_ades::model::ObservationRow;
+
+/// The lineage page's observatory link for one observation — an inherent
+/// method can't be added to [`ObservationRow`] directly any more (it's
+/// defined in another crate), so this extension trait keeps the `obs.link()`
+/// call site unchanged.
+trait ObservationRowExt {
+    fn link(&self) -> ObsLink;
+}
+
+impl ObservationRowExt for ObservationRow {
     fn link(&self) -> ObsLink {
         observation_link(&self.object_id, &self.mpc_code_obs)
     }
-}
-
-/// One real observation belonging to a lineage's best branch, in track order.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ObservationRow {
-    pub id: i64,
-    pub object_id: String,
-    pub position: i32,
-    pub mjd_tt: f64,
-    pub ra: f64,
-    pub ra_err: f64,
-    pub dec: f64,
-    pub dec_err: f64,
-    pub magnitude: f64,
-    pub mag_err: f64,
-    pub filter: i16,
-    pub mpc_code_obs: String,
-    /// Observatory-longitude-aware observation night bucket, pre-computed at
-    /// ingestion (`observations.night_id`) — used by the ADES export to
-    /// detect nights with a single observation ("singleton" nights, which
-    /// the MPC rejects an entire batch for containing).
-    pub night_id: i64,
 }
 
 #[cfg_attr(feature = "server", derive(sqlx::FromRow))]
@@ -48,23 +41,27 @@ struct ObservationRowSql {
     night_id: i64,
 }
 
-impl From<ObservationRowSql> for ObservationRow {
-    fn from(r: ObservationRowSql) -> Self {
-        Self {
-            id: r.id,
-            object_id: r.object_id,
-            position: r.position,
-            mjd_tt: r.mjd_tt,
-            ra: r.ra,
-            ra_err: r.ra_err,
-            dec: r.dec,
-            dec_err: r.dec_err,
-            magnitude: r.magnitude,
-            mag_err: r.mag_err,
-            filter: r.filter,
-            mpc_code_obs: r.mpc_code_obs,
-            night_id: r.night_id,
-        }
+/// Maps a raw SQL row into the shared, DB-client-agnostic [`ObservationRow`].
+/// A plain function rather than `impl From<ObservationRowSql> for
+/// ObservationRow`: with `ObservationRow` now defined in `fink-fat-ades`,
+/// that impl would implement a foreign trait (`From`) for a foreign type
+/// from this crate's `ObservationRowSql` parameter, which the orphan rule
+/// only allows when the target type itself is local.
+fn observation_row_from_sql(r: ObservationRowSql) -> ObservationRow {
+    ObservationRow {
+        id: r.id,
+        object_id: r.object_id,
+        position: r.position,
+        mjd_tt: r.mjd_tt,
+        ra: r.ra,
+        ra_err: r.ra_err,
+        dec: r.dec,
+        dec_err: r.dec_err,
+        magnitude: r.magnitude,
+        mag_err: r.mag_err,
+        filter: r.filter,
+        mpc_code_obs: r.mpc_code_obs,
+        night_id: r.night_id,
     }
 }
 
@@ -91,7 +88,7 @@ pub(crate) async fn fetch_branch_observations(
     .fetch_all(pool)
     .await?;
 
-    Ok(rows.into_iter().map(ObservationRow::from).collect())
+    Ok(rows.into_iter().map(observation_row_from_sql).collect())
 }
 
 /// A lineage's best branch (highest `cumulative_llr`) and its observations —
