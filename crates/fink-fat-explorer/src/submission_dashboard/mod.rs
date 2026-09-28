@@ -7,6 +7,7 @@
 //! burger button rather than sharing this column, so the page reads as one
 //! thing: a status dashboard.
 
+mod ades_xml_modal;
 mod data;
 mod prepare_menu;
 
@@ -14,6 +15,7 @@ use dioxus::prelude::*;
 use fink_fat_ades::mpc_submission::MPC_SUBMISSION_STATUS_URL;
 use fink_fat_ades::wamo::WamoObservation;
 
+use ades_xml_modal::{ades_file_name, AdesXmlModal};
 use data::{
     get_submission_candidates, get_submission_history, refresh_submission_status, SubmissionRow,
 };
@@ -27,19 +29,6 @@ fn verdict_badge_class(verdict: &str) -> &'static str {
         "rejected" | "error" => "badge-error",
         _ => "badge-ghost",
     }
-}
-
-/// Whether a row has anything worth expanding into a detail panel — a bare
-/// `pending` row with neither a coarse verdict detail nor a WAMO lookup yet
-/// has nothing to show. Pure.
-///
-/// # Arguments
-/// * `row` — the submission row.
-///
-/// # Return
-/// `true` if the row's detail toggle should be shown at all.
-fn has_expandable_detail(row: &SubmissionRow) -> bool {
-    row.verdict_detail.is_some() || row.wamo_detail.is_some()
 }
 
 /// Parses a row's stored `wamo_detail` JSON back into the observations it
@@ -100,6 +89,7 @@ pub fn SubmissionDashboardPage() -> Element {
     let mut history = use_signal(Vec::<SubmissionRow>::new);
     let mut refreshing_id = use_signal(|| None::<i64>);
     let mut expanded_id = use_signal(|| None::<i64>);
+    let mut xml_modal_row = use_signal(|| None::<(i64, String)>);
 
     use_effect(move || {
         spawn(async move {
@@ -157,20 +147,18 @@ pub fn SubmissionDashboardPage() -> Element {
                                     for row in history.read().iter() {
                                         tr { key: "{row.id}",
                                             td {
-                                                if has_expandable_detail(row) {
-                                                    button {
-                                                        class: "btn btn-xs btn-ghost",
-                                                        r#type: "button",
-                                                        onclick: {
-                                                            let row_id = row.id;
-                                                            move |_| {
-                                                                expanded_id.set(
-                                                                    if expanded_id() == Some(row_id) { None } else { Some(row_id) },
-                                                                );
-                                                            }
-                                                        },
-                                                        if expanded_id() == Some(row.id) { "▾" } else { "▸" }
-                                                    }
+                                                button {
+                                                    class: "btn btn-xs btn-ghost",
+                                                    r#type: "button",
+                                                    onclick: {
+                                                        let row_id = row.id;
+                                                        move |_| {
+                                                            expanded_id.set(
+                                                                if expanded_id() == Some(row_id) { None } else { Some(row_id) },
+                                                            );
+                                                        }
+                                                    },
+                                                    if expanded_id() == Some(row.id) { "▾" } else { "▸" }
                                                 }
                                             }
                                             td {
@@ -243,6 +231,16 @@ pub fn SubmissionDashboardPage() -> Element {
                                             tr { key: "{row.id}-detail",
                                                 td { colspan: "7", class: "bg-base-200",
                                                     div { class: "flex flex-col gap-3 p-3 text-sm",
+                                                        button {
+                                                            class: "btn btn-xs btn-outline self-start",
+                                                            r#type: "button",
+                                                            onclick: {
+                                                                let row_id = row.id;
+                                                                let lineage_designation = row.lineage_designation.clone();
+                                                                move |_| xml_modal_row.set(Some((row_id, lineage_designation.clone())))
+                                                            },
+                                                            "🔍 View ADES XML"
+                                                        }
                                                         if let Some(detail) = &row.verdict_detail {
                                                             div {
                                                                 div { class: "font-semibold text-xs opacity-70 mb-1", "Verdict detail" }
@@ -318,30 +316,21 @@ pub fn SubmissionDashboardPage() -> Element {
                 }
             }
         }
+
+        AdesXmlModal {
+            id: xml_modal_row().map(|(id, _)| id).unwrap_or_default(),
+            file_name: xml_modal_row()
+                .map(|(_, designation)| ades_file_name(&designation))
+                .unwrap_or_default(),
+            open: xml_modal_row().is_some(),
+            on_close: move |_| xml_modal_row.set(None),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn row(
-        verdict_detail: Option<serde_json::Value>,
-        wamo_detail: Option<serde_json::Value>,
-    ) -> SubmissionRow {
-        SubmissionRow {
-            id: 1,
-            lineage_designation: "FF2026abc".to_string(),
-            endpoint: "production".to_string(),
-            submission_id: Some("sub-1".to_string()),
-            verdict: "pending".to_string(),
-            submitted_at: "2026-09-28T00:00:00+00:00".to_string(),
-            verdict_checked_at: None,
-            verdict_detail,
-            wamo_detail,
-            wamo_checked_at: None,
-        }
-    }
 
     #[test]
     fn verdict_badge_class_covers_every_known_verdict() {
@@ -350,29 +339,6 @@ mod tests {
         assert_eq!(verdict_badge_class("rejected"), "badge-error");
         assert_eq!(verdict_badge_class("error"), "badge-error");
         assert_eq!(verdict_badge_class("unknown"), "badge-ghost");
-    }
-
-    #[test]
-    fn has_expandable_detail_false_when_neither_detail_is_present() {
-        assert!(!has_expandable_detail(&row(None, None)));
-    }
-
-    #[test]
-    fn has_expandable_detail_true_when_verdict_detail_is_present() {
-        assert!(has_expandable_detail(&row(
-            Some(serde_json::json!({})),
-            None
-        )));
-    }
-
-    #[test]
-    fn has_expandable_detail_true_when_wamo_was_checked_even_if_empty() {
-        // `Some([])` means "WAMO was queried, nothing found (yet)" — still
-        // worth expanding to show that informational state.
-        assert!(has_expandable_detail(&row(
-            None,
-            Some(serde_json::json!([]))
-        )));
     }
 
     #[test]

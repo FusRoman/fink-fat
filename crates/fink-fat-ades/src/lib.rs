@@ -51,3 +51,4 @@ pub mod submission_status_api;
 pub mod submitter_config;
 pub mod wamo;
 pub mod xml;
+pub mod xml_format;

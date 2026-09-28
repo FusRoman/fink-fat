@@ -156,6 +156,32 @@ async fn fetch_submission_row(
     }))
 }
 
+/// Fetches one submission's full ADES XML payload — the exact document sent
+/// to MPC, kept out of [`SubmissionRow`]/[`get_submission_history`] since
+/// it's a large field not needed for the list view, so it's fetched only
+/// when the user actually opens the XML viewer.
+///
+/// # Arguments
+/// * `id` — the `mpc_submissions.id` row to fetch.
+///
+/// # Return
+/// The ADES XML text.
+///
+/// # Errors
+/// The query failing, or no row with that id existing, as a `ServerFnError`.
+#[server]
+pub async fn get_submission_xml(id: i64) -> Result<String, ServerFnError> {
+    use crate::get_pool;
+
+    let pool = get_pool().await;
+    sqlx::query_scalar("SELECT xml FROM mpc_submissions WHERE id = $1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?
+        .ok_or_else(|| ServerFnError::new(format!("no mpc_submissions row with id {id}")))
+}
+
 /// Every submission attempt on record, most recent first.
 ///
 /// # Return

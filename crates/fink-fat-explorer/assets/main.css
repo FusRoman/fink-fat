@@ -24,6 +24,7 @@
     --spacing: 0.25rem;
     --container-lg: 32rem;
     --container-2xl: 42rem;
+    --container-3xl: 48rem;
     --container-7xl: 80rem;
     --text-xs: 0.75rem;
     --text-xs--line-height: calc(1 / 0.75);
@@ -2853,6 +2854,11 @@
       width: calc(var(--size-selector, 0.25rem) * 7);
     }
   }
+  .loading-md {
+    @layer daisyui.modifier {
+      width: calc(var(--size-selector, 0.25rem) * 6);
+    }
+  }
   .loading-sm {
     @layer daisyui.modifier {
       width: calc(var(--size-selector, 0.25rem) * 5);
@@ -2898,6 +2904,9 @@
   }
   .w-full {
     width: 100%;
+  }
+  .max-w-3xl {
+    max-width: var(--container-3xl);
   }
   .max-w-\[calc\(100vw-2rem\)\] {
     max-width: calc(100vw - 2rem);
