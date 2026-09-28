@@ -63,6 +63,32 @@ impl WamoIdentifier {
     }
 }
 
+/// Derives a submission's first WAMO submission-block ID from its bare
+/// `submission_id` (the only MPC-assigned identifier fink-fat itself stores
+/// — see `mpc_submissions.submission_id`). MPC splits a submission into one
+/// or more blocks server-side; fink-fat always submits exactly one lineage
+/// as one ADES document, so in the normal case that's a single block,
+/// numbered `_01`. Confirmed against a real captured WAMO fixture (this
+/// module's own tests): submission ID
+/// `"2017-10-10T12:17:02.000_0000CfiO"` had block ID
+/// `"2017-10-10T12:17:02.000_0000CfiO_01"`.
+///
+/// This is a best-effort guess, not a guarantee — a submission that MPC
+/// split into more than one block would have further blocks
+/// (`_02`, `_03`, ...) this function never derives. Callers should treat a
+/// `not_found` WAMO result as "nothing under this guess yet", not proof the
+/// submission has no block at all.
+///
+/// # Arguments
+/// * `submission_id` — the bare submission ID, as stored in
+///   `mpc_submissions.submission_id`.
+///
+/// # Return
+/// The guessed first block ID.
+pub fn first_block_id(submission_id: &str) -> String {
+    format!("{submission_id}_01")
+}
+
 /// Build the JSON request body for a WAMO call: a bare array of identifier
 /// query strings, ready to send as the body of a `GET`
 /// (`reqwest::RequestBuilder::json(&body)` works on a `GET` request builder
@@ -174,6 +200,16 @@ mod tests {
             station_code: "703".to_string(),
         };
         assert_eq!(id.as_query_string(), "5T0D452 703");
+    }
+
+    #[test]
+    fn first_block_id_matches_the_real_captured_fixture() {
+        // "2017-10-10T12:17:02.000_0000CfiO" -> "..._01", exactly the pair
+        // captured live in `FOUND_FIXTURE` below.
+        assert_eq!(
+            first_block_id("2017-10-10T12:17:02.000_0000CfiO"),
+            "2017-10-10T12:17:02.000_0000CfiO_01"
+        );
     }
 
     #[test]

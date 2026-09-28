@@ -266,9 +266,18 @@ pub fn SubmitterConfigFields(
             }
         }
         if !config().validation_errors().is_empty() {
-            div { class: "alert alert-warning text-xs py-2 flex-col items-start",
-                for reason in config().validation_errors() {
-                    div { key: "{reason}", "⚠ {reason}" }
+            // daisyUI's `.alert` lays its direct children out with CSS
+            // Grid (an `auto 1fr` icon/content template), not flexbox — a
+            // `flex-col` utility on the alert itself does nothing, so each
+            // warning `div` was landing as its own grid item and spilling
+            // sideways instead of stacking. Wrapping the list in one flex
+            // container gives the alert a single grid item, and that
+            // wrapper is free to lay its own children out as a column.
+            div { class: "alert alert-warning text-xs py-2 items-start",
+                div { class: "flex flex-col gap-1 min-w-0",
+                    for reason in config().validation_errors() {
+                        div { key: "{reason}", class: "break-words", "⚠ {reason}" }
+                    }
                 }
             }
         }

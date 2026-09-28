@@ -33,6 +33,17 @@ CREATE TABLE IF NOT EXISTS mpc_submissions (
     verdict_detail JSONB
 );
 
+-- Added after the initial rollout, once "Refresh status" started also
+-- querying WAMO (fink_fat_ades::wamo) for production submissions — kept
+-- separate from verdict_detail (which holds the coarse accept/reject
+-- payload from the Submission Status API / test-tier status page) since
+-- WAMO detail is refreshed independently and evolves over time as MPC
+-- finishes processing a submission, unrelated to the coarse verdict itself.
+-- NULL for test-tier rows: WAMO never indexes submit_xml_test submissions
+-- (confirmed by live probing), so it's simply never queried for those.
+ALTER TABLE mpc_submissions ADD COLUMN IF NOT EXISTS wamo_detail JSONB;
+ALTER TABLE mpc_submissions ADD COLUMN IF NOT EXISTS wamo_checked_at TIMESTAMPTZ;
+
 CREATE INDEX IF NOT EXISTS idx_mpc_submissions_lineage
     ON mpc_submissions (lineage_designation, submitted_at DESC);
 

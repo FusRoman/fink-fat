@@ -2379,6 +2379,24 @@
       font-size: 0.75rem;
     }
   }
+  .container {
+    width: 100%;
+    @media (width >= 40rem) {
+      max-width: 40rem;
+    }
+    @media (width >= 48rem) {
+      max-width: 48rem;
+    }
+    @media (width >= 64rem) {
+      max-width: 64rem;
+    }
+    @media (width >= 80rem) {
+      max-width: 80rem;
+    }
+    @media (width >= 96rem) {
+      max-width: 96rem;
+    }
+  }
   .divider {
     @layer daisyui.component {
       display: flex;
@@ -2835,11 +2853,6 @@
       width: calc(var(--size-selector, 0.25rem) * 7);
     }
   }
-  .loading-md {
-    @layer daisyui.modifier {
-      width: calc(var(--size-selector, 0.25rem) * 6);
-    }
-  }
   .loading-sm {
     @layer daisyui.modifier {
       width: calc(var(--size-selector, 0.25rem) * 5);
@@ -2877,11 +2890,17 @@
   .w-80 {
     width: calc(var(--spacing) * 80);
   }
+  .w-\[34rem\] {
+    width: 34rem;
+  }
   .w-fit {
     width: fit-content;
   }
   .w-full {
     width: 100%;
+  }
+  .max-w-\[calc\(100vw-2rem\)\] {
+    max-width: calc(100vw - 2rem);
   }
   .max-w-full {
     max-width: 100%;
@@ -3256,6 +3275,9 @@
   .py-12 {
     padding-block: calc(var(--spacing) * 12);
   }
+  .pt-0 {
+    padding-top: calc(var(--spacing) * 0);
+  }
   .pt-2 {
     padding-top: calc(var(--spacing) * 2);
   }
@@ -3331,6 +3353,9 @@
   .tracking-wide {
     --tw-tracking: var(--tracking-wide);
     letter-spacing: var(--tracking-wide);
+  }
+  .break-words {
+    overflow-wrap: break-word;
   }
   .break-all {
     word-break: break-all;

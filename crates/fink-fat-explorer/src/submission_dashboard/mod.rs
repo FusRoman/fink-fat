@@ -1,24 +1,23 @@
 //! The "Submission" page: reached from the homepage's navbar button (next
-//! to "🔭 Cross-match"), it lets the user copy the exact `fink-fat submit`
-//! command for every currently-eligible, not-yet-submitted lineage (or
-//! download the matching CSV), and shows every past submission attempt with
-//! a per-row "Refresh status" action.
+//! to "🔭 Cross-match"), it tracks every `fink-fat submit` attempt on
+//! record — status, MPC links, and (for production submissions) WAMO's
+//! per-observation detail. Preparing a *new* submission (the copy-pastable
+//! command, the eligible-lineages CSV, the submitter-config generator) is a
+//! separate concern, kept behind the [`prepare_menu::PrepareSubmissionMenu`]
+//! burger button rather than sharing this column, so the page reads as one
+//! thing: a status dashboard.
 
 mod data;
+mod prepare_menu;
 
 use dioxus::prelude::*;
+use fink_fat_ades::mpc_submission::MPC_SUBMISSION_STATUS_URL;
+use fink_fat_ades::wamo::WamoObservation;
 
-use crate::submitter_config_form::SubmitterConfigFields;
 use data::{
-    get_submission_candidates, get_submission_history, refresh_submission_status,
-    SubmissionCandidate, SubmissionRow,
+    get_submission_candidates, get_submission_history, refresh_submission_status, SubmissionRow,
 };
-
-/// Above this many eligible lineages, the generated command switches from a
-/// literal `--lineages a,b,c` list to `--csv eligible_lineages.csv` (paired
-/// with the "Download CSV" button) — long enough to type/paste comfortably,
-/// short enough that a handful of lineages don't need a separate file.
-const MAX_INLINE_LINEAGES: usize = 5;
+use prepare_menu::PrepareSubmissionMenu;
 
 /// daisyUI badge color class for one `mpc_submissions.verdict` value.
 fn verdict_badge_class(verdict: &str) -> &'static str {
@@ -30,50 +29,69 @@ fn verdict_badge_class(verdict: &str) -> &'static str {
     }
 }
 
-/// Builds the copy-pastable `fink-fat submit` command for a batch of
-/// eligible lineage designations. Pure — the CSV-vs-inline-list choice and
-/// exact flag set are worth testing without a browser.
+/// Whether a row has anything worth expanding into a detail panel — a bare
+/// `pending` row with neither a coarse verdict detail nor a WAMO lookup yet
+/// has nothing to show. Pure.
 ///
 /// # Arguments
-/// * `lineage_designations` — every currently-eligible, unsubmitted lineage.
+/// * `row` — the submission row.
 ///
 /// # Return
-/// The full command text, ready to paste into a shell (`\`-continued across
-/// lines) or hand to a clipboard-write call verbatim.
-fn submit_command(lineage_designations: &[String]) -> String {
-    let source_flag = if lineage_designations.is_empty() {
-        "--lineages <FF...>".to_string()
-    } else if lineage_designations.len() <= MAX_INLINE_LINEAGES {
-        format!("--lineages {}", lineage_designations.join(","))
-    } else {
-        "--csv eligible_lineages.csv".to_string()
-    };
-
-    [
-        "fink-fat submit \\".to_string(),
-        format!("  {source_flag} \\"),
-        "  --submitter-config submission.yaml \\".to_string(),
-        "  --database-url $DATABASE_URL \\".to_string(),
-        "  --endpoint production".to_string(),
-    ]
-    .join("\n")
+/// `true` if the row's detail toggle should be shown at all.
+fn has_expandable_detail(row: &SubmissionRow) -> bool {
+    row.verdict_detail.is_some() || row.wamo_detail.is_some()
 }
 
-/// Builds the `eligible_lineages.csv` text (one `lineage_designation`
-/// column) for the "Download CSV" button. Pure.
+/// Parses a row's stored `wamo_detail` JSON back into the observations it
+/// holds. Defensive rather than fallible: this is fink-fat's own
+/// previously-written JSON, so a parse failure would mean a schema drift
+/// bug, not bad external input — surfacing it as an empty list (a state the
+/// UI already renders sensibly, as "not linked yet") is better than an
+/// error banner for what is, at worst, a display glitch.
 ///
 /// # Arguments
-/// * `lineage_designations` — every currently-eligible, unsubmitted lineage.
+/// * `wamo_detail` — the row's `wamo_detail` field.
 ///
 /// # Return
-/// The CSV text, header included.
-fn eligible_lineages_csv(lineage_designations: &[String]) -> String {
-    let mut csv = String::from("lineage_designation\n");
-    for designation in lineage_designations {
-        csv.push_str(designation);
-        csv.push('\n');
-    }
-    csv
+/// The observations, empty if `wamo_detail` is `None` or fails to parse.
+fn parse_wamo_observations(wamo_detail: &Option<serde_json::Value>) -> Vec<WamoObservation> {
+    wamo_detail
+        .as_ref()
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default()
+}
+
+/// The one-line summary badge text for a WAMO observation's IAU designation
+/// — the actual payoff of a real submission once MPC assigns one. Pure.
+///
+/// # Arguments
+/// * `observation` — one WAMO match.
+///
+/// # Return
+/// `Some("Designated (NNNNN)")` if MPC assigned a designation, `None`
+/// otherwise (a match can exist — e.g. an identification against a known
+/// object — without a fresh designation).
+fn wamo_designation_label(observation: &WamoObservation) -> Option<String> {
+    observation
+        .iau_desig
+        .as_deref()
+        .map(|desig| format!("Designated ({desig})"))
+}
+
+/// Link to MPC's test-submission status page for a given submission — same
+/// pattern as `lineage_page::ades_export_modal`'s `mpc_status_url`. Only
+/// meaningful for `endpoint = "test"`: there is no public, browsable
+/// equivalent page for production submissions (confirmed by probing while
+/// building this feature) — production status is shown inline instead, via
+/// the coarse verdict and WAMO detail already fetched by "Refresh".
+///
+/// # Arguments
+/// * `submission_id` — the MPC-assigned submission id.
+///
+/// # Return
+/// The status page URL.
+fn mpc_test_status_url(submission_id: &str) -> String {
+    format!("{MPC_SUBMISSION_STATUS_URL}?id={submission_id}")
 }
 
 #[component]
@@ -81,7 +99,7 @@ pub fn SubmissionDashboardPage() -> Element {
     let candidates_resource = use_resource(get_submission_candidates);
     let mut history = use_signal(Vec::<SubmissionRow>::new);
     let mut refreshing_id = use_signal(|| None::<i64>);
-    let submitter_config = use_signal(crate::submitter_config_form::default_submitter_config);
+    let mut expanded_id = use_signal(|| None::<i64>);
 
     use_effect(move || {
         spawn(async move {
@@ -91,67 +109,18 @@ pub fn SubmissionDashboardPage() -> Element {
         });
     });
 
-    let candidates: Vec<SubmissionCandidate> = match &*candidates_resource.read() {
+    let candidates = match &*candidates_resource.read() {
         Some(Ok(rows)) => rows.clone(),
         _ => Vec::new(),
-    };
-    let lineage_designations: Vec<String> = candidates
-        .iter()
-        .map(|c| c.lineage_designation.clone())
-        .collect();
-    let command = submit_command(&lineage_designations);
-
-    let copy_command = {
-        let command = command.clone();
-        move |_| {
-            let eval = document::eval(
-                "const data = await dioxus.recv();
-                 await navigator.clipboard.writeText(data.text);",
-            );
-            let _ = eval.send(serde_json::json!({ "text": command }));
-        }
-    };
-
-    let download_csv = move |_| {
-        let csv = eligible_lineages_csv(&lineage_designations);
-        let eval = document::eval(
-            "const data = await dioxus.recv();
-             const blob = new Blob([data.csv], { type: 'text/csv' });
-             const url = URL.createObjectURL(blob);
-             const a = document.createElement('a');
-             a.href = url;
-             a.download = 'eligible_lineages.csv';
-             document.body.appendChild(a);
-             a.click();
-             a.remove();
-             URL.revokeObjectURL(url);",
-        );
-        let _ = eval.send(serde_json::json!({ "csv": csv }));
-    };
-
-    let download_submitter_config = move |_| {
-        let Ok(yaml) = submitter_config().to_yaml() else {
-            return;
-        };
-        let eval = document::eval(
-            "const data = await dioxus.recv();
-             const blob = new Blob([data.yaml], { type: 'text/yaml' });
-             const url = URL.createObjectURL(blob);
-             const a = document.createElement('a');
-             a.href = url;
-             a.download = 'submission.yaml';
-             document.body.appendChild(a);
-             a.click();
-             a.remove();
-             URL.revokeObjectURL(url);",
-        );
-        let _ = eval.send(serde_json::json!({ "yaml": yaml }));
     };
 
     rsx! {
         div { class: "min-h-screen bg-base-200 flex flex-col gap-4 p-4",
             div { class: "navbar bg-base-100 shadow-sm px-6 rounded-box",
-                Link { to: crate::Route::Home {}, class: "link link-hover text-sm", "← Back to home" }
+                div { class: "flex-1",
+                    Link { to: crate::Route::Home {}, class: "link link-hover text-sm", "← Back to home" }
+                }
+                div { class: "flex-none", PrepareSubmissionMenu { candidates: candidates.clone() } }
             }
 
             div { class: "stats shadow bg-base-100",
@@ -166,72 +135,6 @@ pub fn SubmissionDashboardPage() -> Element {
             }
 
             div { class: "card bg-base-100 shadow-sm",
-                div { class: "card-body gap-3",
-                    h2 { class: "card-title", "Prepare a submission" }
-                    match &*candidates_resource.read() {
-                        None => rsx! {
-                            div { class: "flex justify-center py-6",
-                                span { class: "loading loading-spinner loading-md" }
-                            }
-                        },
-                        Some(Err(e)) => rsx! {
-                            div { class: "alert alert-error", "Failed to load candidates: {e}" }
-                        },
-                        Some(Ok(_)) if candidates.is_empty() => rsx! {
-                            p { class: "text-sm opacity-60",
-                                "No lineage is currently eligible (Well-sampled discovery / \
-                                 Discovery) and unsubmitted."
-                            }
-                        },
-                        Some(Ok(_)) => rsx! {
-                            p { class: "text-sm opacity-70",
-                                "{candidates.len()} lineage(s) ready to submit. Fill in a \
-                                 submitter config (see `fink-fat submit --help`), then run:"
-                            }
-                            div { class: "mockup-code text-xs whitespace-pre",
-                                pre { "data-prefix": "$", code { "{command}" } }
-                            }
-                            div { class: "flex gap-2",
-                                button {
-                                    class: "btn btn-sm btn-outline",
-                                    r#type: "button",
-                                    onclick: copy_command,
-                                    "📋 Copy command"
-                                }
-                                button {
-                                    class: "btn btn-sm btn-outline",
-                                    r#type: "button",
-                                    onclick: download_csv,
-                                    "⬇ Download eligible_lineages.csv"
-                                }
-                            }
-                        },
-                    }
-                }
-            }
-
-            div { class: "collapse collapse-arrow bg-base-100 shadow-sm",
-                input { r#type: "checkbox" }
-                div { class: "collapse-title font-semibold", "Generate submitter config (submission.yaml)" }
-                div { class: "collapse-content",
-                    div { class: "flex flex-col gap-3 pt-2",
-                        p { class: "text-xs opacity-70",
-                            "Fill in your submitter/telescope identity once, download it as \
-                             `submission.yaml`, then pass it to `fink-fat submit \
-                             --submitter-config submission.yaml`."
-                        }
-                        SubmitterConfigFields { config: submitter_config, on_change: move |_| {} }
-                        button {
-                            class: "btn btn-sm btn-outline self-start",
-                            r#type: "button",
-                            onclick: download_submitter_config,
-                            "⬇ Download submission.yaml"
-                        }
-                    }
-                }
-            }
-
-            div { class: "card bg-base-100 shadow-sm",
                 div { class: "card-body p-0",
                     h2 { class: "card-title p-4 pb-0", "Submitted lineages" }
                     if history.read().is_empty() {
@@ -241,6 +144,7 @@ pub fn SubmissionDashboardPage() -> Element {
                             table { class: "table table-zebra table-sm",
                                 thead {
                                     tr {
+                                        th { "" }
                                         th { "Lineage" }
                                         th { "Endpoint" }
                                         th { "Submission ID" }
@@ -252,6 +156,23 @@ pub fn SubmissionDashboardPage() -> Element {
                                 tbody {
                                     for row in history.read().iter() {
                                         tr { key: "{row.id}",
+                                            td {
+                                                if has_expandable_detail(row) {
+                                                    button {
+                                                        class: "btn btn-xs btn-ghost",
+                                                        r#type: "button",
+                                                        onclick: {
+                                                            let row_id = row.id;
+                                                            move |_| {
+                                                                expanded_id.set(
+                                                                    if expanded_id() == Some(row_id) { None } else { Some(row_id) },
+                                                                );
+                                                            }
+                                                        },
+                                                        if expanded_id() == Some(row.id) { "▾" } else { "▸" }
+                                                    }
+                                                }
+                                            }
                                             td {
                                                 Link {
                                                     to: crate::Route::LineagePage {
@@ -268,7 +189,19 @@ pub fn SubmissionDashboardPage() -> Element {
                                                 }
                                             }
                                             td { class: "text-xs opacity-70 font-mono",
-                                                {row.submission_id.clone().unwrap_or_else(|| "—".to_string())}
+                                                match (&row.submission_id, row.endpoint.as_str()) {
+                                                    (Some(submission_id), "test") => rsx! {
+                                                        a {
+                                                            class: "link",
+                                                            href: "{mpc_test_status_url(submission_id)}",
+                                                            target: "_blank",
+                                                            rel: "noopener noreferrer",
+                                                            "{submission_id}"
+                                                        }
+                                                    },
+                                                    (Some(submission_id), _) => rsx! { "{submission_id}" },
+                                                    (None, _) => rsx! { "—" },
+                                                }
                                             }
                                             td {
                                                 span {
@@ -306,6 +239,77 @@ pub fn SubmissionDashboardPage() -> Element {
                                                 }
                                             }
                                         }
+                                        if expanded_id() == Some(row.id) {
+                                            tr { key: "{row.id}-detail",
+                                                td { colspan: "7", class: "bg-base-200",
+                                                    div { class: "flex flex-col gap-3 p-3 text-sm",
+                                                        if let Some(detail) = &row.verdict_detail {
+                                                            div {
+                                                                div { class: "font-semibold text-xs opacity-70 mb-1", "Verdict detail" }
+                                                                if let Some(comments) = detail.get("comments").and_then(|v| v.as_array()) {
+                                                                    ul { class: "list-disc pl-4 text-xs",
+                                                                        for comment in comments.iter().filter_map(|c| c.as_str()) {
+                                                                            li { key: "{comment}", "{comment}" }
+                                                                        }
+                                                                    }
+                                                                } else {
+                                                                    pre { class: "text-xs whitespace-pre-wrap", "{detail}" }
+                                                                }
+                                                            }
+                                                        }
+                                                        if row.endpoint == "production" {
+                                                            div {
+                                                                div { class: "font-semibold text-xs opacity-70 mb-1 flex items-center gap-2",
+                                                                    "WAMO detail"
+                                                                    if let Some(checked_at) = &row.wamo_checked_at {
+                                                                        span { class: "font-normal opacity-60", "(checked {checked_at})" }
+                                                                    }
+                                                                }
+                                                                {
+                                                                    let observations = parse_wamo_observations(&row.wamo_detail);
+                                                                    if row.wamo_detail.is_none() {
+                                                                        rsx! {
+                                                                            p { class: "text-xs opacity-60",
+                                                                                "Not checked yet — click Refresh to query WAMO."
+                                                                            }
+                                                                        }
+                                                                    } else if observations.is_empty() {
+                                                                        rsx! {
+                                                                            p { class: "text-xs opacity-60",
+                                                                                "MPC hasn't linked/published this submission yet — \
+                                                                                 normal for a submission still in processing, \
+                                                                                 check back later."
+                                                                            }
+                                                                        }
+                                                                    } else {
+                                                                        rsx! {
+                                                                            div { class: "flex flex-col gap-2",
+                                                                                for observation in &observations {
+                                                                                    div {
+                                                                                        key: "{observation.obsid}",
+                                                                                        class: "border border-base-300 rounded p-2 flex flex-col gap-1",
+                                                                                        if let Some(label) = wamo_designation_label(observation) {
+                                                                                            span { class: "badge badge-success badge-sm self-start", "{label}" }
+                                                                                        }
+                                                                                        span { "{observation.status_decoded}" }
+                                                                                        if let Some(obs80) = &observation.obs80 {
+                                                                                            code { class: "text-xs block", "{obs80}" }
+                                                                                        }
+                                                                                        if let Some(reference) = &observation.reference {
+                                                                                            span { class: "text-xs opacity-70", "Reference: {reference}" }
+                                                                                        }
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -321,41 +325,22 @@ pub fn SubmissionDashboardPage() -> Element {
 mod tests {
     use super::*;
 
-    #[test]
-    fn submit_command_uses_inline_lineages_under_the_threshold() {
-        let designations = vec!["FF2026abc".to_string(), "FF2026def".to_string()];
-        let command = submit_command(&designations);
-        assert!(command.contains("--lineages FF2026abc,FF2026def"));
-        assert!(!command.contains("--csv"));
-    }
-
-    #[test]
-    fn submit_command_switches_to_csv_above_the_threshold() {
-        let designations: Vec<String> = (0..MAX_INLINE_LINEAGES + 1)
-            .map(|i| format!("FF2026{i:04}"))
-            .collect();
-        let command = submit_command(&designations);
-        assert!(command.contains("--csv eligible_lineages.csv"));
-        assert!(!command.contains("--lineages"));
-    }
-
-    #[test]
-    fn submit_command_is_a_valid_shell_continuation() {
-        let command = submit_command(&["FF2026abc".to_string()]);
-        let lines: Vec<&str> = command.lines().collect();
-        assert!(lines[..lines.len() - 1].iter().all(|l| l.ends_with('\\')));
-        assert!(!lines.last().unwrap().ends_with('\\'));
-    }
-
-    #[test]
-    fn eligible_lineages_csv_has_the_expected_header_and_rows() {
-        let csv = eligible_lineages_csv(&["FF2026abc".to_string(), "FF2026def".to_string()]);
-        assert_eq!(csv, "lineage_designation\nFF2026abc\nFF2026def\n");
-    }
-
-    #[test]
-    fn eligible_lineages_csv_of_an_empty_list_is_just_the_header() {
-        assert_eq!(eligible_lineages_csv(&[]), "lineage_designation\n");
+    fn row(
+        verdict_detail: Option<serde_json::Value>,
+        wamo_detail: Option<serde_json::Value>,
+    ) -> SubmissionRow {
+        SubmissionRow {
+            id: 1,
+            lineage_designation: "FF2026abc".to_string(),
+            endpoint: "production".to_string(),
+            submission_id: Some("sub-1".to_string()),
+            verdict: "pending".to_string(),
+            submitted_at: "2026-09-28T00:00:00+00:00".to_string(),
+            verdict_checked_at: None,
+            verdict_detail,
+            wamo_detail,
+            wamo_checked_at: None,
+        }
     }
 
     #[test]
@@ -365,5 +350,104 @@ mod tests {
         assert_eq!(verdict_badge_class("rejected"), "badge-error");
         assert_eq!(verdict_badge_class("error"), "badge-error");
         assert_eq!(verdict_badge_class("unknown"), "badge-ghost");
+    }
+
+    #[test]
+    fn has_expandable_detail_false_when_neither_detail_is_present() {
+        assert!(!has_expandable_detail(&row(None, None)));
+    }
+
+    #[test]
+    fn has_expandable_detail_true_when_verdict_detail_is_present() {
+        assert!(has_expandable_detail(&row(
+            Some(serde_json::json!({})),
+            None
+        )));
+    }
+
+    #[test]
+    fn has_expandable_detail_true_when_wamo_was_checked_even_if_empty() {
+        // `Some([])` means "WAMO was queried, nothing found (yet)" — still
+        // worth expanding to show that informational state.
+        assert!(has_expandable_detail(&row(
+            None,
+            Some(serde_json::json!([]))
+        )));
+    }
+
+    #[test]
+    fn parse_wamo_observations_empty_for_none() {
+        assert!(parse_wamo_observations(&None).is_empty());
+    }
+
+    #[test]
+    fn parse_wamo_observations_empty_for_malformed_json() {
+        assert!(parse_wamo_observations(&Some(serde_json::json!({"not": "a list"}))).is_empty());
+    }
+
+    #[test]
+    fn parse_wamo_observations_round_trips_real_shape() {
+        let value = serde_json::json!([{
+            "iau_desig": "380635",
+            "input_type": "submission_block_id",
+            "obs80": "c0635 ...",
+            "obsid": "L4eBVG000000CfiO010000A9a",
+            "obssubid": null,
+            "ref": "MPS   826083",
+            "status": "P",
+            "status_decoded": "matched",
+            "submission_block_id": "2017-10-10T12:17:02.000_0000CfiO_01",
+            "submission_id": "2017-10-10T12:17:02.000_0000CfiO"
+        }]);
+        let observations = parse_wamo_observations(&Some(value));
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0].iau_desig.as_deref(), Some("380635"));
+    }
+
+    #[test]
+    fn wamo_designation_label_present_when_designated() {
+        let mut observations = parse_wamo_observations(&Some(serde_json::json!([{
+            "iau_desig": "380635",
+            "input_type": "submission_block_id",
+            "obs80": null,
+            "obsid": "obs-1",
+            "obssubid": null,
+            "ref": null,
+            "status": "P",
+            "status_decoded": "matched",
+            "submission_block_id": null,
+            "submission_id": null
+        }])));
+        let observation = observations.remove(0);
+        assert_eq!(
+            wamo_designation_label(&observation),
+            Some("Designated (380635)".to_string())
+        );
+    }
+
+    #[test]
+    fn wamo_designation_label_absent_without_a_designation() {
+        let mut observations = parse_wamo_observations(&Some(serde_json::json!([{
+            "iau_desig": null,
+            "input_type": "submission_block_id",
+            "obs80": null,
+            "obsid": "obs-1",
+            "obssubid": null,
+            "ref": null,
+            "status": "P",
+            "status_decoded": "matched",
+            "submission_block_id": null,
+            "submission_id": null
+        }])));
+        let observation = observations.remove(0);
+        assert_eq!(wamo_designation_label(&observation), None);
+    }
+
+    #[test]
+    fn mpc_test_status_url_embeds_the_submission_id() {
+        assert_eq!(
+            mpc_test_status_url("2026-09-28T09:18:41.271_00000lJM"),
+            "https://submit-test.minorplanetcenter.net/submission_status/query/?id=2026-09-28T09:18:41.271_00000lJM"
+        );
     }
 }
