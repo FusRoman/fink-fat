@@ -3,6 +3,8 @@ use crate::survey::{observation_link, ObsLink};
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use super::observations_table_glossary::ObservationsTableGlossary;
+
 /// One real observation belonging to a lineage's best branch, in track
 /// order. Now defined in the shared [`fink_fat_ades::model`] crate (the
 /// `fink-fat submit` CLI needs the exact same shape to build an ADES
@@ -139,7 +141,10 @@ pub fn ObservationsTable(observations: Vec<ObservationRow>) -> Element {
     rsx! {
         div { class: "card bg-base-100 shadow-sm",
             div { class: "card-body",
-                h2 { class: "card-title", "Observations ({observations.len()})" }
+                div { class: "flex items-center gap-2",
+                    h2 { class: "card-title", "Observations ({observations.len()})" }
+                    ObservationsTableGlossary {}
+                }
 
                 div { class: "max-h-[50vh] overflow-y-auto",
                     table { class: "table table-zebra table-pin-rows table-sm",

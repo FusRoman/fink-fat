@@ -1,7 +1,7 @@
 //! The homepage's lineage table's glossary: a "?" icon whose popover
 //! explains the columns and how to interact with the table.
 //!
-//! Uses the shared [`crate::homepage::help_popover::HelpPopover`] shell, and
+//! Uses the shared [`crate::help_popover::HelpPopover`] shell, and
 //! reuses [`crate::homepage::population_plot_glossary::FamilyReferenceList`]/
 //! [`crate::homepage::population_plot_glossary::TierReferenceList`] for the
 //! Family/Quality columns' reference lists, since they carry the exact same
@@ -9,7 +9,7 @@
 
 use dioxus::prelude::*;
 
-use crate::homepage::help_popover::HelpPopover;
+use crate::help_popover::HelpPopover;
 use crate::homepage::population_plot_glossary::{FamilyReferenceList, TierReferenceList};
 
 /// A short description of the table, shown above the glossary.

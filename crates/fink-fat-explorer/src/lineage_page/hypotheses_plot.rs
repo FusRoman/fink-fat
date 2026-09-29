@@ -7,6 +7,7 @@ use plotly::{
     Plot, Scatter,
 };
 
+use super::hypotheses_plot_glossary::HypothesesPlotGlossary;
 use super::kf_replay::KfStep;
 use super::x_axis::XAxisUnit;
 #[cfg(target_arch = "wasm32")]
@@ -21,7 +22,10 @@ pub fn HypothesesPlot(replay: Vec<KfStep>, x_axis_unit: XAxisUnit) -> Element {
     rsx! {
         div { class: "card bg-base-100 shadow-sm flex-1",
             div { class: "card-body gap-4",
-                h2 { class: "card-title", "Hypothesis bank" }
+                div { class: "flex items-center gap-2",
+                    h2 { class: "card-title", "Hypothesis bank" }
+                    HypothesesPlotGlossary {}
+                }
                 HypothesisCountPlot { replay: replay.clone(), x_axis_unit }
                 SearchRegionPlot { replay, x_axis_unit }
             }

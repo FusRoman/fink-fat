@@ -8,6 +8,7 @@ use plotly::{
 };
 
 use super::kf_replay::{HypothesisSnapshot, KfStep};
+use super::rho_evolution_plot_glossary::RhoEvolutionPlotGlossary;
 use super::x_axis::XAxisUnit;
 #[cfg(target_arch = "wasm32")]
 use super::x_axis::{x_values_for_hypotheses, x_values_for_steps, XAxisValues};
@@ -26,7 +27,10 @@ pub fn RhoEvolutionPlot(
     rsx! {
         div { class: "card bg-base-100 shadow-sm flex-1",
             div { class: "card-body gap-4",
-                h2 { class: "card-title", "ρ / ρ̇ evolution" }
+                div { class: "flex items-center gap-2",
+                    h2 { class: "card-title", "ρ / ρ̇ evolution" }
+                    RhoEvolutionPlotGlossary {}
+                }
                 RhoPlot { replay: replay.clone(), x_axis_unit }
                 RhoDotPlot { replay: replay.clone(), x_axis_unit }
                 HypothesisRhoScatterPlot { hypotheses, replay, x_axis_unit }

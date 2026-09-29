@@ -3,6 +3,19 @@ use super::kf_replay::{HypothesisSnapshot, KfStep};
 #[cfg(target_arch = "wasm32")]
 use super::observations_table::ObservationRow;
 
+/// Explanation of the `Steps`/`Days`/`Date` selector, for the glossary
+/// popover of every lineage-page plot it drives (`trajectory_plot.rs`,
+/// `light_curve_plot.rs`, and every mini-plot in `metrics_plot.rs`/
+/// `rho_evolution_plot.rs`/`hypotheses_plot.rs`) — written once here, next
+/// to [`XAxisUnit`] itself, so each glossary includes it rather than
+/// restating it with independently-drifting wording.
+pub(super) const X_AXIS_UNIT_CONCEPT: (&str, &str) = (
+    "X-axis: Steps / Days / Date",
+    "Switches what the x-axis (or, on the trajectory plot, the hover time label) represents: \
+     Steps is the raw observation/step index, Days is elapsed days since the first observation, \
+     Date is the calendar date in UTC. One selector, shared by every plot it appears on.",
+);
+
 /// Which quantity the x-axis of the replay plots represents. Shared by every
 /// mini-plot in `metrics_plot.rs`/`rho_evolution_plot.rs`/`hypotheses_plot.rs`
 /// via a single selector in `plot_tabs.rs`, so switching it redraws every

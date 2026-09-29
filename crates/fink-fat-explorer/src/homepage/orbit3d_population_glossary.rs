@@ -1,7 +1,7 @@
 //! The homepage's 3D orbit view's glossary: a "?" icon whose popover
 //! explains what the view shows.
 //!
-//! Uses the shared [`crate::homepage::help_popover::HelpPopover`] shell, and
+//! Uses the shared [`crate::help_popover::HelpPopover`] shell, and
 //! [`crate::homepage::population_plot_glossary::FamilyReferenceList`] for
 //! the dynamical-family reference — this view uses the same family colors
 //! as the (a, e) plot, so the reference list is identical; it has no
@@ -9,7 +9,7 @@
 
 use dioxus::prelude::*;
 
-use crate::homepage::help_popover::HelpPopover;
+use crate::help_popover::HelpPopover;
 use crate::homepage::population_plot_glossary::FamilyReferenceList;
 
 /// A short description of the view, shown above the glossary.

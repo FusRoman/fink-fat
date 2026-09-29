@@ -1,18 +1,25 @@
 mod ades_export_modal;
 mod alert_cutouts;
+mod alert_cutouts_glossary;
 mod cross_match_controls;
 mod cross_match_panel;
 mod hypotheses_plot;
+mod hypotheses_plot_glossary;
 mod identity_card;
 mod kf_replay;
 mod light_curve_plot;
+mod light_curve_plot_glossary;
 mod metrics_plot;
+mod metrics_plot_glossary;
 pub mod observations_table;
+mod observations_table_glossary;
 mod orbit3d_glossary;
 mod orbit3d_tab;
 mod plot_tabs;
 mod rho_evolution_plot;
+mod rho_evolution_plot_glossary;
 mod trajectory_plot;
+mod trajectory_plot_glossary;
 mod x_axis;
 
 use dioxus::prelude::*;

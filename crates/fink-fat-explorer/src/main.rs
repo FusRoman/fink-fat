@@ -11,6 +11,7 @@ pub mod cross_match_dashboard;
 pub mod cross_match_status;
 pub mod fit_pipeline;
 pub mod format_epoch;
+mod help_popover;
 pub mod homepage;
 pub mod lineage_page;
 pub mod lsst_band;

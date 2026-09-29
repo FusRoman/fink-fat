@@ -1,7 +1,7 @@
 //! The homepage's (a, e) plot's glossary: a "?" icon whose popover explains
 //! how to read the plot and what its colors/markers mean.
 //!
-//! Uses the shared [`crate::homepage::help_popover::HelpPopover`] shell for
+//! Uses the shared [`crate::help_popover::HelpPopover`] shell for
 //! the hover/pin/outside-click/Escape mechanic. Also home to
 //! [`FAMILY_GROUPS`]/[`FamilyReferenceList`] and
 //! [`TIER_ENTRIES`]/[`TierReferenceList`] — the [`DynamicalFamily`]/
@@ -12,8 +12,8 @@
 
 use dioxus::prelude::*;
 
+use crate::help_popover::HelpPopover;
 use crate::homepage::family::DynamicalFamily;
-use crate::homepage::help_popover::HelpPopover;
 use crate::homepage::quality_tier::QualityTier;
 
 /// A short description of the plot, shown above the glossary.

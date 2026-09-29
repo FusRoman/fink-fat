@@ -1,7 +1,6 @@
 pub mod branch_tab;
 pub mod dynamic_pop_plot;
 pub mod family;
-mod help_popover;
 pub mod interaction;
 mod lineage_table_glossary;
 pub mod orbit3d_plot;

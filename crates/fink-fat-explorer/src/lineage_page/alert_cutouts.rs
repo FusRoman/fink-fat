@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::format_epoch::iso_utc;
 use crate::survey::Survey;
 
+use super::alert_cutouts_glossary::AlertCutoutsGlossary;
 use super::observations_table::ObservationRow;
 
 /// Which of the three cutout stamps attached to every ZTF/LSST alert is
@@ -348,7 +349,10 @@ pub fn AlertCarousel(observations: Vec<ObservationRow>) -> Element {
         div { class: "card bg-base-100 shadow-sm",
             div { class: "card-body gap-3",
                 div { class: "flex flex-wrap items-center justify-between gap-2",
-                    h2 { class: "card-title", "Alert images ({(index() + 1).min(n)}/{n})" }
+                    div { class: "flex items-center gap-2",
+                        h2 { class: "card-title", "Alert images ({(index() + 1).min(n)}/{n})" }
+                        AlertCutoutsGlossary {}
+                    }
                     label { class: "flex items-center gap-2 cursor-pointer text-sm",
                         span { class: if !show_utc() { "font-bold" } else { "opacity-50" }, "MJD (TT)" }
                         input {

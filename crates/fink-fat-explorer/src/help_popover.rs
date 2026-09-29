@@ -1,9 +1,9 @@
-//! Shared shell for the homepage's "?" help widgets
-//! ([`crate::homepage::population_plot_glossary`],
-//! [`crate::homepage::orbit3d_population_glossary`],
-//! [`crate::homepage::lineage_table_glossary`]): a "?" icon whose popover
-//! opens on hover, can be *pinned* open (and scrolled) by clicking the icon,
-//! and closes on an outside click or Escape.
+//! Shared shell for this app's "?" help widgets (the homepage's
+//! `population_plot_glossary`/`orbit3d_population_glossary`/
+//! `lineage_table_glossary`, and the lineage page's per-plot glossaries): a
+//! "?" icon whose popover opens on hover, can be *pinned* open (and
+//! scrolled) by clicking the icon, and closes on an outside click or
+//! Escape.
 //!
 //! Driven by Dioxus state rather than a CSS-only tooltip (daisyUI's
 //! `tooltip`), which closes as soon as the pointer crosses the gap between
@@ -13,9 +13,13 @@
 //!
 //! Same mechanic as the lineage page's 3D-view glossary
 //! (`lineage_page::orbit3d_glossary::PlotGlossary`), which predates this
-//! shared shell and still has its own copy — the two never shared a
-//! consumer, so unifying them would only have added an import for its own
-//! sake.
+//! shared shell and still has its own copy — it was the only consumer at
+//! the time, so unifying them would only have added an import for its own
+//! sake. Every widget added since reuses this one instead.
+//!
+//! A crate-root module (not nested under `homepage`, where it originated)
+//! because both `homepage` and `lineage_page` now mount widgets built on
+//! it.
 
 use dioxus::prelude::*;
 
@@ -35,7 +39,7 @@ const POPOVER_MAX_HEIGHT: &str = "min(75vh, 36rem)";
 /// * `children` — the popover's content, typically an "About this ..."
 ///   paragraph followed by one or more `dl` reference lists.
 #[component]
-pub(super) fn HelpPopover(aria_label: &'static str, children: Element) -> Element {
+pub fn HelpPopover(aria_label: &'static str, children: Element) -> Element {
     let mut hovered = use_signal(|| false);
     let mut pinned = use_signal(|| false);
     let open = hovered() || pinned();
