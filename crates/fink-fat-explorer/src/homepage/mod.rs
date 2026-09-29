@@ -154,11 +154,15 @@ pub fn Home() -> Element {
 
             // Stays visible no matter which view is active below, since
             // `hidden_families`/`hidden_tiers` filter both the (a, e) plot
-            // and the lineage table.
-            div { class: "px-6 pt-4", PopulationLegendBar { orbital_data, hidden_families, hidden_tiers } }
-
-            div { class: "p-6 flex flex-col gap-6 flex-1 min-h-0",
-                div { class: "join self-center bg-base-100 shadow-sm rounded-box",
+            // and the lineage table. The view switch rides in the same row
+            // rather than its own — it used to cost a whole extra row of
+            // vertical space, which pushed the (a, e) plot's x axis below
+            // the fold.
+            div { class: "px-6 pt-4 flex items-start gap-4",
+                div { class: "flex-1 min-w-0",
+                    PopulationLegendBar { orbital_data, hidden_families, hidden_tiers }
+                }
+                div { class: "join bg-base-100 shadow-sm rounded-box shrink-0",
                     for view in HomepagePlotView::ALL {
                         button {
                             key: "{view.label()}",
@@ -168,7 +172,9 @@ pub fn Home() -> Element {
                         }
                     }
                 }
+            }
 
+            div { class: "p-6 flex flex-col flex-1 min-h-0",
                 match plot_view() {
                     HomepagePlotView::PopulationAe => rsx! {
                         DynamicPopPlot { orbital_data, hidden_families, hidden_tiers }
@@ -177,11 +183,13 @@ pub fn Home() -> Element {
                         Orbit3DPlot {}
                     },
                     HomepagePlotView::Table => rsx! {
-                        BranchTab {
-                            search_query: search_input(),
-                            hidden_families,
-                            hidden_tiers,
-                            refresh_token,
+                        div { class: "flex-1 min-h-0 flex flex-col",
+                            BranchTab {
+                                search_query: search_input(),
+                                hidden_families,
+                                hidden_tiers,
+                                refresh_token,
+                            }
                         }
                     },
                 }
