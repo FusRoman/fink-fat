@@ -43,23 +43,27 @@ pub async fn query_orbital_elements() -> Result<Option<Vec<PlotSeries>>, ServerF
 /// How often to re-check whether the homepage snapshot has finished building.
 const WARMUP_POLL_MS: u64 = 1000;
 
-#[component]
-pub fn DynamicPopPlot(
-    hidden_families: Signal<HashSet<DynamicalFamily>>,
-    hidden_tiers: Signal<HashSet<QualityTier>>,
+/// The population's per-(family, tier) series, kept alive independently of
+/// the (a, e) plot itself: [`PopulationLegendBar`] needs this data even when
+/// `DynamicPopPlot` isn't the active homepage view, since the legend now
+/// stays visible across all 3 views. `Home()` calls this once and hands the
+/// resulting resource to both.
+///
+/// # Arguments
+/// * `refresh_token` — bumped after a snapshot rebuild lands; restarts the
+///   fetch against the new snapshot.
+///
+/// # Return
+/// The raw query resource: `Ok(None)` while the snapshot is still building
+/// (this function polls for it internally), `Ok(Some(series))` once ready,
+/// `Err` on a transport failure.
+pub fn use_population_series(
     refresh_token: Signal<u64>,
-) -> Element {
+) -> Resource<Result<Option<Vec<PlotSeries>>, ServerFnError>> {
     let mut orbital_data = use_resource(move || async move {
         let _ = refresh_token();
         query_orbital_elements().await
     });
-    let mut is_mounted = use_signal(|| false);
-    // Whether plotly has drawn into the div at least once: the first draw
-    // needs `new_plot`, every later one is a cheaper `react` diff. Only the
-    // wasm build ever draws, and target arch is fixed at compile time, so
-    // gating the hook keeps hook order consistent within a given build.
-    #[cfg(target_arch = "wasm32")]
-    let mut drawn = use_signal(|| false);
 
     // `Ok(None)` means the snapshot is still building — poll for it.
     use_effect(move || {
@@ -72,37 +76,30 @@ pub fn DynamicPopPlot(
         }
     });
 
-    // Already grouped by (family, tier), in family then tier order — which is
-    // the order both legends list their chips in.
+    orbital_data
+}
+
+#[component]
+pub fn DynamicPopPlot(
+    orbital_data: Resource<Result<Option<Vec<PlotSeries>>, ServerFnError>>,
+    hidden_families: Signal<HashSet<DynamicalFamily>>,
+    hidden_tiers: Signal<HashSet<QualityTier>>,
+) -> Element {
+    let mut is_mounted = use_signal(|| false);
+    // Whether plotly has drawn into the div at least once: the first draw
+    // needs `new_plot`, every later one is a cheaper `react` diff. Only the
+    // wasm build ever draws, and target arch is fixed at compile time, so
+    // gating the hook keeps hook order consistent within a given build.
+    #[cfg(target_arch = "wasm32")]
+    let mut drawn = use_signal(|| false);
+
+    // Only the wasm build ever draws a plot from this, so — like `drawn`
+    // above — this is only created there; target arch is fixed at compile
+    // time, so hook order stays consistent within a given build.
+    #[cfg(target_arch = "wasm32")]
     let series = use_memo(move || match &*orbital_data.read() {
         Some(Ok(Some(series))) => series.clone(),
         _ => Vec::new(),
-    });
-
-    // (family, point count) pairs, summed across tiers — cheap enough to hand
-    // to the family legend as a prop, unlike the full coordinate vectors.
-    let family_legend_entries = use_memo(move || {
-        let mut counts: Vec<(DynamicalFamily, usize)> = Vec::new();
-        for s in series.read().iter() {
-            match counts.iter_mut().find(|(f, _)| *f == s.family) {
-                Some((_, count)) => *count += s.a.len(),
-                None => counts.push((s.family, s.a.len())),
-            }
-        }
-        counts
-    });
-
-    // Same idea, summed across families instead, for the tier legend.
-    let tier_legend_entries = use_memo(move || {
-        let mut counts: Vec<(QualityTier, usize)> = Vec::new();
-        for s in series.read().iter() {
-            match counts.iter_mut().find(|(t, _)| *t == s.tier) {
-                Some((_, count)) => *count += s.a.len(),
-                None => counts.push((s.tier, s.a.len())),
-            }
-        }
-        counts.sort_by_key(|(tier, _)| *tier);
-        counts
     });
 
     // Deliberately does *not* read `hidden_families`: doing so would re-render
@@ -236,6 +233,54 @@ pub fn DynamicPopPlot(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/// The legend row shown between the navbar and the active homepage view: one
+/// clickable chip per dynamical family plus one per quality tier, driving
+/// `hidden_families`/`hidden_tiers` — which the (a, e) plot's traces and the
+/// lineage table's query both read. Kept alive independently of which view
+/// is active by taking the shared [`use_population_series`] resource rather
+/// than fetching its own copy.
+#[component]
+pub fn PopulationLegendBar(
+    orbital_data: Resource<Result<Option<Vec<PlotSeries>>, ServerFnError>>,
+    hidden_families: Signal<HashSet<DynamicalFamily>>,
+    hidden_tiers: Signal<HashSet<QualityTier>>,
+) -> Element {
+    let series = use_memo(move || match &*orbital_data.read() {
+        Some(Ok(Some(series))) => series.clone(),
+        _ => Vec::new(),
+    });
+
+    let family_legend_entries = use_memo(move || {
+        let mut counts: Vec<(DynamicalFamily, usize)> = Vec::new();
+        for s in series.read().iter() {
+            match counts.iter_mut().find(|(f, _)| *f == s.family) {
+                Some((_, count)) => *count += s.a.len(),
+                None => counts.push((s.family, s.a.len())),
+            }
+        }
+        counts
+    });
+
+    let tier_legend_entries = use_memo(move || {
+        let mut counts: Vec<(QualityTier, usize)> = Vec::new();
+        for s in series.read().iter() {
+            match counts.iter_mut().find(|(t, _)| *t == s.tier) {
+                Some((_, count)) => *count += s.a.len(),
+                None => counts.push((s.tier, s.a.len())),
+            }
+        }
+        counts.sort_by_key(|(tier, _)| *tier);
+        counts
+    });
+
+    rsx! {
+        div { class: "card bg-base-100 shadow-sm",
+            div { class: "card-body py-2",
                 FamilyLegend { entries: family_legend_entries(), hidden_families }
                 TierLegend { entries: tier_legend_entries(), hidden_tiers }
             }

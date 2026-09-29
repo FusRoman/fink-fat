@@ -14,7 +14,7 @@ use std::collections::HashSet;
 
 use crate::homepage::{
     branch_tab::{refresh_snapshot, BranchTab},
-    dynamic_pop_plot::DynamicPopPlot,
+    dynamic_pop_plot::{use_population_series, DynamicPopPlot, PopulationLegendBar},
     family::DynamicalFamily,
     orbit3d_plot::Orbit3DPlot,
     quality_tier::QualityTier,
@@ -22,20 +22,27 @@ use crate::homepage::{
     tools_menu::ToolsMenu,
 };
 
-/// Which population-wide plot the homepage shows above the lineage table.
+/// Which of the 3 mutually-exclusive views the homepage shows below the
+/// legend bar. Only one is ever mounted at a time.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum HomepagePlotView {
     PopulationAe,
     Orbit3D,
+    Table,
 }
 
 impl HomepagePlotView {
-    const ALL: [HomepagePlotView; 2] = [HomepagePlotView::PopulationAe, HomepagePlotView::Orbit3D];
+    const ALL: [HomepagePlotView; 3] = [
+        HomepagePlotView::PopulationAe,
+        HomepagePlotView::Orbit3D,
+        HomepagePlotView::Table,
+    ];
 
     fn label(self) -> &'static str {
         match self {
             HomepagePlotView::PopulationAe => "a / e distribution",
             HomepagePlotView::Orbit3D => "3D orbits",
+            HomepagePlotView::Table => "Lineage table",
         }
     }
 }
@@ -70,6 +77,11 @@ pub fn Home() -> Element {
     // refetches the whole page against the new snapshot.
     let mut refresh_token = use_signal(|| 0_u64);
     let mut refreshing = use_signal(|| false);
+
+    // Shared with `PopulationLegendBar`, which stays visible across all 3
+    // views: fetched once here rather than inside `DynamicPopPlot`, which is
+    // now only mounted while the (a, e) view is active.
+    let orbital_data = use_population_series(refresh_token);
 
     let request_refresh = move |_| {
         if refreshing() {
@@ -140,43 +152,38 @@ pub fn Home() -> Element {
                 }
             }
 
+            // Stays visible no matter which view is active below, since
+            // `hidden_families`/`hidden_tiers` filter both the (a, e) plot
+            // and the lineage table.
+            div { class: "px-6 pt-4", PopulationLegendBar { orbital_data, hidden_families, hidden_tiers } }
+
             div { class: "p-6 flex flex-col gap-6 flex-1 min-h-0",
-                // The view switcher used to sit in its own centered row above
-                // the plot, costing a full row of vertical space that could
-                // otherwise go to the chart. Overlaid in the plot's own
-                // top-right corner instead (`relative` wrapper +
-                // `absolute`-positioned `join`, so it's removed from normal
-                // flow and takes no space of its own) — a translucent
-                // background keeps it legible over chart data without
-                // hiding much of it.
-                div { class: "relative",
-                    div { class: "absolute top-2 right-2 z-10 join bg-base-100/90 shadow-sm rounded-box",
-                        for view in HomepagePlotView::ALL {
-                            button {
-                                key: "{view.label()}",
-                                class: if plot_view() == view { "join-item btn btn-sm btn-active" } else { "join-item btn btn-sm" },
-                                onclick: move |_| plot_view.set(view),
-                                "{view.label()}"
-                            }
+                div { class: "join self-center bg-base-100 shadow-sm rounded-box",
+                    for view in HomepagePlotView::ALL {
+                        button {
+                            key: "{view.label()}",
+                            class: if plot_view() == view { "join-item btn btn-sm btn-active" } else { "join-item btn btn-sm" },
+                            onclick: move |_| plot_view.set(view),
+                            "{view.label()}"
                         }
-                    }
-                    match plot_view() {
-                        HomepagePlotView::PopulationAe => rsx! {
-                            DynamicPopPlot { hidden_families, hidden_tiers, refresh_token }
-                        },
-                        HomepagePlotView::Orbit3D => rsx! {
-                            Orbit3DPlot {}
-                        },
                     }
                 }
 
-                div { class: "grid grid-cols-1",
-                    BranchTab {
-                        search_query: search_input(),
-                        hidden_families,
-                        hidden_tiers,
-                        refresh_token,
-                    }
+                match plot_view() {
+                    HomepagePlotView::PopulationAe => rsx! {
+                        DynamicPopPlot { orbital_data, hidden_families, hidden_tiers }
+                    },
+                    HomepagePlotView::Orbit3D => rsx! {
+                        Orbit3DPlot {}
+                    },
+                    HomepagePlotView::Table => rsx! {
+                        BranchTab {
+                            search_query: search_input(),
+                            hidden_families,
+                            hidden_tiers,
+                            refresh_token,
+                        }
+                    },
                 }
             }
         }
