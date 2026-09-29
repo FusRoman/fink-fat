@@ -15,6 +15,35 @@ use crate::homepage::family::DynamicalFamily;
 use crate::homepage::quality_tier::marker_for;
 use crate::homepage::quality_tier::QualityTier;
 
+// plotly.rs 0.14 only wraps plotly.js's `newPlot`/`react` functions, not its
+// event API, so subscribing to `plotly_click` (to jump to the clicked
+// point's lineage page) goes straight through a small inline JS helper
+// instead. `encodeURIComponent` runs on the JS side, so a designation with
+// spaces or other reserved characters still produces a valid URL.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(inline_js = "
+export function bind_plotly_click_navigation(plot_id, url_prefix) {
+    var gd = document.getElementById(plot_id);
+    if (!gd) { return; }
+    gd.on('plotly_click', function(event_data) {
+        if (!event_data || !event_data.points || event_data.points.length === 0) {
+            return;
+        }
+        var designation = event_data.points[0].customdata;
+        if (designation) {
+            window.location.href = url_prefix + encodeURIComponent(designation);
+        }
+    });
+}
+")]
+extern "C" {
+    /// Navigates the browser to `{url_prefix}{encodeURIComponent(designation)}`
+    /// whenever a point in `plot_id` is clicked, reading the designation from
+    /// that point's `customdata` (set per-trace alongside the hover
+    /// template). A no-op if `plot_id` isn't mounted yet.
+    fn bind_plotly_click_navigation(plot_id: &str, url_prefix: &str);
+}
+
 /// All the points of a single (family, quality tier) pair, pre-split into the
 /// two coordinate vectors plotly wants, so that toggling a family or a tier
 /// only rebuilds the traces and never re-groups the whole population.
@@ -22,13 +51,16 @@ use crate::homepage::quality_tier::QualityTier;
 /// This is also the wire format: the server groups the population once when it
 /// builds the homepage snapshot and ships these flat arrays, rather than one
 /// JSON object per point carrying a repeated family/tier label — roughly a
-/// sixfold cut in payload at 214k branches.
+/// sixfold cut in payload at 214k branches. `lineage_designations` is the one
+/// per-point field kept alongside `a`/`e` (index-aligned with both) — it
+/// labels each point on hover and lets a click jump to that lineage's page.
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlotSeries {
     pub family: DynamicalFamily,
     pub tier: QualityTier,
     pub a: Vec<f32>,
     pub e: Vec<f32>,
+    pub lineage_designations: Vec<Box<str>>,
 }
 
 /// Served from the in-RAM homepage snapshot; `None` while it is still being
@@ -155,12 +187,32 @@ pub fn DynamicPopPlot(
                         } else {
                             Visible::True
                         };
+                        // Family/tier are constant for the whole trace, so
+                        // they're baked into the template as plain text;
+                        // `%{customdata}`/`%{x}`/`%{y}` are the per-point
+                        // placeholders plotly.js fills in at hover time.
+                        // `<extra></extra>` drops the secondary trace-name
+                        // box the default template would otherwise add.
+                        let hover_template = format!(
+                            "<b>{family} · {tier}</b><br>Lineage: %{{customdata}}<br>\
+                             Semi-major axis: %{{x:.3f}} AU<br>Eccentricity: %{{y:.3f}}\
+                             <extra></extra>",
+                            family = s.family.label(),
+                            tier = s.tier.label(),
+                        );
+                        let custom_data: Vec<String> = s
+                            .lineage_designations
+                            .iter()
+                            .map(|d| d.to_string())
+                            .collect();
                         let trace = Scatter::new(s.a.clone(), s.e.clone())
                             .name(format!("{} · {}", s.family.label(), s.tier.label()))
                             .mode(Mode::Markers)
                             .web_gl_mode(true)
                             .visible(visible)
-                            .marker(marker_for(s.family, s.tier));
+                            .marker(marker_for(s.family, s.tier))
+                            .custom_data(custom_data)
+                            .hover_template(hover_template);
                         plot.add_trace(trace);
                     }
 
@@ -206,6 +258,10 @@ pub fn DynamicPopPlot(
                     } else {
                         plotly::bindings::new_plot("ae-plot-div", &plot).await;
                         drawn.set(true);
+                        // The graph div persists across every later `react`
+                        // (only its data changes), so the click listener only
+                        // needs binding once, right after the first draw.
+                        bind_plotly_click_navigation("ae-plot-div", "/lineage/");
                     }
                 });
             }

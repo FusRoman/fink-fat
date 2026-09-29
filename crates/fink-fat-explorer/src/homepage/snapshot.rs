@@ -723,20 +723,32 @@ fn total_cmp_f64(a: f64, b: f64) -> std::cmp::Ordering {
 /// plot: family drives the marker color, tier drives its shape/opacity/
 /// border (`quality_tier::marker_for`), and plotly only offers one of each
 /// per trace — so a family alone is no longer a fine enough grouping once
-/// every branch also carries a tier.
+/// every branch also carries a tier. Each point's `lineage_designation` rides
+/// along too, so the plot can label points on hover and link through to the
+/// lineage page on click.
 fn build_series(branches: &[BranchRow]) -> Vec<PlotSeries> {
-    let mut grouped: HashMap<(DynamicalFamily, QualityTier), (Vec<f32>, Vec<f32>)> = HashMap::new();
+    type GroupEntry = (Vec<f32>, Vec<f32>, Vec<Box<str>>);
+    let mut grouped: HashMap<(DynamicalFamily, QualityTier), GroupEntry> = HashMap::new();
     for branch in branches {
         let entry = grouped
             .entry((branch.family, branch.quality_tier))
             .or_default();
         entry.0.push(branch.semi_major_axis);
         entry.1.push(branch.eccentricity);
+        entry.2.push(branch.lineage_designation.clone());
     }
 
     let mut series: Vec<PlotSeries> = grouped
         .into_iter()
-        .map(|((family, tier), (a, e))| PlotSeries { family, tier, a, e })
+        .map(
+            |((family, tier), (a, e, lineage_designations))| PlotSeries {
+                family,
+                tier,
+                a,
+                e,
+                lineage_designations,
+            },
+        )
         .collect();
     // Family (increasing heliocentric distance) then tier (best to worst) —
     // the order both legends render their chips in.

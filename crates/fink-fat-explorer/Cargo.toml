@@ -57,6 +57,11 @@ web-sys = { version = "0.3.104", features = ["console"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 gloo-timers = { version = "0.3", features = ["futures"] }
+# Binds the (a, e) plot's `plotly_click` event to a lineage-page navigation —
+# plotly.rs's own bindings only wrap `newPlot`/`react`, not plotly.js's event
+# API, so `homepage::dynamic_pop_plot` calls straight into a small inline JS
+# helper for this one event.
+wasm-bindgen = "0.2"
 
 [features]
 default = ["web"]
