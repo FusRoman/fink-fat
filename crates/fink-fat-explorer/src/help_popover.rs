@@ -1,8 +1,9 @@
-//! Shared shell for this app's "?" help widgets (the homepage's
-//! `population_plot_glossary`/`orbit3d_population_glossary`/
-//! `lineage_table_glossary`, and the lineage page's per-plot glossaries): a
-//! "?" icon whose popover opens on hover, can be *pinned* open (and
-//! scrolled) by clicking the icon, and closes on an outside click or
+//! Shared shell for this app's hover popovers — mostly "?" help widgets
+//! (the homepage's `population_plot_glossary`/`orbit3d_population_glossary`/
+//! `lineage_table_glossary`, and the lineage page's per-plot glossaries),
+//! but also the footer's text-labeled "Acknowledgments"/"Useful links"
+//! triggers: a small trigger whose popover opens on hover, can be *pinned*
+//! open (and scrolled) by clicking it, and closes on an outside click or
 //! Escape.
 //!
 //! Driven by Dioxus state rather than a CSS-only tooltip (daisyUI's
@@ -30,16 +31,49 @@ const POPOVER_WIDTH: &str = "min(40rem, calc(100vw - 2rem))";
 /// scrolls inside the popover instead of running off the screen.
 const POPOVER_MAX_HEIGHT: &str = "min(75vh, 36rem)";
 
-/// A "?" icon that reveals `children` on hover, and keeps it open (and
+/// Default trigger: the small circular "?" icon every glossary widget uses.
+const DEFAULT_TRIGGER_LABEL: &str = "?";
+/// Default trigger button styling: a small circular outline, sized for a
+/// single glyph like [`DEFAULT_TRIGGER_LABEL`].
+const DEFAULT_TRIGGER_CLASS: &str = "inline-flex items-center justify-center w-5 h-5 rounded-full \
+    border border-current text-xs leading-none cursor-help";
+/// Default popover heading — generic, since most triggers are the "?" icon
+/// and the heading is the only place naming what it explains.
+const DEFAULT_HEADING: &str = "Help";
+
+/// A small trigger — by default the "?" icon every glossary widget uses,
+/// but any short label works (e.g. the footer's "Acknowledgments"/"Useful
+/// links") — that reveals `children` on hover, and keeps it open (and
 /// scrollable) once clicked.
 ///
 /// # Arguments
-/// * `aria_label` — accessible name for the icon button, specific to what
-///   it explains (e.g. `"Help for the (a, e) plot"`).
+/// * `aria_label` — accessible name for the trigger, specific to what it
+///   reveals (e.g. `"Help for the (a, e) plot"`).
+/// * `trigger_label` — the trigger's visible text; defaults to
+///   [`DEFAULT_TRIGGER_LABEL`] (`"?"`).
+/// * `trigger_class` — the trigger `button`'s class; defaults to
+///   [`DEFAULT_TRIGGER_CLASS`], the small circular outline sized for a
+///   single glyph — pass something else for a text label (e.g. a plain
+///   underlined-on-hover style) so it doesn't render as a tiny circle
+///   around several words.
+/// * `heading` — the popover's own title, top-left; defaults to
+///   [`DEFAULT_HEADING`] (`"Help"`) — pass something more specific (e.g.
+///   the same text as `trigger_label`) when the trigger isn't the generic
+///   "?" icon.
+/// * `open_upward` — opens the popover above the trigger instead of below
+///   it; `false` by default. For a trigger near the bottom of the page
+///   (e.g. the footer), opening downward would grow the page itself.
 /// * `children` — the popover's content, typically an "About this ..."
 ///   paragraph followed by one or more `dl` reference lists.
 #[component]
-pub fn HelpPopover(aria_label: &'static str, children: Element) -> Element {
+pub fn HelpPopover(
+    aria_label: &'static str,
+    #[props(default = DEFAULT_TRIGGER_LABEL)] trigger_label: &'static str,
+    #[props(default = DEFAULT_TRIGGER_CLASS)] trigger_class: &'static str,
+    #[props(default = DEFAULT_HEADING)] heading: &'static str,
+    #[props(default = false)] open_upward: bool,
+    children: Element,
+) -> Element {
     let mut hovered = use_signal(|| false);
     let mut pinned = use_signal(|| false);
     let open = hovered() || pinned();
@@ -68,27 +102,28 @@ pub fn HelpPopover(aria_label: &'static str, children: Element) -> Element {
             }
             button {
                 r#type: "button",
-                class: "inline-flex items-center justify-center w-5 h-5 rounded-full border border-current text-xs leading-none cursor-help",
+                class: "{trigger_class}",
                 style: "position: relative; z-index: 50; opacity: {icon_opacity};",
                 aria_label: "{aria_label}",
                 aria_expanded: "{open}",
                 onclick: move |_| pinned.toggle(),
-                "?"
+                "{trigger_label}"
             }
             if open {
-                div { style: "position: absolute; top: 100%; left: 0; z-index: 50; padding-top: 0.375rem;",
+                div {
+                    style: if open_upward { "position: absolute; bottom: 100%; left: 0; z-index: 50; padding-bottom: 0.375rem;" } else { "position: absolute; top: 100%; left: 0; z-index: 50; padding-top: 0.375rem;" },
                     div {
                         class: "bg-base-100 rounded-box p-3 text-xs text-left",
                         style: "width: {POPOVER_WIDTH}; max-height: {POPOVER_MAX_HEIGHT}; overflow-y: auto; \
                                 border: 1px solid rgba(128, 128, 128, 0.35); \
                                 box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);",
                         div { class: "flex items-baseline justify-between mb-2",
-                            span { class: "font-semibold", "Help" }
+                            span { class: "font-semibold", "{heading}" }
                             span { class: "opacity-60",
                                 if pinned() {
                                     "click outside or press Esc to close"
                                 } else {
-                                    "click the ? to keep it open and scroll"
+                                    "click to keep it open and scroll"
                                 }
                             }
                         }

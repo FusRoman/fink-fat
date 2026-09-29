@@ -54,12 +54,12 @@ pub fn software_versions() -> Vec<SoftwareVersion> {
         SoftwareVersion {
             name: "fink-fat-explorer",
             version: built_info::PKG_VERSION,
-            url: "https://github.com/FusRoman/fink-fat",
+            url: "https://github.com/FusRoman/fink-fat/tree/main/crates/fink-fat-explorer",
         },
         SoftwareVersion {
             name: "fink-fat-engine",
             version: dependency_version("fink-fat-engine"),
-            url: "https://github.com/FusRoman/fink-fat",
+            url: "https://github.com/FusRoman/fink-fat/tree/main/crates/fink-fat-engine",
         },
         SoftwareVersion {
             name: "outfit",

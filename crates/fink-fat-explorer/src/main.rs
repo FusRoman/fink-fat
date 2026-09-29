@@ -325,6 +325,13 @@ fn main() {
 fn App() -> Element {
     rsx! {
         document::Stylesheet { href: asset!("/assets/main.css") }
+        // The footer's tagline uses this geometric, sci-fi/space-observatory
+        // style font — loaded once, here, rather than per-component, same
+        // as the main stylesheet above.
+        document::Link {
+            rel: "stylesheet",
+            href: "https://fonts.googleapis.com/css2?family=Orbitron:wght@500..700&display=swap",
+        }
 
         div { class: "min-h-screen flex flex-col",
             div { class: "flex-1 flex flex-col", Router::<Route> {} }
