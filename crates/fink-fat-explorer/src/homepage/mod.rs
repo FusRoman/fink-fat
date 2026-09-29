@@ -3,6 +3,7 @@ pub mod dynamic_pop_plot;
 pub mod family;
 pub mod interaction;
 pub mod orbit3d_plot;
+mod population_plot_glossary;
 pub mod quality_tier;
 #[cfg(feature = "server")]
 pub mod snapshot;

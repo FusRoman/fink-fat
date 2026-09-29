@@ -11,6 +11,7 @@ use plotly::{
 use serde::{Deserialize, Serialize};
 
 use crate::homepage::family::DynamicalFamily;
+use crate::homepage::population_plot_glossary::PopulationPlotGlossary;
 #[cfg(target_arch = "wasm32")]
 use crate::homepage::quality_tier::marker_for;
 use crate::homepage::quality_tier::QualityTier;
@@ -272,7 +273,10 @@ pub fn DynamicPopPlot(
         div { class: "card bg-base-100 shadow-sm",
             div { class: "card-body",
                 div { class: "text-center mb-1",
-                    h2 { class: "text-2xl font-bold tracking-tight", "The Solar System, Mapped" }
+                    div { class: "flex items-center justify-center gap-2",
+                        h2 { class: "text-2xl font-bold tracking-tight", "The Solar System, Mapped" }
+                        PopulationPlotGlossary {}
+                    }
                     p { class: "text-sm opacity-60", "{status_text}" }
                 }
                 div { class: "relative", style: if is_loading { "min-height: 60vh;" },
