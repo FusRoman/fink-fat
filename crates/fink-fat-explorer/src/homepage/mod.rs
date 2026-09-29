@@ -141,8 +141,16 @@ pub fn Home() -> Element {
             }
 
             div { class: "p-6 flex flex-col gap-6 flex-1 min-h-0",
-                div { class: "flex justify-center",
-                    div { class: "join",
+                // The view switcher used to sit in its own centered row above
+                // the plot, costing a full row of vertical space that could
+                // otherwise go to the chart. Overlaid in the plot's own
+                // top-right corner instead (`relative` wrapper +
+                // `absolute`-positioned `join`, so it's removed from normal
+                // flow and takes no space of its own) — a translucent
+                // background keeps it legible over chart data without
+                // hiding much of it.
+                div { class: "relative",
+                    div { class: "absolute top-2 right-2 z-10 join bg-base-100/90 shadow-sm rounded-box",
                         for view in HomepagePlotView::ALL {
                             button {
                                 key: "{view.label()}",
@@ -152,14 +160,14 @@ pub fn Home() -> Element {
                             }
                         }
                     }
-                }
-                match plot_view() {
-                    HomepagePlotView::PopulationAe => rsx! {
-                        DynamicPopPlot { hidden_families, hidden_tiers, refresh_token }
-                    },
-                    HomepagePlotView::Orbit3D => rsx! {
-                        Orbit3DPlot {}
-                    },
+                    match plot_view() {
+                        HomepagePlotView::PopulationAe => rsx! {
+                            DynamicPopPlot { hidden_families, hidden_tiers, refresh_token }
+                        },
+                        HomepagePlotView::Orbit3D => rsx! {
+                            Orbit3DPlot {}
+                        },
+                    }
                 }
 
                 div { class: "grid grid-cols-1",
