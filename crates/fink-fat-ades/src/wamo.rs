@@ -14,6 +14,15 @@
 //! well-formed-looking but nonexistent submission block ID (`not_found`),
 //! and a plain designation string, which WAMO's grammar doesn't accept as
 //! an identifier at all (`malformed`).
+//!
+//! A fourth state, only observed on a real *production* submission still
+//! early in MPC's pipeline (never seen on a `not_found` probe): WAMO can
+//! report an observation as `found` while it's still unprocessed, with
+//! [`WamoObservation::iau_desig`]/`obs80`/`reference` all set to the
+//! **literal string `"hidden"`** (not `null`/omitted) and `status_decoded`
+//! reading e.g. `"The submission_id '...' has not been processed."`. See
+//! [`wamo_field_is_hidden`] — display code must check for this sentinel
+//! explicitly, or it renders as if `"hidden"` were a real designation.
 
 use std::collections::HashMap;
 
@@ -136,6 +145,38 @@ pub struct WamoObservation {
     pub submission_id: Option<String>,
 }
 
+impl WamoObservation {
+    /// Whether this observation is still awaiting MPC processing —
+    /// `iau_desig` (the field display code most needs to check) is the
+    /// `"hidden"` placeholder rather than real data or a genuine absence of
+    /// a designation. See [`wamo_field_is_hidden`] and the module docs'
+    /// fourth-state note.
+    ///
+    /// # Return
+    /// `true` if this observation hasn't been processed/published yet.
+    pub fn is_pending(&self) -> bool {
+        self.iau_desig.as_deref().is_some_and(wamo_field_is_hidden)
+    }
+}
+
+/// MPC's placeholder value for a [`WamoObservation`] field that exists but
+/// isn't disclosable yet (observation received, not yet processed/published)
+/// — see the module docs' fourth-state note. WAMO sends this as a literal
+/// string, indistinguishable from real data by type alone.
+const HIDDEN_FIELD_PLACEHOLDER: &str = "hidden";
+
+/// Whether a [`WamoObservation`] field value is MPC's `"hidden"` placeholder
+/// rather than real data.
+///
+/// # Arguments
+/// * `value` — a field value, e.g. `observation.iau_desig.as_deref()`.
+///
+/// # Return
+/// `true` if `value` is the placeholder.
+pub fn wamo_field_is_hidden(value: &str) -> bool {
+    value == HIDDEN_FIELD_PLACEHOLDER
+}
+
 /// The full parsed shape of a WAMO response.
 #[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
 pub struct WamoResponse {
@@ -210,6 +251,45 @@ mod tests {
             first_block_id("2017-10-10T12:17:02.000_0000CfiO"),
             "2017-10-10T12:17:02.000_0000CfiO_01"
         );
+    }
+
+    fn observation(iau_desig: Option<&str>) -> WamoObservation {
+        WamoObservation {
+            iau_desig: iau_desig.map(str::to_string),
+            input_type: "submission_block_id".to_string(),
+            obs80: None,
+            obsid: "obs-1".to_string(),
+            obssubid: None,
+            reference: None,
+            status: "P".to_string(),
+            status_decoded: "The submission_id '...' has not been processed.".to_string(),
+            submission_block_id: None,
+            submission_id: None,
+        }
+    }
+
+    #[test]
+    fn wamo_field_is_hidden_matches_the_literal_placeholder_only() {
+        assert!(wamo_field_is_hidden("hidden"));
+        assert!(!wamo_field_is_hidden("380635"));
+        assert!(!wamo_field_is_hidden(""));
+    }
+
+    #[test]
+    fn is_pending_true_when_iau_desig_is_hidden() {
+        assert!(observation(Some("hidden")).is_pending());
+    }
+
+    #[test]
+    fn is_pending_false_for_a_real_designation() {
+        assert!(!observation(Some("380635")).is_pending());
+    }
+
+    #[test]
+    fn is_pending_false_when_there_is_no_designation_at_all() {
+        // A genuine "no designation assigned" (None) is a different,
+        // already-processed state — not the same as "not processed yet".
+        assert!(!observation(None).is_pending());
     }
 
     #[test]
