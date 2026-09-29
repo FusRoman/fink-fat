@@ -477,19 +477,28 @@ struct PreviousSubmission {
 /// Step 0: checks whether `lineage_designation` (exact match) or any of
 /// `observation_ids` (array-overlap with a prior submission's own
 /// `observation_ids`, regardless of that submission's lineage designation)
-/// has already been submitted.
+/// has already been submitted **to this same `endpoint`**. Scoped per
+/// endpoint deliberately: `submit_xml_test` is an isolated MPC sandbox with
+/// no relationship to the real submission pipeline (confirmed empirically —
+/// WAMO never indexes test-tier submissions), so a prior test submission
+/// must never block a production one, and vice versa.
 fn already_submitted(
     client: &mut Client,
     lineage_designation: &str,
     observation_ids: &[i64],
+    endpoint: SubmitEndpoint,
 ) -> Result<Option<PreviousSubmission>, SubmitError> {
     let row = client.query_opt(
         "SELECT lineage_designation, submission_id
          FROM mpc_submissions
-         WHERE lineage_designation = $1 OR observation_ids && $2
+         WHERE (lineage_designation = $1 OR observation_ids && $2) AND endpoint = $3
          ORDER BY submitted_at DESC
          LIMIT 1",
-        &[&lineage_designation, &observation_ids],
+        &[
+            &lineage_designation,
+            &observation_ids,
+            &endpoint.as_column(),
+        ],
     )?;
     Ok(row.map(|row| PreviousSubmission {
         lineage_designation: row.get(0),
@@ -511,11 +520,7 @@ fn insert_submission_row(
     verdict: &str,
     verdict_detail: Option<&str>,
 ) -> Result<i64, SubmitError> {
-    let endpoint_column = if endpoint.is_production() {
-        "production"
-    } else {
-        "test"
-    };
+    let endpoint_column = endpoint.as_column();
     // `postgres-types`' plain `ToSql for String`/`for &str` only `accepts()`
     // text-ish column types (TEXT/VARCHAR/...), not JSON/JSONB — binding a
     // pre-serialized JSON *string* against `verdict_detail JSONB` (even with
@@ -613,7 +618,9 @@ fn process_lineage(
     let (kept, singleton_summary) = remove_singleton_nights(&night_observations);
     let obs_ids = observation_ids(&kept);
 
-    if !force && let Some(previous) = already_submitted(client, lineage_designation, &obs_ids)? {
+    if !force
+        && let Some(previous) = already_submitted(client, lineage_designation, &obs_ids, endpoint)?
+    {
         info!(
             previous_lineage = %previous.lineage_designation,
             previous_submission_id = ?previous.submission_id,

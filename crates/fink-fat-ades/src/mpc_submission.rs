@@ -66,6 +66,20 @@ impl SubmitEndpoint {
     pub fn is_production(self) -> bool {
         matches!(self, Self::Production)
     }
+
+    /// The value written to `mpc_submissions.endpoint` — the single
+    /// definition of those two strings, so every reader/writer of that
+    /// column (the "already submitted" check, history display, ...) agrees
+    /// on them. Also the natural key for scoping duplicate-submission
+    /// checks *per endpoint*: a `Test` submission must never block, or be
+    /// blocked by, a `Production` one, since `submit_xml_test` is an
+    /// isolated sandbox with no relationship to MPC's real pipeline.
+    pub fn as_column(self) -> &'static str {
+        match self {
+            Self::Test => "test",
+            Self::Production => "production",
+        }
+    }
 }
 
 /// Everything needed to build the `multipart/form-data` body for
@@ -256,6 +270,12 @@ mod tests {
     fn submit_endpoint_production_targets_the_real_url() {
         assert_eq!(SubmitEndpoint::Production.submit_url(), MPC_SUBMIT_XML_URL);
         assert!(SubmitEndpoint::Production.is_production());
+    }
+
+    #[test]
+    fn submit_endpoint_as_column_matches_the_stored_strings() {
+        assert_eq!(SubmitEndpoint::Test.as_column(), "test");
+        assert_eq!(SubmitEndpoint::Production.as_column(), "production");
     }
 
     #[test]

@@ -50,13 +50,20 @@ pub async fn get_submission_candidates() -> Result<Vec<SubmissionCandidate>, Ser
     };
 
     let pool = get_pool().await;
-    let already_submitted: HashSet<String> =
-        sqlx::query_scalar("SELECT DISTINCT lineage_designation FROM mpc_submissions")
-            .fetch_all(pool)
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))?
-            .into_iter()
-            .collect();
+    // Scoped to `production`: `fink-fat submit`'s own already-submitted
+    // gate (step 0) is scoped per endpoint too — a `test`-tier submission
+    // (`submit_xml_test`, MPC's isolated sandbox) never counts against a
+    // production one — and this preview generates a `--endpoint production`
+    // command (`prepare_menu::submit_command`), so it must agree with what
+    // that command would actually accept.
+    let already_submitted: HashSet<String> = sqlx::query_scalar(
+        "SELECT DISTINCT lineage_designation FROM mpc_submissions WHERE endpoint = 'production'",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?
+    .into_iter()
+    .collect();
 
     let mut candidates: Vec<SubmissionCandidate> = snap
         .lineages
