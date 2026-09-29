@@ -64,28 +64,26 @@ pub fn Footer() -> Element {
             nav {
                 h6 { class: "footer-title", "Acknowledgments" }
                 for ack in content::ACKNOWLEDGMENTS {
-                    div { class: "flex items-start gap-2 max-w-xs",
+                    p { class: "text-sm opacity-80 max-w-xs",
+                        a {
+                            class: "link link-hover font-medium",
+                            href: "{ack.url}",
+                            target: "_blank",
+                            rel: "noopener noreferrer",
+                            "{ack.name}"
+                        }
                         if !ack.logos.is_empty() {
-                            div { class: "flex items-center gap-1.5 shrink-0 pt-0.5",
+                            span { class: "inline-flex items-center gap-1 ml-1.5 align-middle",
                                 for logo in ack.logos {
                                     img {
                                         src: resolve_logo(*logo),
                                         alt: "",
-                                        class: "h-5 w-auto",
+                                        class: "h-4 w-auto inline-block",
                                     }
                                 }
                             }
                         }
-                        p { class: "text-sm opacity-80",
-                            a {
-                                class: "link link-hover font-medium",
-                                href: "{ack.url}",
-                                target: "_blank",
-                                rel: "noopener noreferrer",
-                                "{ack.name}"
-                            }
-                            " — {ack.blurb}"
-                        }
+                        " — {ack.blurb}"
                     }
                 }
             }
