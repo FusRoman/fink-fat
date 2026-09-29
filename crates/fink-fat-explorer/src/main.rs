@@ -10,6 +10,7 @@ pub mod cnd_search;
 pub mod cross_match_dashboard;
 pub mod cross_match_status;
 pub mod fit_pipeline;
+pub mod footer;
 pub mod format_epoch;
 mod help_popover;
 pub mod homepage;
@@ -312,11 +313,22 @@ fn main() {
     dioxus::launch(App);
 }
 
+/// The app's root component, mounted once regardless of route.
+///
+/// Every page renders its own `min-h-screen` root inside `Router` — this
+/// wrapper adds the one piece of chrome shared by all of them: the
+/// site-wide [`footer::Footer`]. The `flex-1` div around `Router` is what
+/// makes it a proper sticky footer: a page shorter than the viewport still
+/// pushes the footer to the bottom, while a taller page's own content
+/// scrolls normally with the footer following at the true end of the page.
 #[component]
 fn App() -> Element {
     rsx! {
         document::Stylesheet { href: asset!("/assets/main.css") }
 
-        Router::<Route> {}
+        div { class: "min-h-screen flex flex-col",
+            div { class: "flex-1 flex flex-col", Router::<Route> {} }
+            footer::Footer {}
+        }
     }
 }

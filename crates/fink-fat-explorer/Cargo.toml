@@ -94,3 +94,6 @@ tempfile = { workspace = true }
 # own obs80 parser (see `cnd_search/obs80.rs`'s tests) — same pattern as
 # `fink-fat-engine/Cargo.toml`'s dev-dependency override for the same feature.
 photom = { workspace = true, features = ["mpc_80_col"] }
+
+[build-dependencies]
+built = { version = "0.8.1", default-features = false, features = ["cargo-lock"] }
