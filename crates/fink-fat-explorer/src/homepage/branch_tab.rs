@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use crate::homepage::family::DynamicalFamily;
 use crate::homepage::interaction::{Pagination, SortColumn, SortDirection, PAGE_SIZE};
+use crate::homepage::lineage_table_glossary::LineageTableGlossary;
 use crate::homepage::quality_tier::QualityTier;
 use crate::Route;
 
@@ -487,7 +488,10 @@ pub fn BranchTab(
                 div { class: "card bg-base-100 shadow-sm h-full flex flex-col",
                     div { class: "card-body flex-1 min-h-0 flex flex-col",
                         div { class: "flex items-center justify-between mb-2",
-                            h2 { class: "card-title", "Recent lineages" }
+                            div { class: "flex items-center gap-2",
+                                h2 { class: "card-title", "Recent lineages" }
+                                LineageTableGlossary {}
+                            }
                             select { class: "select select-bordered select-sm w-40",
                                 option { "All" }
                                 option { "Active" }

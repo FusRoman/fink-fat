@@ -1,17 +1,19 @@
 //! The homepage's (a, e) plot's glossary: a "?" icon whose popover explains
 //! how to read the plot and what its colors/markers mean.
 //!
-//! Same interaction mechanic as the lineage page's 3D-view glossary
-//! (`lineage_page::orbit3d_glossary::PlotGlossary`): opens on hover, can be
-//! *pinned* open (and scrolled) by clicking the icon, and closes on an
-//! outside click or Escape. Copied rather than shared, since
-//! the two widgets have no content in common and a props-driven "generic
-//! glossary" component would just move this same content into a prop
-//! instead of a const.
+//! Uses the shared [`crate::homepage::help_popover::HelpPopover`] shell for
+//! the hover/pin/outside-click/Escape mechanic. Also home to
+//! [`FAMILY_GROUPS`]/[`FamilyReferenceList`] and
+//! [`TIER_ENTRIES`]/[`TierReferenceList`] — the [`DynamicalFamily`]/
+//! [`QualityTier`] reference lists shown here, and reused as-is by
+//! [`crate::homepage::orbit3d_population_glossary`] and
+//! [`crate::homepage::lineage_table_glossary`], since all three views share
+//! the same family/tier vocabulary.
 
 use dioxus::prelude::*;
 
 use crate::homepage::family::DynamicalFamily;
+use crate::homepage::help_popover::HelpPopover;
 use crate::homepage::quality_tier::QualityTier;
 
 /// A short description of the plot, shown above the glossary.
@@ -238,116 +240,73 @@ pub(super) const TIER_ENTRIES: &[(QualityTier, &str)] = &[
     ),
 ];
 
-/// Width of the glossary popover: two columns of definitions, but never
-/// wider than the window.
-const POPOVER_WIDTH: &str = "min(40rem, calc(100vw - 2rem))";
-/// Height limit of the glossary popover: most of the window, so the content
-/// scrolls inside the popover instead of running off the screen.
-const POPOVER_MAX_HEIGHT: &str = "min(75vh, 36rem)";
-
 /// A "?" icon that shows how to read the (a, e) plot on hover, and keeps it
-/// open (and scrollable) once clicked.
-///
-/// The popover is glued to the icon with a small transparent padding, not a
-/// gap, so the pointer can travel from the icon into the popover without the
-/// hover being lost — same mechanic as `lineage_page::orbit3d_glossary::PlotGlossary`.
+/// open (and scrollable) once clicked. See [`HelpPopover`] for the
+/// interaction mechanic.
 #[component]
 pub fn PopulationPlotGlossary() -> Element {
-    let mut hovered = use_signal(|| false);
-    let mut pinned = use_signal(|| false);
-    let open = hovered() || pinned();
-    let icon_opacity = if open { "1" } else { "0.6" };
-
     rsx! {
-        div {
-            style: "position: relative; display: inline-block;",
-            onmouseenter: move |_| hovered.set(true),
-            onmouseleave: move |_| hovered.set(false),
-            onkeydown: move |evt| {
-                if evt.key() == Key::Escape {
-                    pinned.set(false);
-                    hovered.set(false);
-                }
-            },
-            // While pinned, a click anywhere outside the popover closes it.
-            if pinned() {
-                div {
-                    style: "position: fixed; inset: 0; z-index: 40;",
-                    onclick: move |_| {
-                        pinned.set(false);
-                        hovered.set(false);
-                    },
+        HelpPopover { aria_label: "Help for the (a, e) plot",
+            div { class: "mb-3",
+                div { class: "font-semibold mb-1", "About this plot" }
+                p { class: "opacity-80", "{PLOT_DESCRIPTION}" }
+            }
+            div { class: "font-semibold mb-2", "Core concepts" }
+            dl { style: "columns: 2 16rem; column-gap: 1.5rem;",
+                for (term , definition) in CONCEPTS {
+                    div { style: "break-inside: avoid; margin-bottom: 0.75rem;",
+                        dt { class: "font-semibold", "{term}" }
+                        dd { class: "opacity-80", "{definition}" }
+                    }
                 }
             }
-            button {
-                r#type: "button",
-                class: "inline-flex items-center justify-center w-5 h-5 rounded-full border border-current text-xs leading-none cursor-help",
-                style: "position: relative; z-index: 50; opacity: {icon_opacity};",
-                aria_label: "Help for the (a, e) plot",
-                aria_expanded: "{open}",
-                onclick: move |_| pinned.toggle(),
-                "?"
-            }
-            if open {
-                div { style: "position: absolute; top: 100%; left: 0; z-index: 50; padding-top: 0.375rem;",
-                    div {
-                        class: "bg-base-100 rounded-box p-3 text-xs text-left",
-                        style: "width: {POPOVER_WIDTH}; max-height: {POPOVER_MAX_HEIGHT}; overflow-y: auto; \
-                                border: 1px solid rgba(128, 128, 128, 0.35); \
-                                box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);",
-                        div { class: "flex items-baseline justify-between mb-2",
-                            span { class: "font-semibold", "Help" }
-                            span { class: "opacity-60",
-                                if pinned() {
-                                    "click outside or press Esc to close"
-                                } else {
-                                    "click the ? to keep it open and scroll"
-                                }
+            div { class: "font-semibold mb-2 mt-3", "Dynamical families" }
+            FamilyReferenceList {}
+            div { class: "font-semibold mb-2 mt-3", "Quality tiers" }
+            TierReferenceList {}
+        }
+    }
+}
+
+/// [`FAMILY_GROUPS`], rendered as one color-swatched `dl` per group. Shared
+/// by every homepage glossary that mentions dynamical family (the (a, e)
+/// plot, the 3D view, the lineage table).
+#[component]
+pub(super) fn FamilyReferenceList() -> Element {
+    rsx! {
+        for (group_name , entries) in FAMILY_GROUPS {
+            div { class: "mb-2",
+                div { class: "opacity-60 font-semibold mb-1", "{group_name}" }
+                dl { style: "columns: 2 16rem; column-gap: 1.5rem;",
+                    for (family , definition) in *entries {
+                        div { style: "break-inside: avoid; margin-bottom: 0.5rem; display: flex; gap: 0.375rem;",
+                            span {
+                                style: "display: inline-block; width: 0.6rem; height: 0.6rem; border-radius: 9999px; \
+                                        margin-top: 0.2rem; flex-shrink: 0; background-color: {family.color()};",
                             }
-                        }
-                        div { class: "mb-3",
-                            div { class: "font-semibold mb-1", "About this plot" }
-                            p { class: "opacity-80", "{PLOT_DESCRIPTION}" }
-                        }
-                        div { class: "font-semibold mb-2", "Core concepts" }
-                        dl { style: "columns: 2 16rem; column-gap: 1.5rem;",
-                            for (term , definition) in CONCEPTS {
-                                div { style: "break-inside: avoid; margin-bottom: 0.75rem;",
-                                    dt { class: "font-semibold", "{term}" }
-                                    dd { class: "opacity-80", "{definition}" }
-                                }
-                            }
-                        }
-                        div { class: "font-semibold mb-2 mt-3", "Dynamical families" }
-                        for (group_name , entries) in FAMILY_GROUPS {
-                            div { class: "mb-2",
-                                div { class: "opacity-60 font-semibold mb-1", "{group_name}" }
-                                dl { style: "columns: 2 16rem; column-gap: 1.5rem;",
-                                    for (family , definition) in *entries {
-                                        div { style: "break-inside: avoid; margin-bottom: 0.5rem; display: flex; gap: 0.375rem;",
-                                            span {
-                                                style: "display: inline-block; width: 0.6rem; height: 0.6rem; border-radius: 9999px; \
-                                                        margin-top: 0.2rem; flex-shrink: 0; background-color: {family.color()};",
-                                            }
-                                            div {
-                                                dt { class: "font-semibold", "{family.label()}" }
-                                                dd { class: "opacity-80", "{definition}" }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        div { class: "font-semibold mb-2 mt-3", "Quality tiers" }
-                        dl { style: "columns: 2 16rem; column-gap: 1.5rem;",
-                            for (tier , definition) in TIER_ENTRIES {
-                                div { style: "break-inside: avoid; margin-bottom: 0.5rem;",
-                                    dt { class: "font-semibold", "{tier.glyph()} {tier.label()}" }
-                                    dd { class: "opacity-80", "{definition}" }
-                                }
+                            div {
+                                dt { class: "font-semibold", "{family.label()}" }
+                                dd { class: "opacity-80", "{definition}" }
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+/// [`TIER_ENTRIES`], rendered as a glyph-prefixed `dl`. Shared by every
+/// homepage glossary that mentions quality tier (the (a, e) plot, the
+/// lineage table).
+#[component]
+pub(super) fn TierReferenceList() -> Element {
+    rsx! {
+        dl { style: "columns: 2 16rem; column-gap: 1.5rem;",
+            for (tier , definition) in TIER_ENTRIES {
+                div { style: "break-inside: avoid; margin-bottom: 0.5rem;",
+                    dt { class: "font-semibold", "{tier.glyph()} {tier.label()}" }
+                    dd { class: "opacity-80", "{definition}" }
                 }
             }
         }
@@ -410,14 +369,5 @@ mod tests {
     fn the_description_mentions_clicking_a_point() {
         assert!(PLOT_DESCRIPTION.to_lowercase().contains("click"));
         assert!(CONCEPTS.iter().any(|(term, _)| term.contains("Click")));
-    }
-
-    /// The popover must fit in the window: its size limits are relative to
-    /// the viewport, never fixed pixel sizes that a small window could not
-    /// hold.
-    #[test]
-    fn the_popover_is_sized_relative_to_the_viewport() {
-        assert!(POPOVER_WIDTH.contains("100vw"), "{POPOVER_WIDTH}");
-        assert!(POPOVER_MAX_HEIGHT.contains("vh"), "{POPOVER_MAX_HEIGHT}");
     }
 }
