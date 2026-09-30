@@ -9,10 +9,15 @@ title = "fink-fat-explorer"
 [web.resource]
 
 # Additional CSS style files
-style = []
+style = ["https://cdn.jsdelivr.net/npm/vanilla-calendar-pro@3.4.0/styles/index.css"]
 
 # Additional JavaScript files
-script = ["https://cdn.plot.ly/plotly-2.14.0.min.js"]
+script = [
+    "https://cdn.plot.ly/plotly-2.14.0.min.js",
+    # Date-range picker of the Submission page (MIT, exposes
+    # `window.VanillaCalendarPro`).
+    "https://cdn.jsdelivr.net/npm/vanilla-calendar-pro@3.4.0/index.js",
+]
 
 [web.resource.dev]
 

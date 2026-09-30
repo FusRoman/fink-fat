@@ -47,6 +47,11 @@ ALTER TABLE mpc_submissions ADD COLUMN IF NOT EXISTS wamo_checked_at TIMESTAMPTZ
 CREATE INDEX IF NOT EXISTS idx_mpc_submissions_lineage
     ON mpc_submissions (lineage_designation, submitted_at DESC);
 
+-- Powers the explorer's "Submission" page: date-range filter and the
+-- `ORDER BY submitted_at` sort, independent of the lineage.
+CREATE INDEX IF NOT EXISTS idx_mpc_submissions_submitted_at
+    ON mpc_submissions (submitted_at DESC);
+
 -- Powers the observation-level "already submitted under a different/renamed
 -- lineage" check (fink-fat submit's step 0): `WHERE observation_ids && $1`.
 CREATE INDEX IF NOT EXISTS idx_mpc_submissions_observation_ids

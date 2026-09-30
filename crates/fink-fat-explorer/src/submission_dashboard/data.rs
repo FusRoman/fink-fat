@@ -1,6 +1,7 @@
 //! Server functions for the "Submission" page: a fresh-query "which
-//! lineages are ready to submit" candidate list, and a fresh-query
-//! submission history/status table.
+//! lineages are ready to submit" candidate list, and a fresh-query,
+//! filtered/sorted/paginated submission history/status table (the pure
+//! query model lives in [`super::query`]; this module only executes it).
 //!
 //! Both deliberately bypass the homepage snapshot's own caching for the
 //! `mpc_submissions` half of the picture — same rationale as
@@ -14,6 +15,8 @@
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
+
+use super::query::SubmissionQuery;
 
 /// One lineage ready to hand to `fink-fat submit`: eligible
 /// ([`fink_fat_ades::quality_tier::QualityTier::is_submission_eligible`])
@@ -109,6 +112,47 @@ pub struct SubmissionRow {
     pub wamo_checked_at: Option<String>,
 }
 
+/// Column list shared by every query that materializes a [`SubmissionRow`]
+/// (deliberately excludes the large `xml` field).
+#[cfg(feature = "server")]
+const SUBMISSION_ROW_COLUMNS: &str = "id, lineage_designation, endpoint, submission_id, verdict, \
+     submitted_at, verdict_checked_at, verdict_detail, wamo_detail, wamo_checked_at";
+
+/// Database shape of one `mpc_submissions` row, before timestamps are
+/// rendered to strings for the wire.
+#[cfg(feature = "server")]
+#[derive(sqlx::FromRow)]
+struct SubmissionRowSql {
+    id: i64,
+    lineage_designation: String,
+    endpoint: String,
+    submission_id: Option<String>,
+    verdict: String,
+    submitted_at: chrono::DateTime<chrono::Utc>,
+    verdict_checked_at: Option<chrono::DateTime<chrono::Utc>>,
+    verdict_detail: Option<serde_json::Value>,
+    wamo_detail: Option<serde_json::Value>,
+    wamo_checked_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[cfg(feature = "server")]
+impl From<SubmissionRowSql> for SubmissionRow {
+    fn from(r: SubmissionRowSql) -> Self {
+        Self {
+            id: r.id,
+            lineage_designation: r.lineage_designation,
+            endpoint: r.endpoint,
+            submission_id: r.submission_id,
+            verdict: r.verdict,
+            submitted_at: r.submitted_at.to_rfc3339(),
+            verdict_checked_at: r.verdict_checked_at.map(|t| t.to_rfc3339()),
+            verdict_detail: r.verdict_detail,
+            wamo_detail: r.wamo_detail,
+            wamo_checked_at: r.wamo_checked_at.map(|t| t.to_rfc3339()),
+        }
+    }
+}
+
 /// Fetches one `mpc_submissions` row by id.
 ///
 /// # Arguments
@@ -125,46 +169,18 @@ async fn fetch_submission_row(
     pool: &sqlx::PgPool,
     id: i64,
 ) -> Result<Option<SubmissionRow>, sqlx::Error> {
-    #[derive(sqlx::FromRow)]
-    struct SubmissionRowSql {
-        id: i64,
-        lineage_designation: String,
-        endpoint: String,
-        submission_id: Option<String>,
-        verdict: String,
-        submitted_at: chrono::DateTime<chrono::Utc>,
-        verdict_checked_at: Option<chrono::DateTime<chrono::Utc>>,
-        verdict_detail: Option<serde_json::Value>,
-        wamo_detail: Option<serde_json::Value>,
-        wamo_checked_at: Option<chrono::DateTime<chrono::Utc>>,
-    }
-
-    let row: Option<SubmissionRowSql> = sqlx::query_as(
-        "SELECT id, lineage_designation, endpoint, submission_id, verdict, \
-                submitted_at, verdict_checked_at, verdict_detail, wamo_detail, wamo_checked_at
-         FROM mpc_submissions
-         WHERE id = $1",
-    )
+    let row: Option<SubmissionRowSql> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT {SUBMISSION_ROW_COLUMNS} FROM mpc_submissions WHERE id = $1"
+    )))
     .bind(id)
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.map(|r| SubmissionRow {
-        id: r.id,
-        lineage_designation: r.lineage_designation,
-        endpoint: r.endpoint,
-        submission_id: r.submission_id,
-        verdict: r.verdict,
-        submitted_at: r.submitted_at.to_rfc3339(),
-        verdict_checked_at: r.verdict_checked_at.map(|t| t.to_rfc3339()),
-        verdict_detail: r.verdict_detail,
-        wamo_detail: r.wamo_detail,
-        wamo_checked_at: r.wamo_checked_at.map(|t| t.to_rfc3339()),
-    }))
+    Ok(row.map(SubmissionRow::from))
 }
 
 /// Fetches one submission's full ADES XML payload — the exact document sent
-/// to MPC, kept out of [`SubmissionRow`]/[`get_submission_history`] since
+/// to MPC, kept out of [`SubmissionRow`]/[`list_submissions`] since
 /// it's a large field not needed for the list view, so it's fetched only
 /// when the user actually opens the XML viewer.
 ///
@@ -189,57 +205,84 @@ pub async fn get_submission_xml(id: i64) -> Result<String, ServerFnError> {
         .ok_or_else(|| ServerFnError::new(format!("no mpc_submissions row with id {id}")))
 }
 
-/// Every submission attempt on record, most recent first.
+/// One page of the submission history plus the counters the page header
+/// needs.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SubmissionPage {
+    /// The rows of the requested page, already sorted.
+    pub rows: Vec<SubmissionRow>,
+    /// Number of rows matching the query's filters, across all pages.
+    pub total_filtered: i64,
+    /// Number of rows on record, ignoring every filter.
+    pub total_all: i64,
+    /// The zero-based page actually served: the requested one, clamped into
+    /// range (e.g. after a filter shrank the result set).
+    pub page: i64,
+}
+
+/// Submission attempts on record matching a query: filtered by endpoint,
+/// verdict, free text and submission date range, sorted by submission time,
+/// and paginated ([`super::query::SUBMISSIONS_PAGE_SIZE`] rows per page).
+///
+/// # Arguments
+/// * `query` — filters, sort and page; see [`SubmissionQuery`].
 ///
 /// # Return
-/// The submission history rows.
+/// The page of rows with the filtered and unfiltered totals. A requested page
+/// past the end is clamped to the last page (see [`SubmissionPage::page`]).
 ///
 /// # Errors
-/// The `mpc_submissions` query failing, as a `ServerFnError`.
+/// Any of the `mpc_submissions` queries failing, as a `ServerFnError`.
 #[server]
-pub async fn get_submission_history() -> Result<Vec<SubmissionRow>, ServerFnError> {
+pub async fn list_submissions(query: SubmissionQuery) -> Result<SubmissionPage, ServerFnError> {
+    use super::query::{build_where_clause, clamp_page, order_by_clause, SUBMISSIONS_PAGE_SIZE};
     use crate::get_pool;
 
-    #[derive(sqlx::FromRow)]
-    struct SubmissionRowSql {
-        id: i64,
-        lineage_designation: String,
-        endpoint: String,
-        submission_id: Option<String>,
-        verdict: String,
-        submitted_at: chrono::DateTime<chrono::Utc>,
-        verdict_checked_at: Option<chrono::DateTime<chrono::Utc>>,
-        verdict_detail: Option<serde_json::Value>,
-        wamo_detail: Option<serde_json::Value>,
-        wamo_checked_at: Option<chrono::DateTime<chrono::Utc>>,
-    }
-
     let pool = get_pool().await;
-    let rows: Vec<SubmissionRowSql> = sqlx::query_as(
-        "SELECT id, lineage_designation, endpoint, submission_id, verdict, \
-                submitted_at, verdict_checked_at, verdict_detail, wamo_detail, wamo_checked_at
-         FROM mpc_submissions
-         ORDER BY submitted_at DESC",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let db_err = |e: sqlx::Error| ServerFnError::new(e.to_string());
+    // The SQL assembled below is safe: `build_where_clause` and
+    // `order_by_clause` emit constant fragments and `$n` placeholders only;
+    // every user-controlled value travels as a bind parameter.
+    let clause = build_where_clause(&query);
 
-    Ok(rows
-        .into_iter()
-        .map(|r| SubmissionRow {
-            id: r.id,
-            lineage_designation: r.lineage_designation,
-            endpoint: r.endpoint,
-            submission_id: r.submission_id,
-            verdict: r.verdict,
-            submitted_at: r.submitted_at.to_rfc3339(),
-            verdict_checked_at: r.verdict_checked_at.map(|t| t.to_rfc3339()),
-            verdict_detail: r.verdict_detail,
-            wamo_detail: r.wamo_detail,
-            wamo_checked_at: r.wamo_checked_at.map(|t| t.to_rfc3339()),
-        })
-        .collect())
+    let count_sql = format!("SELECT COUNT(*) FROM mpc_submissions {}", clause.sql);
+    let mut count_query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(count_sql));
+    for bind in &clause.binds {
+        count_query = count_query.bind(bind);
+    }
+    let total_filtered = count_query.fetch_one(pool).await.map_err(db_err)?;
+
+    let total_all: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mpc_submissions")
+        .fetch_one(pool)
+        .await
+        .map_err(db_err)?;
+
+    let page = clamp_page(query.page, total_filtered, SUBMISSIONS_PAGE_SIZE);
+    let limit_at = clause.next_placeholder();
+    let rows_sql = format!(
+        "SELECT {SUBMISSION_ROW_COLUMNS} FROM mpc_submissions {} {} LIMIT ${} OFFSET ${}",
+        clause.sql,
+        order_by_clause(query.sort),
+        limit_at,
+        limit_at + 1,
+    );
+    let mut rows_query = sqlx::query_as::<_, SubmissionRowSql>(sqlx::AssertSqlSafe(rows_sql));
+    for bind in &clause.binds {
+        rows_query = rows_query.bind(bind);
+    }
+    let rows = rows_query
+        .bind(SUBMISSIONS_PAGE_SIZE)
+        .bind(page * SUBMISSIONS_PAGE_SIZE)
+        .fetch_all(pool)
+        .await
+        .map_err(db_err)?;
+
+    Ok(SubmissionPage {
+        rows: rows.into_iter().map(SubmissionRow::from).collect(),
+        total_filtered,
+        total_all,
+        page,
+    })
 }
 
 /// Picks which of a WAMO response's two identifier lookups to keep for
