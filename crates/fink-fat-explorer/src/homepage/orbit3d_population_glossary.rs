@@ -23,7 +23,8 @@ pub(super) const PLOT_DESCRIPTION: &str = "Current heliocentric positions — at
     colored by dynamical family (the same colors as the (a, e) plot, but without its \
     quality-tier marker distinction). The Sun sits at the origin; the planets and a few tracked \
     perturbers are drawn both as their current position and their full orbital ellipse, for \
-    scale.";
+    scale. Unlike the (a, e) plot, this view has no per-point click-through to the lineage page \
+    yet.";
 
 /// Core view-reading concepts, shown before the family reference list.
 pub(super) const CONCEPTS: &[(&str, &str)] = &[
