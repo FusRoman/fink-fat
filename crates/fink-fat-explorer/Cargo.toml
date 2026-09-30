@@ -86,6 +86,12 @@ server = [
     "dep:tracing"
 ]
 
+# Documented on the `/api-docs` page (included with `include_str!`), so it is
+# compiled and linted with the rest of the workspace and cannot go stale.
+[[example]]
+name = "reverse_search"
+required-features = ["server"]
+
 [dev-dependencies]
 approx = "0.5.1"
 tempfile = { workspace = true }

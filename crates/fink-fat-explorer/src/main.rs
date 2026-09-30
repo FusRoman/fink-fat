@@ -1,5 +1,6 @@
 pub mod ades;
 pub mod api;
+pub mod api_docs;
 pub mod best_orbit;
 pub mod bulk_cnd;
 pub mod bulk_cnd_page;
@@ -40,6 +41,7 @@ use std::sync::Mutex;
 #[cfg(feature = "server")]
 use tokio::sync::OnceCell;
 
+use crate::api_docs::ApiDocsPage;
 use crate::bulk_cnd_page::BulkCndPage;
 use crate::bulk_orbit_fit_page::BulkOrbitFitPage;
 use crate::bulk_skybot_page::BulkSkybotPage;
@@ -308,6 +310,9 @@ enum Route {
 
     #[route("/submission")]
     SubmissionDashboardPage {},
+
+    #[route("/api-docs")]
+    ApiDocsPage {},
 }
 
 fn main() {

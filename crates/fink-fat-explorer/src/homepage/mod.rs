@@ -151,6 +151,11 @@ pub fn Home() -> Element {
                         class: "btn btn-sm btn-outline btn-accent gap-1",
                         "📡 Submission"
                     }
+                    Link {
+                        to: crate::Route::ApiDocsPage {},
+                        class: "btn btn-sm btn-outline btn-accent gap-1",
+                        "📖 API"
+                    }
                     ToolsMenu { refreshing: refreshing(), on_refresh: request_refresh }
                 }
             }

@@ -9,7 +9,14 @@ title = "fink-fat-explorer"
 [web.resource]
 
 # Additional CSS style files
-style = ["https://cdn.jsdelivr.net/npm/vanilla-calendar-pro@3.4.0/styles/index.css"]
+style = [
+    "https://cdn.jsdelivr.net/npm/vanilla-calendar-pro@3.4.0/styles/index.css",
+    # Syntax highlighting of the `/api-docs` code samples (LIGHT theme only).
+    # TODO(dark mode): when the site gets a dark mode, also load a dark
+    # highlight.js theme (e.g. `.../styles/github-dark.min.css`) and enable
+    # the right one depending on the active daisyUI theme.
+    "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github.min.css",
+]
 
 # Additional JavaScript files
 script = [
@@ -17,6 +24,9 @@ script = [
     # Date-range picker of the Submission page (MIT, exposes
     # `window.VanillaCalendarPro`).
     "https://cdn.jsdelivr.net/npm/vanilla-calendar-pro@3.4.0/index.js",
+    # Syntax highlighting of the `/api-docs` code samples (exposes `window.hljs`;
+    # the "common" build includes Python, Rust, bash and JSON).
+    "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js",
 ]
 
 [web.resource.dev]

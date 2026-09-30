@@ -7,6 +7,12 @@ use dioxus::prelude::*;
 use super::types::LineageMatch;
 use super::types::ReverseSearchResponse;
 
+/// Path of the reverse-search route, as documented on the `/api-docs` page.
+///
+/// The `#[get]` macro below needs a string literal, so the two are kept equal
+/// by the `route_path_matches_the_declared_route` test.
+pub const REVERSE_SEARCH_PATH: &str = "/api/v1/alerts/{object_id}/lineages";
+
 /// One `(lineage, matching branch)` row returned by [`MATCHING_BRANCHES_QUERY`].
 #[cfg(feature = "server")]
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -134,6 +140,17 @@ pub async fn reverse_search_alert(
     let pool = crate::get_pool().await;
     let response = fetch_lineages_for_object(pool, &object_id).await?;
     Ok(Json(response))
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::REVERSE_SEARCH_PATH;
+
+    #[test]
+    fn route_path_matches_the_declared_route() {
+        let declared = format!("#[get(\"{REVERSE_SEARCH_PATH}\")]");
+        assert!(include_str!("reverse_search.rs").contains(&declared));
+    }
 }
 
 #[cfg(all(test, feature = "server"))]
