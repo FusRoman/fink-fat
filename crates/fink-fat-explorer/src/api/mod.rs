@@ -13,5 +13,10 @@ mod error;
 pub mod reverse_search;
 pub mod types;
 
-pub use reverse_search::{reverse_search_alert, REVERSE_SEARCH_PATH};
-pub use types::{LineageMatch, ReverseSearchResponse};
+pub use reverse_search::{
+    reverse_search_alert, reverse_search_alerts, BATCH_REVERSE_SEARCH_PATH, MAX_BATCH_SIZE,
+    REVERSE_SEARCH_PATH,
+};
+pub use types::{
+    BatchReverseSearchRequest, BatchReverseSearchResponse, LineageMatch, ReverseSearchResponse,
+};

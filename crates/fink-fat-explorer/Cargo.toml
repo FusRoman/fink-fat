@@ -92,6 +92,10 @@ server = [
 name = "reverse_search"
 required-features = ["server"]
 
+[[example]]
+name = "reverse_search_batch"
+required-features = ["server"]
+
 [dev-dependencies]
 approx = "0.5.1"
 tempfile = { workspace = true }

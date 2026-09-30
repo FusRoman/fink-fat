@@ -9,6 +9,9 @@ pub(crate) enum ApiError {
     /// The requested resource does not exist.
     #[error("no alert with object_id `{0}`")]
     NotFound(String),
+    /// The request is malformed (empty or too large batch, ...).
+    #[error("{0}")]
+    BadRequest(String),
     /// A database query failed.
     #[error(transparent)]
     Db(#[from] sqlx::Error),
@@ -19,10 +22,12 @@ impl ApiError {
     ///
     /// # Return
     ///
-    /// `404` for [`ApiError::NotFound`], `500` for [`ApiError::Db`].
+    /// `404` for [`ApiError::NotFound`], `400` for [`ApiError::BadRequest`],
+    /// `500` for [`ApiError::Db`].
     pub(crate) fn status(&self) -> StatusCode {
         match self {
             Self::NotFound(_) => StatusCode::NOT_FOUND,
+            Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -60,6 +65,14 @@ mod tests {
             ServerFnError::from(err),
             ServerFnError::ServerError { code: 404, .. }
         ));
+    }
+
+    #[test]
+    fn bad_request_maps_to_400() {
+        assert_eq!(
+            ApiError::BadRequest("x".into()).status(),
+            StatusCode::BAD_REQUEST
+        );
     }
 
     #[test]

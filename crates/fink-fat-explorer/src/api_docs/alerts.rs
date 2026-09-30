@@ -5,10 +5,21 @@ use dioxus::prelude::*;
 
 use super::code_tabs::{CodeTab, CodeTabs};
 use super::endpoint::EndpointAccordion;
-use crate::api::{LineageMatch, ReverseSearchResponse, REVERSE_SEARCH_PATH};
+use crate::api::{
+    BatchReverseSearchRequest, BatchReverseSearchResponse, LineageMatch, ReverseSearchResponse,
+    BATCH_REVERSE_SEARCH_PATH, MAX_BATCH_SIZE, REVERSE_SEARCH_PATH,
+};
 
 const PYTHON_EXAMPLE: &str = include_str!("../../examples/reverse_search.py");
 const RUST_EXAMPLE: &str = include_str!("../../examples/reverse_search.rs");
+
+const BATCH_PYTHON_EXAMPLE: &str = include_str!("../../examples/reverse_search_batch.py");
+const BATCH_RUST_EXAMPLE: &str = include_str!("../../examples/reverse_search_batch.rs");
+
+/// Real alert of the running database that belongs to a single lineage.
+const SAMPLE_OBJECT_ID_SINGLE: &str = "313791827801014320";
+/// Identifier that matches no observation.
+const SAMPLE_UNKNOWN_OBJECT_ID: &str = "000000000000000000";
 
 /// `[dependencies]` needed by the Rust sample, shown above it.
 const RUST_DEPENDENCIES: &str = r#"// Cargo.toml
@@ -57,6 +68,86 @@ fn sample_response_json() -> String {
 fn curl_example() -> String {
     let path = REVERSE_SEARCH_PATH.replace("{object_id}", SAMPLE_OBJECT_ID);
     format!("curl -s http://localhost:8080{path}")
+}
+
+/// Builds the [`LineageMatch`] of a single-branch lineage (real sample data).
+///
+/// # Arguments
+///
+/// * `lineage_id` - numeric lineage id.
+/// * `designation` - lineage designation.
+/// * `branch_id` - the only branch, both matching and best.
+///
+/// # Return
+///
+/// The match, with the lineage page URL derived from `designation`.
+fn single_branch_match(lineage_id: i64, designation: &str, branch_id: i64) -> LineageMatch {
+    LineageMatch {
+        lineage_id,
+        lineage_designation: designation.to_string(),
+        best_branch_id: branch_id,
+        matching_branch_ids: vec![branch_id],
+        url: format!("/lineage/{designation}"),
+    }
+}
+
+/// Sample batch request body, serialized from the real request type.
+///
+/// # Return
+///
+/// Pretty-printed JSON asking for two known alerts and an unknown one.
+fn batch_request_json() -> String {
+    let request = BatchReverseSearchRequest {
+        object_ids: vec![
+            SAMPLE_OBJECT_ID.to_string(),
+            SAMPLE_OBJECT_ID_SINGLE.to_string(),
+            SAMPLE_UNKNOWN_OBJECT_ID.to_string(),
+        ],
+    };
+    serde_json::to_string_pretty(&request).unwrap_or_default()
+}
+
+/// Sample batch response (real data), serialized from the real response type.
+///
+/// # Return
+///
+/// Pretty-printed JSON answering [`batch_request_json`].
+fn batch_response_json() -> String {
+    let response = BatchReverseSearchResponse {
+        results: vec![
+            ReverseSearchResponse {
+                object_id: SAMPLE_OBJECT_ID.to_string(),
+                lineages: vec![
+                    single_branch_match(171, "FF2025ouzemdyvufld", 219280),
+                    single_branch_match(428, "FF2025ixcfnuzdkkak", 7260),
+                ],
+            },
+            ReverseSearchResponse {
+                object_id: SAMPLE_OBJECT_ID_SINGLE.to_string(),
+                lineages: vec![single_branch_match(4337, "FF2025xzqzwqmvdqqa", 180356)],
+            },
+        ],
+        unknown_object_ids: vec![SAMPLE_UNKNOWN_OBJECT_ID.to_string()],
+    };
+    serde_json::to_string_pretty(&response).unwrap_or_default()
+}
+
+/// The batch `curl` sample command.
+///
+/// # Return
+///
+/// A multi-line `curl` invocation posting [`batch_request_json`].
+fn batch_curl_example() -> String {
+    let body = serde_json::to_string(&BatchReverseSearchRequest {
+        object_ids: vec![
+            SAMPLE_OBJECT_ID.to_string(),
+            SAMPLE_OBJECT_ID_SINGLE.to_string(),
+        ],
+    })
+    .unwrap_or_default();
+    format!(
+        "curl -s -X POST http://localhost:8080{BATCH_REVERSE_SEARCH_PATH} \\\n  -H 'Content-Type: application/json' \\\n  -d '{body}'"
+    )
 }
 
 /// Field reference of a [`LineageMatch`].
@@ -159,7 +250,7 @@ pub fn AlertsEndpoints() -> Element {
 
             h4 { class: "font-semibold mt-2", "Examples" }
             p {
-                "Each sample takes an object id, queries the endpoint above and prints the \
+                "Each sample takes an object id, queries this endpoint and prints the \
                  matching lineages. Set "
                 code { "FINK_FAT_URL" }
                 " to target another server than "
@@ -168,8 +259,117 @@ pub fn AlertsEndpoints() -> Element {
             }
             CodeTabs { tabs }
         }
+
+        EndpointAccordion {
+            method: "POST",
+            path: BATCH_REVERSE_SEARCH_PATH,
+            summary: "Find the lineages of several alerts at once",
+            p {
+                "Reverse search for a whole list of alerts: for each alert, list the lineages \
+                 that contain it. The lookup is done with two database queries whatever the \
+                 list length, so it is much cheaper than one request per alert."
+            }
+            p {
+                "Send a JSON body with an "
+                code { "object_ids" }
+                " array of at most {MAX_BATCH_SIZE} distinct alert identifiers (duplicates are \
+                 ignored). An identifier that matches no alert does not fail the request: it \
+                 is listed in "
+                code { "unknown_object_ids" }
+                " of the response."
+            }
+
+            h4 { class: "font-semibold mt-2", "Response" }
+            div { class: "overflow-x-auto bg-base-100 rounded-box border border-base-300",
+                table { class: "table table-sm",
+                    thead {
+                        tr {
+                            th { "Field" }
+                            th { "Type" }
+                            th { "Description" }
+                        }
+                    }
+                    tbody {
+                        for (name , kind , description) in BATCH_RESPONSE_FIELDS {
+                            tr { key: "{name}",
+                                td {
+                                    code { "{name}" }
+                                }
+                                td { "{kind}" }
+                                td { "{description}" }
+                            }
+                        }
+                    }
+                }
+            }
+            CodeTabs {
+                tabs: vec![
+                    CodeTab::new("Request", "json", batch_request_json()),
+                    CodeTab::new("Response", "json", batch_response_json()),
+                ],
+            }
+
+            h4 { class: "font-semibold mt-2", "Status codes" }
+            div { class: "overflow-x-auto bg-base-100 rounded-box border border-base-300",
+                table { class: "table table-sm",
+                    tbody {
+                        for (status , description) in BATCH_STATUS_CODES {
+                            tr { key: "{status}",
+                                td {
+                                    code { "{status}" }
+                                }
+                                td { "{description}" }
+                            }
+                        }
+                    }
+                }
+            }
+
+            h4 { class: "font-semibold mt-2", "Examples" }
+            CodeTabs {
+                tabs: vec![
+                    CodeTab::new("Python", "python", BATCH_PYTHON_EXAMPLE),
+                    CodeTab::new(
+                        "Rust",
+                        "rust",
+                        format!("{RUST_DEPENDENCIES}{BATCH_RUST_EXAMPLE}"),
+                    ),
+                    CodeTab::new("curl", "bash", batch_curl_example()),
+                ],
+            }
+        }
     }
 }
+
+/// Field reference of the batch response.
+const BATCH_RESPONSE_FIELDS: &[(&str, &str, &str)] = &[
+    (
+        "results",
+        "array",
+        "One entry per known alert, in request order, holding its object_id and its lineages (each with lineage_id, lineage_designation, best_branch_id, matching_branch_ids and url). lineages is empty if the alert is in no lineage.",
+    ),
+    (
+        "unknown_object_ids",
+        "array of strings",
+        "Requested identifiers that match no observation, in request order.",
+    ),
+];
+
+/// HTTP status codes of the batch endpoint.
+const BATCH_STATUS_CODES: &[(&str, &str)] = &[
+    (
+        "200",
+        "The request was processed. Unknown alerts are reported in unknown_object_ids.",
+    ),
+    (
+        "400",
+        "object_ids is empty or has more distinct identifiers than the limit.",
+    ),
+    (
+        "500",
+        "Internal error. The body is a generic message; details are only in the server logs.",
+    ),
+];
 
 #[cfg(test)]
 mod tests {
@@ -182,6 +382,25 @@ mod tests {
         assert_eq!(parsed.object_id, SAMPLE_OBJECT_ID);
         assert_eq!(parsed.lineages.len(), 2);
         assert_eq!(parsed.lineages[1].matching_branch_ids, vec![7260]);
+    }
+
+    #[test]
+    fn batch_samples_round_trip_through_the_real_types() {
+        let request: BatchReverseSearchRequest =
+            serde_json::from_str(&batch_request_json()).expect("valid request JSON");
+        assert_eq!(request.object_ids.len(), 3);
+        let response: BatchReverseSearchResponse =
+            serde_json::from_str(&batch_response_json()).expect("valid response JSON");
+        assert_eq!(response.results.len(), 2);
+        assert_eq!(response.unknown_object_ids, vec![SAMPLE_UNKNOWN_OBJECT_ID]);
+        assert!(request.object_ids.len() <= MAX_BATCH_SIZE);
+    }
+
+    #[test]
+    fn batch_examples_target_the_documented_route() {
+        assert!(BATCH_PYTHON_EXAMPLE.contains(BATCH_REVERSE_SEARCH_PATH));
+        assert!(BATCH_RUST_EXAMPLE.contains(BATCH_REVERSE_SEARCH_PATH));
+        assert!(batch_curl_example().contains(BATCH_REVERSE_SEARCH_PATH));
     }
 
     #[test]

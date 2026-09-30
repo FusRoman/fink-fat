@@ -1,6 +1,8 @@
 """Reverse search: find the lineages that contain a given alert.
 
-Usage: python reverse_search.py <object_id>
+Usage: python reverse_search.py [<object_id>]
+
+Without argument (e.g. when pasted in a REPL or notebook), a real alert is used.
 
 The server address is read from the FINK_FAT_URL environment variable
 (default http://localhost:8080). Requires `pip install requests`.

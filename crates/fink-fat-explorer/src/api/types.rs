@@ -30,3 +30,21 @@ pub struct ReverseSearchResponse {
     /// alert is known but not attached to any lineage.
     pub lineages: Vec<LineageMatch>,
 }
+
+/// Request body of the batch reverse search.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BatchReverseSearchRequest {
+    /// Alert identifiers to search (`observations.object_id`).
+    pub object_ids: Vec<String>,
+}
+
+/// Response of the batch reverse search.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BatchReverseSearchResponse {
+    /// One entry per known alert, in request order (duplicates removed). An
+    /// entry's `lineages` is empty when the alert is not attached to any
+    /// lineage.
+    pub results: Vec<ReverseSearchResponse>,
+    /// Requested identifiers that match no observation, in request order.
+    pub unknown_object_ids: Vec<String>,
+}
