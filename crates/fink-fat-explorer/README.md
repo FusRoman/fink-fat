@@ -186,6 +186,177 @@ docker compose down       # stop everything (all profiles)
 docker compose down -v    # also wipe volumes: database, pgAdmin, caches
 ```
 
+## Inspecting the database from a terminal
+
+### Connecting
+
+From the workspace root, open `psql` inside the `db` container (nothing to
+install on the host):
+
+```bash
+docker compose exec db psql -U finkfat -d finkfat_test
+```
+
+From the host, if a `psql` client is installed:
+
+```bash
+psql postgresql://finkfat:finkfat@localhost:5432/finkfat_test
+```
+
+Run a single query without opening an interactive session (`-T`: no TTY,
+so it also works in scripts and pipes):
+
+```bash
+docker compose exec -T db psql -U finkfat -d finkfat_test -c "SELECT count(*) FROM branches;"
+```
+
+The explorer images do not include `psql`: always go through the `db`
+container or the host.
+
+### psql commands
+
+| Command              | Effect                                                         |
+|----------------------|----------------------------------------------------------------|
+| `\l`                 | list databases                                                 |
+| `\c finkfat_test`    | connect to another database                                    |
+| `\dt` / `\dt+`       | list tables (`+`: with their size on disk)                     |
+| `\d branches`        | columns, indexes and foreign keys of a table                   |
+| `\di+`               | list indexes with their size                                   |
+| `\x auto`            | expanded display (one column per line) when rows are too wide  |
+| `\timing on`         | print the execution time of each query                         |
+| `\pset pager off`    | disable the pager (`less`) for long results                    |
+| `\copy (SELECT ...) TO 'out.csv' CSV HEADER` | export a query result to a CSV file, written on the machine running `psql` (inside the container when using `docker compose exec`) |
+| `\q`                 | quit                                                           |
+
+### Tables
+
+Loaded by `fink-fat convert`. These tables are `UNLOGGED` and emptied
+(`TRUNCATE ... CASCADE`) then refilled on every convert run:
+
+| Table                   | Content                                                              |
+|-------------------------|----------------------------------------------------------------------|
+| `observations`          | one row per alert: position, magnitude, filter, `mjd_tt`, `night_id` |
+| `branches`              | one row per track branch; `lineage_id` / `lineage_designation` group the branches of a lineage |
+| `branch_observations`   | ordered list (`position`) of the observations of each branch         |
+| `kf_bank`               | per-branch Kalman bank summary (steps, absolute magnitude estimate)  |
+| `hypotheses`            | Kalman hypotheses of each branch, weighted by `log_weight` (the largest table) |
+| `kf_state`              | Kalman state and covariance of each hypothesis, `dynamic_family`     |
+| `archived_trajectories` | trajectories archived by the tracker, with their last state, `a` and `e` |
+
+Written by the explorer itself. They are append-only, have no foreign keys
+to the tables above and survive a convert run:
+
+| Table                | Content                                                       |
+|----------------------|---------------------------------------------------------------|
+| `orbit_fits`         | successful orbit fits (single-lineage and bulk)               |
+| `orbit_fit_failures` | failed bulk-fit attempts, one row per branch and attempt      |
+| `cnd_queries`        | CND cross-match queries and their hits                        |
+| `skybot_bulk_jobs`   | Skybot bulk cross-match jobs: status, progress, logs          |
+| `skybot_obs_status`  | Skybot result per observation (`hits = []` if no match)       |
+| `mpc_submissions`    | ADES submissions to the MPC, with the sent XML and the verdict |
+
+### Useful queries
+
+Table sizes and row counts. `reltuples` is an estimate maintained by
+Postgres, instant even on `hypotheses`, whereas `count(*)` scans the whole
+table:
+
+```sql
+SELECT relname AS table,
+       reltuples::bigint AS estimated_rows,
+       pg_size_pretty(pg_total_relation_size(oid)) AS total_size
+FROM pg_class
+WHERE relkind = 'r' AND relnamespace = 'public'::regnamespace
+ORDER BY pg_total_relation_size(oid) DESC;
+```
+
+A lineage and its branches:
+
+```sql
+SELECT branch_id, designation, n_nights, arc_length_days, n_real_updates, cumulative_llr
+FROM branches
+WHERE lineage_designation = '<designation>'
+ORDER BY cumulative_llr DESC;
+```
+
+Observations of a branch, in track order:
+
+```sql
+SELECT bo.position, o.id, o.night_id, o.mjd_tt, o.ra, o.dec, o.magnitude, o.filter, o.object_id
+FROM branch_observations bo
+JOIN observations o ON o.id = bo.obs_id
+WHERE bo.branch_id = <branch_id>
+ORDER BY bo.position;
+```
+
+Best hypothesis of a branch and its Kalman state:
+
+```sql
+SELECT h.hypothesis_id, h.log_weight, k.dynamic_family, k.epoch, k.rho, k.rho_dot, k.nis_ema
+FROM hypotheses h
+JOIN kf_state k USING (hypothesis_id)
+WHERE h.branch_id = <branch_id>
+ORDER BY h.log_weight DESC
+LIMIT 1;
+```
+
+Branches per dynamic family (scans `hypotheses` and `kf_state`: expect
+several minutes on a full database):
+
+```sql
+SELECT k.dynamic_family, count(*)
+FROM branches b
+CROSS JOIN LATERAL (
+    SELECT hypothesis_id FROM hypotheses
+    WHERE branch_id = b.branch_id
+    ORDER BY log_weight DESC LIMIT 1
+) best
+JOIN kf_state k USING (hypothesis_id)
+GROUP BY 1
+ORDER BY 2 DESC;
+```
+
+Latest orbit fits, and bulk-fit failures:
+
+```sql
+SELECT lineage_designation, branch_id, fitted_at, fit_method, converged,
+       normalised_rms, n_observations_used, keplerian
+FROM orbit_fits
+ORDER BY fitted_at DESC
+LIMIT 20;
+
+SELECT count(DISTINCT branch_id) AS failed_branches FROM orbit_fit_failures;
+```
+
+Skybot jobs and MPC submissions:
+
+```sql
+SELECT id, status, started_at, finished_at, processed_observations,
+       total_observations, matched_observations, error
+FROM skybot_bulk_jobs
+ORDER BY started_at DESC;
+
+SELECT id, lineage_designation, trk_sub, endpoint, submitted_at, verdict
+FROM mpc_submissions
+ORDER BY submitted_at DESC;
+```
+
+Queries currently running, for example to spot a slow explorer query:
+
+```sql
+SELECT pid, now() - query_start AS duration, state, left(query, 120) AS query
+FROM pg_stat_activity
+WHERE datname = 'finkfat_test' AND state <> 'idle'
+ORDER BY duration DESC;
+```
+
+`SELECT pg_cancel_backend(<pid>);` stops one of them. To see a query's plan,
+prefix it with `EXPLAIN (ANALYZE, BUFFERS)`: the query is actually executed.
+
+> `app-dev` and `app-prod` share the same database: write statements
+> (`UPDATE`, `DELETE`, `TRUNCATE`) affect both. Run
+> `BEGIN READ ONLY;` first to explore without risk, and `ROLLBACK;` at the end.
+
 ## Build context
 
 [`.dockerignore`](../../.dockerignore) is an allowlist: only `Cargo.toml`,
