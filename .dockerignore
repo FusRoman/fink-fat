@@ -1,0 +1,20 @@
+# Allowlist: the build context only carries what `dockerfile` COPYs.
+# Everything else (target/, storage*/, test_exp/, experiment outputs, ...)
+# would otherwise be sent to the Docker daemon on every build.
+*
+!Cargo.toml
+!Cargo.lock
+!.cargo
+!LICENSE
+!README.md
+!katex-header.html
+!engine_config.best.yaml
+!src
+!crates
+
+# Build outputs and local-only files inside the allowed directories.
+**/target
+**/.venv
+**/__pycache__
+**/.env
+crates/fink-fat-explorer/tailwindcss-extra
