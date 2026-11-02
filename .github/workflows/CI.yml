@@ -71,6 +71,52 @@ jobs:
       - name: cargo check
         run: cargo check --all-targets --all-features
 
+  sql-integration-test:
+    name: SQL conversion integration test
+    runs-on: ubuntu-latest
+    needs: [check]
+    # Throwaway instance for `tests/sql_convert.rs`, which exercises the real
+    # `fink-fat convert --format sql` path against Postgres (COPY BINARY,
+    # UNLOGGED tables, deferred FK/index rebuild) — behaviour with no SQLite
+    # equivalent, so this test needs a real Postgres rather than a lighter
+    # stand-in. Same credentials as the repo's `docker-compose.yml` `db`
+    # service, so `DATABASE_URL` below matches what a contributor would use
+    # locally.
+    services:
+      postgres:
+        image: postgres:latest
+        env:
+          POSTGRES_USER: finkfat
+          POSTGRES_PASSWORD: finkfat
+          POSTGRES_DB: finkfat_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies
+        # Note: Needed for plotters in the fink-fat-eval crate
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: cargo test --test sql_convert
+        env:
+          DATABASE_URL: postgres://finkfat:finkfat@localhost:5432/finkfat_test
+        run: cargo test -p fink-fat --test sql_convert
+
   doc:
     name: Documentation check
     runs-on: ubuntu-latest

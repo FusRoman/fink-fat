@@ -1,0 +1,62 @@
+services:
+  db:
+    image: postgres:latest
+    container_name: fink-fat-db
+    environment:
+      POSTGRES_USER: finkfat
+      POSTGRES_PASSWORD: finkfat
+      POSTGRES_DB: finkfat_test
+    ports:
+      - "5432:5432"
+    volumes:
+      # PostgreSQL 18+ expects a mount on /var/lib/postgresql (parent dir),
+      # not directly on /var/lib/postgresql/data
+      - db-data:/var/lib/postgresql
+    # Tuned for `fink-fat convert`'s bulk COPY load (millions of rows across
+    # 7 tables in one transaction), not for a small interactive workload —
+    # sized against a 128 GB host, leaving headroom for the `app`/`pgadmin`
+    # containers and the `convert` process itself (which loads the source
+    # parquet/rkyv into its own memory before it ever connects here).
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=8GB"
+      - "-c"
+      - "maintenance_work_mem=2GB"
+      - "-c"
+      - "max_wal_size=16GB"
+      - "-c"
+      - "checkpoint_timeout=30min"
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: fink-fat-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - db
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+
+  app:
+    build:
+      context: .              # workspace root
+      dockerfile: Dockerfile
+    container_name: fink-fat-explore-app
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/app                 # bind mount: local code changes are reflected instantly
+      - cargo-target:/app/target # named volume: persists across container recreation
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: postgres://finkfat:finkfat@db:5432/finkfat_test
+
+volumes:
+  db-data:
+  pgadmin-data:
+  cargo-target:

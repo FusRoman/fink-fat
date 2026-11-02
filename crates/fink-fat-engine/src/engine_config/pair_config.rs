@@ -26,7 +26,7 @@
 //!     `Δθ / Δt ≤ max_angular_speed`.
 //! - Photometric constraint:
 //!   - The candidate must satisfy a configurable brightness / flux similarity
-//!     test controlled by `max_flux_difference`.
+//!     test controlled by `max_mag_difference`.
 //!
 //! The exact photometry metric depends on the pairing implementation (flux space,
 //! magnitude space, normalized flux difference, etc.). This configuration
@@ -108,7 +108,7 @@
 //!
 //! - `max_dt = 0.06 d` (~86.4 min)
 //! - `max_angular_speed = 0.05 rad/d`
-//! - `max_flux_difference = 5.0`
+//! - `max_mag_difference = 5.0`
 //! - `allow_same_timebin = true`
 //!
 //! Tuning suggestions:
@@ -116,13 +116,13 @@
 //! - If too many pairs are produced (high contamination):
 //!   - decrease `max_dt`,
 //!   - decrease `max_angular_speed`,
-//!   - tighten `max_flux_difference`,
+//!   - tighten `max_mag_difference`,
 //!   - or set `allow_same_timebin = false` (if your time-binning is coarse and
 //!     produces many same-bin candidates).
 //! - If too few pairs are produced (low recall):
 //!   - increase `max_dt` slightly,
 //!   - increase `max_angular_speed` if you target fast movers,
-//!   - loosen `max_flux_difference` if photometry is noisy.
+//!   - loosen `max_mag_difference` if photometry is noisy.
 //!
 //! -----------------------------------------------------------------------------
 //! Configuration examples (YAML)
@@ -134,7 +134,7 @@
 //! pairs:
 //!   max_dt: 0.06                 # days (TT)
 //!   max_angular_speed: 5.0e-2    # rad/day
-//!   max_flux_difference: 5.0     # must match pairing kernel's photometry metric
+//!   max_mag_difference: 5.0      # must match pairing kernel's photometry metric
 //!   allow_same_timebin: true
 //! ```
 //!
@@ -144,8 +144,9 @@
 //! pairs:
 //!   max_dt: "86.4 min"
 //!   max_angular_speed: "35 arcmin/day"
-//!   max_flux_difference: 5.0
+//!   max_mag_difference: 5.0
 //!   allow_same_timebin: true
+//!   acc_prior_var: "1 arcsec/day^2"
 //! ```
 //!
 //! Unknown keys are rejected (`deny_unknown_fields`) to catch YAML typos early.
@@ -154,14 +155,11 @@
 //! Errors and validation
 //! -----------------------------------------------------------------------------
 //!
-//! [`PairConfig::validate`] enforces basic numeric validity:
-//! - finite values,
-//! - non-negative constraints.
-//!
-//! Validation can fail with:
-//! - [`SeedError::NonFiniteOrNegativeTime`] for `pairs.max_dt`,
-//! - [`SeedError::NonFiniteOrNegativeAngle`] for `pairs.max_angular_speed`,
-//! - [`SeedError::NonFiniteOrNegativePhotometry`] for `pairs.max_flux_difference`.
+//! [`PairConfig`]'s [`Validate`] implementation
+//! enforces basic numeric validity — finite values, non-negative constraints
+//! — for `max_dt`, `max_angular_speed`, `max_mag_difference` and
+//! `acc_prior_var`, accumulating every failing field into a
+//! `Vec<FieldError>` instead of stopping at the first one.
 //!
 //! Unit parsing failures (string quantities) are surfaced by serde as
 //! deserialization errors with an explicit message from `engine_config::units`
@@ -175,10 +173,15 @@
 //!   trade-off of neighborhood search.
 //! - `TripletConfig` extends validated pairs into higher-quality seeds.
 
+use photom::MJDTT;
 use serde::{Deserialize, Serialize};
 
-use crate::engine_config::units::{de_ang_speed_rad_per_day, de_time_days};
-use crate::{MJDTT, error::SeedError};
+use crate::engine_config::{
+    Validate,
+    error::FieldError,
+    units::{de_ang_accel_rad_per_day2, de_ang_speed_rad_per_day, de_time_days},
+    validate_helpers::check_finite_nonneg,
+};
 
 /// Parameters controlling **pair generation** between alerts `(a, b)`.
 ///
@@ -193,7 +196,7 @@ use crate::{MJDTT, error::SeedError};
 /// - Temporal gating: `t_b > t_a` and `Δt ≤ max_dt`.
 /// - Kinematic gating: `ang_sep(a, b) / Δt ≤ max_angular_speed`.
 /// - Photometric gating: the implementation-specific brightness similarity
-///   test using `max_flux_difference`.
+///   test using `max_mag_difference`.
 ///
 /// Notes
 /// -----
@@ -256,7 +259,7 @@ pub struct PairConfig {
     /// - magnitude difference threshold,
     /// - normalized residual threshold,
     /// - or any other scalar similarity metric.
-    pub max_flux_difference: f64,
+    pub max_mag_difference: f64,
 
     /// Whether to allow pairs formed from alerts inside the same **time bin**.
     ///
@@ -267,6 +270,63 @@ pub struct PairConfig {
     /// - increase recall,
     /// - increase contamination.
     pub allow_same_timebin: bool,
+
+    /// Prior variance on the pairwise acceleration.
+    ///
+    /// Units
+    /// -----
+    /// - Canonical: **rad/day²**.
+    ///
+    /// YAML forms
+    /// ---------
+    /// - numeric (already in rad/day²): `1.0e-4`
+    /// - string with explicit rate: `"1 arcsec/day^2"`, `"0.5 arcmin/hour2"`
+    ///
+    /// Context
+    /// -------
+    /// For pairs, acceleration is not directly observable (two points define
+    /// a velocity, not a curvature). This parameter models the acceleration
+    /// uncertainty in the pair seeds, allowing a better Kalman filter
+    /// propagation.
+    ///
+    /// Serialization
+    /// -------------
+    /// Parsed with [`de_ang_accel_rad_per_day2`].
+    #[serde(deserialize_with = "de_ang_accel_rad_per_day2")]
+    pub acc_prior_var: f64,
+
+    /// Sigma multiplier for the extrapolation-residual gate used by the
+    /// incremental tracklet linker (`seeding::tracklet_linker`) once a
+    /// track has accumulated ≥2 observations and fit a linear motion model.
+    ///
+    /// Units
+    /// -----
+    /// Dimensionless (multiple of the combined predicted-position standard
+    /// deviation).
+    ///
+    /// Context
+    /// -------
+    /// A candidate observation is linked onto an existing track only if its
+    /// angular distance from the track's linear-motion extrapolation is
+    /// within `tracklet_residual_sigma` standard deviations, where the
+    /// standard deviation is derived from the observations' own
+    /// `ra_error`/`dec_error` and the fit's extrapolation (leverage)
+    /// uncertainty — not a fixed angular constant, so the gate adapts to
+    /// whatever astrometric precision a given survey provides. This only
+    /// applies once a track has a fit (≥2 points); a track with a single
+    /// observation still falls back to the plain pairwise
+    /// `max_angular_speed` gate above, exactly as `generate_pairs` does
+    /// today.
+    ///
+    /// Tuning suggestions
+    /// -------------------
+    /// - Smaller values (e.g. `3.0`) link more conservatively: fewer false
+    ///   cross-object merges, but a real track is more likely to be split
+    ///   into several tracks if a single observation is noisier than usual.
+    /// - Larger values (e.g. `7.0`) tolerate more per-observation noise
+    ///   before splitting a track, at the cost of a slightly higher chance
+    ///   of bridging two different nearby objects into one track.
+    pub tracklet_residual_sigma: f64,
 }
 
 impl Default for PairConfig {
@@ -276,38 +336,71 @@ impl Default for PairConfig {
     /// --------
     /// - `max_dt = 0.06` days (~86.4 minutes)
     /// - `max_angular_speed = 5.0e-2` rad/day (order-of-magnitude)
-    /// - `max_flux_difference = 5.0`
+    /// - `max_mag_difference = 5.0`
     /// - `allow_same_timebin = true`
     fn default() -> Self {
         Self {
             max_dt: 0.06,
             max_angular_speed: 5.0e-2,
-            max_flux_difference: 5.0,
+            max_mag_difference: 5.0,
             allow_same_timebin: true,
+            acc_prior_var: 1.0e-4, // should also englobe NEOs
+            tracklet_residual_sigma: 5.0,
+        }
+    }
+}
+
+impl Validate for PairConfig {
+    /// Validate internal consistency and numeric ranges, accumulating every
+    /// failure found instead of stopping at the first one.
+    fn validate(&self) -> Result<(), Vec<FieldError>> {
+        let mut errors = Vec::new();
+
+        if let Some(e) = check_finite_nonneg(
+            "max_dt",
+            self.max_dt,
+            "set pairs.max_dt to a non-negative duration, e.g. \"86.4 min\" or 0.06 (days)",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_nonneg(
+            "max_angular_speed",
+            self.max_angular_speed,
+            "set pairs.max_angular_speed to a non-negative rate, e.g. \"35 arcmin/day\" or 5.0e-2 (rad/day)",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_nonneg(
+            "max_mag_difference",
+            self.max_mag_difference,
+            "set pairs.max_mag_difference to a non-negative threshold, e.g. 5.0",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_nonneg(
+            "acc_prior_var",
+            self.acc_prior_var,
+            "set pairs.acc_prior_var to a non-negative acceleration variance, e.g. \"1 arcsec/day^2\" or 1.0e-4 (rad/day^2)",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_nonneg(
+            "tracklet_residual_sigma",
+            self.tracklet_residual_sigma,
+            "set pairs.tracklet_residual_sigma to a non-negative sigma multiplier, e.g. 5.0",
+        ) {
+            errors.push(e);
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
         }
     }
 }
 
 impl PairConfig {
-    /// Validate internal consistency and numeric ranges.
-    pub fn validate(&self) -> Result<(), SeedError> {
-        if !self.max_dt.is_finite() || self.max_dt < 0.0 {
-            return Err(SeedError::NonFiniteOrNegativeTime("pairs.max_dt"));
-        }
-        if !self.max_angular_speed.is_finite() || self.max_angular_speed < 0.0 {
-            // Reuse the "angle" error kind for this angular-rate parameter.
-            return Err(SeedError::NonFiniteOrNegativeAngle(
-                "pairs.max_angular_speed",
-            ));
-        }
-        if !self.max_flux_difference.is_finite() || self.max_flux_difference < 0.0 {
-            return Err(SeedError::NonFiniteOrNegativePhotometry(
-                "pairs.max_flux_difference",
-            ));
-        }
-        Ok(())
-    }
-
     /// Conservative maximum separation (radians) used for **spatial neighborhood**
     /// traversal in the bucket index:
     ///
@@ -345,8 +438,8 @@ impl PairConfigBuilder {
     }
 
     /// Set maximum allowed photometric difference (dimensionless).
-    pub fn max_flux_difference(mut self, v: f64) -> Self {
-        self.params.max_flux_difference = v;
+    pub fn max_mag_difference(mut self, v: f64) -> Self {
+        self.params.max_mag_difference = v;
         self
     }
 
@@ -356,13 +449,32 @@ impl PairConfigBuilder {
         self
     }
 
+    /// Set prior variance on the pairwise acceleration.
+    ///
+    /// Units: canonical rad/day² (see [`PairConfig::acc_prior_var`] for
+    /// accepted YAML string forms when loading from a config file — this
+    /// builder setter expects the value already in canonical units).
+    pub fn acc_prior_var(mut self, v: f64) -> Self {
+        self.params.acc_prior_var = v;
+        self
+    }
+
+    /// Set the sigma multiplier for the tracklet linker's extrapolation-residual
+    /// gate (see [`PairConfig::tracklet_residual_sigma`]).
+    pub fn tracklet_residual_sigma(mut self, v: f64) -> Self {
+        self.params.tracklet_residual_sigma = v;
+        self
+    }
+
     /// Finalize builder and validate constraints.
-    pub fn build(self) -> Result<PairConfig, SeedError> {
+    pub fn build(self) -> Result<PairConfig, Vec<FieldError>> {
         let p = PairConfig {
             max_dt: self.params.max_dt,
             max_angular_speed: self.params.max_angular_speed,
-            max_flux_difference: self.params.max_flux_difference,
+            max_mag_difference: self.params.max_mag_difference,
             allow_same_timebin: self.params.allow_same_timebin,
+            acc_prior_var: self.params.acc_prior_var,
+            tracklet_residual_sigma: self.params.tracklet_residual_sigma,
         };
         p.validate()?;
         Ok(p)

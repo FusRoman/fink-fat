@@ -27,10 +27,9 @@
 //! robust against floating-point roundoff, the upper bound `b` is nudged
 //! downward by a small epsilon proportional to the bin width.
 
-use crate::{
-    MJDTT,
-    spacetime_bucket::time_binner::{TimeBin, TimeBinner},
-};
+use photom::MJDTT;
+
+use crate::spacetime_bucket::time_binner::{TimeBin, TimeBinner};
 
 /// Uniform time binner for Modified Julian Date (TT) streams.
 ///

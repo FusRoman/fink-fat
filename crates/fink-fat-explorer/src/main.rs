@@ -1,0 +1,347 @@
+pub mod ades;
+pub mod api;
+pub mod api_docs;
+pub mod best_orbit;
+pub mod bulk_cnd;
+pub mod bulk_cnd_page;
+pub mod bulk_orbit_fit;
+pub mod bulk_orbit_fit_page;
+pub mod bulk_skybot;
+pub mod bulk_skybot_page;
+pub mod cnd_search;
+pub mod cross_match_dashboard;
+pub mod cross_match_status;
+pub mod fit_pipeline;
+pub mod footer;
+pub mod format_epoch;
+mod help_popover;
+pub mod homepage;
+pub mod lineage_page;
+pub mod lsst_band;
+pub mod orbit3d;
+pub mod orbit_fit;
+pub mod orbit_fit_page;
+pub mod skybot_search;
+pub mod submission_dashboard;
+pub mod submitter_config_form;
+pub mod survey;
+
+use dioxus::prelude::*;
+
+#[cfg(feature = "server")]
+use sqlx::postgres::PgPoolOptions;
+#[cfg(feature = "server")]
+use sqlx::PgPool;
+#[cfg(feature = "server")]
+use std::collections::HashMap;
+#[cfg(feature = "server")]
+use std::sync::atomic::{AtomicBool, AtomicU64};
+#[cfg(feature = "server")]
+use std::sync::Mutex;
+#[cfg(feature = "server")]
+use tokio::sync::OnceCell;
+
+use crate::api_docs::ApiDocsPage;
+use crate::bulk_cnd_page::BulkCndPage;
+use crate::bulk_orbit_fit_page::BulkOrbitFitPage;
+use crate::bulk_skybot_page::BulkSkybotPage;
+use crate::cross_match_dashboard::CrossMatchDashboardPage;
+use crate::homepage::Home;
+use crate::lineage_page::LineagePage;
+use crate::orbit_fit_page::OrbitFitPage;
+use crate::submission_dashboard::SubmissionDashboardPage;
+
+/// Platform-agnostic async sleep, for the app's polling loops (orbit fit job
+/// status, homepage snapshot warm-up, search debounce).
+pub async fn sleep_ms(ms: u64) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        gloo_timers::future::TimeoutFuture::new(ms as u32).await;
+    }
+    // `tokio` is only pulled in behind the `server` feature (it doesn't
+    // build for wasm32) — this branch only exists for native builds that
+    // also enable `server` (i.e. `dx serve` running the SSR/liveview
+    // server). A native build with neither `wasm32` nor `server` has no
+    // client to poll from, so there's nothing useful to sleep for.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "server"))]
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+    }
+    #[cfg(all(not(target_arch = "wasm32"), not(feature = "server")))]
+    {
+        let _ = ms;
+    }
+}
+
+#[cfg(feature = "server")]
+static DB_POOL: OnceCell<PgPool> = OnceCell::const_new();
+
+#[cfg(feature = "server")]
+async fn get_pool() -> &'static PgPool {
+    DB_POOL
+        .get_or_init(|| async {
+            dotenvy::dotenv().ok();
+
+            let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+
+            // The homepage snapshot rebuild can hold a connection for a long
+            // time on a large instance; five would let it starve the lineage
+            // page, which fires three concurrent queries per mount.
+            PgPoolOptions::new()
+                .max_connections(16)
+                .acquire_timeout(std::time::Duration::from_secs(30))
+                .connect(&database_url)
+                .await
+                .expect("Failed to connect to Postgres")
+        })
+        .await
+}
+
+/// Shared client for outbound calls to the Fink broker's REST API (alert
+/// cutouts, per-object source metadata) — reused across requests rather than
+/// building a new one per call, per `reqwest`'s own recommendation.
+#[cfg(feature = "server")]
+static HTTP_CLIENT: OnceCell<reqwest::Client> = OnceCell::const_new();
+
+#[cfg(feature = "server")]
+async fn get_http_client() -> &'static reqwest::Client {
+    HTTP_CLIENT
+        .get_or_init(|| async { reqwest::Client::new() })
+        .await
+}
+
+/// The engine's full validated configuration (same `engine_config.best.yaml`
+/// shape the main pipeline loads), read once from `KALMAN_CONFIG_PATH`. The
+/// lineage replay needs more than just the Kalman tuning from this file —
+/// it also needs `seeding_grid_config`/`kfbank_config`/`advance_params` to
+/// replicate the production multi-hypothesis bank rather than a single
+/// circular-orbit guess — so the whole `EngineConfig` is cached here instead
+/// of discarding everything but the derived `KalmanContext`. The path is
+/// required; there is no hard-coded fallback.
+#[cfg(feature = "server")]
+static ENGINE_CONFIG: OnceCell<fink_fat_engine::engine_config::EngineConfig> =
+    OnceCell::const_new();
+
+#[cfg(feature = "server")]
+async fn get_engine_config() -> &'static fink_fat_engine::engine_config::EngineConfig {
+    ENGINE_CONFIG
+        .get_or_init(|| async {
+            dotenvy::dotenv().ok();
+
+            let config_path =
+                std::env::var("KALMAN_CONFIG_PATH").expect("KALMAN_CONFIG_PATH must be set");
+
+            tokio::task::spawn_blocking(move || {
+                use fink_fat_engine::engine_config::EngineConfig;
+
+                EngineConfig::load_engine_config_validated(camino::Utf8Path::new(&config_path))
+                    .expect("failed to load/validate KALMAN_CONFIG_PATH")
+            })
+            .await
+            .expect("EngineConfig load task panicked")
+        })
+        .await
+}
+
+/// Shared Kalman filter runtime (JPL ephemeris + UT1 provider, expensive to
+/// load) derived from [`get_engine_config`], used by every hypothesis in the
+/// lineage replay's bank.
+#[cfg(feature = "server")]
+static KALMAN_CONTEXT: OnceCell<fink_fat_engine::engine_config::kalman_context::KalmanContext> =
+    OnceCell::const_new();
+
+#[cfg(feature = "server")]
+async fn get_kalman_context(
+) -> &'static fink_fat_engine::engine_config::kalman_context::KalmanContext {
+    KALMAN_CONTEXT
+        .get_or_init(|| async {
+            let engine_config = get_engine_config().await;
+            tokio::task::spawn_blocking(|| engine_config.build_context())
+                .await
+                .expect("KalmanContext build task panicked")
+        })
+        .await
+}
+
+/// MPC observatory code -> `Observer` lookup table, fetched once at
+/// startup. Resolved explicitly here (rather than relying on
+/// `photom::ObsDataset`'s own lazy per-lookup MPC-catalogue fetch) so a
+/// resolution failure surfaces as a clear panic/log at startup instead of a
+/// confusing `ObserverIdIsNone` deep inside a replay.
+#[cfg(feature = "server")]
+static OBSERVATORIES: OnceCell<photom::observer::mpc::MpcCodeObs> = OnceCell::const_new();
+
+#[cfg(feature = "server")]
+async fn get_observatories() -> &'static photom::observer::mpc::MpcCodeObs {
+    OBSERVATORIES
+        .get_or_init(|| async {
+            tokio::task::spawn_blocking(|| {
+                photom::observer::mpc::init_observatories(&Default::default())
+            })
+            .await
+            .expect("observatory lookup task panicked")
+            .expect("failed to fetch/parse the MPC observatory list")
+        })
+        .await
+}
+
+/// In-memory registry of in-flight/completed orbit fit jobs (see
+/// `orbit_fit::run::start_orbit_fit`). Job status/logs don't need to survive
+/// a server restart — only the final successful result is persisted, into
+/// the `orbit_fits` Postgres table — so a plain in-memory map is enough,
+/// unlike `DB_POOL`/`KALMAN_CONTEXT` which cache expensive-to-build state.
+#[cfg(feature = "server")]
+static ORBIT_FIT_JOBS: OnceCell<Mutex<HashMap<u64, crate::orbit_fit::OrbitFitJob>>> =
+    OnceCell::const_new();
+
+#[cfg(feature = "server")]
+static NEXT_ORBIT_FIT_JOB_ID: AtomicU64 = AtomicU64::new(1);
+
+#[cfg(feature = "server")]
+async fn get_orbit_fit_jobs() -> &'static Mutex<HashMap<u64, crate::orbit_fit::OrbitFitJob>> {
+    ORBIT_FIT_JOBS
+        .get_or_init(|| async { Mutex::new(HashMap::new()) })
+        .await
+}
+
+/// In-memory registry of in-flight/completed bulk orbit fit jobs (see
+/// `bulk_orbit_fit::run::start_bulk_orbit_fit`) — same rationale as
+/// `ORBIT_FIT_JOBS` above, just for the bulk fit's own job/payload shape.
+#[cfg(feature = "server")]
+static BULK_ORBIT_FIT_JOBS: OnceCell<Mutex<HashMap<u64, crate::bulk_orbit_fit::BulkOrbitFitJob>>> =
+    OnceCell::const_new();
+
+#[cfg(feature = "server")]
+static NEXT_BULK_ORBIT_FIT_JOB_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Only one bulk fit runs at a time — it's a long, CPU-heavy job over every
+/// eligible branch, so a second concurrent run would just contend for the
+/// same cores/DB connections for no benefit.
+#[cfg(feature = "server")]
+static BULK_ORBIT_FIT_RUNNING: AtomicBool = AtomicBool::new(false);
+
+#[cfg(feature = "server")]
+async fn get_bulk_orbit_fit_jobs(
+) -> &'static Mutex<HashMap<u64, crate::bulk_orbit_fit::BulkOrbitFitJob>> {
+    BULK_ORBIT_FIT_JOBS
+        .get_or_init(|| async { Mutex::new(HashMap::new()) })
+        .await
+}
+
+/// In-memory registry of in-flight/completed Skybot search jobs (see
+/// `skybot_search::run::start_skybot_search`) — same rationale as
+/// `ORBIT_FIT_JOBS` above; nothing here needs to survive a restart since a
+/// job's hits only matter to the lineage page currently displaying them.
+#[cfg(feature = "server")]
+static SKYBOT_JOBS: OnceCell<Mutex<HashMap<u64, crate::skybot_search::SkybotJob>>> =
+    OnceCell::const_new();
+
+#[cfg(feature = "server")]
+static NEXT_SKYBOT_JOB_ID: AtomicU64 = AtomicU64::new(1);
+
+#[cfg(feature = "server")]
+async fn get_skybot_jobs() -> &'static Mutex<HashMap<u64, crate::skybot_search::SkybotJob>> {
+    SKYBOT_JOBS
+        .get_or_init(|| async { Mutex::new(HashMap::new()) })
+        .await
+}
+
+/// In-memory registry of in-flight/completed CND search jobs (see
+/// `cnd_search::run::start_cnd_search`) — same rationale as `SKYBOT_JOBS`
+/// above.
+#[cfg(feature = "server")]
+static CND_JOBS: OnceCell<Mutex<HashMap<u64, crate::cnd_search::CndJob>>> = OnceCell::const_new();
+
+#[cfg(feature = "server")]
+static NEXT_CND_JOB_ID: AtomicU64 = AtomicU64::new(1);
+
+#[cfg(feature = "server")]
+async fn get_cnd_jobs() -> &'static Mutex<HashMap<u64, crate::cnd_search::CndJob>> {
+    CND_JOBS
+        .get_or_init(|| async { Mutex::new(HashMap::new()) })
+        .await
+}
+
+/// In-memory registry of in-flight/completed bulk CND jobs (see
+/// `bulk_cnd::run::start_bulk_cnd_check`) — same rationale as
+/// `BULK_ORBIT_FIT_JOBS` above, including its own independent
+/// single-run guard (`BULK_CND_RUNNING`): a bulk CND check and a bulk orbit
+/// fit don't contend for the same resource, so they're allowed to run
+/// concurrently — only two *bulk CND* checks can't overlap.
+#[cfg(feature = "server")]
+static BULK_CND_JOBS: OnceCell<Mutex<HashMap<u64, crate::bulk_cnd::BulkCndJob>>> =
+    OnceCell::const_new();
+
+#[cfg(feature = "server")]
+static NEXT_BULK_CND_JOB_ID: AtomicU64 = AtomicU64::new(1);
+
+#[cfg(feature = "server")]
+static BULK_CND_RUNNING: AtomicBool = AtomicBool::new(false);
+
+#[cfg(feature = "server")]
+async fn get_bulk_cnd_jobs() -> &'static Mutex<HashMap<u64, crate::bulk_cnd::BulkCndJob>> {
+    BULK_CND_JOBS
+        .get_or_init(|| async { Mutex::new(HashMap::new()) })
+        .await
+}
+
+#[derive(Clone, Debug, PartialEq, Routable)]
+enum Route {
+    #[route("/")]
+    Home {},
+
+    #[route("/lineage/:lineage_id")]
+    LineagePage { lineage_id: String },
+
+    #[route("/lineage/:lineage_id/fit")]
+    OrbitFitPage { lineage_id: String },
+
+    #[route("/bulk-fit")]
+    BulkOrbitFitPage {},
+
+    #[route("/bulk-cnd")]
+    BulkCndPage {},
+
+    #[route("/bulk-skybot")]
+    BulkSkybotPage {},
+
+    #[route("/cross-match")]
+    CrossMatchDashboardPage {},
+
+    #[route("/submission")]
+    SubmissionDashboardPage {},
+
+    #[route("/api-docs")]
+    ApiDocsPage {},
+}
+
+fn main() {
+    dioxus::launch(App);
+}
+
+/// The app's root component, mounted once regardless of route.
+///
+/// Every page renders its own `min-h-screen` root inside `Router` — this
+/// wrapper adds the one piece of chrome shared by all of them: the
+/// site-wide [`footer::Footer`]. The `flex-1` div around `Router` is what
+/// makes it a proper sticky footer: a page shorter than the viewport still
+/// pushes the footer to the bottom, while a taller page's own content
+/// scrolls normally with the footer following at the true end of the page.
+#[component]
+fn App() -> Element {
+    rsx! {
+        document::Stylesheet { href: asset!("/assets/main.css") }
+        // The footer's tagline uses this geometric, sci-fi/space-observatory
+        // style font — loaded once, here, rather than per-component, same
+        // as the main stylesheet above.
+        document::Link {
+            rel: "stylesheet",
+            href: "https://fonts.googleapis.com/css2?family=Orbitron:wght@500..700&display=swap",
+        }
+
+        div { class: "min-h-screen flex flex-col",
+            div { class: "flex-1 flex flex-col", Router::<Route> {} }
+            footer::Footer {}
+        }
+    }
+}
