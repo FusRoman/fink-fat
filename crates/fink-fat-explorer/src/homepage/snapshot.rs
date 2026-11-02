@@ -24,6 +24,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
+use dioxus::server::axum::body::Bytes;
 use sqlx::PgPool;
 use tokio::sync::OnceCell;
 
@@ -33,6 +34,8 @@ use crate::homepage::dynamic_pop_plot::PlotSeries;
 use crate::homepage::family::DynamicalFamily;
 use crate::homepage::interaction::SortColumn;
 use crate::homepage::quality_tier::{assign_quality_tier, FitMethod, LatestFit, QualityTier};
+use crate::homepage::series_route::etag_for;
+use crate::homepage::series_wire::{encode_series, SeriesWireError};
 
 /// How long a snapshot is served before a rebuild is triggered in the
 /// background. The data only changes on a `fink-fat convert` re-run, so this
@@ -398,12 +401,17 @@ pub struct Snapshot {
     /// only cost ~20 ms, but paying it once at build time keeps every
     /// interaction bounded by the page size instead of the population.
     sorted: [Vec<u32>; SortColumn::ALL.len()],
-    /// Ready-to-serialize plot series, one per (family, quality tier) pair
-    /// present in the data, ordered by family then tier — the order both
-    /// legends list their chips in. Grouping once here, rather than in the
-    /// browser on every data load, is also what lets the plot ship two flat
-    /// coordinate arrays per series instead of one JSON object per point.
-    pub series: Vec<PlotSeries>,
+    /// The (a, e) plot's series, already encoded with
+    /// [`crate::homepage::series_wire::encode_series`]: one series per
+    /// (family, quality tier) pair present in the data, ordered by family then
+    /// tier — the order both legends list their chips in. Encoded once here so
+    /// a request only clones this reference-counted buffer instead of cloning
+    /// and serializing the whole population.
+    pub series_payload: Bytes,
+    /// HTTP entity tag of [`Snapshot::series_payload`], derived from its
+    /// content (see [`crate::homepage::series_route::etag_for`]): a rebuild
+    /// over unchanged data keeps it, so browsers keep their cached copy.
+    pub series_etag: Box<str>,
     pub n_branches: i64,
     pub n_hypotheses: i64,
     pub n_lineages: i64,
@@ -507,7 +515,18 @@ fn spawn_rebuild() {
     });
 }
 
-async fn build() -> Result<Snapshot, sqlx::Error> {
+/// Why a snapshot build failed. The previous snapshot, if any, stays served.
+#[derive(Debug, thiserror::Error)]
+pub enum SnapshotBuildError {
+    /// One of the build queries failed.
+    #[error(transparent)]
+    Sql(#[from] sqlx::Error),
+    /// The (a, e) plot series could not be encoded.
+    #[error(transparent)]
+    Series(#[from] SeriesWireError),
+}
+
+async fn build() -> Result<Snapshot, SnapshotBuildError> {
     let pool = get_pool().await;
 
     let rows: Vec<SnapshotRow> = sqlx::query_as(SNAPSHOT_QUERY).fetch_all(pool).await?;
@@ -530,7 +549,7 @@ async fn build() -> Result<Snapshot, sqlx::Error> {
         n_archived,
         &quality,
         &best_orbits,
-    ))
+    )?)
 }
 
 /// Turns raw rows into the indexed, pre-sorted structure the server functions
@@ -543,13 +562,17 @@ async fn build() -> Result<Snapshot, sqlx::Error> {
 ///   `orbit_fits` row over its Kalman-bank state for the (a, e) plot's
 ///   position and the family badge, matching the identity card's own
 ///   n-body-over-IOD-over-Kalman priority.
+///
+/// # Errors
+///
+/// [`SeriesWireError`] if the (a, e) plot series cannot be encoded.
 fn assemble(
     rows: Vec<SnapshotRow>,
     n_hypotheses: i64,
     n_archived: i64,
     quality: &QualityIndex,
     best_orbits: &HashMap<i64, crate::best_orbit::OrbitCandidate>,
-) -> Snapshot {
+) -> Result<Snapshot, SeriesWireError> {
     let mut branches: Vec<BranchRow> = rows
         .into_iter()
         .map(|row| {
@@ -639,24 +662,26 @@ fn assemble(
     }
 
     let sorted = build_orders(&branches, &lineages);
-    let series = build_series(&branches);
+    let series_payload = Bytes::from(encode_series(&build_series(&branches))?);
+    let series_etag = etag_for(&series_payload).into_boxed_str();
 
     let n_branches = branches.len() as i64;
     let n_lineages = lineages.len() as i64;
 
-    Snapshot {
+    Ok(Snapshot {
         branches,
         lineages,
         others_idx,
         sorted,
-        series,
+        series_payload,
+        series_etag,
         n_branches,
         n_hypotheses,
         n_lineages,
         n_archived,
         version: NEXT_VERSION.fetch_add(1, Ordering::SeqCst),
         built_at: Instant::now(),
-    }
+    })
 }
 
 /// One ascending permutation of `lineages` per sortable column.
@@ -953,7 +978,7 @@ mod tests {
     /// grouping, sorting, search, paging) uses.
     fn assemble_default(rows: Vec<SnapshotRow>, n_hypotheses: i64, n_archived: i64) -> Snapshot {
         let quality = all_not_fitted(&rows);
-        assemble(rows, n_hypotheses, n_archived, &quality, &HashMap::new())
+        assemble(rows, n_hypotheses, n_archived, &quality, &HashMap::new()).expect("assembles")
     }
 
     #[test]
@@ -1147,13 +1172,19 @@ mod tests {
             0,
         );
 
-        let families: Vec<DynamicalFamily> = snap.series.iter().map(|s| s.family).collect();
+        let series = crate::homepage::series_wire::decode_series(&snap.series_payload)
+            .expect("snapshot payload decodes");
+        let families: Vec<DynamicalFamily> = series.iter().map(|s| s.family).collect();
         assert_eq!(
             families,
             vec![DynamicalFamily::NeaApollo, DynamicalFamily::Trojan]
         );
-        assert_eq!(snap.series[0].a.len(), 2);
-        assert_eq!(snap.series[1].a.len(), 1);
+        assert_eq!(series[0].a.len(), 2);
+        assert_eq!(series[1].a.len(), 1);
+        assert_eq!(
+            series[0].lineage_designations,
+            vec![Box::from("L20"), Box::from("L30")]
+        );
     }
 
     /// Mirrors `hidden_families_are_matched_against_the_best_branch_only`:
@@ -1173,7 +1204,7 @@ mod tests {
             well_sampled_nights: HashMap::new(),
             cross_match: HashSet::new(),
         };
-        let snap = assemble(rows, 0, 0, &quality, &HashMap::new());
+        let snap = assemble(rows, 0, 0, &quality, &HashMap::new()).expect("assembles");
 
         assert_eq!(
             snap.branches[snap.lineages[0].best as usize].quality_tier,
@@ -1221,7 +1252,7 @@ mod tests {
             well_sampled_nights: HashMap::new(),
             cross_match: HashSet::new(),
         };
-        let snap = assemble(rows, 0, 0, &quality, &HashMap::new());
+        let snap = assemble(rows, 0, 0, &quality, &HashMap::new()).expect("assembles");
 
         // Default click direction (`SortDirection::Desc`) must surface the
         // best tier first, exactly like every other column's "larger first"

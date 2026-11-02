@@ -50,10 +50,17 @@ tokio = { version = "1.53.1", features = [
     "macros",
     "time",
 ], optional = true }
+# HTTP response compression (gzip/brotli/zstd) layered over the Dioxus
+# router in `main.rs`. Same major version as the one dioxus-server uses.
+tower-http = { version = "0.6", features = [
+    "compression-br",
+    "compression-gzip",
+    "compression-zstd",
+], optional = true }
 # The homepage snapshot rebuilds in a detached task, so a failed rebuild has
 # no request to report itself through — it needs a log line.
 tracing = { workspace = true, optional = true }
-web-sys = { version = "0.3.104", features = ["console"] }
+web-sys = { version = "0.3.104", features = ["console", "Response", "Window"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 gloo-timers = { version = "0.3", features = ["futures"] }
@@ -62,6 +69,10 @@ gloo-timers = { version = "0.3", features = ["futures"] }
 # API, so `homepage::dynamic_pop_plot` calls straight into a small inline JS
 # helper for this one event.
 wasm-bindgen = "0.2"
+# The homepage's population series is fetched with a plain browser `fetch`
+# GET (cacheable, unlike a server function's POST) and read back as bytes.
+js-sys = "0.3"
+wasm-bindgen-futures = "0.4"
 
 [features]
 default = ["web"]
@@ -83,6 +94,7 @@ server = [
     "dep:rand",
     "dep:rayon",
     "dep:reqwest",
+    "dep:tower-http",
     "dep:tracing"
 ]
 

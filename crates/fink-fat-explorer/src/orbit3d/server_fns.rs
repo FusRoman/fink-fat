@@ -64,8 +64,9 @@ pub async fn get_planets_3d() -> Result<Vec<Body3D>, ServerFnError> {
 /// One point per lineage — its best branch's current heliocentric position —
 /// for the homepage's 3D scatter, plus how many lineages could not be placed.
 /// `None` while the homepage snapshot is still (re)building, mirroring
-/// `homepage::dynamic_pop_plot::query_orbital_elements`'s own "warming up"
-/// contract so both plots poll the same way.
+/// the (a, e) plot's own "warming up" contract
+/// (`homepage::dynamic_pop_plot::use_population_series`) so both plots poll
+/// the same way.
 ///
 /// A lineage whose best state is not a closed ellipse has no orbit to
 /// position it on; it is left out and counted in

@@ -8,6 +8,9 @@ mod orbit3d_population_glossary;
 mod population_plot_glossary;
 pub mod quality_tier;
 #[cfg(feature = "server")]
+pub mod series_route;
+pub mod series_wire;
+#[cfg(feature = "server")]
 pub mod snapshot;
 pub mod stats_count;
 mod tools_menu;

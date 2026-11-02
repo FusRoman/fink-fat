@@ -8,7 +8,7 @@
 //!
 //! [`server_fns`] holds the `#[server]` functions the wasm client calls: like
 //! every other `#[server]` function in this crate (see
-//! `homepage::dynamic_pop_plot::query_orbital_elements`), its *declaration*
+//! `homepage::stats_count::get_stats`), its *declaration*
 //! must exist on both targets — the macro compiles the real body only under
 //! the `server` feature and a client-calling stub otherwise — so this module
 //! is *not* itself feature-gated.
