@@ -44,23 +44,79 @@
 //! See also
 //! --------
 //! - `seeding::pairs` – produces `(a, b)` candidates.
-//! - [`SeedNode::from_triplet`] – constructs a quadratic tangent-plane seed.
 //! - `spacetime_bucket::bucket` – bucket index and per-bucket time ordering.
 
+use std::f64::consts::PI;
+
 use ahash::{AHashMap, AHashSet};
+use photom::{
+    Radians, coordinates::cartesian::CartesianCoord, observation_dataset::observation::Observation,
+};
 
 use crate::{
-    Alert,
-    astro_math::{dot3, planar_offset_fast, unit_vec},
     engine_config::triplet_config::TripletConfig,
-    night_id::NightId,
-    seeding::{SeedNode, pairs::Pair, store::SeedStore},
+    seeding::pairs::{Pair, SeedingEvent},
     spacetime_bucket::{
         bucket::{BucketIndex, BucketKey},
         spatial_binner::{SpatialBinner, SpatialKey},
         time_binner::{TimeBin, TimeBinner, time_targets},
     },
 };
+
+/// Wrap an angle into the interval $(-\pi, \pi]$.
+///
+/// Useful when computing RA differences that should be taken modulo $2\pi$.
+///
+/// # Arguments
+///
+/// - `x` – Input angle in radians (unbounded).
+///
+/// # Returns
+///
+/// Angle in radians, $y \in (-\pi, \pi]$.
+#[inline]
+pub fn wrap_pm_pi(x: Radians) -> Radians {
+    let two_pi = 2.0 * PI;
+    let mut y = (x + PI) % two_pi;
+    if y < 0.0 {
+        y += two_pi;
+    }
+    y - PI
+}
+
+/// Compute tangent-plane offsets around `(ra0, dec0)` using a precomputed `cos(dec0)`.
+///
+/// This routine projects a target position `(ra, dec)` onto the local tangent
+/// plane centered at `(ra0, dec0)`. It is intended for **small angular
+/// separations**, where a Cartesian approximation is sufficient.
+///
+/// The offsets are:
+/// - `dx = wrap_pm_pi(ra − ra0) * cos(dec0)`
+/// - `dy = dec − dec0`
+///
+/// # Arguments
+///
+/// - `ra0` – Center right ascension (radians).
+/// - `dec0` – Center declination (radians).
+/// - `cos_dec0` – Precomputed cosine of `dec0`, i.e. `dec0.cos()`.
+/// - `ra` – Target right ascension (radians).
+/// - `dec` – Target declination (radians).
+///
+/// # Returns
+///
+/// `(dx, dy)` tangent-plane offsets in **radians**.
+#[inline]
+pub fn planar_offset_fast(
+    ra0: Radians,
+    dec0: Radians,
+    cos_dec0: f64,
+    ra: Radians,
+    dec: Radians,
+) -> (Radians, Radians) {
+    let dx = wrap_pm_pi(ra - ra0) * cos_dec0;
+    let dy = dec - dec0;
+    (dx, dy)
+}
 
 /// A seed made of three detections with strictly increasing observation times.
 ///
@@ -73,11 +129,11 @@ use crate::{
 #[derive(Copy, Clone, Debug)]
 pub struct Triplet<'alert_lf> {
     /// First detection (earliest epoch).
-    pub a: &'alert_lf Alert,
+    pub a: &'alert_lf Observation,
     /// Second detection (middle epoch).
-    pub b: &'alert_lf Alert,
+    pub b: &'alert_lf Observation,
     /// Third detection (latest epoch).
-    pub c: &'alert_lf Alert,
+    pub c: &'alert_lf Observation,
 }
 
 /// Convenience alias: a flat list of triplets.
@@ -91,8 +147,8 @@ pub type Triplets<'alert_lf> = Vec<Triplet<'alert_lf>>;
 /// expensive (HEALPix cone coverage). We cache `neighbors(center, radius)`
 /// keyed by the center spatial cell.
 ///
-/// Notes
-/// -----
+/// # Notes
+///
 /// The resulting list is sorted and deduplicated to guarantee deterministic
 /// iteration and avoid redundant bucket scans even if a binner implementation
 /// returns duplicates.
@@ -116,13 +172,11 @@ fn cached_spatial_neighbors<'cache, Bs: SpatialBinner>(
 /// For triplets we require `t_c > t_b`. We therefore generate **strictly later**
 /// time bins relative to `b` by calling `time_targets(..., allow_same_bin=false)`.
 ///
-/// Parameters
-/// ----------
-/// base_time_bin : TimeBin
-///     The time bin of detection `b`.
-/// cfg : &TripletConfig
-///     Triplet configuration, notably `max_dt_between` which defines how far in
-///     time we are willing to search for `c`.
+/// # Arguments
+///
+/// - `base_time_bin` — the time bin of detection `b`.
+/// - `cfg` — triplet configuration, notably `max_dt_between` which defines how far in
+///   time we are willing to search for `c`.
 #[inline]
 fn cached_time_targets_strictly_after<'cache, Bt: TimeBinner>(
     cache: &'cache mut AHashMap<TimeBin, Vec<TimeBin>>,
@@ -143,12 +197,12 @@ fn cached_time_targets_strictly_after<'cache, Bt: TimeBinner>(
 ///
 /// Assumes `members` are sorted by time (guaranteed by `build_alert_bucket_index`).
 #[inline]
-fn lower_bound_gt_time(members: &[&Alert], t0: f64) -> usize {
+fn lower_bound_gt_time(members: &[&Observation], t0: f64) -> usize {
     let mut lo = 0usize;
     let mut hi = members.len();
     while lo < hi {
         let mid = (lo + hi) / 2;
-        if members[mid].mjd_tt <= t0 {
+        if members[mid].mjd_tt() <= t0 {
             lo = mid + 1;
         } else {
             hi = mid;
@@ -182,36 +236,29 @@ fn lower_bound_gt_time(members: &[&Alert], t0: f64) -> usize {
 ///    - keep if `resid <= max_predicted_residual`.
 /// 6. Deduplicate `(a, b, c)` by pointer identity and push to output.
 ///
-/// Parameters
-/// ----------
-/// index : &BucketIndex<&Alert>
-///     Spatio-temporal bucket index over alerts. Bucket members must be sorted
-///     by time (as built by `build_alert_bucket_index`).
-/// sb : &impl SpatialBinner
-///     Spatial binner used to compute neighbor cells around `b`.
-/// tb : &impl TimeBinner
-///     Time binner used to select time bins strictly after `b`.
-/// cfg : &TripletConfig
-///     Triplet-generation parameters (time window, spatial radius, flux gate,
-///     pair angular gate, prediction residual threshold, etc.).
-/// pairs : &[Pair]
-///     Precomputed valid pairs `(a, b)` from which triplets are extended.
+/// # Arguments
 ///
-/// Returns
-/// -------
-/// Triplets
-///     Deduplicated, deterministically sorted list of `(a, b, c)` triplets.
+/// - `index` — spatio-temporal bucket index over alerts; bucket members must be sorted
+///   by time (as built by `build_alert_bucket_index`).
+/// - `sb` — spatial binner used to compute neighbor cells around `b`.
+/// - `tb` — time binner used to select time bins strictly after `b`.
+/// - `cfg` — triplet-generation parameters (time window, spatial radius, flux gate,
+///   pair angular gate, prediction residual threshold, etc.).
+/// - `pairs` — precomputed valid pairs `(a, b)` from which triplets are extended.
 ///
-/// Notes
-/// -----
-/// - The spatial search radius is `cfg.max_pair_sep + sb.cell_radius()` to ensure
-///   we cover cell boundary effects during bucket-based searches.
-/// - The angular gate `ang_sep(b, c) <= cfg.max_pair_sep` is implemented via a
-///   dot-product threshold (`cos_pair_threshold`) to avoid `acos`.
-/// - The linear prediction uses a small-angle approximation around `a`. It is
-///   intended only as a fast prefilter.
+/// # Returns
+///
+/// Deduplicated, deterministically sorted list of `(a, b, c)` triplets.
+///
+/// # Notes
+///
+/// The spatial search radius is `cfg.max_pair_sep + sb.cell_radius()` to ensure
+/// coverage of cell boundary effects during bucket-based searches. The angular gate
+/// `ang_sep(b, c) <= cfg.max_pair_sep` is implemented via a dot-product threshold
+/// to avoid `acos`. The linear prediction uses a small-angle approximation around
+/// `a` and is intended only as a fast prefilter.
 pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
-    index: &BucketIndex<&'alert_lf Alert>,
+    index: &BucketIndex<&'alert_lf Observation>,
     sb: &Bs,
     tb: &Bt,
     cfg: &TripletConfig,
@@ -223,16 +270,16 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
     // Dot-product threshold for ang_sep(b,c) <= max_pair_sep.
     let cos_pair_threshold = cfg.max_pair_sep.cos();
 
-    tracing::debug!(
-        n_input_pairs = pairs.len(),
-        max_dt_between = cfg.max_dt_between,
-        max_pair_sep = cfg.max_pair_sep,
-        max_predicted_residual = cfg.max_predicted_residual,
-        max_flux_difference = cfg.max_flux_difference,
-        enforce_time_order = cfg.enforce_time_order,
+    SeedingEvent::TripletsStart {
+        n_input_pairs: pairs.len(),
+        max_dt_between: cfg.max_dt_between,
+        max_pair_sep: cfg.max_pair_sep,
+        max_predicted_residual: cfg.max_predicted_residual,
+        max_mag_difference: cfg.max_mag_difference,
+        enforce_time_order: cfg.enforce_time_order,
         search_radius,
-        "generate_triplets_from_pairs starting",
-    );
+    }
+    .emit();
 
     let mut spatial_neighbor_cache: AHashMap<SpatialKey, Vec<SpatialKey>> = AHashMap::new();
     let mut timebin_target_cache: AHashMap<TimeBin, Vec<TimeBin>> = AHashMap::new();
@@ -251,30 +298,36 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
 
     for &Pair { a, b } in pairs {
         // Optional enforcement: require strict ordering on the input pairs.
-        if cfg.enforce_time_order && a.mjd_tt >= b.mjd_tt {
+        if cfg.enforce_time_order && a.mjd_tt() >= b.mjd_tt() {
             n_skipped_time_order += 1;
             continue;
         }
 
         // We predict from (a,b), so dt_ab must be strictly positive.
-        let dt_ab = b.mjd_tt - a.mjd_tt;
+        let dt_ab = b.mjd_tt() - a.mjd_tt();
         if dt_ab <= 0.0 {
             continue;
         }
 
         // Linear motion estimate from (a,b) on a tangent plane around `a`.
-        let cos_dec_a = a.dec.cos();
-        let (dx_ab, dy_ab) = planar_offset_fast(a.ra, a.dec, cos_dec_a, b.ra, b.dec);
+        let cos_dec_a = a.equ_coord().dec.cos();
+        let (dx_ab, dy_ab) = planar_offset_fast(
+            a.equ_coord().ra,
+            a.equ_coord().dec,
+            cos_dec_a,
+            b.equ_coord().ra,
+            b.equ_coord().dec,
+        );
         let vx = dx_ab / dt_ab; // rad/day on tangent plane (x)
         let vy = dy_ab / dt_ab; // rad/day on tangent plane (y)
 
         // Precompute values reused across candidate `c`.
-        let u_b = unit_vec(b.ra, b.dec);
-        let flux_b = b.flux;
+        let u_b: CartesianCoord = b.equ_coord().into();
+        let magnitude_b = b.photometry().magnitude;
 
         // Neighbor bucket keys around `b`.
-        let b_space_key = sb.key_for(b.ra, b.dec);
-        let b_time_bin = tb.bin_for(b.mjd_tt);
+        let b_space_key = sb.key_for(b.equ_coord());
+        let b_time_bin = tb.bin_for(b.mjd_tt());
 
         let spatial_neighbors =
             cached_spatial_neighbors(&mut spatial_neighbor_cache, sb, b_space_key, search_radius);
@@ -282,7 +335,7 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
         let time_bins =
             cached_time_targets_strictly_after(&mut timebin_target_cache, tb, b_time_bin, cfg);
 
-        let t_b = b.mjd_tt;
+        let t_b = b.mjd_tt();
         let t_upper = t_b + cfg.max_dt_between;
 
         // Scan candidate buckets (time bins strictly after b).
@@ -302,7 +355,7 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
                     let c = members[idx];
                     idx += 1;
 
-                    let t_c = c.mjd_tt;
+                    let t_c = c.mjd_tt();
                     if t_c > t_upper {
                         break;
                     }
@@ -313,20 +366,20 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
                     }
 
                     // Flux similarity between b and c.
-                    if (flux_b - c.flux).abs() > cfg.max_flux_difference {
+                    if (magnitude_b - c.photometry().magnitude).abs() > cfg.max_mag_difference {
                         n_rejected_flux += 1;
                         continue;
                     }
 
                     // Pairwise angular consistency: ang_sep(b,c) <= max_pair_sep
-                    let u_c = unit_vec(c.ra, c.dec);
-                    if dot3(u_b, u_c) < cos_pair_threshold {
+                    let u_c: CartesianCoord = c.equ_coord().into();
+                    if u_b.dot(&u_c) < cos_pair_threshold {
                         n_rejected_angular += 1;
                         continue;
                     }
 
                     // Predict from (a,b) to epoch t_c.
-                    let dt_ac = t_c - a.mjd_tt;
+                    let dt_ac = t_c - a.mjd_tt();
                     if dt_ac <= 0.0 {
                         continue;
                     }
@@ -334,13 +387,24 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
                     // Predicted RA/Dec at t_c (small-angle approximation around `a`):
                     // - vx is tangent-plane x where dx ~ cos(dec_a) * dRA,
                     // - so dRA_pred ~ vx * dt / cos(dec_a).
-                    let ra_pred = a.ra + vx * dt_ac / cos_dec_a.max(1e-12);
-                    let dec_pred = a.dec + vy * dt_ac;
+                    let ra_pred = a.equ_coord().ra + vx * dt_ac / cos_dec_a.max(1e-12);
+                    let dec_pred = a.equ_coord().dec + vy * dt_ac;
 
                     // Compare predicted vs actual c on the tangent plane around `a`.
-                    let (dx_act, dy_act) = planar_offset_fast(a.ra, a.dec, cos_dec_a, c.ra, c.dec);
-                    let (dx_pred, dy_pred) =
-                        planar_offset_fast(a.ra, a.dec, cos_dec_a, ra_pred, dec_pred);
+                    let (dx_act, dy_act) = planar_offset_fast(
+                        a.equ_coord().ra,
+                        a.equ_coord().dec,
+                        cos_dec_a,
+                        c.equ_coord().ra,
+                        c.equ_coord().dec,
+                    );
+                    let (dx_pred, dy_pred) = planar_offset_fast(
+                        a.equ_coord().ra,
+                        a.equ_coord().dec,
+                        cos_dec_a,
+                        ra_pred,
+                        dec_pred,
+                    );
 
                     let resid = ((dx_act - dx_pred).powi(2) + (dy_act - dy_pred).powi(2)).sqrt();
                     if resid > cfg.max_predicted_residual {
@@ -350,9 +414,9 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
 
                     // Dedup + push.
                     let key = (
-                        a as *const Alert as usize,
-                        b as *const Alert as usize,
-                        c as *const Alert as usize,
+                        a as *const Observation as usize,
+                        b as *const Observation as usize,
+                        c as *const Observation as usize,
                     );
                     if seen.insert(key) {
                         out.push(Triplet { a, b, c });
@@ -371,43 +435,16 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
             .then_with(|| t1.c.cmp(t2.c))
     });
 
-    tracing::debug!(
-        n_triplets = out.len(),
+    SeedingEvent::TripletsComplete {
+        n_triplets: out.len(),
         n_skipped_time_order,
         n_rejected_flux,
         n_rejected_angular,
         n_rejected_residual,
         n_dedup_skipped,
-        "generate_triplets_from_pairs complete",
-    );
-
-    out
-}
-
-/// Convert triplets into quadratic [`SeedNode`] objects for a given night.
-///
-/// This is a thin wrapper around [`SeedNode::from_triplet`].
-///
-/// Parameters
-/// ----------
-/// trips : &Triplets
-///     Triplets produced by [`generate_triplets_from_pairs`].
-/// night_id : NightId
-///     Night identifier assigned to all output seeds.
-///
-/// Returns
-/// -------
-/// `Vec<SeedNode>`
-///     One seed per triplet, preserving input order.
-pub fn extract_triplet_features<'alert_lf>(
-    trips: &Triplets<'alert_lf>,
-    seed_store: &mut SeedStore,
-    night_id: NightId,
-) -> Vec<SeedNode> {
-    let mut out = Vec::with_capacity(trips.len());
-    for &Triplet { a, b, c } in trips.iter() {
-        out.push(SeedNode::from_triplet(seed_store, night_id, a, b, c));
     }
+    .emit();
+
     out
 }
 
@@ -418,9 +455,17 @@ mod triplet_gen_tests {
     use std::collections::HashSet;
     use std::f64::consts::PI;
 
+    use photom::{
+        Arcseconds, MJDTT, Radians,
+        coordinates::equatorial::EquCoord,
+        observation_dataset::{
+            ObsDataset,
+            observation::{Observation, ObservationInput},
+        },
+        photometry::{Filter, Photometry as PhotomPhotometry},
+    };
+
     use crate::{
-        AlertKey, MJDTT, Radian,
-        astro_math::{angular_separation_vincenty, arcsec_to_rad, planar_offset_fast},
         engine_config::triplet_config::TripletConfig,
         spacetime_bucket::{
             bucket::build_alert_bucket_index,
@@ -431,30 +476,30 @@ mod triplet_gen_tests {
 
     const LAT_EPS: f64 = 1e-6;
 
+    #[inline]
+    pub fn arcsec_to_rad(x: Arcseconds) -> Radians {
+        x * PI / (180.0 * 3600.0)
+    }
+
     /* ------------------------- dummy binners ------------------------- */
 
     /// Dummy spatial binner: everything goes to a single spatial cell.
     struct DummySpatialBinner;
 
     impl SpatialBinner for DummySpatialBinner {
-        fn key_for(&self, _ra: Radian, _dec: Radian) -> SpatialKey {
+        fn key_for(&self, _e: &EquCoord) -> SpatialKey {
             SpatialKey(0)
         }
 
-        fn neighbors(&self, _key: SpatialKey, _ang_radius: Radian) -> Vec<SpatialKey> {
+        fn neighbors(&self, _key: SpatialKey, _ang_radius: f64) -> Vec<SpatialKey> {
             vec![SpatialKey(0)]
         }
 
-        fn cell_radius(&self) -> Radian {
+        fn cell_radius(&self) -> f64 {
             0.0
         }
 
-        fn neighbors_into(
-            &self,
-            _key: SpatialKey,
-            _ang_radius: Radian,
-            _out: &mut Vec<SpatialKey>,
-        ) {
+        fn neighbors_into(&self, _key: SpatialKey, _ang_radius: f64, _out: &mut Vec<SpatialKey>) {
             // Not needed in these tests.
             unimplemented!()
         }
@@ -495,23 +540,30 @@ mod triplet_gen_tests {
 
     /* ------------------------- helpers ------------------------- */
 
-    fn mk_alert(i: usize, ra: f64, dec: f64, mjd_tt: f64, band: u8, flux: f64) -> Alert {
+    fn mk_observation(
+        i: usize,
+        ra: f64,
+        dec: f64,
+        mjd_tt: f64,
+        band: u8,
+        flux: f64,
+    ) -> Observation {
+        let obs_dataset = ObsDataset::empty();
         let pos_err = arcsec_to_rad(0.5);
-        Alert {
-            key: AlertKey {
-                night_id: NightId(0),
-                dia_source_id: i as u64,
-            },
-            ra,
-            ra_err: pos_err,
-            dec,
-            dec_err: pos_err,
-            mjd_tt,
-            flux,
-            flux_err: 0.0,
-            band,
-            ..Default::default()
-        }
+        let equ_coord = EquCoord::new(ra, pos_err, dec, pos_err);
+        let photometry = PhotomPhotometry {
+            magnitude: flux,
+            error: 0.0,
+            filter: Filter::Int(band as u32),
+        };
+
+        let input = ObservationInput::new(i as u64, equ_coord, photometry, mjd_tt, None);
+        let (obs_dataset, obs_id) = obs_dataset.push_observation(vec![input]).unwrap();
+        let observation = obs_dataset
+            .get_obs_by_index(*obs_id.get(0).unwrap())
+            .unwrap()
+            .clone();
+        observation
     }
 
     fn mk_triplet_config(
@@ -524,20 +576,23 @@ mod triplet_gen_tests {
             max_pair_sep: arcsec_to_rad(max_pair_sep_arcsec),
             max_predicted_residual: arcsec_to_rad(max_residual_arcsec),
             enforce_time_order: true,
-            max_flux_difference: 5.0,
+            max_mag_difference: 5.0,
             ..TripletConfig::default()
         }
     }
 
-    fn ptr2(a: &Alert, b: &Alert) -> (usize, usize) {
-        (a as *const Alert as usize, b as *const Alert as usize)
+    fn ptr2(a: &Observation, b: &Observation) -> (usize, usize) {
+        (
+            a as *const Observation as usize,
+            b as *const Observation as usize,
+        )
     }
 
-    fn ptr3(a: &Alert, b: &Alert, c: &Alert) -> (usize, usize, usize) {
+    fn ptr3(a: &Observation, b: &Observation, c: &Observation) -> (usize, usize, usize) {
         (
-            a as *const Alert as usize,
-            b as *const Alert as usize,
-            c as *const Alert as usize,
+            a as *const Observation as usize,
+            b as *const Observation as usize,
+            c as *const Observation as usize,
         )
     }
 
@@ -553,9 +608,9 @@ mod triplet_gen_tests {
         let dec0: f64 = 0.25;
         let dr = arcsec_to_rad(6.0) / dec0.cos();
 
-        let a = mk_alert(0, 1.0, dec0, t0, 1, 1000.0);
-        let b = mk_alert(1, 1.0 + dr, dec0, t0 + 10.0 / 1440.0, 1, 1000.0);
-        let c = mk_alert(2, 1.0 + 2.0 * dr, dec0, t0 + 20.0 / 1440.0, 1, 1000.0);
+        let a = mk_observation(0, 1.0, dec0, t0, 1, 1000.0);
+        let b = mk_observation(1, 1.0 + dr, dec0, t0 + 10.0 / 1440.0, 1, 1000.0);
+        let c = mk_observation(2, 1.0 + 2.0 * dr, dec0, t0 + 20.0 / 1440.0, 1, 1000.0);
 
         let alerts = vec![a, b, c];
         let index = build_alert_bucket_index(&alerts, &sb, &tb);
@@ -598,11 +653,11 @@ mod triplet_gen_tests {
         let dec0: f64 = 0.2;
         let dr = arcsec_to_rad(6.0) / dec0.cos();
 
-        let a = mk_alert(0, 2.0, dec0, t0, 1, 1000.0);
-        let b = mk_alert(1, 2.0 + dr, dec0, t0 + 10.0 / 1440.0, 1, 1000.0);
+        let a = mk_observation(0, 2.0, dec0, t0, 1, 1000.0);
+        let b = mk_observation(1, 2.0 + dr, dec0, t0 + 10.0 / 1440.0, 1, 1000.0);
 
         // Deviate by ~40" in RA.
-        let c = mk_alert(
+        let c = mk_observation(
             2,
             2.0 + 2.0 * dr + arcsec_to_rad(40.0) / dec0.cos(),
             dec0,
@@ -645,10 +700,10 @@ mod triplet_gen_tests {
         let dec: f64 = 0.25;
         let dr = arcsec_to_rad(8.0) / dec.cos();
 
-        let a = mk_alert(0, 0.6, dec, t0, 1, 1000.0);
-        let b = mk_alert(1, 0.6 + dr, dec, t0 + 10.0 / 1440.0, 1, 1000.0);
-        let c = mk_alert(2, 0.6 + 2.0 * dr, dec, t0 + 20.0 / 1440.0, 1, 1000.0);
-        let d = mk_alert(3, 2.5, 0.0, t0 + 5.0 / 1440.0, 1, 1000.0); // noise
+        let a = mk_observation(0, 0.6, dec, t0, 1, 1000.0);
+        let b = mk_observation(1, 0.6 + dr, dec, t0 + 10.0 / 1440.0, 1, 1000.0);
+        let c = mk_observation(2, 0.6 + 2.0 * dr, dec, t0 + 20.0 / 1440.0, 1, 1000.0);
+        let d = mk_observation(3, 2.5, 0.0, t0 + 5.0 / 1440.0, 1, 1000.0); // noise
 
         let alerts = vec![a, b, c, d];
         let index = build_alert_bucket_index(&alerts, &sb, &tb);
@@ -712,8 +767,8 @@ mod triplet_gen_tests {
             );
 
             // Same flux to simplify, still keep flux check.
-            let alerts: Vec<Alert> = samples.iter().enumerate()
-                .map(|(i, (ra, dec, t))| mk_alert(i, *ra, *dec, *t, 1, 1000.0))
+            let alerts: Vec<Observation> = samples.iter().enumerate()
+                .map(|(i, (ra, dec, t))| mk_observation(i, *ra, *dec, *t, 1, 1000.0))
                 .collect();
 
             let index = build_alert_bucket_index(&alerts, &sb, &tb);
@@ -724,11 +779,11 @@ mod triplet_gen_tests {
                 for j in (i+1)..alerts.len() {
                     let a = &alerts[i];
                     let b = &alerts[j];
-                    let dt = b.mjd_tt - a.mjd_tt;
+                    let dt = b.mjd_tt() - a.mjd_tt();
                     if dt <= 0.0 || dt > cfg.max_dt_between {
                         continue;
                     }
-                    let d = angular_separation_vincenty(a.ra, a.dec, b.ra, b.dec);
+                    let d = a.equ_coord().angular_separation(&b.equ_coord());
                     if d > cfg.max_pair_sep {
                         continue;
                     }
@@ -750,139 +805,43 @@ mod triplet_gen_tests {
                 prop_assert!(pair_set.contains(&ptr2(a, b)));
 
                 // Time ordering.
-                prop_assert!(a.mjd_tt < b.mjd_tt);
-                prop_assert!(b.mjd_tt < c.mjd_tt);
+                prop_assert!(a.mjd_tt() < b.mjd_tt());
+                prop_assert!(b.mjd_tt() < c.mjd_tt());
 
-                let dt_ab = b.mjd_tt - a.mjd_tt;
-                let dt_bc = c.mjd_tt - b.mjd_tt;
+                let dt_ab = b.mjd_tt() - a.mjd_tt();
+                let dt_bc = c.mjd_tt() - b.mjd_tt();
 
                 // Time constraints.
                 prop_assert!(dt_ab <= cfg.max_dt_between + 1e-12);
                 prop_assert!(dt_bc <= cfg.max_dt_between + 1e-12);
 
                 // Angular constraints on (b,c).
-                let dbc = angular_separation_vincenty(b.ra, b.dec, c.ra, c.dec);
+                let dbc = b.equ_coord().angular_separation(&c.equ_coord());
                 prop_assert!(dbc <= cfg.max_pair_sep + 1e-12);
 
-                // Flux constraint.
-                let flux_diff = (b.flux - c.flux).abs();
-                prop_assert!(flux_diff <= cfg.max_flux_difference + 1e-6);
+                // Magnitude constraint.
+                let mag_diff = (b.photometry().magnitude - c.photometry().magnitude).abs();
+                prop_assert!(mag_diff <= cfg.max_mag_difference + 1e-6);
 
                 // Residual recompute (same as implementation).
-                let cos_dec_a = a.dec.cos();
-                let (dx_ab, dy_ab) = planar_offset_fast(a.ra, a.dec, cos_dec_a, b.ra, b.dec);
+                let cos_dec_a = a.equ_coord().dec.cos();
+                let (dx_ab, dy_ab) = planar_offset_fast(a.equ_coord().ra, a.equ_coord().dec, cos_dec_a, b.equ_coord().ra, b.equ_coord().dec);
                 let dt_ab_safe = dt_ab.max(1e-12);
                 let vx = dx_ab / dt_ab_safe;
                 let vy = dy_ab / dt_ab_safe;
 
-                let dt_ac = c.mjd_tt - a.mjd_tt;
-                let ra_pred = a.ra + vx * dt_ac / cos_dec_a.max(1e-12);
-                let dec_pred = a.dec + vy * dt_ac;
+                let dt_ac = c.mjd_tt() - a.mjd_tt();
+                let ra_pred = a.equ_coord().ra + vx * dt_ac / cos_dec_a.max(1e-12);
+                let dec_pred = a.equ_coord().dec + vy * dt_ac;
 
-                let (dx_act, dy_act) = planar_offset_fast(a.ra, a.dec, cos_dec_a, c.ra, c.dec);
-                let (dx_pred, dy_pred) = planar_offset_fast(a.ra, a.dec, cos_dec_a, ra_pred, dec_pred);
+                let (dx_act, dy_act) = planar_offset_fast(a.equ_coord().ra, a.equ_coord().dec, cos_dec_a, c.equ_coord().ra, c.equ_coord().dec);
+                let (dx_pred, dy_pred) = planar_offset_fast(a.equ_coord().ra, a.equ_coord().dec, cos_dec_a, ra_pred, dec_pred);
 
                 let residual = ((dx_act - dx_pred).powi(2) + (dy_act - dy_pred).powi(2)).sqrt();
                 prop_assert!(residual <= cfg.max_predicted_residual + 1e-12);
 
                 // Also ensure (b,c) passes the pair sep (already checked above, but keep explicit)
                 prop_assert!(dbc <= cfg.max_pair_sep + 1e-12);
-            }
-        }
-    }
-
-    /* ---------------------- extract_triplet_features tests ---------------------- */
-
-    #[test]
-    fn extract_triplet_features_order_and_members() {
-        let t0 = 60000.0;
-        let dec0: f64 = 0.3;
-
-        let dr = arcsec_to_rad(6.0) / dec0.cos();
-
-        let a = mk_alert(0, 1.0, dec0, t0, 1, 1000.0);
-        let b = mk_alert(1, 1.0 + dr, dec0, t0 + 10.0 / 1440.0, 1, 1005.0);
-        let c = mk_alert(2, 1.0 + 2.0 * dr, dec0, t0 + 20.0 / 1440.0, 1, 1002.0);
-
-        let alerts = vec![a, b, c];
-
-        let trips = vec![
-            Triplet {
-                a: &alerts[0],
-                b: &alerts[1],
-                c: &alerts[2],
-            },
-            Triplet {
-                a: &alerts[0],
-                b: &alerts[2],
-                c: &alerts[1],
-            }, // intentionally "weird"
-        ];
-
-        let night_id = NightId::new(99);
-
-        let seed_store = &mut SeedStore::new();
-
-        let seeds = extract_triplet_features(&trips, seed_store, night_id);
-
-        assert_eq!(seeds.len(), 2);
-        assert_eq!(seeds[0].night_id(), night_id);
-        assert_eq!(seeds[1].night_id(), night_id);
-
-        assert_eq!(seeds[0].n_obs, 3);
-        assert_eq!(seeds[1].n_obs, 3);
-
-        // We can't assert `members == [id..]` anymore. If SeedNode stores refs,
-        // you can add pointer-based assertions here once you show its structure.
-    }
-
-    mod prop_extract_triplet_features {
-        use super::*;
-
-        fn ra_strategy() -> impl Strategy<Value = f64> {
-            0.0f64..(2.0 * std::f64::consts::PI)
-        }
-        fn dec_strategy() -> impl Strategy<Value = f64> {
-            (-(std::f64::consts::PI / 2.0 - LAT_EPS))..(std::f64::consts::PI / 2.0 - LAT_EPS)
-        }
-        fn time_strategy() -> impl Strategy<Value = f64> {
-            60000.0f64..60000.1667f64
-        }
-
-        proptest! {
-            #![proptest_config(ProptestConfig {
-                cases: 32,
-                .. ProptestConfig::default()
-            })]
-
-            #[test]
-            fn prop_extract_triplet_features_1to1_mapping(
-                samples in proptest::collection::vec((ra_strategy(), dec_strategy(), time_strategy()), 3..60)
-            ) {
-                let alerts: Vec<Alert> = samples.iter().enumerate()
-                    .map(|(i, (ra, dec, t))| mk_alert(i, *ra, *dec, *t, 1, 1000.0))
-                    .collect();
-
-                // Build triplets (consecutive) with increasing time.
-                let mut trips: Triplets = Vec::new();
-                for i in 0..alerts.len().saturating_sub(2) {
-                    let a = &alerts[i];
-                    let b = &alerts[i+1];
-                    let c = &alerts[i+2];
-                    if a.mjd_tt < b.mjd_tt && b.mjd_tt < c.mjd_tt {
-                        trips.push(Triplet { a, b, c });
-                    }
-                }
-
-                let night_id = NightId::new(7);
-                let seed_store = &mut SeedStore::new();
-                let seeds = extract_triplet_features(&trips, seed_store, night_id);
-
-                prop_assert_eq!(seeds.len(), trips.len());
-                for seed in seeds.iter() {
-                    prop_assert_eq!(seed.n_obs, 3);
-                    prop_assert_eq!(seed.night_id(), night_id);
-                }
             }
         }
     }

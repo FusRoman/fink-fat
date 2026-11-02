@@ -1,112 +1,94 @@
-use camino::Utf8PathBuf;
-use clap::{Args, Parser, Subcommand};
-use fink_fat_engine::pipeline::stages::alert_inputs::input_uri::InputUri;
+use anyhow::{Context, Result};
+use camino::{Utf8Path, Utf8PathBuf};
+use clap::Parser;
+use fink_fat_engine::engine_config::main_config::EngineConfig;
+use photom::{
+    io::polars::{ContiguousChoice, FromPolarsArgs},
+    observation_dataset::ObsDataset,
+    observer::error_model::ObsErrorModel,
+};
+use polars::lazy::{
+    dsl::lit,
+    frame::{LazyFrame, ScanArgsParquet},
+};
+
+/// Load an alerts dataset, optionally overriding every observation's
+/// `ra_err`/`dec_err` (radians) with a single uniform value — used to sweep
+/// candidate astrometric-noise assumptions (see
+/// `test_exp/prep_alert.py`'s hardcoded 1″) against dataset-wide NIS/NEES
+/// calibration without regenerating the source Parquet for each candidate.
+///
+/// Only the lazy frame is materialized into `ObsDataset`'s row-oriented
+/// layout — no caller needs the Polars `DataFrame` form, and collecting one
+/// used to hold a second full copy of the dataset in memory for the whole
+/// run.
+pub fn load_data(
+    parquet_path: impl AsRef<Utf8Path>,
+    override_obs_error_arcsec: Option<f64>,
+) -> ObsDataset {
+    let path = parquet_path.as_ref().as_str();
+    let args = ScanArgsParquet {
+        rechunk: true,
+        ..Default::default()
+    };
+    let mut lf = LazyFrame::scan_parquet(path.into(), args).expect("scan_parquet must succeed");
+
+    if let Some(arcsec) = override_obs_error_arcsec {
+        let err_rad = arcsec * (std::f64::consts::PI / (180.0 * 3600.0));
+        lf = lf.with_columns([lit(err_rad).alias("ra_err"), lit(err_rad).alias("dec_err")]);
+    }
+
+    ObsDataset::from_lazy(
+        lf,
+        FromPolarsArgs {
+            do_rechunk: Some(true),
+            error_model: Some(ObsErrorModel::FCCT14),
+            contiguous_choice: Some(ContiguousChoice::ContiguousNight),
+        },
+    )
+    .expect("from_lazy must succeed for int file")
+}
 
 /// FINK-FAT: Fink Asteroid Tracker
 #[derive(Debug, Parser)]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
-    #[command(subcommand)]
-    pub command: Commands,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum Commands {
-    /// Run fink-fat in seeding evaluation mode over a set of alerts
-    SeedingEval(SeedingArgs),
-    /// Run fink-fat in edge evaluation mode over a set of alerts
-    EdgeEval(EdgeArgs),
-    /// Run fink-fat in solver evaluation mode over a set of alerts
-    SolverEval(SolverArgs),
-    ModelEval(ModelEvalArgs),
-}
-
-/// Arguments for the `seeding-eval` subcommand
-#[derive(Debug, Args)]
-pub struct CommonArgs {
     /// Path to the file containing the night's alerts
     #[arg(short, long, value_name = "ALERTS_FILE")]
-    pub alerts: InputUri,
+    pub alerts: Utf8PathBuf,
 
     /// Path to the fink-fat configuration file
     #[arg(short, long, value_name = "CONFIG_FILE")]
     pub config: Utf8PathBuf,
 
-    /// Output directory for evaluation plots (PNG files).
-    ///
-    /// When set, a set of distribution and result charts is written to this
-    /// directory after evaluation completes.  The directory is created
-    /// automatically if it does not exist.
-    #[arg(long, value_name = "PLOT_DIR")]
-    pub plot_dir: Option<Utf8PathBuf>,
+    /// Path of the output directory if any results should be save on disk
+    #[arg(short, long, value_name = "OUTPUT_DIR")]
+    pub output_result: Option<Utf8PathBuf>,
+
+    /// Path to a ground-truth topocentric-state Parquet file (see
+    /// `test_exp/solar_system_data/build_ground_truth.py`), used to compute
+    /// NEES/RMSE metrics against the true trajectory. If omitted, those
+    /// metrics are skipped.
+    #[arg(long, value_name = "GROUND_TRUTH_FILE")]
+    pub ground_truth: Option<Utf8PathBuf>,
+
+    /// Path to write a per-step metrics Parquet file (one row per Kalman
+    /// filter step across all processed trajectories).
+    #[arg(long, value_name = "STEPS_PARQUET_FILE")]
+    pub steps_parquet_out: Option<Utf8PathBuf>,
+
+    /// Path to write a per-trajectory summary metrics Parquet file.
+    #[arg(long, value_name = "SUMMARY_PARQUET_FILE")]
+    pub summary_parquet_out: Option<Utf8PathBuf>,
+
+    /// Override every observation's ra_err/dec_err (arcsec) with this single
+    /// uniform value, without regenerating the source Parquet file — used to
+    /// sweep candidate astrometric-noise assumptions against dataset-wide
+    /// NIS/NEES calibration (see `test_exp/prep_alert.py`).
+    #[arg(long, value_name = "ARCSEC")]
+    pub override_obs_error_arcsec: Option<f64>,
 }
 
-/// Arguments for the `seeding-eval` subcommand
-#[derive(Debug, Args)]
-pub struct SeedingArgs {
-    #[command(flatten)]
-    pub common: CommonArgs,
-}
-
-/// Arguments for the `edge-eval` subcommand
-#[derive(Debug, Args)]
-pub struct EdgeArgs {
-    #[command(flatten)]
-    pub common: CommonArgs,
-
-    /// Output path for the edge feature Parquet file (ML training dataset).
-    ///
-    /// When set, a Parquet file containing all 17 edge features
-    /// (`position.*`, `velocity.*`, `uncertainty.*`, `photometry.*`),
-    /// the truth label (`is_true_edge`), the group column (`from_seed_id`),
-    /// and the debug columns (`left_nid`, `right_nid`, `gap_nights`) is
-    /// written to this path.  Parent directories are created automatically.
-    #[arg(long, value_name = "PARQUET_PATH")]
-    pub export_features: Option<Utf8PathBuf>,
-}
-
-/// Arguments for the `solver-eval` subcommand
-#[derive(Debug, Args)]
-pub struct SolverArgs {
-    #[command(flatten)]
-    pub common: CommonArgs,
-}
-
-/// Arguments for the `model-eval` subcommand
-#[derive(Debug, Args)]
-pub struct ModelEvalArgs {
-    /// Number of threads to use for ONNX inference (optional).
-    ///
-    /// If not set, the default number of threads determined by the ONNX runtime is used.
-    /// Setting this can be useful for controlling CPU resource usage during evaluation,
-    /// especially when running on shared machines or when the default behavior leads to excessive parallelism.
-    /// The value must be a positive integer. If set to `1`, inference will run in single-threaded mode.
-    #[arg(short = 't', long, value_name = "THREADS")]
-    pub onnx_intra_threads: Option<usize>,
-
-    /// Path to the edge features Parquet file produced by `edge-eval --export-features`.
-    ///
-    /// This file must contain the 17 canonical feature columns
-    /// (`position.*`, `velocity.*`, `uncertainty.*`, `photometry.*`) and the
-    /// truth label column `is_true_edge` (1 = true positive, 0 otherwise).
-    #[arg(short = 'f', long, value_name = "PARQUET_PATH")]
-    pub features_parquet: Utf8PathBuf,
-
-    /// Path to the XGBoost training config file (`xgb_params.yml`).
-    ///
-    /// The `training.onnx_output` field in this file is read to locate the
-    /// ONNX model to evaluate.  The path stored in the config is interpreted
-    /// relative to the directory of this YAML file.
-    #[arg(short = 'x', long, value_name = "XGB_PARAMS")]
-    pub xgb_params: Utf8PathBuf,
-
-    /// Output directory for evaluation plots (PNG files).
-    ///
-    /// Written: `roc_curve.png`, `pr_curve.png`, `score_distribution.png`.
-    #[arg(short = 'p', long, value_name = "PLOT_DIR")]
-    pub plot_dir: Option<Utf8PathBuf>,
-}
-
-pub fn cli_builder() -> Cli {
-    Cli::parse()
+pub fn load_config(config_path: impl AsRef<Utf8Path>) -> Result<EngineConfig> {
+    EngineConfig::load_engine_config_validated(config_path).context("failed to load engine config")
 }

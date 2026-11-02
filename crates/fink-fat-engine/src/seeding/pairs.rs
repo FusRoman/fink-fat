@@ -53,22 +53,120 @@
 //! --------
 //! - [`PairConfig`] – configuration of time/flux/speed constraints.
 //! - [`BucketIndex`] – bucketed storage used for accelerated neighbor scans.
-//! - [`SeedNode::from_pair`] – builds a compact intra-night seed from a valid pair.
 
 use ahash::{AHashMap, AHashSet};
+use photom::{
+    coordinates::cartesian::CartesianCoord, observation_dataset::observation::Observation,
+};
 
 use crate::{
-    Alert,
-    astro_math::{dot3, unit_vec},
     engine_config::pair_config::PairConfig,
-    night_id::NightId,
-    seeding::{SeedNode, store::SeedStore},
     spacetime_bucket::{
         bucket::{BucketIndex, BucketKey},
         spatial_binner::{SpatialBinner, SpatialKey},
         time_binner::{TimeBin, TimeBinner, time_targets},
     },
 };
+
+use crate::logging::LogTarget;
+
+/// Structured log events for intra-night pairing/tracklet linking (shared by
+/// [`pairs`](self), [`triplets`](super::triplets) and
+/// [`tracklet_linker`](super::tracklet_linker)). See [`crate::logging`] for
+/// the `.emit()` pattern.
+pub enum SeedingEvent {
+    PairsStart {
+        n_buckets: usize,
+        max_dt: f64,
+        max_angular_speed: f64,
+        max_mag_difference: f64,
+        allow_same_timebin: bool,
+        sep_cap: f64,
+        spatial_search_radius: f64,
+    },
+    PairsComplete {
+        n_pairs: usize,
+        n_rejected_flux: u64,
+        n_rejected_speed: u64,
+        n_dedup_skipped: u64,
+    },
+    TripletsStart {
+        n_input_pairs: usize,
+        max_dt_between: f64,
+        max_pair_sep: f64,
+        max_predicted_residual: f64,
+        max_mag_difference: f64,
+        enforce_time_order: bool,
+        search_radius: f64,
+    },
+    TripletsComplete {
+        n_triplets: usize,
+        n_skipped_time_order: u64,
+        n_rejected_flux: u64,
+        n_rejected_angular: u64,
+        n_rejected_residual: u64,
+        n_dedup_skipped: u64,
+    },
+}
+
+crate::impl_log_target!(
+    SeedingEvent,
+    "seeding",
+    "Intra-night observation pairing and tracklet linking (pairs/triplets)",
+    [tracing::Level::DEBUG]
+);
+
+impl SeedingEvent {
+    pub fn emit(&self) {
+        use SeedingEvent::*;
+        match self {
+            PairsStart {
+                n_buckets,
+                max_dt,
+                max_angular_speed,
+                max_mag_difference,
+                allow_same_timebin,
+                sep_cap,
+                spatial_search_radius,
+            } => tracing::debug!(
+                target: SeedingEvent::TARGET, n_buckets, max_dt, max_angular_speed, max_mag_difference, allow_same_timebin, sep_cap, spatial_search_radius,
+                "generate_pairs starting"
+            ),
+            PairsComplete {
+                n_pairs,
+                n_rejected_flux,
+                n_rejected_speed,
+                n_dedup_skipped,
+            } => tracing::debug!(
+                target: SeedingEvent::TARGET, n_pairs, n_rejected_flux, n_rejected_speed, n_dedup_skipped,
+                "generate_pairs complete"
+            ),
+            TripletsStart {
+                n_input_pairs,
+                max_dt_between,
+                max_pair_sep,
+                max_predicted_residual,
+                max_mag_difference,
+                enforce_time_order,
+                search_radius,
+            } => tracing::debug!(
+                target: SeedingEvent::TARGET, n_input_pairs, max_dt_between, max_pair_sep, max_predicted_residual, max_mag_difference, enforce_time_order, search_radius,
+                "generate_triplets_from_pairs starting"
+            ),
+            TripletsComplete {
+                n_triplets,
+                n_skipped_time_order,
+                n_rejected_flux,
+                n_rejected_angular,
+                n_rejected_residual,
+                n_dedup_skipped,
+            } => tracing::debug!(
+                target: SeedingEvent::TARGET, n_triplets, n_skipped_time_order, n_rejected_flux, n_rejected_angular, n_rejected_residual, n_dedup_skipped,
+                "generate_triplets_from_pairs complete"
+            ),
+        }
+    }
+}
 
 /// A time-ordered detection pair `(a, b)` with `t_b > t_a`.
 ///
@@ -77,16 +175,16 @@ use crate::{
 /// - `a` is the anchor detection,
 /// - `b` is a candidate detection at a later epoch within `max_dt`.
 ///
-/// Notes
-/// -----
+/// # Notes
+///
 /// The ordering is semantically meaningful (directed in time) and is used
 /// downstream when fitting a linear seed model.
 #[derive(Copy, Clone, Debug)]
 pub struct Pair<'alert_lf> {
     /// Anchor detection (earlier epoch).
-    pub a: &'alert_lf Alert,
+    pub a: &'alert_lf Observation,
     /// Candidate detection (later epoch).
-    pub b: &'alert_lf Alert,
+    pub b: &'alert_lf Observation,
 }
 
 /// Convenience alias: a flat list of time-ordered detection pairs.
@@ -98,29 +196,22 @@ pub type Pairs<'alert_lf> = Vec<Pair<'alert_lf>>;
 /// neighbor expansion, etc.). For pair generation we call it many times with the
 /// same bucket keys, so we cache the results.
 ///
-/// Parameters
-/// ----------
-/// cache : &mut AHashMap<SpatialKey, Vec<SpatialKey>>
-///     Cache map keyed by the target cell.
-/// spatial_binner : &impl SpatialBinner
-///     Spatial discretization backend (e.g. HEALPix).
-/// target_space_key : SpatialKey
-///     Space cell key of the anchor bucket.
-/// search_radius : f64
-///     Cone radius (radians) used to include neighboring cells.
+/// # Arguments
 ///
-/// Returns
-/// -------
-/// &Vec<SpatialKey>
-///     Sorted, deduplicated list of neighboring cell keys including
-///     `target_space_key` itself if returned by the binner.
+/// - `cache` — cache map keyed by the target cell.
+/// - `spatial_binner` — spatial discretization backend (e.g. HEALPix).
+/// - `target_space_key` — space cell key of the anchor bucket.
+/// - `search_radius` — cone radius (radians) used to include neighboring cells.
 ///
-/// Notes
-/// -----
-/// The vector is:
-/// - sorted (`sort_unstable`) and
-/// - deduplicated (`dedup`)
-///   to ensure deterministic behavior and to avoid redundant scans.
+/// # Returns
+///
+/// Sorted, deduplicated list of neighboring cell keys including
+/// `target_space_key` itself if returned by the binner.
+///
+/// # Notes
+///
+/// The vector is sorted (`sort_unstable`) and deduplicated (`dedup`)
+/// to ensure deterministic behavior and to avoid redundant scans.
 #[inline]
 fn cached_spatial_neighbors<'cache, Bs: SpatialBinner>(
     cache: &'cache mut AHashMap<SpatialKey, Vec<SpatialKey>>,
@@ -144,21 +235,16 @@ fn cached_spatial_neighbors<'cache, Bs: SpatialBinner>(
 /// - `config.max_dt`,
 /// - `config.allow_same_timebin`.
 ///
-/// Parameters
-/// ----------
-/// cache : &mut AHashMap<TimeBin, Vec<TimeBin>>
-///     Cache map keyed by the base time bin.
-/// time_binner : &impl TimeBinner
-///     Time discretization backend.
-/// base_bin : TimeBin
-///     Time bin of the anchor bucket.
-/// config : &PairConfig
-///     Pair generation configuration.
+/// # Arguments
 ///
-/// Returns
-/// -------
-/// &Vec<TimeBin>
-///     List of time bins to consider as candidate buckets.
+/// - `cache` — cache map keyed by the base time bin.
+/// - `time_binner` — time discretization backend.
+/// - `base_bin` — time bin of the anchor bucket.
+/// - `config` — pair generation configuration.
+///
+/// # Returns
+///
+/// List of time bins to consider as candidate buckets.
 #[inline]
 fn cached_time_targets<'cache, Bt: TimeBinner>(
     cache: &'cache mut AHashMap<TimeBin, Vec<TimeBin>>,
@@ -183,24 +269,21 @@ fn cached_time_targets<'cache, Bt: TimeBinner>(
 /// It is used to skip all candidate alerts `b` with `t_b ≤ t_a` inside a bucket,
 /// assuming `members` is sorted by increasing `mjd_tt`.
 ///
-/// Parameters
-/// ----------
-/// members : &[&Alert]
-///     Bucket members, sorted by `mjd_tt` ascending.
-/// t0 : f64
-///     Threshold epoch (MJD TT).
+/// # Arguments
 ///
-/// Returns
-/// -------
-/// usize
-///     Index of the first element with `mjd_tt > t0` (may be `members.len()`).
+/// - `members` — bucket members, sorted by `mjd_tt` ascending.
+/// - `t0` — threshold epoch (MJD TT).
+///
+/// # Returns
+///
+/// Index of the first element with `mjd_tt > t0` (may be `members.len()`).
 #[inline]
-fn lower_bound_gt_time(members: &[&Alert], t0: f64) -> usize {
+fn lower_bound_gt_time(members: &[&Observation], t0: f64) -> usize {
     let mut lo = 0usize;
     let mut hi = members.len();
     while lo < hi {
         let mid = (lo + hi) / 2;
-        if members[mid].mjd_tt <= t0 {
+        if members[mid].mjd_tt() <= t0 {
             lo = mid + 1;
         } else {
             hi = mid;
@@ -211,81 +294,43 @@ fn lower_bound_gt_time(members: &[&Alert], t0: f64) -> usize {
 
 /// Generate all valid `(a, b)` pairs according to [`PairConfig`].
 ///
-/// Overview
-/// --------
-/// The algorithm is designed to be simple and fast:
-/// - iterate anchor buckets and anchor alerts `a`,
-/// - enumerate nearby buckets using cached spatial neighbors + cached time targets,
-/// - within each candidate bucket:
-///   - binary-search to skip `t_b ≤ t_a`,
-///   - scan forward until `t_b > t_a + max_dt`,
-///   - apply flux and angular-speed constraints,
-///   - deduplicate by `(ptr(a), ptr(b))`.
+/// The algorithm iterates anchor buckets and anchor alerts `a`, enumerates nearby
+/// buckets using cached spatial neighbors and cached time targets, and within each
+/// candidate bucket binary-searches to skip `t_b ≤ t_a`, scans forward until
+/// `t_b > t_a + max_dt`, applies flux and angular-speed constraints, and deduplicates
+/// by `(ptr(a), ptr(b))`.
 ///
-/// Parameters
-/// ----------
-/// bucket_index : &BucketIndex<&Alert>
-///     Spatio-temporal bucket index holding alerts.
-///     Each bucket’s `members` must be sorted by time (`mjd_tt`).
-/// spatial_binner : &impl SpatialBinner
-///     Spatial discretization backend used to build neighbor sets.
-/// time_binner : &impl TimeBinner
-///     Time discretization backend used to map `max_dt` to candidate time bins.
-/// config : &PairConfig
-///     Pair-generation parameters:
-///     - `max_dt` (days)
-///     - `max_angular_speed` (rad/day)
-///     - `max_flux_difference` (flux units)
-///     - `allow_same_timebin` (bool)
+/// # Arguments
 ///
-/// Returns
-/// -------
-/// Pairs
-///     A deterministic, time-ordered list of unique pairs `(a, b)`.
+/// - `bucket_index` — spatio-temporal bucket index holding observations; each bucket's
+///   `members` must be sorted by time (`mjd_tt`).
+/// - `spatial_binner` — spatial discretization backend used to build neighbor sets.
+/// - `time_binner` — time discretization backend used to map `max_dt` to candidate time bins.
+/// - `config` — pair-generation parameters: `max_dt` (days), `max_angular_speed` (rad/day),
+///   `max_flux_difference` (flux units), `allow_same_timebin` (bool).
 ///
-/// Implementation details
-/// ---------------------
-/// ### Spatial search radius
-/// We use a conservative search radius:
-/// `search_radius = max_sep + cell_radius`,
-/// where `max_sep = max_angular_speed * max_dt`.
+/// # Returns
 ///
-/// This ensures we scan all potentially intersecting spatial cells, even when
-/// a bucket boundary cuts through the geometric cone.
+/// A deterministic, time-ordered list of unique pairs `(a, b)`.
 ///
-/// ### Angular-speed test without trigonometric inversion
-/// We avoid `acos` by comparing dot products:
-/// - compute `u_a = unit_vec(ra_a, dec_a)`
-/// - compute `u_b = unit_vec(ra_b, dec_b)`
-/// - accept iff `dot3(u_a, u_b) >= cos(max_angular_speed * Δt)`
+/// # Notes
 ///
-/// ### Deduplication key
-/// Pairs are deduplicated using pointer identity `(ptr(a), ptr(b))`.
-/// This assumes the same `Alert` object is not duplicated in memory.
+/// **Spatial search radius:** `search_radius = max_sep + cell_radius`, where
+/// `max_sep = max_angular_speed * max_dt`. This ensures all potentially intersecting
+/// cells are scanned even when a bucket boundary cuts through the geometric cone.
 ///
-/// Complexity
-/// ----------
-/// Let:
-/// - `B` be the number of buckets,
-/// - `n` be total alerts,
-/// - `k_s` average number of spatial neighbor cells,
-/// - `k_t` average number of target time bins,
-/// - `m` average bucket size.
+/// **Angular-speed test:** `acos` is avoided by comparing dot products —
+/// accept iff `dot3(unit_vec(a), unit_vec(b)) >= cos(max_angular_speed * Δt)`.
 ///
-/// The dominant cost is the nested scan over `(k_t * k_s)` candidate buckets
-/// per anchor bucket, with early exits based on time and dot-product checks.
+/// **Deduplication:** pairs are keyed by pointer identity `(ptr(a), ptr(b))`; this
+/// assumes the same `Alert` object is not duplicated in memory.
 ///
-/// Notes
-/// -----
-/// - Output is sorted at the end using `(a, b)` ordering for reproducibility.
-/// - This stage is intentionally permissive: it is a pre-filter before seed
-///   fitting and later graph construction.
+/// Output is sorted at the end using `(a, b)` ordering for reproducibility.
+/// This stage is intentionally permissive — it is a pre-filter before seed
+/// fitting and later graph construction.
 ///
-/// See also
-/// --------
-/// - [`extract_pair_features`] – convert valid pairs into [`SeedNode`] objects.
 pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
-    bucket_index: &BucketIndex<&'alert_lf Alert>,
+    bucket_index: &BucketIndex<&'alert_lf Observation>,
     spatial_binner: &Bs,
     time_binner: &Bt,
     config: &PairConfig,
@@ -294,16 +339,16 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
     let sep_cap = (config.max_angular_speed * config.max_dt).max(0.0);
     let spatial_search_radius = sep_cap + spatial_binner.cell_radius();
 
-    tracing::debug!(
-        n_buckets = bucket_index.buckets.len(),
-        max_dt = config.max_dt,
-        max_angular_speed = config.max_angular_speed,
-        max_flux_difference = config.max_flux_difference,
-        allow_same_timebin = config.allow_same_timebin,
+    SeedingEvent::PairsStart {
+        n_buckets: bucket_index.buckets.len(),
+        max_dt: config.max_dt,
+        max_angular_speed: config.max_angular_speed,
+        max_mag_difference: config.max_mag_difference,
+        allow_same_timebin: config.allow_same_timebin,
         sep_cap,
         spatial_search_radius,
-        "generate_pairs starting",
-    );
+    }
+    .emit();
 
     let mut spatial_neighbor_cache = AHashMap::<SpatialKey, Vec<SpatialKey>>::new();
     let mut timebin_target_cache = AHashMap::<TimeBin, Vec<TimeBin>>::new();
@@ -336,12 +381,12 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
 
         // Anchors `a` from this bucket
         for &a in bucket.members.iter() {
-            let t_a = a.mjd_tt;
+            let t_a = a.mjd_tt();
             let t_upper = t_a + config.max_dt;
-            let flux_a = a.flux;
+            let magnitude_a = a.photometry().magnitude;
 
             // Precompute direction vector of `a` to amortize dot products.
-            let u_a = unit_vec(a.ra, a.dec);
+            let u_a: CartesianCoord = a.equ_coord().into();
 
             for &time_bin in time_targets {
                 for &space_key in spatial_neighbors {
@@ -359,7 +404,7 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
                         let b = members[idx];
                         idx += 1;
 
-                        let t_b = b.mjd_tt;
+                        let t_b = b.mjd_tt();
                         if t_b > t_upper {
                             break;
                         }
@@ -369,8 +414,10 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
                             continue;
                         }
 
-                        // Flux similarity
-                        if (flux_a - b.flux).abs() > config.max_flux_difference {
+                        // Magnitude similarity
+                        if (magnitude_a - b.photometry().magnitude).abs()
+                            > config.max_mag_difference
+                        {
                             n_rejected_flux += 1;
                             continue;
                         }
@@ -380,14 +427,17 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
                         let max_sep_dt = (config.max_angular_speed * dt).min(core::f64::consts::PI);
                         let cos_thresh = max_sep_dt.cos();
 
-                        let u_b = unit_vec(b.ra, b.dec);
-                        if dot3(u_a, u_b) < cos_thresh {
+                        let u_b: CartesianCoord = b.equ_coord().into();
+                        if u_a.dot(&u_b) < cos_thresh {
                             n_rejected_speed += 1;
                             continue;
                         }
 
                         // Dedup + push
-                        let key = (a as *const Alert as usize, b as *const Alert as usize);
+                        let key = (
+                            a as *const Observation as usize,
+                            b as *const Observation as usize,
+                        );
                         if seen.insert(key) {
                             out.push(Pair { a, b });
                         } else {
@@ -402,55 +452,14 @@ pub fn generate_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner>(
     // Deterministic ordering (handy for tests / reproducibility)
     out.sort_unstable_by(|p1, p2| p1.a.cmp(p2.a).then_with(|| p1.b.cmp(p2.b)));
 
-    tracing::debug!(
-        n_pairs = out.len(),
+    SeedingEvent::PairsComplete {
+        n_pairs: out.len(),
         n_rejected_flux,
         n_rejected_speed,
         n_dedup_skipped,
-        "generate_pairs complete",
-    );
-
-    out
-}
-
-/// Convert a list of valid detection pairs into intra-night [`SeedNode`] objects.
-///
-/// Each pair `(a, b)` is passed to [`SeedNode::from_pair`]. The optional
-/// `max_speed_rad_per_day` allows applying an additional physical sanity check
-/// at seed-construction time (independent from the pair-generation constraint).
-///
-/// Parameters
-/// ----------
-/// pairs : &Pairs
-///     Time-ordered detection pairs produced by [`generate_pairs`].
-/// night_id : NightId
-///     Night identifier assigned to all resulting seeds.
-/// max_speed_rad_per_day : `Option<f64>`
-///     Optional speed filter forwarded to [`SeedNode::from_pair`].
-///
-/// Returns
-/// -------
-/// `Vec<SeedNode>`
-///     Seeds successfully constructed from the input pairs.
-///
-/// Notes
-/// -----
-/// - `SeedNode::from_pair` can still reject a pair (returns `None`) if the
-///   speed filter is set and the fitted speed exceeds the threshold.
-/// - The output order follows the input `pairs` order (which is deterministic
-///   if produced by [`generate_pairs`]).
-pub fn extract_pair_features<'alert_lf>(
-    pairs: &Pairs<'alert_lf>,
-    seed_store: &mut SeedStore,
-    night_id: NightId,
-    max_speed_rad_per_day: Option<f64>,
-) -> Vec<SeedNode> {
-    let mut out = Vec::with_capacity(pairs.len());
-    for &Pair { a, b } in pairs.iter() {
-        if let Some(seed) = SeedNode::from_pair(seed_store, night_id, a, b, max_speed_rad_per_day) {
-            out.push(seed);
-        }
     }
+    .emit();
+
     out
 }
 
@@ -460,8 +469,16 @@ mod pair_gen_tests {
     use std::collections::HashSet;
     use std::f64::consts::PI;
 
-    use crate::AlertKey;
-    use crate::astro_math::{angular_separation_vincenty, arcsec_to_rad};
+    use photom::{
+        Arcseconds, Radians,
+        coordinates::equatorial::EquCoord,
+        observation_dataset::{
+            ObsDataset,
+            observation::{Observation, ObservationInput},
+        },
+        photometry::{Filter, Photometry as PhotomPhotometry},
+    };
+
     use crate::engine_config::pair_config::PairConfig;
     use crate::spacetime_bucket::bucket::{BucketKey, build_alert_bucket_index};
     use crate::spacetime_bucket::healpix_binner::HealpixBinner;
@@ -469,30 +486,36 @@ mod pair_gen_tests {
 
     /* ------------------------- helpers ------------------------- */
 
-    /// Construct a minimal `Alert` for testing.
-    fn mk_alert(i: usize, ra: f64, dec: f64, mjd_tt: f64, band: u8, flux: f64) -> Alert {
-        Alert {
-            key: AlertKey {
-                night_id: NightId(0),
-                dia_source_id: i as u64,
-            },
-            ra,
-            ra_err: 0.5 * PI / (180.0 * 3600.0), // ~0.5 arcsec in radians
-            dec,
-            dec_err: 0.5 * PI / (180.0 * 3600.0), // ~0.5 arcsec in radians
-            mjd_tt,
-            flux,
-            flux_err: 0.0,
-            band,
-            ..Default::default()
-        }
+    #[inline]
+    pub fn arcsec_to_rad(x: Arcseconds) -> Radians {
+        x * PI / (180.0 * 3600.0)
     }
 
-    fn idx_of(alerts: &[Alert], a: &Alert) -> usize {
+    /// Construct a minimal `Observation` for testing.
+    fn mk_observation(id: u64, ra: f64, dec: f64, mjd_tt: f64, band: u8, flux: f64) -> Observation {
+        let obs_dataset = ObsDataset::empty();
+
+        let pos_err = arcsec_to_rad(0.5);
+        let equ_coord = EquCoord::new(ra, pos_err, dec, pos_err);
+        let photometry = PhotomPhotometry {
+            magnitude: flux,
+            error: 0.0,
+            filter: Filter::Int(band as u32),
+        };
+        let input = ObservationInput::new(id, equ_coord, photometry, mjd_tt, None);
+        let (obs_dataset, obs_id) = obs_dataset.push_observation(vec![input]).unwrap();
+        let observation = obs_dataset
+            .get_obs_by_index(*obs_id.get(0).unwrap())
+            .unwrap()
+            .clone();
+        observation
+    }
+
+    fn idx_of(alerts: &[Observation], a: &Observation) -> usize {
         alerts
             .iter()
             .position(|x| core::ptr::eq(x, a))
-            .expect("alert ref not found in slice")
+            .expect("observation ref not found in slice")
     }
 
     /* ------------------------- unit tests ------------------------- */
@@ -506,9 +529,9 @@ mod pair_gen_tests {
         let t0 = 60000.10;
         let dec0 = 0.2;
 
-        // Two alerts ~5" apart and 8 min apart.
-        let a1 = mk_alert(0, 1.0, dec0, t0, 1, 1000.0);
-        let a2 = mk_alert(
+        // Two observations ~5" apart and 8 min apart.
+        let a1 = mk_observation(0, 1.0, dec0, t0, 1, 1000.0);
+        let a2 = mk_observation(
             1,
             1.0 + arcsec_to_rad(5.0) / dec0.cos(),
             dec0,
@@ -518,7 +541,7 @@ mod pair_gen_tests {
         );
 
         // A distant outlier (must not match).
-        let a3 = mk_alert(2, 2.0, -0.3, t0 + 5.0 / 1440.0, 1, 900.0);
+        let a3 = mk_observation(2, 2.0, -0.3, t0 + 5.0 / 1440.0, 1, 900.0);
 
         let alerts = vec![a1, a2, a3];
         let bucket_index = build_alert_bucket_index(&alerts, &spatial_binner, &time_binner);
@@ -532,7 +555,9 @@ mod pair_gen_tests {
             max_dt,
             max_angular_speed: omega,
             allow_same_timebin: false,
-            max_flux_difference: 10.0,
+            max_mag_difference: 10.0,
+            acc_prior_var: 1e-5,
+            ..Default::default()
         };
 
         let pairs = generate_pairs(&bucket_index, &spatial_binner, &time_binner, &config);
@@ -545,7 +570,7 @@ mod pair_gen_tests {
 
         assert_eq!(ia, 0);
         assert_eq!(ib, 1);
-        assert!(p.b.mjd_tt > p.a.mjd_tt);
+        assert!(p.b.mjd_tt() > p.a.mjd_tt());
     }
 
     /// Check behavior of `allow_same_timebin`.
@@ -557,9 +582,9 @@ mod pair_gen_tests {
         let t0 = 60000.25;
         let dec0 = 0.1;
 
-        // Two alerts in the same time bin (Δt = 5 min < 20 min).
-        let a1 = mk_alert(0, 1.5, dec0, t0, 1, 1000.0);
-        let a2 = mk_alert(
+        // Two observations in the same time bin (Δt = 5 min < 20 min).
+        let a1 = mk_observation(0, 1.5, dec0, t0, 1, 1000.0);
+        let a2 = mk_observation(
             1,
             1.5 + arcsec_to_rad(4.0) / dec0.cos(),
             dec0,
@@ -579,7 +604,9 @@ mod pair_gen_tests {
             max_dt,
             max_angular_speed: omega,
             allow_same_timebin: false,
-            max_flux_difference: 10.0,
+            max_mag_difference: 10.0,
+            acc_prior_var: 1e-5,
+            ..Default::default()
         };
 
         let pairs_no_same = generate_pairs(
@@ -594,7 +621,9 @@ mod pair_gen_tests {
             max_dt,
             max_angular_speed: omega,
             allow_same_timebin: true,
-            max_flux_difference: 10.0,
+            max_mag_difference: 10.0,
+            acc_prior_var: 1e-5,
+            ..Default::default()
         };
 
         let pairs_same = generate_pairs(&bucket_index, &spatial_binner, &time_binner, &config_same);
@@ -615,8 +644,8 @@ mod pair_gen_tests {
         let t0 = 60000.0;
         let dec0 = 0.3;
 
-        let a0 = mk_alert(0, 1.0, dec0, t0, 1, 1000.0);
-        let a1 = mk_alert(
+        let a0 = mk_observation(0, 1.0, dec0, t0, 1, 1000.0);
+        let a1 = mk_observation(
             1,
             1.0 + arcsec_to_rad(5.0) / dec0.cos(),
             dec0,
@@ -624,7 +653,7 @@ mod pair_gen_tests {
             1,
             1000.0,
         );
-        let a2 = mk_alert(
+        let a2 = mk_observation(
             2,
             1.0 + arcsec_to_rad(9.0) / dec0.cos(),
             dec0,
@@ -648,20 +677,22 @@ mod pair_gen_tests {
             max_dt: 15.0 / 1440.0,
             max_angular_speed: omega,
             allow_same_timebin: true,
-            max_flux_difference: 1e6,
+            max_mag_difference: 1e6,
+            acc_prior_var: 1e-5,
+            ..Default::default()
         };
 
         let pairs = generate_pairs(&bucket_index, &spatial_binner, &time_binner, &config);
 
         for Pair { a, b } in &pairs {
-            assert!(b.mjd_tt > a.mjd_tt, "t_b must be > t_a");
+            assert!(b.mjd_tt() > a.mjd_tt(), "t_b must be > t_a");
             assert!(
-                (b.mjd_tt - a.mjd_tt) <= config.max_dt + 1e-15,
+                (b.mjd_tt() - a.mjd_tt()) <= config.max_dt + 1e-15,
                 "Δt must be <= max_dt"
             );
 
-            let dt = b.mjd_tt - a.mjd_tt;
-            let d = angular_separation_vincenty(a.ra, a.dec, b.ra, b.dec);
+            let dt = b.mjd_tt() - a.mjd_tt();
+            let d = a.equ_coord().angular_separation(&b.equ_coord());
 
             assert!(
                 d <= config.max_angular_speed * dt + 1e-12,
@@ -683,8 +714,8 @@ mod pair_gen_tests {
         let t0 = 60000.0;
         let dec0 = 0.4;
 
-        let a0 = mk_alert(0, 0.5, dec0, t0, 1, 1000.0);
-        let a1 = mk_alert(
+        let a0 = mk_observation(0, 0.5, dec0, t0, 1, 1000.0);
+        let a1 = mk_observation(
             1,
             0.5 + arcsec_to_rad(4.0) / dec0.cos(),
             dec0,
@@ -692,7 +723,7 @@ mod pair_gen_tests {
             1,
             1005.0,
         );
-        let a2 = mk_alert(
+        let a2 = mk_observation(
             2,
             0.5 + arcsec_to_rad(7.0) / dec0.cos(),
             dec0,
@@ -712,7 +743,9 @@ mod pair_gen_tests {
             max_dt,
             max_angular_speed: omega,
             allow_same_timebin: true,
-            max_flux_difference: 10.0,
+            max_mag_difference: 10.0,
+            acc_prior_var: 1e-5,
+            ..Default::default()
         };
 
         let pairs = generate_pairs(&bucket_index, &spatial_binner, &time_binner, &config);
@@ -720,7 +753,10 @@ mod pair_gen_tests {
         // Uniqueness by pointer identity
         let mut set: HashSet<(usize, usize)> = HashSet::new();
         for p in &pairs {
-            let k = (p.a as *const Alert as usize, p.b as *const Alert as usize);
+            let k = (
+                p.a as *const Observation as usize,
+                p.b as *const Observation as usize,
+            );
             assert!(set.insert(k), "duplicate pair produced");
         }
     }
@@ -736,12 +772,12 @@ mod pair_gen_tests {
         let dec0: f64 = 0.25;
         let dr = arcsec_to_rad(6.0) / dec0.cos();
 
-        let a = mk_alert(0, 2.0, dec0, t0, 1, 1000.0);
-        let b = mk_alert(1, 2.0 + dr, dec0, t0 + 5.0 / 1440.0, 1, 1002.0);
-        let c = mk_alert(2, 2.0 + 2.0 * dr, dec0, t0 + 10.0 / 1440.0, 1, 1004.0);
+        let a = mk_observation(0, 2.0, dec0, t0, 1, 1000.0);
+        let b = mk_observation(1, 2.0 + dr, dec0, t0 + 5.0 / 1440.0, 1, 1002.0);
+        let c = mk_observation(2, 2.0 + 2.0 * dr, dec0, t0 + 10.0 / 1440.0, 1, 1004.0);
 
-        let n1 = mk_alert(3, 3.0, -0.1, t0 + 3.0 / 1440.0, 1, 500.0);
-        let n2 = mk_alert(4, 1.0, 0.8, t0 + 6.0 / 1440.0, 1, 800.0);
+        let n1 = mk_observation(3, 3.0, -0.1, t0 + 3.0 / 1440.0, 1, 500.0);
+        let n2 = mk_observation(4, 1.0, 0.8, t0 + 6.0 / 1440.0, 1, 800.0);
 
         let alerts = vec![a, b, c, n1, n2];
         let bucket_index = build_alert_bucket_index(&alerts, &spatial_binner, &time_binner);
@@ -754,7 +790,9 @@ mod pair_gen_tests {
             max_dt,
             max_angular_speed: omega,
             allow_same_timebin: true,
-            max_flux_difference: 100.0,
+            max_mag_difference: 100.0,
+            acc_prior_var: 1e-5,
+            ..Default::default()
         };
 
         let pairs = generate_pairs(&bucket_index, &spatial_binner, &time_binner, &config);
@@ -772,8 +810,8 @@ mod pair_gen_tests {
         assert!(pair_set.contains(&(0, 2)));
 
         for p in &pairs {
-            let dt = p.b.mjd_tt - p.a.mjd_tt;
-            let d = angular_separation_vincenty(p.a.ra, p.a.dec, p.b.ra, p.b.dec);
+            let dt = p.b.mjd_tt() - p.a.mjd_tt();
+            let d = p.a.equ_coord().angular_separation(&p.b.equ_coord());
             assert!(d <= config.max_angular_speed * dt + 1e-12);
         }
     }
@@ -819,14 +857,16 @@ mod pair_gen_tests {
                     max_dt,
                     max_angular_speed: omega,
                     allow_same_timebin: false,
-                    max_flux_difference: 1e6,
+                    max_mag_difference: 1e6,
+                    acc_prior_var: 1e-5,
+                    ..Default::default()
                 };
 
                 let sep_cap = config.max_angular_speed * config.max_dt;
                 let search_radius = sep_cap + spatial_binner.cell_radius();
 
-                let alerts: Vec<Alert> = triples.iter().enumerate()
-                    .map(|(i, (ra, dec, t))| mk_alert(i, *ra, *dec, *t, 1, 1000.0))
+                let alerts: Vec<Observation> = triples.iter().enumerate()
+                    .map(|(i, (ra, dec, t))| mk_observation(i as u64, *ra, *dec, *t, 1, 1000.0))
                     .collect();
 
                 let bucket_index = build_alert_bucket_index(&alerts, &spatial_binner, &time_binner);
@@ -836,27 +876,30 @@ mod pair_gen_tests {
                 // Pairs must be unique (pointer identity).
                 let mut set: HashSet<(usize, usize)> = HashSet::new();
                 for p in &pairs {
-                    let k = (p.a as *const Alert as usize, p.b as *const Alert as usize);
+                    let k = (
+                        p.a as *const Observation as usize,
+                        p.b as *const Observation as usize,
+                    );
                     prop_assert!(set.insert(k));
                 }
 
                 for Pair { a, b } in pairs {
-                    prop_assert!(b.mjd_tt > a.mjd_tt);
-                    prop_assert!((b.mjd_tt - a.mjd_tt) <= config.max_dt + 1e-15);
+                    prop_assert!(b.mjd_tt() > a.mjd_tt());
+                    prop_assert!((b.mjd_tt() - a.mjd_tt()) <= config.max_dt + 1e-15);
 
-                    let dt = b.mjd_tt - a.mjd_tt;
-                    let d = angular_separation_vincenty(a.ra, a.dec, b.ra, b.dec);
+                    let dt = b.mjd_tt() - a.mjd_tt();
+                    let d = a.equ_coord().angular_separation(&b.equ_coord());
                     prop_assert!(d <= config.max_angular_speed * dt + 1e-12);
                     prop_assert!(d <= sep_cap + 1e-12);
 
                     // Bucket compatibility (same logic as before).
                     let key_a = BucketKey {
-                        space_key: spatial_binner.key_for(a.ra, a.dec),
-                        time_bin: time_binner.bin_for(a.mjd_tt),
+                        space_key: spatial_binner.key_for(a.equ_coord()),
+                        time_bin: time_binner.bin_for(a.mjd_tt()),
                     };
                     let key_b = BucketKey {
-                        space_key: spatial_binner.key_for(b.ra, b.dec),
-                        time_bin: time_binner.bin_for(b.mjd_tt),
+                        space_key: spatial_binner.key_for(b.equ_coord()),
+                        time_bin: time_binner.bin_for(b.mjd_tt()),
                     };
 
                     let spatial_neighbors = spatial_binner.neighbors(key_a.space_key, search_radius);
@@ -869,119 +912,6 @@ mod pair_gen_tests {
                         (1..=max_steps).map(|dk| key_a.time_bin.0 + dk).collect();
 
                     prop_assert!(allowed_bins.contains(&key_b.time_bin.0));
-                }
-            }
-        }
-    }
-
-    /* ---------------------- extract_pair_features tests ---------------------- */
-
-    #[test]
-    fn extract_pair_features_order_and_speed_filter() {
-        use crate::astro_math::arcsec_to_rad;
-
-        let t0 = 60000.0;
-        let dec0: f64 = 0.25;
-
-        let slow_sep = arcsec_to_rad(5.0) / dec0.cos();
-        let fast_sep = arcsec_to_rad(100.0) / dec0.cos();
-
-        let a = mk_alert(0, 1.0, dec0, t0, 1, 1000.0);
-        let b = mk_alert(1, 1.0 + slow_sep, dec0, t0 + 5.0 / 1440.0, 1, 1001.0);
-        let c = mk_alert(
-            2,
-            1.0 + slow_sep + fast_sep,
-            dec0,
-            t0 + 10.0 / 1440.0,
-            1,
-            1002.0,
-        );
-
-        let alerts = vec![a, b, c];
-
-        // Build pairs explicitly (refs).
-        let pairs = vec![
-            Pair {
-                a: &alerts[0],
-                b: &alerts[1],
-            },
-            Pair {
-                a: &alerts[1],
-                b: &alerts[2],
-            },
-        ];
-
-        let mut seed_store = SeedStore::new();
-
-        let seeds_all = extract_pair_features(&pairs, &mut seed_store, NightId::new(42), None);
-        assert_eq!(seeds_all.len(), 2);
-
-        // Speed threshold between slow and fast.
-        let dt_day = 5.0 / 1440.0;
-        let speed_slow = slow_sep / dt_day;
-        let speed_fast = fast_sep / dt_day;
-        assert!(speed_fast > speed_slow);
-
-        let vmax = (speed_slow + speed_fast) * 0.5;
-        let seeds_filtered =
-            extract_pair_features(&pairs, &mut seed_store, NightId::new(42), Some(vmax));
-
-        assert_eq!(seeds_filtered.len(), 1);
-
-        // The kept seed must correspond to (alerts[0], alerts[1]).
-        // We check by pointer identity (doesn't require ids).
-        let kept = &seeds_filtered[0];
-        // Assuming SeedNode stores refs or can be introspected; if it stores values/ids,
-        // this assertion may need adaptation to your new SeedNode representation.
-        // At minimum, we can check it's the first pair by construction:
-        let _ = kept;
-    }
-
-    mod prop_extract_features {
-        use super::*;
-        use proptest::prelude::*;
-
-        const LAT_EPS: f64 = 1e-6;
-
-        fn ra_strategy() -> impl Strategy<Value = f64> {
-            0.0f64..(2.0 * std::f64::consts::PI)
-        }
-        fn dec_strategy() -> impl Strategy<Value = f64> {
-            (-(std::f64::consts::PI / 2.0 - LAT_EPS))..(std::f64::consts::PI / 2.0 - LAT_EPS)
-        }
-        fn time_strategy() -> impl Strategy<Value = f64> {
-            60000.0f64..60000.1667f64
-        }
-
-        proptest! {
-            #![proptest_config(ProptestConfig {
-                cases: 32,
-                .. ProptestConfig::default()
-            })]
-
-            #[test]
-            fn prop_extract_pair_features_1to1_mapping(
-                triples in proptest::collection::vec((ra_strategy(), dec_strategy(), time_strategy()), 2..40)
-            ) {
-                let alerts: Vec<Alert> = triples.iter().enumerate().map(|(i, (ra, dec, t))| mk_alert(i, *ra, *dec, *t, 1, 1000.0)).collect();
-
-                // Build an ordered pair list from refs, enforcing t_b > t_a.
-                let mut pairs: Vec<Pair> = Vec::new();
-                for i in 0..alerts.len() {
-                    for j in (i+1)..alerts.len() {
-                        if alerts[j].mjd_tt > alerts[i].mjd_tt {
-                            pairs.push(Pair { a: &alerts[i], b: &alerts[j] });
-                        }
-                    }
-                }
-
-                let mut seed_store = SeedStore::new();
-                let seeds = extract_pair_features(&pairs, &mut seed_store, NightId::new(7), Some(f64::INFINITY));
-
-                prop_assert_eq!(seeds.len(), pairs.len());
-
-                for seed in seeds.iter() {
-                    prop_assert_eq!(seed.n_obs, 2);
                 }
             }
         }

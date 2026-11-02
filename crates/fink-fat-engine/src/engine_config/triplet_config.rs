@@ -43,7 +43,7 @@
 //!   - require `residual ≤ max_predicted_residual`.
 //! - Photometric consistency:
 //!   - apply the implementation-specific brightness similarity check using
-//!     `max_flux_difference`.
+//!     `max_mag_difference`.
 //!
 //! -----------------------------------------------------------------------------
 //! Predictive residual: what is being bounded?
@@ -103,7 +103,7 @@
 //!   - Numeric form: `8.0e-4` means `0.0008 rad`.
 //!   - String form: `"2.75 arcmin"`, `"165 arcsec"`, `"8e-4rad"`.
 //!
-//! As for pairs, `max_flux_difference` is intentionally unit-agnostic at the
+//! As for pairs, `max_mag_difference` is intentionally unit-agnostic at the
 //! configuration layer: its meaning must match the triplet photometry kernel.
 //!
 //! ## Supported units (as implemented in `units.rs`)
@@ -135,7 +135,7 @@
 //! - `max_pair_sep = 2.5e-3 rad` (~8.6 arcmin)
 //! - `max_predicted_residual = 8.0e-4 rad` (~2.75 arcmin)
 //! - `enforce_time_order = true`
-//! - `max_flux_difference = 5.0`
+//! - `max_mag_difference = 5.0`
 //!
 //! Tuning suggestions:
 //!
@@ -143,7 +143,7 @@
 //!   - decrease `max_dt_between`,
 //!   - decrease `max_pair_sep`,
 //!   - decrease `max_predicted_residual` (often the most selective constraint),
-//!   - tighten `max_flux_difference`.
+//!   - tighten `max_mag_difference`.
 //!
 //! - If recall is too low:
 //!   - increase `max_dt_between` slightly,
@@ -167,7 +167,7 @@
 //!   max_pair_sep: 2.5e-3            # rad
 //!   max_predicted_residual: 8.0e-4  # rad
 //!   enforce_time_order: true
-//!   max_flux_difference: 5.0        # must match triplet photometry metric
+//!   max_mag_difference: 5.0        # must match triplet photometry metric
 //! ```
 //!
 //! Human-friendly string form:
@@ -178,24 +178,19 @@
 //!   max_pair_sep: "8.6 arcmin"
 //!   max_predicted_residual: "2.75 arcmin"
 //!   enforce_time_order: true
-//!   max_flux_difference: 5.0
+//!   max_mag_difference: 5.0
 //! ```
 //!
 //! -----------------------------------------------------------------------------
 //! Errors and validation
 //! -----------------------------------------------------------------------------
 //!
-//! [`TripletConfig::validate`] enforces basic numeric validity:
-//! - finite values,
-//! - non-negative thresholds,
-//! - and consistency (`max_predicted_residual ≤ max_pair_sep`).
-//!
-//! Validation can fail with:
-//! - [`SeedError::NonFiniteOrNegativeTime`] for `triplets.max_dt_between`,
-//! - [`SeedError::NonFiniteOrNegativeAngle`] for `triplets.max_pair_sep`,
-//! - [`SeedError::NonFiniteOrNegativeResidual`] for `triplets.max_predicted_residual`,
-//! - [`SeedError::NonFiniteOrNegativePhotometry`] for `triplets.max_flux_difference`,
-//! - [`SeedError::Inconsistent`] if `max_predicted_residual > max_pair_sep`.
+//! [`TripletConfig`]'s [`Validate`]
+//! implementation enforces basic numeric validity — finite values,
+//! non-negative thresholds — for all five numeric fields, plus the
+//! cross-field consistency check `max_predicted_residual ≤ max_pair_sep`,
+//! accumulating every failing field into a `Vec<FieldError>` instead of
+//! stopping at the first one.
 //!
 //! Unit parsing failures (string quantities) are surfaced by serde as
 //! deserialization errors with an explicit message from `engine_config::units`
@@ -210,10 +205,15 @@
 //! - `PairConfig` provides the earlier-stage constraints used to generate
 //!   candidate pairs that triplets may build upon.
 
+use photom::{MJDTT, Radians};
 use serde::{Deserialize, Serialize};
 
-use crate::engine_config::units::{de_angle_rad, de_time_days};
-use crate::{MJDTT, Radian, error::SeedError};
+use crate::engine_config::{
+    Validate,
+    error::FieldError,
+    units::{de_ang_speed_rad_per_day, de_angle_rad, de_time_days},
+    validate_helpers::{check_finite_nonneg, check_le},
+};
 
 /// Parameters controlling **triplet generation** `(a, b, c)`.
 ///
@@ -228,15 +228,17 @@ use crate::{MJDTT, Radian, error::SeedError};
 /// - `ang_sep(a, b) ≤ max_pair_sep` and `ang_sep(b, c) ≤ max_pair_sep`,
 /// - the linear prediction residual at `c` from `a→b` is
 ///   `≤ max_predicted_residual`,
-/// - the photometry similarity constraints pass using `max_flux_difference`,
+/// - the photometry similarity constraints pass using `max_mag_difference`,
 /// - and optionally, strict time ordering is enforced (`enforce_time_order`).
 ///
 /// Notes
 /// -----
-/// This struct is `serde`-deserializable to support robust configuration loading.
-/// If you want strict YAML typo checking (recommended), apply:
-/// `#[serde(default, deny_unknown_fields)]` as done on other config structs.
+/// - This struct is `serde`-deserializable to support robust configuration loading
+///   (YAML + environment overrides) via the `config` crate.
+/// - Unknown keys are rejected (`deny_unknown_fields`) to catch YAML typos early.
+/// - Missing fields are filled from [`Default`] (`serde(default)`).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct TripletConfig {
     /// Maximum allowed time separation between consecutive neighbors.
     ///
@@ -276,7 +278,7 @@ pub struct TripletConfig {
     /// -------------
     /// Parsed with [`de_angle_rad`].
     #[serde(deserialize_with = "de_angle_rad")]
-    pub max_pair_sep: Radian,
+    pub max_pair_sep: Radians,
 
     /// Maximum residual at `c` when extrapolating a linear motion model from `a→b`.
     ///
@@ -304,7 +306,7 @@ pub struct TripletConfig {
     /// -------------
     /// Parsed with [`de_angle_rad`].
     #[serde(deserialize_with = "de_angle_rad")]
-    pub max_predicted_residual: Radian,
+    pub max_predicted_residual: Radians,
 
     /// Enforce strict time ordering: require `t(a) < t(b) < t(c)`.
     ///
@@ -319,7 +321,32 @@ pub struct TripletConfig {
     /// This value is **dimensionless at the configuration layer**. Its meaning
     /// depends on the photometry check used by the triplet generator
     /// (flux space, magnitude space, normalized residual, etc.).
-    pub max_flux_difference: f64,
+    pub max_mag_difference: f64,
+
+    /// Maximum allowed on-sky angular speed.
+    ///
+    /// Units
+    /// -----
+    /// - Canonical: **radians per day**.
+    ///
+    /// YAML forms
+    /// ---------
+    /// - numeric (already in rad/day): `5.0e-2`
+    /// - string with explicit rate: `"35 arcmin/day"`, `"2 arcsec / hour"`, `"0.05 rad/day"`
+    ///
+    /// Acceptance test
+    /// ---------------
+    /// A candidate pair `(a, b)` must satisfy:
+    ///
+    /// ```text
+    /// ang_sep(a, b) / (t_b - t_a) ≤ max_angular_speed
+    /// ```
+    ///
+    /// Serialization
+    /// -------------
+    /// Parsed with [`de_ang_speed_rad_per_day`].
+    #[serde(deserialize_with = "de_ang_speed_rad_per_day")]
+    pub max_angular_speed: f64,
 }
 
 impl Default for TripletConfig {
@@ -330,40 +357,73 @@ impl Default for TripletConfig {
             max_pair_sep: 2.5e-3,
             max_predicted_residual: 8.0e-4,
             enforce_time_order: true,
-            max_flux_difference: 5.0,
+            max_mag_difference: 5.0,
+            max_angular_speed: 5.0e-2,
+        }
+    }
+}
+
+impl Validate for TripletConfig {
+    /// Validate internal consistency and numeric ranges, accumulating every
+    /// failure found instead of stopping at the first one.
+    fn validate(&self) -> Result<(), Vec<FieldError>> {
+        let mut errors = Vec::new();
+
+        if let Some(e) = check_finite_nonneg(
+            "max_dt_between",
+            self.max_dt_between,
+            "set triplets.max_dt_between to a non-negative duration, e.g. \"57.6 min\" or 0.04 (days)",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_nonneg(
+            "max_pair_sep",
+            self.max_pair_sep,
+            "set triplets.max_pair_sep to a non-negative angle, e.g. \"8.6 arcmin\" or 2.5e-3 (rad)",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_nonneg(
+            "max_predicted_residual",
+            self.max_predicted_residual,
+            "set triplets.max_predicted_residual to a non-negative angle, e.g. \"2.75 arcmin\" or 8.0e-4 (rad)",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_nonneg(
+            "max_mag_difference",
+            self.max_mag_difference,
+            "set triplets.max_mag_difference to a non-negative threshold, e.g. 5.0",
+        ) {
+            errors.push(e);
+        }
+        if let Some(e) = check_finite_nonneg(
+            "max_angular_speed",
+            self.max_angular_speed,
+            "set triplets.max_angular_speed to a non-negative rate, e.g. \"35 arcmin/day\" or 5.0e-2 (rad/day)",
+        ) {
+            errors.push(e);
+        }
+
+        if let Some(e) = check_le(
+            "max_predicted_residual",
+            self.max_predicted_residual,
+            "max_pair_sep",
+            self.max_pair_sep,
+            "lower triplets.max_predicted_residual, or raise triplets.max_pair_sep, so the prediction residual never exceeds the neighbor-scale separation",
+        ) {
+            errors.push(e);
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
         }
     }
 }
 
 impl TripletConfig {
-    /// Validate internal consistency and numeric ranges.
-    pub fn validate(&self) -> Result<(), SeedError> {
-        if !self.max_dt_between.is_finite() || self.max_dt_between < 0.0 {
-            return Err(SeedError::NonFiniteOrNegativeTime(
-                "triplets.max_dt_between",
-            ));
-        }
-        if !self.max_pair_sep.is_finite() || self.max_pair_sep < 0.0 {
-            return Err(SeedError::NonFiniteOrNegativeAngle("triplets.max_pair_sep"));
-        }
-        if !self.max_predicted_residual.is_finite() || self.max_predicted_residual < 0.0 {
-            return Err(SeedError::NonFiniteOrNegativeResidual(
-                "triplets.max_predicted_residual",
-            ));
-        }
-        if !self.max_flux_difference.is_finite() || self.max_flux_difference < 0.0 {
-            return Err(SeedError::NonFiniteOrNegativePhotometry(
-                "triplets.max_flux_difference",
-            ));
-        }
-        if self.max_predicted_residual > self.max_pair_sep {
-            return Err(SeedError::Inconsistent(
-                "triplets.max_predicted_residual > triplets.max_pair_sep",
-            ));
-        }
-        Ok(())
-    }
-
     /// Start building a [`TripletConfig`] with chainable setters.
     pub fn builder() -> TripletConfigBuilder {
         TripletConfigBuilder::default()
@@ -384,13 +444,13 @@ impl TripletConfigBuilder {
     }
 
     /// Set maximum angular separation between neighbor alerts (radians).
-    pub fn max_pair_sep(mut self, v: Radian) -> Self {
+    pub fn max_pair_sep(mut self, v: Radians) -> Self {
         self.params.max_pair_sep = v;
         self
     }
 
     /// Set maximum allowed prediction residual at `c` (radians).
-    pub fn max_predicted_residual(mut self, v: Radian) -> Self {
+    pub fn max_predicted_residual(mut self, v: Radians) -> Self {
         self.params.max_predicted_residual = v;
         self
     }
@@ -402,19 +462,26 @@ impl TripletConfigBuilder {
     }
 
     /// Set maximum allowed photometric difference.
-    pub fn max_flux_difference(mut self, v: f64) -> Self {
-        self.params.max_flux_difference = v;
+    pub fn max_mag_difference(mut self, v: f64) -> Self {
+        self.params.max_mag_difference = v;
+        self
+    }
+
+    /// Set maximum allowed on-sky angular speed.
+    pub fn max_angular_speed(mut self, v: f64) -> Self {
+        self.params.max_angular_speed = v;
         self
     }
 
     /// Finalize builder and validate constraints.
-    pub fn build(self) -> Result<TripletConfig, SeedError> {
+    pub fn build(self) -> Result<TripletConfig, Vec<FieldError>> {
         let p = TripletConfig {
             max_dt_between: self.params.max_dt_between,
             max_pair_sep: self.params.max_pair_sep,
             max_predicted_residual: self.params.max_predicted_residual,
             enforce_time_order: self.params.enforce_time_order,
-            max_flux_difference: self.params.max_flux_difference,
+            max_mag_difference: self.params.max_mag_difference,
+            max_angular_speed: self.params.max_angular_speed,
         };
         p.validate()?;
         Ok(p)
