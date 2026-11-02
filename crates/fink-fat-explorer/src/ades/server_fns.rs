@@ -104,9 +104,11 @@ async fn poll_mpc_submission_status(
             .get(MPC_SUBMISSION_STATUS_URL)
             .query(&[("id", submission_id)])
             .send()
-            .await?
+            .await
+            .map_err(|e| AdesError::McpRequest(e.to_string()))?
             .text()
-            .await?;
+            .await
+            .map_err(|e| AdesError::McpRequest(e.to_string()))?;
 
         match parse_submission_status_page(&body)? {
             SubmissionStatusOutcome::Pending => {

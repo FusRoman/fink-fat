@@ -10,6 +10,7 @@ use plotly::{
 use super::cross_match_controls::CrossMatchControls;
 use super::kf_replay::KfStep;
 use super::observations_table::ObservationRow;
+use super::trajectory_plot_glossary::TrajectoryPlotGlossary;
 use super::x_axis::XAxisUnit;
 #[cfg(target_arch = "wasm32")]
 use super::x_axis::{format_time_labels, x_values_for_observations, x_values_for_steps};
@@ -409,7 +410,10 @@ pub fn TrajectoryPlot(
         div { class: "card bg-base-100 shadow-sm flex-1",
             div { class: "card-body",
                 div { class: "flex flex-wrap items-center justify-between gap-3",
-                    h2 { class: "card-title", "Trajectory & Kalman predictions" }
+                    div { class: "flex items-center gap-2",
+                        h2 { class: "card-title", "Trajectory & Kalman predictions" }
+                        TrajectoryPlotGlossary {}
+                    }
                     div { class: "flex items-center gap-2",
                         CrossMatchControls {
                             skybot_radius_arcsec,

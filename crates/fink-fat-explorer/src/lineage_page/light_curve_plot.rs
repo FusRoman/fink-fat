@@ -7,6 +7,7 @@ use plotly::{
     Plot, Scatter,
 };
 
+use super::light_curve_plot_glossary::LightCurvePlotGlossary;
 use super::observations_table::ObservationRow;
 use super::x_axis::XAxisUnit;
 #[cfg(target_arch = "wasm32")]
@@ -196,7 +197,10 @@ pub fn LightCurvePlot(observations: Vec<ObservationRow>, x_axis_unit: XAxisUnit)
     rsx! {
         div { class: "card bg-base-100 shadow-sm flex-1",
             div { class: "card-body",
-                h2 { class: "card-title", "Light curve" }
+                div { class: "flex items-center gap-2",
+                    h2 { class: "card-title", "Light curve" }
+                    LightCurvePlotGlossary {}
+                }
                 div {
                     id: "lineage-light-curve-plot",
                     style: "width: 100%;",

@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use dioxus::prelude::*;
 
 use crate::homepage::family::DynamicalFamily;
+use crate::homepage::orbit3d_population_glossary::Orbit3DPopulationGlossary;
 use crate::orbit3d::plot3d::{planet_traces, Scatter3dPlot, Trace3D, TraceSource, TraceStyle};
 use crate::orbit3d::server_fns::{get_homepage_orbit3d, get_planets_3d};
 use crate::orbit3d::types::ObjectPoint3D;
@@ -124,7 +125,10 @@ pub fn Orbit3DPlot() -> Element {
         div { class: "card bg-base-100 shadow-sm",
             div { class: "card-body",
                 div { class: "text-center mb-1",
-                    h2 { class: "text-2xl font-bold tracking-tight", "The Solar System, in 3D" }
+                    div { class: "flex items-center justify-center gap-2",
+                        h2 { class: "text-2xl font-bold tracking-tight", "The Solar System, in 3D" }
+                        Orbit3DPopulationGlossary {}
+                    }
                     p { class: "text-sm opacity-60", "{status_text}" }
                 }
                 div { class: "relative",

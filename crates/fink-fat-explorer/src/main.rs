@@ -1,4 +1,6 @@
 pub mod ades;
+pub mod api;
+pub mod api_docs;
 pub mod best_orbit;
 pub mod bulk_cnd;
 pub mod bulk_cnd_page;
@@ -10,7 +12,9 @@ pub mod cnd_search;
 pub mod cross_match_dashboard;
 pub mod cross_match_status;
 pub mod fit_pipeline;
+pub mod footer;
 pub mod format_epoch;
+mod help_popover;
 pub mod homepage;
 pub mod lineage_page;
 pub mod lsst_band;
@@ -18,6 +22,8 @@ pub mod orbit3d;
 pub mod orbit_fit;
 pub mod orbit_fit_page;
 pub mod skybot_search;
+pub mod submission_dashboard;
+pub mod submitter_config_form;
 pub mod survey;
 
 use dioxus::prelude::*;
@@ -35,6 +41,7 @@ use std::sync::Mutex;
 #[cfg(feature = "server")]
 use tokio::sync::OnceCell;
 
+use crate::api_docs::ApiDocsPage;
 use crate::bulk_cnd_page::BulkCndPage;
 use crate::bulk_orbit_fit_page::BulkOrbitFitPage;
 use crate::bulk_skybot_page::BulkSkybotPage;
@@ -42,6 +49,7 @@ use crate::cross_match_dashboard::CrossMatchDashboardPage;
 use crate::homepage::Home;
 use crate::lineage_page::LineagePage;
 use crate::orbit_fit_page::OrbitFitPage;
+use crate::submission_dashboard::SubmissionDashboardPage;
 
 /// Platform-agnostic async sleep, for the app's polling loops (orbit fit job
 /// status, homepage snapshot warm-up, search debounce).
@@ -299,17 +307,41 @@ enum Route {
 
     #[route("/cross-match")]
     CrossMatchDashboardPage {},
+
+    #[route("/submission")]
+    SubmissionDashboardPage {},
+
+    #[route("/api-docs")]
+    ApiDocsPage {},
 }
 
 fn main() {
     dioxus::launch(App);
 }
 
+/// The app's root component, mounted once regardless of route.
+///
+/// Every page renders its own `min-h-screen` root inside `Router` — this
+/// wrapper adds the one piece of chrome shared by all of them: the
+/// site-wide [`footer::Footer`]. The `flex-1` div around `Router` is what
+/// makes it a proper sticky footer: a page shorter than the viewport still
+/// pushes the footer to the bottom, while a taller page's own content
+/// scrolls normally with the footer following at the true end of the page.
 #[component]
 fn App() -> Element {
     rsx! {
         document::Stylesheet { href: asset!("/assets/main.css") }
+        // The footer's tagline uses this geometric, sci-fi/space-observatory
+        // style font — loaded once, here, rather than per-component, same
+        // as the main stylesheet above.
+        document::Link {
+            rel: "stylesheet",
+            href: "https://fonts.googleapis.com/css2?family=Orbitron:wght@500..700&display=swap",
+        }
 
-        Router::<Route> {}
+        div { class: "min-h-screen flex flex-col",
+            div { class: "flex-1 flex flex-col", Router::<Route> {} }
+            footer::Footer {}
+        }
     }
 }

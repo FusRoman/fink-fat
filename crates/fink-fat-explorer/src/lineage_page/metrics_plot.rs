@@ -8,14 +8,19 @@ use plotly::{
 };
 
 use super::kf_replay::KfStep;
+use super::metrics_plot_glossary::MetricsPlotGlossary;
 use super::x_axis::XAxisUnit;
 #[cfg(target_arch = "wasm32")]
 use super::x_axis::{x_values_for_steps, XAxisValues};
 
-/// χ² (2 d.o.f.) gate threshold at 95% confidence — the same value used by
-/// the engine's default `inflation_chi2_threshold`
-/// (`engine_config.best.yaml`'s `kalman_shared_context.config`).
-const CHI2_GATE_95: f64 = 5.991;
+/// χ² (2 d.o.f.) covariance-inflation threshold at 95% confidence — the same
+/// value used by the engine's default `SingleKalmanConfig::inflation_chi2_threshold`
+/// (`engine_config.best.yaml`'s `kalman_shared_context.config`). This is
+/// *not* the multi-hypothesis bank's discard gate (`KFBankConfig::gate_chi2`,
+/// default 23.0) — see [`super::metrics_plot_glossary`] for that distinction.
+/// `pub(super)` so the glossary's tests can assert its displayed text
+/// matches this value exactly rather than a copy that could drift.
+pub(super) const CHI2_GATE_95: f64 = 5.991;
 
 /// Evolution of the per-point filter-consistency metrics as real
 /// observations are absorbed: χ² (NIS), angular separation from the
@@ -26,7 +31,10 @@ pub fn MetricsPlot(replay: Vec<KfStep>, x_axis_unit: XAxisUnit) -> Element {
     rsx! {
         div { class: "card bg-base-100 shadow-sm flex-1",
             div { class: "card-body gap-4",
-                h2 { class: "card-title", "Filter consistency metrics" }
+                div { class: "flex items-center gap-2",
+                    h2 { class: "card-title", "Filter consistency metrics" }
+                    MetricsPlotGlossary {}
+                }
                 Chi2Plot { replay: replay.clone(), x_axis_unit }
                 SeparationPlot { replay: replay.clone(), x_axis_unit }
                 LogLikelihoodPlot { replay, x_axis_unit }

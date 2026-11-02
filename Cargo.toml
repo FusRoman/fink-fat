@@ -24,7 +24,12 @@ documentation.workspace = true
 license-file.workspace = true
 
 [workspace]
-members = ["crates/fink-fat-engine", "crates/fink-fat-eval", "crates/fink-fat-explorer"]
+members = [
+    "crates/fink-fat-ades",
+    "crates/fink-fat-engine",
+    "crates/fink-fat-eval",
+    "crates/fink-fat-explorer",
+]
 resolver = "3"
 
 [workspace.dependencies]
@@ -35,11 +40,12 @@ thiserror = "2.0.17"
 camino = "1.2.1"
 tempfile = "3.23.0"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 tracing-appender = "0.2"
 clap = { version = "4.5.60", features = ["cargo", "derive"] }
 chrono = "0.4"
 fink-fat-engine = { path = "crates/fink-fat-engine", version = "1.0.0" }
+fink-fat-ades = { path = "crates/fink-fat-ades", version = "1.0.0" }
 indicatif = "0.18.0"
 serde_yaml = "0.9.34"
 ndarray = "0.17.2"
@@ -55,7 +61,14 @@ polars = { version = "0.53.0", default-features = false, features = [
 ] }
 rkyv = "0.8.17"
 memmap2 = "0.9.10"
-postgres = "0.19.10"
+# `with-chrono-0_4`: `fink-fat submit`'s eligibility check reads
+# `orbit_fits.fitted_at`/`orbit_fit_failures.attempted_at` (`TIMESTAMPTZ`) to
+# reproduce `fink_fat_ades::quality_tier::assign_quality_tier`'s cascade —
+# nothing under `converter::sql` needed chrono round-tripping before this.
+# `with-serde_json-1`: `mpc_submissions.verdict_detail` is `JSONB` —
+# `postgres::types::Json<T>` is the only `ToSql` impl that actually accepts
+# a JSON/JSONB column (see `submit::insert_submission_row`'s doc comment).
+postgres = { version = "0.19.10", features = ["with-chrono-0_4", "with-serde_json-1"] }
 rayon = "1.12.0"
 
 
@@ -67,6 +80,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
 fink-fat-engine = { workspace = true }
+fink-fat-ades = { workspace = true }
 clap = { workspace = true }
 photom = { workspace = true, features = ["polars"] }
 polars = { workspace = true }
@@ -76,6 +90,14 @@ postgres = { workspace = true }
 nalgebra = { workspace = true }
 outfit = { workspace = true }
 rayon = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+serde_json = "1.0"
+# `blocking` keeps the CLI's `submit` subcommand synchronous (no tokio
+# runtime needed, matching the rest of this binary crate — see
+# `converter::sql`'s use of the synchronous `postgres` crate for the same
+# reason); `multipart` is needed for the ADES XML submission POST.
+reqwest = { version = "0.12", features = ["blocking", "json", "multipart"] }
 
 [dev-dependencies]
 assert_cmd = "2.0.16"

@@ -12,6 +12,12 @@ plotly = "0.14.1"
 serde.workspace = true
 serde_json = "1.0"
 thiserror.workspace = true
+# Pure ADES/MPC domain logic and the QualityTier cascade, shared with the
+# `fink-fat submit` CLI — see `crates/fink-fat-ades`'s crate docs. Always-on
+# (not server-gated): its plain serializable types (`AdesHeaderInput`,
+# `QualityTier`, ...) cross the `#[server]` fn boundary, so the wasm client
+# build needs them too, same as this crate's own `serde`/`serde_json`.
+fink-fat-ades = { workspace = true }
 
 # Server-only dependencies — not compiled for wasm32.
 # fink-fat-engine pulls tokio (rt-multi-thread, fs) and getrandom without
@@ -25,7 +31,6 @@ nalgebra = { workspace = true, optional = true }
 outfit = { workspace = true, optional = true }
 photom = { workspace = true, optional = true, features = ["polars"] }
 polars = { workspace = true, optional = true }
-quick-xml = { version = "0.37", features = ["serialize"], optional = true }
 rand = { version = "0.9", default-features = false, features = [
     "small_rng",
 ], optional = true }
@@ -52,6 +57,11 @@ web-sys = { version = "0.3.104", features = ["console"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 gloo-timers = { version = "0.3", features = ["futures"] }
+# Binds the (a, e) plot's `plotly_click` event to a lineage-page navigation —
+# plotly.rs's own bindings only wrap `newPlot`/`react`, not plotly.js's event
+# API, so `homepage::dynamic_pop_plot` calls straight into a small inline JS
+# helper for this one event.
+wasm-bindgen = "0.2"
 
 [features]
 default = ["web"]
@@ -70,12 +80,21 @@ server = [
     "dep:outfit",
     "dep:photom",
     "dep:polars",
-    "dep:quick-xml",
     "dep:rand",
     "dep:rayon",
     "dep:reqwest",
     "dep:tracing"
 ]
+
+# Documented on the `/api-docs` page (included with `include_str!`), so it is
+# compiled and linted with the rest of the workspace and cannot go stale.
+[[example]]
+name = "reverse_search"
+required-features = ["server"]
+
+[[example]]
+name = "reverse_search_batch"
+required-features = ["server"]
 
 [dev-dependencies]
 approx = "0.5.1"
@@ -85,3 +104,6 @@ tempfile = { workspace = true }
 # own obs80 parser (see `cnd_search/obs80.rs`'s tests) — same pattern as
 # `fink-fat-engine/Cargo.toml`'s dev-dependency override for the same feature.
 photom = { workspace = true, features = ["mpc_80_col"] }
+
+[build-dependencies]
+built = { version = "0.8.1", default-features = false, features = ["cargo-lock"] }

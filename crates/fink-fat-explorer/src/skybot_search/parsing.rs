@@ -201,6 +201,8 @@ mod tests {
     fn point_at(ra_deg: f64, dec_deg: f64) -> SkybotQueryPoint {
         SkybotQueryPoint {
             source_index: 3,
+            obs_id: 0,
+            branch_id: 0,
             ra_deg,
             dec_deg,
             mjd_tt: 60000.0,
@@ -234,6 +236,8 @@ mod tests {
     fn conesearch_url_embeds_point_and_radius() {
         let point = SkybotQueryPoint {
             source_index: 0,
+            obs_id: 0,
+            branch_id: 0,
             ra_deg: 148.67,
             dec_deg: 16.3838,
             mjd_tt: 60000.0,
@@ -396,6 +400,8 @@ mod live_tests {
     fn known_object_point() -> SkybotQueryPoint {
         SkybotQueryPoint {
             source_index: 0,
+            obs_id: 0,
+            branch_id: 0,
             ra_deg: 149.330_606_28,
             dec_deg: 0.935_603_11,
             mjd_tt: 61_033.278_741,
@@ -440,6 +446,8 @@ mod live_tests {
         // (204/empty-body) response path end to end.
         let point = SkybotQueryPoint {
             source_index: 0,
+            obs_id: 0,
+            branch_id: 0,
             ra_deg: 0.0,
             dec_deg: 89.9,
             mjd_tt: 61_033.278_741,

@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use crate::homepage::family::DynamicalFamily;
 use crate::homepage::interaction::{Pagination, SortColumn, SortDirection, PAGE_SIZE};
+use crate::homepage::lineage_table_glossary::LineageTableGlossary;
 use crate::homepage::quality_tier::QualityTier;
 use crate::Route;
 
@@ -212,7 +213,7 @@ fn TabHeader(
     };
 
     rsx! {
-        div { class: "grid grid-cols-9 gap-4 px-4 py-2 text-sm font-semibold opacity-60",
+        div { class: "grid grid-cols-9 gap-4 px-4 py-2 text-sm font-semibold opacity-60 sticky top-0 z-10 bg-base-100",
             span { "Designation" }
             span { "Lineage" }
             span {
@@ -484,10 +485,13 @@ pub fn BranchTab(
             let page = current_page();
 
             rsx! {
-                div { class: "card bg-base-100 shadow-sm",
-                    div { class: "card-body",
+                div { class: "card bg-base-100 shadow-sm h-full flex flex-col",
+                    div { class: "card-body flex-1 min-h-0 flex flex-col",
                         div { class: "flex items-center justify-between mb-2",
-                            h2 { class: "card-title", "Recent lineages" }
+                            div { class: "flex items-center gap-2",
+                                h2 { class: "card-title", "Recent lineages" }
+                                LineageTableGlossary {}
+                            }
                             select { class: "select select-bordered select-sm w-40",
                                 option { "All" }
                                 option { "Active" }
@@ -495,7 +499,7 @@ pub fn BranchTab(
                             }
                         }
 
-                        div { class: "max-h-[32vh] overflow-y-auto pr-1",
+                        div { class: "flex-1 min-h-0 overflow-y-auto pr-1",
                             TabHeader {
                                 sort_column: sort_column(),
                                 sort_direction: sort_direction(),

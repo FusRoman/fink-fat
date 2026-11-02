@@ -41,7 +41,7 @@ impl SortColumn {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SortDirection {
     Asc,
     Desc,
@@ -64,11 +64,12 @@ pub fn Pagination(
     page: i64,
     total_pages: i64,
     total_lineages: i64,
+    #[props(default = "lineages".to_string())] item_label: String,
 ) -> Element {
     rsx! {
         div { class: "flex items-center justify-between mt-4",
             span { class: "text-sm opacity-70",
-                "Page {page + 1} of {total_pages} ({total_lineages} lineages)"
+                "Page {page + 1} of {total_pages} ({total_lineages} {item_label})"
             }
             div { class: "flex items-center gap-2",
                 input {

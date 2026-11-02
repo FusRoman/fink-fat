@@ -1,11 +1,20 @@
 //! Typed errors for ADES document construction, local schema validation,
-//! submission to MPC's `submit_xml_test` endpoint, and polling its
-//! test-submission status page for the real ingest verdict.
+//! submission to MPC (`submit_xml`/`submit_xml_test`), and parsing the
+//! responses of every MPC status-checking service this crate knows about
+//! (the test-submission status page, the production Submission Status API,
+//! WAMO).
+//!
+//! This crate performs no I/O itself (see the crate-level docs), so network
+//! failures are not represented via a typed HTTP-client error — each caller
+//! (`fink-fat-explorer`'s async `reqwest::Client`, `fink-fat`'s CLI
+//! `reqwest::blocking::Client`) maps its own request failure to
+//! [`AdesError::McpRequest`] with `.to_string()`, keeping this crate free of
+//! a `reqwest` dependency.
 
 use thiserror::Error;
 
-/// Everything that can go wrong building, serializing, or submitting an ADES
-/// pre-submission XML file for a lineage.
+/// Everything that can go wrong building, serializing, submitting, or
+/// checking the status of an ADES pre-submission XML file for a lineage.
 #[derive(Debug, Error)]
 pub enum AdesError {
     /// `trkSub` normalization failed (e.g. empty designation, or every
@@ -29,20 +38,20 @@ pub enum AdesError {
 
     /// `quick_xml`'s serializer failed on an otherwise well-formed
     /// `AdesDocument`.
-    #[cfg(feature = "server")]
     #[error("failed to serialize ADES document to XML: {0}")]
     XmlSerialize(#[from] quick_xml::SeError),
 
     /// An outbound HTTP request to MPC itself failed (network/timeout/
-    /// non-2xx) — either the initial `submit_xml_test` POST or a later
-    /// status-page GET, as opposed to a request that succeeded but returned
-    /// an unparseable body.
-    #[cfg(feature = "server")]
+    /// non-2xx) — the initial submission POST, or a later status-page/API
+    /// GET, as opposed to a request that succeeded but returned an
+    /// unparseable body. Carries the caller's HTTP client error rendered to
+    /// a string (see the module docs for why this isn't a typed `reqwest`
+    /// error).
     #[error("MPC request failed: {0}")]
-    McpRequest(#[from] reqwest::Error),
+    McpRequest(String),
 
-    /// MPC's `submit_xml_test` response body didn't contain the expected
-    /// `"Submission ID is ..."` acknowledgement pattern.
+    /// MPC's `submit_xml`/`submit_xml_test` response body didn't contain the
+    /// expected `"Submission ID is ..."` acknowledgement pattern.
     #[error("could not parse MPC submission acknowledgement: {0}")]
     McpSubmissionResponseParse(String),
 
@@ -56,4 +65,21 @@ pub enum AdesError {
     /// the polling budget — MPC may still be processing it.
     #[error("MPC status check for submission '{submission_id}' timed out")]
     McpStatusPollTimedOut { submission_id: String },
+
+    /// MPC's production Submission Status API returned a body that couldn't
+    /// be decoded as the documented `{accepted, pipeline_entry_time,
+    /// fault_events}` JSON shape.
+    #[error("could not parse MPC submission-status API response: {0}")]
+    SubmissionStatusApiParse(String),
+
+    /// A [`crate::wamo::build_wamo_request_body`] call would have carried
+    /// more identifiers than WAMO's documented ~50,000-identifier limit per
+    /// call.
+    #[error("WAMO request has {count} identifiers, over the documented limit of {limit}")]
+    WamoTooManyIdentifiers { count: usize, limit: usize },
+
+    /// MPC's WAMO API returned a body that couldn't be decoded as its
+    /// documented JSON response shape.
+    #[error("could not parse WAMO API response: {0}")]
+    WamoResponseParse(String),
 }

@@ -2,15 +2,14 @@
 //! an ADES optical-observation submission, read directly from
 //! <https://raw.githubusercontent.com/IAU-ADES/ADES-Master/master/xsd/submit.xsd>.
 //!
-//! MPC's live `submit_xml_test` endpoint (see `mpc_submission.rs`) is
-//! asynchronous — it only ever acknowledges a submission and emails the real
-//! validation report later, so it cannot back a synchronous, blocking
-//! green/red indicator. This module is that indicator instead: it is the
-//! sole gate controlling whether the ADES download button is enabled.
+//! MPC's live `submit_xml`/`submit_xml_test` endpoints (see
+//! `mpc_submission.rs`) are asynchronous — they only ever acknowledge a
+//! submission, with the real verdict arriving later via a separate status
+//! check — so this module is the synchronous, blocking green/red indicator
+//! callers use before ever contacting MPC: the sole gate controlling whether
+//! a document is submitted at all.
 
-use crate::ades::model::{
-    band_index_to_ades_band, normalize_trk_sub, AdesHeaderInput, NightObservation,
-};
+use crate::model::{AdesHeaderInput, NightObservation, band_index_to_ades_band, normalize_trk_sub};
 
 /// `submit.xsd`'s `StationType`: 3–4 alphanumeric characters.
 const STATION_LEN_RANGE: std::ops::RangeInclusive<usize> = 3..=4;
@@ -28,14 +27,22 @@ fn is_ast_cat_char(c: char) -> bool {
 }
 
 /// Check every observation and header field against the `submit.xsd`
-/// constraints relevant to an ADES optical-observation submission. Returns a
-/// list of human-readable violations; an empty list means the document that
-/// would be built from these inputs is locally conformant.
+/// constraints relevant to an ADES optical-observation submission.
 ///
-/// This is the sole gate controlling the download button: MPC's
-/// `submit_xml_test` endpoint is only ever consulted (see
-/// `mpc_submission.rs`) once this function returns no violations, and its
-/// own outcome never re-opens or re-closes that gate.
+/// This is the sole gate controlling whether a document is worth submitting
+/// to MPC at all: `submit_xml`/`submit_xml_test` are only ever consulted
+/// (see `mpc_submission.rs`) once this function returns no violations, and
+/// MPC's own outcome never re-opens or re-closes that gate.
+///
+/// # Arguments
+/// * `lineage_designation` — the lineage the document would be built for.
+/// * `observations` — the candidate observations (after singleton-night
+///   removal — see [`crate::model::remove_singleton_nights`]).
+/// * `header` — the submitter/telescope header fields.
+///
+/// # Return
+/// A list of human-readable violations; an empty list means the document
+/// that would be built from these inputs is locally conformant.
 pub fn check_local_schema_violations(
     lineage_designation: &str,
     observations: &[NightObservation],
@@ -148,7 +155,7 @@ pub fn check_local_schema_violations(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lineage_page::observations_table::ObservationRow;
+    use crate::model::ObservationRow;
 
     fn valid_header() -> AdesHeaderInput {
         AdesHeaderInput {
@@ -250,9 +257,11 @@ mod tests {
         header.ack_message = String::new();
         header.ac2_email = "not-an-email".to_string();
         let violations = check_local_schema_violations("FF2024AB", &[valid_observation()], &header);
-        assert!(violations
-            .iter()
-            .any(|v| v.contains("acknowledgment message")));
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.contains("acknowledgment message"))
+        );
         assert!(violations.iter().any(|v| v.contains("email")));
     }
 }

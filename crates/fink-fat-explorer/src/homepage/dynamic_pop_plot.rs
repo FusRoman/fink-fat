@@ -11,9 +11,39 @@ use plotly::{
 use serde::{Deserialize, Serialize};
 
 use crate::homepage::family::DynamicalFamily;
+use crate::homepage::population_plot_glossary::PopulationPlotGlossary;
 #[cfg(target_arch = "wasm32")]
 use crate::homepage::quality_tier::marker_for;
 use crate::homepage::quality_tier::QualityTier;
+
+// plotly.rs 0.14 only wraps plotly.js's `newPlot`/`react` functions, not its
+// event API, so subscribing to `plotly_click` (to jump to the clicked
+// point's lineage page) goes straight through a small inline JS helper
+// instead. `encodeURIComponent` runs on the JS side, so a designation with
+// spaces or other reserved characters still produces a valid URL.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(inline_js = "
+export function bind_plotly_click_navigation(plot_id, url_prefix) {
+    var gd = document.getElementById(plot_id);
+    if (!gd) { return; }
+    gd.on('plotly_click', function(event_data) {
+        if (!event_data || !event_data.points || event_data.points.length === 0) {
+            return;
+        }
+        var designation = event_data.points[0].customdata;
+        if (designation) {
+            window.location.href = url_prefix + encodeURIComponent(designation);
+        }
+    });
+}
+")]
+extern "C" {
+    /// Navigates the browser to `{url_prefix}{encodeURIComponent(designation)}`
+    /// whenever a point in `plot_id` is clicked, reading the designation from
+    /// that point's `customdata` (set per-trace alongside the hover
+    /// template). A no-op if `plot_id` isn't mounted yet.
+    fn bind_plotly_click_navigation(plot_id: &str, url_prefix: &str);
+}
 
 /// All the points of a single (family, quality tier) pair, pre-split into the
 /// two coordinate vectors plotly wants, so that toggling a family or a tier
@@ -22,13 +52,16 @@ use crate::homepage::quality_tier::QualityTier;
 /// This is also the wire format: the server groups the population once when it
 /// builds the homepage snapshot and ships these flat arrays, rather than one
 /// JSON object per point carrying a repeated family/tier label — roughly a
-/// sixfold cut in payload at 214k branches.
+/// sixfold cut in payload at 214k branches. `lineage_designations` is the one
+/// per-point field kept alongside `a`/`e` (index-aligned with both) — it
+/// labels each point on hover and lets a click jump to that lineage's page.
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlotSeries {
     pub family: DynamicalFamily,
     pub tier: QualityTier,
     pub a: Vec<f32>,
     pub e: Vec<f32>,
+    pub lineage_designations: Vec<Box<str>>,
 }
 
 /// Served from the in-RAM homepage snapshot; `None` while it is still being
@@ -43,23 +76,27 @@ pub async fn query_orbital_elements() -> Result<Option<Vec<PlotSeries>>, ServerF
 /// How often to re-check whether the homepage snapshot has finished building.
 const WARMUP_POLL_MS: u64 = 1000;
 
-#[component]
-pub fn DynamicPopPlot(
-    hidden_families: Signal<HashSet<DynamicalFamily>>,
-    hidden_tiers: Signal<HashSet<QualityTier>>,
+/// The population's per-(family, tier) series, kept alive independently of
+/// the (a, e) plot itself: [`PopulationLegendBar`] needs this data even when
+/// `DynamicPopPlot` isn't the active homepage view, since the legend now
+/// stays visible across all 3 views. `Home()` calls this once and hands the
+/// resulting resource to both.
+///
+/// # Arguments
+/// * `refresh_token` — bumped after a snapshot rebuild lands; restarts the
+///   fetch against the new snapshot.
+///
+/// # Return
+/// The raw query resource: `Ok(None)` while the snapshot is still building
+/// (this function polls for it internally), `Ok(Some(series))` once ready,
+/// `Err` on a transport failure.
+pub fn use_population_series(
     refresh_token: Signal<u64>,
-) -> Element {
+) -> Resource<Result<Option<Vec<PlotSeries>>, ServerFnError>> {
     let mut orbital_data = use_resource(move || async move {
         let _ = refresh_token();
         query_orbital_elements().await
     });
-    let mut is_mounted = use_signal(|| false);
-    // Whether plotly has drawn into the div at least once: the first draw
-    // needs `new_plot`, every later one is a cheaper `react` diff. Only the
-    // wasm build ever draws, and target arch is fixed at compile time, so
-    // gating the hook keeps hook order consistent within a given build.
-    #[cfg(target_arch = "wasm32")]
-    let mut drawn = use_signal(|| false);
 
     // `Ok(None)` means the snapshot is still building — poll for it.
     use_effect(move || {
@@ -72,37 +109,30 @@ pub fn DynamicPopPlot(
         }
     });
 
-    // Already grouped by (family, tier), in family then tier order — which is
-    // the order both legends list their chips in.
+    orbital_data
+}
+
+#[component]
+pub fn DynamicPopPlot(
+    orbital_data: Resource<Result<Option<Vec<PlotSeries>>, ServerFnError>>,
+    hidden_families: Signal<HashSet<DynamicalFamily>>,
+    hidden_tiers: Signal<HashSet<QualityTier>>,
+) -> Element {
+    let mut is_mounted = use_signal(|| false);
+    // Whether plotly has drawn into the div at least once: the first draw
+    // needs `new_plot`, every later one is a cheaper `react` diff. Only the
+    // wasm build ever draws, and target arch is fixed at compile time, so
+    // gating the hook keeps hook order consistent within a given build.
+    #[cfg(target_arch = "wasm32")]
+    let mut drawn = use_signal(|| false);
+
+    // Only the wasm build ever draws a plot from this, so — like `drawn`
+    // above — this is only created there; target arch is fixed at compile
+    // time, so hook order stays consistent within a given build.
+    #[cfg(target_arch = "wasm32")]
     let series = use_memo(move || match &*orbital_data.read() {
         Some(Ok(Some(series))) => series.clone(),
         _ => Vec::new(),
-    });
-
-    // (family, point count) pairs, summed across tiers — cheap enough to hand
-    // to the family legend as a prop, unlike the full coordinate vectors.
-    let family_legend_entries = use_memo(move || {
-        let mut counts: Vec<(DynamicalFamily, usize)> = Vec::new();
-        for s in series.read().iter() {
-            match counts.iter_mut().find(|(f, _)| *f == s.family) {
-                Some((_, count)) => *count += s.a.len(),
-                None => counts.push((s.family, s.a.len())),
-            }
-        }
-        counts
-    });
-
-    // Same idea, summed across families instead, for the tier legend.
-    let tier_legend_entries = use_memo(move || {
-        let mut counts: Vec<(QualityTier, usize)> = Vec::new();
-        for s in series.read().iter() {
-            match counts.iter_mut().find(|(t, _)| *t == s.tier) {
-                Some((_, count)) => *count += s.a.len(),
-                None => counts.push((s.tier, s.a.len())),
-            }
-        }
-        counts.sort_by_key(|(tier, _)| *tier);
-        counts
     });
 
     // Deliberately does *not* read `hidden_families`: doing so would re-render
@@ -158,12 +188,32 @@ pub fn DynamicPopPlot(
                         } else {
                             Visible::True
                         };
+                        // Family/tier are constant for the whole trace, so
+                        // they're baked into the template as plain text;
+                        // `%{customdata}`/`%{x}`/`%{y}` are the per-point
+                        // placeholders plotly.js fills in at hover time.
+                        // `<extra></extra>` drops the secondary trace-name
+                        // box the default template would otherwise add.
+                        let hover_template = format!(
+                            "<b>{family} · {tier}</b><br>Lineage: %{{customdata}}<br>\
+                             Semi-major axis: %{{x:.3f}} AU<br>Eccentricity: %{{y:.3f}}\
+                             <extra></extra>",
+                            family = s.family.label(),
+                            tier = s.tier.label(),
+                        );
+                        let custom_data: Vec<String> = s
+                            .lineage_designations
+                            .iter()
+                            .map(|d| d.to_string())
+                            .collect();
                         let trace = Scatter::new(s.a.clone(), s.e.clone())
                             .name(format!("{} · {}", s.family.label(), s.tier.label()))
                             .mode(Mode::Markers)
                             .web_gl_mode(true)
                             .visible(visible)
-                            .marker(marker_for(s.family, s.tier));
+                            .marker(marker_for(s.family, s.tier))
+                            .custom_data(custom_data)
+                            .hover_template(hover_template);
                         plot.add_trace(trace);
                     }
 
@@ -209,6 +259,10 @@ pub fn DynamicPopPlot(
                     } else {
                         plotly::bindings::new_plot("ae-plot-div", &plot).await;
                         drawn.set(true);
+                        // The graph div persists across every later `react`
+                        // (only its data changes), so the click listener only
+                        // needs binding once, right after the first draw.
+                        bind_plotly_click_navigation("ae-plot-div", "/lineage/");
                     }
                 });
             }
@@ -219,7 +273,10 @@ pub fn DynamicPopPlot(
         div { class: "card bg-base-100 shadow-sm",
             div { class: "card-body",
                 div { class: "text-center mb-1",
-                    h2 { class: "text-2xl font-bold tracking-tight", "The Solar System, Mapped" }
+                    div { class: "flex items-center justify-center gap-2",
+                        h2 { class: "text-2xl font-bold tracking-tight", "The Solar System, Mapped" }
+                        PopulationPlotGlossary {}
+                    }
                     p { class: "text-sm opacity-60", "{status_text}" }
                 }
                 div { class: "relative", style: if is_loading { "min-height: 60vh;" },
@@ -236,6 +293,54 @@ pub fn DynamicPopPlot(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/// The legend row shown between the navbar and the active homepage view: one
+/// clickable chip per dynamical family plus one per quality tier, driving
+/// `hidden_families`/`hidden_tiers` — which the (a, e) plot's traces and the
+/// lineage table's query both read. Kept alive independently of which view
+/// is active by taking the shared [`use_population_series`] resource rather
+/// than fetching its own copy.
+#[component]
+pub fn PopulationLegendBar(
+    orbital_data: Resource<Result<Option<Vec<PlotSeries>>, ServerFnError>>,
+    hidden_families: Signal<HashSet<DynamicalFamily>>,
+    hidden_tiers: Signal<HashSet<QualityTier>>,
+) -> Element {
+    let series = use_memo(move || match &*orbital_data.read() {
+        Some(Ok(Some(series))) => series.clone(),
+        _ => Vec::new(),
+    });
+
+    let family_legend_entries = use_memo(move || {
+        let mut counts: Vec<(DynamicalFamily, usize)> = Vec::new();
+        for s in series.read().iter() {
+            match counts.iter_mut().find(|(f, _)| *f == s.family) {
+                Some((_, count)) => *count += s.a.len(),
+                None => counts.push((s.family, s.a.len())),
+            }
+        }
+        counts
+    });
+
+    let tier_legend_entries = use_memo(move || {
+        let mut counts: Vec<(QualityTier, usize)> = Vec::new();
+        for s in series.read().iter() {
+            match counts.iter_mut().find(|(t, _)| *t == s.tier) {
+                Some((_, count)) => *count += s.a.len(),
+                None => counts.push((s.tier, s.a.len())),
+            }
+        }
+        counts.sort_by_key(|(tier, _)| *tier);
+        counts
+    });
+
+    rsx! {
+        div { class: "card bg-base-100 shadow-sm",
+            div { class: "card-body py-2",
                 FamilyLegend { entries: family_legend_entries(), hidden_families }
                 TierLegend { entries: tier_legend_entries(), hidden_tiers }
             }
