@@ -33,7 +33,7 @@ differ only in how it is compiled and run:
 | CSS              | Tailwind in `--watch` mode                     | generated once, minified, at build time                     |
 | Runtime image    | `rust:1.97.1-trixie` + toolchain (~2 GB)       | `debian:trixie-slim` (~130 MB), non-root user `explorer`    |
 | Client wasm      | unoptimized debug build                        | ~2.9 MB, optimized                                          |
-| Engine config    | `KALMAN_CONFIG_PATH` from `.env`               | `/app/engine_config.best.yaml`, copied into the image       |
+| Engine config    | `KALMAN_CONFIG_PATH` from `.env`               | host file `$ENGINE_CONFIG` bind-mounted read-only, no rebuild needed |
 | Restart policy   | none                                           | `unless-stopped`                                            |
 
 Use `dev` to work on the code and test changes. Never expose it to users: it
@@ -119,6 +119,7 @@ To build the image without Compose:
 docker build --target prod -t fink-fat-explorer:prod .
 docker run --rm -p 8081:8080 \
   -e DATABASE_URL=postgres://finkfat:finkfat@<db-host>:5432/finkfat_test \
+  -v "$PWD/engine_config.best.yaml:/app/config/engine_config.yaml:ro" \
   fink-fat-explorer:prod
 ```
 
@@ -127,15 +128,26 @@ docker run --rm -p 8081:8080 \
 | Variable             | Where it is set                    | Meaning                                                  |
 |----------------------|------------------------------------|----------------------------------------------------------|
 | `DATABASE_URL`       | `docker-compose.yml`               | PostgreSQL connection string (required)                  |
-| `KALMAN_CONFIG_PATH` | image (`/app/engine_config.best.yaml`) | engine config used by the Kalman replay and the 3D view |
+| `KALMAN_CONFIG_PATH` | image (`/app/config/engine_config.yaml`) | engine config used by the Kalman replay and the 3D view; mount point of `$ENGINE_CONFIG` |
 | `IP`                 | image (`0.0.0.0`)                  | listen address. The Dioxus server defaults to `127.0.0.1`, which is unreachable from outside the container |
 | `PORT`               | image (`8080`)                     | listen port inside the container                         |
 
 The production container does **not** read the crate's `.env` file:
-`.dockerignore` keeps every `.env` out of the image. The engine config is
-copied into the image, so changing `engine_config.best.yaml` requires a
-rebuild. To change it without rebuilding, bind-mount a file and override
-`KALMAN_CONFIG_PATH`.
+`.dockerignore` keeps every `.env` out of the image.
+
+The engine config is not part of the image. Compose bind-mounts the host file
+named by `ENGINE_CONFIG` (path relative to the workspace root, default
+`./engine_config.best.yaml`) read-only on `KALMAN_CONFIG_PATH`:
+
+```bash
+ENGINE_CONFIG=./engine_config_lsst.best.yaml docker compose --profile prod up -d --build
+```
+
+To make the choice persistent, put `ENGINE_CONFIG=./engine_config_lsst.best.yaml`
+in a `.env` file at the workspace root (read by Compose for interpolation only,
+never sent to the container). Switching config, or editing the file, only needs
+a restart: `docker compose --profile prod up -d --force-recreate app-prod`.
+If the file does not exist, Compose refuses to start the container.
 
 ### Volumes
 
@@ -178,7 +190,7 @@ docker compose down -v    # also wipe volumes: database, pgAdmin, caches
 
 [`.dockerignore`](../../.dockerignore) is an allowlist: only `Cargo.toml`,
 `Cargo.lock`, `.cargo/`, `LICENSE`, `README.md`, `katex-header.html`,
-`engine_config.best.yaml`, `src/` and `crates/` are sent to the Docker daemon,
+`src/` and `crates/` are sent to the Docker daemon,
 without any `target/`, `.venv/`, `__pycache__/`, `.env` or the local
 `tailwindcss-extra` binary. If the `dockerfile` starts copying a new file,
 also add it to the allowlist, or the build fails with "not found".

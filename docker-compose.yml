@@ -77,6 +77,17 @@ services:
     volumes:
       # Downloaded JPL ephemeris + MPC observatory list, kept across restarts.
       - explorer-cache:/home/explorer/.cache
+      # Engine config, chosen on the host without rebuilding the image:
+      #   ENGINE_CONFIG=./engine_config_lsst.best.yaml docker compose --profile prod up -d
+      # (or set ENGINE_CONFIG in a `.env` file next to this compose file).
+      # Long syntax so a missing file fails loudly instead of Docker silently
+      # creating an empty directory in its place.
+      - type: bind
+        source: ${ENGINE_CONFIG:-./engine_config.best.yaml}
+        target: /app/config/engine_config.yaml
+        read_only: true
+        bind:
+          create_host_path: false
     depends_on:
       - db
     restart: unless-stopped

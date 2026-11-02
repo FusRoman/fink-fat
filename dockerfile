@@ -99,8 +99,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     dx bundle --web --release --debug-symbols false --out-dir /app/dist
 
 # ---------------------------------------------------------------------------
-# prod: runtime-only image. Holds the server binary, its `public/` client
-# bundle and the engine config — no compiler, no sources.
+# prod: runtime-only image. Holds the server binary and its `public/` client
+# bundle — no compiler, no sources. The engine config is NOT baked in: it is
+# bind-mounted at runtime on `KALMAN_CONFIG_PATH` (see `docker-compose.yml`),
+# so any config file can be used without rebuilding the image.
 # ---------------------------------------------------------------------------
 FROM debian:trixie-slim AS prod
 
@@ -124,15 +126,15 @@ WORKDIR /app
 # its `public/` client bundle, which the server resolves relative to its own
 # path — so the bundle directory is copied as a whole.
 COPY --from=builder /app/dist ./
-COPY engine_config.best.yaml ./engine_config.best.yaml
 
 USER explorer
 
 # `IP`/`PORT` are read by the Dioxus server at startup (it defaults to
-# 127.0.0.1, unreachable from outside the container).
+# 127.0.0.1, unreachable from outside the container). `KALMAN_CONFIG_PATH`
+# is the fixed in-container mount point of the engine config file.
 ENV IP=0.0.0.0 \
     PORT=8080 \
-    KALMAN_CONFIG_PATH=/app/engine_config.best.yaml
+    KALMAN_CONFIG_PATH=/app/config/engine_config.yaml
 
 EXPOSE 8080
 
