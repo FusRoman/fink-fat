@@ -196,7 +196,19 @@ The prod image only holds the explorer server (no `fink-fat` binary, no Rust
 toolchain), so the convert runs in a one-off `app-dev` container. It has the
 workspace bind-mounted on `/app` (config and input files at their usual
 paths) and the `cargo-target` volume on `/app/target`, where the `fink-fat`
-binary lives:
+binary lives.
+
+**Nothing rebuilds that binary automatically**: `docker compose --profile
+prod up -d --build` only rebuilds the explorer, and `docker compose run
+app-dev …` runs whatever binary is already in the volume. After pulling or
+changing converter code, rebuild it from the bind-mounted sources first:
+
+```bash
+docker compose run --rm --no-deps --workdir /app app-dev \
+  sh -c 'cargo build --release -p fink-fat && mkdir -p target/bin && cp target/release/fink-fat target/bin/fink-fat'
+```
+
+Then run the convert:
 
 ```bash
 docker compose run --rm --no-deps --workdir /app app-dev \
@@ -214,8 +226,29 @@ docker compose run --rm --no-deps --workdir /app app-dev \
 - `--workdir /app`: the `dev` image's default working directory is
   `crates/fink-fat-explorer`.
 - The first `run` on a machine builds the `fink-fat-app-dev` image (a few
-  minutes, ~2 GB). If the binary is missing:
-  `docker compose run --rm --no-deps app-dev ls /app/target/bin`.
+  minutes, ~2 GB). To check which binary is in the volume (missing, or
+  older than the converter code):
+  `docker compose run --rm --no-deps app-dev ls -l /app/target/bin`.
+
+### After a database schema change
+
+When a change adds, removes or renames tables or columns written by the
+convert and read by the explorer, deploy in this order:
+
+1. **Rebuild the `fink-fat` binary** in the `cargo-target` volume (build
+   command above). Skipping this step is the usual pitfall: the old binary
+   runs without error but loads the old schema, and the explorer then fails
+   with `relation "…" does not exist` or `column "…" does not exist`.
+2. **Re-run the convert** (command above).
+3. **Rebuild and restart `app-prod`**:
+   `ENGINE_CONFIG=./engine_config_lsst.best.yaml docker compose --profile prod up -d --build`.
+
+Steps 2 and 3 can be swapped: an explorer deployed first fails until the
+convert lands, then recovers by itself within a minute (or right away with
+**Tools → ⟳**).
+
+To confirm the schema is the expected one, list the tables with `\dt+` (see
+[Inspecting the database from a terminal](#inspecting-the-database-from-a-terminal)).
 
 ### What to expect on the explorer side
 
@@ -243,8 +276,8 @@ docker compose run --rm --no-deps --workdir /app app-dev \
   `branches.n_observations` / `branches.well_sampled_nights` columns, which
   only the current convert writes. Against an older database the homepage
   stays on "Building the population index…" and **Tools → Refresh** shows
-  `relation "branch_best_state" does not exist`: rebuild the `fink-fat`
-  binary and re-run the convert.
+  `relation "branch_best_state" does not exist`: follow
+  [After a database schema change](#after-a-database-schema-change).
 
 - The loaded tables are `UNLOGGED`: PostgreSQL empties them after an unclean
   shutdown (crash recovery). If they come back empty after a restart of
