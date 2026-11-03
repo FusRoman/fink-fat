@@ -7,11 +7,14 @@ pub mod orbit3d_plot;
 mod orbit3d_population_glossary;
 mod population_plot_glossary;
 pub mod quality_tier;
+pub mod refresh_status;
 #[cfg(feature = "server")]
 pub mod series_route;
 pub mod series_wire;
 #[cfg(feature = "server")]
 pub mod snapshot;
+#[cfg(feature = "server")]
+pub mod snapshot_refresh;
 pub mod stats_count;
 mod tools_menu;
 
@@ -19,12 +22,16 @@ use dioxus::prelude::*;
 use std::collections::HashSet;
 
 use crate::homepage::{
-    branch_tab::{refresh_snapshot, BranchTab},
+    branch_tab::BranchTab,
     dynamic_pop_plot::{use_population_series, DynamicPopPlot, PopulationLegendBar},
     family::DynamicalFamily,
     orbit3d_plot::Orbit3DPlot,
     quality_tier::QualityTier,
-    stats_count::{get_snapshot_version, StatsBanner},
+    refresh_status::{
+        get_refresh_status, interpret_status, refresh_snapshot, PollVerdict, RefreshOutcome,
+        RefreshUi,
+    },
+    stats_count::StatsBanner,
     tools_menu::ToolsMenu,
 };
 
@@ -53,13 +60,17 @@ impl HomepagePlotView {
     }
 }
 
-/// How often the refresh button checks whether the rebuild it asked for has
-/// landed. The rebuild is a single large query, so this can be leisurely.
-const REFRESH_POLL_MS: u64 = 1000;
+/// How often the Refresh controls poll the build progress. The status call
+/// reads no table, so this can be frequent enough for a smooth gauge.
+const REFRESH_POLL_MS: u64 = 500;
 
-/// Give up watching for a requested rebuild after this long, so a failed
-/// rebuild does not leave a poll loop running for the life of the session.
+/// Give up following a rebuild after this long, so a build that never
+/// reports back does not leave a poll loop running for the whole session.
 const REFRESH_POLL_TIMEOUT_MS: u64 = 10 * 60 * 1000;
+
+/// How long a transient outcome ("Up to date", "Updated") stays on the
+/// Refresh button before it returns to its idle label.
+const REFRESH_FEEDBACK_MS: u64 = 4000;
 
 #[component]
 pub fn Home() -> Element {
@@ -82,51 +93,66 @@ pub fn Home() -> Element {
     // data components read it inside their resource futures, so bumping it
     // refetches the whole page against the new snapshot.
     let mut refresh_token = use_signal(|| 0_u64);
-    let mut refreshing = use_signal(|| false);
+    let mut refresh_ui = use_signal(|| RefreshUi::Idle);
 
     // Shared with `PopulationLegendBar`, which stays visible across all 3
     // views: fetched once here rather than inside `DynamicPopPlot`, which is
     // now only mounted while the (a, e) view is active.
     let orbital_data = use_population_series(refresh_token);
 
-    let request_refresh = move |_| {
-        if refreshing() {
+    // `force = false`: rebuild only if the database changed; `true`: always.
+    let request_refresh = move |force: bool| {
+        if refresh_ui.peek().is_busy() {
             return;
         }
-        refreshing.set(true);
+        refresh_ui.set(RefreshUi::Checking);
 
         spawn(async move {
-            // The version at click time: the rebuild has landed when the
-            // server reports a different one. Asking for the version first
-            // means a rebuild that finishes unusually fast cannot slip past.
-            let before = get_snapshot_version().await.ok().flatten();
+            // The version before the request: the rebuild has landed once the
+            // server reports a different one.
+            let version_before = get_refresh_status().await.ok().and_then(|s| s.version);
 
-            if refresh_snapshot().await.is_err() {
-                refreshing.set(false);
-                return;
-            }
-
-            let mut waited = 0;
-            loop {
-                crate::sleep_ms(REFRESH_POLL_MS).await;
-                waited += REFRESH_POLL_MS;
-
-                match get_snapshot_version().await {
-                    Ok(current) if current.is_some() && current != before => {
-                        refresh_token += 1;
-                        break;
+            let final_ui = match refresh_snapshot(force).await {
+                Err(e) => RefreshUi::Failed(e.to_string()),
+                Ok(RefreshOutcome::UpToDate) => RefreshUi::UpToDate,
+                Ok(RefreshOutcome::Started | RefreshOutcome::AlreadyRunning) => {
+                    let mut waited = 0;
+                    loop {
+                        // A transport error mid-build is not fatal: keep
+                        // polling until the timeout.
+                        if let Ok(status) = get_refresh_status().await {
+                            match interpret_status(&status, version_before) {
+                                PollVerdict::Continue(ui) => refresh_ui.set(ui),
+                                PollVerdict::Finished { ui, new_snapshot } => {
+                                    if new_snapshot {
+                                        refresh_token += 1;
+                                    }
+                                    break ui;
+                                }
+                            }
+                        }
+                        if waited >= REFRESH_POLL_TIMEOUT_MS {
+                            break RefreshUi::Failed(
+                                "No answer from the server, the build may still be running"
+                                    .to_string(),
+                            );
+                        }
+                        crate::sleep_ms(REFRESH_POLL_MS).await;
+                        waited += REFRESH_POLL_MS;
                     }
-                    // A transport error mid-rebuild is not fatal; keep waiting
-                    // until the timeout.
-                    _ => {}
                 }
+            };
 
-                if waited >= REFRESH_POLL_TIMEOUT_MS {
-                    break;
+            // A failure stays visible until the next attempt; a success
+            // fades back to the idle label.
+            let transient = matches!(final_ui, RefreshUi::UpToDate | RefreshUi::Updated);
+            refresh_ui.set(final_ui.clone());
+            if transient {
+                crate::sleep_ms(REFRESH_FEEDBACK_MS).await;
+                if *refresh_ui.peek() == final_ui {
+                    refresh_ui.set(RefreshUi::Idle);
                 }
             }
-
-            refreshing.set(false);
         });
     };
 
@@ -159,7 +185,7 @@ pub fn Home() -> Element {
                         class: "btn btn-sm btn-outline btn-accent gap-1",
                         "📖 API"
                     }
-                    ToolsMenu { refreshing: refreshing(), on_refresh: request_refresh }
+                    ToolsMenu { refresh: refresh_ui(), on_refresh: request_refresh }
                 }
             }
 

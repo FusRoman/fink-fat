@@ -329,11 +329,16 @@ const RESPONSE_COMPRESSION_LEVEL: i32 = 4;
 /// behind HTTP response compression. Responses are compressed according to
 /// the client's `Accept-Encoding`; static assets already served with a
 /// precompressed `Content-Encoding` are left untouched.
+///
+/// The homepage snapshot starts building as soon as the server is up (see
+/// [`homepage::snapshot_refresh::start_background_refresh`]), so the first
+/// visitor does not wait for it.
 #[cfg(feature = "server")]
 fn main() {
     use tower_http::compression::{CompressionLayer, CompressionLevel};
 
     dioxus::serve(|| async move {
+        crate::homepage::snapshot_refresh::start_background_refresh();
         let router = crate::homepage::series_route::register(dioxus::server::router(App)).layer(
             CompressionLayer::new().quality(CompressionLevel::Precise(RESPONSE_COMPRESSION_LEVEL)),
         );

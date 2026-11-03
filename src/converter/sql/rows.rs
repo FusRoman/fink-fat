@@ -81,6 +81,19 @@ pub(super) struct BranchRow {
     pub arc_length_days: f64,
     pub n_nights: i64,
     pub median_inter_night_dt_days: Option<f64>,
+    pub n_observations: i64,
+    pub well_sampled_nights: i64,
+}
+
+/// One row of the `branch_best_state` table: which `kf_state` row holds a
+/// branch's best hypothesis. The columns copied from it are resolved at
+/// `COPY` time (see `copy::copy_branch_best_state`), so the state is never
+/// duplicated in memory.
+pub(super) struct BranchBestStateRow {
+    pub branch_id: i64,
+    /// Index of the best hypothesis' row in the `kf_state` row vector built
+    /// alongside this one.
+    pub kf_state_index: usize,
 }
 
 /// One row of the `kf_bank` table.

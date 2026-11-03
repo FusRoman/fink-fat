@@ -21,6 +21,9 @@ ALTER TABLE hypotheses
 ALTER TABLE kf_state
     ADD CONSTRAINT kf_state_hypothesis_id_fkey
     FOREIGN KEY (hypothesis_id) REFERENCES hypotheses(hypothesis_id);
+ALTER TABLE branch_best_state
+    ADD CONSTRAINT branch_best_state_branch_id_fkey
+    FOREIGN KEY (branch_id) REFERENCES branches(branch_id);
 
 CREATE INDEX idx_observations_object_id ON observations (object_id);
 CREATE INDEX idx_hypotheses_branch_log_weight

@@ -48,7 +48,7 @@ pub async fn get_submission_candidates() -> Result<Vec<SubmissionCandidate>, Ser
     use crate::homepage::snapshot;
     use std::collections::HashSet;
 
-    let Some(snap) = snapshot::snapshot().await else {
+    let Some(snap) = snapshot::snapshot() else {
         return Ok(Vec::new());
     };
 

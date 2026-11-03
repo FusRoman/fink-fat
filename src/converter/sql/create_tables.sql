@@ -1,4 +1,4 @@
--- Target schema of the 7 tables `write_sql_tables` bulk-loads, as it would
+-- Target schema of the 8 tables `write_sql_tables` bulk-loads, as it would
 -- be created on a brand-new database. `UNLOGGED`: these tables are fully
 -- rebuilt by every `convert` run (TRUNCATE then COPY, see `mod.rs`) and never
 -- modified outside of it, so skipping WAL for them costs nothing — see the
@@ -37,7 +37,12 @@ CREATE UNLOGGED TABLE IF NOT EXISTS branches (
     designation TEXT NOT NULL,
     arc_length_days DOUBLE PRECISION NOT NULL,
     n_nights BIGINT NOT NULL,
-    median_inter_night_dt_days DOUBLE PRECISION
+    median_inter_night_dt_days DOUBLE PRECISION,
+    -- Matched observations (COUNT(*) over branch_observations ⋈
+    -- observations) and nights with >= 2 of them: precomputed so the
+    -- explorer never aggregates those two tables to rank or filter branches.
+    n_observations BIGINT NOT NULL,
+    well_sampled_nights BIGINT NOT NULL
 );
 
 CREATE UNLOGGED TABLE IF NOT EXISTS kf_bank (
@@ -82,6 +87,33 @@ CREATE UNLOGGED TABLE IF NOT EXISTS kf_state (
     kalman_gain DOUBLE PRECISION[],
     nis_ema DOUBLE PRECISION,
     dynamic_family TEXT NOT NULL
+);
+
+-- Each branch's best hypothesis (largest log_weight): its family, (a, e)
+-- and attributable state, copied from its kf_state row. Denormalized on
+-- purpose: the explorer's homepage needs exactly this for every branch, and
+-- reading it from hypotheses + kf_state means one index probe and one heap
+-- probe per branch into tables tens of GB large. Covariance and Kalman gain
+-- are left out: nothing reads them across all branches.
+CREATE UNLOGGED TABLE IF NOT EXISTS branch_best_state (
+    branch_id BIGINT PRIMARY KEY REFERENCES branches(branch_id),
+    hypothesis_id BIGINT NOT NULL,
+    dynamic_family TEXT NOT NULL,
+    semi_major_axis DOUBLE PRECISION NOT NULL,
+    eccentricity DOUBLE PRECISION NOT NULL,
+    ra DOUBLE PRECISION NOT NULL,
+    dec DOUBLE PRECISION NOT NULL,
+    ra_dot DOUBLE PRECISION NOT NULL,
+    dec_dot DOUBLE PRECISION NOT NULL,
+    rho DOUBLE PRECISION NOT NULL,
+    rho_dot DOUBLE PRECISION NOT NULL,
+    epoch DOUBLE PRECISION NOT NULL,
+    r_obs_x DOUBLE PRECISION NOT NULL,
+    r_obs_y DOUBLE PRECISION NOT NULL,
+    r_obs_z DOUBLE PRECISION NOT NULL,
+    v_obs_x DOUBLE PRECISION NOT NULL,
+    v_obs_y DOUBLE PRECISION NOT NULL,
+    v_obs_z DOUBLE PRECISION NOT NULL
 );
 
 CREATE UNLOGGED TABLE IF NOT EXISTS archived_trajectories (

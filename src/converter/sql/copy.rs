@@ -14,9 +14,14 @@ use postgres::{Transaction, binary_copy::BinaryCopyInWriter, types::Type};
 
 use super::build::classify_rows_in_parallel;
 use super::rows::{
-    ArchivedRow, BranchObservationRow, BranchRow, HypothesisRow, KfBankRow, KfStateFields,
-    KfStateRow, ObservationRow,
+    ArchivedRow, BranchBestStateRow, BranchObservationRow, BranchRow, HypothesisRow, KfBankRow,
+    KfStateFields, KfStateRow, ObservationRow,
 };
+use crate::converter::family::DynamicalFamily;
+
+/// Dynamical family, semi-major axis and eccentricity of one `kf_state` row,
+/// as returned by [`classify_rows_in_parallel`].
+pub(super) type Classification = (DynamicalFamily, f64, f64);
 
 /// Columns shared by the `kf_state` and `archived_trajectories` `COPY`
 /// statements — both tables carry a full [`KfStateFields`] plus their own
@@ -154,7 +159,7 @@ pub(super) fn copy_branches(
         "COPY branches (branch_id, lineage_id, parent_branch_id, ancestor_at_scan_horizon, \
          ancestor_creation_step, last_real_update_step, n_real_updates, cumulative_llr, \
          lineage_designation, designation, arc_length_days, n_nights, \
-         median_inter_night_dt_days) FROM STDIN BINARY",
+         median_inter_night_dt_days, n_observations, well_sampled_nights) FROM STDIN BINARY",
     )?;
     let mut writer = BinaryCopyInWriter::new(
         sink,
@@ -172,6 +177,8 @@ pub(super) fn copy_branches(
             Type::FLOAT8,
             Type::INT8,
             Type::FLOAT8,
+            Type::INT8,
+            Type::INT8,
         ],
     );
     for row in rows {
@@ -189,6 +196,8 @@ pub(super) fn copy_branches(
             &row.arc_length_days,
             &row.n_nights,
             &row.median_inter_night_dt_days,
+            &row.n_observations,
+            &row.well_sampled_nights,
         ])?;
         pb.inc(1);
     }
@@ -314,18 +323,31 @@ pub(super) fn copy_hypotheses(
     Ok(())
 }
 
-/// Bulk-loads `rows` into `kf_state`.
+/// Classifies every `kf_state` row's dynamical family, in parallel
+/// ([`classify_rows_in_parallel`]), ahead of the necessarily sequential
+/// write loops (one shared `Transaction`/`COPY` stream). Computed once and
+/// shared by [`copy_kf_state`] and [`copy_branch_best_state`].
 ///
-/// Classifies every row's dynamical family in parallel
-/// ([`classify_rows_in_parallel`]) before the write loop, since the write
-/// loop itself is necessarily sequential (one shared `Transaction`/`COPY`
-/// stream).
+/// # Arguments
+///
+/// * `rows` — every `kf_state` row.
+///
+/// # Returns
+///
+/// One [`Classification`] per row, in the same order.
+pub(super) fn classify_kf_state_rows(rows: &[KfStateRow]) -> Vec<Classification> {
+    let field_refs: Vec<&KfStateFields> = rows.iter().map(|row| &row.fields).collect();
+    classify_rows_in_parallel(&field_refs)
+}
+
+/// Bulk-loads `rows` into `kf_state`.
 ///
 /// # Arguments
 ///
 /// * `transaction` — the transaction [`super::write_sql_tables`] runs the
 ///   whole conversion in.
 /// * `rows` — every row to insert.
+/// * `classifications` — [`classify_kf_state_rows`] of `rows`, index-aligned.
 /// * `pb` — ticked once per row.
 ///
 /// # Errors
@@ -335,6 +357,7 @@ pub(super) fn copy_hypotheses(
 pub(super) fn copy_kf_state(
     transaction: &mut Transaction<'_>,
     rows: &[KfStateRow],
+    classifications: &[Classification],
     pb: &ProgressBar,
 ) -> Result<(), postgres::Error> {
     pb.println(format!("Copying {} rows into kf_state...", rows.len()));
@@ -349,8 +372,6 @@ pub(super) fn copy_kf_state(
     types.push(Type::FLOAT8);
 
     let mut writer = BinaryCopyInWriter::new(sink, &types);
-    let field_refs: Vec<&KfStateFields> = rows.iter().map(|row| &row.fields).collect();
-    let classifications = classify_rows_in_parallel(&field_refs);
     for (row, (dyn_family, semi_major, eccentricity)) in rows.iter().zip(classifications) {
         let f = &row.fields;
 
@@ -374,8 +395,78 @@ pub(super) fn copy_kf_state(
             &f.kalman_gain,
             &f.nis_ema,
             &dyn_family.label(),
-            &semi_major,
-            &eccentricity,
+            semi_major,
+            eccentricity,
+        ])?;
+        pb.inc(1);
+    }
+    writer.finish()?;
+    Ok(())
+}
+
+/// Bulk-loads `rows` into `branch_best_state`: each branch's best
+/// hypothesis' family, (a, e) and attributable state, copied from its
+/// `kf_state` row so the explorer's homepage reads one narrow table instead
+/// of probing `hypotheses` and `kf_state` once per branch.
+///
+/// # Arguments
+///
+/// * `transaction` — the transaction [`super::write_sql_tables`] runs the
+///   whole conversion in.
+/// * `rows` — one row per branch with at least one hypothesis.
+/// * `kf_state_rows` — the `kf_state` rows `rows` index into.
+/// * `classifications` — [`classify_kf_state_rows`] of `kf_state_rows`,
+///   index-aligned, so the family and (a, e) are exactly those of the
+///   matching `kf_state` row.
+/// * `pb` — ticked once per row.
+///
+/// # Errors
+///
+/// Any Postgres error while opening the `COPY` sink, writing a row, or
+/// finishing the writer, as a [`postgres::Error`].
+pub(super) fn copy_branch_best_state(
+    transaction: &mut Transaction<'_>,
+    rows: &[BranchBestStateRow],
+    kf_state_rows: &[KfStateRow],
+    classifications: &[Classification],
+    pb: &ProgressBar,
+) -> Result<(), postgres::Error> {
+    pb.println(format!(
+        "Copying {} rows into branch_best_state...",
+        rows.len()
+    ));
+    let sink = transaction.copy_in(
+        "COPY branch_best_state (branch_id, hypothesis_id, dynamic_family, semi_major_axis, \
+         eccentricity, ra, dec, ra_dot, dec_dot, rho, rho_dot, epoch, \
+         r_obs_x, r_obs_y, r_obs_z, v_obs_x, v_obs_y, v_obs_z) FROM STDIN BINARY",
+    )?;
+    let mut types = vec![Type::INT8, Type::INT8, Type::TEXT];
+    types.extend(std::iter::repeat_n(Type::FLOAT8, 15));
+    let mut writer = BinaryCopyInWriter::new(sink, &types);
+    for row in rows {
+        let kf = &kf_state_rows[row.kf_state_index];
+        let (dyn_family, semi_major, eccentricity) = &classifications[row.kf_state_index];
+        let f = &kf.fields;
+
+        writer.write(&[
+            &row.branch_id,
+            &kf.hypothesis_id,
+            &dyn_family.label(),
+            semi_major,
+            eccentricity,
+            &f.ra,
+            &f.dec,
+            &f.ra_dot,
+            &f.dec_dot,
+            &f.rho,
+            &f.rho_dot,
+            &f.epoch,
+            &f.r_obs_x,
+            &f.r_obs_y,
+            &f.r_obs_z,
+            &f.v_obs_x,
+            &f.v_obs_y,
+            &f.v_obs_z,
         ])?;
         pb.inc(1);
     }

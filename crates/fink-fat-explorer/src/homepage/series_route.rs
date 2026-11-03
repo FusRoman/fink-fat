@@ -44,7 +44,7 @@ pub fn register(router: Router) -> Router {
 /// * `304 Not Modified` if `If-None-Match` already names the current payload;
 /// * `200 OK` with the binary payload otherwise.
 async fn population_series(headers: HeaderMap) -> Response {
-    let Some(snap) = crate::homepage::snapshot::snapshot().await else {
+    let Some(snap) = crate::homepage::snapshot::snapshot() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
 

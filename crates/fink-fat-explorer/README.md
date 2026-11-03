@@ -186,6 +186,98 @@ docker compose down       # stop everything (all profiles)
 docker compose down -v    # also wipe volumes: database, pgAdmin, caches
 ```
 
+## Loading data with `fink-fat convert`
+
+`convert` does not go through the explorer: it writes straight into
+PostgreSQL. Since both explorer services read the same `finkfat_test`
+database, one convert run feeds `app-dev` and `app-prod` alike.
+
+The prod image only holds the explorer server (no `fink-fat` binary, no Rust
+toolchain), so the convert runs in a one-off `app-dev` container. It has the
+workspace bind-mounted on `/app` (config and input files at their usual
+paths) and the `cargo-target` volume on `/app/target`, where the `fink-fat`
+binary lives:
+
+```bash
+docker compose run --rm --no-deps --workdir /app app-dev \
+  /app/target/bin/fink-fat convert \
+  --config engine_config_lsst.best.yaml --format sql \
+  --database-url postgres://finkfat:finkfat@db:5432/finkfat_test \
+  --path-observation lsst_candidate_eval_data.parquet
+```
+
+- `run` replaces the image's `dx serve` command with this one, so the dev
+  server is never started; `--rm` removes the container afterwards. Naming
+  the service explicitly enables its `dev` profile, no `--profile` needed.
+- `--no-deps` leaves the already-running `db` alone; `db:5432` still
+  resolves because the container joins the Compose network.
+- `--workdir /app`: the `dev` image's default working directory is
+  `crates/fink-fat-explorer`.
+- The first `run` on a machine builds the `fink-fat-app-dev` image (a few
+  minutes, ~2 GB). If the binary is missing:
+  `docker compose run --rm --no-deps app-dev ls /app/target/bin`.
+
+### What to expect on the explorer side
+
+- **The homepage picks up the new data by itself.** It is served from an
+  in-RAM snapshot that the server checks against the database every minute
+  (see [Homepage snapshot and Refresh](#homepage-snapshot-and-refresh)): a
+  convert is detected and rebuilt automatically. **Tools → Refresh** does the
+  check right away. No restart needed.
+- **During the convert, the pages that query the database directly** (lineage
+  page, fits, cross-match) are empty or in error: the convert empties the
+  tables (`TRUNCATE`) and then reloads them. The homepage keeps showing the
+  previous snapshot until the convert has committed and the rebuild lands.
+- **Use the same engine config on both sides**: `--config` for the convert
+  and `ENGINE_CONFIG` for `app-prod` (see
+  [Runtime configuration](#runtime-configuration)) should name the same file.
+- **Data written by the explorer survives a convert**: `orbit_fits`,
+  `orbit_fit_failures`, `cnd_queries`, `skybot_*` and `mpc_submissions`.
+- **The convert runs `ANALYZE` itself** on every table it loads, so planner
+  statistics (and the hypothesis count in the navbar, read from them) are
+  right as soon as it commits. A database loaded by an older `fink-fat`
+  binary still needs a manual
+  `docker compose exec db psql -U finkfat -d finkfat_test -c "ANALYZE;"`.
+- **The explorer needs a database loaded by a recent `fink-fat convert`.**
+  The homepage reads the `branch_best_state` table and the
+  `branches.n_observations` / `branches.well_sampled_nights` columns, which
+  only the current convert writes. Against an older database the homepage
+  stays on "Building the population index…" and **Tools → Refresh** shows
+  `relation "branch_best_state" does not exist`: rebuild the `fink-fat`
+  binary and re-run the convert.
+
+- The loaded tables are `UNLOGGED`: PostgreSQL empties them after an unclean
+  shutdown (crash recovery). If they come back empty after a restart of
+  `db`, re-run the convert.
+
+## Homepage snapshot and Refresh
+
+The homepage (stats banner, (a, e) plot, lineage table, 3D view) is served
+from an in-RAM snapshot of the database, so no user interaction runs SQL.
+
+- **Built at startup.** The server starts building it as soon as it is up,
+  along with the 3D view's planet ephemerides. Until the first build lands,
+  the homepage shows "Building the population index…".
+- **Rebuilt when the data changes.** Every minute the server reads a cheap
+  fingerprint of the database: the physical file of `branches` and
+  `branch_best_state` (a convert's `TRUNCATE` always changes it) and the write
+  counters of `orbit_fits`, `orbit_fit_failures`, `cnd_queries` and
+  `skybot_obs_status`. It only rebuilds when the fingerprint differs from the
+  one the served snapshot was built from. The previous snapshot stays served
+  during a rebuild, and after a failed one.
+- **Cheap to build.** It reads `branches` and `branch_best_state`, both
+  prepared by `fink-fat convert`, plus a handful of small queries run
+  concurrently. The server log reports each build:
+  `homepage snapshot vN built in X s`.
+
+**Tools → Refresh** runs the same check right away and rebuilds only if
+something changed ("✓ Up to date" otherwise). The **⟳** button next to it
+forces a rebuild. While a build runs, the button (and the "Tools" button,
+so it stays visible with the menu closed) fills up as the build steps
+complete, and the line below shows the current step, the step count and the
+elapsed time. A failed check or build turns the button red with the error
+message, and the previous snapshot keeps being served.
+
 ## Inspecting the database from a terminal
 
 ### Connecting
@@ -236,11 +328,12 @@ Loaded by `fink-fat convert`. These tables are `UNLOGGED` and emptied
 | Table                   | Content                                                              |
 |-------------------------|----------------------------------------------------------------------|
 | `observations`          | one row per alert: position, magnitude, filter, `mjd_tt`, `night_id` |
-| `branches`              | one row per track branch; `lineage_id` / `lineage_designation` group the branches of a lineage |
+| `branches`              | one row per track branch; `lineage_id` / `lineage_designation` group the branches of a lineage; precomputed observation stats (`n_observations`, `n_nights`, `well_sampled_nights`, `arc_length_days`) |
 | `branch_observations`   | ordered list (`position`) of the observations of each branch         |
 | `kf_bank`               | per-branch Kalman bank summary (steps, absolute magnitude estimate)  |
 | `hypotheses`            | Kalman hypotheses of each branch, weighted by `log_weight` (the largest table) |
 | `kf_state`              | Kalman state and covariance of each hypothesis, `dynamic_family`     |
+| `branch_best_state`     | the best hypothesis of each branch (largest `log_weight`): `hypothesis_id`, `dynamic_family`, `semi_major_axis`, `eccentricity` and its state, copied from `kf_state` for the homepage |
 | `archived_trajectories` | trajectories archived by the tracker, with their last state, `a` and `e` |
 
 Written by the explorer itself. They are append-only, have no foreign keys
@@ -300,18 +393,12 @@ ORDER BY h.log_weight DESC
 LIMIT 1;
 ```
 
-Branches per dynamic family (scans `hypotheses` and `kf_state`: expect
-several minutes on a full database):
+Branches per dynamic family of their best hypothesis (reads
+`branch_best_state`, instant):
 
 ```sql
-SELECT k.dynamic_family, count(*)
-FROM branches b
-CROSS JOIN LATERAL (
-    SELECT hypothesis_id FROM hypotheses
-    WHERE branch_id = b.branch_id
-    ORDER BY log_weight DESC LIMIT 1
-) best
-JOIN kf_state k USING (hypothesis_id)
+SELECT dynamic_family, count(*)
+FROM branch_best_state
 GROUP BY 1
 ORDER BY 2 DESC;
 ```

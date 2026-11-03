@@ -136,11 +136,13 @@ async fn compute_quality_tier(
     use crate::fit_pipeline::params::{MIN_BASELINE_DAYS, MIN_OBSERVATIONS};
     use crate::homepage::quality_tier::{assign_quality_tier, LatestFit};
 
-    let eligible: bool = sqlx::query_scalar(
-        "SELECT COUNT(*) >= $1 AND (COALESCE(MAX(o.mjd_tt) - MIN(o.mjd_tt), 0)) >= $2
-         FROM branch_observations bo
-         JOIN observations o ON o.id = bo.obs_id
-         WHERE bo.branch_id = $3",
+    // Both precomputed by `fink-fat convert`, the same columns the homepage
+    // snapshot and `params::ELIGIBLE_BRANCH_QUERY` read, so the card and the
+    // homepage badge always agree.
+    let (eligible, well_sampled_nights): (bool, i64) = sqlx::query_as(
+        "SELECT n_observations >= $1 AND arc_length_days >= $2, well_sampled_nights
+         FROM branches
+         WHERE branch_id = $3",
     )
     .bind(MIN_OBSERVATIONS as i64)
     .bind(MIN_BASELINE_DAYS)
@@ -168,19 +170,6 @@ async fn compute_quality_tier(
     )
     .bind(branch_id)
     .fetch_optional(pool)
-    .await?;
-
-    let well_sampled_nights: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM (
-            SELECT o.night_id, COUNT(*) AS n
-            FROM branch_observations bo
-            JOIN observations o ON o.id = bo.obs_id
-            WHERE bo.branch_id = $1
-            GROUP BY o.night_id
-         ) per_night WHERE n >= 2",
-    )
-    .bind(branch_id)
-    .fetch_one(pool)
     .await?;
 
     let has_cross_match = lineage_has_cross_match(pool, lineage_designation).await?;

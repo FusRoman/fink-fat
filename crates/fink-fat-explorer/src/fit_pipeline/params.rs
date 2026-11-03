@@ -322,13 +322,16 @@ pub const MIN_BASELINE_DAYS: f64 = 0.25;
 /// picked up by a bulk fit run yet) — a single copy of the predicate keeps
 /// the two from drifting apart. Bind `$1 = MIN_OBSERVATIONS as i64`,
 /// `$2 = MIN_BASELINE_DAYS`.
+///
+/// `n_observations` and `arc_length_days` are precomputed by `fink-fat
+/// convert` from the branch's matched observations (`COUNT(*)` and
+/// `max(mjd_tt) - min(mjd_tt)` over `branch_observations ⋈ observations`),
+/// so this is a plain scan of `branches` rather than an aggregate over the
+/// two largest observation tables.
 pub const ELIGIBLE_BRANCH_QUERY: &str = "
-    SELECT bo.branch_id, b.lineage_designation
-    FROM branch_observations bo
-    JOIN branches b ON b.branch_id = bo.branch_id
-    JOIN observations o ON o.id = bo.obs_id
-    GROUP BY bo.branch_id, b.lineage_designation
-    HAVING count(*) >= $1 AND (max(o.mjd_tt) - min(o.mjd_tt)) >= $2
+    SELECT branch_id, lineage_designation
+    FROM branches
+    WHERE n_observations >= $1 AND arc_length_days >= $2
 ";
 
 /// Base seed of the per-branch RNG that drives the Gauss IOD's Monte-Carlo

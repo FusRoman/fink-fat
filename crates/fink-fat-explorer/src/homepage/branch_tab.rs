@@ -59,7 +59,7 @@ async fn list_lineages(
         snapshot::{self, PageQuery},
     };
 
-    let Some(snap) = snapshot::snapshot().await else {
+    let Some(snap) = snapshot::snapshot() else {
         return Ok(None);
     };
 
@@ -111,15 +111,6 @@ async fn list_lineages(
         groups,
         total_lineages,
     }))
-}
-
-/// Rebuilds the homepage snapshot in the background — what the navbar's
-/// refresh button calls after a `fink-fat convert`. Returns immediately; the
-/// previous snapshot keeps being served until the new one is ready.
-#[server]
-pub async fn refresh_snapshot() -> Result<(), ServerFnError> {
-    crate::homepage::snapshot::request_refresh();
-    Ok(())
 }
 
 #[component]

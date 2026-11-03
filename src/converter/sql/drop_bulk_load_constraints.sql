@@ -13,3 +13,4 @@ ALTER TABLE branch_observations DROP CONSTRAINT IF EXISTS branch_observations_br
 ALTER TABLE branch_observations DROP CONSTRAINT IF EXISTS branch_observations_obs_id_fkey;
 ALTER TABLE hypotheses DROP CONSTRAINT IF EXISTS hypotheses_branch_id_fkey;
 ALTER TABLE kf_state DROP CONSTRAINT IF EXISTS kf_state_hypothesis_id_fkey;
+ALTER TABLE branch_best_state DROP CONSTRAINT IF EXISTS branch_best_state_branch_id_fkey;

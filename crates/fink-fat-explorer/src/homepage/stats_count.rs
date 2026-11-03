@@ -17,24 +17,12 @@ pub struct HomeStats {
 /// [`crate::homepage::snapshot`].
 #[server]
 pub async fn get_stats() -> Result<Option<HomeStats>, ServerFnError> {
-    Ok(crate::homepage::snapshot::snapshot()
-        .await
-        .map(|snap| HomeStats {
-            n_branches: snap.n_branches,
-            n_hypotheses: snap.n_hypotheses,
-            n_lineages: snap.n_lineages,
-            n_archived: snap.n_archived,
-        }))
-}
-
-/// The snapshot's build counter, or `None` while the first build is running.
-/// The refresh button polls this to tell when a rebuild it requested has
-/// actually landed — until it does, the previous snapshot is still served.
-#[server]
-pub async fn get_snapshot_version() -> Result<Option<u64>, ServerFnError> {
-    Ok(crate::homepage::snapshot::snapshot()
-        .await
-        .map(|snap| snap.version))
+    Ok(crate::homepage::snapshot::snapshot().map(|snap| HomeStats {
+        n_branches: snap.n_branches,
+        n_hypotheses: snap.n_hypotheses,
+        n_lineages: snap.n_lineages,
+        n_archived: snap.n_archived,
+    }))
 }
 
 /// How often to re-check whether the homepage snapshot has finished building.
