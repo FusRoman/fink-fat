@@ -60,7 +60,21 @@ tower-http = { version = "0.6", features = [
 # The homepage snapshot rebuilds in a detached task, so a failed rebuild has
 # no request to report itself through — it needs a log line.
 tracing = { workspace = true, optional = true }
-web-sys = { version = "0.3.104", features = ["console", "Response", "Window"] }
+web-sys = { version = "0.3.104", features = [
+    "console",
+    "Response",
+    "Window",
+    # `clipboard::copy_text`: the Clipboard API, and its `execCommand`
+    # fallback on a temporary textarea outside a secure context.
+    "Clipboard",
+    "Document",
+    "Element",
+    "HtmlDocument",
+    "HtmlElement",
+    "HtmlTextAreaElement",
+    "Navigator",
+    "Node",
+] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 gloo-timers = { version = "0.3", features = ["futures"] }

@@ -9,6 +9,7 @@
 
 use dioxus::prelude::*;
 
+use crate::clipboard::CopyButton;
 use crate::submission_dashboard::data::SubmissionCandidate;
 use crate::submitter_config_form::SubmitterConfigFields;
 
@@ -81,17 +82,6 @@ pub fn PrepareSubmissionMenu(candidates: Vec<SubmissionCandidate>) -> Element {
         .map(|c| c.lineage_designation.clone())
         .collect();
     let command = submit_command(&lineage_designations);
-
-    let copy_command = {
-        let command = command.clone();
-        move |_| {
-            let eval = document::eval(
-                "const data = await dioxus.recv();
-                 await navigator.clipboard.writeText(data.text);",
-            );
-            let _ = eval.send(serde_json::json!({ "text": command }));
-        }
-    };
 
     let download_csv = move |_| {
         let csv = eligible_lineages_csv(&lineage_designations);
@@ -167,12 +157,7 @@ pub fn PrepareSubmissionMenu(candidates: Vec<SubmissionCandidate>) -> Element {
                                 pre { "data-prefix": "$", code { "{command}" } }
                             }
                             div { class: "flex gap-2 mt-2",
-                                button {
-                                    class: "btn btn-sm btn-outline",
-                                    r#type: "button",
-                                    onclick: copy_command,
-                                    "📋 Copy command"
-                                }
+                                CopyButton { text: command.clone(), label: "📋 Copy command" }
                                 button {
                                     class: "btn btn-sm btn-outline",
                                     r#type: "button",

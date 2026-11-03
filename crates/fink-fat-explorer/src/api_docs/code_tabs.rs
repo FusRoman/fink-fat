@@ -2,6 +2,8 @@
 
 use dioxus::prelude::*;
 
+use crate::clipboard::CopyButton;
+
 /// One tab of [`CodeTabs`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct CodeTab {
@@ -43,7 +45,6 @@ impl CodeTab {
 #[component]
 pub fn CodeTabs(tabs: Vec<CodeTab>) -> Element {
     let mut selected = use_signal(|| 0usize);
-    let mut copied = use_signal(|| false);
     let current = selected().min(tabs.len().saturating_sub(1));
     let (language, code) = tabs
         .get(current)
@@ -66,15 +67,6 @@ pub fn CodeTabs(tabs: Vec<CodeTab>) -> Element {
         );
     });
 
-    let copy = {
-        let code = code.clone();
-        move |_| {
-            let eval = document::eval("navigator.clipboard.writeText(await dioxus.recv());");
-            let _ = eval.send(code.clone());
-            copied.set(true);
-        }
-    };
-
     rsx! {
         div { class: "card bg-base-100 shadow-sm",
             div { class: "flex items-center justify-between px-2 pt-2",
@@ -84,23 +76,15 @@ pub fn CodeTabs(tabs: Vec<CodeTab>) -> Element {
                             key: "{tab.label}",
                             role: "tab",
                             class: if index == current { "tab tab-active" } else { "tab" },
-                            onclick: move |_| {
-                                selected.set(index);
-                                copied.set(false);
-                            },
+                            onclick: move |_| selected.set(index),
                             "{tab.label}"
                         }
                     }
                 }
-                button {
+                CopyButton {
+                    text: code.clone(),
+                    label: "Copy",
                     class: "btn btn-xs btn-ghost",
-                    r#type: "button",
-                    onclick: copy,
-                    if copied() {
-                        "Copied ✓"
-                    } else {
-                        "Copy"
-                    }
                 }
             }
             pre { class: "overflow-x-auto text-sm leading-relaxed",

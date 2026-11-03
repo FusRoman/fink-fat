@@ -17,6 +17,8 @@ use fink_fat_ades::wamo::{
     WamoStatus, MPC_WAMO_HELP_URL, MPC_WAMO_MANUAL_URL,
 };
 
+use crate::clipboard::CopyButton;
+
 /// Parses a row's stored `wamo_detail` JSON back into the observations it
 /// holds. Defensive rather than fallible: this is fink-fat's own
 /// previously-written JSON, so a parse failure would mean a schema drift
@@ -272,7 +274,6 @@ pub(super) fn WamoDetailSection(
     wamo_detail: Option<serde_json::Value>,
     wamo_checked_at: Option<String>,
 ) -> Element {
-    let mut copied = use_signal(|| false);
     let observations = parse_wamo_observations(&wamo_detail);
     let groups = group_by_status(&observations);
 
@@ -327,16 +328,10 @@ pub(super) fn WamoDetailSection(
             }
             div { class: "flex flex-wrap items-center gap-3 text-xs",
                 if let Some(submission_id) = submission_id {
-                    button {
+                    CopyButton {
+                        text: submission_id,
+                        label: "📋 Copy ID",
                         class: "btn btn-xs btn-outline",
-                        r#type: "button",
-                        title: "Copy the submission ID, to paste on the WAMO page",
-                        onclick: move |_| {
-                            let eval = document::eval("navigator.clipboard.writeText(await dioxus.recv());");
-                            let _ = eval.send(submission_id.clone());
-                            copied.set(true);
-                        },
-                        if copied() { "✓ Copied" } else { "📋 Copy ID" }
                     }
                 }
                 a {

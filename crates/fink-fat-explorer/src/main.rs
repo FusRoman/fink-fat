@@ -8,6 +8,7 @@ pub mod bulk_orbit_fit;
 pub mod bulk_orbit_fit_page;
 pub mod bulk_skybot;
 pub mod bulk_skybot_page;
+pub mod clipboard;
 pub mod cnd_search;
 pub mod cross_match_dashboard;
 pub mod cross_match_status;
