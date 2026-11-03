@@ -41,11 +41,18 @@ services:
     volumes:
       - pgadmin-data:/var/lib/pgadmin
 
-  app:
+  # The two explorer services serve the same application; they differ only in
+  # their `dockerfile` target (see the header of `dockerfile`). Each sits behind
+  # its own profile so neither starts by accident:
+  #   docker compose --profile dev  up -d   # debug build, hot reload
+  #   docker compose --profile prod up -d --build
+  app-dev:
+    profiles: ["dev"]
     build:
       context: .              # workspace root
-      dockerfile: Dockerfile
-    container_name: fink-fat-explore-app
+      dockerfile: dockerfile
+      target: dev
+    container_name: fink-fat-explorer-dev
     ports:
       - "8080:8080"
     volumes:
@@ -56,7 +63,39 @@ services:
     environment:
       DATABASE_URL: postgres://finkfat:finkfat@db:5432/finkfat_test
 
+  app-prod:
+    profiles: ["prod"]
+    build:
+      context: .
+      dockerfile: dockerfile
+      target: prod
+    container_name: fink-fat-explorer-prod
+    # No bind mount: the image is self-contained. Published on 8081 so it can
+    # run next to `app-dev` on the same host.
+    ports:
+      - "8081:8080"
+    volumes:
+      # Downloaded JPL ephemeris + MPC observatory list, kept across restarts.
+      - explorer-cache:/home/explorer/.cache
+      # Engine config, chosen on the host without rebuilding the image:
+      #   ENGINE_CONFIG=./engine_config_lsst.best.yaml docker compose --profile prod up -d
+      # (or set ENGINE_CONFIG in a `.env` file next to this compose file).
+      # Long syntax so a missing file fails loudly instead of Docker silently
+      # creating an empty directory in its place.
+      - type: bind
+        source: ${ENGINE_CONFIG:-./engine_config.best.yaml}
+        target: /app/config/engine_config.yaml
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      - db
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://finkfat:finkfat@db:5432/finkfat_test
+
 volumes:
   db-data:
   pgadmin-data:
   cargo-target:
+  explorer-cache:

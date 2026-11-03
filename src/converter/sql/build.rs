@@ -15,8 +15,8 @@ use rayon::prelude::*;
 use crate::converter::family::{DynamicalFamily, classify_from_attributable_state};
 
 use super::rows::{
-    ArchivedRow, BranchObservationRow, BranchRow, HypothesisRow, KfBankRow, KfStateFields,
-    KfStateRow,
+    ArchivedRow, BranchBestStateRow, BranchObservationRow, BranchRow, HypothesisRow, KfBankRow,
+    KfStateFields, KfStateRow,
 };
 
 /// Per-observation lookup keyed by `ObservationRow::id`
@@ -28,8 +28,31 @@ use super::rows::{
 /// homepage sort.
 pub(super) type ObsIndex = HashMap<i64, (i64, f64)>;
 
-/// Arc length, unique night count, and the median gap between consecutive
-/// nights for one branch's observations.
+/// Per-branch observation statistics stored on the `branches` row, computed
+/// once at conversion time so neither the explorer's homepage nor its bulk
+/// fit has to aggregate `branch_observations ⋈ observations` again.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct ObsStats {
+    /// `max(mjd_tt) - min(mjd_tt)` across every matched observation, `0.0`
+    /// if none matched.
+    pub arc_length_days: f64,
+    /// Number of distinct `night_id`s among matched observations.
+    pub n_nights: i64,
+    /// Median gap (in days) between consecutive nights, each night
+    /// represented by its earliest observation's `mjd_tt`; `None` when the
+    /// branch spans at most one night (there is then no inter-night gap).
+    pub median_inter_night_dt_days: Option<f64>,
+    /// Number of matched observations, a repeated id counted each time — the
+    /// same value as `COUNT(*)` over `branch_observations ⋈ observations`
+    /// for this branch, which the orbit-fit eligibility rule thresholds.
+    pub n_observations: i64,
+    /// Number of nights with at least two matched observations: the
+    /// geometric bar the explorer's `WellSampledDiscovery` quality tier adds
+    /// on top of `Discovery`.
+    pub well_sampled_nights: i64,
+}
+
+/// Observation statistics for one branch, see [`ObsStats`].
 ///
 /// # Arguments
 ///
@@ -42,43 +65,45 @@ pub(super) type ObsIndex = HashMap<i64, (i64, f64)>;
 ///
 /// # Returns
 ///
-/// A triple of:
-/// 1. `arc_length_days` — `max(mjd_tt) - min(mjd_tt)` across every matched
-///    observation, `0.0` if none matched.
-/// 2. `n_nights` — the number of distinct `night_id`s among matched
-///    observations.
-/// 3. `median_inter_night_dt_days` — the median gap (in days) between
-///    consecutive nights, each night represented by its earliest
-///    observation's `mjd_tt`; `None` when the branch spans at most one night
-///    (there is then no inter-night gap to measure).
-pub(super) fn compute_obs_stats(
-    track_ids: &[u64],
-    obs_index: &ObsIndex,
-) -> (f64, i64, Option<f64>) {
-    let mut night_start: HashMap<i64, f64> = HashMap::new();
+/// The branch's [`ObsStats`]; all zero (and no median gap) when no id
+/// matched.
+pub(super) fn compute_obs_stats(track_ids: &[u64], obs_index: &ObsIndex) -> ObsStats {
+    // night_id -> (earliest mjd_tt, number of matched observations).
+    let mut nights: HashMap<i64, (f64, i64)> = HashMap::new();
     let mut min_mjd = f64::INFINITY;
     let mut max_mjd = f64::NEG_INFINITY;
+    let mut n_observations = 0;
 
     for &obs_id in track_ids {
         let Some(&(night_id, mjd_tt)) = obs_index.get(&(obs_id as i64)) else {
             continue;
         };
+        n_observations += 1;
         min_mjd = min_mjd.min(mjd_tt);
         max_mjd = max_mjd.max(mjd_tt);
-        night_start
+        nights
             .entry(night_id)
-            .and_modify(|t| *t = t.min(mjd_tt))
-            .or_insert(mjd_tt);
+            .and_modify(|(start, count)| {
+                *start = start.min(mjd_tt);
+                *count += 1;
+            })
+            .or_insert((mjd_tt, 1));
     }
 
-    if night_start.is_empty() {
-        return (0.0, 0, None);
+    if nights.is_empty() {
+        return ObsStats {
+            arc_length_days: 0.0,
+            n_nights: 0,
+            median_inter_night_dt_days: None,
+            n_observations: 0,
+            well_sampled_nights: 0,
+        };
     }
 
-    let arc_length_days = max_mjd - min_mjd;
-    let n_nights = night_start.len() as i64;
+    let well_sampled_nights = nights.values().filter(|(_, count)| *count >= 2).count() as i64;
+    let n_nights = nights.len() as i64;
 
-    let mut night_times: Vec<f64> = night_start.into_values().collect();
+    let mut night_times: Vec<f64> = nights.into_values().map(|(start, _)| start).collect();
     night_times.sort_by(|a, b| a.total_cmp(b));
 
     let mut gaps: Vec<f64> = night_times.windows(2).map(|w| w[1] - w[0]).collect();
@@ -94,7 +119,34 @@ pub(super) fn compute_obs_stats(
         })
     };
 
-    (arc_length_days, n_nights, median_inter_night_dt_days)
+    ObsStats {
+        arc_length_days: max_mjd - min_mjd,
+        n_nights,
+        median_inter_night_dt_days,
+        n_observations,
+        well_sampled_nights,
+    }
+}
+
+/// Index of a bank's best hypothesis: the one with the largest log-weight.
+///
+/// Matches the `ORDER BY log_weight DESC LIMIT 1` the explorer used to run
+/// per branch, NaN included: [`f64::total_cmp`] ranks a (positive) NaN above
+/// every number, as Postgres does.
+///
+/// # Arguments
+///
+/// * `log_weights` — the bank's hypothesis log-weights, in bank order.
+///
+/// # Returns
+///
+/// The index of the largest log-weight, `None` for an empty bank.
+pub(super) fn best_hypothesis_index(log_weights: impl IntoIterator<Item = f64>) -> Option<usize> {
+    log_weights
+        .into_iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| a.total_cmp(b))
+        .map(|(index, _)| index)
 }
 
 /// Builds every row of `branches`/`kf_bank`/`branch_observations`/
@@ -110,15 +162,16 @@ pub(super) fn compute_obs_stats(
 ///
 /// * `branch_collection` — the loaded snapshot to convert.
 /// * `obs_index` — see [`ObsIndex`]; used to compute each branch's
-///   `arc_length_days`/`n_nights`/`median_inter_night_dt_days` via
-///   [`compute_obs_stats`].
+///   [`ObsStats`] via [`compute_obs_stats`].
 ///
 /// # Returns
 ///
-/// The five row vectors, in insertion order matching `branch_collection`'s
+/// The six row vectors, in insertion order matching `branch_collection`'s
 /// own branch order; `hypothesis_id`/`kf_state` rows are aligned 1:1 with
 /// `hypotheses` rows via a hypothesis id allocated sequentially across every
-/// branch.
+/// branch. The last vector holds one [`BranchBestStateRow`] per branch with
+/// at least one hypothesis, pointing at its best hypothesis' `kf_state` row
+/// (see [`best_hypothesis_index`]).
 #[allow(clippy::type_complexity)]
 pub(super) fn build_branch_rows(
     branch_collection: &BranchCollection,
@@ -129,6 +182,7 @@ pub(super) fn build_branch_rows(
     Vec<BranchObservationRow>,
     Vec<HypothesisRow>,
     Vec<KfStateRow>,
+    Vec<BranchBestStateRow>,
 ) {
     let n_branches = branch_collection.branches.len();
     let n_track_id_rows: usize = branch_collection
@@ -147,14 +201,14 @@ pub(super) fn build_branch_rows(
     let mut branch_observation_rows = Vec::with_capacity(n_track_id_rows);
     let mut hypothesis_rows = Vec::with_capacity(n_hypotheses);
     let mut kf_state_rows = Vec::with_capacity(n_hypotheses);
+    let mut best_state_rows = Vec::with_capacity(n_branches);
 
     let mut next_hypothesis_id: i64 = 0;
 
     for branch in &branch_collection.branches {
         let branch_id = branch.branch_id as i64;
 
-        let (arc_length_days, n_nights, median_inter_night_dt_days) =
-            compute_obs_stats(branch.bank.track_ids(), obs_index);
+        let stats = compute_obs_stats(branch.bank.track_ids(), obs_index);
 
         branch_rows.push(BranchRow {
             branch_id,
@@ -167,9 +221,11 @@ pub(super) fn build_branch_rows(
             cumulative_llr: branch.cumulative_llr,
             lineage_designation: branch.lineage_designation.to_string(),
             designation: branch.designation().to_string(),
-            arc_length_days,
-            n_nights,
-            median_inter_night_dt_days,
+            arc_length_days: stats.arc_length_days,
+            n_nights: stats.n_nights,
+            median_inter_night_dt_days: stats.median_inter_night_dt_days,
+            n_observations: stats.n_observations,
+            well_sampled_nights: stats.well_sampled_nights,
         });
 
         let bank_snapshot = branch.bank.to_snapshot();
@@ -186,6 +242,17 @@ pub(super) fn build_branch_rows(
                 branch_id,
                 position: position as i32,
                 obs_id: *id as i64,
+            });
+        }
+
+        if let Some(best) =
+            best_hypothesis_index(bank_snapshot.hypotheses.iter().map(|h| h.log_weight))
+        {
+            // Hypothesis ids are allocated sequentially just below, so the
+            // best one's `kf_state` row lands at this offset.
+            best_state_rows.push(BranchBestStateRow {
+                branch_id,
+                kf_state_index: kf_state_rows.len() + best,
             });
         }
 
@@ -214,6 +281,7 @@ pub(super) fn build_branch_rows(
         branch_observation_rows,
         hypothesis_rows,
         kf_state_rows,
+        best_state_rows,
     )
 }
 
@@ -299,28 +367,30 @@ mod tests {
     fn no_matching_observations_returns_zeroed_stats() {
         let obs_index = index(&[(1, 100, 60000.0)]);
         // track_ids references an id that isn't in obs_index at all.
-        let (arc_length_days, n_nights, median) = compute_obs_stats(&[999], &obs_index);
-        assert_eq!(arc_length_days, 0.0);
-        assert_eq!(n_nights, 0);
-        assert_eq!(median, None);
+        let stats = compute_obs_stats(&[999], &obs_index);
+        assert_eq!(stats.arc_length_days, 0.0);
+        assert_eq!(stats.n_nights, 0);
+        assert_eq!(stats.median_inter_night_dt_days, None);
+        assert_eq!(stats.n_observations, 0);
+        assert_eq!(stats.well_sampled_nights, 0);
     }
 
     #[test]
     fn single_night_has_no_median_gap() {
         let obs_index = index(&[(1, 100, 60000.0), (2, 100, 60000.5)]);
-        let (arc_length_days, n_nights, median) = compute_obs_stats(&[1, 2], &obs_index);
-        assert_eq!(arc_length_days, 0.5);
-        assert_eq!(n_nights, 1);
-        assert_eq!(median, None);
+        let stats = compute_obs_stats(&[1, 2], &obs_index);
+        assert_eq!(stats.arc_length_days, 0.5);
+        assert_eq!(stats.n_nights, 1);
+        assert_eq!(stats.median_inter_night_dt_days, None);
     }
 
     #[test]
     fn two_nights_median_is_the_single_gap() {
         let obs_index = index(&[(1, 100, 60000.0), (2, 101, 60003.0)]);
-        let (arc_length_days, n_nights, median) = compute_obs_stats(&[1, 2], &obs_index);
-        assert_eq!(arc_length_days, 3.0);
-        assert_eq!(n_nights, 2);
-        assert_eq!(median, Some(3.0));
+        let stats = compute_obs_stats(&[1, 2], &obs_index);
+        assert_eq!(stats.arc_length_days, 3.0);
+        assert_eq!(stats.n_nights, 2);
+        assert_eq!(stats.median_inter_night_dt_days, Some(3.0));
     }
 
     #[test]
@@ -333,18 +403,18 @@ mod tests {
             (3, 3, 60004.0),
             (4, 4, 60010.0),
         ]);
-        let (_, n_nights, median) = compute_obs_stats(&[1, 2, 3, 4], &obs_index);
-        assert_eq!(n_nights, 4);
-        assert_eq!(median, Some(3.0));
+        let stats = compute_obs_stats(&[1, 2, 3, 4], &obs_index);
+        assert_eq!(stats.n_nights, 4);
+        assert_eq!(stats.median_inter_night_dt_days, Some(3.0));
     }
 
     #[test]
     fn even_number_of_gaps_averages_the_two_middle_ones() {
         // Nights at day 0, 1, 4 -> gaps [1, 3] -> median = (1+3)/2 = 2.
         let obs_index = index(&[(1, 1, 60000.0), (2, 2, 60001.0), (3, 3, 60004.0)]);
-        let (_, n_nights, median) = compute_obs_stats(&[1, 2, 3], &obs_index);
-        assert_eq!(n_nights, 3);
-        assert_eq!(median, Some(2.0));
+        let stats = compute_obs_stats(&[1, 2, 3], &obs_index);
+        assert_eq!(stats.n_nights, 3);
+        assert_eq!(stats.median_inter_night_dt_days, Some(2.0));
     }
 
     #[test]
@@ -356,12 +426,12 @@ mod tests {
             (2, 1, 60000.0), // earlier observation of night 1
             (3, 2, 60002.0),
         ]);
-        let (arc_length_days, n_nights, median) = compute_obs_stats(&[1, 2, 3], &obs_index);
+        let stats = compute_obs_stats(&[1, 2, 3], &obs_index);
         // Arc length still spans every observation, not just night starts.
-        assert_eq!(arc_length_days, 2.0);
-        assert_eq!(n_nights, 2);
+        assert_eq!(stats.arc_length_days, 2.0);
+        assert_eq!(stats.n_nights, 2);
         // Gap measured from night 1's earliest obs (60000.0), not the latest.
-        assert_eq!(median, Some(2.0));
+        assert_eq!(stats.median_inter_night_dt_days, Some(2.0));
     }
 
     #[test]
@@ -370,5 +440,42 @@ mod tests {
         let with_noise = compute_obs_stats(&[1, 999, 2, 1000], &obs_index);
         let without_noise = compute_obs_stats(&[1, 2], &obs_index);
         assert_eq!(with_noise, without_noise);
+    }
+
+    /// `n_observations` mirrors `COUNT(*)` over the SQL join: unmatched ids
+    /// are left out, a repeated id is counted each time.
+    #[test]
+    fn n_observations_counts_matched_ids_including_repeats() {
+        let obs_index = index(&[(1, 1, 60000.0), (2, 2, 60002.0)]);
+        let stats = compute_obs_stats(&[1, 1, 2, 999], &obs_index);
+        assert_eq!(stats.n_observations, 3);
+    }
+
+    #[test]
+    fn well_sampled_nights_are_the_nights_with_two_or_more_observations() {
+        let obs_index = index(&[
+            (1, 1, 60000.0),
+            (2, 1, 60000.1),
+            (3, 2, 60001.0),
+            (4, 3, 60002.0),
+            (5, 3, 60002.1),
+            (6, 3, 60002.2),
+        ]);
+        let stats = compute_obs_stats(&[1, 2, 3, 4, 5, 6], &obs_index);
+        assert_eq!(stats.n_nights, 3);
+        assert_eq!(stats.well_sampled_nights, 2);
+    }
+
+    #[test]
+    fn best_hypothesis_is_the_largest_log_weight() {
+        assert_eq!(best_hypothesis_index([-3.0, -0.5, -2.0]), Some(1));
+        assert_eq!(best_hypothesis_index(std::iter::empty()), None);
+    }
+
+    /// Postgres' `ORDER BY log_weight DESC` puts NaN first; so must we.
+    #[test]
+    fn nan_log_weight_ranks_first_like_postgres() {
+        assert_eq!(best_hypothesis_index([0.0, f64::NAN, 1.0]), Some(1));
+        assert_eq!(best_hypothesis_index([f64::NEG_INFINITY, -1.0]), Some(1));
     }
 }

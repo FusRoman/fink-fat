@@ -8,13 +8,14 @@ use plotly::{
     Plot, Scatter,
 };
 
-use serde::{Deserialize, Serialize};
-
 use crate::homepage::family::DynamicalFamily;
 use crate::homepage::population_plot_glossary::PopulationPlotGlossary;
 #[cfg(target_arch = "wasm32")]
 use crate::homepage::quality_tier::marker_for;
 use crate::homepage::quality_tier::QualityTier;
+use crate::homepage::series_wire::SeriesWireError;
+#[cfg(target_arch = "wasm32")]
+use crate::homepage::series_wire::{decode_series, POPULATION_SERIES_PATH};
 
 // plotly.rs 0.14 only wraps plotly.js's `newPlot`/`react` functions, not its
 // event API, so subscribing to `plotly_click` (to jump to the clicked
@@ -49,13 +50,12 @@ extern "C" {
 /// two coordinate vectors plotly wants, so that toggling a family or a tier
 /// only rebuilds the traces and never re-groups the whole population.
 ///
-/// This is also the wire format: the server groups the population once when it
-/// builds the homepage snapshot and ships these flat arrays, rather than one
-/// JSON object per point carrying a repeated family/tier label — roughly a
-/// sixfold cut in payload at 214k branches. `lineage_designations` is the one
+/// The server groups the population once when it builds the homepage
+/// snapshot and ships these flat arrays in a compact binary form (see
+/// [`crate::homepage::series_wire`]). `lineage_designations` is the one
 /// per-point field kept alongside `a`/`e` (index-aligned with both) — it
 /// labels each point on hover and lets a click jump to that lineage's page.
-#[derive(Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PlotSeries {
     pub family: DynamicalFamily,
     pub tier: QualityTier,
@@ -64,17 +64,76 @@ pub struct PlotSeries {
     pub lineage_designations: Vec<Box<str>>,
 }
 
-/// Served from the in-RAM homepage snapshot; `None` while it is still being
-/// built. See [`crate::homepage::snapshot`].
-#[server]
-pub async fn query_orbital_elements() -> Result<Option<Vec<PlotSeries>>, ServerFnError> {
-    Ok(crate::homepage::snapshot::snapshot()
-        .await
-        .map(|snap| snap.series.clone()))
+/// Why the population series could not be loaded.
+#[derive(Debug, thiserror::Error)]
+pub enum SeriesLoadError {
+    /// The request itself failed (network error, aborted fetch, ...).
+    #[error("fetching the population failed: {0}")]
+    Fetch(String),
+    /// The server answered with an unexpected status.
+    #[error("fetching the population returned HTTP {0}")]
+    Status(u16),
+    /// The payload is not a valid series payload.
+    #[error(transparent)]
+    Wire(#[from] SeriesWireError),
 }
+
+/// Loaded population series: `Ok(None)` while the snapshot is still
+/// building, `Ok(Some(series))` once ready.
+pub type PopulationSeries = Result<Option<Vec<PlotSeries>>, SeriesLoadError>;
 
 /// How often to re-check whether the homepage snapshot has finished building.
 const WARMUP_POLL_MS: u64 = 1000;
+
+/// Fetches and decodes the population series from
+/// [`POPULATION_SERIES_PATH`].
+///
+/// A plain `fetch` GET rather than a server function so the browser's HTTP
+/// cache applies: the route answers with an `ETag`, and an unchanged
+/// snapshot is revalidated with a `304` instead of being downloaded again.
+///
+/// # Return
+/// `Ok(None)` while the snapshot is still building (`503`), `Ok(Some(_))`
+/// with the decoded series once ready.
+///
+/// # Errors
+/// [`SeriesLoadError`] on a network failure, any other non-success status, or
+/// an undecodable payload.
+#[cfg(target_arch = "wasm32")]
+async fn fetch_population_series() -> PopulationSeries {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen_futures::JsFuture;
+
+    let js_error = |e: wasm_bindgen::JsValue| SeriesLoadError::Fetch(format!("{e:?}"));
+
+    let window =
+        web_sys::window().ok_or_else(|| SeriesLoadError::Fetch("no window".to_string()))?;
+    let response: web_sys::Response = JsFuture::from(window.fetch_with_str(POPULATION_SERIES_PATH))
+        .await
+        .map_err(js_error)?
+        .dyn_into()
+        .map_err(js_error)?;
+
+    match response.status() {
+        503 => return Ok(None),
+        status if !response.ok() => return Err(SeriesLoadError::Status(status)),
+        _ => {}
+    }
+
+    let buffer = JsFuture::from(response.array_buffer().map_err(js_error)?)
+        .await
+        .map_err(js_error)?;
+    let bytes = js_sys::Uint8Array::new(&buffer).to_vec();
+    Ok(Some(decode_series(&bytes)?))
+}
+
+/// Server-side stand-in: the server renders the homepage without its plot
+/// data (only the wasm client fetches it), so this never resolves and the
+/// resource stays in its initial loading state during SSR.
+#[cfg(not(target_arch = "wasm32"))]
+async fn fetch_population_series() -> PopulationSeries {
+    std::future::pending().await
+}
 
 /// The population's per-(family, tier) series, kept alive independently of
 /// the (a, e) plot itself: [`PopulationLegendBar`] needs this data even when
@@ -87,15 +146,13 @@ const WARMUP_POLL_MS: u64 = 1000;
 ///   fetch against the new snapshot.
 ///
 /// # Return
-/// The raw query resource: `Ok(None)` while the snapshot is still building
+/// The raw fetch resource: `Ok(None)` while the snapshot is still building
 /// (this function polls for it internally), `Ok(Some(series))` once ready,
-/// `Err` on a transport failure.
-pub fn use_population_series(
-    refresh_token: Signal<u64>,
-) -> Resource<Result<Option<Vec<PlotSeries>>, ServerFnError>> {
+/// `Err` on a transport or decoding failure.
+pub fn use_population_series(refresh_token: Signal<u64>) -> Resource<PopulationSeries> {
     let mut orbital_data = use_resource(move || async move {
         let _ = refresh_token();
-        query_orbital_elements().await
+        fetch_population_series().await
     });
 
     // `Ok(None)` means the snapshot is still building — poll for it.
@@ -114,7 +171,7 @@ pub fn use_population_series(
 
 #[component]
 pub fn DynamicPopPlot(
-    orbital_data: Resource<Result<Option<Vec<PlotSeries>>, ServerFnError>>,
+    orbital_data: Resource<PopulationSeries>,
     hidden_families: Signal<HashSet<DynamicalFamily>>,
     hidden_tiers: Signal<HashSet<QualityTier>>,
 ) -> Element {
@@ -306,7 +363,7 @@ pub fn DynamicPopPlot(
 /// than fetching its own copy.
 #[component]
 pub fn PopulationLegendBar(
-    orbital_data: Resource<Result<Option<Vec<PlotSeries>>, ServerFnError>>,
+    orbital_data: Resource<PopulationSeries>,
     hidden_families: Signal<HashSet<DynamicalFamily>>,
     hidden_tiers: Signal<HashSet<QualityTier>>,
 ) -> Element {

@@ -37,8 +37,9 @@ fn now_mjd_tt() -> f64 {
 /// The first [`get_planets_3d`]/[`get_lineage_orbit3d`] call otherwise pays
 /// the whole lazy `crate::get_kalman_context` load (JPL/SPK kernels, UT1) at
 /// the moment the user first opens a 3D view, so the plot first draws without
-/// its planets and then redraws. Called from the first homepage request
-/// instead, so that cost is paid while the user is still on another view.
+/// its planets and then redraws. Called once at server start instead (see
+/// `homepage::snapshot_refresh::start_background_refresh`), so that cost is
+/// paid before the first visitor even arrives.
 /// Both `get_kalman_context`'s and `get_planets`'s caches deduplicate, so a
 /// request racing this task simply waits on the same initialisation.
 ///
@@ -64,8 +65,9 @@ pub async fn get_planets_3d() -> Result<Vec<Body3D>, ServerFnError> {
 /// One point per lineage — its best branch's current heliocentric position —
 /// for the homepage's 3D scatter, plus how many lineages could not be placed.
 /// `None` while the homepage snapshot is still (re)building, mirroring
-/// `homepage::dynamic_pop_plot::query_orbital_elements`'s own "warming up"
-/// contract so both plots poll the same way.
+/// the (a, e) plot's own "warming up" contract
+/// (`homepage::dynamic_pop_plot::use_population_series`) so both plots poll
+/// the same way.
 ///
 /// A lineage whose best state is not a closed ellipse has no orbit to
 /// position it on; it is left out and counted in
@@ -73,7 +75,7 @@ pub async fn get_planets_3d() -> Result<Vec<Body3D>, ServerFnError> {
 /// lower than the (a, e) plot's.
 #[server]
 pub async fn get_homepage_orbit3d() -> Result<Option<HomepageObjects3D>, ServerFnError> {
-    let Some(snapshot) = crate::homepage::snapshot::snapshot().await else {
+    let Some(snapshot) = crate::homepage::snapshot::snapshot() else {
         return Ok(None);
     };
 

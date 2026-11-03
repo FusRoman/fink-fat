@@ -2,7 +2,10 @@
 //! (`observations`/`branches`/`kf_bank`/`branch_observations`/`hypotheses`/
 //! `kf_state`/`archived_trajectories`, joined by
 //! `branch_id`/`hypothesis_id`/`id`) as [`crate::converter::parquet`]'s
-//! 6-table schema, plus `observations` itself.
+//! 6-table schema, plus `observations` itself, plus `branch_best_state`: a
+//! denormalized copy of each branch's best hypothesis state that the
+//! explorer's homepage reads instead of probing `hypotheses`/`kf_state` once
+//! per branch.
 //!
 //! Organised by concern rather than by table:
 //! - [`rows`] — plain row structs, no logic.
@@ -19,7 +22,7 @@
 //! [`NoTls`], suitable for a local/trusted Postgres instance. Add TLS
 //! support if this ever talks to a non-local database.
 //!
-//! The 7 bulk-loaded tables are `UNLOGGED` (no WAL, reset to empty by
+//! The 8 bulk-loaded tables are `UNLOGGED` (no WAL, reset to empty by
 //! Postgres after a crash/unclean shutdown) and have their secondary
 //! indexes/foreign keys dropped before the COPYs and rebuilt after
 //! ([`schema::drop_bulk_load_constraints`]/[`schema::restore_bulk_load_constraints`])
@@ -42,8 +45,8 @@ use postgres::{Client, NoTls};
 
 /// Loads `branch_collection` and the raw observations at
 /// `observations_parquet_path` into the Postgres database at `database_url`:
-/// creates the 7 bulk-loaded tables (and `orbit_fits`/`orbit_fit_failures`)
-/// if absent, `TRUNCATE`s the 7 bulk-loaded ones, then bulk-loads via
+/// creates the 8 bulk-loaded tables (and `orbit_fits`/`orbit_fit_failures`)
+/// if absent, `TRUNCATE`s the 8 bulk-loaded ones, then bulk-loads via
 /// `COPY ... FROM STDIN BINARY`.
 ///
 /// Runs in a single transaction — a failure partway through leaves the
@@ -84,8 +87,14 @@ pub(crate) fn write_sql_tables(
         .map(|r| (r.id, (r.night_id, r.mjd_tt)))
         .collect();
 
-    let (branch_rows, kf_bank_rows, branch_observation_rows, hypothesis_rows, kf_state_rows) =
-        build::build_branch_rows(branch_collection, &obs_index);
+    let (
+        branch_rows,
+        kf_bank_rows,
+        branch_observation_rows,
+        hypothesis_rows,
+        kf_state_rows,
+        best_state_rows,
+    ) = build::build_branch_rows(branch_collection, &obs_index);
     let archived_rows = build::build_archived_rows(branch_collection);
 
     let total_rows = observation_rows.len()
@@ -94,6 +103,7 @@ pub(crate) fn write_sql_tables(
         + branch_observation_rows.len()
         + hypothesis_rows.len()
         + kf_state_rows.len()
+        + best_state_rows.len()
         + archived_rows.len();
     let pb = copy::build_progress_bar(total_rows);
 
@@ -121,7 +131,7 @@ pub(crate) fn write_sql_tables(
     pb.println("Truncating existing tables...");
     transaction.batch_execute(
         "TRUNCATE TABLE branches, kf_bank, branch_observations, hypotheses, kf_state, \
-         archived_trajectories, observations CASCADE;",
+         branch_best_state, archived_trajectories, observations CASCADE;",
     )?;
 
     copy::copy_observations(&mut transaction, &observation_rows, &pb)?;
@@ -129,11 +139,23 @@ pub(crate) fn write_sql_tables(
     copy::copy_kf_bank(&mut transaction, &kf_bank_rows, &pb)?;
     copy::copy_branch_observations(&mut transaction, &branch_observation_rows, &pb)?;
     copy::copy_hypotheses(&mut transaction, &hypothesis_rows, &pb)?;
-    copy::copy_kf_state(&mut transaction, &kf_state_rows, &pb)?;
+    let classifications = copy::classify_kf_state_rows(&kf_state_rows);
+    copy::copy_kf_state(&mut transaction, &kf_state_rows, &classifications, &pb)?;
+    copy::copy_branch_best_state(
+        &mut transaction,
+        &best_state_rows,
+        &kf_state_rows,
+        &classifications,
+        &pb,
+    )?;
+    drop(classifications);
     copy::copy_archived_trajectories(&mut transaction, &archived_rows, &pb)?;
 
     pb.println("Rebuilding secondary indexes/constraints...");
     schema::restore_bulk_load_constraints(&mut transaction)?;
+
+    pb.println("Refreshing planner statistics (ANALYZE)...");
+    schema::analyze_bulk_loaded_tables(&mut transaction)?;
 
     pb.println("Committing transaction...");
     transaction.commit()?;

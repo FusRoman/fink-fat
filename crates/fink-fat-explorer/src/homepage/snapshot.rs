@@ -2,30 +2,34 @@
 //!
 //! The homepage used to answer every user interaction — a legend toggle, a
 //! column sort, a page change, a keystroke in the search box — with fresh SQL.
-//! The expensive part was never `branches` (a few hundred thousand narrow
-//! rows) but `kf_state`: `dynamic_family` lives there, one row per hypothesis,
-//! and reaching it means a `LATERAL` best-hypothesis lookup plus a primary-key
-//! probe *per branch*. On a loaded instance that is ~214k random reads into a
-//! ~20 GB table, and `list_lineages` paid for it twice per call (once for the
-//! count, once for the page).
+//! Instead, the whole working set is loaded into an immutable [`Snapshot`] —
+//! about 35 MB at 214k branches — and every homepage server function becomes
+//! an in-memory scan.
 //!
-//! Nothing in this data changes while the server runs: `fink-fat convert`
-//! rewrites these tables wholesale (`TRUNCATE ... CASCADE` then `COPY`), and
-//! the explorer only ever writes to `orbit_fits`. So the whole working set is
-//! loaded once into an immutable [`Snapshot`] — about 35 MB at 214k branches —
-//! and every homepage server function becomes an in-memory scan.
+//! The build itself reads two narrow tables `fink-fat convert` prepares for
+//! it: `branches` (with its precomputed observation statistics) and
+//! `branch_best_state` (each branch's best hypothesis state). It used to
+//! reach that state through a `LATERAL` best-hypothesis lookup plus a
+//! `kf_state` primary-key probe *per branch* — ~214k random reads into tens
+//! of GB, minutes per build. The remaining queries (fits, failures,
+//! cross-matches, counts) are small and run concurrently.
+//!
+//! The data changes when `fink-fat convert` rewrites the bulk-loaded tables
+//! (`TRUNCATE ... CASCADE` then `COPY`), and when the explorer records orbit
+//! fits, fit failures or cross-matches. When to rebuild is decided by
+//! [`crate::homepage::snapshot_refresh`], from the [`DataMarker`] each
+//! snapshot is built from.
 //!
 //! Server-only: `main.rs` gates the module on the `server` feature, so none of
 //! this reaches the wasm bundle.
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, PoisonError, RwLock};
 
+use dioxus::server::axum::body::Bytes;
 use sqlx::PgPool;
-use tokio::sync::OnceCell;
 
 use crate::fit_pipeline::params;
 use crate::get_pool;
@@ -33,12 +37,9 @@ use crate::homepage::dynamic_pop_plot::PlotSeries;
 use crate::homepage::family::DynamicalFamily;
 use crate::homepage::interaction::SortColumn;
 use crate::homepage::quality_tier::{assign_quality_tier, FitMethod, LatestFit, QualityTier};
-
-/// How long a snapshot is served before a rebuild is triggered in the
-/// background. The data only changes on a `fink-fat convert` re-run, so this
-/// is a safety net rather than a freshness guarantee — the navbar's refresh
-/// button is the intended way to pick up a new conversion immediately.
-const SNAPSHOT_TTL: Duration = Duration::from_secs(15 * 60);
+use crate::homepage::series_route::etag_for;
+use crate::homepage::series_wire::{encode_series, SeriesWireError};
+use crate::homepage::snapshot_refresh::{tracked, BuildStep};
 
 /// Raw row shape of [`SNAPSHOT_QUERY`].
 #[derive(sqlx::FromRow)]
@@ -52,6 +53,7 @@ struct SnapshotRow {
     arc_length_days: f64,
     n_nights: i64,
     median_inter_night_dt_days: Option<f64>,
+    well_sampled_nights: i64,
     semi_major_axis: f64,
     eccentricity: f64,
     // Raw Kalman attributable state — not used by the (a, e) plot or the
@@ -81,26 +83,78 @@ struct SnapshotRow {
 }
 
 /// The one query the whole homepage is built from: every branch, joined to its
-/// best hypothesis' Kalman state for the precomputed family and orbital
-/// elements. Served by `idx_hypotheses_branch_log_weight` and `kf_state`'s
-/// primary key.
+/// best hypothesis' state, precomputed by `fink-fat convert` in
+/// `branch_best_state` (one row per branch, so this is a hash join of two
+/// sequential scans). A branch without any hypothesis has no
+/// `branch_best_state` row and is left out, as the former per-branch
+/// best-hypothesis lookup did.
 const SNAPSHOT_QUERY: &str = "
     SELECT b.branch_id, b.lineage_id, b.designation, b.lineage_designation,
            b.cumulative_llr, b.n_real_updates,
            b.arc_length_days, b.n_nights, b.median_inter_night_dt_days,
-           ks.semi_major_axis, ks.eccentricity,
-           ks.ra, ks.dec, ks.ra_dot, ks.dec_dot, ks.rho, ks.rho_dot, ks.epoch,
-           ks.r_obs_x, ks.r_obs_y, ks.r_obs_z, ks.v_obs_x, ks.v_obs_y, ks.v_obs_z
+           b.well_sampled_nights,
+           s.semi_major_axis, s.eccentricity,
+           s.ra, s.dec, s.ra_dot, s.dec_dot, s.rho, s.rho_dot, s.epoch,
+           s.r_obs_x, s.r_obs_y, s.r_obs_z, s.v_obs_x, s.v_obs_y, s.v_obs_z
     FROM branches b
-    CROSS JOIN LATERAL (
-        SELECT hypothesis_id
-        FROM hypotheses h
-        WHERE h.branch_id = b.branch_id
-        ORDER BY h.log_weight DESC
-        LIMIT 1
-    ) bh
-    JOIN kf_state ks ON ks.hypothesis_id = bh.hypothesis_id
+    JOIN branch_best_state s ON s.branch_id = b.branch_id
 ";
+
+/// The hypothesis count shown in the navbar, from the planner's row estimate
+/// rather than a `COUNT(*)` over tens of millions of rows. `fink-fat convert`
+/// runs `ANALYZE` at the end of every load, so the estimate is exact right
+/// after a convert; `GREATEST` covers a never-analyzed table (`-1`).
+const HYPOTHESIS_COUNT_QUERY: &str =
+    "SELECT GREATEST(reltuples, 0)::bigint FROM pg_class WHERE oid = 'hypotheses'::regclass";
+
+/// Cheap fingerprint of everything the snapshot is built from, see
+/// [`DataMarker`].
+const DATA_MARKER_QUERY: &str = "
+    SELECT pg_relation_filenode('branches')::bigint AS branches_filenode,
+           pg_relation_filenode('branch_best_state')::bigint AS best_state_filenode,
+           COALESCE((
+               SELECT sum(n_tup_ins + n_tup_upd + n_tup_del)
+               FROM pg_stat_user_tables
+               WHERE relid IN ('orbit_fits'::regclass, 'orbit_fit_failures'::regclass,
+                               'cnd_queries'::regclass, 'skybot_obs_status'::regclass)
+           ), 0)::bigint AS overlay_changes
+";
+
+/// Cheap fingerprint of the database content a [`Snapshot`] is built from:
+/// two catalog lookups and one statistics view, no table scan. A snapshot
+/// stores the marker read just before its build; a different marker means
+/// the data changed since.
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+pub struct DataMarker {
+    /// Physical file of `branches`. `fink-fat convert` `TRUNCATE`s it, which
+    /// always allocates a new file, so this changes on every convert.
+    pub branches_filenode: i64,
+    /// Same for `branch_best_state`, truncated in the same transaction.
+    pub best_state_filenode: i64,
+    /// Cumulative inserted + updated + deleted rows in the tables the
+    /// explorer writes to while running (orbit fits, fit failures, CND and
+    /// Skybot cross-matches), from Postgres' activity statistics. Only
+    /// compared for equality: any write changes it. The statistics are
+    /// flushed within about a second of a commit, and a statistics reset
+    /// merely triggers one extra rebuild.
+    pub overlay_changes: i64,
+}
+
+/// Reads the current [`DataMarker`].
+///
+/// # Arguments
+/// * `pool` — the database pool.
+///
+/// # Return
+/// The marker.
+///
+/// # Errors
+/// The query failing, including when `branch_best_state` does not exist
+/// yet, i.e. the database was loaded by a `fink-fat convert` that predates
+/// it.
+pub async fn read_data_marker(pool: &PgPool) -> Result<DataMarker, sqlx::Error> {
+    sqlx::query_as(DATA_MARKER_QUERY).fetch_one(pool).await
+}
 
 /// One row of `params::ELIGIBLE_BRANCH_QUERY` — only `branch_id` is used
 /// here, but that query also selects `lineage_designation` (needed by
@@ -205,30 +259,6 @@ struct LatestFailureRow {
     attempted_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// Number of distinct nights (`observations.night_id`) on which each branch
-/// has two or more observations — the geometric bar
-/// [`QualityTier::WellSampledDiscovery`] adds on top of [`QualityTier::Discovery`].
-/// Reuses `night_id`, the same grouping key `compute_obs_stats` in
-/// `src/converter/sql.rs` already uses for `branches.n_nights`, rather than
-/// re-bucketing `mjd_tt` independently.
-const WELL_SAMPLED_NIGHTS_QUERY: &str = "
-    SELECT branch_id, COUNT(*) AS well_sampled_nights
-    FROM (
-        SELECT bo.branch_id, o.night_id, COUNT(*) AS n
-        FROM branch_observations bo
-        JOIN observations o ON o.id = bo.obs_id
-        GROUP BY bo.branch_id, o.night_id
-    ) per_night
-    WHERE n >= 2
-    GROUP BY branch_id
-";
-
-#[derive(sqlx::FromRow)]
-struct WellSampledNightsRow {
-    branch_id: i64,
-    well_sampled_nights: i64,
-}
-
 /// Everything [`assign_quality_tier`] needs about every branch, keyed by
 /// `branch_id`. Bundled into one struct — rather than threading four loose
 /// maps through [`build`] and [`assemble`] — so the snapshot's quality-tier
@@ -238,43 +268,49 @@ struct QualityIndex {
     eligible: HashSet<i64>,
     latest_fit: HashMap<i64, LatestFit>,
     latest_failure_at: HashMap<i64, chrono::DateTime<chrono::Utc>>,
-    well_sampled_nights: HashMap<i64, i64>,
     /// Lineages with an active CND/Skybot cross-match hit — see
     /// [`crate::cross_match_status::build_cross_match_index`].
     cross_match: HashSet<Box<str>>,
 }
 
 impl QualityIndex {
-    fn tier_for(&self, branch_id: i64, lineage_designation: &str, n_nights: i64) -> QualityTier {
+    fn tier_for(&self, row: &SnapshotRow) -> QualityTier {
         assign_quality_tier(
-            self.eligible.contains(&branch_id),
-            self.latest_fit.get(&branch_id),
-            self.latest_failure_at.get(&branch_id).copied(),
-            n_nights,
-            self.well_sampled_nights
-                .get(&branch_id)
-                .copied()
-                .unwrap_or(0),
-            self.cross_match.contains(lineage_designation),
+            self.eligible.contains(&row.branch_id),
+            self.latest_fit.get(&row.branch_id),
+            self.latest_failure_at.get(&row.branch_id).copied(),
+            row.n_nights,
+            row.well_sampled_nights,
+            self.cross_match.contains(row.lineage_designation.as_str()),
         )
     }
 }
 
-/// Runs the five queries [`QualityIndex`] is built from. Separate from
-/// [`build`]'s main [`SNAPSHOT_QUERY`] fetch since none of these five share
-/// its `branches`/`kf_state` join.
-async fn build_quality_index(pool: &PgPool) -> Result<QualityIndex, sqlx::Error> {
-    let eligible_rows: Vec<EligibleBranchRow> = sqlx::query_as(params::ELIGIBLE_BRANCH_QUERY)
+/// Branches the bulk orbit fit would attempt, see
+/// [`params::ELIGIBLE_BRANCH_QUERY`].
+///
+/// # Errors
+///
+/// The query failing.
+async fn fetch_eligible(pool: &PgPool) -> Result<HashSet<i64>, sqlx::Error> {
+    let rows: Vec<EligibleBranchRow> = sqlx::query_as(params::ELIGIBLE_BRANCH_QUERY)
         .bind(params::MIN_OBSERVATIONS as i64)
         .bind(params::MIN_BASELINE_DAYS)
         .fetch_all(pool)
         .await?;
-    let eligible: HashSet<i64> = eligible_rows.into_iter().map(|r| r.branch_id).collect();
+    Ok(rows.into_iter().map(|r| r.branch_id).collect())
+}
 
-    let fit_rows: Vec<LatestFitRow> = sqlx::query_as(LATEST_ORBIT_FIT_QUERY)
+/// Each branch's latest `orbit_fits` row, see [`LATEST_ORBIT_FIT_QUERY`].
+///
+/// # Errors
+///
+/// The query failing.
+async fn fetch_latest_fits(pool: &PgPool) -> Result<HashMap<i64, LatestFit>, sqlx::Error> {
+    let rows: Vec<LatestFitRow> = sqlx::query_as(LATEST_ORBIT_FIT_QUERY)
         .fetch_all(pool)
         .await?;
-    let latest_fit: HashMap<i64, LatestFit> = fit_rows
+    Ok(rows
         .into_iter()
         .map(|r| {
             (
@@ -286,33 +322,25 @@ async fn build_quality_index(pool: &PgPool) -> Result<QualityIndex, sqlx::Error>
                 },
             )
         })
-        .collect();
+        .collect())
+}
 
-    let failure_rows: Vec<LatestFailureRow> = sqlx::query_as(LATEST_ORBIT_FIT_FAILURE_QUERY)
+/// Each branch's latest failed bulk-fit attempt, see
+/// [`LATEST_ORBIT_FIT_FAILURE_QUERY`].
+///
+/// # Errors
+///
+/// The query failing.
+async fn fetch_latest_failures(
+    pool: &PgPool,
+) -> Result<HashMap<i64, chrono::DateTime<chrono::Utc>>, sqlx::Error> {
+    let rows: Vec<LatestFailureRow> = sqlx::query_as(LATEST_ORBIT_FIT_FAILURE_QUERY)
         .fetch_all(pool)
         .await?;
-    let latest_failure_at = failure_rows
+    Ok(rows
         .into_iter()
         .map(|r| (r.branch_id, r.attempted_at))
-        .collect();
-
-    let well_sampled_rows: Vec<WellSampledNightsRow> = sqlx::query_as(WELL_SAMPLED_NIGHTS_QUERY)
-        .fetch_all(pool)
-        .await?;
-    let well_sampled_nights = well_sampled_rows
-        .into_iter()
-        .map(|r| (r.branch_id, r.well_sampled_nights))
-        .collect();
-
-    let cross_match = crate::cross_match_status::build_cross_match_index(pool).await?;
-
-    Ok(QualityIndex {
-        eligible,
-        latest_fit,
-        latest_failure_at,
-        well_sampled_nights,
-        cross_match,
-    })
+        .collect())
 }
 
 /// Postgres sorts NaN as *larger* than any other float, Infinity included, so
@@ -398,12 +426,17 @@ pub struct Snapshot {
     /// only cost ~20 ms, but paying it once at build time keeps every
     /// interaction bounded by the page size instead of the population.
     sorted: [Vec<u32>; SortColumn::ALL.len()],
-    /// Ready-to-serialize plot series, one per (family, quality tier) pair
-    /// present in the data, ordered by family then tier — the order both
-    /// legends list their chips in. Grouping once here, rather than in the
-    /// browser on every data load, is also what lets the plot ship two flat
-    /// coordinate arrays per series instead of one JSON object per point.
-    pub series: Vec<PlotSeries>,
+    /// The (a, e) plot's series, already encoded with
+    /// [`crate::homepage::series_wire::encode_series`]: one series per
+    /// (family, quality tier) pair present in the data, ordered by family then
+    /// tier — the order both legends list their chips in. Encoded once here so
+    /// a request only clones this reference-counted buffer instead of cloning
+    /// and serializing the whole population.
+    pub series_payload: Bytes,
+    /// HTTP entity tag of [`Snapshot::series_payload`], derived from its
+    /// content (see [`crate::homepage::series_route::etag_for`]): a rebuild
+    /// over unchanged data keeps it, so browsers keep their cached copy.
+    pub series_etag: Box<str>,
     pub n_branches: i64,
     pub n_hypotheses: i64,
     pub n_lineages: i64,
@@ -412,7 +445,8 @@ pub struct Snapshot {
     /// watches it to know when a rebuild it asked for has actually landed —
     /// until then the previous snapshot is still what gets served.
     pub version: u64,
-    built_at: Instant,
+    /// The database fingerprint read just before this snapshot's build.
+    pub marker: DataMarker,
 }
 
 impl Snapshot {
@@ -427,110 +461,116 @@ static NEXT_VERSION: AtomicU64 = AtomicU64::new(1);
 
 /// `None` until the first build finishes; callers surface that as a loading
 /// state rather than blocking on it.
-static SNAPSHOT: OnceCell<RwLock<Option<Arc<Snapshot>>>> = OnceCell::const_new();
-
-/// Guards against concurrent rebuilds: several requests can notice the same
-/// expired snapshot at once, and the build is minutes of work on a large
-/// instance.
-static REBUILDING: AtomicBool = AtomicBool::new(false);
-
-async fn cell() -> &'static RwLock<Option<Arc<Snapshot>>> {
-    SNAPSHOT.get_or_init(|| async { RwLock::new(None) }).await
-}
+static SNAPSHOT: RwLock<Option<Arc<Snapshot>>> = RwLock::new(None);
 
 /// The current snapshot, or `None` while the first build is still running.
 ///
-/// Never blocks on a build: if the snapshot has aged past [`SNAPSHOT_TTL`] the
-/// stale one is returned and a rebuild is spawned, so a TTL expiry is invisible
-/// to whoever happens to make the next request.
-pub async fn snapshot() -> Option<Arc<Snapshot>> {
-    let current = {
-        // Cloning an Arc is the whole critical section — no await is held
-        // across the lock, so a plain std RwLock is the right primitive.
-        let guard = cell().await.read().expect("snapshot lock poisoned");
-        guard.clone()
-    };
-
-    match &current {
-        Some(snap) if snap.built_at.elapsed() >= SNAPSHOT_TTL => spawn_rebuild(),
-        Some(_) => {}
-        // First build: kick it off, and let the caller show a loading state.
-        // The 3D view's ephemeris load is started alongside, so it is warm by
-        // the time the user opens that view.
-        None => {
-            spawn_rebuild();
-            crate::orbit3d::server_fns::warm_up_planets();
-        }
-    }
-
-    current
+/// Never blocks on a build, and never triggers one: builds are driven by
+/// [`crate::homepage::snapshot_refresh`].
+pub fn snapshot() -> Option<Arc<Snapshot>> {
+    // Cloning an Arc is the whole critical section, so a plain std RwLock is
+    // the right primitive; a poisoned lock still holds a valid `Option`.
+    SNAPSHOT
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
 }
 
-/// Force a rebuild regardless of age — what the navbar's refresh button calls
-/// after a `fink-fat convert`. Returns immediately; the old snapshot keeps
-/// being served until the new one is ready.
-pub fn request_refresh() {
-    spawn_rebuild();
+/// Replaces the served snapshot.
+///
+/// # Arguments
+/// * `snap` — the newly built snapshot.
+pub(crate) fn publish(snap: Snapshot) {
+    *SNAPSHOT.write().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(snap));
 }
 
-/// Clears [`REBUILDING`] on drop, so a panicking build cannot wedge the flag
-/// at `true` and block every future rebuild for the life of the process.
-struct RebuildGuard;
-
-impl Drop for RebuildGuard {
-    fn drop(&mut self) {
-        REBUILDING.store(false, Ordering::SeqCst);
-    }
+/// Why a snapshot build failed. The previous snapshot, if any, stays served.
+#[derive(Debug, thiserror::Error)]
+pub enum SnapshotBuildError {
+    /// One of the build queries failed.
+    #[error(transparent)]
+    Sql(#[from] sqlx::Error),
+    /// The (a, e) plot series could not be encoded.
+    #[error(transparent)]
+    Series(#[from] SeriesWireError),
+    /// The CPU-bound assembly task panicked or was cancelled.
+    #[error("snapshot assembly task failed: {0}")]
+    Join(#[from] tokio::task::JoinError),
 }
 
-fn spawn_rebuild() {
-    // `swap` rather than a load-then-store: two requests hitting an expired
-    // snapshot simultaneously must not both start a multi-minute build.
-    if REBUILDING.swap(true, Ordering::SeqCst) {
-        return;
-    }
-
-    tokio::spawn(async move {
-        let _guard = RebuildGuard;
-
-        match build().await {
-            Ok(snap) => {
-                let mut guard = cell().await.write().expect("snapshot lock poisoned");
-                *guard = Some(Arc::new(snap));
-            }
-            Err(e) => {
-                // A failed rebuild leaves the previous snapshot in place; the
-                // next request simply retries.
-                tracing::error!("homepage snapshot build failed: {e}");
-            }
-        }
-    });
-}
-
-async fn build() -> Result<Snapshot, sqlx::Error> {
+/// Reads everything the homepage needs and assembles a new [`Snapshot`].
+///
+/// The [`DataMarker`] is read first, so a change landing during the build is
+/// picked up by the next check; the other queries then run concurrently
+/// (the pool has room for all of them), and the CPU-bound assembly runs on
+/// a blocking thread. Each step reports its completion through
+/// [`tracked`].
+///
+/// # Return
+/// The new snapshot; publishing it is left to the caller.
+///
+/// # Errors
+/// [`SnapshotBuildError`] if any query, the series encoding or the assembly
+/// task fails.
+pub(crate) async fn build() -> Result<Snapshot, SnapshotBuildError> {
     let pool = get_pool().await;
 
-    let rows: Vec<SnapshotRow> = sqlx::query_as(SNAPSHOT_QUERY).fetch_all(pool).await?;
+    let marker = tracked(BuildStep::DataMarker, read_data_marker(pool)).await?;
 
-    // The two counts the snapshot cannot derive from `branches`. `n_branches`
-    // and `n_lineages` come out of the rows themselves.
-    let (n_hypotheses,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM hypotheses")
-        .fetch_one(pool)
-        .await?;
-    let (n_archived,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM archived_trajectories")
-        .fetch_one(pool)
-        .await?;
-
-    let quality = build_quality_index(pool).await?;
-    let best_orbits = build_best_orbit_index(pool).await?;
-
-    Ok(assemble(
+    let (
         rows,
         n_hypotheses,
         n_archived,
-        &quality,
-        &best_orbits,
-    ))
+        eligible,
+        latest_fit,
+        latest_failure_at,
+        cross_match,
+        best_orbits,
+    ) = tokio::try_join!(
+        tracked(
+            BuildStep::Branches,
+            sqlx::query_as::<_, SnapshotRow>(SNAPSHOT_QUERY).fetch_all(pool)
+        ),
+        tracked(
+            BuildStep::HypothesisCount,
+            sqlx::query_scalar::<_, i64>(HYPOTHESIS_COUNT_QUERY).fetch_one(pool)
+        ),
+        tracked(
+            BuildStep::ArchivedCount,
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM archived_trajectories")
+                .fetch_one(pool)
+        ),
+        tracked(BuildStep::Eligibility, fetch_eligible(pool)),
+        tracked(BuildStep::LatestFits, fetch_latest_fits(pool)),
+        tracked(BuildStep::FitFailures, fetch_latest_failures(pool)),
+        tracked(
+            BuildStep::CrossMatches,
+            crate::cross_match_status::build_cross_match_index(pool)
+        ),
+        tracked(BuildStep::BestOrbits, build_best_orbit_index(pool)),
+    )?;
+
+    let quality = QualityIndex {
+        eligible,
+        latest_fit,
+        latest_failure_at,
+        cross_match,
+    };
+    let snap = tracked(
+        BuildStep::Indexing,
+        tokio::task::spawn_blocking(move || {
+            assemble(
+                rows,
+                n_hypotheses,
+                n_archived,
+                &quality,
+                &best_orbits,
+                marker,
+            )
+        }),
+    )
+    .await??;
+    Ok(snap)
 }
 
 /// Turns raw rows into the indexed, pre-sorted structure the server functions
@@ -543,13 +583,19 @@ async fn build() -> Result<Snapshot, sqlx::Error> {
 ///   `orbit_fits` row over its Kalman-bank state for the (a, e) plot's
 ///   position and the family badge, matching the identity card's own
 ///   n-body-over-IOD-over-Kalman priority.
+/// * `marker` — the [`DataMarker`] read before the queries, stored as-is.
+///
+/// # Errors
+///
+/// [`SeriesWireError`] if the (a, e) plot series cannot be encoded.
 fn assemble(
     rows: Vec<SnapshotRow>,
     n_hypotheses: i64,
     n_archived: i64,
     quality: &QualityIndex,
     best_orbits: &HashMap<i64, crate::best_orbit::OrbitCandidate>,
-) -> Snapshot {
+    marker: DataMarker,
+) -> Result<Snapshot, SeriesWireError> {
     let mut branches: Vec<BranchRow> = rows
         .into_iter()
         .map(|row| {
@@ -569,8 +615,7 @@ fn assemble(
                 best_orbit.eccentricity as f32,
                 best_orbit.family,
             );
-            let quality_tier =
-                quality.tier_for(row.branch_id, &row.lineage_designation, row.n_nights);
+            let quality_tier = quality.tier_for(&row);
 
             BranchRow {
                 branch_id: row.branch_id,
@@ -639,24 +684,26 @@ fn assemble(
     }
 
     let sorted = build_orders(&branches, &lineages);
-    let series = build_series(&branches);
+    let series_payload = Bytes::from(encode_series(&build_series(&branches))?);
+    let series_etag = etag_for(&series_payload).into_boxed_str();
 
     let n_branches = branches.len() as i64;
     let n_lineages = lineages.len() as i64;
 
-    Snapshot {
+    Ok(Snapshot {
         branches,
         lineages,
         others_idx,
         sorted,
-        series,
+        series_payload,
+        series_etag,
         n_branches,
         n_hypotheses,
         n_lineages,
         n_archived,
         version: NEXT_VERSION.fetch_add(1, Ordering::SeqCst),
-        built_at: Instant::now(),
-    }
+        marker,
+    })
 }
 
 /// One ascending permutation of `lineages` per sortable column.
@@ -885,6 +932,7 @@ mod tests {
             arc_length_days: 0.0,
             n_nights: if median.is_some() { 3 } else { 1 },
             median_inter_night_dt_days: median,
+            well_sampled_nights: 0,
             semi_major_axis,
             eccentricity,
             // Not exercised by any test in this module (those all go through
@@ -943,8 +991,15 @@ mod tests {
             eligible: rows.iter().map(|r| r.branch_id).collect(),
             latest_fit: HashMap::new(),
             latest_failure_at: HashMap::new(),
-            well_sampled_nights: HashMap::new(),
             cross_match: HashSet::new(),
+        }
+    }
+
+    fn test_marker() -> DataMarker {
+        DataMarker {
+            branches_filenode: 1,
+            best_state_filenode: 2,
+            overlay_changes: 0,
         }
     }
 
@@ -953,7 +1008,15 @@ mod tests {
     /// grouping, sorting, search, paging) uses.
     fn assemble_default(rows: Vec<SnapshotRow>, n_hypotheses: i64, n_archived: i64) -> Snapshot {
         let quality = all_not_fitted(&rows);
-        assemble(rows, n_hypotheses, n_archived, &quality, &HashMap::new())
+        assemble(
+            rows,
+            n_hypotheses,
+            n_archived,
+            &quality,
+            &HashMap::new(),
+            test_marker(),
+        )
+        .expect("assembles")
     }
 
     #[test]
@@ -1147,13 +1210,19 @@ mod tests {
             0,
         );
 
-        let families: Vec<DynamicalFamily> = snap.series.iter().map(|s| s.family).collect();
+        let series = crate::homepage::series_wire::decode_series(&snap.series_payload)
+            .expect("snapshot payload decodes");
+        let families: Vec<DynamicalFamily> = series.iter().map(|s| s.family).collect();
         assert_eq!(
             families,
             vec![DynamicalFamily::NeaApollo, DynamicalFamily::Trojan]
         );
-        assert_eq!(snap.series[0].a.len(), 2);
-        assert_eq!(snap.series[1].a.len(), 1);
+        assert_eq!(series[0].a.len(), 2);
+        assert_eq!(series[1].a.len(), 1);
+        assert_eq!(
+            series[0].lineage_designations,
+            vec![Box::from("L20"), Box::from("L30")]
+        );
     }
 
     /// Mirrors `hidden_families_are_matched_against_the_best_branch_only`:
@@ -1170,10 +1239,10 @@ mod tests {
             eligible: [1].into_iter().collect(),
             latest_fit: HashMap::new(),
             latest_failure_at: HashMap::new(),
-            well_sampled_nights: HashMap::new(),
             cross_match: HashSet::new(),
         };
-        let snap = assemble(rows, 0, 0, &quality, &HashMap::new());
+        let snap =
+            assemble(rows, 0, 0, &quality, &HashMap::new(), test_marker()).expect("assembles");
 
         assert_eq!(
             snap.branches[snap.lineages[0].best as usize].quality_tier,
@@ -1218,10 +1287,10 @@ mod tests {
             eligible: [2, 3].into_iter().collect(),
             latest_fit: HashMap::new(),
             latest_failure_at: HashMap::new(),
-            well_sampled_nights: HashMap::new(),
             cross_match: HashSet::new(),
         };
-        let snap = assemble(rows, 0, 0, &quality, &HashMap::new());
+        let snap =
+            assemble(rows, 0, 0, &quality, &HashMap::new(), test_marker()).expect("assembles");
 
         // Default click direction (`SortDirection::Desc`) must surface the
         // best tier first, exactly like every other column's "larger first"

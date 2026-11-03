@@ -29,6 +29,8 @@ ALTER TABLE archived_trajectories ADD COLUMN IF NOT EXISTS eccentricity DOUBLE P
 ALTER TABLE branches ADD COLUMN IF NOT EXISTS arc_length_days DOUBLE PRECISION NOT NULL DEFAULT 0;
 ALTER TABLE branches ADD COLUMN IF NOT EXISTS n_nights BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE branches ADD COLUMN IF NOT EXISTS median_inter_night_dt_days DOUBLE PRECISION;
+ALTER TABLE branches ADD COLUMN IF NOT EXISTS n_observations BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE branches ADD COLUMN IF NOT EXISTS well_sampled_nights BIGINT NOT NULL DEFAULT 0;
 
 -- Same rationale as above: a DB created before `observations` and the FK on
 -- branch_observations.obs_id existed needs the constraint backfilled

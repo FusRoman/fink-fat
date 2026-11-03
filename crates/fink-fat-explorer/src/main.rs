@@ -315,6 +315,39 @@ enum Route {
     ApiDocsPage {},
 }
 
+/// Compression level applied to every response. Each algorithm's own
+/// default is tuned for static assets compressed once, not per request:
+/// brotli's is its slowest setting (11), which on the multi-megabyte (a, e)
+/// population payload costs seconds of CPU per page load. Level 4 keeps
+/// brotli and zstd within a few percent of their best ratio at a fraction of
+/// that cost, and is close to gzip's own default.
+#[cfg(feature = "server")]
+const RESPONSE_COMPRESSION_LEVEL: i32 = 4;
+
+/// Server entry point: the standard Dioxus fullstack router (SSR, server
+/// functions, static assets), plus the homepage's population series route,
+/// behind HTTP response compression. Responses are compressed according to
+/// the client's `Accept-Encoding`; static assets already served with a
+/// precompressed `Content-Encoding` are left untouched.
+///
+/// The homepage snapshot starts building as soon as the server is up (see
+/// [`homepage::snapshot_refresh::start_background_refresh`]), so the first
+/// visitor does not wait for it.
+#[cfg(feature = "server")]
+fn main() {
+    use tower_http::compression::{CompressionLayer, CompressionLevel};
+
+    dioxus::serve(|| async move {
+        crate::homepage::snapshot_refresh::start_background_refresh();
+        let router = crate::homepage::series_route::register(dioxus::server::router(App)).layer(
+            CompressionLayer::new().quality(CompressionLevel::Precise(RESPONSE_COMPRESSION_LEVEL)),
+        );
+        Ok(router)
+    });
+}
+
+/// Client entry point (wasm), and any build without the `server` feature.
+#[cfg(not(feature = "server"))]
 fn main() {
     dioxus::launch(App);
 }

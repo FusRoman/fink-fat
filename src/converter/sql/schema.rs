@@ -14,7 +14,7 @@ use postgres::Transaction;
 /// migrates any that already exist from an older schema version.
 ///
 /// Three separate scripts, run in order:
-/// 1. `create_tables.sql` — the target schema of the 7 bulk-loaded tables,
+/// 1. `create_tables.sql` — the target schema of the 8 bulk-loaded tables,
 ///    as it would be created fresh.
 /// 2. `migrate_legacy_columns.sql` — fixes for a database created by an
 ///    older version of this binary, where step 1's
@@ -56,7 +56,7 @@ pub(super) fn create_tables(transaction: &mut Transaction<'_>) -> Result<(), pos
 }
 
 /// Drops the secondary indexes and foreign keys `create_tables.sql` declares
-/// on the 7 bulk-loaded tables, so the COPYs in [`super::write_sql_tables`]
+/// on the 8 bulk-loaded tables, so the COPYs in [`super::write_sql_tables`]
 /// insert into bare (primary-key-only) tables instead of paying for b-tree
 /// maintenance and FK lookups on every row. Always run immediately before
 /// the COPYs, and undone by [`restore_bulk_load_constraints`] immediately
@@ -99,4 +99,30 @@ pub(super) fn restore_bulk_load_constraints(
     transaction: &mut Transaction<'_>,
 ) -> Result<(), postgres::Error> {
     transaction.batch_execute(include_str!("restore_bulk_load_constraints.sql"))
+}
+
+/// Refreshes the planner statistics of every bulk-loaded table.
+///
+/// `TRUNCATE` resets a table's statistics, and autovacuum may take a long
+/// time to get back to the largest ones (`kf_state` stayed at
+/// `reltuples = -1` well after a convert): until then the planner works
+/// blind, and the explorer's hypothesis count (read from `reltuples`) is
+/// missing. `ANALYZE` only samples each table, so this costs seconds even on
+/// `kf_state`, and it can run inside the conversion transaction.
+///
+/// # Arguments
+///
+/// * `transaction` — the transaction [`super::write_sql_tables`] runs the
+///   whole conversion in.
+///
+/// # Errors
+///
+/// Any statement failing, as a [`postgres::Error`].
+pub(super) fn analyze_bulk_loaded_tables(
+    transaction: &mut Transaction<'_>,
+) -> Result<(), postgres::Error> {
+    transaction.batch_execute(
+        "ANALYZE observations, branches, kf_bank, branch_observations, hypotheses, kf_state, \
+         branch_best_state, archived_trajectories;",
+    )
 }
