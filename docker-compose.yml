@@ -2,6 +2,8 @@ services:
   db:
     image: postgres:latest
     container_name: fink-fat-db
+    # stop grace period to allow the db service to stop properly and make the `UNLOGGED` tables survive the restart.
+    stop_grace_period: 5m
     environment:
       POSTGRES_USER: finkfat
       POSTGRES_PASSWORD: finkfat
