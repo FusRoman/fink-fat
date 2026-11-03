@@ -7,7 +7,9 @@
 //! [`KFBank`](crate::topocentric_kf::kalman_bank::KFBank) (which operates on
 //! `Vec<Hypothesis>` within a single bank).
 
-use std::collections::HashMap;
+use std::hash::Hash;
+
+use ahash::AHashMap;
 
 use crate::topocentric_kf::branching::archive::ArchivedTrajectory;
 use crate::topocentric_kf::branching::branch::Branch;
@@ -87,17 +89,11 @@ pub fn cap_top_b_per_lineage<'state_lf, 'bank_config>(
     cap: usize,
 ) -> Vec<Branch<'state_lf, 'bank_config>> {
     let n_before = branches.len();
-    let mut by_lineage: HashMap<u64, Vec<Branch<'state_lf, 'bank_config>>> = HashMap::new();
-    for branch in branches {
-        by_lineage
-            .entry(branch.lineage_id)
-            .or_default()
-            .push(branch);
-    }
+    let by_lineage = group_in_first_seen_order(branches, |branch| branch.lineage_id);
     let n_lineages = by_lineage.len();
 
     let survivors: Vec<_> = by_lineage
-        .into_values()
+        .into_iter()
         .flat_map(|mut lineage_branches| {
             lineage_branches.sort_by(|a, b| b.cumulative_llr.total_cmp(&a.cumulative_llr));
             lineage_branches.truncate(cap.max(1));
@@ -144,17 +140,12 @@ pub fn apply_n_scan_pruning<'state_lf, 'bank_config>(
     current_step: usize,
 ) -> Vec<Branch<'state_lf, 'bank_config>> {
     let n_before = branches.len();
-    let mut by_horizon_node: HashMap<(u64, u64), Vec<Branch<'state_lf, 'bank_config>>> =
-        HashMap::new();
-    for branch in branches {
-        by_horizon_node
-            .entry((branch.lineage_id, branch.ancestor_at_scan_horizon))
-            .or_default()
-            .push(branch);
-    }
+    let by_horizon_node = group_in_first_seen_order(branches, |branch| {
+        (branch.lineage_id, branch.ancestor_at_scan_horizon)
+    });
 
     let survivors: Vec<_> = by_horizon_node
-        .into_values()
+        .into_iter()
         .flat_map(|node_branches| {
             // All members of a group share the same `ancestor_creation_step`
             // by construction (`Branch::from_observation`/`from_null` copy
@@ -288,19 +279,13 @@ pub fn purge_stale_lineages<'state_lf, 'bank_config>(
     }
 
     let n_before = branches.len();
-    let mut by_lineage: HashMap<u64, Vec<Branch<'state_lf, 'bank_config>>> = HashMap::new();
-    for branch in branches {
-        by_lineage
-            .entry(branch.lineage_id)
-            .or_default()
-            .push(branch);
-    }
+    let by_lineage = group_in_first_seen_order(branches, |branch| branch.lineage_id);
 
     let mut n_lineages_purged = 0;
     let mut archived: Vec<ArchivedTrajectory> = Vec::new();
     let mut survivors: Vec<Branch<'state_lf, 'bank_config>> = Vec::new();
 
-    for lineage_branches in by_lineage.into_values() {
+    for lineage_branches in by_lineage {
         let freshest_update = lineage_branches
             .iter()
             .map(|b| b.last_real_update_step)
@@ -384,6 +369,41 @@ fn archive_entry(
         absolute_magnitude_estimate: branch.bank.absolute_magnitude_estimate(),
         absolute_magnitude_sample_count: branch.bank.absolute_magnitude_sample_count(),
     })
+}
+
+/// Group items by key, keeping groups in the order their key first appears
+/// in `items` and each group's members in input order.
+///
+/// The pruning passes break `cumulative_llr` ties by position (stable sort
+/// in [`cap_top_b_per_lineage`], first-wins in `best_by_cumulative_llr`),
+/// and their output order is the next visit's input order. Iterating a
+/// `HashMap` here would make both depend on the per-process random hash
+/// seed, so two runs on the same data could keep different branches. The map
+/// below is only ever used for lookup, never iterated, so the result is a
+/// pure function of the input order.
+///
+/// # Arguments
+/// * `items` – Items to group, in their canonical order.
+/// * `key_of` – Grouping key of an item.
+///
+/// # Return
+/// The non-empty groups, ordered by first appearance of their key.
+fn group_in_first_seen_order<T, K, F>(items: Vec<T>, key_of: F) -> Vec<Vec<T>>
+where
+    K: Hash + Eq,
+    F: Fn(&T) -> K,
+{
+    let mut group_index: AHashMap<K, usize> = AHashMap::new();
+    let mut groups: Vec<Vec<T>> = Vec::new();
+    for item in items {
+        let next_index = groups.len();
+        let index = *group_index.entry(key_of(&item)).or_insert(next_index);
+        if index == next_index {
+            groups.push(Vec::new());
+        }
+        groups[index].push(item);
+    }
+    groups
 }
 
 /// Pick the branch with the highest `cumulative_llr` from a non-empty group.
@@ -552,5 +572,30 @@ mod stale_lineage_tests {
             prop_assert!(lineage_is_stale(age, f64::NEG_INFINITY, max, floor, None));
             prop_assert!(!lineage_is_stale(age, f64::INFINITY, max, floor, None));
         }
+    }
+}
+
+#[cfg(test)]
+mod grouping_tests {
+    use super::group_in_first_seen_order;
+
+    #[test]
+    fn groups_follow_first_appearance_and_keep_member_order() {
+        let items = vec![(7, 'a'), (3, 'b'), (7, 'c'), (9, 'd'), (3, 'e'), (7, 'f')];
+        let groups = group_in_first_seen_order(items, |&(key, _)| key);
+        assert_eq!(
+            groups,
+            vec![
+                vec![(7, 'a'), (7, 'c'), (7, 'f')],
+                vec![(3, 'b'), (3, 'e')],
+                vec![(9, 'd')],
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_input_yields_no_groups() {
+        let groups = group_in_first_seen_order(Vec::<(u64, u64)>::new(), |&(key, _)| key);
+        assert!(groups.is_empty());
     }
 }
