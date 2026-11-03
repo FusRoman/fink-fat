@@ -12,6 +12,11 @@
 //! page stays usable with a very large number of submissions. The pure query
 //! model is in [`query`], the controls in [`filters_bar`] and
 //! [`date_range_picker`].
+//!
+//! A production submission's state in MPC's pipeline (processing queue,
+//! publication, rejection...) is read from its stored WAMO observations by
+//! [`wamo_view`], shown as a badge in the table and broken down per state
+//! in the expanded row.
 
 mod ades_xml_modal;
 mod calendar_bridge;
@@ -20,10 +25,10 @@ mod date_range_picker;
 mod filters_bar;
 mod prepare_menu;
 mod query;
+mod wamo_view;
 
 use dioxus::prelude::*;
 use fink_fat_ades::mpc_submission::MPC_SUBMISSION_STATUS_URL;
-use fink_fat_ades::wamo::WamoObservation;
 
 use ades_xml_modal::{ades_file_name, AdesXmlModal};
 use data::{
@@ -34,6 +39,7 @@ use prepare_menu::PrepareSubmissionMenu;
 use query::{
     total_pages, DateRange, EndpointFilter, SubmissionQuery, VerdictFilter, SUBMISSIONS_PAGE_SIZE,
 };
+use wamo_view::{WamoDetailSection, WamoSummaryBadge};
 
 use crate::homepage::interaction::{Pagination, SortDirection};
 
@@ -48,47 +54,6 @@ fn verdict_badge_class(verdict: &str) -> &'static str {
         "rejected" | "error" => "badge-error",
         _ => "badge-ghost",
     }
-}
-
-/// Parses a row's stored `wamo_detail` JSON back into the observations it
-/// holds. Defensive rather than fallible: this is fink-fat's own
-/// previously-written JSON, so a parse failure would mean a schema drift
-/// bug, not bad external input — surfacing it as an empty list (a state the
-/// UI already renders sensibly, as "not linked yet") is better than an
-/// error banner for what is, at worst, a display glitch.
-///
-/// # Arguments
-/// * `wamo_detail` — the row's `wamo_detail` field.
-///
-/// # Return
-/// The observations, empty if `wamo_detail` is `None` or fails to parse.
-fn parse_wamo_observations(wamo_detail: &Option<serde_json::Value>) -> Vec<WamoObservation> {
-    wamo_detail
-        .as_ref()
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default()
-}
-
-/// The one-line summary badge text for a WAMO observation's IAU designation
-/// — the actual payoff of a real submission once MPC assigns one. Pure.
-///
-/// # Arguments
-/// * `observation` — one WAMO match.
-///
-/// # Return
-/// `Some("Designated (NNNNN)")` if MPC assigned a designation, `None`
-/// otherwise — either no designation exists (e.g. an identification against
-/// a known object, without a fresh designation), or MPC hasn't processed
-/// the observation yet ([`WamoObservation::is_pending`] — its `iau_desig`
-/// would otherwise be the literal string `"hidden"`, not a real value;
-/// callers must check `is_pending` separately before assuming "no label"
-/// means "processed, nothing to show").
-fn wamo_designation_label(observation: &WamoObservation) -> Option<String> {
-    observation
-        .iau_desig
-        .as_deref()
-        .filter(|desig| !fink_fat_ades::wamo::wamo_field_is_hidden(desig))
-        .map(|desig| format!("Designated ({desig})"))
 }
 
 /// Link to MPC's test-submission status page for a given submission — same
@@ -290,7 +255,8 @@ pub fn SubmissionDashboardPage() -> Element {
                                         th { "Lineage" }
                                         th { "Endpoint" }
                                         th { "Submission ID" }
-                                        th { "Verdict" }
+                                        th { title: "MPC's coarse ingestion check", "Ingest verdict" }
+                                        th { title: "Per-observation state from MPC's WAMO lookup (production only)", "MPC processing" }
                                         th {
                                             class: "cursor-pointer select-none",
                                             title: "Sort by submission time",
@@ -354,6 +320,11 @@ pub fn SubmissionDashboardPage() -> Element {
                                                     "{row.verdict}"
                                                 }
                                             }
+                                            td {
+                                                if row.endpoint == "production" {
+                                                    WamoSummaryBadge { wamo_detail: row.wamo_detail.clone() }
+                                                }
+                                            }
                                             td { class: "text-xs opacity-70", "{row.submitted_at}" }
                                             td {
                                                 button {
@@ -389,7 +360,7 @@ pub fn SubmissionDashboardPage() -> Element {
                                         }
                                         if expanded_id() == Some(row.id) {
                                             tr { key: "{row.id}-detail",
-                                                td { colspan: "7", class: "bg-base-200",
+                                                td { colspan: "8", class: "bg-base-200",
                                                     div { class: "flex flex-col gap-3 p-3 text-sm",
                                                         button {
                                                             class: "btn btn-xs btn-outline self-start",
@@ -416,64 +387,10 @@ pub fn SubmissionDashboardPage() -> Element {
                                                             }
                                                         }
                                                         if row.endpoint == "production" {
-                                                            div {
-                                                                div { class: "font-semibold text-xs opacity-70 mb-1 flex items-center gap-2",
-                                                                    "WAMO detail"
-                                                                    if let Some(checked_at) = &row.wamo_checked_at {
-                                                                        span { class: "font-normal opacity-60", "(checked {checked_at})" }
-                                                                    }
-                                                                }
-                                                                {
-                                                                    let observations = parse_wamo_observations(&row.wamo_detail);
-                                                                    let available: Vec<&WamoObservation> = observations
-                                                                        .iter()
-                                                                        .filter(|o| !o.is_pending())
-                                                                        .collect();
-                                                                    let pending_count = observations.len() - available.len();
-
-                                                                    if row.wamo_detail.is_none() {
-                                                                        rsx! {
-                                                                            p { class: "text-xs opacity-60",
-                                                                                "Not checked yet — click Refresh to query WAMO."
-                                                                            }
-                                                                        }
-                                                                    } else if observations.is_empty() {
-                                                                        rsx! {
-                                                                            p { class: "text-xs opacity-60",
-                                                                                "MPC hasn't linked/published this submission yet — \
-                                                                                 normal for a submission still in processing, \
-                                                                                 check back later."
-                                                                            }
-                                                                        }
-                                                                    } else {
-                                                                        rsx! {
-                                                                            div { class: "flex flex-col gap-2",
-                                                                                for observation in &available {
-                                                                                    div {
-                                                                                        key: "{observation.obsid}",
-                                                                                        class: "border border-base-300 rounded p-2 flex flex-col gap-1",
-                                                                                        if let Some(label) = wamo_designation_label(observation) {
-                                                                                            span { class: "badge badge-success badge-sm self-start", "{label}" }
-                                                                                        }
-                                                                                        span { "{observation.status_decoded}" }
-                                                                                        if let Some(obs80) = observation.obs80.as_deref().filter(|v| !fink_fat_ades::wamo::wamo_field_is_hidden(v)) {
-                                                                                            code { class: "text-xs block", "{obs80}" }
-                                                                                        }
-                                                                                        if let Some(reference) = observation.reference.as_deref().filter(|v| !fink_fat_ades::wamo::wamo_field_is_hidden(v)) {
-                                                                                            span { class: "text-xs opacity-70", "Reference: {reference}" }
-                                                                                        }
-                                                                                    }
-                                                                                }
-                                                                                if pending_count > 0 {
-                                                                                    p { class: "text-xs opacity-60",
-                                                                                        "⏳ {pending_count} observation(s) received by MPC but not \
-                                                                                         processed/published yet — check back later."
-                                                                                    }
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                }
+                                                            WamoDetailSection {
+                                                                submission_id: row.submission_id.clone(),
+                                                                wamo_detail: row.wamo_detail.clone(),
+                                                                wamo_checked_at: row.wamo_checked_at.clone(),
                                                             }
                                                         }
                                                     }
@@ -520,97 +437,6 @@ mod tests {
         assert_eq!(verdict_badge_class("rejected"), "badge-error");
         assert_eq!(verdict_badge_class("error"), "badge-error");
         assert_eq!(verdict_badge_class("unknown"), "badge-ghost");
-    }
-
-    #[test]
-    fn parse_wamo_observations_empty_for_none() {
-        assert!(parse_wamo_observations(&None).is_empty());
-    }
-
-    #[test]
-    fn parse_wamo_observations_empty_for_malformed_json() {
-        assert!(parse_wamo_observations(&Some(serde_json::json!({"not": "a list"}))).is_empty());
-    }
-
-    #[test]
-    fn parse_wamo_observations_round_trips_real_shape() {
-        let value = serde_json::json!([{
-            "iau_desig": "380635",
-            "input_type": "submission_block_id",
-            "obs80": "c0635 ...",
-            "obsid": "L4eBVG000000CfiO010000A9a",
-            "obssubid": null,
-            "ref": "MPS   826083",
-            "status": "P",
-            "status_decoded": "matched",
-            "submission_block_id": "2017-10-10T12:17:02.000_0000CfiO_01",
-            "submission_id": "2017-10-10T12:17:02.000_0000CfiO"
-        }]);
-        let observations = parse_wamo_observations(&Some(value));
-        assert_eq!(observations.len(), 1);
-        assert_eq!(observations[0].iau_desig.as_deref(), Some("380635"));
-    }
-
-    #[test]
-    fn wamo_designation_label_present_when_designated() {
-        let mut observations = parse_wamo_observations(&Some(serde_json::json!([{
-            "iau_desig": "380635",
-            "input_type": "submission_block_id",
-            "obs80": null,
-            "obsid": "obs-1",
-            "obssubid": null,
-            "ref": null,
-            "status": "P",
-            "status_decoded": "matched",
-            "submission_block_id": null,
-            "submission_id": null
-        }])));
-        let observation = observations.remove(0);
-        assert_eq!(
-            wamo_designation_label(&observation),
-            Some("Designated (380635)".to_string())
-        );
-    }
-
-    #[test]
-    fn wamo_designation_label_absent_without_a_designation() {
-        let mut observations = parse_wamo_observations(&Some(serde_json::json!([{
-            "iau_desig": null,
-            "input_type": "submission_block_id",
-            "obs80": null,
-            "obsid": "obs-1",
-            "obssubid": null,
-            "ref": null,
-            "status": "P",
-            "status_decoded": "matched",
-            "submission_block_id": null,
-            "submission_id": null
-        }])));
-        let observation = observations.remove(0);
-        assert_eq!(wamo_designation_label(&observation), None);
-    }
-
-    #[test]
-    fn wamo_designation_label_absent_when_mpc_hides_it_pending_processing() {
-        // MPC's real, live behavior on an unprocessed production submission
-        // (see `fink_fat_ades::wamo`'s module docs): `iau_desig` is the
-        // literal string "hidden", not `null` — must not be rendered as if
-        // it were a real designation.
-        let mut observations = parse_wamo_observations(&Some(serde_json::json!([{
-            "iau_desig": "hidden",
-            "input_type": "submission_block_id",
-            "obs80": "hidden",
-            "obsid": "obs-1",
-            "obssubid": null,
-            "ref": "hidden",
-            "status": "P",
-            "status_decoded": "The submission_id '...' has not been processed.",
-            "submission_block_id": null,
-            "submission_id": null
-        }])));
-        let observation = observations.remove(0);
-        assert_eq!(wamo_designation_label(&observation), None);
-        assert!(observation.is_pending());
     }
 
     #[test]

@@ -1,8 +1,8 @@
 //! Modal for inspecting one submission's stored ADES XML — the exact
 //! document that was sent to MPC (`mpc_submissions.xml`). Reuses
-//! `lineage_page::ades_export_modal`'s modal shell/mount convention and
-//! `submission_dashboard::prepare_menu`'s copy/download closures verbatim
-//! rather than inventing new mechanics for either.
+//! `lineage_page::ades_export_modal`'s modal shell/mount convention,
+//! [`crate::clipboard::CopyButton`] and `submission_dashboard::prepare_menu`'s
+//! download closure rather than inventing new mechanics for either.
 //!
 //! The XML shown on screen is a re-indented, syntax-colored *copy* of the
 //! stored value ([`fink_fat_ades::xml_format::pretty_print_xml`] +
@@ -14,6 +14,7 @@
 use dioxus::prelude::*;
 
 use super::data::get_submission_xml;
+use crate::clipboard::CopyButton;
 
 /// The download filename for a submission's ADES XML.
 ///
@@ -225,18 +226,6 @@ pub fn AdesXmlModal(id: i64, file_name: String, open: bool, on_close: EventHandl
 
     let xml_resource = use_resource(move || get_submission_xml(id));
 
-    let copy_xml = move |_| {
-        if let Some(Ok(xml)) = &*xml_resource.read() {
-            let pretty =
-                fink_fat_ades::xml_format::pretty_print_xml(xml).unwrap_or_else(|_| xml.clone());
-            let eval = document::eval(
-                "const data = await dioxus.recv();
-                 await navigator.clipboard.writeText(data.text);",
-            );
-            let _ = eval.send(serde_json::json!({ "text": pretty }));
-        }
-    };
-
     let download_xml = {
         let file_name = file_name.clone();
         move |_| {
@@ -292,12 +281,7 @@ pub fn AdesXmlModal(id: i64, file_name: String, open: bool, on_close: EventHandl
                             let spans = tokenize_xml(&pretty);
                             rsx! {
                                 div { class: "flex gap-2",
-                                    button {
-                                        class: "btn btn-sm btn-outline",
-                                        r#type: "button",
-                                        onclick: copy_xml,
-                                        "📋 Copy"
-                                    }
+                                    CopyButton { text: pretty.clone(), label: "📋 Copy" }
                                     button {
                                         class: "btn btn-sm btn-outline",
                                         r#type: "button",

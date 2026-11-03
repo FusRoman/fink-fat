@@ -101,3 +101,4 @@ eligible_lineages.csv
 storage_lsst_results_test/
 lsst_candidate_experiments/
 submission.yaml
+/.claude

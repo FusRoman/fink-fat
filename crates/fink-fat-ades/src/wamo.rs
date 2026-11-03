@@ -23,6 +23,16 @@
 //! reading e.g. `"The submission_id '...' has not been processed."`. See
 //! [`wamo_field_is_hidden`] — display code must check for this sentinel
 //! explicitly, or it renders as if `"hidden"` were a real designation.
+//!
+//! Such a hidden observation still says *where* it is in MPC's pipeline:
+//! its `status_decoded` names the processing queue, e.g. `"The
+//! submission_id '...' is in the 'whatcode' processing queue."` (captured
+//! live on a real production submission, see `WHATCODE_FIXTURE` in the
+//! tests). `status_decoded` is therefore the source of truth for an
+//! observation's state: [`classify_status_decoded`] maps it onto
+//! [`WamoStatus`], following the sentence list of MPC's WAMO help page
+//! ([`MPC_WAMO_HELP_URL`]). The one-letter `status` code is not documented
+//! and is not interpreted.
 
 use std::collections::HashMap;
 
@@ -32,6 +42,15 @@ use crate::error::AdesError;
 
 /// MPC's WAMO API endpoint.
 pub const MPC_WAMO_URL: &str = "https://data.minorplanetcenter.net/api/wamo";
+
+/// MPC's manual WAMO lookup page, for a human to check a submission by
+/// pasting its ID (the page takes no prefill query parameter).
+pub const MPC_WAMO_MANUAL_URL: &str = "https://minorplanetcenter.net/wamo/wamo.html";
+
+/// MPC's WAMO help page, which lists every observation status sentence and
+/// processing queue that [`classify_status_decoded`] and
+/// [`queue_description`] interpret.
+pub const MPC_WAMO_HELP_URL: &str = "https://minorplanetcenter.net/wamo/help.html";
 
 /// WAMO's documented per-call identifier limit ("up to ~50,000").
 pub const WAMO_MAX_IDENTIFIERS: usize = 50_000;
@@ -157,6 +176,232 @@ impl WamoObservation {
     pub fn is_pending(&self) -> bool {
         self.iau_desig.as_deref().is_some_and(wamo_field_is_hidden)
     }
+
+    /// Where this observation stands in MPC's pipeline, read from its
+    /// `status_decoded` sentence (see [`classify_status_decoded`]).
+    ///
+    /// # Return
+    /// The classified status.
+    pub fn classify(&self) -> WamoStatus {
+        classify_status_decoded(&self.status_decoded)
+    }
+}
+
+/// One observation's state in MPC's pipeline, as reported by WAMO's
+/// `status_decoded` sentence. One variant per sentence of the "Observation
+/// Status" list on MPC's WAMO help page ([`MPC_WAMO_HELP_URL`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WamoStatus {
+    /// "... is in the '`queue`' processing queue." — see
+    /// [`queue_description`] for what each queue means.
+    InQueue { queue: String },
+    /// "... has not been processed."
+    NotProcessed,
+    /// "... has been identified as `designation`, publication is pending."
+    IdentifiedPendingPublication { designation: String },
+    /// "... has been identified as `designation` and published in
+    /// `reference`." — the reference is an MPEC number or a Circular /
+    /// Supplement page.
+    Published {
+        designation: String,
+        reference: String,
+    },
+    /// "... is on the NEOCP/PCCP."
+    OnConfirmationPage,
+    /// "... has been placed in the Isolated Tracklet File (ITF)."
+    Itf,
+    /// "... is an unidentified isolated observation."
+    UnidentifiedIsolated,
+    /// "... was rejected." (usually poor residuals).
+    Rejected,
+    /// "... has been deleted."
+    Deleted,
+    /// "... is not a minor planet."
+    NotMinorPlanet,
+    /// "... was suspected to be artificial."
+    SuspectedArtificial,
+    /// "... was flagged as a near-duplicate."
+    NearDuplicate,
+    /// "... is of unknown status." — MPC's own wording, not a parse failure.
+    UnknownStatus,
+    /// A sentence matching none of the documented ones; callers should show
+    /// the raw `status_decoded` text.
+    Unrecognized,
+}
+
+/// How far a [`WamoStatus`] is from a final, successful outcome, ordered
+/// from best to worst so the worst stage of a set is its maximum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum WamoStage {
+    /// Final state: published, identified (publication pending), or filed
+    /// as an isolated tracklet.
+    Done,
+    /// Moving through MPC's automatic pipeline.
+    InProgress,
+    /// Parked in a queue that needs a human at MPC (see
+    /// [`queue_needs_mpc_attention`]); can stay unchanged for days.
+    NeedsMpcAttention,
+    /// Rejected, deleted or otherwise discarded.
+    Problem,
+}
+
+impl WamoStatus {
+    /// The [`WamoStage`] this status belongs to.
+    ///
+    /// # Return
+    /// The stage.
+    pub fn stage(&self) -> WamoStage {
+        match self {
+            Self::Published { .. }
+            | Self::IdentifiedPendingPublication { .. }
+            | Self::Itf
+            | Self::UnidentifiedIsolated => WamoStage::Done,
+            Self::InQueue { queue } if queue_needs_mpc_attention(queue) => {
+                WamoStage::NeedsMpcAttention
+            }
+            Self::InQueue { .. }
+            | Self::NotProcessed
+            | Self::OnConfirmationPage
+            | Self::UnknownStatus
+            | Self::Unrecognized => WamoStage::InProgress,
+            Self::Rejected
+            | Self::Deleted
+            | Self::NotMinorPlanet
+            | Self::SuspectedArtificial
+            | Self::NearDuplicate => WamoStage::Problem,
+        }
+    }
+}
+
+/// Classify a WAMO `status_decoded` sentence. Matching is on the stable
+/// predicate of each documented sentence, never on its subject (a
+/// submission ID, obs ID or obs80 line, which varies).
+///
+/// # Arguments
+/// * `text` — the observation's `status_decoded`.
+///
+/// # Return
+/// The matching [`WamoStatus`], [`WamoStatus::Unrecognized`] if none
+/// matches.
+pub fn classify_status_decoded(text: &str) -> WamoStatus {
+    const IDENTIFIED_AS: &str = "has been identified as ";
+    const PUBLISHED_IN: &str = " and published in ";
+    const PUBLICATION_PENDING: &str = ", publication is pending";
+
+    if let Some(queue) = queue_name(text) {
+        return WamoStatus::InQueue { queue };
+    }
+    if let Some((_, identified)) = text.split_once(IDENTIFIED_AS) {
+        if let Some((designation, reference)) = identified.split_once(PUBLISHED_IN) {
+            return WamoStatus::Published {
+                designation: designation.trim().to_string(),
+                reference: reference.trim().trim_end_matches('.').trim().to_string(),
+            };
+        }
+        if let Some((designation, _)) = identified.split_once(PUBLICATION_PENDING) {
+            return WamoStatus::IdentifiedPendingPublication {
+                designation: designation.trim().to_string(),
+            };
+        }
+    }
+
+    [
+        ("has not been processed", WamoStatus::NotProcessed),
+        ("NEOCP/PCCP", WamoStatus::OnConfirmationPage),
+        ("Isolated Tracklet File", WamoStatus::Itf),
+        (
+            "unidentified isolated observation",
+            WamoStatus::UnidentifiedIsolated,
+        ),
+        ("was rejected", WamoStatus::Rejected),
+        ("has been deleted", WamoStatus::Deleted),
+        ("is not a minor planet", WamoStatus::NotMinorPlanet),
+        (
+            "suspected to be artificial",
+            WamoStatus::SuspectedArtificial,
+        ),
+        ("near-duplicate", WamoStatus::NearDuplicate),
+        ("is of unknown status", WamoStatus::UnknownStatus),
+    ]
+    .into_iter()
+    .find(|(predicate, _)| text.contains(predicate))
+    .map_or(WamoStatus::Unrecognized, |(_, status)| status)
+}
+
+/// Extract the queue name from a "... is in the 'queue' processing queue."
+/// sentence. The subject itself may hold quotes (even unbalanced ones, as in
+/// `"ObsID '...' in '..._01 is in the 'whatcode' processing queue."`), so
+/// the name is read backwards from the `processing queue` suffix.
+///
+/// # Arguments
+/// * `text` — a `status_decoded` sentence.
+///
+/// # Return
+/// The queue name, `None` if `text` is not a queue sentence.
+fn queue_name(text: &str) -> Option<String> {
+    let (before, _) = text.rsplit_once(" processing queue")?;
+    let quoted = before.strip_suffix('\'')?;
+    let (_, queue) = quoted.rsplit_once('\'')?;
+    (!queue.is_empty()).then(|| queue.to_string())
+}
+
+/// Whether an MPC processing queue needs human attention at MPC, per the
+/// WAMO help page: observations there wait on manual action (a program or
+/// observatory code to assign, a detected problem) and can stay unchanged
+/// "for a few to several days".
+///
+/// # Arguments
+/// * `queue` — a queue name, as in [`WamoStatus::InQueue`].
+///
+/// # Return
+/// `true` for `whatcode`, `newcode`, `manual_attention` and `problems`.
+pub fn queue_needs_mpc_attention(queue: &str) -> bool {
+    matches!(
+        queue,
+        "whatcode" | "newcode" | "manual_attention" | "problems"
+    )
+}
+
+/// What an MPC processing queue holds, as listed on the WAMO help page
+/// ([`MPC_WAMO_HELP_URL`]).
+///
+/// # Arguments
+/// * `queue` — a queue name, as in [`WamoStatus::InQueue`].
+///
+/// # Return
+/// The help page's description, `None` for a queue it does not list (the
+/// page itself says rarely used queues are omitted).
+pub fn queue_description(queue: &str) -> Option<&'static str> {
+    Some(match queue {
+        "verified" => "mixed observations, to be split and assigned to the appropriate queues",
+        "neo/new/incoming" => "new NEOCP or PCCP objects",
+        "neocp/incoming" => "NEOCP or PCCP follow-up",
+        "neo/mopp" => "unnumbered NEOs",
+        "neo/num" => "numbered NEOs",
+        "neo/newid" => "NEO (p)recoveries",
+        "mba/itf" => "unidentified tracklets heading to the Isolated Tracklet File (ITF)",
+        "mba/mopp" | "mba/unn" => "unnumbered MBAs",
+        "mba/num" => "numbered MBAs",
+        "mba/new" => "possible new MBAs to be designated",
+        "mba/newid" => "MBA (p)recoveries",
+        "tno/unn" => "unnumbered one-opposition TNOs",
+        "tno/mopp" => "unnumbered multi-opposition TNOs",
+        "tno/num" => "numbered TNOs",
+        "tno/newid" => "TNO (p)recoveries",
+        "tno/new" => "possible new TNOs to be designated",
+        "sat/unn" => "unnumbered natural satellites",
+        "sat/num" => "numbered natural satellites",
+        "sat/new" => "possible new natural satellites to be designated",
+        "artsat" | "sat/art" => "possible new artificial satellites",
+        "cmt/cmt" => "unnumbered comets",
+        "cmt/pct" => "numbered comets",
+        "cmt/new" => "possible new comets (not on the PCCP, e.g. SOHO or archival data)",
+        "cmt/newid" => "comet (p)recoveries",
+        "manual_attention" | "problems" => "human attention required (problems detected)",
+        "newcode" => "observations awaiting an observatory code to be assigned",
+        "whatcode" => "observations awaiting a program code to be assigned",
+        _ => return None,
+    })
 }
 
 /// MPC's placeholder value for a [`WamoObservation`] field that exists but
@@ -394,6 +639,183 @@ mod tests {
         assert_eq!(response.malformed.len(), 1);
         assert_eq!(response.malformed[0].0, "433");
         assert!(response.malformed[0].1.contains("could not be parsed"));
+    }
+
+    // Captured live on a real production submission still awaiting a
+    // program code at MPC: both the bare submission ID and its block ID
+    // match, and every field but the status sentence is "hidden".
+    const WHATCODE_FIXTURE: &str = r#"{
+      "found": [
+        {
+          "2026-09-30T14:07:07.550_0000CE6o": [
+            {
+              "iau_desig": "hidden",
+              "input_type": "submission_id",
+              "obs80": "hidden",
+              "obsid": "LwTDDn8s0000CE6o010000001",
+              "obssubid": null,
+              "ref": "hidden",
+              "status": "W",
+              "status_decoded": "The submission_id '2026-09-30T14:07:07.550_0000CE6o' is in the 'whatcode' processing queue.",
+              "submission_block_id": "2026-09-30T14:07:07.550_0000CE6o_01",
+              "submission_id": "2026-09-30T14:07:07.550_0000CE6o"
+            }
+          ]
+        },
+        {
+          "2026-09-30T14:07:07.550_0000CE6o_01": [
+            {
+              "iau_desig": "hidden",
+              "input_type": "submission_block_id",
+              "obs80": "hidden",
+              "obsid": "LwTDDn8s0000CE6o010000001",
+              "obssubid": null,
+              "ref": "hidden",
+              "status": "W",
+              "status_decoded": "ObsID 'LwTDDn8s0000CE6o010000001' in '2026-09-30T14:07:07.550_0000CE6o_01 is in the 'whatcode' processing queue.",
+              "submission_block_id": "2026-09-30T14:07:07.550_0000CE6o_01",
+              "submission_id": "2026-09-30T14:07:07.550_0000CE6o"
+            }
+          ]
+        }
+      ],
+      "malformed": [],
+      "not_found": []
+    }"#;
+
+    #[test]
+    fn whatcode_fixture_classifies_as_a_queue_needing_mpc_attention() {
+        let response = parse_wamo_response(WHATCODE_FIXTURE).unwrap();
+        let whatcode = WamoStatus::InQueue {
+            queue: "whatcode".to_string(),
+        };
+        for identifier in [
+            "2026-09-30T14:07:07.550_0000CE6o",
+            "2026-09-30T14:07:07.550_0000CE6o_01",
+        ] {
+            let obs = response.observations_for(identifier);
+            assert_eq!(obs.len(), 1);
+            assert!(obs[0].is_pending());
+            assert_eq!(obs[0].classify(), whatcode);
+        }
+        assert_eq!(whatcode.stage(), WamoStage::NeedsMpcAttention);
+    }
+
+    #[test]
+    fn found_fixture_classifies_as_published() {
+        let response = parse_wamo_response(FOUND_FIXTURE).unwrap();
+        let status = response.observations_for("L4eBVG000000CfiO010000A9a")[0].classify();
+        assert_eq!(
+            status,
+            WamoStatus::Published {
+                designation: "(380635)".to_string(),
+                reference: "MPS   826083".to_string(),
+            }
+        );
+        assert_eq!(status.stage(), WamoStage::Done);
+    }
+
+    #[test]
+    fn classify_reads_a_regular_queue_as_in_progress() {
+        let status = classify_status_decoded("K24A00B is in the 'mba/unn' processing queue.");
+        assert_eq!(
+            status,
+            WamoStatus::InQueue {
+                queue: "mba/unn".to_string()
+            }
+        );
+        assert_eq!(status.stage(), WamoStage::InProgress);
+    }
+
+    #[test]
+    fn classify_reads_identified_publication_pending() {
+        assert_eq!(
+            classify_status_decoded(
+                "K24A00B has been identified as 2024 AB1, publication is pending."
+            ),
+            WamoStatus::IdentifiedPendingPublication {
+                designation: "2024 AB1".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn classify_covers_every_fixed_help_page_sentence() {
+        let cases = [
+            (
+                "X has not been processed.",
+                WamoStatus::NotProcessed,
+                WamoStage::InProgress,
+            ),
+            (
+                "X is on the NEOCP/PCCP.",
+                WamoStatus::OnConfirmationPage,
+                WamoStage::InProgress,
+            ),
+            (
+                "X has been placed in the Isolated Tracklet File (ITF).",
+                WamoStatus::Itf,
+                WamoStage::Done,
+            ),
+            (
+                "X is an unidentified isolated observation.",
+                WamoStatus::UnidentifiedIsolated,
+                WamoStage::Done,
+            ),
+            ("X was rejected.", WamoStatus::Rejected, WamoStage::Problem),
+            (
+                "X has been deleted.",
+                WamoStatus::Deleted,
+                WamoStage::Problem,
+            ),
+            (
+                "X is not a minor planet.",
+                WamoStatus::NotMinorPlanet,
+                WamoStage::Problem,
+            ),
+            (
+                "X was suspected to be artificial.",
+                WamoStatus::SuspectedArtificial,
+                WamoStage::Problem,
+            ),
+            (
+                "X was flagged as a near-duplicate.",
+                WamoStatus::NearDuplicate,
+                WamoStage::Problem,
+            ),
+            (
+                "X is of unknown status.",
+                WamoStatus::UnknownStatus,
+                WamoStage::InProgress,
+            ),
+            (
+                "Something MPC never documented.",
+                WamoStatus::Unrecognized,
+                WamoStage::InProgress,
+            ),
+        ];
+        for (text, status, stage) in cases {
+            let classified = classify_status_decoded(text);
+            assert_eq!(classified, status, "{text}");
+            assert_eq!(classified.stage(), stage, "{text}");
+        }
+    }
+
+    #[test]
+    fn stages_order_from_best_to_worst() {
+        assert!(WamoStage::Done < WamoStage::InProgress);
+        assert!(WamoStage::InProgress < WamoStage::NeedsMpcAttention);
+        assert!(WamoStage::NeedsMpcAttention < WamoStage::Problem);
+    }
+
+    #[test]
+    fn queue_description_knows_the_help_page_queues_only() {
+        assert_eq!(
+            queue_description("whatcode"),
+            Some("observations awaiting a program code to be assigned")
+        );
+        assert_eq!(queue_description("mba/mopp"), Some("unnumbered MBAs"));
+        assert_eq!(queue_description("some/rare/queue"), None);
     }
 
     #[test]
