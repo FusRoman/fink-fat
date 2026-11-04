@@ -5761,9 +5761,9 @@ dependencies = [
 
 [[package]]
 name = "outfit"
-version = "5.0.1"
+version = "5.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3460146598f3e34a6ecf831aff34d108e89278e68cc96fae25715c0e3cd39f47"
+checksum = "69784ae92ebc87b37e50abf7722d54fb9a61b1b80639cb154b3a5c5c7e398e5d"
 dependencies = [
  "aberth",
  "ahash",

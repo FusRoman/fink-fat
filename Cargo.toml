@@ -50,7 +50,7 @@ indicatif = "0.18.0"
 serde_yaml = "0.9.34"
 ndarray = "0.17.2"
 photom = { version = "1.0.0" }
-outfit = { version = "5.0.1", default-features = false, features = ["serde", "ephem-anise", "parallel"] }
+outfit = { version = "5.0.2", default-features = false, features = ["serde", "ephem-anise", "parallel"] }
 polars = { version = "0.53.0", default-features = false, features = [
     "lazy",
     "dtype-u8",
