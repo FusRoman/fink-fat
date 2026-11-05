@@ -50,7 +50,7 @@ pub enum HypothesisCapSchedule {
     /// Predictable and easy to reason about.
     Linear {
         /// Cap at observation 0. Dimensionless hypothesis count; expected
-        /// `start ≥ end` for a genuine decay (not enforced at load time).
+        /// `start ≥ end` (enforced by validation at load time).
         start: usize,
         /// Asymptotic minimum cap, reached at `n_obs_full` and held
         /// thereafter. Dimensionless hypothesis count, must be `≥ 1`.
@@ -69,7 +69,7 @@ pub enum HypothesisCapSchedule {
     /// nights: the bank contracts quickly to a compact core, then stabilises.
     Logarithmic {
         /// Cap at observation 0. Dimensionless hypothesis count; expected
-        /// `start ≥ end` for a genuine decay (not enforced at load time).
+        /// `start ≥ end` (enforced by validation at load time).
         start: usize,
         /// Asymptotic minimum cap. Dimensionless hypothesis count, must be `≥ 1`.
         end: usize,
@@ -87,7 +87,7 @@ pub enum HypothesisCapSchedule {
     /// `tau ≈ n_obs_full / 3` gives a ~95 % decay over `n_obs_full` steps.
     Exponential {
         /// Cap at observation 0. Dimensionless hypothesis count; expected
-        /// `start ≥ end` for a genuine decay (not enforced at load time).
+        /// `start ≥ end` (enforced by validation at load time).
         start: usize,
         /// Asymptotic minimum cap. Dimensionless hypothesis count, must be `≥ 1`.
         end: usize,

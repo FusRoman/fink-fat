@@ -6,14 +6,15 @@
 //! [`crate::engine_config::grid_population`]).
 //!
 //! The bank's lifecycle, in the order these fields act on it:
-//! 0. At birth (`KFBank::from_grid`), the raw admissible-region grid is
-//!    immediately pruned/capped/merged the same way as after any real
-//!    update (steps 3-4 below) — a lineage that never gets a second real
-//!    observation would otherwise keep its full birth-time hypothesis count
-//!    (up to `n_rho × n_rho_dot`) forever, since `branch_null` deliberately
-//!    never cleans up.
-//! 1. Each update gates candidate observations against `gate_chi2`
-//!    (except the MAP hypothesis, always exempt).
+//! 0. At birth (`KFBank::from_grid`), the bank holds the raw
+//!    admissible-region grid (up to `n_rho × n_rho_dot` hypotheses) with
+//!    **unnormalized** population-prior weights. No pruning, capping or
+//!    merging is applied at birth: the first cleanup (steps 3-4 below) runs
+//!    after the first real update. A lineage that never gets a second real
+//!    observation therefore keeps its full birth-time hypothesis count, since
+//!    `branch_null` deliberately never cleans up.
+//! 1. Each update gates candidate observations against `gate_chi2`, except
+//!    the top `min_hypotheses` hypotheses by weight, which are exempt.
 //! 2. `search_region_chi2` independently sizes the *prediction* search region
 //!    used to find candidate observations in the first place (decoupled from
 //!    the update gate so the search can stay generous while the gate stays tight).
@@ -51,9 +52,10 @@ pub struct KFBankConfig {
     /// discarded.  Typical values: `13.8 ≈ 99.9 %`, `23.0 ≈ 99.999 %`. Must
     /// be strictly positive.
     ///
-    /// **The MAP (highest-weight) hypothesis is always exempt from this gate.**
-    /// When only one hypothesis remains, the gate has no role to play and
-    /// gating out the last survivor would destroy the filter.  Inconsistency
+    /// **The top `min_hypotheses` hypotheses by weight (always including the
+    /// MAP) are exempt from this gate.** The protected set is computed before
+    /// the weights are updated. Gating out the best survivors would destroy
+    /// the filter right when it needs to adapt.  Inconsistency
     /// should instead be addressed via covariance inflation (see process-noise
     /// tuning) and is tracked by the NIS diagnostic.
     pub gate_chi2: f64,
@@ -84,7 +86,9 @@ pub struct KFBankConfig {
     /// -----
     /// Dimensionless count, must be `≥ 1`.
     ///
-    /// Combined with the MAP protection, this prevents premature collapse
+    /// The same count also sets how many top-weight hypotheses are exempt
+    /// from the `gate_chi2` gate at each update. Together, this prevents
+    /// premature collapse
     /// before the `(ρ, ρ̇)` ambiguity is truly resolved.  A value of 5–10
     /// is recommended for arcs shorter than ≈15 nights.
     pub min_hypotheses: usize,

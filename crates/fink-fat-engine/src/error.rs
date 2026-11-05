@@ -1,3 +1,10 @@
+//! Crate-level error types of `fink-fat-engine`.
+//!
+//! [`EngineError`] aggregates the errors of every subsystem (configuration,
+//! seeding, `outfit`, `photom`, `hifitime`) through `#[from]` conversions, so
+//! that engine entry points can propagate them with `?`. [`FinkFatError`]
+//! holds generic I/O, JSON and message errors.
+
 use std::io;
 
 use hifitime::HifitimeError;
@@ -13,8 +20,10 @@ use crate::{engine_config::error::ConfigError, seeding::error::SeedingError};
 /// -----
 /// This error groups together:
 /// - filesystem I/O errors,
-/// - JSON serialization errors (night summaries),
-/// - bincode encoding/decoding errors (seeds.bin),
+/// - JSON serialization errors,
+/// - binary encoding/decoding errors (`BincodeEncode` / `BincodeDecode`,
+///   legacy variants kept for API compatibility; the snapshot and archive
+///   are serialized with `rkyv`),
 /// - custom domain-level errors.
 ///
 /// More fine-grained variants can be added as the project evolves.
@@ -67,29 +76,13 @@ pub enum EngineError {
     Cancelled,
 
     // -------------------------------------------------------------------------
-    // Wrappers for lower-level subsystems (add as you wire real calls)
+    // Wrappers for lower-level subsystems
     // -------------------------------------------------------------------------
-    /// Edge building / ML inference error.
-    // #[error(transparent)]
-    // Edge(#[from] EdgeBuilderError),
-
-    // /// Persistence I/O (manifest, stores, journals, etc).
-    // #[error(transparent)]
-    // Persistence(#[from] PersistenceError),
-
-    /// Generic engine error (if you already use `FinkFatError` as a top-level error).
+    /// Generic engine error (I/O, JSON, free-form messages).
     #[error(transparent)]
     FinkFat(#[from] FinkFatError),
 
-    /// Component error
-    // #[error(transparent)]
-    // Component(#[from] ComponentError),
-
-    // /// Solver error
-    // #[error(transparent)]
-    // Solver(#[from] SolverError),
-
-    /// Outfit error
+    /// Error from the `outfit` crate (ephemeris, observer cache, Kepler solver).
     #[error(transparent)]
     Outfit(#[from] OutfitError),
 
@@ -109,12 +102,16 @@ pub enum EngineError {
     #[error(transparent)]
     Ut1(#[from] HifitimeError),
 
+    /// An observation id referenced by a pair, branch or track is missing
+    /// from the `ObsDataset`.
     #[error("obs dataset id not found : {0}")]
     ObsDatasetIdNotFound(ObsId),
 
+    /// Intra-night seeding error.
     #[error(transparent)]
-    Sedding(#[from] SeedingError),
+    Seeding(#[from] SeedingError),
 
+    /// Topocentric range estimation failed (no admissible root).
     #[error(transparent)]
     TopoError(#[from] TopocentricRangeError),
 }

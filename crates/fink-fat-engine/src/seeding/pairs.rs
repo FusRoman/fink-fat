@@ -14,7 +14,7 @@
 //! For each candidate pair `(a, b)`:
 //! - **Time ordering:** `t_b > t_a`
 //! - **Maximum time separation:** `t_b - t_a ≤ max_dt`
-//! - **Flux similarity:** `|flux_a - flux_b| ≤ max_flux_difference`
+//! - **Magnitude similarity:** `|mag_a - mag_b| ≤ max_mag_difference`
 //! - **Angular-speed constraint:** `angular_separation_vincenty(a, b) / (t_b - t_a) ≤ max_angular_speed`
 //!
 //! The angular-speed constraint is implemented via a dot-product threshold
@@ -307,7 +307,7 @@ fn lower_bound_gt_time(members: &[&Observation], t0: f64) -> usize {
 /// - `spatial_binner` — spatial discretization backend used to build neighbor sets.
 /// - `time_binner` — time discretization backend used to map `max_dt` to candidate time bins.
 /// - `config` — pair-generation parameters: `max_dt` (days), `max_angular_speed` (rad/day),
-///   `max_flux_difference` (flux units), `allow_same_timebin` (bool).
+///   `max_mag_difference` (magnitudes), `allow_same_timebin` (bool).
 ///
 /// # Returns
 ///

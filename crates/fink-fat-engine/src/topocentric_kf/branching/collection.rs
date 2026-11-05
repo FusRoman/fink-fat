@@ -36,7 +36,8 @@ use crate::{
 
 /// Filename the [`BranchCollectionSnapshot`] is written to under
 /// [`EngineConfig::storage_path_buf`] — shared by `fink-fat` (the real
-/// engine binary, which writes it after every night) and `fink-fat-eval`
+/// engine binary, which writes it after the last night of a run, and every
+/// `--snapshot-every N` nights when that flag is set) and `fink-fat-eval`
 /// (which only reads it, for `tracking_analysis --from-snapshot`).
 pub const SNAPSHOT_FILENAME: &str = "branch_collection.rkyv";
 

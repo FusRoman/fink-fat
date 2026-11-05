@@ -271,8 +271,10 @@ pub struct TripletConfig {
     /// Acceptance test
     /// ---------------
     /// For the chosen ordering `(a, b, c)`:
-    /// - `ang_sep(a, b) ≤ max_pair_sep`
     /// - `ang_sep(b, c) ≤ max_pair_sep`
+    ///
+    /// The input pair `(a, b)` is **not** re-tested against this bound: it is
+    /// taken as already validated by the pair generator.
     ///
     /// Serialization
     /// -------------

@@ -16,7 +16,7 @@
 //! - `t_c > t_b` and `t_c - t_b <= max_dt_between`,
 //! - `c` lies in nearby spatio-temporal buckets around `b`,
 //! - `(b, c)` passes a short-baseline angular constraint,
-//! - `(b, c)` passes a flux similarity constraint,
+//! - `(b, c)` passes a magnitude similarity constraint (`max_mag_difference`),
 //! - and `c` is consistent with the linear motion model fitted from `(a, b)`
 //!   (a fast predicted-residual test).
 //!
@@ -228,7 +228,7 @@ fn lower_bound_gt_time(members: &[&Observation], t0: f64) -> usize {
 /// 3. Search candidate detections `c` in neighboring spatio-temporal buckets
 ///    around `b` (spatial cover + time bins strictly after `b`).
 /// 4. Apply cheap gates:
-///    - flux similarity between `b` and `c`,
+///    - magnitude similarity between `b` and `c`,
 ///    - angular separation constraint on `(b, c)` using dot-product threshold.
 /// 5. Apply a linear prediction residual test:
 ///    - predict `(ra, dec)` at `t_c` from the `(a, b)` model,
@@ -242,7 +242,7 @@ fn lower_bound_gt_time(members: &[&Observation], t0: f64) -> usize {
 ///   by time (as built by `build_alert_bucket_index`).
 /// - `sb` — spatial binner used to compute neighbor cells around `b`.
 /// - `tb` — time binner used to select time bins strictly after `b`.
-/// - `cfg` — triplet-generation parameters (time window, spatial radius, flux gate,
+/// - `cfg` — triplet-generation parameters (time window, spatial radius, magnitude gate,
 ///   pair angular gate, prediction residual threshold, etc.).
 /// - `pairs` — precomputed valid pairs `(a, b)` from which triplets are extended.
 ///
@@ -365,7 +365,7 @@ pub fn generate_triplets_from_pairs<'alert_lf, Bs: SpatialBinner, Bt: TimeBinner
                         continue;
                     }
 
-                    // Flux similarity between b and c.
+                    // Magnitude similarity between b and c.
                     if (magnitude_b - c.photometry().magnitude).abs() > cfg.max_mag_difference {
                         n_rejected_flux += 1;
                         continue;

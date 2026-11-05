@@ -14,14 +14,17 @@
 //!
 //! # Robustness improvements over the original design
 //!
-//! ## MAP-hypothesis gate protection
+//! ## Top-hypotheses gate protection
 //!
-//! The chi-square gate now **never discards the highest-weight (MAP) hypothesis**.
-//! The gate's purpose is to cull clearly implausible range hypotheses from a large
-//! population; applying it to the sole surviving best estimate is counter-productive:
-//! it kills the filter right when it should adapt. Instead, a MAP hypothesis that
-//! exceeds the gate is logged and passed through; filter inconsistency is tracked
-//! via the NIS diagnostic.
+//! The chi-square gate **never discards the top `min_hypotheses` hypotheses by
+//! weight** (always including the MAP). The protected set is computed before
+//! the weights change. The gate's purpose is to cull clearly implausible range
+//! hypotheses from a large population; applying it to the best surviving
+//! estimates is counter-productive: it kills the filter right when it should
+//! adapt. Instead, a protected hypothesis that exceeds the gate is logged and
+//! passed through; filter inconsistency is tracked via the NIS diagnostic.
+//! A non-finite Mahalanobis distance is rejected even for protected
+//! hypotheses.
 //!
 //! ## Scheduled hypothesis-count decay
 //!
@@ -273,14 +276,19 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
     /// log-weights internally.  Non-positive weights are silently ignored.
     ///
     /// The raw admissible-region grid can carry hundreds of nodes (up to
-    /// `n_rho × n_rho_dot`) before any weight-based pruning — `post_step_cleanup`
-    /// is applied once here, immediately, so a freshly seeded bank is capped
-    /// the same way any subsequent real update would cap it. Without this, a
-    /// lineage that never gets a second real observation (common: noise
-    /// pairs, objects not revisited soon) would keep its full birth-time
-    /// hypothesis count forever — `branch_null` deliberately never cleans up
-    /// (see its doc), and `cap_schedule`/`min_hypotheses`/`weight_floor`
-    /// would never even be consulted for such a bank.
+    /// `n_rho × n_rho_dot`). **No cleanup is applied at birth**: the bank
+    /// keeps every grid node, with log-weights equal to the unnormalized
+    /// population priors (`log_weight = ln w`). Normalization, pruning,
+    /// capping and merging first run in `post_step_cleanup` after the first
+    /// real update.
+    ///
+    /// Consequences: a lineage that never gets a second real observation
+    /// (common: noise pairs, objects not revisited soon) keeps its full
+    /// birth-time hypothesis count, since `branch_null` deliberately never
+    /// cleans up (see its doc). Code that reads the weights of a fresh bank
+    /// must not assume they sum to one (see
+    /// [`TopK::WeightThreshold`](crate::topocentric_kf::kalman_bank::ellipse_region_finder::top_k::TopK::WeightThreshold),
+    /// which normalizes before thresholding for this reason).
     pub fn from_grid(
         obs_dataset: &ObsDataset,
         first_obs: &Observation,
@@ -452,7 +460,8 @@ impl<'state_lf, 'bank_config> KFBank<'state_lf, 'bank_config> {
     ///
     /// `None` at `n_steps == 0` is meaningful rather than missing: a freshly
     /// seeded bank has never been through a cleanup, so it legitimately carries
-    /// the full seeding grid (~400-750 hypotheses) whatever `cap(0)` says.
+    /// the full seeding grid (up to `n_rho × n_rho_dot` hypotheses, 308 with
+    /// the default grid) whatever `cap(0)` says.
     pub fn last_applied_cap(&self) -> Option<usize> {
         self.n_steps.checked_sub(1).map(|previous| {
             self.config

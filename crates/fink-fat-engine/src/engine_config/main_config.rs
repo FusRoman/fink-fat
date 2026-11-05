@@ -335,8 +335,11 @@ impl Validate for EngineConfig {
     /// - `time_binner_width`: must be finite and strictly positive.
     /// - Every nested section, delegated to its own
     ///   [`Validate`] implementation and re-prefixed with the field name
-    ///   (`pairs`, `triplets`, `kalman_shared_context`, `kfbank_config`,
-    ///   `seeding_grid_config`, `advance_params`).
+    ///   (`pairs`, `triplets`, `kalman_shared_context`, `merge_params`,
+    ///   `kfbank_config`, `seeding_grid_config`, `advance_params`).
+    /// - `log_level`, `log_targets` and `log_retention_days` are not
+    ///   validated here (`log_level` is checked by serde; the CLI resolves
+    ///   `log_targets`).
     ///
     /// Return
     /// ------

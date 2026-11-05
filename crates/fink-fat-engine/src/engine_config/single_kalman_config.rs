@@ -108,7 +108,7 @@ pub struct KalmanConfig {
     ///
     /// Units
     /// -----
-    /// Dimensionless ratio, `[0, 1)`.
+    /// Dimensionless ratio, `[0, 1]` (bounds inclusive).
     ///
     /// Context
     /// -------

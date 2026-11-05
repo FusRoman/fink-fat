@@ -259,24 +259,25 @@ pub fn estimate_sigma_gamma(
     (sigma_obs.powi(2) + sigma_prior.powi(2)).sqrt()
 }
 
-/// Estimate the initial Kalman filter covariance scale factors.
+/// Estimate the transverse and radial velocity uncertainty scales of a
+/// freshly initialized state.
 ///
-/// Derives position and velocity uncertainties from the observational data
-/// and the inverse-distance prior $\gamma$.
+/// These values are **diagnostic only**:
+/// [`KFState::init_kf_state`](crate::topocentric_kf::single_kalman::KFState::init_kf_state)
+/// emits them as an
+/// `InitEvent::InitSigmas` trace event, but the initial covariance is built by
+/// [`initial_covariance`] from the angular errors, the $\gamma$ uncertainty
+/// and a Keplerian range-rate bound.
 ///
 /// Derivation
 /// ----------
-/// **`sigma_pos`** — propagated from distance uncertainty via $r = 1/\gamma$:
-///
-/// $$\sigma_r = \frac{\sigma_\gamma}{\gamma^2}$$
-///
 /// **`sigma_trans`** — propagated from angular rate errors at range $\rho$:
 ///
-/// $$\sigma_{v_\perp} = \rho\sqrt{\sigma_{\dot{\alpha}}^2\cos^2\delta + \sigma_{\dot{\delta}}^2}$$
+/// $$\sigma\_{v\_\perp} = \rho\sqrt{\sigma\_{\dot{\alpha}}^2\cos^2\delta + \sigma\_{\dot{\delta}}^2}$$
 ///
 /// **`sigma_rad`** — bounded by the Keplerian circular velocity at $r = 1/\gamma$:
 ///
-/// $$\sigma_{\dot{r}} = \sqrt{\frac{k^2}{r}}$$
+/// $$\sigma\_{\dot{r}} = \sqrt{\frac{k^2}{r}}$$
 ///
 /// where $k^2$ is [`GAUSS_GRAV_SQUARED`] (AU³/day²). The radial velocity
 /// is unobserved at initialization; this bound reflects the maximum
@@ -285,14 +286,13 @@ pub fn estimate_sigma_gamma(
 /// Arguments
 /// ---------
 /// * `rho` – Topocentric range (AU).
-/// * `sigma_gamma` – Uncertainty on the inverse-distance prior (AU$^{-1}$).
 /// * `gamma` – Inverse heliocentric distance prior $\gamma = 1/r$ (AU$^{-1}$).
 /// * `mid_speed` – Angular velocity with propagated errors (rad/day).
 /// * `mid_point` – Midpoint coordinates providing $\delta$ (radians).
 ///
 /// Return
 /// ------
-/// `(sigma_pos, sigma_trans, sigma_rad)` in AU and AU/day respectively.
+/// `(sigma_trans, sigma_rad)`, both in AU/day.
 pub fn estimate_init_sigmas(
     rho: f64,
     gamma: f64,

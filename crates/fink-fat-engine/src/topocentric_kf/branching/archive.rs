@@ -95,11 +95,12 @@ pub struct ArchivedTrajectory {
     ///
     /// `H` is the object's *intrinsic* brightness, unlike apparent magnitude
     /// which varies with heliocentric distance and topocentric range, so it
-    /// is the invariant two arcs of the same object must agree on. Note it is
-    /// computed without the H-G phase term (see
-    /// [`implied_absolute_magnitude`](super::detection_probability::implied_absolute_magnitude)),
-    /// so comparisons across arcs observed at different phase angles carry a
-    /// systematic offset of a few tenths of a magnitude.
+    /// is the invariant two arcs of the same object must agree on. It includes
+    /// the H-G phase correction when `KFBankConfig::slope_parameter_g` is set
+    /// (the default; see
+    /// [`implied_absolute_magnitude`](super::detection_probability::implied_absolute_magnitude)).
+    /// Comparisons across arcs still carry a systematic offset driven by the
+    /// error on `ρ` and by the lightcurve amplitude.
     pub absolute_magnitude_estimate: Option<f64>,
     /// How many observations were folded into `absolute_magnitude_estimate`.
     pub absolute_magnitude_sample_count: u32,

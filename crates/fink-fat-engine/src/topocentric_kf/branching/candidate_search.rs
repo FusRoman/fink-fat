@@ -175,25 +175,6 @@ fn filter_candidates<'obs>(
         .collect()
 }
 
-/// Find the next-night observations falling inside one bank's predicted
-/// search ellipse.
-///
-/// # Arguments
-/// * `search_region` – Bank's predicted region, e.g. from
-///   [`KFBank::predict_search_region`](crate::topocentric_kf::kalman_bank::KFBank::predict_search_region).
-/// * `track_ids` – Association history of the bank, used to identify it in
-///   the returned [`BankCandidates`] (see
-///   [`KFBank::track_ids`](crate::topocentric_kf::kalman_bank::KFBank::track_ids)).
-/// * `bucket_index` – Spatial index of the next night's observations (built
-///   once per night, shared across every bank — see [`SingleBinTimeBinner`]).
-/// * `spatial_binner` – Same binner used to build `bucket_index`.
-/// * `gate_chi2`, `likelihood_threshold` – Two-stage gate parameters (cheap
-///   Mahalanobis pre-filter, then mixture-likelihood threshold).
-///
-/// # Returns
-/// The bank's [`BankCandidates`] — possibly with an empty `matches` list,
-/// which is the common case at LSST cadence and simply means the following
-/// branching step will spawn only the null branch.
 /// Like [`find_candidates_for_bank`], but fetches the coarse candidate pool
 /// from the union of several `(center_ra, center_dec, radius_rad)` regions
 /// (see
@@ -209,6 +190,18 @@ fn filter_candidates<'obs>(
 /// mixture and drops every mode further out, including the correct one. See
 /// [`SearchRegion::radius_pinned_at_clamp`](crate::topocentric_kf::kalman_bank::ellipse_region_finder::SearchRegion::radius_pinned_at_clamp)
 /// for the trigger and `sky_cover_regions`'s doc for the measurements.
+///
+/// # Arguments
+/// * `cluster_regions` – Coarse `(center_ra, center_dec, radius_rad)` cones
+///   (rad) whose union is queried for candidates.
+/// * `full_region` – The bank's full search region, used for the fine gate
+///   and returned in [`BankCandidates`].
+/// * `track_ids`, `bucket_index`, `spatial_binner`, `gate_chi2`,
+///   `likelihood_threshold` – Same as [`find_candidates_for_bank`].
+///
+/// # Returns
+/// The bank's [`BankCandidates`], with candidates deduplicated across
+/// overlapping cones.
 pub fn find_candidates_for_bank_multi_region<'obs>(
     cluster_regions: &[(f64, f64, f64)],
     full_region: &SearchRegion,
@@ -249,6 +242,26 @@ pub fn find_candidates_for_bank_multi_region<'obs>(
     }
 }
 
+/// Find the observations of the current visit falling inside one bank's
+/// predicted search ellipse.
+///
+/// # Arguments
+/// * `search_region` – Bank's predicted region, e.g. from
+///   [`KFBank::predict_search_region`](crate::topocentric_kf::kalman_bank::KFBank::predict_search_region).
+/// * `track_ids` – Association history of the bank, used to identify it in
+///   the returned [`BankCandidates`] (see
+///   [`KFBank::track_ids`](crate::topocentric_kf::kalman_bank::KFBank::track_ids)).
+/// * `bucket_index` – Spatial index of the current visit's observations
+///   (built once per visit, shared across every bank — see
+///   [`SingleBinTimeBinner`]).
+/// * `spatial_binner` – Same binner used to build `bucket_index`.
+/// * `gate_chi2`, `likelihood_threshold` – Two-stage gate parameters (cheap
+///   Mahalanobis pre-filter, then mixture-likelihood threshold).
+///
+/// # Returns
+/// The bank's [`BankCandidates`] — possibly with an empty `matches` list,
+/// which is the common case at LSST cadence and simply means the following
+/// branching step will spawn only the null branch.
 pub fn find_candidates_for_bank<'obs>(
     search_region: &SearchRegion,
     track_ids: Vec<ObsId>,

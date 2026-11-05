@@ -25,13 +25,9 @@
 //!   - The candidate must satisfy:
 //!     `Δθ / Δt ≤ max_angular_speed`.
 //! - Photometric constraint:
-//!   - The candidate must satisfy a configurable brightness / flux similarity
-//!     test controlled by `max_mag_difference`.
-//!
-//! The exact photometry metric depends on the pairing implementation (flux space,
-//! magnitude space, normalized flux difference, etc.). This configuration
-//! parameter is intentionally **unit-agnostic** at the config level: it must
-//! match what the pairing kernel expects.
+//!   - The candidate must satisfy `|m_a - m_b| ≤ max_mag_difference`, with
+//!     `m` the apparent magnitude of each alert. The tracklet linker compares
+//!     the candidate with the last observation of the track.
 //!
 //! -----------------------------------------------------------------------------
 //! Spatial bucket search and `sep_cap()`
@@ -249,16 +245,11 @@ pub struct PairConfig {
     #[serde(deserialize_with = "de_ang_speed_rad_per_day")]
     pub max_angular_speed: f64,
 
-    /// Maximum allowed photometric difference between the two alerts.
+    /// Maximum allowed apparent-magnitude difference `|m_a - m_b|` between
+    /// two alerts (magnitudes).
     ///
-    /// Important
-    /// ---------
-    /// This value is **dimensionless at the configuration layer**. Its meaning
-    /// depends on the pair generation kernel:
-    /// - raw flux difference threshold,
-    /// - magnitude difference threshold,
-    /// - normalized residual threshold,
-    /// - or any other scalar similarity metric.
+    /// Used by the tracklet linker (candidate vs. last observation of the
+    /// track) and by the standalone `generate_pairs` kernel.
     pub max_mag_difference: f64,
 
     /// Whether to allow pairs formed from alerts inside the same **time bin**.

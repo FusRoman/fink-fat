@@ -54,15 +54,16 @@
 //!
 //! # On the photometric threshold
 //!
-//! [`implied_absolute_magnitude`](super::detection_probability::implied_absolute_magnitude)
-//! omits the H-G phase-angle term, so `H` measured on two arcs observed at
-//! different phase angles carries a **systematic** offset of a few tenths of
-//! a magnitude — not noise that averages out with more observations. A
-//! variance-based test (`|ΔH| / σ`) would therefore be confidently wrong: the
-//! within-arc scatter it measures says nothing about that between-arc bias.
-//! Hence a plain absolute threshold, sized to absorb the missing phase term
-//! *plus* the object's lightcurve amplitude (≲ 0.5 mag is typical). Adding
-//! the phase term upstream is what would let this tighten.
+//! The bank's `H` estimate applies the H-G phase-angle term (see
+//! [`implied_absolute_magnitude`](super::detection_probability::implied_absolute_magnitude),
+//! active whenever `KFBankConfig::slope_parameter_g` is set, the default).
+//! `H` measured on two arcs still carries a **systematic** between-arc
+//! offset, dominated by the error on `ρ` (and so on `5·log10(r·Δ)`) and by
+//! the object's lightcurve amplitude (≲ 0.5 mag is typical) — not noise
+//! that averages out with more observations. A variance-based test
+//! (`|ΔH| / σ`) would therefore be confidently wrong: the within-arc scatter
+//! it measures says nothing about that between-arc bias. Hence a plain
+//! absolute threshold (see [`MergeParams::max_delta_h`]).
 
 use ahash::AHashMap;
 use nalgebra::{Matrix2, Vector2, Vector3};

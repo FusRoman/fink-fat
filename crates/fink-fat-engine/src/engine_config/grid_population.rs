@@ -67,9 +67,16 @@ pub struct Population {
     #[serde(deserialize_with = "de_length_au")]
     pub a_sigma: f64,
 
-    /// Relative abundance (un-normalized; only ratios between populations'
-    /// weights matter — the sampler normalizes internally). Dimensionless,
-    /// must be non-negative.
+    /// Relative abundance. Dimensionless, must be non-negative.
+    ///
+    /// The grid weight of a node is the raw sum
+    /// $\sum\_p w\_p \exp\big(-\tfrac12((a - a\_p)/\sigma\_p)^2\big)$: it is
+    /// **not** normalized, neither across populations nor by
+    /// $1/(\sigma\_p\sqrt{2\pi})$. Only ratios between node weights matter for
+    /// the bank once its weights are normalized after the first real update,
+    /// but the absolute scale is compared against
+    /// [`GridConfig::weight_floor`] at seeding time, so rescaling every
+    /// `weight` also moves that cut.
     pub weight: f64,
 }
 

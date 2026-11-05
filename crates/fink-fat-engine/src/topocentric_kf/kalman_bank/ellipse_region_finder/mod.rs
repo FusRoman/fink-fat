@@ -196,9 +196,9 @@ impl SearchComponent {
 /// [`TopK`] at construction time.
 #[derive(Debug, Clone)]
 pub struct SearchRegion {
-    /// Weighted-mean predicted RA (rad).
+    /// Predicted RA of the MAP (highest-weight) hypothesis (rad).
     pub center_ra: f64,
-    /// Weighted-mean predicted Dec (rad).
+    /// Predicted Dec of the MAP (highest-weight) hypothesis (rad).
     pub center_dec: f64,
     /// Conservative bounding radius (rad).
     pub radius_rad: f64,

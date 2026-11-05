@@ -78,14 +78,18 @@ use crate::{
 ///   (`estimate_rho_dot_circular`), and falls back to zero if the geometry
 ///   is inconsistent.
 ///
-/// The initial covariance $P_0$ is constructed in Cartesian space and
-/// mapped to attributable coordinates (see `initial_covariance`):
+/// The initial covariance $P_0$ is **diagonal**, assembled directly in
+/// attributable coordinates (see
+/// [`initial_covariance`](crate::topocentric_kf::single_kalman::init::initial_covariance)):
+/// the angular and angular-rate variances come from the pair's astrometric
+/// errors, $\sigma\_\rho$ is propagated from the uncertainty on $\gamma$, and
+/// $\sigma\_{\dot\rho}^2 = k^2\gamma$ is a Keplerian bound. All
+/// cross-correlations are set to zero.
 ///
-/// $$P_0 = J \, \Sigma_\text{cart} \, J^\top$$
-///
-/// where $J$ is the Jacobian of the coordinate transform and
-/// $\Sigma_\text{cart}$ is the Cartesian uncertainty decomposed into
-/// transverse and radial components.
+/// This single-guess initialization is a diagnostic path. The tracking
+/// pipeline seeds a whole bank of hypotheses from the admissible region
+/// instead (see
+/// [`admissible_region_grid`](crate::topocentric_kf::kalman_bank::seed_grid::admissible_region_grid)).
 ///
 /// # Observation model
 ///
@@ -102,27 +106,26 @@ use crate::{
 ///
 /// # Propagation
 ///
-/// Between observations, the state is propagated under a **uniform
-/// apparent motion** model (constant $\dot{\alpha}$, $\dot{\delta}$,
-/// $\dot{\rho}$):
+/// Between observations, the state is propagated under **two-body
+/// heliocentric motion** (see
+/// [`propagate`]):
 ///
-/// $$\alpha(t) = \alpha_0 + \dot{\alpha}\,\Delta t, \quad
-///   \delta(t) = \delta_0 + \dot{\delta}\,\Delta t, \quad
-///   \rho(t) = \rho_0 + \dot{\rho}\,\Delta t$$
+/// 1. The attributable state is converted to a heliocentric Cartesian state.
+/// 2. The Cartesian state is propagated with universal-variable Kepler
+///    (`outfit::kepler::propagate_universal`), from emission time to emission
+///    time. The light time $\tau = \rho/c$ is refined by a bounded fixed-point
+///    iteration, so the predicted angles are apparent, like the measured ones.
+/// 3. The result is converted back to attributable coordinates relative to
+///    the observer at the target epoch.
 ///
-/// giving the transition matrix:
-///
-/// $$F = \begin{pmatrix}
-///   1 & 0 & \Delta t & 0 & 0 & 0 \\
-///   0 & 1 & 0 & \Delta t & 0 & 0 \\
-///   0 & 0 & 1 & 0 & 0 & 0 \\
-///   0 & 0 & 0 & 1 & 0 & 0 \\
-///   0 & 0 & 0 & 0 & 1 & \Delta t \\
-///   0 & 0 & 0 & 0 & 0 & 1
-/// \end{pmatrix}$$
-///
-/// This model is an approximation; process noise $Q$ must absorb
-/// deviations from uniform motion due to gravitational acceleration.
+/// The covariance is transported in Cartesian space with the Keplerian
+/// state-transition matrix built from the Lagrange coefficients
+/// $\Phi = \begin{pmatrix} f I\_3 & g I\_3 \\ \dot f I\_3 & \dot g I\_3 \end{pmatrix}$,
+/// optionally inflated by a fading-memory factor driven by the NIS EMA, and
+/// augmented with a state-noise-compensation process noise $Q$ whose
+/// intensity grows with $\Delta t$. $Q$ absorbs the unmodelled
+/// accelerations (planetary perturbations, non-gravitational forces).
+/// Annual aberration is not modelled.
 ///
 /// # Reference
 ///

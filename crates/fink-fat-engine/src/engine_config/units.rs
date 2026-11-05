@@ -17,7 +17,9 @@
 //!
 //! All conversions performed by this module target the following internal units:
 //!
-//! - **Angles**: radians
+//! - **Angles**: radians, except [`de_angle_arcsec`], which targets
+//!   arcseconds (used by the `*_arcsec` fields such as `cone_half_arcsec`
+//!   and `RadiusStrategy::Clamped::max_arcsec`)
 //! - **Time**: days
 //! - **Angular speed**: radians per day
 //! - **Length**: astronomical units (AU)

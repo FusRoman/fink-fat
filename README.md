@@ -1,208 +1,245 @@
-# Fink-FAT
+# Fink-FAT — Fink Asteroid Tracker
 
-![Rust](https://img.shields.io/badge/Rust-000000?style=flat&logo=rust&logoColor=white)
-![Version](https://img.shields.io/github/v/release/FusRoman/fink-fat)
-![Licence](https://img.shields.io/github/license/FusRoman/fink-fat)
+[![CI](https://github.com/FusRoman/fink-fat/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/FusRoman/fink-fat/actions/workflows/CI.yml)
+[![codecov](https://codecov.io/gh/FusRoman/fink-fat/branch/main/graph/badge.svg)](https://codecov.io/gh/FusRoman/fink-fat)
+[![Docs](https://img.shields.io/badge/docs-rustdoc%20%2B%20KaTeX-blue?logo=rust)](#documentation)
+[![Release](https://img.shields.io/github/v/release/FusRoman/fink-fat?include_prereleases&sort=semver)](https://github.com/FusRoman/fink-fat/releases)
+[![License: CeCILL-C](https://img.shields.io/badge/license-CeCILL--C-blue)](LICENSE)
+[![Rust 2024](https://img.shields.io/badge/rust-2024%20edition-orange?logo=rust)](https://doc.rust-lang.org/edition-guide/rust-2024/)
+[![Fink](https://img.shields.io/badge/broker-Fink-7a5cff)](https://fink-broker.org)
+[![arXiv](https://img.shields.io/badge/arXiv-2305.01123-b31b1b?logo=arxiv)](https://arxiv.org/abs/2305.01123)
 
-Fink-FAT is a Rust workspace for asteroid detection and trajectory reconstruction in alert streams. It ingests photometric alerts from surveys such as ZTF and Vera Rubin, builds intra-night seeds, links them across nights, solves candidate trajectories, and can optionally fit preliminary orbits.
+Fink-FAT finds **new Solar System objects** in the photometric alert streams of
+large time-domain surveys (ZTF, Vera C. Rubin / LSST). It links
+detections night after night into candidate trajectories, keeps several
+association hypotheses alive while the data is ambiguous, and turns the
+surviving candidates into orbits and MPC-ready ADES submissions.
 
-The repository also contains evaluation tools for measuring seed, edge, and solver quality on labelled datasets, as well as utilities for exporting edge features and generating diagnostic plots.
+The project started as a Python package used inside the
+[Fink broker](https://fink-broker.org) (see the
+[paper](https://arxiv.org/abs/2305.01123)). Version 1.0 is a full rewrite in
+Rust.
 
-## Highlights
+## How it works
 
-- Ingest nightly or multi-night alert batches from configurable URIs.
-- Build intra-night seeds from pairs and triplets of detections.
-- Construct inter-night edges with configurable scoring and optional ONNX ranking.
-- Solve connected components into candidate trajectories.
-- Optionally run orbit fitting on selected tracks.
-- Evaluate seeding, edge, solver, and model quality on labelled data.
-- Persist intermediate state to disk for incremental processing.
-- Provide progress bars and structured logs for long runs.
+Fink-FAT treats linking as a **tracking problem**, not as a combinatorial
+search over all possible combinations of detections:
+
+1. **Intra-night seeding.** Within a night, detections of the same moving
+   object are linked into tracklets. A tracklet only constrains the sky
+   position and angular rate. Range `ρ` and range-rate `ρ̇` are unknown.
+2. **Admissible-region hypotheses.** Each tracklet seeds a *Kalman filter bank*:
+   a set of topocentric Kalman filters, one per `(ρ, ρ̇)` node of the
+   admissible region. Nodes are weighted by dynamical population priors
+   (NEOs, main belt, Hildas, Trojans, Centaurs, Kuiper belt, scattered and
+   detached objects).
+3. **Night-to-night multi-hypothesis tracking.** Every lineage is propagated to
+   each new exposure. Detections inside its predicted search ellipse spawn
+   **branches**, which are scored by a log-likelihood ratio against the local
+   clutter density, then pruned (top-B / N-scan). Range ambiguity collapses as
+   the arc grows.
+4. **Discovery and archiving.** Detections that no existing lineage claims seed
+   new lineages. Lineages that stop receiving detections are archived, not
+   lost: their association history is still a result.
+5. **Orbit fitting and submission.** Candidate tracks are fitted (via
+   [`outfit`](https://crates.io/crates/outfit)), cross-matched against known
+   objects (SkyBoT, CND), ranked by a submission-quality tier and exported as
+   ADES XML to the Minor Planet Center.
+
+Steps 1–4 run in the engine. The
+[engine README](crates/fink-fat-engine/README.md) describes the algorithms in
+detail: state vector, filter equations, scoring, pruning and fragment
+merging.
+
+A few principles guide the design:
+
+- **Completeness for unusual objects first.** Fink-FAT aims to find NEOs,
+  Centaurs and distant objects, not only main-belt asteroids. Tuning choices
+  are judged on metrics split by population, not on aggregate recall alone.
+- **Incremental by construction.** Night 0 and night N use the same call
+  (`BranchCollection::advance_one_night`). State is a single on-disk snapshot,
+  so a nightly cron job and a multi-year replay run the same code.
+- **Pure logic, thin I/O.** Algorithms are pure functions over plain data
+  types. Postgres, HTTP and filesystem access live at the edges (CLI,
+  explorer). For example, `fink-fat-ades` holds no I/O at all, so the CLI and
+  the web app always agree on what a valid submission is.
+- **Validated, unit-aware configuration.** One YAML file drives the whole
+  engine. Unknown keys are rejected. Physical quantities are written with units
+  (`"35 arcmin/day"`, `"0.02 au"`). Every validation error is reported at once.
 
 ## Workspace layout
 
-| Path | Role |
+| Crate | Path | Role |
+| --- | --- | --- |
+| `fink-fat` | [`src/`](src/) | Main CLI: `track`, `convert`, `submit`. |
+| `fink-fat-engine` | [`crates/fink-fat-engine/`](crates/fink-fat-engine/README.md) | Core library: configuration, seeding, space-time bucketing, topocentric Kalman filters, branching / MHT, archive, snapshot. |
+| `fink-fat-ades` | [`crates/fink-fat-ades/`](crates/fink-fat-ades/) | Pure ADES / MPC logic: document building, local `submit.xsd` validation, submission and status API parsing, quality tiers. |
+| `fink-fat-eval` | [`crates/fink-fat-eval/`](crates/fink-fat-eval/) | Evaluation binaries run against labelled datasets (tracking recall/purity, seeding, KF calibration, MOT contamination). |
+| `fink-fat-explorer` | [`crates/fink-fat-explorer/`](crates/fink-fat-explorer/) | Dioxus fullstack web app on Postgres: population maps, 3D orbits, lineage pages, orbit fitting, cross-matching, MPC submission dashboard. |
+
+Other notable paths:
+
+| Path | Content |
 | --- | --- |
-| `src/` | Binary entrypoint, CLI parsing, logging, progress hooks, and runtime orchestration. |
-| `crates/fink-fat-engine/` | Core engine library: alerts, seeding, edges, solver, persistence, and configuration. |
-| `crates/fink-fat-eval/` | Evaluation binary: seeding, edge, solver, and model evaluation modes. |
-| `docs/` | Design notes and analysis documents. |
-| `katex-header.html` | KaTeX header used when generating Rust documentation. |
+| [`tests/`](tests/) | CLI-level integration tests and small ZTF / LSST night samples. |
+| [`test_exp/`](test_exp/) | Python scripts for data preparation (alert Parquet files, ground truth, astrometric error calibration). |
+| `engine_config.best.yaml`, `engine_config_lsst.best.yaml` | Reference engine configurations for ZTF and LSST cadence. |
+| [`dockerfile`](dockerfile), [`docker-compose.yml`](docker-compose.yml) | Postgres, pgAdmin and the explorer (`dev` / `prod` profiles). |
+| [`katex-header.html`](katex-header.html) | KaTeX header so rustdoc renders the maths. |
 
 ## Requirements
 
-- A recent stable Rust toolchain.
-- Access to the survey alert files you want to process.
-- A validated engine configuration file.
-- Optional: an ONNX edge ranking model, if you enable model-based edge filtering.
-
-For engine-specific runtime and configuration details, see [crates/fink-fat-engine/README.md](crates/fink-fat-engine/README.md).
+- Rust stable with 2024 edition support (≥ 1.85).
+- `libfontconfig1-dev` (used by the plotting code in `fink-fat-eval`).
+- Network access on first run: the Kalman context downloads the JPL ephemeris
+  and UT1 data, and the MPC observatory list.
+- Optional: PostgreSQL (or `docker compose`) for `convert --format sql`,
+  `submit` and the explorer.
 
 ## Quick start
 
-Build the workspace:
-
 ```bash
-cargo build --workspace
+cargo build --release
+./target/release/fink-fat --help
 ```
 
-Run the main binary help:
+### Track asteroids
 
 ```bash
-cargo run -- --help
+fink-fat track \
+  --alerts /path/to/alerts.parquet \
+  --config engine_config.best.yaml \
+  --progress --logs
 ```
 
-Run the automated tests:
-
-```bash
-cargo test --workspace
-```
-
-Generate the documentation:
-
-```bash
-RUSTDOCFLAGS="--html-in-header $(pwd)/katex-header.html" cargo doc --workspace --open
-```
-
-## Running the main pipeline
-
-The `fink-fat` binary expects two required arguments:
-
-- `--alerts` - URI of the alert file to process.
-- `--config` - path to the engine configuration file.
-
-Optional runtime flags:
-
-- `--progress` enables `indicatif` progress bars.
-- `--logs` enables terminal and file logging.
-
-Example:
-
-```bash
-cargo run -- \
-  --alerts file:///path/to/alerts.parquet \
-  --config /path/to/config.yml \
-  --progress \
-  --logs
-```
-
-The pipeline runtime typically follows this sequence:
-
-1. Load and validate the engine configuration.
-2. Open or create the persistence layout.
-3. Configure progress reporting and logging.
-4. Ingest alerts.
-5. Build seeds.
-6. Build inter-night edges.
-7. Solve connected components.
-8. Fit orbits when enabled.
-9. Persist the updated state.
-
-Generated logs are written under the configured storage root, typically in a `logs/` subdirectory.
-
-## Evaluation workflows
-
-The `fink-fat-eval` crate provides four evaluation modes.
-
-### Seeding evaluation
-
-Measures seed purity and recall.
-
-```bash
-cargo run --profile evaluation -p fink-fat-eval -- seeding-eval \
-  --alerts file:///path/to/sso_dataset_eval.parquet \
-  --config crates/fink-fat-eval/eval_config.yml
-```
-
-### Edge evaluation
-
-Measures edge purity and recall, and can export the edge-feature dataset used for model training.
-
-```bash
-cargo run --profile evaluation -p fink-fat-eval -- edge-eval \
-  --alerts file:///path/to/sso_dataset_eval.parquet \
-  --config crates/fink-fat-eval/eval_config.yml \
-  --plot-dir edge_plots
-```
-
-Export features for machine learning:
-
-```bash
-cargo run --profile evaluation -p fink-fat-eval -- edge-eval \
-  --alerts file:///path/to/sso_dataset_eval.parquet \
-  --config crates/fink-fat-eval/eval_config.yml \
-  --export-features crates/fink-fat-eval/src/bin/edge_ml_prediction/edge_features.parquet
-```
-
-### Solver evaluation
-
-Measures trajectory-level reconstruction quality.
-
-```bash
-cargo run --profile evaluation -p fink-fat-eval -- solver-eval \
-  --alerts file:///path/to/sso_dataset_eval.parquet \
-  --config crates/fink-fat-eval/eval_config.yml \
-  --plot-dir solver_plots
-```
-
-### Model evaluation
-
-Evaluates an ONNX classifier against a labelled feature file.
-
-```bash
-cargo run --profile evaluation -p fink-fat-eval -- model-eval \
-  -f crates/fink-fat-eval/src/bin/edge_ml_prediction/edge_features.parquet \
-  -x crates/fink-fat-eval/src/bin/edge_ml_prediction/xgb_params.yml \
-  -p model_eval_plots
-```
-
-Use `-t` if you want to override the number of ONNX inference threads.
-
-## Configuration
-
-The engine uses a validated YAML configuration file to control:
-
-- pair and triplet generation,
-- edge construction and ranking,
-- solver policy and routing,
-- persistence layout,
-- logging level,
-- optional ONNX model paths.
-
-The evaluation crate ships with a reference configuration at [crates/fink-fat-eval/eval_config.yml](crates/fink-fat-eval/eval_config.yml).
-
-For a detailed explanation of the engine configuration schema, see [crates/fink-fat-engine/README.md](crates/fink-fat-engine/README.md).
-
-## Documentation and design notes
-
-- Rust API documentation is generated from the crate-level docs in `src/` and `crates/fink-fat-engine/src/`.
-- High-level design notes are available in `docs/`.
-- The workspace uses `katex-header.html` when generating docs so mathematical expressions render correctly.
-
-## Testing and benchmarks
-
-Common commands:
-
-```bash
-cargo test --workspace
-cargo bench -p fink-fat-engine
-```
-
-The engine crate also provides dedicated Criterion benchmarks under `crates/fink-fat-engine/benches/`.
-
-## Repository structure
+`--alerts` is a Parquet file holding one night, or several nights with
+distinct `night_id`s. Nights are processed in chronological order. The run
+loads the `BranchCollection` snapshot from the config's `storage_path` if there
+is one, advances it through every night, then writes it back. Closed
+trajectories go to an append-only archive log next to the snapshot:
 
 ```text
-fink-fat/
-├── src/                       # binary entrypoint and runtime glue
-├── crates/
-│   ├── fink-fat-engine/       # core engine library
-│   └── fink-fat-eval/         # evaluation binary and ML helper code
-├── docs/                      # analysis and architecture notes
-├── katex-header.html          # rustdoc KaTeX header
-└── README.md                  # project overview and usage
+<storage_path>/
+├── branch_collection.rkyv          # live lineages (zero-copy rkyv snapshot)
+├── archived_trajectories.rkyvlog   # append-only log of closed trajectories
+└── fink_fat.<date>.log             # with --logs; rotated daily
 ```
+
+Useful flags:
+
+| Flag | Effect |
+| --- | --- |
+| `--snapshot-every N` | In batch mode, also checkpoint the snapshot every N nights. |
+| `--log-target TARGET=LEVEL` | Per-target log level (repeatable). `--list-log-targets` lists them. |
+| `--log-retention-days N` | Override how many daily log files are kept. |
+
+Any configuration key can be overridden from the environment with the
+`FINK_FAT__` prefix and `__` as the nesting separator.
+
+### Export results
+
+```bash
+# Flat Parquet tables
+fink-fat convert --config engine_config.best.yaml --format parquet
+
+# Postgres (feeds fink-fat-explorer and `submit`)
+fink-fat convert --config engine_config.best.yaml --format sql \
+  --database-url postgres://finkfat:finkfat@localhost:5432/finkfat_test \
+  --path-observation /path/to/alerts.parquet
+```
+
+The Parquet export writes one `<table>.parquet` file per table into
+`storage_path`.
+
+### Submit to the Minor Planet Center
+
+```bash
+fink-fat submit \
+  --csv eligible_lineages.csv \
+  --database-url postgres://finkfat:finkfat@localhost:5432/finkfat_test \
+  --submitter-config submission.yaml \
+  --dry-run
+```
+
+`submit` skips lineages that were already submitted, checks that each lineage
+is eligible (by quality tier), builds the ADES document and validates it
+locally. Then it sends the document and records the outcome in the
+`mpc_submissions` table. `--endpoint test` is the default and targets MPC's
+test endpoint. Only `--endpoint production` sends a real submission.
+`--dry-run` stops before anything leaves the machine.
+
+### Explore results in the browser
+
+```bash
+docker compose --profile dev up -d            # db + pgAdmin + explorer (hot reload) on :8080
+docker compose --profile prod up -d --build   # optimised build on :8081
+```
+
+See [`crates/fink-fat-explorer/README.md`](crates/fink-fat-explorer/README.md)
+for the build targets, runtime configuration and data loading.
+
+## Evaluation
+
+`fink-fat-eval` runs the engine on labelled data (alerts with their
+ground-truth object identity) and reports where reconstruction succeeds or
+fails. Each tool is a separate binary:
+
+| Binary | Purpose |
+| --- | --- |
+| `tracking_analysis` | Full night-after-night tracking: recall, purity and fragmentation, broken down by population. |
+| `seed_to_bank_analysis` | Intra-night seeding in isolation (every night treated as night 0). |
+| `kalman_full_traj_eval` / `kalman_single_traj_eval` | Kalman bank behaviour on ground-truth trajectories (coverage, NEES/RMSE). |
+| `kf_calibrate` | Automatic search for search-region / gating / process-noise parameters. |
+| `mot_analysis` | Contamination of the predicted search regions by unrelated detections. |
+
+```bash
+cargo run --profile evaluation-fast -p fink-fat-eval --bin tracking_analysis -- \
+  --alerts /path/to/sso_dataset_eval.parquet \
+  --config engine_config.best.yaml \
+  --output-result eval_out/
+```
+
+The `evaluation` profile keeps debug assertions and overflow checks to catch
+numerical bugs. `evaluation-fast` drops them for full-dataset sweeps.
+
+## Development
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --workspace
+```
+
+Tests use synthetic or bundled data only. The `sql_convert` integration test
+needs a Postgres instance given by `DATABASE_URL`; `docker compose up -d db`
+provides one with the same credentials as CI.
+
+A `husky-rs` pre-commit hook runs fmt, clippy, check and the doc build. CI runs
+the same jobs, plus the Postgres integration test and engine coverage
+(Codecov). Contributor conventions (error handling, collections, doc comment
+format, tests) are listed in [`AGENTS.md`](AGENTS.md).
+
+## Documentation
+
+For an overview of the algorithms, start with the
+[engine README](crates/fink-fat-engine/README.md).
+
+The API reference is generated with rustdoc. Module-level docs explain both
+the algorithms and the reasons behind the design choices. KaTeX renders the
+equations:
+
+```bash
+RUSTDOCFLAGS="--html-in-header $(pwd)/katex-header.html" cargo doc --workspace --no-deps --open
+```
+
+Good entry points are `fink_fat_engine::topocentric_kf::kalman_bank` (the
+filter bank), `fink_fat_engine::topocentric_kf::branching` (multi-hypothesis
+tracking) and `fink_fat_engine::engine_config` (every configuration key and its
+units).
 
 ## License
 
-See [LICENSE](LICENSE) for licensing information.
+Fink-FAT is distributed under the
+[CeCILL-C](https://cecill.info/licences/Licence_CeCILL-C_V1-en.html) free
+software license, a French LGPL-style license compatible with EU law. See
+[LICENSE](LICENSE).

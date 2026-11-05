@@ -1,7 +1,10 @@
 //! Top-level intra-night pair → [`KFBank`] construction pipeline.
 //!
-//! Entry point: [`build_kf_bank_collection`]. For each night present in an
-//! [`ObsDataset`] (via `iter_night_id`/`iter_night_observations`), links
+//! Entry point: [`build_kf_bank_collection`]. For **one** night of an
+//! [`ObsDataset`] (selected by `night_id`, via `iter_night_observations`), or
+//! for an explicit set of observations
+//! ([`build_kf_bank_collection_from_observations`], used by discovery on the
+//! night's unclaimed observations), links
 //! intra-night observations into tracklets with [`link_tracklets`] (one
 //! maximal-baseline pair per multi-detection object — see that module's
 //! docs for why this replaces a plain all-pairs enumeration), then converts

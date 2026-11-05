@@ -52,10 +52,16 @@ pub fn local_clutter_density<Object>(
 
 /// Total number of alerts across every time bin of a single HEALPix cell.
 ///
-/// The clutter estimate is a per-night, purely spatial density: it sums
-/// alerts over all time bins sharing `space_key` rather than restricting to
-/// one bin, since a night's `BucketIndex` may already be split into several
-/// narrow time bins upstream (see `build_kf_bank_collection`).
+/// The clutter estimate is a purely spatial density: it sums alerts over all
+/// time bins sharing `space_key` rather than restricting to one bin, so the
+/// result does not depend on how the caller's `BucketIndex` is split in time.
+/// In the tracking loop the index is built **per visit** (one exposure, a
+/// single time bin; see `advance_bank_collection_one_night`), so the density
+/// is the number of alerts of that exposure in the cell.
+///
+/// Notes
+/// -----
+/// Scans every bucket of the index on each call (`O(#buckets)`).
 fn count_alerts_in_cell<Object>(
     bucket_index: &BucketIndex<Object>,
     space_key: SpatialKey,

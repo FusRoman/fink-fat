@@ -26,7 +26,9 @@
 //! Two different gates apply depending on how much history a candidate
 //! track already has:
 //! - **No fit yet (1 observation)**: falls back to the same pairwise
-//!   `max_angular_speed` dot-product gate `generate_pairs` uses today. This
+//!   `max_angular_speed` criterion as `generate_pairs`, computed directly as
+//!   `angular_separation / Δt` (`generate_pairs` evaluates the equivalent
+//!   dot-product threshold to avoid an `acos`). This
 //!   is the *only* path exercised on a "normal cadence" night (≤2
 //!   detections/object), so behavior there is unchanged.
 //! - **Fit established (≥2 observations)**: gates on the angular distance
@@ -213,10 +215,10 @@ fn fitted_match_score(
     })
 }
 
-/// Gate a candidate against a single-observation track with no fit yet,
-/// using the same pairwise angular-speed dot-product test
-/// `generate_pairs` applies today — this is the "normal cadence" fallback
-/// path, deliberately left unchanged from existing behavior.
+/// Gate a candidate against a single-observation track with no fit yet:
+/// accept it if `angular_separation / dt ≤ max_angular_speed`, the same
+/// criterion `generate_pairs` applies through an equivalent dot-product
+/// threshold. This is the "normal cadence" fallback path.
 fn fallback_match_score(
     track: &Track,
     observation: &Observation,
