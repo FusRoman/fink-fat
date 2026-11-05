@@ -284,6 +284,6 @@ software license, a French LGPL-style license compatible with EU law. See
 
 ## AI Disclosure
 
-D3 — daliascale.org
+D3 — [daliascale.org](https://daliascale.org)
 
 D3: Human and AI act as creative partners. AI shapes ideas or output in meaningful ways, but humans retain authorial control.
