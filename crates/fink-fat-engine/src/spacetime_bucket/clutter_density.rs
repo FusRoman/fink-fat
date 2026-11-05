@@ -56,7 +56,7 @@ pub fn local_clutter_density<Object>(
 /// time bins sharing `space_key` rather than restricting to one bin, so the
 /// result does not depend on how the caller's `BucketIndex` is split in time.
 /// In the tracking loop the index is built **per visit** (one exposure, a
-/// single time bin; see `advance_bank_collection_one_night`), so the density
+/// single time bin; see `NightSession::advance_visit`), so the density
 /// is the number of alerts of that exposure in the cell.
 ///
 /// Notes

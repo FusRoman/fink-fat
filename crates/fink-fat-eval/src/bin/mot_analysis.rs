@@ -1363,7 +1363,7 @@ fn study_kalman_asteroid(
         // coarse prefilter extrapolates from the MAP hypothesis propagated
         // to this night's first resolvable visit, not from a possibly
         // weeks-stale bank epoch. Computed once per night, exactly like
-        // `advance_bank_collection_one_night` does.
+        // `NightSession::advance_visit` does.
         //
         // The `find_map` short-circuits on the *geometry*, never on the
         // anchor result: `for_branch` legitimately returns `None` for a
@@ -1393,7 +1393,7 @@ fn study_kalman_asteroid(
         // against the true observer/object geometry — a spurious
         // along-track offset baked into both the actual candidate search
         // (`not_matched%` itself) and the diagnostics below. Matches
-        // production's `orchestrate::advance_bank_collection_one_night`,
+        // production's `NightSession::advance_visit`,
         // which predicts fresh per visit for the same reason.
         for (visit_index, pv) in night_data.visits.iter().enumerate() {
             // The anchor belongs to the branch it was computed for; once

@@ -65,24 +65,20 @@ impl DiscoveryEvent {
 /// # Arguments
 /// * `night_obs` – This night's full observation set.
 /// * `consumed_observation_ids` – Ids claimed by an existing lineage this
-///   night (see
-///   [`NightAdvanceOutcome::consumed_observation_ids`](super::orchestrate::NightAdvanceOutcome::consumed_observation_ids)).
-///   Empty at night 0, when every observation is up for grabs.
+///   night and still held by a surviving branch (see
+///   [`NightSession::close`](super::NightSession::close)). Empty at night 0,
+///   when every observation is up for grabs.
 /// * `next_lineage_id` – Monotonic counter; advanced by one per new lineage
-///   created. Caller seeds it above the highest `lineage_id` already in use
-///   (including lineages that got fully pruned this night, so ids are never
-///   reused).
+///   created ([`IdCounters::next_lineage_id`](super::IdCounters::next_lineage_id)).
 /// * `next_branch_id` – Monotonic counter for the `branch_id` of each new
 ///   lineage's root branch. **Deliberately separate from `next_lineage_id`**:
-///   [`advance_bank_collection_one_night`](super::orchestrate::advance_bank_collection_one_night)
-///   allocates `branch_id`s from its own counter (bounded by the highest
-///   `branch_id` among the branches it advanced), which grows independently
-///   of — and much faster than — `next_lineage_id` (one new value per
-///   branching event vs. one per newly discovered object). Reusing
-///   `next_lineage_id`'s value as a `branch_id` here would let a freshly
-///   seeded lineage collide with a `branch_id` orchestration already handed
-///   out this same night. Caller seeds it above the highest `branch_id`
-///   among the branches surviving this night's advance step.
+///   it is the same counter the visit-level branching step
+///   ([`NightSession::advance_visit`](super::NightSession::advance_visit))
+///   drew from all night, which grows independently of — and much faster
+///   than — `next_lineage_id` (one new value per branching event vs. one per
+///   newly discovered object). Reusing `next_lineage_id`'s value as a
+///   `branch_id` here would let a freshly seeded lineage collide with a
+///   `branch_id` already handed out this same night.
 /// * `current_step` – Current night index; recorded as each new lineage's
 ///   `last_real_update_step` (birth counts as a real update, so a freshly
 ///   seeded lineage starts at staleness age zero).

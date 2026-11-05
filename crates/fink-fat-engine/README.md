@@ -490,7 +490,8 @@ At LSST cadence a night holds hundreds of visits.
 
 ### 2. Per-visit branching
 
-`orchestrate::advance_bank_collection_one_night`. For each visit, every live
+`NightSession::advance_visit` (driven by `BranchCollection::advance_one_night`
+in batch). For each visit, every live
 lineage is processed in parallel:
 
 1. **Quick prefilter**: once per night, each lineage's MAP state is propagated

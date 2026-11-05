@@ -9,14 +9,17 @@
 //! caller never special-cases "first night" vs. "later night":
 //!
 //! ```ignore
-//! let mut collection = BranchCollection::default();
-//! for (step, night_obs) in nights_in_order.iter().enumerate() {
+//! let mut collection = BranchCollection::empty();
+//! for night_obs in &nights_in_order {
+//!     let step = collection.current_step;
 //!     collection = collection.advance_one_night(
-//!         night_obs, &obs_dataset, &kalman_context,
-//!         &advance_params, &discovery_params, step,
+//!         night_obs, &obs_dataset, &engine_config, &kalman_context, step,
 //!     )?;
 //! }
 //! ```
+//!
+//! A streaming caller that receives a night visit by visit drives the same
+//! pipeline through a [`NightSession`] instead.
 
 use std::collections::HashSet;
 
@@ -29,8 +32,9 @@ use crate::{
     spacetime_bucket::healpix_binner::HealpixBinner,
     topocentric_kf::branching::{
         ArchivedTrajectory, Branch, BranchSnapshot,
-        discovery::seed_new_lineages_from_leftovers,
-        orchestrate::{GateRecord, advance_bank_collection_one_night},
+        night_session::NightSession,
+        orchestrate::{GateRecord, OrchestrateEvent},
+        visit::group_observations_into_visits,
     },
 };
 
@@ -51,8 +55,8 @@ pub struct BranchCollection<'state_lf, 'bank_config> {
     /// consumed by a candidate extension of an existing lineage during the
     /// night just advanced, where that candidate branch was itself pruned
     /// before surviving to `branches` — see
-    /// [`NightAdvanceOutcome::consumed_then_pruned_ids`](super::orchestrate::NightAdvanceOutcome::consumed_then_pruned_ids).
-    /// These were already given back to `advance_one_night`'s own discovery
+    /// [`NightSession::close`]. These were already given back to that same
+    /// night's discovery
     /// step this same night (see that method's doc), so a caller does not
     /// need to do anything with this field to benefit from that — it's
     /// informational only at this point (e.g. for reporting/telemetry).
@@ -250,25 +254,24 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
         self.branches.is_empty()
     }
 
-    /// Advance the collection by one night.
+    /// Advance the collection by one night — the batch driver of a
+    /// [`NightSession`].
     ///
-    /// When `self` is empty (night 0, or simply no live lineage survived),
-    /// the update phase is skipped entirely — there is nothing to propagate
-    /// or branch — and every observation is available for discovery.
-    /// Otherwise, existing lineages are propagated/branched/scored/pruned
-    /// first ([`advance_bank_collection_one_night`]), and only the
-    /// observations they didn't claim feed the discovery phase
-    /// ([`seed_new_lineages_from_leftovers`]). Either way the result is one
-    /// `BranchCollection` ready for the next night.
+    /// Groups `night_obs` into visits
+    /// ([`group_observations_into_visits`]), feeds them in chronological
+    /// order to [`NightSession::advance_visit`], then closes the night
+    /// ([`NightSession::close`]: N-scan pruning, stale purge, discovery of new
+    /// lineages from the unclaimed observations). When `self` is empty (night
+    /// 0, or no lineage survived) the visit loop is skipped entirely and every
+    /// observation goes to discovery. A caller never special-cases "first
+    /// night" vs. "later night".
     ///
     /// # Arguments
     /// * `night_obs` – This night's observations.
     /// * `obs_dataset`, `kalman_context` – Shared ephemeris/observation
     ///   context, threaded through to both phases.
-    /// * `advance_params` – MHT branching/pruning tuning for the update
-    ///   phase (see [`crate::engine_config::night_advance_params::NightAdvanceParams`]).
-    /// * `discovery_params` – Pairing/seeding tuning for the discovery phase
-    ///   (see `BankBuildParams`).
+    /// * `engine_config` – Supplies the branching/pruning parameters
+    ///   (`advance_params`), the discovery parameters and the HEALPix depth.
     /// * `current_step` – Current night index, for N-scan bookkeeping.
     ///
     /// # Returns
@@ -293,126 +296,44 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
         .emit();
 
         let spatial_binner = HealpixBinner::new(engine_config.healpix_depth);
+        let params = &engine_config.advance_params;
+        let mut session = NightSession::begin(self, current_step);
 
-        // `advance_bank_collection_one_night` groups `night_obs` into
-        // visits internally and builds one bucket index per visit (see its
-        // module doc for why a single per-night index would be wrong at
-        // LSST cadence) — nothing to build here.
-        let (
-            mut branches,
-            consumed_observation_ids,
-            consumed_then_pruned_ids,
-            gate_records,
-            archived_tonight,
-        ) = if self.branches.is_empty() {
+        if self.branches.is_empty() {
             CollectionEvent::SkipPropagation.emit();
-            (
-                Vec::new(),
-                HashSet::new(),
-                HashSet::new(),
-                Vec::new(),
-                Vec::new(),
-            )
         } else {
             CollectionEvent::Advancing.emit();
-            let outcome = advance_bank_collection_one_night(
-                &self.branches,
-                night_obs,
-                obs_dataset,
-                kalman_context,
-                &engine_config.advance_params,
-                &spatial_binner,
-                current_step,
-            );
-            (
-                outcome.branches,
-                outcome.consumed_observation_ids,
-                outcome.consumed_then_pruned_ids,
-                outcome.gate_records,
-                outcome.archived,
-            )
-        };
-
-        // Must not reuse an id already held by a branch that got fully
-        // pruned this night, so the max is taken over the pre-update set
-        // (`self.branches`) too, not just the survivors.
-        let mut next_lineage_id = self
-            .branches
-            .iter()
-            .chain(branches.iter())
-            .map(|branch| branch.lineage_id)
-            .max()
-            .map_or(0, |id| id + 1);
-
-        // Deliberately a *separate* counter from `next_lineage_id` (see
-        // `seed_new_lineages_from_leftovers`'s doc): `branch_id`s handed out
-        // during this night's advance step (`advance_bank_collection_one_night`,
-        // above) come from their own counter, bounded by the highest
-        // `branch_id` among the branches it was given — not by `lineage_id`.
-        // Reusing `next_lineage_id`'s (much slower-growing) value here would
-        // let a freshly seeded lineage's `branch_id` collide with one
-        // `advance_bank_collection_one_night` already assigned this same
-        // night. Bounding over `branches` (the survivors of that step, which
-        // carry every `branch_id` handed out and still live) is enough —
-        // a `branch_id` that got pruned away this night is no longer live
-        // anywhere, so reusing it is safe.
-        let mut next_branch_id = self
-            .branches
-            .iter()
-            .chain(branches.iter())
-            .map(|branch| branch.branch_id)
-            .max()
-            .map_or(0, |id| id + 1);
+            let _advance = OrchestrateEvent::span().entered();
+            let visits =
+                group_observations_into_visits(night_obs, params.visit_epoch_tolerance_days);
+            let n_visits = visits.len();
+            OrchestrateEvent::VisitSummary { n_visits }.emit();
+            let visit_progress_modulo = (n_visits / 100).max(1);
+            for (visit_index, visit) in visits.iter().enumerate() {
+                if visit_index % visit_progress_modulo == 0 {
+                    OrchestrateEvent::VisitProgress {
+                        visit_index,
+                        n_visits,
+                    }
+                    .emit();
+                }
+                session.advance_visit(visit, obs_dataset, kalman_context, params, &spatial_binner);
+            }
+        }
 
         CollectionEvent::SeedingNewLineages.emit();
-
-        // Observations an existing lineage's candidate extension merely
-        // *tried* this night, but that didn't survive this same night's
-        // pruning (`cap_top_b_per_lineage`/`apply_n_scan_pruning`), are not
-        // truly claimed by anything: give them back to the leftover pool so
-        // a real object doesn't lose its only same-night seeding chance to
-        // an unrelated candidate that ultimately went nowhere. See
-        // `NightAdvanceOutcome::consumed_then_pruned_ids`'s doc — this is
-        // always resolvable within this same night (an observation only
-        // ever appears in one night's `night_obs`, so there is no later
-        // night where it could be revisited).
-        let truly_claimed_ids: HashSet<ObsId> = consumed_observation_ids
-            .difference(&consumed_then_pruned_ids)
-            .copied()
-            .collect();
-
-        // Separate, differently-binned index — built once inside
-        // `build_kf_bank_collection_from_observations` (see `discovery`
-        // module docs).
-        let new_lineages = seed_new_lineages_from_leftovers(
+        let next = session.close(
             night_obs,
-            &truly_claimed_ids,
             obs_dataset,
             kalman_context,
             engine_config,
             &spatial_binner,
-            &mut next_lineage_id,
-            &mut next_branch_id,
-            current_step,
         )?;
-        branches.extend(new_lineages);
 
         CollectionEvent::End {
-            n_branches: branches.len(),
+            n_branches: next.branches.len(),
         }
         .emit();
-
-        // Deliberately *not* accumulated with `self.archived`: unlike before,
-        // this field now carries only this night's fresh batch (see
-        // `BranchCollection::archived`'s doc) — the caller is expected to
-        // append `archived_tonight` to the on-disk log and drop it rather
-        // than fold it into the next call's `self`.
-        Ok(Self {
-            branches,
-            last_night_consumed_then_pruned_ids: consumed_then_pruned_ids,
-            last_night_gate_records: gate_records,
-            current_step: current_step + 1,
-            archived: archived_tonight,
-        })
+        Ok(next)
     }
 }

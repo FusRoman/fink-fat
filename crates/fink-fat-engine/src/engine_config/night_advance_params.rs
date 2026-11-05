@@ -1,9 +1,9 @@
 //! # Night-advance tuning configuration (`NightAdvanceParams`)
 //!
 //! This module defines [`NightAdvanceParams`], the tuning knobs consumed by
-//! [`crate::topocentric_kf::branching::orchestrate::advance_bank_collection_one_night`]
-//! every time a night's worth of new visits is folded into a collection of
-//! tracklet hypothesis banks.
+//! [`crate::topocentric_kf::branching::NightSession`] every time a visit is
+//! folded into a collection of tracklet hypothesis banks, and when the night
+//! is closed (pruning).
 //!
 //! The fields are grouped, and documented below, in the order the pipeline
 //! consumes them for a single night:
@@ -52,8 +52,8 @@ use crate::topocentric_kf::kalman_bank::ellipse_region_finder::{
 };
 
 /// Tuning parameters shared by every lineage advanced in one call to
-/// [`crate::topocentric_kf::branching::orchestrate::advance_bank_collection_one_night`] — everything except the branches
-/// being advanced and the current step index, which are the function's
+/// [`crate::topocentric_kf::branching::NightSession`] — everything except the branches
+/// being advanced and the current step index, which are the session's
 /// primary inputs rather than tuning knobs.
 ///
 /// Grouped in the order they're consumed by the pipeline: visit grouping →
@@ -363,7 +363,7 @@ pub struct NightAdvanceParams {
 
     /// N-scan pruning window, in **nights** (not visits — see
     /// [`crate::topocentric_kf::branching::pruning::apply_n_scan_pruning`]), applied exactly once per call to
-    /// [`crate::topocentric_kf::branching::orchestrate::advance_bank_collection_one_night`], after every visit that night
+    /// [`crate::topocentric_kf::branching::NightSession::close`], after every visit that night
     /// has been folded in. For every branch-tree node this many nights old,
     /// only the single best-scoring descendant survives; siblings are
     /// discarded.

@@ -58,6 +58,7 @@ pub mod detection_probability;
 pub mod discovery;
 pub mod llr_score;
 pub mod merge;
+pub mod night_session;
 pub mod orchestrate;
 pub mod pruning;
 pub mod visit;
@@ -68,3 +69,4 @@ pub use archive::{
 pub use branch::{Branch, BranchSnapshot};
 pub use branch_id::BranchId;
 pub use collection::{BranchCollection, BranchCollectionSnapshot, SNAPSHOT_FILENAME};
+pub use night_session::{IdCounters, NightSession, VisitOutcome};

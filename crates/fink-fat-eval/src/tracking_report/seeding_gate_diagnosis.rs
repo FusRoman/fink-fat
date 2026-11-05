@@ -16,7 +16,7 @@
 //! 2. **Claimed-then-pruned check** — was one of the object's own
 //!    observations consumed by an *existing* lineage's speculative
 //!    extension that was itself pruned before the end of that night (see
-//!    `fink_fat_engine::topocentric_kf::branching::orchestrate::NightAdvanceOutcome::consumed_then_pruned_ids`)?
+//!    `fink_fat_engine::topocentric_kf::branching::BranchCollection::last_night_consumed_then_pruned_ids`)?
 //!    If so, the observation was excluded from that night's seeding pool
 //!    without ever appearing in any surviving branch — never a `PairConfig`
 //!    issue at all.
