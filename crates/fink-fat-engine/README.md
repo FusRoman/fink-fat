@@ -71,7 +71,7 @@ links back to its table.
 > | $\Phi$ | state transition matrix (Kalman prediction) | H-G phase function $\Phi_{HG}$ |
 > | $r$ | heliocentric distance $\lvert\mathbf r\rvert$ | search radius (tracklet linker, search region) |
 > | $\lambda$ | covariance inflation factor | $\lambda_\mathrm{max}$: largest eigenvalue; $\lambda_\mathrm{clutter}$: alert density |
-> | $w$ | weight ($w_i$, $w_p$, $w(a)$) | width of the completeness curve (mag) |
+> | $w$ | a weight: $w_i$, $w_p$ or $w(a)$ | width of the completeness curve (mag) |
 > | $\Delta$ | topocentric distance (= $\rho$) | $\Delta t$, and the LLR increments $\Delta_\mathrm{obs}$, $\Delta_\mathrm{phot}$, $\Delta_\mathrm{null}$ |
 
 ### Notation: sky positions and tracklet linker
@@ -83,12 +83,13 @@ links back to its table.
 | $m_\mathrm{obs}$, $m_\mathrm{last}$ | apparent magnitude of the new observation / of the track's last detection | mag |
 | $\dot\theta_\mathrm{max}$ | maximum angular speed on the sky (`max_angular_speed`) | rad/day |
 | $\Delta t_\mathrm{max}$ | maximum time gap between two detections of a track (`max_dt`) | day |
-| $\texttt{sep\_cap}$ | largest angular distance an object can travel in $\Delta t_\mathrm{max}$ | rad |
+| $s_\mathrm{cap}$ | largest angular distance an object can travel in $\Delta t_\mathrm{max}$ (`PairConfig::sep_cap`) | rad |
 | $r_\mathrm{cell}$ | radius of one HEALPix cell of the spatial index | rad |
 | $r$ | search radius around an observation | rad |
 | $\alpha_0, \delta_0$ | position of the track's first observation (tangent-plane origin) | rad |
 | $\mathrm{wrap}(\cdot)$ | brings an angle back into $(-\pi, \pi]$ (handles the RA 0/2π jump) | — |
 | $x, y$ | flat tangent-plane coordinates relative to $(\alpha_0, \delta_0)$ | rad |
+| $N_\sigma$ | acceptance threshold on the normalised residual (`tracklet_residual_sigma`) | — |
 | $\hat p(t)$ | position predicted at time $t$ by the track's linear fit | — |
 | $p_\mathrm{obs}$ | position of the candidate observation | — |
 | $\mathrm{sep}(\cdot,\cdot)$ | angular separation between two sky positions | rad |
@@ -108,7 +109,7 @@ links back to its table.
 | $\mathbf r_\mathrm{obs}$, $\mathbf v_\mathrm{obs}$ | heliocentric position and velocity of the observer | au, au/day |
 | $\mathbf r$, $\mathbf v$ | heliocentric position and velocity of the object | au, au/day |
 | $r$ | heliocentric distance of the object, $\lvert\mathbf r\rvert$ | au |
-| $k$ | Gaussian gravitational constant ($k^2 = GM_\odot$) | au$^{3/2}$/day |
+| $k$ | Gaussian gravitational constant ($k^2 = GM_\odot$) | au^1.5/day |
 | $\varepsilon$ | specific orbital energy; the orbit is bound (elliptic) when $\varepsilon < 0$ | au²/day² |
 | $\mathbf v_T$ | part of $\mathbf v$ that does not depend on $\dot\rho$ | au/day |
 | $D$ | discriminant of the quadratic in $\dot\rho$; no bound orbit when $D \le 0$ | au²/day² |
@@ -128,6 +129,7 @@ links back to its table.
 | $J$ | 6×6 Jacobian of the attributable → Cartesian conversion; $J_\mathrm{old}$ at the start epoch, $J_\mathrm{new}$ at the target epoch | — |
 | $\Phi$ | state transition matrix (STM) of the two-body motion | — |
 | $f, g$, $\dot f, \dot g$ | Lagrange coefficients and their time derivatives | —, day, 1/day, — |
+| $\mathbf r_0, \mathbf v_0$ | Cartesian position and velocity at the start epoch | au, au/day |
 | $Q$ | process-noise covariance (models the unmodelled accelerations) | — |
 | $q_0$ | base process-noise intensity | au²/day³ |
 | $q_\mathrm{eff}$ | intensity actually used, grows with $\Delta t$ | au²/day³ |
@@ -146,6 +148,9 @@ links back to its table.
 | $w_i$ | weight of hypothesis $i$ in the bank (they sum to 1) | — |
 | $\bar\ell_h$ | mean of $\ell$ over the sliding window for hypothesis $h$ | — |
 | $n_\mathrm{steps}$ | number of observations the bank has absorbed | — |
+| $\mathrm{cap}(n)$ | maximum number of hypotheses after $n$ steps (`HypothesisCapSchedule`) | — |
+| $w_\mathrm{floor}$ | relative pruning threshold on the windowed likelihood (`weight_floor`) | — |
+| $N_\mathrm{min}$ | number of best hypotheses always kept (`min_hypotheses`) | — |
 
 ### Notation: photometry, search region and MHT scoring
 
@@ -252,8 +257,8 @@ enumerating all pairs (`O(n²)` on a night with many revisits):
 1. Sort the night's observations by `mjd_tt`. Index the active tracks by the
    HEALPix cell of their last detection.
 2. For each observation, look up the active tracks in the neighbouring cells
-   within $r = \texttt{sep\_cap} + r_\mathrm{cell}$, where
-   $\texttt{sep\_cap} = \dot\theta_\mathrm{max} \cdot \Delta t_\mathrm{max}$.
+   within $r = s_\mathrm{cap} + r_\mathrm{cell}$, where
+   $s_\mathrm{cap} = \dot\theta_\mathrm{max} \cdot \Delta t_\mathrm{max}$.
    A track is a candidate only if its last detection is less than `max_dt`
    old.
 3. Common gate: $\Delta t > 0$ and $|m_\mathrm{obs} - m_\mathrm{last}| \le$
@@ -263,9 +268,9 @@ enumerating all pairs (`O(n²)` on a night with many revisits):
      least-squares linear fit on the tangent plane, with
      $x = \mathrm{wrap}(\alpha - \alpha_0)\cos\delta_0$ and
      $y = \delta - \delta_0$. The candidate is accepted if
-     ```math
-     \frac{\mathrm{sep}\big(\hat p(t),\, p_\mathrm{obs}\big)}{\sqrt{\sigma^2_\mathrm{pred}(t) + \sigma^2_\mathrm{obs}}} \le \texttt{tracklet\_residual\_sigma}
-     ```
+
+     $$\frac{\mathrm{sep}\big(\hat p(t),\thinspace  p_\mathrm{obs}\big)}{\sqrt{\sigma^2_\mathrm{pred}(t) + \sigma^2_\mathrm{obs}}} \le N_\sigma$$
+
      The prediction variance follows the usual linear-regression form
      $\bar\sigma^2_\mathrm{obs}\left(\tfrac1n + \tfrac{(t-\bar t)^2}{S_{xx}}\right)$.
      The observation variance is $(\sigma_\alpha\cos\delta)^2 + \sigma_\delta^2$.
@@ -302,17 +307,17 @@ heliocentric orbit:
 - **ρ̇ interval**: for each ρ, the orbit is bound
   ($\varepsilon = \tfrac12|\mathbf v|^2 - k^2/r < 0$) only for $\dot\rho$
   between the two roots of a quadratic:
-  ```math
-  \dot\rho \in \Big[-\mathbf v_T\!\cdot\hat{\mathbf u} - \sqrt{D},\; -\mathbf v_T\!\cdot\hat{\mathbf u} + \sqrt{D}\Big],\qquad D = (\mathbf v_T\!\cdot\hat{\mathbf u})^2 - \Big(|\mathbf v_T|^2 - \frac{2k^2}{r}\Big)
-  ```
-  Here $\mathbf v_T = \mathbf v_\mathrm{obs} + \rho\,\dot{\hat{\mathbf u}}$.
+
+  $$\dot\rho \in \Big[-\mathbf v_T\negthinspace \cdot\hat{\mathbf u} - \sqrt{D},\thickspace  -\mathbf v_T\negthinspace \cdot\hat{\mathbf u} + \sqrt{D}\Big],\qquad D = (\mathbf v_T\negthinspace \cdot\hat{\mathbf u})^2 - \Big(|\mathbf v_T|^2 - \frac{2k^2}{r}\Big)$$
+
+  Here $\mathbf v_T = \mathbf v_\mathrm{obs} + \rho\thinspace \dot{\hat{\mathbf u}}$.
   A ρ with $D \le 0$ is skipped. `n_rho_dot` (default 11) nodes are placed at
   the centres of equal sub-intervals.
 - **Population prior**: every node with $\varepsilon < 0$ gets its semi-major
   axis $a = -k^2/(2\varepsilon)$ and a weight from a Gaussian mixture in $a$:
-  ```math
-  w(a) = \sum_p w_p \exp\!\Big[-\tfrac12\Big(\frac{a - a_p}{\sigma_p}\Big)^2\Big]
-  ```
+
+  $$w(a) = \sum_p w_p \exp\negthinspace \Big[-\tfrac12\Big(\frac{a - a_p}{\sigma_p}\Big)^2\Big]$$
+
   Nodes below `weight_floor` (1e-6) are dropped.
 - **Initial covariance**: diagonal in attributable space. The angular blocks
   come from the pair's astrometric errors. $\sigma_\rho$ is the half-width of
@@ -367,17 +372,20 @@ built through `outfit`'s observer cache (`observer_state.rs`).
   fixed-point iteration (at most 5 iterations, tolerance 1e-9 day).
   Annual aberration is not modelled.
 - The covariance is moved to Cartesian space through the Jacobian $J$,
-  propagated with the Lagrange-coefficient STM
-  $\Phi = \left(\begin{smallmatrix} f I & g I \\ \dot f I & \dot g I\end{smallmatrix}\right)$,
+  propagated with the Lagrange-coefficient STM $\Phi$, which maps
+  $(\mathbf r_0, \mathbf v_0)$ to $\mathbf r = f\mathbf r_0 + g\mathbf v_0$ and
+  $\mathbf v = \dot f\mathbf r_0 + \dot g\mathbf v_0$,
   then mapped back:
-  ```math
-  P^- = J_\mathrm{new}^{-1}\big(\lambda\,\Phi\,J_\mathrm{old}PJ_\mathrm{old}^\top\Phi^\top + Q\big)J_\mathrm{new}^{-\top}
-  ```
+
+  $$P^- = J_\mathrm{new}^{-1}\big(\lambda\thinspace \Phi\thinspace J_\mathrm{old}PJ_\mathrm{old}^\top\Phi^\top + Q\big)J_\mathrm{new}^{-\top}$$
+
 - **Process noise**: state noise compensation (SNC) with
-  $q_\mathrm{eff} = q_0\,(1 + (\Delta t/\Delta t_\mathrm{ref})^2)$ and
-  $Q = q_\mathrm{eff}\left(\begin{smallmatrix}\Delta t^3/3\,I & \Delta t^2/2\,I\\ \Delta t^2/2\,I & \Delta t\,I\end{smallmatrix}\right)$.
+  $q_\mathrm{eff} = q_0\thinspace (1 + (\Delta t/\Delta t_\mathrm{ref})^2)$ and
+  a 6×6 matrix $Q$ made of 3×3 blocks: $Q_{rr} = q_\mathrm{eff}\Delta t^3/3\thinspace I$
+  (position), $Q_{vv} = q_\mathrm{eff}\Delta t\thinspace I$ (velocity) and
+  $Q_{rv} = Q_{vr} = q_\mathrm{eff}\Delta t^2/2\thinspace I$ (cross terms).
   Defaults: $q_0 = 10^{-16}$ au²/day³, $\Delta t_\mathrm{ref} = 1$ day.
-- **Fading-memory inflation**: $\lambda = \mathrm{clamp}(\mathrm{NIS}_\mathrm{EMA}/5.991,\,1,\,5)$.
+- **Fading-memory inflation**: $\lambda = \mathrm{clamp}(\mathrm{NIS}_\mathrm{EMA}/5.991,\thinspace 1,\thinspace 5)$.
   The filter widens its covariance when its recent innovations are larger
   than expected.
 - If $\rho$ leaves $[10^{-4}, 10^{6}]$ au, the propagation is rejected as
@@ -422,12 +430,13 @@ hypotheses of one association history. At each step (`step`):
 4. **Kalman update** of every surviving hypothesis.
 5. **Cleanup**:
    - *Smoothed pruning*: a hypothesis is dropped when the mean log-likelihood
-     over its window falls below $\max_h \bar\ell_h + \ln(\texttt{weight\_floor})$.
+     over its window falls below $\max_h \bar\ell_h + \ln w_\mathrm{floor}$
+     ($w_\mathrm{floor}$ = `weight_floor`).
      Averaging over the window means one bad epoch does not kill an
      otherwise consistent hypothesis.
    - *Scheduled cap*: keep the top
-     $\max(\mathrm{cap}(n_\mathrm{steps}),\ \texttt{min\_hypotheses})$
-     hypotheses by weight. `HypothesisCapSchedule` is one of `Fixed` (default
+     $\max(\mathrm{cap}(n_\mathrm{steps}),\ N_\mathrm{min})$
+     hypotheses by weight ($N_\mathrm{min}$ = `min_hypotheses`). `HypothesisCapSchedule` is one of `Fixed` (default
      1000), `Linear`, `Logarithmic` or `Exponential` decay with the number of
      observations.
    - *Mode merging*: hypotheses whose Cartesian positions are closer than
@@ -453,7 +462,7 @@ $S_i = HP_iH^\top + R_\mathrm{search}$.
 - **Centre**: the sky position of the MAP hypothesis.
 - **Radius** (`RadiusStrategy`):
   - `MixtureCovariance`:
-    $r = \sqrt{\chi^2\,\lambda_\mathrm{max}(S_\mathrm{mix})}$ with
+    $r = \sqrt{\chi^2\thinspace \lambda_\mathrm{max}(S_\mathrm{mix})}$ with
     $S_\mathrm{mix} = \sum w_i(S_i + \delta_i\delta_i^\top)$.
   - `MaxEllipse`: the largest component ellipse plus its offset from the mean.
   - `Clamped`: either of the above, capped (default 30′).
@@ -501,11 +510,13 @@ lineage is processed in parallel:
    **null branch** (`Branch::from_null`) is also spawned for the hypothesis
    "the object was not detected in this visit".
 5. **Scoring**: the cumulative LLR is the sum of per-visit increments:
-   ```math
-   \Delta_\mathrm{obs} = \ln L(z) - \ln\lambda_\mathrm{clutter},\qquad
-   \Delta_\mathrm{phot} = -\tfrac12\Big(\frac{m_\mathrm{obs}-m_\mathrm{pred}}{\sigma_\mathrm{mag}}\Big)^2,\qquad
-   \Delta_\mathrm{null} = \ln(1 - P_D)
-   ```
+
+   $$\Delta_\mathrm{obs} = \ln L(z) - \ln\lambda_\mathrm{clutter}$$
+
+   $$\Delta_\mathrm{phot} = -\tfrac12\Big(\frac{m_\mathrm{obs}-m_\mathrm{pred}}{\sigma_\mathrm{mag}}\Big)^2$$
+
+   $$\Delta_\mathrm{null} = \ln(1 - P_D)$$
+
    - $L(z)$ is the predictive mixture likelihood at the candidate.
    - $\lambda_\mathrm{clutter}$ is the local alert density, in alerts per
      steradian: the number of alerts in the candidate's HEALPix cell of the

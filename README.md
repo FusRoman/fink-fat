@@ -6,8 +6,23 @@
 [![Release](https://img.shields.io/github/v/release/FusRoman/fink-fat?include_prereleases&sort=semver)](https://github.com/FusRoman/fink-fat/releases)
 [![License: CeCILL-C](https://img.shields.io/badge/license-CeCILL--C-blue)](LICENSE)
 [![Rust 2024](https://img.shields.io/badge/rust-2024%20edition-orange?logo=rust)](https://doc.rust-lang.org/edition-guide/rust-2024/)
-[![Fink](https://img.shields.io/badge/broker-Fink-7a5cff)](https://fink-broker.org)
+[![Fink][badge-fink]](https://fink-broker.org)
 [![arXiv](https://img.shields.io/badge/arXiv-2305.01123-b31b1b?logo=arxiv)](https://arxiv.org/abs/2305.01123)
+
+**Fink ecosystem:**
+[![fink-broker][badge-broker]](https://github.com/astrolabsoftware/fink-broker)
+[![fink-client][badge-client]](https://github.com/astrolabsoftware/fink-client)
+[![fink-science][badge-science]](https://github.com/astrolabsoftware/fink-science)
+[![fink-filters][badge-filters]](https://github.com/astrolabsoftware/fink-filters)
+[![fink-fat][badge-fat]](https://github.com/FusRoman/fink-fat)
+
+<!-- Fink badges use the official palette (fink-broker.org/visual-identity): navy #15284F, blue #3C8DFF, orange #F5622E, grey #D5D5D3. -->
+[badge-fink]: https://img.shields.io/badge/Fink-astronomy%20broker-F5622E?style=flat&labelColor=15284F&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPGVsbGlwc2UgY3g9IjEyIiBjeT0iMTIiIHJ4PSI0LjIiIHJ5PSIxMSIgdHJhbnNmb3JtPSJyb3RhdGUoMjIgMTIgMTIpIiBmaWxsPSJub25lIiBzdHJva2U9IiNGRkZGRkYiIHN0cm9rZS13aWR0aD0iMiIvPjxwYXRoIGQ9Ik0xMS4zIDkuNSBMOSAxOSIgc3Ryb2tlPSIjRjU2MjJFIiBzdHJva2Utd2lkdGg9IjIuNCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8%2BPGNpcmNsZSBjeD0iMTIuNiIgY3k9IjUuOCIgcj0iMi4zIiBmaWxsPSIjRjU2MjJFIi8%2BPC9zdmc%2B
+[badge-broker]: https://img.shields.io/badge/fink--broker-alert%20processing-15284F?style=flat&labelColor=F5622E&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPGNpcmNsZSBjeD0iNyIgY3k9IjEyIiByPSIzIiBmaWxsPSIjRkZGRkZGIi8%2BPHBhdGggZD0iTTEgMTJoM00xMCAxMmg0TTEwIDEwLjUgTDE0IDVoOE0xMCAxMy41IEwxNCAxOWg4TTE0IDEyaDgiIHN0cm9rZT0iI0ZGRkZGRiIgc3Ryb2tlLXdpZHRoPSIyIiBmaWxsPSJub25lIiBzdHJva2UtbGluZWNhcD0icm91bmQiLz48Y2lyY2xlIGN4PSIyMSIgY3k9IjUiIHI9IjEuOCIgZmlsbD0iIzE1Mjg0RiIvPjxjaXJjbGUgY3g9IjIxIiBjeT0iMTIiIHI9IjEuOCIgZmlsbD0iIzE1Mjg0RiIvPjxjaXJjbGUgY3g9IjIxIiBjeT0iMTkiIHI9IjEuOCIgZmlsbD0iIzE1Mjg0RiIvPjwvc3ZnPg%3D%3D
+[badge-client]: https://img.shields.io/badge/fink--client-alert%20client-3C8DFF?style=flat&labelColor=15284F&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZD0iTTQgNiBhMTAgMTAgMCAwIDAgMTQgMTQgeiIgZmlsbD0iI0ZGRkZGRiIvPjxwYXRoIGQ9Ik0xMSAxMyBMMTcgNyIgc3Ryb2tlPSIjRkZGRkZGIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjxjaXJjbGUgY3g9IjE4IiBjeT0iNiIgcj0iMiIgZmlsbD0iIzNDOERGRiIvPjxwYXRoIGQ9Ik04IDIwaDgiIHN0cm9rZT0iI0ZGRkZGRiIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiLz48L3N2Zz4%3D
+[badge-science]: https://img.shields.io/badge/fink--science-science%20modules-15284F?style=flat&labelColor=3C8DFF&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZD0iTTkgMmg2TTEwIDJ2N0w0IDIwYTEuNSAxLjUgMCAwIDAgMS4zIDJoMTMuNEExLjUgMS41IDAgMCAwIDIwIDIwTDE0IDlWMiIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjRkZGRkZGIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz48cGF0aCBkPSJNNyAxNWgxMGwyLjYgNUg0LjR6IiBmaWxsPSIjRkZGRkZGIi8%2BPGNpcmNsZSBjeD0iMTEiIGN5PSIxMS41IiByPSIxIiBmaWxsPSIjRkZGRkZGIi8%2BPC9zdmc%2B
+[badge-filters]: https://img.shields.io/badge/fink--filters-alert%20filters-15284F?style=flat&labelColor=D5D5D3&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZD0iTTIgM2gyMGwtOCA5djdsLTQgM3YtMTB6IiBmaWxsPSIjMTUyODRGIi8%2BPGNpcmNsZSBjeD0iMTIiIGN5PSI3IiByPSIyIiBmaWxsPSIjRjU2MjJFIi8%2BPC9zdmc%2B
+[badge-fat]: https://img.shields.io/badge/fink--fat-asteroid%20tracker-3C8DFF?style=flat&labelColor=F5622E&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPGVsbGlwc2UgY3g9IjEyIiBjeT0iMTIiIHJ4PSIxMSIgcnk9IjYiIHRyYW5zZm9ybT0icm90YXRlKC0yMCAxMiAxMikiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI0ZGRkZGRiIgc3Ryb2tlLXdpZHRoPSIxLjYiLz48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSIyLjYiIGZpbGw9IiNGRkZGRkYiLz48Y2lyY2xlIGN4PSIyMC4zIiBjeT0iNy42IiByPSIyLjQiIGZpbGw9IiNGNTYyMkUiIHN0cm9rZT0iI0ZGRkZGRiIgc3Ryb2tlLXdpZHRoPSIxIi8%2BPC9zdmc%2B
 
 Fink-FAT finds **new Solar System objects** in the photometric alert streams of
 large time-domain surveys (ZTF, Vera C. Rubin / LSST). It links
