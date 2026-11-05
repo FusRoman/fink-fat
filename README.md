@@ -243,3 +243,9 @@ Fink-FAT is distributed under the
 [CeCILL-C](https://cecill.info/licences/Licence_CeCILL-C_V1-en.html) free
 software license, a French LGPL-style license compatible with EU law. See
 [LICENSE](LICENSE).
+
+## AI Disclosure
+
+D3 — daliascale.org
+
+D3: Human and AI act as creative partners. AI shapes ideas or output in meaningful ways, but humans retain authorial control.
