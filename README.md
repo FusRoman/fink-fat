@@ -1,20 +1,21 @@
-# Fink-FAT — Fink Asteroid Tracker
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo/fink-fat-lockup-white.svg">
+    <img src="assets/logo/fink-fat-lockup.svg" alt="Fink-FAT — Fink Asteroid Tracker" width="460">
+  </picture>
+</h1>
 
-[![CI](https://github.com/FusRoman/fink-fat/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/FusRoman/fink-fat/actions/workflows/CI.yml)
-[![codecov](https://codecov.io/gh/FusRoman/fink-fat/branch/main/graph/badge.svg)](https://codecov.io/gh/FusRoman/fink-fat)
-[![Docs](https://img.shields.io/badge/docs-rustdoc%20%2B%20KaTeX-blue?logo=rust)](#documentation)
-[![Release](https://img.shields.io/github/v/release/FusRoman/fink-fat?include_prereleases&sort=semver)](https://github.com/FusRoman/fink-fat/releases)
-[![License: CeCILL-C](https://img.shields.io/badge/license-CeCILL--C-blue)](LICENSE)
-[![Rust 2024](https://img.shields.io/badge/rust-2024%20edition-orange?logo=rust)](https://doc.rust-lang.org/edition-guide/rust-2024/)
-[![Fink](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fastrolabsoftware%2Ffink-badges%2Fmain%2Fendpoints%2Ffink.json)](https://fink-broker.org)
-[![arXiv](https://img.shields.io/badge/arXiv-2305.01123-b31b1b?logo=arxiv)](https://arxiv.org/abs/2305.01123)
+<p align="center">
+  <b>Finding new Solar System objects in the alert streams of large sky surveys.</b>
+</p>
 
-**Fink ecosystem** ([reuse these badges](https://github.com/astrolabsoftware/fink-badges)):
-[![fink-broker](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fastrolabsoftware%2Ffink-badges%2Fmain%2Fendpoints%2Ffink-broker.json)](https://github.com/astrolabsoftware/fink-broker)
-[![fink-client](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fastrolabsoftware%2Ffink-badges%2Fmain%2Fendpoints%2Ffink-client.json)](https://github.com/astrolabsoftware/fink-client)
-[![fink-science](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fastrolabsoftware%2Ffink-badges%2Fmain%2Fendpoints%2Ffink-science.json)](https://github.com/astrolabsoftware/fink-science)
-[![fink-filters](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fastrolabsoftware%2Ffink-badges%2Fmain%2Fendpoints%2Ffink-filters.json)](https://github.com/astrolabsoftware/fink-filters)
-[![fink-fat](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fastrolabsoftware%2Ffink-badges%2Fmain%2Fendpoints%2Ffink-fat.json)](https://github.com/FusRoman/fink-fat)
+<div align="center">
+
+[![CI](https://github.com/FusRoman/fink-fat/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/FusRoman/fink-fat/actions/workflows/CI.yml) [![codecov](https://codecov.io/gh/FusRoman/fink-fat/branch/main/graph/badge.svg)](https://codecov.io/gh/FusRoman/fink-fat) [![Docs](https://img.shields.io/badge/docs-rustdoc%20%2B%20KaTeX-blue?logo=rust)](#documentation) [![Release](https://img.shields.io/github/v/release/FusRoman/fink-fat?include_prereleases&sort=semver)](https://github.com/FusRoman/fink-fat/releases) [![License: CeCILL-C](https://img.shields.io/badge/license-CeCILL--C-blue)](LICENSE) [![Rust 2024](https://img.shields.io/badge/rust-2024%20edition-orange?logo=rust)](https://doc.rust-lang.org/edition-guide/rust-2024/)<br>[![Fink](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fastrolabsoftware%2Ffink-badges%2Fmain%2Fendpoints%2Ffink.json)](https://fink-broker.org) [![fink-fat](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fastrolabsoftware%2Ffink-badges%2Fmain%2Fendpoints%2Ffink-fat.json)](https://github.com/FusRoman/fink-fat)
+
+<a href="#quick-start">Quick start</a> · <a href="#how-it-works">How it works</a> · <a href="#documentation">Documentation</a> · <a href="#evaluation">Evaluation</a>
+
+</div>
 
 Fink-FAT finds **new Solar System objects** in the photometric alert streams of
 large time-domain surveys (ZTF, Vera C. Rubin / LSST). It links
@@ -23,9 +24,8 @@ association hypotheses alive while the data is ambiguous, and turns the
 surviving candidates into orbits and MPC-ready ADES submissions.
 
 The project started as a Python package used inside the
-[Fink broker](https://fink-broker.org) (see the
-[paper](https://arxiv.org/abs/2305.01123)). Version 1.0 is a full rewrite in
-Rust.
+[Fink broker](https://fink-broker.org). Version 1.0 is a full rewrite in
+Rust (see [History](#history)).
 
 ## How it works
 
@@ -243,6 +243,37 @@ Good entry points are `fink_fat_engine::topocentric_kf::kalman_bank` (the
 filter bank), `fink_fat_engine::topocentric_kf::branching` (multi-hypothesis
 tracking) and `fink_fat_engine::engine_config` (every configuration key and its
 units).
+
+## History
+
+[![arXiv: Python version (v0.x)](https://img.shields.io/badge/arXiv-2305.01123%20%C2%B7%20Python%20v0.x-b31b1b?logo=arxiv)](https://arxiv.org/abs/2305.01123)
+
+The first Fink-FAT was a Python package that ran inside the
+[Fink broker](https://fink-broker.org). It is described in
+[arXiv:2305.01123](https://arxiv.org/abs/2305.01123); its last release is
+[v0.17.0](https://github.com/FusRoman/fink-fat/releases).
+
+> [!NOTE]
+> The paper describes that Python version, not this one. Version 1.0 is a
+> complete rewrite in Rust, with a different architecture and association
+> method (multi-hypothesis tracking over banks of topocentric Kalman filters,
+> see [How it works](#how-it-works)). Use the paper for the history of the
+> project, not as a description of the current code.
+
+## Logo
+
+The logo echoes the [Fink](https://fink-broker.org) logo: its brackets and
+tilted ring, with the detections of an object linked night after night into a
+trajectory that ends on an orange asteroid. It uses the
+[official Fink colors](https://fink-broker.org/visual-identity/branding/).
+The SVG files are in [`assets/logo/`](assets/logo/). A white version on a
+transparent background, `fink-fat-lockup-white.svg`, is also available for dark
+backgrounds (it is not shown here, as it would be invisible on a light page).
+
+| Icon | Icon (dark) | Horizontal | Horizontal (dark) |
+| :---: | :---: | :---: | :---: |
+| <img src="assets/logo/fink-fat-logo.svg" alt="Fink-FAT icon" width="96"> | <img src="assets/logo/fink-fat-logo-dark.svg" alt="Fink-FAT icon, dark" width="96"> | <img src="assets/logo/fink-fat-lockup.svg" alt="Fink-FAT horizontal logo" width="240"> | <img src="assets/logo/fink-fat-lockup-dark.svg" alt="Fink-FAT horizontal logo, dark" width="240"> |
+| `fink-fat-logo.svg` | `fink-fat-logo-dark.svg` | `fink-fat-lockup.svg` | `fink-fat-lockup-dark.svg` |
 
 ## License
 
