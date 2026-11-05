@@ -20,6 +20,7 @@ use super::x_axis::{x_values_for_steps, XAxisValues};
 /// default 23.0) — see [`super::metrics_plot_glossary`] for that distinction.
 /// `pub(super)` so the glossary's tests can assert its displayed text
 /// matches this value exactly rather than a copy that could drift.
+#[cfg(any(target_arch = "wasm32", test))]
 pub(super) const CHI2_GATE_95: f64 = 5.991;
 
 /// Evolution of the per-point filter-consistency metrics as real
@@ -50,6 +51,10 @@ fn Chi2Plot(replay: Vec<KfStep>, x_axis_unit: XAxisUnit) -> Element {
     let mut drawn = use_signal(|| false);
 
     use_effect(use_reactive!(|(replay, x_axis_unit)| {
+        // Drawn client-side only: the server build merely subscribes to the
+        // same reactive inputs.
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = (replay, x_axis_unit);
         #[cfg(target_arch = "wasm32")]
         {
             if !is_mounted() {
@@ -135,6 +140,10 @@ fn SeparationPlot(replay: Vec<KfStep>, x_axis_unit: XAxisUnit) -> Element {
     let mut drawn = use_signal(|| false);
 
     use_effect(use_reactive!(|(replay, x_axis_unit)| {
+        // Drawn client-side only: the server build merely subscribes to the
+        // same reactive inputs.
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = (replay, x_axis_unit);
         #[cfg(target_arch = "wasm32")]
         {
             if !is_mounted() {
@@ -199,6 +208,10 @@ fn LogLikelihoodPlot(replay: Vec<KfStep>, x_axis_unit: XAxisUnit) -> Element {
     let mut drawn = use_signal(|| false);
 
     use_effect(use_reactive!(|(replay, x_axis_unit)| {
+        // Drawn client-side only: the server build merely subscribes to the
+        // same reactive inputs.
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = (replay, x_axis_unit);
         #[cfg(target_arch = "wasm32")]
         {
             if !is_mounted() {

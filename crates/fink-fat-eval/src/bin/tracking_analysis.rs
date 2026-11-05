@@ -160,7 +160,7 @@ fn main() -> Result<()> {
         for night_id in &night_ids {
             println!(
                 "{night_id}\t{}",
-                obs_dataset.len_night(&night_id).unwrap_or(0)
+                obs_dataset.len_night(night_id).unwrap_or(0)
             );
         }
         println!("Number of nights : {}", night_ids.len());

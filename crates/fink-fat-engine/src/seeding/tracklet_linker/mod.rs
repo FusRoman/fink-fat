@@ -289,7 +289,7 @@ mod tests {
         let input = ObservationInput::new(id, equ, phot, mjd_tt, None);
         let (obs_dataset, obs_id) = obs_dataset.push_observation(vec![input]).unwrap();
         obs_dataset
-            .get_obs_by_index(*obs_id.get(0).unwrap())
+            .get_obs_by_index(*obs_id.first().unwrap())
             .unwrap()
             .clone()
     }
@@ -314,7 +314,7 @@ mod tests {
 
         let a = mk_obs(0, 1.0, 0.2, 60000.0, 20.0);
         let b = mk_obs(1, 1.0 + 1e-5, 0.2 + 1e-5, 60000.0 + 5.0 / 1440.0, 20.05);
-        let alerts = vec![a, b];
+        let alerts = [a, b];
         let refs: Vec<&Observation> = alerts.iter().collect();
 
         let pairs = link_tracklets(&refs, &sb, &config);
@@ -377,7 +377,7 @@ mod tests {
         let a = mk_obs(0, 1.0, 0.2, 60000.0, 20.0);
         // Implied speed far above max_angular_speed over a short dt.
         let b = mk_obs(1, 1.5, 0.2, 60000.0 + 1.0 / 1440.0, 20.0);
-        let alerts = vec![a, b];
+        let alerts = [a, b];
         let refs: Vec<&Observation> = alerts.iter().collect();
 
         let pairs = link_tracklets(&refs, &sb, &config);

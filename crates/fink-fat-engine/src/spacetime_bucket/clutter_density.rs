@@ -103,7 +103,7 @@ mod clutter_density_tests {
         let input = ObservationInput::new(id, equ, photometry, mjd_tt, None);
         let (obs_dataset, obs_id) = obs_dataset.push_observation(vec![input]).unwrap();
         obs_dataset
-            .get_obs_by_index(*obs_id.get(0).unwrap())
+            .get_obs_by_index(*obs_id.first().unwrap())
             .unwrap()
             .clone()
     }

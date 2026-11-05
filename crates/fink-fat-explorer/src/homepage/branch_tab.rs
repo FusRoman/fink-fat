@@ -455,7 +455,7 @@ pub fn BranchTab(
         }
     });
 
-    let mut toggle_sort = move |col: SortColumn| {
+    let toggle_sort = move |col: SortColumn| {
         if sort_column() == Some(col) {
             sort_direction.set(sort_direction().toggled());
         } else {
@@ -494,7 +494,7 @@ pub fn BranchTab(
                             TabHeader {
                                 sort_column: sort_column(),
                                 sort_direction: sort_direction(),
-                                on_sort: move |col| toggle_sort(col),
+                                on_sort: toggle_sort,
                             }
 
                             if groups.is_empty() {

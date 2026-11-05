@@ -13,18 +13,13 @@ use serde::{Deserialize, Serialize};
 /// `photom::observer::error_model::ObsErrorModel`, kept as our own type here
 /// so this module (and the wasm build of the form) doesn't need the
 /// server-only `photom`/`outfit` dependencies just to describe the choice.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ObsErrorModelChoice {
+    #[default]
     Fcct14,
     Cbm10,
     Vfcc17,
     Lsst,
-}
-
-impl Default for ObsErrorModelChoice {
-    fn default() -> Self {
-        Self::Fcct14
-    }
 }
 
 impl ObsErrorModelChoice {
@@ -42,16 +37,11 @@ impl ObsErrorModelChoice {
 /// point of this feature (a real perturbed dynamical model, rather than the
 /// two-body approximation the Kalman filter uses) so it's the default here,
 /// even though the `outfit` crate itself defaults to two-body.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum PropagatorChoice {
     TwoBody,
+    #[default]
     NBody,
-}
-
-impl Default for PropagatorChoice {
-    fn default() -> Self {
-        Self::NBody
-    }
 }
 
 /// Planets that can be added as N-body perturbers. The Sun is always
@@ -175,21 +165,16 @@ impl AsteroidPerturberChoice {
 /// started from a fresh Gauss IOD solution. This option lets the
 /// single-lineage page reproduce the bulk fit's strategy to tell the two
 /// apart, or to unblock a fit that only diverges from the Kalman seed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum SeedStrategy {
     /// Seed from the lineage's current Kalman-derived orbit (default,
     /// historical behaviour).
+    #[default]
     KalmanOrbit,
     /// Seed from a fresh Gauss IOD solution computed from the selected
     /// observations, ignoring the Kalman orbit entirely — same strategy the
     /// bulk fit uses.
     SeedlessGaussIod,
-}
-
-impl Default for SeedStrategy {
-    fn default() -> Self {
-        Self::KalmanOrbit
-    }
 }
 
 impl SeedStrategy {

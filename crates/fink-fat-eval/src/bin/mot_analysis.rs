@@ -172,11 +172,7 @@ impl fmt::Display for Histogram {
         for (i, &count) in self.counts.iter().enumerate() {
             let lo = self.edges[i];
             let hi = self.edges[i + 1];
-            let bar_len = if max_count == 0 {
-                0
-            } else {
-                count * BAR_WIDTH / max_count
-            };
+            let bar_len = (count * BAR_WIDTH).checked_div(max_count).unwrap_or(0);
             let bar = "█".repeat(bar_len);
             writeln!(
                 f,
@@ -1897,7 +1893,8 @@ struct GeometryDiagnostic {
 /// into a tangent-plane direction.
 fn weighted_mean_motion(mixture: &[(f64, KFState<'_>)]) -> Option<(f64, f64, f64)> {
     let total_weight: f64 = mixture.iter().map(|(w, _)| w).sum();
-    if !(total_weight > 0.0) {
+    // Also rejects a NaN total (NaN is unordered, hence not `Greater`).
+    if total_weight.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
         return None;
     }
     let (ra_dot, dec_dot, dec) = mixture
@@ -1932,7 +1929,8 @@ fn along_cross_track_arcsec(
     let vx = ra_dot * mean_dec.cos();
     let vy = dec_dot;
     let v_norm = (vx * vx + vy * vy).sqrt();
-    if !(v_norm > 0.0) {
+    // Also rejects a NaN norm (NaN is unordered, hence not `Greater`).
+    if v_norm.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
         return None;
     }
     let (ux, uy) = (vx / v_norm, vy / v_norm);

@@ -83,6 +83,13 @@ pub struct OrbitFitJob {
 }
 
 #[cfg(feature = "server")]
+impl Default for OrbitFitJob {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "server")]
 impl OrbitFitJob {
     pub fn new() -> Self {
         Self {

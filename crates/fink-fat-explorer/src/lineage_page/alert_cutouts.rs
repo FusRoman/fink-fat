@@ -4,6 +4,7 @@ use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::format_epoch::iso_utc;
+#[cfg(feature = "server")]
 use crate::survey::Survey;
 
 use super::alert_cutouts_glossary::AlertCutoutsGlossary;

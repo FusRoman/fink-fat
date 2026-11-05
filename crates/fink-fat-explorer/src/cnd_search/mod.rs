@@ -200,7 +200,7 @@ mod tests {
         // The API itself accepts 0 (a zero-width match window), but we
         // deliberately don't offer it — see MIN_TIME_SEPARATION_S's doc.
         assert_eq!(clamp_time_separation_s(0.0), MIN_TIME_SEPARATION_S);
-        assert!(MIN_TIME_SEPARATION_S > 0.0);
+        const { assert!(MIN_TIME_SEPARATION_S > 0.0) };
     }
 
     #[test]
@@ -225,6 +225,6 @@ mod tests {
             clamp_angle_separation_arcsec(0.0),
             MIN_ANGLE_SEPARATION_ARCSEC
         );
-        assert!(MIN_ANGLE_SEPARATION_ARCSEC > 0.0);
+        const { assert!(MIN_ANGLE_SEPARATION_ARCSEC > 0.0) };
     }
 }

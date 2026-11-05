@@ -209,7 +209,7 @@ fn main() -> Result<()> {
 
                 println!("\n\n");
 
-                kf = propagated_kf.update(&obs).unwrap();
+                kf = propagated_kf.update(obs).unwrap();
 
                 println!("\n\n");
 
