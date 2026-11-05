@@ -1,11 +1,11 @@
 use std::io::{BufWriter, Write};
 
-use camino::Utf8Path;
 use fink_fat_engine::{
     engine_config::EngineConfig,
     topocentric_kf::branching::{BranchCollection, write_archived_batch},
 };
 use photom::{
+    NightId,
     io::polars::{ContiguousChoice, FromPolarsArgs},
     observation_dataset::{ObsDataset, observation::Observation},
     observer::error_model::ObsErrorModel,
@@ -81,7 +81,9 @@ pub fn tracking(cli_args: FinkFatCliArgs) -> Result<(), Box<dyn std::error::Erro
     // A dataset tagged with more than one `night_id` is processed one night
     // at a time, in chronological order; anything else (no night index, or
     // a single night) is treated as one logical night, exactly as before.
-    let night_batches: Vec<Vec<&Observation>> = match obs_dataset.nb_night() {
+    // Each batch carries its night id when the dataset has one, so a run
+    // resumed from a snapshot skips the nights it already advanced.
+    let night_batches: Vec<(Option<NightId>, Vec<&Observation>)> = match obs_dataset.nb_night() {
         Some(n) if n > 1 => {
             let mut night_ids: Vec<_> = obs_dataset
                 .iter_night_id()
@@ -90,20 +92,37 @@ pub fn tracking(cli_args: FinkFatCliArgs) -> Result<(), Box<dyn std::error::Erro
                 .collect();
             night_ids.sort_unstable();
             night_ids
-                .iter()
+                .into_iter()
                 .map(|night_id| {
-                    obs_dataset
-                        .iter_night_observations(night_id)
+                    let night_obs = obs_dataset
+                        .iter_night_observations(&night_id)
                         .expect("night_id came from iter_night_id()")
-                        .collect()
+                        .collect();
+                    (Some(night_id), night_obs)
                 })
                 .collect()
         }
-        _ => vec![obs_dataset.iter_observations().collect()],
+        _ => {
+            let single_night = obs_dataset
+                .iter_night_id()
+                .and_then(|mut ids| ids.next().copied());
+            vec![(single_night, obs_dataset.iter_observations().collect())]
+        }
     };
 
     let n_batches = night_batches.len();
-    for (i, night_obs) in night_batches.iter().enumerate() {
+    for (i, (night_id, night_obs)) in night_batches.iter().enumerate() {
+        if let Some(night_id) = *night_id
+            && collection.is_night_closed(night_id)
+        {
+            tracing::info!(
+                %night_id,
+                last_closed = ?collection.last_closed_night_id,
+                "night already advanced by a previous run, skipped"
+            );
+            continue;
+        }
+
         let current_step = collection.current_step;
         collection = collection.advance_one_night(
             night_obs,
@@ -111,6 +130,7 @@ pub fn tracking(cli_args: FinkFatCliArgs) -> Result<(), Box<dyn std::error::Erro
             &engine_config,
             &kalman_context,
             current_step,
+            *night_id,
         )?;
 
         // `collection.archived` is only this night's fresh batch (see
@@ -121,7 +141,7 @@ pub fn tracking(cli_args: FinkFatCliArgs) -> Result<(), Box<dyn std::error::Erro
         collection.archived.clear();
 
         if should_write_snapshot(i + 1, n_batches, cli_args.snapshot_every) {
-            write_snapshot(&collection, &snapshot_path)?;
+            collection.save_snapshot_to_disk(&snapshot_path)?;
         }
     }
 
@@ -136,30 +156,6 @@ pub fn tracking(cli_args: FinkFatCliArgs) -> Result<(), Box<dyn std::error::Erro
 /// every `snapshot_every` nights, if set.
 fn should_write_snapshot(nights_done: usize, total: usize, snapshot_every: Option<usize>) -> bool {
     nights_done == total || snapshot_every.is_some_and(|n| n > 0 && nights_done.is_multiple_of(n))
-}
-
-/// Serialize `collection`'s snapshot straight to `snapshot_path`, streaming
-/// into the file instead of first materializing the whole serialized byte
-/// buffer on the heap: at the scale this snapshot can reach (many thousands
-/// of branches), that intermediate buffer was itself a multi-GB allocation,
-/// on top of the collection and its borrow-free snapshot copy already held
-/// live in memory.
-///
-/// Written to a `.tmp` sibling and renamed into place, so a run that dies
-/// mid-write (including an OOM kill) never leaves a truncated snapshot in
-/// place of the last good one.
-fn write_snapshot(
-    collection: &BranchCollection,
-    snapshot_path: &Utf8Path,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let tmp_path = format!("{snapshot_path}.tmp");
-    let file = std::fs::File::create(&tmp_path)?;
-    let writer = rkyv::ser::writer::IoWriter::new(std::io::BufWriter::new(file));
-    let writer =
-        rkyv::api::high::to_bytes_in::<_, rkyv::rancor::Error>(&collection.to_snapshot(), writer)?;
-    writer.into_inner().flush()?;
-    std::fs::rename(&tmp_path, snapshot_path)?;
-    Ok(())
 }
 
 #[cfg(test)]

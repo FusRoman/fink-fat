@@ -233,6 +233,7 @@ fn main() -> Result<()> {
             &engine_config,
             &kalman_ctx,
             step,
+            Some(night_id),
         )?;
         let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;
 

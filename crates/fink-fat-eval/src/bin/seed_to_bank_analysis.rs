@@ -81,6 +81,7 @@ fn main() -> Result<()> {
             &engine_config,
             &kalman_ctx,
             0,
+            Some(night_id),
         )?;
 
         let stats = compute_night_stats(

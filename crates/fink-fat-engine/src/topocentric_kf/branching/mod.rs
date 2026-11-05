@@ -68,5 +68,9 @@ pub use archive::{
 };
 pub use branch::{Branch, BranchSnapshot};
 pub use branch_id::BranchId;
-pub use collection::{BranchCollection, BranchCollectionSnapshot, SNAPSHOT_FILENAME};
+pub use collection::{
+    BranchCollection, BranchCollectionSnapshot, SNAPSHOT_FILENAME, SNAPSHOT_HEADER_LEN,
+    SNAPSHOT_MAGIC, SNAPSHOT_VERSION, SnapshotFormat, decode_snapshot, parse_snapshot_header,
+    read_snapshot_file, snapshot_header, write_snapshot_file,
+};
 pub use night_session::{IdCounters, NightSession, VisitOutcome};

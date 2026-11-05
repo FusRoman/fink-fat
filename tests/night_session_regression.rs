@@ -25,16 +25,31 @@
 //! the test writes the current fingerprint and passes. Bless it on a commit
 //! whose behaviour is the reference, run the test a second time to confirm
 //! the pipeline is deterministic, then commit the file.
+//!
+//! # Resume
+//!
+//! [`resume_from_snapshot_matches_golden_fingerprint`] runs the same nights
+//! with a save/reload of the snapshot in the middle and checks it lands on
+//! the same golden, that already-closed nights are refused, and that no
+//! branch or lineage id is ever handed out twice.
 
+use std::collections::HashSet;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
+use camino::Utf8PathBuf;
 use fink_fat_engine::{
     engine_config::EngineConfig,
-    topocentric_kf::branching::{ArchivedTrajectory, BranchCollection, BranchSnapshot},
+    error::EngineError,
+    topocentric_kf::branching::{
+        ArchivedTrajectory, BranchCollection, BranchSnapshot, IdCounters, SNAPSHOT_FILENAME,
+    },
 };
 use fink_fat_eval::cli::load_data;
-use photom::{NightId, observation_dataset::observation::Observation};
+use photom::{
+    NightId,
+    observation_dataset::{ObsDataset, observation::Observation},
+};
 use polars::prelude::*;
 use tempfile::TempDir;
 
@@ -49,6 +64,8 @@ const BLESS_ENV: &str = "FINK_FAT_BLESS_GOLDEN";
 /// Nights to run — enough for lineages to be seeded, extended, coasted,
 /// N-scan pruned and archived, without paying for the whole fixture.
 const N_NIGHTS: usize = 20;
+/// Nights advanced before the resume test persists and reloads the snapshot.
+const RESUME_AFTER: usize = N_NIGHTS / 2;
 
 /// Night fixture files of `tests/data`, sorted by night id.
 fn sorted_night_paths() -> Vec<PathBuf> {
@@ -156,8 +173,10 @@ fn night_fingerprint(night_id: NightId, collection: &BranchCollection) -> String
     )
 }
 
-#[test]
-fn night_pipeline_matches_golden_fingerprint() {
+/// The fixture's first [`N_NIGHTS`] nights as one dataset, with their ids in
+/// chronological order. The [`TempDir`] holds the combined parquet and must
+/// outlive the dataset.
+fn load_fixture() -> (TempDir, ObsDataset, Vec<NightId>) {
     let paths: Vec<PathBuf> = sorted_night_paths().into_iter().take(N_NIGHTS).collect();
     assert!(!paths.is_empty(), "tests/data must contain night fixtures");
 
@@ -172,25 +191,38 @@ fn night_pipeline_matches_golden_fingerprint() {
         .copied()
         .collect();
     night_ids.sort_unstable();
+    (tmp, obs_dataset, night_ids)
+}
 
-    let config =
-        EngineConfig::load_engine_config_validated(CONFIG_PATH).expect("load engine config");
-    let ctx = config.build_context();
+/// Observations of `night_id`, in the dataset's night order.
+fn night_observations(obs_dataset: &ObsDataset, night_id: NightId) -> Vec<&Observation> {
+    obs_dataset
+        .iter_night_observations(&night_id)
+        .into_iter()
+        .flatten()
+        .collect()
+}
 
-    let mut lines = Vec::with_capacity(night_ids.len());
-    let mut collection = BranchCollection::empty();
-    for night_id in &night_ids {
-        let night_obs: Vec<&Observation> = obs_dataset
-            .iter_night_observations(night_id)
-            .into_iter()
-            .flatten()
-            .collect();
-        let step = collection.current_step;
-        collection = collection
-            .advance_one_night(&night_obs, &obs_dataset, &config, &ctx, step)
-            .expect("advance_one_night should not fail on the fixture");
-        lines.push(night_fingerprint(*night_id, &collection));
-    }
+/// Advance `collection` through `night_id`, as `fink-fat track` does.
+fn advance<'a>(
+    collection: &BranchCollection<'a, 'a>,
+    obs_dataset: &ObsDataset,
+    night_id: NightId,
+    config: &'a EngineConfig,
+    ctx: &'a fink_fat_engine::engine_config::kalman_context::KalmanContext,
+) -> Result<BranchCollection<'a, 'a>, EngineError> {
+    collection.advance_one_night(
+        &night_observations(obs_dataset, night_id),
+        obs_dataset,
+        config,
+        ctx,
+        collection.current_step,
+        Some(night_id),
+    )
+}
+
+/// Compare fingerprint lines to the golden; (re)write it when blessing.
+fn check_against_golden(lines: &[String]) {
     let actual = lines.join("\n") + "\n";
 
     let golden = Path::new(GOLDEN_PATH);
@@ -216,4 +248,112 @@ fn night_pipeline_matches_golden_fingerprint() {
         actual.lines().count(),
         "fingerprint night count differs from the golden"
     );
+}
+
+/// Every id of `next` that `prev` did not carry must have been drawn after
+/// `prev`'s counters — i.e. no id is ever handed out twice — and the counters
+/// themselves must never go back.
+fn assert_fresh_ids_only(prev: &BranchCollection, next: &BranchCollection, night_id: NightId) {
+    let old_branches: HashSet<u64> = prev.branches.iter().map(|b| b.branch_id).collect();
+    let old_lineages: HashSet<u64> = prev.branches.iter().map(|b| b.lineage_id).collect();
+    for branch in &next.branches {
+        if !old_branches.contains(&branch.branch_id) {
+            assert!(
+                (prev.ids.next_branch_id..next.ids.next_branch_id).contains(&branch.branch_id),
+                "night {night_id}: branch_id {} outside the ids drawn tonight {:?}..{:?}",
+                branch.branch_id,
+                prev.ids,
+                next.ids,
+            );
+        }
+        if !old_lineages.contains(&branch.lineage_id) {
+            assert!(
+                (prev.ids.next_lineage_id..next.ids.next_lineage_id).contains(&branch.lineage_id),
+                "night {night_id}: lineage_id {} reused (counters {:?}..{:?})",
+                branch.lineage_id,
+                prev.ids,
+                next.ids,
+            );
+        }
+    }
+    assert!(next.ids.next_branch_id >= prev.ids.next_branch_id);
+    assert!(next.ids.next_lineage_id >= prev.ids.next_lineage_id);
+}
+
+#[test]
+fn night_pipeline_matches_golden_fingerprint() {
+    let (_tmp, obs_dataset, night_ids) = load_fixture();
+    let config =
+        EngineConfig::load_engine_config_validated(CONFIG_PATH).expect("load engine config");
+    let ctx = config.build_context();
+
+    let mut lines = Vec::with_capacity(night_ids.len());
+    let mut collection = BranchCollection::empty();
+    for &night_id in &night_ids {
+        collection = advance(&collection, &obs_dataset, night_id, &config, &ctx)
+            .expect("advance_one_night should not fail on the fixture");
+        lines.push(night_fingerprint(night_id, &collection));
+    }
+    check_against_golden(&lines);
+}
+
+#[test]
+fn resume_from_snapshot_matches_golden_fingerprint() {
+    let (tmp, obs_dataset, night_ids) = load_fixture();
+    let config =
+        EngineConfig::load_engine_config_validated(CONFIG_PATH).expect("load engine config");
+    let ctx = config.build_context();
+    let snapshot_path =
+        Utf8PathBuf::from_path_buf(tmp.path().join(SNAPSHOT_FILENAME)).expect("utf8 tempdir");
+    let (first, rest) = night_ids.split_at(RESUME_AFTER.min(night_ids.len()));
+
+    let mut lines = Vec::with_capacity(night_ids.len());
+    let mut collection = BranchCollection::empty();
+    for &night_id in first {
+        let next = advance(&collection, &obs_dataset, night_id, &config, &ctx)
+            .expect("advance_one_night should not fail on the fixture");
+        assert_fresh_ids_only(&collection, &next, night_id);
+        assert_eq!(next.last_closed_night_id, Some(night_id));
+        lines.push(night_fingerprint(night_id, &next));
+        collection = next;
+    }
+
+    // Persist, then resume from disk exactly as a restarted process would.
+    collection
+        .save_snapshot_to_disk(&snapshot_path)
+        .expect("save snapshot");
+    let saved_ids: IdCounters = collection.ids;
+    let saved_last_closed = collection.last_closed_night_id;
+    let saved_step = collection.current_step;
+    let saved_branches = collection.branches.len();
+    drop(collection);
+    let mut collection = BranchCollection::load_snapshot_from_disk(&snapshot_path, &ctx, &config)
+        .expect("load snapshot");
+    assert_eq!(collection.ids, saved_ids);
+    assert_eq!(collection.last_closed_night_id, saved_last_closed);
+    assert_eq!(collection.current_step, saved_step);
+    assert_eq!(collection.branches.len(), saved_branches);
+
+    // Every night already folded in is refused, so a resumed run cannot
+    // double-count one.
+    for &night_id in first {
+        assert!(collection.is_night_closed(night_id));
+        assert!(matches!(
+            advance(&collection, &obs_dataset, night_id, &config, &ctx),
+            Err(EngineError::NightAlreadyClosed { .. })
+        ));
+    }
+
+    for &night_id in rest {
+        assert!(!collection.is_night_closed(night_id));
+        let next = advance(&collection, &obs_dataset, night_id, &config, &ctx)
+            .expect("advance_one_night should not fail on the fixture");
+        assert_fresh_ids_only(&collection, &next, night_id);
+        lines.push(night_fingerprint(night_id, &next));
+        collection = next;
+    }
+
+    if Path::new(GOLDEN_PATH).exists() && std::env::var_os(BLESS_ENV).is_none() {
+        check_against_golden(&lines);
+    }
 }

@@ -28,7 +28,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::AtomicU64;
 
-use photom::observation_dataset::{ObsDataset, ObsId, observation::Observation};
+use photom::{
+    NightId,
+    observation_dataset::{ObsDataset, ObsId, observation::Observation},
+};
 use rayon::prelude::*;
 
 use crate::{
@@ -58,7 +61,14 @@ use crate::{
 /// Two separate counters on purpose: `branch_id`s grow at every branching
 /// event, `lineage_id`s only when discovery seeds a new lineage (see
 /// [`seed_new_lineages_from_leftovers`]).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+///
+/// Persisted with the collection (see
+/// [`BranchCollection::ids`]), so both counters are monotone across nights
+/// and process restarts: an id is never handed out twice, even once its last
+/// holder has been pruned or archived.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 pub struct IdCounters {
     /// Next `branch_id` to hand out.
     pub next_branch_id: u64,
@@ -67,17 +77,32 @@ pub struct IdCounters {
 }
 
 impl IdCounters {
-    /// Counters strictly above every id carried by `branches` (`0` when
-    /// empty).
+    /// Counters strictly above every `(branch_id, lineage_id)` pair of `ids`
+    /// (`0` when empty).
     ///
-    /// Only safe as a starting point when `branches` holds every id ever
-    /// handed out: an id whose last holder was pruned or archived can be
-    /// re-issued.
+    /// Only a lower bound on the true counters: an id whose last holder was
+    /// pruned or archived is not in `ids` and could be re-issued. Used to
+    /// rebuild counters that were never persisted (legacy snapshots) and to
+    /// guard against hand-assembled collections.
+    pub fn above(ids: impl IntoIterator<Item = (u64, u64)>) -> Self {
+        ids.into_iter()
+            .fold(Self::default(), |acc, (branch_id, lineage_id)| Self {
+                next_branch_id: acc.next_branch_id.max(branch_id + 1),
+                next_lineage_id: acc.next_lineage_id.max(lineage_id + 1),
+            })
+    }
+
+    /// [`Self::above`] over the ids of live `branches`.
     pub fn above_live_branches(branches: &[Branch<'_, '_>]) -> Self {
-        let next_after = |id: Option<u64>| id.map_or(0, |id| id + 1);
+        Self::above(branches.iter().map(|b| (b.branch_id, b.lineage_id)))
+    }
+
+    /// Component-wise maximum: counters safe with respect to both `self` and
+    /// `other`.
+    pub fn max(self, other: Self) -> Self {
         Self {
-            next_branch_id: next_after(branches.iter().map(|b| b.branch_id).max()),
-            next_lineage_id: next_after(branches.iter().map(|b| b.lineage_id).max()),
+            next_branch_id: self.next_branch_id.max(other.next_branch_id),
+            next_lineage_id: self.next_lineage_id.max(other.next_lineage_id),
         }
     }
 }
@@ -101,6 +126,10 @@ pub struct VisitOutcome {
 pub struct NightSession<'state_lf, 'bank_config> {
     /// Night index being advanced (N-scan / staleness bookkeeping).
     current_step: usize,
+    /// What [`BranchCollection::last_closed_night_id`] becomes at
+    /// [`Self::close`]: the night being advanced, or the previous value when
+    /// the caller did not name the night.
+    last_closed_night_id: Option<NightId>,
     /// Live branches, replaced after every resolved visit.
     branches: Vec<Branch<'state_lf, 'bank_config>>,
     /// Pre-filter origins of the lineages that entered the night, built at
@@ -125,21 +154,45 @@ impl<'state_lf, 'bank_config> NightSession<'state_lf, 'bank_config> {
     /// # Arguments
     /// * `collection` – State left by the previous night; its branches are
     ///   cloned, `collection` itself is left untouched.
+    /// * `night_id` – Night being advanced, when the caller knows it. Recorded
+    ///   as the collection's last closed night at [`Self::close`], which lets
+    ///   a resumed run skip nights it already processed. `None` (e.g. an
+    ///   input without a night index) disables that check for this night.
     /// * `current_step` – Night index being advanced.
+    ///
+    /// # Errors
+    /// [`EngineError::NightAlreadyClosed`] when `night_id` is not after
+    /// `collection`'s last closed night (see
+    /// [`BranchCollection::is_night_closed`]).
     pub fn begin(
         collection: &BranchCollection<'state_lf, 'bank_config>,
+        night_id: Option<NightId>,
         current_step: usize,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, EngineError> {
+        if let Some(night_id) = night_id
+            && let Some(last_closed) = collection.last_closed_night_id
+            && night_id <= last_closed
+        {
+            return Err(EngineError::NightAlreadyClosed {
+                night_id,
+                last_closed,
+            });
+        }
+        Ok(Self {
             current_step,
+            last_closed_night_id: night_id.or(collection.last_closed_night_id),
             branches: collection.branches.clone(),
             prefilter_anchors: None,
             consumed_observation_ids: HashSet::new(),
             gate_records: Vec::new(),
-            ids: IdCounters::above_live_branches(&collection.branches),
+            // The persisted counters are authoritative; the scan only guards
+            // a collection assembled by hand through its public fields.
+            ids: collection
+                .ids
+                .max(IdCounters::above_live_branches(&collection.branches)),
             n_visits: 0,
             n_unresolved_visits: 0,
-        }
+        })
     }
 
     /// Night index being advanced.
@@ -338,7 +391,8 @@ impl<'state_lf, 'bank_config> NightSession<'state_lf, 'bank_config> {
     ///
     /// # Returns
     /// The collection for the next night (`current_step + 1`), carrying this
-    /// night's archived arcs, gate records and consumed-then-pruned ids.
+    /// night's archived arcs, gate records and consumed-then-pruned ids, the
+    /// advanced id counters and the night as its last closed one.
     ///
     /// # Errors
     /// Propagates a discovery failure (see [`seed_new_lineages_from_leftovers`]).
@@ -410,6 +464,8 @@ impl<'state_lf, 'bank_config> NightSession<'state_lf, 'bank_config> {
             last_night_consumed_then_pruned_ids: consumed_then_pruned_ids,
             last_night_gate_records: self.gate_records,
             current_step: self.current_step + 1,
+            ids: self.ids,
+            last_closed_night_id: self.last_closed_night_id,
             archived,
         })
     }
@@ -472,5 +528,83 @@ mod tests {
     fn consumed_then_pruned_with_nothing_consumed_is_empty() {
         let tracks: [&[ObsId]; 1] = [&[1, 2]];
         assert!(consumed_then_pruned(&HashSet::new(), tracks.into_iter()).is_empty());
+    }
+
+    #[test]
+    fn id_counters_above_is_one_past_each_max() {
+        assert_eq!(IdCounters::above([]), IdCounters::default());
+        assert_eq!(
+            IdCounters::above([(7, 2), (3, 5)]),
+            IdCounters {
+                next_branch_id: 8,
+                next_lineage_id: 6,
+            }
+        );
+    }
+
+    #[test]
+    fn id_counters_max_is_component_wise() {
+        let a = IdCounters {
+            next_branch_id: 10,
+            next_lineage_id: 1,
+        };
+        let b = IdCounters {
+            next_branch_id: 4,
+            next_lineage_id: 9,
+        };
+        assert_eq!(
+            a.max(b),
+            IdCounters {
+                next_branch_id: 10,
+                next_lineage_id: 9,
+            }
+        );
+    }
+
+    /// Empty collection whose last closed night is `last_closed`.
+    fn closed_at(last_closed: Option<u32>) -> BranchCollection<'static, 'static> {
+        BranchCollection {
+            last_closed_night_id: last_closed.map(NightId),
+            ..BranchCollection::empty()
+        }
+    }
+
+    #[test]
+    fn begin_refuses_a_night_not_after_the_last_closed_one() {
+        let collection = closed_at(Some(5));
+        for night in [4, 5] {
+            assert!(matches!(
+                NightSession::begin(&collection, Some(NightId(night)), 0),
+                Err(EngineError::NightAlreadyClosed { night_id, last_closed })
+                    if night_id == NightId(night) && last_closed == NightId(5)
+            ));
+        }
+    }
+
+    #[test]
+    fn begin_accepts_a_later_night_and_records_it_at_close_time() {
+        let session = NightSession::begin(&closed_at(Some(5)), Some(NightId(6)), 0).unwrap();
+        assert_eq!(session.last_closed_night_id, Some(NightId(6)));
+        let session = NightSession::begin(&closed_at(None), Some(NightId(0)), 0).unwrap();
+        assert_eq!(session.last_closed_night_id, Some(NightId(0)));
+    }
+
+    #[test]
+    fn begin_without_night_id_keeps_the_previous_last_closed_night() {
+        let session = NightSession::begin(&closed_at(Some(5)), None, 0).unwrap();
+        assert_eq!(session.last_closed_night_id, Some(NightId(5)));
+    }
+
+    #[test]
+    fn begin_starts_from_the_persisted_counters() {
+        let ids = IdCounters {
+            next_branch_id: 42,
+            next_lineage_id: 7,
+        };
+        let collection = BranchCollection {
+            ids,
+            ..BranchCollection::empty()
+        };
+        assert_eq!(NightSession::begin(&collection, None, 0).unwrap().ids, ids);
     }
 }

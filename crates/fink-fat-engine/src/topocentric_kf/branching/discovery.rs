@@ -70,6 +70,8 @@ impl DiscoveryEvent {
 ///   when every observation is up for grabs.
 /// * `next_lineage_id` – Monotonic counter; advanced by one per new lineage
 ///   created ([`IdCounters::next_lineage_id`](super::IdCounters::next_lineage_id)).
+///   Persisted with the collection, so a `lineage_id` is never reused, even
+///   after the lineage that held it was archived.
 /// * `next_branch_id` – Monotonic counter for the `branch_id` of each new
 ///   lineage's root branch. **Deliberately separate from `next_lineage_id`**:
 ///   it is the same counter the visit-level branching step
