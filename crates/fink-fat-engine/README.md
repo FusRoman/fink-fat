@@ -18,27 +18,161 @@ and the web explorer (`fink-fat-explorer`) all sit on top of it. See the
 
 > Mathematical notation below follows the code. The rustdoc of each module
 > (`cargo doc -p fink-fat-engine`, with the KaTeX header) gives the full
-> derivations and the reasons behind each design choice.
+> derivations and the reasons behind each design choice. Every symbol is
+> explained in the [Notation](#notation) section.
 
 ## Contents
 
-1. [Pipeline at a glance](#pipeline-at-a-glance)
-2. [Data model](#data-model)
-3. [Intra-night seeding: the tracklet linker](#intra-night-seeding-the-tracklet-linker)
-4. [Admissible-region seed grid](#admissible-region-seed-grid)
-5. [The topocentric Kalman filter](#the-topocentric-kalman-filter)
-6. [The Kalman filter bank](#the-kalman-filter-bank)
-7. [Predicted search region](#predicted-search-region)
-8. [Night-to-night multi-hypothesis tracking](#night-to-night-multi-hypothesis-tracking)
-9. [Fragment linkage](#fragment-linkage)
-10. [Persistence](#persistence)
-11. [Configuration](#configuration)
-12. [Logging](#logging)
-13. [Parallelism and determinism](#parallelism-and-determinism)
-14. [Module map](#module-map)
-15. [Status and known limitations](#status-and-known-limitations)
+1. [Notation](#notation)
+2. [Pipeline at a glance](#pipeline-at-a-glance)
+3. [Data model](#data-model)
+4. [Intra-night seeding: the tracklet linker](#intra-night-seeding-the-tracklet-linker)
+5. [Admissible-region seed grid](#admissible-region-seed-grid)
+6. [The topocentric Kalman filter](#the-topocentric-kalman-filter)
+7. [The Kalman filter bank](#the-kalman-filter-bank)
+8. [Predicted search region](#predicted-search-region)
+9. [Night-to-night multi-hypothesis tracking](#night-to-night-multi-hypothesis-tracking)
+10. [Fragment linkage](#fragment-linkage)
+11. [Persistence](#persistence)
+12. [Configuration](#configuration)
+13. [Logging](#logging)
+14. [Parallelism and determinism](#parallelism-and-determinism)
+15. [Module map](#module-map)
+16. [Status and known limitations](#status-and-known-limitations)
 
 ---
+
+## Notation
+
+The tables below explain every symbol used in the equations of this README,
+grouped by the section where it first appears. Each section with equations
+links back to its table.
+
+**Conventions**
+
+- Bold lower-case letters ($\mathbf r$, $\mathbf v$, $\mathbf x$) are vectors;
+  a hat ($\hat{\mathbf u}$) marks a unit vector.
+- A dot ($\dot\rho$, $\dot\alpha$) is a time derivative.
+- $^\top$ is the transpose, $I$ the identity matrix ($I_2$: 2×2) and
+  $\mathrm{diag}(\dots)$ a diagonal matrix.
+- Superscripts $^-$ / $^+$ mean "before" / "after" the Kalman update of the
+  current observation.
+- $\Delta t$ is always a time difference in days (TT).
+- Index $i$ runs over the hypotheses of a bank, index $p$ over the orbital
+  populations of the prior.
+
+> **Overloaded symbols.** The notation follows the code and astronomy usage,
+> so a few letters have two meanings. The context always makes it clear:
+>
+> | Symbol | Meaning 1 | Meaning 2 |
+> | --- | --- | --- |
+> | $\alpha$ | right ascension | phase angle (Sun–object–observer), in $\Phi_{HG}(\alpha)$; also the EMA factor $\alpha = 0.4$ |
+> | $H$ | measurement matrix $[I_2 \mid 0]$ (Kalman filter) | absolute magnitude (photometry) |
+> | $\Phi$ | state transition matrix (Kalman prediction) | H-G phase function $\Phi_{HG}$ |
+> | $r$ | heliocentric distance $\lvert\mathbf r\rvert$ | search radius (tracklet linker, search region) |
+> | $\lambda$ | covariance inflation factor | $\lambda_\mathrm{max}$: largest eigenvalue; $\lambda_\mathrm{clutter}$: alert density |
+> | $w$ | weight ($w_i$, $w_p$, $w(a)$) | width of the completeness curve (mag) |
+> | $\Delta$ | topocentric distance (= $\rho$) | $\Delta t$, and the LLR increments $\Delta_\mathrm{obs}$, $\Delta_\mathrm{phot}$, $\Delta_\mathrm{null}$ |
+
+### Notation: sky positions and tracklet linker
+
+| Symbol | Meaning | Unit |
+| --- | --- | --- |
+| $\alpha, \delta$ | right ascension, declination (equatorial J2000) | rad |
+| $\sigma_\alpha, \sigma_\delta$ | 1-σ astrometric errors of an alert on $\alpha$ and $\delta$ | rad |
+| $m_\mathrm{obs}$, $m_\mathrm{last}$ | apparent magnitude of the new observation / of the track's last detection | mag |
+| $\dot\theta_\mathrm{max}$ | maximum angular speed on the sky (`max_angular_speed`) | rad/day |
+| $\Delta t_\mathrm{max}$ | maximum time gap between two detections of a track (`max_dt`) | day |
+| $\texttt{sep\_cap}$ | largest angular distance an object can travel in $\Delta t_\mathrm{max}$ | rad |
+| $r_\mathrm{cell}$ | radius of one HEALPix cell of the spatial index | rad |
+| $r$ | search radius around an observation | rad |
+| $\alpha_0, \delta_0$ | position of the track's first observation (tangent-plane origin) | rad |
+| $\mathrm{wrap}(\cdot)$ | brings an angle back into $(-\pi, \pi]$ (handles the RA 0/2π jump) | — |
+| $x, y$ | flat tangent-plane coordinates relative to $(\alpha_0, \delta_0)$ | rad |
+| $\hat p(t)$ | position predicted at time $t$ by the track's linear fit | — |
+| $p_\mathrm{obs}$ | position of the candidate observation | — |
+| $\mathrm{sep}(\cdot,\cdot)$ | angular separation between two sky positions | rad |
+| $\sigma^2_\mathrm{pred}(t)$ | variance of the fit's prediction at time $t$ | rad² |
+| $\sigma^2_\mathrm{obs}$ | variance of one observation, $(\sigma_\alpha\cos\delta)^2 + \sigma_\delta^2$ | rad² |
+| $\bar\sigma^2_\mathrm{obs}$ | mean $\sigma^2_\mathrm{obs}$ over the track's points | rad² |
+| $n$ | number of points in the track | — |
+| $t$, $\bar t$ | observation time, mean time of the track's points | day |
+| $S_{xx}$ | spread of the times, $\sum_k (t_k - \bar t)^2$ | day² |
+
+### Notation: orbital geometry and admissible region
+
+| Symbol | Meaning | Unit |
+| --- | --- | --- |
+| $\rho$, $\dot\rho$ | topocentric range (observer–object distance) and its rate | au, au/day |
+| $\hat{\mathbf u}$, $\dot{\hat{\mathbf u}}$ | unit line-of-sight vector from the observer to the object, and its time derivative | —, 1/day |
+| $\mathbf r_\mathrm{obs}$, $\mathbf v_\mathrm{obs}$ | heliocentric position and velocity of the observer | au, au/day |
+| $\mathbf r$, $\mathbf v$ | heliocentric position and velocity of the object | au, au/day |
+| $r$ | heliocentric distance of the object, $\lvert\mathbf r\rvert$ | au |
+| $k$ | Gaussian gravitational constant ($k^2 = GM_\odot$) | au$^{3/2}$/day |
+| $\varepsilon$ | specific orbital energy; the orbit is bound (elliptic) when $\varepsilon < 0$ | au²/day² |
+| $\mathbf v_T$ | part of $\mathbf v$ that does not depend on $\dot\rho$ | au/day |
+| $D$ | discriminant of the quadratic in $\dot\rho$; no bound orbit when $D \le 0$ | au²/day² |
+| $a$ | semi-major axis of the orbit, $-k^2/(2\varepsilon)$ | au |
+| $a_p$, $\sigma_p$, $w_p$ | centre, width and weight of population $p$ in the prior | au, au, — |
+| $w(a)$ | prior weight given to a grid node of semi-major axis $a$ | — |
+| $\sigma_\rho$, $\sigma_{\dot\rho}$ | initial 1-σ uncertainty on $\rho$ and $\dot\rho$ | au, au/day |
+
+### Notation: Kalman filter and bank
+
+| Symbol | Meaning | Unit |
+| --- | --- | --- |
+| $\mathbf x$ | state (attributable) vector $(\alpha, \delta, \dot\alpha, \dot\delta, \rho, \dot\rho)$ | mixed |
+| $P$ | 6×6 state covariance ($P^-$ predicted, $P^+$ updated) | mixed |
+| $\tau$ | light time, travel time of light from the object to the observer | day |
+| $c$ | speed of light | au/day |
+| $J$ | 6×6 Jacobian of the attributable → Cartesian conversion; $J_\mathrm{old}$ at the start epoch, $J_\mathrm{new}$ at the target epoch | — |
+| $\Phi$ | state transition matrix (STM) of the two-body motion | — |
+| $f, g$, $\dot f, \dot g$ | Lagrange coefficients and their time derivatives | —, day, 1/day, — |
+| $Q$ | process-noise covariance (models the unmodelled accelerations) | — |
+| $q_0$ | base process-noise intensity | au²/day³ |
+| $q_\mathrm{eff}$ | intensity actually used, grows with $\Delta t$ | au²/day³ |
+| $\Delta t_\mathrm{ref}$ | time scale of that growth | day |
+| $\lambda$ | fading-memory inflation factor applied to the predicted covariance | — |
+| $\mathrm{NIS}$ | normalised innovation squared, $\nu^\top S^{-1}\nu$ (≈ 2 on average for a well-tuned filter) | — |
+| $\mathrm{NIS}_\mathrm{EMA}$ | exponential moving average of the NIS; 5.991 is the 95 % χ² quantile with 2 degrees of freedom | — |
+| $z$ | measured position $(\alpha, \delta)$ of the alert | rad |
+| $H$ | measurement matrix $[I_2 \mid 0]$: picks $(\alpha, \delta)$ out of $\mathbf x$ | — |
+| $R$ | measurement-noise covariance $\mathrm{diag}(\sigma_\alpha^2, \sigma_\delta^2)$ | rad² |
+| $\nu$ | innovation: measured minus predicted position | rad |
+| $S$ | innovation covariance (uncertainty on $\nu$) | rad² |
+| $K$ | Kalman gain | — |
+| $d^2$ | squared Mahalanobis distance of the observation, $\nu^\top S^{-1}\nu$ | — |
+| $\ell$ | log-likelihood of the observation for one hypothesis | — |
+| $w_i$ | weight of hypothesis $i$ in the bank (they sum to 1) | — |
+| $\bar\ell_h$ | mean of $\ell$ over the sliding window for hypothesis $h$ | — |
+| $n_\mathrm{steps}$ | number of observations the bank has absorbed | — |
+
+### Notation: photometry, search region and MHT scoring
+
+| Symbol | Meaning | Unit |
+| --- | --- | --- |
+| $m$ | apparent magnitude of a detection | mag |
+| $H$ | absolute magnitude of the object | mag |
+| $\Delta$ | topocentric distance (equal to $\rho$) | au |
+| $\alpha$ | phase angle Sun–object–observer | rad |
+| $\Phi_{HG}(\alpha)$, $G$ | H-G phase function and its slope parameter | mag, — |
+| $P_i$ | covariance of hypothesis $i$ predicted to the visit epoch | — |
+| $S_i$ | sky-plane covariance of hypothesis $i$ | rad² |
+| $R_\mathrm{search}$ | measurement noise added when building the search region | rad² |
+| $\delta_i$ | offset of hypothesis $i$'s predicted position from the mixture mean | rad |
+| $S_\mathrm{mix}$ | covariance of the whole mixture (spread of each component + spread between them) | rad² |
+| $\lambda_\mathrm{max}(\cdot)$ | largest eigenvalue of a matrix (semi-major axis² of the ellipse) | rad² |
+| $\chi^2$ | χ² threshold setting the size of the region (`search_region_chi2`) | — |
+| $L(z)$ | predictive mixture likelihood of the bank at the candidate position $z$ | 1/sr |
+| $\lambda_\mathrm{clutter}$ | local density of alerts (false-alarm density) | 1/sr |
+| $m_\mathrm{pred}$ | apparent magnitude predicted from $H$ and the geometry | mag |
+| $\sigma_\mathrm{mag}$ | assumed 1-σ spread of $m_\mathrm{obs} - m_\mathrm{pred}$ (`photometric_sigma_mag`) | mag |
+| $P_D$ | probability that the object is detected in the visit | — |
+| $m_\mathrm{lim}$, $w$ | magnitude of 50 % completeness and width of the completeness curve | mag |
+| $\Delta_\mathrm{obs}$, $\Delta_\mathrm{phot}$, $\Delta_\mathrm{null}$ | LLR increments for an astrometric match, the photometric match, and a missed detection | — |
+
+---
+
 
 ## Pipeline at a glance
 
@@ -109,6 +243,8 @@ ordering.
 
 ## Intra-night seeding: the tracklet linker
 
+*Symbols: see [Notation](#notation-sky-positions-and-tracklet-linker).*
+
 `seeding::tracklet_linker::link_tracklets` links each object's intra-night
 detections into a track. It works as a **time-ordered sweep**, which avoids
 enumerating all pairs (`O(n²)` on a night with many revisits):
@@ -117,7 +253,7 @@ enumerating all pairs (`O(n²)` on a night with many revisits):
    HEALPix cell of their last detection.
 2. For each observation, look up the active tracks in the neighbouring cells
    within $r = \texttt{sep\_cap} + r_\mathrm{cell}$, where
-   $\texttt{sep\_cap} = \dot\theta_\max \cdot \Delta t_\max$.
+   $\texttt{sep\_cap} = \dot\theta_\mathrm{max} \cdot \Delta t_\mathrm{max}$.
    A track is a candidate only if its last detection is less than `max_dt`
    old.
 3. Common gate: $\Delta t > 0$ and $|m_\mathrm{obs} - m_\mathrm{last}| \le$
@@ -152,6 +288,8 @@ bank that fails to build is logged and skipped.
 pipeline does not use them.
 
 ## Admissible-region seed grid
+
+*Symbols: see [Notation](#notation-orbital-geometry-and-admissible-region).*
 
 A tracklet constrains $(\alpha, \delta, \dot\alpha, \dot\delta)$ but not the
 topocentric range $\rho$ nor the range-rate $\dot\rho$. Instead of guessing
@@ -201,6 +339,8 @@ them out.
 
 ## The topocentric Kalman filter
 
+*Symbols: see [Notation](#notation-kalman-filter-and-bank).*
+
 `topocentric_kf::single_kalman`.
 
 **State.** The state is the attributable vector
@@ -228,14 +368,14 @@ built through `outfit`'s observer cache (`observer_state.rs`).
   Annual aberration is not modelled.
 - The covariance is moved to Cartesian space through the Jacobian $J$,
   propagated with the Lagrange-coefficient STM
-  $\Phi = \begin{psmallmatrix} f I & g I \\ \dot f I & \dot g I\end{psmallmatrix}$,
+  $\Phi = \left(\begin{smallmatrix} f I & g I \\ \dot f I & \dot g I\end{smallmatrix}\right)$,
   then mapped back:
   ```math
   P^- = J_\mathrm{new}^{-1}\big(\lambda\,\Phi\,J_\mathrm{old}PJ_\mathrm{old}^\top\Phi^\top + Q\big)J_\mathrm{new}^{-\top}
   ```
 - **Process noise**: state noise compensation (SNC) with
   $q_\mathrm{eff} = q_0\,(1 + (\Delta t/\Delta t_\mathrm{ref})^2)$ and
-  $Q = q_\mathrm{eff}\begin{psmallmatrix}\Delta t^3/3\,I & \Delta t^2/2\,I\\ \Delta t^2/2\,I & \Delta t\,I\end{psmallmatrix}$.
+  $Q = q_\mathrm{eff}\left(\begin{smallmatrix}\Delta t^3/3\,I & \Delta t^2/2\,I\\ \Delta t^2/2\,I & \Delta t\,I\end{smallmatrix}\right)$.
   Defaults: $q_0 = 10^{-16}$ au²/day³, $\Delta t_\mathrm{ref} = 1$ day.
 - **Fading-memory inflation**: $\lambda = \mathrm{clamp}(\mathrm{NIS}_\mathrm{EMA}/5.991,\,1,\,5)$.
   The filter widens its covariance when its recent innovations are larger
@@ -263,6 +403,8 @@ Numerical safeguards:
   drives the inflation above.
 
 ## The Kalman filter bank
+
+*Symbols: see [Notation](#notation-kalman-filter-and-bank).*
 
 `topocentric_kf::kalman_bank::KFBank`. One bank holds all the $(\rho,\dot\rho)$
 hypotheses of one association history. At each step (`step`):
@@ -299,6 +441,8 @@ drives the detection probability and the photometric score described below.
 
 ## Predicted search region
 
+*Symbols: see [Notation](#notation-photometry-search-region-and-mht-scoring).*
+
 `kalman_bank::ellipse_region_finder`. To find where a bank expects its next
 detection, `predict_to` propagates it read-only to the visit epoch. A subset
 of the predicted mixture is kept (`top_k`, default
@@ -309,7 +453,7 @@ $S_i = HP_iH^\top + R_\mathrm{search}$.
 - **Centre**: the sky position of the MAP hypothesis.
 - **Radius** (`RadiusStrategy`):
   - `MixtureCovariance`:
-    $r = \sqrt{\chi^2\,\lambda_\max(S_\mathrm{mix})}$ with
+    $r = \sqrt{\chi^2\,\lambda_\mathrm{max}(S_\mathrm{mix})}$ with
     $S_\mathrm{mix} = \sum w_i(S_i + \delta_i\delta_i^\top)$.
   - `MaxEllipse`: the largest component ellipse plus its offset from the mean.
   - `Clamped`: either of the above, capped (default 30′).
@@ -322,6 +466,8 @@ $S_i = HP_iH^\top + R_\mathrm{search}$.
   disabled by default).
 
 ## Night-to-night multi-hypothesis tracking
+
+*Symbols: see [Notation](#notation-photometry-search-region-and-mht-scoring).*
 
 `topocentric_kf::branching`. This is track-oriented MHT branched at the bank
 level, with top-B and N-scan pruning.
