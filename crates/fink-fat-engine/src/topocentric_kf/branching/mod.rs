@@ -73,4 +73,4 @@ pub use collection::{
     SNAPSHOT_MAGIC, SNAPSHOT_VERSION, SnapshotFormat, decode_snapshot, parse_snapshot_header,
     read_snapshot_file, snapshot_header, write_snapshot_file,
 };
-pub use night_session::{IdCounters, NightSession, VisitOutcome};
+pub use night_session::{IdCounters, NightRefused, NightSession, VisitOutcome};

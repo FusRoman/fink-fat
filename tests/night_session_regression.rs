@@ -42,7 +42,8 @@ use fink_fat_engine::{
     engine_config::EngineConfig,
     error::EngineError,
     topocentric_kf::branching::{
-        ArchivedTrajectory, BranchCollection, BranchSnapshot, IdCounters, SNAPSHOT_FILENAME,
+        ArchivedTrajectory, BranchCollection, BranchSnapshot, IdCounters, NightSession,
+        SNAPSHOT_FILENAME,
     },
 };
 use fink_fat_eval::cli::load_data;
@@ -205,18 +206,19 @@ fn night_observations(obs_dataset: &ObsDataset, night_id: NightId) -> Vec<&Obser
 
 /// Advance `collection` through `night_id`, as `fink-fat track` does.
 fn advance<'a>(
-    collection: &BranchCollection<'a, 'a>,
+    collection: BranchCollection<'a, 'a>,
     obs_dataset: &ObsDataset,
     night_id: NightId,
     config: &'a EngineConfig,
     ctx: &'a fink_fat_engine::engine_config::kalman_context::KalmanContext,
 ) -> Result<BranchCollection<'a, 'a>, EngineError> {
+    let step = collection.current_step;
     collection.advance_one_night(
         &night_observations(obs_dataset, night_id),
         obs_dataset,
         config,
         ctx,
-        collection.current_step,
+        step,
         Some(night_id),
     )
 }
@@ -250,34 +252,47 @@ fn check_against_golden(lines: &[String]) {
     );
 }
 
-/// Every id of `next` that `prev` did not carry must have been drawn after
-/// `prev`'s counters — i.e. no id is ever handed out twice — and the counters
-/// themselves must never go back.
-fn assert_fresh_ids_only(prev: &BranchCollection, next: &BranchCollection, night_id: NightId) {
-    let old_branches: HashSet<u64> = prev.branches.iter().map(|b| b.branch_id).collect();
-    let old_lineages: HashSet<u64> = prev.branches.iter().map(|b| b.lineage_id).collect();
+/// The ids a collection carries before a night is advanced — all that
+/// [`assert_fresh_ids_only`] needs, since advancing consumes the collection.
+struct IdsBefore {
+    branch_ids: HashSet<u64>,
+    lineage_ids: HashSet<u64>,
+    counters: IdCounters,
+}
+
+impl IdsBefore {
+    fn of(collection: &BranchCollection) -> Self {
+        Self {
+            branch_ids: collection.branches.iter().map(|b| b.branch_id).collect(),
+            lineage_ids: collection.branches.iter().map(|b| b.lineage_id).collect(),
+            counters: collection.ids,
+        }
+    }
+}
+
+/// Every id of `next` absent before the night must have been drawn after the
+/// counters it started from — i.e. no id is ever handed out twice — and the
+/// counters themselves must never go back.
+fn assert_fresh_ids_only(before: &IdsBefore, next: &BranchCollection, night_id: NightId) {
+    let (prev, now) = (before.counters, next.ids);
     for branch in &next.branches {
-        if !old_branches.contains(&branch.branch_id) {
+        if !before.branch_ids.contains(&branch.branch_id) {
             assert!(
-                (prev.ids.next_branch_id..next.ids.next_branch_id).contains(&branch.branch_id),
-                "night {night_id}: branch_id {} outside the ids drawn tonight {:?}..{:?}",
+                (prev.next_branch_id..now.next_branch_id).contains(&branch.branch_id),
+                "night {night_id}: branch_id {} outside the ids drawn tonight {prev:?}..{now:?}",
                 branch.branch_id,
-                prev.ids,
-                next.ids,
             );
         }
-        if !old_lineages.contains(&branch.lineage_id) {
+        if !before.lineage_ids.contains(&branch.lineage_id) {
             assert!(
-                (prev.ids.next_lineage_id..next.ids.next_lineage_id).contains(&branch.lineage_id),
-                "night {night_id}: lineage_id {} reused (counters {:?}..{:?})",
+                (prev.next_lineage_id..now.next_lineage_id).contains(&branch.lineage_id),
+                "night {night_id}: lineage_id {} reused (counters {prev:?}..{now:?})",
                 branch.lineage_id,
-                prev.ids,
-                next.ids,
             );
         }
     }
-    assert!(next.ids.next_branch_id >= prev.ids.next_branch_id);
-    assert!(next.ids.next_lineage_id >= prev.ids.next_lineage_id);
+    assert!(now.next_branch_id >= prev.next_branch_id);
+    assert!(now.next_lineage_id >= prev.next_lineage_id);
 }
 
 #[test]
@@ -290,7 +305,7 @@ fn night_pipeline_matches_golden_fingerprint() {
     let mut lines = Vec::with_capacity(night_ids.len());
     let mut collection = BranchCollection::empty();
     for &night_id in &night_ids {
-        collection = advance(&collection, &obs_dataset, night_id, &config, &ctx)
+        collection = advance(collection, &obs_dataset, night_id, &config, &ctx)
             .expect("advance_one_night should not fail on the fixture");
         lines.push(night_fingerprint(night_id, &collection));
     }
@@ -310,9 +325,10 @@ fn resume_from_snapshot_matches_golden_fingerprint() {
     let mut lines = Vec::with_capacity(night_ids.len());
     let mut collection = BranchCollection::empty();
     for &night_id in first {
-        let next = advance(&collection, &obs_dataset, night_id, &config, &ctx)
+        let before = IdsBefore::of(&collection);
+        let next = advance(collection, &obs_dataset, night_id, &config, &ctx)
             .expect("advance_one_night should not fail on the fixture");
-        assert_fresh_ids_only(&collection, &next, night_id);
+        assert_fresh_ids_only(&before, &next, night_id);
         assert_eq!(next.last_closed_night_id, Some(night_id));
         lines.push(night_fingerprint(night_id, &next));
         collection = next;
@@ -335,20 +351,27 @@ fn resume_from_snapshot_matches_golden_fingerprint() {
     assert_eq!(collection.branches.len(), saved_branches);
 
     // Every night already folded in is refused, so a resumed run cannot
-    // double-count one.
+    // double-count one — and the refused collection comes back intact.
     for &night_id in first {
         assert!(collection.is_night_closed(night_id));
+        let step = collection.current_step;
+        let Err(refused) = NightSession::begin(collection, Some(night_id), step) else {
+            panic!("night {night_id} was already closed and must be refused");
+        };
         assert!(matches!(
-            advance(&collection, &obs_dataset, night_id, &config, &ctx),
-            Err(EngineError::NightAlreadyClosed { .. })
+            refused.error,
+            EngineError::NightAlreadyClosed { .. }
         ));
+        collection = *refused.collection;
+        assert_eq!(collection.branches.len(), saved_branches);
     }
 
     for &night_id in rest {
         assert!(!collection.is_night_closed(night_id));
-        let next = advance(&collection, &obs_dataset, night_id, &config, &ctx)
+        let before = IdsBefore::of(&collection);
+        let next = advance(collection, &obs_dataset, night_id, &config, &ctx)
             .expect("advance_one_night should not fail on the fixture");
-        assert_fresh_ids_only(&collection, &next, night_id);
+        assert_fresh_ids_only(&before, &next, night_id);
         lines.push(night_fingerprint(night_id, &next));
         collection = next;
     }

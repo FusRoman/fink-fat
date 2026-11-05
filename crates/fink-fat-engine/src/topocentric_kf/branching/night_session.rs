@@ -121,6 +121,35 @@ pub struct VisitOutcome {
     pub n_branches: usize,
 }
 
+/// [`NightSession::begin`] refused to open a night: the error, plus the
+/// collection it was given, handed back untouched so a long-lived caller
+/// (e.g. a stream consumer) keeps its state.
+///
+/// Converts into [`EngineError`] (dropping the collection) for callers that
+/// just propagate with `?`.
+pub struct NightRefused<'state_lf, 'bank_config> {
+    /// Why the night was refused.
+    pub error: EngineError,
+    /// The collection passed to [`NightSession::begin`], unchanged (boxed
+    /// to keep the `Result` small on the success path).
+    pub collection: Box<BranchCollection<'state_lf, 'bank_config>>,
+}
+
+impl std::fmt::Debug for NightRefused<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NightRefused")
+            .field("error", &self.error)
+            .field("n_branches", &self.collection.branches.len())
+            .finish()
+    }
+}
+
+impl From<NightRefused<'_, '_>> for EngineError {
+    fn from(refused: NightRefused<'_, '_>) -> Self {
+        refused.error
+    }
+}
+
 /// In-flight state of one night being advanced visit by visit — see the
 /// [module doc](self).
 pub struct NightSession<'state_lf, 'bank_config> {
@@ -152,8 +181,12 @@ impl<'state_lf, 'bank_config> NightSession<'state_lf, 'bank_config> {
     /// Open a night on top of `collection`.
     ///
     /// # Arguments
-    /// * `collection` – State left by the previous night; its branches are
-    ///   cloned, `collection` itself is left untouched.
+    /// * `collection` – State left by the previous night, consumed: its
+    ///   branches become the session's live set without being copied (at
+    ///   LSST scale a clone of every branch is the night's largest
+    ///   allocation). Its per-night outputs (`archived`, `last_night_*`) are
+    ///   dropped — flush them before. A caller that still needs the previous
+    ///   state afterwards clones it explicitly.
     /// * `night_id` – Night being advanced, when the caller knows it. Recorded
     ///   as the collection's last closed night at [`Self::close`], which lets
     ///   a resumed run skip nights it already processed. `None` (e.g. an
@@ -161,35 +194,39 @@ impl<'state_lf, 'bank_config> NightSession<'state_lf, 'bank_config> {
     /// * `current_step` – Night index being advanced.
     ///
     /// # Errors
-    /// [`EngineError::NightAlreadyClosed`] when `night_id` is not after
-    /// `collection`'s last closed night (see
-    /// [`BranchCollection::is_night_closed`]).
+    /// [`NightRefused`] carrying [`EngineError::NightAlreadyClosed`] (and the
+    /// untouched `collection`) when `night_id` is not after `collection`'s
+    /// last closed night (see [`BranchCollection::is_night_closed`]).
     pub fn begin(
-        collection: &BranchCollection<'state_lf, 'bank_config>,
+        collection: BranchCollection<'state_lf, 'bank_config>,
         night_id: Option<NightId>,
         current_step: usize,
-    ) -> Result<Self, EngineError> {
+    ) -> Result<Self, NightRefused<'state_lf, 'bank_config>> {
         if let Some(night_id) = night_id
             && let Some(last_closed) = collection.last_closed_night_id
             && night_id <= last_closed
         {
-            return Err(EngineError::NightAlreadyClosed {
-                night_id,
-                last_closed,
+            return Err(NightRefused {
+                error: EngineError::NightAlreadyClosed {
+                    night_id,
+                    last_closed,
+                },
+                collection: Box::new(collection),
             });
         }
+        // The persisted counters are authoritative; the scan only guards a
+        // collection assembled by hand through its public fields.
+        let ids = collection
+            .ids
+            .max(IdCounters::above_live_branches(&collection.branches));
         Ok(Self {
             current_step,
             last_closed_night_id: night_id.or(collection.last_closed_night_id),
-            branches: collection.branches.clone(),
+            branches: collection.branches,
             prefilter_anchors: None,
             consumed_observation_ids: HashSet::new(),
             gate_records: Vec::new(),
-            // The persisted counters are authoritative; the scan only guards
-            // a collection assembled by hand through its public fields.
-            ids: collection
-                .ids
-                .max(IdCounters::above_live_branches(&collection.branches)),
+            ids,
             n_visits: 0,
             n_unresolved_visits: 0,
         })
@@ -289,7 +326,9 @@ impl<'state_lf, 'bank_config> NightSession<'state_lf, 'bank_config> {
         // Per-lineage work is independent within a visit (each lineage only
         // ever reads its own bank) and dominated by the two-body Kepler
         // propagation in `spawn_branches_for_lineage` — parallelize across
-        // lineages via rayon. `next_branch_id` is a shared atomic counter
+        // lineages via rayon. The live branches are moved through, not
+        // cloned: a lineage with nothing to do this visit is handed on as is,
+        // so the visit never holds two copies of the branch set. `next_branch_id` is a shared atomic counter
         // (branch ids are opaque unique keys, never relied on for ordering
         // — see `branch_id.rs`); `consumed_observation_ids` can't be
         // mutated from parallel closures, so each lineage returns its own
@@ -297,56 +336,56 @@ impl<'state_lf, 'bank_config> NightSession<'state_lf, 'bank_config> {
         // `HashSet::extend`, not a bottleneck).
         let next_branch_id = AtomicU64::new(self.ids.next_branch_id);
         let current_step = self.current_step;
-        let outcomes: Vec<LineageOutcome<'state_lf, 'bank_config>> = self
-            .branches
-            .par_iter()
-            .map(|lineage| {
-                if !lineage_might_be_in_visit(
-                    lineage,
-                    prefilter_anchors.get(&lineage.branch_id),
-                    visit,
-                    &visit_bucket_index,
-                    params,
-                    spatial_binner,
-                ) {
-                    // No alert anywhere near this lineage's extrapolated
-                    // position — skip the two Kepler solves entirely. The
-                    // lineage carries over unchanged, picked up again
-                    // whenever a later visit's alerts land nearby.
-                    return LineageOutcome::Unchanged(lineage.clone());
-                }
+        let outcomes: Vec<LineageOutcome<'state_lf, 'bank_config>> =
+            std::mem::take(&mut self.branches)
+                .into_par_iter()
+                .map(|lineage| {
+                    if !lineage_might_be_in_visit(
+                        &lineage,
+                        prefilter_anchors.get(&lineage.branch_id),
+                        visit,
+                        &visit_bucket_index,
+                        params,
+                        spatial_binner,
+                    ) {
+                        // No alert anywhere near this lineage's extrapolated
+                        // position — skip the two Kepler solves entirely. The
+                        // lineage carries over unchanged, picked up again
+                        // whenever a later visit's alerts land nearby.
+                        return LineageOutcome::Unchanged(lineage);
+                    }
 
-                match spawn_branches_for_lineage(
-                    lineage,
-                    &visit_bucket_index,
-                    visit.epoch,
-                    r_obs,
-                    v_obs,
-                    params,
-                    spatial_binner,
-                    &next_branch_id,
-                    current_step,
-                ) {
-                    Some((spawned, consumed)) => LineageOutcome::Spawned(
-                        spawned,
-                        GateRecord {
-                            lineage_id: lineage.lineage_id,
-                            nights_since_seed: current_step
-                                .saturating_sub(lineage.last_real_update_step),
-                            gated_obs_ids: consumed,
-                            n_hypotheses: lineage.bank.len(),
-                            n_steps: lineage.bank.n_steps(),
-                        },
-                    ),
-                    // Every hypothesis in the bank failed to propagate this
-                    // visit (rare, but not impossible — see
-                    // `outfit_propagate_universal_failures.md`). Treat it
-                    // like "no candidate nearby": carry the lineage over
-                    // unchanged rather than losing its whole track history.
-                    None => LineageOutcome::Unchanged(lineage.clone()),
-                }
-            })
-            .collect();
+                    match spawn_branches_for_lineage(
+                        &lineage,
+                        &visit_bucket_index,
+                        visit.epoch,
+                        r_obs,
+                        v_obs,
+                        params,
+                        spatial_binner,
+                        &next_branch_id,
+                        current_step,
+                    ) {
+                        Some((spawned, consumed)) => LineageOutcome::Spawned(
+                            spawned,
+                            GateRecord {
+                                lineage_id: lineage.lineage_id,
+                                nights_since_seed: current_step
+                                    .saturating_sub(lineage.last_real_update_step),
+                                gated_obs_ids: consumed,
+                                n_hypotheses: lineage.bank.len(),
+                                n_steps: lineage.bank.n_steps(),
+                            },
+                        ),
+                        // Every hypothesis in the bank failed to propagate this
+                        // visit (rare, but not impossible — see
+                        // `outfit_propagate_universal_failures.md`). Treat it
+                        // like "no candidate nearby": carry the lineage over
+                        // unchanged rather than losing its whole track history.
+                        None => LineageOutcome::Unchanged(lineage),
+                    }
+                })
+                .collect();
         self.ids.next_branch_id = next_branch_id.into_inner();
 
         let mut n_lineages_gated = 0;
@@ -571,27 +610,36 @@ mod tests {
 
     #[test]
     fn begin_refuses_a_night_not_after_the_last_closed_one() {
-        let collection = closed_at(Some(5));
+        let mut collection = closed_at(Some(5));
         for night in [4, 5] {
+            let Err(refused) = NightSession::begin(collection, Some(NightId(night)), 0) else {
+                panic!("night {night} must be refused");
+            };
             assert!(matches!(
-                NightSession::begin(&collection, Some(NightId(night)), 0),
-                Err(EngineError::NightAlreadyClosed { night_id, last_closed })
+                refused.error,
+                EngineError::NightAlreadyClosed { night_id, last_closed }
                     if night_id == NightId(night) && last_closed == NightId(5)
             ));
+            assert_eq!(
+                refused.collection.last_closed_night_id,
+                Some(NightId(5)),
+                "the refused collection is handed back untouched"
+            );
+            collection = *refused.collection;
         }
     }
 
     #[test]
     fn begin_accepts_a_later_night_and_records_it_at_close_time() {
-        let session = NightSession::begin(&closed_at(Some(5)), Some(NightId(6)), 0).unwrap();
+        let session = NightSession::begin(closed_at(Some(5)), Some(NightId(6)), 0).unwrap();
         assert_eq!(session.last_closed_night_id, Some(NightId(6)));
-        let session = NightSession::begin(&closed_at(None), Some(NightId(0)), 0).unwrap();
+        let session = NightSession::begin(closed_at(None), Some(NightId(0)), 0).unwrap();
         assert_eq!(session.last_closed_night_id, Some(NightId(0)));
     }
 
     #[test]
     fn begin_without_night_id_keeps_the_previous_last_closed_night() {
-        let session = NightSession::begin(&closed_at(Some(5)), None, 0).unwrap();
+        let session = NightSession::begin(closed_at(Some(5)), None, 0).unwrap();
         assert_eq!(session.last_closed_night_id, Some(NightId(5)));
     }
 
@@ -605,6 +653,6 @@ mod tests {
             ids,
             ..BranchCollection::empty()
         };
-        assert_eq!(NightSession::begin(&collection, None, 0).unwrap().ids, ids);
+        assert_eq!(NightSession::begin(collection, None, 0).unwrap().ids, ids);
     }
 }

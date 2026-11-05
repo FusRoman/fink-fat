@@ -225,9 +225,11 @@ fn main() -> Result<()> {
 
         gold_tracker.observe_night(step, &night_obs, &ground_truth);
 
+        // The engine consumes the collection it advances; this report compares
+        // both nights, so it keeps its own copy (outside the timed section).
+        let prev_collection = collection.clone();
         let t0 = Instant::now();
-        let prev_collection = collection;
-        let new_collection = prev_collection.advance_one_night(
+        let new_collection = collection.advance_one_night(
             &night_obs,
             &obs_dataset,
             &engine_config,

@@ -116,7 +116,11 @@ pub fn parse_snapshot_header(bytes: &[u8]) -> SnapshotFormat {
 /// The full set of live branches tracked across nights — one entry per
 /// surviving candidate association history, possibly several per original
 /// bank once ambiguity has forced branching.
-#[derive(Default)]
+///
+/// `Clone` is a full deep copy of every branch — fine for evaluation tools
+/// comparing two consecutive nights, never on the tracking path (see
+/// [`Self::advance_one_night`]).
+#[derive(Clone, Default)]
 pub struct BranchCollection<'state_lf, 'bank_config> {
     pub branches: Vec<Branch<'state_lf, 'bank_config>>,
     /// Exposed for observability, not just diagnostics: observations
@@ -485,6 +489,10 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
     /// observation goes to discovery. A caller never special-cases "first
     /// night" vs. "later night".
     ///
+    /// Consumes `self`, so the night is advanced without ever copying the
+    /// branch set (see [`NightSession::begin`]). A caller that still needs
+    /// the previous night's state must `clone()` it first.
+    ///
     /// # Arguments
     /// * `night_obs` – This night's observations.
     /// * `obs_dataset`, `kalman_context` – Shared ephemeris/observation
@@ -503,7 +511,7 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
     /// advanced, or the discovery phase's bank-building error (see
     /// [`build_kf_bank_collection_from_observations`](crate::topocentric_kf::kalman_bank::from_seeds::build_kf_bank_collection_from_observations)).
     pub fn advance_one_night(
-        &self,
+        self,
         night_obs: &[&Observation],
         obs_dataset: &ObsDataset,
         engine_config: &'bank_config EngineConfig,
@@ -522,9 +530,10 @@ impl<'state_lf, 'bank_config> BranchCollection<'state_lf, 'bank_config> {
 
         let spatial_binner = HealpixBinner::new(engine_config.healpix_depth);
         let params = &engine_config.advance_params;
+        let starts_empty = self.branches.is_empty();
         let mut session = NightSession::begin(self, night_id, current_step)?;
 
-        if self.branches.is_empty() {
+        if starts_empty {
             CollectionEvent::SkipPropagation.emit();
         } else {
             CollectionEvent::Advancing.emit();
