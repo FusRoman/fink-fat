@@ -1,0 +1,103 @@
+services:
+  db:
+    image: postgres:latest
+    container_name: fink-fat-db
+    # stop grace period to allow the db service to stop properly and make the `UNLOGGED` tables survive the restart.
+    stop_grace_period: 5m
+    environment:
+      POSTGRES_USER: finkfat
+      POSTGRES_PASSWORD: finkfat
+      POSTGRES_DB: finkfat_test
+    ports:
+      - "5432:5432"
+    volumes:
+      # PostgreSQL 18+ expects a mount on /var/lib/postgresql (parent dir),
+      # not directly on /var/lib/postgresql/data
+      - db-data:/var/lib/postgresql
+    # Tuned for `fink-fat convert`'s bulk COPY load (millions of rows across
+    # 7 tables in one transaction), not for a small interactive workload —
+    # sized against a 128 GB host, leaving headroom for the `app`/`pgadmin`
+    # containers and the `convert` process itself (which loads the source
+    # parquet/rkyv into its own memory before it ever connects here).
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=8GB"
+      - "-c"
+      - "maintenance_work_mem=2GB"
+      - "-c"
+      - "max_wal_size=16GB"
+      - "-c"
+      - "checkpoint_timeout=30min"
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: fink-fat-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - db
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+
+  # The two explorer services serve the same application; they differ only in
+  # their `dockerfile` target (see the header of `dockerfile`). Each sits behind
+  # its own profile so neither starts by accident:
+  #   docker compose --profile dev  up -d   # debug build, hot reload
+  #   docker compose --profile prod up -d --build
+  app-dev:
+    profiles: ["dev"]
+    build:
+      context: .              # workspace root
+      dockerfile: dockerfile
+      target: dev
+    container_name: fink-fat-explorer-dev
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/app                 # bind mount: local code changes are reflected instantly
+      - cargo-target:/app/target # named volume: persists across container recreation
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: postgres://finkfat:finkfat@db:5432/finkfat_test
+
+  app-prod:
+    profiles: ["prod"]
+    build:
+      context: .
+      dockerfile: dockerfile
+      target: prod
+    container_name: fink-fat-explorer-prod
+    # No bind mount: the image is self-contained. Published on 8081 so it can
+    # run next to `app-dev` on the same host.
+    ports:
+      - "8081:8080"
+    volumes:
+      # Downloaded JPL ephemeris + MPC observatory list, kept across restarts.
+      - explorer-cache:/home/explorer/.cache
+      # Engine config, chosen on the host without rebuilding the image:
+      #   ENGINE_CONFIG=./engine_config_lsst.best.yaml docker compose --profile prod up -d
+      # (or set ENGINE_CONFIG in a `.env` file next to this compose file).
+      # Long syntax so a missing file fails loudly instead of Docker silently
+      # creating an empty directory in its place.
+      - type: bind
+        source: ${ENGINE_CONFIG:-./engine_config.best.yaml}
+        target: /app/config/engine_config.yaml
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      - db
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://finkfat:finkfat@db:5432/finkfat_test
+
+volumes:
+  db-data:
+  pgadmin-data:
+  cargo-target:
+  explorer-cache:

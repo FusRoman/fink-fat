@@ -1,0 +1,135 @@
+[package]
+name = "fink-fat-explorer"
+version = "0.1.0"
+authors = ["Roman <roman.lemontagner@gmail.com>"]
+edition = "2021"
+
+[dependencies]
+dioxus = { version = "0.7.1", features = ["router", "fullstack"] }
+dotenvy = "0.15.7"
+hifitime = { version = "4.3", default-features = false, features = ["std"] }
+plotly = "0.14.1"
+serde.workspace = true
+serde_json = "1.0"
+thiserror.workspace = true
+# Pure ADES/MPC domain logic and the QualityTier cascade, shared with the
+# `fink-fat submit` CLI — see `crates/fink-fat-ades`'s crate docs. Always-on
+# (not server-gated): its plain serializable types (`AdesHeaderInput`,
+# `QualityTier`, ...) cross the `#[server]` fn boundary, so the wasm client
+# build needs them too, same as this crate's own `serde`/`serde_json`.
+fink-fat-ades = { workspace = true }
+
+# Server-only dependencies — not compiled for wasm32.
+# fink-fat-engine pulls tokio (rt-multi-thread, fs) and getrandom without
+# the "js" feature, neither of which compile for wasm32-unknown-unknown.
+# nalgebra is only used in the server-side orbital conversion code.
+base64 = { version = "0.22", optional = true }
+camino = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }
+fink-fat-engine = { workspace = true, optional = true }
+nalgebra = { workspace = true, optional = true }
+outfit = { workspace = true, optional = true }
+photom = { workspace = true, optional = true, features = ["polars"] }
+polars = { workspace = true, optional = true }
+rand = { version = "0.9", default-features = false, features = [
+    "small_rng",
+], optional = true }
+rayon = { workspace = true, optional = true }
+reqwest = { version = "0.12", features = ["json"], optional = true }
+
+sqlx = { version = "0.9.0", features = [
+    "postgres",
+    "runtime-tokio",
+    "macros",
+    "json",
+    "chrono",
+], optional = true }
+tokio = { version = "1.53.1", features = [
+    "rt-multi-thread",
+    "sync",
+    "macros",
+    "time",
+], optional = true }
+# HTTP response compression (gzip/brotli/zstd) layered over the Dioxus
+# router in `main.rs`. Same major version as the one dioxus-server uses.
+tower-http = { version = "0.6", features = [
+    "compression-br",
+    "compression-gzip",
+    "compression-zstd",
+], optional = true }
+# The homepage snapshot rebuilds in a detached task, so a failed rebuild has
+# no request to report itself through — it needs a log line.
+tracing = { workspace = true, optional = true }
+web-sys = { version = "0.3.104", features = [
+    "console",
+    "Response",
+    "Window",
+    # `clipboard::copy_text`: the Clipboard API, and its `execCommand`
+    # fallback on a temporary textarea outside a secure context.
+    "Clipboard",
+    "Document",
+    "Element",
+    "HtmlDocument",
+    "HtmlElement",
+    "HtmlTextAreaElement",
+    "Navigator",
+    "Node",
+] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+gloo-timers = { version = "0.3", features = ["futures"] }
+# Binds the (a, e) plot's `plotly_click` event to a lineage-page navigation —
+# plotly.rs's own bindings only wrap `newPlot`/`react`, not plotly.js's event
+# API, so `homepage::dynamic_pop_plot` calls straight into a small inline JS
+# helper for this one event.
+wasm-bindgen = "0.2"
+# The homepage's population series is fetched with a plain browser `fetch`
+# GET (cacheable, unlike a server function's POST) and read back as bytes.
+js-sys = "0.3"
+wasm-bindgen-futures = "0.4"
+
+[features]
+default = ["web"]
+web = ["dioxus/web"]
+desktop = ["dioxus/desktop"]
+mobile = ["dioxus/mobile"]
+server = [
+    "dioxus/server",
+    "dep:sqlx",
+    "dep:tokio",
+    "dep:base64",
+    "dep:camino",
+    "dep:chrono",
+    "dep:fink-fat-engine",
+    "dep:nalgebra",
+    "dep:outfit",
+    "dep:photom",
+    "dep:polars",
+    "dep:rand",
+    "dep:rayon",
+    "dep:reqwest",
+    "dep:tower-http",
+    "dep:tracing"
+]
+
+# Documented on the `/api-docs` page (included with `include_str!`), so it is
+# compiled and linted with the rest of the workspace and cannot go stale.
+[[example]]
+name = "reverse_search"
+required-features = ["server"]
+
+[[example]]
+name = "reverse_search_batch"
+required-features = ["server"]
+
+[dev-dependencies]
+approx = "0.5.1"
+tempfile = { workspace = true }
+# Test-only: enables `ObsDataset::from_mpc_80_col`, used to round-trip
+# validate `cnd_search::obs80::build_obs80_line`'s output against photom's
+# own obs80 parser (see `cnd_search/obs80.rs`'s tests) — same pattern as
+# `fink-fat-engine/Cargo.toml`'s dev-dependency override for the same feature.
+photom = { workspace = true, features = ["mpc_80_col"] }
+
+[build-dependencies]
+built = { version = "0.8.1", default-features = false, features = ["cargo-lock"] }

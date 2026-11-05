@@ -1,0 +1,236 @@
+pub mod branch_tab;
+pub mod dynamic_pop_plot;
+pub mod family;
+pub mod interaction;
+mod lineage_table_glossary;
+pub mod orbit3d_plot;
+mod orbit3d_population_glossary;
+mod population_plot_glossary;
+pub mod quality_tier;
+pub mod refresh_status;
+#[cfg(feature = "server")]
+pub mod series_route;
+pub mod series_wire;
+#[cfg(feature = "server")]
+pub mod snapshot;
+#[cfg(feature = "server")]
+pub mod snapshot_refresh;
+pub mod stats_count;
+mod tools_menu;
+
+use dioxus::prelude::*;
+use std::collections::HashSet;
+
+use crate::homepage::{
+    branch_tab::BranchTab,
+    dynamic_pop_plot::{use_population_series, DynamicPopPlot, PopulationLegendBar},
+    family::DynamicalFamily,
+    orbit3d_plot::Orbit3DPlot,
+    quality_tier::QualityTier,
+    refresh_status::{
+        get_refresh_status, interpret_status, refresh_snapshot, PollVerdict, RefreshOutcome,
+        RefreshUi,
+    },
+    stats_count::StatsBanner,
+    tools_menu::ToolsMenu,
+};
+
+/// Which of the 3 mutually-exclusive views the homepage shows below the
+/// legend bar. Only one is ever mounted at a time.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum HomepagePlotView {
+    PopulationAe,
+    Orbit3D,
+    Table,
+}
+
+impl HomepagePlotView {
+    const ALL: [HomepagePlotView; 3] = [
+        HomepagePlotView::PopulationAe,
+        HomepagePlotView::Orbit3D,
+        HomepagePlotView::Table,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            HomepagePlotView::PopulationAe => "a / e distribution",
+            HomepagePlotView::Orbit3D => "3D orbits",
+            HomepagePlotView::Table => "Lineage table",
+        }
+    }
+}
+
+/// How often the Refresh controls poll the build progress. The status call
+/// reads no table, so this can be frequent enough for a smooth gauge.
+const REFRESH_POLL_MS: u64 = 500;
+
+/// Give up following a rebuild after this long, so a build that never
+/// reports back does not leave a poll loop running for the whole session.
+const REFRESH_POLL_TIMEOUT_MS: u64 = 10 * 60 * 1000;
+
+/// How long a transient outcome ("Up to date", "Updated") stays on the
+/// Refresh button before it returns to its idle label.
+const REFRESH_FEEDBACK_MS: u64 = 4000;
+
+#[component]
+pub fn Home() -> Element {
+    let mut search_input = use_signal(String::new);
+
+    // Families the user toggled off in the plot legend. Shared with both the
+    // plot (which hides their traces) and the table (which filters them out
+    // of its query) — storing the *hidden* set rather than the visible one
+    // means the empty default naturally reads as "no filter", so neither
+    // component has to know the full list of families up front.
+    let hidden_families = use_signal(HashSet::<DynamicalFamily>::new);
+
+    // Same idea as `hidden_families`, one signal for the quality-tier legend
+    // chips (plot) and the "Quality" column filter (table).
+    let hidden_tiers = use_signal(HashSet::<QualityTier>::new);
+
+    let mut plot_view = use_signal(|| HomepagePlotView::PopulationAe);
+
+    // Bumped once a requested snapshot rebuild has actually landed. All three
+    // data components read it inside their resource futures, so bumping it
+    // refetches the whole page against the new snapshot.
+    let mut refresh_token = use_signal(|| 0_u64);
+    let mut refresh_ui = use_signal(|| RefreshUi::Idle);
+
+    // Shared with `PopulationLegendBar`, which stays visible across all 3
+    // views: fetched once here rather than inside `DynamicPopPlot`, which is
+    // now only mounted while the (a, e) view is active.
+    let orbital_data = use_population_series(refresh_token);
+
+    // `force = false`: rebuild only if the database changed; `true`: always.
+    let request_refresh = move |force: bool| {
+        if refresh_ui.peek().is_busy() {
+            return;
+        }
+        refresh_ui.set(RefreshUi::Checking);
+
+        spawn(async move {
+            // The version before the request: the rebuild has landed once the
+            // server reports a different one.
+            let version_before = get_refresh_status().await.ok().and_then(|s| s.version);
+
+            let final_ui = match refresh_snapshot(force).await {
+                Err(e) => RefreshUi::Failed(e.to_string()),
+                Ok(RefreshOutcome::UpToDate) => RefreshUi::UpToDate,
+                Ok(RefreshOutcome::Started | RefreshOutcome::AlreadyRunning) => {
+                    let mut waited = 0;
+                    loop {
+                        // A transport error mid-build is not fatal: keep
+                        // polling until the timeout.
+                        if let Ok(status) = get_refresh_status().await {
+                            match interpret_status(&status, version_before) {
+                                PollVerdict::Continue(ui) => refresh_ui.set(ui),
+                                PollVerdict::Finished { ui, new_snapshot } => {
+                                    if new_snapshot {
+                                        refresh_token += 1;
+                                    }
+                                    break ui;
+                                }
+                            }
+                        }
+                        if waited >= REFRESH_POLL_TIMEOUT_MS {
+                            break RefreshUi::Failed(
+                                "No answer from the server, the build may still be running"
+                                    .to_string(),
+                            );
+                        }
+                        crate::sleep_ms(REFRESH_POLL_MS).await;
+                        waited += REFRESH_POLL_MS;
+                    }
+                }
+            };
+
+            // A failure stays visible until the next attempt; a success
+            // fades back to the idle label.
+            let transient = matches!(final_ui, RefreshUi::UpToDate | RefreshUi::Updated);
+            refresh_ui.set(final_ui.clone());
+            if transient {
+                crate::sleep_ms(REFRESH_FEEDBACK_MS).await;
+                if *refresh_ui.peek() == final_ui {
+                    refresh_ui.set(RefreshUi::Idle);
+                }
+            }
+        });
+    };
+
+    rsx! {
+        div { class: "min-h-screen bg-base-200 flex flex-col",
+            div { class: "navbar bg-base-100 shadow-sm px-6 gap-4 sticky top-0 z-20",
+                div { class: "flex-none",
+                    span { class: "text-lg font-semibold", "fink-fat-explorer" }
+                }
+                div { class: "flex-1 min-w-0", StatsBanner { refresh_token } }
+                div { class: "flex-none flex items-center gap-2",
+                    input {
+                        r#type: "text",
+                        placeholder: "Search a designation...",
+                        class: "input input-bordered input-sm w-64",
+                        oninput: move |evt| search_input.set(evt.value()),
+                    }
+                    Link {
+                        to: crate::Route::CrossMatchDashboardPage {},
+                        class: "btn btn-sm btn-outline btn-accent gap-1",
+                        "🔭 Cross-match"
+                    }
+                    Link {
+                        to: crate::Route::SubmissionDashboardPage {},
+                        class: "btn btn-sm btn-outline btn-accent gap-1",
+                        "📡 Submission"
+                    }
+                    Link {
+                        to: crate::Route::ApiDocsPage {},
+                        class: "btn btn-sm btn-outline btn-accent gap-1",
+                        "📖 API"
+                    }
+                    ToolsMenu { refresh: refresh_ui(), on_refresh: request_refresh }
+                }
+            }
+
+            // Stays visible no matter which view is active below, since
+            // `hidden_families`/`hidden_tiers` filter both the (a, e) plot
+            // and the lineage table. The view switch rides in the same row
+            // rather than its own — it used to cost a whole extra row of
+            // vertical space, which pushed the (a, e) plot's x axis below
+            // the fold.
+            div { class: "px-6 pt-4 flex items-start gap-4",
+                div { class: "flex-1 min-w-0",
+                    PopulationLegendBar { orbital_data, hidden_families, hidden_tiers }
+                }
+                div { class: "join bg-base-100 shadow-sm rounded-box shrink-0",
+                    for view in HomepagePlotView::ALL {
+                        button {
+                            key: "{view.label()}",
+                            class: if plot_view() == view { "join-item btn btn-sm btn-active" } else { "join-item btn btn-sm" },
+                            onclick: move |_| plot_view.set(view),
+                            "{view.label()}"
+                        }
+                    }
+                }
+            }
+
+            div { class: "p-6 flex flex-col flex-1 min-h-0",
+                match plot_view() {
+                    HomepagePlotView::PopulationAe => rsx! {
+                        DynamicPopPlot { orbital_data, hidden_families, hidden_tiers }
+                    },
+                    HomepagePlotView::Orbit3D => rsx! {
+                        Orbit3DPlot {}
+                    },
+                    HomepagePlotView::Table => rsx! {
+                        div { class: "flex-1 min-h-0 flex flex-col",
+                            BranchTab {
+                                search_query: search_input(),
+                                hidden_families,
+                                hidden_tiers,
+                                refresh_token,
+                            }
+                        }
+                    },
+                }
+            }
+        }
+    }
+}

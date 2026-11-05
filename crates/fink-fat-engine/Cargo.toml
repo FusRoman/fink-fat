@@ -1,0 +1,47 @@
+[package]
+name = "fink-fat-engine"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+categories.workspace = true
+keywords.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+license-file.workspace = true
+readme = "README.md"
+description = "Core engine for the Fink-FAT asteroid detection pipeline."
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+camino = { workspace = true }
+tracing = { workspace = true }
+ahash = { workspace = true }
+photom = { workspace = true, features = ["serde"] }
+outfit = { workspace = true, features = ["serde"] }
+rkyv = { workspace = true, features = ["pointer_width_64"] }
+memmap2 = { workspace = true }
+nalgebra = { workspace = true }
+rayon = { workspace = true }
+
+hifitime = { version = "4.2.0", default-features = false, features = [
+    "ut1",
+    "std",
+] }
+
+cdshealpix = "0.7.3"
+config = "0.15.19"
+serde_json = "1.0.145"
+
+[dev-dependencies]
+approx = "0.5.1"
+# criterion = "0.8.1"
+proptest = "1.9.0"
+serde_yaml = { workspace = true }
+tracing-subscriber = { workspace = true }
+tempfile = { workspace = true }
+# Test-only: enables `ObsDataset::from_mpc_80_col`, used by the UTC->TT
+# anchor test (`tests/utc_tt_anchor.rs`) to exercise the real parsing path
+# instead of constructing an `MJDTT` value directly.
+photom = { workspace = true, features = ["serde", "mpc_80_col"] }

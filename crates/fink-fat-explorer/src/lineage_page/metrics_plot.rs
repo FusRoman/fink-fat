@@ -1,0 +1,264 @@
+use dioxus::prelude::*;
+
+#[cfg(target_arch = "wasm32")]
+use plotly::{
+    common::{Line, Marker, Mode, Title},
+    layout::{Axis, AxisType, Layout, Margin},
+    Plot, Scatter,
+};
+
+use super::kf_replay::KfStep;
+use super::metrics_plot_glossary::MetricsPlotGlossary;
+use super::x_axis::XAxisUnit;
+#[cfg(target_arch = "wasm32")]
+use super::x_axis::{x_values_for_steps, XAxisValues};
+
+/// χ² (2 d.o.f.) covariance-inflation threshold at 95% confidence — the same
+/// value used by the engine's default `SingleKalmanConfig::inflation_chi2_threshold`
+/// (`engine_config.best.yaml`'s `kalman_shared_context.config`). This is
+/// *not* the multi-hypothesis bank's discard gate (`KFBankConfig::gate_chi2`,
+/// default 23.0) — see [`super::metrics_plot_glossary`] for that distinction.
+/// `pub(super)` so the glossary's tests can assert its displayed text
+/// matches this value exactly rather than a copy that could drift.
+pub(super) const CHI2_GATE_95: f64 = 5.991;
+
+/// Evolution of the per-point filter-consistency metrics as real
+/// observations are absorbed: χ² (NIS), angular separation from the
+/// pre-update prediction, and the single-hypothesis log-likelihood (a proxy
+/// for the production LLR — see [`KfStep::log_likelihood`]).
+#[component]
+pub fn MetricsPlot(replay: Vec<KfStep>, x_axis_unit: XAxisUnit) -> Element {
+    rsx! {
+        div { class: "card bg-base-100 shadow-sm flex-1",
+            div { class: "card-body gap-4",
+                div { class: "flex items-center gap-2",
+                    h2 { class: "card-title", "Filter consistency metrics" }
+                    MetricsPlotGlossary {}
+                }
+                Chi2Plot { replay: replay.clone(), x_axis_unit }
+                SeparationPlot { replay: replay.clone(), x_axis_unit }
+                LogLikelihoodPlot { replay, x_axis_unit }
+            }
+        }
+    }
+}
+
+#[component]
+fn Chi2Plot(replay: Vec<KfStep>, x_axis_unit: XAxisUnit) -> Element {
+    let mut is_mounted = use_signal(|| false);
+    #[cfg(target_arch = "wasm32")]
+    let mut drawn = use_signal(|| false);
+
+    use_effect(use_reactive!(|(replay, x_axis_unit)| {
+        #[cfg(target_arch = "wasm32")]
+        {
+            if !is_mounted() {
+                return;
+            }
+
+            let nis: Vec<f64> = replay.iter().map(|s| s.nis).collect();
+            let threshold = vec![CHI2_GATE_95; nis.len()];
+
+            let mut plot = Plot::new();
+            let mut x_axis = Axis::new().title(Title::from(x_axis_unit.axis_title()));
+            match x_values_for_steps(x_axis_unit, &replay) {
+                XAxisValues::Numeric(x) => {
+                    plot.add_trace(
+                        Scatter::new(x.clone(), nis)
+                            .name("χ² (NIS)")
+                            .mode(Mode::LinesMarkers)
+                            .marker(Marker::new().color("#d2422d")),
+                    );
+                    plot.add_trace(
+                        Scatter::new(x, threshold)
+                            .name("95% gate (2 d.o.f.)")
+                            .mode(Mode::Lines)
+                            .line(
+                                Line::new()
+                                    .dash(plotly::common::DashType::Dash)
+                                    .color("#888888"),
+                            ),
+                    );
+                }
+                XAxisValues::Date(x) => {
+                    x_axis = x_axis.type_(AxisType::Date);
+                    plot.add_trace(
+                        Scatter::new(x.clone(), nis)
+                            .name("χ² (NIS)")
+                            .mode(Mode::LinesMarkers)
+                            .marker(Marker::new().color("#d2422d")),
+                    );
+                    plot.add_trace(
+                        Scatter::new(x, threshold)
+                            .name("95% gate (2 d.o.f.)")
+                            .mode(Mode::Lines)
+                            .line(
+                                Line::new()
+                                    .dash(plotly::common::DashType::Dash)
+                                    .color("#888888"),
+                            ),
+                    );
+                }
+            }
+
+            let layout = Layout::new()
+                .height(180)
+                .margin(Margin::new().top(10).right(10).bottom(30))
+                .x_axis(x_axis)
+                .y_axis(Axis::new().title(Title::from("χ²")));
+            plot.set_layout(layout);
+
+            spawn(async move {
+                if *drawn.peek() {
+                    plotly::bindings::react("lineage-chi2-plot", &plot).await;
+                } else {
+                    plotly::bindings::new_plot("lineage-chi2-plot", &plot).await;
+                    drawn.set(true);
+                }
+            });
+        }
+    }));
+
+    rsx! {
+        div {
+            id: "lineage-chi2-plot",
+            style: "width: 100%;",
+            onmounted: move |_| is_mounted.set(true),
+        }
+    }
+}
+
+#[component]
+fn SeparationPlot(replay: Vec<KfStep>, x_axis_unit: XAxisUnit) -> Element {
+    let mut is_mounted = use_signal(|| false);
+    #[cfg(target_arch = "wasm32")]
+    let mut drawn = use_signal(|| false);
+
+    use_effect(use_reactive!(|(replay, x_axis_unit)| {
+        #[cfg(target_arch = "wasm32")]
+        {
+            if !is_mounted() {
+                return;
+            }
+
+            let separation: Vec<f64> = replay.iter().map(|s| s.separation_arcsec).collect();
+
+            let mut plot = Plot::new();
+            let mut x_axis = Axis::new().title(Title::from(x_axis_unit.axis_title()));
+            match x_values_for_steps(x_axis_unit, &replay) {
+                XAxisValues::Numeric(x) => {
+                    plot.add_trace(
+                        Scatter::new(x, separation)
+                            .name("Distance to prediction")
+                            .mode(Mode::LinesMarkers)
+                            .marker(Marker::new().color("#2d7fd2")),
+                    );
+                }
+                XAxisValues::Date(x) => {
+                    x_axis = x_axis.type_(AxisType::Date);
+                    plot.add_trace(
+                        Scatter::new(x, separation)
+                            .name("Distance to prediction")
+                            .mode(Mode::LinesMarkers)
+                            .marker(Marker::new().color("#2d7fd2")),
+                    );
+                }
+            }
+
+            let layout = Layout::new()
+                .height(180)
+                .margin(Margin::new().top(10).right(10).bottom(30))
+                .x_axis(x_axis)
+                .y_axis(Axis::new().title(Title::from("Separation (arcsec)")));
+            plot.set_layout(layout);
+
+            spawn(async move {
+                if *drawn.peek() {
+                    plotly::bindings::react("lineage-separation-plot", &plot).await;
+                } else {
+                    plotly::bindings::new_plot("lineage-separation-plot", &plot).await;
+                    drawn.set(true);
+                }
+            });
+        }
+    }));
+
+    rsx! {
+        div {
+            id: "lineage-separation-plot",
+            style: "width: 100%;",
+            onmounted: move |_| is_mounted.set(true),
+        }
+    }
+}
+
+#[component]
+fn LogLikelihoodPlot(replay: Vec<KfStep>, x_axis_unit: XAxisUnit) -> Element {
+    let mut is_mounted = use_signal(|| false);
+    #[cfg(target_arch = "wasm32")]
+    let mut drawn = use_signal(|| false);
+
+    use_effect(use_reactive!(|(replay, x_axis_unit)| {
+        #[cfg(target_arch = "wasm32")]
+        {
+            if !is_mounted() {
+                return;
+            }
+
+            let mut cumulative = 0.0;
+            let cumulative_log_lik: Vec<f64> = replay
+                .iter()
+                .map(|s| {
+                    cumulative += s.log_likelihood;
+                    cumulative
+                })
+                .collect();
+
+            let mut plot = Plot::new();
+            let mut x_axis = Axis::new().title(Title::from(x_axis_unit.axis_title()));
+            match x_values_for_steps(x_axis_unit, &replay) {
+                XAxisValues::Numeric(x) => {
+                    plot.add_trace(
+                        Scatter::new(x, cumulative_log_lik)
+                            .name("Cumulative log-likelihood")
+                            .mode(Mode::LinesMarkers)
+                            .marker(Marker::new().color("#2dd25d")),
+                    );
+                }
+                XAxisValues::Date(x) => {
+                    x_axis = x_axis.type_(AxisType::Date);
+                    plot.add_trace(
+                        Scatter::new(x, cumulative_log_lik)
+                            .name("Cumulative log-likelihood")
+                            .mode(Mode::LinesMarkers)
+                            .marker(Marker::new().color("#2dd25d")),
+                    );
+                }
+            }
+
+            let layout = Layout::new()
+                .height(180)
+                .margin(Margin::new().top(10).right(10).bottom(30))
+                .x_axis(x_axis)
+                .y_axis(Axis::new().title(Title::from("log-likelihood (single hyp.)")));
+            plot.set_layout(layout);
+
+            spawn(async move {
+                if *drawn.peek() {
+                    plotly::bindings::react("lineage-loglik-plot", &plot).await;
+                } else {
+                    plotly::bindings::new_plot("lineage-loglik-plot", &plot).await;
+                    drawn.set(true);
+                }
+            });
+        }
+    }));
+
+    rsx! {
+        div {
+            id: "lineage-loglik-plot",
+            style: "width: 100%;",
+            onmounted: move |_| is_mounted.set(true),
+        }
+    }
+}
