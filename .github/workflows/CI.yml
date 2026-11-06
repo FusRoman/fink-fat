@@ -78,7 +78,8 @@ jobs:
           --health-retries 5
     env:
       DATABASE_URL: postgres://finkfat:finkfat@localhost:5432/finkfat_test
-      TBLS_DSN: postgres://finkfat:finkfat@localhost:5432/finkfat_test?sslmode=disable
+      # Same dedicated database as docs/generate_schema_docs.sh.
+      TBLS_DSN: postgres://finkfat:finkfat@localhost:5432/fink_fat_schema_docs?sslmode=disable
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -92,7 +93,7 @@ jobs:
           key: schema-docs
 
       - name: Create the tables
-        run: cargo run --quiet -p fink-fat-sql --example create_schema
+        run: cargo run --quiet -p fink-fat-sql --example create_schema -- fink_fat_schema_docs
 
       - name: Install tbls
         uses: k1low/setup-tbls@v1

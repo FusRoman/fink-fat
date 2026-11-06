@@ -137,8 +137,12 @@ docker compose up -d db                               # or set DATABASE_URL
 crates/fink-fat-sql/docs/generate_schema_docs.sh
 ```
 
-The script creates the tables (`cargo run -p fink-fat-sql --example
-create_schema`), then runs tbls with `.tbls.yml`. It uses the local `tbls`
+The script recreates a dedicated database, `fink_fat_schema_docs`, on the same
+server, and creates the tables in it (`cargo run -p fink-fat-sql --example
+create_schema -- fink_fat_schema_docs`). It then runs tbls on that database
+with `.tbls.yml`. tbls lists tables in creation order, so a fresh database gives
+the same docs locally and in CI, and the development database is never
+touched. It uses the local `tbls`
 binary if installed, otherwise its pinned Docker image. The configuration is
 always passed explicitly (`-c .tbls.yml`), because tbls does not find it on its
 own. Run tbls by hand the same way: `tbls doc|diff|lint -c .tbls.yml`.
