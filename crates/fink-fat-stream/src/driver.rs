@@ -74,16 +74,30 @@
 //! (pruning, stale purge, discovery), then:
 //!
 //! 1. the night's archived trajectories are appended to the archive log and
-//!    fsynced;
+//!    fsynced (with a SQL sink, they are also queued in its outbox, with the
+//!    batch's pending `observations` rows, and fsynced);
 //! 2. the branch-collection snapshot is written (atomically, carrying the
 //!    night as its last closed one);
-//! 3. the journal is truncated.
+//! 3. the journal is truncated;
+//! 4. with a SQL sink, the new collection is published to Postgres — best
+//!    effort, see [Postgres](self#postgres).
 //!
 //! | Crash … | On restart |
 //! |---------|------------|
 //! | before 1 | the snapshot still says the night is open: it is replayed from the journal and closed again |
 //! | between 1 and 2 | same, so the night's archived batch is appended a **second time** (identical trajectories, same designations — deduplicable by designation). The reverse order would *lose* the batch instead. |
 //! | between 2 and 3 | the journal describes a night the snapshot says is closed: it is discarded |
+//! | during 4 | the snapshot and the outbox are on disk; the next start-up flushes the outbox and publishes the collection |
+//!
+//! # Postgres
+//!
+//! With a `database:` configuration, the driver also feeds the explorer's
+//! database through a [`SqlSink`] (see [`crate::sink`]): accepted alerts
+//! are queued for `observations` at every batch and flushed when Postgres
+//! is reachable; at every night close the archived trajectories are queued
+//! and the trajectory tables are swapped for the new collection. The
+//! database is a *view* of the driver's local state: its failures are
+//! logged and counted ([`DriverStats`]), never fatal, and caught up later.
 //!
 //! # Restart
 //!
@@ -96,6 +110,7 @@
 use std::{
     fs::{File, OpenOptions},
     io::{BufWriter, Write},
+    time::Instant,
 };
 
 use camino::Utf8PathBuf;
@@ -103,6 +118,7 @@ use fink_fat_engine::{
     engine_config::{EngineConfig, kalman_context::KalmanContext},
     topocentric_kf::branching::{BranchCollection, write_archived_batch},
 };
+use fink_fat_sql::rows::ObservationRow;
 use photom::{NightId, observation_dataset::observation::ObservationInput};
 
 use crate::{
@@ -115,6 +131,7 @@ use crate::{
     journal::{JOURNAL_FILENAME, JournalEntry, NightJournal},
     night::LiveNight,
     record::AlertRecord,
+    sink::{FlushOutcome, SQL_OUTBOX_FILENAME, SqlSink, SyncOutcome, observation_row},
     source::AlertSource,
 };
 
@@ -131,6 +148,9 @@ pub struct StreamPaths {
     pub archive: Utf8PathBuf,
     /// Journal of the open night (see [`crate::journal`]).
     pub journal: Utf8PathBuf,
+    /// Rows waiting for Postgres (see [`crate::sink::outbox`]); only used
+    /// with a `database:` configuration.
+    pub sql_outbox: Utf8PathBuf,
 }
 
 impl StreamPaths {
@@ -144,6 +164,7 @@ impl StreamPaths {
             snapshot: engine_config.snapshot_path(),
             archive: engine_config.archive_log_path(),
             journal: engine_config.storage_path_buf().join(JOURNAL_FILENAME),
+            sql_outbox: engine_config.storage_path_buf().join(SQL_OUTBOX_FILENAME),
         }
     }
 }
@@ -181,6 +202,17 @@ pub struct DriverStats {
     pub n_nights_closed: usize,
     /// Trajectories appended to the archive log.
     pub n_archived: usize,
+    /// Rows inserted into `observations` (already-present rows excluded).
+    pub n_observations_inserted: u64,
+    /// Rows inserted into `archived_trajectories`.
+    pub n_archived_inserted: u64,
+    /// Failed flushes of the SQL outbox (each retried later).
+    pub n_flush_failures: usize,
+    /// Successful swaps of the trajectory tables.
+    pub n_nights_synced: usize,
+    /// Failed syncs of the trajectory tables (each retried at the next
+    /// close or start-up).
+    pub n_sync_failures: usize,
 }
 
 impl DriverStats {
@@ -248,6 +280,12 @@ pub struct Driver<'ctx, 'cfg, S> {
     /// is acknowledged, or dropped if the night closes first (the snapshot
     /// then supersedes them).
     pending: Vec<JournalEntry>,
+    /// Postgres writer, `None` without a `database:` configuration.
+    sink: Option<SqlSink>,
+    /// `observations` rows of the current batch's accepted alerts, queued
+    /// in the SQL outbox before the batch is journaled (see [`Self::step`]).
+    /// Always empty without a sink.
+    pending_rows: Vec<ObservationRow>,
     /// Idle or open (see [`Phase`]).
     phase: Phase<'ctx, 'cfg>,
     /// Latest `arrival_mjd` seen, MJD UTC (`-∞` before the first alert).
@@ -266,7 +304,12 @@ impl<'ctx, 'cfg, S: AlertSource> Driver<'ctx, 'cfg, S> {
     ///    collection (a first run).
     /// 3. Open the archive log in append mode.
     /// 4. Open the journal (cutting a torn last frame) and read its entries.
-    /// 5. Replay those entries if they describe a night not closed yet (see
+    /// 5. With a `database:` configuration: open the SQL sink (and its
+    ///    outbox), then publish the loaded collection if the database is
+    ///    behind it — the only moment the idle collection is at hand before
+    ///    a night opens (see [`crate::sink`]). A database failure is logged,
+    ///    not fatal.
+    /// 6. Replay those entries if they describe a night not closed yet (see
     ///    the private `recover`): the driver then
     ///    starts with that night open, exactly as the interrupted run left
     ///    it at its last fsync.
@@ -308,6 +351,11 @@ impl<'ctx, 'cfg, S: AlertSource> Driver<'ctx, 'cfg, S> {
         );
         let (journal, entries) = NightJournal::open(&paths.journal)?;
         let ingestor = Ingestor::new(config.ingest.quality_cuts, config.ingest.conversion);
+        let sink = config
+            .database
+            .as_ref()
+            .map(|database| SqlSink::open(database, &paths.sql_outbox))
+            .transpose()?;
 
         let mut driver = Self {
             source,
@@ -319,10 +367,13 @@ impl<'ctx, 'cfg, S: AlertSource> Driver<'ctx, 'cfg, S> {
             archive,
             ingestor,
             pending: Vec::new(),
+            sink,
+            pending_rows: Vec::new(),
             phase: Phase::Idle(collection),
             event_time: f64::NEG_INFINITY,
             stats: DriverStats::default(),
         };
+        driver.sync_idle_collection()?;
         driver.recover(entries)?;
         Ok(driver)
     }
@@ -348,6 +399,15 @@ impl<'ctx, 'cfg, S: AlertSource> Driver<'ctx, 'cfg, S> {
     /// may open the next one; the journal frame written at the end then only
     /// holds the new night's entries.
     ///
+    /// With a SQL sink, the batch's `observations` rows are queued and
+    /// fsynced in the outbox **before** the journal: if the process dies in
+    /// between, the batch is not acknowledged, the source redelivers it, and
+    /// the alerts — absent from the journal, hence not duplicates — are
+    /// accepted and queued again (an idempotent insert). The reverse order
+    /// would lose them: journaled, hence duplicates on redelivery, but never
+    /// queued. After the acknowledgement, the outbox is flushed if its
+    /// backoff allows; a database failure never fails the step.
+    ///
     /// # Returns
     /// `true` when a batch was processed (possibly empty), `false` once the
     /// source is exhausted — in which case nothing was done, and the caller
@@ -367,10 +427,15 @@ impl<'ctx, 'cfg, S: AlertSource> Driver<'ctx, 'cfg, S> {
         self.advance_ready_visits()?;
         self.check_clock()?;
         // Durability point: everything this batch did is on disk before the
-        // source is told it may forget the batch.
+        // source is told it may forget the batch. Outbox first (see above).
+        self.queue_pending_rows()?;
+        if let Some(sink) = &mut self.sink {
+            sink.sync_outbox()?;
+        }
         self.journal.append(std::mem::take(&mut self.pending))?;
         self.journal.sync()?;
         self.source.ack()?;
+        self.flush_sink(false)?;
         Ok(true)
     }
 
@@ -397,6 +462,9 @@ impl<'ctx, 'cfg, S: AlertSource> Driver<'ctx, 'cfg, S> {
     /// open night stays in the journal and is resumed by the next
     /// [`Self::new`].
     ///
+    /// With a SQL sink, a last flush is forced, so a replay ends with the
+    /// database up to date whenever Postgres is reachable.
+    ///
     /// # Returns
     /// The final counters.
     ///
@@ -406,7 +474,119 @@ impl<'ctx, 'cfg, S: AlertSource> Driver<'ctx, 'cfg, S> {
         if matches!(self.phase, Phase::Open(_)) {
             self.close_night(CloseTrigger::EndOfStream)?;
         }
+        self.flush_sink(true)?;
         Ok(self.stats)
+    }
+
+    /// Move the batch's `observations` rows into the SQL outbox (buffered;
+    /// the caller fsyncs). A no-op without a sink.
+    ///
+    /// # Errors
+    /// Local I/O error on the outbox.
+    fn queue_pending_rows(&mut self) -> Result<()> {
+        let rows = std::mem::take(&mut self.pending_rows);
+        match &mut self.sink {
+            Some(sink) => sink.queue_observations(rows),
+            None => Ok(()),
+        }
+    }
+
+    /// Flush the SQL outbox (see [`SqlSink::flush`]) and record the outcome
+    /// in the stats and the log. A no-op without a sink.
+    ///
+    /// # Arguments
+    /// * `force` – Ignore the backoff.
+    ///
+    /// # Errors
+    /// Only a local I/O error on the outbox; Postgres failures are logged.
+    fn flush_sink(&mut self, force: bool) -> Result<()> {
+        let Some(sink) = &mut self.sink else {
+            return Ok(());
+        };
+        match sink.flush(Instant::now(), force)? {
+            FlushOutcome::Empty | FlushOutcome::Deferred => {}
+            FlushOutcome::Flushed {
+                n_observations,
+                n_archived,
+            } => {
+                self.stats.n_observations_inserted += n_observations;
+                self.stats.n_archived_inserted += n_archived;
+                StreamEvent::SqlFlushed {
+                    n_observations,
+                    n_archived,
+                }
+                .emit();
+            }
+            FlushOutcome::Failed { failure, retry_in } => {
+                self.stats.n_flush_failures += 1;
+                StreamEvent::SqlFlushFailed {
+                    failure: &failure,
+                    retry_in,
+                }
+                .emit();
+            }
+        }
+        Ok(())
+    }
+
+    /// Publish `collection` to the database if it is behind (see
+    /// [`SqlSink::sync_night`]) and record the outcome. A no-op without a
+    /// sink.
+    ///
+    /// The caller must first force a flush ([`Self::flush_sink`]`(true)`),
+    /// which records its own outcome: the sync refuses to run while rows
+    /// are pending.
+    ///
+    /// A free-standing helper over the fields it needs, so the caller can
+    /// pass a collection it owns while the driver is borrowed.
+    fn sync_collection(
+        sink: Option<&mut SqlSink>,
+        collection: &BranchCollection<'ctx, 'cfg>,
+        stats: &mut DriverStats,
+    ) {
+        let Some(sink) = sink else {
+            return;
+        };
+        let night_id = collection.last_closed_night_id;
+        match sink.sync_night(collection) {
+            SyncOutcome::UpToDate => {}
+            SyncOutcome::Synced {
+                n_branches,
+                duration,
+            } => {
+                stats.n_nights_synced += 1;
+                StreamEvent::NightSynced {
+                    night_id,
+                    n_branches,
+                    duration,
+                }
+                .emit();
+            }
+            SyncOutcome::Failed(failure) => {
+                stats.n_sync_failures += 1;
+                StreamEvent::NightSyncFailed {
+                    night_id,
+                    failure: &failure,
+                }
+                .emit();
+            }
+        }
+    }
+
+    /// At start-up, publish the idle collection loaded from the snapshot if
+    /// the database is behind (step 5 of [`Self::new`]).
+    ///
+    /// # Errors
+    /// Only a local I/O error on the outbox.
+    fn sync_idle_collection(&mut self) -> Result<()> {
+        if self.sink.is_none() {
+            return Ok(());
+        }
+        self.flush_sink(true)?;
+        if let Phase::Idle(collection) = &self.phase {
+            Self::sync_collection(self.sink.as_mut(), collection, &mut self.stats);
+        }
+        Ok(())
     }
 
     /// The driver's clock, MJD UTC (see the [module doc](self#clock)).
@@ -471,8 +651,11 @@ impl<'ctx, 'cfg, S: AlertSource> Driver<'ctx, 'cfg, S> {
             return Ok(());
         }
 
-        // 4. Journal, then 5. assembler.
+        // 4. Journal (and SQL outbox), then 5. assembler.
         self.stats.n_accepted += 1;
+        if self.sink.is_some() {
+            self.pending_rows.push(observation_row(&observation));
+        }
         let arrival = record.arrival_mjd;
         self.pending.push(JournalEntry::Alert(record));
         self.place(observation.visit, arrival, observation.input)
@@ -651,9 +834,15 @@ impl<'ctx, 'cfg, S: AlertSource> Driver<'ctx, 'cfg, S> {
     ///    The night's dataset is dropped.
     /// 3. Persist, in the order of the
     ///    [module doc](self#closing-a-night-durably): archive (fsynced),
+    ///    SQL outbox (the batch's pending `observations` rows and the
+    ///    night's archived trajectories, fsynced — before the snapshot, so a
+    ///    crash replays the close and queues them again, idempotently),
     ///    snapshot, journal truncation. Queued journal entries of this night
     ///    are dropped — the snapshot supersedes them.
     /// 4. Reset the per-night dedup set and go Idle with the new collection.
+    /// 5. Publish the new collection to the database (flush, then swap; see
+    ///    [`SqlSink::sync_night`]). Best effort: a failure is logged and the
+    ///    next close or start-up catches up.
     ///
     /// Drained visits get no [`JournalEntry::VisitEmitted`] marker: if the
     /// process dies before the snapshot, the replay leaves them in the
@@ -693,14 +882,20 @@ impl<'ctx, 'cfg, S: AlertSource> Driver<'ctx, 'cfg, S> {
         // 2. Engine close.
         let mut collection = live.close()?;
 
-        // 3. Persistence: archive, snapshot, journal — in this order.
+        // 3. Persistence: archive, SQL outbox, snapshot, journal — in this
+        // order.
         let n_archived = collection.archived.len();
         write_archived_batch(&mut self.archive, &collection.archived)?;
         self.archive.flush()?;
         self.archive.get_ref().sync_data()?;
-        // `archived` is this night's batch only; now on disk, no need to
-        // carry it in RAM (nor in the snapshot).
-        collection.archived.clear();
+        // `archived` is this night's batch only; once on disk (and queued
+        // for Postgres), no need to carry it in RAM, nor in the snapshot.
+        let archived = std::mem::take(&mut collection.archived);
+        self.queue_pending_rows()?;
+        if let Some(sink) = &mut self.sink {
+            sink.queue_archived(archived)?;
+            sink.sync_outbox()?;
+        }
         collection.save_snapshot_to_disk(&self.paths.snapshot)?;
         self.pending.clear();
         self.journal.truncate()?;
@@ -720,6 +915,10 @@ impl<'ctx, 'cfg, S: AlertSource> Driver<'ctx, 'cfg, S> {
             n_archived,
         }
         .emit();
+
+        // 5. Database (best effort): forced flush (counted), then sync.
+        self.flush_sink(true)?;
+        Self::sync_collection(self.sink.as_mut(), &collection, &mut self.stats);
         self.phase = Phase::Idle(collection);
         Ok(())
     }

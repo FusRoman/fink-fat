@@ -31,7 +31,7 @@ echo "Running sqlfluff lint..."
 sqlfluff lint "$SQL_DIR" || exit 1
 
 echo "Running squawk..."
-squawk --config crates/fink-fat-sql/.squawk.toml "$SQL_DIR"/*.sql || exit 1
+squawk --config crates/fink-fat-sql/.squawk.toml "$SQL_DIR/**/*.sql" || exit 1
 
 echo "Running cargo fmt..."
 cargo fmt --all -- --check || exit 1

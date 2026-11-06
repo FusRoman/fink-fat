@@ -1,7 +1,7 @@
 //! `fink-fat submit`: submit MPC-eligible lineages' observations to the
 //! Minor Planet Center (MPC) as ADES XML files, recording the outcome
 //! durably in `mpc_submissions`
-//! (`crates/fink-fat-sql/sql/create_mpc_submission_tables.sql`) so a later run —
+//! (`crates/fink-fat-sql/sql/tables/submit/mpc_submissions.sql`) so a later run —
 //! or `fink-fat-explorer`'s submission dashboard — can tell what has already
 //! been sent.
 //!

@@ -2,7 +2,8 @@
 //!
 //! Plain data only — no I/O, no Postgres types. One struct per table, built
 //! by [`crate::build`] from a [`fink_fat_engine::topocentric_kf::branching::BranchCollection`]
-//! and consumed by [`crate::copy`]'s `COPY ... FROM STDIN BINARY` writers.
+//! (or, for [`ObservationRow`], by the caller from its alerts) and consumed
+//! by [`crate::copy`]'s `COPY ... FROM STDIN BINARY` writers.
 
 use fink_fat_engine::topocentric_kf::single_kalman::KFStateSnapshot;
 
@@ -202,6 +203,10 @@ pub struct ArchivedRow {
 /// that parquet is deliberately not read here — it's an evaluation-only
 /// artifact with no equivalent on real production data, and this table is
 /// meant to also hold production observations.
+///
+/// `rkyv`-serializable: the streaming pipeline journals the rows it has not
+/// inserted yet (its SQL outbox).
+#[derive(Debug, Clone, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct ObservationRow {
     /// Primary key: the alert id (ZTF candid / LSST `diaSourceId`).
     pub id: i64,

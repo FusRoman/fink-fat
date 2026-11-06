@@ -23,6 +23,7 @@
 //! | [`night`] | [`LiveNight`]: the engine's `NightSession` + the night's dataset | — |
 //! | [`journal`] | [`NightJournal`]: crash recovery of the open night | I/O |
 //! | [`source`] | [`AlertSource`] trait, [`ReplaySource`] (parquet dump) | I/O |
+//! | [`sink`] | [`SqlSink`](sink::SqlSink): Postgres writes through a durable outbox, never blocking | I/O |
 //! | [`driver`] | [`Driver`]: the loop tying everything together | I/O |
 //! | [`config`] | [`StreamConfig`]: YAML configuration | — |
 //!
@@ -42,11 +43,12 @@ pub mod ingest;
 pub mod journal;
 pub mod night;
 pub mod record;
+pub mod sink;
 pub mod source;
 
 pub use assembler::VisitAssembler;
 pub use clock::NightClock;
-pub use config::{DriverConfig, StreamConfig};
+pub use config::{DatabaseConfig, DriverConfig, StreamConfig};
 pub use driver::{Driver, DriverStats, StreamPaths};
 pub use error::{Result, StreamError};
 pub use journal::NightJournal;

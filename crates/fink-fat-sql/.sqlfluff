@@ -1,4 +1,4 @@
-# SQLFluff configuration for the fink-fat-sql scripts (`sql/*.sql`).
+# SQLFluff configuration for the fink-fat-sql scripts (`sql/**/*.sql`).
 # Run from this directory: `sqlfluff lint sql/` / `sqlfluff fix sql/`.
 
 [sqlfluff]

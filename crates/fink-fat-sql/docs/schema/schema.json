@@ -1,0 +1,3488 @@
+{
+  "name": "fink-fat",
+  "desc": "Tables written by the fink-fat engine (convert, streaming), fink-fat-explorer and fink-fat submit.",
+  "tables": [
+    {
+      "name": "public.orbit_fits",
+      "type": "BASE TABLE",
+      "comment": "Orbit fits computed by fink-fat-explorer (single lineage on demand, or bulk): Gauss IOD then n-body differential correction (outfit). Append-only history, one row per fit; owned by the explorer, never truncated by a load, no FK to the trajectory tables.",
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Identifier of the fit."
+        },
+        {
+          "name": "lineage_designation",
+          "type": "text",
+          "nullable": false,
+          "comment": "Lineage fitted (branches.lineage_designation, by value)."
+        },
+        {
+          "name": "branch_id",
+          "type": "bigint",
+          "nullable": true,
+          "comment": "Branch fitted (branches.branch_id, by value); NULL for rows written before per-branch fits existed."
+        },
+        {
+          "name": "fitted_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()",
+          "comment": "When the fit was stored."
+        },
+        {
+          "name": "observation_ids",
+          "type": "bigint[]",
+          "nullable": false,
+          "comment": "Observations submitted to the fit (observations.id), before outlier rejection."
+        },
+        {
+          "name": "n_observations_used",
+          "type": "integer",
+          "nullable": false,
+          "comment": "Observations kept by the fit after outlier rejection."
+        },
+        {
+          "name": "error_model",
+          "type": "text",
+          "nullable": false,
+          "comment": "Astrometric error model used to weight the observations."
+        },
+        {
+          "name": "fit_method",
+          "type": "text",
+          "nullable": false,
+          "default": "'differential_correction'::text",
+          "comment": "differential_correction for a converged least-squares fit; otherwise the IOD-only fallback (the bulk fit keeps the Gauss solution when the correction diverges)."
+        },
+        {
+          "name": "fit_params",
+          "type": "jsonb",
+          "nullable": false,
+          "comment": "Full fit parameters, as JSON (to reload a past configuration)."
+        },
+        {
+          "name": "reference_epoch",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Epoch of the elements, MJD."
+        },
+        {
+          "name": "semi_major_axis",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Equinoctial a: semi-major axis, AU."
+        },
+        {
+          "name": "eccentricity_sin_lon",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Equinoctial h = e·sin(Ω + ω)."
+        },
+        {
+          "name": "eccentricity_cos_lon",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Equinoctial k = e·cos(Ω + ω)."
+        },
+        {
+          "name": "tan_half_incl_sin_node",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Equinoctial p = tan(i/2)·sin Ω."
+        },
+        {
+          "name": "tan_half_incl_cos_node",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Equinoctial q = tan(i/2)·cos Ω."
+        },
+        {
+          "name": "mean_longitude",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Equinoctial λ = Ω + ω + M, rad."
+        },
+        {
+          "name": "covariance",
+          "type": "double precision[]",
+          "nullable": false,
+          "comment": "6×6 covariance of the equinoctial elements, row-major, 36 values."
+        },
+        {
+          "name": "normalised_rms",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Normalized RMS of the astrometric residuals."
+        },
+        {
+          "name": "total_newton_iterations",
+          "type": "integer",
+          "nullable": false,
+          "comment": "Iterations of the differential correction."
+        },
+        {
+          "name": "num_measurements",
+          "type": "integer",
+          "nullable": false,
+          "comment": "Scalar measurements used (two per observation)."
+        },
+        {
+          "name": "converged",
+          "type": "boolean",
+          "nullable": false,
+          "comment": "Whether the differential correction converged."
+        },
+        {
+          "name": "keplerian",
+          "type": "jsonb",
+          "nullable": false,
+          "comment": "Keplerian elements of the fitted orbit, as JSON."
+        },
+        {
+          "name": "delta_vs_previous_fit",
+          "type": "jsonb",
+          "nullable": true,
+          "comment": "Comparison with the previous fit of the lineage, as JSON; NULL for bulk fits."
+        },
+        {
+          "name": "residuals",
+          "type": "jsonb",
+          "nullable": false,
+          "comment": "Per-observation residuals, as JSON."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "orbit_fits_pkey",
+          "def": "CREATE UNIQUE INDEX orbit_fits_pkey ON public.orbit_fits USING btree (id)",
+          "table": "public.orbit_fits",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "idx_orbit_fits_lineage",
+          "def": "CREATE INDEX idx_orbit_fits_lineage ON public.orbit_fits USING btree (lineage_designation, fitted_at DESC)",
+          "table": "public.orbit_fits",
+          "columns": [
+            "lineage_designation",
+            "fitted_at"
+          ]
+        },
+        {
+          "name": "idx_orbit_fits_branch",
+          "def": "CREATE INDEX idx_orbit_fits_branch ON public.orbit_fits USING btree (branch_id, fitted_at DESC)",
+          "table": "public.orbit_fits",
+          "columns": [
+            "branch_id",
+            "fitted_at"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "orbit_fits_converged_not_null",
+          "type": "n",
+          "def": "NOT NULL converged",
+          "table": "public.orbit_fits",
+          "referenced_table": "",
+          "columns": [
+            "converged"
+          ]
+        },
+        {
+          "name": "orbit_fits_covariance_not_null",
+          "type": "n",
+          "def": "NOT NULL covariance",
+          "table": "public.orbit_fits",
+          "referenced_table": "",
+          "columns": [
+            "covariance"
+          ]
+        },
+        {
+          "name": "orbit_fits_eccentricity_cos_lon_not_null",
+          "type": "n",
+          "def": "NOT NULL eccentricity_cos_lon",
+          "table": "public.orbit_fits",
+          "referenced_table": "",
+          "columns": [
+            "eccentricity_cos_lon"
+          ]
+        },
+        {
+          "name": "orbit_fits_eccentricity_sin_lon_not_null",
+          "type": "n",
+          "def": "NOT NULL eccentricity_sin_lon",
+          "table": "public.orbit_fits",
+          "referenced_table": "",
+          "columns": [
+            "eccentricity_sin_lon"
+          ]
+        },
+        {
+          "name": "orbit_fits_error_model_not_null",
+          "type": "n",
+          "def": "NOT NULL error_model",
+          "table": "public.orbit_fits",
+          "referenced_table": "",
+          "columns": [
+            "error_model"
+          ]
+        },
+        {
+          "name": "orbit_fits_fit_method_not_null",
+          "type": "n",
+          "def": "NOT NULL fit_method",
+          "table": "public.orbit_fits",
+          "referenced_table": "",
+          "columns": [
+            "fit_method"
+          ]
+        },
+        {
+          "name": "orbit_fits_fit_params_not_null",
+          "type": "n",
+          "def": "NOT NULL fit_params",
+          "table": "public.orbit_fits",
+          "referenced_table": "",
+          "columns": [
+            "fit_params"
+          ]
+        },
+        {
+          "name": "orbit_fits_fitted_at_not_null",
+          "type": "n",
+          "def": "NOT NULL fitted_at",
+          "table": "public.orbit_fits",
+          "referenced_table": "",
+          "columns": [
+            "fitted_at"
+          ]
+        },
+        {
+          "name": "orbit_fits_id_not_null",
+          "type": "n",
+          "def": "NOT NULL id",
+          "table": "public.orbit_fits",
+          "referenced_table": "",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "orbit_fits_keplerian_not_null",
+          "type": "n",
+          "def": "NOT NULL keplerian",
+          "table": "public.orbit_fits",
+          "referenced_table": "",
+          "columns": [
+            "keplerian"
+          ]
+        },
+        {
+          "name": "orbit_fits_lineage_designation_not_null",
+          "type": "n",
+          "def": "NOT NULL lineage_designation",
+          "table": "public.orbit_fits",
+          "referenced_table": "",
+          "columns": [
+            "lineage_designation"
+          ]
+        },
+        {
+          "name": "orbit_fits_mean_longitude_not_null",
+          "type": "n",
+          "def": "NOT NULL mean_longitude",
+          "table": "public.orbit_fits",
+          "referenced_table": "",
+          "columns": [
+            "mean_longitude"
+          ]
+        },
+        {
+          "name": "orbit_fits_n_observations_used_not_null",
+          "type": "n",
+          "def": "NOT NULL n_observations_used",
+          "table": "public.orbit_fits",
+          "referenced_table": "",
+          "columns": [
+            "n_observations_used"
+          ]
+        },
+        {
+          "name": "orbit_fits_normalised_rms_not_null",
+          "type": "n",
+          "def": "NOT NULL normalised_rms",
+          "table": "public.orbit_fits",
+          "referenced_table": "",
+          "columns": [
+            "normalised_rms"
+          ]
+        },
+        {
+          "name": "orbit_fits_num_measurements_not_null",
+          "type": "n",
+          "def": "NOT NULL num_measurements",
+          "table": "public.orbit_fits",
+          "referenced_table": "",
+          "columns": [
+            "num_measurements"
+          ]
+        },
+        {
+          "name": "orbit_fits_observation_ids_not_null",
+          "type": "n",
+          "def": "NOT NULL observation_ids",
+          "table": "public.orbit_fits",
+          "referenced_table": "",
+          "columns": [
+            "observation_ids"
+          ]
+        },
+        {
+          "name": "orbit_fits_reference_epoch_not_null",
+          "type": "n",
+          "def": "NOT NULL reference_epoch",
+          "table": "public.orbit_fits",
+          "referenced_table": "",
+          "columns": [
+            "reference_epoch"
+          ]
+        },
+        {
+          "name": "orbit_fits_residuals_not_null",
+          "type": "n",
+          "def": "NOT NULL residuals",
+          "table": "public.orbit_fits",
+          "referenced_table": "",
+          "columns": [
+            "residuals"
+          ]
+        },
+        {
+          "name": "orbit_fits_semi_major_axis_not_null",
+          "type": "n",
+          "def": "NOT NULL semi_major_axis",
+          "table": "public.orbit_fits",
+          "referenced_table": "",
+          "columns": [
+            "semi_major_axis"
+          ]
+        },
+        {
+          "name": "orbit_fits_tan_half_incl_cos_node_not_null",
+          "type": "n",
+          "def": "NOT NULL tan_half_incl_cos_node",
+          "table": "public.orbit_fits",
+          "referenced_table": "",
+          "columns": [
+            "tan_half_incl_cos_node"
+          ]
+        },
+        {
+          "name": "orbit_fits_tan_half_incl_sin_node_not_null",
+          "type": "n",
+          "def": "NOT NULL tan_half_incl_sin_node",
+          "table": "public.orbit_fits",
+          "referenced_table": "",
+          "columns": [
+            "tan_half_incl_sin_node"
+          ]
+        },
+        {
+          "name": "orbit_fits_total_newton_iterations_not_null",
+          "type": "n",
+          "def": "NOT NULL total_newton_iterations",
+          "table": "public.orbit_fits",
+          "referenced_table": "",
+          "columns": [
+            "total_newton_iterations"
+          ]
+        },
+        {
+          "name": "orbit_fits_pkey",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (id)",
+          "table": "public.orbit_fits",
+          "referenced_table": "",
+          "columns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "public.orbit_fit_failures",
+      "type": "BASE TABLE",
+      "comment": "One row per failed bulk orbit fit (Gauss IOD found no orbit), so that the homepage quality tier can tell a failed branch from one never submitted. Owned by fink-fat-explorer, append-only.",
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Identifier of the attempt."
+        },
+        {
+          "name": "branch_id",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Branch whose fit failed (branches.branch_id, by value)."
+        },
+        {
+          "name": "attempted_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()",
+          "comment": "When the attempt failed."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "orbit_fit_failures_pkey",
+          "def": "CREATE UNIQUE INDEX orbit_fit_failures_pkey ON public.orbit_fit_failures USING btree (id)",
+          "table": "public.orbit_fit_failures",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "idx_orbit_fit_failures_branch",
+          "def": "CREATE INDEX idx_orbit_fit_failures_branch ON public.orbit_fit_failures USING btree (branch_id, attempted_at DESC)",
+          "table": "public.orbit_fit_failures",
+          "columns": [
+            "branch_id",
+            "attempted_at"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "orbit_fit_failures_attempted_at_not_null",
+          "type": "n",
+          "def": "NOT NULL attempted_at",
+          "table": "public.orbit_fit_failures",
+          "referenced_table": "",
+          "columns": [
+            "attempted_at"
+          ]
+        },
+        {
+          "name": "orbit_fit_failures_branch_id_not_null",
+          "type": "n",
+          "def": "NOT NULL branch_id",
+          "table": "public.orbit_fit_failures",
+          "referenced_table": "",
+          "columns": [
+            "branch_id"
+          ]
+        },
+        {
+          "name": "orbit_fit_failures_id_not_null",
+          "type": "n",
+          "def": "NOT NULL id",
+          "table": "public.orbit_fit_failures",
+          "referenced_table": "",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "orbit_fit_failures_pkey",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (id)",
+          "table": "public.orbit_fit_failures",
+          "referenced_table": "",
+          "columns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "public.cnd_queries",
+      "type": "BASE TABLE",
+      "comment": "MPC Check Near-Duplicates (CND) checks of a lineage's observations, on demand or in bulk: one row per check attempt, including those that found nothing. Owned by fink-fat-explorer, append-only.",
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Identifier of the check."
+        },
+        {
+          "name": "lineage_designation",
+          "type": "text",
+          "nullable": false,
+          "comment": "Lineage checked (branches.lineage_designation, by value)."
+        },
+        {
+          "name": "branch_id",
+          "type": "bigint",
+          "nullable": true,
+          "comment": "Branch checked (branches.branch_id, by value); NULL for older rows."
+        },
+        {
+          "name": "queried_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()",
+          "comment": "When the check ran."
+        },
+        {
+          "name": "time_separation_s",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Time tolerance of the near-duplicate search, seconds."
+        },
+        {
+          "name": "angle_separation_arcsec",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Angular tolerance of the near-duplicate search, arcsec."
+        },
+        {
+          "name": "hits",
+          "type": "jsonb",
+          "nullable": false,
+          "comment": "Observations with at least one MPC near-duplicate, as a JSON array of CndHit ([] when none)."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "cnd_queries_pkey",
+          "def": "CREATE UNIQUE INDEX cnd_queries_pkey ON public.cnd_queries USING btree (id)",
+          "table": "public.cnd_queries",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "idx_cnd_queries_lineage",
+          "def": "CREATE INDEX idx_cnd_queries_lineage ON public.cnd_queries USING btree (lineage_designation, queried_at DESC)",
+          "table": "public.cnd_queries",
+          "columns": [
+            "lineage_designation",
+            "queried_at"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "cnd_queries_angle_separation_arcsec_not_null",
+          "type": "n",
+          "def": "NOT NULL angle_separation_arcsec",
+          "table": "public.cnd_queries",
+          "referenced_table": "",
+          "columns": [
+            "angle_separation_arcsec"
+          ]
+        },
+        {
+          "name": "cnd_queries_hits_not_null",
+          "type": "n",
+          "def": "NOT NULL hits",
+          "table": "public.cnd_queries",
+          "referenced_table": "",
+          "columns": [
+            "hits"
+          ]
+        },
+        {
+          "name": "cnd_queries_id_not_null",
+          "type": "n",
+          "def": "NOT NULL id",
+          "table": "public.cnd_queries",
+          "referenced_table": "",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "cnd_queries_lineage_designation_not_null",
+          "type": "n",
+          "def": "NOT NULL lineage_designation",
+          "table": "public.cnd_queries",
+          "referenced_table": "",
+          "columns": [
+            "lineage_designation"
+          ]
+        },
+        {
+          "name": "cnd_queries_queried_at_not_null",
+          "type": "n",
+          "def": "NOT NULL queried_at",
+          "table": "public.cnd_queries",
+          "referenced_table": "",
+          "columns": [
+            "queried_at"
+          ]
+        },
+        {
+          "name": "cnd_queries_time_separation_s_not_null",
+          "type": "n",
+          "def": "NOT NULL time_separation_s",
+          "table": "public.cnd_queries",
+          "referenced_table": "",
+          "columns": [
+            "time_separation_s"
+          ]
+        },
+        {
+          "name": "cnd_queries_pkey",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (id)",
+          "table": "public.cnd_queries",
+          "referenced_table": "",
+          "columns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "public.skybot_bulk_jobs",
+      "type": "BASE TABLE",
+      "comment": "One row per attempt of the explorer's bulk Skybot sweep (cross-match of every eligible observation with known objects). A partial unique index allows at most one running job.",
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Identifier of the job."
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false,
+          "comment": "running, done, failed, killed or interrupted."
+        },
+        {
+          "name": "radius_arcsec",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Search radius around each observation, arcsec."
+        },
+        {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()",
+          "comment": "When the job started."
+        },
+        {
+          "name": "finished_at",
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "comment": "When it ended; NULL while running."
+        },
+        {
+          "name": "total_observations",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Eligible observations in the whole dataset (population-wide progress)."
+        },
+        {
+          "name": "processed_observations",
+          "type": "bigint",
+          "nullable": false,
+          "default": "0",
+          "comment": "Eligible observations ever checked (resumed jobs start from the previous count)."
+        },
+        {
+          "name": "matched_observations",
+          "type": "bigint",
+          "nullable": false,
+          "default": "0",
+          "comment": "Of those, observations matched to a known object."
+        },
+        {
+          "name": "kill_requested",
+          "type": "boolean",
+          "nullable": false,
+          "default": "false",
+          "comment": "Set by the UI to ask the running job to stop."
+        },
+        {
+          "name": "error",
+          "type": "text",
+          "nullable": true,
+          "comment": "Error message of a failed job."
+        },
+        {
+          "name": "logs",
+          "type": "text[]",
+          "nullable": false,
+          "default": "'{}'::text[]",
+          "comment": "Milestone log lines of the job (start, resume, kill, end)."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "skybot_bulk_jobs_pkey",
+          "def": "CREATE UNIQUE INDEX skybot_bulk_jobs_pkey ON public.skybot_bulk_jobs USING btree (id)",
+          "table": "public.skybot_bulk_jobs",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "idx_skybot_bulk_jobs_single_running",
+          "def": "CREATE UNIQUE INDEX idx_skybot_bulk_jobs_single_running ON public.skybot_bulk_jobs USING btree ((1)) WHERE (status = 'running'::text)",
+          "table": "public.skybot_bulk_jobs",
+          "columns": [
+            "expr"
+          ]
+        },
+        {
+          "name": "idx_skybot_bulk_jobs_started_at",
+          "def": "CREATE INDEX idx_skybot_bulk_jobs_started_at ON public.skybot_bulk_jobs USING btree (started_at DESC)",
+          "table": "public.skybot_bulk_jobs",
+          "columns": [
+            "started_at"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "skybot_bulk_jobs_id_not_null",
+          "type": "n",
+          "def": "NOT NULL id",
+          "table": "public.skybot_bulk_jobs",
+          "referenced_table": "",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "skybot_bulk_jobs_kill_requested_not_null",
+          "type": "n",
+          "def": "NOT NULL kill_requested",
+          "table": "public.skybot_bulk_jobs",
+          "referenced_table": "",
+          "columns": [
+            "kill_requested"
+          ]
+        },
+        {
+          "name": "skybot_bulk_jobs_logs_not_null",
+          "type": "n",
+          "def": "NOT NULL logs",
+          "table": "public.skybot_bulk_jobs",
+          "referenced_table": "",
+          "columns": [
+            "logs"
+          ]
+        },
+        {
+          "name": "skybot_bulk_jobs_matched_observations_not_null",
+          "type": "n",
+          "def": "NOT NULL matched_observations",
+          "table": "public.skybot_bulk_jobs",
+          "referenced_table": "",
+          "columns": [
+            "matched_observations"
+          ]
+        },
+        {
+          "name": "skybot_bulk_jobs_processed_observations_not_null",
+          "type": "n",
+          "def": "NOT NULL processed_observations",
+          "table": "public.skybot_bulk_jobs",
+          "referenced_table": "",
+          "columns": [
+            "processed_observations"
+          ]
+        },
+        {
+          "name": "skybot_bulk_jobs_radius_arcsec_not_null",
+          "type": "n",
+          "def": "NOT NULL radius_arcsec",
+          "table": "public.skybot_bulk_jobs",
+          "referenced_table": "",
+          "columns": [
+            "radius_arcsec"
+          ]
+        },
+        {
+          "name": "skybot_bulk_jobs_started_at_not_null",
+          "type": "n",
+          "def": "NOT NULL started_at",
+          "table": "public.skybot_bulk_jobs",
+          "referenced_table": "",
+          "columns": [
+            "started_at"
+          ]
+        },
+        {
+          "name": "skybot_bulk_jobs_status_not_null",
+          "type": "n",
+          "def": "NOT NULL status",
+          "table": "public.skybot_bulk_jobs",
+          "referenced_table": "",
+          "columns": [
+            "status"
+          ]
+        },
+        {
+          "name": "skybot_bulk_jobs_total_observations_not_null",
+          "type": "n",
+          "def": "NOT NULL total_observations",
+          "table": "public.skybot_bulk_jobs",
+          "referenced_table": "",
+          "columns": [
+            "total_observations"
+          ]
+        },
+        {
+          "name": "skybot_bulk_jobs_pkey",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (id)",
+          "table": "public.skybot_bulk_jobs",
+          "referenced_table": "",
+          "columns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "public.skybot_obs_status",
+      "type": "BASE TABLE",
+      "comment": "One row per observation ever checked by Skybot (bulk sweep or per-lineage search), upserted on obs_id: the single source of truth of Skybot results. Only written on a successful request.",
+      "columns": [
+        {
+          "name": "obs_id",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Observation checked (observations.id, by value). Primary key."
+        },
+        {
+          "name": "lineage_designation",
+          "type": "text",
+          "nullable": false,
+          "comment": "Lineage the observation was checked for."
+        },
+        {
+          "name": "branch_id",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Branch the observation was checked for."
+        },
+        {
+          "name": "checked_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "comment": "When it was last checked."
+        },
+        {
+          "name": "radius_arcsec",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Search radius, arcsec."
+        },
+        {
+          "name": "hits",
+          "type": "jsonb",
+          "nullable": false,
+          "comment": "Known objects found, as a JSON array of SkybotHit ([] when none)."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "skybot_obs_status_pkey",
+          "def": "CREATE UNIQUE INDEX skybot_obs_status_pkey ON public.skybot_obs_status USING btree (obs_id)",
+          "table": "public.skybot_obs_status",
+          "columns": [
+            "obs_id"
+          ]
+        },
+        {
+          "name": "idx_skybot_obs_status_checked_at",
+          "def": "CREATE INDEX idx_skybot_obs_status_checked_at ON public.skybot_obs_status USING btree (checked_at)",
+          "table": "public.skybot_obs_status",
+          "columns": [
+            "checked_at"
+          ]
+        },
+        {
+          "name": "idx_skybot_obs_status_lineage",
+          "def": "CREATE INDEX idx_skybot_obs_status_lineage ON public.skybot_obs_status USING btree (lineage_designation)",
+          "table": "public.skybot_obs_status",
+          "columns": [
+            "lineage_designation"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "skybot_obs_status_branch_id_not_null",
+          "type": "n",
+          "def": "NOT NULL branch_id",
+          "table": "public.skybot_obs_status",
+          "referenced_table": "",
+          "columns": [
+            "branch_id"
+          ]
+        },
+        {
+          "name": "skybot_obs_status_checked_at_not_null",
+          "type": "n",
+          "def": "NOT NULL checked_at",
+          "table": "public.skybot_obs_status",
+          "referenced_table": "",
+          "columns": [
+            "checked_at"
+          ]
+        },
+        {
+          "name": "skybot_obs_status_hits_not_null",
+          "type": "n",
+          "def": "NOT NULL hits",
+          "table": "public.skybot_obs_status",
+          "referenced_table": "",
+          "columns": [
+            "hits"
+          ]
+        },
+        {
+          "name": "skybot_obs_status_lineage_designation_not_null",
+          "type": "n",
+          "def": "NOT NULL lineage_designation",
+          "table": "public.skybot_obs_status",
+          "referenced_table": "",
+          "columns": [
+            "lineage_designation"
+          ]
+        },
+        {
+          "name": "skybot_obs_status_obs_id_not_null",
+          "type": "n",
+          "def": "NOT NULL obs_id",
+          "table": "public.skybot_obs_status",
+          "referenced_table": "",
+          "columns": [
+            "obs_id"
+          ]
+        },
+        {
+          "name": "skybot_obs_status_radius_arcsec_not_null",
+          "type": "n",
+          "def": "NOT NULL radius_arcsec",
+          "table": "public.skybot_obs_status",
+          "referenced_table": "",
+          "columns": [
+            "radius_arcsec"
+          ]
+        },
+        {
+          "name": "skybot_obs_status_pkey",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (obs_id)",
+          "table": "public.skybot_obs_status",
+          "referenced_table": "",
+          "columns": [
+            "obs_id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "public.mpc_submissions",
+      "type": "BASE TABLE",
+      "comment": "Every MPC submission attempt made by fink-fat submit (ADES XML), and the source of truth for what was already submitted. Owned by submit and the explorer's submission dashboard, append-only.",
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Identifier of the attempt."
+        },
+        {
+          "name": "lineage_designation",
+          "type": "text",
+          "nullable": false,
+          "comment": "Lineage submitted (branches.lineage_designation, by value)."
+        },
+        {
+          "name": "branch_id",
+          "type": "bigint",
+          "nullable": true,
+          "comment": "Branch submitted (branches.branch_id, by value)."
+        },
+        {
+          "name": "trk_sub",
+          "type": "text",
+          "nullable": false,
+          "comment": "Tracklet identifier (ADES trkSub) sent to the MPC."
+        },
+        {
+          "name": "endpoint",
+          "type": "text",
+          "nullable": false,
+          "comment": "test (submit_xml_test) or production (submit_xml)."
+        },
+        {
+          "name": "submission_id",
+          "type": "text",
+          "nullable": true,
+          "comment": "Acknowledgement id returned by the MPC; NULL if the POST failed."
+        },
+        {
+          "name": "observation_ids",
+          "type": "bigint[]",
+          "nullable": false,
+          "comment": "Observations submitted (observations.id, by value); GIN-indexed for the duplicate check."
+        },
+        {
+          "name": "xml",
+          "type": "text",
+          "nullable": false,
+          "comment": "Full ADES payload sent, for audit."
+        },
+        {
+          "name": "ack_message",
+          "type": "text",
+          "nullable": false,
+          "comment": "Acknowledgement message returned by the MPC."
+        },
+        {
+          "name": "ac2_email",
+          "type": "text",
+          "nullable": false,
+          "comment": "Contact email the MPC acknowledgement was sent to."
+        },
+        {
+          "name": "submitted_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()",
+          "comment": "When the submission was sent."
+        },
+        {
+          "name": "verdict",
+          "type": "text",
+          "nullable": false,
+          "default": "'pending'::text",
+          "comment": "pending, accepted, rejected or error; refreshed from the explorer's submission dashboard."
+        },
+        {
+          "name": "verdict_checked_at",
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "comment": "When the verdict was last refreshed."
+        },
+        {
+          "name": "verdict_detail",
+          "type": "jsonb",
+          "nullable": true,
+          "comment": "Raw status payload behind the verdict, as JSON."
+        },
+        {
+          "name": "wamo_detail",
+          "type": "jsonb",
+          "nullable": true,
+          "comment": "Per-observation processing status from MPC WAMO, as JSON (production submissions only)."
+        },
+        {
+          "name": "wamo_checked_at",
+          "type": "timestamp with time zone",
+          "nullable": true,
+          "comment": "When wamo_detail was last refreshed."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "mpc_submissions_pkey",
+          "def": "CREATE UNIQUE INDEX mpc_submissions_pkey ON public.mpc_submissions USING btree (id)",
+          "table": "public.mpc_submissions",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "idx_mpc_submissions_lineage",
+          "def": "CREATE INDEX idx_mpc_submissions_lineage ON public.mpc_submissions USING btree (lineage_designation, submitted_at DESC)",
+          "table": "public.mpc_submissions",
+          "columns": [
+            "lineage_designation",
+            "submitted_at"
+          ]
+        },
+        {
+          "name": "idx_mpc_submissions_submitted_at",
+          "def": "CREATE INDEX idx_mpc_submissions_submitted_at ON public.mpc_submissions USING btree (submitted_at DESC)",
+          "table": "public.mpc_submissions",
+          "columns": [
+            "submitted_at"
+          ]
+        },
+        {
+          "name": "idx_mpc_submissions_observation_ids",
+          "def": "CREATE INDEX idx_mpc_submissions_observation_ids ON public.mpc_submissions USING gin (observation_ids)",
+          "table": "public.mpc_submissions",
+          "columns": [
+            "observation_ids"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "mpc_submissions_ac2_email_not_null",
+          "type": "n",
+          "def": "NOT NULL ac2_email",
+          "table": "public.mpc_submissions",
+          "referenced_table": "",
+          "columns": [
+            "ac2_email"
+          ]
+        },
+        {
+          "name": "mpc_submissions_ack_message_not_null",
+          "type": "n",
+          "def": "NOT NULL ack_message",
+          "table": "public.mpc_submissions",
+          "referenced_table": "",
+          "columns": [
+            "ack_message"
+          ]
+        },
+        {
+          "name": "mpc_submissions_endpoint_not_null",
+          "type": "n",
+          "def": "NOT NULL endpoint",
+          "table": "public.mpc_submissions",
+          "referenced_table": "",
+          "columns": [
+            "endpoint"
+          ]
+        },
+        {
+          "name": "mpc_submissions_id_not_null",
+          "type": "n",
+          "def": "NOT NULL id",
+          "table": "public.mpc_submissions",
+          "referenced_table": "",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "mpc_submissions_lineage_designation_not_null",
+          "type": "n",
+          "def": "NOT NULL lineage_designation",
+          "table": "public.mpc_submissions",
+          "referenced_table": "",
+          "columns": [
+            "lineage_designation"
+          ]
+        },
+        {
+          "name": "mpc_submissions_observation_ids_not_null",
+          "type": "n",
+          "def": "NOT NULL observation_ids",
+          "table": "public.mpc_submissions",
+          "referenced_table": "",
+          "columns": [
+            "observation_ids"
+          ]
+        },
+        {
+          "name": "mpc_submissions_submitted_at_not_null",
+          "type": "n",
+          "def": "NOT NULL submitted_at",
+          "table": "public.mpc_submissions",
+          "referenced_table": "",
+          "columns": [
+            "submitted_at"
+          ]
+        },
+        {
+          "name": "mpc_submissions_trk_sub_not_null",
+          "type": "n",
+          "def": "NOT NULL trk_sub",
+          "table": "public.mpc_submissions",
+          "referenced_table": "",
+          "columns": [
+            "trk_sub"
+          ]
+        },
+        {
+          "name": "mpc_submissions_verdict_not_null",
+          "type": "n",
+          "def": "NOT NULL verdict",
+          "table": "public.mpc_submissions",
+          "referenced_table": "",
+          "columns": [
+            "verdict"
+          ]
+        },
+        {
+          "name": "mpc_submissions_xml_not_null",
+          "type": "n",
+          "def": "NOT NULL xml",
+          "table": "public.mpc_submissions",
+          "referenced_table": "",
+          "columns": [
+            "xml"
+          ]
+        },
+        {
+          "name": "mpc_submissions_pkey",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (id)",
+          "table": "public.mpc_submissions",
+          "referenced_table": "",
+          "columns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "public.observations",
+      "type": "BASE TABLE",
+      "comment": "One row per alert (detection) fed to the tracker: its astrometry, photometry and epoch. Written by fink-fat convert (full reload from a parquet) and by the streaming pipeline (live, idempotent inserts). The only store of past alerts in the database, hence WAL-logged.",
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Alert identifier: ZTF candid or LSST diaSourceId. Primary key; referenced by branch_observations.obs_id."
+        },
+        {
+          "name": "night_id",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Observing night of the alert. Batch input: relative night index of the input parquet; streaming: MJD of the Rubin dayObs. Do not mix both in one database."
+        },
+        {
+          "name": "object_id",
+          "type": "text",
+          "nullable": false,
+          "comment": "Survey object identifier: ZTF objectId; for LSST, the diaSourceId as text (no persistent per-object id for unknown moving objects)."
+        },
+        {
+          "name": "magnitude",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Apparent magnitude (AB for LSST)."
+        },
+        {
+          "name": "mag_err",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "1-σ magnitude uncertainty."
+        },
+        {
+          "name": "filter",
+          "type": "smallint",
+          "nullable": false,
+          "comment": "Numeric filter code (LSST: u g r i z y = 0 … 5; ZTF: 1 = g, 2 = r, 3 = i)."
+        },
+        {
+          "name": "mpc_code_obs",
+          "type": "text",
+          "nullable": false,
+          "comment": "MPC observatory code of the observer (I41 for ZTF, X05 for Rubin)."
+        },
+        {
+          "name": "ra",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Right ascension, rad (ICRF)."
+        },
+        {
+          "name": "ra_err",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "1-σ error on the right-ascension coordinate α (on-sky error / cos δ), rad."
+        },
+        {
+          "name": "dec",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Declination, rad (ICRF)."
+        },
+        {
+          "name": "dec_err",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "1-σ declination error, rad."
+        },
+        {
+          "name": "mjd_tt",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Exposure mid-point, MJD TT."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "observations_pkey",
+          "def": "CREATE UNIQUE INDEX observations_pkey ON public.observations USING btree (id)",
+          "table": "public.observations",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "idx_observations_object_id",
+          "def": "CREATE INDEX idx_observations_object_id ON public.observations USING btree (object_id)",
+          "table": "public.observations",
+          "columns": [
+            "object_id"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "observations_dec_err_not_null",
+          "type": "n",
+          "def": "NOT NULL dec_err",
+          "table": "public.observations",
+          "referenced_table": "",
+          "columns": [
+            "dec_err"
+          ]
+        },
+        {
+          "name": "observations_dec_not_null",
+          "type": "n",
+          "def": "NOT NULL \"dec\"",
+          "table": "public.observations",
+          "referenced_table": "",
+          "columns": [
+            "dec"
+          ]
+        },
+        {
+          "name": "observations_filter_not_null",
+          "type": "n",
+          "def": "NOT NULL filter",
+          "table": "public.observations",
+          "referenced_table": "",
+          "columns": [
+            "filter"
+          ]
+        },
+        {
+          "name": "observations_id_not_null",
+          "type": "n",
+          "def": "NOT NULL id",
+          "table": "public.observations",
+          "referenced_table": "",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "observations_mag_err_not_null",
+          "type": "n",
+          "def": "NOT NULL mag_err",
+          "table": "public.observations",
+          "referenced_table": "",
+          "columns": [
+            "mag_err"
+          ]
+        },
+        {
+          "name": "observations_magnitude_not_null",
+          "type": "n",
+          "def": "NOT NULL magnitude",
+          "table": "public.observations",
+          "referenced_table": "",
+          "columns": [
+            "magnitude"
+          ]
+        },
+        {
+          "name": "observations_mjd_tt_not_null",
+          "type": "n",
+          "def": "NOT NULL mjd_tt",
+          "table": "public.observations",
+          "referenced_table": "",
+          "columns": [
+            "mjd_tt"
+          ]
+        },
+        {
+          "name": "observations_mpc_code_obs_not_null",
+          "type": "n",
+          "def": "NOT NULL mpc_code_obs",
+          "table": "public.observations",
+          "referenced_table": "",
+          "columns": [
+            "mpc_code_obs"
+          ]
+        },
+        {
+          "name": "observations_night_id_not_null",
+          "type": "n",
+          "def": "NOT NULL night_id",
+          "table": "public.observations",
+          "referenced_table": "",
+          "columns": [
+            "night_id"
+          ]
+        },
+        {
+          "name": "observations_object_id_not_null",
+          "type": "n",
+          "def": "NOT NULL object_id",
+          "table": "public.observations",
+          "referenced_table": "",
+          "columns": [
+            "object_id"
+          ]
+        },
+        {
+          "name": "observations_ra_err_not_null",
+          "type": "n",
+          "def": "NOT NULL ra_err",
+          "table": "public.observations",
+          "referenced_table": "",
+          "columns": [
+            "ra_err"
+          ]
+        },
+        {
+          "name": "observations_ra_not_null",
+          "type": "n",
+          "def": "NOT NULL ra",
+          "table": "public.observations",
+          "referenced_table": "",
+          "columns": [
+            "ra"
+          ]
+        },
+        {
+          "name": "observations_pkey",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (id)",
+          "table": "public.observations",
+          "referenced_table": "",
+          "columns": [
+            "id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "public.archived_trajectories",
+      "type": "BASE TABLE",
+      "comment": "Closed trajectories: lineages that stopped being propagated (stale purge) but whose association history is kept as a result, with their final MAP Kalman state. Keyed by designation; only ever inserted into between full reloads.",
+      "columns": [
+        {
+          "name": "designation",
+          "type": "text",
+          "nullable": false,
+          "comment": "Designation of the branch the trajectory was archived from. Primary key."
+        },
+        {
+          "name": "lineage_id",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Lineage the trajectory came from."
+        },
+        {
+          "name": "track_ids",
+          "type": "bigint[]",
+          "nullable": false,
+          "comment": "Observation ids of the trajectory (observations.id), in track order."
+        },
+        {
+          "name": "cumulative_llr",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Cumulative log-likelihood ratio at archiving time."
+        },
+        {
+          "name": "n_real_updates",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Number of real observations the trajectory associated."
+        },
+        {
+          "name": "last_real_update_step",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Night step of the last real update: where the arc actually ends."
+        },
+        {
+          "name": "archived_at_step",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Night step at which the lineage was archived."
+        },
+        {
+          "name": "absolute_magnitude_estimate",
+          "type": "double precision",
+          "nullable": true,
+          "comment": "Absolute magnitude H estimate at archiving time; NULL if never updated."
+        },
+        {
+          "name": "absolute_magnitude_sample_count",
+          "type": "integer",
+          "nullable": false,
+          "comment": "Number of observations behind absolute_magnitude_estimate."
+        },
+        {
+          "name": "ra",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Right ascension α of the attributable state, rad (equatorial J2000)."
+        },
+        {
+          "name": "dec",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Declination δ of the attributable state, rad."
+        },
+        {
+          "name": "ra_dot",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Rate of α, rad/day."
+        },
+        {
+          "name": "dec_dot",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Rate of δ, rad/day."
+        },
+        {
+          "name": "rho",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Topocentric range ρ, AU."
+        },
+        {
+          "name": "rho_dot",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Topocentric range rate, AU/day."
+        },
+        {
+          "name": "covariance",
+          "type": "double precision[]",
+          "nullable": false,
+          "comment": "6×6 state covariance in attributable space (α, δ, α̇, δ̇, ρ, ρ̇), row-major, 36 values."
+        },
+        {
+          "name": "epoch",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Epoch of the state, MJD TT."
+        },
+        {
+          "name": "r_obs_x",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Heliocentric observer position x at epoch, AU (ecliptic J2000)."
+        },
+        {
+          "name": "r_obs_y",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Heliocentric observer position y at epoch, AU (ecliptic J2000)."
+        },
+        {
+          "name": "r_obs_z",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Heliocentric observer position z at epoch, AU (ecliptic J2000)."
+        },
+        {
+          "name": "v_obs_x",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Heliocentric observer velocity x at epoch, AU/day (ecliptic J2000)."
+        },
+        {
+          "name": "v_obs_y",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Heliocentric observer velocity y at epoch, AU/day (ecliptic J2000)."
+        },
+        {
+          "name": "v_obs_z",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Heliocentric observer velocity z at epoch, AU/day (ecliptic J2000)."
+        },
+        {
+          "name": "universal_anomaly",
+          "type": "double precision",
+          "nullable": true,
+          "comment": "Last universal anomaly of the two-body propagation (warm start of the next solve); NULL before the first propagation."
+        },
+        {
+          "name": "kalman_gain",
+          "type": "double precision[]",
+          "nullable": true,
+          "comment": "6×2 Kalman gain of the last update, row-major, 12 values; NULL before the first update."
+        },
+        {
+          "name": "nis_ema",
+          "type": "double precision",
+          "nullable": true,
+          "comment": "Exponential moving average of the normalized innovation squared, driving the fading-memory inflation; NULL before the first update."
+        },
+        {
+          "name": "dynamic_family",
+          "type": "text",
+          "nullable": false,
+          "comment": "Dynamical family of the two-body orbit implied by the state (e.g. MBA, NEO, Jupiter trojan, Centaur, TNO; Unknown when the state does not convert to a bound orbit)."
+        },
+        {
+          "name": "semi_major_axis",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Semi-major axis of that orbit, AU (0 when Unknown)."
+        },
+        {
+          "name": "eccentricity",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Eccentricity of that orbit (0 when Unknown)."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "archived_trajectories_pkey",
+          "def": "CREATE UNIQUE INDEX archived_trajectories_pkey ON public.archived_trajectories USING btree (designation)",
+          "table": "public.archived_trajectories",
+          "columns": [
+            "designation"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "archived_trajectories_absolute_magnitude_sample_count_not_null",
+          "type": "n",
+          "def": "NOT NULL absolute_magnitude_sample_count",
+          "table": "public.archived_trajectories",
+          "referenced_table": "",
+          "columns": [
+            "absolute_magnitude_sample_count"
+          ]
+        },
+        {
+          "name": "archived_trajectories_archived_at_step_not_null",
+          "type": "n",
+          "def": "NOT NULL archived_at_step",
+          "table": "public.archived_trajectories",
+          "referenced_table": "",
+          "columns": [
+            "archived_at_step"
+          ]
+        },
+        {
+          "name": "archived_trajectories_covariance_not_null",
+          "type": "n",
+          "def": "NOT NULL covariance",
+          "table": "public.archived_trajectories",
+          "referenced_table": "",
+          "columns": [
+            "covariance"
+          ]
+        },
+        {
+          "name": "archived_trajectories_cumulative_llr_not_null",
+          "type": "n",
+          "def": "NOT NULL cumulative_llr",
+          "table": "public.archived_trajectories",
+          "referenced_table": "",
+          "columns": [
+            "cumulative_llr"
+          ]
+        },
+        {
+          "name": "archived_trajectories_dec_dot_not_null",
+          "type": "n",
+          "def": "NOT NULL dec_dot",
+          "table": "public.archived_trajectories",
+          "referenced_table": "",
+          "columns": [
+            "dec_dot"
+          ]
+        },
+        {
+          "name": "archived_trajectories_dec_not_null",
+          "type": "n",
+          "def": "NOT NULL \"dec\"",
+          "table": "public.archived_trajectories",
+          "referenced_table": "",
+          "columns": [
+            "dec"
+          ]
+        },
+        {
+          "name": "archived_trajectories_designation_not_null",
+          "type": "n",
+          "def": "NOT NULL designation",
+          "table": "public.archived_trajectories",
+          "referenced_table": "",
+          "columns": [
+            "designation"
+          ]
+        },
+        {
+          "name": "archived_trajectories_dynamic_family_not_null",
+          "type": "n",
+          "def": "NOT NULL dynamic_family",
+          "table": "public.archived_trajectories",
+          "referenced_table": "",
+          "columns": [
+            "dynamic_family"
+          ]
+        },
+        {
+          "name": "archived_trajectories_eccentricity_not_null",
+          "type": "n",
+          "def": "NOT NULL eccentricity",
+          "table": "public.archived_trajectories",
+          "referenced_table": "",
+          "columns": [
+            "eccentricity"
+          ]
+        },
+        {
+          "name": "archived_trajectories_epoch_not_null",
+          "type": "n",
+          "def": "NOT NULL epoch",
+          "table": "public.archived_trajectories",
+          "referenced_table": "",
+          "columns": [
+            "epoch"
+          ]
+        },
+        {
+          "name": "archived_trajectories_last_real_update_step_not_null",
+          "type": "n",
+          "def": "NOT NULL last_real_update_step",
+          "table": "public.archived_trajectories",
+          "referenced_table": "",
+          "columns": [
+            "last_real_update_step"
+          ]
+        },
+        {
+          "name": "archived_trajectories_lineage_id_not_null",
+          "type": "n",
+          "def": "NOT NULL lineage_id",
+          "table": "public.archived_trajectories",
+          "referenced_table": "",
+          "columns": [
+            "lineage_id"
+          ]
+        },
+        {
+          "name": "archived_trajectories_n_real_updates_not_null",
+          "type": "n",
+          "def": "NOT NULL n_real_updates",
+          "table": "public.archived_trajectories",
+          "referenced_table": "",
+          "columns": [
+            "n_real_updates"
+          ]
+        },
+        {
+          "name": "archived_trajectories_r_obs_x_not_null",
+          "type": "n",
+          "def": "NOT NULL r_obs_x",
+          "table": "public.archived_trajectories",
+          "referenced_table": "",
+          "columns": [
+            "r_obs_x"
+          ]
+        },
+        {
+          "name": "archived_trajectories_r_obs_y_not_null",
+          "type": "n",
+          "def": "NOT NULL r_obs_y",
+          "table": "public.archived_trajectories",
+          "referenced_table": "",
+          "columns": [
+            "r_obs_y"
+          ]
+        },
+        {
+          "name": "archived_trajectories_r_obs_z_not_null",
+          "type": "n",
+          "def": "NOT NULL r_obs_z",
+          "table": "public.archived_trajectories",
+          "referenced_table": "",
+          "columns": [
+            "r_obs_z"
+          ]
+        },
+        {
+          "name": "archived_trajectories_ra_dot_not_null",
+          "type": "n",
+          "def": "NOT NULL ra_dot",
+          "table": "public.archived_trajectories",
+          "referenced_table": "",
+          "columns": [
+            "ra_dot"
+          ]
+        },
+        {
+          "name": "archived_trajectories_ra_not_null",
+          "type": "n",
+          "def": "NOT NULL ra",
+          "table": "public.archived_trajectories",
+          "referenced_table": "",
+          "columns": [
+            "ra"
+          ]
+        },
+        {
+          "name": "archived_trajectories_rho_dot_not_null",
+          "type": "n",
+          "def": "NOT NULL rho_dot",
+          "table": "public.archived_trajectories",
+          "referenced_table": "",
+          "columns": [
+            "rho_dot"
+          ]
+        },
+        {
+          "name": "archived_trajectories_rho_not_null",
+          "type": "n",
+          "def": "NOT NULL rho",
+          "table": "public.archived_trajectories",
+          "referenced_table": "",
+          "columns": [
+            "rho"
+          ]
+        },
+        {
+          "name": "archived_trajectories_semi_major_axis_not_null",
+          "type": "n",
+          "def": "NOT NULL semi_major_axis",
+          "table": "public.archived_trajectories",
+          "referenced_table": "",
+          "columns": [
+            "semi_major_axis"
+          ]
+        },
+        {
+          "name": "archived_trajectories_track_ids_not_null",
+          "type": "n",
+          "def": "NOT NULL track_ids",
+          "table": "public.archived_trajectories",
+          "referenced_table": "",
+          "columns": [
+            "track_ids"
+          ]
+        },
+        {
+          "name": "archived_trajectories_v_obs_x_not_null",
+          "type": "n",
+          "def": "NOT NULL v_obs_x",
+          "table": "public.archived_trajectories",
+          "referenced_table": "",
+          "columns": [
+            "v_obs_x"
+          ]
+        },
+        {
+          "name": "archived_trajectories_v_obs_y_not_null",
+          "type": "n",
+          "def": "NOT NULL v_obs_y",
+          "table": "public.archived_trajectories",
+          "referenced_table": "",
+          "columns": [
+            "v_obs_y"
+          ]
+        },
+        {
+          "name": "archived_trajectories_v_obs_z_not_null",
+          "type": "n",
+          "def": "NOT NULL v_obs_z",
+          "table": "public.archived_trajectories",
+          "referenced_table": "",
+          "columns": [
+            "v_obs_z"
+          ]
+        },
+        {
+          "name": "archived_trajectories_pkey",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (designation)",
+          "table": "public.archived_trajectories",
+          "referenced_table": "",
+          "columns": [
+            "designation"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "public.fink_fat_sync_state",
+      "type": "BASE TABLE",
+      "comment": "Single-row record of the last nightly swap of the trajectory tables by the streaming pipeline. Empty when no sync ever completed, or after a Postgres crash (UNLOGGED, like the trajectory tables), which makes the pipeline sync again.",
+      "columns": [
+        {
+          "name": "singleton",
+          "type": "boolean",
+          "nullable": false,
+          "default": "true",
+          "comment": "Always TRUE: makes the table hold at most one row."
+        },
+        {
+          "name": "last_synced_night",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Last night (MJD of its dayObs) whose trajectories were swapped in."
+        },
+        {
+          "name": "synced_at",
+          "type": "timestamp with time zone",
+          "nullable": false,
+          "default": "now()",
+          "comment": "When that swap committed."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "fink_fat_sync_state_pkey",
+          "def": "CREATE UNIQUE INDEX fink_fat_sync_state_pkey ON public.fink_fat_sync_state USING btree (singleton)",
+          "table": "public.fink_fat_sync_state",
+          "columns": [
+            "singleton"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "fink_fat_sync_state_last_synced_night_not_null",
+          "type": "n",
+          "def": "NOT NULL last_synced_night",
+          "table": "public.fink_fat_sync_state",
+          "referenced_table": "",
+          "columns": [
+            "last_synced_night"
+          ]
+        },
+        {
+          "name": "fink_fat_sync_state_singleton_check",
+          "type": "CHECK",
+          "def": "CHECK (singleton)",
+          "table": "public.fink_fat_sync_state",
+          "referenced_table": "",
+          "columns": [
+            "singleton"
+          ]
+        },
+        {
+          "name": "fink_fat_sync_state_singleton_not_null",
+          "type": "n",
+          "def": "NOT NULL singleton",
+          "table": "public.fink_fat_sync_state",
+          "referenced_table": "",
+          "columns": [
+            "singleton"
+          ]
+        },
+        {
+          "name": "fink_fat_sync_state_synced_at_not_null",
+          "type": "n",
+          "def": "NOT NULL synced_at",
+          "table": "public.fink_fat_sync_state",
+          "referenced_table": "",
+          "columns": [
+            "synced_at"
+          ]
+        },
+        {
+          "name": "fink_fat_sync_state_pkey",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (singleton)",
+          "table": "public.fink_fat_sync_state",
+          "referenced_table": "",
+          "columns": [
+            "singleton"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "public.branches",
+      "type": "BASE TABLE",
+      "comment": "One row per live branch of the multi-hypothesis tracker: one candidate association history of one tracked object (its lineage), with its score and precomputed observation statistics. Replaced as a whole by every load (convert, or the streaming pipeline's nightly swap).",
+      "columns": [
+        {
+          "name": "branch_id",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Stable identifier of the branch, never reused (engine id counters are persisted)."
+        },
+        {
+          "name": "lineage_id",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Lineage (tracked object) the branch belongs to: sibling branches share it and compete in top-B pruning."
+        },
+        {
+          "name": "parent_branch_id",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "branch_id of the branch this one was spawned from."
+        },
+        {
+          "name": "ancestor_at_scan_horizon",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "branch_id of the ancestor anchoring the current N-scan pruning window."
+        },
+        {
+          "name": "ancestor_creation_step",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Night step at which that ancestor was created (decides when the N-scan horizon rolls forward)."
+        },
+        {
+          "name": "last_real_update_step",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Night step of the last real (non-null) observation update."
+        },
+        {
+          "name": "n_real_updates",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Number of real observations the branch associated."
+        },
+        {
+          "name": "cumulative_llr",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Cumulative log-likelihood ratio of the track against the clutter background: the branch score."
+        },
+        {
+          "name": "lineage_designation",
+          "type": "text",
+          "nullable": false,
+          "comment": "Human-readable, stable identifier of the lineage (shared by its branches); the key used by the explorer pages and by the explorer/submit tables."
+        },
+        {
+          "name": "designation",
+          "type": "text",
+          "nullable": false,
+          "comment": "Human-readable identifier unique to this branch."
+        },
+        {
+          "name": "arc_length_days",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Time span between the first and last observation of the track, days."
+        },
+        {
+          "name": "n_nights",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Number of distinct nights among the track's observations."
+        },
+        {
+          "name": "median_inter_night_dt_days",
+          "type": "double precision",
+          "nullable": true,
+          "comment": "Median gap between consecutive observed nights (each night at its earliest observation), days; NULL for a single-night track."
+        },
+        {
+          "name": "n_observations",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Number of observations in the track (as COUNT over branch_observations ⋈ observations)."
+        },
+        {
+          "name": "well_sampled_nights",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Number of nights with at least two observations of the track."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "branches_pkey",
+          "def": "CREATE UNIQUE INDEX branches_pkey ON public.branches USING btree (branch_id)",
+          "table": "public.branches",
+          "columns": [
+            "branch_id"
+          ]
+        },
+        {
+          "name": "idx_branches_lineage_designation",
+          "def": "CREATE INDEX idx_branches_lineage_designation ON public.branches USING btree (lineage_designation)",
+          "table": "public.branches",
+          "columns": [
+            "lineage_designation"
+          ]
+        },
+        {
+          "name": "idx_branches_lineage_id",
+          "def": "CREATE INDEX idx_branches_lineage_id ON public.branches USING btree (lineage_id)",
+          "table": "public.branches",
+          "columns": [
+            "lineage_id"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "branches_ancestor_at_scan_horizon_not_null",
+          "type": "n",
+          "def": "NOT NULL ancestor_at_scan_horizon",
+          "table": "public.branches",
+          "referenced_table": "",
+          "columns": [
+            "ancestor_at_scan_horizon"
+          ]
+        },
+        {
+          "name": "branches_ancestor_creation_step_not_null",
+          "type": "n",
+          "def": "NOT NULL ancestor_creation_step",
+          "table": "public.branches",
+          "referenced_table": "",
+          "columns": [
+            "ancestor_creation_step"
+          ]
+        },
+        {
+          "name": "branches_arc_length_days_not_null",
+          "type": "n",
+          "def": "NOT NULL arc_length_days",
+          "table": "public.branches",
+          "referenced_table": "",
+          "columns": [
+            "arc_length_days"
+          ]
+        },
+        {
+          "name": "branches_branch_id_not_null",
+          "type": "n",
+          "def": "NOT NULL branch_id",
+          "table": "public.branches",
+          "referenced_table": "",
+          "columns": [
+            "branch_id"
+          ]
+        },
+        {
+          "name": "branches_cumulative_llr_not_null",
+          "type": "n",
+          "def": "NOT NULL cumulative_llr",
+          "table": "public.branches",
+          "referenced_table": "",
+          "columns": [
+            "cumulative_llr"
+          ]
+        },
+        {
+          "name": "branches_designation_not_null",
+          "type": "n",
+          "def": "NOT NULL designation",
+          "table": "public.branches",
+          "referenced_table": "",
+          "columns": [
+            "designation"
+          ]
+        },
+        {
+          "name": "branches_last_real_update_step_not_null",
+          "type": "n",
+          "def": "NOT NULL last_real_update_step",
+          "table": "public.branches",
+          "referenced_table": "",
+          "columns": [
+            "last_real_update_step"
+          ]
+        },
+        {
+          "name": "branches_lineage_designation_not_null",
+          "type": "n",
+          "def": "NOT NULL lineage_designation",
+          "table": "public.branches",
+          "referenced_table": "",
+          "columns": [
+            "lineage_designation"
+          ]
+        },
+        {
+          "name": "branches_lineage_id_not_null",
+          "type": "n",
+          "def": "NOT NULL lineage_id",
+          "table": "public.branches",
+          "referenced_table": "",
+          "columns": [
+            "lineage_id"
+          ]
+        },
+        {
+          "name": "branches_n_nights_not_null",
+          "type": "n",
+          "def": "NOT NULL n_nights",
+          "table": "public.branches",
+          "referenced_table": "",
+          "columns": [
+            "n_nights"
+          ]
+        },
+        {
+          "name": "branches_n_observations_not_null",
+          "type": "n",
+          "def": "NOT NULL n_observations",
+          "table": "public.branches",
+          "referenced_table": "",
+          "columns": [
+            "n_observations"
+          ]
+        },
+        {
+          "name": "branches_n_real_updates_not_null",
+          "type": "n",
+          "def": "NOT NULL n_real_updates",
+          "table": "public.branches",
+          "referenced_table": "",
+          "columns": [
+            "n_real_updates"
+          ]
+        },
+        {
+          "name": "branches_parent_branch_id_not_null",
+          "type": "n",
+          "def": "NOT NULL parent_branch_id",
+          "table": "public.branches",
+          "referenced_table": "",
+          "columns": [
+            "parent_branch_id"
+          ]
+        },
+        {
+          "name": "branches_well_sampled_nights_not_null",
+          "type": "n",
+          "def": "NOT NULL well_sampled_nights",
+          "table": "public.branches",
+          "referenced_table": "",
+          "columns": [
+            "well_sampled_nights"
+          ]
+        },
+        {
+          "name": "branches_pkey",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (branch_id)",
+          "table": "public.branches",
+          "referenced_table": "",
+          "columns": [
+            "branch_id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "public.kf_bank",
+      "type": "BASE TABLE",
+      "comment": "One row per branch: summary of its Kalman bank (the mixture of (ρ, ρ̇) hypotheses).",
+      "columns": [
+        {
+          "name": "branch_id",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "The branch (FK to branches)."
+        },
+        {
+          "name": "n_steps",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Number of observation steps the bank processed (drives the hypothesis-cap schedule)."
+        },
+        {
+          "name": "absolute_magnitude_estimate",
+          "type": "double precision",
+          "nullable": true,
+          "comment": "Running estimate of the absolute magnitude H (with H-G phase correction); NULL before the first real observation."
+        },
+        {
+          "name": "absolute_magnitude_sample_count",
+          "type": "integer",
+          "nullable": false,
+          "comment": "Number of observations folded into absolute_magnitude_estimate."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "kf_bank_pkey",
+          "def": "CREATE UNIQUE INDEX kf_bank_pkey ON public.kf_bank USING btree (branch_id)",
+          "table": "public.kf_bank",
+          "columns": [
+            "branch_id"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "kf_bank_absolute_magnitude_sample_count_not_null",
+          "type": "n",
+          "def": "NOT NULL absolute_magnitude_sample_count",
+          "table": "public.kf_bank",
+          "referenced_table": "",
+          "columns": [
+            "absolute_magnitude_sample_count"
+          ]
+        },
+        {
+          "name": "kf_bank_branch_id_not_null",
+          "type": "n",
+          "def": "NOT NULL branch_id",
+          "table": "public.kf_bank",
+          "referenced_table": "",
+          "columns": [
+            "branch_id"
+          ]
+        },
+        {
+          "name": "kf_bank_n_steps_not_null",
+          "type": "n",
+          "def": "NOT NULL n_steps",
+          "table": "public.kf_bank",
+          "referenced_table": "",
+          "columns": [
+            "n_steps"
+          ]
+        },
+        {
+          "name": "kf_bank_branch_id_fkey",
+          "type": "FOREIGN KEY",
+          "def": "FOREIGN KEY (branch_id) REFERENCES branches(branch_id)",
+          "table": "public.kf_bank",
+          "referenced_table": "public.branches",
+          "columns": [
+            "branch_id"
+          ],
+          "referenced_columns": [
+            "branch_id"
+          ]
+        },
+        {
+          "name": "kf_bank_pkey",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (branch_id)",
+          "table": "public.kf_bank",
+          "referenced_table": "",
+          "columns": [
+            "branch_id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "public.branch_observations",
+      "type": "BASE TABLE",
+      "comment": "Association history of each branch: one row per observation of its track, in track order.",
+      "columns": [
+        {
+          "name": "branch_id",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "The branch (FK to branches)."
+        },
+        {
+          "name": "position",
+          "type": "integer",
+          "nullable": false,
+          "comment": "Rank of the observation in the track, from 0."
+        },
+        {
+          "name": "obs_id",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "The observation (FK to observations.id)."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "branch_observations_pkey",
+          "def": "CREATE UNIQUE INDEX branch_observations_pkey ON public.branch_observations USING btree (branch_id, \"position\")",
+          "table": "public.branch_observations",
+          "columns": [
+            "branch_id",
+            "position"
+          ]
+        },
+        {
+          "name": "idx_branch_observations_obs_id",
+          "def": "CREATE INDEX idx_branch_observations_obs_id ON public.branch_observations USING btree (obs_id)",
+          "table": "public.branch_observations",
+          "columns": [
+            "obs_id"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "branch_observations_branch_id_not_null",
+          "type": "n",
+          "def": "NOT NULL branch_id",
+          "table": "public.branch_observations",
+          "referenced_table": "",
+          "columns": [
+            "branch_id"
+          ]
+        },
+        {
+          "name": "branch_observations_obs_id_not_null",
+          "type": "n",
+          "def": "NOT NULL obs_id",
+          "table": "public.branch_observations",
+          "referenced_table": "",
+          "columns": [
+            "obs_id"
+          ]
+        },
+        {
+          "name": "branch_observations_position_not_null",
+          "type": "n",
+          "def": "NOT NULL \"position\"",
+          "table": "public.branch_observations",
+          "referenced_table": "",
+          "columns": [
+            "position"
+          ]
+        },
+        {
+          "name": "branch_observations_obs_id_fkey",
+          "type": "FOREIGN KEY",
+          "def": "FOREIGN KEY (obs_id) REFERENCES observations(id)",
+          "table": "public.branch_observations",
+          "referenced_table": "public.observations",
+          "columns": [
+            "obs_id"
+          ],
+          "referenced_columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "branch_observations_branch_id_fkey",
+          "type": "FOREIGN KEY",
+          "def": "FOREIGN KEY (branch_id) REFERENCES branches(branch_id)",
+          "table": "public.branch_observations",
+          "referenced_table": "public.branches",
+          "columns": [
+            "branch_id"
+          ],
+          "referenced_columns": [
+            "branch_id"
+          ]
+        },
+        {
+          "name": "branch_observations_pkey",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (branch_id, \"position\")",
+          "table": "public.branch_observations",
+          "referenced_table": "",
+          "columns": [
+            "branch_id",
+            "position"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "public.hypotheses",
+      "type": "BASE TABLE",
+      "comment": "One row per hypothesis of each branch's Kalman bank: one (ρ, ρ̇) mode of the Gaussian mixture.",
+      "columns": [
+        {
+          "name": "hypothesis_id",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Identifier of the row, allocated sequentially at load time (not stable across loads)."
+        },
+        {
+          "name": "branch_id",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "The branch (FK to branches)."
+        },
+        {
+          "name": "local_hyp_id",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Stable identifier of the hypothesis within its bank."
+        },
+        {
+          "name": "log_weight",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Log of the hypothesis' posterior weight in the mixture."
+        },
+        {
+          "name": "recent_log_liks",
+          "type": "double precision[]",
+          "nullable": false,
+          "comment": "Log-likelihoods of the most recent updates (sliding window), used by the smoothed hypothesis pruning."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "hypotheses_pkey",
+          "def": "CREATE UNIQUE INDEX hypotheses_pkey ON public.hypotheses USING btree (hypothesis_id)",
+          "table": "public.hypotheses",
+          "columns": [
+            "hypothesis_id"
+          ]
+        },
+        {
+          "name": "idx_hypotheses_branch_log_weight",
+          "def": "CREATE INDEX idx_hypotheses_branch_log_weight ON public.hypotheses USING btree (branch_id, log_weight DESC)",
+          "table": "public.hypotheses",
+          "columns": [
+            "branch_id",
+            "log_weight"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "hypotheses_branch_id_not_null",
+          "type": "n",
+          "def": "NOT NULL branch_id",
+          "table": "public.hypotheses",
+          "referenced_table": "",
+          "columns": [
+            "branch_id"
+          ]
+        },
+        {
+          "name": "hypotheses_hypothesis_id_not_null",
+          "type": "n",
+          "def": "NOT NULL hypothesis_id",
+          "table": "public.hypotheses",
+          "referenced_table": "",
+          "columns": [
+            "hypothesis_id"
+          ]
+        },
+        {
+          "name": "hypotheses_local_hyp_id_not_null",
+          "type": "n",
+          "def": "NOT NULL local_hyp_id",
+          "table": "public.hypotheses",
+          "referenced_table": "",
+          "columns": [
+            "local_hyp_id"
+          ]
+        },
+        {
+          "name": "hypotheses_log_weight_not_null",
+          "type": "n",
+          "def": "NOT NULL log_weight",
+          "table": "public.hypotheses",
+          "referenced_table": "",
+          "columns": [
+            "log_weight"
+          ]
+        },
+        {
+          "name": "hypotheses_recent_log_liks_not_null",
+          "type": "n",
+          "def": "NOT NULL recent_log_liks",
+          "table": "public.hypotheses",
+          "referenced_table": "",
+          "columns": [
+            "recent_log_liks"
+          ]
+        },
+        {
+          "name": "hypotheses_branch_id_fkey",
+          "type": "FOREIGN KEY",
+          "def": "FOREIGN KEY (branch_id) REFERENCES branches(branch_id)",
+          "table": "public.hypotheses",
+          "referenced_table": "public.branches",
+          "columns": [
+            "branch_id"
+          ],
+          "referenced_columns": [
+            "branch_id"
+          ]
+        },
+        {
+          "name": "hypotheses_pkey",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (hypothesis_id)",
+          "table": "public.hypotheses",
+          "referenced_table": "",
+          "columns": [
+            "hypothesis_id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "public.kf_state",
+      "type": "BASE TABLE",
+      "comment": "One row per hypothesis: its Kalman state in attributable coordinates (α, δ, α̇, δ̇, ρ, ρ̇), covariance and the dynamical family of the implied orbit.",
+      "columns": [
+        {
+          "name": "hypothesis_id",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "The hypothesis (FK to hypotheses)."
+        },
+        {
+          "name": "ra",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Right ascension α of the attributable state, rad (equatorial J2000)."
+        },
+        {
+          "name": "dec",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Declination δ of the attributable state, rad."
+        },
+        {
+          "name": "ra_dot",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Rate of α, rad/day."
+        },
+        {
+          "name": "dec_dot",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Rate of δ, rad/day."
+        },
+        {
+          "name": "rho",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Topocentric range ρ, AU."
+        },
+        {
+          "name": "rho_dot",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Topocentric range rate, AU/day."
+        },
+        {
+          "name": "covariance",
+          "type": "double precision[]",
+          "nullable": false,
+          "comment": "6×6 state covariance in attributable space (α, δ, α̇, δ̇, ρ, ρ̇), row-major, 36 values."
+        },
+        {
+          "name": "epoch",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Epoch of the state, MJD TT."
+        },
+        {
+          "name": "r_obs_x",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Heliocentric observer position x at epoch, AU (ecliptic J2000)."
+        },
+        {
+          "name": "r_obs_y",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Heliocentric observer position y at epoch, AU (ecliptic J2000)."
+        },
+        {
+          "name": "r_obs_z",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Heliocentric observer position z at epoch, AU (ecliptic J2000)."
+        },
+        {
+          "name": "v_obs_x",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Heliocentric observer velocity x at epoch, AU/day (ecliptic J2000)."
+        },
+        {
+          "name": "v_obs_y",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Heliocentric observer velocity y at epoch, AU/day (ecliptic J2000)."
+        },
+        {
+          "name": "v_obs_z",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Heliocentric observer velocity z at epoch, AU/day (ecliptic J2000)."
+        },
+        {
+          "name": "universal_anomaly",
+          "type": "double precision",
+          "nullable": true,
+          "comment": "Last universal anomaly of the two-body propagation (warm start of the next solve); NULL before the first propagation."
+        },
+        {
+          "name": "kalman_gain",
+          "type": "double precision[]",
+          "nullable": true,
+          "comment": "6×2 Kalman gain of the last update, row-major, 12 values; NULL before the first update."
+        },
+        {
+          "name": "nis_ema",
+          "type": "double precision",
+          "nullable": true,
+          "comment": "Exponential moving average of the normalized innovation squared, driving the fading-memory inflation; NULL before the first update."
+        },
+        {
+          "name": "dynamic_family",
+          "type": "text",
+          "nullable": false,
+          "comment": "Dynamical family of the two-body orbit implied by the state (e.g. MBA, NEO, Jupiter trojan, Centaur, TNO; Unknown when the state does not convert to a bound orbit)."
+        },
+        {
+          "name": "semi_major_axis",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Semi-major axis of that orbit, AU (0 when Unknown)."
+        },
+        {
+          "name": "eccentricity",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Eccentricity of that orbit (0 when Unknown)."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "kf_state_pkey",
+          "def": "CREATE UNIQUE INDEX kf_state_pkey ON public.kf_state USING btree (hypothesis_id)",
+          "table": "public.kf_state",
+          "columns": [
+            "hypothesis_id"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "kf_state_covariance_not_null",
+          "type": "n",
+          "def": "NOT NULL covariance",
+          "table": "public.kf_state",
+          "referenced_table": "",
+          "columns": [
+            "covariance"
+          ]
+        },
+        {
+          "name": "kf_state_dec_dot_not_null",
+          "type": "n",
+          "def": "NOT NULL dec_dot",
+          "table": "public.kf_state",
+          "referenced_table": "",
+          "columns": [
+            "dec_dot"
+          ]
+        },
+        {
+          "name": "kf_state_dec_not_null",
+          "type": "n",
+          "def": "NOT NULL \"dec\"",
+          "table": "public.kf_state",
+          "referenced_table": "",
+          "columns": [
+            "dec"
+          ]
+        },
+        {
+          "name": "kf_state_dynamic_family_not_null",
+          "type": "n",
+          "def": "NOT NULL dynamic_family",
+          "table": "public.kf_state",
+          "referenced_table": "",
+          "columns": [
+            "dynamic_family"
+          ]
+        },
+        {
+          "name": "kf_state_eccentricity_not_null",
+          "type": "n",
+          "def": "NOT NULL eccentricity",
+          "table": "public.kf_state",
+          "referenced_table": "",
+          "columns": [
+            "eccentricity"
+          ]
+        },
+        {
+          "name": "kf_state_epoch_not_null",
+          "type": "n",
+          "def": "NOT NULL epoch",
+          "table": "public.kf_state",
+          "referenced_table": "",
+          "columns": [
+            "epoch"
+          ]
+        },
+        {
+          "name": "kf_state_hypothesis_id_not_null",
+          "type": "n",
+          "def": "NOT NULL hypothesis_id",
+          "table": "public.kf_state",
+          "referenced_table": "",
+          "columns": [
+            "hypothesis_id"
+          ]
+        },
+        {
+          "name": "kf_state_r_obs_x_not_null",
+          "type": "n",
+          "def": "NOT NULL r_obs_x",
+          "table": "public.kf_state",
+          "referenced_table": "",
+          "columns": [
+            "r_obs_x"
+          ]
+        },
+        {
+          "name": "kf_state_r_obs_y_not_null",
+          "type": "n",
+          "def": "NOT NULL r_obs_y",
+          "table": "public.kf_state",
+          "referenced_table": "",
+          "columns": [
+            "r_obs_y"
+          ]
+        },
+        {
+          "name": "kf_state_r_obs_z_not_null",
+          "type": "n",
+          "def": "NOT NULL r_obs_z",
+          "table": "public.kf_state",
+          "referenced_table": "",
+          "columns": [
+            "r_obs_z"
+          ]
+        },
+        {
+          "name": "kf_state_ra_dot_not_null",
+          "type": "n",
+          "def": "NOT NULL ra_dot",
+          "table": "public.kf_state",
+          "referenced_table": "",
+          "columns": [
+            "ra_dot"
+          ]
+        },
+        {
+          "name": "kf_state_ra_not_null",
+          "type": "n",
+          "def": "NOT NULL ra",
+          "table": "public.kf_state",
+          "referenced_table": "",
+          "columns": [
+            "ra"
+          ]
+        },
+        {
+          "name": "kf_state_rho_dot_not_null",
+          "type": "n",
+          "def": "NOT NULL rho_dot",
+          "table": "public.kf_state",
+          "referenced_table": "",
+          "columns": [
+            "rho_dot"
+          ]
+        },
+        {
+          "name": "kf_state_rho_not_null",
+          "type": "n",
+          "def": "NOT NULL rho",
+          "table": "public.kf_state",
+          "referenced_table": "",
+          "columns": [
+            "rho"
+          ]
+        },
+        {
+          "name": "kf_state_semi_major_axis_not_null",
+          "type": "n",
+          "def": "NOT NULL semi_major_axis",
+          "table": "public.kf_state",
+          "referenced_table": "",
+          "columns": [
+            "semi_major_axis"
+          ]
+        },
+        {
+          "name": "kf_state_v_obs_x_not_null",
+          "type": "n",
+          "def": "NOT NULL v_obs_x",
+          "table": "public.kf_state",
+          "referenced_table": "",
+          "columns": [
+            "v_obs_x"
+          ]
+        },
+        {
+          "name": "kf_state_v_obs_y_not_null",
+          "type": "n",
+          "def": "NOT NULL v_obs_y",
+          "table": "public.kf_state",
+          "referenced_table": "",
+          "columns": [
+            "v_obs_y"
+          ]
+        },
+        {
+          "name": "kf_state_v_obs_z_not_null",
+          "type": "n",
+          "def": "NOT NULL v_obs_z",
+          "table": "public.kf_state",
+          "referenced_table": "",
+          "columns": [
+            "v_obs_z"
+          ]
+        },
+        {
+          "name": "kf_state_hypothesis_id_fkey",
+          "type": "FOREIGN KEY",
+          "def": "FOREIGN KEY (hypothesis_id) REFERENCES hypotheses(hypothesis_id)",
+          "table": "public.kf_state",
+          "referenced_table": "public.hypotheses",
+          "columns": [
+            "hypothesis_id"
+          ],
+          "referenced_columns": [
+            "hypothesis_id"
+          ]
+        },
+        {
+          "name": "kf_state_pkey",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (hypothesis_id)",
+          "table": "public.kf_state",
+          "referenced_table": "",
+          "columns": [
+            "hypothesis_id"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "public.branch_best_state",
+      "type": "BASE TABLE",
+      "comment": "One row per branch: copy of the state of its best hypothesis (largest log_weight), denormalized so the explorer homepage reads one row per branch instead of probing hypotheses and kf_state. Covariance and Kalman gain are left out.",
+      "columns": [
+        {
+          "name": "branch_id",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "The branch (FK to branches)."
+        },
+        {
+          "name": "hypothesis_id",
+          "type": "bigint",
+          "nullable": false,
+          "comment": "Its best hypothesis (hypotheses.hypothesis_id of the same load)."
+        },
+        {
+          "name": "dynamic_family",
+          "type": "text",
+          "nullable": false,
+          "comment": "Dynamical family of the two-body orbit implied by the state (e.g. MBA, NEO, Jupiter trojan, Centaur, TNO; Unknown when the state does not convert to a bound orbit)."
+        },
+        {
+          "name": "semi_major_axis",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Semi-major axis of that orbit, AU (0 when Unknown)."
+        },
+        {
+          "name": "eccentricity",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Eccentricity of that orbit (0 when Unknown)."
+        },
+        {
+          "name": "ra",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Right ascension α of the attributable state, rad (equatorial J2000)."
+        },
+        {
+          "name": "dec",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Declination δ of the attributable state, rad."
+        },
+        {
+          "name": "ra_dot",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Rate of α, rad/day."
+        },
+        {
+          "name": "dec_dot",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Rate of δ, rad/day."
+        },
+        {
+          "name": "rho",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Topocentric range ρ, AU."
+        },
+        {
+          "name": "rho_dot",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Topocentric range rate, AU/day."
+        },
+        {
+          "name": "epoch",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Epoch of the state, MJD TT."
+        },
+        {
+          "name": "r_obs_x",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Heliocentric observer position x at epoch, AU (ecliptic J2000)."
+        },
+        {
+          "name": "r_obs_y",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Heliocentric observer position y at epoch, AU (ecliptic J2000)."
+        },
+        {
+          "name": "r_obs_z",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Heliocentric observer position z at epoch, AU (ecliptic J2000)."
+        },
+        {
+          "name": "v_obs_x",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Heliocentric observer velocity x at epoch, AU/day (ecliptic J2000)."
+        },
+        {
+          "name": "v_obs_y",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Heliocentric observer velocity y at epoch, AU/day (ecliptic J2000)."
+        },
+        {
+          "name": "v_obs_z",
+          "type": "double precision",
+          "nullable": false,
+          "comment": "Heliocentric observer velocity z at epoch, AU/day (ecliptic J2000)."
+        }
+      ],
+      "indexes": [
+        {
+          "name": "branch_best_state_pkey",
+          "def": "CREATE UNIQUE INDEX branch_best_state_pkey ON public.branch_best_state USING btree (branch_id)",
+          "table": "public.branch_best_state",
+          "columns": [
+            "branch_id"
+          ]
+        }
+      ],
+      "constraints": [
+        {
+          "name": "branch_best_state_branch_id_not_null",
+          "type": "n",
+          "def": "NOT NULL branch_id",
+          "table": "public.branch_best_state",
+          "referenced_table": "",
+          "columns": [
+            "branch_id"
+          ]
+        },
+        {
+          "name": "branch_best_state_dec_dot_not_null",
+          "type": "n",
+          "def": "NOT NULL dec_dot",
+          "table": "public.branch_best_state",
+          "referenced_table": "",
+          "columns": [
+            "dec_dot"
+          ]
+        },
+        {
+          "name": "branch_best_state_dec_not_null",
+          "type": "n",
+          "def": "NOT NULL \"dec\"",
+          "table": "public.branch_best_state",
+          "referenced_table": "",
+          "columns": [
+            "dec"
+          ]
+        },
+        {
+          "name": "branch_best_state_dynamic_family_not_null",
+          "type": "n",
+          "def": "NOT NULL dynamic_family",
+          "table": "public.branch_best_state",
+          "referenced_table": "",
+          "columns": [
+            "dynamic_family"
+          ]
+        },
+        {
+          "name": "branch_best_state_eccentricity_not_null",
+          "type": "n",
+          "def": "NOT NULL eccentricity",
+          "table": "public.branch_best_state",
+          "referenced_table": "",
+          "columns": [
+            "eccentricity"
+          ]
+        },
+        {
+          "name": "branch_best_state_epoch_not_null",
+          "type": "n",
+          "def": "NOT NULL epoch",
+          "table": "public.branch_best_state",
+          "referenced_table": "",
+          "columns": [
+            "epoch"
+          ]
+        },
+        {
+          "name": "branch_best_state_hypothesis_id_not_null",
+          "type": "n",
+          "def": "NOT NULL hypothesis_id",
+          "table": "public.branch_best_state",
+          "referenced_table": "",
+          "columns": [
+            "hypothesis_id"
+          ]
+        },
+        {
+          "name": "branch_best_state_r_obs_x_not_null",
+          "type": "n",
+          "def": "NOT NULL r_obs_x",
+          "table": "public.branch_best_state",
+          "referenced_table": "",
+          "columns": [
+            "r_obs_x"
+          ]
+        },
+        {
+          "name": "branch_best_state_r_obs_y_not_null",
+          "type": "n",
+          "def": "NOT NULL r_obs_y",
+          "table": "public.branch_best_state",
+          "referenced_table": "",
+          "columns": [
+            "r_obs_y"
+          ]
+        },
+        {
+          "name": "branch_best_state_r_obs_z_not_null",
+          "type": "n",
+          "def": "NOT NULL r_obs_z",
+          "table": "public.branch_best_state",
+          "referenced_table": "",
+          "columns": [
+            "r_obs_z"
+          ]
+        },
+        {
+          "name": "branch_best_state_ra_dot_not_null",
+          "type": "n",
+          "def": "NOT NULL ra_dot",
+          "table": "public.branch_best_state",
+          "referenced_table": "",
+          "columns": [
+            "ra_dot"
+          ]
+        },
+        {
+          "name": "branch_best_state_ra_not_null",
+          "type": "n",
+          "def": "NOT NULL ra",
+          "table": "public.branch_best_state",
+          "referenced_table": "",
+          "columns": [
+            "ra"
+          ]
+        },
+        {
+          "name": "branch_best_state_rho_dot_not_null",
+          "type": "n",
+          "def": "NOT NULL rho_dot",
+          "table": "public.branch_best_state",
+          "referenced_table": "",
+          "columns": [
+            "rho_dot"
+          ]
+        },
+        {
+          "name": "branch_best_state_rho_not_null",
+          "type": "n",
+          "def": "NOT NULL rho",
+          "table": "public.branch_best_state",
+          "referenced_table": "",
+          "columns": [
+            "rho"
+          ]
+        },
+        {
+          "name": "branch_best_state_semi_major_axis_not_null",
+          "type": "n",
+          "def": "NOT NULL semi_major_axis",
+          "table": "public.branch_best_state",
+          "referenced_table": "",
+          "columns": [
+            "semi_major_axis"
+          ]
+        },
+        {
+          "name": "branch_best_state_v_obs_x_not_null",
+          "type": "n",
+          "def": "NOT NULL v_obs_x",
+          "table": "public.branch_best_state",
+          "referenced_table": "",
+          "columns": [
+            "v_obs_x"
+          ]
+        },
+        {
+          "name": "branch_best_state_v_obs_y_not_null",
+          "type": "n",
+          "def": "NOT NULL v_obs_y",
+          "table": "public.branch_best_state",
+          "referenced_table": "",
+          "columns": [
+            "v_obs_y"
+          ]
+        },
+        {
+          "name": "branch_best_state_v_obs_z_not_null",
+          "type": "n",
+          "def": "NOT NULL v_obs_z",
+          "table": "public.branch_best_state",
+          "referenced_table": "",
+          "columns": [
+            "v_obs_z"
+          ]
+        },
+        {
+          "name": "branch_best_state_branch_id_fkey",
+          "type": "FOREIGN KEY",
+          "def": "FOREIGN KEY (branch_id) REFERENCES branches(branch_id)",
+          "table": "public.branch_best_state",
+          "referenced_table": "public.branches",
+          "columns": [
+            "branch_id"
+          ],
+          "referenced_columns": [
+            "branch_id"
+          ]
+        },
+        {
+          "name": "branch_best_state_pkey",
+          "type": "PRIMARY KEY",
+          "def": "PRIMARY KEY (branch_id)",
+          "table": "public.branch_best_state",
+          "referenced_table": "",
+          "columns": [
+            "branch_id"
+          ]
+        }
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "table": "public.kf_bank",
+      "columns": [
+        "branch_id"
+      ],
+      "cardinality": "zero_or_one",
+      "parent_table": "public.branches",
+      "parent_columns": [
+        "branch_id"
+      ],
+      "parent_cardinality": "exactly_one",
+      "def": "FOREIGN KEY (branch_id) REFERENCES branches(branch_id)"
+    },
+    {
+      "table": "public.branch_observations",
+      "columns": [
+        "obs_id"
+      ],
+      "cardinality": "zero_or_more",
+      "parent_table": "public.observations",
+      "parent_columns": [
+        "id"
+      ],
+      "parent_cardinality": "exactly_one",
+      "def": "FOREIGN KEY (obs_id) REFERENCES observations(id)"
+    },
+    {
+      "table": "public.branch_observations",
+      "columns": [
+        "branch_id"
+      ],
+      "cardinality": "zero_or_more",
+      "parent_table": "public.branches",
+      "parent_columns": [
+        "branch_id"
+      ],
+      "parent_cardinality": "exactly_one",
+      "def": "FOREIGN KEY (branch_id) REFERENCES branches(branch_id)"
+    },
+    {
+      "table": "public.hypotheses",
+      "columns": [
+        "branch_id"
+      ],
+      "cardinality": "zero_or_more",
+      "parent_table": "public.branches",
+      "parent_columns": [
+        "branch_id"
+      ],
+      "parent_cardinality": "exactly_one",
+      "def": "FOREIGN KEY (branch_id) REFERENCES branches(branch_id)"
+    },
+    {
+      "table": "public.kf_state",
+      "columns": [
+        "hypothesis_id"
+      ],
+      "cardinality": "zero_or_one",
+      "parent_table": "public.hypotheses",
+      "parent_columns": [
+        "hypothesis_id"
+      ],
+      "parent_cardinality": "exactly_one",
+      "def": "FOREIGN KEY (hypothesis_id) REFERENCES hypotheses(hypothesis_id)"
+    },
+    {
+      "table": "public.branch_best_state",
+      "columns": [
+        "branch_id"
+      ],
+      "cardinality": "zero_or_one",
+      "parent_table": "public.branches",
+      "parent_columns": [
+        "branch_id"
+      ],
+      "parent_cardinality": "exactly_one",
+      "def": "FOREIGN KEY (branch_id) REFERENCES branches(branch_id)"
+    },
+    {
+      "table": "public.orbit_fits",
+      "columns": [
+        "branch_id"
+      ],
+      "cardinality": "zero_or_more",
+      "parent_table": "public.branches",
+      "parent_columns": [
+        "branch_id"
+      ],
+      "parent_cardinality": "zero_or_one",
+      "def": "by value, no FK",
+      "virtual": true
+    },
+    {
+      "table": "public.orbit_fit_failures",
+      "columns": [
+        "branch_id"
+      ],
+      "cardinality": "zero_or_more",
+      "parent_table": "public.branches",
+      "parent_columns": [
+        "branch_id"
+      ],
+      "parent_cardinality": "exactly_one",
+      "def": "by value, no FK",
+      "virtual": true
+    },
+    {
+      "table": "public.cnd_queries",
+      "columns": [
+        "branch_id"
+      ],
+      "cardinality": "zero_or_more",
+      "parent_table": "public.branches",
+      "parent_columns": [
+        "branch_id"
+      ],
+      "parent_cardinality": "zero_or_one",
+      "def": "by value, no FK",
+      "virtual": true
+    },
+    {
+      "table": "public.skybot_obs_status",
+      "columns": [
+        "branch_id"
+      ],
+      "cardinality": "zero_or_more",
+      "parent_table": "public.branches",
+      "parent_columns": [
+        "branch_id"
+      ],
+      "parent_cardinality": "exactly_one",
+      "def": "by value, no FK",
+      "virtual": true
+    },
+    {
+      "table": "public.skybot_obs_status",
+      "columns": [
+        "obs_id"
+      ],
+      "cardinality": "zero_or_one",
+      "parent_table": "public.observations",
+      "parent_columns": [
+        "id"
+      ],
+      "parent_cardinality": "exactly_one",
+      "def": "by value, no FK",
+      "virtual": true
+    },
+    {
+      "table": "public.mpc_submissions",
+      "columns": [
+        "branch_id"
+      ],
+      "cardinality": "zero_or_more",
+      "parent_table": "public.branches",
+      "parent_columns": [
+        "branch_id"
+      ],
+      "parent_cardinality": "zero_or_one",
+      "def": "by value, no FK",
+      "virtual": true
+    }
+  ],
+  "driver": {
+    "name": "postgres",
+    "database_version": "PostgreSQL 18.6 (Debian 18.6-1.pgdg13+2) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit",
+    "meta": {
+      "current_schema": "public",
+      "search_paths": [
+        "finkfat",
+        "public"
+      ],
+      "dict": {
+        "Functions": "Stored procedures and functions"
+      }
+    }
+  }
+}

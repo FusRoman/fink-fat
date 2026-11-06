@@ -13,8 +13,8 @@ SET LOCAL statement_timeout = 0;
 -- page (there is deliberately no separate per-lineage table — see
 -- skybot_obs_status's own comment below). Deliberately NOT truncated by
 -- write_bulk_tables and given no FK into branches/observations, same
--- rationale as the other explorer-owned tables (create_orbit_fits_tables.sql,
--- create_cnd_tables.sql): those tables are TRUNCATEd (with CASCADE) on every
+-- rationale as the other explorer-owned tables (tables/explorer/orbit_fits.sql,
+-- tables/explorer/cnd_queries.sql): those tables are TRUNCATEd (with CASCADE) on every
 -- `convert` re-run, and a FK here would wipe this history along with them.
 --
 -- The bulk job specifically can run for HOURS at real dataset sizes (one
@@ -86,3 +86,66 @@ ON skybot_obs_status (checked_at);
 
 CREATE INDEX IF NOT EXISTS idx_skybot_obs_status_lineage
 ON skybot_obs_status (lineage_designation);
+
+-- Documentation of the table(s) above, read by `psql \d+`, pgAdmin and the
+-- generated schema docs (crates/fink-fat-sql/docs/schema, see the README).
+
+COMMENT ON TABLE skybot_bulk_jobs IS
+'One row per attempt of the explorer''s bulk Skybot sweep (cross-match of every eligible '
+'observation with known objects). A partial unique index allows at most one running job.';
+
+COMMENT ON COLUMN skybot_bulk_jobs.id IS
+'Identifier of the job.';
+
+COMMENT ON COLUMN skybot_bulk_jobs.status IS
+'running, done, failed, killed or interrupted.';
+
+COMMENT ON COLUMN skybot_bulk_jobs.radius_arcsec IS
+'Search radius around each observation, arcsec.';
+
+COMMENT ON COLUMN skybot_bulk_jobs.started_at IS
+'When the job started.';
+
+COMMENT ON COLUMN skybot_bulk_jobs.finished_at IS
+'When it ended; NULL while running.';
+
+COMMENT ON COLUMN skybot_bulk_jobs.total_observations IS
+'Eligible observations in the whole dataset (population-wide progress).';
+
+COMMENT ON COLUMN skybot_bulk_jobs.processed_observations IS
+'Eligible observations ever checked (resumed jobs start from the previous count).';
+
+COMMENT ON COLUMN skybot_bulk_jobs.matched_observations IS
+'Of those, observations matched to a known object.';
+
+COMMENT ON COLUMN skybot_bulk_jobs.kill_requested IS
+'Set by the UI to ask the running job to stop.';
+
+COMMENT ON COLUMN skybot_bulk_jobs.error IS
+'Error message of a failed job.';
+
+COMMENT ON COLUMN skybot_bulk_jobs.logs IS
+'Milestone log lines of the job (start, resume, kill, end).';
+
+COMMENT ON TABLE skybot_obs_status IS
+'One row per observation ever checked by Skybot (bulk sweep or per-lineage search), upserted '
+'on obs_id: the single source of truth of Skybot results. Only written on a successful '
+'request.';
+
+COMMENT ON COLUMN skybot_obs_status.obs_id IS
+'Observation checked (observations.id, by value). Primary key.';
+
+COMMENT ON COLUMN skybot_obs_status.lineage_designation IS
+'Lineage the observation was checked for.';
+
+COMMENT ON COLUMN skybot_obs_status.branch_id IS
+'Branch the observation was checked for.';
+
+COMMENT ON COLUMN skybot_obs_status.checked_at IS
+'When it was last checked.';
+
+COMMENT ON COLUMN skybot_obs_status.radius_arcsec IS
+'Search radius, arcsec.';
+
+COMMENT ON COLUMN skybot_obs_status.hits IS
+'Known objects found, as a JSON array of SkybotHit ([] when none).';

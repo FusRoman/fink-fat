@@ -10,17 +10,16 @@
 -- script in it). lock_timeout: fail after 1 min instead of queueing behind a
 -- long explorer query, which would also block every query queued behind
 -- this one. statement_timeout = 0 (no limit) on purpose: the bulk COPYs and
--- index rebuilds that follow in `convert` legitimately run for minutes.
+-- index rebuilds that follow legitimately run for minutes.
 SET LOCAL lock_timeout = '1min';
 SET LOCAL statement_timeout = 0;
 
--- Undoes drop_bulk_load_constraints.sql now that the tables hold their
--- final data for this run: one index build and one FK validation scan per
+-- Undoes bulk_load/drop_trajectory_constraints.sql once the trajectory tables hold
+-- their final data: one index build and one FK validation scan per
 -- constraint, instead of one check per row during the COPYs. Constraint
 -- names match Postgres's default naming for an unnamed inline `REFERENCES`
--- (`{table}_{column}_fkey`), the same names
--- drop_bulk_load_constraints.sql and migrate_legacy_columns.sql's
--- legacy-DB backfill both rely on.
+-- (`{table}_{column}_fkey`), the names bulk_load/drop_trajectory_constraints.sql and
+-- migrations/legacy_columns.sql rely on.
 
 ALTER TABLE kf_bank
 ADD CONSTRAINT kf_bank_branch_id_fkey
@@ -41,7 +40,6 @@ ALTER TABLE branch_best_state
 ADD CONSTRAINT branch_best_state_branch_id_fkey
 FOREIGN KEY (branch_id) REFERENCES branches (branch_id);
 
-CREATE INDEX idx_observations_object_id ON observations (object_id);
 CREATE INDEX idx_hypotheses_branch_log_weight
 ON hypotheses (branch_id, log_weight DESC);
 CREATE INDEX idx_branches_lineage_designation ON branches (lineage_designation);

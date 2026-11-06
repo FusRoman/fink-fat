@@ -65,3 +65,59 @@ ON mpc_submissions (submitted_at DESC);
 -- lineage" check (fink-fat submit's step 0): `WHERE observation_ids && $1`.
 CREATE INDEX IF NOT EXISTS idx_mpc_submissions_observation_ids
 ON mpc_submissions USING gin (observation_ids);
+
+-- Documentation of the table(s) above, read by `psql \d+`, pgAdmin and the
+-- generated schema docs (crates/fink-fat-sql/docs/schema, see the README).
+
+COMMENT ON TABLE mpc_submissions IS
+'Every MPC submission attempt made by fink-fat submit (ADES XML), and the source of truth for '
+'what was already submitted. Owned by submit and the explorer''s submission dashboard, '
+'append-only.';
+
+COMMENT ON COLUMN mpc_submissions.id IS
+'Identifier of the attempt.';
+
+COMMENT ON COLUMN mpc_submissions.lineage_designation IS
+'Lineage submitted (branches.lineage_designation, by value).';
+
+COMMENT ON COLUMN mpc_submissions.branch_id IS
+'Branch submitted (branches.branch_id, by value).';
+
+COMMENT ON COLUMN mpc_submissions.trk_sub IS
+'Tracklet identifier (ADES trkSub) sent to the MPC.';
+
+COMMENT ON COLUMN mpc_submissions.endpoint IS
+'test (submit_xml_test) or production (submit_xml).';
+
+COMMENT ON COLUMN mpc_submissions.submission_id IS
+'Acknowledgement id returned by the MPC; NULL if the POST failed.';
+
+COMMENT ON COLUMN mpc_submissions.observation_ids IS
+'Observations submitted (observations.id, by value); GIN-indexed for the duplicate check.';
+
+COMMENT ON COLUMN mpc_submissions.xml IS
+'Full ADES payload sent, for audit.';
+
+COMMENT ON COLUMN mpc_submissions.ack_message IS
+'Acknowledgement message returned by the MPC.';
+
+COMMENT ON COLUMN mpc_submissions.ac2_email IS
+'Contact email the MPC acknowledgement was sent to.';
+
+COMMENT ON COLUMN mpc_submissions.submitted_at IS
+'When the submission was sent.';
+
+COMMENT ON COLUMN mpc_submissions.verdict IS
+'pending, accepted, rejected or error; refreshed from the explorer''s submission dashboard.';
+
+COMMENT ON COLUMN mpc_submissions.verdict_checked_at IS
+'When the verdict was last refreshed.';
+
+COMMENT ON COLUMN mpc_submissions.verdict_detail IS
+'Raw status payload behind the verdict, as JSON.';
+
+COMMENT ON COLUMN mpc_submissions.wamo_detail IS
+'Per-observation processing status from MPC WAMO, as JSON (production submissions only).';
+
+COMMENT ON COLUMN mpc_submissions.wamo_checked_at IS
+'When wamo_detail was last refreshed.';

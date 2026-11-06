@@ -3063,7 +3063,9 @@ dependencies = [
  "outfit",
  "postgres",
  "rayon",
+ "rkyv",
  "thiserror 2.0.20",
+ "tracing",
 ]
 
 [[package]]
@@ -3072,8 +3074,10 @@ version = "1.0.0"
 dependencies = [
  "camino",
  "fink-fat-engine",
+ "fink-fat-sql",
  "photom",
  "polars",
+ "postgres",
  "rkyv",
  "serde",
  "serde_yaml",

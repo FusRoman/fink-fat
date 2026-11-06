@@ -6,6 +6,8 @@
 // Each test crate includes this module and uses a different subset of it.
 #![allow(dead_code)]
 
+pub mod stream;
+
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
@@ -212,4 +214,13 @@ pub fn observation_input(observation: &Observation) -> ObservationInput {
         observation.mjd_tt(),
         observation.observer_id().copied(),
     )
+}
+
+/// Connection string of the throwaway Postgres the SQL tests write into
+/// (`sql_convert.rs`, `stream_sql.rs`): `$DATABASE_URL`, defaulting to the
+/// `db` service of the repo's `docker-compose.yml` reached from the host
+/// (`docker compose up -d db` exposes it on `localhost:5432`).
+pub fn database_url() -> String {
+    std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://finkfat:finkfat@localhost:5432/finkfat_test".to_string())
 }

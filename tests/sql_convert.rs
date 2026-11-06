@@ -22,6 +22,10 @@
 //! instance; defaults to the `docker-compose.yml` `db` service reached from
 //! the host.
 
+mod common;
+
+use common::database_url;
+
 use std::path::PathBuf;
 
 use assert_cmd::Command;
@@ -59,14 +63,6 @@ fn first_night_path() -> PathBuf {
         .into_iter()
         .next()
         .expect("tests/data should contain at least one night fixture")
-}
-
-/// Connection string for the Postgres this test converts into. Defaults to
-/// the `db` service in the repo's `docker-compose.yml`, reached from the
-/// host (`docker compose up -d db` exposes it on `localhost:5432`).
-fn database_url() -> String {
-    std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://finkfat:finkfat@localhost:5432/finkfat_test".to_string())
 }
 
 /// Runs `fink-fat track --alerts <alerts_path> --config tests/config.yaml`,
@@ -170,13 +166,17 @@ fn assert_conversion_succeeded(night_str: &str, database_url: &str) {
                 "{table} should hold at least one row after converting a real night fixture"
             );
         }
-        assert!(
+        // `observations` is the one WAL-logged table: the streaming pipeline
+        // appends to it live (see tables/engine/observations.sql); the others
+        // are regenerated from the engine's state by every load.
+        assert_eq!(
             status.is_unlogged,
-            "{table} should be UNLOGGED after `convert` (see crates/fink-fat-sql/sql/create_tables.sql)"
+            table != "observations",
+            "{table}: unexpected persistence after `convert` (see crates/fink-fat-sql/src/schema.rs)"
         );
     }
 
-    // Rebuilt by `restore_bulk_load_constraints.sql` after the COPYs — see
+    // Rebuilt by `bulk_load/restore_trajectory_constraints.sql` after the COPYs — see
     // `crates/fink-fat-sql/src/schema.rs`.
     for conname in [
         "kf_bank_branch_id_fkey",
@@ -192,7 +192,7 @@ fn assert_conversion_succeeded(night_str: &str, database_url: &str) {
     }
 
     // `branch_observations`'s primary key (`branch_id, position`) is never
-    // dropped during the bulk load (see `schema::drop_bulk_load_constraints`),
+    // dropped during the bulk load (see `schema::drop_trajectory_constraints`),
     // so it should already have rejected any duplicate had one been written;
     // this just double-checks the invariant end to end.
     let (n_rows, n_distinct): (i64, i64) = {

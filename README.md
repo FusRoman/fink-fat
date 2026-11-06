@@ -81,7 +81,7 @@ A few principles guide the design:
 | `fink-fat` | [`src/`](src/) | Main CLI: `track`, `convert`, `submit`. |
 | `fink-fat-engine` | [`crates/fink-fat-engine/`](crates/fink-fat-engine/README.md) | Core library: configuration, seeding, space-time bucketing, topocentric Kalman filters, branching / MHT, archive, snapshot. |
 | `fink-fat-ades` | [`crates/fink-fat-ades/`](crates/fink-fat-ades/README.md) | Pure ADES / MPC logic: document building, local `submit.xsd` validation, submission and status API parsing, quality tiers. |
-| `fink-fat-sql` | [`crates/fink-fat-sql/`](crates/fink-fat-sql/README.md) | Postgres sink: table schema (`sql/*.sql`), row shapes and `COPY` loaders shared by `convert` and the streaming pipeline. |
+| `fink-fat-sql` | [`crates/fink-fat-sql/`](crates/fink-fat-sql/README.md) | Postgres sink: table schema (`sql/`), row shapes and `COPY` loaders shared by `convert` and the streaming pipeline. |
 | `fink-fat-stream` | [`crates/fink-fat-stream/`](crates/fink-fat-stream/README.md) | Streaming driver library behind `fink-fat stream`: advances the engine visit by visit as Rubin alerts arrive (visit assembly, night clock, crash-safe night journal); replays Fink parquet dumps. |
 | `fink-fat-eval` | [`crates/fink-fat-eval/`](crates/fink-fat-eval/README.md) | Evaluation binaries run against labelled datasets (tracking recall/purity, seeding, KF calibration, MOT contamination). |
 | `fink-fat-explorer` | [`crates/fink-fat-explorer/`](crates/fink-fat-explorer/README.md) | Dioxus fullstack web app on Postgres: population maps, 3D orbits, lineage pages, orbit fitting, cross-matching, MPC submission dashboard. |
@@ -228,7 +228,7 @@ versions once, then run both from the repository root:
 ```bash
 pip install -r crates/fink-fat-sql/sql-lint-requirements.txt
 sqlfluff lint crates/fink-fat-sql/sql            # `sqlfluff fix` to reformat
-squawk --config crates/fink-fat-sql/.squawk.toml crates/fink-fat-sql/sql/*.sql
+squawk --config crates/fink-fat-sql/.squawk.toml 'crates/fink-fat-sql/sql/**/*.sql'
 ```
 
 Tests use synthetic or bundled data only. The `sql_convert` integration test

@@ -20,3 +20,6 @@ outfit = { workspace = true }
 rayon = { workspace = true }
 indicatif = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
+# `ObservationRow` is journaled by the streaming pipeline's SQL outbox.
+rkyv = { workspace = true, features = ["pointer_width_64"] }

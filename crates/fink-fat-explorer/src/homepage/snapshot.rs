@@ -246,7 +246,7 @@ async fn build_best_orbit_index(
 }
 
 /// A branch's latest recorded failed bulk-fit attempt, if any — see
-/// `orbit_fit_failures` in `crates/fink-fat-sql/sql/create_orbit_fits_tables.sql`.
+/// `orbit_fit_failures` in `crates/fink-fat-sql/sql/tables/explorer/orbit_fits.sql`.
 const LATEST_ORBIT_FIT_FAILURE_QUERY: &str = "
     SELECT DISTINCT ON (branch_id) branch_id, attempted_at
     FROM orbit_fit_failures

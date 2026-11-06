@@ -1,6 +1,6 @@
 -- squawk-ignore-file ban-drop-constraint, require-concurrent-index-deletion
 -- Offline bulk load, not a live migration: the constraints and indexes
--- dropped here are rebuilt by restore_bulk_load_constraints.sql in the same
+-- dropped here are rebuilt by the matching bulk_load/restore_*.sql script in the same
 -- transaction, and DROP INDEX CONCURRENTLY cannot run inside a transaction.
 
 -- Lock/statement limits (SET LOCAL: they hold until the end of the
@@ -8,15 +8,15 @@
 -- script in it). lock_timeout: fail after 1 min instead of queueing behind a
 -- long explorer query, which would also block every query queued behind
 -- this one. statement_timeout = 0 (no limit) on purpose: the bulk COPYs and
--- index rebuilds that follow in `convert` legitimately run for minutes.
+-- index rebuilds that follow legitimately run for minutes.
 SET LOCAL lock_timeout = '1min';
 SET LOCAL statement_timeout = 0;
 
--- Dropped before the bulk-load COPYs and rebuilt by
--- restore_bulk_load_constraints.sql immediately after — see
--- `schema::drop_bulk_load_constraints`'s doc comment for why.
+-- Dropped before the trajectory tables' COPYs and rebuilt by
+-- bulk_load/restore_trajectory_constraints.sql right after — see
+-- `schema::drop_trajectory_constraints`. Unqualified names, for the same
+-- reason as in tables/engine/trajectory_tables.sql.
 
-DROP INDEX IF EXISTS idx_observations_object_id;
 DROP INDEX IF EXISTS idx_hypotheses_branch_log_weight;
 DROP INDEX IF EXISTS idx_branches_lineage_designation;
 DROP INDEX IF EXISTS idx_branches_lineage_id;

@@ -11,7 +11,7 @@ SET LOCAL statement_timeout = 0;
 -- bulk) from fink-fat-explorer's lineage page / bulk CND page. Deliberately
 -- NOT truncated by write_bulk_tables and given no FK into
 -- branches/observations, for the same reason as orbit_fits/skybot_queries
--- (see create_orbit_fits_tables.sql / create_skybot_tables.sql): those
+-- (see tables/explorer/orbit_fits.sql / tables/explorer/skybot_bulk.sql): those
 -- tables are TRUNCATEd (with CASCADE) on every `convert` re-run, and a FK
 -- here would wipe this history along with them.
 --
@@ -35,3 +35,32 @@ CREATE TABLE IF NOT EXISTS cnd_queries (
 
 CREATE INDEX IF NOT EXISTS idx_cnd_queries_lineage
 ON cnd_queries (lineage_designation, queried_at DESC);
+
+-- Documentation of the table(s) above, read by `psql \d+`, pgAdmin and the
+-- generated schema docs (crates/fink-fat-sql/docs/schema, see the README).
+
+COMMENT ON TABLE cnd_queries IS
+'MPC Check Near-Duplicates (CND) checks of a lineage''s observations, on demand or in bulk: one '
+'row per check attempt, including those that found nothing. Owned by fink-fat-explorer, '
+'append-only.';
+
+COMMENT ON COLUMN cnd_queries.id IS
+'Identifier of the check.';
+
+COMMENT ON COLUMN cnd_queries.lineage_designation IS
+'Lineage checked (branches.lineage_designation, by value).';
+
+COMMENT ON COLUMN cnd_queries.branch_id IS
+'Branch checked (branches.branch_id, by value); NULL for older rows.';
+
+COMMENT ON COLUMN cnd_queries.queried_at IS
+'When the check ran.';
+
+COMMENT ON COLUMN cnd_queries.time_separation_s IS
+'Time tolerance of the near-duplicate search, seconds.';
+
+COMMENT ON COLUMN cnd_queries.angle_separation_arcsec IS
+'Angular tolerance of the near-duplicate search, arcsec.';
+
+COMMENT ON COLUMN cnd_queries.hits IS
+'Observations with at least one MPC near-duplicate, as a JSON array of CndHit ([] when none).';

@@ -1,5 +1,13 @@
-//! `COPY ... FROM STDIN BINARY` into every table [`crate::write_bulk_tables`]
-//! bulk-loads, one function per table, plus the shared progress bar.
+//! `COPY ... FROM STDIN BINARY` into every table this crate loads, one
+//! function per table, plus the shared progress bar.
+//!
+//! Table names are unqualified, so the trajectory loaders write into the
+//! first schema of the `search_path` (`public` for `convert`, the staging
+//! schema for the nightly sync, see [`crate::night_sync`]). The two loaders
+//! the streaming pipeline also uses for incremental inserts
+//! ([`copy_observations`], [`copy_archived_trajectories`]) take the target
+//! table as an argument, so they can fill a temporary table first (see
+//! [`crate::incremental`]).
 //!
 //! Each function follows the same shape: open a `COPY` sink, wrap it in a
 //! [`BinaryCopyInWriter`] with an explicit column-type list, write every row,
@@ -70,17 +78,21 @@ pub fn build_progress_bar(total_rows: usize) -> ProgressBar {
     pb
 }
 
-/// Bulk-loads `rows` into `observations`.
+/// Bulk-loads `rows` into `table`, a table with the `observations` columns
+/// (`observations` itself, or a temporary copy of it).
 ///
-/// Must run before [`copy_branch_observations`] within the same transaction,
-/// so that `branch_observations.obs_id`'s foreign key into `observations(id)`
-/// is satisfied once it's rebuilt after the load (see
-/// [`crate::schema::restore_bulk_load_constraints`]).
+/// `table` is an internal constant, never user input: it is interpolated
+/// into the `COPY` statement.
+///
+/// In a full reload, must run before [`copy_branch_observations`], so that
+/// `branch_observations.obs_id`'s foreign key into `observations(id)` is
+/// satisfied once it's rebuilt after the load (see
+/// [`crate::schema::restore_trajectory_constraints`]).
 ///
 /// # Arguments
 ///
-/// * `transaction` — the transaction [`crate::write_bulk_tables`] runs the
-///   whole conversion in.
+/// * `transaction` — the load transaction.
+/// * `table` — target table (see above).
 /// * `rows` — every row to insert.
 /// * `pb` — ticked once per row.
 ///
@@ -90,14 +102,15 @@ pub fn build_progress_bar(total_rows: usize) -> ProgressBar {
 /// finishing the writer, as a [`postgres::Error`].
 pub fn copy_observations(
     transaction: &mut Transaction<'_>,
+    table: &str,
     rows: &[ObservationRow],
     pb: &ProgressBar,
 ) -> Result<(), postgres::Error> {
-    pb.println(format!("Copying {} rows into observations...", rows.len()));
-    let sink = transaction.copy_in(
-        "COPY observations (id, night_id, object_id, magnitude, mag_err, filter, \
-         mpc_code_obs, ra, ra_err, dec, dec_err, mjd_tt) FROM STDIN BINARY",
-    )?;
+    pb.println(format!("Copying {} rows into {table}...", rows.len()));
+    let sink = transaction.copy_in(&format!(
+        "COPY {table} (id, night_id, object_id, magnitude, mag_err, filter, \
+         mpc_code_obs, ra, ra_err, dec, dec_err, mjd_tt) FROM STDIN BINARY"
+    ))?;
     let mut writer = BinaryCopyInWriter::new(
         sink,
         &[
@@ -474,15 +487,18 @@ pub fn copy_branch_best_state(
     Ok(())
 }
 
-/// Bulk-loads `rows` into `archived_trajectories`.
+/// Bulk-loads `rows` into `table`, a table with the
+/// `archived_trajectories` columns (that table itself, or a temporary copy
+/// of it).
 ///
 /// Classifies every row's dynamical family in parallel — see
 /// [`copy_kf_state`]'s doc comment, same rationale.
 ///
 /// # Arguments
 ///
-/// * `transaction` — the transaction [`crate::write_bulk_tables`] runs the
-///   whole conversion in.
+/// * `transaction` — the load transaction.
+/// * `table` — target table; an internal constant, never user input (it is
+///   interpolated into the `COPY` statement).
 /// * `rows` — every row to insert.
 /// * `pb` — ticked once per row.
 ///
@@ -492,15 +508,13 @@ pub fn copy_branch_best_state(
 /// finishing the writer, as a [`postgres::Error`].
 pub fn copy_archived_trajectories(
     transaction: &mut Transaction<'_>,
+    table: &str,
     rows: &[ArchivedRow],
     pb: &ProgressBar,
 ) -> Result<(), postgres::Error> {
-    pb.println(format!(
-        "Copying {} rows into archived_trajectories...",
-        rows.len()
-    ));
+    pb.println(format!("Copying {} rows into {table}...", rows.len()));
     let sink = transaction.copy_in(&format!(
-        "COPY archived_trajectories (designation, lineage_id, track_ids, cumulative_llr, \
+        "COPY {table} (designation, lineage_id, track_ids, cumulative_llr, \
          n_real_updates, last_real_update_step, archived_at_step, absolute_magnitude_estimate, \
          absolute_magnitude_sample_count, {KF_STATE_COLUMN_NAMES}, dynamic_family, \
          semi_major_axis, eccentricity) FROM STDIN BINARY"

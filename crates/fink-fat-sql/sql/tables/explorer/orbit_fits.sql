@@ -83,3 +83,99 @@ CREATE TABLE IF NOT EXISTS orbit_fit_failures (
 
 CREATE INDEX IF NOT EXISTS idx_orbit_fit_failures_branch
 ON orbit_fit_failures (branch_id, attempted_at DESC);
+
+-- Documentation of the table(s) above, read by `psql \d+`, pgAdmin and the
+-- generated schema docs (crates/fink-fat-sql/docs/schema, see the README).
+
+COMMENT ON TABLE orbit_fits IS
+'Orbit fits computed by fink-fat-explorer (single lineage on demand, or bulk): Gauss IOD then '
+'n-body differential correction (outfit). Append-only history, one row per fit; owned by the '
+'explorer, never truncated by a load, no FK to the trajectory tables.';
+
+COMMENT ON COLUMN orbit_fits.id IS
+'Identifier of the fit.';
+
+COMMENT ON COLUMN orbit_fits.lineage_designation IS
+'Lineage fitted (branches.lineage_designation, by value).';
+
+COMMENT ON COLUMN orbit_fits.branch_id IS
+'Branch fitted (branches.branch_id, by value); NULL for rows written before per-branch fits '
+'existed.';
+
+COMMENT ON COLUMN orbit_fits.fitted_at IS
+'When the fit was stored.';
+
+COMMENT ON COLUMN orbit_fits.observation_ids IS
+'Observations submitted to the fit (observations.id), before outlier rejection.';
+
+COMMENT ON COLUMN orbit_fits.n_observations_used IS
+'Observations kept by the fit after outlier rejection.';
+
+COMMENT ON COLUMN orbit_fits.error_model IS
+'Astrometric error model used to weight the observations.';
+
+COMMENT ON COLUMN orbit_fits.fit_method IS
+'differential_correction for a converged least-squares fit; otherwise the IOD-only fallback '
+'(the bulk fit keeps the Gauss solution when the correction diverges).';
+
+COMMENT ON COLUMN orbit_fits.fit_params IS
+'Full fit parameters, as JSON (to reload a past configuration).';
+
+COMMENT ON COLUMN orbit_fits.reference_epoch IS
+'Epoch of the elements, MJD.';
+
+COMMENT ON COLUMN orbit_fits.semi_major_axis IS
+'Equinoctial a: semi-major axis, AU.';
+
+COMMENT ON COLUMN orbit_fits.eccentricity_sin_lon IS
+'Equinoctial h = e·sin(Ω + ω).';
+
+COMMENT ON COLUMN orbit_fits.eccentricity_cos_lon IS
+'Equinoctial k = e·cos(Ω + ω).';
+
+COMMENT ON COLUMN orbit_fits.tan_half_incl_sin_node IS
+'Equinoctial p = tan(i/2)·sin Ω.';
+
+COMMENT ON COLUMN orbit_fits.tan_half_incl_cos_node IS
+'Equinoctial q = tan(i/2)·cos Ω.';
+
+COMMENT ON COLUMN orbit_fits.mean_longitude IS
+'Equinoctial λ = Ω + ω + M, rad.';
+
+COMMENT ON COLUMN orbit_fits.covariance IS
+'6×6 covariance of the equinoctial elements, row-major, 36 values.';
+
+COMMENT ON COLUMN orbit_fits.normalised_rms IS
+'Normalized RMS of the astrometric residuals.';
+
+COMMENT ON COLUMN orbit_fits.total_newton_iterations IS
+'Iterations of the differential correction.';
+
+COMMENT ON COLUMN orbit_fits.num_measurements IS
+'Scalar measurements used (two per observation).';
+
+COMMENT ON COLUMN orbit_fits.converged IS
+'Whether the differential correction converged.';
+
+COMMENT ON COLUMN orbit_fits.keplerian IS
+'Keplerian elements of the fitted orbit, as JSON.';
+
+COMMENT ON COLUMN orbit_fits.delta_vs_previous_fit IS
+'Comparison with the previous fit of the lineage, as JSON; NULL for bulk fits.';
+
+COMMENT ON COLUMN orbit_fits.residuals IS
+'Per-observation residuals, as JSON.';
+
+COMMENT ON TABLE orbit_fit_failures IS
+'One row per failed bulk orbit fit (Gauss IOD found no orbit), so that the homepage quality '
+'tier can tell a failed branch from one never submitted. Owned by fink-fat-explorer, '
+'append-only.';
+
+COMMENT ON COLUMN orbit_fit_failures.id IS
+'Identifier of the attempt.';
+
+COMMENT ON COLUMN orbit_fit_failures.branch_id IS
+'Branch whose fit failed (branches.branch_id, by value).';
+
+COMMENT ON COLUMN orbit_fit_failures.attempted_at IS
+'When the attempt failed.';

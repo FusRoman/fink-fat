@@ -32,6 +32,7 @@ AlertSource ─► ingest ─► NightJournal ─► VisitAssembler ─► LiveN
 | `night` | `LiveNight`: the engine's `NightSession`, plus a dataset holding only the open night's observations. |
 | `journal` | `NightJournal`: append-only log of the open night, used to rebuild it after a crash. |
 | `source` | `AlertSource` trait, and `ReplaySource` (parquet dump, column mapping in `ColumnMap`). |
+| `sink` | `SqlSink`: writes to the explorer's Postgres through a durable outbox, without ever blocking tracking. |
 | `driver` | `Driver`: the loop that ties everything together. |
 
 ## When a night closes
@@ -80,6 +81,33 @@ On restart, the driver:
 A crash between the archive write and the snapshot appends the night's
 archived batch twice, with the same trajectories and designations.
 
+## Postgres
+
+With a `database:` section in the configuration, the driver also feeds the
+explorer's database. The database is a view of the driver's local state, not
+its source of truth:
+
+| Data | When | How |
+| --- | --- | --- |
+| accepted alerts → `observations` | every batch | queued in `sql_outbox.rkyvlog` (fsynced before the batch is acknowledged), then inserted idempotently when Postgres is reachable |
+| archived trajectories → `archived_trajectories` | every night close | same queue |
+| live branches → the 6 trajectory tables | every night close | atomic swap (see `fink-fat-sql`'s README) |
+
+Postgres failures are logged and counted, never fatal:
+
+- the outbox keeps everything through outages and restarts;
+- flush retries are spaced by an exponential backoff;
+- a failed swap is caught up at the next night close, or at the next start-up.
+  On start-up, the driver publishes its snapshot if the database's
+  `fink_fat_sync_state` is behind.
+
+The URL comes from `database.url` or from the `FINK_FAT_DATABASE_URL`
+environment variable, which keeps the password out of the YAML. It is never
+logged.
+
+The connection is not encrypted (`NoTls`). TLS comes with the move to a remote
+database.
+
 ## Usage
 
 ```sh
@@ -111,3 +139,8 @@ The dump needs the Rubin `DiaSource` columns `diaSourceId`, `visit`,
 - `tests/stream_resume.rs` (workspace root) stops a replay mid-night and
   restarts it from storage. It checks that the final state matches an
   uninterrupted run.
+- `tests/stream_sql.rs` (workspace root, needs `docker compose up -d db`) checks
+  three things:
+  - a replay with a database leaves exactly the tables `convert` would load;
+  - a replay against an unreachable server catches up at restart;
+  - the inserts are idempotent.

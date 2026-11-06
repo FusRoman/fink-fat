@@ -1,5 +1,7 @@
-//! Pure construction of every row [`crate::write_bulk_tables`] bulk-loads,
-//! from a [`BranchCollection`] and the observation index built from it.
+//! Pure construction of every row this crate loads, from a
+//! [`BranchCollection`] (trajectory tables, see [`TrajectoryRows`]), its
+//! archived trajectories ([`build_archived_rows`]) and the observation index
+//! of its branches ([`ObsIndex`]).
 //!
 //! Nothing here touches Postgres or the filesystem: nothing in this file
 //! does I/O. That is what makes it the part of the SQL conversion pipeline
@@ -8,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use fink_fat_engine::topocentric_kf::branching::BranchCollection;
+use fink_fat_engine::topocentric_kf::branching::{ArchivedTrajectory, BranchCollection};
 use nalgebra::Vector3;
 use rayon::prelude::*;
 
@@ -21,8 +23,10 @@ use crate::rows::{
 
 /// Per-observation lookup keyed by `ObservationRow::id`
 /// (== `BranchObservationRow::obs_id`), mapping to `(night_id, mjd_tt)`.
-/// Built once in [`crate::write_bulk_tables`] from the observation rows read
-/// off disk, and shared read-only by every branch's [`compute_obs_stats`]
+/// Built once per load — by [`crate::write_bulk_tables`] from the observation
+/// rows read off disk, by the nightly sync from `observations` itself (see
+/// [`crate::night_sync::fetch_obs_index`]) — and shared read-only by every
+/// branch's [`compute_obs_stats`]
 /// call — computing each branch's arc/night-count/inter-night-gap stats once
 /// here in Rust, rather than re-deriving them from Postgres on every
 /// homepage sort.
@@ -149,156 +153,200 @@ pub fn best_hypothesis_index(log_weights: impl IntoIterator<Item = f64>) -> Opti
         .map(|(index, _)| index)
 }
 
-/// Builds every row of `branches`/`kf_bank`/`branch_observations`/
-/// `hypotheses`/`kf_state` by walking `branch_collection` once.
+/// Every row of the 6 trajectory tables for one [`BranchCollection`]: what
+/// `convert` loads into `public` and the nightly sync into the staging
+/// schema (see [`crate::load_trajectory_tables`]).
 ///
-/// Re-walks `&BranchCollection` with the same shape of loop as
-/// `parquet::to_dataframes` rather than reading back the already-built
-/// Polars `DataFrame`s: extracting typed values out of `ChunkedArray`/
-/// `ListChunked` just to re-serialize them for `COPY` would be a pointless
-/// extra materialization pass for a one-shot batch export.
-///
-/// # Arguments
-///
-/// * `branch_collection` — the loaded snapshot to convert.
-/// * `obs_index` — see [`ObsIndex`]; used to compute each branch's
-///   [`ObsStats`] via [`compute_obs_stats`].
-///
-/// # Returns
-///
-/// The six row vectors, in insertion order matching `branch_collection`'s
-/// own branch order; `hypothesis_id`/`kf_state` rows are aligned 1:1 with
-/// `hypotheses` rows via a hypothesis id allocated sequentially across every
-/// branch. The last vector holds one [`BranchBestStateRow`] per branch with
-/// at least one hypothesis, pointing at its best hypothesis' `kf_state` row
-/// (see [`best_hypothesis_index`]).
-#[allow(clippy::type_complexity)]
-pub fn build_branch_rows(
-    branch_collection: &BranchCollection,
-    obs_index: &ObsIndex,
-) -> (
-    Vec<BranchRow>,
-    Vec<KfBankRow>,
-    Vec<BranchObservationRow>,
-    Vec<HypothesisRow>,
-    Vec<KfStateRow>,
-    Vec<BranchBestStateRow>,
-) {
-    let n_branches = branch_collection.branches.len();
-    let n_track_id_rows: usize = branch_collection
-        .branches
-        .iter()
-        .map(|b| b.bank.track_ids().len())
-        .sum();
-    let n_hypotheses: usize = branch_collection
-        .branches
-        .iter()
-        .map(|b| b.bank.hypotheses().len())
-        .sum();
+/// The vectors are aligned by construction (see [`Self::build`]):
+/// `hypotheses[i]` and `kf_state[i]` describe the same hypothesis, and each
+/// [`BranchBestStateRow::kf_state_index`] points into `kf_state`.
+#[derive(Default)]
+pub struct TrajectoryRows {
+    /// One row per branch.
+    pub branches: Vec<BranchRow>,
+    /// One row per branch.
+    pub kf_bank: Vec<KfBankRow>,
+    /// One row per (branch, track position).
+    pub branch_observations: Vec<BranchObservationRow>,
+    /// One row per hypothesis of every branch's bank.
+    pub hypotheses: Vec<HypothesisRow>,
+    /// One row per hypothesis, aligned with `hypotheses`.
+    pub kf_state: Vec<KfStateRow>,
+    /// One row per branch with at least one hypothesis.
+    pub best_state: Vec<BranchBestStateRow>,
+}
 
-    let mut branch_rows = Vec::with_capacity(n_branches);
-    let mut kf_bank_rows = Vec::with_capacity(n_branches);
-    let mut branch_observation_rows = Vec::with_capacity(n_track_id_rows);
-    let mut hypothesis_rows = Vec::with_capacity(n_hypotheses);
-    let mut kf_state_rows = Vec::with_capacity(n_hypotheses);
-    let mut best_state_rows = Vec::with_capacity(n_branches);
+impl TrajectoryRows {
+    /// Builds every trajectory-table row by walking `branch_collection` once.
+    ///
+    /// Walks `&BranchCollection` directly rather than reading back the
+    /// Polars `DataFrame`s of `parquet::to_dataframes`: extracting typed
+    /// values out of `ChunkedArray`/`ListChunked` just to re-serialize them
+    /// for `COPY` would be a pointless extra materialization pass.
+    ///
+    /// # Arguments
+    ///
+    /// * `branch_collection` — the collection to convert (only `branches` is
+    ///   read).
+    /// * `obs_index` — see [`ObsIndex`]; used to compute each branch's
+    ///   [`ObsStats`] via [`compute_obs_stats`].
+    ///
+    /// # Returns
+    ///
+    /// The rows, in `branch_collection`'s own branch order. Hypothesis ids
+    /// are allocated sequentially across every branch, from 0, so
+    /// `hypotheses`/`kf_state` are aligned 1:1; `best_state` holds one row
+    /// per branch with at least one hypothesis, pointing at its best
+    /// hypothesis' `kf_state` row (see [`best_hypothesis_index`]).
+    pub fn build(branch_collection: &BranchCollection, obs_index: &ObsIndex) -> Self {
+        let n_branches = branch_collection.branches.len();
+        let n_track_id_rows: usize = branch_collection
+            .branches
+            .iter()
+            .map(|b| b.bank.track_ids().len())
+            .sum();
+        let n_hypotheses: usize = branch_collection
+            .branches
+            .iter()
+            .map(|b| b.bank.hypotheses().len())
+            .sum();
 
-    let mut next_hypothesis_id: i64 = 0;
+        let mut branch_rows = Vec::with_capacity(n_branches);
+        let mut kf_bank_rows = Vec::with_capacity(n_branches);
+        let mut branch_observation_rows = Vec::with_capacity(n_track_id_rows);
+        let mut hypothesis_rows = Vec::with_capacity(n_hypotheses);
+        let mut kf_state_rows = Vec::with_capacity(n_hypotheses);
+        let mut best_state_rows = Vec::with_capacity(n_branches);
 
-    for branch in &branch_collection.branches {
-        let branch_id = branch.branch_id as i64;
+        let mut next_hypothesis_id: i64 = 0;
 
-        let stats = compute_obs_stats(branch.bank.track_ids(), obs_index);
+        for branch in &branch_collection.branches {
+            let branch_id = branch.branch_id as i64;
 
-        branch_rows.push(BranchRow {
-            branch_id,
-            lineage_id: branch.lineage_id as i64,
-            parent_branch_id: branch.parent_branch_id as i64,
-            ancestor_at_scan_horizon: branch.ancestor_at_scan_horizon as i64,
-            ancestor_creation_step: branch.ancestor_creation_step as i64,
-            last_real_update_step: branch.last_real_update_step as i64,
-            n_real_updates: branch.n_real_updates as i64,
-            cumulative_llr: branch.cumulative_llr,
-            lineage_designation: branch.lineage_designation.to_string(),
-            designation: branch.designation().to_string(),
-            arc_length_days: stats.arc_length_days,
-            n_nights: stats.n_nights,
-            median_inter_night_dt_days: stats.median_inter_night_dt_days,
-            n_observations: stats.n_observations,
-            well_sampled_nights: stats.well_sampled_nights,
-        });
+            let stats = compute_obs_stats(branch.bank.track_ids(), obs_index);
 
-        let bank_snapshot = branch.bank.to_snapshot();
-
-        kf_bank_rows.push(KfBankRow {
-            branch_id,
-            n_steps: bank_snapshot.n_steps as i64,
-            absolute_magnitude_estimate: bank_snapshot.absolute_magnitude_estimate,
-            absolute_magnitude_sample_count: bank_snapshot.absolute_magnitude_sample_count as i32,
-        });
-
-        for (position, id) in bank_snapshot.track_ids.iter().enumerate() {
-            branch_observation_rows.push(BranchObservationRow {
+            branch_rows.push(BranchRow {
                 branch_id,
-                position: position as i32,
-                obs_id: *id as i64,
+                lineage_id: branch.lineage_id as i64,
+                parent_branch_id: branch.parent_branch_id as i64,
+                ancestor_at_scan_horizon: branch.ancestor_at_scan_horizon as i64,
+                ancestor_creation_step: branch.ancestor_creation_step as i64,
+                last_real_update_step: branch.last_real_update_step as i64,
+                n_real_updates: branch.n_real_updates as i64,
+                cumulative_llr: branch.cumulative_llr,
+                lineage_designation: branch.lineage_designation.to_string(),
+                designation: branch.designation().to_string(),
+                arc_length_days: stats.arc_length_days,
+                n_nights: stats.n_nights,
+                median_inter_night_dt_days: stats.median_inter_night_dt_days,
+                n_observations: stats.n_observations,
+                well_sampled_nights: stats.well_sampled_nights,
             });
+
+            let bank_snapshot = branch.bank.to_snapshot();
+
+            kf_bank_rows.push(KfBankRow {
+                branch_id,
+                n_steps: bank_snapshot.n_steps as i64,
+                absolute_magnitude_estimate: bank_snapshot.absolute_magnitude_estimate,
+                absolute_magnitude_sample_count: bank_snapshot.absolute_magnitude_sample_count
+                    as i32,
+            });
+
+            for (position, id) in bank_snapshot.track_ids.iter().enumerate() {
+                branch_observation_rows.push(BranchObservationRow {
+                    branch_id,
+                    position: position as i32,
+                    obs_id: *id as i64,
+                });
+            }
+
+            if let Some(best) =
+                best_hypothesis_index(bank_snapshot.hypotheses.iter().map(|h| h.log_weight))
+            {
+                // Hypothesis ids are allocated sequentially just below, so the
+                // best one's `kf_state` row lands at this offset.
+                best_state_rows.push(BranchBestStateRow {
+                    branch_id,
+                    kf_state_index: kf_state_rows.len() + best,
+                });
+            }
+
+            for hyp_snapshot in bank_snapshot.hypotheses {
+                let hypothesis_id = next_hypothesis_id;
+                next_hypothesis_id += 1;
+
+                hypothesis_rows.push(HypothesisRow {
+                    hypothesis_id,
+                    branch_id,
+                    local_hyp_id: hyp_snapshot.id as i64,
+                    log_weight: hyp_snapshot.log_weight,
+                    recent_log_liks: hyp_snapshot.recent_log_liks,
+                });
+
+                kf_state_rows.push(KfStateRow {
+                    hypothesis_id,
+                    fields: KfStateFields::from_snapshot(&hyp_snapshot.kf),
+                });
+            }
         }
 
-        if let Some(best) =
-            best_hypothesis_index(bank_snapshot.hypotheses.iter().map(|h| h.log_weight))
-        {
-            // Hypothesis ids are allocated sequentially just below, so the
-            // best one's `kf_state` row lands at this offset.
-            best_state_rows.push(BranchBestStateRow {
-                branch_id,
-                kf_state_index: kf_state_rows.len() + best,
-            });
-        }
-
-        for hyp_snapshot in bank_snapshot.hypotheses {
-            let hypothesis_id = next_hypothesis_id;
-            next_hypothesis_id += 1;
-
-            hypothesis_rows.push(HypothesisRow {
-                hypothesis_id,
-                branch_id,
-                local_hyp_id: hyp_snapshot.id as i64,
-                log_weight: hyp_snapshot.log_weight,
-                recent_log_liks: hyp_snapshot.recent_log_liks,
-            });
-
-            kf_state_rows.push(KfStateRow {
-                hypothesis_id,
-                fields: KfStateFields::from_snapshot(&hyp_snapshot.kf),
-            });
+        Self {
+            branches: branch_rows,
+            kf_bank: kf_bank_rows,
+            branch_observations: branch_observation_rows,
+            hypotheses: hypothesis_rows,
+            kf_state: kf_state_rows,
+            best_state: best_state_rows,
         }
     }
 
-    (
-        branch_rows,
-        kf_bank_rows,
-        branch_observation_rows,
-        hypothesis_rows,
-        kf_state_rows,
-        best_state_rows,
-    )
+    /// Total number of rows over the 6 tables (for progress reporting).
+    pub fn len(&self) -> usize {
+        self.branches.len()
+            + self.kf_bank.len()
+            + self.branch_observations.len()
+            + self.hypotheses.len()
+            + self.kf_state.len()
+            + self.best_state.len()
+    }
+
+    /// Whether there is no row at all (an empty collection).
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
-/// Builds every row of `archived_trajectories`.
-///
-/// # Arguments
-///
-/// * `branch_collection` — the loaded snapshot to convert; only
-///   `branch_collection.archived` is read.
+/// Every observation id the branches of `branch_collection` reference,
+/// deduplicated — the ids whose `(night_id, mjd_tt)` an [`ObsIndex`] must
+/// hold for [`TrajectoryRows::build`] to compute complete statistics.
 ///
 /// # Returns
 ///
-/// One [`ArchivedRow`] per archived trajectory, in `branch_collection`'s own
-/// order.
-pub fn build_archived_rows(branch_collection: &BranchCollection) -> Vec<ArchivedRow> {
-    branch_collection
-        .archived
+/// The ids, sorted ascending, as `i64` (the `observations.id` type).
+pub fn referenced_obs_ids(branch_collection: &BranchCollection) -> Vec<i64> {
+    let mut ids: Vec<i64> = branch_collection
+        .branches
+        .iter()
+        .flat_map(|b| b.bank.track_ids().iter().map(|&id| id as i64))
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+/// Builds every row of `archived_trajectories` for `archived`.
+///
+/// # Arguments
+///
+/// * `archived` — the trajectories to convert: a collection's whole archive
+///   for `convert`, one night's batch for the streaming pipeline.
+///
+/// # Returns
+///
+/// One [`ArchivedRow`] per trajectory, in input order.
+pub fn build_archived_rows(archived: &[ArchivedTrajectory]) -> Vec<ArchivedRow> {
+    archived
         .iter()
         .map(|trajectory| ArchivedRow {
             designation: trajectory.designation.to_string(),
