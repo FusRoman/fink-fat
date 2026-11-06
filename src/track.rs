@@ -38,11 +38,17 @@ pub fn tracking(cli_args: FinkFatCliArgs) -> Result<(), Box<dyn std::error::Erro
 
     // Kept alive for the whole run: dropping it flushes the file writer's
     // background worker. `None` when `--logs` wasn't passed.
-    let mut _file_log_guard: Option<tracing_appender::non_blocking::WorkerGuard> = None;
-
-    if cli_args.logs {
-        initialize_logs(&cli_args, &engine_config, &mut _file_log_guard)?;
-    }
+    let _file_log_guard = cli_args
+        .logs
+        .then(|| {
+            initialize_logs(
+                &engine_config,
+                "fink_fat",
+                &cli_args.log_targets,
+                cli_args.log_retention_days,
+            )
+        })
+        .transpose()?;
 
     let lf = LazyFrame::scan_parquet(alerts.as_str().into(), ScanArgsParquet::default())?;
     let obs_dataset = ObsDataset::from_lazy(

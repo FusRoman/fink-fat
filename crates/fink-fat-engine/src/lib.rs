@@ -1,5 +1,6 @@
 pub mod engine_config;
 pub mod error;
+pub mod framed_log;
 pub mod logging;
 
 pub mod seeding;

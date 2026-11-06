@@ -9,10 +9,12 @@
 //!    each object's intra-night detections into a track and emits one
 //!    maximal-baseline [`pairs::Pair`] per multi-detection object, instead
 //!    of the `O(n²)` all-pairs enumeration a plain pairwise gate would
-//!    produce on a night with many revisits per object. [`pairs::generate_pairs`]
-//!    (the underlying pairwise time/angular-speed/magnitude gate) still
-//!    backs the linker's own candidate gating and remains directly usable
-//!    on its own for simpler pairing needs.
+//!    produce on a night with many revisits per object. The linker only
+//!    shares the [`pairs::Pair`] type with [`pairs::generate_pairs`]: it
+//!    applies the same `max_angular_speed` criterion through its own code
+//!    and its own neighborhood index, and does not call it.
+//!    `generate_pairs` (the pairwise all-pairs enumeration) is no longer on
+//!    the production path; it remains available for simpler pairing needs.
 //! 3. Each surviving pair seeds one [`crate::topocentric_kf::kalman_bank::KFBank`]
 //!    via `KFBank::from_grid`.
 //!

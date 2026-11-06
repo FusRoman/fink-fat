@@ -1,0 +1,27 @@
+[package]
+name = "fink-fat-stream"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+categories.workspace = true
+keywords.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+license-file.workspace = true
+readme = "README.md"
+description = "Streaming driver of the Fink-FAT engine: advances the tracker visit by visit as Rubin alerts arrive."
+
+[dependencies]
+fink-fat-engine = { workspace = true }
+photom = { workspace = true, features = ["lsst_alert", "serde", "polars"] }
+polars = { workspace = true }
+rkyv = { workspace = true, features = ["pointer_width_64"] }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+camino = { workspace = true, features = ["serde1"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

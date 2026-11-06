@@ -1,11 +1,12 @@
 //! Non-regression guard for the per-night tracking pipeline
 //! ([`BranchCollection::advance_one_night`]).
 //!
-//! Runs the engine night by night over the first [`N_NIGHTS`] nights of the
+//! Runs the engine night by night over the first `N_NIGHTS` nights of the
 //! `tests/data` fixture and reduces the collection after every night to an
 //! **id-agnostic fingerprint** line: branch / archive / consumed-then-pruned
 //! counts plus order-independent hashes of their content. The lines are
-//! compared against the committed golden file [`GOLDEN_PATH`].
+//! compared against the committed golden file `GOLDEN_PATH`.
+//! Fixture and fingerprint helpers live in `common/`.
 //!
 //! # Why id-agnostic
 //!
@@ -32,177 +33,35 @@
 //! with a save/reload of the snapshot in the middle and checks it lands on
 //! the same golden, that already-closed nights are refused, and that no
 //! branch or lineage id is ever handed out twice.
+//!
+//! # Streaming
+//!
+//! [`streamed_visits_match_golden_fingerprint`] feeds the same nights visit
+//! by visit through `fink-fat-stream`'s [`LiveNight`], each night with its
+//! **own** dataset holding only that night's observations, and checks it
+//! lands on the same golden: incremental insertion plus a per-night dataset
+//! is the batch pipeline.
+
+mod common;
 
 use std::collections::HashSet;
-use std::fs::File;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use camino::Utf8PathBuf;
+use common::{
+    BLESS_ENV, CONFIG_PATH, GOLDEN_PATH, RESUME_AFTER, check_against_golden, load_fixture,
+    night_fingerprint, night_observations, observation_input,
+};
 use fink_fat_engine::{
     engine_config::EngineConfig,
     error::EngineError,
     topocentric_kf::branching::{
-        ArchivedTrajectory, BranchCollection, BranchSnapshot, IdCounters, NightSession,
-        SNAPSHOT_FILENAME,
+        BranchCollection, IdCounters, NightSession, SNAPSHOT_FILENAME,
+        visit::group_observations_into_visits,
     },
 };
-use fink_fat_eval::cli::load_data;
-use photom::{
-    NightId,
-    observation_dataset::{ObsDataset, observation::Observation},
-};
-use polars::prelude::*;
-use tempfile::TempDir;
-
-const CONFIG_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/config.yaml");
-const DATA_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data");
-const GOLDEN_PATH: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/golden/night_session_fingerprint.txt"
-);
-/// Environment variable forcing the golden file to be (re)written.
-const BLESS_ENV: &str = "FINK_FAT_BLESS_GOLDEN";
-/// Nights to run — enough for lineages to be seeded, extended, coasted,
-/// N-scan pruned and archived, without paying for the whole fixture.
-const N_NIGHTS: usize = 20;
-/// Nights advanced before the resume test persists and reloads the snapshot.
-const RESUME_AFTER: usize = N_NIGHTS / 2;
-
-/// Night fixture files of `tests/data`, sorted by night id.
-fn sorted_night_paths() -> Vec<PathBuf> {
-    let mut nights: Vec<(u32, PathBuf)> = std::fs::read_dir(DATA_DIR)
-        .expect("read tests/data dir")
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("parquet") {
-                return None;
-            }
-            let n: u32 = path
-                .file_stem()?
-                .to_str()?
-                .strip_prefix("night_id_")?
-                .parse()
-                .ok()?;
-            Some((n, path))
-        })
-        .collect();
-    nights.sort_by_key(|(n, _)| *n);
-    nights.into_iter().map(|(_, p)| p).collect()
-}
-
-/// Concatenate the night fixtures into one parquet so a single
-/// [`ObsDataset`](photom::observation_dataset::ObsDataset) carries a night
-/// index over all of them.
-fn write_combined_parquet(files: &[PathBuf], out_path: &Path) {
-    let lfs: Vec<LazyFrame> = files
-        .iter()
-        .map(|p| {
-            LazyFrame::scan_parquet(p.to_str().expect("utf8 path").into(), Default::default())
-                .expect("scan_parquet")
-        })
-        .collect();
-    let mut df = concat(&lfs, UnionArgs::default())
-        .expect("concat")
-        .collect()
-        .expect("collect");
-    let file = File::create(out_path).expect("create combined parquet");
-    ParquetWriter::new(file)
-        .finish(&mut df)
-        .expect("write parquet");
-}
-
-/// 64-bit FNV-1a: a tiny, dependency-free hash whose output is stable across
-/// Rust versions (unlike `DefaultHasher`), as a committed golden requires.
-fn fnv1a(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| {
-        (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
-    })
-}
-
-/// Order-independent combination of per-item hashes: sort, then hash the
-/// concatenated little-endian words.
-fn combine_unordered(mut hashes: Vec<u64>) -> u64 {
-    hashes.sort_unstable();
-    let bytes: Vec<u8> = hashes.iter().flat_map(|h| h.to_le_bytes()).collect();
-    fnv1a(&bytes)
-}
-
-/// Hash of a branch snapshot with every run-dependent numeric id zeroed.
-fn branch_hash(mut snapshot: BranchSnapshot) -> u64 {
-    snapshot.lineage_id = 0;
-    snapshot.parent_branch_id = 0;
-    snapshot.branch_id = 0;
-    snapshot.ancestor_at_scan_horizon = 0;
-    let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&snapshot).expect("serialize branch");
-    fnv1a(&bytes)
-}
-
-/// Hash of an archived trajectory with its `lineage_id` zeroed.
-fn archived_hash(archived: &ArchivedTrajectory) -> u64 {
-    let mut archived = archived.clone();
-    archived.lineage_id = 0;
-    let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&archived).expect("serialize archived");
-    fnv1a(&bytes)
-}
-
-/// One golden line describing the collection right after `night_id` closed.
-fn night_fingerprint(night_id: NightId, collection: &BranchCollection) -> String {
-    let branches = combine_unordered(
-        collection
-            .branches
-            .iter()
-            .map(|b| branch_hash(b.to_snapshot()))
-            .collect(),
-    );
-    let archived = combine_unordered(collection.archived.iter().map(archived_hash).collect());
-    let consumed_then_pruned = combine_unordered(
-        collection
-            .last_night_consumed_then_pruned_ids
-            .iter()
-            .map(|id| fnv1a(&id.to_le_bytes()))
-            .collect(),
-    );
-    format!(
-        "night={} step={} branches={} archived={} ctp={} h_branches={branches:016x} \
-         h_archived={archived:016x} h_ctp={consumed_then_pruned:016x}",
-        night_id.0,
-        collection.current_step,
-        collection.branches.len(),
-        collection.archived.len(),
-        collection.last_night_consumed_then_pruned_ids.len(),
-    )
-}
-
-/// The fixture's first [`N_NIGHTS`] nights as one dataset, with their ids in
-/// chronological order. The [`TempDir`] holds the combined parquet and must
-/// outlive the dataset.
-fn load_fixture() -> (TempDir, ObsDataset, Vec<NightId>) {
-    let paths: Vec<PathBuf> = sorted_night_paths().into_iter().take(N_NIGHTS).collect();
-    assert!(!paths.is_empty(), "tests/data must contain night fixtures");
-
-    let tmp = TempDir::new().expect("tempdir");
-    let combined = tmp.path().join("combined.parquet");
-    write_combined_parquet(&paths, &combined);
-    let obs_dataset = load_data(combined.to_str().expect("utf8"), None);
-
-    let mut night_ids: Vec<NightId> = obs_dataset
-        .iter_night_id()
-        .expect("dataset must have a night index")
-        .copied()
-        .collect();
-    night_ids.sort_unstable();
-    (tmp, obs_dataset, night_ids)
-}
-
-/// Observations of `night_id`, in the dataset's night order.
-fn night_observations(obs_dataset: &ObsDataset, night_id: NightId) -> Vec<&Observation> {
-    obs_dataset
-        .iter_night_observations(&night_id)
-        .into_iter()
-        .flatten()
-        .collect()
-}
+use fink_fat_stream::LiveNight;
+use photom::{NightId, observation_dataset::ObsDataset};
 
 /// Advance `collection` through `night_id`, as `fink-fat track` does.
 fn advance<'a>(
@@ -221,35 +80,6 @@ fn advance<'a>(
         step,
         Some(night_id),
     )
-}
-
-/// Compare fingerprint lines to the golden; (re)write it when blessing.
-fn check_against_golden(lines: &[String]) {
-    let actual = lines.join("\n") + "\n";
-
-    let golden = Path::new(GOLDEN_PATH);
-    if std::env::var_os(BLESS_ENV).is_some() || !golden.exists() {
-        std::fs::create_dir_all(golden.parent().expect("golden has a parent dir"))
-            .expect("create golden dir");
-        std::fs::write(golden, &actual).expect("write golden");
-        eprintln!("golden fingerprint written to {GOLDEN_PATH}; rerun to check determinism");
-        return;
-    }
-
-    let expected = std::fs::read_to_string(golden).expect("read golden");
-    if let Some((i, (exp, act))) = expected
-        .lines()
-        .zip(actual.lines())
-        .enumerate()
-        .find(|(_, (e, a))| e != a)
-    {
-        panic!("fingerprint diverges at night #{i}:\n  expected: {exp}\n  actual:   {act}");
-    }
-    assert_eq!(
-        expected.lines().count(),
-        actual.lines().count(),
-        "fingerprint night count differs from the golden"
-    );
 }
 
 /// The ids a collection carries before a night is advanced — all that
@@ -376,6 +206,46 @@ fn resume_from_snapshot_matches_golden_fingerprint() {
         collection = next;
     }
 
+    if Path::new(GOLDEN_PATH).exists() && std::env::var_os(BLESS_ENV).is_none() {
+        check_against_golden(&lines);
+    }
+}
+
+#[test]
+fn streamed_visits_match_golden_fingerprint() {
+    let (_tmp, obs_dataset, night_ids) = load_fixture();
+    let config =
+        EngineConfig::load_engine_config_validated(CONFIG_PATH).expect("load engine config");
+    let ctx = config.build_context();
+    let error_model = *obs_dataset
+        .get_error_model()
+        .expect("the fixture dataset carries an error model");
+    let tolerance = config.advance_params.visit_epoch_tolerance_days;
+
+    let mut lines = Vec::with_capacity(night_ids.len());
+    let mut collection = BranchCollection::empty();
+    for &night_id in &night_ids {
+        let night_obs = night_observations(&obs_dataset, night_id);
+        let mut live = LiveNight::begin(collection, night_id, error_model, &ctx, &config)
+            .expect("each fixture night is new");
+        for visit in group_observations_into_visits(&night_obs, tolerance) {
+            let inputs = visit
+                .observations
+                .iter()
+                .map(|o| observation_input(o))
+                .collect();
+            let outcome = live.advance_visit(inputs).expect("advance visit");
+            assert!(
+                outcome.observer_resolved,
+                "night {night_id}: the night's own dataset must resolve the observer"
+            );
+        }
+        assert_eq!(live.n_observations(), night_obs.len());
+        collection = live.close().expect("close night");
+        lines.push(night_fingerprint(night_id, &collection));
+    }
+
+    // Never blesses: the golden is the batch pipeline's.
     if Path::new(GOLDEN_PATH).exists() && std::env::var_os(BLESS_ENV).is_none() {
         check_against_golden(&lines);
     }

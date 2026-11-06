@@ -33,6 +33,7 @@
 //! ```
 
 pub mod registry;
+pub mod subscriber;
 
 /// Implemented by each module's log-event enum. Carries the module's tracing
 /// `target` name, a human-readable description (surfaced by

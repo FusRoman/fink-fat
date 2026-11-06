@@ -893,6 +893,9 @@ name = "camino"
 version = "1.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bb1307f12aa967b5a58416e87b3653360e0fd614a016b6e970db08fecbb1b80d"
+dependencies = [
+ "serde_core",
+]
 
 [[package]]
 name = "cargo-lock"
@@ -2925,6 +2928,7 @@ dependencies = [
  "fink-fat-engine",
  "fink-fat-eval",
  "fink-fat-sql",
+ "fink-fat-stream",
  "husky-rs",
  "outfit",
  "photom",
@@ -2978,6 +2982,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tracing",
+ "tracing-appender",
  "tracing-subscriber",
 ]
 
@@ -3059,6 +3064,22 @@ dependencies = [
  "postgres",
  "rayon",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "fink-fat-stream"
+version = "1.0.0"
+dependencies = [
+ "camino",
+ "fink-fat-engine",
+ "photom",
+ "polars",
+ "rkyv",
+ "serde",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tracing",
 ]
 
 [[package]]

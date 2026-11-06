@@ -138,7 +138,7 @@ jobs:
           cache-on-failure: true
 
       - name: cargo doc (workspace, explorer excluded)
-        run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features -p fink-fat -p fink-fat-engine -p fink-fat-sql -p fink-fat-ades -p fink-fat-eval
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features -p fink-fat -p fink-fat-engine -p fink-fat-sql -p fink-fat-ades -p fink-fat-eval -p fink-fat-stream
 
       - name: cargo doc (explorer, server)
         run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps $EXPLORER_SERVER
@@ -166,6 +166,8 @@ jobs:
             cargo_flags: -p fink-fat-ades --all-features
           - crate: fink-fat-eval
             cargo_flags: -p fink-fat-eval --all-features
+          - crate: fink-fat-stream
+            cargo_flags: -p fink-fat-stream --all-features
           # Server side only: the wasm32 client has no test harness here.
           # Tests hitting live external services are `#[ignore]`d.
           - crate: fink-fat-explorer

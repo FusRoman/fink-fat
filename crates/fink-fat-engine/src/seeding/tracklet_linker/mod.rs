@@ -63,8 +63,14 @@ pub fn link_tracklets<'alert_lf, Bs: SpatialBinner>(
     spatial_binner: &Bs,
     config: &PairConfig,
 ) -> Pairs<'alert_lf> {
+    // Total order `(mjd_tt, id)` (`Observation`'s `Ord`), not `mjd_tt` alone:
+    // the alerts of one exposure share an epoch, and the greedy sweep below
+    // lets the first of two same-epoch candidates claim a track. Breaking the
+    // tie by id makes the result independent of the caller's input order —
+    // a batch run passes the parquet's row order, a streaming consumer the
+    // order its visits arrived in, and both must seed the same lineages.
     let mut sorted_obs: Vec<&'alert_lf Observation> = night_obs.to_vec();
-    sorted_obs.sort_unstable_by(|a, b| a.mjd_tt().total_cmp(&b.mjd_tt()));
+    sorted_obs.sort_unstable();
 
     let mut active_tracks = ActiveTracks::default();
 

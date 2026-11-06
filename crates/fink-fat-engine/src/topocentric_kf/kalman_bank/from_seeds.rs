@@ -107,16 +107,17 @@ pub fn build_kf_bank_collection<'state_lf, 'bank_config>(
 /// only in which observations they pass in.
 ///
 /// Pipeline:
-/// 1. [`link_tracklets`] — links intra-night observations into per-object
-///    tracklets (time/angular-speed/magnitude gated, reusing the same
-///    spatial bucketing as `generate_pairs`) and emits one pair per
+/// 1. [`link_tracklets`] — a time-ordered sweep linking intra-night
+///    observations into per-object tracklets (time/angular-speed/magnitude
+///    gated, candidate tracks looked up in the observation's HEALPix
+///    neighborhood) that emits one maximal-baseline pair per
 ///    multi-detection object.
 /// 2. `KFBank::from_grid` per surviving pair.
 ///
 /// A `KFBank::from_grid` failure for one pair (e.g. unresolvable observer, no
 /// admissible (ρ, ρ̇) region) is logged and the pair is skipped — it does not
-/// abort the whole run, consistent with `generate_pairs` being a permissive
-/// pre-filter (see `pairs` module docs).
+/// abort the whole run: the linker is a permissive pre-filter, and a pair
+/// it lets through may still turn out to admit no orbit.
 pub fn build_kf_bank_collection_from_observations<'state_lf, 'bank_config>(
     obs_dataset: &ObsDataset,
     night_obs: &[&Observation],
