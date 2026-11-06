@@ -8,7 +8,7 @@
 //! run for hours, so an in-memory registry isn't good enough here: the job
 //! needs to survive a restart, be resumable without re-checking already-done
 //! observations, and be visible/killable from any page load. Two new
-//! Postgres tables make this possible — see `src/converter/sql/create_skybot_bulk_tables.sql`:
+//! Postgres tables make this possible — see `crates/fink-fat-sql/sql/tables/explorer/skybot_bulk.sql`:
 //! `skybot_bulk_jobs` (one row per job attempt; a partial unique index on
 //! `status = 'running'` is the actual "only one job at a time" guarantee,
 //! enforced by Postgres rather than a process-local `AtomicBool`) and
@@ -18,7 +18,7 @@
 //!
 //! [`run`] reuses [`crate::skybot_search::parsing::fetch_conesearch_hits`]
 //! for the actual network call and the same semaphore-bounded fan-out shape
-//! as [`crate::skybot_search::run::run_skybot_job`] — only the work source
+//! as `skybot_search::run::run_skybot_job` — only the work source
 //! (a priority-ordered DB query instead of one lineage's points) and sink
 //! (per-observation DB upserts instead of an in-memory job) differ.
 

@@ -80,9 +80,12 @@ struct EligibleBranchRow {
 /// failures away) specifically so failures can still be persisted — that is
 /// the only thing telling a branch whose fit failed apart from one that was
 /// never submitted to a bulk fit.
+///
+/// The row is boxed: it is several hundred bytes, against 8 for a failure,
+/// and one outcome per eligible branch is collected before persisting.
 #[cfg(feature = "server")]
 enum FitOutcome {
-    Success(crate::fit_pipeline::store::OrbitFitRow),
+    Success(Box<crate::fit_pipeline::store::OrbitFitRow>),
     Failure(i64),
 }
 
@@ -321,12 +324,12 @@ async fn run_bulk_fit(job_id: u64, params: &OrbitFitParams) -> Result<(), String
                     match product {
                         Some(product) => {
                             succeeded_counter.fetch_add(1, Ordering::Relaxed);
-                            FitOutcome::Success(bulk_row(
+                            FitOutcome::Success(Box::new(bulk_row(
                                 *branch_id,
                                 lineage_designation.clone(),
                                 &observations,
                                 product,
-                            ))
+                            )))
                         }
                         None => {
                             failed_counter.fetch_add(1, Ordering::Relaxed);
@@ -344,7 +347,7 @@ async fn run_bulk_fit(job_id: u64, params: &OrbitFitParams) -> Result<(), String
     let mut failed_branch_ids: Vec<i64> = Vec::new();
     for outcome in outcomes {
         match outcome {
-            FitOutcome::Success(row) => fit_rows.push(row),
+            FitOutcome::Success(row) => fit_rows.push(*row),
             FitOutcome::Failure(branch_id) => failed_branch_ids.push(branch_id),
         }
     }

@@ -1,7 +1,7 @@
 //! Writing checked observations to `skybot_obs_status` — the single source
 //! of truth for Skybot results shared by the per-lineage search (this
 //! module) and the bulk sweep (`crate::bulk_skybot`). Kept separate from
-//! [`super::run`] for the same reason `cnd_search::persist` is kept apart
+//! [`crate::skybot_search::run`] for the same reason `cnd_search::persist` is kept apart
 //! from `cnd_search::run`: the insert itself needs a real Postgres
 //! connection and is worth testing/reusing in isolation from the job
 //! registry/semaphore plumbing.

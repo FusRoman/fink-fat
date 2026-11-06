@@ -63,7 +63,7 @@ pub fn materialize_contiguous_traj<'o>(
 ///
 /// Scans `traj` for the first consecutive pair of observations separated by
 /// less than one day, computes the heliocentric observer state at both
-/// epochs, and builds an [`KFBank`] seeded from the admissible-region grid
+/// epochs, and builds a [`KFBank`](fink_fat_engine::topocentric_kf::kalman_bank::KFBank) seeded from the admissible-region grid
 /// at the pair midpoint epoch.
 ///
 /// Arguments
@@ -209,7 +209,7 @@ fn main() -> Result<()> {
 
                 println!("\n\n");
 
-                kf = propagated_kf.update(&obs).unwrap();
+                kf = propagated_kf.update(obs).unwrap();
 
                 println!("\n\n");
 

@@ -154,8 +154,10 @@ const FOCUS_SPHERE_RADIUS_AU: f64 = 0.10;
 const DASHED_LINE_WIDTH: f64 = 2.0;
 /// Nominal dash length, AU, of a [`TraceStyle::DashedPolylines`] line — see
 /// [`dash_segment`] for how it is adjusted per segment.
+#[cfg(target_arch = "wasm32")]
 const DASH_LENGTH_AU: f64 = 0.10;
 /// Gap between dashes, AU, of a [`TraceStyle::DashedPolylines`] line.
+#[cfg(target_arch = "wasm32")]
 const DASH_GAP_AU: f64 = 0.06;
 /// Marker size of an uncertainty-cloud clone ([`TraceSource::Uncertainty`]).
 #[cfg(target_arch = "wasm32")]
@@ -222,17 +224,21 @@ const LINE_VERTEX_SIZE: usize = 2;
 /// Highest opacity [`population_opacity`] returns — for a small
 /// tracked-object trace (at or below [`OBJECT_OPACITY_LOW_POPULATION`]
 /// points), which has no clutter of its own to cut through.
+#[cfg(any(target_arch = "wasm32", test))]
 const OBJECT_OPACITY_MAX: f64 = 0.95;
 /// Lowest opacity [`population_opacity`] returns — for a large
 /// tracked-object trace (at or above [`OBJECT_OPACITY_HIGH_POPULATION`]
 /// points), so a dense cluster reads as a soft cloud instead of a solid
 /// mass.
+#[cfg(any(target_arch = "wasm32", test))]
 const OBJECT_OPACITY_MIN: f64 = 0.35;
 /// Population size at or below which [`population_opacity`] returns
 /// [`OBJECT_OPACITY_MAX`] — e.g. a rare dynamical family.
+#[cfg(any(target_arch = "wasm32", test))]
 const OBJECT_OPACITY_LOW_POPULATION: f64 = 10.0;
 /// Population size at or above which [`population_opacity`] returns
 /// [`OBJECT_OPACITY_MIN`] — e.g. the main belt.
+#[cfg(any(target_arch = "wasm32", test))]
 const OBJECT_OPACITY_HIGH_POPULATION: f64 = 10_000.0;
 
 /// Marker opacity for a tracked-object trace of `n` points, interpolated on
@@ -254,6 +260,7 @@ const OBJECT_OPACITY_HIGH_POPULATION: f64 = 10_000.0;
 /// OBJECT_OPACITY_LOW_POPULATION` maps to the former, `n >=
 /// OBJECT_OPACITY_HIGH_POPULATION` to the latter, and every value in between
 /// is interpolated linearly in `log10(n)`.
+#[cfg(any(target_arch = "wasm32", test))]
 fn population_opacity(n: usize) -> f64 {
     let log_n = (n.max(1) as f64).log10();
     let log_low = OBJECT_OPACITY_LOW_POPULATION.log10();
@@ -793,6 +800,10 @@ pub fn Scatter3dPlot(
     // again, even as new data streamed in. Same pattern as
     // `lineage_page::trajectory_plot::TrajectoryPlot`.
     use_effect(use_reactive!(|(plot_id, traces, sphere_scale)| {
+        // Drawn client-side only: the server build merely subscribes to the
+        // same reactive inputs.
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = (plot_id, traces, sphere_scale);
         #[cfg(target_arch = "wasm32")]
         {
             if !is_mounted() {

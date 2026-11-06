@@ -29,6 +29,8 @@ members = [
     "crates/fink-fat-engine",
     "crates/fink-fat-eval",
     "crates/fink-fat-explorer",
+    "crates/fink-fat-sql",
+    "crates/fink-fat-stream",
 ]
 resolver = "3"
 
@@ -46,10 +48,12 @@ clap = { version = "4.5.60", features = ["cargo", "derive"] }
 chrono = "0.4"
 fink-fat-engine = { path = "crates/fink-fat-engine", version = "1.0.0" }
 fink-fat-ades = { path = "crates/fink-fat-ades", version = "1.0.0" }
+fink-fat-sql = { path = "crates/fink-fat-sql", version = "1.0.0" }
+fink-fat-stream = { path = "crates/fink-fat-stream", version = "1.0.0" }
 indicatif = "0.18.0"
 serde_yaml = "0.9.34"
 ndarray = "0.17.2"
-photom = { version = "1.0.0" }
+photom = { version = "1.1.0" }
 outfit = { version = "5.0.2", default-features = false, features = ["serde", "ephem-anise", "parallel"] }
 polars = { version = "0.53.0", default-features = false, features = [
     "lazy",
@@ -64,7 +68,7 @@ memmap2 = "0.9.10"
 # `with-chrono-0_4`: `fink-fat submit`'s eligibility check reads
 # `orbit_fits.fitted_at`/`orbit_fit_failures.attempted_at` (`TIMESTAMPTZ`) to
 # reproduce `fink_fat_ades::quality_tier::assign_quality_tier`'s cascade —
-# nothing under `converter::sql` needed chrono round-tripping before this.
+# nothing in `fink-fat-sql`'s bulk load needed chrono round-tripping before this.
 # `with-serde_json-1`: `mpc_submissions.verdict_detail` is `JSONB` —
 # `postgres::types::Json<T>` is the only `ToSql` impl that actually accepts
 # a JSON/JSONB column (see `submit::insert_submission_row`'s doc comment).
@@ -73,7 +77,6 @@ rayon = "1.12.0"
 
 
 [dependencies]
-indicatif = { workspace = true }
 camino = { workspace = true }
 chrono = { workspace = true }
 tracing = { workspace = true }
@@ -81,28 +84,30 @@ tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
 fink-fat-engine = { workspace = true }
 fink-fat-ades = { workspace = true }
+fink-fat-sql = { workspace = true }
+fink-fat-stream = { workspace = true }
 clap = { workspace = true }
 photom = { workspace = true, features = ["polars"] }
 polars = { workspace = true }
 rkyv = { workspace = true, features = ["pointer_width_64"] }
 thiserror = { workspace = true }
 postgres = { workspace = true }
-nalgebra = { workspace = true }
-outfit = { workspace = true }
-rayon = { workspace = true }
 serde = { workspace = true }
 serde_yaml = { workspace = true }
 serde_json = "1.0"
 # `blocking` keeps the CLI's `submit` subcommand synchronous (no tokio
 # runtime needed, matching the rest of this binary crate — see
-# `converter::sql`'s use of the synchronous `postgres` crate for the same
+# `fink-fat-sql`'s use of the synchronous `postgres` crate for the same
 # reason); `multipart` is needed for the ADES XML submission POST.
 reqwest = { version = "0.12", features = ["blocking", "json", "multipart"] }
 
 [dev-dependencies]
+outfit = { workspace = true }
 assert_cmd = "2.0.16"
 tempfile = { workspace = true }
 fink-fat-eval = { path = "crates/fink-fat-eval" }
+# `lsst_alert`: `tests/stream_resume.rs` builds synthetic Rubin alerts.
+photom = { workspace = true, features = ["polars", "lsst_alert"] }
 husky-rs = "0.4.0"
 
 [profile.release]

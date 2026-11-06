@@ -23,6 +23,7 @@ pub(super) fn band_name(filter: i16) -> String {
 }
 
 /// Standard LSST ugrizy plotting palette.
+#[cfg(target_arch = "wasm32")]
 fn band_color(filter: i16) -> &'static str {
     match filter {
         0 => "#56b4e9",
@@ -38,6 +39,7 @@ fn band_color(filter: i16) -> &'static str {
 /// Observation indices grouped by filter, in `u,g,r,i,z,y` order (then any
 /// unrecognised codes), so the legend is stable regardless of which bands a
 /// given lineage happens to have observations in.
+#[cfg(target_arch = "wasm32")]
 fn group_by_band(observations: &[ObservationRow]) -> Vec<(i16, Vec<usize>)> {
     let mut groups: Vec<(i16, Vec<usize>)> = Vec::new();
     for band in 0..=5i16 {
@@ -64,6 +66,7 @@ fn group_by_band(observations: &[ObservationRow]) -> Vec<(i16, Vec<usize>)> {
 
 /// The x part of the hover template, matched to whichever axis unit is
 /// currently selected so the value shown makes sense next to it.
+#[cfg(target_arch = "wasm32")]
 fn x_hover_format(unit: XAxisUnit) -> &'static str {
     match unit {
         XAxisUnit::ObservationIndex => "Obs #%{x:.0f}",
@@ -75,6 +78,7 @@ fn x_hover_format(unit: XAxisUnit) -> &'static str {
 /// `hovertemplate` can't reference `%{error_y}` (Plotly.js doesn't expose
 /// error arrays to hover templates), so `mag_err` is threaded through as
 /// `customdata` and d3-formatted inline instead.
+#[cfg(target_arch = "wasm32")]
 fn hover_template(unit: XAxisUnit) -> String {
     format!(
         "{}<br>%{{y:.3f}} ± %{{customdata:.3f}} mag",
@@ -82,6 +86,7 @@ fn hover_template(unit: XAxisUnit) -> String {
     )
 }
 
+#[cfg(target_arch = "wasm32")]
 fn magnitude_range(observations: &[ObservationRow]) -> (f64, f64) {
     let min = observations
         .iter()
@@ -130,6 +135,10 @@ pub fn LightCurvePlot(observations: Vec<ObservationRow>, x_axis_unit: XAxisUnit)
     let mut drawn = use_signal(|| false);
 
     use_effect(use_reactive!(|(observations, x_axis_unit)| {
+        // Drawn client-side only: the server build merely subscribes to the
+        // same reactive inputs.
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = (observations, x_axis_unit);
         #[cfg(target_arch = "wasm32")]
         {
             if !is_mounted() {

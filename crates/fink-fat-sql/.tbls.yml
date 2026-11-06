@@ -1,0 +1,70 @@
+# tbls configuration (https://github.com/k1LoW/tbls): generated schema docs
+# (one Markdown page per table + ER diagram) of the tables this crate
+# creates. The connection comes from the TBLS_DSN environment variable, set
+# by docs/generate_schema_docs.sh and by the `schema-docs` CI job.
+#
+# Always pass it explicitly (`tbls doc|diff|lint -c .tbls.yml`): tbls
+# v1.96.1 does not pick this file up on its own.
+#
+# Table and column descriptions are NOT written here: they are the
+# `COMMENT ON` statements of sql/tables/**, the single source of truth.
+
+name: fink-fat
+desc: Tables written by the fink-fat engine (convert, streaming), fink-fat-explorer and fink-fat submit.
+
+docPath: docs/schema
+
+er:
+  # Mermaid renders directly on GitHub; no image to commit.
+  format: mermaid
+  comment: true
+
+format:
+  adjust: true
+
+# Leftovers of an interrupted nightly sync, never part of the schema.
+exclude:
+  - fink_fat_staging.*
+  - fink_fat_retired.*
+
+# Every table and column must be documented: `tbls lint` fails otherwise.
+lint:
+  requireTableComment:
+    enabled: true
+  requireColumnComment:
+    enabled: true
+
+# Keys stored by value, without a foreign key (the referenced tables are
+# reloaded or swapped, a FK would cascade or block): declared here so the ER
+# diagram shows how the explorer / submit tables join the engine's.
+relations:
+  - table: orbit_fits
+    columns: [branch_id]
+    parentTable: branches
+    parentColumns: [branch_id]
+    def: by value, no FK
+  - table: orbit_fit_failures
+    columns: [branch_id]
+    parentTable: branches
+    parentColumns: [branch_id]
+    def: by value, no FK
+  - table: cnd_queries
+    columns: [branch_id]
+    parentTable: branches
+    parentColumns: [branch_id]
+    def: by value, no FK
+  - table: skybot_obs_status
+    columns: [branch_id]
+    parentTable: branches
+    parentColumns: [branch_id]
+    def: by value, no FK
+  - table: skybot_obs_status
+    columns: [obs_id]
+    parentTable: observations
+    parentColumns: [id]
+    def: by value, no FK
+  - table: mpc_submissions
+    columns: [branch_id]
+    parentTable: branches
+    parentColumns: [branch_id]
+    def: by value, no FK

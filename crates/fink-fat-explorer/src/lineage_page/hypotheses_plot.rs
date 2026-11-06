@@ -40,6 +40,10 @@ fn HypothesisCountPlot(replay: Vec<KfStep>, x_axis_unit: XAxisUnit) -> Element {
     let mut drawn = use_signal(|| false);
 
     use_effect(use_reactive!(|(replay, x_axis_unit)| {
+        // Drawn client-side only: the server build merely subscribes to the
+        // same reactive inputs.
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = (replay, x_axis_unit);
         #[cfg(target_arch = "wasm32")]
         {
             if !is_mounted() {
@@ -117,6 +121,10 @@ fn SearchRegionPlot(replay: Vec<KfStep>, x_axis_unit: XAxisUnit) -> Element {
     let mut drawn = use_signal(|| false);
 
     use_effect(use_reactive!(|(replay, x_axis_unit)| {
+        // Drawn client-side only: the server build merely subscribes to the
+        // same reactive inputs.
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = (replay, x_axis_unit);
         #[cfg(target_arch = "wasm32")]
         {
             if !is_mounted() {

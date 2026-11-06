@@ -1,13 +1,55 @@
 #!/bin/sh
+#
+# Lints the WHOLE workspace. A bare `cargo clippy` at the root only lints the
+# root `fink-fat` package (the other members are merely built as
+# dependencies), hence the explicit `--workspace` / `-p` everywhere below.
+#
+# `fink-fat-explorer` is a Dioxus fullstack app, linted the way `dx` builds it
+# rather than with `--all-features` (its `desktop`/`mobile` features pull GTK
+# and are never built here):
+#   - `server` feature, host target, with tests;
+#   - `web` feature, wasm32 target (the browser client).
+# Each side has code the other compiles out (`#[cfg(feature = "server")]`
+# helpers, `#[cfg(target_arch = "wasm32")]` plotting), so dead code only shows
+# up when both are linted. Requires `rustup target add wasm32-unknown-unknown`.
+
+EXPLORER_SERVER="-p fink-fat-explorer --no-default-features --features server"
+EXPLORER_WEB="-p fink-fat-explorer --no-default-features --features web --target wasm32-unknown-unknown"
+
+# SQL scripts of fink-fat-sql: SQLFluff (style/format) and Squawk (Postgres
+# DDL safety), versions pinned in crates/fink-fat-sql/sql-lint-requirements.txt.
+SQL_DIR="crates/fink-fat-sql/sql"
+for tool in sqlfluff squawk; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        echo "error: '$tool' not found. Install the SQL linters with:"
+        echo "  pip install -r crates/fink-fat-sql/sql-lint-requirements.txt"
+        exit 1
+    fi
+done
+
+echo "Running sqlfluff lint..."
+sqlfluff lint "$SQL_DIR" || exit 1
+
+echo "Running squawk..."
+squawk --config crates/fink-fat-sql/.squawk.toml "$SQL_DIR/**/*.sql" || exit 1
 
 echo "Running cargo fmt..."
 cargo fmt --all -- --check || exit 1
 
-echo "Running cargo clippy..."
-cargo clippy --all-targets --all-features -- -D warnings || exit 1
+echo "Running cargo clippy (workspace, all features, explorer excluded)..."
+cargo clippy --workspace --exclude fink-fat-explorer --all-targets --all-features -- -D warnings || exit 1
+
+echo "Running cargo clippy (explorer, server)..."
+cargo clippy $EXPLORER_SERVER --all-targets -- -D warnings || exit 1
+
+echo "Running cargo clippy (explorer, web/wasm32)..."
+cargo clippy $EXPLORER_WEB -- -D warnings || exit 1
 
 echo "Running cargo check..."
-cargo check --all-targets --all-features || exit 1
+cargo check --workspace --exclude fink-fat-explorer --all-targets --all-features || exit 1
+cargo check $EXPLORER_SERVER --all-targets || exit 1
+cargo check $EXPLORER_WEB || exit 1
 
 echo "Checking documentation build..."
-RUSTDOCFLAGS="-D warnings --html-in-header $(pwd)/katex-header.html" cargo doc --no-deps --all-features -p fink-fat -p fink-fat-engine || exit 1
+RUSTDOCFLAGS="-D warnings --html-in-header $(pwd)/katex-header.html" cargo doc --no-deps --all-features -p fink-fat -p fink-fat-engine -p fink-fat-sql -p fink-fat-ades -p fink-fat-eval -p fink-fat-stream || exit 1
+RUSTDOCFLAGS="-D warnings --html-in-header $(pwd)/katex-header.html" cargo doc --no-deps $EXPLORER_SERVER || exit 1

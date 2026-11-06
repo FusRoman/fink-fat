@@ -118,7 +118,7 @@ fn run_and_summarize(
             .flatten()
             .collect();
         collection = collection
-            .advance_one_night(&night_obs, obs_dataset, config, ctx, step)
+            .advance_one_night(&night_obs, obs_dataset, config, ctx, step, Some(*night_id))
             .expect("advance_one_night should not fail on the fixture");
     }
 

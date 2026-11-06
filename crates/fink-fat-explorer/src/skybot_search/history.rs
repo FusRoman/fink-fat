@@ -1,5 +1,5 @@
 //! Reading back a lineage's Skybot status from `skybot_obs_status` — the
-//! same table both the per-lineage search ([`super::run`]) and the bulk
+//! same table both the per-lineage search ([`crate::skybot_search::run`]) and the bulk
 //! sweep (`crate::bulk_skybot`) write to, aggregated here across every
 //! observation belonging to the lineage.
 

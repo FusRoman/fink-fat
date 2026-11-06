@@ -1,0 +1,16 @@
+# SQLFluff configuration for the fink-fat-sql scripts (`sql/**/*.sql`).
+# Run from this directory: `sqlfluff lint sql/` / `sqlfluff fix sql/`.
+
+[sqlfluff]
+dialect = postgres
+# Same width as rustfmt's default.
+max_line_length = 100
+# RF04 (keywords used as identifiers): the `filter`, `dec`, `position`, `xml`
+# and `logs` columns are part of the schema the explorer and `submit` query
+# by name; renaming them would break every reader for a style rule.
+exclude_rules = RF04
+
+# Keep Postgres array types written the usual way, `BIGINT[]`, instead of
+# SQLFluff's default `BIGINT []`.
+[sqlfluff:layout:type:start_square_bracket]
+spacing_before = touch

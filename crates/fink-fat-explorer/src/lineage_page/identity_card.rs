@@ -40,7 +40,8 @@ pub struct LineageSummary {
     pub rho_dot: f64,
 }
 
-#[cfg_attr(feature = "server", derive(sqlx::FromRow))]
+#[cfg(feature = "server")]
+#[derive(sqlx::FromRow)]
 struct LineageSummaryRow {
     lineage_id: i64,
     lineage_designation: String,
@@ -63,6 +64,7 @@ struct LineageSummaryRow {
 /// Same non-finite sanitization used by `homepage::branch_tab::list_lineages`,
 /// duplicated here rather than shared because it is a tiny SQL fragment tied
 /// to the literal column name it sanitizes in each query.
+#[cfg(feature = "server")]
 const SANITIZED_LLR_EXPR: &str = "
     CASE
         WHEN cumulative_llr = 'NaN'::double precision THEN 0

@@ -1,0 +1,25 @@
+[package]
+name = "fink-fat-sql"
+description = "Postgres sink of fink-fat: table schema, row shapes and COPY loaders shared by the fink-fat CLI (full reload) and the streaming binary."
+readme = "README.md"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+categories.workspace = true
+keywords.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+license-file.workspace = true
+
+[dependencies]
+fink-fat-engine = { workspace = true }
+postgres = { workspace = true }
+nalgebra = { workspace = true }
+outfit = { workspace = true }
+rayon = { workspace = true }
+indicatif = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+# `ObservationRow` is journaled by the streaming pipeline's SQL outbox.
+rkyv = { workspace = true, features = ["pointer_width_64"] }

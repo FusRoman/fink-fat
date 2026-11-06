@@ -8,9 +8,9 @@
 //!
 //! The actual work is split into two modules so this file stays a thin
 //! orchestration layer:
-//!   - [`trajectory_processing`]: materializing trajectories, running the
+//!   - [`trajectory_processing`](fink_fat_eval::trajectory_processing): materializing trajectories, running the
 //!     Kalman filter bank, summarizing results, and ranking trajectories.
-//!   - [`reporting`]: all `stdout` formatting and printing.
+//!   - [`reporting`](fink_fat_eval::reporting): all `stdout` formatting and printing.
 
 use anyhow::Result;
 use clap::Parser;

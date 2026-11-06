@@ -330,7 +330,7 @@ mod candidate_search_tests {
         let input = ObservationInput::new(id, equ, photometry, mjd_tt, None);
         let (obs_dataset, obs_id) = obs_dataset.push_observation(vec![input]).unwrap();
         obs_dataset
-            .get_obs_by_index(*obs_id.get(0).unwrap())
+            .get_obs_by_index(*obs_id.first().unwrap())
             .unwrap()
             .clone()
     }
@@ -363,7 +363,7 @@ mod candidate_search_tests {
         // 20" cone query.
         let far = mk_observation(1, center_ra + 1.0, center_dec, 60000.0);
 
-        let obs = vec![near, far];
+        let obs = [near, far];
         let obs_refs: Vec<&Observation> = obs.iter().collect();
 
         let bucket_index = build_alert_bucket_index(
@@ -435,7 +435,7 @@ mod candidate_search_tests {
 
         let region = mk_region(center_ra, center_dec, sigma, gate_chi2);
         let center_obs = mk_observation(0, center_ra, center_dec, 60000.0);
-        let obs = vec![center_obs];
+        let obs = [center_obs];
         let obs_refs: Vec<&Observation> = obs.iter().collect();
 
         let spatial_binner = HealpixBinner::new(10);

@@ -149,7 +149,7 @@ mod tests {
         assert!(id.as_str().starts_with("FF2020"));
         let suffix = &id.as_str()["FF2020".len()..];
         assert_eq!(suffix.len(), 12);
-        assert!(suffix.chars().all(|c| ('a'..='z').contains(&c)));
+        assert!(suffix.chars().all(|c: char| c.is_ascii_lowercase()));
     }
 
     #[test]
@@ -181,7 +181,7 @@ mod tests {
         assert!(id.as_str().starts_with(&expected_prefix));
         let suffix = &id.as_str()[expected_prefix.len()..];
         assert_eq!(suffix.len(), 8);
-        assert!(suffix.chars().all(|c| ('a'..='z').contains(&c)));
+        assert!(suffix.chars().all(|c: char| c.is_ascii_lowercase()));
     }
 
     #[test]

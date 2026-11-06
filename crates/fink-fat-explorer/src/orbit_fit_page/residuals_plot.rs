@@ -51,6 +51,10 @@ fn CombinedResidualsPlot(residuals: Vec<ObsResidual>, x_axis_unit: XAxisUnit) ->
     let mut drawn = use_signal(|| false);
 
     use_effect(use_reactive!(|(residuals, x_axis_unit)| {
+        // Drawn client-side only: the server build merely subscribes to the
+        // same reactive inputs.
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = (residuals, x_axis_unit);
         #[cfg(target_arch = "wasm32")]
         {
             if !is_mounted() {

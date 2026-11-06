@@ -12,6 +12,8 @@
 //!   pipeline.
 //! - `fink-fat-engine` — core library. Implements alert models, seeding, edge
 //!   construction, solver routing, persistence, and configuration loading.
+//! - `fink-fat-stream` — streaming driver library, behind `fink-fat stream`:
+//!   advances the engine visit by visit as alerts arrive.
 //! - `fink-fat-eval` — evaluation binaries. Runs the engine on labelled data to
 //!   measure seeding, edge, solver, and model quality.
 //!
@@ -50,15 +52,17 @@ pub mod converter;
 pub mod error;
 pub mod init_cli;
 pub mod logging;
+pub mod stream;
 pub mod submit;
 pub mod track;
 
 use crate::{
     converter::convert,
     init_cli::{
-        FinkFatCommands::{Convert, Submit, Track},
+        FinkFatCommands::{Convert, Stream, Submit, Track},
         cli_builder,
     },
+    stream::stream,
     submit::{SubmitArgs, submit},
     track::tracking,
 };
@@ -68,6 +72,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Track(fink_fat_cli_args) => tracking(fink_fat_cli_args),
+        Stream(stream_cli_args) => stream(stream_cli_args),
         Convert {
             config,
             format,

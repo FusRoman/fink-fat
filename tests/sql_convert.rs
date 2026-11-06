@@ -2,12 +2,13 @@
 //!
 //! Same pattern as `tests/reconstruction.rs`: `fink-fat` is a binary-only
 //! crate (no `src/lib.rs`), so a test in `tests/` cannot call
-//! `converter::sql::write_sql_tables` directly — it invokes the compiled
+//! the conversion directly — it invokes the compiled
 //! binary via [`assert_cmd`] instead, then inspects the result with its own,
 //! independent Postgres connection.
 //!
-//! **Requires a running Postgres** and **destroys the contents of its 7
-//! bulk-loaded tables** (`write_sql_tables` always `TRUNCATE`s them). CI
+//! **Requires a running Postgres** and **destroys the contents of its 8
+//! bulk-loaded tables** (`fink_fat_sql::write_bulk_tables` always
+//! `TRUNCATE`s them). CI
 //! provides a throwaway instance for this (see the `sql-integration-test`
 //! job in `.github/workflows/CI.yml`); locally, use the repo's
 //! `docker-compose.yml`:
@@ -20,6 +21,10 @@
 //! Override `DATABASE_URL` in the environment to point at a different
 //! instance; defaults to the `docker-compose.yml` `db` service reached from
 //! the host.
+
+mod common;
+
+use common::database_url;
 
 use std::path::PathBuf;
 
@@ -45,7 +50,7 @@ const LSST_FIXTURE: &str = concat!(
 /// `tests/data/night_id_<N>.parquet` file works as both the `track` input
 /// and the `convert --path-observation` input: it's already shaped like the
 /// candid-keyed alert parquet `read_observation_rows` expects (see
-/// `src/converter/sql/observations.rs`), `objectId` column included.
+/// `src/converter/observations.rs`), `objectId` column included.
 fn first_night_path() -> PathBuf {
     let mut nights: Vec<PathBuf> = std::fs::read_dir(DATA_DIR)
         .expect("read tests/data dir")
@@ -58,14 +63,6 @@ fn first_night_path() -> PathBuf {
         .into_iter()
         .next()
         .expect("tests/data should contain at least one night fixture")
-}
-
-/// Connection string for the Postgres this test converts into. Defaults to
-/// the `db` service in the repo's `docker-compose.yml`, reached from the
-/// host (`docker compose up -d db` exposes it on `localhost:5432`).
-fn database_url() -> String {
-    std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://finkfat:finkfat@localhost:5432/finkfat_test".to_string())
 }
 
 /// Runs `fink-fat track --alerts <alerts_path> --config tests/config.yaml`,
@@ -169,14 +166,18 @@ fn assert_conversion_succeeded(night_str: &str, database_url: &str) {
                 "{table} should hold at least one row after converting a real night fixture"
             );
         }
-        assert!(
+        // `observations` is the one WAL-logged table: the streaming pipeline
+        // appends to it live (see tables/engine/observations.sql); the others
+        // are regenerated from the engine's state by every load.
+        assert_eq!(
             status.is_unlogged,
-            "{table} should be UNLOGGED after `convert` (see src/converter/sql/create_tables.sql)"
+            table != "observations",
+            "{table}: unexpected persistence after `convert` (see crates/fink-fat-sql/src/schema.rs)"
         );
     }
 
-    // Rebuilt by `restore_bulk_load_constraints.sql` after the COPYs — see
-    // `src/converter/sql/schema.rs`.
+    // Rebuilt by `bulk_load/restore_trajectory_constraints.sql` after the COPYs — see
+    // `crates/fink-fat-sql/src/schema.rs`.
     for conname in [
         "kf_bank_branch_id_fkey",
         "branch_observations_branch_id_fkey",
@@ -191,7 +192,7 @@ fn assert_conversion_succeeded(night_str: &str, database_url: &str) {
     }
 
     // `branch_observations`'s primary key (`branch_id, position`) is never
-    // dropped during the bulk load (see `schema::drop_bulk_load_constraints`),
+    // dropped during the bulk load (see `schema::drop_trajectory_constraints`),
     // so it should already have rejected any duplicate had one been written;
     // this just double-checks the invariant end to end.
     let (n_rows, n_distinct): (i64, i64) = {

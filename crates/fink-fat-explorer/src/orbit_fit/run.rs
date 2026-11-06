@@ -226,7 +226,6 @@ pub(crate) async fn fetch_kalman_orbit(branch_id: i64) -> Result<outfit::Orbital
 
 #[cfg(feature = "server")]
 struct PreviousFit {
-    fitted_at: chrono::DateTime<chrono::Utc>,
     keplerian: outfit::KeplerianElements,
 }
 
@@ -234,7 +233,6 @@ struct PreviousFit {
 async fn fetch_previous_fit(lineage_designation: &str) -> Result<Option<PreviousFit>, String> {
     #[derive(sqlx::FromRow)]
     struct Row {
-        fitted_at: chrono::DateTime<chrono::Utc>,
         reference_epoch: f64,
         semi_major_axis: f64,
         eccentricity_sin_lon: f64,
@@ -246,7 +244,7 @@ async fn fetch_previous_fit(lineage_designation: &str) -> Result<Option<Previous
 
     let pool = crate::get_pool().await;
     let row: Option<Row> = sqlx::query_as(
-        "SELECT fitted_at, reference_epoch, semi_major_axis, eccentricity_sin_lon, \
+        "SELECT reference_epoch, semi_major_axis, eccentricity_sin_lon, \
          eccentricity_cos_lon, tan_half_incl_sin_node, tan_half_incl_cos_node, mean_longitude \
          FROM orbit_fits \
          WHERE lineage_designation = $1 \
@@ -278,10 +276,7 @@ async fn fetch_previous_fit(lineage_designation: &str) -> Result<Option<Previous
     };
     let keplerian = crate::fit_pipeline::fit::to_keplerian(oe)?;
 
-    Ok(Some(PreviousFit {
-        fitted_at: row.fitted_at,
-        keplerian,
-    }))
+    Ok(Some(PreviousFit { keplerian }))
 }
 /// Wrap a difference of angles (degrees) into (-180, 180].
 #[cfg(feature = "server")]
