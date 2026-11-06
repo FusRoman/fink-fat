@@ -1,9 +1,24 @@
--- Target schema of the 8 tables `write_sql_tables` bulk-loads, as it would
+-- squawk-ignore-file prefer-bigint-over-int, prefer-bigint-over-smallint
+-- INTEGER/SMALLINT are deliberate: `filter`, `position` and
+-- `absolute_magnitude_sample_count` are written by the binary COPY as
+-- INT2/INT4 (src/copy.rs) and read as i16/i32 by the explorer; widening them
+-- would break both, and no value comes near the 32-bit limit.
+
+-- Lock/statement limits (SET LOCAL: they hold until the end of the
+-- enclosing transaction, i.e. also for the statements that run after this
+-- script in it). lock_timeout: fail after 1 min instead of queueing behind a
+-- long explorer query, which would also block every query queued behind
+-- this one. statement_timeout = 0 (no limit) on purpose: the bulk COPYs and
+-- index rebuilds that follow in `convert` legitimately run for minutes.
+SET LOCAL lock_timeout = '1min';
+SET LOCAL statement_timeout = 0;
+
+-- Target schema of the 8 tables `write_bulk_tables` bulk-loads, as it would
 -- be created on a brand-new database. `UNLOGGED`: these tables are fully
--- rebuilt by every `convert` run (TRUNCATE then COPY, see `mod.rs`) and never
+-- rebuilt by every `convert` run (TRUNCATE then COPY, see `src/load.rs`) and never
 -- modified outside of it, so skipping WAL for them costs nothing — see the
--- crate-level doc comment on `super` for the full rationale. A database
--- created by an older version of this binary needs its existing tables
+-- crate-level doc comment in `src/lib.rs` for the full rationale. A database
+-- created by an older version of `fink-fat convert` needs its existing tables
 -- migrated instead of (re)created; that migration lives in
 -- `migrate_legacy_columns.sql`, not here.
 
@@ -46,29 +61,29 @@ CREATE UNLOGGED TABLE IF NOT EXISTS branches (
 );
 
 CREATE UNLOGGED TABLE IF NOT EXISTS kf_bank (
-    branch_id BIGINT PRIMARY KEY REFERENCES branches(branch_id),
+    branch_id BIGINT PRIMARY KEY REFERENCES branches (branch_id),
     n_steps BIGINT NOT NULL,
     absolute_magnitude_estimate DOUBLE PRECISION,
     absolute_magnitude_sample_count INTEGER NOT NULL
 );
 
 CREATE UNLOGGED TABLE IF NOT EXISTS branch_observations (
-    branch_id BIGINT NOT NULL REFERENCES branches(branch_id),
+    branch_id BIGINT NOT NULL REFERENCES branches (branch_id),
     position INTEGER NOT NULL,
-    obs_id BIGINT NOT NULL REFERENCES observations(id),
+    obs_id BIGINT NOT NULL REFERENCES observations (id),
     PRIMARY KEY (branch_id, position)
 );
 
 CREATE UNLOGGED TABLE IF NOT EXISTS hypotheses (
     hypothesis_id BIGINT PRIMARY KEY,
-    branch_id BIGINT NOT NULL REFERENCES branches(branch_id),
+    branch_id BIGINT NOT NULL REFERENCES branches (branch_id),
     local_hyp_id BIGINT NOT NULL,
     log_weight DOUBLE PRECISION NOT NULL,
     recent_log_liks DOUBLE PRECISION[] NOT NULL
 );
 
 CREATE UNLOGGED TABLE IF NOT EXISTS kf_state (
-    hypothesis_id BIGINT PRIMARY KEY REFERENCES hypotheses(hypothesis_id),
+    hypothesis_id BIGINT PRIMARY KEY REFERENCES hypotheses (hypothesis_id),
     ra DOUBLE PRECISION NOT NULL,
     dec DOUBLE PRECISION NOT NULL,
     ra_dot DOUBLE PRECISION NOT NULL,
@@ -96,7 +111,7 @@ CREATE UNLOGGED TABLE IF NOT EXISTS kf_state (
 -- probe per branch into tables tens of GB large. Covariance and Kalman gain
 -- are left out: nothing reads them across all branches.
 CREATE UNLOGGED TABLE IF NOT EXISTS branch_best_state (
-    branch_id BIGINT PRIMARY KEY REFERENCES branches(branch_id),
+    branch_id BIGINT PRIMARY KEY REFERENCES branches (branch_id),
     hypothesis_id BIGINT NOT NULL,
     dynamic_family TEXT NOT NULL,
     semi_major_axis DOUBLE PRECISION NOT NULL,
@@ -149,19 +164,19 @@ CREATE UNLOGGED TABLE IF NOT EXISTS archived_trajectories (
 );
 
 CREATE INDEX IF NOT EXISTS idx_hypotheses_branch_log_weight
-    ON hypotheses (branch_id, log_weight DESC);
+ON hypotheses (branch_id, log_weight DESC);
 
 -- The explorer's lineage page resolves a lineage by its designation
 -- (`WHERE lineage_designation = $1`) from four different queries per
 -- page load; without this each one is a full scan of `branches`.
 CREATE INDEX IF NOT EXISTS idx_branches_lineage_designation
-    ON branches (lineage_designation);
+ON branches (lineage_designation);
 
 CREATE INDEX IF NOT EXISTS idx_branches_lineage_id
-    ON branches (lineage_id);
+ON branches (lineage_id);
 
 -- Postgres does not index foreign-key columns on its own, and this one
 -- backs both `JOIN observations o ON o.id = bo.obs_id` and the FK
 -- checks that TRUNCATE ... CASCADE performs.
 CREATE INDEX IF NOT EXISTS idx_branch_observations_obs_id
-    ON branch_observations (obs_id);
+ON branch_observations (obs_id);

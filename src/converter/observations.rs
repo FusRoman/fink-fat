@@ -3,14 +3,15 @@
 //! (ZTF)/`test_exp/prep_lsst_eval_data.py` (LSST)) that feeds the
 //! `observations` table.
 //!
-//! Kept separate from [`super::build`] because it has a distinct concern —
-//! reading an external Parquet file — rather than walking a
-//! [`fink_fat_engine::topocentric_kf::branching::BranchCollection`].
+//! This is the only input `convert --format sql` reads from a file: the rows
+//! themselves, their encoding and the `COPY` into Postgres live in
+//! [`fink_fat_sql`], which takes rows rather than a path so the streaming
+//! binary can feed it observations from the alert stream instead.
 
 use camino::Utf8Path;
 use polars::prelude::*;
 
-use super::rows::ObservationRow;
+use fink_fat_sql::rows::ObservationRow;
 
 /// Reads every row of `path` into a [`Vec<ObservationRow>`].
 ///
@@ -38,7 +39,7 @@ use super::rows::ObservationRow;
 /// The file failing to open/parse as the expected schema (via [`polars`]),
 /// or a null `objectId`/`mpc_code_obs` value (both are `NOT NULL` columns on
 /// `observations` and have no sensible default).
-pub(super) fn read_observation_rows(
+pub fn read_observation_rows(
     path: &Utf8Path,
 ) -> Result<Vec<ObservationRow>, Box<dyn std::error::Error>> {
     let mut df =

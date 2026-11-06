@@ -9,6 +9,15 @@ on:
 permissions:
   contents: read
 
+# Feature sets, mirrored from `.husky/pre-commit`:
+# - every crate except the explorer: `--all-features`;
+# - `fink-fat-explorer` (Dioxus fullstack app): `server` on the host target
+#   (with tests) and `web` on wasm32 (the browser client). Its `desktop` /
+#   `mobile` features pull GTK and are never built.
+env:
+  EXPLORER_SERVER: -p fink-fat-explorer --no-default-features --features server
+  EXPLORER_WEB: -p fink-fat-explorer --no-default-features --features web --target wasm32-unknown-unknown
+
 jobs:
   fmt:
     name: Format check
@@ -25,6 +34,27 @@ jobs:
       - name: cargo fmt
         run: cargo fmt --all -- --check
 
+  sql-lint:
+    name: SQL lint (SQLFluff + Squawk)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install SQL linters
+        run: pip install -r crates/fink-fat-sql/sql-lint-requirements.txt
+
+      - name: sqlfluff lint
+        run: sqlfluff lint crates/fink-fat-sql/sql
+
+      - name: squawk
+        run: squawk --config crates/fink-fat-sql/.squawk.toml crates/fink-fat-sql/sql/*.sql
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
@@ -36,6 +66,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+          targets: wasm32-unknown-unknown
 
       - name: Install system dependencies
         # Note: Needed for plotters in the fink-fat-eval crate
@@ -46,8 +77,16 @@ jobs:
         with:
           cache-on-failure: true
 
-      - name: cargo clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: cargo clippy (workspace, explorer excluded)
+        # A bare `cargo clippy` at the root only lints the root `fink-fat`
+        # package, hence `--workspace`.
+        run: cargo clippy --workspace --exclude fink-fat-explorer --all-targets --all-features -- -D warnings
+
+      - name: cargo clippy (explorer, server)
+        run: cargo clippy $EXPLORER_SERVER --all-targets -- -D warnings
+
+      - name: cargo clippy (explorer, web/wasm32)
+        run: cargo clippy $EXPLORER_WEB -- -D warnings
 
   check:
     name: Cargo check
@@ -58,6 +97,8 @@ jobs:
 
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
 
       - name: Install system dependencies
         # Note: Needed for plotters in the fink-fat-eval crate
@@ -68,54 +109,14 @@ jobs:
         with:
           cache-on-failure: true
 
-      - name: cargo check
-        run: cargo check --all-targets --all-features
+      - name: cargo check (workspace, explorer excluded)
+        run: cargo check --workspace --exclude fink-fat-explorer --all-targets --all-features
 
-  sql-integration-test:
-    name: SQL conversion integration test
-    runs-on: ubuntu-latest
-    needs: [check]
-    # Throwaway instance for `tests/sql_convert.rs`, which exercises the real
-    # `fink-fat convert --format sql` path against Postgres (COPY BINARY,
-    # UNLOGGED tables, deferred FK/index rebuild) — behaviour with no SQLite
-    # equivalent, so this test needs a real Postgres rather than a lighter
-    # stand-in. Same credentials as the repo's `docker-compose.yml` `db`
-    # service, so `DATABASE_URL` below matches what a contributor would use
-    # locally.
-    services:
-      postgres:
-        image: postgres:latest
-        env:
-          POSTGRES_USER: finkfat
-          POSTGRES_PASSWORD: finkfat
-          POSTGRES_DB: finkfat_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: cargo check (explorer, server)
+        run: cargo check $EXPLORER_SERVER --all-targets
 
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install system dependencies
-        # Note: Needed for plotters in the fink-fat-eval crate
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
-
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
-
-      - name: cargo test --test sql_convert
-        env:
-          DATABASE_URL: postgres://finkfat:finkfat@localhost:5432/finkfat_test
-        run: cargo test -p fink-fat --test sql_convert
+      - name: cargo check (explorer, web/wasm32)
+        run: cargo check $EXPLORER_WEB
 
   doc:
     name: Documentation check
@@ -137,12 +138,56 @@ jobs:
           cache-on-failure: true
 
       - name: cargo doc
-        run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+        # fink-fat-eval and fink-fat-explorer are not listed yet: their
+        # intra-doc links still have to be fixed before `-D warnings` passes.
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features -p fink-fat -p fink-fat-engine -p fink-fat-sql -p fink-fat-ades
 
-  coverage:
-    name: Tests & Coverage
+  test-coverage:
+    # One job per crate: tests run under `cargo llvm-cov`, and each crate's
+    # report is uploaded to Codecov under its own flag (see `codecov.yml`),
+    # so coverage is tracked per crate as well as for the whole workspace.
+    name: Tests & coverage (${{ matrix.crate }})
     runs-on: ubuntu-latest
     needs: [fmt, clippy, check, doc]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Root CLI. Includes the black-box `tests/sql_convert.rs`, which
+          # needs the Postgres service below.
+          - crate: fink-fat
+            cargo_flags: -p fink-fat --all-features
+          - crate: fink-fat-engine
+            cargo_flags: -p fink-fat-engine --all-features
+          - crate: fink-fat-sql
+            cargo_flags: -p fink-fat-sql --all-features
+          - crate: fink-fat-ades
+            cargo_flags: -p fink-fat-ades --all-features
+          - crate: fink-fat-eval
+            cargo_flags: -p fink-fat-eval --all-features
+          # Server side only: the wasm32 client has no test harness here.
+          # Tests hitting live external services are `#[ignore]`d.
+          - crate: fink-fat-explorer
+            cargo_flags: -p fink-fat-explorer --no-default-features --features server
+    # Throwaway Postgres for `tests/sql_convert.rs`, which exercises the real
+    # `fink-fat convert --format sql` path (COPY BINARY, UNLOGGED tables,
+    # deferred FK/index rebuild). Same credentials as the repo's
+    # `docker-compose.yml` `db` service. Service containers cannot be
+    # enabled per matrix entry; the other crates simply ignore it.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: finkfat
+          POSTGRES_PASSWORD: finkfat
+          POSTGRES_DB: finkfat_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -152,31 +197,30 @@ jobs:
         with:
           components: llvm-tools-preview
 
+      - name: Install system dependencies
+        # Note: Needed for plotters in the fink-fat-eval crate
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
+
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          key: coverage-${{ matrix.crate }}
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      - name: Clean coverage artifacts
-        run: cargo llvm-cov clean --workspace
-
-      - name: Generate coverage (engine only, lcov)
+      - name: Run tests with coverage (lcov)
         env:
+          DATABASE_URL: postgres://finkfat:finkfat@localhost:5432/finkfat_test
           RAYON_NUM_THREADS: 2
           RUST_TEST_THREADS: 1
-        run: |
-          cargo llvm-cov \
-            --package fink-fat-engine \
-            --all-features \
-            --lcov --output-path lcov.info
+        run: cargo llvm-cov ${{ matrix.cargo_flags }} --lcov --output-path lcov.info
 
       - name: Upload to Codecov
         uses: codecov/codecov-action@v4
         with:
           files: lcov.info
-          flags: rust
+          flags: ${{ matrix.crate }}
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}

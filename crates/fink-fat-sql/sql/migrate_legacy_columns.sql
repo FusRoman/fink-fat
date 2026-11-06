@@ -1,4 +1,13 @@
--- Migrations for a database created by an older version of this binary,
+-- Lock/statement limits (SET LOCAL: they hold until the end of the
+-- enclosing transaction, i.e. also for the statements that run after this
+-- script in it). lock_timeout: fail after 1 min instead of queueing behind a
+-- long explorer query, which would also block every query queued behind
+-- this one. statement_timeout = 0 (no limit) on purpose: the bulk COPYs and
+-- index rebuilds that follow in `convert` legitimately run for minutes.
+SET LOCAL lock_timeout = '1min';
+SET LOCAL statement_timeout = 0;
+
+-- Migrations for a database created by an older version of `fink-fat convert`,
 -- where `create_tables.sql`'s `CREATE TABLE IF NOT EXISTS` is a no-op
 -- against tables that already exist but predate a later schema change.
 -- Idempotent throughout, safe to run on every `convert`.
@@ -18,14 +27,17 @@ ALTER TABLE archived_trajectories SET UNLOGGED;
 -- create_tables.sql is a no-op against a pre-existing table, so a DB created
 -- before these columns existed needs them backfilled explicitly. The
 -- DEFAULT satisfies NOT NULL on any existing rows; the table is TRUNCATEd
--- right after this script runs (see `mod.rs::write_sql_tables`), so the
+-- right after this script runs (see `load.rs::write_bulk_tables`), so the
 -- default values never actually get read back out.
 ALTER TABLE kf_state ADD COLUMN IF NOT EXISTS dynamic_family TEXT NOT NULL DEFAULT 'Unknown';
 ALTER TABLE kf_state ADD COLUMN IF NOT EXISTS semi_major_axis DOUBLE PRECISION NOT NULL DEFAULT 0;
 ALTER TABLE kf_state ADD COLUMN IF NOT EXISTS eccentricity DOUBLE PRECISION NOT NULL DEFAULT 0;
-ALTER TABLE archived_trajectories ADD COLUMN IF NOT EXISTS dynamic_family TEXT NOT NULL DEFAULT 'Unknown';
-ALTER TABLE archived_trajectories ADD COLUMN IF NOT EXISTS semi_major_axis DOUBLE PRECISION NOT NULL DEFAULT 0;
-ALTER TABLE archived_trajectories ADD COLUMN IF NOT EXISTS eccentricity DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE archived_trajectories
+ADD COLUMN IF NOT EXISTS dynamic_family TEXT NOT NULL DEFAULT 'Unknown';
+ALTER TABLE archived_trajectories
+ADD COLUMN IF NOT EXISTS semi_major_axis DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE archived_trajectories
+ADD COLUMN IF NOT EXISTS eccentricity DOUBLE PRECISION NOT NULL DEFAULT 0;
 ALTER TABLE branches ADD COLUMN IF NOT EXISTS arc_length_days DOUBLE PRECISION NOT NULL DEFAULT 0;
 ALTER TABLE branches ADD COLUMN IF NOT EXISTS n_nights BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE branches ADD COLUMN IF NOT EXISTS median_inter_night_dt_days DOUBLE PRECISION;

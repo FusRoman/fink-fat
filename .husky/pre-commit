@@ -16,6 +16,23 @@
 EXPLORER_SERVER="-p fink-fat-explorer --no-default-features --features server"
 EXPLORER_WEB="-p fink-fat-explorer --no-default-features --features web --target wasm32-unknown-unknown"
 
+# SQL scripts of fink-fat-sql: SQLFluff (style/format) and Squawk (Postgres
+# DDL safety), versions pinned in crates/fink-fat-sql/sql-lint-requirements.txt.
+SQL_DIR="crates/fink-fat-sql/sql"
+for tool in sqlfluff squawk; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        echo "error: '$tool' not found. Install the SQL linters with:"
+        echo "  pip install -r crates/fink-fat-sql/sql-lint-requirements.txt"
+        exit 1
+    fi
+done
+
+echo "Running sqlfluff lint..."
+sqlfluff lint "$SQL_DIR" || exit 1
+
+echo "Running squawk..."
+squawk --config crates/fink-fat-sql/.squawk.toml "$SQL_DIR"/*.sql || exit 1
+
 echo "Running cargo fmt..."
 cargo fmt --all -- --check || exit 1
 
@@ -34,4 +51,4 @@ cargo check $EXPLORER_SERVER --all-targets || exit 1
 cargo check $EXPLORER_WEB || exit 1
 
 echo "Checking documentation build..."
-RUSTDOCFLAGS="-D warnings --html-in-header $(pwd)/katex-header.html" cargo doc --no-deps --all-features -p fink-fat -p fink-fat-engine || exit 1
+RUSTDOCFLAGS="-D warnings --html-in-header $(pwd)/katex-header.html" cargo doc --no-deps --all-features -p fink-fat -p fink-fat-engine -p fink-fat-sql || exit 1

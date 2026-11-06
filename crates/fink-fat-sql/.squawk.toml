@@ -1,0 +1,8 @@
+# Squawk configuration for the fink-fat-sql scripts (`sql/*.sql`).
+# Run from this directory: `squawk sql/*.sql`.
+
+# Every script runs inside a transaction: `convert` executes them all in its
+# single bulk-load transaction, and `submit`'s standalone
+# `create_mpc_submission_tables.sql` is sent as one multi-statement query,
+# which Postgres runs as one implicit transaction.
+assume_in_transaction = true

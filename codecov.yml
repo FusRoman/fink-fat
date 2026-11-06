@@ -1,0 +1,43 @@
+# Codecov configuration: one flag per workspace crate, matching the
+# `test-coverage` matrix of `.github/workflows/CI.yml`.
+#
+# Each flag only counts the files of its own crate: a crate's test run also
+# executes code of the crates it depends on (e.g. `fink-fat`'s CLI tests run
+# the engine), which must not be credited to the wrong crate.
+# `carryforward`: a crate whose job did not upload (cancelled, skipped) keeps
+# its last known coverage instead of dropping to zero.
+
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+
+flag_management:
+  default_rules:
+    carryforward: true
+  individual_flags:
+    - name: fink-fat
+      paths:
+        - src/
+    - name: fink-fat-engine
+      paths:
+        - crates/fink-fat-engine/
+    - name: fink-fat-sql
+      paths:
+        - crates/fink-fat-sql/
+    - name: fink-fat-ades
+      paths:
+        - crates/fink-fat-ades/
+    - name: fink-fat-eval
+      paths:
+        - crates/fink-fat-eval/
+    - name: fink-fat-explorer
+      paths:
+        - crates/fink-fat-explorer/
+
+comment:
+  layout: "header, diff, flags, components"

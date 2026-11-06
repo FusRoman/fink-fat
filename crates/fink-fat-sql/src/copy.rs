@@ -1,4 +1,4 @@
-//! `COPY ... FROM STDIN BINARY` into every table [`super::write_sql_tables`]
+//! `COPY ... FROM STDIN BINARY` into every table [`crate::write_bulk_tables`]
 //! bulk-loads, one function per table, plus the shared progress bar.
 //!
 //! Each function follows the same shape: open a `COPY` sink, wrap it in a
@@ -12,16 +12,16 @@
 use indicatif::{ProgressBar, ProgressStyle};
 use postgres::{Transaction, binary_copy::BinaryCopyInWriter, types::Type};
 
-use super::build::classify_rows_in_parallel;
-use super::rows::{
+use crate::build::classify_rows_in_parallel;
+use crate::family::DynamicalFamily;
+use crate::rows::{
     ArchivedRow, BranchBestStateRow, BranchObservationRow, BranchRow, HypothesisRow, KfBankRow,
     KfStateFields, KfStateRow, ObservationRow,
 };
-use crate::converter::family::DynamicalFamily;
 
 /// Dynamical family, semi-major axis and eccentricity of one `kf_state` row,
 /// as returned by [`classify_rows_in_parallel`].
-pub(super) type Classification = (DynamicalFamily, f64, f64);
+pub type Classification = (DynamicalFamily, f64, f64);
 
 /// Columns shared by the `kf_state` and `archived_trajectories` `COPY`
 /// statements — both tables carry a full [`KfStateFields`] plus their own
@@ -50,7 +50,7 @@ const KF_STATE_COLUMN_TYPES: &[Type] = &[
     Type::FLOAT8,
 ];
 
-/// Builds the progress bar shown while [`super::write_sql_tables`] runs: one
+/// Builds the progress bar shown while [`crate::write_bulk_tables`] runs: one
 /// tick per row `COPY`'d, with `pb.println(...)` used by the caller for the
 /// coarser stages (connect/DDL/truncate/commit) that aren't row-counted.
 ///
@@ -61,7 +61,7 @@ const KF_STATE_COLUMN_TYPES: &[Type] = &[
 /// # Returns
 ///
 /// A ready-to-use [`ProgressBar`] with its length set to `total_rows`.
-pub(super) fn build_progress_bar(total_rows: usize) -> ProgressBar {
+pub fn build_progress_bar(total_rows: usize) -> ProgressBar {
     let pb = ProgressBar::new(total_rows as u64);
     pb.set_style(
         ProgressStyle::with_template("{bar:40.cyan/blue} {pos}/{len} rows  {msg}")
@@ -75,11 +75,11 @@ pub(super) fn build_progress_bar(total_rows: usize) -> ProgressBar {
 /// Must run before [`copy_branch_observations`] within the same transaction,
 /// so that `branch_observations.obs_id`'s foreign key into `observations(id)`
 /// is satisfied once it's rebuilt after the load (see
-/// [`super::schema::restore_bulk_load_constraints`]).
+/// [`crate::schema::restore_bulk_load_constraints`]).
 ///
 /// # Arguments
 ///
-/// * `transaction` — the transaction [`super::write_sql_tables`] runs the
+/// * `transaction` — the transaction [`crate::write_bulk_tables`] runs the
 ///   whole conversion in.
 /// * `rows` — every row to insert.
 /// * `pb` — ticked once per row.
@@ -88,7 +88,7 @@ pub(super) fn build_progress_bar(total_rows: usize) -> ProgressBar {
 ///
 /// Any Postgres error while opening the `COPY` sink, writing a row, or
 /// finishing the writer, as a [`postgres::Error`].
-pub(super) fn copy_observations(
+pub fn copy_observations(
     transaction: &mut Transaction<'_>,
     rows: &[ObservationRow],
     pb: &ProgressBar,
@@ -140,7 +140,7 @@ pub(super) fn copy_observations(
 ///
 /// # Arguments
 ///
-/// * `transaction` — the transaction [`super::write_sql_tables`] runs the
+/// * `transaction` — the transaction [`crate::write_bulk_tables`] runs the
 ///   whole conversion in.
 /// * `rows` — every row to insert.
 /// * `pb` — ticked once per row.
@@ -149,7 +149,7 @@ pub(super) fn copy_observations(
 ///
 /// Any Postgres error while opening the `COPY` sink, writing a row, or
 /// finishing the writer, as a [`postgres::Error`].
-pub(super) fn copy_branches(
+pub fn copy_branches(
     transaction: &mut Transaction<'_>,
     rows: &[BranchRow],
     pb: &ProgressBar,
@@ -209,7 +209,7 @@ pub(super) fn copy_branches(
 ///
 /// # Arguments
 ///
-/// * `transaction` — the transaction [`super::write_sql_tables`] runs the
+/// * `transaction` — the transaction [`crate::write_bulk_tables`] runs the
 ///   whole conversion in.
 /// * `rows` — every row to insert.
 /// * `pb` — ticked once per row.
@@ -218,7 +218,7 @@ pub(super) fn copy_branches(
 ///
 /// Any Postgres error while opening the `COPY` sink, writing a row, or
 /// finishing the writer, as a [`postgres::Error`].
-pub(super) fn copy_kf_bank(
+pub fn copy_kf_bank(
     transaction: &mut Transaction<'_>,
     rows: &[KfBankRow],
     pb: &ProgressBar,
@@ -247,7 +247,7 @@ pub(super) fn copy_kf_bank(
 ///
 /// # Arguments
 ///
-/// * `transaction` — the transaction [`super::write_sql_tables`] runs the
+/// * `transaction` — the transaction [`crate::write_bulk_tables`] runs the
 ///   whole conversion in.
 /// * `rows` — every row to insert.
 /// * `pb` — ticked once per row.
@@ -256,7 +256,7 @@ pub(super) fn copy_kf_bank(
 ///
 /// Any Postgres error while opening the `COPY` sink, writing a row, or
 /// finishing the writer, as a [`postgres::Error`].
-pub(super) fn copy_branch_observations(
+pub fn copy_branch_observations(
     transaction: &mut Transaction<'_>,
     rows: &[BranchObservationRow],
     pb: &ProgressBar,
@@ -280,7 +280,7 @@ pub(super) fn copy_branch_observations(
 ///
 /// # Arguments
 ///
-/// * `transaction` — the transaction [`super::write_sql_tables`] runs the
+/// * `transaction` — the transaction [`crate::write_bulk_tables`] runs the
 ///   whole conversion in.
 /// * `rows` — every row to insert.
 /// * `pb` — ticked once per row.
@@ -289,7 +289,7 @@ pub(super) fn copy_branch_observations(
 ///
 /// Any Postgres error while opening the `COPY` sink, writing a row, or
 /// finishing the writer, as a [`postgres::Error`].
-pub(super) fn copy_hypotheses(
+pub fn copy_hypotheses(
     transaction: &mut Transaction<'_>,
     rows: &[HypothesisRow],
     pb: &ProgressBar,
@@ -335,7 +335,7 @@ pub(super) fn copy_hypotheses(
 /// # Returns
 ///
 /// One [`Classification`] per row, in the same order.
-pub(super) fn classify_kf_state_rows(rows: &[KfStateRow]) -> Vec<Classification> {
+pub fn classify_kf_state_rows(rows: &[KfStateRow]) -> Vec<Classification> {
     let field_refs: Vec<&KfStateFields> = rows.iter().map(|row| &row.fields).collect();
     classify_rows_in_parallel(&field_refs)
 }
@@ -344,7 +344,7 @@ pub(super) fn classify_kf_state_rows(rows: &[KfStateRow]) -> Vec<Classification>
 ///
 /// # Arguments
 ///
-/// * `transaction` — the transaction [`super::write_sql_tables`] runs the
+/// * `transaction` — the transaction [`crate::write_bulk_tables`] runs the
 ///   whole conversion in.
 /// * `rows` — every row to insert.
 /// * `classifications` — [`classify_kf_state_rows`] of `rows`, index-aligned.
@@ -354,7 +354,7 @@ pub(super) fn classify_kf_state_rows(rows: &[KfStateRow]) -> Vec<Classification>
 ///
 /// Any Postgres error while opening the `COPY` sink, writing a row, or
 /// finishing the writer, as a [`postgres::Error`].
-pub(super) fn copy_kf_state(
+pub fn copy_kf_state(
     transaction: &mut Transaction<'_>,
     rows: &[KfStateRow],
     classifications: &[Classification],
@@ -411,7 +411,7 @@ pub(super) fn copy_kf_state(
 ///
 /// # Arguments
 ///
-/// * `transaction` — the transaction [`super::write_sql_tables`] runs the
+/// * `transaction` — the transaction [`crate::write_bulk_tables`] runs the
 ///   whole conversion in.
 /// * `rows` — one row per branch with at least one hypothesis.
 /// * `kf_state_rows` — the `kf_state` rows `rows` index into.
@@ -424,7 +424,7 @@ pub(super) fn copy_kf_state(
 ///
 /// Any Postgres error while opening the `COPY` sink, writing a row, or
 /// finishing the writer, as a [`postgres::Error`].
-pub(super) fn copy_branch_best_state(
+pub fn copy_branch_best_state(
     transaction: &mut Transaction<'_>,
     rows: &[BranchBestStateRow],
     kf_state_rows: &[KfStateRow],
@@ -481,7 +481,7 @@ pub(super) fn copy_branch_best_state(
 ///
 /// # Arguments
 ///
-/// * `transaction` — the transaction [`super::write_sql_tables`] runs the
+/// * `transaction` — the transaction [`crate::write_bulk_tables`] runs the
 ///   whole conversion in.
 /// * `rows` — every row to insert.
 /// * `pb` — ticked once per row.
@@ -490,7 +490,7 @@ pub(super) fn copy_branch_best_state(
 ///
 /// Any Postgres error while opening the `COPY` sink, writing a row, or
 /// finishing the writer, as a [`postgres::Error`].
-pub(super) fn copy_archived_trajectories(
+pub fn copy_archived_trajectories(
     transaction: &mut Transaction<'_>,
     rows: &[ArchivedRow],
     pb: &ProgressBar,

@@ -80,9 +80,10 @@ A few principles guide the design:
 | --- | --- | --- |
 | `fink-fat` | [`src/`](src/) | Main CLI: `track`, `convert`, `submit`. |
 | `fink-fat-engine` | [`crates/fink-fat-engine/`](crates/fink-fat-engine/README.md) | Core library: configuration, seeding, space-time bucketing, topocentric Kalman filters, branching / MHT, archive, snapshot. |
-| `fink-fat-ades` | [`crates/fink-fat-ades/`](crates/fink-fat-ades/) | Pure ADES / MPC logic: document building, local `submit.xsd` validation, submission and status API parsing, quality tiers. |
-| `fink-fat-eval` | [`crates/fink-fat-eval/`](crates/fink-fat-eval/) | Evaluation binaries run against labelled datasets (tracking recall/purity, seeding, KF calibration, MOT contamination). |
-| `fink-fat-explorer` | [`crates/fink-fat-explorer/`](crates/fink-fat-explorer/) | Dioxus fullstack web app on Postgres: population maps, 3D orbits, lineage pages, orbit fitting, cross-matching, MPC submission dashboard. |
+| `fink-fat-ades` | [`crates/fink-fat-ades/`](crates/fink-fat-ades/README.md) | Pure ADES / MPC logic: document building, local `submit.xsd` validation, submission and status API parsing, quality tiers. |
+| `fink-fat-sql` | [`crates/fink-fat-sql/`](crates/fink-fat-sql/README.md) | Postgres sink: table schema (`sql/*.sql`), row shapes and `COPY` loaders shared by `convert` and the streaming pipeline. |
+| `fink-fat-eval` | [`crates/fink-fat-eval/`](crates/fink-fat-eval/README.md) | Evaluation binaries run against labelled datasets (tracking recall/purity, seeding, KF calibration, MOT contamination). |
+| `fink-fat-explorer` | [`crates/fink-fat-explorer/`](crates/fink-fat-explorer/README.md) | Dioxus fullstack web app on Postgres: population maps, 3D orbits, lineage pages, orbit fitting, cross-matching, MPC submission dashboard. |
 
 Other notable paths:
 
@@ -93,6 +94,7 @@ Other notable paths:
 | `engine_config.best.yaml`, `engine_config_lsst.best.yaml` | Reference engine configurations for ZTF and LSST cadence. |
 | [`dockerfile`](dockerfile), [`docker-compose.yml`](docker-compose.yml) | Postgres, pgAdmin and the explorer (`dev` / `prod` profiles). |
 | [`katex-header.html`](katex-header.html) | KaTeX header so rustdoc renders the maths. |
+| [`assets/logo/`](assets/logo/README.md) | Fink-FAT logo: SVG files (light, dark, white) and their design notes. |
 
 ## Requirements
 
@@ -213,16 +215,27 @@ numerical bugs. `evaluation-fast` drops them for full-dataset sweeps.
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
+cargo clippy --workspace --exclude fink-fat-explorer --all-targets --all-features -- -D warnings
 cargo test --workspace
+```
+
+The SQL scripts in `crates/fink-fat-sql/sql/` are linted with
+[SQLFluff](https://sqlfluff.com) (style, Postgres dialect) and
+[Squawk](https://squawkhq.com) (Postgres DDL safety). Install the pinned
+versions once, then run both from the repository root:
+
+```bash
+pip install -r crates/fink-fat-sql/sql-lint-requirements.txt
+sqlfluff lint crates/fink-fat-sql/sql            # `sqlfluff fix` to reformat
+squawk --config crates/fink-fat-sql/.squawk.toml crates/fink-fat-sql/sql/*.sql
 ```
 
 Tests use synthetic or bundled data only. The `sql_convert` integration test
 needs a Postgres instance given by `DATABASE_URL`; `docker compose up -d db`
 provides one with the same credentials as CI.
 
-A `husky-rs` pre-commit hook runs fmt, clippy, check and the doc build. CI runs
-the same jobs, plus the Postgres integration test and engine coverage
+A `husky-rs` pre-commit hook runs the SQL linters, fmt, clippy, check and the
+doc build. CI runs the same jobs, plus the Postgres integration test and engine coverage
 (Codecov). Contributor conventions (error handling, collections, doc comment
 format, tests) are listed in [`AGENTS.md`](AGENTS.md).
 
@@ -259,21 +272,6 @@ The first Fink-FAT was a Python package that ran inside the
 > method (multi-hypothesis tracking over banks of topocentric Kalman filters,
 > see [How it works](#how-it-works)). Use the paper for the history of the
 > project, not as a description of the current code.
-
-## Logo
-
-The logo echoes the [Fink](https://fink-broker.org) logo: its brackets and
-tilted ring, with the detections of an object linked night after night into a
-trajectory that ends on an orange asteroid. It uses the
-[official Fink colors](https://fink-broker.org/visual-identity/branding/).
-The SVG files are in [`assets/logo/`](assets/logo/). A white version on a
-transparent background, `fink-fat-lockup-white.svg`, is also available for dark
-backgrounds (it is not shown here, as it would be invisible on a light page).
-
-| Icon | Icon (dark) | Horizontal | Horizontal (dark) |
-| :---: | :---: | :---: | :---: |
-| <img src="assets/logo/fink-fat-logo.svg" alt="Fink-FAT icon" width="96"> | <img src="assets/logo/fink-fat-logo-dark.svg" alt="Fink-FAT icon, dark" width="96"> | <img src="assets/logo/fink-fat-lockup.svg" alt="Fink-FAT horizontal logo" width="240"> | <img src="assets/logo/fink-fat-lockup-dark.svg" alt="Fink-FAT horizontal logo, dark" width="240"> |
-| `fink-fat-logo.svg` | `fink-fat-logo-dark.svg` | `fink-fat-lockup.svg` | `fink-fat-lockup-dark.svg` |
 
 ## License
 

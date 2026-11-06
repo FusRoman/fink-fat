@@ -1,7 +1,7 @@
 //! `fink-fat submit`: submit MPC-eligible lineages' observations to the
 //! Minor Planet Center (MPC) as ADES XML files, recording the outcome
 //! durably in `mpc_submissions`
-//! (`src/converter/sql/create_mpc_submission_tables.sql`) so a later run —
+//! (`crates/fink-fat-sql/sql/create_mpc_submission_tables.sql`) so a later run —
 //! or `fink-fat-explorer`'s submission dashboard — can tell what has already
 //! been sent.
 //!
@@ -24,7 +24,7 @@
 //! `submit` has no [`fink_fat_engine::engine_config::EngineConfig`] in
 //! scope: it never touches the engine's snapshot/archive log, only
 //! Postgres (via the synchronous `postgres` crate, matching
-//! `crate::converter::sql`) and MPC (via `reqwest::blocking`) — see the
+//! `fink_fat_sql`) and MPC (via `reqwest::blocking`) — see the
 //! architecture note in the project's implementation plan for why the ADES
 //! data (RA/Dec/mag/band per observation) is only reachable through
 //! Postgres, not the raw journal.
@@ -740,9 +740,7 @@ pub fn submit(args: SubmitArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Connecting to Postgres...");
     let mut client = Client::connect(&args.database_url, NoTls).map_err(SubmitError::Database)?;
-    client.batch_execute(include_str!(
-        "../converter/sql/create_mpc_submission_tables.sql"
-    ))?;
+    client.batch_execute(fink_fat_sql::schema::CREATE_MPC_SUBMISSION_TABLES_SQL)?;
 
     println!("Building eligibility index...");
     let quality_index = build_quality_index(&mut client)?;

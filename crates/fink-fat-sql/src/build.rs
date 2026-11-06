@@ -1,4 +1,4 @@
-//! Pure construction of every row [`super::write_sql_tables`] bulk-loads,
+//! Pure construction of every row [`crate::write_bulk_tables`] bulk-loads,
 //! from a [`BranchCollection`] and the observation index built from it.
 //!
 //! Nothing here touches Postgres or the filesystem: nothing in this file
@@ -12,27 +12,27 @@ use fink_fat_engine::topocentric_kf::branching::BranchCollection;
 use nalgebra::Vector3;
 use rayon::prelude::*;
 
-use crate::converter::family::{DynamicalFamily, classify_from_attributable_state};
+use crate::family::{DynamicalFamily, classify_from_attributable_state};
 
-use super::rows::{
+use crate::rows::{
     ArchivedRow, BranchBestStateRow, BranchObservationRow, BranchRow, HypothesisRow, KfBankRow,
     KfStateFields, KfStateRow,
 };
 
 /// Per-observation lookup keyed by `ObservationRow::id`
 /// (== `BranchObservationRow::obs_id`), mapping to `(night_id, mjd_tt)`.
-/// Built once in [`super::write_sql_tables`] from the observation rows read
+/// Built once in [`crate::write_bulk_tables`] from the observation rows read
 /// off disk, and shared read-only by every branch's [`compute_obs_stats`]
 /// call — computing each branch's arc/night-count/inter-night-gap stats once
 /// here in Rust, rather than re-deriving them from Postgres on every
 /// homepage sort.
-pub(super) type ObsIndex = HashMap<i64, (i64, f64)>;
+pub type ObsIndex = HashMap<i64, (i64, f64)>;
 
 /// Per-branch observation statistics stored on the `branches` row, computed
 /// once at conversion time so neither the explorer's homepage nor its bulk
 /// fit has to aggregate `branch_observations ⋈ observations` again.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct ObsStats {
+pub struct ObsStats {
     /// `max(mjd_tt) - min(mjd_tt)` across every matched observation, `0.0`
     /// if none matched.
     pub arc_length_days: f64,
@@ -67,7 +67,7 @@ pub(super) struct ObsStats {
 ///
 /// The branch's [`ObsStats`]; all zero (and no median gap) when no id
 /// matched.
-pub(super) fn compute_obs_stats(track_ids: &[u64], obs_index: &ObsIndex) -> ObsStats {
+pub fn compute_obs_stats(track_ids: &[u64], obs_index: &ObsIndex) -> ObsStats {
     // night_id -> (earliest mjd_tt, number of matched observations).
     let mut nights: HashMap<i64, (f64, i64)> = HashMap::new();
     let mut min_mjd = f64::INFINITY;
@@ -141,7 +141,7 @@ pub(super) fn compute_obs_stats(track_ids: &[u64], obs_index: &ObsIndex) -> ObsS
 /// # Returns
 ///
 /// The index of the largest log-weight, `None` for an empty bank.
-pub(super) fn best_hypothesis_index(log_weights: impl IntoIterator<Item = f64>) -> Option<usize> {
+pub fn best_hypothesis_index(log_weights: impl IntoIterator<Item = f64>) -> Option<usize> {
     log_weights
         .into_iter()
         .enumerate()
@@ -173,7 +173,7 @@ pub(super) fn best_hypothesis_index(log_weights: impl IntoIterator<Item = f64>) 
 /// at least one hypothesis, pointing at its best hypothesis' `kf_state` row
 /// (see [`best_hypothesis_index`]).
 #[allow(clippy::type_complexity)]
-pub(super) fn build_branch_rows(
+pub fn build_branch_rows(
     branch_collection: &BranchCollection,
     obs_index: &ObsIndex,
 ) -> (
@@ -296,7 +296,7 @@ pub(super) fn build_branch_rows(
 ///
 /// One [`ArchivedRow`] per archived trajectory, in `branch_collection`'s own
 /// order.
-pub(super) fn build_archived_rows(branch_collection: &BranchCollection) -> Vec<ArchivedRow> {
+pub fn build_archived_rows(branch_collection: &BranchCollection) -> Vec<ArchivedRow> {
     branch_collection
         .archived
         .iter()
@@ -329,9 +329,7 @@ pub(super) fn build_archived_rows(branch_collection: &BranchCollection) -> Vec<A
 /// same order; a row whose attributable state doesn't convert to a bound
 /// orbit falls back to `(DynamicalFamily::Unknown, 0.0, 0.0)` rather than
 /// failing the whole conversion over one degenerate hypothesis.
-pub(super) fn classify_rows_in_parallel(
-    fields: &[&KfStateFields],
-) -> Vec<(DynamicalFamily, f64, f64)> {
+pub fn classify_rows_in_parallel(fields: &[&KfStateFields]) -> Vec<(DynamicalFamily, f64, f64)> {
     fields
         .par_iter()
         .map(|f| {

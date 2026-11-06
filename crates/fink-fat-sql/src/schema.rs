@@ -1,16 +1,47 @@
-//! Schema DDL for the tables [`super::write_sql_tables`] bulk-loads, plus the
+//! Schema DDL for the tables [`crate::write_bulk_tables`] bulk-loads, plus the
 //! drop/rebuild of secondary indexes and foreign keys around the bulk load
 //! itself.
 //!
-//! Each function is a thin wrapper around one (or a few) `.sql` file next to
-//! this one, loaded at compile time with [`include_str!`] — kept as plain
-//! `.sql` rather than Rust string literals so the schema itself can be read,
-//! diffed, and (in principle) run directly with `psql` without extracting it
-//! from Rust source first.
+//! The DDL lives in plain `.sql` files under the crate's `sql/` directory,
+//! embedded at compile time with [`include_str!`] and exposed as the
+//! `*_SQL` constants below — kept as `.sql` rather than Rust string literals
+//! so the schema can be read, diffed, linted (SQLFluff, Squawk) and run
+//! directly with `psql`. Each function is a thin wrapper running one (or a
+//! few) of these scripts; other crates that need a script on its own (e.g.
+//! `fink-fat submit`'s `mpc_submissions` table) use the constant instead of
+//! embedding the file a second time.
 
 use postgres::Transaction;
 
-/// Creates every table [`super::write_sql_tables`] needs if absent, and
+/// Target schema of the 8 bulk-loaded tables and their indexes.
+pub const CREATE_TABLES_SQL: &str = include_str!("../sql/create_tables.sql");
+
+/// Migration of a database created by an older `convert` (UNLOGGED switch, added columns).
+pub const MIGRATE_LEGACY_COLUMNS_SQL: &str = include_str!("../sql/migrate_legacy_columns.sql");
+
+/// `orbit_fits` / `orbit_fit_failures`, owned by `fink-fat-explorer`.
+pub const CREATE_ORBIT_FITS_TABLES_SQL: &str = include_str!("../sql/create_orbit_fits_tables.sql");
+
+/// `cnd_queries`, owned by `fink-fat-explorer`.
+pub const CREATE_CND_TABLES_SQL: &str = include_str!("../sql/create_cnd_tables.sql");
+
+/// `skybot_bulk_jobs` / `skybot_obs_status`, owned by `fink-fat-explorer`.
+pub const CREATE_SKYBOT_BULK_TABLES_SQL: &str =
+    include_str!("../sql/create_skybot_bulk_tables.sql");
+
+/// `mpc_submissions`, owned by `fink-fat submit`.
+pub const CREATE_MPC_SUBMISSION_TABLES_SQL: &str =
+    include_str!("../sql/create_mpc_submission_tables.sql");
+
+/// Drop of the secondary indexes / foreign keys before the bulk `COPY`s.
+pub const DROP_BULK_LOAD_CONSTRAINTS_SQL: &str =
+    include_str!("../sql/drop_bulk_load_constraints.sql");
+
+/// Rebuild of what [`DROP_BULK_LOAD_CONSTRAINTS_SQL`] dropped.
+pub const RESTORE_BULK_LOAD_CONSTRAINTS_SQL: &str =
+    include_str!("../sql/restore_bulk_load_constraints.sql");
+
+/// Creates every table [`crate::write_bulk_tables`] needs if absent, and
 /// migrates any that already exist from an older schema version.
 ///
 /// Three separate scripts, run in order:
@@ -39,24 +70,24 @@ use postgres::Transaction;
 ///
 /// # Arguments
 ///
-/// * `transaction` — the transaction [`super::write_sql_tables`] runs the
+/// * `transaction` — the transaction [`crate::write_bulk_tables`] runs the
 ///   whole conversion in.
 ///
 /// # Errors
 ///
 /// Any statement failing, as a [`postgres::Error`].
-pub(super) fn create_tables(transaction: &mut Transaction<'_>) -> Result<(), postgres::Error> {
-    transaction.batch_execute(include_str!("create_tables.sql"))?;
-    transaction.batch_execute(include_str!("migrate_legacy_columns.sql"))?;
-    transaction.batch_execute(include_str!("create_orbit_fits_tables.sql"))?;
-    transaction.batch_execute(include_str!("create_cnd_tables.sql"))?;
-    transaction.batch_execute(include_str!("create_skybot_bulk_tables.sql"))?;
-    transaction.batch_execute(include_str!("create_mpc_submission_tables.sql"))?;
+pub fn create_tables(transaction: &mut Transaction<'_>) -> Result<(), postgres::Error> {
+    transaction.batch_execute(CREATE_TABLES_SQL)?;
+    transaction.batch_execute(MIGRATE_LEGACY_COLUMNS_SQL)?;
+    transaction.batch_execute(CREATE_ORBIT_FITS_TABLES_SQL)?;
+    transaction.batch_execute(CREATE_CND_TABLES_SQL)?;
+    transaction.batch_execute(CREATE_SKYBOT_BULK_TABLES_SQL)?;
+    transaction.batch_execute(CREATE_MPC_SUBMISSION_TABLES_SQL)?;
     Ok(())
 }
 
 /// Drops the secondary indexes and foreign keys `create_tables.sql` declares
-/// on the 8 bulk-loaded tables, so the COPYs in [`super::write_sql_tables`]
+/// on the 8 bulk-loaded tables, so the COPYs in [`crate::write_bulk_tables`]
 /// insert into bare (primary-key-only) tables instead of paying for b-tree
 /// maintenance and FK lookups on every row. Always run immediately before
 /// the COPYs, and undone by [`restore_bulk_load_constraints`] immediately
@@ -71,16 +102,16 @@ pub(super) fn create_tables(transaction: &mut Transaction<'_>) -> Result<(), pos
 ///
 /// # Arguments
 ///
-/// * `transaction` — the transaction [`super::write_sql_tables`] runs the
+/// * `transaction` — the transaction [`crate::write_bulk_tables`] runs the
 ///   whole conversion in.
 ///
 /// # Errors
 ///
 /// Any statement failing, as a [`postgres::Error`].
-pub(super) fn drop_bulk_load_constraints(
+pub fn drop_bulk_load_constraints(
     transaction: &mut Transaction<'_>,
 ) -> Result<(), postgres::Error> {
-    transaction.batch_execute(include_str!("drop_bulk_load_constraints.sql"))
+    transaction.batch_execute(DROP_BULK_LOAD_CONSTRAINTS_SQL)
 }
 
 /// Rebuilds what [`drop_bulk_load_constraints`] dropped, now that the tables
@@ -89,16 +120,16 @@ pub(super) fn drop_bulk_load_constraints(
 ///
 /// # Arguments
 ///
-/// * `transaction` — the transaction [`super::write_sql_tables`] runs the
+/// * `transaction` — the transaction [`crate::write_bulk_tables`] runs the
 ///   whole conversion in.
 ///
 /// # Errors
 ///
 /// Any statement failing, as a [`postgres::Error`].
-pub(super) fn restore_bulk_load_constraints(
+pub fn restore_bulk_load_constraints(
     transaction: &mut Transaction<'_>,
 ) -> Result<(), postgres::Error> {
-    transaction.batch_execute(include_str!("restore_bulk_load_constraints.sql"))
+    transaction.batch_execute(RESTORE_BULK_LOAD_CONSTRAINTS_SQL)
 }
 
 /// Refreshes the planner statistics of every bulk-loaded table.
@@ -112,13 +143,13 @@ pub(super) fn restore_bulk_load_constraints(
 ///
 /// # Arguments
 ///
-/// * `transaction` — the transaction [`super::write_sql_tables`] runs the
+/// * `transaction` — the transaction [`crate::write_bulk_tables`] runs the
 ///   whole conversion in.
 ///
 /// # Errors
 ///
 /// Any statement failing, as a [`postgres::Error`].
-pub(super) fn analyze_bulk_loaded_tables(
+pub fn analyze_bulk_loaded_tables(
     transaction: &mut Transaction<'_>,
 ) -> Result<(), postgres::Error> {
     transaction.batch_execute(

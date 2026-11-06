@@ -2924,14 +2924,12 @@ dependencies = [
  "fink-fat-ades",
  "fink-fat-engine",
  "fink-fat-eval",
+ "fink-fat-sql",
  "husky-rs",
- "indicatif",
- "nalgebra 0.34.2",
  "outfit",
  "photom",
  "polars",
  "postgres",
- "rayon",
  "reqwest",
  "rkyv",
  "serde",
@@ -3048,6 +3046,19 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "fink-fat-sql"
+version = "1.0.0"
+dependencies = [
+ "fink-fat-engine",
+ "indicatif",
+ "nalgebra 0.34.2",
+ "outfit",
+ "postgres",
+ "rayon",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
