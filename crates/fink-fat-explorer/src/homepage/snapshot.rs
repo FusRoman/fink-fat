@@ -262,7 +262,7 @@ struct LatestFailureRow {
 /// Everything [`assign_quality_tier`] needs about every branch, keyed by
 /// `branch_id`. Bundled into one struct — rather than threading four loose
 /// maps through [`build`] and [`assemble`] — so the snapshot's quality-tier
-/// inputs have one shape, fetched by [`build_quality_index`] and consumed
+/// inputs have one shape, fetched by [`build`] and consumed
 /// once per branch in [`assemble`].
 struct QualityIndex {
     eligible: HashSet<i64>,

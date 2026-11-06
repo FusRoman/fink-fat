@@ -51,4 +51,5 @@ cargo check $EXPLORER_SERVER --all-targets || exit 1
 cargo check $EXPLORER_WEB || exit 1
 
 echo "Checking documentation build..."
-RUSTDOCFLAGS="-D warnings --html-in-header $(pwd)/katex-header.html" cargo doc --no-deps --all-features -p fink-fat -p fink-fat-engine -p fink-fat-sql || exit 1
+RUSTDOCFLAGS="-D warnings --html-in-header $(pwd)/katex-header.html" cargo doc --no-deps --all-features -p fink-fat -p fink-fat-engine -p fink-fat-sql -p fink-fat-ades -p fink-fat-eval || exit 1
+RUSTDOCFLAGS="-D warnings --html-in-header $(pwd)/katex-header.html" cargo doc --no-deps $EXPLORER_SERVER || exit 1

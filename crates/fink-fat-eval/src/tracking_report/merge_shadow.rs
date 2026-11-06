@@ -18,7 +18,7 @@
 //! # How the ground truth is obtained
 //!
 //! A fragment is one entry of
-//! [`all_reconstructions`](crate::snapshot_report::efficacy::all_reconstructions)
+//! [`all_reconstructions`]
 //! — live branches followed by archived arcs, the exact pool (and order) the
 //! efficacy report scores. Classifying each fragment's `track_ids` with
 //! [`ObsTrajLookup::classify`] tells us which object it belongs to, so:

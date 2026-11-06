@@ -137,10 +137,11 @@ jobs:
         with:
           cache-on-failure: true
 
-      - name: cargo doc
-        # fink-fat-eval and fink-fat-explorer are not listed yet: their
-        # intra-doc links still have to be fixed before `-D warnings` passes.
-        run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features -p fink-fat -p fink-fat-engine -p fink-fat-sql -p fink-fat-ades
+      - name: cargo doc (workspace, explorer excluded)
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features -p fink-fat -p fink-fat-engine -p fink-fat-sql -p fink-fat-ades -p fink-fat-eval
+
+      - name: cargo doc (explorer, server)
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps $EXPLORER_SERVER
 
   test-coverage:
     # One job per crate: tests run under `cargo llvm-cov`, and each crate's

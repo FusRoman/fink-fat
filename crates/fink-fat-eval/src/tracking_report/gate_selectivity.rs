@@ -1,7 +1,7 @@
 //! Gate **selectivity** of the cross-night association, broken down by
 //! nights-since-seed and by the seed object's orbital-class population.
 //!
-//! Each [`GateRecord`](fink_fat_engine::topocentric_kf::branching::orchestrate::GateRecord)
+//! Each [`GateRecord`]
 //! lists the observations that passed one existing lineage's gate on one
 //! visit. Against ground truth we split them into RIGHT (belong to the
 //! lineage's own object) and WRONG (belong to another object — contamination

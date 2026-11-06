@@ -7,7 +7,7 @@
 //! This is a faithful Rust port of the companion analysis project's
 //! `python/mpc_obs80.py` (same column layout, same fixed TT-UTC offset, same
 //! branch_id-derived placeholder designation, same rounding-carry fix — see
-//! [`split_sexagesimal`]), so its regression tests are reproduced here
+//! `split_sexagesimal`), so its regression tests are reproduced here
 //! verbatim rather than re-derived.
 //!
 //! Column layout (1-based, 80 chars total), matching the CND docs' example

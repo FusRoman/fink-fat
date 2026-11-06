@@ -1,5 +1,5 @@
 //! All Postgres reads/writes for the bulk Skybot job — kept apart from
-//! [`super::run`] (which owns the HTTP fan-out/semaphore/kill-watcher
+//! [`crate::bulk_skybot::run`] (which owns the HTTP fan-out/semaphore/kill-watcher
 //! plumbing) so the actual queries are testable in isolation, same
 //! rationale as `skybot_search::persist`/`cnd_search::persist`.
 
@@ -10,7 +10,7 @@ use crate::skybot_search::SkybotHit;
 use super::SkybotBulkJobStatus;
 
 /// One row of the priority-ordered worklist a job processes — see
-/// [`super::run`]'s doc comment for the query this comes from.
+/// [`crate::bulk_skybot::run`]'s doc comment for the query this comes from.
 #[cfg_attr(feature = "server", derive(sqlx::FromRow))]
 pub struct WorkItem {
     pub obs_id: i64,
@@ -62,7 +62,7 @@ pub async fn fetch_worklist(pool: &PgPool) -> Result<Vec<WorkItem>, String> {
 /// reaching a terminal state as `interrupted` instead — otherwise that row
 /// would trip the partial unique index on `status = 'running'` forever and
 /// permanently block every future job. Idempotent; cheap to call more than
-/// once (see [`super::run`]'s `OnceCell`-guarded wrapper, which only
+/// once (see [`crate::bulk_skybot::run`]'s `OnceCell`-guarded wrapper, which only
 /// actually calls this once per process).
 ///
 /// # Errors

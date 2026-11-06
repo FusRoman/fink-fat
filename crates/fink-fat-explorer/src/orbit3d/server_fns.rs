@@ -421,7 +421,7 @@ const ABSOLUTE_MAGNITUDE_SLOPE_G: f64 = 0.15;
 #[cfg(feature = "server")]
 const LINEAGE_ORBIT_CURVE_SAMPLES: usize = 360;
 
-/// [`KeplerianView`]'s fields are already in the same units as
+/// [`KeplerianView`](crate::fit_pipeline::fit::KeplerianView)'s fields are already in the same units as
 /// [`geometry::Keplerian`] (AU, degrees) — this is a plain field-for-field
 /// copy, not a unit conversion, unlike
 /// `ephem_provider::keplerian_from_outfit_elements`.

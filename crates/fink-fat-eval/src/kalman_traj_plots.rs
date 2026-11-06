@@ -3,7 +3,7 @@
 //! metric plotted against step index, with the χ² 95% confidence band drawn
 //! as horizontal reference lines.
 //!
-//! Reuses the generic [`draw_line_chart`] primitive from
+//! Reuses the generic `draw_line_chart` primitive from
 //! [`crate::seed_bank_report::plots`] instead of duplicating `plotters`
 //! boilerplate.
 

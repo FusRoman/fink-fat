@@ -532,7 +532,6 @@ mod healpix_binner_tests {
     }
 
     mod neighbor_into_test {
-        use super::super::*;
         use super::*;
 
         /* ------------------------- tests: neighbors_into ------------------------- */

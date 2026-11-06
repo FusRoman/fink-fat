@@ -18,7 +18,7 @@
 //!
 //! [`run`] reuses [`crate::skybot_search::parsing::fetch_conesearch_hits`]
 //! for the actual network call and the same semaphore-bounded fan-out shape
-//! as [`crate::skybot_search::run::run_skybot_job`] — only the work source
+//! as `skybot_search::run::run_skybot_job` — only the work source
 //! (a priority-ordered DB query instead of one lineage's points) and sink
 //! (per-observation DB upserts instead of an in-memory job) differ.
 
