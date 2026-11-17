@@ -167,7 +167,7 @@ fn assert_conversion_succeeded(night_str: &str, database_url: &str) {
             );
         }
         // `observations` is the one WAL-logged table: the streaming pipeline
-        // appends to it live (see tables/engine/observations.sql); the others
+        // appends to it live (see migrations/V1__baseline.sql); the others
         // are regenerated from the engine's state by every load.
         assert_eq!(
             status.is_unlogged,

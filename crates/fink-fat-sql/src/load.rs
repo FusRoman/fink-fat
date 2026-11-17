@@ -80,9 +80,12 @@ pub fn load_trajectory_tables(
 /// tables held.
 ///
 /// # Steps
-/// 1. Create every table if absent and migrate legacy ones
-///    ([`schema::create_tables`]).
-/// 2. Drop `observations`' secondary index, then `TRUNCATE` the 8 tables.
+/// 0. Migrate the persistent tables to the latest schema version
+///    ([`schema::migrate`], its own transaction).
+/// 1. Drop and recreate the 6 trajectory tables in their current shape
+///    ([`schema::recreate_trajectory_tables`]).
+/// 2. Drop `observations`' secondary index, then `TRUNCATE`
+///    `observations` and `archived_trajectories`.
 /// 3. `COPY` `observations` — before the trajectory tables, so that
 ///    `branch_observations.obs_id`'s foreign key is satisfied when it is
 ///    rebuilt.
@@ -90,9 +93,11 @@ pub fn load_trajectory_tables(
 /// 5. `COPY` `archived_trajectories`.
 /// 6. Rebuild `observations`' index and `ANALYZE` the two remaining tables.
 ///
-/// Runs in a single transaction: a failure partway through leaves the
-/// previous contents untouched. The explorer's reads of these tables wait
-/// for the commit (the `TRUNCATE` holds `ACCESS EXCLUSIVE`).
+/// Steps 1 – 6 run in a single transaction: a failure partway through
+/// leaves the previous contents (and the previous trajectory tables)
+/// untouched; a migration applied by step 0 stays applied. The explorer's
+/// reads of these tables wait for the commit (the `DROP` and `TRUNCATE`
+/// hold `ACCESS EXCLUSIVE`).
 ///
 /// # Arguments
 ///
@@ -106,6 +111,7 @@ pub fn load_trajectory_tables(
 ///
 /// # Errors
 ///
+/// [`SqlError::Migration`] when step 0 fails (see [`schema::migrate`]).
 /// [`SqlError::Postgres`] when connecting to Postgres or any statement
 /// within the transaction fails. The transaction is never explicitly rolled
 /// back on error: dropping it without a `commit()` is enough for Postgres to
@@ -134,19 +140,22 @@ pub fn write_bulk_tables(
     // — never logged, even at this generic "connecting" granularity.
     pb.println("Connecting to Postgres...");
     let mut client = Client::connect(database_url, NoTls)?;
+
+    // 0.
+    pb.println("Migrating schema...");
+    schema::migrate(&mut client)?;
+
     let mut transaction = client.transaction()?;
 
     // 1.
-    pb.println("Creating tables (CREATE TABLE IF NOT EXISTS)...");
-    schema::create_tables(&mut transaction)?;
+    pb.println("Recreating trajectory tables (DROP + CREATE)...");
+    schema::recreate_trajectory_tables(&mut transaction)?;
 
-    // 2.
-    pb.println("Truncating existing tables...");
+    // 2. CASCADE: `branch_observations` (just recreated, empty) references
+    // `observations`.
+    pb.println("Truncating observations and archived trajectories...");
     schema::drop_observations_indexes(&mut transaction)?;
-    transaction.batch_execute(
-        "TRUNCATE TABLE branches, kf_bank, branch_observations, hypotheses, kf_state, \
-         branch_best_state, archived_trajectories, observations CASCADE;",
-    )?;
+    transaction.batch_execute("TRUNCATE TABLE archived_trajectories, observations CASCADE;")?;
 
     // 3. – 5.
     copy::copy_observations(&mut transaction, "observations", observation_rows, &pb)?;

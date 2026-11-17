@@ -305,8 +305,10 @@ impl SqlSink {
 /// The open connection in `client`, opening one (and creating the tables)
 /// if there is none.
 ///
-/// A new connection runs [`schema::create_tables`] once: idempotent, and it
-/// makes a fresh (or wiped) database usable without a prior `convert`.
+/// A new connection runs [`schema::prepare_schema`] once: it migrates the
+/// persistent tables to this binary's schema version and creates the
+/// trajectory tables if absent, so a fresh (or wiped) database is usable
+/// without a prior `convert`; a no-op beyond two short queries otherwise.
 fn connect_if_needed<'c>(
     client: &'c mut Option<Client>,
     url: &str,
@@ -316,9 +318,7 @@ fn connect_if_needed<'c>(
         let mut pg_config: postgres::Config = url.parse()?;
         pg_config.connect_timeout(config.connect_timeout());
         let mut fresh = pg_config.connect(NoTls)?;
-        let mut transaction = fresh.transaction()?;
-        schema::create_tables(&mut transaction)?;
-        transaction.commit()?;
+        schema::prepare_schema(&mut fresh)?;
         *client = Some(fresh);
     }
     Ok(client.as_mut().expect("connected above"))

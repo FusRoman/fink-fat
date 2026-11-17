@@ -17,21 +17,25 @@ holds the ER diagram (Mermaid, rendered by GitHub) and one page per table with
 every column, index and constraint. See
 [Schema documentation](#schema-documentation) below.
 
-| Table | Owner | Persistence | Content |
-| --- | --- | --- | --- |
-| `observations` | engine | LOGGED | One row per alert: position, errors, magnitude, filter, epoch, MPC code. |
-| `branches` | engine | UNLOGGED | One row per live branch (candidate track of a lineage), with its score and precomputed arc / night statistics. |
-| `kf_bank` | engine | UNLOGGED | Per-branch Kalman bank summary (steps, absolute magnitude). |
-| `branch_observations` | engine | UNLOGGED | Branch ↔ observation join, in track order. |
-| `hypotheses` | engine | UNLOGGED | The (ρ, ρ̇) hypotheses of each branch's Gaussian mixture. |
-| `kf_state` | engine | UNLOGGED | Kalman state of each hypothesis, with its dynamical family. |
-| `branch_best_state` | engine | UNLOGGED | Denormalized best-hypothesis state per branch, for the explorer homepage. |
-| `archived_trajectories` | engine | UNLOGGED | Closed trajectories and their final state. |
-| `fink_fat_sync_state` | engine (streaming) | UNLOGGED | Last night swapped in by the streaming pipeline. |
-| `orbit_fits`, `orbit_fit_failures` | explorer | LOGGED | Orbit fits and failed fit attempts. |
-| `cnd_queries` | explorer | LOGGED | MPC near-duplicate checks. |
-| `skybot_bulk_jobs`, `skybot_obs_status` | explorer | LOGGED | Skybot cross-match jobs and per-observation results. |
-| `mpc_submissions` | `fink-fat submit` | LOGGED | MPC submission attempts and their verdicts. |
+The "Schema" column says how a table's structure evolves: by a versioned
+**migration**, or by **regeneration** from its current DDL at every load (see
+[Schema migrations](#schema-migrations)).
+
+| Table | Owner | Schema | Persistence | Content |
+| --- | --- | --- | --- | --- |
+| `observations` | engine | migration | LOGGED | One row per alert: position, errors, magnitude, filter, epoch, MPC code. |
+| `branches` | engine | regenerated | UNLOGGED | One row per live branch (candidate track of a lineage), with its score and precomputed arc / night statistics. |
+| `kf_bank` | engine | regenerated | UNLOGGED | Per-branch Kalman bank summary (steps, absolute magnitude). |
+| `branch_observations` | engine | regenerated | UNLOGGED | Branch ↔ observation join, in track order. |
+| `hypotheses` | engine | regenerated | UNLOGGED | The (ρ, ρ̇) hypotheses of each branch's Gaussian mixture. |
+| `kf_state` | engine | regenerated | UNLOGGED | Kalman state of each hypothesis, with its dynamical family. |
+| `branch_best_state` | engine | regenerated | UNLOGGED | Denormalized best-hypothesis state per branch, for the explorer homepage. |
+| `archived_trajectories` | engine | migration | UNLOGGED | Closed trajectories and their final state. |
+| `fink_fat_sync_state` | engine (streaming) | migration | UNLOGGED | Last night swapped in by the streaming pipeline. |
+| `orbit_fits`, `orbit_fit_failures` | explorer | migration | LOGGED | Orbit fits and failed fit attempts. |
+| `cnd_queries` | explorer | migration | LOGGED | MPC near-duplicate checks. |
+| `skybot_bulk_jobs`, `skybot_obs_status` | explorer | migration | LOGGED | Skybot cross-match jobs and per-observation results. |
+| `mpc_submissions` | `fink-fat submit` | migration | LOGGED | MPC submission attempts and their verdicts. |
 
 The engine tables are joined by foreign keys (`branch_id`, `hypothesis_id`,
 `obs_id → observations.id`). The explorer and submit tables refer to them by
@@ -43,20 +47,18 @@ tables are reloaded or swapped.
 
 ```text
 sql/
-├── tables/
-│   ├── engine/      tables written by the engine (convert, streaming)
-│   ├── explorer/    tables owned by fink-fat-explorer
-│   └── submit/      table owned by `fink-fat submit`
-├── bulk_load/       drop / restore of secondary indexes and FKs around the COPYs
-├── night_sync/      staging, swap and cleanup of the streaming pipeline's nightly sync
-└── migrations/      upgrades of databases created by older versions
+├── migrations/      refinery migrations V{n}__{name}.sql of the persistent tables
+├── tables/engine/   trajectory_tables.sql: the 6 regenerated trajectory tables
+├── bulk_load/       drop / restore of secondary indexes, FKs and trajectory tables
+│                    around the COPYs
+└── night_sync/      staging, swap and cleanup of the streaming pipeline's nightly sync
 ```
 
-Each `tables/**` script creates its tables idempotently
-(`CREATE TABLE IF NOT EXISTS`) and documents them with `COMMENT ON TABLE` and
-`COMMENT ON COLUMN`. These comments are the single source of truth for the
-meaning and unit of every column. `psql \d+`, pgAdmin and the generated docs
-all read them.
+The migrations and `trajectory_tables.sql` document every table with
+`COMMENT ON TABLE` and `COMMENT ON COLUMN`. These comments are the single
+source of truth for the meaning and unit of every column. `psql \d+`, pgAdmin
+and the generated docs all read them. A column added by a later migration is
+documented by a `COMMENT ON COLUMN` in that same migration.
 
 ## Crate layout
 
@@ -65,14 +67,14 @@ all read them.
 | `src/rows.rs` | Plain row structs, one per table. No logic. |
 | `src/build.rs` | Pure functions turning a `BranchCollection` into rows (unit-tested). |
 | `src/family.rs` | Dynamical-family classification stored in the `dynamic_family` columns. |
-| `src/schema.rs` | DDL wrappers and the `*_SQL` constants embedding the scripts. |
+| `src/schema.rs` | Migrations (`migrate`, `prepare_schema`), trajectory-table regeneration, DDL wrappers and the `*_SQL` constants embedding the scripts. |
 | `src/copy.rs` | `COPY ... FROM STDIN BINARY` loaders, one per table. |
 | `src/load.rs` | `write_bulk_tables`, the full reload in one transaction, and `load_trajectory_tables`, which it shares with the nightly sync. |
 | `src/incremental.rs` | Idempotent inserts into `observations` and `archived_trajectories` (streaming pipeline). |
 | `src/night_sync.rs` | Nightly staging and atomic swap of the trajectory tables (streaming pipeline). |
 | `src/error.rs` | `SqlError`. |
 | `sql/**/*.sql` | The DDL itself, kept as plain SQL so it can be read, diffed, linted and run with `psql` (see [SQL scripts](#sql-scripts)). |
-| `examples/create_schema.rs` | Creates every table in `$DATABASE_URL`, without data (used to generate the schema docs). |
+| `examples/create_schema.rs` | Recreates a database and creates every table in it, without data (used to generate the schema docs, and to try the migrations on a throwaway database). |
 | `.tbls.yml`, `docs/generate_schema_docs.sh`, [docs/schema/](docs/schema/README.md) | Schema docs: configuration, generation script, generated output (see [Schema documentation](#schema-documentation)). |
 
 The input is rows, not a file path: the CLI reads its observation Parquet
@@ -80,10 +82,17 @@ itself, and the streaming pipeline builds rows from the alert stream.
 
 ## Full reload (`write_bulk_tables`)
 
-A single transaction:
+0. Migrate the persistent tables to the latest version (`schema::migrate`,
+   see [Schema migrations](#schema-migrations)), in refinery's own
+   transaction.
 
-1. Create the tables if absent, then migrate older schemas.
-2. Drop the secondary index of `observations`, then `TRUNCATE` the 8 tables.
+Then a single transaction:
+
+1. Drop the 6 trajectory tables and create them again from
+   `trajectory_tables.sql` (`schema::recreate_trajectory_tables`), so they
+   always have the current shape.
+2. Drop the secondary index of `observations`, then `TRUNCATE`
+   `observations` and `archived_trajectories`.
 3. `COPY` `observations`.
 4. Load the 6 trajectory tables (`load_trajectory_tables`): drop their
    secondary indexes and foreign keys, `COPY` them, rebuild the indexes and
@@ -91,8 +100,10 @@ A single transaction:
 5. `COPY` `archived_trajectories`.
 6. Rebuild the index of `observations`, `ANALYZE`, then commit.
 
-A failure at any step leaves the previous contents untouched. The trajectory
-tables and `archived_trajectories` are `UNLOGGED`: they are regenerated from the
+A failure at steps 1 – 6 leaves the previous contents, and the previous
+trajectory tables, untouched; a migration applied at step 0 stays applied. The
+trajectory
+tables and `archived_trajectories` are `UNLOGGED`: they are reloaded from the
 engine's state by every load, so skipping the WAL loses nothing. `observations`
 is WAL-logged: the streaming pipeline appends to it night after night, and it is
 the only store of past alerts.
@@ -104,7 +115,8 @@ because the bulk `COPY`s and index rebuilds legitimately run for minutes.
 ## Streaming writes
 
 The streaming pipeline (`fink-fat stream`, crate `fink-fat-stream`) does not
-reload anything. It writes in two ways:
+reload anything. Each new connection runs `schema::prepare_schema` once:
+migrations, then the trajectory tables if absent. It then writes in two ways:
 
 - **`observations` and `archived_trajectories`**: idempotent inserts
   (`incremental`). The rows are `COPY`'d into a temporary table, then moved with
@@ -113,7 +125,8 @@ reload anything. It writes in two ways:
   (`night_sync`), without blocking the explorer:
   1. The next generation is built in the `fink_fat_staging` schema. The same
      scripts and loaders as `convert` are run with
-     `search_path = fink_fat_staging, public`. Table, index and constraint
+     `search_path = fink_fat_staging, public`: the staging tables get the
+     current `trajectory_tables.sql` shape. Table, index and constraint
      names stay the same, and `branch_observations` still references
      `public.observations`.
   2. A short transaction (`lock_timeout = 5s`, retried) moves the `public`
@@ -126,11 +139,123 @@ reload anything. It writes in two ways:
   the trajectory tables: a Postgres crash empties both, which tells the pipeline
   to sync again.
 
+## Schema migrations
+
+The schema of the persistent tables is versioned with
+[refinery](https://github.com/rust-db/refinery) (crate docs:
+[`refinery`](https://docs.rs/refinery/latest/refinery/),
+[`Runner`](https://docs.rs/refinery-core/latest/refinery_core/struct.Runner.html)).
+It replaces the former `sql/migrations/legacy_columns.sql`, an idempotent
+script replayed at every load, which had to be written to run forever and
+recorded nothing.
+
+### What is migrated, what is regenerated
+
+- **Migrated**: every table whose rows outlive a load: `observations`,
+  `archived_trajectories`, `fink_fat_sync_state`, and the explorer and
+  `submit` tables. Their schema is the sequence of
+  `sql/migrations/V{n}__{name}.sql` files. Each file applied to a database is
+  recorded in its `refinery_schema_history` table.
+- **Regenerated**: the 6 trajectory tables. `convert` drops and recreates
+  them, and the nightly sync builds a fresh generation in a staging schema,
+  both from `sql/tables/engine/trajectory_tables.sql`. Their schema is
+  whatever that file says, with no migration. A migration of the `public`
+  copy would be overwritten by the next load anyway.
+
+### How migrations run
+
+`schema::migrate` applies every pending migration. It is called by:
+
+- `fink-fat convert --format sql`, before its load transaction;
+- the streaming sink, through `schema::prepare_schema`, at each new
+  connection;
+- `fink-fat submit`, at start-up;
+- `examples/create_schema.rs`, through `prepare_schema`.
+
+You never run a migration by hand: starting any of these is enough. With
+nothing pending, it costs two short queries. Behaviour:
+
+- **One transaction for the batch** (`set_grouped(true)`): if one
+  migration fails, none of the batch is applied, and the database stays at
+  its previous version. Postgres DDL is transactional.
+- **Advisory lock**: `pg_advisory_lock(schema::MIGRATION_LOCK_KEY)` is held
+  for the whole run. refinery takes no lock of its own, so without it two
+  processes starting together (for example `convert` and the stream) would
+  both apply the same migration.
+- **Checks**: refinery refuses to run when an applied migration was edited
+  (*divergent*), or when the database has a migration this binary does not
+  know (*missing*). Both are reported as `SqlError::Migration`.
+- **Databases created before refinery** (tables present, no history table)
+  need no manual step. `V1__baseline.sql` is idempotent: it upgrades them in
+  place, then records version 1.
+- **Logging**: each migration applied is logged at `info` level by
+  `tracing` ("applied schema migration").
+
+### Checking a database
+
+```sql
+SELECT version, name, applied_on, checksum
+FROM refinery_schema_history
+ORDER BY version;
+```
+
+- **No `refinery_schema_history` table**: the database predates refinery,
+  or is empty. The next `convert`, stream start or `submit` applies V1.
+- **Last `version` equal to the highest `V{n}` in `sql/migrations/`**: up
+  to date.
+- **Lower last `version`**: pending migrations, applied by the next start.
+
+Each fix below depends on the error:
+
+| Error (`schema migration error: …`) | Meaning | Fix |
+| --- | --- | --- |
+| `applied migration V{n}__… is different than filesystem one` | `V{n}` was edited after being applied (checksum mismatch). | Restore the file as it was (`git log -p -- crates/fink-fat-sql/sql/migrations/V{n}__*.sql`). Put the change in a new migration. |
+| `migration V{n}__… is missing from the filesystem` | The database was migrated by a newer fink-fat than this binary. | Run an up-to-date binary. |
+| `error applying migrations` + a Postgres error | A statement failed. Nothing was applied. | Fix the new migration (it was never recorded, so editing it is fine), then restart. |
+
+To try the migrations on a throwaway database, from the repository root:
+
+```bash
+docker compose up -d db
+cargo run -p fink-fat-sql --example create_schema -- my_scratch_db   # drops and recreates my_scratch_db
+psql postgres://finkfat:finkfat@localhost:5432/my_scratch_db \
+    -c 'SELECT version, name, applied_on FROM refinery_schema_history'
+```
+
+The refinery CLI (`cargo install refinery_cli`, then
+`refinery migrate -e DATABASE_URL -p crates/fink-fat-sql/sql/migrations`) works
+too. It is not needed: the binaries migrate on their own.
+
+### Writing a migration
+
+1. **Persistent table**: add `sql/migrations/V{n+1}__{description}.sql`.
+   - Use the next version number, with no gap and no `U` prefix. The
+     `migrations_are_contiguous_versioned_from_one` unit test checks it.
+   - Use a snake_case description, for example `V2__add_orbit_fit_rms.sql`.
+   - Unlike V1, it needs no `IF NOT EXISTS`: it runs exactly once per
+     database.
+   - Document any new column with `COMMENT ON COLUMN` in the same file:
+     `tbls lint` fails otherwise.
+   - Keep `SET LOCAL lock_timeout = '1min';` at the top, as V1 does, so a
+     long explorer query does not block the migration indefinitely.
+2. **Never edit a migration once it is merged** (or applied to any shared
+   database), not even a comment: its checksum is stored in every database
+   it reached. Undoing it is also a new migration: refinery has no "down"
+   migrations.
+3. **Trajectory table**: edit `sql/tables/engine/trajectory_tables.sql`,
+   not a migration. The next `convert` or nightly sync applies it.
+4. A new migration file is only picked up when `fink-fat-sql` is rebuilt
+   (`embed_migrations!` reads the directory at compile time). If a build
+   seems to ignore it, run `touch crates/fink-fat-sql/src/schema.rs`.
+5. Lint (see [SQL lint](#sql-lint)), regenerate the schema docs (see
+   [Schema documentation](#schema-documentation)), and test on a fresh
+   database (`create_schema`) and on one at the previous version.
+
 ## Schema documentation
 
 The [schema docs](docs/schema/README.md) (`docs/schema/`) are generated, never edited by hand.
-After changing a table or a comment in `sql/tables/**`, regenerate it and
-commit the result:
+After adding a migration, or changing a table or a comment in
+`sql/tables/engine/trajectory_tables.sql`, regenerate it and commit the result:
 
 ```bash
 docker compose up -d db                               # or set DATABASE_URL
@@ -140,7 +265,8 @@ crates/fink-fat-sql/docs/generate_schema_docs.sh
 The script recreates a dedicated database, `fink_fat_schema_docs`, on the same
 server, and creates the tables in it (`cargo run -p fink-fat-sql --example
 create_schema -- fink_fat_schema_docs`). It then runs tbls on that database
-with `.tbls.yml`. tbls lists tables in creation order, so a fresh database gives
+with `.tbls.yml` (which excludes `refinery_schema_history`). tbls lists
+tables in creation order, so a fresh database gives
 the same docs locally and in CI, and the development database is never
 touched. It uses the local `tbls`
 binary if installed, otherwise its pinned Docker image. The configuration is
@@ -170,11 +296,12 @@ squawk --config crates/fink-fat-sql/.squawk.toml 'crates/fink-fat-sql/sql/**/*.s
 
 ## Tests
 
-Unit tests cover the pure row building (`cargo test -p fink-fat-sql`). The
+Unit tests cover the pure row building and the numbering of the embedded
+migrations (`cargo test -p fink-fat-sql`). The
 root crate tests both writers end to end against a real Postgres:
 `tests/sql_convert.rs` covers the full reload, and `tests/stream_sql.rs` covers
 the streaming writes (same content as `convert`, outage catch-up,
-idempotence):
+idempotence). Both apply the migrations to the test database:
 
 ```bash
 docker compose up -d db

@@ -1,7 +1,7 @@
 //! `fink-fat submit`: submit MPC-eligible lineages' observations to the
 //! Minor Planet Center (MPC) as ADES XML files, recording the outcome
 //! durably in `mpc_submissions`
-//! (`crates/fink-fat-sql/sql/tables/submit/mpc_submissions.sql`) so a later run —
+//! (`crates/fink-fat-sql/sql/migrations/`) so a later run —
 //! or `fink-fat-explorer`'s submission dashboard — can tell what has already
 //! been sent.
 //!
@@ -740,7 +740,9 @@ pub fn submit(args: SubmitArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Connecting to Postgres...");
     let mut client = Client::connect(&args.database_url, NoTls).map_err(SubmitError::Database)?;
-    client.batch_execute(fink_fat_sql::schema::CREATE_MPC_SUBMISSION_TABLES_SQL)?;
+    // `submit` can run before any `convert` or streaming start: bring the
+    // persistent tables (`mpc_submissions` included) to this binary's schema.
+    fink_fat_sql::schema::migrate(&mut client)?;
 
     println!("Building eligibility index...");
     let quality_index = build_quality_index(&mut client)?;

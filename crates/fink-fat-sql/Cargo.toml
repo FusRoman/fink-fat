@@ -15,6 +15,7 @@ license-file.workspace = true
 [dependencies]
 fink-fat-engine = { workspace = true }
 postgres = { workspace = true }
+refinery = { workspace = true }
 nalgebra = { workspace = true }
 outfit = { workspace = true }
 rayon = { workspace = true }

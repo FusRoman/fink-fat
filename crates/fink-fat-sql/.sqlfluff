@@ -9,6 +9,10 @@ max_line_length = 100
 # and `logs` columns are part of the schema the explorer and `submit` query
 # by name; renaming them would break every reader for a style rule.
 exclude_rules = RF04
+# migrations/V1__baseline.sql (every persistent table, with its comments) is
+# ~35 kB, over SQLFluff's 20 kB default above which a file is silently
+# skipped rather than linted.
+large_file_skip_byte_limit = 100000
 
 # Keep Postgres array types written the usual way, `BIGINT[]`, instead of
 # SQLFluff's default `BIGINT []`.

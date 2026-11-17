@@ -3,8 +3,8 @@
 //!
 //! # Why a swap
 //!
-//! `convert` replaces the trajectory tables with `TRUNCATE` + `COPY` in one
-//! transaction: correct, but the `TRUNCATE` holds `ACCESS EXCLUSIVE` for the
+//! `convert` replaces the trajectory tables with `DROP` + `CREATE` + `COPY` in one
+//! transaction: correct, but the `DROP` holds `ACCESS EXCLUSIVE` for the
 //! whole load (minutes at LSST scale), during which every explorer page
 //! touching these tables hangs. The streaming pipeline replaces them every
 //! night while the explorer is in use, so it builds the next generation
@@ -33,7 +33,7 @@
 //!
 //! # Preconditions
 //!
-//! * The tables exist ([`crate::schema::create_tables`]).
+//! * The tables exist ([`crate::schema::prepare_schema`]).
 //! * `observations` already holds every observation the branches reference:
 //!   `branch_observations.obs_id`'s foreign key is validated in step 1.
 //!
@@ -63,7 +63,7 @@ pub const STAGING_SCHEMA: &str = "fink_fat_staging";
 pub const RETIRED_SCHEMA: &str = "fink_fat_retired";
 
 /// Single-row table holding the last night swapped in (see
-/// `sql/tables/engine/sync_state.sql`).
+/// `sql/migrations/V1__baseline.sql`).
 pub const SYNC_STATE_TABLE: &str = "fink_fat_sync_state";
 
 /// How the swap transaction copes with the explorer's locks.
@@ -129,7 +129,7 @@ pub fn fetch_obs_index(client: &mut impl GenericClient, ids: &[i64]) -> Result<O
 /// # Errors
 ///
 /// [`SqlError::Postgres`] on query failure (e.g. the table does not exist:
-/// run [`crate::schema::create_tables`] first).
+/// run [`crate::schema::prepare_schema`] first).
 pub fn last_synced_night(client: &mut impl GenericClient) -> Result<Option<i64>, SqlError> {
     Ok(client
         .query_opt(

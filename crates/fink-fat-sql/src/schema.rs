@@ -1,38 +1,50 @@
-//! Schema DDL of every table this crate writes, plus the drop/rebuild of
-//! secondary indexes and foreign keys around bulk loads.
+//! Schema of every table this crate writes: versioned migrations of the
+//! persistent tables (refinery), regeneration of the trajectory tables, and
+//! the drop/rebuild of secondary indexes and foreign keys around bulk loads.
 //!
 //! The DDL lives in plain `.sql` files under the crate's `sql/` directory,
-//! embedded at compile time with [`include_str!`] and exposed as the `*_SQL`
-//! constants below — kept as `.sql` rather than Rust string literals so the
-//! schema can be read, diffed, linted (SQLFluff, Squawk) and run directly
-//! with `psql`. Each function is a thin wrapper running one (or a few) of
-//! these scripts; other crates that need a script on its own (e.g.
-//! `fink-fat submit`'s `mpc_submissions` table) use the constant instead of
-//! embedding the file a second time.
+//! embedded at compile time ([`include_str!`], or refinery's
+//! `embed_migrations!` for `sql/migrations/`) — kept as `.sql` rather than
+//! Rust string literals so the schema can be read, diffed, linted (SQLFluff,
+//! Squawk) and run directly with `psql`. Each function is a thin wrapper
+//! running one (or a few) of these scripts.
 //!
 //! # Script layout
 //!
 //! ```text
 //! sql/
-//! ├── tables/            CREATE TABLE IF NOT EXISTS, one file per table group
-//! │   ├── engine/        written by the engine: observations, trajectory tables,
-//! │   │                  archived_trajectories, fink_fat_sync_state
-//! │   ├── explorer/      owned by fink-fat-explorer: orbit_fits, cnd_queries, skybot_*
-//! │   └── submit/        owned by `fink-fat submit`: mpc_submissions
-//! ├── bulk_load/         drop / restore of secondary indexes and FKs around the COPYs
-//! ├── night_sync/        staging, swap and cleanup of the streaming pipeline's nightly sync
-//! └── migrations/        upgrades of databases created by older versions
+//! ├── migrations/        refinery migrations (V{n}__{name}.sql) of the persistent tables
+//! ├── tables/engine/     trajectory_tables.sql: the 6 regenerated trajectory tables
+//! ├── bulk_load/         drop / restore of secondary indexes, FKs and trajectory tables
+//! │                      around the COPYs
+//! └── night_sync/        staging, swap and cleanup of the streaming pipeline's nightly sync
 //! ```
 //!
 //! # Table groups
 //!
-//! | Group | Script | Persistence | Written by |
-//! |-------|--------|-------------|-----------|
-//! | `observations` | `tables/engine/observations.sql` | LOGGED | `convert` (full reload), stream (live inserts) |
-//! | trajectory tables (6) | `tables/engine/trajectory_tables.sql` | UNLOGGED | `convert` (full reload), stream (nightly swap) |
-//! | `archived_trajectories` | `tables/engine/archived_trajectories.sql` | UNLOGGED | `convert` (full reload), stream (inserts) |
-//! | `fink_fat_sync_state` | `tables/engine/sync_state.sql` | UNLOGGED | stream (nightly swap) |
-//! | explorer / submit tables | `tables/explorer/*.sql`, `tables/submit/*.sql` | LOGGED | explorer, `submit` |
+//! | Group | Schema managed by | Persistence | Written by |
+//! |-------|-------------------|-------------|-----------|
+//! | `observations` | migrations | LOGGED | `convert` (full reload), stream (live inserts) |
+//! | `archived_trajectories` | migrations | UNLOGGED | `convert` (full reload), stream (inserts) |
+//! | `fink_fat_sync_state` | migrations | UNLOGGED | stream (nightly swap) |
+//! | explorer / submit tables | migrations | LOGGED | explorer, `submit` |
+//! | trajectory tables (6) | `tables/engine/trajectory_tables.sql` | UNLOGGED | `convert` (DROP + CREATE + COPY), stream (nightly swap) |
+//!
+//! # Migrated vs regenerated tables
+//!
+//! Tables whose rows outlive a load are **migrated**: [`migrate`] applies the
+//! pending `sql/migrations/V{n}__{name}.sql` files, in version order, and
+//! records each one in `refinery_schema_history`. A schema change of one of
+//! them is a new `V{n+1}__{name}.sql`; an applied migration is frozen (its
+//! checksum is checked at every run, see the crate README).
+//!
+//! The 6 trajectory tables are **regenerated** instead: every `convert`
+//! drops and recreates them ([`recreate_trajectory_tables`]) and every
+//! nightly sync builds a fresh generation in a staging schema
+//! ([`crate::night_sync`]), both from `tables/engine/trajectory_tables.sql`.
+//! A schema change of one of them is an edit of that script, never a
+//! migration: a migration of the `public` copy would be overwritten by the
+//! next load.
 //!
 //! # Schema-independent scripts
 //!
@@ -42,11 +54,31 @@
 //! nightly sync swaps in (see [`crate::night_sync`]). Index and constraint
 //! names are therefore the same in both schemas.
 
-use postgres::Transaction;
+use postgres::{Client, Transaction};
+use refinery::{Report, Runner};
 
-/// `observations` and its index.
-pub const CREATE_OBSERVATIONS_TABLE_SQL: &str =
-    include_str!("../sql/tables/engine/observations.sql");
+use crate::SqlError;
+
+/// The refinery migrations of `sql/migrations/`, embedded at compile time
+/// (generates `embedded::migrations::runner()`).
+///
+/// An edit of an existing file triggers a rebuild (the macro embeds each file
+/// with [`include_str!`]); a **new** file is only picked up once the crate is
+/// rebuilt for another reason — `cargo clean -p fink-fat-sql` (or touching
+/// this file) forces it.
+mod embedded {
+    refinery::embed_migrations!("sql/migrations");
+}
+
+/// Key of the session-level Postgres advisory lock [`migrate`] holds while
+/// it runs: `convert`, the streaming pipeline and `submit` may all start at
+/// the same time against the same database, and refinery takes no lock of its
+/// own — it reads `refinery_schema_history` and applies the pending
+/// migrations in separate transactions, so two concurrent runs would both
+/// apply the same migration and the second would fail on the history table's
+/// primary key. The value is arbitrary but fixed: the ASCII bytes of
+/// `"finkfat"` followed by a 1 (lock #1 of this crate).
+pub const MIGRATION_LOCK_KEY: i64 = 0x66_69_6E_6B_66_61_74_01;
 
 /// The 6 trajectory tables (`branches`, `kf_bank`, `branch_observations`,
 /// `hypotheses`, `kf_state`, `branch_best_state`), their foreign keys and
@@ -54,32 +86,11 @@ pub const CREATE_OBSERVATIONS_TABLE_SQL: &str =
 pub const CREATE_TRAJECTORY_TABLES_SQL: &str =
     include_str!("../sql/tables/engine/trajectory_tables.sql");
 
-/// `archived_trajectories`.
-pub const CREATE_ARCHIVED_TABLE_SQL: &str =
-    include_str!("../sql/tables/engine/archived_trajectories.sql");
-
-/// `fink_fat_sync_state`, the streaming pipeline's record of the last
-/// trajectory swap.
-pub const CREATE_SYNC_STATE_TABLE_SQL: &str = include_str!("../sql/tables/engine/sync_state.sql");
-
-/// Migration of a database created by an older `convert` (persistence
-/// switches, added columns, backfilled foreign key).
-pub const MIGRATE_LEGACY_COLUMNS_SQL: &str = include_str!("../sql/migrations/legacy_columns.sql");
-
-/// `orbit_fits` / `orbit_fit_failures`, owned by `fink-fat-explorer`.
-pub const CREATE_ORBIT_FITS_TABLES_SQL: &str =
-    include_str!("../sql/tables/explorer/orbit_fits.sql");
-
-/// `cnd_queries`, owned by `fink-fat-explorer`.
-pub const CREATE_CND_TABLES_SQL: &str = include_str!("../sql/tables/explorer/cnd_queries.sql");
-
-/// `skybot_bulk_jobs` / `skybot_obs_status`, owned by `fink-fat-explorer`.
-pub const CREATE_SKYBOT_BULK_TABLES_SQL: &str =
-    include_str!("../sql/tables/explorer/skybot_bulk.sql");
-
-/// `mpc_submissions`, owned by `fink-fat submit`.
-pub const CREATE_MPC_SUBMISSION_TABLES_SQL: &str =
-    include_str!("../sql/tables/submit/mpc_submissions.sql");
+/// Drop of the 6 trajectory tables of the current `search_path`, before
+/// [`CREATE_TRAJECTORY_TABLES_SQL`] recreates them (see
+/// [`recreate_trajectory_tables`]).
+pub const DROP_TRAJECTORY_TABLES_SQL: &str =
+    include_str!("../sql/bulk_load/drop_trajectory_tables.sql");
 
 /// Drop of the trajectory tables' secondary indexes and foreign keys before
 /// their bulk `COPY`s; schema-independent.
@@ -109,50 +120,140 @@ pub const SWAP_TRAJECTORY_TABLES_SQL: &str =
 pub const DROP_RETIRED_TRAJECTORY_TABLES_SQL: &str =
     include_str!("../sql/night_sync/drop_retired_tables.sql");
 
-/// Creates every table this crate and its users need if absent, and migrates
-/// any that already exist from an older schema version.
+/// The refinery runner of the embedded migrations, configured for this
+/// crate:
 ///
-/// Scripts run in order:
-/// 1. `migrations/legacy_columns.sql` — upgrades of tables created by an
-///    older version of this crate (persistence switches, added columns, a
-///    backfilled foreign key), where a `CREATE TABLE IF NOT EXISTS` would be
-///    a no-op against the outdated table. First, because step 2's
-///    `COMMENT ON COLUMN` statements need every column to exist; a no-op on
-///    a fresh database (`ALTER TABLE IF EXISTS`).
-/// 2. `tables/engine/*.sql` — `observations`, the trajectory tables (in the
-///    current `search_path`, i.e. `public`), `archived_trajectories`,
-///    `fink_fat_sync_state`: created if absent, and documented
-///    (`COMMENT ON`). Observations first: a trajectory table references it.
-/// 3. `tables/explorer/*.sql` (`orbit_fits`, `orbit_fit_failures`,
-///    `cnd_queries`, `skybot_bulk_jobs`, `skybot_obs_status`) and
-///    `tables/submit/*.sql` (`mpc_submissions`), owned by
-///    `fink-fat-explorer` and `fink-fat submit` but bootstrapped here so a
-///    fresh database has every table after one `convert` or one streaming
-///    start. `skybot_obs_status` is the single source of truth for Skybot
-///    results (see `fink-fat-explorer`'s `skybot_search` module doc);
-///    `submit` also creates `mpc_submissions` defensively itself, since it
-///    can run independently.
+/// * `grouped`: every pending migration runs in **one** transaction, so a
+///   failure leaves the database at its previous version (Postgres DDL is
+///   transactional) instead of half-way between two versions;
+/// * `abort_divergent`: refuse to run when an applied migration's file
+///   changed since (checksum mismatch) — the file must be restored, never
+///   edited;
+/// * `abort_missing`: refuse to run when an applied migration is absent from
+///   this binary, i.e. the binary is older than the database.
 ///
-/// Idempotent: safe to run at every `convert` and every streaming start.
+/// These are refinery's defaults except `grouped`, all set explicitly so the
+/// policy is visible here.
+fn migration_runner() -> Runner {
+    embedded::migrations::runner()
+        .set_grouped(true)
+        .set_abort_divergent(true)
+        .set_abort_missing(true)
+}
+
+/// Brings the persistent tables to the latest schema version: applies every
+/// pending `sql/migrations/V{n}__{name}.sql` (see the
+/// [module doc](self#migrated-vs-regenerated-tables)), under the
+/// [`MIGRATION_LOCK_KEY`] advisory lock.
+///
+/// A database created before refinery was introduced (tables present, no
+/// `refinery_schema_history`) needs no manual step: `V1__baseline.sql` is
+/// idempotent and upgrades it in place. With no pending migration this costs
+/// two short queries, so it is safe to run at every `convert`, every
+/// streaming start and every `submit`.
+///
+/// Runs its own transactions, hence the [`Client`] rather than a
+/// [`Transaction`]: call it before opening the load transaction.
 ///
 /// # Arguments
 ///
-/// * `transaction` — the transaction to run the scripts in.
+/// * `client` — a connection outside any transaction.
+///
+/// # Returns
+///
+/// refinery's [`Report`], listing the migrations this call applied (empty
+/// when the database was already up to date).
+///
+/// # Errors
+///
+/// * [`SqlError::Migration`] — a migration failed (nothing of the batch is
+///   applied), an applied migration diverges from or is missing in this
+///   binary, or the history table could not be read.
+/// * [`SqlError::Postgres`] — taking or releasing the advisory lock failed.
+pub fn migrate(client: &mut Client) -> Result<Report, SqlError> {
+    client.execute("SELECT pg_advisory_lock($1)", &[&MIGRATION_LOCK_KEY])?;
+    let outcome = migration_runner().run(client);
+    // Released whatever the outcome (a failed migration's transaction is
+    // already rolled back, the session stays usable); the migration error,
+    // if any, takes precedence over an unlock error. A lost connection
+    // releases the lock on its own.
+    let unlock = client.execute("SELECT pg_advisory_unlock($1)", &[&MIGRATION_LOCK_KEY]);
+    let report = outcome?;
+    unlock?;
+    for migration in report.applied_migrations() {
+        tracing::info!(%migration, "applied schema migration");
+    }
+    Ok(report)
+}
+
+/// Makes a database ready for any fink-fat process: [`migrate`]s the
+/// persistent tables, then creates the trajectory tables if absent
+/// ([`create_trajectory_tables`]), in one transaction of its own.
+///
+/// The entry point of every caller that only needs the tables to exist (the
+/// streaming sink, the schema-docs example, tests). `convert`, which reloads
+/// the trajectory tables anyway, calls [`migrate`] and
+/// [`recreate_trajectory_tables`] instead.
+///
+/// Existing trajectory tables are left as they are, even if an older
+/// fink-fat created them: the streaming pipeline's next nightly sync, or the
+/// next `convert`, replaces them with the current shape.
+///
+/// # Arguments
+///
+/// * `client` — a connection outside any transaction.
+///
+/// # Errors
+///
+/// See [`migrate`]; [`SqlError::Postgres`] if the trajectory tables cannot
+/// be created.
+pub fn prepare_schema(client: &mut Client) -> Result<(), SqlError> {
+    migrate(client)?;
+    let mut transaction = client.transaction()?;
+    create_trajectory_tables(&mut transaction)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Creates the 6 trajectory tables of the current `search_path` if absent,
+/// with their foreign keys, indexes and comments
+/// ([`CREATE_TRAJECTORY_TABLES_SQL`]). Idempotent.
+///
+/// `branch_observations` references `observations`: run [`migrate`] first.
+///
+/// # Arguments
+///
+/// * `transaction` — the transaction to run the script in.
 ///
 /// # Errors
 ///
 /// Any statement failing, as a [`postgres::Error`].
-pub fn create_tables(transaction: &mut Transaction<'_>) -> Result<(), postgres::Error> {
-    transaction.batch_execute(MIGRATE_LEGACY_COLUMNS_SQL)?;
-    transaction.batch_execute(CREATE_OBSERVATIONS_TABLE_SQL)?;
-    transaction.batch_execute(CREATE_TRAJECTORY_TABLES_SQL)?;
-    transaction.batch_execute(CREATE_ARCHIVED_TABLE_SQL)?;
-    transaction.batch_execute(CREATE_SYNC_STATE_TABLE_SQL)?;
-    transaction.batch_execute(CREATE_ORBIT_FITS_TABLES_SQL)?;
-    transaction.batch_execute(CREATE_CND_TABLES_SQL)?;
-    transaction.batch_execute(CREATE_SKYBOT_BULK_TABLES_SQL)?;
-    transaction.batch_execute(CREATE_MPC_SUBMISSION_TABLES_SQL)?;
-    Ok(())
+pub fn create_trajectory_tables(transaction: &mut Transaction<'_>) -> Result<(), postgres::Error> {
+    transaction.batch_execute(CREATE_TRAJECTORY_TABLES_SQL)
+}
+
+/// Drops the 6 trajectory tables of the current `search_path` and creates
+/// them again from [`CREATE_TRAJECTORY_TABLES_SQL`]: `convert`'s first step
+/// of a full reload, which leaves them empty and in their current shape —
+/// whatever version of fink-fat created the previous ones, so their schema
+/// changes never need a migration (see the
+/// [module doc](self#migrated-vs-regenerated-tables)).
+///
+/// Takes `ACCESS EXCLUSIVE` on the tables until the transaction ends, like
+/// the `TRUNCATE` it replaces.
+///
+/// # Arguments
+///
+/// * `transaction` — the bulk-load transaction.
+///
+/// # Errors
+///
+/// Any statement failing, as a [`postgres::Error`].
+pub fn recreate_trajectory_tables(
+    transaction: &mut Transaction<'_>,
+) -> Result<(), postgres::Error> {
+    transaction.batch_execute(DROP_TRAJECTORY_TABLES_SQL)?;
+    transaction.batch_execute(CREATE_TRAJECTORY_TABLES_SQL)
 }
 
 /// Drops the trajectory tables' secondary indexes and foreign keys, so their
@@ -265,4 +366,41 @@ pub fn analyze_observation_and_archive_tables(
     transaction: &mut Transaction<'_>,
 ) -> Result<(), postgres::Error> {
     transaction.batch_execute("ANALYZE observations, archived_trajectories;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The embedded migrations are numbered `V1`, `V2`, … with no gap and no
+    /// `U` (unversioned) file: refinery's `abort_missing` refuses a version
+    /// lower than the last applied one that was never applied, so a gap
+    /// filled later would brick every database already past it.
+    #[test]
+    fn migrations_are_contiguous_versioned_from_one() {
+        let runner = migration_runner();
+        let migrations = runner.get_migrations();
+        assert!(
+            !migrations.is_empty(),
+            "no migration embedded from sql/migrations"
+        );
+
+        let mut versions: Vec<i32> = migrations.iter().map(|m| m.version()).collect();
+        versions.sort_unstable();
+        let expected: Vec<i32> = (1..).take(versions.len()).collect();
+        assert_eq!(
+            versions, expected,
+            "migration versions must be 1, 2, 3, … without gaps"
+        );
+
+        for migration in migrations {
+            // `refinery_core::Type` is not re-exported by `refinery`: compare
+            // its `Display` (`V` / `U`) instead.
+            assert_eq!(
+                migration.prefix().to_string(),
+                "V",
+                "{migration}: only versioned (`V{{n}}__…`) migrations are allowed"
+            );
+        }
+    }
 }

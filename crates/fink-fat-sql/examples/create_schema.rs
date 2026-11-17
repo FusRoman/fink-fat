@@ -15,8 +15,12 @@
 //! that has lived through loads and nightly swaps has its trajectory tables
 //! recreated last, so its docs would differ from the ones CI generates on a
 //! fresh server (`tbls diff` fails). Building the docs on a database created
-//! by [`fink_fat_sql::schema::create_tables`] alone gives the same order
+//! by [`fink_fat_sql::schema::prepare_schema`] alone gives the same order
 //! everywhere — and never touches a development database.
+//!
+//! Also the quickest way to try the migrations on a throwaway database: the
+//! run applies every `sql/migrations/V*.sql` and records them in
+//! `refinery_schema_history` (see the crate README, "Schema migrations").
 
 use postgres::{Client, NoTls};
 
@@ -51,12 +55,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     server.batch_execute(&format!("CREATE DATABASE {database}"))?;
     drop(server);
 
-    // 2. Create every table in it, exactly as the loaders do.
+    // 2. Create every table in it, exactly as the streaming sink does:
+    //    migrations, then the trajectory tables.
     let mut config: postgres::Config = url.parse()?;
     config.dbname(&database);
     let mut client = config.connect(NoTls)?;
-    let mut transaction = client.transaction()?;
-    fink_fat_sql::schema::create_tables(&mut transaction)?;
-    transaction.commit()?;
+    fink_fat_sql::schema::prepare_schema(&mut client)?;
     Ok(())
 }

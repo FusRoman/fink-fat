@@ -14,7 +14,8 @@
 //! denormalized copy of each branch's best hypothesis state that the
 //! explorer's homepage reads instead of probing `hypotheses`/`kf_state`
 //! once per branch), and `archived_trajectories`. See [`schema`] for their
-//! persistence (only `observations` is WAL-logged) and the tables owned by
+//! persistence (only `observations` is WAL-logged), the split between
+//! migrated (refinery) and regenerated tables, and the tables owned by
 //! the explorer and `submit`.
 //!
 //! # Two writers
@@ -22,8 +23,9 @@
 //! | | `fink-fat convert` | streaming pipeline |
 //! |-|--------------------|--------------------|
 //! | `observations` | full reload | idempotent inserts, live ([`incremental`]) |
-//! | trajectory tables | full reload (`TRUNCATE` + `COPY`) | nightly atomic swap ([`night_sync`]) |
+//! | trajectory tables | full reload (`DROP` + `CREATE` + `COPY`) | nightly atomic swap ([`night_sync`]) |
 //! | `archived_trajectories` | full reload | idempotent inserts, with the swap |
+//! | schema | [`schema::migrate`] + [`schema::recreate_trajectory_tables`] | [`schema::prepare_schema`] |
 //! | entry point | [`write_bulk_tables`] | [`incremental`], [`night_sync`] |
 //!
 //! Both build their rows with the same pure functions ([`build`]) and write

@@ -19,7 +19,7 @@ SET LOCAL statement_timeout = 0;
 -- constraint, instead of one check per row during the COPYs. Constraint
 -- names match Postgres's default naming for an unnamed inline `REFERENCES`
 -- (`{table}_{column}_fkey`), the names bulk_load/drop_trajectory_constraints.sql and
--- migrations/legacy_columns.sql rely on.
+-- tables/engine/trajectory_tables.sql rely on.
 
 ALTER TABLE kf_bank
 ADD CONSTRAINT kf_bank_branch_id_fkey

@@ -4,8 +4,9 @@
 # docker-compose `db` service; start it with `docker compose up -d db`).
 #
 # 1. recreate the dedicated database $SCHEMA_DB and create every table in
-#    it, documented by the COMMENT ON statements of sql/tables/** (cargo
-#    example `create_schema`). A fresh database gives the same table order
+#    it, documented by the COMMENT ON statements of sql/migrations/V*.sql
+#    and sql/tables/engine/trajectory_tables.sql (cargo example
+#    `create_schema`). A fresh database gives the same table order
 #    as CI (tbls follows creation order) and leaves the development
 #    database untouched;
 # 2. run tbls — the local binary if installed, its pinned Docker image

@@ -65,7 +65,8 @@ fn reset_database(client: &mut Client) {
             "DROP SCHEMA IF EXISTS fink_fat_staging CASCADE;
              DROP SCHEMA IF EXISTS fink_fat_retired CASCADE;
              DROP TABLE IF EXISTS branch_best_state, kf_state, hypotheses, branch_observations,
-                 kf_bank, branches, archived_trajectories, observations, fink_fat_sync_state
+                 kf_bank, branches, archived_trajectories, observations, fink_fat_sync_state,
+                 refinery_schema_history
                  CASCADE;",
         )
         .expect("reset the test database");
@@ -296,8 +297,8 @@ fn incremental_inserts_are_idempotent() {
     let _database = DATABASE.lock().unwrap_or_else(|e| e.into_inner());
     let mut client = connect();
     reset_database(&mut client);
+    fink_fat_sql::schema::prepare_schema(&mut client).expect("prepare schema");
     let mut transaction = client.transaction().expect("transaction");
-    fink_fat_sql::schema::create_tables(&mut transaction).expect("create tables");
 
     let row = |id: i64| ObservationRow {
         id,

@@ -7,7 +7,8 @@
 # v1.96.1 does not pick this file up on its own.
 #
 # Table and column descriptions are NOT written here: they are the
-# `COMMENT ON` statements of sql/tables/**, the single source of truth.
+# `COMMENT ON` statements of sql/migrations/V*.sql and
+# sql/tables/engine/trajectory_tables.sql, the single source of truth.
 
 name: fink-fat
 desc: Tables written by the fink-fat engine (convert, streaming), fink-fat-explorer and fink-fat submit.
@@ -22,10 +23,13 @@ er:
 format:
   adjust: true
 
-# Leftovers of an interrupted nightly sync, never part of the schema.
+# Leftovers of an interrupted nightly sync, never part of the schema; and
+# refinery's migration history (see the README, "Schema migrations"),
+# tooling rather than fink-fat data.
 exclude:
   - fink_fat_staging.*
   - fink_fat_retired.*
+  - refinery_schema_history
 
 # Every table and column must be documented: `tbls lint` fails otherwise.
 lint:

@@ -1,8 +1,7 @@
 # Squawk configuration for the fink-fat-sql scripts (`sql/**/*.sql`).
 # Run from this directory: `squawk 'sql/**/*.sql'` (quoted: squawk expands the pattern itself).
 
-# Every script runs inside a transaction: `convert` executes them all in its
-# single bulk-load transaction, and `submit`'s standalone
-# `tables/submit/mpc_submissions.sql` is sent as one multi-statement query,
-# which Postgres runs as one implicit transaction.
+# Every script runs inside a transaction: the migrations in refinery's single
+# grouped transaction (`schema::migrate`), the other scripts in `convert`'s
+# bulk-load transaction or one of the nightly sync's transactions.
 assume_in_transaction = true

@@ -73,6 +73,11 @@ memmap2 = "0.9.10"
 # `postgres::types::Json<T>` is the only `ToSql` impl that actually accepts
 # a JSON/JSONB column (see `submit::insert_submission_row`'s doc comment).
 postgres = { version = "0.19.10", features = ["with-chrono-0_4", "with-serde_json-1"] }
+# Versioned schema migrations of the persistent tables (`fink-fat-sql`'s
+# `sql/migrations/V*.sql`), run on the synchronous `postgres::Client`.
+# `default-features = false` drops the `toml` feature, only used by
+# refinery's file-based `Config` / CLI.
+refinery = { version = "0.10.0", default-features = false, features = ["postgres"] }
 rayon = "1.12.0"
 
 

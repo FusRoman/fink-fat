@@ -9,12 +9,6 @@ Tables written by the fink-fat engine (convert, streaming), fink-fat-explorer an
 | Name                                                            | Columns | Comment                                                                                                                                                                                                                                                                       | Type       |
 | --------------------------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
 | [public.observations](public.observations.md)                   | 12      | One row per alert (detection) fed to the tracker: its astrometry, photometry and epoch. Written by fink-fat convert (full reload from a parquet) and by the streaming pipeline (live, idempotent inserts). The only store of past alerts in the database, hence WAL-logged.   | BASE TABLE |
-| [public.branches](public.branches.md)                           | 15      | One row per live branch of the multi-hypothesis tracker: one candidate association history of one tracked object (its lineage), with its score and precomputed observation statistics. Replaced as a whole by every load (convert, or the streaming pipeline's nightly swap). | BASE TABLE |
-| [public.kf_bank](public.kf_bank.md)                             | 4       | One row per branch: summary of its Kalman bank (the mixture of (ρ, ρ̇) hypotheses).                                                                                                                                                                                            | BASE TABLE |
-| [public.branch_observations](public.branch_observations.md)     | 3       | Association history of each branch: one row per observation of its track, in track order.                                                                                                                                                                                     | BASE TABLE |
-| [public.hypotheses](public.hypotheses.md)                       | 5       | One row per hypothesis of each branch's Kalman bank: one (ρ, ρ̇) mode of the Gaussian mixture.                                                                                                                                                                                 | BASE TABLE |
-| [public.kf_state](public.kf_state.md)                           | 21      | One row per hypothesis: its Kalman state in attributable coordinates (α, δ, α̇, δ̇, ρ, ρ̇), covariance and the dynamical family of the implied orbit.                                                                                                                            | BASE TABLE |
-| [public.branch_best_state](public.branch_best_state.md)         | 18      | One row per branch: copy of the state of its best hypothesis (largest log_weight), denormalized so the explorer homepage reads one row per branch instead of probing hypotheses and kf_state. Covariance and Kalman gain are left out.                                        | BASE TABLE |
 | [public.archived_trajectories](public.archived_trajectories.md) | 29      | Closed trajectories: lineages that stopped being propagated (stale purge) but whose association history is kept as a result, with their final MAP Kalman state. Keyed by designation; only ever inserted into between full reloads.                                           | BASE TABLE |
 | [public.fink_fat_sync_state](public.fink_fat_sync_state.md)     | 3       | Single-row record of the last nightly swap of the trajectory tables by the streaming pipeline. Empty when no sync ever completed, or after a Postgres crash (UNLOGGED, like the trajectory tables), which makes the pipeline sync again.                                      | BASE TABLE |
 | [public.orbit_fits](public.orbit_fits.md)                       | 24      | Orbit fits computed by fink-fat-explorer (single lineage on demand, or bulk): Gauss IOD then n-body differential correction (outfit). Append-only history, one row per fit; owned by the explorer, never truncated by a load, no FK to the trajectory tables.                 | BASE TABLE |
@@ -23,6 +17,12 @@ Tables written by the fink-fat engine (convert, streaming), fink-fat-explorer an
 | [public.skybot_bulk_jobs](public.skybot_bulk_jobs.md)           | 11      | One row per attempt of the explorer's bulk Skybot sweep (cross-match of every eligible observation with known objects). A partial unique index allows at most one running job.                                                                                                | BASE TABLE |
 | [public.skybot_obs_status](public.skybot_obs_status.md)         | 6       | One row per observation ever checked by Skybot (bulk sweep or per-lineage search), upserted on obs_id: the single source of truth of Skybot results. Only written on a successful request.                                                                                    | BASE TABLE |
 | [public.mpc_submissions](public.mpc_submissions.md)             | 16      | Every MPC submission attempt made by fink-fat submit (ADES XML), and the source of truth for what was already submitted. Owned by submit and the explorer's submission dashboard, append-only.                                                                                | BASE TABLE |
+| [public.branches](public.branches.md)                           | 15      | One row per live branch of the multi-hypothesis tracker: one candidate association history of one tracked object (its lineage), with its score and precomputed observation statistics. Replaced as a whole by every load (convert, or the streaming pipeline's nightly swap). | BASE TABLE |
+| [public.kf_bank](public.kf_bank.md)                             | 4       | One row per branch: summary of its Kalman bank (the mixture of (ρ, ρ̇) hypotheses).                                                                                                                                                                                            | BASE TABLE |
+| [public.branch_observations](public.branch_observations.md)     | 3       | Association history of each branch: one row per observation of its track, in track order.                                                                                                                                                                                     | BASE TABLE |
+| [public.hypotheses](public.hypotheses.md)                       | 5       | One row per hypothesis of each branch's Kalman bank: one (ρ, ρ̇) mode of the Gaussian mixture.                                                                                                                                                                                 | BASE TABLE |
+| [public.kf_state](public.kf_state.md)                           | 21      | One row per hypothesis: its Kalman state in attributable coordinates (α, δ, α̇, δ̇, ρ, ρ̇), covariance and the dynamical family of the implied orbit.                                                                                                                            | BASE TABLE |
+| [public.branch_best_state](public.branch_best_state.md)         | 18      | One row per branch: copy of the state of its best hypothesis (largest log_weight), denormalized so the explorer homepage reads one row per branch instead of probing hypotheses and kf_state. Covariance and Kalman gain are left out.                                        | BASE TABLE |
 
 ## Relations
 
@@ -55,84 +55,6 @@ erDiagram
   double_precision dec "Declination, rad (ICRF)."
   double_precision dec_err "1-σ declination error, rad."
   double_precision mjd_tt "Exposure mid-point, MJD TT."
-}
-"public.branches" {
-  bigint branch_id "Stable identifier of the branch, never reused (engine id counters are persisted)."
-  bigint lineage_id "Lineage (tracked object) the branch belongs to: sibling branches share it and compete in top-B pruning."
-  bigint parent_branch_id "branch_id of the branch this one was spawned from."
-  bigint ancestor_at_scan_horizon "branch_id of the ancestor anchoring the current N-scan pruning window."
-  bigint ancestor_creation_step "Night step at which that ancestor was created (decides when the N-scan horizon rolls forward)."
-  bigint last_real_update_step "Night step of the last real (non-null) observation update."
-  bigint n_real_updates "Number of real observations the branch associated."
-  double_precision cumulative_llr "Cumulative log-likelihood ratio of the track against the clutter background: the branch score."
-  text lineage_designation "Human-readable, stable identifier of the lineage (shared by its branches); the key used by the explorer pages and by the explorer/submit tables."
-  text designation "Human-readable identifier unique to this branch."
-  double_precision arc_length_days "Time span between the first and last observation of the track, days."
-  bigint n_nights "Number of distinct nights among the track's observations."
-  double_precision median_inter_night_dt_days "Median gap between consecutive observed nights (each night at its earliest observation), days; NULL for a single-night track."
-  bigint n_observations "Number of observations in the track (as COUNT over branch_observations ⋈ observations)."
-  bigint well_sampled_nights "Number of nights with at least two observations of the track."
-}
-"public.kf_bank" {
-  bigint branch_id FK "The branch (FK to branches)."
-  bigint n_steps "Number of observation steps the bank processed (drives the hypothesis-cap schedule)."
-  double_precision absolute_magnitude_estimate "Running estimate of the absolute magnitude H (with H-G phase correction); NULL before the first real observation."
-  integer absolute_magnitude_sample_count "Number of observations folded into absolute_magnitude_estimate."
-}
-"public.branch_observations" {
-  bigint branch_id FK "The branch (FK to branches)."
-  integer position "Rank of the observation in the track, from 0."
-  bigint obs_id FK "The observation (FK to observations.id)."
-}
-"public.hypotheses" {
-  bigint hypothesis_id "Identifier of the row, allocated sequentially at load time (not stable across loads)."
-  bigint branch_id FK "The branch (FK to branches)."
-  bigint local_hyp_id "Stable identifier of the hypothesis within its bank."
-  double_precision log_weight "Log of the hypothesis' posterior weight in the mixture."
-  double_precision__ recent_log_liks "Log-likelihoods of the most recent updates (sliding window), used by the smoothed hypothesis pruning."
-}
-"public.kf_state" {
-  bigint hypothesis_id FK "The hypothesis (FK to hypotheses)."
-  double_precision ra "Right ascension α of the attributable state, rad (equatorial J2000)."
-  double_precision dec "Declination δ of the attributable state, rad."
-  double_precision ra_dot "Rate of α, rad/day."
-  double_precision dec_dot "Rate of δ, rad/day."
-  double_precision rho "Topocentric range ρ, AU."
-  double_precision rho_dot "Topocentric range rate, AU/day."
-  double_precision__ covariance "6×6 state covariance in attributable space (α, δ, α̇, δ̇, ρ, ρ̇), row-major, 36 values."
-  double_precision epoch "Epoch of the state, MJD TT."
-  double_precision r_obs_x "Heliocentric observer position x at epoch, AU (ecliptic J2000)."
-  double_precision r_obs_y "Heliocentric observer position y at epoch, AU (ecliptic J2000)."
-  double_precision r_obs_z "Heliocentric observer position z at epoch, AU (ecliptic J2000)."
-  double_precision v_obs_x "Heliocentric observer velocity x at epoch, AU/day (ecliptic J2000)."
-  double_precision v_obs_y "Heliocentric observer velocity y at epoch, AU/day (ecliptic J2000)."
-  double_precision v_obs_z "Heliocentric observer velocity z at epoch, AU/day (ecliptic J2000)."
-  double_precision universal_anomaly "Last universal anomaly of the two-body propagation (warm start of the next solve); NULL before the first propagation."
-  double_precision__ kalman_gain "6×2 Kalman gain of the last update, row-major, 12 values; NULL before the first update."
-  double_precision nis_ema "Exponential moving average of the normalized innovation squared, driving the fading-memory inflation; NULL before the first update."
-  text dynamic_family "Dynamical family of the two-body orbit implied by the state (e.g. MBA, NEO, Jupiter trojan, Centaur, TNO; Unknown when the state does not convert to a bound orbit)."
-  double_precision semi_major_axis "Semi-major axis of that orbit, AU (0 when Unknown)."
-  double_precision eccentricity "Eccentricity of that orbit (0 when Unknown)."
-}
-"public.branch_best_state" {
-  bigint branch_id FK "The branch (FK to branches)."
-  bigint hypothesis_id "Its best hypothesis (hypotheses.hypothesis_id of the same load)."
-  text dynamic_family "Dynamical family of the two-body orbit implied by the state (e.g. MBA, NEO, Jupiter trojan, Centaur, TNO; Unknown when the state does not convert to a bound orbit)."
-  double_precision semi_major_axis "Semi-major axis of that orbit, AU (0 when Unknown)."
-  double_precision eccentricity "Eccentricity of that orbit (0 when Unknown)."
-  double_precision ra "Right ascension α of the attributable state, rad (equatorial J2000)."
-  double_precision dec "Declination δ of the attributable state, rad."
-  double_precision ra_dot "Rate of α, rad/day."
-  double_precision dec_dot "Rate of δ, rad/day."
-  double_precision rho "Topocentric range ρ, AU."
-  double_precision rho_dot "Topocentric range rate, AU/day."
-  double_precision epoch "Epoch of the state, MJD TT."
-  double_precision r_obs_x "Heliocentric observer position x at epoch, AU (ecliptic J2000)."
-  double_precision r_obs_y "Heliocentric observer position y at epoch, AU (ecliptic J2000)."
-  double_precision r_obs_z "Heliocentric observer position z at epoch, AU (ecliptic J2000)."
-  double_precision v_obs_x "Heliocentric observer velocity x at epoch, AU/day (ecliptic J2000)."
-  double_precision v_obs_y "Heliocentric observer velocity y at epoch, AU/day (ecliptic J2000)."
-  double_precision v_obs_z "Heliocentric observer velocity z at epoch, AU/day (ecliptic J2000)."
 }
 "public.archived_trajectories" {
   text designation "Designation of the branch the trajectory was archived from. Primary key."
@@ -248,6 +170,84 @@ erDiagram
   jsonb verdict_detail "Raw status payload behind the verdict, as JSON."
   jsonb wamo_detail "Per-observation processing status from MPC WAMO, as JSON (production submissions only)."
   timestamp_with_time_zone wamo_checked_at "When wamo_detail was last refreshed."
+}
+"public.branches" {
+  bigint branch_id "Stable identifier of the branch, never reused (engine id counters are persisted)."
+  bigint lineage_id "Lineage (tracked object) the branch belongs to: sibling branches share it and compete in top-B pruning."
+  bigint parent_branch_id "branch_id of the branch this one was spawned from."
+  bigint ancestor_at_scan_horizon "branch_id of the ancestor anchoring the current N-scan pruning window."
+  bigint ancestor_creation_step "Night step at which that ancestor was created (decides when the N-scan horizon rolls forward)."
+  bigint last_real_update_step "Night step of the last real (non-null) observation update."
+  bigint n_real_updates "Number of real observations the branch associated."
+  double_precision cumulative_llr "Cumulative log-likelihood ratio of the track against the clutter background: the branch score."
+  text lineage_designation "Human-readable, stable identifier of the lineage (shared by its branches); the key used by the explorer pages and by the explorer/submit tables."
+  text designation "Human-readable identifier unique to this branch."
+  double_precision arc_length_days "Time span between the first and last observation of the track, days."
+  bigint n_nights "Number of distinct nights among the track's observations."
+  double_precision median_inter_night_dt_days "Median gap between consecutive observed nights (each night at its earliest observation), days; NULL for a single-night track."
+  bigint n_observations "Number of observations in the track (as COUNT over branch_observations ⋈ observations)."
+  bigint well_sampled_nights "Number of nights with at least two observations of the track."
+}
+"public.kf_bank" {
+  bigint branch_id FK "The branch (FK to branches)."
+  bigint n_steps "Number of observation steps the bank processed (drives the hypothesis-cap schedule)."
+  double_precision absolute_magnitude_estimate "Running estimate of the absolute magnitude H (with H-G phase correction); NULL before the first real observation."
+  integer absolute_magnitude_sample_count "Number of observations folded into absolute_magnitude_estimate."
+}
+"public.branch_observations" {
+  bigint branch_id FK "The branch (FK to branches)."
+  integer position "Rank of the observation in the track, from 0."
+  bigint obs_id FK "The observation (FK to observations.id)."
+}
+"public.hypotheses" {
+  bigint hypothesis_id "Identifier of the row, allocated sequentially at load time (not stable across loads)."
+  bigint branch_id FK "The branch (FK to branches)."
+  bigint local_hyp_id "Stable identifier of the hypothesis within its bank."
+  double_precision log_weight "Log of the hypothesis' posterior weight in the mixture."
+  double_precision__ recent_log_liks "Log-likelihoods of the most recent updates (sliding window), used by the smoothed hypothesis pruning."
+}
+"public.kf_state" {
+  bigint hypothesis_id FK "The hypothesis (FK to hypotheses)."
+  double_precision ra "Right ascension α of the attributable state, rad (equatorial J2000)."
+  double_precision dec "Declination δ of the attributable state, rad."
+  double_precision ra_dot "Rate of α, rad/day."
+  double_precision dec_dot "Rate of δ, rad/day."
+  double_precision rho "Topocentric range ρ, AU."
+  double_precision rho_dot "Topocentric range rate, AU/day."
+  double_precision__ covariance "6×6 state covariance in attributable space (α, δ, α̇, δ̇, ρ, ρ̇), row-major, 36 values."
+  double_precision epoch "Epoch of the state, MJD TT."
+  double_precision r_obs_x "Heliocentric observer position x at epoch, AU (ecliptic J2000)."
+  double_precision r_obs_y "Heliocentric observer position y at epoch, AU (ecliptic J2000)."
+  double_precision r_obs_z "Heliocentric observer position z at epoch, AU (ecliptic J2000)."
+  double_precision v_obs_x "Heliocentric observer velocity x at epoch, AU/day (ecliptic J2000)."
+  double_precision v_obs_y "Heliocentric observer velocity y at epoch, AU/day (ecliptic J2000)."
+  double_precision v_obs_z "Heliocentric observer velocity z at epoch, AU/day (ecliptic J2000)."
+  double_precision universal_anomaly "Last universal anomaly of the two-body propagation (warm start of the next solve); NULL before the first propagation."
+  double_precision__ kalman_gain "6×2 Kalman gain of the last update, row-major, 12 values; NULL before the first update."
+  double_precision nis_ema "Exponential moving average of the normalized innovation squared, driving the fading-memory inflation; NULL before the first update."
+  text dynamic_family "Dynamical family of the two-body orbit implied by the state (e.g. MBA, NEO, Jupiter trojan, Centaur, TNO; Unknown when the state does not convert to a bound orbit)."
+  double_precision semi_major_axis "Semi-major axis of that orbit, AU (0 when Unknown)."
+  double_precision eccentricity "Eccentricity of that orbit (0 when Unknown)."
+}
+"public.branch_best_state" {
+  bigint branch_id FK "The branch (FK to branches)."
+  bigint hypothesis_id "Its best hypothesis (hypotheses.hypothesis_id of the same load)."
+  text dynamic_family "Dynamical family of the two-body orbit implied by the state (e.g. MBA, NEO, Jupiter trojan, Centaur, TNO; Unknown when the state does not convert to a bound orbit)."
+  double_precision semi_major_axis "Semi-major axis of that orbit, AU (0 when Unknown)."
+  double_precision eccentricity "Eccentricity of that orbit (0 when Unknown)."
+  double_precision ra "Right ascension α of the attributable state, rad (equatorial J2000)."
+  double_precision dec "Declination δ of the attributable state, rad."
+  double_precision ra_dot "Rate of α, rad/day."
+  double_precision dec_dot "Rate of δ, rad/day."
+  double_precision rho "Topocentric range ρ, AU."
+  double_precision rho_dot "Topocentric range rate, AU/day."
+  double_precision epoch "Epoch of the state, MJD TT."
+  double_precision r_obs_x "Heliocentric observer position x at epoch, AU (ecliptic J2000)."
+  double_precision r_obs_y "Heliocentric observer position y at epoch, AU (ecliptic J2000)."
+  double_precision r_obs_z "Heliocentric observer position z at epoch, AU (ecliptic J2000)."
+  double_precision v_obs_x "Heliocentric observer velocity x at epoch, AU/day (ecliptic J2000)."
+  double_precision v_obs_y "Heliocentric observer velocity y at epoch, AU/day (ecliptic J2000)."
+  double_precision v_obs_z "Heliocentric observer velocity z at epoch, AU/day (ecliptic J2000)."
 }
 ```
 
