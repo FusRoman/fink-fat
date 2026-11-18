@@ -78,7 +78,7 @@ A few principles guide the design:
 
 | Crate | Path | Role |
 | --- | --- | --- |
-| `fink-fat` | [`src/`](src/) | Main CLI: `track`, `convert`, `submit`. |
+| `fink-fat` | [`src/`](src/) | Main CLI: `track`, `stream`, `convert`, `submit`. |
 | `fink-fat-engine` | [`crates/fink-fat-engine/`](crates/fink-fat-engine/README.md) | Core library: configuration, seeding, space-time bucketing, topocentric Kalman filters, branching / MHT, archive, snapshot. |
 | `fink-fat-ades` | [`crates/fink-fat-ades/`](crates/fink-fat-ades/README.md) | Pure ADES / MPC logic: document building, local `submit.xsd` validation, submission and status API parsing, quality tiers. |
 | `fink-fat-sql` | [`crates/fink-fat-sql/`](crates/fink-fat-sql/README.md) | Postgres sink: table schema (`sql/`), row shapes and `COPY` loaders shared by `convert` and the streaming pipeline. |
@@ -93,7 +93,7 @@ Other notable paths:
 | [`tests/`](tests/) | CLI-level integration tests and small ZTF / LSST night samples. |
 | [`test_exp/`](test_exp/) | Python scripts for data preparation (alert Parquet files, ground truth, astrometric error calibration). |
 | `engine_config.best.yaml`, `engine_config_lsst.best.yaml` | Reference engine configurations for ZTF and LSST cadence. |
-| [`dockerfile`](dockerfile), [`docker-compose.yml`](docker-compose.yml) | Postgres, pgAdmin and the explorer (`dev` / `prod` profiles). |
+| [`dockerfile`](dockerfile), [`docker-compose.yml`](docker-compose.yml) | Postgres, pgAdmin, the explorer (`dev` / `prod` profiles) and a test Kafka broker (`kafka` profile). |
 | [`katex-header.html`](katex-header.html) | KaTeX header so rustdoc renders the maths. |
 | [`assets/logo/`](assets/logo/README.md) | Fink-FAT logo: SVG files (light, dark, white) and their design notes. |
 
@@ -145,6 +145,20 @@ Useful flags:
 
 Any configuration key can be overridden from the environment with the
 `FINK_FAT__` prefix and `__` as the nesting separator.
+
+### Stream alerts in real time
+
+```bash
+fink-fat stream --config stream.yaml --logs
+```
+
+`stream` advances the same engine visit by visit as Rubin alerts arrive from
+Fink's Kafka livestream (or from a replayed parquet dump), and can feed the
+explorer's Postgres database as it goes. The configuration and the crash-safety
+guarantees are described in the
+[`fink-fat-stream` README](crates/fink-fat-stream/README.md). To run the whole
+chain on one machine, see
+[Local end-to-end test](#local-end-to-end-test-kafka--postgres--explorer).
 
 ### Export results
 
@@ -239,6 +253,187 @@ A `husky-rs` pre-commit hook runs the SQL linters, fmt, clippy, check and the
 doc build. CI runs the same jobs, plus the Postgres integration test and engine coverage
 (Codecov). Contributor conventions (error handling, collections, doc comment
 format, tests) are listed in [`AGENTS.md`](AGENTS.md).
+
+## Local end-to-end test (Kafka → Postgres → explorer)
+
+This section is for developers who want to run the whole real-time chain on
+their own machine before deploying it: `fink-fat stream` reads Fink's Kafka
+livestream of Rubin alerts, writes to a local Postgres, and the explorer shows
+the new data. Every command runs from the repository root.
+
+```text
+Fink Kafka ──► fink-fat stream ──► Postgres (docker: db) ──► explorer (docker: app-prod, :8081)
+                 │                                             reads the DB; homepage
+                 └─ storage_path: snapshot, archive,            refreshed every minute
+                    night journal, SQL outbox
+```
+
+### Prerequisites
+
+- Docker with the Compose plugin, and the [Requirements](#requirements) above.
+  librdkafka is compiled from source: a C toolchain, `make` and `libssl-dev`
+  are also needed.
+- Fink LSST Kafka access: the bootstrap server, the topic, a consumer
+  `group_id` and, if your account has one, a SASL username and password.
+  Ask the Fink team for them.
+- Memory: the `db` service is tuned for bulk loads (`shared_buffers=8GB` in
+  `docker-compose.yml`). On a small machine, lower it locally (for example
+  `shared_buffers=1GB`) before starting `db`, and do not commit the change.
+
+### 1. Start from a clean state (optional)
+
+```bash
+docker compose down -v        # stops every container; -v also DELETES the database, pgAdmin and cache volumes
+rm -rf local_e2e/storage      # the tracker's local state, if a previous test left one
+```
+
+Skip `-v` to keep an existing database. A database previously loaded by
+`fink-fat convert` works, but its trajectory tables are replaced at the
+stream's first night close. Do not run `convert` against the same database
+while a stream test is running: `convert` truncates the tables the stream
+writes to.
+
+### 2. Start Postgres
+
+```bash
+docker compose up -d db
+docker compose exec db pg_isready -U finkfat -d finkfat_test   # wait for "accepting connections"
+```
+
+There is no migration step to run by hand. `fink-fat stream` applies the
+refinery migrations (`crates/fink-fat-sql/sql/migrations/`) and creates the
+trajectory tables when it first connects.
+
+### 3. Build `fink-fat`
+
+```bash
+cargo build --release -p fink-fat
+```
+
+### 4. Write the local configuration
+
+Use a dedicated directory, so the test never touches the reference configs or
+storage (keep it out of git, for example with
+`echo local_e2e/ >> .git/info/exclude`):
+
+```bash
+mkdir -p local_e2e
+sed 's|^storage_path:.*|storage_path: ./local_e2e/storage|' \
+  engine_config_lsst.best.yaml > local_e2e/engine_config.yaml
+
+cat > local_e2e/stream.yaml <<'YAML'
+engine_config: local_e2e/engine_config.yaml
+ingest:
+  error_model: LSST
+source:
+  kind: kafka
+  bootstrap_servers: <host:port given by Fink>
+  topics: [<fink topic>]          # e.g. fink_is_solar_system_lsst
+  group_id: <your group>_e2e_1    # change the suffix to start over
+  # sasl: { username: <user> }    # only if your account has a password
+  # Start at the live edge instead of the retained backlog:
+  # extra: { auto.offset.reset: latest }
+database: {}                      # URL from FINK_FAT_DATABASE_URL
+YAML
+```
+
+- `database: {}` turns the Postgres sink on. Without a `database:` section,
+  the stream runs without a database.
+- A new `group_id` starts at the **oldest** retained alert (backlog
+  catch-up). This is the fastest way to see the explorer change: the backlog
+  holds several nights, and each night closes as soon as an alert of the
+  next one arrives.
+
+### 5. Run the stream
+
+```bash
+export FINK_FAT_DATABASE_URL=postgres://finkfat:finkfat@localhost:5432/finkfat_test
+# export FINK_FAT_KAFKA_PASSWORD=...   # only with `sasl:`
+
+./target/release/fink-fat stream --config local_e2e/stream.yaml \
+  --logs --log-target stream=debug
+```
+
+The first start downloads the JPL ephemeris, the UT1 data and the MPC
+observatory list. With `--logs`, the logs are also written to
+`local_e2e/storage/fink_fat.<date>.log`.
+
+### 6. Start the explorer
+
+In a second terminal, with the **same engine config** as the stream:
+
+```bash
+ENGINE_CONFIG=./local_e2e/engine_config.yaml docker compose --profile prod up -d --build
+docker compose logs -f app-prod     # wait for "homepage snapshot v1 built in X s"
+```
+
+Open http://localhost:8081. The first build of the image takes several
+minutes. The `dev` profile (http://localhost:8080, hot reload) works too, but
+it reads its engine config from `crates/fink-fat-explorer/.env`, and it is
+slower: see the [explorer README](crates/fink-fat-explorer/README.md).
+
+### 7. Check each stage
+
+| Stage | Where to look | Expected |
+| --- | --- | --- |
+| Kafka | stream logs | `caught up with the Kafka stream` once the backlog is consumed |
+| Migrations | `SELECT version, name FROM refinery_schema_history;` | `V1 baseline` |
+| Alerts → `observations` | `SELECT count(*) FROM observations;` | grows after every batch |
+| Night close → trajectory tables | `SELECT * FROM fink_fat_sync_state;` and `SELECT count(*) FROM branches;` | a new `last_synced_night` at every night close |
+| Explorer | app-prod logs, homepage | a new `homepage snapshot vN` within a minute of each night close (or **Tools → Refresh**) |
+
+Run the queries with:
+
+```bash
+docker compose exec db psql -U finkfat -d finkfat_test -c "SELECT * FROM fink_fat_sync_state;"
+```
+
+pgAdmin is also available on http://localhost:5050 (start it with
+`docker compose up -d pgadmin`).
+
+**When does the explorer change?** Alerts reach `observations` with every
+batch. The trajectory tables, which the explorer's homepage reads, only
+change when a night closes. During a backlog catch-up, nights close within
+minutes. At the live edge, a night closes at the next morning twilight in
+Chile (plus a grace period), or when the first alert of the next night
+arrives. Until the first close, the homepage is empty.
+
+### 8. Test the failure cases (optional)
+
+- **Restart**: `Ctrl-C` once stops gracefully. It flushes the SQL outbox and
+  keeps the open night in its journal. Run step 5 again: the stream resumes
+  at its committed Kafka offsets and replays the journal. A second `Ctrl-C`
+  exits at once.
+- **Database outage**: `docker compose stop db`, let the stream run (it logs
+  the failures and keeps tracking), then `docker compose start db`. The
+  outbox (`sql_outbox.rkyvlog`) catches up with a backoff of up to 15 min. A
+  missed night swap is caught up at the next close or the next start.
+
+### 9. Stop and clean up
+
+```bash
+# Ctrl-C in the stream terminal
+docker compose --profile prod down   # add -v to also delete the database
+rm -rf local_e2e/storage             # to start the tracker again from scratch
+```
+
+`UNLOGGED` tables (the trajectory tables and `fink_fat_sync_state`) are
+emptied by Postgres after an unclean shutdown. At its next start, the stream
+sees that the database is behind and publishes its snapshot again.
+
+### Without Fink access: Kafka integration tests
+
+The `kafka` Compose profile starts a local Redpanda broker. The integration
+tests use it to check the Kafka source against a replay (several partitions,
+resume at the committed offsets, real Fink alerts), and `tests/stream_sql.rs`
+checks the Postgres sink:
+
+```bash
+docker compose up -d db
+docker compose --profile kafka up -d kafka
+KAFKA_BOOTSTRAP=localhost:19092 cargo test -p fink-fat --test stream_kafka
+cargo test -p fink-fat --test stream_sql
+```
 
 ## Documentation
 
