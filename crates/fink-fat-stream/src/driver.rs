@@ -110,6 +110,7 @@
 use std::{
     fs::{File, OpenOptions},
     io::{BufWriter, Write},
+    sync::atomic::{AtomicBool, Ordering},
     time::Instant,
 };
 
@@ -452,6 +453,53 @@ impl<'ctx, 'cfg, S: AlertSource> Driver<'ctx, 'cfg, S> {
     pub fn run(mut self) -> Result<DriverStats> {
         while self.step()? {}
         self.finish()
+    }
+
+    /// [`Self::step`] until `stop` is raised — by a SIGTERM / SIGINT handler
+    /// — then [`Self::shutdown`]; or until the source is exhausted, then
+    /// [`Self::finish`].
+    ///
+    /// `stop` is checked between steps, so the driver stops within one
+    /// step: a source's batch timeout plus the batch's processing (a whole
+    /// night close, if one was due).
+    ///
+    /// # Arguments
+    /// * `stop` – Raised to request a graceful stop.
+    ///
+    /// # Returns
+    /// The final counters.
+    ///
+    /// # Errors
+    /// As [`Self::step`], [`Self::finish`] and [`Self::shutdown`].
+    pub fn run_until(mut self, stop: &AtomicBool) -> Result<DriverStats> {
+        while !stop.load(Ordering::Relaxed) {
+            if !self.step()? {
+                return self.finish();
+            }
+        }
+        self.shutdown()
+    }
+
+    /// Graceful stop **without** closing the open night: the night is not
+    /// over, only this process is. Everything acknowledged is already in the
+    /// journal (fsynced at every step), so the next [`Self::new`] resumes the
+    /// night from it; this only forces a last flush of the SQL outbox, so
+    /// the database is up to date while the process is down.
+    ///
+    /// # Returns
+    /// The final counters.
+    ///
+    /// # Errors
+    /// A local I/O error on the SQL outbox.
+    pub fn shutdown(mut self) -> Result<DriverStats> {
+        tracing::info!("stopping: the open night stays in the journal");
+        self.flush_sink(true)?;
+        Ok(self.stats)
+    }
+
+    /// The alert source.
+    pub fn source(&self) -> &S {
+        &self.source
     }
 
     /// End of stream: close the open night, if any, with

@@ -78,6 +78,22 @@ postgres = { version = "0.19.10", features = ["with-chrono-0_4", "with-serde_jso
 # `default-features = false` drops the `toml` feature, only used by
 # refinery's file-based `Config` / CLI.
 refinery = { version = "0.10.0", default-features = false, features = ["postgres"] }
+# Live alert stream of `fink-fat stream` (Fink's Kafka livestream), behind
+# `fink-fat-stream`'s `kafka` feature. librdkafka is built from its bundled
+# sources with its own `./configure` (needs a C toolchain, make and the
+# OpenSSL headers) — NOT `cmake-build`: librdkafka 2.12's CMake build
+# includes <curl/curl.h> whenever SSL is on, even with curl disabled
+# (`#cmakedefine01 WITH_OAUTHBEARER_OIDC` + `#ifdef`). `ssl`: SCRAM
+# authentication, which Fink uses, requires OpenSSL in librdkafka.
+# `default-features = false`: drops the `tokio` integration, the source is
+# synchronous (`BaseConsumer`).
+rdkafka = { version = "0.39.0", default-features = false, features = ["libz", "ssl"] }
+# Fink alerts are Avro: the writer schema in the message key, a schemaless
+# datum in the value.
+apache-avro = "0.23.0"
+# SIGTERM / SIGINT → graceful stop of `fink-fat stream` (an AtomicBool flag,
+# no async runtime).
+signal-hook = "0.4.6"
 rayon = "1.12.0"
 
 
@@ -90,7 +106,8 @@ tracing-appender = { workspace = true }
 fink-fat-engine = { workspace = true }
 fink-fat-ades = { workspace = true }
 fink-fat-sql = { workspace = true }
-fink-fat-stream = { workspace = true }
+fink-fat-stream = { workspace = true, features = ["kafka"] }
+signal-hook = { workspace = true }
 clap = { workspace = true }
 photom = { workspace = true, features = ["polars"] }
 polars = { workspace = true }
@@ -113,6 +130,11 @@ tempfile = { workspace = true }
 fink-fat-eval = { path = "crates/fink-fat-eval" }
 # `lsst_alert`: `tests/stream_resume.rs` builds synthetic Rubin alerts.
 photom = { workspace = true, features = ["polars", "lsst_alert"] }
+# `tests/stream_kafka.rs` publishes Fink-encoded alerts to a local broker.
+rdkafka = { workspace = true }
+apache-avro = { workspace = true }
+# Waits on rdkafka's `AdminClient` futures (multi-partition test topics).
+futures-executor = "0.3.34"
 husky-rs = "0.4.0"
 
 [profile.release]

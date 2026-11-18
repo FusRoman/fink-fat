@@ -15,7 +15,8 @@ description = "Streaming driver of the Fink-FAT engine: advances the tracker vis
 [dependencies]
 fink-fat-engine = { workspace = true }
 fink-fat-sql = { workspace = true }
-# Synchronous client, like `fink-fat-sql` (no tokio before the Kafka phase).
+# Synchronous client, like `fink-fat-sql`: the whole driver is synchronous
+# (the Kafka source polls with a timeout, no async runtime).
 postgres = { workspace = true }
 photom = { workspace = true, features = ["lsst_alert", "serde", "polars"] }
 polars = { workspace = true }
@@ -25,6 +26,14 @@ serde_yaml = { workspace = true }
 camino = { workspace = true, features = ["serde1"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+rdkafka = { workspace = true, optional = true }
+apache-avro = { workspace = true, optional = true }
+
+[features]
+# The Kafka source (`source::kafka`): builds librdkafka from source (its
+# `./configure`, a C toolchain, OpenSSL headers), hence opt-in — the replay source, the driver and their tests
+# build without it. Enabled by the `fink-fat` binary.
+kafka = ["dep:rdkafka", "dep:apache-avro"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

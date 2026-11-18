@@ -13,11 +13,18 @@
 //!   twilight_grace: "30 min"
 //!   rollover_grace: "30 min"
 //!   site: { lon: "-70.749417 deg", lat: "-30.244639 deg" }
-//! replay:
+//! source:                                         # where alerts come from, see SourceConfig
+//!   kind: replay                                  # a parquet dump replayed as if live…
 //!   path: alerts.parquet
 //!   latency: "3 min"
 //!   batch_size: 1000
 //!   columns: { dia_source_id: diaSourceId }      # dump column names, see ColumnMap
+//! # source:                                       # …or Fink's Kafka livestream, see KafkaConfig
+//! #   kind: kafka
+//! #   bootstrap_servers: host:port
+//! #   topics: [fink_sso_candidate_lsst]
+//! #   group_id: my_group
+//! #   sasl: { username: me }                      # password: env FINK_FAT_KAFKA_PASSWORD
 //! database:                                       # optional: no section, no Postgres
 //!   url: postgres://engine@host/finkfat           # or env FINK_FAT_DATABASE_URL (keeps the password out)
 //!   connect_timeout: "10 sec"
@@ -27,7 +34,7 @@
 //!   swap_retry_delay: "10 sec"
 //! ```
 //!
-//! Every section but `engine_config` and `replay` is optional. Paths are
+//! Every section but `engine_config` and `source` is optional. Paths are
 //! taken as given (relative to the working directory). Durations and angles
 //! accept units, through the engine's
 //! [`units`](fink_fat_engine::engine_config::units) helpers.
@@ -45,7 +52,7 @@ use serde::Deserialize;
 use crate::{
     clock::ClockParams,
     error::{Result, StreamError},
-    source::ReplayConfig,
+    source::SourceConfig,
 };
 
 /// `ingest:` section — what turns an alert into a tracked observation.
@@ -95,7 +102,7 @@ pub const DATABASE_URL_ENV: &str = "FINK_FAT_DATABASE_URL";
 
 /// Seconds-scale durations are configured in days, like every engine
 /// duration (units accepted, e.g. `"10 sec"`); this converts them.
-fn days_to_duration(days: f64) -> Duration {
+pub(crate) fn days_to_duration(days: f64) -> Duration {
     Duration::from_secs_f64((days * 86_400.0).max(0.0))
 }
 
@@ -208,8 +215,8 @@ pub struct StreamConfig {
     /// Night clock.
     #[serde(default)]
     pub clock: ClockParams,
-    /// Replay source.
-    pub replay: ReplayConfig,
+    /// Alert source.
+    pub source: SourceConfig,
     /// Postgres sink; `None` (no `database:` section) runs without one.
     #[serde(default)]
     pub database: Option<DatabaseConfig>,
@@ -272,7 +279,7 @@ mod tests {
     #[test]
     fn a_minimal_configuration_takes_every_default() {
         let config = StreamConfig::from_yaml(
-            "engine_config: engine.yaml\nreplay:\n  path: dump.parquet\n",
+            "engine_config: engine.yaml\nsource:\n  kind: replay\n  path: dump.parquet\n",
             Utf8Path::new("stream.yaml"),
         )
         .unwrap();
@@ -280,7 +287,11 @@ mod tests {
         assert_eq!(config.ingest, IngestConfig::default());
         assert_eq!(config.assembler, AssemblerConfig::default());
         assert_eq!(config.clock, ClockParams::default());
-        assert_eq!(config.replay.path, "dump.parquet");
+        assert!(
+            matches!(&config.source, SourceConfig::Replay(replay) if replay.path == "dump.parquet"),
+            "{:?}",
+            config.source
+        );
     }
 
     #[test]
@@ -289,7 +300,7 @@ mod tests {
             "engine_config: e.yaml\n\
              ingest:\n  error_model: VFCC17\n  quality_cuts:\n    min_snr: 5.0\n\
              assembler:\n  visit_idle_timeout: \"2 min\"\n\
-             replay:\n  path: d.parquet\n",
+             source:\n  kind: replay\n  path: d.parquet\n",
             Utf8Path::new("stream.yaml"),
         )
         .unwrap();
@@ -300,7 +311,7 @@ mod tests {
 
     #[test]
     fn the_database_section_is_optional_and_defaults() {
-        let base = "engine_config: e.yaml\nreplay:\n  path: d.parquet\n";
+        let base = "engine_config: e.yaml\nsource:\n  kind: replay\n  path: d.parquet\n";
         let config = StreamConfig::from_yaml(base, Utf8Path::new("s.yaml")).unwrap();
         assert_eq!(config.database, None);
 
@@ -329,9 +340,41 @@ mod tests {
     }
 
     #[test]
+    fn a_kafka_source_parses_with_its_defaults() {
+        let config = StreamConfig::from_yaml(
+            "engine_config: e.yaml\n\
+             source:\n  kind: kafka\n  bootstrap_servers: localhost:19092\n  \
+             topics: [alerts]\n  group_id: g\n  batch_timeout: \"2 sec\"\n",
+            Utf8Path::new("s.yaml"),
+        )
+        .unwrap();
+        let SourceConfig::Kafka(kafka) = config.source else {
+            panic!("expected a Kafka source");
+        };
+        assert_eq!(kafka.topics, ["alerts"]);
+        assert!((kafka.batch_timeout - 2.0 / 86_400.0).abs() < 1e-15);
+        assert_eq!(kafka.layout.record, "diaSource");
+    }
+
+    #[test]
+    fn unknown_source_kinds_and_source_fields_are_refused() {
+        for source in [
+            "source:\n  kind: http\n  path: d.parquet\n",
+            "source:\n  kind: replay\n  path: d.parquet\n  typo: 1\n",
+            "source:\n  kind: kafka\n  bootstrap_servers: b\n  topics: [t]\n  group_id: g\n  typo: 1\n",
+        ] {
+            let yaml = format!("engine_config: e.yaml\n{source}");
+            assert!(
+                StreamConfig::from_yaml(&yaml, Utf8Path::new("s.yaml")).is_err(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
     fn unknown_fields_are_refused() {
         let err = StreamConfig::from_yaml(
-            "engine_config: e.yaml\nreplay:\n  path: d.parquet\ntypo: 1\n",
+            "engine_config: e.yaml\nsource:\n  kind: replay\n  path: d.parquet\ntypo: 1\n",
             Utf8Path::new("stream.yaml"),
         )
         .unwrap_err();

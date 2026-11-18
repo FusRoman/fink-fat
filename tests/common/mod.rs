@@ -6,6 +6,7 @@
 // Each test crate includes this module and uses a different subset of it.
 #![allow(dead_code)]
 
+pub mod kafka;
 pub mod stream;
 
 use std::fs::File;

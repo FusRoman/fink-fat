@@ -30,6 +30,31 @@ services:
       - "-c"
       - "checkpoint_timeout=30min"
 
+  # Local Kafka-compatible broker (Redpanda, single node) for the Kafka
+  # source tests of `fink-fat stream` (`tests/stream_kafka.rs`), behind its
+  # own profile so it never starts by accident:
+  #   docker compose --profile kafka up -d kafka
+  #   KAFKA_BOOTSTRAP=localhost:19092 cargo test -p fink-fat --test stream_kafka
+  # `dev-container` mode: no fsync, topics auto-created on first produce
+  # (one partition) — a test broker, holding nothing worth keeping.
+  kafka:
+    profiles: ["kafka"]
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+    container_name: fink-fat-kafka
+    command:
+      - redpanda
+      - start
+      - --mode
+      - dev-container
+      - --smp
+      - "1"
+      - --kafka-addr
+      - internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr
+      - internal://kafka:9092,external://localhost:19092
+    ports:
+      - "19092:19092"
+
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: fink-fat-pgadmin

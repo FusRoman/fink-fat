@@ -6,7 +6,7 @@
 //!
 //! ```text
 //! AlertSource ──► ingest ──► NightJournal ──► VisitAssembler ──► LiveNight
-//!  (replay)      (cuts,        (append-only,     (complete           (NightSession
+//! (Kafka, replay) (cuts,       (append-only,     (complete           (NightSession
 //!                 convert,      fsync before      visits, in          + night's
 //!                 dedup)        ack)              seqNum order)       ObsDataset)
 //!                                                                         │
@@ -22,13 +22,16 @@
 //! | [`clock`] | [`NightClock`]: when a night closes; analytic twilight | yes |
 //! | [`night`] | [`LiveNight`]: the engine's `NightSession` + the night's dataset | — |
 //! | [`journal`] | [`NightJournal`]: crash recovery of the open night | I/O |
-//! | [`source`] | [`AlertSource`] trait, [`ReplaySource`] (parquet dump) | I/O |
+//! | [`source`] | [`AlertSource`] trait; Fink's Kafka livestream (`kafka` feature), [`ReplaySource`] (parquet dump) | I/O |
 //! | [`sink`] | [`SqlSink`](sink::SqlSink): Postgres writes through a durable outbox, never blocking | I/O |
 //! | [`driver`] | [`Driver`]: the loop tying everything together | I/O |
 //! | [`config`] | [`StreamConfig`]: YAML configuration | — |
 //!
-//! The driver is synchronous; the Kafka consumer (and `tokio`) will come
-//! as a second [`AlertSource`].
+//! The driver is synchronous, the Kafka source included (a librdkafka
+//! consumer polled with a timeout; no async runtime). The Kafka source needs
+//! the `kafka` feature (librdkafka is built from source), which the
+//! `fink-fat` binary enables; without it the crate builds the replay source
+//! only.
 //!
 //! This crate is a library only: the `fink-fat` binary assembles the
 //! command line (`fink-fat stream`) from it.
@@ -54,4 +57,4 @@ pub use error::{Result, StreamError};
 pub use journal::NightJournal;
 pub use night::LiveNight;
 pub use record::AlertRecord;
-pub use source::{AlertSource, ReplaySource};
+pub use source::{AlertSource, ReplaySource, SourceConfig};

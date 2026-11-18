@@ -122,8 +122,10 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Install system dependencies
-        # Note: Needed for plotters in the fink-fat-eval crate
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
+        # libfontconfig1-dev: plotters (fink-fat-eval). libssl-dev: librdkafka,
+        # built from source with SSL for the `kafka` feature of fink-fat-stream
+        # (enabled by the `fink-fat` binary).
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libssl-dev
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
@@ -154,8 +156,10 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Install system dependencies
-        # Note: Needed for plotters in the fink-fat-eval crate
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
+        # libfontconfig1-dev: plotters (fink-fat-eval). libssl-dev: librdkafka,
+        # built from source with SSL for the `kafka` feature of fink-fat-stream
+        # (enabled by the `fink-fat` binary).
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libssl-dev
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
@@ -182,8 +186,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install system dependencies
-        # Note: Needed for plotters in the fink-fat-eval crate
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
+        # libfontconfig1-dev: plotters (fink-fat-eval). libssl-dev: librdkafka,
+        # built from source with SSL for the `kafka` feature of fink-fat-stream
+        # (enabled by the `fink-fat` binary).
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libssl-dev
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
@@ -208,9 +214,11 @@ jobs:
       matrix:
         include:
           # Root CLI. Includes the black-box `tests/sql_convert.rs`, which
-          # needs the Postgres service below.
+          # needs the Postgres service below, and `tests/stream_kafka.rs`,
+          # which needs the Kafka broker started by `kafka: true`.
           - crate: fink-fat
             cargo_flags: -p fink-fat --all-features
+            kafka: true
           - crate: fink-fat-engine
             cargo_flags: -p fink-fat-engine --all-features
           - crate: fink-fat-sql
@@ -254,8 +262,10 @@ jobs:
           components: llvm-tools-preview
 
       - name: Install system dependencies
-        # Note: Needed for plotters in the fink-fat-eval crate
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
+        # libfontconfig1-dev: plotters (fink-fat-eval). libssl-dev: librdkafka,
+        # built from source with SSL for the `kafka` feature of fink-fat-stream
+        # (enabled by the `fink-fat` binary).
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libssl-dev
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
@@ -266,12 +276,32 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
+      - name: Start Kafka broker (Redpanda)
+        # The `kafka` service of `docker-compose.yml` (not a job `services:`
+        # container: Redpanda needs its command line, which `services:`
+        # cannot pass). `KAFKA_BOOTSTRAP` is exported only here: without it
+        # the tests of `tests/stream_kafka.rs` would be skipped, which
+        # `FINK_FAT_REQUIRE_KAFKA` (test step) turns into a failure.
+        if: matrix.kafka
+        run: |
+          docker compose --profile kafka up -d kafka
+          timeout 120 sh -c 'until docker exec fink-fat-kafka rpk cluster health | grep -Eq "Healthy:[[:space:]]+true"; do sleep 2; done'
+          echo "KAFKA_BOOTSTRAP=localhost:19092" >> "$GITHUB_ENV"
+
       - name: Run tests with coverage (lcov)
         env:
           DATABASE_URL: postgres://finkfat:finkfat@localhost:5432/finkfat_test
           RAYON_NUM_THREADS: 2
           RUST_TEST_THREADS: 1
+          # Set from the matrix, independently of the broker step: if that
+          # step ever stops exporting `KAFKA_BOOTSTRAP`, the Kafka tests fail
+          # instead of passing without running (see `tests/common/kafka.rs`).
+          FINK_FAT_REQUIRE_KAFKA: ${{ matrix.kafka && '1' || '0' }}
         run: cargo llvm-cov ${{ matrix.cargo_flags }} --lcov --output-path lcov.info
+
+      - name: Kafka broker logs
+        if: failure() && matrix.kafka
+        run: docker logs fink-fat-kafka
 
       - name: Upload to Codecov
         uses: codecov/codecov-action@v4

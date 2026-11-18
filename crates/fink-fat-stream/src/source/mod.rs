@@ -1,12 +1,42 @@
-//! Where alerts come from: the [`AlertSource`] trait and its replay
-//! implementation ([`ReplaySource`]). The Kafka consumer of phase 6 will be
-//! a second implementation.
+//! Where alerts come from: the [`AlertSource`] trait and its two
+//! implementations — [`ReplaySource`], a parquet dump replayed as if live
+//! (tests, validation), and the Kafka consumer of Fink's livestream
+//! (`kafka::KafkaSource`, `kafka` feature), the production source.
 
+pub mod columns;
+pub mod kafka;
 pub mod replay;
 
-pub use replay::{ColumnMap, ReplayConfig, ReplaySource};
+pub use columns::ColumnMap;
+pub use kafka::KafkaConfig;
+#[cfg(feature = "kafka")]
+pub use kafka::KafkaSource;
+pub use replay::{ReplayConfig, ReplaySource};
+
+use serde::Deserialize;
 
 use crate::{error::Result, record::AlertRecord};
+
+/// `source:` section of the stream configuration: which [`AlertSource`]
+/// the driver reads, selected by `kind`.
+///
+/// ```yaml
+/// source:
+///   kind: replay          # or: kafka (see KafkaConfig)
+///   path: alerts.parquet
+/// ```
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "read once from the configuration file and consumed at start-up"
+)]
+pub enum SourceConfig {
+    /// A parquet dump replayed as if live ([`ReplayConfig`]).
+    Replay(ReplayConfig),
+    /// Fink's Kafka livestream ([`KafkaConfig`]).
+    Kafka(KafkaConfig),
+}
 
 /// A stream of alerts delivered in batches, *at least once*.
 ///
@@ -23,10 +53,13 @@ use crate::{error::Result, record::AlertRecord};
 /// * **At least once**: a batch that was not acknowledged may be delivered
 ///   again after a restart — the driver deduplicates by `diaSourceId` and
 ///   drops alerts of closed nights. Never *lose* an unacknowledged alert.
-/// * **Order**: alerts should come roughly in arrival order. Out-of-order
-///   alerts are tolerated (the clock takes the maximum arrival seen), but an
-///   alert arriving after its visit was declared complete only feeds the
-///   night's discovery, not the visit's association.
+/// * **Order**: alerts should come in arrival order. The driver's clock is
+///   the latest arrival seen, so an alert delivered well after later ones
+///   finds its visit already advanced (it then only feeds the night's
+///   discovery, not the visit's association) or its night already closed
+///   (it is dropped as late). A source reading several queues must merge
+///   them: the Kafka source does, across the topic's partitions (see
+///   `kafka::watermark`, `kafka` feature).
 /// * **`arrival_mjd`** of each record must be on UTC (see
 ///   [`crate::record`]): it drives visit completion and night closing.
 /// * **`caught_up`** must only be `true` when no backlog is pending:

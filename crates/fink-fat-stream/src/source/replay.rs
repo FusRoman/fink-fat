@@ -32,60 +32,12 @@ use fink_fat_engine::engine_config::units::de_time_days;
 use polars::prelude::*;
 use serde::Deserialize;
 
+pub use super::columns::ColumnMap;
 use crate::{
     error::Result,
     record::{AlertRecord, mjd_tai_to_utc},
     source::AlertSource,
 };
-
-/// Names of the dump's columns holding each [`AlertRecord`] field (the
-/// `replay.columns` section of the configuration; unset fields keep the
-/// Rubin name).
-///
-/// Only flat columns are supported: a dump nesting the `DiaSource` in a
-/// struct column must be flattened first.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct ColumnMap {
-    /// `diaSourceId` (integer).
-    pub dia_source_id: String,
-    /// `visit` (integer).
-    pub visit: String,
-    /// `midpointMjdTai` (MJD TAI).
-    pub midpoint_mjd_tai: String,
-    /// `ra` (degrees).
-    pub ra: String,
-    /// `dec` (degrees).
-    pub dec: String,
-    /// `raErr` (on-sky, degrees).
-    pub ra_err: String,
-    /// `decErr` (degrees).
-    pub dec_err: String,
-    /// `psfFlux` (nJy).
-    pub psf_flux: String,
-    /// `psfFluxErr` (nJy).
-    pub psf_flux_err: String,
-    /// `band` (string).
-    pub band: String,
-}
-
-impl Default for ColumnMap {
-    /// The Rubin `DiaSource` column names.
-    fn default() -> Self {
-        Self {
-            dia_source_id: "diaSourceId".into(),
-            visit: "visit".into(),
-            midpoint_mjd_tai: "midpointMjdTai".into(),
-            ra: "ra".into(),
-            dec: "dec".into(),
-            ra_err: "raErr".into(),
-            dec_err: "decErr".into(),
-            psf_flux: "psfFlux".into(),
-            psf_flux_err: "psfFluxErr".into(),
-            band: "band".into(),
-        }
-    }
-}
 
 /// Internal names the mapped columns are renamed to before extraction, so
 /// that [`read_records`] reads fixed names whatever the dump's.
@@ -142,7 +94,7 @@ fn default_batch_size() -> usize {
     1_000
 }
 
-/// `replay:` section of the stream configuration.
+/// `source:` section of the stream configuration with `kind: replay`.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReplayConfig {

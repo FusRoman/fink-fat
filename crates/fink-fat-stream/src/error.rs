@@ -57,6 +57,12 @@ pub enum StreamError {
         message: String,
     },
 
+    /// The alert source failed beyond recovery: the Kafka consumer could
+    /// not be created or subscribed. (Transient broker trouble is not an
+    /// error: librdkafka retries, and the source logs and goes on.)
+    #[error("alert source: {0}")]
+    Source(String),
+
     /// The logging subscriber could not be installed.
     #[error(transparent)]
     Logging(#[from] LogInitError),

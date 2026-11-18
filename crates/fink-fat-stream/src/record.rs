@@ -18,7 +18,8 @@
 //!
 //! The clock is on UTC because twilight and the 12:00 UTC rollover are civil
 //! times; [`mjd_tai_to_utc`] bridges a TAI mid-point to it (the replay uses it
-//! to simulate arrivals).
+//! to simulate arrivals), and [`unix_ms_to_mjd_utc`] turns a Kafka message
+//! timestamp or the system clock into it.
 
 use photom::NightId;
 use photom::io::lsst_alert::{
@@ -36,6 +37,25 @@ pub const TAI_MINUS_UTC_DAYS: f64 = 37.0 / 86_400.0;
 /// second table, which no Rubin alert does.
 pub fn mjd_tai_to_utc(mjd_tai: f64) -> f64 {
     mjd_tai - TAI_MINUS_UTC_DAYS
+}
+
+/// MJD of the Unix epoch, 1970-01-01T00:00:00 UTC.
+pub const UNIX_EPOCH_MJD: f64 = 40_587.0;
+
+/// Milliseconds in a day.
+const MS_PER_DAY: f64 = 86_400_000.0;
+
+/// Convert a Unix timestamp in milliseconds (a Kafka message timestamp, or
+/// the system clock) to an MJD on the UTC scale.
+///
+/// Unix time counts UTC days of exactly 86 400 s (leap seconds are not
+/// counted), the same convention as an MJD UTC, so the conversion is a
+/// plain offset and scale.
+///
+/// # Arguments
+/// * `unix_ms` – Milliseconds since the Unix epoch.
+pub fn unix_ms_to_mjd_utc(unix_ms: i64) -> f64 {
+    UNIX_EPOCH_MJD + unix_ms as f64 / MS_PER_DAY
 }
 
 /// One alert's `DiaSource` fields, owned, in Rubin units (see
@@ -163,5 +183,14 @@ pub(crate) mod tests {
     #[test]
     fn utc_is_37_seconds_behind_tai() {
         assert!((mjd_tai_to_utc(1.0) - (1.0 - 37.0 / 86_400.0)).abs() < 1e-15);
+    }
+
+    #[test]
+    fn unix_milliseconds_map_to_mjd_utc() {
+        assert_eq!(unix_ms_to_mjd_utc(0), 40_587.0);
+        // 2026-11-11T00:00:00Z = 1 794 355 200 s since the epoch = MJD 61355.
+        assert_eq!(unix_ms_to_mjd_utc(1_794_355_200_000), 61_355.0);
+        // Half a day later.
+        assert_eq!(unix_ms_to_mjd_utc(1_794_355_200_000 + 43_200_000), 61_355.5);
     }
 }
