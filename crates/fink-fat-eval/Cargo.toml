@@ -21,8 +21,6 @@ tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
 ahash = { workspace = true }
 serde = { workspace = true }
-serde_yaml = { workspace = true }
-ndarray = { workspace = true }
 photom = { workspace = true, features = ["polars"] }
 outfit = { workspace = true }
 polars = { workspace = true }

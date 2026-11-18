@@ -6,7 +6,7 @@ edition = "2021"
 
 [dependencies]
 dioxus = { version = "0.7.1", features = ["router", "fullstack"] }
-dotenvy = "0.15.7"
+dotenvy = { version = "0.15.7", optional = true }
 hifitime = { version = "4.3", default-features = false, features = ["std"] }
 plotly = "0.14.1"
 serde.workspace = true
@@ -96,6 +96,7 @@ mobile = ["dioxus/mobile"]
 server = [
     "dioxus/server",
     "dep:sqlx",
+    "dep:dotenvy",
     "dep:tokio",
     "dep:base64",
     "dep:camino",
