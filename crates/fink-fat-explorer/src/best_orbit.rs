@@ -4,7 +4,7 @@
 //! n-body (`orbit_fits.fit_method = 'differential_correction'`) fit, else an
 //! IOD-only one, else fall back to the Kalman-bank (`kf_state`) estimate.
 //! [`crate::homepage::snapshot`] uses it for the homepage's a/e plot and
-//! family badge; [`crate::lineage_page::identity_card`] uses it for the
+//! family badge; `lineage_page::identity_card` uses it for the
 //! lineage detail page's identity card. Both used to hand-roll their own
 //! copy of this cascade — this module is the single place it is decided,
 //! so the two pages can never silently drift apart again.

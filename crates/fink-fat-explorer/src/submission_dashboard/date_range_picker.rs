@@ -3,7 +3,7 @@
 //! (MIT), loaded from the jsDelivr CDN through `Dioxus.toml`.
 //!
 //! The widget itself is driven through the typed
-//! [`CalendarHandle`](super::calendar_bridge::CalendarHandle); this module
+//! [`CalendarHandle`]; this module
 //! only bridges its selection into a `Signal<Option<DateRange>>`.
 
 use std::cell::RefCell;

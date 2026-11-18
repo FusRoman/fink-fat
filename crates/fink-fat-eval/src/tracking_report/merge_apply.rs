@@ -10,7 +10,7 @@
 //! They deliberately keep separate index implementations. The sweep needs to
 //! vary things the engine hard-codes into [`MergeParams`], and having the
 //! validation path go through
-//! [`merge_fragments`](fink_fat_engine::topocentric_kf::branching::merge::merge_fragments)
+//! [`merge_fragments`]
 //! is the whole point — a validation that re-implemented the engine would
 //! prove nothing about the engine.
 //!

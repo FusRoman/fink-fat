@@ -89,8 +89,7 @@ pub async fn get_latest_orbit_fit_result(
     };
 
     let keplerian = row.keplerian.0;
-    let n_observations_rejected =
-        row.observation_ids.len() as usize - row.n_observations_used as usize;
+    let n_observations_rejected = row.observation_ids.len() - row.n_observations_used as usize;
     let degrees_of_freedom = row.num_measurements as i64 - 6;
     let reduced_chi2 = row.normalised_rms * row.normalised_rms;
 

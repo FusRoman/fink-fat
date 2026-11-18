@@ -1,7 +1,7 @@
 //! HTTP client for the Minor Planet Center's Check Near-Duplicates (CND) API
 //! (<https://docs.minorplanetcenter.net/mpc-ops-docs/apis/cnd/>).
 //!
-//! Shared by both the per-lineage job ([`super::run`]) and the bulk job
+//! Shared by both the per-lineage job ([`crate::cnd_search::run`]) and the bulk job
 //! (`crate::bulk_cnd::run`) so the batching/request/resilience logic lives in
 //! exactly one place.
 

@@ -8,7 +8,7 @@ use fink_fat_engine::topocentric_kf::conversion::attributable_to_cartesian;
 
 /// Dynamical family of an asteroid, classified from its (semi-major axis,
 /// eccentricity) based on the IMCCE SSP population table:
-/// https://ssp.imcce.fr/webservices/skybot/
+/// <https://ssp.imcce.fr/webservices/skybot/>
 ///
 /// Variant order is deterministic and roughly follows increasing heliocentric
 /// distance — it is what backs the `Ord` used to sort the lineages table by

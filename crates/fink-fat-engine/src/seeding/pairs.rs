@@ -504,11 +504,11 @@ mod pair_gen_tests {
         };
         let input = ObservationInput::new(id, equ_coord, photometry, mjd_tt, None);
         let (obs_dataset, obs_id) = obs_dataset.push_observation(vec![input]).unwrap();
-        let observation = obs_dataset
-            .get_obs_by_index(*obs_id.get(0).unwrap())
+
+        obs_dataset
+            .get_obs_by_index(*obs_id.first().unwrap())
             .unwrap()
-            .clone();
-        observation
+            .clone()
     }
 
     fn idx_of(alerts: &[Observation], a: &Observation) -> usize {
@@ -692,7 +692,7 @@ mod pair_gen_tests {
             );
 
             let dt = b.mjd_tt() - a.mjd_tt();
-            let d = a.equ_coord().angular_separation(&b.equ_coord());
+            let d = a.equ_coord().angular_separation(b.equ_coord());
 
             assert!(
                 d <= config.max_angular_speed * dt + 1e-12,
@@ -811,7 +811,7 @@ mod pair_gen_tests {
 
         for p in &pairs {
             let dt = p.b.mjd_tt() - p.a.mjd_tt();
-            let d = p.a.equ_coord().angular_separation(&p.b.equ_coord());
+            let d = p.a.equ_coord().angular_separation(p.b.equ_coord());
             assert!(d <= config.max_angular_speed * dt + 1e-12);
         }
     }
@@ -888,7 +888,7 @@ mod pair_gen_tests {
                     prop_assert!((b.mjd_tt() - a.mjd_tt()) <= config.max_dt + 1e-15);
 
                     let dt = b.mjd_tt() - a.mjd_tt();
-                    let d = a.equ_coord().angular_separation(&b.equ_coord());
+                    let d = a.equ_coord().angular_separation(b.equ_coord());
                     prop_assert!(d <= config.max_angular_speed * dt + 1e-12);
                     prop_assert!(d <= sep_cap + 1e-12);
 

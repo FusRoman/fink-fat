@@ -1,7 +1,9 @@
-//! Per-night orchestration: propagate, search, branch, score, prune.
+//! Per-visit orchestration building blocks: propagate, search, branch, score.
 //!
-//! Ties together propagation, candidate search, branching, LLR scoring and
-//! cross-bank pruning for a whole set of lineages — steps 1–6 of
+//! Provides the per-lineage steps (coarse pre-filter, propagation, candidate
+//! search, branching, LLR scoring) that
+//! [`NightSession`](super::NightSession) drives visit by visit and wraps with
+//! the per-night cap / N-scan / purge — steps 1–6 of
 //! `kalman_update_instruction.md`'s per-night recap. Deliberately **not**
 //! implemented here (see the `branching` module doc): inter-bank
 //! deduplication ("promotion"), orbital-fit arbitration, cross-run
@@ -39,7 +41,7 @@
 //! that matters once null branches can be spawned hundreds of times a
 //! night (once per visit with no candidate) instead of once per night.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use nalgebra::Vector3;
@@ -53,25 +55,23 @@ use rayon::prelude::*;
 use crate::{
     engine_config::{kalman_context::KalmanContext, night_advance_params::NightAdvanceParams},
     spacetime_bucket::{
-        bucket::{BucketIndex, BucketKey, build_alert_bucket_index},
+        bucket::{BucketIndex, BucketKey},
         clutter_density::local_clutter_density,
         healpix_binner::HealpixBinner,
         spatial_binner::SpatialBinner,
     },
     topocentric_kf::{
         branching::{
-            ArchivedTrajectory, Branch,
+            Branch,
             candidate_filters::apply_candidate_filters,
             candidate_search::{
-                SINGLE_TIME_BIN, SingleBinTimeBinner, find_candidates_for_bank,
-                find_candidates_for_bank_multi_region,
+                SINGLE_TIME_BIN, find_candidates_for_bank, find_candidates_for_bank_multi_region,
             },
             detection_probability::{
                 detection_probability, phase_correction, predicted_apparent_magnitude,
             },
             llr_score::{null_branch_llr_delta, observation_llr_delta, photometric_llr_delta},
-            pruning::{apply_n_scan_pruning, cap_top_b_per_lineage, purge_stale_lineages},
-            visit::{Visit, group_observations_into_visits},
+            visit::Visit,
         },
         kalman_bank::{KFBank, ellipse_region_finder::cover_if_clamped},
         observer_state::get_observer,
@@ -280,7 +280,7 @@ impl PrefilterAnchor {
 /// A branch whose MAP hypothesis fails to propagate is simply absent from
 /// the map; the pre-filter then falls back to that branch's stored state,
 /// i.e. exactly the previous behavior.
-fn compute_prefilter_anchors(
+pub(super) fn compute_prefilter_anchors(
     lineages: &[Branch<'_, '_>],
     epoch: f64,
     r_obs: Vector3<f64>,
@@ -304,274 +304,12 @@ fn compute_prefilter_anchors(
     by_branch
 }
 
-/// Result of advancing a set of lineages by one night.
-pub struct NightAdvanceOutcome<'state_lf, 'bank_config> {
-    /// Surviving branches after this night's cap + N-scan pruning.
-    pub branches: Vec<Branch<'state_lf, 'bank_config>>,
-    /// One [`GateRecord`] per (existing lineage, visit) that gated at least
-    /// one candidate this night — passive diagnostics for gate-selectivity
-    /// analysis, ignored by the engine itself.
-    pub gate_records: Vec<GateRecord>,
-    /// Ids of every observation that passed the two-stage gate for at least
-    /// one lineage's search region this night — regardless of whether the
-    /// branch carrying it survived pruning. The caller
-    /// ([`BranchCollection::advance_one_night`](super::collection::BranchCollection::advance_one_night))
-    /// excludes `consumed_observation_ids.difference(&consumed_then_pruned_ids)`
-    /// (i.e. observations truly held by a *surviving* branch) from the
-    /// discovery step's (`seed_new_lineages_from_leftovers`) candidate pool,
-    /// so an observation plausibly belonging to a known track doesn't also
-    /// seed a brand-new one.
-    pub consumed_observation_ids: HashSet<ObsId>,
-    /// The subset of `consumed_observation_ids` that ended up in none of the
-    /// surviving `branches`' track histories — i.e. observations claimed by
-    /// a candidate extension of an existing lineage that was itself pruned
-    /// (by `cap_top_b_per_lineage` or `apply_n_scan_pruning`) before the end
-    /// of this night. The caller gives these back to the leftover pool for
-    /// discovery (see `consumed_observation_ids`'s doc) instead of
-    /// permanently losing them: a candidate extension that didn't survive
-    /// pruning was never a real claim, and an observation only ever appears
-    /// in one night's `night_obs` — there is no later night where it could
-    /// be revisited if not resolved now.
-    pub consumed_then_pruned_ids: HashSet<ObsId>,
-    /// Reconstructions of the lineages that stopped being propagated this
-    /// night — see
-    /// [`purge_stale_lineages`]. These are *results*, not state: they carry an
-    /// association history but no Kalman bank, and never re-enter `branches`.
-    /// The caller accumulates them (see
-    /// [`BranchCollection::archived`](super::collection::BranchCollection::archived)),
-    /// since a purged lineage's arc is as much an output of the run as a live
-    /// branch's.
-    pub archived: Vec<ArchivedTrajectory>,
-}
-
-/// Advance every lineage by one night, one visit (exposure epoch) at a
-/// time: propagate, search for candidates, branch, score in LLR, and
-/// top-B-prune — repeated per visit, then N-scan-pruned once for the whole
-/// night.
-///
-/// # Arguments
-/// * `lineages` – Branches to advance (from the previous night, or freshly
-///   seeded — see [`Branch::seed`]).
-/// * `night_obs` – This night's observations, grouped into visits
-///   internally (see [`group_observations_into_visits`]).
-/// * `obs_dataset`, `kalman_context` – Needed to resolve each visit's
-///   observer heliocentric state at its own epoch.
-/// * `params` – Tuning parameters, shared across every lineage and visit.
-/// * `current_step` – Current night index, for N-scan bookkeeping.
-///
-/// # Returns
-/// The surviving branches after pruning, plus the set of observation ids
-/// they consumed (see [`NightAdvanceOutcome`]).
-pub fn advance_bank_collection_one_night<'state_lf, 'bank_config>(
-    lineages: &[Branch<'state_lf, 'bank_config>],
-    night_obs: &[&Observation],
-    obs_dataset: &ObsDataset,
-    kalman_context: &KalmanContext,
-    params: &NightAdvanceParams,
-    spatial_binner: &HealpixBinner,
-    current_step: usize,
-) -> NightAdvanceOutcome<'state_lf, 'bank_config> {
-    let _enter = OrchestrateEvent::span().entered();
-
-    let visits = group_observations_into_visits(night_obs, params.visit_epoch_tolerance_days);
-
-    OrchestrateEvent::VisitSummary {
-        n_visits: visits.len(),
-    }
-    .emit();
-    let visit_progress_modulo = (visits.len() / 100).max(1);
-
-    // Fresh origin for this night's coarse pre-filter — one Kepler solve per
-    // incoming branch, against `predict_to`'s `n_hypotheses` solves per
-    // branch per passing visit. See `PrefilterAnchor` for why extrapolating
-    // from a weeks-old epoch was silently starving the association.
-    //
-    // Anchored at the first visit whose observer state resolves, so `dt`
-    // inside `lineage_might_be_in_visit` stays within one night (~8h).
-    // Branches spawned later tonight need no anchor: their bank is already
-    // at the visit epoch they were born at.
-    //
-    // The `find_map` short-circuits on the *observer state*, never on an
-    // anchor result: `for_branch` legitimately returns `None` for a branch
-    // that is already fresh, and letting that drive the search would retry
-    // every visit of the night for nothing.
-    let prefilter_anchors: HashMap<u64, PrefilterAnchor> = visits
-        .iter()
-        .find_map(|visit| {
-            resolve_observer_state(
-                obs_dataset,
-                kalman_context,
-                visit.representative_obs,
-                visit.epoch,
-            )
-            .ok()
-            .map(|(r_obs, v_obs)| (visit.epoch, r_obs, v_obs))
-        })
-        .map(|(epoch, r_obs, v_obs)| compute_prefilter_anchors(lineages, epoch, r_obs, v_obs))
-        .unwrap_or_default();
-
-    let mut branches: Vec<Branch<'state_lf, 'bank_config>> = lineages.to_vec();
-    let mut consumed_observation_ids = HashSet::new();
-    let mut gate_records: Vec<GateRecord> = Vec::new();
-    let next_branch_id = AtomicU64::new(
-        lineages
-            .iter()
-            .map(|branch| branch.branch_id)
-            .max()
-            .map_or(0, |id| id + 1),
-    );
-
-    for (visit_index, visit) in visits.iter().enumerate() {
-        if visit_index % visit_progress_modulo == 0 {
-            OrchestrateEvent::VisitProgress {
-                visit_index,
-                n_visits: visits.len(),
-            }
-            .emit();
-        }
-
-        let Ok((r_obs, v_obs)) = resolve_observer_state(
-            obs_dataset,
-            kalman_context,
-            visit.representative_obs,
-            visit.epoch,
-        ) else {
-            OrchestrateEvent::ObserverResolutionFailed { epoch: visit.epoch }.emit();
-            continue;
-        };
-
-        // Built once per VISIT, reused by every lineage's cheap pre-filter,
-        // candidate search and clutter-density lookup this visit.
-        let visit_bucket_index = build_alert_bucket_index(
-            visit.observations.iter().copied(),
-            spatial_binner,
-            &SingleBinTimeBinner,
-        );
-
-        // Per-lineage work is independent within a visit (each lineage only
-        // ever reads its own bank) and dominated by the two-body Kepler
-        // propagation in `spawn_branches_for_lineage` — parallelize across
-        // lineages via rayon. `next_branch_id` is a shared atomic counter
-        // (branch ids are opaque unique keys, never relied on for ordering
-        // — see `branch_id.rs`); `consumed_observation_ids` can't be
-        // mutated from parallel closures, so each lineage returns its own
-        // consumed ids and they're merged sequentially below (cheap: a
-        // `HashSet::extend`, not a bottleneck).
-        let outcomes: Vec<LineageOutcome<'state_lf, 'bank_config>> = branches
-            .par_iter()
-            .map(|lineage| {
-                if !lineage_might_be_in_visit(
-                    lineage,
-                    prefilter_anchors.get(&lineage.branch_id),
-                    visit,
-                    &visit_bucket_index,
-                    params,
-                    spatial_binner,
-                ) {
-                    // No alert anywhere near this lineage's extrapolated
-                    // position — skip the two Kepler solves entirely. The
-                    // lineage carries over unchanged, picked up again
-                    // whenever a later visit's alerts land nearby.
-                    return LineageOutcome::Unchanged(lineage.clone());
-                }
-
-                match spawn_branches_for_lineage(
-                    lineage,
-                    &visit_bucket_index,
-                    visit.epoch,
-                    r_obs,
-                    v_obs,
-                    params,
-                    spatial_binner,
-                    &next_branch_id,
-                    current_step,
-                ) {
-                    Some((spawned, consumed)) => LineageOutcome::Spawned(
-                        spawned,
-                        GateRecord {
-                            lineage_id: lineage.lineage_id,
-                            nights_since_seed: current_step
-                                .saturating_sub(lineage.last_real_update_step),
-                            gated_obs_ids: consumed,
-                            n_hypotheses: lineage.bank.len(),
-                            n_steps: lineage.bank.n_steps(),
-                        },
-                    ),
-                    // Every hypothesis in the bank failed to propagate this
-                    // visit (rare, but not impossible — see
-                    // `outfit_propagate_universal_failures.md`). Treat it
-                    // like "no candidate nearby": carry the lineage over
-                    // unchanged rather than losing its whole track history.
-                    None => LineageOutcome::Unchanged(lineage.clone()),
-                }
-            })
-            .collect();
-
-        let mut visit_branches = Vec::new();
-        for outcome in outcomes {
-            match outcome {
-                LineageOutcome::Unchanged(branch) => visit_branches.push(branch),
-                LineageOutcome::Spawned(spawned, record) => {
-                    visit_branches.extend(spawned);
-                    consumed_observation_ids.extend(record.gated_obs_ids.iter().copied());
-                    gate_records.push(record);
-                }
-            }
-        }
-
-        // Top-B pruning after every visit — branch counts multiply at every
-        // branching event; left unbounded across a night's worth of visits
-        // this would explode long before the night ends.
-        branches = cap_top_b_per_lineage(visit_branches, params.branch_cap);
-    }
-
-    // N-scan stays at night granularity: one call, after every visit this
-    // night has been folded in.
-    let n_branches_before_n_scan = branches.len();
-    let branches = apply_n_scan_pruning(branches, params.n_scan, current_step);
-    let (branches, archived) = purge_stale_lineages(
-        branches,
-        params.max_lineage_lifetime_nights,
-        params.stale_llr_floor,
-        params.hard_stale_nights,
-        params.archive_min_real_updates,
-        current_step,
-    );
-    OrchestrateEvent::NightPruningSummary {
-        n_branches_before_n_scan,
-        n_branches_after: branches.len(),
-    }
-    .emit();
-
-    // Deliberately live branches only, not the archived arcs: this set exists
-    // to decide which of *this night's* observations go back to the discovery
-    // pool, and a lineage purged for staleness consumed none of them (that is
-    // what made it stale). Archived observations were claimed on earlier
-    // nights, which are long past recycling.
-    let surviving_ids: HashSet<ObsId> = branches
-        .iter()
-        .flat_map(|b| b.track_ids().iter().copied())
-        .collect();
-    let consumed_then_pruned_ids = consumed_observation_ids
-        .difference(&surviving_ids)
-        .copied()
-        .collect();
-
-    NightAdvanceOutcome {
-        branches,
-        gate_records,
-        consumed_observation_ids,
-        consumed_then_pruned_ids,
-        archived,
-    }
-}
-
 /// Resolve the observer's heliocentric state at `epoch`.
 ///
 /// `representative_obs` is only used to identify *which* observer
 /// (site/instrument) took this visit — any observation in the visit works,
 /// they share one exposure.
-fn resolve_observer_state(
+pub(super) fn resolve_observer_state(
     obs_dataset: &ObsDataset,
     kalman_context: &KalmanContext,
     representative_obs: &Observation,
@@ -676,16 +414,6 @@ pub fn lineage_might_be_in_visit(
                 time_bin: SINGLE_TIME_BIN,
             })
         })
-}
-
-/// Outcome of checking one lineage against one visit — either it carries
-/// over unchanged (no candidate nearby), or it spawned branches plus the
-/// observation ids they consumed. Kept separate from mutating shared state
-/// directly so the per-lineage work in
-/// [`advance_bank_collection_one_night`] can run in parallel via rayon.
-enum LineageOutcome<'state_lf, 'bank_config> {
-    Unchanged(Branch<'state_lf, 'bank_config>),
-    Spawned(Vec<Branch<'state_lf, 'bank_config>>, GateRecord),
 }
 
 /// Propagate one lineage's bank once (to this visit's epoch), search its

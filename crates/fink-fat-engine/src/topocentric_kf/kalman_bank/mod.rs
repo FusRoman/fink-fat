@@ -149,7 +149,7 @@ pub struct KFBank<'state_lf, 'bank_config> {
     /// `Arc::make_mut`, which clones-on-write only when the `Arc` is
     /// actually shared. `Arc` (not `Rc`) so that `KFBank`/`Branch` stay
     /// `Send + Sync` — required to parallelize the per-lineage work in
-    /// `advance_bank_collection_one_night` with rayon.
+    /// `NightSession::advance_visit` with rayon.
     ///
     /// Private: the only ways to change this field are [`Self::with_hypotheses`]
     /// (construction) and the [`Self::set_hypotheses`]/[`Self::hypotheses_mut`]

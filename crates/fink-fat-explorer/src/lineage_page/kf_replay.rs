@@ -96,6 +96,7 @@ pub struct ReplayResult {
 /// Consecutive real observations closer than this are treated as a single
 /// epoch — mirrors `fink-fat-eval`'s `dedupe_by_epoch`, guarding against a
 /// near-singular innovation covariance from a near-zero Δt.
+#[cfg(feature = "server")]
 const DEDUPE_TOLERANCE_DAYS: f64 = 1e-6;
 
 /// Replay the lineage's best branch through a multi-hypothesis Kalman

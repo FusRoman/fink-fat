@@ -1,6 +1,6 @@
 //! Writing finished CND check attempts to `cnd_queries`.
 //!
-//! Kept separate from [`super::run`] for the same reason
+//! Kept separate from [`crate::cnd_search::run`] for the same reason
 //! `skybot_search::persist` is kept apart from `skybot_search::run`: the
 //! insert itself needs a real Postgres pool and is worth testing/reusing in
 //! isolation from the job registry/batching plumbing. Reused unmodified by

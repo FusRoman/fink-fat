@@ -6,16 +6,15 @@ use fink_fat_engine::{
 
 use crate::{
     converter::{
+        observations::read_observation_rows,
         parquet::{to_dataframes, write_parquet_tables},
-        sql::write_sql_tables,
     },
     error::FinkFatError,
     init_cli::ConvertFormat,
 };
 
-pub mod family;
+pub mod observations;
 pub mod parquet;
-pub mod sql;
 
 pub fn convert(
     config_path: Utf8PathBuf,
@@ -59,7 +58,8 @@ pub fn convert(
                     "--path-observation is required when --format sql".to_string(),
                 )
             })?;
-            write_sql_tables(&collection, &database_url, &path_observation)?;
+            let observation_rows = read_observation_rows(&path_observation)?;
+            fink_fat_sql::write_bulk_tables(&collection, &observation_rows, &database_url)?;
         }
     }
 

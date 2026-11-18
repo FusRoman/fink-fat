@@ -6,7 +6,6 @@ authors.workspace = true
 categories.workspace = true
 keywords.workspace = true
 repository.workspace = true
-homepage.workspace = true
 documentation.workspace = true
 license-file.workspace = true
 readme = "README.md"
@@ -22,8 +21,6 @@ tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
 ahash = { workspace = true }
 serde = { workspace = true }
-serde_yaml = { workspace = true }
-ndarray = { workspace = true }
 photom = { workspace = true, features = ["polars"] }
 outfit = { workspace = true }
 polars = { workspace = true }

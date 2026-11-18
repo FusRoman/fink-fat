@@ -55,6 +55,11 @@ pub enum FinkFatCommands {
     /// Track asteroids in an alert stream from photometric alerts
     Track(FinkFatCliArgs),
 
+    /// Track asteroids visit by visit, as alerts arrive (currently: replay
+    /// of a Fink parquet dump with a simulated clock). See
+    /// `crates/fink-fat-stream/README.md`.
+    Stream(StreamCliArgs),
+
     /// Convert the binary output of fink-fat into the requested format
     Convert {
         /// Path to the fink-fat configuration file
@@ -216,6 +221,35 @@ pub struct FinkFatCliArgs {
     /// mode (the snapshot is always written once, as today).
     #[arg(long, value_name = "N")]
     pub snapshot_every: Option<usize>,
+}
+
+/// Command-line arguments of `fink-fat stream`.
+///
+/// Everything else (engine configuration, source, ingestion, clock) comes
+/// from the stream configuration file, see
+/// [`fink_fat_stream::StreamConfig`].
+#[derive(Debug, Parser)]
+pub struct StreamCliArgs {
+    /// Path to the stream configuration file (YAML)
+    #[arg(short, long, value_name = "STREAM_CONFIG_FILE")]
+    pub config: Utf8PathBuf,
+
+    /// Enable logging to file and terminal. Log files
+    /// (`fink_fat_stream.<date>.log`) are written to the engine
+    /// configuration's `storage_path`, rotated daily, and pruned beyond
+    /// `log_retention_days` (see `--log-retention-days`).
+    #[arg(long, default_value_t = false)]
+    pub logs: bool,
+
+    /// Override or add a per-target log level, e.g. `--log-target stream=debug`
+    /// (repeatable).
+    #[arg(long = "log-target", value_name = "TARGET=LEVEL")]
+    pub log_targets: Vec<String>,
+
+    /// Override the number of daily log files to retain (see the engine
+    /// configuration's `log_retention_days`). Only meaningful with `--logs`.
+    #[arg(long, value_name = "N")]
+    pub log_retention_days: Option<usize>,
 }
 
 /// Parse command-line arguments and return a fully-populated

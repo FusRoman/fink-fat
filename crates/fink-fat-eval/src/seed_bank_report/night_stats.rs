@@ -60,7 +60,7 @@ pub(crate) fn percentage(numerator: usize, denominator: usize) -> f64 {
 ///
 /// `night_obs` is this night's full observation set (used to determine
 /// which ground-truth trajectories had ≥2 detections that night);
-/// `branches` is the seed set [`BranchCollection::advance_one_night`]
+/// `branches` is the seed set [`BranchCollection::advance_one_night`](fink_fat_engine::topocentric_kf::branching::BranchCollection::advance_one_night)
 /// produced from it.
 pub fn compute_night_stats(
     night_id: NightId,

@@ -559,11 +559,11 @@ mod triplet_gen_tests {
 
         let input = ObservationInput::new(i as u64, equ_coord, photometry, mjd_tt, None);
         let (obs_dataset, obs_id) = obs_dataset.push_observation(vec![input]).unwrap();
-        let observation = obs_dataset
-            .get_obs_by_index(*obs_id.get(0).unwrap())
+
+        obs_dataset
+            .get_obs_by_index(*obs_id.first().unwrap())
             .unwrap()
-            .clone();
-        observation
+            .clone()
     }
 
     fn mk_triplet_config(
@@ -783,7 +783,7 @@ mod triplet_gen_tests {
                     if dt <= 0.0 || dt > cfg.max_dt_between {
                         continue;
                     }
-                    let d = a.equ_coord().angular_separation(&b.equ_coord());
+                    let d = a.equ_coord().angular_separation(b.equ_coord());
                     if d > cfg.max_pair_sep {
                         continue;
                     }
@@ -816,7 +816,7 @@ mod triplet_gen_tests {
                 prop_assert!(dt_bc <= cfg.max_dt_between + 1e-12);
 
                 // Angular constraints on (b,c).
-                let dbc = b.equ_coord().angular_separation(&c.equ_coord());
+                let dbc = b.equ_coord().angular_separation(c.equ_coord());
                 prop_assert!(dbc <= cfg.max_pair_sep + 1e-12);
 
                 // Magnitude constraint.
