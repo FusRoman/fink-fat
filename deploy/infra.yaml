@@ -1,0 +1,42 @@
+# Structure of the fink-fat production deployment (versioned, public).
+# Nothing personal here: allowed SSH ranges, cloud profile, project and domain live in the
+# gitignored infra.local.yaml; passwords in the gitignored secrets.env. See README.md, "Configuration".
+
+env: prod                                    # every resource is named ffat-prod-*
+keypair: roman_ssh_key                       # existing Nova keypair (public key only)
+heat_template_version: 2021-04-16            # newest HOT version accepted by the lab's Heat
+availability_zone: nova
+os_image: AlmaLinux-9-GenericCloud-9.7-20260414.x86_64  # newest AlmaLinux image
+ssh_user: almalinux                          # default user of the AlmaLinux cloud image
+volume_type: __DEFAULT__
+
+network:
+  cidr: 10.42.0.0/24                         # distinct from the project's existing 10.0.0.0/24
+  external_network: public-2                 # router gateway + floating IP pool (157.136.x.x)
+  dns_nameservers: []                        # empty: keep the cloud default
+
+images:
+  registry: ghcr.io/fusroman
+  tag: main                                  # default tag; `ff-ops update --tag vX` overrides it
+
+roles:
+  compute:                                   # fink-fat stream: Kafka client + tracking engine
+    enabled: true                            # false = VM removed on next apply, data volume kept
+    flavor: vd.64                            # 64 vCPU, 125 GB RAM
+    root_gb: 50                              # boot volume (flavors only have 20 GB)
+    fixed_ip: 10.42.0.10
+    volume: { name: engine, size_gb: 200, mount: /srv/finkfat }
+
+  db:                                        # Postgres
+    enabled: true
+    flavor: vd.16                            # 16 vCPU, 32 GB RAM
+    root_gb: 50
+    fixed_ip: 10.42.0.20
+    volume: { name: pgdata, size_gb: 500, mount: /srv/pgdata }
+
+  explorer:                                  # web explorer + Caddy + pgAdmin; SSH bastion
+    enabled: true
+    flavor: vd.8                             # 8 vCPU, 16 GB RAM
+    root_gb: 50
+    fixed_ip: 10.42.0.30
+    floating_ip: true                        # the only public machine

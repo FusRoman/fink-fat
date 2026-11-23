@@ -1,0 +1,73 @@
+[project]
+name = "finkfat-ops"
+version = "0.1.0"
+description = "ff-ops: manage the fink-fat production instance on OpenStack (Heat stacks, VMs, Docker deployments)."
+authors = [{ name = "Roman" }]
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = "==3.12.*"
+dependencies = [
+    "typer>=0.12",
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "rich>=13.7",
+    # The OpenStack CLI and its Heat plugin are pinned here so that ff-ops always calls a
+    # complete, known `openstack` binary from its own environment, never a system one.
+    "python-openstackclient>=6.6",
+    "python-heatclient>=3.5",
+]
+
+[project.scripts]
+ff-ops = "finkfat_ops.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+[tool.pdm]
+distribution = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [".venv", ".pdm-build"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "N",        # pep8-naming
+    "UP",       # pyupgrade
+    "B",        # flake8-bugbear
+    "SIM",      # flake8-simplify
+    "C4",       # flake8-comprehensions
+    "PTH",      # use pathlib
+    "RET",      # return statements
+    "PL",       # pylint
+    "RUF",      # ruff-specific
+    "D",        # pydocstyle
+]
+ignore = [
+    "D105", "D107",  # magic methods and __init__ are documented by their class
+    "PLR2004",       # magic values in comparisons are fine in tests and validators
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D", "PLR0913"]
+"finkfat_ops/config.py" = ["N815"]  # Secrets fields mirror the env variable names
+
+[tool.ruff.format]
+docstring-code-format = true

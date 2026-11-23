@@ -1,0 +1,17 @@
+# Template of infra.local.yaml — copy it, then fill in real values:
+#   cp infra.local.example.yaml infra.local.yaml
+# infra.local.yaml is gitignored: it describes who may reach the bastion and which cloud
+# project is targeted, which has no business in a public repository (README.md, "Configuration").
+#
+# Every value below is a placeholder: 192.0.2.0/24 and 198.51.100.0/24 are documentation-only
+# ranges (RFC 5737, never routed) and example.org is a reserved domain (RFC 2606).
+
+openstack:
+  cloud: my-cloud-profile            # profile name in ~/.config/openstack/clouds.yaml
+  project: my-project                # ff-ops refuses to act on any other project
+
+admin_cidrs:                         # source ranges allowed to SSH into the bastion (port 22)
+  - 192.0.2.0/24                     # e.g. the lab egress range (stable, used through sshuttle)
+  - 198.51.100.7/32                  # e.g. home IP; managed by `ff-ops access allow-me`
+
+explorer_domain: fink-fat.example.org   # remove the line to run without a domain (self-signed HTTPS)
