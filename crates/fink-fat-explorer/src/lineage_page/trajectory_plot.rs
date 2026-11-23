@@ -17,16 +17,19 @@ use super::x_axis::{format_time_labels, x_values_for_observations, x_values_for_
 use crate::cnd_search::CndHit;
 use crate::skybot_search::SkybotHit;
 
+#[cfg(target_arch = "wasm32")]
 const DEG_PER_ARCSEC: f64 = 1.0 / 3600.0;
 
 /// `hovertemplate` can't reference `%{error_x}`/`%{error_y}` (Plotly.js
 /// doesn't expose error arrays to hover templates), so the time label and
 /// both sky errors are pre-formatted into the single string `customdata`
 /// carries per point.
+#[cfg(target_arch = "wasm32")]
 fn format_hover_extra(time_label: &str, ra_err_arcsec: f64, dec_err_arcsec: f64) -> String {
     format!("σ RA ±{ra_err_arcsec:.3}″  σ Dec ±{dec_err_arcsec:.3}″<br>{time_label}")
 }
 
+#[cfg(target_arch = "wasm32")]
 const TRAJECTORY_HOVER_TEMPLATE: &str = "RA: %{x:.6f}°<br>Dec: %{y:.6f}°<br>%{customdata}";
 
 /// Trims an RFC 3339 timestamp (as returned by
@@ -136,6 +139,7 @@ fn format_cnd_hover(hit: &CndHit) -> String {
 /// A small, high-contrast palette for telling different Skybot matches apart
 /// on the plot — deliberately disjoint from the Observations/Kalman traces'
 /// colors (`#2d7fd2` blue, `#d2422d` red-orange) used elsewhere on this plot.
+#[cfg(any(target_arch = "wasm32", test))]
 const SKYBOT_MARKER_COLORS: [&str; 8] = [
     "#2ba84a", "#9b59b6", "#e67e22", "#16a085", "#e91e63", "#f1c40f", "#34495e", "#795548",
 ];
@@ -143,6 +147,7 @@ const SKYBOT_MARKER_COLORS: [&str; 8] = [
 /// Picks a stable color for an object name out of [`SKYBOT_MARKER_COLORS`],
 /// by hashing the name — not by discovery order — so a point's color never
 /// shifts as more distinct objects stream in from the still-running search.
+#[cfg(any(target_arch = "wasm32", test))]
 fn skybot_marker_color(name: &str) -> &'static str {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -158,6 +163,7 @@ fn skybot_marker_color(name: &str) -> &'static str {
 /// our own observations with a published near-duplicate), chosen to be
 /// visually distinct from every Skybot palette entry and from the
 /// Observations/Kalman trace colors.
+#[cfg(target_arch = "wasm32")]
 const CND_MARKER_COLOR: &str = "#c0392b";
 
 /// Linearly interpolated marker sizes from `from` (first/oldest point) to
@@ -165,6 +171,7 @@ const CND_MARKER_COLOR: &str = "#c0392b";
 /// version has no auto-oriented arrow marker to show which way a track runs.
 /// `Marker::size` only accepts `usize`, hence rounding here rather than at
 /// each call site.
+#[cfg(target_arch = "wasm32")]
 fn size_gradient(n: usize, from: usize, to: usize) -> Vec<usize> {
     let (from, to) = (from as f64, to as f64);
     match n {
@@ -233,6 +240,10 @@ pub fn TrajectoryPlot(
         skybot_hits,
         cnd_hits,
     )| {
+        // Drawn client-side only: the server build merely subscribes to the
+        // same reactive inputs.
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = (observations, replay, x_axis_unit, skybot_hits, cnd_hits);
         #[cfg(target_arch = "wasm32")]
         {
             if !is_mounted() {

@@ -60,6 +60,12 @@ pub enum SubmitError {
     #[error("database error: {0}")]
     Database(#[from] postgres::Error),
 
+    /// Bringing the database schema up to date
+    /// ([`fink_fat_sql::schema::migrate`]) failed before anything was
+    /// submitted.
+    #[error("database schema error: {0}")]
+    Schema(#[from] fink_fat_sql::SqlError),
+
     /// An MPC request (the submission POST itself) failed at the transport
     /// level (network/timeout/non-2xx) — a request that succeeded but
     /// returned an unparseable body is a [`Self::Ades`] instead.

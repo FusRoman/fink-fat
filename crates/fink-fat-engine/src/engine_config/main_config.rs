@@ -760,7 +760,7 @@ pairs:
             .expect("config should load with env overrides");
 
         assert_relative_eq!(cfg.pairs.max_dt, 0.05, epsilon = 1e-15);
-        assert_eq!(cfg.pairs.allow_same_timebin, false);
+        assert!(!cfg.pairs.allow_same_timebin);
     }
 
     #[test]
@@ -893,7 +893,7 @@ pairs:
         #![proptest_config(ProptestConfig { cases: 64, .. ProptestConfig::default() })]
 
         #[test]
-        fn prop_units_minutes_to_days_pairs_max_dt(minutes in 0u32..(10_000u32)) {
+        fn prop_units_minutes_to_days_pairs_max_dt(minutes in 0u32..10_000u32) {
             let minutes_f = minutes as f64;
 
             let yaml = format!(r#"
@@ -910,7 +910,7 @@ pairs:
         }
 
         #[test]
-        fn prop_units_arcsec_per_hour_to_rad_per_day_pairs_max_angular_speed(arcsec_per_hour in 0u32..(50_000u32)) {
+        fn prop_units_arcsec_per_hour_to_rad_per_day_pairs_max_angular_speed(arcsec_per_hour in 0u32..50_000u32) {
             let x = arcsec_per_hour as f64;
 
             let yaml = format!(r#"
@@ -926,12 +926,12 @@ pairs:
         }
 
         #[test]
-        fn prop_units_arcmin_to_rad_triplets_max_pair_sep(arcmin in 0u32..(60_000u32)) {
+        fn prop_units_arcmin_to_rad_triplets_max_pair_sep(arcmin in 0u32..60_000u32) {
             let arcmin_f = arcmin as f64;
 
             // Ensure config remains valid by also setting residual <= pair_sep.
             // We use half the sep (integer division ok).
-            let residual_arcmin = (arcmin / 2) as u32;
+            let residual_arcmin = arcmin / 2;
 
             let yaml = format!(r#"
 version: 1

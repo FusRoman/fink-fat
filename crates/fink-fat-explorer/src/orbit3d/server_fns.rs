@@ -8,12 +8,14 @@
 //! built from for the rationale.
 
 use dioxus::prelude::*;
+#[cfg(feature = "server")]
 use hifitime::Epoch;
 
+#[cfg(feature = "server")]
 use crate::orbit3d::geometry;
-use crate::orbit3d::types::{
-    Body3D, HomepageObjects3D, LineageOrbit3D, ObjectPoint3D, ObservationPoint3D,
-};
+use crate::orbit3d::types::{Body3D, HomepageObjects3D, LineageOrbit3D};
+#[cfg(feature = "server")]
+use crate::orbit3d::types::{ObjectPoint3D, ObservationPoint3D};
 
 /// The current epoch, as Modified Julian Date in Terrestrial Time — the
 /// convention every stored epoch in this crate uses (see
@@ -25,6 +27,7 @@ use crate::orbit3d::types::{
 ///
 /// Panics if the system clock cannot be read (`hifitime::Epoch::now`
 /// failing means the host itself is unusable well beyond this feature).
+#[cfg(feature = "server")]
 fn now_mjd_tt() -> f64 {
     Epoch::now()
         .expect("failed to read the system clock")
@@ -409,17 +412,20 @@ async fn observation_points(
 
 /// The H,G slope parameter used for each observation's absolute-magnitude
 /// estimate — the customary default for an asteroid of unknown taxonomy.
+#[cfg(feature = "server")]
 const ABSOLUTE_MAGNITUDE_SLOPE_G: f64 = 0.15;
 
 /// Number of points sampled for a single lineage's own orbit — denser than
 /// [`crate::orbit3d::ephem_provider::TRACKED_BODIES`]'s curves since it is
 /// the one shape the lineage page's 3D tab is actually about.
+#[cfg(feature = "server")]
 const LINEAGE_ORBIT_CURVE_SAMPLES: usize = 360;
 
-/// [`KeplerianView`]'s fields are already in the same units as
+/// [`KeplerianView`](crate::fit_pipeline::fit::KeplerianView)'s fields are already in the same units as
 /// [`geometry::Keplerian`] (AU, degrees) — this is a plain field-for-field
 /// copy, not a unit conversion, unlike
 /// `ephem_provider::keplerian_from_outfit_elements`.
+#[cfg(feature = "server")]
 fn keplerian_from_view(
     view: &crate::fit_pipeline::fit::KeplerianView,
     epoch_mjd_tt: f64,

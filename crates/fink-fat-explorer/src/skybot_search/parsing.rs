@@ -1,6 +1,6 @@
 //! Pure request/response handling for one Skybot conesearch call: building
-//! the request URL and turning a response body into [`super::SkybotHit`]s.
-//! Nothing here touches the network — only [`super::run`] does — so all of
+//! the request URL and turning a response body into [`crate::skybot_search::SkybotHit`]s.
+//! Nothing here touches the network — only [`crate::skybot_search::run`] does — so all of
 //! it is covered directly by the unit tests below.
 
 use photom::coordinates::equatorial::EquCoord;
@@ -164,7 +164,7 @@ pub fn parse_conesearch_response(
 /// Queries Skybot for one point and parses its response — the only network
 /// call this feature makes. Takes a plain `&reqwest::Client` rather than
 /// reaching for `crate::get_http_client()` itself, so it has no dependency
-/// on the job registry, `tokio::spawn`, or dioxus: [`super::run`] is the only
+/// on the job registry, `tokio::spawn`, or dioxus: [`crate::skybot_search::run`] is the only
 /// caller in the app, but the live tests below call it directly too.
 #[cfg(feature = "server")]
 pub async fn fetch_conesearch_hits(

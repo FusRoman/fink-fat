@@ -227,7 +227,7 @@ fn select_specs(opts: &CalibrationOptions) -> Vec<ParamSpec> {
 /// One trajectory subset for a round: `failing_pool` in full, topped up
 /// with a fresh random draw from `all_ids` (excluding `failing_pool`) up to
 /// `target_size`. If `failing_pool` alone already exceeds `target_size`, a
-/// random subset of it is kept instead (see [`cap_pool`]) — this only
+/// random subset of it is kept instead (see `cap_pool`) — this only
 /// happens if the caller passed an already-oversized `failing_pool` (`calibrate`
 /// caps it every round via `opts.max_failing_pool`, so in practice this is a
 /// safety net, not the normal path).
@@ -282,22 +282,22 @@ fn cap_pool(pool: Vec<TrajId>, max_size: usize, rng: &mut StdRng) -> Vec<TrajId>
 /// 2. Diagnostic-only specs (`is_diagnostic_only == true`) next, against a
 ///    single [`ReferenceRun`](crate::kf_calibration::objective::ReferenceRun)
 ///    set built *once* per sweep (via
-///    [`build_reference_runs`](crate::kf_calibration::objective::build_reference_runs))
+///    [`build_reference_runs`])
 ///    for phase 1's now-settled dynamics values, then reused for every
 ///    diagnostic-only candidate via the cheap
-///    [`evaluate_diagnostic_only`](crate::kf_calibration::objective::evaluate_diagnostic_only)
+///    [`evaluate_diagnostic_only`]
 ///    — safe because nothing in phase 2 can change the dynamics-affecting
 ///    values the reference runs were built from (see
 ///    [`crate::kf_calibration::params::ParamSpec::is_diagnostic_only`]'s doc).
 ///
-/// [`default_param_specs`](crate::kf_calibration::params::default_param_specs)
+/// [`default_param_specs`]
 /// is already ordered dynamics-affecting-first so `specs`' own order lines
 /// up with these two phases; [`coordinate_descent`] still filters by
 /// `is_diagnostic_only` rather than assuming a prefix split, so a caller
 /// passing a reordered/filtered `specs` (e.g. `--params`) stays correct.
 ///
 /// Returns the final params, their [`RoundEval`], and the last sweep's
-/// per-parameter score deltas (see [`scalar_score`] for what "score" means)
+/// per-parameter score deltas (see `scalar_score` for what "score" means)
 /// — the latter feeds [`RoundResult::param_deltas`]
 /// (`crate::kf_calibration::report`).
 #[allow(clippy::too_many_arguments)]

@@ -63,7 +63,7 @@ pub fn materialize_contiguous_traj<'o>(
 
 /// Mean / median / min / max of a metric, computed over any slice of items
 /// via an accessor closure. Used both to collapse a single trajectory's
-/// per-step [`KFStudyResult`]s into one [`TrajSummary`], and to collapse the
+/// per-step [`KFStudyResult`](crate::kalman_traj::KFStudyResult)s into one [`TrajSummary`], and to collapse the
 /// whole dataset's [`TrajSummary`]s into one global report (see
 /// [`crate::reporting::print_global_aggregate_stats`]).
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -227,7 +227,7 @@ pub fn fmt_stats(stats: &MetricStats) -> String {
 
 // ── Per-trajectory summary ─────────────────────────────────────────────────
 
-/// One-row digest of a trajectory's [`KFStudyResult`] series, used for
+/// One-row digest of a trajectory's [`KFStudyResult`](crate::kalman_traj::KFStudyResult) series, used for
 /// dataset-wide aggregation and for ranking trajectories by filter quality.
 #[derive(Debug, Clone)]
 pub struct TrajSummary {
@@ -320,7 +320,7 @@ pub struct TrajSummary {
 ///
 /// `pub`: reused as-is by `kf_calibration::objective`, which runs the same
 /// materialize → Kalman filter bank → summarize pipeline as
-/// [`process_one_trajectory`] but against explicit, caller-chosen
+/// `process_one_trajectory` but against explicit, caller-chosen
 /// `EngineConfig`/`KalmanContext` variants instead of one fixed config.
 pub fn summarize_trajectory(
     traj_id: TrajId,
@@ -407,7 +407,7 @@ pub struct RunCounters {
     /// Histogram of [`TrajStopReason`] over every trajectory that reached
     /// [`study_kalman_asteroid`] (i.e. everything except
     /// `n_materialize_failed`, which never gets one — see
-    /// [`TrajOutcome::stop_reason`]). Iterate [`TrajStopReason::all`] for a
+    /// `TrajOutcome::stop_reason`). Iterate [`TrajStopReason::all`] for a
     /// stable, complete-coverage report order; a missing key means `0`.
     pub stop_reason_counts: AHashMap<TrajStopReason, usize>,
 }
@@ -580,7 +580,7 @@ fn build_progress_bar(nb_traj: usize) -> ProgressBar {
 }
 
 /// Number of leading steps-since-bootstrap tracked individually by
-/// [`step_stats_by_bootstrap`] before folding the rest into one "overflow"
+/// `step_stats_by_bootstrap` before folding the rest into one "overflow"
 /// bucket — deep enough to see whether NIS trends toward its χ²(2)
 /// expectation over the first few updates, without letting a handful of very
 /// long arcs blow up the number of (mostly near-empty) buckets.
@@ -588,7 +588,7 @@ pub const NIS_STEP_BUCKET_DEPTH: usize = 30;
 
 /// One trajectory's per-step diagnostic sample, in step order. Carries the
 /// predictive NIS plus the search-radius decomposition (between-mode spread
-/// vs within-mode covariance, arcsec) so [`step_stats_by_bootstrap`] can
+/// vs within-mode covariance, arcsec) so `step_stats_by_bootstrap` can
 /// bucket all three by steps-since-bootstrap.
 #[derive(Debug, Clone, Copy)]
 pub struct StepSample {
@@ -600,7 +600,7 @@ pub struct StepSample {
 }
 
 /// Dataset-wide distribution for one "steps since the bootstrap pair"
-/// bucket — see [`step_stats_by_bootstrap`].
+/// bucket — see `step_stats_by_bootstrap`.
 #[derive(Debug, Clone)]
 pub struct StepBucketStats {
     /// 1-based step index, e.g. `1` = the first predict/update step right
@@ -692,7 +692,7 @@ fn step_stats_by_bootstrap(by_step_all: &[Vec<StepSample>]) -> Vec<StepBucketSta
 /// collapse each one into a [`TrajSummary`].
 ///
 /// Only the lightweight summaries are kept in memory here — the full
-/// per-step [`KFStudyResult`] series is discarded after summarizing, so this
+/// per-step [`KFStudyResult`](crate::kalman_traj::KFStudyResult) series is discarded after summarizing, so this
 /// scales to datasets with many thousands of trajectories. The detailed
 /// per-step results for individual trajectories of interest (best/worst) are
 /// recomputed on demand by [`crate::reporting::print_detailed_reports`].

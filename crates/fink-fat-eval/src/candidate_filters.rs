@@ -269,7 +269,7 @@ pub struct DirectionGate {
     /// Positional tolerance (arcsec) folded into the effective angle — no
     /// direction judgement is possible below this separation.
     pub tol_arcsec: f64,
-    /// Only act when [`bank_confident`] holds — the first shadow run showed
+    /// Only act when `bank_confident` holds — the first shadow run showed
     /// the plain variant's `removed_TRUE` concentrated where the bank's
     /// motion estimate isn't trustworthy yet.
     pub confident_only: bool,

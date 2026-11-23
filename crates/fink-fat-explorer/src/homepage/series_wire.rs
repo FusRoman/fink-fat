@@ -211,10 +211,9 @@ impl<'a> Reader<'a> {
                 .ok_or(SeriesWireError::Truncated(field))?,
             field,
         )?;
-        Ok(raw
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect())
+        // `raw.len()` is exactly `len * 4`, so the remainder is always empty.
+        let (words, _) = raw.as_chunks::<4>();
+        Ok(words.iter().map(|w| f32::from_le_bytes(*w)).collect())
     }
 }
 

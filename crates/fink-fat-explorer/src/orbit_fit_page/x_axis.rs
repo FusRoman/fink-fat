@@ -26,6 +26,7 @@ impl XAxisUnit {
         }
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub fn axis_title(self) -> &'static str {
         match self {
             XAxisUnit::ObservationIndex => "Observation #",

@@ -160,7 +160,7 @@ fn main() -> Result<()> {
         for night_id in &night_ids {
             println!(
                 "{night_id}\t{}",
-                obs_dataset.len_night(&night_id).unwrap_or(0)
+                obs_dataset.len_night(night_id).unwrap_or(0)
             );
         }
         println!("Number of nights : {}", night_ids.len());
@@ -225,14 +225,17 @@ fn main() -> Result<()> {
 
         gold_tracker.observe_night(step, &night_obs, &ground_truth);
 
+        // The engine consumes the collection it advances; this report compares
+        // both nights, so it keeps its own copy (outside the timed section).
+        let prev_collection = collection.clone();
         let t0 = Instant::now();
-        let prev_collection = collection;
-        let new_collection = prev_collection.advance_one_night(
+        let new_collection = collection.advance_one_night(
             &night_obs,
             &obs_dataset,
             &engine_config,
             &kalman_ctx,
             step,
+            Some(night_id),
         )?;
         let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;
 

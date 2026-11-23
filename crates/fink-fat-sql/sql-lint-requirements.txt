@@ -1,0 +1,5 @@
+# SQL linters for crates/fink-fat-sql/sql/*.sql, pinned so the pre-commit
+# hook and CI run the same versions:
+#   pip install -r crates/fink-fat-sql/sql-lint-requirements.txt
+sqlfluff==4.0.4
+squawk-cli==2.71.0

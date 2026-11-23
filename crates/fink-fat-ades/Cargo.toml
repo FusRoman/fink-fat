@@ -1,13 +1,13 @@
 [package]
 name = "fink-fat-ades"
 description = "Pure ADES/MPC domain logic (document building, local schema validation, submission request/response parsing, submission-quality tiering) shared by the fink-fat CLI and fink-fat-explorer."
+readme = "README.md"
 edition.workspace = true
 version.workspace = true
 authors.workspace = true
 categories.workspace = true
 keywords.workspace = true
 repository.workspace = true
-homepage.workspace = true
 documentation.workspace = true
 license-file.workspace = true
 

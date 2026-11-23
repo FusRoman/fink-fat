@@ -26,7 +26,8 @@ impl ObservationRowExt for ObservationRow {
     }
 }
 
-#[cfg_attr(feature = "server", derive(sqlx::FromRow))]
+#[cfg(feature = "server")]
+#[derive(sqlx::FromRow)]
 struct ObservationRowSql {
     id: i64,
     object_id: String,
@@ -49,6 +50,7 @@ struct ObservationRowSql {
 /// that impl would implement a foreign trait (`From`) for a foreign type
 /// from this crate's `ObservationRowSql` parameter, which the orphan rule
 /// only allows when the target type itself is local.
+#[cfg(feature = "server")]
 fn observation_row_from_sql(r: ObservationRowSql) -> ObservationRow {
     ObservationRow {
         id: r.id,

@@ -9,7 +9,10 @@ use std::io;
 
 use hifitime::HifitimeError;
 use outfit::OutfitError;
-use photom::observation_dataset::{ObsDatasetError, ObsId};
+use photom::{
+    NightId,
+    observation_dataset::{ObsDatasetError, ObsId},
+};
 use thiserror::Error;
 
 use crate::{engine_config::error::ConfigError, seeding::error::SeedingError};
@@ -114,6 +117,44 @@ pub enum EngineError {
     /// Topocentric range estimation failed (no admissible root).
     #[error(transparent)]
     TopoError(#[from] TopocentricRangeError),
+
+    /// A night was opened on a collection that already closed it, or a later
+    /// night (see
+    /// [`BranchCollection::last_closed_night_id`](crate::topocentric_kf::branching::BranchCollection::last_closed_night_id)).
+    /// Advancing it again would re-seed its observations and double-count
+    /// the night.
+    #[error("night {night_id} is not after the last closed night {last_closed}")]
+    NightAlreadyClosed {
+        /// Night the caller tried to open.
+        night_id: NightId,
+        /// Last night the collection closed.
+        last_closed: NightId,
+    },
+
+    /// The branch-collection snapshot on disk is unreadable.
+    #[error(transparent)]
+    Snapshot(#[from] SnapshotError),
+}
+
+/// Failure to read or write a branch-collection snapshot (see
+/// [`BranchCollection::save_snapshot_to_disk`](crate::topocentric_kf::branching::BranchCollection::save_snapshot_to_disk)).
+#[derive(Debug, Error)]
+pub enum SnapshotError {
+    /// The file starts with the snapshot magic but is shorter than the header.
+    #[error("snapshot header is truncated")]
+    TruncatedHeader,
+
+    /// The header carries a format version this build cannot read.
+    #[error("unsupported snapshot format version {0}")]
+    UnsupportedVersion(u32),
+
+    /// The rkyv payload failed to serialize.
+    #[error("snapshot encoding failed: {0}")]
+    Encode(String),
+
+    /// The rkyv payload failed validation or deserialization.
+    #[error("snapshot decoding failed: {0}")]
+    Decode(String),
 }
 
 #[derive(Debug, Error)]
