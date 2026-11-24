@@ -16,6 +16,21 @@
 EXPLORER_SERVER="-p fink-fat-explorer --no-default-features --features server"
 EXPLORER_WEB="-p fink-fat-explorer --no-default-features --features web --target wasm32-unknown-unknown"
 
+# ff-ops (deploy/, Python): Ruff format check and lint, run from the pdm environment
+# of deploy/ so that the Ruff version and configuration are those of deploy/pyproject.toml.
+# The test suite runs in CI (job `deploy`).
+if ! command -v pdm >/dev/null 2>&1; then
+    echo "error: 'pdm' not found. Install it (https://pdm-project.org), then run:"
+    echo "  (cd deploy && pdm install)"
+    exit 1
+fi
+
+echo "Running ruff format (deploy)..."
+(cd deploy && pdm run ruff format --check .) || exit 1
+
+echo "Running ruff check (deploy)..."
+(cd deploy && pdm run ruff check .) || exit 1
+
 # SQL scripts of fink-fat-sql: SQLFluff (style/format) and Squawk (Postgres
 # DDL safety), versions pinned in crates/fink-fat-sql/sql-lint-requirements.txt.
 SQL_DIR="crates/fink-fat-sql/sql"

@@ -229,7 +229,9 @@ pdm run ruff check .        # linting: pycodestyle, pyflakes, isort, naming, pyu
 ```
 
 The ruff configuration lives in `pyproject.toml`. Both `ruff format --check .` and
-`ruff check .` must pass before a change is committed.
+`ruff check .` must pass before a change is committed: the repository's pre-commit hook
+(`.husky/pre-commit`) runs them, and the `deploy` job of the CI runs them again together
+with the test suite, from the locked dependencies (`pdm install --check`).
 
 The suite uses `FakeRunner` and recorded OpenStack responses. Apart from `git`, it
 only runs a few harmless local commands, and it never contacts the cloud.
