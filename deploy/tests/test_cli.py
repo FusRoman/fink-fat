@@ -144,3 +144,68 @@ def test_destroy_requires_the_exact_name(deploy_dir: Path) -> None:
     result = _run(deploy_dir, runner, "infra", "destroy", "net")
     assert result.exit_code == 1 and "cancelled" in result.output
     assert not any("delete" in c.argv for c in runner.calls)
+
+
+# ----------------------------------------------------------------------------- volume
+
+STORAGE_SHOW = CommandResult(
+    stdout=json.dumps(
+        {
+            "stack_name": "ffat-prod-storage",
+            "stack_status": "CREATE_COMPLETE",
+            "parameters": {"vol_pgdata_existing_id": "", "vol_engine_existing_id": ""},
+            "outputs": [{"output_key": "vol_pgdata_id", "output_value": "v1"}],
+        }
+    )
+)
+PGDATA = CommandResult(
+    stdout=json.dumps(
+        [{"ID": "v1", "Name": "ffat-prod-vol-pgdata", "Status": "in-use", "Size": 500}]
+    )
+)
+
+
+def test_volume_list_shows_state_and_management(deploy_dir: Path) -> None:
+    runner = (
+        _cloud_runner()
+        .on([*OS, "stack", "show"], STORAGE_SHOW)
+        .on([*OS, "volume", "list", "--name", "ffat-prod-vol-pgdata"], PGDATA)
+        .on([*OS, "volume", "list"], CommandResult(stdout="[]"))
+    )
+    result = _run(deploy_dir, runner, "volume", "list")
+    assert result.exit_code == 0, result.output
+    assert "created" in result.output and "orphan" not in result.output
+    assert "absent" in result.output  # the engine volume does not exist yet
+
+
+def test_volume_snapshot_targets_the_role_volume(deploy_dir: Path) -> None:
+    snapshot = CommandResult(stdout=json.dumps({"id": "s1", "status": "creating"}))
+    runner = (
+        _cloud_runner()
+        .on([*OS, "volume", "list"], PGDATA)
+        .on([*OS, "volume", "snapshot", "create"], snapshot)
+    )
+    result = _run(deploy_dir, runner, "volume", "snapshot", "db")
+    assert result.exit_code == 0, result.output
+    create = runner.calls[-1].argv
+    assert create[create.index("--volume") + 1] == "v1"
+    assert "s1" in result.output
+    assert "openstack --os-cloud test-cloud volume snapshot show" in result.output
+
+
+def test_volume_snapshot_of_a_role_without_volume_fails(deploy_dir: Path) -> None:
+    result = _run(deploy_dir, _cloud_runner(), "volume", "snapshot", "explorer")
+    assert result.exit_code == 1 and "no data volume" in result.output
+
+
+def test_destroy_storage_reminds_that_volumes_are_kept(deploy_dir: Path) -> None:
+    runner = _cloud_runner().on([*OS, "stack", "delete"], CommandResult())
+    context = AppContext(
+        paths=DeployPaths(deploy_dir),
+        runner=runner,
+        openstack_binary="openstack",
+        prompt=lambda _: "ffat-prod-storage",
+    )
+    result = CliRunner().invoke(app, ["infra", "destroy", "storage"], obj=context)
+    assert result.exit_code == 0, result.output
+    assert "data volumes are kept" in result.output

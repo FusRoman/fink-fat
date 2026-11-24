@@ -143,13 +143,14 @@ contact nothing (`infra render`, `--dry-run`).
 | --- | --- | --- |
 | `ff-ops config check` | available | Validate the three files without contacting anything. Also checks that the sensitive files are untracked by git and private. |
 | `ff-ops doctor` | planned | Check the workstation (CLI, Heat plugin, cloud profile, project, endpoint reachability, SSH key, allowed IP) and print the fix for each problem. |
-| `ff-ops infra render / plan / apply / show / destroy` | available for `net`; `storage` and `servers` planned | Generate the Heat templates, preview the changes (`stack update --dry-run`), apply them. A replacement guard refuses any change that would replace or delete a protected resource (network, volumes, `db` and `compute` VMs, floating IP) unless it is named with `--allow-replace` and retyped. `destroy` requires retyping the stack name. |
+| `ff-ops infra render / plan / apply / show / destroy` | available for `net` and `storage`; `servers` planned | Generate the Heat templates, preview the changes (`stack update --dry-run`), apply them. A replacement guard refuses any change that would replace or delete a protected resource (network, volumes, `db` and `compute` VMs, floating IP) unless it is named with `--allow-replace` and retyped. `destroy` requires retyping the stack name. |
 | `ff-ops access list / allow-me / revoke` | available | Manage the source ranges allowed to SSH into the bastion (see below). |
 | `ff-ops up` | planned | First deployment: `net` → `storage` → `servers` → first-boot checks → services. Idempotent. |
 | `ff-ops status` | planned | One table: VMs, containers, deployed version, configuration drift, disk usage, certificate expiry, tracking progress, schema version. |
 | `ff-ops update / rollback` | planned | Deploy an image tag or changed configuration in the safe order `db` → `compute` → `explorer`, with health checks and automatic rollback. |
 | `ff-ops config edit / diff / push` | planned | Change the production fink-fat configuration files, validated by `fink-fat config check` from the target image before anything is deployed. |
-| `ff-ops vm / volume / logs / ssh / tunnel` | planned | Machine lifecycle, volume snapshots and resizing, logs, SSH through the bastion, pgAdmin tunnel. |
+| `ff-ops volume list / snapshot` | available | List the data volumes (size, status, attachment, created or adopted by the storage stack, or orphan); take a Cinder snapshot of a role's data volume, even while attached. |
+| `ff-ops vm / volume extend / logs / ssh / tunnel` | planned | Machine lifecycle, volume resizing, logs, SSH through the bastion, pgAdmin tunnel. |
 
 `--dry-run` is a global option: it prints every external command instead of running it.
 
@@ -170,6 +171,40 @@ Every command that talks to the cloud first checks that the profile of
 | `sg_compute` | No rule: a label referenced by `sg_db`. |
 
 Security groups only filter inbound traffic; outbound traffic stays open.
+
+## The `storage` stack
+
+One `OS::Cinder::Volume` per data volume of `infra.yaml` (`vol_engine` for compute,
+`vol_pgdata` for db), with `deletion_policy: Retain`: deleting the stack, or removing a
+volume from it, keeps the volume and its data. A disabled role keeps its volume too. The
+volume resources are protected by the replacement guard.
+
+A retained volume is no longer managed by any stack. To manage it again without creating a
+new, empty volume, each volume has a template parameter `<resource>_existing_id`:
+
+| Parameter | Effect |
+| --- | --- |
+| empty (default) | Heat creates the volume. |
+| a volume ID | The resource's condition is false: Heat creates nothing, and the output `<resource>_id` returns that ID. The volume is *adopted*. |
+
+`ff-ops infra plan|apply storage` sets these parameters itself. It looks up each volume
+by name in Cinder and compares it with the stack's current parameters and outputs:
+
+| Cinder volumes with the name | Decision |
+| --- | --- |
+| none | created by the stack |
+| one, created by the stack | left as is |
+| one, already adopted by the stack | stays adopted |
+| one, managed by no stack (e.g. after `infra destroy storage`) | adopted (`= adopted:` line in the preview) |
+| several | refused: check which one holds the data, rename or delete the others |
+| none, but the stack had adopted one | refused: restore it from a snapshot first |
+
+The template never depends on the cloud: `infra render storage` writes exactly the file
+that `apply` sends, and only the parameters change. The outputs `vol_engine_id` and
+`vol_pgdata_id` are what the `servers` stack attaches.
+
+An adopted volume keeps its own size: `size_gb` in `infra.yaml` only applies when the
+stack creates the volume.
 
 ## SSH access to the bastion
 

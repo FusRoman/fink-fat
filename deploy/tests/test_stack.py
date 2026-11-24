@@ -109,3 +109,35 @@ def test_guard_honours_explicit_permission() -> None:
 def test_updates_in_place_are_never_blocked() -> None:
     changes = ChangeSet(updated=("net", "router"))
     assert stack.guard_violations(changes, {"net", "router"}) == []
+
+
+def test_parameters_are_passed_sorted_before_the_stack_name() -> None:
+    parameters = {"vol_pgdata_existing_id": "v1", "vol_engine_existing_id": ""}
+    template = Path("/b/storage.yaml")
+    for build in (stack.preview_update_command, stack.create_command, stack.update_command):
+        argv = build(CLI, "ffat-prod-storage", template, parameters).argv
+        assert argv[-7:] == (
+            *("--parameter", "vol_engine_existing_id="),
+            *("--parameter", "vol_pgdata_existing_id=v1"),
+            *("ffat-prod-storage", "-f", "json"),
+        )
+
+
+def test_stack_show_reads_the_parameters() -> None:
+    info = stack.parse_stack_show(
+        {
+            "stack_name": "s",
+            "stack_status": "CREATE_COMPLETE",
+            "parameters": {"OS::stack_id": "x", "vol_pgdata_existing_id": "v1"},
+        }
+    )
+    assert info.parameters["vol_pgdata_existing_id"] == "v1"
+    as_text = stack.parse_stack_show(
+        {"stack_name": "s", "stack_status": "CREATE_COMPLETE", "parameters": '{"a": "b"}'}
+    )
+    assert as_text.parameters == {"a": "b"}
+
+
+def test_creation_change_set_leaves_out_skipped_resources() -> None:
+    changes = stack.change_set_for_creation({"resources": {"b": {}, "a": {}}}, skipped=["a"])
+    assert changes.added == ("b",)

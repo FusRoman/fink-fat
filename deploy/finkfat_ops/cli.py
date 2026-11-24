@@ -6,6 +6,7 @@ import os
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from ipaddress import IPv4Address, IPv4Network
 from pathlib import Path
 from typing import Annotated
@@ -16,14 +17,18 @@ from rich.table import Table
 
 from finkfat_ops import access as access_ops
 from finkfat_ops import infra as infra_ops
+from finkfat_ops import naming
+from finkfat_ops import volume as volume_ops
 from finkfat_ops.checks import Finding, Level, check_sensitive_files
 from finkfat_ops.config import ConfigError, Deployment, DeployPaths, load_deployment
 from finkfat_ops.heat.net import ADMIN_SSH_RESOURCE
-from finkfat_ops.naming import Stack
+from finkfat_ops.heat.storage import data_volumes
+from finkfat_ops.naming import Role, Stack
 from finkfat_ops.openstack import (
     OpenStackCli,
     ProjectMismatchError,
     default_openstack_binary,
+    parse_json,
     profile_password,
     verify_project,
 )
@@ -52,6 +57,8 @@ access_app = typer.Typer(
     help="Source ranges allowed to SSH into the bastion.", no_args_is_help=True
 )
 app.add_typer(access_app, name="access")
+volume_app = typer.Typer(help="Persistent data volumes: list and snapshot.", no_args_is_help=True)
+app.add_typer(volume_app, name="volume")
 
 
 @dataclass
@@ -228,8 +235,15 @@ def _access_state(app_ctx: AppContext) -> access_ops.AccessState:
 def _spec(
     session: infra_ops.InfraSession, app_ctx: AppContext, stack: Stack
 ) -> infra_ops.StackSpec:
-    """Build the specification of ``stack`` from the session's configuration."""
+    """Build the specification of ``stack`` from the configuration alone (no cloud call)."""
     return infra_ops.build_stack_spec(stack, session.deployment, _access_state(app_ctx))
+
+
+def _resolved_spec(
+    session: infra_ops.InfraSession, app_ctx: AppContext, stack: Stack
+) -> infra_ops.StackSpec:
+    """Build the specification of ``stack``, with the decisions that need the cloud."""
+    return infra_ops.resolve_spec(session, stack, _access_state(app_ctx))
 
 
 StackArgument = Annotated[Stack, typer.Argument(help="Which stack (net, storage, servers).")]
@@ -261,11 +275,15 @@ def infra_plan(ctx: typer.Context, stack: StackArgument = Stack.NET) -> None:
     app_ctx: AppContext = ctx.obj
     with _fail_nicely():
         session = _session(app_ctx)
-        planned = infra_ops.plan(session, _spec(session, app_ctx, stack))
+        planned = infra_ops.plan(session, _resolved_spec(session, app_ctx, stack))
         state = "will be created" if planned.existing is None else planned.existing.status
         console.print(f"{planned.spec.name}: {state}")
-        for line in infra_ops.describe_changes(planned.changes):
-            console.print(f"  {line}")
+        lines = [
+            *infra_ops.describe_adoptions(planned.spec),
+            *infra_ops.describe_changes(planned.changes, creating=planned.existing is None),
+        ]
+        for line in lines:
+            console.print(f"  {line}", markup=False)
         violations = infra_ops.stack_ops.guard_violations(planned.changes, planned.spec.protected)
         if violations:
             console.print(f"[red]✘[/] {infra_ops.describe_violations(planned.spec, violations)}")
@@ -288,7 +306,7 @@ def infra_apply(
     app_ctx: AppContext = ctx.obj
     with _fail_nicely():
         session = _session(app_ctx)
-        spec = _spec(session, app_ctx, stack)
+        spec = _resolved_spec(session, app_ctx, stack)
         for name in allow_replace or []:
             if app_ctx.prompt(f"type '{name}' to confirm it may be destroyed") != name:
                 raise infra_ops.InfraError("cancelled")
@@ -311,7 +329,7 @@ def infra_show(ctx: typer.Context) -> None:
             table.add_column(column)
         env = session.deployment.infra.env
         for stack in Stack:
-            name = infra_ops.naming.stack_name(env, stack)
+            name = naming.stack_name(env, stack)
             info = infra_ops.get_stack(session, name)
             if info is None:
                 table.add_row(name, "absent", "")
@@ -338,6 +356,12 @@ def infra_destroy(ctx: typer.Context, stack: StackArgument) -> None:
             raise infra_ops.InfraError("cancelled")
         infra_ops.destroy(session, spec, assume_yes=True)
         console.print(f"[green]✔[/] {spec.name} deleted")
+        if stack == Stack.STORAGE:
+            console.print(
+                "    the data volumes are kept (Retain): `ff-ops infra apply storage` adopts "
+                "them again, `ff-ops volume list` shows them",
+                style="dim",
+            )
 
 
 # ------------------------------------------------------------------------------ access
@@ -428,6 +452,84 @@ def access_revoke(
         deployment = load_deployment(app_ctx.paths)
         new_state = access_ops.revoke(_access_state(app_ctx), deployment.local, IPv4Network(cidr))
         _apply_access(app_ctx, new_state, yes)
+
+
+# ------------------------------------------------------------------------------ volume
+
+
+@volume_app.command("list")
+def volume_list(ctx: typer.Context) -> None:
+    """List the data volumes: size, status, attachment and how the storage stack manages them.
+
+    Example: ff-ops volume list
+    """
+    app_ctx: AppContext = ctx.obj
+    with _fail_nicely():
+        session = _session(app_ctx)
+        infra = session.deployment.infra
+        existing = infra_ops.get_stack(session, naming.stack_name(infra.env, Stack.STORAGE))
+        parameters = existing.parameters if existing else None
+        outputs = existing.outputs if existing else None
+        table = Table(title="Data volumes")
+        for column in ("role", "volume", "size", "status", "attached to", "managed", "ID"):
+            table.add_column(column)
+        labels = []
+        for volume in data_volumes(infra):
+            found = infra_ops.find_volumes(session, volume.name)
+            if not found:
+                table.add_row(str(volume.role), volume.name, f"({volume.size_gb} GB)", "absent")
+            for info in found:
+                label = volume_ops.management(volume, info.id, parameters, outputs)
+                labels.append(label)
+                table.add_row(
+                    str(volume.role),
+                    volume.name,
+                    f"{info.size_gb} GB",
+                    info.status,
+                    info.attached_to or "—",
+                    label,
+                    info.id,
+                )
+        console.print(table)
+        if volume_ops.ORPHAN in labels:
+            console.print(
+                f"[yellow]⚠[/] '{volume_ops.ORPHAN}' volumes are managed by no stack: "
+                "`ff-ops infra apply storage` adopts them"
+            )
+
+
+@volume_app.command("snapshot")
+def volume_snapshot(
+    ctx: typer.Context,
+    role: Annotated[Role, typer.Argument(help="Machine whose data volume is snapshotted.")],
+) -> None:
+    """Take a Cinder snapshot of a role's data volume, even while it is attached.
+
+    The snapshot is crash-consistent (like a power cut): Postgres recovers from it. Take
+    one before any risky operation.
+
+    Example: ff-ops volume snapshot db
+    """
+    app_ctx: AppContext = ctx.obj
+    with _fail_nicely():
+        session = _session(app_ctx)
+        volume = infra_ops.volume_of_role(session.deployment, role)
+        found = infra_ops.find_volumes(session, volume.name)
+        if app_ctx.dry_run and not found:
+            found = [volume_ops.VolumeInfo(f"<{volume.name} id>", volume.name, "", 0)]
+        if len(found) != 1:
+            raise infra_ops.InfraError(
+                f"expected exactly one volume named {volume.name}, found {len(found)}"
+            )
+        name = volume_ops.snapshot_name(volume, datetime.now(UTC))
+        result = app_ctx.runner.run(volume_ops.snapshot_command(session.cli, found[0].id, name))
+        snapshot = parse_json(result) or {}
+        console.print(
+            f"[green]✔[/] snapshot {name} requested ({snapshot.get('id', 'dry-run')}, "
+            f"status {snapshot.get('status', '—')})"
+        )
+        check = volume_ops.snapshot_show_command(session.cli, name).display()
+        console.print(f"    check it reaches 'available': {check}", style="dim", markup=False)
 
 
 def main() -> None:

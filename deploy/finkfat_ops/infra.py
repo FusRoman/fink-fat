@@ -7,18 +7,29 @@ sequences the commands and the operator's confirmations.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from finkfat_ops import naming
 from finkfat_ops import stack as stack_ops
+from finkfat_ops import volume as volume_ops
 from finkfat_ops.access import AccessState, effective_ssh_cidrs
 from finkfat_ops.config import Deployment, DeployPaths
 from finkfat_ops.heat.net import PROTECTED_RESOURCES as NET_PROTECTED
 from finkfat_ops.heat.net import build_net_template
 from finkfat_ops.heat.render import render_template
+from finkfat_ops.heat.storage import (
+    Adoption,
+    AdoptionError,
+    DataVolume,
+    adoption_parameters,
+    build_storage_template,
+    data_volumes,
+    resolve_adoptions,
+)
+from finkfat_ops.heat.storage import protected_resources as storage_protected
 from finkfat_ops.naming import Stack
 from finkfat_ops.openstack import OpenStackCli, is_not_found, parse_json
 from finkfat_ops.runner import CommandError, Runner
@@ -43,20 +54,31 @@ class StackSpec:
         The HOT template.
     protected : frozenset[str]
         Logical resources that must never be replaced or deleted silently.
+    parameters : Mapping[str, str]
+        Template parameters passed to every create, preview and update.
+    adoptions : tuple[Adoption, ...]
+        Existing volumes the stack takes over instead of creating them (storage only).
     """
 
     stack: Stack
     name: str
     template: dict[str, Any]
     protected: frozenset[str]
+    parameters: Mapping[str, str] = field(default_factory=dict)
+    adoptions: tuple[Adoption, ...] = ()
 
 
-IMPLEMENTED_STACKS = (Stack.NET,)
+IMPLEMENTED_STACKS = (Stack.NET, Stack.STORAGE)
 """Stacks that ff-ops can build so far."""
 
 
-def build_stack_spec(stack: Stack, deployment: Deployment, access: AccessState) -> StackSpec:
-    """Build the template and protection list of a stack (pure).
+def build_stack_spec(
+    stack: Stack,
+    deployment: Deployment,
+    access: AccessState,
+    adoptions: Iterable[Adoption] = (),
+) -> StackSpec:
+    """Build the template, parameters and protection list of a stack (pure).
 
     Parameters
     ----------
@@ -65,7 +87,9 @@ def build_stack_spec(stack: Stack, deployment: Deployment, access: AccessState) 
     deployment : Deployment
         Validated configuration.
     access : AccessState
-        Dynamic SSH ranges.
+        Dynamic SSH ranges (net stack).
+    adoptions : Iterable[Adoption]
+        Existing volumes to adopt (storage stack), from :func:`resolve_spec`.
 
     Returns
     -------
@@ -77,28 +101,122 @@ def build_stack_spec(stack: Stack, deployment: Deployment, access: AccessState) 
     InfraError
         The stack is not implemented yet.
     """
-    name = naming.stack_name(deployment.infra.env, stack)
+    infra = deployment.infra
+    name = naming.stack_name(infra.env, stack)
     if stack == Stack.NET:
         cidrs = effective_ssh_cidrs(deployment.local, access)
-        return StackSpec(stack, name, build_net_template(deployment.infra, cidrs), NET_PROTECTED)
+        return StackSpec(stack, name, build_net_template(infra, cidrs), NET_PROTECTED)
+    if stack == Stack.STORAGE:
+        adopted = tuple(adoptions)
+        return StackSpec(
+            stack,
+            name,
+            build_storage_template(infra),
+            storage_protected(infra),
+            parameters=adoption_parameters(data_volumes(infra), adopted),
+            adoptions=adopted,
+        )
     raise InfraError(f"stack '{stack}' is not implemented yet")
 
 
-def describe_changes(changes: ChangeSet) -> list[str]:
+def resolve_spec(session: InfraSession, stack: Stack, access: AccessState) -> StackSpec:
+    """Build a stack specification, with the decisions that need the cloud's state.
+
+    For the storage stack, the existing volumes are looked up by name and compared with
+    the stack's current parameters and outputs to decide which ones to adopt (see
+    :func:`finkfat_ops.heat.storage.resolve_adoptions`). Other stacks need no lookup.
+
+    Parameters
+    ----------
+    session : InfraSession
+        Cloud access.
+    stack : Stack
+        Which stack.
+    access : AccessState
+        Dynamic SSH ranges (net stack).
+
+    Returns
+    -------
+    StackSpec
+        The stack specification.
+
+    Raises
+    ------
+    InfraError
+        The volumes found do not allow a safe adoption decision.
+    """
+    if stack != Stack.STORAGE:
+        return build_stack_spec(stack, session.deployment, access)
+    volumes = data_volumes(session.deployment.infra)
+    existing = get_stack(session, naming.stack_name(session.deployment.infra.env, stack))
+    found = {v.name: [info.id for info in find_volumes(session, v.name)] for v in volumes}
+    try:
+        adoptions = resolve_adoptions(
+            volumes,
+            found,
+            existing.parameters if existing else None,
+            existing.outputs if existing else None,
+        )
+    except AdoptionError as error:
+        raise InfraError(f"refused: {error}") from error
+    return build_stack_spec(stack, session.deployment, access, adoptions)
+
+
+def find_volumes(session: InfraSession, name: str) -> list[volume_ops.VolumeInfo]:
+    """Return every Cinder volume carrying exactly ``name`` (empty in dry-run)."""
+    result = session.runner.run(volume_ops.list_by_name_command(session.cli, name))
+    return [info for info in volume_ops.parse_volume_list(parse_json(result)) if info.name == name]
+
+
+def describe_adoptions(spec: StackSpec) -> list[str]:
+    """Format the adoptions of a stack as one line each (pure).
+
+    Parameters
+    ----------
+    spec : StackSpec
+        The stack.
+
+    Returns
+    -------
+    list[str]
+        Lines such as ``"= adopted: ffat-prod-vol-pgdata (<id>)"``; empty without adoption.
+    """
+    return [f"= adopted: {a.volume.name} ({a.volume_id})" for a in spec.adoptions]
+
+
+def volume_of_role(deployment: Deployment, role: naming.Role) -> DataVolume:
+    """Return the data volume of a role (pure).
+
+    Raises
+    ------
+    InfraError
+        The role has no data volume.
+    """
+    for volume in data_volumes(deployment.infra):
+        if volume.role == role:
+            return volume
+    raise InfraError(f"the {role} machine has no data volume")
+
+
+def describe_changes(changes: ChangeSet, *, creating: bool = False) -> list[str]:
     """Format a change set as one line per kind of change (pure).
 
     Parameters
     ----------
     changes : ChangeSet
         The previewed changes.
+    creating : bool
+        The stack does not exist yet: an empty change set then means that the stack
+        will be created without resources of its own (every volume adopted).
 
     Returns
     -------
     list[str]
-        Lines such as ``"+ added: net, subnet"``; ``["no change"]`` when empty.
+        Lines such as ``"+ added: net, subnet"``; ``["no change"]`` (or
+        ``["nothing to create"]`` for a creation) when empty.
     """
     if changes.is_empty:
-        return ["no change"]
+        return ["nothing to create" if creating else "no change"]
     symbols = {"added": "+", "updated": "~", "replaced": "!", "deleted": "-"}
     return [
         f"{symbol} {kind}: {', '.join(getattr(changes, kind))}"
@@ -210,8 +328,11 @@ def plan(session: InfraSession, spec: StackSpec) -> Plan:
     path = render(session, spec)
     existing = get_stack(session, spec.name)
     if existing is None:
-        return Plan(spec, path, None, stack_ops.change_set_for_creation(spec.template))
-    result = session.runner.run(stack_ops.preview_update_command(session.cli, spec.name, path))
+        skipped = [adoption.volume.resource for adoption in spec.adoptions]
+        return Plan(spec, path, None, stack_ops.change_set_for_creation(spec.template, skipped))
+    result = session.runner.run(
+        stack_ops.preview_update_command(session.cli, spec.name, path, spec.parameters)
+    )
     return Plan(spec, path, existing, stack_ops.parse_change_set(parse_json(result)))
 
 
@@ -250,7 +371,8 @@ def apply(
         Guard violation, change outside ``only``, operator refusal, or failed stack.
     """
     planned = plan(session, spec)
-    for line in describe_changes(planned.changes):
+    changes = describe_changes(planned.changes, creating=planned.existing is None)
+    for line in [*describe_adoptions(spec), *changes]:
         session.echo(f"  {line}")
     if planned.existing is not None and planned.changes.is_empty:
         session.echo(f"{spec.name} is up to date")
@@ -270,7 +392,7 @@ def apply(
     if not assume_yes and not session.confirm(f"{verb} {spec.name}?"):
         raise InfraError("cancelled")
     command = (stack_ops.create_command if planned.existing is None else stack_ops.update_command)(
-        session.cli, spec.name, planned.template_path
+        session.cli, spec.name, planned.template_path, spec.parameters
     )
     session.echo(f"{verb} {spec.name} (this waits until Heat is done)…")
     try:

@@ -7,7 +7,7 @@ interpret JSON already returned by ``openstack``.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -35,22 +35,62 @@ def outputs_command(cli: OpenStackCli, stack: str) -> Command:
     return cli.command("stack", "output", "show", stack, "--all")
 
 
-def preview_update_command(cli: OpenStackCli, stack: str, template: Path) -> Command:
+def _parameter_args(parameters: Mapping[str, str]) -> list[str]:
+    """Turn template parameters into ``--parameter key=value`` arguments (sorted)."""
+    return [
+        arg for key in sorted(parameters) for arg in ("--parameter", f"{key}={parameters[key]}")
+    ]
+
+
+def preview_update_command(
+    cli: OpenStackCli, stack: str, template: Path, parameters: Mapping[str, str] | None = None
+) -> Command:
     """``openstack stack update --dry-run``: list the changes without applying them."""
-    return cli.command("stack", "update", "--dry-run", "--show-nested", "-t", str(template), stack)
-
-
-def create_command(cli: OpenStackCli, stack: str, template: Path) -> Command:
-    """``openstack stack create --wait`` (rollback on failure is Heat's default)."""
     return cli.command(
-        "stack", "create", "--wait", "-t", str(template), stack, timeout_s=WAIT_TIMEOUT_S
+        "stack",
+        "update",
+        "--dry-run",
+        "--show-nested",
+        "-t",
+        str(template),
+        *_parameter_args(parameters or {}),
+        stack,
     )
 
 
-def update_command(cli: OpenStackCli, stack: str, template: Path) -> Command:
-    """``openstack stack update --wait``: apply the template; only differences change."""
+def create_command(
+    cli: OpenStackCli, stack: str, template: Path, parameters: Mapping[str, str] | None = None
+) -> Command:
+    """``openstack stack create --wait`` (rollback on failure is Heat's default)."""
     return cli.command(
-        "stack", "update", "--wait", "-t", str(template), stack, timeout_s=WAIT_TIMEOUT_S
+        "stack",
+        "create",
+        "--wait",
+        "-t",
+        str(template),
+        *_parameter_args(parameters or {}),
+        stack,
+        timeout_s=WAIT_TIMEOUT_S,
+    )
+
+
+def update_command(
+    cli: OpenStackCli, stack: str, template: Path, parameters: Mapping[str, str] | None = None
+) -> Command:
+    """``openstack stack update --wait``: apply the template; only differences change.
+
+    Every parameter of the template must be given: an update without ``--existing``
+    resets the missing ones to their default.
+    """
+    return cli.command(
+        "stack",
+        "update",
+        "--wait",
+        "-t",
+        str(template),
+        *_parameter_args(parameters or {}),
+        stack,
+        timeout_s=WAIT_TIMEOUT_S,
     )
 
 
@@ -78,12 +118,15 @@ class StackInfo:
         Heat's explanation of the status (the error, for a failed stack).
     outputs : dict[str, Any]
         Output values by key.
+    parameters : dict[str, str]
+        Current template parameters (Heat's own ``OS::*`` entries included).
     """
 
     name: str
     status: str
     reason: str
     outputs: dict[str, Any] = field(default_factory=dict)
+    parameters: dict[str, str] = field(default_factory=dict)
 
     @property
     def healthy(self) -> bool:
@@ -135,13 +178,15 @@ def parse_stack_show(data: dict[str, Any]) -> StackInfo:
     Returns
     -------
     StackInfo
-        Name, status, reason and outputs.
+        Name, status, reason, outputs and parameters.
     """
+    parameters = _decode(data.get("parameters")) or {}
     return StackInfo(
         name=data["stack_name"],
         status=data["stack_status"],
         reason=data.get("stack_status_reason") or "",
         outputs=parse_outputs(data.get("outputs")),
+        parameters={str(key): str(value) for key, value in parameters.items()},
     )
 
 
@@ -201,20 +246,23 @@ def parse_change_set(data: Any) -> ChangeSet:
     )
 
 
-def change_set_for_creation(template: dict[str, Any]) -> ChangeSet:
+def change_set_for_creation(template: dict[str, Any], skipped: Iterable[str] = ()) -> ChangeSet:
     """Describe the creation of a new stack as a change set (every resource added).
 
     Parameters
     ----------
     template : dict[str, Any]
         The template to create.
+    skipped : Iterable[str]
+        Resources whose condition is false for this creation (e.g. adopted volumes).
 
     Returns
     -------
     ChangeSet
-        All resources of the template in ``added``.
+        The resources of the template that will be created, in ``added``.
     """
-    return ChangeSet(added=tuple(sorted(template.get("resources", {}))))
+    created = set(template.get("resources", {})) - set(skipped)
+    return ChangeSet(added=tuple(sorted(created)))
 
 
 # ------------------------------------------------------------------- replacement guard
