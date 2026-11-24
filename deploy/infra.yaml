@@ -4,7 +4,7 @@
 
 env: prod                                    # every resource is named ffat-prod-*
 keypair: roman_ssh_key                       # existing Nova keypair (public key only)
-heat_template_version: 2021-04-16            # newest HOT version accepted by the lab's Heat
+heat_template_version: 2021-04-16            # newest HOT version accepted by the cloud's Heat
 availability_zone: nova
 os_image: AlmaLinux-9-GenericCloud-9.7-20260414.x86_64  # newest AlmaLinux image
 ssh_user: almalinux                          # default user of the AlmaLinux cloud image

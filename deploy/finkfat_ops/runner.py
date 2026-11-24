@@ -11,6 +11,7 @@ This is the only module of ff-ops that runs anything. Every other module builds
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 from collections.abc import Callable, Sequence
@@ -34,11 +35,15 @@ class Command:
         (only for interactive commands such as ``ssh`` sessions).
     stdin : str | None
         Text sent to the command's standard input, if any.
+    env : tuple[tuple[str, str], ...]
+        Variables added to the inherited environment, e.g. ``OS_PASSWORD``. Never shown
+        by :meth:`display` nor by ``repr``, since they may hold secrets.
     """
 
     argv: tuple[str, ...]
     timeout_s: float | None = DEFAULT_TIMEOUT_S
     stdin: str | None = None
+    env: tuple[tuple[str, str], ...] = field(default=(), repr=False)
 
     @classmethod
     def of(cls, *argv: str, timeout_s: float | None = DEFAULT_TIMEOUT_S) -> Command:
@@ -132,6 +137,7 @@ class SubprocessRunner:
             completed = subprocess.run(
                 list(command.argv),
                 input=command.stdin,
+                env={**os.environ, **dict(command.env)} if command.env else None,
                 capture_output=True,
                 text=True,
                 timeout=command.timeout_s,
@@ -172,7 +178,7 @@ class DryRunRunner:
         return CommandResult()
 
 
-@dataclass(frozen=True)
+@dataclass
 class FakeResponse:
     """A recorded answer of :class:`FakeRunner`.
 
@@ -182,10 +188,13 @@ class FakeResponse:
         The response applies to any command whose argv starts with this prefix.
     result : CommandResult
         The result returned for such a command.
+    remaining : int | None
+        How many more times this response may be used; ``None`` means forever.
     """
 
     prefix: tuple[str, ...]
     result: CommandResult
+    remaining: int | None = None
 
 
 class UnexpectedCommandError(AssertionError):
@@ -211,9 +220,27 @@ class FakeRunner:
     responses: list[FakeResponse] = field(default_factory=list)
     calls: list[Command] = field(default_factory=list)
 
-    def on(self, prefix: Sequence[str], result: CommandResult) -> FakeRunner:
-        """Register ``result`` for commands starting with ``prefix``; returns ``self``."""
-        self.responses.append(FakeResponse(tuple(prefix), result))
+    def on(
+        self, prefix: Sequence[str], result: CommandResult, *, times: int | None = None
+    ) -> FakeRunner:
+        """Register ``result`` for commands starting with ``prefix``.
+
+        Parameters
+        ----------
+        prefix : Sequence[str]
+            Leading arguments to match.
+        result : CommandResult
+            Answer to give.
+        times : int | None
+            Use this answer at most ``times`` times (then later responses are tried);
+            ``None`` means forever.
+
+        Returns
+        -------
+        FakeRunner
+            ``self``, to chain registrations.
+        """
+        self.responses.append(FakeResponse(tuple(prefix), result, times))
         return self
 
     def run(self, command: Command, *, check: bool = True) -> CommandResult:
@@ -228,6 +255,10 @@ class FakeRunner:
         """
         self.calls.append(command)
         for response in self.responses:
+            if response.remaining == 0:
+                continue
             if command.argv[: len(response.prefix)] == response.prefix:
+                if response.remaining is not None:
+                    response.remaining -= 1
                 return _check(command, response.result, check)
         raise UnexpectedCommandError(f"no fake response for: {command.display()}")

@@ -9,9 +9,14 @@
 openstack:
   cloud: my-cloud-profile            # profile name in ~/.config/openstack/clouds.yaml
   project: my-project                # ff-ops refuses to act on any other project
+  ask_password: true                 # profile uses auth_type: password (required by Heat on
+                                     # clouds where application credentials cannot create
+                                     # trusts); ff-ops asks once, or reads OS_PASSWORD
 
-admin_cidrs:                         # source ranges allowed to SSH into the bastion (port 22)
-  - 192.0.2.0/24                     # e.g. the lab egress range (stable, used through sshuttle)
-  - 198.51.100.7/32                  # e.g. home IP; managed by `ff-ops access allow-me`
+admin_cidrs:                         # STABLE source ranges allowed to SSH into the bastion (port 22)
+  - 192.0.2.0/24                     # e.g. the institution egress range (used through sshuttle)
+  - 198.51.100.7/32                  # e.g. a fixed office address
+# A changing address (home, travel) does not belong here: `ff-ops access allow-me` manages it
+# in .state/access.yaml and never rewrites this file.
 
 explorer_domain: fink-fat.example.org   # remove the line to run without a domain (self-signed HTTPS)

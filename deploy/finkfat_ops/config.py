@@ -38,6 +38,12 @@ LOCAL_ONLY_KEYS = frozenset({"openstack", "admin_cidrs", "explorer_domain"})
 MIN_ROOT_GB = 20
 """Smallest boot volume accepted (the flavors' own root disk size)."""
 
+MAX_PREFIXLEN = 24
+"""Smallest private subnet accepted (a /24)."""
+
+DHCP_POOL_OFFSET = 100
+"""Offset of the first DHCP address; fixed IPs must stay below it."""
+
 _NAME_PATTERN = r"^[a-z][a-z0-9-]{0,30}$"
 _HOSTNAME_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
 
@@ -133,6 +139,29 @@ class NetworkConfig(_Strict):
     external_network: str = Field(min_length=1)
     dns_nameservers: list[IPv4Address] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def _check_size(self) -> Self:
+        """Require at least a /24, so that fixed IPs and the DHCP pool never overlap."""
+        if self.cidr.prefixlen > MAX_PREFIXLEN:
+            raise ValueError(f"cidr {self.cidr} is too small: use a /{MAX_PREFIXLEN} or larger")
+        return self
+
+    def dhcp_pool(self) -> tuple[IPv4Address, IPv4Address]:
+        """Return the first and last address handed out by DHCP.
+
+        Fixed IPs live below the pool (offsets 2 to 99), so that no other port can
+        ever receive them.
+
+        Returns
+        -------
+        tuple[IPv4Address, IPv4Address]
+            Start and end of the DHCP allocation pool.
+        """
+        return (
+            self.cidr.network_address + DHCP_POOL_OFFSET,
+            self.cidr.broadcast_address - 1,
+        )
+
 
 class ImagesConfig(_Strict):
     """Docker images.
@@ -183,7 +212,8 @@ def role_problems(network: NetworkConfig, roles: RolesConfig) -> list[str]:
 
     Checked rules:
 
-    * each fixed IP is a usable host of the subnet, not its gateway (first host);
+    * each fixed IP is a usable host of the subnet, not its gateway (first host), and
+      lies below the DHCP pool;
     * fixed IPs and data volume names are unique;
     * compute and db have a data volume (they hold the data);
     * exactly the explorer carries the floating IP (it is the bastion).
@@ -213,6 +243,11 @@ def role_problems(network: NetworkConfig, roles: RolesConfig) -> list[str]:
             problems.append(f"roles.{role}.fixed_ip {cfg.fixed_ip} is not a host of {network.cidr}")
         elif cfg.fixed_ip == gateway:
             problems.append(f"roles.{role}.fixed_ip {cfg.fixed_ip} is the router gateway address")
+        elif cfg.fixed_ip >= network.dhcp_pool()[0]:
+            problems.append(
+                f"roles.{role}.fixed_ip {cfg.fixed_ip} is inside the DHCP pool "
+                f"(starting at {network.dhcp_pool()[0]})"
+            )
         if cfg.fixed_ip in ips:
             problems.append(f"roles.{role}.fixed_ip duplicates roles.{ips[cfg.fixed_ip]}.fixed_ip")
         ips.setdefault(cfg.fixed_ip, role)
@@ -245,10 +280,14 @@ class OpenStackTarget(_Strict):
         Profile name in ``~/.config/openstack/clouds.yaml`` (passed as ``--os-cloud``).
     project : str
         Expected project name; ff-ops refuses to act on any other project.
+    ask_password : bool
+        The profile authenticates with a password kept out of ``clouds.yaml``: ff-ops asks
+        for it once per command (or reads ``OS_PASSWORD``) and passes it to ``openstack``.
     """
 
     cloud: str = Field(min_length=1)
     project: str = Field(min_length=1)
+    ask_password: bool = False
 
 
 class LocalConfig(_Strict):
@@ -437,7 +476,7 @@ class Deployment:
     infra : InfraConfig
         Versioned structure.
     local : LocalConfig
-        Person/lab-specific settings.
+        Operator-specific settings.
     secrets : Secrets
         Passwords and tokens.
     """

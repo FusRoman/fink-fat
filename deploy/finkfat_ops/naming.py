@@ -33,6 +33,7 @@ class SecurityGroup(StrEnum):
     """The security groups created by the ``net`` stack."""
 
     EXPLORER = "explorer"
+    ADMIN_SSH = "admin-ssh"
     INTERNAL_SSH = "internal-ssh"
     DB = "db"
     COMPUTE = "compute"

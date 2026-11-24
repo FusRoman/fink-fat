@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from ipaddress import IPv4Address, IPv4Network
 from pathlib import Path
 from typing import Annotated
 
@@ -10,14 +14,25 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from finkfat_ops import access as access_ops
+from finkfat_ops import infra as infra_ops
 from finkfat_ops.checks import Finding, Level, check_sensitive_files
 from finkfat_ops.config import ConfigError, Deployment, DeployPaths, load_deployment
-from finkfat_ops.runner import DryRunRunner, Runner, SubprocessRunner
+from finkfat_ops.heat.net import ADMIN_SSH_RESOURCE
+from finkfat_ops.naming import Stack
+from finkfat_ops.openstack import (
+    OpenStackCli,
+    ProjectMismatchError,
+    default_openstack_binary,
+    profile_password,
+    verify_project,
+)
+from finkfat_ops.runner import CommandError, DryRunRunner, Runner, SubprocessRunner
 
 DEFAULT_DEPLOY_DIR = Path(__file__).resolve().parents[1]
 """The ``deploy/`` directory this package lives in."""
 
-console = Console()
+console = Console(soft_wrap=True)
 
 app = typer.Typer(
     name="ff-ops",
@@ -29,6 +44,14 @@ config_app = typer.Typer(
     help="Validate and inspect the deployment configuration.", no_args_is_help=True
 )
 app.add_typer(config_app, name="config")
+infra_app = typer.Typer(
+    help="Heat stacks: render, preview, apply, inspect and destroy.", no_args_is_help=True
+)
+app.add_typer(infra_app, name="infra")
+access_app = typer.Typer(
+    help="Source ranges allowed to SSH into the bastion.", no_args_is_help=True
+)
+app.add_typer(access_app, name="access")
 
 
 @dataclass
@@ -41,10 +64,25 @@ class AppContext:
         Deployment file locations.
     runner : Runner
         Executes external commands (real, dry-run or fake).
+    dry_run : bool
+        Commands are printed, not run; nothing local is written either.
+    openstack_binary : str
+        The ``openstack`` executable.
+    confirm : Callable[[str], bool]
+        Asks the operator a yes/no question.
+    prompt : Callable[[str], str]
+        Asks the operator to type a value.
+    ask_secret : Callable[[str], str]
+        Asks the operator to type a secret, without echoing it.
     """
 
     paths: DeployPaths
     runner: Runner
+    dry_run: bool = False
+    openstack_binary: str = field(default_factory=default_openstack_binary)
+    confirm: Callable[[str], bool] = lambda question: typer.confirm(question, default=False)
+    prompt: Callable[[str], str] = lambda question: typer.prompt(question, default="")
+    ask_secret: Callable[[str], str] = lambda question: typer.prompt(question, hide_input=True)
 
 
 @app.callback()
@@ -59,8 +97,15 @@ def main_callback(
 ) -> None:
     """Build the shared context, unless a test already injected one."""
     if ctx.obj is None:
-        runner: Runner = DryRunRunner(echo=console.print) if dry_run else SubprocessRunner()
-        ctx.obj = AppContext(paths=DeployPaths(deploy_dir.resolve()), runner=runner)
+        runner: Runner = DryRunRunner(echo=_print_plain) if dry_run else SubprocessRunner()
+        ctx.obj = AppContext(
+            paths=DeployPaths(deploy_dir.resolve()), runner=runner, dry_run=dry_run
+        )
+
+
+def _print_plain(line: str) -> None:
+    """Print a line verbatim (no rich markup: ``[dry-run]`` must stay visible)."""
+    console.print(line, markup=False, highlight=False)
 
 
 _LEVEL_STYLE = {Level.OK: "[green]✔[/]", Level.WARN: "[yellow]⚠[/]", Level.ERROR: "[red]✘[/]"}
@@ -121,6 +166,268 @@ def config_check(ctx: typer.Context) -> None:
     _print_findings(findings)
     if failed or any(f.level == Level.ERROR for f in findings):
         raise typer.Exit(code=1)
+
+
+# ----------------------------------------------------------------------------- helpers
+
+
+@contextmanager
+def _fail_nicely() -> Generator[None]:
+    """Turn the expected errors into a red message and exit status 1."""
+    try:
+        yield
+    except ConfigError as error:
+        for problem in error.problems:
+            console.print(f"[red]✘[/] {problem}")
+        raise typer.Exit(code=1) from error
+    except (
+        infra_ops.InfraError,
+        CommandError,
+        ProjectMismatchError,
+        ValueError,
+    ) as error:
+        console.print(f"[red]✘[/] {error}")
+        raise typer.Exit(code=1) from error
+
+
+def _session(app_ctx: AppContext, *, verify: bool = True) -> infra_ops.InfraSession:
+    """Load the configuration and, unless ``verify`` is false, check the cloud project.
+
+    The password of a password-based profile is asked here, once, only when the cloud is
+    really contacted (not for ``verify=False`` nor in dry-run mode).
+    """
+    deployment = load_deployment(app_ctx.paths)
+    target = deployment.local.openstack
+    contacts_cloud = verify and not app_ctx.dry_run
+    password = profile_password(
+        target.ask_password and contacts_cloud, os.environ, app_ctx.ask_secret
+    )
+    cli = OpenStackCli(cloud=target.cloud, binary=app_ctx.openstack_binary, password=password)
+    if verify:
+        project_id = verify_project(cli, app_ctx.runner, target.project)
+        if project_id:
+            label = (
+                project_id if target.project == project_id else f"{target.project} ({project_id})"
+            )
+            console.print(f"[green]✔[/] project {label}")
+    return infra_ops.InfraSession(
+        deployment=deployment,
+        paths=app_ctx.paths,
+        cli=cli,
+        runner=app_ctx.runner,
+        echo=console.print,
+        confirm=app_ctx.confirm,
+    )
+
+
+def _access_state(app_ctx: AppContext) -> access_ops.AccessState:
+    """Read ``.state/access.yaml``."""
+    return access_ops.load_access_state(access_ops.access_state_path(app_ctx.paths.state_dir))
+
+
+def _spec(
+    session: infra_ops.InfraSession, app_ctx: AppContext, stack: Stack
+) -> infra_ops.StackSpec:
+    """Build the specification of ``stack`` from the session's configuration."""
+    return infra_ops.build_stack_spec(stack, session.deployment, _access_state(app_ctx))
+
+
+StackArgument = Annotated[Stack, typer.Argument(help="Which stack (net, storage, servers).")]
+
+
+# ------------------------------------------------------------------------------- infra
+
+
+@infra_app.command("render")
+def infra_render(ctx: typer.Context, stack: StackArgument = Stack.NET) -> None:
+    """Write the Heat template of a stack to deploy/.build/ (contacts nothing).
+
+    Example: ff-ops infra render net
+    """
+    app_ctx: AppContext = ctx.obj
+    with _fail_nicely():
+        session = _session(app_ctx, verify=False)
+        path = infra_ops.render(session, _spec(session, app_ctx, stack))
+        console.print(f"[green]✔[/] {path}")
+        console.print(f"    check it with: openstack orchestration template validate -t {path}")
+
+
+@infra_app.command("plan")
+def infra_plan(ctx: typer.Context, stack: StackArgument = Stack.NET) -> None:
+    """Preview what applying a stack would change, without changing anything.
+
+    Example: ff-ops infra plan net
+    """
+    app_ctx: AppContext = ctx.obj
+    with _fail_nicely():
+        session = _session(app_ctx)
+        planned = infra_ops.plan(session, _spec(session, app_ctx, stack))
+        state = "will be created" if planned.existing is None else planned.existing.status
+        console.print(f"{planned.spec.name}: {state}")
+        for line in infra_ops.describe_changes(planned.changes):
+            console.print(f"  {line}")
+        violations = infra_ops.stack_ops.guard_violations(planned.changes, planned.spec.protected)
+        if violations:
+            console.print(f"[red]✘[/] {infra_ops.describe_violations(planned.spec, violations)}")
+
+
+@infra_app.command("apply")
+def infra_apply(
+    ctx: typer.Context,
+    stack: StackArgument = Stack.NET,
+    allow_replace: Annotated[
+        list[str] | None,
+        typer.Option(help="Protected resource that may be replaced or deleted (repeatable)."),
+    ] = None,
+    yes: Annotated[bool, typer.Option("--yes", help="Do not ask for confirmation.")] = False,
+) -> None:
+    """Create or update a stack: preview, replacement guard, confirmation, then apply.
+
+    Example: ff-ops infra apply net
+    """
+    app_ctx: AppContext = ctx.obj
+    with _fail_nicely():
+        session = _session(app_ctx)
+        spec = _spec(session, app_ctx, stack)
+        for name in allow_replace or []:
+            if app_ctx.prompt(f"type '{name}' to confirm it may be destroyed") != name:
+                raise infra_ops.InfraError("cancelled")
+        final = infra_ops.apply(session, spec, allow_replace=allow_replace or (), assume_yes=yes)
+        if final is not None:
+            console.print(f"[green]✔[/] {final.name}: {final.status}")
+
+
+@infra_app.command("show")
+def infra_show(ctx: typer.Context) -> None:
+    """Show the status and outputs of every stack.
+
+    Example: ff-ops infra show
+    """
+    app_ctx: AppContext = ctx.obj
+    with _fail_nicely():
+        session = _session(app_ctx)
+        table = Table(title="Heat stacks")
+        for column in ("stack", "status", "reason / outputs"):
+            table.add_column(column)
+        env = session.deployment.infra.env
+        for stack in Stack:
+            name = infra_ops.naming.stack_name(env, stack)
+            info = infra_ops.get_stack(session, name)
+            if info is None:
+                table.add_row(name, "absent", "")
+                continue
+            detail = info.reason if not info.healthy else ", ".join(sorted(info.outputs))
+            style = "green" if info.healthy else "red"
+            table.add_row(name, f"[{style}]{info.status}[/]", detail)
+        console.print(table)
+
+
+@infra_app.command("destroy")
+def infra_destroy(ctx: typer.Context, stack: StackArgument) -> None:
+    """Delete a stack and every resource it owns (retyping its name is required).
+
+    Data volumes (storage stack, deletion policy Retain) survive the deletion.
+
+    Example: ff-ops infra destroy servers
+    """
+    app_ctx: AppContext = ctx.obj
+    with _fail_nicely():
+        session = _session(app_ctx)
+        spec = _spec(session, app_ctx, stack)
+        if app_ctx.prompt(f"type '{spec.name}' to delete it") != spec.name:
+            raise infra_ops.InfraError("cancelled")
+        infra_ops.destroy(session, spec, assume_yes=True)
+        console.print(f"[green]✔[/] {spec.name} deleted")
+
+
+# ------------------------------------------------------------------------------ access
+
+
+def _detect_public_ip(app_ctx: AppContext) -> IPv4Address:
+    """Ask the public echo service for this machine's IPv4 address."""
+    result = app_ctx.runner.run(access_ops.public_ip_command())
+    return access_ops.parse_public_ip(result.stdout)
+
+
+@access_app.command("list")
+def access_list(ctx: typer.Context) -> None:
+    """List the ranges allowed to SSH into the bastion and check the current IP.
+
+    Example: ff-ops access list
+    """
+    app_ctx: AppContext = ctx.obj
+    with _fail_nicely():
+        deployment = load_deployment(app_ctx.paths)
+        state = _access_state(app_ctx)
+        table = Table(title="SSH into the bastion is allowed from")
+        table.add_column("range")
+        table.add_column("managed by")
+        for cidr in deployment.local.admin_cidrs:
+            table.add_row(str(cidr), "infra.local.yaml (stable)")
+        for cidr in state.dynamic_cidrs:
+            table.add_row(str(cidr), "ff-ops access (dynamic)")
+        console.print(table)
+        if app_ctx.dry_run:
+            return
+        ip = _detect_public_ip(app_ctx)
+        cidrs = access_ops.effective_ssh_cidrs(deployment.local, state)
+        if access_ops.covers(cidrs, ip):
+            console.print(f"[green]✔[/] your current IP {ip} is allowed")
+        else:
+            console.print(f"[yellow]⚠[/] your current IP {ip} is not allowed")
+            console.print("    → ff-ops access allow-me", style="dim")
+
+
+def _apply_access(app_ctx: AppContext, new_state: access_ops.AccessState, yes: bool) -> None:
+    """Apply the SSH rules of ``new_state`` to the net stack, then record the state."""
+    session = _session(app_ctx)
+    spec = infra_ops.build_stack_spec(Stack.NET, session.deployment, new_state)
+    infra_ops.apply(session, spec, only={ADMIN_SSH_RESOURCE}, assume_yes=yes)
+    if app_ctx.dry_run:
+        _print_plain("[dry-run] .state/access.yaml left unchanged")
+        return
+    access_ops.save_access_state(access_ops.access_state_path(app_ctx.paths.state_dir), new_state)
+    console.print("[green]✔[/] SSH rules updated")
+
+
+@access_app.command("allow-me")
+def access_allow_me(
+    ctx: typer.Context,
+    temporary: Annotated[
+        bool, typer.Option(help="Add this IP without removing the previous dynamic ones.")
+    ] = False,
+    yes: Annotated[bool, typer.Option("--yes", help="Do not ask for confirmation.")] = False,
+) -> None:
+    """Allow this machine's current public IP to SSH into the bastion.
+
+    By default the new IP replaces the previous dynamic one (stable ranges of
+    infra.local.yaml are never touched).
+
+    Example: ff-ops access allow-me --temporary
+    """
+    app_ctx: AppContext = ctx.obj
+    with _fail_nicely():
+        ip = _detect_public_ip(app_ctx)
+        console.print(f"current public IP: {ip}")
+        new_state = access_ops.allow(_access_state(app_ctx), ip, temporary=temporary)
+        _apply_access(app_ctx, new_state, yes)
+
+
+@access_app.command("revoke")
+def access_revoke(
+    ctx: typer.Context,
+    cidr: Annotated[str, typer.Argument(help="Dynamic range to remove, e.g. 198.51.100.7/32.")],
+    yes: Annotated[bool, typer.Option("--yes", help="Do not ask for confirmation.")] = False,
+) -> None:
+    """Remove a dynamic range from the SSH rules of the bastion.
+
+    Example: ff-ops access revoke 198.51.100.7/32
+    """
+    app_ctx: AppContext = ctx.obj
+    with _fail_nicely():
+        deployment = load_deployment(app_ctx.paths)
+        new_state = access_ops.revoke(_access_state(app_ctx), deployment.local, IPv4Network(cidr))
+        _apply_access(app_ctx, new_state, yes)
 
 
 def main() -> None:

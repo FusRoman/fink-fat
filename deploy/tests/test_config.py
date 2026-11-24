@@ -186,3 +186,13 @@ def test_ssh_user_must_be_a_valid_login(infra_data: dict[str, Any]) -> None:
     assert parse_infra(infra_data).ssh_user == "almalinux"
     infra_data["ssh_user"] = "root; rm -rf /"
     assert "ssh_user" in _problems(parse_infra, infra_data)
+
+
+def test_fixed_ips_stay_below_the_dhcp_pool(infra_data: dict[str, Any]) -> None:
+    infra_data["roles"]["db"]["fixed_ip"] = "10.42.0.150"
+    assert "inside the DHCP pool (starting at 10.42.0.100)" in _problems(parse_infra, infra_data)
+
+
+def test_private_subnet_must_be_at_least_a_slash_24(infra_data: dict[str, Any]) -> None:
+    infra_data["network"]["cidr"] = "10.42.0.0/25"
+    assert "too small" in _problems(parse_infra, infra_data)

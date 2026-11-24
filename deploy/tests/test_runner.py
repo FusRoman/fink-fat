@@ -69,3 +69,15 @@ def test_subprocess_runner_reports_failures_and_timeouts() -> None:
         runner.run(Command.of(sys.executable, "-c", "import time; time.sleep(5)", timeout_s=0.2))
     with pytest.raises(CommandError, match="program not found"):
         runner.run(Command.of("definitely-not-a-real-program-ffops"))
+
+
+def test_subprocess_runner_adds_env_to_the_inherited_environment() -> None:
+    command = Command(
+        argv=(
+            sys.executable,
+            "-c",
+            "import os; print(os.environ['FF_OPS_TEST'], 'PATH' in os.environ)",
+        ),
+        env=(("FF_OPS_TEST", "value"),),
+    )
+    assert SubprocessRunner().run(command).stdout.split() == ["value", "True"]
