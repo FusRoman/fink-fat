@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from ipaddress import IPv4Address, IPv4Network
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, NoReturn
 
 import typer
 from rich.console import Console
@@ -18,6 +18,8 @@ from rich.table import Table
 from finkfat_ops import access as access_ops
 from finkfat_ops import infra as infra_ops
 from finkfat_ops import naming
+from finkfat_ops import ssh as ssh_ops
+from finkfat_ops import vm as vm_ops
 from finkfat_ops import volume as volume_ops
 from finkfat_ops.checks import Finding, Level, check_sensitive_files
 from finkfat_ops.config import ConfigError, Deployment, DeployPaths, load_deployment
@@ -32,12 +34,20 @@ from finkfat_ops.openstack import (
     profile_password,
     verify_project,
 )
-from finkfat_ops.runner import CommandError, DryRunRunner, Runner, SubprocessRunner
+from finkfat_ops.runner import (
+    CommandError,
+    CommandResult,
+    DryRunRunner,
+    Runner,
+    SubprocessRunner,
+)
 
 DEFAULT_DEPLOY_DIR = Path(__file__).resolve().parents[1]
 """The ``deploy/`` directory this package lives in."""
 
 console = Console(soft_wrap=True)
+error_console = Console(soft_wrap=True, stderr=True)
+"""Remote commands' error output (``ff-ops ssh … -- <cmd>``)."""
 
 app = typer.Typer(
     name="ff-ops",
@@ -59,6 +69,8 @@ access_app = typer.Typer(
 app.add_typer(access_app, name="access")
 volume_app = typer.Typer(help="Persistent data volumes: list and snapshot.", no_args_is_help=True)
 app.add_typer(volume_app, name="volume")
+vm_app = typer.Typer(help="The VMs: list, console log, reboot, stop, start.", no_args_is_help=True)
+app.add_typer(vm_app, name="vm")
 
 
 @dataclass
@@ -247,17 +259,24 @@ def _resolved_spec(
 
 
 StackArgument = Annotated[Stack, typer.Argument(help="Which stack (net, storage, servers).")]
+OptionalStackArgument = Annotated[
+    Stack | None, typer.Argument(help="Which stack (net, storage, servers).")
+]
 
 
 # ------------------------------------------------------------------------------- infra
 
 
 @infra_app.command("render")
-def infra_render(ctx: typer.Context, stack: StackArgument = Stack.NET) -> None:
+def infra_render(ctx: typer.Context, stack: OptionalStackArgument = None) -> None:
     """Write the Heat template of a stack to deploy/.build/ (contacts nothing).
+
+    The stack must be named: without it, this help is shown and nothing is written.
 
     Example: ff-ops infra render net
     """
+    if stack is None:
+        _print_help(ctx)
     app_ctx: AppContext = ctx.obj
     with _fail_nicely():
         session = _session(app_ctx, verify=False)
@@ -267,32 +286,56 @@ def infra_render(ctx: typer.Context, stack: StackArgument = Stack.NET) -> None:
 
 
 @infra_app.command("plan")
-def infra_plan(ctx: typer.Context, stack: StackArgument = Stack.NET) -> None:
+def infra_plan(ctx: typer.Context, stack: OptionalStackArgument = None) -> None:
     """Preview what applying a stack would change, without changing anything.
 
-    Example: ff-ops infra plan net
+    Without a stack, the three stacks are previewed in order (net, storage, servers);
+    a stack that cannot be previewed is reported and the next one is still shown.
+
+    Examples: ff-ops infra plan    ·    ff-ops infra plan servers
     """
     app_ctx: AppContext = ctx.obj
+    failed = False
     with _fail_nicely():
         session = _session(app_ctx)
-        planned = infra_ops.plan(session, _resolved_spec(session, app_ctx, stack))
-        state = "will be created" if planned.existing is None else planned.existing.status
-        console.print(f"{planned.spec.name}: {state}")
-        lines = [
-            *infra_ops.describe_adoptions(planned.spec),
-            *infra_ops.describe_changes(planned.changes, creating=planned.existing is None),
-        ]
-        for line in lines:
-            console.print(f"  {line}", markup=False)
-        violations = infra_ops.stack_ops.guard_violations(planned.changes, planned.spec.protected)
-        if violations:
-            console.print(f"[red]✘[/] {infra_ops.describe_violations(planned.spec, violations)}")
+        for current in [stack] if stack is not None else list(Stack):
+            try:
+                _print_plan(session, app_ctx, current)
+            except (infra_ops.InfraError, CommandError) as error:
+                name = naming.stack_name(session.deployment.infra.env, current)
+                console.print(f"{name}: [red]✘[/] {error}")
+                failed = True
+    if failed:
+        raise typer.Exit(code=1)
+
+
+def _print_help(ctx: typer.Context) -> NoReturn:
+    """Print the help of the current command and stop (used when a stack is not named)."""
+    console.print(ctx.get_help(), markup=False, highlight=False)
+    raise typer.Exit(code=0)
+
+
+def _print_plan(session: infra_ops.InfraSession, app_ctx: AppContext, stack: Stack) -> None:
+    """Preview one stack and print its changes, adoptions and guard violations."""
+    planned = infra_ops.plan(session, _resolved_spec(session, app_ctx, stack))
+    state = "will be created" if planned.existing is None else planned.existing.status
+    console.print(f"{planned.spec.name}: {state}")
+    lines = [
+        *infra_ops.describe_adoptions(planned.spec),
+        *infra_ops.describe_changes(planned.changes, creating=planned.existing is None),
+        *infra_ops.describe_ignored(planned),
+    ]
+    for line in lines:
+        console.print(f"  {line}", markup=False)
+    violations = infra_ops.stack_ops.guard_violations(planned.changes, planned.spec.protected)
+    if violations:
+        console.print(f"[red]✘[/] {infra_ops.describe_violations(planned.spec, violations)}")
 
 
 @infra_app.command("apply")
 def infra_apply(
     ctx: typer.Context,
-    stack: StackArgument = Stack.NET,
+    stack: OptionalStackArgument = None,
     allow_replace: Annotated[
         list[str] | None,
         typer.Option(help="Protected resource that may be replaced or deleted (repeatable)."),
@@ -301,8 +344,12 @@ def infra_apply(
 ) -> None:
     """Create or update a stack: preview, replacement guard, confirmation, then apply.
 
+    The stack must be named: without it, this help is shown and nothing is applied.
+
     Example: ff-ops infra apply net
     """
+    if stack is None:
+        _print_help(ctx)
     app_ctx: AppContext = ctx.obj
     with _fail_nicely():
         session = _session(app_ctx)
@@ -310,9 +357,22 @@ def infra_apply(
         for name in allow_replace or []:
             if app_ctx.prompt(f"type '{name}' to confirm it may be destroyed") != name:
                 raise infra_ops.InfraError("cancelled")
+        before = infra_ops.get_stack(session, spec.name) if stack == Stack.SERVERS else None
         final = infra_ops.apply(session, spec, allow_replace=allow_replace or (), assume_yes=yes)
         if final is not None:
             console.print(f"[green]✔[/] {final.name}: {final.status}")
+        if stack == Stack.SERVERS and final is not None:
+            _report_ssh_access(infra_ops.write_ssh_access(session, before, final))
+
+
+def _report_ssh_access(config: Path | None) -> None:
+    """Tell where the SSH configuration was written and what to do next."""
+    if config is None:
+        return
+    console.print(f"[green]✔[/] {config}")
+    console.print(
+        "    next: ff-ops init (waits for cloud-init, then checks each machine)", style="dim"
+    )
 
 
 @infra_app.command("show")
@@ -530,6 +590,172 @@ def volume_snapshot(
         )
         check = volume_ops.snapshot_show_command(session.cli, name).display()
         console.print(f"    check it reaches 'available': {check}", style="dim", markup=False)
+
+
+# ---------------------------------------------------------------------- ssh and init
+
+
+def _ssh_config(app_ctx: AppContext, *, refresh: bool) -> Path:
+    """Return the generated ``ssh_config``, writing it from the servers stack if needed."""
+    config = ssh_ops.ssh_config_path(app_ctx.paths.state_dir)
+    if config.exists() and not refresh:
+        return config
+    session = _session(app_ctx)
+    name = naming.stack_name(session.deployment.infra.env, Stack.SERVERS)
+    info = infra_ops.get_stack(session, name)
+    if info is None or not info.healthy:
+        raise infra_ops.InfraError(f"{name} is not deployed: run ff-ops infra apply servers")
+    written = infra_ops.write_ssh_access(session, info, info)
+    if written is None:
+        raise infra_ops.InfraError(f"{name} exposes no public address yet")
+    return written
+
+
+@app.command("ssh", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def ssh(
+    ctx: typer.Context,
+    role: Annotated[Role, typer.Argument(help="Machine to connect to.")],
+    refresh: Annotated[
+        bool, typer.Option(help="Rewrite .state/ssh_config from the servers stack first.")
+    ] = False,
+) -> None:
+    """Open a shell on a machine (through the bastion), or run a command after `--`.
+
+    Examples: ff-ops ssh db    ·    ff-ops ssh compute -- docker ps
+    """
+    app_ctx: AppContext = ctx.obj
+    with _fail_nicely():
+        config = _ssh_config(app_ctx, refresh=refresh)
+        result = app_ctx.runner.run(ssh_ops.ssh_command(config, role, ctx.args), check=False)
+        if result.stdout:
+            console.print(result.stdout, end="", markup=False, highlight=False)
+        if result.stderr:
+            error_console.print(result.stderr, end="", markup=False, highlight=False)
+        if result.returncode:
+            raise typer.Exit(code=result.returncode)
+
+
+@app.command("init")
+def init(
+    ctx: typer.Context,
+    roles: Annotated[
+        list[Role] | None, typer.Argument(help="Machines to check (default: every enabled one).")
+    ] = None,
+) -> None:
+    """Wait for the first boot (cloud-init) of the machines, then check them.
+
+    Checks Docker, the data volume mount and the clock synchronisation. The bastion
+    (explorer) is checked first, since the other machines are reached through it.
+
+    Example: ff-ops init db
+    """
+    app_ctx: AppContext = ctx.obj
+    failed = False
+    with _fail_nicely():
+        infra = load_deployment(app_ctx.paths).infra
+        config = _ssh_config(app_ctx, refresh=False)
+        wanted = roles or [role for role, cfg in infra.roles.items() if cfg.enabled]
+        ordered = sorted(set(wanted), key=lambda role: role != Role.EXPLORER)
+        for role in ordered:
+            console.print(f"[bold]{role}[/]")
+            for check in ssh_ops.init_checks(infra, role):
+                command = ssh_ops.ssh_command(
+                    config, role, check.command, timeout_s=check.timeout_s
+                )
+                try:
+                    result = app_ctx.runner.run(command, check=False)
+                except CommandError as error:
+                    result = CommandResult(returncode=1, stderr=str(error).splitlines()[0])
+                finding = ssh_ops.evaluate_check(check, result)
+                _print_findings([finding])
+                failed = failed or finding.level == Level.ERROR
+                if finding.level == Level.ERROR:
+                    break
+    if failed:
+        raise typer.Exit(code=1)
+
+
+# ---------------------------------------------------------------------------------- vm
+
+
+@vm_app.command("list")
+def vm_list(ctx: typer.Context) -> None:
+    """List the VMs of this environment with their status and addresses.
+
+    Example: ff-ops vm list
+    """
+    app_ctx: AppContext = ctx.obj
+    with _fail_nicely():
+        session = _session(app_ctx)
+        result = app_ctx.runner.run(vm_ops.list_command(session.cli, session.deployment.infra.env))
+        table = Table(title="VMs")
+        for column in ("name", "status", "addresses", "ID"):
+            table.add_column(column)
+        for server in vm_ops.parse_server_list(parse_json(result)):
+            style = "green" if server.status == "ACTIVE" else "yellow"
+            table.add_row(server.name, f"[{style}]{server.status}[/]", server.networks, server.id)
+        console.print(table)
+
+
+@vm_app.command("console")
+def vm_console(
+    ctx: typer.Context,
+    role: Annotated[Role, typer.Argument(help="Machine whose console log is shown.")],
+    lines: Annotated[int, typer.Option(help="Number of lines.")] = vm_ops.CONSOLE_LINES,
+) -> None:
+    """Show the end of a VM's console log (boot and cloud-init messages, even without SSH).
+
+    Example: ff-ops vm console db --lines 200
+    """
+    app_ctx: AppContext = ctx.obj
+    with _fail_nicely():
+        session = _session(app_ctx)
+        command = vm_ops.console_command(session.cli, session.deployment.infra.env, role, lines)
+        console.print(app_ctx.runner.run(command).stdout, markup=False, highlight=False)
+
+
+def _power(ctx: typer.Context, role: Role, action: vm_ops.Power, yes: bool) -> None:
+    """Reboot, stop or start a VM, after confirmation for reboot and stop."""
+    app_ctx: AppContext = ctx.obj
+    with _fail_nicely():
+        session = _session(app_ctx)
+        name = naming.server_name(session.deployment.infra.env, role)
+        if action != vm_ops.Power.START and not yes and not app_ctx.confirm(f"{action} {name}?"):
+            raise infra_ops.InfraError("cancelled")
+        command = vm_ops.power_command(session.cli, session.deployment.infra.env, role, action)
+        app_ctx.runner.run(command)
+        console.print(f"[green]✔[/] {action} {name} requested (ff-ops vm list shows its status)")
+
+
+YesOption = Annotated[bool, typer.Option("--yes", help="Do not ask for confirmation.")]
+RoleArgument = Annotated[Role, typer.Argument(help="Which machine.")]
+
+
+@vm_app.command("reboot")
+def vm_reboot(ctx: typer.Context, role: RoleArgument, yes: YesOption = False) -> None:
+    """Reboot a VM (soft reboot).
+
+    Example: ff-ops vm reboot explorer
+    """
+    _power(ctx, role, vm_ops.Power.REBOOT, yes)
+
+
+@vm_app.command("stop")
+def vm_stop(ctx: typer.Context, role: RoleArgument, yes: YesOption = False) -> None:
+    """Shut a VM down (its disks are kept).
+
+    Example: ff-ops vm stop compute
+    """
+    _power(ctx, role, vm_ops.Power.STOP, yes)
+
+
+@vm_app.command("start")
+def vm_start(ctx: typer.Context, role: RoleArgument) -> None:
+    """Start a stopped VM.
+
+    Example: ff-ops vm start compute
+    """
+    _power(ctx, role, vm_ops.Power.START, yes=True)
 
 
 def main() -> None:

@@ -20,3 +20,8 @@ admin_cidrs:                         # STABLE source ranges allowed to SSH into 
 # in .state/access.yaml and never rewrites this file.
 
 explorer_domain: fink-fat.example.org   # remove the line to run without a domain (self-signed HTTPS)
+ssh_identity_file: ~/.ssh/id_ed25519     # private key of the Nova keypair; remove to use ssh's defaults
+
+dns_nameservers:                         # DNS servers of the private subnet. Without them, VMs get
+  - 192.0.2.53                           # Neutron's DHCP server as DNS, which may resolve no external
+  - 192.0.2.54                           # name (then cloud-init fails on dnf). Reuse the cloud's own.

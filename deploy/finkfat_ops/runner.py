@@ -38,12 +38,16 @@ class Command:
     env : tuple[tuple[str, str], ...]
         Variables added to the inherited environment, e.g. ``OS_PASSWORD``. Never shown
         by :meth:`display` nor by ``repr``, since they may hold secrets.
+    interactive : bool
+        The command talks to the operator's terminal (e.g. an ``ssh`` shell): its input
+        and output are not captured, and its result carries no output.
     """
 
     argv: tuple[str, ...]
     timeout_s: float | None = DEFAULT_TIMEOUT_S
     stdin: str | None = None
     env: tuple[tuple[str, str], ...] = field(default=(), repr=False)
+    interactive: bool = False
 
     @classmethod
     def of(cls, *argv: str, timeout_s: float | None = DEFAULT_TIMEOUT_S) -> Command:
@@ -136,9 +140,9 @@ class SubprocessRunner:
         try:
             completed = subprocess.run(
                 list(command.argv),
-                input=command.stdin,
+                input=None if command.interactive else command.stdin,
                 env={**os.environ, **dict(command.env)} if command.env else None,
-                capture_output=True,
+                capture_output=not command.interactive,
                 text=True,
                 timeout=command.timeout_s,
                 check=False,
@@ -149,7 +153,7 @@ class SubprocessRunner:
             ) from exc
         except FileNotFoundError as exc:
             raise CommandError(command, f"program not found: {command.argv[0]}") from exc
-        result = CommandResult(completed.returncode, completed.stdout, completed.stderr)
+        result = CommandResult(completed.returncode, completed.stdout or "", completed.stderr or "")
         return _check(command, result, check)
 
 

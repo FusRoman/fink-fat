@@ -32,7 +32,9 @@ from pydantic import (
 
 from finkfat_ops.naming import Role
 
-LOCAL_ONLY_KEYS = frozenset({"openstack", "admin_cidrs", "explorer_domain"})
+LOCAL_ONLY_KEYS = frozenset(
+    {"openstack", "admin_cidrs", "explorer_domain", "ssh_identity_file", "dns_nameservers"}
+)
 """Keys that belong in ``infra.local.yaml`` and must never appear in the versioned file."""
 
 MIN_ROOT_GB = 20
@@ -121,6 +123,10 @@ class RolesConfig(_Strict):
         """Return ``(role, config)`` pairs in a stable order."""
         return [(Role.COMPUTE, self.compute), (Role.DB, self.db), (Role.EXPLORER, self.explorer)]
 
+    def of(self, role: Role) -> RoleConfig:
+        """Return the configuration of ``role``."""
+        return dict(self.items())[role]
+
 
 class NetworkConfig(_Strict):
     """The private network.
@@ -131,13 +137,10 @@ class NetworkConfig(_Strict):
         Private subnet range.
     external_network : str
         External network used for the router gateway and floating IP.
-    dns_nameservers : list[IPv4Address]
-        DNS servers handed out by DHCP; empty keeps the cloud default.
     """
 
     cidr: IPv4Network
     external_network: str = Field(min_length=1)
-    dns_nameservers: list[IPv4Address] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check_size(self) -> Self:
@@ -301,11 +304,19 @@ class LocalConfig(_Strict):
         Source ranges allowed to SSH into the bastion.
     explorer_domain : str | None
         Public domain name of the explorer; ``None`` for no HTTPS certificate.
+    ssh_identity_file : str | None
+        Private key matching the Nova keypair (``~`` allowed); ``None`` lets ``ssh`` use
+        its default keys and agent.
+    dns_nameservers : list[IPv4Address]
+        DNS servers handed out by DHCP on the private subnet. Empty keeps Neutron's
+        default (its DHCP server), which does not resolve external names on every cloud.
     """
 
     openstack: OpenStackTarget
     admin_cidrs: list[IPv4Network] = Field(min_length=1)
     explorer_domain: str | None = None
+    ssh_identity_file: str | None = Field(default=None, min_length=1)
+    dns_nameservers: list[IPv4Address] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check(self) -> Self:

@@ -9,10 +9,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
+from ipaddress import IPv4Address
 from pathlib import Path
 from typing import Any
 
 from finkfat_ops import naming
+from finkfat_ops import ssh as ssh_ops
 from finkfat_ops import stack as stack_ops
 from finkfat_ops import volume as volume_ops
 from finkfat_ops.access import AccessState, effective_ssh_cidrs
@@ -20,6 +22,13 @@ from finkfat_ops.config import Deployment, DeployPaths
 from finkfat_ops.heat.net import PROTECTED_RESOURCES as NET_PROTECTED
 from finkfat_ops.heat.net import build_net_template
 from finkfat_ops.heat.render import render_template
+from finkfat_ops.heat.servers import (
+    EXPLORER_PUBLIC_IP_OUTPUT,
+    MissingUpstreamError,
+    build_servers_template,
+    upstream_parameters,
+)
+from finkfat_ops.heat.servers import protected_resources as servers_protected
 from finkfat_ops.heat.storage import (
     Adoption,
     AdoptionError,
@@ -68,7 +77,7 @@ class StackSpec:
     adoptions: tuple[Adoption, ...] = ()
 
 
-IMPLEMENTED_STACKS = (Stack.NET, Stack.STORAGE)
+IMPLEMENTED_STACKS = (Stack.NET, Stack.STORAGE, Stack.SERVERS)
 """Stacks that ff-ops can build so far."""
 
 
@@ -77,6 +86,7 @@ def build_stack_spec(
     deployment: Deployment,
     access: AccessState,
     adoptions: Iterable[Adoption] = (),
+    upstream: Mapping[str, str] | None = None,
 ) -> StackSpec:
     """Build the template, parameters and protection list of a stack (pure).
 
@@ -90,6 +100,9 @@ def build_stack_spec(
         Dynamic SSH ranges (net stack).
     adoptions : Iterable[Adoption]
         Existing volumes to adopt (storage stack), from :func:`resolve_spec`.
+    upstream : Mapping[str, str] | None
+        Parameters taken from the net and storage outputs (servers stack), from
+        :func:`resolve_spec`; ``None`` to build the template alone (``infra render``).
 
     Returns
     -------
@@ -105,7 +118,8 @@ def build_stack_spec(
     name = naming.stack_name(infra.env, stack)
     if stack == Stack.NET:
         cidrs = effective_ssh_cidrs(deployment.local, access)
-        return StackSpec(stack, name, build_net_template(infra, cidrs), NET_PROTECTED)
+        template = build_net_template(infra, cidrs, deployment.local.dns_nameservers)
+        return StackSpec(stack, name, template, NET_PROTECTED)
     if stack == Stack.STORAGE:
         adopted = tuple(adoptions)
         return StackSpec(
@@ -116,6 +130,14 @@ def build_stack_spec(
             parameters=adoption_parameters(data_volumes(infra), adopted),
             adoptions=adopted,
         )
+    if stack == Stack.SERVERS:
+        return StackSpec(
+            stack,
+            name,
+            build_servers_template(infra),
+            servers_protected(infra),
+            parameters=dict(upstream or {}),
+        )
     raise InfraError(f"stack '{stack}' is not implemented yet")
 
 
@@ -124,7 +146,9 @@ def resolve_spec(session: InfraSession, stack: Stack, access: AccessState) -> St
 
     For the storage stack, the existing volumes are looked up by name and compared with
     the stack's current parameters and outputs to decide which ones to adopt (see
-    :func:`finkfat_ops.heat.storage.resolve_adoptions`). Other stacks need no lookup.
+    :func:`finkfat_ops.heat.storage.resolve_adoptions`). For the servers stack, the
+    outputs of the net and storage stacks become its parameters. The net stack needs no
+    lookup.
 
     Parameters
     ----------
@@ -143,8 +167,13 @@ def resolve_spec(session: InfraSession, stack: Stack, access: AccessState) -> St
     Raises
     ------
     InfraError
-        The volumes found do not allow a safe adoption decision.
+        The volumes found do not allow a safe adoption decision, or the net or storage
+        stack is missing or unhealthy (servers stack).
     """
+    if stack == Stack.SERVERS:
+        return build_stack_spec(
+            stack, session.deployment, access, upstream=_upstream_parameters(session)
+        )
     if stack != Stack.STORAGE:
         return build_stack_spec(stack, session.deployment, access)
     volumes = data_volumes(session.deployment.infra)
@@ -160,6 +189,70 @@ def resolve_spec(session: InfraSession, stack: Stack, access: AccessState) -> St
     except AdoptionError as error:
         raise InfraError(f"refused: {error}") from error
     return build_stack_spec(stack, session.deployment, access, adoptions)
+
+
+def _upstream_parameters(session: InfraSession) -> dict[str, str]:
+    """Read the outputs of the net and storage stacks as parameters of the servers stack."""
+    env = session.deployment.infra.env
+    outputs = {}
+    for upstream in (Stack.NET, Stack.STORAGE):
+        name = naming.stack_name(env, upstream)
+        info = get_stack(session, name)
+        if info is None:
+            raise InfraError(
+                f"refused: {name} does not exist; create it first (ff-ops infra apply {upstream})"
+            )
+        if not info.healthy:
+            raise InfraError(
+                f"refused: {info.name} is {info.status}; fix it first (ff-ops infra show)"
+            )
+        outputs[upstream] = info.outputs
+    try:
+        return upstream_parameters(
+            session.deployment.infra, outputs[Stack.NET], outputs[Stack.STORAGE]
+        )
+    except MissingUpstreamError as error:
+        raise InfraError(f"refused: {error}") from error
+
+
+def write_ssh_access(
+    session: InfraSession, before: StackInfo | None, after: StackInfo
+) -> Path | None:
+    """Write ``.state/ssh_config`` from the servers stack and forget obsolete host keys.
+
+    Parameters
+    ----------
+    session : InfraSession
+        Cloud access and configuration.
+    before : StackInfo | None
+        Servers stack before the apply (``None`` if it did not exist).
+    after : StackInfo
+        Servers stack after the apply.
+
+    Returns
+    -------
+    Path | None
+        The written ``ssh_config``, or ``None`` when the stack exposes no public address
+        (dry-run).
+    """
+    address = after.outputs.get(EXPLORER_PUBLIC_IP_OUTPUT)
+    if not address:
+        return None
+    state_dir = session.paths.state_dir
+    state_dir.mkdir(parents=True, exist_ok=True)
+    known_hosts = ssh_ops.known_hosts_path(state_dir)
+    config = ssh_ops.ssh_config_path(state_dir)
+    identity = session.deployment.local.ssh_identity_file
+    infra = session.deployment.infra
+    config.write_text(
+        ssh_ops.build_ssh_config(infra, IPv4Address(str(address)), known_hosts, identity),
+        encoding="utf-8",
+    )
+    if known_hosts.exists():
+        before_outputs = before.outputs if before is not None else None
+        for role in ssh_ops.recreated_roles(infra, before_outputs, after.outputs):
+            session.runner.run(ssh_ops.forget_host_command(known_hosts, role), check=False)
+    return config
 
 
 def find_volumes(session: InfraSession, name: str) -> list[volume_ops.VolumeInfo]:
@@ -302,12 +395,20 @@ class Plan:
         Current stack, or ``None`` when it would be created.
     changes : ChangeSet
         What would change.
+    ignored : tuple[str, ...]
+        Resources that Heat's preview reported as updated or replaced although neither
+        their definition nor their parameters change (references to other resources).
+    in_place : tuple[str, ...]
+        Resources that Heat's preview reported as replaced although every property that
+        changes is updatable in place: counted as updated.
     """
 
     spec: StackSpec
     template_path: Path
     existing: StackInfo | None
     changes: ChangeSet
+    ignored: tuple[str, ...] = ()
+    in_place: tuple[str, ...] = ()
 
 
 def plan(session: InfraSession, spec: StackSpec) -> Plan:
@@ -324,16 +425,82 @@ def plan(session: InfraSession, spec: StackSpec) -> Plan:
     -------
     Plan
         The previewed changes (every resource added for a new stack).
+
+    Notes
+    -----
+    For an existing stack, the deployed template is compared with the new one first
+    (:func:`finkfat_ops.stack.really_changed`): when nothing changes, Heat is not asked
+    at all; otherwise its preview is kept only where the comparison confirms it.
     """
     path = render(session, spec)
     existing = get_stack(session, spec.name)
     if existing is None:
         skipped = [adoption.volume.resource for adoption in spec.adoptions]
         return Plan(spec, path, None, stack_ops.change_set_for_creation(spec.template, skipped))
+    deployed = stack_ops.parse_template(
+        parse_json(session.runner.run(stack_ops.template_command(session.cli, spec.name)))
+    )
+    changed = stack_ops.really_changed(
+        deployed, spec.template, existing.parameters, dict(spec.parameters)
+    )
+    if deployed and not changed:
+        return Plan(spec, path, existing, stack_ops.ChangeSet())
     result = session.runner.run(
         stack_ops.preview_update_command(session.cli, spec.name, path, spec.parameters)
     )
-    return Plan(spec, path, existing, stack_ops.parse_change_set(parse_json(result)))
+    previewed = stack_ops.parse_change_set(parse_json(result))
+    if not deployed:
+        return Plan(spec, path, existing, previewed)
+    kept, ignored = stack_ops.filter_change_set(previewed, changed)
+    candidates = stack_ops.in_place_candidates(
+        kept, deployed, spec.template, existing.parameters, dict(spec.parameters)
+    )
+    allowed = _update_allowed(session, spec.template, candidates)
+    kept, in_place = stack_ops.downgrade_replacements(kept, candidates, allowed)
+    return Plan(spec, path, existing, kept, ignored, in_place)
+
+
+def _update_allowed(
+    session: InfraSession, template: dict[str, Any], candidates: Mapping[str, Any]
+) -> dict[str, dict[str, bool]]:
+    """Read from Heat which properties of each candidate's type update in place."""
+    resources = template.get("resources") or {}
+    schemas: dict[str, dict[str, bool]] = {}
+    allowed = {}
+    for name in candidates:
+        resource_type = resources[name]["type"]
+        if resource_type not in schemas:
+            result = session.runner.run(stack_ops.resource_type_command(session.cli, resource_type))
+            schemas[resource_type] = stack_ops.parse_update_allowed(parse_json(result))
+        allowed[name] = schemas[resource_type]
+    return allowed
+
+
+def describe_ignored(planned: Plan) -> list[str]:
+    """Format the preview entries corrected or discarded by :func:`plan` (pure).
+
+    Parameters
+    ----------
+    planned : Plan
+        The plan.
+
+    Returns
+    -------
+    list[str]
+        One line per kind of correction; none when Heat's preview was kept as is.
+    """
+    lines = []
+    if planned.in_place:
+        lines.append(
+            f"(Heat's preview said {', '.join(planned.in_place)} would be replaced, but every "
+            "property that changes is updatable in place: counted as updated)"
+        )
+    if planned.ignored:
+        lines.append(
+            f"(Heat's preview also listed {', '.join(planned.ignored)}: they only reference "
+            "changed resources, their own definition is unchanged; ignored)"
+        )
+    return lines
 
 
 def apply(
@@ -372,7 +539,7 @@ def apply(
     """
     planned = plan(session, spec)
     changes = describe_changes(planned.changes, creating=planned.existing is None)
-    for line in [*describe_adoptions(spec), *changes]:
+    for line in [*describe_adoptions(spec), *changes, *describe_ignored(planned)]:
         session.echo(f"  {line}")
     if planned.existing is not None and planned.changes.is_empty:
         session.echo(f"{spec.name} is up to date")

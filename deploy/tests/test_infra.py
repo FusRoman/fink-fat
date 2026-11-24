@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
+import yaml
 
 from finkfat_ops import infra
 from finkfat_ops.access import AccessState
@@ -13,7 +16,7 @@ from finkfat_ops.config import DeployPaths, load_deployment
 from finkfat_ops.naming import Role, Stack
 from finkfat_ops.openstack import OpenStackCli
 from finkfat_ops.runner import CommandResult, FakeRunner
-from finkfat_ops.stack import ChangeSet
+from finkfat_ops.stack import ChangeSet, StackInfo
 
 OS = ["openstack", "--os-cloud", "test-cloud"]
 NOT_FOUND = CommandResult(returncode=1, stderr="Stack not found: ffat-prod-net")
@@ -44,17 +47,22 @@ def _spec(session: infra.InfraSession) -> infra.StackSpec:
     return infra.build_stack_spec(Stack.NET, session.deployment, AccessState())
 
 
+def _deployed(session: infra.InfraSession, *changed: str) -> CommandResult:
+    """The net template as deployed, where the ``changed`` resources differ from now."""
+    template = copy.deepcopy(_spec(session).template)
+    for name in changed:
+        template["resources"][name]["properties"]["description"] = "older definition"
+    return CommandResult(stdout=json.dumps(template))
+
+
+TEMPLATE_SHOW = [*OS, "stack", "template", "show"]
+
+
 def _verbs(runner: FakeRunner) -> list[str]:
     return [
         " ".join(c.argv[3:5]) + (" --dry-run" if "--dry-run" in c.argv else "")
         for c in runner.calls
     ]
-
-
-def test_only_the_net_stack_is_implemented(deploy_dir: Path) -> None:
-    session = _session(deploy_dir, FakeRunner())
-    with pytest.raises(infra.InfraError, match="not implemented"):
-        infra.build_stack_spec(Stack.SERVERS, session.deployment, AccessState())
 
 
 def test_render_writes_the_template(deploy_dir: Path) -> None:
@@ -86,47 +94,101 @@ def test_apply_creates_a_missing_stack(deploy_dir: Path) -> None:
 
 
 def test_apply_updates_only_after_a_preview(deploy_dir: Path) -> None:
-    runner = (
-        FakeRunner()
+    runner = FakeRunner()
+    session = _session(deploy_dir, runner)
+    (
+        runner.on(TEMPLATE_SHOW, _deployed(session, "sg_admin_ssh"))
         .on([*OS, "stack", "update", "--dry-run"], _preview(updated=["sg_admin_ssh"]))
         .on([*OS, "stack", "update", "--wait"], CommandResult())
         .on([*OS, "stack", "show"], _show("UPDATE_COMPLETE"))
     )
-    session = _session(deploy_dir, runner)
     infra.apply(session, _spec(session))
-    assert _verbs(runner) == ["stack show", "stack update --dry-run", "stack update", "stack show"]
+    assert _verbs(runner) == [
+        "stack show",
+        "stack template",
+        "stack update --dry-run",
+        "stack update",
+        "stack show",
+    ]
 
 
-def test_up_to_date_stack_is_left_alone(deploy_dir: Path) -> None:
-    runner = (
-        FakeRunner()
-        .on([*OS, "stack", "show"], _show())
-        .on([*OS, "stack", "update", "--dry-run"], _preview(unchanged=["net"]))
+def test_up_to_date_stack_is_left_alone_without_asking_heat(deploy_dir: Path) -> None:
+    runner = FakeRunner()
+    session = _session(deploy_dir, runner)
+    runner.on([*OS, "stack", "show"], _show()).on(TEMPLATE_SHOW, _deployed(session))
+    infra.apply(session, _spec(session))
+    assert _verbs(runner) == ["stack show", "stack template"]
+
+
+def test_preview_false_alarms_on_references_are_ignored(deploy_dir: Path) -> None:
+    """Heat flags every resource holding a get_resource; only sg_admin_ssh really changes."""
+    runner = FakeRunner()
+    session = _session(deploy_dir, runner)
+    preview = _preview(
+        updated=["sg_admin_ssh", "sg_db", "sg_internal_ssh"],
+        replaced=["router_interface", "subnet"],
     )
-    session = _session(deploy_dir, runner)
-    infra.apply(session, _spec(session))
-    assert "stack update" not in _verbs(runner)
+    (
+        runner.on([*OS, "stack", "show"], _show())
+        .on(TEMPLATE_SHOW, _deployed(session, "sg_admin_ssh"))
+        .on([*OS, "stack", "update", "--dry-run"], preview)
+    )
+    planned = infra.plan(session, _spec(session))
+    assert planned.changes.updated == ("sg_admin_ssh",)
+    assert planned.changes.replaced == ()
+    assert planned.ignored == ("router_interface", "sg_db", "sg_internal_ssh", "subnet")
+    assert "ignored" in infra.describe_ignored(planned)[0]
+
+
+SUBNET_SCHEMA = CommandResult(
+    stdout=json.dumps(
+        {
+            "resource_type": "OS::Neutron::Subnet",
+            "properties": {
+                "cidr": {"update_allowed": False},
+                "dns_nameservers": {"update_allowed": True},
+                "network": {"update_allowed": False},
+            },
+        }
+    )
+)
+TYPE_SHOW = [*OS, "orchestration", "resource", "type", "show"]
+
+
+def _deployed_subnet(session: infra.InfraSession, **properties: Any) -> CommandResult:
+    """The net template as deployed, with other values for some subnet properties."""
+    template = copy.deepcopy(_spec(session).template)
+    subnet = template["resources"]["subnet"]["properties"]
+    for key, value in properties.items():
+        if value is None:
+            subnet.pop(key, None)
+        else:
+            subnet[key] = value
+    return CommandResult(stdout=json.dumps(template))
 
 
 def test_guard_refuses_to_replace_the_network(deploy_dir: Path) -> None:
-    runner = (
-        FakeRunner()
-        .on([*OS, "stack", "show"], _show())
+    runner = FakeRunner()
+    session = _session(deploy_dir, runner)
+    (
+        runner.on([*OS, "stack", "show"], _show())
+        .on(TEMPLATE_SHOW, _deployed_subnet(session, cidr="10.43.0.0/24"))
+        .on(TYPE_SHOW, SUBNET_SCHEMA)
         .on([*OS, "stack", "update", "--dry-run"], _preview(replaced=["subnet"]))
     )
-    session = _session(deploy_dir, runner)
     with pytest.raises(infra.InfraError, match="--allow-replace subnet"):
         infra.apply(session, _spec(session))
     assert "stack update" not in _verbs(runner)
 
 
 def test_only_refuses_unrelated_pending_changes(deploy_dir: Path) -> None:
-    runner = (
-        FakeRunner()
-        .on([*OS, "stack", "show"], _show())
+    runner = FakeRunner()
+    session = _session(deploy_dir, runner)
+    (
+        runner.on([*OS, "stack", "show"], _show())
+        .on(TEMPLATE_SHOW, _deployed(session, "sg_admin_ssh", "router"))
         .on([*OS, "stack", "update", "--dry-run"], _preview(updated=["sg_admin_ssh", "router"]))
     )
-    session = _session(deploy_dir, runner)
     with pytest.raises(infra.InfraError, match="other pending changes \\(router"):
         infra.apply(session, _spec(session), only={"sg_admin_ssh"})
 
@@ -270,3 +332,128 @@ def test_volume_of_role(deploy_dir: Path) -> None:
 def test_creation_without_resources_says_nothing_to_create() -> None:
     assert infra.describe_changes(ChangeSet(), creating=True) == ["nothing to create"]
     assert infra.describe_changes(ChangeSet()) == ["no change"]
+
+
+# -------------------------------------------------------------------------- servers
+
+NET_OUTPUTS = {
+    "network_id": "n",
+    "subnet_id": "s",
+    "sg_explorer_id": "g1",
+    "sg_admin_ssh_id": "g2",
+    "sg_internal_ssh_id": "g3",
+    "sg_db_id": "g4",
+    "sg_compute_id": "g5",
+    "explorer_floating_ip_id": "f1",
+    "explorer_public_ip": "157.136.0.9",
+}
+
+
+def _stack(name: str, outputs: dict[str, str], status: str = "CREATE_COMPLETE") -> CommandResult:
+    data = {
+        "stack_name": name,
+        "stack_status": status,
+        "outputs": [{"output_key": k, "output_value": v} for k, v in outputs.items()],
+    }
+    return CommandResult(stdout=json.dumps(data))
+
+
+def _upstream_runner(storage_status: str = "CREATE_COMPLETE") -> FakeRunner:
+    storage = {"vol_engine_id": "ve", "vol_pgdata_id": "vp"}
+    return (
+        FakeRunner()
+        .on([*OS, "stack", "show", "ffat-prod-net"], _stack("ffat-prod-net", NET_OUTPUTS))
+        .on(
+            [*OS, "stack", "show", "ffat-prod-storage"],
+            _stack("ffat-prod-storage", storage, storage_status),
+        )
+    )
+
+
+def test_servers_parameters_come_from_the_other_stacks(deploy_dir: Path) -> None:
+    session = _session(deploy_dir, _upstream_runner())
+    spec = infra.resolve_spec(session, Stack.SERVERS, AccessState())
+    assert spec.parameters["network_id"] == "n"
+    assert spec.parameters["vol_pgdata_id"] == "vp"
+    assert "server_db" in spec.protected
+    assert spec.parameters["explorer_floating_ip_id"] == "f1"
+
+
+def test_servers_refused_while_storage_is_broken(deploy_dir: Path) -> None:
+    session = _session(deploy_dir, _upstream_runner("UPDATE_FAILED"))
+    with pytest.raises(infra.InfraError, match="ffat-prod-storage is UPDATE_FAILED"):
+        infra.resolve_spec(session, Stack.SERVERS, AccessState())
+
+
+def test_servers_refused_without_storage(deploy_dir: Path) -> None:
+    runner = (
+        FakeRunner()
+        .on([*OS, "stack", "show", "ffat-prod-net"], _stack("ffat-prod-net", NET_OUTPUTS))
+        .on([*OS, "stack", "show"], STORAGE_NOT_FOUND)
+    )
+    with pytest.raises(infra.InfraError, match="ffat-prod-storage does not exist"):
+        infra.resolve_spec(_session(deploy_dir, runner), Stack.SERVERS, AccessState())
+
+
+def test_ssh_access_is_written_and_recreated_hosts_forgotten(deploy_dir: Path) -> None:
+    runner = FakeRunner().on(["ssh-keygen"], CommandResult())
+    session = _session(deploy_dir, runner)
+    state = deploy_dir / ".state"
+    state.mkdir()
+    (state / "known_hosts").write_text("", encoding="utf-8")
+    before = stack_info({"server_db_id": "s1", "server_explorer_id": "e1"})
+    after = stack_info(
+        {"server_db_id": "s2", "server_explorer_id": "e1", "explorer_public_ip": "157.136.0.9"}
+    )
+    config = infra.write_ssh_access(session, before, after)
+    assert config == state / "ssh_config"
+    assert "HostName 157.136.0.9" in config.read_text(encoding="utf-8")
+    assert [c.argv[-1] for c in runner.calls] == ["ffat-db"]
+
+
+def test_no_ssh_access_without_public_address(deploy_dir: Path) -> None:
+    session = _session(deploy_dir, FakeRunner())
+    assert infra.write_ssh_access(session, None, stack_info({})) is None
+
+
+def stack_info(outputs: dict[str, str]) -> StackInfo:
+    return StackInfo("ffat-prod-servers", "CREATE_COMPLETE", "", outputs)
+
+
+def test_local_dns_servers_reach_the_subnet(deploy_dir: Path) -> None:
+    local = deploy_dir / "infra.local.yaml"
+    data = yaml.safe_load(local.read_text(encoding="utf-8"))
+    data["dns_nameservers"] = ["192.0.2.53"]
+    local.write_text(yaml.safe_dump(data), encoding="utf-8")
+    session = _session(deploy_dir, FakeRunner())
+    subnet = _spec(session).template["resources"]["subnet"]["properties"]
+    assert subnet["dns_nameservers"] == ["192.0.2.53"]
+
+
+def test_false_replacement_of_an_updatable_property_is_an_update(deploy_dir: Path) -> None:
+    """Adding DNS servers: Heat's preview says 'replaced', its schema says 'in place'."""
+    local = deploy_dir / "infra.local.yaml"
+    data = yaml.safe_load(local.read_text(encoding="utf-8"))
+    data["dns_nameservers"] = ["192.0.2.53"]
+    local.write_text(yaml.safe_dump(data), encoding="utf-8")
+    runner = FakeRunner()
+    session = _session(deploy_dir, runner)
+    preview = _preview(
+        updated=["sg_db", "sg_internal_ssh"], replaced=["router_interface", "subnet"]
+    )
+    (
+        runner.on([*OS, "stack", "show"], _show())
+        .on(TEMPLATE_SHOW, _deployed_subnet(session, dns_nameservers=None))
+        .on(TYPE_SHOW, SUBNET_SCHEMA)
+        .on([*OS, "stack", "update", "--dry-run"], preview)
+    )
+    planned = infra.plan(session, _spec(session))
+    assert planned.changes.updated == ("subnet",) and planned.changes.replaced == ()
+    assert planned.in_place == ("subnet",)
+    assert planned.ignored == ("router_interface", "sg_db", "sg_internal_ssh")
+    assert len(infra.describe_ignored(planned)) == 2
+    assert stack_guard_is_clear(planned)
+
+
+def stack_guard_is_clear(planned: infra.Plan) -> bool:
+    return not infra.stack_ops.guard_violations(planned.changes, planned.spec.protected)

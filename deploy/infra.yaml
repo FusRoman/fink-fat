@@ -13,7 +13,6 @@ volume_type: __DEFAULT__
 network:
   cidr: 10.42.0.0/24                         # distinct from the project's existing 10.0.0.0/24
   external_network: public-2                 # router gateway + floating IP pool (157.136.x.x)
-  dns_nameservers: []                        # empty: keep the cloud default
 
 images:
   registry: ghcr.io/fusroman

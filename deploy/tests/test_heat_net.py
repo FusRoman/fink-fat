@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ipaddress import IPv4Network
+from ipaddress import IPv4Address, IPv4Network
 from typing import Any
 
 import pytest
@@ -36,6 +36,7 @@ def test_resources_and_names(template: dict[str, Any]) -> None:
         "sg_internal_ssh",
         "sg_compute",
         "sg_db",
+        "fip_explorer",
     }
     assert resources["net"]["properties"]["name"] == "ffat-prod-net"
     assert resources["sg_db"]["properties"]["name"] == "ffat-prod-sg-db"
@@ -48,6 +49,19 @@ def test_subnet_keeps_fixed_ips_out_of_dhcp(template: dict[str, Any]) -> None:
     assert subnet["cidr"] == "10.42.0.0/24"
     assert subnet["allocation_pools"] == [{"start": "10.42.0.100", "end": "10.42.0.254"}]
     assert "dns_nameservers" not in subnet
+
+
+def test_public_address_lives_in_the_net_stack(template: dict[str, Any]) -> None:
+    assert template["resources"]["fip_explorer"] == {
+        "type": "OS::Neutron::FloatingIP",
+        "properties": {"floating_network": "public-2"},
+    }
+    assert "fip_explorer" in PROTECTED_RESOURCES
+    outputs = template["outputs"]
+    assert outputs["explorer_floating_ip_id"]["value"] == {"get_resource": "fip_explorer"}
+    assert outputs["explorer_public_ip"]["value"] == {
+        "get_attr": ["fip_explorer", "floating_ip_address"]
+    }
 
 
 def test_router_uses_the_external_network(template: dict[str, Any]) -> None:
@@ -98,6 +112,8 @@ def test_outputs_expose_every_identifier(template: dict[str, Any]) -> None:
         "sg_internal_ssh_id",
         "sg_db_id",
         "sg_compute_id",
+        "explorer_floating_ip_id",
+        "explorer_public_ip",
     }
 
 
@@ -113,8 +129,7 @@ def test_ssh_must_be_restricted(infra_data: dict[str, Any], cidrs: list[IPv4Netw
 
 
 def test_dns_servers_are_passed_when_configured(infra_data: dict[str, Any]) -> None:
-    infra_data["network"]["dns_nameservers"] = ["192.0.2.53"]
-    template = build_net_template(parse_infra(infra_data), SSH)
+    template = build_net_template(parse_infra(infra_data), SSH, [IPv4Address("192.0.2.53")])
     assert template["resources"]["subnet"]["properties"]["dns_nameservers"] == ["192.0.2.53"]
 
 

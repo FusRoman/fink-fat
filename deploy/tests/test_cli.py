@@ -8,7 +8,8 @@ import yaml
 from typer.testing import CliRunner
 
 from finkfat_ops.cli import AppContext, app
-from finkfat_ops.config import DeployPaths
+from finkfat_ops.config import DeployPaths, load_deployment
+from finkfat_ops.heat.net import build_net_template
 from finkfat_ops.runner import CommandResult, FakeRunner
 
 
@@ -106,10 +107,20 @@ def test_wrong_project_stops_everything(deploy_dir: Path) -> None:
     assert not any("stack" in c.argv for c in runner.calls)
 
 
+def _deployed_net(deploy_dir: Path, *changed: str) -> CommandResult:
+    """The net template as deployed before allow-me (no dynamic range yet)."""
+    deployment = load_deployment(DeployPaths(deploy_dir))
+    template = build_net_template(deployment.infra, deployment.local.admin_cidrs)
+    for name in changed:
+        template["resources"][name]["properties"]["description"] = "older definition"
+    return CommandResult(stdout=json.dumps(template))
+
+
 def test_allow_me_updates_only_the_ssh_rules_and_records_the_ip(deploy_dir: Path) -> None:
     preview = CommandResult(stdout=json.dumps({"updated": [{"resource_name": "sg_admin_ssh"}]}))
     runner = (
         _cloud_runner()
+        .on([*OS, "stack", "template", "show"], _deployed_net(deploy_dir))
         .on([*OS, "stack", "show"], SHOW)
         .on([*OS, "stack", "update", "--dry-run"], preview)
         .on([*OS, "stack", "update", "--wait"], CommandResult())
@@ -130,6 +141,7 @@ def test_allow_me_keeps_state_unchanged_when_apply_is_refused(deploy_dir: Path) 
     )
     runner = (
         _cloud_runner()
+        .on([*OS, "stack", "template", "show"], _deployed_net(deploy_dir, "router"))
         .on([*OS, "stack", "show"], SHOW)
         .on([*OS, "stack", "update", "--dry-run"], preview)
     )
@@ -209,3 +221,132 @@ def test_destroy_storage_reminds_that_volumes_are_kept(deploy_dir: Path) -> None
     result = CliRunner().invoke(app, ["infra", "destroy", "storage"], obj=context)
     assert result.exit_code == 0, result.output
     assert "data volumes are kept" in result.output
+
+
+# ------------------------------------------------------------------------ ssh, init, vm
+
+
+def _servers_show(ip: str = "157.136.0.9") -> CommandResult:
+    outputs = {"explorer_public_ip": ip, "server_db_id": "s1"}
+    data = {
+        "stack_name": "ffat-prod-servers",
+        "stack_status": "CREATE_COMPLETE",
+        "outputs": [{"output_key": k, "output_value": v} for k, v in outputs.items()],
+    }
+    return CommandResult(stdout=json.dumps(data))
+
+
+def test_ssh_writes_its_config_once_then_runs_ssh(deploy_dir: Path) -> None:
+    runner = (
+        _cloud_runner()
+        .on([*OS, "stack", "show"], _servers_show())
+        .on(["ssh"], CommandResult(stdout="ok\n"))
+    )
+    result = _run(deploy_dir, runner, "ssh", "db", "--", "docker", "ps")
+    assert result.exit_code == 0, result.output
+    ssh = runner.calls[-1].argv
+    assert ssh[-3:] == ("ffat-db", "docker", "ps") and "BatchMode=yes" in ssh
+    config = deploy_dir / ".state" / "ssh_config"
+    assert "HostName 157.136.0.9" in config.read_text(encoding="utf-8")
+    second = FakeRunner().on(["ssh"], CommandResult())
+    assert _run(deploy_dir, second, "ssh", "db").exit_code == 0
+    assert [c.argv[0] for c in second.calls] == ["ssh"]  # no cloud call: config reused
+    assert second.calls[0].interactive
+
+
+def test_ssh_without_servers_stack_says_what_to_do(deploy_dir: Path) -> None:
+    missing = CommandResult(returncode=1, stderr="Stack not found")
+    runner = _cloud_runner().on([*OS, "stack", "show"], missing)
+    result = _run(deploy_dir, runner, "ssh", "db")
+    assert result.exit_code == 1 and "infra apply servers" in result.output
+
+
+def test_init_checks_the_bastion_first_and_stops_at_the_first_failure(deploy_dir: Path) -> None:
+    state = deploy_dir / ".state"
+    state.mkdir()
+    (state / "ssh_config").write_text("Host ffat-explorer\n", encoding="utf-8")
+    ssh = ["ssh", "-F", str(state / "ssh_config"), "-o", "BatchMode=yes", "-o", "LogLevel=ERROR"]
+    runner = (
+        FakeRunner()
+        .on([*ssh, "ffat-db", "systemctl"], CommandResult(returncode=3, stderr="inactive"))
+        .on([*ssh, "ffat-db", "timedatectl"], CommandResult(stdout="yes\n"))
+        .on([*ssh, "ffat-explorer", "timedatectl"], CommandResult(stdout="yes\n"))
+        .on(["ssh"], CommandResult())
+    )
+    result = _run(deploy_dir, runner, "init", "db", "explorer")
+    assert result.exit_code == 1, result.output
+    hosts = [c.argv[7] for c in runner.calls]
+    assert hosts[0] == "ffat-explorer" and hosts.count("ffat-explorer") == 3
+    db_commands = [c.argv[8] for c in runner.calls if c.argv[7] == "ffat-db"]
+    assert db_commands == ["sudo", "systemctl"]  # cloud-init (with sudo), then docker fails
+    assert "docker running: failed (exit status 3: inactive)" in result.output
+
+
+def test_vm_list_and_power(deploy_dir: Path) -> None:
+    servers = CommandResult(
+        stdout=json.dumps([{"ID": "1", "Name": "ffat-prod-db", "Status": "ACTIVE"}])
+    )
+    runner = _cloud_runner().on([*OS, "server", "list"], servers)
+    result = _run(deploy_dir, runner, "vm", "list")
+    assert result.exit_code == 0 and "ffat-prod-db" in result.output
+    runner = _cloud_runner().on([*OS, "server", "stop"], CommandResult())
+    result = _run(deploy_dir, runner, "vm", "stop", "db")
+    assert result.exit_code == 0, result.output
+    assert runner.calls[-1].argv[-2:] == ("stop", "ffat-prod-db")
+
+
+def test_vm_stop_can_be_refused(deploy_dir: Path) -> None:
+    runner = _cloud_runner()
+    context = AppContext(
+        paths=DeployPaths(deploy_dir),
+        runner=runner,
+        openstack_binary="openstack",
+        confirm=lambda _: False,
+    )
+    result = CliRunner().invoke(app, ["vm", "stop", "db"], obj=context)
+    assert result.exit_code == 1 and "cancelled" in result.output
+    assert not any("stop" in c.argv for c in runner.calls)
+
+
+# ------------------------------------------------------------------- plan / apply defaults
+
+
+def test_apply_without_stack_only_shows_the_help(deploy_dir: Path) -> None:
+    runner = FakeRunner()
+    result = _run(deploy_dir, runner, "infra", "apply")
+    assert result.exit_code == 0, result.output
+    assert "The stack must be named" in result.output
+    assert runner.calls == []
+
+
+def test_plan_without_stack_previews_all_three_in_order(deploy_dir: Path) -> None:
+    missing = CommandResult(returncode=1, stderr="Stack not found")
+    runner = (
+        _cloud_runner()
+        .on([*OS, "stack", "show"], missing)
+        .on([*OS, "volume", "list"], CommandResult(stdout="[]"))
+    )
+    result = _run(deploy_dir, runner, "infra", "plan")
+    assert result.exit_code == 1, result.output  # servers cannot be previewed yet
+    output = result.output
+    assert output.index("ffat-prod-net: will be created") < output.index(
+        "ffat-prod-storage: will be created"
+    )
+    assert "ffat-prod-servers: ✘ refused: ffat-prod-net does not exist" in output
+
+
+def test_render_without_stack_only_shows_the_help(deploy_dir: Path) -> None:
+    result = _run(deploy_dir, FakeRunner(), "infra", "render")
+    assert result.exit_code == 0, result.output
+    assert "The stack must be named" in result.output
+    assert not (deploy_dir / ".build").exists()
+
+
+def test_ssh_command_shows_the_remote_errors(deploy_dir: Path) -> None:
+    state = deploy_dir / ".state"
+    state.mkdir()
+    (state / "ssh_config").write_text("Host ffat-db\n", encoding="utf-8")
+    runner = FakeRunner().on(["ssh"], CommandResult(1, stdout="partial\n", stderr="denied\n"))
+    result = _run(deploy_dir, runner, "ssh", "db", "--", "sudo", "cat", "/x")
+    assert result.exit_code == 1
+    assert "partial" in result.output and "denied" in result.output

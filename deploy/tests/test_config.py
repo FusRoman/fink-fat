@@ -37,7 +37,9 @@ def test_committed_infra_yaml_is_valid(infra_data: dict[str, Any]) -> None:
     assert infra.roles.explorer.floating_ip
 
 
-@pytest.mark.parametrize("key", ["openstack", "admin_cidrs", "explorer_domain"])
+@pytest.mark.parametrize(
+    "key", ["openstack", "admin_cidrs", "explorer_domain", "ssh_identity_file", "dns_nameservers"]
+)
 def test_local_only_keys_are_refused_in_the_versioned_file(
     infra_data: dict[str, Any], key: str
 ) -> None:
@@ -196,3 +198,13 @@ def test_fixed_ips_stay_below_the_dhcp_pool(infra_data: dict[str, Any]) -> None:
 def test_private_subnet_must_be_at_least_a_slash_24(infra_data: dict[str, Any]) -> None:
     infra_data["network"]["cidr"] = "10.42.0.0/25"
     assert "too small" in _problems(parse_infra, infra_data)
+
+
+def test_dns_servers_are_local_only(infra_data: dict[str, Any], local_data: dict[str, Any]) -> None:
+    infra_data["network"]["dns_nameservers"] = ["192.0.2.53"]
+    assert "dns_nameservers" in _problems(parse_infra, infra_data)
+    local_data["dns_nameservers"] = ["192.0.2.53", "192.0.2.54"]
+    assert [str(ip) for ip in parse_local(local_data).dns_nameservers] == [
+        "192.0.2.53",
+        "192.0.2.54",
+    ]

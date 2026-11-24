@@ -1,4 +1,9 @@
-"""Template of the ``net`` stack: private network, router and security groups.
+"""Template of the ``net`` stack: private network, router, security groups, public address.
+
+The explorer's public address (floating IP ``fip_explorer``) lives here rather than in the
+servers stack: the net stack almost never changes, so destroying and recreating the servers
+keeps the address, hence the DNS record. The servers stack only associates it with the
+explorer's port.
 
 Logical resource names (keys of ``resources``) are stable identifiers used by Heat to
 compute updates; renaming one makes Heat replace the resource.
@@ -7,15 +12,25 @@ compute updates; renaming one makes Heat replace the resource.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from ipaddress import IPv4Network
+from ipaddress import IPv4Address, IPv4Network
 from typing import Any
 
 from finkfat_ops import naming
 from finkfat_ops.config import InfraConfig
 from finkfat_ops.naming import SecurityGroup
 
-PROTECTED_RESOURCES = frozenset({"net", "subnet", "router", "router_interface"})
-"""Resources whose replacement or deletion would cut every VM off the network."""
+FLOATING_IP = "fip_explorer"
+"""The explorer's floating IP (web site and SSH bastion)."""
+
+FLOATING_IP_ID_OUTPUT = "explorer_floating_ip_id"
+"""Output holding the ID of :data:`FLOATING_IP`, associated by the servers stack."""
+
+PUBLIC_IP_OUTPUT = "explorer_public_ip"
+"""Output holding the address of :data:`FLOATING_IP`."""
+
+PROTECTED_RESOURCES = frozenset({"net", "subnet", "router", "router_interface", FLOATING_IP})
+"""Resources whose replacement or deletion would cut every VM off the network, or change
+the public address (its DNS record)."""
 
 SECURITY_GROUP_RESOURCES = {
     SecurityGroup.EXPLORER: "sg_explorer",
@@ -75,7 +90,11 @@ def _security_group(env: str, group: SecurityGroup, description: str, rules: lis
     }
 
 
-def build_net_template(infra: InfraConfig, ssh_cidrs: Sequence[IPv4Network]) -> dict[str, Any]:
+def build_net_template(
+    infra: InfraConfig,
+    ssh_cidrs: Sequence[IPv4Network],
+    dns_nameservers: Sequence[IPv4Address] = (),
+) -> dict[str, Any]:
     """Build the HOT template of the ``net`` stack.
 
     Security groups:
@@ -92,6 +111,8 @@ def build_net_template(infra: InfraConfig, ssh_cidrs: Sequence[IPv4Network]) -> 
         Versioned structure (environment, network).
     ssh_cidrs : Sequence[IPv4Network]
         Source ranges allowed to SSH into the bastion (stable and dynamic ones).
+    dns_nameservers : Sequence[IPv4Address]
+        DNS servers handed out by DHCP (``infra.local.yaml``); empty keeps Neutron's default.
 
     Returns
     -------
@@ -118,8 +139,8 @@ def build_net_template(infra: InfraConfig, ssh_cidrs: Sequence[IPv4Network]) -> 
         "enable_dhcp": True,
         "allocation_pools": [{"start": str(pool_start), "end": str(pool_end)}],
     }
-    if network.dns_nameservers:
-        subnet_properties["dns_nameservers"] = [str(ip) for ip in network.dns_nameservers]
+    if dns_nameservers:
+        subnet_properties["dns_nameservers"] = [str(ip) for ip in dns_nameservers]
 
     resources: dict[str, Any] = {
         "net": {"type": "OS::Neutron::Net", "properties": {"name": naming.network_name(env)}},
@@ -137,6 +158,10 @@ def build_net_template(infra: InfraConfig, ssh_cidrs: Sequence[IPv4Network]) -> 
                 "router": {"get_resource": "router"},
                 "subnet": {"get_resource": "subnet"},
             },
+        },
+        FLOATING_IP: {
+            "type": "OS::Neutron::FloatingIP",
+            "properties": {"floating_network": network.external_network},
         },
         sg[SecurityGroup.EXPLORER]: _security_group(
             env,
@@ -177,9 +202,11 @@ def build_net_template(infra: InfraConfig, ssh_cidrs: Sequence[IPv4Network]) -> 
         "subnet_id": {"value": {"get_resource": "subnet"}},
         "router_id": {"value": {"get_resource": "router"}},
     } | {f"{resource}_id": {"value": {"get_resource": resource}} for resource in sg.values()}
+    outputs[FLOATING_IP_ID_OUTPUT] = {"value": {"get_resource": FLOATING_IP}}
+    outputs[PUBLIC_IP_OUTPUT] = {"value": {"get_attr": [FLOATING_IP, "floating_ip_address"]}}
     return {
         "heat_template_version": infra.heat_template_version,
-        "description": f"fink-fat {env}: private network, router and security groups",
+        "description": f"fink-fat {env}: private network, router, security groups, public IP",
         "resources": resources,
         "outputs": outputs,
     }
