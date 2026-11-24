@@ -1,0 +1,193 @@
+[workspace.package]
+edition = "2024"
+version = "1.0.0"
+authors = ["Roman Le Montagner <roman.le-montagner@ijclab.in2p3.fr>"]
+categories = ["science"]
+keywords = ["astronomy", "asteroids", "tracking", "alerts"]
+repository = "https://github.com/FusRoman/fink-fat"
+documentation = "https://docs.rs/fink-fat"
+license-file = "LICENSE"
+
+[package]
+name = "fink-fat"
+readme = "README.md"
+description = "Fink-FAT (Fink Asteroid Tracker): links solar system object detections of an alert stream such as Fink's into trajectories, night after night, with multi-hypothesis Kalman filter banks, in batch or in real time."
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+categories.workspace = true
+keywords.workspace = true
+repository.workspace = true
+documentation.workspace = true
+license-file.workspace = true
+
+[workspace]
+members = [
+    "crates/fink-fat-ades",
+    "crates/fink-fat-engine",
+    "crates/fink-fat-eval",
+    "crates/fink-fat-explorer",
+    "crates/fink-fat-sql",
+    "crates/fink-fat-stream",
+]
+resolver = "3"
+
+[workspace.dependencies]
+nalgebra = { version = "0.34.2" }
+serde = { version = "1.0.228", features = ["derive"] }
+ahash = { version = "0.8.12", features = ["serde"] }
+thiserror = "2.0.17"
+camino = "1.2.1"
+tempfile = "3.23.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+tracing-appender = "0.2"
+clap = { version = "4.5.60", features = ["cargo", "derive"] }
+chrono = "0.4"
+fink-fat-engine = { path = "crates/fink-fat-engine", version = "1.0.0" }
+fink-fat-ades = { path = "crates/fink-fat-ades", version = "1.0.0" }
+fink-fat-sql = { path = "crates/fink-fat-sql", version = "1.0.0" }
+fink-fat-stream = { path = "crates/fink-fat-stream", version = "1.0.0" }
+indicatif = "0.18.0"
+serde_yaml = "0.9.34"
+photom = { version = "1.1.0" }
+outfit = { version = "5.0.2", default-features = false, features = ["serde", "ephem-anise", "parallel"] }
+polars = { version = "0.53.0", default-features = false, features = [
+    "lazy",
+    "dtype-u8",
+    "dtype-u16",
+    "parquet",
+    "strings",
+    "temporal",
+] }
+rkyv = "0.8.17"
+memmap2 = "0.9.10"
+# `with-chrono-0_4`: `fink-fat submit`'s eligibility check reads
+# `orbit_fits.fitted_at`/`orbit_fit_failures.attempted_at` (`TIMESTAMPTZ`) to
+# reproduce `fink_fat_ades::quality_tier::assign_quality_tier`'s cascade —
+# nothing in `fink-fat-sql`'s bulk load needed chrono round-tripping before this.
+# `with-serde_json-1`: `mpc_submissions.verdict_detail` is `JSONB` —
+# `postgres::types::Json<T>` is the only `ToSql` impl that actually accepts
+# a JSON/JSONB column (see `submit::insert_submission_row`'s doc comment).
+postgres = { version = "0.19.10", features = ["with-chrono-0_4", "with-serde_json-1"] }
+# Versioned schema migrations of the persistent tables (`fink-fat-sql`'s
+# `sql/migrations/V*.sql`), run on the synchronous `postgres::Client`.
+# `default-features = false` drops the `toml` feature, only used by
+# refinery's file-based `Config` / CLI.
+refinery = { version = "0.10.0", default-features = false, features = ["postgres"] }
+# Live alert stream of `fink-fat stream` (Fink's Kafka livestream), behind
+# `fink-fat-stream`'s `kafka` feature. librdkafka is built from its bundled
+# sources with its own `./configure` (needs a C toolchain, make and the
+# OpenSSL headers) — NOT `cmake-build`: librdkafka 2.12's CMake build
+# includes <curl/curl.h> whenever SSL is on, even with curl disabled
+# (`#cmakedefine01 WITH_OAUTHBEARER_OIDC` + `#ifdef`). `ssl`: SCRAM
+# authentication, which Fink uses, requires OpenSSL in librdkafka.
+# `default-features = false`: drops the `tokio` integration, the source is
+# synchronous (`BaseConsumer`).
+rdkafka = { version = "0.39.0", default-features = false, features = ["libz", "ssl"] }
+# Fink alerts are Avro: the writer schema in the message key, a schemaless
+# datum in the value.
+apache-avro = "0.23.0"
+# SIGTERM / SIGINT → graceful stop of `fink-fat stream` (an AtomicBool flag,
+# no async runtime).
+signal-hook = "0.4.6"
+rayon = "1.12.0"
+
+
+[dependencies]
+camino = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+fink-fat-engine = { workspace = true }
+fink-fat-ades = { workspace = true }
+fink-fat-sql = { workspace = true }
+fink-fat-stream = { workspace = true, features = ["kafka"] }
+signal-hook = { workspace = true }
+clap = { workspace = true }
+photom = { workspace = true, features = ["polars"] }
+polars = { workspace = true }
+rkyv = { workspace = true, features = ["pointer_width_64"] }
+thiserror = { workspace = true }
+postgres = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+serde_json = "1.0"
+# `blocking` keeps the CLI's `submit` subcommand synchronous (no tokio
+# runtime needed, matching the rest of this binary crate — see
+# `fink-fat-sql`'s use of the synchronous `postgres` crate for the same
+# reason); `multipart` is needed for the ADES XML submission POST.
+reqwest = { version = "0.12", features = ["blocking", "json", "multipart"] }
+
+[dev-dependencies]
+outfit = { workspace = true }
+assert_cmd = "2.0.16"
+tempfile = { workspace = true }
+fink-fat-eval = { path = "crates/fink-fat-eval" }
+# `lsst_alert`: `tests/stream_resume.rs` builds synthetic Rubin alerts.
+photom = { workspace = true, features = ["polars", "lsst_alert"] }
+# `tests/stream_kafka.rs` publishes Fink-encoded alerts to a local broker.
+rdkafka = { workspace = true }
+apache-avro = { workspace = true }
+# Waits on rdkafka's `AdminClient` futures (multi-partition test topics).
+futures-executor = "0.3.34"
+husky-rs = "0.4.0"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+# disable debug symbols for all packages except this one
+[profile.release.package."*"]
+debug = false
+
+# `dx serve` (fink-fat-explorer's dev container) always builds in the `dev`
+# profile, and unoptimized `outfit`/`photom`/`anise`/`nalgebra`/`polars` code
+# is where essentially all of an orbit fit's CPU time goes — debug builds of
+# that kind of numerical code routinely run 5-20x slower than release. This
+# raises every *dependency* to release-level codegen while leaving this
+# workspace's own crates (fink-fat, fink-fat-engine, fink-fat-eval,
+# fink-fat-explorer) at the default unoptimized `dev` profile, so editing and
+# hot-reloading the explorer's own code still recompiles fast — only
+# dependency code (rebuilt rarely, just when Cargo.lock changes) pays the
+# slower optimized-compile cost, once.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.bench]
+codegen-units = 1
+debug = true
+
+[profile.evaluation]
+inherits = "release"
+lto = false
+codegen-units = 128
+overflow-checks = true
+debug-assertions = true
+incremental = true
+
+[profile.evaluation.package."*"]
+codegen-units = 32
+overflow-checks = true
+debug-assertions = true
+incremental = false
+
+# Same binaries as `evaluation`, but without the debug_assert!()/overflow
+# checks that profile turns on for catching numerical bugs (NaN/degenerate
+# states, invariant violations) during investigation. Use this once the
+# correctness of a run isn't in question and you just want a full-dataset
+# sweep (e.g. mot_analysis over the whole survey) to finish faster —
+# `lto = "thin"` + `codegen-units = 1` restore release-level cross-crate
+# inlining in the Kalman hot path that `evaluation`'s `codegen-units = 128`
+# gives up for faster incremental compiles.
+[profile.evaluation-fast]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+overflow-checks = false
+debug-assertions = false
+incremental = false
+
+[profile.evaluation-fast.package."*"]
+debug = false

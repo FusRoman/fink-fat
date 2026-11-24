@@ -1,0 +1,27 @@
+# Template of infra.local.yaml — copy it, then fill in real values:
+#   cp infra.local.example.yaml infra.local.yaml
+# infra.local.yaml is gitignored: it describes who may reach the bastion and which cloud
+# project is targeted, which has no business in a public repository (README.md, "Configuration").
+#
+# Every value below is a placeholder: 192.0.2.0/24 and 198.51.100.0/24 are documentation-only
+# ranges (RFC 5737, never routed) and example.org is a reserved domain (RFC 2606).
+
+openstack:
+  cloud: my-cloud-profile            # profile name in ~/.config/openstack/clouds.yaml
+  project: my-project                # ff-ops refuses to act on any other project
+  ask_password: true                 # profile uses auth_type: password (required by Heat on
+                                     # clouds where application credentials cannot create
+                                     # trusts); ff-ops asks once, or reads OS_PASSWORD
+
+admin_cidrs:                         # STABLE source ranges allowed to SSH into the bastion (port 22)
+  - 192.0.2.0/24                     # e.g. the institution egress range (used through sshuttle)
+  - 198.51.100.7/32                  # e.g. a fixed office address
+# A changing address (home, travel) does not belong here: `ff-ops access allow-me` manages it
+# in .state/access.yaml and never rewrites this file.
+
+explorer_domain: fink-fat.example.org   # remove the line to run without a domain (self-signed HTTPS)
+ssh_identity_file: ~/.ssh/id_ed25519     # private key of the Nova keypair; remove to use ssh's defaults
+
+dns_nameservers:                         # DNS servers of the private subnet. Without them, VMs get
+  - 192.0.2.53                           # Neutron's DHCP server as DNS, which may resolve no external
+  - 192.0.2.54                           # name (then cloud-init fails on dnf). Reuse the cloud's own.

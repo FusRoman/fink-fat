@@ -1,0 +1,7 @@
+# Squawk configuration for the fink-fat-sql scripts (`sql/**/*.sql`).
+# Run from this directory: `squawk 'sql/**/*.sql'` (quoted: squawk expands the pattern itself).
+
+# Every script runs inside a transaction: the migrations in refinery's single
+# grouped transaction (`schema::migrate`), the other scripts in `convert`'s
+# bulk-load transaction or one of the nightly sync's transactions.
+assume_in_transaction = true

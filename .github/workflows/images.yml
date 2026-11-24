@@ -1,0 +1,94 @@
+name: Images
+
+# Builds the production images and publishes them to GHCR, but only for
+# commits that passed CI:
+#
+#   push on main or tag v* ──► CI ──(completed, success)──► Images
+#
+# - `workflow_run` starts this workflow when CI finishes; the job only runs if
+#   CI succeeded, on a push (never for a pull request, so a fork cannot publish).
+# - The built commit is `workflow_run.head_sha`, the one CI tested — not the
+#   latest commit of the branch.
+# - Tags: `sha-<7 chars>` always; `main` for main; the tag name for `v*` tags.
+# - No token to create: the automatic GITHUB_TOKEN gets `packages: write`.
+#
+# `workflow_run` always uses the version of this file on the default branch:
+# a change here only applies once merged.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  images:
+    name: Image ${{ matrix.target }}
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      (github.event.workflow_run.head_branch == 'main' ||
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Stages of `dockerfile`; each is published as fink-fat-<target>.
+        target: [engine, explorer]
+    steps:
+      - name: Checkout the commit CI validated
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Image name and tags
+        id: meta
+        env:
+          OWNER: ${{ github.repository_owner }}
+          TARGET: ${{ matrix.target }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          REF: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          # GHCR names must be lowercase.
+          image="ghcr.io/${OWNER,,}/fink-fat-${TARGET}"
+          tags="${image}:sha-${SHA::7}"
+          if [ "$REF" = "main" ]; then
+            tags="${tags},${image}:main"
+          elif [[ "$REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            tags="${tags},${image}:${REF}"
+          else
+            echo "::error::unexpected ref '${REF}' (expected main or a vX.Y.Z tag)"
+            exit 1
+          fi
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+          echo "tags=${tags}" >> "$GITHUB_OUTPUT"
+          echo "Publishing: ${tags}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: dockerfile
+          target: ${{ matrix.target }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.event.workflow_run.head_sha }}
+            org.opencontainers.image.title=fink-fat-${{ matrix.target }}
+          # Docker layers kept between runs, one cache per image.
+          cache-from: type=gha,scope=${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }}
