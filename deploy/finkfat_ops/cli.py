@@ -16,6 +16,7 @@ from rich.console import Console
 from rich.table import Table
 
 from finkfat_ops import access as access_ops
+from finkfat_ops import images as images_ops
 from finkfat_ops import infra as infra_ops
 from finkfat_ops import naming
 from finkfat_ops import ssh as ssh_ops
@@ -71,6 +72,10 @@ volume_app = typer.Typer(help="Persistent data volumes: list and snapshot.", no_
 app.add_typer(volume_app, name="volume")
 vm_app = typer.Typer(help="The VMs: list, console log, reboot, stop, start.", no_args_is_help=True)
 app.add_typer(vm_app, name="vm")
+images_app = typer.Typer(
+    help="Docker images on GHCR: published tags, troubleshooting builds.", no_args_is_help=True
+)
+app.add_typer(images_app, name="images")
 
 
 @dataclass
@@ -756,6 +761,90 @@ def vm_start(ctx: typer.Context, role: RoleArgument) -> None:
     Example: ff-ops vm start compute
     """
     _power(ctx, role, vm_ops.Power.START, yes=True)
+
+
+# ------------------------------------------------------------------------------ images
+
+ImageTargets = Annotated[
+    list[images_ops.ImageTarget] | None,
+    typer.Argument(help="Images (default: engine and explorer)."),
+]
+
+
+@images_app.command("list")
+def images_list(ctx: typer.Context, targets: ImageTargets = None) -> None:
+    """List the tags published on GHCR, newest first (needs `gh` with `read:packages`).
+
+    Example: ff-ops images list engine
+    """
+    app_ctx: AppContext = ctx.obj
+    with _fail_nicely():
+        registry = load_deployment(app_ctx.paths).infra.images.registry
+        owner = images_ops.registry_owner(registry)
+        for target in targets or list(images_ops.ImageTarget):
+            name = images_ops.image_name(registry, target)
+            command = images_ops.versions_command(owner, target)
+            result = app_ctx.runner.run(command, check=False)
+            if images_ops.is_missing_package(result):
+                console.print(
+                    f"[yellow]⚠[/] {name}: not published yet (CI publishes it after a green "
+                    "run on main); if it is private, check that `gh` has read:packages"
+                )
+                continue
+            if not result.ok:
+                raise infra_ops.InfraError(
+                    f"{result.stderr.strip()}\n  command: {command.display()}\n"
+                    "  is `gh` logged in with read:packages? gh auth refresh -s read:packages"
+                )
+            table = Table(title=name)
+            for column in ("tags", "published", "digest"):
+                table.add_column(column)
+            for version in images_ops.parse_versions(parse_json(result)):
+                table.add_row(", ".join(version.tags), version.created_at, version.digest[:19])
+            console.print(table)
+
+
+@images_app.command("build")
+def images_build(
+    ctx: typer.Context,
+    targets: ImageTargets = None,
+    push: Annotated[bool, typer.Option(help="Push to GHCR instead of loading locally.")] = False,
+    allow_dirty: Annotated[
+        bool, typer.Option(help="Build even with uncommitted changes (never with --push).")
+    ] = False,
+) -> None:
+    """Build the images from this machine, tagged sha-<commit> (troubleshooting only).
+
+    CI normally builds and publishes the images once it is green. Pushing from here
+    needs `docker login ghcr.io` with a token allowed to write packages, and a clean
+    working tree, so that the tag always names the code it contains.
+
+    Example: ff-ops images build engine --push
+    """
+    app_ctx: AppContext = ctx.obj
+    with _fail_nicely():
+        registry = load_deployment(app_ctx.paths).infra.images.registry
+        images_ops.registry_owner(registry)  # validates the registry before building
+        repo = app_ctx.paths.root.parent
+        dirty = app_ctx.runner.run(images_ops.dirty_command(repo)).stdout.strip()
+        if dirty and (push or not allow_dirty):
+            raise infra_ops.InfraError(
+                "the working tree has uncommitted changes: commit them first "
+                "(--allow-dirty is accepted for local builds only)"
+            )
+        sha = app_ctx.runner.run(images_ops.head_command(repo)).stdout.strip() or "0" * 40
+        tag = images_ops.short_sha_tag(sha)
+        selected = targets or list(images_ops.ImageTarget)
+        refs = {t: f"{images_ops.image_name(registry, t)}:{tag}" for t in selected}
+        verb = "build and push" if push else "build locally"
+        if push and not app_ctx.confirm(f"{verb} {', '.join(refs.values())}?"):
+            raise infra_ops.InfraError("cancelled")
+        for target, ref in refs.items():
+            console.print(f"[bold]{verb}[/] {ref}")
+            command = images_ops.build_command(repo, target, [ref], push=push)
+            if app_ctx.runner.run(command, check=False).returncode:
+                raise infra_ops.InfraError(f"the build of {ref} failed (see the log above)")
+            console.print(f"[green]✔[/] {ref}")
 
 
 def main() -> None:

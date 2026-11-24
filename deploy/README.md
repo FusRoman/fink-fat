@@ -153,6 +153,8 @@ contact nothing (`infra render`, `--dry-run`).
 | `ff-ops ssh <role> [-- command]` | available | Open a shell on a machine through the bastion, or run a command. `--refresh` rewrites `.state/ssh_config` from the servers stack. |
 | `ff-ops init [roles…]` | available | Wait for cloud-init on each machine (bastion first), then check Docker, the data volume mount and the clock synchronisation. |
 | `ff-ops vm list / console / reboot / stop / start` | available | List the VMs, show the end of a console log (boot messages, even without SSH), power actions (confirmation for reboot and stop). |
+| `ff-ops images list [engine\|explorer]` | available | Tags published on GHCR, newest first (through `gh api`; needs `gh` logged in with `read:packages`). |
+| `ff-ops images build [targets] [--push]` | available | Troubleshooting only: build the images from this machine, tagged `sha-<commit>`; `--push` publishes them (needs `docker login ghcr.io` with a token allowed to write packages, and a clean working tree). |
 | `ff-ops volume extend / logs / tunnel` | planned | Volume resizing, logs, pgAdmin tunnel. |
 
 `--dry-run` is a global option: it prints every external command instead of running it.
@@ -267,6 +269,42 @@ its floating IP, compute and db through it (`ProxyJump`). Host keys go to ff-ops
 `.state/known_hosts`, under a stable alias per machine; when a VM is recreated, its old key
 is removed there automatically. `ssh_identity_file` in `infra.local.yaml` selects the
 private key of the Nova keypair (otherwise `ssh` uses its defaults and agent).
+
+## Docker images
+
+The repository's `dockerfile` builds every image from the same workspace sources and the
+same Rust compiler:
+
+| Stage | Content |
+| --- | --- |
+| `engine` | `fink-fat` (release, librdkafka with SSL) on `debian:trixie-slim`, as the unprivileged user `finkfat` (UID 10001). Entrypoint `fink-fat`, default command `stream --config /config/stream.yaml --logs`. The stream configuration is mounted read-only on `/config`, the engine's `storage_path` on `/data`. |
+| `explorer` | fink-fat-explorer (`dx bundle --release`) on `debian:trixie-slim`, as the unprivileged user `explorer`. |
+| `prod` | Alias of `explorer`, for the local `docker-compose.yml`. |
+| `dev` | The explorer with `dx serve` and hot reload, for local development. |
+
+No configuration and no secret is ever baked into an image.
+
+`.github/workflows/images.yml` publishes `engine` and `explorer` to GHCR as
+`ghcr.io/<owner>/fink-fat-<stage>`. It starts when the `CI` workflow completes
+(`workflow_run`) and only runs when CI succeeded on a push to `main` or to a `v*` tag, so
+a red CI or a pull request never publishes anything. It builds the commit CI tested
+(`workflow_run.head_sha`) and tags it:
+
+| Tag | When |
+| --- | --- |
+| `sha-<7 characters>` | always: the exact code inside |
+| `main` | built from `main`: the latest green version |
+| `vX.Y.Z` | built from a `vX.Y.Z` git tag: a release |
+
+`.github/workflows/images-check.yml` builds both images **without publishing them** on
+pull requests that change how they are built (`dockerfile`, `.dockerignore`, the image
+workflows), and checks that `fink-fat --help` runs in the `engine` image. Other pull
+requests do not pay for this release build.
+
+Publishing uses the automatic `GITHUB_TOKEN`; no token has to be created. Docker layers
+are cached between runs (GitHub Actions cache, one scope per image). As with every
+`workflow_run` workflow, GitHub runs the version of `images.yml` found on the default
+branch.
 
 ## SSH access to the bastion
 

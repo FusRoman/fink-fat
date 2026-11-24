@@ -350,3 +350,58 @@ def test_ssh_command_shows_the_remote_errors(deploy_dir: Path) -> None:
     result = _run(deploy_dir, runner, "ssh", "db", "--", "sudo", "cat", "/x")
     assert result.exit_code == 1
     assert "partial" in result.output and "denied" in result.output
+
+
+# ------------------------------------------------------------------------------ images
+
+VERSIONS = CommandResult(
+    stdout=json.dumps(
+        [{"name": "sha256:" + "a" * 64, "created_at": "2026-11-24T10:00:00Z",
+          "metadata": {"container": {"tags": ["sha-2222222", "main"]}}}]
+    )
+)  # fmt: skip
+
+
+def test_images_list_shows_the_published_tags(deploy_dir: Path) -> None:
+    runner = FakeRunner().on(["gh", "api"], VERSIONS)
+    result = _run(deploy_dir, runner, "images", "list", "engine")
+    assert result.exit_code == 0, result.output
+    assert "sha-2222222, main" in result.output
+    assert "fink-fat-engine/versions" in runner.calls[0].argv[2]
+
+
+def test_images_list_explains_a_missing_scope(deploy_dir: Path) -> None:
+    denied = CommandResult(1, stderr="HTTP 403: You need at least read:packages scope")
+    result = _run(deploy_dir, FakeRunner().on(["gh"], denied), "images", "list")
+    assert result.exit_code == 1 and "gh auth refresh -s read:packages" in result.output
+
+
+def test_images_push_refuses_a_dirty_tree(deploy_dir: Path) -> None:
+    runner = FakeRunner().on(["git", "-C"], CommandResult(stdout=" M src/main.rs\n"))
+    result = _run(deploy_dir, runner, "images", "build", "--push", "--allow-dirty")
+    assert result.exit_code == 1 and "uncommitted changes" in result.output
+    assert not any(c.argv[0] == "docker" for c in runner.calls)
+
+
+def test_images_build_tags_with_the_commit(deploy_dir: Path) -> None:
+    runner = (
+        FakeRunner()
+        .on(["git", "-C", str(deploy_dir.parent), "status"], CommandResult(stdout=""))
+        .on(["git", "-C", str(deploy_dir.parent), "rev-parse"], CommandResult(stdout="abc1234ff\n"))
+        .on(["docker"], CommandResult())
+    )
+    result = _run(deploy_dir, runner, "images", "build", "engine", "--push")
+    assert result.exit_code == 0, result.output
+    docker = [c for c in runner.calls if c.argv[0] == "docker"]
+    assert len(docker) == 1
+    assert "ghcr.io/fusroman/fink-fat-engine:sha-abc1234" in docker[0].argv
+    assert "--push" in docker[0].argv
+
+
+def test_images_list_reports_unpublished_images_and_goes_on(deploy_dir: Path) -> None:
+    missing = CommandResult(1, stderr="gh: Package not found. (HTTP 404)")
+    runner = FakeRunner().on(["gh", "api"], missing, times=1).on(["gh", "api"], VERSIONS)
+    result = _run(deploy_dir, runner, "images", "list")
+    assert result.exit_code == 0, result.output
+    assert "fink-fat-engine: not published yet" in result.output
+    assert "sha-2222222, main" in result.output  # the explorer is still listed

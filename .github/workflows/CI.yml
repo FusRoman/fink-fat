@@ -3,6 +3,9 @@ name: CI
 on:
   push:
     branches: [main, master]
+    # Release tags: a green CI on a tag publishes the `vX.Y.Z` images
+    # (`images.yml`).
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
