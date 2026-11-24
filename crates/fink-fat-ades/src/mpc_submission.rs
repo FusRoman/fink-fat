@@ -6,13 +6,12 @@
 //! inputs and interprets outputs, so both are unit testable without a live
 //! network call.
 //!
-//! A live probe of `submit_xml_test` (valid ADES, an ADES with `dec` out of
-//! range, plain garbage text, and a non-ADES XML document) showed it is
-//! **asynchronous**: every one of those inputs produced the exact same kind
-//! of response — an acknowledgement carrying a `Submission ID`, never a
+//! `submit_xml_test` is **asynchronous**: a valid ADES document, an invalid
+//! one (e.g. `dec` out of range), plain garbage text and a non-ADES XML
+//! document all produce the exact same kind of response — an acknowledgement carrying a `Submission ID`, never a
 //! pass/fail verdict, and (contrary to what its form implies) it does not
 //! reliably email a report either. The real verdict comes from a second,
-//! separate, undocumented endpoint discovered by further live probing:
+//! separate, undocumented endpoint:
 //! `submit-test.minorplanetcenter.net/submission_status/query/?id=<id>`
 //! (test-submissions only). Production submissions instead use the
 //! documented [`crate::submission_status_api`] (coarse ingest acceptance)

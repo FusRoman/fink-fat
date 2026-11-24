@@ -198,9 +198,9 @@ pub struct ArchivedRow {
     pub kf_state: KfStateFields,
 }
 
-/// One row of the `observations` table: a single alert as produced by
-/// `test_exp/prep_alert.py`. The ground-truth `traj_id` column present in
-/// that parquet is deliberately not read here — it's an evaluation-only
+/// One row of the `observations` table: a single alert of the observation
+/// Parquet. The ground-truth `traj_id` column of evaluation datasets is
+/// deliberately not read here — it's an evaluation-only
 /// artifact with no equivalent on real production data, and this table is
 /// meant to also hold production observations.
 ///

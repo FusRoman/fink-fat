@@ -335,7 +335,7 @@ impl Default for PairConfig {
             max_angular_speed: 5.0e-2,
             max_mag_difference: 5.0,
             allow_same_timebin: true,
-            acc_prior_var: 1.0e-4, // should also englobe NEOs
+            acc_prior_var: 1.0e-4, // should also cover NEOs
             tracklet_residual_sigma: 5.0,
         }
     }

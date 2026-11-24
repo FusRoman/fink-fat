@@ -10,9 +10,8 @@
 //! **ordered in time**, but librdkafka reads them in turns of a few
 //! messages each: it balances partitions by *message count*, not by
 //! *time*. A partition holding few alerts over some period therefore races
-//! ahead in time, and a dense one falls behind. On the live stream, after
-//! 1200 messages, some partitions had delivered alerts up to t = 366 s,
-//! others only up to t = 240 s.
+//! ahead in time, and a dense one falls behind: on the live stream,
+//! partitions routinely drift apart by two minutes or more.
 //!
 //! The rest of the pipeline expects alerts in roughly arrival order: the
 //! driver's clock is the **latest** arrival seen, and the visit assembler
@@ -30,8 +29,8 @@
 //!   P1's V alerts     arrive after V was advanced: leftovers, no association
 //! ```
 //!
-//! The first run on Fink's stream lost a quarter of its alerts this way
-//! (607 leftovers out of 2293). At a night boundary it is worse: the fast
+//! Without a correction, a large share of the alerts become leftovers this
+//! way. At a night boundary it is worse: the fast
 //! partition's first alert of the next night closes the current night, and
 //! the slow partitions' last alerts of that night become *late* — not
 //! tracked at all.

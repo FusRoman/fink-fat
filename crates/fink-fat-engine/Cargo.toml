@@ -42,7 +42,6 @@ approx = "0.5.1"
 proptest = "1.9.0"
 serde_yaml = { workspace = true }
 tempfile = { workspace = true }
-# Test-only: enables `ObsDataset::from_mpc_80_col`, used by the UTC->TT
-# anchor test (`tests/utc_tt_anchor.rs`) to exercise the real parsing path
-# instead of constructing an `MJDTT` value directly.
+# Test-only: `serde` and `ObsDataset::from_mpc_80_col` (MPC 80-column
+# parsing) for building test observations through the real parsing path.
 photom = { workspace = true, features = ["serde", "mpc_80_col"] }

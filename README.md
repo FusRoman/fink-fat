@@ -82,7 +82,7 @@ A few principles guide the design:
 | `fink-fat-engine` | [`crates/fink-fat-engine/`](crates/fink-fat-engine/README.md) | Core library: configuration, seeding, space-time bucketing, topocentric Kalman filters, branching / MHT, archive, snapshot. |
 | `fink-fat-ades` | [`crates/fink-fat-ades/`](crates/fink-fat-ades/README.md) | Pure ADES / MPC logic: document building, local `submit.xsd` validation, submission and status API parsing, quality tiers. |
 | `fink-fat-sql` | [`crates/fink-fat-sql/`](crates/fink-fat-sql/README.md) | Postgres sink: table schema (`sql/`), row shapes and `COPY` loaders shared by `convert` and the streaming pipeline. |
-| `fink-fat-stream` | [`crates/fink-fat-stream/`](crates/fink-fat-stream/README.md) | Streaming driver library behind `fink-fat stream`: advances the engine visit by visit as Rubin alerts arrive (visit assembly, night clock, crash-safe night journal); replays Fink parquet dumps. |
+| `fink-fat-stream` | [`crates/fink-fat-stream/`](crates/fink-fat-stream/README.md) | Streaming driver library behind `fink-fat stream`: advances the engine visit by visit as Rubin alerts arrive from Fink's Kafka stream or a replayed Parquet dump (visit assembly, night clock, crash-safe night journal, Postgres outbox). |
 | `fink-fat-eval` | [`crates/fink-fat-eval/`](crates/fink-fat-eval/README.md) | Evaluation binaries run against labelled datasets (tracking recall/purity, seeding, KF calibration, MOT contamination). |
 | `fink-fat-explorer` | [`crates/fink-fat-explorer/`](crates/fink-fat-explorer/README.md) | Dioxus fullstack web app on Postgres: population maps, 3D orbits, lineage pages, orbit fitting, cross-matching, MPC submission dashboard. |
 
@@ -91,16 +91,18 @@ Other notable paths:
 | Path | Content |
 | --- | --- |
 | [`tests/`](tests/) | CLI-level integration tests and small ZTF / LSST night samples. |
-| [`test_exp/`](test_exp/) | Python scripts for data preparation (alert Parquet files, ground truth, astrometric error calibration). |
-| `engine_config.best.yaml`, `engine_config_lsst.best.yaml` | Reference engine configurations for ZTF and LSST cadence. |
-| [`dockerfile`](dockerfile), [`docker-compose.yml`](docker-compose.yml) | Postgres, pgAdmin, the explorer (`dev` / `prod` profiles) and a test Kafka broker (`kafka` profile). |
+| [`config/engine_config.yaml`](config/engine_config.yaml) | Reference engine configuration (the operating point retained by the ground-truth evaluation). |
+| [`dockerfile`](dockerfile), [`docker-compose.yml`](docker-compose.yml) | The `engine` and `explorer` images (see [Docker images](#docker-images)); for local work, Postgres, pgAdmin, the explorer (`dev` / `prod` profiles) and a test Kafka broker (`kafka` profile). |
+| [`Changelog.md`](Changelog.md) | Release notes. |
 | [`deploy/`](deploy/README.md) | `ff-ops`: Python tool that manages the production instance on OpenStack (Heat stacks, VMs, Docker deployments, updates, migrations). |
 | [`katex-header.html`](katex-header.html) | KaTeX header so rustdoc renders the maths. |
 | [`assets/logo/`](assets/logo/README.md) | Fink-FAT logo: SVG files (light, dark, white) and their design notes. |
 
 ## Requirements
 
-- Rust stable with 2024 edition support (≥ 1.85).
+- Rust stable (2024 edition).
+- A C toolchain, `make` and the OpenSSL headers (`libssl-dev`): librdkafka,
+  used by `fink-fat stream`, is compiled from its bundled sources.
 - `libfontconfig1-dev` (used by the plotting code in `fink-fat-eval`).
 - Network access on first run: the Kalman context downloads the JPL ephemeris
   and UT1 data, and the MPC observatory list.
@@ -119,7 +121,7 @@ cargo build --release
 ```bash
 fink-fat track \
   --alerts /path/to/alerts.parquet \
-  --config engine_config.best.yaml \
+  --config config/engine_config.yaml \
   --progress --logs
 ```
 
@@ -165,10 +167,10 @@ chain on one machine, see
 
 ```bash
 # Flat Parquet tables
-fink-fat convert --config engine_config.best.yaml --format parquet
+fink-fat convert --config config/engine_config.yaml --format parquet
 
 # Postgres (feeds fink-fat-explorer and `submit`)
-fink-fat convert --config engine_config.best.yaml --format sql \
+fink-fat convert --config config/engine_config.yaml --format sql \
   --database-url postgres://finkfat:finkfat@localhost:5432/finkfat_test \
   --path-observation /path/to/alerts.parquet
 ```
@@ -191,7 +193,10 @@ is eligible (by quality tier), builds the ADES document and validates it
 locally. Then it sends the document and records the outcome in the
 `mpc_submissions` table. `--endpoint test` is the default and targets MPC's
 test endpoint. Only `--endpoint production` sends a real submission.
-`--dry-run` stops before anything leaves the machine.
+`--dry-run` stops before anything leaves the machine. Lineages can also be
+given directly (`--lineages FF2026AB1,FF2026AB2` instead of `--csv`, whose
+file has a `lineage_designation` column, as downloaded from the explorer's
+submission page). `--force` resubmits a lineage that was already sent.
 
 ### Explore results in the browser
 
@@ -202,6 +207,22 @@ docker compose --profile prod up -d --build   # optimised build on :8081
 
 See [`crates/fink-fat-explorer/README.md`](crates/fink-fat-explorer/README.md)
 for the build targets, runtime configuration and data loading.
+
+## Docker images
+
+CI publishes two images to GHCR, built from the [`dockerfile`](dockerfile) once
+the CI of a push to `main` or of a `vX.Y.Z` tag is green:
+
+| Image | Content |
+| --- | --- |
+| `ghcr.io/fusroman/fink-fat-engine` | `fink-fat` on `debian:trixie-slim`; runs `fink-fat stream --config /config/stream.yaml --logs` by default. |
+| `ghcr.io/fusroman/fink-fat-explorer` | The explorer's `server` binary and its client bundle. |
+
+Tags: `sha-<commit>` for every build, `main` for the latest green `main`,
+`vX.Y.Z` for releases. Neither image contains a configuration or a secret:
+they are mounted at runtime. Pull requests that change the `dockerfile` build
+both images without publishing them. See [`deploy/`](deploy/README.md) for the
+production deployment.
 
 ## Evaluation
 
@@ -219,8 +240,8 @@ fails. Each tool is a separate binary:
 
 ```bash
 cargo run --profile evaluation-fast -p fink-fat-eval --bin tracking_analysis -- \
-  --alerts /path/to/sso_dataset_eval.parquet \
-  --config engine_config.best.yaml \
+  --alerts /path/to/labelled_alerts.parquet \
+  --config config/engine_config.yaml \
   --output-result eval_out/
 ```
 
@@ -250,10 +271,10 @@ Tests use synthetic or bundled data only. The `sql_convert` integration test
 needs a Postgres instance given by `DATABASE_URL`; `docker compose up -d db`
 provides one with the same credentials as CI.
 
-A `husky-rs` pre-commit hook runs the SQL linters, fmt, clippy, check and the
-doc build. CI runs the same jobs, plus the Postgres integration test and engine coverage
-(Codecov). Contributor conventions (error handling, collections, doc comment
-format, tests) are listed in [`AGENTS.md`](AGENTS.md).
+A `husky-rs` pre-commit hook runs the SQL linters, Ruff on `deploy/` (needs
+`pdm`), fmt, clippy, check and the doc build. CI runs the same jobs, plus the
+test suites with coverage (Codecov), the Postgres and Kafka integration tests,
+and the `deploy/` tests.
 
 ## Local end-to-end test (Kafka → Postgres → explorer)
 
@@ -313,14 +334,14 @@ cargo build --release -p fink-fat
 
 ### 4. Write the local configuration
 
-Use a dedicated directory, so the test never touches the reference configs or
+Use a dedicated directory, so the test never touches the reference config or
 storage (keep it out of git, for example with
 `echo local_e2e/ >> .git/info/exclude`):
 
 ```bash
 mkdir -p local_e2e
 sed 's|^storage_path:.*|storage_path: ./local_e2e/storage|' \
-  engine_config_lsst.best.yaml > local_e2e/engine_config.yaml
+  config/engine_config.yaml > local_e2e/engine_config.yaml
 
 cat > local_e2e/stream.yaml <<'YAML'
 engine_config: local_e2e/engine_config.yaml

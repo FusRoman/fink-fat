@@ -45,22 +45,22 @@ pub enum RadiusStrategy {
         #[serde(deserialize_with = "de_angle_arcsec")]
         max_arcsec: f64,
     },
-    /// Bascule entre deux stratégies selon la taille du mélange sélectionné
-    /// — `MaxEllipse` (insensible aux poids, donc robuste à l'ambiguïté
-    /// ρ/ρ̇ post-bootstrap où les poids ne sont pas encore informatifs) tant
-    /// que la banque est grande, `MixtureCovariance` clampé une fois
-    /// qu'elle a convergé vers un petit nombre d'hypothèses. Voir
-    /// l'investigation `not_matched%` aux steps 1/2 dans `mot_analysis`.
+    /// Switches between two strategies according to the size of the
+    /// selected mixture: `MaxEllipse` (insensitive to the weights, hence
+    /// robust to the post-bootstrap ρ/ρ̇ ambiguity, when the weights are not
+    /// informative yet) while the bank is large, then a clamped
+    /// `MixtureCovariance` once it has converged to a few hypotheses. The
+    /// `not_matched%` of the first steps, reported by `fink-fat-eval`'s
+    /// `mot_analysis`, motivates the split.
     AdaptiveConvergence {
-        /// Si `components.len()` dépasse ce seuil, la banque est considérée
-        /// non convergée : `MaxEllipse`, clampé à
-        /// `unconverged_clamp_arcsec` (généreux — c'est justement le clamp
-        /// serré actuel qui coupe les modes corrects mais éloignés).
+        /// Above this number of components, the bank is considered not
+        /// converged: `MaxEllipse`, clamped to `unconverged_clamp_arcsec`
+        /// (generous: a tight clamp cuts correct but distant modes).
         max_hypotheses_for_mixture: usize,
         #[serde(deserialize_with = "de_angle_arcsec")]
         unconverged_clamp_arcsec: f64,
-        /// Sinon (banque élaguée, poids informatifs) : comportement
-        /// actuel, `MixtureCovariance` clampé à `converged_clamp_arcsec`.
+        /// Otherwise (pruned bank, informative weights): `MixtureCovariance`
+        /// clamped to `converged_clamp_arcsec`.
         #[serde(deserialize_with = "de_angle_arcsec")]
         converged_clamp_arcsec: f64,
     },

@@ -111,7 +111,7 @@ async fn get_http_client() -> &'static reqwest::Client {
         .await
 }
 
-/// The engine's full validated configuration (same `engine_config.best.yaml`
+/// The engine's full validated configuration (same `config/engine_config.yaml`
 /// shape the main pipeline loads), read once from `KALMAN_CONFIG_PATH`. The
 /// lineage replay needs more than just the Kalman tuning from this file —
 /// it also needs `seeding_grid_config`/`kfbank_config`/`advance_params` to

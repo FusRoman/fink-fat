@@ -1,196 +1,118 @@
 # fink-fat-eval
 
-Evaluation binary for the Fink-FAT asteroid detection pipeline.  It runs the
-engine against a labelled dataset (ground-truth SSO identities) and reports
-purity/recall metrics at each pipeline stage.
+Evaluation tools for the Fink-FAT tracking engine. They run the engine
+(`fink-fat-engine`) on **labelled** alert data, where every detection carries
+the identity of the solar-system object it belongs to, and measure where
+reconstruction succeeds or fails.
 
-Four independent evaluation modes are available:
+The crate is a library (the shared statistics, reports and plots) plus one
+binary per study. It is a development tool: nothing in the production pipeline
+depends on it.
 
-| Subcommand | Pipeline stages executed | What it measures |
-|---|---|---|
-| `seeding-eval` | Ingest → Seeds | Seed purity and trajectory recall per night |
-| `edge-eval` | Ingest → Seeds → Edges | Edge purity, lower/upper-bound recall |
-| `solver-eval` | Ingest → Seeds → Edges → Solver | Full trajectory reconstruction quality |
-| `model-eval` | *(offline, no pipeline)* | ONNX classifier ROC-AUC / PR-AUC on a pre-built feature file |
+## Binaries
 
----
+| Binary | Purpose | Main outputs |
+| --- | --- | --- |
+| `tracking_analysis` | Full night-after-night tracking: advances a `BranchCollection` over the run and reports recall, purity, completeness and fragmentation, broken down by population. | `tracking_report.json`, plots (PNG) |
+| `seed_to_bank_analysis` | Intra-night seeding in isolation: every night is seeded from an empty collection, as if it were night 0. Reports seed recall, purity and volume (banks, hypotheses). | report on stdout, plots (PNG) |
+| `kalman_full_traj_eval` | Runs the topocentric Kalman filter bank on every ground-truth trajectory: dataset-wide statistics, best/worst trajectories by predictive-region coverage, detailed per-step reports. NEES/RMSE with `--ground-truth`. | report on stdout, optional Parquet |
+| `kf_calibrate` | Automatic calibration of the search-region, gating and process-noise parameters: progressive-sampling coordinate descent that keeps recall high while shrinking the mean search-region radius. | `kf_calibration_report.json` |
+| `mot_analysis` | Contamination study of the predicted search regions: per visit, how many detections fall inside besides the true one. | report on stdout |
+| `kalman_single_traj_eval`, `helio_kf_update` | Development probes on a few hard-coded trajectories (per-step Kalman reports, heliocentric update). | stdout |
 
-## Common arguments
-
-All pipeline evaluation subcommands (`seeding-eval`, `edge-eval`, `solver-eval`) share the same base arguments:
-
-| Argument | Description |
-|---|---|
-| `--alerts <URI>` | Input alert file URI (e.g. `file:///path/to/alerts.parquet`) |
-| `--config <FILE>` | Engine configuration file (`eval_config.yml`) |
-| `--plot-dir <DIR>` | *(optional)* Output directory for PNG diagnostic plots |
-
-The **truth table** embedded in the alert file must contain at minimum two columns:
-`dia_source_id` (uint64) and `trajectory_id` (int32).
-
----
-
-## seeding-eval
-
-Runs the ingestion and seeding stages only.  Reports per-night and global
-statistics for the produced seeds:
-
-- **Purity** — fraction of classifiable seeds that are true positives (all
-  member alerts belong to the same ground-truth trajectory).
-- **Recall** — fraction of recoverable ground-truth trajectories for which at
-  least one TP seed was produced.
+Every binary is selected with `--bin`:
 
 ```bash
-cargo run --profile evaluation -p fink-fat-eval -- seeding-eval \
-  --alerts file:///path/to/sso_dataset_eval.parquet \
-  --config crates/fink-fat-eval/eval_config.yml
+cargo run --profile evaluation -p fink-fat-eval --bin tracking_analysis -- \
+  --alerts /path/to/labelled_alerts.parquet \
+  --config engine_config.yaml \
+  --output-result eval_out/
 ```
 
-With plots:
+## Inputs
+
+- **`--alerts`**: a Parquet file of labelled alerts, loaded with `photom`
+  (observation layout, observations grouped by night). The object identity of
+  each detection is the ground truth every metric is computed against.
+- **`--config`**: an engine configuration file, the same YAML format as the
+  `fink-fat` binary (validated on load); see the
+  [engine README](../fink-fat-engine/README.md) for its fields.
+- **`--ground-truth`** (optional): a Parquet file of true topocentric states.
+  Required for the NEES/RMSE metrics of the Kalman tools; without it they are
+  skipped.
+
+## Common options
+
+Shared by every binary (`fink_fat_eval::cli::Cli`):
+
+| Option | Meaning |
+| --- | --- |
+| `-a, --alerts <ALERTS_FILE>` | Labelled alerts (Parquet). Required. |
+| `-c, --config <CONFIG_FILE>` | Engine configuration (YAML). Required. |
+| `-o, --output-result <OUTPUT_DIR>` | Directory for reports and plots written to disk. |
+| `--ground-truth <GROUND_TRUTH_FILE>` | True topocentric states, for NEES/RMSE. |
+| `--steps-parquet-out <FILE>` | Per-step Kalman metrics (one row per filter step). |
+| `--summary-parquet-out <FILE>` | Per-trajectory summary metrics. |
+| `--override-obs-error-arcsec <ARCSEC>` | Replace every observation's `ra_err`/`dec_err` with one value, to sweep astrometric-noise assumptions without regenerating the input. |
+
+### `tracking_analysis`
+
+| Option | Meaning |
+| --- | --- |
+| `--from-json <JSON_FILE>` | Regenerate the plots from an existing `tracking_report.json`, without running the engine. |
+| `--from-snapshot` | Report on the `.rkyv` snapshot written by `fink-fat` under the config's `storage_path`, instead of simulating the nights. |
+| `--list-nights` | Print every night id with its observation count, then exit. |
+| `--start-night <N>`, `--end-night <N>`, `--n-nights <N>` | Restrict the run to a range of nights. Tracking always starts from an empty collection at `--start-night`. |
+| `--completeness-coverage-threshold <F>` | Fraction of a trajectory a pure branch must cover for the relaxed completeness metric (default `0.8`). |
+
+### `kf_calibrate`
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--seed` | `42` | Seed of the sampling RNG (same seed and inputs, same report). |
+| `--initial-sample-size` | `50` | Trajectories sampled in round 0. |
+| `--growth-factor` | `4.0` | Sample growth after each round that does not yet cover the dataset. |
+| `--target-recall` | `0.98` | Recall above which cost reductions are preferred, and a full-dataset round may stop the run. |
+| `--max-rounds` | `20` | Hard cap on the number of rounds. |
+| `--max-failing-pool` | `200` | Failing trajectories carried into the next round's sample. |
+| `--completion-threshold` | `0.98` | Completion fraction for "trajectory reconstructed". |
+| `--within-radius-threshold` | `95.0` | Percentage of observations inside the search radius for "trajectory reconstructed". |
+| `--params` | all | Comma-separated subset of parameters to calibrate, e.g. `max_arcsec,gate_chi2`. |
+| `--min-traj-points` | `4` | Minimum observations for a trajectory to take part. |
+
+## Logging
+
+Every binary logs through `tracing`, filtered by the `FINKFAT_LOG`
+environment variable (default `warn`):
 
 ```bash
-cargo run --profile evaluation -p fink-fat-eval -- seeding-eval \
-  --alerts file:///path/to/sso_dataset_eval.parquet \
-  --config crates/fink-fat-eval/eval_config.yml \
-  --plot-dir seeding_plots
+FINKFAT_LOG=info cargo run --profile evaluation -p fink-fat-eval --bin mot_analysis -- ...
 ```
 
----
+## Library modules
 
-## edge-eval
+| Module | Content |
+| --- | --- |
+| `cli` | Shared command-line options and the alert loader. |
+| `tracking_report` | Night-after-night tracking statistics and plots. |
+| `seed_bank_report` | Intra-night seeding statistics. |
+| `snapshot_report` | Statistics and plots of a `BranchCollection` snapshot. |
+| `trajectory_processing`, `kalman_traj`, `reporting` | Running the Kalman filter bank on ground-truth trajectories, and its stdout reports. |
+| `kalman_traj_plots` | Per-trajectory NIS/NEES time series. |
+| `kf_calibration` | Parameter search of `kf_calibrate`. |
+| `candidate_filters` | Candidate filters evaluated by the contamination study. |
+| `ground_truth_state` | Lookup of the true topocentric state, for NEES/RMSE. |
+| `population` | Orbital population of a trajectory (main belt, NEO, …), for per-population metrics. |
+| `length_bin` | Trajectory-length bins. |
+| `parquet_export` | Parquet export of the per-step and per-trajectory metrics. |
 
-Runs ingestion, seeding, and edge-building stages.  Reports per night-pair and
-global statistics for the produced inter-night edges:
+## Build profiles
 
-- **Purity** — fraction of classifiable edges that are true positives.
-- **Lower-bound recall** — trajectories recovered by a TP edge whose exact
-  `(from_night, to_night)` pair is among consecutive seeded nights.
-- **Upper-bound recall** — trajectories recovered by any TP edge connecting two
-  seeded nights within `max_gap_nights`, including skip edges.
+The workspace `Cargo.toml` defines two profiles for these tools:
 
-The gap between lower and upper bound quantifies how many trajectories are
-recovered only via skip edges.
+| Profile | Settings | Use |
+| --- | --- | --- |
+| `evaluation` | release optimisations, `lto = false`, `codegen-units = 128`, overflow checks and debug assertions on | investigations: fast incremental rebuilds, numerical bugs (NaN, broken invariants) caught early |
+| `evaluation-fast` | release optimisations, thin LTO, `codegen-units = 1`, checks off | full-dataset sweeps once correctness is not in question |
 
-```bash
-cargo run --profile evaluation -p fink-fat-eval -- edge-eval \
-  --alerts file:///path/to/sso_dataset_eval.parquet \
-  --config crates/fink-fat-eval/eval_config.yml
-```
-
-With plots:
-
-```bash
-cargo run --profile evaluation -p fink-fat-eval -- edge-eval \
-  --alerts file:///path/to/sso_dataset_eval.parquet \
-  --config crates/fink-fat-eval/eval_config.yml \
-  --plot-dir edge_plots
-```
-
-Exporting the edge feature dataset for ML training (produces a Parquet file
-with 17 features, the truth label `is_true_edge`, and debug columns):
-
-```bash
-cargo run --profile evaluation -p fink-fat-eval -- edge-eval \
-  --alerts file:///path/to/sso_dataset_eval.parquet \
-  --config crates/fink-fat-eval/eval_config.yml \
-  --export-features crates/fink-fat-eval/src/bin/edge_ml_prediction/edge_features.parquet
-```
-
----
-
-## solver-eval
-
-Runs the full pipeline including the graph solver.  Reports trajectory-level
-quality metrics:
-
-- **Purity** — fraction of reconstructed trajectories that are true positives
-  (all member alerts from the same ground-truth object).
-- **Recall** — fraction of recoverable trajectories for which at least one TP
-  track was produced.
-- **Partial recall** — fraction of recoverable trajectories for which at least
-  one TP track covers ≥ 50 % of their total alerts.
-
-```bash
-cargo run --profile evaluation -p fink-fat-eval -- solver-eval \
-  --alerts file:///path/to/sso_dataset_eval.parquet \
-  --config crates/fink-fat-eval/eval_config.yml
-```
-
-With plots:
-
-```bash
-cargo run --profile evaluation -p fink-fat-eval -- solver-eval \
-  --alerts file:///path/to/sso_dataset_eval.parquet \
-  --config crates/fink-fat-eval/eval_config.yml \
-  --plot-dir solver_plots
-```
-
----
-
-## model-eval
-
-Offline evaluation of a trained ONNX edge classifier against the labelled
-feature Parquet file produced by `edge-eval --export-features`.  No pipeline
-is executed.
-
-Loads the ONNX model path from the `training.onnx_output` field of
-`xgb_params.yml`, runs inference on the full feature file, and reports:
-
-- **ROC-AUC**
-- **PR-AUC** (primary metric, more informative on imbalanced data)
-
-and writes three diagnostic plots: `roc_curve.png`, `pr_curve.png`,
-`score_distribution.png`.
-
-```bash
-cargo run --profile evaluation -p fink-fat-eval -- model-eval \
-  -f crates/fink-fat-eval/src/bin/edge_ml_prediction/edge_features.parquet \
-  -x crates/fink-fat-eval/src/bin/edge_ml_prediction/xgb_params.yml \
-  -p model_eval_plots
-```
-
-| Flag | Description |
-|---|---|
-| `-f` / `--features-parquet` | Parquet file produced by `edge-eval --export-features` |
-| `-x` / `--xgb-params` | `xgb_params.yml` — used to locate the ONNX model |
-| `-p` / `--plot-dir` | *(optional)* Output directory for PNG plots |
-
----
-
-## Configuration
-
-The engine configuration file (`eval_config.yml`) controls all pipeline
-parameters: spatial search radii, candidate speed bounds, cost function
-variant, solver policy, and more.
-
-The reference file is `crates/fink-fat-eval/eval_config.yml`.
-
----
-
-## Build profile
-
-All evaluation commands should be compiled with the `--profile evaluation`
-flag.  This profile is defined in the workspace `Cargo.toml` and is optimised
-specifically for evaluation workloads:
-
-- inherits `release` optimisations (fast runtime)
-- `lto = false` and `codegen-units = 128` for significantly faster
-  incremental recompilation between runs
-- `overflow-checks` and `debug-assertions` enabled for easier debugging
-
-```bash
-cargo run --profile evaluation -p fink-fat-eval -- <subcommand> ...
-```
-
-Using `--release` instead will produce a slightly faster binary but with much
-longer incremental build times.  Using the debug profile (no flag) will result
-in a runtime that is orders of magnitude slower.
-
----
-
-## ML training pipeline
-
-The full machine-learning workflow for the edge classifier lives in
-`src/bin/edge_ml_prediction/`.  See its own
-[README](src/bin/edge_ml_prediction/README.md) for the complete walkthrough
-(data generation → HPO → training → ONNX export).
+The default debug profile is orders of magnitude slower on real datasets.

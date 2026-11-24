@@ -9,7 +9,7 @@ use photom::{io::lsst_alert::LsstObservation, observer::dataset::ObserverId, pho
 /// |--------|-------|
 /// | `id` | `diaSourceId` |
 /// | `night_id` | the alert's night: MJD of its `dayObs` (the batch pipeline stores a relative night index instead — do not mix both in one database) |
-/// | `object_id` | `diaSourceId` as text, the convention of `test_exp/prep_lsst_eval_data.py` (Rubin has no persistent per-object id for unknown moving objects) |
+/// | `object_id` | `diaSourceId` as text, the convention of the batch LSST datasets (Rubin has no persistent per-object id for unknown moving objects) |
 /// | `magnitude`, `mag_err` | AB magnitude and its error, from photom's conversion |
 /// | `filter` | photom's band code (`u`…`y` → `0`…`5`); `-1` for a label filter, which LSST alerts never have |
 /// | `mpc_code_obs` | the observer's MPC code (`X05` for Rubin); empty if none |

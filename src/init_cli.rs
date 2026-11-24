@@ -55,9 +55,9 @@ pub enum FinkFatCommands {
     /// Track asteroids in an alert stream from photometric alerts
     Track(FinkFatCliArgs),
 
-    /// Track asteroids visit by visit, as alerts arrive (currently: replay
-    /// of a Fink parquet dump with a simulated clock). See
-    /// `crates/fink-fat-stream/README.md`.
+    /// Track asteroids visit by visit, as alerts arrive: Fink's Kafka
+    /// stream, or the replay of a Parquet alert dump with a simulated clock.
+    /// See `crates/fink-fat-stream/README.md`.
     Stream(StreamCliArgs),
 
     /// Convert the binary output of fink-fat into the requested format

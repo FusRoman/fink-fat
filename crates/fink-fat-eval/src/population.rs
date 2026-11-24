@@ -7,9 +7,8 @@
 //! axis `a` and perihelion `q`, so efficacy / selectivity can be broken down
 //! per population.
 //!
-//! `a`/`q` come from `ssoBFT` and are added to the ground-truth Parquet by
-//! `test_exp/solar_system_data/build_ground_truth.py` (columns `true_a_au`,
-//! `true_q_au`). Older Parquets without those columns yield an empty map, so
+//! `a`/`q` come from `ssoBFT` and are stored in the ground-truth Parquet
+//! (columns `true_a_au`, `true_q_au`). Older Parquets without those columns yield an empty map, so
 //! every trajectory falls back to [`Population::Unknown`].
 
 use ahash::AHashMap;

@@ -1,32 +1,39 @@
 //! # Fink-FAT
 //!
-//! Fink-FAT is the command-line entrypoint of the asteroid-linking pipeline.
-//! It ingests photometric alerts, groups detections into intra-night seeds,
-//! links those seeds across nights, and forwards the resulting trajectories to
-//! orbit fitting and evaluation stages.
+//! Fink-FAT is the command-line entrypoint of the asteroid tracker. Its
+//! subcommands are:
 //!
-//! The workspace is split into three crates with clear responsibilities:
+//! - `track` — batch tracking of a Parquet alert file, night after night
+//!   ([`crate::track`]);
+//! - `stream` — real-time tracking of an alert stream (Fink's Kafka, or the
+//!   replay of a Parquet dump), visit by visit ([`crate::stream`](mod@crate::stream));
+//! - `convert` — export of the tracking state to Parquet or Postgres
+//!   ([`crate::converter`]);
+//! - `submit` — submission of eligible lineages to the Minor Planet Center
+//!   ([`crate::submit`](mod@crate::submit)).
 //!
-//! - `fink-fat` — binary crate. Parses the CLI, loads the engine configuration,
-//!   initialises logging and progress reporting, and launches the runtime
-//!   pipeline.
-//! - `fink-fat-engine` — core library. Implements alert models, seeding, edge
-//!   construction, solver routing, persistence, and configuration loading.
-//! - `fink-fat-stream` — streaming driver library, behind `fink-fat stream`:
-//!   advances the engine visit by visit as alerts arrive.
-//! - `fink-fat-eval` — evaluation binaries. Runs the engine on labelled data to
-//!   measure seeding, edge, solver, and model quality.
+//! The workspace crates it relies on:
+//!
+//! - `fink-fat-engine` — the tracking engine: seeding, Kalman filter banks,
+//!   multi-hypothesis branching, snapshot and archive persistence,
+//!   configuration;
+//! - `fink-fat-stream` — the streaming driver behind `fink-fat stream`;
+//! - `fink-fat-sql` — the Postgres schema, migrations and bulk loading;
+//! - `fink-fat-ades` — ADES documents and MPC request/response handling.
+//!
+//! `fink-fat-eval` (evaluation tools) and `fink-fat-explorer` (web app) are
+//! separate workspace members.
 //!
 //! ## Typical usage
 //!
-//! Run the binary with an alerts file (one night, or several nights tagged
-//! with distinct `night_id`s) and a validated configuration file:
+//! Track an alert file (one night, or several nights tagged with distinct
+//! `night_id`s) with a validated configuration file:
 //!
 //! ```bash
-//! fink-fat --alerts /path/to/alerts.parquet --config /path/to/config.yml
+//! fink-fat track --alerts /path/to/alerts.parquet --config config/engine_config.yaml
 //! ```
 //!
-//! ## Runtime flow
+//! ## Runtime flow of `track`
 //!
 //! One invocation processes every night present in `--alerts`, in
 //! chronological order:

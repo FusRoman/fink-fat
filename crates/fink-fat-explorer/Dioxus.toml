@@ -12,7 +12,7 @@ title = "fink-fat-explorer"
 style = [
     "https://cdn.jsdelivr.net/npm/vanilla-calendar-pro@3.4.0/styles/index.css",
     # Syntax highlighting of the `/api-docs` code samples (LIGHT theme only).
-    # TODO(dark mode): when the site gets a dark mode, also load a dark
+    # Dark mode, if the site ever gets one: also load a dark
     # highlight.js theme (e.g. `.../styles/github-dark.min.css`) and enable
     # the right one depending on the active daisyUI theme.
     "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github.min.css",

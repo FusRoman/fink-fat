@@ -8,10 +8,9 @@
 //!
 //! The build itself reads two narrow tables `fink-fat convert` prepares for
 //! it: `branches` (with its precomputed observation statistics) and
-//! `branch_best_state` (each branch's best hypothesis state). It used to
-//! reach that state through a `LATERAL` best-hypothesis lookup plus a
-//! `kf_state` primary-key probe *per branch* — ~214k random reads into tens
-//! of GB, minutes per build. The remaining queries (fits, failures,
+//! `branch_best_state` (each branch's best hypothesis state), so the build
+//! never does a per-branch lookup into the large `kf_state` table. The
+//! remaining queries (fits, failures,
 //! cross-matches, counts) are small and run concurrently.
 //!
 //! The data changes when `fink-fat convert` rewrites the bulk-loaded tables

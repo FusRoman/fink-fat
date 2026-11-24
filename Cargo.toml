@@ -11,7 +11,7 @@ license-file = "LICENSE"
 [package]
 name = "fink-fat"
 readme = "README.md"
-description = "FINK-FAT: Fink Asteroid Tracker, a software to track asteroids in an alert stream such as Fink's.It provides a graph-based representation of the linked alerts and implements algorithms to predict potential asteroid detections and track them over time."
+description = "Fink-FAT (Fink Asteroid Tracker): links solar system object detections of an alert stream such as Fink's into trajectories, night after night, with multi-hypothesis Kalman filter banks, in batch or in real time."
 edition.workspace = true
 version.workspace = true
 authors.workspace = true

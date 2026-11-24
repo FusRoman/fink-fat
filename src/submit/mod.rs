@@ -24,10 +24,10 @@
 //! `submit` has no [`fink_fat_engine::engine_config::EngineConfig`] in
 //! scope: it never touches the engine's snapshot/archive log, only
 //! Postgres (via the synchronous `postgres` crate, matching
-//! `fink_fat_sql`) and MPC (via `reqwest::blocking`) — see the
-//! architecture note in the project's implementation plan for why the ADES
-//! data (RA/Dec/mag/band per observation) is only reachable through
-//! Postgres, not the raw journal.
+//! `fink_fat_sql`) and MPC (via `reqwest::blocking`). The ADES data
+//! (RA/Dec/mag/band per observation) is only reachable through Postgres:
+//! the engine's snapshot and journal keep the tracking state, not the
+//! photometry of every observation.
 //!
 //! Every step above is a thin wrapper around a pure function (parsing,
 //! decision, formatting) covered by this module's `tests`; the only real

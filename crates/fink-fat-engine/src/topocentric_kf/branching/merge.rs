@@ -87,10 +87,8 @@ use crate::{
 /// Tuning for the linkage cascade and the index that feeds it.
 ///
 /// Every optional stage is disabled by `None` rather than by a numeric
-/// sentinel: a `0.0`-means-off convention once inverted the photometric gate
-/// in the shadow study, turning the row labelled "off" into the strictest test
-/// in the sweep and producing two reports that concluded "zero contamination"
-/// from a broken row.
+/// sentinel: with a `0.0`-means-off convention, a gate meant to be off
+/// silently becomes the strictest one.
 ///
 /// The defaults are the operating point the sweep retained against ground
 /// truth — most recall at ≥ 99 % precision with zero wrong merge on
@@ -108,8 +106,8 @@ pub struct MergeParams {
     ///
     /// Note this gates the *predictor* only. Short arcs are still indexed as
     /// **candidates**, because `(α, δ, α̇, δ̇)` at an arc's own epoch is well
-    /// determined even from two points — applying the gate to both sides used
-    /// to lose 12 090 true pairs against 523 lost to cell sizing.
+    /// determined even from two points — applying the gate to both sides loses
+    /// far more true pairs than the index cell sizing does.
     pub min_arc_points: usize,
 
     /// Max `|H_A − H_B|` (magnitudes) for two arcs to be photometrically
@@ -209,9 +207,9 @@ pub struct MergeParams {
 }
 
 impl Default for MergeParams {
-    /// The operating point retained by the ground-truth sweep: 4838 correct
-    /// merges against 43 wrong, 99.12 % precision, zero wrong merge on
-    /// NEO/Centaur/KBO/SDO.
+    /// The operating point retained by the ground-truth sweep: about 99 %
+    /// precision, with no wrong merge on the NEO, Centaur, KBO and SDO
+    /// populations.
     fn default() -> Self {
         Self {
             min_arc_points: 6,
@@ -901,9 +899,9 @@ struct TimeSlice {
 /// Carrying every arc to one shared reference epoch forces a long propagation
 /// on both sides, and a propagation is only as good as `ρ` — the
 /// badly-determined half of a topocentric attributable. Such an index has to
-/// demand convergence of both arcs, and measurement showed the price: of
-/// 12 613 true pairs missed, **12 090 were missed because one arc was too
-/// short to index**, against 523 genuinely mis-binned.
+/// demand convergence of both arcs, and the price is high: nearly all the
+/// true pairs missed that way are missed **because one arc is too short to
+/// index**, not because of the binning.
 ///
 /// So:
 /// * **candidates** are indexed at *their own epoch* with no propagation at

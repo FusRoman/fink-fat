@@ -1,7 +1,6 @@
-//! Read the raw observation parquet (candid-keyed ZTF/LSST alerts, e.g.
-//! `sso_dataset_eval.parquet`, produced by `test_exp/prep_alert.py`
-//! (ZTF)/`test_exp/prep_lsst_eval_data.py` (LSST)) that feeds the
-//! `observations` table.
+//! Read the raw observation Parquet (candid-keyed ZTF/LSST alerts, the same
+//! file given to `fink-fat track --alerts`) that feeds the `observations`
+//! table.
 //!
 //! This is the only input `convert --format sql` reads from a file: the rows
 //! themselves, their encoding and the `COPY` into Postgres live in

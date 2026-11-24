@@ -1,6 +1,6 @@
 //! Submitter/telescope identity, shared by every producer and consumer of
 //! it: `fink-fat submit`'s `--submitter-config` YAML file
-//! (`fink-fat`'s `SubmitterConfig::load`/`load_submitter_config`),
+//! (read by `fink-fat`'s `load_submitter_config`),
 //! `fink-fat-explorer`'s generator form on the Submission page (which
 //! downloads exactly this type serialized as YAML — see [`SubmitterConfig::to_yaml`]),
 //! and its lineage-page ADES export modal (which converts straight to

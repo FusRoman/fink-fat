@@ -1,7 +1,7 @@
 //! [`StreamConfig`]: the YAML configuration of `fink-fat-stream`.
 //!
 //! ```yaml
-//! engine_config: engine_config_lsst.best.yaml   # the tracker's own configuration
+//! engine_config: config/engine_config.yaml   # the tracker's own configuration
 //! ingest:
 //!   error_model: FCCT14                          # astrometric error model of the night datasets
 //!   quality_cuts: { min_snr: 5.0, max_ra_err_arcsec: 1.0, max_dec_err_arcsec: 1.0 }

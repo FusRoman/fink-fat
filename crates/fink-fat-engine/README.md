@@ -11,8 +11,9 @@ multi-night candidate trajectories of Solar System objects. The approach is
 - branches compete through a log-likelihood ratio against the local alert
   density.
 
-The crate does no I/O of its own beyond reading and writing its snapshot and
-archive files. The CLI (`fink-fat`), the evaluation tools (`fink-fat-eval`)
+Its I/O is limited to reading the YAML configuration, reading and writing its
+snapshot and archive files, and loading the JPL ephemeris and UT1 data when a
+`KalmanContext` is built. The CLI (`fink-fat`), the evaluation tools (`fink-fat-eval`)
 and the web explorer (`fink-fat-explorer`) all sit on top of it. See the
 [workspace README](../../README.md) for how to run the pipeline.
 
@@ -358,8 +359,8 @@ $\mathbf v = \mathbf v_\mathrm{obs} + \dot\rho\hat{\mathbf u} + \rho\dot{\hat{\m
 (`conversion.rs`, with the analytic 6×6 Jacobian).
 
 **Observer.** The `KalmanContext` loads the JPL ephemeris (default
-`naif:DE440`) and the UT1 / EOP data at start-up. It downloads them if they
-are missing. For each observation it gives the observer's heliocentric state,
+`naif:DE440`, with the main-belt asteroid perturbers) and the UT1 / EOP data
+at start-up; the UT1 data is downloaded from JPL (network access required). For each observation it gives the observer's heliocentric state,
 built through `outfit`'s observer cache (`observer_state.rs`).
 
 **Prediction** (`propagate.rs`):
@@ -521,7 +522,8 @@ lineage is processed in parallel:
    - $L(z)$ is the predictive mixture likelihood at the candidate.
    - $\lambda_\mathrm{clutter}$ is the local alert density, in alerts per
      steradian: the number of alerts in the candidate's HEALPix cell of the
-     visit, divided by the pixel area (`spacetime_bucket::clutter_density`).
+     visit, divided by the pixel area
+     (`spacetime_bucket::clutter_density::local_clutter_density`).
    - $m_\mathrm{pred} = H + 5\log_{10}(r\Delta) + \Phi_{HG}(\alpha)$.
    - The detection probability is a logistic completeness curve,
      $P_D = 1/(1 + e^{(m_\mathrm{pred} - m_\mathrm{lim})/w})$, with
@@ -557,8 +559,8 @@ again.
 
 `branching::merge`. An object's arc often splits into several lineages: the
 association breaks (gate rejection, cadence gap) and the orphan detections
-are re-seeded. On a 200-night ZTF-cadence run, 42 % of trackable trajectories
-were fragmented, most into individually pure pieces. The merge module decides
+are re-seeded, so a large share of the trackable trajectories end up
+fragmented, mostly into individually pure pieces. The merge module decides
 whether two arcs are the same object, through a cascade of tests:
 
 1. The predictor arc (the longer one) has converged (≥ `min_arc_points`,
@@ -605,9 +607,10 @@ new configuration.
 
 | Section | Type | Controls |
 | --- | --- | --- |
-| `pairs` | `PairConfig` | Tracklet linker: `max_dt` (86.4 min), `max_angular_speed`, `max_mag_difference`, `tracklet_residual_sigma` (5). |
+| (root) | `EngineConfig` | `version` (1), `log_level`, `storage_path` (`./storage`), `healpix_depth`, `time_binner_width`, `log_retention_days` (5). |
+| `pairs` | `PairConfig` | Tracklet linker: `max_dt` (86.4 min), `max_angular_speed`, `max_mag_difference`, `tracklet_residual_sigma` (5), `allow_same_timebin`, `acc_prior_var`. |
 | `triplets` | `TripletConfig` | Standalone triplet generator (not used by the pipeline). |
-| `kalman_shared_context` | `KalmanContextConfig` | Ephemeris file, UT1 version, single-filter tuning (`q0`, `dt_ref`, Kepler solver, inflation threshold / max, angular variance floor). |
+| `kalman_shared_context` | `KalmanContextConfig` | `ephem_file_name`, `ut1_file_version`, and under `config:` the single-filter tuning: `q0`, `dt_ref`, `solver_type`, `inflation_chi2_threshold`, `max_inflation`, `min_angular_variance_ratio`. |
 | `kfbank_config` | `KFBankConfig` | `gate_chi2`, `weight_floor`, `min_hypotheses`, `cap_schedule`, `likelihood_window`, `search_region_chi2`, `merge_position_au`, `slope_parameter_g`. |
 | `seeding_grid_config` | `GridConfig` | ρ / ρ̇ grid bounds and resolution, populations, covariance floors. |
 | `advance_params` | `NightAdvanceParams` | Visits, prefilter, search region (`top_k`, `radius_strategy`, cones), candidate filters, `branch_cap`, `n_scan`, stale / archive policy, photometric model (`limiting_magnitude`, `completeness_width_mag`, `photometric_sigma_mag`). |
@@ -624,8 +627,10 @@ angular-acceleration and angular-variance tokens are supported, including
 French aliases (`jour`, `heure`, `ua`, …). For a variance field, a string is
 read as a sigma and squared.
 
-Reference configurations for ZTF and LSST cadence are at the workspace root
-(`engine_config.best.yaml`, `engine_config_lsst.best.yaml`).
+The reference configuration, the operating point retained by the
+ground-truth evaluation, is
+[`config/engine_config.yaml`](../../config/engine_config.yaml) at the
+workspace root.
 
 ## Logging
 
@@ -638,7 +643,9 @@ Each module defines a typed event enum with an `emit()` method on its own
 `orchestrate`, `propagation`, `pruning`, `seed_grid`, `seeding`,
 `spacetime_bucket`, `update`, `visit`.
 
-The engine never installs a subscriber. The binary does.
+The engine's own code only emits events. The `logging::subscriber` module
+provides the subscriber installation that the binaries (`fink-fat track`,
+`fink-fat stream`) call; a library user installs its own.
 
 ## Parallelism and determinism
 
@@ -662,20 +669,23 @@ src/
 │   ├── kalman_context.rs, single_kalman_config.rs
 │   ├── kf_bank_config.rs, hypothesis_cap.rs
 │   ├── grid_population.rs, night_advance_params.rs
-│   └── units.rs, validate_helpers.rs, error.rs
+│   └── units.rs, validate_helpers.rs, log_level.rs, error.rs
 ├── seeding/              intra-night pairing
 │   ├── tracklet_linker/  time-ordered sweep + incremental linear fit
 │   ├── pairs.rs          Pair, standalone pairwise gate
-│   └── triplets.rs       standalone triplet generator
+│   ├── triplets.rs       standalone triplet generator
+│   └── error.rs
 ├── spacetime_bucket/     (HEALPix cell, time bin) index, clutter density
 ├── topocentric_kf/
 │   ├── conversion.rs, observer_state.rs, pairs_state.rs, constants.rs
 │   ├── single_kalman/    KFState: init, propagate (Kepler + light time), update
-│   ├── kalman_bank/      KFBank, hypotheses, seed grid, search region, from_seeds
-│   └── branching/        MHT: visit, orchestrate, candidate search / filters,
-│                         LLR, detection probability, pruning, discovery,
-│                         archive, merge, BranchCollection
-├── logging/              LogTarget trait, target registry
+│   ├── kalman_bank/      KFBank, hypotheses, seed grid, from_seeds, logging,
+│   │                     ellipse_region_finder/ (search region, radius strategy, top-k)
+│   └── branching/        MHT: visit, night_session, orchestrate, candidate
+│                         search / filters, LLR, detection probability,
+│                         pruning, discovery, archive, merge, BranchCollection
+├── logging/              LogTarget trait, target registry, subscriber
+├── framed_log.rs         append-only length-prefixed rkyv logs (archive)
 └── error.rs              EngineError and shared error types
 ```
 
@@ -683,12 +693,12 @@ src/
 
 - With the default configuration, the stale-lineage purge and archiving, the
   candidate filters and multi-cone coverage are **disabled**. The reference
-  YAML files set the values actually used in production.
+  configuration (`config/engine_config.yaml`) sets the values actually used.
 - Fragment linkage (`merge`) is not yet called by the night loop.
 - Not implemented: inter-bank deduplication ("promotion") and arbitration
   between overlapping lineages by orbital fit.
-- The `pairs.acc_prior_var` and `time_binner_width` keys are validated but
-  not read by the pipeline. `triplets` is only used by its own tests.
+- The `pairs.acc_prior_var` and root `time_binner_width` keys are validated
+  but not read by the pipeline. `triplets` is only used by its own tests.
 - The motion model has no annual aberration and no planetary perturbations
   (two-body heliocentric propagation).
 

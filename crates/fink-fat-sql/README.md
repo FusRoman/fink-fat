@@ -23,7 +23,7 @@ The "Schema" column says how a table's structure evolves: by a versioned
 
 | Table | Owner | Schema | Persistence | Content |
 | --- | --- | --- | --- | --- |
-| `observations` | engine | migration | LOGGED | One row per alert: position, errors, magnitude, filter, epoch, MPC code. |
+| `observations` | engine | migration | LOGGED | One row per alert: `id`, `night_id`, `object_id`, `ra`/`dec` and their errors, `magnitude`/`mag_err`, `filter`, `mjd_tt`, `mpc_code_obs`. |
 | `branches` | engine | regenerated | UNLOGGED | One row per live branch (candidate track of a lineage), with its score and precomputed arc / night statistics. |
 | `kf_bank` | engine | regenerated | UNLOGGED | Per-branch Kalman bank summary (steps, absolute magnitude). |
 | `branch_observations` | engine | regenerated | UNLOGGED | Branch ↔ observation join, in track order. |
@@ -64,7 +64,7 @@ documented by a `COMMENT ON COLUMN` in that same migration.
 
 | Path | Role |
 | --- | --- |
-| `src/rows.rs` | Plain row structs, one per table. No logic. |
+| `src/rows.rs` | Row structs, one per table, and their conversion from the engine's snapshot types. |
 | `src/build.rs` | Pure functions turning a `BranchCollection` into rows (unit-tested). |
 | `src/family.rs` | Dynamical-family classification stored in the `dynamic_family` columns. |
 | `src/schema.rs` | Migrations (`migrate`, `prepare_schema`), trajectory-table regeneration, DDL wrappers and the `*_SQL` constants embedding the scripts. |
@@ -91,8 +91,9 @@ Then a single transaction:
 1. Drop the 6 trajectory tables and create them again from
    `trajectory_tables.sql` (`schema::recreate_trajectory_tables`), so they
    always have the current shape.
-2. Drop the secondary index of `observations`, then `TRUNCATE`
-   `observations` and `archived_trajectories`.
+2. Drop the secondary index of `observations`, then
+   `TRUNCATE archived_trajectories, observations CASCADE` (the cascade also
+   empties `branch_observations`, which references `observations`).
 3. `COPY` `observations`.
 4. Load the 6 trajectory tables (`load_trajectory_tables`): drop their
    secondary indexes and foreign keys, `COPY` them, rebuild the indexes and
@@ -102,15 +103,17 @@ Then a single transaction:
 
 A failure at steps 1 – 6 leaves the previous contents, and the previous
 trajectory tables, untouched; a migration applied at step 0 stays applied. The
-trajectory
-tables and `archived_trajectories` are `UNLOGGED`: they are reloaded from the
-engine's state by every load, so skipping the WAL loses nothing. `observations`
+trajectory tables and `archived_trajectories` are `UNLOGGED`: every load
+rebuilds them from the engine's snapshot and archive log, so skipping the WAL
+loses nothing. `observations`
 is WAL-logged: the streaming pipeline appends to it night after night, and it is
 the only store of past alerts.
 
-The scripts set `lock_timeout = '1min'`, so `convert` fails instead of queueing
-indefinitely behind a long explorer query. They set no statement timeout,
-because the bulk `COPY`s and index rebuilds legitimately run for minutes.
+The load scripts set `lock_timeout = '1min'`, so `convert` fails instead of
+queueing indefinitely behind a long explorer query. They set no statement
+timeout, because the bulk `COPY`s and index rebuilds legitimately run for
+minutes. The nightly swap (below) is the exception: `lock_timeout = '5s'` and
+`statement_timeout = '1min'`.
 
 ## Streaming writes
 
@@ -122,7 +125,8 @@ migrations, then the trajectory tables if absent. It then writes in two ways:
   (`incremental`). The rows are `COPY`'d into a temporary table, then moved with
   `INSERT … ON CONFLICT DO NOTHING`. A row delivered twice is skipped.
 - **The 6 trajectory tables**: replaced every night by an atomic swap
-  (`night_sync`), without blocking the explorer:
+  (`night_sync`). The explorer keeps reading the previous generation while the
+  next one is built; only the swap itself takes a brief exclusive lock:
   1. The next generation is built in the `fink_fat_staging` schema. The same
      scripts and loaders as `convert` are run with
      `search_path = fink_fat_staging, public`: the staging tables get the
@@ -145,15 +149,13 @@ The schema of the persistent tables is versioned with
 [refinery](https://github.com/rust-db/refinery) (crate docs:
 [`refinery`](https://docs.rs/refinery/latest/refinery/),
 [`Runner`](https://docs.rs/refinery-core/latest/refinery_core/struct.Runner.html)).
-It replaces the former `sql/migrations/legacy_columns.sql`, an idempotent
-script replayed at every load, which had to be written to run forever and
-recorded nothing.
 
 ### What is migrated, what is regenerated
 
-- **Migrated**: every table whose rows outlive a load: `observations`,
-  `archived_trajectories`, `fink_fat_sync_state`, and the explorer and
-  `submit` tables. Their schema is the sequence of
+- **Migrated**: every table that is not rebuilt from scratch by each load:
+  `observations`, `archived_trajectories`, `fink_fat_sync_state`, and the
+  explorer and `submit` tables. Today the only migration is
+  `V1__baseline.sql`. Their schema is the sequence of
   `sql/migrations/V{n}__{name}.sql` files. Each file applied to a database is
   recorded in its `refinery_schema_history` table.
 - **Regenerated**: the 6 trajectory tables. `convert` drops and recreates
@@ -293,6 +295,12 @@ pip install -r crates/fink-fat-sql/sql-lint-requirements.txt
 sqlfluff lint crates/fink-fat-sql/sql            # `sqlfluff fix` to reformat
 squawk --config crates/fink-fat-sql/.squawk.toml 'crates/fink-fat-sql/sql/**/*.sql'
 ```
+
+## Connection security
+
+Connections are made without TLS (`NoTls`), which is fine for a database on
+the same host or private network. Add TLS support before connecting to a
+database over an untrusted network.
 
 ## Tests
 

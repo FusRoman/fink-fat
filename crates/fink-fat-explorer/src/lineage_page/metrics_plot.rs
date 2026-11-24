@@ -15,7 +15,7 @@ use super::x_axis::{x_values_for_steps, XAxisValues};
 
 /// χ² (2 d.o.f.) covariance-inflation threshold at 95% confidence — the same
 /// value used by the engine's default `SingleKalmanConfig::inflation_chi2_threshold`
-/// (`engine_config.best.yaml`'s `kalman_shared_context.config`). This is
+/// (`config/engine_config.yaml`'s `kalman_shared_context.config`). This is
 /// *not* the multi-hypothesis bank's discard gate (`KFBankConfig::gate_chi2`,
 /// default 23.0) — see [`super::metrics_plot_glossary`] for that distinction.
 /// `pub(super)` so the glossary's tests can assert its displayed text

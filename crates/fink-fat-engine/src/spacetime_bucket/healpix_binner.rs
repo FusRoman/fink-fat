@@ -317,7 +317,7 @@ mod healpix_binner_tests {
             "neighbors(<=cell_radius) should not exceed 9 entries (center + up to 8 neighbors)"
         );
 
-        // Unicité
+        // Uniqueness
         let ulen = uniq_len(&neighs);
         assert_eq!(ulen, neighs.len(), "neighbors must be unique");
 
@@ -369,7 +369,7 @@ mod healpix_binner_tests {
             "cone coverage should have ≥ local neighbors"
         );
 
-        // Unicité
+        // Uniqueness
         assert_eq!(uniq_len(&cone), cone.len(), "cone neighbors must be unique");
         assert!(
             cone.len() >= 2,
@@ -439,7 +439,7 @@ mod healpix_binner_tests {
 
         const LAT_EPS: f64 = 1e-6;
 
-        // Stratégie: depth ∈ [3, 12], ra ∈ [0, 2π), dec ∈ [-π/2+ε, π/2-ε]
+        // Strategy: depth ∈ [3, 12], ra ∈ [0, 2π), dec ∈ [-π/2+ε, π/2-ε]
         fn depth_strategy() -> impl Strategy<Value = u8> {
             3u8..=12u8
         }

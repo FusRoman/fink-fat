@@ -1,8 +1,6 @@
 //! When the homepage snapshot is (re)built, and how far a build has got.
 //!
-//! The snapshot used to be built lazily by the first request after a server
-//! start, then rebuilt every 15 minutes whether or not anything had changed.
-//! Now:
+//! The snapshot is rebuilt only when the data changed:
 //!
 //! - [`start_background_refresh`] builds it as soon as the server starts,
 //!   then checks for changes every [`CHECK_INTERVAL`];

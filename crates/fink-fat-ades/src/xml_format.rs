@@ -75,7 +75,7 @@ mod tests {
     #[test]
     fn pretty_print_xml_round_trips_a_real_ades_document() {
         let compact = r#"<?xml version="1.0" encoding="UTF-8"?>
-<ades version="2022"><obsBlock><obsContext><observatory><mpcCode>X05</mpcCode></observatory><submitter><name>R Le Montagner</name></submitter><measurers><name>Vera C. Rubin Observatory (LSST)</name></measurers><telescope><design>Reflector</design><aperture>8.4</aperture><detector>CCD Mosaic</detector></telescope></obsContext><obsData><optical><trkSub>elslilbd</trkSub><mode>CCD</mode><stn>X05</stn><obsTime>2025-12-19T07:46:01.413116Z</obsTime><ra>151.848719</ra><dec>2.477959</dec><astCat>Gaia2</astCat><mag>23.80</mag><band>r</band></optical></obsData></obsBlock></ades>
+<ades version="2022"><obsBlock><obsContext><observatory><mpcCode>X05</mpcCode></observatory><submitter><name>J. Doe</name></submitter><measurers><name>Vera C. Rubin Observatory (LSST)</name></measurers><telescope><design>Reflector</design><aperture>8.4</aperture><detector>CCD Mosaic</detector></telescope></obsContext><obsData><optical><trkSub>elslilbd</trkSub><mode>CCD</mode><stn>X05</stn><obsTime>2025-12-19T07:46:01.413116Z</obsTime><ra>151.848719</ra><dec>2.477959</dec><astCat>Gaia2</astCat><mag>23.80</mag><band>r</band></optical></obsData></obsBlock></ades>
 "#;
         let pretty = pretty_print_xml(compact).unwrap();
         assert!(pretty.contains("<trkSub>elslilbd</trkSub>"));

@@ -2,10 +2,8 @@
 //! fine-grained, per-observation status lookup, complementary to
 //! [`crate::submission_status_api`]'s coarse submission-level ingest check.
 //!
-//! Live-probed (read-only `GET`, no submission involved) while implementing
-//! this module, since WAMO's documented shape ("a JSON array of
-//! identifiers, up to ~50,000 per call") turned out to need verification:
-//! the request is a `GET` whose body is a bare JSON array of identifier
+//! Observed behaviour, more precise than WAMO's documented shape ("a JSON
+//! array of identifiers, up to ~50,000 per call"): the request is a `GET` whose body is a bare JSON array of identifier
 //! strings (not an object), and the response has three top-level keys —
 //! `found` (array of single-key `{identifier: [observation, ...]}` objects),
 //! `malformed` (array of `[identifier, reason]` pairs), and `not_found`

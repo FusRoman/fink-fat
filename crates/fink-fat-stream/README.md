@@ -31,13 +31,16 @@ replay)       convert,    fsync before     in seqNum order    the night's own
 | --- | --- |
 | `record` | `AlertRecord`: an owned alert (Rubin `DiaSource` fields) plus its arrival time. |
 | `ingest` | Quality cuts and conversion (`photom::io::lsst_alert`), deduplication by `diaSourceId`. |
-| `assembler` | `VisitAssembler`: buffers alerts by `visit`. A visit is complete after an idle timeout (90 s by default) and visits are emitted in `seqNum` order. |
+| `assembler` | `VisitAssembler`: buffers alerts by `visit`. A visit is complete after an idle timeout (90 s by default) and visits are emitted in `visit` order (`dayObs × 100000 + seqNum`). |
 | `clock` | `NightClock`: when a night closes. Includes an analytic Sun for twilight. |
 | `night` | `LiveNight`: the engine's `NightSession`, plus a dataset holding only the open night's observations. |
 | `journal` | `NightJournal`: append-only log of the open night, used to rebuild it after a crash. |
 | `source` | `AlertSource` trait. `kafka`: `KafkaSource`, Fink's livestream (`kafka` feature). `replay`: `ReplaySource`, a parquet dump. `ColumnMap`: field names, shared by both. |
 | `sink` | `SqlSink`: writes to the explorer's Postgres through a durable outbox, without ever blocking tracking. |
 | `driver` | `Driver`: the loop that ties everything together. |
+| `config` | `StreamConfig` and its sections (see [Configuration](#configuration)). |
+| `events` | `StreamEvent`: what the driver reports (visits, night closes, rejections). |
+| `error` | `StreamError`. |
 
 ## When a night closes
 
@@ -64,6 +67,7 @@ All files live under the engine's `storage_path`:
 | `branch_collection.rkyv` | Snapshot written at each night close, in the same format as `fink-fat track`. It records the last closed night. |
 | `archived_trajectories.rkyvlog` | Archive of closed trajectories, in the same format as `fink-fat track`. |
 | `night_journal.rkyvlog` | Journal of the open night: accepted alerts and "visit emitted" markers. |
+| `sql_outbox.rkyvlog` | Rows not yet written to Postgres (see [Postgres](#postgres)). |
 
 Each batch from the source is journaled and fsynced **before** it is
 acknowledged.
@@ -109,8 +113,9 @@ The URL comes from `database.url` or from the `FINK_FAT_DATABASE_URL`
 environment variable, which keeps the password out of the YAML. It is never
 logged.
 
-The connection is not encrypted (`NoTls`). TLS comes with the move to a remote
-database.
+The connection is not encrypted (`NoTls`): keep the database on the same host
+or a private network, or add TLS support before going over an untrusted
+network.
 
 ## Kafka source
 
@@ -128,20 +133,19 @@ The schema is parsed once and cached. `schema_path` gives a fallback schema
 for messages whose key does not carry one.
 
 The fields come from the alert's `diaSource` record, under their Rubin names.
-The `layout:` sub-section remaps them (see `AlertLayout`). This was checked on
-real alerts (`tests/fixtures/fink_lsst/`): `diaSource` holds `visit` and the
-nine other fields, all nullable. An undecodable message is logged and skipped,
+The `layout:` sub-section remaps them (see `AlertLayout`). In real Fink alerts
+(see the fixtures in `tests/fixtures/fink_lsst/`), `diaSource` holds `visit`
+and the nine other fields, all nullable. An undecodable message is logged and skipped,
 and so is one with a null required field. Its offset is still committed.
 
 **Arrival order across partitions.** Fink spreads each visit's alerts over
 all the partitions of its topic, and librdkafka reads them in turns balanced
-by message count, not by time. Partitions therefore drift apart: on the live
-stream, after 1200 messages, some had delivered alerts up to t = 366 s,
-others only up to 240 s. Fed straight to the driver, whose clock is the
-latest arrival seen, this declared visits complete before the lagging
-partitions had delivered their share (a quarter of the alerts became
-leftovers on the first live run), and would close a night on the first
-alert of the next one while lagging partitions still held alerts of it.
+by message count, not by time. Partitions therefore drift apart, by minutes
+on the live stream. Fed straight to the driver, whose clock is the latest
+arrival seen, this would declare visits complete before the lagging
+partitions have delivered their share (their alerts would become
+leftovers), and close a night on the first alert of the next one while
+lagging partitions still hold alerts of it.
 
 The source therefore merges the partitions back into one stream in arrival
 order, with a **watermark per partition** (`source::kafka::watermark`, whose
@@ -212,9 +216,9 @@ open night: the night stays in the journal and the next start resumes it. A
 second signal exits at once.
 
 **Building.** librdkafka is compiled from its bundled sources. This needs a
-C toolchain, `make`, and the OpenSSL headers (`libssl-dev`). The crate does
-not use `cmake-build`: librdkafka 2.12's CMake build includes
-`<curl/curl.h>` when SSL is enabled, even with curl turned off.
+C toolchain, `make`, and the OpenSSL headers (`libssl-dev`), with librdkafka's
+own `./configure` (not its CMake build, which requires the curl headers
+whenever SSL is enabled).
 
 ## Usage
 
@@ -228,7 +232,7 @@ module). The `source:` section selects the source by `kind`. For Fink's
 livestream:
 
 ```yaml
-engine_config: engine_config_lsst.best.yaml
+engine_config: config/engine_config.yaml
 source:
   kind: kafka
   bootstrap_servers: <host:port given by Fink>
@@ -240,7 +244,7 @@ source:
 For a replay:
 
 ```yaml
-engine_config: engine_config_lsst.best.yaml
+engine_config: config/engine_config.yaml
 source:
   kind: replay
   path: fink_dump.parquet
@@ -250,6 +254,55 @@ source:
 The dump needs the Rubin `DiaSource` columns `diaSourceId`, `visit`,
 `midpointMjdTai`, `ra`, `dec`, `raErr`, `decErr`, `psfFlux`, `psfFluxErr` and
 `band`. Other names are mapped under `source.columns`.
+
+## Configuration
+
+`StreamConfig` (the YAML file given to `--config`). Durations accept unit
+strings (`"90 s"`, `"3 min"`, `"15 min"`), as in the engine configuration.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `engine_config` | required | Path of the engine configuration (its `storage_path` holds every file of [Crash safety](#crash-safety)). |
+| `ingest.error_model` | `FCCT14` | Astrometric error model applied at conversion. |
+| `ingest.quality_cuts`, `ingest.conversion` | photom's defaults | LSST alert cuts and conversion parameters. |
+| `assembler.visit_idle_timeout` | 90 s | Idle time after which a visit is complete. |
+| `clock.twilight_altitude` | −12° | Sun altitude whose morning crossing can close the night. |
+| `clock.twilight_grace`, `clock.rollover_grace` | 30 min | Grace periods of triggers 2 and 3. |
+| `database` | absent | Postgres publication; without it the stream only tracks. |
+| `database.url` | `FINK_FAT_DATABASE_URL` | Connection URL. |
+| `database.connect_timeout` | 10 s | |
+| `database.flush_backoff_min`, `database.flush_backoff_max` | 30 s, 15 min | Outbox retry backoff. |
+| `database.swap_retries`, `database.swap_retry_delay` | 12, 10 s | Retries of the nightly swap when its lock times out. |
+| `source.kind` | required | `kafka` or `replay`. |
+
+Kafka source (`kind: kafka`):
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `bootstrap_servers`, `topics`, `group_id` | required | Given by Fink. |
+| `sasl.mechanism` | `SCRAM-SHA-512` | |
+| `sasl.username` | required with `sasl` | |
+| `sasl.password` | `FINK_FAT_KAFKA_PASSWORD` | Keep it out of the YAML. |
+| `batch_size`, `batch_timeout` | 1000, 1 s | Size and wait of a consumed batch. |
+| `max_poll_interval` | 30 min | librdkafka's `max.poll.interval.ms`. |
+| `caught_up_check_interval` | 30 s | How often the backlog is checked. |
+| `max_buffered_per_partition` | 10 000 | Bound of the watermark merger's buffers. |
+| `watermark_timeout` | 5 s | Wait for an idle partition before releasing the others. |
+| `latency` | 3 min | Assumed delay between exposure and alert. |
+| `layout` | Fink's LSST layout | Where the `diaSource` fields are in the Avro record. |
+| `schema_path` | absent | Fallback Avro schema for messages without one in their key. |
+| `extra` | empty | Other librdkafka properties. |
+
+Replay source (`kind: replay`): `path` (required), `latency` (3 min),
+`batch_size` (1000), `columns` (Rubin names).
+
+## Library use
+
+The binary is a thin wrapper: `fink-fat stream` builds a `Driver` from the
+`StreamConfig` (`Driver::new`) and runs it with `Driver::run_until(&stop)`, until
+the source ends or the stop flag is raised (`Driver::run` without one).
+`DriverStats` reports what was processed. See `src/stream.rs` in the
+workspace root for the complete wiring.
 
 ## Tests
 
@@ -291,4 +344,5 @@ The dump needs the Rubin `DiaSource` columns `diaSourceId`, `visit`,
     order.
 
   Without `KAFKA_BOOTSTRAP` these tests return at once, unless
-  `FINK_FAT_REQUIRE_KAFKA=1` (set by the CI), which makes them fail instead.
+  `FINK_FAT_REQUIRE_KAFKA=1` (set by the CI job that starts a broker), which
+  makes them fail instead.

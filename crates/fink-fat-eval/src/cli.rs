@@ -14,8 +14,7 @@ use polars::lazy::{
 
 /// Load an alerts dataset, optionally overriding every observation's
 /// `ra_err`/`dec_err` (radians) with a single uniform value — used to sweep
-/// candidate astrometric-noise assumptions (see
-/// `test_exp/prep_alert.py`'s hardcoded 1″) against dataset-wide NIS/NEES
+/// candidate astrometric-noise assumptions against dataset-wide NIS/NEES
 /// calibration without regenerating the source Parquet for each candidate.
 ///
 /// Only the lazy frame is materialized into `ObsDataset`'s row-oriented
@@ -65,8 +64,7 @@ pub struct Cli {
     #[arg(short, long, value_name = "OUTPUT_DIR")]
     pub output_result: Option<Utf8PathBuf>,
 
-    /// Path to a ground-truth topocentric-state Parquet file (see
-    /// `test_exp/solar_system_data/build_ground_truth.py`), used to compute
+    /// Path to a ground-truth topocentric-state Parquet file, used to compute
     /// NEES/RMSE metrics against the true trajectory. If omitted, those
     /// metrics are skipped.
     #[arg(long, value_name = "GROUND_TRUTH_FILE")]
@@ -84,7 +82,7 @@ pub struct Cli {
     /// Override every observation's ra_err/dec_err (arcsec) with this single
     /// uniform value, without regenerating the source Parquet file — used to
     /// sweep candidate astrometric-noise assumptions against dataset-wide
-    /// NIS/NEES calibration (see `test_exp/prep_alert.py`).
+    /// NIS/NEES calibration.
     #[arg(long, value_name = "ARCSEC")]
     pub override_obs_error_arcsec: Option<f64>,
 }

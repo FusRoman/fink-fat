@@ -5,8 +5,7 @@
 //! [`crate::mpc_submission`]'s test-tier HTML status page (which reports a
 //! real valid/invalid verdict, but only for `submit_xml_test` submissions).
 //!
-//! Live-probed (read-only `GET`, no submission involved) while implementing
-//! this module: **the endpoint takes its `submission_id` as a JSON request
+//! Observed behaviour, not covered by the MPC documentation: **the endpoint takes its `submission_id` as a JSON request
 //! body, not a query parameter** — a `GET` with a `submission_id=...` query
 //! string alone 400s with `"/submission-status requires a JSON request
 //! payload"`. A nonexistent submission ID 404s with a **plain-text** body

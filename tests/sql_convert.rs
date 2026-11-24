@@ -35,9 +35,8 @@ use tempfile::TempDir;
 const CONFIG_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/config.yaml");
 const DATA_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data");
 /// One ZTF fixture reshaped as an LSST one: `mpc_code_obs = "X05"` and
-/// `objectId` synthesized the way `test_exp/prep_lsst_eval_data.py` does
-/// (from `id`, since LSST has no per-object field to draw from upstream) —
-/// see that script's line 145. Kept in a separate directory from
+/// `objectId` synthesized from `id`, as for the batch LSST datasets (LSST has
+/// no per-object field to draw from upstream). Kept in a separate directory from
 /// `DATA_DIR` so `tests/reconstruction.rs`'s `list_nights_sorted` (which
 /// globs every `night_id_<N>.parquet` under `tests/data` for its full
 /// 177-night non-regression run) never picks it up.

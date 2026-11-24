@@ -3,10 +3,9 @@
 //! table, [`crate::model::ObservationRow::filter`]) maps to the standard
 //! ugrizy band letters.
 //!
-//! Inverse of the offline prep scripts' `mapping_band = {"u": 0, "g": 1,
-//! "r": 2, "i": 3, "z": 4, "y": 5}` (`test_exp/prep_lsst_alert.py`,
-//! `test_exp/prep_lsst_eval_data.py`) — LSST-only, no other survey stores
-//! photometry this way.
+//! Inverse of the band encoding used when LSST alerts are prepared
+//! (`{"u": 0, "g": 1, "r": 2, "i": 3, "z": 4, "y": 5}`) — LSST-only, no other
+//! survey stores photometry this way.
 
 /// Map a `filter` index to its ugrizy band letter, or `None` if it's outside
 /// the known `0..=5` range.

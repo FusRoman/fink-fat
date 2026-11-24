@@ -1,24 +1,18 @@
-//! Per-branch orbit-fit quality tier, ported from the `quality_flags.py`
-//! cascade of the sibling `lsst_cross_fink_fat_analysis` project.
-//! [`QualityTier::WellSampledIdentified`]/[`QualityTier::Identified`] play a
-//! similar role to that script's SBN-cross-match-dependent `completion`
-//! tier (a numerically good fit that turns out to match a known object, not
-//! a new find) but are driven by `fink-fat-explorer`'s own CND/Skybot
-//! cross-match results rather than a static SBN cache, and — unlike the
-//! Python `completion`, which merges both novelty levels into one tier —
-//! keep the well-sampled-nights distinction even once matched. The Python
-//! `contaminated` tier (matched to *more than one* distinct object) has no
-//! equivalent here: this cascade only distinguishes has-a-match from
-//! has-none.
+//! Per-branch orbit-fit quality tier: a cascade of conditions on the orbit
+//! fit and on the observation sampling that decides whether a lineage is
+//! worth submitting to the MPC.
 //!
-//! Two tiers have no counterpart in the Python version at all:
-//! [`QualityTier::NotFitted`] and [`QualityTier::Ineligible`]. The Python
-//! script ran once, exhaustively, over every branch, so "no `orbit_fits`
-//! row" unambiguously meant "the Gauss IOD failed". `fink-fat-explorer`'s
-//! bulk fit is instead run on demand and repeatedly, so a branch with no row
-//! could mean it was never eligible, was eligible but never included in a
-//! run, or was attempted and failed — three states that only became
-//! distinguishable once failures started being recorded separately.
+//! [`QualityTier::WellSampledIdentified`]/[`QualityTier::Identified`] mark a
+//! numerically good fit that matches a known object (not a new find). They
+//! are driven by `fink-fat-explorer`'s own CND/Skybot cross-match results,
+//! and keep the well-sampled-nights distinction even once matched. The
+//! cascade only distinguishes has-a-match from has-none.
+//!
+//! [`QualityTier::NotFitted`] and [`QualityTier::Ineligible`] exist because
+//! `fink-fat-explorer`'s bulk fit runs on demand and repeatedly: a branch
+//! with no `orbit_fits` row could have never been eligible, been eligible
+//! but never included in a run, or been attempted and failed — three states
+//! told apart by recording failures separately.
 //!
 //! Shared with `fink-fat`'s `submit` CLI (this crate has no dependency on
 //! `fink-fat-explorer`'s Postgres client or web framework), together with

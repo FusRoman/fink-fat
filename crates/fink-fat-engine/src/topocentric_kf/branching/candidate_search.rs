@@ -1,11 +1,8 @@
 //! Match next-night observations against a bank's predicted search ellipse.
 //!
-//! Salvaged from a stale draft (`bank_collection/night_candidate_search.rs`,
-//! which referenced a `KFPairBank` type that never existed in the crate and
-//! was never wired into the build) and retyped against the real
-//! [`KFBank`](crate::topocentric_kf::kalman_bank::KFBank)/[`SearchRegion`].
-//! The core two-stage gate (cone query + Mahalanobis/likelihood filter) is
-//! unchanged.
+//! Works on the [`KFBank`](crate::topocentric_kf::kalman_bank::KFBank)'s
+//! [`SearchRegion`] with a two-stage gate: a cone query, then a
+//! Mahalanobis/likelihood filter.
 //!
 //! # Strategy
 //! 1. Build a spatial index over the next night's observations once

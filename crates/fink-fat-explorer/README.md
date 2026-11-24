@@ -10,9 +10,39 @@ runs the Dioxus components itself and sends back ready-made HTML, so the
 browser can show the page before the wasm client has finished downloading.
 The wasm client then *hydrates* that HTML: it attaches to the existing markup
 and makes it interactive, rather than rebuilding the page from scratch. Data
-is loaded afterwards through *server functions* (`#[server]`), plain HTTP
+is loaded afterwards through *server functions* (`#[server]`), internal HTTP
 endpoints (`POST /api/...`) that the client calls like ordinary async Rust
-functions.
+functions. A separate, versioned public API (`/api/v1/...`) serves external
+clients (see [Public API](#public-api)).
+
+## Pages
+
+| Route | Page |
+| --- | --- |
+| `/` | Homepage: statistics, (a, e) population plot, lineage table, 3D view. |
+| `/lineage/:lineage_id` | A lineage: its branches, observations, Kalman metrics, ADES export. |
+| `/lineage/:lineage_id/fit` | Orbit fit of a lineage. |
+| `/bulk-fit`, `/bulk-cnd`, `/bulk-skybot` | Bulk jobs: orbit fits, CND and Skybot cross-matches. |
+| `/cross-match` | Cross-match dashboard. |
+| `/submission` | MPC submission dashboard, and the submitter-config generator. |
+| `/api-docs` | Documentation of the public API, with code samples. |
+
+## Public API
+
+Stable and versioned, for external tools:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/v1/alerts/{object_id}/lineages` | Lineages containing an alert. |
+| `POST /api/v1/alerts/lineages` | The same for a batch of alerts. |
+
+`examples/reverse_search.rs` and `examples/reverse_search_batch.rs` call
+them; set `FINK_FAT_URL` to the explorer's address:
+
+```bash
+FINK_FAT_URL=http://localhost:8081 cargo run -p fink-fat-explorer \
+  --no-default-features --features server --example reverse_search -- <object_id>
+```
 
 Database setup and loading fink-fat products into PostgreSQL are covered in
 [`test_postgress_db.md`](test_postgress_db.md).
@@ -49,9 +79,13 @@ workspace `Cargo.toml`. Run every command below from the workspace root
 ### Dockerfile stages
 
 ```
-toolchain ─┬─> dev                        (dx serve)
-           └─> builder ──(/app/dist)──> prod   (debian slim + server binary)
+sources ──┐
+rust-base ┴─> toolchain ─┬─> dev                                      (dx serve)
+                         └─> builder ──(/app/dist)──> explorer ──> prod (debian slim + server binary)
 ```
+
+The same `dockerfile` also builds the `engine` image of `fink-fat` (stages
+`engine-builder`, `engine`), from the same `sources` and `rust-base`.
 
 - `toolchain`: Rust, the `wasm32-unknown-unknown` target, `dioxus-cli`
   (pinned to `0.7.10`, the `dioxus` version in `Cargo.lock`) and
@@ -62,11 +96,12 @@ toolchain ─┬─> dev                        (dx serve)
   `dx bundle --web --release --debug-symbols false --out-dir /app/dist`. The
   cargo registry and `target/` are BuildKit cache mounts, so later builds only
   recompile what changed.
-- `prod`: copies `/app/dist`, which contains a `server` executable next to
-  its `public/` client bundle, plus `engine_config.best.yaml`.
-
-`prod` is the last stage, so a bare `docker build .` produces the production
-image.
+- `explorer`: copies `/app/dist`, which contains a `server` executable next
+  to its `public/` client bundle, into `debian:trixie-slim`. No engine
+  configuration is baked in: it is mounted at runtime. This is the image CI
+  publishes as `ghcr.io/<owner>/fink-fat-explorer`.
+- `prod`: alias of `explorer`, used by `docker-compose.yml`. It is the last
+  stage, so a bare `docker build .` produces the production image.
 
 ## Running the dev build
 
@@ -119,7 +154,7 @@ To build the image without Compose:
 docker build --target prod -t fink-fat-explorer:prod .
 docker run --rm -p 8081:8080 \
   -e DATABASE_URL=postgres://finkfat:finkfat@<db-host>:5432/finkfat_test \
-  -v "$PWD/engine_config.best.yaml:/app/config/engine_config.yaml:ro" \
+  -v "$PWD/config/engine_config.yaml:/app/config/engine_config.yaml:ro" \
   fink-fat-explorer:prod
 ```
 
@@ -137,13 +172,13 @@ The production container does **not** read the crate's `.env` file:
 
 The engine config is not part of the image. Compose bind-mounts the host file
 named by `ENGINE_CONFIG` (path relative to the workspace root, default
-`./engine_config.best.yaml`) read-only on `KALMAN_CONFIG_PATH`:
+`./config/engine_config.yaml`) read-only on `KALMAN_CONFIG_PATH`:
 
 ```bash
-ENGINE_CONFIG=./engine_config_lsst.best.yaml docker compose --profile prod up -d --build
+ENGINE_CONFIG=./my_engine_config.yaml docker compose --profile prod up -d --build
 ```
 
-To make the choice persistent, put `ENGINE_CONFIG=./engine_config_lsst.best.yaml`
+To make the choice persistent, put `ENGINE_CONFIG=./my_engine_config.yaml`
 in a `.env` file at the workspace root (read by Compose for interpolation only,
 never sent to the container). Switching config, or editing the file, only needs
 a restart: `docker compose --profile prod up -d --force-recreate app-prod`.
@@ -213,9 +248,9 @@ Then run the convert:
 ```bash
 docker compose run --rm --no-deps --workdir /app app-dev \
   /app/target/bin/fink-fat convert \
-  --config engine_config_lsst.best.yaml --format sql \
+  --config config/engine_config.yaml --format sql \
   --database-url postgres://finkfat:finkfat@db:5432/finkfat_test \
-  --path-observation lsst_candidate_eval_data.parquet
+  --path-observation observations.parquet
 ```
 
 - `run` replaces the image's `dx serve` command with this one, so the dev
@@ -241,7 +276,7 @@ convert and read by the explorer, deploy in this order:
    with `relation "…" does not exist` or `column "…" does not exist`.
 2. **Re-run the convert** (command above).
 3. **Rebuild and restart `app-prod`**:
-   `ENGINE_CONFIG=./engine_config_lsst.best.yaml docker compose --profile prod up -d --build`.
+   `ENGINE_CONFIG=./my_engine_config.yaml docker compose --profile prod up -d --build`.
 
 Steps 2 and 3 can be swapped: an explorer deployed first fails until the
 convert lands, then recovers by itself within a minute (or right away with
@@ -268,20 +303,12 @@ To confirm the schema is the expected one, list the tables with `\dt+` (see
   `orbit_fit_failures`, `cnd_queries`, `skybot_*` and `mpc_submissions`.
 - **The convert runs `ANALYZE` itself** on every table it loads, so planner
   statistics (and the hypothesis count in the navbar, read from them) are
-  right as soon as it commits. A database loaded by an older `fink-fat`
-  binary still needs a manual
-  `docker compose exec db psql -U finkfat -d finkfat_test -c "ANALYZE;"`.
-- **The explorer needs a database loaded by a recent `fink-fat convert`.**
-  The homepage reads the `branch_best_state` table and the
-  `branches.n_observations` / `branches.well_sampled_nights` columns, which
-  only the current convert writes. Against an older database the homepage
-  stays on "Building the population index…" and **Tools → Refresh** shows
-  `relation "branch_best_state" does not exist`: follow
-  [After a database schema change](#after-a-database-schema-change).
+  right as soon as it commits.
 
-- The loaded tables are `UNLOGGED`: PostgreSQL empties them after an unclean
-  shutdown (crash recovery). If they come back empty after a restart of
-  `db`, re-run the convert.
+- The trajectory tables and `archived_trajectories` are `UNLOGGED`:
+  PostgreSQL empties them after an unclean shutdown (crash recovery). If they
+  come back empty after a restart of `db`, re-run the convert (or let the
+  stream resynchronise). `observations` is WAL-logged and survives.
 
 ## Homepage snapshot and Refresh
 
@@ -290,7 +317,7 @@ from an in-RAM snapshot of the database, so no user interaction runs SQL.
 
 - **Built at startup.** The server starts building it as soon as it is up,
   along with the 3D view's planet ephemerides. Until the first build lands,
-  the homepage shows "Building the population index…".
+  the homepage shows "Building the population index...".
 - **Rebuilt when the data changes.** Every minute the server reads a cheap
   fingerprint of the database: the physical file of `branches` and
   `branch_best_state` (a convert's `TRUNCATE` always changes it) and the write
@@ -355,12 +382,13 @@ container or the host.
 
 ### Tables
 
-Loaded by `fink-fat convert`. These tables are `UNLOGGED` and emptied
-(`TRUNCATE ... CASCADE`) then refilled on every convert run:
+Loaded by `fink-fat convert` (emptied with `TRUNCATE ... CASCADE`, then
+refilled on every run) or kept up to date by `fink-fat stream`. All are
+`UNLOGGED` except `observations`, the only store of past alerts:
 
 | Table                   | Content                                                              |
 |-------------------------|----------------------------------------------------------------------|
-| `observations`          | one row per alert: position, magnitude, filter, `mjd_tt`, `night_id` |
+| `observations`          | one row per alert: `ra`/`dec` and errors, magnitude, filter, `mjd_tt`, `night_id` |
 | `branches`              | one row per track branch; `lineage_id` / `lineage_designation` group the branches of a lineage; precomputed observation stats (`n_observations`, `n_nights`, `well_sampled_nights`, `arc_length_days`) |
 | `branch_observations`   | ordered list (`position`) of the observations of each branch         |
 | `kf_bank`               | per-branch Kalman bank summary (steps, absolute magnitude estimate)  |
@@ -486,18 +514,10 @@ without any `target/`, `.venv/`, `__pycache__/`, `.env` or the local
 `tailwindcss-extra` binary. If the `dockerfile` starts copying a new file,
 also add it to the allowlist, or the build fails with "not found".
 
-## Migrating from the former single `app` service
-
-The old `app` service (container `fink-fat-explore-app`, image `fink-fat-app`)
-is replaced by `app-dev`. Compose reports its container as an orphan.
-Remove it with:
-
-```bash
-docker compose --profile dev up -d --remove-orphans
-docker image rm fink-fat-app   # optional: frees ~2 GB
-```
-
 ## Without Docker
+
+`DATABASE_URL` and `KALMAN_CONFIG_PATH` are read from `crates/fink-fat-explorer/.env`
+(gitignored); start from the template: `cp .env.example .env`.
 
 ```bash
 cd crates/fink-fat-explorer
@@ -513,5 +533,5 @@ cd dist
 IP=0.0.0.0 PORT=8080 DATABASE_URL=... KALMAN_CONFIG_PATH=... ./server
 ```
 
-Keep `server` and `public/` together, the way the `prod` image does
+Keep `server` and `public/` together, the way the `explorer` image does
 (`WORKDIR /app`).

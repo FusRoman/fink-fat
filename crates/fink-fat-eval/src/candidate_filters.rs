@@ -508,22 +508,16 @@ impl CandidateFilter for AdaptiveChi2Gate {
 
 // ── Default suite and cascade ────────────────────────────────────────────
 
-/// The shadow suite, refined after the first dataset-wide run (2026-08-03).
+/// The default suite of candidate filters evaluated by `mot_analysis`.
 ///
-/// That run's verdict at the initial thresholds (`true_lost%` /
-/// `bad_removed%`): cross-track 5σ 0.001/5.3, rel-likelihood 1e-4 0.003/19.8
-/// and 1e-2 0.02/41.2, photometric 2mag 0.56/9.0 — all clear keepers;
-/// direction and rate lost 1.5–3.3 % of true observations (concentrated,
-/// per hypothesis, in unconverged banks — hence the `confident_only`
-/// re-test); adaptive-χ² was rejected outright despite 0.86 % overall
-/// because its losses hit NEOs (157 true NEO removals).
-///
-/// Round 3 (2026-08-04) adds [`TopKGate`]: after round 2's cascade, the
-/// per-visit candidate count is much smaller but still has a long tail
-/// (up to 40). `TopKGate` bounds it by construction — swept at k ∈
-/// {5, 8, 12}, with k=5 (the user's target) placed in the cascade; its
-/// `removed_true`/population breakdown will show whether that cap is safe
-/// or needs loosening to 8/12.
+/// The cross-track, relative-likelihood and photometric gates remove a large
+/// share of the wrong candidates for a negligible loss of true observations.
+/// The direction and rate gates lose more true observations, mostly in
+/// unconverged banks, hence their `confident_only` variants. An adaptive-χ²
+/// gate is left out: its losses fall on NEOs. [`TopKGate`] bounds the long
+/// tail of the per-visit candidate count by construction, swept over several
+/// values of k; its `removed_true` breakdown by population shows whether a
+/// cap is safe.
 pub fn default_filter_suite() -> Vec<Box<dyn CandidateFilter>> {
     vec![
         // Photometric: 2mag was the family's best trade-off; sweep upward.

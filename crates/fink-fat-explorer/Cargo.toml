@@ -1,6 +1,6 @@
 [package]
 name = "fink-fat-explorer"
-version = "0.1.0"
+version.workspace = true
 authors = ["Roman <roman.lemontagner@gmail.com>"]
 edition = "2021"
 

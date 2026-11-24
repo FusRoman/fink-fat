@@ -1,11 +1,9 @@
 //! True topocentric state lookup, used to compute NEES/RMSE against ground
 //! truth for real ZTF asteroid observations.
 //!
-//! The Parquet file consumed here is produced offline by
-//! `test_exp/solar_system_data/build_ground_truth.py`, which joins the
-//! fink-fat eval dataset to the ZTF alert stream and the per-asteroid
-//! light-curve fits (which carry a true topocentric cartesian state per
-//! alert epoch) — see that script for the full provenance chain.
+//! The Parquet file consumed here is prepared offline: it joins the
+//! evaluation dataset to the per-asteroid light-curve fits, which carry a
+//! true topocentric cartesian state per alert epoch.
 
 use ahash::AHashMap;
 use anyhow::{Context, Result};
@@ -31,8 +29,7 @@ pub struct TruthLookup {
 }
 
 impl TruthLookup {
-    /// Load the ground-truth Parquet file produced by
-    /// `build_ground_truth.py`. Rows with a null truth (no light-curve match
+    /// Load the ground-truth Parquet file. Rows with a null truth (no light-curve match
     /// within tolerance) are skipped — `get` simply returns `None` for them.
     pub fn load(path: impl AsRef<Utf8Path>) -> Result<Self> {
         let path = path.as_ref();
