@@ -3,6 +3,9 @@ name: CI
 on:
   push:
     branches: [main, master]
+    # Release tags: a green CI on a tag publishes the `vX.Y.Z` images
+    # (`images.yml`).
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -33,6 +36,39 @@ jobs:
 
       - name: cargo fmt
         run: cargo fmt --all -- --check
+
+  deploy:
+    # ff-ops, the production tooling (deploy/, Python): same Ruff checks as
+    # `.husky/pre-commit`, then the test suite. The tests never contact a
+    # cloud: every `openstack` call goes through a fake runner.
+    name: ff-ops (Ruff + tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Python and pdm
+        uses: pdm-project/setup-pdm@v4
+        with:
+          python-version: "3.12"   # requires-python of deploy/pyproject.toml
+          cache: true
+          cache-dependency-path: deploy/pdm.lock
+
+      - name: Install dependencies (from the lock file)
+        # `--check` fails if pdm.lock no longer matches pyproject.toml.
+        run: pdm install --check
+
+      - name: ruff format
+        run: pdm run ruff format --check .
+
+      - name: ruff check
+        run: pdm run ruff check .
+
+      - name: pytest
+        run: pdm run pytest
 
   sql-lint:
     name: SQL lint (SQLFluff + Squawk)

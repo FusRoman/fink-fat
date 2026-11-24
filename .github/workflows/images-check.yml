@@ -1,0 +1,52 @@
+name: Images check
+
+# Builds the production images WITHOUT publishing them, on pull requests that
+# change how they are built. It catches a broken `dockerfile` before the merge,
+# whereas `images.yml` (publication) only runs after CI on main or a v* tag.
+#
+# The `paths` filter keeps ordinary pull requests (Rust code, deploy tooling,
+# docs) free of this full release build.
+
+on:
+  pull_request:
+    paths:
+      - dockerfile
+      - .dockerignore
+      - .github/workflows/images.yml
+      - .github/workflows/images-check.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }} (no push)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Same stages as `images.yml`.
+        target: [engine, explorer]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: dockerfile
+          target: ${{ matrix.target }}
+          push: false
+          # Load the image, so that the smoke test below can run it.
+          load: true
+          tags: fink-fat-${{ matrix.target }}:check
+          cache-from: type=gha,scope=check-${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=check-${{ matrix.target }}
+
+      - name: Smoke test (the binary starts in the runtime image)
+        if: matrix.target == 'engine'
+        run: docker run --rm fink-fat-engine:check --help

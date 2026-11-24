@@ -94,6 +94,7 @@ Other notable paths:
 | [`test_exp/`](test_exp/) | Python scripts for data preparation (alert Parquet files, ground truth, astrometric error calibration). |
 | `engine_config.best.yaml`, `engine_config_lsst.best.yaml` | Reference engine configurations for ZTF and LSST cadence. |
 | [`dockerfile`](dockerfile), [`docker-compose.yml`](docker-compose.yml) | Postgres, pgAdmin, the explorer (`dev` / `prod` profiles) and a test Kafka broker (`kafka` profile). |
+| [`deploy/`](deploy/README.md) | `ff-ops`: Python tool that manages the production instance on OpenStack (Heat stacks, VMs, Docker deployments, updates, migrations). |
 | [`katex-header.html`](katex-header.html) | KaTeX header so rustdoc renders the maths. |
 | [`assets/logo/`](assets/logo/README.md) | Fink-FAT logo: SVG files (light, dark, white) and their design notes. |
 
