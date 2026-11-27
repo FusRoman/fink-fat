@@ -1,0 +1,25 @@
+# Template of stream.yaml, the production configuration of `fink-fat stream` (compute VM).
+# Copy it, then fill in the real broker and consumer group:
+#   cp config/stream.example.yaml config/stream.yaml && chmod 600 config/stream.yaml
+# stream.yaml is gitignored: the broker address and the consumer group of the production
+# instance are not published (a client joining the same group would take partitions from it).
+# Every other value below is the real production setting.
+#
+# Mounted read-only on /config on the compute VM. No secret here: the database URL comes from
+# $FINK_FAT_DATABASE_URL and the Kafka password, if the account ever gets one, from
+# $FINK_FAT_KAFKA_PASSWORD; ff-ops writes both into the VM's .env.
+engine_config: /config/engine_config.yaml
+ingest:
+  error_model: LSST
+source:
+  kind: kafka
+  bootstrap_servers: kafka.example.org:9092   # PLACEHOLDER: the Fink Kafka broker (host:port)
+  topics: [fink_is_solar_system_lsst]
+  # Consumer group of the production instance: its committed offsets are where the stream
+  # resumes after a restart. A new group starts from the oldest alert still retained by Fink.
+  group_id: my-finkfat-group                  # PLACEHOLDER: the production consumer group
+  # No `sasl:` block: the Fink account connects without SASL.
+assembler:
+  visit_idle_timeout: "3 min"
+# Postgres sink; the URL is read from $FINK_FAT_DATABASE_URL.
+database: {}

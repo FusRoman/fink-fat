@@ -1,0 +1,206 @@
+# Production engine configuration, shared by the compute (fink-fat stream) and the explorer.
+# storage_path is /data/storage: /data is the compute's data volume (/srv/finkfat on the VM).
+version: 1
+
+log_level: info
+storage_path: /data/storage
+time_binner_width: 0.021
+healpix_depth: 8
+
+pairs:
+  acc_prior_var: 0.0001
+  allow_same_timebin: true
+  max_angular_speed: "40 arcmin/day"
+  max_dt: "5 hours"
+  # 2.0 aligns seeding with the validated association gate
+  # (candidate_photometric_max_delta_mag). At 1.6 this gate accounted for
+  # 587 of the 897 analysed never-touched objects.
+  max_mag_difference: 2.0
+
+kalman_shared_context:
+  config:
+    dt_ref: 1.0
+    q0: 1e-12
+    inflation_chi2_threshold: 5.991
+    max_inflation: 5.0
+    min_angular_variance_ratio: 0.3
+    solver_type:
+      kind: Auto
+      params:
+        convergency: 2.220446049250313e-14
+        max_iter_prelim_kepuni: 20
+        parabolic_solving_method: Cardano
+        psi_guess: null
+  ephem_file_name: naif:DE440
+  ut1_file_version: null
+
+advance_params:
+  max_lineage_lifetime_nights: 5
+  stale_llr_floor: -20.0
+  # Don't archive arcs that were seeded from a pair and never confirmed by a
+  # later night: they are the 2-point noise tracklets behind most of the
+  # contamination the archive re-imported (n_points=2 -> 67% contaminated).
+  archive_min_real_updates: 2
+
+  # Unconditional lifetime cap: purge a lineage that has gone this many nights
+  # without a real update, whatever its LLR says. null disables it.
+  #
+  # max_lineage_lifetime_nights above is AND-ed with stale_llr_floor, and the
+  # LLR test vetoes it in practice: even the noise class sits at p10 = -13.2,
+  # above the -20 floor, so almost nothing is ever purged. Lineages meant to die
+  # after 5 nights survive a median of 18, and 96.6% of all contamination comes
+  # from associations made by lineages a mean 11-24 nights stale.
+  #
+  # Set from the report's staleness trade-off table, not by intuition: a purged
+  # lineage is archived, so this trades contamination for fragmentation, and a
+  # fragmented-but-pure trajectory still counts toward pure-only completeness.
+  hard_stale_nights: null
+
+  branch_cap: 10
+  completeness_width_mag: 0.4
+  likelihood_threshold: 0.0
+
+  candidate_photometric_max_delta_mag: 2.0
+  candidate_cross_track_k_sigma: 5.0
+  candidate_cross_track_floor_arcsec: 2.0
+  candidate_rel_likelihood_alpha: 0.01
+  max_candidates_per_visit: 5
+
+  limiting_magnitude: 21.0
+  n_scan: 1
+  max_search_cones: 0
+  cone_half_arcsec: "30 arcmin"
+  obs_noise:
+    - 2.35e-13
+    - 2.35e-13
+  photometric_sigma_mag: 0.35
+  quick_reject_radius_rad: "5 arcmin"
+  radius_strategy:
+    Clamped:
+      inner: MixtureCovariance
+      max_arcsec: "30 arcmin"
+  top_k:
+    WeightThreshold: 0.99
+  visit_epoch_tolerance_days: 0.000011574074074074073
+
+kfbank_config:
+  cap_schedule:
+    Logarithmic:
+      start: 100
+      end: 1
+      n_obs_full: 5
+
+  gate_chi2: 100.0
+  search_region_chi2: 100.0
+
+  likelihood_window: 3
+  merge_position_au: 0.02
+  min_hypotheses: 1
+  weight_floor: 0.0001
+
+  # IAU slope parameter G for the H-G phase correction; null disables it.
+  # Without it, the absolute magnitude inferred from a detection depends on the
+  # observing geometry rather than on the object, and two arcs seen months apart
+  # disagree systematically.
+  slope_parameter_g: 0.15
+
+# End-of-run fragment linkage. Defaults are the operating point retained by the
+# ground-truth sweep: 4838 correct merges against 43 wrong (99.12% pairwise),
+# zero wrong merge on NEO/Centaur/KBO/SDO.
+merge_params:
+  # Only converged arcs may predict. Short arcs are still indexed as candidates:
+  # their (ra, dec, ra_dot, dec_dot) is well determined even from two points.
+  min_arc_points: 6
+
+  # null = stage disabled. Photometry separates (|dH| p50 0.35 correct vs 1.11
+  # wrong) but overlaps too much to buy net recall at this precision; the
+  # residual error is dominated by rho, not by phase.
+  max_delta_h: null
+  max_reduced_chi2: null
+  chi2_on_whole_walk: true
+
+  # The two criteria that carry the precision.
+  max_residual_arcsec: 300.0
+  max_rate_diff_rad_per_day: 8.726646259971648e-5   # 0.3 arcmin/day
+
+  # Caps recall directly: at 30 days it excluded 3391 true pairs, at 60 days 1032.
+  max_gap_days: 60.0
+
+  # Linkage is transitive, so one wrong link merges two whole components.
+  # Past this size a component is a chain of errors, not a fragmented object.
+  max_component_size: 8
+
+  index_healpix_depth: 5
+  time_slice_days: 1.0
+  max_test_points: 5
+
+seeding_grid_config:
+  n_rho: 50
+  n_rho_dot: 15
+  populations:
+    - a_center: 1.5
+      a_sigma: 0.6
+      name: NEO
+      weight: 0.02
+    - a_center: 2.2
+      a_sigma: 0.15
+      name: MBA Inner
+      weight: 0.6
+    - a_center: 2.7
+      a_sigma: 0.15
+      name: MBA Middle
+      weight: 1.0
+    - a_center: 3.1
+      a_sigma: 0.15
+      name: MBA Outer
+      weight: 0.7
+    - a_center: 3.42
+      a_sigma: 0.1
+      name: Cybele
+      weight: 0.04
+    - a_center: 3.95
+      a_sigma: 0.15
+      name: Hilda
+      weight: 0.05
+    - a_center: 5.2
+      a_sigma: 0.3
+      name: Trojan
+      weight: 0.1
+    - a_center: 15.0
+      a_sigma: 5.0
+      name: Centaur
+      weight: 0.03
+    - a_center: 44.0
+      a_sigma: 2.0
+      name: KBO Cold
+      weight: 0.04
+    - a_center: 45.0
+      a_sigma: 8.0
+      name: KBO Hot
+      weight: 0.03
+    - a_center: 39.4
+      a_sigma: 1.0
+      name: KBO Resonant
+      weight: 0.02
+    - a_center: 70.0
+      a_sigma: 20.0
+      name: SDO
+      weight: 0.02
+    - a_center: 90.0
+      a_sigma: 10.0
+      name: Detached
+      weight: 0.01
+  rho_max: 100.0
+  rho_min: 0.1
+  sigma_pos_au_floor: 0.001
+  sigma_rho_dot_floor: 0.0001
+  weight_floor: 1e-6
+
+# not used in the current pipeline
+triplets:
+  enforce_time_order: true
+  max_angular_speed: 0.05
+  max_dt_between: 0.04
+  max_mag_difference: 5.0
+  max_pair_sep: 0.0025
+  max_predicted_residual: 0.0008

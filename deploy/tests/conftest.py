@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -39,11 +40,20 @@ def local_data() -> dict[str, Any]:
 
 @pytest.fixture
 def deploy_dir(tmp_path: Path, infra_data: dict[str, Any], local_data: dict[str, Any]) -> Path:
-    """A temporary deploy/ directory holding three valid configuration files."""
+    """A temporary deploy/ directory: valid configuration files, the real compose/ and config/."""
     (tmp_path / "infra.yaml").write_text(yaml.safe_dump(infra_data), encoding="utf-8")
     (tmp_path / "infra.local.yaml").write_text(yaml.safe_dump(local_data), encoding="utf-8")
     secrets = tmp_path / "secrets.env"
     secrets.write_text(VALID_SECRETS_TEXT, encoding="utf-8")
     secrets.chmod(0o600)
     (tmp_path / "infra.local.yaml").chmod(0o600)
+    # The real versioned deployment files. The gitignored stream.yaml (real Kafka broker and
+    # consumer group) is never read by the tests: its versioned template stands in for it.
+    shutil.copytree(DEPLOY_DIR / "compose", tmp_path / "compose")
+    shutil.copytree(
+        DEPLOY_DIR / "config", tmp_path / "config", ignore=shutil.ignore_patterns("stream.yaml")
+    )
+    stream = tmp_path / "config" / "stream.yaml"
+    shutil.copy(tmp_path / "config" / "stream.example.yaml", stream)
+    stream.chmod(0o600)
     return tmp_path

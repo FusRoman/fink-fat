@@ -24,7 +24,15 @@ def test_git_command_uses_paths_relative_to_deploy(tmp_path: Path) -> None:
         "--",
         "infra.local.yaml",
         "secrets.env",
+        "config/stream.yaml",
     )
+
+
+def test_tracked_stream_config_is_an_error(tmp_path: Path) -> None:
+    files = DeployPaths(tmp_path).sensitive_files()
+    findings = evaluate_git_tracked(tmp_path, files, "config/stream.yaml\n")
+    assert [f.level for f in findings] == [Level.ERROR]
+    assert "config/stream.yaml is tracked" in findings[0].message
 
 
 def test_tracked_sensitive_file_is_an_error(tmp_path: Path) -> None:
@@ -52,7 +60,7 @@ def test_check_sensitive_files_combines_git_and_modes(deploy_dir: Path) -> None:
     runner = FakeRunner().on(["git"], CommandResult(stdout=""))
     findings = check_sensitive_files(DeployPaths(deploy_dir), runner)
     levels = [f.level for f in findings]
-    assert levels.count(Level.OK) == 2 and levels.count(Level.WARN) == 1
+    assert levels.count(Level.OK) == 3 and levels.count(Level.WARN) == 1
 
 
 def test_git_unavailable_is_a_warning(deploy_dir: Path) -> None:
