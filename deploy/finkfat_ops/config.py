@@ -537,9 +537,24 @@ class DeployPaths:
         """Generated SSH configuration and known hosts."""
         return self.root / ".state"
 
+    @property
+    def compose_dir(self) -> Path:
+        """One Docker Compose file per role (``<role>.yml``)."""
+        return self.root / "compose"
+
+    @property
+    def fink_config_dir(self) -> Path:
+        """Production fink-fat configuration files (``engine_config.yaml``, ``stream.yaml``)."""
+        return self.root / "config"
+
+    @property
+    def stream_config(self) -> Path:
+        """Gitignored ``fink-fat stream`` configuration (Kafka broker and consumer group)."""
+        return self.fink_config_dir / "stream.yaml"
+
     def sensitive_files(self) -> list[Path]:
         """Files that must never be tracked by git."""
-        return [self.infra_local, self.secrets]
+        return [self.infra_local, self.secrets, self.stream_config]
 
 
 def read_yaml(path: Path) -> Any:

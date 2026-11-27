@@ -1,0 +1,40 @@
+# Postgres of the fink-fat production instance (db VM). Copied by `ff-ops deploy db` to
+# /opt/finkfat/compose.yml; every ${VARIABLE} comes from the .env ff-ops writes next to it.
+name: finkfat
+services:
+  postgres:
+    # Pinned: a new major version cannot read the data directory of the previous one.
+    image: postgres:19.0
+    restart: unless-stopped
+    # UNLOGGED tables survive a clean shutdown only: leave Postgres time to checkpoint.
+    stop_grace_period: 5m
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    # Published on the private address only; sg-db admits the compute and the explorer.
+    ports:
+      - "${DB_BIND_IP}:5432:5432"
+    volumes:
+      # Since Postgres 18 the image keeps PGDATA in <major>/docker under this directory,
+      # so the volume's lost+found never gets in initdb's way.
+      - /srv/pgdata:/var/lib/postgresql
+    shm_size: 1g
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${PG_SHARED_BUFFERS}
+      - -c
+      - effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE}
+      - -c
+      - maintenance_work_mem=${PG_MAINTENANCE_WORK_MEM}
+      - -c
+      - max_wal_size=${PG_MAX_WAL_SIZE}
+      - -c
+      - checkpoint_timeout=${PG_CHECKPOINT_TIMEOUT}
+    healthcheck:
+      # $$ escapes compose's own interpolation: the variables are read inside the container.
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6

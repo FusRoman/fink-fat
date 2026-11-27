@@ -1,0 +1,24 @@
+# fink-fat stream of the production instance (compute VM). Copied by `ff-ops deploy compute`
+# to /opt/finkfat/compose.yml, next to config/ and the .env ff-ops writes.
+name: finkfat
+services:
+  stream:
+    image: ${FFAT_REGISTRY}/fink-fat-engine:${FFAT_TAG}
+    # The image's default command: fink-fat stream --config /config/stream.yaml --logs
+    restart: unless-stopped
+    # On SIGTERM the stream flushes its SQL outbox, keeps the open night in its journal and
+    # resumes from its Kafka offsets on the next start.
+    stop_signal: SIGTERM
+    stop_grace_period: 10m
+    environment:
+      FINK_FAT_DATABASE_URL: ${FINK_FAT_DATABASE_URL}
+      FINK_FAT_KAFKA_PASSWORD: ${FINK_FAT_KAFKA_PASSWORD}
+    volumes:
+      # Data volume: snapshot, night journal, archive and daily log files (storage_path).
+      # Owned by the image's user (UID 10001); `ff-ops deploy compute` sets the ownership.
+      - /srv/finkfat:/data
+      - ./config:/config:ro
+      # Downloaded JPL ephemeris, kept across restarts and image updates.
+      - engine-cache:/home/finkfat/.cache
+volumes:
+  engine-cache:

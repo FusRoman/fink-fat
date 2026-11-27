@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import dataclasses
+import json
 import os
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from enum import StrEnum
 from ipaddress import IPv4Address, IPv4Network
 from pathlib import Path
 from typing import Annotated, NoReturn
@@ -16,10 +19,13 @@ from rich.console import Console
 from rich.table import Table
 
 from finkfat_ops import access as access_ops
+from finkfat_ops import deploy as deploy_ops
+from finkfat_ops import doctor as doctor_ops
 from finkfat_ops import images as images_ops
 from finkfat_ops import infra as infra_ops
 from finkfat_ops import naming
 from finkfat_ops import ssh as ssh_ops
+from finkfat_ops import status as status_ops
 from finkfat_ops import vm as vm_ops
 from finkfat_ops import volume as volume_ops
 from finkfat_ops.checks import Finding, Level, check_sensitive_files
@@ -76,6 +82,12 @@ images_app = typer.Typer(
     help="Docker images on GHCR: published tags, troubleshooting builds.", no_args_is_help=True
 )
 app.add_typer(images_app, name="images")
+
+
+class TunnelTarget(StrEnum):
+    """Private web UIs reachable through ``ff-ops tunnel``."""
+
+    PGADMIN = "pgadmin"
 
 
 @dataclass
@@ -184,9 +196,13 @@ def config_check(ctx: typer.Context) -> None:
         console.print(_deployment_table(deployment))
         local = deployment.local
         console.print(f"SSH allowed from: {', '.join(str(c) for c in local.admin_cidrs)}")
-        console.print(f"explorer domain: {local.explorer_domain or '(none — self-signed HTTPS)'}")
+        console.print(f"explorer domain: {local.explorer_domain or '(none — plain HTTP)'}")
         console.print("[green]✔[/] configuration is valid")
     findings = check_sensitive_files(app_ctx.paths, app_ctx.runner)
+    if not failed:
+        # compose/ and config/ files of the enabled roles, stream.yaml included.
+        enabled = deploy_ops.ordered_roles(deployment.infra, None)
+        findings += deploy_ops.file_findings(enabled, app_ctx.paths)
     _print_findings(findings)
     if failed or any(f.level == Level.ERROR for f in findings):
         raise typer.Exit(code=1)
@@ -601,10 +617,17 @@ def volume_snapshot(
 
 
 def _ssh_config(app_ctx: AppContext, *, refresh: bool) -> Path:
-    """Return the generated ``ssh_config``, writing it from the servers stack if needed."""
+    """Return the generated ``ssh_config``, writing it from the servers stack if needed.
+
+    Every command that talks to a machine (ssh, init, deploy, logs, tunnel, status) starts
+    here. The file is normally already written by ``infra apply servers``: then no cloud
+    call is made (and no OpenStack password is asked).
+    """
     config = ssh_ops.ssh_config_path(app_ctx.paths.state_dir)
     if config.exists() and not refresh:
         return config
+    # Missing (or --refresh): the bastion's public IP is read from the servers stack's
+    # outputs, which needs the cloud.
     session = _session(app_ctx)
     name = naming.stack_name(session.deployment.infra.env, Stack.SERVERS)
     info = infra_ops.get_stack(session, name)
@@ -677,6 +700,302 @@ def init(
                 if finding.level == Level.ERROR:
                     break
     if failed:
+        raise typer.Exit(code=1)
+
+
+# ------------------------------------------------------------------- deploy, logs, tunnel
+
+
+@app.command("deploy")
+def deploy(
+    ctx: typer.Context,
+    roles: Annotated[
+        list[Role] | None,
+        typer.Argument(help="Machines to deploy (default: every enabled one, db first)."),
+    ] = None,
+    tag: Annotated[
+        str | None, typer.Option(help="Image tag to run (default: images.tag of infra.yaml).")
+    ] = None,
+    yes: Annotated[bool, typer.Option("--yes", help="Do not ask for confirmation.")] = False,
+) -> None:
+    """Send the services' files to the machines, then pull and start the containers.
+
+    Order: db (until Postgres accepts connections), compute, explorer; each role is checked
+    before the next one starts, and a failed check stops the deployment. Running it again
+    with nothing changed restarts nothing.
+
+    Examples: ff-ops deploy    ·    ff-ops deploy explorer    ·    ff-ops deploy --tag v1.0.1
+    """
+    app_ctx: AppContext = ctx.obj
+    failed = False
+    # _fail_nicely turns the errors of a deployment step (CommandError, ValueError…) into
+    # a red message and exit status 1, instead of a Python traceback.
+    with _fail_nicely():
+        # Configuration (infra.yaml + infra.local.yaml + secrets.env), validated.
+        deployment = load_deployment(app_ctx.paths)
+        # The requested roles (all enabled ones by default), always as db → compute →
+        # explorer, whatever the order typed on the command line.
+        ordered = deploy_ops.ordered_roles(deployment.infra, roles)
+        # Every file of every requested role must exist BEFORE the first machine is
+        # touched: a missing stream.yaml must not be discovered after the db is redeployed.
+        missing = deploy_ops.missing_files(ordered, app_ctx.paths)
+        if missing:
+            raise ValueError(deploy_ops.missing_files_message(missing))
+        chosen = tag or deployment.infra.images.tag
+        config = _ssh_config(app_ctx, refresh=False)
+        console.print(f"deploy {', '.join(ordered)} with images tagged [bold]{chosen}[/]")
+        # No question in dry-run mode: nothing will really happen.
+        if not yes and not app_ctx.dry_run and not app_ctx.confirm("Proceed?"):
+            raise infra_ops.InfraError("cancelled")
+        # Everything deploy_role needs; app_ctx.runner decides whether the commands are
+        # really run (SubprocessRunner), only printed (--dry-run) or faked (tests).
+        context = deploy_ops.DeployContext(
+            deployment=deployment,
+            paths=app_ctx.paths,
+            ssh_config=config,
+            runner=app_ctx.runner,
+            tag=chosen,
+            now=lambda: datetime.now(UTC),
+            echo=lambda line: console.print(line, style="dim", markup=False),
+            dry_run=app_ctx.dry_run,
+        )
+        for role in ordered:
+            console.print(f"[bold]{role}[/]")
+            # The 9 steps of one role (see the module docstring of deploy.py).
+            findings = deploy_ops.deploy_role(context, role)
+            _print_findings(findings)
+            # A role in error stops here: deploying the compute against a db that does not
+            # answer, or the explorer without its database, would only add failures.
+            if any(f.level == Level.ERROR for f in findings):
+                failed = True
+                console.print(f"[red]✘[/] {role} is unhealthy: deployment stopped")
+                break
+    if failed:
+        raise typer.Exit(code=1)
+
+
+@app.command("logs")
+def logs(
+    ctx: typer.Context,
+    role: Annotated[Role, typer.Argument(help="Machine whose services are shown.")],
+    service: Annotated[
+        str | None,
+        typer.Argument(help="One service: postgres, stream, app, caddy or pgadmin."),
+    ] = None,
+    follow: Annotated[bool, typer.Option("--follow", "-f", help="Stream new lines.")] = False,
+    tail: Annotated[int, typer.Option(help="Past lines per service.")] = 200,
+) -> None:
+    """Show the logs of a machine's containers.
+
+    The stream also writes daily log files under /srv/finkfat/storage on the compute.
+
+    Examples: ff-ops logs compute -f    ·    ff-ops logs explorer caddy --tail 50
+    """
+    app_ctx: AppContext = ctx.obj
+    with _fail_nicely():
+        config = _ssh_config(app_ctx, refresh=False)
+        # ssh … 'cd /opt/finkfat && docker compose logs …', interactive: the lines go
+        # straight to this terminal, nothing is captured.
+        command = deploy_ops.logs_command(config, role, service, follow=follow, tail=tail)
+        result = app_ctx.runner.run(command, check=False)
+        # With --follow, Ctrl-C ends ssh with a non-zero status: that is not an error.
+        if result.returncode and not follow:
+            raise typer.Exit(code=result.returncode)
+
+
+@app.command("tunnel")
+def tunnel(
+    ctx: typer.Context,
+    target: Annotated[
+        TunnelTarget, typer.Argument(help="Service to reach (pgadmin).")
+    ] = TunnelTarget.PGADMIN,
+    port: Annotated[int, typer.Option(help="Local port.")] = ssh_ops.PGADMIN_PORT,
+) -> None:
+    """Forward a private web UI to this machine, until Ctrl-C.
+
+    pgAdmin then answers on http://localhost:5050 (login: the e-mail shown, the
+    PGADMIN_PASSWORD of secrets.env). Its Postgres server is the db's private address.
+
+    Example: ff-ops tunnel pgadmin
+    """
+    app_ctx: AppContext = ctx.obj
+    with _fail_nicely():
+        deployment = load_deployment(app_ctx.paths)
+        config = _ssh_config(app_ctx, refresh=False)
+        db = deployment.infra.roles.db.fixed_ip
+        console.print(
+            f"{target} on http://localhost:{port} — login {deploy_ops.PGADMIN_EMAIL}; "
+            f"server {db}:{deploy_ops.POSTGRES_PORT}, user {deploy_ops.POSTGRES_USER}. "
+            "Ctrl-C to stop."
+        )
+        # ssh -N -L: no remote command, only the port forwarding, until Ctrl-C. pgAdmin
+        # listens on the explorer's loopback (127.0.0.1:5050), never on a public port.
+        app_ctx.runner.run(ssh_ops.tunnel_command(config, port), check=False)
+
+
+# ------------------------------------------------------------------------------ status
+
+
+def _collect_status(app_ctx: AppContext) -> status_ops.StatusReport:
+    """Gather what ``ff-ops status`` shows: VM states, machines over SSH, certificate."""
+    # 1. The cloud: project check, then the state of every VM (one openstack call).
+    session = _session(app_ctx)
+    deployment = session.deployment
+    infra, domain = deployment.infra, deployment.local.explorer_domain
+    listing = app_ctx.runner.run(vm_ops.list_command(session.cli, infra.env))
+    vms = status_ops.vm_states(infra, vm_ops.parse_server_list(parse_json(listing) or []))
+    # 2. The machines: one ssh call each (skipped for a VM that is not ACTIVE), printing
+    #    deployed.json, the containers, the disk usage and, on the db, the nightly sync.
+    config = _ssh_config(app_ctx, refresh=False)
+    statuses, sync = [], None
+    for role in deploy_ops.ordered_roles(infra, None):
+        status, raw = status_ops.collect_role(app_ctx.runner, config, role, infra, vms[role])
+        statuses.append(status)
+        if role == Role.DB and raw:
+            sync = status_ops.parse_sync(status_ops.parse_sections(raw).get("sync", ""))
+    # 3. What deploy/ would send now, to detect a configuration drift.
+    fingerprints = {
+        status.role: deploy_ops.local_fingerprint(status.role, deployment, app_ctx.paths)
+        for status in statuses
+    }
+    expected = status_ops.Expected(infra.images.tag, fingerprints, domain)
+    # 4. The certificate, seen from this machine as a visitor sees it.
+    expiry = status_ops.read_certificate_expiry(app_ctx.runner, domain) if domain else None
+    # 5. Pure: everything above turned into a table and findings.
+    return status_ops.build_report(
+        statuses, expected, sync=sync, certificate_expiry=expiry, now=datetime.now(UTC)
+    )
+
+
+def _services_cell(status: status_ops.RoleStatus) -> str:
+    """Describe a machine's containers in one table cell."""
+    if status.error:
+        return f"[red]{status.error}[/]"
+    if not status.services:
+        return "—"
+    return "\n".join(
+        f"{service.name} {'[green]✔[/]' if service.ok else '[red]✘[/]'} {service.status}"
+        for service in status.services
+    )
+
+
+def _status_table(report: status_ops.StatusReport, expected_tag: str) -> Table:
+    """Render the per-machine part of the report."""
+    table = Table(title=f"fink-fat — {datetime.now(UTC):%Y-%m-%d %H:%M} UTC")
+    for column in ("role", "VM", "services", "version", "config", "disk"):
+        table.add_column(column)
+    for status in report.roles:
+        record = status.record
+        version = record.tag if record else "—"
+        if record and status.role != Role.DB and record.tag != expected_tag:
+            version += f"\n({expected_tag} wanted)"
+        config = "—" if record is None else ("⚠ drift" if status.role in report.drifted else "✔")
+        disk = "—" if status.disk_percent is None else f"{status.disk_percent}%"
+        vm_style = "green" if status.vm_status == "ACTIVE" else "red"
+        table.add_row(
+            str(status.role),
+            f"[{vm_style}]{status.vm_status}[/]",
+            _services_cell(status),
+            version,
+            config,
+            disk,
+        )
+    return table
+
+
+def _report_json(report: status_ops.StatusReport) -> str:
+    """Serialise the report for scripts (dates in ISO format)."""
+    return json.dumps(dataclasses.asdict(report), default=str, indent=2)
+
+
+@app.command("status")
+def show_status(
+    ctx: typer.Context,
+    as_json: Annotated[bool, typer.Option("--json", help="Print the report as JSON.")] = False,
+) -> None:
+    """Show the state of the instance in one table: VMs, containers, version, drift, disk.
+
+    Also the last nightly sync of the trajectory tables and the HTTPS certificate. Exits
+    with status 1 when something is in error.
+
+    Example: ff-ops status
+    """
+    app_ctx: AppContext = ctx.obj
+    with _fail_nicely():
+        report = _collect_status(app_ctx)
+        if as_json:
+            console.print(_report_json(report), markup=False, highlight=False)
+        else:
+            expected_tag = load_deployment(app_ctx.paths).infra.images.tag
+            console.print(_status_table(report, expected_tag))
+            now = datetime.now(UTC)
+            if report.sync:
+                age = status_ops.format_age(now, report.sync.synced_at)
+                console.print(f"tracking: last synced night {report.sync.night} ({age} ago)")
+            if report.certificate_expiry:
+                days = (report.certificate_expiry - now).days
+                console.print(f"certificate: expires in {days} days")
+            _print_findings([f for f in report.findings if f.level != Level.OK])
+            if not report.findings:
+                console.print("[green]✔[/] everything is fine")
+    if not report.healthy:
+        raise typer.Exit(code=1)
+
+
+# ------------------------------------------------------------------------------ doctor
+
+
+def _doctor_findings(app_ctx: AppContext) -> list[Finding]:
+    """Run every check of ``ff-ops doctor``; a failing step never hides the next ones."""
+    findings: list[Finding] = []
+    # 1. The three configuration files. An invalid configuration is reported, not raised,
+    #    so that the checks below still run.
+    try:
+        deployment: Deployment | None = load_deployment(app_ctx.paths)
+        findings.append(Finding(Level.OK, "infra.yaml, infra.local.yaml and secrets.env valid"))
+    except ConfigError as error:
+        deployment = None
+        findings += [Finding(Level.ERROR, p, "ff-ops config check") for p in error.problems]
+    # 2. Local only: secret files untracked and private, tools, SSH key, clouds.yaml mode.
+    findings += check_sensitive_files(app_ctx.paths, app_ctx.runner)
+    identity = deployment.local.ssh_identity_file if deployment else None
+    findings += doctor_ops.local_checks(app_ctx.runner, app_ctx.openstack_binary, identity)
+    # Without a valid configuration, the roles, the cloud profile and the SSH ranges are
+    # unknown.
+    if deployment is None:
+        return findings
+    # compose/ and config/ files of the enabled roles, stream.yaml included.
+    enabled = deploy_ops.ordered_roles(deployment.infra, None)
+    findings += deploy_ops.file_findings(enabled, app_ctx.paths)
+    # 3. The cloud: profile and project (_session), then every endpoint of the catalog.
+    try:
+        session = _session(app_ctx)
+    except (CommandError, ProjectMismatchError) as error:
+        fix = "check the profile in ~/.config/openstack/clouds.yaml (and sshuttle)"
+        findings.append(Finding(Level.ERROR, f"cloud profile: {error}", fix))
+    else:
+        findings += doctor_ops.cloud_checks(app_ctx.runner, session.cli)
+    # 4. Is this machine's public IP among the ranges allowed to SSH into the bastion?
+    cidrs = access_ops.effective_ssh_cidrs(deployment.local, _access_state(app_ctx))
+    findings.append(doctor_ops.public_ip_check(app_ctx.runner, cidrs))
+    return findings
+
+
+@app.command("doctor")
+def doctor(ctx: typer.Context) -> None:
+    """Check this workstation and say how to fix each problem.
+
+    Tools (openstack and its Heat plugin, ssh, gh), configuration files and their
+    permissions, cloud profile and project, reachability of the OpenStack endpoints, SSH
+    key, and whether the current public IP may reach the bastion. Exits with status 1
+    when something is in error.
+
+    Example: ff-ops doctor
+    """
+    app_ctx: AppContext = ctx.obj
+    findings = _doctor_findings(app_ctx)
+    _print_findings(findings)
+    if any(f.level == Level.ERROR for f in findings):
         raise typer.Exit(code=1)
 
 

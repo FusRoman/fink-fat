@@ -135,6 +135,9 @@ def ssh_command(
         instead of asking for a password or a passphrase) and without SSH's own warnings
         (``LogLevel=ERROR``), so that the output is the remote command's.
     """
+    # -F: ff-ops' own ssh_config, which knows the alias ffat-<role>, the bastion
+    # (ProxyJump) and the key. Batch options only for a remote command: a script must fail
+    # rather than wait for a passphrase nobody will type.
     batch = ("-o", "BatchMode=yes", "-o", "LogLevel=ERROR") if remote else ()
     argv = ("ssh", "-F", str(config), *batch, ssh_host_alias(role), *remote)
     return Command(argv=argv, timeout_s=timeout_s, interactive=not remote)
@@ -270,3 +273,21 @@ def _detail(result: CommandResult) -> str:
     if len(text) > DETAIL_MAX_CHARS:
         text = "…" + text[-DETAIL_MAX_CHARS:]  # the end holds the conclusion (error, status)
     return f" (exit status {result.returncode}: {text})"
+
+
+PGADMIN_PORT = 5050
+"""Port of pgAdmin, published on the explorer's loopback and forwarded by the tunnel."""
+
+
+def tunnel_command(config: Path, local_port: int = PGADMIN_PORT) -> Command:
+    """Forward ``localhost:<local_port>`` to pgAdmin on the explorer (pure).
+
+    Returns
+    -------
+    Command
+        ``ssh -N -L <port>:127.0.0.1:5050 ffat-explorer``, interactive: it runs until the
+        operator stops it (Ctrl-C).
+    """
+    forward = f"{local_port}:127.0.0.1:{PGADMIN_PORT}"
+    argv = ("ssh", "-F", str(config), "-N", "-L", forward, ssh_host_alias(Role.EXPLORER))
+    return Command(argv=argv, timeout_s=None, interactive=True)

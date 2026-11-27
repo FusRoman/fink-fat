@@ -1,6 +1,6 @@
 [project]
 name = "finkfat-ops"
-version = "0.1.0"
+version = "0.2.0"
 description = "ff-ops: manage the fink-fat production instance on OpenStack (Heat stacks, VMs, Docker deployments)."
 authors = [{ name = "Roman" }]
 readme = "README.md"

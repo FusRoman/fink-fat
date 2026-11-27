@@ -67,9 +67,15 @@ spread over three machines:
 | [`finkfat_ops/stack.py`](finkfat_ops/stack.py) | Stack commands, parsing of their output, and the replacement guard. |
 | [`finkfat_ops/infra.py`](finkfat_ops/infra.py) | Stack orchestration: render, preview, guard, confirmation, apply. |
 | [`finkfat_ops/access.py`](finkfat_ops/access.py) | Source ranges allowed to SSH into the bastion (stable and dynamic). |
+| [`finkfat_ops/deploy.py`](finkfat_ops/deploy.py) | Per-role bundles (compose file, configuration, Caddyfile, `.env`), their upload, `docker compose pull/up`, health checks, deployment record. |
+| [`finkfat_ops/status.py`](finkfat_ops/status.py) | State of the instance: collection over SSH, parsing, warnings. |
+| [`finkfat_ops/doctor.py`](finkfat_ops/doctor.py) | Workstation diagnosis: tools, files, cloud endpoints, SSH key, public IP. |
 | [`finkfat_ops/cli.py`](finkfat_ops/cli.py) | Typer command-line interface (wiring only). |
 | [`tests/`](tests/) | pytest suite. It never contacts the cloud. |
 | [`infra.yaml`](infra.yaml) | Versioned deployment structure. |
+| [`compose/`](compose/) | One Docker Compose file per role (`db.yml`, `compute.yml`, `explorer.yml`). |
+| [`DEPLOYMENT.md`](DEPLOYMENT.md) | Bundles, image versions and update procedures. |
+| [`config/`](config/) | Production fink-fat configuration: `engine_config.yaml` (compute and explorer) and `stream.example.yaml`, the template of the gitignored `stream.yaml` (compute). No secret. |
 | [`infra.local.example.yaml`](infra.local.example.yaml), [`secrets.example.env`](secrets.example.env) | Templates of the two gitignored files. |
 
 ## Configuration
@@ -107,7 +113,17 @@ cd deploy
 pdm install                                   # creates deploy/.venv
 cp infra.local.example.yaml infra.local.yaml  # fill in cloud profile, project, SSH ranges, domain
 cp secrets.example.env secrets.env && chmod 600 secrets.env   # fill in the passwords
+cp config/stream.example.yaml config/stream.yaml && chmod 600 config/stream.yaml  # Kafka broker, group
 pdm run ff-ops config check
+pdm run ff-ops doctor                         # every check green, or the fix to apply
+```
+
+First deployment, once the three stacks are applied and `ff-ops init` is green:
+
+```bash
+pdm run ff-ops deploy                         # db, then compute, then explorer
+pdm run ff-ops status
+pdm run ff-ops logs compute stream -f         # until "caught up with the Kafka stream"
 ```
 
 If some OpenStack endpoints (Heat in particular) are only reachable from the institution
@@ -141,12 +157,13 @@ contact nothing (`infra render`, `--dry-run`).
 
 | Command | Status | Effect |
 | --- | --- | --- |
-| `ff-ops config check` | available | Validate the three files without contacting anything. Also checks that the sensitive files are untracked by git and private. |
-| `ff-ops doctor` | planned | Check the workstation (CLI, Heat plugin, cloud profile, project, endpoint reachability, SSH key, allowed IP) and print the fix for each problem. |
+| `ff-ops config check` | available | Validate the three files without contacting anything. Also checks that the sensitive files are untracked by git and private, and that the deployment files of the enabled roles exist (`compose/`, `config/`, local `config/stream.yaml`). |
+| `ff-ops doctor` | available | Check the workstation (CLI, Heat plugin, `ssh`, `gh`, configuration files and their modes, cloud profile, project, endpoint reachability, SSH key, allowed IP) and print the fix for each problem. |
 | `ff-ops infra render / plan / apply / show / destroy` | available | Generate the Heat templates, preview the changes (`stack update --dry-run`), apply them. A replacement guard refuses any change that would replace or delete a protected resource (network, volumes, `db` and `compute` VMs and their data attachments, floating IP) unless it is named with `--allow-replace` and retyped. `destroy` requires retyping the stack name. `plan` without a stack previews the three stacks in order; `apply` and `render` without a stack only print their help. |
 | `ff-ops access list / allow-me / revoke` | available | Manage the source ranges allowed to SSH into the bastion (see below). |
 | `ff-ops up` | planned | First deployment: `net` → `storage` → `servers` → first-boot checks → services. Idempotent. |
-| `ff-ops status` | planned | One table: VMs, containers, deployed version, configuration drift, disk usage, certificate expiry, tracking progress, schema version. |
+| `ff-ops deploy [roles…] [--tag]` | available | Send each role its compose file, configuration and `.env`, pull the images and start the containers, in the order db → compute → explorer, checking each role before the next one (see "Deploying the services"). |
+| `ff-ops status [--json]` | available | One table: VMs, containers, deployed version, configuration drift, disk usage; then the last nightly sync and the certificate expiry. Exit status 1 when something is in error. The schema version comes with `update`. |
 | `ff-ops update / rollback` | planned | Deploy an image tag or changed configuration in the safe order `db` → `compute` → `explorer`, with health checks and automatic rollback. |
 | `ff-ops config edit / diff / push` | planned | Change the production fink-fat configuration files, validated by `fink-fat config check` from the target image before anything is deployed. |
 | `ff-ops volume list / snapshot` | available | List the data volumes (size, status, attachment, created or adopted by the storage stack, or orphan); take a Cinder snapshot of a role's data volume, even while attached. |
@@ -155,7 +172,9 @@ contact nothing (`infra render`, `--dry-run`).
 | `ff-ops vm list / console / reboot / stop / start` | available | List the VMs, show the end of a console log (boot messages, even without SSH), power actions (confirmation for reboot and stop). |
 | `ff-ops images list [engine\|explorer]` | available | Tags published on GHCR, newest first (through `gh api`; needs `gh` logged in with `read:packages`). |
 | `ff-ops images build [targets] [--push]` | available | Troubleshooting only: build the images from this machine, tagged `sha-<commit>`; `--push` publishes them (needs `docker login ghcr.io` with a token allowed to write packages, and a clean working tree). |
-| `ff-ops volume extend / logs / tunnel` | planned | Volume resizing, logs, pgAdmin tunnel. |
+| `ff-ops logs <role> [service] [-f] [--tail N]` | available | Logs of a machine's containers (`docker compose logs`). |
+| `ff-ops tunnel pgadmin [--port]` | available | Forward pgAdmin (loopback of the explorer) to `http://localhost:5050` until Ctrl-C. |
+| `ff-ops volume extend` | planned | Volume resizing. |
 
 `--dry-run` is a global option: it prints every external command instead of running it.
 
@@ -305,6 +324,18 @@ Publishing uses the automatic `GITHUB_TOKEN`; no token has to be created. Docker
 are cached between runs (GitHub Actions cache, one scope per image). As with every
 `workflow_run` workflow, GitHub runs the version of `images.yml` found on the default
 branch.
+
+## Deploying the services
+
+`ff-ops deploy` sends every enabled role a *bundle* (its compose file, configuration and a
+`.env` holding only its own secrets) through `ssh`, then runs `docker compose pull` and
+`up -d` in the order db → compute → explorer, with a health check after each role.
+`deployed.json` records what runs on each machine; `ff-ops status` compares it with
+`infra.yaml` and `deploy/`.
+
+**[DEPLOYMENT.md](DEPLOYMENT.md)** describes the bundles, how image versions reach the
+machines, the deployment sequence, and the procedures: first deployment, new version,
+rollback, configuration changes, pinned images, failures.
 
 ## SSH access to the bastion
 

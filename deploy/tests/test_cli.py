@@ -9,7 +9,9 @@ from typer.testing import CliRunner
 
 from finkfat_ops.cli import AppContext, app
 from finkfat_ops.config import DeployPaths, load_deployment
+from finkfat_ops.deploy import health_checks
 from finkfat_ops.heat.net import build_net_template
+from finkfat_ops.naming import Role
 from finkfat_ops.runner import CommandResult, FakeRunner
 
 
@@ -55,7 +57,7 @@ def _cloud_runner() -> FakeRunner:
         FakeRunner()
         .on([*OS, "token"], TOKEN)
         .on([*OS, "project", "show"], PROJECT)
-        .on(["curl"], CommandResult(stdout="8.8.8.8\n"))
+        .on(["curl", "-4"], CommandResult(stdout="8.8.8.8\n"))
     )
 
 
@@ -405,3 +407,179 @@ def test_images_list_reports_unpublished_images_and_goes_on(deploy_dir: Path) ->
     assert result.exit_code == 0, result.output
     assert "fink-fat-engine: not published yet" in result.output
     assert "sha-2222222, main" in result.output  # the explorer is still listed
+
+
+# ------------------------------------------------- deploy, logs, tunnel, status, doctor
+
+
+def _state(deploy_dir: Path) -> Path:
+    state = deploy_dir / ".state"
+    state.mkdir(exist_ok=True)
+    config = state / "ssh_config"
+    config.write_text("Host ffat-explorer\n", encoding="utf-8")
+    return config
+
+
+MEMINFO = CommandResult(stdout="MemTotal:       32763204 kB\n")
+
+
+def test_deploy_runs_the_roles_in_order(deploy_dir: Path) -> None:
+    _state(deploy_dir)
+    runner = (
+        FakeRunner()
+        .on(
+            [
+                "ssh",
+                "-F",
+                str(deploy_dir / ".state/ssh_config"),
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "LogLevel=ERROR",
+                "ffat-db",
+                "cat /proc/meminfo",
+            ],
+            MEMINFO,
+        )
+        .on(["ssh"], CommandResult())
+        .on(["curl"], CommandResult())
+    )
+    result = _run(deploy_dir, runner, "deploy", "explorer", "db")
+    assert result.exit_code == 0, result.output
+    hosts = [c.argv[7] for c in runner.calls if c.argv[0] == "ssh"]
+    assert hosts.index("ffat-explorer") > max(i for i, h in enumerate(hosts) if h == "ffat-db")
+    assert "ffat-compute" not in hosts
+    assert "with images tagged v1.0.0" in result.output
+
+
+def test_deploy_stops_at_the_first_unhealthy_role(deploy_dir: Path) -> None:
+    _state(deploy_dir)
+    runner = FakeRunner().on(["ssh"], CommandResult(returncode=1, stdout="MemTotal: 1 kB"))
+    result = _run(deploy_dir, runner, "deploy", "--tag", "v9.9.9")
+    assert result.exit_code == 1
+    assert all(c.argv[7] == "ffat-db" for c in runner.calls)
+
+
+def test_deploy_unhealthy_db_stops_before_compute(deploy_dir: Path) -> None:
+    config = _state(deploy_dir)
+    ssh = ["ssh", "-F", str(config), "-o", "BatchMode=yes", "-o", "LogLevel=ERROR", "ffat-db"]
+    (ready,) = health_checks(Role.DB)
+    runner = (
+        FakeRunner()
+        .on([*ssh, "cat /proc/meminfo"], MEMINFO)
+        .on([*ssh, *ready.command], CommandResult(returncode=1))
+        .on(["ssh"], CommandResult())
+    )
+    result = _run(deploy_dir, runner, "deploy")
+    assert result.exit_code == 1
+    assert "db is unhealthy: deployment stopped" in result.output
+    assert {c.argv[7] for c in runner.calls} == {"ffat-db"}
+    assert not any("deployed.json" in c.argv[-1] for c in runner.calls)
+
+
+def test_logs_and_tunnel_are_interactive(deploy_dir: Path) -> None:
+    _state(deploy_dir)
+    runner = FakeRunner().on(["ssh"], CommandResult())
+    assert _run(deploy_dir, runner, "logs", "compute", "stream", "-f").exit_code == 0
+    assert runner.calls[-1].interactive
+    assert runner.calls[-1].argv[-1].endswith("docker compose logs --tail 200 --follow stream")
+    result = _run(deploy_dir, runner, "tunnel", "pgadmin")
+    assert result.exit_code == 0 and "localhost:5050" in result.output
+    assert "-L" in runner.calls[-1].argv and "5050:127.0.0.1:5050" in runner.calls[-1].argv
+
+
+def test_status_reports_and_fails_on_errors(deploy_dir: Path) -> None:
+    _state(deploy_dir)
+    servers = CommandResult(
+        stdout=json.dumps(
+            [
+                {"ID": "1", "Name": "ffat-prod-db", "Status": "SHUTOFF"},
+                {"ID": "2", "Name": "ffat-prod-compute", "Status": "ACTIVE"},
+                {"ID": "3", "Name": "ffat-prod-explorer", "Status": "ACTIVE"},
+            ]
+        )
+    )
+    runner = (
+        _cloud_runner()
+        .on([*OS, "server", "list"], servers)
+        .on(["ssh"], CommandResult(stdout=""))
+        .on(
+            ["curl", "--silent", "--verbose"],
+            CommandResult(stderr="*  expire date: Jan 30 23:59:59 2099 GMT"),
+        )
+    )
+    result = _run(deploy_dir, runner, "status")
+    assert result.exit_code == 1, result.output
+    assert "db: VM SHUTOFF" in result.output
+    assert "compute: never deployed" in result.output
+    as_json = _run(deploy_dir, runner, "status", "--json")
+    assert '"vm_status": "SHUTOFF"' in as_json.output
+
+
+def test_doctor_lists_every_problem(deploy_dir: Path) -> None:
+    catalog = CommandResult(
+        stdout=json.dumps(
+            [
+                {
+                    "Name": "heat",
+                    "Type": "orchestration",
+                    "Endpoints": [{"interface": "public", "url": "https://heat.example.org:8004"}],
+                },
+                {
+                    "Name": "nova",
+                    "Type": "compute",
+                    "Endpoints": "region\n  public: https://nova.example.org:8774\n",
+                },
+            ]
+        )
+    )
+    runner = (
+        _cloud_runner()
+        .on(["git"], CommandResult())
+        .on(["openstack", "stack", "list", "--help"], CommandResult())
+        .on(["ssh", "-V"], CommandResult(stderr="OpenSSH_9.6"))
+        .on(["gh"], CommandResult(returncode=1, stderr="You are not logged into any GitHub hosts"))
+        .on([*OS, "catalog", "list"], catalog)
+        .on(
+            [
+                "curl",
+                "--silent",
+                "--output",
+                "/dev/null",
+                "--connect-timeout",
+                "5",
+                "--max-time",
+                "10",
+                "https://heat.example.org:8004",
+            ],
+            CommandResult(returncode=28),
+        )
+        .on(["curl", "--silent", "--output"], CommandResult())
+    )
+    result = _run(deploy_dir, runner, "doctor")
+    assert result.exit_code == 1, result.output
+    assert "Heat unreachable" in result.output and "start sshuttle" in result.output
+    assert "Nova reachable" in result.output
+    assert "gh logged in" in result.output and "gh auth login" in result.output
+    assert "public IP 8.8.8.8 is not in the allowed SSH ranges" in result.output
+
+
+def test_deploy_checks_every_file_before_touching_a_machine(deploy_dir: Path) -> None:
+    _state(deploy_dir)
+    (deploy_dir / "config" / "stream.yaml").unlink()
+    runner = FakeRunner().on(["ssh"], CommandResult())
+    result = _run(deploy_dir, runner, "deploy")
+    assert result.exit_code == 1
+    assert "copy stream.example.yaml and fill it in" in result.output
+    assert runner.calls == []  # not even the db was redeployed
+    db_only = FakeRunner().on(["ssh"], MEMINFO)  # MemTotal for the db, ignored elsewhere
+    result = _run(deploy_dir, db_only, "deploy", "db")
+    assert result.exit_code == 0, result.output  # the db does not need stream.yaml
+
+
+def test_config_check_reports_a_missing_stream_config(deploy_dir: Path) -> None:
+    (deploy_dir / "config" / "stream.yaml").unlink()
+    result = _invoke(deploy_dir)
+    assert result.exit_code == 1
+    assert "config/stream.yaml is missing" in result.output
+    assert "cp " in result.output and "stream.example.yaml" in result.output

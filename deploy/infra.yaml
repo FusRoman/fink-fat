@@ -16,7 +16,7 @@ network:
 
 images:
   registry: ghcr.io/fusroman
-  tag: main                                  # default tag; `ff-ops update --tag vX` overrides it
+  tag: v1.0.0                                # default tag; `ff-ops update --tag vX` overrides it
 
 roles:
   compute:                                   # fink-fat stream: Kafka client + tracking engine

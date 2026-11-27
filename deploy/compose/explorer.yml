@@ -1,0 +1,57 @@
+# Web explorer of the production instance (explorer VM, the only public machine). Copied by
+# `ff-ops deploy explorer` to /opt/finkfat/compose.yml, next to config/, the generated
+# Caddyfile and the .env ff-ops writes.
+name: finkfat
+services:
+  app:
+    image: ${FFAT_REGISTRY}/fink-fat-explorer:${FFAT_TAG}
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    volumes:
+      # Same engine configuration as the compute (KALMAN_CONFIG_PATH points here). Long
+      # syntax, so that a missing file fails instead of Docker creating an empty directory.
+      - type: bind
+        source: ./config/engine_config.yaml
+        target: /app/config/engine_config.yaml
+        read_only: true
+        bind:
+          create_host_path: false
+      # Downloaded JPL ephemeris and MPC observatory list, kept across restarts.
+      - explorer-cache:/home/explorer/.cache
+    # Not published: only Caddy reaches it, on the compose network.
+    expose:
+      - "8080"
+
+  caddy:
+    image: caddy:2.11.9
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"        # Let's Encrypt HTTP challenge, then redirection to HTTPS
+      - "443:443"      # TCP only: sg-explorer opens no UDP port (no HTTP/3)
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates and ACME account, kept across redeployments so that Let's Encrypt is
+      # not asked again (its rate limits are per domain).
+      - caddy-data:/data
+      - caddy-config:/config
+
+  pgadmin:
+    image: dpage/pgadmin4:9.19.0
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+    # Loopback only: reached through `ff-ops tunnel pgadmin`.
+    ports:
+      - "127.0.0.1:5050:80"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+
+volumes:
+  explorer-cache:
+  caddy-data:
+  caddy-config:
+  pgadmin-data:
